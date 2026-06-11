@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "er_effects_rs",
+  "project_id": "dc79271e-4b43-477b-a624-16f6bf68c539"
+}
