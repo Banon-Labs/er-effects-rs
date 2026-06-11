@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>12</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Andre.Formats">
+      <HintPath>{{ANDRE_FORMATS_DLL}}</HintPath>
+    </Reference>
+    <Reference Include="Andre.SoulsFormats">
+      <HintPath>{{ANDRE_SOULSFORMATS_DLL}}</HintPath>
+    </Reference>
+  </ItemGroup>
+</Project>

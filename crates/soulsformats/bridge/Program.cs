@@ -1,91 +1,118 @@
-using Andre.Formats;
-using SoulsFormats;
-using System.Text.Json;
+using System.Runtime.Loader;
 
-const string ParamRowsMode = "param-rows";
-const int ModeArgIndex = 0;
-const int RegulationArgIndex = 1;
-const int ParamNameArgIndex = 2;
-const int RowIdArgStartIndex = 3;
-const int RequiredArgCount = 4;
-const int UsageExitCode = 2;
-const int FailureExitCode = 1;
+const string SmithboxBinaryDirEnv = "SMITHBOX_BINARY_DIR";
 
-if (args.Length < RequiredArgCount || args[ModeArgIndex] != ParamRowsMode)
+// When the bridge was built against a binary Smithbox install (DLL references
+// instead of a project reference), transitive Smithbox dependencies are not
+// copied to the bridge output directory. Resolve them from the install
+// directory instead. This must be registered before any method touching
+// Andre/SoulsFormats types is JIT-compiled, which is why the actual work
+// lives in the Run local function below.
+var smithboxBinaryDir = Environment.GetEnvironmentVariable(SmithboxBinaryDirEnv);
+if (!string.IsNullOrEmpty(smithboxBinaryDir))
 {
-    Console.Error.WriteLine("usage: soulsformats-bridge param-rows <regulation.bin> <param-name> <row-id> [row-id...]");
-    Environment.Exit(UsageExitCode);
-}
-
-var regulationPath = args[RegulationArgIndex];
-var paramName = args[ParamNameArgIndex];
-var requestedIds = args[RowIdArgStartIndex..].Select(int.Parse).ToArray();
-
-try
-{
-    var data = File.ReadAllBytes(regulationPath);
-    using var binder = SFUtil.DecryptERRegulation(data);
-    var binderFile = binder.Files.FirstOrDefault(file =>
-        Path.GetFileNameWithoutExtension(file.Name).Equals(paramName, StringComparison.OrdinalIgnoreCase));
-
-    if (binderFile is null)
+    AssemblyLoadContext.Default.Resolving += (context, assemblyName) =>
     {
-        Console.Error.WriteLine($"Param not found: {paramName}");
-        Environment.Exit(FailureExitCode);
-    }
-
-    var param = Param.ReadIgnoreCompression(binderFile!.Bytes);
-    var rows = new List<object>();
-    var occurrenceIndexById = new Dictionary<int, int>();
-    var foundIds = new HashSet<int>();
-    var requestedIdSet = requestedIds.ToHashSet();
-
-    foreach (var row in param.Rows)
-    {
-        if (!occurrenceIndexById.TryGetValue(row.ID, out var occurrenceIndex))
+        if (assemblyName.Name is null)
         {
-            occurrenceIndex = 0;
+            return null;
         }
-        occurrenceIndexById[row.ID] = occurrenceIndex + 1;
-
-        if (!requestedIdSet.Contains(row.ID))
-        {
-            continue;
-        }
-
-        foundIds.Add(row.ID);
-        rows.Add(new
-        {
-            id = row.ID,
-            occurrence_index = occurrenceIndex,
-            name = row.Name ?? "",
-            found = true,
-        });
-    }
-
-    foreach (var missingId in requestedIds.Where(id => !foundIds.Contains(id)))
-    {
-        rows.Add(new
-        {
-            id = missingId,
-            occurrence_index = 0,
-            name = "",
-            found = false,
-        });
-    }
-
-    var response = new
-    {
-        binder_version = binder.Version,
-        param_name = paramName,
-        row_count = param.Rows.Count,
-        rows,
+        var candidate = Path.Combine(smithboxBinaryDir, assemblyName.Name + ".dll");
+        return File.Exists(candidate) ? context.LoadFromAssemblyPath(candidate) : null;
     };
-
-    Console.WriteLine(JsonSerializer.Serialize(response));
 }
-catch (Exception ex)
+
+return Run(args);
+
+static int Run(string[] args)
 {
-    Console.Error.WriteLine(ex.ToString());
-    Environment.Exit(FailureExitCode);
+    const string ParamRowsMode = "param-rows";
+    const int ModeArgIndex = 0;
+    const int RegulationArgIndex = 1;
+    const int ParamNameArgIndex = 2;
+    const int RowIdArgStartIndex = 3;
+    const int RequiredArgCount = 4;
+    const int SuccessExitCode = 0;
+    const int FailureExitCode = 1;
+    const int UsageExitCode = 2;
+
+    if (args.Length < RequiredArgCount || args[ModeArgIndex] != ParamRowsMode)
+    {
+        Console.Error.WriteLine("usage: soulsformats-bridge param-rows <regulation.bin> <param-name> <row-id> [row-id...]");
+        return UsageExitCode;
+    }
+
+    var regulationPath = args[RegulationArgIndex];
+    var paramName = args[ParamNameArgIndex];
+    var requestedIds = args[RowIdArgStartIndex..].Select(int.Parse).ToArray();
+
+    try
+    {
+        var data = File.ReadAllBytes(regulationPath);
+        using var binder = SoulsFormats.SFUtil.DecryptERRegulation(data);
+        var binderFile = binder.Files.FirstOrDefault(file =>
+            Path.GetFileNameWithoutExtension(file.Name).Equals(paramName, StringComparison.OrdinalIgnoreCase));
+
+        if (binderFile is null)
+        {
+            Console.Error.WriteLine($"Param not found: {paramName}");
+            return FailureExitCode;
+        }
+
+        var param = Andre.Formats.Param.ReadIgnoreCompression(binderFile!.Bytes);
+        var rows = new List<object>();
+        var occurrenceIndexById = new Dictionary<int, int>();
+        var foundIds = new HashSet<int>();
+        var requestedIdSet = requestedIds.ToHashSet();
+
+        foreach (var row in param.Rows)
+        {
+            if (!occurrenceIndexById.TryGetValue(row.ID, out var occurrenceIndex))
+            {
+                occurrenceIndex = 0;
+            }
+            occurrenceIndexById[row.ID] = occurrenceIndex + 1;
+
+            if (!requestedIdSet.Contains(row.ID))
+            {
+                continue;
+            }
+
+            foundIds.Add(row.ID);
+            rows.Add(new
+            {
+                id = row.ID,
+                occurrence_index = occurrenceIndex,
+                name = row.Name ?? "",
+                found = true,
+            });
+        }
+
+        foreach (var missingId in requestedIds.Where(id => !foundIds.Contains(id)))
+        {
+            rows.Add(new
+            {
+                id = missingId,
+                occurrence_index = 0,
+                name = "",
+                found = false,
+            });
+        }
+
+        var response = new
+        {
+            binder_version = binder.Version,
+            param_name = paramName,
+            row_count = param.Rows.Count,
+            rows,
+        };
+
+        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(response));
+        return SuccessExitCode;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine(ex.ToString());
+        return FailureExitCode;
+    }
 }

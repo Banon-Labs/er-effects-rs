@@ -47,15 +47,20 @@ bash scripts/check.sh
 compiling and running a small .NET bridge against Smithbox's
 `Andre.Formats`/SoulsFormats libraries. Prerequisites:
 
-1. **A Smithbox source checkout.** Discovery order:
-   - the `SMITHBOX_SOURCE_DIR` environment variable, if set;
-   - otherwise the first of `.deps/Smithbox`, `../Smithbox`, `../smithbox`,
-     `/tmp/pi-github-repos/vawser/Smithbox` (relative to this repo) that
-     contains `src/Andre/Andre.Formats/Andre.Formats.csproj`.
+1. **A Smithbox checkout or binary install.** Two layouts are supported:
+   - **source checkout** — contains `src/Andre/Andre.Formats/Andre.Formats.csproj`;
+     the bridge builds Andre.Formats from source
+     (`git clone https://github.com/vawser/Smithbox .deps/Smithbox`);
+   - **binary release install** — contains `Andre.Formats.dll` /
+     `Andre.SoulsFormats.dll` at its root; the bridge references the DLLs
+     directly and resolves transitive assemblies from the install directory.
 
-   ```bash
-   git clone https://github.com/vawser/Smithbox .deps/Smithbox
-   ```
+   Discovery order: the `SMITHBOX_SOURCE_DIR` environment variable if set,
+   otherwise the first of `.deps/Smithbox`, `../Smithbox`, `../smithbox`,
+   `/mnt/d/Smithbox`, `/tmp/pi-github-repos/vawser/Smithbox` that matches a
+   layout. (On this machine `D:\Smithbox` is a binary install and is found
+   automatically; the Steam game files with `regulation.bin` are at
+   `C:\SteamLibrary\steamapps\common\ELDEN RING\Game`.)
 
 2. **A .NET SDK.** If `dotnet` is on `PATH` it is used directly. Under WSL
    without a Linux .NET SDK, the bridge falls back to running the Windows

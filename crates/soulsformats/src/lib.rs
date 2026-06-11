@@ -15,9 +15,14 @@ const DEFAULT_SMITHBOX_REPO_CANDIDATES: &[&str] = &[
     ".deps/Smithbox",
     "../Smithbox",
     "../smithbox",
+    // Binary release install on this machine's Windows side (D:\Smithbox).
+    "/mnt/d/Smithbox",
     "/tmp/pi-github-repos/vawser/Smithbox",
 ];
 const ANDRE_FORMATS_PROJECT_PATH: &str = "src/Andre/Andre.Formats/Andre.Formats.csproj";
+const ANDRE_FORMATS_DLL_FILE: &str = "Andre.Formats.dll";
+const ANDRE_SOULSFORMATS_DLL_FILE: &str = "Andre.SoulsFormats.dll";
+const SMITHBOX_BINARY_DIR_ENV: &str = "SMITHBOX_BINARY_DIR";
 const BRIDGE_PROJECT_DIR: &str = "target/soulsformats-bridge";
 const BRIDGE_PROJECT_FILE_NAME: &str = "soulsformats-bridge.csproj";
 const BRIDGE_PROGRAM_FILE_NAME: &str = "Program.cs";
@@ -31,11 +36,26 @@ const POWERSHELL_NO_PROFILE_FLAG: &str = "-NoProfile";
 const POWERSHELL_COMMAND_FLAG: &str = "-Command";
 const POWERSHELL_ERROR_ACTION_STOP: &str = "$ErrorActionPreference = 'Stop';";
 const BRIDGE_PROJECT_TEMPLATE: &str = include_str!("../bridge/soulsformats-bridge.csproj.template");
+const BRIDGE_BINARY_PROJECT_TEMPLATE: &str =
+    include_str!("../bridge/soulsformats-bridge-binary.csproj.template");
 const BRIDGE_PROGRAM: &str = include_str!("../bridge/Program.cs");
+
+/// How the Smithbox dependency is available on disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SmithboxLayout {
+    /// A source checkout containing `src/Andre/Andre.Formats/Andre.Formats.csproj`;
+    /// the bridge builds Andre.Formats from source via a project reference.
+    Source,
+    /// A binary release install containing `Andre.Formats.dll` (and friends)
+    /// at its root; the bridge references the DLLs directly and resolves
+    /// transitive assemblies from the install directory at runtime.
+    Binary,
+}
 
 #[derive(Clone, Debug)]
 pub struct SoulsFormats {
     smithbox_root: PathBuf,
+    layout: SmithboxLayout,
     repo_root: PathBuf,
 }
 
@@ -68,7 +88,9 @@ pub enum SoulsFormatsError {
     )]
     SmithboxSourceMissing { checked_paths: Vec<PathBuf> },
 
-    #[error("Smithbox source exists but Andre.Formats project was missing: {path}")]
+    #[error(
+        "Smithbox directory exists but contains neither {ANDRE_FORMATS_PROJECT_PATH} (source checkout) nor {ANDRE_FORMATS_DLL_FILE} (binary install): {path}"
+    )]
     AndreFormatsProjectMissing { path: PathBuf },
 
     #[error("failed to write SoulsFormats bridge project")]
@@ -121,9 +143,10 @@ impl SoulsFormats {
         for candidate in DEFAULT_SMITHBOX_REPO_CANDIDATES {
             let path = repo_root.join(candidate);
             checked_paths.push(path.clone());
-            if andre_formats_project_path(&path).exists() {
+            if let Some(layout) = detect_smithbox_layout(&path) {
                 return Ok(Self {
                     smithbox_root: path,
+                    layout,
                     repo_root,
                 });
             }
@@ -158,7 +181,14 @@ impl SoulsFormats {
             )?,
         };
 
-        serde_json::from_str(&output).map_err(SoulsFormatsError::JsonParseFailed)
+        // `dotnet run` may emit restore/build messages on stdout ahead of the
+        // bridge's single JSON line; parse the last JSON-looking line.
+        let json_line = output
+            .lines()
+            .rev()
+            .find(|line| line.trim_start().starts_with('{'))
+            .unwrap_or(&output);
+        serde_json::from_str(json_line).map_err(SoulsFormatsError::JsonParseFailed)
     }
 
     fn from_smithbox_root_with_repo_root(
@@ -166,15 +196,15 @@ impl SoulsFormats {
         repo_root: PathBuf,
         checked_paths: Vec<PathBuf>,
     ) -> Result<Self, SoulsFormatsError> {
-        let andre_formats_project = andre_formats_project_path(&smithbox_root);
-        if andre_formats_project.exists() {
+        if let Some(layout) = detect_smithbox_layout(&smithbox_root) {
             Ok(Self {
                 smithbox_root,
+                layout,
                 repo_root,
             })
         } else if checked_paths.is_empty() {
             Err(SoulsFormatsError::AndreFormatsProjectMissing {
-                path: andre_formats_project,
+                path: smithbox_root,
             })
         } else {
             Err(SoulsFormatsError::SmithboxSourceMissing { checked_paths })
@@ -193,12 +223,25 @@ impl SoulsFormats {
         let bridge_root = self.repo_root.join(BRIDGE_PROJECT_DIR);
         fs::create_dir_all(&bridge_root).map_err(SoulsFormatsError::BridgeWriteFailed)?;
 
-        let andre_formats_project = andre_formats_project_path(&self.smithbox_root);
-        let andre_formats_project = self.host_path_for(&andre_formats_project, host)?;
-        let project = BRIDGE_PROJECT_TEMPLATE.replace(
-            "{{ANDRE_FORMATS_PROJECT}}",
-            &escape_xml(&andre_formats_project),
-        );
+        let project = match self.layout {
+            SmithboxLayout::Source => {
+                let andre_formats_project = andre_formats_project_path(&self.smithbox_root);
+                let andre_formats_project = self.host_path_for(&andre_formats_project, host)?;
+                BRIDGE_PROJECT_TEMPLATE.replace(
+                    "{{ANDRE_FORMATS_PROJECT}}",
+                    &escape_xml(&andre_formats_project),
+                )
+            }
+            SmithboxLayout::Binary => {
+                let formats_dll = self.smithbox_root.join(ANDRE_FORMATS_DLL_FILE);
+                let formats_dll = self.host_path_for(&formats_dll, host)?;
+                let soulsformats_dll = self.smithbox_root.join(ANDRE_SOULSFORMATS_DLL_FILE);
+                let soulsformats_dll = self.host_path_for(&soulsformats_dll, host)?;
+                BRIDGE_BINARY_PROJECT_TEMPLATE
+                    .replace("{{ANDRE_FORMATS_DLL}}", &escape_xml(&formats_dll))
+                    .replace("{{ANDRE_SOULSFORMATS_DLL}}", &escape_xml(&soulsformats_dll))
+            }
+        };
 
         // Skip the write when contents are unchanged so the project files keep
         // their mtimes and `dotnet run` can reuse the previous build instead of
@@ -228,6 +271,11 @@ impl SoulsFormats {
             .arg(param_name);
         append_row_ids(&mut command, row_ids);
 
+        if self.layout == SmithboxLayout::Binary {
+            let smithbox_dir = self.host_path_for(&self.smithbox_root, &DotnetHost::Direct)?;
+            command.env(SMITHBOX_BINARY_DIR_ENV, smithbox_dir);
+        }
+
         run_command(command, DOTNET_EXECUTABLE)
     }
 
@@ -241,8 +289,18 @@ impl SoulsFormats {
         let bridge_root = self.host_path_for(bridge_root, &DotnetHost::WindowsPowerShell)?;
         let regulation_path =
             self.host_path_for(regulation_path, &DotnetHost::WindowsPowerShell)?;
+        let smithbox_env_assignment = if self.layout == SmithboxLayout::Binary {
+            let smithbox_dir =
+                self.host_path_for(&self.smithbox_root, &DotnetHost::WindowsPowerShell)?;
+            format!(
+                " $env:{SMITHBOX_BINARY_DIR_ENV} = {};",
+                powershell_quote(&smithbox_dir)
+            )
+        } else {
+            String::new()
+        };
         let mut command_text = format!(
-            "{POWERSHELL_ERROR_ACTION_STOP} Set-Location -LiteralPath {}; dotnet run --configuration {DOTNET_RELEASE_CONFIGURATION} -- {PARAM_ROWS_MODE} {} {}",
+            "{POWERSHELL_ERROR_ACTION_STOP}{smithbox_env_assignment} Set-Location -LiteralPath {}; dotnet run --configuration {DOTNET_RELEASE_CONFIGURATION} -- {PARAM_ROWS_MODE} {} {}",
             powershell_quote(&bridge_root),
             powershell_quote(&regulation_path),
             powershell_quote(param_name),
@@ -281,6 +339,16 @@ fn current_repo_root() -> Result<PathBuf, SoulsFormatsError> {
 
 fn andre_formats_project_path(smithbox_root: &Path) -> PathBuf {
     smithbox_root.join(ANDRE_FORMATS_PROJECT_PATH)
+}
+
+fn detect_smithbox_layout(smithbox_root: &Path) -> Option<SmithboxLayout> {
+    if andre_formats_project_path(smithbox_root).exists() {
+        Some(SmithboxLayout::Source)
+    } else if smithbox_root.join(ANDRE_FORMATS_DLL_FILE).exists() {
+        Some(SmithboxLayout::Binary)
+    } else {
+        None
+    }
 }
 
 fn command_exists(command: &str) -> bool {
@@ -440,6 +508,52 @@ mod tests {
 
         assert!(!project.contains("{{ANDRE_FORMATS_PROJECT}}"));
         assert!(project.contains("a&amp;b"));
+    }
+
+    #[test]
+    fn detects_source_and_binary_smithbox_layouts() {
+        let base = std::env::temp_dir().join("er-soulsformats-layout-test");
+
+        let source_root = base.join("source");
+        let project_dir = andre_formats_project_path(&source_root);
+        fs::create_dir_all(project_dir.parent().expect("project parent")).expect("create dirs");
+        fs::write(&project_dir, "<Project />").expect("write csproj");
+        assert_eq!(
+            detect_smithbox_layout(&source_root),
+            Some(SmithboxLayout::Source)
+        );
+
+        let binary_root = base.join("binary");
+        fs::create_dir_all(&binary_root).expect("create binary dir");
+        fs::write(binary_root.join(ANDRE_FORMATS_DLL_FILE), "").expect("write dll");
+        assert_eq!(
+            detect_smithbox_layout(&binary_root),
+            Some(SmithboxLayout::Binary)
+        );
+
+        let empty_root = base.join("empty");
+        fs::create_dir_all(&empty_root).expect("create empty dir");
+        assert_eq!(detect_smithbox_layout(&empty_root), None);
+
+        fs::remove_dir_all(&base).expect("cleanup");
+    }
+
+    #[test]
+    fn binary_bridge_template_substitution_fills_both_dll_paths() {
+        let project = BRIDGE_BINARY_PROJECT_TEMPLATE
+            .replace(
+                "{{ANDRE_FORMATS_DLL}}",
+                &escape_xml(r"D:\Smithbox\Andre.Formats.dll"),
+            )
+            .replace(
+                "{{ANDRE_SOULSFORMATS_DLL}}",
+                &escape_xml(r"D:\Smithbox\Andre.SoulsFormats.dll"),
+            );
+
+        assert!(!project.contains("{{ANDRE_FORMATS_DLL}}"));
+        assert!(!project.contains("{{ANDRE_SOULSFORMATS_DLL}}"));
+        assert!(project.contains(r"D:\Smithbox\Andre.Formats.dll"));
+        assert!(project.contains(r"D:\Smithbox\Andre.SoulsFormats.dll"));
     }
 
     #[test]
