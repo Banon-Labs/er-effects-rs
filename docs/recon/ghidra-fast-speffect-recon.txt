@@ -1,0 +1,549 @@
+program=pc_eldenring_runtime.1.16.1.exe
+executablePath=/C:/Users/axd1x8a/Desktop/dump-er-1.16.1/pc_eldenring_runtime.1.16.1.exe
+domainFile=/Elden Ring/pc_eldenring_runtime.1.16.1.exe
+outputFile=C:\Users\choza\AppData\Local\Temp\ghidra-fast-speffect-recon.txt
+
+symbol-matches
+symbol name="GivePhantomGreatRune" type=Function address=140255270 namespace="Global"
+  refFrom=14488bde8 type=DATA
+  refFrom=140af9bfd type=UNCONDITIONAL_CALL
+  refFrom=1434468e0 type=DATA
+symbol name="GetWhitePhantomCount" type=Function address=140256040 namespace="CS::GameData"
+  refFrom=140a3075f type=UNCONDITIONAL_CALL
+symbol name="InitializeSpEffects" type=Function address=14025f2f0 namespace="CS::PlayerGameData"
+  refFrom=140258e7e type=UNCONDITIONAL_CALL
+  refFrom=14065d379 type=UNCONDITIONAL_CALL
+  refFrom=14065aa7f type=UNCONDITIONAL_CALL
+symbol name="GetSpEffectEntry" type=Function address=14025fbf0 namespace="CS::PlayerGameData"
+  refFrom=14065d345 type=UNCONDITIONAL_CALL
+symbol name="GetMenuRefSpecialEffect1" type=Function address=140260a00 namespace="CS::PlayerGameData"
+  refFrom=1405574b9 type=UNCONDITIONAL_CALL
+  refFrom=140778257 type=UNCONDITIONAL_CALL
+  refFrom=14078a4ab type=UNCONDITIONAL_CALL
+  refFrom=140788e9b type=UNCONDITIONAL_CALL
+  refFrom=1407c072d type=UNCONDITIONAL_CALL
+  refFrom=1407c0e0d type=UNCONDITIONAL_CALL
+  refFrom=1407c9e25 type=UNCONDITIONAL_CALL
+  refFrom=1407ca40b type=UNCONDITIONAL_CALL
+  refFrom=<truncated>
+symbol name="GetSpecialEffectInterruptType" type=Function address=1402dc710 namespace="CS::SpecialEffectObserver"
+  refFrom=144894fc8 type=DATA
+  refFrom=1402dc4e2 type=UNCONDITIONAL_CALL
+  refFrom=1402dc512 type=UNCONDITIONAL_CALL
+symbol name="AddObserveSpecialEffectAttribute" type=Function address=1402fc970 namespace="CS::CSAiFunc"
+  refFrom=14008f06b type=DATA
+  refFrom=143b13fb0 type=DATA
+symbol name="DeleteObserveSpecialEffectAttribute" type=Function address=1402fd650 namespace="CS::CSAiFunc"
+  refFrom=14008f0db type=DATA
+  refFrom=143b13fc0 type=DATA
+symbol name="GetSpecialEffectActivateInterruptId" type=Function address=1402ffa60 namespace="CS::CSAiFunc"
+  refFrom=14008837b type=DATA
+  refFrom=143b14010 type=DATA
+symbol name="GetSpecialEffectActivateInterruptNum" type=Function address=1402ffa70 namespace="CS::CSAiFunc"
+  refFrom=1400881bb type=DATA
+  refFrom=143b13fd0 type=DATA
+symbol name="GetSpecialEffectActivateInterruptType" type=Function address=1402ffa80 namespace="CS::CSAiFunc"
+  refFrom=144898130 type=DATA
+  refFrom=14008829b type=DATA
+  refFrom=143b13ff0 type=DATA
+symbol name="GetSpecialEffectDeActivateInterruptId" type=Function address=1402ffab0 namespace="CS::CSAiFunc"
+  refFrom=1400883eb type=DATA
+  refFrom=143b14020 type=DATA
+symbol name="GetSpecialEffectInactivateInterruptNum" type=Function address=1402ffac0 namespace="CS::CSAiFunc"
+  refFrom=14008822b type=DATA
+  refFrom=143b13fe0 type=DATA
+symbol name="GetSpecialEffectInactivateInterruptType" type=Function address=1402ffad0 namespace="CS::CSAiFunc"
+  refFrom=14489813c type=DATA
+  refFrom=14008830b type=DATA
+  refFrom=143b14000 type=DATA
+symbol name="HasSpecialEffectAttribute" type=Function address=1403006f0 namespace="CS::CSAiFunc"
+  refFrom=144898244 type=DATA
+  refFrom=140087ffb type=DATA
+  refFrom=143b13f70 type=DATA
+symbol name="HasSpecialEffectCategory" type=Label address=140300720 namespace="CS::CSAiFunc"
+  refFrom=144898250 type=DATA
+  refFrom=14008806b type=DATA
+  refFrom=143b13f80 type=DATA
+symbol name="HasSpecialEffectCategory" type=Function address=140300720 namespace="Global"
+  refFrom=144898250 type=DATA
+  refFrom=14008806b type=DATA
+  refFrom=143b13f80 type=DATA
+symbol name="HasSpecialEffectId" type=Function address=140300750 namespace="CS::CSAiFunc"
+  refFrom=14489825c type=DATA
+  refFrom=1402dc64e type=UNCONDITIONAL_CALL
+  refFrom=1402dc32b type=UNCONDITIONAL_CALL
+  refFrom=1402dc458 type=UNCONDITIONAL_CALL
+  refFrom=140321922 type=UNCONDITIONAL_CALL
+  refFrom=1400880db type=DATA
+  refFrom=143b13f90 type=DATA
+symbol name="IsSleepSpecialEffectId" type=Function address=140301db0 namespace="CS::CSAiFunc"
+  refFrom=144898460 type=DATA
+  refFrom=14008814b type=DATA
+  refFrom=143b13fa0 type=DATA
+symbol name="GetSpEffectTargetPriorityCorrection" type=Function address=140328f00 namespace="CS::CSChrInsTargetAccessorBase"
+  refFrom=14489b250 type=DATA
+  refFrom=142a00458 type=DATA
+  refFrom=142a19c78 type=DATA
+  refFrom=1429ffe10 type=DATA
+  refFrom=142a19a60 type=DATA
+symbol name="HasSpecialEffectId" type=Function address=14035c330 namespace="CS::CSAiPlatoonFunc"
+  refFrom=14009231b type=DATA
+  refFrom=143b156e8 type=DATA
+symbol name="ApplySpEffect" type=Function address=1403e8cf0 namespace="CS::ChrIns"
+  refFrom=1448a578c type=DATA
+  refFrom=140651c22 type=UNCONDITIONAL_CALL
+  refFrom=1401c0f1d type=UNCONDITIONAL_CALL
+  refFrom=140a054bf type=UNCONDITIONAL_CALL
+  refFrom=1403552f3 type=UNCONDITIONAL_CALL
+  refFrom=140301fa1 type=UNCONDITIONAL_CALL
+  refFrom=140303444 type=UNCONDITIONAL_CALL
+  refFrom=1403549c2 type=UNCONDITIONAL_CALL
+  refFrom=<truncated>
+symbol name="RemoveSpEffectById" type=Function address=1403ee1b0 namespace="CS::ChrIns"
+  refFrom=140a054ae type=UNCONDITIONAL_CALL
+  refFrom=14041bdbd type=UNCONDITIONAL_CALL
+  refFrom=14041bd04 type=UNCONDITIONAL_CALL
+  refFrom=1404a5e14 type=UNCONDITIONAL_CALL
+  refFrom=1404a7799 type=UNCONDITIONAL_CALL
+  refFrom=1404ab8f8 type=UNCONDITIONAL_CALL
+  refFrom=1405ed663 type=CONDITIONAL_JUMP
+  refFrom=140608771 type=UNCONDITIONAL_CALL
+  refFrom=<truncated>
+symbol name="GetPhantomParamId" type=Function address=1403f0af0 namespace="CS::ChrIns"
+  refFrom=1448a5c9c type=DATA
+  refFrom=1434a5408 type=DATA
+  refFrom=1434a541c type=DATA
+  refFrom=1434a5430 type=DATA
+  refFrom=1434a5444 type=DATA
+  refFrom=1434a5454 type=DATA
+  refFrom=142bf3c50 type=DATA
+  refFrom=142a444e0 type=DATA
+  refFrom=<truncated>
+symbol name="HasSpecialEffectId" type=Function address=1403f2080 namespace="CS::ChrIns"
+  refFrom=140506886 type=UNCONDITIONAL_CALL
+  refFrom=14037ef2e type=UNCONDITIONAL_CALL
+  refFrom=14043f106 type=UNCONDITIONAL_CALL
+  refFrom=1404b8888 type=UNCONDITIONAL_CALL
+  refFrom=1404b8908 type=UNCONDITIONAL_CALL
+  refFrom=1404b8ef7 type=UNCONDITIONAL_CALL
+  refFrom=1404b914c type=UNCONDITIONAL_CALL
+  refFrom=1404fe849 type=UNCONDITIONAL_CALL
+  refFrom=<truncated>
+symbol name="HasSpEffect455AkaStateInfo435" type=Function address=1403f2df0 namespace="CS::ChrIns"
+  refFrom=1448a5ec4 type=DATA
+  refFrom=1403cc24b type=UNCONDITIONAL_CALL
+  refFrom=1403dc6f3 type=UNCONDITIONAL_CALL
+  refFrom=1406604ce type=UNCONDITIONAL_CALL
+  refFrom=140551da4 type=UNCONDITIONAL_CALL
+  refFrom=140552080 type=UNCONDITIONAL_CALL
+  refFrom=14077366e type=UNCONDITIONAL_CALL
+  refFrom=140773e65 type=UNCONDITIONAL_CALL
+  refFrom=<truncated>
+symbol name="HasTelescopeSpEffect" type=Function address=1403f4ce0 namespace="CS::ChrIns"
+  refFrom=1448a6110 type=DATA
+  refFrom=1403b15f1 type=UNCONDITIONAL_CALL
+  refFrom=1403cc238 type=UNCONDITIONAL_CALL
+  refFrom=1403dc6df type=UNCONDITIONAL_CALL
+  refFrom=1406604c2 type=UNCONDITIONAL_CALL
+  refFrom=1406608c4 type=UNCONDITIONAL_CALL
+  refFrom=14065a1c7 type=UNCONDITIONAL_CALL
+  refFrom=14077588b type=UNCONDITIONAL_CALL
+  refFrom=<truncated>
+symbol name="SendSpEffectIdSync" type=Function address=1403f5ed0 namespace="CS::PlayerIns"
+  refFrom=1448a6248 type=DATA
+  refFrom=1403e90bc type=UNCONDITIONAL_CALL
+  refFrom=140cb48f5 type=UNCONDITIONAL_CALL
+  refFrom=1434a4db0 type=DATA
+  refFrom=140cb4918 type=UNCONDITIONAL_CALL
+symbol name="WanderingPhantom" type=Function address=1403fa020 namespace="TeamType"
+  refFrom=1403f76ca type=UNCONDITIONAL_CALL
+  refFrom=1403f77ac type=UNCONDITIONAL_CALL
+  refFrom=1403f7655 type=UNCONDITIONAL_CALL
+symbol name="InitNpcSpEffectEquipCtrl" type=Function address=1403fc6d0 namespace="CS::ChrIns"
+  refFrom=1448a66f8 type=DATA
+  refFrom=1403f26f2 type=UNCONDITIONAL_CALL
+  refFrom=1404cff8a type=UNCONDITIONAL_CALL
+  refFrom=140657c88 type=UNCONDITIONAL_CALL
+  refFrom=1434a5550 type=DATA
+symbol name="UpdateSpEffects" type=Function address=140400090 namespace="CS::ChrIns"
+  refFrom=1448a69c8 type=DATA
+  refFrom=1434a4d38 type=DATA
+  refFrom=1403f2836 type=UNCONDITIONAL_CALL
+  refFrom=140401378 type=UNCONDITIONAL_CALL
+  refFrom=1404022cf type=UNCONDITIONAL_CALL
+symbol name="GetSpEffectWetConditionDepth" type=Function address=1404065c0 namespace="CS::CSChrActionFlagModule"
+  refFrom=1404fc6cf type=UNCONDITIONAL_CALL
+symbol name="AddSpEffect" type=Function address=14042c0e0 namespace="CS::CSChrTaeAnimEvent"
+  refFrom=1448a8e7c type=DATA
+  refFrom=1434ae46c type=DATA
+  refFrom=1434ae480 type=DATA
+  refFrom=1434ae490 type=DATA
+  refFrom=14042e352 type=UNCONDITIONAL_CALL
+  refFrom=14042e362 type=UNCONDITIONAL_CALL
+symbol name="PhantomParamDataModifier" type=Function address=14043b3e0 namespace="PhantomParamDataModifier"
+  refFrom=1448aa34c type=DATA
+  refFrom=1403edd02 type=UNCONDITIONAL_CALL
+  refFrom=1403ea0a1 type=UNCONDITIONAL_CALL
+  refFrom=1403ede3b type=UNCONDITIONAL_CALL
+symbol name="GetPhantomParamParamName" type=Function address=14043b530 namespace="Global"
+  refFrom=14043b728 type=UNCONDITIONAL_CALL
+symbol name="ApplyPhantomParams" type=Function address=14043bb30 namespace="CS::CSChrModelParamModifierModule"
+  refFrom=1448aa37c type=DATA
+  refFrom=1403edd10 type=UNCONDITIONAL_CALL
+  refFrom=1403ea0af type=UNCONDITIONAL_CALL
+  refFrom=1403ede49 type=UNCONDITIONAL_CALL
+  refFrom=1403f823e type=UNCONDITIONAL_CALL
+  refFrom=1404b33a5 type=UNCONDITIONAL_CALL
+  refFrom=1434b1820 type=DATA
+symbol name="GetSpecialEffect" type=Function address=14043ce10 namespace="CS::CSChrModuleBase"
+  refFrom=14043764a type=UNCONDITIONAL_CALL
+  refFrom=140437098 type=UNCONDITIONAL_CALL
+  refFrom=140437880 type=UNCONDITIONAL_CALL
+  refFrom=1404378b0 type=UNCONDITIONAL_CALL
+  refFrom=14046099e type=UNCONDITIONAL_CALL
+  refFrom=14043908a type=UNCONDITIONAL_CALL
+  refFrom=140437b14 type=UNCONDITIONAL_CALL
+  refFrom=140437c1f type=UNCONDITIONAL_CALL
+  refFrom=<truncated>
+symbol name="ApplySpEffectStatusClearFlags" type=Function address=14043e360 namespace="CS::CSChrResistModule"
+  refFrom=1448aa6f4 type=DATA
+  refFrom=1403ee593 type=UNCONDITIONAL_CALL
+symbol name="ValidateThrowForHKSSpEffects" type=Function address=140485a90 namespace="CS::CSThrowNode"
+  refFrom=1448ae8b8 type=DATA
+  refFrom=140485e95 type=UNCONDITIONAL_CALL
+  refFrom=14048255b type=UNCONDITIONAL_CALL
+symbol name="ChrBigRuneSpEffectSlot" type=Function address=1404a6d90 namespace="CS::ChrBigRuneSpEffectSlot"
+  refFrom=1448b0ed4 type=DATA
+  refFrom=140498540 type=UNCONDITIONAL_CALL
+  refFrom=1434c58e8 type=DATA
+symbol name="RemoveGreatRuneSpEffects" type=Function address=1404a7410 namespace="CS::PlayerIns"
+  refFrom=1448b0ef8 type=DATA
+  refFrom=1404a789e type=UNCONDITIONAL_CALL
+  refFrom=1404a78e2 type=UNCONDITIONAL_CALL
+  refFrom=1434c59d8 type=DATA
+symbol name="ApplyBuddySpawnSpEffect" type=Function address=1404b8190 namespace="SummonBuddyManager"
+  refFrom=1448b1f0c type=DATA
+  refFrom=1403fb0a8 type=UNCONDITIONAL_CALL
+symbol name="UpdateSummonSpEffects" type=Function address=1404b8a90 namespace="CS::SummonBuddyManager"
+  refFrom=1448b1f54 type=DATA
+  refFrom=1434c8da8 type=DATA
+  refFrom=1434c8e08 type=DATA
+  refFrom=1404b8702 type=UNCONDITIONAL_CALL
+symbol name="GetBuddyListBySpEffectId" type=Function address=1404bca60 namespace="CS::SummonBuddyManager"
+  refFrom=1448b217c type=DATA
+  refFrom=1434c9920 type=DATA
+  refFrom=1434c9930 type=DATA
+  refFrom=1434c9948 type=DATA
+  refFrom=1404bcd99 type=UNCONDITIONAL_CALL
+  refFrom=1404bbae4 type=UNCONDITIONAL_CALL
+symbol name="UpdateTriggerSpEffectMap" type=Function address=1404bcb40 namespace="CS::SummonBuddyManager"
+  refFrom=1448b21ac type=DATA
+  refFrom=1404b5f8a type=UNCONDITIONAL_CALL
+  refFrom=1434c98e8 type=DATA
+symbol name="IsGrayPhantom" type=Function address=1404c7cd0 namespace="Global"
+  refFrom=1406581c1 type=UNCONDITIONAL_CALL
+  refFrom=140658eb8 type=UNCONDITIONAL_CALL
+  refFrom=14065e92d type=UNCONDITIONAL_CALL
+symbol name="IsFriendlyPhantom" type=Function address=1404c7d90 namespace="CharacterTypeProperties"
+  refFrom=1409fcebd type=UNCONDITIONAL_CALL
+  refFrom=1409fcf15 type=UNCONDITIONAL_CALL
+  refFrom=140d3c883 type=UNCONDITIONAL_CALL
+  refFrom=14035384f type=UNCONDITIONAL_CALL
+  refFrom=14037e873 type=UNCONDITIONAL_CALL
+  refFrom=140d37d09 type=UNCONDITIONAL_CALL
+  refFrom=140d37d4d type=UNCONDITIONAL_CALL
+  refFrom=140d38098 type=UNCONDITIONAL_CALL
+  refFrom=<truncated>
+symbol name="IsHostilePhantom" type=Function address=1404c7e10 namespace="CharacterTypeProperties"
+  refFrom=1409fced0 type=UNCONDITIONAL_CALL
+  refFrom=1409fcf28 type=UNCONDITIONAL_CALL
+  refFrom=140d48ae0 type=UNCONDITIONAL_CALL
+  refFrom=140d3c8ac type=UNCONDITIONAL_CALL
+  refFrom=1405069f0 type=UNCONDITIONAL_CALL
+  refFrom=1403f4de5 type=UNCONDITIONAL_CALL
+  refFrom=140651a9c type=UNCONDITIONAL_CALL
+  refFrom=140d37d1a type=UNCONDITIONAL_CALL
+  refFrom=<truncated>
+symbol name="NpcSpEffectEquipCtrl" type=Function address=1404f1b40 namespace="CS::NpcSpEffectEquipCtrl"
+  refFrom=1448b55d8 type=DATA
+  refFrom=1403fc7d7 type=UNCONDITIONAL_CALL
+  refFrom=1403fc867 type=UNCONDITIONAL_CALL
+  refFrom=1404d05c0 type=UNCONDITIONAL_CALL
+  refFrom=1404f1713 type=UNCONDITIONAL_CALL
+  refFrom=14065d1f9 type=UNCONDITIONAL_CALL
+  refFrom=1434d6ee0 type=DATA
+symbol name="ProSpEffectEquipCtrl" type=Function address=1404f1d90 namespace="CS::ProSpEffectEquipCtrl"
+  refFrom=1448b5608 type=DATA
+  refFrom=14065d1a9 type=UNCONDITIONAL_CALL
+  refFrom=1434d6f60 type=DATA
+symbol name="RngSpEffectEquipCtrl" type=Function address=1404f2100 namespace="CS::RngSpEffectEquipCtrl"
+  refFrom=1448b56bc type=DATA
+  refFrom=14065d11d type=UNCONDITIONAL_CALL
+  refFrom=1434d70a0 type=DATA
+symbol name="SpecialEffect" type=Function address=1404f30f0 namespace="CS::SpecialEffect"
+  refFrom=1448b5860 type=DATA
+  refFrom=140564396 type=UNCONDITIONAL_CALL
+  refFrom=1403e7684 type=UNCONDITIONAL_CALL
+  refFrom=1434d71d8 type=DATA
+symbol name="RespawnSpecialEffectActiveCheckerSpEffectId" type=Function address=1404f3ad0 namespace="CS::SpecialEffect"
+  refFrom=1448b59ec type=DATA
+  refFrom=14044869d type=UNCONDITIONAL_CALL
+  refFrom=140441154 type=UNCONDITIONAL_CALL
+  refFrom=14044e3c9 type=UNCONDITIONAL_CALL
+symbol name="RemoveSpEffectById" type=Function address=1404f6980 namespace="CS::SpecialEffect"
+  refFrom=1448b5d10 type=DATA
+  refFrom=140654d83 type=UNCONDITIONAL_CALL
+  refFrom=1404ab599 type=UNCONDITIONAL_CALL
+  refFrom=1404ab5c9 type=UNCONDITIONAL_CALL
+  refFrom=140a4bb85 type=UNCONDITIONAL_CALL
+  refFrom=1404b8e6a type=UNCONDITIONAL_CALL
+  refFrom=1404b8e7f type=UNCONDITIONAL_CALL
+  refFrom=1404d97df type=UNCONDITIONAL_CALL
+  refFrom=<truncated>
+symbol name="RemoveWepParam2And6SpEffects" type=Function address=1404f6bd0 namespace="CS::SpecialEffect"
+  refFrom=1448b5d34 type=DATA
+  refFrom=140654db0 type=UNCONDITIONAL_CALL
+  refFrom=14066042f type=UNCONDITIONAL_CALL
+  refFrom=1407ca441 type=UNCONDITIONAL_CALL
+symbol name="CheckMimicryRelatedSpEffects" type=Function address=1404f76c0 namespace="CS::SpecialEffect"
+  refFrom=1403fff8d type=UNCONDITIONAL_CALL
+symbol name="GetDeathPreventingSPEffectType" type=Function address=1404f89d0 namespace="CS::SpecialEffect"
+  refFrom=1448b5f20 type=DATA
+  refFrom=1434d8158 type=DATA
+  refFrom=1434d8170 type=DATA
+  refFrom=1434d8180 type=DATA
+  refFrom=14065a5be type=UNCONDITIONAL_CALL
+symbol name="HasSpecialEffectWithStateInfo" type=Function address=1404f9670 namespace="CS::SpecialEffect"
+  refFrom=1406f308c type=UNCONDITIONAL_CALL
+  refFrom=1406f30a9 type=UNCONDITIONAL_CALL
+  refFrom=140509cf6 type=UNCONDITIONAL_CALL
+  refFrom=140509d76 type=UNCONDITIONAL_CALL
+  refFrom=140509df6 type=UNCONDITIONAL_CALL
+  refFrom=140509e76 type=UNCONDITIONAL_CALL
+  refFrom=140a5e6c7 type=UNCONDITIONAL_CALL
+  refFrom=14068662d type=UNCONDITIONAL_CALL
+  refFrom=<truncated>
+symbol name="HasSpEffectWithStateInfo" type=Function address=1404f9770 namespace="CS::SpecialEffect"
+  refFrom=1404bbf1a type=UNCONDITIONAL_CALL
+  refFrom=140564676 type=UNCONDITIONAL_CALL
+  refFrom=140329ff2 type=UNCONDITIONAL_CALL
+symbol name="Has0HPConditionSpEffect" type=Function address=1404f98c0 namespace="CS::SpecialEffect"
+  refFrom=140437666 type=UNCONDITIONAL_CALL
+  refFrom=1404390a6 type=UNCONDITIONAL_CALL
+symbol name="Has0HPConditionSpEffect" type=Function address=1404f9970 namespace="CS::SpecialEffect"
+  refFrom=14043765a type=UNCONDITIONAL_CALL
+  refFrom=14043909a type=UNCONDITIONAL_CALL
+symbol name="HasSpecialEffectId" type=Function address=1404f9a10 namespace="CS::SpecialEffect"
+  refFrom=140675c06 type=UNCONDITIONAL_CALL
+  refFrom=1403e52e8 type=UNCONDITIONAL_CALL
+  refFrom=14068e991 type=UNCONDITIONAL_CALL
+  refFrom=140400214 type=UNCONDITIONAL_CALL
+  refFrom=1404405e2 type=UNCONDITIONAL_CALL
+  refFrom=1403f8304 type=UNCONDITIONAL_CALL
+  refFrom=1403f8315 type=UNCONDITIONAL_CALL
+  refFrom=1403f9bab type=UNCONDITIONAL_CALL
+  refFrom=<truncated>
+symbol name="HasSpEffectWithThrowCondition" type=Function address=1404f9a40 namespace="CS::SpecialEffect"
+  refFrom=140481f58 type=UNCONDITIONAL_CALL
+  refFrom=140481f7c type=UNCONDITIONAL_CALL
+  refFrom=140481fae type=UNCONDITIONAL_CALL
+  refFrom=140484505 type=UNCONDITIONAL_CALL
+  refFrom=140484533 type=UNCONDITIONAL_CALL
+  refFrom=140484563 type=UNCONDITIONAL_CALL
+  refFrom=140484591 type=UNCONDITIONAL_CALL
+  refFrom=1404845bf type=UNCONDITIONAL_CALL
+  refFrom=<truncated>
+symbol name="HasRequestNpcInvedeSpEffect" type=Function address=1404fa260 namespace="CS::SpecialEffect"
+  refFrom=14065aea9 type=UNCONDITIONAL_CALL
+symbol name="HasRequestKickSessionSpEffect" type=Function address=1404fa2a0 namespace="CS::SpecialEffect"
+  refFrom=14065aebe type=UNCONDITIONAL_CALL
+symbol name="GetSpEffectEventAnimID" type=Function address=1404fae30 namespace="CS::SpecialEffect"
+  refFrom=140412809 type=UNCONDITIONAL_CALL
+symbol name="NewSpecialEffectEntry" type=Function address=1404fb6c0 namespace="SpecialEffect"
+  refFrom=1448b6208 type=DATA
+  refFrom=1404fd1a7 type=UNCONDITIONAL_CALL
+  refFrom=1434d7338 type=DATA
+symbol name="SpEffectAccumulatorInfo" type=Function address=1404fde80 namespace="SpEffectAccumulatorInfo"
+  refFrom=1448b6400 type=DATA
+  refFrom=1404fe029 type=UNCONDITIONAL_CALL
+  refFrom=1404fe00f type=UNCONDITIONAL_CALL
+symbol name="SpEffectAccumulatorInfo" type=Function address=1404fe000 namespace="SpEffectAccumulatorInfo"
+  refFrom=1448b640c type=DATA
+  refFrom=1404ff00f type=UNCONDITIONAL_CALL
+symbol name="SpEffectAccumulatorInfo" type=Function address=1404fe020 namespace="SpEffectAccumulatorInfo"
+  refFrom=1448b6418 type=DATA
+  refFrom=1404fd2c4 type=UNCONDITIONAL_CALL
+  refFrom=1404fd425 type=UNCONDITIONAL_CALL
+symbol name="SpecialEffectUnkStruct" type=Function address=1404fe120 namespace="SpecialEffectUnkStruct"
+  refFrom=1448b6430 type=DATA
+  refFrom=1404f3167 type=UNCONDITIONAL_CALL
+symbol name="SpEffectEquipCtrl" type=Function address=1404fe6f0 namespace="CS::SpEffectEquipCtrl"
+  refFrom=1404f1b67 type=UNCONDITIONAL_CALL
+  refFrom=1404f1a46 type=UNCONDITIONAL_CALL
+  refFrom=1404f1db7 type=UNCONDITIONAL_CALL
+  refFrom=1404f2127 type=UNCONDITIONAL_CALL
+  refFrom=140501557 type=UNCONDITIONAL_CALL
+symbol name="SpEffectSubCategoryMaskData" type=Function address=1404fef90 namespace="SpEffectSubCategoryMaskData"
+  refFrom=1448b664c type=DATA
+  refFrom=1407cbeba type=UNCONDITIONAL_CALL
+  refFrom=1407cc01a type=UNCONDITIONAL_CALL
+symbol name="SpecialEffectEntry" type=Function address=1404fefe0 namespace="SpecialEffectEntry"
+  refFrom=1448b6658 type=DATA
+  refFrom=1404fb6f8 type=UNCONDITIONAL_CALL
+  refFrom=1404f344a type=UNCONDITIONAL_CALL
+  refFrom=1434d9278 type=DATA
+symbol name="WepSpEffectEquipCtrl" type=Function address=140501530 namespace="CS::WepSpEffectEquipCtrl"
+  refFrom=1448b67d8 type=DATA
+  refFrom=14065d163 type=UNCONDITIONAL_CALL
+  refFrom=1434d9470 type=DATA
+symbol name="~WepSpEffectEquipCtrl" type=Function address=140501580 namespace="CS::WepSpEffectEquipCtrl"
+  refFrom=1448b67e4 type=DATA
+  refFrom=14050163f type=UNCONDITIONAL_CALL
+  refFrom=1434d94b0 type=DATA
+symbol name="UpdateSpEffects" type=Function address=140501c30 namespace="CS::WorldChrManImp"
+  refFrom=1448b6874 type=DATA
+  refFrom=1434dcdd8 type=DATA
+  refFrom=1434dcde8 type=DATA
+  refFrom=14050a56e type=UNCONDITIONAL_CALL
+symbol name="UpdateSpEffects" type=Function address=14050a520 namespace="Global"
+  refFrom=1448b7570 type=DATA
+  refFrom=140af7385 type=UNCONDITIONAL_CALL
+symbol name="validateTeamTypeRelationshipWithSpEffect" type=Function address=14051aac0 namespace="Global"
+  refFrom=1448b8710 type=DATA
+  refFrom=1404fc667 type=UNCONDITIONAL_CALL
+symbol name="validateTeamTypeRelationForObjectWithSpEffect" type=Function address=14051aba0 namespace="Global"
+  refFrom=1448b8728 type=DATA
+  refFrom=1404fc655 type=UNCONDITIONAL_CALL
+symbol name="MenuRefSpecialEffect" type=Function address=140564380 namespace="CS::MenuRefSpecialEffect"
+  refFrom=1448bccf4 type=DATA
+  refFrom=140258b69 type=UNCONDITIONAL_CALL
+  refFrom=14025d849 type=UNCONDITIONAL_CALL
+  refFrom=14025d882 type=UNCONDITIONAL_CALL
+  refFrom=14025d8bb type=UNCONDITIONAL_CALL
+  refFrom=140258eff type=UNCONDITIONAL_CALL
+  refFrom=1434f1500 type=DATA
+symbol name="SetEventSpecialEffect_2" type=Function address=1405911e0 namespace="CS::CSLuaEventProxy"
+  refFrom=1448bf520 type=DATA
+  refFrom=140599c35 type=UNCONDITIONAL_CALL
+symbol name="AddRuneArcGreatRuneSpEffect" type=Function address=140591320 namespace="Global"
+  refFrom=1448bf544 type=DATA
+  refFrom=1434fb3f4 type=DATA
+  refFrom=1434fb408 type=DATA
+  refFrom=1434fb418 type=DATA
+  refFrom=140596eb7 type=UNCONDITIONAL_CALL
+symbol name="SetEventSpecialEffect_2" type=Function address=1405e0840 namespace="Global"
+  refFrom=1448c41dc type=DATA
+  refFrom=1405911e7 type=UNCONDITIONAL_CALL
+symbol name="ApplyResistCurseSpEffect" type=Function address=140651bd0 namespace="Global"
+  refFrom=1448caee4 type=DATA
+  refFrom=14024ebfc type=UNCONDITIONAL_CALL
+symbol name="RemoveCurseResistSpEffect" type=Function address=140654d30 namespace="Global"
+  refFrom=1448cb2e0 type=DATA
+  refFrom=14024ebac type=UNCONDITIONAL_CALL
+symbol name="RemoveWepParam2And6SpEffects" type=Function address=140654da0 namespace="CS::PlayerIns"
+  refFrom=1448cb2ec type=DATA
+  refFrom=14042667c type=UNCONDITIONAL_CALL
+  refFrom=14042d47f type=UNCONDITIONAL_CALL
+symbol name="RemoveWepParam1And5SpEffects" type=Function address=140654dd0 namespace="CS::PlayerIns"
+  refFrom=1448cb2f8 type=DATA
+  refFrom=140426689 type=UNCONDITIONAL_CALL
+  refFrom=14042d471 type=UNCONDITIONAL_CALL
+symbol name="InitializeSpEffects" type=Function address=14065d0c0 namespace="CS::PlayerIns"
+  refFrom=1448cbc28 type=DATA
+  refFrom=140656aef type=UNCONDITIONAL_CALL
+  refFrom=140657c78 type=UNCONDITIONAL_CALL
+  refFrom=143527a30 type=DATA
+symbol name="HasNonNPCPhantoms" type=Function address=1406f26a0 namespace="CS::SummoningFrame"
+  refFrom=1409f9556 type=UNCONDITIONAL_CALL
+symbol name="PhantomJoinData" type=Function address=1406f6e90 namespace="CS::PhantomJoinData"
+  refFrom=1448d41cc type=DATA
+  refFrom=1406fd933 type=UNCONDITIONAL_CALL
+  refFrom=1406f7faa type=UNCONDITIONAL_CALL
+  refFrom=1406f8162 type=UNCONDITIONAL_CALL
+symbol name="CountHostilePhantoms_Total" type=Function address=1406f8fa0 namespace="CS::SosSignMan"
+  refFrom=1448d4424 type=DATA
+  refFrom=1409f9359 type=UNCONDITIONAL_CALL
+  refFrom=1435480e0 type=DATA
+symbol name="GetPhantomJoinDataSize" type=Function address=1406f9eb0 namespace="CS::SosSignMan"
+  refFrom=1409fb1c1 type=UNCONDITIONAL_CALL
+  refFrom=140cb0a3a type=UNCONDITIONAL_CALL
+  refFrom=140cb2adc type=UNCONDITIONAL_CALL
+symbol name="HasNonNPCPhantoms" type=Function address=1409f94f0 namespace="CS::PartyMemberInfo"
+  refFrom=1449078ec type=DATA
+  refFrom=140c9711a type=UNCONDITIONAL_CALL
+  refFrom=14068e2a4 type=UNCONDITIONAL_CALL
+  refFrom=1409f95aa type=UNCONDITIONAL_CALL
+  refFrom=1436b8638 type=DATA
+symbol name="SendInvadingPhantomsHome" type=Function address=1409fad70 namespace="CS::PartyMemberInfo"
+  refFrom=1449079b8 type=DATA
+  refFrom=140573ade type=UNCONDITIONAL_CALL
+  refFrom=140573c42 type=UNCONDITIONAL_CALL
+  refFrom=1409fc0ec type=UNCONDITIONAL_CALL
+  refFrom=1436b8900 type=DATA
+symbol name="GetUtilitySpEffectId" type=Function address=140a4cd90 namespace="QuickmatchManager"
+  refFrom=140a49afe type=UNCONDITIONAL_CALL
+  refFrom=140a49bc9 type=UNCONDITIONAL_CALL
+  refFrom=140a49c51 type=UNCONDITIONAL_CALL
+  refFrom=140a49d17 type=UNCONDITIONAL_CALL
+  refFrom=140a49d96 type=UNCONDITIONAL_CALL
+  refFrom=1405a0ad6 type=UNCONDITIONAL_CALL
+  refFrom=1405a140b type=UNCONDITIONAL_CALL
+  refFrom=1405a3b88 type=UNCONDITIONAL_CALL
+  refFrom=<truncated>
+symbol name="KeyExistsInTree" type=Function address=140c945d0 namespace="CS::CSSessionMan0x30"
+  refFrom=140cae316 type=UNCONDITIONAL_CALL
+symbol name="ValidateNetworkedSpEffect" type=Function address=140ca6560 namespace="Global"
+  refFrom=1449309e0 type=DATA
+  refFrom=140c9b8ed type=UNCONDITIONAL_CALL
+  refFrom=140c9c9f5 type=UNCONDITIONAL_CALL
+symbol name="SyncSpEffects590and592" type=Function address=140cb4890 namespace="CS::CSSessionManagerImp"
+  refFrom=1449315e0 type=DATA
+  refFrom=140cb0e9f type=UNCONDITIONAL_CALL
+  refFrom=140cb0f8b type=UNCONDITIONAL_CALL
+symbol name="GetArenaHostileSpEffect" type=Function address=140d265c0 namespace="CS::BuddyParam"
+  refFrom=1404b8877 type=UNCONDITIONAL_CALL
+symbol name="GetArenaFriendlySpEffects" type=Function address=140d26610 namespace="CS::BuddyParam"
+  refFrom=1404b88f7 type=UNCONDITIONAL_CALL
+symbol name="GetArenaDopingSpEffect" type=Function address=140d26660 namespace="CS::BuddyParam"
+  refFrom=1404bdcc9 type=UNCONDITIONAL_CALL
+  refFrom=1404bdcd9 type=UNCONDITIONAL_CALL
+symbol name="GetDopingLevelSpEffect" type=Function address=140d26810 namespace="CS::BuddyParam"
+  refFrom=1404bb2b6 type=UNCONDITIONAL_CALL
+symbol name="GetSpEffectIds" type=Function address=140d33ea0 namespace="CS::BulletParamEntry"
+  refFrom=1405263ce type=UNCONDITIONAL_CALL
+symbol name="CheckItemUseForPhantom" type=Function address=140d3a2a0 namespace="EquipParamGoodsLookupResult"
+  refFrom=14493a1b4 type=DATA
+  refFrom=14068ee1d type=UNCONDITIONAL_CALL
+symbol name="GetHitSpEffect" type=Function address=140d3bb50 namespace="CS::HitMtrlParamLookupResult"
+  refFrom=14493a268 type=DATA
+  refFrom=1403ff5e7 type=UNCONDITIONAL_CALL
+symbol name="GetPhantomParam" type=Function address=140d43690 namespace="Global"
+  refFrom=14493a6ac type=DATA
+  refFrom=14043bb70 type=UNCONDITIONAL_CALL
+  refFrom=140a91922 type=UNCONDITIONAL_CALL
+  refFrom=140a91930 type=UNCONDITIONAL_CALL
+symbol name="GetPhantomParam" type=Function address=140d43a40 namespace="Global"
+  refFrom=14493a6f4 type=DATA
+  refFrom=140d436a7 type=UNCONDITIONAL_CALL
+  refFrom=143784e90 type=DATA
+symbol name="GetPhantomParamIdByVow" type=Function address=140d488a0 namespace="RoleParamLookupResult"
+  refFrom=14493aa90 type=DATA
+  refFrom=1404f0679 type=UNCONDITIONAL_CALL
+  refFrom=1404f1389 type=UNCONDITIONAL_CALL
+  refFrom=1403f0c04 type=UNCONDITIONAL_CALL
+symbol name="GetRoleSpEffects" type=Function address=140d489d0 namespace="RoleParamLookupResult"
+  refFrom=14493aaa8 type=DATA
+  refFrom=140501ce0 type=UNCONDITIONAL_CALL
+symbol name="GetSpEffectByVowRank" type=Function address=140d48b20 namespace="RoleParamLookupResult"
+  refFrom=14493aac0 type=DATA
+  refFrom=140501d83 type=UNCONDITIONAL_CALL
+symbol name="GetSpEffectParam" type=Function address=140d506a0 namespace="Global"
+  refFrom=14493b30c type=DATA
+  refFrom=1403f5f05 type=UNCONDITIONAL_CALL
+  refFrom=1403faf8d type=UNCONDITIONAL_CALL
+  refFrom=1404faa25 type=UNCONDITIONAL_CALL
+  refFrom=1404fc5fa type=UNCONDITIONAL_CALL
+  refFrom=1404fb5ce type=UNCONDITIONAL_CALL
+  refFrom=1404fc11e type=UNCONDITIONAL_CALL
+  refFrom=1404fc1c4 type=UNCONDITIONAL_CALL
+  refFrom=<truncated>

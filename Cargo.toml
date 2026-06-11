@@ -1,0 +1,19 @@
+[workspace]
+members = [".", "crates/effects-data", "crates/soulsformats", "tools/er-param-inspect"]
+resolver = "2"
+
+[package]
+name = "er-effects-rs"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+eldenring = { path = "../fromsoftware-rs/crates/eldenring" }
+er-effects-data = { path = "crates/effects-data" }
+fromsoftware-shared = { path = "../fromsoftware-rs/crates/shared" }
+debug = { path = "../fromsoftware-rs/crates/debug" }
+hudhook = { git = "https://github.com/veeenu/hudhook", features = ["imgui-tables-api"] }

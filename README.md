@@ -1,0 +1,91 @@
+# er-effects-rs
+
+An Elden Ring Rust DLL experiment for named runtime effect calls.
+
+Initial scope:
+
+- Detect local player animation `63010`.
+- Apply selected named SpEffect calls once per trigger animation.
+- Provide an ImGui overlay for selecting/deselecting calls.
+- Support manual apply/remove buttons for quick testing.
+
+Seeded calls (defined in `data/effects.json`, embedded into the DLL at build
+time — edit that file to change the list, no Rust changes needed):
+
+| ID | Name |
+| --- | --- |
+| `4330` | Player all black |
+| `20018100` | Player right eye red |
+| `20018101` | Player left eye red |
+
+The overlay also has a `Custom SpEffect ID` field for adding arbitrary IDs at
+runtime, shows per-call `[active]` / `[inactive]` / `[apply failed]` status
+(read back from the player's live SpEffect list), and surfaces a parse error
+if the embedded `data/effects.json` is invalid.
+
+The code uses `../fromsoftware-rs` path dependencies, so keep this project as a sibling of `fromsoftware-rs` unless you update `Cargo.toml`.
+
+## Build
+
+From a Rust environment with the Windows target installed:
+
+```bash
+cargo build --release --target x86_64-pc-windows-msvc
+```
+
+The DLL is emitted under `target/x86_64-pc-windows-msvc/release/`.
+
+Run the full quality gate (lints, formatting, windows-target check) with:
+
+```bash
+bash scripts/check.sh
+```
+
+## Param tooling (Smithbox bridge)
+
+`er-soulsformats` and the `er-param-inspect` CLI read `regulation.bin` params by
+compiling and running a small .NET bridge against Smithbox's
+`Andre.Formats`/SoulsFormats libraries. Prerequisites:
+
+1. **A Smithbox source checkout.** Discovery order:
+   - the `SMITHBOX_SOURCE_DIR` environment variable, if set;
+   - otherwise the first of `.deps/Smithbox`, `../Smithbox`, `../smithbox`,
+     `/tmp/pi-github-repos/vawser/Smithbox` (relative to this repo) that
+     contains `src/Andre/Andre.Formats/Andre.Formats.csproj`.
+
+   ```bash
+   git clone https://github.com/vawser/Smithbox .deps/Smithbox
+   ```
+
+2. **A .NET SDK.** If `dotnet` is on `PATH` it is used directly. Under WSL
+   without a Linux .NET SDK, the bridge falls back to running the Windows
+   `dotnet` through `powershell.exe` (paths are translated with `wslpath -w`).
+
+The bridge project is generated under `target/soulsformats-bridge/` on first
+use. Example query:
+
+```bash
+cargo run -p er-param-inspect -- rows <path-to-regulation.bin> SpEffectParam 4330 20018100 20018101
+```
+
+Validate the seeded effect list (`data/effects.json`) against a regulation
+file:
+
+```bash
+cargo run -p er-param-inspect -- validate <path-to-regulation.bin>
+```
+
+## Network sync semantics
+
+Each SpEffect call takes a "don't sync" flag. The overlay checkbox
+`Sync effect calls over the network` controls it:
+
+- **Off (default):** effects are applied with `dont_sync = true` — local-only,
+  other players never see them. Safe for offline/local testing.
+- **On:** effects are applied with `dont_sync = false`, matching the Cheat
+  Engine `addNetworked(..., id, 0)` pattern — the effect application is
+  propagated to network peers.
+
+Leave it off unless you specifically need peers to observe the effect. Sending
+non-standard effect applications to other players in online sessions is
+detectable and may carry ban risk; use offline or in controlled sessions only.

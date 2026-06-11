@@ -1,0 +1,7 @@
+{
+  "calls": [
+    { "kind": "sp_effect", "id": 4330, "name": "Player all black", "enabled": true },
+    { "kind": "sp_effect", "id": 20018100, "name": "Player right eye red", "enabled": true },
+    { "kind": "sp_effect", "id": 20018101, "name": "Player left eye red", "enabled": true }
+  ]
+}

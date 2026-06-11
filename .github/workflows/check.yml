@@ -1,0 +1,46 @@
+name: check
+
+on:
+  push:
+  pull_request:
+
+env:
+  # Commit of vswarte/fromsoftware-rs the workspace is developed against.
+  # The root crate uses `../fromsoftware-rs` path dependencies, so the
+  # workspace cannot even be loaded by cargo without this sibling checkout.
+  FROMSOFTWARE_RS_REV: 902851865d05069eda7dcfd6385c8881eadf29bf
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out fromsoftware-rs as sibling
+        run: |
+          git clone https://github.com/vswarte/fromsoftware-rs.git "$GITHUB_WORKSPACE/../fromsoftware-rs"
+          git -C "$GITHUB_WORKSPACE/../fromsoftware-rs" checkout "$FROMSOFTWARE_RS_REV"
+
+      - name: Install Rust (stable + windows target)
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup target add x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Lint - no magic numbers
+        run: python3 scripts/check-no-magic-numbers.py
+
+      - name: Lint - no lossy UTF-8
+        run: python3 scripts/check-no-lossy-utf8.py
+
+      - name: rustfmt
+        run: cargo fmt -- --check
+
+      - name: Test host-buildable crates
+        run: cargo test -p er-soulsformats -p er-param-inspect
+
+      # Full link of the DLL needs the MSVC linker; `cargo check` of the
+      # windows target works on Linux and still type-checks the game code.
+      - name: Check DLL crate (windows target)
+        run: cargo check --target x86_64-pc-windows-msvc
