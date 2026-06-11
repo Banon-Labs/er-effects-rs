@@ -547,3 +547,841 @@ symbol name="GetSpEffectParam" type=Function address=140d506a0 namespace="Global
   refFrom=1404fc11e type=UNCONDITIONAL_CALL
   refFrom=1404fc1c4 type=UNCONDITIONAL_CALL
   refFrom=<truncated>
+symbol name="u_HAN_HIRAGANA#Eyebrows_Dark_Light_1429e3718" type=Label address=1429e3718 namespace="Global"
+  refFrom=143b11e20 type=DATA
+symbol name="u_HAN_HIRAGANA#Eyebrows_Low_High_1429e3750" type=Label address=1429e3750 namespace="Global"
+  refFrom=143b11e28 type=DATA
+symbol name="u_HAN_HIRAGANA#Eyebrows_Thick_Thin___1429e3780" type=Label address=1429e3780 namespace="Global"
+  refFrom=143b11e30 type=DATA
+symbol name="u_HAN#Eyebrows_Very_Thin_Thick___1429e37c0" type=Label address=1429e37c0 namespace="Global"
+  refFrom=143b11e38 type=DATA
+symbol name="u_HAN_KATAKANA#Eyebrows_Lower_Light_Dark_1429e3800" type=Label address=1429e3800 namespace="Global"
+  refFrom=143b11e40 type=DATA
+symbol name="u_HAN_KATAKANA#Eyebrows_Outer_Light_Dark_1429e3850" type=Label address=1429e3850 namespace="Global"
+  refFrom=143b11e48 type=DATA
+symbol name="u_HAN_KATAKANA#Eyebrows_Upper_Dark_Light_1429e38a0" type=Label address=1429e38a0 namespace="Global"
+  refFrom=143b11e50 type=DATA
+symbol name="u_HAN_HIRAGANA#Eyes_down_up_1429e38e8" type=Label address=1429e38e8 namespace="Global"
+  refFrom=143b11e58 type=DATA
+symbol name="u_HAN_HIRAGANA#Eyes_small_large_1429e3910" type=Label address=1429e3910 namespace="Global"
+  refFrom=143b11e60 type=DATA
+symbol name="u_HAN_HIRAGANA#Eyes_tilt_inward_outward_1429e3940" type=Label address=1429e3940 namespace="Global"
+  refFrom=143b11e68 type=DATA
+symbol name="u_HAN_HIRAGANA#Eyes_apart_together_1429e3980" type=Label address=1429e3980 namespace="Global"
+  refFrom=143b11e70 type=DATA
+symbol name="u_HAN#Eye_Whites_Dim_Bright_1429e39b8" type=Label address=1429e39b8 namespace="Global"
+  refFrom=143b11e78 type=DATA
+symbol name="u_HAN_HIRAGANA#Eyes_Dark_Brown_Light_Blue_1429e39f0" type=Label address=1429e39f0 namespace="Global"
+  refFrom=143b11e80 type=DATA
+symbol name="u_HAN_HIRAGANA#Eyes_Dark_Brown_Light_Brown_1429e3a30" type=Label address=1429e3a30 namespace="Global"
+  refFrom=143b11e88 type=DATA
+symbol name="u_HAN_HIRAGANA#Eye_Sockets_Bruised_Bright_1429e3a80" type=Label address=1429e3a80 namespace="Global"
+  refFrom=143b11e90 type=DATA
+symbol name="u_HAN_HIRAGANA#Eye_Sockets_Dark_Light_1429e3ad0" type=Label address=1429e3ad0 namespace="Global"
+  refFrom=143b11e98 type=DATA
+symbol name="u_HIRAGANA#Eyelids_Light_Dark_1429e3b10" type=Label address=1429e3b10 namespace="Global"
+  refFrom=143b11ea0 type=DATA
+symbol name="u_HIRAGANA#Eyelids_Pale_Red_1429e3b40" type=Label address=1429e3b40 namespace="Global"
+  refFrom=143b11ea8 type=DATA
+symbol name="u_KATAKANA#Eyeliner_Light_Dark_1429e3b70" type=Label address=1429e3b70 namespace="Global"
+  refFrom=143b11eb0 type=DATA
+symbol name="u_KATAKANA#Eyeshadow_Light_Dark_1429e3ba8" type=Label address=1429e3ba8 namespace="Global"
+  refFrom=143b11eb8 type=DATA
+symbol name="u_HasSpecialEffectId_142a03d28" type=Label address=142a03d28 namespace="Global"
+  refFrom=14009233d type=DATA
+  refFrom=1400880fd type=DATA
+symbol name="s_HasSpecialEffectId_142a03d78" type=Label address=142a03d78 namespace="Global"
+  refFrom=140092344 type=DATA
+  refFrom=140088104 type=DATA
+symbol name="u_IsSleepSpecialEffectId_142a03ee8" type=Label address=142a03ee8 namespace="Global"
+  refFrom=14008816d type=DATA
+symbol name="s_IsSleepSpecialEffectId_142a03f18" type=Label address=142a03f18 namespace="Global"
+  refFrom=140088174 type=DATA
+symbol name="u_AddObserveSpecialEffectAttribute_142a04050" type=Label address=142a04050 namespace="Global"
+  refFrom=14008f08d type=DATA
+symbol name="s_AddObserveSpecialEffectAttribute_142a04098" type=Label address=142a04098 namespace="Global"
+  refFrom=14008f094 type=DATA
+symbol name="u_DeleteObserveSpecialEffectAttrib_142a04190" type=Label address=142a04190 namespace="Global"
+  refFrom=14008f0fd type=DATA
+symbol name="s_DeleteObserveSpecialEffectAttrib_142a04218" type=Label address=142a04218 namespace="Global"
+  refFrom=14008f104 type=DATA
+symbol name="u_GetSpecialEffectActivateInterrup_142a04320" type=Label address=142a04320 namespace="Global"
+  refFrom=1400881dd type=DATA
+symbol name="s_GetSpecialEffectActivateInterrup_142a04390" type=Label address=142a04390 namespace="Global"
+  refFrom=1400881e4 type=DATA
+symbol name="u_GetSpecialEffectInactivateInterr_142a04410" type=Label address=142a04410 namespace="Global"
+  refFrom=14008824d type=DATA
+symbol name="s_GetSpecialEffectInactivateInterr_142a04480" type=Label address=142a04480 namespace="Global"
+  refFrom=140088254 type=DATA
+symbol name="u_GetSpecialEffectActivateInterrup_142a04530" type=Label address=142a04530 namespace="Global"
+  refFrom=1400882bd type=DATA
+symbol name="s_GetSpecialEffectActivateInterrup_142a04580" type=Label address=142a04580 namespace="Global"
+  refFrom=1400882c4 type=DATA
+symbol name="u_GetSpecialEffectInactivateInterr_142a046a0" type=Label address=142a046a0 namespace="Global"
+  refFrom=14008832d type=DATA
+symbol name="s_GetSpecialEffectInactivateInterr_142a046f0" type=Label address=142a046f0 namespace="Global"
+  refFrom=140088334 type=DATA
+symbol name="u_GetSpecialEffectActivateInterrup_142a047f0" type=Label address=142a047f0 namespace="Global"
+  refFrom=14008839d type=DATA
+symbol name="s_GetSpecialEffectActivateInterrup_142a04838" type=Label address=142a04838 namespace="Global"
+  refFrom=1400883a4 type=DATA
+symbol name="u_GetSpecialEffectDeActivateInterr_142a04920" type=Label address=142a04920 namespace="Global"
+  refFrom=14008840d type=DATA
+symbol name="s_GetSpecialEffectDeActivateInterr_142a04990" type=Label address=142a04990 namespace="Global"
+  refFrom=140088414 type=DATA
+symbol name="u_HasSpecialEffectAttribute_142a0a8c8" type=Label address=142a0a8c8 namespace="Global"
+  refFrom=14008801d type=DATA
+symbol name="s_HasSpecialEffectAttribute_142a0a930" type=Label address=142a0a930 namespace="Global"
+  refFrom=140088024 type=DATA
+symbol name="u_HasSpecialEffectCategory_142a0a9a0" type=Label address=142a0a9a0 namespace="Global"
+  refFrom=14008808d type=DATA
+symbol name="s_HasSpecialEffectCategory_142a0aa10" type=Label address=142a0aa10 namespace="Global"
+  refFrom=140088094 type=DATA
+symbol name="u_ExParam_PhantomEdgeColor_142a35668" type=Label address=142a35668 namespace="Global"
+  refFrom=141b5dc14 type=DATA
+  refFrom=14043bc55 type=DATA
+  refFrom=140a921fa type=DATA
+  refFrom=143b38678 type=DATA
+  refFrom=143b17638 type=DATA
+symbol name="u_ExParam_PhantomFrontColor_142a356a0" type=Label address=142a356a0 namespace="Global"
+  refFrom=141b5dc26 type=DATA
+  refFrom=14043bca7 type=DATA
+  refFrom=140a9222c type=DATA
+  refFrom=143b38680 type=DATA
+  refFrom=143b17640 type=DATA
+symbol name="u_ExParam_PhantomDiffColor_142a356d8" type=Label address=142a356d8 namespace="Global"
+  refFrom=141b5dc38 type=DATA
+  refFrom=14043bcf9 type=DATA
+  refFrom=140a9225e type=DATA
+  refFrom=143b38688 type=DATA
+  refFrom=143b17648 type=DATA
+symbol name="u_ExParam_PhantomSpecColor_142a35710" type=Label address=142a35710 namespace="Global"
+  refFrom=141b5dc4a type=DATA
+  refFrom=14043bd4b type=DATA
+  refFrom=140a92290 type=DATA
+  refFrom=143b38690 type=DATA
+  refFrom=143b17650 type=DATA
+symbol name="u_ExParam_PhantomLightColor_142a35748" type=Label address=142a35748 namespace="Global"
+  refFrom=141b5dc5c type=DATA
+  refFrom=14043bd9d type=DATA
+  refFrom=140a922c2 type=DATA
+  refFrom=143b38698 type=DATA
+  refFrom=143b17658 type=DATA
+symbol name="u_ExParam_PhantomEdgeColorIsSubtra_142a35780" type=Label address=142a35780 namespace="Global"
+  refFrom=141b5dbf0 type=DATA
+  refFrom=14043bbc5 type=DATA
+  refFrom=140a92172 type=DATA
+  refFrom=143b386a0 type=DATA
+  refFrom=143b17660 type=DATA
+symbol name="u_ExParam_PhantomFrontColorIsSubtr_142a357d0" type=Label address=142a357d0 namespace="Global"
+  refFrom=141b5dc02 type=DATA
+  refFrom=14043bc0e type=DATA
+  refFrom=140a921b7 type=DATA
+  refFrom=143b386a8 type=DATA
+  refFrom=143b17668 type=DATA
+symbol name="u_ExParam_PhantomEdgePower_142a35818" type=Label address=142a35818 namespace="Global"
+  refFrom=141b5dc6e type=DATA
+  refFrom=14043bdef type=DATA
+  refFrom=140a922f4 type=DATA
+  refFrom=143b386b0 type=DATA
+  refFrom=143b17670 type=DATA
+symbol name="u_ExParam_PhantomGlowScale_142a35850" type=Label address=142a35850 namespace="Global"
+  refFrom=141b5dc80 type=DATA
+  refFrom=14043be33 type=DATA
+  refFrom=140a92326 type=DATA
+  refFrom=143b386b8 type=DATA
+  refFrom=143b17678 type=DATA
+symbol name="u_Eyebrow_142b32a48" type=Label address=142b32a48 namespace="Global"
+  refFrom=143b37f40 type=DATA
+symbol name="u_Eyelash_142b32a58" type=Label address=142b32a58 namespace="Global"
+  refFrom=143b37f48 type=DATA
+symbol name="u_phantomParamId_142b4cff8" type=Label address=142b4cff8 namespace="Global"
+  refFrom=140a95398 type=DATA
+symbol name="u_dstPhantomParamId_142b4d018" type=Label address=142b4d018 namespace="Global"
+  refFrom=140a953b2 type=DATA
+symbol name="u_Face_Eye_R_142b6cf10" type=Label address=142b6cf10 namespace="Global"
+  refFrom=143b38c78 type=DATA
+  refFrom=1400a5e7b type=READ
+symbol name="u_ace_Eye_R_142b6cf10+2" type=Label address=142b6cf12 namespace="Global"
+  refFrom=1400a5e96 type=DATA
+  refFrom=1400a5e9d type=READ
+symbol name="u_ce_Eye_R_142b6cf10+4" type=Label address=142b6cf14 namespace="Global"
+  refFrom=1400a5e9d type=READ
+symbol name="u_Face_Eye_L_142b6cf28" type=Label address=142b6cf28 namespace="Global"
+  refFrom=143b38c80 type=DATA
+  refFrom=1400a5eb5 type=READ
+symbol name="u_ace_Eye_L_142b6cf28+2" type=Label address=142b6cf2a namespace="Global"
+  refFrom=1400a5ec6 type=DATA
+  refFrom=1400a5ecd type=READ
+symbol name="u_ce_Eye_L_142b6cf28+4" type=Label address=142b6cf2c namespace="Global"
+  refFrom=1400a5ecd type=READ
+symbol name="u_pcHairEyeColor_142baac48" type=Label address=142baac48 namespace="Global"
+  refFrom=140d1193e type=DATA
+symbol name="u_SpEffectParam_142bb28d0" type=Label address=142bb28d0 namespace="Global"
+  refFrom=143b3c6d0 type=DATA
+symbol name="u_SpEffectVfxParam_142bb28f0" type=Label address=142bb28f0 namespace="Global"
+  refFrom=143b3c6e0 type=DATA
+symbol name="u_SpEffectSetParam_142bb2918" type=Label address=142bb2918 namespace="Global"
+  refFrom=143b3c6f0 type=DATA
+symbol name="u_PhantomParam_142bb2da0" type=Label address=142bb2da0 namespace="Global"
+  refFrom=143b3c900 type=DATA
+symbol name="PTR_s_The_eye_position_in_the_coordina_142d1bb90" type=Label address=142d1bb90 namespace="Global"
+  refFrom=142d1bf48 type=DATA
+symbol name="s_The_eye_position_in_the_coordina_142d40268" type=Label address=142d40268 namespace="Global"
+  refFrom=142d1bb90 type=DATA
+symbol name="s_eyePositionHS_142d40a78" type=Label address=142d40a78 namespace="Global"
+  refFrom=142d1c3a0 type=DATA
+symbol name="s_Phantoms_142dc3650" type=Label address=142dc3650 namespace="Global"
+  refFrom=143be6818 type=DATA
+symbol name="s_phantom_142dc4910" type=Label address=142dc4910 namespace="Global"
+  refFrom=143be7818 type=DATA
+symbol name="s_phantomListeners_142dc5f20" type=Label address=142dc5f20 namespace="Global"
+  refFrom=143be5d40 type=DATA
+symbol name="s_hkpPhantom_142dc61e0" type=Label address=142dc61e0 namespace="Global"
+  refFrom=143be5dd0 type=DATA
+symbol name="s_phantoms_142dc6378" type=Label address=142dc6378 namespace="Global"
+  refFrom=143be5e20 type=DATA
+symbol name="s_eyeHeight_142e86010" type=Label address=142e86010 namespace="Global"
+  refFrom=142ed4048 type=DATA
+  refFrom=142edf168 type=DATA
+symbol name="u_Phantom_142f154b8" type=Label address=142f154b8 namespace="Global"
+  refFrom=141a6326f type=DATA
+  refFrom=141a63380 type=DATA
+  refFrom=141a63387 type=DATA
+  refFrom=141a61ff2 type=DATA
+symbol name="u_PhantomLite_142f155e0" type=Label address=142f155e0 namespace="Global"
+  refFrom=141a632ca type=DATA
+  refFrom=141a633d9 type=DATA
+  refFrom=141a633e0 type=DATA
+symbol name="u_GXFT_ValidSubPhantom_142f1eca8" type=Label address=142f1eca8 namespace="Global"
+  refFrom=143c235f8 type=DATA
+symbol name="u_ValidSubPhantom_142f1ecd8" type=Label address=142f1ecd8 namespace="Global"
+  refFrom=143c23600 type=DATA
+symbol name="u_[Phantom]_Edge_Color_Is_Subtract_143035060" type=Label address=143035060 namespace="Global"
+  refFrom=141b5c5c7 type=DATA
+symbol name="u_[Phantom]_Front_Color_Is_Subtrac_1430350b0" type=Label address=1430350b0 namespace="Global"
+  refFrom=141b5c69f type=DATA
+symbol name="u_[Phantom]_Edge_Color_1430350f8" type=Label address=1430350f8 namespace="Global"
+  refFrom=141b5c777 type=DATA
+symbol name="u_[Phantom]_Front_Color_143035128" type=Label address=143035128 namespace="Global"
+  refFrom=141b5c85d type=DATA
+symbol name="u_[Phantom]_Diff_Color_143035158" type=Label address=143035158 namespace="Global"
+  refFrom=141b5c943 type=DATA
+symbol name="u_[Phantom]_Spec_Color_143035188" type=Label address=143035188 namespace="Global"
+  refFrom=141b5ca29 type=DATA
+symbol name="u_[Phantom]_Light_Color_1430351b8" type=Label address=1430351b8 namespace="Global"
+  refFrom=141b5cb0f type=DATA
+symbol name="u_[Phantom]_Edge_Power_1430351e8" type=Label address=1430351e8 namespace="Global"
+  refFrom=141b5cbf8 type=DATA
+symbol name="u_[Phantom]_Glow_Scale_143035218" type=Label address=143035218 namespace="Global"
+  refFrom=141b5cce7 type=DATA
+symbol name="s_RegOpenKeyExW_1430a6da0" type=Label address=1430a6da0 namespace="Global"
+  refFrom=1424fc538 type=DATA
+  refFrom=140003403 type=DATA
+  refFrom=140003605 type=DATA
+  refFrom=14000289a type=DATA
+symbol name="s_Key_type:_1=AT_KEYEXCHANGE_(defa_1432026a8" type=Label address=1432026a8 namespace="Global"
+  refFrom=1432023c0 type=DATA
+symbol name="s_keyEncryptionAlgorithm_143246138" type=Label address=143246138 namespace="Global"
+  refFrom=143244ff0 type=DATA
+  refFrom=1432453f0 type=DATA
+  refFrom=143245530 type=DATA
+  refFrom=1432455e0 type=DATA
+symbol name="s_keyEncipherment_143248068" type=Label address=143248068 namespace="Global"
+  refFrom=143c5a9c0 type=DATA
+symbol name="PTR_HasSpecialEffectAttribute_143b13f70" type=Label address=143b13f70 namespace="Global"
+  refFrom=140088002 type=WRITE
+symbol name="PTR_HasSpecialEffectCategory_143b13f80" type=Label address=143b13f80 namespace="Global"
+  refFrom=140088072 type=WRITE
+symbol name="PTR_HasSpecialEffectId_143b13f90" type=Label address=143b13f90 namespace="Global"
+  refFrom=1400880e2 type=WRITE
+symbol name="PTR_IsSleepSpecialEffectId_143b13fa0" type=Label address=143b13fa0 namespace="Global"
+  refFrom=140088152 type=WRITE
+symbol name="PTR_AddObserveSpecialEffectAttribute_143b13fb0" type=Label address=143b13fb0 namespace="Global"
+  refFrom=14008f072 type=WRITE
+symbol name="PTR_DeleteObserveSpecialEffectAttribute_143b13fc0" type=Label address=143b13fc0 namespace="Global"
+  refFrom=14008f0e2 type=WRITE
+symbol name="PTR_GetSpecialEffectActivateInterruptNum_143b13fd0" type=Label address=143b13fd0 namespace="Global"
+  refFrom=1400881c2 type=WRITE
+symbol name="PTR_GetSpecialEffectInactivateInterruptNum_143b13fe0" type=Label address=143b13fe0 namespace="Global"
+  refFrom=140088232 type=WRITE
+symbol name="PTR_GetSpecialEffectActivateInterruptType_143b13ff0" type=Label address=143b13ff0 namespace="Global"
+  refFrom=1400882a2 type=WRITE
+symbol name="PTR_GetSpecialEffectInactivateInterruptType_143b14000" type=Label address=143b14000 namespace="Global"
+  refFrom=140088312 type=WRITE
+symbol name="PTR_GetSpecialEffectActivateInterruptId_143b14010" type=Label address=143b14010 namespace="Global"
+  refFrom=140088382 type=WRITE
+symbol name="PTR_GetSpecialEffectDeActivateInterruptId_143b14020" type=Label address=143b14020 namespace="Global"
+  refFrom=1400883f2 type=WRITE
+symbol name="PTR_HasSpecialEffectId_143b156e8" type=Label address=143b156e8 namespace="Global"
+  refFrom=140092322 type=WRITE
+symbol name="SCALING_SP_EFFECT_WHITE_PHANTOM" type=Label address=143b17b00 namespace="Global"
+  refFrom=1404ab572 type=READ
+  refFrom=1404ab58c type=READ
+  refFrom=1404ab8d7 type=READ
+symbol name="SCALING_SP_EFFECT_BLACK_PHANTOM" type=Label address=143b17b04 namespace="Global"
+  refFrom=1404ab5a2 type=READ
+  refFrom=1404ab5bc type=READ
+  refFrom=1404ab8df type=READ
+  refFrom=1404abe20 type=READ
+symbol name="CharacterTypeProperties[0].isFriendlyPhantom" type=Label address=143b17c09 namespace="Global"
+  refFrom=1404c7da3 type=DATA
+symbol name="CharacterTypeProperties[0].isHostilePhantom" type=Label address=143b17c0a namespace="Global"
+  refFrom=1404c7e23 type=DATA
+symbol name="DEFAULT_CharacterTypeProperties.isFriendlyPhantom" type=Label address=143b17dd5 namespace="Global"
+  refFrom=1404c7da9 type=READ
+symbol name="DEFAULT_CharacterTypeProperties.isHostilePhantom" type=Label address=143b17dd6 namespace="Global"
+  refFrom=1404c7e29 type=READ
+symbol name="PTR_u_ExParam_PhantomEdgeColor_143b38678" type=Label address=143b38678 namespace="Global"
+  refFrom=140a921f3 type=READ
+symbol name="PTR_u_ExParam_PhantomFrontColor_143b38680" type=Label address=143b38680 namespace="Global"
+  refFrom=140a92225 type=READ
+symbol name="PTR_u_ExParam_PhantomDiffColor_143b38688" type=Label address=143b38688 namespace="Global"
+  refFrom=140a92257 type=READ
+symbol name="PTR_u_ExParam_PhantomSpecColor_143b38690" type=Label address=143b38690 namespace="Global"
+  refFrom=140a92289 type=READ
+symbol name="PTR_u_ExParam_PhantomLightColor_143b38698" type=Label address=143b38698 namespace="Global"
+  refFrom=140a922bb type=READ
+symbol name="PTR_u_ExParam_PhantomEdgeColorIsSubtra_143b386a0" type=Label address=143b386a0 namespace="Global"
+  refFrom=140a9216b type=READ
+symbol name="PTR_u_ExParam_PhantomFrontColorIsSubtr_143b386a8" type=Label address=143b386a8 namespace="Global"
+  refFrom=140a921b0 type=READ
+symbol name="PTR_u_ExParam_PhantomEdgePower_143b386b0" type=Label address=143b386b0 namespace="Global"
+  refFrom=140a922ed type=READ
+symbol name="PTR_u_ExParam_PhantomGlowScale_143b386b8" type=Label address=143b386b8 namespace="Global"
+  refFrom=140a9231f type=READ
+symbol name="PTR_u_Face_Eye_R_143b38c78" type=Label address=143b38c78 namespace="Global"
+  refFrom=140b4917a type=DATA
+  refFrom=140b48ee5 type=DATA
+  refFrom=1400a5e70 type=READ
+symbol name="PTR_u_Face_Eye_L_143b38c80" type=Label address=143b38c80 namespace="Global"
+  refFrom=1400a5ea6 type=READ
+symbol name="MSVCTreeNode<BuddySpEffectMapEntry>_7ffef70a7980" type=Label address=7ffef70a7980 namespace="Global"
+  refFrom=7ffef70a8740 type=DATA
+  refFrom=7ffef70a8750 type=DATA
+  refFrom=7ffef70a8700 type=DATA
+  refFrom=7ffef70a8e88 type=DATA
+  refFrom=7ffef70a8ec0 type=DATA
+  refFrom=7ffef70a8ed0 type=DATA
+  refFrom=7ffef70a8600 type=DATA
+  refFrom=7ffef70a8610 type=DATA
+  refFrom=<truncated>
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50" type=Label address=7ffef70a7b50 namespace="Global"
+  refFrom=7fff9eb43428 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[1].buddyParamId" type=Label address=7ffef70a7b60 namespace="Global"
+  refFrom=7ffef70a8628 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[2].buddyParamId" type=Label address=7ffef70a7b70 namespace="Global"
+  refFrom=7ffef70a8668 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[6].buddyParamId" type=Label address=7ffef70a7bb0 namespace="Global"
+  refFrom=7ffef70a8768 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[7].buddyParamId" type=Label address=7ffef70a7bc0 namespace="Global"
+  refFrom=7ffef70a87a8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[8].buddyParamId" type=Label address=7ffef70a7bd0 namespace="Global"
+  refFrom=7ffef70a7bc8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[12].buddyParamId" type=Label address=7ffef70a7c10 namespace="Global"
+  refFrom=7ffef70a7c08 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[13].buddyParamId" type=Label address=7ffef70a7c20 namespace="Global"
+  refFrom=7ffef70a88a8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[14].buddyParamId" type=Label address=7ffef70a7c30 namespace="Global"
+  refFrom=7ffef70a7c28 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[19].buddyParamId" type=Label address=7ffef70a7c80 namespace="Global"
+  refFrom=7ffef70a7c78 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[21].buddyParamId" type=Label address=7ffef70a7ca0 namespace="Global"
+  refFrom=7ffef70a7c98 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[24].buddyParamId" type=Label address=7ffef70a7cd0 namespace="Global"
+  refFrom=7ffef70a7cc8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[25].buddyParamId" type=Label address=7ffef70a7ce0 namespace="Global"
+  refFrom=7ffef70a7cd8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[26].buddyParamId" type=Label address=7ffef70a7cf0 namespace="Global"
+  refFrom=7ffef70a7ce8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[27].buddyParamId" type=Label address=7ffef70a7d00 namespace="Global"
+  refFrom=7ffef70a8aa8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[28].buddyParamId" type=Label address=7ffef70a7d10 namespace="Global"
+  refFrom=7ffef70a7d08 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[29].buddyParamId" type=Label address=7ffef70a7d20 namespace="Global"
+  refFrom=7ffef70a7d18 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[30].buddyParamId" type=Label address=7ffef70a7d30 namespace="Global"
+  refFrom=7ffef70a7d28 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[38].buddyParamId" type=Label address=7ffef70a7db0 namespace="Global"
+  refFrom=7ffef70a7da8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[39].buddyParamId" type=Label address=7ffef70a7dc0 namespace="Global"
+  refFrom=7ffef70a8ca8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[42].buddyParamId" type=Label address=7ffef70a7df0 namespace="Global"
+  refFrom=7ffef70a7de8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[44].buddyParamId" type=Label address=7ffef70a7e10 namespace="Global"
+  refFrom=7ffef70a7e08 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[49].buddyParamId" type=Label address=7ffef70a7e60 namespace="Global"
+  refFrom=7ffef70a7e58 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[50].buddyParamId" type=Label address=7ffef70a7e70 namespace="Global"
+  refFrom=7ffef70a8ea8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[51].buddyParamId" type=Label address=7ffef70a7e80 namespace="Global"
+  refFrom=7ffef70a8ee8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[52].buddyParamId" type=Label address=7ffef70a7e90 namespace="Global"
+  refFrom=7ffef70a7e88 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[53].buddyParamId" type=Label address=7ffef70a7ea0 namespace="Global"
+  refFrom=7ffef70a7e98 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[54].buddyParamId" type=Label address=7ffef70a7eb0 namespace="Global"
+  refFrom=7ffef70a8f28 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[55].buddyParamId" type=Label address=7ffef70a7ec0 namespace="Global"
+  refFrom=7ffef70a7eb8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[56].buddyParamId" type=Label address=7ffef70a7ed0 namespace="Global"
+  refFrom=7ffef70a7ec8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[58].buddyParamId" type=Label address=7ffef70a7ef0 namespace="Global"
+  refFrom=7ffef70a7ee8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[59].buddyParamId" type=Label address=7ffef70a7f00 namespace="Global"
+  refFrom=7ffef70a7ef8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[60].buddyParamId" type=Label address=7ffef70a7f10 namespace="Global"
+  refFrom=7ffef70a7f08 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[61].buddyParamId" type=Label address=7ffef70a7f20 namespace="Global"
+  refFrom=7ffef70a8fa8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[62].buddyParamId" type=Label address=7ffef70a7f30 namespace="Global"
+  refFrom=7ffef70a7f28 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[63].buddyParamId" type=Label address=7ffef70a7f40 namespace="Global"
+  refFrom=7ffef70a7f38 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[64].buddyParamId" type=Label address=7ffef70a7f50 namespace="Global"
+  refFrom=7ffef70a7f48 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[65].buddyParamId" type=Label address=7ffef70a7f60 namespace="Global"
+  refFrom=7ffef70a7f58 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[67].buddyParamId" type=Label address=7ffef70a7f80 namespace="Global"
+  refFrom=7ffef70a7f78 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[68].buddyParamId" type=Label address=7ffef70a7f90 namespace="Global"
+  refFrom=7ffef70a7f88 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[69].buddyParamId" type=Label address=7ffef70a7fa0 namespace="Global"
+  refFrom=7ffef70a7f98 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[70].buddyParamId" type=Label address=7ffef70a7fb0 namespace="Global"
+  refFrom=7ffef70a7fa8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[73].buddyParamId" type=Label address=7ffef70a7fe0 namespace="Global"
+  refFrom=7ffef70a90a8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[77].buddyParamId" type=Label address=7ffef70a8020 namespace="Global"
+  refFrom=7ffef70a8018 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[78].buddyParamId" type=Label address=7ffef70a8030 namespace="Global"
+  refFrom=7ffef70a8028 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[79].buddyParamId" type=Label address=7ffef70a8040 namespace="Global"
+  refFrom=7ffef70a8038 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[80].buddyParamId" type=Label address=7ffef70a8050 namespace="Global"
+  refFrom=7ffef70a8048 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[83].buddyParamId" type=Label address=7ffef70a8080 namespace="Global"
+  refFrom=7ffef70a8078 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[84].buddyParamId" type=Label address=7ffef70a8090 namespace="Global"
+  refFrom=7ffef70a8088 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[87].buddyParamId" type=Label address=7ffef70a80c0 namespace="Global"
+  refFrom=7ffef70a80b8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[88].buddyParamId" type=Label address=7ffef70a80d0 namespace="Global"
+  refFrom=7ffef70a80c8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[89].buddyParamId" type=Label address=7ffef70a80e0 namespace="Global"
+  refFrom=7ffef70a92a8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[90].buddyParamId" type=Label address=7ffef70a80f0 namespace="Global"
+  refFrom=7ffef70a80e8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[91].buddyParamId" type=Label address=7ffef70a8100 namespace="Global"
+  refFrom=7ffef70a80f8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[92].buddyParamId" type=Label address=7ffef70a8110 namespace="Global"
+  refFrom=7ffef70a8108 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[93].buddyParamId" type=Label address=7ffef70a8120 namespace="Global"
+  refFrom=7ffef70a8118 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[95].buddyParamId" type=Label address=7ffef70a8140 namespace="Global"
+  refFrom=7ffef70a8138 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[96].buddyParamId" type=Label address=7ffef70a8150 namespace="Global"
+  refFrom=7ffef70a8148 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[99].buddyParamId" type=Label address=7ffef70a8180 namespace="Global"
+  refFrom=7ffef70a8178 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[100].buddyParamId" type=Label address=7ffef70a8190 namespace="Global"
+  refFrom=7ffef70a8188 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[101].buddyParamId" type=Label address=7ffef70a81a0 namespace="Global"
+  refFrom=7ffef70a8198 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[102].buddyParamId" type=Label address=7ffef70a81b0 namespace="Global"
+  refFrom=7ffef70a81a8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[104].buddyParamId" type=Label address=7ffef70a81d0 namespace="Global"
+  refFrom=7ffef70a81c8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[105].buddyParamId" type=Label address=7ffef70a81e0 namespace="Global"
+  refFrom=7ffef70a81d8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[107].buddyParamId" type=Label address=7ffef70a8200 namespace="Global"
+  refFrom=7ffef70a81f8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[109].buddyParamId" type=Label address=7ffef70a8220 namespace="Global"
+  refFrom=7ffef70a8218 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[110].buddyParamId" type=Label address=7ffef70a8230 namespace="Global"
+  refFrom=7ffef70a8228 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[112].buddyParamId" type=Label address=7ffef70a8250 namespace="Global"
+  refFrom=7ffef70a8248 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[114].buddyParamId" type=Label address=7ffef70a8270 namespace="Global"
+  refFrom=7ffef70a8268 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[116].buddyParamId" type=Label address=7ffef70a8290 namespace="Global"
+  refFrom=7ffef70a8288 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[117].buddyParamId" type=Label address=7ffef70a82a0 namespace="Global"
+  refFrom=7ffef70a8298 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[118].buddyParamId" type=Label address=7ffef70a82b0 namespace="Global"
+  refFrom=7ffef70a82a8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[119].buddyParamId" type=Label address=7ffef70a82c0 namespace="Global"
+  refFrom=7ffef70a82b8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[121].buddyParamId" type=Label address=7ffef70a82e0 namespace="Global"
+  refFrom=7ffef70a82d8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[122].buddyParamId" type=Label address=7ffef70a82f0 namespace="Global"
+  refFrom=7ffef70a82e8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[123].buddyParamId" type=Label address=7ffef70a8300 namespace="Global"
+  refFrom=7ffef70a82f8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[142].buddyParamId" type=Label address=7ffef70a8430 namespace="Global"
+  refFrom=7ffef70a8428 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[145].buddyParamId" type=Label address=7ffef70a8460 namespace="Global"
+  refFrom=7ffef70a8458 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[150].buddyParamId" type=Label address=7ffef70a84b0 namespace="Global"
+  refFrom=7ffef70a84a8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[151].buddyParamId" type=Label address=7ffef70a84c0 namespace="Global"
+  refFrom=7ffef70a84b8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[161].buddyParamId" type=Label address=7ffef70a8560 namespace="Global"
+  refFrom=7ffef70a8558 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[167].buddyParamId" type=Label address=7ffef70a85c0 namespace="Global"
+  refFrom=7ffef70a7b98 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[168].buddyParamId" type=Label address=7ffef70a85d0 namespace="Global"
+  refFrom=7ffef70a7ba8 type=DATA
+symbol name="BuddySpEffectMapEntry_ARRAY_7ffef70a7b50[169].buddyParamId" type=Label address=7ffef70a85e0 namespace="Global"
+  refFrom=7ffef70a7bb8 type=DATA
+symbol name="MSVCTreeNode<BuddySpEffectMapEntry>_7ffef70a8600" type=Label address=7ffef70a8600 namespace="Global"
+  refFrom=7ffef70a7980 type=DATA
+  refFrom=7ffef70a8640 type=DATA
+symbol name="MSVCTreeNode<BuddySpEffectMapEntry>_7ffef70a8640" type=Label address=7ffef70a8640 namespace="Global"
+  refFrom=7ffef70a8608 type=DATA
+  refFrom=7ffef70a8780 type=DATA
+symbol name="MSVCTreeNode<BuddySpEffectMapEntry>_7ffef70a86c0" type=Label address=7ffef70a86c0 namespace="Global"
+  refFrom=7ffef70a8708 type=DATA
+symbol name="MSVCTreeNode<BuddySpEffectMapEntry>_7ffef70a8700" type=Label address=7ffef70a8700 namespace="Global"
+  refFrom=7ffef70a8748 type=DATA
+  refFrom=7ffef70a86d0 type=DATA
+symbol name="MSVCTreeNode<BuddySpEffectMapEntry>_7ffef70a8740" type=Label address=7ffef70a8740 namespace="Global"
+  refFrom=7ffef70a8710 type=DATA
+  refFrom=7ffef70a7990 type=DATA
+symbol name="MSVCTreeNode<BuddySpEffectMapEntry>_7ffef70a8780" type=Label address=7ffef70a8780 namespace="Global"
+  refFrom=7ffef70a8648 type=DATA
+  refFrom=7ffef70a8880 type=DATA
+symbol name="MSVCTreeNode<BuddySpEffectMapEntry>_7ffef70a8880" type=Label address=7ffef70a8880 namespace="Global"
+  refFrom=7ffef70a8788 type=DATA
+  refFrom=7ffef70a8a80 type=DATA
+symbol name="MSVCTreeNode<BuddySpEffectMapEntry>_7ffef70a8a80" type=Label address=7ffef70a8a80 namespace="Global"
+  refFrom=7ffef70a8e80 type=DATA
+  refFrom=7ffef70a8888 type=DATA
+  refFrom=7ffef70a8c88 type=DATA
+symbol name="MSVCTreeNode<BuddySpEffectMapEntry>_7ffef70a8c80" type=Label address=7ffef70a8c80 namespace="Global"
+  refFrom=7ffef70a8a90 type=DATA
+symbol name="MSVCTreeNode<BuddySpEffectMapEntry>_7ffef70a8e80" type=Label address=7ffef70a8e80 namespace="Global"
+  refFrom=7ffef70a7988 type=DATA
+  refFrom=7ffef70a9288 type=DATA
+  refFrom=7ffef70a8a88 type=DATA
+symbol name="MSVCTreeNode<BuddySpEffectMapEntry>_7ffef70a8ec0" type=Label address=7ffef70a8ec0 namespace="Global"
+  refFrom=7ffef70a8f00 type=DATA
+symbol name="MSVCTreeNode<BuddySpEffectMapEntry>_7ffef70a8f00" type=Label address=7ffef70a8f00 namespace="Global"
+  refFrom=7ffef70a8f80 type=DATA
+  refFrom=7ffef70a8ec8 type=DATA
+symbol name="MSVCTreeNode<BuddySpEffectMapEntry>_7ffef70a8f80" type=Label address=7ffef70a8f80 namespace="Global"
+  refFrom=7ffef70a9080 type=DATA
+  refFrom=7ffef70a8f08 type=DATA
+symbol name="MSVCTreeNode<BuddySpEffectMapEntry>_7ffef70a9080" type=Label address=7ffef70a9080 namespace="Global"
+  refFrom=7ffef70a9280 type=DATA
+  refFrom=7ffef70a8f88 type=DATA
+symbol name="MSVCTreeNode<BuddySpEffectMapEntry>_7ffef70a9280" type=Label address=7ffef70a9280 namespace="Global"
+  refFrom=7ffef70a8e90 type=DATA
+  refFrom=7ffef70a9088 type=DATA
+symbol name="GameDataMan_7fff9eb80160.awardPhantomGreatRuneRequired" type=Label address=7fff9eb801ef namespace="Global"
+  refFrom=140af9bf4 type=READ
+  refFrom=140af9c09 type=WRITE
+  refFrom=140af5fb5 type=WRITE
+  refFrom=1402559b7 type=WRITE
+symbol name="GameDataMan_7fff9eb80160.whitePhantomCount" type=Label address=7fff9eb80224 namespace="Global"
+  refFrom=140257d8f type=WRITE
+  refFrom=14025604c type=READ
+  refFrom=140255c05 type=WRITE
+symbol name="AddSpEffectMultiplayer_Params_t_7fffae40b720" type=Label address=7fffae40b720 namespace="Global"
+  refFrom=7fffae40b718 type=DATA
+symbol name="AddSpEffectMultiplayer_Params_t_7fffae40b7a0" type=Label address=7fffae40b7a0 namespace="Global"
+  refFrom=7fffae40b798 type=DATA
+symbol name="AddSpEffect_Params_t_7fffae41c920" type=Label address=7fffae41c920 namespace="Global"
+  refFrom=7fffae41c918 type=DATA
+symbol-scan-cancelled=false
+symbol-scan-count=2111988
+symbol-match-count=341
+
+defined-string-matches
+string address=1429d0890 value="-----BEGIN RSA PUBLIC KEY-----\nMIIBCwKCAQEAmYJ/5GJU4boJSvZ81BFOHYTGdBWPHnWYly3yWo01BYjGRnz8NTkz\nDHUxsbjIgtG5XqsQfZstZILQ97hgSI5AaAoCGrT8sn0PeXg2i0mKwL21gRjRUdvP\nDp1Y+7hgrGwuTkjycqqsQ/qILm4NvJHvGRd7xLOJ9rs2zwYhceRVrq9XU2AXbdY4\npdCQ3+HuoaFiJ0dW0ly5qdEXjbSv2QEYe36nWCtsd6hEY9LjbBX8D1fK3D2c6C0g\nNdHJGH2iEONUN6DMK9t0v2JBnwCOZQ7W+Gt7SpNNrkx8xKEM8gH9na10g9ne11Mi\nO1FnLm8i4zOxVdPHQBKICkKcGS1o3C2dfwIEXw/f3w==\n-----END RSA PUBLIC KEY-----\n"
+  refFrom=143b3ffc8 type=DATA
+string address=1429e3718 value="Eyebrows_Dark_Light（眉の濃さ）"
+  refFrom=143b11e20 type=DATA
+string address=1429e3750 value="Eyebrows_Low_High（眉の角度）"
+  refFrom=143b11e28 type=DATA
+string address=1429e3780 value="Eyebrows_Thick_Thin（眉の太さ：細_太）"
+  refFrom=143b11e30 type=DATA
+string address=1429e37c0 value="Eyebrows_Very_Thin_Thick（極細_極太）"
+  refFrom=143b11e38 type=DATA
+string address=1429e3800 value="Eyebrows_Lower_Light_Dark（眉ライト下部）"
+  refFrom=143b11e40 type=DATA
+string address=1429e3850 value="Eyebrows_Outer_Light_Dark（眉ライト外側）"
+  refFrom=143b11e48 type=DATA
+string address=1429e38a0 value="Eyebrows_Upper_Dark_Light（眉ライト上部）"
+  refFrom=143b11e50 type=DATA
+string address=1429e38e8 value="Eyes_down_up（眼の位置）"
+  refFrom=143b11e58 type=DATA
+string address=1429e3910 value="Eyes_small_large（眼の大きさ）"
+  refFrom=143b11e60 type=DATA
+string address=1429e3940 value="Eyes_tilt_inward_outward（眼の傾き）"
+  refFrom=143b11e68 type=DATA
+string address=1429e3980 value="Eyes_apart_together（眼の間隔）"
+  refFrom=143b11e70 type=DATA
+string address=1429e39b8 value="Eye_Whites_Dim_Bright（白目）"
+  refFrom=143b11e78 type=DATA
+string address=1429e39f0 value="Eyes_Dark_Brown_Light_Blue（瞳の色）"
+  refFrom=143b11e80 type=DATA
+string address=1429e3a30 value="Eyes_Dark_Brown_Light_Brown（瞳の色）"
+  refFrom=143b11e88 type=DATA
+string address=1429e3a80 value="Eye_Sockets_Bruised_Bright（眼窩の色）"
+  refFrom=143b11e90 type=DATA
+string address=1429e3ad0 value="Eye_Sockets_Dark_Light（眼窩の明るさ２）"
+  refFrom=143b11e98 type=DATA
+string address=1429e3b10 value="Eyelids_Light_Dark（まぶた）"
+  refFrom=143b11ea0 type=DATA
+string address=1429e3b40 value="Eyelids_Pale_Red（まぶた）"
+  refFrom=143b11ea8 type=DATA
+string address=1429e3b70 value="Eyeliner_Light_Dark（アイライナー）"
+  refFrom=143b11eb0 type=DATA
+string address=1429e3ba8 value="Eyeshadow_Light_Dark（アイシャドー）"
+  refFrom=143b11eb8 type=DATA
+string address=1429e4a20 value="Face_AroundEye"
+string address=1429e4a40 value="Face_AroundEyeColor"
+string address=1429e4aa0 value="Face_EyeLine"
+string address=1429e4ac0 value="Face_EyeLineColor"
+string address=1429e4ae8 value="Face_EyeShadowDown"
+string address=1429e4b10 value="Face_EyeShadowDownColor"
+string address=1429e4b40 value="Face_EyeShadowUp"
+string address=1429e4b68 value="Face_EyeShadowUpColor"
+string address=1429e4cc0 value="EyeR_IrisColor"
+string address=1429e4ce0 value="EyeR_IrisScale"
+string address=1429e4d00 value="EyeR_Cataract"
+string address=1429e4d20 value="EyeR_CataractColor"
+string address=1429e4d48 value="EyeR_ScleraColor"
+string address=1429e4d70 value="EyeR_IrisDistance"
+string address=1429e4d98 value="EyeL_IrisColor"
+string address=1429e4db8 value="EyeL_IrisScale"
+string address=1429e4dd8 value="EyeL_Cataract"
+string address=1429e4df8 value="EyeL_CataractColor"
+string address=1429e4e20 value="EyeL_ScleraColor"
+string address=1429e4e48 value="EyeL_IrisDistance"
+string address=1429e4f70 value="Eyebrow_Color"
+string address=1429e4f90 value="Eyebrow_Shininess"
+string address=1429e4fb8 value="Eyebrow_RootBlack"
+string address=1429e4fe0 value="Eyebrow_WhiteDensity"
+string address=1429e5010 value="Eyelash_Color"
+string address=142a03d28 value="HasSpecialEffectId"
+  refFrom=14009233d type=DATA
+  refFrom=1400880fd type=DATA
+string address=142a03d78 value="HasSpecialEffectId"
+  refFrom=140092344 type=DATA
+  refFrom=140088104 type=DATA
+string address=142a03ee8 value="IsSleepSpecialEffectId"
+  refFrom=14008816d type=DATA
+string address=142a03f18 value="IsSleepSpecialEffectId"
+  refFrom=140088174 type=DATA
+string address=142a04050 value="AddObserveSpecialEffectAttribute"
+  refFrom=14008f08d type=DATA
+string address=142a04098 value="AddObserveSpecialEffectAttribute"
+  refFrom=14008f094 type=DATA
+string address=142a04190 value="DeleteObserveSpecialEffectAttribute"
+  refFrom=14008f0fd type=DATA
+string address=142a04218 value="DeleteObserveSpecialEffectAttribute"
+  refFrom=14008f104 type=DATA
+string address=142a04320 value="GetSpecialEffectActivateInterruptNum"
+  refFrom=1400881dd type=DATA
+string address=142a04390 value="GetSpecialEffectActivateInterruptNum"
+  refFrom=1400881e4 type=DATA
+string address=142a04410 value="GetSpecialEffectInactivateInterruptNum"
+  refFrom=14008824d type=DATA
+string address=142a04480 value="GetSpecialEffectInactivateInterruptNum"
+  refFrom=140088254 type=DATA
+string address=142a04530 value="GetSpecialEffectActivateInterruptType"
+  refFrom=1400882bd type=DATA
+string address=142a04580 value="GetSpecialEffectActivateInterruptType"
+  refFrom=1400882c4 type=DATA
+string address=142a046a0 value="GetSpecialEffectInactivateInterruptType"
+  refFrom=14008832d type=DATA
+string address=142a046f0 value="GetSpecialEffectInactivateInterruptType"
+  refFrom=140088334 type=DATA
+string address=142a047f0 value="GetSpecialEffectActivateInterruptId"
+  refFrom=14008839d type=DATA
+string address=142a04838 value="GetSpecialEffectActivateInterruptId"
+  refFrom=1400883a4 type=DATA
+string address=142a04920 value="GetSpecialEffectDeActivateInterruptId"
+  refFrom=14008840d type=DATA
+string address=142a04990 value="GetSpecialEffectDeActivateInterruptId"
+  refFrom=140088414 type=DATA
+string address=142a0a8c8 value="HasSpecialEffectAttribute"
+  refFrom=14008801d type=DATA
+string address=142a0a930 value="HasSpecialEffectAttribute"
+  refFrom=140088024 type=DATA
+string address=142a0a9a0 value="HasSpecialEffectCategory"
+  refFrom=14008808d type=DATA
+string address=142a0aa10 value="HasSpecialEffectCategory"
+  refFrom=140088094 type=DATA
+string address=142a35668 value="ExParam_PhantomEdgeColor"
+  refFrom=141b5dc14 type=DATA
+  refFrom=14043bc55 type=DATA
+  refFrom=140a921fa type=DATA
+  refFrom=143b38678 type=DATA
+  refFrom=143b17638 type=DATA
+string address=142a356a0 value="ExParam_PhantomFrontColor"
+  refFrom=141b5dc26 type=DATA
+  refFrom=14043bca7 type=DATA
+  refFrom=140a9222c type=DATA
+  refFrom=143b38680 type=DATA
+  refFrom=143b17640 type=DATA
+string address=142a356d8 value="ExParam_PhantomDiffColor"
+  refFrom=141b5dc38 type=DATA
+  refFrom=14043bcf9 type=DATA
+  refFrom=140a9225e type=DATA
+  refFrom=143b38688 type=DATA
+  refFrom=143b17648 type=DATA
+string address=142a35710 value="ExParam_PhantomSpecColor"
+  refFrom=141b5dc4a type=DATA
+  refFrom=14043bd4b type=DATA
+  refFrom=140a92290 type=DATA
+  refFrom=143b38690 type=DATA
+  refFrom=143b17650 type=DATA
+string address=142a35748 value="ExParam_PhantomLightColor"
+  refFrom=141b5dc5c type=DATA
+  refFrom=14043bd9d type=DATA
+  refFrom=140a922c2 type=DATA
+  refFrom=143b38698 type=DATA
+  refFrom=143b17658 type=DATA
+string address=142a35780 value="ExParam_PhantomEdgeColorIsSubtract"
+  refFrom=141b5dbf0 type=DATA
+  refFrom=14043bbc5 type=DATA
+  refFrom=140a92172 type=DATA
+  refFrom=143b386a0 type=DATA
+  refFrom=143b17660 type=DATA
+string address=142a357d0 value="ExParam_PhantomFrontColorIsSubtract"
+  refFrom=141b5dc02 type=DATA
+  refFrom=14043bc0e type=DATA
+  refFrom=140a921b7 type=DATA
+  refFrom=143b386a8 type=DATA
+  refFrom=143b17668 type=DATA
+string address=142a35818 value="ExParam_PhantomEdgePower"
+  refFrom=141b5dc6e type=DATA
+  refFrom=14043bdef type=DATA
+  refFrom=140a922f4 type=DATA
+  refFrom=143b386b0 type=DATA
+  refFrom=143b17670 type=DATA
+string address=142a35850 value="ExParam_PhantomGlowScale"
+  refFrom=141b5dc80 type=DATA
+  refFrom=14043be33 type=DATA
+  refFrom=140a92326 type=DATA
+  refFrom=143b386b8 type=DATA
+  refFrom=143b17678 type=DATA
+string address=142b32a48 value="Eyebrow"
+  refFrom=143b37f40 type=DATA
+string address=142b32a58 value="Eyelash"
+  refFrom=143b37f48 type=DATA
+string address=142b4cff8 value="phantomParamId"
+  refFrom=140a95398 type=DATA
+string address=142b4d018 value="dstPhantomParamId"
+  refFrom=140a953b2 type=DATA
+string address=142b6cf10 value="Face_Eye_R"
+  refFrom=143b38c78 type=DATA
+  refFrom=1400a5e7b type=READ
+string address=142b6cf28 value="Face_Eye_L"
+  refFrom=143b38c80 type=DATA
+  refFrom=1400a5eb5 type=READ
+string address=142baac48 value="pcHairEyeColor"
+  refFrom=140d1193e type=DATA
+string address=142bb28d0 value="SpEffectParam"
+  refFrom=143b3c6d0 type=DATA
+string address=142bb28f0 value="SpEffectVfxParam"
+  refFrom=143b3c6e0 type=DATA
+string address=142bb2918 value="SpEffectSetParam"
+  refFrom=143b3c6f0 type=DATA
+string address=142bb2da0 value="PhantomParam"
+  refFrom=143b3c900 type=DATA
+string address=142c5f1f0 value="keyEquivalent"
+string address=142c5f200 value="keyEquivalentModifiers"
+string address=142d40268 value="The eye position in the coordinates of the head."
+  refFrom=142d1bb90 type=DATA
+string address=142d40a78 value="eyePositionHS"
+  refFrom=142d1c3a0 type=DATA
+string address=142dc3650 value="Phantoms"
+  refFrom=143be6818 type=DATA
+string address=142dc4910 value="phantom"
+  refFrom=143be7818 type=DATA
+string address=142dc5f20 value="phantomListeners"
+  refFrom=143be5d40 type=DATA
+string address=142dc61e0 value="hkpPhantom"
+  refFrom=143be5dd0 type=DATA
+string address=142dc6378 value="phantoms"
+  refFrom=143be5e20 type=DATA
+string address=142e1cd78 value="phantomType"
+string address=142e86010 value="eyeHeight"
+  refFrom=142ed4048 type=DATA
+  refFrom=142edf168 type=DATA
+string address=142ee5a60 value="This flag determines if the character controller should be present in the simulated world as a special phantom. By default this is set to false, i.e., the shape is not added as a phantom body."
+  refFrom=142ed32e8 type=DATA
+string address=142f154b8 value="Phantom"
+  refFrom=141a6326f type=DATA
+  refFrom=141a63380 type=DATA
+  refFrom=141a63387 type=DATA
+  refFrom=141a61ff2 type=DATA
+string address=142f155e0 value="PhantomLite"
+  refFrom=141a632ca type=DATA
+  refFrom=141a633d9 type=DATA
+  refFrom=141a633e0 type=DATA
+string address=142f1eca8 value="GXFT_ValidSubPhantom"
+  refFrom=143c235f8 type=DATA
+string address=142f1ecd8 value="ValidSubPhantom"
+  refFrom=143c23600 type=DATA
+string address=143035060 value="[Phantom] Edge Color Is Subtract"
+  refFrom=141b5c5c7 type=DATA
+string address=1430350b0 value="[Phantom] Front Color Is Subtract"
+  refFrom=141b5c69f type=DATA
+string address=1430350f8 value="[Phantom] Edge Color"
+  refFrom=141b5c777 type=DATA
+string address=143035128 value="[Phantom] Front Color"
+  refFrom=141b5c85d type=DATA
+string address=143035158 value="[Phantom] Diff Color"
+  refFrom=141b5c943 type=DATA
+string address=143035188 value="[Phantom] Spec Color"
+  refFrom=141b5ca29 type=DATA
+string address=1430351b8 value="[Phantom] Light Color"
+  refFrom=141b5cb0f type=DATA
+string address=1430351e8 value="[Phantom] Edge Power"
+  refFrom=141b5cbf8 type=DATA
+string address=143035218 value="[Phantom] Glow Scale"
+  refFrom=141b5cce7 type=DATA
+string address=1430a6da0 value="RegOpenKeyExW"
+  refFrom=1424fc538 type=DATA
+  refFrom=140003403 type=DATA
+  refFrom=140003605 type=DATA
+  refFrom=14000289a type=DATA
+string address=1432026a8 value="Key type: 1=AT_KEYEXCHANGE (default), 2=AT_SIGNATURE"
+  refFrom=1432023c0 type=DATA
+string address=143246138 value="keyEncryptionAlgorithm"
+  refFrom=143244ff0 type=DATA
+  refFrom=1432453f0 type=DATA
+  refFrom=143245530 type=DATA
+  refFrom=1432455e0 type=DATA
+string address=143248068 value="keyEncipherment"
+  refFrom=143c5a9c0 type=DATA
+string address=143c189c0 value="GXFlver_EyeIbl"
+string address=143c1a5c0 value="GXFlver_EyeIbl_Bloody"
+string address=143c1dfc0 value="GXFlver_EyeIbl"
+string address=143c1fbc0 value="GXFlver_EyeIbl_Bloody"
+string address=143c6ee10 value=".?AVIEnumObserve@SpecialEffectObserver@CS@@"
+string address=143c6ee50 value=".?AVEnumObserve@?1??_GetInterruptNum@SpecialEffectObserver@CS@@AEBAHW4EFFECT_SWITCH_STATE@23@@Z@"
+string address=143c6eed0 value=".?AVEnumObserve@?1??_GetInterruptInfo@SpecialEffectObserver@CS@@AEBA?AUINTERRUPT_INFO_ST@23@W4EFFECT_SWITCH_STATE@23@H@Z@"
+string address=143c80738 value=".?AVChrBigRuneSpEffectSlot@CS@@"
+string address=143c81e00 value=".?AVMapStudioSpEffectEquipCtrl@CS@@"
+string address=143c81e38 value=".?AVSpEffectEquipCtrl@CS@@"
+string address=143c81e68 value=".?AVNpcSpEffectEquipCtrl@CS@@"
+string address=143c81e98 value=".?AVProSpEffectEquipCtrl@CS@@"
+string address=143c81ec8 value=".?AVRngSpEffectEquipCtrl@CS@@"
+string address=143c81f18 value=".?AVSpecialEffect@CS@@"
+string address=143c81f70 value=".?AVDeadChrFinder@?1??ActivityOfDeadTargetSearch_ApplyActivityOfDead@SpecialEffect@CS@@QEAAXXZ@"
+string address=143c82028 value=".?AVWepSpEffectEquipCtrl@CS@@"
+string address=143c84ff0 value=".?AVMenuRefSpecialEffect@CS@@"
+string address=143c85998 value=".?AVEcTestHasSpEffectId@CS@@"
+string address=143c859c8 value=".?AVEcTestHasSpEffectType@CS@@"
+string address=143cea228 value=".?AVCSRemoPhantomShaderAct@CS@@"
+defined-string-scan-cancelled=false
+defined-data-scan-count=1266053
+defined-string-match-count=139
+
+done
