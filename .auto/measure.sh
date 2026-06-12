@@ -199,16 +199,13 @@ if artifact_dir and artifact_dir.exists():
         metrics["trace_invasiveness_score"] = max(metrics["trace_invasiveness_score"], 20)
     if re.search(r"LEAVE map_load_67bc10 ret=1", joined_logs):
         metrics["title_bootstrap_seen"] = 1
-    queued = re.search(r"queuing traced continue flags|direct continue sequence requested", joined_logs)
-    consumed = re.search(r"ENTER (current_slot_load_67b570|continue_load_67b750|combined_load_67b940|map_load_67bc10|save_load_state_init_67b030)", joined_logs)
-    if queued and consumed:
-        metrics["native_request_consumed"] = 1
-    if consumed and re.search(r"state=(?!0\b)\d+", joined_logs):
-        trace_confirms_state_transition = True
-    else:
-        trace_confirms_state_transition = False
+    queued_load_request = bool(re.search(r"queuing traced continue flags|direct continue sequence requested", joined_logs))
+    load_hook_seen = bool(re.search(r"ENTER (current_slot_load_67b570|continue_load_67b750|combined_load_67b940|map_load_67bc10|save_load_state_init_67b030)", joined_logs))
+    trace_confirms_state_transition = bool(load_hook_seen and re.search(r"state=(?!0\b)\d+", joined_logs))
 else:
     joined_logs = ""
+    queued_load_request = False
+    load_hook_seen = False
     trace_confirms_state_transition = False
 
 if telemetry:
@@ -231,8 +228,11 @@ if telemetry:
     if metrics["player_available"] and metrics["selected_slot_loaded"]:
         metrics["autoload_success"] = 1
     status = str(telemetry.get("autoload_last_status") or "")
-    if "direct continue sequence requested" in status and metrics["game_requested_save_slot_load_index"] == -1:
-        metrics["native_request_consumed"] = max(metrics["native_request_consumed"], 1)
+    if "direct continue sequence requested" in status:
+        queued_load_request = True
+
+if queued_load_request and load_hook_seen and (trace_confirms_state_transition or metrics["game_save_state"] not in (-1, 0)):
+    metrics["native_request_consumed"] = 1
 
 hard_zero = bool(
     gate_failed
@@ -247,7 +247,7 @@ if hard_zero:
     score = 0
 elif metrics["autoload_success"] and metrics["player_available"] and metrics["selected_slot_loaded"]:
     score = 1000
-elif metrics["native_request_consumed"] and (metrics["game_save_state"] not in (-1, 0) or metrics["title_bootstrap_seen"]):
+elif metrics["native_request_consumed"]:
     score = 800
 elif trace_confirms_state_transition and static_score >= 400:
     score = 600
