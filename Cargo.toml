@@ -1,5 +1,12 @@
 [workspace]
-members = [".", "crates/effects-data", "crates/soulsformats", "tools/er-param-inspect"]
+members = [
+    ".",
+    "crates/effects-data",
+    "crates/er-safe-input",
+    "crates/er-save-loader",
+    "crates/soulsformats",
+    "tools/er-param-inspect",
+]
 resolver = "2"
 
 [package]
@@ -14,6 +21,8 @@ crate-type = ["cdylib"]
 [dependencies]
 eldenring = { path = "../fromsoftware-rs/crates/eldenring" }
 er-effects-data = { path = "crates/effects-data" }
+er-save-loader = { path = "crates/er-save-loader" }
+er-safe-input = { path = "crates/er-safe-input" }
 fromsoftware-shared = { path = "../fromsoftware-rs/crates/shared" }
 debug = { path = "../fromsoftware-rs/crates/debug" }
 hudhook = { git = "https://github.com/veeenu/hudhook", features = ["imgui-tables-api", "dx12-fallback-device-check", "poll-cursor-position"] }

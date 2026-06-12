@@ -1,23 +1,46 @@
 use std::{
     ffi::c_void,
-    sync::{Arc, Mutex, Once},
-    time::Duration,
+    fs,
+    path::PathBuf,
+    sync::{
+        Arc, Mutex, Once,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use debug::InputBlocker;
 use eldenring::{
-    cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, PlayerIns},
+    cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
     util::system::wait_for_system_init,
 };
 use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
-use fromsoftware_shared::{SharedTaskImpExt, program::Program};
+use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
+use fromsoftware_shared::{FromStatic, SharedTaskImpExt, program::Program};
 use hudhook::{
     ImguiRenderLoop, MessageFilter,
     hooks::dx12::ImguiDx12Hooks,
     imgui::{Condition, Context, Ui},
-    windows::Win32::{Foundation::HINSTANCE, System::SystemServices::DLL_PROCESS_ATTACH},
+    mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook},
+    windows::{
+        Win32::{
+            Foundation::HINSTANCE,
+            System::{LibraryLoader::GetModuleHandleA, SystemServices::DLL_PROCESS_ATTACH},
+        },
+        core::PCSTR,
+    },
 };
+
+#[cfg(windows)]
+unsafe extern "system" {
+    fn RtlCaptureStackBackTrace(
+        frames_to_skip: u32,
+        frames_to_capture: u32,
+        backtrace: *mut *mut c_void,
+        backtrace_hash: *mut u32,
+    ) -> u16;
+}
 
 const DLL_MAIN_SUCCESS: i32 = 1;
 const APPEAR_ANIMATION_ID: i32 = 63010;
@@ -29,8 +52,22 @@ const INVALID_ANIMATION_ID_FLOOR: i32 = 0;
 const ANIM_QUEUE_SLOT_STEP: u32 = 1;
 const ANIM_QUEUE_SCAN_FLOOR: u32 = 0;
 const CUSTOM_CALL_DEFAULT_ID: i32 = 0;
-
 static START_GAME_TASK: Once = Once::new();
+static START_AUTOLOAD_TASK: Once = Once::new();
+static START_CONTINUE_TRACE: Once = Once::new();
+
+static MENU_CONTINUE_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(0);
+static MENU_NEW_OR_LOAD_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(0);
+static MENU_OTHER_LOAD_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(0);
+static SET_SAVE_SLOT_ORIG: AtomicUsize = AtomicUsize::new(0);
+static SAVE_REQUEST_PROFILE_ORIG: AtomicUsize = AtomicUsize::new(0);
+static REQUEST_SAVE_ORIG: AtomicUsize = AtomicUsize::new(0);
+static CURRENT_SLOT_LOAD_ORIG: AtomicUsize = AtomicUsize::new(0);
+static CONTINUE_LOAD_ORIG: AtomicUsize = AtomicUsize::new(0);
+static COMBINED_LOAD_ORIG: AtomicUsize = AtomicUsize::new(0);
+static MAP_LOAD_ORIG: AtomicUsize = AtomicUsize::new(0);
+static SAVE_LOAD_STATE_INIT_ORIG: AtomicUsize = AtomicUsize::new(0);
+static TITLE_BOOTSTRAP_SEEN: AtomicUsize = AtomicUsize::new(0);
 
 /// A named runtime effect call the overlay can trigger.
 ///
@@ -135,6 +172,9 @@ struct EffectsState {
     remove_all_requested: bool,
     network_sync: bool,
     custom_call_id: i32,
+    last_telemetry_write: Option<Instant>,
+    last_driver_command: Option<String>,
+    autoload: SaveLoader,
 }
 
 impl Default for EffectsState {
@@ -164,6 +204,9 @@ impl Default for EffectsState {
             remove_all_requested: false,
             network_sync: false,
             custom_call_id: CUSTOM_CALL_DEFAULT_ID,
+            last_telemetry_write: None,
+            last_driver_command: None,
+            autoload: SaveLoader::from_env(),
         }
     }
 }
@@ -188,6 +231,16 @@ impl ImguiRenderLoop for EffectsOverlay {
         blocker.block_from_io(ui.io());
 
         let mut state = state_or_return(&self.state);
+        process_global_driver_command(&mut state);
+        let player_available = if let Ok(player) = unsafe { PlayerIns::local_player_mut() } {
+            process_driver_command(player, &mut state);
+            refresh_call_status(player, &mut state);
+            true
+        } else {
+            process_autoload_request(&mut state);
+            false
+        };
+        write_telemetry_throttled(&mut state, player_available);
 
         ui.window("ER Effects")
             .position(OVERLAY_INITIAL_POSITION, Condition::FirstUseEver)
@@ -213,10 +266,23 @@ impl ImguiRenderLoop for EffectsOverlay {
                 );
 
                 if ui.button("Apply selected now") {
-                    state.manual_apply_requested = true;
+                    if let Ok(player) = unsafe { PlayerIns::local_player_mut() } {
+                        apply_selected_calls(player, &mut state);
+                        refresh_call_status(player, &mut state);
+                    } else {
+                        state.manual_apply_requested = true;
+                    }
                 }
                 if ui.button("Remove all listed effects") {
-                    state.remove_all_requested = true;
+                    if let Ok(player) = unsafe { PlayerIns::local_player_mut() } {
+                        for call in &mut state.calls {
+                            call.kind.remove(player);
+                            call.remove_requested = false;
+                        }
+                        refresh_call_status(player, &mut state);
+                    } else {
+                        state.remove_all_requested = true;
+                    }
                 }
 
                 ui.separator();
@@ -229,14 +295,33 @@ impl ImguiRenderLoop for EffectsOverlay {
                 ui.separator();
                 ui.text("Named calls");
 
+                let network_sync = state.network_sync;
+                let mut apply_requested_without_player = false;
                 for call in &mut state.calls {
-                    let was_enabled = call.enabled;
                     let label = format!("{} ({})", call.name, call.kind.label());
-                    if ui.checkbox(&label, &mut call.enabled) && was_enabled && !call.enabled {
-                        call.remove_requested = true;
+                    if ui.checkbox(&label, &mut call.enabled) {
+                        if let Ok(player) = unsafe { PlayerIns::local_player_mut() } {
+                            if call.enabled {
+                                call.kind.apply(player, network_sync);
+                                call.active = call.kind.is_active(player);
+                                call.apply_failed = !call.active;
+                            } else {
+                                call.kind.remove(player);
+                                call.remove_requested = false;
+                                call.apply_failed = false;
+                                call.active = call.kind.is_active(player);
+                            }
+                        } else if call.enabled {
+                            apply_requested_without_player = true;
+                        } else {
+                            call.remove_requested = true;
+                        }
                     }
                     ui.same_line();
                     ui.text(call_status_text(call));
+                }
+                if apply_requested_without_player {
+                    state.manual_apply_requested = true;
                 }
             });
     }
@@ -248,6 +333,143 @@ impl ImguiRenderLoop for EffectsOverlay {
             MessageFilter::empty()
         }
     }
+}
+
+fn write_telemetry_throttled(state: &mut EffectsState, player_available: bool) {
+    const TELEMETRY_INTERVAL: Duration = Duration::from_millis(250);
+
+    let now = Instant::now();
+    if state
+        .last_telemetry_write
+        .is_some_and(|last_write| now.duration_since(last_write) < TELEMETRY_INTERVAL)
+    {
+        return;
+    }
+
+    state.last_telemetry_write = Some(now);
+    write_telemetry(state, player_available);
+}
+
+fn write_telemetry(state: &EffectsState, player_available: bool) {
+    let path = telemetry_path();
+    let mut body = String::new();
+    body.push_str("{\n");
+    body.push_str(&format!("  \"player_available\": {player_available},\n"));
+    body.push_str(&format!(
+        "  \"current_animation_id\": {},\n",
+        state
+            .current_animation_id
+            .map_or_else(|| "null".to_owned(), |id| id.to_string())
+    ));
+    body.push_str(&format!("  \"network_sync\": {},\n", state.network_sync));
+    body.push_str(&format!(
+        "  \"autoload_save_extension\": {},\n",
+        state.autoload.save_extension().map_or_else(
+            || "null".to_owned(),
+            |extension| format!("\"{}\"", json_escape(extension))
+        )
+    ));
+    body.push_str(&format!(
+        "  \"autoload_slot\": {},\n",
+        state
+            .autoload
+            .slot()
+            .map_or_else(|| "null".to_owned(), |slot| slot.to_string())
+    ));
+    body.push_str(&format!(
+        "  \"autoload_method\": \"{}\",\n",
+        state.autoload.method().label()
+    ));
+    body.push_str(&format!(
+        "  \"autoload_attempts\": {},\n",
+        state.autoload.attempts()
+    ));
+    body.push_str(&format!(
+        "  \"autoload_last_status\": {},\n",
+        state.autoload.last_status().map_or_else(
+            || "null".to_owned(),
+            |status| format!("\"{}\"", json_escape(status))
+        )
+    ));
+    write_game_man_telemetry(&mut body);
+    body.push_str(&format!(
+        "  \"last_driver_command\": {},\n",
+        state.last_driver_command.as_ref().map_or_else(
+            || "null".to_owned(),
+            |command| format!("\"{}\"", json_escape(command))
+        )
+    ));
+    body.push_str("  \"calls\": [\n");
+    for (index, call) in state.calls.iter().enumerate() {
+        let comma = if index + 1 == state.calls.len() {
+            ""
+        } else {
+            ","
+        };
+        body.push_str(&format!(
+            "    {{\"index\": {index}, \"name\": \"{}\", \"kind\": \"{}\", \"enabled\": {}, \"active\": {}, \"apply_failed\": {}}}{comma}\n",
+            json_escape(&call.name),
+            json_escape(&call.kind.label()),
+            call.enabled,
+            call.active,
+            call.apply_failed,
+        ));
+    }
+    body.push_str("  ]\n}\n");
+
+    let tmp_path = path.with_extension("json.tmp");
+    if fs::write(&tmp_path, body).is_ok() {
+        let _ = fs::rename(tmp_path, path);
+    }
+}
+
+fn write_game_man_telemetry(body: &mut String) {
+    let Ok(game_man) = (unsafe { GameMan::instance() }) else {
+        body.push_str("  \"game_man_available\": false,\n");
+        return;
+    };
+
+    let telemetry = GameManTelemetry::from_game_man(game_man);
+    body.push_str("  \"game_man_available\": true,\n");
+    body.push_str(&format!("  \"game_save_slot\": {},\n", telemetry.save_slot));
+    body.push_str(&format!(
+        "  \"game_requested_save_slot_load_index\": {},\n",
+        telemetry.requested_save_slot_load_index
+    ));
+    body.push_str(&format!(
+        "  \"game_save_state\": {},\n",
+        telemetry.save_state
+    ));
+    body.push_str(&format!(
+        "  \"game_save_requested\": {},\n",
+        telemetry.save_requested
+    ));
+}
+
+fn telemetry_path() -> PathBuf {
+    std::env::var_os("ER_EFFECTS_TELEMETRY_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("er-effects-telemetry.json"))
+}
+
+fn command_path() -> PathBuf {
+    std::env::var_os("ER_EFFECTS_COMMAND_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("er-effects-command.txt"))
+}
+
+fn json_escape(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|character| match character {
+            '\\' => "\\\\".chars().collect::<Vec<_>>(),
+            '"' => "\\\"".chars().collect::<Vec<_>>(),
+            '\n' => "\\n".chars().collect::<Vec<_>>(),
+            '\r' => "\\r".chars().collect::<Vec<_>>(),
+            '\t' => "\\t".chars().collect::<Vec<_>>(),
+            character => vec![character],
+        })
+        .collect()
 }
 
 fn call_status_text(call: &NamedEffectCall) -> &'static str {
@@ -281,10 +503,36 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     }
 
     let state = Arc::new(Mutex::new(EffectsState::default()));
+
+    let direct_autoload_configured = {
+        let state = state_or_return(&state);
+        state.autoload.method() == SaveLoadMethod::DirectMenuLoad && state.autoload.slot().is_some()
+    };
+    if trace_continue_enabled() || direct_autoload_configured {
+        START_CONTINUE_TRACE.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-continue-trace".to_owned())
+                .spawn(|| {
+                    std::thread::sleep(Duration::from_secs(2));
+                    install_continue_trace_hooks();
+                });
+        });
+    }
     START_GAME_TASK.call_once({
         let state = Arc::clone(&state);
         move || spawn_game_task(state)
     });
+
+    let autoload_without_overlay = state_or_return(&state).autoload.slot().is_some();
+    if autoload_without_overlay {
+        START_AUTOLOAD_TASK.call_once({
+            let state = Arc::clone(&state);
+            move || spawn_autoload_task(state)
+        });
+    }
+    if autoload_without_overlay {
+        return DLL_MAIN_SUCCESS;
+    }
 
     debug::initialize::<ImguiDx12Hooks>(
         hmodule,
@@ -297,14 +545,44 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     )
 }
 
+fn spawn_autoload_task(state: Arc<Mutex<EffectsState>>) {
+    std::thread::spawn(move || {
+        let start = Instant::now();
+        loop {
+            {
+                let mut state = state_or_return(&state);
+                if state.autoload.completed() || state.autoload.slot().is_none() {
+                    write_telemetry_throttled(&mut state, false);
+                    return;
+                }
+                process_autoload_request(&mut state);
+                write_telemetry_throttled(&mut state, false);
+            }
+
+            if start.elapsed() > Duration::from_secs(300) {
+                let mut state = state_or_return(&state);
+                state.autoload.set_last_status("autoload polling timed out");
+                write_telemetry_throttled(&mut state, false);
+                return;
+            }
+
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    });
+}
+
 fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
     std::thread::spawn(move || {
-        let cs_task =
-            CSTaskImp::wait_for_instance(Duration::MAX).expect("timed out waiting for CSTaskImp");
+        let Ok(cs_task) = CSTaskImp::wait_for_instance(Duration::MAX) else {
+            return;
+        };
 
         cs_task.run_recurring(
             move |_: &FD4TaskData| {
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
+                    let mut state = state_or_return(&state);
+                    process_autoload_request(&mut state);
+                    write_telemetry_throttled(&mut state, false);
                     return;
                 };
 
@@ -314,6 +592,7 @@ fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 state.last_write_idx = Some(observation.write_idx);
 
                 remove_requested_calls(player, &mut state);
+                process_driver_command(player, &mut state);
 
                 let appear_playing = observation.current_animation_id == Some(APPEAR_ANIMATION_ID);
                 if !appear_playing {
@@ -333,11 +612,522 @@ fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     apply_selected_calls(player, &mut state);
                 }
 
+                process_global_driver_command(&mut state);
                 refresh_call_status(player, &mut state);
+                write_telemetry_throttled(&mut state, true);
             },
             CSTaskGroupIndex::FrameBegin,
         );
     });
+}
+
+fn process_autoload_request(state: &mut EffectsState) {
+    if state.autoload.completed() || state.autoload.slot().is_none() {
+        return;
+    }
+
+    let Ok(game_man) = (unsafe { GameMan::instance_mut() }) else {
+        return;
+    };
+
+    let Ok(game_module_base) = game_module_base() else {
+        return;
+    };
+
+    let context = SaveLoadContext {
+        game_module_base,
+        title_bootstrap_seen: TITLE_BOOTSTRAP_SEEN.load(Ordering::SeqCst) != 0,
+    };
+    let _ = unsafe {
+        state.autoload.process(game_man, context, |message| {
+            append_autoload_debug(format_args!("{message}"))
+        })
+    };
+}
+
+fn game_module_base() -> Result<usize, String> {
+    let module = unsafe { GetModuleHandleA(PCSTR::null()) }
+        .map_err(|error| format!("failed to resolve game module: {error}"))?;
+    Ok(module.0 as usize)
+}
+
+fn game_rva(rva: u32) -> Result<usize, String> {
+    Ok(game_module_base()? + rva as usize)
+}
+
+fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
+    use std::io::Write;
+
+    let path = std::env::var("ER_EFFECTS_AUTOLOAD_DEBUG_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("er-effects-autoload-debug.log"));
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{args}");
+    }
+}
+
+fn trace_continue_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_TRACE_CONTINUE").as_deref(),
+        Ok("1")
+    ) || trace_continue_default_path().exists()
+        || PathBuf::from("er-effects-trace-continue.txt").exists()
+}
+
+fn trace_continue_default_path() -> PathBuf {
+    game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-trace-continue.txt")
+}
+
+fn continue_trace_log_path() -> PathBuf {
+    std::env::var("ER_EFFECTS_TRACE_CONTINUE_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            game_directory_path()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("er-effects-continue-trace.log")
+        })
+}
+
+fn game_directory_path() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(PathBuf::from))
+}
+
+fn append_continue_trace(args: std::fmt::Arguments<'_>) {
+    use std::io::Write;
+
+    if let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(continue_trace_log_path())
+    {
+        let _ = writeln!(file, "{args}");
+    }
+}
+
+#[cfg(windows)]
+fn trace_callers_summary() -> String {
+    let mut frames = [std::ptr::null_mut::<c_void>(); 8];
+    let captured = unsafe {
+        RtlCaptureStackBackTrace(
+            0,
+            frames.len() as u32,
+            frames.as_mut_ptr(),
+            std::ptr::null_mut(),
+        )
+    } as usize;
+    let module_base = unsafe { GetModuleHandleA(PCSTR::null()) }
+        .ok()
+        .map(|module| module.0 as usize)
+        .unwrap_or(0);
+
+    let callers = frames
+        .iter()
+        .take(captured)
+        .enumerate()
+        .map(|(index, frame)| {
+            let address = *frame as usize;
+            if module_base != 0 && address >= module_base {
+                format!("#{index}=0x{:x}", address - module_base)
+            } else {
+                format!("#{index}=0x{address:x}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("callers=[{callers}]")
+}
+
+#[cfg(not(windows))]
+fn trace_callers_summary() -> String {
+    "callers=[]".to_owned()
+}
+
+fn game_man_trace_summary() -> String {
+    const GAME_MAN_GLOBAL_RVA: u32 = 0x03d69918;
+
+    unsafe {
+        let Ok(global) = game_rva(GAME_MAN_GLOBAL_RVA) else {
+            return "gm_global_unresolved".to_owned();
+        };
+        let game_man = *(global as *const *const u8);
+        if game_man.is_null() {
+            return "gm=null".to_owned();
+        }
+
+        let read_i32 = |offset: usize| *(game_man.add(offset) as *const i32);
+        let read_u8 = |offset: usize| *game_man.add(offset);
+        format!(
+            "gm={game_man:p} slot={} req_idx={} state={} flags{{b72={},b73={},b74={},b75={},bb8={}}} bc4={} bbc={} bc0={}",
+            read_i32(0xac0),
+            read_i32(0xb78),
+            read_i32(0xb80),
+            read_u8(0xb72),
+            read_u8(0xb73),
+            read_u8(0xb74),
+            read_u8(0xb75),
+            read_u8(0xbb8),
+            read_i32(0xbc4),
+            read_i32(0xbbc),
+            read_i32(0xbc0),
+        )
+    }
+}
+
+unsafe fn create_continue_trace_hook(
+    hooks: &mut Vec<MhHook>,
+    name: &str,
+    rva: u32,
+    hook_impl: *mut c_void,
+    original: &AtomicUsize,
+) {
+    let Ok(addr) = game_rva(rva) else {
+        append_continue_trace(format_args!("hook {name}: failed to resolve rva=0x{rva:x}"));
+        return;
+    };
+
+    match unsafe { MhHook::new(addr as *mut c_void, hook_impl) } {
+        Ok(hook) => {
+            original.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_continue_trace(format_args!("hook {name}: queue_enable failed: {status:?}"));
+            } else {
+                append_continue_trace(format_args!(
+                    "hook {name}: target=0x{addr:x} trampoline={:p}",
+                    hook.trampoline()
+                ));
+                hooks.push(hook);
+            }
+        }
+        Err(status) => append_continue_trace(format_args!(
+            "hook {name}: create failed at 0x{addr:x}: {status:?}"
+        )),
+    }
+}
+
+fn install_continue_trace_hooks() {
+    // Local Proton executable RVAs. The shared Ghidra 1.16.1 function starts are
+    // currently +0xf0 for these text symbols; these RVAs are verified against
+    // /home/banon/.local/share/Steam/.../eldenring.exe sha256
+    // 34102b1c08bb5f769a724427a6f70fe29b3b732c31cf73693f861c48d3492ddb.
+    const MENU_CONTINUE_WRAPPER_RVA: u32 = 0x0082bac0;
+    const MENU_NEW_OR_LOAD_WRAPPER_RVA: u32 = 0x0082ba80;
+    const MENU_OTHER_LOAD_WRAPPER_RVA: u32 = 0x0082bb00;
+    const SET_SAVE_SLOT_RVA: u32 = 0x0067a810;
+    const SAVE_REQUEST_PROFILE_RVA: u32 = 0x0067a420;
+    const REQUEST_SAVE_RVA: u32 = 0x0067a520;
+    const CURRENT_SLOT_LOAD_RVA: u32 = 0x0067b570;
+    const CONTINUE_LOAD_RVA: u32 = 0x0067b750;
+    const COMBINED_LOAD_RVA: u32 = 0x0067b940;
+    const MAP_LOAD_RVA: u32 = 0x0067bc10;
+    const SAVE_LOAD_STATE_INIT_RVA: u32 = 0x0067b030;
+
+    append_continue_trace(format_args!(
+        "install_continue_trace_hooks begin {}",
+        game_man_trace_summary()
+    ));
+
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_continue_trace(format_args!("MH_Initialize failed: {status:?}"));
+            return;
+        }
+    }
+
+    let mut hooks = Vec::new();
+    unsafe {
+        create_continue_trace_hook(
+            &mut hooks,
+            "menu_continue_wrapper",
+            MENU_CONTINUE_WRAPPER_RVA,
+            menu_continue_wrapper_hook as *mut c_void,
+            &MENU_CONTINUE_WRAPPER_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "menu_new_or_load_wrapper",
+            MENU_NEW_OR_LOAD_WRAPPER_RVA,
+            menu_new_or_load_wrapper_hook as *mut c_void,
+            &MENU_NEW_OR_LOAD_WRAPPER_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "menu_other_load_wrapper",
+            MENU_OTHER_LOAD_WRAPPER_RVA,
+            menu_other_load_wrapper_hook as *mut c_void,
+            &MENU_OTHER_LOAD_WRAPPER_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "set_save_slot",
+            SET_SAVE_SLOT_RVA,
+            set_save_slot_hook as *mut c_void,
+            &SET_SAVE_SLOT_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "save_request_profile",
+            SAVE_REQUEST_PROFILE_RVA,
+            save_request_profile_hook as *mut c_void,
+            &SAVE_REQUEST_PROFILE_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "request_save",
+            REQUEST_SAVE_RVA,
+            request_save_hook as *mut c_void,
+            &REQUEST_SAVE_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "current_slot_load_67b570",
+            CURRENT_SLOT_LOAD_RVA,
+            current_slot_load_hook as *mut c_void,
+            &CURRENT_SLOT_LOAD_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "continue_load_67b750",
+            CONTINUE_LOAD_RVA,
+            continue_load_hook as *mut c_void,
+            &CONTINUE_LOAD_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "combined_load_67b940",
+            COMBINED_LOAD_RVA,
+            combined_load_hook as *mut c_void,
+            &COMBINED_LOAD_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "map_load_67bc10",
+            MAP_LOAD_RVA,
+            map_load_hook as *mut c_void,
+            &MAP_LOAD_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "save_load_state_init_67b030",
+            SAVE_LOAD_STATE_INIT_RVA,
+            save_load_state_init_hook as *mut c_void,
+            &SAVE_LOAD_STATE_INIT_ORIG,
+        );
+    }
+
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => append_continue_trace(format_args!(
+            "install_continue_trace_hooks applied count={} {}",
+            hooks.len(),
+            game_man_trace_summary()
+        )),
+        status => append_continue_trace(format_args!("MH_ApplyQueued failed: {status:?}")),
+    }
+
+    std::mem::forget(hooks);
+}
+
+unsafe fn call_wrapper_original(original: &AtomicUsize, this: *mut c_void) -> Option<*mut c_void> {
+    let original = original.load(Ordering::SeqCst);
+    if original == 0 {
+        return None;
+    }
+    let original: unsafe extern "system" fn(*mut c_void) -> *mut c_void =
+        unsafe { std::mem::transmute(original) };
+    Some(unsafe { original(this) })
+}
+
+unsafe fn call_bool3_original(original: &AtomicUsize, arg0: i32, arg1: u8, arg2: u8) -> Option<u8> {
+    let original = original.load(Ordering::SeqCst);
+    if original == 0 {
+        return None;
+    }
+    let original: unsafe extern "system" fn(i32, u8, u8) -> u8 =
+        unsafe { std::mem::transmute(original) };
+    Some(unsafe { original(arg0, arg1, arg2) })
+}
+
+unsafe extern "system" fn menu_continue_wrapper_hook(this: *mut c_void) -> *mut c_void {
+    append_continue_trace(format_args!(
+        "ENTER menu_continue_wrapper this={this:p} {}",
+        game_man_trace_summary()
+    ));
+    let result =
+        unsafe { call_wrapper_original(&MENU_CONTINUE_WRAPPER_ORIG, this) }.unwrap_or(this);
+    append_continue_trace(format_args!(
+        "LEAVE menu_continue_wrapper ret={result:p} {}",
+        game_man_trace_summary()
+    ));
+    result
+}
+
+unsafe extern "system" fn menu_new_or_load_wrapper_hook(this: *mut c_void) -> *mut c_void {
+    append_continue_trace(format_args!(
+        "ENTER menu_new_or_load_wrapper this={this:p} {}",
+        game_man_trace_summary()
+    ));
+    let result =
+        unsafe { call_wrapper_original(&MENU_NEW_OR_LOAD_WRAPPER_ORIG, this) }.unwrap_or(this);
+    append_continue_trace(format_args!(
+        "LEAVE menu_new_or_load_wrapper ret={result:p} {}",
+        game_man_trace_summary()
+    ));
+    result
+}
+
+unsafe extern "system" fn menu_other_load_wrapper_hook(this: *mut c_void) -> *mut c_void {
+    append_continue_trace(format_args!(
+        "ENTER menu_other_load_wrapper this={this:p} {}",
+        game_man_trace_summary()
+    ));
+    let result =
+        unsafe { call_wrapper_original(&MENU_OTHER_LOAD_WRAPPER_ORIG, this) }.unwrap_or(this);
+    append_continue_trace(format_args!(
+        "LEAVE menu_other_load_wrapper ret={result:p} {}",
+        game_man_trace_summary()
+    ));
+    result
+}
+
+unsafe extern "system" fn set_save_slot_hook(slot: i32) {
+    append_continue_trace(format_args!(
+        "ENTER set_save_slot slot={slot} {} {}",
+        trace_callers_summary(),
+        game_man_trace_summary()
+    ));
+    let original = SET_SAVE_SLOT_ORIG.load(Ordering::SeqCst);
+    if original != 0 {
+        let original: unsafe extern "system" fn(i32) = unsafe { std::mem::transmute(original) };
+        unsafe { original(slot) };
+    }
+    append_continue_trace(format_args!(
+        "LEAVE set_save_slot {}",
+        game_man_trace_summary()
+    ));
+}
+
+unsafe extern "system" fn save_request_profile_hook(enabled: u8) {
+    append_continue_trace(format_args!(
+        "ENTER save_request_profile enabled={enabled} {} {}",
+        trace_callers_summary(),
+        game_man_trace_summary()
+    ));
+    let original = SAVE_REQUEST_PROFILE_ORIG.load(Ordering::SeqCst);
+    if original != 0 {
+        let original: unsafe extern "system" fn(u8) = unsafe { std::mem::transmute(original) };
+        unsafe { original(enabled) };
+    }
+    append_continue_trace(format_args!(
+        "LEAVE save_request_profile {}",
+        game_man_trace_summary()
+    ));
+}
+
+unsafe extern "system" fn request_save_hook(enabled: u8) {
+    append_continue_trace(format_args!(
+        "ENTER request_save enabled={enabled} {} {}",
+        trace_callers_summary(),
+        game_man_trace_summary()
+    ));
+    let original = REQUEST_SAVE_ORIG.load(Ordering::SeqCst);
+    if original != 0 {
+        let original: unsafe extern "system" fn(u8) = unsafe { std::mem::transmute(original) };
+        unsafe { original(enabled) };
+    }
+    append_continue_trace(format_args!(
+        "LEAVE request_save {}",
+        game_man_trace_summary()
+    ));
+}
+
+unsafe extern "system" fn current_slot_load_hook(arg0: i32, arg1: u8, arg2: u8) -> u8 {
+    append_continue_trace(format_args!(
+        "ENTER current_slot_load_67b570 arg0={arg0} arg1={arg1} arg2={arg2} {} {}",
+        trace_callers_summary(),
+        game_man_trace_summary()
+    ));
+    let ret =
+        unsafe { call_bool3_original(&CURRENT_SLOT_LOAD_ORIG, arg0, arg1, arg2) }.unwrap_or(0);
+    append_continue_trace(format_args!(
+        "LEAVE current_slot_load_67b570 ret={ret} {}",
+        game_man_trace_summary()
+    ));
+    ret
+}
+
+unsafe extern "system" fn continue_load_hook(slot: i32, arg1: u8, arg2: u8) -> u8 {
+    append_continue_trace(format_args!(
+        "ENTER continue_load_67b750 slot={slot} arg1={arg1} arg2={arg2} {} {}",
+        trace_callers_summary(),
+        game_man_trace_summary()
+    ));
+    let ret = unsafe { call_bool3_original(&CONTINUE_LOAD_ORIG, slot, arg1, arg2) }.unwrap_or(0);
+    append_continue_trace(format_args!(
+        "LEAVE continue_load_67b750 ret={ret} {}",
+        game_man_trace_summary()
+    ));
+    ret
+}
+
+unsafe extern "system" fn combined_load_hook(slot: i32, arg1: u8, arg2: u8) -> u8 {
+    append_continue_trace(format_args!(
+        "ENTER combined_load_67b940 slot={slot} arg1={arg1} arg2={arg2} {} {}",
+        trace_callers_summary(),
+        game_man_trace_summary()
+    ));
+    let ret = unsafe { call_bool3_original(&COMBINED_LOAD_ORIG, slot, arg1, arg2) }.unwrap_or(0);
+    append_continue_trace(format_args!(
+        "LEAVE combined_load_67b940 ret={ret} {}",
+        game_man_trace_summary()
+    ));
+    ret
+}
+
+unsafe extern "system" fn map_load_hook() -> u8 {
+    append_continue_trace(format_args!(
+        "ENTER map_load_67bc10 {} {}",
+        trace_callers_summary(),
+        game_man_trace_summary()
+    ));
+    let original = MAP_LOAD_ORIG.load(Ordering::SeqCst);
+    let ret = if original == 0 {
+        0
+    } else {
+        let original: unsafe extern "system" fn() -> u8 = unsafe { std::mem::transmute(original) };
+        unsafe { original() }
+    };
+    if ret != 0 {
+        TITLE_BOOTSTRAP_SEEN.store(1, Ordering::SeqCst);
+    }
+    append_continue_trace(format_args!(
+        "LEAVE map_load_67bc10 ret={ret} {}",
+        game_man_trace_summary()
+    ));
+    ret
+}
+
+unsafe extern "system" fn save_load_state_init_hook() -> u8 {
+    append_continue_trace(format_args!(
+        "ENTER save_load_state_init_67b030 {} {}",
+        trace_callers_summary(),
+        game_man_trace_summary()
+    ));
+    let original = SAVE_LOAD_STATE_INIT_ORIG.load(Ordering::SeqCst);
+    let ret = if original == 0 {
+        0
+    } else {
+        let original: unsafe extern "system" fn() -> u8 = unsafe { std::mem::transmute(original) };
+        unsafe { original() }
+    };
+    append_continue_trace(format_args!(
+        "LEAVE save_load_state_init_67b030 ret={ret} {}",
+        game_man_trace_summary()
+    ));
+    ret
 }
 
 fn state_or_return(state: &Arc<Mutex<EffectsState>>) -> std::sync::MutexGuard<'_, EffectsState> {
@@ -397,6 +1187,127 @@ fn observe_animation(player: &PlayerIns, last_write_idx: Option<u32>) -> Animati
 
 fn valid_animation_id(anim_id: i32) -> Option<i32> {
     (anim_id > INVALID_ANIMATION_ID_FLOOR).then_some(anim_id)
+}
+
+fn process_global_driver_command(state: &mut EffectsState) {
+    let path = command_path();
+    let Ok(raw_command) = fs::read_to_string(&path) else {
+        return;
+    };
+    let command = raw_command.trim();
+    if !command.starts_with("load_slot ") {
+        return;
+    }
+    let _ = fs::remove_file(path);
+
+    let parts: Vec<_> = command.split_whitespace().collect();
+    state.last_driver_command = Some(match parts.as_slice() {
+        ["load_slot", slot] => match slot.parse() {
+            Ok(slot) => {
+                state.autoload.queue_direct_menu_load(slot);
+                process_autoload_request(state);
+                format!("ok: {command}")
+            }
+            Err(error) => format!("error: {command}: invalid slot: {error}"),
+        },
+        _ => format!("error: {command}: expected load_slot <index>"),
+    });
+}
+
+fn process_driver_command(player: &mut PlayerIns, state: &mut EffectsState) {
+    let path = command_path();
+    let Ok(raw_command) = fs::read_to_string(&path) else {
+        return;
+    };
+    let _ = fs::remove_file(path);
+
+    execute_and_record_driver_command(player, state, raw_command.trim());
+}
+
+fn execute_and_record_driver_command(
+    player: &mut PlayerIns,
+    state: &mut EffectsState,
+    command: &str,
+) {
+    if command.is_empty() {
+        return;
+    }
+
+    state.last_driver_command = Some(match execute_driver_command(player, state, command) {
+        Ok(()) => format!("ok: {command}"),
+        Err(error) => format!("error: {command}: {error}"),
+    });
+}
+
+fn execute_driver_command(
+    player: &mut PlayerIns,
+    state: &mut EffectsState,
+    command: &str,
+) -> Result<(), String> {
+    let parts: Vec<_> = command.split_whitespace().collect();
+    match parts.as_slice() {
+        ["apply_all"] => {
+            apply_selected_calls(player, state);
+            refresh_call_status(player, state);
+            Ok(())
+        }
+        ["remove_all"] => {
+            for call in &mut state.calls {
+                call.kind.remove(player);
+                call.enabled = false;
+                call.remove_requested = false;
+                call.apply_failed = false;
+            }
+            refresh_call_status(player, state);
+            Ok(())
+        }
+        ["apply", index] => set_call_enabled(player, state, parse_call_index(index)?, true),
+        ["remove", index] => set_call_enabled(player, state, parse_call_index(index)?, false),
+        ["set", index, "on"] => set_call_enabled(player, state, parse_call_index(index)?, true),
+        ["set", index, "off"] => set_call_enabled(player, state, parse_call_index(index)?, false),
+        ["toggle", index] => {
+            let index = parse_call_index(index)?;
+            let enabled = !state
+                .calls
+                .get(index)
+                .ok_or_else(|| format!("call index {index} out of range"))?
+                .enabled;
+            set_call_enabled(player, state, index, enabled)
+        }
+        _ => Err("expected apply_all, remove_all, apply <index>, remove <index>, set <index> on|off, toggle <index>, or load_slot <index> before player load".to_owned()),
+    }
+}
+
+fn parse_call_index(index: &str) -> Result<usize, String> {
+    index
+        .parse()
+        .map_err(|error| format!("invalid call index {index:?}: {error}"))
+}
+
+fn set_call_enabled(
+    player: &mut PlayerIns,
+    state: &mut EffectsState,
+    index: usize,
+    enabled: bool,
+) -> Result<(), String> {
+    let call = state
+        .calls
+        .get_mut(index)
+        .ok_or_else(|| format!("call index {index} out of range"))?;
+
+    call.enabled = enabled;
+    if enabled {
+        call.kind.apply(player, state.network_sync);
+        call.active = call.kind.is_active(player);
+        call.apply_failed = !call.active;
+    } else {
+        call.kind.remove(player);
+        call.remove_requested = false;
+        call.apply_failed = false;
+        call.active = call.kind.is_active(player);
+    }
+
+    Ok(())
 }
 
 fn remove_requested_calls(player: &mut PlayerIns, state: &mut EffectsState) {
