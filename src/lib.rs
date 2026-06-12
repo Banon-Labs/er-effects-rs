@@ -13,7 +13,7 @@ use eldenring::{
 use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
 use fromsoftware_shared::{SharedTaskImpExt, program::Program};
 use hudhook::{
-    ImguiRenderLoop,
+    ImguiRenderLoop, MessageFilter,
     hooks::dx12::ImguiDx12Hooks,
     imgui::{Condition, Context, Ui},
     windows::Win32::{Foundation::HINSTANCE, System::SystemServices::DLL_PROCESS_ATTACH},
@@ -173,7 +173,11 @@ struct EffectsOverlay {
 }
 
 impl ImguiRenderLoop for EffectsOverlay {
-    fn initialize(&mut self, _ctx: &mut Context, _render_context: &mut dyn hudhook::RenderContext) {
+    fn initialize(&mut self, ctx: &mut Context, _render_context: &mut dyn hudhook::RenderContext) {
+        // Elden Ring hides/captures the OS cursor under Proton. Draw ImGui's
+        // software cursor so overlay hit-testing is visible during Linux smoke
+        // tests and normal in-game use.
+        ctx.io_mut().mouse_draw_cursor = true;
     }
 
     fn render(&mut self, ui: &mut Ui) {
@@ -235,6 +239,14 @@ impl ImguiRenderLoop for EffectsOverlay {
                     ui.text(call_status_text(call));
                 }
             });
+    }
+
+    fn message_filter(&self, io: &hudhook::imgui::Io) -> MessageFilter {
+        if io.want_capture_mouse || io.want_capture_keyboard {
+            MessageFilter::InputAll
+        } else {
+            MessageFilter::empty()
+        }
     }
 }
 

@@ -16,4 +16,7 @@ eldenring = { path = "../fromsoftware-rs/crates/eldenring" }
 er-effects-data = { path = "crates/effects-data" }
 fromsoftware-shared = { path = "../fromsoftware-rs/crates/shared" }
 debug = { path = "../fromsoftware-rs/crates/debug" }
-hudhook = { git = "https://github.com/veeenu/hudhook", features = ["imgui-tables-api"] }
+hudhook = { git = "https://github.com/veeenu/hudhook", features = ["imgui-tables-api", "dx12-fallback-device-check", "poll-cursor-position"] }
+
+[patch."https://github.com/veeenu/hudhook"]
+hudhook = { git = "https://github.com/Banon-Labs/hudhook", branch = "er-proton-cursor-poll" }
