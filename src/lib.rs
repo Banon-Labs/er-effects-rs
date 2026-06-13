@@ -76,6 +76,8 @@ const BOOTSTRAP_DETAIL_START: &str = "start";
 const BOOTSTRAP_DETAIL_DONE: &str = "done";
 const BOOTSTRAP_DETAIL_PLAYER_AVAILABLE: &str = "player_available";
 const BOOTSTRAP_DETAIL_PLAYER_UNAVAILABLE: &str = "player_unavailable";
+const INITIAL_GAME_TASK_TICKS: u64 = 0;
+const GAME_TASK_TICK_INCREMENT: u64 = 1;
 static START_GAME_TASK: Once = Once::new();
 static START_CONTINUE_TRACE: Once = Once::new();
 static BOOTSTRAP_TELEMETRY_SEEN: AtomicUsize = AtomicUsize::new(BOOTSTRAP_TELEMETRY_UNSEEN);
@@ -237,6 +239,7 @@ struct EffectsState {
     last_telemetry_write: Option<Instant>,
     last_driver_command: Option<String>,
     autoload: SaveLoader,
+    game_task_ticks: u64,
 }
 
 impl Default for EffectsState {
@@ -269,6 +272,7 @@ impl Default for EffectsState {
             last_telemetry_write: None,
             last_driver_command: None,
             autoload: SaveLoader::from_env(),
+            game_task_ticks: INITIAL_GAME_TASK_TICKS,
         }
     }
 }
@@ -462,8 +466,20 @@ fn write_telemetry(state: &EffectsState, player_available: bool) {
         state.autoload.method().label()
     ));
     body.push_str(&format!(
+        "  \"autoload_require_title_bootstrap\": {},\n",
+        state.autoload.requires_title_bootstrap()
+    ));
+    body.push_str(&format!(
+        "  \"title_bootstrap_seen\": {},\n",
+        TITLE_BOOTSTRAP_SEEN.load(Ordering::SeqCst) != TITLE_BOOTSTRAP_UNSEEN
+    ));
+    body.push_str(&format!(
         "  \"autoload_attempts\": {},\n",
         state.autoload.attempts()
+    ));
+    body.push_str(&format!(
+        "  \"game_task_ticks\": {},\n",
+        state.game_task_ticks
     ));
     body.push_str(&format!(
         "  \"autoload_last_status\": {},\n",
@@ -653,12 +669,14 @@ fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             move |_: &FD4TaskData| {
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
                     let mut state = state_or_return(&state);
+                    state.game_task_ticks += GAME_TASK_TICK_INCREMENT;
                     process_autoload_request(&mut state);
                     write_telemetry_throttled(&mut state, false);
                     return;
                 };
 
                 let mut state = state_or_return(&state);
+                state.game_task_ticks += GAME_TASK_TICK_INCREMENT;
                 let observation = observe_animation(player, state.last_write_idx);
                 state.current_animation_id = observation.current_animation_id;
                 state.last_write_idx = Some(observation.write_idx);

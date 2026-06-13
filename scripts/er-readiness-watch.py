@@ -22,14 +22,27 @@ DEFAULT_WINDOW_CLASS = "steam_app_1245620"
 DEFAULT_SPAWN_POLL_BUDGET = 4096
 DEFAULT_READINESS_POLL_BUDGET = 8192
 DEFAULT_WINDOW_STALE_POLL_BUDGET = 4096
+DEFAULT_AUTOLOAD_ATTEMPT_BUDGET = 300
+DEFAULT_POST_REQUEST_TICK_BUDGET = 300
 SUCCESS_RC = 0
 FAILURE_RC = 1
+TARGET_GAME_MAN = "game-man"
+TARGET_AUTOLOAD_REQUEST = "autoload-request"
+TARGET_REQUEST_CONSUMPTION = "request-consumption"
+TARGET_PLAYER_LOAD = "player-load"
 READY_REASON = "game_man_telemetry_ready"
 RUNTIME_EXE_NAME = "eldenring.exe"
 WINDOW_WITHOUT_BOOTSTRAP = "window_without_bootstrap_marker"
 WINDOW_WITHOUT_TASK = "window_without_game_task_ready"
 WINDOW_WITHOUT_TELEMETRY = "window_without_valid_telemetry"
 TELEMETRY_WITHOUT_GAME_MAN = "telemetry_without_game_man"
+AUTOLOAD_REQUESTED = "autoload_requested"
+TITLE_BOOTSTRAP_SEEN = "title_bootstrap_seen"
+PLAYER_AVAILABLE = "player_available"
+AUTOLOAD_ATTEMPT_BUDGET_REACHED = "autoload_attempt_budget_reached"
+POST_REQUEST_TICK_BUDGET_REACHED = "post_request_tick_budget_reached"
+PLAYER_LOAD_TICK_BUDGET_REACHED = "player_load_tick_budget_reached"
+AUTOLOAD_SLOT_MISSING = "autoload_slot_missing"
 PROCESS_EXITED = "process_exited_before_ready"
 SPAWN_BUDGET_EXHAUSTED = "runtime_process_not_observed_within_spawn_poll_budget"
 READINESS_BUDGET_EXHAUSTED = "readiness_poll_budget_exhausted"
@@ -206,12 +219,67 @@ def classify_snapshot(
     window_stale_polls: int,
     window_stale_poll_budget: int,
     polls: int,
+    target: str = TARGET_GAME_MAN,
+    autoload_attempt_budget: int = DEFAULT_AUTOLOAD_ATTEMPT_BUDGET,
+    post_request_tick_budget: int = DEFAULT_POST_REQUEST_TICK_BUDGET,
 ) -> ReadinessResult | None:
     if not process_running:
         return ReadinessResult(False, PROCESS_EXITED, pid, bootstrap, telemetry, windows, polls)
     if telemetry is not None and telemetry.get("game_man_available") is True:
-        return ReadinessResult(True, READY_REASON, pid, bootstrap, telemetry, windows, polls)
-    if telemetry is not None and windows and window_stale_polls >= window_stale_poll_budget:
+        if target == TARGET_GAME_MAN:
+            return ReadinessResult(True, READY_REASON, pid, bootstrap, telemetry, windows, polls)
+        if telemetry.get("autoload_slot") is None:
+            return ReadinessResult(False, AUTOLOAD_SLOT_MISSING, pid, bootstrap, telemetry, windows, polls)
+        status = str(telemetry.get("autoload_last_status") or "")
+        if (
+            status.startswith("direct continue sequence requested")
+            or status.startswith("direct map load requested")
+            or status.startswith("direct combined load requested")
+            or status.startswith("direct combined-only load requested")
+            or status.startswith("direct bootstrap combined load requested")
+            or status.startswith("direct bootstrap pump requested")
+            or status.startswith("direct trace sequence requested")
+            or status.startswith("direct menu wrapper requested")
+        ):
+            if target == TARGET_AUTOLOAD_REQUEST:
+                return ReadinessResult(True, AUTOLOAD_REQUESTED, pid, bootstrap, telemetry, windows, polls)
+            if telemetry.get("player_available") is True:
+                return ReadinessResult(True, PLAYER_AVAILABLE, pid, bootstrap, telemetry, windows, polls)
+            game_task_ticks = int(telemetry.get("game_task_ticks") or 0)
+            if target == TARGET_REQUEST_CONSUMPTION and telemetry.get("title_bootstrap_seen") is True:
+                return ReadinessResult(True, TITLE_BOOTSTRAP_SEEN, pid, bootstrap, telemetry, windows, polls)
+            if game_task_ticks >= post_request_tick_budget:
+                reason = (
+                    PLAYER_LOAD_TICK_BUDGET_REACHED
+                    if target == TARGET_PLAYER_LOAD
+                    else POST_REQUEST_TICK_BUDGET_REACHED
+                )
+                return ReadinessResult(
+                    False,
+                    reason,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    windows,
+                    polls,
+                )
+        attempts = int(telemetry.get("autoload_attempts") or 0)
+        if attempts >= autoload_attempt_budget:
+            return ReadinessResult(
+                False,
+                AUTOLOAD_ATTEMPT_BUDGET_REACHED,
+                pid,
+                bootstrap,
+                telemetry,
+                windows,
+                polls,
+            )
+    if (
+        telemetry is not None
+        and telemetry.get("game_man_available") is not True
+        and windows
+        and window_stale_polls >= window_stale_poll_budget
+    ):
         return ReadinessResult(
             False,
             TELEMETRY_WITHOUT_GAME_MAN,
@@ -226,7 +294,7 @@ def classify_snapshot(
     if bootstrap is None:
         return ReadinessResult(False, WINDOW_WITHOUT_BOOTSTRAP, pid, bootstrap, telemetry, windows, polls)
     stage = str(bootstrap.get("stage") or "")
-    if stage in TELEMETRY_READY_STAGES and window_stale_polls >= window_stale_poll_budget:
+    if telemetry is None and stage in TELEMETRY_READY_STAGES and window_stale_polls >= window_stale_poll_budget:
         return ReadinessResult(False, WINDOW_WITHOUT_TELEMETRY, pid, bootstrap, telemetry, windows, polls)
     if stage not in TASK_READY_STAGES and window_stale_polls >= window_stale_poll_budget:
         return ReadinessResult(False, WINDOW_WITHOUT_TASK, pid, bootstrap, telemetry, windows, polls)
@@ -257,6 +325,9 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
             window_stale_polls=window_stale_polls,
             window_stale_poll_budget=args.window_stale_poll_budget,
             polls=spawn_polls + poll,
+            target=args.target,
+            autoload_attempt_budget=args.autoload_attempt_budget,
+            post_request_tick_budget=args.post_request_tick_budget,
         )
         if result is not None:
             return result
@@ -284,6 +355,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--window-class", default=DEFAULT_WINDOW_CLASS)
     parser.add_argument("--spawn-poll-budget", type=int, default=DEFAULT_SPAWN_POLL_BUDGET)
     parser.add_argument("--readiness-poll-budget", type=int, default=DEFAULT_READINESS_POLL_BUDGET)
+    parser.add_argument(
+        "--target",
+        choices=[
+            TARGET_GAME_MAN,
+            TARGET_AUTOLOAD_REQUEST,
+            TARGET_REQUEST_CONSUMPTION,
+            TARGET_PLAYER_LOAD,
+        ],
+        default=TARGET_GAME_MAN,
+    )
+    parser.add_argument("--autoload-attempt-budget", type=int, default=DEFAULT_AUTOLOAD_ATTEMPT_BUDGET)
+    parser.add_argument("--post-request-tick-budget", type=int, default=DEFAULT_POST_REQUEST_TICK_BUDGET)
     parser.add_argument(
         "--window-stale-poll-budget",
         type=int,

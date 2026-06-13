@@ -10,6 +10,14 @@ const TITLE_ACCEPT_CONFIRM_FRAMES: u16 = 2;
 const REQUEST_SAVE_ENABLED: u8 = 1;
 const SAVE_REQUEST_PROFILE_ENABLED: u8 = 1;
 const NULL_MODULE_BASE: usize = 0;
+const MAP_LOAD_FALSE_RETURN: u8 = 0;
+const LOAD_ARG_FALSE: u8 = 0;
+const LOAD_ARG_TRUE: u8 = 1;
+const DIRECT_SEQUENCE_PHASE_COMBINED: u8 = 0;
+const DIRECT_SEQUENCE_PHASE_CONTINUE: u8 = 1;
+const DIRECT_SEQUENCE_PHASE_FINAL_COMBINED: u8 = 2;
+const MENU_OTHER_LOAD_STATE_PTR: usize = 0x10f060;
+const REQUIRE_TITLE_BOOTSTRAP_DEFAULT: bool = true;
 
 #[derive(Debug)]
 pub struct SaveLoader {
@@ -18,13 +26,15 @@ pub struct SaveLoader {
     completed: bool,
     last_status: Option<String>,
     direct_seen_initial_save_busy: bool,
+    direct_sequence_phase: u8,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SaveLoadRequest {
     pub save_extension: Option<String>,
     pub slot: Option<i32>,
     pub method: SaveLoadMethod,
+    pub require_title_bootstrap: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -34,6 +44,13 @@ pub enum SaveLoadMethod {
     RequestedIndex,
     Both,
     DirectMenuLoad,
+    DirectMapLoad,
+    DirectCombinedLoad,
+    DirectCombinedOnly,
+    DirectBootstrapCombined,
+    DirectBootstrapPump,
+    DirectTraceSequence,
+    DirectMenuWrapper,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -112,6 +129,7 @@ impl SaveLoader {
             completed: false,
             last_status: None,
             direct_seen_initial_save_busy: false,
+            direct_sequence_phase: DIRECT_SEQUENCE_PHASE_COMBINED,
         }
     }
 
@@ -142,10 +160,12 @@ impl SaveLoader {
     pub fn queue_direct_menu_load(&mut self, slot: i32) {
         self.request.slot = Some(slot);
         self.request.method = SaveLoadMethod::DirectMenuLoad;
+        self.request.require_title_bootstrap = REQUIRE_TITLE_BOOTSTRAP_DEFAULT;
         self.attempts = INITIAL_ATTEMPTS;
         self.completed = false;
         self.last_status = None;
         self.direct_seen_initial_save_busy = false;
+        self.direct_sequence_phase = DIRECT_SEQUENCE_PHASE_COMBINED;
     }
 
     #[must_use]
@@ -161,6 +181,11 @@ impl SaveLoader {
     #[must_use]
     pub const fn method(&self) -> SaveLoadMethod {
         self.request.method
+    }
+
+    #[must_use]
+    pub const fn requires_title_bootstrap(&self) -> bool {
+        self.request.require_title_bootstrap
     }
 
     /// Advance the load request state machine once.
@@ -212,8 +237,18 @@ impl SaveLoader {
                 self.last_status = Some(format!("requested slot {slot}"));
                 Ok(SaveLoadStep::Requested)
             }
-            SaveLoadMethod::DirectMenuLoad => {
-                if context.title_bootstrap_seen || game_man.save_state() != IDLE_SAVE_STATE {
+            SaveLoadMethod::DirectMenuLoad
+            | SaveLoadMethod::DirectMapLoad
+            | SaveLoadMethod::DirectCombinedLoad
+            | SaveLoadMethod::DirectCombinedOnly
+            | SaveLoadMethod::DirectBootstrapCombined
+            | SaveLoadMethod::DirectBootstrapPump
+            | SaveLoadMethod::DirectTraceSequence
+            | SaveLoadMethod::DirectMenuWrapper => {
+                if !self.request.require_title_bootstrap
+                    || context.title_bootstrap_seen
+                    || game_man.save_state() != IDLE_SAVE_STATE
+                {
                     self.direct_seen_initial_save_busy = true;
                 }
                 if !self.direct_seen_initial_save_busy {
@@ -224,12 +259,83 @@ impl SaveLoader {
                     return Ok(SaveLoadStep::Waiting);
                 }
 
+                if self.request.method == SaveLoadMethod::DirectTraceSequence {
+                    return match unsafe {
+                        request_direct_trace_sequence(
+                            game_man,
+                            context.game_module_base,
+                            slot,
+                            self.attempts,
+                            &mut self.direct_sequence_phase,
+                            &mut debug,
+                        )
+                    } {
+                        Ok(false) => {
+                            self.last_status = Some(format!(
+                                "direct trace sequence phase {} awaiting player for slot {slot}",
+                                self.direct_sequence_phase
+                            ));
+                            Ok(SaveLoadStep::Waiting)
+                        }
+                        Ok(true) => {
+                            self.completed = true;
+                            self.last_status =
+                                Some(format!("direct trace sequence requested slot {slot}"));
+                            Ok(SaveLoadStep::Requested)
+                        }
+                        Err(error) => {
+                            self.last_status = Some(error.clone());
+                            Err(error)
+                        }
+                    };
+                }
+
+                if self.request.method == SaveLoadMethod::DirectMenuWrapper {
+                    return match unsafe {
+                        request_direct_menu_wrapper(
+                            game_man,
+                            context.game_module_base,
+                            slot,
+                            self.attempts,
+                            &mut debug,
+                        )
+                    } {
+                        Ok(true) => {
+                            game_man.set_requested_save_slot_load_index(
+                                CLEAR_REQUESTED_SAVE_SLOT_LOAD_INDEX,
+                            );
+                            self.completed = true;
+                            self.last_status =
+                                Some(format!("direct menu wrapper requested slot {slot}"));
+                            Ok(SaveLoadStep::Requested)
+                        }
+                        Ok(false) => {
+                            self.last_status =
+                                Some(format!("direct menu wrapper not ready for slot {slot}"));
+                            Ok(SaveLoadStep::Waiting)
+                        }
+                        Err(error) => {
+                            self.last_status = Some(error.clone());
+                            Err(error)
+                        }
+                    };
+                }
+
                 match unsafe {
                     request_direct_menu_load(
                         game_man,
                         context.game_module_base,
                         slot,
                         self.attempts,
+                        self.request.method == SaveLoadMethod::DirectMapLoad
+                            || self.request.method == SaveLoadMethod::DirectCombinedLoad,
+                        self.request.method == SaveLoadMethod::DirectCombinedLoad
+                            || self.request.method == SaveLoadMethod::DirectCombinedOnly
+                            || self.request.method == SaveLoadMethod::DirectBootstrapCombined
+                            || self.request.method == SaveLoadMethod::DirectBootstrapPump,
+                        self.request.method == SaveLoadMethod::DirectBootstrapCombined
+                            || self.request.method == SaveLoadMethod::DirectBootstrapPump,
+                        self.request.method == SaveLoadMethod::DirectBootstrapPump,
                         &mut debug,
                     )
                 } {
@@ -238,14 +344,34 @@ impl SaveLoader {
                             CLEAR_REQUESTED_SAVE_SLOT_LOAD_INDEX,
                         );
                         self.completed = true;
-                        self.last_status =
-                            Some(format!("direct continue sequence requested slot {slot}"));
+                        self.last_status = Some(match self.request.method {
+                            SaveLoadMethod::DirectMapLoad => {
+                                format!("direct map load requested slot {slot}")
+                            }
+                            SaveLoadMethod::DirectCombinedLoad => {
+                                format!("direct combined load requested slot {slot}")
+                            }
+                            SaveLoadMethod::DirectCombinedOnly => {
+                                format!("direct combined-only load requested slot {slot}")
+                            }
+                            SaveLoadMethod::DirectBootstrapCombined => {
+                                format!("direct bootstrap combined load requested slot {slot}")
+                            }
+                            SaveLoadMethod::DirectBootstrapPump => {
+                                format!("direct bootstrap pump requested slot {slot}")
+                            }
+                            _ => format!("direct continue sequence requested slot {slot}"),
+                        });
                         Ok(SaveLoadStep::Requested)
                     }
                     Ok(false) => {
-                        self.last_status = Some(format!(
-                            "direct continue sequence not ready for slot {slot}"
-                        ));
+                        self.last_status = Some(
+                            if self.request.method == SaveLoadMethod::DirectBootstrapPump {
+                                format!("direct bootstrap pump awaiting player for slot {slot}")
+                            } else {
+                                format!("direct continue sequence not ready for slot {slot}")
+                            },
+                        );
                         Ok(SaveLoadStep::Waiting)
                     }
                     Err(error) => {
@@ -256,6 +382,21 @@ impl SaveLoader {
             }
         }
     }
+}
+
+impl Default for SaveLoadRequest {
+    fn default() -> Self {
+        Self {
+            save_extension: None,
+            slot: None,
+            method: SaveLoadMethod::default(),
+            require_title_bootstrap: REQUIRE_TITLE_BOOTSTRAP_DEFAULT,
+        }
+    }
+}
+
+fn parse_bool(value: &str) -> bool {
+    matches!(value, "1" | "true" | "yes" | "on")
 }
 
 impl SaveLoadRequest {
@@ -274,6 +415,11 @@ impl SaveLoadRequest {
         }
         if let Ok(method) = std::env::var("ER_EFFECTS_AUTOLOAD_METHOD") {
             request.method = SaveLoadMethod::from_label(&method);
+        }
+        if let Ok(require_title_bootstrap) =
+            std::env::var("ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP")
+        {
+            request.require_title_bootstrap = parse_bool(require_title_bootstrap.trim());
         }
 
         request
@@ -304,6 +450,9 @@ impl SaveLoadRequest {
                 }
                 "slot" => request.slot = value.trim().parse().ok(),
                 "method" => request.method = SaveLoadMethod::from_label(value.trim()),
+                "require_title_bootstrap" => {
+                    request.require_title_bootstrap = parse_bool(value.trim())
+                }
                 _ => {}
             }
         }
@@ -319,6 +468,13 @@ impl SaveLoadMethod {
             "requested_index" => Self::RequestedIndex,
             "both" => Self::Both,
             "direct_menu_load" => Self::DirectMenuLoad,
+            "direct_map_load" => Self::DirectMapLoad,
+            "direct_combined_load" => Self::DirectCombinedLoad,
+            "direct_combined_only" => Self::DirectCombinedOnly,
+            "direct_bootstrap_combined" => Self::DirectBootstrapCombined,
+            "direct_bootstrap_pump" => Self::DirectBootstrapPump,
+            "direct_trace_sequence" => Self::DirectTraceSequence,
+            "direct_menu_wrapper" => Self::DirectMenuWrapper,
             _ => Self::SaveRequested,
         }
     }
@@ -330,6 +486,13 @@ impl SaveLoadMethod {
             Self::RequestedIndex => "requested_index",
             Self::Both => "both",
             Self::DirectMenuLoad => "direct_menu_load",
+            Self::DirectMapLoad => "direct_map_load",
+            Self::DirectCombinedLoad => "direct_combined_load",
+            Self::DirectCombinedOnly => "direct_combined_only",
+            Self::DirectBootstrapCombined => "direct_bootstrap_combined",
+            Self::DirectBootstrapPump => "direct_bootstrap_pump",
+            Self::DirectTraceSequence => "direct_trace_sequence",
+            Self::DirectMenuWrapper => "direct_menu_wrapper",
         }
     }
 }
@@ -359,11 +522,76 @@ pub fn title_accept_fallback_sequence(
     )?])
 }
 
+unsafe fn request_direct_menu_wrapper<G, F>(
+    game_man: &mut G,
+    module_base: usize,
+    slot: i32,
+    attempt: u64,
+    debug: &mut F,
+) -> Result<bool, String>
+where
+    G: GameManSaveAccess,
+    F: FnMut(String),
+{
+    // The menu wrapper's state pointer is stable across collected title-menu
+    // traces. Calling the native wrapper preserves its task-state write at
+    // 0x1407a91e0 instead of calling map_load in isolation.
+    const SET_SAVE_SLOT_RVA: u32 = 0x0067a810;
+    const SAVE_REQUEST_PROFILE_RVA: u32 = 0x0067a420;
+    const REQUEST_SAVE_RVA: u32 = 0x0067a520;
+    const MENU_OTHER_LOAD_WRAPPER_RVA: u32 = 0x0082bb00;
+
+    type SetSaveSlot = unsafe extern "system" fn(i32);
+    type RequestSave = unsafe extern "system" fn(u8);
+    type SaveRequestProfile = unsafe extern "system" fn(u8);
+    type MenuOtherLoadWrapper =
+        unsafe extern "system" fn(*mut std::ffi::c_void) -> *mut std::ffi::c_void;
+
+    if game_man.save_state() != IDLE_SAVE_STATE {
+        debug(format!(
+            "attempt {attempt}: menu wrapper request is in flight (state={})",
+            game_man.save_state()
+        ));
+        return Ok(true);
+    }
+
+    if !unsafe { save_buffer_allocator_ready(module_base)? } {
+        debug(format!(
+            "attempt {attempt}: waiting for save buffer allocator before menu wrapper"
+        ));
+        return Ok(false);
+    }
+
+    let set_save_slot: SetSaveSlot =
+        unsafe { std::mem::transmute(game_rva(module_base, SET_SAVE_SLOT_RVA)?) };
+    let request_save: RequestSave =
+        unsafe { std::mem::transmute(game_rva(module_base, REQUEST_SAVE_RVA)?) };
+    let save_request_profile: SaveRequestProfile =
+        unsafe { std::mem::transmute(game_rva(module_base, SAVE_REQUEST_PROFILE_RVA)?) };
+    let menu_other_load_wrapper: MenuOtherLoadWrapper =
+        unsafe { std::mem::transmute(game_rva(module_base, MENU_OTHER_LOAD_WRAPPER_RVA)?) };
+
+    unsafe { set_save_slot(slot) };
+    unsafe { request_save(REQUEST_SAVE_ENABLED) };
+    unsafe { save_request_profile(SAVE_REQUEST_PROFILE_ENABLED) };
+    let state_ptr = MENU_OTHER_LOAD_STATE_PTR as *mut std::ffi::c_void;
+    let ret = unsafe { menu_other_load_wrapper(state_ptr) };
+    let save_state = game_man.save_state();
+    debug(format!(
+        "attempt {attempt}: direct menu_other_load_wrapper returned {ret:p} save_state={save_state}"
+    ));
+    Ok(save_state != IDLE_SAVE_STATE)
+}
+
 unsafe fn request_direct_menu_load<G, F>(
     game_man: &mut G,
     module_base: usize,
     slot: i32,
     attempt: u64,
+    call_map_load: bool,
+    call_combined_load: bool,
+    call_title_bootstrap_marker: bool,
+    call_save_load_pump: bool,
     debug: &mut F,
 ) -> Result<bool, String>
 where
@@ -376,10 +604,29 @@ where
     const SET_SAVE_SLOT_RVA: u32 = 0x0067a810;
     const SAVE_REQUEST_PROFILE_RVA: u32 = 0x0067a420;
     const REQUEST_SAVE_RVA: u32 = 0x0067a520;
+    const MAP_LOAD_RVA: u32 = 0x0067bc10;
+    const COMBINED_LOAD_RVA: u32 = 0x0067b940;
+    const MARK_TITLE_BOOTSTRAP_RVA: u32 = 0x0067a310;
+    const SAVE_LOAD_PUMP_DEFAULT_RVA: u32 = 0x00679510;
 
     type SetSaveSlot = unsafe extern "system" fn(i32);
     type RequestSave = unsafe extern "system" fn(u8);
     type SaveRequestProfile = unsafe extern "system" fn(u8);
+    type MapLoad = unsafe extern "system" fn() -> u8;
+    type CombinedLoad = unsafe extern "system" fn(i32, u8, u8) -> u8;
+    type MarkTitleBootstrap = unsafe extern "system" fn();
+    type SaveLoadPumpDefault = unsafe extern "system" fn();
+
+    if call_save_load_pump && game_man.save_state() != IDLE_SAVE_STATE {
+        let save_load_pump_default: SaveLoadPumpDefault =
+            unsafe { std::mem::transmute(game_rva(module_base, SAVE_LOAD_PUMP_DEFAULT_RVA)?) };
+        unsafe { save_load_pump_default() };
+        debug(format!(
+            "attempt {attempt}: pumped save/load state (state={})",
+            game_man.save_state()
+        ));
+        return Ok(false);
+    }
 
     if game_man.save_state() != IDLE_SAVE_STATE {
         debug(format!(
@@ -403,13 +650,198 @@ where
     let save_request_profile: SaveRequestProfile =
         unsafe { std::mem::transmute(game_rva(module_base, SAVE_REQUEST_PROFILE_RVA)?) };
 
+    if call_title_bootstrap_marker {
+        let mark_title_bootstrap: MarkTitleBootstrap =
+            unsafe { std::mem::transmute(game_rva(module_base, MARK_TITLE_BOOTSTRAP_RVA)?) };
+        unsafe { mark_title_bootstrap() };
+        debug(format!(
+            "attempt {attempt}: marked native title bootstrap load flag"
+        ));
+    }
+
     debug(format!(
         "attempt {attempt}: queuing traced continue flags for slot {slot}"
     ));
     unsafe { set_save_slot(slot) };
     unsafe { request_save(REQUEST_SAVE_ENABLED) };
     unsafe { save_request_profile(SAVE_REQUEST_PROFILE_ENABLED) };
+    if call_combined_load && !call_map_load {
+        let combined_load: CombinedLoad =
+            unsafe { std::mem::transmute(game_rva(module_base, COMBINED_LOAD_RVA)?) };
+        let combined_ret = unsafe {
+            combined_load(
+                CLEAR_REQUESTED_SAVE_SLOT_LOAD_INDEX,
+                LOAD_ARG_FALSE,
+                LOAD_ARG_TRUE,
+            )
+        };
+        debug(format!(
+            "attempt {attempt}: direct combined_load returned {combined_ret}"
+        ));
+        if call_save_load_pump {
+            return Ok(false);
+        }
+        return Ok(combined_ret != MAP_LOAD_FALSE_RETURN);
+    }
+    if call_map_load {
+        let map_load: MapLoad =
+            unsafe { std::mem::transmute(game_rva(module_base, MAP_LOAD_RVA)?) };
+        let ret = unsafe { map_load() };
+        debug(format!("attempt {attempt}: direct map_load returned {ret}"));
+        if ret == MAP_LOAD_FALSE_RETURN {
+            return Ok(false);
+        }
+        if call_combined_load {
+            let combined_load: CombinedLoad =
+                unsafe { std::mem::transmute(game_rva(module_base, COMBINED_LOAD_RVA)?) };
+            let combined_ret = unsafe {
+                combined_load(
+                    CLEAR_REQUESTED_SAVE_SLOT_LOAD_INDEX,
+                    LOAD_ARG_FALSE,
+                    LOAD_ARG_TRUE,
+                )
+            };
+            debug(format!(
+                "attempt {attempt}: direct combined_load returned {combined_ret}"
+            ));
+            if call_save_load_pump {
+                return Ok(false);
+            }
+            return Ok(combined_ret != MAP_LOAD_FALSE_RETURN);
+        }
+        return Ok(true);
+    }
     Ok(true)
+}
+
+unsafe fn request_direct_trace_sequence<G, F>(
+    game_man: &mut G,
+    module_base: usize,
+    slot: i32,
+    attempt: u64,
+    phase: &mut u8,
+    debug: &mut F,
+) -> Result<bool, String>
+where
+    G: GameManSaveAccess,
+    F: FnMut(String),
+{
+    const SET_SAVE_SLOT_RVA: u32 = 0x0067a810;
+    const SAVE_REQUEST_PROFILE_RVA: u32 = 0x0067a420;
+    const REQUEST_SAVE_RVA: u32 = 0x0067a520;
+    const COMBINED_LOAD_RVA: u32 = 0x0067b940;
+    const CONTINUE_LOAD_RVA: u32 = 0x0067b750;
+    const MARK_TITLE_BOOTSTRAP_RVA: u32 = 0x0067a310;
+    const SAVE_LOAD_PUMP_DEFAULT_RVA: u32 = 0x00679510;
+
+    type SetSaveSlot = unsafe extern "system" fn(i32);
+    type RequestSave = unsafe extern "system" fn(u8);
+    type SaveRequestProfile = unsafe extern "system" fn(u8);
+    type CombinedLoad = unsafe extern "system" fn(i32, u8, u8) -> u8;
+    type ContinueLoad = unsafe extern "system" fn(i32, u8, u8) -> u8;
+    type MarkTitleBootstrap = unsafe extern "system" fn();
+    type SaveLoadPumpDefault = unsafe extern "system" fn();
+
+    if game_man.save_state() != IDLE_SAVE_STATE {
+        let save_load_pump_default: SaveLoadPumpDefault =
+            unsafe { std::mem::transmute(game_rva(module_base, SAVE_LOAD_PUMP_DEFAULT_RVA)?) };
+        unsafe { save_load_pump_default() };
+        debug(format!(
+            "attempt {attempt}: direct trace phase {phase} pumped save/load state (state={})",
+            game_man.save_state(),
+            phase = *phase,
+        ));
+        return Ok(false);
+    }
+
+    if !unsafe { save_buffer_allocator_ready(module_base)? } {
+        debug(format!(
+            "attempt {attempt}: waiting for save buffer allocator before direct trace sequence"
+        ));
+        return Ok(false);
+    }
+
+    let set_save_slot: SetSaveSlot =
+        unsafe { std::mem::transmute(game_rva(module_base, SET_SAVE_SLOT_RVA)?) };
+    let request_save: RequestSave =
+        unsafe { std::mem::transmute(game_rva(module_base, REQUEST_SAVE_RVA)?) };
+    let save_request_profile: SaveRequestProfile =
+        unsafe { std::mem::transmute(game_rva(module_base, SAVE_REQUEST_PROFILE_RVA)?) };
+    let combined_load: CombinedLoad =
+        unsafe { std::mem::transmute(game_rva(module_base, COMBINED_LOAD_RVA)?) };
+    let continue_load: ContinueLoad =
+        unsafe { std::mem::transmute(game_rva(module_base, CONTINUE_LOAD_RVA)?) };
+
+    match *phase {
+        DIRECT_SEQUENCE_PHASE_COMBINED => {
+            let mark_title_bootstrap: MarkTitleBootstrap =
+                unsafe { std::mem::transmute(game_rva(module_base, MARK_TITLE_BOOTSTRAP_RVA)?) };
+            unsafe { mark_title_bootstrap() };
+            unsafe { set_save_slot(slot) };
+            unsafe { request_save(REQUEST_SAVE_ENABLED) };
+            unsafe { save_request_profile(SAVE_REQUEST_PROFILE_ENABLED) };
+            let ret = unsafe {
+                combined_load(
+                    CLEAR_REQUESTED_SAVE_SLOT_LOAD_INDEX,
+                    LOAD_ARG_FALSE,
+                    LOAD_ARG_TRUE,
+                )
+            };
+            debug(format!(
+                "attempt {attempt}: direct trace phase 0 combined_load returned {ret}"
+            ));
+            if ret != MAP_LOAD_FALSE_RETURN {
+                *phase = DIRECT_SEQUENCE_PHASE_CONTINUE;
+            }
+        }
+        DIRECT_SEQUENCE_PHASE_CONTINUE => {
+            unsafe { save_request_profile(MAP_LOAD_FALSE_RETURN) };
+            let ret = unsafe {
+                continue_load(
+                    CLEAR_REQUESTED_SAVE_SLOT_LOAD_INDEX,
+                    LOAD_ARG_FALSE,
+                    MAP_LOAD_FALSE_RETURN,
+                )
+            };
+            debug(format!(
+                "attempt {attempt}: direct trace phase 1 continue_load returned {ret}"
+            ));
+            if ret != MAP_LOAD_FALSE_RETURN {
+                *phase = DIRECT_SEQUENCE_PHASE_FINAL_COMBINED;
+            }
+        }
+        DIRECT_SEQUENCE_PHASE_FINAL_COMBINED => {
+            unsafe { request_save(MAP_LOAD_FALSE_RETURN) };
+            let ret = unsafe {
+                combined_load(
+                    CLEAR_REQUESTED_SAVE_SLOT_LOAD_INDEX,
+                    LOAD_ARG_FALSE,
+                    LOAD_ARG_TRUE,
+                )
+            };
+            debug(format!(
+                "attempt {attempt}: direct trace phase 2 combined_load returned {ret}"
+            ));
+            if ret != MAP_LOAD_FALSE_RETURN {
+                *phase = DIRECT_SEQUENCE_PHASE_FINAL_COMBINED + LOAD_ARG_TRUE;
+            }
+        }
+        _ => {
+            unsafe { request_save(REQUEST_SAVE_ENABLED) };
+            unsafe { save_request_profile(SAVE_REQUEST_PROFILE_ENABLED) };
+            let ret = unsafe {
+                combined_load(
+                    CLEAR_REQUESTED_SAVE_SLOT_LOAD_INDEX,
+                    LOAD_ARG_FALSE,
+                    LOAD_ARG_TRUE,
+                )
+            };
+            debug(format!(
+                "attempt {attempt}: direct trace repeat combined_load returned {ret}"
+            ));
+        }
+    }
+    Ok(false)
 }
 
 unsafe fn save_buffer_allocator_ready(module_base: usize) -> Result<bool, String> {
@@ -485,7 +917,7 @@ mod tests {
         ));
         fs::write(
             &path,
-            "save_ext=co2\nslot=9\nmethod=direct_menu_load\nignored=true\n",
+            "save_ext=co2\nslot=9\nmethod=direct_menu_load\nrequire_title_bootstrap=false\nignored=true\n",
         )
         .unwrap();
 
@@ -495,6 +927,7 @@ mod tests {
         assert_eq!(request.save_extension.as_deref(), Some("co2"));
         assert_eq!(request.slot, Some(TEST_SLOT));
         assert_eq!(request.method, SaveLoadMethod::DirectMenuLoad);
+        assert!(!request.require_title_bootstrap);
     }
 
     #[test]
@@ -519,6 +952,7 @@ mod tests {
             save_extension: None,
             slot: Some(TEST_SLOT),
             method: SaveLoadMethod::Both,
+            require_title_bootstrap: REQUIRE_TITLE_BOOTSTRAP_DEFAULT,
         });
 
         let step = unsafe {
@@ -548,6 +982,7 @@ mod tests {
             save_extension: None,
             slot: Some(TEST_SLOT),
             method: SaveLoadMethod::DirectMenuLoad,
+            require_title_bootstrap: REQUIRE_TITLE_BOOTSTRAP_DEFAULT,
         });
 
         let step = unsafe {
@@ -579,6 +1014,13 @@ mod tests {
             SaveLoadMethod::RequestedIndex,
             SaveLoadMethod::Both,
             SaveLoadMethod::DirectMenuLoad,
+            SaveLoadMethod::DirectMapLoad,
+            SaveLoadMethod::DirectCombinedLoad,
+            SaveLoadMethod::DirectCombinedOnly,
+            SaveLoadMethod::DirectBootstrapCombined,
+            SaveLoadMethod::DirectBootstrapPump,
+            SaveLoadMethod::DirectTraceSequence,
+            SaveLoadMethod::DirectMenuWrapper,
         ] {
             assert_eq!(SaveLoadMethod::from_label(method.label()), method);
         }

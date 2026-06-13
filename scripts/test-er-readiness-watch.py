@@ -118,6 +118,109 @@ def main() -> int:
     assert not telemetry_without_game_man.ready
     assert telemetry_without_game_man.reason == watcher.TELEMETRY_WITHOUT_GAME_MAN
 
+    autoload_requested = watcher.classify_snapshot(
+        pid=TEST_PID,
+        process_running=True,
+        telemetry={
+            "game_man_available": True,
+            "autoload_slot": 9,
+            "autoload_last_status": "direct continue sequence requested slot 9",
+        },
+        bootstrap={"stage": "telemetry_write"},
+        windows=[TEST_WINDOW],
+        window_stale_polls=0,
+        window_stale_poll_budget=TEST_BUDGET,
+        polls=TEST_POLLS,
+        target=watcher.TARGET_AUTOLOAD_REQUEST,
+    )
+    assert autoload_requested is not None
+    assert autoload_requested.ready
+    assert autoload_requested.reason == watcher.AUTOLOAD_REQUESTED
+
+    autoload_budget = watcher.classify_snapshot(
+        pid=TEST_PID,
+        process_running=True,
+        telemetry={
+            "game_man_available": True,
+            "autoload_slot": 9,
+            "autoload_attempts": TEST_BUDGET,
+            "autoload_last_status": "waiting for title bootstrap/save activity before direct continue queue",
+        },
+        bootstrap={"stage": "telemetry_write"},
+        windows=[TEST_WINDOW],
+        window_stale_polls=0,
+        window_stale_poll_budget=TEST_BUDGET,
+        polls=TEST_POLLS,
+        target=watcher.TARGET_AUTOLOAD_REQUEST,
+        autoload_attempt_budget=TEST_BUDGET,
+    )
+    assert autoload_budget is not None
+    assert not autoload_budget.ready
+    assert autoload_budget.reason == watcher.AUTOLOAD_ATTEMPT_BUDGET_REACHED
+
+    post_request_budget = watcher.classify_snapshot(
+        pid=TEST_PID,
+        process_running=True,
+        telemetry={
+            "game_man_available": True,
+            "autoload_slot": 9,
+            "game_task_ticks": TEST_BUDGET,
+            "autoload_last_status": "direct continue sequence requested slot 9",
+        },
+        bootstrap={"stage": "telemetry_write"},
+        windows=[TEST_WINDOW],
+        window_stale_polls=0,
+        window_stale_poll_budget=TEST_BUDGET,
+        polls=TEST_POLLS,
+        target=watcher.TARGET_REQUEST_CONSUMPTION,
+        post_request_tick_budget=TEST_BUDGET,
+    )
+    assert post_request_budget is not None
+    assert not post_request_budget.ready
+    assert post_request_budget.reason == watcher.POST_REQUEST_TICK_BUDGET_REACHED
+
+    title_bootstrap_seen = watcher.classify_snapshot(
+        pid=TEST_PID,
+        process_running=True,
+        telemetry={
+            "game_man_available": True,
+            "autoload_slot": 9,
+            "title_bootstrap_seen": True,
+            "autoload_last_status": "direct continue sequence requested slot 9",
+        },
+        bootstrap={"stage": "telemetry_write"},
+        windows=[TEST_WINDOW],
+        window_stale_polls=0,
+        window_stale_poll_budget=TEST_BUDGET,
+        polls=TEST_POLLS,
+        target=watcher.TARGET_REQUEST_CONSUMPTION,
+    )
+    assert title_bootstrap_seen is not None
+    assert title_bootstrap_seen.ready
+    assert title_bootstrap_seen.reason == watcher.TITLE_BOOTSTRAP_SEEN
+
+    player_load_budget = watcher.classify_snapshot(
+        pid=TEST_PID,
+        process_running=True,
+        telemetry={
+            "game_man_available": True,
+            "autoload_slot": 9,
+            "title_bootstrap_seen": True,
+            "game_task_ticks": TEST_BUDGET,
+            "autoload_last_status": "direct map load requested slot 9",
+        },
+        bootstrap={"stage": "telemetry_write"},
+        windows=[TEST_WINDOW],
+        window_stale_polls=0,
+        window_stale_poll_budget=TEST_BUDGET,
+        polls=TEST_POLLS,
+        target=watcher.TARGET_PLAYER_LOAD,
+        post_request_tick_budget=TEST_BUDGET,
+    )
+    assert player_load_budget is not None
+    assert not player_load_budget.ready
+    assert player_load_budget.reason == watcher.PLAYER_LOAD_TICK_BUDGET_REACHED
+
     no_telemetry = watcher.classify_snapshot(
         pid=TEST_PID,
         process_running=True,
