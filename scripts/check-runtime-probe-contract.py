@@ -30,6 +30,13 @@ BANNED_TOOL_TIMEOUT_FIELDS = ("timeout_seconds", "checks_timeout_seconds")
 BANNED_LAUNCH_SNIPPETS = (
     "./.auto/runtime_probe.sh",
 )
+RUNTIME_POLICY_REQUIRED_SNIPPETS = (
+    "manual_event_driver_ready",
+    "scripts/er-readiness-watch.py",
+    "window_without_bootstrap_or_task_ready",
+    "host_input == \"none\"",
+    "process_tree_and_save_restore",
+)
 BANNED_WRAPPER_SNIPPETS = (
     ".auto/run-runtime-once",
     "AUTO_ALLOW_RUNTIME_PROBE=1",
@@ -232,14 +239,25 @@ def scan_contract() -> list[Finding]:
         )
     else:
         text = RUNTIME_POLICY_PATH.read_text(encoding="utf-8", errors="replace")
-        if re.search(r"(?m)^\s*allow\s+if\s*\{", text):
+        if re.search(r"(?m)^\s*allow\s+if\s*\{", text) and "manual_event_driver_ready" not in text:
             findings.append(
                 Finding(
                     relative(RUNTIME_POLICY_PATH),
                     0,
-                    "runtime-policy-allows-probes",
+                    "runtime-policy-unscoped-allow",
                     "allow if { ... }",
-                    "Runtime policy must not expose an allow rule until the event-driven driver includes a deterministic no-telemetry bootstrap failure path and this guard is updated.",
+                    "Runtime policy allow rules must be scoped through manual_event_driver_ready so autoresearch remains fail-closed and only the explicit readiness watcher can launch.",
+                )
+            )
+        missing_snippets = [snippet for snippet in RUNTIME_POLICY_REQUIRED_SNIPPETS if snippet not in text]
+        if missing_snippets:
+            findings.append(
+                Finding(
+                    relative(RUNTIME_POLICY_PATH),
+                    0,
+                    "runtime-policy-missing-readiness-watcher-gate",
+                    ", ".join(missing_snippets),
+                    "Require the manual readiness probe contract: readiness watcher, no-telemetry bootstrap failure, no host input, and process/save teardown.",
                 )
             )
         if "runtime probes are disabled" not in text:
@@ -306,7 +324,7 @@ def main() -> int:
         if findings:
             print("Runtime probe contract violations found.", file=sys.stderr)
             print(
-                "Autoresearch measurement must stay non-disruptive and must not rely on tool timeout budgets. Runtime probes are disabled fail-closed until an event-driven driver includes a deterministic no-telemetry bootstrap failure path.\n",
+                "Autoresearch measurement must stay non-disruptive and must not rely on tool timeout budgets. Manual runtime probes must remain explicitly opted in and gated by the readiness watcher/no-telemetry bootstrap contract.\n",
                 file=sys.stderr,
             )
             for finding in findings:

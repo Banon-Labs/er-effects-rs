@@ -59,8 +59,26 @@ const STACK_TRACE_FRAMES_TO_SKIP: u32 = 0;
 const NULL_MODULE_BASE: usize = 0;
 const HOOK_ORIGINAL_UNSET: usize = 0;
 const HOOK_FALSE_RETURN: u8 = 0;
+const BOOTSTRAP_TELEMETRY_UNSEEN: usize = 0;
+const BOOTSTRAP_TELEMETRY_SEEN_VALUE: usize = 1;
+const BOOTSTRAP_EVENT_DLL_MAIN_ATTACH: &str = "dllmain_attach";
+const BOOTSTRAP_EVENT_CONTINUE_TRACE_REQUESTED: &str = "continue_trace_thread_requested";
+const BOOTSTRAP_EVENT_GAME_TASK_REQUESTED: &str = "game_task_thread_requested";
+const BOOTSTRAP_EVENT_OVERLAY_SKIPPED_AUTOLOAD: &str = "overlay_skipped_autoload_only";
+const BOOTSTRAP_EVENT_GAME_TASK_THREAD_STARTED: &str = "game_task_thread_started";
+const BOOTSTRAP_EVENT_GAME_TASK_INSTANCE_READY: &str = "game_task_instance_ready";
+const BOOTSTRAP_EVENT_GAME_TASK_RECURRING_REGISTERED: &str = "game_task_recurring_registered";
+const BOOTSTRAP_EVENT_TELEMETRY_WRITE: &str = "telemetry_write";
+const BOOTSTRAP_EVENT_CONTINUE_TRACE_STARTED: &str = "continue_trace_started";
+const BOOTSTRAP_EVENT_CONTINUE_TRACE_APPLIED: &str = "continue_trace_applied";
+const BOOTSTRAP_EVENT_CONTINUE_TRACE_APPLY_FAILED: &str = "continue_trace_apply_failed";
+const BOOTSTRAP_DETAIL_START: &str = "start";
+const BOOTSTRAP_DETAIL_DONE: &str = "done";
+const BOOTSTRAP_DETAIL_PLAYER_AVAILABLE: &str = "player_available";
+const BOOTSTRAP_DETAIL_PLAYER_UNAVAILABLE: &str = "player_unavailable";
 static START_GAME_TASK: Once = Once::new();
 static START_CONTINUE_TRACE: Once = Once::new();
+static BOOTSTRAP_TELEMETRY_SEEN: AtomicUsize = AtomicUsize::new(BOOTSTRAP_TELEMETRY_UNSEEN);
 
 static MENU_CONTINUE_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(0);
 static MENU_NEW_OR_LOAD_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(0);
@@ -162,6 +180,44 @@ fn call_kind_from_spec(kind: EffectKindSpec, id: i32) -> EffectCallKind {
 fn named_call_from_spec(spec: EffectCallSpec) -> NamedEffectCall {
     let kind = call_kind_from_spec(spec.kind, spec.id);
     NamedEffectCall::new(spec.name, kind, spec.enabled)
+}
+
+fn bootstrap_path() -> PathBuf {
+    std::env::var_os("ER_EFFECTS_BOOTSTRAP_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("er-effects-bootstrap.jsonl"))
+}
+
+fn bootstrap_state_path() -> PathBuf {
+    std::env::var_os("ER_EFFECTS_BOOTSTRAP_STATE_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("er-effects-bootstrap-state.json"))
+}
+
+fn write_bootstrap_event(stage: &str, detail: &str) {
+    use std::io::Write;
+
+    let event_path = bootstrap_path();
+    let state_path = bootstrap_state_path();
+    if let Some(parent) = event_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Some(parent) = state_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let payload = format!(
+        "{{\"stage\":\"{}\",\"detail\":\"{}\"}}\n",
+        json_escape(stage),
+        json_escape(detail)
+    );
+    if let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&event_path)
+    {
+        let _ = file.write_all(payload.as_bytes());
+    }
+    let _ = fs::write(state_path, payload);
 }
 
 struct EffectsState {
@@ -357,6 +413,25 @@ fn write_telemetry_throttled(state: &mut EffectsState, player_available: bool) {
 }
 
 fn write_telemetry(state: &EffectsState, player_available: bool) {
+    if BOOTSTRAP_TELEMETRY_SEEN
+        .compare_exchange(
+            BOOTSTRAP_TELEMETRY_UNSEEN,
+            BOOTSTRAP_TELEMETRY_SEEN_VALUE,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        )
+        .is_ok()
+    {
+        write_bootstrap_event(
+            BOOTSTRAP_EVENT_TELEMETRY_WRITE,
+            if player_available {
+                BOOTSTRAP_DETAIL_PLAYER_AVAILABLE
+            } else {
+                BOOTSTRAP_DETAIL_PLAYER_UNAVAILABLE
+            },
+        );
+    }
+
     let path = telemetry_path();
     let mut body = String::new();
     body.push_str("{\n");
@@ -507,6 +582,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     if reason != DLL_PROCESS_ATTACH {
         return DLL_MAIN_SUCCESS;
     }
+    write_bootstrap_event(BOOTSTRAP_EVENT_DLL_MAIN_ATTACH, BOOTSTRAP_DETAIL_START);
 
     let state = Arc::new(Mutex::new(EffectsState::default()));
 
@@ -515,12 +591,17 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         state.autoload.method() == SaveLoadMethod::DirectMenuLoad && state.autoload.slot().is_some()
     };
     if trace_continue_enabled() || direct_autoload_configured {
+        write_bootstrap_event(
+            BOOTSTRAP_EVENT_CONTINUE_TRACE_REQUESTED,
+            BOOTSTRAP_DETAIL_START,
+        );
         START_CONTINUE_TRACE.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-effects-continue-trace".to_owned())
                 .spawn(install_continue_trace_hooks);
         });
     }
+    write_bootstrap_event(BOOTSTRAP_EVENT_GAME_TASK_REQUESTED, BOOTSTRAP_DETAIL_START);
     START_GAME_TASK.call_once({
         let state = Arc::clone(&state);
         move || spawn_game_task(state)
@@ -528,6 +609,10 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
 
     let autoload_without_overlay = state_or_return(&state).autoload.slot().is_some();
     if autoload_without_overlay {
+        write_bootstrap_event(
+            BOOTSTRAP_EVENT_OVERLAY_SKIPPED_AUTOLOAD,
+            BOOTSTRAP_DETAIL_DONE,
+        );
         return DLL_MAIN_SUCCESS;
     }
 
@@ -535,29 +620,34 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         hmodule,
         reason,
         || {
-            wait_for_task_instance().expect("failed while waiting for Elden Ring task system");
+            let _ = wait_for_task_instance();
         },
         EffectsOverlay { state },
     )
 }
 
-fn wait_for_task_instance() -> Result<&'static CSTaskImp, String> {
+fn wait_for_task_instance() -> &'static CSTaskImp {
     loop {
         match unsafe { CSTaskImp::instance() } {
-            Ok(instance) => return Ok(instance),
-            Err(InstanceError::NotFound(name)) => {
-                return Err(format!("static object not found: {name}"));
+            Ok(instance) => return instance,
+            Err(InstanceError::NotFound(_)) | Err(InstanceError::Null(_)) => {
+                std::thread::yield_now()
             }
-            Err(InstanceError::Null(_)) => std::thread::yield_now(),
         }
     }
 }
 
 fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
     std::thread::spawn(move || {
-        let Ok(cs_task) = wait_for_task_instance() else {
-            return;
-        };
+        write_bootstrap_event(
+            BOOTSTRAP_EVENT_GAME_TASK_THREAD_STARTED,
+            BOOTSTRAP_DETAIL_START,
+        );
+        let cs_task = wait_for_task_instance();
+        write_bootstrap_event(
+            BOOTSTRAP_EVENT_GAME_TASK_INSTANCE_READY,
+            BOOTSTRAP_DETAIL_DONE,
+        );
 
         cs_task.run_recurring(
             move |_: &FD4TaskData| {
@@ -599,6 +689,10 @@ fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 write_telemetry_throttled(&mut state, true);
             },
             CSTaskGroupIndex::FrameBegin,
+        );
+        write_bootstrap_event(
+            BOOTSTRAP_EVENT_GAME_TASK_RECURRING_REGISTERED,
+            BOOTSTRAP_DETAIL_DONE,
         );
     });
 }
@@ -802,6 +896,10 @@ unsafe fn create_continue_trace_hook(
 }
 
 fn install_continue_trace_hooks() {
+    write_bootstrap_event(
+        BOOTSTRAP_EVENT_CONTINUE_TRACE_STARTED,
+        BOOTSTRAP_DETAIL_START,
+    );
     // Local Proton executable RVAs. The shared Ghidra 1.16.1 function starts are
     // currently +0xf0 for these text symbols; these RVAs are verified against
     // /home/banon/.local/share/Steam/.../eldenring.exe sha256
@@ -913,12 +1011,22 @@ fn install_continue_trace_hooks() {
     }
 
     match unsafe { MH_ApplyQueued() } {
-        MH_STATUS::MH_OK => append_continue_trace(format_args!(
-            "install_continue_trace_hooks applied count={} {}",
-            hooks.len(),
-            game_man_trace_summary()
-        )),
-        status => append_continue_trace(format_args!("MH_ApplyQueued failed: {status:?}")),
+        MH_STATUS::MH_OK => {
+            write_bootstrap_event(
+                BOOTSTRAP_EVENT_CONTINUE_TRACE_APPLIED,
+                BOOTSTRAP_DETAIL_DONE,
+            );
+            append_continue_trace(format_args!(
+                "install_continue_trace_hooks applied count={} {}",
+                hooks.len(),
+                game_man_trace_summary()
+            ));
+        }
+        status => {
+            let detail = format!("MH_ApplyQueued failed: {status:?}");
+            write_bootstrap_event(BOOTSTRAP_EVENT_CONTINUE_TRACE_APPLY_FAILED, &detail);
+            append_continue_trace(format_args!("{detail}"));
+        }
     }
 
     std::mem::forget(hooks);

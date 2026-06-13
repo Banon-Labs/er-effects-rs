@@ -31,6 +31,17 @@ RUNTIME_MAX_NUDGES="${RUNTIME_MAX_NUDGES:-0}"
 RUNTIME_READINESS_RATIONALE="${RUNTIME_READINESS_RATIONALE:-$REPO_ROOT/.auto/runtime-readiness-rationale}"
 mkdir -p "$ARTIFACT_DIR"
 ARTIFACT_DIR=$(realpath -m "$ARTIFACT_DIR")
+TELEMETRY_PATH="${TELEMETRY_PATH:-$ARTIFACT_DIR/telemetry-live.json}"
+BOOTSTRAP_PATH="${BOOTSTRAP_PATH:-$ARTIFACT_DIR/bootstrap.jsonl}"
+BOOTSTRAP_STATE_PATH="${BOOTSTRAP_STATE_PATH:-$ARTIFACT_DIR/bootstrap-state.json}"
+COMMAND_PATH="${COMMAND_PATH:-$GAME_DIR/er-effects-command.txt}"
+AUTOLOAD_PATH="${AUTOLOAD_PATH:-$GAME_DIR/er-effects-autoload.txt}"
+AUTOLOAD_DEBUG_PATH="${AUTOLOAD_DEBUG_PATH:-$ARTIFACT_DIR/autoload-debug.log}"
+TRACE_CONTINUE_PATH="${TRACE_CONTINUE_PATH:-$ARTIFACT_DIR/continue-trace.log}"
+PROTON="${PROTON:-$HOME/.local/share/Steam/steamapps/common/Proton - Experimental/proton}"
+STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
+STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}"
+LAUNCH_PID_FILE="$ARTIFACT_DIR/launcher.pid"
 
 START_MS=$(now_ms)
 RUN_START_MS=0
@@ -157,6 +168,10 @@ if path.exists():
 payload = {
     "explicit_opt_in": os.environ.get("AUTO_ALLOW_RUNTIME_PROBE") == "1",
     "launch_mode": launch_mode,
+    "readiness_watcher": rationale.get("readiness_watcher", ""),
+    "no_telemetry_bootstrap_failure": rationale.get("no_telemetry_bootstrap_failure", ""),
+    "host_input": rationale.get("host_input", ""),
+    "teardown": rationale.get("teardown", ""),
     "readiness_strategy": rationale.get("readiness_strategy", ""),
     "structured_failure": rationale.get("structured_failure", ""),
     "user_impact": rationale.get("user_impact", ""),
@@ -300,6 +315,15 @@ log_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8"
 PY
 }
 
+copy_runtime_logs() {
+  cp -f "$TELEMETRY_PATH" "$ARTIFACT_DIR/telemetry.json" 2>/dev/null || true
+  cp -f "$TELEMETRY_PATH" "$ARTIFACT_DIR/final-telemetry.json" 2>/dev/null || true
+  cp -f "$AUTOLOAD_DEBUG_PATH" "$ARTIFACT_DIR/autoload-debug-default.log" 2>/dev/null || true
+  cp -f "$TRACE_CONTINUE_PATH" "$ARTIFACT_DIR/continue-trace.log" 2>/dev/null || true
+  cp -f "$BOOTSTRAP_PATH" "$ARTIFACT_DIR/bootstrap.jsonl" 2>/dev/null || true
+  cp -f "$BOOTSTRAP_STATE_PATH" "$ARTIFACT_DIR/bootstrap-state.json" 2>/dev/null || true
+}
+
 write_runtime_metrics() {
   local end_ms runtime_ms run_runtime_ms save_safety_ok process_count
   end_ms=$(now_ms)
@@ -338,6 +362,13 @@ for candidate in [final_telemetry, telemetry]:
             break
         except Exception:
             pass
+readiness = {}
+readiness_path = artifact / "readiness-result.json"
+if readiness_path.exists():
+    try:
+        readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
+    except Exception:
+        readiness = {}
 metrics = {
     "driver_rc": driver_rc,
     "runtime_probe_seconds": round(run_runtime_ms / 1000, 3),
@@ -346,6 +377,8 @@ metrics = {
     "er_process_teardown_ok": 1 if process_count == 0 else 0,
     "host_pointer_input_used": 0,
     "save_safety_ok": save_safety_ok,
+    "readiness_ready": 1 if readiness.get("ready") is True else 0,
+    "readiness_reason": readiness.get("reason"),
 }
 (artifact / "runtime-metrics.json").write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 print(f"runtime_artifact_dir={artifact}")
@@ -359,11 +392,13 @@ cleanup_runtime() {
   (( CLEANUP_ARMED )) || return 0
   CLEANUP_ARMED=0
   log_timeline "cleanup_start"
+  copy_runtime_logs || true
   write_state_snapshot "$ARTIFACT_DIR/final-state-before-cleanup.json" || true
   teardown_runtime_processes || true
   snapshot_saves "$ARTIFACT_DIR/save-hashes-after-pre-restore.txt"
   restore_saves_from_backup || true
   snapshot_saves "$ARTIFACT_DIR/save-hashes-after.txt"
+  copy_runtime_logs || true
   write_runtime_metrics || true
   write_state_snapshot "$ARTIFACT_DIR/final-state-after-cleanup.json" || true
   log_timeline "cleanup_finish"
@@ -391,9 +426,40 @@ PY
     {
       printf 'slot=%s\n' "$ER_EFFECTS_AUTOLOAD_SLOT"
       printf 'method=%s\n' "$ER_EFFECTS_AUTOLOAD_METHOD"
-    } > "$GAME_DIR/er-effects-autoload.txt"
+    } > "$AUTOLOAD_PATH"
     rm -f "$GAME_DIR/er-effects-safe-input.txt"
+    rm -f "$TELEMETRY_PATH" "$COMMAND_PATH" "$AUTOLOAD_DEBUG_PATH" "$TRACE_CONTINUE_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH"
   } > "$ARTIFACT_DIR/setup.out" 2>&1
+}
+
+launch_runtime() {
+  case "$LAUNCH_MODE" in
+    direct)
+      log_timeline "launch" "eldenring.exe via Proton"
+      (cd "$GAME_DIR" && STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_COMPAT_CLIENT_INSTALL_PATH" STEAM_COMPAT_DATA_PATH="$STEAM_COMPAT_DATA_PATH" ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" ER_EFFECTS_COMMAND_PATH="$COMMAND_PATH" ER_EFFECTS_AUTOLOAD_PATH="$AUTOLOAD_PATH" ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" ER_EFFECTS_TRACE_CONTINUE_PATH="$TRACE_CONTINUE_PATH" ER_EFFECTS_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" "$PROTON" run "$GAME_DIR/eldenring.exe" > "$ARTIFACT_DIR/proton-run.out" 2>&1 & echo $! > "$LAUNCH_PID_FILE")
+      ;;
+    direct-protected)
+      log_timeline "launch" "start_protected_game.exe via Proton"
+      (cd "$GAME_DIR" && STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_COMPAT_CLIENT_INSTALL_PATH" STEAM_COMPAT_DATA_PATH="$STEAM_COMPAT_DATA_PATH" ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" ER_EFFECTS_COMMAND_PATH="$COMMAND_PATH" ER_EFFECTS_AUTOLOAD_PATH="$AUTOLOAD_PATH" ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" ER_EFFECTS_TRACE_CONTINUE_PATH="$TRACE_CONTINUE_PATH" ER_EFFECTS_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" "$PROTON" run "$GAME_DIR/start_protected_game.exe" > "$ARTIFACT_DIR/proton-protected-run.out" 2>&1 & echo $! > "$LAUNCH_PID_FILE")
+      ;;
+    attach-existing)
+      runtime_process_rows | awk 'NR == 1 {print $1}' > "$LAUNCH_PID_FILE"
+      ;;
+    *)
+      echo "unknown launch mode: $LAUNCH_MODE" >&2
+      return 2
+      ;;
+  esac
+}
+
+watch_readiness() {
+  python3 scripts/er-readiness-watch.py \
+    --artifact-dir "$ARTIFACT_DIR" \
+    --pid-file "$LAUNCH_PID_FILE" \
+    --telemetry "$TELEMETRY_PATH" \
+    --bootstrap "$BOOTSTRAP_PATH" \
+    --bootstrap-state "$BOOTSTRAP_STATE_PATH" \
+    > "$ARTIFACT_DIR/driver.out" 2>&1
 }
 
 trap cleanup_runtime EXIT
@@ -415,36 +481,13 @@ fi
 
 RUN_START_MS=$(now_ms)
 CLEANUP_ARMED=1
-if [[ "$LAUNCH_MODE" == "attach-existing" ]]; then
-  if scripts/er-smoke-driver.sh drive \
-    --artifact-dir "$ARTIFACT_DIR" \
-    --game-dir "$GAME_DIR" \
-    --launch-mode steam \
-    --no-build \
-    --no-install \
-    --no-launch \
-    --max-nudges "$RUNTIME_MAX_NUDGES" \
-    --screenshot-ext jpg \
-    > "$ARTIFACT_DIR/driver.out" 2>&1; then
-    DRIVER_RC=0
-  else
-    DRIVER_RC=$?
-  fi
+launch_runtime
+if watch_readiness; then
+  DRIVER_RC=0
 else
-  if scripts/er-smoke-driver.sh drive \
-    --artifact-dir "$ARTIFACT_DIR" \
-    --game-dir "$GAME_DIR" \
-    --launch-mode "$LAUNCH_MODE" \
-    --no-build \
-    --no-install \
-    --max-nudges "$RUNTIME_MAX_NUDGES" \
-    --screenshot-ext jpg \
-    > "$ARTIFACT_DIR/driver.out" 2>&1; then
-    DRIVER_RC=0
-  else
-    DRIVER_RC=$?
-  fi
+  DRIVER_RC=$?
 fi
 
 cleanup_runtime
 AUTO_MEASURE_INNER=1 ./.auto/measure.sh
+exit "$DRIVER_RC"

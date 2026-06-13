@@ -69,6 +69,7 @@ run_gate cargo_fmt cargo fmt --check
 run_gate cargo_tests cargo test -p er-safe-input -p er-save-loader
 run_gate runtime_probe_contract python3 scripts/check-runtime-probe-contract.py
 run_gate runtime_probe_contract_tests python3 scripts/test-runtime-probe-contract.py
+run_gate readiness_watch_tests python3 scripts/test-er-readiness-watch.py
 run_gate xwin_check cargo xwin check --target x86_64-pc-windows-msvc --no-default-features
 run_gate shellcheck_scripts shellcheck scripts/er-smoke-driver.sh
 run_gate shellcheck_auto_runtime shellcheck .auto/runtime_probe.sh .auto/run_runtime_experiment.sh

@@ -1,3 +1,7 @@
-readiness_strategy=Runtime probes are disabled fail-closed. The aborted 2026-06-13 probe showed that launcher/process following plus DLL terminal telemetry is insufficient when telemetry never starts.
-structured_failure=Required before re-enable: a deterministic no-telemetry bootstrap failure path, in addition to process exit, save-hash mismatch, teardown evidence, and DLL-authored game-task tick budgets.
-user_impact=Runtime is not launched by autoresearch or direct runtime_probe.sh, even with explicit opt-in, until the no-telemetry gap is fixed and the policy/checker/tests are updated together.
+readiness_watcher=scripts/er-readiness-watch.py
+no_telemetry_bootstrap_failure=window_without_bootstrap_or_task_ready
+host_input=none
+teardown=process_tree_and_save_restore
+readiness_strategy=Runtime probes launch Elden Ring, then scripts/er-readiness-watch.py waits on process/window/DLL bootstrap markers and GameMan telemetry JSON. The watcher exits on GameMan-ready telemetry or a structured no-telemetry/no-GameMan failure instead of relying on elapsed wall-clock guesses.
+structured_failure=The watcher fails on process exit, window without DLL bootstrap marker, window without game-task readiness, window without valid telemetry, telemetry that stays without GameMan readiness, save-hash mismatch, teardown evidence, or bounded poll-budget exhaustion.
+user_impact=Runtime remains explicit opt-in only through AUTO_ALLOW_RUNTIME_PROBE=1. Autoresearch measurement stays static/non-interactive and does not launch Elden Ring.
