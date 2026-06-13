@@ -38,6 +38,9 @@ usage() {
   cat <<EOF
 Usage: $0 [drive|preflight] [options]
 
+The drive command is runtime-disruptive and is disabled fail-closed unless
+ER_EFFECTS_ALLOW_RUNTIME_DRIVER=1 is set for the exact invocation.
+
 Options:
   --artifact-dir DIR    Capture/log output directory (default: target/smoke/driver-<timestamp>)
   --game-dir DIR        Elden Ring Game directory
@@ -80,6 +83,19 @@ done
 
 log() { printf '[er-smoke-driver] %s\n' "$*"; }
 require() { command -v "$1" >/dev/null 2>&1 || { echo "missing required command: $1" >&2; exit 127; }; }
+
+require_runtime_driver_opt_in() {
+  if [[ "${ER_EFFECTS_ALLOW_RUNTIME_DRIVER:-0}" != "1" ]]; then
+    cat >&2 <<'EOF'
+Runtime driver execution is disabled fail-closed.
+
+Set ER_EFFECTS_ALLOW_RUNTIME_DRIVER=1 only for a deliberate non-autoresearch
+runtime validation with observable completion/failure evidence. Do not use
+outer agent/tool wall-clock budgets as the safety mechanism.
+EOF
+    exit 2
+  fi
+}
 
 preflight() {
   require cargo
@@ -276,6 +292,7 @@ wait_for_call_state() {
 }
 
 drive() {
+  require_runtime_driver_opt_in
   preflight
   ARTIFACT_DIR=$(realpath -m "$ARTIFACT_DIR")
   TELEMETRY_PATH=$(realpath -m "$TELEMETRY_PATH")

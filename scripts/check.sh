@@ -5,6 +5,8 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 
 python3 "$repo_root/scripts/check-no-timeouts.py"
 python3 "$repo_root/scripts/test-no-timeouts.py"
+python3 "$repo_root/scripts/check-runtime-probe-contract.py" --audit
+python3 "$repo_root/scripts/test-runtime-probe-contract.py"
 command -v cupcake >/dev/null 2>&1 || { echo "missing required command: cupcake" >&2; exit 127; }
 cupcake validate --log-level error
 python3 "$repo_root/scripts/test-cupcake-policies.py"

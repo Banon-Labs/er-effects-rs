@@ -18,7 +18,7 @@ Emit when available: `autoload_success`, `player_available`, `selected_slot_load
 ## How to Run
 `./.auto/measure.sh`
 
-Fast default measurement runs static/build/safety checks and parses latest structured runtime evidence under `target/smoke/` without launching Elden Ring. Runtime validation must be explicit, bounded, deterministic, and produce telemetry/log/artifact evidence plus teardown proof.
+Fast default measurement runs static/build/safety checks only and does not launch Elden Ring or parse stale runtime artifacts. Runtime validation is currently disabled fail-closed until the event-driven runtime driver is redesigned.
 
 ## Hard Zero Gates
 - Build/check failure.
@@ -62,9 +62,9 @@ The default measurement gates on:
 6. Tooling/guardrails: keep Cupcake Bash guards correct and low-noise; env files under `.envs/`.
 
 ## Measurement Strategy
-- Default loop: no ER launch; run static/build/safety gates; parse latest `target/smoke/**/{telemetry,final-telemetry}.json`, `autoload-debug*.log`, and `continue-trace.log`.
-- Runtime loop: only after a deterministic static/code change and explicit opt-in; use `scripts/er-smoke-driver.sh` with observable process/window/telemetry/driver-command readiness, `--max-nudges 0`, JPEG artifacts, exact artifact dir, telemetry path, trace/debug logs, and teardown proof.
-- Runtime probes are disruptive to the user. Default iterations must be fast/non-interactive and must not launch Elden Ring. `.auto/run-runtime-once` is ignored unless `AUTO_ALLOW_RUNTIME_PROBE=1` is also set for that exact measurement, and runtime probing must not use wall-clock deadline or sleep control flow.
+- Default loop: no ER launch; run static/build/safety gates only. Do not parse stale `target/smoke/**` runtime artifacts unless explicitly auditing historical evidence with `AUTO_INCLUDE_RUNTIME_EVIDENCE=1`.
+- Runtime loop: disabled fail-closed. Re-enable only by deliberately changing `scripts/check-runtime-probe-contract.py`, its regression tests, and `.auto/runtime_experiment_policy.rego` together.
+- Runtime probes are disruptive to the user. Default iterations must be fast/non-interactive and must not launch Elden Ring. `.auto/run-runtime-once` is rejected by `.auto/measure.sh`, and direct `.auto/runtime_probe.sh` execution is denied by Rego until the event-driven runtime driver is redesigned.
 - If runtime cannot be safely driven deterministically without interrupting the user's desktop/game experience, stop runtime probing and continue static RE or ask for one fast manual interaction while structured evidence records.
 
 ## What's Been Tried / Known Baseline

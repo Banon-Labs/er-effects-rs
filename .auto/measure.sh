@@ -12,20 +12,15 @@ fi
 
 if [[ "${AUTO_MEASURE_INNER:-0}" != "1" && -f "$REPO_ROOT/.auto/run-runtime-once" ]]; then
   runtime_request_path="$REPO_ROOT/.auto/run-runtime-once"
-  if [[ "${AUTO_ALLOW_RUNTIME_PROBE:-0}" != "1" ]]; then
-    mkdir -p "$REPO_ROOT/.auto"
-    {
-      printf 'skipped_at=%s\n' "$(date -Is)"
-      printf 'reason=%s\n' "runtime probes are disruptive and now require AUTO_ALLOW_RUNTIME_PROBE=1"
-      printf 'request=%s\n' "$(tr -cd '[:print:]' < "$runtime_request_path" || true)"
-    } > "$REPO_ROOT/.auto/last-runtime-request-skipped"
-    rm -f "$runtime_request_path"
-    echo "[measure] skipped .auto/run-runtime-once; set AUTO_ALLOW_RUNTIME_PROBE=1 only for explicit event-driven runtime validation" >&2
-  else
-    rm -f "$runtime_request_path"
-    ./.auto/runtime_probe.sh
-    exit $?
-  fi
+  mkdir -p "$REPO_ROOT/.auto"
+  {
+    printf 'rejected_at=%s\n' "$(date -Is)"
+    printf 'reason=%s\n' "autoresearch runtime probes are disabled fail-closed; use static measurement until the event-driven runtime driver is redesigned"
+    printf 'request=%s\n' "$(tr -cd '[:print:]' < "$runtime_request_path" || true)"
+  } > "$REPO_ROOT/.auto/last-runtime-request-rejected"
+  rm -f "$runtime_request_path"
+  echo "[measure] rejected .auto/run-runtime-once; runtime probes are disabled fail-closed by scripts/check-runtime-probe-contract.py" >&2
+  exit 2
 fi
 
 LOG_DIR="$REPO_ROOT/.auto/last-measure"
@@ -72,6 +67,8 @@ PY
 
 run_gate cargo_fmt cargo fmt --check
 run_gate cargo_tests cargo test -p er-safe-input -p er-save-loader
+run_gate runtime_probe_contract python3 scripts/check-runtime-probe-contract.py
+run_gate runtime_probe_contract_tests python3 scripts/test-runtime-probe-contract.py
 run_gate xwin_check cargo xwin check --target x86_64-pc-windows-msvc --no-default-features
 run_gate shellcheck_scripts shellcheck scripts/er-smoke-driver.sh
 run_gate shellcheck_auto_runtime shellcheck .auto/runtime_probe.sh .auto/run_runtime_experiment.sh
@@ -942,7 +939,7 @@ if os.environ.get("AUTO_MEASURE_INNER") != "1" and preferred_artifact_path.exist
         candidate = preferred_artifact / name
         if candidate.exists():
             candidates.append(candidate)
-else:
+elif os.environ.get("AUTO_INCLUDE_RUNTIME_EVIDENCE") == "1":
     for pattern in ["target/smoke/**/final-telemetry.json", "target/smoke/**/telemetry.json"]:
         candidates.extend(repo.glob(pattern))
 if candidates:
