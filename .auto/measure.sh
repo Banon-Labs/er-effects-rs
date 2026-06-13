@@ -10,6 +10,17 @@ if [[ -f "$HOME/.cargo/env" ]]; then
   . "$HOME/.cargo/env"
 fi
 
+if [[ "${AUTO_MEASURE_INNER:-0}" != "1" && -f "$REPO_ROOT/.auto/run-runtime-once" ]]; then
+  runtime_max_seconds=$(tr -dc '0-9' < "$REPO_ROOT/.auto/run-runtime-once" || true)
+  rm -f "$REPO_ROOT/.auto/run-runtime-once"
+  if [[ -n "$runtime_max_seconds" ]]; then
+    MAX_SECONDS="$runtime_max_seconds" ./.auto/runtime_probe.sh
+  else
+    ./.auto/runtime_probe.sh
+  fi
+  exit $?
+fi
+
 LOG_DIR="$REPO_ROOT/.auto/last-measure"
 mkdir -p "$LOG_DIR"
 rm -f "$LOG_DIR"/*.log 2>/dev/null || true
@@ -167,8 +178,16 @@ except Exception:
 artifact_dir = None
 telemetry_path = None
 candidates = []
-for pattern in ["target/smoke/**/final-telemetry.json", "target/smoke/**/telemetry.json"]:
-    candidates.extend(repo.glob(pattern))
+preferred_artifact_path = repo / ".auto/current-evidence-artifact"
+if os.environ.get("AUTO_MEASURE_INNER") != "1" and preferred_artifact_path.exists():
+    preferred_artifact = Path(preferred_artifact_path.read_text(encoding="utf-8", errors="replace").strip())
+    for name in ["final-telemetry.json", "telemetry.json"]:
+        candidate = preferred_artifact / name
+        if candidate.exists():
+            candidates.append(candidate)
+else:
+    for pattern in ["target/smoke/**/final-telemetry.json", "target/smoke/**/telemetry.json"]:
+        candidates.extend(repo.glob(pattern))
 if candidates:
     telemetry_path = max(candidates, key=lambda path: path.stat().st_mtime)
     artifact_dir = telemetry_path.parent
@@ -199,7 +218,21 @@ if artifact_dir and artifact_dir.exists():
         metrics["trace_invasiveness_score"] = max(metrics["trace_invasiveness_score"], 20)
     if re.search(r"LEAVE map_load_67bc10 ret=1", joined_logs):
         metrics["title_bootstrap_seen"] = 1
-    queued_load_request = bool(re.search(r"queuing traced continue flags|direct continue sequence requested", joined_logs))
+    runtime_metrics_path = artifact_dir / "runtime-metrics.json"
+    if runtime_metrics_path.exists():
+        try:
+            runtime_metrics = json.loads(runtime_metrics_path.read_text(encoding="utf-8", errors="replace"))
+            for key in ["runtime_probe_seconds", "time_to_player_seconds", "host_pointer_input_used"]:
+                value = runtime_metrics.get(key)
+                if isinstance(value, (int, float)):
+                    metrics[key] = value
+            if runtime_metrics.get("er_process_teardown_ok") in (0, False):
+                metrics["er_process_teardown_ok"] = 0
+            if runtime_metrics.get("save_safety_ok") in (0, False):
+                metrics["save_safety_ok"] = 0
+        except Exception:
+            metrics["crash_detected"] = 1
+    queued_load_request = bool(re.search(r"queuing (?:traced continue flags|b72-only continue profile request)|direct continue sequence requested", joined_logs))
     load_hook_seen = bool(re.search(r"ENTER (current_slot_load_67b570|continue_load_67b750|combined_load_67b940|map_load_67bc10|save_load_state_init_67b030)", joined_logs))
     trace_confirms_state_transition = bool(load_hook_seen and re.search(r"state=(?!0\b)\d+", joined_logs))
 else:

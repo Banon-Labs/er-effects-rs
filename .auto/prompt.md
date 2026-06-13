@@ -68,5 +68,11 @@ The default measurement gates on:
 
 ## What's Been Tried / Known Baseline
 - Current dirty baseline already contains `er-safe-input`, `er-save-loader`, no-overlay autoload polling, GameMan telemetry, Continue/load trace hooks, and `scripts/er-smoke-driver.sh` with default `MAX_NUDGES=0` and JPEG screenshots.
-- Current queued direct path calls `set_save_slot`, `request_save(1)`, and `save_request_profile(1)` after title/bootstrap evidence, then clears `requested_save_slot_load_index`. This is plausible but not yet proven to reach player availability.
+- Current queued direct path calls `set_save_slot`, `request_save(1)`, and `save_request_profile(1)` after title/bootstrap evidence, then clears `requested_save_slot_load_index`. Runtime trace can prove native consumption/state transition (800) but not player availability.
+- Static disassembly of the MoveMapList dispatcher at `0x140afb880` shows: `b72 && b73 -> combined_load_67b940(-1,0,b75)`, `b72 only -> continue_load_67b750(-1,0,0)`, `b73 only -> current_slot_load_67b570(0,0,b75)`, and `+0xb78 != -1 -> requested-slot validation at 0x14067b200` followed by slot-select calls.
+- Tried b72-only (`set_save_slot + save_request_profile`) at runtime: left `b72=1,b73=0` but no scheduler/menu consumption within 150s; worse than baseline.
+- Tried `requested_index` / GameMan `+0xb78=9` alone at runtime: field stayed set and was not consumed; worse than baseline.
+- Tried direct `combined_load_67b940(-1,0,0)`: returned 1 and moved `save_state 0->1`, cleared `b72/b73`, set `bb8=1`, advanced `bbc 1->2`, but no player availability after 150s and is too direct/invasive to keep.
+- Tried direct `map_load_67bc10` title bootstrap after grace: returned 1 and set `save_state=1`, but without the surrounding menu task pump it never returned to 0; do not retry standalone.
+- Runtime probes must go through `.auto/runtime_probe.sh` / `.auto/run-runtime-once` so teardown proof, save hash comparison, no-pointer evidence, telemetry, and JPEG artifacts are captured.
 - Runtime success must not be inferred from process success or screenshots; require telemetry/log evidence.
