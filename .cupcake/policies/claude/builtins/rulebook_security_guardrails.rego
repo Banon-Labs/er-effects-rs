@@ -19,13 +19,13 @@ halt contains decision if {
 	input.hook_event_name == "PreToolUse"
 
 	# Check for ANY file operation tools (read, write, search, etc.)
-	file_operation_tools := {
+	file_operation_tools := [
 		"Edit", "Write", "MultiEdit", "NotebookEdit", # Writing tools
 		"Read", # Reading tools
 		"Grep", "Glob", # Search/listing tools
 		"WebFetch", # Could use file:// URLs
 		"Task", # Could spawn agent to bypass
-	}
+	]
 	input.tool_name in file_operation_tools
 
 	# Check if any parameter contains a protected path (case-insensitive)
@@ -57,7 +57,9 @@ halt contains decision if {
 	command := lower(input.tool_input.command)
 
 	# Iterate over all protected paths
-	some protected_path in get_protected_paths
+	protected_paths := get_protected_paths
+	some protected_path_index
+	protected_path := protected_paths[protected_path_index]
 	contains_protected_reference(command, protected_path)
 
 	message := get_configured_message
@@ -77,7 +79,9 @@ halt contains decision if {
 	command := lower(input.tool_input.command)
 
 	# Check if command creates symlink involving ANY protected path (source OR target)
-	some protected_path in get_protected_paths
+	protected_paths := get_protected_paths
+	some protected_path_index
+	protected_path := protected_paths[protected_path_index]
 	commands.symlink_involves_path(command, protected_path)
 
 	message := get_configured_message
@@ -92,7 +96,8 @@ halt contains decision if {
 # Check if a file path matches any protected path
 is_protected_path(path) if {
 	protected_paths := get_protected_paths
-	some protected_path in protected_paths
+	some protected_path_index
+	protected_path := protected_paths[protected_path_index]
 	path_matches(path, protected_path)
 }
 
@@ -152,7 +157,7 @@ contains_protected_reference(cmd, protected_path) if {
 
 contains_protected_reference(cmd, protected_path) if {
 	# Without trailing slash if it's a directory pattern
-	# "secrets/" pattern should also match "secrets" in command
+	# A "secrets/" pattern should also match a bare "secrets" command reference.
 	endswith(protected_path, "/")
 	path_without_slash := substring(lower(protected_path), 0, count(protected_path) - 1)
 	contains(cmd, path_without_slash)
@@ -160,11 +165,12 @@ contains_protected_reference(cmd, protected_path) if {
 
 # Get configured message from builtin config
 get_configured_message := msg if {
-	# Direct access to builtin config (no signal execution needed)
-	msg := input.builtin_config.rulebook_security_guardrails.message
-} else := msg if {
-	# Fallback to default if config not present
-	msg := "Cupcake configuration files are protected from modification"
+	config := object.get(input.builtin_config, "rulebook_security_guardrails", {})
+	msg := object.get(
+		config,
+		"message",
+		"Cupcake configuration files are protected from modification",
+	)
 }
 
 # Extract file path from tool input based on tool type
@@ -221,9 +227,6 @@ get_file_path_with_preprocessing_fallback := path if {
 
 # Helper: Get list of protected paths from builtin config
 get_protected_paths := paths if {
-	# Direct access to builtin config (no signal execution needed)
-	paths := input.builtin_config.rulebook_security_guardrails.protected_paths
-} else := paths if {
-	# Default protected paths
-	paths := [".cupcake/"]
+	config := object.get(input.builtin_config, "rulebook_security_guardrails", {})
+	paths := object.get(config, "protected_paths", [".cupcake/"])
 }

@@ -34,12 +34,12 @@ deny contains decision if {
 # Check if the Read tool has offset or limit parameters
 has_partial_read_params if {
     # Check for offset parameter
-    "offset" in object.keys(input.tool_input)
+    object.get(input.tool_input, "offset", null) != null
 }
 
 has_partial_read_params if {
     # Check for limit parameter
-    "limit" in object.keys(input.tool_input)
+    object.get(input.tool_input, "limit", null) != null
 }
 
 # Get configured message from builtin config

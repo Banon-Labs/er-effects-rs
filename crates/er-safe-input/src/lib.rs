@@ -1,5 +1,8 @@
 use std::fmt;
 
+const DEFAULT_MAX_HOLD_FRAMES: u16 = 30;
+const MIN_ACTION_FRAMES: u16 = 1;
+
 /// Whitelisted logical inputs that the automation layer is allowed to emit.
 ///
 /// This crate intentionally models controller/menu intent instead of exposing
@@ -74,14 +77,14 @@ pub struct SafeInputConfig {
 impl Default for SafeInputConfig {
     fn default() -> Self {
         Self {
-            max_hold_frames: 30,
+            max_hold_frames: DEFAULT_MAX_HOLD_FRAMES,
         }
     }
 }
 
 impl SafeInputConfig {
     pub fn validate_frames(self, frames: u16) -> Result<(), SafeInputError> {
-        if frames == 0 {
+        if frames < MIN_ACTION_FRAMES {
             return Err(SafeInputError::ZeroFrameAction);
         }
         if frames > self.max_hold_frames {
@@ -175,26 +178,42 @@ impl SafeInputBackend for RecordingBackend {
 mod tests {
     use super::*;
 
+    const TEST_MAX_HOLD_FRAMES: u16 = 3;
+    const TEST_VALID_TAP_FRAMES: u16 = 2;
+    const TEST_TOO_MANY_HOLD_FRAMES: u16 = 4;
+    const TEST_ZERO_FRAMES: u16 = 0;
+
     #[test]
     fn controller_allows_only_bounded_actions() {
         let backend = RecordingBackend::default();
-        let mut controller =
-            SafeInputController::new(backend, SafeInputConfig { max_hold_frames: 3 });
+        let mut controller = SafeInputController::new(
+            backend,
+            SafeInputConfig {
+                max_hold_frames: TEST_MAX_HOLD_FRAMES,
+            },
+        );
 
-        controller.tap(SafeButton::Confirm, 2).unwrap();
-        let error = controller.hold(SafeButton::DpadDown, 4).unwrap_err();
+        controller
+            .tap(SafeButton::Confirm, TEST_VALID_TAP_FRAMES)
+            .unwrap();
+        let error = controller
+            .hold(SafeButton::DpadDown, TEST_TOO_MANY_HOLD_FRAMES)
+            .unwrap_err();
         controller.release_all().unwrap();
 
         assert_eq!(
             error,
-            SafeInputError::FramesExceedLimit { frames: 4, max: 3 }
+            SafeInputError::FramesExceedLimit {
+                frames: TEST_TOO_MANY_HOLD_FRAMES,
+                max: TEST_MAX_HOLD_FRAMES,
+            }
         );
         assert_eq!(
             controller.into_backend().actions,
             vec![
                 SafeInputAction::Tap {
                     button: SafeButton::Confirm,
-                    frames: 2,
+                    frames: TEST_VALID_TAP_FRAMES,
                 },
                 SafeInputAction::ReleaseAll,
             ]
@@ -203,8 +222,12 @@ mod tests {
 
     #[test]
     fn zero_frame_tap_is_rejected() {
-        let error =
-            SafeInputAction::tap(SafeButton::Confirm, 0, SafeInputConfig::default()).unwrap_err();
+        let error = SafeInputAction::tap(
+            SafeButton::Confirm,
+            TEST_ZERO_FRAMES,
+            SafeInputConfig::default(),
+        )
+        .unwrap_err();
         assert_eq!(error, SafeInputError::ZeroFrameAction);
     }
 }

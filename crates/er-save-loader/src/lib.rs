@@ -1,9 +1,15 @@
-use std::{fs, path::PathBuf, time::Instant};
+use std::{fs, path::PathBuf};
 
 use er_safe_input::{SafeButton, SafeInputAction, SafeInputConfig, SafeInputError};
 
-pub const DIRECT_AUTOLOAD_TITLE_ACCEPT_GRACE_SECS: f32 = 60.0;
-const DIRECT_AUTOLOAD_TITLE_ACCEPT_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
+const INITIAL_ATTEMPTS: u64 = 0;
+const ATTEMPT_INCREMENT: u64 = 1;
+const IDLE_SAVE_STATE: u32 = 0;
+const CLEAR_REQUESTED_SAVE_SLOT_LOAD_INDEX: i32 = -1;
+const TITLE_ACCEPT_CONFIRM_FRAMES: u16 = 2;
+const REQUEST_SAVE_ENABLED: u8 = 1;
+const SAVE_REQUEST_PROFILE_ENABLED: u8 = 1;
+const NULL_MODULE_BASE: usize = 0;
 
 #[derive(Debug)]
 pub struct SaveLoader {
@@ -11,7 +17,6 @@ pub struct SaveLoader {
     attempts: u64,
     completed: bool,
     last_status: Option<String>,
-    direct_started_at: Instant,
     direct_seen_initial_save_busy: bool,
 }
 
@@ -103,10 +108,9 @@ impl SaveLoader {
     pub fn new(request: SaveLoadRequest) -> Self {
         Self {
             request,
-            attempts: 0,
+            attempts: INITIAL_ATTEMPTS,
             completed: false,
             last_status: None,
-            direct_started_at: Instant::now(),
             direct_seen_initial_save_busy: false,
         }
     }
@@ -138,10 +142,9 @@ impl SaveLoader {
     pub fn queue_direct_menu_load(&mut self, slot: i32) {
         self.request.slot = Some(slot);
         self.request.method = SaveLoadMethod::DirectMenuLoad;
-        self.attempts = 0;
+        self.attempts = INITIAL_ATTEMPTS;
         self.completed = false;
         self.last_status = None;
-        self.direct_started_at = Instant::now();
         self.direct_seen_initial_save_busy = false;
     }
 
@@ -189,7 +192,7 @@ impl SaveLoader {
             return Ok(SaveLoadStep::Idle);
         };
 
-        self.attempts += 1;
+        self.attempts += ATTEMPT_INCREMENT;
         match self.request.method {
             SaveLoadMethod::SaveRequested => {
                 game_man.set_save_slot(slot);
@@ -210,17 +213,14 @@ impl SaveLoader {
                 Ok(SaveLoadStep::Requested)
             }
             SaveLoadMethod::DirectMenuLoad => {
-                if context.title_bootstrap_seen || game_man.save_state() != 0 {
+                if context.title_bootstrap_seen || game_man.save_state() != IDLE_SAVE_STATE {
                     self.direct_seen_initial_save_busy = true;
                 }
-                if !self.direct_seen_initial_save_busy
-                    && self.direct_started_at.elapsed() < DIRECT_AUTOLOAD_TITLE_ACCEPT_GRACE
-                {
-                    self.last_status = Some(format!(
-                        "waiting for title accept before direct continue queue ({:.1}/{:.1}s)",
-                        self.direct_started_at.elapsed().as_secs_f32(),
-                        DIRECT_AUTOLOAD_TITLE_ACCEPT_GRACE_SECS,
-                    ));
+                if !self.direct_seen_initial_save_busy {
+                    self.last_status = Some(
+                        "waiting for title bootstrap/save activity before direct continue queue"
+                            .to_owned(),
+                    );
                     return Ok(SaveLoadStep::Waiting);
                 }
 
@@ -234,7 +234,7 @@ impl SaveLoader {
                     )
                 } {
                     Ok(true) => {
-                        game_man.set_requested_save_slot_load_index(-1);
+                        game_man.set_requested_save_slot_load_index(CLEAR_REQUESTED_SAVE_SLOT_LOAD_INDEX);
                         self.completed = true;
                         self.last_status =
                             Some(format!("direct continue sequence requested slot {slot}"));
@@ -350,7 +350,11 @@ impl GameManTelemetry {
 pub fn title_accept_fallback_sequence(
     config: SafeInputConfig,
 ) -> Result<Vec<SafeInputAction>, SafeInputError> {
-    Ok(vec![SafeInputAction::tap(SafeButton::Confirm, 2, config)?])
+    Ok(vec![SafeInputAction::tap(
+        SafeButton::Confirm,
+        TITLE_ACCEPT_CONFIRM_FRAMES,
+        config,
+    )?])
 }
 
 unsafe fn request_direct_menu_load<G, F>(
@@ -375,7 +379,7 @@ where
     type RequestSave = unsafe extern "system" fn(u8);
     type SaveRequestProfile = unsafe extern "system" fn(u8);
 
-    if game_man.save_state() != 0 {
+    if game_man.save_state() != IDLE_SAVE_STATE {
         debug(format!(
             "attempt {attempt}: waiting for save_state 0 before queuing continue flags (state={})",
             game_man.save_state()
@@ -401,8 +405,8 @@ where
         "attempt {attempt}: queuing traced continue flags for slot {slot}"
     ));
     unsafe { set_save_slot(slot) };
-    unsafe { request_save(1) };
-    unsafe { save_request_profile(1) };
+    unsafe { request_save(REQUEST_SAVE_ENABLED) };
+    unsafe { save_request_profile(SAVE_REQUEST_PROFILE_ENABLED) };
     Ok(true)
 }
 
@@ -416,7 +420,7 @@ unsafe fn save_buffer_allocator_ready(module_base: usize) -> Result<bool, String
 }
 
 fn game_rva(module_base: usize, rva: u32) -> Result<usize, String> {
-    if module_base == 0 {
+    if module_base == NULL_MODULE_BASE {
         return Err("failed to resolve game module: null module base".to_owned());
     }
     Ok(module_base + rva as usize)
@@ -425,6 +429,12 @@ fn game_rva(module_base: usize, rva: u32) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TEST_TEMP_FILE_DISAMBIGUATOR: u32 = 1;
+    const TEST_SLOT: i32 = 9;
+    const TEST_MODULE_BASE: usize = 1;
+    const TEST_NULL_MODULE_BASE: usize = 0;
+    const TEST_UNSET_SLOT: i32 = 0;
 
     #[derive(Default)]
     struct FakeGameMan {
@@ -469,7 +479,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!(
             "er-save-loader-test-{}-{}.txt",
             std::process::id(),
-            1
+            TEST_TEMP_FILE_DISAMBIGUATOR
         ));
         fs::write(
             &path,
@@ -481,19 +491,21 @@ mod tests {
         let _ = fs::remove_file(&path);
 
         assert_eq!(request.save_extension.as_deref(), Some("co2"));
-        assert_eq!(request.slot, Some(9));
+        assert_eq!(request.slot, Some(TEST_SLOT));
         assert_eq!(request.method, SaveLoadMethod::DirectMenuLoad);
     }
 
     #[test]
     fn title_accept_fallback_is_bounded_safe_input() {
-        let sequence =
-            title_accept_fallback_sequence(SafeInputConfig { max_hold_frames: 2 }).unwrap();
+        let sequence = title_accept_fallback_sequence(SafeInputConfig {
+            max_hold_frames: TITLE_ACCEPT_CONFIRM_FRAMES,
+        })
+        .unwrap();
         assert_eq!(
             sequence,
             vec![SafeInputAction::Tap {
                 button: SafeButton::Confirm,
-                frames: 2,
+                frames: TITLE_ACCEPT_CONFIRM_FRAMES,
             }]
         );
     }
@@ -503,7 +515,7 @@ mod tests {
         let mut game_man = FakeGameMan::default();
         let mut loader = SaveLoader::new(SaveLoadRequest {
             save_extension: None,
-            slot: Some(9),
+            slot: Some(TEST_SLOT),
             method: SaveLoadMethod::Both,
         });
 
@@ -512,7 +524,7 @@ mod tests {
                 .process(
                     &mut game_man,
                     SaveLoadContext {
-                        game_module_base: 1,
+                        game_module_base: TEST_MODULE_BASE,
                         title_bootstrap_seen: false,
                     },
                     |_| {},
@@ -521,8 +533,8 @@ mod tests {
         };
 
         assert_eq!(step, SaveLoadStep::Requested);
-        assert_eq!(game_man.save_slot, 9);
-        assert_eq!(game_man.requested_save_slot_load_index, 9);
+        assert_eq!(game_man.save_slot, TEST_SLOT);
+        assert_eq!(game_man.requested_save_slot_load_index, TEST_SLOT);
         assert!(game_man.save_requested);
         assert_eq!(loader.last_status(), Some("requested slot 9"));
     }
@@ -532,7 +544,7 @@ mod tests {
         let mut game_man = FakeGameMan::default();
         let mut loader = SaveLoader::new(SaveLoadRequest {
             save_extension: None,
-            slot: Some(9),
+            slot: Some(TEST_SLOT),
             method: SaveLoadMethod::DirectMenuLoad,
         });
 
@@ -541,7 +553,7 @@ mod tests {
                 .process(
                     &mut game_man,
                     SaveLoadContext {
-                        game_module_base: 0,
+                        game_module_base: TEST_NULL_MODULE_BASE,
                         title_bootstrap_seen: false,
                     },
                     |_| {},
@@ -550,11 +562,11 @@ mod tests {
         };
 
         assert_eq!(step, SaveLoadStep::Waiting);
-        assert_eq!(game_man.save_slot, 0);
+        assert_eq!(game_man.save_slot, TEST_UNSET_SLOT);
         assert!(
             loader
                 .last_status()
-                .is_some_and(|status| status.starts_with("waiting for title accept"))
+                .is_some_and(|status| status.starts_with("waiting for title bootstrap"))
         );
     }
 

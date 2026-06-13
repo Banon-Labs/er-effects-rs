@@ -17,7 +17,7 @@ command := input.tool_input.command
 native_search_or_listing_tools := {"grep", "egrep", "fgrep", "zgrep", "rg", "find", "ls"}
 readonly_git_subcommands := {"status", "diff", "log", "show", "branch"}
 
-block contains decision if {
+deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"
 	native_search_or_listing_detected
@@ -35,7 +35,7 @@ block contains decision if {
 	}
 }
 
-block contains decision if {
+deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"
 	readonly_git_inspection_detected

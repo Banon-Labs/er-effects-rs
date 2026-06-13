@@ -25,6 +25,10 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal --component rustfmt
           rustup target add x86_64-pc-windows-msvc
+          cargo install cargo-xwin --locked
+
+      - name: Install Cupcake policy checker
+        run: cargo install --git https://github.com/eqtylab/cupcake.git --rev 27b94b8 cupcake-cli --locked
 
       - uses: Swatinem/rust-cache@v2
 
@@ -34,13 +38,20 @@ jobs:
       - name: Lint - no lossy UTF-8
         run: python3 scripts/check-no-lossy-utf8.py
 
+      - name: Lint - no timeout/sleep control flow
+        run: |
+          python3 scripts/check-no-timeouts.py
+          python3 scripts/test-no-timeouts.py
+          cupcake validate --log-level error
+          python3 scripts/test-cupcake-policies.py
+
       - name: rustfmt
         run: cargo fmt -- --check
 
       - name: Test host-buildable crates
         run: cargo test -p er-soulsformats -p er-param-inspect
 
-      # Full link of the DLL needs the MSVC linker; `cargo check` of the
-      # windows target works on Linux and still type-checks the game code.
+      # Full link of the DLL needs the MSVC linker; cargo-xwin provides the
+      # Windows SDK import libraries needed for Linux-hosted type-checks.
       - name: Check DLL crate (windows target)
-        run: cargo check --target x86_64-pc-windows-msvc
+        run: cargo xwin check --target x86_64-pc-windows-msvc

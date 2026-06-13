@@ -13,11 +13,10 @@ use debug::InputBlocker;
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
-    util::system::wait_for_system_init,
 };
 use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
-use fromsoftware_shared::{FromStatic, SharedTaskImpExt, program::Program};
+use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
 use hudhook::{
     ImguiRenderLoop, MessageFilter,
     hooks::dx12::ImguiDx12Hooks,
@@ -52,8 +51,15 @@ const INVALID_ANIMATION_ID_FLOOR: i32 = 0;
 const ANIM_QUEUE_SLOT_STEP: u32 = 1;
 const ANIM_QUEUE_SCAN_FLOOR: u32 = 0;
 const CUSTOM_CALL_DEFAULT_ID: i32 = 0;
+const NEXT_INDEX_OFFSET: usize = 1;
+const TITLE_BOOTSTRAP_UNSEEN: usize = 0;
+const TITLE_BOOTSTRAP_SEEN_VALUE: usize = 1;
+const STACK_TRACE_FRAME_COUNT: usize = 8;
+const STACK_TRACE_FRAMES_TO_SKIP: u32 = 0;
+const NULL_MODULE_BASE: usize = 0;
+const HOOK_ORIGINAL_UNSET: usize = 0;
+const HOOK_FALSE_RETURN: u8 = 0;
 static START_GAME_TASK: Once = Once::new();
-static START_AUTOLOAD_TASK: Once = Once::new();
 static START_CONTINUE_TRACE: Once = Once::new();
 
 static MENU_CONTINUE_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(0);
@@ -401,7 +407,7 @@ fn write_telemetry(state: &EffectsState, player_available: bool) {
     ));
     body.push_str("  \"calls\": [\n");
     for (index, call) in state.calls.iter().enumerate() {
-        let comma = if index + 1 == state.calls.len() {
+        let comma = if index + NEXT_INDEX_OFFSET == state.calls.len() {
             ""
         } else {
             ","
@@ -512,10 +518,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         START_CONTINUE_TRACE.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-effects-continue-trace".to_owned())
-                .spawn(|| {
-                    std::thread::sleep(Duration::from_secs(2));
-                    install_continue_trace_hooks();
-                });
+                .spawn(install_continue_trace_hooks);
         });
     }
     START_GAME_TASK.call_once({
@@ -525,12 +528,6 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
 
     let autoload_without_overlay = state_or_return(&state).autoload.slot().is_some();
     if autoload_without_overlay {
-        START_AUTOLOAD_TASK.call_once({
-            let state = Arc::clone(&state);
-            move || spawn_autoload_task(state)
-        });
-    }
-    if autoload_without_overlay {
         return DLL_MAIN_SUCCESS;
     }
 
@@ -538,42 +535,27 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         hmodule,
         reason,
         || {
-            wait_for_system_init(&Program::current(), Duration::MAX)
-                .expect("timed out waiting for Elden Ring systems");
+            wait_for_task_instance().expect("failed while waiting for Elden Ring task system");
         },
         EffectsOverlay { state },
     )
 }
 
-fn spawn_autoload_task(state: Arc<Mutex<EffectsState>>) {
-    std::thread::spawn(move || {
-        let start = Instant::now();
-        loop {
-            {
-                let mut state = state_or_return(&state);
-                if state.autoload.completed() || state.autoload.slot().is_none() {
-                    write_telemetry_throttled(&mut state, false);
-                    return;
-                }
-                process_autoload_request(&mut state);
-                write_telemetry_throttled(&mut state, false);
+fn wait_for_task_instance() -> Result<&'static CSTaskImp, String> {
+    loop {
+        match unsafe { CSTaskImp::instance() } {
+            Ok(instance) => return Ok(instance),
+            Err(InstanceError::NotFound(name)) => {
+                return Err(format!("static object not found: {name}"));
             }
-
-            if start.elapsed() > Duration::from_secs(300) {
-                let mut state = state_or_return(&state);
-                state.autoload.set_last_status("autoload polling timed out");
-                write_telemetry_throttled(&mut state, false);
-                return;
-            }
-
-            std::thread::sleep(Duration::from_millis(250));
+            Err(InstanceError::Null(_)) => std::thread::yield_now(),
         }
-    });
+    }
 }
 
 fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
     std::thread::spawn(move || {
-        let Ok(cs_task) = CSTaskImp::wait_for_instance(Duration::MAX) else {
+        let Ok(cs_task) = wait_for_task_instance() else {
             return;
         };
 
@@ -636,7 +618,7 @@ fn process_autoload_request(state: &mut EffectsState) {
 
     let context = SaveLoadContext {
         game_module_base,
-        title_bootstrap_seen: TITLE_BOOTSTRAP_SEEN.load(Ordering::SeqCst) != 0,
+        title_bootstrap_seen: TITLE_BOOTSTRAP_SEEN.load(Ordering::SeqCst) != TITLE_BOOTSTRAP_UNSEEN,
     };
     let _ = unsafe {
         state.autoload.process(game_man, context, |message| {
@@ -710,10 +692,10 @@ fn append_continue_trace(args: std::fmt::Arguments<'_>) {
 
 #[cfg(windows)]
 fn trace_callers_summary() -> String {
-    let mut frames = [std::ptr::null_mut::<c_void>(); 8];
+    let mut frames = [std::ptr::null_mut::<c_void>(); STACK_TRACE_FRAME_COUNT];
     let captured = unsafe {
         RtlCaptureStackBackTrace(
-            0,
+            STACK_TRACE_FRAMES_TO_SKIP,
             frames.len() as u32,
             frames.as_mut_ptr(),
             std::ptr::null_mut(),
@@ -722,7 +704,7 @@ fn trace_callers_summary() -> String {
     let module_base = unsafe { GetModuleHandleA(PCSTR::null()) }
         .ok()
         .map(|module| module.0 as usize)
-        .unwrap_or(0);
+        .unwrap_or(NULL_MODULE_BASE);
 
     let callers = frames
         .iter()
@@ -730,7 +712,7 @@ fn trace_callers_summary() -> String {
         .enumerate()
         .map(|(index, frame)| {
             let address = *frame as usize;
-            if module_base != 0 && address >= module_base {
+            if module_base != NULL_MODULE_BASE && address >= module_base {
                 format!("#{index}=0x{:x}", address - module_base)
             } else {
                 format!("#{index}=0x{address:x}")
@@ -748,6 +730,17 @@ fn trace_callers_summary() -> String {
 
 fn game_man_trace_summary() -> String {
     const GAME_MAN_GLOBAL_RVA: u32 = 0x03d69918;
+    const GAME_MAN_SAVE_SLOT_OFFSET: usize = 0xac0;
+    const GAME_MAN_REQUESTED_SAVE_SLOT_LOAD_INDEX_OFFSET: usize = 0xb78;
+    const GAME_MAN_SAVE_STATE_OFFSET: usize = 0xb80;
+    const GAME_MAN_FLAG_B72_OFFSET: usize = 0xb72;
+    const GAME_MAN_FLAG_B73_OFFSET: usize = 0xb73;
+    const GAME_MAN_FLAG_B74_OFFSET: usize = 0xb74;
+    const GAME_MAN_FLAG_B75_OFFSET: usize = 0xb75;
+    const GAME_MAN_FLAG_BB8_OFFSET: usize = 0xbb8;
+    const GAME_MAN_FLAG_BC4_OFFSET: usize = 0xbc4;
+    const GAME_MAN_FLAG_BBC_OFFSET: usize = 0xbbc;
+    const GAME_MAN_FLAG_BC0_OFFSET: usize = 0xbc0;
 
     unsafe {
         let Ok(global) = game_rva(GAME_MAN_GLOBAL_RVA) else {
@@ -762,17 +755,17 @@ fn game_man_trace_summary() -> String {
         let read_u8 = |offset: usize| *game_man.add(offset);
         format!(
             "gm={game_man:p} slot={} req_idx={} state={} flags{{b72={},b73={},b74={},b75={},bb8={}}} bc4={} bbc={} bc0={}",
-            read_i32(0xac0),
-            read_i32(0xb78),
-            read_i32(0xb80),
-            read_u8(0xb72),
-            read_u8(0xb73),
-            read_u8(0xb74),
-            read_u8(0xb75),
-            read_u8(0xbb8),
-            read_i32(0xbc4),
-            read_i32(0xbbc),
-            read_i32(0xbc0),
+            read_i32(GAME_MAN_SAVE_SLOT_OFFSET),
+            read_i32(GAME_MAN_REQUESTED_SAVE_SLOT_LOAD_INDEX_OFFSET),
+            read_i32(GAME_MAN_SAVE_STATE_OFFSET),
+            read_u8(GAME_MAN_FLAG_B72_OFFSET),
+            read_u8(GAME_MAN_FLAG_B73_OFFSET),
+            read_u8(GAME_MAN_FLAG_B74_OFFSET),
+            read_u8(GAME_MAN_FLAG_B75_OFFSET),
+            read_u8(GAME_MAN_FLAG_BB8_OFFSET),
+            read_i32(GAME_MAN_FLAG_BC4_OFFSET),
+            read_i32(GAME_MAN_FLAG_BBC_OFFSET),
+            read_i32(GAME_MAN_FLAG_BC0_OFFSET),
         )
     }
 }
@@ -933,7 +926,7 @@ fn install_continue_trace_hooks() {
 
 unsafe fn call_wrapper_original(original: &AtomicUsize, this: *mut c_void) -> Option<*mut c_void> {
     let original = original.load(Ordering::SeqCst);
-    if original == 0 {
+    if original == HOOK_ORIGINAL_UNSET {
         return None;
     }
     let original: unsafe extern "system" fn(*mut c_void) -> *mut c_void =
@@ -943,7 +936,7 @@ unsafe fn call_wrapper_original(original: &AtomicUsize, this: *mut c_void) -> Op
 
 unsafe fn call_bool3_original(original: &AtomicUsize, arg0: i32, arg1: u8, arg2: u8) -> Option<u8> {
     let original = original.load(Ordering::SeqCst);
-    if original == 0 {
+    if original == HOOK_ORIGINAL_UNSET {
         return None;
     }
     let original: unsafe extern "system" fn(i32, u8, u8) -> u8 =
@@ -1000,7 +993,7 @@ unsafe extern "system" fn set_save_slot_hook(slot: i32) {
         game_man_trace_summary()
     ));
     let original = SET_SAVE_SLOT_ORIG.load(Ordering::SeqCst);
-    if original != 0 {
+    if original != HOOK_ORIGINAL_UNSET {
         let original: unsafe extern "system" fn(i32) = unsafe { std::mem::transmute(original) };
         unsafe { original(slot) };
     }
@@ -1017,7 +1010,7 @@ unsafe extern "system" fn save_request_profile_hook(enabled: u8) {
         game_man_trace_summary()
     ));
     let original = SAVE_REQUEST_PROFILE_ORIG.load(Ordering::SeqCst);
-    if original != 0 {
+    if original != HOOK_ORIGINAL_UNSET {
         let original: unsafe extern "system" fn(u8) = unsafe { std::mem::transmute(original) };
         unsafe { original(enabled) };
     }
@@ -1034,7 +1027,7 @@ unsafe extern "system" fn request_save_hook(enabled: u8) {
         game_man_trace_summary()
     ));
     let original = REQUEST_SAVE_ORIG.load(Ordering::SeqCst);
-    if original != 0 {
+    if original != HOOK_ORIGINAL_UNSET {
         let original: unsafe extern "system" fn(u8) = unsafe { std::mem::transmute(original) };
         unsafe { original(enabled) };
     }
@@ -1050,8 +1043,8 @@ unsafe extern "system" fn current_slot_load_hook(arg0: i32, arg1: u8, arg2: u8) 
         trace_callers_summary(),
         game_man_trace_summary()
     ));
-    let ret =
-        unsafe { call_bool3_original(&CURRENT_SLOT_LOAD_ORIG, arg0, arg1, arg2) }.unwrap_or(0);
+    let ret = unsafe { call_bool3_original(&CURRENT_SLOT_LOAD_ORIG, arg0, arg1, arg2) }
+        .unwrap_or(HOOK_FALSE_RETURN);
     append_continue_trace(format_args!(
         "LEAVE current_slot_load_67b570 ret={ret} {}",
         game_man_trace_summary()
@@ -1065,7 +1058,8 @@ unsafe extern "system" fn continue_load_hook(slot: i32, arg1: u8, arg2: u8) -> u
         trace_callers_summary(),
         game_man_trace_summary()
     ));
-    let ret = unsafe { call_bool3_original(&CONTINUE_LOAD_ORIG, slot, arg1, arg2) }.unwrap_or(0);
+    let ret = unsafe { call_bool3_original(&CONTINUE_LOAD_ORIG, slot, arg1, arg2) }
+        .unwrap_or(HOOK_FALSE_RETURN);
     append_continue_trace(format_args!(
         "LEAVE continue_load_67b750 ret={ret} {}",
         game_man_trace_summary()
@@ -1079,7 +1073,8 @@ unsafe extern "system" fn combined_load_hook(slot: i32, arg1: u8, arg2: u8) -> u
         trace_callers_summary(),
         game_man_trace_summary()
     ));
-    let ret = unsafe { call_bool3_original(&COMBINED_LOAD_ORIG, slot, arg1, arg2) }.unwrap_or(0);
+    let ret = unsafe { call_bool3_original(&COMBINED_LOAD_ORIG, slot, arg1, arg2) }
+        .unwrap_or(HOOK_FALSE_RETURN);
     append_continue_trace(format_args!(
         "LEAVE combined_load_67b940 ret={ret} {}",
         game_man_trace_summary()
@@ -1094,14 +1089,14 @@ unsafe extern "system" fn map_load_hook() -> u8 {
         game_man_trace_summary()
     ));
     let original = MAP_LOAD_ORIG.load(Ordering::SeqCst);
-    let ret = if original == 0 {
-        0
+    let ret = if original == HOOK_ORIGINAL_UNSET {
+        HOOK_FALSE_RETURN
     } else {
         let original: unsafe extern "system" fn() -> u8 = unsafe { std::mem::transmute(original) };
         unsafe { original() }
     };
-    if ret != 0 {
-        TITLE_BOOTSTRAP_SEEN.store(1, Ordering::SeqCst);
+    if ret != HOOK_FALSE_RETURN {
+        TITLE_BOOTSTRAP_SEEN.store(TITLE_BOOTSTRAP_SEEN_VALUE, Ordering::SeqCst);
     }
     append_continue_trace(format_args!(
         "LEAVE map_load_67bc10 ret={ret} {}",
@@ -1117,8 +1112,8 @@ unsafe extern "system" fn save_load_state_init_hook() -> u8 {
         game_man_trace_summary()
     ));
     let original = SAVE_LOAD_STATE_INIT_ORIG.load(Ordering::SeqCst);
-    let ret = if original == 0 {
-        0
+    let ret = if original == HOOK_ORIGINAL_UNSET {
+        HOOK_FALSE_RETURN
     } else {
         let original: unsafe extern "system" fn() -> u8 = unsafe { std::mem::transmute(original) };
         unsafe { original() }

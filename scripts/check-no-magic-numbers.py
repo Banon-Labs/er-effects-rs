@@ -15,7 +15,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 IGNORED_DIRECTORIES = {".git", "target"}
 NUMERIC_LITERAL_RE = re.compile(
-    r"(?<![A-Za-z0-9_])"
+    r"(?<![A-Za-z0-9_.])"
     r"(?:"
     r"0[xX][0-9A-Fa-f](?:_?[0-9A-Fa-f])*"
     r"|"

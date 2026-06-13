@@ -14,7 +14,7 @@ import rego.v1
 
 command := input.tool_input.command
 
-block contains decision if {
+deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"
 	inline_env_assignment
