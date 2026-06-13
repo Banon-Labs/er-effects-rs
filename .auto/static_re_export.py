@@ -4897,6 +4897,108 @@ def scan_rip_relative_vtable_refs(
     return refs
 
 
+def summarize_autoload_native_transition_candidates(
+    selector6_owner_compose_parent_contexts: list[dict[str, Any]],
+    selector6_owner_variant_caller_contexts: dict[str, list[dict[str, Any]]],
+    selector_owner_lifecycle_context: dict[str, Any],
+    slot_reset_state_table_init_context: dict[str, Any],
+    slot_reset_play_game_context: dict[str, Any],
+    slot_reset_play_game_submit_context: dict[str, Any],
+    set_save_slot_callsite_contexts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Condense static evidence for native title/menu progression candidates.
+
+    This deliberately does not claim runtime success. It highlights exact
+    scheduler/input/menu-task relationships that could replace host key/focus
+    nudges once a safe event-driven runtime probe is redesigned.
+    """
+
+    input_parent_contexts = [
+        context
+        for context in selector6_owner_compose_parent_contexts
+        if context.get("passes_common_args_via_input_key")
+        or context.get("input_key_calls")
+        or any(
+            target.get("target_name") == "owner_parent_input_tag_7108"
+            for target in context.get("lea_targets", [])
+        )
+    ]
+    input_variant_callers = selector6_owner_variant_caller_contexts.get(
+        "selector6_owner_variant_input_82a970", []
+    )
+    set_slot_menu_wrappers = [
+        context
+        for context in set_save_slot_callsite_contexts
+        if context.get("source_va") == "0x14082c379" and context.get("menu_region")
+    ]
+    title_state_entries = [
+        entry
+        for entry in slot_reset_state_table_init_context.get("entries", [])
+        if entry.get("label_text")
+        in {
+            "TitleStep::STEP_MenuJobWait",
+            "TitleStep::STEP_PlayGame",
+            "TitleStep::STEP_Finish",
+        }
+    ]
+    factory_context = selector_owner_lifecycle_context.get("factory", {})
+
+    return {
+        "status": "static_candidate_only_no_runtime_claim",
+        "selector_input_parent_contexts": input_parent_contexts,
+        "selector_input_variant_callers": input_variant_callers,
+        "selector_owner_factory": {
+            key: factory_context.get(key)
+            for key in [
+                "function_begin_va",
+                "function_end_va",
+                "caller_chain",
+                "calls_main_preflight_ctor_wrapper",
+                "calls_sibling_ctor_wrapper",
+                "main_call_uses_r14_plus_0x18_and_incoming_r8",
+                "sibling_call_uses_r14_plus_0x18_and_incoming_r8",
+                "enqueue_calls",
+                "enqueue_link_calls",
+            ]
+        },
+        "title_state_entries": title_state_entries,
+        "set_slot_menu_wrappers": set_slot_menu_wrappers,
+        "play_game_submit": {
+            key: slot_reset_play_game_submit_context.get(key)
+            for key in [
+                "function_begin_va",
+                "function_end_va",
+                "returns_early_when_slot_minus_one",
+                "calls_selected_value_validate_then_load_pair",
+                "stores_load_pair_to_owner_job_100_104",
+                "appends_payload_vector_to_owner_job_b35f0",
+            ]
+        },
+        "play_game_handler": {
+            key: slot_reset_play_game_context.get(key)
+            for key in [
+                "function_begin_va",
+                "function_end_va",
+                "submits_owner_bc_and_owner_2e8_job",
+                "gets_save_slot_and_stores_nonnegative_to_global_1200",
+                "tail_function_begin_va",
+                "tail_function_end_va",
+            ]
+        },
+        "interpretation": (
+            "The selector input variant at 0x14082a970 builds an owner-parent "
+            "input descriptor (owner_parent_input_tag_7108 / vtable_76f0) and "
+            "routes it into the same parent composer as local menu wrappers. "
+            "Its callback target 0x14082c240 is the menu set-slot wrapper that "
+            "calls set_save_slot. The TitleStep PlayGame path then validates a "
+            "nonnegative slot and stores the load pair before appending the owner "
+            "job payload. This is a candidate native/menu-task route for clearing "
+            "title-slot selection without host focus/key nudges, but it still "
+            "needs runtime validation behind the fail-closed runtime contract."
+        ),
+    }
+
+
 def main() -> int:
     exe = Path(os.environ.get("ER_EXE_PATH", str(DEFAULT_EXE)))
     output = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".auto/last-measure/static-re-evidence.json")
@@ -5056,6 +5158,15 @@ def main() -> int:
         "continue_selector_dispatch_comparison": continue_selector_dispatch_comparison,
         "selector_owner_lifecycle_context": selector_owner_lifecycle_context,
         "selector_owner_factory_entry_context": selector_owner_factory_entry_context,
+        "autoload_native_transition_candidates": summarize_autoload_native_transition_candidates(
+            selector6_owner_compose_parent_contexts,
+            selector6_owner_variant_caller_contexts,
+            selector_owner_lifecycle_context,
+            slot_reset_state_table_init_context,
+            slot_reset_play_game_context,
+            slot_reset_play_game_submit_context,
+            set_save_slot_callsite_contexts,
+        ),
         "selector_submit_context": selector_submit_context,
         "selector_final_enqueue_context": selector_final_enqueue_context,
         "selector_pair_builder_context": selector_pair_builder_context,
@@ -5936,6 +6047,39 @@ def main() -> int:
                 and context.get("input_variant_enqueues_to_incoming_rdx")
                 and context.get("enqueue_calls") == ["0x140824864"]
                 for context in selector6_owner_variant_caller_contexts.get("selector6_owner_variant_input_82a970", [])
+            ),
+            "autoload_native_selector_input_candidate_mapped": any(
+                context.get("function_begin_va") == "0x14082a970"
+                and context.get("input_guard_calls") == ["0x14082a9b8"]
+                and context.get("input_key_calls") == ["0x14082aa7c"]
+                and any(
+                    target.get("target_name") == "owner_parent_input_tag_7108"
+                    for target in context.get("lea_targets", [])
+                )
+                for context in selector6_owner_compose_parent_contexts
+            ),
+            "autoload_native_set_slot_callback_links_selector_to_set_save_slot": bool(
+                any(
+                    context.get("function_begin_va") == "0x14082a970"
+                    and any(
+                        target.get("target_name") == "owner_parent_callback_c240"
+                        and target.get("target_va") == "0x14082c240"
+                        for target in context.get("lea_targets", [])
+                    )
+                    for context in selector6_owner_compose_parent_contexts
+                )
+                and any(
+                    context.get("source_va") == "0x14082c379"
+                    and context.get("function_begin_va") == "0x14082c240"
+                    and context.get("menu_region")
+                    for context in set_save_slot_callsite_contexts
+                )
+            ),
+            "autoload_native_playgame_submit_valid_slot_payload_mapped": bool(
+                slot_reset_play_game_submit_context.get("returns_early_when_slot_minus_one")
+                and slot_reset_play_game_submit_context.get("calls_selected_value_validate_then_load_pair")
+                and slot_reset_play_game_submit_context.get("stores_load_pair_to_owner_job_100_104")
+                and slot_reset_play_game_submit_context.get("appends_payload_vector_to_owner_job_b35f0")
             ),
             "selector6_owner_local_variant_828e10_arg_flow_mapped": any(
                 context.get("source_va") == "0x140824a5b"
