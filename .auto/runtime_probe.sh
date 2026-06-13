@@ -17,23 +17,160 @@ if [[ -f .auto/runtime-env ]]; then
   . ./.auto/runtime-env
 fi
 
-ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/smoke/autoload-runtime-$(date +%Y%m%d-%H%M%S)}"
-GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
-MAX_SECONDS="${MAX_SECONDS:-150}"
-mkdir -p "$ARTIFACT_DIR"
-ARTIFACT_DIR=$(realpath -m "$ARTIFACT_DIR")
-
-START_MS=$(python3 - <<'PY'
+now_ms() {
+  python3 - <<'PY'
 import time
 print(int(time.time() * 1000))
 PY
-)
+}
+
+ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/smoke/autoload-runtime-$(date +%Y%m%d-%H%M%S)}"
+GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
+LAUNCH_MODE="${LAUNCH_MODE:-direct-protected}"
+RUNTIME_MAX_NUDGES="${RUNTIME_MAX_NUDGES:-0}"
+RUNTIME_READINESS_RATIONALE="${RUNTIME_READINESS_RATIONALE:-$REPO_ROOT/.auto/runtime-readiness-rationale}"
+mkdir -p "$ARTIFACT_DIR"
+ARTIFACT_DIR=$(realpath -m "$ARTIFACT_DIR")
+
+START_MS=$(now_ms)
+RUN_START_MS=0
 DRIVER_RC=0
+CLEANUP_ARMED=0
+TIMELINE_LOG="$ARTIFACT_DIR/runtime-timeline.jsonl"
 
 save_roots=(
   "$HOME/.local/share/Steam/steamapps/compatdata/1245620/pfx/drive_c/users/steamuser/AppData/Roaming/EldenRing"
   "/mnt/c/Users/choza/AppData/Roaming/EldenRing"
 )
+
+runtime_process_pattern='(?:^|[/\\])(eldenring\.exe|start_protected_game\.exe)(?:\s|$)'
+
+log_timeline() {
+  local event=$1
+  shift || true
+  local details="$*"
+  python3 - "$TIMELINE_LOG" "$START_MS" "$RUN_START_MS" "$event" "$details" <<'PY'
+import json
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+log_path = Path(sys.argv[1])
+start_ms = int(sys.argv[2])
+run_start_ms = int(sys.argv[3])
+event = sys.argv[4]
+details = sys.argv[5]
+now_ms = int(time.time() * 1000)
+entry = {
+    "ts": datetime.now(timezone.utc).isoformat(),
+    "event": event,
+    "total_s": round((now_ms - start_ms) / 1000, 3),
+    "run_s": None if run_start_ms <= 0 else round((now_ms - run_start_ms) / 1000, 3),
+    "details": details,
+}
+with log_path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(entry, sort_keys=True) + "\n")
+PY
+}
+
+write_state_snapshot() {
+  local output=$1
+  python3 - "$output" "$ARTIFACT_DIR" "$GAME_DIR" "$runtime_process_pattern" <<'PY'
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+output = Path(sys.argv[1])
+artifact = Path(sys.argv[2])
+game_dir = Path(sys.argv[3])
+pattern = re.compile(sys.argv[4], re.I)
+process_rows = []
+try:
+    ps_output = subprocess.check_output(["ps", "-eo", "pid=,args="], text=True)
+    process_rows = [line.strip() for line in ps_output.splitlines() if pattern.search(line)]
+except Exception as exc:
+    process_rows = [f"ps_error={exc}"]
+windows = []
+try:
+    clients = json.loads(subprocess.check_output(["hyprctl", "clients", "-j"], text=True))
+    for client in clients:
+        title = client.get("title") or ""
+        klass = client.get("class") or ""
+        if "elden" in title.lower() or klass == "steam_app_1245620":
+            windows.append({
+                "class": klass,
+                "title": title,
+                "at": client.get("at"),
+                "size": client.get("size"),
+                "workspace": (client.get("workspace") or {}).get("name"),
+            })
+except Exception as exc:
+    windows = [{"error": str(exc)}]
+telemetry = {}
+for candidate in [artifact / "telemetry.json", artifact / "final-telemetry.json", game_dir / "er-effects-telemetry.json"]:
+    if candidate.exists():
+        try:
+            telemetry = json.loads(candidate.read_text(encoding="utf-8", errors="replace"))
+            break
+        except Exception as exc:
+            telemetry = {"error": str(exc), "path": str(candidate)}
+latest_capture = None
+captures = list(artifact.glob("*.jpg")) + list(artifact.glob("*.png"))
+if captures:
+    latest = max(captures, key=lambda path: path.stat().st_mtime)
+    latest_capture = {"path": str(latest), "mtime": latest.stat().st_mtime, "bytes": latest.stat().st_size}
+output.write_text(json.dumps({
+    "process_rows": process_rows,
+    "windows": windows,
+    "telemetry": telemetry,
+    "latest_capture": latest_capture,
+}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
+
+validate_runtime_policy() {
+  command -v opa >/dev/null 2>&1 || {
+    echo "missing required command: opa" >&2
+    exit 127
+  }
+  local input_path allowed
+  input_path="$ARTIFACT_DIR/runtime-policy-input.json"
+  python3 - "$input_path" "$LAUNCH_MODE" "$RUNTIME_READINESS_RATIONALE" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+output, launch_mode, rationale_path = sys.argv[1:4]
+rationale = {}
+path = Path(rationale_path)
+if path.exists():
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        rationale[key.strip()] = value.strip().strip('"').strip("'")
+payload = {
+    "explicit_opt_in": os.environ.get("AUTO_ALLOW_RUNTIME_PROBE") == "1",
+    "launch_mode": launch_mode,
+    "readiness_strategy": rationale.get("readiness_strategy", ""),
+    "structured_failure": rationale.get("structured_failure", ""),
+    "user_impact": rationale.get("user_impact", ""),
+}
+Path(output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+  opa check "$REPO_ROOT/.auto/runtime_experiment_policy.rego"
+  allowed=$(opa eval --format raw -d "$REPO_ROOT/.auto/runtime_experiment_policy.rego" -i "$input_path" 'data.auto.runtime_experiment.allow')
+  if [[ "$allowed" != "true" ]]; then
+    echo "runtime experiment rejected by Rego policy:" >&2
+    opa eval --format pretty -d "$REPO_ROOT/.auto/runtime_experiment_policy.rego" -i "$input_path" 'data.auto.runtime_experiment.deny' >&2
+    exit 2
+  fi
+}
 
 snapshot_saves() {
   local output=$1
@@ -44,36 +181,64 @@ snapshot_saves() {
   done | sort -z | xargs -0 --no-run-if-empty sha256sum > "$output"
 }
 
-cleanup_runtime() {
-  local end_ms runtime_ms save_safety_ok
-  end_ms=$(python3 - <<'PY'
-import time
-print(int(time.time() * 1000))
-PY
-)
-  runtime_ms=$((end_ms - START_MS))
-  snapshot_saves "$ARTIFACT_DIR/save-hashes-after.txt"
-  if cmp -s "$ARTIFACT_DIR/save-hashes-before.txt" "$ARTIFACT_DIR/save-hashes-after.txt"; then
-    save_safety_ok=1
-  else
-    save_safety_ok=0
-  fi
-
-  python3 - "$ARTIFACT_DIR" "$runtime_ms" "$DRIVER_RC" "$save_safety_ok" <<'PY'
+backup_saves() {
+  python3 - "$ARTIFACT_DIR" "${save_roots[@]}" <<'PY'
 import json
+import shutil
+import sys
+from pathlib import Path
+
+artifact = Path(sys.argv[1])
+roots = [Path(value).expanduser() for value in sys.argv[2:]]
+backup_dir = artifact / "save-backup"
+files_dir = backup_dir / "files"
+files_dir.mkdir(parents=True, exist_ok=True)
+manifest = []
+index = 0
+for root in roots:
+    if not root.is_dir():
+        continue
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in {".sl2", ".co2"}:
+            continue
+        target = files_dir / f"{index:04d}-{path.name}"
+        shutil.copy2(path, target)
+        manifest.append({"source": str(path), "backup": str(target)})
+        index += 1
+(backup_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+print(f"backed_up_saves={len(manifest)}")
+PY
+}
+
+runtime_process_rows() {
+  python3 - "$runtime_process_pattern" <<'PY'
+import re
+import subprocess
+import sys
+
+pattern = re.compile(sys.argv[1], re.I)
+output = subprocess.check_output(["ps", "-eo", "pid=,args="], text=True)
+for line in output.splitlines():
+    stripped = line.strip()
+    if not stripped:
+        continue
+    pid_text, _, args = stripped.partition(" ")
+    if pid_text.isdigit() and pattern.search(args):
+        print(stripped)
+PY
+}
+
+teardown_runtime_processes() {
+  python3 - "$ARTIFACT_DIR" "$runtime_process_pattern" <<'PY'
 import os
 import re
 import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 artifact = Path(sys.argv[1])
-runtime_ms = int(sys.argv[2])
-driver_rc = int(sys.argv[3])
-save_safety_ok = int(sys.argv[4])
-pattern = re.compile(r'(?:^|[/\\])(eldenring\.exe|start_protected_game\.exe)(?:\s|$)', re.I)
+pattern = re.compile(sys.argv[2], re.I)
 
 def procs():
     output = subprocess.check_output(["ps", "-eo", "pid=,args="], text=True)
@@ -92,24 +257,75 @@ before = procs()
 for pid, _ in before:
     try:
         os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
         pass
-    except PermissionError:
-        pass
-if before:
-    time.sleep(2)
 mid = procs()
 for pid, _ in mid:
     try:
         os.kill(pid, signal.SIGKILL)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
         pass
-    except PermissionError:
-        pass
-if mid:
-    time.sleep(1)
 after = procs()
 (artifact / "teardown-after.txt").write_text("".join(f"{pid} {args}\n" for pid, args in after), encoding="utf-8")
+PY
+}
+
+restore_saves_from_backup() {
+  if [[ "${RESTORE_RUNTIME_SAVES:-1}" != "1" ]]; then
+    printf 'restore_runtime_saves=disabled\n' > "$ARTIFACT_DIR/save-restore.log"
+    return 0
+  fi
+  python3 - "$ARTIFACT_DIR" <<'PY'
+import json
+import shutil
+import sys
+from pathlib import Path
+
+artifact = Path(sys.argv[1])
+manifest_path = artifact / "save-backup" / "manifest.json"
+log_path = artifact / "save-restore.log"
+if not manifest_path.exists():
+    log_path.write_text("restore_runtime_saves=missing_manifest\n", encoding="utf-8")
+    raise SystemExit(0)
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+lines = []
+for entry in manifest:
+    source = Path(entry["source"])
+    backup = Path(entry["backup"])
+    if backup.exists():
+        source.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(backup, source)
+        lines.append(f"restored {source} from {backup}")
+log_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+PY
+}
+
+write_runtime_metrics() {
+  local end_ms runtime_ms run_runtime_ms save_safety_ok process_count
+  end_ms=$(now_ms)
+  runtime_ms=$((end_ms - START_MS))
+  if (( RUN_START_MS > 0 )); then
+    run_runtime_ms=$((end_ms - RUN_START_MS))
+  else
+    run_runtime_ms=$runtime_ms
+  fi
+  if cmp -s "$ARTIFACT_DIR/save-hashes-before.txt" "$ARTIFACT_DIR/save-hashes-after.txt"; then
+    save_safety_ok=1
+  else
+    save_safety_ok=0
+  fi
+  process_count=$(runtime_process_rows | wc -l)
+  python3 - "$ARTIFACT_DIR" "$runtime_ms" "$run_runtime_ms" "$DRIVER_RC" "$save_safety_ok" "$process_count" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+artifact = Path(sys.argv[1])
+runtime_ms = int(sys.argv[2])
+run_runtime_ms = int(sys.argv[3])
+driver_rc = int(sys.argv[4])
+save_safety_ok = int(sys.argv[5])
+process_count = int(sys.argv[6])
 telemetry = artifact / "telemetry.json"
 final_telemetry = artifact / "final-telemetry.json"
 if not telemetry.exists() and not final_telemetry.exists():
@@ -124,9 +340,10 @@ for candidate in [final_telemetry, telemetry]:
             pass
 metrics = {
     "driver_rc": driver_rc,
-    "runtime_probe_seconds": round(runtime_ms / 1000, 3),
-    "time_to_player_seconds": round(runtime_ms / 1000, 3) if player_available else -1,
-    "er_process_teardown_ok": 1 if not after else 0,
+    "runtime_probe_seconds": round(run_runtime_ms / 1000, 3),
+    "runtime_total_seconds": round(runtime_ms / 1000, 3),
+    "time_to_player_seconds": round(run_runtime_ms / 1000, 3) if player_available else -1,
+    "er_process_teardown_ok": 1 if process_count == 0 else 0,
     "host_pointer_input_used": 0,
     "save_safety_ok": save_safety_ok,
 }
@@ -138,23 +355,95 @@ print(f"save_safety_ok={save_safety_ok}")
 PY
 }
 
+cleanup_runtime() {
+  (( CLEANUP_ARMED )) || return 0
+  CLEANUP_ARMED=0
+  log_timeline "cleanup_start"
+  write_state_snapshot "$ARTIFACT_DIR/final-state-before-cleanup.json" || true
+  teardown_runtime_processes || true
+  snapshot_saves "$ARTIFACT_DIR/save-hashes-after-pre-restore.txt"
+  restore_saves_from_backup || true
+  snapshot_saves "$ARTIFACT_DIR/save-hashes-after.txt"
+  write_runtime_metrics || true
+  write_state_snapshot "$ARTIFACT_DIR/final-state-after-cleanup.json" || true
+  log_timeline "cleanup_finish"
+}
+
+setup_runtime_payload() {
+  local lazyloader_dir
+  lazyloader_dir="${LAZYLOADER_DIR:-$GAME_DIR/dllMods.disabled/lazyloader-20260611-234916}"
+  {
+    printf '[runtime_probe] setup phase: build DLL and install LazyLoader payload\n'
+    cargo xwin build --target x86_64-pc-windows-msvc --release
+    cp -f "$lazyloader_dir/dinput8.dll" "$GAME_DIR/dinput8.dll"
+    cp -f "$lazyloader_dir/lazyLoad.ini" "$GAME_DIR/lazyLoad.ini"
+    python3 - "$GAME_DIR/lazyLoad.ini" <<'PY'
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8", errors="replace")
+if "0=er_effects_rs.dll" not in text:
+    text = text.replace("[LOADORDER]\n", "[LOADORDER]\n0=er_effects_rs.dll\n", 1)
+path.write_text(text, encoding="utf-8")
+PY
+    mkdir -p "$GAME_DIR/dllMods"
+    cp -f "$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll" "$GAME_DIR/dllMods/er_effects_rs.dll"
+    {
+      printf 'slot=%s\n' "$ER_EFFECTS_AUTOLOAD_SLOT"
+      printf 'method=%s\n' "$ER_EFFECTS_AUTOLOAD_METHOD"
+    } > "$GAME_DIR/er-effects-autoload.txt"
+    rm -f "$GAME_DIR/er-effects-safe-input.txt"
+  } > "$ARTIFACT_DIR/setup.out" 2>&1
+}
+
+trap cleanup_runtime EXIT
+
+log_timeline "runtime_probe_start" "launch_mode=$LAUNCH_MODE readiness=event-driven"
+validate_runtime_policy
 snapshot_saves "$ARTIFACT_DIR/save-hashes-before.txt"
+backup_saves > "$ARTIFACT_DIR/save-backup.log" 2>&1
 
 export ER_EFFECTS_AUTOLOAD_SLOT="${ER_EFFECTS_AUTOLOAD_SLOT:-9}"
 export ER_EFFECTS_AUTOLOAD_METHOD="${ER_EFFECTS_AUTOLOAD_METHOD:-direct_menu_load}"
 export ER_EFFECTS_TRACE_CONTINUE="${ER_EFFECTS_TRACE_CONTINUE:-1}"
 
-if scripts/er-smoke-driver.sh drive \
-  --artifact-dir "$ARTIFACT_DIR" \
-  --game-dir "$GAME_DIR" \
-  --launch-mode direct-protected \
-  --max-seconds "$MAX_SECONDS" \
-  --max-nudges 0 \
-  --screenshot-ext jpg \
-  > "$ARTIFACT_DIR/driver.out" 2>&1; then
-  DRIVER_RC=0
+if [[ "$LAUNCH_MODE" != "attach-existing" ]]; then
+  setup_runtime_payload
 else
-  DRIVER_RC=$?
+  printf '[runtime_probe] setup phase: attach-existing leaves the running game payload untouched\n' > "$ARTIFACT_DIR/setup.out"
+fi
+
+RUN_START_MS=$(now_ms)
+CLEANUP_ARMED=1
+if [[ "$LAUNCH_MODE" == "attach-existing" ]]; then
+  if scripts/er-smoke-driver.sh drive \
+    --artifact-dir "$ARTIFACT_DIR" \
+    --game-dir "$GAME_DIR" \
+    --launch-mode steam \
+    --no-build \
+    --no-install \
+    --no-launch \
+    --max-nudges "$RUNTIME_MAX_NUDGES" \
+    --screenshot-ext jpg \
+    > "$ARTIFACT_DIR/driver.out" 2>&1; then
+    DRIVER_RC=0
+  else
+    DRIVER_RC=$?
+  fi
+else
+  if scripts/er-smoke-driver.sh drive \
+    --artifact-dir "$ARTIFACT_DIR" \
+    --game-dir "$GAME_DIR" \
+    --launch-mode "$LAUNCH_MODE" \
+    --no-build \
+    --no-install \
+    --max-nudges "$RUNTIME_MAX_NUDGES" \
+    --screenshot-ext jpg \
+    > "$ARTIFACT_DIR/driver.out" 2>&1; then
+    DRIVER_RC=0
+  else
+    DRIVER_RC=$?
+  fi
 fi
 
 cleanup_runtime

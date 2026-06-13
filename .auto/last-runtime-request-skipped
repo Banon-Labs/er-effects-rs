@@ -1,0 +1,3 @@
+skipped_at=2026-06-13T12:52:30-07:00
+reason=runtime probes are disruptive and now require AUTO_ALLOW_RUNTIME_PROBE=1
+request=event-driven-runtime-probe

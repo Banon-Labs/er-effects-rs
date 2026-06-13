@@ -234,7 +234,9 @@ impl SaveLoader {
                     )
                 } {
                     Ok(true) => {
-                        game_man.set_requested_save_slot_load_index(CLEAR_REQUESTED_SAVE_SLOT_LOAD_INDEX);
+                        game_man.set_requested_save_slot_load_index(
+                            CLEAR_REQUESTED_SAVE_SLOT_LOAD_INDEX,
+                        );
                         self.completed = true;
                         self.last_status =
                             Some(format!("direct continue sequence requested slot {slot}"));

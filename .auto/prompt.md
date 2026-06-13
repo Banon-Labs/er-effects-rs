@@ -63,11 +63,12 @@ The default measurement gates on:
 
 ## Measurement Strategy
 - Default loop: no ER launch; run static/build/safety gates; parse latest `target/smoke/**/{telemetry,final-telemetry}.json`, `autoload-debug*.log`, and `continue-trace.log`.
-- Runtime loop: only after a deterministic static/code change; use `scripts/er-smoke-driver.sh` with bounded time, `--max-nudges 0`, JPEG artifacts, exact artifact dir, telemetry path, trace/debug logs, and teardown proof.
-- If runtime cannot be safely driven deterministically, stop runtime probing and continue static RE or ask for one fast manual interaction while structured evidence records.
+- Runtime loop: only after a deterministic static/code change and explicit opt-in; use `scripts/er-smoke-driver.sh` with observable process/window/telemetry/driver-command readiness, `--max-nudges 0`, JPEG artifacts, exact artifact dir, telemetry path, trace/debug logs, and teardown proof.
+- Runtime probes are disruptive to the user. Default iterations must be fast/non-interactive and must not launch Elden Ring. `.auto/run-runtime-once` is ignored unless `AUTO_ALLOW_RUNTIME_PROBE=1` is also set for that exact measurement, and runtime probing must not use wall-clock deadline or sleep control flow.
+- If runtime cannot be safely driven deterministically without interrupting the user's desktop/game experience, stop runtime probing and continue static RE or ask for one fast manual interaction while structured evidence records.
 
 ## What's Been Tried / Known Baseline
-- Current dirty baseline already contains `er-safe-input`, `er-save-loader`, no-overlay autoload polling, GameMan telemetry, Continue/load trace hooks, and `scripts/er-smoke-driver.sh` with default `MAX_NUDGES=0` and JPEG screenshots.
+- Current dirty baseline already contains `er-safe-input`, `er-save-loader`, no-overlay autoload polling, GameMan telemetry, Continue/load trace hooks, and `scripts/er-smoke-driver.sh` with default `MAX_NUDGES=0`, event-driven waits, and JPEG screenshots.
 - Current queued direct path calls `set_save_slot`, `request_save(1)`, and `save_request_profile(1)` after title/bootstrap evidence, then clears `requested_save_slot_load_index`. Runtime trace can prove native consumption/state transition (800) but not player availability.
 - Static disassembly of the MoveMapList dispatcher at `0x140afb880` shows: `b72 && b73 -> combined_load_67b940(-1,0,b75)`, `b72 only -> continue_load_67b750(-1,0,0)`, `b73 only -> current_slot_load_67b570(0,0,b75)`, and `+0xb78 != -1 -> requested-slot validation at 0x14067b200` followed by slot-select calls.
 - Tried b72-only (`set_save_slot + save_request_profile`) at runtime: left `b72=1,b73=0` but no scheduler/menu consumption within 150s; worse than baseline.

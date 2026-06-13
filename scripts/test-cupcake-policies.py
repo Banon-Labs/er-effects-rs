@@ -68,6 +68,50 @@ def main() -> int:
             "named-env.env",
         ),
         PolicyCase(
+            "deny-ast-inline-env",
+            "FOO=bar ./scripts/check.sh",
+            False,
+            "named-env.env",
+            {
+                "command_ast": {
+                    "parse_ok": True,
+                    "statements": [
+                        {
+                            "env_setting": True,
+                            "command_name": "./scripts/check.sh",
+                        }
+                    ],
+                }
+            },
+        ),
+        PolicyCase(
+            "allow-shell-variable-bookkeeping",
+            "./scripts/check-no-timeouts.py\nrc=$?\necho \"$rc\"",
+            True,
+        ),
+        PolicyCase(
+            "allow-ast-shell-variable-bookkeeping",
+            "rc=$?",
+            True,
+            None,
+            {
+                "command_ast": {
+                    "parse_ok": True,
+                    "statements": [
+                        {
+                            "env_setting": True,
+                            "command_name": None,
+                        }
+                    ],
+                }
+            },
+        ),
+        PolicyCase(
+            "allow-flattened-shell-variable-bookkeeping",
+            "set +e false rc=$? set -e echo \"$rc\"",
+            True,
+        ),
+        PolicyCase(
             "deny-semicolon-split",
             "echo one; echo two",
             False,

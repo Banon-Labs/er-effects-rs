@@ -36,11 +36,15 @@ inline_env_assignment if {
 	statements := object.get(ast, "statements", [])
 	some statement in statements
 	object.get(statement, "env_setting", false) == true
+	object.get(statement, "command_name", null) != null
 }
 
 inline_env_assignment if {
 	no_usable_ast
-	regex.match("(^|[;&|()][[:space:]]*)[A-Za-z_][A-Za-z0-9_]*=", command)
+	# Fallback mode is intentionally conservative: catch conventional uppercase
+	# environment assignments before a command without treating ordinary shell
+	# bookkeeping such as rc=$? as an exported environment override.
+	regex.match("(^|\\n|[;&|()][ \\t]*)[A-Z_][A-Z0-9_]*=[^ \\t\\n;&|()]+[ \\t]+[^ \\t\\n;&|()=]+", command)
 }
 
 inline_env_assignment if {
