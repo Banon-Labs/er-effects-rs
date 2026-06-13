@@ -1,3 +1,3 @@
-readiness_strategy=Runtime probes delegate to scripts/er-smoke-driver.sh, which waits on observable game/window/process/telemetry transitions and driver command state rather than elapsed wall-clock guesses.
-structured_failure=The probe fails through concrete process exit, missing prerequisites, policy rejection, smoke-driver failure, save-hash mismatch, or post-run teardown evidence instead of an arbitrary duration expiring.
-user_impact=Runtime is explicit opt-in only through AUTO_ALLOW_RUNTIME_PROBE=1 and .auto/run-runtime-once; default autoresearch iterations stay static/non-interactive and do not launch Elden Ring.
+readiness_strategy=Runtime probes are disabled fail-closed. The aborted 2026-06-13 probe showed that launcher/process following plus DLL terminal telemetry is insufficient when telemetry never starts.
+structured_failure=Required before re-enable: a deterministic no-telemetry bootstrap failure path, in addition to process exit, save-hash mismatch, teardown evidence, and DLL-authored game-task tick budgets.
+user_impact=Runtime is not launched by autoresearch or direct runtime_probe.sh, even with explicit opt-in, until the no-telemetry gap is fixed and the policy/checker/tests are updated together.

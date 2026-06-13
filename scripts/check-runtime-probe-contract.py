@@ -239,7 +239,7 @@ def scan_contract() -> list[Finding]:
                     0,
                     "runtime-policy-allows-probes",
                     "allow if { ... }",
-                    "Runtime policy must not expose an allow rule until the event-driven driver is redesigned and this guard is updated.",
+                    "Runtime policy must not expose an allow rule until the event-driven driver includes a deterministic no-telemetry bootstrap failure path and this guard is updated.",
                 )
             )
         if "runtime probes are disabled" not in text:
@@ -306,7 +306,7 @@ def main() -> int:
         if findings:
             print("Runtime probe contract violations found.", file=sys.stderr)
             print(
-                "Autoresearch measurement must stay non-disruptive and must not rely on tool timeout budgets. Runtime probes are disabled fail-closed until an event-driven driver is implemented.\n",
+                "Autoresearch measurement must stay non-disruptive and must not rely on tool timeout budgets. Runtime probes are disabled fail-closed until an event-driven driver includes a deterministic no-telemetry bootstrap failure path.\n",
                 file=sys.stderr,
             )
             for finding in findings:
