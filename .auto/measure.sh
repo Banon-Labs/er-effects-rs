@@ -1059,7 +1059,10 @@ hard_zero = bool(
 if hard_zero:
     score = 0
 elif metrics["autoload_success"] and metrics["player_available"] and metrics["selected_slot_loaded"]:
-    score = 1000 if metrics["simulated_button_presses_total"] == 0 else 950
+    if metrics["simulated_button_presses_total"] == 0:
+        score = 1000
+    else:
+        score = max(900, 950 - metrics["simulated_button_presses_total"])
 elif metrics["native_request_consumed"]:
     score = 800
 elif trace_confirms_state_transition and static_score >= 400:
