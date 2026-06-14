@@ -59,6 +59,9 @@ RUN_START_MS=0
 DRIVER_RC=0
 CLEANUP_ARMED=0
 TIMELINE_LOG="$ARTIFACT_DIR/runtime-timeline.jsonl"
+RUNTIME_CAPTURE_INPUT_OCR="${RUNTIME_CAPTURE_INPUT_OCR:-0}"
+INPUT_CAPTURE_PID=0
+INPUT_CAPTURE_STOP="$ARTIFACT_DIR/input-capture.stop"
 
 save_roots=(
   "$HOME/.local/share/Steam/steamapps/compatdata/1245620/pfx/drive_c/users/steamuser/AppData/Roaming/EldenRing"
@@ -381,6 +384,27 @@ if readiness_path.exists():
         readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
     except Exception:
         readiness = {}
+input_reason_known = 0
+input_reason_summary_path = artifact / "input-reason-summary.json"
+autoload_debug = artifact / "autoload-debug-default.log"
+if input_reason_summary_path.exists():
+    try:
+        summary = json.loads(input_reason_summary_path.read_text(encoding="utf-8", errors="replace"))
+        reasons_by_pulse = summary.get("reasons_by_pulse", {})
+        debug_text = autoload_debug.read_text(encoding="utf-8", errors="replace") if autoload_debug.exists() else ""
+        final_gate_known = "input_gate[post_map_continuation]" in debug_text
+        pulse_count = 0
+        for candidate in [final_telemetry, telemetry]:
+            if candidate.exists():
+                try:
+                    pulse_count = int(json.loads(candidate.read_text(encoding="utf-8", errors="replace")).get("safe_input_pulses_sent") or 0)
+                    break
+                except Exception:
+                    pass
+        if pulse_count > 0 and final_gate_known and all(reasons_by_pulse.get(str(pulse)) for pulse in range(1, pulse_count)):
+            input_reason_known = 1
+    except Exception:
+        input_reason_known = 0
 metrics = {
     "driver_rc": driver_rc,
     "runtime_probe_seconds": round(run_runtime_ms / 1000, 3),
@@ -391,6 +415,7 @@ metrics = {
     "save_safety_ok": save_safety_ok,
     "readiness_ready": 1 if readiness.get("ready") is True else 0,
     "readiness_reason": readiness.get("reason"),
+    "input_reason_known": input_reason_known,
 }
 (artifact / "runtime-metrics.json").write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 print(f"runtime_artifact_dir={artifact}")
@@ -411,6 +436,7 @@ cleanup_runtime() {
   restore_saves_from_backup || true
   snapshot_saves "$ARTIFACT_DIR/save-hashes-after.txt"
   copy_runtime_logs || true
+  stop_input_capture_ocr || true
   write_runtime_metrics || true
   write_state_snapshot "$ARTIFACT_DIR/final-state-after-cleanup.json" || true
   log_timeline "cleanup_finish"
@@ -454,6 +480,27 @@ PY
     fi
     rm -f "$TELEMETRY_PATH" "$COMMAND_PATH" "$AUTOLOAD_DEBUG_PATH" "$TRACE_CONTINUE_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH"
   } > "$ARTIFACT_DIR/setup.out" 2>&1
+}
+
+start_input_capture_ocr() {
+  [[ "$RUNTIME_CAPTURE_INPUT_OCR" == "1" ]] || return 0
+  rm -f "$INPUT_CAPTURE_STOP"
+  log_timeline "input_capture_ocr_start" "log=$AUTOLOAD_DEBUG_PATH"
+  python3 .auto/input_capture_ocr.py \
+    --artifact-dir "$ARTIFACT_DIR" \
+    --log-path "$AUTOLOAD_DEBUG_PATH" \
+    --stop-file "$INPUT_CAPTURE_STOP" \
+    > "$ARTIFACT_DIR/input-capture-ocr.out" 2>&1 &
+  INPUT_CAPTURE_PID=$!
+}
+
+stop_input_capture_ocr() {
+  (( INPUT_CAPTURE_PID > 0 )) || return 0
+  touch "$INPUT_CAPTURE_STOP"
+  kill "$INPUT_CAPTURE_PID" 2>/dev/null || true
+  wait "$INPUT_CAPTURE_PID" 2>/dev/null || true
+  INPUT_CAPTURE_PID=0
+  log_timeline "input_capture_ocr_stop"
 }
 
 launch_runtime() {
@@ -529,6 +576,7 @@ else
   printf '[runtime_probe] setup phase: attach-existing leaves the running game payload untouched\n' > "$ARTIFACT_DIR/setup.out"
 fi
 
+start_input_capture_ocr
 RUN_START_MS=$(now_ms)
 CLEANUP_ARMED=1
 launch_runtime
