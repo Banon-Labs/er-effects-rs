@@ -27,6 +27,7 @@ use hudhook::{
             Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
             System::{
                 LibraryLoader::{GetModuleHandleA, GetProcAddress},
+                Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
                 SystemServices::DLL_PROCESS_ATTACH,
                 Threading::GetCurrentProcessId,
             },
@@ -101,6 +102,16 @@ const DIRECT_INPUT_CREATE_DEVICE_VTBL_INDEX: usize = 3;
 const DIRECT_INPUT_DEVICE_GET_STATE_VTBL_INDEX: usize = 9;
 const HRESULT_SUCCESS_FLOOR: i32 = 0;
 const SAFE_INPUT_DIRECT_INPUT_WAIT_TICKS: u64 = 300;
+const TITLE_OWNER_VTABLE_RVA: usize = 0x02b63ba0;
+const TITLE_OWNER_STATE_OFFSET: usize = 0x4c;
+const TITLE_OWNER_SCAN_ALIGNMENT: usize = 8;
+const TITLE_OWNER_SCAN_MAX_ADDRESS: usize = 0x0000_8000_0000_0000;
+const TITLE_OWNER_TRACE_LIMIT: usize = 64;
+const TITLE_MENU_JOB_WAIT_RVA: usize = 0x00b0d400;
+const TITLE_NATIVE_JOB_MIN_TICK: u64 = 170;
+const MEM_COMMIT_NUMERIC: u32 = 0x1000;
+const PAGE_NOACCESS_NUMERIC: u32 = 0x01;
+const PAGE_GUARD_NUMERIC: u32 = 0x100;
 const TRACE_MENU_CONTINUE_WRAPPER_RVA: u32 = 0x0082bac0;
 const TRACE_MENU_NEW_OR_LOAD_WRAPPER_RVA: u32 = 0x0082ba80;
 const TRACE_MENU_OTHER_LOAD_WRAPPER_RVA: u32 = 0x0082bb00;
@@ -136,6 +147,9 @@ static DIRECT_INPUT8_CREATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 static DIRECT_INPUT_CREATE_DEVICE_ORIG: AtomicUsize = AtomicUsize::new(0);
 static DIRECT_INPUT_GET_DEVICE_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 static TITLE_BOOTSTRAP_SEEN: AtomicUsize = AtomicUsize::new(0);
+static TITLE_OWNER_PTR: AtomicUsize = AtomicUsize::new(0);
+static TITLE_OWNER_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
+static TITLE_NATIVE_JOB_CALLED: AtomicUsize = AtomicUsize::new(0);
 static SAFE_INPUT_CONFIRM_PULSE_SEQ: AtomicUsize = AtomicUsize::new(0);
 static MENU_TRACE_EVENT_SEQ: AtomicUsize = AtomicUsize::new(0);
 static MENU_TRACE_LAST_SEQ: AtomicUsize = AtomicUsize::new(0);
@@ -824,6 +838,12 @@ fn process_autoload_request(state: &mut EffectsState) {
         return;
     };
 
+    if native_title_job_enabled()
+        && !unsafe { call_native_title_job_once(game_module_base, state.game_task_ticks) }
+    {
+        return;
+    }
+
     let context = SaveLoadContext {
         game_module_base,
         title_bootstrap_seen: TITLE_BOOTSTRAP_SEEN.load(Ordering::SeqCst) != TITLE_BOOTSTRAP_UNSEEN,
@@ -1373,6 +1393,16 @@ fn trace_menu_task_update_enabled() -> bool {
         .exists()
 }
 
+fn native_title_job_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_AUTOLOAD_NATIVE_TITLE_JOB").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-native-title-job.txt")
+        .exists()
+}
+
 fn trace_continue_default_path() -> PathBuf {
     game_directory_path()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -1405,6 +1435,109 @@ fn append_continue_trace(args: std::fmt::Arguments<'_>) {
     {
         let _ = writeln!(file, "{args}");
     }
+}
+
+unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*mut u8> {
+    let target_vtable = module_base.checked_add(TITLE_OWNER_VTABLE_RVA)?;
+    let mut address = 0usize;
+    while address < TITLE_OWNER_SCAN_MAX_ADDRESS {
+        let mut info = MEMORY_BASIC_INFORMATION::default();
+        let queried = unsafe {
+            VirtualQuery(
+                Some(address as *const c_void),
+                &mut info,
+                std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+            )
+        };
+        if queried == 0 {
+            break;
+        }
+
+        let base = info.BaseAddress as usize;
+        let size = info.RegionSize;
+        let next = base.saturating_add(size);
+        let state = info.State.0;
+        let protect = info.Protect.0;
+        if state == MEM_COMMIT_NUMERIC
+            && protect & (PAGE_NOACCESS_NUMERIC | PAGE_GUARD_NUMERIC) == 0
+            && size >= TITLE_OWNER_STATE_OFFSET + std::mem::size_of::<i32>()
+        {
+            let end = next.saturating_sub(TITLE_OWNER_STATE_OFFSET + std::mem::size_of::<i32>());
+            let mut cursor = base;
+            while cursor <= end {
+                let vtable = unsafe { *(cursor as *const usize) };
+                if vtable == target_vtable {
+                    let state_value =
+                        unsafe { *((cursor + TITLE_OWNER_STATE_OFFSET) as *const i32) };
+                    if (0..=11).contains(&state_value) {
+                        return Some(cursor as *mut u8);
+                    }
+                }
+                cursor = cursor.saturating_add(TITLE_OWNER_SCAN_ALIGNMENT);
+            }
+        }
+
+        if next <= address {
+            break;
+        }
+        address = next;
+    }
+    None
+}
+
+unsafe fn title_owner(module_base: usize) -> Option<*mut u8> {
+    let cached = TITLE_OWNER_PTR.load(Ordering::SeqCst) as *mut u8;
+    if !cached.is_null() {
+        return Some(cached);
+    }
+    let found = unsafe { find_title_owner_by_vtable(module_base) }?;
+    TITLE_OWNER_PTR.store(found as usize, Ordering::SeqCst);
+    let state_value = unsafe { *(found.add(TITLE_OWNER_STATE_OFFSET) as *const i32) };
+    append_autoload_debug(format_args!(
+        "native_title_job: captured title owner={found:p} state={state_value}"
+    ));
+    Some(found)
+}
+
+unsafe fn call_native_title_job_once(module_base: usize, tick: u64) -> bool {
+    if TITLE_NATIVE_JOB_CALLED.load(Ordering::SeqCst) != 0 {
+        return true;
+    }
+    if tick < TITLE_NATIVE_JOB_MIN_TICK {
+        let count = TITLE_OWNER_TRACE_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        if count <= TITLE_OWNER_TRACE_LIMIT {
+            append_autoload_debug(format_args!(
+                "native_title_job: waiting for min tick tick={tick} target={TITLE_NATIVE_JOB_MIN_TICK}"
+            ));
+        }
+        return false;
+    }
+    let Some(owner) = (unsafe { title_owner(module_base) }) else {
+        let count = TITLE_OWNER_TRACE_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        if count <= TITLE_OWNER_TRACE_LIMIT {
+            append_autoload_debug(format_args!(
+                "native_title_job: waiting for title owner at tick={tick}"
+            ));
+        }
+        return false;
+    };
+
+    let state_before = unsafe { *(owner.add(TITLE_OWNER_STATE_OFFSET) as *const i32) };
+    let mut task_data = [0u8; 16];
+    let frame_delta = 1.0f32 / 60.0f32;
+    task_data[8..12].copy_from_slice(&frame_delta.to_le_bytes());
+    let title_menu_job: unsafe extern "system" fn(*mut u8, *mut c_void) =
+        unsafe { std::mem::transmute(module_base + TITLE_MENU_JOB_WAIT_RVA) };
+    append_autoload_debug(format_args!(
+        "native_title_job: ENTER owner={owner:p} state_before={state_before} tick={tick}"
+    ));
+    unsafe { title_menu_job(owner, task_data.as_mut_ptr().cast()) };
+    let state_after = unsafe { *(owner.add(TITLE_OWNER_STATE_OFFSET) as *const i32) };
+    TITLE_NATIVE_JOB_CALLED.store(1, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "native_title_job: LEAVE owner={owner:p} state_after={state_after} tick={tick}"
+    ));
+    true
 }
 
 #[derive(Clone, Copy)]

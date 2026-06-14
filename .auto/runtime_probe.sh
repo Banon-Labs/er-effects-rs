@@ -41,6 +41,10 @@ SAFE_INPUT_PATH="${SAFE_INPUT_PATH:-$GAME_DIR/er-effects-safe-input.txt}"
 AUTOLOAD_DEBUG_PATH="${AUTOLOAD_DEBUG_PATH:-$ARTIFACT_DIR/autoload-debug.log}"
 TRACE_CONTINUE_PATH="${TRACE_CONTINUE_PATH:-$ARTIFACT_DIR/continue-trace.log}"
 TRACE_MENU_TASK_UPDATE_PATH="${TRACE_MENU_TASK_UPDATE_PATH:-$GAME_DIR/er-effects-trace-menu-task-update.txt}"
+TRACE_TITLE_STAGE_PATH="${TRACE_TITLE_STAGE_PATH:-$GAME_DIR/er-effects-trace-title-stage.txt}"
+PUMP_MOVE_MAP_PATH="${PUMP_MOVE_MAP_PATH:-$GAME_DIR/er-effects-pump-move-map.txt}"
+FORCE_TITLE_STATE_PATH="${FORCE_TITLE_STATE_PATH:-$GAME_DIR/er-effects-force-title-state.txt}"
+NATIVE_TITLE_JOB_PATH="${NATIVE_TITLE_JOB_PATH:-$GAME_DIR/er-effects-native-title-job.txt}"
 PROTON="${PROTON:-$HOME/.local/share/Steam/steamapps/common/Proton - Experimental/proton}"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
 STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}"
@@ -434,6 +438,18 @@ cleanup_runtime() {
   if [[ "${ER_EFFECTS_TRACE_MENU_TASK_UPDATE:-0}" == "1" ]]; then
     rm -f "$TRACE_MENU_TASK_UPDATE_PATH"
   fi
+  if [[ "${ER_EFFECTS_TRACE_TITLE_STAGE:-0}" == "1" ]]; then
+    rm -f "$TRACE_TITLE_STAGE_PATH"
+  fi
+  if [[ "${ER_EFFECTS_AUTOLOAD_PUMP_MOVE_MAP:-0}" == "1" ]]; then
+    rm -f "$PUMP_MOVE_MAP_PATH"
+  fi
+  if [[ -n "${ER_EFFECTS_AUTOLOAD_FORCE_TITLE_STATE:-}" ]]; then
+    rm -f "$FORCE_TITLE_STATE_PATH"
+  fi
+  if [[ "${ER_EFFECTS_AUTOLOAD_NATIVE_TITLE_JOB:-0}" == "1" ]]; then
+    rm -f "$NATIVE_TITLE_JOB_PATH"
+  fi
   copy_runtime_logs || true
   write_state_snapshot "$ARTIFACT_DIR/final-state-before-cleanup.json" || true
   teardown_runtime_processes || true
@@ -490,6 +506,30 @@ PY
       cp -f "$TRACE_MENU_TASK_UPDATE_PATH" "$ARTIFACT_DIR/trace-menu-task-update-request.txt"
     else
       rm -f "$TRACE_MENU_TASK_UPDATE_PATH"
+    fi
+    if [[ "${ER_EFFECTS_TRACE_TITLE_STAGE:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$TRACE_TITLE_STAGE_PATH"
+      cp -f "$TRACE_TITLE_STAGE_PATH" "$ARTIFACT_DIR/trace-title-stage-request.txt"
+    else
+      rm -f "$TRACE_TITLE_STAGE_PATH"
+    fi
+    if [[ "${ER_EFFECTS_AUTOLOAD_PUMP_MOVE_MAP:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$PUMP_MOVE_MAP_PATH"
+      cp -f "$PUMP_MOVE_MAP_PATH" "$ARTIFACT_DIR/pump-move-map-request.txt"
+    else
+      rm -f "$PUMP_MOVE_MAP_PATH"
+    fi
+    if [[ -n "${ER_EFFECTS_AUTOLOAD_FORCE_TITLE_STATE:-}" ]]; then
+      printf '%s\n' "$ER_EFFECTS_AUTOLOAD_FORCE_TITLE_STATE" > "$FORCE_TITLE_STATE_PATH"
+      cp -f "$FORCE_TITLE_STATE_PATH" "$ARTIFACT_DIR/force-title-state-request.txt"
+    else
+      rm -f "$FORCE_TITLE_STATE_PATH"
+    fi
+    if [[ "${ER_EFFECTS_AUTOLOAD_NATIVE_TITLE_JOB:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$NATIVE_TITLE_JOB_PATH"
+      cp -f "$NATIVE_TITLE_JOB_PATH" "$ARTIFACT_DIR/native-title-job-request.txt"
+    else
+      rm -f "$NATIVE_TITLE_JOB_PATH"
     fi
     rm -f "$TELEMETRY_PATH" "$COMMAND_PATH" "$AUTOLOAD_DEBUG_PATH" "$TRACE_CONTINUE_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH"
   } > "$ARTIFACT_DIR/setup.out" 2>&1

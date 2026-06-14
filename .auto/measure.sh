@@ -1011,6 +1011,8 @@ if artifact_dir and artifact_dir.exists():
         (r"queuing traced continue flags for slot", 20),
         (r"waiting for save_state 0 before queuing continue flags", 20),
         (r"ENTER menu_other_load_wrapper|LEAVE menu_other_load_wrapper", 20),
+        (r"native_title_job: LEAVE", 20),
+        (r"menu_task_enqueue.*callers=.*#2=0xb0d0dd.*#3=0xb0be57", 20),
         (r"LEAVE map_load_67bc10 ret=1", 20),
         (r"LEAVE menu_other_load_wrapper ret=.*state=1", 20),
         (r"ENTER set_save_slot slot=.*#2=0x82c37e", 20),
@@ -1056,11 +1058,16 @@ if artifact_dir and artifact_dir.exists():
     queued_load_request = bool(re.search(r"queuing (?:traced continue flags|b72-only continue profile request)|direct continue sequence requested", joined_logs))
     load_hook_seen = bool(re.search(r"ENTER (current_slot_load_67b570|continue_load_67b750|combined_load_67b940|map_load_67bc10|save_load_state_init_67b030)", joined_logs))
     trace_confirms_state_transition = bool(load_hook_seen and re.search(r"state=(?!0\b)\d+", joined_logs))
+    native_transition_identified = bool(
+        re.search(r"native_title_job: LEAVE", joined_logs)
+        and re.search(r"menu_task_enqueue.*callers=.*#2=0xb0d0dd.*#3=0xb0be57", joined_logs)
+    )
 else:
     joined_logs = ""
     queued_load_request = False
     load_hook_seen = False
     trace_confirms_state_transition = False
+    native_transition_identified = False
 
 if telemetry:
     metrics["player_available"] = 1 if telemetry.get("player_available") is True else 0
@@ -1138,7 +1145,7 @@ elif metrics["autoload_success"] and metrics["player_available"] and metrics["se
         score = 500
 elif metrics["native_request_consumed"]:
     score = 800 if int(metrics["simulated_button_presses_total"]) == 0 else 500
-elif trace_confirms_state_transition and static_score >= 400:
+elif (trace_confirms_state_transition or native_transition_identified) and static_score >= 400:
     score = 600 if int(metrics["simulated_button_presses_total"]) == 0 else 500
 elif static_score >= 400:
     score = 400
