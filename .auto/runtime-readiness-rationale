@@ -4,4 +4,4 @@ host_input=none
 teardown=process_tree_and_save_restore
 readiness_strategy=Runtime probes launch Elden Ring, then scripts/er-readiness-watch.py waits on process/window/DLL bootstrap markers and GameMan telemetry JSON. The watcher exits on GameMan-ready telemetry or a structured no-telemetry/no-GameMan failure instead of relying on elapsed wall-clock guesses.
 structured_failure=The watcher fails on process exit, window without DLL bootstrap marker, window without game-task readiness, window without valid telemetry, telemetry that stays without GameMan readiness, save-hash mismatch, teardown evidence, or bounded poll-budget exhaustion.
-user_impact=Runtime remains explicit opt-in only through AUTO_ALLOW_RUNTIME_PROBE=1. Autoresearch measurement stays static/non-interactive and does not launch Elden Ring.
+user_impact=Runtime remains explicit opt-in only through .auto/run-runtime-once, which measure.sh converts into AUTO_ALLOW_RUNTIME_PROBE=1 for .auto/runtime_probe.sh after deleting the trigger. Default autoresearch measurement stays static/non-interactive and does not launch Elden Ring.

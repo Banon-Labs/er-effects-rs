@@ -36,11 +36,22 @@ BOOTSTRAP_PATH="${BOOTSTRAP_PATH:-$ARTIFACT_DIR/bootstrap.jsonl}"
 BOOTSTRAP_STATE_PATH="${BOOTSTRAP_STATE_PATH:-$ARTIFACT_DIR/bootstrap-state.json}"
 COMMAND_PATH="${COMMAND_PATH:-$GAME_DIR/er-effects-command.txt}"
 AUTOLOAD_PATH="${AUTOLOAD_PATH:-$GAME_DIR/er-effects-autoload.txt}"
+SAFE_INPUT_PATH="${SAFE_INPUT_PATH:-$GAME_DIR/er-effects-safe-input.txt}"
 AUTOLOAD_DEBUG_PATH="${AUTOLOAD_DEBUG_PATH:-$ARTIFACT_DIR/autoload-debug.log}"
 TRACE_CONTINUE_PATH="${TRACE_CONTINUE_PATH:-$ARTIFACT_DIR/continue-trace.log}"
 PROTON="${PROTON:-$HOME/.local/share/Steam/steamapps/common/Proton - Experimental/proton}"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
 STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}"
+if [[ "$LAUNCH_MODE" == "steam" ]]; then
+  # Steam launch options do not reliably inherit per-run environment from this
+  # wrapper. Use the DLL's game-directory defaults for live IPC and copy them
+  # into the artifact directory during cleanup.
+  TELEMETRY_PATH="$GAME_DIR/er-effects-telemetry.json"
+  BOOTSTRAP_PATH="$GAME_DIR/er-effects-bootstrap.jsonl"
+  BOOTSTRAP_STATE_PATH="$GAME_DIR/er-effects-bootstrap-state.json"
+  AUTOLOAD_DEBUG_PATH="$GAME_DIR/er-effects-autoload-debug.log"
+  TRACE_CONTINUE_PATH="$GAME_DIR/er-effects-continue-trace.log"
+fi
 LAUNCH_PID_FILE="$ARTIFACT_DIR/launcher.pid"
 
 START_MS=$(now_ms)
@@ -168,6 +179,7 @@ if path.exists():
 payload = {
     "explicit_opt_in": os.environ.get("AUTO_ALLOW_RUNTIME_PROBE") == "1",
     "launch_mode": launch_mode,
+    "runtime_entrypoint": "measure_runtime_trigger",
     "readiness_watcher": rationale.get("readiness_watcher", ""),
     "no_telemetry_bootstrap_failure": rationale.get("no_telemetry_bootstrap_failure", ""),
     "host_input": rationale.get("host_input", ""),
@@ -429,6 +441,14 @@ PY
       printf 'require_title_bootstrap=%s\n' "$ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP"
     } > "$AUTOLOAD_PATH"
     rm -f "$GAME_DIR/er-effects-safe-input.txt"
+    if [[ "${ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT:-0}" != "0" ]]; then
+      {
+        printf 'backend=%s\n' "${ER_EFFECTS_SAFE_INPUT_BACKEND:-post_message}"
+        printf 'confirm_count=%s\n' "${ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT:-0}"
+        printf 'interval_ticks=%s\n' "${ER_EFFECTS_SAFE_INPUT_INTERVAL_TICKS:-30}"
+      } > "$SAFE_INPUT_PATH"
+      cp -f "$SAFE_INPUT_PATH" "$ARTIFACT_DIR/safe-input-request.txt"
+    fi
     rm -f "$TELEMETRY_PATH" "$COMMAND_PATH" "$AUTOLOAD_DEBUG_PATH" "$TRACE_CONTINUE_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH"
   } > "$ARTIFACT_DIR/setup.out" 2>&1
 }
@@ -437,11 +457,15 @@ launch_runtime() {
   case "$LAUNCH_MODE" in
     direct)
       log_timeline "launch" "eldenring.exe via Proton"
-      (cd "$GAME_DIR" && STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_COMPAT_CLIENT_INSTALL_PATH" STEAM_COMPAT_DATA_PATH="$STEAM_COMPAT_DATA_PATH" ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" ER_EFFECTS_COMMAND_PATH="$COMMAND_PATH" ER_EFFECTS_AUTOLOAD_PATH="$AUTOLOAD_PATH" ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" ER_EFFECTS_TRACE_CONTINUE_PATH="$TRACE_CONTINUE_PATH" ER_EFFECTS_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP="$ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP" "$PROTON" run "$GAME_DIR/eldenring.exe" > "$ARTIFACT_DIR/proton-run.out" 2>&1 & echo $! > "$LAUNCH_PID_FILE")
+      (cd "$GAME_DIR" && STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_COMPAT_CLIENT_INSTALL_PATH" STEAM_COMPAT_DATA_PATH="$STEAM_COMPAT_DATA_PATH" ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" ER_EFFECTS_COMMAND_PATH="$COMMAND_PATH" ER_EFFECTS_AUTOLOAD_PATH="$AUTOLOAD_PATH" ER_EFFECTS_SAFE_INPUT_PATH="$SAFE_INPUT_PATH" ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" ER_EFFECTS_TRACE_CONTINUE_PATH="$TRACE_CONTINUE_PATH" ER_EFFECTS_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP="$ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP" "$PROTON" run "$GAME_DIR/eldenring.exe" > "$ARTIFACT_DIR/proton-run.out" 2>&1 & echo $! > "$LAUNCH_PID_FILE")
       ;;
     direct-protected)
       log_timeline "launch" "start_protected_game.exe via Proton"
-      (cd "$GAME_DIR" && STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_COMPAT_CLIENT_INSTALL_PATH" STEAM_COMPAT_DATA_PATH="$STEAM_COMPAT_DATA_PATH" ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" ER_EFFECTS_COMMAND_PATH="$COMMAND_PATH" ER_EFFECTS_AUTOLOAD_PATH="$AUTOLOAD_PATH" ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" ER_EFFECTS_TRACE_CONTINUE_PATH="$TRACE_CONTINUE_PATH" ER_EFFECTS_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP="$ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP" "$PROTON" run "$GAME_DIR/start_protected_game.exe" > "$ARTIFACT_DIR/proton-protected-run.out" 2>&1 & echo $! > "$LAUNCH_PID_FILE")
+      (cd "$GAME_DIR" && STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_COMPAT_CLIENT_INSTALL_PATH" STEAM_COMPAT_DATA_PATH="$STEAM_COMPAT_DATA_PATH" ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" ER_EFFECTS_COMMAND_PATH="$COMMAND_PATH" ER_EFFECTS_AUTOLOAD_PATH="$AUTOLOAD_PATH" ER_EFFECTS_SAFE_INPUT_PATH="$SAFE_INPUT_PATH" ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" ER_EFFECTS_TRACE_CONTINUE_PATH="$TRACE_CONTINUE_PATH" ER_EFFECTS_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP="$ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP" "$PROTON" run "$GAME_DIR/start_protected_game.exe" > "$ARTIFACT_DIR/proton-protected-run.out" 2>&1 & echo $! > "$LAUNCH_PID_FILE")
+      ;;
+    steam)
+      log_timeline "launch" "steam://rungameid/1245620 via Steam"
+      (cd "$GAME_DIR" && ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" ER_EFFECTS_COMMAND_PATH="$COMMAND_PATH" ER_EFFECTS_AUTOLOAD_PATH="$AUTOLOAD_PATH" ER_EFFECTS_SAFE_INPUT_PATH="$SAFE_INPUT_PATH" ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" ER_EFFECTS_TRACE_CONTINUE_PATH="$TRACE_CONTINUE_PATH" ER_EFFECTS_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP="$ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP" steam steam://rungameid/1245620 > "$ARTIFACT_DIR/steam-launch.out" 2>&1 & echo $! > "$LAUNCH_PID_FILE")
       ;;
     attach-existing)
       runtime_process_rows | awk 'NR == 1 {print $1}' > "$LAUNCH_PID_FILE"
@@ -454,17 +478,22 @@ launch_runtime() {
 }
 
 watch_readiness() {
-  python3 scripts/er-readiness-watch.py \
-    --artifact-dir "$ARTIFACT_DIR" \
-    --pid-file "$LAUNCH_PID_FILE" \
-    --telemetry "$TELEMETRY_PATH" \
-    --bootstrap "$BOOTSTRAP_PATH" \
-    --bootstrap-state "$BOOTSTRAP_STATE_PATH" \
-    --target "$RUNTIME_WATCH_TARGET" \
-    --autoload-attempt-budget "$RUNTIME_AUTOLOAD_ATTEMPT_BUDGET" \
-    --post-request-tick-budget "$RUNTIME_POST_REQUEST_TICK_BUDGET" \
-    --readiness-poll-budget "$RUNTIME_READINESS_POLL_BUDGET" \
-    > "$ARTIFACT_DIR/driver.out" 2>&1
+  local -a readiness_args=(
+    --artifact-dir "$ARTIFACT_DIR"
+    --pid-file "$LAUNCH_PID_FILE"
+    --telemetry "$TELEMETRY_PATH"
+    --bootstrap "$BOOTSTRAP_PATH"
+    --bootstrap-state "$BOOTSTRAP_STATE_PATH"
+    --target "$RUNTIME_WATCH_TARGET"
+    --autoload-attempt-budget "$RUNTIME_AUTOLOAD_ATTEMPT_BUDGET"
+    --post-request-tick-budget "$RUNTIME_POST_REQUEST_TICK_BUDGET"
+    --spawn-poll-budget "$RUNTIME_SPAWN_POLL_BUDGET"
+    --readiness-poll-budget "$RUNTIME_READINESS_POLL_BUDGET"
+  )
+  if [[ -n "$RUNTIME_ALLOW_ASYNC_LAUNCHER_EXIT" ]]; then
+    readiness_args+=(--allow-async-launcher-exit)
+  fi
+  python3 scripts/er-readiness-watch.py "${readiness_args[@]}" > "$ARTIFACT_DIR/driver.out" 2>&1
 }
 
 trap cleanup_runtime EXIT
@@ -483,7 +512,13 @@ RUNTIME_AUTOLOAD_ATTEMPT_BUDGET="${RUNTIME_AUTOLOAD_ATTEMPT_BUDGET:-300}"
 RUNTIME_POST_REQUEST_TICK_BUDGET="${RUNTIME_POST_REQUEST_TICK_BUDGET:-300}"
 RUNTIME_READINESS_POLLS_PER_TASK_TICK="${RUNTIME_READINESS_POLLS_PER_TASK_TICK:-16}"
 RUNTIME_READINESS_BASE_POLL_BUDGET="${RUNTIME_READINESS_BASE_POLL_BUDGET:-8192}"
+RUNTIME_SPAWN_POLL_BUDGET="${RUNTIME_SPAWN_POLL_BUDGET:-32768}"
 RUNTIME_READINESS_POLL_BUDGET="${RUNTIME_READINESS_POLL_BUDGET:-$((RUNTIME_POST_REQUEST_TICK_BUDGET * RUNTIME_READINESS_POLLS_PER_TASK_TICK + RUNTIME_READINESS_BASE_POLL_BUDGET))}"
+if [[ "$LAUNCH_MODE" == "steam" ]]; then
+  RUNTIME_ALLOW_ASYNC_LAUNCHER_EXIT=1
+else
+  RUNTIME_ALLOW_ASYNC_LAUNCHER_EXIT="${RUNTIME_ALLOW_ASYNC_LAUNCHER_EXIT:-}"
+fi
 
 if [[ "$LAUNCH_MODE" != "attach-existing" ]]; then
   setup_runtime_payload
@@ -501,5 +536,5 @@ else
 fi
 
 cleanup_runtime
-AUTO_MEASURE_INNER=1 ./.auto/measure.sh
+AUTO_MEASURE_INNER=1 AUTO_INCLUDE_RUNTIME_EVIDENCE=1 ./.auto/measure.sh
 exit "$DRIVER_RC"

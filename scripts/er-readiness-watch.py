@@ -155,20 +155,26 @@ def pid_file_value(path: Path) -> int | None:
 
 
 def select_runtime_pid(
-    pattern: re.Pattern[str], pid_file: Path, poll_budget: int
+    pattern: re.Pattern[str],
+    pid_file: Path,
+    poll_budget: int,
+    allow_async_launcher_exit: bool = False,
 ) -> tuple[int | None, str, int]:
     launcher_pid = pid_file_value(pid_file)
+    launcher_exited = False
     for poll in range(poll_budget):
         rows = runtime_process_rows(pattern)
         for row in rows:
             if RUNTIME_EXE_NAME in row.args.lower():
                 return row.pid, READY_REASON, poll
-        if launcher_pid is not None and not pid_running(launcher_pid):
+        if launcher_pid is not None and not launcher_exited and not pid_running(launcher_pid):
+            launcher_exited = True
             rows = runtime_process_rows(pattern)
             for row in rows:
                 if RUNTIME_EXE_NAME in row.args.lower():
                     return row.pid, READY_REASON, poll
-            return None, PROCESS_EXITED, poll
+            if not allow_async_launcher_exit:
+                return None, PROCESS_EXITED, poll
         os.sched_yield()
     return None, SPAWN_BUDGET_EXHAUSTED, poll_budget
 
@@ -292,7 +298,9 @@ def classify_snapshot(
     if not windows:
         return None
     if bootstrap is None:
-        return ReadinessResult(False, WINDOW_WITHOUT_BOOTSTRAP, pid, bootstrap, telemetry, windows, polls)
+        if window_stale_polls >= window_stale_poll_budget:
+            return ReadinessResult(False, WINDOW_WITHOUT_BOOTSTRAP, pid, bootstrap, telemetry, windows, polls)
+        return None
     stage = str(bootstrap.get("stage") or "")
     if telemetry is None and stage in TELEMETRY_READY_STAGES and window_stale_polls >= window_stale_poll_budget:
         return ReadinessResult(False, WINDOW_WITHOUT_TELEMETRY, pid, bootstrap, telemetry, windows, polls)
@@ -303,7 +311,12 @@ def classify_snapshot(
 
 def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
     pattern = re.compile(args.process_pattern, re.I)
-    pid, reason, spawn_polls = select_runtime_pid(pattern, args.pid_file, args.spawn_poll_budget)
+    pid, reason, spawn_polls = select_runtime_pid(
+        pattern,
+        args.pid_file,
+        args.spawn_poll_budget,
+        allow_async_launcher_exit=args.allow_async_launcher_exit,
+    )
     if pid is None:
         return ReadinessResult(False, reason, None, None, None, [], spawn_polls)
 
@@ -367,6 +380,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--autoload-attempt-budget", type=int, default=DEFAULT_AUTOLOAD_ATTEMPT_BUDGET)
     parser.add_argument("--post-request-tick-budget", type=int, default=DEFAULT_POST_REQUEST_TICK_BUDGET)
+    parser.add_argument(
+        "--allow-async-launcher-exit",
+        action="store_true",
+        help="Keep observing for a late Steam/Proton game process after the initial launcher command exits.",
+    )
     parser.add_argument(
         "--window-stale-poll-budget",
         type=int,

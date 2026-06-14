@@ -64,13 +64,25 @@ def main() -> int:
     assert not exited.ready
     assert exited.reason == watcher.PROCESS_EXITED
 
-    no_bootstrap = watcher.classify_snapshot(
+    no_bootstrap_waiting = watcher.classify_snapshot(
         pid=TEST_PID,
         process_running=True,
         telemetry=None,
         bootstrap=None,
         windows=[TEST_WINDOW],
         window_stale_polls=1,
+        window_stale_poll_budget=TEST_BUDGET,
+        polls=TEST_POLLS,
+    )
+    assert no_bootstrap_waiting is None
+
+    no_bootstrap = watcher.classify_snapshot(
+        pid=TEST_PID,
+        process_running=True,
+        telemetry=None,
+        bootstrap=None,
+        windows=[TEST_WINDOW],
+        window_stale_polls=TEST_BUDGET,
         window_stale_poll_budget=TEST_BUDGET,
         polls=TEST_POLLS,
     )
