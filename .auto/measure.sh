@@ -137,6 +137,16 @@ metrics = {
     "save_safety_ok": 1,
     "er_process_teardown_ok": 1 if er_process_count == 0 else 0,
     "host_pointer_input_used": 0,
+    "simulated_button_presses_total": 0,
+    "simulated_confirm_presses": 0,
+    "simulated_cancel_presses": 0,
+    "simulated_start_presses": 0,
+    "simulated_dpad_up_presses": 0,
+    "simulated_dpad_down_presses": 0,
+    "simulated_dpad_left_presses": 0,
+    "simulated_dpad_right_presses": 0,
+    "simulated_left_bumper_presses": 0,
+    "simulated_right_bumper_presses": 0,
     "trace_invasiveness_score": 0,
     "static_evidence_score": 0,
     "runtime_probe_seconds": 0,
@@ -1018,6 +1028,11 @@ if telemetry:
     game_slot = telemetry.get("game_save_slot")
     if isinstance(slot, (int, float)) and isinstance(game_slot, (int, float)) and int(slot) == int(game_slot):
         metrics["selected_slot_loaded"] = 1 if metrics["player_available"] else 0
+    safe_input_pulses = telemetry.get("safe_input_pulses_sent")
+    if isinstance(safe_input_pulses, (int, float)):
+        simulated_confirms = max(0, int(safe_input_pulses))
+        metrics["simulated_confirm_presses"] = simulated_confirms
+        metrics["simulated_button_presses_total"] = simulated_confirms
     if metrics["player_available"] and metrics["selected_slot_loaded"]:
         metrics["autoload_success"] = 1
     status = str(telemetry.get("autoload_last_status") or "")
@@ -1044,7 +1059,7 @@ hard_zero = bool(
 if hard_zero:
     score = 0
 elif metrics["autoload_success"] and metrics["player_available"] and metrics["selected_slot_loaded"]:
-    score = 1000
+    score = 1000 if metrics["simulated_button_presses_total"] == 0 else 950
 elif metrics["native_request_consumed"]:
     score = 800
 elif trace_confirms_state_transition and static_score >= 400:
@@ -1073,6 +1088,16 @@ for key in [
     "save_safety_ok",
     "er_process_teardown_ok",
     "host_pointer_input_used",
+    "simulated_button_presses_total",
+    "simulated_confirm_presses",
+    "simulated_cancel_presses",
+    "simulated_start_presses",
+    "simulated_dpad_up_presses",
+    "simulated_dpad_down_presses",
+    "simulated_dpad_left_presses",
+    "simulated_dpad_right_presses",
+    "simulated_left_bumper_presses",
+    "simulated_right_bumper_presses",
     "trace_invasiveness_score",
     "static_evidence_score",
     "runtime_probe_seconds",

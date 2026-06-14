@@ -1,7 +1,7 @@
 # Autoresearch Ideas
 
 - Add a tiny Ghidra/export script that emits machine-readable refs around GameMan `+0xb72/+0xb73/+0xb78/+0xbc4` and the `0x140af*` MoveMapList/title-menu functions so `measure.sh` can score exact static RE evidence without launching ER.
-- Consider moving the kept DirectInput/key-state safe-input backend behind a cleaner `er-safe-input` abstraction so production code exposes logical Confirm pulses without host pointer/focus nudges or ad-hoc hook code in `src/lib.rs`.
+- Consider moving the kept fallback-backed DirectInput/key-state safe-input backend behind a cleaner `er-safe-input` abstraction so production code exposes logical Confirm pulses without host pointer/focus nudges or ad-hoc hook code in `src/lib.rs`. DirectInput-only was flaky; preserve the fallback behavior unless a state-gated replacement proves stable.
 - Static-RE the menu task wrappers around `0x14082bb00` and `0x14082a0f0`: standalone `map_load_67bc10` strands `save_state=1`, so the missing transition is likely the task wrapper/pump that advances or resets `b80/bb8/bbc/bc0/bc4` after map/load requests.
 - If runtime probing is explicitly authorized, reintroduce telemetry-only fields for branch gate `0x143d6f9c0` plus GameMan `+0xb5e/+0xb5f/+0xb60/+0xac0/+0xbcc/+0xbcd/+0xbce` and run one bounded no-pointer probe to confirm whether current autoload falls into e780 reset-to-zero or e650 restore-selected path.
 - Prototype a non-completing DirectMenuLoad state machine that keeps polling after the first queue when TitleStep::Finish resets `set_save_slot(-1)` at `0x140b0cd8b`; current code marks completed immediately after queuing, which may prevent a deterministic requeue in the next safe title/menu state.
