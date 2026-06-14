@@ -1314,6 +1314,13 @@ fn trace_continue_enabled() -> bool {
         || PathBuf::from("er-effects-trace-continue.txt").exists()
 }
 
+fn trace_menu_task_update_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_TRACE_MENU_TASK_UPDATE").as_deref(),
+        Ok("1")
+    )
+}
+
 fn trace_continue_default_path() -> PathBuf {
     game_directory_path()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -1667,13 +1674,19 @@ fn install_continue_trace_hooks() {
             menu_other_load_wrapper_hook as *mut c_void,
             &MENU_OTHER_LOAD_WRAPPER_ORIG,
         );
-        create_continue_trace_hook(
-            &mut hooks,
-            "menu_task_update_wrapper",
-            TRACE_MENU_TASK_UPDATE_WRAPPER_RVA,
-            menu_task_update_wrapper_hook as *mut c_void,
-            &MENU_TASK_UPDATE_WRAPPER_ORIG,
-        );
+        if trace_menu_task_update_enabled() {
+            create_continue_trace_hook(
+                &mut hooks,
+                "menu_task_update_wrapper",
+                TRACE_MENU_TASK_UPDATE_WRAPPER_RVA,
+                menu_task_update_wrapper_hook as *mut c_void,
+                &MENU_TASK_UPDATE_WRAPPER_ORIG,
+            );
+        } else {
+            append_continue_trace(format_args!(
+                "menu_task_update_wrapper trace skipped by default; set ER_EFFECTS_TRACE_MENU_TASK_UPDATE=1 for invasive pump diagnostics"
+            ));
+        }
         create_continue_trace_hook(
             &mut hooks,
             "task_enqueue_7a7b60",
