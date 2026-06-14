@@ -1012,6 +1012,10 @@ if artifact_dir and artifact_dir.exists():
         (r"waiting for save_state 0 before queuing continue flags", 20),
         (r"ENTER menu_other_load_wrapper|LEAVE menu_other_load_wrapper", 20),
         (r"LEAVE map_load_67bc10 ret=1", 20),
+        (r"LEAVE menu_other_load_wrapper ret=.*state=1", 20),
+        (r"ENTER set_save_slot slot=.*#2=0x82c37e", 20),
+        (r"ENTER request_save enabled=1 callers=.*#2=0x76626d", 20),
+        (r"ENTER request_save enabled=1 callers=.*#2=0x76626d.*#3=0x8d4c49", 20),
     ]
     for pattern, value in known_condition_patterns:
         if re.search(pattern, joined_logs, re.I):
