@@ -1135,9 +1135,9 @@ elif metrics["autoload_success"] and metrics["player_available"] and metrics["se
             explanation_bonus += 20
         explanation_bonus += min(20, int(metrics["menu_condition_evidence_score"]) // 10)
         metrics["input_explanation_bonus"] = explanation_bonus
-        score = min(600, 500 + explanation_bonus)
+        score = 500
 elif metrics["native_request_consumed"]:
-    score = 800 if int(metrics["simulated_button_presses_total"]) == 0 else 600
+    score = 800 if int(metrics["simulated_button_presses_total"]) == 0 else 500
 elif trace_confirms_state_transition and static_score >= 400:
     score = 600 if int(metrics["simulated_button_presses_total"]) == 0 else 500
 elif static_score >= 400:

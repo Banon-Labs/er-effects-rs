@@ -8,7 +8,7 @@ Reliably autoload Elden Ring / Seamless Co-op into the selected save slot on Lin
   - 1000: selected Seamless/ER save slot loads to `player_available=true` within bounded time, repeatably, via deterministic native/menu-task path with `simulated_button_presses_total=0`.
   - 900: a zero-input runtime probe replaces at least one current safe-input phase with an identified native/menu-task transition and preserves the path toward selected-slot load.
   - 800: with `ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=0`, the native scheduler/menu task consumes a queued load request and advances through expected save/load states, but full player availability still needs final validation.
-  - 600: safe-input oracle/differential trace or static+runtime evidence identifies the native transition behind a current input. This is diagnostic only; button-count reductions without a native explanation must not score above this tier.
+  - 600: zero-input/static+runtime evidence identifies the native transition behind a current input. Safe-input oracle traces are diagnostic ASI only and must not score above 500 until their transition is replaced natively.
   - 400: static RE identifies a plausible native queue/scheduler transition with address/RVA evidence.
   - 200: tooling/build/test/refactor improvement that reduces risk or improves observability without moving autoload forward.
   - 0: any hard-gate violation.
