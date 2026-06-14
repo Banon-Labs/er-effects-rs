@@ -1008,6 +1008,8 @@ if artifact_dir and artifact_dir.exists():
         (r"ENTER set_save_slot slot=|LEAVE set_save_slot", 20),
         (r"ENTER request_save enabled=1|LEAVE request_save", 20),
         (r"ENTER save_request_profile enabled=1|LEAVE save_request_profile", 20),
+        (r"queuing traced continue flags for slot", 20),
+        (r"waiting for save_state 0 before queuing continue flags", 20),
         (r"ENTER menu_other_load_wrapper|LEAVE menu_other_load_wrapper", 20),
         (r"LEAVE map_load_67bc10 ret=1", 20),
     ]
