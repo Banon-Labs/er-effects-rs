@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Watch an Elden Ring launch until DLL telemetry is ready or a structured failure is known.
 
-This helper intentionally avoids wall-clock sleeps and outer timeout wrappers. It
-uses process/window/bootstrap/telemetry observations and bounded poll counts so a
-missing DLL telemetry stream cannot strand Elden Ring on-screen indefinitely.
+This helper uses process/window/bootstrap/telemetry observations first, but every
+runtime watch is also hard-bounded by --max-runtime-seconds, capped at 30 seconds,
+so a missing DLL telemetry stream cannot strand Elden Ring on-screen indefinitely.
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,9 @@ DEFAULT_READINESS_POLL_BUDGET = 8192
 DEFAULT_WINDOW_STALE_POLL_BUDGET = 4096
 DEFAULT_AUTOLOAD_ATTEMPT_BUDGET = 300
 DEFAULT_POST_REQUEST_TICK_BUDGET = 300
+DEFAULT_MAX_RUNTIME_SECONDS = 30.0
+MAX_ALLOWED_RUNTIME_SECONDS = 30.0
+OBSERVATION_SUBPROCESS_TIMEOUT_SECONDS = 5.0
 SUCCESS_RC = 0
 FAILURE_RC = 1
 TARGET_GAME_MAN = "game-man"
@@ -46,6 +50,7 @@ AUTOLOAD_SLOT_MISSING = "autoload_slot_missing"
 PROCESS_EXITED = "process_exited_before_ready"
 SPAWN_BUDGET_EXHAUSTED = "runtime_process_not_observed_within_spawn_poll_budget"
 READINESS_BUDGET_EXHAUSTED = "readiness_poll_budget_exhausted"
+TIMEOUT_BUDGET_EXHAUSTED = "timeout_seconds_budget_exhausted"
 
 TASK_READY_STAGES = {
     "game_task_recurring_registered",
@@ -71,6 +76,7 @@ class ReadinessResult:
     telemetry: dict[str, Any] | None
     windows: list[dict[str, Any]]
     polls: int
+    timeout_seconds: float | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -81,6 +87,7 @@ class ReadinessResult:
             "telemetry": self.telemetry,
             "windows": self.windows,
             "polls": self.polls,
+            "timeout_seconds": self.timeout_seconds,
         }
 
 
@@ -117,7 +124,11 @@ def read_bootstrap(event_path: Path, state_path: Path) -> dict[str, Any] | None:
 
 
 def runtime_process_rows(pattern: re.Pattern[str]) -> list[ProcessRow]:
-    output = subprocess.check_output(["ps", "-eo", "pid=,args="], text=True)
+    output = subprocess.check_output(
+        ["ps", "-eo", "pid=,args="],
+        text=True,
+        timeout=OBSERVATION_SUBPROCESS_TIMEOUT_SECONDS,
+    )
     rows: list[ProcessRow] = []
     for line in output.splitlines():
         stripped = line.strip()
@@ -158,11 +169,14 @@ def select_runtime_pid(
     pattern: re.Pattern[str],
     pid_file: Path,
     poll_budget: int,
+    deadline: float,
     allow_async_launcher_exit: bool = False,
 ) -> tuple[int | None, str, int]:
     launcher_pid = pid_file_value(pid_file)
     launcher_exited = False
     for poll in range(poll_budget):
+        if time.monotonic() >= deadline:
+            return None, TIMEOUT_BUDGET_EXHAUSTED, poll
         rows = runtime_process_rows(pattern)
         for row in rows:
             if RUNTIME_EXE_NAME in row.args.lower():
@@ -191,7 +205,13 @@ def client_is_game_window(client: dict[str, Any], window_class: str) -> bool:
 
 def hypr_windows(window_class: str) -> list[dict[str, Any]]:
     try:
-        clients = json.loads(subprocess.check_output(["hyprctl", "clients", "-j"], text=True))
+        clients = json.loads(
+            subprocess.check_output(
+                ["hyprctl", "clients", "-j"],
+                text=True,
+                timeout=OBSERVATION_SUBPROCESS_TIMEOUT_SECONDS,
+            )
+        )
     except Exception:
         return []
     if not isinstance(clients, list):
@@ -311,17 +331,30 @@ def classify_snapshot(
 
 def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
     pattern = re.compile(args.process_pattern, re.I)
+    deadline = time.monotonic() + float(args.max_runtime_seconds)
     pid, reason, spawn_polls = select_runtime_pid(
         pattern,
         args.pid_file,
         args.spawn_poll_budget,
+        deadline,
         allow_async_launcher_exit=args.allow_async_launcher_exit,
     )
     if pid is None:
-        return ReadinessResult(False, reason, None, None, None, [], spawn_polls)
+        return ReadinessResult(False, reason, None, None, None, [], spawn_polls, float(args.max_runtime_seconds))
 
     window_stale_polls = 0
     for poll in range(args.readiness_poll_budget):
+        if time.monotonic() >= deadline:
+            return ReadinessResult(
+                False,
+                TIMEOUT_BUDGET_EXHAUSTED,
+                pid,
+                read_bootstrap(args.bootstrap, args.bootstrap_state),
+                read_json(args.telemetry),
+                hypr_windows(args.window_class),
+                spawn_polls + poll,
+                float(args.max_runtime_seconds),
+            )
         telemetry = read_json(args.telemetry)
         bootstrap = read_bootstrap(args.bootstrap, args.bootstrap_state)
         windows = hypr_windows(args.window_class)
@@ -343,7 +376,16 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
             post_request_tick_budget=args.post_request_tick_budget,
         )
         if result is not None:
-            return result
+            return ReadinessResult(
+                result.ready,
+                result.reason,
+                result.pid,
+                result.bootstrap,
+                result.telemetry,
+                result.windows,
+                result.polls,
+                float(args.max_runtime_seconds),
+            )
         os.sched_yield()
 
     return ReadinessResult(
@@ -354,6 +396,7 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
         read_json(args.telemetry),
         hypr_windows(args.window_class),
         spawn_polls + args.readiness_poll_budget,
+        float(args.max_runtime_seconds),
     )
 
 
@@ -381,6 +424,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--autoload-attempt-budget", type=int, default=DEFAULT_AUTOLOAD_ATTEMPT_BUDGET)
     parser.add_argument("--post-request-tick-budget", type=int, default=DEFAULT_POST_REQUEST_TICK_BUDGET)
     parser.add_argument(
+        "--max-runtime-seconds",
+        type=float,
+        default=DEFAULT_MAX_RUNTIME_SECONDS,
+        help="Hard wall-clock cap for the readiness watch; must be >0 and <=30.",
+    )
+    parser.add_argument(
         "--allow-async-launcher-exit",
         action="store_true",
         help="Keep observing for a late Steam/Proton game process after the initial launcher command exits.",
@@ -395,6 +444,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.max_runtime_seconds <= 0 or args.max_runtime_seconds > MAX_ALLOWED_RUNTIME_SECONDS:
+        raise SystemExit("--max-runtime-seconds must be greater than 0 and no more than 30")
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
     result = wait_readiness(args)
     output = args.artifact_dir / "readiness-result.json"

@@ -28,6 +28,7 @@ PY
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/smoke/autoload-runtime-$(date +%Y%m%d-%H%M%S)}"
 GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
 LAUNCH_MODE="${LAUNCH_MODE:-direct-protected}"
+RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-30}"
 RUNTIME_MAX_NUDGES="${RUNTIME_MAX_NUDGES:-0}"
 RUNTIME_READINESS_RATIONALE="${RUNTIME_READINESS_RATIONALE:-$REPO_ROOT/.auto/runtime-readiness-rationale}"
 mkdir -p "$ARTIFACT_DIR"
@@ -45,6 +46,7 @@ TRACE_TITLE_STAGE_PATH="${TRACE_TITLE_STAGE_PATH:-$GAME_DIR/er-effects-trace-tit
 PUMP_MOVE_MAP_PATH="${PUMP_MOVE_MAP_PATH:-$GAME_DIR/er-effects-pump-move-map.txt}"
 FORCE_TITLE_STATE_PATH="${FORCE_TITLE_STATE_PATH:-$GAME_DIR/er-effects-force-title-state.txt}"
 NATIVE_TITLE_JOB_PATH="${NATIVE_TITLE_JOB_PATH:-$GAME_DIR/er-effects-native-title-job.txt}"
+TRACE_TASK_NODE_BYTES_PATH="${TRACE_TASK_NODE_BYTES_PATH:-$GAME_DIR/er-effects-trace-task-node-bytes.txt}"
 PROTON="${PROTON:-$HOME/.local/share/Steam/steamapps/common/Proton - Experimental/proton}"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
 STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}"
@@ -169,13 +171,17 @@ validate_runtime_policy() {
   }
   local input_path allowed
   input_path="$ARTIFACT_DIR/runtime-policy-input.json"
-  python3 - "$input_path" "$LAUNCH_MODE" "$RUNTIME_READINESS_RATIONALE" <<'PY'
+  python3 - "$input_path" "$LAUNCH_MODE" "$RUNTIME_TIMEOUT_SECONDS" "$RUNTIME_READINESS_RATIONALE" <<'PY'
 import json
 import os
 import sys
 from pathlib import Path
 
-output, launch_mode, rationale_path = sys.argv[1:4]
+output, launch_mode, timeout_seconds, rationale_path = sys.argv[1:5]
+try:
+    parsed_timeout_seconds = float(timeout_seconds)
+except ValueError:
+    parsed_timeout_seconds = timeout_seconds
 rationale = {}
 path = Path(rationale_path)
 if path.exists():
@@ -188,6 +194,8 @@ if path.exists():
 payload = {
     "explicit_opt_in": os.environ.get("AUTO_ALLOW_RUNTIME_PROBE") == "1",
     "launch_mode": launch_mode,
+    "timeout_seconds": parsed_timeout_seconds,
+    "native_title_accept_gate": os.environ.get("ER_EFFECTS_AUTOLOAD_NATIVE_TITLE_ACCEPT_GATE") == "1",
     "runtime_entrypoint": "measure_runtime_trigger",
     "readiness_watcher": rationale.get("readiness_watcher", ""),
     "no_telemetry_bootstrap_failure": rationale.get("no_telemetry_bootstrap_failure", ""),
@@ -450,6 +458,9 @@ cleanup_runtime() {
   if [[ "${ER_EFFECTS_AUTOLOAD_NATIVE_TITLE_JOB:-0}" == "1" ]]; then
     rm -f "$NATIVE_TITLE_JOB_PATH"
   fi
+  if [[ "${ER_EFFECTS_TRACE_TASK_NODE_BYTES:-0}" == "1" ]]; then
+    rm -f "$TRACE_TASK_NODE_BYTES_PATH"
+  fi
   copy_runtime_logs || true
   write_state_snapshot "$ARTIFACT_DIR/final-state-before-cleanup.json" || true
   teardown_runtime_processes || true
@@ -531,6 +542,12 @@ PY
     else
       rm -f "$NATIVE_TITLE_JOB_PATH"
     fi
+    if [[ "${ER_EFFECTS_TRACE_TASK_NODE_BYTES:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$TRACE_TASK_NODE_BYTES_PATH"
+      cp -f "$TRACE_TASK_NODE_BYTES_PATH" "$ARTIFACT_DIR/trace-task-node-bytes-request.txt"
+    else
+      rm -f "$TRACE_TASK_NODE_BYTES_PATH"
+    fi
     rm -f "$TELEMETRY_PATH" "$COMMAND_PATH" "$AUTOLOAD_DEBUG_PATH" "$TRACE_CONTINUE_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH"
   } > "$ARTIFACT_DIR/setup.out" 2>&1
 }
@@ -592,6 +609,7 @@ watch_readiness() {
     --post-request-tick-budget "$RUNTIME_POST_REQUEST_TICK_BUDGET"
     --spawn-poll-budget "$RUNTIME_SPAWN_POLL_BUDGET"
     --readiness-poll-budget "$RUNTIME_READINESS_POLL_BUDGET"
+    --max-runtime-seconds "$RUNTIME_TIMEOUT_SECONDS"
   )
   if [[ -n "$RUNTIME_ALLOW_ASYNC_LAUNCHER_EXIT" ]]; then
     readiness_args+=(--allow-async-launcher-exit)
@@ -601,7 +619,7 @@ watch_readiness() {
 
 trap cleanup_runtime EXIT
 
-log_timeline "runtime_probe_start" "launch_mode=$LAUNCH_MODE readiness=event-driven"
+log_timeline "runtime_probe_start" "launch_mode=$LAUNCH_MODE readiness=event-driven timeout_seconds=$RUNTIME_TIMEOUT_SECONDS"
 validate_runtime_policy
 snapshot_saves "$ARTIFACT_DIR/save-hashes-before.txt"
 backup_saves > "$ARTIFACT_DIR/save-backup.log" 2>&1

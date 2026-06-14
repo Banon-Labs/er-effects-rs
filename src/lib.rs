@@ -122,6 +122,39 @@ const TRACE_UNKNOWN_TABLE_RVA: u32 = 0;
 const MENU_TASK_STATE_PAYLOAD_PTR_OFFSET: usize = 0x30;
 const MENU_TASK_STATE_DELAY_OFFSET: usize = 0x08;
 const TASK_ENQUEUE_TRACE_LIMIT: usize = 256;
+const NO_SAFE_INPUT_CONFIRM_FRAMES: usize = 0;
+const SAFE_INPUT_CONFIRM_FRAME_DECREMENT: usize = 1;
+const SAFE_INPUT_NO_CONFIRM_PULSES: u32 = 0;
+const SAFE_INPUT_FIRST_PULSE_INDEX: u32 = 0;
+const SAFE_INPUT_NEXT_PULSE_OFFSET: u32 = 1;
+const SAFE_INPUT_POST_MAP_MIN_CONFIRM_COUNT: u32 = 5;
+const SAFE_INPUT_INITIAL_DELAY_TICKS: u64 = 0;
+const WINDOW_PID_UNSET: u32 = 0;
+const ENUM_WINDOWS_STOP_NUMERIC: i32 = 0;
+const ENUM_WINDOWS_CONTINUE_NUMERIC: i32 = 1;
+const DIRECT_INPUT_FAILURE_HRESULT: i32 = -1;
+const DIRECT_INPUT_KEY_DOWN_MASK: u8 = 0x80;
+const MENU_TRACE_UNSEEN_SEQ: usize = 0;
+const POST_MAP_CONTINUATION_STATE_QWORD: usize = 2;
+const TITLE_OWNER_SCAN_START_ADDRESS: usize = 0;
+const TITLE_OWNER_QUERY_FAILED_BYTES: usize = 0;
+const PAGE_PROTECTION_NO_FLAGS: u32 = 0;
+const TITLE_OWNER_MIN_STATE: i32 = 0;
+const TITLE_OWNER_MAX_STATE: i32 = 11;
+const TITLE_NATIVE_JOB_NOT_CALLED: usize = 0;
+const TITLE_TRACE_SEQUENCE_INCREMENT: usize = 1;
+const TITLE_NATIVE_JOB_TASK_DATA_ZERO: u8 = 0;
+const TITLE_NATIVE_JOB_TASK_DATA_BYTES: usize = 16;
+const TITLE_NATIVE_JOB_FRAME_DELTA_NUMERATOR: f32 = 1.0;
+const TITLE_NATIVE_JOB_FRAME_RATE: f32 = 60.0;
+const TITLE_NATIVE_JOB_DELTA_OFFSET_START: usize = 8;
+const TITLE_NATIVE_JOB_DELTA_OFFSET_END: usize = 12;
+const TITLE_NATIVE_JOB_CALLED_VALUE: usize = 1;
+const MENU_TASK_NULL_STATE_QWORD: usize = 0;
+const MENU_TASK_NULL_PAYLOAD_PTR: usize = 0;
+const MENU_TASK_STATE_PAYLOAD_CODE_OFFSET: usize = 4;
+const MENU_TRACE_EVENT_INCREMENT: usize = 1;
+const TASK_ENQUEUE_TRACE_INCREMENT: usize = 1;
 static START_GAME_TASK: Once = Once::new();
 static START_CONTINUE_TRACE: Once = Once::new();
 static START_SAFE_INPUT_HOOKS: Once = Once::new();
@@ -856,13 +889,14 @@ fn process_autoload_request(state: &mut EffectsState) {
 }
 
 fn process_safe_input_request(state: &mut EffectsState) {
-    if SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst) > 0 {
-        SAFE_INPUT_CONFIRM_FRAMES_REMAINING.fetch_sub(1, Ordering::SeqCst);
+    if SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst) > NO_SAFE_INPUT_CONFIRM_FRAMES {
+        SAFE_INPUT_CONFIRM_FRAMES_REMAINING
+            .fetch_sub(SAFE_INPUT_CONFIRM_FRAME_DECREMENT, Ordering::SeqCst);
     }
     if !state.safe_input.loaded {
         load_safe_input_runtime(&mut state.safe_input);
     }
-    if state.safe_input.confirm_count == 0
+    if state.safe_input.confirm_count == SAFE_INPUT_NO_CONFIRM_PULSES
         || state.safe_input.pulses_sent >= state.safe_input.confirm_count
     {
         return;
@@ -876,7 +910,7 @@ fn process_safe_input_request(state: &mut EffectsState) {
         ));
         return;
     }
-    if state.safe_input.pulses_sent == 0 {
+    if state.safe_input.pulses_sent == SAFE_INPUT_FIRST_PULSE_INDEX {
         if state.game_task_ticks < state.safe_input.initial_delay_ticks {
             state.safe_input.last_status = Some(format!(
                 "waiting for initial safe-input delay tick={} target={}",
@@ -907,11 +941,13 @@ fn process_safe_input_request(state: &mut EffectsState) {
         None
     };
 
-    let pulse_seq = SAFE_INPUT_CONFIRM_PULSE_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+    let pulse_seq = SAFE_INPUT_CONFIRM_PULSE_SEQ
+        .fetch_add(SAFE_INPUT_NEXT_PULSE_OFFSET as usize, Ordering::SeqCst)
+        + SAFE_INPUT_NEXT_PULSE_OFFSET as usize;
     if let Some(reason) = gate_reason {
         let line = format!(
             "input_gate[{reason}] state-gated input satisfied pulse={}/{} tick={} {} {}",
-            state.safe_input.pulses_sent + 1,
+            state.safe_input.pulses_sent + SAFE_INPUT_NEXT_PULSE_OFFSET,
             state.safe_input.confirm_count,
             state.game_task_ticks,
             before_snapshot.summary(),
@@ -930,7 +966,7 @@ fn process_safe_input_request(state: &mut EffectsState) {
 
     match emit_confirm_pulse_to_own_window() {
         Ok(()) => {
-            state.safe_input.pulses_sent += 1;
+            state.safe_input.pulses_sent += SAFE_INPUT_NEXT_PULSE_OFFSET;
             state.safe_input.last_pulse_tick = state.game_task_ticks;
             state.safe_input.last_status = Some(format!(
                 "confirm pulse {}/{} via DirectInput/key-state hook + post_message",
@@ -968,19 +1004,20 @@ fn process_safe_input_request(state: &mut EffectsState) {
 }
 
 fn requires_post_map_final_confirm_gate(runtime: &SafeInputRuntime) -> bool {
-    runtime.confirm_count >= 5 && runtime.pulses_sent + 1 == runtime.confirm_count
+    runtime.confirm_count >= SAFE_INPUT_POST_MAP_MIN_CONFIRM_COUNT
+        && runtime.pulses_sent + SAFE_INPUT_NEXT_PULSE_OFFSET == runtime.confirm_count
 }
 
 fn is_post_map_continuation_gate(snapshot: MenuTraceSnapshot) -> bool {
-    snapshot.seq > 0
+    snapshot.seq > MENU_TRACE_UNSEEN_SEQ
         && snapshot.hook_rva == TRACE_MENU_OTHER_LOAD_WRAPPER_RVA as usize
-        && snapshot.state_qword == 2
+        && snapshot.state_qword == POST_MAP_CONTINUATION_STATE_QWORD
 }
 
 fn load_safe_input_runtime(runtime: &mut SafeInputRuntime) {
     runtime.loaded = true;
     runtime.interval_ticks = SAFE_INPUT_DEFAULT_INTERVAL_TICKS;
-    runtime.initial_delay_ticks = 0;
+    runtime.initial_delay_ticks = SAFE_INPUT_INITIAL_DELAY_TICKS;
     runtime.last_pulse_tick = SAFE_INPUT_INITIAL_LAST_PULSE_TICK;
 
     let path = safe_input_path();
@@ -998,7 +1035,7 @@ fn load_safe_input_runtime(runtime: &mut SafeInputRuntime) {
                 runtime.confirm_count = value
                     .trim()
                     .parse::<u32>()
-                    .unwrap_or(0)
+                    .unwrap_or(SAFE_INPUT_NO_CONFIRM_PULSES)
                     .min(SAFE_INPUT_MAX_CONFIRM_PULSES);
             }
             "interval_ticks" => {
@@ -1009,7 +1046,11 @@ fn load_safe_input_runtime(runtime: &mut SafeInputRuntime) {
                     .max(GAME_TASK_TICK_INCREMENT);
             }
             "initial_delay_ticks" | "first_pulse_min_tick" => {
-                runtime.initial_delay_ticks = value.trim().parse::<u64>().unwrap_or(0).max(0);
+                runtime.initial_delay_ticks = value
+                    .trim()
+                    .parse::<u64>()
+                    .unwrap_or(SAFE_INPUT_INITIAL_DELAY_TICKS)
+                    .max(SAFE_INPUT_INITIAL_DELAY_TICKS);
             }
             "backend" => {}
             _ => {}
@@ -1043,7 +1084,7 @@ fn safe_input_path() -> PathBuf {
 }
 
 unsafe extern "system" fn find_own_window_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    let mut window_pid = 0u32;
+    let mut window_pid = WINDOW_PID_UNSET;
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut window_pid as *mut u32)) };
     let current_pid = unsafe { GetCurrentProcessId() };
     if window_pid == current_pid && unsafe { IsWindowVisible(hwnd).as_bool() } {
@@ -1051,9 +1092,9 @@ unsafe extern "system" fn find_own_window_callback(hwnd: HWND, lparam: LPARAM) -
         if !output.is_null() {
             unsafe { *output = hwnd };
         }
-        return BOOL(0);
+        return BOOL(ENUM_WINDOWS_STOP_NUMERIC);
     }
-    BOOL(1)
+    BOOL(ENUM_WINDOWS_CONTINUE_NUMERIC)
 }
 
 fn own_window() -> Option<HWND> {
@@ -1206,7 +1247,7 @@ fn is_safe_input_confirm_key(vkey: i32) -> bool {
 
 fn safe_input_key_state_override(vkey: i32, original_value: i16) -> i16 {
     if is_safe_input_confirm_key(vkey)
-        && SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst) > 0
+        && SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst) > NO_SAFE_INPUT_CONFIRM_FRAMES
     {
         original_value | i16::MIN
     } else {
@@ -1239,7 +1280,9 @@ unsafe extern "system" fn get_key_state_hook(vkey: i32) -> i16 {
 }
 
 unsafe fn install_direct_input_create_device_hook(direct_input: *mut c_void) {
-    if direct_input.is_null() || DIRECT_INPUT_CREATE_DEVICE_ORIG.load(Ordering::SeqCst) != 0 {
+    if direct_input.is_null()
+        || DIRECT_INPUT_CREATE_DEVICE_ORIG.load(Ordering::SeqCst) != HOOK_ORIGINAL_UNSET
+    {
         return;
     }
     let vtable = unsafe { *(direct_input as *const *const *mut c_void) };
@@ -1261,7 +1304,9 @@ unsafe fn install_direct_input_create_device_hook(direct_input: *mut c_void) {
 }
 
 unsafe fn install_direct_input_get_state_hook(device: *mut c_void) {
-    if device.is_null() || DIRECT_INPUT_GET_DEVICE_STATE_ORIG.load(Ordering::SeqCst) != 0 {
+    if device.is_null()
+        || DIRECT_INPUT_GET_DEVICE_STATE_ORIG.load(Ordering::SeqCst) != HOOK_ORIGINAL_UNSET
+    {
         return;
     }
     let vtable = unsafe { *(device as *const *const *mut c_void) };
@@ -1298,7 +1343,7 @@ unsafe extern "system" fn direct_input8_create_hook(
     ) -> i32;
     let original = DIRECT_INPUT8_CREATE_ORIG.load(Ordering::SeqCst);
     if original == HOOK_ORIGINAL_UNSET {
-        return -1;
+        return DIRECT_INPUT_FAILURE_HRESULT;
     }
     let original: DirectInput8Create = unsafe { std::mem::transmute(original) };
     let hr = unsafe { original(instance, version, riidltf, out, outer) };
@@ -1319,7 +1364,7 @@ unsafe extern "system" fn direct_input_create_device_hook(
         unsafe extern "system" fn(*mut c_void, *const c_void, *mut *mut c_void, *mut c_void) -> i32;
     let original = DIRECT_INPUT_CREATE_DEVICE_ORIG.load(Ordering::SeqCst);
     if original == HOOK_ORIGINAL_UNSET {
-        return -1;
+        return DIRECT_INPUT_FAILURE_HRESULT;
     }
     let original: CreateDevice = unsafe { std::mem::transmute(original) };
     let hr = unsafe { original(this, guid, out, outer) };
@@ -1338,18 +1383,18 @@ unsafe extern "system" fn direct_input_get_device_state_hook(
     type GetDeviceState = unsafe extern "system" fn(*mut c_void, u32, *mut c_void) -> i32;
     let original = DIRECT_INPUT_GET_DEVICE_STATE_ORIG.load(Ordering::SeqCst);
     if original == HOOK_ORIGINAL_UNSET {
-        return -1;
+        return DIRECT_INPUT_FAILURE_HRESULT;
     }
     let original: GetDeviceState = unsafe { std::mem::transmute(original) };
     let hr = unsafe { original(this, data_len, data) };
     if hr >= HRESULT_SUCCESS_FLOOR
         && !data.is_null()
-        && SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst) > 0
+        && SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst) > NO_SAFE_INPUT_CONFIRM_FRAMES
         && data_len as usize > DIK_SPACE
     {
         let state = unsafe { std::slice::from_raw_parts_mut(data as *mut u8, data_len as usize) };
-        state[DIK_RETURN] |= 0x80;
-        state[DIK_SPACE] |= 0x80;
+        state[DIK_RETURN] |= DIRECT_INPUT_KEY_DOWN_MASK;
+        state[DIK_SPACE] |= DIRECT_INPUT_KEY_DOWN_MASK;
     }
     hr
 }
@@ -1439,7 +1484,7 @@ fn append_continue_trace(args: std::fmt::Arguments<'_>) {
 
 unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*mut u8> {
     let target_vtable = module_base.checked_add(TITLE_OWNER_VTABLE_RVA)?;
-    let mut address = 0usize;
+    let mut address = TITLE_OWNER_SCAN_START_ADDRESS;
     while address < TITLE_OWNER_SCAN_MAX_ADDRESS {
         let mut info = MEMORY_BASIC_INFORMATION::default();
         let queried = unsafe {
@@ -1449,7 +1494,7 @@ unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*mut u8> {
                 std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
             )
         };
-        if queried == 0 {
+        if queried == TITLE_OWNER_QUERY_FAILED_BYTES {
             break;
         }
 
@@ -1459,7 +1504,7 @@ unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*mut u8> {
         let state = info.State.0;
         let protect = info.Protect.0;
         if state == MEM_COMMIT_NUMERIC
-            && protect & (PAGE_NOACCESS_NUMERIC | PAGE_GUARD_NUMERIC) == 0
+            && protect & (PAGE_NOACCESS_NUMERIC | PAGE_GUARD_NUMERIC) == PAGE_PROTECTION_NO_FLAGS
             && size >= TITLE_OWNER_STATE_OFFSET + std::mem::size_of::<i32>()
         {
             let end = next.saturating_sub(TITLE_OWNER_STATE_OFFSET + std::mem::size_of::<i32>());
@@ -1469,7 +1514,7 @@ unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*mut u8> {
                 if vtable == target_vtable {
                     let state_value =
                         unsafe { *((cursor + TITLE_OWNER_STATE_OFFSET) as *const i32) };
-                    if (0..=11).contains(&state_value) {
+                    if (TITLE_OWNER_MIN_STATE..=TITLE_OWNER_MAX_STATE).contains(&state_value) {
                         return Some(cursor as *mut u8);
                     }
                 }
@@ -1500,11 +1545,13 @@ unsafe fn title_owner(module_base: usize) -> Option<*mut u8> {
 }
 
 unsafe fn call_native_title_job_once(module_base: usize, tick: u64) -> bool {
-    if TITLE_NATIVE_JOB_CALLED.load(Ordering::SeqCst) != 0 {
+    if TITLE_NATIVE_JOB_CALLED.load(Ordering::SeqCst) != TITLE_NATIVE_JOB_NOT_CALLED {
         return true;
     }
     if tick < TITLE_NATIVE_JOB_MIN_TICK {
-        let count = TITLE_OWNER_TRACE_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        let count = TITLE_OWNER_TRACE_COUNT
+            .fetch_add(TITLE_TRACE_SEQUENCE_INCREMENT, Ordering::SeqCst)
+            + TITLE_TRACE_SEQUENCE_INCREMENT;
         if count <= TITLE_OWNER_TRACE_LIMIT {
             append_autoload_debug(format_args!(
                 "native_title_job: waiting for min tick tick={tick} target={TITLE_NATIVE_JOB_MIN_TICK}"
@@ -1513,7 +1560,9 @@ unsafe fn call_native_title_job_once(module_base: usize, tick: u64) -> bool {
         return false;
     }
     let Some(owner) = (unsafe { title_owner(module_base) }) else {
-        let count = TITLE_OWNER_TRACE_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        let count = TITLE_OWNER_TRACE_COUNT
+            .fetch_add(TITLE_TRACE_SEQUENCE_INCREMENT, Ordering::SeqCst)
+            + TITLE_TRACE_SEQUENCE_INCREMENT;
         if count <= TITLE_OWNER_TRACE_LIMIT {
             append_autoload_debug(format_args!(
                 "native_title_job: waiting for title owner at tick={tick}"
@@ -1523,9 +1572,10 @@ unsafe fn call_native_title_job_once(module_base: usize, tick: u64) -> bool {
     };
 
     let state_before = unsafe { *(owner.add(TITLE_OWNER_STATE_OFFSET) as *const i32) };
-    let mut task_data = [0u8; 16];
-    let frame_delta = 1.0f32 / 60.0f32;
-    task_data[8..12].copy_from_slice(&frame_delta.to_le_bytes());
+    let mut task_data = [TITLE_NATIVE_JOB_TASK_DATA_ZERO; TITLE_NATIVE_JOB_TASK_DATA_BYTES];
+    let frame_delta = TITLE_NATIVE_JOB_FRAME_DELTA_NUMERATOR / TITLE_NATIVE_JOB_FRAME_RATE;
+    task_data[TITLE_NATIVE_JOB_DELTA_OFFSET_START..TITLE_NATIVE_JOB_DELTA_OFFSET_END]
+        .copy_from_slice(&frame_delta.to_le_bytes());
     let title_menu_job: unsafe extern "system" fn(*mut u8, *mut c_void) =
         unsafe { std::mem::transmute(module_base + TITLE_MENU_JOB_WAIT_RVA) };
     append_autoload_debug(format_args!(
@@ -1533,7 +1583,7 @@ unsafe fn call_native_title_job_once(module_base: usize, tick: u64) -> bool {
     ));
     unsafe { title_menu_job(owner, task_data.as_mut_ptr().cast()) };
     let state_after = unsafe { *(owner.add(TITLE_OWNER_STATE_OFFSET) as *const i32) };
-    TITLE_NATIVE_JOB_CALLED.store(1, Ordering::SeqCst);
+    TITLE_NATIVE_JOB_CALLED.store(TITLE_NATIVE_JOB_CALLED_VALUE, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "native_title_job: LEAVE owner={owner:p} state_after={state_after} tick={tick}"
     ));
@@ -1612,7 +1662,7 @@ fn append_confirm_probe(
     let line = format!(
         "confirm_probe phase={phase} pulse={pulse_seq} tick={tick} menu_condition[unknown_confirmable_modal] barrier_id={} observed_after_pulse={advanced} confirm_active={} {} {}",
         snapshot.barrier_id(),
-        SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst) > 0,
+        SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst) > NO_SAFE_INPUT_CONFIRM_FRAMES,
         snapshot.summary(),
         game_man_trace_summary()
     );
@@ -1622,12 +1672,16 @@ fn append_confirm_probe(
 
 unsafe fn menu_task_state_summary(this: *mut c_void) -> (usize, usize, String) {
     if this.is_null() {
-        return (0, 0, "task_state{null=true}".to_owned());
+        return (
+            MENU_TASK_NULL_STATE_QWORD,
+            MENU_TASK_NULL_PAYLOAD_PTR,
+            "task_state{null=true}".to_owned(),
+        );
     }
     let base = this.cast::<u8>();
     let state_qword = unsafe { *(base.cast::<usize>()) };
     let state_code = unsafe { *(base.cast::<i32>()) };
-    let state_payload = unsafe { *(base.add(4).cast::<i32>()) };
+    let state_payload = unsafe { *(base.add(MENU_TASK_STATE_PAYLOAD_CODE_OFFSET).cast::<i32>()) };
     let delay_bits = unsafe { *(base.add(MENU_TASK_STATE_DELAY_OFFSET).cast::<u32>()) };
     let payload_ptr = unsafe { *(base.add(MENU_TASK_STATE_PAYLOAD_PTR_OFFSET).cast::<usize>()) };
     (
@@ -1662,14 +1716,15 @@ unsafe fn append_menu_semaphore_trace(
     table_rva: u32,
     this: *mut c_void,
 ) {
-    let seq = MENU_TRACE_EVENT_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+    let seq = MENU_TRACE_EVENT_SEQ.fetch_add(MENU_TRACE_EVENT_INCREMENT, Ordering::SeqCst)
+        + MENU_TRACE_EVENT_INCREMENT;
     let (state_qword, payload_ptr, task_state) = unsafe { menu_task_state_summary(this) };
     record_menu_trace_snapshot(seq, hook_rva, table_rva, this, state_qword, payload_ptr);
     append_continue_trace(format_args!(
         "menu_semaphore seq={seq} phase={phase} hook={hook_name} hook_rva=0x{hook_rva:x} table_rva={} this={this:p} barrier_id=hook_0x{hook_rva:x}/table_{} confirm_active={} pulse={} {} {} {}",
         trace_rva_label(table_rva as usize),
         trace_rva_label(table_rva as usize),
-        SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst) > 0,
+        SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst) > NO_SAFE_INPUT_CONFIRM_FRAMES,
         SAFE_INPUT_CONFIRM_PULSE_SEQ.load(Ordering::SeqCst),
         task_state,
         trace_callers_summary(),
@@ -2090,15 +2145,19 @@ unsafe extern "system" fn menu_task_update_wrapper_hook(this: *mut c_void) -> *m
 }
 
 unsafe extern "system" fn task_enqueue_hook(arg0: *mut c_void, arg1: *mut c_void) -> *mut c_void {
-    let trace_index = TASK_ENQUEUE_TRACE_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+    let trace_index = TASK_ENQUEUE_TRACE_COUNT
+        .fetch_add(TASK_ENQUEUE_TRACE_INCREMENT, Ordering::SeqCst)
+        + TASK_ENQUEUE_TRACE_INCREMENT;
     let should_trace = trace_index <= TASK_ENQUEUE_TRACE_LIMIT
-        || SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst) > 0;
+        || SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst)
+            > NO_SAFE_INPUT_CONFIRM_FRAMES;
     if should_trace {
         append_continue_trace(format_args!(
             "menu_task_enqueue seq={trace_index} phase=ENTER hook_rva=0x{:x} list={arg0:p} node={arg1:p} node_{} confirm_active={} pulse={} {} {}",
             TRACE_TASK_ENQUEUE_RVA,
             unsafe { object_vtable_summary(arg1) },
-            SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst) > 0,
+            SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst)
+                > NO_SAFE_INPUT_CONFIRM_FRAMES,
             SAFE_INPUT_CONFIRM_PULSE_SEQ.load(Ordering::SeqCst),
             trace_callers_summary(),
             game_man_trace_summary()

@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""Fail closed when autoresearch runtime probes can be launched through timers.
+"""Fail closed when runtime probes are unbounded or missing the approved driver contract.
 
-This guard exists because runtime Elden Ring probes are disruptive and a prior
-agent launched one through an outer run_experiment timeout budget. The durable
-contract is intentionally conservative: autoresearch/measure entrypoints may
-not launch the game at all until a separate event-driven driver is implemented
-and this policy is deliberately changed with tests.
+Runtime Elden Ring probes are disruptive. The durable contract is conservative:
+manual probes must be explicit, event/readiness-driven, cleanly torn down, and
+hard-bounded by a timeout_seconds value greater than 0 and no more than 30.
 """
 from __future__ import annotations
 
@@ -26,7 +24,7 @@ RUNTIME_POLICY_PATH = AUTO_DIR / "runtime_experiment_policy.rego"
 SMOKE_DRIVER_PATH = REPO_ROOT / "scripts" / "er-smoke-driver.sh"
 AUTO_LOG_PATH = AUTO_DIR / "log.jsonl"
 INCIDENT_ISSUE_ID = "er-effects-rs-1l6"
-BANNED_TOOL_TIMEOUT_FIELDS = ("timeout_seconds", "checks_timeout_seconds")
+MAX_RUNTIME_TIMEOUT_SECONDS = 30
 BANNED_LAUNCH_SNIPPETS = (
     "./.auto/runtime_probe.sh",
 )
@@ -36,6 +34,8 @@ RUNTIME_POLICY_REQUIRED_SNIPPETS = (
     "window_without_bootstrap_or_task_ready",
     "host_input == \"none\"",
     "process_tree_and_save_restore",
+    "timeout_seconds",
+    "max_timeout_seconds := 30",
 )
 BANNED_WRAPPER_SNIPPETS = (
     ".auto/run-runtime-once",
@@ -94,33 +94,6 @@ def line_findings(
         for snippet in snippets:
             if snippet in line:
                 findings.append(Finding(relative(path), line_number, rule, stripped, guidance))
-    return findings
-
-
-def scan_tool_timeout_fields() -> list[Finding]:
-    findings: list[Finding] = []
-    for pattern in SCAN_RELATIVE_GLOBS:
-        for path in REPO_ROOT.glob(pattern):
-            if not path.is_file():
-                continue
-            rel = relative(path)
-            if rel in SELF_PATHS:
-                continue
-            for line_number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
-                stripped = line.strip()
-                if stripped.startswith("#"):
-                    continue
-                for field in BANNED_TOOL_TIMEOUT_FIELDS:
-                    if field in line:
-                        findings.append(
-                            Finding(
-                                rel,
-                                line_number,
-                                "agent-tool-timeout-field",
-                                stripped,
-                                "Do not encode run_experiment/tool timeout budgets. Runtime probes must fail closed or terminate from observable events and structured failure states.",
-                            )
-                        )
     return findings
 
 
@@ -271,7 +244,51 @@ def scan_contract() -> list[Finding]:
                 )
             )
 
-    findings.extend(scan_tool_timeout_fields())
+    if RUNTIME_PROBE_PATH.exists():
+        probe_text = RUNTIME_PROBE_PATH.read_text(encoding="utf-8", errors="replace")
+        missing_probe_timeout = [
+            snippet
+            for snippet in (
+                "RUNTIME_TIMEOUT_SECONDS",
+                '"timeout_seconds"',
+                "--max-runtime-seconds",
+            )
+            if snippet not in probe_text
+        ]
+        if missing_probe_timeout:
+            findings.append(
+                Finding(
+                    relative(RUNTIME_PROBE_PATH),
+                    0,
+                    "runtime-probe-missing-bounded-timeout",
+                    ", ".join(missing_probe_timeout),
+                    "Runtime probe policy input and readiness watcher invocation must carry timeout_seconds / --max-runtime-seconds with a value no greater than 30.",
+                )
+            )
+
+    readiness_watch_path = REPO_ROOT / "scripts" / "er-readiness-watch.py"
+    if readiness_watch_path.exists():
+        readiness_text = readiness_watch_path.read_text(encoding="utf-8", errors="replace")
+        missing_watch_timeout = [
+            snippet
+            for snippet in (
+                "MAX_ALLOWED_RUNTIME_SECONDS = 30.0",
+                "--max-runtime-seconds",
+                "TIMEOUT_BUDGET_EXHAUSTED",
+            )
+            if snippet not in readiness_text
+        ]
+        if missing_watch_timeout:
+            findings.append(
+                Finding(
+                    relative(readiness_watch_path),
+                    0,
+                    "readiness-watch-missing-hard-timeout",
+                    ", ".join(missing_watch_timeout),
+                    "The readiness watcher must enforce --max-runtime-seconds and cap it at 30 seconds.",
+                )
+            )
+
     return findings
 
 
@@ -324,7 +341,7 @@ def main() -> int:
         if findings:
             print("Runtime probe contract violations found.", file=sys.stderr)
             print(
-                "Autoresearch measurement must stay non-disruptive and must not rely on tool timeout budgets. Manual runtime probes must remain explicitly opted in and gated by the readiness watcher/no-telemetry bootstrap contract.\n",
+                "Autoresearch measurement must stay non-disruptive. Manual runtime probes must remain explicitly opted in, gated by the readiness watcher/no-telemetry bootstrap contract, and hard-bounded by timeout_seconds <= 30.\n",
                 file=sys.stderr,
             )
             for finding in findings:

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Reject timeout/sleep-based control flow and point to deterministic fixes."""
+"""Reject sleeps and unbounded/over-30-second timeout control flow."""
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
+import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +36,21 @@ SOURCE_SUFFIXES = {
     ".cjs",
     ".yml",
     ".yaml",
+}
+MAX_TIMEOUT_SECONDS = 30.0
+SHELL_DURATION_UNITS = {
+    "": 1.0,
+    "s": 1.0,
+    "m": 60.0,
+    "h": 3600.0,
+    "d": 86400.0,
+}
+PYTHON_SUBPROCESS_FUNCTIONS = {
+    "run",
+    "check_call",
+    "check_output",
+    "call",
+    "Popen",
 }
 
 
@@ -70,28 +87,16 @@ RULES = [
         "Replace sleep with an observable readiness signal such as process exit, driver acknowledgement, file/event notification, or game/task-frame state.",
     ),
     Rule(
-        "shell-timeout-command",
-        re.compile(r"(^|[;&|()\s])timeout(\s|$)"),
-        {".sh", ".bash"},
-        "Remove the timeout wrapper; make the invoked helper terminate on a deterministic completion or structured failure condition.",
-    ),
-    Rule(
-        "shell-read-timeout",
-        re.compile(r"(^|[;&|()\s])read\s[^#\n;|&]*\s-t(\s|$)"),
-        {".sh", ".bash"},
-        "Use a deterministic input/event source instead of read -t.",
-    ),
-    Rule(
         "rust-thread-sleep",
         re.compile(r"\b(?:std::)?thread::sleep\s*\("),
         {".rs"},
         "Replace thread sleep with a readiness/event handshake, task-frame callback, channel receive, or explicit driver acknowledgement.",
     ),
     Rule(
-        "rust-async-sleep-or-timeout",
-        re.compile(r"\btokio::time::(?:sleep|timeout)\s*\("),
+        "rust-async-sleep",
+        re.compile(r"\btokio::time::sleep\s*\("),
         {".rs"},
-        "Use deterministic async completion, cancellation from an observed state, or a channel/event instead of tokio time gates.",
+        "Use deterministic async completion, cancellation from an observed state, or a channel/event instead of sleeps.",
     ),
     Rule(
         "rust-elapsed-deadline",
@@ -118,24 +123,37 @@ RULES = [
         "Use deterministic process/event/file readiness primitives instead of Python sleep or wait_for.",
     ),
     Rule(
-        "python-timeout-argument",
-        re.compile(r"\btimeout\s*="),
-        {".py"},
-        "Avoid timeout keyword arguments; drive the operation from an observable completion or failure condition.",
-    ),
-    Rule(
         "js-timer-api",
         re.compile(r"\b(?:setTimeout|setInterval|AbortSignal\.timeout)\s*\("),
         {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"},
         "Replace timer APIs with explicit events, promises resolved by real readiness, or deterministic test hooks.",
     ),
-    Rule(
-        "yaml-timeout-minutes",
-        re.compile(r"(^|\s)timeout-minutes\s*:"),
-        {".yml", ".yaml"},
-        "Do not encode CI timeouts; make the invoked job/check exit on deterministic completion or structured failure.",
-    ),
 ]
+
+SHELL_TIMEOUT_RULE = Rule(
+    "shell-timeout-unbounded-or-over-30",
+    re.compile(r"$^"),
+    {".sh", ".bash"},
+    "Use timeout/read -t only with an explicit numeric duration greater than 0 and no more than 30 seconds.",
+)
+PYTHON_SUBPROCESS_MISSING_TIMEOUT_RULE = Rule(
+    "python-subprocess-missing-timeout",
+    re.compile(r"$^"),
+    {".py"},
+    "Every subprocess call must include an explicit timeout no greater than 30 seconds.",
+)
+PYTHON_SUBPROCESS_UNBOUNDED_TIMEOUT_RULE = Rule(
+    "python-subprocess-unbounded-or-over-30-timeout",
+    re.compile(r"$^"),
+    {".py"},
+    "Use a literal or module constant timeout greater than 0 and no more than 30 seconds.",
+)
+YAML_TIMEOUT_MINUTES_RULE = Rule(
+    "yaml-timeout-minutes-over-30-seconds",
+    re.compile(r"$^"),
+    {".yml", ".yaml"},
+    "timeout-minutes cannot express the 30-second hard cap; use a repo helper with a <=30 second timeout instead.",
+)
 
 
 def strip_line_for_suffix(line: str, suffix: str) -> str:
@@ -164,14 +182,162 @@ def source_files() -> list[Path]:
     return sorted(paths)
 
 
+def line_text(lines: list[str], line_number: int) -> str:
+    if 1 <= line_number <= len(lines):
+        return lines[line_number - 1]
+    return ""
+
+
+def parse_shell_duration_seconds(token: str) -> float | None:
+    value = token.strip().strip("'\"")
+    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)([smhd]?)", value)
+    if match is None:
+        return None
+    magnitude = float(match.group(1))
+    unit = match.group(2)
+    return magnitude * SHELL_DURATION_UNITS[unit]
+
+
+def bounded_seconds(value: float | None) -> bool:
+    return value is not None and 0 < value <= MAX_TIMEOUT_SECONDS
+
+
+def shell_timeout_duration(tokens: list[str], timeout_index: int) -> float | None:
+    index = timeout_index + 1
+    while index < len(tokens) and tokens[index].startswith("-"):
+        option = tokens[index]
+        index += 1
+        if option in {"-k", "--kill-after"} and index < len(tokens):
+            index += 1
+    if index >= len(tokens):
+        return None
+    return parse_shell_duration_seconds(tokens[index])
+
+
+def shell_read_timeout_duration(tokens: list[str], read_index: int) -> float | None:
+    index = read_index + 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "-t":
+            if index + 1 >= len(tokens):
+                return None
+            return parse_shell_duration_seconds(tokens[index + 1])
+        if token.startswith("-t") and len(token) > 2:
+            return parse_shell_duration_seconds(token[2:])
+        index += 1
+    return None
+
+
+def scan_shell_bounded_timeouts(relative: Path, lines: list[str], suffix: str) -> list[Finding]:
+    if suffix not in {".sh", ".bash"}:
+        return []
+    findings: list[Finding] = []
+    for line_number, line in enumerate(lines, start=1):
+        searchable = strip_line_for_suffix(line, suffix)
+        if not searchable:
+            continue
+        try:
+            tokens = shlex.split(searchable, comments=True, posix=True)
+        except ValueError:
+            tokens = searchable.split()
+        for index, token in enumerate(tokens):
+            if token == "timeout" and not bounded_seconds(shell_timeout_duration(tokens, index)):
+                findings.append(Finding(relative, line_number, SHELL_TIMEOUT_RULE, line))
+            if token == "read" and "-t" in searchable and not bounded_seconds(shell_read_timeout_duration(tokens, index)):
+                findings.append(Finding(relative, line_number, SHELL_TIMEOUT_RULE, line))
+    return findings
+
+
+def numeric_constant_value(node: ast.AST) -> float | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, int | float):
+        return float(node.value)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        operand = numeric_constant_value(node.operand)
+        return -operand if operand is not None else None
+    return None
+
+
+def module_numeric_constants(tree: ast.AST) -> dict[str, float]:
+    constants: dict[str, float] = {}
+    for node in getattr(tree, "body", []):
+        if isinstance(node, ast.Assign):
+            value = numeric_constant_value(node.value)
+            if value is None:
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id.isupper():
+                    constants[target.id] = value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            value = numeric_constant_value(node.value) if node.value is not None else None
+            if value is not None and node.target.id.isupper():
+                constants[node.target.id] = value
+    return constants
+
+
+def subprocess_attr_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+        if node.value.id == "subprocess" and node.attr in PYTHON_SUBPROCESS_FUNCTIONS:
+            return node.attr
+    return None
+
+
+def timeout_keyword_value(node: ast.Call) -> ast.AST | None:
+    for keyword in node.keywords:
+        if keyword.arg == "timeout":
+            return keyword.value
+    return None
+
+
+def bounded_python_timeout(value_node: ast.AST, constants: dict[str, float]) -> bool:
+    value = numeric_constant_value(value_node)
+    if value is None and isinstance(value_node, ast.Name):
+        value = constants.get(value_node.id)
+    return bounded_seconds(value)
+
+
+def scan_python_subprocess_timeouts(relative: Path, text: str, lines: list[str]) -> list[Finding]:
+    if relative.suffix != ".py":
+        return []
+    try:
+        tree = ast.parse(text, filename=str(relative))
+    except SyntaxError:
+        return []
+    constants = module_numeric_constants(tree)
+    findings: list[Finding] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if subprocess_attr_name(node.func) is None:
+            continue
+        timeout_value = timeout_keyword_value(node)
+        line = line_text(lines, node.lineno)
+        if timeout_value is None:
+            findings.append(Finding(relative, node.lineno, PYTHON_SUBPROCESS_MISSING_TIMEOUT_RULE, line))
+        elif not bounded_python_timeout(timeout_value, constants):
+            findings.append(Finding(relative, node.lineno, PYTHON_SUBPROCESS_UNBOUNDED_TIMEOUT_RULE, line))
+    return findings
+
+
+def scan_yaml_timeouts(relative: Path, lines: list[str], suffix: str) -> list[Finding]:
+    if suffix not in {".yml", ".yaml"}:
+        return []
+    findings: list[Finding] = []
+    for line_number, line in enumerate(lines, start=1):
+        searchable = strip_line_for_suffix(line, suffix)
+        if re.search(r"(^|\s)timeout-minutes\s*:", searchable):
+            findings.append(Finding(relative, line_number, YAML_TIMEOUT_MINUTES_RULE, line))
+    return findings
+
+
 def scan_file(path: Path) -> list[Finding]:
     findings: list[Finding] = []
     relative = path.relative_to(REPO_ROOT)
     suffix = path.suffix
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as error:
         raise SystemExit(f"failed to decode {relative}: {error}") from error
+    lines = text.splitlines()
 
     for line_number, line in enumerate(lines, start=1):
         searchable = strip_line_for_suffix(line, suffix)
@@ -182,6 +348,9 @@ def scan_file(path: Path) -> list[Finding]:
                 continue
             if rule.pattern.search(searchable):
                 findings.append(Finding(relative, line_number, rule, line))
+    findings.extend(scan_shell_bounded_timeouts(relative, lines, suffix))
+    findings.extend(scan_python_subprocess_timeouts(relative, text, lines))
+    findings.extend(scan_yaml_timeouts(relative, lines, suffix))
     return findings
 
 
@@ -195,9 +364,9 @@ def main() -> int:
         json.dump([finding.to_json() for finding in findings], sys.stdout, indent=2)
         sys.stdout.write("\n")
     elif findings:
-        print("Timeout/sleep-based control flow is banned.", file=sys.stderr)
+        print("Sleep or unbounded/over-30-second timeout control flow is banned.", file=sys.stderr)
         print(
-            "Use deterministic readiness instead: event files, process exit, inotify/file changes, explicit driver acknowledgements, game/task-frame state, channels, or structured failure states.\n",
+            "Use explicit timeouts of 30 seconds or less as hard safety caps, and prefer deterministic readiness inside that cap: event files, process exit, inotify/file changes, explicit driver acknowledgements, game/task-frame state, channels, or structured failure states.\n",
             file=sys.stderr,
         )
         for finding in findings:

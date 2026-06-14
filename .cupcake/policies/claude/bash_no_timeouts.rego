@@ -1,10 +1,10 @@
 # METADATA
 # scope: package
-# title: Bash No Timeout/Sleep Guard
-# description: Reject agent-invoked shell timeouts and sleeps; require deterministic readiness, events, or repo-approved drivers instead.
+# title: Bash Bounded Timeout Guard
+# description: Require agent-invoked Bash commands to carry a tool-level timeout of 30 seconds or less; reject sleeps that hide readiness bugs.
 # custom:
 #   severity: HIGH
-#   id: ER-EFFECTS-BASH-NO-TIMEOUTS
+#   id: ER-EFFECTS-BASH-BOUNDED-TIMEOUT
 #   routing:
 #     required_events: ["PreToolUse"]
 #     required_tools: ["Bash"]
@@ -15,27 +15,77 @@ import rego.v1
 command := object.get(input.tool_input, "command", "")
 
 timeout_fields := {"timeout", "timeout_ms", "timeout_seconds"}
-timeout_option_prefixes := {"--timeout", "--max-time", "--connect-timeout", "--read-timeout", "--write-timeout"}
 
 tool_applies if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"
 }
 
-violation_reasons contains "Bash tool timeout parameter" if {
-	tool_applies
+has_tool_timeout if {
 	some field in timeout_fields
 	object.get(input.tool_input, field, null) != null
+}
+
+valid_seconds_string(value) if {
+	is_string(value)
+	regex.match("^([1-9]|[12][0-9]|30)$", value)
+}
+
+valid_milliseconds_string(value) if {
+	is_string(value)
+	regex.match("^([1-9][0-9]{0,3}|[12][0-9]{4}|30000)$", value)
+}
+
+valid_tool_timeout if {
+	value := object.get(input.tool_input, "timeout", null)
+	is_number(value)
+	not value <= 0
+	value <= 30000
+}
+
+valid_tool_timeout if {
+	value := object.get(input.tool_input, "timeout", null)
+	valid_milliseconds_string(value)
+}
+
+valid_tool_timeout if {
+	value := object.get(input.tool_input, "timeout_seconds", null)
+	is_number(value)
+	not value <= 0
+	value <= 30
+}
+
+valid_tool_timeout if {
+	value := object.get(input.tool_input, "timeout_seconds", null)
+	valid_seconds_string(value)
+}
+
+valid_tool_timeout if {
+	value := object.get(input.tool_input, "timeout_ms", null)
+	is_number(value)
+	not value <= 0
+	value <= 30000
+}
+
+valid_tool_timeout if {
+	value := object.get(input.tool_input, "timeout_ms", null)
+	valid_milliseconds_string(value)
+}
+
+violation_reasons contains "missing Bash tool timeout parameter" if {
+	tool_applies
+	not has_tool_timeout
+}
+
+violation_reasons contains "Bash tool timeout parameter must be greater than 0 and no more than 30 seconds (timeout/timeout_ms <= 30000ms, timeout_seconds <= 30)" if {
+	tool_applies
+	has_tool_timeout
+	not valid_tool_timeout
 }
 
 violation_reasons contains "shell sleep command" if {
 	tool_applies
 	ast_command_name("sleep")
-}
-
-violation_reasons contains "shell timeout command" if {
-	tool_applies
-	ast_command_name("timeout")
 }
 
 violation_reasons contains "shell sleep command" if {
@@ -44,49 +94,20 @@ violation_reasons contains "shell sleep command" if {
 	uses_shell_word(command, "sleep")
 }
 
-violation_reasons contains "shell timeout command" if {
-	tool_applies
-	no_usable_ast
-	uses_shell_word(command, "timeout")
-}
-
-violation_reasons contains "shell `read -t` timeout option" if {
-	tool_applies
-	read_with_timeout_option
-}
-
-violation_reasons contains sprintf("timeout-style option `%s`", [token]) if {
-	tool_applies
-	ast := object.get(input.tool_input, "command_ast", {})
-	object.get(ast, "parse_ok", false) == true
-	statements := object.get(ast, "statements", [])
-	some statement in statements
-	tokens := object.get(statement, "tokens", [])
-	some token in tokens
-	some prefix in timeout_option_prefixes
-	startswith(token, prefix)
-}
-
-violation_reasons contains "timeout-style shell option" if {
-	tool_applies
-	no_usable_ast
-	regex.match("(^|[\\s])--(timeout|max-time|connect-timeout|read-timeout|write-timeout)(=|[\\s]|$)", command)
-}
-
 deny contains decision if {
 	reasons := [reason | some reason in violation_reasons]
 	count(reasons) > 0
 
 	decision := {
-		"rule_id": "ER-EFFECTS-BASH-NO-TIMEOUTS",
+		"rule_id": "ER-EFFECTS-BASH-BOUNDED-TIMEOUT",
 		"severity": "HIGH",
 		"reason": concat("", [
-			"🧁 Cupcake denied this Bash invocation because timeouts and sleeps are not permitted in coding workflows. Command: ",
+			"🧁 Cupcake denied this Bash invocation because agent-run shell commands must be hard-bounded. Command: ",
 			command,
 			"\n\nDetected: ",
 			concat(", ", reasons),
-			"\n\nWhy this policy exists: timeout- and sleep-based control hides races, strands runtime probes behind arbitrary wall-clock guesses, and converts correctness into luck.",
-			"\n\nHappy path: omit Bash tool timeout fields, avoid `sleep`/`timeout`/timeout options, and use deterministic readiness instead: event files, process exit, inotify/file changes, explicit driver acknowledgements, game/task-frame state, or a repo-approved helper that returns only after an observable completion or structured failure condition.",
+			"\n\nWhy this policy exists: unbounded shell commands can strand shared tools, game processes, or remote analysis jobs. Every agent-invoked Bash command must include a tool-level timeout of 30 seconds or less; runtime helpers should still prefer observable completion and structured failures inside that hard cap.",
+			"\n\nHappy path: set the Bash tool timeout to 30 seconds or less. Cupcake receives Bash tool `timeout`/`timeout_ms` in milliseconds and `timeout_seconds` in seconds. Keep long-running workflows split into bounded steps, and avoid `sleep`; use event files, process exit, inotify/file changes, explicit driver acknowledgements, game/task-frame state, or a repo-approved helper that returns before the hard cap.",
 		]),
 	}
 }
@@ -97,22 +118,6 @@ ast_command_name(expected) if {
 	statements := object.get(ast, "statements", [])
 	some statement in statements
 	object.get(statement, "command_name", "") == expected
-}
-
-read_with_timeout_option if {
-	ast := object.get(input.tool_input, "command_ast", {})
-	object.get(ast, "parse_ok", false) == true
-	statements := object.get(ast, "statements", [])
-	some statement in statements
-	object.get(statement, "command_name", "") == "read"
-	tokens := object.get(statement, "tokens", [])
-	some token in tokens
-	token == "-t"
-}
-
-read_with_timeout_option if {
-	no_usable_ast
-	regex.match("(^|[\\s;|&()])read[\\s][^\n;|&]*(^|[\\s])-t([\\s]|$)", command)
 }
 
 no_usable_ast if {

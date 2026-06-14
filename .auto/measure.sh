@@ -29,6 +29,12 @@ LOG_DIR="$REPO_ROOT/.auto/last-measure"
 mkdir -p "$LOG_DIR"
 rm -f "$LOG_DIR"/*.log 2>/dev/null || true
 
+AUTO_MEASURE_GATE_TIMEOUT_SECONDS="${AUTO_MEASURE_GATE_TIMEOUT_SECONDS:-30}"
+if ! [[ "$AUTO_MEASURE_GATE_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || (( AUTO_MEASURE_GATE_TIMEOUT_SECONDS < 1 || AUTO_MEASURE_GATE_TIMEOUT_SECONDS > 30 )); then
+  echo "AUTO_MEASURE_GATE_TIMEOUT_SECONDS must be an integer from 1 to 30" >&2
+  exit 2
+fi
+
 GATE_FAILED=0
 TEST_PASS=1
 BUILD_SECONDS="0"
@@ -47,13 +53,17 @@ run_gate() {
   log_path="$LOG_DIR/$name.log"
   start=$(now_ms)
   echo "[measure] gate $name: $*" >&2
-  if "$@" >"$log_path" 2>&1; then
+  if timeout "$AUTO_MEASURE_GATE_TIMEOUT_SECONDS" "$@" >"$log_path" 2>&1; then
     rc=0
   else
     rc=$?
     GATE_FAILED=1
     TEST_PASS=0
-    echo "[measure] gate $name failed with rc=$rc; log=$log_path" >&2
+    if [[ "$rc" == "124" ]]; then
+      echo "[measure] gate $name exceeded ${AUTO_MEASURE_GATE_TIMEOUT_SECONDS}s hard cap; log=$log_path" >&2
+    else
+      echo "[measure] gate $name failed with rc=$rc; log=$log_path" >&2
+    fi
     tail -80 "$log_path" >&2 || true
   fi
   end=$(now_ms)
@@ -75,7 +85,8 @@ run_gate readiness_watch_tests python3 scripts/test-er-readiness-watch.py
 run_gate xwin_check cargo xwin check --target x86_64-pc-windows-msvc --no-default-features
 run_gate shellcheck_scripts shellcheck scripts/er-smoke-driver.sh
 run_gate shellcheck_auto_runtime shellcheck .auto/runtime_probe.sh .auto/run_runtime_experiment.sh
-run_gate runtime_experiment_rego opa check .auto/runtime_experiment_policy.rego
+run_gate runtime_experiment_rego opa check .auto/runtime_experiment_policy.rego .auto/runtime_experiment_policy_test.rego
+run_gate runtime_experiment_rego_tests opa test .auto/runtime_experiment_policy.rego .auto/runtime_experiment_policy_test.rego
 run_gate cupcake_validate cupcake validate --log-level error
 run_gate cupcake_policy_regressions python3 scripts/test-cupcake-policies.py
 run_gate smoke_preflight scripts/er-smoke-driver.sh preflight --no-build --no-install --no-launch --max-nudges 0
@@ -86,7 +97,7 @@ import re
 import subprocess
 pattern = re.compile(r'(?:^|[/\\])(eldenring\.exe|start_protected_game\.exe)(?:\s|$)', re.I)
 count = 0
-output = subprocess.check_output(["ps", "-eo", "pid=,args="], text=True)
+output = subprocess.check_output(["ps", "-eo", "pid=,args="], text=True, timeout=30)
 for line in output.splitlines():
     if pattern.search(line):
         count += 1
@@ -101,7 +112,7 @@ if [[ "$ER_PROCESS_COUNT" != "0" ]]; then
 import re
 import subprocess
 pattern = re.compile(r'(?:^|[/\\])(eldenring\.exe|start_protected_game\.exe)(?:\s|$)', re.I)
-output = subprocess.check_output(["ps", "-eo", "pid=,args="], text=True)
+output = subprocess.check_output(["ps", "-eo", "pid=,args="], text=True, timeout=30)
 for line in output.splitlines():
     if pattern.search(line):
         print(line)
@@ -153,6 +164,9 @@ metrics = {
     "input_explanation_bonus": 0,
     "trace_invasiveness_score": 0,
     "static_evidence_score": 0,
+    "ghidra_crossref_score": 0,
+    "ghidra_static_ref_match_count": 0,
+    "ghidra_function_boundary_mismatch_count": 0,
     "runtime_probe_seconds": 0,
     "build_seconds": build_seconds,
     "test_pass": test_pass,
@@ -704,6 +718,134 @@ if summary.get("slot_reset_parent_state_table_dispatch_mapped"):
     static_score += 40
 if summary.get("slot_reset_parent_default_label_and_loop_guard_mapped"):
     static_score += 40
+if summary.get("slot_reset_parent_loop_trace_state_payload_mapped"):
+    static_score += 40
+if summary.get("slot_reset_parent_loop_trace_control_payload_mapped"):
+    static_score += 40
+if summary.get("slot_reset_parent_loop_trace_queue_payload_mapped"):
+    static_score += 40
+if summary.get("slot_reset_parent_loop_trace_finish_payload_mapped"):
+    static_score += 40
+if summary.get("slot_reset_parent_loop_trace_payload_ready_for_passive_probe"):
+    static_score += 40
+if summary.get("slot_reset_to_menu_job_wait_helper_range_mapped"):
+    static_score += 40
+if summary.get("slot_reset_to_menu_job_wait_helper_attaches_owner130"):
+    static_score += 40
+if summary.get("slot_reset_to_menu_job_wait_helper_sets_state10"):
+    static_score += 40
+if summary.get("slot_reset_to_menu_job_wait_helper_callers_mapped"):
+    static_score += 40
+if summary.get("slot_reset_to_menu_job_wait_helper_candidate_handoff_mapped"):
+    static_score += 40
+if summary.get("slot_reset_to_menu_job_wait_begin_logo_payload_mapped"):
+    static_score += 40
+if summary.get("slot_reset_to_menu_job_wait_begin_title_accept_payload_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_bool_wrapper_inner_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_owner_builder_range_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_owner_builder_args_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_owner_builder_input_call_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_owner_builder_selector6_active_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_builder_allocates_0x138"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_owner_builder_sources_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_condition_builder_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_builder_range_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_builder_arg_capture_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_builder_alloc_ctor_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_builder_temp_descriptor_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_builder_node_vtable_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_builder_copy_sources_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_builder_subnodes_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_builder_output_cleanup_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_node_vtable_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_node_update_range_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_node_update_gates_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_node_update_child_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_node_update_status_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_node_update_global_bit_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_node_update_terminal_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_node_update_wait_states_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_builder_subnode_update_offsets_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_temp_vtable_slots_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_temp_clone_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_temp_child_clone_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_temp_callback_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_manager_state_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_manager_global_ref_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_manager_singleton_refs_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_manager_shutdown_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_manager_init_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_manager_counter_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_input_manager_queue_setup_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_branch_step_wrapper_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_accept_condition_chain_mapped"):
+    static_score += 40
+if summary.get("slot_reset_to_menu_job_wait_xr_dialog_payload_mapped"):
+    static_score += 40
+if summary.get("slot_reset_to_menu_job_wait_init_menu_two_descriptor_payload_mapped"):
+    static_score += 40
+if summary.get("slot_reset_to_menu_job_wait_init_menu_gate_payload_mapped"):
+    static_score += 40
+if summary.get("slot_reset_to_menu_job_wait_init_menu_link_fold_payload_mapped"):
+    static_score += 40
+if summary.get("slot_reset_to_menu_job_wait_init_menu_payload_mapped"):
+    static_score += 40
+if summary.get("slot_reset_to_menu_job_wait_all_caller_payloads_mapped"):
+    static_score += 40
+if summary.get("slot_reset_title_parent_constructor_ranges_mapped"):
+    static_score += 40
+if summary.get("slot_reset_title_parent_constructor_table_chain_mapped"):
+    static_score += 40
+if summary.get("slot_reset_title_parent_constructor_state_fields_mapped"):
+    static_score += 40
+if summary.get("slot_reset_title_parent_constructor_to_dispatch_mapped"):
+    static_score += 40
+if summary.get("slot_reset_title_parent_title_table_refs_mapped"):
+    static_score += 40
+if summary.get("slot_reset_title_parent_simple_table_refs_initializer_only"):
+    static_score += 40
+if summary.get("slot_reset_title_parent_final_vtable_slot28_maps_parent_loop"):
+    static_score += 40
+if summary.get("slot_reset_title_parent_passive_trace_anchor_mapped"):
+    static_score += 40
 if summary.get("slot_reset_handler_range_mapped"):
     static_score += 40
 if summary.get("slot_reset_handler_counter_gate_and_minus_one_slot_mapped"):
@@ -770,7 +912,49 @@ if summary.get("slot_reset_global_context_plus19_gate_callers_mapped"):
     static_score += 40
 if summary.get("slot_reset_global_context_plus19_gate_conditions_mapped"):
     static_score += 40
+if summary.get("slot_reset_title_queue_state_table_range_mapped"):
+    static_score += 40
+if summary.get("slot_reset_title_queue_state_table_zeroes_global_0x60"):
+    static_score += 40
+if summary.get("slot_reset_title_queue_state_table_has_6_initialized_pairs"):
+    static_score += 40
+if summary.get("slot_reset_title_queue_menu_states_link_seed_and_pump"):
+    static_score += 40
+if summary.get("slot_reset_title_queue_ingame_states_mapped"):
+    static_score += 40
+if summary.get("slot_reset_title_queue_state_handler_ranges_mapped"):
+    static_score += 40
+if summary.get("slot_reset_title_queue_seed_range_mapped"):
+    static_score += 40
+if summary.get("slot_reset_title_queue_seed_produces_owner128_task"):
+    static_score += 40
+if summary.get("slot_reset_title_queue_seed_resets_selection_and_advances"):
+    static_score += 40
+if summary.get("slot_reset_title_queue_pump_range_mapped"):
+    static_score += 40
+if summary.get("slot_reset_title_queue_pump_consumes_owner128_task"):
+    static_score += 40
+if summary.get("slot_reset_title_queue_pump_selection_path_mapped"):
+    static_score += 40
+if summary.get("slot_reset_title_queue_advance_helper_mapped"):
+    static_score += 40
+if summary.get("slot_reset_title_queue_advance_callers_mapped"):
+    static_score += 40
+if summary.get("slot_reset_title_queue_set_state_helper_mapped"):
+    static_score += 40
+if summary.get("slot_reset_title_queue_set_state_callers_mapped"):
+    static_score += 40
+if summary.get("slot_reset_title_queue_menu_loop_sets_state5"):
+    static_score += 40
+if summary.get("slot_reset_title_queue_ingame_gate_sets_state0"):
+    static_score += 40
 if summary.get("slot_reset_menu_job_wait_sets_finish_state_11"):
+    static_score += 40
+if summary.get("slot_reset_menu_job_wait_pump_sequence_mapped"):
+    static_score += 40
+if summary.get("slot_reset_menu_job_wait_is_not_title_payload_enqueue"):
+    static_score += 40
+if summary.get("slot_reset_menu_job_wait_finish_gate_after_owner130_queue"):
     static_score += 40
 if summary.get("slot_reset_set_state_helper_range_mapped"):
     static_score += 40
@@ -782,9 +966,91 @@ if summary.get("slot_reset_timed_submit_helper_range_mapped"):
     static_score += 40
 if summary.get("slot_reset_timed_submit_iterates_existing_tasks"):
     static_score += 40
+if summary.get("slot_reset_timed_descriptor_vtables_mapped"):
+    static_score += 40
+if summary.get("slot_reset_timed_submit_restores_descriptor_without_enqueue"):
+    static_score += 40
 if summary.get("slot_reset_timed_queue_helper_range_mapped"):
     static_score += 40
 if summary.get("slot_reset_timed_queue_consumes_existing_job_before_finish"):
+    static_score += 40
+if summary.get("slot_reset_timed_queue_check_semantics_mapped"):
+    static_score += 40
+if summary.get("slot_reset_timed_queue_check_receives_virtual_result_descriptor"):
+    static_score += 40
+if summary.get("slot_reset_timed_queue_terminal_check_gates_slot_clear"):
+    static_score += 40
+if summary.get("slot_reset_timed_queue_restores_descriptor_when_empty"):
+    static_score += 40
+if summary.get("title_accept_payload_range_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_primary_enqueue_chain_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_primary_chain_builder_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_primary_link_uses_first_enqueue"):
+    static_score += 40
+if summary.get("title_accept_payload_primary_link_feeds_second_enqueue"):
+    static_score += 40
+if summary.get("title_accept_payload_second_enqueue_saved_r15"):
+    static_score += 40
+if summary.get("title_accept_payload_state_chain_args_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_descriptor_wrapper_enqueue_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_late_aux_builders_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_late_aux_enqueues_saved"):
+    static_score += 40
+if summary.get("title_accept_payload_late_link_folds_aux_results"):
+    static_score += 40
+if summary.get("title_accept_payload_final_owner_builder_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_final_combiner_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_final_enqueue_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_final_wrapper_chains_prior_nodes"):
+    static_score += 40
+if summary.get("title_accept_payload_final_cleanup_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_final_combiner_body_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_final_combiner_ownership_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_final_wrapper_body_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_branch_compose_body_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_branch_step_body_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_final_combiner_inner_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_final_wrapper_inner_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_branch_compose_inner_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_branch_step_builder_inner_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_branch_step_status_node_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_branch_step_condition_chain_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_branch_step_status_matches_terminal_check"):
+    static_score += 40
+if summary.get("title_accept_payload_branch_step_vtable_chain_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_branch_step_payload_vslot2_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_branch_step_status_vslot2_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_state_descriptor_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_owner_fields_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_enqueue_fanout_mapped"):
+    static_score += 40
+if summary.get("title_accept_payload_late_link_chain_mapped"):
     static_score += 40
 if summary.get("slot_reset_timed_submit_empty_descriptor_mapped"):
     static_score += 40
@@ -927,6 +1193,19 @@ if summary.get("slot_reset_end_flow_branch_gate_submit_helper_mapped"):
 if summary.get("slot_reset_end_flow_branch_gate_stage_helper_mapped"):
     static_score += 40
 metrics["static_evidence_score"] = static_score
+if isinstance(static_re_evidence, dict):
+    ghidra_reconciliation = static_re_evidence.get("ghidra_reconciliation", {})
+    if isinstance(ghidra_reconciliation, dict):
+        ghidra_summary = ghidra_reconciliation.get("summary", {})
+        if isinstance(ghidra_summary, dict):
+            for metric_key, summary_key in [
+                ("ghidra_crossref_score", "score"),
+                ("ghidra_static_ref_match_count", "static_ref_match_count"),
+                ("ghidra_function_boundary_mismatch_count", "function_boundary_mismatch_count"),
+            ]:
+                value = ghidra_summary.get(summary_key)
+                if isinstance(value, (int, float)):
+                    metrics[metric_key] = int(value)
 
 # Gated tracing is present but not always active. Runtime trace artifacts raise this score.
 if "install_continue_trace_hooks" in src:
@@ -1187,6 +1466,9 @@ for key in [
     "input_explanation_bonus",
     "trace_invasiveness_score",
     "static_evidence_score",
+    "ghidra_crossref_score",
+    "ghidra_static_ref_match_count",
+    "ghidra_function_boundary_mismatch_count",
     "runtime_probe_seconds",
     "build_seconds",
     "test_pass",

@@ -18,10 +18,16 @@ class PolicyCase:
     expected_text: str | None = None
     extra_tool_input: dict[str, object] | None = None
     extra_event: dict[str, object] | None = None
+    include_timeout: bool = True
+
+
+DEFAULT_BASH_TIMEOUT_MS = 30000
 
 
 def run_case(case: PolicyCase) -> None:
     tool_input: dict[str, object] = {"command": case.command}
+    if case.include_timeout:
+        tool_input["timeout"] = DEFAULT_BASH_TIMEOUT_MS
     if case.extra_tool_input:
         tool_input.update(case.extra_tool_input)
     event = {
@@ -41,6 +47,7 @@ def run_case(case: PolicyCase) -> None:
         text=True,
         capture_output=True,
         check=False,
+        timeout=30,
     )
     output = result.stdout + result.stderr
     allowed = result.returncode == 0
@@ -56,11 +63,18 @@ def main() -> int:
     cases = [
         PolicyCase("allow-rtk", "rtk ls", True),
         PolicyCase(
-            "deny-tool-timeout-field",
+            "deny-missing-tool-timeout-field",
             "rtk ls",
             False,
-            "Bash tool timeout parameter",
-            {"timeout": 1000},
+            "missing Bash tool timeout parameter",
+            include_timeout=False,
+        ),
+        PolicyCase(
+            "deny-tool-timeout-too-large",
+            "rtk ls",
+            False,
+            "no more than 30 seconds",
+            {"timeout": 30001},
         ),
         PolicyCase("deny-shell-sleep", "sleep 1", False, "shell sleep command"),
         PolicyCase("deny-native-ls", "ls target", False, "RTK path"),

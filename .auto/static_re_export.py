@@ -7,6 +7,7 @@ and GameMan save/load scheduler helpers used by the autoresearch benchmark.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import struct
@@ -32,6 +33,22 @@ TARGETS = {
     "slot_reset_state_table_init_0a4f50": 0x1400A4F50,
     "slot_reset_state_table_global_43d71580": 0x143D71580,
     "slot_reset_parent_loop_b0bd60": 0x140B0BD60,
+    "slot_reset_title_parent_ctor_b0b020": 0x140B0B020,
+    "slot_reset_title_parent_base_ctor_b0b0d0": 0x140B0B0D0,
+    "slot_reset_title_step_ctor_b0b1c0": 0x140B0B1C0,
+    "slot_reset_title_queue_state_table_init_0a4c90": 0x1400A4C90,
+    "slot_reset_title_queue_state_table_global_43d71340": 0x143D71340,
+    "slot_reset_title_queue_seed_b0a4a0": 0x140B0A4A0,
+    "slot_reset_title_queue_pump_b0a5e0": 0x140B0A5E0,
+    "slot_reset_title_queue_ingame_init_b0a1f0": 0x140B0A1F0,
+    "slot_reset_title_queue_ingame_standby_b0a430": 0x140B0A430,
+    "slot_reset_title_queue_ingame_b0a1b0": 0x140B0A1B0,
+    "slot_reset_title_queue_end_b0a170": 0x140B0A170,
+    "slot_reset_title_queue_advance_b0a980": 0x140B0A980,
+    "slot_reset_title_queue_source_81f7e0": 0x14081F7E0,
+    "slot_reset_title_queue_take_7a9560": 0x1407A9560,
+    "slot_reset_title_queue_state_set_b0aa90": 0x140B0AA90,
+    "slot_reset_title_queue_stream_validate_71fd60": 0x14071FD60,
     "slot_reset_menu_job_wait_handler_b0d400": 0x140B0D400,
     "slot_reset_play_game_handler_b0d5b0": 0x140B0D5B0,
     "slot_reset_play_game_tail_b0d850": 0x140B0D850,
@@ -41,6 +58,30 @@ TARGETS = {
     "game_man_global_43d69918": 0x143D69918,
     "game_man_b5e_getter_67a1b0": 0x14067A1B0,
     "game_man_b5e_bulk_clear_679830": 0x140679830,
+    "slot_reset_to_menu_job_wait_helper_b0e530": 0x140B0E530,
+    "slot_reset_title_beginlogo_owner_e0_builder_81f180": 0x14081F180,
+    "slot_reset_title_begintitle_owner138_e0_builder_81f9f0": 0x14081F9F0,
+    "slot_reset_title_begintitle_bool_wrapper_b0c180": 0x140B0C180,
+    "slot_reset_title_accept_input_condition_builder_7acb00": 0x1407ACB00,
+    "slot_reset_title_accept_input_alloc_seed_7a72a0": 0x1407A72A0,
+    "slot_reset_title_accept_input_node_ctor_7a6f20": 0x1407A6F20,
+    "slot_reset_title_accept_input_node_update_7ad1c0": 0x1407AD1C0,
+    "slot_reset_title_accept_input_manager_state_765f20": 0x140765F20,
+    "slot_reset_title_accept_input_manager_shutdown_765fa0": 0x140765FA0,
+    "slot_reset_title_accept_input_manager_init_766010": 0x140766010,
+    "slot_reset_title_accept_input_manager_queue_setup_7660f0": 0x1407660F0,
+    "slot_reset_title_accept_input_manager_global_43d6b7b0": 0x143D6B7B0,
+    "slot_reset_title_accept_input_manager_singleton_43d6b880": 0x143D6B880,
+    "slot_reset_title_accept_input_manager_allocator_43d87350": 0x143D87350,
+    "slot_reset_title_accept_input_temp_base_vtable_aa9808": 0x142AA9808,
+    "slot_reset_title_accept_input_temp_active_vtable_aa9840": 0x142AA9840,
+    "slot_reset_title_accept_input_node_vtable_aa97e8": 0x142AA97E8,
+    "slot_reset_title_accept_input_temp_clone_7ad6c0": 0x1407AD6C0,
+    "slot_reset_title_accept_input_temp_callback_7ad810": 0x1407AD810,
+    "slot_reset_title_accept_input_temp_active_clone_7ad990": 0x1407AD990,
+    "slot_reset_title_accept_input_temp_child_clone_7ad9d0": 0x1407AD9D0,
+    "slot_reset_title_xr_job_7bb010": 0x1407BB010,
+    "slot_reset_title_initmenu_gate_builder_7a6c00": 0x1407A6C00,
     "slot_reset_end_flow_branch_e780": 0x140B0E780,
     "slot_reset_end_flow_branch_e650": 0x140B0E650,
     "slot_reset_end_flow_branch_gate_table_init_0a2e10": 0x1400A2E10,
@@ -110,6 +151,8 @@ TARGETS = {
     "slot_reset_menu_job_wait_queue_7a9600": 0x1407A9600,
     "slot_reset_menu_job_wait_queue_check_7a9200": 0x1407A9200,
     "slot_reset_menu_job_wait_global_toggle_7663c0": 0x1407663C0,
+    "slot_reset_timed_descriptor_base_vtable_29c8e48": 0x1429C8E48,
+    "slot_reset_timed_descriptor_active_vtable_29c8e58": 0x1429C8E58,
     "slot_reset_global_job_context_43d6b7b0": 0x143D6B7B0,
     "slot_reset_global_context_plus19_gate_758050": 0x140758050,
     "slot_reset_global_context_plus19_gate_status_b3d310": 0x140B3D310,
@@ -137,8 +180,36 @@ TARGETS = {
     "task_event_80dc10": 0x14080DC10,
     "task_local_wrapper_7449e0": 0x1407449E0,
     "slot_reset_branch_gate_descriptor_wrapper_744a60": 0x140744A60,
+    "title_accept_aux_builder_ac620": 0x1409AC620,
+    "title_accept_primary_builder_a6c70": 0x1409A6C70,
+    "title_accept_owner_payload_builder_833880": 0x140833880,
+    "title_accept_final_owner_builder_9aa2d0": 0x1409AA2D0,
+    "title_accept_final_combiner_7ab170": 0x1407AB170,
+    "title_accept_final_combiner_inner_7abb40": 0x1407ABB40,
+    "title_accept_final_combiner_append_7ac0b0": 0x1407AC0B0,
+    "title_accept_attach_7418d0": 0x1407418D0,
+    "title_accept_final_wrapper_9aa430": 0x1409AA430,
+    "title_accept_final_wrapper_inner_78c530": 0x14078C530,
+    "title_accept_branch_compose_inner_7926e0": 0x1407926E0,
+    "title_accept_branch_step_swap_7925d0": 0x1407925D0,
+    "title_accept_branch_step_builder_792970": 0x140792970,
+    "title_accept_branch_step_build_inner_792100": 0x140792100,
+    "title_accept_branch_step_payload_791b50": 0x140791B50,
+    "title_accept_branch_step_payload_vtable_aa2938": 0x142AA2938,
+    "title_accept_branch_step_status_vtable_aa2958": 0x142AA2958,
+    "title_accept_branch_step_status_vslot2_7aa1f0": 0x1407AA1F0,
+    "title_accept_branch_step_payload_vslot2_792460": 0x140792460,
+    "descriptor_status_gt_one_7a9200": 0x1407A9200,
+    "descriptor_status_eq_two_7a9210": 0x1407A9210,
+    "title_accept_branch_step_condition_init_7923f0": 0x1407923F0,
+    "title_accept_branch_step_condition_add_793770": 0x140793770,
+    "title_accept_branch_step_condition_finish_7936f0": 0x1407936F0,
+    "title_accept_branch_step_condition_cleanup_791ed0": 0x140791ED0,
+    "title_accept_branch_step_attach_7aa380": 0x1407AA380,
+    "title_accept_final_cleanup_78cec0": 0x14078CEC0,
     "task_alloc_selector_high_7a7200": 0x1407A7200,
     "task_alloc_selector_low_7a7250": 0x1407A7250,
+    "title_accept_primary_chain_builder_7a72b0": 0x1407A72B0,
     "task_enqueue_7a7b60": 0x1407A7B60,
     "task_enqueue_link_7a7bb0": 0x1407A7BB0,
     "selector_builder_local_wrapper_744d10": 0x140744D10,
@@ -254,7 +325,22 @@ TARGETS = {
     "combined_load_67b940": 0x14067B940,
     "continue_load_67b750": 0x14067B750,
     "current_slot_load_67b570": 0x14067B570,
+    "slot_reset_title_accept_input_manager_gate_766010": 0x140766010,
+    "title_top_dialog_pulse1_candidate_9b26d8": 0x1409B26D8,
 }
+
+GHIDRA_RECONCILIATION_TARGETS = [
+    {"name": "slot_reset_title_begintitle_bool_wrapper_b0c180", "expects_function_entry": True},
+    {"name": "slot_reset_title_begintitle_owner138_e0_builder_81f9f0", "expects_function_entry": False},
+    {"name": "slot_reset_title_accept_input_condition_builder_7acb00", "expects_function_entry": False},
+    {"name": "slot_reset_title_accept_input_node_update_7ad1c0", "expects_function_entry": False},
+    {"name": "slot_reset_title_accept_input_manager_state_765f20", "expects_function_entry": True},
+    {"name": "slot_reset_title_accept_input_manager_gate_766010", "expects_function_entry": True},
+    {"name": "slot_reset_title_accept_input_manager_queue_setup_7660f0", "expects_function_entry": True},
+    {"name": "slot_reset_to_menu_job_wait_helper_b0e530", "expects_function_entry": False},
+    {"name": "slot_reset_menu_job_wait_handler_b0d400", "expects_function_entry": True},
+    {"name": "title_top_dialog_pulse1_candidate_9b26d8", "expects_function_entry": False},
+]
 
 FIELD_OFFSETS = {
     "b72_save_request_profile": 0xB72,
@@ -570,7 +656,9 @@ def scan_rel32_calls(data: bytes, image_base: int, sections: list[dict[str, int 
     raw_size = int(text["raw_size"])
     text_va = image_base + int(text["virtual_address"])
     text_data = data[raw_ptr : raw_ptr + raw_size]
-    by_target = {addr: name for name, addr in TARGETS.items()}
+    by_target: dict[int, list[str]] = {}
+    for name, addr in TARGETS.items():
+        by_target.setdefault(addr, []).append(name)
     refs: dict[str, list[dict[str, Any]]] = {name: [] for name in TARGETS}
     for index in range(0, max(0, len(text_data) - 5)):
         opcode = text_data[index]
@@ -579,18 +667,18 @@ def scan_rel32_calls(data: bytes, image_base: int, sections: list[dict[str, int 
         rel = struct.unpack_from("<i", text_data, index + 1)[0]
         src = text_va + index
         target = src + 5 + rel
-        target_name = by_target.get(target)
-        if target_name is None:
+        target_names = by_target.get(target)
+        if target_names is None:
             continue
-        refs[target_name].append(
-            {
-                "kind": "call" if opcode == 0xE8 else "jmp",
-                "source_va": f"0x{src:x}",
-                "target_va": f"0x{target:x}",
-                "source_rva": f"0x{src - image_base:x}",
-                "target_rva": f"0x{target - image_base:x}",
-            }
-        )
+        ref = {
+            "kind": "call" if opcode == 0xE8 else "jmp",
+            "source_va": f"0x{src:x}",
+            "target_va": f"0x{target:x}",
+            "source_rva": f"0x{src - image_base:x}",
+            "target_rva": f"0x{target - image_base:x}",
+        }
+        for target_name in target_names:
+            refs[target_name].append(dict(ref))
     return refs
 
 
@@ -733,6 +821,147 @@ def fields_seen(field_windows: dict[str, dict[str, Any]], window: str) -> set[st
 
 def ref_source_set(refs: dict[str, list[dict[str, Any]]], target_name: str) -> set[str]:
     return {str(ref["source_va"]) for ref in refs.get(target_name, [])}
+
+
+def _normalized_source_set(rows: list[dict[str, Any]]) -> set[str]:
+    return {str(row.get("source_va", "")).lower() for row in rows if row.get("source_va")}
+
+
+def build_ghidra_reconciliation(
+    repo_root: Path,
+    image_base: int,
+    rel32_refs: dict[str, list[dict[str, Any]]],
+    absolute_refs: dict[str, list[dict[str, Any]]],
+    exe_md5: str,
+) -> dict[str, Any]:
+    facts_path = Path(
+        os.environ.get("GHIDRA_ADDRESS_FACTS_PATH", str(repo_root / "target/ghidra/ghidra-address-facts.json"))
+    )
+    if not facts_path.exists():
+        return {
+            "status": "missing_ghidra_facts",
+            "facts_path": str(facts_path),
+            "summary": {
+                "score": 0,
+                "target_count": len(GHIDRA_RECONCILIATION_TARGETS),
+                "static_ref_match_count": 0,
+                "function_boundary_mismatch_count": 0,
+                "program_md5_matches_local": False,
+            },
+            "targets": [],
+        }
+    try:
+        facts = json.loads(facts_path.read_text(encoding="utf-8", errors="replace"))
+    except Exception as error:
+        return {
+            "status": "invalid_ghidra_facts",
+            "facts_path": str(facts_path),
+            "error": str(error),
+            "summary": {
+                "score": 0,
+                "target_count": len(GHIDRA_RECONCILIATION_TARGETS),
+                "static_ref_match_count": 0,
+                "function_boundary_mismatch_count": 0,
+                "program_md5_matches_local": False,
+            },
+            "targets": [],
+        }
+
+    program = facts.get("program", {}) if isinstance(facts, dict) else {}
+    ghidra_md5 = str(program.get("executable_md5") or "").lower()
+    program_md5_matches = bool(ghidra_md5 and ghidra_md5 == exe_md5.lower())
+    by_name = {str(row.get("name")): row for row in facts.get("targets", []) if isinstance(row, dict)}
+    rows: list[dict[str, Any]] = []
+    score = 20 if program_md5_matches else 0
+    function_found_count = 0
+    user_defined_count = 0
+    static_ref_match_count = 0
+    function_boundary_mismatch_count = 0
+    missing_fact_count = 0
+
+    for target in GHIDRA_RECONCILIATION_TARGETS:
+        name = str(target["name"])
+        target_va = f"0x{TARGETS[name]:x}"
+        fact = by_name.get(name)
+        if fact is None:
+            missing_fact_count += 1
+            rows.append({"name": name, "target_va": target_va, "status": "missing_ghidra_fact"})
+            continue
+
+        function = fact.get("function") if isinstance(fact.get("function"), dict) else None
+        function_entry = str((function or {}).get("entry_va") or "").lower()
+        function_source = str((function or {}).get("source") or "")
+        function_found = function is not None
+        if function_found:
+            function_found_count += 1
+        symbols = fact.get("symbols", []) if isinstance(fact.get("symbols"), list) else []
+        user_defined = function_source == "USER_DEFINED" or any(
+            str(symbol.get("source") or "") == "USER_DEFINED" for symbol in symbols if isinstance(symbol, dict)
+        )
+        if user_defined:
+            user_defined_count += 1
+        expects_entry = bool(target.get("expects_function_entry"))
+        boundary_matches = function_entry == target_va
+        if expects_entry and function_found and not boundary_matches:
+            function_boundary_mismatch_count += 1
+
+        local_sources = {
+            str(row.get("source_va", "")).lower()
+            for row in rel32_refs.get(name, []) + absolute_refs.get(name, [])
+            if row.get("source_va")
+        }
+        ghidra_exact_sources = _normalized_source_set(fact.get("refs_to_exact", []))
+        ghidra_entry_sources = _normalized_source_set(fact.get("refs_to_function_entry", []))
+        matched_sources = sorted(local_sources & (ghidra_exact_sources | ghidra_entry_sources), key=lambda value: int(value, 16))
+        if matched_sources:
+            static_ref_match_count += len(matched_sources)
+
+        row_score = 0
+        if function_found:
+            row_score += 10
+        if not expects_entry or boundary_matches:
+            row_score += 10
+        if matched_sources:
+            row_score += 20
+        if user_defined:
+            row_score += 10
+        score += row_score
+        rows.append(
+            {
+                "name": name,
+                "target_va": target_va,
+                "expects_function_entry": expects_entry,
+                "function_name": (function or {}).get("name"),
+                "function_entry_va": function_entry or None,
+                "function_source": function_source or None,
+                "function_boundary_matches_target": boundary_matches,
+                "user_defined_symbol_or_function": user_defined,
+                "local_static_ref_count": len(local_sources),
+                "ghidra_exact_ref_count": len(ghidra_exact_sources),
+                "ghidra_function_entry_ref_count": len(ghidra_entry_sources),
+                "matched_static_ref_sources": matched_sources,
+                "row_score": row_score,
+            }
+        )
+
+    return {
+        "status": "ok" if program_md5_matches else "program_md5_mismatch_or_unknown",
+        "facts_path": str(facts_path),
+        "program": program,
+        "local_image_base": f"0x{image_base:x}",
+        "local_exe_md5": exe_md5,
+        "summary": {
+            "score": score,
+            "target_count": len(GHIDRA_RECONCILIATION_TARGETS),
+            "function_found_count": function_found_count,
+            "user_defined_count": user_defined_count,
+            "static_ref_match_count": static_ref_match_count,
+            "function_boundary_mismatch_count": function_boundary_mismatch_count,
+            "missing_fact_count": missing_fact_count,
+            "program_md5_matches_local": program_md5_matches,
+        },
+        "targets": rows,
+    }
 
 
 def read_jump_tables(data: bytes, image_base: int, sections: list[dict[str, int | str]]) -> dict[str, list[dict[str, Any]]]:
@@ -1277,7 +1506,14 @@ def scan_rip_relative_refs_to_va(
         (b"\x48\x89\x05", 3, 7, "movq_store"),
         (b"\x48\x8d\x05", 3, 7, "lea_rax"),
         (b"\x48\x8d\x0d", 3, 7, "lea_rcx"),
+        (b"\x48\x8d\x15", 3, 7, "lea_rdx"),
+        (b"\x48\x8d\x1d", 3, 7, "lea_rbx"),
+        (b"\x48\x8d\x35", 3, 7, "lea_rsi"),
+        (b"\x48\x8d\x3d", 3, 7, "lea_rdi"),
         (b"\x4c\x8d\x05", 3, 7, "lea_r8"),
+        (b"\x4c\x8d\x0d", 3, 7, "lea_r9"),
+        (b"\x4c\x8d\x15", 3, 7, "lea_r10"),
+        (b"\x4c\x8d\x1d", 3, 7, "lea_r11"),
     ]
     refs: list[dict[str, Any]] = []
     for needle, disp_offset, instruction_size, instruction in patterns:
@@ -3260,6 +3496,7 @@ def read_slot_reset_timed_queue_context(
 ) -> dict[str, Any]:
     submit_va = TARGETS["slot_reset_menu_job_wait_task_submit_733f20"]
     queue_va = TARGETS["slot_reset_menu_job_wait_queue_7a9600"]
+    check_va = TARGETS["slot_reset_menu_job_wait_queue_check_7a9200"]
     submit_range = find_pdata_range_for_pc(data, image_base, sections, submit_va)
     queue_range = find_pdata_range_for_pc(data, image_base, sections, queue_va)
     submit_begin = int(str(submit_range.get("begin_va")), 16) if submit_range.get("begin_va") else submit_va
@@ -3268,6 +3505,13 @@ def read_slot_reset_timed_queue_context(
     queue_end = int(str(queue_range.get("end_va")), 16) if queue_range.get("end_va") else queue_va + 0x131
     submit_blob = read_bytes(data, image_base, sections, submit_begin, max(0, submit_end - submit_begin))
     queue_blob = read_bytes(data, image_base, sections, queue_begin, max(0, queue_end - queue_begin))
+    check_blob = read_bytes(data, image_base, sections, check_va, 7)
+    timed_base_vtable_slots = read_qwords(
+        data, image_base, sections, TARGETS["slot_reset_timed_descriptor_base_vtable_29c8e48"], 2
+    )
+    timed_active_vtable_slots = read_qwords(
+        data, image_base, sections, TARGETS["slot_reset_timed_descriptor_active_vtable_29c8e58"], 2
+    )
     submit_calls = {
         target_name: sorted(
             [
@@ -3277,7 +3521,7 @@ def read_slot_reset_timed_queue_context(
             ],
             key=lambda value: int(value, 16),
         )
-        for target_name in []
+        for target_name in ["task_enqueue_7a7b60", "task_enqueue_link_7a7bb0"]
     }
     queue_calls = {
         target_name: sorted(
@@ -3295,6 +3539,10 @@ def read_slot_reset_timed_queue_context(
         "submit_function_end_va": submit_range.get("end_va"),
         "queue_function_begin_va": queue_range.get("begin_va"),
         "queue_function_end_va": queue_range.get("end_va"),
+        "queue_check_function_begin_va": f"0x{check_va:x}",
+        "queue_check_function_end_va": f"0x{check_va + len(check_blob):x}",
+        "timed_base_vtable_slots": timed_base_vtable_slots,
+        "timed_active_vtable_slots": timed_active_vtable_slots,
         "submit_calls_by_target": submit_calls,
         "queue_calls_by_target": queue_calls,
         "submit_reads_owner_48_count": b"\x48\x8b\x41\x48" in submit_blob,
@@ -3312,6 +3560,15 @@ def read_slot_reset_timed_queue_context(
         and b"\xff\x50\x10" in submit_blob,
         "submit_returns_true_descriptor_after_iteration": b"\xb0\x01" in submit_blob
         and b"\x48\x89\x06" in submit_blob,
+        "timed_descriptor_vtable_pair_mapped": [row["value_va"] for row in timed_base_vtable_slots]
+        == ["0x1401205c0", "0x1432ab380"]
+        and [row["value_va"] for row in timed_active_vtable_slots]
+        == ["0x140120590", "0x1432ab478"],
+        "submit_restores_timed_descriptor_vtables_on_empty_and_after_iteration": b"\x48\x8d\x05\x08\x4f\x29\x02\x48\x89\x02\x48\x8d\x05\xee\x4e\x29\x02\x48\x89\x02" in submit_blob
+        and b"\x48\x8d\x05\x94\x4e\x29\x02\x48\x89\x06\x48\x8d\x05\x7a\x4e\x29\x02\x48\x89\x06" in submit_blob,
+        "submit_is_pump_only_no_new_child_enqueue": b"\xff\x50\x10" in submit_blob
+        and submit_calls.get("task_enqueue_7a7b60") == []
+        and submit_calls.get("task_enqueue_link_7a7bb0") == [],
         "queue_captures_slot_and_descriptor": b"\x48\x8b\xf2" in queue_blob
         and b"\x4c\x8b\xf1" in queue_blob
         and b"\x48\x8b\x19" in queue_blob,
@@ -3320,14 +3577,386 @@ def read_slot_reset_timed_queue_context(
         "queue_checks_completion_with_7a9200": queue_calls.get("slot_reset_menu_job_wait_queue_check_7a9200") == [
             "0x1407a9696"
         ],
+        "queue_check_returns_descriptor_status_gt_one": check_blob == b"\x83\x39\x01\x0f\x97\xc0\xc3",
+        "queue_passes_virtual_result_descriptor_to_check": b"\x48\x8d\x8c\x24\x80\x00\x00\x00\xe8\x65\xfb\xff\xff" in queue_blob,
+        "queue_terminal_check_gates_current_slot_clear": b"\x84\xc0\x74\x43\x49\x8b\x3e\x48\x3b\xfb" in queue_blob,
         "queue_clears_slot_when_existing_job_consumed": b"\x49\x8b\x3e" in queue_blob
         and b"\x48\x3b\xfb" in queue_blob
         and b"\x49\xc7\x06\x00\x00\x00\x00" in queue_blob,
         "queue_releases_existing_job_and_clears_temp_descriptor": b"\x48\xc7\x84\x24\x90\x00\x00\x00\x00\x00\x00\x00" in queue_blob
         and b"\x4c\x89\x3e" in queue_blob
         and b"\x4c\x89\x26" in queue_blob,
+        "queue_restores_incoming_descriptor_without_creating_job_when_slot_empty": b"\x48\x85\xdb\x0f\x84\xe2\x00\x00\x00" in queue_blob
+        and b"\x4c\x89\x3e\x4c\x89\x26" in queue_blob,
+        "queue_is_single_slot_consumer_not_enqueue": b"\x48\x8b\x19" in queue_blob
+        and b"\xff\x50\x10" in queue_blob
+        and b"\x49\xc7\x06\x00\x00\x00\x00" in queue_blob,
         "submit_bytes_hex": submit_blob.hex(),
         "queue_bytes_hex": queue_blob.hex(),
+        "queue_check_bytes_hex": check_blob.hex(),
+    }
+
+
+def read_title_accept_payload_context(
+    data: bytes,
+    image_base: int,
+    sections: list[dict[str, int | str]],
+    rel32_refs: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    update_va = 0x1409B26D8
+    update_range = find_pdata_range_for_pc(data, image_base, sections, update_va)
+    update_begin = int(str(update_range.get("begin_va")), 16) if update_range.get("begin_va") else 0x1409B24E0
+    update_end = int(str(update_range.get("end_va")), 16) if update_range.get("end_va") else 0x1409B2CDB
+    update_blob = read_bytes(data, image_base, sections, update_begin, max(0, update_end - update_begin))
+
+    def range_blob(target_name: str, fallback_end: int) -> tuple[dict[str, Any], int, int, bytes]:
+        va = TARGETS[target_name]
+        function_range = find_pdata_range_for_pc(data, image_base, sections, va)
+        begin = int(str(function_range.get("begin_va")), 16) if function_range.get("begin_va") else va
+        end = int(str(function_range.get("end_va")), 16) if function_range.get("end_va") else fallback_end
+        blob = read_bytes(data, image_base, sections, begin, max(0, end - begin))
+        return function_range, begin, end, blob
+
+    final_combiner_range, final_combiner_begin, final_combiner_end, final_combiner_blob = range_blob(
+        "title_accept_final_combiner_7ab170", 0x1407AB36E
+    )
+    final_wrapper_range, final_wrapper_begin, final_wrapper_end, final_wrapper_blob = range_blob(
+        "title_accept_final_wrapper_9aa430", 0x1409AA4DF
+    )
+    branch_compose_range, branch_compose_begin, branch_compose_end, branch_compose_blob = range_blob(
+        "slot_reset_branch_gate_chain_compose_78e0e0", 0x14078E1A7
+    )
+    branch_step_range, branch_step_begin, branch_step_end, branch_step_blob = range_blob(
+        "slot_reset_branch_gate_chain_step_7927d0", 0x140792889
+    )
+    final_combiner_inner_range, final_combiner_inner_begin, final_combiner_inner_end, final_combiner_inner_blob = range_blob(
+        "title_accept_final_combiner_inner_7abb40", 0x1407ABDC1
+    )
+    final_wrapper_inner_range, final_wrapper_inner_begin, final_wrapper_inner_end, final_wrapper_inner_blob = range_blob(
+        "title_accept_final_wrapper_inner_78c530", 0x14078C5C6
+    )
+    branch_compose_inner_range, branch_compose_inner_begin, branch_compose_inner_end, branch_compose_inner_blob = range_blob(
+        "title_accept_branch_compose_inner_7926e0", 0x1407927CE
+    )
+    branch_step_builder_range, branch_step_builder_begin, branch_step_builder_end, branch_step_builder_blob = range_blob(
+        "title_accept_branch_step_builder_792970", 0x140792B66
+    )
+    branch_step_build_inner_range, branch_step_build_inner_begin, branch_step_build_inner_end, branch_step_build_inner_blob = range_blob(
+        "title_accept_branch_step_build_inner_792100", 0x1407923E0
+    )
+    branch_step_status_vslot2_range, branch_step_status_vslot2_begin, branch_step_status_vslot2_end, branch_step_status_vslot2_blob = range_blob(
+        "title_accept_branch_step_status_vslot2_7aa1f0", 0x1407AA371
+    )
+    branch_step_payload_vslot2_range, branch_step_payload_vslot2_begin, branch_step_payload_vslot2_end, branch_step_payload_vslot2_blob = range_blob(
+        "title_accept_branch_step_payload_vslot2_792460", 0x14079253D
+    )
+    branch_step_payload_vtable_slots = read_qwords(
+        data, image_base, sections, TARGETS["title_accept_branch_step_payload_vtable_aa2938"], 3
+    )
+    branch_step_status_vtable_slots = read_qwords(
+        data, image_base, sections, TARGETS["title_accept_branch_step_status_vtable_aa2958"], 3
+    )
+
+    def calls_in(target_name: str) -> list[str]:
+        return sorted(
+            [
+                str(ref.get("source_va"))
+                for ref in rel32_refs.get(target_name, [])
+                if update_begin <= int(str(ref.get("source_va")), 16) < update_end
+            ],
+            key=lambda value: int(value, 16),
+        )
+
+    def calls_in_range(target_name: str, begin: int, end: int) -> list[str]:
+        return sorted(
+            [
+                str(ref.get("source_va"))
+                for ref in rel32_refs.get(target_name, [])
+                if begin <= int(str(ref.get("source_va")), 16) < end
+            ],
+            key=lambda value: int(value, 16),
+        )
+
+    task_enqueue_sources = calls_in("task_enqueue_7a7b60")
+    task_enqueue_link_sources = calls_in("task_enqueue_link_7a7bb0")
+    state_chain_sources = calls_in("selector_builder_chain_key_7a91e0")
+    descriptor_wrapper_sources = calls_in("slot_reset_branch_gate_descriptor_wrapper_744a60")
+    primary_chain_builder_sources = calls_in("title_accept_primary_chain_builder_7a72b0")
+    aux_builder_ac620_sources = calls_in("title_accept_aux_builder_ac620")
+    primary_builder_a6c70_sources = calls_in("title_accept_primary_builder_a6c70")
+    owner_payload_builder_sources = calls_in("title_accept_owner_payload_builder_833880")
+    final_owner_builder_sources = calls_in("title_accept_final_owner_builder_9aa2d0")
+    final_combiner_sources = calls_in("title_accept_final_combiner_7ab170")
+    final_wrapper_sources = calls_in("title_accept_final_wrapper_9aa430")
+    final_cleanup_sources = calls_in("title_accept_final_cleanup_78cec0")
+    branch_compose_sources = calls_in("slot_reset_branch_gate_chain_compose_78e0e0")
+    branch_step_sources = calls_in("slot_reset_branch_gate_chain_step_7927d0")
+    final_combiner_inner_sources = calls_in_range(
+        "title_accept_final_combiner_inner_7abb40", final_combiner_begin, final_combiner_end
+    )
+    final_combiner_attach_sources = calls_in_range(
+        "title_accept_attach_7418d0", final_combiner_begin, final_combiner_end
+    )
+    final_wrapper_inner_sources = calls_in_range(
+        "title_accept_final_wrapper_inner_78c530", final_wrapper_begin, final_wrapper_end
+    )
+    branch_compose_inner_sources = calls_in_range(
+        "title_accept_branch_compose_inner_7926e0", branch_compose_begin, branch_compose_end
+    )
+    branch_step_builder_sources = calls_in_range(
+        "title_accept_branch_step_builder_792970", branch_step_begin, branch_step_end
+    )
+    branch_step_attach_sources = calls_in_range("title_accept_attach_7418d0", branch_step_begin, branch_step_end)
+    final_combiner_append_sources = calls_in_range(
+        "title_accept_final_combiner_append_7ac0b0", final_combiner_inner_begin, final_combiner_inner_end
+    )
+    branch_step_swap_sources = calls_in_range(
+        "title_accept_branch_step_swap_7925d0", branch_step_builder_begin, branch_step_builder_end
+    )
+    branch_step_inner_builder_sources = calls_in_range(
+        "title_accept_branch_step_build_inner_792100", branch_step_builder_begin, branch_step_builder_end
+    )
+    branch_step_payload_sources = calls_in_range(
+        "title_accept_branch_step_payload_791b50", branch_step_build_inner_begin, branch_step_build_inner_end
+    )
+    branch_step_condition_init_sources = calls_in_range(
+        "title_accept_branch_step_condition_init_7923f0", branch_step_build_inner_begin, branch_step_build_inner_end
+    )
+    branch_step_condition_add_sources = calls_in_range(
+        "title_accept_branch_step_condition_add_793770", branch_step_build_inner_begin, branch_step_build_inner_end
+    )
+    branch_step_condition_finish_sources = calls_in_range(
+        "title_accept_branch_step_condition_finish_7936f0", branch_step_build_inner_begin, branch_step_build_inner_end
+    )
+    branch_step_condition_cleanup_sources = calls_in_range(
+        "title_accept_branch_step_condition_cleanup_791ed0", branch_step_build_inner_begin, branch_step_build_inner_end
+    )
+    branch_step_inner_attach_sources = calls_in_range(
+        "title_accept_branch_step_attach_7aa380", branch_step_build_inner_begin, branch_step_build_inner_end
+    )
+    status_vslot2_terminal_check_sources = calls_in_range(
+        "descriptor_status_gt_one_7a9200", branch_step_status_vslot2_begin, branch_step_status_vslot2_end
+    )
+    status_vslot2_success_check_sources = calls_in_range(
+        "descriptor_status_eq_two_7a9210", branch_step_status_vslot2_begin, branch_step_status_vslot2_end
+    )
+    payload_vslot2_terminal_check_sources = calls_in_range(
+        "descriptor_status_gt_one_7a9200", branch_step_payload_vslot2_begin, branch_step_payload_vslot2_end
+    )
+    task_enqueue_source_set = set(task_enqueue_sources)
+    task_enqueue_link_source_set = set(task_enqueue_link_sources)
+    primary_trace_enqueue_sources_present = {"0x1409b26d3", "0x1409b2703"}.issubset(task_enqueue_source_set)
+    primary_trace_link_source_present = "0x1409b26f6" in task_enqueue_link_source_set
+    primary_trace_link_between_first_two_enqueues = False
+    if primary_trace_enqueue_sources_present and primary_trace_link_source_present:
+        primary_trace_link_between_first_two_enqueues = (
+            task_enqueue_sources.index("0x1409b26d3")
+            < task_enqueue_sources.index("0x1409b2703")
+            and task_enqueue_link_sources.index("0x1409b26f6") == 0
+        )
+    return {
+        "function_begin_va": update_range.get("begin_va"),
+        "function_end_va": update_range.get("end_va"),
+        "final_combiner_begin_va": final_combiner_range.get("begin_va"),
+        "final_combiner_end_va": final_combiner_range.get("end_va"),
+        "final_wrapper_begin_va": final_wrapper_range.get("begin_va"),
+        "final_wrapper_end_va": final_wrapper_range.get("end_va"),
+        "branch_compose_begin_va": branch_compose_range.get("begin_va"),
+        "branch_compose_end_va": branch_compose_range.get("end_va"),
+        "branch_step_begin_va": branch_step_range.get("begin_va"),
+        "branch_step_end_va": branch_step_range.get("end_va"),
+        "final_combiner_inner_begin_va": final_combiner_inner_range.get("begin_va"),
+        "final_combiner_inner_end_va": final_combiner_inner_range.get("end_va"),
+        "final_wrapper_inner_begin_va": final_wrapper_inner_range.get("begin_va"),
+        "final_wrapper_inner_end_va": final_wrapper_inner_range.get("end_va"),
+        "branch_compose_inner_begin_va": branch_compose_inner_range.get("begin_va"),
+        "branch_compose_inner_end_va": branch_compose_inner_range.get("end_va"),
+        "branch_step_builder_begin_va": branch_step_builder_range.get("begin_va"),
+        "branch_step_builder_end_va": branch_step_builder_range.get("end_va"),
+        "branch_step_build_inner_begin_va": branch_step_build_inner_range.get("begin_va"),
+        "branch_step_build_inner_end_va": branch_step_build_inner_range.get("end_va"),
+        "branch_step_status_vslot2_begin_va": branch_step_status_vslot2_range.get("begin_va"),
+        "branch_step_status_vslot2_end_va": branch_step_status_vslot2_range.get("end_va"),
+        "branch_step_payload_vslot2_begin_va": branch_step_payload_vslot2_range.get("begin_va"),
+        "branch_step_payload_vslot2_end_va": branch_step_payload_vslot2_range.get("end_va"),
+        "branch_step_payload_vtable_slots": branch_step_payload_vtable_slots,
+        "branch_step_status_vtable_slots": branch_step_status_vtable_slots,
+        "task_enqueue_sources": task_enqueue_sources,
+        "task_enqueue_link_sources": task_enqueue_link_sources,
+        "state_chain_sources": state_chain_sources,
+        "descriptor_wrapper_sources": descriptor_wrapper_sources,
+        "primary_chain_builder_sources": primary_chain_builder_sources,
+        "aux_builder_ac620_sources": aux_builder_ac620_sources,
+        "primary_builder_a6c70_sources": primary_builder_a6c70_sources,
+        "owner_payload_builder_sources": owner_payload_builder_sources,
+        "final_owner_builder_sources": final_owner_builder_sources,
+        "final_combiner_sources": final_combiner_sources,
+        "final_wrapper_sources": final_wrapper_sources,
+        "final_cleanup_sources": final_cleanup_sources,
+        "branch_compose_sources": branch_compose_sources,
+        "branch_step_sources": branch_step_sources,
+        "final_combiner_inner_sources": final_combiner_inner_sources,
+        "final_combiner_attach_sources": final_combiner_attach_sources,
+        "final_wrapper_inner_sources": final_wrapper_inner_sources,
+        "branch_compose_inner_sources": branch_compose_inner_sources,
+        "branch_step_builder_sources": branch_step_builder_sources,
+        "branch_step_attach_sources": branch_step_attach_sources,
+        "final_combiner_append_sources": final_combiner_append_sources,
+        "branch_step_swap_sources": branch_step_swap_sources,
+        "branch_step_inner_builder_sources": branch_step_inner_builder_sources,
+        "branch_step_payload_sources": branch_step_payload_sources,
+        "branch_step_condition_init_sources": branch_step_condition_init_sources,
+        "branch_step_condition_add_sources": branch_step_condition_add_sources,
+        "branch_step_condition_finish_sources": branch_step_condition_finish_sources,
+        "branch_step_condition_cleanup_sources": branch_step_condition_cleanup_sources,
+        "branch_step_inner_attach_sources": branch_step_inner_attach_sources,
+        "status_vslot2_terminal_check_sources": status_vslot2_terminal_check_sources,
+        "status_vslot2_success_check_sources": status_vslot2_success_check_sources,
+        "payload_vslot2_terminal_check_sources": payload_vslot2_terminal_check_sources,
+        "primary_trace_enqueue_sources_present": primary_trace_enqueue_sources_present,
+        "primary_trace_link_source_present": primary_trace_link_source_present,
+        "primary_trace_link_between_first_two_enqueues": primary_trace_link_between_first_two_enqueues,
+        "late_chain_link_sources_present": {"0x1409b2842", "0x1409b2853", "0x1409b2864"}.issubset(
+            task_enqueue_link_source_set
+        ),
+        "primary_chain_builder_source_present": primary_chain_builder_sources == ["0x1409b26e6"],
+        "primary_link_uses_first_enqueue_result": b"\x48\x8b\xd8\x48\x8d\x95\x40\x01\x00\x00" in update_blob
+        and b"\x4c\x8b\xc3\x48\x8d\x55\x98\x48\x8b\xc8" in update_blob,
+        "primary_link_feeds_second_enqueue": b"\xe8\xb5\x54\xdf\xff\x90\x48\x8d\x55\x40\x48\x8b\xc8\xe8\x58\x54\xdf\xff" in update_blob,
+        "second_primary_enqueue_saved_r15": b"\x48\x8d\x55\x40\x48\x8b\xc8\xe8\x58\x54\xdf\xff\x4c\x8b\xf8" in update_blob,
+        "state_chain_args_use_zero_and_add2": b"\x45\x33\xc0\x41\x8d\x54\x24\x02\x48\x8d\x4d\xd0" in update_blob,
+        "state_descriptor_wrapper_uses_chain_result": b"\x4c\x8b\x45\xd0\x48\x8d\x95\x80\x00\x00\x00\x48\x8d\x4d\x90" in update_blob,
+        "state_descriptor_wrapper_result_enqueued_saved_r14": b"\xe8\xe1\x22\xd9\xff\x90\x48\x8d\x55\xd8\x48\x8b\xc8\xe8\xd4\x53\xdf\xff\x4c\x8b\xf0" in update_blob,
+        "late_aux_builder_sources_present": aux_builder_ac620_sources == ["0x1409b27a0"]
+        and primary_builder_a6c70_sources == ["0x1409b27c9"]
+        and owner_payload_builder_sources == ["0x1409b2801"],
+        "late_aux_enqueues_saved_registers": all(
+            needle in update_blob
+            for needle in [
+                b"\xe8\x7b\x9e\xff\xff\x90\x48\x8d\x55\xe0\x48\x8b\xc8\xe8\xae\x53\xdf\xff\x48\x8b\xf0",
+                b"\xe8\xa2\x44\xff\xff\x90\x48\x8d\x55\xe8\x48\x8b\xc8\xe8\x85\x53\xdf\xff\x48\x8b\xf8",
+                b"\xe8\x7a\x10\xe8\xff\x90\x48\x8d\x55\xf0\x48\x8b\xc8\xe8\x4d\x53\xdf\xff\x48\x8b\xd8",
+            ]
+        ),
+        "late_link_chain_folds_aux_results_to_final_enqueue": b"\x4c\x8b\xc3\x48\x8d\x54\x24\x68\x48\x8b\xc8\xe8\x69\x53\xdf\xff\x90\x4c\x8b\xc7\x48\x8d\x54\x24\x60\x48\x8b\xc8\xe8\x58\x53\xdf\xff\x90\x4c\x8b\xc6\x48\x8d\x54\x24\x58\x48\x8b\xc8\xe8\x47\x53\xdf\xff\x90\x48\x8d\x55\x00\x48\x8b\xc8\xe8\xea\x52\xdf\xff\x48\x8b\xd8" in update_blob,
+        "final_owner_builder_source_present": final_owner_builder_sources == ["0x1409b2884"],
+        "final_combiner_source_present": final_combiner_sources == ["0x1409b28a4"],
+        "final_combiner_uses_late_link_result_and_owner_result": b"\x48\x8d\x4c\x24\x40\x48\x89\x4c\x24\x20\x4c\x8d\x4c\x24\x48\x4c\x8b\xc3\x48\x8b\xd0\x48\x8d\x4c\x24\x50" in update_blob,
+        "final_combiner_result_enqueued": b"\xe8\xc7\x88\xdf\xff\x90\x48\x8d\x55\x10\x48\x8b\xc8\xe8\xaa\x52\xdf\xff" in update_blob,
+        "final_enqueue_result_passed_to_wrapper": final_wrapper_sources == ["0x1409b28c1"]
+        and b"\x41\xb0\x01\x48\x8b\xd0\x48\x8d\x4d\x70" in update_blob,
+        "final_wrapper_chains_r14_r15": branch_compose_sources == ["0x1409b28d4"]
+        and branch_step_sources == ["0x1409b28e5"]
+        and b"\x4d\x8b\xc6\x48\x8d\x95\x28\x01\x00\x00\x48\x8b\xc8" in update_blob
+        and b"\x4d\x8b\xc7\x48\x8d\x54\x24\x38\x48\x8b\xc8" in update_blob,
+        "final_cleanup_after_chain_source_present": final_cleanup_sources == ["0x1409b28f2"],
+        "final_combiner_body_range_mapped": final_combiner_range.get("begin_va") == "0x1407ab170"
+        and final_combiner_range.get("end_va") == "0x1407ab36f",
+        "final_combiner_calls_inner_and_attach": final_combiner_inner_sources == ["0x1407ab255"]
+        and final_combiner_attach_sources == ["0x1407ab261"],
+        "final_combiner_captures_four_sources": b"\x4d\x8b\xf1\x49\x8b\xf8\x48\x8b\xf2\x4c\x8b\xf9" in final_combiner_blob,
+        "final_combiner_inner_receives_four_locals": b"\x48\x8d\x45\xb7\x48\x89\x44\x24\x20\x4c\x8d\x4d\xbf\x4c\x8d\x45\xc7\x48\x8d\x55\xcf\x48\x8d\x4d\xd7" in final_combiner_blob,
+        "final_combiner_clears_transferred_slots": all(
+            needle in final_combiner_blob
+            for needle in [b"\x4c\x89\x2e", b"\x4c\x89\x2f", b"\x4d\x89\x2e", b"\x4d\x89\x2c\x24"]
+        ),
+        "final_wrapper_body_range_mapped": final_wrapper_range.get("begin_va") == "0x1409aa430"
+        and final_wrapper_range.get("end_va") == "0x1409aa4e0",
+        "final_wrapper_calls_inner_with_flag": final_wrapper_inner_sources == ["0x1409aa489"]
+        and b"\x44\x0f\xb6\xc7\x48\x8d\x54\x24\x78\x48\x8b\xcb" in final_wrapper_blob,
+        "final_wrapper_clears_source_slot": b"\x48\xc7\x06\x00\x00\x00\x00" in final_wrapper_blob,
+        "branch_compose_body_calls_inner": branch_compose_inner_sources == ["0x14078e15b"]
+        and b"\x44\x0f\xb6\x43\x08" in branch_compose_blob,
+        "branch_step_body_builds_and_attaches": branch_step_builder_sources == ["0x140792831"]
+        and branch_step_attach_sources == ["0x14079283d"],
+        "final_combiner_inner_short_circuits_all_empty": b"\x4c\x39\x2a\x75\x21\x4d\x39\x28\x75\x1c\x4d\x39\x29\x75\x17\x4d\x39\x2f\x75\x12\x4c\x89\x29" in final_combiner_inner_blob,
+        "final_combiner_inner_allocates_composite_node": function_has_rip_lea_any_reg_to(
+            data,
+            image_base,
+            sections,
+            final_combiner_inner_begin,
+            0x142AA9428,
+            max(0, final_combiner_inner_end - final_combiner_inner_begin),
+        )
+        and b"\x41\x8d\x50\x01\xe8\xe8\xd5\xff\xff" in final_combiner_inner_blob,
+        "final_combiner_inner_appends_four_sources": final_combiner_append_sources
+        == ["0x1407abc31", "0x1407abc5b", "0x1407abc85", "0x1407abcaf"],
+        "final_combiner_inner_stores_output_and_releases_inputs": b"\x49\x89\x1c\x24" in final_combiner_inner_blob
+        and all(
+            needle in final_combiner_inner_blob
+            for needle in [b"\x4c\x89\x2f", b"\x4c\x89\x2e", b"\x4d\x89\x2e", b"\x4d\x89\x2f"]
+        ),
+        "final_wrapper_inner_transfers_source_and_flag": b"\x48\x8b\x0a\x48\x89\x0b" in final_wrapper_inner_blob
+        and b"\x40\x88\x7b\x08" in final_wrapper_inner_blob
+        and b"\x48\xc7\x06\x00\x00\x00\x00" in final_wrapper_inner_blob,
+        "branch_compose_inner_transfers_two_sources_and_flag": b"\x48\x8b\x0a\x48\x89\x0b" in branch_compose_inner_blob
+        and b"\x48\x8b\x0e\x48\x89\x4b\x08" in branch_compose_inner_blob
+        and b"\x40\x88\x7b\x10" in branch_compose_inner_blob
+        and b"\x49\xc7\x06\x00\x00\x00\x00" in branch_compose_inner_blob
+        and b"\x48\xc7\x06\x00\x00\x00\x00" in branch_compose_inner_blob,
+        "branch_step_builder_reorders_inputs_on_false_flag": branch_step_swap_sources == ["0x1407929f7"]
+        and b"\x41\x80\x7e\x10\x00\x75\x15" in branch_step_builder_blob,
+        "branch_step_builder_calls_inner_with_three_locals": branch_step_inner_builder_sources == ["0x140792a64"]
+        and b"\x4c\x8d\x4d\xb0\x4c\x8d\x45\xb8\x48\x8d\x55\xc0\x49\x8b\xcc" in branch_step_builder_blob,
+        "branch_step_build_inner_allocates_status_node": function_has_rip_lea_any_reg_to(
+            data,
+            image_base,
+            sections,
+            branch_step_build_inner_begin,
+            0x142AA2958,
+            max(0, branch_step_build_inner_end - branch_step_build_inner_begin),
+        )
+        and b"\xc7\x43\x68\x01\x00\x00\x00" in branch_step_build_inner_blob,
+        "branch_step_build_inner_builds_payload_and_attaches": branch_step_payload_sources == ["0x1407921f5"]
+        and branch_step_inner_attach_sources == ["0x14079221b", "0x1407922b1"],
+        "branch_step_build_inner_builds_condition_chain": branch_step_condition_init_sources == ["0x140792275"]
+        and branch_step_condition_add_sources == ["0x140792288", "0x140792298"]
+        and branch_step_condition_finish_sources == ["0x1407922a5"]
+        and b"\x4c\x8d\x44\x24\x20\xba\x01\x00\x00\x00\x48\x8b\xc8" in branch_step_build_inner_blob
+        and b"\x4c\x8d\x44\x24\x30\x33\xd2\x48\x8b\xc8" in branch_step_build_inner_blob,
+        "branch_step_build_inner_cleans_condition_temp": branch_step_condition_cleanup_sources == ["0x1407922bc"]
+        and b"\x4c\x8b\x64\x24\x60\x4d\x85\xe4" in branch_step_build_inner_blob,
+        "branch_step_vtables_link_payload_to_status_sequence": [row["value_va"] for row in branch_step_payload_vtable_slots]
+        == ["0x140744d90", "0x140792050", "0x140792460"]
+        and [row["value_va"] for row in branch_step_status_vtable_slots]
+        == ["0x140744d90", "0x140792090", "0x1407aa1f0"],
+        "branch_step_payload_vslot2_sets_terminal_status": payload_vslot2_terminal_check_sources == ["0x1407924d5"]
+        and b"\xff\x50\x10\x48\x8d\x4c\x24\x70\xe8" in branch_step_payload_vslot2_blob
+        and b"\x41\x8d\x50\x02\x48\x8b\xcf\xe8" in branch_step_payload_vslot2_blob
+        and b"\x41\x8d\x50\x01\x48\x8b\xcf\xe8" in branch_step_payload_vslot2_blob,
+        "branch_step_payload_vslot2_writes_condition_result": b"\x49\x8b\x46\x18\x89\x08" in branch_step_payload_vslot2_blob
+        and b"\xe8\x28\x6d\x01\x00\x0f\xb6\xc8" in branch_step_payload_vslot2_blob,
+        "branch_step_status_vslot2_iterates_children_until_done": status_vslot2_terminal_check_sources == ["0x1407aa2c4"]
+        and status_vslot2_success_check_sources == ["0x1407aa2d0"]
+        and b"\xff\x50\x10\x48\x8b\x08\x48\x89\x0e" in branch_step_status_vslot2_blob
+        and b"\xff\x47\x10" in branch_step_status_vslot2_blob,
+        "branch_step_status_vslot2_stops_on_nonterminal_or_failed_child": b"\x84\xc0\x74\x55" in branch_step_status_vslot2_blob
+        and b"\x84\xc0\x74\x49" in branch_step_status_vslot2_blob,
+        "builder_state_descriptor_sources_present": state_chain_sources == ["0x1409b2765"]
+        and descriptor_wrapper_sources == ["0x1409b277a"],
+        "builds_title_accept_descriptor_vtables": function_has_rip_lea_any_reg_to(
+            data, image_base, sections, update_begin, 0x1429E2848, max(0, update_end - update_begin)
+        )
+        and function_has_rip_lea_any_reg_to(
+            data, image_base, sections, update_begin, 0x142B26708, max(0, update_end - update_begin)
+        ),
+        "uses_owner_payload_fields": all(
+            needle in update_blob
+            for needle in [
+                b"\x49\x8b\x8d\x38\x0a\x00\x00",
+                b"\x49\x8d\x4d\x50",
+                b"\x49\x8d\x95\x48\x0a\x00\x00",
+            ]
+        ),
+        "task_enqueue_fanout_count": len(task_enqueue_sources),
+        "task_enqueue_fanout_has_expected_late_sources": {
+            "0x1409b2787",
+            "0x1409b27ad",
+            "0x1409b27d6",
+            "0x1409b280e",
+            "0x1409b2871",
+            "0x1409b28b1",
+        }.issubset(task_enqueue_source_set),
     }
 
 
@@ -4315,6 +4944,204 @@ def read_slot_reset_play_game_context(
     }
 
 
+def read_slot_reset_title_queue_state_table_context(
+    data: bytes,
+    image_base: int,
+    sections: list[dict[str, int | str]],
+) -> dict[str, Any]:
+    init_va = TARGETS["slot_reset_title_queue_state_table_init_0a4c90"]
+    table_va = TARGETS["slot_reset_title_queue_state_table_global_43d71340"]
+    init_range = find_pdata_range_for_pc(data, image_base, sections, init_va)
+    init_begin = int(str(init_range.get("begin_va")), 16) if init_range.get("begin_va") else init_va
+    init_end = int(str(init_range.get("end_va")), 16) if init_range.get("end_va") else init_va + 0xC3
+    blob = read_bytes(data, image_base, sections, init_begin, max(0, init_end - init_begin))
+    stores: list[dict[str, Any]] = []
+    for index in range(max(0, len(blob) - 14)):
+        if blob[index : index + 3] not in (b"\x48\x8d\x05", b"\x4c\x8d\x05"):
+            continue
+        if blob[index + 7 : index + 10] != b"\x48\x89\x05":
+            continue
+        value_disp = struct.unpack_from("<i", blob, index + 3)[0]
+        store_disp = struct.unpack_from("<i", blob, index + 10)[0]
+        source_va = init_begin + index
+        value_va = source_va + 7 + value_disp
+        store_va = source_va + 14 + store_disp
+        if not (table_va <= store_va < table_va + 0x60):
+            continue
+        offset = store_va - table_va
+        entry_index = offset // 16
+        entry_slot = "handler" if offset % 16 == 0 else "label"
+        row: dict[str, Any] = {
+            "source_va": f"0x{source_va:x}",
+            "store_va": f"0x{store_va:x}",
+            "store_offset": f"0x{offset:x}",
+            "entry_index": entry_index,
+            "entry_slot": entry_slot,
+            "value_va": f"0x{value_va:x}",
+        }
+        if entry_slot == "label":
+            row["label_text"] = read_utf16z(data, image_base, sections, value_va)
+        stores.append(row)
+    entries: list[dict[str, Any]] = []
+    for entry_index in sorted({int(row["entry_index"]) for row in stores}):
+        handler = next((row for row in stores if row["entry_index"] == entry_index and row["entry_slot"] == "handler"), None)
+        label = next((row for row in stores if row["entry_index"] == entry_index and row["entry_slot"] == "label"), None)
+        entries.append(
+            {
+                "entry_index": entry_index,
+                "handler_va": handler.get("value_va") if handler else None,
+                "handler_source_va": handler.get("source_va") if handler else None,
+                "label_va": label.get("value_va") if label else None,
+                "label_source_va": label.get("source_va") if label else None,
+                "label_text": label.get("label_text") if label else None,
+            }
+        )
+    handler_ranges = {
+        str(entry.get("handler_va")): find_pdata_range_for_pc(data, image_base, sections, int(str(entry.get("handler_va")), 16))
+        for entry in entries
+        if entry.get("handler_va")
+    }
+    return {
+        "function_begin_va": init_range.get("begin_va"),
+        "function_end_va": init_range.get("end_va"),
+        "table_base_va": f"0x{table_va:x}",
+        "zeroes_table_base": function_has_rip_lea_any_reg_to(data, image_base, sections, init_begin, table_va, max(0, init_end - init_begin)),
+        "zero_size_bytes": 0x60 if b"\x44\x8d\x42\x60" in blob else None,
+        "stores": stores,
+        "entries": entries,
+        "handler_ranges": handler_ranges,
+        "bytes_hex": blob.hex(),
+    }
+
+
+def read_slot_reset_title_queue_producer_context(
+    data: bytes,
+    image_base: int,
+    sections: list[dict[str, int | str]],
+    rel32_refs: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    seed_va = TARGETS["slot_reset_title_queue_seed_b0a4a0"]
+    pump_va = TARGETS["slot_reset_title_queue_pump_b0a5e0"]
+    advance_va = TARGETS["slot_reset_title_queue_advance_b0a980"]
+    set_state_va = TARGETS["slot_reset_title_queue_state_set_b0aa90"]
+    seed_range = find_pdata_range_for_pc(data, image_base, sections, seed_va)
+    pump_range = find_pdata_range_for_pc(data, image_base, sections, pump_va)
+    advance_range = find_pdata_range_for_pc(data, image_base, sections, advance_va)
+    set_state_range = find_pdata_range_for_pc(data, image_base, sections, set_state_va)
+    seed_begin = int(str(seed_range.get("begin_va")), 16) if seed_range.get("begin_va") else seed_va
+    seed_end = int(str(seed_range.get("end_va")), 16) if seed_range.get("end_va") else seed_va + 0x13B
+    pump_begin = int(str(pump_range.get("begin_va")), 16) if pump_range.get("begin_va") else pump_va
+    pump_end = int(str(pump_range.get("end_va")), 16) if pump_range.get("end_va") else pump_va + 0x39F
+    advance_begin = int(str(advance_range.get("begin_va")), 16) if advance_range.get("begin_va") else advance_va
+    advance_end = int(str(advance_range.get("end_va")), 16) if advance_range.get("end_va") else advance_va + 0x109
+    set_state_begin = int(str(set_state_range.get("begin_va")), 16) if set_state_range.get("begin_va") else set_state_va
+    set_state_end = int(str(set_state_range.get("end_va")), 16) if set_state_range.get("end_va") else set_state_va + 0x109
+    seed_blob = read_bytes(data, image_base, sections, seed_begin, max(0, seed_end - seed_begin))
+    pump_blob = read_bytes(data, image_base, sections, pump_begin, max(0, pump_end - pump_begin))
+    advance_blob = read_bytes(data, image_base, sections, advance_begin, max(0, advance_end - advance_begin))
+    set_state_blob = read_bytes(data, image_base, sections, set_state_begin, max(0, set_state_end - set_state_begin))
+
+    def calls_in_range(target_name: str, begin: int, end: int) -> list[str]:
+        return sorted(
+            [
+                str(ref.get("source_va"))
+                for ref in rel32_refs.get(target_name, [])
+                if begin <= int(str(ref.get("source_va")), 16) < end
+            ],
+            key=lambda value: int(value, 16),
+        )
+
+    seed_calls = {
+        target_name: calls_in_range(target_name, seed_begin, seed_end)
+        for target_name in [
+            "slot_reset_title_queue_source_81f7e0",
+            "task_enqueue_7a7b60",
+            "slot_reset_branch_gate_submit_attach_7a9460",
+            "slot_reset_title_queue_advance_b0a980",
+        ]
+    }
+    pump_calls = {
+        target_name: calls_in_range(target_name, pump_begin, pump_end)
+        for target_name in [
+            "slot_reset_menu_job_wait_task_submit_733f20",
+            "slot_reset_menu_job_wait_queue_7a9600",
+            "slot_reset_title_queue_advance_b0a980",
+            "slot_reset_title_queue_state_set_b0aa90",
+            "slot_reset_title_queue_stream_validate_71fd60",
+            "slot_reset_title_queue_take_7a9560",
+        ]
+    }
+    state_set_callers = sorted(
+        [str(ref.get("source_va")) for ref in rel32_refs.get("slot_reset_title_queue_state_set_b0aa90", [])],
+        key=lambda value: int(value, 16),
+    )
+    advance_callers = sorted(
+        [str(ref.get("source_va")) for ref in rel32_refs.get("slot_reset_title_queue_advance_b0a980", [])],
+        key=lambda value: int(value, 16),
+    )
+    return {
+        "seed_begin_va": seed_range.get("begin_va"),
+        "seed_end_va": seed_range.get("end_va"),
+        "pump_begin_va": pump_range.get("begin_va"),
+        "pump_end_va": pump_range.get("end_va"),
+        "advance_begin_va": advance_range.get("begin_va"),
+        "advance_end_va": advance_range.get("end_va"),
+        "set_state_begin_va": set_state_range.get("begin_va"),
+        "set_state_end_va": set_state_range.get("end_va"),
+        "seed_calls_by_target": seed_calls,
+        "pump_calls_by_target": pump_calls,
+        "state_set_callers": state_set_callers,
+        "advance_callers": advance_callers,
+        "seed_builds_task_from_owner_d8": seed_calls.get("slot_reset_title_queue_source_81f7e0") == ["0x140b0a513"]
+        and b"\x48\x8d\x97\xd8\x00\x00\x00" in seed_blob,
+        "seed_enqueues_task_and_attaches_to_owner128": seed_calls.get("task_enqueue_7a7b60") == ["0x140b0a521"]
+        and seed_calls.get("slot_reset_branch_gate_submit_attach_7a9460") == ["0x140b0a536"]
+        and b"\x48\x8d\x8f\x28\x01\x00\x00" in seed_blob,
+        "seed_resets_owner130_selection_and_advances": b"\xc7\x87\x30\x01\x00\x00\xff\xff\xff\xff" in seed_blob
+        and seed_calls.get("slot_reset_title_queue_advance_b0a980") == ["0x140b0a5d6"],
+        "pump_submits_owner_d8_and_queues_owner128": pump_calls.get("slot_reset_menu_job_wait_task_submit_733f20") == ["0x140b0a6a0"]
+        and pump_calls.get("slot_reset_menu_job_wait_queue_7a9600") == ["0x140b0a6d2"]
+        and b"\x48\x8d\x8b\xd8\x00\x00\x00" in pump_blob
+        and b"\x48\x8d\x8b\x28\x01\x00\x00" in pump_blob,
+        "pump_advances_when_owner128_empty": b"\x4c\x39\xa3\x28\x01\x00\x00\x75\x0d" in pump_blob
+        and pump_calls.get("slot_reset_title_queue_advance_b0a980")
+        and "0x140b0a6e6" in pump_calls.get("slot_reset_title_queue_advance_b0a980", []),
+        "pump_sets_state5_on_gate_or_finish": pump_calls.get("slot_reset_title_queue_state_set_b0aa90") == [
+            "0x140b0a77d",
+            "0x140b0a7a8",
+        ],
+        "pump_parses_stream_selection_to_owner130": pump_calls.get("slot_reset_title_queue_stream_validate_71fd60") == [
+            "0x140b0a8bc"
+        ]
+        and b"\x89\x83\x30\x01\x00\x00" in pump_blob,
+        "pump_takes_owner128_queue_after_selection": pump_calls.get("slot_reset_title_queue_take_7a9560") == [
+            "0x140b0a8d8"
+        ]
+        and b"\x48\x8d\x8b\x28\x01\x00\x00" in pump_blob,
+        "pump_advances_after_selection_queue_take": "0x140b0a919" in pump_calls.get(
+            "slot_reset_title_queue_advance_b0a980", []
+        ),
+        "advance_increments_owner_4c_and_bounds_owner_48": b"\xff\x41\x4c" in advance_blob
+        and b"\x8b\x41\x48" in advance_blob
+        and b"\x83\xf8\x07" in advance_blob,
+        "advance_callers_cover_seed_pump_and_guard_paths": advance_callers
+        == ["0x140b0a424", "0x140b0a492", "0x140b0a5d6", "0x140b0a6e6", "0x140b0a919"],
+        "set_state_range_mapped": set_state_range.get("begin_va") == "0x140b0aa90"
+        and set_state_range.get("end_va") == "0x140b0ab99",
+        "set_state_writes_requested_state_to_owner_4c": b"\x89\x51\x4c" in set_state_blob,
+        "set_state_validates_owner_48_bounds": b"\x8b\x41\x48\xff\xc0\x83\xf8\x07" in set_state_blob,
+        "set_state_callers_are_ingame_gate_and_menu_loop": state_set_callers
+        == ["0x140b0a1d8", "0x140b0a77d", "0x140b0a7a8"],
+        "set_state_menu_loop_callers_use_state5": b"\xba\x05\x00\x00\x00\x48\x8b\xcb\xe8\x0e\x03\x00\x00" in pump_blob
+        and b"\xba\x05\x00\x00\x00\x48\x8b\xcb\xe8\xe3\x02\x00\x00" in pump_blob,
+        "set_state_ingame_gate_caller_uses_state0": "0x140b0a1d8" in state_set_callers,
+        "seed_bytes_hex": seed_blob.hex(),
+        "pump_bytes_hex": pump_blob.hex(),
+        "advance_bytes_hex": advance_blob.hex(),
+        "set_state_bytes_hex": set_state_blob.hex(),
+    }
+
+
 def read_slot_reset_menu_job_wait_context(
     data: bytes,
     image_base: int,
@@ -4345,6 +5172,8 @@ def read_slot_reset_menu_job_wait_context(
             "slot_reset_menu_job_wait_queue_7a9600",
             "slot_reset_menu_job_wait_global_toggle_7663c0",
             "slot_reset_set_state_helper_b0d960",
+            "task_enqueue_7a7b60",
+            "task_enqueue_link_7a7bb0",
         ]
     }
     set_state_callers = sorted(
@@ -4379,6 +5208,17 @@ def read_slot_reset_menu_job_wait_context(
         ],
         "queues_owner_130_timed_task": b"\x48\x8d\x8b\x30\x01\x00\x00" in handler_blob
         and called_targets.get("slot_reset_menu_job_wait_queue_7a9600") == ["0x140b0d521"],
+        "submit_then_queue_order_mapped": called_targets.get("slot_reset_menu_job_wait_task_submit_733f20") == ["0x140b0d4a8"]
+        and called_targets.get("slot_reset_menu_job_wait_global_toggle_7663c0") == ["0x140b0d4e9"]
+        and called_targets.get("slot_reset_menu_job_wait_queue_7a9600") == ["0x140b0d521"],
+        "reuses_frame_delta_descriptor_for_submit_and_queue": b"\xf3\x0f\x10\x47\x08" in handler_blob
+        and handler_blob.count(b"\xf3\x0f\x10\x47\x08") >= 2
+        and b"\x48\x8d\x35\xd5\xb9\xeb\x01" in handler_blob
+        and b"\x48\x8d\x2d\xd1\xb9\xeb\x01" in handler_blob,
+        "does_not_directly_enqueue_title_accept_payload": called_targets.get("task_enqueue_7a7b60") == []
+        and called_targets.get("task_enqueue_link_7a7bb0") == [],
+        "finish_gate_checked_only_after_owner130_queue": called_targets.get("slot_reset_menu_job_wait_queue_7a9600") == ["0x140b0d521"]
+        and b"\xe8\xda\xc0\xc9\xff\x80\x3d\x73\x81\x27\x03\x00" in handler_blob,
         "conditionally_sets_state_11": b"\x80\x3d" in handler_blob
         and b"\xba\x0b\x00\x00\x00" in handler_blob
         and b"\x48\x8b\xcb" in handler_blob
@@ -4391,7 +5231,8 @@ def read_slot_reset_menu_job_wait_context(
             for ref in finish_gate_refs
         ),
         "finish_gate_refs_include_finish_handler": any(
-            ref.get("source_va") == "0x140b0cd41" and ref.get("function_begin_va") == "0x140b0cd70"
+            ref.get("source_va") == "0x140b0cd41"
+            and ref.get("function_begin_va") in {"0x140b0cd70", "0x140b0ccc0"}
             for ref in finish_gate_refs
         ),
         "finish_gate_refs_include_save_request_gate_family": {
@@ -4474,6 +5315,20 @@ def read_slot_reset_dispatch_context(
         and b"\x44\x38\x73\x50" in parent_blob
         and b"\x81\xff\x80\x00\x00\x00" in parent_blob
         and b"\xc6\x43\x50\x00" in parent_blob,
+        "parent_trace_maps_state_table_requested_current_label": b"\x48\x8b\x43\x10" in parent_blob
+        and b"\x48\x63\x43\x4c" in parent_blob
+        and b"\x89\x43\x48" in parent_blob
+        and b"\x48\x8b\x4c\xc8\x08" in parent_blob
+        and b"\x48\x89\x8b\xa0\x00\x00\x00" in parent_blob,
+        "parent_trace_maps_loop_flags_and_counters": b"\x44\x38\x73\x50" in parent_blob
+        and b"\x48\x8b\x4b\x60" in parent_blob
+        and b"\x44\x38\x73\x69" in parent_blob
+        and b"\x44\x38\xb3\xa8\x00\x00\x00" in parent_blob
+        and b"\x8b\x83\xac\x00\x00\x00" in parent_blob,
+        "parent_trace_dispatch_callsite_mapped": b"\x4c\x63\x43\x48" in parent_blob
+        and b"\x4d\x03\xc0" in parent_blob
+        and b"\x42\xff\x14\xc0" in parent_blob
+        and b"\x48\x63\x43\x4c\x89\x43\x48" in parent_blob,
         "handler_increments_owner_b0_and_requires_gt_one": b"\xff\x81\xb0\x00\x00\x00" in handler_blob
         and b"\x83\xb9\xb0\x00\x00\x00\x01" in handler_blob
         and b"\x7e\x50" in handler_blob,
@@ -4486,6 +5341,656 @@ def read_slot_reset_dispatch_context(
         "handler_marks_owner_4c_minus_one_after_reset": b"\xc7\x43\x4c\xff\xff\xff\xff" in handler_blob,
         "handler_bytes_hex": handler_blob.hex(),
         "parent_bytes_hex": parent_blob.hex(),
+    }
+
+
+def read_slot_reset_title_parent_ctor_context(
+    data: bytes,
+    image_base: int,
+    sections: list[dict[str, int | str]],
+    rel32_refs: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    wrapper_va = TARGETS["slot_reset_title_parent_ctor_b0b020"]
+    base_ctor_va = TARGETS["slot_reset_title_parent_base_ctor_b0b0d0"]
+    title_ctor_va = TARGETS["slot_reset_title_step_ctor_b0b1c0"]
+    state_table_va = TARGETS["slot_reset_state_table_global_43d71580"]
+    simple_table_va = TARGETS["slot_reset_title_queue_state_table_global_43d71340"]
+    wrapper_range = find_pdata_range_for_pc(data, image_base, sections, wrapper_va)
+    base_ctor_range = find_pdata_range_for_pc(data, image_base, sections, base_ctor_va)
+    title_ctor_range = find_pdata_range_for_pc(data, image_base, sections, title_ctor_va)
+    wrapper_begin = int(str(wrapper_range.get("begin_va")), 16) if wrapper_range.get("begin_va") else wrapper_va
+    wrapper_end = int(str(wrapper_range.get("end_va")), 16) if wrapper_range.get("end_va") else wrapper_va + 0xA6
+    base_ctor_begin = int(str(base_ctor_range.get("begin_va")), 16) if base_ctor_range.get("begin_va") else base_ctor_va
+    base_ctor_end = int(str(base_ctor_range.get("end_va")), 16) if base_ctor_range.get("end_va") else base_ctor_va + 0xE2
+    title_ctor_begin = int(str(title_ctor_range.get("begin_va")), 16) if title_ctor_range.get("begin_va") else title_ctor_va
+    title_ctor_end = int(str(title_ctor_range.get("end_va")), 16) if title_ctor_range.get("end_va") else title_ctor_va + 0x130
+    wrapper_blob = read_bytes(data, image_base, sections, wrapper_begin, max(0, wrapper_end - wrapper_begin))
+    base_ctor_blob = read_bytes(data, image_base, sections, base_ctor_begin, max(0, base_ctor_end - base_ctor_begin))
+    title_ctor_blob = read_bytes(data, image_base, sections, title_ctor_begin, max(0, title_ctor_end - title_ctor_begin))
+
+    def calls_in_range(target_name: str, begin: int, end: int) -> list[str]:
+        return sorted(
+            [
+                str(ref.get("source_va"))
+                for ref in rel32_refs.get(target_name, [])
+                if begin <= int(str(ref.get("source_va")), 16) < end
+            ],
+            key=lambda value: int(value, 16),
+        )
+
+    title_table_refs = scan_rip_relative_refs_to_va(data, image_base, sections, state_table_va)
+    simple_table_refs = scan_rip_relative_refs_to_va(data, image_base, sections, simple_table_va)
+    title_final_vtable_base = 0x142B63BA0
+    title_final_vtable_parent_slot = title_final_vtable_base + 0x28
+    return {
+        "wrapper_begin_va": wrapper_range.get("begin_va"),
+        "wrapper_end_va": wrapper_range.get("end_va"),
+        "base_ctor_begin_va": base_ctor_range.get("begin_va"),
+        "base_ctor_end_va": base_ctor_range.get("end_va"),
+        "title_ctor_begin_va": title_ctor_range.get("begin_va"),
+        "title_ctor_end_va": title_ctor_range.get("end_va"),
+        "title_table_refs": title_table_refs,
+        "simple_table_refs": simple_table_refs,
+        "simple_table_refs_are_initializer_only": len(simple_table_refs) == 2
+        and all(ref.get("function_begin_va") == "0x1400a4c90" for ref in simple_table_refs),
+        "title_table_refs_include_initializer_and_constructor": any(
+            ref.get("source_va") == "0x1400a4f56" and ref.get("function_begin_va") == "0x1400a4f50"
+            for ref in title_table_refs
+        )
+        and any(
+            ref.get("source_va") == "0x140b0b1d8" and ref.get("function_begin_va") == "0x140b0b1c0"
+            for ref in title_table_refs
+        ),
+        "title_ctor_final_vtable_parent_loop_slot28": read_qword_value(
+            data, image_base, sections, title_final_vtable_parent_slot
+        )
+        == TARGETS["slot_reset_parent_loop_b0bd60"],
+        "passive_trace_anchor_is_parent_loop_not_simple_table": len(simple_table_refs) == 2
+        and all(ref.get("function_begin_va") == "0x1400a4c90" for ref in simple_table_refs)
+        and any(ref.get("function_begin_va") == "0x140b0b1c0" for ref in title_table_refs)
+        and read_qword_value(data, image_base, sections, title_final_vtable_parent_slot)
+        == TARGETS["slot_reset_parent_loop_b0bd60"],
+        "title_ctor_passes_title_table_to_wrapper": any(
+            ref.get("source_va") == "0x140b0b1d8"
+            and ref.get("instruction") == "lea_rdx"
+            and ref.get("function_begin_va") == "0x140b0b1c0"
+            for ref in title_table_refs
+        )
+        and calls_in_range("slot_reset_title_parent_ctor_b0b020", title_ctor_begin, title_ctor_end) == ["0x140b0b1df"],
+        "wrapper_captures_table_arg_and_forwards_as_r8": b"\x48\x8b\xda" in wrapper_blob
+        and b"\x4c\x8b\xc3" in wrapper_blob
+        and calls_in_range("slot_reset_title_parent_base_ctor_b0b0d0", wrapper_begin, wrapper_end) == ["0x140b0b079"],
+        "base_ctor_stores_table_pointer_to_owner10": b"\x48\x89\x5e\x10" in base_ctor_blob,
+        "base_ctor_initializes_state_fields": b"\x48\x89\x5e\x48" in base_ctor_blob
+        and b"\x88\x5e\x50" in base_ctor_blob
+        and b"\x48\x89\x46\x58" in base_ctor_blob
+        and b"\x48\x89\x5e\x60" in base_ctor_blob
+        and b"\x88\x46\x68" in base_ctor_blob
+        and b"\x88\x5e\x69" in base_ctor_blob
+        and b"\xc7\x86\xac\x00\x00\x00\xff\xff\xff\xff" in base_ctor_blob,
+        "title_ctor_sets_final_vtable_and_state0": function_has_rip_lea_any_reg_to(
+            data, image_base, sections, title_ctor_begin, 0x142B63BB0, max(0, title_ctor_end - title_ctor_begin)
+        )
+        and calls_in_range("slot_reset_set_state_helper_b0d960", title_ctor_begin, title_ctor_end) == ["0x140b0b2d8"]
+        and b"\x33\xd2" in title_ctor_blob,
+        "title_ctor_initializes_owner_128_130": b"\x48\x89\xb7\x28\x01\x00\x00" in title_ctor_blob
+        and b"\x48\x8d\x87\x30\x01\x00\x00" in title_ctor_blob
+        and b"\x48\x89\x30" in title_ctor_blob,
+        "constructor_chain_to_parent_table_dispatch_mapped": b"\x48\x8b\x43\x10" in read_bytes(
+            data, image_base, sections, TARGETS["slot_reset_parent_loop_b0bd60"], 0x120
+        )
+        and b"\x42\xff\x14\xc0" in read_bytes(data, image_base, sections, TARGETS["slot_reset_parent_loop_b0bd60"], 0x120),
+        "wrapper_bytes_hex": wrapper_blob.hex(),
+        "base_ctor_bytes_hex": base_ctor_blob.hex(),
+        "title_ctor_bytes_hex": title_ctor_blob.hex(),
+    }
+
+
+def read_slot_reset_to_menu_job_wait_context(
+    data: bytes,
+    image_base: int,
+    sections: list[dict[str, int | str]],
+    rel32_refs: dict[str, list[dict[str, Any]]],
+    state_table_context: dict[str, Any],
+) -> dict[str, Any]:
+    helper_va = TARGETS["slot_reset_to_menu_job_wait_helper_b0e530"]
+    helper_range = find_pdata_range_for_pc(data, image_base, sections, helper_va)
+    helper_begin = int(str(helper_range.get("begin_va")), 16) if helper_range.get("begin_va") else helper_va
+    helper_end = int(str(helper_range.get("end_va")), 16) if helper_range.get("end_va") else helper_va + 0x120
+    helper_blob = read_bytes(data, image_base, sections, helper_begin, max(0, helper_end - helper_begin))
+    bool_wrapper_va = TARGETS["slot_reset_title_begintitle_bool_wrapper_b0c180"]
+    input_builder_va = TARGETS["slot_reset_title_accept_input_condition_builder_7acb00"]
+    branch_step_va = TARGETS["slot_reset_branch_gate_chain_step_7927d0"]
+    owner_builder_va = TARGETS["slot_reset_title_begintitle_owner138_e0_builder_81f9f0"]
+    node_update_va = TARGETS["slot_reset_title_accept_input_node_update_7ad1c0"]
+    input_manager_state_va = TARGETS["slot_reset_title_accept_input_manager_state_765f20"]
+    input_manager_shutdown_va = TARGETS["slot_reset_title_accept_input_manager_shutdown_765fa0"]
+    input_manager_init_va = TARGETS["slot_reset_title_accept_input_manager_init_766010"]
+    input_manager_queue_setup_va = TARGETS["slot_reset_title_accept_input_manager_queue_setup_7660f0"]
+    temp_clone_va = TARGETS["slot_reset_title_accept_input_temp_clone_7ad6c0"]
+    temp_callback_va = TARGETS["slot_reset_title_accept_input_temp_callback_7ad810"]
+    temp_active_clone_va = TARGETS["slot_reset_title_accept_input_temp_active_clone_7ad990"]
+    temp_child_clone_va = TARGETS["slot_reset_title_accept_input_temp_child_clone_7ad9d0"]
+    bool_wrapper_range = find_pdata_range_for_pc(data, image_base, sections, bool_wrapper_va)
+    input_builder_range = find_pdata_range_for_pc(data, image_base, sections, input_builder_va)
+    branch_step_range = find_pdata_range_for_pc(data, image_base, sections, branch_step_va)
+    owner_builder_range = find_pdata_range_for_pc(data, image_base, sections, owner_builder_va)
+    node_update_range = find_pdata_range_for_pc(data, image_base, sections, node_update_va)
+    input_manager_state_range = find_pdata_range_for_pc(data, image_base, sections, input_manager_state_va)
+    if input_manager_state_range.get("begin_va") != f"0x{input_manager_state_va:x}":
+        input_manager_state_range = {
+            "pc_va": f"0x{input_manager_state_va:x}",
+            "begin_va": f"0x{input_manager_state_va:x}",
+            "end_va": f"0x{input_manager_state_va + 0x11:x}",
+            "unwind_va": None,
+            "source": "tiny_function_fallback",
+        }
+    input_manager_shutdown_range = find_pdata_range_for_pc(data, image_base, sections, input_manager_shutdown_va)
+    if input_manager_shutdown_range.get("begin_va") == f"0x{input_manager_shutdown_va:x}":
+        input_manager_shutdown_range = {
+            **input_manager_shutdown_range,
+            "end_va": f"0x{input_manager_shutdown_va + 0x65:x}",
+            "source": "split_unwind_extended_for_global_clear",
+        }
+    input_manager_init_range = find_pdata_range_for_pc(data, image_base, sections, input_manager_init_va)
+    input_manager_queue_setup_range = find_pdata_range_for_pc(data, image_base, sections, input_manager_queue_setup_va)
+    temp_clone_range = find_pdata_range_for_pc(data, image_base, sections, temp_clone_va)
+    temp_callback_range = find_pdata_range_for_pc(data, image_base, sections, temp_callback_va)
+    temp_active_clone_range = find_pdata_range_for_pc(data, image_base, sections, temp_active_clone_va)
+    temp_child_clone_range = find_pdata_range_for_pc(data, image_base, sections, temp_child_clone_va)
+    bool_wrapper_begin = int(str(bool_wrapper_range.get("begin_va")), 16) if bool_wrapper_range.get("begin_va") else bool_wrapper_va
+    bool_wrapper_end = int(str(bool_wrapper_range.get("end_va")), 16) if bool_wrapper_range.get("end_va") else bool_wrapper_va + 0xAF
+    input_builder_begin = int(str(input_builder_range.get("begin_va")), 16) if input_builder_range.get("begin_va") else input_builder_va
+    input_builder_end = int(str(input_builder_range.get("end_va")), 16) if input_builder_range.get("end_va") else input_builder_va + 0x190
+    branch_step_begin = int(str(branch_step_range.get("begin_va")), 16) if branch_step_range.get("begin_va") else branch_step_va
+    branch_step_end = int(str(branch_step_range.get("end_va")), 16) if branch_step_range.get("end_va") else branch_step_va + 0xB9
+    owner_builder_begin = int(str(owner_builder_range.get("begin_va")), 16) if owner_builder_range.get("begin_va") else owner_builder_va
+    owner_builder_end = int(str(owner_builder_range.get("end_va")), 16) if owner_builder_range.get("end_va") else owner_builder_va + 0xEF
+    node_update_begin = int(str(node_update_range.get("begin_va")), 16) if node_update_range.get("begin_va") else node_update_va
+    node_update_end = int(str(node_update_range.get("end_va")), 16) if node_update_range.get("end_va") else node_update_va + 0x4FC
+    input_manager_state_begin = int(str(input_manager_state_range.get("begin_va")), 16) if input_manager_state_range.get("begin_va") else input_manager_state_va
+    input_manager_state_end = int(str(input_manager_state_range.get("end_va")), 16) if input_manager_state_range.get("end_va") else input_manager_state_va + 0x11
+    input_manager_shutdown_begin = int(str(input_manager_shutdown_range.get("begin_va")), 16) if input_manager_shutdown_range.get("begin_va") else input_manager_shutdown_va
+    input_manager_shutdown_end = int(str(input_manager_shutdown_range.get("end_va")), 16) if input_manager_shutdown_range.get("end_va") else input_manager_shutdown_va + 0x65
+    input_manager_init_begin = int(str(input_manager_init_range.get("begin_va")), 16) if input_manager_init_range.get("begin_va") else input_manager_init_va
+    input_manager_init_end = int(str(input_manager_init_range.get("end_va")), 16) if input_manager_init_range.get("end_va") else input_manager_init_va + 0xDD
+    input_manager_queue_setup_begin = int(str(input_manager_queue_setup_range.get("begin_va")), 16) if input_manager_queue_setup_range.get("begin_va") else input_manager_queue_setup_va
+    input_manager_queue_setup_end = int(str(input_manager_queue_setup_range.get("end_va")), 16) if input_manager_queue_setup_range.get("end_va") else input_manager_queue_setup_va + 0x11F
+    temp_clone_begin = int(str(temp_clone_range.get("begin_va")), 16) if temp_clone_range.get("begin_va") else temp_clone_va
+    temp_clone_end = int(str(temp_clone_range.get("end_va")), 16) if temp_clone_range.get("end_va") else temp_clone_va + 0x3F
+    temp_callback_begin = int(str(temp_callback_range.get("begin_va")), 16) if temp_callback_range.get("begin_va") else temp_callback_va
+    temp_callback_end = int(str(temp_callback_range.get("end_va")), 16) if temp_callback_range.get("end_va") else temp_callback_va + 0x2A
+    temp_active_clone_begin = int(str(temp_active_clone_range.get("begin_va")), 16) if temp_active_clone_range.get("begin_va") else temp_active_clone_va
+    temp_active_clone_end = int(str(temp_active_clone_range.get("end_va")), 16) if temp_active_clone_range.get("end_va") else temp_active_clone_va + 0x3F
+    temp_child_clone_begin = int(str(temp_child_clone_range.get("begin_va")), 16) if temp_child_clone_range.get("begin_va") else temp_child_clone_va
+    temp_child_clone_end = int(str(temp_child_clone_range.get("end_va")), 16) if temp_child_clone_range.get("end_va") else temp_child_clone_va + 0x70
+    bool_wrapper_blob = read_bytes(data, image_base, sections, bool_wrapper_begin, max(0, bool_wrapper_end - bool_wrapper_begin))
+    input_builder_blob = read_bytes(data, image_base, sections, input_builder_begin, max(0, input_builder_end - input_builder_begin))
+    branch_step_blob = read_bytes(data, image_base, sections, branch_step_begin, max(0, branch_step_end - branch_step_begin))
+    owner_builder_blob = read_bytes(data, image_base, sections, owner_builder_begin, max(0, owner_builder_end - owner_builder_begin))
+    node_update_blob = read_bytes(data, image_base, sections, node_update_begin, max(0, node_update_end - node_update_begin))
+    input_manager_state_blob = read_bytes(data, image_base, sections, input_manager_state_begin, max(0, input_manager_state_end - input_manager_state_begin))
+    input_manager_shutdown_blob = read_bytes(data, image_base, sections, input_manager_shutdown_begin, max(0, input_manager_shutdown_end - input_manager_shutdown_begin))
+    input_manager_init_blob = read_bytes(data, image_base, sections, input_manager_init_begin, max(0, input_manager_init_end - input_manager_init_begin))
+    input_manager_queue_setup_blob = read_bytes(data, image_base, sections, input_manager_queue_setup_begin, max(0, input_manager_queue_setup_end - input_manager_queue_setup_begin))
+    temp_clone_blob = read_bytes(data, image_base, sections, temp_clone_begin, max(0, temp_clone_end - temp_clone_begin))
+    temp_callback_blob = read_bytes(data, image_base, sections, temp_callback_begin, max(0, temp_callback_end - temp_callback_begin))
+    temp_active_clone_blob = read_bytes(data, image_base, sections, temp_active_clone_begin, max(0, temp_active_clone_end - temp_active_clone_begin))
+    temp_child_clone_blob = read_bytes(data, image_base, sections, temp_child_clone_begin, max(0, temp_child_clone_end - temp_child_clone_begin))
+
+    state_entries = state_table_context.get("entries", [])
+    handlers_by_va = {str(entry.get("handler_va")): entry for entry in state_entries if entry.get("handler_va")}
+
+    def calls_in_range(target_name: str, begin: int, end: int) -> list[str]:
+        return sorted(
+            [
+                str(ref.get("source_va"))
+                for ref in rel32_refs.get(target_name, [])
+                if begin <= int(str(ref.get("source_va")), 16) < end
+            ],
+            key=lambda value: int(value, 16),
+        )
+
+    helper_callers: list[dict[str, Any]] = []
+    for ref in sorted(
+        rel32_refs.get("slot_reset_to_menu_job_wait_helper_b0e530", []),
+        key=lambda item: int(str(item.get("source_va")), 16),
+    ):
+        source_va = int(str(ref.get("source_va")), 16)
+        function_range = find_pdata_range_for_pc(data, image_base, sections, source_va)
+        begin_text = function_range.get("begin_va")
+        label_entry = handlers_by_va.get(str(begin_text)) if begin_text else None
+        helper_callers.append(
+            {
+                "source_va": ref.get("source_va"),
+                "function_begin_va": begin_text,
+                "function_end_va": function_range.get("end_va"),
+                "state_index": label_entry.get("entry_index") if label_entry else None,
+                "label_text": label_entry.get("label_text") if label_entry else None,
+            }
+        )
+
+    caller_target_names = [
+        "selector_builder_chain_key_7a91e0",
+        "slot_reset_branch_gate_descriptor_wrapper_744a60",
+        "task_enqueue_7a7b60",
+        "task_enqueue_link_7a7bb0",
+        "slot_reset_title_beginlogo_owner_e0_builder_81f180",
+        "slot_reset_title_begintitle_owner138_e0_builder_81f9f0",
+        "slot_reset_title_begintitle_bool_wrapper_b0c180",
+        "slot_reset_title_accept_input_condition_builder_7acb00",
+        "slot_reset_branch_gate_chain_compose_78e0e0",
+        "slot_reset_branch_gate_chain_step_7927d0",
+        "slot_reset_branch_gate_resource_75fbd0",
+        "slot_reset_branch_gate_job_7bae20",
+        "slot_reset_title_xr_job_7bb010",
+        "slot_reset_title_initmenu_gate_builder_7a6c00",
+    ]
+    caller_contexts: dict[str, dict[str, Any]] = {}
+    for caller in helper_callers:
+        begin_text = caller.get("function_begin_va")
+        end_text = caller.get("function_end_va")
+        if not begin_text or not end_text:
+            continue
+        begin = int(str(begin_text), 16)
+        end = int(str(end_text), 16)
+        blob = read_bytes(data, image_base, sections, begin, max(0, end - begin))
+        calls = {target_name: calls_in_range(target_name, begin, end) for target_name in caller_target_names}
+        label = str(caller.get("label_text"))
+        caller_contexts[label] = {
+            "function_begin_va": begin_text,
+            "function_end_va": end_text,
+            "handoff_source_va": caller.get("source_va"),
+            "calls_by_target": calls,
+            "hands_final_enqueue_result_to_helper": bytes.fromhex("488bd0") in blob[max(0, int(str(caller.get("source_va")), 16) - begin - 12) : int(str(caller.get("source_va")), 16) - begin]
+            or bytes.fromhex("488bd0") in blob[max(0, int(str(caller.get("source_va")), 16) - begin - 16) : int(str(caller.get("source_va")), 16) - begin],
+            "begin_logo_owner_e0_payload_shape": calls.get("slot_reset_title_beginlogo_owner_e0_builder_81f180") == ["0x140b0c43e"]
+            and calls.get("task_enqueue_link_7a7bb0") == ["0x140b0c44e"]
+            and {"0x140b0c42b", "0x140b0c45b"}.issubset(set(calls.get("task_enqueue_7a7b60", []))),
+            "begin_title_accept_payload_shape": calls.get("slot_reset_title_begintitle_owner138_e0_builder_81f9f0") == [
+                "0x140b0c70b"
+            ]
+            and calls.get("slot_reset_title_begintitle_bool_wrapper_b0c180") == ["0x140b0c72a"]
+            and calls.get("slot_reset_branch_gate_chain_compose_78e0e0") == ["0x140b0c73a"]
+            and calls.get("slot_reset_branch_gate_chain_step_7927d0") == ["0x140b0c74d"]
+            and "0x140b0c75b" in calls.get("task_enqueue_7a7b60", []),
+            "begin_title_owner_builder_args_owner_e0_138": calls.get(
+                "slot_reset_title_begintitle_owner138_e0_builder_81f9f0"
+            ) == ["0x140b0c70b"]
+            and b"\x4c\x8d\x86\x38\x01\x00\x00" in blob
+            and b"\x48\x8d\x96\xe0\x00\x00\x00" in blob,
+            "xr_dialog_payload_shape": calls.get("slot_reset_branch_gate_resource_75fbd0") == [
+                "0x140b0c9ac",
+                "0x140b0c9e0",
+            ]
+            and calls.get("slot_reset_branch_gate_job_7bae20") == ["0x140b0c9c1"]
+            and calls.get("slot_reset_title_xr_job_7bb010") == ["0x140b0c9f5"]
+            and {"0x140b0ca06", "0x140b0ca17"}.issubset(set(calls.get("task_enqueue_link_7a7bb0", [])))
+            and b"\xba\x4e\x76\x09\x00" in blob
+            and b"\xba\x44\x76\x09\x00" in blob,
+            "init_menu_two_descriptor_payload_shape": calls.get("selector_builder_chain_key_7a91e0") == [
+                "0x140b0d0b6",
+                "0x140b0d11a",
+            ]
+            and calls.get("slot_reset_branch_gate_descriptor_wrapper_744a60") == [
+                "0x140b0d0ca",
+                "0x140b0d12e",
+            ]
+            and {"0x140b0d0d8", "0x140b0d13c"}.issubset(set(calls.get("task_enqueue_7a7b60", []))),
+            "init_menu_gate_payload_shape": calls.get("slot_reset_title_initmenu_gate_builder_7a6c00") == [
+                "0x140b0d185",
+                "0x140b0d1d5",
+            ]
+            and "0x140b0d193" in calls.get("task_enqueue_7a7b60", []),
+            "init_menu_link_fold_payload_shape": calls.get("task_enqueue_link_7a7bb0") == [
+                "0x140b0d1e8",
+                "0x140b0d1fb",
+                "0x140b0d20e",
+            ]
+            and "0x140b0d21c" in calls.get("task_enqueue_7a7b60", []),
+            "init_menu_multibranch_payload_shape": calls.get("selector_builder_chain_key_7a91e0") == [
+                "0x140b0d0b6",
+                "0x140b0d11a",
+            ]
+            and calls.get("slot_reset_branch_gate_descriptor_wrapper_744a60") == [
+                "0x140b0d0ca",
+                "0x140b0d12e",
+            ]
+            and calls.get("slot_reset_title_initmenu_gate_builder_7a6c00") == [
+                "0x140b0d185",
+                "0x140b0d1d5",
+            ]
+            and calls.get("task_enqueue_7a7b60") == [
+                "0x140b0d0d8",
+                "0x140b0d13c",
+                "0x140b0d193",
+                "0x140b0d21c",
+            ]
+            and calls.get("task_enqueue_link_7a7bb0") == [
+                "0x140b0d1e8",
+                "0x140b0d1fb",
+                "0x140b0d20e",
+            ],
+        }
+
+    bool_wrapper_inner_calls = calls_in_range(
+        "title_accept_final_wrapper_inner_78c530", bool_wrapper_begin, bool_wrapper_end
+    )
+    input_builder_calls = {
+        "title_accept_primary_chain_builder_7a72b0": calls_in_range(
+            "title_accept_primary_chain_builder_7a72b0", input_builder_begin, input_builder_end
+        ),
+        "slot_reset_title_accept_input_alloc_seed_7a72a0": calls_in_range(
+            "slot_reset_title_accept_input_alloc_seed_7a72a0", input_builder_begin, input_builder_end
+        ),
+        "slot_reset_title_accept_input_node_ctor_7a6f20": calls_in_range(
+            "slot_reset_title_accept_input_node_ctor_7a6f20", input_builder_begin, input_builder_end
+        ),
+    }
+    input_builder_callers = sorted(
+        [str(ref.get("source_va")) for ref in rel32_refs.get("slot_reset_title_accept_input_condition_builder_7acb00", [])],
+        key=lambda value: int(value, 16),
+    )
+    owner_builder_input_calls = calls_in_range(
+        "slot_reset_title_accept_input_condition_builder_7acb00", owner_builder_begin, owner_builder_end
+    )
+    branch_step_calls = {
+        "title_accept_branch_step_builder_792970": calls_in_range(
+            "title_accept_branch_step_builder_792970", branch_step_begin, branch_step_end
+        ),
+        "title_accept_attach_7418d0": calls_in_range("title_accept_attach_7418d0", branch_step_begin, branch_step_end),
+    }
+    node_vtable_slots = read_qwords(
+        data, image_base, sections, TARGETS["slot_reset_title_accept_input_node_vtable_aa97e8"], 4
+    )
+    temp_base_vtable_slots = read_qwords(
+        data, image_base, sections, TARGETS["slot_reset_title_accept_input_temp_base_vtable_aa9808"], 8
+    )
+    temp_active_vtable_slots = read_qwords(
+        data, image_base, sections, TARGETS["slot_reset_title_accept_input_temp_active_vtable_aa9840"], 12
+    )
+    temp_callback_calls = calls_in_range(
+        "slot_reset_title_accept_input_manager_state_765f20", temp_callback_begin, temp_callback_end
+    )
+    input_manager_global_refs_near_title_accept = [
+        ref
+        for ref in scan_rip_relative_refs_to_va(
+            data, image_base, sections, TARGETS["slot_reset_title_accept_input_manager_global_43d6b7b0"]
+        )
+        if temp_callback_begin <= int(str(ref.get("source_va")), 16) < temp_callback_end
+    ]
+    input_manager_singleton_lifecycle_refs = [
+        ref
+        for ref in scan_rip_relative_refs_to_va(
+            data, image_base, sections, TARGETS["slot_reset_title_accept_input_manager_singleton_43d6b880"]
+        )
+        if input_manager_shutdown_begin <= int(str(ref.get("source_va")), 16) < input_manager_init_end
+    ]
+    set_state_calls = calls_in_range("slot_reset_set_state_helper_b0d960", helper_begin, helper_end)
+    attach_calls = calls_in_range("slot_reset_branch_gate_submit_attach_7a9460", helper_begin, helper_end)
+    return {
+        "helper_begin_va": helper_range.get("begin_va"),
+        "helper_end_va": helper_range.get("end_va"),
+        "helper_callers": helper_callers,
+        "caller_contexts": caller_contexts,
+        "bool_wrapper_begin_va": bool_wrapper_range.get("begin_va"),
+        "bool_wrapper_end_va": bool_wrapper_range.get("end_va"),
+        "input_builder_begin_va": input_builder_range.get("begin_va"),
+        "input_builder_end_va": input_builder_range.get("end_va"),
+        "branch_step_begin_va": branch_step_range.get("begin_va"),
+        "branch_step_end_va": branch_step_range.get("end_va"),
+        "owner_builder_begin_va": owner_builder_range.get("begin_va"),
+        "owner_builder_end_va": owner_builder_range.get("end_va"),
+        "node_update_begin_va": node_update_range.get("begin_va"),
+        "node_update_end_va": node_update_range.get("end_va"),
+        "input_manager_state_begin_va": input_manager_state_range.get("begin_va"),
+        "input_manager_state_end_va": input_manager_state_range.get("end_va"),
+        "input_manager_shutdown_begin_va": input_manager_shutdown_range.get("begin_va"),
+        "input_manager_shutdown_end_va": input_manager_shutdown_range.get("end_va"),
+        "input_manager_init_begin_va": input_manager_init_range.get("begin_va"),
+        "input_manager_init_end_va": input_manager_init_range.get("end_va"),
+        "input_manager_queue_setup_begin_va": input_manager_queue_setup_range.get("begin_va"),
+        "input_manager_queue_setup_end_va": input_manager_queue_setup_range.get("end_va"),
+        "temp_clone_begin_va": temp_clone_range.get("begin_va"),
+        "temp_clone_end_va": temp_clone_range.get("end_va"),
+        "temp_callback_begin_va": temp_callback_range.get("begin_va"),
+        "temp_callback_end_va": temp_callback_range.get("end_va"),
+        "temp_active_clone_begin_va": temp_active_clone_range.get("begin_va"),
+        "temp_active_clone_end_va": temp_active_clone_range.get("end_va"),
+        "temp_child_clone_begin_va": temp_child_clone_range.get("begin_va"),
+        "temp_child_clone_end_va": temp_child_clone_range.get("end_va"),
+        "node_vtable_slots": node_vtable_slots,
+        "temp_base_vtable_slots": temp_base_vtable_slots,
+        "temp_active_vtable_slots": temp_active_vtable_slots,
+        "temp_callback_calls": temp_callback_calls,
+        "input_manager_global_refs_near_title_accept": input_manager_global_refs_near_title_accept,
+        "input_manager_singleton_lifecycle_refs": input_manager_singleton_lifecycle_refs,
+        "bool_wrapper_inner_calls": bool_wrapper_inner_calls,
+        "input_builder_calls": input_builder_calls,
+        "input_builder_callers": input_builder_callers,
+        "owner_builder_input_calls": owner_builder_input_calls,
+        "branch_step_calls": branch_step_calls,
+        "begintitle_bool_wrapper_maps_final_wrapper_inner": bool_wrapper_inner_calls == ["0x140b0c1d9"]
+        and b"\x41\x0f\xb6\xf8" in bool_wrapper_blob
+        and b"\x44\x0f\xb6\xc7" in bool_wrapper_blob,
+        "begintitle_owner_builder_range_mapped": owner_builder_range.get("begin_va") == "0x14081f9f0"
+        and owner_builder_range.get("end_va") == "0x14081fae0",
+        "begintitle_owner_builder_args_owner_e0_138": caller_contexts.get("TitleStep::STEP_BeginTitle", {}).get(
+            "begin_title_owner_builder_args_owner_e0_138"
+        ),
+        "begintitle_owner_builder_calls_input_condition_at_fa8b": owner_builder_input_calls == ["0x14081fa8b"],
+        "begintitle_owner_builder_selector6_active": b"\xc7\x44\x24\x30\x06\x00\x00\x00" in owner_builder_blob
+        and b"\xc6\x44\x24\x34\x01" in owner_builder_blob,
+        "begintitle_owner_builder_passes_descriptor_to_input_condition": b"\x4d\x8d\x4b\xa8" in owner_builder_blob
+        and b"\x4c\x8d\x44\x24\x30" in owner_builder_blob,
+        "begintitle_owner_builder_preserves_owner_sources": b"\x4d\x89\x43\xb0" in owner_builder_blob
+        and caller_contexts.get("TitleStep::STEP_BeginTitle", {}).get("begin_title_owner_builder_args_owner_e0_138"),
+        "begintitle_input_condition_builder_allocates_0x138": b"\xb9\x38\x01\x00\x00" in input_builder_blob,
+        "begintitle_input_condition_builder_selector6_active": b"\xc7\x44\x24\x30\x06\x00\x00\x00" in owner_builder_blob
+        and b"\xc6\x44\x24\x34\x01" in owner_builder_blob
+        and b"\xb9\x38\x01\x00\x00" in input_builder_blob,
+        "begintitle_input_condition_builder_owner_sources": b"\x4c\x89\x66\x50" in input_builder_blob
+        and b"\x0f\x11\x46\x58" in input_builder_blob
+        and b"\x48\x8d\x5e\x70" in input_builder_blob,
+        "begintitle_input_builder_range_mapped": input_builder_range.get("begin_va") == "0x1407acb00"
+        and input_builder_range.get("end_va") == "0x1407acd32",
+        "begintitle_input_builder_captures_all_args": b"\x4d\x8b\xe9" in input_builder_blob
+        and b"\x49\x8b\xd8" in input_builder_blob
+        and b"\x4c\x8b\xe2" in input_builder_blob
+        and b"\x4c\x8b\xf1" in input_builder_blob,
+        "begintitle_input_builder_allocates_and_constructs_0x138_node": input_builder_calls.get(
+            "slot_reset_title_accept_input_alloc_seed_7a72a0"
+        ) == ["0x1407acb4e"]
+        and input_builder_calls.get("slot_reset_title_accept_input_node_ctor_7a6f20") == ["0x1407acbda"]
+        and b"\xb9\x38\x01\x00\x00" in input_builder_blob,
+        "begintitle_input_builder_temp_descriptor_vtables_mapped": function_has_rip_lea_any_reg_to(
+            data, image_base, sections, input_builder_begin, TARGETS["slot_reset_title_accept_input_temp_base_vtable_aa9808"], max(0, input_builder_end - input_builder_begin)
+        )
+        and function_has_rip_lea_any_reg_to(
+            data, image_base, sections, input_builder_begin, TARGETS["slot_reset_title_accept_input_temp_active_vtable_aa9840"], max(0, input_builder_end - input_builder_begin)
+        )
+        and function_has_rip_lea_any_reg_to(
+            data, image_base, sections, input_builder_begin, TARGETS["slot_reset_title_accept_input_temp_callback_7ad810"], max(0, input_builder_end - input_builder_begin)
+        ),
+        "begintitle_input_builder_node_vtable_mapped": function_has_rip_lea_any_reg_to(
+            data, image_base, sections, input_builder_begin, TARGETS["slot_reset_title_accept_input_node_vtable_aa97e8"], max(0, input_builder_end - input_builder_begin)
+        )
+        and b"\x48\x89\x06" in input_builder_blob,
+        "begintitle_input_builder_copies_selector_and_sources": b"\x0f\x10\x03" in input_builder_blob
+        and b"\x0f\x29\x45\x87" in input_builder_blob
+        and b"\x4c\x89\x66\x50" in input_builder_blob
+        and b"\x0f\x11\x46\x58" in input_builder_blob
+        and b"\x4c\x89\x66\x68" in input_builder_blob,
+        "begintitle_input_builder_initializes_condition_subnodes": b"\x48\x8d\x5e\x70" in input_builder_blob
+        and b"\x48\x8d\x86\xb0\x00\x00\x00" in input_builder_blob
+        and b"\x48\x8d\x9e\xf0\x00\x00\x00" in input_builder_blob
+        and b"\x49\x8b\x4d\x38" in input_builder_blob,
+        "begintitle_input_builder_returns_output_and_cleans_sources": b"\x49\x89\x36" in input_builder_blob
+        and b"\x83\xcf\x04" in input_builder_blob
+        and b"\x40\xf6\xc7\x02" in input_builder_blob
+        and b"\x40\xf6\xc7\x01" in input_builder_blob,
+        "begintitle_input_node_vtable_update_slot_mapped": [row.get("value_va") for row in node_vtable_slots]
+        == ["0x140744d90", "0x1407ac850", "0x1407ad1c0", "0x1432f2440"],
+        "begintitle_input_node_update_range_mapped": node_update_range.get("begin_va") == "0x1407ad1c0"
+        and node_update_range.get("end_va") == "0x1407ad6bc",
+        "begintitle_input_node_update_gate_fields_mapped": b"\x48\x83\xb9\x30\x01\x00\x00\x00" in node_update_blob
+        and b"\x48\x83\xb9\xa8\x00\x00\x00\x00" in node_update_blob
+        and b"\x48\x83\x79\x10\x00" in node_update_blob
+        and b"\x48\x83\xb9\xe8\x00\x00\x00\x00" in node_update_blob,
+        "begintitle_input_node_update_moves_child_to_130": b"\x48\xc7\x87\x30\x01\x00\x00\x00\x00\x00\x00" in node_update_blob
+        and b"\x4c\x89\xbf\x30\x01\x00\x00" in node_update_blob
+        and b"\x48\x89\xb7\x30\x01\x00\x00" in node_update_blob,
+        "begintitle_input_node_update_status_switch_mapped": b"\x48\x8b\x8f\x28\x01\x00\x00" in node_update_blob
+        and b"\xff\x50\x10" in node_update_blob
+        and b"\x83\xe8\x01\x74" in node_update_blob
+        and b"\x83\xf8\x01" in node_update_blob,
+        "begintitle_input_node_update_global_input_bit_mapped": b"\x48\x8b\x35" in node_update_blob
+        and b"\x0f\xb7\x03" in node_update_blob
+        and b"\x66\x83\xf8\x47" in node_update_blob
+        and b"\x42\x80\x8c\x09\x90\x00\x00\x00\x01" in node_update_blob,
+        "begintitle_input_node_update_terminal_descriptor_mapped": b"\x48\x8b\x88\xe8\x01\x00\x00" in node_update_blob
+        and b"\xe8\x9d\xbb\xff\xff" in node_update_blob
+        and b"\x49\x89\x04\x24" in node_update_blob
+        and b"\x48\x8d\x05\xda\xb7\x21\x02" in node_update_blob,
+        "begintitle_input_node_update_child_submit_mapped": b"\x48\x8b\x97\x30\x01\x00\x00" in node_update_blob
+        and b"\x48\x8b\x4f\x50" in node_update_blob
+        and b"\xe8\xb0\x69\xf8\xff" in node_update_blob,
+        "begintitle_input_node_update_wait_states_mapped": b"\x41\x8d\x50\x03" in node_update_blob
+        and b"\x41\x8d\x50\x01" in node_update_blob
+        and b"\x48\x8d\x05\xef\xb8\x21\x02" in node_update_blob,
+        "begintitle_input_builder_subnode_offsets_match_update": b"\x48\x8d\x5e\x70" in input_builder_blob
+        and b"\x48\x8d\x86\xb0\x00\x00\x00" in input_builder_blob
+        and b"\x48\x8d\x9e\xf0\x00\x00\x00" in input_builder_blob
+        and b"\x48\x83\xb9\xa8\x00\x00\x00\x00" in node_update_blob
+        and b"\x48\x83\xb9\xe8\x00\x00\x00\x00" in node_update_blob
+        and b"\x48\x83\xbf\x28\x01\x00\x00\x00" in node_update_blob,
+        "begintitle_temp_vtable_slots_mapped": [row.get("value_va") for row in temp_active_vtable_slots[:6]]
+        == ["0x1407ad6c0", "0x1407ad990", "0x1407ad8c0", "0x1407add80", "0x1407ad840", "0x1407ad970"],
+        "begintitle_temp_clone_copies_callback_descriptor": temp_clone_range.get("begin_va") == "0x1407ad6c0"
+        and temp_clone_range.get("end_va") == "0x1407ad6ff"
+        and b"\x48\x8d\x05\x26\xc1\x2f\x02" in temp_clone_blob
+        and b"\x48\x8d\x05\x54\xc1\x2f\x02" in temp_clone_blob
+        and b"\x48\x8b\x41\x08" in temp_clone_blob
+        and b"\x48\x89\x42\x08" in temp_clone_blob,
+        "begintitle_temp_active_clone_copies_callback_descriptor": temp_active_clone_range.get("begin_va") == "0x1407ad990"
+        and temp_active_clone_range.get("end_va") == "0x1407ad9cf"
+        and b"\x48\x8d\x05\x56\xbe\x2f\x02" in temp_active_clone_blob
+        and b"\x48\x8d\x05\x84\xbe\x2f\x02" in temp_active_clone_blob
+        and b"\x48\x8b\x41\x08" in temp_active_clone_blob
+        and b"\x48\x89\x42\x08" in temp_active_clone_blob,
+        "begintitle_temp_child_clone_wraps_source40": temp_child_clone_range.get("begin_va") == "0x1407ad9d0"
+        and temp_child_clone_range.get("end_va") == "0x1407ada40"
+        and b"\x48\x8d\x05\x5f\xdf\x2e\x02" in temp_child_clone_blob
+        and b"\x48\x8d\x05\x75\xbe\x2f\x02" in temp_child_clone_blob
+        and b"\x48\x8d\x7a\x08" in temp_child_clone_blob
+        and b"\x48\x8b\x49\x40" in temp_child_clone_blob
+        and b"\x48\x89\x47\x38" in temp_child_clone_blob,
+        "begintitle_temp_callback_inverts_input_manager_state": temp_callback_range.get("begin_va") == "0x1407ad810"
+        and temp_callback_range.get("end_va") == "0x1407ad83a"
+        and temp_callback_calls == ["0x1407ad827"]
+        and b"\x48\x8b\x0d\x95\xdf\x5b\x03" in temp_callback_blob
+        and b"\x84\xc0" in temp_callback_blob
+        and b"\x0f\x94\xc1" in temp_callback_blob,
+        "begintitle_input_manager_state_active18_mapped": input_manager_state_range.get("begin_va") == "0x140765f20"
+        and input_manager_state_range.get("end_va") == "0x140765f31"
+        and b"\x80\xb9\x98\x08\x00\x00\x00" in input_manager_state_blob
+        and b"\x0f\xb6\x41\x18" in input_manager_state_blob,
+        "begintitle_input_manager_global_callback_ref_mapped": [
+            ref.get("source_va") for ref in input_manager_global_refs_near_title_accept
+        ] == ["0x1407ad814"],
+        "begintitle_input_manager_singleton_lifecycle_refs_mapped": [
+            ref.get("source_va") for ref in input_manager_singleton_lifecycle_refs
+        ] == ["0x140765fbb", "0x140765ff4", "0x14076602a", "0x140766068", "0x140766092", "0x1407660c5"],
+        "begintitle_input_manager_shutdown_clears_singleton": input_manager_shutdown_range.get("begin_va") == "0x140765fa0"
+        and input_manager_shutdown_range.get("end_va") == "0x140766005"
+        and b"\xc6\x41\x1a\x00" in input_manager_shutdown_blob
+        and b"\x48\x8b\x89\x80\x00\x00\x00" in input_manager_shutdown_blob
+        and b"\x48\x8b\x3d\xbe\x58\x60\x03" in input_manager_shutdown_blob
+        and b"\x48\xc7\x05\x81\x58\x60\x03\x00\x00\x00\x00" in input_manager_shutdown_blob,
+        "begintitle_input_manager_init_allocates_singleton": input_manager_init_range.get("begin_va") == "0x140766010"
+        and input_manager_init_range.get("end_va") == "0x1407660ed"
+        and b"\x48\x83\x3d\x4e\x58\x60\x03\x00" in input_manager_init_blob
+        and b"\xb9\x20\x84\x00\x00" in input_manager_init_blob
+        and b"\xba\x10\x00\x00\x00" in input_manager_init_blob
+        and b"\xe8\x49\x46\x00\x00" in input_manager_init_blob
+        and b"\x48\x89\x05\x11\x58\x60\x03" in input_manager_init_blob,
+        "begintitle_input_manager_init_updates_subsystems": b"\x48\x8b\x8b\x80\x00\x00\x00" in input_manager_init_blob
+        and b"\xe8\xc0\x77\x08\x00" in input_manager_init_blob
+        and b"\x48\x8b\x4b\x08" in input_manager_init_blob
+        and b"\xe8\xd7\x1b\x00\x00" in input_manager_init_blob
+        and b"\xc6\x43\x1a\x01" in input_manager_init_blob,
+        "begintitle_input_manager_init_captures_frame_counter": b"\xe8\xe2\x2e\xf1\xff" in input_manager_init_blob
+        and b"\xe8\x9f\x2e\xf1\xff" in input_manager_init_blob
+        and b"\x89\x87\x34\x65\x00\x00" in input_manager_init_blob,
+        "begintitle_input_manager_queue_setup_allocates_child80": input_manager_queue_setup_range.get("begin_va") == "0x1407660f0"
+        and input_manager_queue_setup_range.get("end_va") == "0x14076620f"
+        and b"\x48\x8d\x91\xb8\x06\x00\x00" in input_manager_queue_setup_blob
+        and b"\x48\x8d\x8b\x88\x00\x00\x00" in input_manager_queue_setup_blob
+        and b"\xb9\x20\x03\x00\x00" in input_manager_queue_setup_blob
+        and b"\x48\x89\x83\x80\x00\x00\x00" in input_manager_queue_setup_blob
+        and b"\x48\x8b\x93\x90\x08\x00\x00" in input_manager_queue_setup_blob,
+        "begintitle_branch_step_wrapper_maps_builder_and_attach": branch_step_calls.get(
+            "title_accept_branch_step_builder_792970"
+        ) == ["0x140792831"]
+        and branch_step_calls.get("title_accept_attach_7418d0") == ["0x14079283d"]
+        and b"\x49\x8b\xf0" in branch_step_blob
+        and b"\x48\xc7\x06\x00\x00\x00\x00" in branch_step_blob,
+        "begintitle_accept_condition_chain_mapped": caller_contexts.get("TitleStep::STEP_BeginTitle", {}).get(
+            "begin_title_accept_payload_shape"
+        )
+        and caller_contexts.get("TitleStep::STEP_BeginTitle", {}).get("begin_title_owner_builder_args_owner_e0_138")
+        and bool_wrapper_inner_calls == ["0x140b0c1d9"]
+        and owner_builder_input_calls == ["0x14081fa8b"]
+        and b"\xc7\x44\x24\x30\x06\x00\x00\x00" in owner_builder_blob
+        and b"\xc6\x44\x24\x34\x01" in owner_builder_blob
+        and branch_step_calls.get("title_accept_branch_step_builder_792970") == ["0x140792831"],
+        "attach_calls": attach_calls,
+        "set_state_calls": set_state_calls,
+        "sets_global_job_active_flag": b"\xc6\x80\xb0\x06\x00\x00\x01" in helper_blob,
+        "attaches_payload_to_owner130": b"\x48\x8d\x8e\x30\x01\x00\x00" in helper_blob
+        and attach_calls == ["0x140b0e5be"],
+        "sets_state10_menujobwait": b"\xba\x0a\x00\x00\x00" in helper_blob
+        and set_state_calls == ["0x140b0e604"],
+        "releases_payload_after_transition": b"\x48\x8b\x1f" in helper_blob
+        and b"\x48\xc7\x07\x00\x00\x00\x00" in helper_blob,
+        "callers_are_title_bootstrap_states": [caller.get("label_text") for caller in helper_callers]
+        == [
+            "TitleStep::STEP_BeginLogo",
+            "TitleStep::STEP_BeginTitle",
+            "TitleStep::STEP_BeginXR117Dialog",
+            "TitleStep::STEP_InitMenu",
+        ],
+        "candidate_title_to_menujobwait_handoff_mapped": b"\x48\x8d\x8e\x30\x01\x00\x00" in helper_blob
+        and b"\xba\x0a\x00\x00\x00" in helper_blob
+        and [caller.get("state_index") for caller in helper_callers] == [2, 3, 1, 0],
+        "begin_logo_payload_context_mapped": caller_contexts.get("TitleStep::STEP_BeginLogo", {}).get(
+            "begin_logo_owner_e0_payload_shape"
+        ),
+        "begin_title_accept_payload_context_mapped": caller_contexts.get("TitleStep::STEP_BeginTitle", {}).get(
+            "begin_title_accept_payload_shape"
+        ),
+        "xr_dialog_payload_context_mapped": caller_contexts.get("TitleStep::STEP_BeginXR117Dialog", {}).get(
+            "xr_dialog_payload_shape"
+        ),
+        "init_menu_two_descriptor_payload_context_mapped": caller_contexts.get("TitleStep::STEP_InitMenu", {}).get(
+            "init_menu_two_descriptor_payload_shape"
+        ),
+        "init_menu_gate_payload_context_mapped": caller_contexts.get("TitleStep::STEP_InitMenu", {}).get(
+            "init_menu_gate_payload_shape"
+        ),
+        "init_menu_link_fold_payload_context_mapped": caller_contexts.get("TitleStep::STEP_InitMenu", {}).get(
+            "init_menu_link_fold_payload_shape"
+        ),
+        "init_menu_payload_context_mapped": caller_contexts.get("TitleStep::STEP_InitMenu", {}).get(
+            "init_menu_multibranch_payload_shape"
+        ),
+        "all_handoff_callers_payload_context_mapped": bool(
+            caller_contexts.get("TitleStep::STEP_BeginLogo", {}).get("begin_logo_owner_e0_payload_shape")
+            and caller_contexts.get("TitleStep::STEP_BeginTitle", {}).get("begin_title_accept_payload_shape")
+            and caller_contexts.get("TitleStep::STEP_BeginXR117Dialog", {}).get("xr_dialog_payload_shape")
+            and caller_contexts.get("TitleStep::STEP_InitMenu", {}).get("init_menu_multibranch_payload_shape")
+        ),
+        "helper_bytes_hex": helper_blob.hex(),
     }
 
 
@@ -5003,6 +6508,7 @@ def main() -> int:
     exe = Path(os.environ.get("ER_EXE_PATH", str(DEFAULT_EXE)))
     output = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".auto/last-measure/static-re-evidence.json")
     data = exe.read_bytes()
+    exe_md5 = hashlib.md5(data).hexdigest()
     image_base, sections = parse_pe(data)
     rel32_refs = scan_rel32_calls(data, image_base, sections)
     absolute_refs = scan_absolute_qword_refs(data, image_base, sections)
@@ -5055,7 +6561,13 @@ def main() -> int:
     set_save_slot_callsite_contexts = read_set_save_slot_callsite_contexts(data, image_base, sections, rel32_refs)
     game_man_b5e_context = read_game_man_b5e_context(data, image_base, sections, rel32_refs)
     slot_reset_dispatch_context = read_slot_reset_dispatch_context(data, image_base, sections, rel32_refs, absolute_refs)
+    slot_reset_title_parent_ctor_context = read_slot_reset_title_parent_ctor_context(
+        data, image_base, sections, rel32_refs
+    )
     slot_reset_state_table_init_context = read_slot_reset_state_table_init_context(data, image_base, sections)
+    slot_reset_to_menu_job_wait_context = read_slot_reset_to_menu_job_wait_context(
+        data, image_base, sections, rel32_refs, slot_reset_state_table_init_context
+    )
     slot_reset_selected_value_field_access_context = read_slot_reset_selected_value_field_access_context(
         data, image_base, sections, rel32_refs
     )
@@ -5065,9 +6577,14 @@ def main() -> int:
     slot_reset_selected_value_context = read_slot_reset_selected_value_context(data, image_base, sections, rel32_refs)
     slot_reset_play_game_submit_context = read_slot_reset_play_game_submit_context(data, image_base, sections, rel32_refs)
     slot_reset_play_game_context = read_slot_reset_play_game_context(data, image_base, sections, rel32_refs)
+    slot_reset_title_queue_state_table_context = read_slot_reset_title_queue_state_table_context(data, image_base, sections)
+    slot_reset_title_queue_producer_context = read_slot_reset_title_queue_producer_context(
+        data, image_base, sections, rel32_refs
+    )
     slot_reset_menu_job_wait_context = read_slot_reset_menu_job_wait_context(data, image_base, sections, rel32_refs)
     slot_reset_global_toggle_context = read_slot_reset_global_toggle_context(data, image_base, sections, rel32_refs)
     slot_reset_timed_queue_context = read_slot_reset_timed_queue_context(data, image_base, sections, rel32_refs)
+    title_accept_payload_context = read_title_accept_payload_context(data, image_base, sections, rel32_refs)
     slot_reset_end_flow_branch_gate_table_init_context = read_slot_reset_end_flow_branch_gate_table_init_context(
         data, image_base, sections
     )
@@ -5086,6 +6603,7 @@ def main() -> int:
     task_local_wrapper_contexts = read_task_local_wrapper_contexts(data, image_base, sections, rel32_refs)
     task_local_wrapper_sequences = summarize_task_local_wrapper_sequences(task_local_wrapper_contexts)
     rip_relative_vtable_refs = scan_rip_relative_vtable_refs(data, image_base, sections)
+    ghidra_reconciliation = build_ghidra_reconciliation(Path.cwd(), image_base, rel32_refs, absolute_refs, exe_md5)
 
     # The absolute qword reference to 0x14082a0f0 is a vtable/update-table entry;
     # keep nearby entries so future code can identify the owning menu task object.
@@ -5122,10 +6640,12 @@ def main() -> int:
 
     evidence = {
         "exe_path": str(exe),
+        "exe_md5": exe_md5,
         "image_base": f"0x{image_base:x}",
         "targets": {name: {"va": f"0x{addr:x}", "rva": f"0x{addr - image_base:x}"} for name, addr in TARGETS.items()},
         "rel32_refs": rel32_refs,
         "absolute_qword_refs": absolute_refs,
+        "ghidra_reconciliation": ghidra_reconciliation,
         "menu_task_update_vtable_context": vtable_context,
         "game_man_field_windows": field_windows,
         "jump_tables": jump_tables,
@@ -5173,15 +6693,20 @@ def main() -> int:
         "set_save_slot_callsite_contexts": set_save_slot_callsite_contexts,
         "game_man_b5e_context": game_man_b5e_context,
         "slot_reset_dispatch_context": slot_reset_dispatch_context,
+        "slot_reset_title_parent_ctor_context": slot_reset_title_parent_ctor_context,
         "slot_reset_state_table_init_context": slot_reset_state_table_init_context,
+        "slot_reset_to_menu_job_wait_context": slot_reset_to_menu_job_wait_context,
         "slot_reset_selected_value_field_access_context": slot_reset_selected_value_field_access_context,
         "slot_reset_selected_value_caller_context": slot_reset_selected_value_caller_context,
         "slot_reset_selected_value_context": slot_reset_selected_value_context,
         "slot_reset_play_game_submit_context": slot_reset_play_game_submit_context,
         "slot_reset_play_game_context": slot_reset_play_game_context,
+        "slot_reset_title_queue_state_table_context": slot_reset_title_queue_state_table_context,
+        "slot_reset_title_queue_producer_context": slot_reset_title_queue_producer_context,
         "slot_reset_menu_job_wait_context": slot_reset_menu_job_wait_context,
         "slot_reset_global_toggle_context": slot_reset_global_toggle_context,
         "slot_reset_timed_queue_context": slot_reset_timed_queue_context,
+        "title_accept_payload_context": title_accept_payload_context,
         "slot_reset_end_flow_branch_gate_table_init_context": slot_reset_end_flow_branch_gate_table_init_context,
         "finish_gate_synchronization_context": finish_gate_synchronization_context,
         "slot_reset_end_flow_branch_gate_state_handlers_context": slot_reset_end_flow_branch_gate_state_handlers_context,
@@ -6510,6 +8035,223 @@ def main() -> int:
                 and slot_reset_dispatch_context.get("parent_calls_owner_virtual_slot20_before_dispatch")
                 and slot_reset_dispatch_context.get("parent_loop_flag_and_cap_mapped")
             ),
+            "slot_reset_parent_loop_trace_state_payload_mapped": bool(
+                slot_reset_dispatch_context.get("parent_trace_maps_state_table_requested_current_label")
+                and slot_reset_dispatch_context.get("parent_trace_dispatch_callsite_mapped")
+            ),
+            "slot_reset_parent_loop_trace_control_payload_mapped": bool(
+                slot_reset_dispatch_context.get("parent_trace_maps_loop_flags_and_counters")
+            ),
+            "slot_reset_parent_loop_trace_queue_payload_mapped": bool(
+                slot_reset_title_queue_producer_context.get("seed_resets_owner130_selection_and_advances")
+                and slot_reset_title_queue_producer_context.get("pump_takes_owner128_queue_after_selection")
+                and slot_reset_menu_job_wait_context.get("queues_owner_130_timed_task")
+            ),
+            "slot_reset_parent_loop_trace_finish_payload_mapped": bool(
+                slot_reset_dispatch_context.get("handler_increments_owner_b0_and_requires_gt_one")
+                and slot_reset_dispatch_context.get("handler_marks_owner_4c_minus_one_after_reset")
+            ),
+            "slot_reset_parent_loop_trace_payload_ready_for_passive_probe": bool(
+                slot_reset_title_parent_ctor_context.get("passive_trace_anchor_is_parent_loop_not_simple_table")
+                and slot_reset_dispatch_context.get("parent_trace_maps_state_table_requested_current_label")
+                and slot_reset_dispatch_context.get("parent_trace_maps_loop_flags_and_counters")
+                and slot_reset_title_queue_producer_context.get("pump_takes_owner128_queue_after_selection")
+                and slot_reset_menu_job_wait_context.get("queues_owner_130_timed_task")
+                and slot_reset_dispatch_context.get("handler_increments_owner_b0_and_requires_gt_one")
+            ),
+            "slot_reset_to_menu_job_wait_helper_range_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("helper_begin_va") == "0x140b0e530"
+                and slot_reset_to_menu_job_wait_context.get("helper_end_va") == "0x140b0e650"
+            ),
+            "slot_reset_to_menu_job_wait_helper_attaches_owner130": bool(
+                slot_reset_to_menu_job_wait_context.get("attaches_payload_to_owner130")
+            ),
+            "slot_reset_to_menu_job_wait_helper_sets_state10": bool(
+                slot_reset_to_menu_job_wait_context.get("sets_state10_menujobwait")
+            ),
+            "slot_reset_to_menu_job_wait_helper_callers_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("callers_are_title_bootstrap_states")
+            ),
+            "slot_reset_to_menu_job_wait_helper_candidate_handoff_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("candidate_title_to_menujobwait_handoff_mapped")
+                and slot_reset_to_menu_job_wait_context.get("releases_payload_after_transition")
+            ),
+            "slot_reset_to_menu_job_wait_begin_logo_payload_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begin_logo_payload_context_mapped")
+            ),
+            "slot_reset_to_menu_job_wait_begin_title_accept_payload_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begin_title_accept_payload_context_mapped")
+            ),
+            "slot_reset_begintitle_bool_wrapper_inner_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_bool_wrapper_maps_final_wrapper_inner")
+            ),
+            "slot_reset_begintitle_owner_builder_range_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_owner_builder_range_mapped")
+            ),
+            "slot_reset_begintitle_owner_builder_args_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_owner_builder_args_owner_e0_138")
+            ),
+            "slot_reset_begintitle_owner_builder_input_call_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_owner_builder_calls_input_condition_at_fa8b")
+            ),
+            "slot_reset_begintitle_owner_builder_selector6_active_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_owner_builder_selector6_active")
+            ),
+            "slot_reset_begintitle_input_builder_allocates_0x138": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_condition_builder_allocates_0x138")
+            ),
+            "slot_reset_begintitle_owner_builder_sources_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_owner_builder_passes_descriptor_to_input_condition")
+                and slot_reset_to_menu_job_wait_context.get("begintitle_owner_builder_preserves_owner_sources")
+            ),
+            "slot_reset_begintitle_input_condition_builder_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_condition_builder_selector6_active")
+                and slot_reset_to_menu_job_wait_context.get("begintitle_input_condition_builder_owner_sources")
+            ),
+            "slot_reset_begintitle_input_builder_range_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_builder_range_mapped")
+            ),
+            "slot_reset_begintitle_input_builder_arg_capture_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_builder_captures_all_args")
+            ),
+            "slot_reset_begintitle_input_builder_alloc_ctor_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_builder_allocates_and_constructs_0x138_node")
+            ),
+            "slot_reset_begintitle_input_builder_temp_descriptor_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_builder_temp_descriptor_vtables_mapped")
+            ),
+            "slot_reset_begintitle_input_builder_node_vtable_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_builder_node_vtable_mapped")
+            ),
+            "slot_reset_begintitle_input_builder_copy_sources_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_builder_copies_selector_and_sources")
+            ),
+            "slot_reset_begintitle_input_builder_subnodes_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_builder_initializes_condition_subnodes")
+            ),
+            "slot_reset_begintitle_input_builder_output_cleanup_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_builder_returns_output_and_cleans_sources")
+            ),
+            "slot_reset_begintitle_input_node_vtable_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_node_vtable_update_slot_mapped")
+            ),
+            "slot_reset_begintitle_input_node_update_range_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_node_update_range_mapped")
+            ),
+            "slot_reset_begintitle_input_node_update_gates_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_node_update_gate_fields_mapped")
+            ),
+            "slot_reset_begintitle_input_node_update_child_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_node_update_moves_child_to_130")
+                and slot_reset_to_menu_job_wait_context.get("begintitle_input_node_update_child_submit_mapped")
+            ),
+            "slot_reset_begintitle_input_node_update_status_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_node_update_status_switch_mapped")
+            ),
+            "slot_reset_begintitle_input_node_update_global_bit_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_node_update_global_input_bit_mapped")
+            ),
+            "slot_reset_begintitle_input_node_update_terminal_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_node_update_terminal_descriptor_mapped")
+            ),
+            "slot_reset_begintitle_input_node_update_wait_states_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_node_update_wait_states_mapped")
+            ),
+            "slot_reset_begintitle_input_builder_subnode_update_offsets_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_builder_subnode_offsets_match_update")
+            ),
+            "slot_reset_begintitle_temp_vtable_slots_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_temp_vtable_slots_mapped")
+            ),
+            "slot_reset_begintitle_temp_clone_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_temp_clone_copies_callback_descriptor")
+                and slot_reset_to_menu_job_wait_context.get("begintitle_temp_active_clone_copies_callback_descriptor")
+            ),
+            "slot_reset_begintitle_temp_child_clone_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_temp_child_clone_wraps_source40")
+            ),
+            "slot_reset_begintitle_temp_callback_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_temp_callback_inverts_input_manager_state")
+            ),
+            "slot_reset_begintitle_input_manager_state_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_manager_state_active18_mapped")
+            ),
+            "slot_reset_begintitle_input_manager_global_ref_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_manager_global_callback_ref_mapped")
+            ),
+            "slot_reset_begintitle_input_manager_singleton_refs_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_manager_singleton_lifecycle_refs_mapped")
+            ),
+            "slot_reset_begintitle_input_manager_shutdown_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_manager_shutdown_clears_singleton")
+            ),
+            "slot_reset_begintitle_input_manager_init_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_manager_init_allocates_singleton")
+                and slot_reset_to_menu_job_wait_context.get("begintitle_input_manager_init_updates_subsystems")
+            ),
+            "slot_reset_begintitle_input_manager_counter_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_manager_init_captures_frame_counter")
+            ),
+            "slot_reset_begintitle_input_manager_queue_setup_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_manager_queue_setup_allocates_child80")
+            ),
+            "slot_reset_begintitle_branch_step_wrapper_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_branch_step_wrapper_maps_builder_and_attach")
+            ),
+            "slot_reset_begintitle_accept_condition_chain_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_accept_condition_chain_mapped")
+            ),
+            "slot_reset_to_menu_job_wait_xr_dialog_payload_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("xr_dialog_payload_context_mapped")
+            ),
+            "slot_reset_to_menu_job_wait_init_menu_two_descriptor_payload_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("init_menu_two_descriptor_payload_context_mapped")
+            ),
+            "slot_reset_to_menu_job_wait_init_menu_gate_payload_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("init_menu_gate_payload_context_mapped")
+            ),
+            "slot_reset_to_menu_job_wait_init_menu_link_fold_payload_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("init_menu_link_fold_payload_context_mapped")
+            ),
+            "slot_reset_to_menu_job_wait_init_menu_payload_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("init_menu_payload_context_mapped")
+            ),
+            "slot_reset_to_menu_job_wait_all_caller_payloads_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("all_handoff_callers_payload_context_mapped")
+            ),
+            "slot_reset_title_parent_constructor_ranges_mapped": bool(
+                slot_reset_title_parent_ctor_context.get("wrapper_begin_va") == "0x140b0b020"
+                and slot_reset_title_parent_ctor_context.get("wrapper_end_va") == "0x140b0b0c6"
+                and slot_reset_title_parent_ctor_context.get("base_ctor_begin_va") == "0x140b0b0d0"
+                and slot_reset_title_parent_ctor_context.get("base_ctor_end_va") == "0x140b0b1b2"
+                and slot_reset_title_parent_ctor_context.get("title_ctor_begin_va") == "0x140b0b1c0"
+                and slot_reset_title_parent_ctor_context.get("title_ctor_end_va") == "0x140b0b2f0"
+            ),
+            "slot_reset_title_parent_constructor_table_chain_mapped": bool(
+                slot_reset_title_parent_ctor_context.get("title_ctor_passes_title_table_to_wrapper")
+                and slot_reset_title_parent_ctor_context.get("wrapper_captures_table_arg_and_forwards_as_r8")
+                and slot_reset_title_parent_ctor_context.get("base_ctor_stores_table_pointer_to_owner10")
+            ),
+            "slot_reset_title_parent_constructor_state_fields_mapped": bool(
+                slot_reset_title_parent_ctor_context.get("base_ctor_initializes_state_fields")
+                and slot_reset_title_parent_ctor_context.get("title_ctor_sets_final_vtable_and_state0")
+                and slot_reset_title_parent_ctor_context.get("title_ctor_initializes_owner_128_130")
+            ),
+            "slot_reset_title_parent_constructor_to_dispatch_mapped": bool(
+                slot_reset_title_parent_ctor_context.get("constructor_chain_to_parent_table_dispatch_mapped")
+            ),
+            "slot_reset_title_parent_title_table_refs_mapped": bool(
+                slot_reset_title_parent_ctor_context.get("title_table_refs_include_initializer_and_constructor")
+            ),
+            "slot_reset_title_parent_simple_table_refs_initializer_only": bool(
+                slot_reset_title_parent_ctor_context.get("simple_table_refs_are_initializer_only")
+            ),
+            "slot_reset_title_parent_final_vtable_slot28_maps_parent_loop": bool(
+                slot_reset_title_parent_ctor_context.get("title_ctor_final_vtable_parent_loop_slot28")
+            ),
+            "slot_reset_title_parent_passive_trace_anchor_mapped": bool(
+                slot_reset_title_parent_ctor_context.get("passive_trace_anchor_is_parent_loop_not_simple_table")
+            ),
             "slot_reset_handler_range_mapped": bool(
                 slot_reset_dispatch_context.get("handler_function_begin_va") == "0x140b0cd70"
                 and slot_reset_dispatch_context.get("handler_function_end_va") == "0x140b0cdde"
@@ -6712,8 +8454,112 @@ def main() -> int:
                     "also_requires_status_result_nonzero"
                 )
             ),
+            "slot_reset_title_queue_state_table_range_mapped": bool(
+                slot_reset_title_queue_state_table_context.get("function_begin_va") == "0x1400a4c90"
+                and slot_reset_title_queue_state_table_context.get("function_end_va") == "0x1400a4d53"
+            ),
+            "slot_reset_title_queue_state_table_zeroes_global_0x60": bool(
+                slot_reset_title_queue_state_table_context.get("table_base_va") == "0x143d71340"
+                and slot_reset_title_queue_state_table_context.get("zeroes_table_base")
+                and slot_reset_title_queue_state_table_context.get("zero_size_bytes") == 0x60
+            ),
+            "slot_reset_title_queue_state_table_has_6_initialized_pairs": bool(
+                len(slot_reset_title_queue_state_table_context.get("entries", [])) == 6
+                and all(
+                    entry.get("handler_va") and entry.get("label_va")
+                    for entry in slot_reset_title_queue_state_table_context.get("entries", [])
+                )
+            ),
+            "slot_reset_title_queue_menu_states_link_seed_and_pump": bool(
+                [
+                    (entry.get("entry_index"), entry.get("handler_va"), entry.get("label_text"))
+                    for entry in slot_reset_title_queue_state_table_context.get("entries", [])[:2]
+                ]
+                == [
+                    (0, "0x140b0a4a0", "SimpleTitleStep::STEP_MenuInit"),
+                    (1, "0x140b0a5e0", "SimpleTitleStep::STEP_MenuLoop"),
+                ]
+            ),
+            "slot_reset_title_queue_ingame_states_mapped": bool(
+                [
+                    (entry.get("entry_index"), entry.get("handler_va"), entry.get("label_text"))
+                    for entry in slot_reset_title_queue_state_table_context.get("entries", [])[2:]
+                ]
+                == [
+                    (2, "0x140b0a1f0", "SimpleTitleStep::STEP_IngameInit"),
+                    (3, "0x140b0a430", "SimpleTitleStep::STEP_IngameStandby"),
+                    (4, "0x140b0a1b0", "SimpleTitleStep::STEP_Ingame"),
+                    (5, "0x140b0a170", "SimpleTitleStep::STEP_End"),
+                ]
+            ),
+            "slot_reset_title_queue_state_handler_ranges_mapped": bool(
+                slot_reset_title_queue_state_table_context.get("handler_ranges", {}).get("0x140b0a4a0", {}).get("begin_va")
+                == "0x140b0a4a0"
+                and slot_reset_title_queue_state_table_context.get("handler_ranges", {}).get("0x140b0a5e0", {}).get("begin_va")
+                == "0x140b0a5e0"
+                and slot_reset_title_queue_state_table_context.get("handler_ranges", {}).get("0x140b0a1f0", {}).get("begin_va")
+                == "0x140b0a1f0"
+                and slot_reset_title_queue_state_table_context.get("handler_ranges", {}).get("0x140b0a170", {}).get("end_va")
+                == "0x140b0a1ab"
+            ),
+            "slot_reset_title_queue_seed_range_mapped": bool(
+                slot_reset_title_queue_producer_context.get("seed_begin_va") == "0x140b0a4a0"
+                and slot_reset_title_queue_producer_context.get("seed_end_va") == "0x140b0a5db"
+            ),
+            "slot_reset_title_queue_seed_produces_owner128_task": bool(
+                slot_reset_title_queue_producer_context.get("seed_builds_task_from_owner_d8")
+                and slot_reset_title_queue_producer_context.get("seed_enqueues_task_and_attaches_to_owner128")
+            ),
+            "slot_reset_title_queue_seed_resets_selection_and_advances": bool(
+                slot_reset_title_queue_producer_context.get("seed_resets_owner130_selection_and_advances")
+            ),
+            "slot_reset_title_queue_pump_range_mapped": bool(
+                slot_reset_title_queue_producer_context.get("pump_begin_va") == "0x140b0a5e0"
+                and slot_reset_title_queue_producer_context.get("pump_end_va") == "0x140b0a97f"
+            ),
+            "slot_reset_title_queue_pump_consumes_owner128_task": bool(
+                slot_reset_title_queue_producer_context.get("pump_submits_owner_d8_and_queues_owner128")
+                and slot_reset_title_queue_producer_context.get("pump_advances_when_owner128_empty")
+            ),
+            "slot_reset_title_queue_pump_selection_path_mapped": bool(
+                slot_reset_title_queue_producer_context.get("pump_parses_stream_selection_to_owner130")
+                and slot_reset_title_queue_producer_context.get("pump_takes_owner128_queue_after_selection")
+                and slot_reset_title_queue_producer_context.get("pump_advances_after_selection_queue_take")
+            ),
+            "slot_reset_title_queue_advance_helper_mapped": bool(
+                slot_reset_title_queue_producer_context.get("advance_begin_va") == "0x140b0a980"
+                and slot_reset_title_queue_producer_context.get("advance_end_va") == "0x140b0aa89"
+                and slot_reset_title_queue_producer_context.get("advance_increments_owner_4c_and_bounds_owner_48")
+            ),
+            "slot_reset_title_queue_advance_callers_mapped": bool(
+                slot_reset_title_queue_producer_context.get("advance_callers_cover_seed_pump_and_guard_paths")
+            ),
+            "slot_reset_title_queue_set_state_helper_mapped": bool(
+                slot_reset_title_queue_producer_context.get("set_state_range_mapped")
+                and slot_reset_title_queue_producer_context.get("set_state_writes_requested_state_to_owner_4c")
+                and slot_reset_title_queue_producer_context.get("set_state_validates_owner_48_bounds")
+            ),
+            "slot_reset_title_queue_set_state_callers_mapped": bool(
+                slot_reset_title_queue_producer_context.get("set_state_callers_are_ingame_gate_and_menu_loop")
+            ),
+            "slot_reset_title_queue_menu_loop_sets_state5": bool(
+                slot_reset_title_queue_producer_context.get("set_state_menu_loop_callers_use_state5")
+            ),
+            "slot_reset_title_queue_ingame_gate_sets_state0": bool(
+                slot_reset_title_queue_producer_context.get("set_state_ingame_gate_caller_uses_state0")
+            ),
             "slot_reset_menu_job_wait_sets_finish_state_11": bool(
                 slot_reset_menu_job_wait_context.get("conditionally_sets_state_11")
+            ),
+            "slot_reset_menu_job_wait_pump_sequence_mapped": bool(
+                slot_reset_menu_job_wait_context.get("submit_then_queue_order_mapped")
+                and slot_reset_menu_job_wait_context.get("reuses_frame_delta_descriptor_for_submit_and_queue")
+            ),
+            "slot_reset_menu_job_wait_is_not_title_payload_enqueue": bool(
+                slot_reset_menu_job_wait_context.get("does_not_directly_enqueue_title_accept_payload")
+            ),
+            "slot_reset_menu_job_wait_finish_gate_after_owner130_queue": bool(
+                slot_reset_menu_job_wait_context.get("finish_gate_checked_only_after_owner130_queue")
             ),
             "slot_reset_set_state_helper_range_mapped": bool(
                 slot_reset_menu_job_wait_context.get("set_state_begin_va") == "0x140b0d960"
@@ -6737,6 +8583,13 @@ def main() -> int:
                 and slot_reset_timed_queue_context.get("submit_calls_entry_virtual_slot10_with_task_time")
                 and slot_reset_timed_queue_context.get("submit_returns_true_descriptor_after_iteration")
             ),
+            "slot_reset_timed_descriptor_vtables_mapped": bool(
+                slot_reset_timed_queue_context.get("timed_descriptor_vtable_pair_mapped")
+            ),
+            "slot_reset_timed_submit_restores_descriptor_without_enqueue": bool(
+                slot_reset_timed_queue_context.get("submit_restores_timed_descriptor_vtables_on_empty_and_after_iteration")
+                and slot_reset_timed_queue_context.get("submit_is_pump_only_no_new_child_enqueue")
+            ),
             "slot_reset_timed_queue_helper_range_mapped": bool(
                 slot_reset_timed_queue_context.get("queue_function_begin_va") == "0x1407a9600"
                 and slot_reset_timed_queue_context.get("queue_function_end_va") == "0x1407a9731"
@@ -6748,6 +8601,154 @@ def main() -> int:
                 and slot_reset_timed_queue_context.get("queue_checks_completion_with_7a9200")
                 and slot_reset_timed_queue_context.get("queue_clears_slot_when_existing_job_consumed")
                 and slot_reset_timed_queue_context.get("queue_releases_existing_job_and_clears_temp_descriptor")
+            ),
+            "slot_reset_timed_queue_check_semantics_mapped": bool(
+                slot_reset_timed_queue_context.get("queue_check_function_begin_va") == "0x1407a9200"
+                and slot_reset_timed_queue_context.get("queue_check_function_end_va") == "0x1407a9207"
+                and slot_reset_timed_queue_context.get("queue_check_returns_descriptor_status_gt_one")
+            ),
+            "slot_reset_timed_queue_check_receives_virtual_result_descriptor": bool(
+                slot_reset_timed_queue_context.get("queue_invokes_existing_job_virtual_slot10")
+                and slot_reset_timed_queue_context.get("queue_passes_virtual_result_descriptor_to_check")
+                and slot_reset_timed_queue_context.get("queue_checks_completion_with_7a9200")
+            ),
+            "slot_reset_timed_queue_terminal_check_gates_slot_clear": bool(
+                slot_reset_timed_queue_context.get("queue_check_returns_descriptor_status_gt_one")
+                and slot_reset_timed_queue_context.get("queue_terminal_check_gates_current_slot_clear")
+                and slot_reset_timed_queue_context.get("queue_clears_slot_when_existing_job_consumed")
+            ),
+            "slot_reset_timed_queue_restores_descriptor_when_empty": bool(
+                slot_reset_timed_queue_context.get("queue_restores_incoming_descriptor_without_creating_job_when_slot_empty")
+                and slot_reset_timed_queue_context.get("queue_is_single_slot_consumer_not_enqueue")
+            ),
+            "title_accept_payload_range_mapped": bool(
+                title_accept_payload_context.get("function_begin_va") == "0x1409b24e0"
+                and title_accept_payload_context.get("function_end_va") == "0x1409b2cdb"
+            ),
+            "title_accept_payload_primary_enqueue_chain_mapped": bool(
+                title_accept_payload_context.get("primary_trace_enqueue_sources_present")
+                and title_accept_payload_context.get("primary_trace_link_source_present")
+                and title_accept_payload_context.get("primary_trace_link_between_first_two_enqueues")
+            ),
+            "title_accept_payload_primary_chain_builder_mapped": bool(
+                title_accept_payload_context.get("primary_chain_builder_source_present")
+            ),
+            "title_accept_payload_primary_link_uses_first_enqueue": bool(
+                title_accept_payload_context.get("primary_link_uses_first_enqueue_result")
+            ),
+            "title_accept_payload_primary_link_feeds_second_enqueue": bool(
+                title_accept_payload_context.get("primary_link_feeds_second_enqueue")
+            ),
+            "title_accept_payload_second_enqueue_saved_r15": bool(
+                title_accept_payload_context.get("second_primary_enqueue_saved_r15")
+            ),
+            "title_accept_payload_state_chain_args_mapped": bool(
+                title_accept_payload_context.get("state_chain_args_use_zero_and_add2")
+            ),
+            "title_accept_payload_descriptor_wrapper_enqueue_mapped": bool(
+                title_accept_payload_context.get("state_descriptor_wrapper_uses_chain_result")
+                and title_accept_payload_context.get("state_descriptor_wrapper_result_enqueued_saved_r14")
+            ),
+            "title_accept_payload_late_aux_builders_mapped": bool(
+                title_accept_payload_context.get("late_aux_builder_sources_present")
+            ),
+            "title_accept_payload_late_aux_enqueues_saved": bool(
+                title_accept_payload_context.get("late_aux_enqueues_saved_registers")
+            ),
+            "title_accept_payload_late_link_folds_aux_results": bool(
+                title_accept_payload_context.get("late_link_chain_folds_aux_results_to_final_enqueue")
+            ),
+            "title_accept_payload_final_owner_builder_mapped": bool(
+                title_accept_payload_context.get("final_owner_builder_source_present")
+            ),
+            "title_accept_payload_final_combiner_mapped": bool(
+                title_accept_payload_context.get("final_combiner_source_present")
+                and title_accept_payload_context.get("final_combiner_uses_late_link_result_and_owner_result")
+            ),
+            "title_accept_payload_final_enqueue_mapped": bool(
+                title_accept_payload_context.get("final_combiner_result_enqueued")
+            ),
+            "title_accept_payload_final_wrapper_chains_prior_nodes": bool(
+                title_accept_payload_context.get("final_enqueue_result_passed_to_wrapper")
+                and title_accept_payload_context.get("final_wrapper_chains_r14_r15")
+            ),
+            "title_accept_payload_final_cleanup_mapped": bool(
+                title_accept_payload_context.get("final_cleanup_after_chain_source_present")
+            ),
+            "title_accept_payload_final_combiner_body_mapped": bool(
+                title_accept_payload_context.get("final_combiner_body_range_mapped")
+                and title_accept_payload_context.get("final_combiner_calls_inner_and_attach")
+                and title_accept_payload_context.get("final_combiner_captures_four_sources")
+            ),
+            "title_accept_payload_final_combiner_ownership_mapped": bool(
+                title_accept_payload_context.get("final_combiner_inner_receives_four_locals")
+                and title_accept_payload_context.get("final_combiner_clears_transferred_slots")
+            ),
+            "title_accept_payload_final_wrapper_body_mapped": bool(
+                title_accept_payload_context.get("final_wrapper_body_range_mapped")
+                and title_accept_payload_context.get("final_wrapper_calls_inner_with_flag")
+                and title_accept_payload_context.get("final_wrapper_clears_source_slot")
+            ),
+            "title_accept_payload_branch_compose_body_mapped": bool(
+                title_accept_payload_context.get("branch_compose_body_calls_inner")
+            ),
+            "title_accept_payload_branch_step_body_mapped": bool(
+                title_accept_payload_context.get("branch_step_body_builds_and_attaches")
+            ),
+            "title_accept_payload_final_combiner_inner_mapped": bool(
+                title_accept_payload_context.get("final_combiner_inner_short_circuits_all_empty")
+                and title_accept_payload_context.get("final_combiner_inner_allocates_composite_node")
+                and title_accept_payload_context.get("final_combiner_inner_appends_four_sources")
+                and title_accept_payload_context.get("final_combiner_inner_stores_output_and_releases_inputs")
+            ),
+            "title_accept_payload_final_wrapper_inner_mapped": bool(
+                title_accept_payload_context.get("final_wrapper_inner_transfers_source_and_flag")
+            ),
+            "title_accept_payload_branch_compose_inner_mapped": bool(
+                title_accept_payload_context.get("branch_compose_inner_transfers_two_sources_and_flag")
+            ),
+            "title_accept_payload_branch_step_builder_inner_mapped": bool(
+                title_accept_payload_context.get("branch_step_builder_reorders_inputs_on_false_flag")
+                and title_accept_payload_context.get("branch_step_builder_calls_inner_with_three_locals")
+            ),
+            "title_accept_payload_branch_step_status_node_mapped": bool(
+                title_accept_payload_context.get("branch_step_build_inner_allocates_status_node")
+                and title_accept_payload_context.get("branch_step_build_inner_builds_payload_and_attaches")
+            ),
+            "title_accept_payload_branch_step_condition_chain_mapped": bool(
+                title_accept_payload_context.get("branch_step_build_inner_builds_condition_chain")
+                and title_accept_payload_context.get("branch_step_build_inner_cleans_condition_temp")
+            ),
+            "title_accept_payload_branch_step_status_matches_terminal_check": bool(
+                title_accept_payload_context.get("branch_step_build_inner_allocates_status_node")
+                and slot_reset_timed_queue_context.get("queue_check_returns_descriptor_status_gt_one")
+                and slot_reset_timed_queue_context.get("queue_terminal_check_gates_current_slot_clear")
+            ),
+            "title_accept_payload_branch_step_vtable_chain_mapped": bool(
+                title_accept_payload_context.get("branch_step_vtables_link_payload_to_status_sequence")
+            ),
+            "title_accept_payload_branch_step_payload_vslot2_mapped": bool(
+                title_accept_payload_context.get("branch_step_payload_vslot2_sets_terminal_status")
+                and title_accept_payload_context.get("branch_step_payload_vslot2_writes_condition_result")
+            ),
+            "title_accept_payload_branch_step_status_vslot2_mapped": bool(
+                title_accept_payload_context.get("branch_step_status_vslot2_iterates_children_until_done")
+                and title_accept_payload_context.get("branch_step_status_vslot2_stops_on_nonterminal_or_failed_child")
+            ),
+            "title_accept_payload_state_descriptor_mapped": bool(
+                title_accept_payload_context.get("builder_state_descriptor_sources_present")
+                and title_accept_payload_context.get("builds_title_accept_descriptor_vtables")
+            ),
+            "title_accept_payload_owner_fields_mapped": bool(
+                title_accept_payload_context.get("uses_owner_payload_fields")
+            ),
+            "title_accept_payload_enqueue_fanout_mapped": bool(
+                title_accept_payload_context.get("task_enqueue_fanout_count", 0) >= 8
+                and title_accept_payload_context.get("task_enqueue_fanout_has_expected_late_sources")
+            ),
+            "title_accept_payload_late_link_chain_mapped": bool(
+                title_accept_payload_context.get("late_chain_link_sources_present")
+                and title_accept_payload_context.get("task_enqueue_fanout_has_expected_late_sources")
             ),
             "slot_reset_timed_submit_empty_descriptor_mapped": bool(
                 slot_reset_timed_queue_context.get("submit_empty_returns_false_descriptor")

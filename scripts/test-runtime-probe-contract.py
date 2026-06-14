@@ -52,11 +52,11 @@ def base_fixture() -> None:
     )
     write_fixture(
         ".auto/runtime_probe.sh",
-        "#!/usr/bin/env bash\nset -euo pipefail\ntrap cleanup_runtime EXIT\nvalidate_runtime_policy\nsetup_runtime_payload\n",
+        "#!/usr/bin/env bash\nset -euo pipefail\nRUNTIME_TIMEOUT_SECONDS=\"${RUNTIME_TIMEOUT_SECONDS:-30}\"\ntrap cleanup_runtime EXIT\nvalidate_runtime_policy\npython3 - \"$RUNTIME_TIMEOUT_SECONDS\" <<'PY'\nprint({\"timeout_seconds\": 30})\nPY\nscripts/er-readiness-watch.py --max-runtime-seconds \"$RUNTIME_TIMEOUT_SECONDS\"\nsetup_runtime_payload\n",
     )
     write_fixture(
         ".auto/runtime_experiment_policy.rego",
-        "package auto.runtime_experiment\nimport rego.v1\ndefault allow := false\nmanual_event_driver_ready if {\n input.readiness_watcher == \"scripts/er-readiness-watch.py\"\n input.no_telemetry_bootstrap_failure == \"window_without_bootstrap_or_task_ready\"\n input.host_input == \"none\"\n input.teardown == \"process_tree_and_save_restore\"\n}\nallow if { manual_event_driver_ready }\ndeny contains message if { message := \"runtime probes are disabled fail-closed\" }\n",
+        "package auto.runtime_experiment\nimport rego.v1\ndefault allow := false\nmax_timeout_seconds := 30\nmanual_event_driver_ready if {\n input.readiness_watcher == \"scripts/er-readiness-watch.py\"\n input.no_telemetry_bootstrap_failure == \"window_without_bootstrap_or_task_ready\"\n input.host_input == \"none\"\n input.teardown == \"process_tree_and_save_restore\"\n input.timeout_seconds <= max_timeout_seconds\n}\nallow if { manual_event_driver_ready }\ndeny contains message if { message := \"runtime probes are disabled fail-closed\" }\n",
     )
     write_fixture(
         "scripts/er-smoke-driver.sh",
@@ -112,11 +112,10 @@ def main() -> int:
     base_fixture()
 
     write_fixture(
-        "scripts/helper.py",
-        "payload = {'timeout_seconds': 900}\n",
+        ".auto/runtime_probe.sh",
+        "#!/usr/bin/env bash\nset -euo pipefail\ntrap cleanup_runtime EXIT\nvalidate_runtime_policy\nsetup_runtime_payload\n",
     )
-    assert_rules(checker, {"agent-tool-timeout-field"})
-    (FIXTURE_ROOT / "scripts" / "helper.py").unlink()
+    assert_rules(checker, {"runtime-probe-missing-bounded-timeout"})
     base_fixture()
 
     write_fixture(
