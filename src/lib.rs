@@ -24,18 +24,13 @@ use hudhook::{
     mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook},
     windows::{
         Win32::{
-            Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
+            Foundation::HINSTANCE,
             System::{
                 LibraryLoader::{GetModuleHandleA, GetProcAddress},
                 SystemServices::DLL_PROCESS_ATTACH,
-                Threading::GetCurrentProcessId,
-            },
-            UI::WindowsAndMessaging::{
-                EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
-                WM_KEYUP,
             },
         },
-        core::{BOOL, PCSTR},
+        core::PCSTR,
     },
 };
 
@@ -90,11 +85,6 @@ const SAFE_INPUT_MAX_CONFIRM_PULSES: u32 = 16;
 const SAFE_INPUT_DEFAULT_INTERVAL_TICKS: u64 = 30;
 const SAFE_INPUT_INITIAL_LAST_PULSE_TICK: u64 = 0;
 const SAFE_INPUT_CONFIRM_HOOK_FRAMES: usize = 4;
-const SAFE_INPUT_KEY_UP_STATE: i16 = 0;
-const VK_RETURN_KEY: usize = 0x0d;
-const VK_SPACE_KEY: usize = 0x20;
-const KEYDOWN_LPARAM: isize = 1;
-const KEYUP_LPARAM: isize = 0xc0000001u32 as isize;
 const DIK_RETURN: usize = 0x1c;
 const DIK_SPACE: usize = 0x39;
 const DIRECT_INPUT_CREATE_DEVICE_VTBL_INDEX: usize = 3;
@@ -118,8 +108,6 @@ static CONTINUE_LOAD_ORIG: AtomicUsize = AtomicUsize::new(0);
 static COMBINED_LOAD_ORIG: AtomicUsize = AtomicUsize::new(0);
 static MAP_LOAD_ORIG: AtomicUsize = AtomicUsize::new(0);
 static SAVE_LOAD_STATE_INIT_ORIG: AtomicUsize = AtomicUsize::new(0);
-static GET_ASYNC_KEY_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
-static GET_KEY_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 static DIRECT_INPUT8_CREATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 static DIRECT_INPUT_CREATE_DEVICE_ORIG: AtomicUsize = AtomicUsize::new(0);
 static DIRECT_INPUT_GET_DEVICE_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
@@ -843,27 +831,20 @@ fn process_safe_input_request(state: &mut EffectsState) {
         return;
     }
 
-    match emit_confirm_pulse_to_own_window() {
-        Ok(()) => {
-            state.safe_input.pulses_sent += 1;
-            state.safe_input.last_pulse_tick = state.game_task_ticks;
-            state.safe_input.last_status = Some(format!(
-                "confirm pulse {}/{} via DirectInput/key-state hook + post_message",
-                state.safe_input.pulses_sent, state.safe_input.confirm_count
-            ));
-            append_autoload_debug(format_args!(
-                "safe_input_confirm pulse {}/{} tick={} hook_frames={}",
-                state.safe_input.pulses_sent,
-                state.safe_input.confirm_count,
-                state.game_task_ticks,
-                SAFE_INPUT_CONFIRM_HOOK_FRAMES
-            ));
-        }
-        Err(error) => {
-            state.safe_input.last_status = Some(error.clone());
-            append_autoload_debug(format_args!("safe_input_confirm {error}"));
-        }
-    }
+    emit_confirm_pulse();
+    state.safe_input.pulses_sent += 1;
+    state.safe_input.last_pulse_tick = state.game_task_ticks;
+    state.safe_input.last_status = Some(format!(
+        "confirm pulse {}/{} via DirectInput GetDeviceState hook",
+        state.safe_input.pulses_sent, state.safe_input.confirm_count
+    ));
+    append_autoload_debug(format_args!(
+        "safe_input_confirm pulse {}/{} tick={} hook_frames={}",
+        state.safe_input.pulses_sent,
+        state.safe_input.confirm_count,
+        state.game_task_ticks,
+        SAFE_INPUT_CONFIRM_HOOK_FRAMES
+    ));
 }
 
 fn load_safe_input_runtime(runtime: &mut SafeInputRuntime) {
@@ -926,41 +907,8 @@ fn safe_input_path() -> PathBuf {
         })
 }
 
-unsafe extern "system" fn find_own_window_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    let mut window_pid = 0u32;
-    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut window_pid as *mut u32)) };
-    let current_pid = unsafe { GetCurrentProcessId() };
-    if window_pid == current_pid && unsafe { IsWindowVisible(hwnd).as_bool() } {
-        let output = lparam.0 as *mut HWND;
-        if !output.is_null() {
-            unsafe { *output = hwnd };
-        }
-        return BOOL(0);
-    }
-    BOOL(1)
-}
-
-fn own_window() -> Option<HWND> {
-    let mut hwnd = HWND::default();
-    unsafe {
-        let _ = EnumWindows(
-            Some(find_own_window_callback),
-            LPARAM((&mut hwnd as *mut HWND).cast::<()>() as isize),
-        );
-    }
-    if hwnd.0.is_null() { None } else { Some(hwnd) }
-}
-
-fn emit_confirm_pulse_to_own_window() -> Result<(), String> {
+fn emit_confirm_pulse() {
     SAFE_INPUT_CONFIRM_FRAMES_REMAINING.store(SAFE_INPUT_CONFIRM_HOOK_FRAMES, Ordering::SeqCst);
-    let hwnd = own_window().ok_or_else(|| "no visible process window for safe input".to_owned())?;
-    for key in [VK_RETURN_KEY, VK_SPACE_KEY] {
-        unsafe { PostMessageW(Some(hwnd), WM_KEYDOWN, WPARAM(key), LPARAM(KEYDOWN_LPARAM)) }
-            .map_err(|error| format!("PostMessageW keydown {key:#x} failed: {error}"))?;
-        unsafe { PostMessageW(Some(hwnd), WM_KEYUP, WPARAM(key), LPARAM(KEYUP_LPARAM)) }
-            .map_err(|error| format!("PostMessageW keyup {key:#x} failed: {error}"))?;
-    }
-    Ok(())
 }
 
 fn safe_input_proc(module: &[u8], proc: &[u8]) -> Result<*mut c_void, String> {
@@ -1029,34 +977,6 @@ fn install_safe_input_hooks() {
     }
 
     let mut hooks = Vec::new();
-    match safe_input_proc(b"user32.dll\0", b"GetAsyncKeyState\0") {
-        Ok(target) => unsafe {
-            create_absolute_hook(
-                &mut hooks,
-                "GetAsyncKeyState",
-                target,
-                get_async_key_state_hook as *mut c_void,
-                &GET_ASYNC_KEY_STATE_ORIG,
-            )
-        },
-        Err(error) => append_autoload_debug(format_args!(
-            "safe_input GetAsyncKeyState resolve failed: {error}"
-        )),
-    }
-    match safe_input_proc(b"user32.dll\0", b"GetKeyState\0") {
-        Ok(target) => unsafe {
-            create_absolute_hook(
-                &mut hooks,
-                "GetKeyState",
-                target,
-                get_key_state_hook as *mut c_void,
-                &GET_KEY_STATE_ORIG,
-            )
-        },
-        Err(error) => append_autoload_debug(format_args!(
-            "safe_input GetKeyState resolve failed: {error}"
-        )),
-    }
     match safe_input_proc(b"dinput8.dll\0", b"DirectInput8Create\0") {
         Ok(target) => unsafe {
             create_absolute_hook(
@@ -1082,44 +1002,6 @@ fn install_safe_input_hooks() {
         }
     }
     std::mem::forget(hooks);
-}
-
-fn is_safe_input_confirm_key(vkey: i32) -> bool {
-    matches!(vkey as usize, VK_RETURN_KEY | VK_SPACE_KEY)
-}
-
-fn safe_input_key_state_override(vkey: i32, original_value: i16) -> i16 {
-    if is_safe_input_confirm_key(vkey)
-        && SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst) > 0
-    {
-        original_value | i16::MIN
-    } else {
-        original_value
-    }
-}
-
-unsafe extern "system" fn get_async_key_state_hook(vkey: i32) -> i16 {
-    type GetAsyncKeyState = unsafe extern "system" fn(i32) -> i16;
-    let original = GET_ASYNC_KEY_STATE_ORIG.load(Ordering::SeqCst);
-    let original_value = if original == HOOK_ORIGINAL_UNSET {
-        SAFE_INPUT_KEY_UP_STATE
-    } else {
-        let original: GetAsyncKeyState = unsafe { std::mem::transmute(original) };
-        unsafe { original(vkey) }
-    };
-    safe_input_key_state_override(vkey, original_value)
-}
-
-unsafe extern "system" fn get_key_state_hook(vkey: i32) -> i16 {
-    type GetKeyState = unsafe extern "system" fn(i32) -> i16;
-    let original = GET_KEY_STATE_ORIG.load(Ordering::SeqCst);
-    let original_value = if original == HOOK_ORIGINAL_UNSET {
-        SAFE_INPUT_KEY_UP_STATE
-    } else {
-        let original: GetKeyState = unsafe { std::mem::transmute(original) };
-        unsafe { original(vkey) }
-    };
-    safe_input_key_state_override(vkey, original_value)
 }
 
 unsafe fn install_direct_input_create_device_hook(direct_input: *mut c_void) {
