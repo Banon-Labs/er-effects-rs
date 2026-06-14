@@ -1,3 +1,3 @@
-started_at=2026-06-13T18:16:21-07:00
-request=try_9_confirms_interval_60
+started_at=2026-06-13T18:18:07-07:00
+request=try_8_confirms_interval_75
 entrypoint=measure_runtime_trigger
