@@ -31,10 +31,12 @@ OBSERVATION_SUBPROCESS_TIMEOUT_SECONDS = 5.0
 SUCCESS_RC = 0
 FAILURE_RC = 1
 TARGET_GAME_MAN = "game-man"
+TARGET_MODULE_BASE = "module-base"
 TARGET_AUTOLOAD_REQUEST = "autoload-request"
 TARGET_REQUEST_CONSUMPTION = "request-consumption"
 TARGET_PLAYER_LOAD = "player-load"
 READY_REASON = "game_man_telemetry_ready"
+MODULE_BASE_READY = "runtime_module_base_observed"
 RUNTIME_EXE_NAME = "eldenring.exe"
 WINDOW_WITHOUT_BOOTSTRAP = "window_without_bootstrap_marker"
 WINDOW_WITHOUT_TASK = "window_without_game_task_ready"
@@ -77,6 +79,8 @@ class ReadinessResult:
     windows: list[dict[str, Any]]
     polls: int
     timeout_seconds: float | None = None
+    runtime_module_base: str | None = None
+    runtime_module_mappings: list[dict[str, Any]] | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -88,6 +92,8 @@ class ReadinessResult:
             "windows": self.windows,
             "polls": self.polls,
             "timeout_seconds": self.timeout_seconds,
+            "runtime_module_base": self.runtime_module_base,
+            "runtime_module_mappings": self.runtime_module_mappings or [],
         }
 
 
@@ -163,6 +169,65 @@ def pid_file_value(path: Path) -> int | None:
         return None
     text = path.read_text(encoding="utf-8", errors="replace").strip()
     return int(text) if text.isdigit() else None
+
+
+def runtime_module_mappings(pid: int) -> list[dict[str, Any]]:
+    maps_path = Path("/proc", str(pid), "maps")
+    if not maps_path.exists():
+        return []
+    mappings: list[dict[str, Any]] = []
+    for line in maps_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if RUNTIME_EXE_NAME not in line.lower():
+            continue
+        fields = line.split(maxsplit=5)
+        if len(fields) < 5:
+            continue
+        start_text, _, end_text = fields[0].partition("-")
+        path = fields[5] if len(fields) >= 6 else ""
+        mappings.append(
+            {
+                "start": f"0x{int(start_text, 16):x}",
+                "end": f"0x{int(end_text, 16):x}",
+                "permissions": fields[1],
+                "offset": f"0x{int(fields[2], 16):x}",
+                "device": fields[3],
+                "inode": fields[4],
+                "path": path,
+            }
+        )
+    return mappings
+
+
+def runtime_module_base(pid: int) -> tuple[str | None, list[dict[str, Any]]]:
+    mappings = runtime_module_mappings(pid)
+    zero_offset_starts = [
+        int(mapping["start"], 16)
+        for mapping in mappings
+        if mapping.get("offset") == "0x0"
+    ]
+    if zero_offset_starts:
+        return f"0x{min(zero_offset_starts):x}", mappings
+    if mappings:
+        return f"0x{min(int(mapping['start'], 16) for mapping in mappings):x}", mappings
+    return None, mappings
+
+
+def with_runtime_module_info(result: ReadinessResult) -> ReadinessResult:
+    if result.pid is None:
+        return result
+    base, mappings = runtime_module_base(result.pid)
+    return ReadinessResult(
+        result.ready,
+        result.reason,
+        result.pid,
+        result.bootstrap,
+        result.telemetry,
+        result.windows,
+        result.polls,
+        result.timeout_seconds,
+        base,
+        mappings,
+    )
 
 
 def select_runtime_pid(
@@ -345,15 +410,32 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
     window_stale_polls = 0
     for poll in range(args.readiness_poll_budget):
         if time.monotonic() >= deadline:
+            return with_runtime_module_info(
+                ReadinessResult(
+                    False,
+                    TIMEOUT_BUDGET_EXHAUSTED,
+                    pid,
+                    read_bootstrap(args.bootstrap, args.bootstrap_state),
+                    read_json(args.telemetry),
+                    hypr_windows(args.window_class),
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                )
+            )
+        module_base, module_mappings = runtime_module_base(pid)
+        process_running = process_exists(pid)
+        if args.target == TARGET_MODULE_BASE and process_running and module_base is not None:
             return ReadinessResult(
-                False,
-                TIMEOUT_BUDGET_EXHAUSTED,
+                True,
+                MODULE_BASE_READY,
                 pid,
                 read_bootstrap(args.bootstrap, args.bootstrap_state),
                 read_json(args.telemetry),
-                hypr_windows(args.window_class),
+                [],
                 spawn_polls + poll,
                 float(args.max_runtime_seconds),
+                module_base,
+                module_mappings,
             )
         telemetry = read_json(args.telemetry)
         bootstrap = read_bootstrap(args.bootstrap, args.bootstrap_state)
@@ -364,7 +446,7 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
             window_stale_polls = 0
         result = classify_snapshot(
             pid=pid,
-            process_running=process_exists(pid),
+            process_running=process_running,
             telemetry=telemetry,
             bootstrap=bootstrap,
             windows=windows,
@@ -376,27 +458,31 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
             post_request_tick_budget=args.post_request_tick_budget,
         )
         if result is not None:
-            return ReadinessResult(
-                result.ready,
-                result.reason,
-                result.pid,
-                result.bootstrap,
-                result.telemetry,
-                result.windows,
-                result.polls,
-                float(args.max_runtime_seconds),
+            return with_runtime_module_info(
+                ReadinessResult(
+                    result.ready,
+                    result.reason,
+                    result.pid,
+                    result.bootstrap,
+                    result.telemetry,
+                    result.windows,
+                    result.polls,
+                    float(args.max_runtime_seconds),
+                )
             )
         os.sched_yield()
 
-    return ReadinessResult(
-        False,
-        READINESS_BUDGET_EXHAUSTED,
-        pid,
-        read_bootstrap(args.bootstrap, args.bootstrap_state),
-        read_json(args.telemetry),
-        hypr_windows(args.window_class),
-        spawn_polls + args.readiness_poll_budget,
-        float(args.max_runtime_seconds),
+    return with_runtime_module_info(
+        ReadinessResult(
+            False,
+            READINESS_BUDGET_EXHAUSTED,
+            pid,
+            read_bootstrap(args.bootstrap, args.bootstrap_state),
+            read_json(args.telemetry),
+            hypr_windows(args.window_class),
+            spawn_polls + args.readiness_poll_budget,
+            float(args.max_runtime_seconds),
+        )
     )
 
 
@@ -415,6 +501,7 @@ def parse_args() -> argparse.Namespace:
         "--target",
         choices=[
             TARGET_GAME_MAN,
+            TARGET_MODULE_BASE,
             TARGET_AUTOLOAD_REQUEST,
             TARGET_REQUEST_CONSUMPTION,
             TARGET_PLAYER_LOAD,
