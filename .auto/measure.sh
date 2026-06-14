@@ -1005,6 +1005,9 @@ if artifact_dir and artifact_dir.exists():
         (r"menu_semaphore", 25),
         (r"confirm_probe", 20),
         (r"barrier_id=hook_0x[0-9a-f]+/table_", 20),
+        (r"ENTER set_save_slot slot=|LEAVE set_save_slot", 20),
+        (r"ENTER request_save enabled=1|LEAVE request_save", 20),
+        (r"ENTER save_request_profile enabled=1|LEAVE save_request_profile", 20),
         (r"ENTER menu_other_load_wrapper|LEAVE menu_other_load_wrapper", 20),
         (r"LEAVE map_load_67bc10 ret=1", 20),
     ]
