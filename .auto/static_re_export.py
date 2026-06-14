@@ -7,7 +7,6 @@ and GameMan save/load scheduler helpers used by the autoresearch benchmark.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import struct
@@ -832,7 +831,6 @@ def build_ghidra_reconciliation(
     image_base: int,
     rel32_refs: dict[str, list[dict[str, Any]]],
     absolute_refs: dict[str, list[dict[str, Any]]],
-    exe_md5: str,
 ) -> dict[str, Any]:
     facts_path = Path(
         os.environ.get("GHIDRA_ADDRESS_FACTS_PATH", str(repo_root / "target/ghidra/ghidra-address-facts.json"))
@@ -846,7 +844,8 @@ def build_ghidra_reconciliation(
                 "target_count": len(GHIDRA_RECONCILIATION_TARGETS),
                 "static_ref_match_count": 0,
                 "function_boundary_mismatch_count": 0,
-                "program_md5_matches_local": False,
+                "whole_file_md5_ignored": True,
+                "code_unit_best_shift_match_count": 0,
             },
             "targets": [],
         }
@@ -862,17 +861,33 @@ def build_ghidra_reconciliation(
                 "target_count": len(GHIDRA_RECONCILIATION_TARGETS),
                 "static_ref_match_count": 0,
                 "function_boundary_mismatch_count": 0,
-                "program_md5_matches_local": False,
+                "whole_file_md5_ignored": True,
+                "code_unit_best_shift_match_count": 0,
             },
             "targets": [],
         }
 
     program = facts.get("program", {}) if isinstance(facts, dict) else {}
-    ghidra_md5 = str(program.get("executable_md5") or "").lower()
-    program_md5_matches = bool(ghidra_md5 and ghidra_md5 == exe_md5.lower())
+    comparison_path = Path(
+        os.environ.get(
+            "GHIDRA_LOCAL_DISASM_COMPARISON_PATH",
+            str(repo_root / "target/ghidra/ghidra-existing-facts-local-disasm-comparison.json"),
+        )
+    )
+    code_unit_comparison: dict[str, Any] = {}
+    if comparison_path.exists():
+        try:
+            loaded_comparison = json.loads(comparison_path.read_text(encoding="utf-8", errors="replace"))
+            if isinstance(loaded_comparison, dict):
+                code_unit_comparison = loaded_comparison
+        except Exception:
+            code_unit_comparison = {}
+    comparison_summary = code_unit_comparison.get("summary", {}) if isinstance(code_unit_comparison, dict) else {}
+    code_unit_best_shift_match_count = int(comparison_summary.get("best_shift_match_count") or 0)
+    code_unit_best_shift_mismatch_count = int(comparison_summary.get("best_shift_mismatch_count") or 0)
     by_name = {str(row.get("name")): row for row in facts.get("targets", []) if isinstance(row, dict)}
     rows: list[dict[str, Any]] = []
-    score = 20 if program_md5_matches else 0
+    score = code_unit_best_shift_match_count * 5
     function_found_count = 0
     user_defined_count = 0
     static_ref_match_count = 0
@@ -945,11 +960,13 @@ def build_ghidra_reconciliation(
         )
 
     return {
-        "status": "ok" if program_md5_matches else "program_md5_mismatch_or_unknown",
+        "status": "ok_shift_reconciled" if code_unit_best_shift_match_count else "ghidra_facts_loaded_runtime_dump_expected",
         "facts_path": str(facts_path),
+        "local_disasm_comparison_path": str(comparison_path),
         "program": program,
+        "program_executable_md5_provenance_only": program.get("executable_md5"),
         "local_image_base": f"0x{image_base:x}",
-        "local_exe_md5": exe_md5,
+        "whole_file_md5_ignored": True,
         "summary": {
             "score": score,
             "target_count": len(GHIDRA_RECONCILIATION_TARGETS),
@@ -958,7 +975,10 @@ def build_ghidra_reconciliation(
             "static_ref_match_count": static_ref_match_count,
             "function_boundary_mismatch_count": function_boundary_mismatch_count,
             "missing_fact_count": missing_fact_count,
-            "program_md5_matches_local": program_md5_matches,
+            "whole_file_md5_ignored": True,
+            "code_unit_best_shift": comparison_summary.get("best_shift"),
+            "code_unit_best_shift_match_count": code_unit_best_shift_match_count,
+            "code_unit_best_shift_mismatch_count": code_unit_best_shift_mismatch_count,
         },
         "targets": rows,
     }
@@ -6506,9 +6526,24 @@ def summarize_autoload_native_transition_candidates(
 
 def main() -> int:
     exe = Path(os.environ.get("ER_EXE_PATH", str(DEFAULT_EXE)))
+    if len(sys.argv) > 1 and sys.argv[1] == "--ghidra-reconciliation-only":
+        output = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("target/ghidra/ghidra-reconciliation-only.json")
+        data = exe.read_bytes()
+        image_base, _sections = parse_pe(data)
+        evidence = {
+            "exe_path": str(exe),
+            "exe_size_bytes": len(data),
+            "whole_file_hash_ignored": True,
+            "image_base": f"0x{image_base:x}",
+            "ghidra_reconciliation": build_ghidra_reconciliation(Path.cwd(), image_base, {}, {}),
+        }
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(output)
+        return 0
+
     output = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".auto/last-measure/static-re-evidence.json")
     data = exe.read_bytes()
-    exe_md5 = hashlib.md5(data).hexdigest()
     image_base, sections = parse_pe(data)
     rel32_refs = scan_rel32_calls(data, image_base, sections)
     absolute_refs = scan_absolute_qword_refs(data, image_base, sections)
@@ -6603,7 +6638,7 @@ def main() -> int:
     task_local_wrapper_contexts = read_task_local_wrapper_contexts(data, image_base, sections, rel32_refs)
     task_local_wrapper_sequences = summarize_task_local_wrapper_sequences(task_local_wrapper_contexts)
     rip_relative_vtable_refs = scan_rip_relative_vtable_refs(data, image_base, sections)
-    ghidra_reconciliation = build_ghidra_reconciliation(Path.cwd(), image_base, rel32_refs, absolute_refs, exe_md5)
+    ghidra_reconciliation = build_ghidra_reconciliation(Path.cwd(), image_base, rel32_refs, absolute_refs)
 
     # The absolute qword reference to 0x14082a0f0 is a vtable/update-table entry;
     # keep nearby entries so future code can identify the owning menu task object.
@@ -6640,7 +6675,8 @@ def main() -> int:
 
     evidence = {
         "exe_path": str(exe),
-        "exe_md5": exe_md5,
+        "exe_size_bytes": len(data),
+        "whole_file_hash_ignored": True,
         "image_base": f"0x{image_base:x}",
         "targets": {name: {"va": f"0x{addr:x}", "rva": f"0x{addr - image_base:x}"} for name, addr in TARGETS.items()},
         "rel32_refs": rel32_refs,

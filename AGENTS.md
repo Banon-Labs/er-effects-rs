@@ -26,6 +26,8 @@ Autoresearch runtime probes are disabled fail-closed unless `scripts/check-runti
 
 Do not run broad headless Ghidra enumeration that opens every candidate program in the shared repository. A prior `ListEldenRingPrograms.java` attempt over the shared `From Software` repo had to be interrupted after nearly two hours. Use exact known project paths, repository file listings that do not open programs, or a small user-approved target list. If a new shared Ghidra query might open multiple large programs or scan the whole repository, stop and propose the bounded query first.
 
+Do not use whole-file MD5 as the Ghidra identity oracle for Elden Ring. The shared program is expected to be a runtime dump and local `eldenring.exe` may be intentionally PE-header patched, so whole-file hashes are at best provenance metadata. Use small bounded anchor byte windows, function-boundary evidence, and section/window fingerprints at exact RVAs instead.
+
 ## Non-Interactive Shell Commands
 
 **ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
