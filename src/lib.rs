@@ -1367,7 +1367,10 @@ fn trace_menu_task_update_enabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_TRACE_MENU_TASK_UPDATE").as_deref(),
         Ok("1")
-    )
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-trace-menu-task-update.txt")
+        .exists()
 }
 
 fn trace_continue_default_path() -> PathBuf {
@@ -1618,19 +1621,23 @@ fn game_man_trace_summary() -> String {
 
         let read_i32 = |offset: usize| *(game_man.add(offset) as *const i32);
         let read_u8 = |offset: usize| *game_man.add(offset);
+        let requested_slot_index = read_i32(GAME_MAN_REQUESTED_SAVE_SLOT_LOAD_INDEX_OFFSET);
+        let save_state = read_i32(GAME_MAN_SAVE_STATE_OFFSET);
         format!(
-            "gm={game_man:p} slot={} req_idx={} state={} flags{{b72={},b73={},b74={},b75={},bb8={}}} bc4={} bbc={} bc0={}",
+            "gm={game_man:p} slot={} req_idx={} b78={} state={} b80={} flags{{b72={},b73={},b74={},b75={},bb8={}}} bbc={} bc0={} bc4={}",
             read_i32(GAME_MAN_SAVE_SLOT_OFFSET),
-            read_i32(GAME_MAN_REQUESTED_SAVE_SLOT_LOAD_INDEX_OFFSET),
-            read_i32(GAME_MAN_SAVE_STATE_OFFSET),
+            requested_slot_index,
+            requested_slot_index,
+            save_state,
+            save_state,
             read_u8(GAME_MAN_FLAG_B72_OFFSET),
             read_u8(GAME_MAN_FLAG_B73_OFFSET),
             read_u8(GAME_MAN_FLAG_B74_OFFSET),
             read_u8(GAME_MAN_FLAG_B75_OFFSET),
             read_u8(GAME_MAN_FLAG_BB8_OFFSET),
-            read_i32(GAME_MAN_FLAG_BC4_OFFSET),
             read_i32(GAME_MAN_FLAG_BBC_OFFSET),
             read_i32(GAME_MAN_FLAG_BC0_OFFSET),
+            read_i32(GAME_MAN_FLAG_BC4_OFFSET),
         )
     }
 }

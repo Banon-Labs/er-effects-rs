@@ -12,9 +12,10 @@ if [[ -f .envrc ]]; then
   # shellcheck disable=SC1091
   . ./.envrc
 fi
-if [[ -f .auto/runtime-env ]]; then
+RUNTIME_ENV_FILE="${AUTO_RUNTIME_ENV_FILE:-.auto/runtime-env}"
+if [[ -n "$RUNTIME_ENV_FILE" && -f "$RUNTIME_ENV_FILE" ]]; then
   # shellcheck source=/dev/null
-  . ./.auto/runtime-env
+  . "$RUNTIME_ENV_FILE"
 fi
 
 now_ms() {
@@ -39,6 +40,7 @@ AUTOLOAD_PATH="${AUTOLOAD_PATH:-$GAME_DIR/er-effects-autoload.txt}"
 SAFE_INPUT_PATH="${SAFE_INPUT_PATH:-$GAME_DIR/er-effects-safe-input.txt}"
 AUTOLOAD_DEBUG_PATH="${AUTOLOAD_DEBUG_PATH:-$ARTIFACT_DIR/autoload-debug.log}"
 TRACE_CONTINUE_PATH="${TRACE_CONTINUE_PATH:-$ARTIFACT_DIR/continue-trace.log}"
+TRACE_MENU_TASK_UPDATE_PATH="${TRACE_MENU_TASK_UPDATE_PATH:-$GAME_DIR/er-effects-trace-menu-task-update.txt}"
 PROTON="${PROTON:-$HOME/.local/share/Steam/steamapps/common/Proton - Experimental/proton}"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
 STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}"
@@ -429,6 +431,9 @@ cleanup_runtime() {
   (( CLEANUP_ARMED )) || return 0
   CLEANUP_ARMED=0
   log_timeline "cleanup_start"
+  if [[ "${ER_EFFECTS_TRACE_MENU_TASK_UPDATE:-0}" == "1" ]]; then
+    rm -f "$TRACE_MENU_TASK_UPDATE_PATH"
+  fi
   copy_runtime_logs || true
   write_state_snapshot "$ARTIFACT_DIR/final-state-before-cleanup.json" || true
   teardown_runtime_processes || true
@@ -477,6 +482,14 @@ PY
         fi
       } > "$SAFE_INPUT_PATH"
       cp -f "$SAFE_INPUT_PATH" "$ARTIFACT_DIR/safe-input-request.txt"
+    else
+      printf 'confirm_count=0\n' > "$ARTIFACT_DIR/safe-input-request.txt"
+    fi
+    if [[ "${ER_EFFECTS_TRACE_MENU_TASK_UPDATE:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$TRACE_MENU_TASK_UPDATE_PATH"
+      cp -f "$TRACE_MENU_TASK_UPDATE_PATH" "$ARTIFACT_DIR/trace-menu-task-update-request.txt"
+    else
+      rm -f "$TRACE_MENU_TASK_UPDATE_PATH"
     fi
     rm -f "$TELEMETRY_PATH" "$COMMAND_PATH" "$AUTOLOAD_DEBUG_PATH" "$TRACE_CONTINUE_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH"
   } > "$ARTIFACT_DIR/setup.out" 2>&1
@@ -557,6 +570,7 @@ export ER_EFFECTS_AUTOLOAD_SLOT="${ER_EFFECTS_AUTOLOAD_SLOT:-9}"
 export ER_EFFECTS_AUTOLOAD_METHOD="${ER_EFFECTS_AUTOLOAD_METHOD:-direct_menu_load}"
 export ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP="${ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP:-true}"
 export ER_EFFECTS_TRACE_CONTINUE="${ER_EFFECTS_TRACE_CONTINUE:-1}"
+export ER_EFFECTS_TRACE_MENU_TASK_UPDATE="${ER_EFFECTS_TRACE_MENU_TASK_UPDATE:-0}"
 RUNTIME_WATCH_TARGET="${RUNTIME_WATCH_TARGET:-game-man}"
 RUNTIME_AUTOLOAD_ATTEMPT_BUDGET="${RUNTIME_AUTOLOAD_ATTEMPT_BUDGET:-300}"
 RUNTIME_POST_REQUEST_TICK_BUDGET="${RUNTIME_POST_REQUEST_TICK_BUDGET:-300}"

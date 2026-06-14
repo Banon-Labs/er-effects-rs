@@ -1,5 +1,4 @@
-# Default runtime probe for zero-input native transition research.
-# Safe-input is disabled; the DLL may only use native/menu-task paths.
+# Explicit zero-input native transition probe.
 LAUNCH_MODE=steam
 RUNTIME_MAX_NUDGES=0
 RESTORE_RUNTIME_SAVES=1

@@ -1124,6 +1124,10 @@ elif metrics["autoload_success"] and metrics["player_available"] and metrics["se
     if simulated_buttons == 0:
         score = 1000
     else:
+        # Safe-input success is now an oracle trace, not the product path. Do
+        # not reward button-count reductions as primary progress; only retain a
+        # bounded diagnostic tier when the run explains which native/menu
+        # transition each input probed.
         explanation_bonus = 0
         if metrics["input_reason_known"]:
             explanation_bonus += 40
@@ -1131,11 +1135,11 @@ elif metrics["autoload_success"] and metrics["player_available"] and metrics["se
             explanation_bonus += 20
         explanation_bonus += min(20, int(metrics["menu_condition_evidence_score"]) // 10)
         metrics["input_explanation_bonus"] = explanation_bonus
-        score = min(980, max(850, 900 - simulated_buttons) + explanation_bonus)
+        score = min(600, 500 + explanation_bonus)
 elif metrics["native_request_consumed"]:
-    score = 800
+    score = 800 if int(metrics["simulated_button_presses_total"]) == 0 else 600
 elif trace_confirms_state_transition and static_score >= 400:
-    score = 600
+    score = 600 if int(metrics["simulated_button_presses_total"]) == 0 else 500
 elif static_score >= 400:
     score = 400
 elif metrics["test_pass"]:
