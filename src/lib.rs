@@ -279,6 +279,7 @@ struct SafeInputRuntime {
     confirm_count: u32,
     pulses_sent: u32,
     interval_ticks: u64,
+    initial_delay_ticks: u64,
     last_pulse_tick: u64,
     hooks_requested: bool,
     last_status: Option<String>,
@@ -855,11 +856,18 @@ fn process_safe_input_request(state: &mut EffectsState) {
         ));
         return;
     }
-    if state.safe_input.pulses_sent > 0
-        && state
-            .game_task_ticks
-            .saturating_sub(state.safe_input.last_pulse_tick)
-            < state.safe_input.interval_ticks
+    if state.safe_input.pulses_sent == 0 {
+        if state.game_task_ticks < state.safe_input.initial_delay_ticks {
+            state.safe_input.last_status = Some(format!(
+                "waiting for initial safe-input delay tick={} target={}",
+                state.game_task_ticks, state.safe_input.initial_delay_ticks
+            ));
+            return;
+        }
+    } else if state
+        .game_task_ticks
+        .saturating_sub(state.safe_input.last_pulse_tick)
+        < state.safe_input.interval_ticks
     {
         return;
     }
@@ -940,7 +948,7 @@ fn process_safe_input_request(state: &mut EffectsState) {
 }
 
 fn requires_post_map_final_confirm_gate(runtime: &SafeInputRuntime) -> bool {
-    runtime.confirm_count >= 6 && runtime.pulses_sent + 1 == runtime.confirm_count
+    runtime.confirm_count >= 5 && runtime.pulses_sent + 1 == runtime.confirm_count
 }
 
 fn is_post_map_continuation_gate(snapshot: MenuTraceSnapshot) -> bool {
@@ -952,6 +960,7 @@ fn is_post_map_continuation_gate(snapshot: MenuTraceSnapshot) -> bool {
 fn load_safe_input_runtime(runtime: &mut SafeInputRuntime) {
     runtime.loaded = true;
     runtime.interval_ticks = SAFE_INPUT_DEFAULT_INTERVAL_TICKS;
+    runtime.initial_delay_ticks = 0;
     runtime.last_pulse_tick = SAFE_INPUT_INITIAL_LAST_PULSE_TICK;
 
     let path = safe_input_path();
@@ -979,16 +988,20 @@ fn load_safe_input_runtime(runtime: &mut SafeInputRuntime) {
                     .unwrap_or(SAFE_INPUT_DEFAULT_INTERVAL_TICKS)
                     .max(GAME_TASK_TICK_INCREMENT);
             }
+            "initial_delay_ticks" | "first_pulse_min_tick" => {
+                runtime.initial_delay_ticks = value.trim().parse::<u64>().unwrap_or(0).max(0);
+            }
             "backend" => {}
             _ => {}
         }
     }
     runtime.hooks_requested = true;
     runtime.last_status = Some(format!(
-        "loaded safe input config {} confirm_count={} interval_ticks={}",
+        "loaded safe input config {} confirm_count={} interval_ticks={} initial_delay_ticks={}",
         path.display(),
         runtime.confirm_count,
-        runtime.interval_ticks
+        runtime.interval_ticks,
+        runtime.initial_delay_ticks
     ));
     append_autoload_debug(format_args!(
         "{}",

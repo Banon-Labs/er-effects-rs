@@ -446,6 +446,9 @@ PY
         printf 'backend=%s\n' "${ER_EFFECTS_SAFE_INPUT_BACKEND:-post_message}"
         printf 'confirm_count=%s\n' "${ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT:-0}"
         printf 'interval_ticks=%s\n' "${ER_EFFECTS_SAFE_INPUT_INTERVAL_TICKS:-30}"
+        if [[ -n "${ER_EFFECTS_SAFE_INPUT_INITIAL_DELAY_TICKS:-}" ]]; then
+          printf 'initial_delay_ticks=%s\n' "$ER_EFFECTS_SAFE_INPUT_INITIAL_DELAY_TICKS"
+        fi
       } > "$SAFE_INPUT_PATH"
       cp -f "$SAFE_INPUT_PATH" "$ARTIFACT_DIR/safe-input-request.txt"
     fi
