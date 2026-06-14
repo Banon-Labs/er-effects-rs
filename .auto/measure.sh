@@ -147,6 +147,10 @@ metrics = {
     "simulated_dpad_right_presses": 0,
     "simulated_left_bumper_presses": 0,
     "simulated_right_bumper_presses": 0,
+    "menu_condition_evidence_score": 0,
+    "input_reason_known": 0,
+    "state_gated_input": 0,
+    "input_explanation_bonus": 0,
     "trace_invasiveness_score": 0,
     "static_evidence_score": 0,
     "runtime_probe_seconds": 0,
@@ -985,6 +989,36 @@ if artifact_dir and artifact_dir.exists():
         metrics["trace_invasiveness_score"] = max(metrics["trace_invasiveness_score"], 20)
     if re.search(r"LEAVE map_load_67bc10 ret=1", joined_logs):
         metrics["title_bootstrap_seen"] = 1
+    menu_condition_score = 0
+    input_reason_known = False
+    known_condition_patterns = [
+        (r"input_reason(?:\[[^\]]+\]|=|:)\s*(unsafe[-_ ]shutdown|seamless[-_ ]coop[-_ ]notice|online[-_ ]warning|title[-_ ]accept|continue[-_ ]menu)", 40),
+        (r"menu_condition\[(unsafe[-_ ]shutdown|seamless[-_ ]coop[-_ ]notice|online[-_ ]warning|title[-_ ]accept|continue[-_ ]menu)\]", 40),
+        (r"unsafe[-_ ]shutdown|did not (?:shut down|quit)|quit game properly", 40),
+        (r"seamless co-?op|free mod|welcome dialog", 30),
+        (r"online[-_ ]play warning|online play warning", 30),
+        (r"title[-_ ]accept|press any button", 20),
+        (r"continue[-_ ]selected|continue menu selected", 20),
+    ]
+    unknown_condition_patterns = [
+        (r"unknown_confirmable_modal", 30),
+        (r"menu_semaphore", 25),
+        (r"confirm_probe", 20),
+        (r"barrier_id=hook_0x[0-9a-f]+/table_", 20),
+    ]
+    for pattern, value in known_condition_patterns:
+        if re.search(pattern, joined_logs, re.I):
+            menu_condition_score += value
+            input_reason_known = True
+    for pattern, value in unknown_condition_patterns:
+        if re.search(pattern, joined_logs, re.I):
+            menu_condition_score += value
+    if menu_condition_score:
+        metrics["menu_condition_evidence_score"] = min(200, menu_condition_score)
+    if input_reason_known:
+        metrics["input_reason_known"] = 1
+    if re.search(r"state[-_ ]gated input|menu[-_ ]aware input|input_gate(?:\[[^\]]+\]|=|:)", joined_logs, re.I):
+        metrics["state_gated_input"] = 1
     runtime_metrics_path = artifact_dir / "runtime-metrics.json"
     if runtime_metrics_path.exists():
         try:
@@ -992,10 +1026,16 @@ if artifact_dir and artifact_dir.exists():
             driver_rc_value = runtime_metrics.get("driver_rc")
             if isinstance(driver_rc_value, (int, float)):
                 runtime_driver_rc = int(driver_rc_value)
-            for key in ["runtime_probe_seconds", "time_to_player_seconds", "host_pointer_input_used"]:
+            for key in ["runtime_probe_seconds", "time_to_player_seconds", "host_pointer_input_used", "menu_condition_evidence_score"]:
                 value = runtime_metrics.get(key)
                 if isinstance(value, (int, float)):
                     metrics[key] = value
+            for key in ["input_reason_known", "state_gated_input"]:
+                value = runtime_metrics.get(key)
+                if isinstance(value, bool):
+                    metrics[key] = 1 if value else 0
+                elif isinstance(value, (int, float)):
+                    metrics[key] = 1 if value else 0
             if runtime_metrics.get("er_process_teardown_ok") in (0, False):
                 metrics["er_process_teardown_ok"] = 0
             if runtime_metrics.get("save_safety_ok") in (0, False):
@@ -1033,6 +1073,16 @@ if telemetry:
         simulated_confirms = max(0, int(safe_input_pulses))
         metrics["simulated_confirm_presses"] = simulated_confirms
         metrics["simulated_button_presses_total"] = simulated_confirms
+    for key in ["menu_condition_evidence_score"]:
+        value = telemetry.get(key)
+        if isinstance(value, (int, float)):
+            metrics[key] = max(metrics[key], value)
+    for key in ["input_reason_known", "state_gated_input"]:
+        value = telemetry.get(key)
+        if isinstance(value, bool):
+            metrics[key] = max(metrics[key], 1 if value else 0)
+        elif isinstance(value, (int, float)):
+            metrics[key] = max(metrics[key], 1 if value else 0)
     if metrics["player_available"] and metrics["selected_slot_loaded"]:
         metrics["autoload_success"] = 1
     status = str(telemetry.get("autoload_last_status") or "")
@@ -1059,10 +1109,18 @@ hard_zero = bool(
 if hard_zero:
     score = 0
 elif metrics["autoload_success"] and metrics["player_available"] and metrics["selected_slot_loaded"]:
-    if metrics["simulated_button_presses_total"] == 0:
+    simulated_buttons = int(metrics["simulated_button_presses_total"])
+    if simulated_buttons == 0:
         score = 1000
     else:
-        score = max(900, 950 - metrics["simulated_button_presses_total"])
+        explanation_bonus = 0
+        if metrics["input_reason_known"]:
+            explanation_bonus += 40
+        if metrics["state_gated_input"]:
+            explanation_bonus += 20
+        explanation_bonus += min(20, int(metrics["menu_condition_evidence_score"]) // 10)
+        metrics["input_explanation_bonus"] = explanation_bonus
+        score = min(980, max(850, 900 - simulated_buttons) + explanation_bonus)
 elif metrics["native_request_consumed"]:
     score = 800
 elif trace_confirms_state_transition and static_score >= 400:
@@ -1101,6 +1159,10 @@ for key in [
     "simulated_dpad_right_presses",
     "simulated_left_bumper_presses",
     "simulated_right_bumper_presses",
+    "menu_condition_evidence_score",
+    "input_reason_known",
+    "state_gated_input",
+    "input_explanation_bonus",
     "trace_invasiveness_score",
     "static_evidence_score",
     "runtime_probe_seconds",

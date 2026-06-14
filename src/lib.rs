@@ -101,6 +101,16 @@ const DIRECT_INPUT_CREATE_DEVICE_VTBL_INDEX: usize = 3;
 const DIRECT_INPUT_DEVICE_GET_STATE_VTBL_INDEX: usize = 9;
 const HRESULT_SUCCESS_FLOOR: i32 = 0;
 const SAFE_INPUT_DIRECT_INPUT_WAIT_TICKS: u64 = 300;
+const TRACE_MENU_CONTINUE_WRAPPER_RVA: u32 = 0x0082bac0;
+const TRACE_MENU_NEW_OR_LOAD_WRAPPER_RVA: u32 = 0x0082ba80;
+const TRACE_MENU_OTHER_LOAD_WRAPPER_RVA: u32 = 0x0082bb00;
+const TRACE_MENU_TASK_UPDATE_WRAPPER_RVA: u32 = 0x0082a0f0;
+const TRACE_MENU_TASK_UPDATE_TABLE_RVA: u32 = 0x02ac72a0;
+const TRACE_TASK_ENQUEUE_RVA: u32 = 0x007a7b60;
+const TRACE_UNKNOWN_TABLE_RVA: u32 = 0;
+const MENU_TASK_STATE_PAYLOAD_PTR_OFFSET: usize = 0x30;
+const MENU_TASK_STATE_DELAY_OFFSET: usize = 0x08;
+const TASK_ENQUEUE_TRACE_LIMIT: usize = 256;
 static START_GAME_TASK: Once = Once::new();
 static START_CONTINUE_TRACE: Once = Once::new();
 static START_SAFE_INPUT_HOOKS: Once = Once::new();
@@ -110,6 +120,8 @@ static SAFE_INPUT_CONFIRM_FRAMES_REMAINING: AtomicUsize = AtomicUsize::new(0);
 static MENU_CONTINUE_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(0);
 static MENU_NEW_OR_LOAD_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(0);
 static MENU_OTHER_LOAD_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(0);
+static MENU_TASK_UPDATE_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(0);
+static TASK_ENQUEUE_ORIG: AtomicUsize = AtomicUsize::new(0);
 static SET_SAVE_SLOT_ORIG: AtomicUsize = AtomicUsize::new(0);
 static SAVE_REQUEST_PROFILE_ORIG: AtomicUsize = AtomicUsize::new(0);
 static REQUEST_SAVE_ORIG: AtomicUsize = AtomicUsize::new(0);
@@ -124,6 +136,15 @@ static DIRECT_INPUT8_CREATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 static DIRECT_INPUT_CREATE_DEVICE_ORIG: AtomicUsize = AtomicUsize::new(0);
 static DIRECT_INPUT_GET_DEVICE_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 static TITLE_BOOTSTRAP_SEEN: AtomicUsize = AtomicUsize::new(0);
+static SAFE_INPUT_CONFIRM_PULSE_SEQ: AtomicUsize = AtomicUsize::new(0);
+static MENU_TRACE_EVENT_SEQ: AtomicUsize = AtomicUsize::new(0);
+static MENU_TRACE_LAST_SEQ: AtomicUsize = AtomicUsize::new(0);
+static MENU_TRACE_LAST_HOOK_RVA: AtomicUsize = AtomicUsize::new(0);
+static MENU_TRACE_LAST_TABLE_RVA: AtomicUsize = AtomicUsize::new(0);
+static MENU_TRACE_LAST_THIS: AtomicUsize = AtomicUsize::new(0);
+static MENU_TRACE_LAST_STATE_QWORD: AtomicUsize = AtomicUsize::new(0);
+static MENU_TRACE_LAST_PAYLOAD_PTR: AtomicUsize = AtomicUsize::new(0);
+static TASK_ENQUEUE_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// A named runtime effect call the overlay can trigger.
 ///
@@ -843,6 +864,16 @@ fn process_safe_input_request(state: &mut EffectsState) {
         return;
     }
 
+    let pulse_seq = SAFE_INPUT_CONFIRM_PULSE_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+    let before_snapshot = menu_trace_snapshot();
+    append_confirm_probe(
+        "before_confirm",
+        pulse_seq,
+        state.game_task_ticks,
+        before_snapshot,
+        None,
+    );
+
     match emit_confirm_pulse_to_own_window() {
         Ok(()) => {
             state.safe_input.pulses_sent += 1;
@@ -858,10 +889,26 @@ fn process_safe_input_request(state: &mut EffectsState) {
                 state.game_task_ticks,
                 SAFE_INPUT_CONFIRM_HOOK_FRAMES
             ));
+            let after_snapshot = menu_trace_snapshot();
+            append_confirm_probe(
+                "after_confirm",
+                pulse_seq,
+                state.game_task_ticks,
+                after_snapshot,
+                Some(after_snapshot.advanced_from(before_snapshot)),
+            );
         }
         Err(error) => {
             state.safe_input.last_status = Some(error.clone());
             append_autoload_debug(format_args!("safe_input_confirm {error}"));
+            let after_snapshot = menu_trace_snapshot();
+            append_confirm_probe(
+                "after_confirm_error",
+                pulse_seq,
+                state.game_task_ticks,
+                after_snapshot,
+                Some(after_snapshot.advanced_from(before_snapshot)),
+            );
         }
     }
 }
@@ -1301,6 +1348,157 @@ fn append_continue_trace(args: std::fmt::Arguments<'_>) {
     }
 }
 
+#[derive(Clone, Copy)]
+struct MenuTraceSnapshot {
+    seq: usize,
+    hook_rva: usize,
+    table_rva: usize,
+    this_ptr: usize,
+    state_qword: usize,
+    payload_ptr: usize,
+}
+
+impl MenuTraceSnapshot {
+    fn advanced_from(self, previous: Self) -> bool {
+        self.seq != previous.seq
+            || self.hook_rva != previous.hook_rva
+            || self.table_rva != previous.table_rva
+            || self.this_ptr != previous.this_ptr
+            || self.state_qword != previous.state_qword
+            || self.payload_ptr != previous.payload_ptr
+    }
+
+    fn barrier_id(self) -> String {
+        format!(
+            "hook_0x{:x}/table_{}",
+            self.hook_rva,
+            trace_rva_label(self.table_rva)
+        )
+    }
+
+    fn summary(self) -> String {
+        format!(
+            "last_menu_seq={} hook_rva=0x{:x} table_rva={} this=0x{:x} state_qword=0x{:x} payload_ptr=0x{:x}",
+            self.seq,
+            self.hook_rva,
+            trace_rva_label(self.table_rva),
+            self.this_ptr,
+            self.state_qword,
+            self.payload_ptr
+        )
+    }
+}
+
+fn menu_trace_snapshot() -> MenuTraceSnapshot {
+    MenuTraceSnapshot {
+        seq: MENU_TRACE_LAST_SEQ.load(Ordering::SeqCst),
+        hook_rva: MENU_TRACE_LAST_HOOK_RVA.load(Ordering::SeqCst),
+        table_rva: MENU_TRACE_LAST_TABLE_RVA.load(Ordering::SeqCst),
+        this_ptr: MENU_TRACE_LAST_THIS.load(Ordering::SeqCst),
+        state_qword: MENU_TRACE_LAST_STATE_QWORD.load(Ordering::SeqCst),
+        payload_ptr: MENU_TRACE_LAST_PAYLOAD_PTR.load(Ordering::SeqCst),
+    }
+}
+
+fn trace_rva_label(rva: usize) -> String {
+    if rva == TRACE_UNKNOWN_TABLE_RVA as usize {
+        "unknown".to_owned()
+    } else {
+        format!("0x{rva:x}")
+    }
+}
+
+fn append_confirm_probe(
+    phase: &str,
+    pulse_seq: usize,
+    tick: u64,
+    snapshot: MenuTraceSnapshot,
+    advanced_after_pulse: Option<bool>,
+) {
+    let advanced =
+        advanced_after_pulse.map_or_else(|| "unknown".to_owned(), |value| value.to_string());
+    let line = format!(
+        "confirm_probe phase={phase} pulse={pulse_seq} tick={tick} menu_condition[unknown_confirmable_modal] barrier_id={} observed_after_pulse={advanced} confirm_active={} {} {}",
+        snapshot.barrier_id(),
+        SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst) > 0,
+        snapshot.summary(),
+        game_man_trace_summary()
+    );
+    append_autoload_debug(format_args!("{line}"));
+    append_continue_trace(format_args!("{line}"));
+}
+
+unsafe fn menu_task_state_summary(this: *mut c_void) -> (usize, usize, String) {
+    if this.is_null() {
+        return (0, 0, "task_state{null=true}".to_owned());
+    }
+    let base = this.cast::<u8>();
+    let state_qword = unsafe { *(base.cast::<usize>()) };
+    let state_code = unsafe { *(base.cast::<i32>()) };
+    let state_payload = unsafe { *(base.add(4).cast::<i32>()) };
+    let delay_bits = unsafe { *(base.add(MENU_TASK_STATE_DELAY_OFFSET).cast::<u32>()) };
+    let payload_ptr = unsafe { *(base.add(MENU_TASK_STATE_PAYLOAD_PTR_OFFSET).cast::<usize>()) };
+    (
+        state_qword,
+        payload_ptr,
+        format!(
+            "task_state{{qword=0x{state_qword:x},code={state_code},payload={state_payload},delay_bits=0x{delay_bits:x},payload_ptr=0x{payload_ptr:x}}}"
+        ),
+    )
+}
+
+fn record_menu_trace_snapshot(
+    seq: usize,
+    hook_rva: u32,
+    table_rva: u32,
+    this: *mut c_void,
+    state_qword: usize,
+    payload_ptr: usize,
+) {
+    MENU_TRACE_LAST_SEQ.store(seq, Ordering::SeqCst);
+    MENU_TRACE_LAST_HOOK_RVA.store(hook_rva as usize, Ordering::SeqCst);
+    MENU_TRACE_LAST_TABLE_RVA.store(table_rva as usize, Ordering::SeqCst);
+    MENU_TRACE_LAST_THIS.store(this as usize, Ordering::SeqCst);
+    MENU_TRACE_LAST_STATE_QWORD.store(state_qword, Ordering::SeqCst);
+    MENU_TRACE_LAST_PAYLOAD_PTR.store(payload_ptr, Ordering::SeqCst);
+}
+
+unsafe fn append_menu_semaphore_trace(
+    hook_name: &str,
+    phase: &str,
+    hook_rva: u32,
+    table_rva: u32,
+    this: *mut c_void,
+) {
+    let seq = MENU_TRACE_EVENT_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+    let (state_qword, payload_ptr, task_state) = unsafe { menu_task_state_summary(this) };
+    record_menu_trace_snapshot(seq, hook_rva, table_rva, this, state_qword, payload_ptr);
+    append_continue_trace(format_args!(
+        "menu_semaphore seq={seq} phase={phase} hook={hook_name} hook_rva=0x{hook_rva:x} table_rva={} this={this:p} barrier_id=hook_0x{hook_rva:x}/table_{} confirm_active={} pulse={} {} {} {}",
+        trace_rva_label(table_rva as usize),
+        trace_rva_label(table_rva as usize),
+        SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst) > 0,
+        SAFE_INPUT_CONFIRM_PULSE_SEQ.load(Ordering::SeqCst),
+        task_state,
+        trace_callers_summary(),
+        game_man_trace_summary()
+    ));
+}
+
+unsafe fn object_vtable_summary(ptr: *mut c_void) -> String {
+    if ptr.is_null() {
+        return "vtable_rva=null".to_owned();
+    }
+    let vtable = unsafe { *(ptr as *const usize) };
+    let rva = game_module_base()
+        .ok()
+        .and_then(|module_base| vtable.checked_sub(module_base));
+    rva.map_or_else(
+        || format!("vtable=0x{vtable:x} vtable_rva=unknown"),
+        |value| format!("vtable=0x{vtable:x} vtable_rva=0x{value:x}"),
+    )
+}
+
 #[cfg(windows)]
 fn trace_callers_summary() -> String {
     let mut frames = [std::ptr::null_mut::<c_void>(); STACK_TRACE_FRAME_COUNT];
@@ -1471,6 +1669,20 @@ fn install_continue_trace_hooks() {
         );
         create_continue_trace_hook(
             &mut hooks,
+            "menu_task_update_wrapper",
+            TRACE_MENU_TASK_UPDATE_WRAPPER_RVA,
+            menu_task_update_wrapper_hook as *mut c_void,
+            &MENU_TASK_UPDATE_WRAPPER_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "task_enqueue_7a7b60",
+            TRACE_TASK_ENQUEUE_RVA,
+            task_enqueue_hook as *mut c_void,
+            &TASK_ENQUEUE_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
             "set_save_slot",
             SET_SAVE_SLOT_RVA,
             set_save_slot_hook as *mut c_void,
@@ -1569,45 +1781,134 @@ unsafe fn call_bool3_original(original: &AtomicUsize, arg0: i32, arg1: u8, arg2:
     Some(unsafe { original(arg0, arg1, arg2) })
 }
 
+unsafe fn call_task_enqueue_original(arg0: *mut c_void, arg1: *mut c_void) -> Option<*mut c_void> {
+    let original = TASK_ENQUEUE_ORIG.load(Ordering::SeqCst);
+    if original == HOOK_ORIGINAL_UNSET {
+        return None;
+    }
+    let original: unsafe extern "system" fn(*mut c_void, *mut c_void) -> *mut c_void =
+        unsafe { std::mem::transmute(original) };
+    Some(unsafe { original(arg0, arg1) })
+}
+
 unsafe extern "system" fn menu_continue_wrapper_hook(this: *mut c_void) -> *mut c_void {
-    append_continue_trace(format_args!(
-        "ENTER menu_continue_wrapper this={this:p} {}",
-        game_man_trace_summary()
-    ));
+    unsafe {
+        append_menu_semaphore_trace(
+            "menu_continue_wrapper",
+            "ENTER",
+            TRACE_MENU_CONTINUE_WRAPPER_RVA,
+            TRACE_UNKNOWN_TABLE_RVA,
+            this,
+        )
+    };
     let result =
         unsafe { call_wrapper_original(&MENU_CONTINUE_WRAPPER_ORIG, this) }.unwrap_or(this);
-    append_continue_trace(format_args!(
-        "LEAVE menu_continue_wrapper ret={result:p} {}",
-        game_man_trace_summary()
-    ));
+    unsafe {
+        append_menu_semaphore_trace(
+            "menu_continue_wrapper",
+            "LEAVE",
+            TRACE_MENU_CONTINUE_WRAPPER_RVA,
+            TRACE_UNKNOWN_TABLE_RVA,
+            result,
+        )
+    };
     result
 }
 
 unsafe extern "system" fn menu_new_or_load_wrapper_hook(this: *mut c_void) -> *mut c_void {
-    append_continue_trace(format_args!(
-        "ENTER menu_new_or_load_wrapper this={this:p} {}",
-        game_man_trace_summary()
-    ));
+    unsafe {
+        append_menu_semaphore_trace(
+            "menu_new_or_load_wrapper",
+            "ENTER",
+            TRACE_MENU_NEW_OR_LOAD_WRAPPER_RVA,
+            TRACE_UNKNOWN_TABLE_RVA,
+            this,
+        )
+    };
     let result =
         unsafe { call_wrapper_original(&MENU_NEW_OR_LOAD_WRAPPER_ORIG, this) }.unwrap_or(this);
-    append_continue_trace(format_args!(
-        "LEAVE menu_new_or_load_wrapper ret={result:p} {}",
-        game_man_trace_summary()
-    ));
+    unsafe {
+        append_menu_semaphore_trace(
+            "menu_new_or_load_wrapper",
+            "LEAVE",
+            TRACE_MENU_NEW_OR_LOAD_WRAPPER_RVA,
+            TRACE_UNKNOWN_TABLE_RVA,
+            result,
+        )
+    };
     result
 }
 
 unsafe extern "system" fn menu_other_load_wrapper_hook(this: *mut c_void) -> *mut c_void {
-    append_continue_trace(format_args!(
-        "ENTER menu_other_load_wrapper this={this:p} {}",
-        game_man_trace_summary()
-    ));
+    unsafe {
+        append_menu_semaphore_trace(
+            "menu_other_load_wrapper",
+            "ENTER",
+            TRACE_MENU_OTHER_LOAD_WRAPPER_RVA,
+            TRACE_UNKNOWN_TABLE_RVA,
+            this,
+        )
+    };
     let result =
         unsafe { call_wrapper_original(&MENU_OTHER_LOAD_WRAPPER_ORIG, this) }.unwrap_or(this);
-    append_continue_trace(format_args!(
-        "LEAVE menu_other_load_wrapper ret={result:p} {}",
-        game_man_trace_summary()
-    ));
+    unsafe {
+        append_menu_semaphore_trace(
+            "menu_other_load_wrapper",
+            "LEAVE",
+            TRACE_MENU_OTHER_LOAD_WRAPPER_RVA,
+            TRACE_UNKNOWN_TABLE_RVA,
+            result,
+        )
+    };
+    result
+}
+
+unsafe extern "system" fn menu_task_update_wrapper_hook(this: *mut c_void) -> *mut c_void {
+    unsafe {
+        append_menu_semaphore_trace(
+            "menu_task_update_wrapper",
+            "ENTER",
+            TRACE_MENU_TASK_UPDATE_WRAPPER_RVA,
+            TRACE_MENU_TASK_UPDATE_TABLE_RVA,
+            this,
+        )
+    };
+    let result =
+        unsafe { call_wrapper_original(&MENU_TASK_UPDATE_WRAPPER_ORIG, this) }.unwrap_or(this);
+    unsafe {
+        append_menu_semaphore_trace(
+            "menu_task_update_wrapper",
+            "LEAVE",
+            TRACE_MENU_TASK_UPDATE_WRAPPER_RVA,
+            TRACE_MENU_TASK_UPDATE_TABLE_RVA,
+            result,
+        )
+    };
+    result
+}
+
+unsafe extern "system" fn task_enqueue_hook(arg0: *mut c_void, arg1: *mut c_void) -> *mut c_void {
+    let trace_index = TASK_ENQUEUE_TRACE_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+    let should_trace = trace_index <= TASK_ENQUEUE_TRACE_LIMIT
+        || SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst) > 0;
+    if should_trace {
+        append_continue_trace(format_args!(
+            "menu_task_enqueue seq={trace_index} phase=ENTER hook_rva=0x{:x} list={arg0:p} node={arg1:p} node_{} confirm_active={} pulse={} {} {}",
+            TRACE_TASK_ENQUEUE_RVA,
+            unsafe { object_vtable_summary(arg1) },
+            SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst) > 0,
+            SAFE_INPUT_CONFIRM_PULSE_SEQ.load(Ordering::SeqCst),
+            trace_callers_summary(),
+            game_man_trace_summary()
+        ));
+    }
+    let result = unsafe { call_task_enqueue_original(arg0, arg1) }.unwrap_or(arg1);
+    if should_trace {
+        append_continue_trace(format_args!(
+            "menu_task_enqueue seq={trace_index} phase=LEAVE ret={result:p} {}",
+            game_man_trace_summary()
+        ));
+    }
     result
 }
 

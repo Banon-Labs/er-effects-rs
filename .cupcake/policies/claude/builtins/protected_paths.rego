@@ -97,8 +97,13 @@ halt contains decision if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"
 
-	# Get affected parent directories from preprocessing
-	# This is populated for commands like rm -rf, chmod -R, etc.
+	# Get affected parent directories from preprocessing.
+	# This is populated for commands like rm -rf, chmod -R, etc.  Treat it as
+	# advisory and require an independently destructive shell verb so parser
+	# uncertainty (for example a read-only Python heredoc) does not make root (/)
+	# look like a dangerous parent operation.
+	command := lower(input.tool_input.command)
+	parent_destructive_command_detected(command)
 	affected_dirs := input.affected_parent_directories
 	count(affected_dirs) > 0
 
@@ -314,17 +319,52 @@ is_whitelisted_read_command(cmd) if {
 	commands.has_verb(first_part, verb)
 }
 
+# Check whether a Bash command is a known parent-directory mutator.  The
+# affected_parent_directories preprocessor field is intentionally not sufficient
+# by itself because unknown shell forms can over-approximate to `/`.
+parent_destructive_command_detected(cmd) if {
+	destructive_parent_verbs := {"rm", "rmdir", "mv", "cp", "chmod", "chown", "chgrp", "rsync", "install", "truncate", "shred"}
+	some verb in destructive_parent_verbs
+	commands.has_verb(cmd, verb)
+}
+
+parent_destructive_command_detected(cmd) if {
+	commands.has_verb(cmd, "find")
+	regex.match(`(^|[[:space:]])-(delete|exec|execdir)([[:space:]]|$)`, cmd)
+}
+
 # Check if command references a protected path
 contains_protected_reference(cmd, protected_path) if {
-	# Direct reference
+	# Absolute protected paths need a shell/path boundary before the leading slash.
+	# Otherwise a repo-relative path such as `.cupcake/system` falsely matches the
+	# absolute protected path `/System/` after case folding.
+	startswith(protected_path, "/")
+	shell_path_prefix_reference_matches(cmd, lower(protected_path))
+}
+
+contains_protected_reference(cmd, protected_path) if {
+	# Non-absolute patterns keep the historical substring behavior for entries such
+	# as `~/.ssh/` or project-relative protected paths.
+	not startswith(protected_path, "/")
 	contains(cmd, lower(protected_path))
 }
 
 contains_protected_reference(cmd, protected_path) if {
-	# Without trailing slash if it's a directory pattern
+	# Without trailing slash if it's a directory pattern.  Use path boundaries so
+	# `/System/` still matches `/System` but not `.cupcake/system`.
 	endswith(protected_path, "/")
 	path_without_slash := substring(lower(protected_path), 0, count(protected_path) - 1)
-	contains(cmd, path_without_slash)
+	shell_path_reference_matches(cmd, path_without_slash)
+}
+
+shell_path_prefix_reference_matches(cmd, path) if {
+	regex_path := replace(path, ".", "\\.")
+	regex.match(concat("", ["(^|[[:space:]\\\"'=:(])", regex_path]), cmd)
+}
+
+shell_path_reference_matches(cmd, path) if {
+	regex_path := replace(path, ".", "\\.")
+	regex.match(concat("", ["(^|[[:space:]\\\"'=:(])", regex_path, "([[:space:]\\\"')/:;,&]|$)"]), cmd)
 }
 
 # Get configured message from builtin config

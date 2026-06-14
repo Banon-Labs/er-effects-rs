@@ -17,6 +17,7 @@ class PolicyCase:
     should_allow: bool
     expected_text: str | None = None
     extra_tool_input: dict[str, object] | None = None
+    extra_event: dict[str, object] | None = None
 
 
 def run_case(case: PolicyCase) -> None:
@@ -31,6 +32,8 @@ def run_case(case: PolicyCase) -> None:
         "tool_name": "Bash",
         "tool_input": tool_input,
     }
+    if case.extra_event:
+        event.update(case.extra_event)
     result = subprocess.run(
         ["cupcake", "eval", "--harness", "claude", "--strict", "--log-level", "error"],
         cwd=REPO_ROOT,
@@ -110,6 +113,24 @@ def main() -> int:
             "allow-flattened-shell-variable-bookkeeping",
             "set +e false rc=$? set -e echo \"$rc\"",
             True,
+        ),
+        PolicyCase(
+            "allow-python-heredoc-with-overbroad-affected-root",
+            "python3 - <<'PY'\nprint(1)\nPY",
+            True,
+            extra_event={"affected_parent_directories": ["/"]},
+        ),
+        PolicyCase(
+            "allow-repo-cupcake-system-path-not-absolute-system",
+            "opa check .cupcake/system .cupcake/policies/claude/builtins/protected_paths.rego",
+            True,
+        ),
+        PolicyCase(
+            "deny-destructive-parent-root",
+            "rm -rf /",
+            False,
+            "would be affected by operation on /",
+            extra_event={"affected_parent_directories": ["/"]},
         ),
         PolicyCase(
             "deny-semicolon-split",
