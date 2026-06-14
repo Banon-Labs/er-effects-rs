@@ -864,8 +864,34 @@ fn process_safe_input_request(state: &mut EffectsState) {
         return;
     }
 
-    let pulse_seq = SAFE_INPUT_CONFIRM_PULSE_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
     let before_snapshot = menu_trace_snapshot();
+    let gate_reason = if requires_post_map_final_confirm_gate(&state.safe_input) {
+        if !is_post_map_continuation_gate(before_snapshot) {
+            state.safe_input.last_status = Some(format!(
+                "waiting for post-map continuation input gate before final confirm tick={} {}",
+                state.game_task_ticks,
+                before_snapshot.summary()
+            ));
+            return;
+        }
+        Some("post_map_continuation")
+    } else {
+        None
+    };
+
+    let pulse_seq = SAFE_INPUT_CONFIRM_PULSE_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+    if let Some(reason) = gate_reason {
+        let line = format!(
+            "input_gate[{reason}] state-gated input satisfied pulse={}/{} tick={} {} {}",
+            state.safe_input.pulses_sent + 1,
+            state.safe_input.confirm_count,
+            state.game_task_ticks,
+            before_snapshot.summary(),
+            game_man_trace_summary()
+        );
+        append_autoload_debug(format_args!("{line}"));
+        append_continue_trace(format_args!("{line}"));
+    }
     append_confirm_probe(
         "before_confirm",
         pulse_seq,
@@ -911,6 +937,16 @@ fn process_safe_input_request(state: &mut EffectsState) {
             );
         }
     }
+}
+
+fn requires_post_map_final_confirm_gate(runtime: &SafeInputRuntime) -> bool {
+    runtime.confirm_count >= 6 && runtime.pulses_sent + 1 == runtime.confirm_count
+}
+
+fn is_post_map_continuation_gate(snapshot: MenuTraceSnapshot) -> bool {
+    snapshot.seq > 0
+        && snapshot.hook_rva == TRACE_MENU_OTHER_LOAD_WRAPPER_RVA as usize
+        && snapshot.state_qword == 2
 }
 
 fn load_safe_input_runtime(runtime: &mut SafeInputRuntime) {
