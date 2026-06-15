@@ -1068,6 +1068,16 @@ fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         write_telemetry_throttled(&mut state, false);
                         return;
                     }
+                    // Per-frame native arm: re-set the slot each frame + latch so
+                    // the save-mgr update can arm before the title resets the slot.
+                    if native_arm_loop_enabled() {
+                        if let (Ok(base), Some(slot)) = (game_module_base(), state.autoload.slot())
+                        {
+                            unsafe { native_arm_loop_tick(base, slot, state.game_task_ticks) };
+                        }
+                        write_telemetry_throttled(&mut state, false);
+                        return;
+                    }
                     // Recipe Option 1 (flagless): drive the genuine offline
                     // continue (MoveMapList dispatcher + b73) to load the REAL slot.
                     if continue_drive_enabled() {
@@ -2291,6 +2301,53 @@ fn arm_probe_enabled() -> bool {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("er-effects-arm-probe.txt")
             .exists()
+}
+
+fn native_arm_loop_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_NATIVE_ARM_LOOP").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-native-arm-loop.txt")
+        .exists()
+}
+
+/// Per-frame native autoload arm. Recipe A set the slot once and the title reset
+/// it to -1 before the save-mgr update could arm, so the latch fired Finish with
+/// nothing armed -> null deref. This re-sets the slot EVERY frame (against the
+/// title's reset) and sets the latch, giving the native update 0x14067f5d0 a
+/// chance to arm GameMan+0xb72 before Finish. Observes b72 / b80 / CSFeMan to see
+/// if the arm + bootstrap take. Crash logger should run alongside.
+unsafe fn native_arm_loop_tick(module_base: usize, slot: i32, tick: u64) {
+    if tick < ARM_PROBE_MIN_TICK {
+        return;
+    }
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let game_man =
+        unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+    if game_man == null {
+        return;
+    }
+    let load_in_progress =
+        unsafe { *((game_man + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *const u8) };
+    let armed = unsafe { *((game_man + GAME_MAN_ARM_FLAG_B72_OFFSET) as *const u8) };
+    let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
+    if load_in_progress == TITLE_NATIVE_JOB_TASK_DATA_ZERO {
+        // Re-arm each frame: persist the slot against the title's reset, set latch.
+        let set_save_slot: unsafe extern "system" fn(i32) =
+            unsafe { std::mem::transmute(module_base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+        unsafe { set_save_slot(slot) };
+        unsafe {
+            *((module_base + SELECTBOT_LOAD_GATE_RVA) as *mut u8) = TITLE_PROCEED_GATE_SET_VALUE;
+        }
+    }
+    if tick % ARM_PROBE_TICK_INTERVAL == null as u64 {
+        let ac0 = unsafe { *((game_man + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
+        append_autoload_debug(format_args!(
+            "native_arm_loop tick={tick} ac0={ac0} b72={armed} b80={load_in_progress} csfeman=0x{csfeman:x}"
+        ));
+    }
 }
 
 /// Read-only probe of the native autoload-arm preconditions at the title. The

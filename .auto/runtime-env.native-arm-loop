@@ -1,0 +1,20 @@
+# Per-frame native autoload arm (subagent recipe): re-set slot 9 EVERY frame
+# (against the title's per-frame reset) + set the latch, so the native save-mgr
+# update 0x14067f5d0 can arm GameMan+0xb72 before the latch forces MenuJobWait
+# Finish. Recipe A failed because its one-shot slot was reset -> Finish with
+# nothing armed -> null deref. Crash logger on to catch the outcome; observes
+# b72/b80/CSFeMan to see if the arm + front-end bootstrap take.
+LAUNCH_MODE=direct
+RUNTIME_MAX_NUDGES=0
+RESTORE_RUNTIME_SAVES=1
+RUNTIME_CAPTURE_INPUT_OCR=0
+ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=0
+ER_EFFECTS_NATIVE_ARM_LOOP=1
+ER_EFFECTS_CRASH_LOG=1
+ER_EFFECTS_AUTOLOAD_SLOT=9
+ER_EFFECTS_AUTOLOAD_METHOD=direct_menu_load
+ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP=false
+RUNTIME_WATCH_TARGET=player-load
+RUNTIME_AUTOLOAD_ATTEMPT_BUDGET=100000
+RUNTIME_POST_REQUEST_TICK_BUDGET=600
+RUNTIME_SPAWN_POLL_BUDGET=32768
