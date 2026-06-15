@@ -227,6 +227,7 @@ const CONTINUE_OWNER_SLOT_OFFSET: usize = 0x12c;
 const CONTINUE_OWNER_FLAG_12A_OFFSET: usize = 0x12a;
 const CONTINUE_OWNER_FLAG_12A_VALUE: u8 = 0;
 const CONTINUE_OWNER_QWORDS: usize = 0x40;
+const CONTINUE_DRIVE_MIN_TICK: u64 = 120;
 const FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET: usize = 0x14;
 const FORCE_PLAY_GAME_GM_PAIR_GATE_B28_OFFSET: usize = 0xb28;
 const FORCE_PLAY_GAME_GM_VALIDATE_12D_OFFSET: usize = 0x12d;
@@ -1918,7 +1919,10 @@ fn continue_drive_enabled() -> bool {
 /// GameMan+0x10=1), also building the world singletons. owner is a synthetic
 /// buffer with +0x12c = slot. Never writes the force flag 0x143d856a0.
 unsafe fn continue_drive_tick(module_base: usize, slot: i32, tick: u64) {
-    if tick < TITLE_NATIVE_JOB_MIN_TICK {
+    // Lower gate than the title-owner experiments: continue_drive only needs
+    // GameMan (ready ~tick 82), not the inner TitleStep owner, and degraded
+    // sessions sometimes exit ~tick 154, so start the drive earlier.
+    if tick < CONTINUE_DRIVE_MIN_TICK {
         return;
     }
     let game_man =
