@@ -293,6 +293,8 @@ const JOB_CHILD_PTR_STRIDE: usize = 8;
 const JOB_CHILD_WALK_CAP: u64 = 16;
 const JOB_CHILD_WALK_START: u64 = 0;
 const JOB_CHILD_INDEX_STEP: u64 = 1;
+const DFS_STACK_SIZE: usize = 64;
+const DFS_MAX_NODES: usize = 256;
 const MIN_VALID_HEAP_PTR: usize = 0x10000;
 const INPUTMGR_KEYSTATE_BITMAP_OFFSET: usize = 0x90;
 const KEYCODE_MAX_VALID: u16 = 0x47;
@@ -2437,43 +2439,47 @@ unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
         }
         return;
     }
+    // The condition nodes form a tree (J's children are sub-combiners). Bounded
+    // DFS for the leaf INPUT node (vtable 0x2aa97e8) anywhere under J; each node's
+    // children are at [node+0x18 + i*8], count [node+0x60].
     let leaf_vtable = module_base + LEAF_INPUT_VTABLE_RVA;
-    let count = unsafe { *((job + JOB_CHILD_COUNT_OFFSET) as *const u64) }.min(JOB_CHILD_WALK_CAP);
+    let mut stack: Vec<usize> = Vec::with_capacity(DFS_STACK_SIZE);
+    stack.push(job);
+    let mut visited = TITLE_OWNER_SCAN_START_ADDRESS;
     let mut leaf = null;
-    let mut index = JOB_CHILD_WALK_START;
-    while index < count {
-        let child = unsafe {
-            *((job + JOB_CHILD_ARRAY_OFFSET + (index as usize) * JOB_CHILD_PTR_STRIDE)
-                as *const usize)
-        };
-        if child >= MIN_VALID_HEAP_PTR {
-            let child_vtable = unsafe { *(child as *const usize) };
-            if child_vtable == leaf_vtable {
-                leaf = child;
-                break;
-            }
+    while let Some(node) = stack.pop() {
+        if visited >= DFS_MAX_NODES {
+            break;
         }
-        index += JOB_CHILD_INDEX_STEP;
+        visited += TITLE_TRACE_SEQUENCE_INCREMENT;
+        if node < MIN_VALID_HEAP_PTR {
+            continue;
+        }
+        let node_vtable = unsafe { *(node as *const usize) };
+        if node_vtable == leaf_vtable {
+            leaf = node;
+            break;
+        }
+        let count =
+            unsafe { *((node + JOB_CHILD_COUNT_OFFSET) as *const u64) }.min(JOB_CHILD_WALK_CAP);
+        let mut index = JOB_CHILD_WALK_START;
+        while index < count && stack.len() < DFS_STACK_SIZE {
+            let child = unsafe {
+                *((node + JOB_CHILD_ARRAY_OFFSET + (index as usize) * JOB_CHILD_PTR_STRIDE)
+                    as *const usize)
+            };
+            if child >= MIN_VALID_HEAP_PTR {
+                stack.push(child);
+            }
+            index += JOB_CHILD_INDEX_STEP;
+        }
     }
     let latch = unsafe { *((module_base + TITLE_ACCEPT_LATCH_RVA) as *const u8) };
     if leaf == null {
         if log_now {
-            let mut i = JOB_CHILD_WALK_START;
-            while i < count {
-                let child = unsafe {
-                    *((job + JOB_CHILD_ARRAY_OFFSET + (i as usize) * JOB_CHILD_PTR_STRIDE)
-                        as *const usize)
-                };
-                let child_vtable_rva = if child >= MIN_VALID_HEAP_PTR {
-                    unsafe { *(child as *const usize) }.wrapping_sub(module_base)
-                } else {
-                    child
-                };
-                append_autoload_debug(format_args!(
-                    "title_accept: leaf NOT FOUND child[{i}]=0x{child:x} vtable_rva=0x{child_vtable_rva:x} (want leaf 0x{LEAF_INPUT_VTABLE_RVA:x}) count={count} latch={latch} csfeman=0x{csfeman:x} tick={tick}"
-                ));
-                i += JOB_CHILD_INDEX_STEP;
-            }
+            append_autoload_debug(format_args!(
+                "title_accept: leaf NOT FOUND via DFS (visited={visited}) latch={latch} csfeman=0x{csfeman:x} tick={tick}"
+            ));
         }
         return;
     }
