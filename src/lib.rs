@@ -277,24 +277,29 @@ const ARM_PROBE_TICK_INTERVAL: u64 = 30;
 /// Injecting that event makes the game's own node update accept and run the real
 /// front-end bootstrap. Verdict is [job+0x1e8] >= 2.
 const TITLE_OWNER_PRESS_JOB_130_OFFSET: usize = 0x130;
-const TITLE_OWNER_MENU_JOB_E0_OFFSET: usize = 0xe0;
 const JOB_KEYCODE_180_OFFSET: usize = 0x180;
 const JOB_KEYCODE_UNMAPPED: u16 = 0xffff;
+/// The press-any-button job (owner+0x130) is an AND-combiner (vtable RVA
+/// 0x2aa2958) over child condition nodes at [job+0x18 + i*8], count [job+0x60].
+/// The real input node is the child with vtable RVA 0x2aa97e8; its keycode is at
+/// child+0x180. Accept = set the inputmgr keystate bitmap (inputmgr+0x90+keycode
+/// |= 3 pressed+triggered) so the leaf returns accepted and the combiner ANDs to
+/// done -> MenuJobWait advances 10->11 and the front-end bootstraps.
+const JOB_COMBINER_VTABLE_RVA: usize = 0x2aa2958;
+const LEAF_INPUT_VTABLE_RVA: usize = 0x2aa97e8;
+const JOB_CHILD_ARRAY_OFFSET: usize = 0x18;
+const JOB_CHILD_COUNT_OFFSET: usize = 0x60;
+const JOB_CHILD_PTR_STRIDE: usize = 8;
+const JOB_CHILD_WALK_CAP: u64 = 16;
+const JOB_CHILD_WALK_START: u64 = 0;
+const JOB_CHILD_INDEX_STEP: u64 = 1;
+const MIN_VALID_HEAP_PTR: usize = 0x10000;
+const INPUTMGR_KEYSTATE_BITMAP_OFFSET: usize = 0x90;
+const KEYCODE_MAX_VALID: u16 = 0x47;
+const KEYSTATE_PRESSED_TRIGGERED: u8 = 3;
+const TITLE_ACCEPT_LATCH_RVA: usize = 0x3d856a0;
 /// Generous upper bound on the game image span, to sanity-check that a candidate
 /// object's vtable points into the module before dereferencing deeper.
-const MODULE_IMAGE_SIZE_MAX: usize = 0x5000000;
-const JOB_VTABLE_FILL_DESC_OFFSET: usize = 0x18;
-const TITLE_ACCEPT_DESC_QWORDS: usize = 0x20;
-const EVENT_TABLE_RVA: usize = 0x3d6a860;
-const EVENT_TABLE_ENTRY_STRIDE: usize = 0x60;
-const EVENT_TABLE_MAX_INDEX: i32 = 0x400;
-const EVENT_ENTRY_EVENTID_OFFSET: usize = 0x4;
-const EVENT_ENTRY_VALUE_OFFSET: usize = 0x8;
-const JOB_VERDICT_1E8_OFFSET: usize = 0x1e8;
-const INPUTMGR_EVENT_ARRAY_OFFSET: usize = 0xdc;
-const EVENT_ID_VALID_FLOOR: i32 = 0;
-const EVENT_ID_MAX: u32 = 0x15e;
-const EVENT_ID_WORD_SIZE: usize = 4;
 /// Sentinel logged when GameMan is null so the field could not be read.
 const ARM_PROBE_FIELD_ABSENT: i64 = -1;
 /// IngameInit drive (recipe B, flagless). The SimpleTitleStep container that
@@ -1107,9 +1112,13 @@ fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     // (staged probe -> fill -> inject) to bootstrap the front-end.
                     if title_accept_enabled() {
                         if let Ok(base) = game_module_base() {
-                            let inject = title_accept_inject_enabled();
-                            let fill = inject || title_accept_fill_enabled();
-                            unsafe { title_accept_tick(base, state.game_task_ticks, fill, inject) };
+                            unsafe {
+                                title_accept_tick(
+                                    base,
+                                    state.game_task_ticks,
+                                    title_accept_inject_enabled(),
+                                )
+                            };
                         }
                         write_telemetry_throttled(&mut state, false);
                         return;
@@ -2367,16 +2376,6 @@ fn title_accept_enabled() -> bool {
             .exists()
 }
 
-fn title_accept_fill_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_TITLE_ACCEPT_FILL").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-title-accept-fill.txt")
-        .exists()
-}
-
 fn title_accept_inject_enabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_TITLE_ACCEPT_INJECT").as_deref(),
@@ -2392,7 +2391,7 @@ fn title_accept_inject_enabled() -> bool {
 /// bootstrap. Staged: basic probe (pure reads) -> +fill (resolve eventId via the
 /// job descriptor, read-only) -> +inject (write the event). Verify CSFeMan
 /// 0x143d6b880 / 0x1447ef360 go non-null after a successful accept.
-unsafe fn title_accept_tick(module_base: usize, tick: u64, do_fill: bool, do_write: bool) {
+unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
     if tick < ARM_PROBE_MIN_TICK {
         return;
     }
@@ -2426,59 +2425,55 @@ unsafe fn title_accept_tick(module_base: usize, tick: u64, do_fill: bool, do_wri
         }
         return;
     }
-    if !do_fill {
+    // J = owner+0x130 is an AND-combiner; confirm its vtable, then walk its child
+    // condition nodes to the leaf INPUT node (vtable 0x2aa97e8) and read its keycode.
+    let combiner_vtable = unsafe { *(job as *const usize) };
+    if combiner_vtable != module_base + JOB_COMBINER_VTABLE_RVA {
         if log_now {
-            let menu_job = unsafe { *((owner + TITLE_OWNER_MENU_JOB_E0_OFFSET) as *const usize) };
-            let job_vtable = unsafe { *(job as *const usize) };
-            let vtable_ok =
-                job_vtable >= module_base && job_vtable < module_base + MODULE_IMAGE_SIZE_MAX;
-            let vtable_rva = job_vtable.wrapping_sub(module_base);
-            let (keycode, verdict) = if vtable_ok {
-                (
-                    unsafe { *((job + JOB_KEYCODE_180_OFFSET) as *const u16) },
-                    unsafe { *((job + JOB_VERDICT_1E8_OFFSET) as *const i32) },
-                )
-            } else {
-                (JOB_KEYCODE_UNMAPPED, ARM_PROBE_FIELD_ABSENT as i32)
-            };
+            let rva = combiner_vtable.wrapping_sub(module_base);
             append_autoload_debug(format_args!(
-                "title_accept probe: state=10 owner=0x{owner:x} job=0x{job:x} menu_job(e0)=0x{menu_job:x} job_vtable_rva=0x{vtable_rva:x} vtable_ok={vtable_ok} keycode=0x{keycode:x} verdict={verdict} inputmgr=0x{input_mgr:x} csfeman=0x{csfeman:x} tick={tick}"
+                "title_accept: state=10 job=0x{job:x} combiner_vtable_rva=0x{rva:x} (expected 0x{JOB_COMBINER_VTABLE_RVA:x}) csfeman=0x{csfeman:x} tick={tick}"
             ));
         }
         return;
     }
-    // Resolve the confirm eventId exactly as the node update does: the job's
-    // vtable[+0x18] fills a descriptor whose first i32 indexes the event table.
-    let mut desc = [SYNTHETIC_ZERO_QWORD; TITLE_ACCEPT_DESC_QWORDS];
-    let job_vtable = unsafe { *(job as *const usize) };
-    let fill: unsafe extern "system" fn(*mut c_void, *mut c_void) = unsafe {
-        std::mem::transmute(*((job_vtable + JOB_VTABLE_FILL_DESC_OFFSET) as *const usize))
-    };
-    unsafe { fill(job as *mut c_void, desc.as_mut_ptr() as *mut c_void) };
-    let idx = unsafe { *(desc.as_ptr() as *const i32) };
-    let verdict = unsafe { *((job + JOB_VERDICT_1E8_OFFSET) as *const i32) };
-    if idx < EVENT_ID_VALID_FLOOR || idx > EVENT_TABLE_MAX_INDEX {
+    let leaf_vtable = module_base + LEAF_INPUT_VTABLE_RVA;
+    let count = unsafe { *((job + JOB_CHILD_COUNT_OFFSET) as *const u64) }.min(JOB_CHILD_WALK_CAP);
+    let mut leaf = null;
+    let mut index = JOB_CHILD_WALK_START;
+    while index < count {
+        let child = unsafe {
+            *((job + JOB_CHILD_ARRAY_OFFSET + (index as usize) * JOB_CHILD_PTR_STRIDE)
+                as *const usize)
+        };
+        if child >= MIN_VALID_HEAP_PTR {
+            let child_vtable = unsafe { *(child as *const usize) };
+            if child_vtable == leaf_vtable {
+                leaf = child;
+                break;
+            }
+        }
+        index += JOB_CHILD_INDEX_STEP;
+    }
+    let latch = unsafe { *((module_base + TITLE_ACCEPT_LATCH_RVA) as *const u8) };
+    if leaf == null {
         if log_now {
+            let child0 = unsafe { *((job + JOB_CHILD_ARRAY_OFFSET) as *const usize) };
             append_autoload_debug(format_args!(
-                "title_accept: state=10 idx={idx} OUT OF RANGE verdict={verdict} csfeman=0x{csfeman:x} tick={tick}"
+                "title_accept: state=10 leaf NOT FOUND count={count} child0=0x{child0:x} latch={latch} csfeman=0x{csfeman:x} tick={tick}"
             ));
         }
         return;
     }
-    let entry =
-        module_base + EVENT_TABLE_RVA + (idx as usize).wrapping_mul(EVENT_TABLE_ENTRY_STRIDE);
-    let event_id = unsafe { *((entry + EVENT_ENTRY_EVENTID_OFFSET) as *const i32) };
-    let value = unsafe { *((entry + EVENT_ENTRY_VALUE_OFFSET) as *const i32) };
+    let keycode = unsafe { *((leaf + JOB_KEYCODE_180_OFFSET) as *const u16) };
     if log_now || do_write {
         append_autoload_debug(format_args!(
-            "title_accept: state=10 idx={idx} event_id={event_id} value={value} verdict={verdict} csfeman=0x{csfeman:x} write={do_write} tick={tick}"
+            "title_accept: state=10 leaf=0x{leaf:x} keycode=0x{keycode:x} latch={latch} csfeman=0x{csfeman:x} write={do_write} tick={tick}"
         ));
     }
-    if do_write && event_id >= EVENT_ID_VALID_FLOOR && (event_id as u32) <= EVENT_ID_MAX {
-        let slot = input_mgr
-            + INPUTMGR_EVENT_ARRAY_OFFSET
-            + (event_id as usize).wrapping_mul(EVENT_ID_WORD_SIZE);
-        unsafe { *(slot as *mut i32) = value };
+    if do_write && keycode != JOB_KEYCODE_UNMAPPED && keycode < KEYCODE_MAX_VALID {
+        let slot = input_mgr + INPUTMGR_KEYSTATE_BITMAP_OFFSET + keycode as usize;
+        unsafe { *(slot as *mut u8) |= KEYSTATE_PRESSED_TRIGGERED };
     }
 }
 
