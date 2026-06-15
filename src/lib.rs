@@ -217,6 +217,15 @@ const SELECTBOT_LOAD_GATE_RVA: usize = 0x3d856a0;
 /// until the title-accept advances the outer state).
 const SELECTBOT_INPUT_MANAGER_GLOBAL_RVA: usize = 0x3d6b7b0;
 const SELECTBOT_PUMP_RAN_FLAG_OFFSET: usize = 0x6b0;
+/// Lever-1 title-accept experiment (runs 304+). Static RE (bd
+/// `title-accept-lever-143d856a0`) shows inner MenuJobWait (state 10, 0xb0d400)
+/// advances to state 11 (Finish) iff the global byte `[0x143d856a0]` (==
+/// `SELECTBOT_LOAD_GATE_RVA`) is non-zero — it is the title-accept/"proceed"
+/// latch, not a load-downstream flag. We set it ONCE, only while the inner owner
+/// is confirmed at MenuJobWait, to drive the native title-accept with zero input,
+/// then keep sampling to observe the cascade.
+const TITLE_STEP_MENU_JOB_WAIT_STATE: i32 = 10;
+const TITLE_PROCEED_GATE_SET_VALUE: u8 = 1;
 const MENU_TASK_NULL_STATE_QWORD: usize = 0;
 const MENU_TASK_NULL_PAYLOAD_PTR: usize = 0;
 const MENU_TASK_STATE_PAYLOAD_CODE_OFFSET: usize = 4;
@@ -253,6 +262,8 @@ static TITLE_NATIVE_JOB_CALLED: AtomicUsize = AtomicUsize::new(0);
 static FORCE_PLAY_GAME_CALLED: AtomicUsize = AtomicUsize::new(0);
 static FORCE_PLAY_GAME_LAST_STATE: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(FORCE_PLAY_GAME_STATE_UNOBSERVED);
+static TITLE_PROCEED_GATE_FIRED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 static TITLE_OWNER_SCAN_COUNTDOWN: AtomicUsize = AtomicUsize::new(0);
 static SAFE_INPUT_CONFIRM_PULSE_SEQ: AtomicUsize = AtomicUsize::new(0);
 static MENU_TRACE_EVENT_SEQ: AtomicUsize = AtomicUsize::new(0);
@@ -942,10 +953,12 @@ fn process_autoload_request(state: &mut EffectsState) {
         return;
     };
 
-    if selectbot_probe_enabled() {
-        // Read-only validation: sample the SelectBot registry / pump state and
-        // return without mutating anything or completing the autoload, so the
-        // probe keeps sampling across the title idle.
+    if selectbot_probe_enabled() || title_proceed_gate_enabled() {
+        // selectbot_probe_once samples the SelectBot/pump state each title-idle
+        // frame; when ER_EFFECTS_TITLE_PROCEED_GATE is set it ALSO fires the
+        // one-shot title-accept latch write (lever 1) at state 10. Returns
+        // without completing the autoload so sampling continues across the
+        // cascade.
         unsafe { selectbot_probe_once(game_module_base, state.game_task_ticks) };
         return;
     }
@@ -1592,6 +1605,33 @@ unsafe fn selectbot_probe_once(module_base: usize, tick: u64) {
     append_autoload_debug(format_args!(
         "selectbot_probe: state={state} queue128={queue128:#x} selection130={selection130} registry={registry:#x} load_gate={load_gate} input_mgr={input_manager:#x} pump_ran={pump_ran} tick={tick}"
     ));
+    // Lever-1 title-accept experiment: set the proceed latch [0x143d856a0]=1 ONCE,
+    // only while the inner owner is confirmed at MenuJobWait (state 10), so the
+    // native MenuJobWait handler advances itself to state 11 (Finish) on its next
+    // tick. Sampling continues above so the cascade (state, pump_ran, registry) is
+    // observed after the write. Gated separately from the read-only probe.
+    if title_proceed_gate_enabled()
+        && state == TITLE_STEP_MENU_JOB_WAIT_STATE
+        && !TITLE_PROCEED_GATE_FIRED.swap(true, Ordering::SeqCst)
+    {
+        unsafe {
+            *((module_base + SELECTBOT_LOAD_GATE_RVA) as *mut u8) = TITLE_PROCEED_GATE_SET_VALUE;
+        }
+        let after = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
+        append_autoload_debug(format_args!(
+            "title_proceed_gate: set [0x143d856a0]={after} at state {state} tick={tick}"
+        ));
+    }
+}
+
+fn title_proceed_gate_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_TITLE_PROCEED_GATE").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-title-proceed-gate.txt")
+        .exists()
 }
 
 /// Drives the native TitleStep state machine to `STEP_PlayGame` once.

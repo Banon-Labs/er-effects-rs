@@ -1,0 +1,20 @@
+# Lever-1 title-accept experiment: set the proceed latch [0x143d856a0]=1 once at
+# inner TitleStep MenuJobWait (state 10), zero input, then sample the cascade.
+# Watch target game-man so the watcher reaches GameMan-ready and observes; the
+# DLL drives the title-accept itself (no request status), so the run ends on the
+# readiness deadline while the probe logs state/pump_ran across the transition.
+LAUNCH_MODE=steam
+RUNTIME_MAX_NUDGES=0
+RESTORE_RUNTIME_SAVES=1
+RUNTIME_CAPTURE_INPUT_OCR=0
+ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=0
+ER_EFFECTS_SELECTBOT_PROBE=1
+ER_EFFECTS_TITLE_PROCEED_GATE=1
+ER_EFFECTS_AUTOLOAD_SLOT=9
+ER_EFFECTS_AUTOLOAD_METHOD=direct_menu_load
+ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP=false
+ER_EFFECTS_TRACE_MENU_TASK_UPDATE=0
+RUNTIME_WATCH_TARGET=autoload-request
+RUNTIME_AUTOLOAD_ATTEMPT_BUDGET=300
+RUNTIME_POST_REQUEST_TICK_BUDGET=300
+RUNTIME_SPAWN_POLL_BUDGET=32768
