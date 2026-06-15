@@ -1,3 +1,3 @@
-started_at=2026-06-14T17:43:56-07:00
-request=30
+started_at=2026-06-15T08:16:13-07:00
+request=selectbot-probe-readonly-20260615
 entrypoint=measure_runtime_trigger
