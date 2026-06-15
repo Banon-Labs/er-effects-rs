@@ -50,6 +50,31 @@ unsafe extern "system" {
     ) -> u16;
 }
 
+/// Vectored exception handler signature: receives EXCEPTION_POINTERS, returns a
+/// disposition (EXCEPTION_CONTINUE_SEARCH to leave behavior unchanged).
+type VectoredHandler = unsafe extern "system" fn(*mut ExceptionPointersMin) -> i32;
+
+#[cfg(windows)]
+unsafe extern "system" {
+    fn AddVectoredExceptionHandler(first: u32, handler: VectoredHandler) -> *mut c_void;
+}
+
+/// Minimal prefix of EXCEPTION_RECORD: only the fields the crash logger reads.
+#[repr(C)]
+struct ExceptionRecordMin {
+    exception_code: u32,
+    exception_flags: u32,
+    next_record: *mut ExceptionRecordMin,
+    exception_address: *mut c_void,
+}
+
+/// Minimal EXCEPTION_POINTERS: only the record pointer is read.
+#[repr(C)]
+struct ExceptionPointersMin {
+    exception_record: *mut ExceptionRecordMin,
+    context_record: *mut c_void,
+}
+
 const DLL_MAIN_SUCCESS: i32 = 1;
 const APPEAR_ANIMATION_ID: i32 = 63010;
 const OVERLAY_INITIAL_POSITION: [f32; 2] = [24.0, 24.0];
@@ -68,6 +93,20 @@ const STACK_TRACE_FRAMES_TO_SKIP: u32 = 0;
 const NULL_MODULE_BASE: usize = 0;
 const HOOK_ORIGINAL_UNSET: usize = 0;
 const HOOK_FALSE_RETURN: u8 = 0;
+/// Access-violation NTSTATUS (0xC0000005) as the i32 the OS passes to a VEH.
+const EXCEPTION_ACCESS_VIOLATION_CODE: u32 = 0xC000_0005;
+/// VEH disposition: leave the exception for the game's own handlers.
+const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
+/// Run our VEH first so it logs before Arxan's handlers consume the exception.
+const VECTORED_FIRST_HANDLER: u32 = 1;
+/// Cap access-violation log lines so an Arxan exception storm cannot fill disk.
+const MAX_AV_LOG_LINES: usize = 32;
+const AV_LOG_LINE_INCREMENT: usize = 1;
+/// Number of process-exit paths hooked (ExitProcess, TerminateProcess,
+/// RtlExitUserProcess, NtTerminateProcess).
+const CRASH_EXIT_TARGET_COUNT: usize = 4;
+/// Zero fill for synthetic qword scratch buffers.
+const SYNTHETIC_ZERO_QWORD: u64 = 0;
 const BOOTSTRAP_TELEMETRY_UNSEEN: usize = 0;
 const BOOTSTRAP_TELEMETRY_SEEN_VALUE: usize = 1;
 const BOOTSTRAP_EVENT_DLL_MAIN_ATTACH: &str = "dllmain_attach";
@@ -335,6 +374,14 @@ static SYNTHETIC_OUTER_PTR: AtomicUsize = AtomicUsize::new(0);
 static CONTINUE_OWNER_PTR: AtomicUsize = AtomicUsize::new(0);
 static CONTINUE_DRIVE_BEGUN: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+static ORIGINAL_EXIT_PROCESS: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIGINAL_TERMINATE_PROCESS: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIGINAL_RTL_EXIT_USER_PROCESS: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIGINAL_NT_TERMINATE_PROCESS: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static PROCESS_EXIT_LOGGED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static AV_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
+static CRASH_LOGGER_INSTALLED: std::sync::Once = std::sync::Once::new();
 static INGAMEINIT_DRIVE_DONE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 static TITLE_OWNER_SCAN_COUNTDOWN: AtomicUsize = AtomicUsize::new(0);
@@ -890,6 +937,12 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     }
     write_bootstrap_event(BOOTSTRAP_EVENT_DLL_MAIN_ATTACH, BOOTSTRAP_DETAIL_START);
 
+    // Install the crash/exit logger first so it can observe an exit or access
+    // violation from any later subsystem. Opt-in; off by default.
+    if crash_logger_enabled() {
+        install_crash_logger();
+    }
+
     let state = Arc::new(Mutex::new(EffectsState::default()));
 
     let direct_autoload_configured = {
@@ -972,6 +1025,13 @@ fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
                     let mut state = state_or_return(&state);
                     state.game_task_ticks += GAME_TASK_TICK_INCREMENT;
+                    // Bisect kill-switch: lock + tick only, NO filesystem I/O
+                    // (no telemetry write, no experiments). Discriminates "our
+                    // per-frame file I/O stalls the title" (lite survives) from
+                    // "any per-frame work trips a budget" (lite still exits).
+                    if lite_mode() {
+                        return;
+                    }
                     // Recipe Option 1 (flagless): drive the genuine offline
                     // continue (MoveMapList dispatcher + b73) to load the REAL slot.
                     if continue_drive_enabled() {
@@ -1393,6 +1453,179 @@ unsafe fn create_and_apply_single_hook(
     std::mem::forget(hooks);
 }
 
+const NO_PROCESS_HANDLE: usize = 0;
+
+fn crash_log_path() -> PathBuf {
+    std::env::var("ER_EFFECTS_CRASH_LOG_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            game_directory_path()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("er-effects-crash.log")
+        })
+}
+
+fn append_crash_log(args: std::fmt::Arguments<'_>) {
+    use std::io::Write;
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(crash_log_path())
+    {
+        let _ = writeln!(file, "{args}");
+    }
+}
+
+/// Opt-in: install the crash/exit logger. Off by default so production and
+/// normal smoke runs are untouched; enabled for diagnostic runs.
+fn crash_logger_enabled() -> bool {
+    matches!(std::env::var("ER_EFFECTS_CRASH_LOG").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-crash-log.txt")
+            .exists()
+}
+
+fn log_process_exit(api: &str, code: u32, handle: usize) {
+    // Log only the first terminator -- the one that actually quits the game.
+    if PROCESS_EXIT_LOGGED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    append_crash_log(format_args!(
+        "process-exit via {api} code=0x{code:x} handle=0x{handle:x} {}",
+        trace_callers_summary()
+    ));
+}
+
+unsafe extern "system" fn exit_process_hook(code: u32) {
+    log_process_exit("ExitProcess", code, NO_PROCESS_HANDLE);
+    let original = ORIGINAL_EXIT_PROCESS.load(Ordering::SeqCst);
+    if original != HOOK_ORIGINAL_UNSET {
+        let original: unsafe extern "system" fn(u32) = unsafe { std::mem::transmute(original) };
+        unsafe { original(code) };
+    }
+}
+
+unsafe extern "system" fn terminate_process_hook(handle: *mut c_void, code: u32) -> i32 {
+    log_process_exit("TerminateProcess", code, handle as usize);
+    let original = ORIGINAL_TERMINATE_PROCESS.load(Ordering::SeqCst);
+    if original != HOOK_ORIGINAL_UNSET {
+        let original: unsafe extern "system" fn(*mut c_void, u32) -> i32 =
+            unsafe { std::mem::transmute(original) };
+        return unsafe { original(handle, code) };
+    }
+    HOOK_FALSE_RETURN as i32
+}
+
+unsafe extern "system" fn rtl_exit_user_process_hook(code: u32) {
+    log_process_exit("RtlExitUserProcess", code, NO_PROCESS_HANDLE);
+    let original = ORIGINAL_RTL_EXIT_USER_PROCESS.load(Ordering::SeqCst);
+    if original != HOOK_ORIGINAL_UNSET {
+        let original: unsafe extern "system" fn(u32) = unsafe { std::mem::transmute(original) };
+        unsafe { original(code) };
+    }
+}
+
+unsafe extern "system" fn nt_terminate_process_hook(handle: *mut c_void, status: i32) -> i32 {
+    log_process_exit("NtTerminateProcess", status as u32, handle as usize);
+    let original = ORIGINAL_NT_TERMINATE_PROCESS.load(Ordering::SeqCst);
+    if original != HOOK_ORIGINAL_UNSET {
+        let original: unsafe extern "system" fn(*mut c_void, i32) -> i32 =
+            unsafe { std::mem::transmute(original) };
+        return unsafe { original(handle, status) };
+    }
+    HOOK_FALSE_RETURN as i32
+}
+
+/// Vectored handler: log access violations (faulting RVA + caller stack) so an
+/// in-process crash points straight at the instruction. Rate-limited; never
+/// changes behavior (returns EXCEPTION_CONTINUE_SEARCH).
+unsafe extern "system" fn crash_vectored_handler(info: *mut ExceptionPointersMin) -> i32 {
+    if !info.is_null() {
+        let record = unsafe { (*info).exception_record };
+        if !record.is_null()
+            && unsafe { (*record).exception_code } == EXCEPTION_ACCESS_VIOLATION_CODE
+            && AV_LOG_LINES_WRITTEN.fetch_add(AV_LOG_LINE_INCREMENT, Ordering::SeqCst)
+                < MAX_AV_LOG_LINES
+        {
+            let address = unsafe { (*record).exception_address } as usize;
+            let rva = game_module_base()
+                .ok()
+                .and_then(|base| address.checked_sub(base));
+            match rva {
+                Some(rva) => append_crash_log(format_args!(
+                    "access-violation rva=0x{rva:x} addr=0x{address:x} {}",
+                    trace_callers_summary()
+                )),
+                None => append_crash_log(format_args!(
+                    "access-violation addr=0x{address:x} (outside game module) {}",
+                    trace_callers_summary()
+                )),
+            }
+        }
+    }
+    EXCEPTION_CONTINUE_SEARCH
+}
+
+/// Install the crash/exit logger: a vectored handler for access violations plus
+/// MinHooks on the process-exit paths. The exit hooks catch a CLEAN watchdog
+/// termination (ExitProcess) that no exception debugger can observe, and record
+/// which game code requested the exit.
+fn install_crash_logger() {
+    CRASH_LOGGER_INSTALLED.call_once(|| {
+        unsafe { AddVectoredExceptionHandler(VECTORED_FIRST_HANDLER, crash_vectored_handler) };
+        match unsafe { MH_Initialize() } {
+            MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+            status => append_crash_log(format_args!(
+                "crash-logger MH_Initialize failed: {status:?}"
+            )),
+        }
+        let targets: [(&str, &[u8], &[u8], *mut c_void, &AtomicUsize); CRASH_EXIT_TARGET_COUNT] = [
+            (
+                "ExitProcess",
+                b"kernel32.dll\0",
+                b"ExitProcess\0",
+                exit_process_hook as *mut c_void,
+                &ORIGINAL_EXIT_PROCESS,
+            ),
+            (
+                "TerminateProcess",
+                b"kernel32.dll\0",
+                b"TerminateProcess\0",
+                terminate_process_hook as *mut c_void,
+                &ORIGINAL_TERMINATE_PROCESS,
+            ),
+            (
+                "RtlExitUserProcess",
+                b"ntdll.dll\0",
+                b"RtlExitUserProcess\0",
+                rtl_exit_user_process_hook as *mut c_void,
+                &ORIGINAL_RTL_EXIT_USER_PROCESS,
+            ),
+            (
+                "NtTerminateProcess",
+                b"ntdll.dll\0",
+                b"NtTerminateProcess\0",
+                nt_terminate_process_hook as *mut c_void,
+                &ORIGINAL_NT_TERMINATE_PROCESS,
+            ),
+        ];
+        for (name, module, proc, hook_impl, original) in targets {
+            match safe_input_proc(module, proc) {
+                Ok(target) => unsafe {
+                    create_and_apply_single_hook(name, target, hook_impl, original)
+                },
+                Err(error) => {
+                    append_crash_log(format_args!("crash-logger resolve {name} failed: {error}"))
+                }
+            }
+        }
+        append_crash_log(format_args!(
+            "crash logger installed (VEH + exit-path hooks)"
+        ));
+    });
+}
+
 fn install_safe_input_hooks() {
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
@@ -1648,6 +1881,17 @@ fn inert_mode() -> bool {
         || game_directory_path()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("er-effects-inert.txt")
+            .exists()
+}
+
+/// Bisect kill-switch: the recurring task does lock + tick only, with no
+/// filesystem I/O. Lets us tell whether the per-frame file I/O (telemetry write)
+/// is what stalls the title vs. any per-frame work at all.
+fn lite_mode() -> bool {
+    matches!(std::env::var("ER_EFFECTS_LITE").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-lite.txt")
             .exists()
 }
 
@@ -1975,7 +2219,7 @@ unsafe fn continue_drive_tick(module_base: usize, slot: i32, tick: u64) {
     // (slot) and +0x12a. A persistent zeroed buffer suffices.
     let mut owner_ptr = CONTINUE_OWNER_PTR.load(Ordering::SeqCst);
     if owner_ptr == TITLE_OWNER_SCAN_START_ADDRESS {
-        let buf = vec![0u64; CONTINUE_OWNER_QWORDS].into_boxed_slice();
+        let buf = vec![SYNTHETIC_ZERO_QWORD; CONTINUE_OWNER_QWORDS].into_boxed_slice();
         owner_ptr = Box::leak(buf).as_mut_ptr() as usize;
         CONTINUE_OWNER_PTR.store(owner_ptr, Ordering::SeqCst);
     }
@@ -2056,7 +2300,7 @@ unsafe fn ingameinit_drive_tick(module_base: usize, slot: i32, tick: u64, task_d
         // +0x48 <= 6). A persistent zeroed buffer satisfies all of that.
         let mut synth_ptr = SYNTHETIC_OUTER_PTR.load(Ordering::SeqCst);
         if synth_ptr == TITLE_OWNER_SCAN_START_ADDRESS {
-            let buf = vec![0u64; INGAMEINIT_SYNTHETIC_QWORDS].into_boxed_slice();
+            let buf = vec![SYNTHETIC_ZERO_QWORD; INGAMEINIT_SYNTHETIC_QWORDS].into_boxed_slice();
             synth_ptr = Box::leak(buf).as_mut_ptr() as usize;
             SYNTHETIC_OUTER_PTR.store(synth_ptr, Ordering::SeqCst);
         }

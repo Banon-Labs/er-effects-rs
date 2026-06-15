@@ -56,6 +56,10 @@ INGAMESTEP_UNPIN_PATH="${INGAMESTEP_UNPIN_PATH:-$GAME_DIR/er-effects-ingamestep-
 NATIVE_AUTOLOAD_PATH="${NATIVE_AUTOLOAD_PATH:-$GAME_DIR/er-effects-native-autoload.txt}"
 INGAMEINIT_DRIVE_PATH="${INGAMEINIT_DRIVE_PATH:-$GAME_DIR/er-effects-ingameinit-drive.txt}"
 CONTINUE_DRIVE_PATH="${CONTINUE_DRIVE_PATH:-$GAME_DIR/er-effects-continue-drive.txt}"
+CRASH_LOG_TRIGGER_PATH="${CRASH_LOG_TRIGGER_PATH:-$GAME_DIR/er-effects-crash-log.txt}"
+# The DLL's default crash-log location (when ER_EFFECTS_CRASH_LOG_PATH is unset);
+# copied into the artifact dir after the run.
+CRASH_LOG_SRC="${CRASH_LOG_SRC:-$GAME_DIR/er-effects-crash.log}"
 FORCE_PLAY_GAME_PATH="${FORCE_PLAY_GAME_PATH:-$GAME_DIR/er-effects-force-play-game.txt}"
 PROTON="${PROTON:-$HOME/.local/share/Steam/steamapps/common/Proton - Experimental/proton}"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
@@ -411,6 +415,7 @@ copy_runtime_logs() {
   cp -f "$TRACE_CONTINUE_PATH" "$ARTIFACT_DIR/continue-trace.log" 2>/dev/null || true
   cp -f "$BOOTSTRAP_PATH" "$ARTIFACT_DIR/bootstrap.jsonl" 2>/dev/null || true
   cp -f "$BOOTSTRAP_STATE_PATH" "$ARTIFACT_DIR/bootstrap-state.json" 2>/dev/null || true
+  cp -f "$CRASH_LOG_SRC" "$ARTIFACT_DIR/crash.log" 2>/dev/null || true
 }
 
 write_runtime_metrics() {
@@ -547,6 +552,9 @@ cleanup_runtime() {
   fi
   if [[ "${ER_EFFECTS_CONTINUE_DRIVE:-0}" == "1" ]]; then
     rm -f "$CONTINUE_DRIVE_PATH"
+  fi
+  if [[ "${ER_EFFECTS_CRASH_LOG:-0}" == "1" ]]; then
+    rm -f "$CRASH_LOG_TRIGGER_PATH"
   fi
   copy_runtime_logs || true
   write_state_snapshot "$ARTIFACT_DIR/final-state-before-cleanup.json" || true
@@ -692,7 +700,12 @@ PY
     else
       rm -f "$CONTINUE_DRIVE_PATH"
     fi
-    rm -f "$TELEMETRY_PATH" "$COMMAND_PATH" "$AUTOLOAD_DEBUG_PATH" "$TRACE_CONTINUE_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH"
+    if [[ "${ER_EFFECTS_CRASH_LOG:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$CRASH_LOG_TRIGGER_PATH"
+    else
+      rm -f "$CRASH_LOG_TRIGGER_PATH"
+    fi
+    rm -f "$TELEMETRY_PATH" "$COMMAND_PATH" "$AUTOLOAD_DEBUG_PATH" "$TRACE_CONTINUE_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH" "$CRASH_LOG_SRC"
   } > "$ARTIFACT_DIR/setup.out" 2>&1
 }
 
@@ -718,6 +731,12 @@ stop_input_capture_ocr() {
 }
 
 launch_runtime() {
+  # Opt-in: let Wine log unhandled SEH exceptions (with backtraces) to the proton
+  # output, complementing the in-DLL crash logger. Inherited by the direct-mode
+  # game process; harmless otherwise.
+  if [[ "${RUNTIME_SEH_TRACE:-0}" == "1" ]]; then
+    export WINEDEBUG="+seh,+tid"
+  fi
   case "$LAUNCH_MODE" in
     direct)
       log_timeline "launch" "eldenring.exe via Proton"

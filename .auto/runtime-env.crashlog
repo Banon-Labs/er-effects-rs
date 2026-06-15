@@ -1,0 +1,19 @@
+# Crash-diagnostic run: reproduce the ~12-19s self-exit (active continue-drive
+# config) WITH the in-DLL crash/exit logger + Wine SEH tracing enabled, so we
+# capture which code requests the process exit (game vs the Arxan/Steam-DRM stub
+# at RVA ~0xc0e000) and any access violation.
+LAUNCH_MODE=direct
+RUNTIME_MAX_NUDGES=0
+RESTORE_RUNTIME_SAVES=1
+RUNTIME_CAPTURE_INPUT_OCR=0
+ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=0
+ER_EFFECTS_CONTINUE_DRIVE=1
+ER_EFFECTS_CRASH_LOG=1
+RUNTIME_SEH_TRACE=1
+ER_EFFECTS_AUTOLOAD_SLOT=9
+ER_EFFECTS_AUTOLOAD_METHOD=direct_menu_load
+ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP=false
+RUNTIME_WATCH_TARGET=player-load
+RUNTIME_AUTOLOAD_ATTEMPT_BUDGET=100000
+RUNTIME_POST_REQUEST_TICK_BUDGET=600
+RUNTIME_SPAWN_POLL_BUDGET=32768
