@@ -2,11 +2,11 @@
 # dispatcher 0x140afb880 with GameMan b73 each frame so it begins
 # current_slot_load and deserializes the REAL slot character (GameMan+0x10=1),
 # building the world singletons. Never sets the force flag 0x143d856a0.
-# steam = via Steam/EAC. direct (eldenring.exe) bypasses EAC but our dinput8
-# LazyLoader does not inject under it (game exits before loading), so steam is
-# the only working injection path. If steam mode stalls the game ~110 ticks,
-# the wine prefix/EAC state is degraded -- reboot to clear it.
-LAUNCH_MODE=steam
+# direct (eldenring.exe + steam_appid.txt) injects our DLL AND bypasses EAC.
+# Both steam(EAC) and direct(no-EAC) exit ~19s wall-clock at the title during
+# Vulkan shader/pipeline compilation -- so the early exit is NOT EAC. Root cause
+# still under investigation (shader-compile crash vs our per-frame code).
+LAUNCH_MODE=direct
 RUNTIME_MAX_NUDGES=0
 RESTORE_RUNTIME_SAVES=1
 RUNTIME_CAPTURE_INPUT_OCR=0
