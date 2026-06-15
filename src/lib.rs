@@ -301,6 +301,15 @@ const KEYCODE_MAX_VALID: u16 = 0x47;
 const KEYCODE_SCAN_START: u16 = 0;
 const KEYCODE_SCAN_STEP: u16 = 1;
 const KEYSTATE_PRESSED_TRIGGERED: u8 = 3;
+/// Logical input-event array on the inputmgr (inputmgr+0xdc, i32 per event id,
+/// ids 0..=0x15e). The leaf input node detects a press via this layer (then
+/// mirrors into the keystate bitmap), so injecting here is what actually accepts.
+const INPUTMGR_EVENT_ARRAY_OFFSET: usize = 0xdc;
+const EVENT_ARRAY_MAX_ID: u32 = 0x15e;
+const EVENT_SCAN_START: u32 = 0;
+const EVENT_SCAN_STEP: u32 = 1;
+const EVENT_WORD_SIZE: usize = 4;
+const EVENT_PRESSED_VALUE: i32 = 1;
 const TITLE_ACCEPT_LATCH_RVA: usize = 0x3d856a0;
 /// Generous upper bound on the game image span, to sanity-check that a candidate
 /// object's vtable points into the module before dereferencing deeper.
@@ -2488,6 +2497,15 @@ unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
                 let slot = input_mgr + INPUTMGR_KEYSTATE_BITMAP_OFFSET + kc as usize;
                 unsafe { *(slot as *mut u8) |= KEYSTATE_PRESSED_TRIGGERED };
                 kc += KEYCODE_SCAN_STEP;
+            }
+            // The leaf detects a press at the event layer, then mirrors to the
+            // keystate bitmap -- so also set the logical event array.
+            let mut id = EVENT_SCAN_START;
+            while id <= EVENT_ARRAY_MAX_ID {
+                let slot =
+                    input_mgr + INPUTMGR_EVENT_ARRAY_OFFSET + (id as usize) * EVENT_WORD_SIZE;
+                unsafe { *(slot as *mut i32) = EVENT_PRESSED_VALUE };
+                id += EVENT_SCAN_STEP;
             }
         }
         if log_now {
