@@ -1558,16 +1558,20 @@ unsafe fn call_force_play_game_once(module_base: usize, slot: i32, tick: u64) ->
         // Already drove the state once; keep observing transitions (logged above).
         // While parked in GameStepWait, periodically report the load job's pending
         // field so we can see whether anything drains it.
-        if state_before == TITLE_STEP_GAME_STEP_WAIT
-            && tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64
-        {
+        if state_before == TITLE_STEP_GAME_STEP_WAIT {
             let job = unsafe { *(owner.add(TITLE_OWNER_JOB_OFFSET) as *const usize) };
             if job != TITLE_OWNER_SCAN_START_ADDRESS {
                 let pending =
                     unsafe { *((job + TITLE_OWNER_JOB_PENDING_OFFSET) as *const i32) };
-                append_autoload_debug(format_args!(
-                    "force_play_game: gamestepwait job={job:#x} job_d8={pending} tick={tick}"
-                ));
+                if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+                    append_autoload_debug(format_args!(
+                        "force_play_game: gamestepwait job={job:#x} job_d8={pending} tick={tick}"
+                    ));
+                }
+                // NOTE: calling the menu-task update wrapper (0x82a0f0) directly on
+                // this job crashed the game (autoload-live-playgame-v10) -- the job
+                // is not the right `this` / reentrancy. Pumping must go through the
+                // game's own task runner; do not force-orphan the job.
             }
         }
         return true;
