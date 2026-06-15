@@ -182,6 +182,19 @@ def main() -> int:
             'git commit -m "guard ignores quotes; e.g. python3 -c \\"a; b\\" works"',
             True,
         ),
+        # Heredoc bodies are interpreter input; their semicolons are not shell
+        # separators (e.g. python statement separators inside python3 - <<'PY').
+        PolicyCase(
+            "allow-heredoc-body-with-semicolons",
+            "python3 - <<'PY'\nimport os; print(os.getpid()); print(1)\nPY",
+            True,
+        ),
+        PolicyCase(
+            "deny-real-split-before-heredoc",
+            "echo one; python3 - <<'PY'\nx = 1\nPY",
+            False,
+            "Prefer splitting up each command split by ; into its own file",
+        ),
     ]
     for case in cases:
         run_case(case)

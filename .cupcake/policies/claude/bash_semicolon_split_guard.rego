@@ -57,11 +57,18 @@ semicolon_split_detected if {
 	contains(strip_single_quoted(part), ";")
 }
 
+# Heredoc bodies (python3 - <<'PY' ... PY, cat <<EOF ... EOF) are interpreter
+# input, not shell, so their semicolons are never command separators. Scan only
+# the text BEFORE the first heredoc opener; a real "cmd1; cmd2 <<EOF" still has
+# its separator in that prefix. split() returns the whole command unchanged when
+# there is no "<<".
+heredoc_trimmed := split(command, "<<")[0]
+
 # Backslash-escaped quotes (\" and \') are literal characters, not span
 # boundaries, but split() cannot see the escaping and would miscount them. Drop
 # them first so the even/odd segment alternation stays aligned. replace() (unlike
 # regex) is available in Cupcake's WASM runtime.
-escapes_stripped := replace(replace(command, `\"`, ""), `\'`, "")
+escapes_stripped := replace(replace(heredoc_trimmed, `\"`, ""), `\'`, "")
 
 # Segments of the command that fall outside double-quoted spans.
 double_quote_parts := split(escapes_stripped, `"`)
