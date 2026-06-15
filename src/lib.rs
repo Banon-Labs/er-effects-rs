@@ -198,15 +198,19 @@ const FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET: usize = 0xac0;
 /// slot (`+0xac0`) and the force flag `0x143d856a0`, then the save-manager
 /// per-frame update `0x14067f5d0` performs it.
 const GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET: usize = 0xb80;
-/// Outer SimpleTitleStep object identification + IngameInit drive (recipe B).
-/// The outer step object holds the state table at +0x10 and the InGameStep at
-/// +0xc0; IngameInit (outer state-2 handler) primes the world subsystems then
-/// SetupLoad-submits the load -- flagless (never touches 0x143d856a0).
-const SIMPLE_TITLE_STEP_TABLE_RVA: usize = 0x3d71340;
-const OUTER_STEP_TABLE_PTR_OFFSET: usize = 0x10;
+/// IngameInit drive (recipe B, flagless). The SimpleTitleStep container that
+/// bears IngameInit is compiled-in but NEVER instantiated in this build, so we
+/// call IngameInit (its state-2 handler) with a SYNTHETIC `this`: it only reads
+/// +0xc0 (the InGameStep) and +0x130 (the map -- != -1 = continue, -1 = new
+/// game), primes the world subsystems, and SetupLoad-submits the load. Never
+/// touches the force flag 0x143d856a0. The map id is produced by the same parser
+/// (0x71fd60) over the default map string the new-game path uses.
 const OUTER_STEP_INGAMESTEP_OFFSET: usize = 0xc0;
 const OUTER_STEP_MAP_OVERRIDE_130_OFFSET: usize = 0x130;
 const INGAMEINIT_HANDLER_RVA: usize = 0xb0a1f0;
+const INGAMEINIT_MAP_PARSER_RVA: usize = 0x71fd60;
+const DEFAULT_MAP_STRING_RVA: usize = 0x2b62c70;
+const INGAMEINIT_SYNTHETIC_QWORDS: usize = 0x40;
 const FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET: usize = 0x14;
 const FORCE_PLAY_GAME_GM_PAIR_GATE_B28_OFFSET: usize = 0xb28;
 const FORCE_PLAY_GAME_GM_VALIDATE_12D_OFFSET: usize = 0x12d;
@@ -310,8 +314,7 @@ static INGAMESTEP_UNPIN_DONE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 static NATIVE_AUTOLOAD_ARMED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-static OUTER_STEP_PTR: AtomicUsize = AtomicUsize::new(0);
-static OUTER_STEP_SCAN_COUNTDOWN: AtomicUsize = AtomicUsize::new(0);
+static SYNTHETIC_OUTER_PTR: AtomicUsize = AtomicUsize::new(0);
 static INGAMEINIT_DRIVE_DONE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 static TITLE_OWNER_SCAN_COUNTDOWN: AtomicUsize = AtomicUsize::new(0);
@@ -1860,92 +1863,6 @@ unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u64) {
     ));
 }
 
-/// Scans committed memory for the outer SimpleTitleStep object: the FD4 step
-/// instance whose state-table pointer (`+0x10`) is the SimpleTitleStep table and
-/// whose `+0xc0` is the known InGameStep. Cached after first match. `unsafe`:
-/// raw cross-process-style pointer probing via VirtualQuery.
-unsafe fn find_outer_simple_title_step(module_base: usize, ingame_step: usize) -> Option<*mut u8> {
-    let cached = OUTER_STEP_PTR.load(Ordering::SeqCst) as *mut u8;
-    if !cached.is_null() {
-        return Some(cached);
-    }
-    // Throttle the full-memory scan so an unmatched outer does not run a
-    // VirtualQuery walk every frame and cripple FPS (same guard as title_owner).
-    let countdown = OUTER_STEP_SCAN_COUNTDOWN.load(Ordering::SeqCst);
-    if countdown > TITLE_OWNER_SCAN_COUNTDOWN_READY {
-        OUTER_STEP_SCAN_COUNTDOWN.fetch_sub(TITLE_OWNER_SCAN_COUNTDOWN_STEP, Ordering::SeqCst);
-        return None;
-    }
-    OUTER_STEP_SCAN_COUNTDOWN.store(TITLE_OWNER_SCAN_CALL_INTERVAL, Ordering::SeqCst);
-    let table_base = module_base.checked_add(SIMPLE_TITLE_STEP_TABLE_RVA)?;
-    let probe_span = OUTER_STEP_INGAMESTEP_OFFSET + std::mem::size_of::<usize>();
-    // Diagnostic: count objects whose +0x10 == the SimpleTitleStep table and
-    // record the first one's +0xc0 so we can tell whether the table signature is
-    // right (table_matches>0) and whether the InGameStep offset (+0xc0) matches.
-    let mut table_matches: usize = 0;
-    let mut first_match_cursor: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    let mut first_match_c0: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    let mut address = TITLE_OWNER_SCAN_START_ADDRESS;
-    while address < TITLE_OWNER_SCAN_MAX_ADDRESS {
-        let mut info = MEMORY_BASIC_INFORMATION::default();
-        let queried = unsafe {
-            VirtualQuery(
-                Some(address as *const c_void),
-                &mut info,
-                std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
-            )
-        };
-        if queried == TITLE_OWNER_QUERY_FAILED_BYTES {
-            break;
-        }
-        let base = info.BaseAddress as usize;
-        let size = info.RegionSize;
-        let next = base.saturating_add(size);
-        if info.State.0 == MEM_COMMIT_NUMERIC
-            && info.Protect.0 & (PAGE_NOACCESS_NUMERIC | PAGE_GUARD_NUMERIC)
-                == PAGE_PROTECTION_NO_FLAGS
-            && size >= probe_span
-        {
-            let end = next.saturating_sub(probe_span);
-            let mut cursor = base;
-            while cursor <= end {
-                let table_ptr =
-                    unsafe { *((cursor + OUTER_STEP_TABLE_PTR_OFFSET) as *const usize) };
-                if table_ptr == table_base {
-                    let ingame =
-                        unsafe { *((cursor + OUTER_STEP_INGAMESTEP_OFFSET) as *const usize) };
-                    if table_matches == TITLE_OWNER_SCAN_START_ADDRESS {
-                        first_match_cursor = cursor;
-                        first_match_c0 = ingame;
-                    }
-                    table_matches += TITLE_OWNER_SCAN_COUNTDOWN_STEP;
-                    if ingame == ingame_step {
-                        OUTER_STEP_PTR.store(cursor, Ordering::SeqCst);
-                        let outer_state =
-                            unsafe { *((cursor + TITLE_OWNER_STATE_OFFSET) as *const i32) };
-                        let map130 = unsafe {
-                            *((cursor + OUTER_STEP_MAP_OVERRIDE_130_OFFSET) as *const i32)
-                        };
-                        append_autoload_debug(format_args!(
-                            "ingameinit_drive: located outer={cursor:#x} state={outer_state} map130={map130} ingame={ingame:#x}"
-                        ));
-                        return Some(cursor as *mut u8);
-                    }
-                }
-                cursor = cursor.saturating_add(TITLE_OWNER_SCAN_ALIGNMENT);
-            }
-        }
-        if next <= address {
-            break;
-        }
-        address = next;
-    }
-    append_autoload_debug(format_args!(
-        "find_outer: no match (table_matches={table_matches} first_match={first_match_cursor:#x} first_c0={first_match_c0:#x} want_ingame={ingame_step:#x})"
-    ));
-    None
-}
-
 fn ingameinit_drive_enabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_INGAMEINIT_DRIVE").as_deref(),
@@ -1980,31 +1897,44 @@ unsafe fn ingameinit_drive_tick(module_base: usize, slot: i32, tick: u64, task_d
         }
         return;
     }
-    let Some(outer) = (unsafe { find_outer_simple_title_step(module_base, ingame) }) else {
-        if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
-            append_autoload_debug(format_args!(
-                "ingameinit_drive: outer NOT located (ingame={ingame:#x} owner={owner:p} state={owner_state}) tick={tick}"
-            ));
-        }
-        return;
-    };
+    let _ = owner_state;
     if !INGAMEINIT_DRIVE_DONE.swap(true, Ordering::SeqCst) {
-        // Arm the staging slot this frame (the descriptor builder reads it), then
-        // run the canonical priming+submit handler once.
+        // Arm the staging slot this frame (the descriptor builder 0x140aea590
+        // reads GameMan+0xac0).
         let set_save_slot: unsafe extern "system" fn(i32) =
             unsafe { std::mem::transmute(module_base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
         unsafe { set_save_slot(slot) };
+        // Compute a valid (non -1) map id so IngameInit takes the continue
+        // variant (variant 2 / -1 is the new-game path). Parse the same default
+        // map string the new-game path uses.
+        let map_parser: unsafe extern "system" fn(*const c_void) -> i32 =
+            unsafe { std::mem::transmute(module_base + INGAMEINIT_MAP_PARSER_RVA) };
+        let map_id = unsafe { map_parser((module_base + DEFAULT_MAP_STRING_RVA) as *const c_void) };
+        // The SimpleTitleStep container is never instantiated in this build, so we
+        // call IngameInit with a SYNTHETIC `this`: it only reads +0xc0 (InGameStep)
+        // and +0x130 (map), and its tail 0x140b0a980 inc's +0x4c (safe while
+        // +0x48 <= 6). A persistent zeroed buffer satisfies all of that.
+        let mut synth_ptr = SYNTHETIC_OUTER_PTR.load(Ordering::SeqCst);
+        if synth_ptr == TITLE_OWNER_SCAN_START_ADDRESS {
+            let buf = vec![0u64; INGAMEINIT_SYNTHETIC_QWORDS].into_boxed_slice();
+            synth_ptr = Box::leak(buf).as_mut_ptr() as usize;
+            SYNTHETIC_OUTER_PTR.store(synth_ptr, Ordering::SeqCst);
+        }
+        let synth = synth_ptr as *mut u8;
+        unsafe {
+            *(synth.add(OUTER_STEP_INGAMESTEP_OFFSET) as *mut usize) = ingame;
+            *(synth.add(OUTER_STEP_MAP_OVERRIDE_130_OFFSET) as *mut i32) = map_id;
+        }
         let ingame_init: unsafe extern "system" fn(*mut u8, *const FD4TaskData) -> usize =
             unsafe { std::mem::transmute(module_base + INGAMEINIT_HANDLER_RVA) };
-        let map130 = unsafe { *(outer.add(OUTER_STEP_MAP_OVERRIDE_130_OFFSET) as *const i32) };
         append_autoload_debug(format_args!(
-            "ingameinit_drive: calling IngameInit outer={outer:p} slot={slot} map130={map130}"
+            "ingameinit_drive: calling IngameInit synth={synth:p} slot={slot} map_id={map_id} ingame={ingame:#x}"
         ));
-        let _ = unsafe { ingame_init(outer, task_data as *const FD4TaskData) };
+        let _ = unsafe { ingame_init(synth, task_data as *const FD4TaskData) };
         let ingame_d8 = unsafe { *((ingame + TITLE_OWNER_JOB_PENDING_OFFSET) as *const i32) };
+        let ingame_cur = unsafe { *((ingame + INGAMESTEP_STEP_STATE_OFFSET) as *const i32) };
         append_autoload_debug(format_args!(
-            "ingameinit_drive: IngameInit returned, ingame_d8={ingame_d8} outer_state={}",
-            unsafe { *(outer.add(TITLE_OWNER_STATE_OFFSET) as *const i32) }
+            "ingameinit_drive: IngameInit returned ingame_d8={ingame_d8} ingame_cur={ingame_cur}"
         ));
         return;
     }
