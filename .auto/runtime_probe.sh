@@ -56,6 +56,7 @@ INGAMESTEP_UNPIN_PATH="${INGAMESTEP_UNPIN_PATH:-$GAME_DIR/er-effects-ingamestep-
 NATIVE_AUTOLOAD_PATH="${NATIVE_AUTOLOAD_PATH:-$GAME_DIR/er-effects-native-autoload.txt}"
 INGAMEINIT_DRIVE_PATH="${INGAMEINIT_DRIVE_PATH:-$GAME_DIR/er-effects-ingameinit-drive.txt}"
 CONTINUE_DRIVE_PATH="${CONTINUE_DRIVE_PATH:-$GAME_DIR/er-effects-continue-drive.txt}"
+ARM_PROBE_PATH="${ARM_PROBE_PATH:-$GAME_DIR/er-effects-arm-probe.txt}"
 CRASH_LOG_TRIGGER_PATH="${CRASH_LOG_TRIGGER_PATH:-$GAME_DIR/er-effects-crash-log.txt}"
 # The DLL's default crash-log location (when ER_EFFECTS_CRASH_LOG_PATH is unset);
 # copied into the artifact dir after the run.
@@ -559,6 +560,9 @@ cleanup_runtime() {
   if [[ "${ER_EFFECTS_CONTINUE_DRIVE:-0}" == "1" ]]; then
     rm -f "$CONTINUE_DRIVE_PATH"
   fi
+  if [[ "${ER_EFFECTS_ARM_PROBE:-0}" == "1" ]]; then
+    rm -f "$ARM_PROBE_PATH"
+  fi
   if [[ "${ER_EFFECTS_CRASH_LOG:-0}" == "1" ]]; then
     rm -f "$CRASH_LOG_TRIGGER_PATH"
   fi
@@ -705,6 +709,11 @@ PY
       cp -f "$CONTINUE_DRIVE_PATH" "$ARTIFACT_DIR/continue-drive-request.txt"
     else
       rm -f "$CONTINUE_DRIVE_PATH"
+    fi
+    if [[ "${ER_EFFECTS_ARM_PROBE:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$ARM_PROBE_PATH"
+    else
+      rm -f "$ARM_PROBE_PATH"
     fi
     if [[ "${ER_EFFECTS_CRASH_LOG:-0}" == "1" ]]; then
       printf 'enabled=1\n' > "$CRASH_LOG_TRIGGER_PATH"

@@ -243,6 +243,25 @@ const FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET: usize = 0xac0;
 /// slot (`+0xac0`) and the force flag `0x143d856a0`, then the save-manager
 /// per-frame update `0x14067f5d0` performs it.
 const GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET: usize = 0xb80;
+/// Read-only autoload-arm precondition probe. The native save-mgr update
+/// 0x14067f5d0 arms autoload (sets GameMan+0xb72=1 -> load) only when its gates
+/// pass; the one runtime unknown is whether the slot-record container
+/// [slotmgr+0x8] is populated at the pre-bootstrap title. These RVAs/offsets let
+/// us read those preconditions without touching state.
+const SLOT_MANAGER_RVA: usize = 0x3d5df38;
+const SLOT_MANAGER_DATA_OFFSET: usize = 0x8;
+const SLOT_MANAGER_CONTAINER_OFFSET: usize = 0x78;
+const CSFEMAN_SINGLETON_RVA: usize = 0x3d6b880;
+const TITLE_INPUT_MANAGER_RVA: usize = 0x3d6b7b0;
+const GAME_MAN_ARM_FLAG_B72_OFFSET: usize = 0xb72;
+const GAME_MAN_FLAG_B73_PROBE_OFFSET: usize = 0xb73;
+const GAME_MAN_FLAG_B75_PROBE_OFFSET: usize = 0xb75;
+const GAME_MAN_REQUESTED_SLOT_B78_OFFSET: usize = 0xb78;
+const GAME_MAN_FLAG_BC4_OFFSET: usize = 0xbc4;
+const ARM_PROBE_MIN_TICK: u64 = 60;
+const ARM_PROBE_TICK_INTERVAL: u64 = 30;
+/// Sentinel logged when GameMan is null so the field could not be read.
+const ARM_PROBE_FIELD_ABSENT: i64 = -1;
 /// IngameInit drive (recipe B, flagless). The SimpleTitleStep container that
 /// bears IngameInit is compiled-in but NEVER instantiated in this build, so we
 /// call IngameInit (its state-2 handler) with a SYNTHETIC `this`: it only reads
@@ -1038,6 +1057,15 @@ fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     // per-frame file I/O stalls the title" (lite survives) from
                     // "any per-frame work trips a budget" (lite still exits).
                     if lite_mode() {
+                        return;
+                    }
+                    // Read-only: log the native autoload-arm preconditions
+                    // (especially [slotmgr+0x8]) to decide the zero-input path.
+                    if arm_probe_enabled() {
+                        if let Ok(base) = game_module_base() {
+                            unsafe { arm_precondition_probe(base, state.game_task_ticks) };
+                        }
+                        write_telemetry_throttled(&mut state, false);
                         return;
                     }
                     // Recipe Option 1 (flagless): drive the genuine offline
@@ -2255,6 +2283,66 @@ fn continue_drive_enabled() -> bool {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("er-effects-continue-drive.txt")
         .exists()
+}
+
+fn arm_probe_enabled() -> bool {
+    matches!(std::env::var("ER_EFFECTS_ARM_PROBE").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-arm-probe.txt")
+            .exists()
+}
+
+/// Read-only probe of the native autoload-arm preconditions at the title. The
+/// decisive unknown is `[slotmgr+0x8]` (the loaded slot-record container): the
+/// native save-mgr update arms autoload only when it is populated. Logs the
+/// GameMan flow flags, slot manager + its data/container pointers, and whether
+/// CSFeMan / the input manager exist yet. Touches no state.
+unsafe fn arm_precondition_probe(module_base: usize, tick: u64) {
+    if tick < ARM_PROBE_MIN_TICK
+        || tick % ARM_PROBE_TICK_INTERVAL != TITLE_OWNER_SCAN_START_ADDRESS as u64
+    {
+        return;
+    }
+    let read_ptr = |rva: usize| unsafe { *((module_base + rva) as *const usize) };
+    let game_man = read_ptr(FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA);
+    let slot_mgr = read_ptr(SLOT_MANAGER_RVA);
+    let csfeman = read_ptr(CSFEMAN_SINGLETON_RVA);
+    let input_mgr = read_ptr(TITLE_INPUT_MANAGER_RVA);
+    let latch = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let gm_byte = |off: usize| {
+        if game_man != null {
+            i64::from(unsafe { *((game_man + off) as *const u8) })
+        } else {
+            ARM_PROBE_FIELD_ABSENT
+        }
+    };
+    let gm_i32 = |off: usize| {
+        if game_man != null {
+            i64::from(unsafe { *((game_man + off) as *const i32) })
+        } else {
+            ARM_PROBE_FIELD_ABSENT
+        }
+    };
+    let (slot_data, slot_container) = if slot_mgr != null {
+        (
+            unsafe { *((slot_mgr + SLOT_MANAGER_DATA_OFFSET) as *const usize) },
+            unsafe { *((slot_mgr + SLOT_MANAGER_CONTAINER_OFFSET) as *const usize) },
+        )
+    } else {
+        (null, null)
+    };
+    append_autoload_debug(format_args!(
+        "arm_probe tick={tick} gm=0x{game_man:x} slotmgr=0x{slot_mgr:x} slotmgr+8=0x{slot_data:x} slotmgr+78=0x{slot_container:x} csfeman=0x{csfeman:x} input_mgr=0x{input_mgr:x} latch={latch} b80={} ac0={} b72={} b73={} b75={} b78={} bc4={}",
+        gm_byte(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET),
+        gm_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET),
+        gm_byte(GAME_MAN_ARM_FLAG_B72_OFFSET),
+        gm_byte(GAME_MAN_FLAG_B73_PROBE_OFFSET),
+        gm_byte(GAME_MAN_FLAG_B75_PROBE_OFFSET),
+        gm_i32(GAME_MAN_REQUESTED_SLOT_B78_OFFSET),
+        gm_byte(GAME_MAN_FLAG_BC4_OFFSET),
+    ));
 }
 
 /// Recipe Option 1 (genuine offline continue, flagless): drive the MoveMapList
