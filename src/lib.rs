@@ -198,6 +198,15 @@ const FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET: usize = 0xac0;
 /// slot (`+0xac0`) and the force flag `0x143d856a0`, then the save-manager
 /// per-frame update `0x14067f5d0` performs it.
 const GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET: usize = 0xb80;
+/// Outer SimpleTitleStep object identification + IngameInit drive (recipe B).
+/// The outer step object holds the state table at +0x10 and the InGameStep at
+/// +0xc0; IngameInit (outer state-2 handler) primes the world subsystems then
+/// SetupLoad-submits the load -- flagless (never touches 0x143d856a0).
+const SIMPLE_TITLE_STEP_TABLE_RVA: usize = 0x3d71340;
+const OUTER_STEP_TABLE_PTR_OFFSET: usize = 0x10;
+const OUTER_STEP_INGAMESTEP_OFFSET: usize = 0xc0;
+const OUTER_STEP_MAP_OVERRIDE_130_OFFSET: usize = 0x130;
+const INGAMEINIT_HANDLER_RVA: usize = 0xb0a1f0;
 const FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET: usize = 0x14;
 const FORCE_PLAY_GAME_GM_PAIR_GATE_B28_OFFSET: usize = 0xb28;
 const FORCE_PLAY_GAME_GM_VALIDATE_12D_OFFSET: usize = 0x12d;
@@ -300,6 +309,10 @@ static INGAMESTEP_PUMP_LAST_NEXT: std::sync::atomic::AtomicI32 =
 static INGAMESTEP_UNPIN_DONE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 static NATIVE_AUTOLOAD_ARMED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static OUTER_STEP_PTR: AtomicUsize = AtomicUsize::new(0);
+static OUTER_STEP_SCAN_COUNTDOWN: AtomicUsize = AtomicUsize::new(0);
+static INGAMEINIT_DRIVE_DONE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 static TITLE_OWNER_SCAN_COUNTDOWN: AtomicUsize = AtomicUsize::new(0);
 static SAFE_INPUT_CONFIRM_PULSE_SEQ: AtomicUsize = AtomicUsize::new(0);
@@ -931,6 +944,19 @@ fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
                     let mut state = state_or_return(&state);
                     state.game_task_ticks += GAME_TASK_TICK_INCREMENT;
+                    // Recipe B (flagless): drive the outer IngameInit once + pump
+                    // the InGameStep. Self-contained -- skips the other autoload
+                    // branches to avoid double-submit. Needs the live FD4TaskData.
+                    if ingameinit_drive_enabled() {
+                        if let (Ok(base), Some(slot)) = (game_module_base(), state.autoload.slot())
+                        {
+                            unsafe {
+                                ingameinit_drive_tick(base, slot, state.game_task_ticks, task_data)
+                            };
+                        }
+                        write_telemetry_throttled(&mut state, false);
+                        return;
+                    }
                     process_safe_input_request(&mut state);
                     process_autoload_request(&mut state);
                     // Direct-drive the orphaned InGameStep load once force_play_game
@@ -1832,6 +1858,152 @@ unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u64) {
     append_autoload_debug(format_args!(
         "native_autoload: armed slot={slot_after} force_flag=1 b80={load_in_progress} tick={tick}"
     ));
+}
+
+/// Scans committed memory for the outer SimpleTitleStep object: the FD4 step
+/// instance whose state-table pointer (`+0x10`) is the SimpleTitleStep table and
+/// whose `+0xc0` is the known InGameStep. Cached after first match. `unsafe`:
+/// raw cross-process-style pointer probing via VirtualQuery.
+unsafe fn find_outer_simple_title_step(module_base: usize, ingame_step: usize) -> Option<*mut u8> {
+    let cached = OUTER_STEP_PTR.load(Ordering::SeqCst) as *mut u8;
+    if !cached.is_null() {
+        return Some(cached);
+    }
+    // Throttle the full-memory scan so an unmatched outer does not run a
+    // VirtualQuery walk every frame and cripple FPS (same guard as title_owner).
+    let countdown = OUTER_STEP_SCAN_COUNTDOWN.load(Ordering::SeqCst);
+    if countdown > TITLE_OWNER_SCAN_COUNTDOWN_READY {
+        OUTER_STEP_SCAN_COUNTDOWN.fetch_sub(TITLE_OWNER_SCAN_COUNTDOWN_STEP, Ordering::SeqCst);
+        return None;
+    }
+    OUTER_STEP_SCAN_COUNTDOWN.store(TITLE_OWNER_SCAN_CALL_INTERVAL, Ordering::SeqCst);
+    let table_base = module_base.checked_add(SIMPLE_TITLE_STEP_TABLE_RVA)?;
+    let probe_span = OUTER_STEP_INGAMESTEP_OFFSET + std::mem::size_of::<usize>();
+    let mut address = TITLE_OWNER_SCAN_START_ADDRESS;
+    while address < TITLE_OWNER_SCAN_MAX_ADDRESS {
+        let mut info = MEMORY_BASIC_INFORMATION::default();
+        let queried = unsafe {
+            VirtualQuery(
+                Some(address as *const c_void),
+                &mut info,
+                std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+            )
+        };
+        if queried == TITLE_OWNER_QUERY_FAILED_BYTES {
+            break;
+        }
+        let base = info.BaseAddress as usize;
+        let size = info.RegionSize;
+        let next = base.saturating_add(size);
+        if info.State.0 == MEM_COMMIT_NUMERIC
+            && info.Protect.0 & (PAGE_NOACCESS_NUMERIC | PAGE_GUARD_NUMERIC)
+                == PAGE_PROTECTION_NO_FLAGS
+            && size >= probe_span
+        {
+            let end = next.saturating_sub(probe_span);
+            let mut cursor = base;
+            while cursor <= end {
+                let table_ptr =
+                    unsafe { *((cursor + OUTER_STEP_TABLE_PTR_OFFSET) as *const usize) };
+                if table_ptr == table_base {
+                    let ingame =
+                        unsafe { *((cursor + OUTER_STEP_INGAMESTEP_OFFSET) as *const usize) };
+                    if ingame == ingame_step {
+                        OUTER_STEP_PTR.store(cursor, Ordering::SeqCst);
+                        let outer_state =
+                            unsafe { *((cursor + TITLE_OWNER_STATE_OFFSET) as *const i32) };
+                        let map130 = unsafe {
+                            *((cursor + OUTER_STEP_MAP_OVERRIDE_130_OFFSET) as *const i32)
+                        };
+                        append_autoload_debug(format_args!(
+                            "ingameinit_drive: located outer={cursor:#x} state={outer_state} map130={map130} ingame={ingame:#x}"
+                        ));
+                        return Some(cursor as *mut u8);
+                    }
+                }
+                cursor = cursor.saturating_add(TITLE_OWNER_SCAN_ALIGNMENT);
+            }
+        }
+        if next <= address {
+            break;
+        }
+        address = next;
+    }
+    None
+}
+
+fn ingameinit_drive_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_INGAMEINIT_DRIVE").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-ingameinit-drive.txt")
+        .exists()
+}
+
+/// Recipe B (flagless): drive the outer SimpleTitleStep IngameInit once to prime
+/// the world subsystems and submit the load, then pump the InGameStep each frame
+/// to completion. Never touches the force flag 0x143d856a0. Replaces
+/// force_play_game (which double-submits). Locates the outer object via scan,
+/// arms the staging slot the same frame (IngameInit's descriptor builder reads
+/// GameMan+0xac0), calls IngameInit(outer, &FD4TaskData) once, then ticks the
+/// InGameStep pump and observes the load cascade.
+unsafe fn ingameinit_drive_tick(module_base: usize, slot: i32, tick: u64, task_data: &FD4TaskData) {
+    if tick < TITLE_NATIVE_JOB_MIN_TICK {
+        return;
+    }
+    let Some(owner) = (unsafe { title_owner(module_base) }) else {
+        return;
+    };
+    let ingame = unsafe { *(owner.add(TITLE_OWNER_JOB_OFFSET) as *const usize) };
+    if ingame == TITLE_OWNER_SCAN_START_ADDRESS {
+        return;
+    }
+    let Some(outer) = (unsafe { find_outer_simple_title_step(module_base, ingame) }) else {
+        return;
+    };
+    if !INGAMEINIT_DRIVE_DONE.swap(true, Ordering::SeqCst) {
+        // Arm the staging slot this frame (the descriptor builder reads it), then
+        // run the canonical priming+submit handler once.
+        let set_save_slot: unsafe extern "system" fn(i32) =
+            unsafe { std::mem::transmute(module_base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+        unsafe { set_save_slot(slot) };
+        let ingame_init: unsafe extern "system" fn(*mut u8, *const FD4TaskData) -> usize =
+            unsafe { std::mem::transmute(module_base + INGAMEINIT_HANDLER_RVA) };
+        let map130 = unsafe { *(outer.add(OUTER_STEP_MAP_OVERRIDE_130_OFFSET) as *const i32) };
+        append_autoload_debug(format_args!(
+            "ingameinit_drive: calling IngameInit outer={outer:p} slot={slot} map130={map130}"
+        ));
+        let _ = unsafe { ingame_init(outer, task_data as *const FD4TaskData) };
+        let ingame_d8 = unsafe { *((ingame + TITLE_OWNER_JOB_PENDING_OFFSET) as *const i32) };
+        append_autoload_debug(format_args!(
+            "ingameinit_drive: IngameInit returned, ingame_d8={ingame_d8} outer_state={}",
+            unsafe { *(outer.add(TITLE_OWNER_STATE_OFFSET) as *const i32) }
+        ));
+        return;
+    }
+    // After priming+submit: pump the InGameStep each frame so step 7 observes the
+    // (now primed) stream reach resident and sets d8=2 -> load completes.
+    let ingame_ptr = ingame as *mut u8;
+    let cur = unsafe { *(ingame_ptr.add(INGAMESTEP_STEP_STATE_OFFSET) as *const i32) };
+    let d8 = unsafe { *(ingame_ptr.add(TITLE_OWNER_JOB_PENDING_OFFSET) as *const i32) };
+    let last_next = INGAMESTEP_PUMP_LAST_NEXT.swap(cur, Ordering::SeqCst);
+    let last_d8 = INGAMESTEP_PUMP_LAST_D8.swap(d8, Ordering::SeqCst);
+    if cur != last_next || d8 != last_d8 {
+        append_autoload_debug(format_args!(
+            "ingameinit_drive: pump cur={cur} d8={d8} ingame={ingame:#x}"
+        ));
+    }
+    if cur == INGAMESTEP_FINISHED_SENTINEL || d8 == INGAMESTEP_LOAD_DONE {
+        return;
+    }
+    let Ok(pump) = game_rva(STEP_PUMP_DRIVER_RVA) else {
+        return;
+    };
+    let pump: unsafe extern "system" fn(*mut u8, *const FD4TaskData) -> usize =
+        unsafe { std::mem::transmute(pump) };
+    let _ = unsafe { pump(ingame_ptr, task_data as *const FD4TaskData) };
 }
 
 fn ingamestep_unpin_enabled() -> bool {
