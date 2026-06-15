@@ -102,7 +102,11 @@ const DIRECT_INPUT_CREATE_DEVICE_VTBL_INDEX: usize = 3;
 const DIRECT_INPUT_DEVICE_GET_STATE_VTBL_INDEX: usize = 9;
 const HRESULT_SUCCESS_FLOOR: i32 = 0;
 const SAFE_INPUT_DIRECT_INPUT_WAIT_TICKS: u64 = 300;
-const TITLE_OWNER_VTABLE_RVA: usize = 0x02b63ba0;
+// The TitleStep ctor (0x140b0b1c0) stores this derived vtable to owner+0
+// (`lea rax,[0x142b63bb0]; mov [rdi],rax` at 0x140b0b1e5). The previous value
+// 0x02b63ba0 was off by 0x10 (the base/parent vtable), so the owner scan never
+// matched the live object.
+const TITLE_OWNER_VTABLE_RVA: usize = 0x02b63bb0;
 const TITLE_OWNER_STATE_OFFSET: usize = 0x4c;
 const TITLE_OWNER_SCAN_ALIGNMENT: usize = 8;
 const TITLE_OWNER_SCAN_MAX_ADDRESS: usize = 0x0000_8000_0000_0000;
@@ -161,6 +165,7 @@ const TITLE_NATIVE_JOB_DELTA_OFFSET_END: usize = 12;
 const TITLE_NATIVE_JOB_CALLED_VALUE: usize = 1;
 const TITLE_STEP_BEGIN_TITLE: i32 = 3;
 const TITLE_STEP_PLAY_GAME: i32 = 5;
+const TITLE_STEP_MENU_JOB_WAIT: i32 = 10;
 const FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA: usize = 0x0067a810;
 const MENU_TASK_NULL_STATE_QWORD: usize = 0;
 const MENU_TASK_NULL_PAYLOAD_PTR: usize = 0;
@@ -1502,13 +1507,16 @@ unsafe fn call_force_play_game_once(module_base: usize, slot: i32, tick: u64) ->
         return false;
     };
     let state_before = unsafe { *(owner.add(TITLE_OWNER_STATE_OFFSET) as *const i32) };
-    if state_before != TITLE_STEP_BEGIN_TITLE {
+    // The live title idles at STEP_MenuJobWait (the input-wait state shown as
+    // PRESS ANY BUTTON); STEP_BeginTitle is the alternate stable pre-load step.
+    // Both run after STEP_InitMenu built the menu object PlayGame needs.
+    if state_before != TITLE_STEP_BEGIN_TITLE && state_before != TITLE_STEP_MENU_JOB_WAIT {
         let count = TITLE_OWNER_TRACE_COUNT
             .fetch_add(TITLE_TRACE_SEQUENCE_INCREMENT, Ordering::SeqCst)
             + TITLE_TRACE_SEQUENCE_INCREMENT;
         if count <= TITLE_OWNER_TRACE_LIMIT {
             append_autoload_debug(format_args!(
-                "force_play_game: waiting for STEP_BeginTitle state_now={state_before} tick={tick}"
+                "force_play_game: waiting for stable title step state_now={state_before} tick={tick}"
             ));
         }
         return false;
