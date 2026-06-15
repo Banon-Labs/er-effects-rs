@@ -5,16 +5,16 @@ Reliably autoload Elden Ring / Seamless Co-op into the selected save slot on Lin
 
 ## Active Lane (2026-06-15): SimpleTitleStep selection injection
 
-Current best: north_star **700** — `force_play_game` drives the inner TitleStep to STEP_PlayGame (5) and the native submit->validate->pair chain writes the load value `GameMan+0x14=9` with zero input, but the enqueued load job (`owner+0x2e8`, `job+0xd8=1`) is never drained and the load never completes.
+Current best: north_star **740** — the pump's selection serialization is fully decoded (run 300, static, objdump). `force_play_game` (north_star 700) drives the inner TitleStep to STEP_PlayGame (5) and writes `GameMan+0x14=9` with zero input, but the enqueued load job is orphaned. Run 300 decoded the *coherent* path: the SimpleTitleStep MenuLoop pump `0xb0a5e0` parses a serialized SelectBot stream — source descriptor `0x142b5ea18` = UTF-16 `"CSEzSelectBot.MoveMapListStep"`, readers `0xe7b650`/`0xe7c780`/`0xe7c3e0` — each token normalized to a 12-char UTF-16 key `"M"+"DD_DD_DD_DD"`, validated/packed by `0x71fd60` (`0x71fd84` body: decimal-pair path packer, -1 if invalid) into the index stored at `owner+0x130`, then submitted via `0x7a9560(owner+0x128, node)`. Falsified shortcut: the pump's direct PlayGame trigger at `0xb0a78b` (`cmp byte [0x143d856a0],0`) is gated by global `0x143d856a0`, whose SOLE writer `0x140c8fe90` is a blocking load-driver that sets it *after* the load starts — so `0x143d856a0` is downstream of the load, and setting it (or calling `0x140c8fe90`) repeats the force-state dead-end. Recon tools: `.auto/recon_disasm.py` / `recon_refs.py` / `recon_strings.py`.
 
 Root cause (readonly RE, see bd `menu-task-manager-architecture`): the inner TitleStep (vtable `0x2b63bb0`, state at `+0x4c`) is driven by an OUTER manager **SimpleTitleStep** (global `0x143d71340`). The TitleStep update `0xb0bd60` only dispatches state handlers; it does NOT pump the load/menu jobs. The real driver is the **SimpleTitleStep MenuLoop pump `0xb0a5e0`**: it parses a serialized selection stream (readers `0xe7b650`/`0xe7c780`/`0xe7c3e0`) into `owner+0x130`, takes from queue `owner+0x128` (`title_queue_take 0x7a9560`), submits a menu task (`0x733f20`), and sets the title state via `title_queue_state_set 0xb0aa90` — gated on the parsed selection. The pump keeps the scheduler coherent and drains the load job. Force-writing the TitleStep state bypasses the pump, orphaning the job.
 
 Lane goal: reach `player_available` for slot 9 with `simulated_button_presses_total=0` by feeding the SimpleTitleStep selection queue/stream so the pump itself sets TitleStep->PlayGame and drains the load job. Do NOT write the TitleStep state field.
 
 Lane sub-ladder (use these finer north_star values so each RE/runtime step scores — prevents a premature plateau verdict while the lane is still productive):
-- 720: selection PRODUCER for `SimpleTitleStep+0x128` identified statically (function + arg/serialization signature).
-- 740: selection SERIALIZATION format decoded (the bytes/struct the stream readers `0xe7b650`/`0xe7c780`/`0xe7c3e0` consume).
-- 760: native selection injected at runtime and observed PARSED (`owner+0x130` set / `+0x128` non-empty) without forcing TitleStep state.
+- 720: selection PRODUCER for `SimpleTitleStep+0x128` identified statically (function + arg/serialization signature). **DONE (run 300, partial):** source descriptor + consumer decoded; the producer FUNCTION that fills the SelectBot registry is the remaining gap.
+- 740: selection SERIALIZATION format decoded (the bytes/struct the stream readers `0xe7b650`/`0xe7c780`/`0xe7c3e0` consume). **DONE (run 300):** 12-char UTF-16 `"M"+"DD_DD_DD_DD"` key → `0x71fd60` packed index → `owner+0x130`. Source = `"CSEzSelectBot.MoveMapListStep"` (`0x142b5ea18`).
+- 760: native selection injected at runtime and observed PARSED (`owner+0x130` set / `+0x128` non-empty) without forcing TitleStep state. **NEXT:** locate the SelectBot registry producer (who supplies keys keyed by `"CSEzSelectBot.MoveMapListStep"` to readers `0xe7b650/0xe7c780/0xe7c3e0`), determine the slot-9 PlayGame key value, then inject it.
 - 800: the pump CONSUMES the injected selection and advances TitleStep via `title_queue_state_set 0xb0aa90` (state set by the pump, not by us).
 - 850: the load job `owner+0x2e8.job+0xd8` drains to 0 (`native_request_consumed=1`).
 - 900: `map_load_67bc10` fires (`title_bootstrap_seen=1`) and `save_state` advances.
@@ -29,7 +29,7 @@ Lane-exhaustion criteria — do NOT declare this lane plateaued/dead until ALL a
 1. call the selection producer directly with a Continue/slot-9 payload;
 2. inject the serialized selection into the stream the pump reads;
 3. push an entry onto queue `+0x128` directly (bypassing the producer);
-4. set the pump's state-set gate condition directly;
+4. set the pump's state-set gate condition directly; **FALSIFIED (run 300):** the gate global `0x143d856a0` is downstream of the load (sole writer `0x140c8fe90` is a blocking load-driver) — setting it is the force-state dead-end. Do not retry.
 5. set `owner+0x130` (parsed selection) and trigger the gate.
 
 ## Primary Metric
