@@ -298,6 +298,8 @@ const DFS_MAX_NODES: usize = 256;
 const MIN_VALID_HEAP_PTR: usize = 0x10000;
 const INPUTMGR_KEYSTATE_BITMAP_OFFSET: usize = 0x90;
 const KEYCODE_MAX_VALID: u16 = 0x47;
+const KEYCODE_SCAN_START: u16 = 0;
+const KEYCODE_SCAN_STEP: u16 = 1;
 const KEYSTATE_PRESSED_TRIGGERED: u8 = 3;
 const TITLE_ACCEPT_LATCH_RVA: usize = 0x3d856a0;
 /// Generous upper bound on the game image span, to sanity-check that a candidate
@@ -2476,9 +2478,21 @@ unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
     }
     let latch = unsafe { *((module_base + TITLE_ACCEPT_LATCH_RVA) as *const u8) };
     if leaf == null {
+        // Couldn't pinpoint the leaf in the condition tree (sub-combiner layouts
+        // differ). "Press any button" accepts on ANY bound key, so shotgun the
+        // keystate bitmap: mark keycodes 0..0x47 pressed+triggered. Only runs at
+        // state 10, so it stops the instant the title accepts and advances.
+        if do_write {
+            let mut kc = KEYCODE_SCAN_START;
+            while kc < KEYCODE_MAX_VALID {
+                let slot = input_mgr + INPUTMGR_KEYSTATE_BITMAP_OFFSET + kc as usize;
+                unsafe { *(slot as *mut u8) |= KEYSTATE_PRESSED_TRIGGERED };
+                kc += KEYCODE_SCAN_STEP;
+            }
+        }
         if log_now {
             append_autoload_debug(format_args!(
-                "title_accept: leaf NOT FOUND via DFS (visited={visited}) latch={latch} csfeman=0x{csfeman:x} tick={tick}"
+                "title_accept: leaf not pinpointed (visited={visited}); keystate shotgun write={do_write} latch={latch} csfeman=0x{csfeman:x} tick={tick}"
             ));
         }
         return;
