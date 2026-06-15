@@ -1,0 +1,20 @@
+# Recipe A (native autoload arm) WITH the crash logger, now that the arm probe
+# confirmed gates 1+2 pass at the title ([slotmgr+0x8] non-null, input-mgr
+# present). Sets slot 9 + the latch 0x143d856a0; the latch drives the inner
+# TitleStep MenuJobWait->Finish (the title-accept hand-off). Run 308 crashed
+# here pre-crash-logger; now capture the EXACT assert/exit (crash-translated.log)
+# to see whether Finish bootstraps the front-end or faults, and where.
+LAUNCH_MODE=direct
+RUNTIME_MAX_NUDGES=0
+RESTORE_RUNTIME_SAVES=1
+RUNTIME_CAPTURE_INPUT_OCR=0
+ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=0
+ER_EFFECTS_NATIVE_AUTOLOAD=1
+ER_EFFECTS_CRASH_LOG=1
+ER_EFFECTS_AUTOLOAD_SLOT=9
+ER_EFFECTS_AUTOLOAD_METHOD=direct_menu_load
+ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP=false
+RUNTIME_WATCH_TARGET=player-load
+RUNTIME_AUTOLOAD_ATTEMPT_BUDGET=100000
+RUNTIME_POST_REQUEST_TICK_BUDGET=600
+RUNTIME_SPAWN_POLL_BUDGET=32768
