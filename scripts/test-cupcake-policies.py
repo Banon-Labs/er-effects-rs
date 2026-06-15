@@ -146,6 +146,29 @@ def main() -> int:
             "would be affected by operation on /",
             extra_event={"affected_parent_directories": ["/"]},
         ),
+        # An `=` inside a quoted argument is not an env assignment.
+        PolicyCase(
+            "allow-equals-in-quoted-grep",
+            'rtk grep -n "FOO=bar|PROTON=x" .auto/runtime_probe.sh',
+            True,
+        ),
+        PolicyCase(
+            "allow-equals-in-double-quoted-echo",
+            'echo "PATH=/usr/bin works"',
+            True,
+        ),
+        PolicyCase(
+            "allow-equals-in-heredoc-body",
+            "python3 - <<'PY'\nimport os\nFOO=os.getpid()\nPY",
+            True,
+        ),
+        # Real inline env assignment with a quoted value must still be caught.
+        PolicyCase(
+            "deny-quoted-value-inline-env",
+            'FOO="bar baz" ./scripts/check.sh',
+            False,
+            "named-env.env",
+        ),
         PolicyCase(
             "deny-semicolon-split",
             "echo one; echo two",
