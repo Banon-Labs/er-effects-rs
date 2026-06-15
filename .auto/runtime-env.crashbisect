@@ -1,0 +1,15 @@
+# Crash bisect: NO autoload slot -> direct_autoload_configured=false -> the
+# continue_trace hooks are NOT installed (and no continue_drive, no trace). If
+# the game now survives to the ~30s timeout instead of exiting ~19s, the
+# continue_trace hooks are the culprit. If it still exits ~19s, the crash is in
+# the per-frame CSTask path (owner scan / telemetry), not the hooks.
+LAUNCH_MODE=direct
+RUNTIME_MAX_NUDGES=0
+RESTORE_RUNTIME_SAVES=1
+RUNTIME_CAPTURE_INPUT_OCR=0
+ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=0
+ER_EFFECTS_AUTOLOAD_METHOD=none
+RUNTIME_WATCH_TARGET=player-load
+RUNTIME_AUTOLOAD_ATTEMPT_BUDGET=300
+RUNTIME_POST_REQUEST_TICK_BUDGET=600
+RUNTIME_SPAWN_POLL_BUDGET=32768
