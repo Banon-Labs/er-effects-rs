@@ -1879,6 +1879,12 @@ unsafe fn find_outer_simple_title_step(module_base: usize, ingame_step: usize) -
     OUTER_STEP_SCAN_COUNTDOWN.store(TITLE_OWNER_SCAN_CALL_INTERVAL, Ordering::SeqCst);
     let table_base = module_base.checked_add(SIMPLE_TITLE_STEP_TABLE_RVA)?;
     let probe_span = OUTER_STEP_INGAMESTEP_OFFSET + std::mem::size_of::<usize>();
+    // Diagnostic: count objects whose +0x10 == the SimpleTitleStep table and
+    // record the first one's +0xc0 so we can tell whether the table signature is
+    // right (table_matches>0) and whether the InGameStep offset (+0xc0) matches.
+    let mut table_matches: usize = 0;
+    let mut first_match_cursor: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    let mut first_match_c0: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     let mut address = TITLE_OWNER_SCAN_START_ADDRESS;
     while address < TITLE_OWNER_SCAN_MAX_ADDRESS {
         let mut info = MEMORY_BASIC_INFORMATION::default();
@@ -1908,6 +1914,11 @@ unsafe fn find_outer_simple_title_step(module_base: usize, ingame_step: usize) -
                 if table_ptr == table_base {
                     let ingame =
                         unsafe { *((cursor + OUTER_STEP_INGAMESTEP_OFFSET) as *const usize) };
+                    if table_matches == TITLE_OWNER_SCAN_START_ADDRESS {
+                        first_match_cursor = cursor;
+                        first_match_c0 = ingame;
+                    }
+                    table_matches += TITLE_OWNER_SCAN_COUNTDOWN_STEP;
                     if ingame == ingame_step {
                         OUTER_STEP_PTR.store(cursor, Ordering::SeqCst);
                         let outer_state =
@@ -1929,6 +1940,9 @@ unsafe fn find_outer_simple_title_step(module_base: usize, ingame_step: usize) -
         }
         address = next;
     }
+    append_autoload_debug(format_args!(
+        "find_outer: no match (table_matches={table_matches} first_match={first_match_cursor:#x} first_c0={first_match_c0:#x} want_ingame={ingame_step:#x})"
+    ));
     None
 }
 
@@ -1957,10 +1971,21 @@ unsafe fn ingameinit_drive_tick(module_base: usize, slot: i32, tick: u64, task_d
         return;
     };
     let ingame = unsafe { *(owner.add(TITLE_OWNER_JOB_OFFSET) as *const usize) };
+    let owner_state = unsafe { *(owner.add(TITLE_OWNER_STATE_OFFSET) as *const i32) };
     if ingame == TITLE_OWNER_SCAN_START_ADDRESS {
+        if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+            append_autoload_debug(format_args!(
+                "ingameinit_drive: ingame(owner+0x2e8) is NULL, owner={owner:p} state={owner_state} tick={tick}"
+            ));
+        }
         return;
     }
     let Some(outer) = (unsafe { find_outer_simple_title_step(module_base, ingame) }) else {
+        if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+            append_autoload_debug(format_args!(
+                "ingameinit_drive: outer NOT located (ingame={ingame:#x} owner={owner:p} state={owner_state}) tick={tick}"
+            ));
+        }
         return;
     };
     if !INGAMEINIT_DRIVE_DONE.swap(true, Ordering::SeqCst) {
