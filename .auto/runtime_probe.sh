@@ -301,6 +301,11 @@ compat_marker = sys.argv[3]
 self_pid = os.getpid()
 # Never touch the Steam client itself or its helpers.
 protect = re.compile(r"steamwebhelper|/ubuntu12_|(?:^|/)steam(?:\s|$)")
+# Only ever SIGKILL actual wine/proton infrastructure. The compat marker also
+# appears in the environ of any process that merely inherited
+# STEAM_COMPAT_DATA_PATH (this harness's own shell, python, etc.), so requiring a
+# wine-infra name first prevents the sweep from killing the harness mid-run.
+wine_infra = re.compile(r"\.exe(?:\s|$)|wineserver|wine64|wineboot|preloader|(?:^|/)bwrap(?:\s|$)|pressure-vessel", re.I)
 
 def all_procs():
     output = subprocess.check_output(["ps", "-eo", "pid=,args="], text=True)
@@ -353,6 +358,8 @@ for pid, args in all_procs():
     if pid in (self_pid, 1):
         continue
     if protect.search(args):
+        continue
+    if not wine_infra.search(args):
         continue
     if belongs_to_prefix(pid):
         wine_swept.append((pid, args))
