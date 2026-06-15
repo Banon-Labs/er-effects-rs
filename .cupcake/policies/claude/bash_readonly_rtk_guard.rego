@@ -21,7 +21,7 @@ deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"
 	native_search_or_listing_detected
-	not uses_shell_word(command, "rtk")
+	not uses_shell_word(scrubbed_command, "rtk")
 
 	decision := {
 		"rule_id": "ER-EFFECTS-RTK-READONLY-GUARD",
@@ -39,7 +39,7 @@ deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"
 	readonly_git_inspection_detected
-	not uses_shell_word(command, "rtk")
+	not uses_shell_word(scrubbed_command, "rtk")
 
 	decision := {
 		"rule_id": "ER-EFFECTS-RTK-GIT-INSPECTION-GUARD",
@@ -66,7 +66,7 @@ native_search_or_listing_detected if {
 	ast := object.get(input.tool_input, "command_ast", null)
 	ast == null
 	some tool in native_search_or_listing_tools
-	uses_shell_word(command, tool)
+	uses_shell_word(scrubbed_command, tool)
 }
 
 readonly_git_inspection_detected if {
@@ -84,11 +84,42 @@ readonly_git_inspection_detected if {
 readonly_git_inspection_detected if {
 	ast := object.get(input.tool_input, "command_ast", null)
 	ast == null
-	uses_shell_word(command, "git")
+	uses_shell_word(scrubbed_command, "git")
 	some subcommand in readonly_git_subcommands
-	regex.match(concat("", ["(^|[[:space:];|&()])git[[:space:]]+", subcommand, "([[:space:];|&()]|$)"]), command)
+	regex.match(concat("", ["(^|[[:space:];|&()])git[[:space:]]+", subcommand, "([[:space:];|&()]|$)"]), scrubbed_command)
 }
 
 uses_shell_word(cmd, word) if {
 	regex.match(concat("", ["(^|[[:space:];|&()])", word, "([[:space:];|&()]|$)"]), cmd)
 }
+
+# Both fallback paths above run only when Claude Code omits command_ast (the
+# common runtime case), and they match bare words anywhere in the command. The
+# words grep/find/ls/git/status appear legitimately inside quoted arguments
+# (bd remember --key k "... use grep ...") and heredoc bodies (interpreter
+# input), which must NOT be treated as native invocations. Scrub those spans
+# before matching, mirroring bash_semicolon_split_guard / bash_env_file_guard.
+# regex.replace is undefined in Cupcake's WASM runtime, so this uses only the
+# WASM-safe split/replace/concat builtins: trim at the heredoc opener, drop
+# backslash-escaped quotes, then keep only the even-indexed (outside-quote)
+# segments after splitting on " and then '. The same scrub is applied to the
+# rtk exception so a real `rtk grep "find"` invocation stays allowed.
+rtk_heredoc_trimmed := split(command, "<<")[0]
+
+rtk_escapes_stripped := replace(replace(rtk_heredoc_trimmed, `\"`, ""), `\'`, "")
+
+rtk_double_parts := split(rtk_escapes_stripped, `"`)
+
+rtk_outside_double := concat(" ", [rtk_double_parts[idx] |
+	some idx
+	rtk_double_parts[idx]
+	idx % 2 == 0
+])
+
+rtk_single_parts := split(rtk_outside_double, "'")
+
+scrubbed_command := concat(" ", [rtk_single_parts[idx] |
+	some idx
+	rtk_single_parts[idx]
+	idx % 2 == 0
+])

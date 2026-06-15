@@ -218,6 +218,54 @@ def main() -> int:
             False,
             "Prefer splitting up each command split by ; into its own file",
         ),
+        # RTK read-only guard: native tool words inside quoted arguments or
+        # heredoc bodies are not native invocations and must be allowed.
+        PolicyCase(
+            "allow-rtk-words-in-quoted-arg",
+            'bd remember --key k "please find and grep the list"',
+            True,
+        ),
+        PolicyCase(
+            "allow-rtk-words-in-commit-message",
+            'git commit -m "find and ls the files"',
+            True,
+        ),
+        PolicyCase(
+            "allow-rtk-words-in-heredoc-body",
+            "python3 - <<'PY'\n# find grep ls git status in body\nprint('find grep ls')\nPY",
+            True,
+        ),
+        # Real native invocations must still be denied.
+        PolicyCase(
+            "deny-native-grep",
+            "grep -n foo src",
+            False,
+            "RTK path",
+        ),
+        PolicyCase(
+            "deny-native-find",
+            "find . -name x",
+            False,
+            "RTK path",
+        ),
+        PolicyCase(
+            "deny-native-ls-target",
+            "ls target",
+            False,
+            "RTK path",
+        ),
+        PolicyCase(
+            "deny-native-git-status",
+            "git status",
+            False,
+            "git inspection",
+        ),
+        # A real rtk invocation with a native word in a quoted arg stays allowed.
+        PolicyCase(
+            "allow-rtk-grep-quoted-find",
+            'rtk grep "find"',
+            True,
+        ),
     ]
     for case in cases:
         run_case(case)
