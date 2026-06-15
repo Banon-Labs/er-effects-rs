@@ -107,6 +107,12 @@ const AV_LOG_LINE_INCREMENT: usize = 1;
 const CRASH_EXIT_TARGET_COUNT: usize = 4;
 /// Zero fill for synthetic qword scratch buffers.
 const SYNTHETIC_ZERO_QWORD: u64 = 0;
+/// FromSoft assert wrapper 0x141eb97a0 (calls the core 0x141eb98d0 which, in the
+/// default mode, deliberately crashes via a null write at 0x141eb9999). Hooking
+/// it captures the failing assertion's expr/message/file (its rcx/rdx/r8 are
+/// .rdata wide-string pointers) before the crash.
+const ASSERT_WRAPPER_RVA: usize = 0x1eb97a0;
+const MAX_ASSERT_LOG_LINES: usize = 16;
 const BOOTSTRAP_TELEMETRY_UNSEEN: usize = 0;
 const BOOTSTRAP_TELEMETRY_SEEN_VALUE: usize = 1;
 const BOOTSTRAP_EVENT_DLL_MAIN_ATTACH: &str = "dllmain_attach";
@@ -378,6 +384,8 @@ static ORIGINAL_EXIT_PROCESS: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET
 static ORIGINAL_TERMINATE_PROCESS: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ORIGINAL_RTL_EXIT_USER_PROCESS: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ORIGINAL_NT_TERMINATE_PROCESS: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ORIGINAL_ASSERT_WRAPPER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ASSERT_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
 static PROCESS_EXIT_LOGGED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 static AV_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
@@ -1537,6 +1545,54 @@ unsafe extern "system" fn nt_terminate_process_hook(handle: *mut c_void, status:
     HOOK_FALSE_RETURN as i32
 }
 
+/// When set, the assert-wrapper hook returns WITHOUT chaining the original, so a
+/// failed FromSoft assertion does not crash -- the game continues past the check.
+/// Diagnostic only (may continue in a degraded state); off by default.
+fn assert_nonfatal() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_ASSERT_NONFATAL").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-assert-nonfatal.txt")
+        .exists()
+}
+
+/// Hook on the FromSoft assert wrapper: log the failing assertion's args as RVAs
+/// (the expr/message/file wide strings live in .rdata, so they are read offline
+/// with recon_strings -- no risky in-process deref) plus the caller, then either
+/// chain the original (crashes in the default mode) or, if assert_nonfatal, skip.
+unsafe extern "system" fn assert_wrapper_hook(arg0: usize, arg1: usize, arg2: usize, arg3: usize) {
+    if ASSERT_LOG_LINES_WRITTEN.fetch_add(AV_LOG_LINE_INCREMENT, Ordering::SeqCst)
+        < MAX_ASSERT_LOG_LINES
+    {
+        let base = game_module_base().unwrap_or(NULL_MODULE_BASE);
+        let rva = |pointer: usize| {
+            if base != NULL_MODULE_BASE && pointer >= base {
+                pointer - base
+            } else {
+                pointer
+            }
+        };
+        append_crash_log(format_args!(
+            "ASSERT a0_rva=0x{:x} a1_rva=0x{:x} a2_rva=0x{:x} a3=0x{arg3:x} {}",
+            rva(arg0),
+            rva(arg1),
+            rva(arg2),
+            trace_callers_summary()
+        ));
+    }
+    if assert_nonfatal() {
+        return;
+    }
+    let original = ORIGINAL_ASSERT_WRAPPER.load(Ordering::SeqCst);
+    if original != HOOK_ORIGINAL_UNSET {
+        let original: unsafe extern "system" fn(usize, usize, usize, usize) =
+            unsafe { std::mem::transmute(original) };
+        unsafe { original(arg0, arg1, arg2, arg3) };
+    }
+}
+
 /// Vectored handler: log access violations (faulting RVA + caller stack) so an
 /// in-process crash points straight at the instruction. Rate-limited; never
 /// changes behavior (returns EXCEPTION_CONTINUE_SEARCH).
@@ -1620,8 +1676,23 @@ fn install_crash_logger() {
                 }
             }
         }
+        // Hook the assert wrapper by absolute address (not an export) to capture
+        // the failing assertion before its deliberate crash.
+        match game_module_base() {
+            Ok(base) => unsafe {
+                create_and_apply_single_hook(
+                    "AssertWrapper",
+                    (base + ASSERT_WRAPPER_RVA) as *mut c_void,
+                    assert_wrapper_hook as *mut c_void,
+                    &ORIGINAL_ASSERT_WRAPPER,
+                )
+            },
+            Err(error) => append_crash_log(format_args!(
+                "crash-logger assert-wrapper base failed: {error}"
+            )),
+        }
         append_crash_log(format_args!(
-            "crash logger installed (VEH + exit-path hooks)"
+            "crash logger installed (VEH + exit-path hooks + assert wrapper)"
         ));
     });
 }
