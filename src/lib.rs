@@ -240,7 +240,6 @@ const STEP_PUMP_DRIVER_RVA: u32 = 0x00b0bd60;
 const INGAMESTEP_STEP_STATE_OFFSET: usize = 0x48;
 const INGAMESTEP_FINISHED_SENTINEL: i32 = -1;
 const INGAMESTEP_LOAD_DONE: i32 = 0;
-const STEP_PUMP_NULL_RETURN: usize = 0;
 const INGAMESTEP_PUMP_D8_UNOBSERVED: i32 = -2;
 const MENU_TASK_NULL_STATE_QWORD: usize = 0;
 const MENU_TASK_NULL_PAYLOAD_PTR: usize = 0;
@@ -280,10 +279,6 @@ static FORCE_PLAY_GAME_LAST_STATE: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(FORCE_PLAY_GAME_STATE_UNOBSERVED);
 static TITLE_PROCEED_GATE_FIRED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-static STEP_PUMP_DRIVER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-static INGAMESTEP_PUMP_ACTIVE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-static INGAMESTEP_PUMP_INNER_VTABLE_VA: AtomicUsize = AtomicUsize::new(0);
 static INGAMESTEP_PUMP_LAST_D8: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(INGAMESTEP_PUMP_D8_UNOBSERVED);
 static TITLE_OWNER_SCAN_COUNTDOWN: AtomicUsize = AtomicUsize::new(0);
@@ -852,7 +847,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
                 .spawn(install_safe_input_hooks);
         });
     }
-    if trace_continue_enabled() || direct_autoload_configured || ingamestep_pump_enabled() {
+    if trace_continue_enabled() || direct_autoload_configured {
         write_bootstrap_event(
             BOOTSTRAP_EVENT_CONTINUE_TRACE_REQUESTED,
             BOOTSTRAP_DETAIL_START,
@@ -912,12 +907,20 @@ fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
         );
 
         cs_task.run_recurring(
-            move |_: &FD4TaskData| {
+            move |task_data: &FD4TaskData| {
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
                     let mut state = state_or_return(&state);
                     state.game_task_ticks += GAME_TASK_TICK_INCREMENT;
                     process_safe_input_request(&mut state);
                     process_autoload_request(&mut state);
+                    // Direct-drive the orphaned InGameStep load once force_play_game
+                    // has reached GameStepWait (run 305: hooking the step pump froze
+                    // the title, so we call its Execute directly with the live ctx).
+                    if ingamestep_pump_enabled() {
+                        if let Ok(base) = game_module_base() {
+                            unsafe { ingamestep_pump_tick(base, task_data) };
+                        }
+                    }
                     write_telemetry_throttled(&mut state, false);
                     return;
                 };
@@ -1670,57 +1673,47 @@ fn ingamestep_pump_enabled() -> bool {
         .exists()
 }
 
-/// Calls the original (trampoline) FD4StepTemplate::Execute pump on `obj` with
-/// the live per-frame `ctx`. Returns the null sentinel if the trampoline is not
-/// yet stored. `unsafe`: dereferences a raw function pointer.
-unsafe fn call_step_pump_original(obj: *mut u8, ctx: *mut c_void) -> usize {
-    let original = STEP_PUMP_DRIVER_ORIG.load(Ordering::SeqCst);
-    if original == HOOK_ORIGINAL_UNSET {
-        return STEP_PUMP_NULL_RETURN;
-    }
-    let original: unsafe extern "system" fn(*mut u8, *mut c_void) -> usize =
-        unsafe { std::mem::transmute(original) };
-    unsafe { original(obj, ctx) }
-}
-
-/// Detour on the FD4StepTemplate::Execute pump (`0x140b0bd60`). It runs the real
-/// pump for `this`, then — when `this` is the inner TitleStep parked at
-/// GameStepWait and its InGameStep load job is still in flight — piggybacks a
-/// second pump call on the InGameStep using the SAME live `ctx`, driving the
-/// orphaned load to completion (`job+0xd8`: 1 -> 2 -> 0). Only active when the
-/// experiment is enabled; otherwise it is a pure pass-through.
-unsafe extern "system" fn step_pump_driver_hook(this: *mut u8, ctx: *mut c_void) -> usize {
-    let result = unsafe { call_step_pump_original(this, ctx) };
-    if !INGAMESTEP_PUMP_ACTIVE.load(Ordering::SeqCst) || this.is_null() {
-        return result;
-    }
-    let vtable = unsafe { *(this as *const usize) };
-    if vtable != INGAMESTEP_PUMP_INNER_VTABLE_VA.load(Ordering::SeqCst) {
-        return result;
-    }
-    let inner_state = unsafe { *(this.add(TITLE_OWNER_STATE_OFFSET) as *const i32) };
+/// Directly drives the orphaned InGameStep load to completion, called once per
+/// game-thread frame from the recurring CSTask (NOT a hook — detouring the hot
+/// step pump `0x140b0bd60` froze the title state machine, run 305).
+///
+/// `force_play_game` advances the inner TitleStep to GameStepWait (state 6) and
+/// submits the load (`job+0xd8=1`), but the InGameStep step machine is a
+/// parent-ticked child the title scheduler never routes to in the forced state,
+/// so the load orphans. The InGameStep's own Execute pump is `0x140b0bd60`
+/// (FD4StepTemplate::Execute, signature `execute(&mut self, &FD4TaskData)`), so
+/// we call it directly on the InGameStep (`owner+0x2e8`) with the live
+/// `FD4TaskData` the CSTask already supplies — the exact ctx the task system
+/// would pass. The step handlers drain `job+0xd8` 1 -> 2 -> 0 and load the world.
+unsafe fn ingamestep_pump_tick(module_base: usize, task_data: &FD4TaskData) {
+    let Some(owner) = (unsafe { title_owner(module_base) }) else {
+        return;
+    };
+    let inner_state = unsafe { *(owner.add(TITLE_OWNER_STATE_OFFSET) as *const i32) };
     if inner_state != TITLE_STEP_GAME_STEP_WAIT {
-        return result;
+        return;
     }
-    let ingame = unsafe { *(this.add(TITLE_OWNER_JOB_OFFSET) as *const *mut u8) };
+    let ingame = unsafe { *(owner.add(TITLE_OWNER_JOB_OFFSET) as *const *mut u8) };
     if ingame.is_null() {
-        return result;
+        return;
     }
     let step_state = unsafe { *(ingame.add(INGAMESTEP_STEP_STATE_OFFSET) as *const i32) };
     let d8_before = unsafe { *(ingame.add(TITLE_OWNER_JOB_PENDING_OFFSET) as *const i32) };
     if step_state == INGAMESTEP_FINISHED_SENTINEL || d8_before == INGAMESTEP_LOAD_DONE {
-        // Finished or already drained: do not re-pump (the isFinished guard would
-        // self-skip anyway, but stop touching it once the load completed).
         let last = INGAMESTEP_PUMP_LAST_D8.swap(d8_before, Ordering::SeqCst);
         if d8_before != last {
             append_autoload_debug(format_args!(
                 "ingamestep_pump: load settled d8={d8_before} step_state={step_state} ingame={ingame:p}"
             ));
         }
-        return result;
+        return;
     }
-    // Piggyback: tick the InGameStep step machine with the engine's live ctx.
-    let _ = unsafe { call_step_pump_original(ingame, ctx) };
+    let Ok(pump) = game_rva(STEP_PUMP_DRIVER_RVA) else {
+        return;
+    };
+    let pump: unsafe extern "system" fn(*mut u8, *const FD4TaskData) -> usize =
+        unsafe { std::mem::transmute(pump) };
+    let _ = unsafe { pump(ingame, task_data as *const FD4TaskData) };
     let d8_after = unsafe { *(ingame.add(TITLE_OWNER_JOB_PENDING_OFFSET) as *const i32) };
     let last = INGAMESTEP_PUMP_LAST_D8.swap(d8_after, Ordering::SeqCst);
     if d8_after != last {
@@ -1728,7 +1721,6 @@ unsafe extern "system" fn step_pump_driver_hook(this: *mut u8, ctx: *mut c_void)
             "ingamestep_pump: ticked d8 {d8_before}->{d8_after} step_state={step_state} ingame={ingame:p}"
         ));
     }
-    result
 }
 
 /// Drives the native TitleStep state machine to `STEP_PlayGame` once.
@@ -2386,27 +2378,6 @@ fn install_continue_trace_hooks() {
             save_load_state_init_hook as *mut c_void,
             &SAVE_LOAD_STATE_INIT_ORIG,
         );
-        if ingamestep_pump_enabled() {
-            match game_rva(TITLE_OWNER_VTABLE_RVA as u32) {
-                Ok(inner_vtable) => {
-                    INGAMESTEP_PUMP_INNER_VTABLE_VA.store(inner_vtable, Ordering::SeqCst);
-                    INGAMESTEP_PUMP_ACTIVE.store(true, Ordering::SeqCst);
-                    create_continue_trace_hook(
-                        &mut hooks,
-                        "step_pump_driver_b0bd60",
-                        STEP_PUMP_DRIVER_RVA,
-                        step_pump_driver_hook as *mut c_void,
-                        &STEP_PUMP_DRIVER_ORIG,
-                    );
-                    append_continue_trace(format_args!(
-                        "ingamestep_pump enabled: inner_vtable=0x{inner_vtable:x} (piggyback InGameStep tick at GameStepWait)"
-                    ));
-                }
-                Err(error) => append_continue_trace(format_args!(
-                    "ingamestep_pump: failed to resolve inner vtable rva: {error:?}"
-                )),
-            }
-        }
     }
 
     match unsafe { MH_ApplyQueued() } {
