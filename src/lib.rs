@@ -2458,10 +2458,22 @@ unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
     let latch = unsafe { *((module_base + TITLE_ACCEPT_LATCH_RVA) as *const u8) };
     if leaf == null {
         if log_now {
-            let child0 = unsafe { *((job + JOB_CHILD_ARRAY_OFFSET) as *const usize) };
-            append_autoload_debug(format_args!(
-                "title_accept: state=10 leaf NOT FOUND count={count} child0=0x{child0:x} latch={latch} csfeman=0x{csfeman:x} tick={tick}"
-            ));
+            let mut i = JOB_CHILD_WALK_START;
+            while i < count {
+                let child = unsafe {
+                    *((job + JOB_CHILD_ARRAY_OFFSET + (i as usize) * JOB_CHILD_PTR_STRIDE)
+                        as *const usize)
+                };
+                let child_vtable_rva = if child >= MIN_VALID_HEAP_PTR {
+                    unsafe { *(child as *const usize) }.wrapping_sub(module_base)
+                } else {
+                    child
+                };
+                append_autoload_debug(format_args!(
+                    "title_accept: leaf NOT FOUND child[{i}]=0x{child:x} vtable_rva=0x{child_vtable_rva:x} (want leaf 0x{LEAF_INPUT_VTABLE_RVA:x}) count={count} latch={latch} csfeman=0x{csfeman:x} tick={tick}"
+                ));
+                i += JOB_CHILD_INDEX_STEP;
+            }
         }
         return;
     }
