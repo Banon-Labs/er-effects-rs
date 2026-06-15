@@ -416,6 +416,12 @@ copy_runtime_logs() {
   cp -f "$BOOTSTRAP_PATH" "$ARTIFACT_DIR/bootstrap.jsonl" 2>/dev/null || true
   cp -f "$BOOTSTRAP_STATE_PATH" "$ARTIFACT_DIR/bootstrap-state.json" 2>/dev/null || true
   cp -f "$CRASH_LOG_SRC" "$ARTIFACT_DIR/crash.log" 2>/dev/null || true
+  # Decode + translate the FromSoft (shift-JIS) assert strings to English so the
+  # crash log is readable without reading Japanese.
+  if [[ -f "$ARTIFACT_DIR/crash.log" ]]; then
+    python3 "$REPO_ROOT/.auto/jp_translate.py" crashlog "$ARTIFACT_DIR/crash.log" \
+      > "$ARTIFACT_DIR/crash-translated.log" 2>/dev/null || true
+  fi
 }
 
 write_runtime_metrics() {
