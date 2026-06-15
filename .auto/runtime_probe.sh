@@ -51,6 +51,8 @@ NATIVE_EXTRA_PARENT_PATH="${NATIVE_EXTRA_PARENT_PATH:-$GAME_DIR/er-effects-nativ
 TRACE_TASK_NODE_BYTES_PATH="${TRACE_TASK_NODE_BYTES_PATH:-$GAME_DIR/er-effects-trace-task-node-bytes.txt}"
 SELECTBOT_PROBE_PATH="${SELECTBOT_PROBE_PATH:-$GAME_DIR/er-effects-selectbot-probe.txt}"
 TITLE_PROCEED_GATE_PATH="${TITLE_PROCEED_GATE_PATH:-$GAME_DIR/er-effects-title-proceed-gate.txt}"
+INGAMESTEP_PUMP_PATH="${INGAMESTEP_PUMP_PATH:-$GAME_DIR/er-effects-ingamestep-pump.txt}"
+FORCE_PLAY_GAME_PATH="${FORCE_PLAY_GAME_PATH:-$GAME_DIR/er-effects-force-play-game.txt}"
 PROTON="${PROTON:-$HOME/.local/share/Steam/steamapps/common/Proton - Experimental/proton}"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
 STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}"
@@ -478,6 +480,9 @@ cleanup_runtime() {
   if [[ "${ER_EFFECTS_TITLE_PROCEED_GATE:-0}" == "1" ]]; then
     rm -f "$TITLE_PROCEED_GATE_PATH"
   fi
+  if [[ "${ER_EFFECTS_INGAMESTEP_PUMP:-0}" == "1" ]]; then
+    rm -f "$INGAMESTEP_PUMP_PATH" "$FORCE_PLAY_GAME_PATH"
+  fi
   copy_runtime_logs || true
   write_state_snapshot "$ARTIFACT_DIR/final-state-before-cleanup.json" || true
   teardown_runtime_processes || true
@@ -588,6 +593,15 @@ PY
       cp -f "$TITLE_PROCEED_GATE_PATH" "$ARTIFACT_DIR/title-proceed-gate-request.txt"
     else
       rm -f "$TITLE_PROCEED_GATE_PATH"
+    fi
+    if [[ "${ER_EFFECTS_INGAMESTEP_PUMP:-0}" == "1" ]]; then
+      # The pump piggybacks the InGameStep tick onto force_play_game's submit,
+      # so both triggers are dropped together.
+      printf 'enabled=1\n' > "$INGAMESTEP_PUMP_PATH"
+      printf 'enabled=1\n' > "$FORCE_PLAY_GAME_PATH"
+      cp -f "$INGAMESTEP_PUMP_PATH" "$ARTIFACT_DIR/ingamestep-pump-request.txt"
+    else
+      rm -f "$INGAMESTEP_PUMP_PATH"
     fi
     rm -f "$TELEMETRY_PATH" "$COMMAND_PATH" "$AUTOLOAD_DEBUG_PATH" "$TRACE_CONTINUE_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH"
   } > "$ARTIFACT_DIR/setup.out" 2>&1

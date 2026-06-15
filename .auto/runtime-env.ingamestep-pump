@@ -1,0 +1,19 @@
+# Direct-drive-the-load experiment: force_play_game submits the InGameStep load,
+# and the step_pump_driver detour piggybacks the InGameStep tick each frame (the
+# orphan fix) so job+0xd8 drains 1 -> 2 -> 0 and the world loads, with zero input.
+# Watch target game-man so the watcher reaches GameMan-ready and observes through
+# the load attempt while the DLL debug log records the d8 cascade.
+LAUNCH_MODE=steam
+RUNTIME_MAX_NUDGES=0
+RESTORE_RUNTIME_SAVES=1
+RUNTIME_CAPTURE_INPUT_OCR=0
+ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=0
+ER_EFFECTS_INGAMESTEP_PUMP=1
+ER_EFFECTS_AUTOLOAD_SLOT=9
+ER_EFFECTS_AUTOLOAD_METHOD=direct_menu_load
+ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP=false
+ER_EFFECTS_TRACE_MENU_TASK_UPDATE=0
+RUNTIME_WATCH_TARGET=request-consumption
+RUNTIME_AUTOLOAD_ATTEMPT_BUDGET=300
+RUNTIME_POST_REQUEST_TICK_BUDGET=600
+RUNTIME_SPAWN_POLL_BUDGET=32768
