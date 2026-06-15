@@ -1,0 +1,19 @@
+# Lever 2 stage 0 (READ-ONLY, no vtable call): the validated owner is at state 10.
+# Log the press-any-button job internals -- job pointer, its vtable RVA,
+# [job+0x180] keycode (0xffff=unmapped), [job+0x1e8] verdict, and the menu job
+# +0xe0 -- to choose the right injection layer (keycode bitmap vs event array)
+# without calling the vtable fill (which executed garbage last run). Crash logger on.
+LAUNCH_MODE=direct
+RUNTIME_MAX_NUDGES=0
+RESTORE_RUNTIME_SAVES=1
+RUNTIME_CAPTURE_INPUT_OCR=0
+ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=0
+ER_EFFECTS_TITLE_ACCEPT=1
+ER_EFFECTS_CRASH_LOG=1
+ER_EFFECTS_AUTOLOAD_SLOT=9
+ER_EFFECTS_AUTOLOAD_METHOD=direct_menu_load
+ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP=false
+RUNTIME_WATCH_TARGET=player-load
+RUNTIME_AUTOLOAD_ATTEMPT_BUDGET=100000
+RUNTIME_POST_REQUEST_TICK_BUDGET=600
+RUNTIME_SPAWN_POLL_BUDGET=32768

@@ -277,6 +277,12 @@ const ARM_PROBE_TICK_INTERVAL: u64 = 30;
 /// Injecting that event makes the game's own node update accept and run the real
 /// front-end bootstrap. Verdict is [job+0x1e8] >= 2.
 const TITLE_OWNER_PRESS_JOB_130_OFFSET: usize = 0x130;
+const TITLE_OWNER_MENU_JOB_E0_OFFSET: usize = 0xe0;
+const JOB_KEYCODE_180_OFFSET: usize = 0x180;
+const JOB_KEYCODE_UNMAPPED: u16 = 0xffff;
+/// Generous upper bound on the game image span, to sanity-check that a candidate
+/// object's vtable points into the module before dereferencing deeper.
+const MODULE_IMAGE_SIZE_MAX: usize = 0x5000000;
 const JOB_VTABLE_FILL_DESC_OFFSET: usize = 0x18;
 const TITLE_ACCEPT_DESC_QWORDS: usize = 0x20;
 const EVENT_TABLE_RVA: usize = 0x3d6a860;
@@ -2422,8 +2428,21 @@ unsafe fn title_accept_tick(module_base: usize, tick: u64, do_fill: bool, do_wri
     }
     if !do_fill {
         if log_now {
+            let menu_job = unsafe { *((owner + TITLE_OWNER_MENU_JOB_E0_OFFSET) as *const usize) };
+            let job_vtable = unsafe { *(job as *const usize) };
+            let vtable_ok =
+                job_vtable >= module_base && job_vtable < module_base + MODULE_IMAGE_SIZE_MAX;
+            let vtable_rva = job_vtable.wrapping_sub(module_base);
+            let (keycode, verdict) = if vtable_ok {
+                (
+                    unsafe { *((job + JOB_KEYCODE_180_OFFSET) as *const u16) },
+                    unsafe { *((job + JOB_VERDICT_1E8_OFFSET) as *const i32) },
+                )
+            } else {
+                (JOB_KEYCODE_UNMAPPED, ARM_PROBE_FIELD_ABSENT as i32)
+            };
             append_autoload_debug(format_args!(
-                "title_accept: state=10 owner=0x{owner:x} job=0x{job:x} inputmgr=0x{input_mgr:x} csfeman=0x{csfeman:x} (probe, no fill) tick={tick}"
+                "title_accept probe: state=10 owner=0x{owner:x} job=0x{job:x} menu_job(e0)=0x{menu_job:x} job_vtable_rva=0x{vtable_rva:x} vtable_ok={vtable_ok} keycode=0x{keycode:x} verdict={verdict} inputmgr=0x{input_mgr:x} csfeman=0x{csfeman:x} tick={tick}"
             ));
         }
         return;
