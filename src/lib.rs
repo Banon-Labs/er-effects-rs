@@ -209,6 +209,14 @@ const SELECTBOT_OWNER_TITLE_QUEUE_128_OFFSET: usize = 0x128;
 const SELECTBOT_OWNER_PARSED_SELECTION_130_OFFSET: usize = 0x130;
 const SELECTBOT_REGISTRY_GLOBAL_RVA: usize = 0x3d87360;
 const SELECTBOT_LOAD_GATE_RVA: usize = 0x3d856a0;
+/// The MenuLoop pump 0xb0a5e0 sets `[input_manager+0x6b0]=1` near its entry
+/// (`mov rax,[0x143d6b7b0]; mov byte [rax+0x6b0],1` at 0xb0a64d) every frame it
+/// executes. Sampling this byte tells us whether the outer SimpleTitleStep is
+/// actually running MenuLoop at the title idle (so SelectBot injection would be
+/// parsed) or is still parked before it (so injection alone would be a no-op
+/// until the title-accept advances the outer state).
+const SELECTBOT_INPUT_MANAGER_GLOBAL_RVA: usize = 0x3d6b7b0;
+const SELECTBOT_PUMP_RAN_FLAG_OFFSET: usize = 0x6b0;
 const MENU_TASK_NULL_STATE_QWORD: usize = 0;
 const MENU_TASK_NULL_PAYLOAD_PTR: usize = 0;
 const MENU_TASK_STATE_PAYLOAD_CODE_OFFSET: usize = 4;
@@ -1574,8 +1582,15 @@ unsafe fn selectbot_probe_once(module_base: usize, tick: u64) {
         unsafe { *(owner.add(SELECTBOT_OWNER_PARSED_SELECTION_130_OFFSET) as *const i32) };
     let registry = unsafe { *((module_base + SELECTBOT_REGISTRY_GLOBAL_RVA) as *const usize) };
     let load_gate = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
+    let input_manager =
+        unsafe { *((module_base + SELECTBOT_INPUT_MANAGER_GLOBAL_RVA) as *const usize) };
+    let pump_ran = if input_manager != TITLE_OWNER_SCAN_START_ADDRESS {
+        unsafe { *((input_manager + SELECTBOT_PUMP_RAN_FLAG_OFFSET) as *const u8) }
+    } else {
+        DIRECT_INPUT_FAILURE_HRESULT as u8
+    };
     append_autoload_debug(format_args!(
-        "selectbot_probe: state={state} queue128={queue128:#x} selection130={selection130} registry={registry:#x} load_gate={load_gate} tick={tick}"
+        "selectbot_probe: state={state} queue128={queue128:#x} selection130={selection130} registry={registry:#x} load_gate={load_gate} input_mgr={input_manager:#x} pump_ran={pump_ran} tick={tick}"
     ));
 }
 
