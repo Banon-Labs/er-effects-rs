@@ -1561,8 +1561,7 @@ unsafe fn call_force_play_game_once(module_base: usize, slot: i32, tick: u64) ->
         if state_before == TITLE_STEP_GAME_STEP_WAIT {
             let job = unsafe { *(owner.add(TITLE_OWNER_JOB_OFFSET) as *const usize) };
             if job != TITLE_OWNER_SCAN_START_ADDRESS {
-                let pending =
-                    unsafe { *((job + TITLE_OWNER_JOB_PENDING_OFFSET) as *const i32) };
+                let pending = unsafe { *((job + TITLE_OWNER_JOB_PENDING_OFFSET) as *const i32) };
                 if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
                     append_autoload_debug(format_args!(
                         "force_play_game: gamestepwait job={job:#x} job_d8={pending} tick={tick}"
