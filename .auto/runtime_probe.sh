@@ -46,6 +46,8 @@ TRACE_TITLE_STAGE_PATH="${TRACE_TITLE_STAGE_PATH:-$GAME_DIR/er-effects-trace-tit
 PUMP_MOVE_MAP_PATH="${PUMP_MOVE_MAP_PATH:-$GAME_DIR/er-effects-pump-move-map.txt}"
 FORCE_TITLE_STATE_PATH="${FORCE_TITLE_STATE_PATH:-$GAME_DIR/er-effects-force-title-state.txt}"
 NATIVE_TITLE_JOB_PATH="${NATIVE_TITLE_JOB_PATH:-$GAME_DIR/er-effects-native-title-job.txt}"
+NATIVE_TITLE_TOGGLE_PATH="${NATIVE_TITLE_TOGGLE_PATH:-$GAME_DIR/er-effects-native-title-toggle.txt}"
+NATIVE_EXTRA_PARENT_PATH="${NATIVE_EXTRA_PARENT_PATH:-$GAME_DIR/er-effects-native-extra-parent.txt}"
 TRACE_TASK_NODE_BYTES_PATH="${TRACE_TASK_NODE_BYTES_PATH:-$GAME_DIR/er-effects-trace-task-node-bytes.txt}"
 PROTON="${PROTON:-$HOME/.local/share/Steam/steamapps/common/Proton - Experimental/proton}"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
@@ -459,6 +461,12 @@ cleanup_runtime() {
   if [[ "${ER_EFFECTS_AUTOLOAD_NATIVE_TITLE_JOB:-0}" == "1" ]]; then
     rm -f "$NATIVE_TITLE_JOB_PATH"
   fi
+  if [[ "${ER_EFFECTS_AUTOLOAD_NATIVE_TITLE_TOGGLE:-0}" == "1" ]]; then
+    rm -f "$NATIVE_TITLE_TOGGLE_PATH"
+  fi
+  if [[ "${ER_EFFECTS_AUTOLOAD_NATIVE_EXTRA_PARENT:-0}" == "1" ]]; then
+    rm -f "$NATIVE_EXTRA_PARENT_PATH"
+  fi
   if [[ "${ER_EFFECTS_TRACE_TASK_NODE_BYTES:-0}" == "1" ]]; then
     rm -f "$TRACE_TASK_NODE_BYTES_PATH"
   fi
@@ -542,6 +550,18 @@ PY
       cp -f "$NATIVE_TITLE_JOB_PATH" "$ARTIFACT_DIR/native-title-job-request.txt"
     else
       rm -f "$NATIVE_TITLE_JOB_PATH"
+    fi
+    if [[ "${ER_EFFECTS_AUTOLOAD_NATIVE_TITLE_TOGGLE:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$NATIVE_TITLE_TOGGLE_PATH"
+      cp -f "$NATIVE_TITLE_TOGGLE_PATH" "$ARTIFACT_DIR/native-title-toggle-request.txt"
+    else
+      rm -f "$NATIVE_TITLE_TOGGLE_PATH"
+    fi
+    if [[ "${ER_EFFECTS_AUTOLOAD_NATIVE_EXTRA_PARENT:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$NATIVE_EXTRA_PARENT_PATH"
+      cp -f "$NATIVE_EXTRA_PARENT_PATH" "$ARTIFACT_DIR/native-extra-parent-request.txt"
+    else
+      rm -f "$NATIVE_EXTRA_PARENT_PATH"
     fi
     if [[ "${ER_EFFECTS_TRACE_TASK_NODE_BYTES:-0}" == "1" ]]; then
       printf 'enabled=1\n' > "$TRACE_TASK_NODE_BYTES_PATH"

@@ -784,6 +784,8 @@ if summary.get("slot_reset_begintitle_input_node_update_child_mapped"):
     static_score += 40
 if summary.get("slot_reset_begintitle_input_node_update_status_mapped"):
     static_score += 40
+if summary.get("slot_reset_begintitle_input_node_update_node128_status_routes_mapped"):
+    static_score += 40
 if summary.get("slot_reset_begintitle_input_node_update_global_bit_mapped"):
     static_score += 40
 if summary.get("slot_reset_begintitle_input_node_update_terminal_mapped"):
@@ -799,6 +801,16 @@ if summary.get("slot_reset_begintitle_temp_clone_mapped"):
 if summary.get("slot_reset_begintitle_temp_child_clone_mapped"):
     static_score += 40
 if summary.get("slot_reset_begintitle_temp_callback_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_node128_provider_clone_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_node128_status_trampoline_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_node128_status_provider_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_node128_title_accept_candidate_mapped"):
+    static_score += 40
+if summary.get("slot_reset_begintitle_node128_global_toggle_pair_mapped"):
     static_score += 40
 if summary.get("slot_reset_begintitle_input_manager_state_mapped"):
     static_score += 40
@@ -893,6 +905,10 @@ if summary.get("slot_reset_global_toggle_extra_parent_clears_19_and_gates_first_
 if summary.get("slot_reset_global_toggle_extra_parent_second_toggle_follows_failed_gate"):
     static_score += 40
 if summary.get("slot_reset_global_toggle_extra_parent_callback_chains_mapped"):
+    static_score += 40
+if summary.get("slot_reset_global_toggle_extra_child_gates_mapped"):
+    static_score += 40
+if summary.get("slot_reset_global_toggle_extra_child_status_bits_mapped"):
     static_score += 40
 if summary.get("slot_reset_global_job_context_known_functions_mapped"):
     static_score += 40
@@ -1229,13 +1245,19 @@ telemetry_path = None
 runtime_driver_rc = None
 candidates = []
 preferred_artifact_path = repo / ".auto/current-evidence-artifact"
+include_runtime_evidence = os.environ.get("AUTO_INCLUDE_RUNTIME_EVIDENCE") == "1"
 if os.environ.get("AUTO_MEASURE_INNER") != "1" and preferred_artifact_path.exists():
     preferred_artifact = Path(preferred_artifact_path.read_text(encoding="utf-8", errors="replace").strip())
-    for name in ["final-telemetry.json", "telemetry.json"]:
-        candidate = preferred_artifact / name
-        if candidate.exists():
-            candidates.append(candidate)
-elif os.environ.get("AUTO_INCLUDE_RUNTIME_EVIDENCE") == "1":
+    # Fast/default measurements must not be poisoned by stale runtime probes.  A
+    # current-evidence pointer to an autoload-runtime-* artifact is only honored
+    # when runtime evidence was explicitly requested.
+    preferred_is_runtime = preferred_artifact.name.startswith("autoload-runtime-")
+    if include_runtime_evidence or not preferred_is_runtime:
+        for name in ["final-telemetry.json", "telemetry.json"]:
+            candidate = preferred_artifact / name
+            if candidate.exists():
+                candidates.append(candidate)
+elif include_runtime_evidence:
     for pattern in ["target/smoke/**/final-telemetry.json", "target/smoke/**/telemetry.json"]:
         candidates.extend(repo.glob(pattern))
 if candidates:
@@ -1338,8 +1360,14 @@ if artifact_dir and artifact_dir.exists():
     load_hook_seen = bool(re.search(r"ENTER (current_slot_load_67b570|continue_load_67b750|combined_load_67b940|map_load_67bc10|save_load_state_init_67b030)", joined_logs))
     trace_confirms_state_transition = bool(load_hook_seen and re.search(r"state=(?!0\b)\d+", joined_logs))
     native_transition_identified = bool(
-        re.search(r"native_title_job: LEAVE", joined_logs)
-        and re.search(r"menu_task_enqueue.*callers=.*#2=0xb0d0dd.*#3=0xb0be57", joined_logs)
+        (
+            re.search(r"native_title_job: LEAVE", joined_logs)
+            and re.search(r"menu_task_enqueue.*callers=.*#2=0xb0d0dd.*#3=0xb0be57", joined_logs)
+        )
+        or re.search(
+            r"native_title_global_toggle: LEAVE .*state_before=10 state_after=(?!10\\b)\\d+ .*flag18_after=0",
+            joined_logs,
+        )
     )
 else:
     joined_logs = ""

@@ -77,6 +77,7 @@ TARGETS = {
     "slot_reset_title_accept_input_node_vtable_aa97e8": 0x142AA97E8,
     "slot_reset_title_accept_input_temp_clone_7ad6c0": 0x1407AD6C0,
     "slot_reset_title_accept_input_temp_callback_7ad810": 0x1407AD810,
+    "slot_reset_title_accept_input_temp_status_trampoline_7ad8c0": 0x1407AD8C0,
     "slot_reset_title_accept_input_temp_active_clone_7ad990": 0x1407AD990,
     "slot_reset_title_accept_input_temp_child_clone_7ad9d0": 0x1407AD9D0,
     "slot_reset_title_xr_job_7bb010": 0x1407BB010,
@@ -683,26 +684,36 @@ def scan_rel32_calls(data: bytes, image_base: int, sections: list[dict[str, int 
 
 def scan_absolute_qword_refs(data: bytes, image_base: int, sections: list[dict[str, int | str]]) -> dict[str, list[dict[str, Any]]]:
     refs: dict[str, list[dict[str, Any]]] = {name: [] for name in TARGETS}
+    by_target: dict[int, list[str]] = {}
     for name, target in TARGETS.items():
-        needle = struct.pack("<Q", target)
-        start = 0
-        while True:
-            index = data.find(needle, start)
-            if index < 0:
-                break
-            mapped = offset_to_va(image_base, sections, index)
-            if mapped is not None:
-                va, section = mapped
-                refs[name].append(
-                    {
-                        "section": section,
-                        "source_va": f"0x{va:x}",
-                        "source_rva": f"0x{va - image_base:x}",
-                        "target_va": f"0x{target:x}",
-                        "target_rva": f"0x{target - image_base:x}",
-                    }
-                )
-            start = index + 1
+        by_target.setdefault(target, []).append(name)
+    for section in sections:
+        raw_ptr = int(section["raw_ptr"])
+        raw_size = int(section["raw_size"])
+        if raw_size < 8:
+            continue
+        section_name = str(section["name"])
+        section_va = image_base + int(section["virtual_address"])
+        section_data = memoryview(data)[raw_ptr : raw_ptr + raw_size]
+        # Absolute function/vtable references in PE data sections are qword
+        # table entries.  Scanning every byte for every target dominated the
+        # static exporter runtime; a single aligned pass preserves the vtable
+        # evidence used by the scorer while keeping the gate inside 30s.
+        for offset in range(0, len(section_data) - 7, 8):
+            value = struct.unpack_from("<Q", section_data, offset)[0]
+            target_names = by_target.get(value)
+            if target_names is None:
+                continue
+            va = section_va + offset
+            ref = {
+                "section": section_name,
+                "source_va": f"0x{va:x}",
+                "source_rva": f"0x{va - image_base:x}",
+                "target_va": f"0x{value:x}",
+                "target_rva": f"0x{value - image_base:x}",
+            }
+            for target_name in target_names:
+                refs[target_name].append(dict(ref))
     return refs
 
 
@@ -1505,62 +1516,70 @@ def find_pdata_range_for_pc(
 def scan_rip_relative_refs_to_va(
     data: bytes, image_base: int, sections: list[dict[str, int | str]], target_va: int
 ) -> list[dict[str, Any]]:
-    text = next(section for section in sections if section["name"] == ".text")
-    raw_ptr = int(text["raw_ptr"])
-    raw_size = int(text["raw_size"])
-    text_va = image_base + int(text["virtual_address"])
-    text_data = data[raw_ptr : raw_ptr + raw_size]
-    patterns = [
-        (b"\x80\x3d", 2, 7, "cmpb_m8_imm8"),
-        (b"\xc6\x05", 2, 7, "movb_m8_imm8"),
-        (b"\x48\x8b\x05", 3, 7, "movq_load_rax"),
-        (b"\x48\x8b\x0d", 3, 7, "movq_load_rcx"),
-        (b"\x48\x8b\x15", 3, 7, "movq_load_rdx"),
-        (b"\x48\x8b\x1d", 3, 7, "movq_load_rbx"),
-        (b"\x48\x8b\x35", 3, 7, "movq_load_rsi"),
-        (b"\x48\x8b\x3d", 3, 7, "movq_load_rdi"),
-        (b"\x4c\x8b\x05", 3, 7, "movq_load_r8"),
-        (b"\x4c\x8b\x0d", 3, 7, "movq_load_r9"),
-        (b"\x4c\x8b\x15", 3, 7, "movq_load_r10"),
-        (b"\x4c\x8b\x1d", 3, 7, "movq_load_r11"),
-        (b"\x48\x89\x05", 3, 7, "movq_store"),
-        (b"\x48\x8d\x05", 3, 7, "lea_rax"),
-        (b"\x48\x8d\x0d", 3, 7, "lea_rcx"),
-        (b"\x48\x8d\x15", 3, 7, "lea_rdx"),
-        (b"\x48\x8d\x1d", 3, 7, "lea_rbx"),
-        (b"\x48\x8d\x35", 3, 7, "lea_rsi"),
-        (b"\x48\x8d\x3d", 3, 7, "lea_rdi"),
-        (b"\x4c\x8d\x05", 3, 7, "lea_r8"),
-        (b"\x4c\x8d\x0d", 3, 7, "lea_r9"),
-        (b"\x4c\x8d\x15", 3, 7, "lea_r10"),
-        (b"\x4c\x8d\x1d", 3, 7, "lea_r11"),
-    ]
-    refs: list[dict[str, Any]] = []
-    for needle, disp_offset, instruction_size, instruction in patterns:
-        start = 0
-        while True:
-            index = text_data.find(needle, start)
-            if index < 0:
-                break
-            disp = struct.unpack_from("<i", text_data, index + disp_offset)[0]
-            source_va = text_va + index
-            resolved_va = source_va + instruction_size + disp
-            if resolved_va == target_va:
-                function_range = find_pdata_range_for_pc(data, image_base, sections, source_va)
-                refs.append(
-                    {
-                        "source_va": f"0x{source_va:x}",
-                        "source_rva": f"0x{source_va - image_base:x}",
-                        "target_va": f"0x{target_va:x}",
-                        "target_rva": f"0x{target_va - image_base:x}",
-                        "instruction": instruction,
-                        "bytes_hex": text_data[index : index + instruction_size].hex(),
-                        "function_begin_va": function_range.get("begin_va"),
-                        "function_end_va": function_range.get("end_va"),
-                    }
-                )
-            start = index + 1
-    return sorted(refs, key=lambda item: int(str(item["source_va"]), 16))
+    cache_key = (id(data), image_base, target_va)
+    cache: dict[tuple[int, int, int], dict[int, list[dict[str, Any]]]] = getattr(scan_rip_relative_refs_to_va, "_cache", {})
+    if cache_key not in cache:
+        text = next(section for section in sections if section["name"] == ".text")
+        raw_ptr = int(text["raw_ptr"])
+        raw_size = int(text["raw_size"])
+        text_va = image_base + int(text["virtual_address"])
+        text_data = data[raw_ptr : raw_ptr + raw_size]
+        patterns = [
+            (b"\x80\x3d", 2, 7, "cmpb_m8_imm8"),
+            (b"\xc6\x05", 2, 7, "movb_m8_imm8"),
+            (b"\x48\x8b\x05", 3, 7, "movq_load_rax"),
+            (b"\x48\x8b\x0d", 3, 7, "movq_load_rcx"),
+            (b"\x48\x8b\x15", 3, 7, "movq_load_rdx"),
+            (b"\x48\x8b\x1d", 3, 7, "movq_load_rbx"),
+            (b"\x48\x8b\x35", 3, 7, "movq_load_rsi"),
+            (b"\x48\x8b\x3d", 3, 7, "movq_load_rdi"),
+            (b"\x4c\x8b\x05", 3, 7, "movq_load_r8"),
+            (b"\x4c\x8b\x0d", 3, 7, "movq_load_r9"),
+            (b"\x4c\x8b\x15", 3, 7, "movq_load_r10"),
+            (b"\x4c\x8b\x1d", 3, 7, "movq_load_r11"),
+            (b"\x48\x89\x05", 3, 7, "movq_store"),
+            (b"\x48\x8d\x05", 3, 7, "lea_rax"),
+            (b"\x48\x8d\x0d", 3, 7, "lea_rcx"),
+            (b"\x48\x8d\x15", 3, 7, "lea_rdx"),
+            (b"\x48\x8d\x1d", 3, 7, "lea_rbx"),
+            (b"\x48\x8d\x35", 3, 7, "lea_rsi"),
+            (b"\x48\x8d\x3d", 3, 7, "lea_rdi"),
+            (b"\x4c\x8d\x05", 3, 7, "lea_r8"),
+            (b"\x4c\x8d\x0d", 3, 7, "lea_r9"),
+            (b"\x4c\x8d\x15", 3, 7, "lea_r10"),
+            (b"\x4c\x8d\x1d", 3, 7, "lea_r11"),
+        ]
+        interesting_targets = {target_va}
+        refs_by_target: dict[int, list[dict[str, Any]]] = {target: [] for target in interesting_targets}
+        for needle, disp_offset, instruction_size, instruction in patterns:
+            start = 0
+            while True:
+                index = text_data.find(needle, start)
+                if index < 0:
+                    break
+                disp = struct.unpack_from("<i", text_data, index + disp_offset)[0]
+                source_va = text_va + index
+                resolved_va = source_va + instruction_size + disp
+                if resolved_va in interesting_targets:
+                    function_range = find_pdata_range_for_pc(data, image_base, sections, source_va)
+                    refs_by_target[resolved_va].append(
+                        {
+                            "source_va": f"0x{source_va:x}",
+                            "source_rva": f"0x{source_va - image_base:x}",
+                            "target_va": f"0x{resolved_va:x}",
+                            "target_rva": f"0x{resolved_va - image_base:x}",
+                            "instruction": instruction,
+                            "bytes_hex": text_data[index : index + instruction_size].hex(),
+                            "function_begin_va": function_range.get("begin_va"),
+                            "function_end_va": function_range.get("end_va"),
+                        }
+                    )
+                start = index + 1
+        for refs in refs_by_target.values():
+            refs.sort(key=lambda item: int(str(item["source_va"]), 16))
+        cache[cache_key] = refs_by_target
+        setattr(scan_rip_relative_refs_to_va, "_cache", cache)
+    return list(cache[cache_key].get(target_va, []))
 
 
 def scan_entry_vtable_rip_refs(
@@ -1573,27 +1592,30 @@ def scan_entry_vtable_rip_refs(
     text_data = data[raw_ptr : raw_ptr + raw_size]
     by_target = {addr: name for name, addr in ENTRY_HELPER_VTABLE_BASES.items()}
     refs: dict[str, list[dict[str, Any]]] = {name: [] for name in ENTRY_HELPER_VTABLE_BASES}
-    for index in range(0, max(0, len(text_data) - 7)):
-        if text_data[index : index + 3] not in (b"\x48\x8d\x05", b"\x4c\x8d\x05"):
-            continue
-        disp = struct.unpack_from("<i", text_data, index + 3)[0]
-        source_va = text_va + index
-        target_va = source_va + 7 + disp
-        target_name = by_target.get(target_va)
-        if target_name is None:
-            continue
-        function_range = find_pdata_range_for_pc(data, image_base, sections, source_va)
-        refs[target_name].append(
-            {
-                "source_va": f"0x{source_va:x}",
-                "source_rva": f"0x{source_va - image_base:x}",
-                "target_va": f"0x{target_va:x}",
-                "target_rva": f"0x{target_va - image_base:x}",
-                "bytes_hex": text_data[index : index + 7].hex(),
-                "function_begin_va": function_range.get("begin_va"),
-                "function_end_va": function_range.get("end_va"),
-            }
-        )
+    for pattern in (b"\x48\x8d\x05", b"\x4c\x8d\x05"):
+        index = -1
+        while True:
+            index = text_data.find(pattern, index + 1)
+            if index < 0 or index + 7 > len(text_data):
+                break
+            disp = struct.unpack_from("<i", text_data, index + 3)[0]
+            source_va = text_va + index
+            target_va = source_va + 7 + disp
+            target_name = by_target.get(target_va)
+            if target_name is None:
+                continue
+            function_range = find_pdata_range_for_pc(data, image_base, sections, source_va)
+            refs[target_name].append(
+                {
+                    "source_va": f"0x{source_va:x}",
+                    "source_rva": f"0x{source_va - image_base:x}",
+                    "target_va": f"0x{target_va:x}",
+                    "target_rva": f"0x{target_va - image_base:x}",
+                    "bytes_hex": text_data[index : index + 7].hex(),
+                    "function_begin_va": function_range.get("begin_va"),
+                    "function_end_va": function_range.get("end_va"),
+                }
+            )
     return refs
 
 
@@ -1644,27 +1666,30 @@ def scan_entry_family_descriptor_rip_refs(
     text_data = data[raw_ptr : raw_ptr + raw_size]
     by_target = {addr: name for name, addr in ENTRY_FAMILY_DESCRIPTOR_VTABLE_BASES.items()}
     refs: dict[str, list[dict[str, Any]]] = {name: [] for name in ENTRY_FAMILY_DESCRIPTOR_VTABLE_BASES}
-    for index in range(0, max(0, len(text_data) - 7)):
-        if text_data[index : index + 3] not in (b"\x48\x8d\x05", b"\x4c\x8d\x05"):
-            continue
-        disp = struct.unpack_from("<i", text_data, index + 3)[0]
-        source_va = text_va + index
-        target_va = source_va + 7 + disp
-        target_name = by_target.get(target_va)
-        if target_name is None:
-            continue
-        function_range = find_pdata_range_for_pc(data, image_base, sections, source_va)
-        refs[target_name].append(
-            {
-                "source_va": f"0x{source_va:x}",
-                "source_rva": f"0x{source_va - image_base:x}",
-                "target_va": f"0x{target_va:x}",
-                "target_rva": f"0x{target_va - image_base:x}",
-                "bytes_hex": text_data[index : index + 7].hex(),
-                "function_begin_va": function_range.get("begin_va"),
-                "function_end_va": function_range.get("end_va"),
-            }
-        )
+    for pattern in (b"\x48\x8d\x05", b"\x4c\x8d\x05"):
+        index = -1
+        while True:
+            index = text_data.find(pattern, index + 1)
+            if index < 0 or index + 7 > len(text_data):
+                break
+            disp = struct.unpack_from("<i", text_data, index + 3)[0]
+            source_va = text_va + index
+            target_va = source_va + 7 + disp
+            target_name = by_target.get(target_va)
+            if target_name is None:
+                continue
+            function_range = find_pdata_range_for_pc(data, image_base, sections, source_va)
+            refs[target_name].append(
+                {
+                    "source_va": f"0x{source_va:x}",
+                    "source_rva": f"0x{source_va - image_base:x}",
+                    "target_va": f"0x{target_va:x}",
+                    "target_rva": f"0x{target_va - image_base:x}",
+                    "bytes_hex": text_data[index : index + 7].hex(),
+                    "function_begin_va": function_range.get("begin_va"),
+                    "function_end_va": function_range.get("end_va"),
+                }
+            )
     return refs
 
 
@@ -3376,8 +3401,74 @@ def read_slot_reset_global_toggle_context(
         )
         for target_name in extra_parent_target_names
     }
-    global_context_refs = scan_rip_relative_refs_to_va(
-        data, image_base, sections, TARGETS["slot_reset_global_job_context_43d6b7b0"]
+    def rip_refs_to_va_in_range(target_va: int, begin: int, end: int) -> list[dict[str, Any]]:
+        blob = read_bytes(data, image_base, sections, begin, max(0, end - begin))
+        patterns = [
+            (b"\x80\x3d", 2, 7, "cmpb_m8_imm8"),
+            (b"\xc6\x05", 2, 7, "movb_m8_imm8"),
+            (b"\x48\x8b\x05", 3, 7, "movq_load_rax"),
+            (b"\x48\x8b\x0d", 3, 7, "movq_load_rcx"),
+            (b"\x48\x8b\x15", 3, 7, "movq_load_rdx"),
+            (b"\x48\x8b\x1d", 3, 7, "movq_load_rbx"),
+            (b"\x48\x8b\x35", 3, 7, "movq_load_rsi"),
+            (b"\x48\x8b\x3d", 3, 7, "movq_load_rdi"),
+            (b"\x4c\x8b\x05", 3, 7, "movq_load_r8"),
+            (b"\x4c\x8b\x0d", 3, 7, "movq_load_r9"),
+            (b"\x4c\x8b\x15", 3, 7, "movq_load_r10"),
+            (b"\x4c\x8b\x1d", 3, 7, "movq_load_r11"),
+            (b"\x48\x89\x05", 3, 7, "movq_store"),
+            (b"\x48\x8d\x05", 3, 7, "lea_rax"),
+            (b"\x48\x8d\x0d", 3, 7, "lea_rcx"),
+            (b"\x48\x8d\x15", 3, 7, "lea_rdx"),
+            (b"\x48\x8d\x1d", 3, 7, "lea_rbx"),
+            (b"\x48\x8d\x35", 3, 7, "lea_rsi"),
+            (b"\x48\x8d\x3d", 3, 7, "lea_rdi"),
+            (b"\x4c\x8d\x05", 3, 7, "lea_r8"),
+            (b"\x4c\x8d\x0d", 3, 7, "lea_r9"),
+            (b"\x4c\x8d\x15", 3, 7, "lea_r10"),
+            (b"\x4c\x8d\x1d", 3, 7, "lea_r11"),
+        ]
+        refs: list[dict[str, Any]] = []
+        for needle, disp_offset, instruction_size, instruction in patterns:
+            start = 0
+            while True:
+                index = blob.find(needle, start)
+                if index < 0:
+                    break
+                disp = struct.unpack_from("<i", blob, index + disp_offset)[0]
+                source_va = begin + index
+                resolved_va = source_va + instruction_size + disp
+                if resolved_va == target_va:
+                    function_range = find_pdata_range_for_pc(data, image_base, sections, source_va)
+                    refs.append(
+                        {
+                            "source_va": f"0x{source_va:x}",
+                            "source_rva": f"0x{source_va - image_base:x}",
+                            "target_va": f"0x{target_va:x}",
+                            "target_rva": f"0x{target_va - image_base:x}",
+                            "instruction": instruction,
+                            "bytes_hex": blob[index : index + instruction_size].hex(),
+                            "function_begin_va": function_range.get("begin_va"),
+                            "function_end_va": function_range.get("end_va"),
+                        }
+                    )
+                start = index + 1
+        return sorted(refs, key=lambda item: int(str(item["source_va"]), 16))
+
+    global_context_refs: list[dict[str, Any]] = []
+    global_context_target = TARGETS["slot_reset_global_job_context_43d6b7b0"]
+    for probe_va in [0x14075811B, 0x140A832A0, 0x140AE5390, 0x140B01BE0, 0x140B0D400]:
+        probe_range = find_pdata_range_for_pc(data, image_base, sections, probe_va)
+        begin_text = probe_range.get("begin_va")
+        end_text = probe_range.get("end_va")
+        if not begin_text or not end_text:
+            continue
+        global_context_refs.extend(
+            rip_refs_to_va_in_range(global_context_target, int(str(begin_text), 16), int(str(end_text), 16))
+        )
+    global_context_refs = sorted(
+        {str(ref.get("source_va")): ref for ref in global_context_refs}.values(),
+        key=lambda ref: int(str(ref.get("source_va")), 16),
     )
     global_context_functions: dict[str, dict[str, Any]] = {}
     for ref in global_context_refs:
@@ -3440,6 +3531,45 @@ def read_slot_reset_global_toggle_context(
         key=lambda value: int(value, 16),
     )
 
+    def child_tail_status_context(target_name: str) -> dict[str, Any]:
+        target_va = TARGETS[target_name]
+        blob = read_bytes(data, image_base, sections, target_va, 0x20)
+        jump_target = None
+        if blob.startswith(b"\x48\x8b\x49\x08\x48\x85\xc9\x0f\x85") and len(blob) >= 13:
+            jump_target = target_va + 13 + struct.unpack_from("<i", blob, 9)[0]
+        tail_blob = b""
+        status_bit_index = None
+        reads_status_dword_14c = False
+        masks_low_bit = False
+        if jump_target is not None:
+            tail_blob = read_bytes(data, image_base, sections, jump_target, 0x10)
+            reads_status_dword_14c = tail_blob.startswith(b"\x8b\x81\x4c\x01\x00\x00")
+            masks_low_bit = b"\x83\xe0\x01\xc3" in tail_blob[:0x10]
+            if reads_status_dword_14c and masks_low_bit:
+                if tail_blob[6:8] == b"\xd1\xe8":
+                    status_bit_index = 1
+                elif tail_blob[6:9] == b"\xc1\xe8\x06":
+                    status_bit_index = 6
+                elif tail_blob[6:9] == b"\xc1\xe8\x03":
+                    status_bit_index = 3
+                elif tail_blob[6:8] == b"\x83\xe0":
+                    status_bit_index = 0
+        return {
+            "function_va": f"0x{target_va:x}",
+            "bytes_hex": blob.hex(),
+            "loads_child_from_rcx_plus8": blob.startswith(b"\x48\x8b\x49\x08"),
+            "returns_false_when_child_null": b"\x32\xc0\xc3" in blob[:0x20],
+            "tail_jumps_when_child_present": jump_target is not None,
+            "tail_jump_target_va": f"0x{jump_target:x}" if jump_target is not None else None,
+            "tail_target_bytes_hex": tail_blob.hex(),
+            "tail_reads_child_status_dword_14c": reads_status_dword_14c,
+            "tail_masks_low_status_bit": masks_low_bit,
+            "tail_status_bit_index": status_bit_index,
+        }
+
+    extra_toggle_gate_a9cc90_context = child_tail_status_context("slot_reset_global_toggle_extra_toggle_gate_a9cc90")
+    extra_gate_a9cd00_context = child_tail_status_context("slot_reset_global_toggle_extra_gate_a9cd00")
+
     return {
         "helper_va": f"0x{helper_va:x}",
         "helper_bytes_hex": helper_blob.hex(),
@@ -3480,6 +3610,8 @@ def read_slot_reset_global_toggle_context(
         and extra_parent_calls.get("slot_reset_global_toggle_extra_callback_7edf40") == ["0x140b01fe8"]
         and extra_parent_calls.get("slot_reset_global_toggle_extra_probe_e29930") == ["0x140b01ff1"]
         and extra_parent_calls.get("slot_reset_global_toggle_extra_callback_7edf90") == ["0x140b02040"],
+        "extra_toggle_gate_a9cc90_context": extra_toggle_gate_a9cc90_context,
+        "extra_gate_a9cd00_context": extra_gate_a9cd00_context,
         "global_context_ref_count": len(global_context_refs),
         "global_context_ref_sources": [str(ref.get("source_va")) for ref in global_context_refs],
         "global_context_functions": global_context_functions,
@@ -5489,6 +5621,7 @@ def read_slot_reset_to_menu_job_wait_context(
     input_manager_queue_setup_va = TARGETS["slot_reset_title_accept_input_manager_queue_setup_7660f0"]
     temp_clone_va = TARGETS["slot_reset_title_accept_input_temp_clone_7ad6c0"]
     temp_callback_va = TARGETS["slot_reset_title_accept_input_temp_callback_7ad810"]
+    temp_status_trampoline_va = TARGETS["slot_reset_title_accept_input_temp_status_trampoline_7ad8c0"]
     temp_active_clone_va = TARGETS["slot_reset_title_accept_input_temp_active_clone_7ad990"]
     temp_child_clone_va = TARGETS["slot_reset_title_accept_input_temp_child_clone_7ad9d0"]
     bool_wrapper_range = find_pdata_range_for_pc(data, image_base, sections, bool_wrapper_va)
@@ -5516,6 +5649,13 @@ def read_slot_reset_to_menu_job_wait_context(
     input_manager_queue_setup_range = find_pdata_range_for_pc(data, image_base, sections, input_manager_queue_setup_va)
     temp_clone_range = find_pdata_range_for_pc(data, image_base, sections, temp_clone_va)
     temp_callback_range = find_pdata_range_for_pc(data, image_base, sections, temp_callback_va)
+    temp_status_trampoline_range = {
+        "pc_va": f"0x{temp_status_trampoline_va:x}",
+        "begin_va": f"0x{temp_status_trampoline_va:x}",
+        "end_va": f"0x{temp_status_trampoline_va + 0x0b:x}",
+        "unwind_va": None,
+        "source": "tiny_trampoline_fallback",
+    }
     temp_active_clone_range = find_pdata_range_for_pc(data, image_base, sections, temp_active_clone_va)
     temp_child_clone_range = find_pdata_range_for_pc(data, image_base, sections, temp_child_clone_va)
     bool_wrapper_begin = int(str(bool_wrapper_range.get("begin_va")), 16) if bool_wrapper_range.get("begin_va") else bool_wrapper_va
@@ -5540,6 +5680,8 @@ def read_slot_reset_to_menu_job_wait_context(
     temp_clone_end = int(str(temp_clone_range.get("end_va")), 16) if temp_clone_range.get("end_va") else temp_clone_va + 0x3F
     temp_callback_begin = int(str(temp_callback_range.get("begin_va")), 16) if temp_callback_range.get("begin_va") else temp_callback_va
     temp_callback_end = int(str(temp_callback_range.get("end_va")), 16) if temp_callback_range.get("end_va") else temp_callback_va + 0x2A
+    temp_status_trampoline_begin = int(str(temp_status_trampoline_range.get("begin_va")), 16)
+    temp_status_trampoline_end = int(str(temp_status_trampoline_range.get("end_va")), 16)
     temp_active_clone_begin = int(str(temp_active_clone_range.get("begin_va")), 16) if temp_active_clone_range.get("begin_va") else temp_active_clone_va
     temp_active_clone_end = int(str(temp_active_clone_range.get("end_va")), 16) if temp_active_clone_range.get("end_va") else temp_active_clone_va + 0x3F
     temp_child_clone_begin = int(str(temp_child_clone_range.get("begin_va")), 16) if temp_child_clone_range.get("begin_va") else temp_child_clone_va
@@ -5555,6 +5697,9 @@ def read_slot_reset_to_menu_job_wait_context(
     input_manager_queue_setup_blob = read_bytes(data, image_base, sections, input_manager_queue_setup_begin, max(0, input_manager_queue_setup_end - input_manager_queue_setup_begin))
     temp_clone_blob = read_bytes(data, image_base, sections, temp_clone_begin, max(0, temp_clone_end - temp_clone_begin))
     temp_callback_blob = read_bytes(data, image_base, sections, temp_callback_begin, max(0, temp_callback_end - temp_callback_begin))
+    temp_status_trampoline_blob = read_bytes(
+        data, image_base, sections, temp_status_trampoline_begin, max(0, temp_status_trampoline_end - temp_status_trampoline_begin)
+    )
     temp_active_clone_blob = read_bytes(data, image_base, sections, temp_active_clone_begin, max(0, temp_active_clone_end - temp_active_clone_begin))
     temp_child_clone_blob = read_bytes(data, image_base, sections, temp_child_clone_begin, max(0, temp_child_clone_end - temp_child_clone_begin))
 
@@ -5570,6 +5715,60 @@ def read_slot_reset_to_menu_job_wait_context(
             ],
             key=lambda value: int(value, 16),
         )
+
+    def rip_refs_to_va_in_range(target_va: int, begin: int, end: int) -> list[dict[str, Any]]:
+        blob = read_bytes(data, image_base, sections, begin, max(0, end - begin))
+        patterns = [
+            (b"\x80\x3d", 2, 7, "cmpb_m8_imm8"),
+            (b"\xc6\x05", 2, 7, "movb_m8_imm8"),
+            (b"\x48\x8b\x05", 3, 7, "movq_load_rax"),
+            (b"\x48\x8b\x0d", 3, 7, "movq_load_rcx"),
+            (b"\x48\x8b\x15", 3, 7, "movq_load_rdx"),
+            (b"\x48\x8b\x1d", 3, 7, "movq_load_rbx"),
+            (b"\x48\x8b\x35", 3, 7, "movq_load_rsi"),
+            (b"\x48\x8b\x3d", 3, 7, "movq_load_rdi"),
+            (b"\x4c\x8b\x05", 3, 7, "movq_load_r8"),
+            (b"\x4c\x8b\x0d", 3, 7, "movq_load_r9"),
+            (b"\x4c\x8b\x15", 3, 7, "movq_load_r10"),
+            (b"\x4c\x8b\x1d", 3, 7, "movq_load_r11"),
+            (b"\x48\x89\x05", 3, 7, "movq_store"),
+            (b"\x48\x8d\x05", 3, 7, "lea_rax"),
+            (b"\x48\x8d\x0d", 3, 7, "lea_rcx"),
+            (b"\x48\x8d\x15", 3, 7, "lea_rdx"),
+            (b"\x48\x8d\x1d", 3, 7, "lea_rbx"),
+            (b"\x48\x8d\x35", 3, 7, "lea_rsi"),
+            (b"\x48\x8d\x3d", 3, 7, "lea_rdi"),
+            (b"\x4c\x8d\x05", 3, 7, "lea_r8"),
+            (b"\x4c\x8d\x0d", 3, 7, "lea_r9"),
+            (b"\x4c\x8d\x15", 3, 7, "lea_r10"),
+            (b"\x4c\x8d\x1d", 3, 7, "lea_r11"),
+        ]
+        refs: list[dict[str, Any]] = []
+        for needle, disp_offset, instruction_size, instruction in patterns:
+            start = 0
+            while True:
+                index = blob.find(needle, start)
+                if index < 0:
+                    break
+                disp = struct.unpack_from("<i", blob, index + disp_offset)[0]
+                source_va = begin + index
+                resolved_va = source_va + instruction_size + disp
+                if resolved_va == target_va:
+                    function_range = find_pdata_range_for_pc(data, image_base, sections, source_va)
+                    refs.append(
+                        {
+                            "source_va": f"0x{source_va:x}",
+                            "source_rva": f"0x{source_va - image_base:x}",
+                            "target_va": f"0x{target_va:x}",
+                            "target_rva": f"0x{target_va - image_base:x}",
+                            "instruction": instruction,
+                            "bytes_hex": blob[index : index + instruction_size].hex(),
+                            "function_begin_va": function_range.get("begin_va"),
+                            "function_end_va": function_range.get("end_va"),
+                        }
+                    )
+                start = index + 1
+        return sorted(refs, key=lambda item: int(str(item["source_va"]), 16))
 
     helper_callers: list[dict[str, Any]] = []
     for ref in sorted(
@@ -5732,20 +5931,14 @@ def read_slot_reset_to_menu_job_wait_context(
     temp_callback_calls = calls_in_range(
         "slot_reset_title_accept_input_manager_state_765f20", temp_callback_begin, temp_callback_end
     )
-    input_manager_global_refs_near_title_accept = [
-        ref
-        for ref in scan_rip_relative_refs_to_va(
-            data, image_base, sections, TARGETS["slot_reset_title_accept_input_manager_global_43d6b7b0"]
-        )
-        if temp_callback_begin <= int(str(ref.get("source_va")), 16) < temp_callback_end
-    ]
-    input_manager_singleton_lifecycle_refs = [
-        ref
-        for ref in scan_rip_relative_refs_to_va(
-            data, image_base, sections, TARGETS["slot_reset_title_accept_input_manager_singleton_43d6b880"]
-        )
-        if input_manager_shutdown_begin <= int(str(ref.get("source_va")), 16) < input_manager_init_end
-    ]
+    input_manager_global_refs_near_title_accept = rip_refs_to_va_in_range(
+        TARGETS["slot_reset_title_accept_input_manager_global_43d6b7b0"], temp_callback_begin, temp_callback_end
+    )
+    input_manager_singleton_lifecycle_refs = rip_refs_to_va_in_range(
+        TARGETS["slot_reset_title_accept_input_manager_singleton_43d6b880"],
+        input_manager_shutdown_begin,
+        input_manager_init_end,
+    )
     set_state_calls = calls_in_range("slot_reset_set_state_helper_b0d960", helper_begin, helper_end)
     attach_calls = calls_in_range("slot_reset_branch_gate_submit_attach_7a9460", helper_begin, helper_end)
     return {
@@ -5775,6 +5968,8 @@ def read_slot_reset_to_menu_job_wait_context(
         "temp_clone_end_va": temp_clone_range.get("end_va"),
         "temp_callback_begin_va": temp_callback_range.get("begin_va"),
         "temp_callback_end_va": temp_callback_range.get("end_va"),
+        "temp_status_trampoline_begin_va": temp_status_trampoline_range.get("begin_va"),
+        "temp_status_trampoline_end_va": temp_status_trampoline_range.get("end_va"),
         "temp_active_clone_begin_va": temp_active_clone_range.get("begin_va"),
         "temp_active_clone_end_va": temp_active_clone_range.get("end_va"),
         "temp_child_clone_begin_va": temp_child_clone_range.get("begin_va"),
@@ -5864,6 +6059,12 @@ def read_slot_reset_to_menu_job_wait_context(
         and b"\xff\x50\x10" in node_update_blob
         and b"\x83\xe8\x01\x74" in node_update_blob
         and b"\x83\xf8\x01" in node_update_blob,
+        "begintitle_input_node_update_node128_status_routes": b"\x48\x83\xbf\x28\x01\x00\x00\x00" in node_update_blob
+        and b"\x48\x8b\x8f\x28\x01\x00\x00" in node_update_blob
+        and b"\x83\xe8\x01\x74\x56\x83\xe8\x01\x74\x2d\x83\xf8\x01\x0f\x85\x9e\x00\x00\x00" in node_update_blob
+        and b"\x48\x8b\x8f\x30\x01\x00\x00\x48\x8b\x01\x48\x8d\x55\x67\xff\x50\x18" in node_update_blob
+        and b"\xb2\x01\x48\x8b\xc8\xe8\x5a\x5d\xf8\xff" in node_update_blob
+        and b"\x33\xd2\x48\x8b\xc8\xe8\x7e\x5d\xf8\xff" in node_update_blob,
         "begintitle_input_node_update_global_input_bit_mapped": b"\x48\x8b\x35" in node_update_blob
         and b"\x0f\xb7\x03" in node_update_blob
         and b"\x66\x83\xf8\x47" in node_update_blob
@@ -5910,6 +6111,18 @@ def read_slot_reset_to_menu_job_wait_context(
         and temp_callback_calls == ["0x1407ad827"]
         and b"\x48\x8b\x0d\x95\xdf\x5b\x03" in temp_callback_blob
         and b"\x84\xc0" in temp_callback_blob
+        and b"\x0f\x94\xc1" in temp_callback_blob,
+        "begintitle_input_builder_node128_provider_clone_mapped": b"\x48\x8d\x9e\xf0\x00\x00\x00" in input_builder_blob
+        and b"\x48\x89\x5c\x24\x30" in input_builder_blob
+        and b"\x4c\x89\x63\x38" in input_builder_blob
+        and b"\x48\x8b\x4d\x0f\x48\x85\xc9\x74\x0c\x48\x8b\x01\x48\x8b\xd3\xff\x10\x48\x89\x43\x38" in input_builder_blob,
+        "begintitle_temp_status_trampoline_jumps_callback": temp_status_trampoline_range.get("begin_va") == "0x1407ad8c0"
+        and temp_status_trampoline_range.get("end_va") == "0x1407ad8cb"
+        and temp_status_trampoline_blob.startswith(b"\x48\xff\x61\x08"),
+        "begintitle_node128_status_provider_is_inverted_input_manager": [row.get("value_va") for row in temp_active_vtable_slots[:3]]
+        == ["0x1407ad6c0", "0x1407ad990", "0x1407ad8c0"]
+        and temp_status_trampoline_blob.startswith(b"\x48\xff\x61\x08")
+        and temp_callback_calls == ["0x1407ad827"]
         and b"\x0f\x94\xc1" in temp_callback_blob,
         "begintitle_input_manager_state_active18_mapped": input_manager_state_range.get("begin_va") == "0x140765f20"
         and input_manager_state_range.get("end_va") == "0x140765f31"
@@ -6014,7 +6227,12 @@ def read_slot_reset_to_menu_job_wait_context(
     }
 
 
-def read_entry_selector_window(data: bytes, image_base: int, sections: list[dict[str, int | str]]) -> dict[str, Any]:
+def read_entry_selector_window(
+    data: bytes,
+    image_base: int,
+    sections: list[dict[str, int | str]],
+    rel32_refs: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
     start_va = TARGETS["entry_selector_824b50"]
     size = 0xC0
     blob = read_bytes(data, image_base, sections, start_va, size)
@@ -6025,8 +6243,12 @@ def read_entry_selector_window(data: bytes, image_base: int, sections: list[dict
         "bytes_hex": blob.hex(),
         "writes_r8d_to_descriptor_plus4": b"\x48\x8b\x01\x44\x89\x40\x04" in blob,
         "branches_on_selector_minus_one_le_one": b"\x41\x8d\x40\xff" in blob and b"\x83\xf8\x01\x76" in blob,
-        "has_alloc_high_path": any(ref["source_va"] == "0x140824b88" for ref in scan_rel32_calls(data, image_base, sections)["task_alloc_selector_high_7a7200"]),
-        "has_alloc_low_path": any(ref["source_va"] == "0x140824ba3" for ref in scan_rel32_calls(data, image_base, sections)["task_alloc_selector_low_7a7250"]),
+        "has_alloc_high_path": any(
+            ref["source_va"] == "0x140824b88" for ref in rel32_refs["task_alloc_selector_high_7a7200"]
+        ),
+        "has_alloc_low_path": any(
+            ref["source_va"] == "0x140824ba3" for ref in rel32_refs["task_alloc_selector_low_7a7250"]
+        ),
     }
 
 
@@ -6634,7 +6856,7 @@ def main() -> int:
     slot_reset_end_flow_tail_branch_context = read_slot_reset_end_flow_tail_branch_context(
         data, image_base, sections, rel32_refs
     )
-    entry_selector_window = read_entry_selector_window(data, image_base, sections)
+    entry_selector_window = read_entry_selector_window(data, image_base, sections, rel32_refs)
     task_local_wrapper_contexts = read_task_local_wrapper_contexts(data, image_base, sections, rel32_refs)
     task_local_wrapper_sequences = summarize_task_local_wrapper_sequences(task_local_wrapper_contexts)
     rip_relative_vtable_refs = scan_rip_relative_vtable_refs(data, image_base, sections)
@@ -8184,6 +8406,9 @@ def main() -> int:
             "slot_reset_begintitle_input_node_update_status_mapped": bool(
                 slot_reset_to_menu_job_wait_context.get("begintitle_input_node_update_status_switch_mapped")
             ),
+            "slot_reset_begintitle_input_node_update_node128_status_routes_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_node_update_node128_status_routes")
+            ),
             "slot_reset_begintitle_input_node_update_global_bit_mapped": bool(
                 slot_reset_to_menu_job_wait_context.get("begintitle_input_node_update_global_input_bit_mapped")
             ),
@@ -8208,6 +8433,29 @@ def main() -> int:
             ),
             "slot_reset_begintitle_temp_callback_mapped": bool(
                 slot_reset_to_menu_job_wait_context.get("begintitle_temp_callback_inverts_input_manager_state")
+            ),
+            "slot_reset_begintitle_node128_provider_clone_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_builder_node128_provider_clone_mapped")
+            ),
+            "slot_reset_begintitle_node128_status_trampoline_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_temp_status_trampoline_jumps_callback")
+            ),
+            "slot_reset_begintitle_node128_status_provider_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_node128_status_provider_is_inverted_input_manager")
+            ),
+            "slot_reset_begintitle_node128_title_accept_candidate_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_input_builder_node128_provider_clone_mapped")
+                and slot_reset_to_menu_job_wait_context.get("begintitle_node128_status_provider_is_inverted_input_manager")
+                and slot_reset_to_menu_job_wait_context.get("begintitle_input_node_update_node128_status_routes")
+                and slot_reset_to_menu_job_wait_context.get("begintitle_accept_condition_chain_mapped")
+                and slot_reset_to_menu_job_wait_context.get("candidate_title_to_menujobwait_handoff_mapped")
+            ),
+            "slot_reset_begintitle_node128_global_toggle_pair_mapped": bool(
+                slot_reset_to_menu_job_wait_context.get("begintitle_node128_status_provider_is_inverted_input_manager")
+                and slot_reset_menu_job_wait_context.get("calls_global_toggle_after_first_submit")
+                and slot_reset_global_toggle_context.get("stores_dl_to_context_plus_18")
+                and slot_reset_global_toggle_context.get("extra_parent_first_call_has_false_and_true_paths")
+                and slot_reset_global_toggle_context.get("extra_parent_second_call_sets_context_plus19_then_true")
             ),
             "slot_reset_begintitle_input_manager_state_mapped": bool(
                 slot_reset_to_menu_job_wait_context.get("begintitle_input_manager_state_active18_mapped")
@@ -8414,6 +8662,20 @@ def main() -> int:
             "slot_reset_global_toggle_extra_parent_callback_chains_mapped": bool(
                 slot_reset_global_toggle_context.get("extra_parent_first_toggle_callback_chain_mapped")
                 and slot_reset_global_toggle_context.get("extra_parent_second_toggle_callback_chain_mapped")
+            ),
+            "slot_reset_global_toggle_extra_child_gates_mapped": bool(
+                slot_reset_global_toggle_context.get("extra_toggle_gate_a9cc90_context", {}).get("loads_child_from_rcx_plus8")
+                and slot_reset_global_toggle_context.get("extra_toggle_gate_a9cc90_context", {}).get("returns_false_when_child_null")
+                and slot_reset_global_toggle_context.get("extra_toggle_gate_a9cc90_context", {}).get("tail_jumps_when_child_present")
+                and slot_reset_global_toggle_context.get("extra_gate_a9cd00_context", {}).get("loads_child_from_rcx_plus8")
+                and slot_reset_global_toggle_context.get("extra_gate_a9cd00_context", {}).get("returns_false_when_child_null")
+                and slot_reset_global_toggle_context.get("extra_gate_a9cd00_context", {}).get("tail_jumps_when_child_present")
+            ),
+            "slot_reset_global_toggle_extra_child_status_bits_mapped": bool(
+                slot_reset_global_toggle_context.get("extra_toggle_gate_a9cc90_context", {}).get("tail_reads_child_status_dword_14c")
+                and slot_reset_global_toggle_context.get("extra_toggle_gate_a9cc90_context", {}).get("tail_status_bit_index") == 1
+                and slot_reset_global_toggle_context.get("extra_gate_a9cd00_context", {}).get("tail_reads_child_status_dword_14c")
+                and slot_reset_global_toggle_context.get("extra_gate_a9cd00_context", {}).get("tail_status_bit_index") == 0
             ),
             "slot_reset_global_job_context_known_functions_mapped": bool(
                 {"0x140ae5390", "0x140b01be0", "0x140b0d400"}.issubset(
