@@ -903,7 +903,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
                 .spawn(install_safe_input_hooks);
         });
     }
-    if trace_continue_enabled() || direct_autoload_configured {
+    if (trace_continue_enabled() || direct_autoload_configured) && !continue_trace_disabled() {
         write_bootstrap_event(
             BOOTSTRAP_EVENT_CONTINUE_TRACE_REQUESTED,
             BOOTSTRAP_DETAIL_START,
@@ -964,6 +964,11 @@ fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
 
         cs_task.run_recurring(
             move |task_data: &FD4TaskData| {
+                // Bisect kill-switch: do nothing per frame. Isolates "our task
+                // body crashes the title ~19s" from "the DLL's mere presence".
+                if inert_mode() {
+                    return;
+                }
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
                     let mut state = state_or_return(&state);
                     state.game_task_ticks += GAME_TASK_TICK_INCREMENT;
@@ -1630,6 +1635,30 @@ fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(file, "{args}");
     }
+}
+
+/// Kill-switch to skip installing the continue_trace hooks (bisecting a ~19s
+/// title crash caused by our DLL). When set, the continue/load-flow hooks are
+/// not installed even if autoload is configured.
+/// Bisect kill-switch: when set, the recurring game task does nothing each
+/// frame, so we can tell whether the per-frame task body or the DLL's mere
+/// presence is what terminates the title ~19s in.
+fn inert_mode() -> bool {
+    matches!(std::env::var("ER_EFFECTS_INERT").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-inert.txt")
+            .exists()
+}
+
+fn continue_trace_disabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_NO_CONTINUE_TRACE").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-no-continue-trace.txt")
+        .exists()
 }
 
 fn trace_continue_enabled() -> bool {
