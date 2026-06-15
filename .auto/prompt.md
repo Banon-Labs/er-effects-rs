@@ -3,6 +3,35 @@
 ## Objective
 Reliably autoload Elden Ring / Seamless Co-op into the selected save slot on Linux/Proton using deterministic game-native or in-process mechanisms. The final deliverable must require zero host, simulated, or safe-input button presses: simulated inputs are diagnostic scaffolding only, useful for discovering which startup/menu transitions must be replaced by native loading logic. Prefer native scheduler/menu-task transitions over direct synchronous load primitives. Never depend on host mouse/focus/pointer nudges, destructive save rewrites, lingering ER processes, or invasive production tracing.
 
+## Active Lane (2026-06-15): SimpleTitleStep selection injection
+
+Current best: north_star **700** — `force_play_game` drives the inner TitleStep to STEP_PlayGame (5) and the native submit->validate->pair chain writes the load value `GameMan+0x14=9` with zero input, but the enqueued load job (`owner+0x2e8`, `job+0xd8=1`) is never drained and the load never completes.
+
+Root cause (readonly RE, see bd `menu-task-manager-architecture`): the inner TitleStep (vtable `0x2b63bb0`, state at `+0x4c`) is driven by an OUTER manager **SimpleTitleStep** (global `0x143d71340`). The TitleStep update `0xb0bd60` only dispatches state handlers; it does NOT pump the load/menu jobs. The real driver is the **SimpleTitleStep MenuLoop pump `0xb0a5e0`**: it parses a serialized selection stream (readers `0xe7b650`/`0xe7c780`/`0xe7c3e0`) into `owner+0x130`, takes from queue `owner+0x128` (`title_queue_take 0x7a9560`), submits a menu task (`0x733f20`), and sets the title state via `title_queue_state_set 0xb0aa90` — gated on the parsed selection. The pump keeps the scheduler coherent and drains the load job. Force-writing the TitleStep state bypasses the pump, orphaning the job.
+
+Lane goal: reach `player_available` for slot 9 with `simulated_button_presses_total=0` by feeding the SimpleTitleStep selection queue/stream so the pump itself sets TitleStep->PlayGame and drains the load job. Do NOT write the TitleStep state field.
+
+Lane sub-ladder (use these finer north_star values so each RE/runtime step scores — prevents a premature plateau verdict while the lane is still productive):
+- 720: selection PRODUCER for `SimpleTitleStep+0x128` identified statically (function + arg/serialization signature).
+- 740: selection SERIALIZATION format decoded (the bytes/struct the stream readers `0xe7b650`/`0xe7c780`/`0xe7c3e0` consume).
+- 760: native selection injected at runtime and observed PARSED (`owner+0x130` set / `+0x128` non-empty) without forcing TitleStep state.
+- 800: the pump CONSUMES the injected selection and advances TitleStep via `title_queue_state_set 0xb0aa90` (state set by the pump, not by us).
+- 850: the load job `owner+0x2e8.job+0xd8` drains to 0 (`native_request_consumed=1`).
+- 900: `map_load_67bc10` fires (`title_bootstrap_seen=1`) and `save_state` advances.
+- 1000: `player_available=1`, slot 9 loaded, repeatable.
+
+Banned dead-ends in this lane (auto-discard; do not retry unchanged):
+- Writing the TitleStep state field `owner+0x4c` directly (orphans the load job — confirmed v8/v9).
+- Calling `0x82a0f0(job)` or any external menu-task update on the load job (crashes — confirmed v10).
+- Host pointer/keyboard or DirectInput safe-input as the driver (diagnostic scaffolding only).
+
+Lane-exhaustion criteria — do NOT declare this lane plateaued/dead until ALL are tried and falsified with static+runtime evidence:
+1. call the selection producer directly with a Continue/slot-9 payload;
+2. inject the serialized selection into the stream the pump reads;
+3. push an entry onto queue `+0x128` directly (bypassing the producer);
+4. set the pump's state-set gate condition directly;
+5. set `owner+0x130` (parsed selection) and trigger the gate.
+
 ## Primary Metric
 - **north_star_score** (unitless, higher is better):
   - 1000: selected Seamless/ER save slot loads to `player_available=true` within bounded time, repeatably, via deterministic native/menu-task path with `simulated_button_presses_total=0`.
@@ -12,6 +41,7 @@ Reliably autoload Elden Ring / Seamless Co-op into the selected save slot on Lin
   - 400: static RE identifies a plausible native queue/scheduler transition with address/RVA evidence.
   - 200: tooling/build/test/refactor improvement that reduces risk or improves observability without moving autoload forward.
   - 0: any hard-gate violation.
+  - Within the Active Lane, use the finer sub-ladder values (720/740/760/850 etc.) defined in "Active Lane" above so incremental RE/runtime progress is scored and the plateau detector does not fire while the lane is still productive.
 
 ## Secondary Metrics
 Emit when available: `autoload_success`, `player_available`, `selected_slot_loaded`, `time_to_player_seconds`, `game_save_state`, `game_save_slot`, `game_requested_save_slot_load_index`, `game_save_requested`, `title_bootstrap_seen`, `native_request_consumed`, `crash_detected`, `save_safety_ok`, `er_process_teardown_ok`, `host_pointer_input_used` (must remain 0), `simulated_button_presses_total` (must be 0 for product success), per-logical-button counters `simulated_confirm_presses`, `simulated_cancel_presses`, `simulated_start_presses`, `simulated_dpad_up_presses`, `simulated_dpad_down_presses`, `simulated_dpad_left_presses`, `simulated_dpad_right_presses`, `simulated_left_bumper_presses`, `simulated_right_bumper_presses` (all lower is better; 0 ideal), `menu_condition_evidence_score` (higher is better for oracle traces only), `input_reason_known` (1 when structured evidence explains required diagnostic inputs), `state_gated_input` (1 when diagnostic input emission is gated by detected menu/load state, not fixed-count timing), `input_explanation_bonus` (diagnostic only), `trace_invasiveness_score` (lower is better), `static_evidence_score` (higher is better), `runtime_frame_task_hz_min` and `runtime_frame_task_hz_avg` (game-thread task tick rate during a runtime probe, computed as delta(game_task_ticks)/delta(seconds); healthy title baseline ~60, higher is better — a low value is user-visible FPS perturbation and a discard signal), `runtime_probe_seconds`, `build_seconds`, `test_pass`, `code_complexity_delta`, `artifact_bytes`, and `false_positives` (must remain 0 for keep decisions).
