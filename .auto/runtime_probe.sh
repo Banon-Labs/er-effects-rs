@@ -52,6 +52,7 @@ TRACE_TASK_NODE_BYTES_PATH="${TRACE_TASK_NODE_BYTES_PATH:-$GAME_DIR/er-effects-t
 SELECTBOT_PROBE_PATH="${SELECTBOT_PROBE_PATH:-$GAME_DIR/er-effects-selectbot-probe.txt}"
 TITLE_PROCEED_GATE_PATH="${TITLE_PROCEED_GATE_PATH:-$GAME_DIR/er-effects-title-proceed-gate.txt}"
 INGAMESTEP_PUMP_PATH="${INGAMESTEP_PUMP_PATH:-$GAME_DIR/er-effects-ingamestep-pump.txt}"
+INGAMESTEP_UNPIN_PATH="${INGAMESTEP_UNPIN_PATH:-$GAME_DIR/er-effects-ingamestep-unpin.txt}"
 FORCE_PLAY_GAME_PATH="${FORCE_PLAY_GAME_PATH:-$GAME_DIR/er-effects-force-play-game.txt}"
 PROTON="${PROTON:-$HOME/.local/share/Steam/steamapps/common/Proton - Experimental/proton}"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
@@ -483,6 +484,9 @@ cleanup_runtime() {
   if [[ "${ER_EFFECTS_INGAMESTEP_PUMP:-0}" == "1" ]]; then
     rm -f "$INGAMESTEP_PUMP_PATH" "$FORCE_PLAY_GAME_PATH"
   fi
+  if [[ "${ER_EFFECTS_INGAMESTEP_UNPIN:-0}" == "1" ]]; then
+    rm -f "$INGAMESTEP_UNPIN_PATH"
+  fi
   copy_runtime_logs || true
   write_state_snapshot "$ARTIFACT_DIR/final-state-before-cleanup.json" || true
   teardown_runtime_processes || true
@@ -602,6 +606,12 @@ PY
       cp -f "$INGAMESTEP_PUMP_PATH" "$ARTIFACT_DIR/ingamestep-pump-request.txt"
     else
       rm -f "$INGAMESTEP_PUMP_PATH"
+    fi
+    if [[ "${ER_EFFECTS_INGAMESTEP_UNPIN:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$INGAMESTEP_UNPIN_PATH"
+      cp -f "$INGAMESTEP_UNPIN_PATH" "$ARTIFACT_DIR/ingamestep-unpin-request.txt"
+    else
+      rm -f "$INGAMESTEP_UNPIN_PATH"
     fi
     rm -f "$TELEMETRY_PATH" "$COMMAND_PATH" "$AUTOLOAD_DEBUG_PATH" "$TRACE_CONTINUE_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH"
   } > "$ARTIFACT_DIR/setup.out" 2>&1

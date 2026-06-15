@@ -238,9 +238,17 @@ const TITLE_PROCEED_GATE_SET_VALUE: u8 = 1;
 /// `+0x48` (`-1` == finished); we tick only while `+0xd8 != 0` and `+0x48 != -1`.
 const STEP_PUMP_DRIVER_RVA: u32 = 0x00b0bd60;
 const INGAMESTEP_STEP_STATE_OFFSET: usize = 0x48;
+const INGAMESTEP_NEXT_STATE_OFFSET: usize = 0x4c;
 const INGAMESTEP_FINISHED_SENTINEL: i32 = -1;
 const INGAMESTEP_LOAD_DONE: i32 = 0;
 const INGAMESTEP_PUMP_D8_UNOBSERVED: i32 = -2;
+/// FD4StepTemplate force-state override fields (pump `0x140b0bd60` @ 0xb0be01:
+/// `if byte[+0x69]!=0 && byte[+0xa8]==0 { +0x48 = +0x4c = [+0xac]; +0xa8=0 }`).
+/// If `+0x69` is set and `+0xac` pins the step index, the machine never advances.
+const INGAMESTEP_OVERRIDE_TRIGGER_OFFSET: usize = 0x69;
+const INGAMESTEP_OVERRIDE_GUARD_OFFSET: usize = 0xa8;
+const INGAMESTEP_OVERRIDE_TARGET_OFFSET: usize = 0xac;
+const INGAMESTEP_OVERRIDE_TRIGGER_CLEAR: u8 = 0;
 const MENU_TASK_NULL_STATE_QWORD: usize = 0;
 const MENU_TASK_NULL_PAYLOAD_PTR: usize = 0;
 const MENU_TASK_STATE_PAYLOAD_CODE_OFFSET: usize = 4;
@@ -281,6 +289,10 @@ static TITLE_PROCEED_GATE_FIRED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 static INGAMESTEP_PUMP_LAST_D8: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(INGAMESTEP_PUMP_D8_UNOBSERVED);
+static INGAMESTEP_PUMP_LAST_NEXT: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(INGAMESTEP_PUMP_D8_UNOBSERVED);
+static INGAMESTEP_UNPIN_DONE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 static TITLE_OWNER_SCAN_COUNTDOWN: AtomicUsize = AtomicUsize::new(0);
 static SAFE_INPUT_CONFIRM_PULSE_SEQ: AtomicUsize = AtomicUsize::new(0);
 static MENU_TRACE_EVENT_SEQ: AtomicUsize = AtomicUsize::new(0);
@@ -1697,16 +1709,42 @@ unsafe fn ingamestep_pump_tick(module_base: usize, task_data: &FD4TaskData) {
     if ingame.is_null() {
         return;
     }
-    let step_state = unsafe { *(ingame.add(INGAMESTEP_STEP_STATE_OFFSET) as *const i32) };
-    let d8_before = unsafe { *(ingame.add(TITLE_OWNER_JOB_PENDING_OFFSET) as *const i32) };
-    if step_state == INGAMESTEP_FINISHED_SENTINEL || d8_before == INGAMESTEP_LOAD_DONE {
-        let last = INGAMESTEP_PUMP_LAST_D8.swap(d8_before, Ordering::SeqCst);
-        if d8_before != last {
-            append_autoload_debug(format_args!(
-                "ingamestep_pump: load settled d8={d8_before} step_state={step_state} ingame={ingame:p}"
-            ));
-        }
+    // Sample the InGameStep step machine. step_state (+0x48) is the CURRENT step,
+    // next (+0x4c) is where it wants to go: if next advances while cur lags, the
+    // machine IS progressing (real wait is downstream). The override fields
+    // (+0x69/+0xa8/+0xac) reveal whether the pump force-re-stamps the step index
+    // each frame (which would pin it). Log on change of (next, d8) to trace it.
+    let cur = unsafe { *(ingame.add(INGAMESTEP_STEP_STATE_OFFSET) as *const i32) };
+    let next = unsafe { *(ingame.add(INGAMESTEP_NEXT_STATE_OFFSET) as *const i32) };
+    let d8 = unsafe { *(ingame.add(TITLE_OWNER_JOB_PENDING_OFFSET) as *const i32) };
+    let ov_trigger = unsafe { *(ingame.add(INGAMESTEP_OVERRIDE_TRIGGER_OFFSET)) };
+    let ov_guard = unsafe { *(ingame.add(INGAMESTEP_OVERRIDE_GUARD_OFFSET)) };
+    let ov_target = unsafe { *(ingame.add(INGAMESTEP_OVERRIDE_TARGET_OFFSET) as *const i32) };
+    let last_next = INGAMESTEP_PUMP_LAST_NEXT.swap(next, Ordering::SeqCst);
+    let last_d8 = INGAMESTEP_PUMP_LAST_D8.swap(d8, Ordering::SeqCst);
+    if next != last_next || d8 != last_d8 {
+        append_autoload_debug(format_args!(
+            "ingamestep_pump: cur={cur} next={next} d8={d8} ov_trigger={ov_trigger} ov_guard={ov_guard} ov_target={ov_target} ingame={ingame:p}"
+        ));
+    }
+    if cur == INGAMESTEP_FINISHED_SENTINEL || d8 == INGAMESTEP_LOAD_DONE {
         return;
+    }
+    // Gated, one-shot "unpin": if the force-state override is re-stamping the step
+    // index (trigger set, target == current stalled step), clear the trigger so
+    // the natural step advance sticks. Read-only by default; opt in via
+    // ER_EFFECTS_INGAMESTEP_UNPIN once the log confirms the machine is pinned.
+    if ingamestep_unpin_enabled()
+        && ov_trigger != INGAMESTEP_OVERRIDE_TRIGGER_CLEAR
+        && ov_target == cur
+        && !INGAMESTEP_UNPIN_DONE.swap(true, Ordering::SeqCst)
+    {
+        unsafe {
+            *(ingame.add(INGAMESTEP_OVERRIDE_TRIGGER_OFFSET)) = INGAMESTEP_OVERRIDE_TRIGGER_CLEAR;
+        }
+        append_autoload_debug(format_args!(
+            "ingamestep_pump: cleared force-override trigger (was {ov_trigger}, target={ov_target}) cur={cur} ingame={ingame:p}"
+        ));
     }
     let Ok(pump) = game_rva(STEP_PUMP_DRIVER_RVA) else {
         return;
@@ -1714,13 +1752,16 @@ unsafe fn ingamestep_pump_tick(module_base: usize, task_data: &FD4TaskData) {
     let pump: unsafe extern "system" fn(*mut u8, *const FD4TaskData) -> usize =
         unsafe { std::mem::transmute(pump) };
     let _ = unsafe { pump(ingame, task_data as *const FD4TaskData) };
-    let d8_after = unsafe { *(ingame.add(TITLE_OWNER_JOB_PENDING_OFFSET) as *const i32) };
-    let last = INGAMESTEP_PUMP_LAST_D8.swap(d8_after, Ordering::SeqCst);
-    if d8_after != last {
-        append_autoload_debug(format_args!(
-            "ingamestep_pump: ticked d8 {d8_before}->{d8_after} step_state={step_state} ingame={ingame:p}"
-        ));
-    }
+}
+
+fn ingamestep_unpin_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_INGAMESTEP_UNPIN").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-ingamestep-unpin.txt")
+        .exists()
 }
 
 /// Drives the native TitleStep state machine to `STEP_PlayGame` once.
