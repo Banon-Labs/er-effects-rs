@@ -196,6 +196,19 @@ const FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET: usize = 0x14;
 const FORCE_PLAY_GAME_GM_PAIR_GATE_B28_OFFSET: usize = 0xb28;
 const FORCE_PLAY_GAME_GM_VALIDATE_12D_OFFSET: usize = 0x12d;
 const FORCE_PLAY_GAME_GM_VALIDATE_12E_OFFSET: usize = 0x12e;
+/// SelectBot selection-injection lane (runs 300/301 static decode). The
+/// SimpleTitleStep MenuLoop pump 0xb0a5e0 parses a serialized SelectBot stream
+/// keyed by "CSEzSelectBot.MoveMapListStep" into owner+0x130 (parsed selection)
+/// and submits a task onto owner+0x128 (title queue). The stream data lives in
+/// the registry object pointed to by global [0x143d87360]. The pump's direct
+/// PlayGame trigger 0xb0a78b is gated by byte [0x143d856a0] (load-active, which
+/// the sole writer 0x140c8fe90 sets downstream of the load). This read-only
+/// probe samples those fields to confirm the registry is live and the pump idles
+/// with an empty stream before any write is attempted.
+const SELECTBOT_OWNER_TITLE_QUEUE_128_OFFSET: usize = 0x128;
+const SELECTBOT_OWNER_PARSED_SELECTION_130_OFFSET: usize = 0x130;
+const SELECTBOT_REGISTRY_GLOBAL_RVA: usize = 0x3d87360;
+const SELECTBOT_LOAD_GATE_RVA: usize = 0x3d856a0;
 const MENU_TASK_NULL_STATE_QWORD: usize = 0;
 const MENU_TASK_NULL_PAYLOAD_PTR: usize = 0;
 const MENU_TASK_STATE_PAYLOAD_CODE_OFFSET: usize = 4;
@@ -921,6 +934,14 @@ fn process_autoload_request(state: &mut EffectsState) {
         return;
     };
 
+    if selectbot_probe_enabled() {
+        // Read-only validation: sample the SelectBot registry / pump state and
+        // return without mutating anything or completing the autoload, so the
+        // probe keeps sampling across the title idle.
+        unsafe { selectbot_probe_once(game_module_base, state.game_task_ticks) };
+        return;
+    }
+
     if force_play_game_enabled() {
         if let Some(slot) = state.autoload.slot() {
             unsafe { call_force_play_game_once(game_module_base, slot, state.game_task_ticks) };
@@ -1513,6 +1534,49 @@ fn force_play_game_enabled() -> bool {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("er-effects-force-play-game.txt")
         .exists()
+}
+
+fn selectbot_probe_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_SELECTBOT_PROBE").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-selectbot-probe.txt")
+        .exists()
+}
+
+/// Read-only runtime validation for the SelectBot selection-injection lane.
+///
+/// Static RE (runs 300/301) decoded the pump's selection path but the SelectBot
+/// registry is FromSoftware's internal test-automation channel, so it may be
+/// empty/inactive in the retail build. Before reversing the registry write API
+/// and attempting an injection, this samples the live state each frame: the
+/// SimpleTitleStep owner state (+0x4c), title queue (+0x128), parsed selection
+/// (+0x130), the registry root pointer ([0x143d87360]) and the load-active gate
+/// byte ([0x143d856a0]). It never writes game memory. A non-null registry with
+/// an idle pump (state stable, queue/selection empty, gate 0) confirms the
+/// injection target is real and reachable; a null registry means the SelectBot
+/// harness is not initialized and the lane needs a different entry.
+unsafe fn selectbot_probe_once(module_base: usize, tick: u64) {
+    if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL != TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+        return;
+    }
+    let Some(owner) = (unsafe { title_owner(module_base) }) else {
+        append_autoload_debug(format_args!(
+            "selectbot_probe: owner not resolved tick={tick}"
+        ));
+        return;
+    };
+    let state = unsafe { *(owner.add(TITLE_OWNER_STATE_OFFSET) as *const i32) };
+    let queue128 = unsafe { *(owner.add(SELECTBOT_OWNER_TITLE_QUEUE_128_OFFSET) as *const usize) };
+    let selection130 =
+        unsafe { *(owner.add(SELECTBOT_OWNER_PARSED_SELECTION_130_OFFSET) as *const i32) };
+    let registry = unsafe { *((module_base + SELECTBOT_REGISTRY_GLOBAL_RVA) as *const usize) };
+    let load_gate = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
+    append_autoload_debug(format_args!(
+        "selectbot_probe: state={state} queue128={queue128:#x} selection130={selection130} registry={registry:#x} load_gate={load_gate} tick={tick}"
+    ));
 }
 
 /// Drives the native TitleStep state machine to `STEP_PlayGame` once.

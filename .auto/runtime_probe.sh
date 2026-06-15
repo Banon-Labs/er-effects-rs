@@ -49,6 +49,7 @@ NATIVE_TITLE_JOB_PATH="${NATIVE_TITLE_JOB_PATH:-$GAME_DIR/er-effects-native-titl
 NATIVE_TITLE_TOGGLE_PATH="${NATIVE_TITLE_TOGGLE_PATH:-$GAME_DIR/er-effects-native-title-toggle.txt}"
 NATIVE_EXTRA_PARENT_PATH="${NATIVE_EXTRA_PARENT_PATH:-$GAME_DIR/er-effects-native-extra-parent.txt}"
 TRACE_TASK_NODE_BYTES_PATH="${TRACE_TASK_NODE_BYTES_PATH:-$GAME_DIR/er-effects-trace-task-node-bytes.txt}"
+SELECTBOT_PROBE_PATH="${SELECTBOT_PROBE_PATH:-$GAME_DIR/er-effects-selectbot-probe.txt}"
 PROTON="${PROTON:-$HOME/.local/share/Steam/steamapps/common/Proton - Experimental/proton}"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
 STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}"
@@ -470,6 +471,9 @@ cleanup_runtime() {
   if [[ "${ER_EFFECTS_TRACE_TASK_NODE_BYTES:-0}" == "1" ]]; then
     rm -f "$TRACE_TASK_NODE_BYTES_PATH"
   fi
+  if [[ "${ER_EFFECTS_SELECTBOT_PROBE:-0}" == "1" ]]; then
+    rm -f "$SELECTBOT_PROBE_PATH"
+  fi
   copy_runtime_logs || true
   write_state_snapshot "$ARTIFACT_DIR/final-state-before-cleanup.json" || true
   teardown_runtime_processes || true
@@ -568,6 +572,12 @@ PY
       cp -f "$TRACE_TASK_NODE_BYTES_PATH" "$ARTIFACT_DIR/trace-task-node-bytes-request.txt"
     else
       rm -f "$TRACE_TASK_NODE_BYTES_PATH"
+    fi
+    if [[ "${ER_EFFECTS_SELECTBOT_PROBE:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$SELECTBOT_PROBE_PATH"
+      cp -f "$SELECTBOT_PROBE_PATH" "$ARTIFACT_DIR/selectbot-probe-request.txt"
+    else
+      rm -f "$SELECTBOT_PROBE_PATH"
     fi
     rm -f "$TELEMETRY_PATH" "$COMMAND_PATH" "$AUTOLOAD_DEBUG_PATH" "$TRACE_CONTINUE_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH"
   } > "$ARTIFACT_DIR/setup.out" 2>&1

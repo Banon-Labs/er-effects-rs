@@ -1,0 +1,20 @@
+# Read-only SelectBot registry/pump validation probe (lane 760 precursor).
+# The DLL only SAMPLES SimpleTitleStep owner +0x4c/+0x128/+0x130, the registry
+# root [0x143d87360] and the load gate [0x143d856a0] at the title idle -- it
+# never writes game memory or simulates input. autoload-request is used as the
+# watch target so the watcher keeps observing (the read-only probe never issues
+# a request) until the 30s readiness deadline while the probe logs samples.
+LAUNCH_MODE=steam
+RUNTIME_MAX_NUDGES=0
+RESTORE_RUNTIME_SAVES=1
+RUNTIME_CAPTURE_INPUT_OCR=0
+ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=0
+ER_EFFECTS_SELECTBOT_PROBE=1
+ER_EFFECTS_AUTOLOAD_SLOT=9
+ER_EFFECTS_AUTOLOAD_METHOD=direct_menu_load
+ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP=false
+ER_EFFECTS_TRACE_MENU_TASK_UPDATE=0
+RUNTIME_WATCH_TARGET=autoload-request
+RUNTIME_AUTOLOAD_ATTEMPT_BUDGET=300
+RUNTIME_POST_REQUEST_TICK_BUDGET=300
+RUNTIME_SPAWN_POLL_BUDGET=32768
