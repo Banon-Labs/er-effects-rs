@@ -152,6 +152,36 @@ def main() -> int:
             False,
             "Prefer splitting up each command split by ; into its own file",
         ),
+        # Quoted semicolons are not command separators (no command_ast supplied
+        # at runtime, so the quote-stripping fallback must handle these).
+        PolicyCase(
+            "allow-semicolon-in-double-quoted-commit",
+            'git commit -m "fix a; fix b"',
+            True,
+        ),
+        PolicyCase(
+            "allow-semicolon-in-python-dash-c",
+            'python3 -c "import sys; print(sys.version)"',
+            True,
+        ),
+        PolicyCase(
+            "allow-semicolon-in-single-quoted-arg",
+            "bd remember --key k 'first clause; second clause'",
+            True,
+        ),
+        PolicyCase(
+            "deny-real-split-between-quoted-args",
+            'echo "a"; echo "b"',
+            False,
+            "Prefer splitting up each command split by ; into its own file",
+        ),
+        # Backslash-escaped quotes inside a quoted message must not desync the
+        # quote-stripping (a commit message that quotes example commands).
+        PolicyCase(
+            "allow-escaped-quotes-with-semicolons",
+            'git commit -m "guard ignores quotes; e.g. python3 -c \\"a; b\\" works"',
+            True,
+        ),
     ]
     for case in cases:
         run_case(case)

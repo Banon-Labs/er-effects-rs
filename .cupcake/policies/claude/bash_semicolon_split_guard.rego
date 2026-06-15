@@ -43,7 +43,41 @@ semicolon_split_detected if {
 	object.get(separator, "syntactic_control", false) == false
 }
 
+# Fallback path: Claude Code does not supply command_ast, so the two AST rules
+# above never fire at runtime and this is the only active detector. A semicolon
+# is a real command separator only when it sits OUTSIDE quoted arguments
+# (git commit -m "a; b", python3 -c "import x; y", bd remember 'a; b' must be
+# allowed). Regex builtins are NOT available in Cupcake's WASM runtime (they
+# evaluate to undefined and silently disable the rule), so quoted spans are
+# stripped with split(): splitting on a quote char yields alternating
+# outside/inside segments, and only even-indexed segments live outside the quote.
 semicolon_split_detected if {
 	not input.tool_input.command_ast
-	contains(command, ";")
+	some part in outside_double_quotes
+	contains(strip_single_quoted(part), ";")
+}
+
+# Backslash-escaped quotes (\" and \') are literal characters, not span
+# boundaries, but split() cannot see the escaping and would miscount them. Drop
+# them first so the even/odd segment alternation stays aligned. replace() (unlike
+# regex) is available in Cupcake's WASM runtime.
+escapes_stripped := replace(replace(command, `\"`, ""), `\'`, "")
+
+# Segments of the command that fall outside double-quoted spans.
+double_quote_parts := split(escapes_stripped, `"`)
+
+outside_double_quotes := [double_quote_parts[idx] |
+	some idx
+	double_quote_parts[idx]
+	idx % 2 == 0
+]
+
+# Remove single-quoted spans from a segment, keeping only the outside text.
+strip_single_quoted(segment) := concat(" ", outside) if {
+	single_quote_parts := split(segment, "'")
+	outside := [single_quote_parts[idx] |
+		some idx
+		single_quote_parts[idx]
+		idx % 2 == 0
+	]
 }
