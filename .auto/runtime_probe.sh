@@ -284,7 +284,7 @@ PY
 }
 
 teardown_runtime_processes() {
-  python3 - "$ARTIFACT_DIR" "$runtime_process_pattern" <<'PY'
+  python3 - "$ARTIFACT_DIR" "$runtime_process_pattern" "$STEAM_COMPAT_DATA_PATH" <<'PY'
 import os
 import re
 import signal
@@ -294,8 +294,15 @@ from pathlib import Path
 
 artifact = Path(sys.argv[1])
 pattern = re.compile(sys.argv[2], re.I)
+# Our Proton prefix path; wine infrastructure for this launch carries it in
+# environ (WINEPREFIX / STEAM_COMPAT_DATA_PATH) or cmdline. Matching on it lets
+# us sweep ONLY this game's wine processes, never another Proton game's.
+compat_marker = sys.argv[3]
+self_pid = os.getpid()
+# Never touch the Steam client itself or its helpers.
+protect = re.compile(r"steamwebhelper|/ubuntu12_|(?:^|/)steam(?:\s|$)")
 
-def procs():
+def all_procs():
     output = subprocess.check_output(["ps", "-eo", "pid=,args="], text=True)
     rows = []
     for line in output.splitlines():
@@ -303,24 +310,59 @@ def procs():
         if not stripped:
             continue
         pid_text, _, args = stripped.partition(" ")
-        if pid_text.isdigit() and pattern.search(args):
+        if pid_text.isdigit():
             rows.append((int(pid_text), args))
     return rows
 
-before = procs()
+def game_procs():
+    return [(pid, args) for pid, args in all_procs() if pattern.search(args)]
+
+def belongs_to_prefix(pid):
+    if not compat_marker:
+        return False
+    for fname in ("environ", "cmdline"):
+        try:
+            data = Path(f"/proc/{pid}/{fname}").read_bytes()
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+        # latin-1 never fails and preserves bytes for an ASCII path substring match.
+        if compat_marker in data.decode("latin-1"):
+            return True
+    return False
+
+# Phase 1: the game processes themselves (SIGTERM, then SIGKILL stragglers).
+before = game_procs()
 (artifact / "teardown-before.txt").write_text("".join(f"{pid} {args}\n" for pid, args in before), encoding="utf-8")
 for pid, _ in before:
     try:
         os.kill(pid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
         pass
-mid = procs()
-for pid, _ in mid:
+for pid, _ in game_procs():
     try:
         os.kill(pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass
-after = procs()
+
+# Phase 2: wine infrastructure for THIS prefix (winedevice.exe, services.exe,
+# explorer.exe, plugplay.exe, wineserver, bwrap, ...). The old teardown left
+# these orphaned, and they accumulated across runs until the game task stalled
+# early. SIGKILL only those whose environ/cmdline names our compat prefix.
+wine_swept = []
+for pid, args in all_procs():
+    if pid in (self_pid, 1):
+        continue
+    if protect.search(args):
+        continue
+    if belongs_to_prefix(pid):
+        wine_swept.append((pid, args))
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+(artifact / "teardown-wine-swept.txt").write_text("".join(f"{pid} {args}\n" for pid, args in wine_swept), encoding="utf-8")
+
+after = game_procs()
 (artifact / "teardown-after.txt").write_text("".join(f"{pid} {args}\n" for pid, args in after), encoding="utf-8")
 PY
 }
