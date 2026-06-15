@@ -107,6 +107,15 @@ const TITLE_OWNER_STATE_OFFSET: usize = 0x4c;
 const TITLE_OWNER_SCAN_ALIGNMENT: usize = 8;
 const TITLE_OWNER_SCAN_MAX_ADDRESS: usize = 0x0000_8000_0000_0000;
 const TITLE_OWNER_TRACE_LIMIT: usize = 64;
+/// How many `title_owner` calls to skip between full-memory owner scans.
+///
+/// The owner scan walks every committed region via `VirtualQuery`; running it
+/// every frame while the owner does not yet exist (or cannot be matched)
+/// collapses the game's frame rate. Throttling to roughly once per second at
+/// 60 fps keeps a failed lookup from being user-visible.
+const TITLE_OWNER_SCAN_CALL_INTERVAL: usize = 60;
+const TITLE_OWNER_SCAN_COUNTDOWN_STEP: usize = 1;
+const TITLE_OWNER_SCAN_COUNTDOWN_READY: usize = 0;
 const TITLE_MENU_JOB_WAIT_RVA: usize = 0x00b0d400;
 const TITLE_NATIVE_JOB_MIN_TICK: u64 = 170;
 const MEM_COMMIT_NUMERIC: u32 = 0x1000;
@@ -150,6 +159,9 @@ const TITLE_NATIVE_JOB_FRAME_RATE: f32 = 60.0;
 const TITLE_NATIVE_JOB_DELTA_OFFSET_START: usize = 8;
 const TITLE_NATIVE_JOB_DELTA_OFFSET_END: usize = 12;
 const TITLE_NATIVE_JOB_CALLED_VALUE: usize = 1;
+const TITLE_STEP_BEGIN_TITLE: i32 = 3;
+const TITLE_STEP_PLAY_GAME: i32 = 5;
+const FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA: usize = 0x0067a810;
 const MENU_TASK_NULL_STATE_QWORD: usize = 0;
 const MENU_TASK_NULL_PAYLOAD_PTR: usize = 0;
 const MENU_TASK_STATE_PAYLOAD_CODE_OFFSET: usize = 4;
@@ -183,6 +195,8 @@ static TITLE_BOOTSTRAP_SEEN: AtomicUsize = AtomicUsize::new(0);
 static TITLE_OWNER_PTR: AtomicUsize = AtomicUsize::new(0);
 static TITLE_OWNER_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 static TITLE_NATIVE_JOB_CALLED: AtomicUsize = AtomicUsize::new(0);
+static FORCE_PLAY_GAME_CALLED: AtomicUsize = AtomicUsize::new(0);
+static TITLE_OWNER_SCAN_COUNTDOWN: AtomicUsize = AtomicUsize::new(0);
 static SAFE_INPUT_CONFIRM_PULSE_SEQ: AtomicUsize = AtomicUsize::new(0);
 static MENU_TRACE_EVENT_SEQ: AtomicUsize = AtomicUsize::new(0);
 static MENU_TRACE_LAST_SEQ: AtomicUsize = AtomicUsize::new(0);
@@ -871,6 +885,13 @@ fn process_autoload_request(state: &mut EffectsState) {
         return;
     };
 
+    if force_play_game_enabled() {
+        if let Some(slot) = state.autoload.slot() {
+            unsafe { call_force_play_game_once(game_module_base, slot, state.game_task_ticks) };
+        }
+        return;
+    }
+
     if native_title_job_enabled()
         && !unsafe { call_native_title_job_once(game_module_base, state.game_task_ticks) }
     {
@@ -1448,6 +1469,62 @@ fn native_title_job_enabled() -> bool {
         .exists()
 }
 
+fn force_play_game_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_AUTOLOAD_FORCE_PLAY_GAME").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-force-play-game.txt")
+        .exists()
+}
+
+/// Drives the native TitleStep state machine to `STEP_PlayGame` once.
+///
+/// Live zero-input probes showed the game parks at `STEP_BeginTitle`
+/// (PRESS ANY BUTTON) with GameMan ready but the MoveMapList load dispatcher
+/// inactive, so directly setting the continue flags is a no-op. Static RE maps
+/// the TitleStep handler table: index 5 (`STEP_PlayGame`, 0x140b0d5b0) reads the
+/// selected save slot and submits the native load job. This selects slot `slot`
+/// via the menu set-slot primitive and advances the owner's state field so the
+/// game's own title task dispatches `STEP_PlayGame` on the next frame — no host
+/// input and no synthetic load-primitive calls. We only act once the owner has
+/// reached `STEP_BeginTitle`, which guarantees `STEP_InitMenu` already built the
+/// menu object `STEP_PlayGame` depends on.
+unsafe fn call_force_play_game_once(module_base: usize, slot: i32, tick: u64) -> bool {
+    if FORCE_PLAY_GAME_CALLED.load(Ordering::SeqCst) != TITLE_NATIVE_JOB_NOT_CALLED {
+        return true;
+    }
+    if tick < TITLE_NATIVE_JOB_MIN_TICK {
+        return false;
+    }
+    let Some(owner) = (unsafe { title_owner(module_base) }) else {
+        return false;
+    };
+    let state_before = unsafe { *(owner.add(TITLE_OWNER_STATE_OFFSET) as *const i32) };
+    if state_before != TITLE_STEP_BEGIN_TITLE {
+        let count = TITLE_OWNER_TRACE_COUNT
+            .fetch_add(TITLE_TRACE_SEQUENCE_INCREMENT, Ordering::SeqCst)
+            + TITLE_TRACE_SEQUENCE_INCREMENT;
+        if count <= TITLE_OWNER_TRACE_LIMIT {
+            append_autoload_debug(format_args!(
+                "force_play_game: waiting for STEP_BeginTitle state_now={state_before} tick={tick}"
+            ));
+        }
+        return false;
+    }
+    let set_save_slot: unsafe extern "system" fn(i32) =
+        unsafe { std::mem::transmute(module_base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+    unsafe { set_save_slot(slot) };
+    unsafe { *(owner.add(TITLE_OWNER_STATE_OFFSET) as *mut i32) = TITLE_STEP_PLAY_GAME };
+    let state_after = unsafe { *(owner.add(TITLE_OWNER_STATE_OFFSET) as *const i32) };
+    FORCE_PLAY_GAME_CALLED.store(TITLE_NATIVE_JOB_CALLED_VALUE, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "force_play_game: set slot={slot} state {state_before}->{state_after} (STEP_PlayGame) tick={tick}"
+    ));
+    true
+}
+
 fn trace_continue_default_path() -> PathBuf {
     game_directory_path()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -1535,6 +1612,14 @@ unsafe fn title_owner(module_base: usize) -> Option<*mut u8> {
     if !cached.is_null() {
         return Some(cached);
     }
+    // Throttle the full-memory scan: until the owner exists it would otherwise
+    // run every frame and cripple FPS (observed ~2 task ticks/s).
+    let countdown = TITLE_OWNER_SCAN_COUNTDOWN.load(Ordering::SeqCst);
+    if countdown > TITLE_OWNER_SCAN_COUNTDOWN_READY {
+        TITLE_OWNER_SCAN_COUNTDOWN.fetch_sub(TITLE_OWNER_SCAN_COUNTDOWN_STEP, Ordering::SeqCst);
+        return None;
+    }
+    TITLE_OWNER_SCAN_COUNTDOWN.store(TITLE_OWNER_SCAN_CALL_INTERVAL, Ordering::SeqCst);
     let found = unsafe { find_title_owner_by_vtable(module_base) }?;
     TITLE_OWNER_PTR.store(found as usize, Ordering::SeqCst);
     let state_value = unsafe { *(found.add(TITLE_OWNER_STATE_OFFSET) as *const i32) };
