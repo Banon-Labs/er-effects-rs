@@ -166,7 +166,29 @@ const TITLE_NATIVE_JOB_CALLED_VALUE: usize = 1;
 const TITLE_STEP_BEGIN_TITLE: i32 = 3;
 const TITLE_STEP_PLAY_GAME: i32 = 5;
 const TITLE_STEP_MENU_JOB_WAIT: i32 = 10;
+const FORCE_PLAY_GAME_STATE_UNOBSERVED: i32 = -999;
+/// One-shot "PlayGame requested" flag on the TitleStep owner. STEP_PlayGame only
+/// runs its real load-trigger (`consume_owner300` 0x140ca89e0 on owner+0x300,
+/// gated at 0x140b0d70c) when this byte is nonzero, then clears it. The menu
+/// "Continue" selection normally sets it; we set it so the forced PlayGame step
+/// actually starts the load instead of resetting via GameStepWait.
+const TITLE_OWNER_PLAY_GAME_REQUEST_FLAG_OFFSET: usize = 0x3e1;
+const TITLE_OWNER_PLAY_GAME_REQUEST_FLAG_SET: u8 = 1;
+/// The save slot STEP_PlayGame actually loads. Its handler (0x140b0d5b0) reads
+/// `mov eax,[owner+0xbc]` and feeds it through submit -> validate -> pair, which
+/// writes the value to GameMan+0x14 (the load value). The +0xac0 save slot only
+/// feeds global+0x1200, not the load pair — so this is the field to select.
+const TITLE_OWNER_PLAY_GAME_SLOT_OFFSET: usize = 0xbc;
 const FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA: usize = 0x0067a810;
+/// Global holding the GameMan pointer (`mov rax,[rip]` in set_save_slot 0x67a810
+/// / save_slot_get 0x678ca0). Read-only diagnostics of the PlayGame load-pair
+/// preconditions read GameMan through this.
+const FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA: usize = 0x3d69918;
+const FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET: usize = 0xac0;
+const FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET: usize = 0x14;
+const FORCE_PLAY_GAME_GM_PAIR_GATE_B28_OFFSET: usize = 0xb28;
+const FORCE_PLAY_GAME_GM_VALIDATE_12D_OFFSET: usize = 0x12d;
+const FORCE_PLAY_GAME_GM_VALIDATE_12E_OFFSET: usize = 0x12e;
 const MENU_TASK_NULL_STATE_QWORD: usize = 0;
 const MENU_TASK_NULL_PAYLOAD_PTR: usize = 0;
 const MENU_TASK_STATE_PAYLOAD_CODE_OFFSET: usize = 4;
@@ -201,6 +223,8 @@ static TITLE_OWNER_PTR: AtomicUsize = AtomicUsize::new(0);
 static TITLE_OWNER_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 static TITLE_NATIVE_JOB_CALLED: AtomicUsize = AtomicUsize::new(0);
 static FORCE_PLAY_GAME_CALLED: AtomicUsize = AtomicUsize::new(0);
+static FORCE_PLAY_GAME_LAST_STATE: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(FORCE_PLAY_GAME_STATE_UNOBSERVED);
 static TITLE_OWNER_SCAN_COUNTDOWN: AtomicUsize = AtomicUsize::new(0);
 static SAFE_INPUT_CONFIRM_PULSE_SEQ: AtomicUsize = AtomicUsize::new(0);
 static MENU_TRACE_EVENT_SEQ: AtomicUsize = AtomicUsize::new(0);
@@ -1497,9 +1521,6 @@ fn force_play_game_enabled() -> bool {
 /// reached `STEP_BeginTitle`, which guarantees `STEP_InitMenu` already built the
 /// menu object `STEP_PlayGame` depends on.
 unsafe fn call_force_play_game_once(module_base: usize, slot: i32, tick: u64) -> bool {
-    if FORCE_PLAY_GAME_CALLED.load(Ordering::SeqCst) != TITLE_NATIVE_JOB_NOT_CALLED {
-        return true;
-    }
     if tick < TITLE_NATIVE_JOB_MIN_TICK {
         return false;
     }
@@ -1507,23 +1528,61 @@ unsafe fn call_force_play_game_once(module_base: usize, slot: i32, tick: u64) ->
         return false;
     };
     let state_before = unsafe { *(owner.add(TITLE_OWNER_STATE_OFFSET) as *const i32) };
+    // Log every TitleStep state transition so we can see whether the forced
+    // STEP_PlayGame write sticks and advances (5 -> 6 GameStepWait -> load) or
+    // gets reset by the title task / a different owner instance.
+    let last_state = FORCE_PLAY_GAME_LAST_STATE.swap(state_before, Ordering::SeqCst);
+    if state_before != last_state {
+        // Read GameMan+0x14 (the load value pair writes) each transition: if it
+        // becomes nonnegative when PlayGame runs (5 -> 6), the pair chain
+        // succeeded and the gap is downstream (GameStepWait/job); if it stays -1,
+        // submit/validate/pair never wrote it.
+        let gm = unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+        let load14 = if gm != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { *((gm + FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET) as *const i32) }
+        } else {
+            DIRECT_INPUT_FAILURE_HRESULT
+        };
+        append_autoload_debug(format_args!(
+            "force_play_game: observed state {last_state}->{state_before} load14={load14} tick={tick}"
+        ));
+    }
+    if FORCE_PLAY_GAME_CALLED.load(Ordering::SeqCst) != TITLE_NATIVE_JOB_NOT_CALLED {
+        // Already drove the state once; keep observing transitions (logged above).
+        return true;
+    }
     // The live title idles at STEP_MenuJobWait (the input-wait state shown as
     // PRESS ANY BUTTON); STEP_BeginTitle is the alternate stable pre-load step.
     // Both run after STEP_InitMenu built the menu object PlayGame needs.
     if state_before != TITLE_STEP_BEGIN_TITLE && state_before != TITLE_STEP_MENU_JOB_WAIT {
-        let count = TITLE_OWNER_TRACE_COUNT
-            .fetch_add(TITLE_TRACE_SEQUENCE_INCREMENT, Ordering::SeqCst)
-            + TITLE_TRACE_SEQUENCE_INCREMENT;
-        if count <= TITLE_OWNER_TRACE_LIMIT {
-            append_autoload_debug(format_args!(
-                "force_play_game: waiting for stable title step state_now={state_before} tick={tick}"
-            ));
-        }
         return false;
     }
     let set_save_slot: unsafe extern "system" fn(i32) =
         unsafe { std::mem::transmute(module_base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
     unsafe { set_save_slot(slot) };
+    // Read-only diagnostic: log the PlayGame load-pair preconditions so we can
+    // see which one blocks (pair skips writing GameMan+0x14 unless b28==0; the
+    // validate step gates on 12d/12e).
+    let game_man_ptr =
+        unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+    if game_man_ptr != TITLE_OWNER_SCAN_START_ADDRESS {
+        let gm = game_man_ptr as *const u8;
+        let ac0 = unsafe { *(gm.add(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
+        let load14 = unsafe { *(gm.add(FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET) as *const i32) };
+        let b28 = unsafe { *gm.add(FORCE_PLAY_GAME_GM_PAIR_GATE_B28_OFFSET) };
+        let f12d = unsafe { *gm.add(FORCE_PLAY_GAME_GM_VALIDATE_12D_OFFSET) };
+        let f12e = unsafe { *gm.add(FORCE_PLAY_GAME_GM_VALIDATE_12E_OFFSET) };
+        append_autoload_debug(format_args!(
+            "force_play_game: gm={game_man_ptr:#x} ac0={ac0} load14={load14} b28={b28} f12d={f12d} f12e={f12e}"
+        ));
+    }
+    unsafe {
+        *(owner.add(TITLE_OWNER_PLAY_GAME_REQUEST_FLAG_OFFSET) as *mut u8) =
+            TITLE_OWNER_PLAY_GAME_REQUEST_FLAG_SET;
+    }
+    // Select the slot STEP_PlayGame loads: its handler reads owner+0xbc and the
+    // pair step writes it to GameMan+0x14. Without this it stays -1 and pair bails.
+    unsafe { *(owner.add(TITLE_OWNER_PLAY_GAME_SLOT_OFFSET) as *mut i32) = slot };
     unsafe { *(owner.add(TITLE_OWNER_STATE_OFFSET) as *mut i32) = TITLE_STEP_PLAY_GAME };
     let state_after = unsafe { *(owner.add(TITLE_OWNER_STATE_OFFSET) as *const i32) };
     FORCE_PLAY_GAME_CALLED.store(TITLE_NATIVE_JOB_CALLED_VALUE, Ordering::SeqCst);
