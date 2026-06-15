@@ -1,3 +1,3 @@
-started_at=2026-06-15T08:25:27-07:00
-request=selectbot-probe-pump-flag-20260615
+started_at=2026-06-15T08:56:23-07:00
+request=selectbot-readonly-control-20260615
 entrypoint=measure_runtime_trigger
