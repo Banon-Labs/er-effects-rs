@@ -58,6 +58,9 @@ INGAMEINIT_DRIVE_PATH="${INGAMEINIT_DRIVE_PATH:-$GAME_DIR/er-effects-ingameinit-
 CONTINUE_DRIVE_PATH="${CONTINUE_DRIVE_PATH:-$GAME_DIR/er-effects-continue-drive.txt}"
 ARM_PROBE_PATH="${ARM_PROBE_PATH:-$GAME_DIR/er-effects-arm-probe.txt}"
 NATIVE_ARM_LOOP_PATH="${NATIVE_ARM_LOOP_PATH:-$GAME_DIR/er-effects-native-arm-loop.txt}"
+TITLE_ACCEPT_PATH="${TITLE_ACCEPT_PATH:-$GAME_DIR/er-effects-title-accept.txt}"
+TITLE_ACCEPT_FILL_PATH="${TITLE_ACCEPT_FILL_PATH:-$GAME_DIR/er-effects-title-accept-fill.txt}"
+TITLE_ACCEPT_INJECT_PATH="${TITLE_ACCEPT_INJECT_PATH:-$GAME_DIR/er-effects-title-accept-inject.txt}"
 CRASH_LOG_TRIGGER_PATH="${CRASH_LOG_TRIGGER_PATH:-$GAME_DIR/er-effects-crash-log.txt}"
 # The DLL's default crash-log location (when ER_EFFECTS_CRASH_LOG_PATH is unset);
 # copied into the artifact dir after the run.
@@ -567,6 +570,15 @@ cleanup_runtime() {
   if [[ "${ER_EFFECTS_NATIVE_ARM_LOOP:-0}" == "1" ]]; then
     rm -f "$NATIVE_ARM_LOOP_PATH"
   fi
+  if [[ "${ER_EFFECTS_TITLE_ACCEPT:-0}" == "1" ]]; then
+    rm -f "$TITLE_ACCEPT_PATH"
+  fi
+  if [[ "${ER_EFFECTS_TITLE_ACCEPT_FILL:-0}" == "1" ]]; then
+    rm -f "$TITLE_ACCEPT_FILL_PATH"
+  fi
+  if [[ "${ER_EFFECTS_TITLE_ACCEPT_INJECT:-0}" == "1" ]]; then
+    rm -f "$TITLE_ACCEPT_INJECT_PATH"
+  fi
   if [[ "${ER_EFFECTS_CRASH_LOG:-0}" == "1" ]]; then
     rm -f "$CRASH_LOG_TRIGGER_PATH"
   fi
@@ -723,6 +735,21 @@ PY
       printf 'enabled=1\n' > "$NATIVE_ARM_LOOP_PATH"
     else
       rm -f "$NATIVE_ARM_LOOP_PATH"
+    fi
+    if [[ "${ER_EFFECTS_TITLE_ACCEPT:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$TITLE_ACCEPT_PATH"
+    else
+      rm -f "$TITLE_ACCEPT_PATH"
+    fi
+    if [[ "${ER_EFFECTS_TITLE_ACCEPT_FILL:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$TITLE_ACCEPT_FILL_PATH"
+    else
+      rm -f "$TITLE_ACCEPT_FILL_PATH"
+    fi
+    if [[ "${ER_EFFECTS_TITLE_ACCEPT_INJECT:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$TITLE_ACCEPT_INJECT_PATH"
+    else
+      rm -f "$TITLE_ACCEPT_INJECT_PATH"
     fi
     if [[ "${ER_EFFECTS_CRASH_LOG:-0}" == "1" ]]; then
       printf 'enabled=1\n' > "$CRASH_LOG_TRIGGER_PATH"

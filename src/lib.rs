@@ -260,6 +260,27 @@ const GAME_MAN_REQUESTED_SLOT_B78_OFFSET: usize = 0xb78;
 const GAME_MAN_FLAG_BC4_OFFSET: usize = 0xbc4;
 const ARM_PROBE_MIN_TICK: u64 = 60;
 const ARM_PROBE_TICK_INTERVAL: u64 = 30;
+/// Lever 2 (zero-input title-accept via input-event injection). Inner TitleStep
+/// state is at owner+0x4c (==10 MenuJobWait); the press-any-button job is at
+/// owner+0x130; its vtable[+0x18] fills a descriptor whose first i32 indexes the
+/// event table 0x143d6a860 (stride 0x60); eventId=[entry+4], value=[entry+8];
+/// the game's node update writes inputmgr(0x143d6b7b0)+0xdc+eventId*4 = value.
+/// Injecting that event makes the game's own node update accept and run the real
+/// front-end bootstrap. Verdict is [job+0x1e8] >= 2.
+const TITLE_OWNER_STATE_4C_OFFSET: usize = 0x4c;
+const TITLE_OWNER_PRESS_JOB_130_OFFSET: usize = 0x130;
+const JOB_VTABLE_FILL_DESC_OFFSET: usize = 0x18;
+const TITLE_ACCEPT_DESC_QWORDS: usize = 0x20;
+const EVENT_TABLE_RVA: usize = 0x3d6a860;
+const EVENT_TABLE_ENTRY_STRIDE: usize = 0x60;
+const EVENT_TABLE_MAX_INDEX: i32 = 0x400;
+const EVENT_ENTRY_EVENTID_OFFSET: usize = 0x4;
+const EVENT_ENTRY_VALUE_OFFSET: usize = 0x8;
+const JOB_VERDICT_1E8_OFFSET: usize = 0x1e8;
+const INPUTMGR_EVENT_ARRAY_OFFSET: usize = 0xdc;
+const EVENT_ID_VALID_FLOOR: i32 = 0;
+const EVENT_ID_MAX: u32 = 0x15e;
+const EVENT_ID_WORD_SIZE: usize = 4;
 /// Sentinel logged when GameMan is null so the field could not be read.
 const ARM_PROBE_FIELD_ABSENT: i64 = -1;
 /// IngameInit drive (recipe B, flagless). The SimpleTitleStep container that
@@ -1064,6 +1085,17 @@ fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     if arm_probe_enabled() {
                         if let Ok(base) = game_module_base() {
                             unsafe { arm_precondition_probe(base, state.game_task_ticks) };
+                        }
+                        write_telemetry_throttled(&mut state, false);
+                        return;
+                    }
+                    // Lever 2: zero-input title-accept via input-event injection
+                    // (staged probe -> fill -> inject) to bootstrap the front-end.
+                    if title_accept_enabled() {
+                        if let Ok(base) = game_module_base() {
+                            let inject = title_accept_inject_enabled();
+                            let fill = inject || title_accept_fill_enabled();
+                            unsafe { title_accept_tick(base, state.game_task_ticks, fill, inject) };
                         }
                         write_telemetry_throttled(&mut state, false);
                         return;
@@ -2311,6 +2343,112 @@ fn native_arm_loop_enabled() -> bool {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("er-effects-native-arm-loop.txt")
         .exists()
+}
+
+fn title_accept_enabled() -> bool {
+    matches!(std::env::var("ER_EFFECTS_TITLE_ACCEPT").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-title-accept.txt")
+            .exists()
+}
+
+fn title_accept_fill_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_TITLE_ACCEPT_FILL").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-title-accept-fill.txt")
+        .exists()
+}
+
+fn title_accept_inject_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_TITLE_ACCEPT_INJECT").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-title-accept-inject.txt")
+        .exists()
+}
+
+/// Lever 2: zero-input title-accept by injecting the confirm input event so the
+/// game's own press-any-button node update accepts and runs the real front-end
+/// bootstrap. Staged: basic probe (pure reads) -> +fill (resolve eventId via the
+/// job descriptor, read-only) -> +inject (write the event). Verify CSFeMan
+/// 0x143d6b880 / 0x1447ef360 go non-null after a successful accept.
+unsafe fn title_accept_tick(module_base: usize, tick: u64, do_fill: bool, do_write: bool) {
+    if tick < ARM_PROBE_MIN_TICK {
+        return;
+    }
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let owner = match unsafe { find_title_owner_by_vtable(module_base) } {
+        Some(ptr) => ptr as usize,
+        None => return,
+    };
+    let log_now = tick % ARM_PROBE_TICK_INTERVAL == null as u64;
+    let state = unsafe { *((owner + TITLE_OWNER_STATE_4C_OFFSET) as *const i32) };
+    let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
+    if state != TITLE_STEP_MENU_JOB_WAIT {
+        if log_now {
+            append_autoload_debug(format_args!(
+                "title_accept: owner=0x{owner:x} state={state} csfeman=0x{csfeman:x} (awaiting MenuJobWait=10) tick={tick}"
+            ));
+        }
+        return;
+    }
+    let job = unsafe { *((owner + TITLE_OWNER_PRESS_JOB_130_OFFSET) as *const usize) };
+    let input_mgr = unsafe { *((module_base + TITLE_INPUT_MANAGER_RVA) as *const usize) };
+    if job == null || input_mgr == null {
+        if log_now {
+            append_autoload_debug(format_args!(
+                "title_accept: state=10 job=0x{job:x} inputmgr=0x{input_mgr:x} csfeman=0x{csfeman:x} tick={tick}"
+            ));
+        }
+        return;
+    }
+    if !do_fill {
+        if log_now {
+            append_autoload_debug(format_args!(
+                "title_accept: state=10 owner=0x{owner:x} job=0x{job:x} inputmgr=0x{input_mgr:x} csfeman=0x{csfeman:x} (probe, no fill) tick={tick}"
+            ));
+        }
+        return;
+    }
+    // Resolve the confirm eventId exactly as the node update does: the job's
+    // vtable[+0x18] fills a descriptor whose first i32 indexes the event table.
+    let mut desc = [SYNTHETIC_ZERO_QWORD; TITLE_ACCEPT_DESC_QWORDS];
+    let job_vtable = unsafe { *(job as *const usize) };
+    let fill: unsafe extern "system" fn(*mut c_void, *mut c_void) = unsafe {
+        std::mem::transmute(*((job_vtable + JOB_VTABLE_FILL_DESC_OFFSET) as *const usize))
+    };
+    unsafe { fill(job as *mut c_void, desc.as_mut_ptr() as *mut c_void) };
+    let idx = unsafe { *(desc.as_ptr() as *const i32) };
+    let verdict = unsafe { *((job + JOB_VERDICT_1E8_OFFSET) as *const i32) };
+    if idx < EVENT_ID_VALID_FLOOR || idx > EVENT_TABLE_MAX_INDEX {
+        if log_now {
+            append_autoload_debug(format_args!(
+                "title_accept: state=10 idx={idx} OUT OF RANGE verdict={verdict} csfeman=0x{csfeman:x} tick={tick}"
+            ));
+        }
+        return;
+    }
+    let entry =
+        module_base + EVENT_TABLE_RVA + (idx as usize).wrapping_mul(EVENT_TABLE_ENTRY_STRIDE);
+    let event_id = unsafe { *((entry + EVENT_ENTRY_EVENTID_OFFSET) as *const i32) };
+    let value = unsafe { *((entry + EVENT_ENTRY_VALUE_OFFSET) as *const i32) };
+    if log_now || do_write {
+        append_autoload_debug(format_args!(
+            "title_accept: state=10 idx={idx} event_id={event_id} value={value} verdict={verdict} csfeman=0x{csfeman:x} write={do_write} tick={tick}"
+        ));
+    }
+    if do_write && event_id >= EVENT_ID_VALID_FLOOR && (event_id as u32) <= EVENT_ID_MAX {
+        let slot = input_mgr
+            + INPUTMGR_EVENT_ARRAY_OFFSET
+            + (event_id as usize).wrapping_mul(EVENT_ID_WORD_SIZE);
+        unsafe { *(slot as *mut i32) = value };
+    }
 }
 
 /// Per-frame native autoload arm. Recipe A set the slot once and the title reset
