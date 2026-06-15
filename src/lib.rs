@@ -1583,16 +1583,10 @@ unsafe fn selectbot_probe_once(module_base: usize, tick: u64) {
     if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL != TITLE_OWNER_SCAN_START_ADDRESS as u64 {
         return;
     }
-    let Some(owner) = (unsafe { title_owner(module_base) }) else {
-        append_autoload_debug(format_args!(
-            "selectbot_probe: owner not resolved tick={tick}"
-        ));
-        return;
-    };
-    let state = unsafe { *(owner.add(TITLE_OWNER_STATE_OFFSET) as *const i32) };
-    let queue128 = unsafe { *(owner.add(SELECTBOT_OWNER_TITLE_QUEUE_128_OFFSET) as *const usize) };
-    let selection130 =
-        unsafe { *(owner.add(SELECTBOT_OWNER_PARSED_SELECTION_130_OFFSET) as *const i32) };
+    // Owner-independent module globals: sample these ALWAYS. After the latch
+    // advances the inner TitleStep to Finish (state 11 -> -1) the inner owner is
+    // torn down, but `pump_ran` (does the outer MenuLoop spin up?) and the latch
+    // byte live in module globals, so we must still capture them post-cascade.
     let registry = unsafe { *((module_base + SELECTBOT_REGISTRY_GLOBAL_RVA) as *const usize) };
     let load_gate = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
     let input_manager =
@@ -1602,6 +1596,16 @@ unsafe fn selectbot_probe_once(module_base: usize, tick: u64) {
     } else {
         DIRECT_INPUT_FAILURE_HRESULT as u8
     };
+    let Some(owner) = (unsafe { title_owner(module_base) }) else {
+        append_autoload_debug(format_args!(
+            "selectbot_probe: owner not resolved registry={registry:#x} load_gate={load_gate} input_mgr={input_manager:#x} pump_ran={pump_ran} tick={tick}"
+        ));
+        return;
+    };
+    let state = unsafe { *(owner.add(TITLE_OWNER_STATE_OFFSET) as *const i32) };
+    let queue128 = unsafe { *(owner.add(SELECTBOT_OWNER_TITLE_QUEUE_128_OFFSET) as *const usize) };
+    let selection130 =
+        unsafe { *(owner.add(SELECTBOT_OWNER_PARSED_SELECTION_130_OFFSET) as *const i32) };
     append_autoload_debug(format_args!(
         "selectbot_probe: state={state} queue128={queue128:#x} selection130={selection130} registry={registry:#x} load_gate={load_gate} input_mgr={input_manager:#x} pump_ran={pump_ran} tick={tick}"
     ));
