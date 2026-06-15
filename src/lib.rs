@@ -192,6 +192,12 @@ const FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA: usize = 0x0067a810;
 /// preconditions read GameMan through this.
 const FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA: usize = 0x3d69918;
 const FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET: usize = 0xac0;
+/// Save-manager load-in-progress flag (GameMan/save-mgr singleton 0x143d69918):
+/// `0x14067b570` sets `[mgr+0xb80]=1` when it begins the load and clears it to 0
+/// when finished. The native autoload (recipe A) arms the load by setting the
+/// slot (`+0xac0`) and the force flag `0x143d856a0`, then the save-manager
+/// per-frame update `0x14067f5d0` performs it.
+const GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET: usize = 0xb80;
 const FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET: usize = 0x14;
 const FORCE_PLAY_GAME_GM_PAIR_GATE_B28_OFFSET: usize = 0xb28;
 const FORCE_PLAY_GAME_GM_VALIDATE_12D_OFFSET: usize = 0x12d;
@@ -292,6 +298,8 @@ static INGAMESTEP_PUMP_LAST_D8: std::sync::atomic::AtomicI32 =
 static INGAMESTEP_PUMP_LAST_NEXT: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(INGAMESTEP_PUMP_D8_UNOBSERVED);
 static INGAMESTEP_UNPIN_DONE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static NATIVE_AUTOLOAD_ARMED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 static TITLE_OWNER_SCAN_COUNTDOWN: AtomicUsize = AtomicUsize::new(0);
 static SAFE_INPUT_CONFIRM_PULSE_SEQ: AtomicUsize = AtomicUsize::new(0);
@@ -997,6 +1005,15 @@ fn process_autoload_request(state: &mut EffectsState) {
         // without completing the autoload so sampling continues across the
         // cascade.
         unsafe { selectbot_probe_once(game_module_base, state.game_task_ticks) };
+        return;
+    }
+
+    if native_autoload_enabled() {
+        // Recipe A: arm the game's own built-in title autoload (slot + force flag)
+        // and let the save-manager update perform the load with zero input.
+        if let Some(slot) = state.autoload.slot() {
+            unsafe { native_autoload_once(game_module_base, slot, state.game_task_ticks) };
+        }
         return;
     }
 
@@ -1752,6 +1769,69 @@ unsafe fn ingamestep_pump_tick(module_base: usize, task_data: &FD4TaskData) {
     let pump: unsafe extern "system" fn(*mut u8, *const FD4TaskData) -> usize =
         unsafe { std::mem::transmute(pump) };
     let _ = unsafe { pump(ingame, task_data as *const FD4TaskData) };
+}
+
+fn native_autoload_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_NATIVE_AUTOLOAD").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-native-autoload.txt")
+        .exists()
+}
+
+/// Recipe A: arm the game's OWN built-in title autoload with zero input.
+///
+/// The save-manager per-frame update `0x14067f5d0` performs an autoload when the
+/// save slot (`GameMan+0xac0`) is set AND the force flag `0x143d856a0` is non-zero
+/// — it primes the world/streaming subsystems through the game's own state
+/// machine (which `force_play_game` bypassed). So we set the slot via the native
+/// setter `0x67a810` and raise the force flag ONCE, then let the engine load.
+/// The earlier crash from raising that flag came from leaving the slot at -1 (a
+/// Finish teardown with no load armed); arming the slot first is the fix.
+unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u64) {
+    if tick < TITLE_NATIVE_JOB_MIN_TICK {
+        return;
+    }
+    let game_man =
+        unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+    if game_man == TITLE_OWNER_SCAN_START_ADDRESS {
+        return;
+    }
+    let load_in_progress =
+        unsafe { *((game_man + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *const u8) };
+    if NATIVE_AUTOLOAD_ARMED.load(Ordering::SeqCst) {
+        // Observe the load cascade after arming.
+        if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+            let slot_now =
+                unsafe { *((game_man + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
+            let load14 =
+                unsafe { *((game_man + FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET) as *const i32) };
+            let flag = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
+            append_autoload_debug(format_args!(
+                "native_autoload: observe slot={slot_now} b80={load_in_progress} load14={load14} flag={flag} tick={tick}"
+            ));
+        }
+        return;
+    }
+    if load_in_progress != TITLE_NATIVE_JOB_TASK_DATA_ZERO {
+        append_autoload_debug(format_args!(
+            "native_autoload: load already in progress (b80={load_in_progress}) before arm; skipping tick={tick}"
+        ));
+        return;
+    }
+    let set_save_slot: unsafe extern "system" fn(i32) =
+        unsafe { std::mem::transmute(module_base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+    unsafe { set_save_slot(slot) };
+    let slot_after = unsafe { *((game_man + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
+    unsafe {
+        *((module_base + SELECTBOT_LOAD_GATE_RVA) as *mut u8) = TITLE_PROCEED_GATE_SET_VALUE;
+    }
+    NATIVE_AUTOLOAD_ARMED.store(true, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "native_autoload: armed slot={slot_after} force_flag=1 b80={load_in_progress} tick={tick}"
+    ));
 }
 
 fn ingamestep_unpin_enabled() -> bool {
