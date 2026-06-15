@@ -179,6 +179,13 @@ const TITLE_OWNER_PLAY_GAME_REQUEST_FLAG_SET: u8 = 1;
 /// writes the value to GameMan+0x14 (the load value). The +0xac0 save slot only
 /// feeds global+0x1200, not the load pair — so this is the field to select.
 const TITLE_OWNER_PLAY_GAME_SLOT_OFFSET: usize = 0xbc;
+/// STEP_GameStepWait (handler 0x140b0cde0) waits on the load job at owner+0x2e8:
+/// `cmp dword [job+0xd8],0 / jne wait`. Observe job+0xd8 while holding here to
+/// learn whether anything drains the job (needs a pump) or it is static.
+const TITLE_STEP_GAME_STEP_WAIT: i32 = 6;
+const TITLE_OWNER_JOB_OFFSET: usize = 0x2e8;
+const TITLE_OWNER_JOB_PENDING_OFFSET: usize = 0xd8;
+const TITLE_JOB_OBSERVE_TICK_INTERVAL: u64 = 30;
 const FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA: usize = 0x0067a810;
 /// Global holding the GameMan pointer (`mov rax,[rip]` in set_save_slot 0x67a810
 /// / save_slot_get 0x678ca0). Read-only diagnostics of the PlayGame load-pair
@@ -1549,6 +1556,20 @@ unsafe fn call_force_play_game_once(module_base: usize, slot: i32, tick: u64) ->
     }
     if FORCE_PLAY_GAME_CALLED.load(Ordering::SeqCst) != TITLE_NATIVE_JOB_NOT_CALLED {
         // Already drove the state once; keep observing transitions (logged above).
+        // While parked in GameStepWait, periodically report the load job's pending
+        // field so we can see whether anything drains it.
+        if state_before == TITLE_STEP_GAME_STEP_WAIT
+            && tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64
+        {
+            let job = unsafe { *(owner.add(TITLE_OWNER_JOB_OFFSET) as *const usize) };
+            if job != TITLE_OWNER_SCAN_START_ADDRESS {
+                let pending =
+                    unsafe { *((job + TITLE_OWNER_JOB_PENDING_OFFSET) as *const i32) };
+                append_autoload_debug(format_args!(
+                    "force_play_game: gamestepwait job={job:#x} job_d8={pending} tick={tick}"
+                ));
+            }
+        }
         return true;
     }
     // The live title idles at STEP_MenuJobWait (the input-wait state shown as
