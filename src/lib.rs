@@ -153,6 +153,15 @@ const SAFE_INPUT_DIRECT_INPUT_WAIT_TICKS: u64 = 300;
 // matched the live object.
 const TITLE_OWNER_VTABLE_RVA: usize = 0x02b63bb0;
 const TITLE_OWNER_STATE_OFFSET: usize = 0x4c;
+/// Committed/current state the inner-TitleStep dispatcher actually runs (the pump
+/// commits +0x4c -> +0x48 each frame and dispatches on +0x48). +0x4c is the
+/// requested/next state. Read +0x48 to know the live state.
+const TITLE_OWNER_STATE_COMMITTED_OFFSET: usize = 0x48;
+/// The inner TitleStep stores a per-instance copy of its state-dispatch table
+/// base (0x143d71580) at owner+0x10; the dispatcher reads [owner+0x10]. Requiring
+/// this rejects stray .data vtable matches (e.g. the 0x1000ffc58 false positive).
+const TITLE_OWNER_INSTANCE_TABLE_OFFSET: usize = 0x10;
+const INNER_TITLE_STATE_TABLE_RVA: usize = 0x3d71580;
 const TITLE_OWNER_SCAN_ALIGNMENT: usize = 8;
 const TITLE_OWNER_SCAN_MAX_ADDRESS: usize = 0x0000_8000_0000_0000;
 const TITLE_OWNER_TRACE_LIMIT: usize = 64;
@@ -267,7 +276,6 @@ const ARM_PROBE_TICK_INTERVAL: u64 = 30;
 /// the game's node update writes inputmgr(0x143d6b7b0)+0xdc+eventId*4 = value.
 /// Injecting that event makes the game's own node update accept and run the real
 /// front-end bootstrap. Verdict is [job+0x1e8] >= 2.
-const TITLE_OWNER_STATE_4C_OFFSET: usize = 0x4c;
 const TITLE_OWNER_PRESS_JOB_130_OFFSET: usize = 0x130;
 const JOB_VTABLE_FILL_DESC_OFFSET: usize = 0x18;
 const TITLE_ACCEPT_DESC_QWORDS: usize = 0x20;
@@ -2383,17 +2391,21 @@ unsafe fn title_accept_tick(module_base: usize, tick: u64, do_fill: bool, do_wri
         return;
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let owner = match unsafe { find_title_owner_by_vtable(module_base) } {
+    // title_owner caches + throttles the validated scan (rejects the false
+    // positive via the owner+0x10 state-table check).
+    let owner = match unsafe { title_owner(module_base) } {
         Some(ptr) => ptr as usize,
         None => return,
     };
     let log_now = tick % ARM_PROBE_TICK_INTERVAL == null as u64;
-    let state = unsafe { *((owner + TITLE_OWNER_STATE_4C_OFFSET) as *const i32) };
+    // Read the COMMITTED state (+0x48), what the dispatcher actually runs.
+    let state = unsafe { *((owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) };
+    let requested = unsafe { *((owner + TITLE_OWNER_STATE_OFFSET) as *const i32) };
     let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
     if state != TITLE_STEP_MENU_JOB_WAIT {
         if log_now {
             append_autoload_debug(format_args!(
-                "title_accept: owner=0x{owner:x} state={state} csfeman=0x{csfeman:x} (awaiting MenuJobWait=10) tick={tick}"
+                "title_accept: owner=0x{owner:x} state={state} requested={requested} csfeman=0x{csfeman:x} (awaiting MenuJobWait=10) tick={tick}"
             ));
         }
         return;
@@ -2876,7 +2888,13 @@ unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*mut u8> {
                 if vtable == target_vtable {
                     let state_value =
                         unsafe { *((cursor + TITLE_OWNER_STATE_OFFSET) as *const i32) };
-                    if (TITLE_OWNER_MIN_STATE..=TITLE_OWNER_MAX_STATE).contains(&state_value) {
+                    let instance_table =
+                        unsafe { *((cursor + TITLE_OWNER_INSTANCE_TABLE_OFFSET) as *const usize) };
+                    // Require the per-instance state-table pointer to reject stray
+                    // .data vtable matches (the 0x1000ffc58 false positive).
+                    if instance_table == module_base + INNER_TITLE_STATE_TABLE_RVA
+                        && (TITLE_OWNER_MIN_STATE..=TITLE_OWNER_MAX_STATE).contains(&state_value)
+                    {
                         return Some(cursor as *mut u8);
                     }
                 }
