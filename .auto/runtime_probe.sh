@@ -55,6 +55,7 @@ INGAMESTEP_PUMP_PATH="${INGAMESTEP_PUMP_PATH:-$GAME_DIR/er-effects-ingamestep-pu
 INGAMESTEP_UNPIN_PATH="${INGAMESTEP_UNPIN_PATH:-$GAME_DIR/er-effects-ingamestep-unpin.txt}"
 NATIVE_AUTOLOAD_PATH="${NATIVE_AUTOLOAD_PATH:-$GAME_DIR/er-effects-native-autoload.txt}"
 INGAMEINIT_DRIVE_PATH="${INGAMEINIT_DRIVE_PATH:-$GAME_DIR/er-effects-ingameinit-drive.txt}"
+CONTINUE_DRIVE_PATH="${CONTINUE_DRIVE_PATH:-$GAME_DIR/er-effects-continue-drive.txt}"
 FORCE_PLAY_GAME_PATH="${FORCE_PLAY_GAME_PATH:-$GAME_DIR/er-effects-force-play-game.txt}"
 PROTON="${PROTON:-$HOME/.local/share/Steam/steamapps/common/Proton - Experimental/proton}"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
@@ -495,6 +496,9 @@ cleanup_runtime() {
   if [[ "${ER_EFFECTS_INGAMEINIT_DRIVE:-0}" == "1" ]]; then
     rm -f "$INGAMEINIT_DRIVE_PATH"
   fi
+  if [[ "${ER_EFFECTS_CONTINUE_DRIVE:-0}" == "1" ]]; then
+    rm -f "$CONTINUE_DRIVE_PATH"
+  fi
   copy_runtime_logs || true
   write_state_snapshot "$ARTIFACT_DIR/final-state-before-cleanup.json" || true
   teardown_runtime_processes || true
@@ -632,6 +636,12 @@ PY
       cp -f "$INGAMEINIT_DRIVE_PATH" "$ARTIFACT_DIR/ingameinit-drive-request.txt"
     else
       rm -f "$INGAMEINIT_DRIVE_PATH"
+    fi
+    if [[ "${ER_EFFECTS_CONTINUE_DRIVE:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$CONTINUE_DRIVE_PATH"
+      cp -f "$CONTINUE_DRIVE_PATH" "$ARTIFACT_DIR/continue-drive-request.txt"
+    else
+      rm -f "$CONTINUE_DRIVE_PATH"
     fi
     rm -f "$TELEMETRY_PATH" "$COMMAND_PATH" "$AUTOLOAD_DEBUG_PATH" "$TRACE_CONTINUE_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH"
   } > "$ARTIFACT_DIR/setup.out" 2>&1

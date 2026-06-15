@@ -211,6 +211,22 @@ const INGAMEINIT_HANDLER_RVA: usize = 0xb0a1f0;
 const INGAMEINIT_MAP_PARSER_RVA: usize = 0x71fd60;
 const DEFAULT_MAP_STRING_RVA: usize = 0x2b62c70;
 const INGAMEINIT_SYNTHETIC_QWORDS: usize = 0x40;
+/// Genuine offline continue drive (recipe Option 1). The MoveMapList save-load
+/// dispatcher 0x140afb880 (clean entry; its Arxan-scrambled body cross-jumps to
+/// the offline-continue deserialize 0x14067b290 at 0x140afbc3e). With GameMan
+/// b73 set it selects current_slot_load 0x67b570 (begin), then drives the async
+/// task (GameMan+0xb80 1->2->3) and synchronously deserializes the REAL slot
+/// character, also building the world singletons. owner is rbx; owner+0x12c =
+/// slot. Done when GameMan+0x10 == 1. Never writes 0x143d856a0.
+const MOVEMAP_DISPATCHER_RVA: usize = 0xafb880;
+const GAME_MAN_B73_FLAG_OFFSET: usize = 0xb73;
+const GAME_MAN_B73_FLAG_SET: u8 = 1;
+const GAME_MAN_REAL_LOAD_DONE_OFFSET: usize = 0x10;
+const GAME_MAN_REAL_LOAD_DONE_VALUE: i32 = 1;
+const CONTINUE_OWNER_SLOT_OFFSET: usize = 0x12c;
+const CONTINUE_OWNER_FLAG_12A_OFFSET: usize = 0x12a;
+const CONTINUE_OWNER_FLAG_12A_VALUE: u8 = 0;
+const CONTINUE_OWNER_QWORDS: usize = 0x40;
 const FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET: usize = 0x14;
 const FORCE_PLAY_GAME_GM_PAIR_GATE_B28_OFFSET: usize = 0xb28;
 const FORCE_PLAY_GAME_GM_VALIDATE_12D_OFFSET: usize = 0x12d;
@@ -315,6 +331,9 @@ static INGAMESTEP_UNPIN_DONE: std::sync::atomic::AtomicBool =
 static NATIVE_AUTOLOAD_ARMED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 static SYNTHETIC_OUTER_PTR: AtomicUsize = AtomicUsize::new(0);
+static CONTINUE_OWNER_PTR: AtomicUsize = AtomicUsize::new(0);
+static CONTINUE_DRIVE_BEGUN: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 static INGAMEINIT_DRIVE_DONE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 static TITLE_OWNER_SCAN_COUNTDOWN: AtomicUsize = AtomicUsize::new(0);
@@ -947,6 +966,16 @@ fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
                     let mut state = state_or_return(&state);
                     state.game_task_ticks += GAME_TASK_TICK_INCREMENT;
+                    // Recipe Option 1 (flagless): drive the genuine offline
+                    // continue (MoveMapList dispatcher + b73) to load the REAL slot.
+                    if continue_drive_enabled() {
+                        if let (Ok(base), Some(slot)) = (game_module_base(), state.autoload.slot())
+                        {
+                            unsafe { continue_drive_tick(base, slot, state.game_task_ticks) };
+                        }
+                        write_telemetry_throttled(&mut state, false);
+                        return;
+                    }
                     // Recipe B (flagless): drive the outer IngameInit once + pump
                     // the InGameStep. Self-contained -- skips the other autoload
                     // branches to avoid double-submit. Needs the live FD4TaskData.
@@ -1871,6 +1900,84 @@ fn ingameinit_drive_enabled() -> bool {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("er-effects-ingameinit-drive.txt")
         .exists()
+}
+
+fn continue_drive_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_CONTINUE_DRIVE").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-continue-drive.txt")
+        .exists()
+}
+
+/// Recipe Option 1 (genuine offline continue, flagless): drive the MoveMapList
+/// dispatcher 0x140afb880 each frame with GameMan b73 set so it begins
+/// current_slot_load and deserializes the REAL slot character (sets
+/// GameMan+0x10=1), also building the world singletons. owner is a synthetic
+/// buffer with +0x12c = slot. Never writes the force flag 0x143d856a0.
+unsafe fn continue_drive_tick(module_base: usize, slot: i32, tick: u64) {
+    if tick < TITLE_NATIVE_JOB_MIN_TICK {
+        return;
+    }
+    let game_man =
+        unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+    if game_man == TITLE_OWNER_SCAN_START_ADDRESS {
+        return;
+    }
+    let real_done = unsafe { *((game_man + GAME_MAN_REAL_LOAD_DONE_OFFSET) as *const i32) };
+    let load_progress =
+        unsafe { *((game_man + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *const u8) };
+    let map14 = unsafe { *((game_man + FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET) as *const i32) };
+    if real_done == GAME_MAN_REAL_LOAD_DONE_VALUE {
+        if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+            append_autoload_debug(format_args!(
+                "continue_drive: REAL LOAD DONE gm+0x10=1 map14={map14} b80={load_progress} tick={tick}"
+            ));
+        }
+        return;
+    }
+    // Synthetic MoveMapList owner: the offline-continue path reads owner+0x12c
+    // (slot) and +0x12a. A persistent zeroed buffer suffices.
+    let mut owner_ptr = CONTINUE_OWNER_PTR.load(Ordering::SeqCst);
+    if owner_ptr == TITLE_OWNER_SCAN_START_ADDRESS {
+        let buf = vec![0u64; CONTINUE_OWNER_QWORDS].into_boxed_slice();
+        owner_ptr = Box::leak(buf).as_mut_ptr() as usize;
+        CONTINUE_OWNER_PTR.store(owner_ptr, Ordering::SeqCst);
+    }
+    let owner = owner_ptr as *mut u8;
+    unsafe {
+        *(owner.add(CONTINUE_OWNER_SLOT_OFFSET) as *mut i32) = slot;
+        *(owner.add(CONTINUE_OWNER_FLAG_12A_OFFSET)) = CONTINUE_OWNER_FLAG_12A_VALUE;
+    }
+    // Until the async load has begun (b80 != 0), arm the slot + b73 so the
+    // dispatcher selects current_slot_load and begins. The begin is gated on
+    // b80==0, so re-arming after it starts cannot re-submit.
+    if !CONTINUE_DRIVE_BEGUN.load(Ordering::SeqCst) {
+        let set_save_slot: unsafe extern "system" fn(i32) =
+            unsafe { std::mem::transmute(module_base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+        unsafe { set_save_slot(slot) };
+        unsafe {
+            *((game_man + GAME_MAN_B73_FLAG_OFFSET) as *mut u8) = GAME_MAN_B73_FLAG_SET;
+        }
+        if load_progress != TITLE_NATIVE_JOB_TASK_DATA_ZERO {
+            CONTINUE_DRIVE_BEGUN.store(true, Ordering::SeqCst);
+        }
+    }
+    let dispatcher: unsafe extern "system" fn(*mut u8) -> usize =
+        unsafe { std::mem::transmute(module_base + MOVEMAP_DISPATCHER_RVA) };
+    let _ = unsafe { dispatcher(owner) };
+    if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+        let real_after = unsafe { *((game_man + GAME_MAN_REAL_LOAD_DONE_OFFSET) as *const i32) };
+        let b80_after =
+            unsafe { *((game_man + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *const u8) };
+        let map14_after =
+            unsafe { *((game_man + FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET) as *const i32) };
+        append_autoload_debug(format_args!(
+            "continue_drive: drove dispatcher slot={slot} b80={b80_after} real_done={real_after} map14={map14_after} tick={tick}"
+        ));
+    }
 }
 
 /// Recipe B (flagless): drive the outer SimpleTitleStep IngameInit once to prime
