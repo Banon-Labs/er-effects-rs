@@ -303,6 +303,13 @@ pub(crate) const BLOCK_ENTRY_STRIDE: usize = 8;
 pub(crate) const BLOCK_SAMPLE_COUNT: usize = 4;
 pub(crate) const BLOCK_AREA_BYTE_MASK: u32 = 0xff;
 pub(crate) const BLOCK_SAMPLE_SHIFT: u32 = 8;
+/// m10 block load-state (mirrors 0x14066d3e0 readiness tail): loadstate =
+/// entry->vtable[+0x10](entry); ready iff [loadstate+0x2d]!=0 AND [loadstate+0x35]==0xa.
+/// Reading [+0x35] live shows which load phase the m10 block is stuck at (<0xa).
+pub(crate) const BLOCK_LOADSTATE_GETTER_VT_10_OFFSET: usize = 0x10;
+pub(crate) const BLOCK_LOADSTATE_FLAG_2D_OFFSET: usize = 0x2d;
+pub(crate) const BLOCK_LOADSTATE_PHASE_35_OFFSET: usize = 0x35;
+pub(crate) const DIAG_PHASE_NONE: i32 = -1;
 /// Global holding the GameMan pointer (`mov rax,[rip]` in set_save_slot 0x67a810
 /// / save_slot_get 0x678ca0). Read-only diagnostics of the PlayGame load-pair
 /// preconditions read GameMan through this.

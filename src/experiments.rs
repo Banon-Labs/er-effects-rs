@@ -554,6 +554,8 @@ pub(crate) unsafe fn submit_play_game_once(
             // sample is the first few blocks' area bytes (likely the title's scene).
             let mut found10 = 0i32;
             let mut sample = 0u32;
+            let mut m10phase = DIAG_PHASE_NONE;
+            let mut m10flag = DIAG_PHASE_NONE;
             if resmgr != null && blocks > 0 {
                 let arr = resmgr + WORLDRES_BLOCK_ARRAY_B3030_OFFSET;
                 let n = blocks.min(BLOCK_SCAN_MAX);
@@ -571,6 +573,24 @@ pub(crate) unsafe fn submit_play_game_once(
                     let area = unsafe { *((areaobj + BLOCK_AREAOBJ_AREA_C_OFFSET) as *const i32) };
                     if area == TARGET_AREA_M10 {
                         found10 += 1;
+                        // load-state = entry->vtable[+0x10](entry); phase = [+0x35].
+                        let vt = unsafe { *(entry as *const usize) };
+                        if vt != null {
+                            let getter: unsafe extern "system" fn(usize) -> usize = unsafe {
+                                std::mem::transmute(
+                                    *((vt + BLOCK_LOADSTATE_GETTER_VT_10_OFFSET) as *const usize),
+                                )
+                            };
+                            let ls = unsafe { getter(entry) };
+                            if ls != null {
+                                m10flag = unsafe {
+                                    *((ls + BLOCK_LOADSTATE_FLAG_2D_OFFSET) as *const u8) as i32
+                                };
+                                m10phase = unsafe {
+                                    *((ls + BLOCK_LOADSTATE_PHASE_35_OFFSET) as *const u8) as i32
+                                };
+                            }
+                        }
                     }
                     if (i as usize) < BLOCK_SAMPLE_COUNT {
                         sample |= ((area as u32) & BLOCK_AREA_BYTE_MASK)
@@ -579,8 +599,9 @@ pub(crate) unsafe fn submit_play_game_once(
                 }
             }
             append_autoload_debug(format_args!(
-                "submit_play_game: phaseD state={state} mms_state={mms_state} blocks={blocks} found10={found10} sample=0x{sample:x} reqcoord=0x{coord:x} worldA=0x{world_a:x} child_d8={d8} b80={b80} csfeman=0x{csfeman:x} tick={tick}"
+                "submit_play_game: phaseD state={state} mms_state={mms_state} blocks={blocks} found10={found10} m10phase={m10phase} m10flag={m10flag} sample=0x{sample:x} reqcoord=0x{coord:x} child_d8={d8} csfeman=0x{csfeman:x} tick={tick}"
             ));
+            let _ = (world_a, b80);
         }
     }
     true
