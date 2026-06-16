@@ -503,40 +503,24 @@ pub(crate) unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: 
         return;
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    // Module-base globals are always safe to read regardless of title owner.
+    // Module-base globals -- always safe committed reads. NO title_owner scan:
+    // its full-memory VirtualQuery+deref walk raced the booting game (region freed
+    // mid-scan -> AV, the boot-crash). The autoload needs none of it -- the movie
+    // singleton and GameMan are fixed globals.
     let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
     let latch = unsafe { *((module_base + TITLE_ACCEPT_LATCH_RVA) as *const u8) };
     let movie = unsafe { *((module_base + MOVIE_SINGLETON_RVA) as *const usize) };
     let skip = unsafe { *((module_base + MOVIE_SKIP_FLAG_RVA) as *const u8) };
-    // Dense per-tick logging once the dismiss has fired (skip set) until the
-    // front-end builds, to capture the exact post-accept trajectory / freeze point.
+    let gm = unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+    let session = unsafe { *((module_base + SESSION_SINGLETON_RVA) as *const usize) };
     let log_now = (tick % ARM_PROBE_TICK_INTERVAL == null as u64)
         || (skip == MOVIE_SKIP_FLAG_SET && csfeman == null);
-    let owner = unsafe { title_owner(module_base) }.map(|p| p as usize);
-    // State is -1 (sentinel) when the title owner is gone (advanced past title).
-    let state = match owner {
-        Some(o) => unsafe { *((o + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) },
-        None => TITLE_STATE_OWNER_GONE,
-    };
-    // Native zero-input dismiss (mirrors the movie WNDPROC's WM_CLOSE teardown,
-    // then sets the skip-flag last): hide+repaint the dedicated movie window so the
-    // intro thread's fade/present-quiesce completes cleanly and latches -- a raw
-    // flag-only write skipped this teardown and hung the render pipeline.
-    if do_write
-        && tick >= DISMISS_MIN_TICK
-        && state == TITLE_STEP_MENU_JOB_WAIT
-        && skip == MOVIE_SKIP_FLAG_CLEAR
-    {
-        let movie_vtable = if movie != null {
-            unsafe { *(movie as *const usize) }
-        } else {
-            null
-        };
-        let hwnd = if movie != null {
-            unsafe { *((movie + MOVIE_HWND_OFFSET) as *const usize) }
-        } else {
-            null
-        };
+    // Scan-free native movie dismiss: gated on the movie singleton being present
+    // with the expected vtable (= the title bg movie is up at press-any-button,
+    // since splash-skip removed the logos) + a tick floor + skip-flag clear.
+    if do_write && tick >= DISMISS_MIN_TICK && skip == MOVIE_SKIP_FLAG_CLEAR && movie != null {
+        let movie_vtable = unsafe { *(movie as *const usize) };
+        let hwnd = unsafe { *((movie + MOVIE_HWND_OFFSET) as *const usize) };
         if movie_vtable == module_base + MOVIE_VTABLE_RVA && hwnd != null {
             let hwnd_ptr = hwnd as *mut c_void;
             unsafe {
@@ -549,51 +533,32 @@ pub(crate) unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: 
                 *((module_base + MOVIE_SKIP_FLAG_RVA) as *mut u8) = MOVIE_SKIP_FLAG_SET;
             }
             append_autoload_debug(format_args!(
-                "title_accept: native movie dismiss (movie=0x{movie:x} hwnd=0x{hwnd:x} latch={latch} state={state} tick={tick})"
-            ));
-        } else if log_now {
-            append_autoload_debug(format_args!(
-                "title_accept: movie dismiss SKIPPED -- movie=0x{movie:x} vtable_ok={} hwnd_present={} tick={tick}",
-                movie_vtable == module_base + MOVIE_VTABLE_RVA,
-                hwnd != null
+                "title_accept: native movie dismiss (movie=0x{movie:x} hwnd=0x{hwnd:x} latch={latch} tick={tick})"
             ));
         }
     }
-    // Load-subsystem probe (read-only): at the clean press-any-button, log the
-    // parked InGameStep (owner+0x2e8) state + GameMan selection/slot fields +
-    // session singleton, to nail the move-map/load request trigger.
-    if log_now && state == TITLE_STEP_MENU_JOB_WAIT {
-        if let Some(o) = owner {
-            let feman = unsafe { *((o + TITLE_OWNER_JOB_OFFSET) as *const usize) };
-            let feman_state = if feman != null {
-                unsafe { *((feman + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) }
-            } else {
-                TITLE_STATE_OWNER_GONE
-            };
-            let gm =
-                unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
-            let session = unsafe { *((module_base + SESSION_SINGLETON_RVA) as *const usize) };
-            if gm != null {
-                let cmd = unsafe { *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *const i32) };
-                let force = unsafe { *((gm + GAME_MAN_ARM_FLAG_B72_OFFSET) as *const u8) };
-                let slot = unsafe { *((gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
-                let loading =
-                    unsafe { *((gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *const u8) };
-                append_autoload_debug(format_args!(
-                    "load_probe: feman=0x{feman:x} feman_state={feman_state} gm=0x{gm:x} cmd={cmd} force={force} slot={slot} loading={loading} session=0x{session:x} tick={tick}"
-                ));
-            } else {
-                append_autoload_debug(format_args!(
-                    "load_probe: feman=0x{feman:x} feman_state={feman_state} gm=NULL session=0x{session:x} tick={tick}"
-                ));
-            }
-        }
-    }
-    // Unconditional observability: log CSFeMan/latch/state every interval, even
-    // after the owner is gone, to see whether the title advanced + bootstrapped.
+    // Observability: GameMan load fields + session + csfeman, to see the post-
+    // dismiss bootstrap/load trajectory (drives where to arm the load recipe).
     if log_now {
+        let (cmd, force, slot, loading) = if gm != null {
+            unsafe {
+                (
+                    *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *const i32),
+                    *((gm + GAME_MAN_ARM_FLAG_B72_OFFSET) as *const u8),
+                    *((gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32),
+                    *((gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *const u8),
+                )
+            }
+        } else {
+            (
+                TITLE_STATE_OWNER_GONE,
+                MOVIE_SKIP_FLAG_CLEAR,
+                TITLE_STATE_OWNER_GONE,
+                MOVIE_SKIP_FLAG_CLEAR,
+            )
+        };
         append_autoload_debug(format_args!(
-            "title_accept: state={state} skip={skip} movie=0x{movie:x} latch={latch} csfeman=0x{csfeman:x} tick={tick}"
+            "title_accept: skip={skip} movie=0x{movie:x} latch={latch} csfeman=0x{csfeman:x} session=0x{session:x} gm=0x{gm:x} cmd={cmd} force={force} slot={slot} loading={loading} tick={tick}"
         ));
     }
 }

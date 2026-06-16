@@ -298,10 +298,10 @@ pub(crate) const SPLASH_SKIP_REPLACEMENT_JG: u8 = 0x7f;
 pub(crate) const SPLASH_PATCH_LEN: usize = 1;
 pub(crate) const PAGE_EXECUTE_READWRITE: u32 = 0x40;
 pub(crate) const PAGE_PROTECT_UNSET: u32 = 0;
-/// Earliest game-task tick to fire the movie dismiss. Dismissing very early
-/// (~tick 121 / ~2s) advanced the title but the menu never built + the task froze;
-/// delaying gives the boot time to load the menu subsystems before we dismiss.
-pub(crate) const DISMISS_MIN_TICK: u64 = 600;
+/// Earliest game-task tick to fire the movie dismiss -- a settle floor; the real
+/// gate is the movie singleton being present with the expected vtable. Kept modest
+/// so the dismiss reliably fires within the runtime window.
+pub(crate) const DISMISS_MIN_TICK: u64 = 120;
 /// Generous upper bound on the game image span, to sanity-check that a candidate
 /// object's vtable points into the module before dereferencing deeper.
 /// Sentinel logged when GameMan is null so the field could not be read.
