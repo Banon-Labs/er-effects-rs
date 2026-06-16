@@ -2,6 +2,21 @@
 
 This file provides instructions and context for AI coding agents working on this project.
 
+## No Compromises
+
+We accept **no compromises** on the stated objective. Do not propose, accept, or
+quietly settle for a weaker solution that technically "works" but relaxes the
+requirement (e.g. simulating an input when the goal is **zero-input** autoload).
+When a path looks blocked, that is a signal to find the *real* solution at a
+deeper layer — not to lower the bar. Specifically for the autoload goal: the
+deliverable must achieve genuine **zero simulated input** (`simulated_button_presses_total = 0`,
+no host pointer, no synthesized DirectInput/keystate/event) AND be a single
+LazyLoader/chainload DLL compatible with offline-vanilla, Seamless Co-op, and
+other mods (see bd memory `autoload-dll-product-requirements`). "Architecturally
+hard" is not "impossible" — keep reverse-engineering until the in-process,
+no-input mechanism is found. Surface trade-offs honestly, but the bar is the
+actual goal, never a fallback.
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
 
