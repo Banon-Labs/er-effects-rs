@@ -642,10 +642,8 @@ impl ImguiRenderLoop for EffectsOverlay {
     }
 
     fn render(&mut self, ui: &mut Ui) {
-        // Render-thread liveness probe: independent of the game-task scheduler, so
-        // it survives the title->menu phase transition. Tells us whether the game
-        // advanced (render alive + CSFeMan builds) or hung (render also frozen).
-        render_liveness_probe();
+        // render_liveness_probe() temporarily disabled: isolating whether the
+        // boot-crash is the render-thread probe vs the game-task scan.
         let blocker = InputBlocker::get_instance();
         unsafe {
             let _ = blocker.install_hooks();

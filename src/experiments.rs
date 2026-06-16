@@ -470,6 +470,7 @@ pub(crate) fn apply_splash_skip() {
 /// separate thread from the game-task scheduler), so it keeps reporting after the
 /// title->menu phase transition stops the title CSTask. Distinguishes "the title
 /// advanced (render alive + CSFeMan builds)" from "the game hung (render frozen)".
+#[allow(dead_code)]
 pub(crate) fn render_liveness_probe() {
     if !title_accept_enabled() {
         return;
