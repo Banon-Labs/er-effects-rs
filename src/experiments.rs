@@ -471,15 +471,21 @@ pub(crate) unsafe fn submit_play_game_once(
             unsafe {
                 *((ingame + INGAMESTEP_TARGET_COORD_100_OFFSET) as *mut i32) = coord;
             }
+            // The resmgr is the INLINE object AT ingame+0x250 (its first qword is the
+            // vtable 0x142a7de60; deref'ing it = the vtable, which caused the prior
+            // null+0x62 crash). So the receiver is the ADDRESS ingame+0x250.
+            let resmgr = ingame + INGAMESTEP_RESMGR_250_OFFSET;
+            // Gap 2 FIRST: enable streaming on the resmgr (sets +0xb7c1, builds the
+            // session singletons, starts the IO job machine) so the builder will create
+            // load-states under an enabled resmgr.
+            let enable: unsafe extern "system" fn(usize) =
+                unsafe { std::mem::transmute(module_base + STREAMING_ENABLE_RVA) };
+            unsafe { enable(resmgr) };
+            // Gap 1: re-submit the m10 block-load request now that streaming is on.
             let submit_req: unsafe extern "system" fn(usize) =
                 unsafe { std::mem::transmute(module_base + REQUEST_SUBMIT_RVA) };
             unsafe { submit_req(ingame) };
-            let resmgr = unsafe { *((ingame + INGAMESTEP_RESMGR_250_OFFSET) as *const usize) };
-            // BISECT: enable 0x14066e2e4 disabled this run (it is a virtual whose `this`
-            // may be the resmgr-owner, not resmgr -> null+0x62 crash). Test whether the
-            // re-submit alone is safe + creates the m10 load-state first.
-            let enabled = 0i32;
-            let _ = STREAMING_ENABLE_RVA;
+            let enabled = 1i32;
             let _ = (
                 LOAD_INITIATOR_RVA,
                 WORLD_WORKER_BUILD_RVA,
