@@ -490,29 +490,39 @@ pub(crate) unsafe extern "system" fn own_stepper_idx6(owner: usize, framectx: us
             pass6();
             return;
         }
-        // PHASE 2: initiate the slot-IO (b80 lane) then deserialize the real slot ->
-        // GameMan+0xc30 = real map + char applied.
+        // PHASE 2 (native autoload arm): lever (a). Set the slot + the force flag so the
+        // game's OWN dispatcher (ticked by the MoveMapStep) runs current_slot_load ->
+        // the b80 save-IO machine -> the full deserialize -> c30 + character, then
+        // streams the real map. This is the designed save-mount path.
         let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
-        let init_io: unsafe extern "system" fn(i32) =
-            unsafe { std::mem::transmute(base + LOAD_INITIATOR_RVA) };
-        unsafe { init_io(want_slot) };
-        let deser: unsafe extern "system" fn(i32) =
-            unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
-        unsafe { deser(want_slot) };
-        let real_c30 = read_gm(GAME_MAN_SAVED_MAP_C30_OFFSET);
-        // PHASE 3: re-target the load to the real map + SetState(5).
-        unsafe {
-            *((owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *mut u8) = MOVIE_SKIP_FLAG_CLEAR;
-            *((owner + TITLE_OWNER_PLAY_GAME_SLOT_OFFSET) as *mut i32) = real_c30;
+        let set_save_slot: unsafe extern "system" fn(i32) =
+            unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+        unsafe { set_save_slot(want_slot) };
+        if gm != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe {
+                *((gm + GAME_MAN_ARM_FLAG_B72_OFFSET) as *mut u8) = TITLE_PROCEED_GATE_SET_VALUE;
+            }
         }
-        let set_state: unsafe extern "system" fn(usize, i32) =
-            unsafe { std::mem::transmute(base + TITLE_SET_STATE_RVA) };
-        unsafe { set_state(owner, TITLE_STEP_PLAY_GAME) };
         OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+        let _ = (
+            owner,
+            LOAD_INITIATOR_RVA,
+            DESERIALIZE_SLOT_RVA,
+            TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET,
+            TITLE_OWNER_PLAY_GAME_SLOT_OFFSET,
+            TITLE_SET_STATE_RVA,
+            TITLE_STEP_PLAY_GAME,
+        );
         append_autoload_debug(format_args!(
-            "own_stepper: idx6 PHASE2/3 (#{n}) slot={want_slot} deser c30=0x{c30:x}->0x{real_c30:x} b80={b80} re-SetState(5) owner=0x{owner:x}"
+            "own_stepper: idx6 ARM (#{n}) slot={want_slot} ac0+b72=1 b80={b80} c30=0x{c30:x}"
         ));
         return;
+    }
+    // phase DONE: WATCH the native autoload progress (b80 1->2->3, c30 -> real map).
+    if n % OWN_STEPPER_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+        append_autoload_debug(format_args!(
+            "own_stepper: idx6 watch #{n} b80={b80} c30=0x{c30:x} csfeman=0x{csfeman:x}"
+        ));
     }
     pass6();
 }
