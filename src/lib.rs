@@ -275,6 +275,15 @@ pub(crate) const STREAMING_ENABLE_RVA: usize = 0x66e2e4;
 pub(crate) const RESMGR_STREAM_ENABLE_B7C1_OFFSET: usize = 0xb7c1;
 pub(crate) const SESSION_SINGLETON_A_RVA: usize = 0x3d687a0;
 pub(crate) const SESSION_SINGLETON_B_RVA: usize = 0x3d67bd0;
+/// Corrected streaming-enable (worldres-enable-0x14066e2e4-decoded-receiver-and-
+/// driver-singleton-2026): the CORRECT resmgr is deref(deref(MoveMapStep+0xf0)+0x10)
+/// with vtable 0x142a7e030 (NOT InGameStep+0x250, which is the WorldRes-owner, vtable
+/// 0x142a7de60 -- the wrong object that crashed). The hard floor is the streaming/
+/// session driver singleton 0x143d7c088 (job machine asserts if null); build it via
+/// the lazy getter 0x140cd6c50 before calling enable 0x14066e2e4(resmgr).
+pub(crate) const RESMGR_EXPECTED_VTABLE_RVA: usize = 0x2a7e030;
+pub(crate) const STREAMING_DRIVER_SINGLETON_RVA: usize = 0x3d7c088;
+pub(crate) const STREAMING_DRIVER_BUILDER_RVA: usize = 0xcd6c50;
 /// World-stream worker build+register: IngameInit's SetState tail 0x140b0a980, whose
 /// `[this+0x48] >= 7` arm constructs the world-stream worker 0x144842d40 (ctor
 /// 0x141eceb10) and registers it with the FD4 scheduler (key 0x59682f01 via

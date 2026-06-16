@@ -471,34 +471,53 @@ pub(crate) unsafe fn submit_play_game_once(
             unsafe {
                 *((ingame + INGAMESTEP_TARGET_COORD_100_OFFSET) as *mut i32) = coord;
             }
-            // The resmgr is the INLINE object AT ingame+0x250 (its first qword is the
-            // vtable 0x142a7de60; the virtual enabler 0x14066e2e4 crashes -- wrong
-            // receiver). Gap 2: POKE the streaming-enable flag [resmgr+0xb7c1]=1
-            // directly. Also read the session singletons the virtual would build, to
-            // judge whether the poke is safe.
-            let resmgr = ingame + INGAMESTEP_RESMGR_250_OFFSET;
-            let sess_a = unsafe { *((module_base + SESSION_SINGLETON_A_RVA) as *const usize) };
-            let sess_b = unsafe { *((module_base + SESSION_SINGLETON_B_RVA) as *const usize) };
-            let b7c1_before =
-                unsafe { *((resmgr + RESMGR_STREAM_ENABLE_B7C1_OFFSET) as *const u8) as i32 };
-            // REVERTED: poking [resmgr+0xb7c1]=1 enables streaming but the job machine
-            // then FD4-asserts because the session singletons 0x143d687a0/0x143d67bd0
-            // are NULL (the virtual 0x14066e2e4 builds them, but its receiver is
-            // unpinned -> calling it crashes null+0x62). Re-submit only (safe) until
-            // the enable receiver is RE'd. (worldres-resubmit-safe-but-resmgr-identity)
+            // CORRECT resmgr = deref(deref(MoveMapStep+0xf0)+0x10), vtable 0x142a7e030
+            // (NOT InGameStep+0x250, which is the WorldRes-OWNER, vtable 0x142a7de60 --
+            // passing that was the prior crash).
+            let mms = unsafe { *((ingame + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) as *const usize) };
+            let wrm = if mms != null {
+                unsafe { *((mms + MOVEMAPSTEP_WORLDRES_F0_OFFSET) as *const usize) }
+            } else {
+                null
+            };
+            let resmgr = if wrm != null {
+                unsafe { *((wrm + WORLDRES_RESMGR_10_OFFSET) as *const usize) }
+            } else {
+                null
+            };
+            let vtok = resmgr != null
+                && unsafe { *(resmgr as *const usize) } == module_base + RESMGR_EXPECTED_VTABLE_RVA;
+            // STEP 1 (hard floor): build the streaming/session driver singleton
+            // 0x143d7c088 via its lazy getter 0x140cd6c50 -- the job machine FD4-asserts
+            // if it is null.
+            let driver_before =
+                unsafe { *((module_base + STREAMING_DRIVER_SINGLETON_RVA) as *const usize) };
+            if driver_before == null {
+                let build_driver: unsafe extern "system" fn() -> usize =
+                    unsafe { std::mem::transmute(module_base + STREAMING_DRIVER_BUILDER_RVA) };
+                let _ = unsafe { build_driver() };
+            }
+            let driver_after =
+                unsafe { *((module_base + STREAMING_DRIVER_SINGLETON_RVA) as *const usize) };
+            // STEP 2: enable streaming on the CORRECT resmgr (builds the 2 session
+            // singletons, sets +0xb7c1, starts the IO jobs). Guarded on vtok + driver.
+            let mut enabled = DIAG_COUNT_ZERO;
+            if vtok && driver_after != null {
+                let enable: unsafe extern "system" fn(usize) =
+                    unsafe { std::mem::transmute(module_base + STREAMING_ENABLE_RVA) };
+                unsafe { enable(resmgr) };
+                enabled = DIAG_COUNT_ONE;
+            }
+            // STEP 3: re-submit so the builder creates the m10 load-states.
             let submit_req: unsafe extern "system" fn(usize) =
                 unsafe { std::mem::transmute(module_base + REQUEST_SUBMIT_RVA) };
             unsafe { submit_req(ingame) };
-            let enabled = DIAG_COUNT_ZERO;
             let _ = (
-                STREAMING_ENABLE_RVA,
+                INGAMESTEP_RESMGR_250_OFFSET,
+                SESSION_SINGLETON_A_RVA,
+                SESSION_SINGLETON_B_RVA,
                 RESMGR_STREAM_ENABLE_B7C1_OFFSET,
                 TITLE_PROCEED_GATE_SET_VALUE,
-            );
-            append_autoload_debug(format_args!(
-                "submit_play_game: phaseC b7c1={b7c1_before} enabled={enabled} sessA=0x{sess_a:x} sessB=0x{sess_b:x} resmgr=0x{resmgr:x} tick={tick}"
-            ));
-            let _ = (
                 LOAD_INITIATOR_RVA,
                 WORLD_WORKER_BUILD_RVA,
                 SYNTHETIC_STEP_THIS_SIZE,
@@ -508,7 +527,7 @@ pub(crate) unsafe fn submit_play_game_once(
             );
             SUBMIT_PLAY_GAME_PHASE.store(SUBMIT_PHASE_DONE, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "submit_play_game: phaseC resubmit coord=0x{coord:x} enabled={enabled} resmgr=0x{resmgr:x} ingame=0x{ingame:x} tick={tick}"
+                "submit_play_game: phaseC driver=0x{driver_before:x}->0x{driver_after:x} resmgr=0x{resmgr:x} vtok={vtok} enabled={enabled} coord=0x{coord:x} tick={tick}"
             ));
         }
         _ => {
