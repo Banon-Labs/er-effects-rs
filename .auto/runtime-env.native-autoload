@@ -2,11 +2,13 @@
 # (GameMan+0xac0) and raises the force flag (0x143d856a0), then the game's own
 # save-manager update performs the load with zero input. Watch target player-load
 # so the watcher observes through the full load to player availability.
-LAUNCH_MODE=steam
+LAUNCH_MODE=direct
 RUNTIME_MAX_NUDGES=0
 RESTORE_RUNTIME_SAVES=1
 RUNTIME_CAPTURE_INPUT_OCR=0
 ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=0
+ER_EFFECTS_SPLASH_SKIP=1
+ER_EFFECTS_CRASH_LOG=1
 ER_EFFECTS_NATIVE_AUTOLOAD=1
 ER_EFFECTS_AUTOLOAD_SLOT=9
 ER_EFFECTS_AUTOLOAD_METHOD=direct_menu_load

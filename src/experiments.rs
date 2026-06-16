@@ -329,9 +329,11 @@ pub(crate) unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u
                 unsafe { *((game_man + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
             let load14 =
                 unsafe { *((game_man + FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET) as *const i32) };
-            let flag = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
+            let latch = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
+            let b72 = unsafe { *((game_man + GAME_MAN_ARM_FLAG_B72_OFFSET) as *const u8) };
+            let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
             append_autoload_debug(format_args!(
-                "native_autoload: observe slot={slot_now} b80={load_in_progress} load14={load14} flag={flag} tick={tick}"
+                "native_autoload: observe slot={slot_now} b80={load_in_progress} load14={load14} latch={latch} b72={b72} csfeman=0x{csfeman:x} tick={tick}"
             ));
         }
         return;
@@ -342,16 +344,21 @@ pub(crate) unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u
         ));
         return;
     }
+    // CORRECTED recipe (native-continue-and-slotn-recipe-2026): the latch
+    // 0x143d856a0 must stay CLEAR; the arm flag is [GameMan+0xb72]=1. (The old
+    // code set the latch to 1, which the disasm proves aborts the load.)
+    let latch_before = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
     let set_save_slot: unsafe extern "system" fn(i32) =
         unsafe { std::mem::transmute(module_base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
     unsafe { set_save_slot(slot) };
     let slot_after = unsafe { *((game_man + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
     unsafe {
-        *((module_base + SELECTBOT_LOAD_GATE_RVA) as *mut u8) = TITLE_PROCEED_GATE_SET_VALUE;
+        *((game_man + GAME_MAN_ARM_FLAG_B72_OFFSET) as *mut u8) = TITLE_PROCEED_GATE_SET_VALUE;
     }
     NATIVE_AUTOLOAD_ARMED.store(true, Ordering::SeqCst);
+    let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
     append_autoload_debug(format_args!(
-        "native_autoload: armed slot={slot_after} force_flag=1 b80={load_in_progress} tick={tick}"
+        "native_autoload: armed slot={slot_after} b72=1 latch_left={latch_before} b80={load_in_progress} csfeman=0x{csfeman:x} tick={tick}"
     ));
 }
 
