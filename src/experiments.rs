@@ -379,7 +379,12 @@ pub(crate) fn submit_play_game_enabled() -> bool {
 /// game's own SetState 0x140b0d960(owner, 5=PlayGame). The existing per-frame pump
 /// then runs PlayGame -> child MoveMap_Init -> builds CSFeMan -> loads. Zero input.
 /// (force_play_game wrote owner+0x4c=5 raw + a raw slot in +0xbc -> orphaned.)
-pub(crate) unsafe fn submit_play_game_once(module_base: usize, slot: i32, tick: u64) -> bool {
+pub(crate) unsafe fn submit_play_game_once(
+    module_base: usize,
+    slot: i32,
+    tick: u64,
+    task_data: &FD4TaskData,
+) -> bool {
     if tick < TITLE_NATIVE_JOB_MIN_TICK {
         return false;
     }
@@ -443,24 +448,36 @@ pub(crate) unsafe fn submit_play_game_once(module_base: usize, slot: i32, tick: 
             ));
         }
         _ => {
+            // Phase C: per-frame pump the MoveMapStep's OWN update so its step
+            // machine advances BeginInit -> MsbLoad (builds world singletons
+            // 0x143d691d8/0x143d69ba8) -> terminal (+0x48 == -1) -> IsResident ->
+            // child+0xd8 drains. IngameInit only re-syncs; the world is built here.
+            let Some(owner) = (unsafe { title_owner(module_base) }) else {
+                return true;
+            };
+            let owner = owner as usize;
+            let ingame = unsafe { *((owner + TITLE_OWNER_JOB_OFFSET) as *const usize) };
+            if ingame == null {
+                return true;
+            }
+            let d8 = unsafe { *((ingame + TITLE_OWNER_JOB_PENDING_OFFSET) as *const i32) };
+            let movemapstep =
+                unsafe { *((ingame + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) as *const usize) };
+            if movemapstep != null && d8 == INGAMESTEP_PENDING_D8_PENDING {
+                let pump: unsafe extern "system" fn(*mut u8, *const FD4TaskData) -> usize =
+                    unsafe { std::mem::transmute(module_base + MOVEMAPSTEP_UPDATE_RVA) };
+                let _ = unsafe { pump(movemapstep as *mut u8, task_data as *const FD4TaskData) };
+            }
             if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == null as u64 {
-                let owner = unsafe { title_owner(module_base) }.map(|p| p as usize);
-                let (state, child_d8) = match owner {
-                    Some(o) => {
-                        let st =
-                            unsafe { *((o + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) };
-                        let child = unsafe { *((o + TITLE_OWNER_JOB_OFFSET) as *const usize) };
-                        let d8 = if child != null {
-                            unsafe { *((child + TITLE_OWNER_JOB_PENDING_OFFSET) as *const i32) }
-                        } else {
-                            TITLE_STATE_OWNER_GONE
-                        };
-                        (st, d8)
-                    }
-                    None => (TITLE_STATE_OWNER_GONE, TITLE_STATE_OWNER_GONE),
+                let state =
+                    unsafe { *((owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) };
+                let mms_state = if movemapstep != null {
+                    unsafe { *((movemapstep + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) }
+                } else {
+                    TITLE_STATE_OWNER_GONE
                 };
                 append_autoload_debug(format_args!(
-                    "submit_play_game: observe state={state} child_d8={child_d8} c30=0x{:x} csfeman=0x{csfeman:x} tick={tick}",
+                    "submit_play_game: pump state={state} child_d8={d8} mms=0x{movemapstep:x} mms_state={mms_state} c30=0x{:x} csfeman=0x{csfeman:x} tick={tick}",
                     read_c30()
                 ));
             }

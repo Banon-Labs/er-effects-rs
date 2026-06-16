@@ -244,6 +244,13 @@ pub(crate) const SUBMIT_PHASE_INIT: i32 = 0;
 pub(crate) const SUBMIT_PHASE_BUILT: i32 = 1;
 pub(crate) const SUBMIT_PHASE_DESER: i32 = 2;
 pub(crate) const SUBMIT_PHASE_DONE: i32 = 3;
+/// Phase C world-priming (ingameinit-decoded-world-built-by-movemapstep-msbload-2026):
+/// the world singletons are built by the MoveMapStep's OWN step machine (STEP_MsbLoad),
+/// driven by per-frame update 0x140aff640(rcx=MoveMapStep, rdx=FD4TaskData). The
+/// MoveMapStep is held at InGameStep(owner+0x2e8)+0xe8. Pump it until child+0xd8 drains.
+pub(crate) const MOVEMAPSTEP_UPDATE_RVA: usize = 0xaff640;
+pub(crate) const INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET: usize = 0xe8;
+pub(crate) const INGAMESTEP_PENDING_D8_PENDING: i32 = 1;
 /// Global holding the GameMan pointer (`mov rax,[rip]` in set_save_slot 0x67a810
 /// / save_slot_get 0x678ca0). Read-only diagnostics of the PlayGame load-pair
 /// preconditions read GameMan through this.
@@ -947,7 +954,9 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     if submit_play_game_enabled() {
                         if let (Ok(base), Some(slot)) = (game_module_base(), state.autoload.slot())
                         {
-                            unsafe { submit_play_game_once(base, slot, state.game_task_ticks) };
+                            unsafe {
+                                submit_play_game_once(base, slot, state.game_task_ticks, task_data)
+                            };
                         }
                         write_telemetry_throttled(&mut state, false);
                         return;
