@@ -397,8 +397,11 @@ pub(crate) unsafe fn submit_play_game_once(module_base: usize, slot: i32, tick: 
         unsafe { std::mem::transmute(module_base + TITLE_SET_STATE_RVA) };
     match SUBMIT_PLAY_GAME_PHASE.load(Ordering::SeqCst) {
         SUBMIT_PHASE_INIT => {
-            // Phase 1: build CSFeMan -- SetState(5) with a placeholder map so the
-            // pump runs PlayGame -> child MoveMap_Init -> CSFeMan::Construct.
+            // Phase A: deserialize slot N FIRST. It is CSFeMan-less, so it works at
+            // the title (state 10) and lands slot N's REAL saved map in GameMan+0xc30
+            // (+ applies the character) BEFORE any MoveMap occupies the child with a
+            // placeholder map. (The m60-first order occupied the child + the re-target
+            // at state 6 was ignored -> child+0xd8 stuck on m60.)
             let Some(owner) = (unsafe { title_owner(module_base) }) else {
                 return false;
             };
@@ -411,29 +414,12 @@ pub(crate) unsafe fn submit_play_game_once(module_base: usize, slot: i32, tick: 
             let set_save_slot: unsafe extern "system" fn(i32) =
                 unsafe { std::mem::transmute(module_base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
             unsafe { set_save_slot(slot) };
-            unsafe {
-                *((owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *mut u8) =
-                    MOVIE_SKIP_FLAG_CLEAR;
-                *((owner + TITLE_OWNER_PLAY_GAME_SLOT_OFFSET) as *mut i32) = DEFAULT_PLAY_GAME_MAP;
-            }
-            unsafe { set_state(owner, TITLE_STEP_PLAY_GAME) };
-            SUBMIT_PLAY_GAME_PHASE.store(SUBMIT_PHASE_BUILT, Ordering::SeqCst);
-            append_autoload_debug(format_args!(
-                "submit_play_game: phase1 SetState(5) owner=0x{owner:x} slot={slot} placeholder=0x{DEFAULT_PLAY_GAME_MAP:x} tick={tick}"
-            ));
-        }
-        SUBMIT_PHASE_BUILT => {
-            // Phase 2: once CSFeMan is built, deserialize slot N CSFeMan-less ->
-            // GameMan+0xc30 = the real saved map + character applied.
-            if csfeman == null {
-                return true;
-            }
             let deserialize: unsafe extern "system" fn(i32) =
                 unsafe { std::mem::transmute(module_base + DESERIALIZE_SLOT_RVA) };
             unsafe { deserialize(slot) };
             SUBMIT_PLAY_GAME_PHASE.store(SUBMIT_PHASE_DESER, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "submit_play_game: phase2 deserialize(slot {slot}) c30=0x{:x} csfeman=0x{csfeman:x} tick={tick}",
+                "submit_play_game: phaseA deserialize(slot {slot}) c30=0x{:x} csfeman=0x{csfeman:x} tick={tick}",
                 read_c30()
             ));
         }
