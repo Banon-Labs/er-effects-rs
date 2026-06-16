@@ -75,6 +75,17 @@ unsafe extern "system" {
         new_protect: u32,
         old_protect: *mut u32,
     ) -> i32;
+    /// Fault-tolerant read: returns FALSE on unmapped/freed memory instead of
+    /// raising an access violation -- used by the title-owner scan so the TOCTOU
+    /// race against the booting game (a region freed between VirtualQuery and the
+    /// deref) cannot crash the process.
+    fn ReadProcessMemory(
+        process: isize,
+        base: *const c_void,
+        buffer: *mut c_void,
+        size: usize,
+        read: *mut usize,
+    ) -> i32;
 }
 
 /// Minimal prefix of EXCEPTION_RECORD: only the fields the crash logger reads.
@@ -3026,6 +3037,31 @@ fn append_continue_trace(args: std::fmt::Arguments<'_>) {
     }
 }
 
+/// Pseudo-handle for the current process (GetCurrentProcess() is constant -1).
+const CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
+
+/// Fault-tolerant pointer-sized read via ReadProcessMemory: returns None on
+/// unmapped/freed memory instead of raising an access violation. Used by the
+/// title-owner scan to survive the TOCTOU race against the booting game.
+unsafe fn safe_read_usize(addr: usize) -> Option<usize> {
+    let mut value: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    let mut read: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    let ok = unsafe {
+        ReadProcessMemory(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            addr as *const c_void,
+            &mut value as *mut usize as *mut c_void,
+            std::mem::size_of::<usize>(),
+            &mut read,
+        )
+    };
+    if ok != HOOK_FALSE_RETURN as i32 && read == std::mem::size_of::<usize>() {
+        Some(value)
+    } else {
+        None
+    }
+}
+
 unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*mut u8> {
     let target_vtable = module_base.checked_add(TITLE_OWNER_VTABLE_RVA)?;
     let mut address = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -3054,7 +3090,12 @@ unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*mut u8> {
             let end = next.saturating_sub(TITLE_OWNER_STATE_OFFSET + std::mem::size_of::<i32>());
             let mut cursor = base;
             while cursor <= end {
-                let vtable = unsafe { *(cursor as *const usize) };
+                // Fault-tolerant read: the region passed VirtualQuery as committed,
+                // but the booting game may free it mid-scan -- a raw deref would AV.
+                let Some(vtable) = (unsafe { safe_read_usize(cursor) }) else {
+                    cursor = cursor.saturating_add(TITLE_OWNER_SCAN_ALIGNMENT);
+                    continue;
+                };
                 if vtable == target_vtable {
                     let state_value =
                         unsafe { *((cursor + TITLE_OWNER_STATE_OFFSET) as *const i32) };

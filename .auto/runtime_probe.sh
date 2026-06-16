@@ -600,6 +600,13 @@ cleanup_runtime() {
 }
 
 setup_runtime_payload() {
+  if [[ "${RUNTIME_NO_DLL:-0}" == "1" ]]; then
+    # Vanilla baseline: remove the LazyLoader proxy so NO DLL is injected, to
+    # isolate "our DLL crashes the boot" from "the environment is degraded".
+    printf '[runtime_probe] RUNTIME_NO_DLL=1: vanilla boot, no DLL injection\n'
+    rm -f "$GAME_DIR/dinput8.dll"
+    return 0
+  fi
   local lazyloader_dir
   lazyloader_dir="${LAZYLOADER_DIR:-$GAME_DIR/dllMods.disabled/lazyloader-20260611-234916}"
   {
