@@ -286,15 +286,15 @@ const ARM_PROBE_TICK_INTERVAL: u64 = 30;
 /// ids 0..=0x15e). The leaf input node detects a press via this layer (then
 /// mirrors into the keystate bitmap), so injecting here is what actually accepts.
 const TITLE_ACCEPT_LATCH_RVA: usize = 0x3d856a0;
-/// The press-any-button accept predicate `cmp dword [rcx],1; seta al; ret`
-/// (returns 1 when the condition verdict >= 2). The pump 0x1407a9600 calls it and,
-/// on true, invokes the job's vtable[0] -- the game's own accept ACTION that
-/// bootstraps the front-end (CSFeMan). Hooking it to report accepted while armed
-/// at title state 10 makes the game run its real accept -> bootstrap, without
-/// touching the latch (which crashes). Scoped: armed only at state 10, disarmed
-/// once CSFeMan is non-null.
-const ACCEPT_PREDICATE_RVA: usize = 0x7a9200;
-const ACCEPT_PREDICATE_ACCEPTED: u8 = 1;
+/// Boot intro/movie singleton (ptr) and its decoder skip-flag byte. The latch
+/// 0x143d856a0 is set by the intro thread 0x140c8fe90 only after its movie-wait
+/// loop ends; the movie-dismiss gate 0x140e90820 finishes on decode-complete or
+/// when the skip-flag byte 0x14458b8a5 is non-zero (sole non-WNDPROC effect is the
+/// movie's own stop). Setting the skip-flag drives a genuine zero-input dismiss.
+const MOVIE_SINGLETON_RVA: usize = 0x458b890;
+const MOVIE_SKIP_FLAG_RVA: usize = 0x458b8a5;
+const MOVIE_SKIP_FLAG_CLEAR: u8 = 0;
+const MOVIE_SKIP_FLAG_SET: u8 = 1;
 /// Generous upper bound on the game image span, to sanity-check that a candidate
 /// object's vtable points into the module before dereferencing deeper.
 /// Sentinel logged when GameMan is null so the field could not be read.
@@ -442,11 +442,6 @@ static ORIGINAL_RTL_EXIT_USER_PROCESS: AtomicUsize = AtomicUsize::new(HOOK_ORIGI
 static ORIGINAL_NT_TERMINATE_PROCESS: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ORIGINAL_ASSERT_WRAPPER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ASSERT_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
-static ORIGINAL_ACCEPT_PREDICATE: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-static ACCEPT_PREDICATE_FIRES: AtomicUsize = AtomicUsize::new(0);
-static TITLE_ACCEPT_ARMED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-static ACCEPT_PREDICATE_HOOK_INSTALLED: std::sync::Once = std::sync::Once::new();
 static PROCESS_EXIT_LOGGED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 static AV_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
@@ -2388,57 +2383,18 @@ fn title_accept_inject_enabled() -> bool {
         .exists()
 }
 
-/// Force the game's OWN press-any-button accept: while armed, report the accept
-/// predicate true. The pump 0x1407a9600 then runs the job's vtable[0] accept
-/// ACTION, which bootstraps the front-end (CSFeMan) natively -- no latch poke
-/// (crashes) and no input-pipeline timing dependence.
-unsafe extern "system" fn accept_predicate_hook(out_ptr: usize) -> u8 {
-    ACCEPT_PREDICATE_FIRES.fetch_add(AV_LOG_LINE_INCREMENT, Ordering::SeqCst);
-    if TITLE_ACCEPT_ARMED.load(Ordering::SeqCst) {
-        return ACCEPT_PREDICATE_ACCEPTED;
-    }
-    let original = ORIGINAL_ACCEPT_PREDICATE.load(Ordering::SeqCst);
-    if original != HOOK_ORIGINAL_UNSET {
-        let original: unsafe extern "system" fn(usize) -> u8 =
-            unsafe { std::mem::transmute(original) };
-        return unsafe { original(out_ptr) };
-    }
-    HOOK_FALSE_RETURN
-}
-
-fn install_accept_predicate_hook(module_base: usize) {
-    ACCEPT_PREDICATE_HOOK_INSTALLED.call_once(|| {
-        match unsafe { MH_Initialize() } {
-            MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-            status => {
-                append_autoload_debug(format_args!(
-                    "accept-predicate hook MH_Initialize failed: {status:?}"
-                ));
-                return;
-            }
-        }
-        unsafe {
-            create_and_apply_single_hook(
-                "AcceptPredicate",
-                (module_base + ACCEPT_PREDICATE_RVA) as *mut c_void,
-                accept_predicate_hook as *mut c_void,
-                &ORIGINAL_ACCEPT_PREDICATE,
-            )
-        };
-        append_autoload_debug(format_args!("accept-predicate hook installed"));
-    });
-}
-
-/// Boot-level title-accept (robust + scoped): install the accept-predicate hook,
-/// arm it only while the inner TitleStep is at committed state 10 (MenuJobWait),
-/// and watch CSFeMan for the native bootstrap; disarm once it is non-null so menus
-/// and other mods behave normally.
+/// Boot-level title-accept (genuine zero input). The press-any-button wall is the
+/// boot intro/movie thread parked in its movie-wait loop; the latch 0x143d856a0
+/// (sole writer 0x140c8ff41) is set only AFTER that loop finishes, which is what
+/// lets the inner MenuJobWait advance 10->11. The movie-dismiss gate 0x140e90820
+/// has NO input check -- it finishes on decode completion or the skip-flag byte
+/// 0x14458b8a5. So writing the skip-flag makes the intro thread complete its REAL
+/// fade-out + teardown + latch LEGITIMATELY (proper bookkeeping, unlike the bare
+/// latch poke that crashes), driving the native title-accept with zero input.
+/// Watch CSFeMan 0x143d6b880 for the bootstrap.
 unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
     if tick < ARM_PROBE_MIN_TICK {
         return;
-    }
-    if do_write {
-        install_accept_predicate_hook(module_base);
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let owner = match unsafe { title_owner(module_base) } {
@@ -2448,9 +2404,10 @@ unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
     let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
     let state = unsafe { *((owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) };
     let latch = unsafe { *((module_base + TITLE_ACCEPT_LATCH_RVA) as *const u8) };
+    let movie = unsafe { *((module_base + MOVIE_SINGLETON_RVA) as *const usize) };
+    let skip = unsafe { *((module_base + MOVIE_SKIP_FLAG_RVA) as *const u8) };
     let log_now = tick % ARM_PROBE_TICK_INTERVAL == null as u64;
     if csfeman != null {
-        TITLE_ACCEPT_ARMED.store(false, Ordering::SeqCst);
         if log_now {
             append_autoload_debug(format_args!(
                 "title_accept: BOOTSTRAPPED csfeman=0x{csfeman:x} state={state} latch={latch} tick={tick}"
@@ -2458,12 +2415,17 @@ unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
         }
         return;
     }
-    let arm = do_write && state == TITLE_STEP_MENU_JOB_WAIT;
-    TITLE_ACCEPT_ARMED.store(arm, Ordering::SeqCst);
-    if log_now {
-        let fires = ACCEPT_PREDICATE_FIRES.load(Ordering::SeqCst);
+    // Native zero-input dismiss: set the movie skip-flag once at the title so the
+    // intro thread finishes legitimately and latches.
+    if do_write && state == TITLE_STEP_MENU_JOB_WAIT && skip == MOVIE_SKIP_FLAG_CLEAR {
+        unsafe { *((module_base + MOVIE_SKIP_FLAG_RVA) as *mut u8) = MOVIE_SKIP_FLAG_SET };
         append_autoload_debug(format_args!(
-            "title_accept: state={state} armed={arm} predicate_fires={fires} latch={latch} csfeman=0x{csfeman:x} tick={tick}"
+            "title_accept: wrote movie skip-flag (movie=0x{movie:x} latch={latch} state={state} tick={tick})"
+        ));
+    }
+    if log_now {
+        append_autoload_debug(format_args!(
+            "title_accept: state={state} skip={skip} movie=0x{movie:x} latch={latch} csfeman=0x{csfeman:x} tick={tick}"
         ));
     }
 }
