@@ -466,6 +466,9 @@ pub(crate) const OWN_STEPPER_PHASE_MOUNT: usize = 3;
 /// as the stream worker drains the async slot read; sets b80=3 when the IO request state
 /// (0x14240a1f0) is resident. We call it ourselves each frame at state 10.
 pub(crate) const B80_POLL_RVA: usize = 0x679180;
+/// Both fastcall args (cl, dl) to the b80 poll 0x140679180 are 0 in the native menu
+/// drive (matches the captured real-load poll calls poll(0,0)).
+pub(crate) const B80_POLL_ARG_ZERO: u8 = 0;
 /// Max frames to poll b80 toward 3 before giving up the mount (avoid an infinite title
 /// hang if the worker never drains). ~10s at 60fps.
 pub(crate) const OWN_STEPPER_MOUNT_POLL_MAX: u64 = 600;
