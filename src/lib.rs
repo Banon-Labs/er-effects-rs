@@ -69,6 +69,12 @@ unsafe extern "system" {
     fn DeleteMenu(hmenu: *mut c_void, uposition: u32, uflags: u32) -> i32;
     fn ShowWindow(hwnd: *mut c_void, ncmdshow: i32) -> i32;
     fn UpdateWindow(hwnd: *mut c_void) -> i32;
+    fn VirtualProtect(
+        addr: *mut c_void,
+        size: usize,
+        new_protect: u32,
+        old_protect: *mut u32,
+    ) -> i32;
 }
 
 /// Minimal prefix of EXCEPTION_RECORD: only the fields the crash logger reads.
@@ -320,6 +326,17 @@ const WND_SW_HIDE: i32 = 0;
 const WND_GET_SYSTEM_MENU_KEEP: i32 = 0;
 /// Render-thread liveness probe logging cadence (in render frames).
 const RENDER_PROBE_INTERVAL: usize = 120;
+/// Splash-skip static patch (ports chozandrias76/er-skip-splash-screens to 1.16.1):
+/// inside STEP_BeginLogo 0x140b0c2a0, the branch `cmp [rdi+0xb8],0; je 0x140b0c3b2`
+/// at RVA 0xb0c35d plays the logo when the byte is 0; flipping je(0x74)->jg(0x7f)
+/// falls through to the SetState(state 3) advance instead, skipping the logo via
+/// the game's own flow. Applied early (DLL attach) before the title runs state 2.
+const SPLASH_SKIP_RVA: usize = 0xb0c35d;
+const SPLASH_SKIP_EXPECTED_JE: u8 = 0x74;
+const SPLASH_SKIP_REPLACEMENT_JG: u8 = 0x7f;
+const SPLASH_PATCH_LEN: usize = 1;
+const PAGE_EXECUTE_READWRITE: u32 = 0x40;
+const PAGE_PROTECT_UNSET: u32 = 0;
 /// Earliest game-task tick to fire the movie dismiss. Dismissing very early
 /// (~tick 121 / ~2s) advanced the title but the menu never built + the task froze;
 /// delaying gives the boot time to load the menu subsystems before we dismiss.
@@ -423,6 +440,7 @@ const TASK_ENQUEUE_TRACE_INCREMENT: usize = 1;
 static START_GAME_TASK: Once = Once::new();
 static START_CONTINUE_TRACE: Once = Once::new();
 static START_SAFE_INPUT_HOOKS: Once = Once::new();
+static START_SPLASH_SKIP: Once = Once::new();
 static BOOTSTRAP_TELEMETRY_SEEN: AtomicUsize = AtomicUsize::new(BOOTSTRAP_TELEMETRY_UNSEEN);
 static SAFE_INPUT_CONFIRM_FRAMES_REMAINING: AtomicUsize = AtomicUsize::new(0);
 
@@ -1042,6 +1060,16 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     }
 
     let state = Arc::new(Mutex::new(EffectsState::default()));
+
+    // Splash-skip: apply the clean BeginLogo branch-flip as early as possible,
+    // from a thread, so it lands before the title state machine runs state 2.
+    if splash_skip_enabled() {
+        START_SPLASH_SKIP.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-splash-skip".to_owned())
+                .spawn(apply_splash_skip);
+        });
+    }
 
     let direct_autoload_configured = {
         let state = state_or_return(&state);
@@ -2415,6 +2443,61 @@ fn title_accept_inject_enabled() -> bool {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("er-effects-title-accept-inject.txt")
         .exists()
+}
+
+fn splash_skip_enabled() -> bool {
+    matches!(std::env::var("ER_EFFECTS_SPLASH_SKIP").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-splash-skip.txt")
+            .exists()
+}
+
+/// Clean static splash-skip patch (flip je->jg in STEP_BeginLogo) so the game's
+/// own flow advances past the logo via SetState instead of playing it. Validates
+/// the expected opcode first (aborts if the binary differs), and restores page
+/// protection after. Spawned early at DLL attach so it lands before state 2 runs.
+fn apply_splash_skip() {
+    let Ok(base) = game_module_base() else {
+        append_autoload_debug(format_args!("splash-skip: module base unavailable"));
+        return;
+    };
+    let target = (base + SPLASH_SKIP_RVA) as *mut u8;
+    let existing = unsafe { *target };
+    if existing != SPLASH_SKIP_EXPECTED_JE {
+        append_autoload_debug(format_args!(
+            "splash-skip: ABORT -- byte at 0x{:x} is 0x{existing:x}, expected 0x{SPLASH_SKIP_EXPECTED_JE:x}",
+            base + SPLASH_SKIP_RVA
+        ));
+        return;
+    }
+    let mut old_protect = PAGE_PROTECT_UNSET;
+    let protect_ok = unsafe {
+        VirtualProtect(
+            target as *mut c_void,
+            SPLASH_PATCH_LEN,
+            PAGE_EXECUTE_READWRITE,
+            &mut old_protect,
+        )
+    };
+    if protect_ok == HOOK_FALSE_RETURN as i32 {
+        append_autoload_debug(format_args!("splash-skip: VirtualProtect failed"));
+        return;
+    }
+    unsafe { *target = SPLASH_SKIP_REPLACEMENT_JG };
+    let mut restored = PAGE_PROTECT_UNSET;
+    unsafe {
+        VirtualProtect(
+            target as *mut c_void,
+            SPLASH_PATCH_LEN,
+            old_protect,
+            &mut restored,
+        )
+    };
+    append_autoload_debug(format_args!(
+        "splash-skip: patched 0x{:x} 0x{SPLASH_SKIP_EXPECTED_JE:x}->0x{SPLASH_SKIP_REPLACEMENT_JG:x}",
+        base + SPLASH_SKIP_RVA
+    ));
 }
 
 /// Render-thread liveness + bootstrap probe. Runs from the ImGui render loop (a

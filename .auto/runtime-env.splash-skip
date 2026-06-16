@@ -1,0 +1,21 @@
+# Splash-skip phase 1: apply the clean BeginLogo branch-flip (port of
+# chozandrias76/er-skip-splash-screens to 1.16.1, RVA 0xb0c35d je->jg) early at
+# DLL attach so the title advances past the logo via the game's own SetState.
+# title-accept is ON for OBSERVATION only (inject OFF -> no movie-dismiss); we
+# watch where the title lands (state / latch / movie / csfeman) with the splash
+# skipped. Crash logger on.
+LAUNCH_MODE=direct
+RUNTIME_MAX_NUDGES=0
+RESTORE_RUNTIME_SAVES=1
+RUNTIME_CAPTURE_INPUT_OCR=0
+ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=0
+ER_EFFECTS_SPLASH_SKIP=1
+ER_EFFECTS_TITLE_ACCEPT=1
+ER_EFFECTS_CRASH_LOG=1
+ER_EFFECTS_AUTOLOAD_SLOT=9
+ER_EFFECTS_AUTOLOAD_METHOD=direct_menu_load
+ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP=false
+RUNTIME_WATCH_TARGET=player-load
+RUNTIME_AUTOLOAD_ATTEMPT_BUDGET=100000
+RUNTIME_POST_REQUEST_TICK_BUDGET=600
+RUNTIME_SPAWN_POLL_BUDGET=32768

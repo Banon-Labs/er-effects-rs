@@ -61,6 +61,7 @@ NATIVE_ARM_LOOP_PATH="${NATIVE_ARM_LOOP_PATH:-$GAME_DIR/er-effects-native-arm-lo
 TITLE_ACCEPT_PATH="${TITLE_ACCEPT_PATH:-$GAME_DIR/er-effects-title-accept.txt}"
 TITLE_ACCEPT_FILL_PATH="${TITLE_ACCEPT_FILL_PATH:-$GAME_DIR/er-effects-title-accept-fill.txt}"
 TITLE_ACCEPT_INJECT_PATH="${TITLE_ACCEPT_INJECT_PATH:-$GAME_DIR/er-effects-title-accept-inject.txt}"
+SPLASH_SKIP_PATH="${SPLASH_SKIP_PATH:-$GAME_DIR/er-effects-splash-skip.txt}"
 CRASH_LOG_TRIGGER_PATH="${CRASH_LOG_TRIGGER_PATH:-$GAME_DIR/er-effects-crash-log.txt}"
 # The DLL's default crash-log location (when ER_EFFECTS_CRASH_LOG_PATH is unset);
 # copied into the artifact dir after the run.
@@ -573,6 +574,9 @@ cleanup_runtime() {
   if [[ "${ER_EFFECTS_TITLE_ACCEPT:-0}" == "1" ]]; then
     rm -f "$TITLE_ACCEPT_PATH"
   fi
+  if [[ "${ER_EFFECTS_SPLASH_SKIP:-0}" == "1" ]]; then
+    rm -f "$SPLASH_SKIP_PATH"
+  fi
   if [[ "${ER_EFFECTS_TITLE_ACCEPT_FILL:-0}" == "1" ]]; then
     rm -f "$TITLE_ACCEPT_FILL_PATH"
   fi
@@ -740,6 +744,11 @@ PY
       printf 'enabled=1\n' > "$TITLE_ACCEPT_PATH"
     else
       rm -f "$TITLE_ACCEPT_PATH"
+    fi
+    if [[ "${ER_EFFECTS_SPLASH_SKIP:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$SPLASH_SKIP_PATH"
+    else
+      rm -f "$SPLASH_SKIP_PATH"
     fi
     if [[ "${ER_EFFECTS_TITLE_ACCEPT_FILL:-0}" == "1" ]]; then
       printf 'enabled=1\n' > "$TITLE_ACCEPT_FILL_PATH"
