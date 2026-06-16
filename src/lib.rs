@@ -366,6 +366,11 @@ pub(crate) const TITLE_INPUT_MANAGER_RVA: usize = 0x3d6b7b0;
 /// Pure-observe snapshot interval (game-task ticks). Logs the title->menu->load state
 /// every N ticks with NO forcing, to capture what the REAL button press does.
 pub(crate) const OBSERVE_INTERVAL: u64 = 10;
+/// Observe change-detection: log a snapshot only when the packed signature changes
+/// (full granularity, minimal file I/O). Multiplier for the rolling signature.
+pub(crate) const OBSERVE_SIG_MULT: i64 = 0x100000001b3;
+pub(crate) static OBSERVE_LAST_SIG: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(i64::MIN);
 pub(crate) const GAME_MAN_ARM_FLAG_B72_OFFSET: usize = 0xb72;
 pub(crate) const GAME_MAN_FLAG_B73_PROBE_OFFSET: usize = 0xb73;
 pub(crate) const GAME_MAN_FLAG_B75_PROBE_OFFSET: usize = 0xb75;

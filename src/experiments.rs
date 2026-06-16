@@ -377,9 +377,7 @@ pub(crate) fn observe_enabled() -> bool {
 /// InGameStep/MoveMapStep appearance. Ground-truths the menu-build the static RE
 /// kept mis-identifying.
 pub(crate) unsafe fn title_observe_tick(module_base: usize, tick: u64) {
-    if tick % OBSERVE_INTERVAL != TITLE_OWNER_SCAN_START_ADDRESS as u64 {
-        return;
-    }
+    let _ = OBSERVE_INTERVAL;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let owner = unsafe { title_owner(module_base) }.map(|p| p as usize);
     let state = match owner {
@@ -414,8 +412,26 @@ pub(crate) unsafe fn title_observe_tick(module_base: usize, tick: u64) {
         TITLE_STATE_OWNER_GONE
     };
     let slotmgr = unsafe { *((module_base + SLOT_MANAGER_RVA) as *const usize) };
+    // Change-detection: only log when the signature changes (full granularity, no
+    // per-frame file I/O). Captures every transition incl. the mms_state 3 -> resolve.
+    let csf_nz = (csfeman != null) as i64;
+    let sess_nz = (session != null) as i64;
+    let ingame_nz = (ingame != null) as i64;
+    let mut sig = state as i64;
+    sig = sig
+        .wrapping_mul(OBSERVE_SIG_MULT)
+        .wrapping_add(mms_state as i64);
+    sig = sig.wrapping_mul(OBSERVE_SIG_MULT).wrapping_add(csf_nz);
+    sig = sig.wrapping_mul(OBSERVE_SIG_MULT).wrapping_add(sess_nz);
+    sig = sig.wrapping_mul(OBSERVE_SIG_MULT).wrapping_add(ingame_nz);
+    sig = sig.wrapping_mul(OBSERVE_SIG_MULT).wrapping_add(c30 as i64);
+    sig = sig.wrapping_mul(OBSERVE_SIG_MULT).wrapping_add(b80 as i64);
+    sig = sig.wrapping_mul(OBSERVE_SIG_MULT).wrapping_add(ac0 as i64);
+    if OBSERVE_LAST_SIG.swap(sig, Ordering::SeqCst) == sig {
+        return;
+    }
     append_autoload_debug(format_args!(
-        "observe: state={state} csfeman=0x{csfeman:x} session=0x{session:x} gm=0x{gm:x} c30=0x{c30:x} ac0={ac0} b80={b80} ingame=0x{ingame:x} mms_state={mms_state} slotmgr=0x{slotmgr:x} tick={tick}"
+        "observe: state={state} csfeman=0x{csfeman:x} session=0x{session:x} gm=0x{gm:x} c30=0x{c30:x} ac0={ac0} b80={b80} ingame=0x{ingame:x} mms=0x{mms:x} mms_state={mms_state} slotmgr=0x{slotmgr:x} tick={tick}"
     ));
 }
 
