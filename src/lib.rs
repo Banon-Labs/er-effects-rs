@@ -318,6 +318,8 @@ const WND_SC_CLOSE: u32 = 0xf060;
 const WND_MF_BYCOMMAND: u32 = 0;
 const WND_SW_HIDE: i32 = 0;
 const WND_GET_SYSTEM_MENU_KEEP: i32 = 0;
+/// Render-thread liveness probe logging cadence (in render frames).
+const RENDER_PROBE_INTERVAL: usize = 120;
 /// Generous upper bound on the game image span, to sanity-check that a candidate
 /// object's vtable points into the module before dereferencing deeper.
 /// Sentinel logged when GameMan is null so the field could not be read.
@@ -465,6 +467,7 @@ static ORIGINAL_RTL_EXIT_USER_PROCESS: AtomicUsize = AtomicUsize::new(HOOK_ORIGI
 static ORIGINAL_NT_TERMINATE_PROCESS: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ORIGINAL_ASSERT_WRAPPER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ASSERT_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
+static RENDER_FRAME_COUNT: AtomicUsize = AtomicUsize::new(0);
 static PROCESS_EXIT_LOGGED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 static AV_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
@@ -691,6 +694,10 @@ impl ImguiRenderLoop for EffectsOverlay {
     }
 
     fn render(&mut self, ui: &mut Ui) {
+        // Render-thread liveness probe: independent of the game-task scheduler, so
+        // it survives the title->menu phase transition. Tells us whether the game
+        // advanced (render alive + CSFeMan builds) or hung (render also frozen).
+        render_liveness_probe();
         let blocker = InputBlocker::get_instance();
         unsafe {
             let _ = blocker.install_hooks();
@@ -2404,6 +2411,28 @@ fn title_accept_inject_enabled() -> bool {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("er-effects-title-accept-inject.txt")
         .exists()
+}
+
+/// Render-thread liveness + bootstrap probe. Runs from the ImGui render loop (a
+/// separate thread from the game-task scheduler), so it keeps reporting after the
+/// title->menu phase transition stops the title CSTask. Distinguishes "the title
+/// advanced (render alive + CSFeMan builds)" from "the game hung (render frozen)".
+fn render_liveness_probe() {
+    if !title_accept_enabled() {
+        return;
+    }
+    let frame = RENDER_FRAME_COUNT.fetch_add(AV_LOG_LINE_INCREMENT, Ordering::SeqCst);
+    if frame % RENDER_PROBE_INTERVAL != TITLE_OWNER_SCAN_START_ADDRESS {
+        return;
+    }
+    let Ok(base) = game_module_base() else {
+        return;
+    };
+    let csfeman = unsafe { *((base + CSFEMAN_SINGLETON_RVA) as *const usize) };
+    let latch = unsafe { *((base + TITLE_ACCEPT_LATCH_RVA) as *const u8) };
+    append_autoload_debug(format_args!(
+        "render_probe: frame={frame} csfeman=0x{csfeman:x} latch={latch}"
+    ));
 }
 
 /// Boot-level title-accept (genuine zero input). The press-any-button wall is the
