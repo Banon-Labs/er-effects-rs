@@ -3039,6 +3039,10 @@ fn append_continue_trace(args: std::fmt::Arguments<'_>) {
 
 /// Pseudo-handle for the current process (GetCurrentProcess() is constant -1).
 const CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
+/// Bytes read per ReadProcessMemory call when scanning a region for the title
+/// vtable. One syscall per 64KB chunk (then an in-process buffer scan) keeps the
+/// fault-tolerant scan fast -- a syscall per 8-byte cursor would stall the thread.
+const SCAN_CHUNK_SIZE: usize = 0x10000;
 
 /// Fault-tolerant pointer-sized read via ReadProcessMemory: returns None on
 /// unmapped/freed memory instead of raising an access violation. Used by the
@@ -3062,8 +3066,29 @@ unsafe fn safe_read_usize(addr: usize) -> Option<usize> {
     }
 }
 
+/// Fault-tolerant i32 read via ReadProcessMemory (None on unmapped memory).
+unsafe fn safe_read_i32(addr: usize) -> Option<i32> {
+    let mut value: i32 = TITLE_OWNER_SCAN_START_ADDRESS as i32;
+    let mut read: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    let ok = unsafe {
+        ReadProcessMemory(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            addr as *const c_void,
+            &mut value as *mut i32 as *mut c_void,
+            std::mem::size_of::<i32>(),
+            &mut read,
+        )
+    };
+    if ok != HOOK_FALSE_RETURN as i32 && read == std::mem::size_of::<i32>() {
+        Some(value)
+    } else {
+        None
+    }
+}
+
 unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*mut u8> {
     let target_vtable = module_base.checked_add(TITLE_OWNER_VTABLE_RVA)?;
+    let mut scan_buf = vec![MOVIE_SKIP_FLAG_CLEAR; SCAN_CHUNK_SIZE];
     let mut address = TITLE_OWNER_SCAN_START_ADDRESS;
     while address < TITLE_OWNER_SCAN_MAX_ADDRESS {
         let mut info = MEMORY_BASIC_INFORMATION::default();
@@ -3087,29 +3112,52 @@ unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*mut u8> {
             && protect & (PAGE_NOACCESS_NUMERIC | PAGE_GUARD_NUMERIC) == PAGE_PROTECTION_NO_FLAGS
             && size >= TITLE_OWNER_STATE_OFFSET + std::mem::size_of::<i32>()
         {
-            let end = next.saturating_sub(TITLE_OWNER_STATE_OFFSET + std::mem::size_of::<i32>());
-            let mut cursor = base;
-            while cursor <= end {
-                // Fault-tolerant read: the region passed VirtualQuery as committed,
-                // but the booting game may free it mid-scan -- a raw deref would AV.
-                let Some(vtable) = (unsafe { safe_read_usize(cursor) }) else {
-                    cursor = cursor.saturating_add(TITLE_OWNER_SCAN_ALIGNMENT);
-                    continue;
+            // Read the region in chunks via ReadProcessMemory (a chunk freed by
+            // the booting game returns FALSE instead of faulting), then scan each
+            // buffer in-process. One syscall per 64KB keeps the scan fast.
+            let mut region_off = TITLE_OWNER_SCAN_START_ADDRESS;
+            while region_off < size {
+                let chunk = (size - region_off).min(SCAN_CHUNK_SIZE);
+                let chunk_base = base + region_off;
+                let mut read: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+                let ok = unsafe {
+                    ReadProcessMemory(
+                        CURRENT_PROCESS_PSEUDO_HANDLE,
+                        chunk_base as *const c_void,
+                        scan_buf.as_mut_ptr() as *mut c_void,
+                        chunk,
+                        &mut read,
+                    )
                 };
-                if vtable == target_vtable {
-                    let state_value =
-                        unsafe { *((cursor + TITLE_OWNER_STATE_OFFSET) as *const i32) };
-                    let instance_table =
-                        unsafe { *((cursor + TITLE_OWNER_INSTANCE_TABLE_OFFSET) as *const usize) };
-                    // Require the per-instance state-table pointer to reject stray
-                    // .data vtable matches (the 0x1000ffc58 false positive).
-                    if instance_table == module_base + INNER_TITLE_STATE_TABLE_RVA
-                        && (TITLE_OWNER_MIN_STATE..=TITLE_OWNER_MAX_STATE).contains(&state_value)
-                    {
-                        return Some(cursor as *mut u8);
+                if ok != HOOK_FALSE_RETURN as i32 && read >= std::mem::size_of::<usize>() {
+                    let mut i = TITLE_OWNER_SCAN_START_ADDRESS;
+                    while i + std::mem::size_of::<usize>() <= read {
+                        let vtable = usize::from_le_bytes(
+                            scan_buf[i..i + std::mem::size_of::<usize>()]
+                                .try_into()
+                                .unwrap(),
+                        );
+                        if vtable == target_vtable {
+                            let cursor = chunk_base + i;
+                            // Validate the per-instance state-table pointer (rejects
+                            // the stray .data match 0x1000ffc58); fault-tolerant.
+                            let instance_table = unsafe {
+                                safe_read_usize(cursor + TITLE_OWNER_INSTANCE_TABLE_OFFSET)
+                            };
+                            let state_value =
+                                unsafe { safe_read_i32(cursor + TITLE_OWNER_STATE_OFFSET) };
+                            if instance_table == Some(module_base + INNER_TITLE_STATE_TABLE_RVA)
+                                && state_value.is_some_and(|s| {
+                                    (TITLE_OWNER_MIN_STATE..=TITLE_OWNER_MAX_STATE).contains(&s)
+                                })
+                            {
+                                return Some(cursor as *mut u8);
+                            }
+                        }
+                        i += TITLE_OWNER_SCAN_ALIGNMENT;
                     }
                 }
-                cursor = cursor.saturating_add(TITLE_OWNER_SCAN_ALIGNMENT);
+                region_off = region_off.saturating_add(chunk);
             }
         }
 
