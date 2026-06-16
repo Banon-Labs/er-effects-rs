@@ -268,6 +268,13 @@ pub(crate) const INGAMESTEP_TARGET_COORD_100_OFFSET: usize = 0x100;
 pub(crate) const INGAMESTEP_RESMGR_250_OFFSET: usize = 0x250;
 pub(crate) const REQUEST_SUBMIT_RVA: usize = 0xaed820;
 pub(crate) const STREAMING_ENABLE_RVA: usize = 0x66e2e4;
+/// Direct poke of the streaming-enable flag [resmgr+0xb7c1]=1 (the virtual enabler
+/// 0x14066e2e4 crashes -- wrong receiver). The virtual also builds session singletons
+/// 0x143d687a0 / 0x143d67bd0; read them to see if the poke is safe (already built) or
+/// if the job machine will deref null.
+pub(crate) const RESMGR_STREAM_ENABLE_B7C1_OFFSET: usize = 0xb7c1;
+pub(crate) const SESSION_SINGLETON_A_RVA: usize = 0x3d687a0;
+pub(crate) const SESSION_SINGLETON_B_RVA: usize = 0x3d67bd0;
 /// World-stream worker build+register: IngameInit's SetState tail 0x140b0a980, whose
 /// `[this+0x48] >= 7` arm constructs the world-stream worker 0x144842d40 (ctor
 /// 0x141eceb10) and registers it with the FD4 scheduler (key 0x59682f01 via
