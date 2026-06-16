@@ -489,7 +489,7 @@ pub(crate) unsafe fn submit_play_game_once(
             let submit_req: unsafe extern "system" fn(usize) =
                 unsafe { std::mem::transmute(module_base + REQUEST_SUBMIT_RVA) };
             unsafe { submit_req(ingame) };
-            let enabled = 0i32;
+            let enabled = DIAG_COUNT_ZERO;
             let _ = (
                 STREAMING_ENABLE_RVA,
                 RESMGR_STREAM_ENABLE_B7C1_OFFSET,
@@ -574,14 +574,14 @@ pub(crate) unsafe fn submit_play_game_once(
             // Scan the block array for slot 9's target area 0x0a (m10): found10 says
             // whether the block is registered (streaming gap) vs absent (loader gap);
             // sample is the first few blocks' area bytes (likely the title's scene).
-            let mut found10 = 0i32;
-            let mut sample = 0u32;
+            let mut found10 = DIAG_COUNT_ZERO;
+            let mut sample = DIAG_SAMPLE_ZERO;
             let mut m10phase = DIAG_PHASE_NONE;
             let mut m10flag = DIAG_PHASE_NONE;
-            if resmgr != null && blocks > 0 {
+            if resmgr != null && blocks > DIAG_COUNT_ZERO {
                 let arr = resmgr + WORLDRES_BLOCK_ARRAY_B3030_OFFSET;
                 let n = blocks.min(BLOCK_SCAN_MAX);
-                for i in 0..n {
+                for i in DIAG_COUNT_ZERO..n {
                     let entry =
                         unsafe { *((arr + (i as usize) * BLOCK_ENTRY_STRIDE) as *const usize) };
                     if entry == null {
@@ -594,7 +594,7 @@ pub(crate) unsafe fn submit_play_game_once(
                     }
                     let area = unsafe { *((areaobj + BLOCK_AREAOBJ_AREA_C_OFFSET) as *const i32) };
                     if area == TARGET_AREA_M10 {
-                        found10 += 1;
+                        found10 += DIAG_COUNT_ONE;
                         // load-state = entry->vtable[+0x10](entry); phase = [+0x35].
                         let vt = unsafe { *(entry as *const usize) };
                         if vt != null {
