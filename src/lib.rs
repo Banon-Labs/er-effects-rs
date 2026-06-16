@@ -401,6 +401,8 @@ pub(crate) static OWN_STEPPER_ORIG_IDX6: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static OWN_STEPPER_IDX6_CALLS: AtomicUsize = AtomicUsize::new(0);
 /// GameMan+0xb80 load-phase value meaning the save IO is resident (mounted).
 pub(crate) const OWN_STEPPER_B80_RESIDENT: i32 = 3;
+/// idx6 calls to wait (MoveMapStep settle) before deserializing the real slot.
+pub(crate) const OWN_STEPPER_IDX6_SETTLE: u64 = 120;
 pub(crate) const OWN_STEPPER_SLOT_NONE: i32 = -1;
 /// Save slot to load (parsed from the trigger file "slot=N"; -1 => leave the game's
 /// own most-recent selection).

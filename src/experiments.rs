@@ -483,13 +483,19 @@ pub(crate) unsafe extern "system" fn own_stepper_idx6(owner: usize, framectx: us
                 "own_stepper: idx6 wait #{n} csfeman=0x{csfeman:x} b80={b80} c30=0x{c30:x}"
             ));
         }
-        // Wait until the MoveMapStep built CSFeMan and mounted the save (b80==3).
-        if csfeman == TITLE_OWNER_SCAN_START_ADDRESS || b80 != OWN_STEPPER_B80_RESIDENT {
+        // Wait for CSFeMan + a settle (MoveMapStep built). Lever (b): try the direct
+        // deserialize regardless of b80; the log shows whether c30 changes.
+        let _ = OWN_STEPPER_B80_RESIDENT;
+        if csfeman == TITLE_OWNER_SCAN_START_ADDRESS || n < OWN_STEPPER_IDX6_SETTLE {
             pass6();
             return;
         }
-        // PHASE 2: deserialize the real slot -> GameMan+0xc30 = real map + char applied.
+        // PHASE 2: initiate the slot-IO (b80 lane) then deserialize the real slot ->
+        // GameMan+0xc30 = real map + char applied.
         let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+        let init_io: unsafe extern "system" fn(i32) =
+            unsafe { std::mem::transmute(base + LOAD_INITIATOR_RVA) };
+        unsafe { init_io(want_slot) };
         let deser: unsafe extern "system" fn(i32) =
             unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
         unsafe { deser(want_slot) };
