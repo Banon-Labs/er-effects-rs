@@ -2454,7 +2454,10 @@ unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
     let latch = unsafe { *((module_base + TITLE_ACCEPT_LATCH_RVA) as *const u8) };
     let movie = unsafe { *((module_base + MOVIE_SINGLETON_RVA) as *const usize) };
     let skip = unsafe { *((module_base + MOVIE_SKIP_FLAG_RVA) as *const u8) };
-    let log_now = tick % ARM_PROBE_TICK_INTERVAL == null as u64;
+    // Dense per-tick logging once the dismiss has fired (skip set) until the
+    // front-end builds, to capture the exact post-accept trajectory / freeze point.
+    let log_now = (tick % ARM_PROBE_TICK_INTERVAL == null as u64)
+        || (skip == MOVIE_SKIP_FLAG_SET && csfeman == null);
     let owner = unsafe { title_owner(module_base) }.map(|p| p as usize);
     // State is -1 (sentinel) when the title owner is gone (advanced past title).
     let state = match owner {
