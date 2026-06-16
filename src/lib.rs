@@ -251,6 +251,13 @@ pub(crate) const SUBMIT_PHASE_DONE: i32 = 3;
 pub(crate) const MOVEMAPSTEP_UPDATE_RVA: usize = 0xaff640;
 pub(crate) const INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET: usize = 0xe8;
 pub(crate) const INGAMESTEP_PENDING_D8_PENDING: i32 = 1;
+/// Native b80 load INITIATOR 0x14067b4e0(ecx=slot): begins the async slot-IO read
+/// and sets GameMan+0xb80=1. The scheduler ticks CSTaskGroup 20 (MoveMapStep) every
+/// frame (fd4-scheduler-no-group-active-gate-runs-all-2026), so once initiated the
+/// b80 machine (dispatcher-1 deserialize + dispatcher-2 apply) + MsbLoad PRIME the
+/// world-stream natively -> resident -> child+0xd8 drains. This is the stream-priming
+/// step the direct 0x14067b290 deserialize skipped.
+pub(crate) const LOAD_INITIATOR_RVA: usize = 0x67b4e0;
 /// Global holding the GameMan pointer (`mov rax,[rip]` in set_save_slot 0x67a810
 /// / save_slot_get 0x678ca0). Read-only diagnostics of the PlayGame load-pair
 /// preconditions read GameMan through this.

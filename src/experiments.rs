@@ -429,8 +429,9 @@ pub(crate) unsafe fn submit_play_game_once(
             ));
         }
         SUBMIT_PHASE_DESER => {
-            // Phase 3: re-submit the REAL saved map (GameMan+0xc30) so the child
-            // streams slot N resident (child+0xd8 drains 1->2->0).
+            // Phase B: SetState(5) with the REAL saved map (GameMan+0xc30) so the
+            // pump builds CSFeMan + the MoveMapStep targeting slot N's actual map
+            // (no m60 placeholder to occupy the child).
             let Some(owner) = (unsafe { title_owner(module_base) }) else {
                 return true;
             };
@@ -442,16 +443,49 @@ pub(crate) unsafe fn submit_play_game_once(
                 *((owner + TITLE_OWNER_PLAY_GAME_SLOT_OFFSET) as *mut i32) = c30;
             }
             unsafe { set_state(owner, TITLE_STEP_PLAY_GAME) };
+            SUBMIT_PLAY_GAME_PHASE.store(SUBMIT_PHASE_BUILT, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "submit_play_game: phaseB SetState(5) map=0x{c30:x} owner=0x{owner:x} tick={tick}"
+            ));
+        }
+        SUBMIT_PHASE_BUILT => {
+            // Phase C: once SetState(5) has built CSFeMan + the MoveMapStep (group 20,
+            // scheduler-ticked every frame), initiate the NATIVE b80 load machine for
+            // slot N: 0x14067b4e0(slot) begins the async slot-IO + sets GameMan+0xb80=1.
+            // The scheduler-ticked MoveMapStep then runs the b80 deserialize/apply +
+            // MsbLoad, PRIMING the world-stream (the piece the direct deserialize
+            // skipped) -> resident -> child+0xd8 drains. No manual pumping.
+            if csfeman == null {
+                return true;
+            }
+            let initiate: unsafe extern "system" fn(i32) =
+                unsafe { std::mem::transmute(module_base + LOAD_INITIATOR_RVA) };
+            unsafe { initiate(slot) };
+            let b80 = if gm != null {
+                unsafe { *((gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *const i32) }
+            } else {
+                TITLE_STATE_OWNER_GONE
+            };
             SUBMIT_PLAY_GAME_PHASE.store(SUBMIT_PHASE_DONE, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "submit_play_game: phase3 re-SetState(5) map=0x{c30:x} owner=0x{owner:x} tick={tick}"
+                "submit_play_game: phaseC initiate b80-load(slot {slot}) b80={b80} c30=0x{:x} csfeman=0x{csfeman:x} tick={tick}",
+                read_c30()
             ));
         }
         _ => {
-            // Phase C: per-frame pump the MoveMapStep's OWN update so its step
-            // machine advances BeginInit -> MsbLoad (builds world singletons
-            // 0x143d691d8/0x143d69ba8) -> terminal (+0x48 == -1) -> IsResident ->
-            // child+0xd8 drains. IngameInit only re-syncs; the world is built here.
+            // Phase D (observe): the scheduler ticks CSTaskGroup 20 (MoveMapStep)
+            // every frame, so after phaseC initiated the b80 load the game's own
+            // b80 machine + MsbLoad drive the stream to resident natively. Watch
+            // b80 advance, mms_state -> -1, and child+0xd8 drain 1->2->0. No pumping
+            // (direct-pump of 0x140aff640 crashes: movemapstep-direct-pump-crashes).
+            let _ = (
+                task_data,
+                MOVEMAPSTEP_UPDATE_RVA,
+                INGAMESTEP_PENDING_D8_PENDING,
+            );
+            if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL != null as u64 {
+                return true;
+            }
             let Some(owner) = (unsafe { title_owner(module_base) }) else {
                 return true;
             };
@@ -463,28 +497,21 @@ pub(crate) unsafe fn submit_play_game_once(
             let d8 = unsafe { *((ingame + TITLE_OWNER_JOB_PENDING_OFFSET) as *const i32) };
             let movemapstep =
                 unsafe { *((ingame + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) as *const usize) };
-            // Phase C direct-pump of MoveMapStep update 0x140aff640 CRASHED (it is a
-            // scheduler task-node fn, unsafe to call outside the FD4 scheduler's task
-            // context). Reverted to observe-only; world-stream completion is
-            // scheduler-owned (movemapstep-direct-pump-crashes-needs-scheduler).
-            let _ = (
-                task_data,
-                INGAMESTEP_PENDING_D8_PENDING,
-                MOVEMAPSTEP_UPDATE_RVA,
-            );
-            if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == null as u64 {
-                let state =
-                    unsafe { *((owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) };
-                let mms_state = if movemapstep != null {
-                    unsafe { *((movemapstep + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) }
-                } else {
-                    TITLE_STATE_OWNER_GONE
-                };
-                append_autoload_debug(format_args!(
-                    "submit_play_game: pump state={state} child_d8={d8} mms=0x{movemapstep:x} mms_state={mms_state} c30=0x{:x} csfeman=0x{csfeman:x} tick={tick}",
-                    read_c30()
-                ));
-            }
+            let state = unsafe { *((owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) };
+            let mms_state = if movemapstep != null {
+                unsafe { *((movemapstep + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) }
+            } else {
+                TITLE_STATE_OWNER_GONE
+            };
+            let b80 = if gm != null {
+                unsafe { *((gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *const i32) }
+            } else {
+                TITLE_STATE_OWNER_GONE
+            };
+            append_autoload_debug(format_args!(
+                "submit_play_game: phaseD state={state} child_d8={d8} b80={b80} mms_state={mms_state} c30=0x{:x} csfeman=0x{csfeman:x} tick={tick}",
+                read_c30()
+            ));
         }
     }
     true
