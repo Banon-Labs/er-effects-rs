@@ -258,6 +258,12 @@ pub(crate) const INGAMESTEP_PENDING_D8_PENDING: i32 = 1;
 /// world-stream natively -> resident -> child+0xd8 drains. This is the stream-priming
 /// step the direct 0x14067b290 deserialize skipped.
 pub(crate) const LOAD_INITIATOR_RVA: usize = 0x67b4e0;
+/// FULL-LOAD (deserialize-arm) initiator 0x14067b1a0(ecx=slot): begins the slot read and
+/// sets GameMan+0xb80=2 (the b80==2 deserialize arm), NOT b80=1 (the preview lane that
+/// 0x14067b4e0 uses and that resets to 0 without deserializing). Runtime-proven the
+/// preview lane never reaches b80==3; the b80=2 arm is the one the poll 0x140679180
+/// advances 2->3 (resident) so the full deserialize 0x14067b290 can run.
+pub(crate) const B80_FULL_LOAD_INITIATOR_RVA: usize = 0x67b1a0;
 /// World-resource streaming lever (worldres-loadstate-creator-and-streaming-enable-
 /// gate-2026). Gap 1: the block-load request is built from the InGameStep target
 /// coord [InGameStep+0x100]; set it to slot 9's real map then re-submit via
@@ -387,6 +393,58 @@ pub(crate) const OWN_STEPPER_CALL_INC: usize = 1;
 pub(crate) const OWN_STEPPER_PHASE_MENU: usize = 0;
 pub(crate) const OWN_STEPPER_PHASE_CONTINUE: usize = 1;
 pub(crate) const OWN_STEPPER_PHASE_DONE: usize = 2;
+/// PHASE 3 (MOUNT): mount the slot at state 10 BEFORE SetState(5) -- the only place the
+/// MoveMapStep dispatcher (which resets b80 via its b80==1 lane) is NOT running, so our
+/// own b80 poll can drive the save-IO machine 1->2->3 cleanly (minimal-save-mount-
+/// primitive-recipe-2026). Register the FD4 stream worker (0x140b0a980 stub), initiate
+/// the slot read (0x14067b4e0 -> b80=1), poll 0x140679180 until b80==3, then full
+/// deserialize 0x14067b290 (c30 = real map + character applied), then SetState(5).
+pub(crate) const OWN_STEPPER_PHASE_MOUNT: usize = 3;
+/// b80 save-IO poll/driver 0x140679180(0,0): advances GameMan+0xb80 toward 3 (resident)
+/// as the stream worker drains the async slot read; sets b80=3 when the IO request state
+/// (0x14240a1f0) is resident. We call it ourselves each frame at state 10.
+pub(crate) const B80_POLL_RVA: usize = 0x679180;
+/// Max frames to poll b80 toward 3 before giving up the mount (avoid an infinite title
+/// hang if the worker never drains). ~10s at 60fps.
+pub(crate) const OWN_STEPPER_MOUNT_POLL_MAX: u64 = 600;
+pub(crate) static OWN_STEPPER_MOUNT_POLLS: AtomicUsize = AtomicUsize::new(0);
+/// PHASE 4 (DRIVE): the validated dispatcher-driven mount (real-load-c30-mount-write-
+/// confirmed-seamless-2026 + menu-b80-mount-orchestration-sequence-2026). Runtime + the
+/// real-load capture proved hand-calling a single b80 initiator never converges (the
+/// two initiators target different queues; only 0x14067b4e0's preview read populates the
+/// iodev request handle the poll reads, and the char-applying deserialize runs ONLY from
+/// dispatcher-1's b80==2 arm). So: start the preview read (0x14067b4e0), set the b78
+/// route slot, then each frame call the two MoveMapStep b80 dispatchers on a SYNTHETIC
+/// owner -- dispatcher-1 0x140afbad0 ticks the b80==1 preview lane to resident then
+/// (b80==2 arm) polls -> b80=3 -> deserialize 0x14067b290 (c30=real map + char applied +
+/// ac0=slot); dispatcher-2 0x140afb880 (b78-route) transitions b80 0->2 + owner+0x12c=slot.
+/// The dispatchers self-sequence the 1->0->2->3 dance the menu does. Success = ac0==slot.
+pub(crate) const OWN_STEPPER_PHASE_DRIVE: usize = 4;
+/// GameMan+0xc30 unset sentinel (0xffffffff as i32). At the bare press-any-button title
+/// (BeginTitle skipped) c30 is unset; the full deserialize 0x14067b290 is the ONLY thing
+/// that writes it to the slot's real saved map during the mount, so c30 != UNSET is the
+/// genuine "the character was deserialized" signal (ac0 is NOT -- set_save_slot pre-sets it).
+pub(crate) const GAME_MAN_C30_UNSET: i32 = -1;
+/// MoveMapStep b80 dispatchers (called per-frame from the MoveMapStep update 0x140aff640
+/// in native order: dispatcher-1 then dispatcher-2). Neither derefs the owner vtable;
+/// both read only GameMan globals + the owner's deserialize-tracking fields (+0x12a skip-
+/// apply, +0x12c slot, +0x130 result), so a zeroed synthetic owner >=0x138 bytes drives
+/// them. dispatcher-1 = deserialize arm; dispatcher-2 = initiate (b78-route).
+pub(crate) const B80_DISPATCHER1_RVA: usize = 0xafbad0;
+pub(crate) const B80_DISPATCHER2_RVA: usize = 0xafb880;
+/// Synthetic MoveMapStep `owner` for the b80 dispatchers. Zeroed; +0x12a=1 forces the
+/// CSFeMan-apply arms (dispatcher-1 b80==1 idx1, dispatcher-2 @0x140afb9e4) to be SKIPPED
+/// (they are gated owner+0x12a==0 and would deref the null-at-title CSFeMan 0x143d6b880);
+/// +0x12c carries the deserialize slot. Size >0x138 (the highest field touched is +0x130).
+pub(crate) const SYNTH_MMS_OWNER_SIZE: usize = 0x140;
+pub(crate) const SYNTH_MMS_SKIP_APPLY_12A_OFFSET: usize = 0x12a;
+pub(crate) const SYNTH_MMS_DESER_SLOT_12C_OFFSET: usize = 0x12c;
+pub(crate) const SYNTH_MMS_SKIP_APPLY_ON: u8 = 1;
+pub(crate) static mut SYNTH_MMS_OWNER: [u8; SYNTH_MMS_OWNER_SIZE] =
+    [MOVIE_SKIP_FLAG_CLEAR; SYNTH_MMS_OWNER_SIZE];
+/// Max frames to drive the dispatchers before giving up (stay at title, no save write).
+pub(crate) const OWN_STEPPER_DRIVE_MAX: u64 = 600;
+pub(crate) static OWN_STEPPER_DRIVE_CALLS: AtomicUsize = AtomicUsize::new(0);
 /// How many in-context idx10 calls to wait before driving (let the boot settle to the
 /// stable press-any-button state 10 first).
 pub(crate) const OWN_STEPPER_SETTLE_CALLS: u64 = 30;
@@ -427,6 +485,24 @@ pub(crate) const GAME_MAN_FLAG_B73_PROBE_OFFSET: usize = 0xb73;
 pub(crate) const GAME_MAN_FLAG_B75_PROBE_OFFSET: usize = 0xb75;
 pub(crate) const GAME_MAN_REQUESTED_SLOT_B78_OFFSET: usize = 0xb78;
 pub(crate) const GAME_MAN_FLAG_BC4_OFFSET: usize = 0xbc4;
+/// Submit-gate diagnostics (b80-submit-kick-exact-false-gate-decoded-2026). The b72
+/// autoload initiator 0x14067b750 sets GameMan+0xb80=1 ONLY if the async submit
+/// 0x140e6ec70 returns true; the submit body 0x140e6f940 bails FALSE if the IO device
+/// has a STALE request in-flight ([iodev+0x10]!=0) or a stale request handle
+/// ([iodev+0x20]!=0). The IO device global is abs 0x144589390 (RVA 0x4589390); we read
+/// it both as a possible pointer-to-device and as a struct base so the log
+/// disambiguates. Also: the b72 effective-getter 0x1406793d0 zeroes b72 if
+/// [GameMan+0xbc4]==3 or [inputmgr+0x13c]!=0, so log those too.
+pub(crate) const IODEV_GLOBAL_RVA: usize = 0x4589390;
+pub(crate) const IODEV_INFLIGHT_10_OFFSET: usize = 0x10;
+/// The async-IO request handle the poll 0x140e6e080 actually reads is the PAIR
+/// [iodev+0x18] && [iodev+0x20] (a *started* request). 0x14067b4e0's preview read
+/// (0x140e6ec80) is what populates these; 0x14067b200's queue (0x140e6eb80) goes to
+/// the file-device-mgr instead, so it never appears here. Logging both pins which
+/// initiator actually started the iodev read (menu-b80-mount-orchestration-sequence).
+pub(crate) const IODEV_REQHANDLE_18_OFFSET: usize = 0x18;
+pub(crate) const IODEV_REQHANDLE_20_OFFSET: usize = 0x20;
+pub(crate) const INPUTMGR_PENDING_13C_OFFSET: usize = 0x13c;
 pub(crate) const ARM_PROBE_MIN_TICK: u64 = 60;
 pub(crate) const ARM_PROBE_TICK_INTERVAL: u64 = 30;
 /// Lever 2 (zero-input title-accept via input-event injection). Inner TitleStep

@@ -390,11 +390,15 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
     let base = OWN_STEPPER_BASE.load(Ordering::SeqCst);
     let phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
     let gm = unsafe { *((base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
-    let c30 = if gm != TITLE_OWNER_SCAN_START_ADDRESS {
-        unsafe { *((gm + GAME_MAN_SAVED_MAP_C30_OFFSET) as *const i32) }
-    } else {
-        TITLE_STATE_OWNER_GONE
+    let read_gm = |off: usize| {
+        if gm != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { *((gm + off) as *const i32) }
+        } else {
+            TITLE_STATE_OWNER_GONE
+        }
     };
+    let c30 = read_gm(GAME_MAN_SAVED_MAP_C30_OFFSET);
+    let b80 = read_gm(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
     let pass_through = |force_log: bool| {
         if force_log || n % OWN_STEPPER_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
             append_autoload_debug(format_args!(
@@ -407,46 +411,142 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             unsafe { f(owner, framectx) };
         }
     };
-    let ng_flag = unsafe { *((owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *const u8) as i32 };
+    let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+    let read_iodev = || {
+        let iodev = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
+        if iodev != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe {
+                (
+                    *((iodev + IODEV_INFLIGHT_10_OFFSET) as *const usize),
+                    *((iodev + IODEV_REQHANDLE_18_OFFSET) as *const usize),
+                    *((iodev + IODEV_REQHANDLE_20_OFFSET) as *const usize),
+                )
+            }
+        } else {
+            (
+                TITLE_OWNER_SCAN_START_ADDRESS,
+                TITLE_OWNER_SCAN_START_ADDRESS,
+                TITLE_OWNER_SCAN_START_ADDRESS,
+            )
+        }
+    };
     if phase == OWN_STEPPER_PHASE_MENU {
-        if n < OWN_STEPPER_SETTLE_CALLS {
+        if n < OWN_STEPPER_SETTLE_CALLS || want_slot == OWN_STEPPER_SLOT_NONE {
             pass_through(false);
             return;
         }
-        // PHASE 1: select the slot, clear new-game, write a VALID placeholder map
-        // (m60 0x3c2a2200; the m10 default 0xa010000 fails the gameplay-area gate
-        // 0x32-0x58 and is the new-game tutorial), then SetState(5) to build + tick the
-        // MoveMapStep so it MOUNTS the save (b80->3). idx6 then deserializes the real
-        // slot (c30 -> real map + char) and re-targets.
-        let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
-        if want_slot != OWN_STEPPER_SLOT_NONE {
-            let set_save_slot: unsafe extern "system" fn(i32) =
-                unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
-            unsafe { set_save_slot(want_slot) };
-        }
+        // PHASE 1 -- MOUNT INIT at state 10. Replicates the real-load menu mount
+        // (real-load-c30-mount-write-confirmed-seamless-2026): (A) register the FD4 stream
+        // worker so the save-IO pool drains -- 0x140b0a980 on a zeroed stub with +0x48=7
+        // does ONLY the build+register (byte-identical to the menu helper 0x140af1b40).
+        // (B) set GameMan+0xb78 = slot so dispatcher-2's b78-route fires. (C) start the
+        // PREVIEW read 0x14067b4e0(slot) -> b80=1, which is the ONLY initiator that
+        // populates the iodev request the poll reads (the b80=2 initiator 0x14067b1a0
+        // queues to the file-device-mgr, never to the iodev -- that was the failed TEST 2).
+        // (D) arm the synthetic dispatcher owner (+0x12a=1 skips the CSFeMan-null apply arms;
+        // +0x12c=-1 deserialize-slot). PHASE_DRIVE then ticks the two dispatchers to
+        // sequence b80 1->0->2->3->deserialize the way the menu does.
         unsafe {
-            *((owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *mut u8) = MOVIE_SKIP_FLAG_CLEAR;
-            *((owner + TITLE_OWNER_PLAY_GAME_SLOT_OFFSET) as *mut i32) =
-                DEFAULT_PLAY_GAME_MAP as i32;
+            *((&raw mut OWN_STEPPER_WORKER_THIS as usize + SYNTHETIC_STEP_STATE_OFFSET)
+                as *mut i32) = WORLD_WORKER_BUILD_STATE;
         }
-        let set_state: unsafe extern "system" fn(usize, i32) =
-            unsafe { std::mem::transmute(base + TITLE_SET_STATE_RVA) };
-        unsafe { set_state(owner, TITLE_STEP_PLAY_GAME) };
-        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_CONTINUE, Ordering::SeqCst);
-        let placeholder = DEFAULT_PLAY_GAME_MAP as i32;
+        let build_worker: unsafe extern "system" fn(usize) =
+            unsafe { std::mem::transmute(base + WORLD_WORKER_BUILD_RVA) };
+        unsafe { build_worker(&raw mut OWN_STEPPER_WORKER_THIS as usize) };
+        let worker = unsafe { *((base + WORLD_STREAM_WORKER_RVA) as *const usize) };
+        // NOTE: do NOT call set_save_slot here -- it pre-sets GameMan+0xac0, which would
+        // make the ac0-based success check a false positive. The dispatcher path carries
+        // the slot via GameMan+0xb78 -> owner+0x12c, so ac0 need not be pre-set; ac0/c30
+        // are then written ONLY by the real deserialize.
+        if gm != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe {
+                *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = want_slot;
+            }
+        }
+        // Arm the synthetic dispatcher owner.
+        unsafe {
+            let so = &raw mut SYNTH_MMS_OWNER as usize;
+            *((so + SYNTH_MMS_SKIP_APPLY_12A_OFFSET) as *mut u8) = SYNTH_MMS_SKIP_APPLY_ON;
+            *((so + SYNTH_MMS_DESER_SLOT_12C_OFFSET) as *mut i32) = OWN_STEPPER_SLOT_NONE;
+        }
+        // Start the preview read (the iodev-request precursor).
+        let preview: unsafe extern "system" fn(i32) =
+            unsafe { std::mem::transmute(base + LOAD_INITIATOR_RVA) };
+        unsafe { preview(want_slot) };
+        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DRIVE, Ordering::SeqCst);
         let _ = (
-            CONTINUE_CONFIRM_RVA,
+            DEFAULT_PLAY_GAME_MAP,
             TITLE_STEP_BEGIN_TITLE,
+            CONTINUE_CONFIRM_RVA,
+            B80_FULL_LOAD_INITIATOR_RVA,
+            OWN_STEPPER_PHASE_MOUNT,
+            B80_POLL_RVA,
+            OWN_STEPPER_B80_RESIDENT,
+            OWN_STEPPER_MOUNT_POLL_MAX,
+            DESERIALIZE_SLOT_RVA,
             OWN_STEPPER_SHIM_OWNER_IDX,
             &raw const OWN_STEPPER_SHIM,
+            &OWN_STEPPER_MOUNT_POLLS,
         );
         append_autoload_debug(format_args!(
-            "own_stepper: phase1 (#{n}) slot={want_slot} ng(was {ng_flag}) SetState(5) placeholder=0x{placeholder:x} owner=0x{owner:x} c30=0x{c30:x}"
+            "own_stepper: drive-init (#{n}) slot={want_slot} worker=0x{worker:x} b80={b80} c30=0x{c30:x}"
         ));
         return;
     }
-    // After phase 1 the title is at state 5/6 (idx6 drives the rest); pass through if
-    // idx10 re-enters (e.g. the load bounced back to MenuJobWait).
+    if phase == OWN_STEPPER_PHASE_DRIVE {
+        let ac0 = read_gm(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
+        let c30_now = read_gm(GAME_MAN_SAVED_MAP_C30_OFFSET);
+        if c30_now != GAME_MAN_C30_UNSET {
+            // c30 became a valid map -> the full deserialize ran (it is the ONLY writer of
+            // c30 during the mount): c30 holds the slot's REAL saved map and the character
+            // is applied to PlayerGameData. Confirm via the native confirm path: clear
+            // owner+0x284 (NOT new-game), owner+0xbc = c30, SetState(5). The native pump
+            // then streams the real world.
+            unsafe {
+                *((owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *mut u8) =
+                    MOVIE_SKIP_FLAG_CLEAR;
+                *((owner + TITLE_OWNER_PLAY_GAME_SLOT_OFFSET) as *mut i32) = c30_now;
+            }
+            let set_state: unsafe extern "system" fn(usize, i32) =
+                unsafe { std::mem::transmute(base + TITLE_SET_STATE_RVA) };
+            unsafe { set_state(owner, TITLE_STEP_PLAY_GAME) };
+            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "own_stepper: MOUNTED (#{n}) ac0={ac0} c30=0x{c30_now:x} SetState(5) owner=0x{owner:x}"
+            ));
+            return;
+        }
+        let drives =
+            OWN_STEPPER_DRIVE_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
+        if drives < OWN_STEPPER_DRIVE_MAX {
+            // Tick the two b80 dispatchers on the synthetic owner, in the MoveMapStep order
+            // (dispatcher-1 = deserialize arm, dispatcher-2 = initiate/b78-route). They
+            // self-sequence b80 1->0 (preview lane to resident) -> 2 (b78-route) -> 3 (poll)
+            // -> deserialize, all using GameMan globals + our owner's +0x12a/+0x12c/+0x130.
+            let so = &raw mut SYNTH_MMS_OWNER as usize;
+            let disp1: unsafe extern "system" fn(usize) =
+                unsafe { std::mem::transmute(base + B80_DISPATCHER1_RVA) };
+            let disp2: unsafe extern "system" fn(usize) =
+                unsafe { std::mem::transmute(base + B80_DISPATCHER2_RVA) };
+            unsafe { disp1(so) };
+            unsafe { disp2(so) };
+            if drives % OWN_STEPPER_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+                let (io10, io18, io20) = read_iodev();
+                append_autoload_debug(format_args!(
+                    "own_stepper: drive {drives} b80={b80} ac0={ac0} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} c30=0x{c30:x}"
+                ));
+            }
+            return;
+        }
+        // Timeout: never deserialized. Stay at the title (no SetState(5) -> no save write).
+        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+        let (io10, io18, io20) = read_iodev();
+        append_autoload_debug(format_args!(
+            "own_stepper: drive TIMEOUT (drives={drives}) b80={b80} ac0={ac0} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} c30=0x{c30:x}"
+        ));
+        return;
+    }
+    // phase DONE: idx6 watches the native load; idx10 just passes through if re-entered.
     pass_through(false);
 }
 
@@ -477,66 +577,42 @@ pub(crate) unsafe extern "system" fn own_stepper_idx6(owner: usize, framectx: us
             unsafe { f(owner, framectx) };
         }
     };
-    if phase == OWN_STEPPER_PHASE_CONTINUE {
-        if n % OWN_STEPPER_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
-            append_autoload_debug(format_args!(
-                "own_stepper: idx6 wait #{n} csfeman=0x{csfeman:x} b80={b80} c30=0x{c30:x}"
-            ));
-        }
-        // Wait for CSFeMan + a settle (MoveMapStep built). Lever (b): try the direct
-        // deserialize regardless of b80; the log shows whether c30 changes.
-        let _ = OWN_STEPPER_B80_RESIDENT;
-        if csfeman == TITLE_OWNER_SCAN_START_ADDRESS || n < OWN_STEPPER_IDX6_SETTLE {
-            pass6();
-            return;
-        }
-        // PHASE 2 (native autoload arm): lever (a). Set the slot + the force flag so the
-        // game's OWN dispatcher (ticked by the MoveMapStep) runs current_slot_load ->
-        // the b80 save-IO machine -> the full deserialize -> c30 + character, then
-        // streams the real map. This is the designed save-mount path.
-        let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
-        // STEP A: register the FD4 stream worker 0x144842d40 so the save-IO pool drains
-        // (b80 can then advance). Our SetState(5) skipped the IngameInit tail that does
-        // this; replicate it via 0x140b0a980 with a synthetic this whose +0x48>=7 hits
-        // the build+register arm (we've called this cold before with no crash).
-        unsafe {
-            *((&raw mut OWN_STEPPER_WORKER_THIS as usize + SYNTHETIC_STEP_STATE_OFFSET)
-                as *mut i32) = WORLD_WORKER_BUILD_STATE;
-        }
-        let build_worker: unsafe extern "system" fn(usize) =
-            unsafe { std::mem::transmute(base + WORLD_WORKER_BUILD_RVA) };
-        unsafe { build_worker(&raw mut OWN_STEPPER_WORKER_THIS as usize) };
-        let worker = unsafe { *((base + WORLD_STREAM_WORKER_RVA) as *const usize) };
-        // STEP B: native autoload arm -- set slot + force flag so the native dispatcher
-        // runs current_slot_load -> b80 machine -> deserialize -> real map + character.
-        let set_save_slot: unsafe extern "system" fn(i32) =
-            unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
-        unsafe { set_save_slot(want_slot) };
-        if gm != TITLE_OWNER_SCAN_START_ADDRESS {
-            unsafe {
-                *((gm + GAME_MAN_ARM_FLAG_B72_OFFSET) as *mut u8) = TITLE_PROCEED_GATE_SET_VALUE;
-            }
-        }
-        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
-        let _ = (
-            owner,
-            LOAD_INITIATOR_RVA,
-            DESERIALIZE_SLOT_RVA,
-            TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET,
-            TITLE_OWNER_PLAY_GAME_SLOT_OFFSET,
-            TITLE_SET_STATE_RVA,
-            TITLE_STEP_PLAY_GAME,
-            SYNTHETIC_STEP_THIS_SIZE,
-        );
-        append_autoload_debug(format_args!(
-            "own_stepper: idx6 ARM (#{n}) slot={want_slot} worker=0x{worker:x} ac0+b72=1 b80={b80} c30=0x{c30:x}"
-        ));
-        return;
-    }
-    // phase DONE: WATCH the native autoload progress (b80 1->2->3, c30 -> real map).
+    let _ = phase;
+    // WATCH the native load that the idx10 Continue confirm kicked off (state 6
+    // GameStepWait). Mirrors the observe snapshot so the in-context load can be compared
+    // directly to the real user-driven load: csfeman + MoveMapStep build, mms_state
+    // advance (1 MsbLoad -> 2 MsbLoadWait -> 3 WorldResWait), b80 deserialize, c30 -> real
+    // map, resmgr + b7c1 (the streaming-enable the real flow sets natively at mms_state=2).
     if n % OWN_STEPPER_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+        let ac0 = read_gm(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
+        let ingame = unsafe { *((owner + TITLE_OWNER_JOB_OFFSET) as *const usize) };
+        let mms = if ingame != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { *((ingame + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) as *const usize) }
+        } else {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        };
+        let mms_state = if mms != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { *((mms + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) }
+        } else {
+            TITLE_STATE_OWNER_GONE
+        };
+        let wrm = if mms != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { *((mms + MOVEMAPSTEP_WORLDRES_F0_OFFSET) as *const usize) }
+        } else {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        };
+        let resmgr = if wrm != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { *((wrm + WORLDRES_RESMGR_10_OFFSET) as *const usize) }
+        } else {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        };
+        let b7c1 = if resmgr != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { *((resmgr + RESMGR_STREAM_ENABLE_B7C1_OFFSET) as *const u8) as i32 }
+        } else {
+            TITLE_STATE_OWNER_GONE
+        };
         append_autoload_debug(format_args!(
-            "own_stepper: idx6 watch #{n} b80={b80} c30=0x{c30:x} csfeman=0x{csfeman:x}"
+            "own_stepper: idx6 watch #{n} csfeman=0x{csfeman:x} c30=0x{c30:x} ac0={ac0} b80={b80} mms=0x{mms:x} mms_state={mms_state} resmgr=0x{resmgr:x} b7c1={b7c1}"
         ));
     }
     pass6();
@@ -615,6 +691,22 @@ pub(crate) unsafe fn title_observe_tick(module_base: usize, tick: u64) {
     let c30 = read_gm(GAME_MAN_SAVED_MAP_C30_OFFSET);
     let ac0 = read_gm(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
     let b80 = read_gm(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+    let b78 = read_gm(GAME_MAN_REQUESTED_SLOT_B78_OFFSET);
+    // Frame-level save-IO orchestration capture (menu-b80-mount-orchestration-sequence):
+    // the iodev request handle pair [iodev+0x18]/[iodev+0x20] + [iodev+0x10] inflight.
+    // Only 0x14067b4e0's preview read populates these; logging them across a real
+    // load pins EXACTLY when the read goes in-flight/resident vs when b80 flips.
+    let iodev = unsafe { *((module_base + IODEV_GLOBAL_RVA) as *const usize) };
+    let read_iodev = |off: usize| {
+        if iodev != null {
+            unsafe { *((iodev + off) as *const usize) }
+        } else {
+            null
+        }
+    };
+    let iodev10 = read_iodev(IODEV_INFLIGHT_10_OFFSET);
+    let iodev18 = read_iodev(IODEV_REQHANDLE_18_OFFSET);
+    let iodev20 = read_iodev(IODEV_REQHANDLE_20_OFFSET);
     let ingame = match owner {
         Some(o) => unsafe { *((o + TITLE_OWNER_JOB_OFFSET) as *const usize) },
         None => null,
@@ -668,11 +760,21 @@ pub(crate) unsafe fn title_observe_tick(module_base: usize, tick: u64) {
     sig = sig.wrapping_mul(OBSERVE_SIG_MULT).wrapping_add(ac0 as i64);
     sig = sig.wrapping_mul(OBSERVE_SIG_MULT).wrapping_add(b7c1 as i64);
     sig = sig.wrapping_mul(OBSERVE_SIG_MULT).wrapping_add(driver_nz);
+    sig = sig.wrapping_mul(OBSERVE_SIG_MULT).wrapping_add(b78 as i64);
+    sig = sig
+        .wrapping_mul(OBSERVE_SIG_MULT)
+        .wrapping_add((iodev10 != null) as i64);
+    sig = sig
+        .wrapping_mul(OBSERVE_SIG_MULT)
+        .wrapping_add((iodev18 != null) as i64);
+    sig = sig
+        .wrapping_mul(OBSERVE_SIG_MULT)
+        .wrapping_add((iodev20 != null) as i64);
     if OBSERVE_LAST_SIG.swap(sig, Ordering::SeqCst) == sig {
         return;
     }
     append_autoload_debug(format_args!(
-        "observe: state={state} csfeman=0x{csfeman:x} session=0x{session:x} c30=0x{c30:x} ac0={ac0} b80={b80} mms=0x{mms:x} mms_state={mms_state} resmgr=0x{resmgr:x} b7c1={b7c1} driver=0x{driver:x} slotmgr=0x{slotmgr:x} tick={tick}"
+        "observe: state={state} csfeman=0x{csfeman:x} session=0x{session:x} c30=0x{c30:x} ac0={ac0} b80={b80} b78={b78} iodev=0x{iodev:x} io10=0x{iodev10:x} io18=0x{iodev18:x} io20=0x{iodev20:x} mms=0x{mms:x} mms_state={mms_state} resmgr=0x{resmgr:x} b7c1={b7c1} driver=0x{driver:x} slotmgr=0x{slotmgr:x} tick={tick}"
     ));
 }
 
