@@ -2181,6 +2181,45 @@ pub(crate) fn install_continue_trace_hooks() {
             save_load_state_init_hook as *mut c_void,
             &SAVE_LOAD_STATE_INIT_ORIG,
         );
+        // b80 save-mount capture: the 5 functions that drive the slot deserialize. A real
+        // user-driven .co2 load through these pins the exact call order + args + which fn
+        // populates io18/io20 + which transitions b80 + which applies the character, so we
+        // can replicate it with slot-int primitives (no synthetic-owner save-write).
+        create_continue_trace_hook(
+            &mut hooks,
+            "b80_preview_67b4e0",
+            LOAD_INITIATOR_RVA as u32,
+            b80_preview_initiator_hook as *mut c_void,
+            &B80_PREVIEW_INITIATOR_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "b80_loadsavedata_67b200",
+            B80_LOAD_SAVE_DATA_INITIATOR_RVA as u32,
+            b80_loadsavedata_hook as *mut c_void,
+            &B80_LOAD_SAVE_DATA_INITIATOR_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "b80_fullload_67b1a0",
+            B80_FULL_LOAD_INITIATOR_RVA as u32,
+            b80_fullload_hook as *mut c_void,
+            &B80_FULL_LOAD_INITIATOR_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "b80_poll_679180",
+            B80_POLL_RVA as u32,
+            b80_poll_hook as *mut c_void,
+            &B80_POLL_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "b80_deserialize_67b290",
+            DESERIALIZE_SLOT_RVA as u32,
+            b80_deserialize_hook as *mut c_void,
+            &B80_DESERIALIZE_ORIG,
+        );
     }
 
     match unsafe { MH_ApplyQueued() } {
@@ -2244,6 +2283,136 @@ pub(crate) unsafe fn call_task_enqueue_original(
     let original: unsafe extern "system" fn(*mut c_void, *mut c_void) -> *mut c_void =
         unsafe { std::mem::transmute(original) };
     Some(unsafe { original(arg0, arg1) })
+}
+
+/// Defensive default when a b80 trampoline is somehow unset (dead branch: if our hook
+/// runs, MhHook installed and the trampoline is set).
+const B80_HOOK_DEFAULT_RET: i32 = 0;
+
+/// State snapshot for the b80 save-mount capture: the GameMan load-phase fields plus the
+/// iodev request-handle pair the poll keys on. Logged at ENTER and LEAVE of each hooked
+/// b80 function so a real user-driven load pins which fn populates io18/io20, transitions
+/// b80 0->1/2->3, and writes c30/ac0 (the character-apply). io18 && io20 set == the
+/// deserialize-ready signature (real-load-c30-mount-write-confirmed-seamless-2026).
+pub(crate) fn b80_mount_trace_summary() -> String {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let Ok(base) = game_module_base() else {
+        return "base_unresolved".to_owned();
+    };
+    let gm = unsafe { *((base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+    let read_gm = |off: usize| {
+        if gm != null {
+            unsafe { *((gm + off) as *const i32) }
+        } else {
+            TITLE_STATE_OWNER_GONE
+        }
+    };
+    let b80 = read_gm(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+    let ac0 = read_gm(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
+    let c30 = read_gm(GAME_MAN_SAVED_MAP_C30_OFFSET);
+    let b78 = read_gm(GAME_MAN_REQUESTED_SLOT_B78_OFFSET);
+    let iodev = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
+    let read_io = |off: usize| {
+        if iodev != null {
+            unsafe { *((iodev + off) as *const usize) }
+        } else {
+            null
+        }
+    };
+    let io10 = read_io(IODEV_INFLIGHT_10_OFFSET);
+    let io18 = read_io(IODEV_REQHANDLE_18_OFFSET);
+    let io20 = read_io(IODEV_REQHANDLE_20_OFFSET);
+    format!(
+        "b80={b80} ac0={ac0} c30=0x{c30:x} b78={b78} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x}"
+    )
+}
+
+/// Call an original slot-int b80 initiator/deserialize (fastcall, ecx=slot). Returns the
+/// full eax the original produced so the game's caller sees the unmodified result.
+unsafe fn call_b80_initiator_original(original: &AtomicUsize, slot: i32) -> i32 {
+    let original = original.load(Ordering::SeqCst);
+    if original == HOOK_ORIGINAL_UNSET {
+        return B80_HOOK_DEFAULT_RET;
+    }
+    let original: unsafe extern "system" fn(i32) -> i32 = unsafe { std::mem::transmute(original) };
+    unsafe { original(slot) }
+}
+
+/// Call the original b80 poll 0x140679180(cl,dl). Returns its full eax (0 ready /
+/// 1 in-progress / else error) so the dispatcher's switch is unchanged.
+unsafe fn call_b80_poll_original(original: &AtomicUsize, arg0: u8, arg1: u8) -> i32 {
+    let original = original.load(Ordering::SeqCst);
+    if original == HOOK_ORIGINAL_UNSET {
+        return B80_HOOK_DEFAULT_RET;
+    }
+    let original: unsafe extern "system" fn(u8, u8) -> i32 =
+        unsafe { std::mem::transmute(original) };
+    unsafe { original(arg0, arg1) }
+}
+
+pub(crate) unsafe extern "system" fn b80_preview_initiator_hook(slot: i32) -> i32 {
+    append_continue_trace(format_args!(
+        "b80_preview_67b4e0 ENTER slot={slot} {}",
+        b80_mount_trace_summary()
+    ));
+    let ret = unsafe { call_b80_initiator_original(&B80_PREVIEW_INITIATOR_ORIG, slot) };
+    append_continue_trace(format_args!(
+        "b80_preview_67b4e0 LEAVE slot={slot} ret={ret} {}",
+        b80_mount_trace_summary()
+    ));
+    ret
+}
+
+pub(crate) unsafe extern "system" fn b80_loadsavedata_hook(slot: i32) -> i32 {
+    append_continue_trace(format_args!(
+        "b80_loadsavedata_67b200 ENTER slot={slot} {}",
+        b80_mount_trace_summary()
+    ));
+    let ret = unsafe { call_b80_initiator_original(&B80_LOAD_SAVE_DATA_INITIATOR_ORIG, slot) };
+    append_continue_trace(format_args!(
+        "b80_loadsavedata_67b200 LEAVE slot={slot} ret={ret} {}",
+        b80_mount_trace_summary()
+    ));
+    ret
+}
+
+pub(crate) unsafe extern "system" fn b80_fullload_hook(slot: i32) -> i32 {
+    append_continue_trace(format_args!(
+        "b80_fullload_67b1a0 ENTER slot={slot} {}",
+        b80_mount_trace_summary()
+    ));
+    let ret = unsafe { call_b80_initiator_original(&B80_FULL_LOAD_INITIATOR_ORIG, slot) };
+    append_continue_trace(format_args!(
+        "b80_fullload_67b1a0 LEAVE slot={slot} ret={ret} {}",
+        b80_mount_trace_summary()
+    ));
+    ret
+}
+
+pub(crate) unsafe extern "system" fn b80_poll_hook(arg0: u8, arg1: u8) -> i32 {
+    append_continue_trace(format_args!(
+        "b80_poll_679180 ENTER arg0={arg0} arg1={arg1} {}",
+        b80_mount_trace_summary()
+    ));
+    let ret = unsafe { call_b80_poll_original(&B80_POLL_ORIG, arg0, arg1) };
+    append_continue_trace(format_args!(
+        "b80_poll_679180 LEAVE ret={ret} {}",
+        b80_mount_trace_summary()
+    ));
+    ret
+}
+
+pub(crate) unsafe extern "system" fn b80_deserialize_hook(slot: i32) -> i32 {
+    append_continue_trace(format_args!(
+        "b80_deserialize_67b290 ENTER slot={slot} {}",
+        b80_mount_trace_summary()
+    ));
+    let ret = unsafe { call_b80_initiator_original(&B80_DESERIALIZE_ORIG, slot) };
+    append_continue_trace(format_args!(
+        "b80_deserialize_67b290 LEAVE slot={slot} ret={ret} {}",
+        b80_mount_trace_summary()
+    ));
+    ret
 }
 
 pub(crate) unsafe extern "system" fn menu_continue_wrapper_hook(this: *mut c_void) -> *mut c_void {
