@@ -320,6 +320,10 @@ const WND_SW_HIDE: i32 = 0;
 const WND_GET_SYSTEM_MENU_KEEP: i32 = 0;
 /// Render-thread liveness probe logging cadence (in render frames).
 const RENDER_PROBE_INTERVAL: usize = 120;
+/// Earliest game-task tick to fire the movie dismiss. Dismissing very early
+/// (~tick 121 / ~2s) advanced the title but the menu never built + the task froze;
+/// delaying gives the boot time to load the menu subsystems before we dismiss.
+const DISMISS_MIN_TICK: u64 = 600;
 /// Generous upper bound on the game image span, to sanity-check that a candidate
 /// object's vtable points into the module before dereferencing deeper.
 /// Sentinel logged when GameMan is null so the field could not be read.
@@ -2468,7 +2472,11 @@ unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
     // then sets the skip-flag last): hide+repaint the dedicated movie window so the
     // intro thread's fade/present-quiesce completes cleanly and latches -- a raw
     // flag-only write skipped this teardown and hung the render pipeline.
-    if do_write && state == TITLE_STEP_MENU_JOB_WAIT && skip == MOVIE_SKIP_FLAG_CLEAR {
+    if do_write
+        && tick >= DISMISS_MIN_TICK
+        && state == TITLE_STEP_MENU_JOB_WAIT
+        && skip == MOVIE_SKIP_FLAG_CLEAR
+    {
         let movie_vtable = if movie != null {
             unsafe { *(movie as *const usize) }
         } else {
