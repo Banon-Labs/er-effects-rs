@@ -290,6 +290,19 @@ pub(crate) const DIAG_NULL_CHAIN: i32 = -2;
 /// 0x0a means slot 9's m10 IS being requested (loader/streaming issue); 0 means the
 /// saved world position never loaded (coord issue).
 pub(crate) const WORLDRES_COORD_2C_OFFSET: usize = 0x2c;
+/// Resource-manager block array scan (mirrors 0x14066d3e0): entries at
+/// [resmgr+0xb3030 + i*8]; each entry's block area = [[entry+0x8]+0xc]. We scan for
+/// the target area 0x0a (m10) to learn if slot 9's block is registered (streaming
+/// gap) or absent (loader never picks up the request).
+pub(crate) const WORLDRES_BLOCK_ARRAY_B3030_OFFSET: usize = 0xb3030;
+pub(crate) const BLOCK_ENTRY_AREAOBJ_8_OFFSET: usize = 0x8;
+pub(crate) const BLOCK_AREAOBJ_AREA_C_OFFSET: usize = 0xc;
+pub(crate) const TARGET_AREA_M10: i32 = 0x0a;
+pub(crate) const BLOCK_SCAN_MAX: i32 = 64;
+pub(crate) const BLOCK_ENTRY_STRIDE: usize = 8;
+pub(crate) const BLOCK_SAMPLE_COUNT: usize = 4;
+pub(crate) const BLOCK_AREA_BYTE_MASK: u32 = 0xff;
+pub(crate) const BLOCK_SAMPLE_SHIFT: u32 = 8;
 /// Global holding the GameMan pointer (`mov rax,[rip]` in set_save_slot 0x67a810
 /// / save_slot_get 0x678ca0). Read-only diagnostics of the PlayGame load-pair
 /// preconditions read GameMan through this.

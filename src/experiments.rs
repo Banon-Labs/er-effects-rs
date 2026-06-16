@@ -534,21 +534,52 @@ pub(crate) unsafe fn submit_play_game_once(
             } else {
                 null
             };
-            let (blocks, reqcoord) = if wrm != null {
-                let coord = unsafe { *((wrm + WORLDRES_COORD_2C_OFFSET) as *const i32) };
-                let resmgr = unsafe { *((wrm + WORLDRES_RESMGR_10_OFFSET) as *const usize) };
-                let b = if resmgr != null {
-                    unsafe { *((resmgr + RESMGR_BLOCK_COUNT_B3140_OFFSET) as *const i32) }
-                } else {
-                    DIAG_NULL_CHAIN
-                };
-                (b, coord)
+            let coord = if wrm != null {
+                unsafe { *((wrm + WORLDRES_COORD_2C_OFFSET) as *const i32) }
             } else {
-                (DIAG_NULL_CHAIN, DIAG_NULL_CHAIN)
+                DIAG_NULL_CHAIN
             };
+            let resmgr = if wrm != null {
+                unsafe { *((wrm + WORLDRES_RESMGR_10_OFFSET) as *const usize) }
+            } else {
+                null
+            };
+            let blocks = if resmgr != null {
+                unsafe { *((resmgr + RESMGR_BLOCK_COUNT_B3140_OFFSET) as *const i32) }
+            } else {
+                DIAG_NULL_CHAIN
+            };
+            // Scan the block array for slot 9's target area 0x0a (m10): found10 says
+            // whether the block is registered (streaming gap) vs absent (loader gap);
+            // sample is the first few blocks' area bytes (likely the title's scene).
+            let mut found10 = 0i32;
+            let mut sample = 0u32;
+            if resmgr != null && blocks > 0 {
+                let arr = resmgr + WORLDRES_BLOCK_ARRAY_B3030_OFFSET;
+                let n = blocks.min(BLOCK_SCAN_MAX);
+                for i in 0..n {
+                    let entry =
+                        unsafe { *((arr + (i as usize) * BLOCK_ENTRY_STRIDE) as *const usize) };
+                    if entry == null {
+                        continue;
+                    }
+                    let areaobj =
+                        unsafe { *((entry + BLOCK_ENTRY_AREAOBJ_8_OFFSET) as *const usize) };
+                    if areaobj == null {
+                        continue;
+                    }
+                    let area = unsafe { *((areaobj + BLOCK_AREAOBJ_AREA_C_OFFSET) as *const i32) };
+                    if area == TARGET_AREA_M10 {
+                        found10 += 1;
+                    }
+                    if (i as usize) < BLOCK_SAMPLE_COUNT {
+                        sample |= ((area as u32) & BLOCK_AREA_BYTE_MASK)
+                            << ((i as u32) * BLOCK_SAMPLE_SHIFT);
+                    }
+                }
+            }
             append_autoload_debug(format_args!(
-                "submit_play_game: phaseD state={state} child_d8={d8} mms_state={mms_state} blocks={blocks} reqcoord=0x{reqcoord:x} worldA=0x{world_a:x} c30=0x{:x} b80={b80} csfeman=0x{csfeman:x} tick={tick}",
-                read_c30()
+                "submit_play_game: phaseD state={state} mms_state={mms_state} blocks={blocks} found10={found10} sample=0x{sample:x} reqcoord=0x{coord:x} worldA=0x{world_a:x} child_d8={d8} b80={b80} csfeman=0x{csfeman:x} tick={tick}"
             ));
         }
     }
