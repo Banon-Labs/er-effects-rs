@@ -495,6 +495,20 @@ pub(crate) unsafe extern "system" fn own_stepper_idx6(owner: usize, framectx: us
         // the b80 save-IO machine -> the full deserialize -> c30 + character, then
         // streams the real map. This is the designed save-mount path.
         let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+        // STEP A: register the FD4 stream worker 0x144842d40 so the save-IO pool drains
+        // (b80 can then advance). Our SetState(5) skipped the IngameInit tail that does
+        // this; replicate it via 0x140b0a980 with a synthetic this whose +0x48>=7 hits
+        // the build+register arm (we've called this cold before with no crash).
+        unsafe {
+            *((&raw mut OWN_STEPPER_WORKER_THIS as usize + SYNTHETIC_STEP_STATE_OFFSET)
+                as *mut i32) = WORLD_WORKER_BUILD_STATE;
+        }
+        let build_worker: unsafe extern "system" fn(usize) =
+            unsafe { std::mem::transmute(base + WORLD_WORKER_BUILD_RVA) };
+        unsafe { build_worker(&raw mut OWN_STEPPER_WORKER_THIS as usize) };
+        let worker = unsafe { *((base + WORLD_STREAM_WORKER_RVA) as *const usize) };
+        // STEP B: native autoload arm -- set slot + force flag so the native dispatcher
+        // runs current_slot_load -> b80 machine -> deserialize -> real map + character.
         let set_save_slot: unsafe extern "system" fn(i32) =
             unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
         unsafe { set_save_slot(want_slot) };
@@ -512,9 +526,10 @@ pub(crate) unsafe extern "system" fn own_stepper_idx6(owner: usize, framectx: us
             TITLE_OWNER_PLAY_GAME_SLOT_OFFSET,
             TITLE_SET_STATE_RVA,
             TITLE_STEP_PLAY_GAME,
+            SYNTHETIC_STEP_THIS_SIZE,
         );
         append_autoload_debug(format_args!(
-            "own_stepper: idx6 ARM (#{n}) slot={want_slot} ac0+b72=1 b80={b80} c30=0x{c30:x}"
+            "own_stepper: idx6 ARM (#{n}) slot={want_slot} worker=0x{worker:x} ac0+b72=1 b80={b80} c30=0x{c30:x}"
         ));
         return;
     }

@@ -411,6 +411,10 @@ pub(crate) static OWN_STEPPER_SLOT: std::sync::atomic::AtomicI32 =
 pub(crate) static OWN_STEPPER_PHASE: AtomicUsize = AtomicUsize::new(OWN_STEPPER_PHASE_MENU);
 pub(crate) static mut OWN_STEPPER_SHIM: [usize; OWN_STEPPER_SHIM_LEN] =
     [TITLE_OWNER_SCAN_START_ADDRESS; OWN_STEPPER_SHIM_LEN];
+/// Synthetic `this` for the IngameInit-tail stream-worker register call 0x140b0a980
+/// (+0x48 set to WORLD_WORKER_BUILD_STATE hits the build+register arm).
+pub(crate) static mut OWN_STEPPER_WORKER_THIS: [u8; SYNTHETIC_STEP_THIS_SIZE] =
+    [MOVIE_SKIP_FLAG_CLEAR; SYNTHETIC_STEP_THIS_SIZE];
 pub(crate) const OWN_STEPPER_PATCHED_NO: usize = 0;
 pub(crate) const OWN_STEPPER_PATCHED_YES: usize = 1;
 /// Original idx10 func ptr (STEP_MenuJobWait), saved so our handler can pass through.
