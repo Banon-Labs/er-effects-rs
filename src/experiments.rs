@@ -384,6 +384,28 @@ pub(crate) unsafe fn submit_play_game_once(module_base: usize, slot: i32, tick: 
         return false;
     }
     if SUBMIT_PLAY_GAME_CALLED.load(Ordering::SeqCst) != TITLE_NATIVE_JOB_NOT_CALLED {
+        // Phase 2: once SetState(5) has built CSFeMan (front-end up), the native
+        // load dispatcher 0x140afb880 finally has a valid CSFeMan -- arm it for the
+        // real slot load (GameMan+0xac0 already=slot; set +0xb72=1; latch must be 0)
+        // so it runs current_slot_load -> 0x14067b290(slot): deserializes slot 9's
+        // real map into GameMan+0xc30, applies the character, streams it resident.
+        let csfeman_now = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
+        if csfeman_now != TITLE_OWNER_SCAN_START_ADDRESS
+            && !SUBMIT_PLAY_GAME_ARMED.swap(true, Ordering::SeqCst)
+        {
+            let gm =
+                unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+            let latch = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
+            if gm != TITLE_OWNER_SCAN_START_ADDRESS {
+                unsafe {
+                    *((gm + GAME_MAN_ARM_FLAG_B72_OFFSET) as *mut u8) =
+                        TITLE_PROCEED_GATE_SET_VALUE;
+                }
+                append_autoload_debug(format_args!(
+                    "submit_play_game: csfeman built (0x{csfeman_now:x}) -> armed b72 for slot load (latch={latch}) tick={tick}"
+                ));
+            }
+        }
         if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
             let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
             let owner = unsafe { title_owner(module_base) }.map(|p| p as usize);

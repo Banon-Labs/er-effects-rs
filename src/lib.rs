@@ -443,6 +443,8 @@ pub(crate) static TITLE_OWNER_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_NATIVE_JOB_CALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static FORCE_PLAY_GAME_CALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SUBMIT_PLAY_GAME_CALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SUBMIT_PLAY_GAME_ARMED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 pub(crate) static FORCE_PLAY_GAME_LAST_STATE: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(FORCE_PLAY_GAME_STATE_UNOBSERVED);
 pub(crate) static TITLE_PROCEED_GATE_FIRED: std::sync::atomic::AtomicBool =
