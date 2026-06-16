@@ -527,8 +527,26 @@ pub(crate) unsafe fn submit_play_game_once(
             };
             let world_a = unsafe { *((module_base + WORLD_SINGLETON_A_RVA) as *const usize) };
             let world_b = unsafe { *((module_base + WORLD_SINGLETON_B_RVA) as *const usize) };
+            // Resource-manager loaded-block count (STEP_WorldResWait residency input):
+            // resmgr = [[MoveMapStep+0xf0]+0x10]; count = [resmgr+0xb3140].
+            let blocks = if movemapstep != null {
+                let wrm =
+                    unsafe { *((movemapstep + MOVEMAPSTEP_WORLDRES_F0_OFFSET) as *const usize) };
+                if wrm != null {
+                    let resmgr = unsafe { *((wrm + WORLDRES_RESMGR_10_OFFSET) as *const usize) };
+                    if resmgr != null {
+                        unsafe { *((resmgr + RESMGR_BLOCK_COUNT_B3140_OFFSET) as *const i32) }
+                    } else {
+                        DIAG_NULL_CHAIN
+                    }
+                } else {
+                    DIAG_NULL_CHAIN
+                }
+            } else {
+                DIAG_NULL_CHAIN
+            };
             append_autoload_debug(format_args!(
-                "submit_play_game: phaseD state={state} child_d8={d8} b80={b80} mms_state={mms_state} worldA=0x{world_a:x} worldB=0x{world_b:x} c30=0x{:x} csfeman=0x{csfeman:x} tick={tick}",
+                "submit_play_game: phaseD state={state} child_d8={d8} b80={b80} mms_state={mms_state} blocks={blocks} worldA=0x{world_a:x} worldB=0x{world_b:x} c30=0x{:x} csfeman=0x{csfeman:x} tick={tick}",
                 read_c30()
             ));
         }

@@ -277,6 +277,14 @@ pub(crate) const WORLD_STREAM_WORKER_RVA: usize = 0x4842d40;
 /// worker is servicing the stream vs the b80 lane stalling first.
 pub(crate) const WORLD_SINGLETON_A_RVA: usize = 0x3d691d8;
 pub(crate) const WORLD_SINGLETON_B_RVA: usize = 0x3d69ba8;
+/// World-resource manager chain for STEP_WorldResWait residency (0x14066d3e0):
+/// resmgr = [[MoveMapStep+0xf0]+0x10]; loaded-block count = [resmgr+0xb3140].
+/// count==0 -> no map-block registered (setup gap); count>0 but block not at load
+/// phase 0xa -> streaming gap. Diagnostic for the final wall.
+pub(crate) const MOVEMAPSTEP_WORLDRES_F0_OFFSET: usize = 0xf0;
+pub(crate) const WORLDRES_RESMGR_10_OFFSET: usize = 0x10;
+pub(crate) const RESMGR_BLOCK_COUNT_B3140_OFFSET: usize = 0xb3140;
+pub(crate) const DIAG_NULL_CHAIN: i32 = -2;
 /// Global holding the GameMan pointer (`mov rax,[rip]` in set_save_slot 0x67a810
 /// / save_slot_get 0x678ca0). Read-only diagnostics of the PlayGame load-pair
 /// preconditions read GameMan through this.
