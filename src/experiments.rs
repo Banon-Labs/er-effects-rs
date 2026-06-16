@@ -475,13 +475,11 @@ pub(crate) unsafe fn submit_play_game_once(
                 unsafe { std::mem::transmute(module_base + REQUEST_SUBMIT_RVA) };
             unsafe { submit_req(ingame) };
             let resmgr = unsafe { *((ingame + INGAMESTEP_RESMGR_250_OFFSET) as *const usize) };
-            let mut enabled = 0i32;
-            if resmgr != null {
-                let enable: unsafe extern "system" fn(usize) =
-                    unsafe { std::mem::transmute(module_base + STREAMING_ENABLE_RVA) };
-                unsafe { enable(resmgr) };
-                enabled = 1;
-            }
+            // BISECT: enable 0x14066e2e4 disabled this run (it is a virtual whose `this`
+            // may be the resmgr-owner, not resmgr -> null+0x62 crash). Test whether the
+            // re-submit alone is safe + creates the m10 load-state first.
+            let enabled = 0i32;
+            let _ = STREAMING_ENABLE_RVA;
             let _ = (
                 LOAD_INITIATOR_RVA,
                 WORLD_WORKER_BUILD_RVA,
