@@ -1,0 +1,17 @@
+# Isolation: minimal DLL. inert_mode (game task no-ops per frame) is set via a
+# manually-written er-effects-inert.txt in GAME_DIR; everything else off. If the
+# boot SURVIVES, our per-frame code (title_accept/scan/render-probe) is the crash;
+# if it still CRASHES, it's the DLL's mere presence / hooks (safe-input, hudhook).
+LAUNCH_MODE=direct
+RUNTIME_MAX_NUDGES=0
+RESTORE_RUNTIME_SAVES=1
+RUNTIME_CAPTURE_INPUT_OCR=0
+ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=0
+ER_EFFECTS_SPLASH_SKIP=0
+ER_EFFECTS_TITLE_ACCEPT=0
+ER_EFFECTS_CRASH_LOG=0
+ER_EFFECTS_AUTOLOAD_METHOD=direct_menu_load
+ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP=false
+RUNTIME_WATCH_TARGET=player-load
+RUNTIME_POST_REQUEST_TICK_BUDGET=600
+RUNTIME_SPAWN_POLL_BUDGET=32768
