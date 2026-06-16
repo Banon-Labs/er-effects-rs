@@ -481,18 +481,22 @@ pub(crate) unsafe fn submit_play_game_once(
             let sess_b = unsafe { *((module_base + SESSION_SINGLETON_B_RVA) as *const usize) };
             let b7c1_before =
                 unsafe { *((resmgr + RESMGR_STREAM_ENABLE_B7C1_OFFSET) as *const u8) as i32 };
-            unsafe {
-                *((resmgr + RESMGR_STREAM_ENABLE_B7C1_OFFSET) as *mut u8) =
-                    TITLE_PROCEED_GATE_SET_VALUE;
-            }
-            // Gap 1: re-submit the m10 block-load request now that streaming is on.
+            // REVERTED: poking [resmgr+0xb7c1]=1 enables streaming but the job machine
+            // then FD4-asserts because the session singletons 0x143d687a0/0x143d67bd0
+            // are NULL (the virtual 0x14066e2e4 builds them, but its receiver is
+            // unpinned -> calling it crashes null+0x62). Re-submit only (safe) until
+            // the enable receiver is RE'd. (worldres-resubmit-safe-but-resmgr-identity)
             let submit_req: unsafe extern "system" fn(usize) =
                 unsafe { std::mem::transmute(module_base + REQUEST_SUBMIT_RVA) };
             unsafe { submit_req(ingame) };
-            let enabled = 1i32;
-            let _ = STREAMING_ENABLE_RVA;
+            let enabled = 0i32;
+            let _ = (
+                STREAMING_ENABLE_RVA,
+                RESMGR_STREAM_ENABLE_B7C1_OFFSET,
+                TITLE_PROCEED_GATE_SET_VALUE,
+            );
             append_autoload_debug(format_args!(
-                "submit_play_game: phaseC-enable b7c1 {b7c1_before}->1 sessA=0x{sess_a:x} sessB=0x{sess_b:x} resmgr=0x{resmgr:x} tick={tick}"
+                "submit_play_game: phaseC b7c1={b7c1_before} enabled={enabled} sessA=0x{sess_a:x} sessB=0x{sess_b:x} resmgr=0x{resmgr:x} tick={tick}"
             ));
             let _ = (
                 LOAD_INITIATOR_RVA,
