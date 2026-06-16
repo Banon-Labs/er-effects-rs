@@ -1,3 +1,3 @@
-started_at=2026-06-15T18:10:50-07:00
-request=movie-skip-flag-20260615
+started_at=2026-06-15T18:14:15-07:00
+request=movie-skip-observe-20260615
 entrypoint=measure_runtime_trigger

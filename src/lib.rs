@@ -59,6 +59,18 @@ unsafe extern "system" {
     fn AddVectoredExceptionHandler(first: u32, handler: VectoredHandler) -> *mut c_void;
 }
 
+/// USER32 window-management calls used to replicate the boot-movie WNDPROC's
+/// WM_CLOSE teardown natively (no posted message, no input): hide + repaint the
+/// dedicated movie window so the intro thread's fade/quiesce completes cleanly.
+/// HWND is passed as a raw pointer read from the movie object (M+8).
+#[cfg(windows)]
+unsafe extern "system" {
+    fn GetSystemMenu(hwnd: *mut c_void, brevert: i32) -> *mut c_void;
+    fn DeleteMenu(hmenu: *mut c_void, uposition: u32, uflags: u32) -> i32;
+    fn ShowWindow(hwnd: *mut c_void, ncmdshow: i32) -> i32;
+    fn UpdateWindow(hwnd: *mut c_void) -> i32;
+}
+
 /// Minimal prefix of EXCEPTION_RECORD: only the fields the crash logger reads.
 #[repr(C)]
 struct ExceptionRecordMin {
@@ -298,6 +310,14 @@ const MOVIE_SINGLETON_RVA: usize = 0x458b890;
 const MOVIE_SKIP_FLAG_RVA: usize = 0x458b8a5;
 const MOVIE_SKIP_FLAG_CLEAR: u8 = 0;
 const MOVIE_SKIP_FLAG_SET: u8 = 1;
+/// Movie controller vtable RVA (0x142bfe088), HWND field offset (M+8), and the
+/// USER32 constants for mirroring the WNDPROC WM_CLOSE teardown.
+const MOVIE_VTABLE_RVA: usize = 0x2bfe088;
+const MOVIE_HWND_OFFSET: usize = 0x8;
+const WND_SC_CLOSE: u32 = 0xf060;
+const WND_MF_BYCOMMAND: u32 = 0;
+const WND_SW_HIDE: i32 = 0;
+const WND_GET_SYSTEM_MENU_KEEP: i32 = 0;
 /// Generous upper bound on the game image span, to sanity-check that a candidate
 /// object's vtable points into the module before dereferencing deeper.
 /// Sentinel logged when GameMan is null so the field could not be read.
@@ -2412,13 +2432,42 @@ unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
         Some(o) => unsafe { *((o + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) },
         None => TITLE_STATE_OWNER_GONE,
     };
-    // Native zero-input dismiss: set the movie skip-flag once at the title so the
-    // intro thread finishes legitimately and latches.
+    // Native zero-input dismiss (mirrors the movie WNDPROC's WM_CLOSE teardown,
+    // then sets the skip-flag last): hide+repaint the dedicated movie window so the
+    // intro thread's fade/present-quiesce completes cleanly and latches -- a raw
+    // flag-only write skipped this teardown and hung the render pipeline.
     if do_write && state == TITLE_STEP_MENU_JOB_WAIT && skip == MOVIE_SKIP_FLAG_CLEAR {
-        unsafe { *((module_base + MOVIE_SKIP_FLAG_RVA) as *mut u8) = MOVIE_SKIP_FLAG_SET };
-        append_autoload_debug(format_args!(
-            "title_accept: wrote movie skip-flag (movie=0x{movie:x} latch={latch} state={state} tick={tick})"
-        ));
+        let movie_vtable = if movie != null {
+            unsafe { *(movie as *const usize) }
+        } else {
+            null
+        };
+        let hwnd = if movie != null {
+            unsafe { *((movie + MOVIE_HWND_OFFSET) as *const usize) }
+        } else {
+            null
+        };
+        if movie_vtable == module_base + MOVIE_VTABLE_RVA && hwnd != null {
+            let hwnd_ptr = hwnd as *mut c_void;
+            unsafe {
+                let menu = GetSystemMenu(hwnd_ptr, WND_GET_SYSTEM_MENU_KEEP);
+                if !menu.is_null() {
+                    DeleteMenu(menu, WND_SC_CLOSE, WND_MF_BYCOMMAND);
+                }
+                ShowWindow(hwnd_ptr, WND_SW_HIDE);
+                UpdateWindow(hwnd_ptr);
+                *((module_base + MOVIE_SKIP_FLAG_RVA) as *mut u8) = MOVIE_SKIP_FLAG_SET;
+            }
+            append_autoload_debug(format_args!(
+                "title_accept: native movie dismiss (movie=0x{movie:x} hwnd=0x{hwnd:x} latch={latch} state={state} tick={tick})"
+            ));
+        } else if log_now {
+            append_autoload_debug(format_args!(
+                "title_accept: movie dismiss SKIPPED -- movie=0x{movie:x} vtable_ok={} hwnd_present={} tick={tick}",
+                movie_vtable == module_base + MOVIE_VTABLE_RVA,
+                hwnd != null
+            ));
+        }
     }
     // Unconditional observability: log CSFeMan/latch/state every interval, even
     // after the owner is gone, to see whether the title advanced + bootstrapped.
