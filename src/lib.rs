@@ -233,6 +233,17 @@ pub(crate) const TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET: usize = 0x284;
 /// map-area gate (area byte 0x32..0x58) while we prove the SetState(5) path builds
 /// CSFeMan; the real slot map comes from GameMan+0xc30 once peeked.
 pub(crate) const DEFAULT_PLAY_GAME_MAP: i32 = 0x3c2a2200;
+/// Full sync slot deserialize 0x14067b290(ecx=slot) -- CSFeMan-LESS (verified): reads
+/// the save, writes the real saved map to GameMan+0xc30, applies the character. The
+/// cycle-breaker for slot loading (slot9-load-phase-machine-b80-csfeman-less-2026).
+pub(crate) const DESERIALIZE_SLOT_RVA: usize = 0x67b290;
+pub(crate) const GAME_MAN_SAVED_MAP_C30_OFFSET: usize = 0xc30;
+/// submit_play_game 3-phase states: build CSFeMan -> deserialize slot -> re-submit
+/// the real map. Driven one step per game-task tick.
+pub(crate) const SUBMIT_PHASE_INIT: i32 = 0;
+pub(crate) const SUBMIT_PHASE_BUILT: i32 = 1;
+pub(crate) const SUBMIT_PHASE_DESER: i32 = 2;
+pub(crate) const SUBMIT_PHASE_DONE: i32 = 3;
 /// Global holding the GameMan pointer (`mov rax,[rip]` in set_save_slot 0x67a810
 /// / save_slot_get 0x678ca0). Read-only diagnostics of the PlayGame load-pair
 /// preconditions read GameMan through this.
@@ -442,9 +453,8 @@ pub(crate) static TITLE_OWNER_PTR: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_OWNER_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_NATIVE_JOB_CALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static FORCE_PLAY_GAME_CALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SUBMIT_PLAY_GAME_CALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SUBMIT_PLAY_GAME_ARMED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+pub(crate) static SUBMIT_PLAY_GAME_PHASE: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(SUBMIT_PHASE_INIT);
 pub(crate) static FORCE_PLAY_GAME_LAST_STATE: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(FORCE_PLAY_GAME_STATE_UNOBSERVED);
 pub(crate) static TITLE_PROCEED_GATE_FIRED: std::sync::atomic::AtomicBool =

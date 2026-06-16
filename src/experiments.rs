@@ -383,74 +383,103 @@ pub(crate) unsafe fn submit_play_game_once(module_base: usize, slot: i32, tick: 
     if tick < TITLE_NATIVE_JOB_MIN_TICK {
         return false;
     }
-    if SUBMIT_PLAY_GAME_CALLED.load(Ordering::SeqCst) != TITLE_NATIVE_JOB_NOT_CALLED {
-        // Phase 2: once SetState(5) has built CSFeMan (front-end up), the native
-        // load dispatcher 0x140afb880 finally has a valid CSFeMan -- arm it for the
-        // real slot load (GameMan+0xac0 already=slot; set +0xb72=1; latch must be 0)
-        // so it runs current_slot_load -> 0x14067b290(slot): deserializes slot 9's
-        // real map into GameMan+0xc30, applies the character, streams it resident.
-        let csfeman_now = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
-        if csfeman_now != TITLE_OWNER_SCAN_START_ADDRESS
-            && !SUBMIT_PLAY_GAME_ARMED.swap(true, Ordering::SeqCst)
-        {
-            let gm =
-                unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
-            let latch = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
-            if gm != TITLE_OWNER_SCAN_START_ADDRESS {
-                unsafe {
-                    *((gm + GAME_MAN_ARM_FLAG_B72_OFFSET) as *mut u8) =
-                        TITLE_PROCEED_GATE_SET_VALUE;
-                }
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
+    let gm = unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+    let read_c30 = || {
+        if gm != null {
+            unsafe { *((gm + GAME_MAN_SAVED_MAP_C30_OFFSET) as *const i32) }
+        } else {
+            TITLE_STATE_OWNER_GONE
+        }
+    };
+    let set_state: unsafe extern "system" fn(usize, i32) =
+        unsafe { std::mem::transmute(module_base + TITLE_SET_STATE_RVA) };
+    match SUBMIT_PLAY_GAME_PHASE.load(Ordering::SeqCst) {
+        SUBMIT_PHASE_INIT => {
+            // Phase 1: build CSFeMan -- SetState(5) with a placeholder map so the
+            // pump runs PlayGame -> child MoveMap_Init -> CSFeMan::Construct.
+            let Some(owner) = (unsafe { title_owner(module_base) }) else {
+                return false;
+            };
+            let owner = owner as usize;
+            if unsafe { *((owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) }
+                != TITLE_STEP_MENU_JOB_WAIT
+            {
+                return false;
+            }
+            let set_save_slot: unsafe extern "system" fn(i32) =
+                unsafe { std::mem::transmute(module_base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+            unsafe { set_save_slot(slot) };
+            unsafe {
+                *((owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *mut u8) =
+                    MOVIE_SKIP_FLAG_CLEAR;
+                *((owner + TITLE_OWNER_PLAY_GAME_SLOT_OFFSET) as *mut i32) = DEFAULT_PLAY_GAME_MAP;
+            }
+            unsafe { set_state(owner, TITLE_STEP_PLAY_GAME) };
+            SUBMIT_PLAY_GAME_PHASE.store(SUBMIT_PHASE_BUILT, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "submit_play_game: phase1 SetState(5) owner=0x{owner:x} slot={slot} placeholder=0x{DEFAULT_PLAY_GAME_MAP:x} tick={tick}"
+            ));
+        }
+        SUBMIT_PHASE_BUILT => {
+            // Phase 2: once CSFeMan is built, deserialize slot N CSFeMan-less ->
+            // GameMan+0xc30 = the real saved map + character applied.
+            if csfeman == null {
+                return true;
+            }
+            let deserialize: unsafe extern "system" fn(i32) =
+                unsafe { std::mem::transmute(module_base + DESERIALIZE_SLOT_RVA) };
+            unsafe { deserialize(slot) };
+            SUBMIT_PLAY_GAME_PHASE.store(SUBMIT_PHASE_DESER, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "submit_play_game: phase2 deserialize(slot {slot}) c30=0x{:x} csfeman=0x{csfeman:x} tick={tick}",
+                read_c30()
+            ));
+        }
+        SUBMIT_PHASE_DESER => {
+            // Phase 3: re-submit the REAL saved map (GameMan+0xc30) so the child
+            // streams slot N resident (child+0xd8 drains 1->2->0).
+            let Some(owner) = (unsafe { title_owner(module_base) }) else {
+                return true;
+            };
+            let owner = owner as usize;
+            let c30 = read_c30();
+            unsafe {
+                *((owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *mut u8) =
+                    MOVIE_SKIP_FLAG_CLEAR;
+                *((owner + TITLE_OWNER_PLAY_GAME_SLOT_OFFSET) as *mut i32) = c30;
+            }
+            unsafe { set_state(owner, TITLE_STEP_PLAY_GAME) };
+            SUBMIT_PLAY_GAME_PHASE.store(SUBMIT_PHASE_DONE, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "submit_play_game: phase3 re-SetState(5) map=0x{c30:x} owner=0x{owner:x} tick={tick}"
+            ));
+        }
+        _ => {
+            if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == null as u64 {
+                let owner = unsafe { title_owner(module_base) }.map(|p| p as usize);
+                let (state, child_d8) = match owner {
+                    Some(o) => {
+                        let st =
+                            unsafe { *((o + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) };
+                        let child = unsafe { *((o + TITLE_OWNER_JOB_OFFSET) as *const usize) };
+                        let d8 = if child != null {
+                            unsafe { *((child + TITLE_OWNER_JOB_PENDING_OFFSET) as *const i32) }
+                        } else {
+                            TITLE_STATE_OWNER_GONE
+                        };
+                        (st, d8)
+                    }
+                    None => (TITLE_STATE_OWNER_GONE, TITLE_STATE_OWNER_GONE),
+                };
                 append_autoload_debug(format_args!(
-                    "submit_play_game: csfeman built (0x{csfeman_now:x}) -> armed b72 for slot load (latch={latch}) tick={tick}"
+                    "submit_play_game: observe state={state} child_d8={child_d8} c30=0x{:x} csfeman=0x{csfeman:x} tick={tick}",
+                    read_c30()
                 ));
             }
         }
-        if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
-            let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
-            let owner = unsafe { title_owner(module_base) }.map(|p| p as usize);
-            let (state, child_d8) = match owner {
-                Some(o) => {
-                    let st = unsafe { *((o + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) };
-                    let child = unsafe { *((o + TITLE_OWNER_JOB_OFFSET) as *const usize) };
-                    let d8 = if child != TITLE_OWNER_SCAN_START_ADDRESS {
-                        unsafe { *((child + TITLE_OWNER_JOB_PENDING_OFFSET) as *const i32) }
-                    } else {
-                        TITLE_STATE_OWNER_GONE
-                    };
-                    (st, d8)
-                }
-                None => (TITLE_STATE_OWNER_GONE, TITLE_STATE_OWNER_GONE),
-            };
-            append_autoload_debug(format_args!(
-                "submit_play_game: observe state={state} child_d8={child_d8} csfeman=0x{csfeman:x} tick={tick}"
-            ));
-        }
-        return true;
     }
-    let Some(owner) = (unsafe { title_owner(module_base) }) else {
-        return false;
-    };
-    let owner = owner as usize;
-    let state = unsafe { *((owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) };
-    if state != TITLE_STEP_MENU_JOB_WAIT {
-        return false;
-    }
-    let set_save_slot: unsafe extern "system" fn(i32) =
-        unsafe { std::mem::transmute(module_base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
-    unsafe { set_save_slot(slot) };
-    unsafe {
-        *((owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *mut u8) = MOVIE_SKIP_FLAG_CLEAR;
-        *((owner + TITLE_OWNER_PLAY_GAME_SLOT_OFFSET) as *mut i32) = DEFAULT_PLAY_GAME_MAP;
-    }
-    let set_state: unsafe extern "system" fn(usize, i32) =
-        unsafe { std::mem::transmute(module_base + TITLE_SET_STATE_RVA) };
-    unsafe { set_state(owner, TITLE_STEP_PLAY_GAME) };
-    SUBMIT_PLAY_GAME_CALLED.store(TITLE_NATIVE_JOB_CALLED_VALUE, Ordering::SeqCst);
-    let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
-    append_autoload_debug(format_args!(
-        "submit_play_game: SetState(5) owner=0x{owner:x} slot={slot} map=0x{DEFAULT_PLAY_GAME_MAP:x} csfeman=0x{csfeman:x} tick={tick}"
-    ));
     true
 }
 
