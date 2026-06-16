@@ -449,44 +449,50 @@ pub(crate) unsafe fn submit_play_game_once(
             ));
         }
         SUBMIT_PHASE_BUILT => {
-            // Phase C: once SetState(5) has built CSFeMan + the MoveMapStep (group 20,
-            // scheduler-ticked every frame), initiate the NATIVE b80 load machine for
-            // slot N: 0x14067b4e0(slot) begins the async slot-IO + sets GameMan+0xb80=1.
-            // The scheduler-ticked MoveMapStep then runs the b80 deserialize/apply +
-            // MsbLoad, PRIMING the world-stream (the piece the direct deserialize
-            // skipped) -> resident -> child+0xd8 drains. No manual pumping.
+            // Phase C: close the two world-streaming gaps (worldres-loadstate-creator-
+            // and-streaming-enable-gate-2026). Gap 1: the spawner built its block-load
+            // request from [InGameStep+0x100], which held the wrong coord, so slot 9's
+            // m10 load-states were never created -- set the real coord + re-submit via
+            // 0x140aed820 so the builder creates them. Gap 2: world-res streaming is
+            // disabled ([resmgr+0xb7c1]==0) -- call the virtual enabler 0x14066e2e4 to
+            // set it + build the session singletons + start the IO job machine.
             if csfeman == null {
                 return true;
             }
-            // NOTE: the b80 initiator 0x14067b4e0 set GameMan+0xb80=1, which is a
-            // DEAD LANE (it never advances 1->2->3); it parked the b80 machine and the
-            // MoveMapStep step-3 waited on it. We already loaded the save synchronously
-            // in phaseA (0x14067b290), so we DON'T initiate b80 -- let the MoveMapStep
-            // drive its own load. (b80-initiate-advances-mms-but-async-io-stalls.)
-            let _ = LOAD_INITIATOR_RVA;
-            // Build + register the world-stream worker 0x144842d40 (IngameInit's
-            // +0x48>=7 tail 0x140b0a980) via a synthetic step `this` (zeroed buffer
-            // with +0x48=7) -- the arm uses only globals/stack after the +0x48 check,
-            // so this constructs + scheduler-registers the worker so the engine pool
-            // services the queued slot reads -> MsbLoad -> world singletons -> resident.
-            let mut synth = [0u8; SYNTHETIC_STEP_THIS_SIZE];
-            unsafe {
-                *(synth.as_mut_ptr().add(SYNTHETIC_STEP_STATE_OFFSET) as *mut i32) =
-                    WORLD_WORKER_BUILD_STATE;
-            }
-            let build_worker: unsafe extern "system" fn(*mut u8) =
-                unsafe { std::mem::transmute(module_base + WORLD_WORKER_BUILD_RVA) };
-            unsafe { build_worker(synth.as_mut_ptr()) };
-            let worker = unsafe { *((module_base + WORLD_STREAM_WORKER_RVA) as *const usize) };
-            let b80 = if gm != null {
-                unsafe { *((gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *const i32) }
-            } else {
-                TITLE_STATE_OWNER_GONE
+            let Some(owner) = (unsafe { title_owner(module_base) }) else {
+                return true;
             };
+            let owner = owner as usize;
+            let ingame = unsafe { *((owner + TITLE_OWNER_JOB_OFFSET) as *const usize) };
+            if ingame == null {
+                return true;
+            }
+            let coord = read_c30();
+            unsafe {
+                *((ingame + INGAMESTEP_TARGET_COORD_100_OFFSET) as *mut i32) = coord;
+            }
+            let submit_req: unsafe extern "system" fn(usize) =
+                unsafe { std::mem::transmute(module_base + REQUEST_SUBMIT_RVA) };
+            unsafe { submit_req(ingame) };
+            let resmgr = unsafe { *((ingame + INGAMESTEP_RESMGR_250_OFFSET) as *const usize) };
+            let mut enabled = 0i32;
+            if resmgr != null {
+                let enable: unsafe extern "system" fn(usize) =
+                    unsafe { std::mem::transmute(module_base + STREAMING_ENABLE_RVA) };
+                unsafe { enable(resmgr) };
+                enabled = 1;
+            }
+            let _ = (
+                LOAD_INITIATOR_RVA,
+                WORLD_WORKER_BUILD_RVA,
+                SYNTHETIC_STEP_THIS_SIZE,
+                SYNTHETIC_STEP_STATE_OFFSET,
+                WORLD_WORKER_BUILD_STATE,
+                WORLD_STREAM_WORKER_RVA,
+            );
             SUBMIT_PLAY_GAME_PHASE.store(SUBMIT_PHASE_DONE, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "submit_play_game: phaseC b80-load(slot {slot}) b80={b80} worker=0x{worker:x} c30=0x{:x} csfeman=0x{csfeman:x} tick={tick}",
-                read_c30()
+                "submit_play_game: phaseC resubmit coord=0x{coord:x} enabled={enabled} resmgr=0x{resmgr:x} ingame=0x{ingame:x} tick={tick}"
             ));
         }
         _ => {

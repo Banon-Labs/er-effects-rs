@@ -258,6 +258,16 @@ pub(crate) const INGAMESTEP_PENDING_D8_PENDING: i32 = 1;
 /// world-stream natively -> resident -> child+0xd8 drains. This is the stream-priming
 /// step the direct 0x14067b290 deserialize skipped.
 pub(crate) const LOAD_INITIATOR_RVA: usize = 0x67b4e0;
+/// World-resource streaming lever (worldres-loadstate-creator-and-streaming-enable-
+/// gate-2026). Gap 1: the block-load request is built from the InGameStep target
+/// coord [InGameStep+0x100]; set it to slot 9's real map then re-submit via
+/// 0x140aed820 so the builder creates the m10 load-states. Gap 2: the resmgr
+/// ([InGameStep+0x250]) streaming-enable flag [resmgr+0xb7c1]==0; the virtual
+/// enabler 0x14066e2e4 sets it + builds the session singletons + starts the IO jobs.
+pub(crate) const INGAMESTEP_TARGET_COORD_100_OFFSET: usize = 0x100;
+pub(crate) const INGAMESTEP_RESMGR_250_OFFSET: usize = 0x250;
+pub(crate) const REQUEST_SUBMIT_RVA: usize = 0xaed820;
+pub(crate) const STREAMING_ENABLE_RVA: usize = 0x66e2e4;
 /// World-stream worker build+register: IngameInit's SetState tail 0x140b0a980, whose
 /// `[this+0x48] >= 7` arm constructs the world-stream worker 0x144842d40 (ctor
 /// 0x141eceb10) and registers it with the FD4 scheduler (key 0x59682f01 via
