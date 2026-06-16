@@ -276,41 +276,25 @@ const ARM_PROBE_TICK_INTERVAL: u64 = 30;
 /// the game's node update writes inputmgr(0x143d6b7b0)+0xdc+eventId*4 = value.
 /// Injecting that event makes the game's own node update accept and run the real
 /// front-end bootstrap. Verdict is [job+0x1e8] >= 2.
-const TITLE_OWNER_PRESS_JOB_130_OFFSET: usize = 0x130;
-const JOB_KEYCODE_180_OFFSET: usize = 0x180;
-const JOB_KEYCODE_UNMAPPED: u16 = 0xffff;
 /// The press-any-button job (owner+0x130) is an AND-combiner (vtable RVA
 /// 0x2aa2958) over child condition nodes at [job+0x18 + i*8], count [job+0x60].
 /// The real input node is the child with vtable RVA 0x2aa97e8; its keycode is at
 /// child+0x180. Accept = set the inputmgr keystate bitmap (inputmgr+0x90+keycode
 /// |= 3 pressed+triggered) so the leaf returns accepted and the combiner ANDs to
 /// done -> MenuJobWait advances 10->11 and the front-end bootstraps.
-const JOB_COMBINER_VTABLE_RVA: usize = 0x2aa2958;
-const LEAF_INPUT_VTABLE_RVA: usize = 0x2aa97e8;
-const JOB_CHILD_ARRAY_OFFSET: usize = 0x18;
-const JOB_CHILD_COUNT_OFFSET: usize = 0x60;
-const JOB_CHILD_PTR_STRIDE: usize = 8;
-const JOB_CHILD_WALK_CAP: u64 = 16;
-const JOB_CHILD_WALK_START: u64 = 0;
-const JOB_CHILD_INDEX_STEP: u64 = 1;
-const DFS_STACK_SIZE: usize = 64;
-const DFS_MAX_NODES: usize = 256;
-const MIN_VALID_HEAP_PTR: usize = 0x10000;
-const INPUTMGR_KEYSTATE_BITMAP_OFFSET: usize = 0x90;
-const KEYCODE_MAX_VALID: u16 = 0x47;
-const KEYCODE_SCAN_START: u16 = 0;
-const KEYCODE_SCAN_STEP: u16 = 1;
-const KEYSTATE_PRESSED_TRIGGERED: u8 = 3;
 /// Logical input-event array on the inputmgr (inputmgr+0xdc, i32 per event id,
 /// ids 0..=0x15e). The leaf input node detects a press via this layer (then
 /// mirrors into the keystate bitmap), so injecting here is what actually accepts.
-const INPUTMGR_EVENT_ARRAY_OFFSET: usize = 0xdc;
-const EVENT_ARRAY_MAX_ID: u32 = 0x15e;
-const EVENT_SCAN_START: u32 = 0;
-const EVENT_SCAN_STEP: u32 = 1;
-const EVENT_WORD_SIZE: usize = 4;
-const EVENT_PRESSED_VALUE: i32 = 1;
 const TITLE_ACCEPT_LATCH_RVA: usize = 0x3d856a0;
+/// The press-any-button accept predicate `cmp dword [rcx],1; seta al; ret`
+/// (returns 1 when the condition verdict >= 2). The pump 0x1407a9600 calls it and,
+/// on true, invokes the job's vtable[0] -- the game's own accept ACTION that
+/// bootstraps the front-end (CSFeMan). Hooking it to report accepted while armed
+/// at title state 10 makes the game run its real accept -> bootstrap, without
+/// touching the latch (which crashes). Scoped: armed only at state 10, disarmed
+/// once CSFeMan is non-null.
+const ACCEPT_PREDICATE_RVA: usize = 0x7a9200;
+const ACCEPT_PREDICATE_ACCEPTED: u8 = 1;
 /// Generous upper bound on the game image span, to sanity-check that a candidate
 /// object's vtable points into the module before dereferencing deeper.
 /// Sentinel logged when GameMan is null so the field could not be read.
@@ -458,6 +442,10 @@ static ORIGINAL_RTL_EXIT_USER_PROCESS: AtomicUsize = AtomicUsize::new(HOOK_ORIGI
 static ORIGINAL_NT_TERMINATE_PROCESS: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ORIGINAL_ASSERT_WRAPPER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ASSERT_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
+static ORIGINAL_ACCEPT_PREDICATE: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static TITLE_ACCEPT_ARMED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static ACCEPT_PREDICATE_HOOK_INSTALLED: std::sync::Once = std::sync::Once::new();
 static PROCESS_EXIT_LOGGED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 static AV_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
@@ -2399,131 +2387,81 @@ fn title_accept_inject_enabled() -> bool {
         .exists()
 }
 
-/// Lever 2: zero-input title-accept by injecting the confirm input event so the
-/// game's own press-any-button node update accepts and runs the real front-end
-/// bootstrap. Staged: basic probe (pure reads) -> +fill (resolve eventId via the
-/// job descriptor, read-only) -> +inject (write the event). Verify CSFeMan
-/// 0x143d6b880 / 0x1447ef360 go non-null after a successful accept.
+/// Force the game's OWN press-any-button accept: while armed, report the accept
+/// predicate true. The pump 0x1407a9600 then runs the job's vtable[0] accept
+/// ACTION, which bootstraps the front-end (CSFeMan) natively -- no latch poke
+/// (crashes) and no input-pipeline timing dependence.
+unsafe extern "system" fn accept_predicate_hook(out_ptr: usize) -> u8 {
+    if TITLE_ACCEPT_ARMED.load(Ordering::SeqCst) {
+        return ACCEPT_PREDICATE_ACCEPTED;
+    }
+    let original = ORIGINAL_ACCEPT_PREDICATE.load(Ordering::SeqCst);
+    if original != HOOK_ORIGINAL_UNSET {
+        let original: unsafe extern "system" fn(usize) -> u8 =
+            unsafe { std::mem::transmute(original) };
+        return unsafe { original(out_ptr) };
+    }
+    HOOK_FALSE_RETURN
+}
+
+fn install_accept_predicate_hook(module_base: usize) {
+    ACCEPT_PREDICATE_HOOK_INSTALLED.call_once(|| {
+        match unsafe { MH_Initialize() } {
+            MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+            status => {
+                append_autoload_debug(format_args!(
+                    "accept-predicate hook MH_Initialize failed: {status:?}"
+                ));
+                return;
+            }
+        }
+        unsafe {
+            create_and_apply_single_hook(
+                "AcceptPredicate",
+                (module_base + ACCEPT_PREDICATE_RVA) as *mut c_void,
+                accept_predicate_hook as *mut c_void,
+                &ORIGINAL_ACCEPT_PREDICATE,
+            )
+        };
+        append_autoload_debug(format_args!("accept-predicate hook installed"));
+    });
+}
+
+/// Boot-level title-accept (robust + scoped): install the accept-predicate hook,
+/// arm it only while the inner TitleStep is at committed state 10 (MenuJobWait),
+/// and watch CSFeMan for the native bootstrap; disarm once it is non-null so menus
+/// and other mods behave normally.
 unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
     if tick < ARM_PROBE_MIN_TICK {
         return;
     }
+    if do_write {
+        install_accept_predicate_hook(module_base);
+    }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    // title_owner caches + throttles the validated scan (rejects the false
-    // positive via the owner+0x10 state-table check).
     let owner = match unsafe { title_owner(module_base) } {
         Some(ptr) => ptr as usize,
         None => return,
     };
-    let log_now = tick % ARM_PROBE_TICK_INTERVAL == null as u64;
-    // Read the COMMITTED state (+0x48), what the dispatcher actually runs.
-    let state = unsafe { *((owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) };
-    let requested = unsafe { *((owner + TITLE_OWNER_STATE_OFFSET) as *const i32) };
     let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
-    if state != TITLE_STEP_MENU_JOB_WAIT {
-        if log_now {
-            append_autoload_debug(format_args!(
-                "title_accept: owner=0x{owner:x} state={state} requested={requested} csfeman=0x{csfeman:x} (awaiting MenuJobWait=10) tick={tick}"
-            ));
-        }
-        return;
-    }
-    let job = unsafe { *((owner + TITLE_OWNER_PRESS_JOB_130_OFFSET) as *const usize) };
-    let input_mgr = unsafe { *((module_base + TITLE_INPUT_MANAGER_RVA) as *const usize) };
-    if job == null || input_mgr == null {
-        if log_now {
-            append_autoload_debug(format_args!(
-                "title_accept: state=10 job=0x{job:x} inputmgr=0x{input_mgr:x} csfeman=0x{csfeman:x} tick={tick}"
-            ));
-        }
-        return;
-    }
-    // J = owner+0x130 is an AND-combiner; confirm its vtable, then walk its child
-    // condition nodes to the leaf INPUT node (vtable 0x2aa97e8) and read its keycode.
-    let combiner_vtable = unsafe { *(job as *const usize) };
-    if combiner_vtable != module_base + JOB_COMBINER_VTABLE_RVA {
-        if log_now {
-            let rva = combiner_vtable.wrapping_sub(module_base);
-            append_autoload_debug(format_args!(
-                "title_accept: state=10 job=0x{job:x} combiner_vtable_rva=0x{rva:x} (expected 0x{JOB_COMBINER_VTABLE_RVA:x}) csfeman=0x{csfeman:x} tick={tick}"
-            ));
-        }
-        return;
-    }
-    // The condition nodes form a tree (J's children are sub-combiners). Bounded
-    // DFS for the leaf INPUT node (vtable 0x2aa97e8) anywhere under J; each node's
-    // children are at [node+0x18 + i*8], count [node+0x60].
-    let leaf_vtable = module_base + LEAF_INPUT_VTABLE_RVA;
-    let mut stack: Vec<usize> = Vec::with_capacity(DFS_STACK_SIZE);
-    stack.push(job);
-    let mut visited = TITLE_OWNER_SCAN_START_ADDRESS;
-    let mut leaf = null;
-    while let Some(node) = stack.pop() {
-        if visited >= DFS_MAX_NODES {
-            break;
-        }
-        visited += TITLE_TRACE_SEQUENCE_INCREMENT;
-        if node < MIN_VALID_HEAP_PTR {
-            continue;
-        }
-        let node_vtable = unsafe { *(node as *const usize) };
-        if node_vtable == leaf_vtable {
-            leaf = node;
-            break;
-        }
-        let count =
-            unsafe { *((node + JOB_CHILD_COUNT_OFFSET) as *const u64) }.min(JOB_CHILD_WALK_CAP);
-        let mut index = JOB_CHILD_WALK_START;
-        while index < count && stack.len() < DFS_STACK_SIZE {
-            let child = unsafe {
-                *((node + JOB_CHILD_ARRAY_OFFSET + (index as usize) * JOB_CHILD_PTR_STRIDE)
-                    as *const usize)
-            };
-            if child >= MIN_VALID_HEAP_PTR {
-                stack.push(child);
-            }
-            index += JOB_CHILD_INDEX_STEP;
-        }
-    }
+    let state = unsafe { *((owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) };
     let latch = unsafe { *((module_base + TITLE_ACCEPT_LATCH_RVA) as *const u8) };
-    if leaf == null {
-        // Couldn't pinpoint the leaf in the condition tree (sub-combiner layouts
-        // differ). "Press any button" accepts on ANY bound key, so shotgun the
-        // keystate bitmap: mark keycodes 0..0x47 pressed+triggered. Only runs at
-        // state 10, so it stops the instant the title accepts and advances.
-        if do_write {
-            let mut kc = KEYCODE_SCAN_START;
-            while kc < KEYCODE_MAX_VALID {
-                let slot = input_mgr + INPUTMGR_KEYSTATE_BITMAP_OFFSET + kc as usize;
-                unsafe { *(slot as *mut u8) |= KEYSTATE_PRESSED_TRIGGERED };
-                kc += KEYCODE_SCAN_STEP;
-            }
-            // The leaf detects a press at the event layer, then mirrors to the
-            // keystate bitmap -- so also set the logical event array.
-            let mut id = EVENT_SCAN_START;
-            while id <= EVENT_ARRAY_MAX_ID {
-                let slot =
-                    input_mgr + INPUTMGR_EVENT_ARRAY_OFFSET + (id as usize) * EVENT_WORD_SIZE;
-                unsafe { *(slot as *mut i32) = EVENT_PRESSED_VALUE };
-                id += EVENT_SCAN_STEP;
-            }
-        }
+    let log_now = tick % ARM_PROBE_TICK_INTERVAL == null as u64;
+    if csfeman != null {
+        TITLE_ACCEPT_ARMED.store(false, Ordering::SeqCst);
         if log_now {
             append_autoload_debug(format_args!(
-                "title_accept: leaf not pinpointed (visited={visited}); keystate shotgun write={do_write} latch={latch} csfeman=0x{csfeman:x} tick={tick}"
+                "title_accept: BOOTSTRAPPED csfeman=0x{csfeman:x} state={state} latch={latch} tick={tick}"
             ));
         }
         return;
     }
-    let keycode = unsafe { *((leaf + JOB_KEYCODE_180_OFFSET) as *const u16) };
-    if log_now || do_write {
+    let arm = do_write && state == TITLE_STEP_MENU_JOB_WAIT;
+    TITLE_ACCEPT_ARMED.store(arm, Ordering::SeqCst);
+    if log_now {
         append_autoload_debug(format_args!(
-            "title_accept: state=10 leaf=0x{leaf:x} keycode=0x{keycode:x} latch={latch} csfeman=0x{csfeman:x} write={do_write} tick={tick}"
+            "title_accept: state={state} armed={arm} latch={latch} csfeman=0x{csfeman:x} tick={tick}"
         ));
-    }
-    if do_write && keycode != JOB_KEYCODE_UNMAPPED && keycode < KEYCODE_MAX_VALID {
-        let slot = input_mgr + INPUTMGR_KEYSTATE_BITMAP_OFFSET + keycode as usize;
-        unsafe { *(slot as *mut u8) |= KEYSTATE_PRESSED_TRIGGERED };
     }
 }
 
