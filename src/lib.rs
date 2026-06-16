@@ -363,6 +363,9 @@ pub(crate) const CSFEMAN_SINGLETON_RVA: usize = 0x3d6b880;
 /// the move-map/load path). RVA = 0x1447ef360 - 0x140000000 = 0x47ef360.
 pub(crate) const SESSION_SINGLETON_RVA: usize = 0x47ef360;
 pub(crate) const TITLE_INPUT_MANAGER_RVA: usize = 0x3d6b7b0;
+/// Pure-observe snapshot interval (game-task ticks). Logs the title->menu->load state
+/// every N ticks with NO forcing, to capture what the REAL button press does.
+pub(crate) const OBSERVE_INTERVAL: u64 = 10;
 pub(crate) const GAME_MAN_ARM_FLAG_B72_OFFSET: usize = 0xb72;
 pub(crate) const GAME_MAN_FLAG_B73_PROBE_OFFSET: usize = 0xb73;
 pub(crate) const GAME_MAN_FLAG_B75_PROBE_OFFSET: usize = 0xb75;
@@ -1010,6 +1013,15 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     // per-frame file I/O stalls the title" (lite survives) from
                     // "any per-frame work trips a budget" (lite still exits).
                     if lite_mode() {
+                        return;
+                    }
+                    // Pure observe: log the title->menu->load transition each interval
+                    // with NO forcing, to capture what the REAL button press does.
+                    if observe_enabled() {
+                        if let Ok(base) = game_module_base() {
+                            unsafe { title_observe_tick(base, state.game_task_ticks) };
+                        }
+                        write_telemetry_throttled(&mut state, false);
                         return;
                     }
                     // Read-only: log the native autoload-arm preconditions

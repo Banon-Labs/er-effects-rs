@@ -362,6 +362,63 @@ pub(crate) unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u
     ));
 }
 
+pub(crate) fn observe_enabled() -> bool {
+    matches!(std::env::var("ER_EFFECTS_OBSERVE").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-observe.txt")
+            .exists()
+}
+
+/// Pure read-only observation (NO forcing, NO SetState) of the title -> menu -> load
+/// transition. Logs a full snapshot every OBSERVE_INTERVAL ticks so we can capture
+/// exactly what the REAL button press does: the title state sequence, when CSFeMan /
+/// session build, when the save mounts (GameMan+0xc30 changes from the default), the
+/// InGameStep/MoveMapStep appearance. Ground-truths the menu-build the static RE
+/// kept mis-identifying.
+pub(crate) unsafe fn title_observe_tick(module_base: usize, tick: u64) {
+    if tick % OBSERVE_INTERVAL != TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+        return;
+    }
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let owner = unsafe { title_owner(module_base) }.map(|p| p as usize);
+    let state = match owner {
+        Some(o) => unsafe { *((o + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) },
+        None => TITLE_STATE_OWNER_GONE,
+    };
+    let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
+    let session = unsafe { *((module_base + SESSION_SINGLETON_RVA) as *const usize) };
+    let gm = unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+    let read_gm = |off: usize| {
+        if gm != null {
+            unsafe { *((gm + off) as *const i32) }
+        } else {
+            TITLE_STATE_OWNER_GONE
+        }
+    };
+    let c30 = read_gm(GAME_MAN_SAVED_MAP_C30_OFFSET);
+    let ac0 = read_gm(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
+    let b80 = read_gm(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+    let ingame = match owner {
+        Some(o) => unsafe { *((o + TITLE_OWNER_JOB_OFFSET) as *const usize) },
+        None => null,
+    };
+    let mms = if ingame != null {
+        unsafe { *((ingame + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) as *const usize) }
+    } else {
+        null
+    };
+    let mms_state = if mms != null {
+        unsafe { *((mms + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) }
+    } else {
+        TITLE_STATE_OWNER_GONE
+    };
+    let slotmgr = unsafe { *((module_base + SLOT_MANAGER_RVA) as *const usize) };
+    append_autoload_debug(format_args!(
+        "observe: state={state} csfeman=0x{csfeman:x} session=0x{session:x} gm=0x{gm:x} c30=0x{c30:x} ac0={ac0} b80={b80} ingame=0x{ingame:x} mms_state={mms_state} slotmgr=0x{slotmgr:x} tick={tick}"
+    ));
+}
+
 pub(crate) fn submit_play_game_enabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_SUBMIT_PLAY_GAME").as_deref(),
