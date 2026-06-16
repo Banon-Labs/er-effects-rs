@@ -282,6 +282,8 @@ const SLOT_MANAGER_RVA: usize = 0x3d5df38;
 const SLOT_MANAGER_DATA_OFFSET: usize = 0x8;
 const SLOT_MANAGER_CONTAINER_OFFSET: usize = 0x78;
 const CSFEMAN_SINGLETON_RVA: usize = 0x3d6b880;
+/// Session manager singleton (NULL at the title; built by the move-map/load path).
+const SESSION_SINGLETON_RVA: usize = 0x447ef360;
 const TITLE_INPUT_MANAGER_RVA: usize = 0x3d6b7b0;
 const GAME_MAN_ARM_FLAG_B72_OFFSET: usize = 0xb72;
 const GAME_MAN_FLAG_B73_PROBE_OFFSET: usize = 0xb73;
@@ -2590,6 +2592,36 @@ unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
                 movie_vtable == module_base + MOVIE_VTABLE_RVA,
                 hwnd != null
             ));
+        }
+    }
+    // Load-subsystem probe (read-only): at the clean press-any-button, log the
+    // parked InGameStep (owner+0x2e8) state + GameMan selection/slot fields +
+    // session singleton, to nail the move-map/load request trigger.
+    if log_now && state == TITLE_STEP_MENU_JOB_WAIT {
+        if let Some(o) = owner {
+            let feman = unsafe { *((o + TITLE_OWNER_JOB_OFFSET) as *const usize) };
+            let feman_state = if feman != null {
+                unsafe { *((feman + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) }
+            } else {
+                TITLE_STATE_OWNER_GONE
+            };
+            let gm =
+                unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+            let session = unsafe { *((module_base + SESSION_SINGLETON_RVA) as *const usize) };
+            if gm != null {
+                let cmd = unsafe { *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *const i32) };
+                let force = unsafe { *((gm + GAME_MAN_ARM_FLAG_B72_OFFSET) as *const u8) };
+                let slot = unsafe { *((gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
+                let loading =
+                    unsafe { *((gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *const u8) };
+                append_autoload_debug(format_args!(
+                    "load_probe: feman=0x{feman:x} feman_state={feman_state} gm=0x{gm:x} cmd={cmd} force={force} slot={slot} loading={loading} session=0x{session:x} tick={tick}"
+                ));
+            } else {
+                append_autoload_debug(format_args!(
+                    "load_probe: feman=0x{feman:x} feman_state={feman_state} gm=NULL session=0x{session:x} tick={tick}"
+                ));
+            }
         }
     }
     // Unconditional observability: log CSFeMan/latch/state every interval, even
