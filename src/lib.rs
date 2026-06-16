@@ -383,6 +383,20 @@ pub(crate) const TITLE_STEP_IDX10_SLOT_RVA: usize = 0x3d71620;
 pub(crate) const CONTINUE_CONFIRM_RVA: usize = 0xb0e180;
 pub(crate) const OWN_STEPPER_LOG_INTERVAL: u64 = 60;
 pub(crate) const OWN_STEPPER_CALL_INC: usize = 1;
+/// Driver phases for the in-context idx10 handler.
+pub(crate) const OWN_STEPPER_PHASE_MENU: usize = 0;
+pub(crate) const OWN_STEPPER_PHASE_CONTINUE: usize = 1;
+pub(crate) const OWN_STEPPER_PHASE_DONE: usize = 2;
+/// How many in-context idx10 calls to wait before driving (let the boot settle to the
+/// stable press-any-button state 10 first).
+pub(crate) const OWN_STEPPER_SETTLE_CALLS: u64 = 30;
+/// Shim callback object for the native Continue confirm 0x140b0e180 (reads
+/// owner=[shim+8]). Persistent (not stack) so the call cannot read freed memory.
+pub(crate) const OWN_STEPPER_SHIM_LEN: usize = 8;
+pub(crate) const OWN_STEPPER_SHIM_OWNER_IDX: usize = 1;
+pub(crate) static OWN_STEPPER_PHASE: AtomicUsize = AtomicUsize::new(OWN_STEPPER_PHASE_MENU);
+pub(crate) static mut OWN_STEPPER_SHIM: [usize; OWN_STEPPER_SHIM_LEN] =
+    [TITLE_OWNER_SCAN_START_ADDRESS; OWN_STEPPER_SHIM_LEN];
 pub(crate) const OWN_STEPPER_PATCHED_NO: usize = 0;
 pub(crate) const OWN_STEPPER_PATCHED_YES: usize = 1;
 /// Original idx10 func ptr (STEP_MenuJobWait), saved so our handler can pass through.

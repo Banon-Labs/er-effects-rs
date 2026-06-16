@@ -378,22 +378,64 @@ pub(crate) fn own_stepper_enabled() -> bool {
             .exists()
 }
 
-/// OWN-THE-STEPPER step 1 (verify the control point): a pass-through handler that the
-/// FD4 scheduler runs IN-CONTEXT at idx10 (STEP_MenuJobWait). Logs periodically then
-/// calls the original handler so the title behaves normally. Proves our code executes
-/// as a real step (rcx=owner, rdx=FD4Time) with no crash, before adding load logic.
+/// OWN-THE-STEPPER step 2 (the load driver): runs IN-CONTEXT at idx10 (STEP_MenuJobWait,
+/// rcx=owner, rdx=FD4Time) as a real FD4 step. After letting the boot settle to the
+/// stable press-any-button state, it drives the game's OWN load: SetState(3=BeginTitle)
+/// builds the Continue/Load menu + sets GameMan+0xc30 to the most-recent saved map, then
+/// the native Continue confirm 0x140b0e180 (via a {[+8]=owner} shim) does slot-select +
+/// child-request + SetState(5=PlayGame). The native pump then loads the world, SKIPPING
+/// the entire variable UI -- no input, no menu traversal.
 pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: usize) {
     let n = OWN_STEPPER_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
-    if n % OWN_STEPPER_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+    let base = OWN_STEPPER_BASE.load(Ordering::SeqCst);
+    let phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
+    let gm = unsafe { *((base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+    let c30 = if gm != TITLE_OWNER_SCAN_START_ADDRESS {
+        unsafe { *((gm + GAME_MAN_SAVED_MAP_C30_OFFSET) as *const i32) }
+    } else {
+        TITLE_STATE_OWNER_GONE
+    };
+    let pass_through = |force_log: bool| {
+        if force_log || n % OWN_STEPPER_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+            append_autoload_debug(format_args!(
+                "own_stepper: pass-through #{n} phase={phase} owner=0x{owner:x} c30=0x{c30:x} framectx=0x{framectx:x}"
+            ));
+        }
+        let orig = OWN_STEPPER_ORIG_IDX10.load(Ordering::SeqCst);
+        if orig != TITLE_OWNER_SCAN_START_ADDRESS {
+            let f: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(orig) };
+            unsafe { f(owner, framectx) };
+        }
+    };
+    if phase == OWN_STEPPER_PHASE_MENU {
+        if n < OWN_STEPPER_SETTLE_CALLS {
+            pass_through(false);
+            return;
+        }
+        let set_state: unsafe extern "system" fn(usize, i32) =
+            unsafe { std::mem::transmute(base + TITLE_SET_STATE_RVA) };
+        unsafe { set_state(owner, TITLE_STEP_BEGIN_TITLE) };
+        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_CONTINUE, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "own_stepper: idx10 in-context call #{n} owner=0x{owner:x} framectx=0x{framectx:x}"
+            "own_stepper: phase MENU (#{n}) SetState(3 BeginTitle) owner=0x{owner:x} c30=0x{c30:x}"
         ));
+        return;
     }
-    let orig = OWN_STEPPER_ORIG_IDX10.load(Ordering::SeqCst);
-    if orig != TITLE_OWNER_SCAN_START_ADDRESS {
-        let f: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(orig) };
-        unsafe { f(owner, framectx) };
+    if phase == OWN_STEPPER_PHASE_CONTINUE {
+        let shim_ptr = &raw mut OWN_STEPPER_SHIM as usize;
+        unsafe {
+            (*(&raw mut OWN_STEPPER_SHIM))[OWN_STEPPER_SHIM_OWNER_IDX] = owner;
+        }
+        let confirm: unsafe extern "system" fn(usize) =
+            unsafe { std::mem::transmute(base + CONTINUE_CONFIRM_RVA) };
+        unsafe { confirm(shim_ptr) };
+        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "own_stepper: phase CONTINUE (#{n}) confirm shim=0x{shim_ptr:x} owner=0x{owner:x} c30=0x{c30:x}"
+        ));
+        return;
     }
+    pass_through(false);
 }
 
 /// Patch the writable .data idx10 step-fn slot to our handler once the FE-host is at
@@ -418,11 +460,7 @@ pub(crate) unsafe fn own_stepper_patch_once(module_base: usize) {
     unsafe { *(slot as *mut usize) = own_stepper_idx10 as usize };
     OWN_STEPPER_PATCHED.store(OWN_STEPPER_PATCHED_YES, Ordering::SeqCst);
     let handler = own_stepper_idx10 as usize;
-    let _ = (
-        CONTINUE_CONFIRM_RVA,
-        TITLE_STEP_BEGIN_TITLE,
-        TITLE_STEP_PLAY_GAME,
-    );
+    let _ = TITLE_STEP_PLAY_GAME;
     append_autoload_debug(format_args!(
         "own_stepper: PATCHED idx10 slot=0x{slot:x} orig=0x{orig:x} -> handler=0x{handler:x} owner=0x{owner:x}"
     ));
