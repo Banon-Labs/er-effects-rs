@@ -443,6 +443,7 @@ static ORIGINAL_NT_TERMINATE_PROCESS: AtomicUsize = AtomicUsize::new(HOOK_ORIGIN
 static ORIGINAL_ASSERT_WRAPPER: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static ASSERT_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
 static ORIGINAL_ACCEPT_PREDICATE: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static ACCEPT_PREDICATE_FIRES: AtomicUsize = AtomicUsize::new(0);
 static TITLE_ACCEPT_ARMED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 static ACCEPT_PREDICATE_HOOK_INSTALLED: std::sync::Once = std::sync::Once::new();
@@ -2392,6 +2393,7 @@ fn title_accept_inject_enabled() -> bool {
 /// ACTION, which bootstraps the front-end (CSFeMan) natively -- no latch poke
 /// (crashes) and no input-pipeline timing dependence.
 unsafe extern "system" fn accept_predicate_hook(out_ptr: usize) -> u8 {
+    ACCEPT_PREDICATE_FIRES.fetch_add(AV_LOG_LINE_INCREMENT, Ordering::SeqCst);
     if TITLE_ACCEPT_ARMED.load(Ordering::SeqCst) {
         return ACCEPT_PREDICATE_ACCEPTED;
     }
@@ -2459,8 +2461,9 @@ unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
     let arm = do_write && state == TITLE_STEP_MENU_JOB_WAIT;
     TITLE_ACCEPT_ARMED.store(arm, Ordering::SeqCst);
     if log_now {
+        let fires = ACCEPT_PREDICATE_FIRES.load(Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "title_accept: state={state} armed={arm} latch={latch} csfeman=0x{csfeman:x} tick={tick}"
+            "title_accept: state={state} armed={arm} predicate_fires={fires} latch={latch} csfeman=0x{csfeman:x} tick={tick}"
         ));
     }
 }
