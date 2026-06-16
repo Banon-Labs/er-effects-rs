@@ -412,11 +412,32 @@ pub(crate) unsafe fn title_observe_tick(module_base: usize, tick: u64) {
         TITLE_STATE_OWNER_GONE
     };
     let slotmgr = unsafe { *((module_base + SLOT_MANAGER_RVA) as *const usize) };
+    // World-resource streaming enable-state (the WorldResWait resolution gate):
+    // resmgr = deref(deref(MoveMapStep+0xf0)+0x10); b7c1 = its streaming-enable flag;
+    // driver = the streaming/session driver singleton 0x143d7c088. Capture what the
+    // REAL load has enabled during mms_state=3 that our forced load lacks.
+    let wrm = if mms != null {
+        unsafe { *((mms + MOVEMAPSTEP_WORLDRES_F0_OFFSET) as *const usize) }
+    } else {
+        null
+    };
+    let resmgr = if wrm != null {
+        unsafe { *((wrm + WORLDRES_RESMGR_10_OFFSET) as *const usize) }
+    } else {
+        null
+    };
+    let b7c1 = if resmgr != null {
+        unsafe { *((resmgr + RESMGR_STREAM_ENABLE_B7C1_OFFSET) as *const u8) as i32 }
+    } else {
+        TITLE_STATE_OWNER_GONE
+    };
+    let driver = unsafe { *((module_base + STREAMING_DRIVER_SINGLETON_RVA) as *const usize) };
     // Change-detection: only log when the signature changes (full granularity, no
     // per-frame file I/O). Captures every transition incl. the mms_state 3 -> resolve.
     let csf_nz = (csfeman != null) as i64;
     let sess_nz = (session != null) as i64;
     let ingame_nz = (ingame != null) as i64;
+    let driver_nz = (driver != null) as i64;
     let mut sig = state as i64;
     sig = sig
         .wrapping_mul(OBSERVE_SIG_MULT)
@@ -427,11 +448,13 @@ pub(crate) unsafe fn title_observe_tick(module_base: usize, tick: u64) {
     sig = sig.wrapping_mul(OBSERVE_SIG_MULT).wrapping_add(c30 as i64);
     sig = sig.wrapping_mul(OBSERVE_SIG_MULT).wrapping_add(b80 as i64);
     sig = sig.wrapping_mul(OBSERVE_SIG_MULT).wrapping_add(ac0 as i64);
+    sig = sig.wrapping_mul(OBSERVE_SIG_MULT).wrapping_add(b7c1 as i64);
+    sig = sig.wrapping_mul(OBSERVE_SIG_MULT).wrapping_add(driver_nz);
     if OBSERVE_LAST_SIG.swap(sig, Ordering::SeqCst) == sig {
         return;
     }
     append_autoload_debug(format_args!(
-        "observe: state={state} csfeman=0x{csfeman:x} session=0x{session:x} gm=0x{gm:x} c30=0x{c30:x} ac0={ac0} b80={b80} ingame=0x{ingame:x} mms=0x{mms:x} mms_state={mms_state} slotmgr=0x{slotmgr:x} tick={tick}"
+        "observe: state={state} csfeman=0x{csfeman:x} session=0x{session:x} c30=0x{c30:x} ac0={ac0} b80={b80} mms=0x{mms:x} mms_state={mms_state} resmgr=0x{resmgr:x} b7c1={b7c1} driver=0x{driver:x} slotmgr=0x{slotmgr:x} tick={tick}"
     ));
 }
 
