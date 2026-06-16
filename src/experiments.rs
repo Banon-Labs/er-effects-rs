@@ -2220,6 +2220,13 @@ pub(crate) fn install_continue_trace_hooks() {
             b80_deserialize_hook as *mut c_void,
             &B80_DESERIALIZE_ORIG,
         );
+        create_continue_trace_hook(
+            &mut hooks,
+            "c30_writer_67bd70",
+            C30_WRITER_RVA as u32,
+            c30_writer_hook as *mut c_void,
+            &C30_WRITER_ORIG,
+        );
     }
 
     match unsafe { MH_ApplyQueued() } {
@@ -2410,6 +2417,35 @@ pub(crate) unsafe extern "system" fn b80_deserialize_hook(slot: i32) -> i32 {
     let ret = unsafe { call_b80_initiator_original(&B80_DESERIALIZE_ORIG, slot) };
     append_continue_trace(format_args!(
         "b80_deserialize_67b290 LEAVE slot={slot} ret={ret} {}",
+        b80_mount_trace_summary()
+    ));
+    ret
+}
+
+/// The SOLE GameMan+0xc30 writer 0x14067bd70(rcx=GameMan, rdx=buf, r8d=size). Logs the
+/// CALLER STACK (which deserializer drove the c30 write -- the Wine-safe replacement
+/// for the hardware watchpoint) + the mount state, then chains the original. If this
+/// never fires during a Seamless .co2 load, ERSC writes c30 from its own module.
+pub(crate) unsafe extern "system" fn c30_writer_hook(
+    game_man: usize,
+    buffer: usize,
+    size: u32,
+) -> usize {
+    append_continue_trace(format_args!(
+        "c30_writer_67bd70 ENTER game_man=0x{game_man:x} buf=0x{buffer:x} size=0x{size:x} {} {}",
+        b80_mount_trace_summary(),
+        trace_callers_summary()
+    ));
+    let original = C30_WRITER_ORIG.load(Ordering::SeqCst);
+    let ret = if original == HOOK_ORIGINAL_UNSET {
+        B80_HOOK_DEFAULT_RET as usize
+    } else {
+        let original: unsafe extern "system" fn(usize, usize, u32) -> usize =
+            unsafe { std::mem::transmute(original) };
+        unsafe { original(game_man, buffer, size) }
+    };
+    append_continue_trace(format_args!(
+        "c30_writer_67bd70 LEAVE ret=0x{ret:x} {}",
         b80_mount_trace_summary()
     ));
     ret

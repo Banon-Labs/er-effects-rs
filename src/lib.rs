@@ -321,6 +321,11 @@ pub(crate) const B80_FULL_LOAD_INITIATOR_RVA: usize = 0x67b1a0;
 /// preview 0x67b4e0 (b80=1) and the 0x67b1a0 variant. Hooked for the b80-mount capture
 /// to pin which initiator the real .co2 load fires and in what order.
 pub(crate) const B80_LOAD_SAVE_DATA_INITIATOR_RVA: usize = 0x67b200;
+/// The save-header parser 0x14067bd70(rcx=GameMan, rdx=buf, r8d=size) -- the SOLE
+/// writer of GameMan+0xc30 (3 callers). Hooked with a caller stack so a real load
+/// reveals WHICH deserializer set the saved map (vanilla 0x67b290/0x67e150 chain or,
+/// if it never fires under Seamless, ERSC writing c30 from its own module).
+pub(crate) const C30_WRITER_RVA: usize = 0x67bd70;
 /// World-resource streaming lever (worldres-loadstate-creator-and-streaming-enable-
 /// gate-2026). Gap 1: the block-load request is built from the InGameStep target
 /// coord [InGameStep+0x100]; set it to slot 9's real map then re-submit via
@@ -740,6 +745,7 @@ pub(crate) static B80_LOAD_SAVE_DATA_INITIATOR_ORIG: AtomicUsize =
 pub(crate) static B80_FULL_LOAD_INITIATOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static B80_POLL_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static B80_DESERIALIZE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static C30_WRITER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static GET_ASYNC_KEY_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static GET_KEY_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static DIRECT_INPUT8_CREATE_ORIG: AtomicUsize = AtomicUsize::new(0);
