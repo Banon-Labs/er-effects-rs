@@ -461,6 +461,20 @@ pub(crate) unsafe fn submit_play_game_once(
             let initiate: unsafe extern "system" fn(i32) =
                 unsafe { std::mem::transmute(module_base + LOAD_INITIATOR_RVA) };
             unsafe { initiate(slot) };
+            // Build + register the world-stream worker 0x144842d40 (IngameInit's
+            // +0x48>=7 tail 0x140b0a980) via a synthetic step `this` (zeroed buffer
+            // with +0x48=7) -- the arm uses only globals/stack after the +0x48 check,
+            // so this constructs + scheduler-registers the worker so the engine pool
+            // services the queued slot reads -> MsbLoad -> world singletons -> resident.
+            let mut synth = [0u8; SYNTHETIC_STEP_THIS_SIZE];
+            unsafe {
+                *(synth.as_mut_ptr().add(SYNTHETIC_STEP_STATE_OFFSET) as *mut i32) =
+                    WORLD_WORKER_BUILD_STATE;
+            }
+            let build_worker: unsafe extern "system" fn(*mut u8) =
+                unsafe { std::mem::transmute(module_base + WORLD_WORKER_BUILD_RVA) };
+            unsafe { build_worker(synth.as_mut_ptr()) };
+            let worker = unsafe { *((module_base + WORLD_STREAM_WORKER_RVA) as *const usize) };
             let b80 = if gm != null {
                 unsafe { *((gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *const i32) }
             } else {
@@ -468,7 +482,7 @@ pub(crate) unsafe fn submit_play_game_once(
             };
             SUBMIT_PLAY_GAME_PHASE.store(SUBMIT_PHASE_DONE, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "submit_play_game: phaseC initiate b80-load(slot {slot}) b80={b80} c30=0x{:x} csfeman=0x{csfeman:x} tick={tick}",
+                "submit_play_game: phaseC b80-load(slot {slot}) b80={b80} worker=0x{worker:x} c30=0x{:x} csfeman=0x{csfeman:x} tick={tick}",
                 read_c30()
             ));
         }

@@ -258,6 +258,20 @@ pub(crate) const INGAMESTEP_PENDING_D8_PENDING: i32 = 1;
 /// world-stream natively -> resident -> child+0xd8 drains. This is the stream-priming
 /// step the direct 0x14067b290 deserialize skipped.
 pub(crate) const LOAD_INITIATOR_RVA: usize = 0x67b4e0;
+/// World-stream worker build+register: IngameInit's SetState tail 0x140b0a980, whose
+/// `[this+0x48] >= 7` arm constructs the world-stream worker 0x144842d40 (ctor
+/// 0x141eceb10) and registers it with the FD4 scheduler (key 0x59682f01 via
+/// 0x142656b00) -- the piece our forced path skips (b80-initiate-advances-mms-but-
+/// async-io-stalls). The arm uses ONLY globals/stack after the +0x48 check, so calling
+/// it with a synthetic `this` (a zeroed buffer with +0x48=7) replicates the build
+/// without needing the real 0x143d71340 step object.
+pub(crate) const WORLD_WORKER_BUILD_RVA: usize = 0xb0a980;
+pub(crate) const SYNTHETIC_STEP_THIS_SIZE: usize = 0x60;
+pub(crate) const SYNTHETIC_STEP_STATE_OFFSET: usize = 0x48;
+pub(crate) const WORLD_WORKER_BUILD_STATE: i32 = 7;
+/// The world-stream worker singleton 0x144842d40 (built by the arm above). Reading it
+/// non-null verifies the build+register fired.
+pub(crate) const WORLD_STREAM_WORKER_RVA: usize = 0x4842d40;
 /// Global holding the GameMan pointer (`mov rax,[rip]` in set_save_slot 0x67a810
 /// / save_slot_get 0x678ca0). Read-only diagnostics of the PlayGame load-pair
 /// preconditions read GameMan through this.
