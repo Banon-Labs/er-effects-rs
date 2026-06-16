@@ -272,6 +272,11 @@ pub(crate) const WORLD_WORKER_BUILD_STATE: i32 = 7;
 /// The world-stream worker singleton 0x144842d40 (built by the arm above). Reading it
 /// non-null verifies the build+register fired.
 pub(crate) const WORLD_STREAM_WORKER_RVA: usize = 0x4842d40;
+/// World/scene singletons built by MoveMapStep::STEP_MsbLoad 0x140af8f00. Non-null
+/// == MsbLoad ran (the IsResident-relevant world exists). Diagnostic for whether the
+/// worker is servicing the stream vs the b80 lane stalling first.
+pub(crate) const WORLD_SINGLETON_A_RVA: usize = 0x3d691d8;
+pub(crate) const WORLD_SINGLETON_B_RVA: usize = 0x3d69ba8;
 /// Global holding the GameMan pointer (`mov rax,[rip]` in set_save_slot 0x67a810
 /// / save_slot_get 0x678ca0). Read-only diagnostics of the PlayGame load-pair
 /// preconditions read GameMan through this.

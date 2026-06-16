@@ -522,8 +522,10 @@ pub(crate) unsafe fn submit_play_game_once(
             } else {
                 TITLE_STATE_OWNER_GONE
             };
+            let world_a = unsafe { *((module_base + WORLD_SINGLETON_A_RVA) as *const usize) };
+            let world_b = unsafe { *((module_base + WORLD_SINGLETON_B_RVA) as *const usize) };
             append_autoload_debug(format_args!(
-                "submit_play_game: phaseD state={state} child_d8={d8} b80={b80} mms_state={mms_state} c30=0x{:x} csfeman=0x{csfeman:x} tick={tick}",
+                "submit_play_game: phaseD state={state} child_d8={d8} b80={b80} mms_state={mms_state} worldA=0x{world_a:x} worldB=0x{world_b:x} c30=0x{:x} csfeman=0x{csfeman:x} tick={tick}",
                 read_c30()
             ));
         }
