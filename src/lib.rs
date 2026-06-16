@@ -241,8 +241,9 @@ pub(crate) const SLOT_MANAGER_RVA: usize = 0x3d5df38;
 pub(crate) const SLOT_MANAGER_DATA_OFFSET: usize = 0x8;
 pub(crate) const SLOT_MANAGER_CONTAINER_OFFSET: usize = 0x78;
 pub(crate) const CSFEMAN_SINGLETON_RVA: usize = 0x3d6b880;
-/// Session manager singleton (NULL at the title; built by the move-map/load path).
-pub(crate) const SESSION_SINGLETON_RVA: usize = 0x447ef360;
+/// Session manager singleton (absolute 0x1447ef360; NULL at the title, built by
+/// the move-map/load path). RVA = 0x1447ef360 - 0x140000000 = 0x47ef360.
+pub(crate) const SESSION_SINGLETON_RVA: usize = 0x47ef360;
 pub(crate) const TITLE_INPUT_MANAGER_RVA: usize = 0x3d6b7b0;
 pub(crate) const GAME_MAN_ARM_FLAG_B72_OFFSET: usize = 0xb72;
 pub(crate) const GAME_MAN_FLAG_B73_PROBE_OFFSET: usize = 0xb73;
