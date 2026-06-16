@@ -402,11 +402,13 @@ pub(crate) unsafe fn submit_play_game_once(
         unsafe { std::mem::transmute(module_base + TITLE_SET_STATE_RVA) };
     match SUBMIT_PLAY_GAME_PHASE.load(Ordering::SeqCst) {
         SUBMIT_PHASE_INIT => {
-            // Phase A: deserialize slot N FIRST. It is CSFeMan-less, so it works at
-            // the title (state 10) and lands slot N's REAL saved map in GameMan+0xc30
-            // (+ applies the character) BEFORE any MoveMap occupies the child with a
-            // placeholder map. (The m60-first order occupied the child + the re-target
-            // at state 6 was ignored -> child+0xd8 stuck on m60.)
+            // Phase A (NATIVE menu build, zero input): drive the game's OWN
+            // STEP_BeginTitle via SetState(owner, 3). On a real boot the press-any-
+            // button just fires this; BeginTitle builds the REAL Continue/Load main
+            // menu (not the intro) + wires the menu-job callback at owner+0xe0. No
+            // input -- the press only DETECTS; the action is a plain SetState. (Our
+            // prior manual deserialize+jump-to-PlayGame skipped this, which is why the
+            // save never mounted.) Observe whether the main menu appears.
             let Some(owner) = (unsafe { title_owner(module_base) }) else {
                 return false;
             };
@@ -416,16 +418,15 @@ pub(crate) unsafe fn submit_play_game_once(
             {
                 return false;
             }
-            let set_save_slot: unsafe extern "system" fn(i32) =
-                unsafe { std::mem::transmute(module_base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
-            unsafe { set_save_slot(slot) };
-            let deserialize: unsafe extern "system" fn(i32) =
-                unsafe { std::mem::transmute(module_base + DESERIALIZE_SLOT_RVA) };
-            unsafe { deserialize(slot) };
-            SUBMIT_PLAY_GAME_PHASE.store(SUBMIT_PHASE_DESER, Ordering::SeqCst);
+            unsafe { set_state(owner, TITLE_STEP_BEGIN_TITLE) };
+            SUBMIT_PLAY_GAME_PHASE.store(SUBMIT_PHASE_DONE, Ordering::SeqCst);
+            let _ = (
+                FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
+                DESERIALIZE_SLOT_RVA,
+                slot,
+            );
             append_autoload_debug(format_args!(
-                "submit_play_game: phaseA deserialize(slot {slot}) c30=0x{:x} csfeman=0x{csfeman:x} tick={tick}",
-                read_c30()
+                "submit_play_game: phaseA SetState(BeginTitle=3) owner=0x{owner:x} tick={tick}"
             ));
         }
         SUBMIT_PHASE_DESER => {
