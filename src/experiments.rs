@@ -498,13 +498,8 @@ pub(crate) unsafe fn submit_play_game_once(
         unsafe { std::mem::transmute(module_base + TITLE_SET_STATE_RVA) };
     match SUBMIT_PLAY_GAME_PHASE.load(Ordering::SeqCst) {
         SUBMIT_PHASE_INIT => {
-            // Phase A (NATIVE menu build, zero input): drive the game's OWN
-            // STEP_BeginTitle via SetState(owner, 3). On a real boot the press-any-
-            // button just fires this; BeginTitle builds the REAL Continue/Load main
-            // menu (not the intro) + wires the menu-job callback at owner+0xe0. No
-            // input -- the press only DETECTS; the action is a plain SetState. (Our
-            // prior manual deserialize+jump-to-PlayGame skipped this, which is why the
-            // save never mounted.) Observe whether the main menu appears.
+            // Phase A: deserialize slot N (CSFeMan-less at the title) to set its map,
+            // then SetState(5)=PlayGame so the pump builds CSFeMan + the MoveMapStep.
             let Some(owner) = (unsafe { title_owner(module_base) }) else {
                 return false;
             };
@@ -514,25 +509,12 @@ pub(crate) unsafe fn submit_play_game_once(
             {
                 return false;
             }
-            unsafe { set_state(owner, TITLE_STEP_BEGIN_TITLE) };
-            SUBMIT_PLAY_GAME_PHASE.store(SUBMIT_PHASE_DONE, Ordering::SeqCst);
-            let _ = (
-                FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
-                DESERIALIZE_SLOT_RVA,
-                slot,
-            );
-            append_autoload_debug(format_args!(
-                "submit_play_game: phaseA SetState(BeginTitle=3) owner=0x{owner:x} tick={tick}"
-            ));
-        }
-        SUBMIT_PHASE_DESER => {
-            // Phase B: SetState(5) with the REAL saved map (GameMan+0xc30) so the
-            // pump builds CSFeMan + the MoveMapStep targeting slot N's actual map
-            // (no m60 placeholder to occupy the child).
-            let Some(owner) = (unsafe { title_owner(module_base) }) else {
-                return true;
-            };
-            let owner = owner as usize;
+            let set_save_slot: unsafe extern "system" fn(i32) =
+                unsafe { std::mem::transmute(module_base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+            unsafe { set_save_slot(slot) };
+            let deserialize: unsafe extern "system" fn(i32) =
+                unsafe { std::mem::transmute(module_base + DESERIALIZE_SLOT_RVA) };
+            unsafe { deserialize(slot) };
             let c30 = read_c30();
             unsafe {
                 *((owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *mut u8) =
@@ -541,9 +523,13 @@ pub(crate) unsafe fn submit_play_game_once(
             }
             unsafe { set_state(owner, TITLE_STEP_PLAY_GAME) };
             SUBMIT_PLAY_GAME_PHASE.store(SUBMIT_PHASE_BUILT, Ordering::SeqCst);
+            let _ = TITLE_STEP_BEGIN_TITLE;
             append_autoload_debug(format_args!(
-                "submit_play_game: phaseB SetState(5) map=0x{c30:x} owner=0x{owner:x} tick={tick}"
+                "submit_play_game: phaseA deserialize+SetState(5) slot={slot} c30=0x{c30:x} tick={tick}"
             ));
+        }
+        SUBMIT_PHASE_DESER => {
+            SUBMIT_PLAY_GAME_PHASE.store(SUBMIT_PHASE_BUILT, Ordering::SeqCst);
         }
         SUBMIT_PHASE_BUILT => {
             // Phase C: close the two world-streaming gaps (worldres-loadstate-creator-
@@ -582,11 +568,17 @@ pub(crate) unsafe fn submit_play_game_once(
             } else {
                 null
             };
-            let vtok = resmgr != null
-                && unsafe { *(resmgr as *const usize) } == module_base + RESMGR_EXPECTED_VTABLE_RVA;
-            // STEP 1 (hard floor): build the streaming/session driver singleton
-            // 0x143d7c088 via its lazy getter 0x140cd6c50 -- the job machine FD4-asserts
-            // if it is null.
+            // TIMING FIX: the resmgr only exists once the MoveMapStep has spun up
+            // (~mms_state 2 in the real load). WAIT for it -- our prior attempts ran
+            // at phaseC with resmgr=0x0 and silently skipped the enable.
+            if resmgr == null {
+                return true;
+            }
+            let resmgr_vt = unsafe { *(resmgr as *const usize) };
+            let b7c1_before =
+                unsafe { *((resmgr + RESMGR_STREAM_ENABLE_B7C1_OFFSET) as *const u8) as i32 };
+            // Defensive: build the streaming/session driver singleton if somehow null
+            // (it is normally built from boot).
             let driver_before =
                 unsafe { *((module_base + STREAMING_DRIVER_SINGLETON_RVA) as *const usize) };
             if driver_before == null {
@@ -594,26 +586,26 @@ pub(crate) unsafe fn submit_play_game_once(
                     unsafe { std::mem::transmute(module_base + STREAMING_DRIVER_BUILDER_RVA) };
                 let _ = unsafe { build_driver() };
             }
-            let driver_after =
-                unsafe { *((module_base + STREAMING_DRIVER_SINGLETON_RVA) as *const usize) };
-            // STEP 2: enable streaming on the CORRECT resmgr (builds the 2 session
-            // singletons, sets +0xb7c1, starts the IO jobs). Guarded on vtok + driver.
+            // ENABLE streaming on the live heap resmgr (the one WorldResWait checks) if
+            // not already enabled. The REAL load has b7c1=1 here; ours is missing only
+            // this bit. 0x14066e2e4 sets +0xb7c1 + builds the 2 session singletons +
+            // starts the IO jobs.
             let mut enabled = DIAG_COUNT_ZERO;
-            if vtok && driver_after != null {
+            if b7c1_before == DIAG_COUNT_ZERO {
                 let enable: unsafe extern "system" fn(usize) =
                     unsafe { std::mem::transmute(module_base + STREAMING_ENABLE_RVA) };
                 unsafe { enable(resmgr) };
                 enabled = DIAG_COUNT_ONE;
             }
-            // STEP 3: re-submit so the builder creates the m10 load-states.
+            // Re-submit so the builder (re)creates the block load-states.
             let submit_req: unsafe extern "system" fn(usize) =
                 unsafe { std::mem::transmute(module_base + REQUEST_SUBMIT_RVA) };
             unsafe { submit_req(ingame) };
             let _ = (
+                RESMGR_EXPECTED_VTABLE_RVA,
                 INGAMESTEP_RESMGR_250_OFFSET,
                 SESSION_SINGLETON_A_RVA,
                 SESSION_SINGLETON_B_RVA,
-                RESMGR_STREAM_ENABLE_B7C1_OFFSET,
                 TITLE_PROCEED_GATE_SET_VALUE,
                 LOAD_INITIATOR_RVA,
                 WORLD_WORKER_BUILD_RVA,
@@ -624,7 +616,7 @@ pub(crate) unsafe fn submit_play_game_once(
             );
             SUBMIT_PLAY_GAME_PHASE.store(SUBMIT_PHASE_DONE, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "submit_play_game: phaseC driver=0x{driver_before:x}->0x{driver_after:x} resmgr=0x{resmgr:x} vtok={vtok} enabled={enabled} coord=0x{coord:x} tick={tick}"
+                "submit_play_game: phaseC ENABLE resmgr=0x{resmgr:x} vt=0x{resmgr_vt:x} b7c1={b7c1_before} driver=0x{driver_before:x} enabled={enabled} coord=0x{coord:x} tick={tick}"
             ));
         }
         _ => {
