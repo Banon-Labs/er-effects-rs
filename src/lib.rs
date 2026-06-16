@@ -220,6 +220,9 @@ const TITLE_NATIVE_JOB_CALLED_VALUE: usize = 1;
 const TITLE_STEP_BEGIN_TITLE: i32 = 3;
 const TITLE_STEP_PLAY_GAME: i32 = 5;
 const TITLE_STEP_MENU_JOB_WAIT: i32 = 10;
+/// Sentinel logged when the inner TitleStep owner can no longer be found (the
+/// title flow advanced past the title and the owner was finalized/destructed).
+const TITLE_STATE_OWNER_GONE: i32 = -1;
 const FORCE_PLAY_GAME_STATE_UNOBSERVED: i32 = -999;
 /// One-shot "PlayGame requested" flag on the TitleStep owner. STEP_PlayGame only
 /// runs its real load-trigger (`consume_owner300` 0x140ca89e0 on owner+0x300,
@@ -2397,24 +2400,18 @@ unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
         return;
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let owner = match unsafe { title_owner(module_base) } {
-        Some(ptr) => ptr as usize,
-        None => return,
-    };
+    // Module-base globals are always safe to read regardless of title owner.
     let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
-    let state = unsafe { *((owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) };
     let latch = unsafe { *((module_base + TITLE_ACCEPT_LATCH_RVA) as *const u8) };
     let movie = unsafe { *((module_base + MOVIE_SINGLETON_RVA) as *const usize) };
     let skip = unsafe { *((module_base + MOVIE_SKIP_FLAG_RVA) as *const u8) };
     let log_now = tick % ARM_PROBE_TICK_INTERVAL == null as u64;
-    if csfeman != null {
-        if log_now {
-            append_autoload_debug(format_args!(
-                "title_accept: BOOTSTRAPPED csfeman=0x{csfeman:x} state={state} latch={latch} tick={tick}"
-            ));
-        }
-        return;
-    }
+    let owner = unsafe { title_owner(module_base) }.map(|p| p as usize);
+    // State is -1 (sentinel) when the title owner is gone (advanced past title).
+    let state = match owner {
+        Some(o) => unsafe { *((o + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) },
+        None => TITLE_STATE_OWNER_GONE,
+    };
     // Native zero-input dismiss: set the movie skip-flag once at the title so the
     // intro thread finishes legitimately and latches.
     if do_write && state == TITLE_STEP_MENU_JOB_WAIT && skip == MOVIE_SKIP_FLAG_CLEAR {
@@ -2423,6 +2420,8 @@ unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: bool) {
             "title_accept: wrote movie skip-flag (movie=0x{movie:x} latch={latch} state={state} tick={tick})"
         ));
     }
+    // Unconditional observability: log CSFeMan/latch/state every interval, even
+    // after the owner is gone, to see whether the title advanced + bootstrapped.
     if log_now {
         append_autoload_debug(format_args!(
             "title_accept: state={state} skip={skip} movie=0x{movie:x} latch={latch} csfeman=0x{csfeman:x} tick={tick}"
