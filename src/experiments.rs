@@ -370,6 +370,64 @@ pub(crate) fn observe_enabled() -> bool {
             .exists()
 }
 
+pub(crate) fn own_stepper_enabled() -> bool {
+    matches!(std::env::var("ER_EFFECTS_OWN_STEPPER").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-own-stepper.txt")
+            .exists()
+}
+
+/// OWN-THE-STEPPER step 1 (verify the control point): a pass-through handler that the
+/// FD4 scheduler runs IN-CONTEXT at idx10 (STEP_MenuJobWait). Logs periodically then
+/// calls the original handler so the title behaves normally. Proves our code executes
+/// as a real step (rcx=owner, rdx=FD4Time) with no crash, before adding load logic.
+pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: usize) {
+    let n = OWN_STEPPER_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
+    if n % OWN_STEPPER_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+        append_autoload_debug(format_args!(
+            "own_stepper: idx10 in-context call #{n} owner=0x{owner:x} framectx=0x{framectx:x}"
+        ));
+    }
+    let orig = OWN_STEPPER_ORIG_IDX10.load(Ordering::SeqCst);
+    if orig != TITLE_OWNER_SCAN_START_ADDRESS {
+        let f: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(orig) };
+        unsafe { f(owner, framectx) };
+    }
+}
+
+/// Patch the writable .data idx10 step-fn slot to our handler once the FE-host is at
+/// committed state 10. Same thread as the dispatch (game-task), so no race.
+pub(crate) unsafe fn own_stepper_patch_once(module_base: usize) {
+    if OWN_STEPPER_PATCHED.load(Ordering::SeqCst) != OWN_STEPPER_PATCHED_NO {
+        return;
+    }
+    let Some(owner) = (unsafe { title_owner(module_base) }) else {
+        return;
+    };
+    let owner = owner as usize;
+    if unsafe { *((owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) }
+        != TITLE_STEP_MENU_JOB_WAIT
+    {
+        return;
+    }
+    let slot = module_base + TITLE_STEP_IDX10_SLOT_RVA;
+    let orig = unsafe { *(slot as *const usize) };
+    OWN_STEPPER_ORIG_IDX10.store(orig, Ordering::SeqCst);
+    OWN_STEPPER_BASE.store(module_base, Ordering::SeqCst);
+    unsafe { *(slot as *mut usize) = own_stepper_idx10 as usize };
+    OWN_STEPPER_PATCHED.store(OWN_STEPPER_PATCHED_YES, Ordering::SeqCst);
+    let handler = own_stepper_idx10 as usize;
+    let _ = (
+        CONTINUE_CONFIRM_RVA,
+        TITLE_STEP_BEGIN_TITLE,
+        TITLE_STEP_PLAY_GAME,
+    );
+    append_autoload_debug(format_args!(
+        "own_stepper: PATCHED idx10 slot=0x{slot:x} orig=0x{orig:x} -> handler=0x{handler:x} owner=0x{owner:x}"
+    ));
+}
+
 /// Pure read-only observation (NO forcing, NO SetState) of the title -> menu -> load
 /// transition. Logs a full snapshot every OBSERVE_INTERVAL ticks so we can capture
 /// exactly what the REAL button press does: the title state sequence, when CSFeMan /

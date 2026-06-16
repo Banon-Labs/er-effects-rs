@@ -371,6 +371,25 @@ pub(crate) const OBSERVE_INTERVAL: u64 = 10;
 pub(crate) const OBSERVE_SIG_MULT: i64 = 0x100000001b3;
 pub(crate) static OBSERVE_LAST_SIG: std::sync::atomic::AtomicI64 =
     std::sync::atomic::AtomicI64::new(i64::MIN);
+/// OWN-THE-STEPPER (own-stepper-control-verified-and-driver-call-2026): the
+/// SimpleTitleStep step-fn table (base abs 0x143d71580, owner+0x10) is in WRITABLE
+/// .data. idx10 = STEP_MenuJobWait func slot = base + 10*0x10 = abs 0x143d71620
+/// (RVA 0x3d71620) is dispatched every frame at the press-any-button title. We patch
+/// it to our own handler so the FD4 scheduler runs OUR code IN-CONTEXT (rcx=owner,
+/// rdx=FD4Time), instead of trampolining from an external CSTask.
+pub(crate) const TITLE_STEP_IDX10_SLOT_RVA: usize = 0x3d71620;
+/// Native Continue/Load confirm handler (reads owner=[rcx+8]; slot-select + child
+/// request + SetState(5)). Invoked via a {[+8]=owner} shim.
+pub(crate) const CONTINUE_CONFIRM_RVA: usize = 0xb0e180;
+pub(crate) const OWN_STEPPER_LOG_INTERVAL: u64 = 60;
+pub(crate) const OWN_STEPPER_CALL_INC: usize = 1;
+pub(crate) const OWN_STEPPER_PATCHED_NO: usize = 0;
+pub(crate) const OWN_STEPPER_PATCHED_YES: usize = 1;
+/// Original idx10 func ptr (STEP_MenuJobWait), saved so our handler can pass through.
+pub(crate) static OWN_STEPPER_ORIG_IDX10: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OWN_STEPPER_BASE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OWN_STEPPER_PATCHED: AtomicUsize = AtomicUsize::new(OWN_STEPPER_PATCHED_NO);
+pub(crate) static OWN_STEPPER_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const GAME_MAN_ARM_FLAG_B72_OFFSET: usize = 0xb72;
 pub(crate) const GAME_MAN_FLAG_B73_PROBE_OFFSET: usize = 0xb73;
 pub(crate) const GAME_MAN_FLAG_B75_PROBE_OFFSET: usize = 0xb75;
@@ -1018,6 +1037,16 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     // per-frame file I/O stalls the title" (lite survives) from
                     // "any per-frame work trips a budget" (lite still exits).
                     if lite_mode() {
+                        return;
+                    }
+                    // OWN-THE-STEPPER: patch the idx10 step-fn slot to our handler so
+                    // the FD4 scheduler runs OUR code in-context (step 1: verify the
+                    // control point with a logging pass-through).
+                    if own_stepper_enabled() {
+                        if let Ok(base) = game_module_base() {
+                            unsafe { own_stepper_patch_once(base) };
+                        }
+                        write_telemetry_throttled(&mut state, false);
                         return;
                     }
                     // Pure observe: log the title->menu->load transition each interval

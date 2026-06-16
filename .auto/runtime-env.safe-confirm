@@ -1,0 +1,15 @@
+# Bounded synthesized input (user-approved): in-process DirectInput Confirm pulses
+# (hooks GetDeviceState so the game's OWN input poll reads them -- not HID/host
+# pointer). Drives the real press-any-button -> main menu -> Continue cascade so the
+# game mounts the character + streams the world natively. Our SetState forcing is OFF.
+LAUNCH_MODE=direct
+RUNTIME_MAX_NUDGES=0
+RESTORE_RUNTIME_SAVES=1
+RUNTIME_CAPTURE_INPUT_OCR=0
+ER_EFFECTS_SPLASH_SKIP=1
+ER_EFFECTS_CRASH_LOG=1
+ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=6
+RUNTIME_WATCH_TARGET=player-load
+RUNTIME_AUTOLOAD_ATTEMPT_BUDGET=100000
+RUNTIME_POST_REQUEST_TICK_BUDGET=600
+RUNTIME_SPAWN_POLL_BUDGET=32768
