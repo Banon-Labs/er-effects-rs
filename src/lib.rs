@@ -221,6 +221,18 @@ pub(crate) const TITLE_OWNER_JOB_OFFSET: usize = 0x2e8;
 pub(crate) const TITLE_OWNER_JOB_PENDING_OFFSET: usize = 0xd8;
 pub(crate) const TITLE_JOB_OBSERVE_TICK_INTERVAL: u64 = 30;
 pub(crate) const FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA: usize = 0x0067a810;
+/// Corrected play-game submit recipe (play-game-submit-and-continue-load-recipe-2026):
+/// the Continue/Load handler 0x140b0e180 sets owner+0xbc to a PACKED MAP id, clears
+/// the new-game flag owner+0x284, and calls SetState 0x140b0d960(owner, 5=PlayGame)
+/// -- then the existing pump runs PlayGame -> child MoveMap_Init -> builds CSFeMan.
+/// (force_play_game wrote owner+0x4c=5 raw + a raw slot in +0xbc, so it orphaned.)
+pub(crate) const TITLE_SET_STATE_RVA: usize = 0xb0d960;
+pub(crate) const TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET: usize = 0x284;
+/// Packed map id for m60_42_34_00 (the new-game default; resolver 0x14071fd60 packs
+/// mAA_BB_CC_DD decimal -> byte3=AA..byte0=DD). A valid map to pass the PlayGame
+/// map-area gate (area byte 0x32..0x58) while we prove the SetState(5) path builds
+/// CSFeMan; the real slot map comes from GameMan+0xc30 once peeked.
+pub(crate) const DEFAULT_PLAY_GAME_MAP: i32 = 0x3c2a2200;
 /// Global holding the GameMan pointer (`mov rax,[rip]` in set_save_slot 0x67a810
 /// / save_slot_get 0x678ca0). Read-only diagnostics of the PlayGame load-pair
 /// preconditions read GameMan through this.
@@ -430,6 +442,7 @@ pub(crate) static TITLE_OWNER_PTR: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_OWNER_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_NATIVE_JOB_CALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static FORCE_PLAY_GAME_CALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SUBMIT_PLAY_GAME_CALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static FORCE_PLAY_GAME_LAST_STATE: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(FORCE_PLAY_GAME_STATE_UNOBSERVED);
 pub(crate) static TITLE_PROCEED_GATE_FIRED: std::sync::atomic::AtomicBool =
@@ -912,6 +925,17 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                                     title_accept_inject_enabled(),
                                 )
                             };
+                        }
+                        write_telemetry_throttled(&mut state, false);
+                        return;
+                    }
+                    // Corrected play-game submit: on the live FE-host at state 10,
+                    // SetState(5) with a packed map (not raw state/slot like the old
+                    // force_play_game) so the existing pump builds CSFeMan + loads.
+                    if submit_play_game_enabled() {
+                        if let (Ok(base), Some(slot)) = (game_module_base(), state.autoload.slot())
+                        {
+                            unsafe { submit_play_game_once(base, slot, state.game_task_ticks) };
                         }
                         write_telemetry_throttled(&mut state, false);
                         return;

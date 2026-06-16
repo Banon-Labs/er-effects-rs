@@ -1,0 +1,20 @@
+# Corrected play-game submit: on the live FE-host (SimpleTitleStep, state 10),
+# SetState(5=PlayGame) via the game's own SetState 0x140b0d960 with a packed map at
+# owner+0xbc (NOT raw state/slot like the failed force_play_game), so the existing
+# pump builds CSFeMan + loads. splash-skip on for a clean boot. Watch CSFeMan
+# 0x143d6b880 -> non-null + player-load. Crash logger on.
+LAUNCH_MODE=direct
+RUNTIME_MAX_NUDGES=0
+RESTORE_RUNTIME_SAVES=1
+RUNTIME_CAPTURE_INPUT_OCR=0
+ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=0
+ER_EFFECTS_SPLASH_SKIP=1
+ER_EFFECTS_CRASH_LOG=1
+ER_EFFECTS_SUBMIT_PLAY_GAME=1
+ER_EFFECTS_AUTOLOAD_SLOT=9
+ER_EFFECTS_AUTOLOAD_METHOD=direct_menu_load
+ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP=false
+RUNTIME_WATCH_TARGET=player-load
+RUNTIME_AUTOLOAD_ATTEMPT_BUDGET=100000
+RUNTIME_POST_REQUEST_TICK_BUDGET=600
+RUNTIME_SPAWN_POLL_BUDGET=32768

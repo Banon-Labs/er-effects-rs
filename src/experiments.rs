@@ -362,6 +362,76 @@ pub(crate) unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u
     ));
 }
 
+pub(crate) fn submit_play_game_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_SUBMIT_PLAY_GAME").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-submit-play-game.txt")
+        .exists()
+}
+
+/// Corrected native play-game submit (play-game-submit-and-continue-load-recipe-2026).
+/// On the live FE-host SimpleTitleStep (committed state 10), replicate the Continue/
+/// Load handler 0x140b0e180's load branch WITHOUT forcing state: set the slot, clear
+/// the new-game flag owner+0x284, write a packed map to owner+0xbc, and call the
+/// game's own SetState 0x140b0d960(owner, 5=PlayGame). The existing per-frame pump
+/// then runs PlayGame -> child MoveMap_Init -> builds CSFeMan -> loads. Zero input.
+/// (force_play_game wrote owner+0x4c=5 raw + a raw slot in +0xbc -> orphaned.)
+pub(crate) unsafe fn submit_play_game_once(module_base: usize, slot: i32, tick: u64) -> bool {
+    if tick < TITLE_NATIVE_JOB_MIN_TICK {
+        return false;
+    }
+    if SUBMIT_PLAY_GAME_CALLED.load(Ordering::SeqCst) != TITLE_NATIVE_JOB_NOT_CALLED {
+        if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+            let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
+            let owner = unsafe { title_owner(module_base) }.map(|p| p as usize);
+            let (state, child_d8) = match owner {
+                Some(o) => {
+                    let st = unsafe { *((o + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) };
+                    let child = unsafe { *((o + TITLE_OWNER_JOB_OFFSET) as *const usize) };
+                    let d8 = if child != TITLE_OWNER_SCAN_START_ADDRESS {
+                        unsafe { *((child + TITLE_OWNER_JOB_PENDING_OFFSET) as *const i32) }
+                    } else {
+                        TITLE_STATE_OWNER_GONE
+                    };
+                    (st, d8)
+                }
+                None => (TITLE_STATE_OWNER_GONE, TITLE_STATE_OWNER_GONE),
+            };
+            append_autoload_debug(format_args!(
+                "submit_play_game: observe state={state} child_d8={child_d8} csfeman=0x{csfeman:x} tick={tick}"
+            ));
+        }
+        return true;
+    }
+    let Some(owner) = (unsafe { title_owner(module_base) }) else {
+        return false;
+    };
+    let owner = owner as usize;
+    let state = unsafe { *((owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) };
+    if state != TITLE_STEP_MENU_JOB_WAIT {
+        return false;
+    }
+    let set_save_slot: unsafe extern "system" fn(i32) =
+        unsafe { std::mem::transmute(module_base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+    unsafe { set_save_slot(slot) };
+    unsafe {
+        *((owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *mut u8) = MOVIE_SKIP_FLAG_CLEAR;
+        *((owner + TITLE_OWNER_PLAY_GAME_SLOT_OFFSET) as *mut i32) = DEFAULT_PLAY_GAME_MAP;
+    }
+    let set_state: unsafe extern "system" fn(usize, i32) =
+        unsafe { std::mem::transmute(module_base + TITLE_SET_STATE_RVA) };
+    unsafe { set_state(owner, TITLE_STEP_PLAY_GAME) };
+    SUBMIT_PLAY_GAME_CALLED.store(TITLE_NATIVE_JOB_CALLED_VALUE, Ordering::SeqCst);
+    let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
+    append_autoload_debug(format_args!(
+        "submit_play_game: SetState(5) owner=0x{owner:x} slot={slot} map=0x{DEFAULT_PLAY_GAME_MAP:x} csfeman=0x{csfeman:x} tick={tick}"
+    ));
+    true
+}
+
 pub(crate) fn ingameinit_drive_enabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_INGAMEINIT_DRIVE").as_deref(),
