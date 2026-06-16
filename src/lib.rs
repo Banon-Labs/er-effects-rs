@@ -394,6 +394,13 @@ pub(crate) const OWN_STEPPER_SETTLE_CALLS: u64 = 30;
 /// owner=[shim+8]). Persistent (not stack) so the call cannot read freed memory.
 pub(crate) const OWN_STEPPER_SHIM_LEN: usize = 8;
 pub(crate) const OWN_STEPPER_SHIM_OWNER_IDX: usize = 1;
+/// idx6 = STEP_GameStepWait func slot = table base + 6*0x10 = abs 0x143d715e0 (RVA
+/// 0x3d715e0). We own it too, to drive the 3-phase load after the MoveMapStep builds.
+pub(crate) const TITLE_STEP_IDX6_SLOT_RVA: usize = 0x3d715e0;
+pub(crate) static OWN_STEPPER_ORIG_IDX6: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OWN_STEPPER_IDX6_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// GameMan+0xb80 load-phase value meaning the save IO is resident (mounted).
+pub(crate) const OWN_STEPPER_B80_RESIDENT: i32 = 3;
 pub(crate) const OWN_STEPPER_SLOT_NONE: i32 = -1;
 /// Save slot to load (parsed from the trigger file "slot=N"; -1 => leave the game's
 /// own most-recent selection).

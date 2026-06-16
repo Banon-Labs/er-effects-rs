@@ -413,47 +413,102 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             pass_through(false);
             return;
         }
-        // Select the configured save slot (GameMan+0xac0) so the load targets it.
+        // PHASE 1: select the slot, clear new-game, write a VALID placeholder map
+        // (m60 0x3c2a2200; the m10 default 0xa010000 fails the gameplay-area gate
+        // 0x32-0x58 and is the new-game tutorial), then SetState(5) to build + tick the
+        // MoveMapStep so it MOUNTS the save (b80->3). idx6 then deserializes the real
+        // slot (c30 -> real map + char) and re-targets.
         let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
         if want_slot != OWN_STEPPER_SLOT_NONE {
             let set_save_slot: unsafe extern "system" fn(i32) =
                 unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
             unsafe { set_save_slot(want_slot) };
         }
-        // Force LOAD mode (not new-game) BEFORE building the menu so BeginTitle wires
-        // the Continue path + lands the saved map in GameMan+0xc30.
         unsafe {
             *((owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *mut u8) = MOVIE_SKIP_FLAG_CLEAR;
+            *((owner + TITLE_OWNER_PLAY_GAME_SLOT_OFFSET) as *mut i32) =
+                DEFAULT_PLAY_GAME_MAP as i32;
         }
         let set_state: unsafe extern "system" fn(usize, i32) =
             unsafe { std::mem::transmute(base + TITLE_SET_STATE_RVA) };
-        unsafe { set_state(owner, TITLE_STEP_BEGIN_TITLE) };
+        unsafe { set_state(owner, TITLE_STEP_PLAY_GAME) };
         OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_CONTINUE, Ordering::SeqCst);
+        let placeholder = DEFAULT_PLAY_GAME_MAP as i32;
+        let _ = (
+            CONTINUE_CONFIRM_RVA,
+            TITLE_STEP_BEGIN_TITLE,
+            OWN_STEPPER_SHIM_OWNER_IDX,
+            &raw const OWN_STEPPER_SHIM,
+        );
         append_autoload_debug(format_args!(
-            "own_stepper: phase MENU (#{n}) slot={want_slot} cleared ng_flag(was {ng_flag}) SetState(3) owner=0x{owner:x} c30=0x{c30:x}"
+            "own_stepper: phase1 (#{n}) slot={want_slot} ng(was {ng_flag}) SetState(5) placeholder=0x{placeholder:x} owner=0x{owner:x} c30=0x{c30:x}"
         ));
         return;
     }
+    // After phase 1 the title is at state 5/6 (idx6 drives the rest); pass through if
+    // idx10 re-enters (e.g. the load bounced back to MenuJobWait).
+    pass_through(false);
+}
+
+/// OWN-THE-STEPPER idx6 (STEP_GameStepWait) handler: runs IN-CONTEXT after phase 1's
+/// SetState(5) builds the MoveMapStep. Once CSFeMan exists and the save is mounted
+/// (GameMan+0xb80==3), it deserializes the real slot (GameMan+0xc30 -> the character's
+/// REAL map + applies the character), re-targets owner+0xbc to that map, and SetState(5)
+/// so the load streams the real world. Pass-through otherwise.
+pub(crate) unsafe extern "system" fn own_stepper_idx6(owner: usize, framectx: usize) {
+    let base = OWN_STEPPER_BASE.load(Ordering::SeqCst);
+    let phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
+    let gm = unsafe { *((base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+    let csfeman = unsafe { *((base + CSFEMAN_SINGLETON_RVA) as *const usize) };
+    let read_gm = |off: usize| {
+        if gm != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { *((gm + off) as *const i32) }
+        } else {
+            TITLE_STATE_OWNER_GONE
+        }
+    };
+    let b80 = read_gm(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+    let c30 = read_gm(GAME_MAN_SAVED_MAP_C30_OFFSET);
+    let n = OWN_STEPPER_IDX6_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
+    let pass6 = || {
+        let orig = OWN_STEPPER_ORIG_IDX6.load(Ordering::SeqCst);
+        if orig != TITLE_OWNER_SCAN_START_ADDRESS {
+            let f: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(orig) };
+            unsafe { f(owner, framectx) };
+        }
+    };
     if phase == OWN_STEPPER_PHASE_CONTINUE {
-        // Clear new-game flag again so 0x140b0e180 takes the LOAD branch (reads c30,
-        // SetState 5), not BeginNewGame (SetState 4).
+        if n % OWN_STEPPER_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+            append_autoload_debug(format_args!(
+                "own_stepper: idx6 wait #{n} csfeman=0x{csfeman:x} b80={b80} c30=0x{c30:x}"
+            ));
+        }
+        // Wait until the MoveMapStep built CSFeMan and mounted the save (b80==3).
+        if csfeman == TITLE_OWNER_SCAN_START_ADDRESS || b80 != OWN_STEPPER_B80_RESIDENT {
+            pass6();
+            return;
+        }
+        // PHASE 2: deserialize the real slot -> GameMan+0xc30 = real map + char applied.
+        let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+        let deser: unsafe extern "system" fn(i32) =
+            unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
+        unsafe { deser(want_slot) };
+        let real_c30 = read_gm(GAME_MAN_SAVED_MAP_C30_OFFSET);
+        // PHASE 3: re-target the load to the real map + SetState(5).
         unsafe {
             *((owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *mut u8) = MOVIE_SKIP_FLAG_CLEAR;
+            *((owner + TITLE_OWNER_PLAY_GAME_SLOT_OFFSET) as *mut i32) = real_c30;
         }
-        let shim_ptr = &raw mut OWN_STEPPER_SHIM as usize;
-        unsafe {
-            (*(&raw mut OWN_STEPPER_SHIM))[OWN_STEPPER_SHIM_OWNER_IDX] = owner;
-        }
-        let confirm: unsafe extern "system" fn(usize) =
-            unsafe { std::mem::transmute(base + CONTINUE_CONFIRM_RVA) };
-        unsafe { confirm(shim_ptr) };
+        let set_state: unsafe extern "system" fn(usize, i32) =
+            unsafe { std::mem::transmute(base + TITLE_SET_STATE_RVA) };
+        unsafe { set_state(owner, TITLE_STEP_PLAY_GAME) };
         OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "own_stepper: phase CONTINUE (#{n}) ng_flag={ng_flag} confirm shim=0x{shim_ptr:x} owner=0x{owner:x} c30=0x{c30:x}"
+            "own_stepper: idx6 PHASE2/3 (#{n}) slot={want_slot} deser c30=0x{c30:x}->0x{real_c30:x} b80={b80} re-SetState(5) owner=0x{owner:x}"
         ));
         return;
     }
-    pass_through(false);
+    pass6();
 }
 
 /// Patch the writable .data idx10 step-fn slot to our handler once the FE-host is at
@@ -488,6 +543,11 @@ pub(crate) unsafe fn own_stepper_patch_once(module_base: usize) {
     let orig = unsafe { *(slot as *const usize) };
     OWN_STEPPER_ORIG_IDX10.store(orig, Ordering::SeqCst);
     OWN_STEPPER_BASE.store(module_base, Ordering::SeqCst);
+    // Own idx6 (STEP_GameStepWait) too, for the post-SetState(5) deserialize + re-target.
+    let slot6 = module_base + TITLE_STEP_IDX6_SLOT_RVA;
+    let orig6 = unsafe { *(slot6 as *const usize) };
+    OWN_STEPPER_ORIG_IDX6.store(orig6, Ordering::SeqCst);
+    unsafe { *(slot6 as *mut usize) = own_stepper_idx6 as usize };
     unsafe { *(slot as *mut usize) = own_stepper_idx10 as usize };
     OWN_STEPPER_PATCHED.store(OWN_STEPPER_PATCHED_YES, Ordering::SeqCst);
     let handler = own_stepper_idx10 as usize;
