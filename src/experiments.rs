@@ -463,11 +463,15 @@ pub(crate) unsafe fn submit_play_game_once(
             let d8 = unsafe { *((ingame + TITLE_OWNER_JOB_PENDING_OFFSET) as *const i32) };
             let movemapstep =
                 unsafe { *((ingame + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) as *const usize) };
-            if movemapstep != null && d8 == INGAMESTEP_PENDING_D8_PENDING {
-                let pump: unsafe extern "system" fn(*mut u8, *const FD4TaskData) -> usize =
-                    unsafe { std::mem::transmute(module_base + MOVEMAPSTEP_UPDATE_RVA) };
-                let _ = unsafe { pump(movemapstep as *mut u8, task_data as *const FD4TaskData) };
-            }
+            // Phase C direct-pump of MoveMapStep update 0x140aff640 CRASHED (it is a
+            // scheduler task-node fn, unsafe to call outside the FD4 scheduler's task
+            // context). Reverted to observe-only; world-stream completion is
+            // scheduler-owned (movemapstep-direct-pump-crashes-needs-scheduler).
+            let _ = (
+                task_data,
+                INGAMESTEP_PENDING_D8_PENDING,
+                MOVEMAPSTEP_UPDATE_RVA,
+            );
             if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == null as u64 {
                 let state =
                     unsafe { *((owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) };
