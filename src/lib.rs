@@ -285,6 +285,11 @@ pub(crate) const MOVEMAPSTEP_WORLDRES_F0_OFFSET: usize = 0xf0;
 pub(crate) const WORLDRES_RESMGR_10_OFFSET: usize = 0x10;
 pub(crate) const RESMGR_BLOCK_COUNT_B3140_OFFSET: usize = 0xb3140;
 pub(crate) const DIAG_NULL_CHAIN: i32 = -2;
+/// The block coord/map-id the MoveMapStep requests in STEP_WorldResWait: at
+/// [[MoveMapStep+0xf0]+0x2c] (0x140624bd0 reads byte3 as the target area). byte3 ==
+/// 0x0a means slot 9's m10 IS being requested (loader/streaming issue); 0 means the
+/// saved world position never loaded (coord issue).
+pub(crate) const WORLDRES_COORD_2C_OFFSET: usize = 0x2c;
 /// Global holding the GameMan pointer (`mov rax,[rip]` in set_save_slot 0x67a810
 /// / save_slot_get 0x678ca0). Read-only diagnostics of the PlayGame load-pair
 /// preconditions read GameMan through this.

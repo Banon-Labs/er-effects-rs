@@ -1,3 +1,3 @@
-started_at=2026-06-16T05:46:23-07:00
-request=no-b80-init-20260616
+started_at=2026-06-16T05:52:13-07:00
+request=blockcount-diag-20260616
 entrypoint=measure_runtime_trigger
