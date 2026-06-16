@@ -458,9 +458,12 @@ pub(crate) unsafe fn submit_play_game_once(
             if csfeman == null {
                 return true;
             }
-            let initiate: unsafe extern "system" fn(i32) =
-                unsafe { std::mem::transmute(module_base + LOAD_INITIATOR_RVA) };
-            unsafe { initiate(slot) };
+            // NOTE: the b80 initiator 0x14067b4e0 set GameMan+0xb80=1, which is a
+            // DEAD LANE (it never advances 1->2->3); it parked the b80 machine and the
+            // MoveMapStep step-3 waited on it. We already loaded the save synchronously
+            // in phaseA (0x14067b290), so we DON'T initiate b80 -- let the MoveMapStep
+            // drive its own load. (b80-initiate-advances-mms-but-async-io-stalls.)
+            let _ = LOAD_INITIATOR_RVA;
             // Build + register the world-stream worker 0x144842d40 (IngameInit's
             // +0x48>=7 tail 0x140b0a980) via a synthetic step `this` (zeroed buffer
             // with +0x48=7) -- the arm uses only globals/stack after the +0x48 check,
