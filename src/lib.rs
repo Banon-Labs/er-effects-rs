@@ -394,6 +394,11 @@ pub(crate) const OWN_STEPPER_SETTLE_CALLS: u64 = 30;
 /// owner=[shim+8]). Persistent (not stack) so the call cannot read freed memory.
 pub(crate) const OWN_STEPPER_SHIM_LEN: usize = 8;
 pub(crate) const OWN_STEPPER_SHIM_OWNER_IDX: usize = 1;
+pub(crate) const OWN_STEPPER_SLOT_NONE: i32 = -1;
+/// Save slot to load (parsed from the trigger file "slot=N"; -1 => leave the game's
+/// own most-recent selection).
+pub(crate) static OWN_STEPPER_SLOT: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(OWN_STEPPER_SLOT_NONE);
 pub(crate) static OWN_STEPPER_PHASE: AtomicUsize = AtomicUsize::new(OWN_STEPPER_PHASE_MENU);
 pub(crate) static mut OWN_STEPPER_SHIM: [usize; OWN_STEPPER_SHIM_LEN] =
     [TITLE_OWNER_SCAN_START_ADDRESS; OWN_STEPPER_SHIM_LEN];

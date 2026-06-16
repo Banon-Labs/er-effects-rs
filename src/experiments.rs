@@ -407,21 +407,39 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             unsafe { f(owner, framectx) };
         }
     };
+    let ng_flag = unsafe { *((owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *const u8) as i32 };
     if phase == OWN_STEPPER_PHASE_MENU {
         if n < OWN_STEPPER_SETTLE_CALLS {
             pass_through(false);
             return;
+        }
+        // Select the configured save slot (GameMan+0xac0) so the load targets it.
+        let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+        if want_slot != OWN_STEPPER_SLOT_NONE {
+            let set_save_slot: unsafe extern "system" fn(i32) =
+                unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+            unsafe { set_save_slot(want_slot) };
+        }
+        // Force LOAD mode (not new-game) BEFORE building the menu so BeginTitle wires
+        // the Continue path + lands the saved map in GameMan+0xc30.
+        unsafe {
+            *((owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *mut u8) = MOVIE_SKIP_FLAG_CLEAR;
         }
         let set_state: unsafe extern "system" fn(usize, i32) =
             unsafe { std::mem::transmute(base + TITLE_SET_STATE_RVA) };
         unsafe { set_state(owner, TITLE_STEP_BEGIN_TITLE) };
         OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_CONTINUE, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "own_stepper: phase MENU (#{n}) SetState(3 BeginTitle) owner=0x{owner:x} c30=0x{c30:x}"
+            "own_stepper: phase MENU (#{n}) slot={want_slot} cleared ng_flag(was {ng_flag}) SetState(3) owner=0x{owner:x} c30=0x{c30:x}"
         ));
         return;
     }
     if phase == OWN_STEPPER_PHASE_CONTINUE {
+        // Clear new-game flag again so 0x140b0e180 takes the LOAD branch (reads c30,
+        // SetState 5), not BeginNewGame (SetState 4).
+        unsafe {
+            *((owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *mut u8) = MOVIE_SKIP_FLAG_CLEAR;
+        }
         let shim_ptr = &raw mut OWN_STEPPER_SHIM as usize;
         unsafe {
             (*(&raw mut OWN_STEPPER_SHIM))[OWN_STEPPER_SHIM_OWNER_IDX] = owner;
@@ -431,7 +449,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         unsafe { confirm(shim_ptr) };
         OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "own_stepper: phase CONTINUE (#{n}) confirm shim=0x{shim_ptr:x} owner=0x{owner:x} c30=0x{c30:x}"
+            "own_stepper: phase CONTINUE (#{n}) ng_flag={ng_flag} confirm shim=0x{shim_ptr:x} owner=0x{owner:x} c30=0x{c30:x}"
         ));
         return;
     }
@@ -452,6 +470,19 @@ pub(crate) unsafe fn own_stepper_patch_once(module_base: usize) {
         != TITLE_STEP_MENU_JOB_WAIT
     {
         return;
+    }
+    // Optional slot override from the trigger file ("slot=N"); -1/absent => the game's
+    // own most-recent selection.
+    if let Some(dir) = game_directory_path() {
+        if let Ok(content) = std::fs::read_to_string(dir.join("er-effects-own-stepper.txt")) {
+            for line in content.lines() {
+                if let Some(rest) = line.trim().strip_prefix("slot=") {
+                    if let Ok(v) = rest.trim().parse::<i32>() {
+                        OWN_STEPPER_SLOT.store(v, Ordering::SeqCst);
+                    }
+                }
+            }
+        }
     }
     let slot = module_base + TITLE_STEP_IDX10_SLOT_RVA;
     let orig = unsafe { *(slot as *const usize) };
