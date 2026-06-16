@@ -469,6 +469,11 @@ pub(crate) const B80_POLL_RVA: usize = 0x679180;
 /// Both fastcall args (cl, dl) to the b80 poll 0x140679180 are 0 in the native menu
 /// drive (matches the captured real-load poll calls poll(0,0)).
 pub(crate) const B80_POLL_ARG_ZERO: u8 = 0;
+/// b80==1 PREVIEW-lane driver 0x140679510: per-frame IO tick of the preview read started by
+/// 0x14067b4e0; resets GameMan+0xb80 1->0 when the iodev request goes resident. NOT a
+/// dispatcher (no CSFeMan apply / no save write) -- just the lane tick the menu runs via
+/// dispatcher-1. We call it ourselves to drain the preview read to resident.
+pub(crate) const B80_LANE1_DRIVER_RVA: usize = 0x679510;
 /// Max frames to poll b80 toward 3 before giving up the mount (avoid an infinite title
 /// hang if the worker never drains). ~10s at 60fps.
 pub(crate) const OWN_STEPPER_MOUNT_POLL_MAX: u64 = 600;
@@ -524,6 +529,12 @@ pub(crate) static OWN_STEPPER_ORIG_IDX6: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static OWN_STEPPER_IDX6_CALLS: AtomicUsize = AtomicUsize::new(0);
 /// GameMan+0xb80 load-phase value meaning the save IO is resident (mounted).
 pub(crate) const OWN_STEPPER_B80_RESIDENT: i32 = 3;
+/// GameMan+0xb80 == 1: the PREVIEW lane (0x14067b4e0 read in flight); drive the lane tick
+/// 0x140679510 to drain it to resident (which resets b80 -> 0).
+pub(crate) const OWN_STEPPER_B80_PREVIEW_LANE: i32 = 1;
+/// GameMan+0xb80 == 0: idle/drained; fire the LoadSaveData initiator 0x14067b200 -> b80=2
+/// (reusing the resident iodev request the preview started).
+pub(crate) const OWN_STEPPER_B80_IDLE: i32 = 0;
 /// idx6 calls to wait (MoveMapStep settle) before deserializing the real slot.
 pub(crate) const OWN_STEPPER_IDX6_SETTLE: u64 = 120;
 pub(crate) const OWN_STEPPER_SLOT_NONE: i32 = -1;

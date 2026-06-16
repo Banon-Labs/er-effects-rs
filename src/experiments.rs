@@ -453,11 +453,17 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             unsafe { std::mem::transmute(base + WORLD_WORKER_BUILD_RVA) };
         unsafe { build_worker(&raw mut OWN_STEPPER_WORKER_THIS as usize) };
         let worker = unsafe { *((base + WORLD_STREAM_WORKER_RVA) as *const usize) };
-        // Start the read: 0x14067b1a0(slot) -> b80=2 + iodev io18/io20 populated. PHASE_DRIVE
-        // then polls 0x140679180 to b80==3 and runs the full deserialize 0x14067b290.
-        let fullload: unsafe extern "system" fn(i32) =
-            unsafe { std::mem::transmute(base + B80_FULL_LOAD_INITIATOR_RVA) };
-        unsafe { fullload(want_slot) };
+        // Start the read with the PREVIEW initiator 0x14067b4e0(slot) -> b80=1 + STARTS the
+        // iodev async read (the b80=2 initiator 0x14067b1a0 only queues to the file-device-mgr
+        // and never populates the iodev request the poll reads -- proven by the prior cold run
+        // own-stepper-cold-b80-primitive-needs-preview-not-67b1a0-2026). PHASE_DRIVE then runs
+        // the menu's documented sequence with read-only primitives: tick the b80==1 lane
+        // 0x140679510 to resident (resets b80->0), 0x14067b200 -> b80=2, poll 0x140679180 ->
+        // b80=3, deserialize 0x14067b290.
+        let preview: unsafe extern "system" fn(i32) =
+            unsafe { std::mem::transmute(base + LOAD_INITIATOR_RVA) };
+        unsafe { preview(want_slot) };
+        let (pi10, pi18, pi20) = read_iodev();
         OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DRIVE, Ordering::SeqCst);
         // Suppress unused warnings for consts/statics retained from the abandoned
         // synthetic-dispatcher and BeginTitle/Continue-shim approaches (kept for reference).
@@ -465,7 +471,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             DEFAULT_PLAY_GAME_MAP,
             TITLE_STEP_BEGIN_TITLE,
             CONTINUE_CONFIRM_RVA,
-            LOAD_INITIATOR_RVA,
+            B80_FULL_LOAD_INITIATOR_RVA,
             OWN_STEPPER_PHASE_MOUNT,
             GAME_MAN_REQUESTED_SLOT_B78_OFFSET,
             B80_DISPATCHER1_RVA,
@@ -480,64 +486,69 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             &OWN_STEPPER_DRIVE_CALLS,
         );
         append_autoload_debug(format_args!(
-            "own_stepper: drive-init (#{n}) slot={want_slot} worker=0x{worker:x} b80={b80} c30=0x{c30:x}"
+            "own_stepper: drive-init (#{n}) slot={want_slot} worker=0x{worker:x} b80={b80} preview_io10=0x{pi10:x} io18=0x{pi18:x} io20=0x{pi20:x} c30=0x{c30:x}"
         ));
         return;
     }
     if phase == OWN_STEPPER_PHASE_DRIVE {
         let ac0 = read_gm(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
-        if b80 == OWN_STEPPER_B80_RESIDENT {
-            // The async slot read reached b80==3 (IO resident). Run the full deserialize
-            // 0x14067b290(slot) DIRECTLY with the slot int (NO synthetic owner / NO
-            // dispatcher -> no save write): it reads 0x14067b100 (gated b80==3), writes the
-            // header map to GameMan+0xc30 (0x14067bd70), sets ac0=slot, and applies the
-            // character to PlayerGameData 0x144588268. Save-agnostic: ERSC redirects the
-            // file IO below 0x14067b100, so the .co2 char loads through the vanilla
-            // deserialize too (seamless-co2-menu-deserialize-is-vanilla-0x82c240-2026).
-            let deser: unsafe extern "system" fn(i32) =
-                unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
-            unsafe { deser(want_slot) };
-            let c30_now = read_gm(GAME_MAN_SAVED_MAP_C30_OFFSET);
-            let ac0_now = read_gm(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
-            if c30_now != GAME_MAN_C30_UNSET {
-                // c30 holds the slot's REAL saved map + the character is applied. Confirm via
-                // the native confirm path: clear owner+0x284 (NOT new-game), owner+0xbc = c30,
-                // SetState(5). The native pump then streams the real world.
-                unsafe {
-                    *((owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *mut u8) =
-                        MOVIE_SKIP_FLAG_CLEAR;
-                    *((owner + TITLE_OWNER_PLAY_GAME_SLOT_OFFSET) as *mut i32) = c30_now;
-                }
-                let set_state: unsafe extern "system" fn(usize, i32) =
-                    unsafe { std::mem::transmute(base + TITLE_SET_STATE_RVA) };
-                unsafe { set_state(owner, TITLE_STEP_PLAY_GAME) };
-                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
-                append_autoload_debug(format_args!(
-                    "own_stepper: MOUNTED (#{n}) ac0={ac0_now} c30=0x{c30_now:x} SetState(5) owner=0x{owner:x}"
-                ));
-            } else {
-                // Resident but the deserialize did not commit c30 (no-op/free path). Stay at
-                // the title (no SetState -> no save write).
-                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
-                append_autoload_debug(format_args!(
-                    "own_stepper: deser-noop (#{n}) ac0={ac0_now} c30 still unset owner=0x{owner:x}"
-                ));
-            }
-            return;
-        }
         let polls =
             OWN_STEPPER_MOUNT_POLLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
         if polls < OWN_STEPPER_MOUNT_POLL_MAX {
-            // Not resident yet: poll the async-IO handle (0x140679180) which advances b80
-            // 2->3 when the stream worker drains the read. Same poll the native dispatcher
-            // uses; no MoveMapStep context needed.
-            let poll: unsafe extern "system" fn(u8, u8) =
-                unsafe { std::mem::transmute(base + B80_POLL_RVA) };
-            unsafe { poll(B80_POLL_ARG_ZERO, B80_POLL_ARG_ZERO) };
+            // Drive the menu's documented b80 sequence with read-only primitives (NO
+            // dispatcher-2 -> no save write), branching on the current b80 phase:
+            //   b80==1 (preview lane): tick 0x140679510 -> resets to 0 when the iodev read
+            //           goes resident.
+            //   b80==0 (preview drained): 0x14067b200(slot) -> b80=2, reusing the now-resident
+            //           iodev request.
+            //   b80==2 (deserialize-arm): poll 0x140679180(0,0) -> b80=3 on resident.
+            //   b80==3 (resident): full deserialize 0x14067b290(slot) -> c30=real map + char
+            //           applied + ac0=slot (READS save). Save-agnostic (ERSC redirects file IO
+            //           below 0x14067b100). Then SetState(5) streams the real world.
+            if b80 == OWN_STEPPER_B80_RESIDENT {
+                let deser: unsafe extern "system" fn(i32) =
+                    unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
+                unsafe { deser(want_slot) };
+                let c30_now = read_gm(GAME_MAN_SAVED_MAP_C30_OFFSET);
+                let ac0_now = read_gm(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
+                if c30_now != GAME_MAN_C30_UNSET {
+                    unsafe {
+                        *((owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *mut u8) =
+                            MOVIE_SKIP_FLAG_CLEAR;
+                        *((owner + TITLE_OWNER_PLAY_GAME_SLOT_OFFSET) as *mut i32) = c30_now;
+                    }
+                    let set_state: unsafe extern "system" fn(usize, i32) =
+                        unsafe { std::mem::transmute(base + TITLE_SET_STATE_RVA) };
+                    unsafe { set_state(owner, TITLE_STEP_PLAY_GAME) };
+                    OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "own_stepper: MOUNTED (#{n}) ac0={ac0_now} c30=0x{c30_now:x} SetState(5) owner=0x{owner:x}"
+                    ));
+                } else {
+                    OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "own_stepper: deser-noop (#{n}) ac0={ac0_now} c30 still unset owner=0x{owner:x}"
+                    ));
+                }
+                return;
+            }
+            if b80 == OWN_STEPPER_B80_PREVIEW_LANE {
+                let lane1: unsafe extern "system" fn() =
+                    unsafe { std::mem::transmute(base + B80_LANE1_DRIVER_RVA) };
+                unsafe { lane1() };
+            } else if b80 == OWN_STEPPER_B80_IDLE {
+                let loadsave: unsafe extern "system" fn(i32) =
+                    unsafe { std::mem::transmute(base + B80_LOAD_SAVE_DATA_INITIATOR_RVA) };
+                unsafe { loadsave(want_slot) };
+            } else {
+                let poll: unsafe extern "system" fn(u8, u8) =
+                    unsafe { std::mem::transmute(base + B80_POLL_RVA) };
+                unsafe { poll(B80_POLL_ARG_ZERO, B80_POLL_ARG_ZERO) };
+            }
             if polls % OWN_STEPPER_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
                 let (io10, io18, io20) = read_iodev();
                 append_autoload_debug(format_args!(
-                    "own_stepper: poll {polls} b80={b80} ac0={ac0} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} c30=0x{c30:x}"
+                    "own_stepper: drive {polls} b80={b80} ac0={ac0} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} c30=0x{c30:x}"
                 ));
             }
             return;
@@ -547,7 +558,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
         let (io10, io18, io20) = read_iodev();
         append_autoload_debug(format_args!(
-            "own_stepper: poll TIMEOUT (polls={polls}) b80={b80} ac0={ac0} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} c30=0x{c30:x}"
+            "own_stepper: drive TIMEOUT (polls={polls}) b80={b80} ac0={ac0} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} c30=0x{c30:x}"
         ));
         return;
     }
