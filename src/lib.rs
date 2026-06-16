@@ -81,6 +81,58 @@ pub(crate) const AV_LOG_LINE_INCREMENT: usize = 1;
 /// Number of process-exit paths hooked (ExitProcess, TerminateProcess,
 /// RtlExitUserProcess, NtTerminateProcess).
 pub(crate) const CRASH_EXIT_TARGET_COUNT: usize = 4;
+// Hardware write-watchpoint on GameMan+0xc30 (the save-mount map write): set DR0 to
+// &c30 + DR7 to a 4-byte data-write breakpoint on the game threads, so the EXACT
+// writing instruction (vanilla OR Seamless/ERSC) traps into our VEH with its RIP +
+// call stack -- no guessing which function does the deserialize. Win64 CONTEXT field
+// offsets (fixed by the ABI) + the debug-register encodings.
+pub(crate) const EXCEPTION_SINGLE_STEP_CODE: u32 = 0x80000004;
+pub(crate) const EXCEPTION_CONTINUE_EXECUTION: i32 = -1;
+pub(crate) const CONTEXT_AMD64_SIZE: usize = 0x4d0;
+pub(crate) const CONTEXT_FLAGS_OFFSET: usize = 0x30;
+pub(crate) const CONTEXT_DR0_OFFSET: usize = 0x48;
+pub(crate) const CONTEXT_DR6_OFFSET: usize = 0x68;
+pub(crate) const CONTEXT_DR7_OFFSET: usize = 0x70;
+pub(crate) const CONTEXT_RIP_OFFSET: usize = 0xf8;
+/// CONTEXT_AMD64 (0x100000) | CONTEXT_DEBUG_REGISTERS (0x10).
+pub(crate) const CONTEXT_DEBUG_REGISTERS_FLAG: u32 = 0x0010_0010;
+/// DR7: L0 (bit0) enable DR0 local + R/W0=01 (data write, bits16-17) + LEN0=11
+/// (4 bytes, bits18-19) = 0xd0001.
+pub(crate) const DR7_C30_WRITE_WATCH: u64 = 0xd0001;
+pub(crate) const DR7_DISARM: u64 = 0;
+pub(crate) const DR6_CLEAR: u64 = 0;
+/// DR6 bit0 set == the DR0 watchpoint condition was the cause.
+pub(crate) const DR6_DR0_HIT_MASK: u64 = 0x1;
+/// THREAD_SUSPEND_RESUME(0x2) | THREAD_GET_CONTEXT(0x8) | THREAD_SET_CONTEXT(0x10).
+pub(crate) const THREAD_WATCH_ACCESS: u32 = 0x1a;
+pub(crate) const TH32CS_SNAPTHREAD: u32 = 0x4;
+pub(crate) const TOOLHELP_ALL_PROCESSES: u32 = 0;
+pub(crate) const TOOLHELP_INVALID_SNAPSHOT: isize = -1;
+pub(crate) const INVALID_THREAD_HANDLE: isize = 0;
+pub(crate) const TOOLHELP_ITER_OK: i32 = 1;
+pub(crate) const SET_THREAD_CONTEXT_OK: i32 = 1;
+/// Cap watchpoint hit log lines (multiple c30 writes across a session).
+pub(crate) const MAX_C30_WATCH_HITS: usize = 12;
+pub(crate) const C30_WATCH_HIT_INCREMENT: usize = 1;
+pub(crate) const C30_WATCH_NEVER_ARMED: usize = 0;
+/// Re-arm cadence (frames) until the first hit, to cover load threads spawned after
+/// the initial arm.
+pub(crate) const C30_WATCH_REARM_INTERVAL: usize = 64;
+pub(crate) const C30_WATCH_TICK_BIAS: usize = 1;
+pub(crate) const C30_WATCH_ARM_COUNT_NONE: i32 = 0;
+pub(crate) static C30_WATCH_LAST_ARM_TICK: AtomicUsize = AtomicUsize::new(C30_WATCH_NEVER_ARMED);
+pub(crate) static C30_WATCH_HITS: AtomicUsize = AtomicUsize::new(0);
+/// 16-byte alignment for the stack CONTEXT buffer (Get/SetThreadContext require it);
+/// mask = align-1. Over-allocate by CONTEXT_ALIGN then round the pointer up.
+pub(crate) const CONTEXT_ALIGN: usize = 16;
+pub(crate) const CONTEXT_ALIGN_MASK: usize = 0xf;
+pub(crate) const CONTEXT_ZERO_FILL: u8 = 0;
+pub(crate) const C30_WATCH_ARM_INCREMENT: i32 = 1;
+/// OpenThread bInheritHandle = FALSE.
+pub(crate) const INHERIT_HANDLE_FALSE: i32 = 0;
+/// Monotonic per-frame counter that paces the watchpoint re-arm cadence without
+/// taking the EffectsState lock before the player check.
+pub(crate) static C30_WATCH_FRAME_COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// Zero fill for synthetic qword scratch buffers.
 pub(crate) const SYNTHETIC_ZERO_QWORD: u64 = 0;
 /// FromSoft assert wrapper 0x141eb97a0 (calls the core 0x141eb98d0 which, in the
@@ -1151,6 +1203,18 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // body crashes the title ~19s" from "the DLL's mere presence".
                 if inert_mode() {
                     return;
+                }
+                // Hardware write-watchpoint on GameMan+0xc30: (re)arm each frame until
+                // the save-mount write is caught, so the VEH logs the exact writer. Runs
+                // before the player check so it arms at the title (pre-load), independent
+                // of the active observe/own-stepper mode.
+                if c30_watch_enabled() {
+                    if let Ok(base) = game_module_base() {
+                        let frame = C30_WATCH_FRAME_COUNTER
+                            .fetch_add(C30_WATCH_HIT_INCREMENT, Ordering::SeqCst)
+                            as u64;
+                        unsafe { maybe_arm_c30_watch(base, frame) };
+                    }
                 }
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
                     let mut state = state_or_return(&state);

@@ -106,9 +106,40 @@ pub(crate) struct ExceptionRecordMin {
     pub(crate) exception_address: *mut c_void,
 }
 
-/// Minimal EXCEPTION_POINTERS: only the record pointer is read.
+/// Minimal EXCEPTION_POINTERS: the record pointer + the CONTEXT pointer (the
+/// CONTEXT is read/modified by the hardware-watchpoint single-step handler to
+/// read Dr6/Rip and one-shot-disarm Dr7).
 #[repr(C)]
 pub(crate) struct ExceptionPointersMin {
     pub(crate) exception_record: *mut ExceptionRecordMin,
     pub(crate) context_record: *mut c_void,
+}
+
+/// THREADENTRY32 (ToolHelp): only the fields the watchpoint arming reads/sets.
+#[repr(C)]
+pub(crate) struct ThreadEntry32 {
+    pub(crate) dw_size: u32,
+    pub(crate) cnt_usage: u32,
+    pub(crate) th32_thread_id: u32,
+    pub(crate) th32_owner_process_id: u32,
+    pub(crate) tpbase_pri: i32,
+    pub(crate) delta_pri: i32,
+    pub(crate) dw_flags: u32,
+}
+
+/// Thread + debug-register FFI for the GameMan+0xc30 hardware write-watchpoint:
+/// enumerate the game's threads (ToolHelp) and set DR0/DR7 on each via
+/// Suspend/Get/SetThreadContext so the writing instruction traps into our VEH.
+#[cfg(windows)]
+unsafe extern "system" {
+    pub(crate) fn CreateToolhelp32Snapshot(flags: u32, process_id: u32) -> isize;
+    pub(crate) fn Thread32First(snapshot: isize, entry: *mut ThreadEntry32) -> i32;
+    pub(crate) fn Thread32Next(snapshot: isize, entry: *mut ThreadEntry32) -> i32;
+    pub(crate) fn OpenThread(access: u32, inherit: i32, thread_id: u32) -> isize;
+    pub(crate) fn SuspendThread(thread: isize) -> u32;
+    pub(crate) fn ResumeThread(thread: isize) -> u32;
+    pub(crate) fn GetThreadContext(thread: isize, context: *mut c_void) -> i32;
+    pub(crate) fn SetThreadContext(thread: isize, context: *const c_void) -> i32;
+    pub(crate) fn GetCurrentThreadId() -> u32;
+    pub(crate) fn CloseHandle(handle: isize) -> i32;
 }
