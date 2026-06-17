@@ -930,11 +930,51 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         return;
     }
     if phase == OWN_STEPPER_PHASE_MENU_BUILD {
-        // Zero-input main-menu built by the idx10 SetState(3). Wait for BeginTitle to
-        // populate Continue/Load into owner+0x138, polling each frame (quiet); log the full
-        // tree once when the Load-Game leaf is found (or on timeout). NO SetState here ->
-        // stays at the main menu, save-safe. STAGE 2 (invoke the leaf functor) is gated on
-        // this confirming the live item + layout first.
+        // STAGE 1d: force-open the main menu zero-input. SetState(2) built the TitleTopDialog
+        // container at owner+0xe0 (vt 0x142b26468) but left it in the press-prompt state -- the
+        // native open is TitleTopDialog::update calling registrar 0x1409b1ae0, gated on the
+        // input/accept byte 0x144589bdc. The registrar reads NO input, so we call it directly
+        // with rcx=dialog to register Continue/Load(d180)/New-Game (the engine's own menu-open
+        // method, NOT input synthesis; no save write). One-shot, guarded by the native
+        // preconditions (vtable match, FD4 state machine [dialog+0xa60] non-null, latch
+        // [dialog+0xa40]==0 not-already-open) to avoid a double-build / wrong-receiver fault.
+        // The container may need a few frames to build (BeginLogo->BeginTitle->10), so this
+        // simply skips until the vtable matches. After it fires, the menu-item Update hook
+        // captures d180 as the freshly-registered entries tick.
+        const MENU_JOB_HOLDER_E0: usize = 0xe0;
+        if OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) == OWN_STEPPER_MENU_OPENED_NO {
+            let holder = unsafe { safe_read_usize(owner + MENU_JOB_HOLDER_E0) }
+                .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+            let holder_vt = if holder != TITLE_OWNER_SCAN_START_ADDRESS {
+                unsafe { safe_read_usize(holder) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+            } else {
+                TITLE_OWNER_SCAN_START_ADDRESS
+            };
+            let opened_latch =
+                unsafe { safe_read_i32(holder + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }
+                    .unwrap_or(TITLE_TOP_DIALOG_OPENED_LATCH_MASK)
+                    & TITLE_TOP_DIALOG_OPENED_LATCH_MASK;
+            let state_machine =
+                unsafe { safe_read_usize(holder + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET) }
+                    .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+            if holder_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA
+                && opened_latch == TITLE_OWNER_SCAN_START_ADDRESS as i32
+                && state_machine != TITLE_OWNER_SCAN_START_ADDRESS
+            {
+                let open_menu: unsafe extern "system" fn(usize) =
+                    unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_OPEN_MENU_RVA) };
+                unsafe { open_menu(holder) };
+                OWN_STEPPER_MENU_OPENED.store(OWN_STEPPER_MENU_OPENED_YES, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "own_stepper: STAGE1d called TitleTopDialog open-menu 0x{:x}(dialog=0x{holder:x}) state_machine=0x{state_machine:x} -> entries should register (zero-input, NO save write)",
+                    base + TITLE_TOP_DIALOG_OPEN_MENU_RVA
+                ));
+            }
+        }
+        // Wait for the registered entries to tick: the menu-item Update hook captures the
+        // Load-Game leaf (functor->dialog_factory) as the native pump ticks them. Fallback:
+        // our static tree walk. NO SetState here -> stays at the main menu, save-safe. STAGE 2
+        // (invoke the leaf functor) follows once the live item is confirmed.
         let waits =
             OWN_STEPPER_MENU_BUILD_WAITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
         // Primary: the menu-item Update hook captures the Load-Game item as the native pump
@@ -2752,6 +2792,16 @@ pub(crate) fn install_continue_trace_hooks() {
             cap_menu_item_update_hook as *mut c_void,
             &MENU_ITEM_UPDATE_ORIG,
         );
+        // Sequence child-iterator 0x1407aa1f0: enumerate every Sequence's children to capture
+        // the Load-Game leaf d180 even though it does not tick (only the focused entry ticks
+        // the leaf Update above).
+        create_continue_trace_hook(
+            &mut hooks,
+            "cap_sequence_iter_7aa1f0",
+            SEQUENCE_ITER_RVA,
+            cap_sequence_iter_hook as *mut c_void,
+            &SEQUENCE_ITER_ORIG,
+        );
     }
 
     match unsafe { MH_ApplyQueued() } {
@@ -3260,17 +3310,93 @@ pub(crate) unsafe extern "system" fn cap_menu_item_update_hook(
                 trace_callers_summary()
             ));
         } else if MENU_ITEM_UPDATE_LAST.swap(item, Ordering::SeqCst) != item {
-            // New distinct item ticked (user navigated to it): log it once.
+            // New distinct item ticked: log it once. CAPPED -- with a few items rotating
+            // each frame this otherwise floods the size-capped trace and rolls the early
+            // SEQ-ITER-CHILD enumeration off. The capture (MENU_LOAD_GAME_ITEM) is unaffected.
             let n =
                 MENU_ITEM_UPDATE_CAPTURE_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
-            let vt = unsafe { safe_read_usize(item) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
-            append_continue_trace(format_args!(
-                "MENU-ITEM-UPDATE #{n} item=0x{item:x} vt=0x{vt:x} {chain} load_game=false {}",
-                trace_callers_summary()
-            ));
+            if n < MENU_ITEM_UPDATE_LOG_MAX {
+                let vt = unsafe { safe_read_usize(item) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+                append_continue_trace(format_args!(
+                    "MENU-ITEM-UPDATE #{n} item=0x{item:x} vt=0x{vt:x} {chain} load_game=false {}",
+                    trace_callers_summary()
+                ));
+            }
         }
     }
     unsafe { call_cap_original(&MENU_ITEM_UPDATE_ORIG, item, b, c, d) }
+}
+
+/// FD4 Sequence::Update / child-iterator 0x1407aa1f0 hook. The opened main-menu registers the
+/// Load-Game leaf d180 but it does NOT tick (only the focused entry ticks the leaf Update, so
+/// `cap_menu_item_update_hook` misses d180). This iterator runs on every Sequence node; we
+/// walk its inline child array ([seq+0x18 + i*8], count [seq+0x60]) and classify each child by
+/// the action-functor `_Do_call` chain (`functor_chain_hits_factory` -> dialog_factory
+/// 0x14081ead0). The unique hit is d180 / Load-Game -- captured regardless of focus, then read
+/// by own_stepper idx10 (MENU_LOAD_GAME_ITEM) for the Stage-2 functor invoke. Early-outs once
+/// found (the iterator is hot); fault-tolerant reads never AV; pure read, NO writes/calls into
+/// the game beyond the original.
+pub(crate) unsafe extern "system" fn cap_sequence_iter_hook(
+    seq: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    const PTR_STRIDE: usize = core::mem::size_of::<usize>();
+    const WALK_START: usize = 0;
+    const WALK_STEP: usize = 1;
+    let base = {
+        let own = OWN_STEPPER_BASE.load(Ordering::SeqCst);
+        if own != TITLE_OWNER_SCAN_START_ADDRESS {
+            own
+        } else {
+            game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+        }
+    };
+    if seq != TITLE_OWNER_SCAN_START_ADDRESS
+        && base != TITLE_OWNER_SCAN_START_ADDRESS
+        && MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        let count = unsafe { safe_read_usize(seq + SEQUENCE_COUNT_60_OFFSET) }
+            .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        if (SEQUENCE_CHILD_COUNT_MIN..=SEQUENCE_CHILD_COUNT_MAX).contains(&count) {
+            let mut i = WALK_START;
+            while i < count {
+                let child = unsafe {
+                    safe_read_usize(seq + SEQUENCE_CHILDREN_BASE_18_OFFSET + i * PTR_STRIDE)
+                }
+                .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+                if child != TITLE_OWNER_SCAN_START_ADDRESS {
+                    let mut chain = String::new();
+                    let child_vt =
+                        unsafe { safe_read_usize(child) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+                    if unsafe { functor_chain_hits_factory(child, base, &mut chain) } {
+                        MENU_LOAD_GAME_ITEM.store(child, Ordering::SeqCst);
+                        append_continue_trace(format_args!(
+                            "SEQ-ITER captured LOAD-GAME child=0x{child:x} vt=0x{child_vt:x} seq=0x{seq:x} count={count} idx={i} {chain}"
+                        ));
+                        break;
+                    }
+                    // Diagnostic: surface distinct MenuWindowJob children (the registered menu
+                    // entries, ticking or not) with their docall chain so one run reveals the
+                    // opened-menu structure (which entry is Load-Game). Capped to avoid flooding.
+                    if child_vt == base + MENU_WINDOW_JOB_VTABLE_RVA
+                        && SEQ_ITER_CHILD_LAST.swap(child, Ordering::SeqCst) != child
+                    {
+                        let nlog = SEQ_ITER_CHILD_LOG_COUNT
+                            .fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+                        if nlog < SEQ_ITER_CHILD_LOG_MAX {
+                            append_continue_trace(format_args!(
+                                "SEQ-ITER-CHILD #{nlog} child=0x{child:x} seq=0x{seq:x} count={count} idx={i} {chain}"
+                            ));
+                        }
+                    }
+                }
+                i += WALK_STEP;
+            }
+        }
+    }
+    unsafe { call_cap_original(&SEQUENCE_ITER_ORIG, seq, b, c, d) }
 }
 
 pub(crate) unsafe extern "system" fn menu_task_update_wrapper_hook(

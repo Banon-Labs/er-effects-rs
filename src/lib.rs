@@ -261,7 +261,38 @@ pub(crate) const TITLE_STEP_BEGIN_LOGO: i32 = 2;
 /// Session singleton 0x144588e98 (RVA = abs - base). Asserted by STEP_BeginLogo(2) and the
 /// MoveMapListStep load menu. Built by the boot/session bootstrap (may be non-null at the
 /// splash-skipped parked title -- UNVERIFIED, hence read it live before SetState(2)).
+/// RUNTIME-CONFIRMED non-null at the parked splash-skipped title (STAGE 1c).
 pub(crate) const SESSION_SINGLETON_144588E98_RVA: usize = 0x4588e98;
+/// CS::TitleTopDialog "open main menu / populate entries" registrar 0x1409b24e0 (RVA
+/// 0x9b24e0; file offset 0x9b1ae0 -- objdump-disasm-confirmed: `mov byte [rcx+0xa40],1;
+/// add rcx,0xa60; lea rdx,desc 0x142b264f0; call set_state 0x1407499e0`). The press-any-button
+/// title holder at owner+0xe0 (a CS::TitleTopDialog, vtable 0x142b26468) is built by BeginTitle
+/// but left in the press-prompt state; this method sets the menu-opened latch [dialog+0xa40]=1,
+/// advances the FD4 state machine at [dialog+0xa60] to the menu-list state, and
+/// constructs+registers the Continue / Load-Game(d180) / New-Game MenuWindowJobs into the
+/// holder. It is normally called from TitleTopDialog::update gated on the global accept byte
+/// 0x144589bdc, but the registrar itself reads NO input -- calling it directly with rcx=dialog
+/// is the zero-input menu-open (no input synthesis, no save write). (NB: a subagent first
+/// reported the entry as 0x1409b1ae0 -- a foff->VA conversion slip of 0xa00; the disasm-verified
+/// entry is 0x1409b24e0.)
+pub(crate) const TITLE_TOP_DIALOG_OPEN_MENU_RVA: usize = 0x9b24e0;
+/// CS::TitleTopDialog vtable 0x142b26468 (RVA). Verify [owner+0xe0][0]==base+this before
+/// calling the registrar (wrong receiver would fault on [dialog+0xa38]/[+0xa60]).
+pub(crate) const TITLE_TOP_DIALOG_VTABLE_RVA: usize = 0x2b26468;
+/// Byte latch [dialog+0xa40]: 0 = press-prompt (menu not opened), 1 = menu opened. The
+/// registrar sets it to 1; mirror update's precondition (only open when ==0) so we never
+/// double-build.
+pub(crate) const TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET: usize = 0xa40;
+/// FD4 StateMachine sub-object pointer at [dialog+0xa60]; must be non-null before the
+/// registrar (it drives the state transition through it).
+pub(crate) const TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET: usize = 0xa60;
+/// Low-byte mask to read the [dialog+0xa40] byte latch out of a 4-byte i32 read.
+pub(crate) const TITLE_TOP_DIALOG_OPENED_LATCH_MASK: i32 = 0xff;
+/// One-shot guard: NO = the TitleTopDialog open-menu registrar has not been called yet.
+pub(crate) const OWN_STEPPER_MENU_OPENED_NO: usize = 0;
+pub(crate) const OWN_STEPPER_MENU_OPENED_YES: usize = 1;
+pub(crate) static OWN_STEPPER_MENU_OPENED: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(OWN_STEPPER_MENU_OPENED_NO);
 /// Sentinel logged when the inner TitleStep owner can no longer be found (the
 /// title flow advanced past the title and the owner was finalized/destructed).
 pub(crate) const TITLE_STATE_OWNER_GONE: i32 = -1;
@@ -549,7 +580,32 @@ pub(crate) static OWN_STEPPER_MENU_BUILD_WAITS: AtomicUsize = AtomicUsize::new(0
 pub(crate) const MENU_ITEM_UPDATE_RVA: u32 = 0x007ad1c0;
 pub(crate) static MENU_ITEM_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static MENU_LOAD_GAME_ITEM: AtomicUsize = AtomicUsize::new(0);
+/// FD4 Sequence::Update / child-iterator 0x1407aa1f0 (RVA). At the opened main menu the
+/// Load-Game leaf d180 is REGISTERED but does NOT tick (only the focused entry ticks via the
+/// leaf Update 0x1407ad1c0, so the leaf hook misses d180). This iterator runs on every
+/// Sequence node and dispatches its children at [seq+0x18 + i*8] (count [seq+0x60]); hooking
+/// it lets us ENUMERATE every Sequence's children and capture d180 as a CHILD (functor ->
+/// dialog_factory) regardless of focus -- the robust zero-input locator.
+pub(crate) const SEQUENCE_ITER_RVA: u32 = 0x007aa1f0;
+pub(crate) static SEQUENCE_ITER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+/// Child-array offsets on an FD4 Sequence node (inline array at +0x18, count at +0x60,
+/// stride 8). Sane child-count bound to skip non-Sequence nodes the hook also sees.
+pub(crate) const SEQUENCE_CHILDREN_BASE_18_OFFSET: usize = 0x18;
+pub(crate) const SEQUENCE_COUNT_60_OFFSET: usize = 0x60;
+pub(crate) const SEQUENCE_CHILD_COUNT_MIN: usize = 1;
+pub(crate) const SEQUENCE_CHILD_COUNT_MAX: usize = 64;
+/// CS::MenuWindowJob vtable 0x142aa97e8 (RVA) -- the menu-item leaf class. Used to log only
+/// real menu-item children when enumerating the opened-menu structure via the iterator hook.
+pub(crate) const MENU_WINDOW_JOB_VTABLE_RVA: usize = 0x2aa97e8;
+/// Diagnostic: log distinct MenuWindowJob children the Sequence iterator walks (with docall
+/// chain) so one run reveals the full opened-menu entry set. Capped to avoid flooding.
+pub(crate) static SEQ_ITER_CHILD_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const SEQ_ITER_CHILD_LOG_MAX: usize = 240;
+pub(crate) static SEQ_ITER_CHILD_LAST: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static MENU_ITEM_UPDATE_CAPTURE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Cap on leaf-hook "distinct item ticked" log lines. A few title/menu items rotate every
+/// frame, so without a cap this floods the size-capped trace and rolls early diagnostics off.
+pub(crate) const MENU_ITEM_UPDATE_LOG_MAX: usize = 48;
 /// Last menu-item pointer we logged from the Update hook; we log only on change (the pump
 /// ticks one item per frame, so this surfaces each distinct item as the user navigates,
 /// without flooding the trace).
