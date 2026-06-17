@@ -279,30 +279,37 @@ pub(crate) const TITLE_TOP_DIALOG_OPEN_MENU_RVA: usize = 0x9b24e0;
 /// CS::TitleTopDialog vtable 0x142b26468 (RVA). Verify [owner+0xe0][0]==base+this before
 /// calling the registrar (wrong receiver would fault on [dialog+0xa38]/[+0xa60]).
 pub(crate) const TITLE_TOP_DIALOG_VTABLE_RVA: usize = 0x2b26468;
-/// Byte latch [dialog+0xa40]: 0 = press-prompt (menu not opened), 1 = menu opened. The
-/// registrar sets it to 1; mirror update's precondition (only open when ==0) so we never
-/// double-build.
-pub(crate) const TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET: usize = 0xa40;
-/// FD4 StateMachine sub-object pointer at [dialog+0xa60]; must be non-null before the
-/// registrar (it drives the state transition through it).
+/// FD4 StateMachine sub-object EMBEDDED at dialog+0xa60. NB: the registrar / set_state /
+/// is_in_state receiver is the ADDRESS dialog+0xa60 (they do `add rcx,0xa60; call`), NOT
+/// `*(dialog+0xa60)`. Its first qword is the SM vtable.
 pub(crate) const TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET: usize = 0xa60;
-/// Initial value (0) for the open-menu registrar retry counter.
+/// Byte latch at [dialog+0xa40]: 0 = menu not opened (the native non-input registrar path
+/// requires it ==0), 1 = registrar ran. We READ it (never write/clear it -- pre-setting it
+/// poisons the native non-input open path, bd titletopdialog-loop-ready-gate-2026).
+pub(crate) const TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET: usize = 0xa40;
+/// Mask to extract the latch byte from an 8-byte read at dialog+0xa40.
+pub(crate) const TITLE_TOP_DIALOG_LATCH_BYTE_MASK: usize = 0xff;
+/// CS FD4 `is_in_state(rcx = sm-receiver = dialog+0xa60, rdx = state descriptor ptr) -> bool`
+/// (0x140749b20). Returns true iff the SM's CURRENT node is SETTLED (flags&0x8f>=2) AND its name
+/// matches the descriptor's inline ASCII name. We call the game's own checker to read the live
+/// state by NAME -- robust, no hand pointer-chase / SSO parsing.
+pub(crate) const TITLE_TOP_DIALOG_IS_IN_STATE_RVA: usize = 0x749b20;
+/// FD4 state name-descriptor RVAs (inline ASCII at the VA). FadeIn = the intro-fade node;
+/// Loop = the settled press-prompt node (the correct gate to open the menu); TextFadeOut = the
+/// menu-list-active node the registrar transitions to. bd titletopdialog-fadein-gate-...-2026.
+pub(crate) const TITLE_STATE_DESC_FADEIN_RVA: usize = 0x2a90500;
+pub(crate) const TITLE_STATE_DESC_LOOP_RVA: usize = 0x2a8f9e8;
+pub(crate) const TITLE_STATE_DESC_TEXTFADEOUT_RVA: usize = 0x2b264f0;
+/// Boolean-false byte returned by the game's `is_in_state` (compare `!= this` for true).
+pub(crate) const OWN_STEPPER_FALSE: u8 = 0;
+/// Initial value (0) for the open-menu registrar one-shot guard.
 pub(crate) const OWN_STEPPER_MENU_OPENED_NO: usize = 0;
-/// Settle delay (frames) before STAGE1d calls the open-menu registrar. The registrar sets
-/// the latch [dialog+0xa40]=1 UNCONDITIONALLY then does the FD4 state transition + entry
-/// registration; if called before the dialog's state machine has reached the press-prompt
-/// state the registration no-ops yet the latch is set, so our one-shot guard never retries
-/// and the menu never opens (the observed run-to-run fragility). Waiting lets the dialog
-/// reach press-prompt first so the single call reliably registers the entries.
+/// Settle delay (frames) before STAGE1d begins probing the dialog's FD4 state. Gives the native
+/// update a head start to run the FadeIn fade animation before we start checking.
 pub(crate) const STAGE1D_SETTLE_WAITS: u64 = 60;
-/// Retry interval (frames) for the open-menu registrar. A single call only succeeds when the
-/// dialog is in the press-prompt FD4 state that frame; otherwise it no-ops + poisons the latch.
-/// So we CLEAR the latch ([dialog+0xa40]=0) and re-call every interval until main-menu entries
-/// actually appear (MENU_ENTRIES_SEEN), spaced so a successful registration is detected before
-/// the next retry (avoiding a double-build). Stops on success.
+/// Interval (frames) for logging the state probe (FadeIn/Loop/TextFadeOut + latch), so the log
+/// shows the dialog progressing without spamming every frame.
 pub(crate) const STAGE1D_RETRY_INTERVAL: u64 = 30;
-/// Cleared value for the [dialog+0xa40] open-menu latch (re-arm a poisoned latch for retry).
-pub(crate) const TITLE_TOP_DIALOG_LATCH_CLEAR: u8 = 0;
 /// Set by cap_sequence_iter_hook when the Sequence iterator first walks a MenuWindowJob child
 /// (vt 0x142aa97e8) -- i.e. the main menu actually opened and its entries are registered. The
 /// retry loop stops once this is set (the title views tick via a different pump, so this fires
@@ -587,8 +594,10 @@ pub(crate) static OWN_STEPPER_DRIVE_CALLS: AtomicUsize = AtomicUsize::new(0);
 /// main menu (no PlayGame) -> save-safe.
 pub(crate) const OWN_STEPPER_PHASE_MENU_BUILD: usize = 5;
 /// Max idx10 re-entries to wait for the main menu to build before giving up (stay at the
-/// title, no save write). ~3s at 60fps.
-pub(crate) const OWN_STEPPER_MENU_BUILD_WAIT_MAX: u64 = 180;
+/// title, no save write). The intro FadeIn takes ~176 frames to reach the Loop state where the
+/// open-menu registrar fires, so this must be well past that to observe the menu entries
+/// register + tick afterward. ~10s at 60fps.
+pub(crate) const OWN_STEPPER_MENU_BUILD_WAIT_MAX: u64 = 600;
 pub(crate) static OWN_STEPPER_MENU_BUILD_WAITS: AtomicUsize = AtomicUsize::new(0);
 /// MenuWindowJob::Update 0x1407ad1c0 -- the native menu pump calls it with rcx = a
 /// menu-item each tick. We hook it to CAPTURE the live Load-Game item (the one whose

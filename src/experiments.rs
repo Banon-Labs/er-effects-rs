@@ -932,51 +932,73 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
     if phase == OWN_STEPPER_PHASE_MENU_BUILD {
         let waits =
             OWN_STEPPER_MENU_BUILD_WAITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
-        // STAGE 1d: force-open the main menu zero-input. SetState(2) built the TitleTopDialog
-        // container at owner+0xe0 (vt 0x142b26468); its "open main menu" registrar 0x1409b24e0
-        // sets the latch [dialog+0xa40]=1, advances the FD4 state machine [dialog+0xa60] to the
-        // menu-list state, and registers Continue/Load(d180)/New-Game. Normally update calls it
-        // gated on the input/accept byte 0x144589bdc; the registrar reads NO input, so we call
-        // it directly (the engine's own menu-open method, NOT input synthesis; no save write).
-        // RETRY: the registrar only registers when the dialog is in the press-prompt FD4 state
-        // that frame (otherwise it no-ops but still sets the latch -> poisons our one-shot). So
-        // after a settle delay we CLEAR the latch and re-call every STAGE1D_RETRY_INTERVAL frames
-        // until main-menu entries actually appear (MENU_ENTRIES_SEEN, set by the iterator hook
-        // on the first MenuWindowJob child). Spaced so a successful registration is detected
-        // before the next retry (no double-build). NO save write.
+        // STAGE 1d: open the main menu zero-input. SetState(2)->3->10 built the TitleTopDialog at
+        // owner+0xe0 (vt 0x142b26468). The dialog's native update 0x1409aac10 (ticked every frame
+        // by pass_through -> STEP_MenuJobWait) runs the intro FadeIn animation, transitions
+        // FadeIn->Loop on anim-complete (NOT input), and on its NON-INPUT Loop-ready path
+        // (0x1409aade8) calls the open-menu registrar 0x1409b24e0 ITSELF, which set_state's the
+        // SM [dialog+0xa60] to "TextFadeOut" and registers Continue/Load(d180)/New-Game. So the
+        // PRIMARY path is to do NOTHING and let the native update self-open the menu.
+        //
+        // The prior force-call was harmful (bd titletopdialog-loop-ready-gate-2026): firing the
+        // registrar on bare flags>=2 fired from the FadeIn node (wrong state) AND set the latch
+        // [dialog+0xa40]=1, which PERMANENTLY blocks the native non-input path (it needs latch==0).
+        // So here we (a) READ-ONLY probe the live state by NAME via the game's own is_in_state
+        // (FadeIn/Loop/TextFadeOut) + the latch, logging it; and (b) only as a FALLBACK self-fire
+        // the registrar on the CORRECT gate -- is_in_state(Loop)==true && latch==0 -- which is
+        // exactly the native path's own precondition (zero input, NO save write). If the native
+        // path fires first (latch->1 in Loop) we simply observe the menu open.
         const MENU_JOB_HOLDER_E0: usize = 0xe0;
         if MENU_ENTRIES_SEEN.load(Ordering::SeqCst) == MENU_ENTRIES_SEEN_NO
             && waits >= STAGE1D_SETTLE_WAITS
-            && (waits - STAGE1D_SETTLE_WAITS) % STAGE1D_RETRY_INTERVAL
-                == TITLE_OWNER_SCAN_START_ADDRESS as u64
         {
-            let holder = unsafe { safe_read_usize(owner + MENU_JOB_HOLDER_E0) }
+            let dialog = unsafe { safe_read_usize(owner + MENU_JOB_HOLDER_E0) }
                 .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
-            let holder_vt = if holder != TITLE_OWNER_SCAN_START_ADDRESS {
-                unsafe { safe_read_usize(holder) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+            let dialog_vt = if dialog != TITLE_OWNER_SCAN_START_ADDRESS {
+                unsafe { safe_read_usize(dialog) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
             } else {
                 TITLE_OWNER_SCAN_START_ADDRESS
             };
-            let state_machine =
-                unsafe { safe_read_usize(holder + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET) }
-                    .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
-            if holder_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA
-                && state_machine != TITLE_OWNER_SCAN_START_ADDRESS
-            {
-                // Clear the (possibly poisoned) open latch so the registrar's registration runs.
-                unsafe {
-                    *((holder + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) as *mut u8) =
-                        TITLE_TOP_DIALOG_LATCH_CLEAR;
+            // Only call into the dialog's FD4 state machine once owner+0xe0 IS the TitleTopDialog.
+            if dialog_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA {
+                // is_in_state receiver = the ADDRESS dialog+0xa60 (the embedded SM sub-object), per
+                // the registrar's `add rcx,0xa60; call`. is_in_state(sm, desc) -> bool reads the
+                // live state by name (no hand pointer-chase). Read-only / no side effects.
+                let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
+                let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
+                    unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
+                let in_fadein = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_FADEIN_RVA) }
+                    != OWN_STEPPER_FALSE;
+                let in_loop = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) }
+                    != OWN_STEPPER_FALSE;
+                let in_textfadeout =
+                    unsafe { is_in_state(sm, base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) }
+                        != OWN_STEPPER_FALSE;
+                let latch =
+                    unsafe { safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }
+                        .map(|v| v & TITLE_TOP_DIALOG_LATCH_BYTE_MASK)
+                        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+                if (waits - STAGE1D_SETTLE_WAITS) % STAGE1D_RETRY_INTERVAL
+                    == TITLE_OWNER_SCAN_START_ADDRESS as u64
+                {
+                    append_autoload_debug(format_args!(
+                        "own_stepper: STAGE1d probe dialog=0x{dialog:x} sm=0x{sm:x} fadein={in_fadein} loop={in_loop} textfadeout={in_textfadeout} latch={latch} waits={waits} (read-only; native path self-opens on Loop-ready)"
+                    ));
                 }
-                let open_menu: unsafe extern "system" fn(usize) =
-                    unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_OPEN_MENU_RVA) };
-                unsafe { open_menu(holder) };
-                let nretry =
+                // FALLBACK self-fire on the CORRECT gate (native path's own precondition).
+                if in_loop
+                    && latch == TITLE_OWNER_SCAN_START_ADDRESS
+                    && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) == OWN_STEPPER_MENU_OPENED_NO
+                {
+                    let open_menu: unsafe extern "system" fn(usize) =
+                        unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_OPEN_MENU_RVA) };
+                    unsafe { open_menu(dialog) };
                     OWN_STEPPER_MENU_OPENED.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
-                append_autoload_debug(format_args!(
-                    "own_stepper: STAGE1d retry #{nretry} open-menu 0x{:x}(dialog=0x{holder:x}) sm=0x{state_machine:x} waits={waits} -- clear-latch+call until entries appear (zero-input, NO save write)",
-                    base + TITLE_TOP_DIALOG_OPEN_MENU_RVA
-                ));
+                    append_autoload_debug(format_args!(
+                        "own_stepper: STAGE1d self-fire open-menu 0x{:x}(dialog=0x{dialog:x}) -- in Loop + latch clear (correct gate, zero-input, NO save write) waits={waits}",
+                        base + TITLE_TOP_DIALOG_OPEN_MENU_RVA
+                    ));
+                }
             }
         }
         // Wait for the registered entries to tick: the menu-item Update hook + Sequence-iterator
