@@ -755,6 +755,24 @@ pub(crate) static CONTINUE_LOAD_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static COMBINED_LOAD_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static MAP_LOAD_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SAVE_LOAD_STATE_INIT_ORIG: AtomicUsize = AtomicUsize::new(0);
+// MENU-UI capture (Path B / zero-input state-stepper): log-only trampolines on the title
+// menu-navigation functions so one real user navigation (press-any-key -> Continue/Load ->
+// slot -> confirm) yields the exact this-pointers + construction order + call sequence for
+// the 4 interactions. SetState (state sequence), Continue confirm, ProfileLoadDialog activate
+// (slot-20 + variant), the enter-Load-Game builder, the selector-step tick, the menu mount.
+pub(crate) static CAP_SETSTATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static CAP_CONTINUE_CONFIRM_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static CAP_LOAD_ACTIVATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static CAP_LOAD_ACTIVATE2_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static CAP_BUILDER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static CAP_SELECTOR_TICK_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static CAP_MENU_DESER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static CAP_SELECTOR_TICK_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const CAP_SELECTOR_TICK_LOG_FIRST: usize = 4;
+pub(crate) const CAP_SELECTOR_TICK_LOG_INTERVAL: usize = 120;
+/// Selector-owner step (0x140826d50) install-flag field: 0 on the first tick (fires the
+/// delegate-installer 0x140828270), 1 afterwards.
+pub(crate) const SELECTOR_STEP_INSTALL_FLAG_68_OFFSET: usize = 0x68;
 // b80 save-mount orchestration capture (own-stepper-dispatcher-mount-failed-and-wrote-
 // save-2026 next-approach): entry/exit logging trampolines on the 5 b80 functions so a
 // real user-driven .co2 load yields the exact call order + args + which fn populates

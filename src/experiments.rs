@@ -2205,6 +2205,66 @@ pub(crate) fn install_continue_trace_hooks() {
             c30_writer_hook as *mut c_void,
             &C30_WRITER_ORIG,
         );
+        // MENU-UI capture (Path B state-stepper). One real navigation through these pins the
+        // this-pointers + construction order + call sequence for the 4 user interactions:
+        // SetState (state machine), Continue confirm, ProfileLoadDialog activate (both
+        // variants), the enter-Load-Game builder, the selector-step tick, and the mount.
+        const CAP_SETSTATE_RVA: u32 = 0x00b0d960;
+        const CAP_CONTINUE_CONFIRM_RVA: u32 = 0x00b0e180;
+        const CAP_LOAD_ACTIVATE_RVA: u32 = 0x009a4670;
+        const CAP_LOAD_ACTIVATE2_RVA: u32 = 0x009ac760;
+        const CAP_BUILDER_RVA: u32 = 0x00826510;
+        const CAP_SELECTOR_TICK_RVA: u32 = 0x00826d50;
+        const CAP_MENU_DESER_RVA: u32 = 0x0082c240;
+        create_continue_trace_hook(
+            &mut hooks,
+            "cap_setstate_b0d960",
+            CAP_SETSTATE_RVA,
+            cap_setstate_hook as *mut c_void,
+            &CAP_SETSTATE_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "cap_continue_confirm_b0e180",
+            CAP_CONTINUE_CONFIRM_RVA,
+            cap_continue_confirm_hook as *mut c_void,
+            &CAP_CONTINUE_CONFIRM_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "cap_load_activate_9a4670",
+            CAP_LOAD_ACTIVATE_RVA,
+            cap_load_activate_hook as *mut c_void,
+            &CAP_LOAD_ACTIVATE_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "cap_load_activate2_9ac760",
+            CAP_LOAD_ACTIVATE2_RVA,
+            cap_load_activate2_hook as *mut c_void,
+            &CAP_LOAD_ACTIVATE2_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "cap_builder_826510",
+            CAP_BUILDER_RVA,
+            cap_builder_hook as *mut c_void,
+            &CAP_BUILDER_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "cap_selector_tick_826d50",
+            CAP_SELECTOR_TICK_RVA,
+            cap_selector_tick_hook as *mut c_void,
+            &CAP_SELECTOR_TICK_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "cap_menu_deser_82c240",
+            CAP_MENU_DESER_RVA,
+            cap_menu_deser_hook as *mut c_void,
+            &CAP_MENU_DESER_ORIG,
+        );
     }
 
     match unsafe { MH_ApplyQueued() } {
@@ -2503,6 +2563,161 @@ pub(crate) unsafe extern "system" fn menu_other_load_wrapper_hook(
         )
     };
     result
+}
+
+/// Forward a captured menu-UI call through its trampoline. Uniform 4-arg fastcall: the
+/// integer arg registers (rcx/rdx/r8/r9) pass through; callees taking fewer args ignore the
+/// rest, and none of the captured targets take >4 integer args or float args. Returns rax.
+unsafe fn call_cap_original(
+    orig: &AtomicUsize,
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let original = orig.load(Ordering::SeqCst);
+    if original == HOOK_ORIGINAL_UNSET {
+        return TITLE_OWNER_SCAN_START_ADDRESS;
+    }
+    let f: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(original) };
+    unsafe { f(a, b, c, d) }
+}
+
+/// SetState 0x140b0d960(this, state): the title state machine setter. Logging every call
+/// reveals the press-any-key advance + Continue's SetState(5) sequence.
+pub(crate) unsafe extern "system" fn cap_setstate_hook(
+    this: usize,
+    state: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    append_continue_trace(format_args!(
+        "CAP setstate this=0x{this:x} state={} {} {}",
+        state as i32,
+        trace_callers_summary(),
+        b80_mount_trace_summary()
+    ));
+    unsafe { call_cap_original(&CAP_SETSTATE_ORIG, this, state, c, d) }
+}
+
+/// Continue confirm 0x140b0e180(this): reads GameMan+0xc30 into owner+0xbc then SetState(5).
+pub(crate) unsafe extern "system" fn cap_continue_confirm_hook(
+    this: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let owner = if this != TITLE_OWNER_SCAN_START_ADDRESS {
+        unsafe { *((this + OWN_STEPPER_SHIM_OWNER_IDX * core::mem::size_of::<usize>()) as *const usize) }
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    append_continue_trace(format_args!(
+        "CAP continue_confirm this=0x{this:x} owner=0x{owner:x} {} {}",
+        trace_callers_summary(),
+        b80_mount_trace_summary()
+    ));
+    unsafe { call_cap_original(&CAP_CONTINUE_CONFIRM_ORIG, this, b, c, d) }
+}
+
+/// Load activate 0x1409a4670 = CS::ProfileLoadDialog vtable slot 20 (this = the dialog).
+pub(crate) unsafe extern "system" fn cap_load_activate_hook(
+    this: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    append_continue_trace(format_args!(
+        "CAP load_activate(slot20) dialog_this=0x{this:x} a1=0x{b:x} a2=0x{c:x} a3=0x{d:x} {} {}",
+        trace_callers_summary(),
+        b80_mount_trace_summary()
+    ));
+    unsafe { call_cap_original(&CAP_LOAD_ACTIVATE_ORIG, this, b, c, d) }
+}
+
+/// Load activate variant 0x1409ac760 (global-slot path).
+pub(crate) unsafe extern "system" fn cap_load_activate2_hook(
+    this: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    append_continue_trace(format_args!(
+        "CAP load_activate2 this=0x{this:x} a1=0x{b:x} a2=0x{c:x} a3=0x{d:x} {} {}",
+        trace_callers_summary(),
+        b80_mount_trace_summary()
+    ));
+    unsafe { call_cap_original(&CAP_LOAD_ACTIVATE2_ORIG, this, b, c, d) }
+}
+
+/// Enter-Load-Game builder 0x140826510(owner, rdx, r8d=slot, r9) -> selector step.
+pub(crate) unsafe extern "system" fn cap_builder_hook(
+    owner: usize,
+    rdx: usize,
+    slot: usize,
+    r9: usize,
+) -> usize {
+    append_continue_trace(format_args!(
+        "CAP builder owner=0x{owner:x} slot={} rdx=0x{rdx:x} r9=0x{r9:x} {} {}",
+        slot as i32,
+        trace_callers_summary(),
+        b80_mount_trace_summary()
+    ));
+    unsafe { call_cap_original(&CAP_BUILDER_ORIG, owner, rdx, slot, r9) }
+}
+
+/// Selector-owner step tick 0x140826d50(step, ctx, result). Rate-limited (it ticks every
+/// frame). Logs the step this, its +0x68 install flag, and the slot at ctx[0].
+pub(crate) unsafe extern "system" fn cap_selector_tick_hook(
+    step: usize,
+    ctx: usize,
+    result: usize,
+    d: usize,
+) -> usize {
+    let n = CAP_SELECTOR_TICK_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    if n < CAP_SELECTOR_TICK_LOG_FIRST || n % CAP_SELECTOR_TICK_LOG_INTERVAL == 0 {
+        let installed = if step != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { *((step + SELECTOR_STEP_INSTALL_FLAG_68_OFFSET) as *const u8) as i32 }
+        } else {
+            TITLE_STATE_OWNER_GONE
+        };
+        let ctx_slot = if ctx != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { *(ctx as *const i32) }
+        } else {
+            TITLE_STATE_OWNER_GONE
+        };
+        append_continue_trace(format_args!(
+            "CAP selector_tick #{n} step=0x{step:x} ctx=0x{ctx:x} installed={installed} ctx_slot={ctx_slot} {}",
+            b80_mount_trace_summary()
+        ));
+    }
+    unsafe { call_cap_original(&CAP_SELECTOR_TICK_ORIG, step, ctx, result, d) }
+}
+
+/// Menu deserialize 0x14082c240(this, ctx): the real mount (writes GameMan+0xc30 + char).
+pub(crate) unsafe extern "system" fn cap_menu_deser_hook(
+    this: usize,
+    ctx: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let ctx_slot = if ctx != TITLE_OWNER_SCAN_START_ADDRESS {
+        unsafe { *(ctx as *const i32) }
+    } else {
+        TITLE_STATE_OWNER_GONE
+    };
+    append_continue_trace(format_args!(
+        "CAP menu_deser ENTER this=0x{this:x} ctx=0x{ctx:x} ctx_slot={ctx_slot} {} {}",
+        trace_callers_summary(),
+        b80_mount_trace_summary()
+    ));
+    let ret = unsafe { call_cap_original(&CAP_MENU_DESER_ORIG, this, ctx, c, d) };
+    append_continue_trace(format_args!(
+        "CAP menu_deser LEAVE ret=0x{ret:x} {}",
+        b80_mount_trace_summary()
+    ));
+    ret
 }
 
 pub(crate) unsafe extern "system" fn menu_task_update_wrapper_hook(
