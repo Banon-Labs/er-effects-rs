@@ -527,6 +527,20 @@ pub(crate) const OWN_STEPPER_PHASE_MENU_BUILD: usize = 5;
 /// title, no save write). ~3s at 60fps.
 pub(crate) const OWN_STEPPER_MENU_BUILD_WAIT_MAX: u64 = 180;
 pub(crate) static OWN_STEPPER_MENU_BUILD_WAITS: AtomicUsize = AtomicUsize::new(0);
+/// MenuWindowJob::Update 0x1407ad1c0 -- the native menu pump calls it with rcx = a
+/// menu-item each tick. We hook it to CAPTURE the live Load-Game item (the one whose
+/// +0xa8 action functor's _Do_call chain resolves to dialog_factory 0x14081ead0) without
+/// guessing the CSMenu container layout the static walk could not penetrate. The captured
+/// item pointer is stored in MENU_LOAD_GAME_ITEM for the own-stepper idx10 to read +
+/// (Stage 2) invoke zero-input. 0 = not yet captured.
+pub(crate) const MENU_ITEM_UPDATE_RVA: u32 = 0x007ad1c0;
+pub(crate) static MENU_ITEM_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static MENU_LOAD_GAME_ITEM: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static MENU_ITEM_UPDATE_CAPTURE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Last menu-item pointer we logged from the Update hook; we log only on change (the pump
+/// ticks one item per frame, so this surfaces each distinct item as the user navigates,
+/// without flooding the trace).
+pub(crate) static MENU_ITEM_UPDATE_LAST: AtomicUsize = AtomicUsize::new(0);
 /// How many in-context idx10 calls to wait before driving (let the boot settle to the
 /// stable press-any-button state 10 first).
 pub(crate) const OWN_STEPPER_SETTLE_CALLS: u64 = 30;

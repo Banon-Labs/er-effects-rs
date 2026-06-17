@@ -873,7 +873,15 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         // this confirming the live item + layout first.
         let waits =
             OWN_STEPPER_MENU_BUILD_WAITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
-        match unsafe { diagnostic_job_tree_walk(owner, base, "built-tree", false) } {
+        // Primary: the menu-item Update hook captures the Load-Game item as the native pump
+        // ticks the CSMenu tree (robust, no layout guess). Fallback: our static tree walk.
+        let hooked = MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst);
+        let found = if hooked != TITLE_OWNER_SCAN_START_ADDRESS {
+            Some(hooked)
+        } else {
+            unsafe { diagnostic_job_tree_walk(owner, base, "built-tree", false) }
+        };
+        match found {
             Some(item) => {
                 let _ = unsafe { diagnostic_menu_walk(owner, base, "built-138", true) };
                 let _ = unsafe { diagnostic_job_tree_walk(owner, base, "built-tree", true) };
@@ -2671,6 +2679,15 @@ pub(crate) fn install_continue_trace_hooks() {
             cap_dialog_factory_hook as *mut c_void,
             &CAP_DIALOG_FACTORY_ORIG,
         );
+        // Menu-item Update 0x1407ad1c0: capture the live Load-Game item (functor ->
+        // dialog_factory) by letting the native pump walk its own CSMenu tree.
+        create_continue_trace_hook(
+            &mut hooks,
+            "cap_menu_item_update_7ad1c0",
+            MENU_ITEM_UPDATE_RVA,
+            cap_menu_item_update_hook as *mut c_void,
+            &MENU_ITEM_UPDATE_ORIG,
+        );
     }
 
     match unsafe { MH_ApplyQueued() } {
@@ -3142,6 +3159,54 @@ pub(crate) unsafe extern "system" fn cap_menu_deser_hook(
         b80_mount_trace_summary()
     ));
     ret
+}
+
+/// MenuWindowJob::Update 0x1407ad1c0 hook: the native menu pump calls this with rcx = a
+/// menu-item each tick. We let the game walk its own (CSMenu) tree and CAPTURE the item
+/// whose +0xa8 action functor's _Do_call chain resolves to dialog_factory 0x14081ead0 (=
+/// the Load-Game item) into MENU_LOAD_GAME_ITEM, so the own-stepper can drive it
+/// zero-input without guessing the container layout. Pure observe + pass-through (no
+/// behaviour change). Logs the first distinct items to map the live title menu.
+pub(crate) unsafe extern "system" fn cap_menu_item_update_hook(
+    item: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    // Module base independent of the own-stepper (so this hook also works during a
+    // user-driven trace with the own-stepper off): own-stepper base if set, else resolve it.
+    let base = {
+        let own = OWN_STEPPER_BASE.load(Ordering::SeqCst);
+        if own != TITLE_OWNER_SCAN_START_ADDRESS {
+            own
+        } else {
+            game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+        }
+    };
+    if item != TITLE_OWNER_SCAN_START_ADDRESS
+        && base != TITLE_OWNER_SCAN_START_ADDRESS
+        && MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        let mut chain = String::new();
+        let is_load_game = unsafe { functor_chain_hits_factory(item, base, &mut chain) };
+        if is_load_game {
+            MENU_LOAD_GAME_ITEM.store(item, Ordering::SeqCst);
+            append_continue_trace(format_args!(
+                "MENU-ITEM-UPDATE captured LOAD-GAME item=0x{item:x} {chain} {}",
+                trace_callers_summary()
+            ));
+        } else if MENU_ITEM_UPDATE_LAST.swap(item, Ordering::SeqCst) != item {
+            // New distinct item ticked (user navigated to it): log it once.
+            let n =
+                MENU_ITEM_UPDATE_CAPTURE_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+            let vt = unsafe { safe_read_usize(item) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+            append_continue_trace(format_args!(
+                "MENU-ITEM-UPDATE #{n} item=0x{item:x} vt=0x{vt:x} {chain} load_game=false {}",
+                trace_callers_summary()
+            ));
+        }
+    }
+    unsafe { call_cap_original(&MENU_ITEM_UPDATE_ORIG, item, b, c, d) }
 }
 
 pub(crate) unsafe extern "system" fn menu_task_update_wrapper_hook(
