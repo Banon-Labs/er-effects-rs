@@ -727,9 +727,12 @@ pub(crate) static OWN_STEPPER_DRIVE_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const OWN_STEPPER_PHASE_MENU_BUILD: usize = 5;
 /// Max idx10 re-entries to wait for the main menu to build before giving up (stay at the
 /// title, no save write). The intro FadeIn takes ~176 frames to reach the Loop state where the
-/// open-menu registrar fires, so this must be well past that to observe the menu entries
-/// register + tick afterward. ~10s at 60fps.
-pub(crate) const OWN_STEPPER_MENU_BUILD_WAIT_MAX: u64 = 600;
+/// open-menu registrar fires; AFTER that the opened TitleTopDialog menu fades in and only then
+/// does the Load-Game leaf d180 begin ticking (the leaf-Update hook captures it). Runtime: that
+/// zero-input capture lands a few hundred frames PAST the open-menu self-fire -- past the old
+/// 600 cap -- so idx10 gave up before consuming it. Stay generous: staying at the title is
+/// strictly NO-WRITE, so a long wait costs nothing. ~50s at 60fps.
+pub(crate) const OWN_STEPPER_MENU_BUILD_WAIT_MAX: u64 = 3000;
 pub(crate) static OWN_STEPPER_MENU_BUILD_WAITS: AtomicUsize = AtomicUsize::new(0);
 /// MenuWindowJob::Update 0x1407ad1c0 -- the native menu pump calls it with rcx = a
 /// menu-item each tick. We hook it to CAPTURE the live Load-Game item (the one whose
@@ -1281,7 +1284,17 @@ impl ImguiRenderLoop for EffectsOverlay {
         unsafe {
             let _ = blocker.install_hooks();
         }
-        blocker.block_from_io(ui.io());
+        // During the zero-input autoload/own-stepper probe, HARD-block every input source
+        // (DInput keyboard+mouse + XInput gamepad) so a focused window cannot contaminate the
+        // result -- the run must prove the load happens with no real input at any layer. NOTE:
+        // under the offline launcher this render loop does NOT run at the title, so the game
+        // task drives the same block too (enforce_input_block_now); this branch just covers the
+        // in-game/overlay case. Otherwise fall back to the overlay's want-capture heuristic.
+        if block_input_enabled() {
+            enforce_input_block_now();
+        } else {
+            blocker.block_from_io(ui.io());
+        }
 
         let mut state = state_or_return(&self.state);
         process_global_driver_command(&mut state);
@@ -1516,6 +1529,15 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 }
                 // Hardware write-watchpoint on GameMan+0xc30: (re)arm each frame until
                 // the save-mount write is caught, so the VEH logs the exact writer. Runs
+                // HARD input block (DInput keyboard+mouse + XInput gamepad), driven from the
+                // game task so it is active EVEN when the hudhook render loop is not running
+                // (it does not under the offline launcher at the title). Runs every frame the
+                // task ticks -- before the player check -- so a focused window cannot inject any
+                // real input during the zero-input own-stepper/autoload probe. Pure suppression,
+                // never synthesis.
+                if block_input_enabled() {
+                    enforce_input_block_now();
+                }
                 // before the player check so it arms at the title (pre-load), independent
                 // of the active observe/own-stepper mode.
                 if c30_watch_enabled() {

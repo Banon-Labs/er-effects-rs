@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use debug::InputBlocker;
+use debug::{InputBlocker, InputFlags};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
@@ -644,6 +644,58 @@ unsafe fn invoke_menu_item_functor(item: usize) -> Option<usize> {
     Some(unsafe { f(functor, ctx_out) })
 }
 
+/// Decode a single-child FD4 job decorator's forwarded-child offset from its Update fn
+/// prologue. Every decorator in the owner+0x130 menu chain forwards Update to one wrapped
+/// child via `mov rcx,[node+disp]; mov rax,[rcx]; call [rax+0x10]`, but the child offset
+/// varies per type (0x48, 0x40, ...). Rather than tabulate each, we read the Update fn's
+/// first bytes and return the disp of the FIRST `mov rcx,[rcx+disp]`:
+///   `48 8b 49 <disp8>`              -> disp8
+///   `48 8b 89 <disp32 le>`          -> disp32
+/// Returns None if no such load appears in the scanned prologue (not a forwarding decorator).
+/// Pure code read via `safe_read_usize`; never faults.
+unsafe fn decorator_child_offset(update_fn: usize) -> Option<usize> {
+    const SCAN_LEN: usize = 0x28;
+    const REXW: usize = 0x48;
+    const MOV_RM_OPCODE: usize = 0x8b;
+    const MODRM_RCX_RCX_DISP8: usize = 0x49;
+    const MODRM_RCX_RCX_DISP32: usize = 0x89;
+    const BYTE_MASK: usize = 0xff;
+    const B1_SHIFT: usize = 8;
+    const B2_SHIFT: usize = 16;
+    const B3_SHIFT: usize = 24;
+    const DISP32_LEN: usize = 4;
+    // bytes consumed by `48 8b 89` before the disp32 immediate begins.
+    const DISP32_PREFIX_LEN: usize = 3;
+    const SCAN_START: usize = 0;
+    const SCAN_STEP: usize = 1;
+    let mut i = SCAN_START;
+    while i < SCAN_LEN {
+        let word = unsafe { safe_read_usize(update_fn + i) }?;
+        let b0 = word & BYTE_MASK;
+        let b1 = (word >> B1_SHIFT) & BYTE_MASK;
+        let b2 = (word >> B2_SHIFT) & BYTE_MASK;
+        let b3 = (word >> B3_SHIFT) & BYTE_MASK;
+        if b0 == REXW && b1 == MOV_RM_OPCODE {
+            if b2 == MODRM_RCX_RCX_DISP8 {
+                return Some(b3);
+            }
+            if b2 == MODRM_RCX_RCX_DISP32 {
+                let mut disp = SCAN_START;
+                let mut k = SCAN_START;
+                while k < DISP32_LEN {
+                    let byte = unsafe { safe_read_usize(update_fn + i + DISP32_PREFIX_LEN + k) }?
+                        & BYTE_MASK;
+                    disp |= byte << (k * B1_SHIFT);
+                    k += SCAN_STEP;
+                }
+                return Some(disp);
+            }
+        }
+        i += SCAN_STEP;
+    }
+    None
+}
+
 /// STAGE 1b (strictly NO-WRITE): recursive bounded walk of the title menu JOB tree rooted
 /// at `[owner+0xe0]` (the FD4 multicast/job holder -- runtime proved the real menu lives
 /// here, NOT the empty `owner+0x138`). Classifies each node by its Update slot
@@ -665,19 +717,68 @@ unsafe fn diagnostic_job_tree_walk(
     const NODE_HOLDER_ROOT_18: usize = 0x18;
     const SEQ_UPDATE_RVA: usize = 0x07aa1f0;
     const LEAF_UPDATE_RVA: usize = 0x07ad1c0;
+    // IfElseJob combiner (vt 0x142aa2c38). Its child jobs are NOT at the sequence
+    // [+0x18]/[+0x60] layout; that mis-read is the "garbage count" the generic walk hit.
+    // Decoded from selector 0x140793390: inline entry array at [node+0x18], stride 0x10,
+    // each entry = {predicate@+0, child_job@+0x8}; entry count at [node+0xa0]; default/else
+    // child at [node+0xa8]; runtime-active child at [node+0xb0]. Entry + default child jobs
+    // are pre-built/retained at BUILD time, so reading them needs no pump.
+    const IFELSE_UPDATE_RVA: usize = 0x07931e0;
+    // Single-child wrapper (vt 0x142a93af8, update 0x140745510): `mov rcx,[node+0x48];
+    // call [rcx]->vt[+0x10]` -- forwards Update to one wrapped child at [node+0x48]. The
+    // IfElseJob entry child jobs are these wrappers, not MenuWindowJobs directly.
+    const WRAP_UPDATE_RVA: usize = 0x0745510;
+    const WRAP_CHILD_48: usize = 0x48;
+    const IFELSE_ENTRY_STRIDE_10: usize = 0x10;
+    const IFELSE_ENTRY_JOB_8: usize = 0x8;
+    const IFELSE_COUNT_A0: usize = 0xa0;
+    const IFELSE_DEFAULT_A8: usize = 0xa8;
+    const IFELSE_ACTIVE_B0: usize = 0xb0;
     const ITEM_CTX_10: usize = 0x10;
     const ITEM_RESULT_130: usize = 0x130;
     const PTR_STRIDE: usize = core::mem::size_of::<usize>();
     const COUNT_MIN: usize = 1;
     const COUNT_MAX: usize = 32;
-    const MAX_NODES: usize = 128;
+    const MAX_NODES: usize = 256;
     const MAX_DEPTH: usize = 8;
     const WALK_START: usize = 0;
     const WALK_STEP: usize = 1;
+    // Generic decorator descent. The owner+0x130 menu tree threads d180 through a chain of
+    // single-child FD4 job decorators (vt 0x142a93af8 child@+0x48, vt 0x142a93d18 child@+0x40,
+    // ...) with per-type child offsets. Rather than decode each, for any node that is none of
+    // the known container/leaf kinds we scan a bounded field window and enqueue every qword
+    // that points at an in-module job object (its vtable AND that vtable's Update slot both
+    // land inside the game image). Fault-tolerant reads; visited-set + node budget bound it.
+    const GEN_SCAN_LO: usize = 0x10;
+    const GEN_SCAN_HI: usize = 0xc0;
+    // PE image bounds (for the in-module pointer test): SizeOfImage at NT+0x50, e_lfanew at
+    // base+0x3c. Both are u32; mask the low dword off the qword read.
+    const PE_E_LFANEW_OFFSET: usize = 0x3c;
+    const PE_SIZE_OF_IMAGE_FROM_NT: usize = 0x50;
+    const PE_U32_MASK: usize = 0xffffffff;
+    const MODULE_SPAN_FALLBACK: usize = 0x3000000;
+    const MODULE_MIN_OFFSET: usize = 0x1000;
 
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let seq_update_abs = module_base + SEQ_UPDATE_RVA;
     let leaf_update_abs = module_base + LEAF_UPDATE_RVA;
+    let ifelse_update_abs = module_base + IFELSE_UPDATE_RVA;
+    let wrap_update_abs = module_base + WRAP_UPDATE_RVA;
+
+    let e_lfanew = unsafe { safe_read_usize(module_base + PE_E_LFANEW_OFFSET) }
+        .map(|v| v & PE_U32_MASK)
+        .unwrap_or(null);
+    let image_span = if e_lfanew != null {
+        unsafe { safe_read_usize(module_base + e_lfanew + PE_SIZE_OF_IMAGE_FROM_NT) }
+            .map(|v| v & PE_U32_MASK)
+            .filter(|&s| s != null)
+            .unwrap_or(MODULE_SPAN_FALLBACK)
+    } else {
+        MODULE_SPAN_FALLBACK
+    };
+    let module_lo = module_base + MODULE_MIN_OFFSET;
+    let module_hi = module_base + image_span;
+    let in_module = |p: usize| p >= module_lo && p < module_hi;
 
     let holder = unsafe { safe_read_usize(owner + holder_offset) }.unwrap_or(null);
     if verbose {
@@ -717,6 +818,12 @@ unsafe fn diagnostic_job_tree_walk(
         let base = unsafe { safe_read_usize(node + NODE_CHILDREN_BASE_18) }.unwrap_or(null);
         let is_leaf = update == leaf_update_abs;
         let is_container = update == seq_update_abs;
+        let is_ifelse = update == ifelse_update_abs;
+        let is_wrap = update == wrap_update_abs;
+        let wrap_child = unsafe { safe_read_usize(node + WRAP_CHILD_48) }.unwrap_or(null);
+        let ife_count = unsafe { safe_read_usize(node + IFELSE_COUNT_A0) }.unwrap_or(null);
+        let ife_default = unsafe { safe_read_usize(node + IFELSE_DEFAULT_A8) }.unwrap_or(null);
+        let ife_active = unsafe { safe_read_usize(node + IFELSE_ACTIVE_B0) }.unwrap_or(null);
         let mut chain = String::new();
         let is_load_game = if update != null {
             unsafe { functor_chain_hits_factory(node, module_base, &mut chain) }
@@ -730,10 +837,42 @@ unsafe fn diagnostic_job_tree_walk(
         let result = unsafe { safe_read_usize(node + ITEM_RESULT_130) }.unwrap_or(null);
         if verbose {
             append_autoload_debug(format_args!(
-                "job-tree[{tag}] d={depth} node=0x{node:x} vt=0x{vtable:x} update=0x{update:x} leaf={is_leaf} container={is_container} count=0x{count:x} base=0x{base:x} ctx=0x{ctx:x} result=0x{result:x} {chain} LOAD_GAME={is_load_game}"
+                "job-tree[{tag}] d={depth} node=0x{node:x} vt=0x{vtable:x} update=0x{update:x} leaf={is_leaf} container={is_container} ifelse={is_ifelse} wrap={is_wrap} count=0x{count:x} base=0x{base:x} ife_count=0x{ife_count:x} ife_default=0x{ife_default:x} ife_active=0x{ife_active:x} wrap_child=0x{wrap_child:x} ctx=0x{ctx:x} result=0x{result:x} {chain} LOAD_GAME={is_load_game}"
             ));
         }
-        if depth < MAX_DEPTH && (COUNT_MIN..=COUNT_MAX).contains(&count) {
+        if depth < MAX_DEPTH && is_wrap {
+            // Single-child wrapper: descend into its one forwarded child.
+            if wrap_child != null {
+                stack.push((wrap_child, depth + WALK_STEP));
+            }
+        } else if depth < MAX_DEPTH && is_ifelse {
+            // IfElseJob: enqueue every entry's pre-built child job + the default + the
+            // runtime-active child. Pure reads (we never call the entry predicates), so this
+            // surfaces d180 whichever branch it lives in, with or without a pump.
+            if (COUNT_MIN..=COUNT_MAX).contains(&ife_count) {
+                let mut i = WALK_START;
+                while i < ife_count {
+                    let entry_job = unsafe {
+                        safe_read_usize(
+                            node + NODE_CHILDREN_BASE_18
+                                + i * IFELSE_ENTRY_STRIDE_10
+                                + IFELSE_ENTRY_JOB_8,
+                        )
+                    }
+                    .unwrap_or(null);
+                    if entry_job != null {
+                        stack.push((entry_job, depth + WALK_STEP));
+                    }
+                    i += WALK_STEP;
+                }
+            }
+            if ife_default != null {
+                stack.push((ife_default, depth + WALK_STEP));
+            }
+            if ife_active != null && ife_active != ife_default {
+                stack.push((ife_active, depth + WALK_STEP));
+            }
+        } else if depth < MAX_DEPTH && is_container && (COUNT_MIN..=COUNT_MAX).contains(&count) {
             let mut i = WALK_START;
             while i < count {
                 let child_b = if base != null {
@@ -751,6 +890,21 @@ unsafe fn diagnostic_job_tree_walk(
                     stack.push((child_i, depth + WALK_STEP));
                 }
                 i += WALK_STEP;
+            }
+        } else if depth < MAX_DEPTH && !is_leaf && in_module(vtable) && in_module(update) {
+            // Unknown FD4 decorator: decode the single forwarded-child offset from its Update
+            // prologue (`mov rcx,[node+disp]`) and descend into [node+disp] ONLY -- a precise
+            // single-child follow, never a field scan (which wandered into the GUI graph).
+            if let Some(off) = unsafe { decorator_child_offset(update) } {
+                if (GEN_SCAN_LO..=GEN_SCAN_HI).contains(&off) {
+                    let child = unsafe { safe_read_usize(node + off) }.unwrap_or(null);
+                    if child != null && child != node {
+                        let cvt = unsafe { safe_read_usize(child) }.unwrap_or(null);
+                        if in_module(cvt) {
+                            stack.push((child, depth + WALK_STEP));
+                        }
+                    }
+                }
             }
         }
     }
@@ -1760,6 +1914,188 @@ pub(crate) fn apply_splash_skip() {
 /// title->menu phase transition stops the title CSTask. Distinguishes "the title
 /// advanced (render alive + CSFeMan builds)" from "the game hung (render frozen)".
 #[allow(dead_code)]
+/// When set, ALL game input is hard-blocked at the API layer (see `enforce_input_block`):
+/// DInput8 keyboard+mouse (state zeroed by the `debug::InputBlocker` hook) AND XInput
+/// gamepad (this module's hook). Read by `xinput_get_state_hook` each poll so the block is
+/// authoritative regardless of window focus.
+pub(crate) static BLOCK_INPUT_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+const BLOCK_INPUT_ON: usize = 1;
+/// Original `XInputGetState` (minhook trampoline). 0 until the hook installs.
+pub(crate) static XINPUT_GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
+
+/// True when the autoload/own-stepper probe must run UNCONTAMINATED -- no real keyboard,
+/// mouse (move/click), or gamepad input may reach the game even if the user focuses the
+/// window. Auto-on whenever the own-stepper drives the front-end (the whole point of that
+/// probe is a zero-input load), plus an explicit env/file override for standalone use.
+pub(crate) fn block_input_enabled() -> bool {
+    own_stepper_enabled()
+        || matches!(std::env::var("ER_EFFECTS_BLOCK_INPUT").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-block-input.txt")
+            .exists()
+}
+
+/// XInput `XInputGetState(user_index, *mut XINPUT_STATE) -> DWORD` detour. Calls the real
+/// function, then -- while the block is active -- zeroes the XINPUT_GAMEPAD sub-struct
+/// (buttons + triggers + thumbsticks) so the game reads a connected-but-idle pad (no
+/// "controller disconnected" popup, but zero input). Leaves the disconnected return code
+/// untouched so a genuinely absent pad still reads absent.
+pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, state: *mut u8) -> u32 {
+    const XINPUT_SUCCESS: u32 = 0;
+    const XINPUT_ERROR_DEVICE_NOT_CONNECTED: u32 = 1167;
+    // XINPUT_STATE = { DWORD dwPacketNumber; XINPUT_GAMEPAD Gamepad; }; the gamepad sub-struct
+    // (wButtons,bLeftTrigger,bRightTrigger,sThumbLX/LY/RX/RY) starts at +4 and is 12 bytes.
+    const XINPUT_GAMEPAD_OFFSET: usize = 4;
+    const XINPUT_GAMEPAD_SIZE: usize = 12;
+    const ZERO_FILL_BYTE: u8 = 0;
+    let orig = XINPUT_GET_STATE_ORIG.load(Ordering::SeqCst);
+    let hr = if orig != TITLE_OWNER_SCAN_START_ADDRESS {
+        let f: unsafe extern "system" fn(u32, *mut u8) -> u32 =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { f(user_index, state) }
+    } else {
+        XINPUT_ERROR_DEVICE_NOT_CONNECTED
+    };
+    if hr == XINPUT_SUCCESS
+        && !state.is_null()
+        && BLOCK_INPUT_ACTIVE.load(Ordering::SeqCst) == BLOCK_INPUT_ON
+    {
+        unsafe {
+            std::ptr::write_bytes(
+                state.add(XINPUT_GAMEPAD_OFFSET),
+                ZERO_FILL_BYTE,
+                XINPUT_GAMEPAD_SIZE,
+            )
+        };
+    }
+    hr
+}
+
+/// Install the XInput gamepad block once. Hooks `XInputGetState` (and ordinal-100
+/// `XInputGetStateEx`, used by Steam Input) in whichever xinput runtime DLL is loaded.
+/// minhook-based, mirroring `create_continue_trace_hook`.
+unsafe fn install_xinput_block() {
+    const XINPUT_DLLS: [&[u8]; 5] = [
+        b"xinput1_4.dll\0",
+        b"xinput1_3.dll\0",
+        b"xinput9_1_0.dll\0",
+        b"xinput1_2.dll\0",
+        b"xinput1_1.dll\0",
+    ];
+    const XINPUT_GET_STATE_EX_ORDINAL: usize = 100;
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "xinput-block: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let mut hooked_any = false;
+    for name in XINPUT_DLLS {
+        let hmod = match unsafe { GetModuleHandleA(PCSTR(name.as_ptr())) } {
+            Ok(h) if !h.is_invalid() => h,
+            _ => continue,
+        };
+        let proc = unsafe { GetProcAddress(hmod, PCSTR(b"XInputGetState\0".as_ptr())) };
+        let Some(addr) = proc else { continue };
+        let addr = addr as usize;
+        match unsafe { MhHook::new(addr as *mut c_void, xinput_get_state_hook as *mut c_void) } {
+            Ok(hook) => {
+                XINPUT_GET_STATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+                if let Err(status) = unsafe { hook.queue_enable() } {
+                    append_autoload_debug(format_args!(
+                        "xinput-block: queue_enable XInputGetState failed: {status:?}"
+                    ));
+                } else {
+                    append_autoload_debug(format_args!(
+                        "xinput-block: hooked XInputGetState at 0x{addr:x}"
+                    ));
+                    std::mem::forget(hook);
+                    hooked_any = true;
+                }
+            }
+            Err(status) => append_autoload_debug(format_args!(
+                "xinput-block: MhHook::new XInputGetState failed: {status:?}"
+            )),
+        }
+        // Steam Input routes the guide button through ordinal-100 XInputGetStateEx; neuter it
+        // too so a focused pad cannot drive menus through that path. Same zeroing detour.
+        let ex = unsafe { GetProcAddress(hmod, PCSTR(XINPUT_GET_STATE_EX_ORDINAL as *const u8)) };
+        if let Some(ex_addr) = ex {
+            let ex_addr = ex_addr as usize;
+            if ex_addr != addr {
+                if let Ok(hook) = unsafe {
+                    MhHook::new(ex_addr as *mut c_void, xinput_get_state_hook as *mut c_void)
+                } {
+                    let _ = unsafe { hook.queue_enable() };
+                    std::mem::forget(hook);
+                    append_autoload_debug(format_args!(
+                        "xinput-block: hooked XInputGetStateEx(ord 100) at 0x{ex_addr:x}"
+                    ));
+                }
+            }
+        }
+        break;
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => {}
+        status => append_autoload_debug(format_args!(
+            "xinput-block: MH_ApplyQueued failed: {status:?}"
+        )),
+    }
+    if !hooked_any {
+        append_autoload_debug(format_args!(
+            "xinput-block: no xinput DLL with XInputGetState found yet (will retry next frame)"
+        ));
+    }
+}
+
+/// Tracks whether the DInput keyboard+mouse `install_hooks` has run (once).
+static DINPUT_BLOCK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+
+/// Enforce the comprehensive input block for this frame. Self-contained (no args) so it can
+/// run from EITHER the game task OR the render loop -- critical because under the offline
+/// launcher the hudhook render loop does NOT execute at the title, so the render-loop call
+/// alone never engaged the block (that was the contamination hole). Driven every frame from
+/// the game task while `block_input_enabled()`:
+///   1. ONCE: install the DInput8 keyboard+mouse `GetDeviceState` block (panics on probe
+///      failure -> contained with catch_unwind so the FD4 task never unwinds into C++).
+///   2. EVERY frame: assert the block-all flag (sticky, overriding any overlay want-capture
+///      clear) and install/retry the XInput gamepad hook until the xinput DLL is present.
+/// Genuinely zero-input: it only SUPPRESSES device reads -- it never synthesizes any input.
+pub(crate) fn enforce_input_block_now() {
+    let blocker = InputBlocker::get_instance();
+    if DINPUT_BLOCK_INSTALLED.swap(BLOCK_INPUT_ON, Ordering::SeqCst)
+        == TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            blocker.install_hooks()
+        }));
+        match result {
+            Ok(Ok(())) => {
+                append_autoload_debug(format_args!(
+                    "input-block: DInput keyboard+mouse GetDeviceState hook installed"
+                ));
+            }
+            Ok(Err(status)) => append_autoload_debug(format_args!(
+                "input-block: DInput install_hooks failed: {status:?} (XInput still hooks)"
+            )),
+            Err(_) => append_autoload_debug(format_args!(
+                "input-block: DInput install_hooks panicked (contained; XInput still hooks)"
+            )),
+        }
+    }
+    BLOCK_INPUT_ACTIVE.store(BLOCK_INPUT_ON, Ordering::SeqCst);
+    blocker.block_only(InputFlags::all());
+    if XINPUT_GET_STATE_ORIG.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS {
+        // Not yet hooked (xinput DLL may load late): retry each frame until it sticks.
+        unsafe { install_xinput_block() };
+    }
+}
+
 pub(crate) fn render_liveness_probe() {
     if !title_accept_enabled() {
         return;
