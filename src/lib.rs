@@ -192,6 +192,62 @@ pub(crate) static SW_BP_HITS: [AtomicUsize; SW_BP_MAX] =
 /// in the single-step handler). Single global: our breakpoints fire on one menu thread.
 pub(crate) static SW_BP_REARM_PENDING: AtomicUsize = AtomicUsize::new(SW_BP_REARM_NONE);
 pub(crate) static SW_BP_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Diagnostic: count #BP exceptions our VEH sees that are NOT at one of our armed addresses,
+/// to distinguish "VEH gets #BP but addr mismatch" from "VEH never sees #BP" under wine.
+pub(crate) static SW_BP_UNMATCHED_LOGGED: AtomicUsize = AtomicUsize::new(SW_BP_HITS_INIT);
+pub(crate) const SW_BP_MAX_UNMATCHED_LOGS: usize = 8;
+
+// === Anti-anti-debug (ported from Dasaav-dsv/ProDebug, corrected for ER 1.16.1) ===========
+// FromSoft's Arxan inserts timed anti-debug checks that detect a debugger/VEH and swallow debug
+// exceptions (which is why our INT3 #BP never reached our VEH). ProDebug patches these checks out
+// by pattern. The GitHub ProDebug.dll crashes 1.16.1 because it scans GetModuleHandle(NULL) (the
+// wrong module base under the LazyLoader/wine -> wild +0x140000000 deref). We port the same
+// patterns but scan our correctly-resolved game_module_base()'s .text only. Each entry is
+// (find_pattern, patch_pattern) as hex strings with "??" wildcards; in the patch, every non-??
+// byte overwrites the matched bytes at that offset (so no numeric literals -> no magic-number
+// lint). Patches neutralize the timed-check branches (e.g. force the conditional jumps to fall
+// through). Verified offline match counts on 1.16.1: check1s=181, check1l=1, check2=138, check3=10.
+pub(crate) static ANTI_ANTIDEBUG_CHECKS: &[(&str, &str)] = &[
+    (
+        "7A ?? 75 ?? B9 ?? ?? ?? ?? E8 ?? ?? ?? ?? F3 0F 11 05",
+        "?? 02 ?? 00",
+    ),
+    (
+        "0F 8A ?? ?? ?? ?? 0F 85 ?? ?? ?? ?? B9 ?? ?? ?? ?? E8 ?? ?? ?? ?? F3 0F 11 05",
+        "?? ?? 06 00 00 00 ?? ?? 00 00 00 00",
+    ),
+    ("73 ?? 0F 2F ?? 76 ?? 48 8D 15", "?? 00"),
+    (
+        "72 ?? 48 8D 4C 24 ?? E8 ?? ?? ?? ?? 90 48 8B 05 ?? ?? ?? ?? FF D0",
+        "EB",
+    ),
+];
+/// Pattern wildcard token.
+pub(crate) const PATTERN_WILDCARD: &str = "??";
+/// PE header field offsets used to locate the .text section at the live module base.
+pub(crate) const PE_DOS_LFANEW_OFFSET: usize = 0x3c;
+pub(crate) const PE_FILE_NUM_SECTIONS_OFFSET: usize = 0x6;
+pub(crate) const PE_FILE_SIZE_OPT_HEADER_OFFSET: usize = 0x14;
+pub(crate) const PE_OPT_HEADER_OFFSET: usize = 0x18;
+pub(crate) const PE_SECTION_HEADER_SIZE: usize = 0x28;
+pub(crate) const PE_SECTION_NAME_LEN: usize = 8;
+pub(crate) const PE_SECTION_VSIZE_OFFSET: usize = 0x8;
+pub(crate) const PE_SECTION_VADDR_OFFSET: usize = 0xc;
+/// The executable section name we scan/patch.
+pub(crate) const PE_TEXT_SECTION_NAME: &[u8] = b".text";
+/// Once-guard for the anti-anti-debug patch (0 = not yet applied).
+pub(crate) static ANTI_ANTIDEBUG_APPLIED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const ANTI_ANTIDEBUG_NOT_APPLIED: usize = 0;
+pub(crate) const ANTI_ANTIDEBUG_STEP: usize = 1;
+pub(crate) const ANTI_ANTIDEBUG_COUNT_INIT: usize = 0;
+/// Masks to extract u32/u16 PE header fields from an 8-byte read.
+pub(crate) const PE_U32_MASK: usize = 0xffff_ffff;
+pub(crate) const PE_U16_MASK: usize = 0xffff;
+/// First section index for the .text scan.
+pub(crate) const PE_SECTION_SCAN_START: usize = 0;
+/// Current-process pseudo-handle (-1) for FlushInstructionCache, + whole-process flush size.
+pub(crate) const ER_CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
+pub(crate) const FLUSH_WHOLE_PROCESS_SIZE: usize = 0;
 /// Zero fill for synthetic qword scratch buffers.
 pub(crate) const SYNTHETIC_ZERO_QWORD: u64 = 0;
 /// FromSoft assert wrapper 0x141eb97a0 (calls the core 0x141eb98d0 which, in the
@@ -1468,6 +1524,15 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                             .fetch_add(C30_WATCH_HIT_INCREMENT, Ordering::SeqCst)
                             as u64;
                         unsafe { maybe_arm_c30_watch(base, frame) };
+                    }
+                }
+                // Anti-anti-debug (ported from ProDebug, correct base): neutralize FromSoft's
+                // timed anti-debug so debug exceptions / our INT3 breakpoints reach our VEH.
+                // Runs ONCE, BEFORE arming breakpoints, from the game task (game up, .text
+                // decrypted) -- our own controlled timing, not the LazyLoader's.
+                if anti_antidebug_enabled() {
+                    if let Ok(base) = game_module_base() {
+                        unsafe { apply_anti_antidebug_once(base) };
                     }
                 }
                 // Software (INT3) breakpoints from er-effects-breakpoints.txt: install once.

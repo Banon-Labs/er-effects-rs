@@ -84,6 +84,9 @@ unsafe extern "system" {
         new_protect: u32,
         old_protect: *mut u32,
     ) -> i32;
+    /// Flush the CPU instruction cache after patching executable code so threads see the
+    /// new bytes (current-process pseudo-handle -1; null base + 0 size = whole process).
+    pub(crate) fn FlushInstructionCache(process: isize, base: *const c_void, size: usize) -> i32;
     /// Fault-tolerant read: returns FALSE on unmapped/freed memory instead of
     /// raising an access violation -- used by the title-owner scan so the TOCTOU
     /// race against the booting game (a region freed between VirtualQuery and the

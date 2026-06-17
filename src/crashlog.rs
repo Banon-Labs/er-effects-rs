@@ -186,12 +186,18 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
         {
             let cbase = context as *mut u8;
             let rip = unsafe { *(cbase.add(CONTEXT_RIP_OFFSET) as *const u64) } as usize;
-            let bp_addr = rip.wrapping_sub(INT3_RIP_BACKUP);
+            // Windows leaves the saved Rip PAST the INT3 (bp = Rip-1); wine/Proton may leave it
+            // AT the INT3 (bp = Rip). Accept either so the lookup is robust across both.
+            let cand_past = rip.wrapping_sub(INT3_RIP_BACKUP);
+            let cand_at = rip;
             let mut slot = SW_BP_EMPTY;
             let mut found = false;
+            let mut bp_addr = cand_past;
             while slot < SW_BP_MAX {
-                if bp_addr != SW_BP_EMPTY && SW_BP_ADDR[slot].load(Ordering::SeqCst) == bp_addr {
+                let armed = SW_BP_ADDR[slot].load(Ordering::SeqCst);
+                if armed != SW_BP_EMPTY && (armed == cand_past || armed == cand_at) {
                     found = true;
+                    bp_addr = armed;
                     break;
                 }
                 slot += SW_BP_SLOT_STEP;
@@ -237,6 +243,22 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
                 }
                 SW_BP_REARM_PENDING.store(bp_addr, Ordering::SeqCst);
                 return EXCEPTION_CONTINUE_EXECUTION;
+            }
+            // #BP not at one of our armed addresses. Log it once (diagnostic: confirms the VEH
+            // IS invoked for #BP under wine; the rip tells us if it is ours with a different
+            // Rip convention or a foreign breakpoint).
+            let seen = SW_BP_UNMATCHED_LOGGED.fetch_add(SW_BP_HIT_INCREMENT, Ordering::SeqCst);
+            if seen < SW_BP_MAX_UNMATCHED_LOGS {
+                let base = game_module_base().unwrap_or(NULL_MODULE_BASE);
+                let rva = if base != NULL_MODULE_BASE && rip >= base {
+                    rip - base
+                } else {
+                    rip
+                };
+                append_crash_log(format_args!(
+                    "sw-bp UNMATCHED #BP rip_rva=0x{rva:x} rip=0x{rip:x} {}",
+                    trace_callers_summary()
+                ));
             }
             return EXCEPTION_CONTINUE_SEARCH;
         }
@@ -491,6 +513,117 @@ pub(crate) unsafe fn install_sw_breakpoints_once(module_base: usize) {
         ));
         slot += SW_BP_SLOT_STEP;
     }
+}
+
+/// Opt-in: apply the anti-anti-debug patches (so debug exceptions / our INT3 breakpoints reach
+/// our VEH). Auto-enabled whenever software breakpoints are enabled (they require it).
+pub(crate) fn anti_antidebug_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_ANTI_ANTIDEBUG").as_deref(),
+        Ok("1")
+    ) || sw_breakpoints_enabled()
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-anti-antidebug.txt")
+            .exists()
+}
+
+/// Parse a "7A ?? 75" hex/wildcard pattern into per-byte Option<u8> (None = wildcard).
+fn parse_byte_pattern(spec: &str) -> Vec<Option<u8>> {
+    spec.split_whitespace()
+        .map(|token| {
+            if token == PATTERN_WILDCARD {
+                None
+            } else {
+                u8::from_str_radix(token, RVA_HEX_RADIX).ok()
+            }
+        })
+        .collect()
+}
+
+/// Locate the live module's .text section [start, len) by parsing the PE headers at `base`.
+unsafe fn find_text_section(base: usize) -> Option<(usize, usize)> {
+    let e_lfanew = unsafe { safe_read_usize(base + PE_DOS_LFANEW_OFFSET) }? & PE_U32_MASK;
+    let nt = base + e_lfanew;
+    let num_sections = unsafe { safe_read_usize(nt + PE_FILE_NUM_SECTIONS_OFFSET) }? & PE_U16_MASK;
+    let size_opt = unsafe { safe_read_usize(nt + PE_FILE_SIZE_OPT_HEADER_OFFSET) }? & PE_U16_MASK;
+    let sections = nt + PE_OPT_HEADER_OFFSET + size_opt;
+    let mut index = PE_SECTION_SCAN_START;
+    while index < num_sections {
+        let header = sections + index * PE_SECTION_HEADER_SIZE;
+        let name = unsafe { safe_read_usize(header) }.unwrap_or(NULL_MODULE_BASE);
+        if name.to_le_bytes().starts_with(PE_TEXT_SECTION_NAME) {
+            let vsize = unsafe { safe_read_usize(header + PE_SECTION_VSIZE_OFFSET) }? & PE_U32_MASK;
+            let vaddr = unsafe { safe_read_usize(header + PE_SECTION_VADDR_OFFSET) }? & PE_U32_MASK;
+            return Some((base + vaddr, vsize));
+        }
+        index += ANTI_ANTIDEBUG_STEP;
+    }
+    None
+}
+
+/// Port of ProDebug's patchDbgChecks, corrected for ER 1.16.1: scan THIS module's .text (resolved
+/// from the real game_module_base, not GetModuleHandle(NULL) which ProDebug got wrong under the
+/// LazyLoader) for the timed anti-debug patterns and neutralize them, so debug exceptions reach
+/// our VEH. Patches are tiny (branch-offset edits) per ANTI_ANTIDEBUG_CHECKS. Runs once.
+pub(crate) unsafe fn apply_anti_antidebug_once(base: usize) {
+    if ANTI_ANTIDEBUG_APPLIED.swap(ANTI_ANTIDEBUG_STEP, Ordering::SeqCst)
+        != ANTI_ANTIDEBUG_NOT_APPLIED
+    {
+        return;
+    }
+    let Some((start, len)) = (unsafe { find_text_section(base) }) else {
+        append_crash_log(format_args!(
+            "anti-antidebug: .text not found at base=0x{base:x}"
+        ));
+        return;
+    };
+    let text = unsafe { std::slice::from_raw_parts(start as *const u8, len) };
+    for (find_spec, patch_spec) in ANTI_ANTIDEBUG_CHECKS {
+        let find = parse_byte_pattern(find_spec);
+        let patch = parse_byte_pattern(patch_spec);
+        let plen = find.len();
+        let Some(Some(first)) = find.first().copied() else {
+            continue;
+        };
+        if plen == ANTI_ANTIDEBUG_COUNT_INIT || plen > len {
+            continue;
+        }
+        let mut count = ANTI_ANTIDEBUG_COUNT_INIT;
+        let mut i = ANTI_ANTIDEBUG_COUNT_INIT;
+        while i + plen <= len {
+            if text[i] == first {
+                let matched = find
+                    .iter()
+                    .enumerate()
+                    .all(|(j, pat)| pat.is_none_or(|b| text[i + j] == b));
+                if matched {
+                    let match_addr = start + i;
+                    for (j, pat) in patch.iter().enumerate() {
+                        if let Some(b) = pat {
+                            unsafe { write_code_byte(match_addr + j, *b) };
+                        }
+                    }
+                    count += ANTI_ANTIDEBUG_STEP;
+                }
+            }
+            i += ANTI_ANTIDEBUG_STEP;
+        }
+        append_crash_log(format_args!(
+            "anti-antidebug: patched {count} site(s) for pattern 0x{first:x} (len {plen})"
+        ));
+    }
+    unsafe {
+        FlushInstructionCache(
+            ER_CURRENT_PROCESS_PSEUDO_HANDLE,
+            std::ptr::null(),
+            FLUSH_WHOLE_PROCESS_SIZE,
+        )
+    };
+    append_crash_log(format_args!(
+        "anti-antidebug: done over .text 0x{start:x}..0x{:x}",
+        start + len
+    ));
 }
 
 /// Install the crash/exit logger: a vectored handler for access violations plus
