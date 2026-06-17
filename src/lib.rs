@@ -808,6 +808,8 @@ pub(crate) const OWN_STEPPER_B80_IDLE: i32 = 0;
 /// idx6 calls to wait (MoveMapStep settle) before deserializing the real slot.
 pub(crate) const OWN_STEPPER_IDX6_SETTLE: u64 = 120;
 pub(crate) const OWN_STEPPER_SLOT_NONE: i32 = -1;
+/// Lowest valid save-slot index (used to bounds-check the dialog cursor in STAGE 2).
+pub(crate) const OWN_STEPPER_SLOT_ZERO: i32 = 0;
 /// Save slot to load (parsed from the trigger file "slot=N"; -1 => leave the game's
 /// own most-recent selection).
 pub(crate) static OWN_STEPPER_SLOT: std::sync::atomic::AtomicI32 =
@@ -815,6 +817,100 @@ pub(crate) static OWN_STEPPER_SLOT: std::sync::atomic::AtomicI32 =
 pub(crate) static OWN_STEPPER_PHASE: AtomicUsize = AtomicUsize::new(OWN_STEPPER_PHASE_MENU);
 pub(crate) static mut OWN_STEPPER_SHIM: [usize; OWN_STEPPER_SHIM_LEN] =
     [TITLE_OWNER_SCAN_START_ADDRESS; OWN_STEPPER_SHIM_LEN];
+
+// ============================================================================================
+// STAGE 2 -- the VERIFIED in-context menu-drive that actually COMPLETES a character load.
+// After PHASE_MENU_BUILD identifies the Load-Game leaf d180 (MENU_LOAD_GAME_ITEM), STAGE 2
+// invokes its +0xa8 functor (-> ProfileLoadDialog), sets the dialog slot cursor, calls the
+// dialog's vtable-slot-20 `load_activate` (which reads the cursor [dialog+0xb0c] -- NOT an
+// arg), lets the NATIVE menu pump tick the registered selector step 0x140826d50 (which
+// populates iodev io18/io20 and runs the menu deserialize 0x14082c240 -> ac0=N + c30=real +
+// character applied, b80-INDEPENDENT), then `continue_confirm` 0x140b0e180 -> SetState(5).
+// All offsets VERIFIED against the on-disk decrypted exe (STAGE-2 spec 2026-06-16).
+// ============================================================================================
+/// PHASE 6 (S2 INVOKE): fire d180's +0xa8 action functor to build the ProfileLoadDialog.
+pub(crate) const OWN_STEPPER_PHASE_S2_INVOKE: usize = 6;
+/// PHASE 7 (S2 ACTIVATE): write the slot cursor [dialog+0xb0c]=N (bounds [dialog+0xb08]) then
+/// call the dialog's vtable-slot-20 load_activate(rcx=dialog), registering the selector step.
+pub(crate) const OWN_STEPPER_PHASE_S2_ACTIVATE: usize = 7;
+/// PHASE 8 (S2 MOUNT_POLL): pass-through each frame so the native pump ticks the selector;
+/// watch for the mount (ac0==N + io18/io20 set->clear; c30 leaving the new-game default).
+pub(crate) const OWN_STEPPER_PHASE_S2_MOUNT_POLL: usize = 8;
+/// PHASE 9 (S2 CONFIRM): guard (ac0==N && c30==latched-mount && io consumed) then
+/// continue_confirm -> SetState(5) so the native pump streams the real world. The ONLY
+/// save-write-risking step; gated entirely by a verified real mount (fail-closed otherwise).
+pub(crate) const OWN_STEPPER_PHASE_S2_CONFIRM: usize = 9;
+/// CS::ProfileLoadDialog vtable (RVA). The dialog built by d180's functor (dialog_factory
+/// 0x14081ead0 -> ctor 0x1409a3d90 writes this vtable). Used to VALIDATE the built dialog
+/// before any dialog call (a wrong this-pointer would AV).
+pub(crate) const PROFILE_LOAD_DIALOG_VTABLE_RVA: usize = 0x2b229f8;
+/// Dialog vtable slot 20 (offset 0xa0) = load_activate 0x1409a4670. Read the live slot from
+/// the dialog vtable (robust to relocation) rather than hard-calling the RVA.
+pub(crate) const DIALOG_LOAD_ACTIVATE_VTSLOT_A0_OFFSET: usize = 0xa0;
+/// Dialog selected-list-index cursor (= [dialog+0xa38+0xd4]); load_activate reads it as the
+/// slot. WRITE the desired slot N here before calling load_activate.
+pub(crate) const DIALOG_SLOT_CURSOR_B0C_OFFSET: usize = 0xb0c;
+/// Dialog list inclusive upper bound; load_activate clamps the cursor to [0, bound).
+pub(crate) const DIALOG_SLOT_BOUND_B08_OFFSET: usize = 0xb08;
+/// MenuWindowJob (d180) layout: +0xa8 action std::function, +0x10 dialog ctx-out (functor
+/// fires only when ==0), +0x130 built-dialog result slot.
+pub(crate) const MENU_ITEM_FUNCTOR_A8_OFFSET: usize = 0xa8;
+pub(crate) const MENU_ITEM_CTX_10_OFFSET: usize = 0x10;
+pub(crate) const MENU_ITEM_DIALOG_RESULT_130_OFFSET: usize = 0x130;
+/// GameMan+0xc30 new-game DEFAULT map (m10_01_00_00). The mount writes the slot's REAL map
+/// here; for a NON-m10 char `c30 != this` corroborates the mount (for an m10 char it is
+/// ambiguous -- ac0 is the primary mount oracle). Packed mAA_BB_CC_DD.
+pub(crate) const GAME_MAN_NEWGAME_DEFAULT_MAP: i32 = 0xa01_0000;
+/// Frames to let the opened menu settle before hand-invoking d180's functor (the cursor sits
+/// on Continue, not Load, so the native pump does not fire d180 itself -- we hand-invoke).
+pub(crate) const OWN_STEPPER_S2_INVOKE_SETTLE: u64 = 30;
+/// Max frames per S2 phase before failing closed (stay at the menu, NO SetState(5), NO write).
+pub(crate) const OWN_STEPPER_S2_PHASE_MAX: u64 = 1200;
+/// Per-phase frame counter for the S2 machine (reset on each phase transition).
+pub(crate) static OWN_STEPPER_S2_WAITS: AtomicUsize = AtomicUsize::new(0);
+/// The built+validated ProfileLoadDialog pointer (0 until PHASE_S2_INVOKE succeeds).
+pub(crate) static OWN_STEPPER_DIALOG: AtomicUsize = AtomicUsize::new(0);
+/// The RESOLVED target slot the mount is expected to land on: the configured `slot=N` if
+/// >=0, else (slot=-1 "most-recent") the dialog's natural highlight cursor read live at
+/// PHASE_S2_ACTIVATE. MOUNT_POLL/CONFIRM compare `GameMan+0xac0` against this.
+pub(crate) static OWN_STEPPER_EXPECTED_SLOT: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(OWN_STEPPER_SLOT_NONE);
+/// Latched real GameMan+0xc30 at the moment the mount is detected; re-read & required-equal
+/// at PHASE_S2_CONFIRM (the save-write guard).
+pub(crate) static OWN_STEPPER_MOUNT_C30: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(GAME_MAN_C30_UNSET);
+/// Latch: the iodev request pair (io18 & io20) was observed non-null at least once -- so
+/// "io18==0 && io20==0" means "request consumed/mounted", not "never started".
+pub(crate) static OWN_STEPPER_IO_WAS_SET: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const OWN_STEPPER_IO_WAS_SET_NO: usize = 0;
+pub(crate) const OWN_STEPPER_IO_WAS_SET_YES: usize = 1;
+/// One-shot latch so PHASE_S2_INVOKE hand-invokes the functor at most once.
+pub(crate) static OWN_STEPPER_INVOKED: AtomicUsize = AtomicUsize::new(0);
+/// One-shot latch so PHASE_S2_CONFIRM fires SetState(5) at most once.
+pub(crate) static OWN_STEPPER_CONFIRMED: AtomicUsize = AtomicUsize::new(0);
+// ---- CS::PlayerGameData correctness oracle (read at in-world) ----
+/// `[base+this]` -> CS::GameDataMan* (the singleton at 0x144588268). The all-player save data
+/// (PlayerGameData) hangs off it at +0x08 -- NOT at the singleton directly (the earlier "pgd =
+/// [0x144588268]" read GameDataMan and so all fields were garbage). Verified against the Hexinton
+/// CE table: every PlayerGameData field chains GameDataMan -> [+0x08] -> [+field] (Vigor +0x3c,
+/// Runes Held +0x6c, ...). fromsoftware-rs exposes this typed (GameDataMan/PlayerGameData) for a
+/// drift-proof accessor; using the verified offsets here for the one-shot correctness dump.
+pub(crate) const PLAYER_GAME_DATA_SINGLETON_RVA: usize = 0x4588268;
+/// GameDataMan -> PlayerGameData (all-player save data) sub-object pointer.
+pub(crate) const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;
+pub(crate) const PGD_LEVEL_68_OFFSET: usize = 0x68;
+pub(crate) const PGD_RUNE_COUNT_6C_OFFSET: usize = 0x6c;
+pub(crate) const PGD_RUNE_MEMORY_70_OFFSET: usize = 0x70;
+pub(crate) const PGD_CHR_TYPE_98_OFFSET: usize = 0x98;
+pub(crate) const PGD_NAME_9C_OFFSET: usize = 0x9c;
+pub(crate) const PGD_NAME_LEN_U16: usize = 17;
+pub(crate) const PGD_STAT_BASE_3C_OFFSET: usize = 0x3c;
+pub(crate) const PGD_STAT_COUNT: usize = 8;
+/// GameMan last field: character_name_is_empty (a cheap blank/new-game discriminator).
+pub(crate) const GAME_MAN_NAME_IS_EMPTY_E78_OFFSET: usize = 0xe78;
+/// One-shot latch for the in-world LOAD-CORRECTNESS dump.
+pub(crate) static LOAD_CORRECTNESS_DUMPED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const LOAD_CORRECTNESS_NOT_DUMPED: usize = 0;
 /// Synthetic `this` for the IngameInit-tail stream-worker register call 0x140b0a980
 /// (+0x48 set to WORLD_WORKER_BUILD_STATE hits the build+register arm).
 pub(crate) static mut OWN_STEPPER_WORKER_THIS: [u8; SYNTHETIC_STEP_THIS_SIZE] =
@@ -896,6 +992,157 @@ pub(crate) const SPLASH_SKIP_RVA: usize = 0xb0c35d;
 pub(crate) const SPLASH_SKIP_EXPECTED_JE: u8 = 0x74;
 pub(crate) const SPLASH_SKIP_REPLACEMENT_JG: u8 = 0x7f;
 pub(crate) const SPLASH_PATCH_LEN: usize = 1;
+/// ONLINE-DISABLE (headless offline boot, no "Unable to start in online mode" modal).
+/// `GameMan::IsOnlineMode` getter 0x14067a030 = `mov rax,[rip+..]; movzx eax,[rax+0xbc8]; ret`
+/// (the canonical online/offline flag, default 1=online, read by ~22 consumers incl. the boot
+/// login flow). Patching the getter body to `xor eax,eax; ret` forces every consumer onto the
+/// game's own OFFLINE branch, so the boot never attempts online login and the connection-error
+/// modal is never raised. Single leaf accessor, no side effects -> equivalent to "Play Offline";
+/// no save/crash risk. Verified (self-disasm, online-disable RE 2026-06-17): first byte 0x48.
+pub(crate) const ONLINE_DISABLE_RVA: usize = 0x67a030;
+pub(crate) const ONLINE_DISABLE_EXPECTED_FIRST: u8 = 0x48;
+/// `xor eax,eax; ret` -- returns 0 (offline) for the whole getter (the original body is 15
+/// bytes followed by the next function, so a 3-byte stub is self-contained).
+pub(crate) const ONLINE_DISABLE_STUB: [u8; 3] = [0x31, 0xc0, 0xc3];
+pub(crate) const ONLINE_DISABLE_PATCH_LEN: usize = 3;
+pub(crate) const ONLINE_DISABLE_BYTE_STEP: usize = 1;
+/// Login-readiness predicate 0x140cab230 (`sub rsp,0x18; ...`, returns 1 only if all 3 session
+/// mgrs == 2). The boot/menu network-flow step calls it to decide ONLINE-attempt vs OFFLINE; a
+/// non-zero return makes it attempt online login, which FAILS offline -> the connection-error
+/// modal re-pops on every menu transition (the popup LOOP). Patching it to `xor eax,eax; ret`
+/// (return "not ready") makes the flow take the clean OFFLINE fork and NEVER attempt online.
+/// Same 3-byte stub; first byte 0x48 (verified disasm). Applied with the getter patch.
+pub(crate) const ONLINE_PREDICATE_DISABLE_RVA: usize = 0xcab230;
+/// AUTO-ACCEPT every `CS::MessageBoxDialog` popup that appears BEFORE the character is in-world
+/// (connection-error, EULA, warnings, "save data" notices, ...), so the headless autoload never
+/// stops on a startup modal. We hook the dialog's finished-poll getter 0x1407b0cf0
+/// (`cmp [rcx+0x25e8],2; setge al; ret`, rcx=dialog) and, for the MessageBoxDialog vtable only,
+/// write the result fields (button=OK, state=decided) and return "finished" -- exactly as if OK
+/// were pressed. Scoped by vtable + pre-in-world so in-game dialogs + the load flow are untouched.
+/// Verified self-disasm (online-disable RE 2026-06-17 + local disasm).
+pub(crate) const MSGBOX_FINISHED_GETTER_RVA: u32 = 0x7b0cf0;
+pub(crate) const MSGBOX_DIALOG_VTABLE_RVA: usize = 0x2b03550;
+pub(crate) const MSGBOX_RESULT_BUTTON_25E0_OFFSET: usize = 0x25e0;
+pub(crate) const MSGBOX_STATE_25E8_OFFSET: usize = 0x25e8;
+/// Affirmative/OK button index (the consumer treats -1 as "none yet").
+pub(crate) const MSGBOX_OK_BUTTON: i32 = 0;
+/// Dialog state >= 2 satisfies the finished-poll.
+pub(crate) const MSGBOX_STATE_DECIDED: i32 = 2;
+pub(crate) const MSGBOX_FINISHED_TRUE: u8 = 1;
+pub(crate) const MSGBOX_FINISHED_FALSE: u8 = 0;
+pub(crate) const AUTO_ACCEPT_LOG_INTERVAL: usize = 30;
+/// Original finished-poll getter trampoline (0 until the hook installs).
+pub(crate) static MSGBOX_FINISHED_ORIG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static AUTO_ACCEPT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const AUTO_ACCEPT_NOT_INSTALLED: usize = 0;
+pub(crate) const AUTO_ACCEPT_INSTALLED_YES: usize = 1;
+pub(crate) static AUTO_ACCEPT_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Set once when the local player first exists in-world; gates the auto-accept OFF so in-game
+/// MessageBoxDialogs (which need real choices) are never force-accepted.
+pub(crate) static IN_WORLD_REACHED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const IN_WORLD_NOT_REACHED: usize = 0;
+pub(crate) const IN_WORLD_REACHED_YES: usize = 1;
+/// DIAGNOSTIC: identify the REAL connection-error dialog (the inferred MessageBoxDialog vtable
+/// 0x142b03550 did NOT match -- the auto-accept never fired). Hook the dialog builder
+/// 0x1409275b0 to log each created dialog's vtable/class + args (the FMG message id is in an
+/// arg) + caller; and log every distinct vtable that polls the finished-getter pre-world.
+pub(crate) const MSGBOX_BUILDER_RVA: u32 = 0x9275b0;
+pub(crate) static MSGBOX_BUILDER_ORIG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static MSGBOX_BUILDER_LOG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const MSGBOX_BUILDER_LOG_MAX: usize = 24;
+pub(crate) static AUTO_ACCEPT_VT_LAST: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static AUTO_ACCEPT_VT_LOG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const AUTO_ACCEPT_VT_LOG_MAX: usize = 24;
+/// The live MessageBoxDialog captured at build time (the connection-error / startup popup), so
+/// the game task can force its result fields (OK + decided) each frame until the caller consumes
+/// it. The finished-getter 0x1407b0cf0 is NOT polled for this dialog, so writing the fields
+/// directly is the dismiss lever. 0 = none captured.
+pub(crate) static CONNECTION_ERROR_DIALOG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static DISMISS_WRITE_LOG: AtomicUsize = AtomicUsize::new(0);
+/// The dialog pointer OnDecide was last fired on, so we press OK exactly ONCE per dialog instead
+/// of every frame (re-dispatching every frame keeps the dialog stuck "deciding" and it never
+/// closes). A newly-built dialog has a different pointer, so it gets its own single OK.
+pub(crate) static LAST_ONDECIDE_DIALOG: AtomicUsize = AtomicUsize::new(0);
+/// CS::MessageBoxDialog OnDecide/finalize (sub-object vtable slot 13) -- the genuine OK handler:
+/// reads the chosen-button index [dialog+0x25e0] (builder-defaulted to OK) and dispatches it,
+/// driving the dialog to emit "stop" to its parent MenuWindowJob (which then tears it down).
+/// This is the verified headless dismiss: call with rcx=dialog. (Field writes do NOT close it --
+/// +0x25e8 is the button COUNT, +0x25e0 the chosen index; both are config/output, not triggers.)
+pub(crate) const MSGBOX_ONDECIDE_RVA: usize = 0x927ba0;
+/// Force-stop / notify-owner-closed 0x14078dfd0(rcx=dialog): if owner [dialog+0x1c80]!=0 ->
+/// owner->vtable[+0x10](dialog); else StepResult(3=stop)+EmitResult. Directly emits "stop" to
+/// the parent MenuWindowJob so it tears the dialog down -- a more direct dismiss than OnDecide
+/// (which only moved the selection to OK). Acceptable because the connection-error OK is a no-op.
+pub(crate) const MSGBOX_FORCE_STOP_RVA: usize = 0x78dfd0;
+/// Frames to let a SetState(2)/BeginLogo-triggered connection-error modal appear + be dismissed
+/// before the own-stepper begins any menu-open churn (so the churn doesn't disrupt the modal's
+/// parent menu). ~3s at 60fps.
+pub(crate) const OWN_STEPPER_MODAL_GRACE: u64 = 180;
+// ============================================================================================
+// IN-PROCESS MENU INPUT DRIVER (verified RE 2026-06-17). The main menu (built by SetState(2)=
+// BeginLogo) reads input from the keystate bitmap inputmgr+0x90+eventId (edge-triggered &1).
+// Confirm=0x3d, vertical-move=0x0/0x45. The Load-Game item d180 is INPUT-GATED -- it only ticks
+// (and so is captured by the leaf/iterator hooks) once the cursor is navigated ONTO it. Main-menu
+// order: Continue(0), Load Game=d180(1), so ONE Down from the default reaches Load Game. We inject
+// Down taps in-process (NO host input, NO window focus) until d180 is captured, then STAGE 2
+// invokes its functor directly -- so we never Confirm a wrong item (no New-Game/save-write risk).
+// ============================================================================================
+/// inputmgr keystate bitmap offset (inputmgr = [0x143d6b7b0]); bit0 = pressed-this-frame (edge).
+pub(crate) const INPUTMGR_BITMAP_90_OFFSET: usize = 0x90;
+pub(crate) const MENU_EVENT_PRESSED_BIT: u8 = 1;
+/// Front-end menu event ids (verified): Confirm/OK, and the two vertical-move candidates (one is
+/// Down, one Up -- we inject both; only Down moves the cursor down, Up saturates at the top so it
+/// is harmless from Continue). We do NOT inject Confirm (STAGE 2 invokes d180's functor instead).
+pub(crate) const MENU_EVENT_CONFIRM_3D: usize = 0x3d;
+pub(crate) const MENU_EVENT_MOVE_A_00: usize = 0x0;
+pub(crate) const MENU_EVENT_MOVE_B_45: usize = 0x45;
+/// AUTO-CONFIRM (observe natural flow past the modal): tap Confirm on a SET/GAP cycle slow enough
+/// that the connection-error modal (which appears ~90 frames after the press) gets its own tap.
+pub(crate) const AUTO_CONFIRM_CYCLE_FRAMES: u64 = 120;
+pub(crate) const AUTO_CONFIRM_SET_FRAMES: u64 = 3;
+pub(crate) const AUTO_CONFIRM_LOG_INTERVAL: u64 = 60;
+pub(crate) static AUTO_CONFIRM_FRAME: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static AUTO_CONFIRM_MODAL_SEEN: AtomicUsize = AtomicUsize::new(0);
+/// Menu list cursor (highlighted index) and item count, on the list object (cursor getter
+/// 0x140739e20 = `mov eax,[rcx+0xd4]`). Used to LOG the live cursor (diagnostic) while injecting.
+pub(crate) const MENU_LIST_CURSOR_D4_OFFSET: usize = 0xd4;
+pub(crate) const MENU_LIST_COUNT_D0_OFFSET: usize = 0xd0;
+/// Down-tap cadence: assert the move bit for SET frames (edge), then GAP idle frames (so the menu
+/// sees a clean single edge + auto-repeat is avoided), one cursor step per cycle.
+pub(crate) const MENU_TAP_SET_FRAMES: u64 = 2;
+pub(crate) const MENU_TAP_GAP_FRAMES: u64 = 10;
+pub(crate) const MENU_TAP_CYCLE_FRAMES: u64 = MENU_TAP_SET_FRAMES + MENU_TAP_GAP_FRAMES;
+/// Max Down taps before giving up (menu has 5 items; cap generously). Down saturates at the last
+/// item (no wrap), so this also bounds an overshoot.
+pub(crate) const MENU_NAV_MAX_TAPS: u64 = 12;
+/// Per-frame counter for the menu-input nav (starts when nav begins, after the modal grace).
+pub(crate) static MENU_NAV_FRAME: AtomicUsize = AtomicUsize::new(0);
+/// Forced entry-diagnostic counter (log the first few menu_input_drive calls unconditionally,
+/// before any early return, so we can see the inputmgr value + capture state).
+pub(crate) static MENU_DRIVE_ENTER_LOG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const MENU_DRIVE_ENTER_LOG_MAX: usize = 8;
+/// "result emitted / closing" latch, set =1 by EmitResult once the dialog begins teardown. We
+/// stop calling OnDecide once this is set (avoids re-dispatch / UAF after teardown).
+pub(crate) const MSGBOX_CLOSING_LATCH_3B0_OFFSET: usize = 0x3b0;
+pub(crate) const MSGBOX_CLOSING_YES: usize = 1;
+pub(crate) const MSGBOX_LATCH_BYTE_MASK: usize = 0xff;
+/// THE OK-BUTTON HANDLER 0x14078e030(rcx=dialog) -- the std::function the menu router invokes when
+/// OK is pressed. Captured from a real OK-press (commit 0x14078ef20 fired with caller 0x78e09c, in
+/// the function entered at 0x78e030). It takes ONLY rcx=dialog: reads the dialog cursor (0x140739e20
+/// = [dialog+0xd4]), gets the OK callback (0x14078fbd0 from [dialog+0x1298]), builds the result
+/// struct (0x1407411e0), and COMMITS (0x14078ef20(dialog, &struct, 1)) -- which closes the dialog
+/// AND emits its result to the parent so the title flow PROCEEDS. Calling this each frame on every
+/// captured MessageBoxDialog skips ALL of them generically (connection-error, starting-offline, ...)
+/// with no input -- it is exactly what a real OK-press runs. Verified entry: `rex push rbx; ... mov
+/// rbx,rcx` at 0x78e030; only rcx used.
+pub(crate) const MSGBOX_OK_HANDLER_RVA: usize = 0x78e030;
+/// CONFIRM latch [dialog+0x1bc0] u8 -- the field a real OK-press sets. The dialog's own per-frame
+/// UPDATE 0x140927d30 reads it -> commit 0x14078ef20 builds the result functor into [dialog+0x10]
+/// -> next UPDATE emits stop via EmitResult (sets the +0x3b0 closing latch) -> the dialog TEARS
+/// DOWN. OnDecide alone only highlights/dispatches OK WITHOUT closing (the modal stays visible and
+/// blocks the title flow); setting this latch is what actually closes it like a real press.
+pub(crate) const MSGBOX_CONFIRM_LATCH_1BC0_OFFSET: usize = 0x1bc0;
+pub(crate) const MSGBOX_CONFIRM_LATCH_SET: u8 = 1;
 pub(crate) const PAGE_EXECUTE_READWRITE: u32 = 0x40;
 pub(crate) const PAGE_PROTECT_UNSET: u32 = 0;
 /// Earliest game-task tick to fire the movie dismiss -- a settle floor; the real
@@ -1002,6 +1249,7 @@ pub(crate) static START_GAME_TASK: Once = Once::new();
 pub(crate) static START_CONTINUE_TRACE: Once = Once::new();
 pub(crate) static START_SAFE_INPUT_HOOKS: Once = Once::new();
 pub(crate) static START_SPLASH_SKIP: Once = Once::new();
+pub(crate) static START_ONLINE_DISABLE: Once = Once::new();
 pub(crate) static BOOTSTRAP_TELEMETRY_SEEN: AtomicUsize =
     AtomicUsize::new(BOOTSTRAP_TELEMETRY_UNSEEN);
 pub(crate) static SAFE_INPUT_CONFIRM_FRAMES_REMAINING: AtomicUsize = AtomicUsize::new(0);
@@ -1450,6 +1698,17 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         });
     }
 
+    // Online-disable: patch GameMan::IsOnlineMode -> always-offline so the boot never attempts
+    // online login and the "Unable to start in online mode" modal is never raised -- the headless
+    // autoload reaches the real title/main-menu directly. Same early-attach pattern as splash-skip.
+    if online_disable_enabled() {
+        START_ONLINE_DISABLE.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-online-disable".to_owned())
+                .spawn(apply_online_disable);
+        });
+    }
+
     let direct_autoload_configured = {
         let state = state_or_return(&state);
         state.autoload.method() == SaveLoadMethod::DirectMenuLoad && state.autoload.slot().is_some()
@@ -1567,6 +1826,17 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
                     let mut state = state_or_return(&state);
                     state.game_task_ticks += GAME_TASK_TICK_INCREMENT;
+                    // Headless startup: auto-accept every pre-load MessageBoxDialog popup
+                    // (connection-error / EULA / warnings) so the autoload never stops on a modal.
+                    // Install the capture hook once, then force OK on the captured dialog each frame.
+                    if online_disable_enabled() {
+                        install_auto_accept_hook();
+                        force_dismiss_startup_dialog();
+                    }
+                    // Observe the natural flow PAST the modal: tap Confirm (game's own input).
+                    if auto_confirm_enabled() {
+                        auto_confirm_tap();
+                    }
                     // Bisect kill-switch: lock + tick only, NO filesystem I/O
                     // (no telemetry write, no experiments). Discriminates "our
                     // per-frame file I/O stalls the title" (lite survives) from
@@ -1679,6 +1949,26 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
 
                 let mut state = state_or_return(&state);
                 state.game_task_ticks += GAME_TASK_TICK_INCREMENT;
+                // In-world: latch OFF the startup popup auto-accept (in-game dialogs need real
+                // choices), then run the one-shot correctness dump.
+                IN_WORLD_REACHED.store(IN_WORLD_REACHED_YES, Ordering::SeqCst);
+                // In-world correctness oracle: on the FIRST frame the local player exists, log
+                // the load-correctness record + the T_controllable timeline marker ONCE. Fires
+                // for both a native-menu load (observe) and a DLL-driven load (own-stepper), so
+                // the two records are directly comparable (field-for-field == correct load).
+                if (own_stepper_enabled() || observe_enabled())
+                    && LOAD_CORRECTNESS_DUMPED.swap(GAME_TASK_TICK_INCREMENT as usize, Ordering::SeqCst)
+                        == LOAD_CORRECTNESS_NOT_DUMPED
+                {
+                    if let Ok(base) = game_module_base() {
+                        timeline_event(
+                            "T_controllable",
+                            state.game_task_ticks,
+                            format_args!("player=1"),
+                        );
+                        unsafe { dump_load_correctness(base, state.game_task_ticks) };
+                    }
+                }
                 let observation = observe_animation(player, state.last_write_idx);
                 state.current_animation_id = observation.current_animation_id;
                 state.last_write_idx = Some(observation.write_idx);

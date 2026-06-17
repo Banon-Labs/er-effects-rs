@@ -378,6 +378,82 @@ pub(crate) fn own_stepper_enabled() -> bool {
             .exists()
 }
 
+/// PASSIVE own-stepper: do NOT force the menu (no SetState(2)/self-fire) and do NOT block input.
+/// The user navigates to Load Game once (the input that surfaces the input-gated d180); the
+/// capture hooks grab d180; then STAGE 2 drives mount->confirm->load. This both PROVES the load
+/// (correct + faster than manual slot-select) and lets the iterator log the menu-structure change
+/// so the pump-switch can be replayed zero-input later. File: er-effects-passive.txt.
+pub(crate) fn own_stepper_passive_enabled() -> bool {
+    matches!(std::env::var("ER_EFFECTS_PASSIVE").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-passive.txt")
+            .exists()
+}
+
+/// AUTO-CONFIRM observe mode (er-effects-auto-confirm.txt): drive the game's OWN natural title
+/// flow with Confirm input-taps so we can finally observe the view PAST the modal. No SetState
+/// forcing, no input block, no custom dismiss -- just the press the game polls for.
+pub(crate) fn auto_confirm_enabled() -> bool {
+    matches!(std::env::var("ER_EFFECTS_AUTO_CONFIRM").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-auto-confirm.txt")
+            .exists()
+}
+
+/// Tap Confirm (inputmgr+0x90+0x3d, edge) to walk the NATURAL flow:
+/// press-any-button -> [confirm] -> connection-error modal -> [confirm] -> MAIN MENU.
+/// STOPS once the modal has been SEEN and is now GONE, so we never confirm a main-menu item
+/// (Continue = load most-recent = SetState(5) save-write risk). Pure observation of the post-modal
+/// view. Uses the builder capture hook only to know when the modal is up.
+pub(crate) fn auto_confirm_tap() {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let Ok(base) = game_module_base() else {
+        return;
+    };
+    install_auto_accept_hook();
+    let modal_now = CONNECTION_ERROR_DIALOG.load(Ordering::SeqCst) != null;
+    if modal_now {
+        AUTO_CONFIRM_MODAL_SEEN.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    }
+    let seen = AUTO_CONFIRM_MODAL_SEEN.load(Ordering::SeqCst) != null;
+    if seen && !modal_now {
+        // Past the modal -> stop tapping (do NOT confirm Continue on the main menu).
+        return;
+    }
+    let inputmgr =
+        unsafe { safe_read_usize(base + SELECTBOT_INPUT_MANAGER_GLOBAL_RVA) }.unwrap_or(null);
+    if inputmgr == null {
+        return;
+    }
+    let frame = AUTO_CONFIRM_FRAME.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
+    if frame % AUTO_CONFIRM_CYCLE_FRAMES < AUTO_CONFIRM_SET_FRAMES {
+        unsafe {
+            *((inputmgr + INPUTMGR_BITMAP_90_OFFSET + MENU_EVENT_CONFIRM_3D) as *mut u8) |=
+                MENU_EVENT_PRESSED_BIT;
+        }
+    }
+    if frame % AUTO_CONFIRM_LOG_INTERVAL == null as u64 {
+        append_autoload_debug(format_args!(
+            "auto-confirm: tap frame={frame} modal_now={modal_now} seen={seen} inputmgr=0x{inputmgr:x}"
+        ));
+    }
+}
+
+/// Whether STAGE 1d should SELF-FIRE the TitleTopDialog open-menu registrar (0x1409b24e0).
+/// DEFAULT OFF (file-gated): with the connection-error modal now handled (clean headless boot),
+/// the NATURAL Continue/Load main menu builds from SetState(2)=BeginLogo, and force-firing the
+/// TitleTopDialog registrar opens a COMPETING dialog that prevents the natural menu's Load-Game
+/// item d180 from ticking through the capture hooks. Off => let the natural menu surface d180.
+pub(crate) fn own_stepper_selffire_enabled() -> bool {
+    matches!(std::env::var("ER_EFFECTS_SELFFIRE").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-selffire.txt")
+            .exists()
+}
+
 /// Decode one x86-64 jmp-thunk hop. Matches either `add rcx,8 ; jmp rel32` (the MSVC
 /// `std::function` `_Do_call` thunk family the FD4 menu-item action functor routes
 /// through) or a bare `jmp rel32`, returning the absolute jump target. Returns `None`
@@ -918,6 +994,75 @@ unsafe fn diagnostic_job_tree_walk(
     load_game
 }
 
+/// In-process menu-input driver: inject Down taps into the keystate bitmap (inputmgr+0x90) to
+/// navigate the main-menu cursor onto the Load-Game item d180 (which surfaces it so the capture
+/// hooks grab it). NO host input, NO window focus -- it writes the game's OWN input bitmap each
+/// frame (edge-triggered: SET for a couple frames, then a gap, = one cursor step per cycle). Does
+/// NOT inject Confirm (STAGE 2 invokes d180's functor directly once captured), so it can never
+/// activate a wrong menu item (no New-Game / save-write risk). Logs the live cursor (diagnostic).
+/// Returns true once d180 is captured.
+unsafe fn menu_input_drive(owner: usize, base: usize) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let lg = MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst);
+    let inputmgr =
+        unsafe { safe_read_usize(base + SELECTBOT_INPUT_MANAGER_GLOBAL_RVA) }.unwrap_or(null);
+    let en = MENU_DRIVE_ENTER_LOG.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    if en < MENU_DRIVE_ENTER_LOG_MAX {
+        append_autoload_debug(format_args!(
+            "own_stepper: menu-input-drive ENTER #{en} inputmgr=0x{inputmgr:x} load_game=0x{lg:x} base=0x{base:x} block={}",
+            block_input_enabled()
+        ));
+    }
+    if lg != null {
+        return true;
+    }
+    if inputmgr == null {
+        return false;
+    }
+    let frame = MENU_NAV_FRAME.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
+    let cycle = frame / MENU_TAP_CYCLE_FRAMES;
+    let in_cycle = frame % MENU_TAP_CYCLE_FRAMES;
+    if cycle >= MENU_NAV_MAX_TAPS {
+        return false; // exhausted; let the d180-search fall through to its timeout
+    }
+    // Inject the Down move (both candidate event ids) during the SET window of each cycle.
+    if in_cycle < MENU_TAP_SET_FRAMES {
+        unsafe {
+            *((inputmgr + INPUTMGR_BITMAP_90_OFFSET + MENU_EVENT_MOVE_A_00) as *mut u8) |=
+                MENU_EVENT_PRESSED_BIT;
+            *((inputmgr + INPUTMGR_BITMAP_90_OFFSET + MENU_EVENT_MOVE_B_45) as *mut u8) |=
+                MENU_EVENT_PRESSED_BIT;
+        }
+    }
+    // Diagnostic once per cycle: live cursor candidates (find the list object + confirm movement).
+    if in_cycle == null as u64 {
+        let holder = unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_LIST_130_OFFSET) }
+            .unwrap_or(null);
+        let cur_inline = unsafe {
+            safe_read_usize(owner + TITLE_OWNER_MENU_LIST_130_OFFSET + MENU_LIST_CURSOR_D4_OFFSET)
+        }
+        .map(|v| v as u32 as i32)
+        .unwrap_or(OWN_STEPPER_SLOT_NONE);
+        let (cur_holder, cnt_holder) = if holder != null {
+            (
+                unsafe { safe_read_usize(holder + MENU_LIST_CURSOR_D4_OFFSET) }
+                    .map(|v| v as u32 as i32)
+                    .unwrap_or(OWN_STEPPER_SLOT_NONE),
+                unsafe { safe_read_usize(holder + MENU_LIST_COUNT_D0_OFFSET) }
+                    .map(|v| v as u32 as i32)
+                    .unwrap_or(OWN_STEPPER_SLOT_NONE),
+            )
+        } else {
+            (OWN_STEPPER_SLOT_NONE, OWN_STEPPER_SLOT_NONE)
+        };
+        append_autoload_debug(format_args!(
+            "own_stepper: menu-input-drive Down-tap #{cycle} inputmgr=0x{inputmgr:x} holder(owner+0x130)=0x{holder:x} cursor[+0x130+0xd4]={cur_inline} cursor[holder+0xd4]={cur_holder} count[holder+0xd0]={cnt_holder} load_game=0x{:x}",
+            MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst)
+        ));
+    }
+    false
+}
+
 /// OWN-THE-STEPPER step 2 (the load driver): runs IN-CONTEXT at idx10 (STEP_MenuJobWait,
 /// rcx=owner, rdx=FD4Time) as a real FD4 step. After letting the boot settle to the
 /// stable press-any-button state, it drives the game's OWN load: SetState(3=BeginTitle)
@@ -971,7 +1116,24 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         }
     };
     if phase == OWN_STEPPER_PHASE_MENU {
-        if n < OWN_STEPPER_SETTLE_CALLS || want_slot == OWN_STEPPER_SLOT_NONE {
+        // Drive once the boot settles. want_slot == -1 is the "most-recent" intent (resolved
+        // from the dialog's natural highlight at PHASE_S2_ACTIVATE), NOT a "do nothing" signal,
+        // so we no longer gate on it -- the own-stepper trigger file is itself the drive intent.
+        if n < OWN_STEPPER_SETTLE_CALLS {
+            pass_through(false);
+            return;
+        }
+        // Wait for any startup MessageBoxDialog (connection-error / EULA / warning) to be
+        // dismissed BEFORE driving the menu -- otherwise we build the main menu underneath the
+        // live modal (black screen / contention). The auto-accept capture clears this atomic
+        // once the dialog is gone (vtable no longer matches), so the own-stepper proceeds then.
+        if CONNECTION_ERROR_DIALOG.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS {
+            if n % OWN_STEPPER_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+                append_autoload_debug(format_args!(
+                    "own_stepper: waiting for startup modal to clear (CONNECTION_ERROR_DIALOG=0x{:x}) before menu drive #{n}",
+                    CONNECTION_ERROR_DIALOG.load(Ordering::SeqCst)
+                ));
+            }
             pass_through(false);
             return;
         }
@@ -1001,6 +1163,25 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         // +0xa8 functor -> drive the dialog -> native mount) follows once this confirms the
         // live layout + item. Every hand-driven b80 lever is dead (the menu async job is the
         // only thing that mounts c30 before PlayGame); this is the Path B menu-drive.
+        // T0: the common timeline start -- the title is parked at state 10 and we begin the
+        // DLL drive. The first timeline_event sets the wall-clock epoch (so all later ms= are
+        // measured from here); a native-baseline observe run sets T0 the same way.
+        timeline_event(
+            "T0",
+            n,
+            format_args!("owner=0x{owner:x} state10 slot={want_slot} c30=0x{c30:x}"),
+        );
+        // PASSIVE mode: do NOT force the menu. Hand off to PHASE_MENU_BUILD which waits for the
+        // user to navigate to Load Game (surfacing d180 via the capture hooks), then runs STAGE 2.
+        if own_stepper_passive_enabled() {
+            append_autoload_debug(format_args!(
+                "own_stepper: PASSIVE -- not forcing the menu; waiting for the user to open Load Game so d180 is captured, then STAGE 2 drives the load (input UNBLOCKED) #{n}"
+            ));
+            OWN_STEPPER_MENU_BUILD_WAITS.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_MENU_BUILD, Ordering::SeqCst);
+            pass_through(false);
+            return;
+        }
         let bare = unsafe { diagnostic_menu_walk(owner, base, "bare", true) };
         let bare_tree = unsafe {
             diagnostic_job_tree_walk(
@@ -1108,6 +1289,35 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
     if phase == OWN_STEPPER_PHASE_MENU_BUILD {
         let waits =
             OWN_STEPPER_MENU_BUILD_WAITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
+        // SetState(2)=BeginLogo re-enters the online check and pops the connection-error
+        // MessageBoxDialog, and the online attempt RE-FIRES on every menu transition -> the modal
+        // LOOPS (a fresh dialog each transition). force_dismiss_startup_dialog presses OK every
+        // frame (OnDecide 0x140927ba0 with +0x25e0=OK -> proceeds, NOT the force-stop cancel that
+        // reverted to press-any-button). Because the popup LOOPS, blocking here until
+        // CONNECTION_ERROR_DIALOG is clear waited FOREVER and STAGE 1d never ran. So: only block
+        // during the initial GRACE window (let the first boot/SetState(2) modal get dismissed),
+        // then PROCEED to menu nav + d180 capture EVEN WITH a modal present -- OnDecide-OK clears
+        // each one every frame, and the underlying main menu / capture hooks run concurrently.
+        if waits < OWN_STEPPER_MODAL_GRACE {
+            if waits % OWN_STEPPER_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+                append_autoload_debug(format_args!(
+                    "own_stepper: PHASE_MENU_BUILD grace {waits}/{OWN_STEPPER_MODAL_GRACE} (dialog=0x{:x}) before menu open -- OnDecide-OK dismisses each looping popup",
+                    CONNECTION_ERROR_DIALOG.load(Ordering::SeqCst)
+                ));
+            }
+            pass_through(false);
+            return;
+        }
+        // IN-PROCESS MENU NAVIGATION (primary): SetState(2)=BeginLogo already built the full main
+        // menu (Continue/Load d180/New-Game) into owner+0x130. d180 is input-gated -- it only ticks
+        // once the cursor is ON it. Inject Down taps into the game's input bitmap (inputmgr+0x90,
+        // no host input / no window focus) to move the cursor onto Load Game; the capture hooks
+        // then set MENU_LOAD_GAME_ITEM and the search below advances to STAGE 2. We never inject
+        // Confirm (STAGE 2 invokes d180's functor), so no wrong-item activation. Skip in passive
+        // mode (the user navigates). The STAGE1d self-fire below is now a fallback (gated off).
+        if !own_stepper_passive_enabled() {
+            unsafe { menu_input_drive(owner, base) };
+        }
         // STAGE 1d: open the main menu zero-input. SetState(2)->3->10 built the TitleTopDialog at
         // owner+0xe0 (vt 0x142b26468). The dialog's native update 0x1409aac10 (ticked every frame
         // by pass_through -> STEP_MenuJobWait) runs the intro FadeIn animation, transitions
@@ -1162,7 +1372,11 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
                     ));
                 }
                 // FALLBACK self-fire on the CORRECT gate (native path's own precondition).
-                if in_loop
+                // DEFAULT OFF: with the modal handled, the natural Continue/Load menu builds and
+                // ticks d180 itself; force-firing the TitleTopDialog registrar opens a competing
+                // dialog that hides d180 from the capture hooks. Enable via er-effects-selffire.txt.
+                if own_stepper_selffire_enabled()
+                    && in_loop
                     && latch == TITLE_OWNER_SCAN_START_ADDRESS
                     && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) == OWN_STEPPER_MENU_OPENED_NO
                 {
@@ -1227,13 +1441,26 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
                         true,
                     )
                 };
+                // Ensure MENU_LOAD_GAME_ITEM is set (the item may have come from the static
+                // tree walk rather than the leaf/iterator hook) so STAGE 2 reads it.
+                if MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS {
+                    MENU_LOAD_GAME_ITEM.store(item, Ordering::SeqCst);
+                }
                 append_autoload_debug(format_args!(
-                    "own_stepper: STAGE1b LOAD-GAME item identified=0x{item:x} after {waits} waits -- STAGE 2 (functor invoke) PENDING; staying at main menu (NO-WRITE) c30=0x{c30:x} b80={b80}"
+                    "own_stepper: STAGE1b LOAD-GAME item identified=0x{item:x} after {waits} waits -- entering STAGE 2 load drive (slot={want_slot}) c30=0x{c30:x} b80={b80}"
                 ));
-                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+                timeline_event(
+                    "T_menu_built",
+                    n,
+                    format_args!("item=0x{item:x} c30=0x{c30:x}"),
+                );
+                OWN_STEPPER_S2_WAITS.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_INVOKE, Ordering::SeqCst);
             }
             None => {
-                if waits >= OWN_STEPPER_MENU_BUILD_WAIT_MAX {
+                if waits >= OWN_STEPPER_MENU_BUILD_WAIT_MAX
+                    && !own_stepper_passive_enabled()
+                {
                     let _ = unsafe { diagnostic_menu_walk(owner, base, "built138-timeout", true) };
                     let _ = unsafe {
                         diagnostic_job_tree_walk(
@@ -1263,8 +1490,379 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         pass_through(false);
         return;
     }
+    if phase == OWN_STEPPER_PHASE_S2_INVOKE
+        || phase == OWN_STEPPER_PHASE_S2_ACTIVATE
+        || phase == OWN_STEPPER_PHASE_S2_MOUNT_POLL
+        || phase == OWN_STEPPER_PHASE_S2_CONFIRM
+    {
+        // STAGE 2: drive the verified menu load (functor -> dialog -> load_activate -> native
+        // pump mounts c30=real+ac0+char -> continue_confirm -> SetState(5)). Pass-through each
+        // frame so STEP_MenuJobWait keeps the native menu task ticking the registered selector.
+        unsafe { own_stepper_stage2(owner, base, gm, want_slot, n) };
+        pass_through(false);
+        return;
+    }
     // phase DONE: idx6 watches the native load; idx10 just passes through if re-entered.
     pass_through(false);
+}
+
+/// STAGE 2 in-context load drive (see the lib.rs STAGE-2 const block). Runs each frame while
+/// `OWN_STEPPER_PHASE` is one of the four S2 phases, sequencing:
+///   INVOKE  -> hand-fire d180's `+0xa8` functor to build the ProfileLoadDialog
+///   ACTIVATE-> write slot cursor `[dialog+0xb0c]=N`, call vtable-slot-20 `load_activate(dialog)`
+///   MOUNT_POLL -> let the native pump tick the selector; detect the mount (`ac0==N` + io
+///               request set->cleared); latch the real `c30`
+///   CONFIRM -> guard (`ac0==N && c30==latched`) then `continue_confirm` -> SetState(5)
+/// Every cross-into-game call is gated by read-only preconditions; the ONLY save-write risk is
+/// the CONFIRM SetState(5), gated entirely by a verified real mount (fail-closed otherwise:
+/// stay at the menu, NO SetState(5), NO save write).
+unsafe fn own_stepper_stage2(owner: usize, base: usize, gm: usize, want_slot: i32, n: u64) {
+    const S2_LOG_INTERVAL: u64 = 30;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
+    let waits = OWN_STEPPER_S2_WAITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
+    let item = MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst);
+    let pld_vt = base + PROFILE_LOAD_DIALOG_VTABLE_RVA;
+    // 32-bit GameMan field read (low dword of the 8-byte safe read; little-endian).
+    let ri32 = |addr: usize, dflt: i32| -> i32 {
+        unsafe { safe_read_usize(addr) }
+            .map(|v| v as u32 as i32)
+            .unwrap_or(dflt)
+    };
+    let c30 = if gm != null {
+        ri32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET, GAME_MAN_C30_UNSET)
+    } else {
+        GAME_MAN_C30_UNSET
+    };
+    let ac0 = if gm != null {
+        ri32(gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET, OWN_STEPPER_SLOT_NONE)
+    } else {
+        OWN_STEPPER_SLOT_NONE
+    };
+    let b80 = if gm != null {
+        ri32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET, OWN_STEPPER_B80_IDLE)
+    } else {
+        OWN_STEPPER_B80_IDLE
+    };
+    let iodev = unsafe { safe_read_usize(base + IODEV_GLOBAL_RVA) }.unwrap_or(null);
+    let (io10, io18, io20) = if iodev != null {
+        (
+            unsafe { safe_read_usize(iodev + IODEV_INFLIGHT_10_OFFSET) }.unwrap_or(null),
+            unsafe { safe_read_usize(iodev + IODEV_REQHANDLE_18_OFFSET) }.unwrap_or(null),
+            unsafe { safe_read_usize(iodev + IODEV_REQHANDLE_20_OFFSET) }.unwrap_or(null),
+        )
+    } else {
+        (null, null, null)
+    };
+    // A dialog candidate is valid iff its vtable == ProfileLoadDialog.
+    let valid_dialog = |d: usize| -> bool {
+        d != null && unsafe { safe_read_usize(d) }.unwrap_or(null) == pld_vt
+    };
+
+    if phase == OWN_STEPPER_PHASE_S2_INVOKE {
+        if item == null {
+            if waits >= OWN_STEPPER_S2_PHASE_MAX {
+                append_autoload_debug(format_args!(
+                    "own_stepper: STAGE2-INVOKE-TIMEOUT no item after {waits} waits -- STAGE2-NOWRITE-ABORT"
+                ));
+                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+            }
+            return;
+        }
+        let dlg130 = unsafe { safe_read_usize(item + MENU_ITEM_DIALOG_RESULT_130_OFFSET) }
+            .unwrap_or(null);
+        let ctx10 =
+            unsafe { safe_read_usize(item + MENU_ITEM_CTX_10_OFFSET) }.unwrap_or(null);
+        let functor =
+            unsafe { safe_read_usize(item + MENU_ITEM_FUNCTOR_A8_OFFSET) }.unwrap_or(null);
+        // If the native pump already built the dialog (focused on Load), use it.
+        let existing = if valid_dialog(dlg130) {
+            dlg130
+        } else if valid_dialog(ctx10) {
+            ctx10
+        } else {
+            null
+        };
+        if existing != null {
+            OWN_STEPPER_DIALOG.store(existing, Ordering::SeqCst);
+            timeline_event("T_dialog", n, format_args!("dialog=0x{existing:x} via=native"));
+            append_autoload_debug(format_args!(
+                "own_stepper: STAGE2-INVOKE-OK (native-built) dialog=0x{existing:x} dvt=0x{pld_vt:x} item=0x{item:x}"
+            ));
+            OWN_STEPPER_S2_WAITS.store(null, Ordering::SeqCst);
+            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_ACTIVATE, Ordering::SeqCst);
+            return;
+        }
+        // Let the opened menu settle, then hand-invoke d180's functor once (the cursor is on
+        // Continue, so the native pump does not fire d180 itself).
+        if waits < OWN_STEPPER_S2_INVOKE_SETTLE {
+            return;
+        }
+        if OWN_STEPPER_INVOKED.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS as usize {
+            let ret = unsafe { invoke_menu_item_functor(item) }.unwrap_or(null);
+            OWN_STEPPER_INVOKED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+            let dlg130b = unsafe { safe_read_usize(item + MENU_ITEM_DIALOG_RESULT_130_OFFSET) }
+                .unwrap_or(null);
+            let ctx10b =
+                unsafe { safe_read_usize(item + MENU_ITEM_CTX_10_OFFSET) }.unwrap_or(null);
+            let candidate = if valid_dialog(ret) {
+                ret
+            } else if valid_dialog(dlg130b) {
+                dlg130b
+            } else if valid_dialog(ctx10b) {
+                ctx10b
+            } else {
+                null
+            };
+            append_autoload_debug(format_args!(
+                "own_stepper: STAGE2-INVOKE hand-fired item=0x{item:x} functor=0x{functor:x} ret=0x{ret:x} dlg130(pre=0x{dlg130:x},post=0x{dlg130b:x}) ctx10(pre=0x{ctx10:x},post=0x{ctx10b:x}) candidate=0x{candidate:x}"
+            ));
+            if candidate != null {
+                // Mirror native bookkeeping: stash the built dialog at item+0x130 if empty so a
+                // later native leaf-Update does not re-build it.
+                if dlg130b == null {
+                    unsafe {
+                        *((item + MENU_ITEM_DIALOG_RESULT_130_OFFSET) as *mut usize) = candidate;
+                    }
+                }
+                OWN_STEPPER_DIALOG.store(candidate, Ordering::SeqCst);
+                timeline_event(
+                    "T_dialog",
+                    n,
+                    format_args!("dialog=0x{candidate:x} via=invoke"),
+                );
+                OWN_STEPPER_S2_WAITS.store(null, Ordering::SeqCst);
+                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_ACTIVATE, Ordering::SeqCst);
+                return;
+            }
+        }
+        if waits >= OWN_STEPPER_S2_PHASE_MAX {
+            append_autoload_debug(format_args!(
+                "own_stepper: STAGE2-INVOKE-TIMEOUT dialog not built after {waits} waits -- STAGE2-NOWRITE-ABORT"
+            ));
+            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+        }
+        return;
+    }
+
+    if phase == OWN_STEPPER_PHASE_S2_ACTIVATE {
+        let dialog = OWN_STEPPER_DIALOG.load(Ordering::SeqCst);
+        if !valid_dialog(dialog) {
+            append_autoload_debug(format_args!(
+                "own_stepper: STAGE2-ACTIVATE invalid dialog=0x{dialog:x} -- STAGE2-NOWRITE-ABORT"
+            ));
+            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+            return;
+        }
+        // PlayerGameData must be non-null (load_activate asserts it).
+        let pgd = unsafe { safe_read_usize(base + PLAYER_GAME_DATA_SINGLETON_RVA) }.unwrap_or(null);
+        if pgd == null {
+            append_autoload_debug(format_args!(
+                "own_stepper: STAGE2-ACTIVATE PlayerGameData null -- STAGE2-NOWRITE-ABORT"
+            ));
+            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+            return;
+        }
+        let dvt = unsafe { safe_read_usize(dialog) }.unwrap_or(null);
+        let bound = ri32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET, OWN_STEPPER_SLOT_NONE);
+        let cursor_now = ri32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET, OWN_STEPPER_SLOT_NONE);
+        // Resolve the target slot: a configured slot=N (>=0), else (slot=-1 = "most-recent")
+        // the dialog's NATURAL highlight cursor -- so we never need to know which slot holds a
+        // character up front, and we never overwrite the user's most-recent highlight.
+        let target = if want_slot == OWN_STEPPER_SLOT_NONE {
+            cursor_now
+        } else {
+            want_slot
+        };
+        if target < OWN_STEPPER_SLOT_ZERO || (bound > OWN_STEPPER_SLOT_ZERO && target >= bound) {
+            append_autoload_debug(format_args!(
+                "own_stepper: STAGE2-ACTIVATE invalid slot want={want_slot} target={target} cursor={cursor_now} bound={bound} dialog=0x{dialog:x} -- STAGE2-NOWRITE-ABORT (no chars / wrong profile?)"
+            ));
+            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+            return;
+        }
+        // For a fixed slot, write the cursor (UI state, not a save write); for most-recent,
+        // leave the dialog's own highlight untouched.
+        if want_slot != OWN_STEPPER_SLOT_NONE {
+            unsafe {
+                *((dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) as *mut i32) = want_slot;
+            }
+        }
+        OWN_STEPPER_EXPECTED_SLOT.store(target, Ordering::SeqCst);
+        let lav = unsafe { safe_read_usize(dvt + DIALOG_LOAD_ACTIVATE_VTSLOT_A0_OFFSET) }
+            .unwrap_or(null);
+        if lav == null {
+            append_autoload_debug(format_args!(
+                "own_stepper: STAGE2-ACTIVATE load_activate slot null dvt=0x{dvt:x} -- STAGE2-NOWRITE-ABORT"
+            ));
+            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+            return;
+        }
+        let activate: unsafe extern "system" fn(usize) -> u8 = unsafe { std::mem::transmute(lav) };
+        let r = unsafe { activate(dialog) };
+        append_autoload_debug(format_args!(
+            "own_stepper: STAGE2-ACTIVATE want={want_slot} target={target} cursor_now={cursor_now} bound={bound} lav=0x{lav:x} ret={r} dialog=0x{dialog:x} io18=0x{io18:x} io20=0x{io20:x}"
+        ));
+        OWN_STEPPER_IO_WAS_SET.store(OWN_STEPPER_IO_WAS_SET_NO, Ordering::SeqCst);
+        OWN_STEPPER_S2_WAITS.store(null, Ordering::SeqCst);
+        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_MOUNT_POLL, Ordering::SeqCst);
+        return;
+    }
+
+    if phase == OWN_STEPPER_PHASE_S2_MOUNT_POLL {
+        // io18/io20 both non-null => the request was started; latch it.
+        if io18 != null && io20 != null {
+            OWN_STEPPER_IO_WAS_SET.store(OWN_STEPPER_IO_WAS_SET_YES, Ordering::SeqCst);
+        }
+        let io_was_set =
+            OWN_STEPPER_IO_WAS_SET.load(Ordering::SeqCst) == OWN_STEPPER_IO_WAS_SET_YES;
+        let io_consumed = io18 == null && io20 == null;
+        let expected = OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst);
+        let mount_done = ac0 == expected && expected != OWN_STEPPER_SLOT_NONE && io_was_set && io_consumed;
+        if waits % S2_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 || mount_done {
+            append_autoload_debug(format_args!(
+                "own_stepper: STAGE2-MOUNT-POLL waits={waits} ac0={ac0} expected={expected} c30=0x{c30:x} b80={b80} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} io_was_set={io_was_set} mount_done={mount_done}"
+            ));
+        }
+        if mount_done {
+            OWN_STEPPER_MOUNT_C30.store(c30, Ordering::SeqCst);
+            timeline_event(
+                "T_mount",
+                n,
+                format_args!("ac0={ac0} c30=0x{c30:x} waits={waits}"),
+            );
+            append_autoload_debug(format_args!(
+                "own_stepper: STAGE2-MOUNT-DONE ac0={ac0} c30=0x{c30:x} waits={waits} (real char applied)"
+            ));
+            OWN_STEPPER_S2_WAITS.store(null, Ordering::SeqCst);
+            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_CONFIRM, Ordering::SeqCst);
+        } else if waits >= OWN_STEPPER_S2_PHASE_MAX {
+            append_autoload_debug(format_args!(
+                "own_stepper: STAGE2-MOUNT-POLL-TIMEOUT ac0={ac0} want={want_slot} c30=0x{c30:x} io_was_set={io_was_set} after {waits} waits -- STAGE2-NOWRITE-ABORT (stay at menu)"
+            ));
+            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+        }
+        return;
+    }
+
+    if phase == OWN_STEPPER_PHASE_S2_CONFIRM {
+        let latched = OWN_STEPPER_MOUNT_C30.load(Ordering::SeqCst);
+        let expected = OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst);
+        // HARD save-write guard: only SetState(5) when the real char is still mounted.
+        let proceed = ac0 == expected
+            && expected != OWN_STEPPER_SLOT_NONE
+            && c30 == latched
+            && c30 != GAME_MAN_C30_UNSET;
+        if !proceed {
+            append_autoload_debug(format_args!(
+                "own_stepper: STAGE2-CONFIRM-GUARD-FAIL ac0={ac0} expected={expected} c30=0x{c30:x} latched=0x{latched:x} -- STAGE2-NOWRITE-ABORT"
+            ));
+            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+            return;
+        }
+        if OWN_STEPPER_CONFIRMED.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS as usize {
+            let shim = &raw mut OWN_STEPPER_SHIM;
+            unsafe { (*shim)[OWN_STEPPER_SHIM_OWNER_IDX] = owner };
+            let shim_ptr = shim as usize;
+            let confirm: unsafe extern "system" fn(usize) =
+                unsafe { std::mem::transmute(base + CONTINUE_CONFIRM_RVA) };
+            append_autoload_debug(format_args!(
+                "own_stepper: STAGE2-CONFIRM-GUARD-PASS ac0={ac0} c30=0x{c30:x} -> continue_confirm shim=0x{shim_ptr:x} owner=0x{owner:x}"
+            ));
+            timeline_event(
+                "T_playgame",
+                n,
+                format_args!("ac0={ac0} c30=0x{c30:x}"),
+            );
+            unsafe { confirm(shim_ptr) };
+            OWN_STEPPER_CONFIRMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "own_stepper: STAGE2-SETSTATE5 fired owner=0x{owner:x} -- native pump now streams the real world"
+            ));
+        }
+        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+    }
+}
+
+/// Read the load-correctness invariants at the in-world transition and log a single greppable
+/// `LOAD-CORRECTNESS` record: GameMan c30/ac0/name_is_empty + the CS::PlayerGameData
+/// (`[base+0x4588268]`) character fingerprint (name, level, runes, rune-memory, chr_type,
+/// 8-stat block). A native-menu load and a DLL-driven load produce comparable records;
+/// correctness == field-for-field match (name non-empty, level/runes/stats equal). Pure reads,
+/// fault-tolerant; safe to call once at the first in-world frame.
+pub(crate) unsafe fn dump_load_correctness(base: usize, frame: u64) {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const BAD_I32: i32 = -1;
+    const ZERO_U16: u16 = 0;
+    const ZERO_U32: u32 = 0;
+    const NAME_UNKNOWN: u8 = 0xff;
+    const U16_STRIDE: usize = 2;
+    const U32_STRIDE: usize = 4;
+    const IDX_START: usize = 0;
+    const IDX_STEP: usize = 1;
+    let gm =
+        unsafe { safe_read_usize(base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) }.unwrap_or(NULL);
+    let ri32 = |addr: usize| -> i32 {
+        unsafe { safe_read_usize(addr) }
+            .map(|v| v as u32 as i32)
+            .unwrap_or(BAD_I32)
+    };
+    let ru32 = |addr: usize| -> u32 {
+        unsafe { safe_read_usize(addr) }
+            .map(|v| v as u32)
+            .unwrap_or(ZERO_U32)
+    };
+    let (c30, ac0, name_empty) = if gm != NULL {
+        (
+            ri32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET),
+            ri32(gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET),
+            unsafe { safe_read_usize(gm + GAME_MAN_NAME_IS_EMPTY_E78_OFFSET) }
+                .map(|v| v as u8)
+                .unwrap_or(NAME_UNKNOWN),
+        )
+    } else {
+        (BAD_I32, BAD_I32, NAME_UNKNOWN)
+    };
+    // [0x144588268] -> GameDataMan; PlayerGameData (the save data) = [GameDataMan + 0x08].
+    let gdm = unsafe { safe_read_usize(base + PLAYER_GAME_DATA_SINGLETON_RVA) }.unwrap_or(NULL);
+    let pgd = if gdm != NULL {
+        unsafe { safe_read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(NULL)
+    } else {
+        NULL
+    };
+    if pgd == NULL {
+        append_autoload_debug(format_args!(
+            "LOAD-CORRECTNESS frame={frame} pgd=NULL gm_c30=0x{c30:x} gm_ac0={ac0} name_empty={name_empty}"
+        ));
+        return;
+    }
+    let level = ru32(pgd + PGD_LEVEL_68_OFFSET);
+    let runes = ru32(pgd + PGD_RUNE_COUNT_6C_OFFSET);
+    let rune_mem = ru32(pgd + PGD_RUNE_MEMORY_70_OFFSET);
+    let chr_type = ru32(pgd + PGD_CHR_TYPE_98_OFFSET);
+    // character_name: up to 17 UTF-16LE units, to the first NUL.
+    let mut name_units = [ZERO_U16; PGD_NAME_LEN_U16];
+    let mut i = IDX_START;
+    while i < PGD_NAME_LEN_U16 {
+        name_units[i] = unsafe { safe_read_usize(pgd + PGD_NAME_9C_OFFSET + i * U16_STRIDE) }
+            .map(|v| v as u16)
+            .unwrap_or(ZERO_U16);
+        i += IDX_STEP;
+    }
+    let mut nlen = IDX_START;
+    while nlen < PGD_NAME_LEN_U16 && name_units[nlen] != ZERO_U16 {
+        nlen += IDX_STEP;
+    }
+    let name = String::from_utf16(&name_units[..nlen]).unwrap_or_default();
+    let mut stats = [ZERO_U32; PGD_STAT_COUNT];
+    let mut s = IDX_START;
+    while s < PGD_STAT_COUNT {
+        stats[s] = ru32(pgd + PGD_STAT_BASE_3C_OFFSET + s * U32_STRIDE);
+        s += IDX_STEP;
+    }
+    append_autoload_debug(format_args!(
+        "LOAD-CORRECTNESS frame={frame} gm_c30=0x{c30:x} gm_ac0={ac0} name_empty={name_empty} pgd=0x{pgd:x} chr_type={chr_type} name={name:?} level={level} runes={runes} rune_mem={rune_mem} stats={stats:?}"
+    ));
 }
 
 /// OWN-THE-STEPPER idx6 (STEP_GameStepWait) handler: runs IN-CONTEXT after idx10's
@@ -1862,6 +2460,269 @@ pub(crate) fn splash_skip_enabled() -> bool {
             .exists()
 }
 
+/// Force OFFLINE boot (no online login attempt -> no "Unable to start in online mode" modal),
+/// so the headless autoload reaches the real title/main-menu directly. Auto-on whenever the
+/// own-stepper drives the front-end (the autoload runs vanilla-OFFLINE), plus explicit overrides.
+/// Gated (not always-on) so it never forces offline on a co-op/online launch that wants the
+/// getter live.
+pub(crate) fn online_disable_enabled() -> bool {
+    own_stepper_enabled()
+        || matches!(std::env::var("ER_EFFECTS_OFFLINE").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-offline.txt")
+            .exists()
+}
+
+/// Patch the `GameMan::IsOnlineMode` getter 0x14067a030 to `xor eax,eax; ret` so it always
+/// reports OFFLINE. Validates the expected first opcode byte (aborts if the binary differs),
+/// VirtualProtects the 3-byte stub region RWX, writes the stub, restores protection, and
+/// flushes the instruction cache. Spawned early at DLL attach (timing-independent: it changes
+/// what the function RETURNS, not a data field, so it works whether GameMan is constructed yet
+/// or not). Mirrors `apply_splash_skip`. Equivalent to the player choosing "Play Offline" --
+/// no save access, no struct mutation, no crash risk.
+pub(crate) fn apply_online_disable() {
+    let Ok(base) = game_module_base() else {
+        append_autoload_debug(format_args!("online-disable: module base unavailable"));
+        return;
+    };
+    // Patch the IsOnlineMode getter (consumers read offline). NOTE: the login-readiness predicate
+    // patch (0x140cab230) was REVERTED -- it did not prevent the modal (the offline fork shows it
+    // too) AND it broke the OnDecide OK-dispatch (the modal stuck instead of proceeding).
+    apply_xor_ret_stub(base, ONLINE_DISABLE_RVA, "IsOnlineMode getter");
+    let _ = ONLINE_PREDICATE_DISABLE_RVA;
+}
+
+/// Patch a 0x48-prologue function body to `xor eax,eax; ret` (return 0) at `base+rva`. Validates
+/// the expected first byte, VirtualProtects RWX, writes the 3-byte stub, restores protection, and
+/// flushes the icache. Used to force-offline the IsOnlineMode getter + login-readiness predicate.
+fn apply_xor_ret_stub(base: usize, rva: usize, label: &str) {
+    let target = (base + rva) as *mut u8;
+    let existing = unsafe { *target };
+    if existing != ONLINE_DISABLE_EXPECTED_FIRST {
+        append_autoload_debug(format_args!(
+            "online-disable: ABORT {label} -- byte at 0x{:x} is 0x{existing:x}, expected 0x{ONLINE_DISABLE_EXPECTED_FIRST:x}",
+            base + rva
+        ));
+        return;
+    }
+    let mut old_protect = PAGE_PROTECT_UNSET;
+    let protect_ok = unsafe {
+        VirtualProtect(
+            target as *mut c_void,
+            ONLINE_DISABLE_PATCH_LEN,
+            PAGE_EXECUTE_READWRITE,
+            &mut old_protect,
+        )
+    };
+    if protect_ok == HOOK_FALSE_RETURN as i32 {
+        append_autoload_debug(format_args!("online-disable: VirtualProtect failed for {label}"));
+        return;
+    }
+    let mut i = TITLE_OWNER_SCAN_START_ADDRESS;
+    while i < ONLINE_DISABLE_PATCH_LEN {
+        unsafe { *target.add(i) = ONLINE_DISABLE_STUB[i] };
+        i += ONLINE_DISABLE_BYTE_STEP;
+    }
+    let mut restored = PAGE_PROTECT_UNSET;
+    unsafe {
+        VirtualProtect(
+            target as *mut c_void,
+            ONLINE_DISABLE_PATCH_LEN,
+            old_protect,
+            &mut restored,
+        )
+    };
+    unsafe {
+        FlushInstructionCache(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            target as *const c_void,
+            ONLINE_DISABLE_PATCH_LEN,
+        )
+    };
+    append_autoload_debug(format_args!(
+        "online-disable: patched {label} 0x{:x} -> xor eax,eax;ret (forces offline)",
+        base + rva
+    ));
+}
+
+// (The 0x1407b0cf0 "finished-poll" auto-accept hook was removed: RE showed 0x1407b0cf0 is a
+// "has >= 2 buttons" layout query, not a finished-poll -- it is never called for the
+// connection-error dialog, and writing +0x25e0/+0x25e8 corrupts the dialog (+0x25e8 is the
+// button COUNT). The dismiss is force_dismiss_startup_dialog -> OnDecide 0x140927ba0.)
+
+/// DIAGNOSTIC detour for the dialog builder 0x1409275b0 (4 register args rcx/rdx/r8/r9 -> dialog
+/// in rax). Calls the original, then (pre-world, capped) logs the BUILT dialog's vtable/class +
+/// the 4 args (the FMG message id is one of them) + caller, so we can identify the actual
+/// connection-error dialog without guessing. Read-only; never mutates the dialog.
+pub(crate) unsafe extern "system" fn msgbox_builder_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = MSGBOX_BUILDER_ORIG.load(Ordering::SeqCst);
+    let ret = if orig != null {
+        let f: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { f(a, b, c, d) }
+    } else {
+        null
+    };
+    if ret != null && IN_WORLD_REACHED.load(Ordering::SeqCst) != IN_WORLD_REACHED_YES {
+        let base = {
+            let own = OWN_STEPPER_BASE.load(Ordering::SeqCst);
+            if own != null {
+                own
+            } else {
+                game_module_base().unwrap_or(null)
+            }
+        };
+        let vt = unsafe { safe_read_usize(ret) }.unwrap_or(null);
+        // CAPTURE the MessageBoxDialog (the connection-error / startup popup) so the game task can
+        // dismiss it via OnDecide each frame. Do NOT touch its fields here: +0x25e0 is the chosen
+        // button (builder-defaulted to OK) and +0x25e8 is the BUTTON COUNT -- writing them corrupts
+        // the dialog. The dismiss is force_dismiss_startup_dialog -> OnDecide 0x140927ba0.
+        if vt == base + MSGBOX_DIALOG_VTABLE_RVA {
+            CONNECTION_ERROR_DIALOG.store(ret, Ordering::SeqCst);
+        }
+        let n = MSGBOX_BUILDER_LOG.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+        if n < MSGBOX_BUILDER_LOG_MAX {
+            let vt_rva = vt.wrapping_sub(base);
+            append_autoload_debug(format_args!(
+                "msgbox-builder #{n}: dialog=0x{ret:x} vt=0x{vt:x} vt_rva=0x{vt_rva:x} captured={} args(rcx=0x{a:x} rdx=0x{b:x} r8=0x{c:x} r9=0x{d:x}) {}",
+                vt == base + MSGBOX_DIALOG_VTABLE_RVA,
+                trace_callers_summary()
+            ));
+        }
+    }
+    ret
+}
+
+/// Dismiss the captured startup MessageBoxDialog (connection-error / EULA / warning) by calling
+/// its verified OnDecide/finalize 0x140927ba0(rcx=dialog) -- the genuine OK handler that
+/// dispatches the chosen button (builder-defaulted to OK) and drives the dialog to emit "stop"
+/// so the parent MenuWindowJob tears it down. Called each frame pre-in-world from the game task
+/// (the menu/game thread, where OnDecide's input-registrar singleton access is valid) UNTIL the
+/// closing latch [dialog+0x3b0]==1 or the dialog is freed/reused (vtable mismatch) -- both stop
+/// the calls, avoiding re-dispatch / UAF. Fault-tolerant reads never AV.
+pub(crate) fn force_dismiss_startup_dialog() {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let dialog = CONNECTION_ERROR_DIALOG.load(Ordering::SeqCst);
+    if dialog == null {
+        return;
+    }
+    let base = {
+        let own = OWN_STEPPER_BASE.load(Ordering::SeqCst);
+        if own != null {
+            own
+        } else {
+            game_module_base().unwrap_or(null)
+        }
+    };
+    let vt = unsafe { safe_read_usize(dialog) }.unwrap_or(null);
+    if base == null || vt != base + MSGBOX_DIALOG_VTABLE_RVA {
+        // Dialog consumed/freed/reused -> stop (and let the builder hook re-capture a new one).
+        CONNECTION_ERROR_DIALOG.store(null, Ordering::SeqCst);
+        return;
+    }
+    // Stop once the dialog has begun teardown (EmitResult set the closing latch) -- calling
+    // OnDecide again risks re-dispatch / UAF as the job frees it.
+    let closing = unsafe { safe_read_usize(dialog + MSGBOX_CLOSING_LATCH_3B0_OFFSET) }
+        .map(|v| v & MSGBOX_LATCH_BYTE_MASK)
+        .unwrap_or(MSGBOX_CLOSING_YES);
+    if closing == MSGBOX_CLOSING_YES {
+        CONNECTION_ERROR_DIALOG.store(null, Ordering::SeqCst);
+        let n = DISMISS_WRITE_LOG.load(Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "auto-accept: MessageBoxDialog 0x{dialog:x} closing (latch+0x3b0=1) after {n} OnDecide calls -- dismissed"
+        ));
+        return;
+    }
+    // PROPER OK (NOT force-stop): OnDecide 0x140927ba0 branches on the chosen button [dialog+0x25e0]
+    // -- if == -1 it calls 0x14078dfd0 (the CANCEL/notify-closed path, which kicks the title flow
+    // BACK to PRESS-ANY-BUTTON); if != -1 it DISPATCHES that button (= press OK -> proceed to the
+    // main menu offline). The prior force-stop 0x14078dfd0 was exactly the cancel path, so the game
+    // bounced back to press-any-button. Fix: set the chosen button to OK (index 0), then OnDecide.
+    // Press OK EVERY FRAME (runtime-confirmed: one-shot only HIGHLIGHTS OK; the modal needs the
+    // per-frame re-dispatch to progress its decide animation -> activate -> close -> proceed to
+    // the main menu). [dialog+0x25e0]=0 selects OK so OnDecide takes the dispatch (NOT cancel) arm.
+    // Call THE REAL OK-BUTTON HANDLER 0x14078e030(rcx=dialog) -- captured from a live OK-press.
+    // It reads the dialog cursor, gets the OK callback, and COMMITS (0x14078ef20) which actually
+    // CLOSES the dialog and emits its result so the title flow PROCEEDS. This is what a real OK
+    // does; OnDecide/field-writes/input-injection all failed to close it. Runs each frame on every
+    // captured MessageBoxDialog -> skips ALL of them (connection-error, starting-offline, ...).
+    let ok_handler: unsafe extern "system" fn(usize) =
+        unsafe { std::mem::transmute(base + MSGBOX_OK_HANDLER_RVA) };
+    unsafe { ok_handler(dialog) };
+    let n = DISMISS_WRITE_LOG.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    if n % AUTO_ACCEPT_LOG_INTERVAL == null {
+        append_autoload_debug(format_args!(
+            "auto-accept: OK-handler 0x{:x}(MessageBoxDialog 0x{dialog:x}) -- real OK-press to close + proceed #{n}",
+            base + MSGBOX_OK_HANDLER_RVA
+        ));
+    }
+    let _ = (
+        &LAST_ONDECIDE_DIALOG,
+        MSGBOX_RESULT_BUTTON_25E0_OFFSET,
+        MSGBOX_OK_BUTTON,
+        MSGBOX_CONFIRM_LATCH_1BC0_OFFSET,
+        MSGBOX_CONFIRM_LATCH_SET,
+        MSGBOX_ONDECIDE_RVA,
+        INPUTMGR_BITMAP_90_OFFSET,
+        MENU_EVENT_CONFIRM_3D,
+        MENU_EVENT_PRESSED_BIT,
+    );
+}
+
+/// Install the startup-popup capture hook once (minhook on the MessageBoxDialog builder
+/// 0x1409275b0). The builder hook captures each created MessageBoxDialog into
+/// CONNECTION_ERROR_DIALOG; `force_dismiss_startup_dialog` then dismisses it via OnDecide each
+/// frame. Idempotent; safe to call every frame from the game task until it succeeds.
+pub(crate) fn install_auto_accept_hook() {
+    if AUTO_ACCEPT_INSTALLED.load(Ordering::SeqCst) != AUTO_ACCEPT_NOT_INSTALLED {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!("auto-accept: MH_Initialize failed: {status:?}"));
+            return;
+        }
+    }
+    let Ok(builder_addr) = game_rva(MSGBOX_BUILDER_RVA) else {
+        append_autoload_debug(format_args!("auto-accept: failed to resolve builder rva"));
+        return;
+    };
+    match unsafe { MhHook::new(builder_addr as *mut c_void, msgbox_builder_hook as *mut c_void) } {
+        Ok(hook) => {
+            MSGBOX_BUILDER_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "auto-accept: queue_enable builder failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    AUTO_ACCEPT_INSTALLED.store(AUTO_ACCEPT_INSTALLED_YES, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "auto-accept: hooked MessageBoxDialog builder 0x{builder_addr:x} (capture -> OnDecide dismiss)"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "auto-accept: MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "auto-accept: MhHook::new builder failed: {status:?}"
+        )),
+    }
+}
+
 /// Clean static splash-skip patch (flip je->jg in STEP_BeginLogo) so the game's
 /// own flow advances past the logo via SetState instead of playing it. Validates
 /// the expected opcode first (aborts if the binary differs), and restores page
@@ -1928,7 +2789,9 @@ pub(crate) static XINPUT_GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 /// window. Auto-on whenever the own-stepper drives the front-end (the whole point of that
 /// probe is a zero-input load), plus an explicit env/file override for standalone use.
 pub(crate) fn block_input_enabled() -> bool {
-    own_stepper_enabled()
+    // PASSIVE mode needs input UNBLOCKED so the user can navigate to Load Game (the input that
+    // surfaces d180); every other own-stepper mode blocks input for uncontaminated zero-input.
+    (own_stepper_enabled() && !own_stepper_passive_enabled())
         || matches!(std::env::var("ER_EFFECTS_BLOCK_INPUT").as_deref(), Ok("1"))
         || game_directory_path()
             .unwrap_or_else(|| PathBuf::from("."))

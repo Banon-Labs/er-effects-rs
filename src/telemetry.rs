@@ -310,6 +310,29 @@ pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     }
 }
 
+/// Wall-clock epoch for the load-timeline markers. Lazily set on the FIRST `timeline_event`
+/// call (which is T0 by construction -- the first frame the title is parked at state 10),
+/// so every subsequent `ms=` is measured from that common start. `Instant` is QPC-backed on
+/// the windows target and works under wine, so no new FFI is needed.
+static TIMELINE_EPOCH: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Emit a frame-stamped load-timeline marker so one parser handles BOTH a native-menu load
+/// (observe mode) and a DLL-driven load (own-stepper). Format (greppable, single regex):
+///   `EVENT <name> frame=<n> ms=<elapsed-from-T0> <fields>`
+/// `frame` is the monotonic per-frame `game_task_ticks`; `ms` is wall-clock from the first
+/// event. Edge-triggering (fire each marker once) is the caller's responsibility.
+pub(crate) fn timeline_event(name: &str, frame: u64, fields: std::fmt::Arguments<'_>) {
+    let ms = {
+        let mut guard = match TIMELINE_EPOCH.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let epoch = guard.get_or_insert_with(Instant::now);
+        epoch.elapsed().as_millis()
+    };
+    append_autoload_debug(format_args!("EVENT {name} frame={frame} ms={ms} {fields}"));
+}
+
 pub(crate) fn trace_continue_default_path() -> PathBuf {
     game_directory_path()
         .unwrap_or_else(|| PathBuf::from("."))
