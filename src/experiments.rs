@@ -604,6 +604,46 @@ unsafe fn functor_chain_hits_factory(item: usize, module_base: usize, chain: &mu
     docall == dialog_factory_abs
 }
 
+/// Fire a captured MenuWindowJob's `+0xa8` action std::function in-context, mirroring the
+/// native leaf Update's functor-invoke at `0x1407ad2b9`:
+///   rcx = `[item+0xa8]` (the std::function obj); rax = `[rcx]` (`_Func_impl_no_alloc`
+///   vtable, no RTTI); rdx = `item+0x10` (the dialog ctx out-slot, the single arg);
+///   call `[rax+0x10]` (`_Do_call`: `add rcx,8; jmp <lambda>`).
+/// Returns the lambda result (e.g. the built dialog), which the native Update stores to
+/// `[item+0x130]`. Guarded EXACTLY like the native BUILD path: only fires when
+/// `[item+0xa8]!=0` AND `[item+0x10]==0`, so we never re-invoke an already-built item
+/// (which would leak/overwrite `item+0x130`). This is the game's OWN menu-action functor
+/// (NOT input synthesis) -- compliant with the zero-input standard. NOTE: this performs a
+/// native call, so it is only used once the live item/owner are validated; it is NOT a
+/// save-write by itself (the Load-entry/dialog functors build UI, not save state).
+unsafe fn invoke_menu_item_functor(item: usize) -> Option<usize> {
+    const ITEM_FUNCTOR_A8: usize = 0xa8;
+    const ITEM_CTX_10: usize = 0x10;
+    const DOCALL_VTABLE_SLOT_10: usize = 0x10;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let functor = unsafe { safe_read_usize(item + ITEM_FUNCTOR_A8) }?;
+    if functor == null {
+        return None;
+    }
+    // BUILD-path precondition: the native Update fires the functor only when item+0x10==0.
+    let ctx_slot = unsafe { safe_read_usize(item + ITEM_CTX_10) }?;
+    if ctx_slot != null {
+        return None;
+    }
+    let functor_vtable = unsafe { safe_read_usize(functor) }?;
+    if functor_vtable == null {
+        return None;
+    }
+    let do_call = unsafe { safe_read_usize(functor_vtable + DOCALL_VTABLE_SLOT_10) }?;
+    if do_call == null {
+        return None;
+    }
+    let f: unsafe extern "system" fn(usize, usize) -> usize =
+        unsafe { std::mem::transmute(do_call) };
+    let ctx_out = item + ITEM_CTX_10;
+    Some(unsafe { f(functor, ctx_out) })
+}
+
 /// STAGE 1b (strictly NO-WRITE): recursive bounded walk of the title menu JOB tree rooted
 /// at `[owner+0xe0]` (the FD4 multicast/job holder -- runtime proved the real menu lives
 /// here, NOT the empty `owner+0x138`). Classifies each node by its Update slot
@@ -809,19 +849,43 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         // only thing that mounts c30 before PlayGame); this is the Path B menu-drive.
         let bare = unsafe { diagnostic_menu_walk(owner, base, "bare", true) };
         let bare_tree = unsafe { diagnostic_job_tree_walk(owner, base, "bare-tree", true) };
+        // STAGE 1c: build the FULL main menu by replicating the engine's OWN press path.
+        // The parked press-any-button screen is the FIRST state 10; the native press handler
+        // 0x140b0b6b0 issues SetState(owner,2)=BeginLogo, after which the native pump advances
+        // 2->3->10 and builds the Continue / Load-Game(d180) / New-Game items into the CSMenu
+        // registry at owner+0xe0. The registry update 0x1409aac10 then ticks EVERY registered
+        // entry each frame, so our menu-item Update hook (functor_chain_hits_factory) will
+        // capture d180. SetState(3)=BeginTitle ALONE (skipping BeginLogo) only built the
+        // BackScreen (runtime: only c000 ticked), so we drive the full sequence. BeginLogo(2)
+        // hard-asserts session singleton 0x144588e98 at entry -- read it live; SetState(2) only
+        // when non-null, else fall back to SetState(3). Save-safe either way: BeginLogo/BeginTitle
+        // are menu-UI builds with NO save write (only SetState(5)/PlayGame writes).
+        let session = unsafe { safe_read_usize(base + SESSION_SINGLETON_144588E98_RVA) }
+            .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        let target_state = if session != TITLE_OWNER_SCAN_START_ADDRESS {
+            TITLE_STEP_BEGIN_LOGO
+        } else {
+            TITLE_STEP_BEGIN_TITLE
+        };
         let set_state: unsafe extern "system" fn(usize, i32) =
             unsafe { std::mem::transmute(base + TITLE_SET_STATE_RVA) };
-        unsafe { set_state(owner, TITLE_STEP_BEGIN_TITLE) };
+        unsafe { set_state(owner, target_state) };
         OWN_STEPPER_MENU_BUILD_WAITS.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
         OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_MENU_BUILD, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "own_stepper: STAGE1 bare-walk done (load_game_138=0x{:x} load_game_tree=0x{:x}) -> SetState(3) BeginTitle to build the main menu zero-input (#{n}) slot={want_slot} gm=0x{gm:x} c30=0x{c30:x} b80={b80}",
+            "own_stepper: STAGE1c bare-walk done (load_game_138=0x{:x} load_game_tree=0x{:x}) session(0x144588e98)=0x{session:x} -> SetState({target_state}) [{}] to build the FULL main menu zero-input (#{n}) slot={want_slot} gm=0x{gm:x} c30=0x{c30:x} b80={b80}",
             bare.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS),
-            bare_tree.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+            bare_tree.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS),
+            if target_state == TITLE_STEP_BEGIN_LOGO {
+                "BeginLogo 2->3->10 full menu"
+            } else {
+                "BeginTitle fallback (session null)"
+            }
         ));
         // Suppress unused warnings for consts/statics retained from the falsified cold
         // slot-int drive, synthetic-dispatcher, b78-route, and Continue-shim work.
         let _ = (
+            invoke_menu_item_functor as usize,
             CONTINUE_CONFIRM_RVA,
             B80_FULL_LOAD_INITIATOR_RVA,
             OWN_STEPPER_PHASE_MOUNT,

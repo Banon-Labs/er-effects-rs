@@ -249,6 +249,19 @@ pub(crate) const TITLE_NATIVE_JOB_CALLED_VALUE: usize = 1;
 pub(crate) const TITLE_STEP_BEGIN_TITLE: i32 = 3;
 pub(crate) const TITLE_STEP_PLAY_GAME: i32 = 5;
 pub(crate) const TITLE_STEP_MENU_JOB_WAIT: i32 = 10;
+/// STEP_BeginLogo (idx2, handler 0x140b0c2a0): the native press-any-button advance target.
+/// The parked press-any-button screen is the FIRST state 10; the engine's own press handler
+/// 0x140b0b6b0 issues SetState(owner, 2), then the native pump advances 2->3->10, building
+/// the FULL main menu (Continue / Load-Game item d180 / New Game / ...). SetState(3)=BeginTitle
+/// ALONE (skipping BeginLogo) only built the BackScreen (c000), not the main-menu items -- so
+/// we replicate the full sequence by SetState(2) from our idx10 handler (zero-input, the
+/// game's own SetState, not input synthesis). CAVEAT: STEP_BeginLogo hard-asserts the session
+/// singleton 0x144588e98 at entry (0x140b0c2c3); only SetState(2) when that is non-null.
+pub(crate) const TITLE_STEP_BEGIN_LOGO: i32 = 2;
+/// Session singleton 0x144588e98 (RVA = abs - base). Asserted by STEP_BeginLogo(2) and the
+/// MoveMapListStep load menu. Built by the boot/session bootstrap (may be non-null at the
+/// splash-skipped parked title -- UNVERIFIED, hence read it live before SetState(2)).
+pub(crate) const SESSION_SINGLETON_144588E98_RVA: usize = 0x4588e98;
 /// Sentinel logged when the inner TitleStep owner can no longer be found (the
 /// title flow advanced past the title and the owner was finalized/destructed).
 pub(crate) const TITLE_STATE_OWNER_GONE: i32 = -1;
