@@ -4769,14 +4769,41 @@ pub(crate) unsafe extern "system" fn cap_dialog_factory_hook(
     c: usize,
     d: usize,
 ) -> usize {
+    // Capture ALL four register args (rcx/rdx/r8/r9) AND a window of the rcx capture object so the
+    // headless PATH-3-direct replay can reconstruct the exact factory invocation. The native
+    // _Do_call thunk 0x140820c60 does `add rcx,8` before jmping here, so rcx (=a) is the lambda
+    // capture state past the _Func_impl header; the ctor reads the owner from a field of it. Pure
+    // reads + pass-through -> save-safe.
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const CAP_START: usize = 0;
+    const CAP_WINDOW: usize = 7;
+    const CAP_STEP: usize = 1;
+    const PTR_SIZE: usize = 8;
+    let mut capdump = String::new();
+    // Dump [a-8 .. a+0x30] (the _Func_impl vtable at a-8, then capture fields).
+    let mut i: usize = CAP_START;
+    while i < CAP_WINDOW {
+        let off = i * PTR_SIZE;
+        let addr = a.wrapping_sub(PTR_SIZE).wrapping_add(off);
+        let v = unsafe { safe_read_usize(addr) }.unwrap_or(NULL);
+        capdump.push_str(&format!(" [rcx-8+0x{off:x}]=0x{v:x}"));
+        i += CAP_STEP;
+    }
+    let rdx0 = unsafe { safe_read_usize(b) }.unwrap_or(NULL);
+    let rdx8 = unsafe { safe_read_usize(b.wrapping_add(PTR_SIZE)) }.unwrap_or(NULL);
     append_continue_trace(format_args!(
-        "CAP dialog_factory ENTER rcx=0x{a:x} rdx=0x{b:x} {} {}",
+        "CAP dialog_factory ENTER rcx=0x{a:x} rdx=0x{b:x} r8=0x{c:x} r9=0x{d:x} [rdx]=0x{rdx0:x} [rdx+8]=0x{rdx8:x}{capdump} {} {}",
         trace_callers_summary(),
         b80_mount_trace_summary()
     ));
     let ret = unsafe { call_cap_original(&CAP_DIALOG_FACTORY_ORIG, a, b, c, d) };
+    let ret_vt = if ret != NULL {
+        unsafe { safe_read_usize(ret) }.unwrap_or(NULL)
+    } else {
+        NULL
+    };
     append_continue_trace(format_args!(
-        "CAP dialog_factory LEAVE dialog_this=0x{ret:x}"
+        "CAP dialog_factory LEAVE dialog_this=0x{ret:x} dialog_vt=0x{ret_vt:x}"
     ));
     ret
 }
