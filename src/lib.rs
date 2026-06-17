@@ -890,12 +890,13 @@ pub(crate) static OWN_STEPPER_INVOKED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static OWN_STEPPER_CONFIRMED: AtomicUsize = AtomicUsize::new(0);
 // ---- CS::PlayerGameData correctness oracle (read at in-world) ----
 /// `[base+this]` -> CS::GameDataMan* (the singleton at 0x144588268). The all-player save data
-/// (PlayerGameData) hangs off it at +0x08 -- NOT at the singleton directly (the earlier "pgd =
-/// [0x144588268]" read GameDataMan and so all fields were garbage). Verified against the Hexinton
-/// CE table: every PlayerGameData field chains GameDataMan -> [+0x08] -> [+field] (Vigor +0x3c,
-/// Runes Held +0x6c, ...). fromsoftware-rs exposes this typed (GameDataMan/PlayerGameData) for a
-/// drift-proof accessor; using the verified offsets here for the one-shot correctness dump.
-pub(crate) const PLAYER_GAME_DATA_SINGLETON_RVA: usize = 0x4588268;
+/// GameDataMan singleton slot: `GameDataMan* = *(base + 0x3d5df38)`; PlayerGameData hangs off it
+/// at +0x08. CORRECTED 2026-06-17: the prior value 0x4588268 was the WRONG global (read garbage:
+/// level=805829232, name="翿"). The real GameDataMan is 0x3d5df38 -- confirmed by fromsoftware-rs
+/// (`rva::game_data_man = 0x3d5df38`, `GameDataMan::main_player_game_data` at struct +0x08) and the
+/// on-disk binary (dozens of `mov reg,[rip->0x143d5df38]; mov reg,[rax+0x8]; test; je` accessor
+/// sites). Validated against the live char "a" (level 9, runes 0, stats [15,10,11,14,13,9,9,7]).
+pub(crate) const PLAYER_GAME_DATA_SINGLETON_RVA: usize = 0x3d5df38;
 /// GameDataMan -> PlayerGameData (all-player save data) sub-object pointer.
 pub(crate) const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;
 pub(crate) const PGD_LEVEL_68_OFFSET: usize = 0x68;
@@ -1796,6 +1797,8 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // never synthesis.
                 if block_input_enabled() {
                     enforce_input_block_now();
+                } else {
+                    release_input_block_now();
                 }
                 // before the player check so it arms at the title (pre-load), independent
                 // of the active observe/own-stepper mode.

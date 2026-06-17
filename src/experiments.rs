@@ -1368,15 +1368,20 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
                     == TITLE_OWNER_SCAN_START_ADDRESS as u64
                 {
                     append_autoload_debug(format_args!(
-                        "own_stepper: STAGE1d probe dialog=0x{dialog:x} sm=0x{sm:x} fadein={in_fadein} loop={in_loop} textfadeout={in_textfadeout} latch={latch} waits={waits} (read-only; native path self-opens on Loop-ready)"
+                        "own_stepper: STAGE1d probe dialog=0x{dialog:x} sm=0x{sm:x} fadein={in_fadein} loop={in_loop} textfadeout={in_textfadeout} latch={latch} waits={waits} (self-fire open-menu on Loop+latch-clear)"
                     ));
                 }
-                // FALLBACK self-fire on the CORRECT gate (native path's own precondition).
-                // DEFAULT OFF: with the modal handled, the natural Continue/Load menu builds and
-                // ticks d180 itself; force-firing the TitleTopDialog registrar opens a competing
-                // dialog that hides d180 from the capture hooks. Enable via er-effects-selffire.txt.
-                if own_stepper_selffire_enabled()
-                    && in_loop
+                // SELF-FIRE the open-menu registrar on the CORRECT gate (the native path's own
+                // precondition: settled in Loop + latch clear). RUNTIME-PROVEN NECESSARY
+                // (headless-load 2026-06-17): with the modal suppressed (online-disable), the
+                // TitleTopDialog SM sits in Loop forever -- the Loop-ready predicate needs the
+                // accept byte (input), which never comes headless (latch=0 for 3000 waits). So the
+                // "native self-opens" assumption is FALSE for a clean offline boot; we must fire
+                // 0x1409b24e0 ourselves (the zero-input-menu-open milestone proved this opens the
+                // menu). Default ON now (no flag) since headless cannot rely on a button press;
+                // gated to the correct state (in_loop, NOT FadeIn) + once + latch-clear so it can
+                // neither corrupt the SM (titletopdialog-fadein-gate) nor double-fire.
+                if in_loop
                     && latch == TITLE_OWNER_SCAN_START_ADDRESS
                     && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) == OWN_STEPPER_MENU_OPENED_NO
                 {
@@ -2789,14 +2794,36 @@ pub(crate) static XINPUT_GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 /// window. Auto-on whenever the own-stepper drives the front-end (the whole point of that
 /// probe is a zero-input load), plus an explicit env/file override for standalone use.
 pub(crate) fn block_input_enabled() -> bool {
-    // PASSIVE mode needs input UNBLOCKED so the user can navigate to Load Game (the input that
-    // surfaces d180); every other own-stepper mode blocks input for uncontaminated zero-input.
-    (own_stepper_enabled() && !own_stepper_passive_enabled())
-        || matches!(std::env::var("ER_EFFECTS_BLOCK_INPUT").as_deref(), Ok("1"))
+    // FORCE-BLOCK override (env/file): block UNCONDITIONALLY, even past menu-open. Used to
+    // FALSIFY -- runtime-proven 2026-06-17 that blocking through menu-open lets the menu OPEN
+    // (self-fire) but starves the post-open navigation, so the load never selects.
+    if matches!(std::env::var("ER_EFFECTS_BLOCK_INPUT").as_deref(), Ok("1"))
         || game_directory_path()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("er-effects-block-input.txt")
             .exists()
+    {
+        return true;
+    }
+    // PASSIVE mode never blocks. Otherwise block only the HEADLESS boot -> menu-open window
+    // (so that stretch is uncontaminated zero-input), then RELEASE the block the instant the
+    // menu opens -- the Continue/Load navigation that follows still needs a live input pipeline
+    // (the menu state machine consumes input each frame; a zeroed device state stalls it).
+    own_stepper_enabled()
+        && !own_stepper_passive_enabled()
+        && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) == OWN_STEPPER_MENU_OPENED_NO
+}
+
+/// Release the input block (DInput + XInput) once `block_input_enabled()` flips false mid-run.
+/// The hooks stay installed but pass input through when `BLOCK_INPUT_ACTIVE` is clear; the
+/// DInput blocker also needs its own flags cleared. Acts once on the ON->off transition.
+pub(crate) fn release_input_block_now() {
+    if BLOCK_INPUT_ACTIVE.swap(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst) == BLOCK_INPUT_ON {
+        InputBlocker::get_instance().block_only(InputFlags::empty());
+        append_autoload_debug(format_args!(
+            "input-block: RELEASED (menu open) -- keyboard/mouse/gamepad live for Continue/Load nav"
+        ));
+    }
 }
 
 /// XInput `XInputGetState(user_index, *mut XINPUT_STATE) -> DWORD` detour. Calls the real
