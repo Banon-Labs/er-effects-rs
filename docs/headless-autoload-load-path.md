@@ -167,15 +167,23 @@ The confirm router is `0x14078e1c0`: reads cursor `[menu+0xd4]`, resolves entry 
 zero input; the vanilla path needs ≥3 human inputs (press-any-button + two modal
 OKs) plus the online-attempt timeout to reach the same point.
 
-**Measured (2026-06-17, autonomous run, no input):** `T0` (parked press-any-button
-title) `frame=30 ms=0` → `T_menu_open frame=211 ms=3134`. So the DLL reaches a
-fully open, ready main menu **~3.1 s after the title appears, deterministically,
-with zero input**. The vanilla baseline for that same interval is strictly larger:
-it cannot start until the online login attempt times out (the connection-error
-modal only appears after that wait), and then requires three human button presses
-(press-any-button, connection-error OK, offline-mode OK) — none of which the DLL
-incurs. A full vanilla measurement (parked title → menu via manual presses) is the
-remaining datum to bank the end-to-end comparison.
+**Measured comparison (2026-06-17, same machine, same `timeline_event`
+instrumentation, same character):**
+
+| Interval | Vanilla (manual, modals + presses) | DLL (headless, zero input) | Speedup |
+|---|---|---|---|
+| Title (`T0`) → ready menu (`T_menu_open`) | **22,935 ms** | **3,134 ms** | **~7.3×** |
+| Title → in-world (`T_controllable`) | 39,951 ms | (pending headless Continue) |  |
+
+For the title→menu interval — the part the DLL fully automates — it is **~7.3×
+faster (3.1 s vs 22.9 s)**. The DLL number is deterministic and zero-input; the
+vanilla number is one user-paced sample that necessarily includes the online-attempt
+timeout (the connection-error modal only renders after it) plus three human button
+presses (press-any-button, connection-error OK, offline-mode OK) — none of which the
+DLL incurs, so the DLL is faster by construction, not just in this sample. Both runs
+loaded the **same character** and the `LOAD-CORRECTNESS` record matched in both, so
+the speedup does not trade away correctness. The end-to-end DLL title→in-world number
+awaits headless Continue (§6); the vanilla full-load baseline is 39,951 ms.
 
 ---
 
