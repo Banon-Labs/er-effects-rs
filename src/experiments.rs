@@ -378,6 +378,352 @@ pub(crate) fn own_stepper_enabled() -> bool {
             .exists()
 }
 
+/// Decode one x86-64 jmp-thunk hop. Matches either `add rcx,8 ; jmp rel32` (the MSVC
+/// `std::function` `_Do_call` thunk family the FD4 menu-item action functor routes
+/// through) or a bare `jmp rel32`, returning the absolute jump target. Returns `None`
+/// when `addr` is not such a thunk (i.e. it is the real lambda body). Fault-tolerant:
+/// reads via `safe_read_*`, never faults on unmapped code.
+unsafe fn decode_thunk_hop(addr: usize) -> Option<usize> {
+    // Low 5 bytes `48 83 C1 08 E9` = `add rcx,8 ; jmp` (little-endian in the qword).
+    const ADDRCX8_JMP_PREFIX: usize = 0xE9_08C1_8348;
+    const PREFIX_MASK_40: usize = 0xFF_FFFF_FFFF;
+    const ADDRCX8_REL_OFF: usize = 5;
+    const ADDRCX8_NEXT_OFF: i64 = 9;
+    const JMP_OPCODE: usize = 0xE9;
+    const JMP_OPCODE_MASK: usize = 0xFF;
+    const JMP_REL_OFF: usize = 1;
+    const JMP_NEXT_OFF: i64 = 5;
+    let w0 = unsafe { safe_read_usize(addr) }?;
+    if (w0 & PREFIX_MASK_40) == ADDRCX8_JMP_PREFIX {
+        let rel = unsafe { safe_read_i32(addr + ADDRCX8_REL_OFF) }? as i64;
+        Some((addr as i64 + ADDRCX8_NEXT_OFF + rel) as usize)
+    } else if (w0 & JMP_OPCODE_MASK) == JMP_OPCODE {
+        let rel = unsafe { safe_read_i32(addr + JMP_REL_OFF) }? as i64;
+        Some((addr as i64 + JMP_NEXT_OFF + rel) as usize)
+    } else {
+        None
+    }
+}
+
+/// STAGE 1 (strictly NO-WRITE): walk the title menu-item container at `owner+0x138` and
+/// log each item, so we can (a) confirm the live FD4 SBO pointer-vector layout matches
+/// the static RE (the captured recipe pointers were suspiciously low, so VERIFY before
+/// any call) and (b) identify the Load-Game leaf by its `+0xa8` action functor's
+/// `_Do_call` jmp-chain resolving to `dialog_factory 0x14081ead0` (Continue's instead
+/// routes to confirm `0x140b0e180`, no dialog). All reads go through fault-tolerant
+/// ReadProcessMemory -- NO writes, NO native calls, NO SetState -> save-safe at the
+/// parked title. Tries both container interpretations (inline SBO vs base-pointer at
+/// `+0x18`) and reports which yields valid menu-item vtables. Runs once.
+unsafe fn diagnostic_menu_walk(
+    owner: usize,
+    module_base: usize,
+    tag: &str,
+    verbose: bool,
+) -> Option<usize> {
+    const ITEM_CONTAINER_138: usize = 0x138;
+    const CONT_CURSOR_10: usize = 0x10;
+    const CONT_ELEM0_18: usize = 0x18;
+    const CONT_COUNT_60: usize = 0x60;
+    const MENU_JOB_HOLDER_E0: usize = 0xe0;
+    const ITEM_VTABLE_RVA: usize = 0x02aa97e8;
+    const ITEM_FUNCTOR_A8: usize = 0xa8;
+    const ITEM_CTX_10: usize = 0x10;
+    const ITEM_DESC_58: usize = 0x58;
+    const ITEM_RESULT_130: usize = 0x130;
+    const DIALOG_FACTORY_RVA: usize = 0x0081ead0;
+    const DOCALL_VTABLE_SLOT_10: usize = 0x10;
+    const COUNT_SANITY_MIN: i32 = 1;
+    const COUNT_SANITY_MAX: i32 = 32;
+    const PTR_STRIDE: usize = core::mem::size_of::<usize>();
+    const WALK_START: usize = 0;
+    const WALK_STEP: usize = 1;
+    const JMP_CHAIN_MAX_HOPS: usize = 4;
+    const INTERP_INLINE: usize = 0;
+    const INTERP_BASE_PTR: usize = 1;
+    const INTERP_COUNT: usize = 2;
+
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let item_vtable_abs = module_base + ITEM_VTABLE_RVA;
+    let dialog_factory_abs = module_base + DIALOG_FACTORY_RVA;
+    let container = owner + ITEM_CONTAINER_138;
+
+    let state = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }
+        .unwrap_or(TITLE_STATE_OWNER_GONE);
+    let cursor =
+        unsafe { safe_read_i32(container + CONT_CURSOR_10) }.unwrap_or(TITLE_STATE_OWNER_GONE);
+    let count =
+        unsafe { safe_read_i32(container + CONT_COUNT_60) }.unwrap_or(TITLE_STATE_OWNER_GONE);
+    let holder = unsafe { safe_read_usize(owner + MENU_JOB_HOLDER_E0) }.unwrap_or(null);
+    let elem0_raw = unsafe { safe_read_usize(container + CONT_ELEM0_18) }.unwrap_or(null);
+    if verbose {
+        append_autoload_debug(format_args!(
+            "menu-walk[{tag}]: owner=0x{owner:x} state={state} container=0x{container:x} cursor={cursor} count={count} holder=0x{holder:x} elem0_raw=0x{elem0_raw:x} item_vt=0x{item_vtable_abs:x} dialog_factory=0x{dialog_factory_abs:x}"
+        ));
+    }
+    if !(COUNT_SANITY_MIN..=COUNT_SANITY_MAX).contains(&count) {
+        if verbose {
+            append_autoload_debug(format_args!(
+                "menu-walk[{tag}]: count={count} out of sane range -- container layout unverified (NO-WRITE)"
+            ));
+        }
+        return None;
+    }
+    let count_usize = count as usize;
+
+    let mut load_game_item: Option<usize> = None;
+    let mut interp = INTERP_INLINE;
+    while interp < INTERP_COUNT {
+        let label = if interp == INTERP_INLINE {
+            "inline"
+        } else {
+            "baseptr"
+        };
+        let base_ptr = if interp == INTERP_BASE_PTR {
+            elem0_raw
+        } else {
+            null
+        };
+        if interp == INTERP_BASE_PTR && base_ptr == null {
+            interp += WALK_STEP;
+            continue;
+        }
+        let mut menu_items_found = WALK_START;
+        let mut i = WALK_START;
+        while i < count_usize {
+            let item = if interp == INTERP_INLINE {
+                unsafe { safe_read_usize(container + CONT_ELEM0_18 + i * PTR_STRIDE) }
+            } else {
+                unsafe { safe_read_usize(base_ptr + i * PTR_STRIDE) }
+            }
+            .unwrap_or(null);
+            if item == null {
+                i += WALK_STEP;
+                continue;
+            }
+            let vtable = unsafe { safe_read_usize(item) }.unwrap_or(null);
+            let is_menu_item = vtable == item_vtable_abs;
+            if is_menu_item {
+                menu_items_found += WALK_STEP;
+            }
+            let functor = unsafe { safe_read_usize(item + ITEM_FUNCTOR_A8) }.unwrap_or(null);
+            let ctx = unsafe { safe_read_usize(item + ITEM_CTX_10) }.unwrap_or(null);
+            let result = unsafe { safe_read_usize(item + ITEM_RESULT_130) }.unwrap_or(null);
+            let desc_lo = unsafe { safe_read_usize(item + ITEM_DESC_58) }.unwrap_or(null);
+            let desc_hi =
+                unsafe { safe_read_usize(item + ITEM_DESC_58 + PTR_STRIDE) }.unwrap_or(null);
+            // Follow the action functor's _Do_call jmp-chain; if it reaches the dialog
+            // factory this is the Load-Game item.
+            let mut is_load_game = false;
+            let mut chain = String::new();
+            if functor != null {
+                let functor_vtable = unsafe { safe_read_usize(functor) }.unwrap_or(null);
+                let mut docall = if functor_vtable != null {
+                    unsafe { safe_read_usize(functor_vtable + DOCALL_VTABLE_SLOT_10) }
+                        .unwrap_or(null)
+                } else {
+                    null
+                };
+                chain.push_str(&format!("docall=0x{docall:x}"));
+                let mut hop = WALK_START;
+                while hop < JMP_CHAIN_MAX_HOPS && docall != null {
+                    if docall == dialog_factory_abs {
+                        is_load_game = true;
+                        break;
+                    }
+                    match unsafe { decode_thunk_hop(docall) } {
+                        Some(next) => {
+                            chain.push_str(&format!("->0x{next:x}"));
+                            docall = next;
+                        }
+                        None => break,
+                    }
+                    hop += WALK_STEP;
+                }
+                if docall == dialog_factory_abs {
+                    is_load_game = true;
+                }
+            }
+            if is_menu_item && is_load_game && load_game_item.is_none() {
+                load_game_item = Some(item);
+            }
+            if verbose {
+                append_autoload_debug(format_args!(
+                    "menu-walk[{tag}/{label}] i={i} item=0x{item:x} vt=0x{vtable:x} menu_item={is_menu_item} functor=0x{functor:x} ctx=0x{ctx:x} result=0x{result:x} desc=0x{desc_hi:016x}{desc_lo:016x} {chain} LOAD_GAME={is_load_game}"
+                ));
+            }
+            i += WALK_STEP;
+        }
+        if verbose {
+            append_autoload_debug(format_args!(
+                "menu-walk[{tag}/{label}] summary: menu_items_found={menu_items_found}/{count_usize}"
+            ));
+        }
+        interp += WALK_STEP;
+    }
+    load_game_item
+}
+
+/// Does `item`'s action functor at `+0xa8` resolve (through its `_Do_call` jmp-chain) to
+/// the dialog factory 0x14081ead0? That uniquely marks the Load-Game leaf (Continue's
+/// functor instead routes to the c30->SetState(5) confirm 0x140b0e180). Appends the decoded
+/// chain to `chain` for logging. Fault-tolerant reads; never faults.
+unsafe fn functor_chain_hits_factory(item: usize, module_base: usize, chain: &mut String) -> bool {
+    const ITEM_FUNCTOR_A8: usize = 0xa8;
+    const DOCALL_VTABLE_SLOT_10: usize = 0x10;
+    const DIALOG_FACTORY_RVA: usize = 0x0081ead0;
+    const JMP_CHAIN_MAX_HOPS: usize = 4;
+    const HOP_START: usize = 0;
+    const HOP_STEP: usize = 1;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let dialog_factory_abs = module_base + DIALOG_FACTORY_RVA;
+    let functor = unsafe { safe_read_usize(item + ITEM_FUNCTOR_A8) }.unwrap_or(null);
+    if functor == null {
+        return false;
+    }
+    let functor_vtable = unsafe { safe_read_usize(functor) }.unwrap_or(null);
+    if functor_vtable == null {
+        return false;
+    }
+    let mut docall =
+        unsafe { safe_read_usize(functor_vtable + DOCALL_VTABLE_SLOT_10) }.unwrap_or(null);
+    chain.push_str(&format!("functor=0x{functor:x} docall=0x{docall:x}"));
+    let mut hop = HOP_START;
+    while hop < JMP_CHAIN_MAX_HOPS && docall != null {
+        if docall == dialog_factory_abs {
+            return true;
+        }
+        match unsafe { decode_thunk_hop(docall) } {
+            Some(next) => {
+                chain.push_str(&format!("->0x{next:x}"));
+                docall = next;
+            }
+            None => break,
+        }
+        hop += HOP_STEP;
+    }
+    docall == dialog_factory_abs
+}
+
+/// STAGE 1b (strictly NO-WRITE): recursive bounded walk of the title menu JOB tree rooted
+/// at `[owner+0xe0]` (the FD4 multicast/job holder -- runtime proved the real menu lives
+/// here, NOT the empty `owner+0x138`). Classifies each node by its Update slot
+/// `[vtable+0x10]`: 0x1407aa1f0 = Sequence/IfElse container (children at `[node+0x18]` base,
+/// count `[node+0x60]`, stride 8), 0x1407ad1c0 = MenuWindowJob leaf (action functor
+/// `[node+0xa8]`). Logs the structure and returns the Load-Game leaf (functor -> dialog
+/// factory). Both child-pointer interpretations (base-deref and inline) are enqueued; a
+/// visited-set + node/depth caps bound it; fault-tolerant reads never AV. NO writes/calls.
+unsafe fn diagnostic_job_tree_walk(
+    owner: usize,
+    module_base: usize,
+    tag: &str,
+    verbose: bool,
+) -> Option<usize> {
+    const MENU_JOB_HOLDER_E0: usize = 0xe0;
+    const VTABLE_UPDATE_SLOT_10: usize = 0x10;
+    const NODE_CHILDREN_BASE_18: usize = 0x18;
+    const NODE_COUNT_60: usize = 0x60;
+    const NODE_HOLDER_ROOT_18: usize = 0x18;
+    const SEQ_UPDATE_RVA: usize = 0x07aa1f0;
+    const LEAF_UPDATE_RVA: usize = 0x07ad1c0;
+    const ITEM_CTX_10: usize = 0x10;
+    const ITEM_RESULT_130: usize = 0x130;
+    const PTR_STRIDE: usize = core::mem::size_of::<usize>();
+    const COUNT_MIN: usize = 1;
+    const COUNT_MAX: usize = 32;
+    const MAX_NODES: usize = 128;
+    const MAX_DEPTH: usize = 8;
+    const WALK_START: usize = 0;
+    const WALK_STEP: usize = 1;
+
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let seq_update_abs = module_base + SEQ_UPDATE_RVA;
+    let leaf_update_abs = module_base + LEAF_UPDATE_RVA;
+
+    let holder = unsafe { safe_read_usize(owner + MENU_JOB_HOLDER_E0) }.unwrap_or(null);
+    if verbose {
+        append_autoload_debug(format_args!(
+            "job-tree[{tag}]: owner=0x{owner:x} holder(owner+0xe0)=0x{holder:x} seq_update=0x{seq_update_abs:x} leaf_update=0x{leaf_update_abs:x}"
+        ));
+    }
+    if holder == null {
+        return None;
+    }
+    let root = unsafe { safe_read_usize(holder + NODE_HOLDER_ROOT_18) }.unwrap_or(null);
+
+    let mut load_game: Option<usize> = None;
+    let mut visited: Vec<usize> = Vec::new();
+    let mut stack: Vec<(usize, usize)> = Vec::new();
+    stack.push((holder, WALK_START));
+    if root != null {
+        stack.push((root, WALK_START));
+    }
+    let mut node_budget = MAX_NODES;
+    while let Some((node, depth)) = stack.pop() {
+        if node_budget == WALK_START {
+            break;
+        }
+        node_budget -= WALK_STEP;
+        if node == null || visited.contains(&node) {
+            continue;
+        }
+        visited.push(node);
+        let vtable = unsafe { safe_read_usize(node) }.unwrap_or(null);
+        let update = if vtable != null {
+            unsafe { safe_read_usize(vtable + VTABLE_UPDATE_SLOT_10) }.unwrap_or(null)
+        } else {
+            null
+        };
+        let count = unsafe { safe_read_usize(node + NODE_COUNT_60) }.unwrap_or(null);
+        let base = unsafe { safe_read_usize(node + NODE_CHILDREN_BASE_18) }.unwrap_or(null);
+        let is_leaf = update == leaf_update_abs;
+        let is_container = update == seq_update_abs;
+        let mut chain = String::new();
+        let is_load_game = if update != null {
+            unsafe { functor_chain_hits_factory(node, module_base, &mut chain) }
+        } else {
+            false
+        };
+        if is_load_game && load_game.is_none() {
+            load_game = Some(node);
+        }
+        let ctx = unsafe { safe_read_usize(node + ITEM_CTX_10) }.unwrap_or(null);
+        let result = unsafe { safe_read_usize(node + ITEM_RESULT_130) }.unwrap_or(null);
+        if verbose {
+            append_autoload_debug(format_args!(
+                "job-tree[{tag}] d={depth} node=0x{node:x} vt=0x{vtable:x} update=0x{update:x} leaf={is_leaf} container={is_container} count=0x{count:x} base=0x{base:x} ctx=0x{ctx:x} result=0x{result:x} {chain} LOAD_GAME={is_load_game}"
+            ));
+        }
+        if depth < MAX_DEPTH && (COUNT_MIN..=COUNT_MAX).contains(&count) {
+            let mut i = WALK_START;
+            while i < count {
+                let child_b = if base != null {
+                    unsafe { safe_read_usize(base + i * PTR_STRIDE) }.unwrap_or(null)
+                } else {
+                    null
+                };
+                let child_i =
+                    unsafe { safe_read_usize(node + NODE_CHILDREN_BASE_18 + i * PTR_STRIDE) }
+                        .unwrap_or(null);
+                if child_b != null {
+                    stack.push((child_b, depth + WALK_STEP));
+                }
+                if child_i != null && child_i != child_b {
+                    stack.push((child_i, depth + WALK_STEP));
+                }
+                i += WALK_STEP;
+            }
+        }
+    }
+    if verbose {
+        append_autoload_debug(format_args!(
+            "job-tree[{tag}] summary: nodes_visited={} load_game=0x{:x}",
+            visited.len(),
+            load_game.unwrap_or(null)
+        ));
+    }
+    load_game
+}
+
 /// OWN-THE-STEPPER step 2 (the load driver): runs IN-CONTEXT at idx10 (STEP_MenuJobWait,
 /// rcx=owner, rdx=FD4Time) as a real FD4 step. After letting the boot settle to the
 /// stable press-any-button state, it drives the game's OWN load: SetState(3=BeginTitle)
@@ -448,11 +794,34 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         // b80 still 0). So idx10 NO LONGER SetState(5)s -- it stays at the title (NO save
         // write) pending the Path B menu-drive (drive the selector-owner step 0x140826d50 /
         // native Load-Game menu entry so the native async job mounts c30=real before PlayGame).
-        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+        // STAGE 1 (NO-WRITE layout verification + zero-input main-menu build). The parked
+        // press-any-button title is the FIRST state 10 and has NOT run BeginTitle, so
+        // owner+0x138 holds only intro items, not Continue/Load. (1) Walk the bare tree and
+        // log it to VERIFY the live FD4 SBO pointer-vector layout against the static RE
+        // (the captured recipe pointers were suspiciously low -- verify before any invoke).
+        // (2) Build the main menu zero-input via SetState(owner, 3=BeginTitle): BeginTitle
+        // needs no session and writes NO save (it is a menu-UI build), so this is save-safe;
+        // it is exactly what the native press does after BeginLogo. The next frames run
+        // BeginTitle (populating Continue/Load into owner+0x138) then return to state 10,
+        // where PHASE_MENU_BUILD walks + identifies the Load-Game leaf. Stage 2 (invoke its
+        // +0xa8 functor -> drive the dialog -> native mount) follows once this confirms the
+        // live layout + item. Every hand-driven b80 lever is dead (the menu async job is the
+        // only thing that mounts c30 before PlayGame); this is the Path B menu-drive.
+        let bare = unsafe { diagnostic_menu_walk(owner, base, "bare", true) };
+        let bare_tree = unsafe { diagnostic_job_tree_walk(owner, base, "bare-tree", true) };
+        let set_state: unsafe extern "system" fn(usize, i32) =
+            unsafe { std::mem::transmute(base + TITLE_SET_STATE_RVA) };
+        unsafe { set_state(owner, TITLE_STEP_BEGIN_TITLE) };
+        OWN_STEPPER_MENU_BUILD_WAITS.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_MENU_BUILD, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "own_stepper: STAGE1 bare-walk done (load_game_138=0x{:x} load_game_tree=0x{:x}) -> SetState(3) BeginTitle to build the main menu zero-input (#{n}) slot={want_slot} gm=0x{gm:x} c30=0x{c30:x} b80={b80}",
+            bare.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS),
+            bare_tree.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+        ));
         // Suppress unused warnings for consts/statics retained from the falsified cold
-        // slot-int drive, synthetic-dispatcher, b78-route, and BeginTitle/Continue-shim work.
+        // slot-int drive, synthetic-dispatcher, b78-route, and Continue-shim work.
         let _ = (
-            TITLE_STEP_BEGIN_TITLE,
             CONTINUE_CONFIRM_RVA,
             B80_FULL_LOAD_INITIATOR_RVA,
             OWN_STEPPER_PHASE_MOUNT,
@@ -485,7 +854,6 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET,
             TITLE_OWNER_PLAY_GAME_SLOT_OFFSET,
             DEFAULT_PLAY_GAME_MAP,
-            TITLE_SET_STATE_RVA,
             TITLE_STEP_PLAY_GAME,
             &raw const OWN_STEPPER_SHIM,
             &raw const SYNTH_MMS_OWNER,
@@ -494,9 +862,39 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             &OWN_STEPPER_MOUNT_POLLS,
         );
         let _ = read_iodev;
-        append_autoload_debug(format_args!(
-            "own_stepper: pathA-falsified NO-WRITE checkpoint (#{n}) slot={want_slot} staying at title (Path B pending) gm=0x{gm:x} c30=0x{c30:x} b80={b80}"
-        ));
+        pass_through(false);
+        return;
+    }
+    if phase == OWN_STEPPER_PHASE_MENU_BUILD {
+        // Zero-input main-menu built by the idx10 SetState(3). Wait for BeginTitle to
+        // populate Continue/Load into owner+0x138, polling each frame (quiet); log the full
+        // tree once when the Load-Game leaf is found (or on timeout). NO SetState here ->
+        // stays at the main menu, save-safe. STAGE 2 (invoke the leaf functor) is gated on
+        // this confirming the live item + layout first.
+        let waits =
+            OWN_STEPPER_MENU_BUILD_WAITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
+        match unsafe { diagnostic_job_tree_walk(owner, base, "built-tree", false) } {
+            Some(item) => {
+                let _ = unsafe { diagnostic_menu_walk(owner, base, "built-138", true) };
+                let _ = unsafe { diagnostic_job_tree_walk(owner, base, "built-tree", true) };
+                append_autoload_debug(format_args!(
+                    "own_stepper: STAGE1b LOAD-GAME item identified=0x{item:x} after {waits} waits -- STAGE 2 (functor invoke) PENDING; staying at main menu (NO-WRITE) c30=0x{c30:x} b80={b80}"
+                ));
+                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+            }
+            None => {
+                if waits >= OWN_STEPPER_MENU_BUILD_WAIT_MAX {
+                    let _ = unsafe { diagnostic_menu_walk(owner, base, "built138-timeout", true) };
+                    let _ = unsafe {
+                        diagnostic_job_tree_walk(owner, base, "built-tree-timeout", true)
+                    };
+                    append_autoload_debug(format_args!(
+                        "own_stepper: STAGE1b menu-build TIMEOUT after {waits} waits -- Load-Game item not found; staying at title (NO-WRITE)"
+                    ));
+                    OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+                }
+            }
+        }
         pass_through(false);
         return;
     }
@@ -2576,13 +2974,7 @@ pub(crate) unsafe extern "system" fn menu_other_load_wrapper_hook(
 /// Forward a captured menu-UI call through its trampoline. Uniform 4-arg fastcall: the
 /// integer arg registers (rcx/rdx/r8/r9) pass through; callees taking fewer args ignore the
 /// rest, and none of the captured targets take >4 integer args or float args. Returns rax.
-unsafe fn call_cap_original(
-    orig: &AtomicUsize,
-    a: usize,
-    b: usize,
-    c: usize,
-    d: usize,
-) -> usize {
+unsafe fn call_cap_original(orig: &AtomicUsize, a: usize, b: usize, c: usize, d: usize) -> usize {
     let original = orig.load(Ordering::SeqCst);
     if original == HOOK_ORIGINAL_UNSET {
         return TITLE_OWNER_SCAN_START_ADDRESS;
@@ -2617,7 +3009,9 @@ pub(crate) unsafe extern "system" fn cap_continue_confirm_hook(
     d: usize,
 ) -> usize {
     let owner = if this != TITLE_OWNER_SCAN_START_ADDRESS {
-        unsafe { *((this + OWN_STEPPER_SHIM_OWNER_IDX * core::mem::size_of::<usize>()) as *const usize) }
+        unsafe {
+            *((this + OWN_STEPPER_SHIM_OWNER_IDX * core::mem::size_of::<usize>()) as *const usize)
+        }
     } else {
         TITLE_OWNER_SCAN_START_ADDRESS
     };
@@ -2684,7 +3078,9 @@ pub(crate) unsafe extern "system" fn cap_selector_tick_hook(
     d: usize,
 ) -> usize {
     let n = CAP_SELECTOR_TICK_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
-    if n < CAP_SELECTOR_TICK_LOG_FIRST || n % CAP_SELECTOR_TICK_LOG_INTERVAL == 0 {
+    if n < CAP_SELECTOR_TICK_LOG_FIRST
+        || n % CAP_SELECTOR_TICK_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS
+    {
         let installed = if step != TITLE_OWNER_SCAN_START_ADDRESS {
             unsafe { *((step + SELECTOR_STEP_INSTALL_FLAG_68_OFFSET) as *const u8) as i32 }
         } else {

@@ -515,6 +515,18 @@ pub(crate) static mut SYNTH_MMS_OWNER: [u8; SYNTH_MMS_OWNER_SIZE] =
 /// Max frames to drive the dispatchers before giving up (stay at title, no save write).
 pub(crate) const OWN_STEPPER_DRIVE_MAX: u64 = 600;
 pub(crate) static OWN_STEPPER_DRIVE_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// PHASE 5 (MENU_BUILD): the parked press-any-button title is the FIRST state 10 and has
+/// NOT run STEP_BeginTitle(3) yet, so the Continue/Load-Game items do not exist at
+/// owner+0x138 until we drive 10->3 zero-input. idx10 SetState(owner,3) builds the main
+/// menu (BeginTitle needs no session, writes NO save), then this phase waits for the menu
+/// to populate and walks owner+0x138 to identify the Load-Game leaf (its +0xa8 action
+/// functor's _Do_call chain resolves to dialog_factory 0x14081ead0). Max state reached =
+/// main menu (no PlayGame) -> save-safe.
+pub(crate) const OWN_STEPPER_PHASE_MENU_BUILD: usize = 5;
+/// Max idx10 re-entries to wait for the main menu to build before giving up (stay at the
+/// title, no save write). ~3s at 60fps.
+pub(crate) const OWN_STEPPER_MENU_BUILD_WAIT_MAX: u64 = 180;
+pub(crate) static OWN_STEPPER_MENU_BUILD_WAITS: AtomicUsize = AtomicUsize::new(0);
 /// How many in-context idx10 calls to wait before driving (let the boot settle to the
 /// stable press-any-button state 10 first).
 pub(crate) const OWN_STEPPER_SETTLE_CALLS: u64 = 30;
