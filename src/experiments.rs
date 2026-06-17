@@ -2187,6 +2187,47 @@ pub(crate) unsafe fn title_observe_tick(module_base: usize, tick: u64) {
         Some(o) => unsafe { *((o + TITLE_OWNER_STATE_COMMITTED_OFFSET) as *const i32) },
         None => TITLE_STATE_OWNER_GONE,
     };
+    // Title->menu timing baseline (works for BOTH a true-vanilla user run and the DLL run):
+    // T0 = first frame parked at the title (state 10); T_menu_open = when the TitleTopDialog SM
+    // reaches TextFadeOut (menu open -- by the user's presses+modal-dismissals in vanilla). The
+    // delta is the apples-to-apples title->ready-menu time to compare against the DLL's headless
+    // 3.1s. Read-only (is_in_state is a pure state query).
+    if state == TITLE_STEP_MENU_JOB_WAIT
+        && owner.is_some()
+        && OBSERVE_T0_EMITTED.swap(OBSERVE_MARKER_EMITTED, Ordering::SeqCst)
+            == OBSERVE_MARKER_NOT_EMITTED
+    {
+        timeline_event("T0", tick, format_args!("state10 observe-baseline"));
+    }
+    if let Some(o) = owner {
+        if OBSERVE_MENU_OPEN_EMITTED.load(Ordering::SeqCst) == OBSERVE_MARKER_NOT_EMITTED {
+            let dialog = unsafe { safe_read_usize(o + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }
+                .unwrap_or(null);
+            let dialog_vt = if dialog != null {
+                unsafe { safe_read_usize(dialog) }.unwrap_or(null)
+            } else {
+                null
+            };
+            if dialog_vt == module_base + TITLE_TOP_DIALOG_VTABLE_RVA {
+                let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
+                let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
+                    unsafe { std::mem::transmute(module_base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
+                let textfadeout =
+                    unsafe { is_in_state(sm, module_base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) }
+                        != OWN_STEPPER_FALSE;
+                if textfadeout
+                    && OBSERVE_MENU_OPEN_EMITTED.swap(OBSERVE_MARKER_EMITTED, Ordering::SeqCst)
+                        == OBSERVE_MARKER_NOT_EMITTED
+                {
+                    timeline_event(
+                        "T_menu_open",
+                        tick,
+                        format_args!("dialog=0x{dialog:x} observe-baseline"),
+                    );
+                }
+            }
+        }
+    }
     let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
     let session = unsafe { *((module_base + SESSION_SINGLETON_RVA) as *const usize) };
     let gm = unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };

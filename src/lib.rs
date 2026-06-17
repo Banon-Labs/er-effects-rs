@@ -918,6 +918,13 @@ pub(crate) const GAME_MAN_NAME_IS_EMPTY_E78_OFFSET: usize = 0xe78;
 /// One-shot latch for the in-world LOAD-CORRECTNESS dump.
 pub(crate) static LOAD_CORRECTNESS_DUMPED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const LOAD_CORRECTNESS_NOT_DUMPED: usize = 0;
+/// One-shot latches for the OBSERVE-mode title->menu timing baseline (T0 at the parked title,
+/// T_menu_open when the TitleTopDialog reaches TextFadeOut). Lets a true-vanilla run (no forcing,
+/// modals + presses by the user) emit the SAME markers as the DLL-headless run for comparison.
+pub(crate) static OBSERVE_T0_EMITTED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OBSERVE_MENU_OPEN_EMITTED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const OBSERVE_MARKER_NOT_EMITTED: usize = 0;
+pub(crate) const OBSERVE_MARKER_EMITTED: usize = 1;
 /// Synthetic `this` for the IngameInit-tail stream-worker register call 0x140b0a980
 /// (+0x48 set to WORLD_WORKER_BUILD_STATE hits the build+register arm).
 pub(crate) static mut OWN_STEPPER_WORKER_THIS: [u8; SYNTHETIC_STEP_THIS_SIZE] =
