@@ -527,6 +527,12 @@ pub(crate) const OWN_STEPPER_SHIM_OWNER_IDX: usize = 1;
 pub(crate) const TITLE_STEP_IDX6_SLOT_RVA: usize = 0x3d715e0;
 pub(crate) static OWN_STEPPER_ORIG_IDX6: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static OWN_STEPPER_IDX6_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// Path A re-target single-shot latch: 0 = the native b78-route deserialize has not yet
+/// landed a real GameMan+0xc30, 1 = idx6 has already re-targeted owner+0xbc to the real
+/// map + SetState(5). Prevents re-firing the re-target every frame.
+pub(crate) static OWN_STEPPER_RETARGETED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const OWN_STEPPER_RETARGET_NO: usize = 0;
+pub(crate) const OWN_STEPPER_RETARGET_YES: usize = 1;
 /// GameMan+0xb80 load-phase value meaning the save IO is resident (mounted).
 pub(crate) const OWN_STEPPER_B80_RESIDENT: i32 = 3;
 /// GameMan+0xb80 == 1: the PREVIEW lane (0x14067b4e0 read in flight); drive the lane tick

@@ -435,45 +435,29 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             pass_through(false);
             return;
         }
-        // PHASE 1 -- start the save read via the SLOT-INT PRIMITIVE LANE (no synthetic
-        // MoveMapStep owner). The prior synthetic-dispatcher mount (disp1/disp2 on a fake
-        // owner) WROTE THE SAVE (own-stepper-dispatcher-mount-failed-and-wrote-save-2026);
-        // this lane calls only slot-int primitives that READ the save. Validated by the
-        // real Seamless .co2 capture (seamless-co2-menu-deserialize-is-vanilla-0x82c240-2026
-        // / autoload-native-menu-mount-drive-design-2026): 0x14067b1a0(slot) sets b80=2 AND
-        // populates the iodev request pair io18+io20 (the deserialize-ready signature the
-        // poll reads). First register the FD4 stream worker so the save-IO pool drains the
-        // queued read -- 0x140b0a980 on a zeroed stub with +0x48=7 does ONLY the
-        // build+register (byte-identical to the menu helper 0x140af1b40).
-        unsafe {
-            *((&raw mut OWN_STEPPER_WORKER_THIS as usize + SYNTHETIC_STEP_STATE_OFFSET)
-                as *mut i32) = WORLD_WORKER_BUILD_STATE;
-        }
-        let build_worker: unsafe extern "system" fn(usize) =
-            unsafe { std::mem::transmute(base + WORLD_WORKER_BUILD_RVA) };
-        unsafe { build_worker(&raw mut OWN_STEPPER_WORKER_THIS as usize) };
-        let worker = unsafe { *((base + WORLD_STREAM_WORKER_RVA) as *const usize) };
-        // Start the read with the PREVIEW initiator 0x14067b4e0(slot) -> b80=1 + STARTS the
-        // iodev async read (the b80=2 initiator 0x14067b1a0 only queues to the file-device-mgr
-        // and never populates the iodev request the poll reads -- proven by the prior cold run
-        // own-stepper-cold-b80-primitive-needs-preview-not-67b1a0-2026). PHASE_DRIVE then runs
-        // the menu's documented sequence with read-only primitives: tick the b80==1 lane
-        // 0x140679510 to resident (resets b80->0), 0x14067b200 -> b80=2, poll 0x140679180 ->
-        // b80=3, deserialize 0x14067b290.
-        let preview: unsafe extern "system" fn(i32) =
-            unsafe { std::mem::transmute(base + LOAD_INITIATOR_RVA) };
-        unsafe { preview(want_slot) };
-        let (pi10, pi18, pi20) = read_iodev();
-        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DRIVE, Ordering::SeqCst);
-        // Suppress unused warnings for consts/statics retained from the abandoned
-        // synthetic-dispatcher and BeginTitle/Continue-shim approaches (kept for reference).
+        // NO-WRITE CHECKPOINT. Path A (b78-route) is RUNTIME-FALSIFIED
+        // (pathA-b78-route-falsified-b80-stuck-latch-gate-2026): disp2 0x140afb880's b78-route
+        // is gated by the title-accept latch [0x143d856a0] (SET by load time -> disp2 bails to
+        // cleanup every frame), so GameMan+0xb80 never leaves 0 and the native PlayGame
+        // defaults to a NEW-GAME null character (which autosaved over the live slot in the
+        // Seamless run). Every hand-driven b80 lever (cold slot-int primitives, b72 lever,
+        // b78-route) hits the SAME wall: b80 reaches 3 ONLY when the native MoveMapListStep
+        // async job pumps the menu deserialize 0x14082c240; FD4 stream-worker registration
+        // alone does NOT advance b80 (0x140af1b40 registers the same task 0x144842d40 under the
+        // same key 0x59682f01 as the in-game 0x140b0a980 milestone lever-c already tried with
+        // b80 still 0). So idx10 NO LONGER SetState(5)s -- it stays at the title (NO save
+        // write) pending the Path B menu-drive (drive the selector-owner step 0x140826d50 /
+        // native Load-Game menu entry so the native async job mounts c30=real before PlayGame).
+        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+        // Suppress unused warnings for consts/statics retained from the falsified cold
+        // slot-int drive, synthetic-dispatcher, b78-route, and BeginTitle/Continue-shim work.
         let _ = (
-            DEFAULT_PLAY_GAME_MAP,
             TITLE_STEP_BEGIN_TITLE,
             CONTINUE_CONFIRM_RVA,
             B80_FULL_LOAD_INITIATOR_RVA,
             OWN_STEPPER_PHASE_MOUNT,
-            GAME_MAN_REQUESTED_SLOT_B78_OFFSET,
+            OWN_STEPPER_PHASE_DRIVE,
+            OWN_STEPPER_PHASE_CONTINUE,
             B80_DISPATCHER1_RVA,
             B80_DISPATCHER2_RVA,
             SYNTH_MMS_SKIP_APPLY_12A_OFFSET,
@@ -481,96 +465,53 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             SYNTH_MMS_SKIP_APPLY_ON,
             OWN_STEPPER_DRIVE_MAX,
             OWN_STEPPER_SHIM_OWNER_IDX,
+            OWN_STEPPER_MOUNT_POLL_MAX,
+            OWN_STEPPER_B80_RESIDENT,
+            OWN_STEPPER_B80_PREVIEW_LANE,
+            OWN_STEPPER_B80_IDLE,
+            B80_POLL_RVA,
+            B80_POLL_ARG_ZERO,
+            B80_LANE1_DRIVER_RVA,
+            B80_LOAD_SAVE_DATA_INITIATOR_RVA,
+            DESERIALIZE_SLOT_RVA,
+            LOAD_INITIATOR_RVA,
+            WORLD_WORKER_BUILD_RVA,
+            WORLD_STREAM_WORKER_RVA,
+            WORLD_WORKER_BUILD_STATE,
+            SYNTHETIC_STEP_STATE_OFFSET,
+            FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
+            GAME_MAN_REQUESTED_SLOT_B78_OFFSET,
+            GAME_MAN_ARM_FLAG_B72_OFFSET,
+            TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET,
+            TITLE_OWNER_PLAY_GAME_SLOT_OFFSET,
+            DEFAULT_PLAY_GAME_MAP,
+            TITLE_SET_STATE_RVA,
+            TITLE_STEP_PLAY_GAME,
             &raw const OWN_STEPPER_SHIM,
             &raw const SYNTH_MMS_OWNER,
+            &raw mut OWN_STEPPER_WORKER_THIS,
             &OWN_STEPPER_DRIVE_CALLS,
+            &OWN_STEPPER_MOUNT_POLLS,
         );
+        let _ = read_iodev;
         append_autoload_debug(format_args!(
-            "own_stepper: drive-init (#{n}) slot={want_slot} worker=0x{worker:x} b80={b80} preview_io10=0x{pi10:x} io18=0x{pi18:x} io20=0x{pi20:x} c30=0x{c30:x}"
+            "own_stepper: pathA-falsified NO-WRITE checkpoint (#{n}) slot={want_slot} staying at title (Path B pending) gm=0x{gm:x} c30=0x{c30:x} b80={b80}"
         ));
-        return;
-    }
-    if phase == OWN_STEPPER_PHASE_DRIVE {
-        let ac0 = read_gm(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
-        let polls =
-            OWN_STEPPER_MOUNT_POLLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
-        if polls < OWN_STEPPER_MOUNT_POLL_MAX {
-            // Drive the menu's documented b80 sequence with read-only primitives (NO
-            // dispatcher-2 -> no save write), branching on the current b80 phase:
-            //   b80==1 (preview lane): tick 0x140679510 -> resets to 0 when the iodev read
-            //           goes resident.
-            //   b80==0 (preview drained): 0x14067b200(slot) -> b80=2, reusing the now-resident
-            //           iodev request.
-            //   b80==2 (deserialize-arm): poll 0x140679180(0,0) -> b80=3 on resident.
-            //   b80==3 (resident): full deserialize 0x14067b290(slot) -> c30=real map + char
-            //           applied + ac0=slot (READS save). Save-agnostic (ERSC redirects file IO
-            //           below 0x14067b100). Then SetState(5) streams the real world.
-            if b80 == OWN_STEPPER_B80_RESIDENT {
-                let deser: unsafe extern "system" fn(i32) =
-                    unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
-                unsafe { deser(want_slot) };
-                let c30_now = read_gm(GAME_MAN_SAVED_MAP_C30_OFFSET);
-                let ac0_now = read_gm(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
-                if c30_now != GAME_MAN_C30_UNSET {
-                    unsafe {
-                        *((owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *mut u8) =
-                            MOVIE_SKIP_FLAG_CLEAR;
-                        *((owner + TITLE_OWNER_PLAY_GAME_SLOT_OFFSET) as *mut i32) = c30_now;
-                    }
-                    let set_state: unsafe extern "system" fn(usize, i32) =
-                        unsafe { std::mem::transmute(base + TITLE_SET_STATE_RVA) };
-                    unsafe { set_state(owner, TITLE_STEP_PLAY_GAME) };
-                    OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
-                    append_autoload_debug(format_args!(
-                        "own_stepper: MOUNTED (#{n}) ac0={ac0_now} c30=0x{c30_now:x} SetState(5) owner=0x{owner:x}"
-                    ));
-                } else {
-                    OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
-                    append_autoload_debug(format_args!(
-                        "own_stepper: deser-noop (#{n}) ac0={ac0_now} c30 still unset owner=0x{owner:x}"
-                    ));
-                }
-                return;
-            }
-            if b80 == OWN_STEPPER_B80_PREVIEW_LANE {
-                let lane1: unsafe extern "system" fn() =
-                    unsafe { std::mem::transmute(base + B80_LANE1_DRIVER_RVA) };
-                unsafe { lane1() };
-            } else if b80 == OWN_STEPPER_B80_IDLE {
-                let loadsave: unsafe extern "system" fn(i32) =
-                    unsafe { std::mem::transmute(base + B80_LOAD_SAVE_DATA_INITIATOR_RVA) };
-                unsafe { loadsave(want_slot) };
-            } else {
-                let poll: unsafe extern "system" fn(u8, u8) =
-                    unsafe { std::mem::transmute(base + B80_POLL_RVA) };
-                unsafe { poll(B80_POLL_ARG_ZERO, B80_POLL_ARG_ZERO) };
-            }
-            if polls % OWN_STEPPER_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
-                let (io10, io18, io20) = read_iodev();
-                append_autoload_debug(format_args!(
-                    "own_stepper: drive {polls} b80={b80} ac0={ac0} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} c30=0x{c30:x}"
-                ));
-            }
-            return;
-        }
-        // Timeout: the read never reached resident. Stay at the title (no SetState(5) -> no
-        // save write).
-        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
-        let (io10, io18, io20) = read_iodev();
-        append_autoload_debug(format_args!(
-            "own_stepper: drive TIMEOUT (polls={polls}) b80={b80} ac0={ac0} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} c30=0x{c30:x}"
-        ));
+        pass_through(false);
         return;
     }
     // phase DONE: idx6 watches the native load; idx10 just passes through if re-entered.
     pass_through(false);
 }
 
-/// OWN-THE-STEPPER idx6 (STEP_GameStepWait) handler: runs IN-CONTEXT after phase 1's
-/// SetState(5) builds the MoveMapStep. Once CSFeMan exists and the save is mounted
-/// (GameMan+0xb80==3), it deserializes the real slot (GameMan+0xc30 -> the character's
-/// REAL map + applies the character), re-targets owner+0xbc to that map, and SetState(5)
-/// so the load streams the real world. Pass-through otherwise.
+/// OWN-THE-STEPPER idx6 (STEP_GameStepWait) handler: runs IN-CONTEXT after idx10's
+/// placeholder SetState(5) builds the MoveMapStep, whose native update 0x140aff640 ticks
+/// the b80 dispatchers (disp1 0x140afbad0 + disp2 0x140afb880). idx6 does NOT call the
+/// deserialize itself -- it keeps the b78-route armed (re-plant GameMan+0xb78=slot, clear
+/// b72, only while b80 is idle) so the NATIVE disp2 b78-route initiates and disp1
+/// deserializes the real slot into GameMan+0xc30. When c30 turns real, idx6 re-targets
+/// owner+0xbc to that map and SetState(5) ONCE so the load streams the character's real
+/// world instead of the m60 placeholder. Pass-through (watch+log) otherwise.
 pub(crate) unsafe extern "system" fn own_stepper_idx6(owner: usize, framectx: usize) {
     let base = OWN_STEPPER_BASE.load(Ordering::SeqCst);
     let phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
@@ -594,6 +535,27 @@ pub(crate) unsafe extern "system" fn own_stepper_idx6(owner: usize, framectx: us
         }
     };
     let _ = phase;
+    // NO-WRITE CHECKPOINT. The Path A re-target (re-plant b78 / re-SetState(5) on c30=real)
+    // is REMOVED: it MISFIRED on the native new-game default c30=0xa010000 and reloaded an
+    // m10 null character (pathA-b78-route-falsified-b80-stuck-latch-gate-2026). idx10 no
+    // longer SetState(5)s, so this idx6 (state 6) is not reached in normal flow; it remains a
+    // pure read-only watcher (no writes) for any future in-context load comparison.
+    let _ = (
+        &OWN_STEPPER_RETARGETED,
+        OWN_STEPPER_RETARGET_NO,
+        OWN_STEPPER_RETARGET_YES,
+        OWN_STEPPER_SLOT_NONE,
+        OWN_STEPPER_B80_IDLE,
+        GAME_MAN_C30_UNSET,
+        DEFAULT_PLAY_GAME_MAP,
+        GAME_MAN_REQUESTED_SLOT_B78_OFFSET,
+        GAME_MAN_ARM_FLAG_B72_OFFSET,
+        TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET,
+        TITLE_OWNER_PLAY_GAME_SLOT_OFFSET,
+        TITLE_SET_STATE_RVA,
+        TITLE_STEP_PLAY_GAME,
+        &OWN_STEPPER_SLOT,
+    );
     // WATCH the native load that the idx10 Continue confirm kicked off (state 6
     // GameStepWait). Mirrors the observe snapshot so the in-context load can be compared
     // directly to the real user-driven load: csfeman + MoveMapStep build, mms_state
