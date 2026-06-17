@@ -177,6 +177,69 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
     if !info.is_null() {
         let record = unsafe { (*info).exception_record };
         let context = unsafe { (*info).context_record };
+        // Software (INT3) breakpoint: on #BP at one of our armed addresses, log the full
+        // register/stack context, restore the original byte, back RIP up to it, and set the
+        // trap flag so the next single-step re-arms the INT3 (persistent breakpoint).
+        if !record.is_null()
+            && !context.is_null()
+            && unsafe { (*record).exception_code } == EXCEPTION_BREAKPOINT_CODE
+        {
+            let cbase = context as *mut u8;
+            let rip = unsafe { *(cbase.add(CONTEXT_RIP_OFFSET) as *const u64) } as usize;
+            let bp_addr = rip.wrapping_sub(INT3_RIP_BACKUP);
+            let mut slot = SW_BP_EMPTY;
+            let mut found = false;
+            while slot < SW_BP_MAX {
+                if bp_addr != SW_BP_EMPTY && SW_BP_ADDR[slot].load(Ordering::SeqCst) == bp_addr {
+                    found = true;
+                    break;
+                }
+                slot += SW_BP_SLOT_STEP;
+            }
+            if found {
+                let hits = SW_BP_HITS[slot].fetch_add(SW_BP_HIT_INCREMENT, Ordering::SeqCst);
+                if hits < SW_BP_MAX_LOGS_PER_BP {
+                    let base = game_module_base().unwrap_or(NULL_MODULE_BASE);
+                    let read_reg = |off: usize| unsafe { *(cbase.add(off) as *const u64) } as usize;
+                    let rva = |pointer: usize| {
+                        if base != NULL_MODULE_BASE && pointer >= base {
+                            pointer - base
+                        } else {
+                            pointer
+                        }
+                    };
+                    let rcx = read_reg(CONTEXT_RCX_OFFSET);
+                    let rdx = read_reg(CONTEXT_RDX_OFFSET);
+                    let r8 = read_reg(CONTEXT_R8_OFFSET);
+                    let r9 = read_reg(CONTEXT_R9_OFFSET);
+                    let rax = read_reg(CONTEXT_RAX_OFFSET);
+                    let rsp = read_reg(CONTEXT_RSP_OFFSET);
+                    let mut stack = String::new();
+                    let mut q = SW_BP_EMPTY;
+                    while q < SW_BP_STACK_DUMP_QWORDS {
+                        let v =
+                            unsafe { *((rsp + q * core::mem::size_of::<usize>()) as *const usize) };
+                        stack.push_str(&format!("0x{:x},", rva(v)));
+                        q += SW_BP_SLOT_STEP;
+                    }
+                    append_crash_log(format_args!(
+                        "sw-bp #{slot} rva=0x{:x} hit={hits} rcx=0x{rcx:x} rdx=0x{rdx:x} r8=0x{r8:x} r9=0x{r9:x} rax=0x{rax:x} rsp=0x{rsp:x} stack=[{stack}] {}",
+                        rva(bp_addr),
+                        trace_callers_summary()
+                    ));
+                }
+                let orig = (SW_BP_ORIG[slot].load(Ordering::SeqCst) & SW_BP_ORIG_BYTE_MASK) as u8;
+                unsafe { write_code_byte(bp_addr, orig) };
+                unsafe {
+                    *(cbase.add(CONTEXT_RIP_OFFSET) as *mut u64) = bp_addr as u64;
+                    let eflags = *(cbase.add(CONTEXT_EFLAGS_OFFSET) as *const u32);
+                    *(cbase.add(CONTEXT_EFLAGS_OFFSET) as *mut u32) = eflags | TRAP_FLAG_MASK;
+                }
+                SW_BP_REARM_PENDING.store(bp_addr, Ordering::SeqCst);
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
         // Hardware watchpoint (DR0) on GameMan+0xc30: a data-write trap surfaces as a
         // single-step exception with DR6 bit0 set. Log the writing instruction's RIP +
         // call stack -- this pins the EXACT function that mounts the save (vanilla
@@ -210,6 +273,18 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
                 unsafe {
                     *(cbase.add(CONTEXT_DR6_OFFSET) as *mut u64) = DR6_CLEAR;
                     *(cbase.add(CONTEXT_DR7_OFFSET) as *mut u64) = DR7_DISARM;
+                }
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+            // Software-breakpoint re-arm: this single-step is the one we requested after
+            // restoring + stepping over the original instruction. Re-write the INT3 and clear
+            // the trap flag so the breakpoint fires again next time.
+            let pending = SW_BP_REARM_PENDING.swap(SW_BP_REARM_NONE, Ordering::SeqCst);
+            if pending != SW_BP_REARM_NONE {
+                unsafe { write_code_byte(pending, INT3_OPCODE) };
+                unsafe {
+                    let eflags = *(cbase.add(CONTEXT_EFLAGS_OFFSET) as *const u32);
+                    *(cbase.add(CONTEXT_EFLAGS_OFFSET) as *mut u32) = eflags & !TRAP_FLAG_MASK;
                 }
                 return EXCEPTION_CONTINUE_EXECUTION;
             }
@@ -336,6 +411,86 @@ pub(crate) unsafe fn maybe_arm_c30_watch(module_base: usize, tick: u64) {
     append_crash_log(format_args!(
         "c30-watch (re)armed on {armed} threads target=0x{target:x} game_man=0x{game_man:x} tick={tick}"
     ));
+}
+
+/// Opt-in: install software (INT3) breakpoints. Reads er-effects-breakpoints.txt (one
+/// hex RVA per line) from the game dir. Requires the crash logger (the VEH) installed.
+pub(crate) fn sw_breakpoints_enabled() -> bool {
+    matches!(std::env::var("ER_EFFECTS_SW_BP").as_deref(), Ok("1"))
+        || sw_breakpoints_file().is_some()
+}
+
+fn sw_breakpoints_file() -> Option<PathBuf> {
+    let path = game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-breakpoints.txt");
+    if path.exists() { Some(path) } else { None }
+}
+
+/// Patch a single executable byte (VirtualProtect RWX -> write -> restore protection).
+/// Used to arm/restore/re-arm an INT3. Returns true on success.
+pub(crate) unsafe fn write_code_byte(addr: usize, byte: u8) -> bool {
+    let mut old: u32 = PROTECT_OLD_INIT;
+    let ok = unsafe {
+        VirtualProtect(
+            addr as *mut c_void,
+            INT3_PATCH_SIZE,
+            PAGE_EXECUTE_READWRITE,
+            &mut old,
+        )
+    };
+    if ok == SET_THREAD_CONTEXT_OK {
+        unsafe { *(addr as *mut u8) = byte };
+        let mut restored: u32 = PROTECT_OLD_INIT;
+        unsafe {
+            VirtualProtect(addr as *mut c_void, INT3_PATCH_SIZE, old, &mut restored);
+        }
+        true
+    } else {
+        false
+    }
+}
+
+/// Install the INT3 breakpoints listed (as hex RVAs) in er-effects-breakpoints.txt, once.
+/// Each is patched with 0xCC; the VEH (crash_vectored_handler) logs every hit's full
+/// register/stack context and re-arms it (persistent breakpoint).
+pub(crate) unsafe fn install_sw_breakpoints_once(module_base: usize) {
+    if SW_BP_INSTALLED.swap(SW_BP_HIT_INCREMENT, Ordering::SeqCst) != SW_BP_REARM_NONE {
+        return;
+    }
+    let Some(path) = sw_breakpoints_file() else {
+        // env-enabled but no file: nothing to install.
+        return;
+    };
+    let Ok(contents) = fs::read_to_string(&path) else {
+        return;
+    };
+    let mut slot = SW_BP_EMPTY;
+    for line in contents.lines() {
+        let trimmed = line
+            .trim()
+            .trim_start_matches("0x")
+            .trim_start_matches("0X");
+        if trimmed.is_empty() || line.trim_start().starts_with('#') {
+            continue;
+        }
+        let Ok(rva) = usize::from_str_radix(trimmed, RVA_HEX_RADIX) else {
+            continue;
+        };
+        if slot >= SW_BP_MAX {
+            append_crash_log(format_args!("sw-bp: table full, skipped rva=0x{rva:x}"));
+            break;
+        }
+        let addr = module_base + rva;
+        let orig = unsafe { *(addr as *const u8) };
+        SW_BP_ADDR[slot].store(addr, Ordering::SeqCst);
+        SW_BP_ORIG[slot].store(orig as usize, Ordering::SeqCst);
+        let armed = unsafe { write_code_byte(addr, INT3_OPCODE) };
+        append_crash_log(format_args!(
+            "sw-bp #{slot} armed rva=0x{rva:x} addr=0x{addr:x} orig=0x{orig:x} ok={armed}"
+        ));
+        slot += SW_BP_SLOT_STEP;
+    }
 }
 
 /// Install the crash/exit logger: a vectored handler for access violations plus
