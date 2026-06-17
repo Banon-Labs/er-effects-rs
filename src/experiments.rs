@@ -930,19 +930,26 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         return;
     }
     if phase == OWN_STEPPER_PHASE_MENU_BUILD {
+        let waits =
+            OWN_STEPPER_MENU_BUILD_WAITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
         // STAGE 1d: force-open the main menu zero-input. SetState(2) built the TitleTopDialog
-        // container at owner+0xe0 (vt 0x142b26468) but left it in the press-prompt state -- the
-        // native open is TitleTopDialog::update calling registrar 0x1409b1ae0, gated on the
-        // input/accept byte 0x144589bdc. The registrar reads NO input, so we call it directly
-        // with rcx=dialog to register Continue/Load(d180)/New-Game (the engine's own menu-open
-        // method, NOT input synthesis; no save write). One-shot, guarded by the native
-        // preconditions (vtable match, FD4 state machine [dialog+0xa60] non-null, latch
-        // [dialog+0xa40]==0 not-already-open) to avoid a double-build / wrong-receiver fault.
-        // The container may need a few frames to build (BeginLogo->BeginTitle->10), so this
-        // simply skips until the vtable matches. After it fires, the menu-item Update hook
-        // captures d180 as the freshly-registered entries tick.
+        // container at owner+0xe0 (vt 0x142b26468); its "open main menu" registrar 0x1409b24e0
+        // sets the latch [dialog+0xa40]=1, advances the FD4 state machine [dialog+0xa60] to the
+        // menu-list state, and registers Continue/Load(d180)/New-Game. Normally update calls it
+        // gated on the input/accept byte 0x144589bdc; the registrar reads NO input, so we call
+        // it directly (the engine's own menu-open method, NOT input synthesis; no save write).
+        // RETRY: the registrar only registers when the dialog is in the press-prompt FD4 state
+        // that frame (otherwise it no-ops but still sets the latch -> poisons our one-shot). So
+        // after a settle delay we CLEAR the latch and re-call every STAGE1D_RETRY_INTERVAL frames
+        // until main-menu entries actually appear (MENU_ENTRIES_SEEN, set by the iterator hook
+        // on the first MenuWindowJob child). Spaced so a successful registration is detected
+        // before the next retry (no double-build). NO save write.
         const MENU_JOB_HOLDER_E0: usize = 0xe0;
-        if OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) == OWN_STEPPER_MENU_OPENED_NO {
+        if MENU_ENTRIES_SEEN.load(Ordering::SeqCst) == MENU_ENTRIES_SEEN_NO
+            && waits >= STAGE1D_SETTLE_WAITS
+            && (waits - STAGE1D_SETTLE_WAITS) % STAGE1D_RETRY_INTERVAL
+                == TITLE_OWNER_SCAN_START_ADDRESS as u64
+        {
             let holder = unsafe { safe_read_usize(owner + MENU_JOB_HOLDER_E0) }
                 .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
             let holder_vt = if holder != TITLE_OWNER_SCAN_START_ADDRESS {
@@ -950,35 +957,32 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             } else {
                 TITLE_OWNER_SCAN_START_ADDRESS
             };
-            let opened_latch =
-                unsafe { safe_read_i32(holder + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }
-                    .unwrap_or(TITLE_TOP_DIALOG_OPENED_LATCH_MASK)
-                    & TITLE_TOP_DIALOG_OPENED_LATCH_MASK;
             let state_machine =
                 unsafe { safe_read_usize(holder + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET) }
                     .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
             if holder_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA
-                && opened_latch == TITLE_OWNER_SCAN_START_ADDRESS as i32
                 && state_machine != TITLE_OWNER_SCAN_START_ADDRESS
             {
+                // Clear the (possibly poisoned) open latch so the registrar's registration runs.
+                unsafe {
+                    *((holder + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) as *mut u8) =
+                        TITLE_TOP_DIALOG_LATCH_CLEAR;
+                }
                 let open_menu: unsafe extern "system" fn(usize) =
                     unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_OPEN_MENU_RVA) };
                 unsafe { open_menu(holder) };
-                OWN_STEPPER_MENU_OPENED.store(OWN_STEPPER_MENU_OPENED_YES, Ordering::SeqCst);
+                let nretry =
+                    OWN_STEPPER_MENU_OPENED.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "own_stepper: STAGE1d called TitleTopDialog open-menu 0x{:x}(dialog=0x{holder:x}) state_machine=0x{state_machine:x} -> entries should register (zero-input, NO save write)",
+                    "own_stepper: STAGE1d retry #{nretry} open-menu 0x{:x}(dialog=0x{holder:x}) sm=0x{state_machine:x} waits={waits} -- clear-latch+call until entries appear (zero-input, NO save write)",
                     base + TITLE_TOP_DIALOG_OPEN_MENU_RVA
                 ));
             }
         }
-        // Wait for the registered entries to tick: the menu-item Update hook captures the
-        // Load-Game leaf (functor->dialog_factory) as the native pump ticks them. Fallback:
-        // our static tree walk. NO SetState here -> stays at the main menu, save-safe. STAGE 2
-        // (invoke the leaf functor) follows once the live item is confirmed.
-        let waits =
-            OWN_STEPPER_MENU_BUILD_WAITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
-        // Primary: the menu-item Update hook captures the Load-Game item as the native pump
-        // ticks the CSMenu tree (robust, no layout guess). Fallback: our static tree walk.
+        // Wait for the registered entries to tick: the menu-item Update hook + Sequence-iterator
+        // hook capture the Load-Game leaf (functor->dialog_factory) as the native pump ticks
+        // them. Fallback: our static tree walk. NO SetState here -> stays at the main menu,
+        // save-safe. STAGE 2 (invoke the leaf functor) follows once the live item is confirmed.
         let hooked = MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst);
         let found = if hooked != TITLE_OWNER_SCAN_START_ADDRESS {
             Some(hooked)
@@ -3359,6 +3363,21 @@ pub(crate) unsafe extern "system" fn cap_sequence_iter_hook(
     {
         let count = unsafe { safe_read_usize(seq + SEQUENCE_COUNT_60_OFFSET) }
             .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        // Unconditional structural dump (first N calls): what does the iterator walk?
+        let ndbg = SEQ_ITER_DEBUG_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+        if ndbg < SEQ_ITER_DEBUG_MAX {
+            let seq_vt = unsafe { safe_read_usize(seq) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+            let child0 = unsafe { safe_read_usize(seq + SEQUENCE_CHILDREN_BASE_18_OFFSET) }
+                .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+            let child0_vt = if child0 != TITLE_OWNER_SCAN_START_ADDRESS {
+                unsafe { safe_read_usize(child0) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+            } else {
+                TITLE_OWNER_SCAN_START_ADDRESS
+            };
+            append_continue_trace(format_args!(
+                "SEQ-ITER-DBG #{ndbg} seq=0x{seq:x} seqvt=0x{seq_vt:x} count={count} child0=0x{child0:x} child0vt=0x{child0_vt:x}"
+            ));
+        }
         if (SEQUENCE_CHILD_COUNT_MIN..=SEQUENCE_CHILD_COUNT_MAX).contains(&count) {
             let mut i = WALK_START;
             while i < count {
@@ -3376,6 +3395,13 @@ pub(crate) unsafe extern "system" fn cap_sequence_iter_hook(
                             "SEQ-ITER captured LOAD-GAME child=0x{child:x} vt=0x{child_vt:x} seq=0x{seq:x} count={count} idx={i} {chain}"
                         ));
                         break;
+                    }
+                    // A MenuWindowJob child means the main menu actually opened (its entries
+                    // are registered into a Sequence the iterator walks) -- signal the STAGE1d
+                    // retry loop to stop. The title views tick via a different pump, so this
+                    // fires ONLY on the real main-menu entries.
+                    if child_vt == base + MENU_WINDOW_JOB_VTABLE_RVA {
+                        MENU_ENTRIES_SEEN.store(MENU_ENTRIES_SEEN_YES, Ordering::SeqCst);
                     }
                     // Diagnostic: surface distinct MenuWindowJob children (the registered menu
                     // entries, ticking or not) with their docall chain so one run reveals the

@@ -286,11 +286,30 @@ pub(crate) const TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET: usize = 0xa40;
 /// FD4 StateMachine sub-object pointer at [dialog+0xa60]; must be non-null before the
 /// registrar (it drives the state transition through it).
 pub(crate) const TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET: usize = 0xa60;
-/// Low-byte mask to read the [dialog+0xa40] byte latch out of a 4-byte i32 read.
-pub(crate) const TITLE_TOP_DIALOG_OPENED_LATCH_MASK: i32 = 0xff;
-/// One-shot guard: NO = the TitleTopDialog open-menu registrar has not been called yet.
+/// Initial value (0) for the open-menu registrar retry counter.
 pub(crate) const OWN_STEPPER_MENU_OPENED_NO: usize = 0;
-pub(crate) const OWN_STEPPER_MENU_OPENED_YES: usize = 1;
+/// Settle delay (frames) before STAGE1d calls the open-menu registrar. The registrar sets
+/// the latch [dialog+0xa40]=1 UNCONDITIONALLY then does the FD4 state transition + entry
+/// registration; if called before the dialog's state machine has reached the press-prompt
+/// state the registration no-ops yet the latch is set, so our one-shot guard never retries
+/// and the menu never opens (the observed run-to-run fragility). Waiting lets the dialog
+/// reach press-prompt first so the single call reliably registers the entries.
+pub(crate) const STAGE1D_SETTLE_WAITS: u64 = 60;
+/// Retry interval (frames) for the open-menu registrar. A single call only succeeds when the
+/// dialog is in the press-prompt FD4 state that frame; otherwise it no-ops + poisons the latch.
+/// So we CLEAR the latch ([dialog+0xa40]=0) and re-call every interval until main-menu entries
+/// actually appear (MENU_ENTRIES_SEEN), spaced so a successful registration is detected before
+/// the next retry (avoiding a double-build). Stops on success.
+pub(crate) const STAGE1D_RETRY_INTERVAL: u64 = 30;
+/// Cleared value for the [dialog+0xa40] open-menu latch (re-arm a poisoned latch for retry).
+pub(crate) const TITLE_TOP_DIALOG_LATCH_CLEAR: u8 = 0;
+/// Set by cap_sequence_iter_hook when the Sequence iterator first walks a MenuWindowJob child
+/// (vt 0x142aa97e8) -- i.e. the main menu actually opened and its entries are registered. The
+/// retry loop stops once this is set (the title views tick via a different pump, so this fires
+/// ONLY on the real main-menu entries).
+pub(crate) const MENU_ENTRIES_SEEN_NO: usize = 0;
+pub(crate) const MENU_ENTRIES_SEEN_YES: usize = 1;
+pub(crate) static MENU_ENTRIES_SEEN: AtomicUsize = AtomicUsize::new(MENU_ENTRIES_SEEN_NO);
 pub(crate) static OWN_STEPPER_MENU_OPENED: core::sync::atomic::AtomicUsize =
     core::sync::atomic::AtomicUsize::new(OWN_STEPPER_MENU_OPENED_NO);
 /// Sentinel logged when the inner TitleStep owner can no longer be found (the
@@ -602,6 +621,12 @@ pub(crate) const MENU_WINDOW_JOB_VTABLE_RVA: usize = 0x2aa97e8;
 pub(crate) static SEQ_ITER_CHILD_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const SEQ_ITER_CHILD_LOG_MAX: usize = 240;
 pub(crate) static SEQ_ITER_CHILD_LAST: AtomicUsize = AtomicUsize::new(0);
+/// Unconditional structural dump of the first N Sequence-iterator calls (seq vtable, count,
+/// child0 vtable) -- reveals what the iterator actually walks (Sequence vs MenuWindowJob,
+/// real counts) regardless of the count-range gate, to diagnose why no menu-item child was
+/// found. Capped.
+pub(crate) static SEQ_ITER_DEBUG_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const SEQ_ITER_DEBUG_MAX: usize = 80;
 pub(crate) static MENU_ITEM_UPDATE_CAPTURE_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Cap on leaf-hook "distinct item ticked" log lines. A few title/menu items rotate every
 /// frame, so without a cap this floods the size-capped trace and rolls early diagnostics off.
