@@ -767,6 +767,11 @@ pub(crate) static CAP_LOAD_ACTIVATE2_ORIG: AtomicUsize = AtomicUsize::new(HOOK_O
 pub(crate) static CAP_BUILDER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static CAP_SELECTOR_TICK_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static CAP_MENU_DESER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+/// ProfileLoadDialog lambda factory 0x14081ead0 (op-new 0x1cd0 + ctor 0x1409a3d90). Hooking
+/// it with a caller backtrace captures the full construction chain: press-any-key -> main
+/// menu -> "Load Game" activated -> dialog built, plus the rcx/rdx context the factory needs
+/// (so the dialog can be built zero-input in the replay).
+pub(crate) static CAP_DIALOG_FACTORY_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static CAP_SELECTOR_TICK_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const CAP_SELECTOR_TICK_LOG_FIRST: usize = 4;
 pub(crate) const CAP_SELECTOR_TICK_LOG_INTERVAL: usize = 120;

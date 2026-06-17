@@ -2216,6 +2216,7 @@ pub(crate) fn install_continue_trace_hooks() {
         const CAP_BUILDER_RVA: u32 = 0x00826510;
         const CAP_SELECTOR_TICK_RVA: u32 = 0x00826d50;
         const CAP_MENU_DESER_RVA: u32 = 0x0082c240;
+        const CAP_DIALOG_FACTORY_RVA: u32 = 0x0081ead0;
         create_continue_trace_hook(
             &mut hooks,
             "cap_setstate_b0d960",
@@ -2264,6 +2265,13 @@ pub(crate) fn install_continue_trace_hooks() {
             CAP_MENU_DESER_RVA,
             cap_menu_deser_hook as *mut c_void,
             &CAP_MENU_DESER_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "cap_dialog_factory_81ead0",
+            CAP_DIALOG_FACTORY_RVA,
+            cap_dialog_factory_hook as *mut c_void,
+            &CAP_DIALOG_FACTORY_ORIG,
         );
     }
 
@@ -2693,6 +2701,26 @@ pub(crate) unsafe extern "system" fn cap_selector_tick_hook(
         ));
     }
     unsafe { call_cap_original(&CAP_SELECTOR_TICK_ORIG, step, ctx, result, d) }
+}
+
+/// ProfileLoadDialog factory 0x14081ead0(rcx=ctx, rdx): builds the Load-Game dialog when the
+/// main-menu "Load Game" item is activated. The caller backtrace pins the navigation chain.
+pub(crate) unsafe extern "system" fn cap_dialog_factory_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    append_continue_trace(format_args!(
+        "CAP dialog_factory ENTER rcx=0x{a:x} rdx=0x{b:x} {} {}",
+        trace_callers_summary(),
+        b80_mount_trace_summary()
+    ));
+    let ret = unsafe { call_cap_original(&CAP_DIALOG_FACTORY_ORIG, a, b, c, d) };
+    append_continue_trace(format_args!(
+        "CAP dialog_factory LEAVE dialog_this=0x{ret:x}"
+    ));
+    ret
 }
 
 /// Menu deserialize 0x14082c240(this, ctx): the real mount (writes GameMan+0xc30 + char).
