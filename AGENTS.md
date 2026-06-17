@@ -1,15 +1,15 @@
 # Agent Instructions
 
-This project uses **bd** via `$BD_REAL_BIN` (beads) for issue tracking. Run `$BD_REAL_BIN prime` for full workflow context.
+This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `/home/banon/.local/bin/bd`** — do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly always works. Run `/home/banon/.local/bin/bd prime` for full workflow context.
 
 ## Quick Reference
 
 ```bash
-$BD_REAL_BIN ready              # Find available work
-$BD_REAL_BIN show <id>          # View issue details
-$BD_REAL_BIN update <id> --claim  # Claim work atomically
-$BD_REAL_BIN close <id>         # Complete work
-$BD_REAL_BIN dolt push          # Push beads data to remote
+/home/banon/.local/bin/bd ready              # Find available work
+/home/banon/.local/bin/bd show <id>          # View issue details
+/home/banon/.local/bin/bd update <id> --claim  # Claim work atomically
+/home/banon/.local/bin/bd close <id>         # Complete work
+/home/banon/.local/bin/bd dolt push          # Push beads data to remote
 ```
 
 ## Elden Ring Runtime Probe Hygiene
@@ -54,9 +54,9 @@ cp -rf source dest          # NOT: cp -r source dest
 
 ### Rules
 
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+- Use `/home/banon/.local/bin/bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
+- Run `/home/banon/.local/bin/bd prime` for detailed command reference and session close protocol
+- Use `/home/banon/.local/bin/bd remember` for persistent knowledge — do NOT use MEMORY.md files (and to READ a memory use `/home/banon/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
 
 ## Session Completion
 
@@ -70,7 +70,7 @@ cp -rf source dest          # NOT: cp -r source dest
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   $BD_REAL_BIN dolt push
+   /home/banon/.local/bin/bd dolt push
    git push
    git status  # MUST show "up to date with origin"
    ```
