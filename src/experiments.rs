@@ -1529,8 +1529,17 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
                         unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_OPEN_MENU_RVA) };
                     unsafe { open_menu(dialog) };
                     OWN_STEPPER_MENU_OPENED.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+                    // Deterministic timing endpoint: the DLL has driven boot -> modal-skip ->
+                    // past press-any-button -> a READY main menu with ZERO input. ms-from-T0 here
+                    // is the headless boot-to-menu time (the part vanilla needs >=3 human inputs +
+                    // an online-attempt timeout to reach).
+                    timeline_event(
+                        "T_menu_open",
+                        n,
+                        format_args!("dialog=0x{dialog:x} waits={waits}"),
+                    );
                     append_autoload_debug(format_args!(
-                        "own_stepper: STAGE1d self-fire open-menu 0x{:x}(dialog=0x{dialog:x}) -- in Loop + latch clear (correct gate, zero-input, NO save write) waits={waits}",
+                        "own_stepper: STAGE1d self-fire open-menu 0x{:x}(dialog=0x{dialog:x}) -- in Loop + latch clear (correct gate, zero-input) waits={waits}",
                         base + TITLE_TOP_DIALOG_OPEN_MENU_RVA
                     ));
                 }
