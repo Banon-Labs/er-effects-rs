@@ -655,10 +655,10 @@ unsafe fn invoke_menu_item_functor(item: usize) -> Option<usize> {
 unsafe fn diagnostic_job_tree_walk(
     owner: usize,
     module_base: usize,
+    holder_offset: usize,
     tag: &str,
     verbose: bool,
 ) -> Option<usize> {
-    const MENU_JOB_HOLDER_E0: usize = 0xe0;
     const VTABLE_UPDATE_SLOT_10: usize = 0x10;
     const NODE_CHILDREN_BASE_18: usize = 0x18;
     const NODE_COUNT_60: usize = 0x60;
@@ -679,10 +679,10 @@ unsafe fn diagnostic_job_tree_walk(
     let seq_update_abs = module_base + SEQ_UPDATE_RVA;
     let leaf_update_abs = module_base + LEAF_UPDATE_RVA;
 
-    let holder = unsafe { safe_read_usize(owner + MENU_JOB_HOLDER_E0) }.unwrap_or(null);
+    let holder = unsafe { safe_read_usize(owner + holder_offset) }.unwrap_or(null);
     if verbose {
         append_autoload_debug(format_args!(
-            "job-tree[{tag}]: owner=0x{owner:x} holder(owner+0xe0)=0x{holder:x} seq_update=0x{seq_update_abs:x} leaf_update=0x{leaf_update_abs:x}"
+            "job-tree[{tag}]: owner=0x{owner:x} holder(owner+0x{holder_offset:x})=0x{holder:x} seq_update=0x{seq_update_abs:x} leaf_update=0x{leaf_update_abs:x}"
         ));
     }
     if holder == null {
@@ -848,7 +848,15 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         // live layout + item. Every hand-driven b80 lever is dead (the menu async job is the
         // only thing that mounts c30 before PlayGame); this is the Path B menu-drive.
         let bare = unsafe { diagnostic_menu_walk(owner, base, "bare", true) };
-        let bare_tree = unsafe { diagnostic_job_tree_walk(owner, base, "bare-tree", true) };
+        let bare_tree = unsafe {
+            diagnostic_job_tree_walk(
+                owner,
+                base,
+                TITLE_OWNER_MENU_HOLDER_E0_OFFSET,
+                "bare-tree",
+                true,
+            )
+        };
         // STAGE 1c: build the FULL main menu by replicating the engine's OWN press path.
         // The parked press-any-button screen is the FIRST state 10; the native press handler
         // 0x140b0b6b0 issues SetState(owner,2)=BeginLogo, after which the native pump advances
@@ -867,13 +875,27 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         } else {
             TITLE_STEP_BEGIN_TITLE
         };
+        // CRITICAL: STEP_BeginLogo builds the main-menu list (Continue/Load d180/...) into
+        // owner+0xe0 via 0x14081f180 ONLY when [owner+0xb8]==0; if set it short-circuits to
+        // SetState(3) and skips the build (bd mainmenu-item-builder-into-iterator-tree-2026) --
+        // which is why our prior SetState(2) only produced the 3 title-composition items. Clear
+        // the gate so BeginLogo runs the full build (zero-input, menu-UI only -> save-safe).
+        let beginlogo_gate =
+            unsafe { safe_read_usize(owner + TITLE_OWNER_BEGINLOGO_LIST_GATE_B8_OFFSET) }
+                .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        if target_state == TITLE_STEP_BEGIN_LOGO {
+            unsafe {
+                *((owner + TITLE_OWNER_BEGINLOGO_LIST_GATE_B8_OFFSET) as *mut u32) =
+                    TITLE_OWNER_BEGINLOGO_GATE_CLEAR;
+            }
+        }
         let set_state: unsafe extern "system" fn(usize, i32) =
             unsafe { std::mem::transmute(base + TITLE_SET_STATE_RVA) };
         unsafe { set_state(owner, target_state) };
         OWN_STEPPER_MENU_BUILD_WAITS.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
         OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_MENU_BUILD, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "own_stepper: STAGE1c bare-walk done (load_game_138=0x{:x} load_game_tree=0x{:x}) session(0x144588e98)=0x{session:x} -> SetState({target_state}) [{}] to build the FULL main menu zero-input (#{n}) slot={want_slot} gm=0x{gm:x} c30=0x{c30:x} b80={b80}",
+            "own_stepper: STAGE1c bare-walk done (load_game_138=0x{:x} load_game_tree=0x{:x}) session(0x144588e98)=0x{session:x} beginlogo_gate(0xb8)=0x{beginlogo_gate:x} -> SetState({target_state}) [{}] to build the FULL main menu zero-input (#{n}) slot={want_slot} gm=0x{gm:x} c30=0x{c30:x} b80={b80}",
             bare.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS),
             bare_tree.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS),
             if target_state == TITLE_STEP_BEGIN_LOGO {
@@ -1006,15 +1028,51 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         // them. Fallback: our static tree walk. NO SetState here -> stays at the main menu,
         // save-safe. STAGE 2 (invoke the leaf functor) follows once the live item is confirmed.
         let hooked = MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst);
+        // Search BOTH the owner+0x130 BeginLogo commit target (where the main-menu list with d180
+        // actually lands, per the commit fn 0x140b0e530) AND owner+0xe0 (the dialog holder).
         let found = if hooked != TITLE_OWNER_SCAN_START_ADDRESS {
             Some(hooked)
         } else {
-            unsafe { diagnostic_job_tree_walk(owner, base, "built-tree", false) }
+            unsafe {
+                diagnostic_job_tree_walk(
+                    owner,
+                    base,
+                    TITLE_OWNER_MENU_LIST_130_OFFSET,
+                    "list130",
+                    false,
+                )
+            }
+            .or_else(|| unsafe {
+                diagnostic_job_tree_walk(
+                    owner,
+                    base,
+                    TITLE_OWNER_MENU_HOLDER_E0_OFFSET,
+                    "built-tree",
+                    false,
+                )
+            })
         };
         match found {
             Some(item) => {
                 let _ = unsafe { diagnostic_menu_walk(owner, base, "built-138", true) };
-                let _ = unsafe { diagnostic_job_tree_walk(owner, base, "built-tree", true) };
+                let _ = unsafe {
+                    diagnostic_job_tree_walk(
+                        owner,
+                        base,
+                        TITLE_OWNER_MENU_LIST_130_OFFSET,
+                        "list130",
+                        true,
+                    )
+                };
+                let _ = unsafe {
+                    diagnostic_job_tree_walk(
+                        owner,
+                        base,
+                        TITLE_OWNER_MENU_HOLDER_E0_OFFSET,
+                        "built-tree",
+                        true,
+                    )
+                };
                 append_autoload_debug(format_args!(
                     "own_stepper: STAGE1b LOAD-GAME item identified=0x{item:x} after {waits} waits -- STAGE 2 (functor invoke) PENDING; staying at main menu (NO-WRITE) c30=0x{c30:x} b80={b80}"
                 ));
@@ -1024,7 +1082,22 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
                 if waits >= OWN_STEPPER_MENU_BUILD_WAIT_MAX {
                     let _ = unsafe { diagnostic_menu_walk(owner, base, "built138-timeout", true) };
                     let _ = unsafe {
-                        diagnostic_job_tree_walk(owner, base, "built-tree-timeout", true)
+                        diagnostic_job_tree_walk(
+                            owner,
+                            base,
+                            TITLE_OWNER_MENU_LIST_130_OFFSET,
+                            "list130-timeout",
+                            true,
+                        )
+                    };
+                    let _ = unsafe {
+                        diagnostic_job_tree_walk(
+                            owner,
+                            base,
+                            TITLE_OWNER_MENU_HOLDER_E0_OFFSET,
+                            "built-tree-timeout",
+                            true,
+                        )
                     };
                     append_autoload_debug(format_args!(
                         "own_stepper: STAGE1b menu-build TIMEOUT after {waits} waits -- Load-Game item not found; staying at title (NO-WRITE)"

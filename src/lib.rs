@@ -258,6 +258,23 @@ pub(crate) const TITLE_STEP_MENU_JOB_WAIT: i32 = 10;
 /// game's own SetState, not input synthesis). CAVEAT: STEP_BeginLogo hard-asserts the session
 /// singleton 0x144588e98 at entry (0x140b0c2c3); only SetState(2) when that is non-null.
 pub(crate) const TITLE_STEP_BEGIN_LOGO: i32 = 2;
+/// STEP_BeginLogo list-build gate at [owner+0xb8]. STEP_BeginLogo 0x140b0c2a0 builds the FULL
+/// main-menu list (Continue / Load-Game d180 / New Game / Settings / Quit) into owner+0xe0 via
+/// the list builder 0x14081f180 ONLY when [owner+0xb8]==0; if it is SET, BeginLogo short-circuits
+/// (@0x140b0c356) straight to SetState(3) and SKIPS the list build -- producing only the 3 title
+/// composition items (BackScreen/Caption/dialog). That is why our prior SetState(2) never built
+/// the main menu. We clear this gate before SetState(2) so BeginLogo runs the full build
+/// (zero-input, menu-UI only -> save-safe). bd mainmenu-item-builder-into-iterator-tree-2026.
+pub(crate) const TITLE_OWNER_BEGINLOGO_LIST_GATE_B8_OFFSET: usize = 0xb8;
+/// Cleared value (0) for the BeginLogo list-build gate [owner+0xb8].
+pub(crate) const TITLE_OWNER_BEGINLOGO_GATE_CLEAR: u32 = 0;
+/// owner+0xe0 = the menu-job/dialog holder (CS::TitleTopDialog built by BeginTitle).
+pub(crate) const TITLE_OWNER_MENU_HOLDER_E0_OFFSET: usize = 0xe0;
+/// owner+0x130 = where STEP_BeginLogo COMMITS the main-menu list (Continue/Load d180/NewGame).
+/// Decoded from the commit fn 0x140b0e530: `lea rcx,[owner+0x130]; call 0x1407a9460` stores the
+/// 0x14081f180-built list there, then SetState(owner,10). So the Load-Game d180 item lives under
+/// owner+0x130, NOT owner+0xe0 -- walk this to find/invoke it.
+pub(crate) const TITLE_OWNER_MENU_LIST_130_OFFSET: usize = 0x130;
 /// Session singleton 0x144588e98 (RVA = abs - base). Asserted by STEP_BeginLogo(2) and the
 /// MoveMapListStep load menu. Built by the boot/session bootstrap (may be non-null at the
 /// splash-skipped parked title -- UNVERIFIED, hence read it live before SetState(2)).
