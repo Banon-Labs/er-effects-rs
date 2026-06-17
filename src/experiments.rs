@@ -1134,75 +1134,6 @@ unsafe fn diagnostic_job_tree_walk(
     load_game
 }
 
-/// In-process menu-input driver: inject Down taps into the keystate bitmap (inputmgr+0x90) to
-/// navigate the main-menu cursor onto the Load-Game item d180 (which surfaces it so the capture
-/// hooks grab it). NO host input, NO window focus -- it writes the game's OWN input bitmap each
-/// frame (edge-triggered: SET for a couple frames, then a gap, = one cursor step per cycle). Does
-/// NOT inject Confirm (STAGE 2 invokes d180's functor directly once captured), so it can never
-/// activate a wrong menu item (no New-Game / save-write risk). Logs the live cursor (diagnostic).
-/// Returns true once d180 is captured.
-unsafe fn menu_input_drive(owner: usize, base: usize) -> bool {
-    let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let lg = MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst);
-    let inputmgr =
-        unsafe { safe_read_usize(base + SELECTBOT_INPUT_MANAGER_GLOBAL_RVA) }.unwrap_or(null);
-    let en = MENU_DRIVE_ENTER_LOG.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
-    if en < MENU_DRIVE_ENTER_LOG_MAX {
-        append_autoload_debug(format_args!(
-            "own_stepper: menu-input-drive ENTER #{en} inputmgr=0x{inputmgr:x} load_game=0x{lg:x} base=0x{base:x} block={}",
-            block_input_enabled()
-        ));
-    }
-    if lg != null {
-        return true;
-    }
-    if inputmgr == null {
-        return false;
-    }
-    let frame = MENU_NAV_FRAME.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
-    let cycle = frame / MENU_TAP_CYCLE_FRAMES;
-    let in_cycle = frame % MENU_TAP_CYCLE_FRAMES;
-    if cycle >= MENU_NAV_MAX_TAPS {
-        return false; // exhausted; let the d180-search fall through to its timeout
-    }
-    // Inject the Down move (both candidate event ids) during the SET window of each cycle.
-    if in_cycle < MENU_TAP_SET_FRAMES {
-        unsafe {
-            *((inputmgr + INPUTMGR_BITMAP_90_OFFSET + MENU_EVENT_MOVE_A_00) as *mut u8) |=
-                MENU_EVENT_PRESSED_BIT;
-            *((inputmgr + INPUTMGR_BITMAP_90_OFFSET + MENU_EVENT_MOVE_B_45) as *mut u8) |=
-                MENU_EVENT_PRESSED_BIT;
-        }
-    }
-    // Diagnostic once per cycle: live cursor candidates (find the list object + confirm movement).
-    if in_cycle == null as u64 {
-        let holder = unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_LIST_130_OFFSET) }
-            .unwrap_or(null);
-        let cur_inline = unsafe {
-            safe_read_usize(owner + TITLE_OWNER_MENU_LIST_130_OFFSET + MENU_LIST_CURSOR_D4_OFFSET)
-        }
-        .map(|v| v as u32 as i32)
-        .unwrap_or(OWN_STEPPER_SLOT_NONE);
-        let (cur_holder, cnt_holder) = if holder != null {
-            (
-                unsafe { safe_read_usize(holder + MENU_LIST_CURSOR_D4_OFFSET) }
-                    .map(|v| v as u32 as i32)
-                    .unwrap_or(OWN_STEPPER_SLOT_NONE),
-                unsafe { safe_read_usize(holder + MENU_LIST_COUNT_D0_OFFSET) }
-                    .map(|v| v as u32 as i32)
-                    .unwrap_or(OWN_STEPPER_SLOT_NONE),
-            )
-        } else {
-            (OWN_STEPPER_SLOT_NONE, OWN_STEPPER_SLOT_NONE)
-        };
-        append_autoload_debug(format_args!(
-            "own_stepper: menu-input-drive Down-tap #{cycle} inputmgr=0x{inputmgr:x} holder(owner+0x130)=0x{holder:x} cursor[+0x130+0xd4]={cur_inline} cursor[holder+0xd4]={cur_holder} count[holder+0xd0]={cnt_holder} load_game=0x{:x}",
-            MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst)
-        ));
-    }
-    false
-}
-
 /// OWN-THE-STEPPER step 2 (the load driver): runs IN-CONTEXT at idx10 (STEP_MenuJobWait,
 /// rcx=owner, rdx=FD4Time) as a real FD4 step. After letting the boot settle to the
 /// stable press-any-button state, it drives the game's OWN load: SetState(3=BeginTitle)
@@ -1448,15 +1379,69 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             pass_through(false);
             return;
         }
-        // IN-PROCESS MENU NAVIGATION (primary): SetState(2)=BeginLogo already built the full main
-        // menu (Continue/Load d180/New-Game) into owner+0x130. d180 is input-gated -- it only ticks
-        // once the cursor is ON it. Inject Down taps into the game's input bitmap (inputmgr+0x90,
-        // no host input / no window focus) to move the cursor onto Load Game; the capture hooks
-        // then set MENU_LOAD_GAME_ITEM and the search below advances to STAGE 2. We never inject
-        // Confirm (STAGE 2 invokes d180's functor), so no wrong-item activation. Skip in passive
-        // mode (the user navigates). The STAGE1d self-fire below is now a fallback (gated off).
-        if !own_stepper_passive_enabled() {
-            unsafe { menu_input_drive(owner, base) };
+        // ZERO-INPUT d180 LOCATE (replaces the old simulated-input cursor nav, which wrote the
+        // keystate bitmap inputmgr+0x90 to move the cursor onto Load-Game -- that is synthesized
+        // input and VIOLATES the No-Compromises zero-input standard). SetState(2)->3->10 builds the
+        // main-menu job tree; the Load-Game item d180 (a MenuWindowJob whose +0xa8 functor's
+        // _Do_call chains to dialog_factory 0x14081ead0) is constructed into the tree at BUILD time,
+        // so a pure-read recursive walk can surface it WITHOUT the pump ticking it and WITHOUT any
+        // input. A user-driven capture (2026-06-17) pinned d180's functor object = {_Func_impl
+        // vtable 0x142ac3ea8, captured owner+0x138}; the factory reads [capture+8]=owner+0x138 as
+        // the dialog owner. We walk the candidate holder roots and, on the first functor->factory
+        // hit, latch the item into MENU_LOAD_GAME_ITEM so STAGE 2 drives the load. (The
+        // cap_menu_item_update hook also sets it if d180 ever ticks; whichever fires first wins.)
+        // Throttled; pure reads -> save-safe.
+        const D180_ROOT_E0: usize = 0xe0;
+        const D180_ROOT_130: usize = 0x130;
+        const D180_ROOT_138: usize = 0x138;
+        if !own_stepper_passive_enabled()
+            && MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS
+            && waits >= STAGE1D_SETTLE_WAITS
+            && (waits - STAGE1D_SETTLE_WAITS) % STAGE1D_RETRY_INTERVAL
+                == TITLE_OWNER_SCAN_START_ADDRESS as u64
+        {
+            // LOCATE-AND-LOG ONLY (first-pass diagnostic): we do NOT yet store into
+            // MENU_LOAD_GAME_ITEM, because driving STAGE 2 on a found-but-UNWIRED d180 (item+0x10
+            // ctx == 0) would feed dialog_factory a null ctx -> AV. First confirm d180 is reachable
+            // by a pure-read headless walk and dump its field state (functor/ctx/result); once
+            // confirmed, the safe drive is to call the native MenuWindowJob::Update (which wires
+            // item+0x10 before firing the functor), not a bare functor invoke.
+            const ITEM_FUNCTOR_A8: usize = 0xa8;
+            const ITEM_CTX_10: usize = 0x10;
+            const ITEM_RESULT_130: usize = 0x130;
+            let verbose = OWN_STEPPER_TITLETOP_DUMPS
+                .fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+                < OWN_STEPPER_TITLETOP_DUMP_CAP;
+            let roots = [D180_ROOT_E0, D180_ROOT_130, D180_ROOT_138];
+            for &root in roots.iter() {
+                if let Some(item) =
+                    unsafe { diagnostic_job_tree_walk(owner, base, root, "d180-locate", verbose) }
+                {
+                    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+                    let functor =
+                        unsafe { safe_read_usize(item + ITEM_FUNCTOR_A8) }.unwrap_or(null);
+                    let fvt = if functor != null {
+                        unsafe { safe_read_usize(functor) }.unwrap_or(null)
+                    } else {
+                        null
+                    };
+                    let fcap = if functor != null {
+                        unsafe { safe_read_usize(functor + core::mem::size_of::<usize>()) }
+                            .unwrap_or(null)
+                    } else {
+                        null
+                    };
+                    let ctx10 = unsafe { safe_read_usize(item + ITEM_CTX_10) }.unwrap_or(null);
+                    let res130 =
+                        unsafe { safe_read_usize(item + ITEM_RESULT_130) }.unwrap_or(null);
+                    append_autoload_debug(format_args!(
+                        "own_stepper: ZERO-INPUT d180 LOCATED item=0x{item:x} via owner+0x{root:x} functor=0x{functor:x} fvt=0x{fvt:x}(want base+0x2ac3ea8) fcap=0x{fcap:x}(want owner+0x138=0x{:x}) ctx10=0x{ctx10:x} result130=0x{res130:x} -- LOCATE-ONLY (no drive yet)"
+                    ,
+                        owner.wrapping_add(D180_ROOT_138)
+                    ));
+                    break;
+                }
+            }
         }
         // STAGE 1d: open the main menu zero-input. SetState(2)->3->10 built the TitleTopDialog at
         // owner+0xe0 (vt 0x142b26468). The dialog's native update 0x1409aac10 (ticked every frame
