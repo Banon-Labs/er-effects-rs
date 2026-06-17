@@ -1135,6 +1135,41 @@ pub(crate) static MENU_NAV_FRAME: AtomicUsize = AtomicUsize::new(0);
 /// before any early return, so we can see the inputmgr value + capture state).
 pub(crate) static MENU_DRIVE_ENTER_LOG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const MENU_DRIVE_ENTER_LOG_MAX: usize = 8;
+// ============================================================================================
+// DETERMINISTIC MENU INPUT PROBE (instrumentation oracle, er-effects-input-probe.txt). After the
+// menu opens, inject a single Down tap (Continue->Load Game) at a KNOWN frame, observe a window
+// with NO further input, then inject Confirm at a KNOWN frame. Because WE choose the inject
+// frames, the decisive question is frame-precise: does the Load-Game leaf d180 tick its leaf
+// Update (0x1407ad1c0 -> MENU_D180_LEAF_TICKED grows) on HIGHLIGHT alone (between Down and
+// Confirm), or only at Confirm? This is targeted input used as a MEASUREMENT (NOT the zero-input
+// deliverable); the Confirm drives the native load so the full chain is captured at a known frame.
+// ============================================================================================
+/// Probe frame counter (per own_stepper idx10 call, starting when the probe first runs after the
+/// menu opens). Schedule below is in these frames.
+pub(crate) static INPUT_PROBE_FRAME: AtomicUsize = AtomicUsize::new(0);
+/// Set to 1 once the probe is active so the hot menu hooks can cheaply enable the extra
+/// leaf-tick accounting (MENU_D180_LEAF_TICKED) without a per-frame file-exists check.
+pub(crate) static INPUT_PROBE_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+/// One-shot latch: set when the d180 leaf tick is observed during the HIGHLIGHT window (decisive).
+pub(crate) static INPUT_PROBE_D180_PRECONFIRM: AtomicUsize = AtomicUsize::new(0);
+/// Snapshot of MENU_D180_LEAF_TICKED captured at the Down-inject frame; HIGHLIGHT growth is
+/// measured strictly above this baseline.
+pub(crate) static INPUT_PROBE_DOWN_LEAF_BASELINE: AtomicUsize = AtomicUsize::new(0);
+/// Count of genuine d180 leaf-Update ticks (bumped ONLY by cap_menu_item_update_hook when the
+/// ticked item classifies to dialog_factory). Distinct from MENU_LOAD_GAME_ITEM, which the static
+/// sequence-iter walk can also set without d180 actually ticking.
+pub(crate) static MENU_D180_LEAF_TICKED: AtomicUsize = AtomicUsize::new(0);
+/// Frame to begin the single Down injection (settle the opened menu first).
+pub(crate) const INPUT_PROBE_DOWN_START: u64 = 120;
+/// Assert the move bit for this many consecutive frames = one clean edge (one cursor step).
+pub(crate) const INPUT_PROBE_DOWN_TAP_FRAMES: u64 = 2;
+/// Observation window AFTER the Down, with NO input, before the Confirm injection.
+pub(crate) const INPUT_PROBE_HIGHLIGHT_FRAMES: u64 = 180;
+/// Frame to begin the Confirm injection (= Down end + highlight window).
+pub(crate) const INPUT_PROBE_CONFIRM_START: u64 =
+    INPUT_PROBE_DOWN_START + INPUT_PROBE_DOWN_TAP_FRAMES + INPUT_PROBE_HIGHLIGHT_FRAMES;
+pub(crate) const INPUT_PROBE_CONFIRM_TAP_FRAMES: u64 = 2;
+pub(crate) const INPUT_PROBE_LOG_INTERVAL: u64 = 20;
 /// "result emitted / closing" latch, set =1 by EmitResult once the dialog begins teardown. We
 /// stop calling OnDecide once this is set (avoids re-dispatch / UAF after teardown).
 pub(crate) const MSGBOX_CLOSING_LATCH_3B0_OFFSET: usize = 0x3b0;
@@ -1298,6 +1333,39 @@ pub(crate) static CAP_MENU_DESER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGI
 /// menu -> "Load Game" activated -> dialog built, plus the rcx/rdx context the factory needs
 /// (so the dialog can be built zero-input in the replay).
 pub(crate) static CAP_DIALOG_FACTORY_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+/// Title CSMenu-controller ("router_this") ctor 0x1409060d8: installs the controller vtable
+/// (runtime 0x142afa070) and the +0x1290 selectable-row vector. Hooking it captures the live
+/// router_this -- the object that owns the Continue/Load-Game/NewGame rows -- which is NOT
+/// field-linked from the TitleTopDialog (a dialog-struct scan misses it). Latched into
+/// MENU_ROUTER_THIS so the own-stepper can read its rows + drive the Load-Game select zero-input.
+pub(crate) static CAP_CSMENU_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static CAP_CSMENU_CTOR_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const CAP_CSMENU_CTOR_LOG_FIRST: usize = 8;
+/// The captured title CSMenu controller (router_this). 0 until its ctor 0x1409060d8 latches it.
+pub(crate) static MENU_ROUTER_THIS: AtomicUsize = AtomicUsize::new(0);
+/// The title-menu "Load Game" ROW entry (stride-0x210 row whose action functor [entry+0xf8]
+/// chains to dialog_factory 0x14081ead0). Captured by the row-push hook's post-build scan. Its
+/// layout is the CSMenu-row layout (action at +0xf8), DISTINCT from the FD4 MenuWindowJob d180
+/// (+0xa8). Invoking its action builds the ProfileLoadDialog zero-input.
+pub(crate) static MENU_LOADGAME_ROW_ENTRY: AtomicUsize = AtomicUsize::new(0);
+/// The matching "Continue" row entry (action -> continue_confirm 0x140b0e180), for reference.
+pub(crate) static MENU_CONTINUE_ROW_ENTRY: AtomicUsize = AtomicUsize::new(0);
+/// router_this ctor RVA and its installed (runtime) primary vtable RVA (= base+this at runtime;
+/// on-disk objdump shows 0x2af9270, +0xe00 dump/PE skew).
+pub(crate) const CSMENU_CTOR_RVA: u32 = 0x009060d8;
+pub(crate) const ROUTER_THIS_VTABLE_RVA: usize = 0x02afa070;
+/// Row-push functions (RELIABLE .text RVAs, no .rdata skew): rebuild_rows 0x14078d2c0 (bulk
+/// emplace) and append_one 0x14078eea0 (single). If EITHER fires headless the Continue/Load rows
+/// ARE materialized zero-input (and rcx reaches router_this); if NEITHER fires the interactive
+/// menu controller is input-instantiated (the architectural floor). rcx = list-model container;
+/// [container+8] = router_this back-ptr.
+pub(crate) static CAP_REBUILD_ROWS_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static CAP_APPEND_ONE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static CAP_ROW_PUSH_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const CAP_ROW_PUSH_LOG_FIRST: usize = 12;
+pub(crate) const REBUILD_ROWS_RVA: u32 = 0x0078d2c0;
+pub(crate) const APPEND_ONE_RVA: u32 = 0x0078eea0;
+pub(crate) const ROW_CONTAINER_BACKPTR_8: usize = 0x8;
 pub(crate) static CAP_SELECTOR_TICK_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const CAP_SELECTOR_TICK_LOG_FIRST: usize = 4;
 pub(crate) const CAP_SELECTOR_TICK_LOG_INTERVAL: usize = 120;

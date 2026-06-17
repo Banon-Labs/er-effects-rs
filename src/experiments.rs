@@ -391,6 +391,19 @@ pub(crate) fn own_stepper_passive_enabled() -> bool {
             .exists()
 }
 
+/// DETERMINISTIC MENU INPUT PROBE (er-effects-input-probe.txt / ER_EFFECTS_INPUT_PROBE). After the
+/// menu opens, inject one Down tap then (after an observation window) one Confirm tap, at frames WE
+/// choose -- so we know exactly the frame to break on. Decisive question: does the Load-Game leaf
+/// d180 tick its leaf Update on HIGHLIGHT alone (Down, no Confirm yet), or only at Confirm? Targeted
+/// input used purely as a MEASUREMENT oracle (NOT the zero-input deliverable).
+pub(crate) fn input_probe_enabled() -> bool {
+    matches!(std::env::var("ER_EFFECTS_INPUT_PROBE").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-input-probe.txt")
+            .exists()
+}
+
 /// AUTO-CONFIRM observe mode (er-effects-auto-confirm.txt): drive the game's OWN natural title
 /// flow with Confirm input-taps so we can finally observe the view PAST the modal. No SetState
 /// forcing, no input block, no custom dismiss -- just the press the game polls for.
@@ -732,13 +745,51 @@ unsafe fn dump_titletop_menu_entries(owner: usize, base: usize) -> (Option<usize
         ));
         return (None, None, cursor);
     }
-    let menu = dialog + MENU_SUBOBJ_A38;
-    let vec_begin = unsafe { safe_read_usize(menu + ENTRY_VEC_BEGIN_1290) }.unwrap_or(NULL);
-    let vec_end = unsafe { safe_read_usize(menu + ENTRY_VEC_END_1298) }.unwrap_or(NULL);
-    let bound = ri32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET);
+    // The selectable-row vector does NOT live on the TitleTopDialog -- [dialog+0x1290] is GFx
+    // markup text (runtime read = ASCII). The rows live on a SEPARATE title CSMenu controller
+    // ("router_this", runtime vtable base+0x2afa070, ctor 0x1409060d8): the select router
+    // 0x14078e1c0 calls the resolver 0x14078fbd0 with rcx=router_this, reading [router_this+0x1290]
+    // /[+0x1298] (stride 0x210); cursor [+0xb0c], bound [+0xb08]. Locate router_this by scanning
+    // the TitleTopDialog's fields for a pointer to an object whose [0] == that vtable. Pure reads
+    // (safe_read_usize tolerates bad derefs) -> save-safe.
+    const ROUTER_VTABLE_RVA: usize = 0x02afa070;
+    const ROUTER_SCAN_QWORDS: usize = 0x400;
+    const PTR_ALIGN_MASK: usize = 0x7;
+    const QW_START: usize = 0;
+    const QW_STEP: usize = 1;
+    const PTR_SZ: usize = 8;
+    let router_vt = base + ROUTER_VTABLE_RVA;
+    // Prefer the ctor-latched router_this (cap_csmenu_ctor_hook captures it at construction --
+    // it is NOT field-linked from the TitleTopDialog). Fall back to a dialog-field scan.
+    let mut router_this = MENU_ROUTER_THIS.load(Ordering::SeqCst);
+    if router_this == NULL {
+        let mut q = QW_START;
+        while q < ROUTER_SCAN_QWORDS {
+            let p = unsafe { safe_read_usize(dialog + q * PTR_SZ) }.unwrap_or(NULL);
+            if p != NULL
+                && (p & PTR_ALIGN_MASK) == QW_START
+                && unsafe { safe_read_usize(p) }.unwrap_or(NULL) == router_vt
+            {
+                router_this = p;
+                break;
+            }
+            q += QW_STEP;
+        }
+    }
+    if router_this == NULL {
+        append_autoload_debug(format_args!(
+            "titletop-entries: dialog=0x{dialog:x} -- router_this (CSMenu vt=0x{router_vt:x}) NOT found in dialog fields; cursor={cursor} (rows unreachable via this path)"
+        ));
+        return (None, None, cursor);
+    }
+    let menu = router_this + MENU_SUBOBJ_A38;
+    let cursor = ri32(router_this + DIALOG_SLOT_CURSOR_B0C_OFFSET);
+    let vec_begin = unsafe { safe_read_usize(router_this + ENTRY_VEC_BEGIN_1290) }.unwrap_or(NULL);
+    let vec_end = unsafe { safe_read_usize(router_this + ENTRY_VEC_END_1298) }.unwrap_or(NULL);
+    let bound = ri32(router_this + DIALOG_SLOT_BOUND_B08_OFFSET);
     if vec_begin == NULL || vec_end <= vec_begin {
         append_autoload_debug(format_args!(
-            "titletop-entries: dialog=0x{dialog:x} menu=0x{menu:x} vec=[0x{vec_begin:x}..0x{vec_end:x}] EMPTY -- entries not realized; cursor={cursor} bound={bound}"
+            "titletop-entries: router_this=0x{router_this:x} vec=[0x{vec_begin:x}..0x{vec_end:x}] EMPTY -- rows NOT populated headless; cursor={cursor} bound={bound}"
         ));
         return (None, None, cursor);
     }
@@ -858,6 +909,37 @@ unsafe fn invoke_menu_item_functor(item: usize) -> Option<usize> {
         unsafe { std::mem::transmute(do_call) };
     let ctx_out = item + ITEM_CTX_10;
     Some(unsafe { f(functor, ctx_out) })
+}
+
+/// Drive the NATIVE MenuWindowJob::Update 0x1407ad1c0(rcx=item, rdx=&out, r8=framectx) once to
+/// BUILD the item's dialog the way the game does. Unlike a bare functor invoke, the native Update
+/// WIRES the ctx (item+0x10) from the descriptor (item+0x58 -> resolved window item+0x68 via
+/// 0x140d6a8e0 + window-mgr 0x143d83148) BEFORE firing the functor -- so it needs NO synthetic ctx
+/// (the prior wall). It is idempotent (returns early if item+0x130 already holds a dialog) and the
+/// Load-Game item only builds a ProfileLoadDialog -> BUILD-ONLY, no save write. Guarded by the
+/// native BUILD precondition (mirrors 0x1407ad1ec/1fa/208): [item+0x130]==0 && [item+0xa8]!=0 &&
+/// [item+0x10]==0. `framectx` is the live FD4Time passed to our idx10 step (the same ctx the native
+/// pump feeds the leaf). Returns the built dialog at [item+0x130], if any.
+unsafe fn drive_menu_item_update(item: usize, base: usize, framectx: usize) -> Option<usize> {
+    const ITEM_FUNCTOR_A8: usize = 0xa8;
+    const ITEM_CTX_10: usize = 0x10;
+    const ITEM_RESULT_130: usize = 0x130;
+    const OUT_ZERO: u64 = 0;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let functor = unsafe { safe_read_usize(item + ITEM_FUNCTOR_A8) }?;
+    let ctx = unsafe { safe_read_usize(item + ITEM_CTX_10) }?;
+    let pre130 = unsafe { safe_read_usize(item + ITEM_RESULT_130) }?;
+    // Native BUILD precondition: dialog not yet built, functor present, ctx not yet wired.
+    if functor == null || ctx != null || pre130 != null {
+        return None;
+    }
+    let update: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(base + MENU_ITEM_UPDATE_RVA as usize) };
+    // 16-byte writable StepResult out-slot ([0]=status, [4]=payload) the leaf Update writes.
+    let mut out = [OUT_ZERO, OUT_ZERO];
+    let _ = unsafe { update(item, out.as_mut_ptr() as usize, framectx) };
+    let _ = &out;
+    unsafe { safe_read_usize(item + ITEM_RESULT_130) }.filter(|&d| d != null)
 }
 
 /// Decode a single-child FD4 job decorator's forwarded-child offset from its Update fn
@@ -1062,25 +1144,28 @@ unsafe fn diagnostic_job_tree_walk(
                 stack.push((wrap_child, depth + WALK_STEP));
             }
         } else if depth < MAX_DEPTH && is_ifelse {
-            // IfElseJob: enqueue every entry's pre-built child job + the default + the
-            // runtime-active child. Pure reads (we never call the entry predicates), so this
-            // surfaces d180 whichever branch it lives in, with or without a pump.
-            if (COUNT_MIN..=COUNT_MAX).contains(&ife_count) {
-                let mut i = WALK_START;
-                while i < ife_count {
-                    let entry_job = unsafe {
-                        safe_read_usize(
-                            node + NODE_CHILDREN_BASE_18
-                                + i * IFELSE_ENTRY_STRIDE_10
-                                + IFELSE_ENTRY_JOB_8,
-                        )
+            // IfElseJob (selector 0x140793390): a case vector at [node+0x18], stride 0x10, each
+            // case = {predicate@+0, child_job@+0x8}; the main-menu branch (holding d180) binds its
+            // child to [node+0xb0] ONLY when its input-gated predicate flips (so headless d180 is
+            // present-but-unbound). The case COUNT offset is ambiguous across memos (+0xa0 vs +0x88
+            // = capacity vs size), so rather than trust a count we do a bounded LAYOUT-AGNOSTIC
+            // scan of the case slots and enqueue every child_job (and predicate slot) that points
+            // at an in-module job object -- this reaches d180's case child whether or not its
+            // branch is bound, with no pump. Pure reads; visited-set + node budget bound it.
+            let _ = (ife_count, IFELSE_COUNT_A0, COUNT_MIN, IFELSE_ENTRY_JOB_8);
+            let mut i = WALK_START;
+            while i < COUNT_MAX {
+                let case = node + NODE_CHILDREN_BASE_18 + i * IFELSE_ENTRY_STRIDE_10;
+                for slot in [WALK_START, IFELSE_ENTRY_JOB_8] {
+                    let child = unsafe { safe_read_usize(case + slot) }.unwrap_or(null);
+                    if child != null && child != node {
+                        let cvt = unsafe { safe_read_usize(child) }.unwrap_or(null);
+                        if in_module(cvt) {
+                            stack.push((child, depth + WALK_STEP));
+                        }
                     }
-                    .unwrap_or(null);
-                    if entry_job != null {
-                        stack.push((entry_job, depth + WALK_STEP));
-                    }
-                    i += WALK_STEP;
                 }
+                i += WALK_STEP;
             }
             if ife_default != null {
                 stack.push((ife_default, depth + WALK_STEP));
@@ -1132,6 +1217,102 @@ unsafe fn diagnostic_job_tree_walk(
         ));
     }
     load_game
+}
+
+/// DETERMINISTIC MENU INPUT PROBE driver. Runs each frame (in PHASE_MENU_BUILD, after the menu is
+/// open) when `input_probe_enabled()`. Schedule (probe-frame `f`, see lib.rs consts):
+///   [0, DOWN_START)                 SETTLE   -- baseline, no input (rows empty headless?)
+///   [DOWN_START, +DOWN_TAP_FRAMES)  DOWN     -- inject one Down (Continue->Load Game)
+///   [DOWN_START, CONFIRM_START)     HIGHLIGHT-- NO input; watch MENU_D180_LEAF_TICKED grow?
+///   [CONFIRM_START, +CONFIRM_TAP)   CONFIRM  -- inject Confirm; native load fires (captured)
+/// The decisive signal is whether the genuine d180 leaf-Update tick count grows during HIGHLIGHT
+/// (before Confirm). Pure reads + the two keystate-bit writes; no SetState here (the Confirm drives
+/// the native load). `dump_titletop_menu_entries` logs the live router_this row vector each interval.
+unsafe fn menu_input_probe(owner: usize, base: usize) {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    INPUT_PROBE_ACTIVE.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    let inputmgr =
+        unsafe { safe_read_usize(base + SELECTBOT_INPUT_MANAGER_GLOBAL_RVA) }.unwrap_or(NULL);
+    let f = INPUT_PROBE_FRAME.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
+    let item = MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst);
+    let leaf_ticks = MENU_D180_LEAF_TICKED.load(Ordering::SeqCst);
+
+    let in_down = f >= INPUT_PROBE_DOWN_START
+        && f < INPUT_PROBE_DOWN_START + INPUT_PROBE_DOWN_TAP_FRAMES;
+    let in_highlight = f >= INPUT_PROBE_DOWN_START && f < INPUT_PROBE_CONFIRM_START;
+    let in_confirm = f >= INPUT_PROBE_CONFIRM_START
+        && f < INPUT_PROBE_CONFIRM_START + INPUT_PROBE_CONFIRM_TAP_FRAMES;
+
+    if inputmgr != NULL {
+        if in_down {
+            // Inject BOTH vertical-move events (one is Down, one Up; Up saturates at the top so
+            // from Continue only Down moves -> lands on Load Game). Edge-triggered &1.
+            unsafe {
+                *((inputmgr + INPUTMGR_BITMAP_90_OFFSET + MENU_EVENT_MOVE_A_00) as *mut u8) |=
+                    MENU_EVENT_PRESSED_BIT;
+                *((inputmgr + INPUTMGR_BITMAP_90_OFFSET + MENU_EVENT_MOVE_B_45) as *mut u8) |=
+                    MENU_EVENT_PRESSED_BIT;
+            }
+        }
+        if in_confirm {
+            unsafe {
+                *((inputmgr + INPUTMGR_BITMAP_90_OFFSET + MENU_EVENT_CONFIRM_3D) as *mut u8) |=
+                    MENU_EVENT_PRESSED_BIT;
+            }
+        }
+    }
+
+    // DECISIVE one-shot: d180's leaf Update ticked during the highlight window (after Down, before
+    // Confirm). Snapshot taken at DOWN_START; any growth here means highlight ALONE ticks d180.
+    if in_highlight
+        && leaf_ticks > INPUT_PROBE_DOWN_LEAF_BASELINE.load(Ordering::SeqCst)
+        && INPUT_PROBE_D180_PRECONFIRM.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst) == NULL
+    {
+        let (l, c, cur) = unsafe { dump_titletop_menu_entries(owner, base) };
+        append_autoload_debug(format_args!(
+            "INPUT-PROBE: *** d180 LEAF-TICKED during HIGHLIGHT (pre-confirm) f={f} ticks={leaf_ticks} item=0x{item:x} cursor={cur} load_entry=0x{:x} cont_entry=0x{:x} *** -> highlight ALONE ticks d180; zero-input functor-invoke route VIABLE",
+            l.unwrap_or(NULL),
+            c.unwrap_or(NULL)
+        ));
+    }
+
+    if f == INPUT_PROBE_DOWN_START {
+        // Latch the leaf-tick baseline at the moment Down begins, so HIGHLIGHT growth is measured
+        // strictly from here (ignores any pre-Down ticks).
+        INPUT_PROBE_DOWN_LEAF_BASELINE.store(leaf_ticks, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "INPUT-PROBE: DOWN inject f={f} inputmgr=0x{inputmgr:x} leaf_baseline={leaf_ticks} -- highlight window [{}..{}) before Confirm",
+            INPUT_PROBE_DOWN_START, INPUT_PROBE_CONFIRM_START
+        ));
+    }
+    if f == INPUT_PROBE_CONFIRM_START {
+        let pre = INPUT_PROBE_D180_PRECONFIRM.load(Ordering::SeqCst) != NULL;
+        append_autoload_debug(format_args!(
+            "INPUT-PROBE: CONFIRM inject f={f} d180_leaf_ticked_on_highlight={pre} ticks_now={leaf_ticks} -- {} (load now fires via Confirm)",
+            if pre {
+                "highlight WAS sufficient"
+            } else {
+                "highlight did NOT tick d180 -> needs static walk / focus is required"
+            }
+        ));
+    }
+    if f % INPUT_PROBE_LOG_INTERVAL == NULL as u64 {
+        let phase = if in_down {
+            "DOWN"
+        } else if in_confirm {
+            "CONFIRM"
+        } else if in_highlight {
+            "HIGHLIGHT"
+        } else if f < INPUT_PROBE_DOWN_START {
+            "SETTLE"
+        } else {
+            "POST"
+        };
+        append_autoload_debug(format_args!(
+            "INPUT-PROBE: f={f} phase={phase} d180_item=0x{item:x} leaf_ticks={leaf_ticks}"
+        ));
+        let _ = unsafe { dump_titletop_menu_entries(owner, base) };
+    }
 }
 
 /// OWN-THE-STEPPER step 2 (the load driver): runs IN-CONTEXT at idx10 (STEP_MenuJobWait,
@@ -1394,18 +1575,23 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         const D180_ROOT_E0: usize = 0xe0;
         const D180_ROOT_130: usize = 0x130;
         const D180_ROOT_138: usize = 0x138;
+        // d180's +0xa8 functor object = {_Func_impl vtable base+0x2ac3ea8, capture[+8]=owner+0x138}
+        // (user-driven capture 2026-06-17) -- a strong fingerprint corroborating the functor->factory
+        // classification.
+        const MENU_ITEM_LOADGAME_FUNCTOR_VTABLE_RVA: usize = 0x02ac3ea8;
         if !own_stepper_passive_enabled()
+            && !input_probe_enabled()
             && MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS
             && waits >= STAGE1D_SETTLE_WAITS
             && (waits - STAGE1D_SETTLE_WAITS) % STAGE1D_RETRY_INTERVAL
                 == TITLE_OWNER_SCAN_START_ADDRESS as u64
         {
-            // LOCATE-AND-LOG ONLY (first-pass diagnostic): we do NOT yet store into
-            // MENU_LOAD_GAME_ITEM, because driving STAGE 2 on a found-but-UNWIRED d180 (item+0x10
-            // ctx == 0) would feed dialog_factory a null ctx -> AV. First confirm d180 is reachable
-            // by a pure-read headless walk and dump its field state (functor/ctx/result); once
-            // confirmed, the safe drive is to call the native MenuWindowJob::Update (which wires
-            // item+0x10 before firing the functor), not a bare functor invoke.
+            // Walk the candidate roots; on the first functor->dialog_factory hit (= the Load-Game
+            // item d180), validate its fingerprint and LATCH it into MENU_LOAD_GAME_ITEM. STAGE 2
+            // then drives it via the NATIVE MenuWindowJob::Update 0x1407ad1c0 (which wires the ctx
+            // item+0x10 from the descriptor item+0x58 before firing the functor -> NO synthetic
+            // ctx, NO save write). The cap_menu_item_update hook also sets it if d180 ever ticks;
+            // whichever fires first wins. Throttled; pure reads here (save-safe).
             const ITEM_FUNCTOR_A8: usize = 0xa8;
             const ITEM_CTX_10: usize = 0x10;
             const ITEM_RESULT_130: usize = 0x130;
@@ -1434,9 +1620,10 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
                     let ctx10 = unsafe { safe_read_usize(item + ITEM_CTX_10) }.unwrap_or(null);
                     let res130 =
                         unsafe { safe_read_usize(item + ITEM_RESULT_130) }.unwrap_or(null);
+                    MENU_LOAD_GAME_ITEM.store(item, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "own_stepper: ZERO-INPUT d180 LOCATED item=0x{item:x} via owner+0x{root:x} functor=0x{functor:x} fvt=0x{fvt:x}(want base+0x2ac3ea8) fcap=0x{fcap:x}(want owner+0x138=0x{:x}) ctx10=0x{ctx10:x} result130=0x{res130:x} -- LOCATE-ONLY (no drive yet)"
-                    ,
+                        "own_stepper: ZERO-INPUT d180 LOCATED item=0x{item:x} via owner+0x{root:x} functor=0x{functor:x} fvt=0x{fvt:x}(want base+0x{:x}) fcap=0x{fcap:x}(want owner+0x138=0x{:x}) ctx10=0x{ctx10:x} result130=0x{res130:x} -- latched, STAGE2 will native-Update it",
+                        MENU_ITEM_LOADGAME_FUNCTOR_VTABLE_RVA,
                         owner.wrapping_add(D180_ROOT_138)
                     ));
                     break;
@@ -1529,6 +1716,17 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
                     ));
                 }
             }
+        }
+        // DETERMINISTIC INPUT PROBE: once the menu is open, drive a frame-precise Down->Confirm
+        // (targeted input as a MEASUREMENT oracle) and short-circuit the zero-input locate/STAGE2
+        // path -- the injected Confirm drives the native load; idx6 watches it. Answers whether the
+        // d180 leaf ticks on highlight alone (so the zero-input functor-invoke route is viable).
+        if input_probe_enabled()
+            && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO
+        {
+            unsafe { menu_input_probe(owner, base) };
+            pass_through(false);
+            return;
         }
         // Wait for the registered entries to tick: the menu-item Update hook + Sequence-iterator
         // hook capture the Load-Game leaf (functor->dialog_factory) as the native pump ticks
@@ -1653,7 +1851,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         // STAGE 2: drive the verified menu load (functor -> dialog -> load_activate -> native
         // pump mounts c30=real+ac0+char -> continue_confirm -> SetState(5)). Pass-through each
         // frame so STEP_MenuJobWait keeps the native menu task ticking the registered selector.
-        unsafe { own_stepper_stage2(owner, base, gm, want_slot, n) };
+        unsafe { own_stepper_stage2(owner, base, gm, want_slot, n, framectx) };
         pass_through(false);
         return;
     }
@@ -1671,7 +1869,14 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
 /// Every cross-into-game call is gated by read-only preconditions; the ONLY save-write risk is
 /// the CONFIRM SetState(5), gated entirely by a verified real mount (fail-closed otherwise:
 /// stay at the menu, NO SetState(5), NO save write).
-unsafe fn own_stepper_stage2(owner: usize, base: usize, gm: usize, want_slot: i32, n: u64) {
+unsafe fn own_stepper_stage2(
+    owner: usize,
+    base: usize,
+    gm: usize,
+    want_slot: i32,
+    n: u64,
+    framectx: usize,
+) {
     const S2_LOG_INTERVAL: u64 = 30;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
@@ -1748,13 +1953,17 @@ unsafe fn own_stepper_stage2(owner: usize, base: usize, gm: usize, want_slot: i3
             OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_ACTIVATE, Ordering::SeqCst);
             return;
         }
-        // Let the opened menu settle, then hand-invoke d180's functor once (the cursor is on
-        // Continue, so the native pump does not fire d180 itself).
+        // Let the opened menu settle, then drive d180's NATIVE Update once to build its dialog.
+        // d180 lives at owner+0x130 under an input-gated IfElseJob branch (its case child is never
+        // bound headless), so the native pump never ticks it -- but the item is fully built, so
+        // calling its own MenuWindowJob::Update 0x1407ad1c0 (which wires the ctx item+0x10 from the
+        // descriptor item+0x58 then fires the functor) builds the ProfileLoadDialog with a NATIVE
+        // ctx (no synthesis) and zero input. Build-only; idempotent; no save write.
         if waits < OWN_STEPPER_S2_INVOKE_SETTLE {
             return;
         }
         if OWN_STEPPER_INVOKED.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS as usize {
-            let ret = unsafe { invoke_menu_item_functor(item) }.unwrap_or(null);
+            let ret = unsafe { drive_menu_item_update(item, base, framectx) }.unwrap_or(null);
             OWN_STEPPER_INVOKED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
             let dlg130b = unsafe { safe_read_usize(item + MENU_ITEM_DIALOG_RESULT_130_OFFSET) }
                 .unwrap_or(null);
@@ -4318,6 +4527,32 @@ pub(crate) fn install_continue_trace_hooks() {
             cap_sequence_iter_hook as *mut c_void,
             &SEQUENCE_ITER_ORIG,
         );
+        // CSMenu controller ctor 0x1409060d8: latch router_this (owns the selectable-row vector
+        // at +0x1290) -- it is NOT field-linked from the TitleTopDialog, so capturing it at
+        // construction is how the own-stepper reaches the Continue/Load rows zero-input.
+        create_continue_trace_hook(
+            &mut hooks,
+            "cap_csmenu_ctor_9060d8",
+            CSMENU_CTOR_RVA,
+            cap_csmenu_ctor_hook as *mut c_void,
+            &CAP_CSMENU_CTOR_ORIG,
+        );
+        // Row-push functions (reliable .text): if either fires headless the rows materialize
+        // zero-input; if neither does, the interactive menu controller is input-instantiated.
+        create_continue_trace_hook(
+            &mut hooks,
+            "cap_rebuild_rows_78d2c0",
+            REBUILD_ROWS_RVA,
+            cap_rebuild_rows_hook as *mut c_void,
+            &CAP_REBUILD_ROWS_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "cap_append_one_78eea0",
+            APPEND_ONE_RVA,
+            cap_append_one_hook as *mut c_void,
+            &CAP_APPEND_ONE_ORIG,
+        );
     }
 
     match unsafe { MH_ApplyQueued() } {
@@ -4631,6 +4866,171 @@ unsafe fn call_cap_original(orig: &AtomicUsize, a: usize, b: usize, c: usize, d:
     unsafe { f(a, b, c, d) }
 }
 
+/// Title CSMenu controller ctor 0x1409060d8: latches `router_this` (the object owning the
+/// selectable Continue/Load/NewGame row vector at +0x1290) when its primary vtable
+/// (runtime `base+0x2afa070`) is installed. router_this is NOT field-linked from the
+/// TitleTopDialog, so this ctor capture is how the own-stepper obtains it. Pure observe +
+/// pass-through; latches the first matching controller.
+pub(crate) unsafe extern "system" fn cap_csmenu_ctor_hook(
+    this: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const ROUTER_VEC_BEGIN_1290: usize = 0x1290;
+    const ROUTER_VEC_END_1298: usize = 0x1298;
+    let ret = unsafe { call_cap_original(&CAP_CSMENU_CTOR_ORIG, this, b, c, d) };
+    let base = {
+        let own = OWN_STEPPER_BASE.load(Ordering::SeqCst);
+        if own != NULL {
+            own
+        } else {
+            game_module_base().unwrap_or(NULL)
+        }
+    };
+    if this != NULL && base != NULL {
+        let vt = unsafe { safe_read_usize(this) }.unwrap_or(NULL);
+        let vt_rva = vt.wrapping_sub(base);
+        let matched = vt == base + ROUTER_THIS_VTABLE_RVA;
+        if matched {
+            MENU_ROUTER_THIS.store(this, Ordering::SeqCst);
+        }
+        // Log the first N constructions REGARDLESS of match: reveals whether this ctor fires
+        // headless at all and the ACTUAL installed runtime vtable (vt_rva), so the inferred
+        // ROUTER_THIS_VTABLE_RVA=0x2afa070 (derived via a +0xe00 dump skew, not measured) can be
+        // corrected if wrong.
+        let n = CAP_CSMENU_CTOR_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+        if n < CAP_CSMENU_CTOR_LOG_FIRST {
+            let vb = unsafe { safe_read_usize(this + ROUTER_VEC_BEGIN_1290) }.unwrap_or(NULL);
+            let ve = unsafe { safe_read_usize(this + ROUTER_VEC_END_1298) }.unwrap_or(NULL);
+            append_continue_trace(format_args!(
+                "CAP csmenu_ctor #{n} this=0x{this:x} vt=0x{vt:x} vt_rva=0x{vt_rva:x} matched={matched} vec=[0x{vb:x}..0x{ve:x}] {}",
+                trace_callers_summary()
+            ));
+        }
+    }
+    ret
+}
+
+/// Post-build scan of a row container (`rebuild_rows`/`append_one` rcx). The generic FD4 list
+/// builder fires for EVERY menu list, so the title menu is identified by CONTENT: a row whose
+/// action functor ([entry+0xf8] -> [+0] vtable -> [+0x10] _Do_call) chains to dialog_factory
+/// 0x14081ead0 (Load-Game) or continue_confirm 0x140b0e180 (Continue). Captures the Load-Game /
+/// Continue ROW ENTRIES (and router_this = container-0x1290) when found. Pure reads + classify
+/// (the original already ran) -> save-safe. Called AFTER the original builds the rows.
+unsafe fn inspect_row_container(tag: &str, container: usize) {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const ENTRY_STRIDE_210: usize = 0x210;
+    const ENTRY_ACTION_F8: usize = 0xf8;
+    const ACTION_DOCALL_10: usize = 0x10;
+    const ROW_VEC_OFFSET_1290: usize = 0x1290;
+    const DIALOG_FACTORY_RVA: usize = 0x0081ead0;
+    const PROBE_ENTRIES: usize = 8;
+    const PROBE_START: usize = 0;
+    const PROBE_STEP: usize = 1;
+    const JMP_HOPS: usize = 5;
+    const HOP_START: usize = 0;
+    const HOP_STEP: usize = 1;
+    if container == NULL {
+        return;
+    }
+    let base = {
+        let own = OWN_STEPPER_BASE.load(Ordering::SeqCst);
+        if own != NULL {
+            own
+        } else {
+            game_module_base().unwrap_or(NULL)
+        }
+    };
+    if base == NULL {
+        return;
+    }
+    let factory = base + DIALOG_FACTORY_RVA;
+    let confirm = base + CONTINUE_CONFIRM_RVA;
+    let begin = unsafe { safe_read_usize(container) }.unwrap_or(NULL);
+    if begin == NULL {
+        return;
+    }
+    let mut load_entry: usize = NULL;
+    let mut cont_entry: usize = NULL;
+    let mut i = PROBE_START;
+    while i < PROBE_ENTRIES {
+        let entry = begin + i * ENTRY_STRIDE_210;
+        let action = unsafe { safe_read_usize(entry + ENTRY_ACTION_F8) }.unwrap_or(NULL);
+        if action != NULL {
+            let avt = unsafe { safe_read_usize(action) }.unwrap_or(NULL);
+            if avt != NULL {
+                let mut tgt =
+                    unsafe { safe_read_usize(avt + ACTION_DOCALL_10) }.unwrap_or(NULL);
+                let mut hop = HOP_START;
+                while hop < JMP_HOPS && tgt != NULL {
+                    if tgt == factory {
+                        load_entry = entry;
+                        break;
+                    }
+                    if tgt == confirm {
+                        cont_entry = entry;
+                        break;
+                    }
+                    match unsafe { decode_thunk_hop(tgt) } {
+                        Some(next) => tgt = next,
+                        None => break,
+                    }
+                    hop += HOP_STEP;
+                }
+            }
+        }
+        i += PROBE_STEP;
+    }
+    if load_entry == NULL && cont_entry == NULL {
+        return;
+    }
+    // This container IS the title menu row list. Latch the entries + a router_this candidate.
+    if load_entry != NULL {
+        MENU_LOADGAME_ROW_ENTRY.store(load_entry, Ordering::SeqCst);
+    }
+    if cont_entry != NULL {
+        MENU_CONTINUE_ROW_ENTRY.store(cont_entry, Ordering::SeqCst);
+    }
+    let router_this = container.wrapping_sub(ROW_VEC_OFFSET_1290);
+    MENU_ROUTER_THIS.store(router_this, Ordering::SeqCst);
+    let n = CAP_ROW_PUSH_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    if n < CAP_ROW_PUSH_LOG_FIRST {
+        let rvt = unsafe { safe_read_usize(router_this) }.unwrap_or(NULL);
+        append_continue_trace(format_args!(
+            "CAP row_push[{tag}] TITLE-MENU container=0x{container:x} begin=0x{begin:x} load_entry=0x{load_entry:x} cont_entry=0x{cont_entry:x} router_this?=0x{router_this:x} rvt=0x{rvt:x} {}",
+            trace_callers_summary()
+        ));
+    }
+}
+
+/// rebuild_rows 0x14078d2c0(rcx=list-model container, rdx=src iterator pair): bulk-emplaces the
+/// Continue/Load/NewGame rows. Firing headless proves the rows materialize zero-input; the
+/// post-build scan isolates the title menu by row CONTENT.
+pub(crate) unsafe extern "system" fn cap_rebuild_rows_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let ret = unsafe { call_cap_original(&CAP_REBUILD_ROWS_ORIG, a, b, c, d) };
+    unsafe { inspect_row_container("rebuild", a) };
+    ret
+}
+
+/// append_one 0x14078eea0(rcx=list-model, r8=&idx): single-row emplace.
+pub(crate) unsafe extern "system" fn cap_append_one_hook(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let ret = unsafe { call_cap_original(&CAP_APPEND_ONE_ORIG, a, b, c, d) };
+    unsafe { inspect_row_container("append", a) };
+    ret
+}
+
 /// SetState 0x140b0d960(this, state): the title state machine setter. Logging every call
 /// reveals the press-any-key advance + Continue's SetState(5) sequence.
 pub(crate) unsafe extern "system" fn cap_setstate_hook(
@@ -4840,6 +5240,19 @@ pub(crate) unsafe extern "system" fn cap_menu_item_update_hook(
             game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
         }
     };
+    // While the deterministic input probe is active, count GENUINE d180 leaf-Update ticks (this
+    // leaf fn 0x1407ad1c0 actually running for the Load-Game item) even after MENU_LOAD_GAME_ITEM
+    // is already latched -- so the probe can tell "d180 leaf ticked" from "static walk found it".
+    if INPUT_PROBE_ACTIVE.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS
+        && item != TITLE_OWNER_SCAN_START_ADDRESS
+        && base != TITLE_OWNER_SCAN_START_ADDRESS
+        && MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        let mut chain = String::new();
+        if unsafe { functor_chain_hits_factory(item, base, &mut chain) } {
+            MENU_D180_LEAF_TICKED.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+        }
+    }
     if item != TITLE_OWNER_SCAN_START_ADDRESS
         && base != TITLE_OWNER_SCAN_START_ADDRESS
         && MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS
@@ -4848,6 +5261,7 @@ pub(crate) unsafe extern "system" fn cap_menu_item_update_hook(
         let is_load_game = unsafe { functor_chain_hits_factory(item, base, &mut chain) };
         if is_load_game {
             MENU_LOAD_GAME_ITEM.store(item, Ordering::SeqCst);
+            MENU_D180_LEAF_TICKED.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
             append_continue_trace(format_args!(
                 "MENU-ITEM-UPDATE captured LOAD-GAME item=0x{item:x} {chain} {}",
                 trace_callers_summary()
