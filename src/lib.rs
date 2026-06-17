@@ -451,6 +451,12 @@ pub(crate) const MENU_ENTRIES_SEEN_YES: usize = 1;
 pub(crate) static MENU_ENTRIES_SEEN: AtomicUsize = AtomicUsize::new(MENU_ENTRIES_SEEN_NO);
 pub(crate) static OWN_STEPPER_MENU_OPENED: core::sync::atomic::AtomicUsize =
     core::sync::atomic::AtomicUsize::new(OWN_STEPPER_MENU_OPENED_NO);
+/// Count of TitleTopDialog entry-vector dumps emitted (the Continue/Load-Game rows live there,
+/// not in the FD4 tree). Capped so the diagnostic samples the entries as they realize after
+/// menu-open without spamming the log every frame.
+pub(crate) static OWN_STEPPER_TITLETOP_DUMPS: AtomicUsize = AtomicUsize::new(0);
+/// Max TitleTopDialog entry dumps + the per-dump frame interval.
+pub(crate) const OWN_STEPPER_TITLETOP_DUMP_CAP: usize = 8;
 /// Sentinel logged when the inner TitleStep owner can no longer be found (the
 /// title flow advanced past the title and the owner was finalized/destructed).
 pub(crate) const TITLE_STATE_OWNER_GONE: i32 = -1;

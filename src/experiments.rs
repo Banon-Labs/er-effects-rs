@@ -680,6 +680,146 @@ unsafe fn functor_chain_hits_factory(item: usize, module_base: usize, chain: &mu
     docall == dialog_factory_abs
 }
 
+/// READ-ONLY enumerator of the TitleTopDialog's REALIZED selectable-entry vector -- the actual
+/// Continue/Load-Game/New-Game rows the user navigates. These are NOT FD4 MenuWindowJobs in the
+/// Sequence tree (which is why every job-tree walk + the 0x1407ad1c0 Update hook miss them); they
+/// live in the dialog's own CSMenu sub-object (menu = dialog+0xa38) as a vector
+/// `[menu+0x1290]..[menu+0x1298]` stride 0x210, cursor `[dialog+0xb0c]`, bound `[dialog+0xb08]`
+/// (mainmenu-items-are-titletopdialog-widgets-not-fd4-jobs-2026). The confirm router 0x14078e1c0
+/// fires an entry via `rax=[entry]; call [rax+0x10]` when `[entry+0xf8]!=0`. For each entry this
+/// logs the vtable, its action method `[vtable+0x10]`, the `+0xf8` action-functor + its decoded
+/// `_Do_call` jmp-chain, and whether either resolves to dialog_factory 0x14081ead0 (Load-Game) or
+/// continue_confirm 0x140b0e180 (Continue). Pure vector math + reads (no game call) -> save-safe.
+/// Returns (load_game_entry, continue_entry, cursor) for STAGE 2 to drive.
+unsafe fn dump_titletop_menu_entries(owner: usize, base: usize) -> (Option<usize>, Option<usize>, i32) {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const DIALOG_E0: usize = 0xe0;
+    const MENU_SUBOBJ_A38: usize = 0xa38;
+    const ENTRY_VEC_BEGIN_1290: usize = 0x1290;
+    const ENTRY_VEC_END_1298: usize = 0x1298;
+    const ENTRY_STRIDE_210: usize = 0x210;
+    const ENTRY_ACTION_VT_SLOT_10: usize = 0x10;
+    const ENTRY_FUNCTOR_F8: usize = 0xf8;
+    const ENTRY_RESULT_130: usize = 0x130;
+    const DIALOG_FACTORY_RVA: usize = 0x0081ead0;
+    const MAX_ENTRIES: usize = 16;
+    const IDX_START: usize = 0;
+    const IDX_STEP: usize = 1;
+    const JMP_HOPS: usize = 5;
+    const HOP_START: usize = 0;
+    const HOP_STEP: usize = 1;
+    const BAD_I32: i32 = -1;
+    let ri32 = |addr: usize| -> i32 {
+        unsafe { safe_read_usize(addr) }
+            .map(|v| v as u32 as i32)
+            .unwrap_or(BAD_I32)
+    };
+    let dialog = unsafe { safe_read_usize(owner + DIALOG_E0) }.unwrap_or(NULL);
+    let dialog_vt = if dialog != NULL {
+        unsafe { safe_read_usize(dialog) }.unwrap_or(NULL)
+    } else {
+        NULL
+    };
+    let cursor = if dialog != NULL {
+        ri32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET)
+    } else {
+        BAD_I32
+    };
+    if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+        append_autoload_debug(format_args!(
+            "titletop-entries: owner+0xe0=0x{dialog:x} vt=0x{dialog_vt:x} (expect 0x{:x}) -- not the TitleTopDialog, skip",
+            base + TITLE_TOP_DIALOG_VTABLE_RVA
+        ));
+        return (None, None, cursor);
+    }
+    let menu = dialog + MENU_SUBOBJ_A38;
+    let vec_begin = unsafe { safe_read_usize(menu + ENTRY_VEC_BEGIN_1290) }.unwrap_or(NULL);
+    let vec_end = unsafe { safe_read_usize(menu + ENTRY_VEC_END_1298) }.unwrap_or(NULL);
+    let bound = ri32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET);
+    if vec_begin == NULL || vec_end <= vec_begin {
+        append_autoload_debug(format_args!(
+            "titletop-entries: dialog=0x{dialog:x} menu=0x{menu:x} vec=[0x{vec_begin:x}..0x{vec_end:x}] EMPTY -- entries not realized; cursor={cursor} bound={bound}"
+        ));
+        return (None, None, cursor);
+    }
+    let count = (vec_end - vec_begin) / ENTRY_STRIDE_210;
+    append_autoload_debug(format_args!(
+        "titletop-entries: dialog=0x{dialog:x} menu=0x{menu:x} count={count} cursor={cursor} bound={bound} vec=[0x{vec_begin:x}..0x{vec_end:x}]"
+    ));
+    let factory_abs = base + DIALOG_FACTORY_RVA;
+    let confirm_abs = base + CONTINUE_CONFIRM_RVA;
+    // Decode a function/thunk address forward through up to JMP_HOPS jmp-thunks, reporting if it
+    // reaches the Load-Game factory or the Continue confirm. (Full-function actions that only CALL
+    // the factory internally won't chain-resolve -- the raw action address is logged regardless.)
+    let classify = |start: usize, chain: &mut String| -> (bool, bool) {
+        let mut tgt = start;
+        let mut hop = HOP_START;
+        while hop < JMP_HOPS && tgt != NULL {
+            if tgt == factory_abs {
+                return (true, false);
+            }
+            if tgt == confirm_abs {
+                return (false, true);
+            }
+            match unsafe { decode_thunk_hop(tgt) } {
+                Some(next) => {
+                    chain.push_str(&format!("->0x{next:x}"));
+                    tgt = next;
+                }
+                None => break,
+            }
+            hop += HOP_STEP;
+        }
+        (tgt == factory_abs, tgt == confirm_abs)
+    };
+    let mut load_game: Option<usize> = None;
+    let mut continue_entry: Option<usize> = None;
+    let mut idx = IDX_START;
+    while idx < count && idx < MAX_ENTRIES {
+        let entry = vec_begin + idx * ENTRY_STRIDE_210;
+        let evt = unsafe { safe_read_usize(entry) }.unwrap_or(NULL);
+        let action = if evt != NULL {
+            unsafe { safe_read_usize(evt + ENTRY_ACTION_VT_SLOT_10) }.unwrap_or(NULL)
+        } else {
+            NULL
+        };
+        let functor = unsafe { safe_read_usize(entry + ENTRY_FUNCTOR_F8) }.unwrap_or(NULL);
+        let result = unsafe { safe_read_usize(entry + ENTRY_RESULT_130) }.unwrap_or(NULL);
+        // Classify the vtable action method, and (if present) the +0xf8 std::function's _Do_call.
+        let mut action_chain = String::new();
+        let (a_load, a_cont) = classify(action, &mut action_chain);
+        let mut f_chain = String::new();
+        let f_docall = if functor != NULL {
+            let fvt = unsafe { safe_read_usize(functor) }.unwrap_or(NULL);
+            if fvt != NULL {
+                unsafe { safe_read_usize(fvt + ENTRY_ACTION_VT_SLOT_10) }.unwrap_or(NULL)
+            } else {
+                NULL
+            }
+        } else {
+            NULL
+        };
+        let (f_load, f_cont) = if f_docall != NULL {
+            classify(f_docall, &mut f_chain)
+        } else {
+            (false, false)
+        };
+        let is_load = a_load || f_load;
+        let is_cont = a_cont || f_cont;
+        append_autoload_debug(format_args!(
+            "titletop-entry #{idx} entry=0x{entry:x} vt=0x{evt:x} action=0x{action:x}{action_chain} f8=0x{functor:x} f8_docall=0x{f_docall:x}{f_chain} result=0x{result:x} LOAD_GAME={is_load} CONTINUE={is_cont}"
+        ));
+        if is_load && load_game.is_none() {
+            load_game = Some(entry);
+        }
+        if is_cont && continue_entry.is_none() {
+            continue_entry = Some(entry);
+        }
+        idx += IDX_STEP;
+    }
+    (load_game, continue_entry, cursor)
+}
+
 /// Fire a captured MenuWindowJob's `+0xa8` action std::function in-context, mirroring the
 /// native leaf Update's functor-invoke at `0x1407ad2b9`:
 ///   rcx = `[item+0xa8]` (the std::function obj); rax = `[rcx]` (`_Func_impl_no_alloc`
@@ -1401,6 +1541,22 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         // them. Fallback: our static tree walk. NO SetState here -> stays at the main menu,
         // save-safe. STAGE 2 (invoke the leaf functor) follows once the live item is confirmed.
         let hooked = MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst);
+        // The real Continue/Load-Game rows are TitleTopDialog entries (NOT FD4 jobs). Once the
+        // menu is open, sample the dialog's entry vector a few times as it realizes -- save-safe
+        // read-only enumeration that identifies the Load-Game/Continue entries for STAGE 2.
+        if OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO
+            && OWN_STEPPER_TITLETOP_DUMPS.load(Ordering::SeqCst) < OWN_STEPPER_TITLETOP_DUMP_CAP
+            && (waits % STAGE1D_RETRY_INTERVAL) == TITLE_OWNER_SCAN_START_ADDRESS as u64
+        {
+            OWN_STEPPER_TITLETOP_DUMPS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+            let (tt_load, tt_cont, tt_cursor) =
+                unsafe { dump_titletop_menu_entries(owner, base) };
+            append_autoload_debug(format_args!(
+                "own_stepper: STAGE1b titletop-entries load_game=0x{:x} continue=0x{:x} cursor={tt_cursor} (entries are dialog rows, not FD4 jobs)",
+                tt_load.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS),
+                tt_cont.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+            ));
+        }
         // Search BOTH the owner+0x130 BeginLogo commit target (where the main-menu list with d180
         // actually lands, per the commit fn 0x140b0e530) AND owner+0xe0 (the dialog holder).
         let found = if hooked != TITLE_OWNER_SCAN_START_ADDRESS {
