@@ -1,0 +1,12 @@
+# Seamless Co-op compatibility run: launch via ersc_launcher.exe so ersc.dll (Seamless) loads AND
+# dinput8.dll loads dllMods/er_effects_rs.dll -- both coexist. The autoload drives the .co2 co-op
+# save (Seamless redirects save IO .sl2->.co2 transparently; the recipe uses only vanilla funcs).
+# Save-safe: the harness backs up + restores BOTH .sl2 and .co2 (save_roots covers the AppData dir).
+# Same own-stepper(slot=0) + direct-build triggers as offline-vanilla; the only change is the launcher.
+LAUNCH_MODE=seamless
+ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=0
+RUNTIME_MAX_NUDGES=0
+RESTORE_RUNTIME_SAVES=1
+RUNTIME_CAPTURE_INPUT_OCR=0
+RUNTIME_WATCH_TARGET=player-load
+RUNTIME_SPAWN_POLL_BUDGET=32768
