@@ -765,13 +765,24 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
         return;
     }
     if phase == PHASE_DESER {
+        // DIAGNOSTIC (char-apply debug, COLD-B80-WALL-BROKEN-...): before the deserialize, read the
+        // suspects for why c30/char did not apply: [mgr+0xdf0] (deserialize-ready -- if set, 0x67b100
+        // takes the fast-path and does NOT read into 0x67b290's buffer = lane mismatch / empty parse);
+        // [mgr+0x18] (the async load job 0x140e6eb80 queued); [0x143d68078] (the c30-write gate that
+        // gates 0x67bd70 inside 0x67b290).
+        const DF0_OFFSET: usize = 0xdf0;
+        const ASYNC_JOB_18_OFFSET: usize = 0x18;
+        const C30_WRITE_GATE_RVA: usize = 0x3d68078;
+        let df0 = unsafe { *((gm + DF0_OFFSET) as *const usize) };
+        let job18 = unsafe { *((gm + ASYNC_JOB_18_OFFSET) as *const usize) };
+        let c30_gate = unsafe { *((base + C30_WRITE_GATE_RVA) as *const usize) };
         let deser: unsafe extern "system" fn(i32) -> i32 =
             unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
         let dret = unsafe { deser(want_slot) };
         let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
         let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
         append_autoload_debug(format_args!(
-            "cold-char-mount: DESERIALIZE slot={want_slot} ret={dret} c30=0x{c30:x} ac0={ac0} (c30!=0x{GAME_MAN_NEWGAME_DEFAULT_MAP:x} default + ac0==slot = MOUNTED). NO SetState/NO save write -- save-data half SOLVED if char correct:"
+            "cold-char-mount: DESERIALIZE slot={want_slot} ret={dret} c30=0x{c30:x} ac0={ac0} | pre-deser df0(mgr+0xdf0)=0x{df0:x} async_job(mgr+0x18)=0x{job18:x} c30_gate(0x143d68078)=0x{c30_gate:x} (df0!=0 -> 0x67b100 fast-path skips the read = empty parse). NO SetState/NO save write:"
         ));
         unsafe { dump_load_correctness(base, n) };
         MOUNT_PHASE.store(PHASE_DONE, Ordering::SeqCst);
