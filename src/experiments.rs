@@ -3058,39 +3058,53 @@ unsafe fn own_stepper_stage2(
         }
         let activate: unsafe extern "system" fn(usize) -> u8 = unsafe { std::mem::transmute(lav) };
         let r = unsafe { activate(dialog) };
-        // load_activate built the selector step at dialog+0x18 (load_activate-gate-inverted /
-        // selector-tick-drive-decode). The cold standalone dialog is NOT ticked by the MENU group,
-        // so capture the step here and SELF-PUMP it in MOUNT_POLL (tick 0x140826d50).
+        // load_activate stores its selector in the menu-job QUEUE (transient stack smart-ptr), not
+        // the dialog (a dialog scan finds nothing). So BUILD the selector step DIRECTLY via builder
+        // 0x140826510 (load_activate-builds-selector-into-queue / find-populate decode): rcx=&owner
+        // [0x10 zeroed; step returned at owner[0]]; rdx=&(dialog+0x50) (OPAQUE -- the builder never
+        // dereferences it, it fabricates the descriptor on its own stack); r8d=slot; r9=[dialog+0x1cc8]
+        // (LoadJobContext, set by the CTOR to dialog+0x1260, valid once rows populate). Builder/factory
+        // only need the boot-built allocator 0x143d87350. Read-only guards before the native call.
+        const BUILDER_RVA: usize = 0x826510;
         const SELECTOR_VTABLE_RVA: usize = 0x2ac71e0;
-        const SELECTOR_SCAN_QWORDS: usize = 0x400;
-        const SCAN_PTR_SZ: usize = 8;
-        const SCAN_ALIGN_MASK: usize = 0x7;
-        const SCAN_HEAP_LO: usize = 0x10000;
-        const SCAN_Q0: usize = 0;
-        const SCAN_QSTEP: usize = 1;
-        let selector_vt = base + SELECTOR_VTABLE_RVA;
-        // load_activate stores the built selector somewhere in the dialog. Scan the dialog object's
-        // fields for a pointer to an object whose [0] == the selector vtable 0x142ac71e0. Pure reads.
-        let mut step = null;
-        let mut step_off = null;
-        let mut q = SCAN_Q0;
-        while q < SELECTOR_SCAN_QWORDS {
-            let off = q * SCAN_PTR_SZ;
-            let p = unsafe { safe_read_usize(dialog + off) }.unwrap_or(null);
-            if p != null && (p & SCAN_ALIGN_MASK) == SCAN_Q0 && p >= SCAN_HEAP_LO {
-                let pvt = unsafe { safe_read_usize(p) }.unwrap_or(null);
-                if pvt == selector_vt {
-                    step = p;
-                    step_off = off;
-                    break;
-                }
-            }
-            q += SCAN_QSTEP;
-        }
-        let step_ok = step != null;
-        OWN_STEPPER_SELECTOR_STEP.store(step, Ordering::SeqCst);
+        const DIALOG_DESC_50: usize = 0x50;
+        const DIALOG_LOADJOBCTX_1CC8: usize = 0x1cc8;
+        const OWNER_CELL_LEN: usize = 2;
+        const OWNER_CELL_INIT: usize = 0;
+        const OWNER_CELL_STEP_IDX: usize = 0;
+        let ctx = unsafe { safe_read_usize(dialog + DIALOG_LOADJOBCTX_1CC8) }.unwrap_or(null);
+        let ctx_vt = if ctx != null {
+            unsafe { safe_read_usize(ctx) }.unwrap_or(null)
+        } else {
+            null
+        };
+        let desc_readable = unsafe { safe_read_usize(dialog + DIALOG_DESC_50) }.is_some();
+        let (step, step_ok) = if ctx != null && ctx_vt != null && desc_readable {
+            let mut owner_cell: [usize; OWNER_CELL_LEN] = [OWNER_CELL_INIT; OWNER_CELL_LEN];
+            let builder: unsafe extern "system" fn(usize, usize, u32, usize) -> usize =
+                unsafe { std::mem::transmute(base + BUILDER_RVA) };
+            unsafe {
+                builder(
+                    (&mut owner_cell) as *mut [usize; OWNER_CELL_LEN] as usize,
+                    dialog + DIALOG_DESC_50,
+                    want_slot as u32,
+                    ctx,
+                )
+            };
+            let s = owner_cell[OWNER_CELL_STEP_IDX];
+            let svt = if s != null {
+                unsafe { safe_read_usize(s) }.unwrap_or(null)
+            } else {
+                null
+            };
+            (s, svt == base + SELECTOR_VTABLE_RVA)
+        } else {
+            (null, false)
+        };
+        OWN_STEPPER_SELECTOR_STEP.store(if step_ok { step } else { null }, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "own_stepper: STAGE2-ACTIVATE want={want_slot} target={target} cursor_now={cursor_now} bound={bound} lav=0x{lav:x} ret={r} dialog=0x{dialog:x} selector_step=0x{step:x}@dialog+0x{step_off:x} step_ok={step_ok}(vt 0x{selector_vt:x}) io18=0x{io18:x} io20=0x{io20:x}"
+            "own_stepper: STAGE2-ACTIVATE want={want_slot} target={target} cursor_now={cursor_now} bound={bound} lav=0x{lav:x} ret={r} dialog=0x{dialog:x} ctx=0x{ctx:x} ctx_vt=0x{ctx_vt:x} builder=0x{:x} step=0x{step:x} step_ok={step_ok}(vt 0x{:x}) io18=0x{io18:x} io20=0x{io20:x}",
+            base + BUILDER_RVA, base + SELECTOR_VTABLE_RVA
         ));
         OWN_STEPPER_IO_WAS_SET.store(OWN_STEPPER_IO_WAS_SET_NO, Ordering::SeqCst);
         OWN_STEPPER_S2_WAITS.store(null, Ordering::SeqCst);
