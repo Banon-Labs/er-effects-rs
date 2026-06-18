@@ -404,6 +404,39 @@ pub(crate) fn input_probe_enabled() -> bool {
             .exists()
 }
 
+/// SELF-DRIVEN GAMEPAD NAV INJECTION (er-effects-inject-nav.txt / ER_EFFECTS_INJECT_NAV). When on,
+/// the input block stays engaged PAST menu-open (user input fully suppressed) and the XInput hook
+/// fabricates a D-pad Down nav schedule at the gamepad poll source, cycling the title-menu cursor
+/// so the input/focus-gated row populate fires and the row-push/csmenu-ctor hooks capture its
+/// trigger -- uncontaminated by user input. Capture-only (Down nav, never Confirm).
+pub(crate) fn inject_nav_enabled() -> bool {
+    matches!(std::env::var("ER_EFFECTS_INJECT_NAV").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-inject-nav.txt")
+            .exists()
+}
+
+/// The D-pad Down button mask to inject for poll-frame `n` (counted from the first poll after
+/// menu-open), per the INJECT_NAV schedule: settle, then `INJECT_NAV_MAX_CYCLES` tap+gap cycles
+/// with Down asserted for the first `INJECT_NAV_TAP_LEN` frames of each cycle. Returns 0 (no
+/// input) during settle, gaps, and after the cycles complete.
+pub(crate) fn inject_nav_buttons(n: usize) -> u16 {
+    const NONE: u16 = 0;
+    if n < INJECT_NAV_SETTLE_FRAMES {
+        return NONE;
+    }
+    let m = n - INJECT_NAV_SETTLE_FRAMES;
+    if m >= INJECT_NAV_MAX_CYCLES * INJECT_NAV_CYCLE {
+        return NONE;
+    }
+    if m % INJECT_NAV_CYCLE < INJECT_NAV_TAP_LEN {
+        XINPUT_GAMEPAD_DPAD_DOWN
+    } else {
+        NONE
+    }
+}
+
 /// AUTO-CONFIRM observe mode (er-effects-auto-confirm.txt): drive the game's OWN natural title
 /// flow with Confirm input-taps so we can finally observe the view PAST the modal. No SetState
 /// forcing, no input block, no custom dismiss -- just the press the game polls for.
@@ -656,6 +689,44 @@ unsafe fn diagnostic_menu_walk(
 /// the dialog factory 0x14081ead0? That uniquely marks the Load-Game leaf (Continue's
 /// functor instead routes to the c30->SetState(5) confirm 0x140b0e180). Appends the decoded
 /// chain to `chain` for logging. Fault-tolerant reads; never faults.
+/// Does a std::function `functor` (the pointer ITSELF, not item+offset) resolve through its
+/// `_Do_call` jmp-chain to the dialog factory 0x14081ead0? Used for the TitleTopDialog ROW entries
+/// whose action functor lives at `[entry+0xf8]` (vs the MenuWindowJob `[item+0xa8]`). Fault-tolerant.
+unsafe fn functor_ptr_hits_factory(functor: usize, module_base: usize, chain: &mut String) -> bool {
+    const DOCALL_VTABLE_SLOT_10: usize = 0x10;
+    const DIALOG_FACTORY_RVA: usize = 0x0081ead0;
+    const JMP_CHAIN_MAX_HOPS: usize = 4;
+    const HOP_START: usize = 0;
+    const HOP_STEP: usize = 1;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let dialog_factory_abs = module_base + DIALOG_FACTORY_RVA;
+    if functor == null {
+        return false;
+    }
+    let functor_vtable = unsafe { safe_read_usize(functor) }.unwrap_or(null);
+    if functor_vtable == null {
+        return false;
+    }
+    let mut docall =
+        unsafe { safe_read_usize(functor_vtable + DOCALL_VTABLE_SLOT_10) }.unwrap_or(null);
+    chain.push_str(&format!("functor=0x{functor:x} docall=0x{docall:x}"));
+    let mut hop = HOP_START;
+    while hop < JMP_CHAIN_MAX_HOPS && docall != null {
+        if docall == dialog_factory_abs {
+            return true;
+        }
+        match unsafe { decode_thunk_hop(docall) } {
+            Some(next) => {
+                chain.push_str(&format!("->0x{next:x}"));
+                docall = next;
+            }
+            None => break,
+        }
+        hop += HOP_STEP;
+    }
+    docall == dialog_factory_abs
+}
+
 unsafe fn functor_chain_hits_factory(item: usize, module_base: usize, chain: &mut String) -> bool {
     const ITEM_FUNCTOR_A8: usize = 0xa8;
     const DOCALL_VTABLE_SLOT_10: usize = 0x10;
@@ -704,6 +775,178 @@ unsafe fn functor_chain_hits_factory(item: usize, module_base: usize, chain: &mu
 /// `_Do_call` jmp-chain, and whether either resolves to dialog_factory 0x14081ead0 (Load-Game) or
 /// continue_confirm 0x140b0e180 (Continue). Pure vector math + reads (no game call) -> save-safe.
 /// Returns (load_game_entry, continue_entry, cursor) for STAGE 2 to drive.
+/// ZERO-INPUT title-menu Load fire (STATIC-RE validated, NO input injection). Replicates the
+/// confirm router 0x14078e1c0's entry-action call directly (decoded: resolver 0x14078fbd0 returns
+/// entry=[dialog+0x1290]+idx*0x210; if [entry+0xf8]!=0 -> rcx=[entry+0xf8]; call [[rcx]+0x10]).
+/// Scans the realized TitleTopDialog row vector for the entry whose action functor [entry+0xf8]
+/// chains to dialog_factory 0x14081ead0 (= Load Game; found empirically, NOT assumed by index),
+/// sets cursor [dialog+0xb0c], and fires its _Do_call(rcx=action) -> builds the ProfileLoadDialog.
+/// SELF-VALIDATING + FAIL-CLOSED: asserts the dialog vtable, that the row vector is populated, and
+/// that a Load-Game entry was found, BEFORE firing -- so a non-realized/contaminated state is
+/// caught, not absorbed. Build-only; the sole save-write is downstream (gated continue_confirm).
+/// Returns true iff it fired.
+unsafe fn fire_titletop_load_entry(dialog: usize, base: usize) -> bool {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const VEC_BEGIN_1290: usize = 0x1290;
+    const VEC_END_1298: usize = 0x1298;
+    const ENTRY_STRIDE_210: usize = 0x210;
+    const ENTRY_ACTION_F8: usize = 0xf8;
+    const CURSOR_B0C: usize = 0xb0c;
+    const DOCALL_VTABLE_SLOT_10: usize = 0x10;
+    const MAX_ENTRIES: usize = 16;
+    const IDX_START: usize = 0;
+    const IDX_STEP: usize = 1;
+    // VALIDATE 1: dialog identity (runtime vtable 0x142b26468).
+    let vt = unsafe { safe_read_usize(dialog) }.unwrap_or(NULL);
+    if vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+        append_autoload_debug(format_args!(
+            "titletop-fire: dialog=0x{dialog:x} vt=0x{vt:x} != TitleTopDialog 0x{:x} -- ABORT (no fire)",
+            base + TITLE_TOP_DIALOG_VTABLE_RVA
+        ));
+        return false;
+    }
+    // VALIDATE 2: row vector realized/populated.
+    let begin = unsafe { safe_read_usize(dialog + VEC_BEGIN_1290) }.unwrap_or(NULL);
+    let end = unsafe { safe_read_usize(dialog + VEC_END_1298) }.unwrap_or(NULL);
+    if begin == NULL || end <= begin {
+        append_autoload_debug(format_args!(
+            "titletop-fire: row vector EMPTY/unrealized vec=[0x{begin:x}..0x{end:x}] -- ABORT (rows not populated)"
+        ));
+        return false;
+    }
+    let count = (end - begin) / ENTRY_STRIDE_210;
+    // VALIDATE 3: find Load-Game by action->dialog_factory (NOT assumed index).
+    let mut found: Option<(usize, usize)> = None;
+    let mut idx = IDX_START;
+    while idx < count && idx < MAX_ENTRIES {
+        let entry = begin + idx * ENTRY_STRIDE_210;
+        let action = unsafe { safe_read_usize(entry + ENTRY_ACTION_F8) }.unwrap_or(NULL);
+        if action != NULL {
+            let mut chain = String::new();
+            if unsafe { functor_ptr_hits_factory(action, base, &mut chain) } {
+                found = Some((idx, action));
+                append_autoload_debug(format_args!(
+                    "titletop-fire: LOAD-GAME entry idx={idx} entry=0x{entry:x} action=0x{action:x} {chain}"
+                ));
+                break;
+            }
+        }
+        idx += IDX_STEP;
+    }
+    let (load_idx, action) = match found {
+        Some(v) => v,
+        None => {
+            append_autoload_debug(format_args!(
+                "titletop-fire: NO Load-Game entry (action->dialog_factory) in {count} rows -- ABORT"
+            ));
+            return false;
+        }
+    };
+    // All validated -> set cursor + fire the action's _Do_call(rcx=action) == the router's confirm.
+    unsafe {
+        *((dialog + CURSOR_B0C) as *mut i32) = load_idx as i32;
+    }
+    let vtable = unsafe { safe_read_usize(action) }.unwrap_or(NULL);
+    let do_call = if vtable != NULL {
+        unsafe { safe_read_usize(vtable + DOCALL_VTABLE_SLOT_10) }.unwrap_or(NULL)
+    } else {
+        NULL
+    };
+    if do_call == NULL {
+        append_autoload_debug(format_args!(
+            "titletop-fire: action=0x{action:x} has no _Do_call -- ABORT"
+        ));
+        return false;
+    }
+    let f: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(do_call) };
+    unsafe { f(action) };
+    append_autoload_debug(format_args!(
+        "titletop-fire: FIRED Load-Game idx={load_idx} do_call=0x{do_call:x} -- ProfileLoadDialog should now build at owner+0xe0"
+    ));
+    true
+}
+
+/// Baseline snapshot of the TitleTopDialog dword window, captured before the one deterministic
+/// Down so the post-Down pass can diff against it and name the cursor field precisely.
+static CURSOR_PROBE_BASELINE: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+
+/// CURSOR-OFFSET PROBE (read-only, save-safe). `baseline=true`: snapshot the live TitleTopDialog
+/// (owner+0xe0) dword window (cursor=0=Continue). `baseline=false` (after exactly one deterministic
+/// Down, cursor=1=Load Game): re-read and log every offset whose value CHANGED, flagging the
+/// 0->1 transition = the cursor field. Also logs the unverified static candidate [dialog+0xb0c] to
+/// confirm/refute it. Pure reads via safe_read_usize -> never AVs.
+unsafe fn cursor_offset_probe(owner: usize, base: usize, baseline: bool) {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const DIALOG_E0: usize = 0xe0;
+    const DWORD_LO_MASK: usize = 0xffffffff;
+    const DWORD_BYTES: usize = 4;
+    const SCAN_START: usize = 0;
+    const SCAN_STEP: usize = 1;
+    const CURSOR_FROM: u32 = 0;
+    const CURSOR_TO: u32 = 1;
+    let tag = if baseline { "baseline" } else { "postdown" };
+    let dialog = unsafe { safe_read_usize(owner + DIALOG_E0) }.unwrap_or(NULL);
+    if dialog == NULL {
+        return;
+    }
+    let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(NULL);
+    let cand_b0c = unsafe { safe_read_usize(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }
+        .map(|v| (v & DWORD_LO_MASK) as u32)
+        .unwrap_or(u32::MAX);
+    append_autoload_debug(format_args!(
+        "cursor-probe[{tag}]: dialog=0x{dialog:x} vt=0x{dialog_vt:x}(want base+0x{:x}) candidate[+0xb0c]={cand_b0c}",
+        TITLE_TOP_DIALOG_VTABLE_RVA
+    ));
+    if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+        return;
+    }
+    let read_dword = |off: usize| -> u32 {
+        unsafe { safe_read_usize(dialog + off) }
+            .map(|w| (w & DWORD_LO_MASK) as u32)
+            .unwrap_or(u32::MAX)
+    };
+    if baseline {
+        let mut snap = Vec::with_capacity(CURSOR_PROBE_SCAN_DWORDS);
+        let mut i = SCAN_START;
+        while i < CURSOR_PROBE_SCAN_DWORDS {
+            snap.push(read_dword(i * DWORD_BYTES));
+            i += SCAN_STEP;
+        }
+        if let Ok(mut b) = CURSOR_PROBE_BASELINE.lock() {
+            *b = snap;
+        }
+        return;
+    }
+    let baseline_snap = match CURSOR_PROBE_BASELINE.lock() {
+        Ok(b) if b.len() == CURSOR_PROBE_SCAN_DWORDS => b.clone(),
+        _ => {
+            append_autoload_debug(format_args!(
+                "cursor-probe[postdown]: no baseline captured -- skip diff"
+            ));
+            return;
+        }
+    };
+    let mut logged = SCAN_START;
+    let mut i = SCAN_START;
+    while i < CURSOR_PROBE_SCAN_DWORDS && logged < CURSOR_PROBE_LOG_CAP {
+        let off = i * DWORD_BYTES;
+        let old = baseline_snap[i];
+        let new = read_dword(off);
+        if old != new && new < CURSOR_PROBE_SMALL_MAX {
+            let is_cursor = old == CURSOR_FROM && new == CURSOR_TO;
+            append_autoload_debug(format_args!(
+                "cursor-probe[postdown] CHANGED off=0x{off:x} {old}->{new}{}",
+                if is_cursor { "  <== CURSOR (0->1)" } else { "" }
+            ));
+            logged += SCAN_STEP;
+        }
+        i += SCAN_STEP;
+    }
+    append_autoload_debug(format_args!(
+        "cursor-probe[postdown]: diff complete ({logged} changed small dwords)"
+    ));
+}
+
 unsafe fn dump_titletop_menu_entries(owner: usize, base: usize) -> (Option<usize>, Option<usize>, i32) {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const DIALOG_E0: usize = 0xe0;
@@ -1728,10 +1971,100 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             pass_through(false);
             return;
         }
+        // INJECT-NAV instrument-capture: self-drive the cursor with synthesized menu-DOWN while
+        // the user's input stays blocked. The menu is KEYBOARD-navigated under Proton (XInput is
+        // not polled), so the primary vehicle is the DInput keyboard block, into which we stamp
+        // DIK_DOWN on the schedule (InputBlocker::set_injected_key); the gamepad button state is
+        // also published for the XInput hook in case a controller is present. This runs every
+        // frame (unlike the XInput hook). Capture-only: DOWN nav, never Confirm -> no load/write.
+        if inject_nav_enabled()
+            && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO
+        {
+            let nf = INJECT_NAV_FRAME.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+            let buttons = inject_nav_buttons(nf);
+            INJECT_NAV_CUR_BUTTONS.store(buttons as usize, Ordering::SeqCst);
+            let dik = if buttons != INJECT_NAV_NO_BUTTONS {
+                DIK_DOWN
+            } else {
+                DIK_NONE
+            };
+            InputBlocker::get_instance().set_injected_key(dik);
+            // Find the cursor offset by observing it across the ONE deterministic Down: snapshot
+            // before (cursor=0), diff after it settles (cursor=1). The 0->1 dword IS the cursor.
+            if nf as usize == CURSOR_PROBE_BASELINE_FRAME {
+                unsafe { cursor_offset_probe(owner, base, true) };
+            } else if nf as usize == CURSOR_PROBE_POSTDOWN_FRAME {
+                unsafe { cursor_offset_probe(owner, base, false) };
+            }
+            if dik != DIK_NONE {
+                let lc = INJECT_NAV_LOG_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+                if lc < INJECT_NAV_LOG_FIRST {
+                    append_autoload_debug(format_args!(
+                        "inject-nav: frame={nf} menu-DOWN asserted (DIK=0x{dik:x} wButtons=0x{buttons:x})"
+                    ));
+                }
+            }
+            pass_through(false);
+            return;
+        }
+        // ZERO-INPUT title-confirm Load (STATIC-RE validated; titletop-confirm-route-static-
+        // validated-no-input-needed-2026). The Continue/Load rows are TitleTopDialog ENTRIES, NOT
+        // FD4 MenuWindowJobs, so the d180 walk/hook can never find them (Model A, runtime-proven:
+        // d180-not-in-owner130-ifelsejob-model-A-confirmed). Once the dialog's row vector is
+        // realized, fire_titletop_load_entry replicates the confirm router 0x14078e1c0's entry-
+        // action call directly -- self-validating (asserts dialog vtable + populated rows + a
+        // Load-Game entry whose [entry+0xf8] action chains to dialog_factory, BEFORE firing) -- to
+        // build the ProfileLoadDialog, then STAGE 2 drives it. No input injection, no d180 self-
+        // fire. This supersedes (and replaces) the refuted d180-locate search below.
+        if OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO
+            && !own_stepper_passive_enabled()
+            && !input_probe_enabled()
+            && !inject_nav_enabled()
+        {
+            let null = TITLE_OWNER_SCAN_START_ADDRESS;
+            let dialog =
+                unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
+            let pld_vt = base + PROFILE_LOAD_DIALOG_VTABLE_RVA;
+            let cur_vt = if dialog != null {
+                unsafe { safe_read_usize(dialog) }.unwrap_or(null)
+            } else {
+                null
+            };
+            if cur_vt == pld_vt {
+                // The fired Load-Game action already built the ProfileLoadDialog at owner+0xe0.
+                OWN_STEPPER_DIALOG.store(dialog, Ordering::SeqCst);
+                OWN_STEPPER_S2_WAITS.store(null, Ordering::SeqCst);
+                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_ACTIVATE, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "own_stepper: title-confirm built ProfileLoadDialog=0x{dialog:x} at owner+0xe0 -- entering STAGE2 ACTIVATE (slot={want_slot})"
+                ));
+                pass_through(false);
+                return;
+            }
+            if OWN_STEPPER_TITLE_FIRED.load(Ordering::SeqCst) == null {
+                // Not yet fired: attempt the validated fire (fail-closed no-op + retry if the rows
+                // are not realized yet -- never writes on a non-realized/contaminated state).
+                if unsafe { fire_titletop_load_entry(dialog, base) } {
+                    OWN_STEPPER_TITLE_FIRED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+                }
+                pass_through(false);
+                return;
+            }
+            // Fired; waiting for the ProfileLoadDialog to appear at owner+0xe0. Bounded timeout.
+            if waits >= OWN_STEPPER_MENU_BUILD_WAIT_MAX {
+                append_autoload_debug(format_args!(
+                    "own_stepper: title-confirm fired but ProfileLoadDialog not at owner+0xe0 after {waits} waits -- STAY (NO-WRITE)"
+                ));
+                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+            }
+            pass_through(false);
+            return;
+        }
         // Wait for the registered entries to tick: the menu-item Update hook + Sequence-iterator
         // hook capture the Load-Game leaf (functor->dialog_factory) as the native pump ticks
         // them. Fallback: our static tree walk. NO SetState here -> stays at the main menu,
         // save-safe. STAGE 2 (invoke the leaf functor) follows once the live item is confirmed.
+        // (REFUTED d180-locate path, retained only for the input-probe/inject-nav diagnostic modes.)
         let hooked = MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst);
         // The real Continue/Load-Game rows are TitleTopDialog entries (NOT FD4 jobs). Once the
         // menu is open, sample the dialog's entry vector a few times as it realizes -- save-safe
@@ -3205,6 +3538,13 @@ pub(crate) fn block_input_enabled() -> bool {
     {
         return true;
     }
+    // INJECT-NAV instrument-capture: keep the block ON past menu-open so the user's input is
+    // suppressed while the XInput hook fabricates the cursor nav (so nothing pollutes the
+    // capture). The fabricated Down is written INTO the otherwise-blocked gamepad state, so the
+    // menu still gets a live (synthesized) input each frame -- it does not stall.
+    if own_stepper_enabled() && !own_stepper_passive_enabled() && inject_nav_enabled() {
+        return true;
+    }
     // PASSIVE mode never blocks. Otherwise block only the HEADLESS boot -> menu-open window
     // (so that stretch is uncontaminated zero-input), then RELEASE the block the instant the
     // menu opens -- the Continue/Load navigation that follows still needs a live input pipeline
@@ -3247,17 +3587,40 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
     } else {
         XINPUT_ERROR_DEVICE_NOT_CONNECTED
     };
-    if hr == XINPUT_SUCCESS
-        && !state.is_null()
-        && BLOCK_INPUT_ACTIVE.load(Ordering::SeqCst) == BLOCK_INPUT_ON
-    {
-        unsafe {
-            std::ptr::write_bytes(
-                state.add(XINPUT_GAMEPAD_OFFSET),
-                ZERO_FILL_BYTE,
-                XINPUT_GAMEPAD_SIZE,
-            )
-        };
+    const XINPUT_PACKET_OFFSET: usize = 0;
+    const WBUTTONS_OFFSET_IN_GAMEPAD: usize = 0;
+    if !state.is_null() && BLOCK_INPUT_ACTIVE.load(Ordering::SeqCst) == BLOCK_INPUT_ON {
+        let inject = inject_nav_enabled()
+            && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO;
+        if inject {
+            // Fabricate the gamepad state at the poll source from the schedule driven each frame
+            // by own_stepper idx10 (this hook may never be polled if no controller, so the
+            // schedule does NOT live here). Force SUCCESS + a fresh packet number so a live pad is
+            // simulated; write the scheduled D-pad Down. Harmless if the game ignores XInput.
+            let buttons = INJECT_NAV_CUR_BUTTONS.load(Ordering::SeqCst) as u16;
+            let pkt = INJECT_NAV_FRAME.load(Ordering::SeqCst) as u32;
+            unsafe {
+                std::ptr::write_bytes(
+                    state.add(XINPUT_GAMEPAD_OFFSET),
+                    ZERO_FILL_BYTE,
+                    XINPUT_GAMEPAD_SIZE,
+                );
+                *(state.add(XINPUT_PACKET_OFFSET) as *mut u32) = pkt;
+                *(state.add(XINPUT_GAMEPAD_OFFSET + WBUTTONS_OFFSET_IN_GAMEPAD) as *mut u16) =
+                    buttons;
+            }
+            let _ = user_index;
+            return XINPUT_SUCCESS;
+        }
+        if hr == XINPUT_SUCCESS {
+            unsafe {
+                std::ptr::write_bytes(
+                    state.add(XINPUT_GAMEPAD_OFFSET),
+                    ZERO_FILL_BYTE,
+                    XINPUT_GAMEPAD_SIZE,
+                )
+            };
+        }
     }
     hr
 }
@@ -5016,6 +5379,7 @@ pub(crate) unsafe extern "system" fn cap_rebuild_rows_hook(
     d: usize,
 ) -> usize {
     let ret = unsafe { call_cap_original(&CAP_REBUILD_ROWS_ORIG, a, b, c, d) };
+    unsafe { log_row_push_caller("rebuild", a) };
     unsafe { inspect_row_container("rebuild", a) };
     ret
 }
@@ -5028,8 +5392,42 @@ pub(crate) unsafe extern "system" fn cap_append_one_hook(
     d: usize,
 ) -> usize {
     let ret = unsafe { call_cap_original(&CAP_APPEND_ONE_ORIG, a, b, c, d) };
+    unsafe { log_row_push_caller("append", a) };
     unsafe { inspect_row_container("append", a) };
     ret
+}
+
+/// UNCONDITIONAL instrument-capture: log container + row-vector size + caller stack for the
+/// first N rebuild_rows/append_one fires, regardless of content. This pins WHAT triggers the
+/// TitleTopDialog CSMenu row populate (the input/focus-gated step confirmed missing zero-input).
+/// Pure reads; the original already ran -> save-safe.
+unsafe fn log_row_push_caller(tag: &str, container: usize) {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const ROW_VEC_BEGIN_1290: usize = 0x1290;
+    const ROW_VEC_END_1298: usize = 0x1298;
+    let n = CAP_ROW_PUSH_ALLFIRE_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    if n >= CAP_ROW_PUSH_ALLFIRE_LOG_FIRST {
+        return;
+    }
+    let base = {
+        let own = OWN_STEPPER_BASE.load(Ordering::SeqCst);
+        if own != NULL {
+            own
+        } else {
+            game_module_base().unwrap_or(NULL)
+        }
+    };
+    // container is the list-model; router_this back-ptr at [container+8], its row vector lives at
+    // router_this+0x1290. Also probe the container itself in case it IS router_this.
+    let backptr = unsafe { safe_read_usize(container + ROW_CONTAINER_BACKPTR_8) }.unwrap_or(NULL);
+    let vb = unsafe { safe_read_usize(container + ROW_VEC_BEGIN_1290) }.unwrap_or(NULL);
+    let ve = unsafe { safe_read_usize(container + ROW_VEC_END_1298) }.unwrap_or(NULL);
+    let cvt = unsafe { safe_read_usize(container) }.unwrap_or(NULL);
+    let cvt_rva = if base != NULL { cvt.wrapping_sub(base) } else { cvt };
+    append_continue_trace(format_args!(
+        "CAP row_push_ALL[{tag}] #{n} container=0x{container:x} cvt=0x{cvt:x}(rva 0x{cvt_rva:x}) backptr=0x{backptr:x} vec=[0x{vb:x}..0x{ve:x}] {}",
+        trace_callers_summary()
+    ));
 }
 
 /// SetState 0x140b0d960(this, state): the title state machine setter. Logging every call

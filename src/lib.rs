@@ -876,6 +876,9 @@ pub(crate) const OWN_STEPPER_S2_PHASE_MAX: u64 = 1200;
 pub(crate) static OWN_STEPPER_S2_WAITS: AtomicUsize = AtomicUsize::new(0);
 /// The built+validated ProfileLoadDialog pointer (0 until PHASE_S2_INVOKE succeeds).
 pub(crate) static OWN_STEPPER_DIALOG: AtomicUsize = AtomicUsize::new(0);
+/// One-shot latch: set once the zero-input title-confirm fire (fire_titletop_load_entry) has
+/// fired the Load-Game row action, so it is not re-fired while the ProfileLoadDialog builds.
+pub(crate) static OWN_STEPPER_TITLE_FIRED: AtomicUsize = AtomicUsize::new(0);
 /// The RESOLVED target slot the mount is expected to land on: the configured `slot=N` if
 /// >=0, else (slot=-1 "most-recent") the dialog's natural highlight cursor read live at
 /// PHASE_S2_ACTIVATE. MOUNT_POLL/CONFIRM compare `GameMan+0xac0` against this.
@@ -1170,6 +1173,63 @@ pub(crate) const INPUT_PROBE_CONFIRM_START: u64 =
     INPUT_PROBE_DOWN_START + INPUT_PROBE_DOWN_TAP_FRAMES + INPUT_PROBE_HIGHLIGHT_FRAMES;
 pub(crate) const INPUT_PROBE_CONFIRM_TAP_FRAMES: u64 = 2;
 pub(crate) const INPUT_PROBE_LOG_INTERVAL: u64 = 20;
+
+// ============================================================================================
+// SELF-DRIVEN GAMEPAD NAV INJECTION (instrument-capture). Distinct from the disproven
+// inputmgr+0x90 keystate write (PROVEN non-functional): this injects at the XInput poll source
+// (XInputGetState, the stage the game actually reads gamepad from), so a synthesized D-pad Down
+// reaches the real input pipeline. The block stays ON (user input suppressed) while the hook
+// fabricates the pad state on a schedule, cycling the title-menu cursor so the input/focus-gated
+// row populate fires and the row-push/csmenu-ctor hooks capture WHO triggers it -- with the
+// user's input blocked so nothing pollutes. Capture-only: D-pad Down nav, NEVER Confirm/A (no
+// load, no save write).
+// ============================================================================================
+/// XInput poll counter, incremented each XInputGetState call while inject-nav is active and the
+/// menu is open. The schedule below is in these poll-frames.
+pub(crate) static INJECT_NAV_FRAME: AtomicUsize = AtomicUsize::new(0);
+/// XINPUT_GAMEPAD.wButtons D-pad Down bit (the menu "move down" gamepad input).
+pub(crate) const XINPUT_GAMEPAD_DPAD_DOWN: u16 = 0x0002;
+/// Settle the freshly-opened menu before injecting (poll-frames).
+pub(crate) const INJECT_NAV_SETTLE_FRAMES: usize = 90;
+/// Down asserted for this many consecutive poll-frames = one clean edge (one cursor step).
+pub(crate) const INJECT_NAV_TAP_LEN: usize = 4;
+/// Released gap between taps (edge re-arm; menu nav is edge-triggered, not auto-repeat).
+pub(crate) const INJECT_NAV_GAP_LEN: usize = 16;
+/// One tap+gap cycle length.
+pub(crate) const INJECT_NAV_CYCLE: usize = INJECT_NAV_TAP_LEN + INJECT_NAV_GAP_LEN;
+/// Number of Down taps to drive. The problem is fully deterministic: the cursor starts on
+/// Continue (index 0) and Load Game is index 1, so EXACTLY ONE Down reaches it. There is no state
+/// of knowledge that justifies more than one tap, so this is a literal 1 (not a tunable).
+pub(crate) const INJECT_NAV_MAX_CYCLES: usize = 1;
+/// Throttle the per-tap log.
+pub(crate) static INJECT_NAV_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const INJECT_NAV_LOG_FIRST: usize = 20;
+/// The current frame's synthesized gamepad wButtons, computed by the per-frame schedule in
+/// own_stepper idx10 and READ by the XInput hook (so the schedule lives in one place that runs
+/// every frame, instead of the XInput hook which the game may never poll). 0 = no input.
+pub(crate) static INJECT_NAV_CUR_BUTTONS: AtomicUsize = AtomicUsize::new(0);
+/// DInput keyboard scancode DIK_DOWN (down-arrow) -- the menu "move down" keyboard input. The
+/// menu is keyboard-navigated under Proton with no controller (XInput is not polled), so the
+/// schedule drives this via InputBlocker::set_injected_key (stamped into the blocked keyboard
+/// state). 0xD0 = DIK_DOWNARROW.
+pub(crate) const DIK_DOWN: u8 = 0xd0;
+/// No key injected (clears the stamp on gap/settle frames).
+pub(crate) const DIK_NONE: u8 = 0;
+/// No gamepad buttons asserted this frame.
+pub(crate) const INJECT_NAV_NO_BUTTONS: u16 = 0;
+/// CURSOR-OFFSET PROBE: with exactly ONE deterministic Down (Continue idx0 -> Load Game idx1),
+/// snapshot the live TitleTopDialog dwords just BEFORE the Down (cursor should read 0) and again
+/// AFTER it settles (cursor should read 1); the dword that goes 0->1 IS the cursor field. This
+/// observes the real offset instead of trusting the unverified +0xb0c guess (which the self-fire
+/// run read as 0). Frames are relative to the first poll after menu-open.
+pub(crate) const CURSOR_PROBE_BASELINE_FRAME: usize = INJECT_NAV_SETTLE_FRAMES - 2;
+pub(crate) const CURSOR_PROBE_POSTDOWN_FRAME: usize = INJECT_NAV_SETTLE_FRAMES + 12;
+/// Dwords to scan from the dialog base (covers 0..0x2400, the known field range).
+pub(crate) const CURSOR_PROBE_SCAN_DWORDS: usize = 0x900;
+/// Only dwords in [0, this) are logged as cursor candidates (a row index is small).
+pub(crate) const CURSOR_PROBE_SMALL_MAX: u32 = 8;
+/// Cap the candidate-dword log per snapshot.
+pub(crate) const CURSOR_PROBE_LOG_CAP: usize = 96;
 /// "result emitted / closing" latch, set =1 by EmitResult once the dialog begins teardown. We
 /// stop calling OnDecide once this is set (avoids re-dispatch / UAF after teardown).
 pub(crate) const MSGBOX_CLOSING_LATCH_3B0_OFFSET: usize = 0x3b0;
@@ -1366,6 +1426,12 @@ pub(crate) static CAP_REBUILD_ROWS_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORI
 pub(crate) static CAP_APPEND_ONE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static CAP_ROW_PUSH_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const CAP_ROW_PUSH_LOG_FIRST: usize = 12;
+/// UNCONDITIONAL row-push capture: log the caller stack of EVERY rebuild_rows/append_one fire
+/// (first N), regardless of whether the container is the title menu. Under Model A the row
+/// populate fires for the ProfileLoadDialog slot list (not the title Continue/Load list), so the
+/// content-gated `inspect_row_container` log would miss it; this captures WHO triggers populate.
+pub(crate) static CAP_ROW_PUSH_ALLFIRE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const CAP_ROW_PUSH_ALLFIRE_LOG_FIRST: usize = 24;
 pub(crate) const REBUILD_ROWS_RVA: u32 = 0x0078d2c0;
 pub(crate) const APPEND_ONE_RVA: u32 = 0x0078eea0;
 pub(crate) const ROW_CONTAINER_BACKPTR_8: usize = 0x8;
