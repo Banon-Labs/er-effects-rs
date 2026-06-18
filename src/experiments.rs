@@ -3143,8 +3143,10 @@ unsafe fn own_stepper_stage2(
             const B80_POLL_ARG: u8 = 0;
             const B80_RESIDENT: i32 = 3;
             const DESER_NOT_FIRED: usize = 0;
-            const DESER_FIRED: usize = 1;
+            const DESER_FIRED_FAIL: usize = 1;
+            const DESER_FIRED_OK: usize = 2;
             const DESER_RET_NONE: i32 = -2;
+            const DESER_SUCCESS_RET: i32 = 1;
             let lane: unsafe extern "system" fn() -> i32 =
                 unsafe { std::mem::transmute(base + B80_LANE_DRIVE_RVA) };
             let _ = unsafe { lane() };
@@ -3153,8 +3155,9 @@ unsafe fn own_stepper_stage2(
             let _ = unsafe { poll(B80_POLL_ARG, B80_POLL_ARG) };
             // When the FULL save is RESIDENT (b80==3), deserialize it ONCE via the proven 0x67b290
             // (cold_char_mount's deserializer; reads the resident request via 0x67b100 gated b80==3).
-            // Earlier 0x67b290 saw only metadata (preview lane) -> header-validate fail; now the
-            // resident request is slot N's FULL type-0xa save -> it should write c30=real + the char.
+            // The resident request is slot N's FULL type-0xa save -> it writes c30 (from save header+4
+            // via 0x67bd70, gated on header-validate -> ret==1) + applies the real char. ret==1 proves
+            // c30 is the char's REAL saved map (setstate5-is-save-safe-c30-from-save).
             let mut deser_ret = DESER_RET_NONE;
             if b80 == B80_RESIDENT
                 && OWN_STEPPER_DESER_FIRED.load(Ordering::SeqCst) == DESER_NOT_FIRED
@@ -3162,9 +3165,16 @@ unsafe fn own_stepper_stage2(
                 let deser: unsafe extern "system" fn(i32) -> i32 =
                     unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
                 deser_ret = unsafe { deser(want_slot) };
-                OWN_STEPPER_DESER_FIRED.store(DESER_FIRED, Ordering::SeqCst);
+                let fired_state = if deser_ret == DESER_SUCCESS_RET {
+                    // Latch c30 (the char's real saved map, written from the save by 0x67bd70).
+                    OWN_STEPPER_MOUNT_C30.store(c30, Ordering::SeqCst);
+                    DESER_FIRED_OK
+                } else {
+                    DESER_FIRED_FAIL
+                };
+                OWN_STEPPER_DESER_FIRED.store(fired_state, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "own_stepper: STAGE2-DESERIALIZE 0x{:x}(slot={want_slot}) ret={deser_ret} (full-save resident, b80=3) -- LOAD-CORRECTNESS (post-deser real char?):",
+                    "own_stepper: STAGE2-DESERIALIZE 0x{:x}(slot={want_slot}) ret={deser_ret} fired_state={fired_state} c30=0x{c30:x} (full-save resident, b80=3) -- LOAD-CORRECTNESS (real char?):",
                     base + DESERIALIZE_SLOT_RVA
                 ));
                 unsafe { dump_load_correctness(base, n) };
@@ -3183,34 +3193,34 @@ unsafe fn own_stepper_stage2(
             OWN_STEPPER_IO_WAS_SET.load(Ordering::SeqCst) == OWN_STEPPER_IO_WAS_SET_YES;
         let io_consumed = io18 == null && io20 == null;
         let expected = OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst);
-        // Mount signal = GameMan c30 became a REAL saved map. set_save_slot (called each frame for
-        // the submit) forces ac0=slot, so ac0 is no longer a usable signal -- use c30. Real ⟺ not
-        // the new-game default, not the unset sentinel, not zero. (decode: menu_deser mounts c30=real)
+        // Mount signal = the deserialize 0x67b290 SUCCEEDED (ret==1), which proves it wrote c30 from
+        // the save header + applied the real char. c30 itself is ambiguous (the char's real early map
+        // 0xa010000 collides with the new-game default), so the reliable signal is deser-success +
+        // a SANE latched c30 (not the unset sentinel, not zero). (setstate5-is-save-safe-c30-from-save)
         const C30_ZERO: i32 = 0;
+        const DESER_FIRED_OK_GATE: usize = 2;
         let _ = (io_was_set, io_consumed);
-        let c30_real = c30 != GAME_MAN_NEWGAME_DEFAULT_MAP
-            && c30 != GAME_MAN_C30_UNSET
-            && c30 != C30_ZERO;
-        let mount_done = c30_real && ac0 == expected && expected != OWN_STEPPER_SLOT_NONE;
+        let latched_c30 = OWN_STEPPER_MOUNT_C30.load(Ordering::SeqCst);
+        let deser_ok = OWN_STEPPER_DESER_FIRED.load(Ordering::SeqCst) == DESER_FIRED_OK_GATE;
+        let c30_sane = latched_c30 != GAME_MAN_C30_UNSET && latched_c30 != C30_ZERO;
+        let mount_done =
+            deser_ok && c30_sane && ac0 == expected && expected != OWN_STEPPER_SLOT_NONE;
         if waits % S2_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 || mount_done {
             append_autoload_debug(format_args!(
-                "own_stepper: STAGE2-MOUNT-POLL waits={waits} ac0={ac0} expected={expected} c30=0x{c30:x} c30_real={c30_real} b80={b80} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x}"
+                "own_stepper: STAGE2-MOUNT-POLL waits={waits} ac0={ac0} expected={expected} c30=0x{c30:x} latched=0x{latched_c30:x} deser_ok={deser_ok} c30_sane={c30_sane} b80={b80} io18=0x{io18:x} io20=0x{io20:x}"
             ));
         }
         if mount_done {
-            OWN_STEPPER_MOUNT_C30.store(c30, Ordering::SeqCst);
             timeline_event(
                 "T_mount",
                 n,
-                format_args!("ac0={ac0} c30=0x{c30:x} waits={waits}"),
+                format_args!("ac0={ac0} c30=0x{latched_c30:x} waits={waits}"),
             );
             append_autoload_debug(format_args!(
-                "own_stepper: STAGE2-MOUNT-DONE ac0={ac0} c30=0x{c30:x} waits={waits} -- VERIFY-ONLY (NO SetState5 this run); LOAD-CORRECTNESS below must show the real slot char before continue_confirm is enabled:"
+                "own_stepper: STAGE2-MOUNT-DONE ac0={ac0} c30=0x{latched_c30:x} waits={waits} (deser ret=1: real char + c30 from save) -> CONFIRM (gated SetState5)"
             ));
-            unsafe { dump_load_correctness(base, n) };
             OWN_STEPPER_S2_WAITS.store(null, Ordering::SeqCst);
-            // SAFETY: verify-only until the char is confirmed correct -- go DONE, do NOT SetState5.
-            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_CONFIRM, Ordering::SeqCst);
         } else if waits >= OWN_STEPPER_S2_PHASE_MAX {
             append_autoload_debug(format_args!(
                 "own_stepper: STAGE2-MOUNT-POLL-TIMEOUT ac0={ac0} want={want_slot} c30=0x{c30:x} io_was_set={io_was_set} after {waits} waits -- STAGE2-NOWRITE-ABORT (stay at menu)"
@@ -3223,8 +3233,13 @@ unsafe fn own_stepper_stage2(
     if phase == OWN_STEPPER_PHASE_S2_CONFIRM {
         let latched = OWN_STEPPER_MOUNT_C30.load(Ordering::SeqCst);
         let expected = OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst);
-        // HARD save-write guard: only SetState(5) when the real char is still mounted.
-        let proceed = ac0 == expected
+        // HARD save-write guard: only SetState(5) when the real char is still mounted. Require the
+        // deserialize SUCCEEDED (ret==1 -> c30 written from save), c30 unchanged since the mount and
+        // not the unset sentinel, and the slot matches. (setstate5-is-save-safe-c30-from-save)
+        const DESER_FIRED_OK_CONFIRM: usize = 2;
+        let deser_ok = OWN_STEPPER_DESER_FIRED.load(Ordering::SeqCst) == DESER_FIRED_OK_CONFIRM;
+        let proceed = deser_ok
+            && ac0 == expected
             && expected != OWN_STEPPER_SLOT_NONE
             && c30 == latched
             && c30 != GAME_MAN_C30_UNSET;
