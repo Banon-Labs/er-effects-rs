@@ -648,6 +648,36 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
             MOUNT_PHASE.store(PHASE_DONE, Ordering::SeqCst);
             return;
         }
+        // (0) REFRAME (2026-06-18, REFRAME-io-subsystem-present-cold-blocker-is-just-the-active-byte):
+        // the FD4 IO subsystem (pool/task/iodev) is ALREADY present + CLEAN cold (snapshot-proven).
+        // 0x67b200 fails cold ONLY because its slot-check 0x140261cd0 reads [ProfileSummary+8+slot]==0
+        // (the session/ProfileSummary IS present). Set that byte directly via ACTIVATE 0x140262250
+        // (byte[profile+slot+8]=1) so 0x67b200 passes its slot-check and submits the read onto the
+        // present subsystem. Save-safe (sets an in-memory flag; the deserialize only READS the .sl2).
+        const PROFILE_SLOT_ACTIVATE_RVA: usize = 0x262250;
+        const SLOT_ACTIVE_BYTE_BASE: usize = 0x8;
+        let game_data_man = unsafe { *((base + SLOT_MANAGER_RVA) as *const usize) };
+        let profile_summary = if game_data_man != null {
+            unsafe { *((game_data_man + SLOT_MANAGER_CONTAINER_OFFSET) as *const usize) }
+        } else {
+            null
+        };
+        if profile_summary != null {
+            let activate: unsafe extern "system" fn(usize, i32) =
+                unsafe { std::mem::transmute(base + PROFILE_SLOT_ACTIVATE_RVA) };
+            unsafe { activate(profile_summary, want_slot) };
+            let abyte = unsafe {
+                *((profile_summary + SLOT_ACTIVE_BYTE_BASE + want_slot as usize) as *const u8)
+            };
+            append_autoload_debug(format_args!(
+                "cold-char-mount: ACTIVATE 0x{:x}(profile=0x{profile_summary:x}, slot={want_slot}) -> [profile+8+{want_slot}]={abyte} (so 0x67b200 slot-check 0x140261cd0 passes)",
+                base + PROFILE_SLOT_ACTIVATE_RVA
+            ));
+        } else {
+            append_autoload_debug(format_args!(
+                "cold-char-mount: ProfileSummary null (gdm=0x{game_data_man:x}) -- cannot ACTIVATE; 0x67b200 will fail its slot-check"
+            ));
+        }
         // (1) build + register the FD4 stream worker so the scheduler ticks it (drains the read).
         let stub: &'static mut [u8; SYNTHETIC_STEP_THIS_SIZE] =
             Box::leak(Box::new([STUB_FILL; SYNTHETIC_STEP_THIS_SIZE]));

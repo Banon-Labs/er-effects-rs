@@ -304,7 +304,56 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
         }
     };
 
+    // FD4 async-IO DRAIN subsystem (B step-3 lever check, read-only). The cold save-IO read
+    // never drains because the queue-processing worker threads live in the global thread POOL
+    // [0x144853048], NOT in the worker MANAGER. Prior cold experiments built the stream TASK
+    // [0x144842d40] but maybe never the POOL. If the pool is NULL cold, cold-building it
+    // (0x14240afe0) is the untested save-safe lever; if non-null cold, the read fails elsewhere.
+    const FD4_IO_POOL_RVA: usize = 0x4853048;
+    const FD4_IO_WORKER_MANAGER_RVA: usize = 0x4852f88;
+    const FD4_STREAM_TASK_RVA: usize = 0x4842d40;
+    const IO_DEVICE_SINGLETON_RVA: usize = 0x4589390;
+    const IO_DEVICE_INFLIGHT_10_OFFSET: usize = 0x10;
+    const IO_DEVICE_REQHANDLE_20_OFFSET: usize = 0x20;
+    let io_pool = unsafe { crate::experiments::safe_read_usize(base + FD4_IO_POOL_RVA) }
+        .unwrap_or(NULL_POINTER_VALUE);
+    let io_worker_manager =
+        unsafe { crate::experiments::safe_read_usize(base + FD4_IO_WORKER_MANAGER_RVA) }
+            .unwrap_or(NULL_POINTER_VALUE);
+    let stream_task = unsafe { crate::experiments::safe_read_usize(base + FD4_STREAM_TASK_RVA) }
+        .unwrap_or(NULL_POINTER_VALUE);
+    let io_device = unsafe { crate::experiments::safe_read_usize(base + IO_DEVICE_SINGLETON_RVA) }
+        .unwrap_or(NULL_POINTER_VALUE);
+    let io_inflight = if io_device == NULL_POINTER_VALUE {
+        None
+    } else {
+        unsafe { crate::experiments::safe_read_usize(io_device + IO_DEVICE_INFLIGHT_10_OFFSET) }
+    };
+    let io_reqhandle = if io_device == NULL_POINTER_VALUE {
+        None
+    } else {
+        unsafe { crate::experiments::safe_read_usize(io_device + IO_DEVICE_REQHANDLE_20_OFFSET) }
+    };
+
     body.push_str("  \"save_snapshot_available\": true,\n");
+    body.push_str(&format!("  \"fd4_io_pool_present\": {},\n", io_pool != NULL_POINTER_VALUE));
+    body.push_str(&format!(
+        "  \"fd4_io_worker_manager_present\": {},\n",
+        io_worker_manager != NULL_POINTER_VALUE
+    ));
+    body.push_str(&format!(
+        "  \"fd4_stream_task_present\": {},\n",
+        stream_task != NULL_POINTER_VALUE
+    ));
+    body.push_str(&format!("  \"io_device_present\": {},\n", io_device != NULL_POINTER_VALUE));
+    body.push_str(&format!(
+        "  \"io_device_inflight_10\": {},\n",
+        io_inflight.map_or_else(|| "null".to_owned(), |value| format!("\"{value:#x}\""))
+    ));
+    body.push_str(&format!(
+        "  \"io_device_reqhandle_20\": {},\n",
+        io_reqhandle.map_or_else(|| "null".to_owned(), |value| format!("\"{value:#x}\""))
+    ));
     body.push_str(&format!(
         "  \"game_data_man_present\": {},\n",
         game_data_man != NULL_POINTER_VALUE

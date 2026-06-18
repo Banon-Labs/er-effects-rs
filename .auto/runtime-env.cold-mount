@@ -1,0 +1,14 @@
+# SAVE-SAFE cold char-mount with the ACTIVATE-byte lever (2026-06-18 reframe).
+# The FD4 IO subsystem (pool/task/iodev) is present+clean cold; 0x67b200 fails cold ONLY on its
+# slot-active-byte check. cold_char_mount_drive now ACTIVATEs [ProfileSummary+8+slot]=1 FIRST
+# (0x140262250), then preview -> lane -> 0x67b200 (now passes) -> poll b80->3 -> deserialize
+# 0x67b290(slot) -> mount slot 0 (c30=real + char). NO SetState, NO save write (reads the .sl2).
+# Gated by GAME_DIR files er-effects-own-stepper.txt (slot=0) + er-effects-cold-char-mount.txt.
+# player-load watch: no world loads (no SetState) so it runs to the 30s deadline for the mount seq.
+LAUNCH_MODE=offline-launcher
+ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=0
+RUNTIME_MAX_NUDGES=0
+RESTORE_RUNTIME_SAVES=1
+RUNTIME_CAPTURE_INPUT_OCR=0
+RUNTIME_WATCH_TARGET=player-load
+RUNTIME_SPAWN_POLL_BUDGET=32768
