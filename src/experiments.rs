@@ -543,6 +543,33 @@ unsafe fn own_stepper_direct_build(owner: usize, base: usize) {
     const ROWVEC_END_A60: usize = 0xa60;
     const ROWVEC_MAX_SPAN: usize = 0x10000;
     const PTR_ALIGN_MASK: usize = 0x7;
+    // CONVERGENCE (2026-06-18, cold-b80-drain-is-PREVIEW-metadata-lane + direct-build): ACTIVATE the
+    // slot byte BEFORE building the dialog, so the ctor's list-builder 0x140875590 (which checks
+    // 0x140261cd0 = [ProfileSummary+8+slot]) APPENDS the slot -> the dialog's save-rows populate
+    // (bound>0) -> load_activate has a row to read. This wires the ACTIVATE-byte breakthrough into
+    // the direct-built dialog. Save-safe (in-memory byte; the dialog build is no-write).
+    const PROFILE_SLOT_ACTIVATE_RVA: usize = 0x262250;
+    let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+    let gdm = unsafe { safe_read_usize(base + SLOT_MANAGER_RVA) }.unwrap_or(NULL);
+    let profile_summary = if gdm != NULL {
+        unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(NULL)
+    } else {
+        NULL
+    };
+    if profile_summary != NULL && want_slot >= OWN_STEPPER_SLOT_ZERO {
+        let activate: unsafe extern "system" fn(usize, i32) =
+            unsafe { std::mem::transmute(base + PROFILE_SLOT_ACTIVATE_RVA) };
+        unsafe { activate(profile_summary, want_slot) };
+        // VALIDATED: ACTIVATE makes the dialog list-builder append the slot -> rows populate
+        // (bound 0->1, runtime-confirmed). NOTE the speculative record-state set ([rec+0x295]=1,
+        // [rec+0x44]=2) did NOT unlock load_activate's selector build -> mount (still ac0=-1, io18=0)
+        // -- the full-save selector/menu_deser lane needs the genuine menu-task drive (the documented
+        // async-IO lane wall), not a faked record. Removed; the rows-populate win stands.
+        append_autoload_debug(format_args!(
+            "own_stepper: DIRECT-BUILD ACTIVATE 0x{:x}(profile=0x{profile_summary:x}, slot={want_slot}) before ctor -> dialog rows populate (bound>0)",
+            base + PROFILE_SLOT_ACTIVATE_RVA
+        ));
+    }
     let owner_obj = owner + OWNER_OBJ_138;
     // Read-only re-validation of r8 (owner_obj) before the native build: expected vtable + a
     // populated row-vector (begin < end, sane span). Fail-closed (latch set so we don't spin).
