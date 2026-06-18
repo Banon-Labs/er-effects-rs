@@ -4527,7 +4527,7 @@ pub(crate) fn install_continue_trace_hooks() {
             cap_sequence_iter_hook as *mut c_void,
             &SEQUENCE_ITER_ORIG,
         );
-        // CSMenu controller ctor 0x1409060d8: latch router_this (owns the selectable-row vector
+        // CSMenu controller ctor 0x1409060d0: latch router_this (owns the selectable-row vector
         // at +0x1290) -- it is NOT field-linked from the TitleTopDialog, so capturing it at
         // construction is how the own-stepper reaches the Continue/Load rows zero-input.
         create_continue_trace_hook(
@@ -4866,7 +4866,8 @@ unsafe fn call_cap_original(orig: &AtomicUsize, a: usize, b: usize, c: usize, d:
     unsafe { f(a, b, c, d) }
 }
 
-/// Title CSMenu controller ctor 0x1409060d8: latches `router_this` (the object owning the
+/// Title CSMenu controller ctor 0x1409060d0 (real prologue entry; doc's 0x9060d8 was mid-
+/// prologue): latches `router_this` (the object owning the
 /// selectable Continue/Load/NewGame row vector at +0x1290) when its primary vtable
 /// (runtime `base+0x2afa070`) is installed. router_this is NOT field-linked from the
 /// TitleTopDialog, so this ctor capture is how the own-stepper obtains it. Pure observe +

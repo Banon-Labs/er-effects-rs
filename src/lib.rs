@@ -1352,7 +1352,10 @@ pub(crate) static MENU_LOADGAME_ROW_ENTRY: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static MENU_CONTINUE_ROW_ENTRY: AtomicUsize = AtomicUsize::new(0);
 /// router_this ctor RVA and its installed (runtime) primary vtable RVA (= base+this at runtime;
 /// on-disk objdump shows 0x2af9270, +0xe00 dump/PE skew).
-pub(crate) const CSMENU_CTOR_RVA: u32 = 0x009060d8;
+/// REAL function entry is 0x1409060d0 (`rex push rbp` prologue, objdump-verified); the doc's
+/// 0x9060d8 lands AFTER 5 pushes (push rbp/rsi/rdi/r12/r13) -- hooking there installs a
+/// trampoline mid-prologue and corrupts the stack, so the prior capture was unreliable.
+pub(crate) const CSMENU_CTOR_RVA: u32 = 0x009060d0;
 pub(crate) const ROUTER_THIS_VTABLE_RVA: usize = 0x02afa070;
 /// Row-push functions (RELIABLE .text RVAs, no .rdata skew): rebuild_rows 0x14078d2c0 (bulk
 /// emplace) and append_one 0x14078eea0 (single). If EITHER fires headless the Continue/Load rows
