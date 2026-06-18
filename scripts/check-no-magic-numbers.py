@@ -14,6 +14,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 IGNORED_DIRECTORIES = {".git", "target"}
+# Vendored/reference .rs files that are NOT part of the DLL build and are kept verbatim
+# (e.g. a copy of an upstream example) -- the no-magic-number rule applies to project source only.
+IGNORED_FILES = {Path("scripts/dearxan-deobfuscate.rs")}
 NUMERIC_LITERAL_RE = re.compile(
     r"(?<![A-Za-z0-9_.])"
     r"(?:"
@@ -104,6 +107,8 @@ def rust_source_files() -> list[Path]:
     paths: list[Path] = []
     for path in REPO_ROOT.rglob("*.rs"):
         if any(part in IGNORED_DIRECTORIES for part in path.relative_to(REPO_ROOT).parts):
+            continue
+        if path.relative_to(REPO_ROOT) in IGNORED_FILES:
             continue
         paths.append(path)
     return sorted(paths)

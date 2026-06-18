@@ -494,6 +494,172 @@ unsafe fn worldres_coldbuild_probe(base: usize) {
     ));
 }
 
+/// COLD CHAR-MOUNT experiment gate (env ER_EFFECTS_COLD_CHAR_MOUNT / er-effects-cold-char-mount.txt,
+/// OFF by default). The DECISIVE save-data experiment (save-io-infra-present-cold-char-mount-is-the-
+/// decisive-untested-experiment-2026): with the stream worker REGISTERED, can the b80 save-IO read
+/// drain to resident so 0x67b290 mounts the real char -- zero-input, SAVE-SAFE (reads the save,
+/// applies char to memory; NO SetState, NO save write).
+pub(crate) fn cold_char_mount_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_COLD_CHAR_MOUNT").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-cold-char-mount.txt")
+        .exists()
+}
+
+/// Multi-frame cold char-mount drive (gated, SAVE-SAFE). Sequence (worker registered): build+register
+/// the FD4 stream worker (0xb0a980 stub) so the scheduler ticks it and drains the save-IO read; set
+/// the slot; PREVIEW 0x67b4e0 (b80=1 + starts the iodev read); poll 0x679180 each frame until
+/// GameMan+0xb80==3 (the make-or-break -- the registered+ticked worker draining the read); then
+/// deserialize 0x67b290 (mounts GameMan+0xc30=real map + applies the char to PlayerGameData).
+/// NO SetState / NO save write. dump_load_correctness verifies the mounted char.
+unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) {
+    const PHASE_INIT: usize = 0;
+    const PHASE_LANE: usize = 1;
+    const PHASE_POLL: usize = 2;
+    const PHASE_DESER: usize = 3;
+    const PHASE_DONE: usize = 4;
+    const STUB_FILL: u8 = 0;
+    const POLL_ARG: u8 = 0;
+    const B80_RESIDENT: i32 = 3;
+    const B80_IDLE: i32 = 0;
+    const MOUNT_POLL_MAX: usize = 1200;
+    const LOG_INTERVAL: usize = 30;
+    const WAIT_INC: usize = 1;
+    static MOUNT_PHASE: AtomicUsize = AtomicUsize::new(PHASE_INIT);
+    static MOUNT_WAITS: AtomicUsize = AtomicUsize::new(0);
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if gm == null {
+        return;
+    }
+    let read_i32 = |off: usize| unsafe { *((gm + off) as *const i32) };
+    let iodev_summary = || -> (usize, usize, usize) {
+        let iodev = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
+        if iodev == null {
+            (null, null, null)
+        } else {
+            unsafe {
+                (
+                    *((iodev + IODEV_INFLIGHT_10_OFFSET) as *const usize),
+                    *((iodev + IODEV_REQHANDLE_18_OFFSET) as *const usize),
+                    *((iodev + IODEV_REQHANDLE_20_OFFSET) as *const usize),
+                )
+            }
+        }
+    };
+    let phase = MOUNT_PHASE.load(Ordering::SeqCst);
+    if phase == PHASE_INIT {
+        const SLOT_MIN: i32 = 0;
+        if want_slot < SLOT_MIN {
+            append_autoload_debug(format_args!(
+                "cold-char-mount: needs an EXPLICIT slot (slot={want_slot}); set slot=N in er-effects-own-stepper.txt -- ABORT (no-write)"
+            ));
+            MOUNT_PHASE.store(PHASE_DONE, Ordering::SeqCst);
+            return;
+        }
+        // (1) build + register the FD4 stream worker so the scheduler ticks it (drains the read).
+        let stub: &'static mut [u8; SYNTHETIC_STEP_THIS_SIZE] =
+            Box::leak(Box::new([STUB_FILL; SYNTHETIC_STEP_THIS_SIZE]));
+        let stub_ptr = stub.as_mut_ptr() as usize;
+        unsafe {
+            *((stub_ptr + SYNTHETIC_STEP_STATE_OFFSET) as *mut i32) = WORLD_WORKER_BUILD_STATE
+        };
+        let worker_build: unsafe extern "system" fn(usize) -> usize =
+            unsafe { std::mem::transmute(base + WORLD_WORKER_BUILD_RVA) };
+        unsafe { worker_build(stub_ptr) };
+        let worker = unsafe { *((base + WORLD_STREAM_WORKER_RVA) as *const usize) };
+        // (2) set the slot, then PREVIEW (b80=1 + start the iodev read).
+        let set_save_slot: unsafe extern "system" fn(i32) =
+            unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+        unsafe { set_save_slot(want_slot) };
+        let preview: unsafe extern "system" fn(i32) -> i32 =
+            unsafe { std::mem::transmute(base + LOAD_INITIATOR_RVA) };
+        let pret = unsafe { preview(want_slot) };
+        let (io10, io18, io20) = iodev_summary();
+        append_autoload_debug(format_args!(
+            "cold-char-mount: INIT slot={want_slot} worker=0x{worker:x} preview_ret={pret} b80={} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} -> LANE",
+            read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET)
+        ));
+        MOUNT_PHASE.store(PHASE_LANE, Ordering::SeqCst);
+        return;
+    }
+    if phase == PHASE_LANE {
+        // While b80==1, tick the b80==1 lane driver 0x679510 (IO tick) to drive the PREVIEW read to
+        // resident. It keeps b80=1 while in-progress and resets b80=0 once the read completes (the
+        // registered+ticked worker is what makes that completion happen). When b80==0, the iodev
+        // request is resident; fire LoadSaveData 0x67b200 to re-enter the b80=2 lane (populates io18).
+        let lane: unsafe extern "system" fn() -> i32 =
+            unsafe { std::mem::transmute(base + B80_LANE1_DRIVER_RVA) };
+        let _ = unsafe { lane() };
+        let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let w = MOUNT_WAITS.fetch_add(WAIT_INC, Ordering::SeqCst);
+        if w % LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS {
+            let (io10, io18, io20) = iodev_summary();
+            append_autoload_debug(format_args!(
+                "cold-char-mount: LANE waits={w} b80={b80} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x}"
+            ));
+        }
+        if b80 == B80_IDLE {
+            let loadsave: unsafe extern "system" fn(i32) -> i32 =
+                unsafe { std::mem::transmute(base + B80_LOAD_SAVE_DATA_INITIATOR_RVA) };
+            let lret = unsafe { loadsave(want_slot) };
+            let (io10, io18, io20) = iodev_summary();
+            append_autoload_debug(format_args!(
+                "cold-char-mount: preview read RESIDENT (b80->0 after {w} lane ticks) -> LoadSaveData 0x67b200 ret={lret} b80={} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} -> POLL",
+                read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET)
+            ));
+            MOUNT_WAITS.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+            MOUNT_PHASE.store(PHASE_POLL, Ordering::SeqCst);
+        } else if w >= MOUNT_POLL_MAX {
+            append_autoload_debug(format_args!(
+                "cold-char-mount: PREVIEW read never resident after {w} lane ticks (b80 stuck at {b80}, io18 never populated) -- the registered worker is NOT draining the read. TIMEOUT (no-write)"
+            ));
+            MOUNT_PHASE.store(PHASE_DONE, Ordering::SeqCst);
+        }
+        return;
+    }
+    if phase == PHASE_POLL {
+        let poll: unsafe extern "system" fn(u8, u8) -> i32 =
+            unsafe { std::mem::transmute(base + B80_POLL_RVA) };
+        let _ = unsafe { poll(POLL_ARG, POLL_ARG) };
+        let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let w = MOUNT_WAITS.fetch_add(WAIT_INC, Ordering::SeqCst);
+        if w % LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS {
+            let (io10, io18, io20) = iodev_summary();
+            append_autoload_debug(format_args!(
+                "cold-char-mount: POLL waits={w} b80={b80} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x}"
+            ));
+        }
+        if b80 == B80_RESIDENT {
+            append_autoload_debug(format_args!(
+                "cold-char-mount: b80 reached RESIDENT(3) after {w} polls -- the registered worker DRAINED the read -> DESERIALIZE"
+            ));
+            MOUNT_PHASE.store(PHASE_DESER, Ordering::SeqCst);
+        } else if w >= MOUNT_POLL_MAX {
+            append_autoload_debug(format_args!(
+                "cold-char-mount: b80 STUCK at {b80} after {w} polls (worker registered but read never resident) -- TIMEOUT (no-write)"
+            ));
+            MOUNT_PHASE.store(PHASE_DONE, Ordering::SeqCst);
+        }
+        return;
+    }
+    if phase == PHASE_DESER {
+        let deser: unsafe extern "system" fn(i32) -> i32 =
+            unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
+        let dret = unsafe { deser(want_slot) };
+        let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
+        let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
+        append_autoload_debug(format_args!(
+            "cold-char-mount: DESERIALIZE slot={want_slot} ret={dret} c30=0x{c30:x} ac0={ac0} (c30!=0x{GAME_MAN_NEWGAME_DEFAULT_MAP:x} default + ac0==slot = MOUNTED). NO SetState/NO save write -- save-data half SOLVED if char correct:"
+        ));
+        unsafe { dump_load_correctness(base, n) };
+        MOUNT_PHASE.store(PHASE_DONE, Ordering::SeqCst);
+        return;
+    }
+}
+
 /// The D-pad Down button mask to inject for poll-frame `n` (counted from the first poll after
 /// menu-open), per the INJECT_NAV schedule: settle, then `INJECT_NAV_MAX_CYCLES` tap+gap cycles
 /// with Down asserted for the first `INJECT_NAV_TAP_LEN` frames of each cycle. Returns 0 (no
@@ -1694,6 +1860,15 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
     // normal phase logic continues (default = stay at the open menu, save-safe).
     if worldres_coldbuild_probe_enabled() && n >= OWN_STEPPER_SETTLE_CALLS {
         unsafe { worldres_coldbuild_probe(base) };
+    }
+    // DECISIVE save-data experiment (gated OFF by default; SAVE-SAFE). Register the stream worker,
+    // then drive the cold b80 save-IO mount (preview -> poll to b80==3 -> deserialize) so 0x67b290
+    // mounts the real char to memory -- NO SetState, NO save write. Bypasses the menu drive while
+    // active; pass-through keeps the title ticking so the scheduler ticks the registered worker.
+    if cold_char_mount_enabled() && n >= OWN_STEPPER_SETTLE_CALLS {
+        unsafe { cold_char_mount_drive(base, gm, want_slot, n) };
+        pass_through(false);
+        return;
     }
     if phase == OWN_STEPPER_PHASE_MENU {
         // Drive once the boot settles. want_slot == -1 is the "most-recent" intent (resolved
