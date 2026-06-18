@@ -648,6 +648,20 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
             MOUNT_PHASE.store(PHASE_DONE, Ordering::SeqCst);
             return;
         }
+        // (-1) Set the save-file path/name on the container so the device read returns slot N's REAL
+        // .sl2 bytes. The native Continue handler runs this slot-mgr peek 0x140678a50 FIRST (reads
+        // [GameDataMan+0x8] container, sync-reads the save path token 0x47054, copies the name to
+        // container+0x94, sets GameMan+0xe70=1) before the load. The prior cold attempt SKIPPED it,
+        // so the device read an EMPTY buffer (deserialize gave c30=0xffffffff + garbage char).
+        // Save-safe (sets a path + reads metadata; NO save write).
+        const SLOT_MGR_PEEK_RVA: usize = 0x678a50;
+        let peek: unsafe extern "system" fn() =
+            unsafe { std::mem::transmute(base + SLOT_MGR_PEEK_RVA) };
+        unsafe { peek() };
+        append_autoload_debug(format_args!(
+            "cold-char-mount: slot-mgr peek 0x{:x}() -> set save-file path before mount (GameMan+0xe70 ready)",
+            base + SLOT_MGR_PEEK_RVA
+        ));
         // (0) REFRAME (2026-06-18, REFRAME-io-subsystem-present-cold-blocker-is-just-the-active-byte):
         // the FD4 IO subsystem (pool/task/iodev) is ALREADY present + CLEAN cold (snapshot-proven).
         // 0x67b200 fails cold ONLY because its slot-check 0x140261cd0 reads [ProfileSummary+8+slot]==0
