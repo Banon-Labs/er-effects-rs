@@ -518,6 +518,32 @@ print(f"save_safety_ok={save_safety_ok}")
 PY
 }
 
+capture_inworld_screenshot() {
+  # Save-safe (read-only) screenshot of ONLY the ER window (class steam_app_1245620), captured at
+  # the end of the run BEFORE teardown, to visually confirm the player reached the playable world
+  # (the stronger oracle than player_available, which can fire on a loading screen). PRIVACY: query
+  # + grim ONLY the ER window by its class; never enumerate or log any other window.
+  python3 - "$ARTIFACT_DIR" <<'PY' 2>/dev/null || true
+import json, subprocess, sys
+from pathlib import Path
+artifact = Path(sys.argv[1])
+log = artifact / "inworld-screenshot.log"
+try:
+    out = subprocess.run(["hyprctl", "-j", "clients"], capture_output=True, text=True, timeout=5).stdout
+    er = [w for w in json.loads(out) if w.get("class") == "steam_app_1245620"]
+except Exception as exc:
+    log.write_text(f"hyprctl_failed={exc}\n", encoding="utf-8"); raise SystemExit(0)
+if not er:
+    log.write_text("er_window_not_found\n", encoding="utf-8"); raise SystemExit(0)
+win = er[0]
+x, y = win["at"]; w, h = win["size"]
+geom = f"{x},{y} {w}x{h}"
+png = artifact / "inworld.png"
+rc = subprocess.run(["grim", "-g", geom, str(png)], capture_output=True, text=True, timeout=10)
+log.write_text(f"captured geom={geom} grim_rc={rc.returncode} stderr={rc.stderr.strip()}\n", encoding="utf-8")
+PY
+}
+
 cleanup_runtime() {
   (( CLEANUP_ARMED )) || return 0
   CLEANUP_ARMED=0
@@ -915,6 +941,7 @@ else
   DRIVER_RC=$?
 fi
 
+capture_inworld_screenshot
 cleanup_runtime
 if [[ "$RUNTIME_SKIP_FINAL_MEASURE" == "1" ]]; then
   exit "$DRIVER_RC"
