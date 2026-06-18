@@ -37,6 +37,16 @@ cleanup() {
   cp -f "$BUNDLE/live.sl2.bak" "$SAVE_DIR/ER0000.sl2" 2>/dev/null
   SHA_AFTER=$(sha256sum "$SAVE_DIR/ER0000.sl2" 2>/dev/null | cut -d' ' -f1)
   echo "sha_restored=$SHA_AFTER save_safe=$([[ "$SHA_AFTER" == "$SHA_BEFORE" ]] && echo 1 || echo 0)" >> "$BUNDLE/progress.log"
+  # save.json reflects the POST-RESTORE state (the game autosaves mid-run; save-safety = the live
+  # .sl2 is byte-identical after the run's backup/restore). Written here, after the restore.
+  SAVE_SRC_SHA=$(sha256sum "$REPO/$SAVE_NAME/ER0000.sl2" 2>/dev/null | cut -d' ' -f1)
+  python3 - "$BUNDLE/save.json" "$SAVE_NAME" "$SAVE_SRC_SHA" "$SHA_BEFORE" "$SHA_AFTER" <<'PY'
+import json, sys
+path, save_name, save_sha, before, after = sys.argv[1:6]
+json.dump({"save_used": save_name, "save_sha256": save_sha,
+           "live_sha_before": before, "live_sha_after_restore": after,
+           "save_safe": before == after}, open(path, "w"), indent=2)
+PY
 }
 trap cleanup EXIT
 
@@ -97,9 +107,7 @@ except Exception:
 json.dump({"mode": "golden", "input_method": "virtual_xbox_gamepad",
            "dll_simulated_button_presses_total": t.get("simulated_button_presses_total"),
            "gamepad_taps_sent": int(taps)}, open(f"{bundle}/input.json", "w"), indent=2)
-json.dump({"save_used": save_name, "save_sha256": save_sha,
-           "live_sha_before": sha_before, "live_sha_after": sha_now,
-           "save_safe": sha_before == sha_now}, open(f"{bundle}/save.json", "w"), indent=2)
+# save.json is written by cleanup() AFTER the restore (post-restore hash = true save-safety).
 open(f"{bundle}/cmd.txt", "w").write(f"ER_TEST_SAVE={save_name} bash .auto/golden-capture.sh\n")
 print("bundle assembled")
 PY
