@@ -1440,6 +1440,31 @@ unsafe fn scan_dialog_for_loadgame(owner: usize, base: usize) -> Option<usize> {
     append_autoload_debug(format_args!(
         "loadgame-scan: dialog=0x{dialog:x} registry(0xa48)=0x{registry:x} source(0xa38)=0x{source:x} functor_vt=0x{functor_vt:x} memberjob_vt=0x{memberjob_vt:x} -- scanning {SCAN_QWORDS} qwords"
     ));
+    // DIRECT-BUILD r8 (ctor owner-obj) candidate validation (2026-06-18 breakthrough: the
+    // ProfileLoadDialog ctor 0x1409a3d90 is COLD-VIABLE -- it builds router_this + slot rows
+    // inline, no session/PGD/input-focus deps). dialog_factory 0x14081ead0 passes the ctor
+    // r8 = *(capture+8); the gold capture showed that = owner+0x138, and the ctor reads the
+    // profile ROW-VECTOR COUNT at [r8+0xa60]. Validate READ-ONLY which candidate has a plausible
+    // vtable [+0] + a small row count [+0xa60] BEFORE any native build call (look before acting).
+    const OWNER_MENU_OBJ_138: usize = 0x138;
+    const CTOR_ROW_COUNT_A60: usize = 0xa60;
+    const CTOR_ROW_VEC_BEGIN_A58: usize = 0xa58;
+    const R8_CAND_N: usize = 2;
+    let cand_a = owner + OWNER_MENU_OBJ_138;
+    let cand_b = unsafe { safe_read_usize(cand_a) }.unwrap_or(NULL);
+    let cands: [(&str, usize); R8_CAND_N] =
+        [("owner+0x138", cand_a), ("*(owner+0x138)", cand_b)];
+    for (tag, c) in cands.iter() {
+        if *c == NULL {
+            continue;
+        }
+        let cvt = unsafe { safe_read_usize(*c) }.unwrap_or(NULL);
+        let cnt = unsafe { safe_read_usize(*c + CTOR_ROW_COUNT_A60) }.unwrap_or(NULL);
+        let vbeg = unsafe { safe_read_usize(*c + CTOR_ROW_VEC_BEGIN_A58) }.unwrap_or(NULL);
+        append_autoload_debug(format_args!(
+            "loadgame-scan: r8-cand[{tag}]=0x{c:x} vt=0x{cvt:x} rowvec_begin[+0xa58]=0x{vbeg:x} rowcount[+0xa60]=0x{cnt:x}"
+        ));
+    }
     let mut found_item: Option<usize> = None;
     let mut hits = HIT_START;
     let mut q = QW_START;
