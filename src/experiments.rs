@@ -3128,6 +3128,7 @@ unsafe fn own_stepper_stage2(
             const STEP_JOB_70: usize = 0x70;
             const TICK_CTX_LEN: usize = 2;
             const TICK_CTX_DONE_IDX: usize = 1;
+            const TICK_CTX_STATE_IDX: usize = 0;
             const TICK_CTX_INIT: u32 = 0;
             const FD4TIME_PAD_INIT: u32 = 0;
             const FD4TIME_DELTA_FALLBACK: f32 = 0.0166667;
@@ -3159,13 +3160,54 @@ unsafe fn own_stepper_stage2(
                     (&mut result) as *mut Fd4Time as usize,
                 )
             };
+            // The step tick creates the LoadJob (step+0x70) but its execute (menu_deser) is not
+            // submitting the read (b80 stays 0). Call the job's execute DIRECTLY each frame:
+            // [[step+0x70]]+0x10(rcx=job, rdx=&ctx, r8=&result-FD4Time) = menu_deser 0x14082c240
+            // (submits the 0x280000 full-save read + advances its state machine).
+            const JOB_VTBL_EXEC_10: usize = 0x10;
+            const MD_RET_INIT: i64 = -1;
+            let job_now = unsafe { safe_read_usize(step + STEP_JOB_70) }.unwrap_or(null);
+            let mut md_ret: i64 = MD_RET_INIT;
+            if job_now != null {
+                let job_vt = unsafe { safe_read_usize(job_now) }.unwrap_or(null);
+                let exec_slot = if job_vt != null {
+                    unsafe { safe_read_usize(job_vt + JOB_VTBL_EXEC_10) }.unwrap_or(null)
+                } else {
+                    null
+                };
+                if exec_slot != null {
+                    let exec: unsafe extern "system" fn(usize, usize, usize) -> i64 =
+                        unsafe { std::mem::transmute(exec_slot) };
+                    md_ret = unsafe {
+                        exec(
+                            job_now,
+                            tctx.as_mut_ptr() as usize,
+                            (&mut result) as *mut Fd4Time as usize,
+                        )
+                    };
+                }
+            }
+            // Co-drive the b80 IO lane each frame so menu_deser's submitted full-save read advances
+            // to resident (b80 0->1->resident->3). menu_deser POLLS 0x679180 but does not tick the
+            // b80==1 IO driver 0x679510 itself; cold_char_mount proved this pair drains the read
+            // cold. We do NOT set_save_slot here (it would force ac0 and defeat the mount guard --
+            // menu_deser sets ac0 on real completion).
+            const B80_LANE_DRIVE_RVA: usize = 0x679510;
+            const B80_POLL_DRIVE_RVA: usize = 0x679180;
+            const B80_POLL_ARG: u8 = 0;
+            let lane: unsafe extern "system" fn() -> i32 =
+                unsafe { std::mem::transmute(base + B80_LANE_DRIVE_RVA) };
+            let _ = unsafe { lane() };
+            let poll: unsafe extern "system" fn(u8, u8) -> i32 =
+                unsafe { std::mem::transmute(base + B80_POLL_DRIVE_RVA) };
+            let _ = unsafe { poll(B80_POLL_ARG, B80_POLL_ARG) };
             let install_flag =
                 unsafe { safe_read_usize(step + STEP_INSTALL_FLAG_68) }.unwrap_or(null);
             let job = unsafe { safe_read_usize(step + STEP_JOB_70) }.unwrap_or(null);
             if waits % S2_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
                 append_autoload_debug(format_args!(
-                    "own_stepper: STAGE2-SELECTOR-TICK waits={waits} step=0x{step:x} install_flag=0x{install_flag:x} job=0x{job:x} ctx_done={} delta={delta} c30=0x{c30:x} ac0={ac0} b80={b80} io18=0x{io18:x} io20=0x{io20:x}",
-                    tctx[TICK_CTX_DONE_IDX]
+                    "own_stepper: STAGE2-SELECTOR-TICK waits={waits} step=0x{step:x} install_flag=0x{install_flag:x} job=0x{job:x} md_ret={md_ret} ctx_done={} ctx_state={} delta={delta} c30=0x{c30:x} ac0={ac0} b80={b80} io18=0x{io18:x} io20=0x{io20:x}",
+                    tctx[TICK_CTX_DONE_IDX], tctx[TICK_CTX_STATE_IDX]
                 ));
             }
         }
