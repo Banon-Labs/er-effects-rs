@@ -2004,6 +2004,23 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         unsafe { install_sw_breakpoints_once(base) };
                     }
                 }
+                // STAY-ACTIVE: force ER's input-accept flag so a virtual gamepad keeps driving the
+                // menus while ER is UNFOCUSED (user can work elsewhere during a golden capture). ER
+                // clears [DLUID+0x88d] each frame when it isn't GetActiveWindow; re-set it to 1.
+                if stay_active_enabled() {
+                    if let Ok(base) = game_module_base() {
+                        const DLUID_SINGLETON_RVA: usize = 0x4c85dc18;
+                        const DLUID_INPUT_ACTIVE_FLAG_OFFSET: usize = 0x88d;
+                        const INPUT_ACTIVE: u8 = 1;
+                        const NULL_DLUID: usize = 0;
+                        let dluid = unsafe { *((base + DLUID_SINGLETON_RVA) as *const usize) };
+                        if dluid != NULL_DLUID {
+                            unsafe {
+                                *((dluid + DLUID_INPUT_ACTIVE_FLAG_OFFSET) as *mut u8) = INPUT_ACTIVE
+                            };
+                        }
+                    }
+                }
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
                     let mut state = state_or_return(&state);
                     state.game_task_ticks += GAME_TASK_TICK_INCREMENT;

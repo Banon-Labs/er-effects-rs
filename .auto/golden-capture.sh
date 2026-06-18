@@ -48,6 +48,7 @@ echo "vgamepad started" >> "$BUNDLE/progress.log"
 # --- observe-only DLL ---
 rm -f "$GAME/er-effects-own-stepper.txt" "$GAME/er-effects-direct-build.txt" "$GAME/er-effects-block-input.txt"
 printf '1\n' > "$GAME/er-effects-offline.txt"
+printf '1\n' > "$GAME/er-effects-stay-active.txt"   # keep input accepted while ER is unfocused
 cp -f "$REPO/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll" "$GAME/dllMods/er_effects_rs.dll"
 
 # --- launch (background) ---

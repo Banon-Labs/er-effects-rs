@@ -291,6 +291,27 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         body.push_str(&format!(
             "  \"oracle_load_in_progress_b80\": {b80},\n  \"oracle_saved_map_c30\": \"{c30:#x}\",\n"
         ));
+        // IDENTITY oracle: loaded char level (must == the chosen save's folder-name level).
+        // GameDataMan = [base+0x4588268]; PlayerGameData = [GameDataMan+0x8]; level = u32 @ pgd+0x68.
+        const PLAYER_GAME_DATA_SINGLETON_RVA: usize = 0x4588268;
+        const GAME_DATA_MAN_PGD_08_OFFSET: usize = 0x8;
+        const PGD_LEVEL_68_OFFSET: usize = 0x68;
+        const LEVEL_READ_FAIL: i64 = -1;
+        let gdm = unsafe { crate::experiments::safe_read_usize(base + PLAYER_GAME_DATA_SINGLETON_RVA) }
+            .unwrap_or(NULL_PTR);
+        let pgd = if gdm == NULL_PTR {
+            NULL_PTR
+        } else {
+            unsafe { crate::experiments::safe_read_usize(gdm + GAME_DATA_MAN_PGD_08_OFFSET) }
+                .unwrap_or(NULL_PTR)
+        };
+        let level = if pgd == NULL_PTR {
+            LEVEL_READ_FAIL
+        } else {
+            unsafe { crate::experiments::safe_read_usize(pgd + PGD_LEVEL_68_OFFSET) }
+                .map_or(LEVEL_READ_FAIL, |v| (v as u32) as i64)
+        };
+        body.push_str(&format!("  \"oracle_char_level\": {level},\n"));
     }
     if let Ok(player) = unsafe { PlayerIns::local_player_mut() } {
         let pos = player.chr_ins.modules.physics.position;

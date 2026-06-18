@@ -4319,6 +4319,19 @@ const BLOCK_INPUT_ON: usize = 1;
 /// Original `XInputGetState` (minhook trampoline). 0 until the hook installs.
 pub(crate) static XINPUT_GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 
+/// STAY-ACTIVE gate (`ER_EFFECTS_STAY_ACTIVE=1` / `er-effects-stay-active.txt`). When set, keep ER's
+/// input-accept flag `[DLUID+0x88d]` forced to 1 every tick so a virtual gamepad keeps driving the
+/// menus while ER is UNFOCUSED -- letting the user work in another window during a golden capture.
+/// Decoded: ER clears that flag each frame when it isn't `GetActiveWindow` (`0x141f292bd`); we re-set
+/// it. Touches ONLY focus-input gating, never the sim/save/load.
+pub(crate) fn stay_active_enabled() -> bool {
+    matches!(std::env::var("ER_EFFECTS_STAY_ACTIVE").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-stay-active.txt")
+            .exists()
+}
+
 /// True when the autoload/own-stepper probe must run UNCONTAMINATED -- no real keyboard,
 /// mouse (move/click), or gamepad input may reach the game even if the user focuses the
 /// window. Auto-on whenever the own-stepper drives the front-end (the whole point of that
