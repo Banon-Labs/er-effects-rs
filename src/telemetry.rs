@@ -317,6 +317,26 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
                 .map_or(LEVEL_READ_FAIL, |v| (v as u32) as i64)
         };
         body.push_str(&format!("  \"oracle_char_level\": {level},\n"));
+        // WORLD-LIVE oracle: CSNowLoadingHelper "now loading" latch = *(u8*)([base+0x3d60ec8]+0xED).
+        // 1 = loading screen ACTIVE; 0 = cleared / playable (latches when the MoveMapStep world-load
+        // steps stop requesting the loading screen). This replaces the grounded check, which fires
+        // DURING loading (player physics exist before the world renders).
+        const NOW_LOADING_SINGLETON_RVA: usize = 0x3d60ec8;
+        const NOW_LOADING_FLAG_OFFSET: usize = 0xed;
+        const NOW_LOADING_UNKNOWN: i32 = -1;
+        const NOW_LOADING_BYTE_MASK: usize = 0xff;
+        let now_loading = {
+            let helper =
+                unsafe { crate::experiments::safe_read_usize(base + NOW_LOADING_SINGLETON_RVA) }
+                    .unwrap_or(NULL_PTR);
+            if helper == NULL_PTR {
+                NOW_LOADING_UNKNOWN
+            } else {
+                unsafe { crate::experiments::safe_read_usize(helper + NOW_LOADING_FLAG_OFFSET) }
+                    .map_or(NOW_LOADING_UNKNOWN, |v| (v & NOW_LOADING_BYTE_MASK) as i32)
+            }
+        };
+        body.push_str(&format!("  \"oracle_now_loading\": {now_loading},\n"));
     }
     if let Ok(player) = unsafe { PlayerIns::local_player_mut() } {
         let pos = player.chr_ins.modules.physics.position;

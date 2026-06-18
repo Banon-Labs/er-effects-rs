@@ -60,14 +60,18 @@ if ws:
  x,y=ws[0]['at']; w,h=ws[0]['size']; subprocess.run(['grim','-g',f'{x},{y} {w}x{h}','$1'])" 2>/dev/null; }
 
 # --- wait (zero-input) for the autoload to land the player in-world ---
-START=$(date +%s)
+START=$(date +%s); CLEAR_NEEDED=4; clear_count=0
 while :; do
   el=$(( $(date +%s) - START ))
-  [[ $el -ge $MAX_SECONDS ]] && { echo "TIMEOUT ${el}s player=$(jfield oracle_player_present) grounded=$(jfield oracle_grounded) presses=$(jfield simulated_button_presses_total)" >> "$BUNDLE/progress.log"; break; }
-  if [[ "$(jfield oracle_grounded)" == "True" ]] && [[ "$(jfield oracle_player_present)" == "True" ]]; then
-    echo "IN-WORLD at ${el}s presses=$(jfield simulated_button_presses_total)" >> "$BUNDLE/progress.log"; break
+  [[ $el -ge $MAX_SECONDS ]] && { echo "TIMEOUT ${el}s player=$(jfield oracle_player_present) now_loading=$(jfield oracle_now_loading) presses=$(jfield simulated_button_presses_total)" >> "$BUNDLE/progress.log"; break; }
+  nl=$(jfield oracle_now_loading); b=$(jfield oracle_load_in_progress_b80); pl=$(jfield oracle_player_present)
+  if [[ "$pl" == "True" ]] && [[ "$nl" == "0" ]] && [[ "$b" == "0" ]]; then
+    clear_count=$((clear_count+1))
+    [[ $clear_count -ge $CLEAR_NEEDED ]] && { echo "WORLD LIVE at ${el}s (now_loading=0 b80=0 x${clear_count}) presses=$(jfield simulated_button_presses_total)" >> "$BUNDLE/progress.log"; break; }
+  else
+    clear_count=0
   fi
-  echo "t=${el}s player=$(jfield oracle_player_present) grounded=$(jfield oracle_grounded) b80=$(jfield oracle_load_in_progress_b80) presses=$(jfield simulated_button_presses_total)" >> "$BUNDLE/progress.log"
+  echo "t=${el}s player=$pl now_loading=$nl b80=$b grounded=$(jfield oracle_grounded) presses=$(jfield simulated_button_presses_total)" >> "$BUNDLE/progress.log"
   sleep 1
 done
 

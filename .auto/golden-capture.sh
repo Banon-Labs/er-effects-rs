@@ -82,17 +82,33 @@ while :; do
     b80=$(jfield oracle_load_in_progress_b80)
     echo "t=${el}s tap#$i A b80=$b80 player=$(jfield oracle_player_present) grounded=$(jfield oracle_grounded)" >> "$BUNDLE/progress.log"
     [[ $((i % 4)) -eq 0 ]] && shot "$BUNDLE/menu-${el}s.png"
-    # stop the moment the character is in the playable world (grounded on solid ground), BEFORE
-    # over-mashing opens an in-game menu -- so the golden shot is the gameplay HUD.
-    if [[ "$(jfield oracle_grounded)" == "True" ]] && [[ "$(jfield oracle_player_present)" == "True" ]]; then
-      echo "IN-WORLD at ${el}s (grounded) -- stop mashing, settle, capture" >> "$BUNDLE/progress.log"; break
+    # stop mashing once the load is committed (player object exists); the world is still on the
+    # loading screen at this point -- we wait for it to clear below.
+    if [[ "$(jfield oracle_player_present)" == "True" ]]; then
+      echo "LOAD COMMITTED at ${el}s (player present) -- stop mashing, wait for world-live" >> "$BUNDLE/progress.log"; break
     fi
   fi
   sleep 0.25
 done
 
-# --- assemble the GOLDEN proof bundle ---
-sleep 1   # let the spawn settle / menu close
+# --- wait for the loading screen to CLEAR: CSNowLoadingHelper now_loading -> 0 AND GameMan b80 -> 0,
+# debounced over several polls (player physics exist during loading; this flag latches when the
+# MoveMapStep world-load actually finishes). THEN capture the gameplay-HUD shot.
+WORLD_LIVE_MAX=50; CLEAR_NEEDED=4; clear_count=0; ws=$(date +%s)
+while :; do
+  el2=$(( $(date +%s) - ws ))
+  [[ $el2 -ge $WORLD_LIVE_MAX ]] && { echo "world-live TIMEOUT +${el2}s now_loading=$(jfield oracle_now_loading)" >> "$BUNDLE/progress.log"; break; }
+  nl=$(jfield oracle_now_loading); b=$(jfield oracle_load_in_progress_b80)
+  if [[ "$nl" == "0" ]] && [[ "$b" == "0" ]]; then
+    clear_count=$((clear_count+1))
+    [[ $clear_count -ge $CLEAR_NEEDED ]] && { echo "WORLD LIVE at +${el2}s (now_loading=0 b80=0 x${clear_count})" >> "$BUNDLE/progress.log"; break; }
+  else
+    clear_count=0
+  fi
+  echo "wait world-live +${el2}s now_loading=$nl b80=$b grounded=$(jfield oracle_grounded)" >> "$BUNDLE/progress.log"
+  sleep 1
+done
+sleep 1
 shot "$BUNDLE/shot.png"
 cp -f "$TEL" "$BUNDLE/state.json" 2>/dev/null
 SHA_NOW=$(sha256sum "$SAVE_DIR/ER0000.sl2" 2>/dev/null | cut -d' ' -f1)
