@@ -8,3 +8,7 @@ __pycache__/
 .beads-credential-key
 
 /save-files
+
+# Deobfuscated (Arxan-decrypted) ER image for static RE -- copyrighted game binary, NEVER commit
+eldenring-deobf.bin
+*.deobf.bin
