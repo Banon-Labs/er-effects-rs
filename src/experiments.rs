@@ -417,6 +417,26 @@ pub(crate) fn inject_nav_enabled() -> bool {
             .exists()
 }
 
+/// DISPROVEN/LEGACY menu-drive escape hatch -- deliberately OFF by default and HARD to trigger.
+///
+/// The own_stepper "title-confirm" Load drive (fire_titletop_load_entry + the d180-locate walk) was
+/// built on a MISIDENTIFIED function: RTTI on the dearxan-deobfuscated image proved 0x14078e1c0 is
+/// `CommandSelectDialog::Update` (an in-game dialog), NOT the title menu's confirm router, so its
+/// offsets (cursor [+0xb0c], rows [+0x1290]) do NOT apply to the TitleTopDialog at owner+0xe0
+/// (RTTI vt 0x142b26468). See bd rtti-correction-0x14078e1c0-is-commandselectdialog-not-title-
+/// confirm-2026. We keep the code (it still has diagnostic value) but it must NEVER be the default
+/// path: a fresh session running plain own_stepper must not take this wrong route. The trigger name
+/// is intentionally obscure so it cannot be stumbled into -- enable ONLY to revisit the dead path.
+pub(crate) fn legacy_menu_drive_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_LEGACY_DISPROVEN_MENU_DRIVE").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-legacy-disproven-menu-drive.txt")
+        .exists()
+}
+
 /// The D-pad Down button mask to inject for poll-frame `n` (counted from the first poll after
 /// menu-open), per the INJECT_NAV schedule: settle, then `INJECT_NAV_MAX_CYCLES` tap+gap cycles
 /// with Down asserted for the first `INJECT_NAV_TAP_LEN` frames of each cycle. Returns 0 (no
@@ -2007,19 +2027,41 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             pass_through(false);
             return;
         }
-        // ZERO-INPUT title-confirm Load (STATIC-RE validated; titletop-confirm-route-static-
-        // validated-no-input-needed-2026). The Continue/Load rows are TitleTopDialog ENTRIES, NOT
-        // FD4 MenuWindowJobs, so the d180 walk/hook can never find them (Model A, runtime-proven:
-        // d180-not-in-owner130-ifelsejob-model-A-confirmed). Once the dialog's row vector is
-        // realized, fire_titletop_load_entry replicates the confirm router 0x14078e1c0's entry-
-        // action call directly -- self-validating (asserts dialog vtable + populated rows + a
-        // Load-Game entry whose [entry+0xf8] action chains to dialog_factory, BEFORE firing) -- to
-        // build the ProfileLoadDialog, then STAGE 2 drives it. No input injection, no d180 self-
-        // fire. This supersedes (and replaces) the refuted d180-locate search below.
+        // SAFE DEFAULT (RTTI-corrected, 2026-06-17). The "title-confirm" menu-drive below was built
+        // on a MISIDENTIFIED function: 0x14078e1c0 is CommandSelectDialog::Update (an in-game
+        // dialog), NOT the TitleTopDialog (owner+0xe0, RTTI vt 0x142b26468) confirm router, so its
+        // cursor [+0xb0c] / rows [+0x1290] offsets do not apply here (bd rtti-correction-...). It is
+        // now DEMOTED behind legacy_menu_drive_enabled(). A plain own_stepper run must NOT take that
+        // wrong route -- it reaches the open menu zero-input and STAYS there (no fire, no SetState,
+        // save-safe). The real headless Load path is the own-the-stepper / session-activation route,
+        // not driving these fake-menu steppers.
         if OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO
             && !own_stepper_passive_enabled()
+            && !legacy_menu_drive_enabled()
             && !input_probe_enabled()
             && !inject_nav_enabled()
+        {
+            if OWN_STEPPER_TITLE_FIRED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+                == TITLE_OWNER_SCAN_START_ADDRESS
+            {
+                append_autoload_debug(format_args!(
+                    "own_stepper: menu open zero-input; disproven title-confirm menu-drive is gated OFF (RTTI-corrected) -- STAY at open menu (NO-WRITE). Set er-effects-legacy-disproven-menu-drive.txt to revisit the dead path."
+                ));
+            }
+            if waits >= OWN_STEPPER_MENU_BUILD_WAIT_MAX {
+                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+            }
+            pass_through(false);
+            return;
+        }
+        // LEGACY / DISPROVEN title-confirm Load -- gated behind legacy_menu_drive_enabled() (OFF by
+        // default). Built on titletop-confirm-route-static-validated-no-input-needed-2026, which RTTI
+        // later REFUTED (0x14078e1c0 = CommandSelectDialog::Update). fire_titletop_load_entry is
+        // self-validating so it fail-closes on the wrong object, but it is the WRONG layer entirely;
+        // kept only to revisit the dead path deliberately. Never the default.
+        if OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO
+            && !own_stepper_passive_enabled()
+            && legacy_menu_drive_enabled()
         {
             let null = TITLE_OWNER_SCAN_START_ADDRESS;
             let dialog =
