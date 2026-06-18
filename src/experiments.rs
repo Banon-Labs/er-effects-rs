@@ -1190,7 +1190,10 @@ unsafe fn cursor_offset_probe(owner: usize, base: usize, baseline: bool) {
     ));
 }
 
-unsafe fn dump_titletop_menu_entries(owner: usize, base: usize) -> (Option<usize>, Option<usize>, i32) {
+unsafe fn dump_titletop_menu_entries(
+    owner: usize,
+    base: usize,
+) -> (Option<usize>, Option<usize>, i32) {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const DIALOG_E0: usize = 0xe0;
     const MENU_SUBOBJ_A38: usize = 0xa38;
@@ -1355,6 +1358,140 @@ unsafe fn dump_titletop_menu_entries(owner: usize, base: usize) -> (Option<usize
         idx += IDX_STEP;
     }
     (load_game, continue_entry, cursor)
+}
+
+/// SAVE-SAFE READ-ONLY structural scan of the OPEN TitleTopDialog for the Load-Game entry,
+/// using the two RTTI fingerprints from the 2026-06-18 reconciliation
+/// (bd title-load-is-profileloaddialog-NOT-movemapliststep-b78-dead-2026):
+///   * d180 std::function `_Func_impl` vtable = `base+0x2ac3ea8` (its `_Do_call` 0x140820c60
+///     `add rcx,8; jmp dialog_factory 0x14081ead0`), held at a MenuWindowJob's `+0xa8`;
+///   * `CS::MenuMemberFuncJob<TitleTopDialog>` vtable = `base+0x2b265d0` (run 0x1409aaba0),
+///     the entries the registrar 0x1409b24e0 registers into `[dialog+0xa48]`.
+/// The prior d180-locate walked the FD4 MenuJobSequence tree (owner+0xe0/0x130/0x138) and never
+/// surfaced the item, because the title rows are TitleTopDialog REGISTRY entries, not Sequence
+/// children, AND `[dialog+0xa48]` is an opaque FD4 delegate registry (insert 0x1407a6c00, vcall
+/// node-build -- not statically walkable). This instead does a BOUNDED flat scan of the dialog
+/// object's own fields for any pointer to either fingerprint (and any object whose `+0xa8` holds
+/// the d180 functor = a MenuWindowJob d180). Pure ReadProcessMemory (safe_read_usize tolerates bad
+/// derefs) -> NO writes, NO native calls -> save-safe. RECON-ONLY: logs every hit and RETURNS the
+/// first d180 MenuWindowJob found, but does NOT latch/advance (the caller decides) so a first run
+/// stays NO-WRITE at the menu.
+unsafe fn scan_dialog_for_loadgame(owner: usize, base: usize) -> Option<usize> {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const DIALOG_E0: usize = 0xe0;
+    const ENTRY_REGISTRY_A48: usize = 0xa48;
+    const ENTRY_SOURCE_A38: usize = 0xa38;
+    // d180 std::function _Func_impl vtable (user-capture-confirmed); MenuMemberFuncJob vtable.
+    const FUNCTOR_VTABLE_RVA: usize = 0x02ac3ea8;
+    const MEMBERFUNCJOB_VTABLE_RVA: usize = 0x02b265d0;
+    const FACTORY_RVA: usize = 0x0081ead0;
+    const ITEM_FUNCTOR_A8: usize = 0xa8;
+    const MEMBER_FN_18: usize = 0x18;
+    const MEMBER_DIALOG_10: usize = 0x10;
+    const MEMBER_ADJ_20: usize = 0x20;
+    const SCAN_QWORDS: usize = 0x500;
+    const PTR_SZ: usize = core::mem::size_of::<usize>();
+    const PTR_ALIGN_MASK: usize = 0x7;
+    const HEAP_LO: usize = 0x10000;
+    const QW_START: usize = 0;
+    const QW_STEP: usize = 1;
+    const JMP_HOPS: usize = 6;
+    const HOP_START: usize = 0;
+    const HOP_STEP: usize = 1;
+    const HIT_CAP: usize = 24;
+    const HIT_START: usize = 0;
+    const HIT_STEP: usize = 1;
+
+    let dialog = unsafe { safe_read_usize(owner + DIALOG_E0) }.unwrap_or(NULL);
+    if dialog == NULL {
+        return None;
+    }
+    let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(NULL);
+    if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+        append_autoload_debug(format_args!(
+            "loadgame-scan: owner+0xe0=0x{dialog:x} vt=0x{dialog_vt:x} != TitleTopDialog 0x{:x} -- skip",
+            base + TITLE_TOP_DIALOG_VTABLE_RVA
+        ));
+        return None;
+    }
+    let functor_vt = base + FUNCTOR_VTABLE_RVA;
+    let memberjob_vt = base + MEMBERFUNCJOB_VTABLE_RVA;
+    let factory_abs = base + FACTORY_RVA;
+    // Resolve a (member-)fn forward through up to JMP_HOPS jmp-thunks; true if it reaches the
+    // Load-Game dialog_factory. (A full member fn that only CALLs the factory internally won't
+    // chain-resolve; the raw fn VA is logged regardless for offline disasm.)
+    let reaches_factory = |start: usize| -> bool {
+        let mut tgt = start;
+        let mut hop = HOP_START;
+        while hop < JMP_HOPS && tgt != NULL {
+            if tgt == factory_abs {
+                return true;
+            }
+            match unsafe { decode_thunk_hop(tgt) } {
+                Some(next) => tgt = next,
+                None => break,
+            }
+            hop += HOP_STEP;
+        }
+        tgt == factory_abs
+    };
+    let registry = unsafe { safe_read_usize(dialog + ENTRY_REGISTRY_A48) }.unwrap_or(NULL);
+    let source = unsafe { safe_read_usize(dialog + ENTRY_SOURCE_A38) }.unwrap_or(NULL);
+    append_autoload_debug(format_args!(
+        "loadgame-scan: dialog=0x{dialog:x} registry(0xa48)=0x{registry:x} source(0xa38)=0x{source:x} functor_vt=0x{functor_vt:x} memberjob_vt=0x{memberjob_vt:x} -- scanning {SCAN_QWORDS} qwords"
+    ));
+    let mut found_item: Option<usize> = None;
+    let mut hits = HIT_START;
+    let mut q = QW_START;
+    while q < SCAN_QWORDS {
+        let off = q * PTR_SZ;
+        let p = unsafe { safe_read_usize(dialog + off) }.unwrap_or(NULL);
+        if p != NULL && (p & PTR_ALIGN_MASK) == QW_START && p >= HEAP_LO {
+            let vt = unsafe { safe_read_usize(p) }.unwrap_or(NULL);
+            if vt == memberjob_vt {
+                // (a) a MenuMemberFuncJob registry entry node.
+                let mfn = unsafe { safe_read_usize(p + MEMBER_FN_18) }.unwrap_or(NULL);
+                let mdlg = unsafe { safe_read_usize(p + MEMBER_DIALOG_10) }.unwrap_or(NULL);
+                let madj = unsafe { safe_read_usize(p + MEMBER_ADJ_20) }.unwrap_or(NULL);
+                let rf = reaches_factory(mfn);
+                if hits < HIT_CAP {
+                    append_autoload_debug(format_args!(
+                        "loadgame-scan: dialog+0x{off:x} MenuMemberFuncJob node=0x{p:x} member_fn=0x{mfn:x} reaches_factory={rf} back=0x{mdlg:x} adj=0x{madj:x}"
+                    ));
+                }
+                hits += HIT_STEP;
+            } else if vt == functor_vt {
+                // (b) the d180 functor object itself.
+                if hits < HIT_CAP {
+                    append_autoload_debug(format_args!(
+                        "loadgame-scan: dialog+0x{off:x} -> d180 FUNCTOR object=0x{p:x} (vt 0x2ac3ea8)"
+                    ));
+                }
+                hits += HIT_STEP;
+            } else {
+                // (c) a MenuWindowJob whose +0xa8 holds the d180 functor = the Load-Game item.
+                let fa8 = unsafe { safe_read_usize(p + ITEM_FUNCTOR_A8) }.unwrap_or(NULL);
+                if fa8 != NULL && (fa8 & PTR_ALIGN_MASK) == QW_START && fa8 >= HEAP_LO {
+                    let fvt = unsafe { safe_read_usize(fa8) }.unwrap_or(NULL);
+                    if fvt == functor_vt {
+                        append_autoload_debug(format_args!(
+                            "loadgame-scan: dialog+0x{off:x} -> d180 MenuWindowJob item=0x{p:x} item_vt=0x{vt:x} functor=0x{fa8:x} -- LOAD-GAME candidate"
+                        ));
+                        if found_item.is_none() {
+                            found_item = Some(p);
+                        }
+                        hits += HIT_STEP;
+                    }
+                }
+            }
+        }
+        q += QW_STEP;
+    }
+    append_autoload_debug(format_args!(
+        "loadgame-scan: done hits={hits} found_item=0x{:x}",
+        found_item.unwrap_or(NULL)
+    ));
+    found_item
 }
 
 /// Fire a captured MenuWindowJob's `+0xa8` action std::function in-context, mirroring the
@@ -1723,8 +1860,8 @@ unsafe fn menu_input_probe(owner: usize, base: usize) {
     let item = MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst);
     let leaf_ticks = MENU_D180_LEAF_TICKED.load(Ordering::SeqCst);
 
-    let in_down = f >= INPUT_PROBE_DOWN_START
-        && f < INPUT_PROBE_DOWN_START + INPUT_PROBE_DOWN_TAP_FRAMES;
+    let in_down =
+        f >= INPUT_PROBE_DOWN_START && f < INPUT_PROBE_DOWN_START + INPUT_PROBE_DOWN_TAP_FRAMES;
     let in_highlight = f >= INPUT_PROBE_DOWN_START && f < INPUT_PROBE_CONFIRM_START;
     let in_confirm = f >= INPUT_PROBE_CONFIRM_START
         && f < INPUT_PROBE_CONFIRM_START + INPUT_PROBE_CONFIRM_TAP_FRAMES;
@@ -2121,8 +2258,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
                         null
                     };
                     let ctx10 = unsafe { safe_read_usize(item + ITEM_CTX_10) }.unwrap_or(null);
-                    let res130 =
-                        unsafe { safe_read_usize(item + ITEM_RESULT_130) }.unwrap_or(null);
+                    let res130 = unsafe { safe_read_usize(item + ITEM_RESULT_130) }.unwrap_or(null);
                     MENU_LOAD_GAME_ITEM.store(item, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         "own_stepper: ZERO-INPUT d180 LOCATED item=0x{item:x} via owner+0x{root:x} functor=0x{functor:x} fvt=0x{fvt:x}(want base+0x{:x}) fcap=0x{fcap:x}(want owner+0x138=0x{:x}) ctx10=0x{ctx10:x} result130=0x{res130:x} -- latched, STAGE2 will native-Update it",
@@ -2288,6 +2424,17 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
                     "own_stepper: menu open zero-input; disproven title-confirm menu-drive is gated OFF (RTTI-corrected) -- STAY at open menu (NO-WRITE). Set er-effects-legacy-disproven-menu-drive.txt to revisit the dead path."
                 ));
             }
+            // 2026-06-18 RECON-ONLY fingerprint scan for the Load-Game entry, run HERE (the open-menu
+            // park is where a plain own_stepper run actually lives -- the dump block further down is
+            // unreachable behind this early return). Result discarded -> no latch into
+            // MENU_LOAD_GAME_ITEM, no STAGE2 advance -> stays NO-WRITE. Dedicated cap/interval so it
+            // logs a handful of times across the ~20s post-open window without spamming.
+            if OWN_STEPPER_LOADGAME_SCANS.load(Ordering::SeqCst) < OWN_STEPPER_LOADGAME_SCAN_CAP
+                && (waits % STAGE1D_RETRY_INTERVAL) == TITLE_OWNER_SCAN_START_ADDRESS as u64
+            {
+                OWN_STEPPER_LOADGAME_SCANS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+                let _ = unsafe { scan_dialog_for_loadgame(owner, base) };
+            }
             if waits >= OWN_STEPPER_MENU_BUILD_WAIT_MAX {
                 OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
             }
@@ -2304,8 +2451,8 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             && legacy_menu_drive_enabled()
         {
             let null = TITLE_OWNER_SCAN_START_ADDRESS;
-            let dialog =
-                unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
+            let dialog = unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }
+                .unwrap_or(null);
             let pld_vt = base + PROFILE_LOAD_DIALOG_VTABLE_RVA;
             let cur_vt = if dialog != null {
                 unsafe { safe_read_usize(dialog) }.unwrap_or(null)
@@ -2356,8 +2503,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             && (waits % STAGE1D_RETRY_INTERVAL) == TITLE_OWNER_SCAN_START_ADDRESS as u64
         {
             OWN_STEPPER_TITLETOP_DUMPS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
-            let (tt_load, tt_cont, tt_cursor) =
-                unsafe { dump_titletop_menu_entries(owner, base) };
+            let (tt_load, tt_cont, tt_cursor) = unsafe { dump_titletop_menu_entries(owner, base) };
             append_autoload_debug(format_args!(
                 "own_stepper: STAGE1b titletop-entries load_game=0x{:x} continue=0x{:x} cursor={tt_cursor} (entries are dialog rows, not FD4 jobs)",
                 tt_load.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS),
@@ -2426,9 +2572,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
                 OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_INVOKE, Ordering::SeqCst);
             }
             None => {
-                if waits >= OWN_STEPPER_MENU_BUILD_WAIT_MAX
-                    && !own_stepper_passive_enabled()
-                {
+                if waits >= OWN_STEPPER_MENU_BUILD_WAIT_MAX && !own_stepper_passive_enabled() {
                     let _ = unsafe { diagnostic_menu_walk(owner, base, "built138-timeout", true) };
                     let _ = unsafe {
                         diagnostic_job_tree_walk(
@@ -2510,12 +2654,18 @@ unsafe fn own_stepper_stage2(
         GAME_MAN_C30_UNSET
     };
     let ac0 = if gm != null {
-        ri32(gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET, OWN_STEPPER_SLOT_NONE)
+        ri32(
+            gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET,
+            OWN_STEPPER_SLOT_NONE,
+        )
     } else {
         OWN_STEPPER_SLOT_NONE
     };
     let b80 = if gm != null {
-        ri32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET, OWN_STEPPER_B80_IDLE)
+        ri32(
+            gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET,
+            OWN_STEPPER_B80_IDLE,
+        )
     } else {
         OWN_STEPPER_B80_IDLE
     };
@@ -2530,9 +2680,8 @@ unsafe fn own_stepper_stage2(
         (null, null, null)
     };
     // A dialog candidate is valid iff its vtable == ProfileLoadDialog.
-    let valid_dialog = |d: usize| -> bool {
-        d != null && unsafe { safe_read_usize(d) }.unwrap_or(null) == pld_vt
-    };
+    let valid_dialog =
+        |d: usize| -> bool { d != null && unsafe { safe_read_usize(d) }.unwrap_or(null) == pld_vt };
 
     if phase == OWN_STEPPER_PHASE_S2_INVOKE {
         if item == null {
@@ -2544,10 +2693,9 @@ unsafe fn own_stepper_stage2(
             }
             return;
         }
-        let dlg130 = unsafe { safe_read_usize(item + MENU_ITEM_DIALOG_RESULT_130_OFFSET) }
-            .unwrap_or(null);
-        let ctx10 =
-            unsafe { safe_read_usize(item + MENU_ITEM_CTX_10_OFFSET) }.unwrap_or(null);
+        let dlg130 =
+            unsafe { safe_read_usize(item + MENU_ITEM_DIALOG_RESULT_130_OFFSET) }.unwrap_or(null);
+        let ctx10 = unsafe { safe_read_usize(item + MENU_ITEM_CTX_10_OFFSET) }.unwrap_or(null);
         let functor =
             unsafe { safe_read_usize(item + MENU_ITEM_FUNCTOR_A8_OFFSET) }.unwrap_or(null);
         // If the native pump already built the dialog (focused on Load), use it.
@@ -2560,7 +2708,11 @@ unsafe fn own_stepper_stage2(
         };
         if existing != null {
             OWN_STEPPER_DIALOG.store(existing, Ordering::SeqCst);
-            timeline_event("T_dialog", n, format_args!("dialog=0x{existing:x} via=native"));
+            timeline_event(
+                "T_dialog",
+                n,
+                format_args!("dialog=0x{existing:x} via=native"),
+            );
             append_autoload_debug(format_args!(
                 "own_stepper: STAGE2-INVOKE-OK (native-built) dialog=0x{existing:x} dvt=0x{pld_vt:x} item=0x{item:x}"
             ));
@@ -2582,8 +2734,7 @@ unsafe fn own_stepper_stage2(
             OWN_STEPPER_INVOKED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
             let dlg130b = unsafe { safe_read_usize(item + MENU_ITEM_DIALOG_RESULT_130_OFFSET) }
                 .unwrap_or(null);
-            let ctx10b =
-                unsafe { safe_read_usize(item + MENU_ITEM_CTX_10_OFFSET) }.unwrap_or(null);
+            let ctx10b = unsafe { safe_read_usize(item + MENU_ITEM_CTX_10_OFFSET) }.unwrap_or(null);
             let candidate = if valid_dialog(ret) {
                 ret
             } else if valid_dialog(dlg130b) {
@@ -2644,7 +2795,10 @@ unsafe fn own_stepper_stage2(
         }
         let dvt = unsafe { safe_read_usize(dialog) }.unwrap_or(null);
         let bound = ri32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET, OWN_STEPPER_SLOT_NONE);
-        let cursor_now = ri32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET, OWN_STEPPER_SLOT_NONE);
+        let cursor_now = ri32(
+            dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET,
+            OWN_STEPPER_SLOT_NONE,
+        );
         // Resolve the target slot: a configured slot=N (>=0), else (slot=-1 = "most-recent")
         // the dialog's NATURAL highlight cursor -- so we never need to know which slot holds a
         // character up front, and we never overwrite the user's most-recent highlight.
@@ -2668,8 +2822,8 @@ unsafe fn own_stepper_stage2(
             }
         }
         OWN_STEPPER_EXPECTED_SLOT.store(target, Ordering::SeqCst);
-        let lav = unsafe { safe_read_usize(dvt + DIALOG_LOAD_ACTIVATE_VTSLOT_A0_OFFSET) }
-            .unwrap_or(null);
+        let lav =
+            unsafe { safe_read_usize(dvt + DIALOG_LOAD_ACTIVATE_VTSLOT_A0_OFFSET) }.unwrap_or(null);
         if lav == null {
             append_autoload_debug(format_args!(
                 "own_stepper: STAGE2-ACTIVATE load_activate slot null dvt=0x{dvt:x} -- STAGE2-NOWRITE-ABORT"
@@ -2697,7 +2851,8 @@ unsafe fn own_stepper_stage2(
             OWN_STEPPER_IO_WAS_SET.load(Ordering::SeqCst) == OWN_STEPPER_IO_WAS_SET_YES;
         let io_consumed = io18 == null && io20 == null;
         let expected = OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst);
-        let mount_done = ac0 == expected && expected != OWN_STEPPER_SLOT_NONE && io_was_set && io_consumed;
+        let mount_done =
+            ac0 == expected && expected != OWN_STEPPER_SLOT_NONE && io_was_set && io_consumed;
         if waits % S2_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 || mount_done {
             append_autoload_debug(format_args!(
                 "own_stepper: STAGE2-MOUNT-POLL waits={waits} ac0={ac0} expected={expected} c30=0x{c30:x} b80={b80} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} io_was_set={io_was_set} mount_done={mount_done}"
@@ -2748,11 +2903,7 @@ unsafe fn own_stepper_stage2(
             append_autoload_debug(format_args!(
                 "own_stepper: STAGE2-CONFIRM-GUARD-PASS ac0={ac0} c30=0x{c30:x} -> continue_confirm shim=0x{shim_ptr:x} owner=0x{owner:x}"
             ));
-            timeline_event(
-                "T_playgame",
-                n,
-                format_args!("ac0={ac0} c30=0x{c30:x}"),
-            );
+            timeline_event("T_playgame", n, format_args!("ac0={ac0} c30=0x{c30:x}"));
             unsafe { confirm(shim_ptr) };
             OWN_STEPPER_CONFIRMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
             append_autoload_debug(format_args!(
@@ -2779,8 +2930,7 @@ pub(crate) unsafe fn dump_load_correctness(base: usize, frame: u64) {
     const U32_STRIDE: usize = 4;
     const IDX_START: usize = 0;
     const IDX_STEP: usize = 1;
-    let gm =
-        unsafe { safe_read_usize(base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) }.unwrap_or(NULL);
+    let gm = unsafe { safe_read_usize(base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) }.unwrap_or(NULL);
     let ri32 = |addr: usize| -> i32 {
         unsafe { safe_read_usize(addr) }
             .map(|v| v as u32 as i32)
@@ -3010,8 +3160,8 @@ pub(crate) unsafe fn title_observe_tick(module_base: usize, tick: u64) {
     }
     if let Some(o) = owner {
         if OBSERVE_MENU_OPEN_EMITTED.load(Ordering::SeqCst) == OBSERVE_MARKER_NOT_EMITTED {
-            let dialog = unsafe { safe_read_usize(o + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }
-                .unwrap_or(null);
+            let dialog =
+                unsafe { safe_read_usize(o + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
             let dialog_vt = if dialog != null {
                 unsafe { safe_read_usize(dialog) }.unwrap_or(null)
             } else {
@@ -3536,7 +3686,9 @@ fn apply_xor_ret_stub(base: usize, rva: usize, label: &str) {
         )
     };
     if protect_ok == HOOK_FALSE_RETURN as i32 {
-        append_autoload_debug(format_args!("online-disable: VirtualProtect failed for {label}"));
+        append_autoload_debug(format_args!(
+            "online-disable: VirtualProtect failed for {label}"
+        ));
         return;
     }
     let mut i = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -3707,7 +3859,9 @@ pub(crate) fn install_auto_accept_hook() {
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
         status => {
-            append_autoload_debug(format_args!("auto-accept: MH_Initialize failed: {status:?}"));
+            append_autoload_debug(format_args!(
+                "auto-accept: MH_Initialize failed: {status:?}"
+            ));
             return;
         }
     }
@@ -3715,7 +3869,12 @@ pub(crate) fn install_auto_accept_hook() {
         append_autoload_debug(format_args!("auto-accept: failed to resolve builder rva"));
         return;
     };
-    match unsafe { MhHook::new(builder_addr as *mut c_void, msgbox_builder_hook as *mut c_void) } {
+    match unsafe {
+        MhHook::new(
+            builder_addr as *mut c_void,
+            msgbox_builder_hook as *mut c_void,
+        )
+    } {
         Ok(hook) => {
             MSGBOX_BUILDER_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
             if let Err(status) = unsafe { hook.queue_enable() } {
@@ -5627,8 +5786,7 @@ unsafe fn inspect_row_container(tag: &str, container: usize) {
         if action != NULL {
             let avt = unsafe { safe_read_usize(action) }.unwrap_or(NULL);
             if avt != NULL {
-                let mut tgt =
-                    unsafe { safe_read_usize(avt + ACTION_DOCALL_10) }.unwrap_or(NULL);
+                let mut tgt = unsafe { safe_read_usize(avt + ACTION_DOCALL_10) }.unwrap_or(NULL);
                 let mut hop = HOP_START;
                 while hop < JMP_HOPS && tgt != NULL {
                     if tgt == factory {
@@ -5725,7 +5883,11 @@ unsafe fn log_row_push_caller(tag: &str, container: usize) {
     let vb = unsafe { safe_read_usize(container + ROW_VEC_BEGIN_1290) }.unwrap_or(NULL);
     let ve = unsafe { safe_read_usize(container + ROW_VEC_END_1298) }.unwrap_or(NULL);
     let cvt = unsafe { safe_read_usize(container) }.unwrap_or(NULL);
-    let cvt_rva = if base != NULL { cvt.wrapping_sub(base) } else { cvt };
+    let cvt_rva = if base != NULL {
+        cvt.wrapping_sub(base)
+    } else {
+        cvt
+    };
     append_continue_trace(format_args!(
         "CAP row_push_ALL[{tag}] #{n} container=0x{container:x} cvt=0x{cvt:x}(rva 0x{cvt_rva:x}) backptr=0x{backptr:x} vec=[0x{vb:x}..0x{ve:x}] {}",
         trace_callers_summary()

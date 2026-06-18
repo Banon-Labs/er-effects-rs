@@ -457,6 +457,12 @@ pub(crate) static OWN_STEPPER_MENU_OPENED: core::sync::atomic::AtomicUsize =
 pub(crate) static OWN_STEPPER_TITLETOP_DUMPS: AtomicUsize = AtomicUsize::new(0);
 /// Max TitleTopDialog entry dumps + the per-dump frame interval.
 pub(crate) const OWN_STEPPER_TITLETOP_DUMP_CAP: usize = 8;
+/// Recon-only Load-Game fingerprint scan (`scan_dialog_for_loadgame`) counter + cap. Runs in the
+/// post-open SAFE-DEFAULT park, independent of the pre-open `OWN_STEPPER_TITLETOP_DUMPS` (which the
+/// d180-locate exhausts before menu-open). 2026-06-18 reconciliation: the title rows are
+/// TitleTopDialog registry entries, not FD4 jobs.
+pub(crate) static OWN_STEPPER_LOADGAME_SCANS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const OWN_STEPPER_LOADGAME_SCAN_CAP: usize = 12;
 /// Sentinel logged when the inner TitleStep owner can no longer be found (the
 /// title flow advanced past the title and the owner was finalized/destructed).
 pub(crate) const TITLE_STATE_OWNER_GONE: i32 = -1;
@@ -2110,7 +2116,8 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // for both a native-menu load (observe) and a DLL-driven load (own-stepper), so
                 // the two records are directly comparable (field-for-field == correct load).
                 if (own_stepper_enabled() || observe_enabled())
-                    && LOAD_CORRECTNESS_DUMPED.swap(GAME_TASK_TICK_INCREMENT as usize, Ordering::SeqCst)
+                    && LOAD_CORRECTNESS_DUMPED
+                        .swap(GAME_TASK_TICK_INCREMENT as usize, Ordering::SeqCst)
                         == LOAD_CORRECTNESS_NOT_DUMPED
                 {
                     if let Ok(base) = game_module_base() {

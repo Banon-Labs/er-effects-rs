@@ -1,0 +1,22 @@
+# SAVE-SAFE READ-ONLY fingerprint scan for the title "Load Game" entry (2026-06-18).
+# Settles WHERE the Load-Game item lives in the open TitleTopDialog, before any fire is wired.
+#
+# own_stepper drives boot -> online-disable -> OK-handler modal-skip -> past press-any-button
+# -> SetState(BeginLogo) -> self-fire open-menu registrar -> a rendered main menu, ZERO input.
+# In PHASE_MENU_BUILD, scan_dialog_for_loadgame flat-scans the dialog object for the d180
+# std::function fingerprint (vt base+0x2ac3ea8) and CS::MenuMemberFuncJob (vt base+0x2b265d0),
+# logging every hit. RECON-ONLY: the scan's result is DISCARDED at the call site (no latch into
+# MENU_LOAD_GAME_ITEM, no STAGE2 advance), so the run STAYS at the open menu -- NO SetState(5),
+# NO save write. Pure ReadProcessMemory. host_input=none, 0 nudges; saves hashed+backed up+restored.
+#
+# player-load watch target (autoload stays gated by require-title-bootstrap while own_stepper
+# drives) -> the watcher never returns ready, so the run goes to the 30s deadline, giving the full
+# window for menu-open (~3s from T0) + the throttled scan to fire.
+LAUNCH_MODE=offline-launcher
+ER_EFFECTS_OWN_STEPPER=1
+ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=0
+RUNTIME_MAX_NUDGES=0
+RESTORE_RUNTIME_SAVES=1
+RUNTIME_CAPTURE_INPUT_OCR=0
+RUNTIME_WATCH_TARGET=player-load
+RUNTIME_SPAWN_POLL_BUDGET=32768
