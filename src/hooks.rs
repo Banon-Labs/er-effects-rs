@@ -269,10 +269,25 @@ pub(crate) fn own_window() -> Option<HWND> {
     if hwnd.0.is_null() { None } else { Some(hwnd) }
 }
 
+/// Total synthesized-input presses the DLL has injected anywhere (DInput device-state fill,
+/// GetAsyncKeyState/GetKeyState override, PostMessage confirm pulse). The zero-input autoload
+/// path must NEVER trigger any of these, so the proof oracle asserts this counter == 0 for the
+/// whole run. Every injection site increments it; it is exported in telemetry as
+/// `simulated_button_presses_total`.
+pub(crate) static SIMULATED_INPUT_PRESSES_TOTAL: AtomicUsize = AtomicUsize::new(0);
+/// One synthesized key press.
+pub(crate) const SIMULATED_PRESS_INCREMENT: usize = 1;
+
+/// Record `count` synthesized key presses at an injection site.
+pub(crate) fn note_simulated_presses(count: usize) {
+    SIMULATED_INPUT_PRESSES_TOTAL.fetch_add(count, Ordering::SeqCst);
+}
+
 pub(crate) fn emit_confirm_pulse_to_own_window() -> Result<(), String> {
     SAFE_INPUT_CONFIRM_FRAMES_REMAINING.store(SAFE_INPUT_CONFIRM_HOOK_FRAMES, Ordering::SeqCst);
     let hwnd = own_window().ok_or_else(|| "no visible process window for safe input".to_owned())?;
     for key in [VK_RETURN_KEY, VK_SPACE_KEY] {
+        note_simulated_presses(SIMULATED_PRESS_INCREMENT);
         unsafe { PostMessageW(Some(hwnd), WM_KEYDOWN, WPARAM(key), LPARAM(KEYDOWN_LPARAM)) }
             .map_err(|error| format!("PostMessageW keydown {key:#x} failed: {error}"))?;
         unsafe { PostMessageW(Some(hwnd), WM_KEYUP, WPARAM(key), LPARAM(KEYUP_LPARAM)) }
@@ -410,6 +425,7 @@ pub(crate) fn safe_input_key_state_override(vkey: i32, original_value: i16) -> i
     if is_safe_input_confirm_key(vkey)
         && SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst) > NO_SAFE_INPUT_CONFIRM_FRAMES
     {
+        note_simulated_presses(SIMULATED_PRESS_INCREMENT);
         original_value | i16::MIN
     } else {
         original_value
@@ -554,6 +570,8 @@ pub(crate) unsafe extern "system" fn direct_input_get_device_state_hook(
         && data_len as usize > DIK_SPACE
     {
         let state = unsafe { std::slice::from_raw_parts_mut(data as *mut u8, data_len as usize) };
+        note_simulated_presses(SIMULATED_PRESS_INCREMENT);
+        note_simulated_presses(SIMULATED_PRESS_INCREMENT);
         state[DIK_RETURN] |= DIRECT_INPUT_KEY_DOWN_MASK;
         state[DIK_SPACE] |= DIRECT_INPUT_KEY_DOWN_MASK;
     }
