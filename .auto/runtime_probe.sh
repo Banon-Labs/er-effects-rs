@@ -68,6 +68,7 @@ CRASH_LOG_TRIGGER_PATH="${CRASH_LOG_TRIGGER_PATH:-$GAME_DIR/er-effects-crash-log
 # copied into the artifact dir after the run.
 CRASH_LOG_SRC="${CRASH_LOG_SRC:-$GAME_DIR/er-effects-crash.log}"
 FORCE_PLAY_GAME_PATH="${FORCE_PLAY_GAME_PATH:-$GAME_DIR/er-effects-force-play-game.txt}"
+OFFLINE_LAUNCHER_SRC="${OFFLINE_LAUNCHER_SRC:-$REPO_ROOT/offline-launcher.exe}"
 PROTON="${PROTON:-$HOME/.local/share/Steam/steamapps/common/Proton - Experimental/proton}"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
 STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}"
@@ -629,6 +630,12 @@ path.write_text(text, encoding="utf-8")
 PY
     mkdir -p "$GAME_DIR/dllMods"
     cp -f "$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll" "$GAME_DIR/dllMods/er_effects_rs.dll"
+    # Offline launcher (launch_modded_eldenring): finds eldenring.exe in its CWD and
+    # boots it offline with SteamAppId set, so DInput/Steam init properly (avoids the
+    # raw direct-mode early-exit + input-hook AV). Installed next to eldenring.exe.
+    if [[ -f "$OFFLINE_LAUNCHER_SRC" ]]; then
+      cp -f "$OFFLINE_LAUNCHER_SRC" "$GAME_DIR/offline-launcher.exe"
+    fi
     {
       printf 'slot=%s\n' "$ER_EFFECTS_AUTOLOAD_SLOT"
       printf 'method=%s\n' "$ER_EFFECTS_AUTOLOAD_METHOD"
@@ -822,6 +829,10 @@ launch_runtime() {
       log_timeline "launch" "start_protected_game.exe via Proton"
       (cd "$GAME_DIR" && STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_COMPAT_CLIENT_INSTALL_PATH" STEAM_COMPAT_DATA_PATH="$STEAM_COMPAT_DATA_PATH" ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" ER_EFFECTS_COMMAND_PATH="$COMMAND_PATH" ER_EFFECTS_AUTOLOAD_PATH="$AUTOLOAD_PATH" ER_EFFECTS_SAFE_INPUT_PATH="$SAFE_INPUT_PATH" ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" ER_EFFECTS_TRACE_CONTINUE_PATH="$TRACE_CONTINUE_PATH" ER_EFFECTS_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP="$ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP" "$PROTON" run "$GAME_DIR/start_protected_game.exe" > "$ARTIFACT_DIR/proton-protected-run.out" 2>&1 & echo $! > "$LAUNCH_PID_FILE")
       ;;
+    offline-launcher)
+      log_timeline "launch" "offline-launcher.exe (launch_modded_eldenring) via Proton"
+      (cd "$GAME_DIR" && STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_COMPAT_CLIENT_INSTALL_PATH" STEAM_COMPAT_DATA_PATH="$STEAM_COMPAT_DATA_PATH" ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" ER_EFFECTS_COMMAND_PATH="$COMMAND_PATH" ER_EFFECTS_AUTOLOAD_PATH="$AUTOLOAD_PATH" ER_EFFECTS_SAFE_INPUT_PATH="$SAFE_INPUT_PATH" ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" ER_EFFECTS_TRACE_CONTINUE_PATH="$TRACE_CONTINUE_PATH" ER_EFFECTS_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP="$ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP" "$PROTON" run "$GAME_DIR/offline-launcher.exe" > "$ARTIFACT_DIR/proton-offline-launcher.out" 2>&1 & echo $! > "$LAUNCH_PID_FILE")
+      ;;
     steam)
       log_timeline "launch" "steam://rungameid/1245620 via Steam"
       (cd "$GAME_DIR" && ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" ER_EFFECTS_COMMAND_PATH="$COMMAND_PATH" ER_EFFECTS_AUTOLOAD_PATH="$AUTOLOAD_PATH" ER_EFFECTS_SAFE_INPUT_PATH="$SAFE_INPUT_PATH" ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" ER_EFFECTS_TRACE_CONTINUE_PATH="$TRACE_CONTINUE_PATH" ER_EFFECTS_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP="$ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP" steam steam://rungameid/1245620 > "$ARTIFACT_DIR/steam-launch.out" 2>&1 & echo $! > "$LAUNCH_PID_FILE")
@@ -875,7 +886,10 @@ RUNTIME_READINESS_POLLS_PER_TASK_TICK="${RUNTIME_READINESS_POLLS_PER_TASK_TICK:-
 RUNTIME_READINESS_BASE_POLL_BUDGET="${RUNTIME_READINESS_BASE_POLL_BUDGET:-8192}"
 RUNTIME_SPAWN_POLL_BUDGET="${RUNTIME_SPAWN_POLL_BUDGET:-32768}"
 RUNTIME_READINESS_POLL_BUDGET="${RUNTIME_READINESS_POLL_BUDGET:-$((RUNTIME_POST_REQUEST_TICK_BUDGET * RUNTIME_READINESS_POLLS_PER_TASK_TICK + RUNTIME_READINESS_BASE_POLL_BUDGET))}"
-if [[ "$LAUNCH_MODE" == "steam" ]]; then
+if [[ "$LAUNCH_MODE" == "steam" || "$LAUNCH_MODE" == "offline-launcher" ]]; then
+  # The offline launcher (like the Steam client) forks eldenring.exe and exits, so
+  # the recorded launcher PID dying is expected -- the readiness watcher must track
+  # the spawned game process instead of treating launcher exit as failure.
   RUNTIME_ALLOW_ASYNC_LAUNCHER_EXIT=1
 else
   RUNTIME_ALLOW_ASYNC_LAUNCHER_EXIT="${RUNTIME_ALLOW_ASYNC_LAUNCHER_EXIT:-}"

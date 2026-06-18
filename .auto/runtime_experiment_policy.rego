@@ -21,7 +21,7 @@ manual_event_driver_ready if {
 	input.teardown == "process_tree_and_save_restore"
 	input.runtime_entrypoint == "measure_runtime_trigger"
 	not input.native_title_accept_gate
-	input.launch_mode in {"direct", "direct-protected", "steam", "attach-existing"}
+	input.launch_mode in {"direct", "direct-protected", "steam", "attach-existing", "offline-launcher"}
 }
 
 allow if {

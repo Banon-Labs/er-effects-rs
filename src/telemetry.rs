@@ -198,6 +198,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         )
     ));
     write_game_man_telemetry(&mut body);
+    write_save_data_snapshot_telemetry(&mut body);
     body.push_str(&format!(
         "  \"last_driver_command\": {},\n",
         state.last_driver_command.as_ref().map_or_else(
@@ -249,6 +250,76 @@ pub(crate) fn write_game_man_telemetry(body: &mut String) {
     body.push_str(&format!(
         "  \"game_save_requested\": {},\n",
         telemetry.save_requested
+    ));
+}
+
+/// Read-only, save-safe save-data snapshot for the parked-title disambiguation
+/// (goal step 2): confirm GameDataMan (`SLOT_MANAGER_RVA`) and its `CS::ProfileSummary`
+/// container (`+SLOT_MANAGER_CONTAINER_OFFSET`) are built cold, read the per-slot
+/// active bytes the char-mount gate (`0x67b200`) checks via `byte[profile+slot+8]`,
+/// and read the save-mgr deserialize-ready handle (`[mgr+0xdf0]`, the gate fast-path).
+/// Every access is a fault-tolerant `ReadProcessMemory` -- no game-state mutation.
+pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
+    /// Null pointer sentinel for the chased singleton reads.
+    const NULL_POINTER_VALUE: usize = 0;
+    /// ProfileSummary per-slot active-byte array base (getter reads `byte[profile+slot+8]`).
+    const PROFILE_SLOT_ACTIVE_ARRAY_OFFSET: usize = 0x8;
+    /// Save-mgr deserialize-ready handle (gate `0x67b200` fast-path `[mgr+0xdf0]`).
+    const GAME_MAN_DESERIALIZE_READY_DF0_OFFSET: usize = 0xdf0;
+
+    let Ok(base) = crate::experiments::game_module_base() else {
+        body.push_str("  \"save_snapshot_available\": false,\n");
+        return;
+    };
+
+    let game_data_man =
+        unsafe { crate::experiments::safe_read_usize(base + crate::SLOT_MANAGER_RVA) }
+            .unwrap_or(NULL_POINTER_VALUE);
+    let profile_summary = if game_data_man == NULL_POINTER_VALUE {
+        NULL_POINTER_VALUE
+    } else {
+        unsafe {
+            crate::experiments::safe_read_usize(
+                game_data_man + crate::SLOT_MANAGER_CONTAINER_OFFSET,
+            )
+        }
+        .unwrap_or(NULL_POINTER_VALUE)
+    };
+    let slot_active_bytes = if profile_summary == NULL_POINTER_VALUE {
+        None
+    } else {
+        unsafe {
+            crate::experiments::safe_read_usize(profile_summary + PROFILE_SLOT_ACTIVE_ARRAY_OFFSET)
+        }
+    };
+    let save_mgr = unsafe {
+        crate::experiments::safe_read_usize(base + crate::FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA)
+    }
+    .unwrap_or(NULL_POINTER_VALUE);
+    let deserialize_ready = if save_mgr == NULL_POINTER_VALUE {
+        None
+    } else {
+        unsafe {
+            crate::experiments::safe_read_usize(save_mgr + GAME_MAN_DESERIALIZE_READY_DF0_OFFSET)
+        }
+    };
+
+    body.push_str("  \"save_snapshot_available\": true,\n");
+    body.push_str(&format!(
+        "  \"game_data_man_present\": {},\n",
+        game_data_man != NULL_POINTER_VALUE
+    ));
+    body.push_str(&format!(
+        "  \"profile_summary_present\": {},\n",
+        profile_summary != NULL_POINTER_VALUE
+    ));
+    body.push_str(&format!(
+        "  \"profile_slot_active_bytes_qword\": {},\n",
+        slot_active_bytes.map_or_else(|| "null".to_owned(), |value| format!("\"{value:#x}\""))
+    ));
+    body.push_str(&format!(
+        "  \"game_save_deserialize_ready_df0\": {},\n",
+        deserialize_ready.map_or_else(|| "null".to_owned(), |value| format!("\"{value:#x}\""))
     ));
 }
 

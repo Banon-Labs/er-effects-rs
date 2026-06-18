@@ -1,0 +1,16 @@
+# Read-only save-data snapshot at the PARKED TITLE (goal step 2 disambiguation).
+# Purpose: confirm GameDataMan/CS::ProfileSummary are built cold and read the
+# per-slot active bytes the char-mount gate (0x67b200) checks, plus the save-mgr
+# requested-slot/load-state/deserialize-ready fields -- via the new save_snapshot_*
+# telemetry. NO drive completes: the DLL only ReadProcessMemory-reads; any autoload
+# gates on title bootstrap which never accepts (host_input=none, 0 nudges); the
+# readiness watcher exits at game-man readiness (parked title) before a drive; and
+# saves are hashed before/after and restored. Three-way save-safe.
+LAUNCH_MODE=offline-launcher
+RUNTIME_MAX_NUDGES=0
+RESTORE_RUNTIME_SAVES=1
+RUNTIME_CAPTURE_INPUT_OCR=0
+ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=0
+ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP=true
+RUNTIME_WATCH_TARGET=game-man
+RUNTIME_SPAWN_POLL_BUDGET=32768
