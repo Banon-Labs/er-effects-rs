@@ -167,6 +167,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         "  \"game_task_ticks\": {},\n",
         state.game_task_ticks
     ));
+    write_oracle_telemetry(&mut body);
     body.push_str(&format!(
         "  \"safe_input_confirm_count\": {},\n",
         state.safe_input.confirm_count
@@ -251,6 +252,58 @@ pub(crate) fn write_game_man_telemetry(body: &mut String) {
         "  \"game_save_requested\": {},\n",
         telemetry.save_requested
     ));
+}
+
+/// ORACLE reads for the proof bundle (per the goal): the LIVE in-world facts the harness asserts
+/// on, independent of any agent narrative. Re-fetches the local player (the lib.rs player borrow
+/// has ended before this runs). For a ZERO-INPUT run, `simulated_button_presses_total` MUST be 0;
+/// `oracle_grounded` + a valid `oracle_block_id` + finite non-origin `oracle_havok_pos`
+/// distinguish "in the playable world" from "frozen on a loading screen".
+pub(crate) fn write_oracle_telemetry(body: &mut String) {
+    const BLOCK_ID_NONE: i32 = -1;
+    const GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET: usize = 0xb80;
+    const GAME_MAN_SAVED_MAP_C30_OFFSET: usize = 0xc30;
+    const READ_FAIL_SENTINEL: i32 = -1;
+    body.push_str(&format!(
+        "  \"simulated_button_presses_total\": {},\n",
+        crate::hooks::SIMULATED_INPUT_PRESSES_TOTAL.load(Ordering::SeqCst)
+    ));
+    // GameMan save-mgr signals: b80 (load-in-progress lane -- the golden-capture mash-stop signal,
+    // nonzero once continue is confirmed and the deserialize kicks) + c30 (saved map id, oracle item 2).
+    const NULL_PTR: usize = 0;
+    if let Ok(base) = crate::experiments::game_module_base() {
+        let gm = unsafe {
+            crate::experiments::safe_read_usize(base + crate::FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA)
+        }
+        .unwrap_or(NULL_PTR);
+        let read_i32 = |addr: usize| -> i32 {
+            unsafe { crate::experiments::safe_read_usize(addr) }
+                .map_or(READ_FAIL_SENTINEL, |v| v as u32 as i32)
+        };
+        let (b80, c30) = if gm == NULL_PTR {
+            (READ_FAIL_SENTINEL, READ_FAIL_SENTINEL)
+        } else {
+            (
+                read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET),
+                read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET),
+            )
+        };
+        body.push_str(&format!(
+            "  \"oracle_load_in_progress_b80\": {b80},\n  \"oracle_saved_map_c30\": \"{c30:#x}\",\n"
+        ));
+    }
+    if let Ok(player) = unsafe { PlayerIns::local_player_mut() } {
+        let pos = player.chr_ins.modules.physics.position;
+        let grounded = player.chr_ins.modules.physics.standing_on_solid_ground;
+        let block = player.current_block_id.0;
+        let bp = player.block_position;
+        body.push_str(&format!(
+            "  \"oracle_player_present\": true,\n  \"oracle_havok_pos\": [{}, {}, {}],\n  \"oracle_grounded\": {},\n  \"oracle_block_id\": {},\n  \"oracle_block_id_valid\": {},\n  \"oracle_block_pos\": [{}, {}, {}],\n",
+            pos.0, pos.1, pos.2, grounded, block, block != BLOCK_ID_NONE, bp.x, bp.y, bp.z
+        ));
+    } else {
+        body.push_str("  \"oracle_player_present\": false,\n");
+    }
 }
 
 /// Read-only, save-safe save-data snapshot for the parked-title disambiguation
