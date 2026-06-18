@@ -28,7 +28,7 @@ use hudhook::{
     mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook},
     windows::{
         Win32::{
-            Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
+            Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
             System::{
                 LibraryLoader::{GetModuleHandleA, GetProcAddress},
                 Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
@@ -36,8 +36,8 @@ use hudhook::{
                 Threading::GetCurrentProcessId,
             },
             UI::WindowsAndMessaging::{
-                EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
-                WM_KEYUP,
+                ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+                WM_KEYDOWN, WM_KEYUP,
             },
         },
         core::{BOOL, PCSTR},
@@ -3545,13 +3545,17 @@ pub(crate) fn block_input_enabled() -> bool {
     if own_stepper_enabled() && !own_stepper_passive_enabled() && inject_nav_enabled() {
         return true;
     }
-    // PASSIVE mode never blocks. Otherwise block only the HEADLESS boot -> menu-open window
-    // (so that stretch is uncontaminated zero-input), then RELEASE the block the instant the
-    // menu opens -- the Continue/Load navigation that follows still needs a live input pipeline
-    // (the menu state machine consumes input each frame; a zeroed device state stalls it).
+    // PASSIVE mode never blocks. Otherwise keep the block engaged through the ENTIRE headless
+    // drive -- boot -> menu-open -> zero-input title-confirm Load fire -> mount -> confirm --
+    // releasing ONLY once in-world (the user takes over) or on abort (phase DONE). The
+    // title-confirm route drives the load with NO user input (direct field-write + functor call,
+    // not the input pipeline), so there is no reason to release at menu-open; keeping it on makes
+    // the run UNCONTAMINATABLE (the user cannot nudge it even deliberately). [Earlier design
+    // released at menu-open for a user-driven Continue; that is obsolete now.]
     own_stepper_enabled()
         && !own_stepper_passive_enabled()
-        && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) == OWN_STEPPER_MENU_OPENED_NO
+        && IN_WORLD_REACHED.load(Ordering::SeqCst) != IN_WORLD_REACHED_YES
+        && OWN_STEPPER_PHASE.load(Ordering::SeqCst) != OWN_STEPPER_PHASE_DONE
 }
 
 /// Release the input block (DInput + XInput) once `block_input_enabled()` flips false mid-run.
@@ -3560,8 +3564,10 @@ pub(crate) fn block_input_enabled() -> bool {
 pub(crate) fn release_input_block_now() {
     if BLOCK_INPUT_ACTIVE.swap(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst) == BLOCK_INPUT_ON {
         InputBlocker::get_instance().block_only(InputFlags::empty());
+        // Release the cursor confinement (paired with the ClipCursor lockdown in enforce).
+        let _ = unsafe { ClipCursor(None) };
         append_autoload_debug(format_args!(
-            "input-block: RELEASED (menu open) -- keyboard/mouse/gamepad live for Continue/Load nav"
+            "input-block: RELEASED (in-world / abort) -- keyboard/mouse/gamepad + cursor live"
         ));
     }
 }
@@ -3747,6 +3753,20 @@ pub(crate) fn enforce_input_block_now() {
         // Not yet hooked (xinput DLL may load late): retry each frame until it sticks.
         unsafe { install_xinput_block() };
     }
+    // Lock down MOUSE MOVEMENT: the DInput GetDeviceState block zeroes keyboard + mouse buttons +
+    // DInput mouse deltas, but ER moves the MENU cursor via the OS cursor position (GetCursorPos),
+    // which DInput blocking does NOT cover -- so the user can still move the cursor. Confine the OS
+    // cursor to a 1x1 rect every frame: it physically cannot move regardless of which API reads it,
+    // making the run uncontaminatable by the mouse. Released (ClipCursor(None)) when the block lifts.
+    const CLIP_ORIGIN: i32 = 0;
+    const CLIP_EDGE: i32 = 1;
+    let clip = RECT {
+        left: CLIP_ORIGIN,
+        top: CLIP_ORIGIN,
+        right: CLIP_EDGE,
+        bottom: CLIP_EDGE,
+    };
+    let _ = unsafe { ClipCursor(Some(&clip)) };
 }
 
 pub(crate) fn render_liveness_probe() {
