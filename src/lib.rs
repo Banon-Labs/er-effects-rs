@@ -897,6 +897,11 @@ pub(crate) const OWN_STEPPER_S2_PHASE_MAX: u64 = 1200;
 pub(crate) static OWN_STEPPER_S2_WAITS: AtomicUsize = AtomicUsize::new(0);
 /// The built+validated ProfileLoadDialog pointer (0 until PHASE_S2_INVOKE succeeds).
 pub(crate) static OWN_STEPPER_DIALOG: AtomicUsize = AtomicUsize::new(0);
+/// The CS::MenuJobWithContext<LoadJobContext> selector step (vtable 0x142ac71e0) that
+/// load_activate 0x1409a4670 builds at `dialog+0x18`. A cold standalone dialog is not ticked by
+/// the MENU task-group, so STAGE 2 reads this and SELF-PUMPS the tick 0x140826d50 each frame
+/// (installer -> io18/io20 full-save read -> menu_deser 0x14082c240 -> mount).
+pub(crate) static OWN_STEPPER_SELECTOR_STEP: AtomicUsize = AtomicUsize::new(0);
 /// One-shot latch: set once the zero-input title-confirm fire (fire_titletop_load_entry) has
 /// fired the Load-Game row action, so it is not re-fired while the ProfileLoadDialog builds.
 pub(crate) static OWN_STEPPER_TITLE_FIRED: AtomicUsize = AtomicUsize::new(0);

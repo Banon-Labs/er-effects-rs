@@ -560,13 +560,22 @@ unsafe fn own_stepper_direct_build(owner: usize, base: usize) {
         let activate: unsafe extern "system" fn(usize, i32) =
             unsafe { std::mem::transmute(base + PROFILE_SLOT_ACTIVATE_RVA) };
         unsafe { activate(profile_summary, want_slot) };
-        // VALIDATED: ACTIVATE makes the dialog list-builder append the slot -> rows populate
-        // (bound 0->1, runtime-confirmed). NOTE the speculative record-state set ([rec+0x295]=1,
-        // [rec+0x44]=2) did NOT unlock load_activate's selector build -> mount (still ac0=-1, io18=0)
-        // -- the full-save selector/menu_deser lane needs the genuine menu-task drive (the documented
-        // async-IO lane wall), not a faked record. Removed; the rows-populate win stands.
+        // Record-state: load_activate 0x1409a4670's gate is INVERTED (load_activate-gate-inverted-
+        // live-mount-is-nonbuild-path) -- the LIVE mount takes the NON-build branch (which calls
+        // builder 0x140826510 @0x9a4985) when [rec+0x295]>=1 && accessor 0x140e362c0([rec+0x44])==2.
+        // So set those so load_activate BUILDS the selector step (then we self-pump it -- the cold
+        // standalone dialog is not ticked by the MENU group). rec = profile + 0x18 + slot*0x2a0.
+        const RECORD_BASE_18: usize = 0x18;
+        const RECORD_STRIDE_2A0: usize = 0x2a0;
+        const RECORD_VALID_295: usize = 0x295;
+        const RECORD_STATE_44: usize = 0x44;
+        const RECORD_VALID_SET: u8 = 1;
+        const RECORD_STATE_LOADABLE: i32 = 2;
+        let rec = profile_summary + RECORD_BASE_18 + (want_slot as usize) * RECORD_STRIDE_2A0;
+        unsafe { *((rec + RECORD_VALID_295) as *mut u8) = RECORD_VALID_SET };
+        unsafe { *((rec + RECORD_STATE_44) as *mut i32) = RECORD_STATE_LOADABLE };
         append_autoload_debug(format_args!(
-            "own_stepper: DIRECT-BUILD ACTIVATE 0x{:x}(profile=0x{profile_summary:x}, slot={want_slot}) before ctor -> dialog rows populate (bound>0)",
+            "own_stepper: DIRECT-BUILD ACTIVATE 0x{:x}(profile=0x{profile_summary:x}, slot={want_slot}) + record [rec=0x{rec:x}+0x295]=1 [+0x44]=2 (rows populate + load_activate reaches the selector builder)",
             base + PROFILE_SLOT_ACTIVATE_RVA
         ));
     }
@@ -3049,8 +3058,39 @@ unsafe fn own_stepper_stage2(
         }
         let activate: unsafe extern "system" fn(usize) -> u8 = unsafe { std::mem::transmute(lav) };
         let r = unsafe { activate(dialog) };
+        // load_activate built the selector step at dialog+0x18 (load_activate-gate-inverted /
+        // selector-tick-drive-decode). The cold standalone dialog is NOT ticked by the MENU group,
+        // so capture the step here and SELF-PUMP it in MOUNT_POLL (tick 0x140826d50).
+        const SELECTOR_VTABLE_RVA: usize = 0x2ac71e0;
+        const SELECTOR_SCAN_QWORDS: usize = 0x400;
+        const SCAN_PTR_SZ: usize = 8;
+        const SCAN_ALIGN_MASK: usize = 0x7;
+        const SCAN_HEAP_LO: usize = 0x10000;
+        const SCAN_Q0: usize = 0;
+        const SCAN_QSTEP: usize = 1;
+        let selector_vt = base + SELECTOR_VTABLE_RVA;
+        // load_activate stores the built selector somewhere in the dialog. Scan the dialog object's
+        // fields for a pointer to an object whose [0] == the selector vtable 0x142ac71e0. Pure reads.
+        let mut step = null;
+        let mut step_off = null;
+        let mut q = SCAN_Q0;
+        while q < SELECTOR_SCAN_QWORDS {
+            let off = q * SCAN_PTR_SZ;
+            let p = unsafe { safe_read_usize(dialog + off) }.unwrap_or(null);
+            if p != null && (p & SCAN_ALIGN_MASK) == SCAN_Q0 && p >= SCAN_HEAP_LO {
+                let pvt = unsafe { safe_read_usize(p) }.unwrap_or(null);
+                if pvt == selector_vt {
+                    step = p;
+                    step_off = off;
+                    break;
+                }
+            }
+            q += SCAN_QSTEP;
+        }
+        let step_ok = step != null;
+        OWN_STEPPER_SELECTOR_STEP.store(step, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "own_stepper: STAGE2-ACTIVATE want={want_slot} target={target} cursor_now={cursor_now} bound={bound} lav=0x{lav:x} ret={r} dialog=0x{dialog:x} io18=0x{io18:x} io20=0x{io20:x}"
+            "own_stepper: STAGE2-ACTIVATE want={want_slot} target={target} cursor_now={cursor_now} bound={bound} lav=0x{lav:x} ret={r} dialog=0x{dialog:x} selector_step=0x{step:x}@dialog+0x{step_off:x} step_ok={step_ok}(vt 0x{selector_vt:x}) io18=0x{io18:x} io20=0x{io20:x}"
         ));
         OWN_STEPPER_IO_WAS_SET.store(OWN_STEPPER_IO_WAS_SET_NO, Ordering::SeqCst);
         OWN_STEPPER_S2_WAITS.store(null, Ordering::SeqCst);
@@ -3059,6 +3099,62 @@ unsafe fn own_stepper_stage2(
     }
 
     if phase == OWN_STEPPER_PHASE_S2_MOUNT_POLL {
+        // SELF-PUMP the selector step each frame (the cold standalone dialog is NOT ticked by the
+        // MENU task-group, so the native pump never advances it). tick 0x140826d50(rcx=step,
+        // rdx=&ctx, r8=&result-FD4Time). First tick runs installer 0x140828270 (submits the
+        // io18/io20 0x280000 full-save request, sets step+0x68=1 / step+0x70=job); later ticks pump
+        // menu_deser 0x14082c240 -> set_save_slot + deserialize -> mount. result+0x8 = frame delta
+        // (must be non-zero or the timing logic stalls), from framectx+0x8. (selector-tick-drive-decode)
+        let step = OWN_STEPPER_SELECTOR_STEP.load(Ordering::SeqCst);
+        if step != null {
+            const SELECTOR_TICK_RVA: usize = 0x826d50;
+            const FD4TIME_VTABLE_RVA: usize = 0x29c8e48;
+            const FRAMECTX_DELTA_8: usize = 0x8;
+            const STEP_INSTALL_FLAG_68: usize = 0x68;
+            const STEP_JOB_70: usize = 0x70;
+            const TICK_CTX_LEN: usize = 2;
+            const TICK_CTX_DONE_IDX: usize = 1;
+            const TICK_CTX_INIT: u32 = 0;
+            const FD4TIME_PAD_INIT: u32 = 0;
+            const FD4TIME_DELTA_FALLBACK: f32 = 0.0166667;
+            const ZERO_F32: f32 = 0.0;
+            #[repr(C)]
+            struct Fd4Time {
+                vtable: usize,
+                delta: f32,
+                pad: u32,
+            }
+            let raw_delta = unsafe { *((framectx + FRAMECTX_DELTA_8) as *const f32) };
+            let delta = if raw_delta.is_finite() && raw_delta > ZERO_F32 {
+                raw_delta
+            } else {
+                FD4TIME_DELTA_FALLBACK
+            };
+            let mut result = Fd4Time {
+                vtable: base + FD4TIME_VTABLE_RVA,
+                delta,
+                pad: FD4TIME_PAD_INIT,
+            };
+            let mut tctx: [u32; TICK_CTX_LEN] = [TICK_CTX_INIT; TICK_CTX_LEN];
+            let tick: unsafe extern "system" fn(usize, usize, usize) -> usize =
+                unsafe { std::mem::transmute(base + SELECTOR_TICK_RVA) };
+            unsafe {
+                tick(
+                    step,
+                    tctx.as_mut_ptr() as usize,
+                    (&mut result) as *mut Fd4Time as usize,
+                )
+            };
+            let install_flag =
+                unsafe { safe_read_usize(step + STEP_INSTALL_FLAG_68) }.unwrap_or(null);
+            let job = unsafe { safe_read_usize(step + STEP_JOB_70) }.unwrap_or(null);
+            if waits % S2_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+                append_autoload_debug(format_args!(
+                    "own_stepper: STAGE2-SELECTOR-TICK waits={waits} step=0x{step:x} install_flag=0x{install_flag:x} job=0x{job:x} ctx_done={} delta={delta} c30=0x{c30:x} ac0={ac0} b80={b80} io18=0x{io18:x} io20=0x{io20:x}",
+                    tctx[TICK_CTX_DONE_IDX]
+                ));
+            }
+        }
         // io18/io20 both non-null => the request was started; latch it.
         if io18 != null && io20 != null {
             OWN_STEPPER_IO_WAS_SET.store(OWN_STEPPER_IO_WAS_SET_YES, Ordering::SeqCst);
