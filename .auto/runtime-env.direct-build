@@ -1,0 +1,17 @@
+# DELIBERATE native ProfileLoadDialog direct-build + full headless load (2026-06-18).
+# own_stepper drives boot -> online-disable -> modal-skip -> past press-any-button -> open menu,
+# then (ER_EFFECTS_DIRECT_BUILD=1) calls dialog_factory 0x14081ead0 to build the ProfileLoadDialog
+# DIRECTLY (bypassing the input-gated router_this/d180-on-confirm layer that never builds headless),
+# validates [dialog]==0x142b229f8, then STAGE 2: load_activate -> selector/menu_deser mount
+# (io18/io20, b80-independent) -> GUARDED continue_confirm 0x140b0e180 -> SetState(5) -> world stream.
+# FAIL-CLOSED: r8 validated read-only before the native call; NO SetState5 / NO save write unless a
+# REAL mount is verified (ac0==slot && c30 real). Saves hashed + backed up + restored. host_input=none.
+LAUNCH_MODE=offline-launcher
+ER_EFFECTS_OWN_STEPPER=1
+ER_EFFECTS_DIRECT_BUILD=1
+ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=0
+RUNTIME_MAX_NUDGES=0
+RESTORE_RUNTIME_SAVES=1
+RUNTIME_CAPTURE_INPUT_OCR=0
+RUNTIME_WATCH_TARGET=player-load
+RUNTIME_SPAWN_POLL_BUDGET=32768

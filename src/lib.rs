@@ -829,6 +829,21 @@ pub(crate) static OWN_STEPPER_SLOT: std::sync::atomic::AtomicI32 =
 pub(crate) static OWN_STEPPER_PHASE: AtomicUsize = AtomicUsize::new(OWN_STEPPER_PHASE_MENU);
 pub(crate) static mut OWN_STEPPER_SHIM: [usize; OWN_STEPPER_SHIM_LEN] =
     [TITLE_OWNER_SCAN_START_ADDRESS; OWN_STEPPER_SHIM_LEN];
+/// 2026-06-18 DIRECT BUILD: persistent buffers for building a ProfileLoadDialog directly via
+/// dialog_factory 0x14081ead0 (bypassing the input-gated router_this/d180-on-confirm layer that
+/// never builds headless). `cap[0]` = owner+0x138 (the ctor r8 = *(capture+8)); the factory reads
+/// *(rcx). `ctx` is the zeroed incoming-ctx the factory reads to build the (empty cosmetic) label.
+/// Both PERSISTENT (the built dialog retains a pointer to the ctx), so static, never stack.
+pub(crate) const DIRECT_BUILD_CAP_LEN: usize = 1;
+pub(crate) static mut DIRECT_BUILD_CAP: [usize; DIRECT_BUILD_CAP_LEN] =
+    [TITLE_OWNER_SCAN_START_ADDRESS; DIRECT_BUILD_CAP_LEN];
+pub(crate) const DIRECT_BUILD_CTX_LEN: usize = 8;
+pub(crate) static mut DIRECT_BUILD_CTX: [usize; DIRECT_BUILD_CTX_LEN] =
+    [TITLE_OWNER_SCAN_START_ADDRESS; DIRECT_BUILD_CTX_LEN];
+/// One-shot latch so the native build fires at most once per run.
+pub(crate) static OWN_STEPPER_DIRECT_BUILT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const OWN_STEPPER_DIRECT_BUILT_NO: usize = 0;
+pub(crate) const OWN_STEPPER_DIRECT_BUILT_YES: usize = 1;
 
 // ============================================================================================
 // STAGE 2 -- the VERIFIED in-context menu-drive that actually COMPLETES a character load.

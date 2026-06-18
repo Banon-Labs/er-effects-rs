@@ -509,6 +509,95 @@ pub(crate) fn cold_char_mount_enabled() -> bool {
         .exists()
 }
 
+/// Direct ProfileLoadDialog build mode (er-effects-direct-build.txt / ER_EFFECTS_DIRECT_BUILD).
+/// OFF by default: a plain own_stepper run stays the safe read-only scan; the native dialog build
+/// (which leads to a guarded SetState(5) save-write via STAGE 2) fires only when deliberately
+/// enabled, so the first native-build run is a deliberate, save-backed experiment.
+pub(crate) fn direct_build_enabled() -> bool {
+    matches!(std::env::var("ER_EFFECTS_DIRECT_BUILD").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-direct-build.txt")
+            .exists()
+}
+
+/// 2026-06-18 BREAKTHROUGH build: construct a CS::ProfileLoadDialog DIRECTLY at the open menu,
+/// bypassing the input-gated router_this/d180-on-confirm layer (runtime-PROVEN never to build
+/// headless -- loadgame-fingerprint-scan-confirms-router-this-not-built-headless-2026). The
+/// ProfileLoadDialog ctor 0x1409a3d90 is COLD-VIABLE (it builds router_this + the slot rows
+/// inline, no session/PlayerGameData/input-focus deps). We call dialog_factory 0x14081ead0,
+/// which does op-new(0x1cd0) via allocator [0x143d87350] + ctx-build + ctor, passing:
+///   rcx = &cap  (cap[0] = owner+0x138 = the ctor r8 = *(capture+8); factory reads *(rcx));
+///   rdx = &ctx  (zeroed incoming-ctx -> empty cosmetic label).
+/// Returns the dialog* in rax. FULLY read-only-validated before the native call (owner-obj vtable
+/// 0x142ac7f20 + a populated row-vector [+0xa58..+0xa60]); fail-closed on any mismatch (NO call /
+/// NO further action / NO write). On success: store OWN_STEPPER_DIALOG + advance to S2_ACTIVATE,
+/// which own_stepper_stage2 drives (load_activate -> menu_deser mount -> guarded continue_confirm).
+/// One-shot (OWN_STEPPER_DIRECT_BUILT). The ONLY save-write risk is STAGE 2's guarded SetState(5).
+unsafe fn own_stepper_direct_build(owner: usize, base: usize) {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const FACTORY_RVA: usize = 0x81ead0;
+    const OWNER_OBJ_138: usize = 0x138;
+    const OWNER_OBJ_VTABLE_RVA: usize = 0x2ac7f20;
+    const ROWVEC_BEGIN_A58: usize = 0xa58;
+    const ROWVEC_END_A60: usize = 0xa60;
+    const ROWVEC_MAX_SPAN: usize = 0x10000;
+    const PTR_ALIGN_MASK: usize = 0x7;
+    let owner_obj = owner + OWNER_OBJ_138;
+    // Read-only re-validation of r8 (owner_obj) before the native build: expected vtable + a
+    // populated row-vector (begin < end, sane span). Fail-closed (latch set so we don't spin).
+    let ovt = unsafe { safe_read_usize(owner_obj) }.unwrap_or(NULL);
+    let begin = unsafe { safe_read_usize(owner_obj + ROWVEC_BEGIN_A58) }.unwrap_or(NULL);
+    let end = unsafe { safe_read_usize(owner_obj + ROWVEC_END_A60) }.unwrap_or(NULL);
+    let span = end.wrapping_sub(begin);
+    let rows_ok = ovt == base + OWNER_OBJ_VTABLE_RVA
+        && begin != NULL
+        && (begin & PTR_ALIGN_MASK) == NULL
+        && end > begin
+        && span <= ROWVEC_MAX_SPAN;
+    if !rows_ok {
+        append_autoload_debug(format_args!(
+            "own_stepper: DIRECT-BUILD ABORT (fail-closed, NO native call) owner_obj=0x{owner_obj:x} vt=0x{ovt:x}(want 0x{:x}) rowvec=[0x{begin:x}..0x{end:x}] span=0x{span:x}",
+            base + OWNER_OBJ_VTABLE_RVA
+        ));
+        OWN_STEPPER_DIRECT_BUILT.store(OWN_STEPPER_DIRECT_BUILT_YES, Ordering::SeqCst);
+        return;
+    }
+    // Stage the persistent buffers: cap[0] = owner_obj (factory reads *(rcx) for the ctor r8);
+    // ctx stays zeroed (factory reads it to build an empty label).
+    let cap_ptr = (&raw mut DIRECT_BUILD_CAP) as *mut usize;
+    unsafe { *cap_ptr = owner_obj };
+    let cap_addr = cap_ptr as usize;
+    let ctx_addr = (&raw mut DIRECT_BUILD_CTX) as *mut usize as usize;
+    let factory: unsafe extern "system" fn(usize, usize) -> usize =
+        unsafe { std::mem::transmute(base + FACTORY_RVA) };
+    append_autoload_debug(format_args!(
+        "own_stepper: DIRECT-BUILD calling factory 0x{:x}(rcx=&cap[=0x{owner_obj:x}], rdx=&ctx) owner_obj vt=0x{ovt:x} rowvec=[0x{begin:x}..0x{end:x}]",
+        base + FACTORY_RVA
+    ));
+    let dialog = unsafe { factory(cap_addr, ctx_addr) };
+    let dvt = if dialog != NULL {
+        unsafe { safe_read_usize(dialog) }.unwrap_or(NULL)
+    } else {
+        NULL
+    };
+    OWN_STEPPER_DIRECT_BUILT.store(OWN_STEPPER_DIRECT_BUILT_YES, Ordering::SeqCst);
+    if dialog != NULL && dvt == base + PROFILE_LOAD_DIALOG_VTABLE_RVA {
+        OWN_STEPPER_DIALOG.store(dialog, Ordering::SeqCst);
+        OWN_STEPPER_S2_WAITS.store(NULL, Ordering::SeqCst);
+        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_ACTIVATE, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "own_stepper: DIRECT-BUILD SUCCESS dialog=0x{dialog:x} vt=0x{dvt:x} (ProfileLoadDialog) -- entering STAGE2 ACTIVATE (slot={})",
+            OWN_STEPPER_SLOT.load(Ordering::SeqCst)
+        ));
+    } else {
+        append_autoload_debug(format_args!(
+            "own_stepper: DIRECT-BUILD returned dialog=0x{dialog:x} vt=0x{dvt:x} != ProfileLoadDialog 0x{:x} -- fail-closed, STAY (NO STAGE2, NO write)",
+            base + PROFILE_LOAD_DIALOG_VTABLE_RVA
+        ));
+    }
+}
+
 /// Multi-frame cold char-mount drive (gated, SAVE-SAFE). Sequence (worker registered): build+register
 /// the FD4 stream worker (0xb0a980 stub) so the scheduler ticks it and drains the save-IO read; set
 /// the slot; PREVIEW 0x67b4e0 (b80=1 + starts the iodev read); poll 0x679180 each frame until
@@ -2425,6 +2514,20 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
                     ));
                 }
             }
+            pass_through(false);
+            return;
+        }
+        // 2026-06-18 DIRECT BUILD (gated, OFF by default). Once the menu is open, build the
+        // ProfileLoadDialog DIRECTLY (factory 0x14081ead0) -- bypassing the input-gated row
+        // controller that never constructs headless -- then drive STAGE 2 (mount + guarded
+        // continue_confirm). One-shot + fail-closed (validates r8 read-only before the native
+        // call). A plain (un-gated) run skips this and stays the safe read-only scan below.
+        if direct_build_enabled()
+            && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO
+            && OWN_STEPPER_DIRECT_BUILT.load(Ordering::SeqCst) == OWN_STEPPER_DIRECT_BUILT_NO
+            && waits >= STAGE1D_SETTLE_WAITS
+        {
+            unsafe { own_stepper_direct_build(owner, base) };
             pass_through(false);
             return;
         }
