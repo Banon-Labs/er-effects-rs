@@ -3121,93 +3121,57 @@ unsafe fn own_stepper_stage2(
         // (must be non-zero or the timing logic stalls), from framectx+0x8. (selector-tick-drive-decode)
         let step = OWN_STEPPER_SELECTOR_STEP.load(Ordering::SeqCst);
         if step != null {
-            const SELECTOR_TICK_RVA: usize = 0x826d50;
-            const FD4TIME_VTABLE_RVA: usize = 0x29c8e48;
-            const FRAMECTX_DELTA_8: usize = 0x8;
-            const STEP_INSTALL_FLAG_68: usize = 0x68;
-            const STEP_JOB_70: usize = 0x70;
-            const TICK_CTX_LEN: usize = 2;
-            const TICK_CTX_DONE_IDX: usize = 1;
-            const TICK_CTX_STATE_IDX: usize = 0;
-            const TICK_CTX_INIT: u32 = 0;
-            const FD4TIME_PAD_INIT: u32 = 0;
-            const FD4TIME_DELTA_FALLBACK: f32 = 0.0166667;
-            const ZERO_F32: f32 = 0.0;
-            #[repr(C)]
-            struct Fd4Time {
-                vtable: usize,
-                delta: f32,
-                pad: u32,
-            }
-            let raw_delta = unsafe { *((framectx + FRAMECTX_DELTA_8) as *const f32) };
-            let delta = if raw_delta.is_finite() && raw_delta > ZERO_F32 {
-                raw_delta
-            } else {
-                FD4TIME_DELTA_FALLBACK
-            };
-            let mut result = Fd4Time {
-                vtable: base + FD4TIME_VTABLE_RVA,
-                delta,
-                pad: FD4TIME_PAD_INIT,
-            };
-            let mut tctx: [u32; TICK_CTX_LEN] = [TICK_CTX_INIT; TICK_CTX_LEN];
-            let tick: unsafe extern "system" fn(usize, usize, usize) -> usize =
-                unsafe { std::mem::transmute(base + SELECTOR_TICK_RVA) };
-            unsafe {
-                tick(
-                    step,
-                    tctx.as_mut_ptr() as usize,
-                    (&mut result) as *mut Fd4Time as usize,
-                )
-            };
-            // The step tick creates the LoadJob (step+0x70) but its execute (menu_deser) is not
-            // submitting the read (b80 stays 0). Call the job's execute DIRECTLY each frame:
-            // [[step+0x70]]+0x10(rcx=job, rdx=&ctx, r8=&result-FD4Time) = menu_deser 0x14082c240
-            // (submits the 0x280000 full-save read + advances its state machine).
-            const JOB_VTBL_EXEC_10: usize = 0x10;
-            const MD_RET_INIT: i64 = -1;
-            let job_now = unsafe { safe_read_usize(step + STEP_JOB_70) }.unwrap_or(null);
-            let mut md_ret: i64 = MD_RET_INIT;
-            if job_now != null {
-                let job_vt = unsafe { safe_read_usize(job_now) }.unwrap_or(null);
-                let exec_slot = if job_vt != null {
-                    unsafe { safe_read_usize(job_vt + JOB_VTBL_EXEC_10) }.unwrap_or(null)
-                } else {
-                    null
-                };
-                if exec_slot != null {
-                    let exec: unsafe extern "system" fn(usize, usize, usize) -> i64 =
-                        unsafe { std::mem::transmute(exec_slot) };
-                    md_ret = unsafe {
-                        exec(
-                            job_now,
-                            tctx.as_mut_ptr() as usize,
-                            (&mut result) as *mut Fd4Time as usize,
-                        )
-                    };
-                }
-            }
-            // Co-drive the b80 IO lane each frame so menu_deser's submitted full-save read advances
-            // to resident (b80 0->1->resident->3). menu_deser POLLS 0x679180 but does not tick the
-            // b80==1 IO driver 0x679510 itself; cold_char_mount proved this pair drains the read
-            // cold. We do NOT set_save_slot here (it would force ac0 and defeat the mount guard --
-            // menu_deser sets ac0 on real completion).
+            // SUBMIT the type-0xa FULL-save read -- THE missing call (decode: the installer + menu_deser
+            // only BUILD+POLL; the live orchestrator 0x14082a6a0 submits via 0x14067b1a0, which the cold
+            // tick chain never runs, so menu_deser polls forever PENDING). set_save_slot first (the
+            // submit reads [worker+0xac0]); both self-idempotent (0x14067b1a0 gates on [worker+0xb80]==0).
+            // The lane/poll co-drive below advances b80 2->3 and menu_deser reads the full 0x280000 + mounts.
+            const FULL_LOAD_SUBMIT_RVA: usize = 0x67b1a0;
+            const FULL_LOAD_FLAG: u8 = 0;
+            let set_slot: unsafe extern "system" fn(i32) =
+                unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+            unsafe { set_slot(want_slot) };
+            let submit: unsafe extern "system" fn(u8) -> u8 =
+                unsafe { std::mem::transmute(base + FULL_LOAD_SUBMIT_RVA) };
+            let submit_ret = unsafe { submit(FULL_LOAD_FLAG) };
+            let _ = submit_ret;
+            // Drain the b80 IO lane each frame so the submitted full-save read advances to resident
+            // (b80 2->3). The submit 0x14067b1a0 only enqueues; lane 0x679510 + poll 0x679180 drive
+            // it to residence (the cold_char_mount drain mechanism, now over the FULL type-0xa read).
             const B80_LANE_DRIVE_RVA: usize = 0x679510;
             const B80_POLL_DRIVE_RVA: usize = 0x679180;
             const B80_POLL_ARG: u8 = 0;
+            const B80_RESIDENT: i32 = 3;
+            const DESER_NOT_FIRED: usize = 0;
+            const DESER_FIRED: usize = 1;
+            const DESER_RET_NONE: i32 = -2;
             let lane: unsafe extern "system" fn() -> i32 =
                 unsafe { std::mem::transmute(base + B80_LANE_DRIVE_RVA) };
             let _ = unsafe { lane() };
             let poll: unsafe extern "system" fn(u8, u8) -> i32 =
                 unsafe { std::mem::transmute(base + B80_POLL_DRIVE_RVA) };
             let _ = unsafe { poll(B80_POLL_ARG, B80_POLL_ARG) };
-            let install_flag =
-                unsafe { safe_read_usize(step + STEP_INSTALL_FLAG_68) }.unwrap_or(null);
-            let job = unsafe { safe_read_usize(step + STEP_JOB_70) }.unwrap_or(null);
+            // When the FULL save is RESIDENT (b80==3), deserialize it ONCE via the proven 0x67b290
+            // (cold_char_mount's deserializer; reads the resident request via 0x67b100 gated b80==3).
+            // Earlier 0x67b290 saw only metadata (preview lane) -> header-validate fail; now the
+            // resident request is slot N's FULL type-0xa save -> it should write c30=real + the char.
+            let mut deser_ret = DESER_RET_NONE;
+            if b80 == B80_RESIDENT
+                && OWN_STEPPER_DESER_FIRED.load(Ordering::SeqCst) == DESER_NOT_FIRED
+            {
+                let deser: unsafe extern "system" fn(i32) -> i32 =
+                    unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
+                deser_ret = unsafe { deser(want_slot) };
+                OWN_STEPPER_DESER_FIRED.store(DESER_FIRED, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "own_stepper: STAGE2-DESERIALIZE 0x{:x}(slot={want_slot}) ret={deser_ret} (full-save resident, b80=3) -- LOAD-CORRECTNESS (post-deser real char?):",
+                    base + DESERIALIZE_SLOT_RVA
+                ));
+                unsafe { dump_load_correctness(base, n) };
+            }
             if waits % S2_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
                 append_autoload_debug(format_args!(
-                    "own_stepper: STAGE2-SELECTOR-TICK waits={waits} step=0x{step:x} install_flag=0x{install_flag:x} job=0x{job:x} md_ret={md_ret} ctx_done={} ctx_state={} delta={delta} c30=0x{c30:x} ac0={ac0} b80={b80} io18=0x{io18:x} io20=0x{io20:x}",
-                    tctx[TICK_CTX_DONE_IDX], tctx[TICK_CTX_STATE_IDX]
+                    "own_stepper: STAGE2-SELECTOR-DRIVE waits={waits} step=0x{step:x} submit_ret={submit_ret} deser_ret={deser_ret} c30=0x{c30:x} ac0={ac0} b80={b80} io18=0x{io18:x} io20=0x{io20:x}"
                 ));
             }
         }
@@ -3219,11 +3183,18 @@ unsafe fn own_stepper_stage2(
             OWN_STEPPER_IO_WAS_SET.load(Ordering::SeqCst) == OWN_STEPPER_IO_WAS_SET_YES;
         let io_consumed = io18 == null && io20 == null;
         let expected = OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst);
-        let mount_done =
-            ac0 == expected && expected != OWN_STEPPER_SLOT_NONE && io_was_set && io_consumed;
+        // Mount signal = GameMan c30 became a REAL saved map. set_save_slot (called each frame for
+        // the submit) forces ac0=slot, so ac0 is no longer a usable signal -- use c30. Real ⟺ not
+        // the new-game default, not the unset sentinel, not zero. (decode: menu_deser mounts c30=real)
+        const C30_ZERO: i32 = 0;
+        let _ = (io_was_set, io_consumed);
+        let c30_real = c30 != GAME_MAN_NEWGAME_DEFAULT_MAP
+            && c30 != GAME_MAN_C30_UNSET
+            && c30 != C30_ZERO;
+        let mount_done = c30_real && ac0 == expected && expected != OWN_STEPPER_SLOT_NONE;
         if waits % S2_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 || mount_done {
             append_autoload_debug(format_args!(
-                "own_stepper: STAGE2-MOUNT-POLL waits={waits} ac0={ac0} expected={expected} c30=0x{c30:x} b80={b80} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} io_was_set={io_was_set} mount_done={mount_done}"
+                "own_stepper: STAGE2-MOUNT-POLL waits={waits} ac0={ac0} expected={expected} c30=0x{c30:x} c30_real={c30_real} b80={b80} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x}"
             ));
         }
         if mount_done {
@@ -3234,10 +3205,12 @@ unsafe fn own_stepper_stage2(
                 format_args!("ac0={ac0} c30=0x{c30:x} waits={waits}"),
             );
             append_autoload_debug(format_args!(
-                "own_stepper: STAGE2-MOUNT-DONE ac0={ac0} c30=0x{c30:x} waits={waits} (real char applied)"
+                "own_stepper: STAGE2-MOUNT-DONE ac0={ac0} c30=0x{c30:x} waits={waits} -- VERIFY-ONLY (NO SetState5 this run); LOAD-CORRECTNESS below must show the real slot char before continue_confirm is enabled:"
             ));
+            unsafe { dump_load_correctness(base, n) };
             OWN_STEPPER_S2_WAITS.store(null, Ordering::SeqCst);
-            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_CONFIRM, Ordering::SeqCst);
+            // SAFETY: verify-only until the char is confirmed correct -- go DONE, do NOT SetState5.
+            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
         } else if waits >= OWN_STEPPER_S2_PHASE_MAX {
             append_autoload_debug(format_args!(
                 "own_stepper: STAGE2-MOUNT-POLL-TIMEOUT ac0={ac0} want={want_slot} c30=0x{c30:x} io_was_set={io_was_set} after {waits} waits -- STAGE2-NOWRITE-ABORT (stay at menu)"

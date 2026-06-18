@@ -902,6 +902,8 @@ pub(crate) static OWN_STEPPER_DIALOG: AtomicUsize = AtomicUsize::new(0);
 /// the MENU task-group, so STAGE 2 reads this and SELF-PUMPS the tick 0x140826d50 each frame
 /// (installer -> io18/io20 full-save read -> menu_deser 0x14082c240 -> mount).
 pub(crate) static OWN_STEPPER_SELECTOR_STEP: AtomicUsize = AtomicUsize::new(0);
+/// One-shot guard: fire the deserialize 0x67b290 exactly once when the full-save read is resident.
+pub(crate) static OWN_STEPPER_DESER_FIRED: AtomicUsize = AtomicUsize::new(0);
 /// One-shot latch: set once the zero-input title-confirm fire (fire_titletop_load_entry) has
 /// fired the Load-Game row action, so it is not re-fired while the ProfileLoadDialog builds.
 pub(crate) static OWN_STEPPER_TITLE_FIRED: AtomicUsize = AtomicUsize::new(0);
