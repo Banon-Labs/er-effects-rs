@@ -2009,12 +2009,19 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // clears [DLUID+0x88d] each frame when it isn't GetActiveWindow; re-set it to 1.
                 if stay_active_enabled() {
                     if let Ok(base) = game_module_base() {
-                        const DLUID_SINGLETON_RVA: usize = 0x4c85dc18;
+                        // DLUID (input-device-manager) singleton VA 0x14485dc18 -> RVA 0x485dc18.
+                        const DLUID_SINGLETON_RVA: usize = 0x485dc18;
                         const DLUID_INPUT_ACTIVE_FLAG_OFFSET: usize = 0x88d;
                         const INPUT_ACTIVE: u8 = 1;
                         const NULL_DLUID: usize = 0;
-                        let dluid = unsafe { *((base + DLUID_SINGLETON_RVA) as *const usize) };
-                        if dluid != NULL_DLUID {
+                        let dluid = unsafe { safe_read_usize(base + DLUID_SINGLETON_RVA) }
+                            .unwrap_or(NULL_DLUID);
+                        // Defensive: only write once the flag byte is confirmed READABLE (so a
+                        // not-yet-initialized or bad singleton ptr can never fault the game thread).
+                        if dluid != NULL_DLUID
+                            && unsafe { safe_read_usize(dluid + DLUID_INPUT_ACTIVE_FLAG_OFFSET) }
+                                .is_some()
+                        {
                             unsafe {
                                 *((dluid + DLUID_INPUT_ACTIVE_FLAG_OFFSET) as *mut u8) = INPUT_ACTIVE
                             };
