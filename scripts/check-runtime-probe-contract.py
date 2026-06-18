@@ -3,7 +3,7 @@
 
 Runtime Elden Ring probes are disruptive. The durable contract is conservative:
 manual probes must be explicit, event/readiness-driven, cleanly torn down, and
-hard-bounded by a timeout_seconds value greater than 0 and no more than 30.
+hard-bounded by a timeout_seconds value greater than 0 and no more than 120.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ RUNTIME_POLICY_PATH = AUTO_DIR / "runtime_experiment_policy.rego"
 SMOKE_DRIVER_PATH = REPO_ROOT / "scripts" / "er-smoke-driver.sh"
 AUTO_LOG_PATH = AUTO_DIR / "log.jsonl"
 INCIDENT_ISSUE_ID = "er-effects-rs-1l6"
-MAX_RUNTIME_TIMEOUT_SECONDS = 30
+MAX_RUNTIME_TIMEOUT_SECONDS = 120
 BANNED_LAUNCH_SNIPPETS = (
     "./.auto/runtime_probe.sh",
 )
@@ -35,7 +35,7 @@ RUNTIME_POLICY_REQUIRED_SNIPPETS = (
     "host_input == \"none\"",
     "process_tree_and_save_restore",
     "timeout_seconds",
-    "max_timeout_seconds := 30",
+    "max_timeout_seconds := 120",
 )
 BANNED_WRAPPER_SNIPPETS = (
     ".auto/run-runtime-once",
@@ -262,7 +262,7 @@ def scan_contract() -> list[Finding]:
                     0,
                     "runtime-probe-missing-bounded-timeout",
                     ", ".join(missing_probe_timeout),
-                    "Runtime probe policy input and readiness watcher invocation must carry timeout_seconds / --max-runtime-seconds with a value no greater than 30.",
+                    "Runtime probe policy input and readiness watcher invocation must carry timeout_seconds / --max-runtime-seconds with a value no greater than 120.",
                 )
             )
 
@@ -272,7 +272,7 @@ def scan_contract() -> list[Finding]:
         missing_watch_timeout = [
             snippet
             for snippet in (
-                "MAX_ALLOWED_RUNTIME_SECONDS = 30.0",
+                "MAX_ALLOWED_RUNTIME_SECONDS = 120.0",
                 "--max-runtime-seconds",
                 "TIMEOUT_BUDGET_EXHAUSTED",
             )
@@ -285,7 +285,7 @@ def scan_contract() -> list[Finding]:
                     0,
                     "readiness-watch-missing-hard-timeout",
                     ", ".join(missing_watch_timeout),
-                    "The readiness watcher must enforce --max-runtime-seconds and cap it at 30 seconds.",
+                    "The readiness watcher must enforce --max-runtime-seconds and cap it at 120 seconds.",
                 )
             )
 
@@ -341,7 +341,7 @@ def main() -> int:
         if findings:
             print("Runtime probe contract violations found.", file=sys.stderr)
             print(
-                "Autoresearch measurement must stay non-disruptive. Manual runtime probes must remain explicitly opted in, gated by the readiness watcher/no-telemetry bootstrap contract, and hard-bounded by timeout_seconds <= 30.\n",
+                "Autoresearch measurement must stay non-disruptive. Manual runtime probes must remain explicitly opted in, gated by the readiness watcher/no-telemetry bootstrap contract, and hard-bounded by timeout_seconds <= 120.\n",
                 file=sys.stderr,
             )
             for finding in findings:

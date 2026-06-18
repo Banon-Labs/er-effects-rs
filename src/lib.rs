@@ -411,6 +411,54 @@ pub(crate) const TITLE_TOP_DIALOG_OPEN_MENU_RVA: usize = 0x9b24e0;
 /// CS::TitleTopDialog vtable 0x142b26468 (RVA). Verify [owner+0xe0][0]==base+this before
 /// calling the registrar (wrong receiver would fault on [dialog+0xa38]/[+0xa60]).
 pub(crate) const TITLE_TOP_DIALOG_VTABLE_RVA: usize = 0x2b26468;
+/// CS::MenuWindow vtable 0x142a93a60 (.?AVMenuWindow@CS@@) (RVA). The live MenuWindow* the LIVE
+/// Load-Game dialog factory needs as its rdx call-frame arg. Located by the active-screen scan.
+pub(crate) const MENU_WINDOW_VTABLE_RVA: usize = 0x2a93a60;
+/// CS::MenuWindowProxy vtable 0x142a94318 (RVA). The proxy variant of MenuWindow that the
+/// active-screen array may hold instead of the concrete MenuWindow; either is a valid factory rdx.
+pub(crate) const MENU_WINDOW_PROXY_VTABLE_RVA: usize = 0x2a94318;
+/// Active-screen array 0x143d6d8d0 (RVA): the per-frame pump 0x1409aa680 iterates it. 10 contiguous
+/// screen* slots (stride 8). The LIVE-dialog scan reads each slot's [scr] vtable to find the live
+/// TitleTopDialog and MenuWindow (the factory's SceneProxy capture + rdx) -- no blind heap scan.
+pub(crate) const ACTIVE_SCREEN_ARRAY_RVA: usize = 0x3d6d8d0;
+/// Active-screen array slot count (bounded scan; the native pump iterates the same span).
+pub(crate) const ACTIVE_SCREEN_ARRAY_SLOTS: usize = 10;
+/// Active-screen array slot stride (one screen* per slot).
+pub(crate) const ACTIVE_SCREEN_ARRAY_STRIDE: usize = 8;
+/// Scan slot start / step.
+pub(crate) const ACTIVE_SCREEN_SLOT_START: usize = 0;
+pub(crate) const ACTIVE_SCREEN_SLOT_STEP: usize = 1;
+/// PROBE-2 GROUND TRUTH (2026-06-18, runtime, REFUTES the static group->holder->screen walk):
+/// the 10 slots of the active-screen array 0x143d6d8d0 each hold a menu MODEL RENDERER (vtable
+/// 0x142b80128 CSMenuProfModelRend / 0x142b7f310 CSMenuAsmModelRend), NOT screen/group controllers,
+/// so the +0xa8 holder / +0x48 screen walk leads nowhere. That walk (and the MENU_GROUP_* /
+/// MENU_HOLDER_* offsets it used) is removed. What IS runtime-reliable: TitleTopDialog at owner+0xe0
+/// (vtable-gated, TITLE_TOP_DIALOG_VTABLE_RVA). The live MenuWindow* is NOT statically pinned; it is
+/// read DETERMINISTICALLY by `locate_live_loadgame_node` from the SceneProxy back-ref at proxy+0x20.
+///
+/// Field-scan stride: one qword pointer per step (also the SceneProxy diagnostic scan stride).
+pub(crate) const FIELD_SCAN_STRIDE: usize = 8;
+/// TitleTopDialog SceneProxy capture slot: [dialog+0xa38] holds the live SceneProxy* the
+/// TitleTopDialog ctor 0x1409a81a0 stored at 0x1409a8213. The LIVE-dialog factory 0x14081ead0
+/// reads the SceneProxy from [rcx], so we pass rcx = dialog+0xa38 (factory r8 = *(dialog+0xa38)).
+pub(crate) const DIALOG_SCENE_PROXY_CAPTURE_A38_OFFSET: usize = 0xa38;
+/// CS::ProfileLoadDialog build factory 0x14081ead0 (RVA). Called as
+/// `extern "system" fn(rcx = dialog+0xa38, rdx = MenuWindow*) -> dialog*` to build + register the
+/// LIVE ProfileLoadDialog (vtable 0x142b229f8) into the active-screen set + menu group.
+pub(crate) const LIVE_DIALOG_FACTORY_RVA: usize = 0x81ead0;
+/// CONVERGED ACQUISITION RECIPE (2026-06-18, bd live-dialog-menuwindow-via-sceneproxy-backref-0x20):
+/// the live MenuWindow* (factory rdx) is read DETERMINISTICALLY from the SceneProxy we already hold
+/// at [td+0xa38] -- NOT via the menu MANAGER. CS::SceneObjProxy ctor 0x14074a700 does
+/// `mov [proxy+0x20], rbx` where rbx is the MenuWindow (0x14074a735), so the back-ref lives at
+/// proxy+0x20. The dead menu-manager/registry/menu-step scans (and the owner/dialog field scans) are
+/// removed. CS::SceneObjProxy vtable 0x142a94a70 (RVA): require *(proxy) == base+this before reading
+/// the +0x20 back-ref; LOG *(proxy) regardless (self-diagnostic).
+pub(crate) const SCENE_OBJ_PROXY_VTABLE_RVA: usize = 0x2a94a70;
+/// SceneProxy MenuWindow back-ref: the live MenuWindow* sits at proxy+0x20 (ctor 0x14074a735).
+pub(crate) const SCENE_PROXY_MENU_WINDOW_20_OFFSET: usize = 0x20;
+/// Diagnostic span: if *(proxy) is NOT SceneObjProxy, scan [proxy .. proxy+0x40] stride 8 logging
+/// each qword + its [0] vtable so the next probe reveals the real layout. Also bounds the fallback.
+pub(crate) const SCENE_PROXY_DIAG_SCAN_SPAN: usize = 0x40;
 /// FD4 StateMachine sub-object EMBEDDED at dialog+0xa60. NB: the registrar / set_state /
 /// is_in_state receiver is the ADDRESS dialog+0xa60 (they do `add rcx,0xa60; call`), NOT
 /// `*(dialog+0xa60)`. Its first qword is the SM vtable.
@@ -540,6 +588,12 @@ pub(crate) const B80_LOAD_SAVE_DATA_INITIATOR_RVA: usize = 0x67b200;
 /// reveals WHICH deserializer set the saved map (vanilla 0x67b290/0x67e150 chain or,
 /// if it never fires under Seamless, ERSC writing c30 from its own module).
 pub(crate) const C30_WRITER_RVA: usize = 0x67bd70;
+/// The save-data subsystem gate the c30-writer 0x67bd70 checks before it writes
+/// GameMan+0xc30: `[0x143d68078]` (RVA 0x3d68078). It is a 0x270-byte heap object
+/// built by the save-load boot 0x6798d0..0x679904 and zeroed on teardown 0x6789bf.
+/// If null at the writer's entry, 0x67bd70 returns without writing c30 (gate (a) in
+/// the c30-stays-default diagnosis). The save-safe c30-writer probe logs this.
+pub(crate) const SAVE_DATA_SUBSYSTEM_GATE_RVA: usize = 0x3d68078;
 /// World-resource streaming lever (worldres-loadstate-creator-and-streaming-enable-
 /// gate-2026). Gap 1: the block-load request is built from the InGameStep target
 /// coord [InGameStep+0x100]; set it to slot 9's real map then re-submit via
@@ -844,6 +898,11 @@ pub(crate) static mut DIRECT_BUILD_CTX: [usize; DIRECT_BUILD_CTX_LEN] =
 pub(crate) static OWN_STEPPER_DIRECT_BUILT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const OWN_STEPPER_DIRECT_BUILT_NO: usize = 0;
 pub(crate) const OWN_STEPPER_DIRECT_BUILT_YES: usize = 1;
+/// MODEL B (live_dialog_enabled): one-shot latch so the live Load-Game node's native run
+/// 0x1409aaba0 fires at most once per run (a re-fire would double-build / leak the dialog).
+pub(crate) static OWN_STEPPER_LIVE_FIRED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const OWN_STEPPER_LIVE_FIRED_NO: usize = 0;
+pub(crate) const OWN_STEPPER_LIVE_FIRED_YES: usize = 1;
 
 // ============================================================================================
 // STAGE 2 -- the VERIFIED in-context menu-drive that actually COMPLETES a character load.
@@ -903,7 +962,14 @@ pub(crate) static OWN_STEPPER_DIALOG: AtomicUsize = AtomicUsize::new(0);
 /// (installer -> io18/io20 full-save read -> menu_deser 0x14082c240 -> mount).
 pub(crate) static OWN_STEPPER_SELECTOR_STEP: AtomicUsize = AtomicUsize::new(0);
 /// One-shot guard: fire the deserialize 0x67b290 exactly once when the full-save read is resident.
+/// State machine for the shared DESER latch: NOT_FIRED -> {FIRED_FAIL, FIRED_OK}. Used by both
+/// the STAGE2 mount and cold_char_mount_drive's DESER phase so the result is observable.
 pub(crate) static OWN_STEPPER_DESER_FIRED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const OWN_STEPPER_DESER_NOT_FIRED: usize = 0;
+pub(crate) const OWN_STEPPER_DESER_FIRED_FAIL: usize = 1;
+pub(crate) const OWN_STEPPER_DESER_FIRED_OK: usize = 2;
+/// deserialize 0x67b290 success return code (ret==1 == real char applied + c30 written from save).
+pub(crate) const OWN_STEPPER_DESER_SUCCESS_RET: i32 = 1;
 /// One-shot latch: set once the zero-input title-confirm fire (fire_titletop_load_entry) has
 /// fired the Load-Game row action, so it is not re-fired while the ProfileLoadDialog builds.
 pub(crate) static OWN_STEPPER_TITLE_FIRED: AtomicUsize = AtomicUsize::new(0);
@@ -967,6 +1033,86 @@ pub(crate) static OWN_STEPPER_ORIG_IDX10: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static OWN_STEPPER_BASE: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static OWN_STEPPER_PATCHED: AtomicUsize = AtomicUsize::new(OWN_STEPPER_PATCHED_NO);
 pub(crate) static OWN_STEPPER_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+// ---------------------------------------------------------------------------
+// NATIVE-LOAD gate (observe-only own_stepper; corrected-autoload-design-observe-not-force-native-load-2026).
+// A SEPARATE gate from own_stepper: when enabled, the idx10 handler does NOT force the title
+// state machine (no SetState(2/3), no beginlogo-gate clear, no registrar self-fire, no
+// direct_build / cold_char_mount). It lets OWN_STEPPER_ORIG_IDX10 pass-through advance the NATIVE
+// title machine, and ONCE the live TitleTopDialog menu is rendered + settled, it fires the native
+// Load-Game MenuMemberFuncJob node's run 0x1409aaba0(rcx=node) exactly ONCE, then observes so the
+// golden oracle is written as the native pump loads the char.
+// ---------------------------------------------------------------------------
+/// CS::MenuMemberFuncJob<TitleTopDialog>::run 0x1409aaba0 (RVA 0x9aaba0). Takes rcx=node (a
+/// MenuMemberFuncJob, vtable TITLE_TOP_DIALOG run-node = MEMBERFUNCJOB_VTABLE_RVA); internally it
+/// computes rcx=[node+0x10]+[node+0x20] (the member `this`, dialog + adjustor) and calls the
+/// member-fn pointer at [node+0x18] -- which chains to the Load-Game dialog factory 0x14081ead0.
+/// Firing it on the NATURALLY-booted menu builds a LIVE registered ProfileLoadDialog the native
+/// pump drives (the live-dialog MenuWindow wall was a forcing artifact -- this de-risks step 4).
+pub(crate) const MENU_MEMBER_FUNC_JOB_RUN_RVA: usize = 0x9aaba0;
+/// CS::MenuMemberFuncJob<TitleTopDialog> vtable 0x142b265d0 (RVA): the registry-entry node the
+/// registrar 0x1409b24e0 inserts into [dialog+0xa48]; its run is MENU_MEMBER_FUNC_JOB_RUN_RVA.
+/// (Mirrors the local MEMBERFUNCJOB_VTABLE_RVA in scan_dialog_for_loadgame.)
+pub(crate) const MEMBERFUNCJOB_VTABLE_RVA: usize = 0x2b265d0;
+/// TitleTopDialog row registry [dialog+0xa48] (the FD4 delegate registry the registrar populates).
+/// Used as the live-menu readiness signal: populated == the menu rows are registered + rendered.
+pub(crate) const DIALOG_ROW_REGISTRY_A48_OFFSET: usize = 0xa48;
+/// NATIVE-LOAD fire latch states (one-shot: fire the Load-Game run exactly once).
+pub(crate) const NATIVE_LOAD_FIRED_NO: usize = 0;
+pub(crate) const NATIVE_LOAD_FIRED_YES: usize = 1;
+pub(crate) static NATIVE_LOAD_FIRED: AtomicUsize = AtomicUsize::new(NATIVE_LOAD_FIRED_NO);
+/// Tick (own_stepper call #) at which the live+settled menu was FIRST observed; 0 == not yet seen.
+pub(crate) static NATIVE_LOAD_MENU_FIRST_SEEN: AtomicUsize = AtomicUsize::new(0);
+/// Settle window (frames) to wait after the menu first renders before firing the native Load run,
+/// so the registry is fully populated by the native pump. Look-before-acting: read-only until settled.
+pub(crate) const NATIVE_LOAD_SETTLE_FRAMES: usize = 60;
+/// Throttle interval for native-load observe logging (frames).
+pub(crate) const NATIVE_LOAD_LOG_INTERVAL: u64 = 120;
+
+/// === NATIVE FULL-SAVE-READ observe chain (native-full-save-read-slot-resolve-chain-observe-recipe-2026). ===
+/// The slot-resolve GLOBAL the menu cursor / Continue selection writes: resolver 0x1406793c0 returns
+/// *(u32*)(GameMan+0xb78). Step 1 of the recipe sets GameMan+0xb78=slot before set_save_slot so the
+/// native chain resolves OUR slot. (Same offset as GAME_MAN_REQUESTED_SLOT_B78_OFFSET; named per the
+/// recipe for the full-read chain.)
+pub(crate) const GAME_MAN_SLOT_SELECT_B78_OFFSET: usize = 0xb78;
+/// GameMan+0xb80 == 3 == RESIDENT (the full-save read drained into the 0x280000 buffer). The DRAIN
+/// phase ticks the lane + poll each frame until b80 reaches this.
+pub(crate) const FULLREAD_B80_RESIDENT: i32 = 3;
+/// GameMan+0xc30 m10 new-game default (golden-oracle-baseline). c30 == this == FAILURE (the char did
+/// NOT deserialize). The step-6 guard requires c30 != this before the (gated) continue_confirm.
+pub(crate) const FULLREAD_C30_M10_DEFAULT: i32 = 0xa010000;
+/// Minimum REAL character level (a new-game default is <10; the golden Banon is 150). The step-6
+/// guard requires the live PlayerGameData level >= this AND a non-empty name (via char_fingerprint).
+pub(crate) const FULLREAD_MIN_REAL_LEVEL: u32 = 10;
+/// Poll arg (0) for the b80 poll 0x140679180 and the lane driver 0x140679510 in the DRAIN phase.
+pub(crate) const FULLREAD_POLL_ARG: u8 = 0;
+/// DRAIN-phase budget: max frames to tick lane+poll waiting for b80==3 before TIMEOUT (no write).
+pub(crate) const FULLREAD_DRAIN_MAX: u64 = 1200;
+/// Throttle interval for the full-read chain per-frame logging (frames).
+pub(crate) const FULLREAD_LOG_INTERVAL: u64 = 30;
+/// Default slot for the full-read chain when neither OWN_STEPPER_SLOT (>=0) nor ER_EFFECTS_AUTOLOAD_SLOT
+/// is set (Banon = slot 0).
+pub(crate) const FULLREAD_DEFAULT_SLOT: i32 = 0;
+/// continue_confirm shim field that owner+0x284 (new-game flag) must equal before the confirm runs
+/// the SetState5: the native continue_confirm reads owner = *(shim[OWN_STEPPER_SHIM_OWNER_IDX]) =
+/// *(base+0x3d5df38+8), checks owner+0x284==0, then sets owner+0xbc=c30 + SetState5 (autosaves).
+pub(crate) const FULLREAD_OWNER_NEW_GAME_OK: u8 = 0;
+/// owner = *(base + PLAYER_GAME_DATA_SINGLETON_RVA + this offset) -- the GameDataMan+0x8 chain the
+/// continue_confirm shim owner is read from (recipe step 7: owner = *(base+0x3d5df38+8)).
+pub(crate) const FULLREAD_OWNER_GDM_08_OFFSET: usize = 0x08;
+/// Full-read chain phase machine states (one step per frame).
+pub(crate) const FULLREAD_PHASE_SUBMIT: usize = 0;
+pub(crate) const FULLREAD_PHASE_DRAIN: usize = 1;
+pub(crate) const FULLREAD_PHASE_DESER: usize = 2;
+pub(crate) const FULLREAD_PHASE_GUARD: usize = 3;
+pub(crate) const FULLREAD_PHASE_DONE: usize = 4;
+/// Live phase + drain-wait counters for the full-read chain (one-shot per run).
+pub(crate) static FULLREAD_PHASE: AtomicUsize = AtomicUsize::new(FULLREAD_PHASE_SUBMIT);
+pub(crate) static FULLREAD_DRAIN_WAITS: AtomicUsize = AtomicUsize::new(0);
+/// Tick (own_stepper call #) at which the live+settled menu was FIRST observed for the full-read
+/// chain; 0 == not yet seen (settle gate, mirrors NATIVE_LOAD_MENU_FIRST_SEEN).
+pub(crate) static FULLREAD_MENU_FIRST_SEEN: AtomicUsize = AtomicUsize::new(0);
+
 pub(crate) const GAME_MAN_ARM_FLAG_B72_OFFSET: usize = 0xb72;
 pub(crate) const GAME_MAN_FLAG_B73_PROBE_OFFSET: usize = 0xb73;
 pub(crate) const GAME_MAN_FLAG_B75_PROBE_OFFSET: usize = 0xb75;
@@ -1098,6 +1244,41 @@ pub(crate) const MSGBOX_BUILDER_LOG_MAX: usize = 24;
 pub(crate) static AUTO_ACCEPT_VT_LAST: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static AUTO_ACCEPT_VT_LOG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const AUTO_ACCEPT_VT_LOG_MAX: usize = 24;
+/// CS::SceneObjProxy ctor 0x14074a700 -- the fn the title dialog-build path runs to wrap the live
+/// host MenuWindow in a transient SceneObjProxy. Disasm-verified prologue: `mov %rdx,%rbx`
+/// (0x14074a720) then store `mov %rbx,0x20(%rsi)` (0x14074a735) -> proxy+0x20 = the incoming RDX =
+/// the engine-VERIFIED MenuWindow (probe-6 proved the TitleTopDialog factory rdx was a std::function
+/// delegate, NOT the MenuWindow). We MinHook this ctor at process attach and LATCH the validated
+/// MenuWindow (arg2/rdx) on EVERY valid call (most-recent live host window wins) so the live-dialog
+/// path reuses it as the Load-Game factory 0x14081ead0 rdx
+/// (bd live-dialog-probe6-factory-fires-returns-dialog-rdx-not-menuwindow-2026).
+pub(crate) const SCENE_OBJ_PROXY_CTOR_RVA: u32 = 0x74a700;
+/// Trampoline for the SceneObjProxy-ctor latch hook (0 = unset).
+pub(crate) static SCENE_OBJ_PROXY_CTOR_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// The host MenuWindow* latched from the SceneObjProxy ctor (incoming rdx) at title build. 0 until
+/// the title builds. Updated on every VALID (vtable-checked) call. Read by
+/// `locate_live_loadgame_node` (SeqCst); fail-closed when still 0.
+pub(crate) static LATCHED_MENU_WINDOW: AtomicUsize = AtomicUsize::new(0);
+/// One-shot install guard for the MenuWindow-latch factory hook (mirrors AUTO_ACCEPT_INSTALLED).
+pub(crate) static MENU_WINDOW_LATCH_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const MENU_WINDOW_LATCH_NOT_INSTALLED: usize = 0;
+pub(crate) const MENU_WINDOW_LATCH_INSTALLED_YES: usize = 1;
+pub(crate) static START_MENU_WINDOW_LATCH: Once = Once::new();
+/// One-shot install guard for the SAVE-SAFE c30-writer diagnostic hook (mirrors
+/// MENU_WINDOW_LATCH_INSTALLED). Installed unconditionally at process attach; the
+/// hook is a pure passthrough that logs the c30-write gate, c30 before/after, and a
+/// window of the resident save buffer to diagnose why GameMan+0xc30 stays default.
+pub(crate) static C30_WRITER_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const C30_WRITER_HOOK_NOT_INSTALLED: usize = 0;
+pub(crate) const C30_WRITER_HOOK_INSTALLED_YES: usize = 1;
+pub(crate) static START_C30_WRITER_HOOK: Once = Once::new();
+/// Rate limit for the c30-writer diagnostic log: only the first few calls are logged
+/// (the cold deserialize drives a small bounded number of c30-writer entries).
+pub(crate) static C30_WRITER_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const C30_WRITER_LOG_MAX: usize = 8;
+/// Bytes of the resident save buffer (rdx) to dump as hex from the c30-writer ENTER,
+/// so the real target map record can be spotted offline. Read-only header window.
+pub(crate) const C30_WRITER_BUFFER_DUMP_BYTES: usize = 0x40;
 /// The live MessageBoxDialog captured at build time (the connection-error / startup popup), so
 /// the game task can force its result fields (OK + decided) each frame until the caller consumes
 /// it. The finished-getter 0x1407b0cf0 is NOT polled for this dialog, so writing the fields
@@ -1888,6 +2069,36 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         });
     }
 
+    // MenuWindow latch: install the SceneObjProxy ctor hook (0x14074a700) as early as the
+    // splash-skip / online-disable patches, from a thread, so it lands BEFORE the title state
+    // machine builds the title dialog during boot. On each VALID call it latches rdx (the engine-
+    // verified host MenuWindow*) for the live-dialog Load-Game path; pure latch + passthrough.
+    // OPT-IN (off by default): only install when `menu_window_latch_enabled()` is set
+    // (env ER_EFFECTS_MENU_WINDOW_LATCH=1 OR GAME_DIR file er-effects-menu-window-latch.txt).
+    // When off, the hook is never installed (no MinHook, no detour) -- a clean run has neither.
+    if menu_window_latch_enabled() {
+        START_MENU_WINDOW_LATCH.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-menu-window-latch".to_owned())
+                .spawn(install_menu_window_latch_hook);
+        });
+    }
+
+    // SAVE-SAFE c30-writer diagnostic: install the MinHook on the SOLE GameMan+0xc30
+    // writer 0x67bd70 UNCONDITIONALLY at process attach (same early-attach pattern as the
+    // MenuWindow latch). Pure passthrough + log of the c30-write gate, c30 before/after,
+    // and a window of the resident save buffer -- NO SetState5, NO save write, harmless.
+    // OPT-IN (off by default): only install when `c30_writer_diag_enabled()` is set
+    // (env ER_EFFECTS_C30_DIAG=1 OR GAME_DIR file er-effects-c30-diag.txt). When off, the
+    // hook is never installed (no MinHook, no detour on the hot 0x67bd70 deserialize path).
+    if c30_writer_diag_enabled() {
+        START_C30_WRITER_HOOK.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-c30-writer-hook".to_owned())
+                .spawn(install_c30_writer_hook);
+        });
+    }
+
     let direct_autoload_configured = {
         let state = state_or_return(&state);
         state.autoload.method() == SaveLoadMethod::DirectMenuLoad && state.autoload.slot().is_some()
@@ -2052,7 +2263,10 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     // OWN-THE-STEPPER: patch the idx10 step-fn slot to our handler so
                     // the FD4 scheduler runs OUR code in-context (step 1: verify the
                     // control point with a logging pass-through).
-                    if own_stepper_enabled() {
+                    // OWN-STEPPER and the SEPARATE observe-only NATIVE-LOAD gate both install the
+                    // idx10 patch so OUR handler runs each frame. own_stepper_idx10 dispatches to
+                    // the native-load (observe-only, no forcing) path when native_load_enabled().
+                    if own_stepper_enabled() || native_load_enabled() || native_fullread_enabled() {
                         if let Ok(base) = game_module_base() {
                             unsafe { own_stepper_patch_once(base) };
                         }
@@ -2161,7 +2375,10 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // the load-correctness record + the T_controllable timeline marker ONCE. Fires
                 // for both a native-menu load (observe) and a DLL-driven load (own-stepper), so
                 // the two records are directly comparable (field-for-field == correct load).
-                if (own_stepper_enabled() || observe_enabled())
+                if (own_stepper_enabled()
+                    || observe_enabled()
+                    || native_load_enabled()
+                    || native_fullread_enabled())
                     && LOAD_CORRECTNESS_DUMPED
                         .swap(GAME_TASK_TICK_INCREMENT as usize, Ordering::SeqCst)
                         == LOAD_CORRECTNESS_NOT_DUMPED

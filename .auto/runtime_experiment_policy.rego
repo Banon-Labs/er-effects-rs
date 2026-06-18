@@ -4,7 +4,7 @@ import rego.v1
 
 default allow := false
 
-max_timeout_seconds := 30
+max_timeout_seconds := 120
 
 valid_timeout if {
 	is_number(input.timeout_seconds)
@@ -40,11 +40,11 @@ deny contains message if {
 
 deny contains message if {
 	not valid_timeout
-	message := "runtime probe rejected: timeout_seconds must be present, numeric, greater than 0, and no more than 30"
+	message := "runtime probe rejected: timeout_seconds must be present, numeric, greater than 0, and no more than 120"
 }
 
 deny contains message if {
 	input.explicit_opt_in
 	not manual_event_driver_ready
-	message := "runtime probe rejected: require measure runtime trigger, timeout_seconds<=30, scripts/er-readiness-watch.py, no-telemetry bootstrap failure, host_input=none, process/save teardown, no native title accept-gate mutation, and an approved launch mode"
+	message := "runtime probe rejected: require measure runtime trigger, timeout_seconds<=120, scripts/er-readiness-watch.py, no-telemetry bootstrap failure, host_input=none, process/save teardown, no native title accept-gate mutation, and an approved launch mode"
 }

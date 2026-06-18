@@ -1,6 +1,20 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(rtk ls *)",
+      "Bash(env)",
+      "Bash(rtk grep *)",
+      "Bash(/home/banon/.local/bin/bd --help)",
+      "Bash(/home/banon/.local/bin/bd onboard *)",
+      "Bash(/home/banon/.local/bin/bd config *)",
+      "Bash(/home/banon/.local/bin/bd hooks *)",
+      "Bash(git -C /home/banon/projects/er-effects-rs diff -- AGENTS.md)",
+      "Bash(git -C /home/banon/projects/er-effects-rs add CLAUDE.md AGENTS.md)",
+      "Bash(git -C /home/banon/projects/er-effects-rs commit -m 'docs: make AGENTS.md the single source of truth; CLAUDE.md imports it *)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "tessl"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }

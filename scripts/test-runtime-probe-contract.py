@@ -56,7 +56,7 @@ def base_fixture() -> None:
     )
     write_fixture(
         ".auto/runtime_experiment_policy.rego",
-        "package auto.runtime_experiment\nimport rego.v1\ndefault allow := false\nmax_timeout_seconds := 30\nmanual_event_driver_ready if {\n input.readiness_watcher == \"scripts/er-readiness-watch.py\"\n input.no_telemetry_bootstrap_failure == \"window_without_bootstrap_or_task_ready\"\n input.host_input == \"none\"\n input.teardown == \"process_tree_and_save_restore\"\n input.timeout_seconds <= max_timeout_seconds\n}\nallow if { manual_event_driver_ready }\ndeny contains message if { message := \"runtime probes are disabled fail-closed\" }\n",
+        "package auto.runtime_experiment\nimport rego.v1\ndefault allow := false\nmax_timeout_seconds := 120\nmanual_event_driver_ready if {\n input.readiness_watcher == \"scripts/er-readiness-watch.py\"\n input.no_telemetry_bootstrap_failure == \"window_without_bootstrap_or_task_ready\"\n input.host_input == \"none\"\n input.teardown == \"process_tree_and_save_restore\"\n input.timeout_seconds <= max_timeout_seconds\n}\nallow if { manual_event_driver_ready }\ndeny contains message if { message := \"runtime probes are disabled fail-closed\" }\n",
     )
     write_fixture(
         "scripts/er-smoke-driver.sh",

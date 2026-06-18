@@ -15,3 +15,9 @@ RESTORE_RUNTIME_SAVES=1
 RUNTIME_CAPTURE_INPUT_OCR=0
 RUNTIME_WATCH_TARGET=player-load
 RUNTIME_SPAWN_POLL_BUDGET=32768
+# Runtime-probe watch cap raised 30->120s (user-authorized; rego+watch+contract bumped together).
+# Set here (sourced as the AUTO_RUNTIME_ENV_FILE, after .envrc) so it actually reaches the watcher.
+# Tick budgets raised so the watcher does not give up on STAGE2 before the 120s wall.
+RUNTIME_TIMEOUT_SECONDS=120
+RUNTIME_POST_REQUEST_TICK_BUDGET=4000
+RUNTIME_AUTOLOAD_ATTEMPT_BUDGET=4000

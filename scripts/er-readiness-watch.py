@@ -2,7 +2,7 @@
 """Watch an Elden Ring launch until DLL telemetry is ready or a structured failure is known.
 
 This helper uses process/window/bootstrap/telemetry observations first, but every
-runtime watch is also hard-bounded by --max-runtime-seconds, capped at 30 seconds,
+runtime watch is also hard-bounded by --max-runtime-seconds, capped at 120 seconds,
 so a missing DLL telemetry stream cannot strand Elden Ring on-screen indefinitely.
 """
 from __future__ import annotations
@@ -25,8 +25,8 @@ DEFAULT_READINESS_POLL_BUDGET = 8192
 DEFAULT_WINDOW_STALE_POLL_BUDGET = 4096
 DEFAULT_AUTOLOAD_ATTEMPT_BUDGET = 300
 DEFAULT_POST_REQUEST_TICK_BUDGET = 300
-DEFAULT_MAX_RUNTIME_SECONDS = 30.0
-MAX_ALLOWED_RUNTIME_SECONDS = 30.0
+DEFAULT_MAX_RUNTIME_SECONDS = 120.0
+MAX_ALLOWED_RUNTIME_SECONDS = 120.0
 OBSERVATION_SUBPROCESS_TIMEOUT_SECONDS = 5.0
 SUCCESS_RC = 0
 FAILURE_RC = 1
@@ -514,7 +514,7 @@ def parse_args() -> argparse.Namespace:
         "--max-runtime-seconds",
         type=float,
         default=DEFAULT_MAX_RUNTIME_SECONDS,
-        help="Hard wall-clock cap for the readiness watch; must be >0 and <=30.",
+        help="Hard wall-clock cap for the readiness watch; must be >0 and <=120.",
     )
     parser.add_argument(
         "--allow-async-launcher-exit",
@@ -532,7 +532,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     if args.max_runtime_seconds <= 0 or args.max_runtime_seconds > MAX_ALLOWED_RUNTIME_SECONDS:
-        raise SystemExit("--max-runtime-seconds must be greater than 0 and no more than 30")
+        raise SystemExit("--max-runtime-seconds must be greater than 0 and no more than 120")
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
     result = wait_readiness(args)
     output = args.artifact_dir / "readiness-result.json"
