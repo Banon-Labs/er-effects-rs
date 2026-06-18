@@ -703,7 +703,13 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
             unsafe { std::mem::transmute(base + WORLD_WORKER_BUILD_RVA) };
         unsafe { worker_build(stub_ptr) };
         let worker = unsafe { *((base + WORLD_STREAM_WORKER_RVA) as *const usize) };
-        // (2) set the slot, then PREVIEW (b80=1 + start the iodev read).
+        // (2) set the slot, then PREVIEW (b80=1 + start the iodev read). The preview 0x67b4e0 is
+        // REQUIRED: it pre-warms a RESIDENT iodev request that 0x67b200 reuses (the no-preview run
+        // showed 0x67b200 alone sets b80=2 but the poll immediately resets it -- the read never goes
+        // resident). CAVEAT (char-apply lane mismatch, cold-b80-char-apply-is-the-async-lane-mismatch):
+        // the preview reads only slot METADATA (0x60000), so the resident request 0x67b290 reads is
+        // metadata, NOT slot N's full 0x280000 save -> header invalid -> char not applied. The
+        // full-save read/deserialize lane does not drain cold; this preview lane DOES (b80->3).
         let set_save_slot: unsafe extern "system" fn(i32) =
             unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
         unsafe { set_save_slot(want_slot) };
