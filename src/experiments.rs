@@ -437,6 +437,63 @@ pub(crate) fn legacy_menu_drive_enabled() -> bool {
         .exists()
 }
 
+/// WORLD-RES STREAMING-DRIVER COLD-BUILD PROBE gate (env ER_EFFECTS_WORLDRES_COLDBUILD /
+/// er-effects-worldres-coldbuild.txt). OFF by default. When on, own_stepper runs a ONE-SHOT,
+/// SAVE-SAFE probe at the parked title that cold-builds the CSEmkResManImp streaming driver
+/// (0x143d7c088) + registers the stream worker (0x144842d40) via the CSResStep tick getter
+/// 0x140cd6c50 with a stub `this` -- NO SetState, NO world load, zero save-write risk. See bd
+/// emk-resman-streaming-driver-coldbuild-stub-lever-2026.
+pub(crate) fn worldres_coldbuild_probe_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_WORLDRES_COLDBUILD").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-worldres-coldbuild.txt")
+        .exists()
+}
+
+/// SAVE-SAFE one-shot cold-build probe of the world-resource streaming driver. Validates the lever
+/// emk-resman-streaming-driver-coldbuild-stub-lever-2026 live, WITHOUT SetState / world load.
+/// The CSResStep tick getter 0x140cd6c50's body is context-free (builds the EMK resman cluster via
+/// global RIP-relative stores + boot allocators; `this`/rsi is touched ONLY at prologue/tail). The
+/// tail registers the stream worker when [this+0x48] >= 6. So a zeroed stub with [+0x48]=6 builds
+/// the driver 0x143d7c088 + worker 0x144842d40, cold. Pure build -> read-back; no save write.
+unsafe fn worldres_coldbuild_probe(base: usize) {
+    const CSRES_GETTER_RVA: usize = 0x00cd6c50;
+    const EMK_RESMAN_DRIVER_RVA: usize = 0x03d7c088;
+    const STREAM_WORKER_RVA: usize = 0x04842d40;
+    const STUB_LEN: usize = 0x80;
+    const STUB_FILL: u8 = 0;
+    const STUB_STATE_OFFSET: usize = 0x48;
+    const STUB_STATE_VALUE: i32 = 6;
+    const PROBE_DONE: usize = 1;
+    static COLDBUILD_DONE: AtomicUsize = AtomicUsize::new(0);
+    if COLDBUILD_DONE.swap(PROBE_DONE, Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS {
+        return;
+    }
+    let driver_before = unsafe { *((base + EMK_RESMAN_DRIVER_RVA) as *const usize) };
+    let worker_before = unsafe { *((base + STREAM_WORKER_RVA) as *const usize) };
+    // Persistent zeroed stub `this`: the getter only touches [+0x48] (state) / [+0x4c] / [+0x50].
+    let stub: &'static mut [u8; STUB_LEN] = Box::leak(Box::new([STUB_FILL; STUB_LEN]));
+    let stub_ptr = stub.as_mut_ptr() as usize;
+    unsafe { *((stub_ptr + STUB_STATE_OFFSET) as *mut i32) = STUB_STATE_VALUE };
+    append_autoload_debug(format_args!(
+        "worldres-coldbuild: BEFORE driver[0x{:x}]=0x{driver_before:x} worker[0x{:x}]=0x{worker_before:x} -- calling CSResStep getter 0x{:x}(stub=0x{stub_ptr:x})",
+        base + EMK_RESMAN_DRIVER_RVA,
+        base + STREAM_WORKER_RVA,
+        base + CSRES_GETTER_RVA
+    ));
+    let getter: unsafe extern "system" fn(usize) -> usize =
+        unsafe { std::mem::transmute(base + CSRES_GETTER_RVA) };
+    let ret = unsafe { getter(stub_ptr) };
+    let driver_after = unsafe { *((base + EMK_RESMAN_DRIVER_RVA) as *const usize) };
+    let worker_after = unsafe { *((base + STREAM_WORKER_RVA) as *const usize) };
+    append_autoload_debug(format_args!(
+        "worldres-coldbuild: AFTER driver=0x{driver_after:x} worker=0x{worker_after:x} ret=0x{ret:x} (both non-null = lever VALIDATED, NO SetState/NO save write)"
+    ));
+}
+
 /// The D-pad Down button mask to inject for poll-frame `n` (counted from the first poll after
 /// menu-open), per the INJECT_NAV schedule: settle, then `INJECT_NAV_MAX_CYCLES` tap+gap cycles
 /// with Down asserted for the first `INJECT_NAV_TAP_LEN` frames of each cycle. Returns 0 (no
@@ -1630,6 +1687,14 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             )
         }
     };
+    // SAVE-SAFE world-res streaming-driver cold-build probe (gated OFF by default; one-shot).
+    // Builds the CSEmkResManImp driver (0x143d7c088) + stream worker (0x144842d40) at the parked
+    // title via the CSResStep getter with a stub `this` -- NO SetState, NO world load, NO save
+    // write. Validates emk-resman-streaming-driver-coldbuild-stub-lever-2026 live. Additive: the
+    // normal phase logic continues (default = stay at the open menu, save-safe).
+    if worldres_coldbuild_probe_enabled() && n >= OWN_STEPPER_SETTLE_CALLS {
+        unsafe { worldres_coldbuild_probe(base) };
+    }
     if phase == OWN_STEPPER_PHASE_MENU {
         // Drive once the boot settles. want_slot == -1 is the "most-recent" intent (resolved
         // from the dialog's natural highlight at PHASE_S2_ACTIVATE), NOT a "do nothing" signal,
