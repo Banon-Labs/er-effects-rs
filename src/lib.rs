@@ -1556,6 +1556,7 @@ pub(crate) const CONTINUE_OWNER_FLAG_12A_OFFSET: usize = 0x12a;
 pub(crate) const CONTINUE_OWNER_FLAG_12A_VALUE: u8 = 0;
 pub(crate) const CONTINUE_OWNER_QWORDS: usize = 0x40;
 pub(crate) const CONTINUE_DRIVE_MIN_TICK: u64 = 120;
+pub(crate) const CONTINUE_DRIVE_AFTER_GAME_MAN_TICKS: u64 = 0;
 /// PlayGame load-pair target block, bound to upstream `GameMan::move_map_target`
 /// (audit-confirmed equal to the hand-decoded 0x14).
 pub(crate) const FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET: usize =
@@ -1748,6 +1749,8 @@ pub(crate) static CONTINUE_OWNER_PTR: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const CONTINUE_DRIVE_GM_FIRST_SEEN_UNSET: u64 = 0;
 pub(crate) static CONTINUE_DRIVE_GM_FIRST_SEEN_TICK: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(CONTINUE_DRIVE_GM_FIRST_SEEN_UNSET);
+pub(crate) static CONTINUE_DRIVE_FIRST_ATTEMPT_LOGGED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 pub(crate) static CONTINUE_DRIVE_BEGUN: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 pub(crate) static ORIGINAL_EXIT_PROCESS: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);

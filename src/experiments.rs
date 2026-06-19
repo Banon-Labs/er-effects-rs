@@ -5656,20 +5656,22 @@ pub(crate) unsafe fn continue_drive_tick(module_base: usize, slot: i32, tick: u6
     if game_man == TITLE_OWNER_SCAN_START_ADDRESS {
         return;
     }
-    if CONTINUE_DRIVE_GM_FIRST_SEEN_TICK
-        .compare_exchange(
-            CONTINUE_DRIVE_GM_FIRST_SEEN_UNSET,
-            tick,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        )
-        .is_ok()
-    {
-        append_autoload_debug(format_args!(
-            "continue_drive: GameMan first_seen tick={tick} gm=0x{game_man:x} gate={CONTINUE_DRIVE_MIN_TICK}"
-        ));
-    }
-    if tick < CONTINUE_DRIVE_MIN_TICK {
+    let first_seen_tick = match CONTINUE_DRIVE_GM_FIRST_SEEN_TICK.compare_exchange(
+        CONTINUE_DRIVE_GM_FIRST_SEEN_UNSET,
+        tick,
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    ) {
+        Ok(_) => {
+            append_autoload_debug(format_args!(
+                "continue_drive: GameMan first_seen tick={tick} gm=0x{game_man:x} after_gm_gate={CONTINUE_DRIVE_AFTER_GAME_MAN_TICKS}"
+            ));
+            tick
+        }
+        Err(existing) => existing,
+    };
+    let drive_gate_tick = first_seen_tick.saturating_add(CONTINUE_DRIVE_AFTER_GAME_MAN_TICKS);
+    if tick < drive_gate_tick {
         return;
     }
     let real_done = unsafe { *((game_man + GAME_MAN_REAL_LOAD_DONE_OFFSET) as *const i32) };
@@ -5711,17 +5713,27 @@ pub(crate) unsafe fn continue_drive_tick(module_base: usize, slot: i32, tick: u6
             CONTINUE_DRIVE_BEGUN.store(true, Ordering::SeqCst);
         }
     }
+    let first_attempt = !CONTINUE_DRIVE_FIRST_ATTEMPT_LOGGED.swap(true, Ordering::SeqCst);
+    if first_attempt {
+        let b73_before = unsafe { *((game_man + GAME_MAN_B73_FLAG_OFFSET) as *const u8) };
+        append_autoload_debug(format_args!(
+            "continue_drive: FIRST dispatcher before slot={slot} b80={load_progress} b73={b73_before} real_done={real_done} map14={map14} tick={tick} gate_tick={drive_gate_tick}"
+        ));
+    }
     let dispatcher: unsafe extern "system" fn(*mut u8) -> usize =
         unsafe { std::mem::transmute(module_base + MOVEMAP_DISPATCHER_RVA) };
     let _ = unsafe { dispatcher(owner) };
-    if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+    if first_attempt
+        || tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64
+    {
         let real_after = unsafe { *((game_man + GAME_MAN_REAL_LOAD_DONE_OFFSET) as *const i32) };
         let b80_after =
             unsafe { *((game_man + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *const u8) };
+        let b73_after = unsafe { *((game_man + GAME_MAN_B73_FLAG_OFFSET) as *const u8) };
         let map14_after =
             unsafe { *((game_man + FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET) as *const i32) };
         append_autoload_debug(format_args!(
-            "continue_drive: drove dispatcher slot={slot} b80={b80_after} real_done={real_after} map14={map14_after} tick={tick}"
+            "continue_drive: drove dispatcher slot={slot} b80={b80_after} b73={b73_after} real_done={real_after} map14={map14_after} tick={tick}"
         ));
     }
 }
