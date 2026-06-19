@@ -422,8 +422,7 @@ pub(crate) unsafe fn maybe_arm_c30_watch(module_base: usize, tick: u64) {
     if last != C30_WATCH_NEVER_ARMED && now.saturating_sub(last) < C30_WATCH_REARM_INTERVAL {
         return;
     }
-    let game_man =
-        game_man_ptr_or_null();
+    let game_man = game_man_ptr_or_null();
     if game_man == NULL_MODULE_BASE {
         return;
     }

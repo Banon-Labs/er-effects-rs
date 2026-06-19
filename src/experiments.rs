@@ -53,8 +53,7 @@ use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 static PRODUCT_AUTOLOAD_ARMED: AtomicUsize = AtomicUsize::new(0);
 
 const PROFILE_SLOT_ACTIVATE_RVA: usize = ProfileLoadMenuRva::ProfileSlotActivate as usize;
-const PROFILE_LOAD_SELECTOR_TICK_RVA: usize =
-    ProfileLoadMenuRva::ProfileLoadSelectorTick as usize;
+const PROFILE_LOAD_SELECTOR_TICK_RVA: usize = ProfileLoadMenuRva::ProfileLoadSelectorTick as usize;
 
 pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
     if request.method() != SaveLoadMethod::DirectMenuLoad {
@@ -343,8 +342,7 @@ pub(crate) unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u
     if tick < TITLE_NATIVE_JOB_MIN_TICK {
         return;
     }
-    let game_man =
-        game_man_ptr_or_null();
+    let game_man = game_man_ptr_or_null();
     if game_man == TITLE_OWNER_SCAN_START_ADDRESS {
         return;
     }
@@ -2118,6 +2116,292 @@ unsafe fn fire_live_loadgame_node(title_dialog: usize, menu_window: usize, base:
     true
 }
 
+#[derive(Clone, Copy)]
+struct MenuActionNode {
+    node: usize,
+    node_vt: usize,
+    registry: usize,
+    member_dialog: usize,
+    member_fn: usize,
+    member_adjust: usize,
+    window_item: usize,
+}
+
+#[derive(Clone, Copy)]
+struct ProfileLoadDialogReady {
+    dialog: usize,
+    dvt: usize,
+    bound: i32,
+    cursor_now: i32,
+    cursor_target: i32,
+    expected_slot: i32,
+    load_activate: usize,
+    load_job_ctx: usize,
+    load_job_ctx_vt: usize,
+    player_game_data: usize,
+}
+
+#[derive(Clone, Copy)]
+enum StartupModalBlockingState {
+    Clear,
+    Blocking {
+        dialog: usize,
+        vtable: usize,
+        closing_latch: usize,
+    },
+}
+
+unsafe fn is_heap_aligned_ptr(ptr: usize) -> bool {
+    const HEAP_LO: usize = 0x10000;
+    const PTR_ALIGN_MASK: usize = 0x7;
+    ptr >= HEAP_LO && (ptr & PTR_ALIGN_MASK) == TITLE_OWNER_SCAN_START_ADDRESS
+}
+
+fn vtable_in_game_image(vtable: usize, base: usize) -> bool {
+    const MODULE_MIN_OFFSET: usize = 0x1000;
+    const MODULE_SPAN_FALLBACK: usize = 0x3000000;
+    vtable >= base + MODULE_MIN_OFFSET && vtable < base + MODULE_SPAN_FALLBACK
+}
+
+unsafe fn title_boot_ready(owner: usize, base: usize) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let committed = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }
+        .unwrap_or(TITLE_STATE_OWNER_GONE);
+    let requested = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_OFFSET) }
+        .unwrap_or(TITLE_STATE_OWNER_GONE);
+    let table =
+        unsafe { safe_read_usize(owner + TITLE_OWNER_INSTANCE_TABLE_OFFSET) }.unwrap_or(null);
+    let session =
+        unsafe { safe_read_usize(base + SESSION_SINGLETON_144588E98_RVA) }.unwrap_or(null);
+    let dialog =
+        unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
+    let dialog_vt = if dialog != null {
+        unsafe { safe_read_usize(dialog) }.unwrap_or(null)
+    } else {
+        null
+    };
+    if committed != TITLE_STEP_MENU_JOB_WAIT
+        || requested != TITLE_STEP_MENU_JOB_WAIT
+        || table != base + INNER_TITLE_STATE_TABLE_RVA
+        || session == null
+        || dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA
+    {
+        return false;
+    }
+    let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
+    let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
+        unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
+    let in_loop = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
+    let in_textfadeout =
+        unsafe { is_in_state(sm, base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) } != OWN_STEPPER_FALSE;
+    in_loop || in_textfadeout
+}
+
+unsafe fn title_scheduler_ready(owner: usize, base: usize) -> bool {
+    unsafe { title_boot_ready(owner, base) }
+}
+
+unsafe fn title_menu_action_ready(owner: usize, base: usize) -> Option<MenuActionNode> {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let dialog =
+        unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
+    if dialog == null {
+        return None;
+    }
+    let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(null);
+    if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+        return None;
+    }
+    let registry =
+        unsafe { safe_read_usize(dialog + DIALOG_ROW_REGISTRY_A48_OFFSET) }.unwrap_or(null);
+    if !unsafe { is_heap_aligned_ptr(registry) } {
+        return None;
+    }
+    let (member_node, window_item) = unsafe { scan_dialog_for_loadgame(owner, base) };
+    let node = member_node?;
+    let node_vt = unsafe { safe_read_usize(node) }.unwrap_or(null);
+    if node_vt != base + MEMBERFUNCJOB_VTABLE_RVA {
+        return None;
+    }
+    const MEMBER_DIALOG_10: usize = core::mem::size_of::<usize>() + core::mem::size_of::<usize>();
+    const MEMBER_FN_18: usize = 0x18;
+    const MEMBER_ADJ_20: usize = 0x20;
+    const JMP_HOPS: usize = 6;
+    const HOP_START: usize = 0;
+    const HOP_STEP: usize = 1;
+    let member_dialog = unsafe { safe_read_usize(node + MEMBER_DIALOG_10) }.unwrap_or(null);
+    let member_fn = unsafe { safe_read_usize(node + MEMBER_FN_18) }.unwrap_or(null);
+    let member_adjust = unsafe { safe_read_usize(node + MEMBER_ADJ_20) }.unwrap_or(null);
+    if member_fn == null {
+        return None;
+    }
+    let factory_abs = base + LIVE_DIALOG_FACTORY_RVA;
+    let mut target = member_fn;
+    let mut hop = HOP_START;
+    while hop < JMP_HOPS && target != null {
+        if target == factory_abs {
+            return Some(MenuActionNode {
+                node,
+                node_vt,
+                registry,
+                member_dialog,
+                member_fn,
+                member_adjust,
+                window_item: window_item.unwrap_or(null),
+            });
+        }
+        match unsafe { decode_thunk_hop(target) } {
+            Some(next) => target = next,
+            None => break,
+        }
+        hop += HOP_STEP;
+    }
+    None
+}
+
+fn startup_modal_blocking_state() -> StartupModalBlockingState {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let dialog = CONNECTION_ERROR_DIALOG.load(Ordering::SeqCst);
+    if dialog == null {
+        return StartupModalBlockingState::Clear;
+    }
+    let base = {
+        let own = OWN_STEPPER_BASE.load(Ordering::SeqCst);
+        if own != null {
+            own
+        } else {
+            game_module_base().unwrap_or(null)
+        }
+    };
+    let vt = unsafe { safe_read_usize(dialog) }.unwrap_or(null);
+    if base == null || vt != base + MSGBOX_DIALOG_VTABLE_RVA {
+        CONNECTION_ERROR_DIALOG.store(null, Ordering::SeqCst);
+        return StartupModalBlockingState::Clear;
+    }
+    let closing = unsafe { safe_read_usize(dialog + MSGBOX_CLOSING_LATCH_3B0_OFFSET) }
+        .map(|v| v & MSGBOX_LATCH_BYTE_MASK)
+        .unwrap_or(MSGBOX_CLOSING_YES);
+    if closing == MSGBOX_CLOSING_YES {
+        CONNECTION_ERROR_DIALOG.store(null, Ordering::SeqCst);
+        return StartupModalBlockingState::Clear;
+    }
+    StartupModalBlockingState::Blocking {
+        dialog,
+        vtable: vt,
+        closing_latch: closing,
+    }
+}
+
+unsafe fn profile_load_dialog_ready(
+    base: usize,
+    dialog: usize,
+    want_slot: i32,
+    log_pending: bool,
+) -> Option<ProfileLoadDialogReady> {
+    const PROFILE_LOAD_ACTIVATE_RVA: usize = 0x009a4670;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let pld_vt = base + PROFILE_LOAD_DIALOG_VTABLE_RVA;
+    let dvt = if dialog != null {
+        unsafe { safe_read_usize(dialog) }.unwrap_or(null)
+    } else {
+        null
+    };
+    if dvt != pld_vt {
+        if log_pending {
+            append_autoload_debug(format_args!(
+                "profile-load-ready: waiting for ProfileLoadDialog dialog=0x{dialog:x} vt=0x{dvt:x} want=0x{pld_vt:x}"
+            ));
+        }
+        return None;
+    }
+    let lav =
+        unsafe { safe_read_usize(dvt + DIALOG_LOAD_ACTIVATE_VTSLOT_A0_OFFSET) }.unwrap_or(null);
+    if lav != base + PROFILE_LOAD_ACTIVATE_RVA {
+        if log_pending {
+            append_autoload_debug(format_args!(
+                "profile-load-ready: load_activate slot not ready lav=0x{lav:x} want=0x{:x} dvt=0x{dvt:x}",
+                base + PROFILE_LOAD_ACTIVATE_RVA
+            ));
+        }
+        return None;
+    }
+    let gdm = game_data_man_ptr_or_null();
+    let player_game_data = if gdm != null {
+        unsafe { safe_read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(null)
+    } else {
+        null
+    };
+    if player_game_data == null {
+        if log_pending {
+            append_autoload_debug(format_args!(
+                "profile-load-ready: PlayerGameData null gdm=0x{gdm:x} -- load_activate would assert"
+            ));
+        }
+        return None;
+    }
+    let bound = unsafe { safe_read_i32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET) }
+        .unwrap_or(OWN_STEPPER_SLOT_NONE);
+    let cursor_now = unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }
+        .unwrap_or(OWN_STEPPER_SLOT_NONE);
+    let expected_slot = if want_slot == OWN_STEPPER_SLOT_NONE {
+        cursor_now
+    } else {
+        want_slot
+    };
+    let cursor_target = if want_slot == OWN_STEPPER_SLOT_NONE {
+        cursor_now
+    } else if bound == OWN_STEPPER_CALL_INC as i32 {
+        OWN_STEPPER_SLOT_ZERO
+    } else {
+        want_slot
+    };
+    if expected_slot < OWN_STEPPER_SLOT_ZERO
+        || bound <= OWN_STEPPER_SLOT_ZERO
+        || cursor_target < OWN_STEPPER_SLOT_ZERO
+        || cursor_target >= bound
+    {
+        if log_pending {
+            append_autoload_debug(format_args!(
+                "profile-load-ready: slot rows not ready/valid want={want_slot} expected={expected_slot} cursor_target={cursor_target} cursor={cursor_now} bound={bound} dialog=0x{dialog:x}"
+            ));
+        }
+        return None;
+    }
+    let load_job_ctx = unsafe {
+        safe_read_usize(dialog + core::mem::offset_of!(ProfileLoadDialogLayout, load_job_ctx))
+    }
+    .unwrap_or(null);
+    if !unsafe { is_heap_aligned_ptr(load_job_ctx) } {
+        if log_pending {
+            append_autoload_debug(format_args!(
+                "profile-load-ready: load_job_ctx not ready dialog=0x{dialog:x} ctx=0x{load_job_ctx:x}"
+            ));
+        }
+        return None;
+    }
+    let load_job_ctx_vt = unsafe { safe_read_usize(load_job_ctx) }.unwrap_or(null);
+    if !vtable_in_game_image(load_job_ctx_vt, base) {
+        if log_pending {
+            append_autoload_debug(format_args!(
+                "profile-load-ready: load_job_ctx vtable invalid ctx=0x{load_job_ctx:x} vt=0x{load_job_ctx_vt:x} base=0x{base:x}"
+            ));
+        }
+        return None;
+    }
+    Some(ProfileLoadDialogReady {
+        dialog,
+        dvt,
+        bound,
+        cursor_now,
+        cursor_target,
+        expected_slot,
+        load_activate: lav,
+        load_job_ctx,
+        load_job_ctx_vt,
+        player_game_data,
+    })
+}
+
 /// MODEL B orchestrator (gated by live_dialog_enabled(), OFF by default). At the rendered title
 /// menu: (1) do the bounded active-screen scan to acquire the live TitleTopDialog* + MenuWindow*,
 /// (2) call the dialog factory 0x14081ead0(rcx=title_dialog+0xa38, rdx=menu_window) ONCE -- which
@@ -2128,8 +2412,6 @@ unsafe fn fire_live_loadgame_node(title_dialog: usize, menu_window: usize, base:
 /// One-shot fire latch; bounded wait. FAIL-CLOSED at every step (no acquisition -> stay; bad
 /// vtable -> no call; dialog not live yet -> wait then DONE on timeout). The forge path is untouched.
 unsafe fn own_stepper_live_dialog_fire(owner: usize, base: usize, waits: u64) {
-    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    const FIRE_SETTLE_WAITS: u64 = OWN_STEPPER_S2_INVOKE_SETTLE;
     const FIRE_DIALOG_WAIT_MAX: u64 = OwnStepperFrameBudget::Frames600 as u64;
     // FIX 2 (probe-6): the factory 0x14081ead0 RETURNS the new dialog in rax. fire_live_loadgame_node
     // validates that return == ProfileLoadDialog (vt 0x142b229f8) and, on a match, stores it as
@@ -2137,18 +2419,34 @@ unsafe fn own_stepper_live_dialog_fire(owner: usize, base: usize, waits: u64) {
     // scan the active-screen array 0x143d6d8d0 here (probe-2 proved it holds MODEL-RENDERERS, never
     // the PLD -> it would never confirm). Once fired+verified the orchestrator routes to STAGE2.
     if OWN_STEPPER_LIVE_FIRED.load(Ordering::SeqCst) == OWN_STEPPER_LIVE_FIRED_NO {
-        if waits < FIRE_SETTLE_WAITS {
+        let Some(action) = (unsafe { title_menu_action_ready(owner, base) }) else {
+            if waits >= FIRE_DIALOG_WAIT_MAX {
+                append_autoload_debug(format_args!(
+                    "live-dialog: Load-Game action never became semantically ready after {waits} polls -- STAY at menu (NO-WRITE), DONE"
+                ));
+                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+            }
             return;
-        }
+        };
         match unsafe { locate_live_loadgame_node(owner, base) } {
             Some((title_dialog, menu_window)) => {
+                append_autoload_debug(format_args!(
+                    "live-dialog: Load-Game action ready node=0x{:x} vt=0x{:x} registry=0x{:x} member_fn=0x{:x} back=0x{:x} adj=0x{:x} window_item=0x{:x} -- firing live factory",
+                    action.node,
+                    action.node_vt,
+                    action.registry,
+                    action.member_fn,
+                    action.member_dialog,
+                    action.member_adjust,
+                    action.window_item
+                ));
                 // fire_live_loadgame_node returns true ONLY when the factory returned a verified
                 // ProfileLoadDialog (it has already stored it + set STAGE2 ACTIVATE on success).
                 if unsafe { fire_live_loadgame_node(title_dialog, menu_window, base) } {
                     OWN_STEPPER_LIVE_FIRED.store(OWN_STEPPER_LIVE_FIRED_YES, Ordering::SeqCst);
                 } else if waits >= FIRE_DIALOG_WAIT_MAX {
                     append_autoload_debug(format_args!(
-                        "live-dialog: factory returned non-PLD (or fail-closed) after {waits} waits -- STAY at menu (NO-WRITE), DONE"
+                        "live-dialog: factory returned non-PLD (or fail-closed) after {waits} polls -- STAY at menu (NO-WRITE), DONE"
                     ));
                     OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
                 }
@@ -2156,7 +2454,7 @@ unsafe fn own_stepper_live_dialog_fire(owner: usize, base: usize, waits: u64) {
             None => {
                 if waits >= FIRE_DIALOG_WAIT_MAX {
                     append_autoload_debug(format_args!(
-                        "live-dialog: could not acquire live args after {waits} waits -- STAY at menu (NO-WRITE), DONE"
+                        "live-dialog: could not acquire live args after {waits} polls -- STAY at menu (NO-WRITE), DONE"
                     ));
                     OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
                 }
@@ -2623,18 +2921,14 @@ unsafe fn menu_input_probe(owner: usize, base: usize) {
 /// so the NATIVE title machine advances untouched (the user drives past press-any-button + modals).
 /// KEEP vs the normal own_stepper: it does NOT SetState(owner,2/3), does NOT clear the beginlogo
 /// gate, does NOT self-fire the registrar 0x1409b24e0, does NOT run direct_build / cold_char_mount.
-/// It ONLY: (1) read-only checks whether the live TitleTopDialog menu is rendered (owner+0xe0 ->
-/// dialog, *(dialog)==base+TITLE_TOP_DIALOG_VTABLE_RVA, [dialog+0xa48] row registry populated);
-/// (2) once the menu first appears, waits NATIVE_LOAD_SETTLE_FRAMES; (3) ONE-SHOT: locates the
-/// Load-Game CS::MenuMemberFuncJob node via scan_dialog_for_loadgame and fires its native run
+/// It ONLY: (1) read-only checks whether the live TitleTopDialog menu/action is rendered and
+/// semantically validated (TitleTopDialog vtable, [dialog+0xa48] registry, Load-Game
+/// MenuMemberFuncJob node/action chain); (2) ONE-SHOT: fires that native run
 /// MENU_MEMBER_FUNC_JOB_RUN_RVA (0x1409aaba0, rcx=node) -- which builds the LIVE registered
 /// ProfileLoadDialog the native pump drives. After firing it observes (the caller keeps writing the
 /// golden oracle as the native pump hopefully loads the char). Pure read-only until the single fire.
 unsafe fn native_load_tick(owner: usize, base: usize, n: u64) {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    const HEAP_LO: usize = 0x10000;
-    const PTR_ALIGN_MASK: usize = 0x7;
-    const NO_TICK: usize = 0;
     // Already fired: keep observing (oracle written by the caller's pass-through telemetry).
     if NATIVE_LOAD_FIRED.load(Ordering::SeqCst) != NATIVE_LOAD_FIRED_NO {
         if n % NATIVE_LOAD_LOG_INTERVAL == NULL as u64 {
@@ -2644,78 +2938,24 @@ unsafe fn native_load_tick(owner: usize, base: usize, n: u64) {
         }
         return;
     }
-    // (1) Is the live TitleTopDialog menu rendered? owner+0xe0 -> dialog, vtable-gated, with its
-    // row registry [dialog+0xa48] populated. Pure reads -- fail-closed (just keep observing) if not.
-    let dialog =
-        unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(NULL);
-    let dialog_vt = if dialog != NULL {
-        unsafe { safe_read_usize(dialog) }.unwrap_or(NULL)
-    } else {
-        NULL
-    };
-    let registry = if dialog != NULL {
-        unsafe { safe_read_usize(dialog + DIALOG_ROW_REGISTRY_A48_OFFSET) }.unwrap_or(NULL)
-    } else {
-        NULL
-    };
-    let menu_live = dialog_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA
-        && registry != NULL
-        && registry >= HEAP_LO
-        && (registry & PTR_ALIGN_MASK) == NULL;
-    if !menu_live {
+    let Some(action) = (unsafe { title_menu_action_ready(owner, base) }) else {
         if n % NATIVE_LOAD_LOG_INTERVAL == NULL as u64 {
             append_autoload_debug(format_args!(
-                "native-load: waiting for live menu (#{n}) dialog=0x{dialog:x} vt=0x{dialog_vt:x}(want 0x{:x}) registry[0xa48]=0x{registry:x}",
-                base + TITLE_TOP_DIALOG_VTABLE_RVA
+                "native-load: waiting for semantic Load-Game action readiness (#{n}) -- TitleTopDialog/registry/node/action not all validated yet"
             ));
         }
         return;
-    }
-    // (2) Settle gate: latch the frame the live+settled menu was FIRST seen; wait
-    // NATIVE_LOAD_SETTLE_FRAMES so the registrar finishes populating the rows before we fire.
-    let first_seen = NATIVE_LOAD_MENU_FIRST_SEEN.load(Ordering::SeqCst);
-    if first_seen == NO_TICK {
-        NATIVE_LOAD_MENU_FIRST_SEEN.store(n as usize, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "native-load: LIVE MENU first seen #{n} dialog=0x{dialog:x} registry=0x{registry:x} -- settling {NATIVE_LOAD_SETTLE_FRAMES} frames before firing native Load run"
-        ));
-        return;
-    }
-    if (n as usize).saturating_sub(first_seen) < NATIVE_LOAD_SETTLE_FRAMES {
-        return;
-    }
-    // (3) ONE-SHOT fire. Locate the Load-Game MenuMemberFuncJob node (scan_dialog_for_loadgame
-    // returns (member_node, window_item)); fire its native run rcx=node. Latch FIRST so a re-entry
-    // (or a scan that finds nothing) never double-fires; if the node is missing, mark fired with a
-    // loud log (stay observing -- NO blind retry) so we never spin firing.
+    };
+    // ONE-SHOT fire. The semantic readiness helper already validated the node vtable, registry,
+    // member fn, and factory chain; latch only after that validation succeeds.
     if NATIVE_LOAD_FIRED.swap(NATIVE_LOAD_FIRED_YES, Ordering::SeqCst) != NATIVE_LOAD_FIRED_NO {
         return;
     }
-    let (member_node, window_item) = unsafe { scan_dialog_for_loadgame(owner, base) };
-    let Some(node) = member_node else {
-        append_autoload_debug(format_args!(
-            "native-load: live menu settled (#{n}) but scan found NO Load-Game MenuMemberFuncJob node (window_item=0x{:x}) -- NOT firing, stay observing",
-            window_item.unwrap_or(NULL)
-        ));
-        return;
-    };
-    // Validate the node vtable read-only before the native call (look before acting): it must be a
-    // CS::MenuMemberFuncJob (vt MEMBERFUNCJOB_VTABLE_RVA). run computes rcx=[node+0x10]+[node+0x20]
-    // and calls [node+0x18]; log those for the record.
-    let node_vt = unsafe { safe_read_usize(node) }.unwrap_or(NULL);
-    if node_vt != base + MEMBERFUNCJOB_VTABLE_RVA {
-        append_autoload_debug(format_args!(
-            "native-load: FIRE ABORT node=0x{node:x} vt=0x{node_vt:x} != MenuMemberFuncJob 0x{:x} -- stay observing (NO native call)",
-            base + MEMBERFUNCJOB_VTABLE_RVA
-        ));
-        return;
-    }
-    const MEMBER_DIALOG_10: usize = core::mem::size_of::<usize>() + core::mem::size_of::<usize>();
-    const MEMBER_FN_18: usize = 0x18;
-    const MEMBER_ADJ_20: usize = 0x20;
-    let m_dlg = unsafe { safe_read_usize(node + MEMBER_DIALOG_10) }.unwrap_or(NULL);
-    let m_fn = unsafe { safe_read_usize(node + MEMBER_FN_18) }.unwrap_or(NULL);
-    let m_adj = unsafe { safe_read_usize(node + MEMBER_ADJ_20) }.unwrap_or(NULL);
+    let node = action.node;
+    let node_vt = action.node_vt;
+    let m_dlg = action.member_dialog;
+    let m_fn = action.member_fn;
+    let m_adj = action.member_adjust;
     let run: unsafe extern "system" fn(usize) = unsafe {
         std::mem::transmute::<usize, unsafe extern "system" fn(usize)>(
             base + MENU_MEMBER_FUNC_JOB_RUN_RVA,
@@ -2756,9 +2996,9 @@ fn native_fullread_slot() -> i32 {
 /// OBSERVE-ONLY NATIVE FULL-SAVE-READ tick (native_fullread_enabled(), gated OFF by default). Runs
 /// each frame INSTEAD of the own_stepper forcing logic (no SetState forcing for boot); the caller
 /// pass-throughs to OWN_STEPPER_ORIG_IDX10 so the NATIVE title machine advances untouched. Once the
-/// live TitleTopDialog menu is rendered + settled (same detection as native_load_tick: owner+0xe0 ->
-/// dialog, *(dialog)==TitleTopDialog vtable, [dialog+0xa48] row registry populated, then a
-/// NATIVE_LOAD_SETTLE_FRAMES settle), it runs the full-save-read load chain as a per-frame phase
+/// live TitleTopDialog menu action is semantically validated (same readiness helper as
+/// native_load_tick: TitleTopDialog vtable, [dialog+0xa48] registry, Load-Game node/action chain),
+/// it runs the full-save-read load chain as a per-frame phase
 /// machine at the LIVE menu (where the FD4 IO worker pool 0x144853048 is live so the submit drains):
 ///   SUBMIT: set GameMan+0xb78=slot (step 1, NEW), set_save_slot 0x14067a810 (step 2 -> GameMan+0xac0),
 ///           submit full read 0x14067b1a0 (step 3, type-0xa).
@@ -2773,9 +3013,6 @@ fn native_fullread_slot() -> i32 {
 /// selector step (probe-12 crash) and forces NO SetState for boot. Logs b80/c30/level each frame.
 unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    const HEAP_LO: usize = 0x10000;
-    const PTR_ALIGN_MASK: usize = 0x7;
-    const NO_TICK: usize = 0;
     const WAIT_INC: usize = 1;
     let gm = game_man_ptr_or_null();
     let phase = FULLREAD_PHASE.load(Ordering::SeqCst);
@@ -2795,43 +3032,21 @@ unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         }
         return;
     }
-    // (A) Live-menu detection (same as native_load_tick): owner+0xe0 -> dialog, vtable-gated, with
-    // its row registry [dialog+0xa48] populated. Pure reads -- fail-closed (keep observing) if not.
-    let dialog =
-        unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(NULL);
-    let dialog_vt = if dialog != NULL {
-        unsafe { safe_read_usize(dialog) }.unwrap_or(NULL)
-    } else {
-        NULL
-    };
-    let registry = if dialog != NULL {
-        unsafe { safe_read_usize(dialog + DIALOG_ROW_REGISTRY_A48_OFFSET) }.unwrap_or(NULL)
-    } else {
-        NULL
-    };
-    let menu_live = dialog_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA
-        && registry != NULL
-        && registry >= HEAP_LO
-        && (registry & PTR_ALIGN_MASK) == NULL;
-    if !menu_live || gm == NULL {
+    let Some(action) = (unsafe { title_menu_action_ready(owner, base) }) else {
         if n % NATIVE_LOAD_LOG_INTERVAL == NULL as u64 {
             append_autoload_debug(format_args!(
-                "native-fullread: waiting for live menu (#{n}) gm=0x{gm:x} dialog=0x{dialog:x} vt=0x{dialog_vt:x}(want 0x{:x}) registry[0xa48]=0x{registry:x}",
-                base + TITLE_TOP_DIALOG_VTABLE_RVA
+                "native-fullread: waiting for semantic Load-Game action readiness (#{n}) gm=0x{gm:x} -- TitleTopDialog/registry/node/action not all validated yet"
             ));
         }
         return;
-    }
-    // (B) Settle gate: latch the frame the live menu was FIRST seen; wait NATIVE_LOAD_SETTLE_FRAMES.
-    let first_seen = FULLREAD_MENU_FIRST_SEEN.load(Ordering::SeqCst);
-    if first_seen == NO_TICK {
-        FULLREAD_MENU_FIRST_SEEN.store(n as usize, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "native-fullread: LIVE MENU first seen #{n} dialog=0x{dialog:x} registry=0x{registry:x} -- settling {NATIVE_LOAD_SETTLE_FRAMES} frames before the full-save-read chain"
-        ));
-        return;
-    }
-    if (n as usize).saturating_sub(first_seen) < NATIVE_LOAD_SETTLE_FRAMES {
+    };
+    if gm == NULL {
+        if n % NATIVE_LOAD_LOG_INTERVAL == NULL as u64 {
+            append_autoload_debug(format_args!(
+                "native-fullread: waiting for GameMan after menu action ready node=0x{:x} registry=0x{:x} (#{n})",
+                action.node, action.registry
+            ));
+        }
         return;
     }
     let slot = native_fullread_slot();
@@ -2956,8 +3171,7 @@ unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         let owner_obj = if game_data_man == NULL {
             NULL
         } else {
-            unsafe { safe_read_usize(game_data_man + FULLREAD_OWNER_GDM_08_OFFSET) }
-                .unwrap_or(NULL)
+            unsafe { safe_read_usize(game_data_man + FULLREAD_OWNER_GDM_08_OFFSET) }.unwrap_or(NULL)
         };
         if owner_obj == NULL {
             append_autoload_debug(format_args!(
@@ -3078,35 +3292,40 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
     // title via the CSResStep getter with a stub `this` -- NO SetState, NO world load, NO save
     // write. Validates emk-resman-streaming-driver-coldbuild-stub-lever-2026 live. Additive: the
     // normal phase logic continues (default = stay at the open menu, save-safe).
-    if worldres_coldbuild_probe_enabled() && n >= OWN_STEPPER_SETTLE_CALLS {
+    if worldres_coldbuild_probe_enabled() && unsafe { title_boot_ready(owner, base) } {
         unsafe { worldres_coldbuild_probe(base) };
     }
     // DECISIVE save-data experiment (gated OFF by default; SAVE-SAFE). Register the stream worker,
     // then drive the cold b80 save-IO mount (preview -> poll to b80==3 -> deserialize) so 0x67b290
     // mounts the real char to memory -- NO SetState, NO save write. Bypasses the menu drive while
     // active; pass-through keeps the title ticking so the scheduler ticks the registered worker.
-    if cold_char_mount_enabled() && n >= OWN_STEPPER_SETTLE_CALLS {
+    if cold_char_mount_enabled() && unsafe { title_boot_ready(owner, base) } {
         unsafe { cold_char_mount_drive(base, gm, want_slot, n) };
         pass_through(false);
         return;
     }
     if phase == OWN_STEPPER_PHASE_MENU {
-        // Drive once the boot settles. want_slot == -1 is the "most-recent" intent (resolved
-        // from the dialog's natural highlight at PHASE_S2_ACTIVATE), NOT a "do nothing" signal,
-        // so we no longer gate on it -- the own-stepper trigger file is itself the drive intent.
-        if n < OWN_STEPPER_SETTLE_CALLS {
+        // Drive only when the title owner/scheduler/session/dialog are semantically ready.
+        // want_slot == -1 is the "most-recent" intent (resolved from the dialog's natural
+        // highlight at PHASE_S2_ACTIVATE), NOT a "do nothing" signal.
+        if !unsafe { title_boot_ready(owner, base) } {
+            if n % OWN_STEPPER_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+                append_autoload_debug(format_args!(
+                    "own_stepper: waiting for title_boot_ready before menu drive #{n} owner=0x{owner:x}"
+                ));
+            }
             pass_through(false);
             return;
         }
-        // Wait for any startup MessageBoxDialog (connection-error / EULA / warning) to be
-        // dismissed BEFORE driving the menu -- otherwise we build the main menu underneath the
-        // live modal (black screen / contention). The auto-accept capture clears this atomic
-        // once the dialog is gone (vtable no longer matches), so the own-stepper proceeds then.
-        if CONNECTION_ERROR_DIALOG.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS {
+        if let StartupModalBlockingState::Blocking {
+            dialog,
+            vtable,
+            closing_latch,
+        } = startup_modal_blocking_state()
+        {
             if n % OWN_STEPPER_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
                 append_autoload_debug(format_args!(
-                    "own_stepper: waiting for startup modal to clear (CONNECTION_ERROR_DIALOG=0x{:x}) before menu drive #{n}",
-                    CONNECTION_ERROR_DIALOG.load(Ordering::SeqCst)
+                    "own_stepper: startup_modal_blocking_state=Blocking dialog=0x{dialog:x} vt=0x{vtable:x} closing_latch={closing_latch} before menu drive #{n}"
                 ));
             }
             pass_through(false);
@@ -3270,20 +3489,15 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
     if phase == OWN_STEPPER_PHASE_MENU_BUILD {
         let waits =
             OWN_STEPPER_MENU_BUILD_WAITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
-        // SetState(2)=BeginLogo re-enters the online check and pops the connection-error
-        // MessageBoxDialog, and the online attempt RE-FIRES on every menu transition -> the modal
-        // LOOPS (a fresh dialog each transition). force_dismiss_startup_dialog presses OK every
-        // frame (OnDecide 0x140927ba0 with +0x25e0=OK -> proceeds, NOT the force-stop cancel that
-        // reverted to press-any-button). Because the popup LOOPS, blocking here until
-        // CONNECTION_ERROR_DIALOG is clear waited FOREVER and STAGE 1d never ran. So: only block
-        // during the initial GRACE window (let the first boot/SetState(2) modal get dismissed),
-        // then PROCEED to menu nav + d180 capture EVEN WITH a modal present -- OnDecide-OK clears
-        // each one every frame, and the underlying main menu / capture hooks run concurrently.
-        if waits < OWN_STEPPER_MODAL_GRACE {
+        if let StartupModalBlockingState::Blocking {
+            dialog,
+            vtable,
+            closing_latch,
+        } = startup_modal_blocking_state()
+        {
             if waits % OWN_STEPPER_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
                 append_autoload_debug(format_args!(
-                    "own_stepper: PHASE_MENU_BUILD grace {waits}/{OWN_STEPPER_MODAL_GRACE} (dialog=0x{:x}) before menu open -- OnDecide-OK dismisses each looping popup",
-                    CONNECTION_ERROR_DIALOG.load(Ordering::SeqCst)
+                    "own_stepper: PHASE_MENU_BUILD startup modal still blocking dialog=0x{dialog:x} vt=0x{vtable:x} closing_latch={closing_latch} -- polling modal lifecycle, not a grace counter"
                 ));
             }
             pass_through(false);
@@ -3313,9 +3527,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             && !input_probe_enabled()
             && !live_dialog_enabled()
             && MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS
-            && waits >= STAGE1D_SETTLE_WAITS
-            && (waits - STAGE1D_SETTLE_WAITS) % STAGE1D_RETRY_INTERVAL
-                == TITLE_OWNER_SCAN_START_ADDRESS as u64
+            && unsafe { title_scheduler_ready(owner, base) }
         {
             // Walk the candidate roots; on the first functor->dialog_factory hit (= the Load-Game
             // item d180), validate its fingerprint and LATCH it into MENU_LOAD_GAME_ITEM. STAGE 2
@@ -3377,9 +3589,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         // exactly the native path's own precondition (zero input, NO save write). If the native
         // path fires first (latch->1 in Loop) we simply observe the menu open.
         const MENU_JOB_HOLDER_E0: usize = TITLE_OWNER_MENU_HOLDER_E0_OFFSET;
-        if MENU_ENTRIES_SEEN.load(Ordering::SeqCst) == MENU_ENTRIES_SEEN_NO
-            && waits >= STAGE1D_SETTLE_WAITS
-        {
+        if MENU_ENTRIES_SEEN.load(Ordering::SeqCst) == MENU_ENTRIES_SEEN_NO {
             let dialog = unsafe { safe_read_usize(owner + MENU_JOB_HOLDER_E0) }
                 .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
             let dialog_vt = if dialog != TITLE_OWNER_SCAN_START_ADDRESS {
@@ -3406,9 +3616,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
                     unsafe { safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }
                         .map(|v| v & TITLE_TOP_DIALOG_LATCH_BYTE_MASK)
                         .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
-                if (waits - STAGE1D_SETTLE_WAITS) % STAGE1D_RETRY_INTERVAL
-                    == TITLE_OWNER_SCAN_START_ADDRESS as u64
-                {
+                if waits % STAGE1D_RETRY_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
                     append_autoload_debug(format_args!(
                         "own_stepper: STAGE1d probe dialog=0x{dialog:x} sm=0x{sm:x} fadein={in_fadein} loop={in_loop} textfadeout={in_textfadeout} latch={latch} waits={waits} (self-fire open-menu on Loop+latch-clear)"
                     ));
@@ -3516,7 +3724,6 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         if direct_build_enabled()
             && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO
             && OWN_STEPPER_DIRECT_BUILT.load(Ordering::SeqCst) == OWN_STEPPER_DIRECT_BUILT_NO
-            && waits >= STAGE1D_SETTLE_WAITS
         {
             unsafe { own_stepper_direct_build(owner, base) };
             pass_through(false);
@@ -3839,15 +4046,13 @@ unsafe fn own_stepper_stage2(
             OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_ACTIVATE, Ordering::SeqCst);
             return;
         }
-        // Let the opened menu settle, then drive d180's NATIVE Update once to build its dialog.
-        // d180 lives at owner+0x130 under an input-gated IfElseJob branch (its case child is never
-        // bound headless), so the native pump never ticks it -- but the item is fully built, so
-        // calling its own MenuWindowJob::Update 0x1407ad1c0 (which wires the ctx item+0x10 from the
-        // descriptor item+0x58 then fires the functor) builds the ProfileLoadDialog with a NATIVE
-        // ctx (no synthesis) and zero input. Build-only; idempotent; no save write.
-        if waits < OWN_STEPPER_S2_INVOKE_SETTLE {
-            return;
-        }
+        // Drive d180's NATIVE Update once as soon as the item exists and its native build
+        // preconditions are true. d180 lives at owner+0x130 under an input-gated IfElseJob branch
+        // (its case child is never bound headless), so the native pump never ticks it -- but the
+        // item is fully built, so calling its own MenuWindowJob::Update 0x1407ad1c0 (which wires
+        // the ctx item+0x10 from the descriptor item+0x58 before firing the functor) builds the
+        // ProfileLoadDialog with a NATIVE ctx (no synthesis) and zero input. Build-only;
+        // idempotent; no save write.
         if OWN_STEPPER_INVOKED.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS as usize {
             let ret = unsafe { drive_menu_item_update(item, base, framectx) }.unwrap_or(null);
             OWN_STEPPER_INVOKED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
@@ -3895,66 +4100,37 @@ unsafe fn own_stepper_stage2(
     }
 
     if phase == OWN_STEPPER_PHASE_S2_ACTIVATE {
-        const LIVE_DIALOG_ACTIVATE_SETTLE_WAITS: u64 =
-            OwnStepperFrameBudget::Frames90 as u64;
-        if live_dialog_enabled() && waits < LIVE_DIALOG_ACTIVATE_SETTLE_WAITS {
+        let dialog = OWN_STEPPER_DIALOG.load(Ordering::SeqCst);
+        if gm == null {
             if waits % S2_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
                 append_autoload_debug(format_args!(
-                    "own_stepper: STAGE2-ACTIVATE live-dialog settle waits={waits}/{LIVE_DIALOG_ACTIVATE_SETTLE_WAITS} before native slot activation"
+                    "own_stepper: STAGE2-ACTIVATE waiting for GameMan before load_activate dialog=0x{dialog:x}"
                 ));
+            }
+            if waits >= OWN_STEPPER_S2_PHASE_MAX {
+                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
             }
             return;
         }
-        let dialog = OWN_STEPPER_DIALOG.load(Ordering::SeqCst);
-        if !valid_dialog(dialog) {
-            append_autoload_debug(format_args!(
-                "own_stepper: STAGE2-ACTIVATE invalid dialog=0x{dialog:x} -- STAGE2-NOWRITE-ABORT"
-            ));
-            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+        let log_pending = waits % S2_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64;
+        let Some(ready) =
+            (unsafe { profile_load_dialog_ready(base, dialog, want_slot, log_pending) })
+        else {
+            if waits >= OWN_STEPPER_S2_PHASE_MAX {
+                append_autoload_debug(format_args!(
+                    "own_stepper: STAGE2-ACTIVATE-TIMEOUT profile_load_dialog_ready stayed false after {waits} polls -- STAGE2-NOWRITE-ABORT"
+                ));
+                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+            }
             return;
-        }
-        // PlayerGameData must be non-null (load_activate asserts it).
-        let pgd = game_data_man_ptr_or_null();
-        if pgd == null {
-            append_autoload_debug(format_args!(
-                "own_stepper: STAGE2-ACTIVATE PlayerGameData null -- STAGE2-NOWRITE-ABORT"
-            ));
-            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
-            return;
-        }
-        let dvt = unsafe { safe_read_usize(dialog) }.unwrap_or(null);
-        let bound = ri32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET, OWN_STEPPER_SLOT_NONE);
-        let cursor_now = ri32(
-            dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET,
-            OWN_STEPPER_SLOT_NONE,
-        );
-        // Resolve the expected save slot separately from the dialog cursor. A direct-built dialog
-        // can contain only the activated save row (runtime: bound=1 after activating slot 9), so
-        // its cursor is a row index, not necessarily the save-slot number. Keep expected_slot=9 for
-        // the mount guard while selecting cursor_target=0 in a single-row dialog.
-        let expected_slot = if want_slot == OWN_STEPPER_SLOT_NONE {
-            cursor_now
-        } else {
-            want_slot
         };
-        let cursor_target = if want_slot == OWN_STEPPER_SLOT_NONE {
-            cursor_now
-        } else if bound == OWN_STEPPER_CALL_INC as i32 {
-            OWN_STEPPER_SLOT_ZERO
-        } else {
-            want_slot
-        };
-        if expected_slot < OWN_STEPPER_SLOT_ZERO
-            || bound <= OWN_STEPPER_SLOT_ZERO
-            || cursor_target < OWN_STEPPER_SLOT_ZERO
-            || cursor_target >= bound
-        {
-            append_autoload_debug(format_args!(
-                "own_stepper: STAGE2-ACTIVATE invalid slot want={want_slot} expected={expected_slot} cursor_target={cursor_target} cursor={cursor_now} bound={bound} dialog=0x{dialog:x} -- STAGE2-NOWRITE-ABORT (no chars / wrong profile?)"
-            ));
-            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
-            return;
-        }
+        let dialog = ready.dialog;
+        let dvt = ready.dvt;
+        let bound = ready.bound;
+        let cursor_now = ready.cursor_now;
+        let expected_slot = ready.expected_slot;
+        let cursor_target = ready.cursor_target;
+        let lav = ready.load_activate;
         // For a fixed slot, write the dialog row cursor (UI state, not a save write); for
         // most-recent, leave the dialog's own highlight untouched.
         if want_slot != OWN_STEPPER_SLOT_NONE {
@@ -3963,45 +4139,22 @@ unsafe fn own_stepper_stage2(
             }
         }
         OWN_STEPPER_EXPECTED_SLOT.store(expected_slot, Ordering::SeqCst);
-        let lav =
-            unsafe { safe_read_usize(dvt + DIALOG_LOAD_ACTIVATE_VTSLOT_A0_OFFSET) }.unwrap_or(null);
-        if lav == null {
-            append_autoload_debug(format_args!(
-                "own_stepper: STAGE2-ACTIVATE load_activate slot null dvt=0x{dvt:x} -- STAGE2-NOWRITE-ABORT"
-            ));
-            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
-            return;
-        }
         if live_dialog_enabled() && expected_slot != OWN_STEPPER_SLOT_NONE {
             let set_save_slot: unsafe extern "system" fn(i32) =
                 unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
             unsafe { set_save_slot(expected_slot) };
             let slot_after = unsafe { *((gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
             append_autoload_debug(format_args!(
-                "own_stepper: STAGE2-ACTIVATE native set_save_slot({expected_slot}) before live load_activate -> ac0={slot_after}"
+                "own_stepper: STAGE2-ACTIVATE native set_save_slot({expected_slot}) after profile_load_dialog_ready -> ac0={slot_after}"
             ));
         }
         OWN_STEPPER_SELECTOR_STEP.store(null, Ordering::SeqCst);
         OWN_STEPPER_SELECTOR_CTX.store(null, Ordering::SeqCst);
         let activate: unsafe extern "system" fn(usize) -> u8 = unsafe { std::mem::transmute(lav) };
         let r = unsafe { activate(dialog) };
-        // load_activate builds + validates the selector (its job is to wire the dialog/ctx). We do
-        // NOT build or self-pump the transient selector step 0x140826510/0x140826d50 anymore: that
-        // step is a transient stack/queue object never stored back to the dialog, so pumping it out
-        // of context CRASHES the game (~795 ticks, process_exited) and never drives GameMan+0xb80
-        // (probe-12-isolation-selector-pump-crashes-regressed-from-direct-submit-drain). The MOUNT
-        // phase now uses the PROVEN cold_char_mount_drive direct submit+drain+poll+deserialize
-        // sequence (SAVE-DATA-HALF-SOLVED) instead. ctx is read here only for the log evidence.
-        const DIALOG_LOADJOBCTX_1CC8: usize =
-            core::mem::offset_of!(ProfileLoadDialogLayout, load_job_ctx);
-        let ctx = unsafe { safe_read_usize(dialog + DIALOG_LOADJOBCTX_1CC8) }.unwrap_or(null);
-        let ctx_vt = if ctx != null {
-            unsafe { safe_read_usize(ctx) }.unwrap_or(null)
-        } else {
-            null
-        };
         append_autoload_debug(format_args!(
-            "own_stepper: STAGE2-ACTIVATE want={want_slot} expected={expected_slot} cursor_target={cursor_target} cursor_now={cursor_now} bound={bound} lav=0x{lav:x} ret={r} dialog=0x{dialog:x} ctx=0x{ctx:x} ctx_vt=0x{ctx_vt:x} io18=0x{io18:x} io20=0x{io20:x} -- selector self-pump DISABLED; MOUNT via direct submit+drain+deser"
+            "own_stepper: STAGE2-ACTIVATE profile_load_dialog_ready opened want={want_slot} expected={expected_slot} cursor_target={cursor_target} cursor_now={cursor_now} bound={bound} dvt=0x{dvt:x} lav=0x{lav:x} ret={r} dialog=0x{dialog:x} ctx=0x{:x} ctx_vt=0x{:x} pgd=0x{:x} io18=0x{io18:x} io20=0x{io20:x} -- selector self-pump DISABLED; MOUNT via direct submit+drain+deser",
+            ready.load_job_ctx, ready.load_job_ctx_vt, ready.player_game_data
         ));
         // Reset the shared mount latches so the MOUNT phase's delegate (cold_char_mount_drive) and
         // the mount-done gate observe a clean slate for this drive.
@@ -5791,8 +5944,7 @@ pub(crate) unsafe fn native_arm_loop_tick(module_base: usize, slot: i32, tick: u
         return;
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let game_man =
-        game_man_ptr_or_null();
+    let game_man = game_man_ptr_or_null();
     if game_man == null {
         return;
     }
@@ -5878,8 +6030,7 @@ pub(crate) unsafe fn continue_drive_tick(module_base: usize, slot: i32, tick: u6
     // Log readiness before the fixed drive gate: recent runs exit before the
     // drive can fire, so the next runtime must tell us when GameMan first became
     // available instead of turning the gate into another blind threshold knob.
-    let game_man =
-        game_man_ptr_or_null();
+    let game_man = game_man_ptr_or_null();
     if game_man == TITLE_OWNER_SCAN_START_ADDRESS {
         return;
     }
@@ -6142,8 +6293,7 @@ pub(crate) unsafe fn call_force_play_game_once(module_base: usize, slot: i32, ti
     // Read-only diagnostic: log the PlayGame load-pair preconditions so we can
     // see which one blocks (pair skips writing GameMan+0x14 unless b28==0; the
     // validate step gates on 12d/12e).
-    let game_man_ptr =
-        game_man_ptr_or_null();
+    let game_man_ptr = game_man_ptr_or_null();
     if game_man_ptr != TITLE_OWNER_SCAN_START_ADDRESS {
         let gm = game_man_ptr as *const u8;
         let ac0 = unsafe { *(gm.add(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
@@ -6523,18 +6673,15 @@ pub(crate) fn game_man_trace_summary() -> String {
     const GAME_MAN_SAVE_STATE_OFFSET: usize = core::mem::offset_of!(GameMan, save_state);
     const GAME_MAN_FLAG_B72_OFFSET: usize = core::mem::offset_of!(GameMan, save_requested);
     const GAME_MAN_FLAG_B73_OFFSET: usize = GAME_MAN_FLAG_B73_PROBE_OFFSET;
-    const GAME_MAN_FLAG_B74_OFFSET: usize =
-        GAME_MAN_FLAG_B73_OFFSET + core::mem::size_of::<u8>();
+    const GAME_MAN_FLAG_B74_OFFSET: usize = GAME_MAN_FLAG_B73_OFFSET + core::mem::size_of::<u8>();
     const GAME_MAN_FLAG_B75_OFFSET: usize = GAME_MAN_FLAG_B75_PROBE_OFFSET;
     const GAME_MAN_FLAG_BC4_OFFSET: usize = crate::GAME_MAN_FLAG_BC4_OFFSET;
     const GAME_MAN_FLAG_BB8_OFFSET: usize = GAME_MAN_FLAG_BC4_OFFSET
         - core::mem::size_of::<u32>()
         - core::mem::size_of::<u32>()
         - core::mem::size_of::<u32>();
-    const GAME_MAN_FLAG_BBC_OFFSET: usize =
-        GAME_MAN_FLAG_BB8_OFFSET + core::mem::size_of::<u32>();
-    const GAME_MAN_FLAG_BC0_OFFSET: usize =
-        GAME_MAN_FLAG_BBC_OFFSET + core::mem::size_of::<u32>();
+    const GAME_MAN_FLAG_BBC_OFFSET: usize = GAME_MAN_FLAG_BB8_OFFSET + core::mem::size_of::<u32>();
+    const GAME_MAN_FLAG_BC0_OFFSET: usize = GAME_MAN_FLAG_BBC_OFFSET + core::mem::size_of::<u32>();
 
     unsafe {
         let game_man = game_man_ptr_or_null() as *const u8;
@@ -7683,19 +7830,17 @@ pub(crate) unsafe extern "system" fn cap_selector_tick_hook(
             SELECTOR_STEP_Q28_OFFSET + core::mem::size_of::<usize>();
         const SELECTOR_STEP_Q38_OFFSET: usize =
             SELECTOR_STEP_Q30_OFFSET + core::mem::size_of::<usize>();
-        const SELECTOR_STEP_Q50_OFFSET: usize =
-            SELECTOR_STEP_Q38_OFFSET
-                + core::mem::size_of::<usize>()
-                + core::mem::size_of::<usize>()
-                + core::mem::size_of::<usize>();
+        const SELECTOR_STEP_Q50_OFFSET: usize = SELECTOR_STEP_Q38_OFFSET
+            + core::mem::size_of::<usize>()
+            + core::mem::size_of::<usize>()
+            + core::mem::size_of::<usize>();
         const SELECTOR_STEP_Q58_OFFSET: usize =
             SELECTOR_STEP_Q50_OFFSET + core::mem::size_of::<usize>();
         const SELECTOR_STEP_Q60_OFFSET: usize =
             SELECTOR_STEP_Q58_OFFSET + core::mem::size_of::<usize>();
-        const SELECTOR_STEP_TASK_OFFSET: usize =
-            SELECTOR_STEP_Q60_OFFSET
-                + core::mem::size_of::<usize>()
-                + core::mem::size_of::<usize>();
+        const SELECTOR_STEP_TASK_OFFSET: usize = SELECTOR_STEP_Q60_OFFSET
+            + core::mem::size_of::<usize>()
+            + core::mem::size_of::<usize>();
         let step_q = |off: usize| -> usize {
             if step != TITLE_OWNER_SCAN_START_ADDRESS {
                 unsafe { safe_read_usize(step + off) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)

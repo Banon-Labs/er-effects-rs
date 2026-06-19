@@ -388,8 +388,7 @@ pub(crate) const TITLE_OWNER_TRACE_LIMIT: usize = TraceSampleLimit::Value64 as u
 /// every frame while the owner does not yet exist (or cannot be matched)
 /// collapses the game's frame rate. Throttling to roughly once per second at
 /// 60 fps keeps a failed lookup from being user-visible.
-pub(crate) const TITLE_OWNER_SCAN_CALL_INTERVAL: usize =
-    TitleNativeJobTiming::FrameRate as usize;
+pub(crate) const TITLE_OWNER_SCAN_CALL_INTERVAL: usize = TitleNativeJobTiming::FrameRate as usize;
 pub(crate) const TITLE_OWNER_SCAN_COUNTDOWN_STEP: usize = true as usize;
 pub(crate) const TITLE_OWNER_SCAN_COUNTDOWN_READY: usize = usize::MIN;
 #[repr(u32)]
@@ -403,14 +402,14 @@ pub(crate) enum MenuTraceRva {
 }
 
 pub(crate) const TITLE_MENU_JOB_WAIT_RVA: usize = MenuTraceRva::MenuJobWait as usize;
-pub(crate) const TITLE_NATIVE_JOB_MIN_TICK: u64 =
-    OwnStepperFrameBudget::Frames170 as u64;
+pub(crate) const TITLE_NATIVE_JOB_MIN_TICK: u64 = OwnStepperFrameBudget::Frames170 as u64;
 pub(crate) const MEM_COMMIT_NUMERIC: u32 = 0x1000;
 pub(crate) const PAGE_NOACCESS_NUMERIC: u32 = 0x01;
 pub(crate) const PAGE_GUARD_NUMERIC: u32 = 0x100;
 pub(crate) const TRACE_MENU_CONTINUE_WRAPPER_RVA: u32 = MenuTraceRva::ContinueWrapper as u32;
 pub(crate) const TRACE_MENU_NEW_OR_LOAD_WRAPPER_RVA: u32 = MenuTraceRva::NewOrLoadWrapper as u32;
-pub(crate) const TRACE_MENU_OTHER_LOAD_WRAPPER_RVA: u32 = er_save_loader::MENU_OTHER_LOAD_WRAPPER_RVA;
+pub(crate) const TRACE_MENU_OTHER_LOAD_WRAPPER_RVA: u32 =
+    er_save_loader::MENU_OTHER_LOAD_WRAPPER_RVA;
 pub(crate) const TRACE_MENU_TASK_UPDATE_WRAPPER_RVA: u32 = MenuTraceRva::TaskUpdateWrapper as u32;
 pub(crate) const TRACE_MENU_TASK_UPDATE_TABLE_RVA: u32 = MenuTraceRva::TaskUpdateTable as u32;
 pub(crate) const TRACE_TASK_ENQUEUE_RVA: u32 = MenuTraceRva::TaskEnqueue as u32;
@@ -648,9 +647,8 @@ pub(crate) const TITLE_STATE_DESC_TEXTFADEOUT_RVA: usize = 0x2b264f0;
 pub(crate) const OWN_STEPPER_FALSE: u8 = false as u8;
 /// Initial value (0) for the open-menu registrar one-shot guard.
 pub(crate) const OWN_STEPPER_MENU_OPENED_NO: usize = OWN_STEPPER_FALSE as usize;
-/// Settle delay (frames) before STAGE1d begins probing the dialog's FD4 state. Gives the native
-/// update a head start to run the FadeIn fade animation before we start checking.
-pub(crate) const STAGE1D_SETTLE_WAITS: u64 = 60;
+/// STAGE1d probes the dialog's FD4 state immediately and opens only on the semantic Loop+latch
+/// predicate; it does not use a fixed pre-probe settle delay.
 /// Interval (frames) for logging the state probe (FadeIn/Loop/TextFadeOut + latch), so the log
 /// shows the dialog progressing without spamming every frame.
 pub(crate) const STAGE1D_RETRY_INTERVAL: u64 = 30;
@@ -666,16 +664,14 @@ pub(crate) static OWN_STEPPER_MENU_OPENED: core::sync::atomic::AtomicUsize =
 /// Count of TitleTopDialog entry-vector dumps emitted (the Continue/Load-Game rows live there,
 /// not in the FD4 tree). Capped so the diagnostic samples the entries as they realize after
 /// menu-open without spamming the log every frame.
-pub(crate) static OWN_STEPPER_TITLETOP_DUMPS: AtomicUsize =
-    AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+pub(crate) static OWN_STEPPER_TITLETOP_DUMPS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 /// Max TitleTopDialog entry dumps + the per-dump frame interval.
 pub(crate) const OWN_STEPPER_TITLETOP_DUMP_CAP: usize = TraceSampleLimit::Value8 as usize;
 /// Recon-only Load-Game fingerprint scan (`scan_dialog_for_loadgame`) counter + cap. Runs in the
 /// post-open SAFE-DEFAULT park, independent of the pre-open `OWN_STEPPER_TITLETOP_DUMPS` (which the
 /// d180-locate exhausts before menu-open). 2026-06-18 reconciliation: the title rows are
 /// TitleTopDialog registry entries, not FD4 jobs.
-pub(crate) static OWN_STEPPER_LOADGAME_SCANS: AtomicUsize =
-    AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+pub(crate) static OWN_STEPPER_LOADGAME_SCANS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) const OWN_STEPPER_LOADGAME_SCAN_CAP: usize = TraceSampleLimit::Value12 as usize;
 /// Sentinel logged when the inner TitleStep owner can no longer be found (the
 /// title flow advanced past the title and the owner was finalized/destructed).
@@ -699,8 +695,7 @@ pub(crate) const TITLE_OWNER_PLAY_GAME_SLOT_OFFSET: usize =
 /// `cmp dword [job+0xd8],0 / jne wait`. Observe job+0xd8 while holding here to
 /// learn whether anything drains the job (needs a pump) or it is static.
 pub(crate) const TITLE_STEP_GAME_STEP_WAIT: i32 = 6;
-pub(crate) const TITLE_OWNER_JOB_OFFSET: usize =
-    core::mem::offset_of!(TitleOwnerLayout, load_job);
+pub(crate) const TITLE_OWNER_JOB_OFFSET: usize = core::mem::offset_of!(TitleOwnerLayout, load_job);
 pub(crate) const TITLE_OWNER_JOB_PENDING_OFFSET: usize =
     core::mem::offset_of!(TitleOwnerLoadJobLayout, pending);
 pub(crate) const TITLE_JOB_OBSERVE_TICK_INTERVAL: u64 = 30;
@@ -980,10 +975,8 @@ pub(crate) const B80_POLL_ARG_ZERO: u8 = false as u8;
 pub(crate) const B80_LANE1_DRIVER_RVA: usize = 0x679510;
 /// Max frames to poll b80 toward 3 before giving up the mount (avoid an infinite title
 /// hang if the worker never drains). ~10s at 60fps.
-pub(crate) const OWN_STEPPER_MOUNT_POLL_MAX: u64 =
-    OwnStepperFrameBudget::Frames600 as u64;
-pub(crate) static OWN_STEPPER_MOUNT_POLLS: AtomicUsize =
-    AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+pub(crate) const OWN_STEPPER_MOUNT_POLL_MAX: u64 = OwnStepperFrameBudget::Frames600 as u64;
+pub(crate) static OWN_STEPPER_MOUNT_POLLS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 /// PHASE 4 (DRIVE): the validated dispatcher-driven mount (real-load-c30-mount-write-
 /// confirmed-seamless-2026 + menu-b80-mount-orchestration-sequence-2026). Runtime + the
 /// real-load capture proved hand-calling a single b80 initiator never converges (the
@@ -1020,8 +1013,7 @@ pub(crate) static mut SYNTH_MMS_OWNER: [u8; SYNTH_MMS_OWNER_SIZE] =
     [MOVIE_SKIP_FLAG_CLEAR; SYNTH_MMS_OWNER_SIZE];
 /// Max frames to drive the dispatchers before giving up (stay at title, no save write).
 pub(crate) const OWN_STEPPER_DRIVE_MAX: u64 = OwnStepperFrameBudget::Frames600 as u64;
-pub(crate) static OWN_STEPPER_DRIVE_CALLS: AtomicUsize =
-    AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+pub(crate) static OWN_STEPPER_DRIVE_CALLS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 /// PHASE 5 (MENU_BUILD): the parked press-any-button title is the FIRST state 10 and has
 /// NOT run STEP_BeginTitle(3) yet, so the Continue/Load-Game items do not exist at
 /// owner+0x138 until we drive 10->3 zero-input. idx10 SetState(owner,3) builds the main
@@ -1037,8 +1029,7 @@ pub(crate) const OWN_STEPPER_PHASE_MENU_BUILD: usize = OwnStepperPhase::MenuBuil
 /// zero-input capture lands a few hundred frames PAST the open-menu self-fire -- past the old
 /// 600 cap -- so idx10 gave up before consuming it. Stay generous: staying at the title is
 /// strictly NO-WRITE, so a long wait costs nothing. ~50s at 60fps.
-pub(crate) const OWN_STEPPER_MENU_BUILD_WAIT_MAX: u64 =
-    OwnStepperFrameBudget::Frames3000 as u64;
+pub(crate) const OWN_STEPPER_MENU_BUILD_WAIT_MAX: u64 = OwnStepperFrameBudget::Frames3000 as u64;
 pub(crate) static OWN_STEPPER_MENU_BUILD_WAITS: AtomicUsize =
     AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 /// MenuWindowJob::Update 0x1407ad1c0 -- the native menu pump calls it with rcx = a
@@ -1089,9 +1080,8 @@ pub(crate) const MENU_ITEM_UPDATE_LOG_MAX: usize = TraceSampleLimit::Value48 as 
 /// without flooding the trace).
 pub(crate) static MENU_ITEM_UPDATE_LAST: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// How many in-context idx10 calls to wait before driving (let the boot settle to the
-/// stable press-any-button state 10 first).
-pub(crate) const OWN_STEPPER_SETTLE_CALLS: u64 = OwnStepperFrameBudget::Frames30 as u64;
+/// The product autoload no longer gates startup on a fixed idx10 call count; it polls
+/// `title_boot_ready` for the native owner/state/session/dialog predicates instead.
 /// Shim callback object for the native Continue confirm 0x140b0e180 (reads
 /// owner=[shim+8]). Persistent (not stack) so the call cannot read freed memory.
 #[repr(C)]
@@ -1109,13 +1099,11 @@ pub(crate) const OWN_STEPPER_SHIM_OWNER_IDX: usize =
 /// 0x3d715e0). We own it too, to drive the 3-phase load after the MoveMapStep builds.
 pub(crate) const TITLE_STEP_IDX6_SLOT_RVA: usize = 0x3d715e0;
 pub(crate) static OWN_STEPPER_ORIG_IDX6: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static OWN_STEPPER_IDX6_CALLS: AtomicUsize =
-    AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+pub(crate) static OWN_STEPPER_IDX6_CALLS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 /// Path A re-target single-shot latch: 0 = the native b78-route deserialize has not yet
 /// landed a real GameMan+0xc30, 1 = idx6 has already re-targeted owner+0xbc to the real
 /// map + SetState(5). Prevents re-firing the re-target every frame.
-pub(crate) static OWN_STEPPER_RETARGETED: AtomicUsize =
-    AtomicUsize::new(OWN_STEPPER_RETARGET_NO);
+pub(crate) static OWN_STEPPER_RETARGETED: AtomicUsize = AtomicUsize::new(OWN_STEPPER_RETARGET_NO);
 pub(crate) const OWN_STEPPER_RETARGET_NO: usize = false as usize;
 pub(crate) const OWN_STEPPER_RETARGET_YES: usize = true as usize;
 /// GameMan+0xb80 load-phase value meaning the save IO is resident (mounted).
@@ -1164,8 +1152,7 @@ pub(crate) const OWN_STEPPER_DIRECT_BUILT_NO: usize = false as usize;
 pub(crate) const OWN_STEPPER_DIRECT_BUILT_YES: usize = true as usize;
 /// MODEL B (live_dialog_enabled): one-shot latch so the live Load-Game node's native run
 /// 0x1409aaba0 fires at most once per run (a re-fire would double-build / leak the dialog).
-pub(crate) static OWN_STEPPER_LIVE_FIRED: AtomicUsize =
-    AtomicUsize::new(OWN_STEPPER_LIVE_FIRED_NO);
+pub(crate) static OWN_STEPPER_LIVE_FIRED: AtomicUsize = AtomicUsize::new(OWN_STEPPER_LIVE_FIRED_NO);
 pub(crate) const OWN_STEPPER_LIVE_FIRED_NO: usize = false as usize;
 pub(crate) const OWN_STEPPER_LIVE_FIRED_YES: usize = true as usize;
 
@@ -1264,10 +1251,8 @@ pub(crate) enum GameManMapId {
 }
 
 pub(crate) const GAME_MAN_NEWGAME_DEFAULT_MAP: i32 = GameManMapId::NewGameDefault as i32;
-/// Frames to let the opened menu settle before hand-invoking d180's functor (the cursor sits
-/// on Continue, not Load, so the native pump does not fire d180 itself -- we hand-invoke).
-pub(crate) const OWN_STEPPER_S2_INVOKE_SETTLE: u64 =
-    OwnStepperFrameBudget::Frames30 as u64;
+/// STAGE 2 invocation is gated by concrete menu/action/dialog readiness, not by a fixed
+/// post-open settle frame count.
 /// Max frames per S2 phase before failing closed (stay at the menu, NO SetState(5), NO write).
 pub(crate) const OWN_STEPPER_S2_PHASE_MAX: u64 = OwnStepperFrameBudget::Frames1200 as u64;
 /// Per-phase frame counter for the S2 machine (reset on each phase transition).
@@ -1317,15 +1302,13 @@ pub(crate) static OWN_STEPPER_MOUNT_C30: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(GAME_MAN_C30_UNSET);
 /// Latch: the iodev request pair (io18 & io20) was observed non-null at least once -- so
 /// "io18==0 && io20==0" means "request consumed/mounted", not "never started".
-pub(crate) static OWN_STEPPER_IO_WAS_SET: AtomicUsize =
-    AtomicUsize::new(OWN_STEPPER_IO_WAS_SET_NO);
+pub(crate) static OWN_STEPPER_IO_WAS_SET: AtomicUsize = AtomicUsize::new(OWN_STEPPER_IO_WAS_SET_NO);
 pub(crate) const OWN_STEPPER_IO_WAS_SET_NO: usize = false as usize;
 pub(crate) const OWN_STEPPER_IO_WAS_SET_YES: usize = true as usize;
 /// One-shot latch so PHASE_S2_INVOKE hand-invokes the functor at most once.
 pub(crate) static OWN_STEPPER_INVOKED: AtomicUsize = AtomicUsize::new(OWN_STEPPER_FALSE as usize);
 /// One-shot latch so PHASE_S2_CONFIRM fires SetState(5) at most once.
-pub(crate) static OWN_STEPPER_CONFIRMED: AtomicUsize =
-    AtomicUsize::new(OWN_STEPPER_FALSE as usize);
+pub(crate) static OWN_STEPPER_CONFIRMED: AtomicUsize = AtomicUsize::new(OWN_STEPPER_FALSE as usize);
 // ---- CS::PlayerGameData correctness oracle (read at in-world) ----
 /// `[base+this]` -> CS::GameDataMan* (the singleton at 0x144588268). The all-player save data
 /// GameDataMan singleton slot: `GameDataMan* = *(base + 0x3d5df38)`; PlayerGameData hangs off it
@@ -1399,19 +1382,16 @@ pub(crate) const FACE_BODY_FIELD_HAIR_MODEL_OFFSET: usize =
 /// The eyebrow field follows the hair field after one u32-sized reserved/model slot in the
 /// serialized face-body payload.
 pub(crate) const FACE_BODY_FIELD_EYEBROW_MODEL_OFFSET: usize =
-    FACE_BODY_FIELD_HAIR_MODEL_OFFSET
-        + core::mem::size_of::<u32>()
-        + core::mem::size_of::<u32>();
+    FACE_BODY_FIELD_HAIR_MODEL_OFFSET + core::mem::size_of::<u32>() + core::mem::size_of::<u32>();
 pub(crate) const FACE_BODY_FIELD_BEARD_MODEL_OFFSET: usize =
     FACE_BODY_FIELD_EYEBROW_MODEL_OFFSET + core::mem::size_of::<u32>();
 pub(crate) const FACE_BODY_FIELD_EYE_PATCH_MODEL_OFFSET: usize =
     FACE_BODY_FIELD_BEARD_MODEL_OFFSET + core::mem::size_of::<u32>();
 /// The apparent-age byte follows the model-id cluster after three u32-sized face-shape slots.
-pub(crate) const FACE_BODY_FIELD_APPARENT_AGE_OFFSET: usize =
-    FACE_BODY_FIELD_EYE_PATCH_MODEL_OFFSET
-        + core::mem::size_of::<u32>()
-        + core::mem::size_of::<u32>()
-        + core::mem::size_of::<u32>();
+pub(crate) const FACE_BODY_FIELD_APPARENT_AGE_OFFSET: usize = FACE_BODY_FIELD_EYE_PATCH_MODEL_OFFSET
+    + core::mem::size_of::<u32>()
+    + core::mem::size_of::<u32>()
+    + core::mem::size_of::<u32>();
 pub(crate) const FACE_BODY_FIELD_FACIAL_AESTHETIC_OFFSET: usize =
     FACE_BODY_FIELD_APPARENT_AGE_OFFSET + core::mem::size_of::<u8>();
 pub(crate) const FACE_BODY_FIELD_FORM_EMPHASIS_OFFSET: usize =
@@ -1434,24 +1414,24 @@ pub(crate) const FACE_BODY_FIELD_LEGS_SIZE_OFFSET: usize =
     FACE_BODY_FIELD_ARMS_SIZE_OFFSET + core::mem::size_of::<u8>();
 /// Skin color follows the body-size bytes after two one-byte face-body values that are not part
 /// of the oracle fingerprint.
-pub(crate) const FACE_BODY_FIELD_SKIN_COLOR_R_OFFSET: usize =
-    FACE_BODY_FIELD_LEGS_SIZE_OFFSET
-        + core::mem::size_of::<u8>()
-        + core::mem::size_of::<u8>()
-        + core::mem::size_of::<u8>();
+pub(crate) const FACE_BODY_FIELD_SKIN_COLOR_R_OFFSET: usize = FACE_BODY_FIELD_LEGS_SIZE_OFFSET
+    + core::mem::size_of::<u8>()
+    + core::mem::size_of::<u8>()
+    + core::mem::size_of::<u8>();
 pub(crate) const FACE_BODY_FIELD_SKIN_COLOR_G_OFFSET: usize =
     FACE_BODY_FIELD_SKIN_COLOR_R_OFFSET + core::mem::size_of::<u8>();
 pub(crate) const FACE_BODY_FIELD_SKIN_COLOR_B_OFFSET: usize =
     FACE_BODY_FIELD_SKIN_COLOR_G_OFFSET + core::mem::size_of::<u8>();
 /// `character_name` is private upstream, so compute its start from the preceding public `chr_type`
 /// field and its length from the following public `gender` field.
-pub(crate) const PGD_NAME_9C_OFFSET: usize =
-    core::mem::offset_of!(PlayerGameData, chr_type) + core::mem::size_of::<eldenring::cs::ChrType>();
+pub(crate) const PGD_NAME_9C_OFFSET: usize = core::mem::offset_of!(PlayerGameData, chr_type)
+    + core::mem::size_of::<eldenring::cs::ChrType>();
 pub(crate) const PGD_NAME_LEN_U16: usize =
     (PGD_GENDER_BE_OFFSET - PGD_NAME_9C_OFFSET) / core::mem::size_of::<u16>();
 /// Base/end of the contiguous stat block; upstream's first post-stat field is `base_hero_point`.
 pub(crate) const PGD_STAT_BASE_3C_OFFSET: usize = core::mem::offset_of!(PlayerGameData, vigor);
-pub(crate) const PGD_STAT_END_OFFSET: usize = core::mem::offset_of!(PlayerGameData, base_hero_point);
+pub(crate) const PGD_STAT_END_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, base_hero_point);
 pub(crate) const PGD_STAT_COUNT: usize =
     (PGD_STAT_END_OFFSET - PGD_STAT_BASE_3C_OFFSET) / core::mem::size_of::<u32>();
 /// GameMan last field: `character_name_is_empty` (a cheap blank/new-game discriminator).
@@ -1480,8 +1460,7 @@ pub(crate) const OWN_STEPPER_PATCHED_NO: usize = false as usize;
 pub(crate) const OWN_STEPPER_PATCHED_YES: usize = true as usize;
 /// Original idx10 func ptr (STEP_MenuJobWait), saved so our handler can pass through.
 pub(crate) static OWN_STEPPER_ORIG_IDX10: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static OWN_STEPPER_BASE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static OWN_STEPPER_BASE: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static OWN_STEPPER_PATCHED: AtomicUsize = AtomicUsize::new(OWN_STEPPER_PATCHED_NO);
 pub(crate) static OWN_STEPPER_CALLS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 
@@ -1514,12 +1493,8 @@ pub(crate) const DIALOG_ROW_REGISTRY_A48_OFFSET: usize =
 pub(crate) const NATIVE_LOAD_FIRED_NO: usize = 0;
 pub(crate) const NATIVE_LOAD_FIRED_YES: usize = 1;
 pub(crate) static NATIVE_LOAD_FIRED: AtomicUsize = AtomicUsize::new(NATIVE_LOAD_FIRED_NO);
-/// Tick (own_stepper call #) at which the live+settled menu was FIRST observed; 0 == not yet seen.
-pub(crate) static NATIVE_LOAD_MENU_FIRST_SEEN: AtomicUsize =
-    AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
-/// Settle window (frames) to wait after the menu first renders before firing the native Load run,
-/// so the registry is fully populated by the native pump. Look-before-acting: read-only until settled.
-pub(crate) const NATIVE_LOAD_SETTLE_FRAMES: usize = 60;
+/// The native-load observer now fires only when `title_menu_action_ready` validates the concrete
+/// Load-Game `MenuMemberFuncJob` node/action; there is no fixed post-menu settle frame count.
 /// Throttle interval for native-load observe logging (frames).
 pub(crate) const NATIVE_LOAD_LOG_INTERVAL: u64 = 120;
 
@@ -1564,11 +1539,8 @@ pub(crate) const FULLREAD_PHASE_DONE: usize = 4;
 /// Live phase + drain-wait counters for the full-read chain (one-shot per run).
 pub(crate) static FULLREAD_PHASE: AtomicUsize = AtomicUsize::new(FULLREAD_PHASE_SUBMIT);
 pub(crate) static FULLREAD_DRAIN_WAITS: AtomicUsize = AtomicUsize::new(0);
-/// Tick (own_stepper call #) at which the live+settled menu was FIRST observed for the full-read
-/// chain; 0 == not yet seen (settle gate, mirrors NATIVE_LOAD_MENU_FIRST_SEEN).
-pub(crate) static FULLREAD_MENU_FIRST_SEEN: AtomicUsize =
-    AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
-
+/// The native full-read chain shares the semantic `title_menu_action_ready` menu readiness gate;
+/// it no longer latches a first-seen frame before starting the save-read phase machine.
 /// `save_requested`: bound to the upstream typed layout (compiler-verified equal to our prior
 /// hand-decoded offset).
 pub(crate) const GAME_MAN_ARM_FLAG_B72_OFFSET: usize =
@@ -1582,10 +1554,10 @@ pub(crate) struct GameManAutoloadFlagCluster {
     pub(crate) probe_b75: u8,
 }
 
-pub(crate) const GAME_MAN_FLAG_B73_PROBE_OFFSET: usize = GAME_MAN_ARM_FLAG_B72_OFFSET
-    + core::mem::offset_of!(GameManAutoloadFlagCluster, probe_b73);
-pub(crate) const GAME_MAN_FLAG_B75_PROBE_OFFSET: usize = GAME_MAN_ARM_FLAG_B72_OFFSET
-    + core::mem::offset_of!(GameManAutoloadFlagCluster, probe_b75);
+pub(crate) const GAME_MAN_FLAG_B73_PROBE_OFFSET: usize =
+    GAME_MAN_ARM_FLAG_B72_OFFSET + core::mem::offset_of!(GameManAutoloadFlagCluster, probe_b73);
+pub(crate) const GAME_MAN_FLAG_B75_PROBE_OFFSET: usize =
+    GAME_MAN_ARM_FLAG_B72_OFFSET + core::mem::offset_of!(GameManAutoloadFlagCluster, probe_b75);
 /// `requested_save_slot_load_index`: bound to upstream (compiler-verified equal to our offset).
 pub(crate) const GAME_MAN_REQUESTED_SLOT_B78_OFFSET: usize =
     core::mem::offset_of!(GameMan, requested_save_slot_load_index);
@@ -1710,8 +1682,7 @@ pub(crate) struct MsgBoxDialogLayout {
 
 pub(crate) const MSGBOX_RESULT_BUTTON_25E0_OFFSET: usize =
     core::mem::offset_of!(MsgBoxDialogLayout, result_button);
-pub(crate) const MSGBOX_STATE_25E8_OFFSET: usize =
-    core::mem::offset_of!(MsgBoxDialogLayout, state);
+pub(crate) const MSGBOX_STATE_25E8_OFFSET: usize = core::mem::offset_of!(MsgBoxDialogLayout, state);
 /// Affirmative/OK button index (the consumer treats -1 as "none yet").
 pub(crate) const MSGBOX_OK_BUTTON: i32 = false as i32;
 /// Dialog state >= 2 satisfies the finished-poll.
@@ -1811,10 +1782,8 @@ pub(crate) const MSGBOX_ONDECIDE_RVA: usize = MsgBoxRva::OnDecide as usize;
 /// the parent MenuWindowJob so it tears the dialog down -- a more direct dismiss than OnDecide
 /// (which only moved the selection to OK). Acceptable because the connection-error OK is a no-op.
 pub(crate) const MSGBOX_FORCE_STOP_RVA: usize = MsgBoxRva::ForceStop as usize;
-/// Frames to let a SetState(2)/BeginLogo-triggered connection-error modal appear + be dismissed
-/// before the own-stepper begins any menu-open churn (so the churn doesn't disrupt the modal's
-/// parent menu). ~3s at 60fps.
-pub(crate) const OWN_STEPPER_MODAL_GRACE: u64 = OwnStepperFrameBudget::Frames180 as u64;
+/// Startup modal handling is lifecycle-driven by `startup_modal_blocking_state`, not by a fixed
+/// grace window.
 // ============================================================================================
 // IN-PROCESS MENU INPUT DRIVER (verified RE 2026-06-17). The main menu (built by SetState(2)=
 // BeginLogo) reads input from the keystate bitmap inputmgr+0x90+eventId (edge-triggered &1).
@@ -1856,10 +1825,8 @@ pub(crate) struct MenuListLayout {
     pub(crate) cursor: i32,
 }
 
-pub(crate) const MENU_LIST_CURSOR_D4_OFFSET: usize =
-    core::mem::offset_of!(MenuListLayout, cursor);
-pub(crate) const MENU_LIST_COUNT_D0_OFFSET: usize =
-    core::mem::offset_of!(MenuListLayout, count);
+pub(crate) const MENU_LIST_CURSOR_D4_OFFSET: usize = core::mem::offset_of!(MenuListLayout, cursor);
+pub(crate) const MENU_LIST_COUNT_D0_OFFSET: usize = core::mem::offset_of!(MenuListLayout, count);
 /// Down-tap cadence: assert the move bit for SET frames (edge), then GAP idle frames (so the menu
 /// sees a clean single edge + auto-repeat is avoided), one cursor step per cycle.
 #[repr(u64)]
@@ -2131,9 +2098,11 @@ pub(crate) static BOOTSTRAP_TELEMETRY_SEEN: AtomicUsize =
 pub(crate) static SAFE_INPUT_CONFIRM_FRAMES_REMAINING: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) static MENU_CONTINUE_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static MENU_NEW_OR_LOAD_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static MENU_NEW_OR_LOAD_WRAPPER_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static MENU_OTHER_LOAD_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static MENU_TASK_UPDATE_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static MENU_TASK_UPDATE_WRAPPER_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static TASK_ENQUEUE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SET_SAVE_SLOT_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SAVE_REQUEST_PROFILE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
@@ -2166,12 +2135,10 @@ pub(crate) static CAP_DIALOG_FACTORY_ORIG: AtomicUsize = AtomicUsize::new(HOOK_O
 /// field-linked from the TitleTopDialog (a dialog-struct scan misses it). Latched into
 /// MENU_ROUTER_THIS so the own-stepper can read its rows + drive the Load-Game select zero-input.
 pub(crate) static CAP_CSMENU_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static CAP_CSMENU_CTOR_COUNT: AtomicUsize =
-    AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+pub(crate) static CAP_CSMENU_CTOR_COUNT: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) const CAP_CSMENU_CTOR_LOG_FIRST: usize = TraceSampleLimit::Value8 as usize;
 /// The captured title CSMenu controller (router_this). 0 until its ctor 0x1409060d8 latches it.
-pub(crate) static MENU_ROUTER_THIS: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_ROUTER_THIS: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// The title-menu "Load Game" ROW entry (stride-0x210 row whose action functor [entry+0xf8]
 /// chains to dialog_factory 0x14081ead0). Captured by the row-push hook's post-build scan. Its
 /// layout is the CSMenu-row layout (action at +0xf8), DISTINCT from the FD4 MenuWindowJob d180
@@ -2198,8 +2165,7 @@ pub(crate) static CAP_APPEND_ONE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGI
 /// FD4/menu registry insertion helper 0x1407a7b60, called directly by TitleTopDialog::open_menu
 /// after each menu entry descriptor is built. The existing task_enqueue_7a7b60 hook logs
 /// rcx/rdx/ret fingerprints to map where the opened Continue/Load-Game entries are stored.
-pub(crate) static CAP_MENU_INSERT_COUNT: AtomicUsize =
-    AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+pub(crate) static CAP_MENU_INSERT_COUNT: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) const CAP_MENU_INSERT_LOG_FIRST: usize = TraceSampleLimit::Value24 as usize;
 
 #[repr(C)]
@@ -2232,14 +2198,12 @@ pub(crate) const CAP_ROW_PUSH_LOG_FIRST: usize = 12;
 /// (first N), regardless of whether the container is the title menu. Under Model A the row
 /// populate fires for the ProfileLoadDialog slot list (not the title Continue/Load list), so the
 /// content-gated `inspect_row_container` log would miss it; this captures WHO triggers populate.
-pub(crate) static CAP_ROW_PUSH_ALLFIRE_COUNT: AtomicUsize =
-    AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+pub(crate) static CAP_ROW_PUSH_ALLFIRE_COUNT: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) const CAP_ROW_PUSH_ALLFIRE_LOG_FIRST: usize = 24;
 pub(crate) const REBUILD_ROWS_RVA: u32 = 0x0078d2c0;
 pub(crate) const APPEND_ONE_RVA: u32 = 0x0078eea0;
 pub(crate) const ROW_CONTAINER_BACKPTR_8: usize = 0x8;
-pub(crate) static CAP_SELECTOR_TICK_COUNT: AtomicUsize =
-    AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+pub(crate) static CAP_SELECTOR_TICK_COUNT: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) const CAP_SELECTOR_TICK_LOG_FIRST: usize = TraceSampleLimit::Value4 as usize;
 pub(crate) const CAP_SELECTOR_TICK_LOG_INTERVAL: usize = OwnStepperFrameBudget::Frames120 as usize;
 /// Selector-owner step (0x140826d50) install-flag field: 0 on the first tick (fires the
@@ -2269,10 +2233,8 @@ pub(crate) static DIRECT_INPUT8_CREATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static DIRECT_INPUT_CREATE_DEVICE_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static DIRECT_INPUT_GET_DEVICE_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_BOOTSTRAP_SEEN: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_OWNER_PTR: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_OWNER_TRACE_COUNT: AtomicUsize =
-    AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+pub(crate) static TITLE_OWNER_PTR: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_OWNER_TRACE_COUNT: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) static TITLE_NATIVE_JOB_CALLED: AtomicUsize =
     AtomicUsize::new(TITLE_NATIVE_JOB_NOT_CALLED);
 pub(crate) static FORCE_PLAY_GAME_CALLED: AtomicUsize =
@@ -2332,8 +2294,7 @@ pub(crate) static MENU_TRACE_LAST_STATE_QWORD: AtomicUsize =
     AtomicUsize::new(MENU_TASK_NULL_STATE_QWORD);
 pub(crate) static MENU_TRACE_LAST_PAYLOAD_PTR: AtomicUsize =
     AtomicUsize::new(MENU_TASK_NULL_PAYLOAD_PTR);
-pub(crate) static TASK_ENQUEUE_TRACE_COUNT: AtomicUsize =
-    AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+pub(crate) static TASK_ENQUEUE_TRACE_COUNT: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 
 /// A named runtime effect call the overlay can trigger.
 ///
@@ -2878,7 +2839,8 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 if stay_active_enabled() {
                     if let Ok(base) = game_module_base() {
                         // DLUID (input-device-manager) singleton VA 0x14485dc18.
-                        const DLUID_SINGLETON_RVA: usize = RuntimeGlobalRva::DluidInputManager as usize;
+                        const DLUID_SINGLETON_RVA: usize =
+                            RuntimeGlobalRva::DluidInputManager as usize;
                         #[repr(C)]
                         struct DluidInputManagerLayout {
                             unknown_000: [u8; 0x88d],

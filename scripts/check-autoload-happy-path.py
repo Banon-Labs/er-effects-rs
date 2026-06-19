@@ -53,30 +53,40 @@ def require(condition: bool, message: str, failures: list[str]) -> None:
         failures.append(message)
 
 
-def enum_variant_value(source: str, enum_name: str, variant_name: str) -> int | None:
-    enum_match = re.search(rf"enum\s+{re.escape(enum_name)}\s*\{{(.*?)\}}", source, re.S)
-    if enum_match is None:
-        return None
-    variant_match = re.search(rf"\b{re.escape(variant_name)}\s*=\s*(\d+)\b", enum_match.group(1))
-    if variant_match is None:
-        return None
-    return int(variant_match.group(1))
+READINESS_HELPERS = {
+    "title_boot_ready",
+    "title_menu_action_ready",
+    "startup_modal_blocking_state",
+    "profile_load_dialog_ready",
+}
+
+FORBIDDEN_FIXED_WAIT_TOKENS = {
+    "OWN_STEPPER_SETTLE_CALLS",
+    "NATIVE_LOAD_SETTLE_FRAMES",
+    "OWN_STEPPER_MODAL_GRACE",
+    "LIVE_DIALOG_ACTIVATE_SETTLE_WAITS",
+}
 
 
-def live_dialog_settle_threshold_is_90(experiments: str, lib: str) -> bool:
-    const_match = re.search(
-        r"const\s+LIVE_DIALOG_ACTIVATE_SETTLE_WAITS:\s+u64\s+=\s*(.*?);",
-        experiments,
-        re.S,
+def semantic_readiness_helpers_present(experiments: str) -> bool:
+    return all(re.search(rf"\bfn\s+{re.escape(name)}\b", experiments) for name in READINESS_HELPERS)
+
+
+def fixed_wait_gates_absent(experiments: str, lib: str) -> bool:
+    combined = experiments + "\n" + lib
+    return not any(re.search(rf"\b{re.escape(name)}\b", combined) for name in FORBIDDEN_FIXED_WAIT_TOKENS)
+
+
+def product_path_uses_semantic_readiness(experiments: str) -> bool:
+    own_stepper = rust_fn_body(experiments, "own_stepper_idx10")
+    native_load = rust_fn_body(experiments, "native_load_tick")
+    stage2 = rust_fn_body(experiments, "own_stepper_stage2")
+    return (
+        "title_boot_ready" in own_stepper
+        and "startup_modal_blocking_state" in own_stepper
+        and "title_menu_action_ready" in native_load
+        and "profile_load_dialog_ready" in stage2
     )
-    if const_match is None:
-        return False
-    expr = " ".join(const_match.group(1).split())
-    if expr == "90":
-        return True
-    if expr == "OwnStepperFrameBudget::Frames90 as u64":
-        return enum_variant_value(lib, "OwnStepperFrameBudget", "Frames90") == 90
-    return False
 
 
 def main() -> int:
@@ -84,7 +94,7 @@ def main() -> int:
     experiments = read(EXPERIMENTS)
     lib = read(LIB)
     stage = read(STAGE_SCRIPT)
-    runtime_probe = read(RUNTIME_PROBE)
+    runtime_probe = read(RUNTIME_PROBE) if RUNTIME_PROBE.exists() else ""
     measure = read(MEASURE)
 
     require(
@@ -111,8 +121,18 @@ def main() -> int:
         require("product_autoload_enabled()" in body, f"{gate} must be enabled by product_autoload_enabled()", failures)
 
     require(
-        live_dialog_settle_threshold_is_90(experiments, lib),
-        "product autoload live-dialog activation settle must stay at the proven 90-frame threshold",
+        semantic_readiness_helpers_present(experiments),
+        "product autoload must define semantic readiness helpers for title boot, menu action, modals, and ProfileLoadDialog",
+        failures,
+    )
+    require(
+        fixed_wait_gates_absent(experiments, lib),
+        "product autoload must not redeclare or use the removed fixed frame/call wait gates",
+        failures,
+    )
+    require(
+        product_path_uses_semantic_readiness(experiments),
+        "product autoload path must call semantic readiness helpers instead of fixed wait gates",
         failures,
     )
 
@@ -132,39 +152,40 @@ def main() -> int:
         failures,
     )
 
+    if runtime_probe:
+        require(
+            "RUNTIME_LAZYLOAD_CHAINLOAD_DLL" in runtime_probe,
+            "runtime probe must honor the LazyLoader CHAINLOAD payload mode used by the proven baseline",
+            failures,
+        )
+        require(
+            "dll=er_effects_rs.dll" in runtime_probe,
+            "runtime probe CHAINLOAD mode must write lazyLoad.ini with er_effects_rs.dll as the chainload DLL",
+            failures,
+        )
+        require(
+            '"$GAME_DIR/er_effects_rs.dll"' in runtime_probe,
+            "runtime probe CHAINLOAD mode must copy er_effects_rs.dll beside LazyLoader, not only into dllMods",
+            failures,
+        )
+        require(
+            'rm -f "$GAME_DIR/dllMods/er_effects_rs.dll"' in runtime_probe,
+            "runtime probe CHAINLOAD mode must remove the stale LOADORDER er_effects_rs.dll payload",
+            failures,
+        )
     require(
-        "RUNTIME_LAZYLOAD_CHAINLOAD_DLL" in runtime_probe,
-        "runtime probe must honor the LazyLoader CHAINLOAD payload mode used by the proven baseline",
+        "readiness_gate_failures" in measure,
+        "measure must expose readiness_gate_failures as the primary static readiness metric",
         failures,
     )
     require(
-        "dll=er_effects_rs.dll" in runtime_probe,
-        "runtime probe CHAINLOAD mode must write lazyLoad.ini with er_effects_rs.dll as the chainload DLL",
+        all(name in measure for name in READINESS_HELPERS),
+        "measure must check every semantic readiness helper",
         failures,
     )
     require(
-        '"$GAME_DIR/er_effects_rs.dll"' in runtime_probe,
-        "runtime probe CHAINLOAD mode must copy er_effects_rs.dll beside LazyLoader, not only into dllMods",
-        failures,
-    )
-    require(
-        'rm -f "$GAME_DIR/dllMods/er_effects_rs.dll"' in runtime_probe,
-        "runtime probe CHAINLOAD mode must remove the stale LOADORDER er_effects_rs.dll payload",
-        failures,
-    )
-    require(
-        "scripts/check-refactor-equivalence.py" in measure,
-        "measure must include the static refactor-equivalence oracle for this branch",
-        failures,
-    )
-    require(
-        "unproven_equivalence_total" in measure,
-        "measure must expose unproven_equivalence_total as the primary proof metric",
-        failures,
-    )
-    require(
-        "autoload_static_failures" in measure and "autoload_stage_failures" in measure,
-        "measure must count static product-gate and release-staging validation failures",
+        all(name in measure for name in FORBIDDEN_FIXED_WAIT_TOKENS),
+        "measure must check every removed fixed wait gate",
         failures,
     )
     require(
