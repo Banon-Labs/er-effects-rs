@@ -1,0 +1,17 @@
+# DELIBERATE save-backed SetState5 test for direct-build Stage2.
+# Same as .auto/runtime-env.direct-build, plus ER_EFFECTS_FULLREAD_COMMIT=1 so
+# STAGE2 advances from verified mount to the existing guarded continue_confirm.
+# Harness backs up/restores saves; zero host/simulated input.
+LAUNCH_MODE=offline-launcher
+ER_EFFECTS_OWN_STEPPER=1
+ER_EFFECTS_DIRECT_BUILD=1
+ER_EFFECTS_FULLREAD_COMMIT=1
+ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=0
+RUNTIME_MAX_NUDGES=0
+RESTORE_RUNTIME_SAVES=1
+RUNTIME_CAPTURE_INPUT_OCR=0
+RUNTIME_WATCH_TARGET=player-load
+RUNTIME_SPAWN_POLL_BUDGET=32768
+RUNTIME_TIMEOUT_SECONDS=120
+RUNTIME_POST_REQUEST_TICK_BUDGET=4000
+RUNTIME_AUTOLOAD_ATTEMPT_BUDGET=4000

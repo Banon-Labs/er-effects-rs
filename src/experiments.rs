@@ -3890,9 +3890,9 @@ unsafe fn own_stepper_stage2(
                 "own_stepper: STAGE2-MOUNT-POLL waits={waits} ac0={ac0} expected={expected} c30=0x{c30:x} latched=0x{latched_c30:x} deser_ok={deser_ok} c30_sane={c30_sane} b80={b80} io18=0x{io18:x} io20=0x{io20:x}"
             ));
         }
-        // VERIFY-ONLY: stop at the deserialize. We log c30 + the char fingerprint and go to DONE --
-        // NO continue_confirm / NO SetState5 / NO save write. (The CONFIRM phase below stays in the
-        // code but is no longer reachable from this verify-only mount.)
+        // Default VERIFY-ONLY: stop at deserialize. With the explicit fullread commit gate enabled,
+        // a verified mount advances to CONFIRM, whose independent guard re-checks deser_ok,
+        // fp_real, expected slot, and c30 latch before continue_confirm/SetState5.
         if deser_done {
             let (fp_real, fp_level, fp_name_len) = unsafe { char_fingerprint(base) };
             timeline_event(
@@ -3900,11 +3900,20 @@ unsafe fn own_stepper_stage2(
                 n,
                 format_args!("ac0={ac0} c30=0x{latched_c30:x} waits={waits}"),
             );
-            append_autoload_debug(format_args!(
-                "own_stepper: STAGE2-MOUNT-VERIFY deser_ok={deser_ok} mount_done={mount_done} ac0={ac0} expected={expected} c30=0x{c30:x} latched=0x{latched_c30:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) b80={b80} -- VERIFY-ONLY (NO SetState5/NO save write) -> DONE"
-            ));
-            OWN_STEPPER_S2_WAITS.store(null, Ordering::SeqCst);
-            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+            let commit = native_fullread_commit_enabled();
+            if mount_done && commit {
+                append_autoload_debug(format_args!(
+                    "own_stepper: STAGE2-MOUNT-COMMIT deser_ok={deser_ok} mount_done={mount_done} ac0={ac0} expected={expected} c30=0x{c30:x} latched=0x{latched_c30:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) b80={b80} -- entering CONFIRM"
+                ));
+                OWN_STEPPER_S2_WAITS.store(null, Ordering::SeqCst);
+                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_CONFIRM, Ordering::SeqCst);
+            } else {
+                append_autoload_debug(format_args!(
+                    "own_stepper: STAGE2-MOUNT-VERIFY deser_ok={deser_ok} mount_done={mount_done} commit={commit} ac0={ac0} expected={expected} c30=0x{c30:x} latched=0x{latched_c30:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) b80={b80} -- VERIFY-ONLY (NO SetState5/NO save write) -> DONE"
+                ));
+                OWN_STEPPER_S2_WAITS.store(null, Ordering::SeqCst);
+                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+            }
         } else if waits >= OWN_STEPPER_S2_PHASE_MAX {
             append_autoload_debug(format_args!(
                 "own_stepper: STAGE2-MOUNT-POLL-TIMEOUT ac0={ac0} want={want_slot} c30=0x{c30:x} io_was_set={io_was_set} after {waits} waits -- STAGE2-NOWRITE-ABORT (stay at menu)"
