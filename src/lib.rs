@@ -13,7 +13,7 @@ use std::{
 
 use debug::InputBlocker;
 use eldenring::{
-    cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
+    cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameDataMan, GameMan, PlayerGameData, PlayerIns},
     fd4::FD4TaskData,
 };
 use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
@@ -1000,15 +1000,24 @@ pub(crate) static OWN_STEPPER_CONFIRMED: AtomicUsize = AtomicUsize::new(0);
 /// on-disk binary (dozens of `mov reg,[rip->0x143d5df38]; mov reg,[rax+0x8]; test; je` accessor
 /// sites). Validated against the live char "a" (level 9, runes 0, stats [15,10,11,14,13,9,9,7]).
 pub(crate) const PLAYER_GAME_DATA_SINGLETON_RVA: usize = 0x3d5df38;
-/// GameDataMan -> PlayerGameData (all-player save data) sub-object pointer.
-pub(crate) const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize = 0x08;
-pub(crate) const PGD_LEVEL_68_OFFSET: usize = 0x68;
-pub(crate) const PGD_RUNE_COUNT_6C_OFFSET: usize = 0x6c;
-pub(crate) const PGD_RUNE_MEMORY_70_OFFSET: usize = 0x70;
-pub(crate) const PGD_CHR_TYPE_98_OFFSET: usize = 0x98;
+/// GameDataMan -> PlayerGameData (the active/main player's save data) sub-object pointer.
+/// Offsets are bound to the upstream `eldenring` typed layout via `offset_of!` so they
+/// track `fromsoftware-rs` automatically and fail the build if the struct layout drifts
+/// (compile-time accuracy guarantee, replacing the hand-decoded hex constants).
+pub(crate) const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize =
+    core::mem::offset_of!(GameDataMan, main_player_game_data);
+pub(crate) const PGD_LEVEL_68_OFFSET: usize = core::mem::offset_of!(PlayerGameData, level);
+pub(crate) const PGD_RUNE_COUNT_6C_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, rune_count);
+pub(crate) const PGD_RUNE_MEMORY_70_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, rune_memory);
+pub(crate) const PGD_CHR_TYPE_98_OFFSET: usize = core::mem::offset_of!(PlayerGameData, chr_type);
+/// `character_name` is a private field upstream, so it cannot be reached via `offset_of!`;
+/// the hand-decoded offset (validated equal to upstream's `[u16; 17]` field position) is retained.
 pub(crate) const PGD_NAME_9C_OFFSET: usize = 0x9c;
 pub(crate) const PGD_NAME_LEN_U16: usize = 17;
-pub(crate) const PGD_STAT_BASE_3C_OFFSET: usize = 0x3c;
+/// Base of the contiguous stat block; upstream's first stat field is `vigor`.
+pub(crate) const PGD_STAT_BASE_3C_OFFSET: usize = core::mem::offset_of!(PlayerGameData, vigor);
 pub(crate) const PGD_STAT_COUNT: usize = 8;
 /// GameMan last field: character_name_is_empty (a cheap blank/new-game discriminator).
 pub(crate) const GAME_MAN_NAME_IS_EMPTY_E78_OFFSET: usize = 0xe78;
@@ -2234,7 +2243,8 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                                 .is_some()
                         {
                             unsafe {
-                                *((dluid + DLUID_INPUT_ACTIVE_FLAG_OFFSET) as *mut u8) = INPUT_ACTIVE
+                                *((dluid + DLUID_INPUT_ACTIVE_FLAG_OFFSET) as *mut u8) =
+                                    INPUT_ACTIVE
                             };
                         }
                     }
