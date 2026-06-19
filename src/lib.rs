@@ -878,7 +878,7 @@ pub(crate) const MENU_ITEM_UPDATE_LOG_MAX: usize = 48;
 pub(crate) static MENU_ITEM_UPDATE_LAST: AtomicUsize = AtomicUsize::new(0);
 /// How many in-context idx10 calls to wait before driving (let the boot settle to the
 /// stable press-any-button state 10 first).
-pub(crate) const OWN_STEPPER_SETTLE_CALLS: u64 = 30;
+pub(crate) const OWN_STEPPER_SETTLE_CALLS: u64 = 25;
 /// Shim callback object for the native Continue confirm 0x140b0e180 (reads
 /// owner=[shim+8]). Persistent (not stack) so the call cannot read freed memory.
 pub(crate) const OWN_STEPPER_SHIM_LEN: usize = 8;
