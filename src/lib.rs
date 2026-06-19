@@ -21,7 +21,7 @@ use eldenring::{
     fd4::FD4TaskData,
 };
 use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
-use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
+use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoader};
 use fromsoftware_shared::{F32Vector4, FromStatic, InstanceError, SharedTaskImpExt};
 use hudhook::{
     ImguiRenderLoop, MessageFilter,
@@ -2717,10 +2717,6 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         });
     }
 
-    let direct_autoload_configured = {
-        let state = state_or_return(&state);
-        state.autoload.method() == SaveLoadMethod::DirectMenuLoad && state.autoload.slot().is_some()
-    };
     if safe_input_path().exists() {
         START_SAFE_INPUT_HOOKS.call_once(|| {
             let _ = std::thread::Builder::new()
@@ -2728,7 +2724,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
                 .spawn(install_safe_input_hooks);
         });
     }
-    if (trace_continue_enabled() || direct_autoload_configured) && !continue_trace_disabled() {
+    if trace_continue_enabled() && !continue_trace_disabled() {
         write_bootstrap_event(
             BOOTSTRAP_EVENT_CONTINUE_TRACE_REQUESTED,
             BOOTSTRAP_DETAIL_START,
@@ -2884,6 +2880,20 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     // per-frame file I/O stalls the title" (lite survives) from
                     // "any per-frame work trips a budget" (lite still exits).
                     if lite_mode() {
+                        return;
+                    }
+                    // Product autoload: run the minimal native save-load core from the recurring
+                    // game task, before the title/front-end stepper is needed. This bypasses
+                    // title-accept input injection, press-any/logo/menu-open state, and the idx10
+                    // MenuJobWait hook path; readiness is checked inside product_core_autoload_tick.
+                    if product_autoload_enabled() {
+                        if let (Ok(base), Some(slot)) = (game_module_base(), state.autoload.slot())
+                        {
+                            unsafe {
+                                product_core_autoload_tick(base, slot, state.game_task_ticks)
+                            };
+                        }
+                        write_telemetry_throttled(&mut state, false);
                         return;
                     }
                     // OWN-THE-STEPPER: patch the idx10 step-fn slot to our handler so

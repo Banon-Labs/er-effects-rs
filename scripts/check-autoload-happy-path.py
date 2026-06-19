@@ -17,9 +17,7 @@ MEASURE = REPO_ROOT / ".auto" / "measure.sh"
 REQUIRED_PRODUCT_GATES = {
     "own_stepper_enabled",
     "splash_skip_enabled",
-    "live_dialog_enabled",
     "native_fullread_commit_enabled",
-    "menu_window_latch_enabled",
     "cleanup_title_dialog_after_world_enabled",
 }
 
@@ -54,8 +52,10 @@ def require(condition: bool, message: str, failures: list[str]) -> None:
 
 
 READINESS_HELPERS = {
+    "product_core_autoload_ready",
     "title_boot_ready",
     "title_menu_action_ready",
+    "title_live_dialog_fire_ready",
     "startup_modal_blocking_state",
     "profile_load_dialog_ready",
 }
@@ -78,12 +78,18 @@ def fixed_wait_gates_absent(experiments: str, lib: str) -> bool:
 
 
 def product_path_uses_semantic_readiness(experiments: str) -> bool:
+    product_core = rust_fn_body(experiments, "product_core_autoload_tick")
     own_stepper = rust_fn_body(experiments, "own_stepper_idx10")
+    live_dialog = rust_fn_body(experiments, "own_stepper_live_dialog_fire")
     native_load = rust_fn_body(experiments, "native_load_tick")
     stage2 = rust_fn_body(experiments, "own_stepper_stage2")
     return (
-        "title_boot_ready" in own_stepper
+        "product_core_autoload_ready" in product_core
+        and "own_stepper_stage2" in product_core
+        and "cold_char_mount_drive" in stage2
+        and "title_boot_ready" in own_stepper
         and "startup_modal_blocking_state" in own_stepper
+        and "title_live_dialog_fire_ready" in live_dialog
         and "title_menu_action_ready" in native_load
         and "profile_load_dialog_ready" in stage2
     )
@@ -108,6 +114,21 @@ def main() -> int:
         "product autoload must be armed before EffectsState is wrapped/shared",
         failures,
     )
+    require(
+        "product_core_autoload_tick" in lib,
+        "game task must route product autoload to the minimal native save-load core",
+        failures,
+    )
+    require(
+        lib.find("product_core_autoload_tick") < lib.find("own_stepper_patch_once"),
+        "product autoload core must run before the idx10/title-front-end stepper patch path",
+        failures,
+    )
+    require(
+        lib.find("product_core_autoload_tick") < lib.find("title_accept_tick"),
+        "product autoload core must run before legacy title-accept input injection paths",
+        failures,
+    )
 
     arm_body = rust_fn_body(experiments, "arm_product_autoload_from_request")
     require("SaveLoadMethod::DirectMenuLoad" in arm_body, "product arm must be limited to direct_menu_load", failures)
@@ -119,6 +140,13 @@ def main() -> int:
     for gate in sorted(REQUIRED_PRODUCT_GATES):
         body = rust_fn_body(experiments, gate)
         require("product_autoload_enabled()" in body, f"{gate} must be enabled by product_autoload_enabled()", failures)
+    for legacy_gate in ("live_dialog_enabled", "menu_window_latch_enabled"):
+        body = rust_fn_body(experiments, legacy_gate)
+        require(
+            "product_autoload_enabled()" not in body,
+            f"{legacy_gate} must remain opt-in and not be part of the product core path",
+            failures,
+        )
 
     require(
         semantic_readiness_helpers_present(experiments),
@@ -149,6 +177,11 @@ def main() -> int:
     require(
         re.search(r"method=direct_menu_load", stage) is not None,
         "release staging autoload example must use direct_menu_load",
+        failures,
+    )
+    require(
+        re.search(r"require_title_bootstrap=false", stage) is not None,
+        "release staging autoload example must not require title/front-end bootstrap",
         failures,
     )
 

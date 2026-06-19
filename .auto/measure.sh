@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 python3 - <<'PY'
 from __future__ import annotations
 import re
@@ -39,16 +38,30 @@ for name in target_constants:
         remaining_constants += 1
 
 helpers = [
+    'product_core_autoload_ready',
     'title_boot_ready',
     'title_menu_action_ready',
+    'title_live_dialog_fire_ready',
     'startup_modal_blocking_state',
     'profile_load_dialog_ready',
 ]
 helpers_missing = 0
+autoload_static_failures = 0
 for name in helpers:
     if not re.search(rf'\bfn\s+{name}\b', exp_code):
         failures.append(f'missing readiness helper: {name}')
         helpers_missing += 1
+
+if 'product_core_autoload_tick' not in lib_code:
+    failures.append('product autoload no longer routes through product_core_autoload_tick')
+    autoload_static_failures += 1
+else:
+    product_core_pos = lib_code.find('product_core_autoload_tick')
+    for later in ['own_stepper_patch_once', 'title_accept_tick']:
+        later_pos = lib_code.find(later)
+        if later_pos != -1 and product_core_pos > later_pos:
+            failures.append(f'product_core_autoload_tick appears after legacy path {later}')
+            autoload_static_failures += 1
 
 # Success predicates must not be expressed as fixed frame waits in the autoload functions.
 function_names = [
@@ -98,7 +111,6 @@ for fn in function_names:
             failures.append(f'{fn} contains fixed lower-bound wait predicate: {mm.group(0).strip()}')
             fixed_wait_predicates += 1
 
-autoload_static_failures = 0
 if 'live_dialog_settle_threshold_is_90' in check or 'proven 90-frame threshold' in check:
     failures.append('check-autoload-happy-path still enforces old 90-frame fixed threshold')
     autoload_static_failures += 1

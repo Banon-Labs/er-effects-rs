@@ -27,7 +27,7 @@ dll=er_effects_rs.dll
 
 EXPECTED_AUTOLOAD = """slot=0
 method=direct_menu_load
-require_title_bootstrap=true
+require_title_bootstrap=false
 """
 
 EXPECTED_SPLASH_SKIP = """# Copy this file to er-effects-splash-skip.txt next to eldenring.exe to enable

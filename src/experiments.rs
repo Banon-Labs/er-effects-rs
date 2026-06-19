@@ -534,15 +534,13 @@ pub(crate) unsafe fn cleanup_title_dialog_after_world_once(module_base: usize, f
 /// NOT present in the prior working cold-mount run; gating it lets us isolate hook-induced
 /// mount perturbation (see bd probe11 caveat).
 pub(crate) fn menu_window_latch_enabled() -> bool {
-    product_autoload_enabled()
-        || matches!(
-            std::env::var("ER_EFFECTS_MENU_WINDOW_LATCH").as_deref(),
-            Ok("1")
-        )
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-menu-window-latch.txt")
-            .exists()
+    matches!(
+        std::env::var("ER_EFFECTS_MENU_WINDOW_LATCH").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-menu-window-latch.txt")
+        .exists()
 }
 
 /// OPT-IN gate for the c30-writer diagnostic hook (hot deserialize-internal 0x67bd70).
@@ -713,8 +711,7 @@ pub(crate) fn direct_build_enabled() -> bool {
 /// fires load_activate (vt+0xa0) + the guarded continue_confirm -> SetState(5). The forge path
 /// (direct_build) is untouched; this is a deliberate, separately-gated experiment.
 pub(crate) fn live_dialog_enabled() -> bool {
-    product_autoload_enabled()
-        || matches!(std::env::var("ER_EFFECTS_LIVE_DIALOG").as_deref(), Ok("1"))
+    matches!(std::env::var("ER_EFFECTS_LIVE_DIALOG").as_deref(), Ok("1"))
         || game_directory_path()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("er-effects-live-dialog.txt")
@@ -1014,14 +1011,31 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
                 "cold-char-mount: POLL waits={w} b80={b80} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x}"
             ));
         }
-        if b80 == B80_RESIDENT {
+        let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
+        let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
+        const C30_ZERO: i32 = 0;
+        let (fp_real, fp_level, fp_name_len) = unsafe { char_fingerprint(base) };
+        if b80 == B80_IDLE
+            && ac0 == want_slot
+            && c30 != GAME_MAN_C30_UNSET
+            && c30 != C30_ZERO
+            && fp_real
+        {
+            OWN_STEPPER_MOUNT_C30.store(c30, Ordering::SeqCst);
+            OWN_STEPPER_DESER_FIRED.store(OWN_STEPPER_DESER_FIRED_OK, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "cold-char-mount: FULL-LATCH success without b80==3 after {w} polls ac0={ac0} c30=0x{c30:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) -- full-read/poll already populated PlayerGameData; NO explicit deserialize needed"
+            ));
+            unsafe { dump_load_correctness(base, n) };
+            MOUNT_PHASE.store(PHASE_DONE, Ordering::SeqCst);
+        } else if b80 == B80_RESIDENT {
             append_autoload_debug(format_args!(
                 "cold-char-mount: b80 reached RESIDENT(3) after {w} polls -- the registered worker DRAINED the read -> DESERIALIZE"
             ));
             MOUNT_PHASE.store(PHASE_DESER, Ordering::SeqCst);
         } else if w >= MOUNT_POLL_MAX {
             append_autoload_debug(format_args!(
-                "cold-char-mount: b80 STUCK at {b80} after {w} polls (worker registered but read never resident) -- TIMEOUT (no-write)"
+                "cold-char-mount: b80 STUCK at {b80} after {w} polls (worker registered but read never resident) ac0={ac0} c30=0x{c30:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) -- TIMEOUT (no-write)"
             ));
             MOUNT_PHASE.store(PHASE_DONE, Ordering::SeqCst);
         }
@@ -1049,13 +1063,21 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
         ));
         unsafe { dump_load_correctness(base, n) };
         // Publish the result so a STAGE2 caller that delegates here can observe completion + the
-        // c30/char result (deser ret==1 == real char + c30 written from the save). Mirrors STAGE2's
-        // DESER_FIRED/MOUNT_C30 latches so the STAGE2 mount-done logging/gate works identically.
-        if dret == OWN_STEPPER_DESER_SUCCESS_RET {
+        // c30/char result. The return code is not a sufficient oracle for m10_01 saves: runtime
+        // evidence shows ret=0 with PlayerGameData already populated. Treat a real mounted
+        // character fingerprint as success, while still fail-closing on a default/new-game PGD.
+        let (fp_real, fp_level, fp_name_len) = unsafe { char_fingerprint(base) };
+        if dret == OWN_STEPPER_DESER_SUCCESS_RET || fp_real {
             OWN_STEPPER_MOUNT_C30.store(c30, Ordering::SeqCst);
             OWN_STEPPER_DESER_FIRED.store(OWN_STEPPER_DESER_FIRED_OK, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "cold-char-mount: DESER-LATCH success dret={dret} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) c30=0x{c30:x}"
+            ));
         } else {
             OWN_STEPPER_DESER_FIRED.store(OWN_STEPPER_DESER_FIRED_FAIL, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "cold-char-mount: DESER-LATCH fail dret={dret} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) c30=0x{c30:x}"
+            ));
         }
         MOUNT_PHASE.store(PHASE_DONE, Ordering::SeqCst);
         return;
@@ -2128,6 +2150,19 @@ struct MenuActionNode {
 }
 
 #[derive(Clone, Copy)]
+struct LiveDialogFireReady {
+    title_dialog: usize,
+    title_dialog_vt: usize,
+    capture_slot: usize,
+    capture: usize,
+    capture_vt: usize,
+    registry_vt: usize,
+    menu_opened_latch: usize,
+    menu_window: usize,
+    menu_window_vt: usize,
+}
+
+#[derive(Clone, Copy)]
 struct ProfileLoadDialogReady {
     dialog: usize,
     dvt: usize,
@@ -2149,6 +2184,17 @@ enum StartupModalBlockingState {
         vtable: usize,
         closing_latch: usize,
     },
+}
+
+struct ProductCoreAutoloadReady {
+    committed: i32,
+    requested: i32,
+    table: usize,
+    session: usize,
+    game_data_man: usize,
+    profile_summary: usize,
+    iodev: usize,
+    heap_allocator: usize,
 }
 
 unsafe fn is_heap_aligned_ptr(ptr: usize) -> bool {
@@ -2201,6 +2247,131 @@ unsafe fn title_scheduler_ready(owner: usize, base: usize) -> bool {
     unsafe { title_boot_ready(owner, base) }
 }
 
+unsafe fn product_core_autoload_ready(
+    owner: usize,
+    base: usize,
+    gm: usize,
+    slot: i32,
+) -> Option<ProductCoreAutoloadReady> {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if slot < OWN_STEPPER_SLOT_ZERO || gm == null {
+        return None;
+    }
+    let committed = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }
+        .unwrap_or(TITLE_STATE_OWNER_GONE);
+    let requested = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_OFFSET) }
+        .unwrap_or(TITLE_STATE_OWNER_GONE);
+    let table =
+        unsafe { safe_read_usize(owner + TITLE_OWNER_INSTANCE_TABLE_OFFSET) }.unwrap_or(null);
+    let session =
+        unsafe { safe_read_usize(base + SESSION_SINGLETON_144588E98_RVA) }.unwrap_or(null);
+    let game_data_man = game_data_man_ptr_or_null();
+    let profile_summary = if game_data_man != null {
+        unsafe { safe_read_usize(game_data_man + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(null)
+    } else {
+        null
+    };
+    let iodev = unsafe { safe_read_usize(base + IODEV_GLOBAL_RVA) }.unwrap_or(null);
+    let heap_allocator = crate::runtime_heap_allocator_ptr_or_null();
+    if table != base + INNER_TITLE_STATE_TABLE_RVA
+        || session == null
+        || game_data_man == null
+        || profile_summary == null
+        || iodev == null
+        || heap_allocator == null
+    {
+        return None;
+    }
+    Some(ProductCoreAutoloadReady {
+        committed,
+        requested,
+        table,
+        session,
+        game_data_man,
+        profile_summary,
+        iodev,
+        heap_allocator,
+    })
+}
+
+pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u64) -> bool {
+    if !product_autoload_enabled() {
+        return false;
+    }
+    let phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
+    if phase == OWN_STEPPER_PHASE_DONE {
+        return true;
+    }
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let Some(owner_ptr) = (unsafe { title_owner(module_base) }) else {
+        if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
+            append_autoload_debug(format_args!(
+                "product-core-autoload: waiting for title owner before native save-load core tick={tick}"
+            ));
+        }
+        return true;
+    };
+    let owner = owner_ptr as usize;
+    let gm = game_man_ptr_or_null();
+    let Some(ready) = (unsafe { product_core_autoload_ready(owner, module_base, gm, slot) }) else {
+        if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
+            let committed = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }
+                .unwrap_or(TITLE_STATE_OWNER_GONE);
+            let requested = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_OFFSET) }
+                .unwrap_or(TITLE_STATE_OWNER_GONE);
+            let table = unsafe { safe_read_usize(owner + TITLE_OWNER_INSTANCE_TABLE_OFFSET) }
+                .unwrap_or(null);
+            let session = unsafe { safe_read_usize(module_base + SESSION_SINGLETON_144588E98_RVA) }
+                .unwrap_or(null);
+            let game_data_man = game_data_man_ptr_or_null();
+            let profile_summary = if game_data_man != null {
+                unsafe { safe_read_usize(game_data_man + SLOT_MANAGER_CONTAINER_OFFSET) }
+                    .unwrap_or(null)
+            } else {
+                null
+            };
+            let iodev = unsafe { safe_read_usize(module_base + IODEV_GLOBAL_RVA) }.unwrap_or(null);
+            let heap_allocator = crate::runtime_heap_allocator_ptr_or_null();
+            append_autoload_debug(format_args!(
+                "product-core-autoload: waiting for core readiness owner=0x{owner:x} state={committed}/{requested} table=0x{table:x} session=0x{session:x} gm=0x{gm:x} gdm=0x{game_data_man:x} profile=0x{profile_summary:x} iodev=0x{iodev:x} heap=0x{heap_allocator:x} slot={slot} tick={tick}"
+            ));
+        }
+        return true;
+    };
+    if phase == OWN_STEPPER_PHASE_MENU {
+        OWN_STEPPER_EXPECTED_SLOT.store(slot, Ordering::SeqCst);
+        OWN_STEPPER_DESER_FIRED.store(OWN_STEPPER_DESER_NOT_FIRED, Ordering::SeqCst);
+        OWN_STEPPER_MOUNT_C30.store(GAME_MAN_C30_UNSET, Ordering::SeqCst);
+        OWN_STEPPER_IO_WAS_SET.store(OWN_STEPPER_IO_WAS_SET_NO, Ordering::SeqCst);
+        OWN_STEPPER_S2_WAITS.store(null, Ordering::SeqCst);
+        timeline_event(
+            "T0",
+            tick,
+            format_args!(
+                "product-core owner=0x{owner:x} state={}/{} slot={slot}",
+                ready.committed, ready.requested
+            ),
+        );
+        append_autoload_debug(format_args!(
+            "product-core-autoload: core ready owner=0x{owner:x} state={}/{} table=0x{:x} session=0x{:x} gm=0x{gm:x} gdm=0x{:x} profile=0x{:x} iodev=0x{:x} heap=0x{:x} slot={slot} -- entering native save-load MOUNT_POLL without title/menu/input stepper",
+            ready.committed,
+            ready.requested,
+            ready.table,
+            ready.session,
+            ready.game_data_man,
+            ready.profile_summary,
+            ready.iodev,
+            ready.heap_allocator
+        ));
+        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_MOUNT_POLL, Ordering::SeqCst);
+    }
+    let phase_now = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
+    if phase_now == OWN_STEPPER_PHASE_S2_MOUNT_POLL || phase_now == OWN_STEPPER_PHASE_S2_CONFIRM {
+        unsafe { own_stepper_stage2(owner, module_base, gm, slot, tick, null) };
+    }
+    true
+}
+
 unsafe fn title_menu_action_ready(owner: usize, base: usize) -> Option<MenuActionNode> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let dialog =
@@ -2214,7 +2385,7 @@ unsafe fn title_menu_action_ready(owner: usize, base: usize) -> Option<MenuActio
     }
     let registry =
         unsafe { safe_read_usize(dialog + DIALOG_ROW_REGISTRY_A48_OFFSET) }.unwrap_or(null);
-    if !unsafe { is_heap_aligned_ptr(registry) } {
+    if !vtable_in_game_image(registry, base) {
         return None;
     }
     let (member_node, window_item) = unsafe { scan_dialog_for_loadgame(owner, base) };
@@ -2257,6 +2428,61 @@ unsafe fn title_menu_action_ready(owner: usize, base: usize) -> Option<MenuActio
         hop += HOP_STEP;
     }
     None
+}
+
+unsafe fn title_live_dialog_fire_ready(owner: usize, base: usize) -> Option<LiveDialogFireReady> {
+    const TITLE_FLOW_CONTEXT_VTABLE_RVA: usize = 0x2ac7f20;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if !unsafe { title_scheduler_ready(owner, base) } {
+        return None;
+    }
+    let title_dialog =
+        unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
+    if title_dialog == null {
+        return None;
+    }
+    let title_dialog_vt = unsafe { safe_read_usize(title_dialog) }.unwrap_or(null);
+    if title_dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+        return None;
+    }
+    let menu_opened_latch = unsafe {
+        safe_read_usize(title_dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET)
+            .map(|v| v & TITLE_TOP_DIALOG_LATCH_BYTE_MASK)
+            .unwrap_or(null)
+    };
+    if menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO {
+        return None;
+    }
+    let registry_vt =
+        unsafe { safe_read_usize(title_dialog + DIALOG_ROW_REGISTRY_A48_OFFSET) }.unwrap_or(null);
+    if registry_vt != base + SCENE_OBJ_PROXY_VTABLE_RVA {
+        return None;
+    }
+    let capture_slot = title_dialog + DIALOG_SCENE_PROXY_CAPTURE_A38_OFFSET;
+    let capture = unsafe { safe_read_usize(capture_slot) }.unwrap_or(null);
+    if !unsafe { is_heap_aligned_ptr(capture) } {
+        return None;
+    }
+    let capture_vt = unsafe { safe_read_usize(capture) }.unwrap_or(null);
+    if capture_vt != base + TITLE_FLOW_CONTEXT_VTABLE_RVA {
+        return None;
+    }
+    let menu_window = LATCHED_MENU_WINDOW.load(Ordering::SeqCst);
+    if !unsafe { is_heap_aligned_ptr(menu_window) } {
+        return None;
+    }
+    let menu_window_vt = unsafe { safe_read_usize(menu_window) }.unwrap_or(null);
+    Some(LiveDialogFireReady {
+        title_dialog,
+        title_dialog_vt,
+        capture_slot,
+        capture,
+        capture_vt,
+        registry_vt,
+        menu_opened_latch,
+        menu_window,
+        menu_window_vt,
+    })
 }
 
 fn startup_modal_blocking_state() -> StartupModalBlockingState {
@@ -2419,46 +2645,36 @@ unsafe fn own_stepper_live_dialog_fire(owner: usize, base: usize, waits: u64) {
     // scan the active-screen array 0x143d6d8d0 here (probe-2 proved it holds MODEL-RENDERERS, never
     // the PLD -> it would never confirm). Once fired+verified the orchestrator routes to STAGE2.
     if OWN_STEPPER_LIVE_FIRED.load(Ordering::SeqCst) == OWN_STEPPER_LIVE_FIRED_NO {
-        let Some(action) = (unsafe { title_menu_action_ready(owner, base) }) else {
+        let Some(ready) = (unsafe { title_live_dialog_fire_ready(owner, base) }) else {
             if waits >= FIRE_DIALOG_WAIT_MAX {
                 append_autoload_debug(format_args!(
-                    "live-dialog: Load-Game action never became semantically ready after {waits} polls -- STAY at menu (NO-WRITE), DONE"
+                    "live-dialog: factory args never became semantically ready after {waits} polls -- STAY at menu (NO-WRITE), DONE"
                 ));
                 OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
             }
             return;
         };
-        match unsafe { locate_live_loadgame_node(owner, base) } {
-            Some((title_dialog, menu_window)) => {
-                append_autoload_debug(format_args!(
-                    "live-dialog: Load-Game action ready node=0x{:x} vt=0x{:x} registry=0x{:x} member_fn=0x{:x} back=0x{:x} adj=0x{:x} window_item=0x{:x} -- firing live factory",
-                    action.node,
-                    action.node_vt,
-                    action.registry,
-                    action.member_fn,
-                    action.member_dialog,
-                    action.member_adjust,
-                    action.window_item
-                ));
-                // fire_live_loadgame_node returns true ONLY when the factory returned a verified
-                // ProfileLoadDialog (it has already stored it + set STAGE2 ACTIVATE on success).
-                if unsafe { fire_live_loadgame_node(title_dialog, menu_window, base) } {
-                    OWN_STEPPER_LIVE_FIRED.store(OWN_STEPPER_LIVE_FIRED_YES, Ordering::SeqCst);
-                } else if waits >= FIRE_DIALOG_WAIT_MAX {
-                    append_autoload_debug(format_args!(
-                        "live-dialog: factory returned non-PLD (or fail-closed) after {waits} polls -- STAY at menu (NO-WRITE), DONE"
-                    ));
-                    OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
-                }
-            }
-            None => {
-                if waits >= FIRE_DIALOG_WAIT_MAX {
-                    append_autoload_debug(format_args!(
-                        "live-dialog: could not acquire live args after {waits} polls -- STAY at menu (NO-WRITE), DONE"
-                    ));
-                    OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
-                }
-            }
+        append_autoload_debug(format_args!(
+            "live-dialog: factory args ready title_dialog=0x{:x} vt=0x{:x} capture_slot=0x{:x} capture=0x{:x} capture_vt=0x{:x} registry_vt=0x{:x} latch={} menu_window=0x{:x} menu_window_vt=0x{:x} -- firing live factory",
+            ready.title_dialog,
+            ready.title_dialog_vt,
+            ready.capture_slot,
+            ready.capture,
+            ready.capture_vt,
+            ready.registry_vt,
+            ready.menu_opened_latch,
+            ready.menu_window,
+            ready.menu_window_vt
+        ));
+        // fire_live_loadgame_node returns true ONLY when the factory returned a verified
+        // ProfileLoadDialog (it has already stored it + set STAGE2 ACTIVATE on success).
+        if unsafe { fire_live_loadgame_node(ready.title_dialog, ready.menu_window, base) } {
+            OWN_STEPPER_LIVE_FIRED.store(OWN_STEPPER_LIVE_FIRED_YES, Ordering::SeqCst);
+        } else if waits >= FIRE_DIALOG_WAIT_MAX {
+            append_autoload_debug(format_args!(
+                "live-dialog: factory returned non-PLD (or fail-closed) after {waits} polls -- STAY at menu (NO-WRITE), DONE"
+            ));
+            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
         }
         return;
     }
@@ -4153,7 +4369,7 @@ unsafe fn own_stepper_stage2(
         let activate: unsafe extern "system" fn(usize) -> u8 = unsafe { std::mem::transmute(lav) };
         let r = unsafe { activate(dialog) };
         append_autoload_debug(format_args!(
-            "own_stepper: STAGE2-ACTIVATE profile_load_dialog_ready opened want={want_slot} expected={expected_slot} cursor_target={cursor_target} cursor_now={cursor_now} bound={bound} dvt=0x{dvt:x} lav=0x{lav:x} ret={r} dialog=0x{dialog:x} ctx=0x{:x} ctx_vt=0x{:x} pgd=0x{:x} io18=0x{io18:x} io20=0x{io20:x} -- selector self-pump DISABLED; MOUNT via direct submit+drain+deser",
+            "own_stepper: STAGE2-ACTIVATE profile_load_dialog_ready opened want={want_slot} expected={expected_slot} cursor_target={cursor_target} cursor_now={cursor_now} bound={bound} dvt=0x{dvt:x} lav=0x{lav:x} ret={r} dialog=0x{dialog:x} ctx=0x{:x} ctx_vt=0x{:x} pgd=0x{:x} io18=0x{io18:x} io20=0x{io20:x} -- MOUNT via live selector tick plus direct submit+drain+deser",
             ready.load_job_ctx, ready.load_job_ctx_vt, ready.player_game_data
         ));
         // Reset the shared mount latches so the MOUNT phase's delegate (cold_char_mount_drive) and
@@ -4167,10 +4383,10 @@ unsafe fn own_stepper_stage2(
     }
 
     if phase == OWN_STEPPER_PHASE_S2_MOUNT_POLL {
-        // Direct-build still uses the older cold submit+drain+deserialize delegate. Live-dialog has
-        // built and registered a real ProfileLoadDialog with the native menu group. Builder
-        // 0x140826510 returns the small owner pointer, but static disassembly proves it stores the
-        // heap selector step at [owner]; tick that step with ctx=owner+0xf8, matching natural traces.
+        let expected = OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst);
+        // Direct-build uses the cold submit+drain+deserialize delegate. Live-dialog also ticks the
+        // native selector step it just built, but still co-drives the save-read/deser path directly:
+        // the selector tick alone has been runtime-proven to leave b80/io idle at the title.
         if live_dialog_enabled() {
             const SELECTOR_TICK_RVA: usize = PROFILE_LOAD_SELECTOR_TICK_RVA;
             #[repr(C)]
@@ -4193,6 +4409,9 @@ unsafe fn own_stepper_stage2(
                     ));
                 }
             }
+            if expected != OWN_STEPPER_SLOT_NONE {
+                unsafe { cold_char_mount_drive(base, gm, expected, n) };
+            }
         } else {
             unsafe { cold_char_mount_drive(base, gm, want_slot, n) };
         }
@@ -4203,7 +4422,6 @@ unsafe fn own_stepper_stage2(
         let io_was_set =
             OWN_STEPPER_IO_WAS_SET.load(Ordering::SeqCst) == OWN_STEPPER_IO_WAS_SET_YES;
         let io_consumed = io18 == null && io20 == null;
-        let expected = OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst);
         // Mount signal = the deserialize 0x67b290 SUCCEEDED (ret==1), which proves it wrote c30 from
         // the save header + applied the real char. c30 itself is ambiguous (the char's real early map
         // 0xa010000 collides with the new-game default), so the reliable signal is deser-success +
@@ -4233,9 +4451,11 @@ unsafe fn own_stepper_stage2(
         }
         let deser_ok = deser_state == OWN_STEPPER_DESER_FIRED_OK;
         let deser_done = deser_state != OWN_STEPPER_DESER_NOT_FIRED;
-        let c30_sane = latched_c30 != GAME_MAN_C30_UNSET
-            && latched_c30 != C30_ZERO
-            && latched_c30 != GAME_MAN_NEWGAME_DEFAULT_MAP;
+        let (fp_real_mount, _fp_level_mount, _fp_name_len_mount) =
+            unsafe { char_fingerprint(base) };
+        let c30_available = latched_c30 != GAME_MAN_C30_UNSET && latched_c30 != C30_ZERO;
+        let c30_sane =
+            c30_available && (latched_c30 != GAME_MAN_NEWGAME_DEFAULT_MAP || fp_real_mount);
         let mount_done =
             deser_ok && c30_sane && ac0 == expected && expected != OWN_STEPPER_SLOT_NONE;
         if waits % S2_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 || deser_done {
@@ -4280,23 +4500,24 @@ unsafe fn own_stepper_stage2(
         let latched = OWN_STEPPER_MOUNT_C30.load(Ordering::SeqCst);
         let expected = OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst);
         // HARD save-write guard: only SetState(5) when the real char is still mounted. Require the
-        // deserialize SUCCEEDED (ret==1 -> c30 written from save), c30 unchanged since the mount and
-        // not the unset sentinel, and the slot matches. (setstate5-is-save-safe-c30-from-save)
+        // mount latch, c30 unchanged since the mount and present, the slot match, and the decisive
+        // PlayerGameData character fingerprint. c30 may legitimately equal the m10_01 default for
+        // saves parked there, and the UTF-16 name field can be empty/unknown, so neither is a hard
+        // failure when the level/stat fingerprint is real.
         const DESER_FIRED_OK_CONFIRM: usize = 2;
+        const C30_ZERO_CONFIRM: i32 = 0;
         let deser_ok = OWN_STEPPER_DESER_FIRED.load(Ordering::SeqCst) == DESER_FIRED_OK_CONFIRM;
         // CHAR-FINGERPRINT gate (MODEL B): SetState(5) ONLY when a REAL character is mounted in
         // PlayerGameData (level>=1). Runtime direct-build evidence showed the mounted target slot
         // has real stats/level while the name field remains empty/unknown, so name is diagnostic
         // only. The new-game default remains level 0, so level>=1 still fail-closes safely.
         let (fp_real, fp_level, fp_name_len) = unsafe { char_fingerprint(base) };
+        let c30_available = c30 == latched && c30 != GAME_MAN_C30_UNSET && c30 != C30_ZERO_CONFIRM;
         let proceed = deser_ok
             && fp_real
-            && fp_name_len > TITLE_OWNER_SCAN_START_ADDRESS
             && ac0 == expected
             && expected != OWN_STEPPER_SLOT_NONE
-            && c30 == latched
-            && c30 != GAME_MAN_C30_UNSET
-            && c30 != GAME_MAN_NEWGAME_DEFAULT_MAP;
+            && c30_available;
         if !proceed {
             append_autoload_debug(format_args!(
                 "own_stepper: STAGE2-CONFIRM-GUARD-FAIL ac0={ac0} expected={expected} c30=0x{c30:x} latched=0x{latched:x} deser_ok={deser_ok} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) -- STAGE2-NOWRITE-ABORT"
@@ -5619,15 +5840,17 @@ pub(crate) fn block_input_enabled() -> bool {
     }
     // PASSIVE mode never blocks. Otherwise keep the block engaged through the ENTIRE headless
     // drive -- boot -> menu-open -> zero-input title-confirm Load fire -> mount -> confirm --
-    // releasing ONLY once in-world (the user takes over) or on abort (phase DONE). The
-    // title-confirm route drives the load with NO user input (direct field-write + functor call,
-    // not the input pipeline), so there is no reason to release at menu-open; keeping it on makes
-    // the run UNCONTAMINATABLE (the user cannot nudge it even deliberately). [Earlier design
-    // released at menu-open for a user-driven Continue; that is obsolete now.]
+    // releasing ONLY once in-world (the user takes over) or on abort (phase DONE). Product
+    // autoload keeps blocking after the guarded SetState5 until the in-world oracle fires, so the
+    // world-stream interval cannot be contaminated by user input.
+    let product_world_stream_pending = product_autoload_enabled()
+        && OWN_STEPPER_CONFIRMED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS
+        && IN_WORLD_REACHED.load(Ordering::SeqCst) != IN_WORLD_REACHED_YES;
     own_stepper_enabled()
         && !own_stepper_passive_enabled()
         && IN_WORLD_REACHED.load(Ordering::SeqCst) != IN_WORLD_REACHED_YES
-        && OWN_STEPPER_PHASE.load(Ordering::SeqCst) != OWN_STEPPER_PHASE_DONE
+        && (OWN_STEPPER_PHASE.load(Ordering::SeqCst) != OWN_STEPPER_PHASE_DONE
+            || product_world_stream_pending)
 }
 
 /// Release the input block (DInput + XInput) once `block_input_enabled()` flips false mid-run.

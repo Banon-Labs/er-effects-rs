@@ -85,7 +85,7 @@ EOF
 cat > "$tmp_dir/er-effects-autoload.txt.example" <<'EOF'
 slot=0
 method=direct_menu_load
-require_title_bootstrap=true
+require_title_bootstrap=false
 EOF
 cat > "$tmp_dir/er-effects-splash-skip.txt.example" <<'EOF'
 # Copy this file to er-effects-splash-skip.txt next to eldenring.exe to enable
