@@ -104,6 +104,8 @@ run_gate runtime_experiment_rego opa check .auto/runtime_experiment_policy.rego 
 run_gate runtime_experiment_rego_tests opa test .auto/runtime_experiment_policy.rego .auto/runtime_experiment_policy_test.rego
 run_gate cupcake_validate cupcake validate --log-level error
 run_gate cupcake_policy_regressions python3 scripts/test-cupcake-policies.py
+run_gate save_slot_oracle_py_compile python3 -m py_compile scripts/save-slot-oracle.py
+run_gate save_slot_oracle_fixture python3 scripts/save-slot-oracle.py --save third_party/ER-Save-File-Readers/testdata/vagabond/save_slots/0.sl2 --slot 0 --output "$LOG_DIR/save-slot-oracle-fixture.json"
 run_gate smoke_preflight scripts/er-smoke-driver.sh preflight --no-build --no-install --no-launch --max-nudges 0
 run_gate static_re_export python3 .auto/static_re_export.py "$LOG_DIR/static-re-evidence.json"
 
@@ -190,6 +192,15 @@ metrics = {
     "artifact_bytes": 0,
     "false_positives": 0,
     "oracle_saved_map_c30_i32": -1,
+    "oracle_char_current_hp": -1,
+    "oracle_char_current_max_hp": -1,
+    "oracle_char_base_max_hp": -1,
+    "oracle_char_current_fp": -1,
+    "oracle_char_current_max_fp": -1,
+    "oracle_char_base_max_fp": -1,
+    "oracle_char_current_stamina": -1,
+    "oracle_char_current_max_stamina": -1,
+    "oracle_char_base_max_stamina": -1,
     "oracle_char_level": -1,
     "oracle_char_runes": -1,
     "oracle_char_rune_memory": -1,
@@ -1427,6 +1438,8 @@ for candidate in expected_identity_candidates:
     try:
         if candidate.exists():
             expected_identity = json.loads(candidate.read_text(encoding="utf-8", errors="replace"))
+            if isinstance(expected_identity.get("decoded_fields"), dict):
+                expected_identity = {**expected_identity, **expected_identity["decoded_fields"]}
             break
     except Exception:
         expected_identity = {}
@@ -1446,6 +1459,15 @@ if telemetry:
     metrics["game_save_requested"] = 1 if telemetry.get("game_save_requested") is True else 0
     metrics["oracle_saved_map_c30_i32"] = as_int(telemetry.get("oracle_saved_map_c30"), -1)
     for telemetry_key, metric_key in [
+        ("oracle_char_current_hp", "oracle_char_current_hp"),
+        ("oracle_char_current_max_hp", "oracle_char_current_max_hp"),
+        ("oracle_char_base_max_hp", "oracle_char_base_max_hp"),
+        ("oracle_char_current_fp", "oracle_char_current_fp"),
+        ("oracle_char_current_max_fp", "oracle_char_current_max_fp"),
+        ("oracle_char_base_max_fp", "oracle_char_base_max_fp"),
+        ("oracle_char_current_stamina", "oracle_char_current_stamina"),
+        ("oracle_char_current_max_stamina", "oracle_char_current_max_stamina"),
+        ("oracle_char_base_max_stamina", "oracle_char_base_max_stamina"),
         ("oracle_char_level", "oracle_char_level"),
         ("oracle_char_runes", "oracle_char_runes"),
         ("oracle_char_rune_memory", "oracle_char_rune_memory"),
@@ -1491,6 +1513,15 @@ if telemetry:
             metrics["oracle_save_identity_mismatches"] += 1
 
     compare_expected("saved_map_c30", metrics["oracle_saved_map_c30_i32"], lambda value: as_int(value, -1))
+    compare_expected("health", metrics["oracle_char_current_hp"], lambda value: as_int(value, -1))
+    compare_expected("max_health", metrics["oracle_char_current_max_hp"], lambda value: as_int(value, -1))
+    compare_expected("max_base_health", metrics["oracle_char_base_max_hp"], lambda value: as_int(value, -1))
+    compare_expected("fp", metrics["oracle_char_current_fp"], lambda value: as_int(value, -1))
+    compare_expected("max_fp", metrics["oracle_char_current_max_fp"], lambda value: as_int(value, -1))
+    compare_expected("base_max_fp", metrics["oracle_char_base_max_fp"], lambda value: as_int(value, -1))
+    compare_expected("stamina", metrics["oracle_char_current_stamina"], lambda value: as_int(value, -1))
+    compare_expected("max_stamina", metrics["oracle_char_current_max_stamina"], lambda value: as_int(value, -1))
+    compare_expected("base_max_stamina", metrics["oracle_char_base_max_stamina"], lambda value: as_int(value, -1))
     compare_expected("level", metrics["oracle_char_level"], lambda value: as_int(value, -1))
     compare_expected("runes", metrics["oracle_char_runes"], lambda value: as_int(value, -1))
     compare_expected("rune_memory", metrics["oracle_char_rune_memory"], lambda value: as_int(value, -1))
@@ -1615,6 +1646,15 @@ for key in [
     "artifact_bytes",
     "false_positives",
     "oracle_saved_map_c30_i32",
+    "oracle_char_current_hp",
+    "oracle_char_current_max_hp",
+    "oracle_char_base_max_hp",
+    "oracle_char_current_fp",
+    "oracle_char_current_max_fp",
+    "oracle_char_base_max_fp",
+    "oracle_char_current_stamina",
+    "oracle_char_current_max_stamina",
+    "oracle_char_base_max_stamina",
     "oracle_char_level",
     "oracle_char_runes",
     "oracle_char_rune_memory",

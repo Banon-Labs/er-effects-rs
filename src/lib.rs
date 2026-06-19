@@ -1023,6 +1023,24 @@ pub(crate) const PLAYER_GAME_DATA_SINGLETON_RVA: usize = 0x3d5df38;
 /// (compile-time accuracy guarantee, replacing the hand-decoded hex constants).
 pub(crate) const GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET: usize =
     core::mem::offset_of!(GameDataMan, main_player_game_data);
+pub(crate) const PGD_CURRENT_HP_10_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, current_hp);
+pub(crate) const PGD_CURRENT_MAX_HP_14_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, current_max_hp);
+pub(crate) const PGD_BASE_MAX_HP_18_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, base_max_hp);
+pub(crate) const PGD_CURRENT_FP_1C_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, current_fp);
+pub(crate) const PGD_CURRENT_MAX_FP_20_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, current_max_fp);
+pub(crate) const PGD_BASE_MAX_FP_24_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, base_max_fp);
+pub(crate) const PGD_CURRENT_STAMINA_2C_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, current_stamina);
+pub(crate) const PGD_CURRENT_MAX_STAMINA_30_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, current_max_stamina);
+pub(crate) const PGD_BASE_MAX_STAMINA_34_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, base_max_stamina);
 pub(crate) const PGD_LEVEL_68_OFFSET: usize = core::mem::offset_of!(PlayerGameData, level);
 pub(crate) const PGD_RUNE_COUNT_6C_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, rune_count);

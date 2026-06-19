@@ -329,6 +329,15 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         } else {
             i64::from(read_pgd_u32(crate::PGD_LEVEL_68_OFFSET))
         };
+        let current_hp = read_pgd_u32(crate::PGD_CURRENT_HP_10_OFFSET);
+        let current_max_hp = read_pgd_u32(crate::PGD_CURRENT_MAX_HP_14_OFFSET);
+        let base_max_hp = read_pgd_u32(crate::PGD_BASE_MAX_HP_18_OFFSET);
+        let current_fp = read_pgd_u32(crate::PGD_CURRENT_FP_1C_OFFSET);
+        let current_max_fp = read_pgd_u32(crate::PGD_CURRENT_MAX_FP_20_OFFSET);
+        let base_max_fp = read_pgd_u32(crate::PGD_BASE_MAX_FP_24_OFFSET);
+        let current_stamina = read_pgd_u32(crate::PGD_CURRENT_STAMINA_2C_OFFSET);
+        let current_max_stamina = read_pgd_u32(crate::PGD_CURRENT_MAX_STAMINA_30_OFFSET);
+        let base_max_stamina = read_pgd_u32(crate::PGD_BASE_MAX_STAMINA_34_OFFSET);
         let runes = read_pgd_u32(crate::PGD_RUNE_COUNT_6C_OFFSET);
         let rune_memory = read_pgd_u32(crate::PGD_RUNE_MEMORY_70_OFFSET);
         let chr_type = read_pgd_u32(crate::PGD_CHR_TYPE_98_OFFSET);
@@ -356,7 +365,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         }
         let stat_values = stats.map(|value| value.to_string()).join(", ");
         body.push_str(&format!(
-            "  \"oracle_char_level\": {level},\n  \"oracle_char_runes\": {runes},\n  \"oracle_char_rune_memory\": {rune_memory},\n  \"oracle_char_chr_type\": {chr_type},\n  \"oracle_char_name\": \"{}\",\n  \"oracle_char_name_len\": {name_len},\n  \"oracle_char_stats\": [{stat_values}],\n",
+            "  \"oracle_char_current_hp\": {current_hp},\n  \"oracle_char_current_max_hp\": {current_max_hp},\n  \"oracle_char_base_max_hp\": {base_max_hp},\n  \"oracle_char_current_fp\": {current_fp},\n  \"oracle_char_current_max_fp\": {current_max_fp},\n  \"oracle_char_base_max_fp\": {base_max_fp},\n  \"oracle_char_current_stamina\": {current_stamina},\n  \"oracle_char_current_max_stamina\": {current_max_stamina},\n  \"oracle_char_base_max_stamina\": {base_max_stamina},\n  \"oracle_char_level\": {level},\n  \"oracle_char_runes\": {runes},\n  \"oracle_char_rune_memory\": {rune_memory},\n  \"oracle_char_chr_type\": {chr_type},\n  \"oracle_char_name\": \"{}\",\n  \"oracle_char_name_len\": {name_len},\n  \"oracle_char_stats\": [{stat_values}],\n",
             json_escape(&name)
         ));
         // WORLD-LIVE oracle: CSNowLoadingHelper "now loading" latch = *(u8*)([base+0x3d60ec8]+0xED).
