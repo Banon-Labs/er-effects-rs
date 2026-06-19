@@ -3779,29 +3779,41 @@ unsafe fn own_stepper_stage2(
             dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET,
             OWN_STEPPER_SLOT_NONE,
         );
-        // Resolve the target slot: a configured slot=N (>=0), else (slot=-1 = "most-recent")
-        // the dialog's NATURAL highlight cursor -- so we never need to know which slot holds a
-        // character up front, and we never overwrite the user's most-recent highlight.
-        let target = if want_slot == OWN_STEPPER_SLOT_NONE {
+        // Resolve the expected save slot separately from the dialog cursor. A direct-built dialog
+        // can contain only the activated save row (runtime: bound=1 after activating slot 9), so
+        // its cursor is a row index, not necessarily the save-slot number. Keep expected_slot=9 for
+        // the mount guard while selecting cursor_target=0 in a single-row dialog.
+        let expected_slot = if want_slot == OWN_STEPPER_SLOT_NONE {
             cursor_now
         } else {
             want_slot
         };
-        if target < OWN_STEPPER_SLOT_ZERO || (bound > OWN_STEPPER_SLOT_ZERO && target >= bound) {
+        let cursor_target = if want_slot == OWN_STEPPER_SLOT_NONE {
+            cursor_now
+        } else if bound == OWN_STEPPER_CALL_INC as i32 {
+            OWN_STEPPER_SLOT_ZERO
+        } else {
+            want_slot
+        };
+        if expected_slot < OWN_STEPPER_SLOT_ZERO
+            || bound <= OWN_STEPPER_SLOT_ZERO
+            || cursor_target < OWN_STEPPER_SLOT_ZERO
+            || cursor_target >= bound
+        {
             append_autoload_debug(format_args!(
-                "own_stepper: STAGE2-ACTIVATE invalid slot want={want_slot} target={target} cursor={cursor_now} bound={bound} dialog=0x{dialog:x} -- STAGE2-NOWRITE-ABORT (no chars / wrong profile?)"
+                "own_stepper: STAGE2-ACTIVATE invalid slot want={want_slot} expected={expected_slot} cursor_target={cursor_target} cursor={cursor_now} bound={bound} dialog=0x{dialog:x} -- STAGE2-NOWRITE-ABORT (no chars / wrong profile?)"
             ));
             OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
             return;
         }
-        // For a fixed slot, write the cursor (UI state, not a save write); for most-recent,
-        // leave the dialog's own highlight untouched.
+        // For a fixed slot, write the dialog row cursor (UI state, not a save write); for
+        // most-recent, leave the dialog's own highlight untouched.
         if want_slot != OWN_STEPPER_SLOT_NONE {
             unsafe {
-                *((dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) as *mut i32) = want_slot;
+                *((dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) as *mut i32) = cursor_target;
             }
         }
-        OWN_STEPPER_EXPECTED_SLOT.store(target, Ordering::SeqCst);
+        OWN_STEPPER_EXPECTED_SLOT.store(expected_slot, Ordering::SeqCst);
         let lav =
             unsafe { safe_read_usize(dvt + DIALOG_LOAD_ACTIVATE_VTSLOT_A0_OFFSET) }.unwrap_or(null);
         if lav == null {
@@ -3829,7 +3841,7 @@ unsafe fn own_stepper_stage2(
         };
         OWN_STEPPER_SELECTOR_STEP.store(null, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "own_stepper: STAGE2-ACTIVATE want={want_slot} target={target} cursor_now={cursor_now} bound={bound} lav=0x{lav:x} ret={r} dialog=0x{dialog:x} ctx=0x{ctx:x} ctx_vt=0x{ctx_vt:x} io18=0x{io18:x} io20=0x{io20:x} -- selector self-pump DISABLED; MOUNT via direct submit+drain+deser"
+            "own_stepper: STAGE2-ACTIVATE want={want_slot} expected={expected_slot} cursor_target={cursor_target} cursor_now={cursor_now} bound={bound} lav=0x{lav:x} ret={r} dialog=0x{dialog:x} ctx=0x{ctx:x} ctx_vt=0x{ctx_vt:x} io18=0x{io18:x} io20=0x{io20:x} -- selector self-pump DISABLED; MOUNT via direct submit+drain+deser"
         ));
         // Reset the shared mount latches so the MOUNT phase's delegate (cold_char_mount_drive) and
         // the mount-done gate observe a clean slate for this drive.
@@ -3911,9 +3923,9 @@ unsafe fn own_stepper_stage2(
         const DESER_FIRED_OK_CONFIRM: usize = 2;
         let deser_ok = OWN_STEPPER_DESER_FIRED.load(Ordering::SeqCst) == DESER_FIRED_OK_CONFIRM;
         // CHAR-FINGERPRINT gate (MODEL B): SetState(5) ONLY when a REAL character is mounted in
-        // PlayerGameData (level>=1 AND a non-empty name) -- NOT on c30 (the ambiguous m10_01
-        // collision the wrong-map crash rode in on). This is the decisive save-write guard: a
-        // new-game default has level 0 / empty name, so it fail-closes (NO SetState5, NO write).
+        // PlayerGameData (level>=1). Runtime direct-build evidence showed the mounted target slot
+        // has real stats/level while the name field remains empty/unknown, so name is diagnostic
+        // only. The new-game default remains level 0, so level>=1 still fail-closes safely.
         let (fp_real, fp_level, fp_name_len) = unsafe { char_fingerprint(base) };
         let proceed = deser_ok
             && fp_real
@@ -3986,7 +3998,7 @@ unsafe fn char_fingerprint(base: usize) -> (bool, u32, usize) {
         name_len += IDX_STEP;
     }
     let _ = IDX_START;
-    let is_real = level >= MIN_REAL_LEVEL && name_len > NAME_LEN_NONE;
+    let is_real = level >= MIN_REAL_LEVEL;
     (is_real, level, name_len)
 }
 
