@@ -291,11 +291,17 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         body.push_str(&format!(
             "  \"oracle_load_in_progress_b80\": {b80},\n  \"oracle_saved_map_c30\": \"{c30:#x}\",\n"
         ));
-        // IDENTITY oracle: loaded char level (must == the chosen save's folder-name level). Uses the
-        // SAME path as dump_load_correctness: GameDataMan = [base + 0x3d5df38]; PlayerGameData =
-        // [GameDataMan + 0x08]; level = u32 @ pgd + 0x68. (The misleading "0x144588268" comment in the
-        // dump points at a different singleton -- the real one is the crate const below.)
+        // IDENTITY oracle: loaded character values that should match the chosen save slot.
+        // These mirror ER-Save-File-Readers' player_game_data models (health/fp today, broader
+        // slot attributes as that reference grows) while reading the live GameDataMan path used by
+        // dump_load_correctness: GameDataMan = [base + 0x3d5df38]; PlayerGameData = [GameDataMan+8].
         const LEVEL_READ_FAIL: i64 = -1;
+        const ZERO_U16: u16 = 0;
+        const ZERO_U32: u32 = 0;
+        const U16_STRIDE: usize = 2;
+        const U32_STRIDE: usize = 4;
+        const IDX_START: usize = 0;
+        const IDX_STEP: usize = 1;
         let gdm = unsafe {
             crate::experiments::safe_read_usize(base + crate::PLAYER_GAME_DATA_SINGLETON_RVA)
         }
@@ -310,13 +316,49 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             }
             .unwrap_or(NULL_PTR)
         };
+        let read_pgd_u32 = |offset: usize| -> u32 {
+            if pgd == NULL_PTR {
+                ZERO_U32
+            } else {
+                unsafe { crate::experiments::safe_read_usize(pgd + offset) }
+                    .map_or(ZERO_U32, |value| value as u32)
+            }
+        };
         let level = if pgd == NULL_PTR {
             LEVEL_READ_FAIL
         } else {
-            unsafe { crate::experiments::safe_read_usize(pgd + crate::PGD_LEVEL_68_OFFSET) }
-                .map_or(LEVEL_READ_FAIL, |v| (v as u32) as i64)
+            i64::from(read_pgd_u32(crate::PGD_LEVEL_68_OFFSET))
         };
-        body.push_str(&format!("  \"oracle_char_level\": {level},\n"));
+        let runes = read_pgd_u32(crate::PGD_RUNE_COUNT_6C_OFFSET);
+        let rune_memory = read_pgd_u32(crate::PGD_RUNE_MEMORY_70_OFFSET);
+        let chr_type = read_pgd_u32(crate::PGD_CHR_TYPE_98_OFFSET);
+        let mut name_units = [ZERO_U16; crate::PGD_NAME_LEN_U16];
+        let mut name_idx = IDX_START;
+        while pgd != NULL_PTR && name_idx < crate::PGD_NAME_LEN_U16 {
+            name_units[name_idx] = unsafe {
+                crate::experiments::safe_read_usize(
+                    pgd + crate::PGD_NAME_9C_OFFSET + name_idx * U16_STRIDE,
+                )
+            }
+            .map_or(ZERO_U16, |value| value as u16);
+            name_idx += IDX_STEP;
+        }
+        let mut name_len = IDX_START;
+        while name_len < crate::PGD_NAME_LEN_U16 && name_units[name_len] != ZERO_U16 {
+            name_len += IDX_STEP;
+        }
+        let name = String::from_utf16(&name_units[..name_len]).unwrap_or_default();
+        let mut stats = [ZERO_U32; crate::PGD_STAT_COUNT];
+        let mut stat_idx = IDX_START;
+        while stat_idx < crate::PGD_STAT_COUNT {
+            stats[stat_idx] = read_pgd_u32(crate::PGD_STAT_BASE_3C_OFFSET + stat_idx * U32_STRIDE);
+            stat_idx += IDX_STEP;
+        }
+        let stat_values = stats.map(|value| value.to_string()).join(", ");
+        body.push_str(&format!(
+            "  \"oracle_char_level\": {level},\n  \"oracle_char_runes\": {runes},\n  \"oracle_char_rune_memory\": {rune_memory},\n  \"oracle_char_chr_type\": {chr_type},\n  \"oracle_char_name\": \"{}\",\n  \"oracle_char_name_len\": {name_len},\n  \"oracle_char_stats\": [{stat_values}],\n",
+            json_escape(&name)
+        ));
         // WORLD-LIVE oracle: CSNowLoadingHelper "now loading" latch = *(u8*)([base+0x3d60ec8]+0xED).
         // 1 = loading screen ACTIVE; 0 = cleared / playable (latches when the MoveMapStep world-load
         // steps stop requesting the loading screen). This replaces the grounded check, which fires

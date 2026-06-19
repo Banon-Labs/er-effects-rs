@@ -137,6 +137,7 @@ fi
 export REPO_ROOT GATE_FAILED TEST_PASS BUILD_SECONDS ER_PROCESS_COUNT
 python3 - <<'PY'
 import json
+import math
 import os
 import re
 import subprocess
@@ -188,6 +189,17 @@ metrics = {
     "code_complexity_delta": 0,
     "artifact_bytes": 0,
     "false_positives": 0,
+    "oracle_saved_map_c30_i32": -1,
+    "oracle_char_level": -1,
+    "oracle_char_runes": -1,
+    "oracle_char_rune_memory": -1,
+    "oracle_char_chr_type": -1,
+    "oracle_char_name_len": -1,
+    "oracle_block_id": -1,
+    "oracle_save_identity_expected_fields": 0,
+    "oracle_save_identity_matches": 0,
+    "oracle_save_identity_mismatches": 0,
+    "oracle_position_distance_to_expected": -1,
 }
 
 src = (repo / "src/lib.rs").read_text(encoding="utf-8", errors="replace") if (repo / "src/lib.rs").exists() else ""
@@ -1391,6 +1403,34 @@ else:
     trace_confirms_state_transition = False
     native_transition_identified = False
 
+def as_int(value, default=-1):
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value, 0)
+        except ValueError:
+            return default
+    return default
+
+expected_identity = {}
+expected_identity_candidates = []
+expected_identity_env = os.environ.get("AUTO_EXPECTED_SLOT_ORACLE_JSON")
+if expected_identity_env:
+    expected_identity_candidates.append(Path(expected_identity_env))
+if artifact_dir:
+    expected_identity_candidates.append(artifact_dir / "expected-slot-oracle.json")
+expected_identity_candidates.append(repo / ".auto/save-slot-oracle-expected.json")
+for candidate in expected_identity_candidates:
+    try:
+        if candidate.exists():
+            expected_identity = json.loads(candidate.read_text(encoding="utf-8", errors="replace"))
+            break
+    except Exception:
+        expected_identity = {}
+
 if telemetry:
     metrics["player_available"] = 1 if telemetry.get("player_available") is True else 0
     for key, metric_name in [
@@ -1404,6 +1444,16 @@ if telemetry:
         elif isinstance(value, (int, float)):
             metrics[metric_name] = value
     metrics["game_save_requested"] = 1 if telemetry.get("game_save_requested") is True else 0
+    metrics["oracle_saved_map_c30_i32"] = as_int(telemetry.get("oracle_saved_map_c30"), -1)
+    for telemetry_key, metric_key in [
+        ("oracle_char_level", "oracle_char_level"),
+        ("oracle_char_runes", "oracle_char_runes"),
+        ("oracle_char_rune_memory", "oracle_char_rune_memory"),
+        ("oracle_char_chr_type", "oracle_char_chr_type"),
+        ("oracle_char_name_len", "oracle_char_name_len"),
+        ("oracle_block_id", "oracle_block_id"),
+    ]:
+        metrics[metric_key] = as_int(telemetry.get(telemetry_key), metrics[metric_key])
     slot = telemetry.get("autoload_slot")
     game_slot = telemetry.get("game_save_slot")
     if isinstance(slot, (int, float)) and isinstance(game_slot, (int, float)) and int(slot) == int(game_slot):
@@ -1428,6 +1478,52 @@ if telemetry:
     status = str(telemetry.get("autoload_last_status") or "")
     if "direct continue sequence requested" in status:
         queued_load_request = True
+
+    def compare_expected(expected_key, actual_value, normalize=lambda value: value):
+        if expected_key not in expected_identity:
+            return
+        metrics["oracle_save_identity_expected_fields"] += 1
+        expected_value = normalize(expected_identity.get(expected_key))
+        actual_normalized = normalize(actual_value)
+        if actual_normalized == expected_value:
+            metrics["oracle_save_identity_matches"] += 1
+        else:
+            metrics["oracle_save_identity_mismatches"] += 1
+
+    compare_expected("saved_map_c30", metrics["oracle_saved_map_c30_i32"], lambda value: as_int(value, -1))
+    compare_expected("level", metrics["oracle_char_level"], lambda value: as_int(value, -1))
+    compare_expected("runes", metrics["oracle_char_runes"], lambda value: as_int(value, -1))
+    compare_expected("rune_memory", metrics["oracle_char_rune_memory"], lambda value: as_int(value, -1))
+    compare_expected("chr_type", metrics["oracle_char_chr_type"], lambda value: as_int(value, -1))
+    compare_expected("name_len", metrics["oracle_char_name_len"], lambda value: as_int(value, -1))
+    compare_expected("name", telemetry.get("oracle_char_name"), lambda value: "" if value is None else str(value))
+    compare_expected("block_id", metrics["oracle_block_id"], lambda value: as_int(value, -1))
+    if "stats" in expected_identity:
+        metrics["oracle_save_identity_expected_fields"] += 1
+        expected_stats = expected_identity.get("stats")
+        actual_stats = telemetry.get("oracle_char_stats")
+        if isinstance(expected_stats, list) and isinstance(actual_stats, list) and [as_int(v, -1) for v in actual_stats] == [as_int(v, -1) for v in expected_stats]:
+            metrics["oracle_save_identity_matches"] += 1
+        else:
+            metrics["oracle_save_identity_mismatches"] += 1
+    for expected_key, telemetry_key in [("havok_pos", "oracle_havok_pos"), ("block_pos", "oracle_block_pos")]:
+        expected_vec = expected_identity.get(expected_key)
+        actual_vec = telemetry.get(telemetry_key)
+        if isinstance(expected_vec, list) and isinstance(actual_vec, list) and len(expected_vec) == len(actual_vec) == 3:
+            try:
+                distance = math.sqrt(sum((float(a) - float(e)) ** 2 for a, e in zip(actual_vec, expected_vec)))
+                if metrics["oracle_position_distance_to_expected"] < 0 or distance < metrics["oracle_position_distance_to_expected"]:
+                    metrics["oracle_position_distance_to_expected"] = distance
+                metrics["oracle_save_identity_expected_fields"] += 1
+                if distance <= float(expected_identity.get("position_tolerance", 1.0)):
+                    metrics["oracle_save_identity_matches"] += 1
+                else:
+                    metrics["oracle_save_identity_mismatches"] += 1
+            except Exception:
+                pass
+    if metrics["oracle_save_identity_expected_fields"] and metrics["oracle_save_identity_mismatches"]:
+        metrics["selected_slot_loaded"] = 0
+        metrics["autoload_success"] = 0
 
 if runtime_driver_rc not in (None, 0) and metrics["autoload_success"]:
     metrics["false_positives"] = 1
@@ -1518,6 +1614,17 @@ for key in [
     "code_complexity_delta",
     "artifact_bytes",
     "false_positives",
+    "oracle_saved_map_c30_i32",
+    "oracle_char_level",
+    "oracle_char_runes",
+    "oracle_char_rune_memory",
+    "oracle_char_chr_type",
+    "oracle_char_name_len",
+    "oracle_block_id",
+    "oracle_save_identity_expected_fields",
+    "oracle_save_identity_matches",
+    "oracle_save_identity_mismatches",
+    "oracle_position_distance_to_expected",
 ]:
     value = metrics[key]
     if isinstance(value, float):
