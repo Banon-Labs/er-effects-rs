@@ -11,6 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO_ROOT / "src" / "experiments.rs"
 LIB = REPO_ROOT / "src" / "lib.rs"
 STAGE_SCRIPT = REPO_ROOT / "scripts" / "stage-autoload-release.sh"
+RUNTIME_PROBE = REPO_ROOT / ".auto" / "runtime_probe.sh"
 
 REQUIRED_PRODUCT_GATES = {
     "own_stepper_enabled",
@@ -56,6 +57,7 @@ def main() -> int:
     experiments = read(EXPERIMENTS)
     lib = read(LIB)
     stage = read(STAGE_SCRIPT)
+    runtime_probe = read(RUNTIME_PROBE)
 
     require(
         "arm_product_autoload_from_request(&initial_state.autoload);" in lib,
@@ -99,6 +101,27 @@ def main() -> int:
     require(
         re.search(r"method=direct_menu_load", stage) is not None,
         "release staging autoload example must use direct_menu_load",
+        failures,
+    )
+
+    require(
+        "RUNTIME_LAZYLOAD_CHAINLOAD_DLL" in runtime_probe,
+        "runtime probe must honor the LazyLoader CHAINLOAD payload mode used by the proven baseline",
+        failures,
+    )
+    require(
+        "dll=er_effects_rs.dll" in runtime_probe,
+        "runtime probe CHAINLOAD mode must write lazyLoad.ini with er_effects_rs.dll as the chainload DLL",
+        failures,
+    )
+    require(
+        '"$GAME_DIR/er_effects_rs.dll"' in runtime_probe,
+        "runtime probe CHAINLOAD mode must copy er_effects_rs.dll beside LazyLoader, not only into dllMods",
+        failures,
+    )
+    require(
+        'rm -f "$GAME_DIR/dllMods/er_effects_rs.dll"' in runtime_probe,
+        "runtime probe CHAINLOAD mode must remove the stale LOADORDER er_effects_rs.dll payload",
         failures,
     )
 

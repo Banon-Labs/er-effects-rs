@@ -1038,8 +1038,29 @@ setup_runtime_payload() {
     else
       printf '[runtime_probe] payload: LazyLoader plus repo DLL (non repo-only compatibility mode)\n'
       cp -f "$lazyloader_dir/dinput8.dll" "$GAME_DIR/dinput8.dll"
-      cp -f "$lazyloader_dir/lazyLoad.ini" "$GAME_DIR/lazyLoad.ini"
-      python3 - "$GAME_DIR/lazyLoad.ini" <<'PY'
+      mkdir -p "$GAME_DIR/dllMods"
+      if [[ "${RUNTIME_LAZYLOAD_CHAINLOAD_DLL:-0}" == "1" ]]; then
+        printf '[runtime_probe] payload: LazyLoader CHAINLOAD er_effects_rs.dll as the properly-loaded dinput8-style mod\n'
+        cp -f "$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll" "$GAME_DIR/er_effects_rs.dll"
+        rm -f "$GAME_DIR/dllMods/er_effects_rs.dll"
+        cat > "$GAME_DIR/lazyLoad.ini" <<'EOF'
+; LazyLoader by Church Guard
+; Installed by er-effects-rs runtime probe.
+
+[LAZYLOAD]
+dllModFolderName=dllMods
+
+[LOADORDER]
+
+[CHAINLOAD]
+dll=er_effects_rs.dll
+EOF
+        cp -f "$GAME_DIR/lazyLoad.ini" "$ARTIFACT_DIR/lazyLoad.ini"
+        sha256sum "$GAME_DIR/dinput8.dll" > "$ARTIFACT_DIR/lazyloader-dinput8.sha256"
+        sha256sum "$GAME_DIR/er_effects_rs.dll" > "$ARTIFACT_DIR/chainload-er_effects_rs.sha256"
+      else
+        cp -f "$lazyloader_dir/lazyLoad.ini" "$GAME_DIR/lazyLoad.ini"
+        python3 - "$GAME_DIR/lazyLoad.ini" <<'PY'
 import sys
 from pathlib import Path
 path = Path(sys.argv[1])
@@ -1048,8 +1069,8 @@ if "0=er_effects_rs.dll" not in text:
     text = text.replace("[LOADORDER]\n", "[LOADORDER]\n0=er_effects_rs.dll\n", 1)
 path.write_text(text, encoding="utf-8")
 PY
-      mkdir -p "$GAME_DIR/dllMods"
-      cp -f "$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll" "$GAME_DIR/dllMods/er_effects_rs.dll"
+        cp -f "$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll" "$GAME_DIR/dllMods/er_effects_rs.dll"
+      fi
     fi
     # Offline launcher (launch_modded_eldenring): finds eldenring.exe in its CWD and
     # boots it offline with SteamAppId set, so DInput/Steam init properly (avoids the
