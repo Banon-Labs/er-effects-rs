@@ -3154,14 +3154,20 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             pass_through(false);
             return;
         }
-        let bare = unsafe { diagnostic_menu_walk(owner, base, "bare", true) };
-        let bare_tree = unsafe {
-            diagnostic_job_tree_walk(
-                owner,
-                base,
-                TITLE_OWNER_MENU_HOLDER_E0_OFFSET,
-                "bare-tree",
-                true,
+        let (bare, bare_tree) = if live_dialog_enabled() {
+            (None, None)
+        } else {
+            (
+                unsafe { diagnostic_menu_walk(owner, base, "bare", true) },
+                unsafe {
+                    diagnostic_job_tree_walk(
+                        owner,
+                        base,
+                        TITLE_OWNER_MENU_HOLDER_E0_OFFSET,
+                        "bare-tree",
+                        true,
+                    )
+                },
             )
         };
         // STAGE 1c: build the FULL main menu by replicating the engine's OWN press path.
@@ -3301,6 +3307,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         const MENU_ITEM_LOADGAME_FUNCTOR_VTABLE_RVA: usize = 0x02ac3ea8;
         if !own_stepper_passive_enabled()
             && !input_probe_enabled()
+            && !live_dialog_enabled()
             && MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS
             && waits >= STAGE1D_SETTLE_WAITS
             && (waits - STAGE1D_SETTLE_WAITS) % STAGE1D_RETRY_INTERVAL
