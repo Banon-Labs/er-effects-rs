@@ -2216,7 +2216,9 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         install_crash_logger();
     }
 
-    let state = Arc::new(Mutex::new(EffectsState::default()));
+    let initial_state = EffectsState::default();
+    arm_product_autoload_from_request(&initial_state.autoload);
+    let state = Arc::new(Mutex::new(initial_state));
 
     // Splash-skip: apply the clean BeginLogo branch-flip as early as possible,
     // from a thread, so it lands before the title state machine runs state 2.

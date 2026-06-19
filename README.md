@@ -41,6 +41,27 @@ Run the full quality gate (lints, formatting, windows-target check) with:
 bash scripts/check.sh
 ```
 
+## Zero-input autoload release staging
+
+Stage the supported release payload with:
+
+```bash
+scripts/stage-autoload-release.sh --output target/autoload-release
+```
+
+The staged LazyLoader config intentionally uses `[CHAINLOAD] dll=er_effects_rs.dll`
+so er-effects-rs is properly loaded as the dinput8-style mod. Put other
+LazyLoader mods in `dllMods/` and list them under `[LOADORDER]`; do not lazy-load
+er-effects-rs itself through `[LOADORDER]`. Configure the requested slot by
+copying `er-effects-autoload.txt.example` to `er-effects-autoload.txt` next to
+`eldenring.exe` and editing `slot=N`.
+
+For splash skipping, use the built-in current-version patch by copying
+`er-effects-splash-skip.txt.example` to `er-effects-splash-skip.txt` next to
+`eldenring.exe`. Do not ship the old external `er_skip_splash_screens.dll` with
+this release unless it has been rebuilt for the current executable; the local old
+copy targets the wrong opcode and exits before the title.
+
 ## Param tooling (Smithbox bridge)
 
 `er-soulsformats` and the `er-param-inspect` CLI read `regulation.bin` params by

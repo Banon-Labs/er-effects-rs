@@ -50,6 +50,29 @@ use crate::*;
 #[allow(unused_imports)]
 use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 
+static PRODUCT_AUTOLOAD_ARMED: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
+    if request.method() != SaveLoadMethod::DirectMenuLoad {
+        return;
+    }
+
+    let Some(slot) = request.slot() else {
+        return;
+    };
+
+    if slot < OWN_STEPPER_SLOT_ZERO {
+        return;
+    }
+
+    OWN_STEPPER_SLOT.store(slot, Ordering::SeqCst);
+    PRODUCT_AUTOLOAD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+}
+
+pub(crate) fn product_autoload_enabled() -> bool {
+    PRODUCT_AUTOLOAD_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
+}
+
 pub(crate) fn game_module_base() -> Result<usize, String> {
     let module = unsafe { GetModuleHandleA(PCSTR::null()) }
         .map_err(|error| format!("failed to resolve game module: {error}"))?;
@@ -372,7 +395,8 @@ pub(crate) fn observe_enabled() -> bool {
 }
 
 pub(crate) fn own_stepper_enabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_OWN_STEPPER").as_deref(), Ok("1"))
+    product_autoload_enabled()
+        || matches!(std::env::var("ER_EFFECTS_OWN_STEPPER").as_deref(), Ok("1"))
         || game_directory_path()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("er-effects-own-stepper.txt")
@@ -424,26 +448,30 @@ pub(crate) fn native_fullread_enabled() -> bool {
 /// chain stops at the step-6 GUARD (deserialize + guard + log only): save-safe, NO continue_confirm,
 /// NO SetState5. This lets a first test run VERIFY-ONLY (default) before any save write.
 pub(crate) fn native_fullread_commit_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_FULLREAD_COMMIT").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-fullread-commit.txt")
-        .exists()
+    product_autoload_enabled()
+        || matches!(
+            std::env::var("ER_EFFECTS_FULLREAD_COMMIT").as_deref(),
+            Ok("1")
+        )
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-fullread-commit.txt")
+            .exists()
 }
 
 /// OPT-IN post-world native TitleTopDialog cleanup. Static trace of 0x1409a8890 shows this is the
 /// real dialog cleanup body: it clears active-screen renderers and releases dialog-owned resources.
 /// It fires only after PlayerIns exists, so it cannot participate in save/load success.
 pub(crate) fn cleanup_title_dialog_after_world_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_CLEANUP_TITLE_DIALOG_AFTER_WORLD").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-cleanup-title-dialog-after-world.txt")
-        .exists()
+    product_autoload_enabled()
+        || matches!(
+            std::env::var("ER_EFFECTS_CLEANUP_TITLE_DIALOG_AFTER_WORLD").as_deref(),
+            Ok("1")
+        )
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-cleanup-title-dialog-after-world.txt")
+            .exists()
 }
 
 pub(crate) unsafe fn cleanup_title_dialog_after_world_once(module_base: usize, frame: u64) {
@@ -504,13 +532,15 @@ pub(crate) unsafe fn cleanup_title_dialog_after_world_once(module_base: usize, f
 /// NOT present in the prior working cold-mount run; gating it lets us isolate hook-induced
 /// mount perturbation (see bd probe11 caveat).
 pub(crate) fn menu_window_latch_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_MENU_WINDOW_LATCH").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-menu-window-latch.txt")
-        .exists()
+    product_autoload_enabled()
+        || matches!(
+            std::env::var("ER_EFFECTS_MENU_WINDOW_LATCH").as_deref(),
+            Ok("1")
+        )
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-menu-window-latch.txt")
+            .exists()
 }
 
 /// OPT-IN gate for the c30-writer diagnostic hook (hot deserialize-internal 0x67bd70).
@@ -683,7 +713,8 @@ pub(crate) fn direct_build_enabled() -> bool {
 /// fires load_activate (vt+0xa0) + the guarded continue_confirm -> SetState(5). The forge path
 /// (direct_build) is untouched; this is a deliberate, separately-gated experiment.
 pub(crate) fn live_dialog_enabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_LIVE_DIALOG").as_deref(), Ok("1"))
+    product_autoload_enabled()
+        || matches!(std::env::var("ER_EFFECTS_LIVE_DIALOG").as_deref(), Ok("1"))
         || game_directory_path()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("er-effects-live-dialog.txt")
