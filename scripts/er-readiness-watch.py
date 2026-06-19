@@ -321,6 +321,9 @@ def classify_snapshot(
             return ReadinessResult(True, READY_REASON, pid, bootstrap, telemetry, windows, polls)
         if telemetry.get("autoload_slot") is None:
             return ReadinessResult(False, AUTOLOAD_SLOT_MISSING, pid, bootstrap, telemetry, windows, polls)
+        player_seen = telemetry.get("player_available") is True or telemetry.get("player_seen") is True
+        if target == TARGET_PLAYER_LOAD and player_seen:
+            return ReadinessResult(True, PLAYER_AVAILABLE, pid, bootstrap, telemetry, windows, polls)
         status = str(telemetry.get("autoload_last_status") or "")
         if (
             status.startswith("direct continue sequence requested")
@@ -334,7 +337,7 @@ def classify_snapshot(
         ):
             if target == TARGET_AUTOLOAD_REQUEST:
                 return ReadinessResult(True, AUTOLOAD_REQUESTED, pid, bootstrap, telemetry, windows, polls)
-            if telemetry.get("player_available") is True:
+            if player_seen:
                 return ReadinessResult(True, PLAYER_AVAILABLE, pid, bootstrap, telemetry, windows, polls)
             game_task_ticks = int(telemetry.get("game_task_ticks") or 0)
             if target == TARGET_REQUEST_CONSUMPTION and telemetry.get("title_bootstrap_seen") is True:

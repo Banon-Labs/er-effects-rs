@@ -1445,7 +1445,8 @@ for candidate in expected_identity_candidates:
         expected_identity = {}
 
 if telemetry:
-    metrics["player_available"] = 1 if telemetry.get("player_available") is True else 0
+    player_seen = telemetry.get("player_available") is True or telemetry.get("player_seen") is True
+    metrics["player_available"] = 1 if player_seen else 0
     for key, metric_name in [
         ("game_save_state", "game_save_state"),
         ("game_save_slot", "game_save_slot"),

@@ -122,10 +122,13 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         );
     }
 
+    let player_seen =
+        player_available || IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
     let path = telemetry_path();
     let mut body = String::new();
     body.push_str("{\n");
     body.push_str(&format!("  \"player_available\": {player_available},\n"));
+    body.push_str(&format!("  \"player_seen\": {player_seen},\n"));
     body.push_str(&format!(
         "  \"current_animation_id\": {},\n",
         state
