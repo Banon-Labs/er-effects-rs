@@ -80,6 +80,12 @@ def main() -> int:
         body = rust_fn_body(experiments, gate)
         require("product_autoload_enabled()" in body, f"{gate} must be enabled by product_autoload_enabled()", failures)
 
+    require(
+        re.search(r"const\s+LIVE_DIALOG_ACTIVATE_SETTLE_WAITS:\s+u64\s+=\s+60;", experiments) is not None,
+        "product autoload live-dialog activation settle must stay at the proven 60-frame threshold",
+        failures,
+    )
+
     online_body = rust_fn_body(experiments, "online_disable_enabled")
     input_body = rust_fn_body(experiments, "block_input_enabled")
     require("own_stepper_enabled()" in online_body, "product autoload must inherit offline mode via own_stepper_enabled()", failures)
