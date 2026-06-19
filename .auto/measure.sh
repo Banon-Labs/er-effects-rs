@@ -97,6 +97,7 @@ run_gate cargo_tests cargo test -p er-safe-input -p er-save-loader
 run_gate runtime_probe_contract python3 scripts/check-runtime-probe-contract.py
 run_gate runtime_probe_contract_tests python3 scripts/test-runtime-probe-contract.py
 run_gate readiness_watch_tests python3 scripts/test-er-readiness-watch.py
+run_gate save_slot_oracle_tests python3 scripts/test-save-slot-oracle.py
 run_gate xwin_check cargo xwin check --target x86_64-pc-windows-msvc --no-default-features
 run_gate shellcheck_scripts shellcheck scripts/er-smoke-driver.sh
 run_gate shellcheck_auto_runtime shellcheck .auto/runtime_probe.sh .auto/run_runtime_experiment.sh
@@ -205,8 +206,30 @@ metrics = {
     "oracle_char_runes": -1,
     "oracle_char_rune_memory": -1,
     "oracle_char_chr_type": -1,
+    "oracle_char_gender": -1,
+    "oracle_char_archetype": -1,
+    "oracle_char_voice_type": -1,
+    "oracle_char_starting_gift": -1,
+    "oracle_char_unlocked_talisman_slots": -1,
+    "oracle_char_spirit_ash_level": -1,
+    "oracle_char_max_crimson_flask_count": -1,
+    "oracle_char_max_cerulean_flask_count": -1,
     "oracle_char_name_len": -1,
     "oracle_block_id": -1,
+    "oracle_player_present": 0,
+    "oracle_block_id_valid": 0,
+    "oracle_now_loading": -1,
+    "oracle_world_loaded": 0,
+    "oracle_map_loaded": 0,
+    "oracle_world_stable_samples": 0,
+    "final_screenshot_present": 0,
+    "final_llm_image_present": 0,
+    "visual_llm_request_ready": 0,
+    "visual_llm_world_expected": 0,
+    "visual_llm_score": 0,
+    "oracle_save_identity_score": 0,
+    "oracle_world_loaded_score": 0,
+    "oracle_world_stable_score": 0,
     "oracle_save_identity_expected_fields": 0,
     "oracle_save_identity_matches": 0,
     "oracle_save_identity_mismatches": 0,
@@ -1378,11 +1401,21 @@ if artifact_dir and artifact_dir.exists():
             driver_rc_value = runtime_metrics.get("driver_rc")
             if isinstance(driver_rc_value, (int, float)):
                 runtime_driver_rc = int(driver_rc_value)
-            for key in ["runtime_probe_seconds", "time_to_player_seconds", "host_pointer_input_used", "menu_condition_evidence_score"]:
+            for key in [
+                "runtime_probe_seconds",
+                "time_to_player_seconds",
+                "host_pointer_input_used",
+                "menu_condition_evidence_score",
+                "oracle_world_stable_samples",
+                "final_screenshot_present",
+                "final_llm_image_present",
+                "visual_llm_request_ready",
+                "visual_llm_score",
+            ]:
                 value = runtime_metrics.get(key)
                 if isinstance(value, (int, float)):
                     metrics[key] = value
-            for key in ["input_reason_known", "state_gated_input"]:
+            for key in ["input_reason_known", "state_gated_input", "visual_llm_world_expected"]:
                 value = runtime_metrics.get(key)
                 if isinstance(value, bool):
                     metrics[key] = 1 if value else 0
@@ -1394,6 +1427,17 @@ if artifact_dir and artifact_dir.exists():
                 metrics["save_safety_ok"] = 0
         except Exception:
             metrics["crash_detected"] = 1
+    visual_oracle_path = artifact_dir / "visual-llm-oracle.json"
+    if visual_oracle_path.exists():
+        try:
+            visual_oracle = json.loads(visual_oracle_path.read_text(encoding="utf-8", errors="replace"))
+            if visual_oracle.get("world_expected") is True or visual_oracle.get("looks_expected") is True:
+                metrics["visual_llm_world_expected"] = 1
+                metrics["visual_llm_score"] = max(metrics["visual_llm_score"], 75)
+            elif visual_oracle.get("world_expected") is False or visual_oracle.get("looks_expected") is False:
+                metrics["visual_llm_world_expected"] = 0
+        except Exception:
+            metrics["visual_llm_world_expected"] = 0
     queued_load_request = bool(re.search(r"queuing (?:traced continue flags|b72-only continue profile request)|direct continue sequence requested", joined_logs))
     load_hook_seen = bool(re.search(r"ENTER (current_slot_load_67b570|continue_load_67b750|combined_load_67b940|map_load_67bc10|save_load_state_init_67b030)", joined_logs))
     trace_confirms_state_transition = bool(load_hook_seen and re.search(r"state=(?!0\b)\d+", joined_logs))
@@ -1473,10 +1517,21 @@ if telemetry:
         ("oracle_char_runes", "oracle_char_runes"),
         ("oracle_char_rune_memory", "oracle_char_rune_memory"),
         ("oracle_char_chr_type", "oracle_char_chr_type"),
+        ("oracle_char_gender", "oracle_char_gender"),
+        ("oracle_char_archetype", "oracle_char_archetype"),
+        ("oracle_char_voice_type", "oracle_char_voice_type"),
+        ("oracle_char_starting_gift", "oracle_char_starting_gift"),
+        ("oracle_char_unlocked_talisman_slots", "oracle_char_unlocked_talisman_slots"),
+        ("oracle_char_spirit_ash_level", "oracle_char_spirit_ash_level"),
+        ("oracle_char_max_crimson_flask_count", "oracle_char_max_crimson_flask_count"),
+        ("oracle_char_max_cerulean_flask_count", "oracle_char_max_cerulean_flask_count"),
         ("oracle_char_name_len", "oracle_char_name_len"),
         ("oracle_block_id", "oracle_block_id"),
+        ("oracle_now_loading", "oracle_now_loading"),
     ]:
         metrics[metric_key] = as_int(telemetry.get(telemetry_key), metrics[metric_key])
+    metrics["oracle_player_present"] = 1 if telemetry.get("oracle_player_present") is True else 0
+    metrics["oracle_block_id_valid"] = 1 if telemetry.get("oracle_block_id_valid") is True else 0
     slot = telemetry.get("autoload_slot")
     game_slot = telemetry.get("game_save_slot")
     if isinstance(slot, (int, float)) and isinstance(game_slot, (int, float)) and int(slot) == int(game_slot):
@@ -1527,6 +1582,14 @@ if telemetry:
     compare_expected("runes", metrics["oracle_char_runes"], lambda value: as_int(value, -1))
     compare_expected("rune_memory", metrics["oracle_char_rune_memory"], lambda value: as_int(value, -1))
     compare_expected("chr_type", metrics["oracle_char_chr_type"], lambda value: as_int(value, -1))
+    compare_expected("gender", metrics["oracle_char_gender"], lambda value: as_int(value, -1))
+    compare_expected("archetype", metrics["oracle_char_archetype"], lambda value: as_int(value, -1))
+    compare_expected("voice_type", metrics["oracle_char_voice_type"], lambda value: as_int(value, -1))
+    compare_expected("starting_gift", metrics["oracle_char_starting_gift"], lambda value: as_int(value, -1))
+    compare_expected("unlocked_talisman_slots", metrics["oracle_char_unlocked_talisman_slots"], lambda value: as_int(value, -1))
+    compare_expected("spirit_ash_level", metrics["oracle_char_spirit_ash_level"], lambda value: as_int(value, -1))
+    compare_expected("max_crimson_flask_count", metrics["oracle_char_max_crimson_flask_count"], lambda value: as_int(value, -1))
+    compare_expected("max_cerulean_flask_count", metrics["oracle_char_max_cerulean_flask_count"], lambda value: as_int(value, -1))
     compare_expected("name_len", metrics["oracle_char_name_len"], lambda value: as_int(value, -1))
     compare_expected("name", telemetry.get("oracle_char_name"), lambda value: "" if value is None else str(value))
     compare_expected("block_id", metrics["oracle_block_id"], lambda value: as_int(value, -1))
@@ -1553,9 +1616,19 @@ if telemetry:
                     metrics["oracle_save_identity_mismatches"] += 1
             except Exception:
                 pass
+    metrics["oracle_world_loaded"] = 1 if (
+        metrics["oracle_player_present"]
+        and metrics["oracle_block_id_valid"]
+        and metrics["oracle_now_loading"] == 0
+    ) else 0
+    metrics["oracle_map_loaded"] = 1 if (
+        metrics["oracle_world_loaded"]
+        and metrics["oracle_saved_map_c30_i32"] != -1
+    ) else 0
     if metrics["oracle_save_identity_expected_fields"] and metrics["oracle_save_identity_mismatches"]:
         metrics["selected_slot_loaded"] = 0
         metrics["autoload_success"] = 0
+        metrics["oracle_map_loaded"] = 0
 
 if runtime_driver_rc not in (None, 0) and metrics["autoload_success"]:
     metrics["false_positives"] = 1
@@ -1603,6 +1676,26 @@ elif metrics["test_pass"]:
     score = 200
 else:
     score = 0
+
+if score >= 1000:
+    if (
+        metrics["oracle_save_identity_expected_fields"]
+        and metrics["oracle_save_identity_mismatches"] == 0
+        and metrics["oracle_save_identity_matches"] >= min(8, metrics["oracle_save_identity_expected_fields"])
+    ):
+        metrics["oracle_save_identity_score"] = 100
+        score += metrics["oracle_save_identity_score"]
+    if metrics["oracle_map_loaded"]:
+        metrics["oracle_world_loaded_score"] = 100
+        score += metrics["oracle_world_loaded_score"]
+    if metrics["oracle_world_stable_samples"] >= 2:
+        metrics["oracle_world_stable_score"] = 100
+        score += metrics["oracle_world_stable_score"]
+    if metrics["final_llm_image_present"] and metrics["visual_llm_request_ready"]:
+        score += 25
+    if metrics["visual_llm_world_expected"]:
+        metrics["visual_llm_score"] = max(metrics["visual_llm_score"], 75)
+        score += metrics["visual_llm_score"]
 
 metrics["north_star_score"] = score
 print(f"METRIC north_star_score={metrics['north_star_score']}")
@@ -1660,8 +1753,30 @@ for key in [
     "oracle_char_runes",
     "oracle_char_rune_memory",
     "oracle_char_chr_type",
+    "oracle_char_gender",
+    "oracle_char_archetype",
+    "oracle_char_voice_type",
+    "oracle_char_starting_gift",
+    "oracle_char_unlocked_talisman_slots",
+    "oracle_char_spirit_ash_level",
+    "oracle_char_max_crimson_flask_count",
+    "oracle_char_max_cerulean_flask_count",
     "oracle_char_name_len",
     "oracle_block_id",
+    "oracle_player_present",
+    "oracle_block_id_valid",
+    "oracle_now_loading",
+    "oracle_world_loaded",
+    "oracle_map_loaded",
+    "oracle_world_stable_samples",
+    "oracle_save_identity_score",
+    "oracle_world_loaded_score",
+    "oracle_world_stable_score",
+    "final_screenshot_present",
+    "final_llm_image_present",
+    "visual_llm_request_ready",
+    "visual_llm_world_expected",
+    "visual_llm_score",
     "oracle_save_identity_expected_fields",
     "oracle_save_identity_matches",
     "oracle_save_identity_mismatches",

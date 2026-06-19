@@ -233,6 +233,31 @@ def main() -> int:
     assert not player_load_budget.ready
     assert player_load_budget.reason == watcher.PLAYER_LOAD_TICK_BUDGET_REACHED
 
+    world_loaded_telemetry = {
+        "game_man_available": True,
+        "player_seen": True,
+        "oracle_player_present": True,
+        "oracle_block_id_valid": True,
+        "oracle_now_loading": 0,
+        "oracle_saved_map_c30": "0xa010000",
+        "game_task_ticks": TEST_POLLS,
+    }
+    assert watcher.telemetry_world_loaded(world_loaded_telemetry)
+    assert watcher.telemetry_world_tick(world_loaded_telemetry, 0) == TEST_POLLS
+    world_loaded_telemetry["oracle_now_loading"] = 1
+    assert not watcher.telemetry_world_loaded(world_loaded_telemetry)
+    stable = watcher.ReadinessResult(
+        True,
+        watcher.WORLD_STABLE,
+        TEST_PID,
+        {"stage": "telemetry_write"},
+        world_loaded_telemetry,
+        [TEST_WINDOW],
+        TEST_POLLS,
+        world_stable_samples=3,
+    )
+    assert stable.to_json()["world_stable_samples"] == 3
+
     no_telemetry = watcher.classify_snapshot(
         pid=TEST_PID,
         process_running=True,

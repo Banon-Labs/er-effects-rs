@@ -35,8 +35,10 @@ TARGET_MODULE_BASE = "module-base"
 TARGET_AUTOLOAD_REQUEST = "autoload-request"
 TARGET_REQUEST_CONSUMPTION = "request-consumption"
 TARGET_PLAYER_LOAD = "player-load"
+TARGET_WORLD_STABLE = "world-stable"
 READY_REASON = "game_man_telemetry_ready"
 MODULE_BASE_READY = "runtime_module_base_observed"
+WORLD_STABLE = "world_stable"
 RUNTIME_EXE_NAME = "eldenring.exe"
 WINDOW_WITHOUT_BOOTSTRAP = "window_without_bootstrap_marker"
 WINDOW_WITHOUT_TASK = "window_without_game_task_ready"
@@ -81,6 +83,7 @@ class ReadinessResult:
     timeout_seconds: float | None = None
     runtime_module_base: str | None = None
     runtime_module_mappings: list[dict[str, Any]] | None = None
+    world_stable_samples: int = 0
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -94,6 +97,7 @@ class ReadinessResult:
             "timeout_seconds": self.timeout_seconds,
             "runtime_module_base": self.runtime_module_base,
             "runtime_module_mappings": self.runtime_module_mappings or [],
+            "world_stable_samples": self.world_stable_samples,
         }
 
 
@@ -227,6 +231,7 @@ def with_runtime_module_info(result: ReadinessResult) -> ReadinessResult:
         result.timeout_seconds,
         base,
         mappings,
+        result.world_stable_samples,
     )
 
 
@@ -266,6 +271,36 @@ def client_is_game_window(client: dict[str, Any], window_class: str) -> bool:
     title = str(client.get("title") or "")
     klass = str(client.get("class") or "")
     return klass == window_class or title.lower().startswith("elden ring")
+
+
+def as_int(value: Any, default: int = -1) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value, 0)
+        except ValueError:
+            return default
+    return default
+
+
+def telemetry_world_loaded(telemetry: dict[str, Any] | None) -> bool:
+    if telemetry is None or telemetry.get("game_man_available") is not True:
+        return False
+    player_seen = telemetry.get("player_available") is True or telemetry.get("player_seen") is True
+    return bool(
+        player_seen
+        and telemetry.get("oracle_player_present") is True
+        and telemetry.get("oracle_block_id_valid") is True
+        and as_int(telemetry.get("oracle_now_loading"), -1) == 0
+        and as_int(telemetry.get("oracle_saved_map_c30"), -1) != -1
+    )
+
+
+def telemetry_world_tick(telemetry: dict[str, Any], fallback: int) -> int:
+    return as_int(telemetry.get("game_task_ticks"), fallback)
 
 
 def hypr_windows(window_class: str) -> list[dict[str, Any]]:
@@ -411,6 +446,8 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
         return ReadinessResult(False, reason, None, None, None, [], spawn_polls, float(args.max_runtime_seconds))
 
     window_stale_polls = 0
+    world_stable_samples = 0
+    last_world_stable_tick: int | None = None
     for poll in range(args.readiness_poll_budget):
         if time.monotonic() >= deadline:
             return with_runtime_module_info(
@@ -443,6 +480,29 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
         telemetry = read_json(args.telemetry)
         bootstrap = read_bootstrap(args.bootstrap, args.bootstrap_state)
         windows = hypr_windows(args.window_class)
+        if args.target == TARGET_WORLD_STABLE:
+            if process_running and telemetry_world_loaded(telemetry):
+                tick = telemetry_world_tick(telemetry or {}, poll)
+                if tick != last_world_stable_tick:
+                    world_stable_samples += 1
+                    last_world_stable_tick = tick
+                if world_stable_samples >= args.world_stable_samples:
+                    return with_runtime_module_info(
+                        ReadinessResult(
+                            True,
+                            WORLD_STABLE,
+                            pid,
+                            bootstrap,
+                            telemetry,
+                            windows,
+                            spawn_polls + poll,
+                            float(args.max_runtime_seconds),
+                            world_stable_samples=world_stable_samples,
+                        )
+                    )
+            else:
+                world_stable_samples = 0
+                last_world_stable_tick = None
         if windows:
             window_stale_polls += 1
         else:
@@ -508,11 +568,13 @@ def parse_args() -> argparse.Namespace:
             TARGET_AUTOLOAD_REQUEST,
             TARGET_REQUEST_CONSUMPTION,
             TARGET_PLAYER_LOAD,
+            TARGET_WORLD_STABLE,
         ],
         default=TARGET_GAME_MAN,
     )
     parser.add_argument("--autoload-attempt-budget", type=int, default=DEFAULT_AUTOLOAD_ATTEMPT_BUDGET)
     parser.add_argument("--post-request-tick-budget", type=int, default=DEFAULT_POST_REQUEST_TICK_BUDGET)
+    parser.add_argument("--world-stable-samples", type=int, default=3)
     parser.add_argument(
         "--max-runtime-seconds",
         type=float,
@@ -536,6 +598,8 @@ def main() -> int:
     args = parse_args()
     if args.max_runtime_seconds <= 0 or args.max_runtime_seconds > MAX_ALLOWED_RUNTIME_SECONDS:
         raise SystemExit("--max-runtime-seconds must be greater than 0 and no more than 120")
+    if args.world_stable_samples <= 0:
+        raise SystemExit("--world-stable-samples must be greater than 0")
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
     result = wait_readiness(args)
     output = args.artifact_dir / "readiness-result.json"

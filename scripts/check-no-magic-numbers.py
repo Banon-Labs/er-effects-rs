@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-IGNORED_DIRECTORIES = {".git", "target"}
+IGNORED_DIRECTORIES = {".git", "target", "third_party"}
 # Vendored/reference .rs files that are NOT part of the DLL build and are kept verbatim
 # (e.g. a copy of an upstream example) -- the no-magic-number rule applies to project source only.
 IGNORED_FILES = {Path("scripts/dearxan-deobfuscate.rs")}

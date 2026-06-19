@@ -30,6 +30,8 @@ GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}
 LAUNCH_MODE="${LAUNCH_MODE:-direct-protected}"
 RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-30}"
 RUNTIME_MAX_NUDGES="${RUNTIME_MAX_NUDGES:-0}"
+SCREENSHOT_LLM_MAX_WIDTH="${SCREENSHOT_LLM_MAX_WIDTH:-480}"
+SCREENSHOT_LLM_JPEG_QUALITY="${SCREENSHOT_LLM_JPEG_QUALITY:-35}"
 RUNTIME_READINESS_RATIONALE="${RUNTIME_READINESS_RATIONALE:-$REPO_ROOT/.auto/runtime-readiness-rationale}"
 mkdir -p "$ARTIFACT_DIR"
 ARTIFACT_DIR=$(realpath -m "$ARTIFACT_DIR")
@@ -487,6 +489,20 @@ if readiness_path.exists():
 input_reason_known = 0
 input_reason_summary_path = artifact / "input-reason-summary.json"
 autoload_debug = artifact / "autoload-debug-default.log"
+screenshot = artifact / "inworld.png"
+llm_image = artifact / "inworld-llm.jpg"
+llm_request = artifact / "visual-llm-oracle-request.json"
+llm_oracle = artifact / "visual-llm-oracle.json"
+visual_llm_world_expected = 0
+visual_llm_score = 0
+if llm_oracle.exists():
+    try:
+        visual_payload = json.loads(llm_oracle.read_text(encoding="utf-8", errors="replace"))
+        if visual_payload.get("world_expected") is True or visual_payload.get("looks_expected") is True:
+            visual_llm_world_expected = 1
+            visual_llm_score = 75
+    except Exception:
+        visual_llm_world_expected = 0
 if input_reason_summary_path.exists():
     try:
         summary = json.loads(input_reason_summary_path.read_text(encoding="utf-8", errors="replace"))
@@ -516,6 +532,12 @@ metrics = {
     "readiness_ready": 1 if readiness.get("ready") is True else 0,
     "readiness_reason": readiness.get("reason"),
     "input_reason_known": input_reason_known,
+    "oracle_world_stable_samples": int(readiness.get("world_stable_samples") or 0),
+    "final_screenshot_present": 1 if screenshot.exists() else 0,
+    "final_llm_image_present": 1 if llm_image.exists() else 0,
+    "visual_llm_request_ready": 1 if llm_request.exists() else 0,
+    "visual_llm_world_expected": visual_llm_world_expected,
+    "visual_llm_score": visual_llm_score,
 }
 (artifact / "runtime-metrics.json").write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 print(f"runtime_artifact_dir={artifact}")
@@ -530,10 +552,12 @@ capture_inworld_screenshot() {
   # the end of the run BEFORE teardown, to visually confirm the player reached the playable world
   # (the stronger oracle than player_available, which can fire on a loading screen). PRIVACY: query
   # + grim ONLY the ER window by its class; never enumerate or log any other window.
-  python3 - "$ARTIFACT_DIR" <<'PY' 2>/dev/null || true
-import json, subprocess, sys
+  python3 - "$ARTIFACT_DIR" "$SCREENSHOT_LLM_MAX_WIDTH" "$SCREENSHOT_LLM_JPEG_QUALITY" <<'PY' 2>/dev/null || true
+import json, shutil, subprocess, sys
 from pathlib import Path
 artifact = Path(sys.argv[1])
+max_width = int(sys.argv[2])
+jpeg_quality = int(sys.argv[3])
 log = artifact / "inworld-screenshot.log"
 try:
     out = subprocess.run(["hyprctl", "-j", "clients"], capture_output=True, text=True, timeout=5).stdout
@@ -546,8 +570,36 @@ win = er[0]
 x, y = win["at"]; w, h = win["size"]
 geom = f"{x},{y} {w}x{h}"
 png = artifact / "inworld.png"
+small = artifact / "inworld-llm.jpg"
 rc = subprocess.run(["grim", "-g", geom, str(png)], capture_output=True, text=True, timeout=10)
-log.write_text(f"captured geom={geom} grim_rc={rc.returncode} stderr={rc.stderr.strip()}\n", encoding="utf-8")
+lines = [f"captured geom={geom} grim_rc={rc.returncode} stderr={rc.stderr.strip()}"]
+if png.exists():
+    magick = shutil.which("magick") or shutil.which("convert")
+    if magick:
+        resize = f"{max_width}x>"
+        cmd = [magick, str(png), "-auto-orient", "-resize", resize, "-quality", str(jpeg_quality), str(small)]
+        conv = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        lines.append(f"llm_jpeg={small} rc={conv.returncode} stderr={conv.stderr.strip()}")
+    elif shutil.which("ffmpeg"):
+        vf = f"scale='min({max_width},iw)':-2"
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(png), "-vf", vf, "-q:v", "7", str(small)]
+        conv = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        lines.append(f"llm_jpeg={small} rc={conv.returncode} stderr={conv.stderr.strip()}")
+    else:
+        lines.append("llm_jpeg_skipped=no_magick_or_ffmpeg")
+    request = {
+        "image_path": str(small if small.exists() else png),
+        "source_png": str(png),
+        "prompt": (
+            "This is a small compressed final Elden Ring runtime screenshot captured only after "
+            "the structured map/character/runtime oracles fired. Answer JSON with "
+            "world_expected=true when it looks like an in-world playable Elden Ring scene rather "
+            "than a title menu, loading screen, crash dialog, or unrelated window."
+        ),
+        "expected_json_path": str(artifact / "visual-llm-oracle.json"),
+    }
+    (artifact / "visual-llm-oracle-request.json").write_text(json.dumps(request, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+log.write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
 }
 
@@ -960,6 +1012,7 @@ watch_readiness() {
     --target "$RUNTIME_WATCH_TARGET"
     --autoload-attempt-budget "$RUNTIME_AUTOLOAD_ATTEMPT_BUDGET"
     --post-request-tick-budget "$RUNTIME_POST_REQUEST_TICK_BUDGET"
+    --world-stable-samples "$RUNTIME_WORLD_STABLE_SAMPLES"
     --spawn-poll-budget "$RUNTIME_SPAWN_POLL_BUDGET"
     --readiness-poll-budget "$RUNTIME_READINESS_POLL_BUDGET"
     --max-runtime-seconds "$RUNTIME_TIMEOUT_SECONDS"
@@ -985,6 +1038,7 @@ export ER_EFFECTS_TRACE_MENU_TASK_UPDATE="${ER_EFFECTS_TRACE_MENU_TASK_UPDATE:-0
 RUNTIME_WATCH_TARGET="${RUNTIME_WATCH_TARGET:-game-man}"
 RUNTIME_AUTOLOAD_ATTEMPT_BUDGET="${RUNTIME_AUTOLOAD_ATTEMPT_BUDGET:-300}"
 RUNTIME_POST_REQUEST_TICK_BUDGET="${RUNTIME_POST_REQUEST_TICK_BUDGET:-300}"
+RUNTIME_WORLD_STABLE_SAMPLES="${RUNTIME_WORLD_STABLE_SAMPLES:-3}"
 RUNTIME_READINESS_POLLS_PER_TASK_TICK="${RUNTIME_READINESS_POLLS_PER_TASK_TICK:-16}"
 RUNTIME_READINESS_BASE_POLL_BUDGET="${RUNTIME_READINESS_BASE_POLL_BUDGET:-8192}"
 RUNTIME_SPAWN_POLL_BUDGET="${RUNTIME_SPAWN_POLL_BUDGET:-32768}"

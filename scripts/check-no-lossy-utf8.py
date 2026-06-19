@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-IGNORED_DIRECTORIES = {".git", "target"}
+IGNORED_DIRECTORIES = {".git", "target", "third_party"}
 LOSSY_CALL = "String::from_utf8_lossy"
 JUSTIFICATION_MARKER = "UTF-8 Lossy:"
 

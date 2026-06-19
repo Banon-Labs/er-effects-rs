@@ -319,12 +319,21 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             }
             .unwrap_or(NULL_PTR)
         };
+        const U8_MASK: usize = 0xff;
         let read_pgd_u32 = |offset: usize| -> u32 {
             if pgd == NULL_PTR {
                 ZERO_U32
             } else {
                 unsafe { crate::experiments::safe_read_usize(pgd + offset) }
                     .map_or(ZERO_U32, |value| value as u32)
+            }
+        };
+        let read_pgd_u8 = |offset: usize| -> u8 {
+            if pgd == NULL_PTR {
+                ZERO_U32 as u8
+            } else {
+                unsafe { crate::experiments::safe_read_usize(pgd + offset) }
+                    .map_or(ZERO_U32 as u8, |value| (value & U8_MASK) as u8)
             }
         };
         let level = if pgd == NULL_PTR {
@@ -344,6 +353,14 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         let runes = read_pgd_u32(crate::PGD_RUNE_COUNT_6C_OFFSET);
         let rune_memory = read_pgd_u32(crate::PGD_RUNE_MEMORY_70_OFFSET);
         let chr_type = read_pgd_u32(crate::PGD_CHR_TYPE_98_OFFSET);
+        let gender = read_pgd_u8(crate::PGD_GENDER_BE_OFFSET);
+        let archetype = read_pgd_u8(crate::PGD_ARCHETYPE_BF_OFFSET);
+        let voice_type = read_pgd_u8(crate::PGD_VOICE_TYPE_C2_OFFSET);
+        let starting_gift = read_pgd_u8(crate::PGD_STARTING_GIFT_C3_OFFSET);
+        let unlocked_talisman_slots = read_pgd_u8(crate::PGD_UNLOCKED_TALISMAN_SLOTS_C6_OFFSET);
+        let spirit_ash_level = read_pgd_u8(crate::PGD_SPIRIT_ASH_LEVEL_C7_OFFSET);
+        let max_crimson_flask_count = read_pgd_u8(crate::PGD_MAX_CRIMSON_FLASK_101_OFFSET);
+        let max_cerulean_flask_count = read_pgd_u8(crate::PGD_MAX_CERULEAN_FLASK_102_OFFSET);
         let mut name_units = [ZERO_U16; crate::PGD_NAME_LEN_U16];
         let mut name_idx = IDX_START;
         while pgd != NULL_PTR && name_idx < crate::PGD_NAME_LEN_U16 {
@@ -368,7 +385,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         }
         let stat_values = stats.map(|value| value.to_string()).join(", ");
         body.push_str(&format!(
-            "  \"oracle_char_current_hp\": {current_hp},\n  \"oracle_char_current_max_hp\": {current_max_hp},\n  \"oracle_char_base_max_hp\": {base_max_hp},\n  \"oracle_char_current_fp\": {current_fp},\n  \"oracle_char_current_max_fp\": {current_max_fp},\n  \"oracle_char_base_max_fp\": {base_max_fp},\n  \"oracle_char_current_stamina\": {current_stamina},\n  \"oracle_char_current_max_stamina\": {current_max_stamina},\n  \"oracle_char_base_max_stamina\": {base_max_stamina},\n  \"oracle_char_level\": {level},\n  \"oracle_char_runes\": {runes},\n  \"oracle_char_rune_memory\": {rune_memory},\n  \"oracle_char_chr_type\": {chr_type},\n  \"oracle_char_name\": \"{}\",\n  \"oracle_char_name_len\": {name_len},\n  \"oracle_char_stats\": [{stat_values}],\n",
+            "  \"oracle_char_current_hp\": {current_hp},\n  \"oracle_char_current_max_hp\": {current_max_hp},\n  \"oracle_char_base_max_hp\": {base_max_hp},\n  \"oracle_char_current_fp\": {current_fp},\n  \"oracle_char_current_max_fp\": {current_max_fp},\n  \"oracle_char_base_max_fp\": {base_max_fp},\n  \"oracle_char_current_stamina\": {current_stamina},\n  \"oracle_char_current_max_stamina\": {current_max_stamina},\n  \"oracle_char_base_max_stamina\": {base_max_stamina},\n  \"oracle_char_level\": {level},\n  \"oracle_char_runes\": {runes},\n  \"oracle_char_rune_memory\": {rune_memory},\n  \"oracle_char_chr_type\": {chr_type},\n  \"oracle_char_gender\": {gender},\n  \"oracle_char_archetype\": {archetype},\n  \"oracle_char_voice_type\": {voice_type},\n  \"oracle_char_starting_gift\": {starting_gift},\n  \"oracle_char_unlocked_talisman_slots\": {unlocked_talisman_slots},\n  \"oracle_char_spirit_ash_level\": {spirit_ash_level},\n  \"oracle_char_max_crimson_flask_count\": {max_crimson_flask_count},\n  \"oracle_char_max_cerulean_flask_count\": {max_cerulean_flask_count},\n  \"oracle_char_name\": \"{}\",\n  \"oracle_char_name_len\": {name_len},\n  \"oracle_char_stats\": [{stat_values}],\n",
             json_escape(&name)
         ));
         // WORLD-LIVE oracle: CSNowLoadingHelper "now loading" latch = *(u8*)([base+0x3d60ec8]+0xED).

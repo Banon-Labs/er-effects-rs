@@ -1047,6 +1047,20 @@ pub(crate) const PGD_RUNE_COUNT_6C_OFFSET: usize =
 pub(crate) const PGD_RUNE_MEMORY_70_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, rune_memory);
 pub(crate) const PGD_CHR_TYPE_98_OFFSET: usize = core::mem::offset_of!(PlayerGameData, chr_type);
+pub(crate) const PGD_GENDER_BE_OFFSET: usize = core::mem::offset_of!(PlayerGameData, gender);
+pub(crate) const PGD_ARCHETYPE_BF_OFFSET: usize = core::mem::offset_of!(PlayerGameData, archetype);
+pub(crate) const PGD_VOICE_TYPE_C2_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, voice_type);
+pub(crate) const PGD_STARTING_GIFT_C3_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, starting_gift);
+pub(crate) const PGD_UNLOCKED_TALISMAN_SLOTS_C6_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, unlocked_talisman_slots);
+pub(crate) const PGD_SPIRIT_ASH_LEVEL_C7_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, matchmaking_spirit_ashes_level);
+pub(crate) const PGD_MAX_CRIMSON_FLASK_101_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, max_hp_flask);
+pub(crate) const PGD_MAX_CERULEAN_FLASK_102_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, max_fp_flask);
 /// `character_name` is a private field upstream, so it cannot be reached via `offset_of!`;
 /// the hand-decoded offset (validated equal to upstream's `[u16; 17]` field position) is retained.
 pub(crate) const PGD_NAME_9C_OFFSET: usize = 0x9c;
