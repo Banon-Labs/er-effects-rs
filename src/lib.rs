@@ -631,9 +631,15 @@ pub(crate) const WORLD_WORKER_BUILD_RVA: usize = 0xb0a980;
 pub(crate) const SYNTHETIC_STEP_THIS_SIZE: usize = 0x60;
 pub(crate) const SYNTHETIC_STEP_STATE_OFFSET: usize = 0x48;
 pub(crate) const WORLD_WORKER_BUILD_STATE: i32 = 7;
-/// The world-stream worker singleton 0x144842d40 (built by the arm above). Reading it
-/// non-null verifies the build+register fired.
-pub(crate) const WORLD_STREAM_WORKER_RVA: usize = 0x4842d40;
+/// MISIDENTIFIED-CORRECTED (autoresearch 2026-06-18): 0x4842d40 is upstream `eldenring`'s
+/// `runtime_heap_allocator` (the `DLAllocator` singleton, `rva::get().runtime_heap_allocator`),
+/// confirmed by static RE -- it has 4057 RIP-relative refs (allocator footprint, not a task) and
+/// the cached-singleton getter at 0x140078ed5. It is built at startup and is ALWAYS non-null, so
+/// reading it non-null is NOT evidence that any "world-stream worker"/FD4 stream task was built.
+/// The save-IO/worldres "worker present" levers below that relied on that inference are FALSE
+/// POSITIVES and need the real stream-task RVA. Name kept generic and accurate; see bd
+/// `rva-4842d40-is-heap-allocator-not-stream-task`.
+pub(crate) const RUNTIME_HEAP_ALLOCATOR_RVA: usize = 0x4842d40;
 /// World/scene singletons built by MoveMapStep::STEP_MsbLoad 0x140af8f00. Non-null
 /// == MsbLoad ran (the IsResident-relevant world exists). Diagnostic for whether the
 /// worker is servicing the stream vs the b80 lane stalling first.

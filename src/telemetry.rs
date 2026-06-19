@@ -405,12 +405,14 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
 
     // FD4 async-IO DRAIN subsystem (B step-3 lever check, read-only). The cold save-IO read
     // never drains because the queue-processing worker threads live in the global thread POOL
-    // [0x144853048], NOT in the worker MANAGER. Prior cold experiments built the stream TASK
-    // [0x144842d40] but maybe never the POOL. If the pool is NULL cold, cold-building it
+    // [0x144853048], NOT in the worker MANAGER. If the pool is NULL cold, cold-building it
     // (0x14240afe0) is the untested save-safe lever; if non-null cold, the read fails elsewhere.
+    // CORRECTION (autoresearch 2026-06-18): the "stream task" 0x144842d40 below is actually
+    // upstream's `runtime_heap_allocator` (DLAllocator) -- always non-null, so the
+    // `fd4_stream_task_present` signal is meaningless. See `RUNTIME_HEAP_ALLOCATOR_RVA`.
     const FD4_IO_POOL_RVA: usize = 0x4853048;
     const FD4_IO_WORKER_MANAGER_RVA: usize = 0x4852f88;
-    const FD4_STREAM_TASK_RVA: usize = 0x4842d40;
+    use crate::RUNTIME_HEAP_ALLOCATOR_RVA as FD4_STREAM_TASK_RVA;
     const IO_DEVICE_SINGLETON_RVA: usize = 0x4589390;
     const IO_DEVICE_INFLIGHT_10_OFFSET: usize = 0x10;
     const IO_DEVICE_REQHANDLE_20_OFFSET: usize = 0x20;

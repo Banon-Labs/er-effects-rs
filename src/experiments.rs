@@ -548,7 +548,10 @@ pub(crate) fn worldres_coldbuild_probe_enabled() -> bool {
 unsafe fn worldres_coldbuild_probe(base: usize) {
     const CSRES_GETTER_RVA: usize = 0x00cd6c50;
     const EMK_RESMAN_DRIVER_RVA: usize = 0x03d7c088;
-    const STREAM_WORKER_RVA: usize = 0x04842d40;
+    // NOTE: this global is upstream's `runtime_heap_allocator` (DLAllocator), always non-null --
+    // NOT a world-stream worker. The BEFORE/AFTER "worker" reads below are a FALSE-POSITIVE lever
+    // (allocator present regardless of the getter); kept for context. See `RUNTIME_HEAP_ALLOCATOR_RVA`.
+    use crate::RUNTIME_HEAP_ALLOCATOR_RVA as STREAM_WORKER_RVA;
     const STUB_LEN: usize = 0x80;
     const STUB_FILL: u8 = 0;
     const STUB_STATE_OFFSET: usize = 0x48;
@@ -841,7 +844,7 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
         let worker_build: unsafe extern "system" fn(usize) -> usize =
             unsafe { std::mem::transmute(base + WORLD_WORKER_BUILD_RVA) };
         unsafe { worker_build(stub_ptr) };
-        let worker = unsafe { *((base + WORLD_STREAM_WORKER_RVA) as *const usize) };
+        let worker = unsafe { *((base + crate::RUNTIME_HEAP_ALLOCATOR_RVA) as *const usize) };
         // (2) set the slot, then PREVIEW (b80=1 + start the iodev read). The preview 0x67b4e0 is
         // REQUIRED: it pre-warms a RESIDENT iodev request that 0x67b200 reuses (the no-preview run
         // showed 0x67b200 alone sets b80=2 but the poll immediately resets it -- the read never goes
@@ -3107,7 +3110,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             DESERIALIZE_SLOT_RVA,
             LOAD_INITIATOR_RVA,
             WORLD_WORKER_BUILD_RVA,
-            WORLD_STREAM_WORKER_RVA,
+            crate::RUNTIME_HEAP_ALLOCATOR_RVA,
             WORLD_WORKER_BUILD_STATE,
             SYNTHETIC_STEP_STATE_OFFSET,
             FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
@@ -4514,7 +4517,7 @@ pub(crate) unsafe fn submit_play_game_once(
                 SYNTHETIC_STEP_THIS_SIZE,
                 SYNTHETIC_STEP_STATE_OFFSET,
                 WORLD_WORKER_BUILD_STATE,
-                WORLD_STREAM_WORKER_RVA,
+                crate::RUNTIME_HEAP_ALLOCATOR_RVA,
             );
             SUBMIT_PLAY_GAME_PHASE.store(SUBMIT_PHASE_DONE, Ordering::SeqCst);
             append_autoload_debug(format_args!(
