@@ -46,6 +46,9 @@ The baseline runtime env is `.auto/runtime-env-fast-load-core-baseline-20260619`
 - Implemented and merged the core zero-input product autoload release path: direct autoload request arms own-stepper/live-dialog/fullread/menu-window-latch internally, and post-world TitleTopDialog cleanup restores the visual oracle.
 - Proved LazyLoader itself is compatible when `er_effects_rs.dll` is loaded through `[CHAINLOAD]`; lazy-loading er-effects through `[LOADORDER]` is the wrong path.
 - Proved the old external splash skipper DLL is not usable as-is on this executable in isolation, but the built-in current-version splash patch works.
+- Baseline for this session: LazyLoader `[CHAINLOAD]` + explicit built-in splash skip scored `fast_load_seconds=45.449`, `north_star_score=1400`.
+- Kept run #13: product autoload now auto-enables the built-in splash skip with no explicit `ER_EFFECTS_SPLASH_SKIP` env/file and scored `fast_load_seconds=44.479`, `north_star_score=1400`. This makes the external skipper's useful BeginLogo branch flip a core default for product autoload.
+- Static RE: external broken target RVA `0xb0c3ed` has byte `0x05` in the current executable because it lands inside a later `lea` displacement; the current matching BeginLogo branch is at RVA `0xb0c35d` and has expected opcode `0x74`. The old external target is `+0x90` from the current working opcode.
 
 ## First Research Steps
 1. Establish a fresh baseline on this branch using `.auto/runtime-env-fast-load-core-baseline-20260619` and `fast_load_seconds`.
