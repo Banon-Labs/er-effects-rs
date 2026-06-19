@@ -5670,7 +5670,9 @@ pub(crate) unsafe fn continue_drive_tick(module_base: usize, slot: i32, tick: u6
         }
         Err(existing) => existing,
     };
-    let drive_gate_tick = first_seen_tick.saturating_add(CONTINUE_DRIVE_AFTER_GAME_MAN_TICKS);
+    let game_man_relative_gate =
+        first_seen_tick.saturating_add(CONTINUE_DRIVE_AFTER_GAME_MAN_TICKS);
+    let drive_gate_tick = core::cmp::max(CONTINUE_DRIVE_MIN_TICK, game_man_relative_gate);
     if tick < drive_gate_tick {
         return;
     }
