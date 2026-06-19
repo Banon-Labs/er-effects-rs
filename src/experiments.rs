@@ -3884,7 +3884,7 @@ unsafe fn own_stepper_stage2(
     }
 
     if phase == OWN_STEPPER_PHASE_S2_ACTIVATE {
-        const LIVE_DIALOG_ACTIVATE_SETTLE_WAITS: u64 = 90;
+        const LIVE_DIALOG_ACTIVATE_SETTLE_WAITS: u64 = 60;
         if live_dialog_enabled() && waits < LIVE_DIALOG_ACTIVATE_SETTLE_WAITS {
             if waits % S2_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
                 append_autoload_debug(format_args!(
