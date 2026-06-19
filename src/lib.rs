@@ -1030,13 +1030,13 @@ pub(crate) const PGD_NAME_LEN_U16: usize = 17;
 /// Base of the contiguous stat block; upstream's first stat field is `vigor`.
 pub(crate) const PGD_STAT_BASE_3C_OFFSET: usize = core::mem::offset_of!(PlayerGameData, vigor);
 pub(crate) const PGD_STAT_COUNT: usize = 8;
-/// GameMan last field: character_name_is_empty (a cheap blank/new-game discriminator).
-/// DISCREPANCY (autoresearch 2026-06-18): upstream `eldenring`'s typed `GameMan` places
-/// `character_name_is_empty` eight bytes earlier than our hand-decoded value (compiler-checked via
-/// `offset_of!`). One of the two is wrong; needs binary-disassembly adjudication before binding to
-/// `offset_of!`. Left hardcoded so runtime behavior is unchanged until resolved. See bd
-/// `gameman-name-empty-offset-e78-vs-e70`.
-pub(crate) const GAME_MAN_NAME_IS_EMPTY_E78_OFFSET: usize = 0xe78;
+/// GameMan last field: `character_name_is_empty` (a cheap blank/new-game discriminator).
+/// RESOLVED (autoresearch 2026-06-18) via static RE of `eldenring-deobf.bin`: the in-game
+/// getter at 0x140679d90 is `mov rax,[GameMan]; movzbl 0xe70(rax),eax; ret`, so the field is
+/// at +0xe70 -- our prior hand-decoded offset was 8 bytes too far (read padding past the field),
+/// a real BUG. Now bound to the upstream typed field, which the disassembly confirms correct.
+pub(crate) const GAME_MAN_NAME_IS_EMPTY_E70_OFFSET: usize =
+    core::mem::offset_of!(GameMan, character_name_is_empty);
 /// One-shot latch for the in-world LOAD-CORRECTNESS dump.
 pub(crate) static LOAD_CORRECTNESS_DUMPED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const LOAD_CORRECTNESS_NOT_DUMPED: usize = 0;

@@ -4018,7 +4018,7 @@ pub(crate) unsafe fn dump_load_correctness(base: usize, frame: u64) {
         (
             ri32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET),
             ri32(gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET),
-            unsafe { safe_read_usize(gm + GAME_MAN_NAME_IS_EMPTY_E78_OFFSET) }
+            unsafe { safe_read_usize(gm + GAME_MAN_NAME_IS_EMPTY_E70_OFFSET) }
                 .map(|v| v as u8)
                 .unwrap_or(NAME_UNKNOWN),
         )
