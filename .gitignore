@@ -12,3 +12,7 @@ __pycache__/
 # Deobfuscated (Arxan-decrypted) ER image for static RE -- copyrighted game binary, NEVER commit
 eldenring-deobf.bin
 *.deobf.bin
+
+
+ProDebug.dll
+offline-launcher.exe
