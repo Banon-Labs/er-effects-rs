@@ -13,6 +13,21 @@ fi
 if [[ "${AUTO_MEASURE_INNER:-0}" != "1" && -f "$REPO_ROOT/.auto/run-runtime-once" ]]; then
   runtime_request_path="$REPO_ROOT/.auto/run-runtime-once"
   runtime_request=$(tr -cd '[:print:]' < "$runtime_request_path" || true)
+  if [[ "$runtime_request" == env=* ]]; then
+    runtime_env_request="${runtime_request#env=}"
+    case "$runtime_env_request" in
+      .auto/runtime-env*) ;;
+      *)
+        echo "[measure] refusing runtime env request outside .auto/runtime-env*: $runtime_env_request" >&2
+        exit 2
+        ;;
+    esac
+    if [[ ! -f "$REPO_ROOT/$runtime_env_request" ]]; then
+      echo "[measure] requested runtime env file not found: $runtime_env_request" >&2
+      exit 2
+    fi
+    export AUTO_RUNTIME_ENV_FILE="$runtime_env_request"
+  fi
   mkdir -p "$REPO_ROOT/.auto"
   {
     printf 'started_at=%s\n' "$(date -Is)"

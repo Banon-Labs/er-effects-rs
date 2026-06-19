@@ -1,0 +1,17 @@
+# MODEL B live-dialog probe (2026-06-18). own_stepper drives boot -> rendered menu, then the NEW
+# ER_EFFECTS_LIVE_DIALOG path: scan active-screen array 0x143d6d8d0 for TitleTopDialog (0x142b26468)
+# + MenuWindow (0x142a93a60/proxy 0x142a94318) -> call factory 0x14081ead0(rcx=dialog+0xa38,
+# rdx=MenuWindow*) -> native pump builds+registers the LIVE ProfileLoadDialog -> load_activate ->
+# selector -> submit 0x14067b1a0 -> mount; char-fingerprint-gated SetState5. FAIL-CLOSED; host_input=none.
+# Save-safe (harness backs up + restores .sl2/.co2). GATING is via GAME_DIR files (env does not reach
+# the game through Proton): er-effects-own-stepper.txt + er-effects-live-dialog.txt must exist.
+export LAUNCH_MODE=offline-launcher
+export ER_EFFECTS_OWN_STEPPER=1
+export ER_EFFECTS_LIVE_DIALOG=1
+export ER_EFFECTS_AUTOLOAD_SLOT=0
+export ER_EFFECTS_SAFE_INPUT_CONFIRM_COUNT=0
+export RUNTIME_MAX_NUDGES=0
+export RESTORE_RUNTIME_SAVES=1
+export RUNTIME_CAPTURE_INPUT_OCR=0
+export RUNTIME_WATCH_TARGET=player-load
+export RUNTIME_SPAWN_POLL_BUDGET=32768
