@@ -435,7 +435,10 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
     };
 
     body.push_str("  \"save_snapshot_available\": true,\n");
-    body.push_str(&format!("  \"fd4_io_pool_present\": {},\n", io_pool != NULL_POINTER_VALUE));
+    body.push_str(&format!(
+        "  \"fd4_io_pool_present\": {},\n",
+        io_pool != NULL_POINTER_VALUE
+    ));
     body.push_str(&format!(
         "  \"fd4_io_worker_manager_present\": {},\n",
         io_worker_manager != NULL_POINTER_VALUE
@@ -444,7 +447,10 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
         "  \"fd4_stream_task_present\": {},\n",
         stream_task != NULL_POINTER_VALUE
     ));
-    body.push_str(&format!("  \"io_device_present\": {},\n", io_device != NULL_POINTER_VALUE));
+    body.push_str(&format!(
+        "  \"io_device_present\": {},\n",
+        io_device != NULL_POINTER_VALUE
+    ));
     body.push_str(&format!(
         "  \"io_device_inflight_10\": {},\n",
         io_inflight.map_or_else(|| "null".to_owned(), |value| format!("\"{value:#x}\""))

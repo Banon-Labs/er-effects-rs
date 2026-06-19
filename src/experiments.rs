@@ -1754,8 +1754,7 @@ unsafe fn scan_dialog_for_loadgame(owner: usize, base: usize) -> (Option<usize>,
     const R8_CAND_N: usize = 2;
     let cand_a = owner + OWNER_MENU_OBJ_138;
     let cand_b = unsafe { safe_read_usize(cand_a) }.unwrap_or(NULL);
-    let cands: [(&str, usize); R8_CAND_N] =
-        [("owner+0x138", cand_a), ("*(owner+0x138)", cand_b)];
+    let cands: [(&str, usize); R8_CAND_N] = [("owner+0x138", cand_a), ("*(owner+0x138)", cand_b)];
     for (tag, c) in cands.iter() {
         if *c == NULL {
             continue;
@@ -1881,7 +1880,8 @@ unsafe fn locate_live_loadgame_node(owner: usize, base: usize) -> Option<(usize,
     // this is a CS::TitleFlowContext (vt 0x142ac7f20), NOT a persistent SceneObjProxy, so it does
     // NOT yield the MenuWindow -- but it IS the correct factory rcx (= td+0xa38). LOG it for
     // context; it never gates acquisition.
-    let capture = unsafe { safe_read_usize(td + DIALOG_SCENE_PROXY_CAPTURE_A38_OFFSET) }.unwrap_or(NULL);
+    let capture =
+        unsafe { safe_read_usize(td + DIALOG_SCENE_PROXY_CAPTURE_A38_OFFSET) }.unwrap_or(NULL);
     let cvt = if capture != NULL {
         unsafe { safe_read_usize(capture) }.unwrap_or(NULL)
     } else {
@@ -2515,7 +2515,8 @@ unsafe fn native_load_tick(owner: usize, base: usize, n: u64) {
     }
     // (1) Is the live TitleTopDialog menu rendered? owner+0xe0 -> dialog, vtable-gated, with its
     // row registry [dialog+0xa48] populated. Pure reads -- fail-closed (just keep observing) if not.
-    let dialog = unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(NULL);
+    let dialog =
+        unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(NULL);
     let dialog_vt = if dialog != NULL {
         unsafe { safe_read_usize(dialog) }.unwrap_or(NULL)
     } else {
@@ -2665,7 +2666,8 @@ unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     }
     // (A) Live-menu detection (same as native_load_tick): owner+0xe0 -> dialog, vtable-gated, with
     // its row registry [dialog+0xa48] populated. Pure reads -- fail-closed (keep observing) if not.
-    let dialog = unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(NULL);
+    let dialog =
+        unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(NULL);
     let dialog_vt = if dialog != NULL {
         unsafe { safe_read_usize(dialog) }.unwrap_or(NULL)
     } else {
@@ -2722,9 +2724,15 @@ unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         let b78 = read_i32(GAME_MAN_SLOT_SELECT_B78_OFFSET);
         append_autoload_debug(format_args!(
             "native-fullread: SUBMIT slot={slot} b78={b78} (0x{:x} write) set_save_slot 0x{:x} ac0={ac0} submit 0x{:x} ret={sret} b80={b80} -> DRAIN",
-            base, base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA, base + B80_FULL_LOAD_INITIATOR_RVA
+            base,
+            base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
+            base + B80_FULL_LOAD_INITIATOR_RVA
         ));
-        timeline_event("T_fullread_submit", n, format_args!("slot={slot} b80={b80}"));
+        timeline_event(
+            "T_fullread_submit",
+            n,
+            format_args!("slot={slot} b80={b80}"),
+        );
         FULLREAD_DRAIN_WAITS.store(NULL, Ordering::SeqCst);
         FULLREAD_PHASE.store(FULLREAD_PHASE_DRAIN, Ordering::SeqCst);
         return;
@@ -2773,7 +2781,11 @@ unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         append_autoload_debug(format_args!(
             "native-fullread: DESER slot={slot} ret={dret} c30=0x{c30:x} ac0={ac0} level={level} -> GUARD"
         ));
-        timeline_event("T_fullread_deser", n, format_args!("c30=0x{c30:x} level={level}"));
+        timeline_event(
+            "T_fullread_deser",
+            n,
+            format_args!("c30=0x{c30:x} level={level}"),
+        );
         FULLREAD_PHASE.store(FULLREAD_PHASE_GUARD, Ordering::SeqCst);
         return;
     }
@@ -2839,7 +2851,11 @@ unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             "native-fullread: *** COMMIT continue_confirm 0x{:x}(shim=0x{shim_ptr:x} owner=0x{owner_obj:x}) c30=0x{c30:x} level={level} owner+0x284=0 -- SetState5 (AUTOSAVES) ***",
             base + CONTINUE_CONFIRM_RVA
         ));
-        timeline_event("T_fullread_confirm", n, format_args!("c30=0x{c30:x} level={level}"));
+        timeline_event(
+            "T_fullread_confirm",
+            n,
+            format_args!("c30=0x{c30:x} level={level}"),
+        );
         unsafe { confirm(shim_ptr) };
         append_autoload_debug(format_args!(
             "native-fullread: continue_confirm returned -- native pump now streams the real world (#{n}) -> DONE"
@@ -4984,7 +5000,8 @@ pub(crate) unsafe extern "system" fn scene_obj_proxy_ctor_hook(
         const SCENE_OBJ_PROXY_CTOR_LOG_MAX: usize = 32;
         const SCENE_OBJ_PROXY_CTOR_HIT_INC: usize = 1;
         static SCENE_OBJ_PROXY_CTOR_HITS: AtomicUsize = AtomicUsize::new(0);
-        let hit = SCENE_OBJ_PROXY_CTOR_HITS.fetch_add(SCENE_OBJ_PROXY_CTOR_HIT_INC, Ordering::SeqCst);
+        let hit =
+            SCENE_OBJ_PROXY_CTOR_HITS.fetch_add(SCENE_OBJ_PROXY_CTOR_HIT_INC, Ordering::SeqCst);
         if hit < SCENE_OBJ_PROXY_CTOR_LOG_MAX {
             let pvt = unsafe { safe_read_usize(rdx) }.unwrap_or(null);
             append_autoload_debug(format_args!(
@@ -5097,15 +5114,14 @@ pub(crate) fn install_c30_writer_hook() {
         Ok(hook) => {
             C30_WRITER_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
             if let Err(status) = unsafe { hook.queue_enable() } {
-                append_autoload_debug(format_args!(
-                    "c30-writer: queue_enable failed: {status:?}"
-                ));
+                append_autoload_debug(format_args!("c30-writer: queue_enable failed: {status:?}"));
                 return;
             }
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
                     std::mem::forget(hook);
-                    C30_WRITER_HOOK_INSTALLED.store(C30_WRITER_HOOK_INSTALLED_YES, Ordering::SeqCst);
+                    C30_WRITER_HOOK_INSTALLED
+                        .store(C30_WRITER_HOOK_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         "c30-writer: hooked 0x{writer_addr:x} (SAVE-SAFE c30-write diagnostic; gate + c30 before/after + buffer window)"
                     ));
@@ -6827,8 +6843,7 @@ pub(crate) unsafe extern "system" fn c30_writer_hook(
             .ok()
             .map(|base| unsafe { *((base + SAVE_DATA_SUBSYSTEM_GATE_RVA) as *const usize) })
             .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
-        let c30_before =
-            unsafe { *((game_man + GAME_MAN_SAVED_MAP_C30_OFFSET) as *const i32) };
+        let c30_before = unsafe { *((game_man + GAME_MAN_SAVED_MAP_C30_OFFSET) as *const i32) };
         // Hex window of the resident 0x280000 save buffer header so the map record is visible.
         let mut hex = String::new();
         const BUFFER_DUMP_START: usize = 0;
@@ -6855,8 +6870,7 @@ pub(crate) unsafe extern "system" fn c30_writer_hook(
         unsafe { original(game_man, buffer, size) }
     };
     if do_log {
-        let c30_after =
-            unsafe { *((game_man + GAME_MAN_SAVED_MAP_C30_OFFSET) as *const i32) };
+        let c30_after = unsafe { *((game_man + GAME_MAN_SAVED_MAP_C30_OFFSET) as *const i32) };
         append_continue_trace(format_args!(
             "c30_writer_67bd70 LEAVE#{log_n} ret=0x{ret:x} c30_after=0x{c30_after:x} {}",
             b80_mount_trace_summary()
