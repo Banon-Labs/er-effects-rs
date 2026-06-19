@@ -7,8 +7,8 @@ const ATTEMPT_INCREMENT: u64 = 1;
 const IDLE_SAVE_STATE: u32 = 0;
 const CLEAR_REQUESTED_SAVE_SLOT_LOAD_INDEX: i32 = -1;
 const TITLE_ACCEPT_CONFIRM_FRAMES: u16 = 2;
-const REQUEST_SAVE_ENABLED: u8 = 1;
-const SAVE_REQUEST_PROFILE_ENABLED: u8 = 1;
+const REQUEST_SAVE_ENABLED: u8 = true as u8;
+const SAVE_REQUEST_PROFILE_ENABLED: u8 = true as u8;
 const NULL_MODULE_BASE: usize = 0;
 const MAP_LOAD_FALSE_RETURN: u8 = 0;
 const LOAD_ARG_FALSE: u8 = 0;
@@ -16,7 +16,26 @@ const LOAD_ARG_TRUE: u8 = 1;
 const DIRECT_SEQUENCE_PHASE_COMBINED: u8 = 0;
 const DIRECT_SEQUENCE_PHASE_CONTINUE: u8 = 1;
 const DIRECT_SEQUENCE_PHASE_FINAL_COMBINED: u8 = 2;
-const MENU_OTHER_LOAD_STATE_PTR: usize = 0x10f060;
+#[repr(u32)]
+enum NativeSaveMenuRva {
+    MenuOtherLoadStatePtr = 0x0010f060,
+    SaveLoadPumpDefault = 0x00679510,
+    SaveRequestProfile = 0x0067a420,
+    RequestSave = 0x0067a520,
+    SetSaveSlot = 0x0067a810,
+    SaveLoadStateInit = 0x0067b030,
+    MenuOtherLoadWrapper = 0x0082bb00,
+}
+
+const MENU_OTHER_LOAD_STATE_PTR: usize = NativeSaveMenuRva::MenuOtherLoadStatePtr as usize;
+pub const SET_SAVE_SLOT_RVA: u32 = NativeSaveMenuRva::SetSaveSlot as u32;
+pub const SAVE_REQUEST_PROFILE_RVA: u32 = NativeSaveMenuRva::SaveRequestProfile as u32;
+pub const REQUEST_SAVE_RVA: u32 = NativeSaveMenuRva::RequestSave as u32;
+const COMBINED_LOAD_RVA: u32 = 0x0067b940;
+const MARK_TITLE_BOOTSTRAP_RVA: u32 = 0x0067a310;
+const SAVE_LOAD_PUMP_DEFAULT_RVA: u32 = NativeSaveMenuRva::SaveLoadPumpDefault as u32;
+pub const SAVE_LOAD_STATE_INIT_RVA: u32 = NativeSaveMenuRva::SaveLoadStateInit as u32;
+pub const MENU_OTHER_LOAD_WRAPPER_RVA: u32 = NativeSaveMenuRva::MenuOtherLoadWrapper as u32;
 const REQUIRE_TITLE_BOOTSTRAP_DEFAULT: bool = true;
 
 #[derive(Debug)]
@@ -536,11 +555,6 @@ where
     // The menu wrapper's state pointer is stable across collected title-menu
     // traces. Calling the native wrapper preserves its task-state write at
     // 0x1407a91e0 instead of calling map_load in isolation.
-    const SET_SAVE_SLOT_RVA: u32 = 0x0067a810;
-    const SAVE_REQUEST_PROFILE_RVA: u32 = 0x0067a420;
-    const REQUEST_SAVE_RVA: u32 = 0x0067a520;
-    const MENU_OTHER_LOAD_WRAPPER_RVA: u32 = 0x0082bb00;
-
     type SetSaveSlot = unsafe extern "system" fn(i32);
     type RequestSave = unsafe extern "system" fn(u8);
     type SaveRequestProfile = unsafe extern "system" fn(u8);
@@ -601,13 +615,7 @@ where
     // Runtime/static RE shows the real Continue path is not a direct call to
     // the load primitives. Menu code queues GameMan flags, and the MoveMapList
     // task consumes those flags at safe scheduler points.
-    const SET_SAVE_SLOT_RVA: u32 = 0x0067a810;
-    const SAVE_REQUEST_PROFILE_RVA: u32 = 0x0067a420;
-    const REQUEST_SAVE_RVA: u32 = 0x0067a520;
     const MAP_LOAD_RVA: u32 = 0x0067bc10;
-    const COMBINED_LOAD_RVA: u32 = 0x0067b940;
-    const MARK_TITLE_BOOTSTRAP_RVA: u32 = 0x0067a310;
-    const SAVE_LOAD_PUMP_DEFAULT_RVA: u32 = 0x00679510;
 
     type SetSaveSlot = unsafe extern "system" fn(i32);
     type RequestSave = unsafe extern "system" fn(u8);
@@ -726,13 +734,7 @@ where
     G: GameManSaveAccess,
     F: FnMut(String),
 {
-    const SET_SAVE_SLOT_RVA: u32 = 0x0067a810;
-    const SAVE_REQUEST_PROFILE_RVA: u32 = 0x0067a420;
-    const REQUEST_SAVE_RVA: u32 = 0x0067a520;
-    const COMBINED_LOAD_RVA: u32 = 0x0067b940;
     const CONTINUE_LOAD_RVA: u32 = 0x0067b750;
-    const MARK_TITLE_BOOTSTRAP_RVA: u32 = 0x0067a310;
-    const SAVE_LOAD_PUMP_DEFAULT_RVA: u32 = 0x00679510;
 
     type SetSaveSlot = unsafe extern "system" fn(i32);
     type RequestSave = unsafe extern "system" fn(u8);

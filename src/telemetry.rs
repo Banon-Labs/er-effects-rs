@@ -49,6 +49,26 @@ use crate::*;
 #[allow(unused_imports)]
 use crate::{crashlog::*, experiments::*, ffi::*, hooks::*};
 
+#[repr(C)]
+pub(crate) struct NowLoadingHelperLayout {
+    pub(crate) unknown_000: [u8; 0xed],
+    pub(crate) loading_flag: u8,
+}
+
+#[repr(C)]
+pub(crate) struct GameManSaveSnapshotLayout {
+    pub(crate) unknown_000: [u8; 0xdf0],
+    pub(crate) deserialize_ready: usize,
+}
+
+#[repr(C)]
+pub(crate) struct IoDeviceSnapshotLayout {
+    pub(crate) unknown_000: [u8; 0x10],
+    pub(crate) inflight: usize,
+    pub(crate) unknown_18: [u8; 0x08],
+    pub(crate) request_handle: usize,
+}
+
 pub(crate) fn bootstrap_path() -> PathBuf {
     std::env::var_os("ER_EFFECTS_BOOTSTRAP_PATH")
         .map(PathBuf::from)
@@ -264,8 +284,11 @@ pub(crate) fn write_game_man_telemetry(body: &mut String) {
 /// distinguish "in the playable world" from "frozen on a loading screen".
 pub(crate) fn write_oracle_telemetry(body: &mut String) {
     const BLOCK_ID_NONE: i32 = -1;
-    const GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET: usize = 0xb80;
-    const GAME_MAN_SAVED_MAP_C30_OFFSET: usize = 0xc30;
+    const GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET: usize = core::mem::offset_of!(GameMan, save_state);
+    const GAME_MAN_SAVED_MAP_C30_OFFSET: usize =
+        core::mem::offset_of!(GameMan, stay_in_multiplay_area_saved_rotation)
+            + core::mem::size_of::<fromsoftware_shared::F32Vector4>()
+            + core::mem::size_of::<fromsoftware_shared::F32Vector4>();
     const READ_FAIL_SENTINEL: i32 = -1;
     body.push_str(&format!(
         "  \"simulated_button_presses_total\": {},\n",
@@ -275,10 +298,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
     // nonzero once continue is confirmed and the deserialize kicks) + c30 (saved map id, oracle item 2).
     const NULL_PTR: usize = 0;
     if let Ok(base) = crate::experiments::game_module_base() {
-        let gm = unsafe {
-            crate::experiments::safe_read_usize(base + crate::FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA)
-        }
-        .unwrap_or(NULL_PTR);
+        let gm = crate::game_man_ptr_or_null();
         let read_i32 = |addr: usize| -> i32 {
             unsafe { crate::experiments::safe_read_usize(addr) }
                 .map_or(READ_FAIL_SENTINEL, |v| v as u32 as i32)
@@ -305,10 +325,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         const U32_STRIDE: usize = 4;
         const IDX_START: usize = 0;
         const IDX_STEP: usize = 1;
-        let gdm = unsafe {
-            crate::experiments::safe_read_usize(base + crate::PLAYER_GAME_DATA_SINGLETON_RVA)
-        }
-        .unwrap_or(NULL_PTR);
+        let gdm = crate::game_data_man_ptr_or_null();
         let pgd = if gdm == NULL_PTR {
             NULL_PTR
         } else {
@@ -448,19 +465,19 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         // 1 = loading screen ACTIVE; 0 = cleared / playable (latches when the MoveMapStep world-load
         // steps stop requesting the loading screen). This replaces the grounded check, which fires
         // DURING loading (player physics exist before the world renders).
-        const NOW_LOADING_SINGLETON_RVA: usize = 0x3d60ec8;
-        const NOW_LOADING_FLAG_OFFSET: usize = 0xed;
-        const NOW_LOADING_UNKNOWN: i32 = -1;
-        const NOW_LOADING_BYTE_MASK: usize = 0xff;
+        const NOW_LOADING_SINGLETON_RVA: usize = RuntimeGlobalRva::NowLoadingSingleton as usize;
+        const NOW_LOADING_FLAG_OFFSET: usize =
+            core::mem::offset_of!(NowLoadingHelperLayout, loading_flag);
+        const NOW_LOADING_BYTE_MASK: usize = u8::MAX as usize;
         let now_loading = {
             let helper =
                 unsafe { crate::experiments::safe_read_usize(base + NOW_LOADING_SINGLETON_RVA) }
                     .unwrap_or(NULL_PTR);
             if helper == NULL_PTR {
-                NOW_LOADING_UNKNOWN
+                READ_FAIL_SENTINEL
             } else {
                 unsafe { crate::experiments::safe_read_usize(helper + NOW_LOADING_FLAG_OFFSET) }
-                    .map_or(NOW_LOADING_UNKNOWN, |v| (v & NOW_LOADING_BYTE_MASK) as i32)
+                    .map_or(READ_FAIL_SENTINEL, |v| (v & NOW_LOADING_BYTE_MASK) as i32)
             }
         };
         body.push_str(&format!("  \"oracle_now_loading\": {now_loading},\n"));
@@ -479,7 +496,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         } else {
             MSGBOX_CLOSING_YES
         };
-        const NO_POSTLOAD_MSGBOX_BUILDS: usize = 0;
+        const NO_POSTLOAD_MSGBOX_BUILDS: usize = MENU_TRACE_UNSEEN_SEQ;
         let postload_modal_seen =
             MSGBOX_POSTLOAD_BUILDS.load(Ordering::SeqCst) != NO_POSTLOAD_MSGBOX_BUILDS;
         let blocking_modal_present = msgbox_vtable == base + MSGBOX_DIALOG_VTABLE_RVA
@@ -536,7 +553,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
 }
 
 /// Read-only, save-safe save-data snapshot for the parked-title disambiguation
-/// (goal step 2): confirm GameDataMan (`SLOT_MANAGER_RVA`) and its `CS::ProfileSummary`
+/// (goal step 2): confirm GameDataMan (`game_data_man_ptr_or_null()`) and its `CS::ProfileSummary`
 /// container (`+SLOT_MANAGER_CONTAINER_OFFSET`) are built cold, read the per-slot
 /// active bytes the char-mount gate (`0x67b200`) checks via `byte[profile+slot+8]`,
 /// and read the save-mgr deserialize-ready handle (`[mgr+0xdf0]`, the gate fast-path).
@@ -545,18 +562,17 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
     /// Null pointer sentinel for the chased singleton reads.
     const NULL_POINTER_VALUE: usize = 0;
     /// ProfileSummary per-slot active-byte array base (getter reads `byte[profile+slot+8]`).
-    const PROFILE_SLOT_ACTIVE_ARRAY_OFFSET: usize = 0x8;
+    const PROFILE_SLOT_ACTIVE_ARRAY_OFFSET: usize = core::mem::size_of::<usize>();
     /// Save-mgr deserialize-ready handle (gate `0x67b200` fast-path `[mgr+0xdf0]`).
-    const GAME_MAN_DESERIALIZE_READY_DF0_OFFSET: usize = 0xdf0;
+    const GAME_MAN_DESERIALIZE_READY_DF0_OFFSET: usize =
+        core::mem::offset_of!(GameManSaveSnapshotLayout, deserialize_ready);
 
     let Ok(base) = crate::experiments::game_module_base() else {
         body.push_str("  \"save_snapshot_available\": false,\n");
         return;
     };
 
-    let game_data_man =
-        unsafe { crate::experiments::safe_read_usize(base + crate::SLOT_MANAGER_RVA) }
-            .unwrap_or(NULL_POINTER_VALUE);
+    let game_data_man = crate::game_data_man_ptr_or_null();
     let profile_summary = if game_data_man == NULL_POINTER_VALUE {
         NULL_POINTER_VALUE
     } else {
@@ -574,10 +590,7 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
             crate::experiments::safe_read_usize(profile_summary + PROFILE_SLOT_ACTIVE_ARRAY_OFFSET)
         }
     };
-    let save_mgr = unsafe {
-        crate::experiments::safe_read_usize(base + crate::FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA)
-    }
-    .unwrap_or(NULL_POINTER_VALUE);
+    let save_mgr = crate::game_man_ptr_or_null();
     let deserialize_ready = if save_mgr == NULL_POINTER_VALUE {
         None
     } else {
@@ -590,22 +603,22 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
     // never drains because the queue-processing worker threads live in the global thread POOL
     // [0x144853048], NOT in the worker MANAGER. If the pool is NULL cold, cold-building it
     // (0x14240afe0) is the untested save-safe lever; if non-null cold, the read fails elsewhere.
-    // CORRECTION (autoresearch 2026-06-18): the "stream task" 0x144842d40 below is actually
+    // CORRECTION (autoresearch 2026-06-18): the "stream task" read is actually
     // upstream's `runtime_heap_allocator` (DLAllocator) -- always non-null, so the
-    // `fd4_stream_task_present` signal is meaningless. See `RUNTIME_HEAP_ALLOCATOR_RVA`.
-    const FD4_IO_POOL_RVA: usize = 0x4853048;
-    const FD4_IO_WORKER_MANAGER_RVA: usize = 0x4852f88;
-    use crate::RUNTIME_HEAP_ALLOCATOR_RVA as FD4_STREAM_TASK_RVA;
-    const IO_DEVICE_SINGLETON_RVA: usize = 0x4589390;
-    const IO_DEVICE_INFLIGHT_10_OFFSET: usize = 0x10;
-    const IO_DEVICE_REQHANDLE_20_OFFSET: usize = 0x20;
+    // `fd4_stream_task_present` signal is meaningless. Resolve it through fromsoftware-rs.
+    const FD4_IO_POOL_RVA: usize = RuntimeGlobalRva::Fd4IoPool as usize;
+    const FD4_IO_WORKER_MANAGER_RVA: usize = RuntimeGlobalRva::Fd4IoWorkerManager as usize;
+    const IO_DEVICE_SINGLETON_RVA: usize = RuntimeGlobalRva::IoDeviceSingleton as usize;
+    const IO_DEVICE_INFLIGHT_10_OFFSET: usize =
+        core::mem::offset_of!(IoDeviceSnapshotLayout, inflight);
+    const IO_DEVICE_REQHANDLE_20_OFFSET: usize =
+        core::mem::offset_of!(IoDeviceSnapshotLayout, request_handle);
     let io_pool = unsafe { crate::experiments::safe_read_usize(base + FD4_IO_POOL_RVA) }
         .unwrap_or(NULL_POINTER_VALUE);
     let io_worker_manager =
         unsafe { crate::experiments::safe_read_usize(base + FD4_IO_WORKER_MANAGER_RVA) }
             .unwrap_or(NULL_POINTER_VALUE);
-    let stream_task = unsafe { crate::experiments::safe_read_usize(base + FD4_STREAM_TASK_RVA) }
-        .unwrap_or(NULL_POINTER_VALUE);
+    let stream_task = crate::runtime_heap_allocator_ptr_or_null();
     let io_device = unsafe { crate::experiments::safe_read_usize(base + IO_DEVICE_SINGLETON_RVA) }
         .unwrap_or(NULL_POINTER_VALUE);
     let io_inflight = if io_device == NULL_POINTER_VALUE {

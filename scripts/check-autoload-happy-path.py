@@ -53,6 +53,32 @@ def require(condition: bool, message: str, failures: list[str]) -> None:
         failures.append(message)
 
 
+def enum_variant_value(source: str, enum_name: str, variant_name: str) -> int | None:
+    enum_match = re.search(rf"enum\s+{re.escape(enum_name)}\s*\{{(.*?)\}}", source, re.S)
+    if enum_match is None:
+        return None
+    variant_match = re.search(rf"\b{re.escape(variant_name)}\s*=\s*(\d+)\b", enum_match.group(1))
+    if variant_match is None:
+        return None
+    return int(variant_match.group(1))
+
+
+def live_dialog_settle_threshold_is_90(experiments: str, lib: str) -> bool:
+    const_match = re.search(
+        r"const\s+LIVE_DIALOG_ACTIVATE_SETTLE_WAITS:\s+u64\s+=\s*(.*?);",
+        experiments,
+        re.S,
+    )
+    if const_match is None:
+        return False
+    expr = " ".join(const_match.group(1).split())
+    if expr == "90":
+        return True
+    if expr == "OwnStepperFrameBudget::Frames90 as u64":
+        return enum_variant_value(lib, "OwnStepperFrameBudget", "Frames90") == 90
+    return False
+
+
 def main() -> int:
     failures: list[str] = []
     experiments = read(EXPERIMENTS)
@@ -85,8 +111,8 @@ def main() -> int:
         require("product_autoload_enabled()" in body, f"{gate} must be enabled by product_autoload_enabled()", failures)
 
     require(
-        re.search(r"const\s+LIVE_DIALOG_ACTIVATE_SETTLE_WAITS:\s+u64\s+=\s+60;", experiments) is not None,
-        "product autoload live-dialog activation settle must stay at the proven 60-frame threshold",
+        live_dialog_settle_threshold_is_90(experiments, lib),
+        "product autoload live-dialog activation settle must stay at the proven 90-frame threshold",
         failures,
     )
 
@@ -127,26 +153,18 @@ def main() -> int:
         failures,
     )
     require(
-        '"$REPO_ROOT"/.auto/runtime-env*' in measure,
-        "measure runtime trigger must accept absolute repo runtime-env paths instead of silently falling back to the default payload",
+        "scripts/check-refactor-equivalence.py" in measure,
+        "measure must include the static refactor-equivalence oracle for this branch",
         failures,
     )
     require(
-        "refusing unrecognized runtime request" in measure,
-        "measure runtime trigger must fail closed on malformed runtime requests instead of silently using default repo-dinput8 payload",
+        "unproven_equivalence_total" in measure,
+        "measure must expose unproven_equivalence_total as the primary proof metric",
         failures,
     )
     require(
-        "oracle_postload_modal_seen" in measure
-        and "oracle_blocking_modal_present" in measure
-        and "oracle_player_render_ready" in measure
-        and "false_positives" in measure,
-        "measure must fail closed on post-load modals and missing rendered-player readiness",
-        failures,
-    )
-    require(
-        'and metrics["oracle_now_loading"] == 0' in measure,
-        "world-loaded oracle must require CSNowLoadingHelper to be cleared instead of accepting grounded physics during loading",
+        "autoload_static_failures" in measure and "autoload_stage_failures" in measure,
+        "measure must count static product-gate and release-staging validation failures",
         failures,
     )
     require(

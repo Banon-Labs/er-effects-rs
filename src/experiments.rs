@@ -52,6 +52,10 @@ use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 
 static PRODUCT_AUTOLOAD_ARMED: AtomicUsize = AtomicUsize::new(0);
 
+const PROFILE_SLOT_ACTIVATE_RVA: usize = ProfileLoadMenuRva::ProfileSlotActivate as usize;
+const PROFILE_LOAD_SELECTOR_TICK_RVA: usize =
+    ProfileLoadMenuRva::ProfileLoadSelectorTick as usize;
+
 pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
     if request.method() != SaveLoadMethod::DirectMenuLoad {
         return;
@@ -340,7 +344,7 @@ pub(crate) unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u
         return;
     }
     let game_man =
-        unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+        game_man_ptr_or_null();
     if game_man == TITLE_OWNER_SCAN_START_ADDRESS {
         return;
     }
@@ -639,12 +643,11 @@ pub(crate) fn worldres_coldbuild_probe_enabled() -> bool {
 /// tail registers the stream worker when [this+0x48] >= 6. So a zeroed stub with [+0x48]=6 builds
 /// the driver 0x143d7c088 + worker 0x144842d40, cold. Pure build -> read-back; no save write.
 unsafe fn worldres_coldbuild_probe(base: usize) {
-    const CSRES_GETTER_RVA: usize = 0x00cd6c50;
-    const EMK_RESMAN_DRIVER_RVA: usize = 0x03d7c088;
+    const CSRES_GETTER_RVA: usize = STREAMING_DRIVER_BUILDER_RVA;
+    const EMK_RESMAN_DRIVER_RVA: usize = STREAMING_DRIVER_SINGLETON_RVA;
     // NOTE: this global is upstream's `runtime_heap_allocator` (DLAllocator), always non-null --
     // NOT a world-stream worker. The BEFORE/AFTER "worker" reads below are a FALSE-POSITIVE lever
-    // (allocator present regardless of the getter); kept for context. See `RUNTIME_HEAP_ALLOCATOR_RVA`.
-    use crate::RUNTIME_HEAP_ALLOCATOR_RVA as STREAM_WORKER_RVA;
+    // (allocator present regardless of the getter); kept for context via the fromsoftware-rs accessor.
     const STUB_LEN: usize = 0x80;
     const STUB_FILL: u8 = 0;
     const STUB_STATE_OFFSET: usize = 0x48;
@@ -655,22 +658,21 @@ unsafe fn worldres_coldbuild_probe(base: usize) {
         return;
     }
     let driver_before = unsafe { *((base + EMK_RESMAN_DRIVER_RVA) as *const usize) };
-    let worker_before = unsafe { *((base + STREAM_WORKER_RVA) as *const usize) };
+    let worker_before = crate::runtime_heap_allocator_ptr_or_null();
     // Persistent zeroed stub `this`: the getter only touches [+0x48] (state) / [+0x4c] / [+0x50].
     let stub: &'static mut [u8; STUB_LEN] = Box::leak(Box::new([STUB_FILL; STUB_LEN]));
     let stub_ptr = stub.as_mut_ptr() as usize;
     unsafe { *((stub_ptr + STUB_STATE_OFFSET) as *mut i32) = STUB_STATE_VALUE };
     append_autoload_debug(format_args!(
-        "worldres-coldbuild: BEFORE driver[0x{:x}]=0x{driver_before:x} worker[0x{:x}]=0x{worker_before:x} -- calling CSResStep getter 0x{:x}(stub=0x{stub_ptr:x})",
+        "worldres-coldbuild: BEFORE driver[0x{:x}]=0x{driver_before:x} allocator=0x{worker_before:x} -- calling CSResStep getter 0x{:x}(stub=0x{stub_ptr:x})",
         base + EMK_RESMAN_DRIVER_RVA,
-        base + STREAM_WORKER_RVA,
         base + CSRES_GETTER_RVA
     ));
     let getter: unsafe extern "system" fn(usize) -> usize =
         unsafe { std::mem::transmute(base + CSRES_GETTER_RVA) };
     let ret = unsafe { getter(stub_ptr) };
     let driver_after = unsafe { *((base + EMK_RESMAN_DRIVER_RVA) as *const usize) };
-    let worker_after = unsafe { *((base + STREAM_WORKER_RVA) as *const usize) };
+    let worker_after = crate::runtime_heap_allocator_ptr_or_null();
     append_autoload_debug(format_args!(
         "worldres-coldbuild: AFTER driver=0x{driver_after:x} worker=0x{worker_after:x} ret=0x{ret:x} (both non-null = lever VALIDATED, NO SetState/NO save write)"
     ));
@@ -748,9 +750,8 @@ unsafe fn own_stepper_direct_build(owner: usize, base: usize) {
     // 0x140261cd0 = [ProfileSummary+8+slot]) APPENDS the slot -> the dialog's save-rows populate
     // (bound>0) -> load_activate has a row to read. This wires the ACTIVATE-byte breakthrough into
     // the direct-built dialog. Save-safe (in-memory byte; the dialog build is no-write).
-    const PROFILE_SLOT_ACTIVATE_RVA: usize = 0x262250;
     let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
-    let gdm = unsafe { safe_read_usize(base + SLOT_MANAGER_RVA) }.unwrap_or(NULL);
+    let gdm = game_data_man_ptr_or_null();
     let profile_summary = if gdm != NULL {
         unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(NULL)
     } else {
@@ -904,9 +905,8 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
         // (the session/ProfileSummary IS present). Set that byte directly via ACTIVATE 0x140262250
         // (byte[profile+slot+8]=1) so 0x67b200 passes its slot-check and submits the read onto the
         // present subsystem. Save-safe (sets an in-memory flag; the deserialize only READS the .sl2).
-        const PROFILE_SLOT_ACTIVATE_RVA: usize = 0x262250;
         const SLOT_ACTIVE_BYTE_BASE: usize = 0x8;
-        let game_data_man = unsafe { *((base + SLOT_MANAGER_RVA) as *const usize) };
+        let game_data_man = game_data_man_ptr_or_null();
         let profile_summary = if game_data_man != null {
             unsafe { *((game_data_man + SLOT_MANAGER_CONTAINER_OFFSET) as *const usize) }
         } else {
@@ -938,7 +938,7 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
         let worker_build: unsafe extern "system" fn(usize) -> usize =
             unsafe { std::mem::transmute(base + WORLD_WORKER_BUILD_RVA) };
         unsafe { worker_build(stub_ptr) };
-        let worker = unsafe { *((base + crate::RUNTIME_HEAP_ALLOCATOR_RVA) as *const usize) };
+        let worker = crate::runtime_heap_allocator_ptr_or_null();
         // (2) Resolve + set the slot, then submit the FULL save read (b80=2). The old
         // preview+LoadSaveData path drained but only left metadata resident, so 0x67b290 could
         // report success while c30 stayed at the default map and the strict world oracle caught a
@@ -1193,13 +1193,13 @@ unsafe fn diagnostic_menu_walk(
     const CONT_CURSOR_10: usize = 0x10;
     const CONT_ELEM0_18: usize = 0x18;
     const CONT_COUNT_60: usize = 0x60;
-    const MENU_JOB_HOLDER_E0: usize = 0xe0;
+    const MENU_JOB_HOLDER_E0: usize = TITLE_OWNER_MENU_HOLDER_E0_OFFSET;
     const ITEM_VTABLE_RVA: usize = 0x02aa97e8;
-    const ITEM_FUNCTOR_A8: usize = 0xa8;
+    const ITEM_FUNCTOR_A8: usize = MENU_ITEM_FUNCTOR_A8_OFFSET;
     const ITEM_CTX_10: usize = 0x10;
     const ITEM_DESC_58: usize = 0x58;
     const ITEM_RESULT_130: usize = 0x130;
-    const DIALOG_FACTORY_RVA: usize = 0x0081ead0;
+    const DIALOG_FACTORY_RVA: usize = LIVE_DIALOG_FACTORY_RVA;
     const DOCALL_VTABLE_SLOT_10: usize = 0x10;
     const COUNT_SANITY_MIN: i32 = 1;
     const COUNT_SANITY_MAX: i32 = 32;
@@ -1341,7 +1341,7 @@ unsafe fn diagnostic_menu_walk(
 /// whose action functor lives at `[entry+0xf8]` (vs the MenuWindowJob `[item+0xa8]`). Fault-tolerant.
 unsafe fn functor_ptr_hits_factory(functor: usize, module_base: usize, chain: &mut String) -> bool {
     const DOCALL_VTABLE_SLOT_10: usize = 0x10;
-    const DIALOG_FACTORY_RVA: usize = 0x0081ead0;
+    const DIALOG_FACTORY_RVA: usize = LIVE_DIALOG_FACTORY_RVA;
     const JMP_CHAIN_MAX_HOPS: usize = 4;
     const HOP_START: usize = 0;
     const HOP_STEP: usize = 1;
@@ -1375,9 +1375,9 @@ unsafe fn functor_ptr_hits_factory(functor: usize, module_base: usize, chain: &m
 }
 
 unsafe fn functor_chain_hits_factory(item: usize, module_base: usize, chain: &mut String) -> bool {
-    const ITEM_FUNCTOR_A8: usize = 0xa8;
+    const ITEM_FUNCTOR_A8: usize = MENU_ITEM_FUNCTOR_A8_OFFSET;
     const DOCALL_VTABLE_SLOT_10: usize = 0x10;
-    const DIALOG_FACTORY_RVA: usize = 0x0081ead0;
+    const DIALOG_FACTORY_RVA: usize = LIVE_DIALOG_FACTORY_RVA;
     const JMP_CHAIN_MAX_HOPS: usize = 4;
     const HOP_START: usize = 0;
     const HOP_STEP: usize = 1;
@@ -1524,7 +1524,7 @@ static CURSOR_PROBE_BASELINE: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new
 /// confirm/refute it. Pure reads via safe_read_usize -> never AVs.
 unsafe fn cursor_offset_probe(owner: usize, base: usize, baseline: bool) {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    const DIALOG_E0: usize = 0xe0;
+    const DIALOG_E0: usize = TITLE_OWNER_MENU_HOLDER_E0_OFFSET;
     const DWORD_LO_MASK: usize = 0xffffffff;
     const DWORD_BYTES: usize = 4;
     const SCAN_START: usize = 0;
@@ -1599,15 +1599,15 @@ unsafe fn dump_titletop_menu_entries(
     base: usize,
 ) -> (Option<usize>, Option<usize>, i32) {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    const DIALOG_E0: usize = 0xe0;
-    const MENU_SUBOBJ_A38: usize = 0xa38;
+    const DIALOG_E0: usize = TITLE_OWNER_MENU_HOLDER_E0_OFFSET;
+    const MENU_SUBOBJ_A38: usize = DIALOG_SCENE_PROXY_CAPTURE_A38_OFFSET;
     const ENTRY_VEC_BEGIN_1290: usize = 0x1290;
     const ENTRY_VEC_END_1298: usize = 0x1298;
     const ENTRY_STRIDE_210: usize = 0x210;
     const ENTRY_ACTION_VT_SLOT_10: usize = 0x10;
     const ENTRY_FUNCTOR_F8: usize = 0xf8;
     const ENTRY_RESULT_130: usize = 0x130;
-    const DIALOG_FACTORY_RVA: usize = 0x0081ead0;
+    const DIALOG_FACTORY_RVA: usize = LIVE_DIALOG_FACTORY_RVA;
     const MAX_ENTRIES: usize = 16;
     const IDX_START: usize = 0;
     const IDX_STEP: usize = 1;
@@ -1786,16 +1786,16 @@ unsafe fn dump_titletop_menu_entries(
 /// so native_load_enabled() can fire its run; previously it returned only the window item.)
 unsafe fn scan_dialog_for_loadgame(owner: usize, base: usize) -> (Option<usize>, Option<usize>) {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    const DIALOG_E0: usize = 0xe0;
+    const DIALOG_E0: usize = TITLE_OWNER_MENU_HOLDER_E0_OFFSET;
     const ENTRY_REGISTRY_A48: usize = 0xa48;
-    const ENTRY_SOURCE_A38: usize = 0xa38;
+    const ENTRY_SOURCE_A38: usize = DIALOG_SCENE_PROXY_CAPTURE_A38_OFFSET;
     // d180 std::function _Func_impl vtable (user-capture-confirmed); MenuMemberFuncJob vtable.
     const FUNCTOR_VTABLE_RVA: usize = 0x02ac3ea8;
     const MEMBERFUNCJOB_VTABLE_RVA: usize = 0x02b265d0;
     const FACTORY_RVA: usize = 0x0081ead0;
-    const ITEM_FUNCTOR_A8: usize = 0xa8;
+    const ITEM_FUNCTOR_A8: usize = MENU_ITEM_FUNCTOR_A8_OFFSET;
     const MEMBER_FN_18: usize = 0x18;
-    const MEMBER_DIALOG_10: usize = 0x10;
+    const MEMBER_DIALOG_10: usize = core::mem::size_of::<usize>() + core::mem::size_of::<usize>();
     const MEMBER_ADJ_20: usize = 0x20;
     const SCAN_QWORDS: usize = 0x500;
     const PTR_SZ: usize = core::mem::size_of::<usize>();
@@ -1854,7 +1854,8 @@ unsafe fn scan_dialog_for_loadgame(owner: usize, base: usize) -> (Option<usize>,
     // r8 = *(capture+8); the gold capture showed that = owner+0x138, and the ctor reads the
     // profile ROW-VECTOR COUNT at [r8+0xa60]. Validate READ-ONLY which candidate has a plausible
     // vtable [+0] + a small row count [+0xa60] BEFORE any native build call (look before acting).
-    const OWNER_MENU_OBJ_138: usize = 0x138;
+    const OWNER_MENU_OBJ_138: usize =
+        TITLE_OWNER_MENU_LIST_130_OFFSET + core::mem::size_of::<usize>();
     const CTOR_ROW_COUNT_A60: usize = 0xa60;
     const CTOR_ROW_VEC_BEGIN_A58: usize = 0xa58;
     const R8_CAND_N: usize = 2;
@@ -2058,7 +2059,6 @@ unsafe fn fire_live_loadgame_node(title_dialog: usize, menu_window: usize, base:
         ));
         return false;
     }
-    const PROFILE_SLOT_ACTIVATE_RVA: usize = 0x262250;
     const RECORD_BASE_18: usize = 0x18;
     const RECORD_STATE_44: usize = 0x44;
     const RECORD_STRIDE_2A0: usize = 0x2a0;
@@ -2066,7 +2066,7 @@ unsafe fn fire_live_loadgame_node(title_dialog: usize, menu_window: usize, base:
     const RECORD_STATE_LOADABLE: i32 = 2;
     const RECORD_VALID_SET: u8 = 1;
     let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
-    let gdm = unsafe { safe_read_usize(base + SLOT_MANAGER_RVA) }.unwrap_or(NULL);
+    let gdm = game_data_man_ptr_or_null();
     let profile_summary = if gdm != NULL {
         unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(NULL)
     } else {
@@ -2129,8 +2129,8 @@ unsafe fn fire_live_loadgame_node(title_dialog: usize, menu_window: usize, base:
 /// vtable -> no call; dialog not live yet -> wait then DONE on timeout). The forge path is untouched.
 unsafe fn own_stepper_live_dialog_fire(owner: usize, base: usize, waits: u64) {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    const FIRE_SETTLE_WAITS: u64 = 30;
-    const FIRE_DIALOG_WAIT_MAX: u64 = 600;
+    const FIRE_SETTLE_WAITS: u64 = OWN_STEPPER_S2_INVOKE_SETTLE;
+    const FIRE_DIALOG_WAIT_MAX: u64 = OwnStepperFrameBudget::Frames600 as u64;
     // FIX 2 (probe-6): the factory 0x14081ead0 RETURNS the new dialog in rax. fire_live_loadgame_node
     // validates that return == ProfileLoadDialog (vt 0x142b229f8) and, on a match, stores it as
     // OWN_STEPPER_DIALOG + transitions own_stepper to STAGE2 ACTIVATE on THAT pointer. We no longer
@@ -2187,7 +2187,7 @@ unsafe fn own_stepper_live_dialog_fire(owner: usize, base: usize, waits: u64) {
 /// native call, so it is only used once the live item/owner are validated; it is NOT a
 /// save-write by itself (the Load-entry/dialog functors build UI, not save state).
 unsafe fn invoke_menu_item_functor(item: usize) -> Option<usize> {
-    const ITEM_FUNCTOR_A8: usize = 0xa8;
+    const ITEM_FUNCTOR_A8: usize = MENU_ITEM_FUNCTOR_A8_OFFSET;
     const ITEM_CTX_10: usize = 0x10;
     const DOCALL_VTABLE_SLOT_10: usize = 0x10;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -2224,7 +2224,7 @@ unsafe fn invoke_menu_item_functor(item: usize) -> Option<usize> {
 /// [item+0x10]==0. `framectx` is the live FD4Time passed to our idx10 step (the same ctx the native
 /// pump feeds the leaf). Returns the built dialog at [item+0x130], if any.
 unsafe fn drive_menu_item_update(item: usize, base: usize, framectx: usize) -> Option<usize> {
-    const ITEM_FUNCTOR_A8: usize = 0xa8;
+    const ITEM_FUNCTOR_A8: usize = MENU_ITEM_FUNCTOR_A8_OFFSET;
     const ITEM_CTX_10: usize = 0x10;
     const ITEM_RESULT_130: usize = 0x130;
     const OUT_ZERO: u64 = 0;
@@ -2710,7 +2710,7 @@ unsafe fn native_load_tick(owner: usize, base: usize, n: u64) {
         ));
         return;
     }
-    const MEMBER_DIALOG_10: usize = 0x10;
+    const MEMBER_DIALOG_10: usize = core::mem::size_of::<usize>() + core::mem::size_of::<usize>();
     const MEMBER_FN_18: usize = 0x18;
     const MEMBER_ADJ_20: usize = 0x20;
     let m_dlg = unsafe { safe_read_usize(node + MEMBER_DIALOG_10) }.unwrap_or(NULL);
@@ -2777,7 +2777,7 @@ unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     const PTR_ALIGN_MASK: usize = 0x7;
     const NO_TICK: usize = 0;
     const WAIT_INC: usize = 1;
-    let gm = unsafe { safe_read_usize(base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) }.unwrap_or(NULL);
+    let gm = game_man_ptr_or_null();
     let phase = FULLREAD_PHASE.load(Ordering::SeqCst);
     // Already finished: keep observing (the golden oracle is written by the caller's telemetry once
     // the native pump streams the world).
@@ -2952,14 +2952,17 @@ unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         // COMMIT: continue_confirm 0x140b0e180(rcx=&shim{[OWNER]=owner}), owner=*(base+0x3d5df38+8).
         // It checks owner+0x284==0 -> sets owner+0xbc=c30 + SetState5 (AUTOSAVES). Look before acting:
         // resolve owner read-only + confirm owner+0x284==0 before the native call (fail-closed).
-        let owner_obj = unsafe {
-            safe_read_usize(base + PLAYER_GAME_DATA_SINGLETON_RVA + FULLREAD_OWNER_GDM_08_OFFSET)
-        }
-        .unwrap_or(NULL);
+        let game_data_man = game_data_man_ptr_or_null();
+        let owner_obj = if game_data_man == NULL {
+            NULL
+        } else {
+            unsafe { safe_read_usize(game_data_man + FULLREAD_OWNER_GDM_08_OFFSET) }
+                .unwrap_or(NULL)
+        };
         if owner_obj == NULL {
             append_autoload_debug(format_args!(
-                "native-fullread: COMMIT ABORT -- continue_confirm owner (*(base+0x{:x}+0x{:x})) is null -> DONE (no write)",
-                PLAYER_GAME_DATA_SINGLETON_RVA, FULLREAD_OWNER_GDM_08_OFFSET
+                "native-fullread: COMMIT ABORT -- continue_confirm owner (GameDataMan=0x{game_data_man:x}, offset=0x{:x}) is null -> DONE (no write)",
+                FULLREAD_OWNER_GDM_08_OFFSET
             ));
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
             return;
@@ -3007,7 +3010,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
     let n = OWN_STEPPER_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
     let base = OWN_STEPPER_BASE.load(Ordering::SeqCst);
     let phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
-    let gm = unsafe { *((base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+    let gm = game_man_ptr_or_null();
     let read_gm = |off: usize| {
         if gm != TITLE_OWNER_SCAN_START_ADDRESS {
             unsafe { *((gm + off) as *const i32) }
@@ -3244,7 +3247,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             DESERIALIZE_SLOT_RVA,
             LOAD_INITIATOR_RVA,
             WORLD_WORKER_BUILD_RVA,
-            crate::RUNTIME_HEAP_ALLOCATOR_RVA,
+            crate::runtime_heap_allocator_ptr_or_null as fn() -> usize,
             WORLD_WORKER_BUILD_STATE,
             SYNTHETIC_STEP_STATE_OFFSET,
             FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
@@ -3304,7 +3307,8 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         // d180's +0xa8 functor object = {_Func_impl vtable base+0x2ac3ea8, capture[+8]=owner+0x138}
         // (user-driven capture 2026-06-17) -- a strong fingerprint corroborating the functor->factory
         // classification.
-        const MENU_ITEM_LOADGAME_FUNCTOR_VTABLE_RVA: usize = 0x02ac3ea8;
+        const MENU_ITEM_LOADGAME_FUNCTOR_VTABLE_RVA: usize =
+            ProfileLoadMenuRva::MenuLoadGameFunctorVtable as usize;
         if !own_stepper_passive_enabled()
             && !input_probe_enabled()
             && !live_dialog_enabled()
@@ -3319,7 +3323,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             // item+0x10 from the descriptor item+0x58 before firing the functor -> NO synthetic
             // ctx, NO save write). The cap_menu_item_update hook also sets it if d180 ever ticks;
             // whichever fires first wins. Throttled; pure reads here (save-safe).
-            const ITEM_FUNCTOR_A8: usize = 0xa8;
+            const ITEM_FUNCTOR_A8: usize = MENU_ITEM_FUNCTOR_A8_OFFSET;
             const ITEM_CTX_10: usize = 0x10;
             const ITEM_RESULT_130: usize = 0x130;
             let verbose = OWN_STEPPER_TITLETOP_DUMPS
@@ -3372,7 +3376,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         // the registrar on the CORRECT gate -- is_in_state(Loop)==true && latch==0 -- which is
         // exactly the native path's own precondition (zero input, NO save write). If the native
         // path fires first (latch->1 in Loop) we simply observe the menu open.
-        const MENU_JOB_HOLDER_E0: usize = 0xe0;
+        const MENU_JOB_HOLDER_E0: usize = TITLE_OWNER_MENU_HOLDER_E0_OFFSET;
         if MENU_ENTRIES_SEEN.load(Ordering::SeqCst) == MENU_ENTRIES_SEEN_NO
             && waits >= STAGE1D_SETTLE_WAITS
         {
@@ -3891,7 +3895,8 @@ unsafe fn own_stepper_stage2(
     }
 
     if phase == OWN_STEPPER_PHASE_S2_ACTIVATE {
-        const LIVE_DIALOG_ACTIVATE_SETTLE_WAITS: u64 = 60;
+        const LIVE_DIALOG_ACTIVATE_SETTLE_WAITS: u64 =
+            OwnStepperFrameBudget::Frames90 as u64;
         if live_dialog_enabled() && waits < LIVE_DIALOG_ACTIVATE_SETTLE_WAITS {
             if waits % S2_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
                 append_autoload_debug(format_args!(
@@ -3909,7 +3914,7 @@ unsafe fn own_stepper_stage2(
             return;
         }
         // PlayerGameData must be non-null (load_activate asserts it).
-        let pgd = unsafe { safe_read_usize(base + PLAYER_GAME_DATA_SINGLETON_RVA) }.unwrap_or(null);
+        let pgd = game_data_man_ptr_or_null();
         if pgd == null {
             append_autoload_debug(format_args!(
                 "own_stepper: STAGE2-ACTIVATE PlayerGameData null -- STAGE2-NOWRITE-ABORT"
@@ -3987,7 +3992,8 @@ unsafe fn own_stepper_stage2(
         // (probe-12-isolation-selector-pump-crashes-regressed-from-direct-submit-drain). The MOUNT
         // phase now uses the PROVEN cold_char_mount_drive direct submit+drain+poll+deserialize
         // sequence (SAVE-DATA-HALF-SOLVED) instead. ctx is read here only for the log evidence.
-        const DIALOG_LOADJOBCTX_1CC8: usize = 0x1cc8;
+        const DIALOG_LOADJOBCTX_1CC8: usize =
+            core::mem::offset_of!(ProfileLoadDialogLayout, load_job_ctx);
         let ctx = unsafe { safe_read_usize(dialog + DIALOG_LOADJOBCTX_1CC8) }.unwrap_or(null);
         let ctx_vt = if ctx != null {
             unsafe { safe_read_usize(ctx) }.unwrap_or(null)
@@ -4013,8 +4019,13 @@ unsafe fn own_stepper_stage2(
         // 0x140826510 returns the small owner pointer, but static disassembly proves it stores the
         // heap selector step at [owner]; tick that step with ctx=owner+0xf8, matching natural traces.
         if live_dialog_enabled() {
-            const SELECTOR_TICK_RVA: usize = 0x826d50;
-            const SELECTOR_RESULT_QWORDS: usize = 4;
+            const SELECTOR_TICK_RVA: usize = PROFILE_LOAD_SELECTOR_TICK_RVA;
+            #[repr(C)]
+            struct SelectorTickResultLayout {
+                qwords: [usize; 4],
+            }
+            const SELECTOR_RESULT_QWORDS: usize =
+                core::mem::size_of::<SelectorTickResultLayout>() / core::mem::size_of::<usize>();
             let step = OWN_STEPPER_SELECTOR_STEP.load(Ordering::SeqCst);
             let selector_ctx = OWN_STEPPER_SELECTOR_CTX.load(Ordering::SeqCst);
             if step != null && selector_ctx != null {
@@ -4175,7 +4186,7 @@ unsafe fn char_fingerprint(base: usize) -> (bool, u32, usize) {
     const IDX_STEP: usize = 1;
     const MIN_REAL_LEVEL: u32 = 1;
     const NAME_LEN_NONE: usize = 0;
-    let gdm = unsafe { safe_read_usize(base + PLAYER_GAME_DATA_SINGLETON_RVA) }.unwrap_or(NULL);
+    let gdm = game_data_man_ptr_or_null();
     let pgd = if gdm != NULL {
         unsafe { safe_read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(NULL)
     } else {
@@ -4218,7 +4229,7 @@ pub(crate) unsafe fn dump_load_correctness(base: usize, frame: u64) {
     const U32_STRIDE: usize = 4;
     const IDX_START: usize = 0;
     const IDX_STEP: usize = 1;
-    let gm = unsafe { safe_read_usize(base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) }.unwrap_or(NULL);
+    let gm = game_man_ptr_or_null();
     let ri32 = |addr: usize| -> i32 {
         unsafe { safe_read_usize(addr) }
             .map(|v| v as u32 as i32)
@@ -4241,7 +4252,7 @@ pub(crate) unsafe fn dump_load_correctness(base: usize, frame: u64) {
         (BAD_I32, BAD_I32, NAME_UNKNOWN)
     };
     // [0x144588268] -> GameDataMan; PlayerGameData (the save data) = [GameDataMan + 0x08].
-    let gdm = unsafe { safe_read_usize(base + PLAYER_GAME_DATA_SINGLETON_RVA) }.unwrap_or(NULL);
+    let gdm = game_data_man_ptr_or_null();
     let pgd = if gdm != NULL {
         unsafe { safe_read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(NULL)
     } else {
@@ -4293,7 +4304,7 @@ pub(crate) unsafe fn dump_load_correctness(base: usize, frame: u64) {
 pub(crate) unsafe extern "system" fn own_stepper_idx6(owner: usize, framectx: usize) {
     let base = OWN_STEPPER_BASE.load(Ordering::SeqCst);
     let phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
-    let gm = unsafe { *((base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+    let gm = game_man_ptr_or_null();
     let csfeman = unsafe { *((base + CSFEMAN_SINGLETON_RVA) as *const usize) };
     let read_gm = |off: usize| {
         if gm != TITLE_OWNER_SCAN_START_ADDRESS {
@@ -4477,7 +4488,7 @@ pub(crate) unsafe fn title_observe_tick(module_base: usize, tick: u64) {
     }
     let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
     let session = unsafe { *((module_base + SESSION_SINGLETON_RVA) as *const usize) };
-    let gm = unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+    let gm = game_man_ptr_or_null();
     let read_gm = |off: usize| {
         if gm != null {
             unsafe { *((gm + off) as *const i32) }
@@ -4518,7 +4529,7 @@ pub(crate) unsafe fn title_observe_tick(module_base: usize, tick: u64) {
     } else {
         TITLE_STATE_OWNER_GONE
     };
-    let slotmgr = unsafe { *((module_base + SLOT_MANAGER_RVA) as *const usize) };
+    let slotmgr = game_data_man_ptr_or_null();
     // World-resource streaming enable-state (the WorldResWait resolution gate):
     // resmgr = deref(deref(MoveMapStep+0xf0)+0x10); b7c1 = its streaming-enable flag;
     // driver = the streaming/session driver singleton 0x143d7c088. Capture what the
@@ -4603,7 +4614,7 @@ pub(crate) unsafe fn submit_play_game_once(
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
-    let gm = unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+    let gm = game_man_ptr_or_null();
     let read_c30 = || {
         if gm != null {
             unsafe { *((gm + GAME_MAN_SAVED_MAP_C30_OFFSET) as *const i32) }
@@ -4729,7 +4740,7 @@ pub(crate) unsafe fn submit_play_game_once(
                 SYNTHETIC_STEP_THIS_SIZE,
                 SYNTHETIC_STEP_STATE_OFFSET,
                 WORLD_WORKER_BUILD_STATE,
-                crate::RUNTIME_HEAP_ALLOCATOR_RVA,
+                crate::runtime_heap_allocator_ptr_or_null as fn() -> usize,
             );
             SUBMIT_PLAY_GAME_PHASE.store(SUBMIT_PHASE_DONE, Ordering::SeqCst);
             append_autoload_debug(format_args!(
@@ -5717,7 +5728,7 @@ pub(crate) unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: 
     let latch = unsafe { *((module_base + TITLE_ACCEPT_LATCH_RVA) as *const u8) };
     let movie = unsafe { *((module_base + MOVIE_SINGLETON_RVA) as *const usize) };
     let skip = unsafe { *((module_base + MOVIE_SKIP_FLAG_RVA) as *const u8) };
-    let gm = unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+    let gm = game_man_ptr_or_null();
     let session = unsafe { *((module_base + SESSION_SINGLETON_RVA) as *const usize) };
     let log_now = (tick % ARM_PROBE_TICK_INTERVAL == null as u64)
         || (skip == MOVIE_SKIP_FLAG_SET && csfeman == null);
@@ -5781,7 +5792,7 @@ pub(crate) unsafe fn native_arm_loop_tick(module_base: usize, slot: i32, tick: u
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let game_man =
-        unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+        game_man_ptr_or_null();
     if game_man == null {
         return;
     }
@@ -5818,8 +5829,8 @@ pub(crate) unsafe fn arm_precondition_probe(module_base: usize, tick: u64) {
         return;
     }
     let read_ptr = |rva: usize| unsafe { *((module_base + rva) as *const usize) };
-    let game_man = read_ptr(FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA);
-    let slot_mgr = read_ptr(SLOT_MANAGER_RVA);
+    let game_man = game_man_ptr_or_null();
+    let slot_mgr = game_data_man_ptr_or_null();
     let csfeman = read_ptr(CSFEMAN_SINGLETON_RVA);
     let input_mgr = read_ptr(TITLE_INPUT_MANAGER_RVA);
     let latch = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
@@ -5868,7 +5879,7 @@ pub(crate) unsafe fn continue_drive_tick(module_base: usize, slot: i32, tick: u6
     // drive can fire, so the next runtime must tell us when GameMan first became
     // available instead of turning the gate into another blind threshold knob.
     let game_man =
-        unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+        game_man_ptr_or_null();
     if game_man == TITLE_OWNER_SCAN_START_ADDRESS {
         return;
     }
@@ -6088,7 +6099,7 @@ pub(crate) unsafe fn call_force_play_game_once(module_base: usize, slot: i32, ti
         // becomes nonnegative when PlayGame runs (5 -> 6), the pair chain
         // succeeded and the gap is downstream (GameStepWait/job); if it stays -1,
         // submit/validate/pair never wrote it.
-        let gm = unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+        let gm = game_man_ptr_or_null();
         let load14 = if gm != TITLE_OWNER_SCAN_START_ADDRESS {
             unsafe { *((gm + FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET) as *const i32) }
         } else {
@@ -6132,7 +6143,7 @@ pub(crate) unsafe fn call_force_play_game_once(module_base: usize, slot: i32, ti
     // see which one blocks (pair skips writing GameMan+0x14 unless b28==0; the
     // validate step gates on 12d/12e).
     let game_man_ptr =
-        unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+        game_man_ptr_or_null();
     if game_man_ptr != TITLE_OWNER_SCAN_START_ADDRESS {
         let gm = game_man_ptr as *const u8;
         let ac0 = unsafe { *(gm.add(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
@@ -6503,7 +6514,6 @@ pub(crate) unsafe fn append_menu_semaphore_trace(
 }
 
 pub(crate) fn game_man_trace_summary() -> String {
-    const GAME_MAN_GLOBAL_RVA: u32 = 0x03d69918;
     // Named GameMan fields bound to the upstream typed layout (self-validating, dedups the
     // crate-level consts). The b73/b74/b75/bb8/bbc/bc0/bc4 flags read upstream-unnamed regions,
     // so they stay hand-decoded.
@@ -6512,19 +6522,22 @@ pub(crate) fn game_man_trace_summary() -> String {
         core::mem::offset_of!(GameMan, requested_save_slot_load_index);
     const GAME_MAN_SAVE_STATE_OFFSET: usize = core::mem::offset_of!(GameMan, save_state);
     const GAME_MAN_FLAG_B72_OFFSET: usize = core::mem::offset_of!(GameMan, save_requested);
-    const GAME_MAN_FLAG_B73_OFFSET: usize = 0xb73;
-    const GAME_MAN_FLAG_B74_OFFSET: usize = 0xb74;
-    const GAME_MAN_FLAG_B75_OFFSET: usize = 0xb75;
-    const GAME_MAN_FLAG_BB8_OFFSET: usize = 0xbb8;
-    const GAME_MAN_FLAG_BC4_OFFSET: usize = 0xbc4;
-    const GAME_MAN_FLAG_BBC_OFFSET: usize = 0xbbc;
-    const GAME_MAN_FLAG_BC0_OFFSET: usize = 0xbc0;
+    const GAME_MAN_FLAG_B73_OFFSET: usize = GAME_MAN_FLAG_B73_PROBE_OFFSET;
+    const GAME_MAN_FLAG_B74_OFFSET: usize =
+        GAME_MAN_FLAG_B73_OFFSET + core::mem::size_of::<u8>();
+    const GAME_MAN_FLAG_B75_OFFSET: usize = GAME_MAN_FLAG_B75_PROBE_OFFSET;
+    const GAME_MAN_FLAG_BC4_OFFSET: usize = crate::GAME_MAN_FLAG_BC4_OFFSET;
+    const GAME_MAN_FLAG_BB8_OFFSET: usize = GAME_MAN_FLAG_BC4_OFFSET
+        - core::mem::size_of::<u32>()
+        - core::mem::size_of::<u32>()
+        - core::mem::size_of::<u32>();
+    const GAME_MAN_FLAG_BBC_OFFSET: usize =
+        GAME_MAN_FLAG_BB8_OFFSET + core::mem::size_of::<u32>();
+    const GAME_MAN_FLAG_BC0_OFFSET: usize =
+        GAME_MAN_FLAG_BBC_OFFSET + core::mem::size_of::<u32>();
 
     unsafe {
-        let Ok(global) = game_rva(GAME_MAN_GLOBAL_RVA) else {
-            return "gm_global_unresolved".to_owned();
-        };
-        let game_man = *(global as *const *const u8);
+        let game_man = game_man_ptr_or_null() as *const u8;
         if game_man.is_null() {
             return "gm=null".to_owned();
         }
@@ -6592,17 +6605,17 @@ pub(crate) fn install_continue_trace_hooks() {
     // currently +0xf0 for these text symbols; these RVAs are verified against
     // /home/banon/.local/share/Steam/.../eldenring.exe sha256
     // 34102b1c08bb5f769a724427a6f70fe29b3b732c31cf73693f861c48d3492ddb.
-    const MENU_CONTINUE_WRAPPER_RVA: u32 = 0x0082bac0;
-    const MENU_NEW_OR_LOAD_WRAPPER_RVA: u32 = 0x0082ba80;
-    const MENU_OTHER_LOAD_WRAPPER_RVA: u32 = 0x0082bb00;
-    const SET_SAVE_SLOT_RVA: u32 = 0x0067a810;
-    const SAVE_REQUEST_PROFILE_RVA: u32 = 0x0067a420;
-    const REQUEST_SAVE_RVA: u32 = 0x0067a520;
+    const MENU_CONTINUE_WRAPPER_RVA: u32 = TRACE_MENU_CONTINUE_WRAPPER_RVA;
+    const MENU_NEW_OR_LOAD_WRAPPER_RVA: u32 = TRACE_MENU_NEW_OR_LOAD_WRAPPER_RVA;
+    const MENU_OTHER_LOAD_WRAPPER_RVA: u32 = er_save_loader::MENU_OTHER_LOAD_WRAPPER_RVA;
+    const SET_SAVE_SLOT_RVA: u32 = er_save_loader::SET_SAVE_SLOT_RVA;
+    const SAVE_REQUEST_PROFILE_RVA: u32 = er_save_loader::SAVE_REQUEST_PROFILE_RVA;
+    const REQUEST_SAVE_RVA: u32 = er_save_loader::REQUEST_SAVE_RVA;
     const CURRENT_SLOT_LOAD_RVA: u32 = 0x0067b570;
     const CONTINUE_LOAD_RVA: u32 = 0x0067b750;
     const COMBINED_LOAD_RVA: u32 = 0x0067b940;
     const MAP_LOAD_RVA: u32 = 0x0067bc10;
-    const SAVE_LOAD_STATE_INIT_RVA: u32 = 0x0067b030;
+    const SAVE_LOAD_STATE_INIT_RVA: u32 = er_save_loader::SAVE_LOAD_STATE_INIT_RVA;
 
     append_continue_trace(format_args!(
         "install_continue_trace_hooks begin {}",
@@ -6769,9 +6782,9 @@ pub(crate) fn install_continue_trace_hooks() {
         const CAP_LOAD_ACTIVATE_RVA: u32 = 0x009a4670;
         const CAP_LOAD_ACTIVATE2_RVA: u32 = 0x009ac760;
         const CAP_BUILDER_RVA: u32 = 0x00826510;
-        const CAP_SELECTOR_TICK_RVA: u32 = 0x00826d50;
-        const CAP_MENU_DESER_RVA: u32 = 0x0082c240;
-        const CAP_DIALOG_FACTORY_RVA: u32 = 0x0081ead0;
+        const CAP_SELECTOR_TICK_RVA: u32 = PROFILE_LOAD_SELECTOR_TICK_RVA as u32;
+        const CAP_MENU_DESER_RVA: u32 = ProfileLoadMenuRva::MenuDeser as u32;
+        const CAP_DIALOG_FACTORY_RVA: u32 = LIVE_DIALOG_FACTORY_RVA as u32;
         create_continue_trace_hook(
             &mut hooks,
             "cap_setstate_b0d960",
@@ -6952,7 +6965,7 @@ pub(crate) fn b80_mount_trace_summary() -> String {
     let Ok(base) = game_module_base() else {
         return "base_unresolved".to_owned();
     };
-    let gm = unsafe { *((base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+    let gm = game_man_ptr_or_null();
     let read_gm = |off: usize| {
         if gm != null {
             unsafe { *((gm + off) as *const i32) }
@@ -7291,7 +7304,7 @@ unsafe fn inspect_row_container(tag: &str, container: usize) {
     const ENTRY_ACTION_F8: usize = 0xf8;
     const ACTION_DOCALL_10: usize = 0x10;
     const ROW_VEC_OFFSET_1290: usize = 0x1290;
-    const DIALOG_FACTORY_RVA: usize = 0x0081ead0;
+    const DIALOG_FACTORY_RVA: usize = LIVE_DIALOG_FACTORY_RVA;
     const PROBE_ENTRIES: usize = 8;
     const PROBE_START: usize = 0;
     const PROBE_STEP: usize = 1;
@@ -7606,8 +7619,14 @@ pub(crate) unsafe extern "system" fn cap_builder_hook(
     ));
     let ret = unsafe { call_cap_original(&CAP_BUILDER_ORIG, owner, rdx, effective_slot, r9) };
     if live_dialog_enabled() && ret != TITLE_OWNER_SCAN_START_ADDRESS {
-        const SELECTOR_CTX_OFFSET_F8: usize = 0xf8;
-        const SELECTOR_STEP_VTABLE_RVA: usize = 0x2ac71e0;
+        #[repr(C)]
+        struct SelectorBuilderOwnerLayout {
+            unknown_000: [u8; 0xf8],
+            selector_ctx: usize,
+        }
+        const SELECTOR_CTX_OFFSET_F8: usize =
+            core::mem::offset_of!(SelectorBuilderOwnerLayout, selector_ctx);
+        const SELECTOR_STEP_VTABLE_RVA: usize = ProfileLoadMenuRva::SelectorStepVtable as usize;
         let step = unsafe { safe_read_usize(ret) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
         let step_vt = if step != TITLE_OWNER_SCAN_START_ADDRESS {
             unsafe { safe_read_usize(step) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
@@ -7652,16 +7671,31 @@ pub(crate) unsafe extern "system" fn cap_selector_tick_hook(
         } else {
             TITLE_STATE_OWNER_GONE
         };
-        const SELECTOR_STEP_Q10_OFFSET: usize = 0x10;
-        const SELECTOR_STEP_Q18_OFFSET: usize = 0x18;
-        const SELECTOR_STEP_Q20_OFFSET: usize = 0x20;
-        const SELECTOR_STEP_Q28_OFFSET: usize = 0x28;
-        const SELECTOR_STEP_Q30_OFFSET: usize = 0x30;
-        const SELECTOR_STEP_Q38_OFFSET: usize = 0x38;
-        const SELECTOR_STEP_Q50_OFFSET: usize = 0x50;
-        const SELECTOR_STEP_Q58_OFFSET: usize = 0x58;
-        const SELECTOR_STEP_Q60_OFFSET: usize = 0x60;
-        const SELECTOR_STEP_TASK_OFFSET: usize = 0x70;
+        const SELECTOR_STEP_Q10_OFFSET: usize =
+            core::mem::size_of::<usize>() + core::mem::size_of::<usize>();
+        const SELECTOR_STEP_Q18_OFFSET: usize =
+            SELECTOR_STEP_Q10_OFFSET + core::mem::size_of::<usize>();
+        const SELECTOR_STEP_Q20_OFFSET: usize =
+            SELECTOR_STEP_Q18_OFFSET + core::mem::size_of::<usize>();
+        const SELECTOR_STEP_Q28_OFFSET: usize =
+            SELECTOR_STEP_Q20_OFFSET + core::mem::size_of::<usize>();
+        const SELECTOR_STEP_Q30_OFFSET: usize =
+            SELECTOR_STEP_Q28_OFFSET + core::mem::size_of::<usize>();
+        const SELECTOR_STEP_Q38_OFFSET: usize =
+            SELECTOR_STEP_Q30_OFFSET + core::mem::size_of::<usize>();
+        const SELECTOR_STEP_Q50_OFFSET: usize =
+            SELECTOR_STEP_Q38_OFFSET
+                + core::mem::size_of::<usize>()
+                + core::mem::size_of::<usize>()
+                + core::mem::size_of::<usize>();
+        const SELECTOR_STEP_Q58_OFFSET: usize =
+            SELECTOR_STEP_Q50_OFFSET + core::mem::size_of::<usize>();
+        const SELECTOR_STEP_Q60_OFFSET: usize =
+            SELECTOR_STEP_Q58_OFFSET + core::mem::size_of::<usize>();
+        const SELECTOR_STEP_TASK_OFFSET: usize =
+            SELECTOR_STEP_Q60_OFFSET
+                + core::mem::size_of::<usize>()
+                + core::mem::size_of::<usize>();
         let step_q = |off: usize| -> usize {
             if step != TITLE_OWNER_SCAN_START_ADDRESS {
                 unsafe { safe_read_usize(step + off) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)

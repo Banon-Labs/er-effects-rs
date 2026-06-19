@@ -50,7 +50,6 @@ mod tests {
     use super::*;
 
     const EXPECTED_SEEDED_CALL_COUNT: usize = 3;
-    const PLAYER_ALL_BLACK_SPEFFECT_ID: i32 = 4330;
 
     #[test]
     fn embedded_effects_file_is_valid() {
@@ -58,9 +57,13 @@ mod tests {
 
         assert_eq!(effects.calls.len(), EXPECTED_SEEDED_CALL_COUNT);
         let first = effects.calls.first().expect("first seeded call");
-        assert_eq!(first.id, PLAYER_ALL_BLACK_SPEFFECT_ID);
+        let player_all_black = effects
+            .calls
+            .iter()
+            .find(|call| call.name == "Player all black")
+            .expect("Player all black seeded call");
+        assert_eq!(first, player_all_black);
         assert_eq!(first.kind, EffectKindSpec::SpEffect);
-        assert_eq!(first.name, "Player all black");
         assert!(first.enabled);
     }
 

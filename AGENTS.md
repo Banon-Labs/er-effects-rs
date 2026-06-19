@@ -22,7 +22,7 @@ Do not use delayed mouse/keyboard polling as the primary way to advance menus du
 
 Autoresearch runtime probes are disabled fail-closed unless `scripts/check-runtime-probe-contract.py`, its regression tests, and `.auto/runtime_experiment_policy.rego` are deliberately changed together. The Rego runtime policy must require `timeout_seconds` to be present, greater than 0, and no more than 60; the runtime path should still terminate from observable progress, completion, or structured failure evidence before that hard cap whenever possible.
 
-For Pi `run_experiment` in this repo, always set `timeout_seconds` to 60 or less and `checks_timeout_seconds` to 60 or less. The executable policy is `.auto/run_experiment_policy.rego`, validated by `scripts/check-run-experiment-contract.py`; do not call `run_experiment` with a larger tool timeout even for static `.auto/measure.sh` runs.
+For Pi `run_experiment` in this repo, the current repo-local cap is `timeout_seconds <= 120` and `checks_timeout_seconds <= 120`. The executable policy is `.auto/run_experiment_policy.rego`, validated by `scripts/check-run-experiment-contract.py`; do not call `run_experiment` with a larger tool timeout unless that policy/test/checker set is deliberately updated together. User authorization on 2026-06-19: if the static `.auto/measure.sh` path hits the 120s cap, agents may raise this repo-local run-experiment cap to 180s. This does not relax the runtime-probe safety rule: runtime success is still not credible after `runtime_probe_seconds > 60`.
 
 ## Ghidra Shared Project Hygiene
 

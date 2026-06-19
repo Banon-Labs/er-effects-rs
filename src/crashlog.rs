@@ -423,7 +423,7 @@ pub(crate) unsafe fn maybe_arm_c30_watch(module_base: usize, tick: u64) {
         return;
     }
     let game_man =
-        unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
+        game_man_ptr_or_null();
     if game_man == NULL_MODULE_BASE {
         return;
     }
