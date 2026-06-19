@@ -12,6 +12,7 @@ EXPERIMENTS = REPO_ROOT / "src" / "experiments.rs"
 LIB = REPO_ROOT / "src" / "lib.rs"
 STAGE_SCRIPT = REPO_ROOT / "scripts" / "stage-autoload-release.sh"
 RUNTIME_PROBE = REPO_ROOT / ".auto" / "runtime_probe.sh"
+MEASURE = REPO_ROOT / ".auto" / "measure.sh"
 
 REQUIRED_PRODUCT_GATES = {
     "own_stepper_enabled",
@@ -58,6 +59,7 @@ def main() -> int:
     lib = read(LIB)
     stage = read(STAGE_SCRIPT)
     runtime_probe = read(RUNTIME_PROBE)
+    measure = read(MEASURE)
 
     require(
         "arm_product_autoload_from_request(&initial_state.autoload);" in lib,
@@ -122,6 +124,16 @@ def main() -> int:
     require(
         'rm -f "$GAME_DIR/dllMods/er_effects_rs.dll"' in runtime_probe,
         "runtime probe CHAINLOAD mode must remove the stale LOADORDER er_effects_rs.dll payload",
+        failures,
+    )
+    require(
+        '"$REPO_ROOT"/.auto/runtime-env*' in measure,
+        "measure runtime trigger must accept absolute repo runtime-env paths instead of silently falling back to the default payload",
+        failures,
+    )
+    require(
+        "refusing unrecognized runtime request" in measure,
+        "measure runtime trigger must fail closed on malformed runtime requests instead of silently using default repo-dinput8 payload",
         failures,
     )
 

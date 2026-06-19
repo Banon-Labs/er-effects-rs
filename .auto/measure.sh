@@ -13,8 +13,18 @@ fi
 if [[ "${AUTO_MEASURE_INNER:-0}" != "1" && -f "$REPO_ROOT/.auto/run-runtime-once" ]]; then
   runtime_request_path="$REPO_ROOT/.auto/run-runtime-once"
   runtime_request=$(tr -cd '[:print:]' < "$runtime_request_path" || true)
+  runtime_env_request=""
   if [[ "$runtime_request" == env=* ]]; then
     runtime_env_request="${runtime_request#env=}"
+  elif [[ "$runtime_request" == .auto/runtime-env* ]]; then
+    runtime_env_request="$runtime_request"
+  elif [[ "$runtime_request" == "$REPO_ROOT"/.auto/runtime-env* ]]; then
+    runtime_env_request="${runtime_request#"$REPO_ROOT"/}"
+  elif [[ -n "$runtime_request" && "$runtime_request" != "probe" ]]; then
+    echo "[measure] refusing unrecognized runtime request (use env=.auto/runtime-env*): $runtime_request" >&2
+    exit 2
+  fi
+  if [[ -n "$runtime_env_request" ]]; then
     case "$runtime_env_request" in
       .auto/runtime-env*) ;;
       *)
