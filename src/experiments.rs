@@ -477,9 +477,8 @@ pub(crate) unsafe fn cleanup_title_dialog_after_world_once(module_base: usize, f
         ));
         return;
     }
-    let cleanup: unsafe extern "system" fn(usize) -> usize = unsafe {
-        std::mem::transmute(module_base + TITLE_TOP_DIALOG_CLEANUP_RVA)
-    };
+    let cleanup: unsafe extern "system" fn(usize) -> usize =
+        unsafe { std::mem::transmute(module_base + TITLE_TOP_DIALOG_CLEANUP_RVA) };
     let ret = unsafe { cleanup(dialog) };
     let mut remaining_slots = TITLE_OWNER_SCAN_START_ADDRESS;
     let mut idx = ACTIVE_SCREEN_SLOT_START;
@@ -7412,9 +7411,9 @@ unsafe fn log_menu_insert_details(a: usize, b: usize, c: usize, d: usize, ret: u
                 game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
             }
         };
-        let avt = q(a, 0);
-        let bvt = q(b, 0);
-        let rvt = q(ret, 0);
+        let avt = q(a, CAP_MENU_INSERT_VTABLE_OFFSET);
+        let bvt = q(b, CAP_MENU_INSERT_VTABLE_OFFSET);
+        let rvt = q(ret, CAP_MENU_INSERT_VTABLE_OFFSET);
         let arva = if base != TITLE_OWNER_SCAN_START_ADDRESS {
             avt.wrapping_sub(base)
         } else {
@@ -7433,18 +7432,18 @@ unsafe fn log_menu_insert_details(a: usize, b: usize, c: usize, d: usize, ret: u
         append_continue_trace(format_args!(
             "CAP menu_insert #{} rcx=0x{a:x} vt=0x{avt:x}(rva 0x{arva:x}) a8=0x{:x} a10=0x{:x} a18=0x{:x} a38=0x{:x} a50=0x{:x} rdx=0x{b:x} vt=0x{bvt:x}(rva 0x{brva:x}) b8=0x{:x} b10=0x{:x} b18=0x{:x} b38=0x{:x} r8=0x{c:x} r9=0x{d:x} ret=0x{ret:x} ret_vt=0x{rvt:x}(rva 0x{rrva:x}) ret8=0x{:x} ret10=0x{:x} ret18=0x{:x} {}",
             n,
-            q(a, 0x8),
-            q(a, 0x10),
-            q(a, 0x18),
-            q(a, 0x38),
-            q(a, 0x50),
-            q(b, 0x8),
-            q(b, 0x10),
-            q(b, 0x18),
-            q(b, 0x38),
-            q(ret, 0x8),
-            q(ret, 0x10),
-            q(ret, 0x18),
+            q(a, CAP_MENU_INSERT_QWORD_8_OFFSET),
+            q(a, CAP_MENU_INSERT_QWORD_10_OFFSET),
+            q(a, CAP_MENU_INSERT_QWORD_18_OFFSET),
+            q(a, CAP_MENU_INSERT_QWORD_38_OFFSET),
+            q(a, CAP_MENU_INSERT_QWORD_50_OFFSET),
+            q(b, CAP_MENU_INSERT_QWORD_8_OFFSET),
+            q(b, CAP_MENU_INSERT_QWORD_10_OFFSET),
+            q(b, CAP_MENU_INSERT_QWORD_18_OFFSET),
+            q(b, CAP_MENU_INSERT_QWORD_38_OFFSET),
+            q(ret, CAP_MENU_INSERT_QWORD_8_OFFSET),
+            q(ret, CAP_MENU_INSERT_QWORD_10_OFFSET),
+            q(ret, CAP_MENU_INSERT_QWORD_18_OFFSET),
             trace_callers_summary()
         ));
     }

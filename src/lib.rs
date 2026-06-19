@@ -1757,6 +1757,12 @@ pub(crate) static CAP_APPEND_ONE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGI
 /// rcx/rdx/ret fingerprints to map where the opened Continue/Load-Game entries are stored.
 pub(crate) static CAP_MENU_INSERT_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const CAP_MENU_INSERT_LOG_FIRST: usize = 24;
+pub(crate) const CAP_MENU_INSERT_VTABLE_OFFSET: usize = 0;
+pub(crate) const CAP_MENU_INSERT_QWORD_8_OFFSET: usize = 0x8;
+pub(crate) const CAP_MENU_INSERT_QWORD_10_OFFSET: usize = 0x10;
+pub(crate) const CAP_MENU_INSERT_QWORD_18_OFFSET: usize = 0x18;
+pub(crate) const CAP_MENU_INSERT_QWORD_38_OFFSET: usize = 0x38;
+pub(crate) const CAP_MENU_INSERT_QWORD_50_OFFSET: usize = 0x50;
 pub(crate) static CAP_ROW_PUSH_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const CAP_ROW_PUSH_LOG_FIRST: usize = 12;
 /// UNCONDITIONAL row-push capture: log the caller stack of EVERY rebuild_rows/append_one fire
@@ -2539,7 +2545,9 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 IN_WORLD_REACHED.store(IN_WORLD_REACHED_YES, Ordering::SeqCst);
                 if own_stepper_enabled() || native_load_enabled() || native_fullread_enabled() {
                     if let Ok(base) = game_module_base() {
-                        unsafe { cleanup_title_dialog_after_world_once(base, state.game_task_ticks) };
+                        unsafe {
+                            cleanup_title_dialog_after_world_once(base, state.game_task_ticks)
+                        };
                     }
                 }
                 // In-world correctness oracle: on the FIRST frame the local player exists, log
