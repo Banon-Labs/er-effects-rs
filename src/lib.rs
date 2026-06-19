@@ -679,7 +679,9 @@ pub(crate) const DIAG_SAMPLE_ZERO: u32 = 0;
 /// / save_slot_get 0x678ca0). Read-only diagnostics of the PlayGame load-pair
 /// preconditions read GameMan through this.
 pub(crate) const FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA: usize = 0x3d69918;
-pub(crate) const FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET: usize = 0xac0;
+/// GameMan `save_slot` (compiler-verified equal to the upstream typed field).
+pub(crate) const FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET: usize =
+    core::mem::offset_of!(GameMan, save_slot);
 /// Save-manager load-in-progress flag (GameMan/save-mgr singleton 0x143d69918):
 /// `0x14067b570` sets `[mgr+0xb80]=1` when it begins the load and clears it to 0
 /// when finished. The native autoload (recipe A) arms the load by setting the
@@ -695,7 +697,11 @@ pub(crate) const GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET: usize =
 /// [slotmgr+0x8] is populated at the pre-bootstrap title. These RVAs/offsets let
 /// us read those preconditions without touching state.
 pub(crate) const SLOT_MANAGER_RVA: usize = 0x3d5df38;
-pub(crate) const SLOT_MANAGER_DATA_OFFSET: usize = 0x8;
+/// GameDataMan -> main player save data (compiler-verified equal to the upstream typed field).
+pub(crate) const SLOT_MANAGER_DATA_OFFSET: usize =
+    core::mem::offset_of!(GameDataMan, main_player_game_data);
+/// GameDataMan -> `profile_summary`; private upstream, so the hand-decoded offset is retained
+/// (validated within-bounds against the upstream `GameDataMan` layout).
 pub(crate) const SLOT_MANAGER_CONTAINER_OFFSET: usize = 0x78;
 pub(crate) const CSFEMAN_SINGLETON_RVA: usize = 0x3d6b880;
 /// Session manager singleton (absolute 0x1447ef360; NULL at the title, built by
