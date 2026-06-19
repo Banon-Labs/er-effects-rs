@@ -168,6 +168,7 @@ metrics = {
     "player_available": 0,
     "selected_slot_loaded": 0,
     "time_to_player_seconds": -1,
+    "fast_load_seconds": 999.0,
     "game_save_state": -1,
     "game_save_slot": -1,
     "game_requested_save_slot_load_index": -1,
@@ -1783,6 +1784,19 @@ if metrics["manual_runtime_baseline"] and score >= 1000:
     score = min(400, score)
 
 metrics["north_star_score"] = score
+success_for_fast_load = (
+    score >= metrics["north_star_score_max"]
+    and metrics["false_positives"] == 0
+    and metrics["save_safety_ok"] == 1
+    and metrics["simulated_button_presses_total"] == 0
+    and metrics["runtime_over_60_seconds"] == 0
+    and metrics["time_to_player_seconds"] >= 0
+)
+if success_for_fast_load:
+    metrics["fast_load_seconds"] = metrics["time_to_player_seconds"]
+else:
+    metrics["fast_load_seconds"] = 999.0
+print(f"METRIC fast_load_seconds={metrics['fast_load_seconds']:.3f}")
 print(f"METRIC north_star_score={metrics['north_star_score']}")
 print(f"METRIC north_star_score_max={metrics['north_star_score_max']}")
 print(f"METRIC oracle_baseline_score={metrics['oracle_baseline_score']}")

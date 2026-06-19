@@ -1,0 +1,3 @@
+started_at=2026-06-19T09:15:36-07:00
+request=env=.auto/runtime-env-fast-load-core-baseline-20260619
+entrypoint=measure_runtime_trigger
