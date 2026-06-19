@@ -14,6 +14,7 @@ STAGE_SCRIPT = REPO_ROOT / "scripts" / "stage-autoload-release.sh"
 
 REQUIRED_PRODUCT_GATES = {
     "own_stepper_enabled",
+    "splash_skip_enabled",
     "live_dialog_enabled",
     "native_fullread_commit_enabled",
     "menu_window_latch_enabled",

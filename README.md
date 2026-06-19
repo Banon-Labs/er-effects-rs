@@ -56,11 +56,13 @@ er-effects-rs itself through `[LOADORDER]`. Configure the requested slot by
 copying `er-effects-autoload.txt.example` to `er-effects-autoload.txt` next to
 `eldenring.exe` and editing `slot=N`.
 
-For splash skipping, use the built-in current-version patch by copying
+Product autoload enables er-effects-rs' built-in current-version splash skip
+patch automatically. For non-autoload launches, copy
 `er-effects-splash-skip.txt.example` to `er-effects-splash-skip.txt` next to
-`eldenring.exe`. Do not ship the old external `er_skip_splash_screens.dll` with
-this release unless it has been rebuilt for the current executable; the local old
-copy targets the wrong opcode and exits before the title.
+`eldenring.exe` to opt in manually. Do not ship the old external
+`er_skip_splash_screens.dll` with this release unless it has been rebuilt for the
+current executable; the local old copy targets the wrong opcode and exits before
+the title.
 
 ## Param tooling (Smithbox bridge)
 

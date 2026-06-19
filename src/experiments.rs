@@ -4904,7 +4904,8 @@ pub(crate) fn title_accept_inject_enabled() -> bool {
 }
 
 pub(crate) fn splash_skip_enabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_SPLASH_SKIP").as_deref(), Ok("1"))
+    product_autoload_enabled()
+        || matches!(std::env::var("ER_EFFECTS_SPLASH_SKIP").as_deref(), Ok("1"))
         || game_directory_path()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("er-effects-splash-skip.txt")
