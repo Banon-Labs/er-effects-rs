@@ -1532,7 +1532,10 @@ pub(crate) const CONTINUE_OWNER_FLAG_12A_OFFSET: usize = 0x12a;
 pub(crate) const CONTINUE_OWNER_FLAG_12A_VALUE: u8 = 0;
 pub(crate) const CONTINUE_OWNER_QWORDS: usize = 0x40;
 pub(crate) const CONTINUE_DRIVE_MIN_TICK: u64 = 120;
-pub(crate) const FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET: usize = 0x14;
+/// PlayGame load-pair target block, bound to upstream `GameMan::move_map_target`
+/// (audit-confirmed equal to the hand-decoded 0x14).
+pub(crate) const FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET: usize =
+    core::mem::offset_of!(GameMan, move_map_target);
 pub(crate) const FORCE_PLAY_GAME_GM_PAIR_GATE_B28_OFFSET: usize = 0xb28;
 pub(crate) const FORCE_PLAY_GAME_GM_VALIDATE_12D_OFFSET: usize = 0x12d;
 pub(crate) const FORCE_PLAY_GAME_GM_VALIDATE_12E_OFFSET: usize = 0x12e;

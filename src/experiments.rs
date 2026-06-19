@@ -6258,10 +6258,14 @@ pub(crate) unsafe fn append_menu_semaphore_trace(
 
 pub(crate) fn game_man_trace_summary() -> String {
     const GAME_MAN_GLOBAL_RVA: u32 = 0x03d69918;
-    const GAME_MAN_SAVE_SLOT_OFFSET: usize = 0xac0;
-    const GAME_MAN_REQUESTED_SAVE_SLOT_LOAD_INDEX_OFFSET: usize = 0xb78;
-    const GAME_MAN_SAVE_STATE_OFFSET: usize = 0xb80;
-    const GAME_MAN_FLAG_B72_OFFSET: usize = 0xb72;
+    // Named GameMan fields bound to the upstream typed layout (self-validating, dedups the
+    // crate-level consts). The b73/b74/b75/bb8/bbc/bc0/bc4 flags read upstream-unnamed regions,
+    // so they stay hand-decoded.
+    const GAME_MAN_SAVE_SLOT_OFFSET: usize = core::mem::offset_of!(GameMan, save_slot);
+    const GAME_MAN_REQUESTED_SAVE_SLOT_LOAD_INDEX_OFFSET: usize =
+        core::mem::offset_of!(GameMan, requested_save_slot_load_index);
+    const GAME_MAN_SAVE_STATE_OFFSET: usize = core::mem::offset_of!(GameMan, save_state);
+    const GAME_MAN_FLAG_B72_OFFSET: usize = core::mem::offset_of!(GameMan, save_requested);
     const GAME_MAN_FLAG_B73_OFFSET: usize = 0xb73;
     const GAME_MAN_FLAG_B74_OFFSET: usize = 0xb74;
     const GAME_MAN_FLAG_B75_OFFSET: usize = 0xb75;
