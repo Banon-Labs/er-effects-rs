@@ -1399,6 +1399,12 @@ pub(crate) const C30_WRITER_BUFFER_DUMP_BYTES: usize = 0x40;
 /// it. The finished-getter 0x1407b0cf0 is NOT polled for this dialog, so writing the fields
 /// directly is the dismiss lever. 0 = none captured.
 pub(crate) static CONNECTION_ERROR_DIALOG: AtomicUsize = AtomicUsize::new(0);
+/// Last vtable-validated MessageBoxDialog built by the game. Unlike CONNECTION_ERROR_DIALOG this
+/// is never used to auto-dismiss; telemetry reads it at the end of a run to fail the oracle if a
+/// blocking dialog is still alive after character/world load.
+pub(crate) static MSGBOX_LAST_DIALOG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static MSGBOX_TOTAL_BUILDS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static MSGBOX_POSTLOAD_BUILDS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static DISMISS_WRITE_LOG: AtomicUsize = AtomicUsize::new(0);
 /// The dialog pointer OnDecide was last fired on, so we press OK exactly ONCE per dialog instead
 /// of every frame (re-dispatching every frame keeps the dialog stuck "deciding" and it never

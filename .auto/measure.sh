@@ -247,6 +247,20 @@ metrics = {
     "oracle_now_loading": -1,
     "oracle_load_in_progress_b80": -1,
     "oracle_grounded": 0,
+    "oracle_msgbox_total_builds": 0,
+    "oracle_msgbox_postload_builds": 0,
+    "oracle_postload_modal_seen": 0,
+    "oracle_blocking_modal_present": 0,
+    "oracle_blocking_modal_ptr": 0,
+    "oracle_blocking_modal_vtable": 0,
+    "oracle_blocking_modal_closing_latch": -1,
+    "oracle_chr_model_ins_present": 0,
+    "oracle_chr_ctrl_present": 0,
+    "oracle_chr_draw_group_enabled": 0,
+    "oracle_chr_render_group_enabled": 0,
+    "oracle_chr_onscreen": 0,
+    "oracle_chr_enable_render": 0,
+    "oracle_player_render_ready": 0,
     "oracle_world_loaded": 0,
     "oracle_map_loaded": 0,
     "oracle_world_stable_samples": 0,
@@ -1343,12 +1357,12 @@ if os.environ.get("AUTO_MEASURE_INNER") != "1" and preferred_artifact_path.exist
     # when runtime evidence was explicitly requested.
     preferred_is_runtime = preferred_artifact.name.startswith("autoload-runtime-")
     if include_runtime_evidence or not preferred_is_runtime:
-        for name in ["final-telemetry.json", "telemetry.json"]:
+        for name in ["final-telemetry.json", "telemetry.json", "telemetry-live.json"]:
             candidate = preferred_artifact / name
             if candidate.exists():
                 candidates.append(candidate)
 elif include_runtime_evidence:
-    for pattern in ["target/smoke/**/final-telemetry.json", "target/smoke/**/telemetry.json"]:
+    for pattern in ["target/smoke/**/final-telemetry.json", "target/smoke/**/telemetry.json", "target/smoke/**/telemetry-live.json"]:
         candidates.extend(repo.glob(pattern))
 if candidates:
     telemetry_path = max(candidates, key=lambda path: path.stat().st_mtime)
@@ -1568,11 +1582,31 @@ if telemetry:
         ("oracle_block_id", "oracle_block_id"),
         ("oracle_now_loading", "oracle_now_loading"),
         ("oracle_load_in_progress_b80", "oracle_load_in_progress_b80"),
+        ("oracle_msgbox_total_builds", "oracle_msgbox_total_builds"),
+        ("oracle_msgbox_postload_builds", "oracle_msgbox_postload_builds"),
+        ("oracle_blocking_modal_ptr", "oracle_blocking_modal_ptr"),
+        ("oracle_blocking_modal_vtable", "oracle_blocking_modal_vtable"),
+        ("oracle_blocking_modal_closing_latch", "oracle_blocking_modal_closing_latch"),
     ]:
         metrics[metric_key] = as_int(telemetry.get(telemetry_key), metrics[metric_key])
     metrics["oracle_player_present"] = 1 if telemetry.get("oracle_player_present") is True else 0
     metrics["oracle_block_id_valid"] = 1 if telemetry.get("oracle_block_id_valid") is True else 0
     metrics["oracle_grounded"] = 1 if telemetry.get("oracle_grounded") is True else 0
+    if metrics["oracle_msgbox_postload_builds"] > 0:
+        metrics["oracle_postload_modal_seen"] = 1
+    for metric_key in [
+        "oracle_postload_modal_seen",
+        "oracle_blocking_modal_present",
+        "oracle_chr_model_ins_present",
+        "oracle_chr_ctrl_present",
+        "oracle_chr_draw_group_enabled",
+        "oracle_chr_render_group_enabled",
+        "oracle_chr_onscreen",
+        "oracle_chr_enable_render",
+        "oracle_player_render_ready",
+    ]:
+        if metric_key in telemetry:
+            metrics[metric_key] = 1 if telemetry.get(metric_key) is True else 0
     face_buffer_hex = telemetry.get("oracle_face_data_buffer_hex")
     face_buffer_sha256 = None
     if isinstance(face_buffer_hex, str):
@@ -1690,12 +1724,24 @@ if telemetry:
         metrics["oracle_player_present"]
         and metrics["oracle_block_id_valid"]
         and metrics["oracle_load_in_progress_b80"] == 0
-        and (metrics["oracle_grounded"] or metrics["oracle_now_loading"] == 0)
+        and metrics["oracle_now_loading"] == 0
     ) else 0
     metrics["oracle_map_loaded"] = 1 if (
         metrics["oracle_world_loaded"]
         and metrics["oracle_saved_map_c30_i32"] != -1
     ) else 0
+    if metrics["oracle_postload_modal_seen"] or metrics["oracle_blocking_modal_present"]:
+        metrics["false_positives"] = 1
+        metrics["autoload_success"] = 0
+        metrics["selected_slot_loaded"] = 0
+    if metrics["autoload_success"] and not metrics["oracle_world_loaded"]:
+        metrics["false_positives"] = 1
+        metrics["autoload_success"] = 0
+        metrics["selected_slot_loaded"] = 0
+    if metrics["autoload_success"] and not metrics["oracle_player_render_ready"]:
+        metrics["false_positives"] = 1
+        metrics["autoload_success"] = 0
+        metrics["selected_slot_loaded"] = 0
     if metrics["autoload_success"] and (
         not metrics["oracle_player_present"]
         or not metrics["oracle_block_id_valid"]
@@ -1884,6 +1930,20 @@ for key in [
     "oracle_now_loading",
     "oracle_load_in_progress_b80",
     "oracle_grounded",
+    "oracle_msgbox_total_builds",
+    "oracle_msgbox_postload_builds",
+    "oracle_postload_modal_seen",
+    "oracle_blocking_modal_present",
+    "oracle_blocking_modal_ptr",
+    "oracle_blocking_modal_vtable",
+    "oracle_blocking_modal_closing_latch",
+    "oracle_chr_model_ins_present",
+    "oracle_chr_ctrl_present",
+    "oracle_chr_draw_group_enabled",
+    "oracle_chr_render_group_enabled",
+    "oracle_chr_onscreen",
+    "oracle_chr_enable_render",
+    "oracle_player_render_ready",
     "oracle_world_loaded",
     "oracle_map_loaded",
     "oracle_world_stable_samples",

@@ -5031,7 +5031,7 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
     } else {
         null
     };
-    if ret != null && IN_WORLD_REACHED.load(Ordering::SeqCst) != IN_WORLD_REACHED_YES {
+    if ret != null {
         let base = {
             let own = OWN_STEPPER_BASE.load(Ordering::SeqCst);
             if own != null {
@@ -5041,19 +5041,26 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
             }
         };
         let vt = unsafe { safe_read_usize(ret) }.unwrap_or(null);
-        // CAPTURE the MessageBoxDialog (the connection-error / startup popup) so the game task can
-        // dismiss it via OnDecide each frame. Do NOT touch its fields here: +0x25e0 is the chosen
-        // button (builder-defaulted to OK) and +0x25e8 is the BUTTON COUNT -- writing them corrupts
-        // the dialog. The dismiss is force_dismiss_startup_dialog -> OnDecide 0x140927ba0.
-        if vt == base + MSGBOX_DIALOG_VTABLE_RVA {
-            CONNECTION_ERROR_DIALOG.store(ret, Ordering::SeqCst);
+        let is_msgbox = vt == base + MSGBOX_DIALOG_VTABLE_RVA;
+        let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
+        // CAPTURE the startup MessageBoxDialog (connection-error / EULA / warning) pre-world so
+        // the game task can dismiss it via the real OK handler. Post-load/in-world dialogs are
+        // NEVER auto-dismissed; they are only latched for telemetry so the oracle fails instead of
+        // reporting a false 1400 when a blocking popup remains on screen.
+        if is_msgbox {
+            MSGBOX_LAST_DIALOG.store(ret, Ordering::SeqCst);
+            MSGBOX_TOTAL_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+            if in_world {
+                MSGBOX_POSTLOAD_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+            } else {
+                CONNECTION_ERROR_DIALOG.store(ret, Ordering::SeqCst);
+            }
         }
         let n = MSGBOX_BUILDER_LOG.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
         if n < MSGBOX_BUILDER_LOG_MAX {
             let vt_rva = vt.wrapping_sub(base);
             append_autoload_debug(format_args!(
-                "msgbox-builder #{n}: dialog=0x{ret:x} vt=0x{vt:x} vt_rva=0x{vt_rva:x} captured={} args(rcx=0x{a:x} rdx=0x{b:x} r8=0x{c:x} r9=0x{d:x}) {}",
-                vt == base + MSGBOX_DIALOG_VTABLE_RVA,
+                "msgbox-builder #{n}: dialog=0x{ret:x} vt=0x{vt:x} vt_rva=0x{vt_rva:x} captured={is_msgbox} in_world={in_world} args(rcx=0x{a:x} rdx=0x{b:x} r8=0x{c:x} r9=0x{d:x}) {}",
                 trace_callers_summary()
             ));
         }

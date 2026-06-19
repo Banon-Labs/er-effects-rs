@@ -464,15 +464,71 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             }
         };
         body.push_str(&format!("  \"oracle_now_loading\": {now_loading},\n"));
+        let msgbox_dialog = MSGBOX_LAST_DIALOG.load(Ordering::SeqCst);
+        let msgbox_vtable = if msgbox_dialog == NULL_PTR {
+            NULL_PTR
+        } else {
+            unsafe { crate::experiments::safe_read_usize(msgbox_dialog) }.unwrap_or(NULL_PTR)
+        };
+        let msgbox_closing_latch = if msgbox_vtable == base + MSGBOX_DIALOG_VTABLE_RVA {
+            unsafe {
+                crate::experiments::safe_read_usize(msgbox_dialog + MSGBOX_CLOSING_LATCH_3B0_OFFSET)
+            }
+            .map(|value| value & MSGBOX_LATCH_BYTE_MASK)
+            .unwrap_or(MSGBOX_CLOSING_YES)
+        } else {
+            MSGBOX_CLOSING_YES
+        };
+        const NO_POSTLOAD_MSGBOX_BUILDS: usize = 0;
+        let postload_modal_seen =
+            MSGBOX_POSTLOAD_BUILDS.load(Ordering::SeqCst) != NO_POSTLOAD_MSGBOX_BUILDS;
+        let blocking_modal_present = msgbox_vtable == base + MSGBOX_DIALOG_VTABLE_RVA
+            && msgbox_closing_latch != MSGBOX_CLOSING_YES;
+        body.push_str(&format!(
+            "  \"oracle_msgbox_total_builds\": {},\n  \"oracle_msgbox_postload_builds\": {},\n  \"oracle_postload_modal_seen\": {},\n  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n",
+            MSGBOX_TOTAL_BUILDS.load(Ordering::SeqCst),
+            MSGBOX_POSTLOAD_BUILDS.load(Ordering::SeqCst),
+            postload_modal_seen,
+            blocking_modal_present,
+            msgbox_dialog,
+            msgbox_vtable,
+            msgbox_closing_latch
+        ));
     }
     if let Ok(player) = unsafe { PlayerIns::local_player_mut() } {
         let pos = player.chr_ins.modules.physics.position;
         let grounded = player.chr_ins.modules.physics.standing_on_solid_ground;
         let block = player.current_block_id.0;
         let bp = player.block_position;
+        let chr_model_ins_ptr = player.chr_ins.chr_model_ins.as_ptr() as usize;
+        let chr_ctrl_ptr = player.chr_ins.chr_ctrl.as_ptr() as usize;
+        let chr_draw_group_enabled = player.chr_ins.load_state.draw_group_enabled();
+        let chr_render_group_enabled = player.chr_ins.chr_flags1c4.is_render_group_enabled();
+        let chr_onscreen = player.chr_ins.chr_flags1c4.is_onscreen();
+        let chr_enable_render = player.chr_ins.chr_flags1c5.enable_render();
+        let player_render_ready = chr_model_ins_ptr != TITLE_OWNER_SCAN_START_ADDRESS
+            && chr_ctrl_ptr != TITLE_OWNER_SCAN_START_ADDRESS
+            && chr_draw_group_enabled
+            && chr_render_group_enabled
+            && chr_enable_render;
         body.push_str(&format!(
-            "  \"oracle_player_present\": true,\n  \"oracle_havok_pos\": [{}, {}, {}],\n  \"oracle_grounded\": {},\n  \"oracle_block_id\": {},\n  \"oracle_block_id_valid\": {},\n  \"oracle_block_pos\": [{}, {}, {}],\n",
-            pos.0, pos.1, pos.2, grounded, block, block != BLOCK_ID_NONE, bp.x, bp.y, bp.z
+            "  \"oracle_player_present\": true,\n  \"oracle_havok_pos\": [{}, {}, {}],\n  \"oracle_grounded\": {},\n  \"oracle_block_id\": {},\n  \"oracle_block_id_valid\": {},\n  \"oracle_block_pos\": [{}, {}, {}],\n  \"oracle_chr_model_ins_present\": {},\n  \"oracle_chr_ctrl_present\": {},\n  \"oracle_chr_draw_group_enabled\": {},\n  \"oracle_chr_render_group_enabled\": {},\n  \"oracle_chr_onscreen\": {},\n  \"oracle_chr_enable_render\": {},\n  \"oracle_player_render_ready\": {},\n",
+            pos.0,
+            pos.1,
+            pos.2,
+            grounded,
+            block,
+            block != BLOCK_ID_NONE,
+            bp.x,
+            bp.y,
+            bp.z,
+            chr_model_ins_ptr != TITLE_OWNER_SCAN_START_ADDRESS,
+            chr_ctrl_ptr != TITLE_OWNER_SCAN_START_ADDRESS,
+            chr_draw_group_enabled,
+            chr_render_group_enabled,
+            chr_onscreen,
+            chr_enable_render,
+            player_render_ready
         ));
     } else {
         body.push_str("  \"oracle_player_present\": false,\n");

@@ -136,6 +136,34 @@ def main() -> int:
         "measure runtime trigger must fail closed on malformed runtime requests instead of silently using default repo-dinput8 payload",
         failures,
     )
+    require(
+        "oracle_postload_modal_seen" in measure
+        and "oracle_blocking_modal_present" in measure
+        and "oracle_player_render_ready" in measure
+        and "false_positives" in measure,
+        "measure must fail closed on post-load modals and missing rendered-player readiness",
+        failures,
+    )
+    require(
+        'and metrics["oracle_now_loading"] == 0' in measure,
+        "world-loaded oracle must require CSNowLoadingHelper to be cleared instead of accepting grounded physics during loading",
+        failures,
+    )
+    require(
+        "MSGBOX_LAST_DIALOG" in lib
+        and "MSGBOX_POSTLOAD_BUILDS" in lib
+        and "oracle_postload_modal_seen" in read(REPO_ROOT / "src" / "telemetry.rs")
+        and "oracle_blocking_modal_present" in read(REPO_ROOT / "src" / "telemetry.rs"),
+        "telemetry must expose post-load MessageBoxDialog/blocking-modal oracle evidence",
+        failures,
+    )
+    require(
+        "oracle_player_render_ready" in read(REPO_ROOT / "src" / "telemetry.rs")
+        and "chr_flags1c5.enable_render" in read(REPO_ROOT / "src" / "telemetry.rs")
+        and "load_state.draw_group_enabled" in read(REPO_ROOT / "src" / "telemetry.rs"),
+        "telemetry must expose rendered-player readiness from ChrIns render state, not just save identity",
+        failures,
+    )
 
     if failures:
         for failure in failures:
