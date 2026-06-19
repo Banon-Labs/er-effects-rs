@@ -1,0 +1,1 @@
+{"type":"config","name":"Autoload semantic readiness gates","metricName":"readiness_gate_failures","metricUnit":"","bestDirection":"lower"}
