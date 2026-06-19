@@ -100,6 +100,15 @@ hard" is not "impossible" — keep reverse-engineering until the in-process,
 no-input mechanism is found. Surface trade-offs honestly, but the bar is the
 actual goal, never a fallback.
 
+## Upstream (`fromsoftware-rs`)
+
+**Never file, open, or propose filing an upstream issue/PR/report** (against
+`fromsoftware-rs` or any other external project) — not even as a recommendation or
+follow-up. When our code and upstream disagree (e.g. a struct offset mismatch), resolve
+it **in this repo**: confirm the correct value via static RE of the binary, fix or pin our
+side, and record the finding in `bd` for the next agent. Treat upstream as a read-only
+reference we adopt from, never as a place we contribute back to.
+
 ## Build & Test
 
 This repo must be a sibling of a `fromsoftware-rs` checkout (the root crate uses `../fromsoftware-rs` path dependencies).

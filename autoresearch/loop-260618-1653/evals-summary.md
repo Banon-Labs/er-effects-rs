@@ -34,9 +34,9 @@ upstream `eldenring` crate's maintained typed definitions, prioritizing **accura
 `GameMan::character_name_is_empty`: **our 0xe78 vs upstream 0xe70** (8-byte gap). The gap is
 adjacent to upstream's low-confidence unnamed blob `unld98: [u8; 0xd8]`; if that blob is
 really `0xe0` bytes the field lands at 0xe78 = our value, which was *live-validated*. Evidence
-leans toward **upstream** being wrong (undersized blob). Left hardcoded; needs static
-RE of `eldenring.exe` to adjudicate / possibly file upstream. bd:
-`gameman-name-empty-offset-e78-vs-e70`.
+leans toward **upstream** being wrong (undersized blob). Left hardcoded; resolve **in-repo**
+via static RE of `eldenring.exe` to adjudicate, then pin our side. (Do not file upstream — see
+AGENTS.md "Upstream".) bd: `gameman-name-empty-offset-e78-vs-e70`.
 
 ## Why the loop stopped at 4 (honest ceiling, not a plateau to push through)
 
@@ -61,7 +61,7 @@ metric-gaming or unvalidated risky edits.
 
 ## Recommended follow-ups
 
-1. **Resolve e78/e70** via static RE of the `character_name_is_empty` accessor; if ours is
-   right, file an upstream issue on `GameMan.unld98` size.
+1. **Resolve e78/e70** via static RE of the `character_name_is_empty` accessor and pin our
+   side in-repo. Do not file upstream (AGENTS.md "Upstream").
 2. Optionally add compile-time asserts that our singleton RVA consts equal upstream's
    `rva_ww` values (regression guard; would *raise* this metric, so out of scope here).
