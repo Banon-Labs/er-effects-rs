@@ -260,6 +260,11 @@ def main() -> int:
             False,
             "git inspection",
         ),
+        PolicyCase(
+            "allow-mutating-git-branch-delete",
+            "git branch -d merged-topic",
+            True,
+        ),
         # A real rtk invocation with a native word in a quoted arg stays allowed.
         PolicyCase(
             "allow-rtk-grep-quoted-find",

@@ -15,7 +15,12 @@ import rego.v1
 command := input.tool_input.command
 
 native_search_or_listing_tools := {"grep", "egrep", "fgrep", "zgrep", "rg", "find", "ls"}
-readonly_git_subcommands := {"status", "diff", "log", "show", "branch"}
+# Deliberately excludes `branch`: `git branch` has mutating forms such as
+# `git branch -d <name>`, so treating the subcommand as read-only causes false
+# positives during normal cleanup. Agents should still prefer `rtk git branch`
+# for branch inspection, but the executable guard only enforces unambiguous
+# read-only git subcommands.
+readonly_git_subcommands := {"status", "diff", "log", "show"}
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
