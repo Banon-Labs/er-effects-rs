@@ -685,7 +685,10 @@ pub(crate) const FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET: usize = 0xac0;
 /// when finished. The native autoload (recipe A) arms the load by setting the
 /// slot (`+0xac0`) and the force flag `0x143d856a0`, then the save-manager
 /// per-frame update `0x14067f5d0` performs it.
-pub(crate) const GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET: usize = 0xb80;
+/// Bound to upstream `GameMan::save_state` (compiler-verified equal to our offset); our research
+/// reads this same dword as the load-in-progress lane (set 1 on load begin, cleared on finish).
+pub(crate) const GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET: usize =
+    core::mem::offset_of!(GameMan, save_state);
 /// Read-only autoload-arm precondition probe. The native save-mgr update
 /// 0x14067f5d0 arms autoload (sets GameMan+0xb72=1 -> load) only when its gates
 /// pass; the one runtime unknown is whether the slot-record container
@@ -1020,6 +1023,11 @@ pub(crate) const PGD_NAME_LEN_U16: usize = 17;
 pub(crate) const PGD_STAT_BASE_3C_OFFSET: usize = core::mem::offset_of!(PlayerGameData, vigor);
 pub(crate) const PGD_STAT_COUNT: usize = 8;
 /// GameMan last field: character_name_is_empty (a cheap blank/new-game discriminator).
+/// DISCREPANCY (autoresearch 2026-06-18): upstream `eldenring`'s typed `GameMan` places
+/// `character_name_is_empty` eight bytes earlier than our hand-decoded value (compiler-checked via
+/// `offset_of!`). One of the two is wrong; needs binary-disassembly adjudication before binding to
+/// `offset_of!`. Left hardcoded so runtime behavior is unchanged until resolved. See bd
+/// `gameman-name-empty-offset-e78-vs-e70`.
 pub(crate) const GAME_MAN_NAME_IS_EMPTY_E78_OFFSET: usize = 0xe78;
 /// One-shot latch for the in-world LOAD-CORRECTNESS dump.
 pub(crate) static LOAD_CORRECTNESS_DUMPED: AtomicUsize = AtomicUsize::new(0);
@@ -1083,7 +1091,8 @@ pub(crate) const NATIVE_LOAD_LOG_INTERVAL: u64 = 120;
 /// *(u32*)(GameMan+0xb78). Step 1 of the recipe sets GameMan+0xb78=slot before set_save_slot so the
 /// native chain resolves OUR slot. (Same offset as GAME_MAN_REQUESTED_SLOT_B78_OFFSET; named per the
 /// recipe for the full-read chain.)
-pub(crate) const GAME_MAN_SLOT_SELECT_B78_OFFSET: usize = 0xb78;
+pub(crate) const GAME_MAN_SLOT_SELECT_B78_OFFSET: usize =
+    core::mem::offset_of!(GameMan, requested_save_slot_load_index);
 /// GameMan+0xb80 == 3 == RESIDENT (the full-save read drained into the 0x280000 buffer). The DRAIN
 /// phase ticks the lane + poll each frame until b80 reaches this.
 pub(crate) const FULLREAD_B80_RESIDENT: i32 = 3;
@@ -1122,10 +1131,15 @@ pub(crate) static FULLREAD_DRAIN_WAITS: AtomicUsize = AtomicUsize::new(0);
 /// chain; 0 == not yet seen (settle gate, mirrors NATIVE_LOAD_MENU_FIRST_SEEN).
 pub(crate) static FULLREAD_MENU_FIRST_SEEN: AtomicUsize = AtomicUsize::new(0);
 
-pub(crate) const GAME_MAN_ARM_FLAG_B72_OFFSET: usize = 0xb72;
+/// `save_requested`: bound to the upstream typed layout (compiler-verified equal to our prior
+/// hand-decoded offset).
+pub(crate) const GAME_MAN_ARM_FLAG_B72_OFFSET: usize =
+    core::mem::offset_of!(GameMan, save_requested);
 pub(crate) const GAME_MAN_FLAG_B73_PROBE_OFFSET: usize = 0xb73;
 pub(crate) const GAME_MAN_FLAG_B75_PROBE_OFFSET: usize = 0xb75;
-pub(crate) const GAME_MAN_REQUESTED_SLOT_B78_OFFSET: usize = 0xb78;
+/// `requested_save_slot_load_index`: bound to upstream (compiler-verified equal to our offset).
+pub(crate) const GAME_MAN_REQUESTED_SLOT_B78_OFFSET: usize =
+    core::mem::offset_of!(GameMan, requested_save_slot_load_index);
 pub(crate) const GAME_MAN_FLAG_BC4_OFFSET: usize = 0xbc4;
 /// Submit-gate diagnostics (b80-submit-kick-exact-false-gate-decoded-2026). The b72
 /// autoload initiator 0x14067b750 sets GameMan+0xb80=1 ONLY if the async submit
