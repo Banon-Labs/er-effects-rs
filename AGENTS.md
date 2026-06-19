@@ -30,6 +30,17 @@ Do not run broad headless Ghidra enumeration that opens every candidate program 
 
 Do not use whole-file MD5 as the Ghidra identity oracle for Elden Ring. The shared program is expected to be a runtime dump and local `eldenring.exe` may be intentionally PE-header patched, so whole-file hashes are at best provenance metadata. Use small bounded anchor byte windows, function-boundary evidence, and section/window fingerprints at exact RVAs instead.
 
+## Colored Elden Ring Disassembly
+
+For Elden Ring disassembly in Pi, prefer the project Pi tool `er_disasm` instead of shelling out to `scripts/disas-*.sh` when colored/reviewable output is useful.
+
+Examples:
+- `er_disasm kind=deobf va=0x140739e20 nbytes=0x40`
+- `er_disasm kind=va va=0x140792460 nbytes=0x100`
+- `er_disasm kind=data va=0x143d00000 nbytes=0xb0`
+
+Use `scripts/disas-deobf.sh --color=always ...` only for direct terminal/Kitty use.
+
 ## Non-Interactive Shell Commands
 
 **ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
