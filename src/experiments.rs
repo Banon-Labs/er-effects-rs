@@ -5648,15 +5648,28 @@ pub(crate) unsafe fn arm_precondition_probe(module_base: usize, tick: u64) {
 /// GameMan+0x10=1), also building the world singletons. owner is a synthetic
 /// buffer with +0x12c = slot. Never writes the force flag 0x143d856a0.
 pub(crate) unsafe fn continue_drive_tick(module_base: usize, slot: i32, tick: u64) {
-    // Lower gate than the title-owner experiments: continue_drive only needs
-    // GameMan (ready ~tick 82), not the inner TitleStep owner, and degraded
-    // sessions sometimes exit ~tick 154, so start the drive earlier.
-    if tick < CONTINUE_DRIVE_MIN_TICK {
-        return;
-    }
+    // Log readiness before the fixed drive gate: recent runs exit before the
+    // drive can fire, so the next runtime must tell us when GameMan first became
+    // available instead of turning the gate into another blind threshold knob.
     let game_man =
         unsafe { *((module_base + FORCE_PLAY_GAME_GAME_MAN_GLOBAL_RVA) as *const usize) };
     if game_man == TITLE_OWNER_SCAN_START_ADDRESS {
+        return;
+    }
+    if CONTINUE_DRIVE_GM_FIRST_SEEN_TICK
+        .compare_exchange(
+            CONTINUE_DRIVE_GM_FIRST_SEEN_UNSET,
+            tick,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        )
+        .is_ok()
+    {
+        append_autoload_debug(format_args!(
+            "continue_drive: GameMan first_seen tick={tick} gm=0x{game_man:x} gate={CONTINUE_DRIVE_MIN_TICK}"
+        ));
+    }
+    if tick < CONTINUE_DRIVE_MIN_TICK {
         return;
     }
     let real_done = unsafe { *((game_man + GAME_MAN_REAL_LOAD_DONE_OFFSET) as *const i32) };
