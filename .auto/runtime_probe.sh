@@ -65,6 +65,12 @@ TITLE_ACCEPT_INJECT_PATH="${TITLE_ACCEPT_INJECT_PATH:-$GAME_DIR/er-effects-title
 SPLASH_SKIP_PATH="${SPLASH_SKIP_PATH:-$GAME_DIR/er-effects-splash-skip.txt}"
 SUBMIT_PLAY_GAME_PATH="${SUBMIT_PLAY_GAME_PATH:-$GAME_DIR/er-effects-submit-play-game.txt}"
 CRASH_LOG_TRIGGER_PATH="${CRASH_LOG_TRIGGER_PATH:-$GAME_DIR/er-effects-crash-log.txt}"
+OWN_STEPPER_PATH="${OWN_STEPPER_PATH:-$GAME_DIR/er-effects-own-stepper.txt}"
+DIRECT_BUILD_PATH="${DIRECT_BUILD_PATH:-$GAME_DIR/er-effects-direct-build.txt}"
+LIVE_DIALOG_PATH="${LIVE_DIALOG_PATH:-$GAME_DIR/er-effects-live-dialog.txt}"
+NATIVE_LOAD_PATH="${NATIVE_LOAD_PATH:-$GAME_DIR/er-effects-native-load.txt}"
+NATIVE_FULLREAD_PATH="${NATIVE_FULLREAD_PATH:-$GAME_DIR/er-effects-native-fullread.txt}"
+FULLREAD_COMMIT_PATH="${FULLREAD_COMMIT_PATH:-$GAME_DIR/er-effects-fullread-commit.txt}"
 # The DLL's default crash-log location (when ER_EFFECTS_CRASH_LOG_PATH is unset);
 # copied into the artifact dir after the run.
 CRASH_LOG_SRC="${CRASH_LOG_SRC:-$GAME_DIR/er-effects-crash.log}"
@@ -621,6 +627,24 @@ cleanup_runtime() {
   if [[ "${ER_EFFECTS_CRASH_LOG:-0}" == "1" ]]; then
     rm -f "$CRASH_LOG_TRIGGER_PATH"
   fi
+  if [[ "${ER_EFFECTS_OWN_STEPPER:-0}" == "1" ]]; then
+    rm -f "$OWN_STEPPER_PATH"
+  fi
+  if [[ "${ER_EFFECTS_DIRECT_BUILD:-0}" == "1" ]]; then
+    rm -f "$DIRECT_BUILD_PATH"
+  fi
+  if [[ "${ER_EFFECTS_LIVE_DIALOG:-0}" == "1" ]]; then
+    rm -f "$LIVE_DIALOG_PATH"
+  fi
+  if [[ "${ER_EFFECTS_NATIVE_LOAD:-0}" == "1" ]]; then
+    rm -f "$NATIVE_LOAD_PATH"
+  fi
+  if [[ "${ER_EFFECTS_NATIVE_FULLREAD:-0}" == "1" ]]; then
+    rm -f "$NATIVE_FULLREAD_PATH"
+  fi
+  if [[ "${ER_EFFECTS_FULLREAD_COMMIT:-0}" == "1" ]]; then
+    rm -f "$FULLREAD_COMMIT_PATH"
+  fi
   copy_runtime_logs || true
   write_state_snapshot "$ARTIFACT_DIR/final-state-before-cleanup.json" || true
   teardown_runtime_processes || true
@@ -823,6 +847,45 @@ PY
       printf 'enabled=1\n' > "$CRASH_LOG_TRIGGER_PATH"
     else
       rm -f "$CRASH_LOG_TRIGGER_PATH"
+    fi
+    if [[ "${ER_EFFECTS_OWN_STEPPER:-0}" == "1" ]]; then
+      {
+        printf 'enabled=1\n'
+        printf 'slot=%s\n' "$ER_EFFECTS_AUTOLOAD_SLOT"
+      } > "$OWN_STEPPER_PATH"
+      cp -f "$OWN_STEPPER_PATH" "$ARTIFACT_DIR/own-stepper-request.txt"
+    else
+      rm -f "$OWN_STEPPER_PATH"
+    fi
+    if [[ "${ER_EFFECTS_DIRECT_BUILD:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$DIRECT_BUILD_PATH"
+      cp -f "$DIRECT_BUILD_PATH" "$ARTIFACT_DIR/direct-build-request.txt"
+    else
+      rm -f "$DIRECT_BUILD_PATH"
+    fi
+    if [[ "${ER_EFFECTS_LIVE_DIALOG:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$LIVE_DIALOG_PATH"
+      cp -f "$LIVE_DIALOG_PATH" "$ARTIFACT_DIR/live-dialog-request.txt"
+    else
+      rm -f "$LIVE_DIALOG_PATH"
+    fi
+    if [[ "${ER_EFFECTS_NATIVE_LOAD:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$NATIVE_LOAD_PATH"
+      cp -f "$NATIVE_LOAD_PATH" "$ARTIFACT_DIR/native-load-request.txt"
+    else
+      rm -f "$NATIVE_LOAD_PATH"
+    fi
+    if [[ "${ER_EFFECTS_NATIVE_FULLREAD:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$NATIVE_FULLREAD_PATH"
+      cp -f "$NATIVE_FULLREAD_PATH" "$ARTIFACT_DIR/native-fullread-request.txt"
+    else
+      rm -f "$NATIVE_FULLREAD_PATH"
+    fi
+    if [[ "${ER_EFFECTS_FULLREAD_COMMIT:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$FULLREAD_COMMIT_PATH"
+      cp -f "$FULLREAD_COMMIT_PATH" "$ARTIFACT_DIR/fullread-commit-request.txt"
+    else
+      rm -f "$FULLREAD_COMMIT_PATH"
     fi
     rm -f "$TELEMETRY_PATH" "$COMMAND_PATH" "$AUTOLOAD_DEBUG_PATH" "$TRACE_CONTINUE_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH" "$CRASH_LOG_SRC"
   } > "$ARTIFACT_DIR/setup.out" 2>&1
