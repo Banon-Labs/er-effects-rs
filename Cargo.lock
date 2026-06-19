@@ -217,6 +217,8 @@ dependencies = [
  "debug",
  "eldenring",
  "er-effects-data",
+ "er-safe-input",
+ "er-save-loader",
  "fromsoftware-shared",
  "hudhook",
 ]
@@ -227,6 +229,18 @@ version = "0.1.0"
 dependencies = [
  "er-effects-data",
  "er-soulsformats",
+]
+
+[[package]]
+name = "er-safe-input"
+version = "0.1.0"
+
+[[package]]
+name = "er-save-loader"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-safe-input",
 ]
 
 [[package]]

@@ -1,16 +1,34 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
+This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `/home/banon/.local/bin/bd`** — do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly always works. Run `/home/banon/.local/bin/bd prime` for full workflow context.
 
 ## Quick Reference
 
 ```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work atomically
-bd close <id>         # Complete work
-bd dolt push          # Push beads data to remote
+/home/banon/.local/bin/bd ready              # Find available work
+/home/banon/.local/bin/bd show <id>          # View issue details
+/home/banon/.local/bin/bd update <id> --claim  # Claim work atomically
+/home/banon/.local/bin/bd close <id>         # Complete work
+/home/banon/.local/bin/bd dolt push          # Push beads data to remote
 ```
+
+## Elden Ring Runtime Probe Hygiene
+
+When using Frida or the injected DLL to scrape runtime Elden Ring data, tear down Elden Ring immediately before pivoting back to code writing or other non-runtime work. Do not leave `eldenring.exe` / `start_protected_game.exe` running while editing code after a probe.
+
+For Elden Ring runtime validation, do not rely on slow manual/LLM-paced input timing. Prefer a deterministic fast helper/driver for inputs and captures, and use observable completion/teardown signals so the game is closed as soon as the targeted evidence is collected or a structured failure condition is reached. Every agent-run shell/runtime operation must also have an explicit hard timeout of 60 seconds or less for the runtime portion; use that timeout as a safety cap, not as the primary synchronization mechanism. `run_experiment` timeouts may include build/setup/cleanup overhead, but runtime success is not credible after `runtime_probe_seconds > 60` and must be scored/treated as failure. Do not use sleeps as synchronization.
+
+Do not use delayed mouse/keyboard polling as the primary way to advance menus during runtime probes. The smoke driver must default to no pointer nudges. If deterministic state injection/hooks are not enough, add/extend the safe input or save-loader workspace crates, or ask the user to perform the single fast interaction while the probe records structured evidence.
+
+Autoresearch runtime probes are disabled fail-closed unless `scripts/check-runtime-probe-contract.py`, its regression tests, and `.auto/runtime_experiment_policy.rego` are deliberately changed together. The Rego runtime policy must require `timeout_seconds` to be present, greater than 0, and no more than 60; the runtime path should still terminate from observable progress, completion, or structured failure evidence before that hard cap whenever possible.
+
+For Pi `run_experiment` in this repo, always set `timeout_seconds` to 60 or less and `checks_timeout_seconds` to 60 or less. The executable policy is `.auto/run_experiment_policy.rego`, validated by `scripts/check-run-experiment-contract.py`; do not call `run_experiment` with a larger tool timeout even for static `.auto/measure.sh` runs.
+
+## Ghidra Shared Project Hygiene
+
+Do not run broad headless Ghidra enumeration that opens every candidate program in the shared repository. A prior `ListEldenRingPrograms.java` attempt over the shared `From Software` repo had to be interrupted after nearly two hours. Use exact known project paths, repository file listings that do not open programs, or a small user-approved target list. If a new shared Ghidra query might open multiple large programs or scan the whole repository, stop and propose the bounded query first.
+
+Do not use whole-file MD5 as the Ghidra identity oracle for Elden Ring. The shared program is expected to be a runtime dump and local `eldenring.exe` may be intentionally PE-header patched, so whole-file hashes are at best provenance metadata. Use small bounded anchor byte windows, function-boundary evidence, and section/window fingerprints at exact RVAs instead.
 
 ## Non-Interactive Shell Commands
 
@@ -36,25 +54,11 @@ cp -rf source dest          # NOT: cp -r source dest
 - `apt-get` - use `-y` flag
 - `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
-## Beads Issue Tracker
-
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
-
-### Quick Reference
-
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
-```
-
 ### Rules
 
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+- Use `/home/banon/.local/bin/bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
+- Run `/home/banon/.local/bin/bd prime` for detailed command reference and session close protocol
+- Use `/home/banon/.local/bin/bd remember` for persistent knowledge — do NOT use MEMORY.md files (and to READ a memory use `/home/banon/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
 
 ## Session Completion
 
@@ -68,7 +72,7 @@ bd close <id>         # Complete work
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   bd dolt push
+   /home/banon/.local/bin/bd dolt push
    git push
    git status  # MUST show "up to date with origin"
    ```
@@ -82,3 +86,60 @@ bd close <id>         # Complete work
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->
+
+## No Compromises
+
+We accept **no compromises** on the stated objective. Do not propose, accept, or
+quietly settle for a weaker solution that technically "works" but relaxes the
+requirement (e.g. simulating an input when the goal is **zero-input** autoload).
+When a path looks blocked, that is a signal to find the *real* solution at a
+deeper layer — not to lower the bar. Specifically for the autoload goal: the
+deliverable must achieve genuine **zero simulated input** (`simulated_button_presses_total = 0`,
+no host pointer, no synthesized DirectInput/keystate/event) AND be a single
+LazyLoader/chainload DLL compatible with offline-vanilla, Seamless Co-op, and
+other mods (see bd memory `autoload-dll-product-requirements`). "Architecturally
+hard" is not "impossible" — keep reverse-engineering until the in-process,
+no-input mechanism is found. Surface trade-offs honestly, but the bar is the
+actual goal, never a fallback.
+
+## Upstream (`fromsoftware-rs`)
+
+**Never file, open, or propose filing an upstream issue/PR/report** (against
+`fromsoftware-rs` or any other external project) — not even as a recommendation or
+follow-up. When our code and upstream disagree (e.g. a struct offset mismatch), resolve
+it **in this repo**: confirm the correct value via static RE of the binary, fix or pin our
+side, and record the finding in `bd` for the next agent. Treat upstream as a read-only
+reference we adopt from, never as a place we contribute back to.
+
+## Build & Test
+
+This repo must be a sibling of a `fromsoftware-rs` checkout (the root crate uses `../fromsoftware-rs` path dependencies).
+
+```bash
+# Full quality gate: magic-number lint, lossy-UTF8 lint, cargo fmt --check,
+# and a windows-target cargo check (routed through powershell.exe under WSL).
+bash scripts/check.sh
+
+# Host-buildable workspace members (no game dependencies):
+cargo test -p er-soulsformats -p er-param-inspect
+cargo check -p er-soulsformats -p er-param-inspect
+
+# The game DLL itself (requires the x86_64-pc-windows-msvc target):
+cargo build --release --target x86_64-pc-windows-msvc
+# Output: target/x86_64-pc-windows-msvc/release/er_effects_rs.dll
+```
+
+## Architecture Overview
+
+- `src/lib.rs` — the injectable DLL. On `DLL_PROCESS_ATTACH` it spawns a recurring game task (via `CSTaskImp`) that watches the local player's TimeAct animation queue and applies the selected SpEffects, plus a hudhook/ImGui overlay for toggling effects, manual apply/remove, and live status.
+- `data/effects.json` — the named SpEffect call list, embedded into the DLL at compile time and validated offline against `SpEffectParam`.
+- `crates/soulsformats` (`er-soulsformats`) — host-side library that drives a generated .NET "bridge" project against Smithbox's `Andre.Formats`/SoulsFormats to read `regulation.bin` params. Also contains the parser for FastSpEffectRecon Ghidra output (`recon` module).
+- `tools/er-param-inspect` — CLI over `er-soulsformats`: inspect param rows and validate `data/effects.json` against a regulation file.
+- `docs/` — reference-tree research notes and recon data (`docs/recon/`).
+
+## Conventions & Patterns
+
+- **No magic numbers**: every numeric literal in Rust source must appear on a `const`/`static` declaration line (`scripts/check-no-magic-numbers.py` enforces this, including in tests).
+- **No lossy UTF-8**: `String::from_utf8_lossy` is banned unless the line (or the line above) carries a `// UTF-8 Lossy:` justification (`scripts/check-no-lossy-utf8.py`).
+- Game-thread state is shared with the render loop via `Arc<Mutex<EffectsState>>`; lock with `state_or_return` (recovers from poisoning) and never hold the lock across game calls longer than needed.
+- The overlay defaults network sync **off**; `apply_speffect(id, dont_sync)` takes an inverted flag — keep the inversion contained in `EffectCallKind::apply`.

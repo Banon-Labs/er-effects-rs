@@ -1,7 +1,18 @@
 /target
 *.log
+__pycache__/
 
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
 .beads-credential-key
+
+/save-files
+
+# Deobfuscated (Arxan-decrypted) ER image for static RE -- copyrighted game binary, NEVER commit
+eldenring-deobf.bin
+*.deobf.bin
+
+
+ProDebug.dll
+offline-launcher.exe
