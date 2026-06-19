@@ -24,6 +24,7 @@ from typing import Iterable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BASE_REF = "main"
+GIT_COMMAND_TIMEOUT_SECONDS = 30
 INTEGER_SUFFIX_RE = re.compile(r"(?<=\d)(?:u|i)(?:8|16|32|64|128|size)\b")
 CAST_RE = re.compile(r"\s+as\s+[A-Za-z_][A-Za-z0-9_:<>]*(?:\s*\*)?")
 PATH_SYMBOL_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)+\b")
@@ -138,6 +139,7 @@ def run_git(args: list[str], *, check: bool = True) -> str:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
+        timeout=GIT_COMMAND_TIMEOUT_SECONDS,
     )
     if check and result.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed\n{result.stderr}{result.stdout}")
@@ -152,6 +154,7 @@ def git_show(ref: str, path: str) -> str:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
+        timeout=GIT_COMMAND_TIMEOUT_SECONDS,
     )
     if result.returncode != 0:
         return ""
