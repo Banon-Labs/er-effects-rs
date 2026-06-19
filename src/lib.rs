@@ -696,7 +696,9 @@ pub(crate) const GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET: usize =
 /// pass; the one runtime unknown is whether the slot-record container
 /// [slotmgr+0x8] is populated at the pre-bootstrap title. These RVAs/offsets let
 /// us read those preconditions without touching state.
-pub(crate) const SLOT_MANAGER_RVA: usize = 0x3d5df38;
+/// Alias for the GameDataMan singleton RVA: the "slot manager" the save-snapshot probe reads IS
+/// GameDataMan. Reference the canonical const so the RVA is decoded in exactly one place.
+pub(crate) const SLOT_MANAGER_RVA: usize = PLAYER_GAME_DATA_SINGLETON_RVA;
 /// GameDataMan -> main player save data (compiler-verified equal to the upstream typed field).
 pub(crate) const SLOT_MANAGER_DATA_OFFSET: usize =
     core::mem::offset_of!(GameDataMan, main_player_game_data);
