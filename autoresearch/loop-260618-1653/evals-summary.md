@@ -29,14 +29,16 @@ upstream `eldenring` crate's maintained typed definitions, prioritizing **accura
 4. **Dedup GameDataMan singleton RVA** (−1). `SLOT_MANAGER_RVA` and
    `PLAYER_GAME_DATA_SINGLETON_RVA` both decoded `0x3d5df38`; collapsed to one source.
 
-## Bug uncovered (the user's "bugs uncovered by replacement")
+## Bug uncovered AND FIXED (the user's "bugs uncovered by replacement")
 
-`GameMan::character_name_is_empty`: **our 0xe78 vs upstream 0xe70** (8-byte gap). The gap is
-adjacent to upstream's low-confidence unnamed blob `unld98: [u8; 0xd8]`; if that blob is
-really `0xe0` bytes the field lands at 0xe78 = our value, which was *live-validated*. Evidence
-leans toward **upstream** being wrong (undersized blob). Left hardcoded; resolve **in-repo**
-via static RE of `eldenring.exe` to adjudicate, then pin our side. (Do not file upstream — see
-AGENTS.md "Upstream".) bd: `gameman-name-empty-offset-e78-vs-e70`.
+`GameMan::character_name_is_empty`: our `0xe78` vs upstream `0xe70` (8-byte gap), **RESOLVED by
+static RE** of `eldenring-deobf.bin`. The in-game getter at `0x140679d90` is
+`mov rax,[GameMan]; movzbl 0xe70(rax),eax; ret` — the field is at **+0xe70**, so **our `0xe78`
+was the bug** (read padding past the field; upstream was correct). A reusable scanner
+(`scripts/scan-gameman-name-empty.py`) corroborates: 4 GameMan-correlated byte-accesses at
+`0xe70`, **0** at `0xe78`. Fix: renamed the const `…_E78_…→…_E70_…` and bound it to
+`offset_of!(GameMan, character_name_is_empty)`; updated the use in `experiments.rs`. The same
+disasm block also reconfirmed `save_slot` @ `0xac0`. bd: `gameman-name-empty-offset-e78-vs-e70`.
 
 ## Why the loop stopped at 4 (honest ceiling, not a plateau to push through)
 
@@ -61,7 +63,6 @@ metric-gaming or unvalidated risky edits.
 
 ## Recommended follow-ups
 
-1. **Resolve e78/e70** via static RE of the `character_name_is_empty` accessor and pin our
-   side in-repo. Do not file upstream (AGENTS.md "Upstream").
+1. ~~Resolve e78/e70 via static RE~~ — **DONE** (field is +0xe70; fixed in-repo, commit `a26bc88`).
 2. Optionally add compile-time asserts that our singleton RVA consts equal upstream's
    `rva_ww` values (regression guard; would *raise* this metric, so out of scope here).
