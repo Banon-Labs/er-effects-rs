@@ -41,6 +41,7 @@ AUTOLOAD_PATH="${AUTOLOAD_PATH:-$GAME_DIR/er-effects-autoload.txt}"
 SAFE_INPUT_PATH="${SAFE_INPUT_PATH:-$GAME_DIR/er-effects-safe-input.txt}"
 AUTOLOAD_DEBUG_PATH="${AUTOLOAD_DEBUG_PATH:-$ARTIFACT_DIR/autoload-debug.log}"
 TRACE_CONTINUE_PATH="${TRACE_CONTINUE_PATH:-$ARTIFACT_DIR/continue-trace.log}"
+NO_CONTINUE_TRACE_PATH="${NO_CONTINUE_TRACE_PATH:-$GAME_DIR/er-effects-no-continue-trace.txt}"
 TRACE_MENU_TASK_UPDATE_PATH="${TRACE_MENU_TASK_UPDATE_PATH:-$GAME_DIR/er-effects-trace-menu-task-update.txt}"
 TRACE_TITLE_STAGE_PATH="${TRACE_TITLE_STAGE_PATH:-$GAME_DIR/er-effects-trace-title-stage.txt}"
 PUMP_MOVE_MAP_PATH="${PUMP_MOVE_MAP_PATH:-$GAME_DIR/er-effects-pump-move-map.txt}"
@@ -569,6 +570,9 @@ cleanup_runtime() {
   if [[ "${ER_EFFECTS_AUTOLOAD_NATIVE_EXTRA_PARENT:-0}" == "1" ]]; then
     rm -f "$NATIVE_EXTRA_PARENT_PATH"
   fi
+  if [[ "${ER_EFFECTS_NO_CONTINUE_TRACE:-0}" == "1" ]]; then
+    rm -f "$NO_CONTINUE_TRACE_PATH"
+  fi
   if [[ "${ER_EFFECTS_TRACE_TASK_NODE_BYTES:-0}" == "1" ]]; then
     rm -f "$TRACE_TASK_NODE_BYTES_PATH"
   fi
@@ -680,6 +684,12 @@ PY
       cp -f "$SAFE_INPUT_PATH" "$ARTIFACT_DIR/safe-input-request.txt"
     else
       printf 'confirm_count=0\n' > "$ARTIFACT_DIR/safe-input-request.txt"
+    fi
+    if [[ "${ER_EFFECTS_NO_CONTINUE_TRACE:-0}" == "1" ]]; then
+      printf 'enabled=1\n' > "$NO_CONTINUE_TRACE_PATH"
+      cp -f "$NO_CONTINUE_TRACE_PATH" "$ARTIFACT_DIR/no-continue-trace-request.txt"
+    else
+      rm -f "$NO_CONTINUE_TRACE_PATH"
     fi
     if [[ "${ER_EFFECTS_TRACE_MENU_TASK_UPDATE:-0}" == "1" ]]; then
       printf 'enabled=1\n' > "$TRACE_MENU_TASK_UPDATE_PATH"
