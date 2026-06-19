@@ -1,0 +1,7 @@
+# metric_direction: lower_is_better
+iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
+0	2026-06-18T16:53:57-0700	2797361	1600	0.0	pass	46	baseline	initial state (hex literals across src/*.rs); guard=src-relevant subset of check.sh (see guard.sh)
+1	2026-06-18T17:05:00-0700	f339109	1594	-6.0	pass	46	keep	offset_of! for GameDataMan/PlayerGameData offsets (6 literals -> upstream typed)
+2	2026-06-18T17:18:00-0700	c3f0895	1590	-4.0	pass	46	keep	bind 3 GameMan offsets to offset_of! (b72/b78/b80); UNCOVERED e78-vs-e70 discrepancy (flagged, bd recorded)
+3	2026-06-18T17:30:00-0700	1ef5f87	1588	-2.0	pass	46	keep	bind GameMan.save_slot(ac0)+GameDataMan.main_player_game_data(0x8) to offset_of!
+4	2026-06-18T17:42:00-0700	61de244	1587	-1.0	pass	46	keep	dedup GameDataMan singleton RVA (SLOT_MANAGER_RVA -> PLAYER_GAME_DATA_SINGLETON_RVA)
