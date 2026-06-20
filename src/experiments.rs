@@ -2705,44 +2705,30 @@ unsafe fn submit_native_continue_item_action(
     action: NativeContinueItemAction,
     base: usize,
 ) -> Option<i32> {
-    let mode = unsafe { safe_read_i32(action.result + MENU_ITEM_RESULT_MODE_58_OFFSET) }?;
-    if mode == MENU_ITEM_RESULT_MODE_EVENT3 {
-        let submit: unsafe extern "system" fn(usize) =
-            unsafe { std::mem::transmute(base + MENU_ITEM_SUBMIT_RVA) };
-        unsafe { submit(action.result) };
-        return Some(mode);
+    const MENU_ITEM_RESULT_MODE_UNKNOWN: i32 = i32::MIN;
+    let diagnostic_mode = unsafe { safe_read_i32(action.result + MENU_ITEM_RESULT_MODE_58_OFFSET) }
+        .unwrap_or(MENU_ITEM_RESULT_MODE_UNKNOWN);
+    let event_handler =
+        unsafe { safe_read_usize(action.result_vt + MENU_ITEM_RESULT_EVENT_SLOT_60_OFFSET) }?;
+    if !vtable_in_game_image(event_handler, base) {
+        append_autoload_debug(format_args!(
+            "product-core-autoload: native Continue submit ABI rejected item=0x{:x} result=0x{:x} result_vt=0x{:x} event_handler=0x{event_handler:x} diagnostic_mode={diagnostic_mode}",
+            action.item, action.result, action.result_vt
+        ));
+        return None;
     }
-    if mode == MENU_ITEM_RESULT_MODE_EVENT4 {
-        let event_ctor: unsafe extern "system" fn(usize, i32, i32) -> usize =
-            unsafe { std::mem::transmute(base + FD4_EVENT_CONSTRUCTOR_RVA) };
-        let event_handler =
-            unsafe { safe_read_usize(action.result_vt + MENU_ITEM_RESULT_EVENT_SLOT_60_OFFSET) }?;
-        let handler: unsafe extern "system" fn(usize, usize) =
-            unsafe { std::mem::transmute(event_handler) };
-        let mut event: u64 = TITLE_OWNER_SCAN_START_ADDRESS as u64;
-        unsafe {
-            event_ctor(
-                (&raw mut event) as usize,
-                MENU_ITEM_RESULT_EVENT4_CODE,
-                MENU_ITEM_RESULT_EVENT4_PAYLOAD,
-            )
-        };
-        unsafe { handler(action.result, (&raw mut event) as usize) };
-        return Some(mode);
-    }
-    const ITEM_STATUS_128: usize = 0x128;
-    let status = unsafe { safe_read_usize(action.item + ITEM_STATUS_128) }
-        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
-    let status_vt = if status != TITLE_OWNER_SCAN_START_ADDRESS {
-        unsafe { safe_read_usize(status) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
-    } else {
-        TITLE_OWNER_SCAN_START_ADDRESS
-    };
+    let fd4_event_constructor = base + FD4_EVENT_CONSTRUCTOR_RVA;
+    let submit: unsafe extern "system" fn(usize) =
+        unsafe { std::mem::transmute(base + MENU_ITEM_SUBMIT_RVA) };
     append_autoload_debug(format_args!(
-        "product-core-autoload: native Continue MenuWindowJob result rejected item=0x{:x} result=0x{:x} result_vt=0x{:x} mode={mode} status128=0x{status:x} status_vt=0x{status_vt:x}",
-        action.item, action.result, action.result_vt
+        "product-core-autoload: native Continue submit ABI proven item=0x{:x} result=0x{:x} result_vt=0x{:x} event_handler=0x{event_handler:x} submit=0x{:x} fd4_event_ctor=0x{fd4_event_constructor:x} diagnostic_mode={diagnostic_mode} -- result+0x58 logged only, never used as readiness",
+        action.item,
+        action.result,
+        action.result_vt,
+        base + MENU_ITEM_SUBMIT_RVA
     ));
-    None
+    unsafe { submit(action.result) };
+    Some(diagnostic_mode)
 }
 
 unsafe fn product_continue_entry_action(owner: usize, base: usize) -> Option<NativeContinueEntry> {
