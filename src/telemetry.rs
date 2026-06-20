@@ -735,6 +735,9 @@ pub(crate) fn json_escape(value: &str) -> String {
             '\n' => "\\n".chars().collect::<Vec<_>>(),
             '\r' => "\\r".chars().collect::<Vec<_>>(),
             '\t' => "\\t".chars().collect::<Vec<_>>(),
+            character if character.is_control() => format!("\\u{:04x}", character as u32)
+                .chars()
+                .collect::<Vec<_>>(),
             character => vec![character],
         })
         .collect()
