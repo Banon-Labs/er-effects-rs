@@ -418,7 +418,10 @@ if rt_root.exists():
             if 'world-stable' in text or 'SetState5' in text or 'max oracle' in text:
                 proof['world'] = True
         count = sum(proof.values())
-        if count > best_runtime[0]:
+        hard_popup_dirs = set(messagebox_by_dir) | set(legal_popup_by_dir) | set(save_data_popup_by_dir)
+        best_has_hard_popup = best_runtime[1] is not None and best_runtime[1].name in hard_popup_dirs
+        has_hard_popup = d.name in hard_popup_dirs
+        if count > best_runtime[0] or (count == best_runtime[0] and best_has_hard_popup and not has_hard_popup):
             best_runtime = (count, d, proof)
 best_count, best_dir, proof = best_runtime
 if best_dir is None:
