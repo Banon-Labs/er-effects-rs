@@ -157,17 +157,17 @@ native_fullread_body = function_body('native_fullread_tick', exp_code) or ''
 product_continue_body = function_body('product_continue_autoload_tick', exp_code) or ''
 submit_body = function_body('submit_native_continue_item_action', exp_code) or ''
 continue_item_body = function_body('product_continue_item_action', exp_code) or ''
-product_related = '\n'.join([product_body or '', function_body('own_stepper_idx10', exp_code) or '', function_body('own_stepper_stage2', exp_code) or '', function_body('cold_char_mount_drive', exp_code) or ''])
-product_input_audit = '\n'.join([product_body or '', function_body('own_stepper_direct_build', exp_code) or '', function_body('own_stepper_stage2', exp_code) or '', function_body('cold_char_mount_drive', exp_code) or ''])
+product_related = '\n'.join([product_body or '', product_continue_body, submit_body, continue_item_body])
+product_input_audit = product_related
 if product_body is None:
     legacy_failures.append('missing product_core_autoload_tick under native-path audit')
     autoload_static_failures += 1
 else:
-    if 'own_stepper_enter_menu_build_phase' not in product_body:
-        legacy_failures.append('product_core_autoload_tick no longer hands off to idx10 menu-build/direct ProfileLoadDialog path')
+    if 'own_stepper_direct_build' in product_body:
+        legacy_failures.append('product_core_autoload_tick still calls broken direct_build path')
         autoload_static_failures += 1
-    if 'product_continue_autoload_tick' in product_body or 'submit_native_continue_item_action' in product_body:
-        legacy_failures.append('product_core_autoload_tick still routes through native Continue row instead of direct ProfileLoadDialog stage2')
+    if 'product_continue_autoload_tick' not in product_body or 'product_continue_action_ready' not in product_body:
+        legacy_failures.append('product_core_autoload_tick no longer routes through product Continue action readiness')
         autoload_static_failures += 1
 
 if 'live_dialog_settle_threshold_is_90' in check or 'proven 90-frame threshold' in check:
@@ -195,22 +195,23 @@ for label, patterns in asset_requirements.items():
         asset_failures.append(f'asset chain missing {label}')
 
 native_failures: list[str] = []
+for name in ['product_continue_item_action', 'submit_native_continue_item_action']:
+    if not re.search(rf'\bfn\s+{name}\b', exp_code):
+        native_failures.append(f'missing native Continue helper {name}')
 for token in [
-    'direct_build_enabled() || product_autoload_enabled()',
-    'own_stepper_direct_build',
-    'profile_load_dialog_ready',
-    'cold_char_mount_drive',
-    'GAME_MAN_SLOT_SELECT_B78_OFFSET',
-    'FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA',
-    'B80_FULL_LOAD_INITIATOR_RVA',
-    'B80_LANE1_DRIVER_RVA',
-    'B80_POLL_RVA',
-    'DESERIALIZE_SLOT_RVA',
-    'CONTINUE_CONFIRM_RVA',
-    'native_fullread_commit_enabled',
+    'MENU_WINDOW_JOB_VTABLE_RVA',
+    'MENU_TITLE_CONTINUE_DOCALL_RVA',
+    'MENU_ITEM_DIALOG_RESULT_130_OFFSET',
+    'MENU_ITEM_SUBMIT_RVA',
+    'MENU_ITEM_RESULT_EVENT_SLOT_60_OFFSET',
+    'FD4_EVENT_CONSTRUCTOR_RVA',
 ]:
     if token not in product_related:
-        native_failures.append(f'direct ProfileLoadDialog/full-read product path missing token {token}')
+        native_failures.append(f'native Continue path missing token {token}')
+if continue_item_body and 'MENU_TITLE_CONTINUE_DOCALL_RVA' not in continue_item_body:
+    native_failures.append('Continue item action does not validate Continue docall')
+if submit_body and 'MENU_ITEM_SUBMIT_RVA' not in submit_body and 'MENU_ITEM_RESULT_EVENT_SLOT_60_OFFSET' not in submit_body:
+    native_failures.append('submit helper does not use native submit/event dispatch')
 
 field58_failures: list[str] = []
 if 'MENU_ITEM_RESULT_MODE_58_OFFSET' in submit_body and re.search(r'if\s+mode\s*==', submit_body):
@@ -228,19 +229,19 @@ direct_tokens = [
 ]
 for token in direct_tokens:
     if token in product_related:
-        direct_failures.append(f'product/native full-read body contains direct shortcut token {token}')
+        direct_failures.append(f'product/native submit body contains direct shortcut token {token}')
 if 'CONTINUE_CONFIRM_RVA' in product_related and not (
-    'guard_pass' in native_fullread_body
-    and 'native_fullread_commit_enabled' in native_fullread_body
-    and 'TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET' in native_fullread_body
-    and 'fp_real' in native_fullread_body
+    'MODAL-CONFIRM-DISABLED' in product_continue_body
+    and 'modal_disable_ready' in product_continue_body
+    and 'c30_loaded_sane' in product_continue_body
+    and 'fp_real' in product_continue_body
 ):
-    direct_failures.append('product/native full-read body contains unguarded continue_confirm')
+    direct_failures.append('product/native submit body contains unguarded direct continue_confirm')
 
 input_failures: list[str] = []
 for token in ['input_probe_enabled', 'inject_nav_enabled', 'menu_input_probe', 'set_injected_key', 'SAFE_INPUT_CONFIRM', 'DIK_DOWN', 'XInput']:
     if token in product_input_audit:
-        input_failures.append(f'product/direct ProfileLoadDialog body contains input path token {token}')
+        input_failures.append(f'product/native submit body contains input path token {token}')
 if re.search(r'Down \+ accept.*product proof', prompt, re.IGNORECASE):
     input_failures.append('prompt still frames Down+accept as product proof')
 

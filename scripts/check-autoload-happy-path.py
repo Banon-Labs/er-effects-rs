@@ -235,11 +235,11 @@ def main() -> int:
         failures,
     )
     require(
-        "product_core_autoload_tick no longer hands off to idx10 menu-build/direct ProfileLoadDialog path" in measure
-        and "direct_build_enabled() || product_autoload_enabled()" in measure
-        and "B80_FULL_LOAD_INITIATOR_RVA" in measure
-        and "DESERIALIZE_SLOT_RVA" in measure,
-        "measure must enforce product autoload uses the direct ProfileLoadDialog stage2/full-read path, not native Continue row",
+        "product_core_autoload_tick still calls broken direct_build path" in measure
+        and "product_continue_autoload_tick" in measure
+        and "product_continue_action_ready" in measure
+        and "CONTINUE_LOAD_RVA" in measure,
+        "measure must enforce product autoload uses the native Continue row load path, not direct_build",
         failures,
     )
     telemetry_src = read(REPO_ROOT / "src" / "telemetry.rs")
