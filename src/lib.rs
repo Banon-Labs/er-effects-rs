@@ -1795,6 +1795,14 @@ pub(crate) static MSGBOX_LAST_DIALOG: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MSGBOX_TOTAL_BUILDS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) static MSGBOX_POSTLOAD_BUILDS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+pub(crate) static MSGBOX_LAST_ARG_RCX: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MSGBOX_LAST_ARG_RDX: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MSGBOX_LAST_ARG_R8: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MSGBOX_LAST_ARG_R9: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static DISMISS_WRITE_LOG: AtomicUsize = AtomicUsize::new(0);
 /// The dialog pointer OnDecide was last fired on, so we press OK exactly ONCE per dialog instead
 /// of every frame (re-dispatching every frame keeps the dialog stuck "deciding" and it never

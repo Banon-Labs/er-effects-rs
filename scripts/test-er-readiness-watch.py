@@ -365,6 +365,12 @@ def main() -> int:
     assert watcher.legal_popup_ocr_matches(eula_text)
     assert watcher.legal_popup_ocr_matches("Terms of Service and Privacy Policy")
     assert not watcher.legal_popup_ocr_matches("ELDEN RING Continue Load Game System")
+    assert watcher.native_legal_text_id(607100) == 607100
+    assert watcher.native_legal_text_id(607200) == 607200
+    assert watcher.native_legal_text_id(607301) == 607301
+    assert watcher.native_legal_text_id(606300) is None
+    assert watcher.telemetry_native_legal_popup_detected({"oracle_msgbox_builder_args": [1, 607200, 3, 4]})
+    assert not watcher.telemetry_native_legal_popup_detected({"oracle_msgbox_builder_args": [1, 2, 3, 4]})
 
     manual_world_wait = watcher.classify_snapshot(
         pid=TEST_PID,

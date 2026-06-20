@@ -111,6 +111,6 @@ python3 "$REPO_ROOT/scripts/er-readiness-watch.py" \
   --target "${RUNTIME_WATCH_TARGET:-world-stable}" \
   --expected-runtime-mode "$RUNTIME_EXPECTED_MODE" \
   --fail-on-messagebox-dialog \
-  --visual-legal-popup-check \
+  --fail-on-native-legal-popup \
   --visual-save-data-popup-check \
   --max-runtime-seconds "$RUNTIME_TIMEOUT_SECONDS"

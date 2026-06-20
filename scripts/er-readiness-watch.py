@@ -59,6 +59,7 @@ READINESS_BUDGET_EXHAUSTED = "readiness_poll_budget_exhausted"
 TIMEOUT_BUDGET_EXHAUSTED = "timeout_seconds_budget_exhausted"
 VISUAL_LOADING_SCREEN_DETECTED = "visual_loading_screen_detected"
 LEGAL_POPUP_DETECTED = "visual_legal_popup_detected"
+NATIVE_LEGAL_POPUP_DETECTED = "native_legal_popup_detected"
 SAVE_DATA_POPUP_DETECTED = "visual_save_data_popup_detected"
 MESSAGEBOX_DIALOG_DETECTED = "native_messagebox_dialog_detected"
 TARGET_WINDOW_CAPTURE_UNSAFE = "target_window_capture_unsafe"
@@ -85,14 +86,22 @@ VISUAL_OCR_CROPS = [
     ("lower_left_tips", "520x220+0+110"),
     ("tip_text", "420x180+0+140"),
 ]
-LEGAL_POPUP_OCR_PATTERNS = [
-    re.compile(r"\bend[- ]user license\b", re.I),
-    re.compile(r"\bsoftware license\b", re.I),
-    re.compile(r"\blicen[cs]e agreement\b", re.I),
-    re.compile(r"\beula\b", re.I),
-    re.compile(r"\bterms of (?:use|service)\b", re.I),
-    re.compile(r"\bprivacy policy\b", re.I),
-    re.compile(r"\buser agreement\b", re.I),
+LEGAL_POPUP_TEXT_PATTERNS = [
+    r"\bend[- ]user license\b",
+    r"\bsoftware license\b",
+    r"\blicen[cs]e agreement\b",
+    r"\beula\b",
+    r"\bterms of (?:use|service)\b",
+    r"\bprivacy policy\b",
+    r"\buser agreement\b",
+]
+LEGAL_POPUP_OCR_PATTERNS = [re.compile(pattern, re.I) for pattern in LEGAL_POPUP_TEXT_PATTERNS]
+# Asset-backed from msg/engus/menu.msgbnd.dcx -> ToS_win64.fmg. These are the
+# English EULA/privacy/data-consent ranges in the packed FMG, not OCR strings.
+NATIVE_LEGAL_TEXT_ID_RANGES = [
+    range(607100, 607133),
+    range(607200, 607213),
+    range(607300, 607302),
 ]
 SAVE_DATA_POPUP_OCR_PATTERNS = [
     re.compile(r"\bfailed to load save data\b", re.I),
@@ -523,6 +532,22 @@ def telemetry_messagebox_dialog_detected(telemetry: dict[str, Any] | None) -> bo
         or telemetry.get("oracle_postload_modal_seen") is True
         or as_int(telemetry.get("oracle_msgbox_postload_builds"), 0) > 0
     )
+
+
+def native_legal_text_id(value: Any) -> int | None:
+    text_id = as_int(value, -1)
+    if any(text_id in text_id_range for text_id_range in NATIVE_LEGAL_TEXT_ID_RANGES):
+        return text_id
+    return None
+
+
+def telemetry_native_legal_popup_detected(telemetry: dict[str, Any] | None) -> bool:
+    if not isinstance(telemetry, dict):
+        return False
+    args = telemetry.get("oracle_msgbox_builder_args")
+    if not isinstance(args, list):
+        return False
+    return any(native_legal_text_id(arg) is not None for arg in args)
 
 
 def telemetry_no_postload_popup(telemetry: dict[str, Any]) -> bool:
@@ -1142,6 +1167,21 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
                     seamless_module_mappings=seamless_mappings,
                 )
             )
+        if args.fail_on_native_legal_popup and telemetry_native_legal_popup_detected(telemetry):
+            return with_runtime_module_info(
+                ReadinessResult(
+                    False,
+                    NATIVE_LEGAL_POPUP_DETECTED,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
         if args.fail_on_messagebox_dialog and telemetry_messagebox_dialog_detected(telemetry):
             return with_runtime_module_info(
                 ReadinessResult(
@@ -1357,6 +1397,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=True,
         help="Fail immediately if in-process telemetry sees any native CS::MessageBoxDialog build; ideal product runtime has zero.",
+    )
+    parser.add_argument(
+        "--fail-on-native-legal-popup",
+        action="store_true",
+        default=True,
+        help="Fail immediately if in-process telemetry sees a MessageBoxDialog builder arg matching packed ToS_win64.fmg EULA/privacy text IDs.",
     )
     parser.add_argument(
         "--visual-legal-popup-check",

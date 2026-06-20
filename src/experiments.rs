@@ -6265,6 +6265,10 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
         // reporting a false 1400 when a blocking popup remains on screen.
         if is_msgbox {
             MSGBOX_LAST_DIALOG.store(ret, Ordering::SeqCst);
+            MSGBOX_LAST_ARG_RCX.store(a, Ordering::SeqCst);
+            MSGBOX_LAST_ARG_RDX.store(b, Ordering::SeqCst);
+            MSGBOX_LAST_ARG_R8.store(c, Ordering::SeqCst);
+            MSGBOX_LAST_ARG_R9.store(d, Ordering::SeqCst);
             MSGBOX_TOTAL_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
             if in_world {
                 MSGBOX_POSTLOAD_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
