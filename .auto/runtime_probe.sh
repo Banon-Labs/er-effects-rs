@@ -8,7 +8,7 @@ RUNTIME_LAZYLOAD_CHAINLOAD_DLL="${RUNTIME_LAZYLOAD_CHAINLOAD_DLL:-er_effects_rs.
 RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-vanilla}"
 POLICY_PATH="$REPO_ROOT/.auto/runtime_experiment_policy.rego"
 SEAMLESS_DLL_PATH="$GAME_DIR/SeamlessCoop/ersc.dll"
-SEAMLESS_STAGED_PATH="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe}/staged-away/ersc.dll"
+SEAMLESS_STAGED_PATH="${SEAMLESS_STAGED_PATH:-$GAME_DIR/SeamlessCoop/ersc.dll.er-effects-staged}"
 
 cleanup_runtime() {
   if [[ "$RUNTIME_EXPECTED_MODE" == "seamless" && -f "$SEAMLESS_STAGED_PATH" && ! -f "$SEAMLESS_DLL_PATH" ]]; then

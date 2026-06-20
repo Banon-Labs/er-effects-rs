@@ -54,7 +54,7 @@ Options:
   --screenshot-ext EXT  Screenshot extension: jpg (default) or png
   --no-build            Skip cargo xwin build
   --no-install          Skip copying LazyLoader and er_effects_rs.dll
-  --launch-mode MODE    direct (default), direct-protected, or steam
+  --launch-mode MODE    direct (default) only; Steam/protected launcher modes are policy-blocked
   --no-launch           Skip launch and drive existing game process/window
 EOF
 }
@@ -102,11 +102,11 @@ preflight() {
   require jq
   require realpath
   require tail
-  if [[ "$LAUNCH_MODE" == steam ]]; then
-    require steam
-  else
-    [[ -x "$PROTON" ]] || { echo "missing Proton runner: $PROTON" >&2; exit 127; }
+  if [[ "$LAUNCH_MODE" != direct ]]; then
+    echo "unsupported launch mode: $LAUNCH_MODE (only direct offline eldenring.exe is allowed)" >&2
+    exit 2
   fi
+  [[ -x "$PROTON" ]] || { echo "missing Proton runner: $PROTON" >&2; exit 127; }
   require ydotool
   require hyprctl
   [[ -x "$SCREENSHOT_HELPER" ]] || { echo "missing screenshot helper: $SCREENSHOT_HELPER" >&2; exit 127; }
@@ -326,24 +326,12 @@ drive() {
   fi
 
   if (( LAUNCH )); then
-    case "$LAUNCH_MODE" in
-      direct)
-        log "launching Elden Ring directly through Proton"
-        (cd "$GAME_DIR" && STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_COMPAT_CLIENT_INSTALL_PATH" STEAM_COMPAT_DATA_PATH="$STEAM_COMPAT_DATA_PATH" ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" ER_EFFECTS_COMMAND_PATH="$COMMAND_PATH" ER_EFFECTS_AUTOLOAD_PATH="$AUTOLOAD_PATH" ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" "$PROTON" run "$GAME_DIR/eldenring.exe" > "$ARTIFACT_DIR/proton-run.out" 2>&1 & echo $! > "$ARTIFACT_DIR/proton-run.pid")
-        ;;
-      direct-protected)
-        log "launching start_protected_game.exe directly through Proton"
-        (cd "$GAME_DIR" && STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_COMPAT_CLIENT_INSTALL_PATH" STEAM_COMPAT_DATA_PATH="$STEAM_COMPAT_DATA_PATH" ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" ER_EFFECTS_COMMAND_PATH="$COMMAND_PATH" ER_EFFECTS_AUTOLOAD_PATH="$AUTOLOAD_PATH" ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" "$PROTON" run "$GAME_DIR/start_protected_game.exe" > "$ARTIFACT_DIR/proton-protected-run.out" 2>&1 & echo $! > "$ARTIFACT_DIR/proton-protected-run.pid")
-        ;;
-      steam)
-        log "launching Elden Ring through Steam"
-        (cd "$GAME_DIR" && ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" ER_EFFECTS_COMMAND_PATH="$COMMAND_PATH" steam steam://rungameid/1245620 > "$ARTIFACT_DIR/steam-launch.out" 2>&1 & echo $! > "$ARTIFACT_DIR/steam-launch.pid")
-        ;;
-      *)
-        echo "unknown launch mode: $LAUNCH_MODE" >&2
-        exit 2
-        ;;
-    esac
+    if [[ "$LAUNCH_MODE" != direct ]]; then
+      echo "unsupported launch mode: $LAUNCH_MODE (only direct offline eldenring.exe is allowed)" >&2
+      exit 2
+    fi
+    log "launching Elden Ring executable directly through Proton"
+    (cd "$GAME_DIR" && STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_COMPAT_CLIENT_INSTALL_PATH" STEAM_COMPAT_DATA_PATH="$STEAM_COMPAT_DATA_PATH" ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" ER_EFFECTS_COMMAND_PATH="$COMMAND_PATH" ER_EFFECTS_AUTOLOAD_PATH="$AUTOLOAD_PATH" ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" "$PROTON" run "$GAME_DIR/eldenring.exe" > "$ARTIFACT_DIR/proton-run.out" 2>&1 & echo $! > "$ARTIFACT_DIR/proton-run.pid")
   fi
 
   wait_window

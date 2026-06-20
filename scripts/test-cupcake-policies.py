@@ -19,6 +19,7 @@ class PolicyCase:
     extra_tool_input: dict[str, object] | None = None
     extra_event: dict[str, object] | None = None
     include_timeout: bool = True
+    tool_name: str = "Bash"
 
 
 DEFAULT_BASH_TIMEOUT_MS = 30000
@@ -35,7 +36,7 @@ def run_case(case: PolicyCase) -> None:
         "transcript_path": f"/tmp/cupcake-policy-regression-{case.name}.jsonl",
         "cwd": str(REPO_ROOT),
         "hook_event_name": "PreToolUse",
-        "tool_name": "Bash",
+        "tool_name": case.tool_name,
         "tool_input": tool_input,
     }
     if case.extra_event:
@@ -253,6 +254,69 @@ def main() -> int:
             "ls target",
             False,
             "RTK path",
+        ),
+        PolicyCase(
+            "deny-steam-applaunch-elden-ring",
+            "steam -applaunch 1245620",
+            False,
+            "blocked this Elden Ring launch command",
+        ),
+        PolicyCase(
+            "deny-steam-rungameid-elden-ring",
+            "steam steam://rungameid/1245620",
+            False,
+            "blocked this Elden Ring launch command",
+        ),
+        PolicyCase(
+            "deny-xdg-open-steam-run-elden-ring",
+            "xdg-open steam://run/1245620",
+            False,
+            "blocked this Elden Ring launch command",
+        ),
+        PolicyCase(
+            "deny-proton-start-protected-game",
+            "proton run /tmp/start_protected_game.exe",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
+        PolicyCase(
+            "deny-direct-start-protected-game",
+            "/tmp/start_protected_game.exe",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
+        PolicyCase(
+            "deny-ersc-dll-copy-bundle",
+            "cp -f /tmp/ersc.dll target/release/ersc.dll",
+            False,
+            "blocked this Seamless Co-op DLL bundling command",
+        ),
+        PolicyCase(
+            "allow-quoted-forbidden-launch-note",
+            "echo 'do not run steam -applaunch 1245620'",
+            True,
+        ),
+        PolicyCase(
+            "deny-ctx-execute-python-steam-applaunch",
+            "",
+            False,
+            "blocked this Elden Ring launch command",
+            {"language": "python", "code": "import subprocess; subprocess.run(['steam','-applaunch','1245620'])"},
+            tool_name="ctx_execute",
+        ),
+        PolicyCase(
+            "deny-heredoc-python-start-protected",
+            "python3 - <<'PY'\nimport subprocess\nsubprocess.run(['proton','run','start_protected_game.exe'])\nPY",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
+        PolicyCase(
+            "deny-ctx-execute-python-ersc-copy",
+            "",
+            False,
+            "blocked this Seamless Co-op DLL bundling command",
+            {"language": "python", "code": "import shutil; shutil.copy2('SeamlessCoop/ersc.dll', 'target/release/ersc.dll')"},
+            tool_name="ctx_execute",
         ),
         PolicyCase(
             "deny-native-git-status",

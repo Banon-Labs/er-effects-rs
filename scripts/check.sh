@@ -5,6 +5,7 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 
 python3 "$repo_root/scripts/check-no-timeouts.py"
 python3 "$repo_root/scripts/test-no-timeouts.py"
+python3 "$repo_root/scripts/check-launch-guardrails.py" --audit
 python3 "$repo_root/scripts/check-runtime-probe-contract.py" --audit
 python3 "$repo_root/scripts/test-runtime-probe-contract.py"
 python3 "$repo_root/scripts/test-er-readiness-watch.py"

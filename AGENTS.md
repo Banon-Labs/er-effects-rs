@@ -1,6 +1,6 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `/home/banon/.local/bin/bd`** — do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly always works. Run `/home/banon/.local/bin/bd prime` for full workflow context.
+This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `/home/banon/.local/bin/bd`** -- do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly always works. Run `/home/banon/.local/bin/bd prime` for full workflow context.
 
 ## Quick Reference
 
@@ -15,6 +15,10 @@ This project uses **bd** (beads) for issue tracking. **Invoke the real binary di
 ## Elden Ring Runtime Probe Hygiene
 
 When using Frida or the injected DLL to scrape runtime Elden Ring data, tear down Elden Ring immediately before pivoting back to code writing or other non-runtime work. Do not leave `eldenring.exe` / `start_protected_game.exe` running while editing code after a probe.
+
+Do not launch Elden Ring through Steam from agent workflows. Forbidden launch forms include `steam -applaunch 1245620`, `steam://run/1245620`, `steam://rungameid/1245620`, and `xdg-open` or similar wrappers around those URLs. Do not launch `start_protected_game.exe` directly or through Proton/Wine/Steam; that is the protected/EAC launcher, not an approved agent runtime target. Process detection/teardown of stale `start_protected_game.exe` is allowed, but launching it is not. Runtime work must use only an approved, explicitly gated direct/offline `eldenring.exe` probe path.
+
+Do not bundle `ersc.dll`. Seamless Co-op is a compatibility target, but this repo must not copy, move, archive, release-package, or stage `SeamlessCoop/ersc.dll` into LazyLoader/product artifacts or repo `target/` bundles.
 
 For Elden Ring runtime validation, do not rely on slow manual/LLM-paced input timing. Prefer a deterministic fast helper/driver for inputs and captures, and use observable completion/teardown signals so the game is closed as soon as the targeted evidence is collected or a structured failure condition is reached. Every agent-run shell/runtime operation must also have an explicit hard timeout of 60 seconds or less for the runtime portion; use that timeout as a safety cap, not as the primary synchronization mechanism. `run_experiment` timeouts may include build/setup/cleanup overhead, but runtime success is not credible after `runtime_probe_seconds > 60` and must be scored/treated as failure. Do not use sleeps as synchronization.
 
@@ -67,9 +71,9 @@ cp -rf source dest          # NOT: cp -r source dest
 
 ### Rules
 
-- Use `/home/banon/.local/bin/bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
+- Use `/home/banon/.local/bin/bd` for ALL task tracking -- do NOT use TodoWrite, TaskCreate, or markdown TODO lists
 - Run `/home/banon/.local/bin/bd prime` for detailed command reference and session close protocol
-- Use `/home/banon/.local/bin/bd remember` for persistent knowledge — do NOT use MEMORY.md files (and to READ a memory use `/home/banon/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
+- Use `/home/banon/.local/bin/bd remember` for persistent knowledge -- do NOT use MEMORY.md files (and to READ a memory use `/home/banon/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
 
 ## Session Completion
 
@@ -104,19 +108,19 @@ We accept **no compromises** on the stated objective. Do not propose, accept, or
 quietly settle for a weaker solution that technically "works" but relaxes the
 requirement (e.g. simulating an input when the goal is **zero-input** autoload).
 When a path looks blocked, that is a signal to find the *real* solution at a
-deeper layer — not to lower the bar. Specifically for the autoload goal: the
+deeper layer -- not to lower the bar. Specifically for the autoload goal: the
 deliverable must achieve genuine **zero simulated input** (`simulated_button_presses_total = 0`,
 no host pointer, no synthesized DirectInput/keystate/event) AND be a single
 LazyLoader/chainload DLL compatible with offline-vanilla, Seamless Co-op, and
 other mods (see bd memory `autoload-dll-product-requirements`). "Architecturally
-hard" is not "impossible" — keep reverse-engineering until the in-process,
+hard" is not "impossible" -- keep reverse-engineering until the in-process,
 no-input mechanism is found. Surface trade-offs honestly, but the bar is the
 actual goal, never a fallback.
 
 ## Upstream (`fromsoftware-rs`)
 
 **Never file, open, or propose filing an upstream issue/PR/report** (against
-`fromsoftware-rs` or any other external project) — not even as a recommendation or
+`fromsoftware-rs` or any other external project) -- not even as a recommendation or
 follow-up. When our code and upstream disagree (e.g. a struct offset mismatch), resolve
 it **in this repo**: confirm the correct value via static RE of the binary, fix or pin our
 side, and record the finding in `bd` for the next agent. Treat upstream as a read-only
@@ -142,15 +146,15 @@ cargo build --release --target x86_64-pc-windows-msvc
 
 ## Architecture Overview
 
-- `src/lib.rs` — the injectable DLL. On `DLL_PROCESS_ATTACH` it spawns a recurring game task (via `CSTaskImp`) that watches the local player's TimeAct animation queue and applies the selected SpEffects, plus a hudhook/ImGui overlay for toggling effects, manual apply/remove, and live status.
-- `data/effects.json` — the named SpEffect call list, embedded into the DLL at compile time and validated offline against `SpEffectParam`.
-- `crates/soulsformats` (`er-soulsformats`) — host-side library that drives a generated .NET "bridge" project against Smithbox's `Andre.Formats`/SoulsFormats to read `regulation.bin` params. Also contains the parser for FastSpEffectRecon Ghidra output (`recon` module).
-- `tools/er-param-inspect` — CLI over `er-soulsformats`: inspect param rows and validate `data/effects.json` against a regulation file.
-- `docs/` — reference-tree research notes and recon data (`docs/recon/`).
+- `src/lib.rs` -- the injectable DLL. On `DLL_PROCESS_ATTACH` it spawns a recurring game task (via `CSTaskImp`) that watches the local player's TimeAct animation queue and applies the selected SpEffects, plus a hudhook/ImGui overlay for toggling effects, manual apply/remove, and live status.
+- `data/effects.json` -- the named SpEffect call list, embedded into the DLL at compile time and validated offline against `SpEffectParam`.
+- `crates/soulsformats` (`er-soulsformats`) -- host-side library that drives a generated .NET "bridge" project against Smithbox's `Andre.Formats`/SoulsFormats to read `regulation.bin` params. Also contains the parser for FastSpEffectRecon Ghidra output (`recon` module).
+- `tools/er-param-inspect` -- CLI over `er-soulsformats`: inspect param rows and validate `data/effects.json` against a regulation file.
+- `docs/` -- reference-tree research notes and recon data (`docs/recon/`).
 
 ## Conventions & Patterns
 
 - **No magic numbers**: every numeric literal in Rust source must appear on a `const`/`static` declaration line (`scripts/check-no-magic-numbers.py` enforces this, including in tests).
 - **No lossy UTF-8**: `String::from_utf8_lossy` is banned unless the line (or the line above) carries a `// UTF-8 Lossy:` justification (`scripts/check-no-lossy-utf8.py`).
 - Game-thread state is shared with the render loop via `Arc<Mutex<EffectsState>>`; lock with `state_or_return` (recovers from poisoning) and never hold the lock across game calls longer than needed.
-- The overlay defaults network sync **off**; `apply_speffect(id, dont_sync)` takes an inverted flag — keep the inversion contained in `EffectCallKind::apply`.
+- The overlay defaults network sync **off**; `apply_speffect(id, dont_sync)` takes an inverted flag -- keep the inversion contained in `EffectCallKind::apply`.
