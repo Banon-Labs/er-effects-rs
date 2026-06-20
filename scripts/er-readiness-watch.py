@@ -73,6 +73,9 @@ VISUAL_OCR_CROPS = [
     ("lower_left_tips", "520x220+0+110"),
     ("tip_text", "420x180+0+140"),
 ]
+MIN_REAL_CHARACTER_LEVEL = 1
+MIN_REAL_CHARACTER_HP = 1
+MIN_EXPECTED_STAT_COUNT = 8
 
 TASK_READY_STAGES = {
     "game_task_recurring_registered",
@@ -304,19 +307,46 @@ def as_int(value: Any, default: int = -1) -> int:
     return default
 
 
+def telemetry_real_character_loaded(telemetry: dict[str, Any]) -> bool:
+    stats = telemetry.get("oracle_char_stats")
+    return bool(
+        as_int(telemetry.get("oracle_char_level"), 0) >= MIN_REAL_CHARACTER_LEVEL
+        and as_int(telemetry.get("oracle_char_current_hp"), 0) >= MIN_REAL_CHARACTER_HP
+        and isinstance(stats, list)
+        and len(stats) >= MIN_EXPECTED_STAT_COUNT
+    )
+
+
+def telemetry_render_semantic_ready(telemetry: dict[str, Any]) -> bool:
+    return bool(
+        telemetry.get("oracle_player_render_ready") is True
+        or (
+            telemetry.get("oracle_chr_model_ins_present") is True
+            and telemetry.get("oracle_chr_ctrl_present") is True
+            and telemetry.get("oracle_chr_onscreen") is True
+            and telemetry.get("oracle_chr_render_group_enabled") is True
+            and telemetry.get("oracle_chr_enable_render") is True
+        )
+    )
+
+
 def telemetry_world_loaded(telemetry: dict[str, Any] | None) -> bool:
     if telemetry is None or telemetry.get("game_man_available") is not True:
         return False
     player_seen = telemetry.get("player_available") is True or telemetry.get("player_seen") is True
     load_in_progress_clear = as_int(telemetry.get("oracle_load_in_progress_b80"), -1) == 0
-    grounded_or_now_loading_clear = telemetry.get("oracle_grounded") is True or as_int(telemetry.get("oracle_now_loading"), -1) == 0
+    saved_map_present = as_int(telemetry.get("oracle_saved_map_c30"), -1) != -1
+    blocking_modal_clear = telemetry.get("oracle_blocking_modal_present") is not True
+    canonical_world_clear = telemetry.get("oracle_grounded") is True or as_int(telemetry.get("oracle_now_loading"), -1) == 0
+    semantic_world_clear = telemetry_real_character_loaded(telemetry) and telemetry_render_semantic_ready(telemetry)
     return bool(
         player_seen
         and telemetry.get("oracle_player_present") is True
         and telemetry.get("oracle_block_id_valid") is True
         and load_in_progress_clear
-        and grounded_or_now_loading_clear
-        and as_int(telemetry.get("oracle_saved_map_c30"), -1) != -1
+        and saved_map_present
+        and blocking_modal_clear
+        and (canonical_world_clear or semantic_world_clear)
     )
 
 

@@ -8,8 +8,8 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        Arc, Mutex, Once,
-        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex, Once, OnceLock,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -51,9 +51,82 @@ use crate::*;
 use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 
 static PRODUCT_AUTOLOAD_ARMED: AtomicUsize = AtomicUsize::new(0);
+static MENU_CONTINUE_ENTRY: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+static MENU_CONTINUE_ITEM: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+static B80_NATIVE_DISPATCHER_OWNER: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+static MENU_CONTINUE_ITEM_FIELD_LOG_COUNT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+static B80_DISPATCHER2_OBSERVE_COUNT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+static B80_DISPATCHER2_OBSERVE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+static MENU_CONTINUE_FUNCTOR: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+static MENU_CONTINUE_DOCALL: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+static MENU_CONTINUE_ROUTER: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+static MENU_CONTINUE_INDEX: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+static AUTOLOAD_PHASE_EPOCH: OnceLock<Instant> = OnceLock::new();
+static OWN_STEPPER_MENU_BUILD_STARTED_MS: AtomicU64 = AtomicU64::new(PHASE_TIMER_UNSET_MS);
+static OWN_STEPPER_S2_PHASE_STARTED_MS: AtomicU64 = AtomicU64::new(PHASE_TIMER_UNSET_MS);
+
+const PHASE_TIMER_UNSET_MS: u64 = u64::MAX;
+const PHASE_TIMER_ZERO_MS: u64 = 0;
+const U64_MAX_AS_U128: u128 = u64::MAX as u128;
 
 const PROFILE_SLOT_ACTIVATE_RVA: usize = ProfileLoadMenuRva::ProfileSlotActivate as usize;
 const PROFILE_LOAD_SELECTOR_TICK_RVA: usize = ProfileLoadMenuRva::ProfileLoadSelectorTick as usize;
+
+fn autoload_phase_elapsed_ms() -> u64 {
+    let elapsed = AUTOLOAD_PHASE_EPOCH
+        .get_or_init(Instant::now)
+        .elapsed()
+        .as_millis();
+    if elapsed > U64_MAX_AS_U128 {
+        u64::MAX
+    } else {
+        elapsed as u64
+    }
+}
+
+fn reset_phase_timer(timer: &AtomicU64) {
+    timer.store(autoload_phase_elapsed_ms(), Ordering::SeqCst);
+}
+
+fn phase_elapsed_ms(timer: &AtomicU64) -> u64 {
+    let started = timer.load(Ordering::SeqCst);
+    if started == PHASE_TIMER_UNSET_MS {
+        reset_phase_timer(timer);
+        PHASE_TIMER_ZERO_MS
+    } else {
+        autoload_phase_elapsed_ms().saturating_sub(started)
+    }
+}
+
+fn own_stepper_enter_menu_build_phase() {
+    OWN_STEPPER_MENU_BUILD_WAITS.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+    reset_phase_timer(&OWN_STEPPER_MENU_BUILD_STARTED_MS);
+    OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_MENU_BUILD, Ordering::SeqCst);
+}
+
+fn own_stepper_menu_build_timed_out() -> bool {
+    phase_elapsed_ms(&OWN_STEPPER_MENU_BUILD_STARTED_MS) >= OWN_STEPPER_MENU_BUILD_WAIT_MAX
+}
+
+fn own_stepper_menu_build_elapsed_ms() -> u64 {
+    phase_elapsed_ms(&OWN_STEPPER_MENU_BUILD_STARTED_MS)
+}
+
+fn own_stepper_enter_s2_phase(phase: usize) {
+    OWN_STEPPER_S2_WAITS.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+    reset_phase_timer(&OWN_STEPPER_S2_PHASE_STARTED_MS);
+    OWN_STEPPER_PHASE.store(phase, Ordering::SeqCst);
+}
+
+fn own_stepper_s2_timed_out() -> bool {
+    phase_elapsed_ms(&OWN_STEPPER_S2_PHASE_STARTED_MS) >= OWN_STEPPER_S2_PHASE_MAX
+}
+
+fn own_stepper_s2_elapsed_ms() -> u64 {
+    phase_elapsed_ms(&OWN_STEPPER_S2_PHASE_STARTED_MS)
+}
 
 pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
     if request.method() != SaveLoadMethod::DirectMenuLoad {
@@ -122,10 +195,12 @@ pub(crate) fn continue_trace_disabled() -> bool {
 }
 
 pub(crate) fn trace_continue_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_TRACE_CONTINUE").as_deref(),
-        Ok("1")
-    ) || trace_continue_default_path().exists()
+    product_autoload_enabled()
+        || matches!(
+            std::env::var("ER_EFFECTS_TRACE_CONTINUE").as_deref(),
+            Ok("1")
+        )
+        || trace_continue_default_path().exists()
         || PathBuf::from("er-effects-trace-continue.txt").exists()
 }
 
@@ -816,8 +891,7 @@ unsafe fn own_stepper_direct_build(owner: usize, base: usize) {
     OWN_STEPPER_DIRECT_BUILT.store(OWN_STEPPER_DIRECT_BUILT_YES, Ordering::SeqCst);
     if dialog != NULL && dvt == base + PROFILE_LOAD_DIALOG_VTABLE_RVA {
         OWN_STEPPER_DIALOG.store(dialog, Ordering::SeqCst);
-        OWN_STEPPER_S2_WAITS.store(NULL, Ordering::SeqCst);
-        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_ACTIVATE, Ordering::SeqCst);
+        own_stepper_enter_s2_phase(OWN_STEPPER_PHASE_S2_ACTIVATE);
         append_autoload_debug(format_args!(
             "own_stepper: DIRECT-BUILD SUCCESS dialog=0x{dialog:x} vt=0x{dvt:x} (ProfileLoadDialog) -- entering STAGE2 ACTIVATE (slot={})",
             OWN_STEPPER_SLOT.load(Ordering::SeqCst)
@@ -1712,9 +1786,11 @@ unsafe fn dump_titletop_menu_entries(
     ));
     let factory_abs = base + DIALOG_FACTORY_RVA;
     let confirm_abs = base + CONTINUE_CONFIRM_RVA;
+    let continue_wrapper_abs = base + TRACE_MENU_CONTINUE_WRAPPER_RVA as usize;
     // Decode a function/thunk address forward through up to JMP_HOPS jmp-thunks, reporting if it
-    // reaches the Load-Game factory or the Continue confirm. (Full-function actions that only CALL
-    // the factory internally won't chain-resolve -- the raw action address is logged regardless.)
+    // reaches the Load-Game factory, Continue confirm, or native Continue wrapper. (Full-function
+    // actions that only CALL the factory internally won't chain-resolve -- the raw action address is
+    // logged regardless.)
     let classify = |start: usize, chain: &mut String| -> (bool, bool) {
         let mut tgt = start;
         let mut hop = HOP_START;
@@ -1722,7 +1798,7 @@ unsafe fn dump_titletop_menu_entries(
             if tgt == factory_abs {
                 return (true, false);
             }
-            if tgt == confirm_abs {
+            if tgt == confirm_abs || tgt == continue_wrapper_abs {
                 return (false, true);
             }
             match unsafe { decode_thunk_hop(tgt) } {
@@ -1734,7 +1810,10 @@ unsafe fn dump_titletop_menu_entries(
             }
             hop += HOP_STEP;
         }
-        (tgt == factory_abs, tgt == confirm_abs)
+        (
+            tgt == factory_abs,
+            tgt == confirm_abs || tgt == continue_wrapper_abs,
+        )
     };
     let mut load_game: Option<usize> = None;
     let mut continue_entry: Option<usize> = None;
@@ -1777,7 +1856,14 @@ unsafe fn dump_titletop_menu_entries(
             load_game = Some(entry);
         }
         if is_cont && continue_entry.is_none() {
+            let receiver = if f_cont { functor } else { entry };
+            let do_call = if f_cont { f_docall } else { action };
             continue_entry = Some(entry);
+            MENU_CONTINUE_ENTRY.store(entry, Ordering::SeqCst);
+            MENU_CONTINUE_FUNCTOR.store(receiver, Ordering::SeqCst);
+            MENU_CONTINUE_DOCALL.store(do_call, Ordering::SeqCst);
+            MENU_CONTINUE_ROUTER.store(router_this, Ordering::SeqCst);
+            MENU_CONTINUE_INDEX.store(idx, Ordering::SeqCst);
         }
         idx += IDX_STEP;
     }
@@ -2129,8 +2215,7 @@ unsafe fn fire_live_loadgame_node(title_dialog: usize, menu_window: usize, base:
         return false;
     }
     OWN_STEPPER_DIALOG.store(dialog, Ordering::SeqCst);
-    OWN_STEPPER_S2_WAITS.store(NULL, Ordering::SeqCst);
-    OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_ACTIVATE, Ordering::SeqCst);
+    own_stepper_enter_s2_phase(OWN_STEPPER_PHASE_S2_ACTIVATE);
     append_autoload_debug(format_args!(
         "live-dialog: LIVE ProfileLoadDialog=0x{dialog:x} (vt 0x{pld_vt:x}) from factory return -- entering STAGE2 ACTIVATE (slot={})",
         OWN_STEPPER_SLOT.load(Ordering::SeqCst)
@@ -2147,6 +2232,25 @@ struct MenuActionNode {
     member_fn: usize,
     member_adjust: usize,
     window_item: usize,
+}
+
+#[derive(Clone, Copy)]
+struct NativeContinueEntry {
+    entry: usize,
+    functor: usize,
+    do_call: usize,
+    router: usize,
+    index: usize,
+    cursor: i32,
+}
+
+#[derive(Clone, Copy)]
+struct NativeContinueItemAction {
+    item: usize,
+    result: usize,
+    result_vt: usize,
+    functor: usize,
+    do_call: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -2195,6 +2299,23 @@ struct ProductCoreAutoloadReady {
     profile_summary: usize,
     iodev: usize,
     heap_allocator: usize,
+    title_dialog: usize,
+    title_in_loop: bool,
+    title_in_textfadeout: bool,
+    menu_opened_latch: usize,
+    press_start_proxy: usize,
+    press_start_context: usize,
+}
+
+struct TitlePressButtonComponent {
+    proxy: usize,
+    context: usize,
+}
+
+struct TitleDialogState {
+    in_loop: bool,
+    in_textfadeout: bool,
+    menu_opened_latch: usize,
 }
 
 unsafe fn is_heap_aligned_ptr(ptr: usize) -> bool {
@@ -2207,6 +2328,43 @@ fn vtable_in_game_image(vtable: usize, base: usize) -> bool {
     const MODULE_MIN_OFFSET: usize = 0x1000;
     const MODULE_SPAN_FALLBACK: usize = 0x3000000;
     vtable >= base + MODULE_MIN_OFFSET && vtable < base + MODULE_SPAN_FALLBACK
+}
+
+unsafe fn title_press_button_component_ready(
+    dialog: usize,
+    base: usize,
+) -> Option<TitlePressButtonComponent> {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let proxy = dialog + TITLE_PRESS_START_SCENE_PROXY_B78_OFFSET;
+    let proxy_vt = unsafe { safe_read_usize(proxy) }.unwrap_or(null);
+    if proxy_vt != base + SCENE_OBJ_PROXY_VTABLE_RVA {
+        return None;
+    }
+    let context =
+        unsafe { safe_read_usize(proxy + SCENE_OBJ_PROXY_CONTEXT_20_OFFSET) }.unwrap_or(null);
+    if context == null {
+        return None;
+    }
+    Some(TitlePressButtonComponent { proxy, context })
+}
+
+unsafe fn title_dialog_state(dialog: usize, base: usize) -> TitleDialogState {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
+    let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
+        unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
+    let in_loop = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
+    let in_textfadeout =
+        unsafe { is_in_state(sm, base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) } != OWN_STEPPER_FALSE;
+    let menu_opened_latch =
+        unsafe { safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }
+            .map(|v| v & TITLE_TOP_DIALOG_LATCH_BYTE_MASK)
+            .unwrap_or(null);
+    TitleDialogState {
+        in_loop,
+        in_textfadeout,
+        menu_opened_latch,
+    }
 }
 
 unsafe fn title_boot_ready(owner: usize, base: usize) -> bool {
@@ -2231,6 +2389,7 @@ unsafe fn title_boot_ready(owner: usize, base: usize) -> bool {
         || table != base + INNER_TITLE_STATE_TABLE_RVA
         || session == null
         || dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA
+        || unsafe { title_press_button_component_ready(dialog, base) }.is_none()
     {
         return false;
     }
@@ -2273,12 +2432,41 @@ unsafe fn product_core_autoload_ready(
     };
     let iodev = unsafe { safe_read_usize(base + IODEV_GLOBAL_RVA) }.unwrap_or(null);
     let heap_allocator = crate::runtime_heap_allocator_ptr_or_null();
-    if table != base + INNER_TITLE_STATE_TABLE_RVA
+    let dialog =
+        unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
+    let dialog_vt = if dialog != null {
+        unsafe { safe_read_usize(dialog) }.unwrap_or(null)
+    } else {
+        null
+    };
+    let press_start = if dialog_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA {
+        unsafe { title_press_button_component_ready(dialog, base) }
+    } else {
+        None
+    };
+    let title_state = if dialog_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA {
+        Some(unsafe { title_dialog_state(dialog, base) })
+    } else {
+        None
+    };
+    if committed != TITLE_STEP_MENU_JOB_WAIT
+        || requested != TITLE_STEP_MENU_JOB_WAIT
+        || table != base + INNER_TITLE_STATE_TABLE_RVA
         || session == null
         || game_data_man == null
         || profile_summary == null
         || iodev == null
         || heap_allocator == null
+        || press_start.is_none()
+        || title_state.is_none()
+    {
+        return None;
+    }
+    let press_start = press_start?;
+    let title_state = title_state?;
+    if !title_state.in_loop
+        && !title_state.in_textfadeout
+        && title_state.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO
     {
         return None;
     }
@@ -2291,6 +2479,12 @@ unsafe fn product_core_autoload_ready(
         profile_summary,
         iodev,
         heap_allocator,
+        title_dialog: dialog,
+        title_in_loop: title_state.in_loop,
+        title_in_textfadeout: title_state.in_textfadeout,
+        menu_opened_latch: title_state.menu_opened_latch,
+        press_start_proxy: press_start.proxy,
+        press_start_context: press_start.context,
     })
 }
 
@@ -2313,6 +2507,14 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     };
     let owner = owner_ptr as usize;
     let gm = game_man_ptr_or_null();
+    if phase == OWN_STEPPER_PHASE_S2_INVOKE
+        || phase == OWN_STEPPER_PHASE_S2_ACTIVATE
+        || phase == OWN_STEPPER_PHASE_S2_MOUNT_POLL
+        || phase == OWN_STEPPER_PHASE_S2_CONFIRM
+    {
+        unsafe { own_stepper_stage2(owner, module_base, gm, slot, tick, null) };
+        return true;
+    }
     let Some(ready) = (unsafe { product_core_autoload_ready(owner, module_base, gm, slot) }) else {
         if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
             let committed = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }
@@ -2332,44 +2534,465 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             };
             let iodev = unsafe { safe_read_usize(module_base + IODEV_GLOBAL_RVA) }.unwrap_or(null);
             let heap_allocator = crate::runtime_heap_allocator_ptr_or_null();
+            let dialog = unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }
+                .unwrap_or(null);
+            let dialog_vt = if dialog != null {
+                unsafe { safe_read_usize(dialog) }.unwrap_or(null)
+            } else {
+                null
+            };
+            let press_start_proxy = dialog + TITLE_PRESS_START_SCENE_PROXY_B78_OFFSET;
+            let press_start_vt = if dialog != null {
+                unsafe { safe_read_usize(press_start_proxy) }.unwrap_or(null)
+            } else {
+                null
+            };
+            let press_start_context = if press_start_vt == module_base + SCENE_OBJ_PROXY_VTABLE_RVA
+            {
+                unsafe { safe_read_usize(press_start_proxy + SCENE_OBJ_PROXY_CONTEXT_20_OFFSET) }
+                    .unwrap_or(null)
+            } else {
+                null
+            };
+            let (title_loop, title_textfadeout, menu_opened_latch) =
+                if dialog_vt == module_base + TITLE_TOP_DIALOG_VTABLE_RVA {
+                    let state = unsafe { title_dialog_state(dialog, module_base) };
+                    (state.in_loop, state.in_textfadeout, state.menu_opened_latch)
+                } else {
+                    (false, false, null)
+                };
             append_autoload_debug(format_args!(
-                "product-core-autoload: waiting for core readiness owner=0x{owner:x} state={committed}/{requested} table=0x{table:x} session=0x{session:x} gm=0x{gm:x} gdm=0x{game_data_man:x} profile=0x{profile_summary:x} iodev=0x{iodev:x} heap=0x{heap_allocator:x} slot={slot} tick={tick}"
+                "product-core-autoload: waiting for core readiness owner=0x{owner:x} state={committed}/{requested} table=0x{table:x} session=0x{session:x} gm=0x{gm:x} gdm=0x{game_data_man:x} profile=0x{profile_summary:x} iodev=0x{iodev:x} heap=0x{heap_allocator:x} title_loop={title_loop} title_textfadeout={title_textfadeout} menu_latch={menu_opened_latch} press_start_proxy=0x{press_start_proxy:x} press_start_vt=0x{press_start_vt:x} press_start_ctx=0x{press_start_context:x} slot={slot} tick={tick}"
             ));
         }
         return true;
     };
     if phase == OWN_STEPPER_PHASE_MENU {
-        OWN_STEPPER_EXPECTED_SLOT.store(slot, Ordering::SeqCst);
-        OWN_STEPPER_DESER_FIRED.store(OWN_STEPPER_DESER_NOT_FIRED, Ordering::SeqCst);
-        OWN_STEPPER_MOUNT_C30.store(GAME_MAN_C30_UNSET, Ordering::SeqCst);
-        OWN_STEPPER_IO_WAS_SET.store(OWN_STEPPER_IO_WAS_SET_NO, Ordering::SeqCst);
-        OWN_STEPPER_S2_WAITS.store(null, Ordering::SeqCst);
-        timeline_event(
-            "T0",
-            tick,
-            format_args!(
-                "product-core owner=0x{owner:x} state={}/{} slot={slot}",
-                ready.committed, ready.requested
-            ),
-        );
-        append_autoload_debug(format_args!(
-            "product-core-autoload: core ready owner=0x{owner:x} state={}/{} table=0x{:x} session=0x{:x} gm=0x{gm:x} gdm=0x{:x} profile=0x{:x} iodev=0x{:x} heap=0x{:x} slot={slot} -- entering native save-load MOUNT_POLL without title/menu/input stepper",
-            ready.committed,
-            ready.requested,
-            ready.table,
-            ready.session,
-            ready.game_data_man,
-            ready.profile_summary,
-            ready.iodev,
-            ready.heap_allocator
-        ));
-        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_MOUNT_POLL, Ordering::SeqCst);
+        if ready.title_in_loop
+            && ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO
+            && OWN_STEPPER_MENU_OPENED
+                .compare_exchange(
+                    OWN_STEPPER_MENU_OPENED_NO,
+                    OWN_STEPPER_CALL_INC,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+        {
+            let open_menu: unsafe extern "system" fn(usize) =
+                unsafe { std::mem::transmute(module_base + TITLE_TOP_DIALOG_OPEN_MENU_RVA) };
+            unsafe { open_menu(ready.title_dialog) };
+            timeline_event(
+                "T_menu_open",
+                tick,
+                format_args!(
+                    "product-core dialog=0x{:x} press_start_proxy=0x{:x}",
+                    ready.title_dialog, ready.press_start_proxy
+                ),
+            );
+            append_autoload_debug(format_args!(
+                "product-core-autoload: PRESS BUTTON component ready; self-fire open-menu 0x{:x}(dialog=0x{:x}) on Loop+latch-clear before native save-load core",
+                module_base + TITLE_TOP_DIALOG_OPEN_MENU_RVA,
+                ready.title_dialog
+            ));
+            return true;
+        }
+        if !ready.title_in_textfadeout && ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO {
+            if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
+                append_autoload_debug(format_args!(
+                    "product-core-autoload: waiting for title open-menu semantic confirmation dialog=0x{:x} loop={} textfadeout={} latch={} press_start_proxy=0x{:x} slot={slot} tick={tick}",
+                    ready.title_dialog,
+                    ready.title_in_loop,
+                    ready.title_in_textfadeout,
+                    ready.menu_opened_latch,
+                    ready.press_start_proxy
+                ));
+            }
+            return true;
+        }
+        if !unsafe { product_continue_action_ready(&ready, module_base, gm, slot) } {
+            if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
+                append_autoload_debug(format_args!(
+                    "product-core-autoload: waiting for native Continue action readiness owner=0x{owner:x} state={}/{} dialog=0x{:x} menu_latch={} press_start_proxy=0x{:x} slot={slot} -- no direct_build/input fallback",
+                    ready.committed,
+                    ready.requested,
+                    ready.title_dialog,
+                    ready.menu_opened_latch,
+                    ready.press_start_proxy
+                ));
+            }
+            return true;
+        }
+        unsafe { product_continue_autoload_tick(owner, module_base, gm, slot, tick, &ready) };
     }
     let phase_now = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
-    if phase_now == OWN_STEPPER_PHASE_S2_MOUNT_POLL || phase_now == OWN_STEPPER_PHASE_S2_CONFIRM {
+    if phase_now == OWN_STEPPER_PHASE_S2_INVOKE
+        || phase_now == OWN_STEPPER_PHASE_S2_ACTIVATE
+        || phase_now == OWN_STEPPER_PHASE_S2_MOUNT_POLL
+        || phase_now == OWN_STEPPER_PHASE_S2_CONFIRM
+    {
         unsafe { own_stepper_stage2(owner, module_base, gm, slot, tick, null) };
     }
     true
+}
+
+unsafe fn product_continue_action_ready(
+    ready: &ProductCoreAutoloadReady,
+    base: usize,
+    gm: usize,
+    slot: i32,
+) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if slot < OWN_STEPPER_SLOT_ZERO
+        || gm == null
+        || ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO
+    {
+        return false;
+    }
+    let dialog_vt = unsafe { safe_read_usize(ready.title_dialog) }.unwrap_or(null);
+    dialog_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA
+}
+
+unsafe fn product_continue_item_action(base: usize) -> Option<NativeContinueItemAction> {
+    const DOCALL_VTABLE_SLOT_10: usize = 0x10;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let item = MENU_CONTINUE_ITEM.load(Ordering::SeqCst);
+    if item == null {
+        return None;
+    }
+    let item_vt = unsafe { safe_read_usize(item) }?;
+    if item_vt != base + MENU_WINDOW_JOB_VTABLE_RVA {
+        append_autoload_debug(format_args!(
+            "product-core-autoload: native Continue MenuWindowJob rejected item=0x{item:x} vt=0x{item_vt:x} expected=0x{:x}",
+            base + MENU_WINDOW_JOB_VTABLE_RVA
+        ));
+        return None;
+    }
+    let functor = unsafe { safe_read_usize(item + MENU_ITEM_FUNCTOR_A8_OFFSET) }?;
+    if functor == null {
+        return None;
+    }
+    let functor_vt = unsafe { safe_read_usize(functor) }?;
+    let do_call = unsafe { safe_read_usize(functor_vt + DOCALL_VTABLE_SLOT_10) }?;
+    if do_call != base + MENU_TITLE_CONTINUE_DOCALL_RVA {
+        append_autoload_debug(format_args!(
+            "product-core-autoload: native Continue MenuWindowJob rejected item=0x{item:x} functor=0x{functor:x} docall=0x{do_call:x} expected=0x{:x}",
+            base + MENU_TITLE_CONTINUE_DOCALL_RVA
+        ));
+        return None;
+    }
+    let result = unsafe { safe_read_usize(item + MENU_ITEM_DIALOG_RESULT_130_OFFSET) }?;
+    if result == null {
+        return None;
+    }
+    let result_vt = unsafe { safe_read_usize(result) }?;
+    if !vtable_in_game_image(result_vt, base) {
+        append_autoload_debug(format_args!(
+            "product-core-autoload: native Continue MenuWindowJob rejected item=0x{item:x} result=0x{result:x} result_vt=0x{result_vt:x}"
+        ));
+        return None;
+    }
+    Some(NativeContinueItemAction {
+        item,
+        result,
+        result_vt,
+        functor,
+        do_call,
+    })
+}
+
+unsafe fn submit_native_continue_item_action(
+    action: NativeContinueItemAction,
+    base: usize,
+) -> Option<i32> {
+    let mode = unsafe { safe_read_i32(action.result + MENU_ITEM_RESULT_MODE_58_OFFSET) }?;
+    if mode == MENU_ITEM_RESULT_MODE_EVENT3 {
+        let submit: unsafe extern "system" fn(usize) =
+            unsafe { std::mem::transmute(base + MENU_ITEM_SUBMIT_RVA) };
+        unsafe { submit(action.result) };
+        return Some(mode);
+    }
+    if mode == MENU_ITEM_RESULT_MODE_EVENT4 {
+        let event_ctor: unsafe extern "system" fn(usize, i32, i32) -> usize =
+            unsafe { std::mem::transmute(base + FD4_EVENT_CONSTRUCTOR_RVA) };
+        let event_handler =
+            unsafe { safe_read_usize(action.result_vt + MENU_ITEM_RESULT_EVENT_SLOT_60_OFFSET) }?;
+        let handler: unsafe extern "system" fn(usize, usize) =
+            unsafe { std::mem::transmute(event_handler) };
+        let mut event: u64 = TITLE_OWNER_SCAN_START_ADDRESS as u64;
+        unsafe {
+            event_ctor(
+                (&raw mut event) as usize,
+                MENU_ITEM_RESULT_EVENT4_CODE,
+                MENU_ITEM_RESULT_EVENT4_PAYLOAD,
+            )
+        };
+        unsafe { handler(action.result, (&raw mut event) as usize) };
+        return Some(mode);
+    }
+    const ITEM_STATUS_128: usize = 0x128;
+    let status = unsafe { safe_read_usize(action.item + ITEM_STATUS_128) }
+        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let status_vt = if status != TITLE_OWNER_SCAN_START_ADDRESS {
+        unsafe { safe_read_usize(status) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    append_autoload_debug(format_args!(
+        "product-core-autoload: native Continue MenuWindowJob result rejected item=0x{:x} result=0x{:x} result_vt=0x{:x} mode={mode} status128=0x{status:x} status_vt=0x{status_vt:x}",
+        action.item, action.result, action.result_vt
+    ));
+    None
+}
+
+unsafe fn product_continue_entry_action(owner: usize, base: usize) -> Option<NativeContinueEntry> {
+    const ROUTER_CURSOR_OFFSET: usize = DIALOG_SLOT_CURSOR_B0C_OFFSET;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let (_, continue_entry, cursor) = unsafe { dump_titletop_menu_entries(owner, base) };
+    let entry = continue_entry.unwrap_or_else(|| MENU_CONTINUE_ENTRY.load(Ordering::SeqCst));
+    let mut functor = MENU_CONTINUE_FUNCTOR.load(Ordering::SeqCst);
+    let mut do_call = MENU_CONTINUE_DOCALL.load(Ordering::SeqCst);
+    let mut router = MENU_CONTINUE_ROUTER.load(Ordering::SeqCst);
+    let mut index = MENU_CONTINUE_INDEX.load(Ordering::SeqCst);
+    let mut entry = entry;
+    if entry == null || functor == null || do_call == null || index == null {
+        return None;
+    }
+    let do_call_vtable = unsafe { safe_read_usize(functor) }.unwrap_or(null);
+    if do_call_vtable == null || !vtable_in_game_image(do_call_vtable, base) {
+        append_autoload_debug(format_args!(
+            "product-core-autoload: native Continue row rejected functor=0x{functor:x} vt=0x{do_call_vtable:x} entry=0x{entry:x}"
+        ));
+        return None;
+    }
+    let live_cursor = unsafe { safe_read_i32(router + ROUTER_CURSOR_OFFSET) }.unwrap_or(cursor);
+    Some(NativeContinueEntry {
+        entry,
+        functor,
+        do_call,
+        router,
+        index,
+        cursor: live_cursor,
+    })
+}
+
+unsafe fn captured_continue_task_node(base: usize) -> usize {
+    let node = MENU_CONTINUE_TASK_NODE.load(Ordering::SeqCst);
+    if node == TITLE_OWNER_SCAN_START_ADDRESS {
+        return TITLE_OWNER_SCAN_START_ADDRESS;
+    }
+    let update_rva = unsafe { task_node_update_rva(base, node) };
+    if update_rva != TRACE_MENU_CONTINUE_WRAPPER_RVA as usize {
+        append_autoload_debug(format_args!(
+            "product-core-autoload: captured Continue task node 0x{node:x} rejected update_rva=0x{update_rva:x} expected=0x{:x}",
+            TRACE_MENU_CONTINUE_WRAPPER_RVA as usize
+        ));
+        return TITLE_OWNER_SCAN_START_ADDRESS;
+    }
+    node
+}
+
+unsafe fn drive_product_continue_post_click_dispatchers(base: usize, slot: i32) {
+    let synth = &raw mut SYNTH_MMS_OWNER as *mut u8;
+    unsafe {
+        *synth.add(SYNTH_MMS_SKIP_APPLY_12A_OFFSET) = SYNTH_MMS_SKIP_APPLY_ON;
+        *(synth.add(SYNTH_MMS_DESER_SLOT_12C_OFFSET) as *mut i32) = slot;
+    }
+    let synth_ptr = synth as usize;
+    let dispatcher1: unsafe extern "system" fn(usize) =
+        unsafe { std::mem::transmute(base + B80_DISPATCHER1_RVA) };
+    let dispatcher2: unsafe extern "system" fn(usize) =
+        unsafe { std::mem::transmute(base + B80_DISPATCHER2_RVA) };
+    unsafe { dispatcher1(synth_ptr) };
+    unsafe { dispatcher2(synth_ptr) };
+}
+
+unsafe fn product_continue_autoload_tick(
+    owner: usize,
+    base: usize,
+    gm: usize,
+    slot: i32,
+    tick: u64,
+    ready: &ProductCoreAutoloadReady,
+) {
+    const PRODUCT_CONTINUE_C30_ZERO: i32 = 0;
+    const PRODUCT_CONTINUE_NEW_GAME_BLOCKED: u8 = 1;
+    const PRODUCT_CONTINUE_WAIT_LOG_TICKS: u64 = 30;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let phase = FULLREAD_PHASE.load(Ordering::SeqCst);
+    let read_i32 = |off: usize| unsafe { safe_read_i32(gm + off) }.unwrap_or(GAME_MAN_C30_UNSET);
+
+    if phase == FULLREAD_PHASE_DONE {
+        return;
+    }
+
+    if phase == FULLREAD_PHASE_SUBMIT {
+        if !unsafe { product_continue_action_ready(ready, base, gm, slot) } {
+            if tick % PRODUCT_CONTINUE_WAIT_LOG_TICKS == null as u64 {
+                append_autoload_debug(format_args!(
+                    "product-core-autoload: Continue submit gated off dialog=0x{:x} menu_latch={} slot={slot} -- semantic menu readiness not stable",
+                    ready.title_dialog, ready.menu_opened_latch
+                ));
+            }
+            return;
+        }
+        let b80_before = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        if b80_before != OWN_STEPPER_B80_IDLE {
+            if tick % PRODUCT_CONTINUE_WAIT_LOG_TICKS == null as u64 {
+                append_autoload_debug(format_args!(
+                    "product-core-autoload: waiting for native preview/load b80={b80_before} to become idle before Continue row fire -- no SetState5"
+                ));
+            }
+            return;
+        }
+        let Some(action) = (unsafe { product_continue_item_action(base) }) else {
+            if tick % PRODUCT_CONTINUE_WAIT_LOG_TICKS == null as u64 {
+                append_autoload_debug(format_args!(
+                    "product-core-autoload: waiting for native Continue MenuWindowJob result after open-menu dialog=0x{:x} slot={slot} -- no direct_load/direct_build/input fallback",
+                    ready.title_dialog
+                ));
+            }
+            return;
+        };
+        unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = slot };
+        let set_save_slot: unsafe extern "system" fn(i32) =
+            unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+        unsafe { set_save_slot(slot) };
+        OWN_STEPPER_EXPECTED_SLOT.store(slot, Ordering::SeqCst);
+        OWN_STEPPER_CONFIRMED.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+        OWN_STEPPER_DESER_FIRED.store(OWN_STEPPER_DESER_NOT_FIRED, Ordering::SeqCst);
+        OWN_STEPPER_MOUNT_C30.store(GAME_MAN_C30_UNSET, Ordering::SeqCst);
+        OWN_STEPPER_IO_WAS_SET.store(OWN_STEPPER_IO_WAS_SET_NO, Ordering::SeqCst);
+        let Some(result_mode) = (unsafe { submit_native_continue_item_action(action, base) })
+        else {
+            return;
+        };
+        let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
+        let b78 = read_i32(GAME_MAN_SLOT_SELECT_B78_OFFSET);
+        let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
+        let (fp_real, fp_level, fp_name_len) = unsafe { char_fingerprint(base) };
+        append_autoload_debug(format_args!(
+            "product-core-autoload: *** SUBMITTED native Continue MenuWindowJob result mode={result_mode} submit=0x{:x}(result=0x{:x}, result_vt=0x{:x}, item=0x{:x}, functor=0x{:x}, docall=0x{:x}) after set_save_slot({slot}) b78={b78} ac0={ac0} c30=0x{c30:x} b80={b80} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) dialog=0x{:x} menu_latch={} tick={tick} -- no input/direct_load/direct_build/raw deserialize/direct_confirm ***",
+            base + MENU_ITEM_SUBMIT_RVA,
+            action.result,
+            action.result_vt,
+            action.item,
+            action.functor,
+            action.do_call,
+            ready.title_dialog,
+            ready.menu_opened_latch
+        ));
+        timeline_event(
+            "T_native_continue_action",
+            tick,
+            format_args!(
+                "slot={slot} item=0x{:x} result=0x{:x} b80={b80}",
+                action.item, action.result
+            ),
+        );
+        FULLREAD_DRAIN_WAITS.store(null, Ordering::SeqCst);
+        FULLREAD_PHASE.store(FULLREAD_PHASE_GUARD, Ordering::SeqCst);
+        return;
+    }
+
+    if phase == FULLREAD_PHASE_GUARD {
+        let expected = OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst);
+        let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
+        let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
+        let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        let latched = OWN_STEPPER_MOUNT_C30.load(Ordering::SeqCst);
+        let deser_ok = OWN_STEPPER_DESER_FIRED.load(Ordering::SeqCst) == OWN_STEPPER_DESER_FIRED_OK;
+        let (fp_real, fp_level, fp_name_len) = unsafe { char_fingerprint(base) };
+        let waits = FULLREAD_DRAIN_WAITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
+        let c30_available =
+            c30 == latched && c30 != GAME_MAN_C30_UNSET && c30 != PRODUCT_CONTINUE_C30_ZERO;
+        let c30_sane = c30_available && (c30 != GAME_MAN_NEWGAME_DEFAULT_MAP || fp_real);
+        let new_game_flag =
+            unsafe { safe_read_usize(owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) }
+                .map(|v| v as u8)
+                .unwrap_or(PRODUCT_CONTINUE_NEW_GAME_BLOCKED);
+        let commit = native_fullread_commit_enabled();
+        let b80_idle = b80 == OWN_STEPPER_B80_IDLE;
+        let native_confirmed =
+            OWN_STEPPER_CONFIRMED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS;
+        let proceed = commit
+            && deser_ok
+            && native_confirmed
+            && fp_real
+            && ac0 == expected
+            && expected != OWN_STEPPER_SLOT_NONE
+            && c30_sane
+            && b80_idle
+            && new_game_flag == FULLREAD_OWNER_NEW_GAME_OK;
+        if waits % PRODUCT_CONTINUE_WAIT_LOG_TICKS == null as u64 || proceed {
+            append_autoload_debug(format_args!(
+                "product-core-autoload: Continue post-click GUARD waits={waits} commit={commit} deser_ok={deser_ok} native_confirmed={native_confirmed} ac0={ac0} expected={expected} c30=0x{c30:x} latched=0x{latched:x} c30_sane={c30_sane} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) owner+0x284={new_game_flag} b80={b80} proceed={proceed} -- waiting for native b80/c30 writer + native continue_confirm/SetState5"
+            ));
+        }
+        if !proceed {
+            if waits >= FULLREAD_DRAIN_MAX {
+                append_autoload_debug(format_args!(
+                    "product-core-autoload: Continue post-click GUARD timeout waits={waits} commit={commit} deser_ok={deser_ok} ac0={ac0} expected={expected} c30=0x{c30:x} latched=0x{latched:x} c30_sane={c30_sane} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) owner+0x284={new_game_flag} b80={b80} -- DONE (NO SetState5)"
+                ));
+                FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
+                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+            }
+            return;
+        }
+        append_autoload_debug(format_args!(
+            "product-core-autoload: STAGE2-MOUNT-COMMIT native Continue row guard pass ac0={ac0} expected={expected} c30=0x{c30:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) owner+0x284={new_game_flag} b80={b80} -- native continue_confirm/SetState5 already fired"
+        ));
+        timeline_event("T_playgame", tick, format_args!("ac0={ac0} c30=0x{c30:x}"));
+        FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
+        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
+    }
+}
+
+unsafe fn fire_product_title_load_action(
+    action: MenuActionNode,
+    base: usize,
+    tick: u64,
+    slot: i32,
+) {
+    if OWN_STEPPER_TITLE_FIRED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        != TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return;
+    }
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let node = action.node;
+    let node_vt = action.node_vt;
+    let member_dialog = action.member_dialog;
+    let member_fn = action.member_fn;
+    let member_adjust = action.member_adjust;
+    let window_item = action.window_item;
+    OWN_STEPPER_EXPECTED_SLOT.store(slot, Ordering::SeqCst);
+    OWN_STEPPER_DESER_FIRED.store(OWN_STEPPER_DESER_NOT_FIRED, Ordering::SeqCst);
+    OWN_STEPPER_MOUNT_C30.store(GAME_MAN_C30_UNSET, Ordering::SeqCst);
+    OWN_STEPPER_IO_WAS_SET.store(OWN_STEPPER_IO_WAS_SET_NO, Ordering::SeqCst);
+    OWN_STEPPER_DIALOG.store(null, Ordering::SeqCst);
+    OWN_STEPPER_SELECTOR_STEP.store(null, Ordering::SeqCst);
+    OWN_STEPPER_SELECTOR_CTX.store(null, Ordering::SeqCst);
+    reset_phase_timer(&OWN_STEPPER_S2_PHASE_STARTED_MS);
+    let run: unsafe extern "system" fn(usize) = unsafe {
+        std::mem::transmute::<usize, unsafe extern "system" fn(usize)>(
+            base + MENU_MEMBER_FUNC_JOB_RUN_RVA,
+        )
+    };
+    append_autoload_debug(format_args!(
+        "product-core-autoload: *** FIRING native TitleTopDialog Load-Game run 0x{:x}(rcx=node=0x{node:x}) vt=0x{node_vt:x} member_dialog=0x{member_dialog:x} member_fn=0x{member_fn:x} member_adjust=0x{member_adjust:x} window_item=0x{window_item:x} slot={slot} tick={tick} -- no direct_build/forged ctx ***",
+        base + MENU_MEMBER_FUNC_JOB_RUN_RVA
+    ));
+    timeline_event(
+        "T_native_load_action",
+        tick,
+        format_args!("node=0x{node:x} member_fn=0x{member_fn:x}"),
+    );
+    unsafe { run(node) };
+    append_autoload_debug(format_args!(
+        "product-core-autoload: native TitleTopDialog Load-Game run returned; waiting for ProfileLoadDialog factory hook capture"
+    ));
 }
 
 unsafe fn title_menu_action_ready(owner: usize, base: usize) -> Option<MenuActionNode> {
@@ -2629,16 +3252,21 @@ unsafe fn profile_load_dialog_ready(
 }
 
 /// MODEL B orchestrator (gated by live_dialog_enabled(), OFF by default). At the rendered title
-/// menu: (1) do the bounded active-screen scan to acquire the live TitleTopDialog* + MenuWindow*,
-/// (2) call the dialog factory 0x14081ead0(rcx=title_dialog+0xa38, rdx=menu_window) ONCE -- which
-/// builds + registers the LIVE ProfileLoadDialog into the active-screen set, then (3) wait
-/// (bounded, per-frame) for that ProfileLoadDialog (vtable 0x142b229f8) to appear in the
-/// active-screen array, latch it as OWN_STEPPER_DIALOG, and hand it to STAGE2 ACTIVATE (which fires
-/// load_activate -> native pump mount -> guarded, char-fingerprint-gated continue_confirm).
-/// One-shot fire latch; bounded wait. FAIL-CLOSED at every step (no acquisition -> stay; bad
-/// vtable -> no call; dialog not live yet -> wait then DONE on timeout). The forge path is untouched.
-unsafe fn own_stepper_live_dialog_fire(owner: usize, base: usize, waits: u64) {
-    const FIRE_DIALOG_WAIT_MAX: u64 = OwnStepperFrameBudget::Frames600 as u64;
+/// menu: (1) do the wall-clock-bounded active-screen scan to acquire the live TitleTopDialog* +
+/// MenuWindow*, (2) call the dialog factory 0x14081ead0(rcx=title_dialog+0xa38, rdx=menu_window)
+/// ONCE -- which builds + registers the LIVE ProfileLoadDialog into the active-screen set, then (3)
+/// wait for that ProfileLoadDialog (vtable 0x142b229f8) to appear in the active-screen array, latch
+/// it as OWN_STEPPER_DIALOG, and hand it to STAGE2 ACTIVATE (which fires load_activate -> native pump
+/// mount -> guarded, char-fingerprint-gated continue_confirm). One-shot fire latch; bounded wait.
+/// FAIL-CLOSED at every step (no acquisition -> stay; bad vtable -> no call; dialog not live yet ->
+/// wait then DONE on timeout). The forge path is untouched.
+unsafe fn own_stepper_live_dialog_fire(
+    owner: usize,
+    base: usize,
+    waits: u64,
+    timed_out: bool,
+    elapsed_ms: u64,
+) {
     // FIX 2 (probe-6): the factory 0x14081ead0 RETURNS the new dialog in rax. fire_live_loadgame_node
     // validates that return == ProfileLoadDialog (vt 0x142b229f8) and, on a match, stores it as
     // OWN_STEPPER_DIALOG + transitions own_stepper to STAGE2 ACTIVATE on THAT pointer. We no longer
@@ -2646,9 +3274,9 @@ unsafe fn own_stepper_live_dialog_fire(owner: usize, base: usize, waits: u64) {
     // the PLD -> it would never confirm). Once fired+verified the orchestrator routes to STAGE2.
     if OWN_STEPPER_LIVE_FIRED.load(Ordering::SeqCst) == OWN_STEPPER_LIVE_FIRED_NO {
         let Some(ready) = (unsafe { title_live_dialog_fire_ready(owner, base) }) else {
-            if waits >= FIRE_DIALOG_WAIT_MAX {
+            if timed_out {
                 append_autoload_debug(format_args!(
-                    "live-dialog: factory args never became semantically ready after {waits} polls -- STAY at menu (NO-WRITE), DONE"
+                    "live-dialog: factory args never became semantically ready after {waits} polls/{elapsed_ms}ms -- STAY at menu (NO-WRITE), DONE"
                 ));
                 OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
             }
@@ -2670,9 +3298,9 @@ unsafe fn own_stepper_live_dialog_fire(owner: usize, base: usize, waits: u64) {
         // ProfileLoadDialog (it has already stored it + set STAGE2 ACTIVATE on success).
         if unsafe { fire_live_loadgame_node(ready.title_dialog, ready.menu_window, base) } {
             OWN_STEPPER_LIVE_FIRED.store(OWN_STEPPER_LIVE_FIRED_YES, Ordering::SeqCst);
-        } else if waits >= FIRE_DIALOG_WAIT_MAX {
+        } else if timed_out {
             append_autoload_debug(format_args!(
-                "live-dialog: factory returned non-PLD (or fail-closed) after {waits} polls -- STAY at menu (NO-WRITE), DONE"
+                "live-dialog: factory returned non-PLD (or fail-closed) after {waits} polls/{elapsed_ms}ms -- STAY at menu (NO-WRITE), DONE"
             ));
             OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
         }
@@ -2680,9 +3308,9 @@ unsafe fn own_stepper_live_dialog_fire(owner: usize, base: usize, waits: u64) {
     }
     // Fired + verified: own_stepper is already in STAGE2 ACTIVATE driving the returned PLD. If we are
     // somehow still here (phase not advanced), bound the wait and stop without writing.
-    if waits >= FIRE_DIALOG_WAIT_MAX {
+    if timed_out {
         append_autoload_debug(format_args!(
-            "live-dialog: fired factory but STAGE2 did not advance after {waits} waits -- STAY (NO-WRITE), DONE"
+            "live-dialog: fired factory but STAGE2 did not advance after {waits} polls/{elapsed_ms}ms -- STAY (NO-WRITE), DONE"
         ));
         OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
     }
@@ -3587,8 +4215,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             append_autoload_debug(format_args!(
                 "own_stepper: PASSIVE -- not forcing the menu; waiting for the user to open Load Game so d180 is captured, then STAGE 2 drives the load (input UNBLOCKED) #{n}"
             ));
-            OWN_STEPPER_MENU_BUILD_WAITS.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
-            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_MENU_BUILD, Ordering::SeqCst);
+            own_stepper_enter_menu_build_phase();
             pass_through(false);
             return;
         }
@@ -3643,8 +4270,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         let set_state: unsafe extern "system" fn(usize, i32) =
             unsafe { std::mem::transmute(base + TITLE_SET_STATE_RVA) };
         unsafe { set_state(owner, target_state) };
-        OWN_STEPPER_MENU_BUILD_WAITS.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
-        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_MENU_BUILD, Ordering::SeqCst);
+        own_stepper_enter_menu_build_phase();
         append_autoload_debug(format_args!(
             "own_stepper: STAGE1c bare-walk done (load_game_138=0x{:x} load_game_tree=0x{:x}) session(0x144588e98)=0x{session:x} beginlogo_gate(0xb8)=0x{beginlogo_gate:x} -> SetState({target_state}) [{}] to build the FULL main menu zero-input (#{n}) slot={want_slot} gm=0x{gm:x} c30=0x{c30:x} b80={b80}",
             bare.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS),
@@ -3705,6 +4331,8 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
     if phase == OWN_STEPPER_PHASE_MENU_BUILD {
         let waits =
             OWN_STEPPER_MENU_BUILD_WAITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
+        let menu_elapsed_ms = own_stepper_menu_build_elapsed_ms();
+        let menu_build_timed_out = own_stepper_menu_build_timed_out();
         if let StartupModalBlockingState::Blocking {
             dialog,
             vtable,
@@ -3928,7 +4556,15 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
         if live_dialog_enabled()
             && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO
         {
-            unsafe { own_stepper_live_dialog_fire(owner, base, waits) };
+            unsafe {
+                own_stepper_live_dialog_fire(
+                    owner,
+                    base,
+                    waits,
+                    menu_build_timed_out,
+                    menu_elapsed_ms,
+                )
+            };
             pass_through(false);
             return;
         }
@@ -3977,7 +4613,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
                 OWN_STEPPER_LOADGAME_SCANS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
                 let _ = unsafe { scan_dialog_for_loadgame(owner, base) };
             }
-            if waits >= OWN_STEPPER_MENU_BUILD_WAIT_MAX {
+            if menu_build_timed_out {
                 OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
             }
             pass_through(false);
@@ -4004,8 +4640,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
             if cur_vt == pld_vt {
                 // The fired Load-Game action already built the ProfileLoadDialog at owner+0xe0.
                 OWN_STEPPER_DIALOG.store(dialog, Ordering::SeqCst);
-                OWN_STEPPER_S2_WAITS.store(null, Ordering::SeqCst);
-                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_ACTIVATE, Ordering::SeqCst);
+                own_stepper_enter_s2_phase(OWN_STEPPER_PHASE_S2_ACTIVATE);
                 append_autoload_debug(format_args!(
                     "own_stepper: title-confirm built ProfileLoadDialog=0x{dialog:x} at owner+0xe0 -- entering STAGE2 ACTIVATE (slot={want_slot})"
                 ));
@@ -4022,9 +4657,9 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
                 return;
             }
             // Fired; waiting for the ProfileLoadDialog to appear at owner+0xe0. Bounded timeout.
-            if waits >= OWN_STEPPER_MENU_BUILD_WAIT_MAX {
+            if menu_build_timed_out {
                 append_autoload_debug(format_args!(
-                    "own_stepper: title-confirm fired but ProfileLoadDialog not at owner+0xe0 after {waits} waits -- STAY (NO-WRITE)"
+                    "own_stepper: title-confirm fired but ProfileLoadDialog not at owner+0xe0 after {waits} polls/{menu_elapsed_ms}ms -- STAY (NO-WRITE)"
                 ));
                 OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
             }
@@ -4110,11 +4745,10 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
                     n,
                     format_args!("item=0x{item:x} c30=0x{c30:x}"),
                 );
-                OWN_STEPPER_S2_WAITS.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
-                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_INVOKE, Ordering::SeqCst);
+                own_stepper_enter_s2_phase(OWN_STEPPER_PHASE_S2_INVOKE);
             }
             None => {
-                if waits >= OWN_STEPPER_MENU_BUILD_WAIT_MAX && !own_stepper_passive_enabled() {
+                if menu_build_timed_out && !own_stepper_passive_enabled() {
                     let _ = unsafe { diagnostic_menu_walk(owner, base, "built138-timeout", true) };
                     let _ = unsafe {
                         diagnostic_job_tree_walk(
@@ -4135,7 +4769,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
                         )
                     };
                     append_autoload_debug(format_args!(
-                        "own_stepper: STAGE1b menu-build TIMEOUT after {waits} waits -- Load-Game item not found; staying at title (NO-WRITE)"
+                        "own_stepper: STAGE1b menu-build TIMEOUT after {waits} polls/{menu_elapsed_ms}ms -- Load-Game item not found; staying at title (NO-WRITE)"
                     ));
                     OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
                 }
@@ -4182,6 +4816,8 @@ unsafe fn own_stepper_stage2(
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
     let waits = OWN_STEPPER_S2_WAITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
+    let s2_elapsed_ms = own_stepper_s2_elapsed_ms();
+    let s2_timed_out = own_stepper_s2_timed_out();
     let item = MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst);
     let pld_vt = base + PROFILE_LOAD_DIALOG_VTABLE_RVA;
     // 32-bit GameMan field read (low dword of the 8-byte safe read; little-endian).
@@ -4227,9 +4863,9 @@ unsafe fn own_stepper_stage2(
 
     if phase == OWN_STEPPER_PHASE_S2_INVOKE {
         if item == null {
-            if waits >= OWN_STEPPER_S2_PHASE_MAX {
+            if s2_timed_out {
                 append_autoload_debug(format_args!(
-                    "own_stepper: STAGE2-INVOKE-TIMEOUT no item after {waits} waits -- STAGE2-NOWRITE-ABORT"
+                    "own_stepper: STAGE2-INVOKE-TIMEOUT no item after {waits} polls/{s2_elapsed_ms}ms -- STAGE2-NOWRITE-ABORT"
                 ));
                 OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
             }
@@ -4258,8 +4894,7 @@ unsafe fn own_stepper_stage2(
             append_autoload_debug(format_args!(
                 "own_stepper: STAGE2-INVOKE-OK (native-built) dialog=0x{existing:x} dvt=0x{pld_vt:x} item=0x{item:x}"
             ));
-            OWN_STEPPER_S2_WAITS.store(null, Ordering::SeqCst);
-            OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_ACTIVATE, Ordering::SeqCst);
+            own_stepper_enter_s2_phase(OWN_STEPPER_PHASE_S2_ACTIVATE);
             return;
         }
         // Drive d180's NATIVE Update once as soon as the item exists and its native build
@@ -4301,14 +4936,13 @@ unsafe fn own_stepper_stage2(
                     n,
                     format_args!("dialog=0x{candidate:x} via=invoke"),
                 );
-                OWN_STEPPER_S2_WAITS.store(null, Ordering::SeqCst);
-                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_ACTIVATE, Ordering::SeqCst);
+                own_stepper_enter_s2_phase(OWN_STEPPER_PHASE_S2_ACTIVATE);
                 return;
             }
         }
-        if waits >= OWN_STEPPER_S2_PHASE_MAX {
+        if s2_timed_out {
             append_autoload_debug(format_args!(
-                "own_stepper: STAGE2-INVOKE-TIMEOUT dialog not built after {waits} waits -- STAGE2-NOWRITE-ABORT"
+                "own_stepper: STAGE2-INVOKE-TIMEOUT dialog not built after {waits} polls/{s2_elapsed_ms}ms -- STAGE2-NOWRITE-ABORT"
             ));
             OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
         }
@@ -4323,7 +4957,7 @@ unsafe fn own_stepper_stage2(
                     "own_stepper: STAGE2-ACTIVATE waiting for GameMan before load_activate dialog=0x{dialog:x}"
                 ));
             }
-            if waits >= OWN_STEPPER_S2_PHASE_MAX {
+            if s2_timed_out {
                 OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
             }
             return;
@@ -4332,9 +4966,9 @@ unsafe fn own_stepper_stage2(
         let Some(ready) =
             (unsafe { profile_load_dialog_ready(base, dialog, want_slot, log_pending) })
         else {
-            if waits >= OWN_STEPPER_S2_PHASE_MAX {
+            if s2_timed_out {
                 append_autoload_debug(format_args!(
-                    "own_stepper: STAGE2-ACTIVATE-TIMEOUT profile_load_dialog_ready stayed false after {waits} polls -- STAGE2-NOWRITE-ABORT"
+                    "own_stepper: STAGE2-ACTIVATE-TIMEOUT profile_load_dialog_ready stayed false after {waits} polls/{s2_elapsed_ms}ms -- STAGE2-NOWRITE-ABORT"
                 ));
                 OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
             }
@@ -4355,13 +4989,15 @@ unsafe fn own_stepper_stage2(
             }
         }
         OWN_STEPPER_EXPECTED_SLOT.store(expected_slot, Ordering::SeqCst);
-        if live_dialog_enabled() && expected_slot != OWN_STEPPER_SLOT_NONE {
+        if (live_dialog_enabled() || product_autoload_enabled())
+            && expected_slot != OWN_STEPPER_SLOT_NONE
+        {
             let set_save_slot: unsafe extern "system" fn(i32) =
                 unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
             unsafe { set_save_slot(expected_slot) };
             let slot_after = unsafe { *((gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
             append_autoload_debug(format_args!(
-                "own_stepper: STAGE2-ACTIVATE native set_save_slot({expected_slot}) after profile_load_dialog_ready -> ac0={slot_after}"
+                "own_stepper: STAGE2-ACTIVATE native-selector set_save_slot({expected_slot}) after profile_load_dialog_ready -> ac0={slot_after}"
             ));
         }
         OWN_STEPPER_SELECTOR_STEP.store(null, Ordering::SeqCst);
@@ -4377,17 +5013,18 @@ unsafe fn own_stepper_stage2(
         OWN_STEPPER_DESER_FIRED.store(OWN_STEPPER_DESER_NOT_FIRED, Ordering::SeqCst);
         OWN_STEPPER_MOUNT_C30.store(GAME_MAN_C30_UNSET, Ordering::SeqCst);
         OWN_STEPPER_IO_WAS_SET.store(OWN_STEPPER_IO_WAS_SET_NO, Ordering::SeqCst);
-        OWN_STEPPER_S2_WAITS.store(null, Ordering::SeqCst);
-        OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_MOUNT_POLL, Ordering::SeqCst);
+        own_stepper_enter_s2_phase(OWN_STEPPER_PHASE_S2_MOUNT_POLL);
         return;
     }
 
     if phase == OWN_STEPPER_PHASE_S2_MOUNT_POLL {
         let expected = OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst);
-        // Direct-build uses the cold submit+drain+deserialize delegate. Live-dialog also ticks the
-        // native selector step it just built, but still co-drives the save-read/deser path directly:
-        // the selector tick alone has been runtime-proven to leave b80/io idle at the title.
-        if live_dialog_enabled() {
+        // Product/live-dialog path: once load_activate builds the real selector step, self-pump
+        // that native selector instead of jumping straight to the cold full-read helper. This is the
+        // proper Load-Game beginning: profile rows/record state -> load_activate -> selector tick ->
+        // menu_deser/mount. The cold helper remains for the older non-selector diagnostic paths.
+        let native_selector_path = live_dialog_enabled() || product_autoload_enabled();
+        if native_selector_path {
             const SELECTOR_TICK_RVA: usize = PROFILE_LOAD_SELECTOR_TICK_RVA;
             #[repr(C)]
             struct SelectorTickResultLayout {
@@ -4405,12 +5042,13 @@ unsafe fn own_stepper_stage2(
                 let tick_ret = unsafe { tick(step, selector_ctx, result_ptr, null) };
                 if waits % S2_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
                     append_autoload_debug(format_args!(
-                        "own_stepper: live selector self-pump step=0x{step:x} ctx=0x{selector_ctx:x} result=0x{result_ptr:x} ret=0x{tick_ret:x}"
+                        "own_stepper: native selector self-pump step=0x{step:x} ctx=0x{selector_ctx:x} result=0x{result_ptr:x} ret=0x{tick_ret:x}"
                     ));
                 }
-            }
-            if expected != OWN_STEPPER_SLOT_NONE {
-                unsafe { cold_char_mount_drive(base, gm, expected, n) };
+            } else if waits % S2_LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
+                append_autoload_debug(format_args!(
+                    "own_stepper: native selector self-pump waiting for selector step/ctx step=0x{step:x} ctx=0x{selector_ctx:x}"
+                ));
             }
         } else {
             unsafe { cold_char_mount_drive(base, gm, want_slot, n) };
@@ -4430,22 +5068,21 @@ unsafe fn own_stepper_stage2(
         let _ = (io_was_set, io_consumed);
         let mut latched_c30 = OWN_STEPPER_MOUNT_C30.load(Ordering::SeqCst);
         let mut deser_state = OWN_STEPPER_DESER_FIRED.load(Ordering::SeqCst);
-        if live_dialog_enabled()
+        if native_selector_path
             && deser_state == OWN_STEPPER_DESER_NOT_FIRED
             && ac0 == expected
             && expected != OWN_STEPPER_SLOT_NONE
             && c30 != GAME_MAN_C30_UNSET
             && c30 != C30_ZERO
-            && c30 != GAME_MAN_NEWGAME_DEFAULT_MAP
         {
             let (fp_real, fp_level, fp_name_len) = unsafe { char_fingerprint(base) };
-            if fp_real && fp_name_len > TITLE_OWNER_SCAN_START_ADDRESS {
+            if fp_real {
                 OWN_STEPPER_MOUNT_C30.store(c30, Ordering::SeqCst);
                 OWN_STEPPER_DESER_FIRED.store(OWN_STEPPER_DESER_FIRED_OK, Ordering::SeqCst);
                 latched_c30 = c30;
                 deser_state = OWN_STEPPER_DESER_FIRED_OK;
                 append_autoload_debug(format_args!(
-                    "own_stepper: STAGE2-MOUNT-LATCH live-menu-deser ac0={ac0} expected={expected} c30=0x{c30:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len})"
+                    "own_stepper: STAGE2-MOUNT-LATCH native-selector ac0={ac0} expected={expected} c30=0x{c30:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len})"
                 ));
             }
         }
@@ -4478,18 +5115,16 @@ unsafe fn own_stepper_stage2(
                 append_autoload_debug(format_args!(
                     "own_stepper: STAGE2-MOUNT-COMMIT deser_ok={deser_ok} mount_done={mount_done} ac0={ac0} expected={expected} c30=0x{c30:x} latched=0x{latched_c30:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) b80={b80} -- entering CONFIRM"
                 ));
-                OWN_STEPPER_S2_WAITS.store(null, Ordering::SeqCst);
-                OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_S2_CONFIRM, Ordering::SeqCst);
+                own_stepper_enter_s2_phase(OWN_STEPPER_PHASE_S2_CONFIRM);
             } else {
                 append_autoload_debug(format_args!(
                     "own_stepper: STAGE2-MOUNT-VERIFY deser_ok={deser_ok} mount_done={mount_done} commit={commit} ac0={ac0} expected={expected} c30=0x{c30:x} latched=0x{latched_c30:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) b80={b80} -- VERIFY-ONLY (NO SetState5/NO save write) -> DONE"
                 ));
-                OWN_STEPPER_S2_WAITS.store(null, Ordering::SeqCst);
                 OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
             }
-        } else if waits >= OWN_STEPPER_S2_PHASE_MAX {
+        } else if s2_timed_out {
             append_autoload_debug(format_args!(
-                "own_stepper: STAGE2-MOUNT-POLL-TIMEOUT ac0={ac0} want={want_slot} c30=0x{c30:x} io_was_set={io_was_set} after {waits} waits -- STAGE2-NOWRITE-ABORT (stay at menu)"
+                "own_stepper: STAGE2-MOUNT-POLL-TIMEOUT ac0={ac0} want={want_slot} c30=0x{c30:x} io_was_set={io_was_set} after {waits} polls/{s2_elapsed_ms}ms -- STAGE2-NOWRITE-ABORT (stay at menu)"
             ));
             OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
         }
@@ -7138,6 +7773,13 @@ pub(crate) fn install_continue_trace_hooks() {
             b80_deserialize_hook as *mut c_void,
             &B80_DESERIALIZE_ORIG,
         );
+        create_continue_trace_hook(
+            &mut hooks,
+            "b80_dispatcher2_afb880_observe",
+            B80_DISPATCHER2_RVA as u32,
+            b80_dispatcher2_observe_hook as *mut c_void,
+            &B80_DISPATCHER2_OBSERVE_ORIG,
+        );
         // NOTE: the c30_writer 0x67bd70 hook is NOT installed here. It is installed
         // UNCONDITIONALLY at process attach via install_c30_writer_hook (mirroring the
         // MenuWindow-latch precedent) so the SAVE-SAFE c30-write diagnostic is always
@@ -7438,12 +8080,55 @@ pub(crate) unsafe extern "system" fn b80_poll_hook(arg0: u8, arg1: u8) -> i32 {
     ret
 }
 
+pub(crate) unsafe extern "system" fn b80_dispatcher2_observe_hook(this: usize) -> u8 {
+    if this != TITLE_OWNER_SCAN_START_ADDRESS {
+        B80_NATIVE_DISPATCHER_OWNER.store(this, Ordering::SeqCst);
+    }
+    let count = B80_DISPATCHER2_OBSERVE_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    let before = b80_mount_trace_summary();
+    let ret = unsafe {
+        let orig = B80_DISPATCHER2_OBSERVE_ORIG.load(Ordering::SeqCst);
+        if orig == HOOK_ORIGINAL_UNSET {
+            TITLE_OWNER_SCAN_START_ADDRESS as u8
+        } else {
+            let f: unsafe extern "system" fn(usize) -> u8 = std::mem::transmute(orig);
+            f(this)
+        }
+    };
+    if count < MENU_ITEM_UPDATE_LOG_MAX
+        || before.contains("b80=1")
+        || before.contains("b80=2")
+        || before.contains("b80=3")
+    {
+        append_continue_trace(format_args!(
+            "b80_dispatcher2_afb880 OBS this=0x{this:x} ret={ret} before{{{before}}} after{{{}}} {}",
+            b80_mount_trace_summary(),
+            trace_callers_summary()
+        ));
+    }
+    ret
+}
+
 pub(crate) unsafe extern "system" fn b80_deserialize_hook(slot: i32) -> i32 {
     append_continue_trace(format_args!(
         "b80_deserialize_67b290 ENTER slot={slot} {}",
         b80_mount_trace_summary()
     ));
     let ret = unsafe { call_b80_initiator_original(&B80_DESERIALIZE_ORIG, slot) };
+    const B80_DESERIALIZE_SUCCESS_RET: i32 = 1;
+    const C30_ZERO: i32 = 0;
+    let gm = game_man_ptr_or_null();
+    if ret == B80_DESERIALIZE_SUCCESS_RET && gm != TITLE_OWNER_SCAN_START_ADDRESS {
+        let c30 = unsafe { *((gm + GAME_MAN_SAVED_MAP_C30_OFFSET) as *const i32) };
+        let ac0 = unsafe { *((gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
+        if c30 != GAME_MAN_C30_UNSET && c30 != C30_ZERO {
+            OWN_STEPPER_MOUNT_C30.store(c30, Ordering::SeqCst);
+            OWN_STEPPER_DESER_FIRED.store(OWN_STEPPER_DESER_FIRED_OK, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "b80_deserialize_67b290: latched native post-click deserialize success slot={slot} ac0={ac0} c30=0x{c30:x}"
+            ));
+        }
+    }
     append_continue_trace(format_args!(
         "b80_deserialize_67b290 LEAVE slot={slot} ret={ret} {}",
         b80_mount_trace_summary()
@@ -7914,6 +8599,7 @@ pub(crate) unsafe extern "system" fn cap_continue_confirm_hook(
         trace_callers_summary(),
         b80_mount_trace_summary()
     ));
+    OWN_STEPPER_CONFIRMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     unsafe { call_cap_original(&CAP_CONTINUE_CONFIRM_ORIG, this, b, c, d) }
 }
 
@@ -7988,7 +8674,9 @@ pub(crate) unsafe extern "system" fn cap_builder_hook(
         b80_mount_trace_summary()
     ));
     let ret = unsafe { call_cap_original(&CAP_BUILDER_ORIG, owner, rdx, effective_slot, r9) };
-    if live_dialog_enabled() && ret != TITLE_OWNER_SCAN_START_ADDRESS {
+    if (live_dialog_enabled() || product_autoload_enabled())
+        && ret != TITLE_OWNER_SCAN_START_ADDRESS
+    {
         #[repr(C)]
         struct SelectorBuilderOwnerLayout {
             unknown_000: [u8; 0xf8],
@@ -8012,7 +8700,7 @@ pub(crate) unsafe extern "system" fn cap_builder_hook(
             OWN_STEPPER_SELECTOR_CTX.store(ctx, Ordering::SeqCst);
         }
         append_autoload_debug(format_args!(
-            "own_stepper: builder ret(owner)=0x{ret:x} step=[owner]=0x{step:x} step_vt=0x{step_vt:x} ctx(owner+0xf8)=0x{ctx:x} slot={} effective_slot={} for live self-pump",
+            "own_stepper: builder ret(owner)=0x{ret:x} step=[owner]=0x{step:x} step_vt=0x{step_vt:x} ctx(owner+0xf8)=0x{ctx:x} slot={} effective_slot={} for native selector self-pump",
             slot_i32, effective_slot as i32
         ));
     }
@@ -8157,6 +8845,19 @@ pub(crate) unsafe extern "system" fn cap_dialog_factory_hook(
     append_continue_trace(format_args!(
         "CAP dialog_factory LEAVE dialog_this=0x{ret:x} dialog_vt=0x{ret_vt:x}"
     ));
+    let base = game_module_base().unwrap_or(NULL);
+    if product_autoload_enabled()
+        && base != NULL
+        && OWN_STEPPER_TITLE_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS
+        && OWN_STEPPER_PHASE.load(Ordering::SeqCst) == OWN_STEPPER_PHASE_MENU
+        && ret_vt == base + PROFILE_LOAD_DIALOG_VTABLE_RVA
+    {
+        OWN_STEPPER_DIALOG.store(ret, Ordering::SeqCst);
+        own_stepper_enter_s2_phase(OWN_STEPPER_PHASE_S2_ACTIVATE);
+        append_autoload_debug(format_args!(
+            "product-core-autoload: native TitleTopDialog Load-Game factory returned ProfileLoadDialog=0x{ret:x} vt=0x{ret_vt:x}; captured by factory hook -> STAGE2 ACTIVATE"
+        ));
+    }
     ret
 }
 
@@ -8245,6 +8946,52 @@ pub(crate) unsafe extern "system" fn cap_menu_item_update_hook(
             game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
         }
     };
+    if product_autoload_enabled()
+        && item != TITLE_OWNER_SCAN_START_ADDRESS
+        && base != TITLE_OWNER_SCAN_START_ADDRESS
+        && MENU_CONTINUE_ITEM
+            .compare_exchange(
+                TITLE_OWNER_SCAN_START_ADDRESS,
+                item,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+    {
+        let vt = unsafe { safe_read_usize(item) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        append_continue_trace(format_args!(
+            "MENU-ITEM-UPDATE captured first title item as native Continue candidate item=0x{item:x} vt=0x{vt:x} item_fields{{{}}} {}",
+            unsafe { menu_item_action_summary(item) },
+            trace_callers_summary()
+        ));
+        append_autoload_debug(format_args!(
+            "product-core-autoload: captured first title MenuWindowJob item=0x{item:x} vt=0x{vt:x} as Continue-row wrapper receiver candidate"
+        ));
+    }
+    if product_autoload_enabled()
+        && item != TITLE_OWNER_SCAN_START_ADDRESS
+        && item == MENU_CONTINUE_ITEM.load(Ordering::SeqCst)
+    {
+        let n =
+            MENU_CONTINUE_ITEM_FIELD_LOG_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+        const FIELD_LOG_0: usize = 0;
+        const FIELD_LOG_8: usize = 8;
+        const FIELD_LOG_30: usize = 30;
+        const FIELD_LOG_60: usize = 60;
+        const FIELD_LOG_120: usize = 120;
+        if n == FIELD_LOG_0
+            || n == FIELD_LOG_8
+            || n == FIELD_LOG_30
+            || n == FIELD_LOG_60
+            || n == FIELD_LOG_120
+        {
+            append_continue_trace(format_args!(
+                "MENU-ITEM-UPDATE Continue candidate fields tick_count={n} item=0x{item:x} item_fields{{{}}} {}",
+                unsafe { menu_item_action_summary(item) },
+                trace_callers_summary()
+            ));
+        }
+    }
     // While the deterministic input probe is active, count GENUINE d180 leaf-Update ticks (this
     // leaf fn 0x1407ad1c0 actually running for the Load-Game item) even after MENU_LOAD_GAME_ITEM
     // is already latched -- so the probe can tell "d180 leaf ticked" from "static walk found it".
@@ -8279,10 +9026,18 @@ pub(crate) unsafe extern "system" fn cap_menu_item_update_hook(
                 MENU_ITEM_UPDATE_CAPTURE_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
             if n < MENU_ITEM_UPDATE_LOG_MAX {
                 let vt = unsafe { safe_read_usize(item) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
-                append_continue_trace(format_args!(
-                    "MENU-ITEM-UPDATE #{n} item=0x{item:x} vt=0x{vt:x} {chain} load_game=false {}",
-                    trace_callers_summary()
-                ));
+                if product_autoload_enabled() {
+                    append_continue_trace(format_args!(
+                        "MENU-ITEM-UPDATE #{n} item=0x{item:x} vt=0x{vt:x} item_fields{{{}}} {chain} load_game=false {}",
+                        unsafe { menu_item_action_summary(item) },
+                        trace_callers_summary()
+                    ));
+                } else {
+                    append_continue_trace(format_args!(
+                        "MENU-ITEM-UPDATE #{n} item=0x{item:x} vt=0x{vt:x} {chain} load_game=false {}",
+                        trace_callers_summary()
+                    ));
+                }
             }
         }
     }
@@ -8409,6 +9164,109 @@ pub(crate) unsafe extern "system" fn menu_task_update_wrapper_hook(
     result
 }
 
+unsafe fn task_node_update_rva(base: usize, node: usize) -> usize {
+    const TASK_NODE_UPDATE_VTABLE_SLOT: usize = 0x10;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let Some(vtable) = (unsafe { safe_read_usize(node) }) else {
+        return null;
+    };
+    let Some(update) = (unsafe { safe_read_usize(vtable + TASK_NODE_UPDATE_VTABLE_SLOT) }) else {
+        return null;
+    };
+    if update >= base { update - base } else { null }
+}
+
+unsafe fn qword_window_summary(ptr: usize) -> String {
+    const QWORDS: usize = 6;
+    const START: usize = 0;
+    const STEP: usize = 1;
+    const STRIDE: usize = core::mem::size_of::<usize>();
+    let mut out = String::new();
+    let mut i = START;
+    while i < QWORDS {
+        let off = i * STRIDE;
+        let value = unsafe { safe_read_usize(ptr + off) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        let _ = core::fmt::write(&mut out, format_args!(" +0x{off:x}=0x{value:x}"));
+        i += STEP;
+    }
+    out
+}
+
+unsafe fn menu_item_action_summary(ptr: usize) -> String {
+    const OFFSETS: [usize; 14] = [
+        0x0, 0x8, 0x10, 0x40, 0x50, 0x68, 0xa8, 0xb0, 0xe8, 0xf0, 0xf8, 0x100, 0x130, 0x138,
+    ];
+    let mut out = String::new();
+    for off in OFFSETS {
+        let value = unsafe { safe_read_usize(ptr + off) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        let _ = core::fmt::write(&mut out, format_args!(" +0x{off:x}=0x{value:x}"));
+        if value != TITLE_OWNER_SCAN_START_ADDRESS {
+            let _ = core::fmt::write(
+                &mut out,
+                format_args!(" ->{{{}}}", unsafe { qword_window_summary(value) }),
+            );
+        }
+    }
+    out
+}
+
+unsafe fn task_node_raw_summary(ptr: usize) -> String {
+    const QWORDS: usize = 8;
+    const START: usize = 0;
+    const STEP: usize = 1;
+    const STRIDE: usize = core::mem::size_of::<usize>();
+    let mut out = String::new();
+    let mut first = TITLE_OWNER_SCAN_START_ADDRESS;
+    let mut second = TITLE_OWNER_SCAN_START_ADDRESS;
+    let mut i = START;
+    while i < QWORDS {
+        let off = i * STRIDE;
+        let value = unsafe { safe_read_usize(ptr + off) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        if i == START {
+            first = value;
+        } else if i == STEP {
+            second = value;
+        }
+        let _ = core::fmt::write(&mut out, format_args!(" +0x{off:x}=0x{value:x}"));
+        i += STEP;
+    }
+    if first != TITLE_OWNER_SCAN_START_ADDRESS {
+        let _ = core::fmt::write(
+            &mut out,
+            format_args!(" | *q0{{{}}}", unsafe { qword_window_summary(first) }),
+        );
+    }
+    if second != TITLE_OWNER_SCAN_START_ADDRESS {
+        let _ = core::fmt::write(
+            &mut out,
+            format_args!(" | *q8{{{}}}", unsafe { qword_window_summary(second) }),
+        );
+    }
+    out
+}
+
+unsafe fn capture_continue_task_node_candidate(base: usize, candidate: usize, label: &str) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if candidate == null {
+        return;
+    }
+    let update_rva = unsafe { task_node_update_rva(base, candidate) };
+    if update_rva != TRACE_MENU_CONTINUE_WRAPPER_RVA as usize {
+        return;
+    }
+    if MENU_CONTINUE_TASK_NODE
+        .compare_exchange(null, candidate, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        append_continue_trace(format_args!(
+            "CAP continue_task_node {label}=0x{candidate:x} update_rva=0x{update_rva:x} -- captured native Continue menu task wrapper"
+        ));
+        append_autoload_debug(format_args!(
+            "product-core-autoload: captured native Continue task node from {label}=0x{candidate:x} update_rva=0x{update_rva:x}"
+        ));
+    }
+}
+
 pub(crate) unsafe extern "system" fn task_enqueue_hook(
     arg0: *mut c_void,
     arg1: *mut c_void,
@@ -8421,9 +9279,10 @@ pub(crate) unsafe extern "system" fn task_enqueue_hook(
             > NO_SAFE_INPUT_CONFIRM_FRAMES;
     if should_trace {
         append_continue_trace(format_args!(
-            "menu_task_enqueue seq={trace_index} phase=ENTER hook_rva=0x{:x} list={arg0:p} node={arg1:p} node_{} confirm_active={} pulse={} {} {}",
+            "menu_task_enqueue seq={trace_index} phase=ENTER hook_rva=0x{:x} list={arg0:p} node={arg1:p} node_{} raw{{{}}} confirm_active={} pulse={} {} {}",
             TRACE_TASK_ENQUEUE_RVA,
             unsafe { object_vtable_summary(arg1) },
+            unsafe { task_node_raw_summary(arg1 as usize) },
             SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst)
                 > NO_SAFE_INPUT_CONFIRM_FRAMES,
             SAFE_INPUT_CONFIRM_PULSE_SEQ.load(Ordering::SeqCst),
@@ -8432,6 +9291,10 @@ pub(crate) unsafe extern "system" fn task_enqueue_hook(
         ));
     }
     let result = unsafe { call_task_enqueue_original(arg0, arg1) }.unwrap_or(arg1);
+    if let Ok(base) = game_module_base() {
+        unsafe { capture_continue_task_node_candidate(base, arg1 as usize, "arg1") };
+        unsafe { capture_continue_task_node_candidate(base, result as usize, "ret") };
+    }
     unsafe {
         log_menu_insert_details(
             arg0 as usize,
@@ -8443,7 +9306,9 @@ pub(crate) unsafe extern "system" fn task_enqueue_hook(
     }
     if should_trace {
         append_continue_trace(format_args!(
-            "menu_task_enqueue seq={trace_index} phase=LEAVE ret={result:p} {}",
+            "menu_task_enqueue seq={trace_index} phase=LEAVE ret={result:p} ret_{} raw{{{}}} {}",
+            unsafe { object_vtable_summary(result) },
+            unsafe { task_node_raw_summary(result as usize) },
             game_man_trace_summary()
         ));
     }

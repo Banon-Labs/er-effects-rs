@@ -53,6 +53,7 @@ def require(condition: bool, message: str, failures: list[str]) -> None:
 
 READINESS_HELPERS = {
     "product_core_autoload_ready",
+    "product_continue_action_ready",
     "title_boot_ready",
     "title_menu_action_ready",
     "title_live_dialog_fire_ready",
@@ -86,6 +87,9 @@ def product_path_uses_semantic_readiness(experiments: str) -> bool:
     return (
         "product_core_autoload_ready" in product_core
         and "own_stepper_stage2" in product_core
+        and "product_continue_action_ready" in product_core
+        and "product_continue_autoload_tick" in product_core
+        and "CONTINUE_LOAD_RVA" in experiments
         and "cold_char_mount_drive" in stage2
         and "title_boot_ready" in own_stepper
         and "startup_modal_blocking_state" in own_stepper
@@ -150,7 +154,7 @@ def main() -> int:
 
     require(
         semantic_readiness_helpers_present(experiments),
-        "product autoload must define semantic readiness helpers for title boot, menu action, modals, and ProfileLoadDialog",
+        "product autoload must define semantic readiness helpers for title boot, native Continue/menu action, modals, and ProfileLoadDialog",
         failures,
     )
     require(
@@ -219,6 +223,19 @@ def main() -> int:
     require(
         all(name in measure for name in FORBIDDEN_FIXED_WAIT_TOKENS),
         "measure must check every removed fixed wait gate",
+        failures,
+    )
+    require(
+        "OwnStepperFrameBudget" in measure,
+        "measure must forbid OwnStepperFrameBudget regressions",
+        failures,
+    )
+    require(
+        "product_core_autoload_tick still calls broken direct_build path" in measure
+        and "product_continue_autoload_tick" in measure
+        and "product_continue_action_ready" in measure
+        and "CONTINUE_LOAD_RVA" in measure,
+        "measure must enforce product autoload uses the native Continue row load path, not direct_build",
         failures,
     )
     require(

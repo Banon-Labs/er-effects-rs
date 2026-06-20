@@ -402,7 +402,9 @@ pub(crate) enum MenuTraceRva {
 }
 
 pub(crate) const TITLE_MENU_JOB_WAIT_RVA: usize = MenuTraceRva::MenuJobWait as usize;
-pub(crate) const TITLE_NATIVE_JOB_MIN_TICK: u64 = OwnStepperFrameBudget::Frames170 as u64;
+/// Legacy native-autoload startup delay is a diagnostic tick throttle only; product autoload
+/// phases must use semantic predicates plus wall-clock fail-safe deadlines, never frame budgets.
+pub(crate) const TITLE_NATIVE_JOB_MIN_TICK: u64 = 170;
 pub(crate) const MEM_COMMIT_NUMERIC: u32 = 0x1000;
 pub(crate) const PAGE_NOACCESS_NUMERIC: u32 = 0x01;
 pub(crate) const PAGE_GUARD_NUMERIC: u32 = 0x100;
@@ -617,6 +619,16 @@ pub(crate) const LIVE_DIALOG_FACTORY_RVA: usize = TitleDialogRva::LiveDialogFact
 pub(crate) const SCENE_OBJ_PROXY_VTABLE_RVA: usize = 0x2a94a70;
 /// SceneProxy MenuWindow back-ref: the live MenuWindow* sits at proxy+0x20 (ctor 0x14074a735).
 pub(crate) const SCENE_PROXY_MENU_WINDOW_20_OFFSET: usize = 0x20;
+/// Generic CS::SceneObjProxy context/back-ref slot. The named-child constructor 0x14074a7c0
+/// copies `[parent+0x20]` into `[proxy+0x20]` before binding the child by name into the proxy's
+/// handle at +0x28. Used for the title `PressStart` / GFX `PRESS BUTTON` component gate.
+pub(crate) const SCENE_OBJ_PROXY_CONTEXT_20_OFFSET: usize = 0x20;
+/// TitleTopDialog embedded CS::SceneObjProxy for the title prompt component. Static evidence:
+/// 05_000_title.gfx contains the visible text `PRESS BUTTON` and symbol `PressStart`; the
+/// TitleTopDialog constructor xref at 0x1409a8275 calls the named-child proxy constructor with
+/// rdx=dialog+0xb78 and r8="PressStart" (RVA 0x2b26500).
+pub(crate) const TITLE_PRESS_START_SCENE_PROXY_B78_OFFSET: usize = 0xb78;
+pub(crate) const TITLE_PRESS_START_NAME_RVA: usize = 0x2b26500;
 /// Diagnostic span: if *(proxy) is NOT SceneObjProxy, scan [proxy .. proxy+0x40] stride 8 logging
 /// each qword + its [0] vtable so the next probe reveals the real layout. Also bounds the fallback.
 pub(crate) const SCENE_PROXY_DIAG_SCAN_SPAN: usize = 0x40;
@@ -718,6 +730,10 @@ pub(crate) const DEFAULT_PLAY_GAME_MAP: i32 = 0x3c2a2200;
 /// the save, writes the real saved map to GameMan+0xc30, applies the character. The
 /// cycle-breaker for slot loading (slot9-load-phase-machine-b80-csfeman-less-2026).
 pub(crate) const DESERIALIZE_SLOT_RVA: usize = 0x67b290;
+/// The title menu's CONTINUE row wrapper 0x14082bac0 calls this native loader as
+/// `continue_load(-1, 0, 0)`: it resolves `-1` through GameMan+0xac0, submits the
+/// 0x280000 save read, and arms GameMan+0xb80 for the b80 drain/deser chain.
+pub(crate) const CONTINUE_LOAD_RVA: usize = 0x67b750;
 /// Private saved-map slot inside the GameMan block immediately after
 /// `stay_in_multiplay_area_saved_rotation`; derive it from the adjacent typed
 /// vector layout instead of retaining the raw absolute field offset.
@@ -937,18 +953,15 @@ pub(crate) enum OwnStepperPhase {
     S2Confirm,
 }
 
-#[repr(u64)]
-pub(crate) enum OwnStepperFrameBudget {
-    Frames30 = 30,
-    Frames60 = 60,
-    Frames90 = 90,
-    Frames120 = 120,
-    Frames170 = 170,
-    Frames180 = 180,
-    Frames600 = 600,
-    Frames1200 = 1200,
-    Frames3000 = 3000,
-}
+/// Own-stepper phase progress is semantic. These values are wall-clock fail-safe caps only:
+/// they abort to a no-write state if a native predicate never arrives, and must never be used as
+/// success/readiness gates.
+pub(crate) const OWN_STEPPER_MOUNT_POLL_TIMEOUT_MS: u64 = 10_000;
+pub(crate) const OWN_STEPPER_DRIVE_TIMEOUT_MS: u64 = 10_000;
+pub(crate) const OWN_STEPPER_MENU_BUILD_TIMEOUT_MS: u64 = 50_000;
+pub(crate) const OWN_STEPPER_S2_PHASE_TIMEOUT_MS: u64 = 20_000;
+pub(crate) const OWN_STEPPER_IDX6_SETTLE_TICKS: u64 = 120;
+pub(crate) const CAP_SELECTOR_TICK_LOG_INTERVAL_TICKS: usize = 120;
 
 /// Driver phases for the in-context idx10 handler.
 pub(crate) const OWN_STEPPER_PHASE_MENU: usize = OwnStepperPhase::Menu as usize;
@@ -973,9 +986,9 @@ pub(crate) const B80_POLL_ARG_ZERO: u8 = false as u8;
 /// dispatcher (no CSFeMan apply / no save write) -- just the lane tick the menu runs via
 /// dispatcher-1. We call it ourselves to drain the preview read to resident.
 pub(crate) const B80_LANE1_DRIVER_RVA: usize = 0x679510;
-/// Max frames to poll b80 toward 3 before giving up the mount (avoid an infinite title
-/// hang if the worker never drains). ~10s at 60fps.
-pub(crate) const OWN_STEPPER_MOUNT_POLL_MAX: u64 = OwnStepperFrameBudget::Frames600 as u64;
+/// Wall-clock fail-safe to poll b80 toward 3 before giving up the mount (avoid an infinite
+/// title hang if the worker never drains). Not a readiness/success predicate.
+pub(crate) const OWN_STEPPER_MOUNT_POLL_MAX: u64 = OWN_STEPPER_MOUNT_POLL_TIMEOUT_MS;
 pub(crate) static OWN_STEPPER_MOUNT_POLLS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 /// PHASE 4 (DRIVE): the validated dispatcher-driven mount (real-load-c30-mount-write-
 /// confirmed-seamless-2026 + menu-b80-mount-orchestration-sequence-2026). Runtime + the
@@ -1011,8 +1024,8 @@ pub(crate) const SYNTH_MMS_DESER_SLOT_12C_OFFSET: usize = 0x12c;
 pub(crate) const SYNTH_MMS_SKIP_APPLY_ON: u8 = true as u8;
 pub(crate) static mut SYNTH_MMS_OWNER: [u8; SYNTH_MMS_OWNER_SIZE] =
     [MOVIE_SKIP_FLAG_CLEAR; SYNTH_MMS_OWNER_SIZE];
-/// Max frames to drive the dispatchers before giving up (stay at title, no save write).
-pub(crate) const OWN_STEPPER_DRIVE_MAX: u64 = OwnStepperFrameBudget::Frames600 as u64;
+/// Wall-clock fail-safe to drive the dispatchers before giving up (stay at title, no save write).
+pub(crate) const OWN_STEPPER_DRIVE_MAX: u64 = OWN_STEPPER_DRIVE_TIMEOUT_MS;
 pub(crate) static OWN_STEPPER_DRIVE_CALLS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 /// PHASE 5 (MENU_BUILD): the parked press-any-button title is the FIRST state 10 and has
 /// NOT run STEP_BeginTitle(3) yet, so the Continue/Load-Game items do not exist at
@@ -1022,14 +1035,11 @@ pub(crate) static OWN_STEPPER_DRIVE_CALLS: AtomicUsize = AtomicUsize::new(MENU_T
 /// functor's _Do_call chain resolves to dialog_factory 0x14081ead0). Max state reached =
 /// main menu (no PlayGame) -> save-safe.
 pub(crate) const OWN_STEPPER_PHASE_MENU_BUILD: usize = OwnStepperPhase::MenuBuild as usize;
-/// Max idx10 re-entries to wait for the main menu to build before giving up (stay at the
-/// title, no save write). The intro FadeIn takes ~176 frames to reach the Loop state where the
-/// open-menu registrar fires; AFTER that the opened TitleTopDialog menu fades in and only then
-/// does the Load-Game leaf d180 begin ticking (the leaf-Update hook captures it). Runtime: that
-/// zero-input capture lands a few hundred frames PAST the open-menu self-fire -- past the old
-/// 600 cap -- so idx10 gave up before consuming it. Stay generous: staying at the title is
-/// strictly NO-WRITE, so a long wait costs nothing. ~50s at 60fps.
-pub(crate) const OWN_STEPPER_MENU_BUILD_WAIT_MAX: u64 = OwnStepperFrameBudget::Frames3000 as u64;
+/// Wall-clock fail-safe to wait for semantic menu-build predicates before giving up (stay at the
+/// title, no save write). The intro/menu animation cadence varies by runtime, so this is a no-write
+/// abort deadline only; readiness comes from native dialog/menu predicates.
+pub(crate) const OWN_STEPPER_MENU_BUILD_WAIT_MAX: u64 = OWN_STEPPER_MENU_BUILD_TIMEOUT_MS;
+/// Menu-build poll counter for diagnostics/log throttling, not a readiness gate.
 pub(crate) static OWN_STEPPER_MENU_BUILD_WAITS: AtomicUsize =
     AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 /// MenuWindowJob::Update 0x1407ad1c0 -- the native menu pump calls it with rcx = a
@@ -1123,7 +1133,7 @@ pub(crate) const OWN_STEPPER_B80_PREVIEW_LANE: i32 = OwnStepperB80State::Preview
 /// (reusing the resident iodev request the preview started).
 pub(crate) const OWN_STEPPER_B80_IDLE: i32 = OwnStepperB80State::Idle as i32;
 /// idx6 calls to wait (MoveMapStep settle) before deserializing the real slot.
-pub(crate) const OWN_STEPPER_IDX6_SETTLE: u64 = OwnStepperFrameBudget::Frames120 as u64;
+pub(crate) const OWN_STEPPER_IDX6_SETTLE: u64 = OWN_STEPPER_IDX6_SETTLE_TICKS;
 pub(crate) const OWN_STEPPER_SLOT_NONE: i32 = !OWN_STEPPER_SLOT_ZERO;
 /// Lowest valid save-slot index (used to bounds-check the dialog cursor in STAGE 2).
 pub(crate) const OWN_STEPPER_SLOT_ZERO: i32 = false as i32;
@@ -1242,6 +1252,24 @@ pub(crate) const MENU_ITEM_CTX_10_OFFSET: usize =
     core::mem::offset_of!(MenuWindowJobLayout, dialog_context);
 pub(crate) const MENU_ITEM_DIALOG_RESULT_130_OFFSET: usize =
     core::mem::offset_of!(MenuWindowJobLayout, dialog_result);
+/// Main-title Continue row action `_Do_call` thunk. This is the `+0xa8` action on the
+/// first focused MenuWindowJob after native `TitleTopDialog::open_menu`; it builds the native
+/// row result consumed by the FD4 menu submit helper, not a save-load/direct-confirm shortcut.
+pub(crate) const MENU_TITLE_CONTINUE_DOCALL_RVA: usize = 0x00764b80;
+/// Native FD4 row submit helper used by `MenuWindowJob::Update` for one result-mode branch.
+/// It forwards event `3` to the row result's own vtable slot `+0x60`.
+pub(crate) const MENU_ITEM_SUBMIT_RVA: usize = 0x007ac890;
+/// Row-result field consumed by `MenuWindowJob::Update` to choose which native accept event branch
+/// to send to the built row result.
+pub(crate) const MENU_ITEM_RESULT_MODE_58_OFFSET: usize = 0x58;
+/// Row-result virtual event handler slot. Both native accept branches dispatch through this slot.
+pub(crate) const MENU_ITEM_RESULT_EVENT_SLOT_60_OFFSET: usize = 0x60;
+/// Tiny FD4 event constructor: writes `{ code: edx, payload: r8d }` to the output slot.
+pub(crate) const FD4_EVENT_CONSTRUCTOR_RVA: usize = 0x007a91e0;
+pub(crate) const MENU_ITEM_RESULT_MODE_EVENT3: i32 = 1;
+pub(crate) const MENU_ITEM_RESULT_MODE_EVENT4: i32 = 2;
+pub(crate) const MENU_ITEM_RESULT_EVENT4_CODE: i32 = 4;
+pub(crate) const MENU_ITEM_RESULT_EVENT4_PAYLOAD: i32 = -1;
 /// GameMan+0xc30 new-game DEFAULT map (m10_01_00_00). The mount writes the slot's REAL map
 /// here; for a NON-m10 char `c30 != this` corroborates the mount (for an m10 char it is
 /// ambiguous -- ac0 is the primary mount oracle). Packed mAA_BB_CC_DD.
@@ -1253,9 +1281,11 @@ pub(crate) enum GameManMapId {
 pub(crate) const GAME_MAN_NEWGAME_DEFAULT_MAP: i32 = GameManMapId::NewGameDefault as i32;
 /// STAGE 2 invocation is gated by concrete menu/action/dialog readiness, not by a fixed
 /// post-open settle frame count.
-/// Max frames per S2 phase before failing closed (stay at the menu, NO SetState(5), NO write).
-pub(crate) const OWN_STEPPER_S2_PHASE_MAX: u64 = OwnStepperFrameBudget::Frames1200 as u64;
-/// Per-phase frame counter for the S2 machine (reset on each phase transition).
+/// Wall-clock fail-safe per S2 phase before failing closed (stay at the menu, NO SetState(5),
+/// NO write). Readiness is still semantic (`ProfileLoadDialog`, selector tick, mount latch, char
+/// fingerprint), not elapsed time.
+pub(crate) const OWN_STEPPER_S2_PHASE_MAX: u64 = OWN_STEPPER_S2_PHASE_TIMEOUT_MS;
+/// Per-phase poll counter for S2 diagnostics/log throttling, not a readiness gate.
 pub(crate) static OWN_STEPPER_S2_WAITS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 /// The built+validated ProfileLoadDialog pointer (0 until PHASE_S2_INVOKE succeeds).
 pub(crate) static OWN_STEPPER_DIALOG: AtomicUsize =
@@ -2148,6 +2178,10 @@ pub(crate) static MENU_LOADGAME_ROW_ENTRY: AtomicUsize =
 /// The matching "Continue" row entry (action -> continue_confirm 0x140b0e180), for reference.
 pub(crate) static MENU_CONTINUE_ROW_ENTRY: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Native title-menu task node whose update wrapper is ContinueWrapper 0x14082bac0. Captured by
+/// the FD4 registry enqueue hook after TitleTopDialog::open_menu materializes the native menu.
+pub(crate) static MENU_CONTINUE_TASK_NODE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// router_this ctor RVA and its installed (runtime) primary vtable RVA (= base+this at runtime;
 /// on-disk objdump shows 0x2af9270, +0xe00 dump/PE skew).
 /// REAL function entry is 0x1409060d0 (`rex push rbp` prologue, objdump-verified); the doc's
@@ -2205,7 +2239,7 @@ pub(crate) const APPEND_ONE_RVA: u32 = 0x0078eea0;
 pub(crate) const ROW_CONTAINER_BACKPTR_8: usize = 0x8;
 pub(crate) static CAP_SELECTOR_TICK_COUNT: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) const CAP_SELECTOR_TICK_LOG_FIRST: usize = TraceSampleLimit::Value4 as usize;
-pub(crate) const CAP_SELECTOR_TICK_LOG_INTERVAL: usize = OwnStepperFrameBudget::Frames120 as usize;
+pub(crate) const CAP_SELECTOR_TICK_LOG_INTERVAL: usize = CAP_SELECTOR_TICK_LOG_INTERVAL_TICKS;
 /// Selector-owner step (0x140826d50) install-flag field: 0 on the first tick (fires the
 /// delegate-installer 0x140828270), 1 afterwards.
 #[repr(C)]
@@ -2882,10 +2916,12 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     if lite_mode() {
                         return;
                     }
-                    // Product autoload: run the minimal native save-load core from the recurring
-                    // game task, before the title/front-end stepper is needed. This bypasses
-                    // title-accept input injection, press-any/logo/menu-open state, and the idx10
-                    // MenuJobWait hook path; readiness is checked inside product_core_autoload_tick.
+                    // Product autoload: run the native title open-menu predicate + minimal
+                    // native save-load core from the recurring game task, before the idx10
+                    // MenuJobWait hook path is needed. This bypasses title-accept/input
+                    // injection while still advancing the data-driven PressStart/PRESS BUTTON
+                    // component through its native open-menu registrar; readiness is checked
+                    // inside product_core_autoload_tick.
                     if product_autoload_enabled() {
                         if let (Ok(base), Some(slot)) = (game_module_base(), state.autoload.slot())
                         {

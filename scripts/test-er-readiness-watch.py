@@ -265,6 +265,24 @@ def main() -> int:
     }
     assert watcher.telemetry_world_loaded(world_loaded_telemetry)
     assert watcher.telemetry_world_tick(world_loaded_telemetry, 0) == TEST_POLLS
+    selector_loaded_telemetry = {
+        **world_loaded_telemetry,
+        "oracle_grounded": False,
+        "oracle_now_loading": 1,
+        "oracle_char_level": 9,
+        "oracle_char_current_hp": 522,
+        "oracle_char_stats": [15, 10, 11, 14, 13, 9, 9, 7],
+        "oracle_chr_model_ins_present": True,
+        "oracle_chr_ctrl_present": True,
+        "oracle_chr_onscreen": True,
+        "oracle_chr_render_group_enabled": True,
+        "oracle_chr_enable_render": True,
+        "oracle_player_render_ready": False,
+        "oracle_blocking_modal_present": False,
+    }
+    assert watcher.telemetry_world_loaded(selector_loaded_telemetry)
+    selector_loaded_telemetry["oracle_blocking_modal_present"] = True
+    assert not watcher.telemetry_world_loaded(selector_loaded_telemetry)
     world_loaded_telemetry["oracle_load_in_progress_b80"] = 1
     assert not watcher.telemetry_world_loaded(world_loaded_telemetry)
     world_loaded_telemetry["oracle_load_in_progress_b80"] = 0
