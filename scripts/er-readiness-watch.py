@@ -15,7 +15,7 @@ import shutil
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -59,9 +59,18 @@ READINESS_BUDGET_EXHAUSTED = "readiness_poll_budget_exhausted"
 TIMEOUT_BUDGET_EXHAUSTED = "timeout_seconds_budget_exhausted"
 VISUAL_LOADING_SCREEN_DETECTED = "visual_loading_screen_detected"
 LEGAL_POPUP_DETECTED = "visual_legal_popup_detected"
+SAVE_DATA_POPUP_DETECTED = "visual_save_data_popup_detected"
+MESSAGEBOX_DIALOG_DETECTED = "native_messagebox_dialog_detected"
 VISUAL_CHECK_SUBPROCESS_TIMEOUT_SECONDS = 10.0
 VISUAL_OCR_PREVIEW_CHARS = 1000
 LEGAL_POPUP_CHECK_INTERVAL_SECONDS = 0.75
+SAVE_DATA_POPUP_CHECK_INTERVAL_SECONDS = 0.75
+RUNTIME_MODE_ANY = "any"
+RUNTIME_MODE_VANILLA = "vanilla"
+RUNTIME_MODE_SEAMLESS = "seamless"
+RUNTIME_MODE_UNKNOWN = "unknown"
+RUNTIME_MODE_MISMATCH = "runtime_mode_mismatch"
+SEAMLESS_MODULE_MARKERS = ("ersc.dll", "/seamlesscoop/", "\\seamlesscoop\\")
 LOADING_SCREEN_OCR_PATTERNS = [
     re.compile(r"\bcritical hits?\b", re.I),
     re.compile(r"\bcritical hit\b", re.I),
@@ -83,6 +92,12 @@ LEGAL_POPUP_OCR_PATTERNS = [
     re.compile(r"\bterms of (?:use|service)\b", re.I),
     re.compile(r"\bprivacy policy\b", re.I),
     re.compile(r"\buser agreement\b", re.I),
+]
+SAVE_DATA_POPUP_OCR_PATTERNS = [
+    re.compile(r"\bfailed to load save data\b", re.I),
+    re.compile(r"\bsave data (?:could not|cannot|can't) be loaded\b", re.I),
+    re.compile(r"\bunable to load save data\b", re.I),
+    re.compile(r"\bload save data failed\b", re.I),
 ]
 VISUAL_LEGAL_OCR_CROPS = [
     ("whole", "640x360+0+0"),
@@ -126,6 +141,10 @@ class ReadinessResult:
     world_stable_samples: int = 0
     expected_save_oracle: dict[str, Any] | None = None
     expected_animation_id: int | None = None
+    runtime_mode_expected: str | None = None
+    runtime_mode_actual: str | None = None
+    runtime_mode_match: bool | None = None
+    seamless_module_mappings: list[dict[str, Any]] | None = None
 
     def to_json(self) -> dict[str, Any]:
         payload = {
@@ -140,6 +159,10 @@ class ReadinessResult:
             "runtime_module_base": self.runtime_module_base,
             "runtime_module_mappings": self.runtime_module_mappings or [],
             "world_stable_samples": self.world_stable_samples,
+            "runtime_mode_expected": self.runtime_mode_expected,
+            "runtime_mode_actual": self.runtime_mode_actual,
+            "runtime_mode_match": self.runtime_mode_match,
+            "seamless_module_mappings": self.seamless_module_mappings or [],
         }
         oracle = oracle_summary(self.telemetry, self.expected_save_oracle, self.expected_animation_id)
         if oracle:
@@ -248,6 +271,82 @@ def runtime_module_mappings(pid: int) -> list[dict[str, Any]]:
     return mappings
 
 
+def seamless_module_mappings(pid: int | None) -> list[dict[str, Any]]:
+    if pid is None:
+        return []
+    maps_path = Path("/proc", str(pid), "maps")
+    if not maps_path.exists():
+        return []
+    matches: list[dict[str, Any]] = []
+    for line in maps_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not any(marker in line.lower() for marker in SEAMLESS_MODULE_MARKERS):
+            continue
+        fields = line.split(maxsplit=5)
+        if len(fields) < 5:
+            continue
+        start_text, _, end_text = fields[0].partition("-")
+        path = fields[5] if len(fields) >= 6 else ""
+        matches.append(
+            {
+                "start": f"0x{int(start_text, 16):x}",
+                "end": f"0x{int(end_text, 16):x}",
+                "permissions": fields[1],
+                "offset": f"0x{int(fields[2], 16):x}",
+                "device": fields[3],
+                "inode": fields[4],
+                "path": path,
+            }
+        )
+    return matches
+
+
+def telemetry_seamless_loaded(telemetry: dict[str, Any] | None) -> bool | None:
+    if not isinstance(telemetry, dict):
+        return None
+    if telemetry.get("seamless_coop_loaded") is True or telemetry.get("runtime_mode") == RUNTIME_MODE_SEAMLESS:
+        return True
+    if telemetry.get("seamless_coop_loaded") is False:
+        return False
+    return None
+
+
+def observed_runtime_mode(pid: int | None, telemetry: dict[str, Any] | None) -> tuple[str, list[dict[str, Any]]]:
+    mappings = seamless_module_mappings(pid)
+    telemetry_loaded = telemetry_seamless_loaded(telemetry)
+    if mappings or telemetry_loaded is True:
+        return RUNTIME_MODE_SEAMLESS, mappings
+    if telemetry_loaded is False:
+        return RUNTIME_MODE_VANILLA, mappings
+    return RUNTIME_MODE_UNKNOWN, mappings
+
+
+def runtime_mode_matches(expected: str, actual: str) -> bool:
+    if expected == RUNTIME_MODE_ANY:
+        return True
+    if expected == RUNTIME_MODE_VANILLA:
+        return actual != RUNTIME_MODE_SEAMLESS
+    if expected == RUNTIME_MODE_SEAMLESS:
+        return actual == RUNTIME_MODE_SEAMLESS
+    return False
+
+
+def runtime_mode_definite_mismatch(expected: str, actual: str) -> bool:
+    if expected == RUNTIME_MODE_ANY or actual == RUNTIME_MODE_UNKNOWN:
+        return False
+    return not runtime_mode_matches(expected, actual)
+
+
+def with_runtime_mode_info(result: ReadinessResult, expected: str) -> ReadinessResult:
+    actual, mappings = observed_runtime_mode(result.pid, result.telemetry)
+    return replace(
+        result,
+        runtime_mode_expected=expected,
+        runtime_mode_actual=actual,
+        runtime_mode_match=runtime_mode_matches(expected, actual),
+        seamless_module_mappings=mappings,
+    )
+
+
 def runtime_module_base(pid: int) -> tuple[str | None, list[dict[str, Any]]]:
     mappings = runtime_module_mappings(pid)
     zero_offset_starts = [
@@ -312,13 +411,22 @@ def select_runtime_pid(
 
 
 def process_exists(pid: int) -> bool:
-    return Path("/proc", str(pid)).exists()
+    proc = Path("/proc", str(pid))
+    if not proc.exists():
+        return False
+    try:
+        cmd = proc.joinpath("cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace").lower()
+        comm = proc.joinpath("comm").read_text(errors="replace").strip().lower()
+    except Exception:
+        return False
+    return RUNTIME_EXE_NAME in cmd or comm == RUNTIME_EXE_NAME
 
 
 def client_is_game_window(client: dict[str, Any], window_class: str) -> bool:
-    title = str(client.get("title") or "")
+    # Exact class only. Title fallback can match unrelated browser/tab titles and caused
+    # wrong-window OCR during a runtime probe; fail closed if the real ER window is absent.
     klass = str(client.get("class") or "")
-    return klass == window_class or title.lower().startswith("elden ring")
+    return klass == window_class
 
 
 def as_int(value: Any, default: int = -1) -> int:
@@ -371,12 +479,20 @@ def telemetry_expected_animation_match(telemetry: dict[str, Any], expected_anima
     return expected_animation_id is None or as_int(telemetry.get("current_animation_id"), -1) == expected_animation_id
 
 
-def telemetry_no_postload_popup(telemetry: dict[str, Any]) -> bool:
+def telemetry_messagebox_dialog_detected(telemetry: dict[str, Any] | None) -> bool:
+    if not isinstance(telemetry, dict):
+        return False
     return bool(
-        telemetry.get("oracle_blocking_modal_present") is not True
-        and telemetry.get("oracle_postload_modal_seen") is not True
-        and as_int(telemetry.get("oracle_msgbox_postload_builds"), -1) == 0
+        telemetry.get("oracle_msgbox_any_seen") is True
+        or as_int(telemetry.get("oracle_msgbox_total_builds"), 0) > 0
+        or telemetry.get("oracle_blocking_modal_present") is True
+        or telemetry.get("oracle_postload_modal_seen") is True
+        or as_int(telemetry.get("oracle_msgbox_postload_builds"), 0) > 0
     )
+
+
+def telemetry_no_postload_popup(telemetry: dict[str, Any]) -> bool:
+    return not telemetry_messagebox_dialog_detected(telemetry)
 
 
 def oracle_summary(
@@ -571,6 +687,10 @@ def legal_popup_ocr_matches(text: str) -> list[str]:
     return [pattern.pattern for pattern in LEGAL_POPUP_OCR_PATTERNS if pattern.search(text)]
 
 
+def save_data_popup_ocr_matches(text: str) -> list[str]:
+    return [pattern.pattern for pattern in SAVE_DATA_POPUP_OCR_PATTERNS if pattern.search(text)]
+
+
 def visual_legal_popup_visible(artifact_dir: Path, windows: list[dict[str, Any]], sample: int) -> bool:
     check_path = artifact_dir / f"legal-popup-check-{sample:03d}.json"
     result: dict[str, Any] = {"sample": sample, "legal_popup_detected": False}
@@ -662,6 +782,84 @@ def visual_legal_popup_visible(artifact_dir: Path, windows: list[dict[str, Any]]
                 "ocr_preview": text[:VISUAL_OCR_PREVIEW_CHARS],
             }
         )
+        return detected
+    except Exception as exc:
+        result["error"] = repr(exc)
+        return False
+    finally:
+        check_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def visual_save_data_popup_visible(artifact_dir: Path, windows: list[dict[str, Any]], sample: int) -> bool:
+    check_path = artifact_dir / f"save-data-popup-check-{sample:03d}.json"
+    result: dict[str, Any] = {"sample": sample, "save_data_popup_detected": False}
+    try:
+        if not windows:
+            result["error"] = "no_target_window"
+            return False
+        grim = shutil.which("grim")
+        tesseract = shutil.which("tesseract")
+        magick = shutil.which("magick") or shutil.which("convert")
+        result["capture_tools"] = {"grim": grim, "tesseract": tesseract, "magick": magick}
+        if not grim or not tesseract or not magick:
+            result["error"] = "missing_visual_check_tool"
+            return False
+        win = windows[0]
+        at = win.get("at") or []
+        size = win.get("size") or []
+        if len(at) != 2 or len(size) != 2:
+            result["error"] = "bad_window_geometry"
+            result["window"] = win
+            return False
+        geom = f"{int(at[0])},{int(at[1])} {int(size[0])}x{int(size[1])}"
+        png = artifact_dir / f"save-data-popup-check-{sample:03d}.png"
+        grim_run = subprocess.run(
+            [grim, "-g", geom, str(png)],
+            capture_output=True,
+            text=True,
+            timeout=VISUAL_CHECK_SUBPROCESS_TIMEOUT_SECONDS,
+        )
+        result["geom"] = geom
+        result["png"] = str(png)
+        result["window"] = win
+        result["grim_rc"] = grim_run.returncode
+        result["grim_stderr"] = grim_run.stderr.strip()
+        if grim_run.returncode != 0 or not png.exists():
+            result["error"] = "grim_failed"
+            return False
+        ocr_results = []
+        text_parts = []
+        for crop_name, crop in VISUAL_LEGAL_OCR_CROPS:
+            ocr_png = artifact_dir / f"save-data-popup-check-{sample:03d}.{crop_name}.ocr.png"
+            magick_run = subprocess.run(
+                [magick, str(png), "-crop", crop, "-resize", "300%", "-colorspace", "Gray", "-normalize", "-level", "20%,85%", "-sharpen", "0x1", str(ocr_png)],
+                capture_output=True,
+                text=True,
+                timeout=VISUAL_CHECK_SUBPROCESS_TIMEOUT_SECONDS,
+            )
+            ocr_input = ocr_png if ocr_png.exists() else png
+            ocr_run = subprocess.run(
+                [tesseract, str(ocr_input), "stdout", "--psm", "6"],
+                capture_output=True,
+                text=True,
+                timeout=VISUAL_CHECK_SUBPROCESS_TIMEOUT_SECONDS,
+            )
+            text_parts.append(ocr_run.stdout)
+            ocr_results.append(
+                {
+                    "crop": crop_name,
+                    "geometry": crop,
+                    "magick_rc": magick_run.returncode,
+                    "magick_stderr": magick_run.stderr.strip(),
+                    "ocr_rc": ocr_run.returncode,
+                    "ocr_stderr": ocr_run.stderr.strip(),
+                    "ocr_preview": ocr_run.stdout[:VISUAL_OCR_PREVIEW_CHARS],
+                }
+            )
+        text = "\n".join(text_parts)
+        matches = save_data_popup_ocr_matches(text)
+        detected = bool(matches)
+        result.update({"save_data_popup_detected": detected, "ocr_results": ocr_results, "ocr_matches": matches, "ocr_preview": text[:VISUAL_OCR_PREVIEW_CHARS]})
         return detected
     except Exception as exc:
         result["error"] = repr(exc)
@@ -822,6 +1020,8 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
     world_stable_samples = 0
     legal_popup_samples = 0
     next_legal_popup_check_at = 0.0
+    save_data_popup_samples = 0
+    next_save_data_popup_check_at = 0.0
     last_world_stable_tick: int | None = None
     world_stable_since: float | None = None
     for poll in range(args.readiness_poll_budget):
@@ -857,9 +1057,46 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
             )
         telemetry = read_json(args.telemetry)
         bootstrap = read_bootstrap(args.bootstrap, args.bootstrap_state)
-        windows = hypr_windows(args.window_class)
+        actual_runtime_mode, seamless_mappings = observed_runtime_mode(pid, telemetry)
+        if runtime_mode_definite_mismatch(args.expected_runtime_mode, actual_runtime_mode):
+            return with_runtime_module_info(
+                replace(
+                    ReadinessResult(
+                        False,
+                        RUNTIME_MODE_MISMATCH,
+                        pid,
+                        bootstrap,
+                        telemetry,
+                        [],
+                        spawn_polls + poll,
+                        float(args.max_runtime_seconds),
+                        expected_save_oracle=expected_save_oracle,
+                        expected_animation_id=args.expected_animation_id,
+                    ),
+                    runtime_mode_expected=args.expected_runtime_mode,
+                    runtime_mode_actual=actual_runtime_mode,
+                    runtime_mode_match=False,
+                    seamless_module_mappings=seamless_mappings,
+                )
+            )
+        if args.fail_on_messagebox_dialog and telemetry_messagebox_dialog_detected(telemetry):
+            return with_runtime_module_info(
+                ReadinessResult(
+                    False,
+                    MESSAGEBOX_DIALOG_DETECTED,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
+        windows = hypr_windows(args.window_class) if process_running else []
         now = time.monotonic()
-        if args.visual_legal_popup_check and windows and now >= next_legal_popup_check_at:
+        if process_running and args.visual_legal_popup_check and windows and now >= next_legal_popup_check_at:
             legal_popup_samples += 1
             next_legal_popup_check_at = now + args.visual_legal_popup_check_interval_seconds
             if visual_legal_popup_visible(args.artifact_dir, windows, legal_popup_samples):
@@ -867,6 +1104,24 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
                     ReadinessResult(
                         False,
                         LEGAL_POPUP_DETECTED,
+                        pid,
+                        bootstrap,
+                        telemetry,
+                        windows,
+                        spawn_polls + poll,
+                        float(args.max_runtime_seconds),
+                        expected_save_oracle=expected_save_oracle,
+                        expected_animation_id=args.expected_animation_id,
+                    )
+                )
+        if process_running and args.visual_save_data_popup_check and windows and now >= next_save_data_popup_check_at:
+            save_data_popup_samples += 1
+            next_save_data_popup_check_at = now + args.visual_save_data_popup_check_interval_seconds
+            if visual_save_data_popup_visible(args.artifact_dir, windows, save_data_popup_samples):
+                return with_runtime_module_info(
+                    ReadinessResult(
+                        False,
+                        SAVE_DATA_POPUP_DETECTED,
                         pid,
                         bootstrap,
                         telemetry,
@@ -1005,9 +1260,21 @@ def parse_args() -> argparse.Namespace:
         help="Expected in-world player animation ID for the gold-start oracle.",
     )
     parser.add_argument(
+        "--expected-runtime-mode",
+        choices=[RUNTIME_MODE_VANILLA, RUNTIME_MODE_SEAMLESS, RUNTIME_MODE_ANY],
+        default=RUNTIME_MODE_VANILLA,
+        help="Fail early when loaded modules/telemetry prove a mismatched Elden Ring mode.",
+    )
+    parser.add_argument(
         "--visual-world-check",
         action="store_true",
         help="Before accepting world-stable telemetry, OCR a target-window screenshot and reject loading-tip screens.",
+    )
+    parser.add_argument(
+        "--fail-on-messagebox-dialog",
+        action="store_true",
+        default=True,
+        help="Fail immediately if in-process telemetry sees any native CS::MessageBoxDialog build; ideal product runtime has zero.",
     )
     parser.add_argument(
         "--visual-legal-popup-check",
@@ -1019,6 +1286,17 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=LEGAL_POPUP_CHECK_INTERVAL_SECONDS,
         help="Minimum seconds between target-window legal-popup OCR samples.",
+    )
+    parser.add_argument(
+        "--visual-save-data-popup-check",
+        action="store_true",
+        help="Fail immediately when target-window OCR detects the in-game 'failed to load save data' popup.",
+    )
+    parser.add_argument(
+        "--visual-save-data-popup-check-interval-seconds",
+        type=float,
+        default=SAVE_DATA_POPUP_CHECK_INTERVAL_SECONDS,
+        help="Minimum seconds between target-window save-data-popup OCR samples.",
     )
     parser.add_argument(
         "--max-runtime-seconds",
@@ -1049,10 +1327,12 @@ def main() -> int:
         raise SystemExit("--world-stable-dwell-seconds must be greater than or equal to 0")
     if args.visual_legal_popup_check_interval_seconds <= 0:
         raise SystemExit("--visual-legal-popup-check-interval-seconds must be greater than 0")
+    if args.visual_save_data_popup_check_interval_seconds <= 0:
+        raise SystemExit("--visual-save-data-popup-check-interval-seconds must be greater than 0")
     if args.expected_save_oracle and read_json(args.expected_save_oracle) is None:
         raise SystemExit(f"--expected-save-oracle is not readable JSON: {args.expected_save_oracle}")
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
-    result = wait_readiness(args)
+    result = with_runtime_mode_info(wait_readiness(args), args.expected_runtime_mode)
     output = args.artifact_dir / "readiness-result.json"
     write_result(output, result)
     print(json.dumps(result.to_json(), sort_keys=True))

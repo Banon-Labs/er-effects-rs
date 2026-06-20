@@ -69,6 +69,18 @@ pub(crate) struct IoDeviceSnapshotLayout {
     pub(crate) request_handle: usize,
 }
 
+const SEAMLESS_COOP_MODULE_NAME: &[u8] = b"ersc.dll\0";
+const SEAMLESS_COOP_MARKER: &str = "ersc.dll";
+const RUNTIME_MODE_SEAMLESS: &str = "seamless";
+const RUNTIME_MODE_VANILLA_OR_UNKNOWN: &str = "vanilla_or_unknown";
+
+pub(crate) fn seamless_coop_loaded() -> bool {
+    matches!(
+        unsafe { GetModuleHandleA(PCSTR(SEAMLESS_COOP_MODULE_NAME.as_ptr())) },
+        Ok(module) if module.0 as usize != 0
+    )
+}
+
 pub(crate) fn bootstrap_path() -> PathBuf {
     std::env::var_os("ER_EFFECTS_BOOTSTRAP_PATH")
         .map(PathBuf::from)
@@ -146,9 +158,25 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         player_available || IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
     let path = telemetry_path();
     let mut body = String::new();
+    let seamless_loaded = seamless_coop_loaded();
+    let runtime_mode = if seamless_loaded {
+        RUNTIME_MODE_SEAMLESS
+    } else {
+        RUNTIME_MODE_VANILLA_OR_UNKNOWN
+    };
     body.push_str("{\n");
     body.push_str(&format!("  \"player_available\": {player_available},\n"));
     body.push_str(&format!("  \"player_seen\": {player_seen},\n"));
+    body.push_str(&format!("  \"runtime_mode\": \"{runtime_mode}\",\n"));
+    body.push_str(&format!("  \"seamless_coop_loaded\": {seamless_loaded},\n"));
+    body.push_str(&format!(
+        "  \"seamless_coop_marker\": {},\n",
+        if seamless_loaded {
+            format!("\"{}\"", json_escape(SEAMLESS_COOP_MARKER))
+        } else {
+            "null".to_owned()
+        }
+    ));
     body.push_str(&format!(
         "  \"current_animation_id\": {},\n",
         state
@@ -496,15 +524,18 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         } else {
             MSGBOX_CLOSING_YES
         };
-        const NO_POSTLOAD_MSGBOX_BUILDS: usize = MENU_TRACE_UNSEEN_SEQ;
-        let postload_modal_seen =
-            MSGBOX_POSTLOAD_BUILDS.load(Ordering::SeqCst) != NO_POSTLOAD_MSGBOX_BUILDS;
+        const NO_MSGBOX_BUILDS: usize = MENU_TRACE_UNSEEN_SEQ;
+        let msgbox_total_builds = MSGBOX_TOTAL_BUILDS.load(Ordering::SeqCst);
+        let msgbox_postload_builds = MSGBOX_POSTLOAD_BUILDS.load(Ordering::SeqCst);
+        let msgbox_any_seen = msgbox_total_builds != NO_MSGBOX_BUILDS;
+        let postload_modal_seen = msgbox_postload_builds != NO_MSGBOX_BUILDS;
         let blocking_modal_present = msgbox_vtable == base + MSGBOX_DIALOG_VTABLE_RVA
             && msgbox_closing_latch != MSGBOX_CLOSING_YES;
         body.push_str(&format!(
-            "  \"oracle_msgbox_total_builds\": {},\n  \"oracle_msgbox_postload_builds\": {},\n  \"oracle_postload_modal_seen\": {},\n  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n",
-            MSGBOX_TOTAL_BUILDS.load(Ordering::SeqCst),
-            MSGBOX_POSTLOAD_BUILDS.load(Ordering::SeqCst),
+            "  \"oracle_msgbox_total_builds\": {},\n  \"oracle_msgbox_any_seen\": {},\n  \"oracle_msgbox_postload_builds\": {},\n  \"oracle_postload_modal_seen\": {},\n  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n",
+            msgbox_total_builds,
+            msgbox_any_seen,
+            msgbox_postload_builds,
             postload_modal_seen,
             blocking_modal_present,
             msgbox_dialog,

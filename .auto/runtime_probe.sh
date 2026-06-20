@@ -5,10 +5,33 @@ REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
 RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-60}"
 RUNTIME_LAZYLOAD_CHAINLOAD_DLL="${RUNTIME_LAZYLOAD_CHAINLOAD_DLL:-er_effects_rs.dll}"
+RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-vanilla}"
 POLICY_PATH="$REPO_ROOT/.auto/runtime_experiment_policy.rego"
+SEAMLESS_DLL_PATH="$GAME_DIR/SeamlessCoop/ersc.dll"
+SEAMLESS_STAGED_PATH="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe}/staged-away/ersc.dll"
 
 cleanup_runtime() {
-  :
+  if [[ "$RUNTIME_EXPECTED_MODE" == "seamless" && -f "$SEAMLESS_STAGED_PATH" && ! -f "$SEAMLESS_DLL_PATH" ]]; then
+    mkdir -p "$(dirname "$SEAMLESS_DLL_PATH")"
+    mv -f "$SEAMLESS_STAGED_PATH" "$SEAMLESS_DLL_PATH"
+  fi
+}
+
+stage_runtime_mode_payload() {
+  case "$RUNTIME_EXPECTED_MODE" in
+    vanilla)
+      if [[ -f "$SEAMLESS_DLL_PATH" ]]; then
+        mkdir -p "$(dirname "$SEAMLESS_STAGED_PATH")"
+        mv -f "$SEAMLESS_DLL_PATH" "$SEAMLESS_STAGED_PATH"
+      fi
+      ;;
+    seamless|any)
+      ;;
+    *)
+      echo "RUNTIME_EXPECTED_MODE must be vanilla, seamless, or any" >&2
+      exit 2
+      ;;
+  esac
 }
 
 runtime_policy_input() {
@@ -77,6 +100,7 @@ EOF
 
 trap cleanup_runtime EXIT
 validate_runtime_policy
+stage_runtime_mode_payload
 setup_runtime_payload
 python3 "$REPO_ROOT/scripts/er-readiness-watch.py" \
   --artifact-dir "${ARTIFACT_DIR:?ARTIFACT_DIR is required}" \
@@ -85,5 +109,8 @@ python3 "$REPO_ROOT/scripts/er-readiness-watch.py" \
   --bootstrap "${BOOTSTRAP_PATH:?BOOTSTRAP_PATH is required}" \
   --bootstrap-state "${BOOTSTRAP_STATE_PATH:?BOOTSTRAP_STATE_PATH is required}" \
   --target "${RUNTIME_WATCH_TARGET:-world-stable}" \
+  --expected-runtime-mode "$RUNTIME_EXPECTED_MODE" \
+  --fail-on-messagebox-dialog \
   --visual-legal-popup-check \
+  --visual-save-data-popup-check \
   --max-runtime-seconds "$RUNTIME_TIMEOUT_SECONDS"

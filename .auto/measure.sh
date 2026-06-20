@@ -11,6 +11,8 @@ root = Path.cwd()
 lib = (root / 'src/lib.rs').read_text(encoding='utf-8', errors='replace')
 exp = (root / 'src/experiments.rs').read_text(encoding='utf-8', errors='replace')
 check = (root / 'scripts/check-autoload-happy-path.py').read_text(encoding='utf-8', errors='replace')
+telemetry_src = (root / 'src/telemetry.rs').read_text(encoding='utf-8', errors='replace')
+watcher = (root / 'scripts/er-readiness-watch.py').read_text(encoding='utf-8', errors='replace')
 prompt = (root / '.auto/prompt.md').read_text(encoding='utf-8', errors='replace') if (root / '.auto/prompt.md').exists() else ''
 combined = lib + '\n' + exp
 
@@ -110,7 +112,7 @@ if 'product_core_autoload_tick' not in lib_code:
     autoload_static_failures += 1
 else:
     product_core_pos = lib_code.find('product_core_autoload_tick')
-    for later in ['own_stepper_patch_once', 'title_accept_tick']:
+    for later in ['title_accept_tick']:
         later_pos = lib_code.find(later)
         if later_pos != -1 and product_core_pos > later_pos:
             legacy_failures.append(f'product_core_autoload_tick appears after legacy path {later}')
@@ -151,19 +153,21 @@ for fn in function_names:
             fixed_wait_predicates += 1
 
 product_body = function_body('product_core_autoload_tick', exp_code)
+native_fullread_body = function_body('native_fullread_tick', exp_code) or ''
 product_continue_body = function_body('product_continue_autoload_tick', exp_code) or ''
 submit_body = function_body('submit_native_continue_item_action', exp_code) or ''
 continue_item_body = function_body('product_continue_item_action', exp_code) or ''
-product_related = '\n'.join([product_body or '', product_continue_body, submit_body, continue_item_body])
+product_related = '\n'.join([product_body or '', function_body('own_stepper_idx10', exp_code) or '', function_body('own_stepper_stage2', exp_code) or '', function_body('cold_char_mount_drive', exp_code) or ''])
+product_input_audit = '\n'.join([product_body or '', function_body('own_stepper_direct_build', exp_code) or '', function_body('own_stepper_stage2', exp_code) or '', function_body('cold_char_mount_drive', exp_code) or ''])
 if product_body is None:
     legacy_failures.append('missing product_core_autoload_tick under native-path audit')
     autoload_static_failures += 1
 else:
-    if 'own_stepper_direct_build' in product_body:
-        legacy_failures.append('product_core_autoload_tick still calls broken direct_build path')
+    if 'own_stepper_enter_menu_build_phase' not in product_body:
+        legacy_failures.append('product_core_autoload_tick no longer hands off to idx10 menu-build/direct ProfileLoadDialog path')
         autoload_static_failures += 1
-    if 'product_continue_autoload_tick' not in product_body or 'product_continue_action_ready' not in product_body:
-        legacy_failures.append('product_core_autoload_tick no longer routes through product Continue action readiness')
+    if 'product_continue_autoload_tick' in product_body or 'submit_native_continue_item_action' in product_body:
+        legacy_failures.append('product_core_autoload_tick still routes through native Continue row instead of direct ProfileLoadDialog stage2')
         autoload_static_failures += 1
 
 if 'live_dialog_settle_threshold_is_90' in check or 'proven 90-frame threshold' in check:
@@ -191,23 +195,22 @@ for label, patterns in asset_requirements.items():
         asset_failures.append(f'asset chain missing {label}')
 
 native_failures: list[str] = []
-for name in ['product_continue_item_action', 'submit_native_continue_item_action']:
-    if not re.search(rf'\bfn\s+{name}\b', exp_code):
-        native_failures.append(f'missing native Continue helper {name}')
 for token in [
-    'MENU_WINDOW_JOB_VTABLE_RVA',
-    'MENU_TITLE_CONTINUE_DOCALL_RVA',
-    'MENU_ITEM_DIALOG_RESULT_130_OFFSET',
-    'MENU_ITEM_SUBMIT_RVA',
-    'MENU_ITEM_RESULT_EVENT_SLOT_60_OFFSET',
-    'FD4_EVENT_CONSTRUCTOR_RVA',
+    'direct_build_enabled() || product_autoload_enabled()',
+    'own_stepper_direct_build',
+    'profile_load_dialog_ready',
+    'cold_char_mount_drive',
+    'GAME_MAN_SLOT_SELECT_B78_OFFSET',
+    'FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA',
+    'B80_FULL_LOAD_INITIATOR_RVA',
+    'B80_LANE1_DRIVER_RVA',
+    'B80_POLL_RVA',
+    'DESERIALIZE_SLOT_RVA',
+    'CONTINUE_CONFIRM_RVA',
+    'native_fullread_commit_enabled',
 ]:
     if token not in product_related:
-        native_failures.append(f'native Continue path missing token {token}')
-if continue_item_body and 'MENU_TITLE_CONTINUE_DOCALL_RVA' not in continue_item_body:
-    native_failures.append('Continue item action does not validate Continue docall')
-if submit_body and 'MENU_ITEM_SUBMIT_RVA' not in submit_body and 'MENU_ITEM_RESULT_EVENT_SLOT_60_OFFSET' not in submit_body:
-    native_failures.append('submit helper does not use native submit/event dispatch')
+        native_failures.append(f'direct ProfileLoadDialog/full-read product path missing token {token}')
 
 field58_failures: list[str] = []
 if 'MENU_ITEM_RESULT_MODE_58_OFFSET' in submit_body and re.search(r'if\s+mode\s*==', submit_body):
@@ -225,19 +228,19 @@ direct_tokens = [
 ]
 for token in direct_tokens:
     if token in product_related:
-        direct_failures.append(f'product/native submit body contains direct shortcut token {token}')
+        direct_failures.append(f'product/native full-read body contains direct shortcut token {token}')
 if 'CONTINUE_CONFIRM_RVA' in product_related and not (
-    'MODAL-CONFIRM-DISABLED' in product_continue_body
-    and 'modal_disable_ready' in product_continue_body
-    and 'c30_loaded_sane' in product_continue_body
-    and 'fp_real' in product_continue_body
+    'guard_pass' in native_fullread_body
+    and 'native_fullread_commit_enabled' in native_fullread_body
+    and 'TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET' in native_fullread_body
+    and 'fp_real' in native_fullread_body
 ):
-    direct_failures.append('product/native submit body contains unguarded direct continue_confirm')
+    direct_failures.append('product/native full-read body contains unguarded continue_confirm')
 
 input_failures: list[str] = []
 for token in ['input_probe_enabled', 'inject_nav_enabled', 'menu_input_probe', 'set_injected_key', 'SAFE_INPUT_CONFIRM', 'DIK_DOWN', 'XInput']:
-    if token in product_related:
-        input_failures.append(f'product/native submit body contains input path token {token}')
+    if token in product_input_audit:
+        input_failures.append(f'product/direct ProfileLoadDialog body contains input path token {token}')
 if re.search(r'Down \+ accept.*product proof', prompt, re.IGNORECASE):
     input_failures.append('prompt still frames Down+accept as product proof')
 
@@ -247,19 +250,63 @@ if 'er_effects_rs.dll' not in prompt and 'chainload DLL' not in prompt and 'DLL'
 for token in ['eldenring.exe patch', 'patch eldenring.exe', 'loose asset edits as product']:
     if token in prompt.lower() and 'do not' not in prompt.lower():
         dll_failures.append(f'prompt may allow forbidden product vehicle: {token}')
-if not product_continue_body:
-    dll_failures.append('missing product_continue_autoload_tick implementation')
+if not native_fullread_body:
+    dll_failures.append('missing native_fullread_tick implementation')
 
 runtime_failures: list[str] = []
+runtime_mode_failures: list[str] = []
 eula_popup_failures: list[str] = []
+save_data_popup_failures: list[str] = []
+messagebox_dialog_failures: list[str] = []
+for token in [
+    'seamless_coop_loaded',
+    'runtime_mode',
+    'GetModuleHandleA',
+    'ersc.dll',
+]:
+    if token not in telemetry_src:
+        runtime_mode_failures.append(f'telemetry missing runtime-mode semaphore token {token}')
+for token in [
+    '--expected-runtime-mode',
+    'runtime_mode_mismatch',
+    'seamless_module_mappings',
+    'SEAMLESS_MODULE_MARKERS',
+]:
+    if token not in watcher:
+        runtime_mode_failures.append(f'readiness watcher missing runtime-mode precondition token {token}')
+for token in [
+    'oracle_msgbox_total_builds',
+    'oracle_msgbox_any_seen',
+]:
+    if token not in telemetry_src:
+        messagebox_dialog_failures.append(f'telemetry missing native MessageBoxDialog zero-oracle token {token}')
+for token in [
+    '--fail-on-messagebox-dialog',
+    'native_messagebox_dialog_detected',
+    'telemetry_messagebox_dialog_detected',
+]:
+    if token not in watcher:
+        messagebox_dialog_failures.append(f'readiness watcher missing native MessageBoxDialog fail-fast token {token}')
+for token in [
+    '--visual-save-data-popup-check',
+    'visual_save_data_popup_detected',
+    'failed to load save data',
+]:
+    if token not in watcher:
+        save_data_popup_failures.append(f'readiness watcher missing save-data-popup semaphore token {token}')
 if any(token in product_continue_body for token in ['T_loadgame_menu_fallback', 'fire_live_loadgame_node', 'Load Game menu fallback']):
     eula_popup_failures.append('product path can still open native Load Game fallback instead of failing closed on invalid/empty Continue target')
 required_runtime = ['ready', 'product_submit', 'continue_load', 'deserialize', 'confirm', 'world', 'zero_input', 'expected_save', 'expected_animation', 'no_postload_popup']
 legal_popup_by_dir: dict[str, list[str]] = {}
+save_data_popup_by_dir: dict[str, list[str]] = {}
+messagebox_by_dir: dict[str, list[str]] = {}
+runtime_mode_by_dir: dict[str, list[str]] = {}
 best_runtime: tuple[int, Path | None, dict[str, bool]] = (0, None, {key: False for key in required_runtime})
+latest_runtime_dir: Path | None = None
 rt_root = root / 'target/runtime-probe'
 if rt_root.exists():
     candidates = sorted((p for p in rt_root.glob('product-core-*') if p.is_dir()), key=lambda p: p.stat().st_mtime, reverse=True)[:30]
+    latest_runtime_dir = candidates[0] if candidates else None
     for d in candidates:
         proof = {key: False for key in required_runtime}
         for name in ['readiness-result.json', 'max-oracle-result.json', 'telemetry.json']:
@@ -273,6 +320,25 @@ if rt_root.exists():
             if data.get('ready') is True or data.get('success') is True:
                 proof['ready'] = True
             raw = json.dumps(data)
+            if re.search(r'"reason"\s*:\s*"native_messagebox_dialog_detected"', raw) or re.search(r'"oracle_msgbox_any_seen"\s*:\s*true', raw) or re.search(r'"oracle_msgbox_total_builds"\s*:\s*[1-9]\d*', raw):
+                messagebox_by_dir[d.name] = [
+                    f'runtime artifact {d.name} observed native CS::MessageBoxDialog build(s); product proof requires zero MessageBoxDialog popups'
+                ]
+            if re.search(r'"reason"\s*:\s*"visual_save_data_popup_detected"', raw):
+                save_data_popup_by_dir[d.name] = [
+                    f'runtime artifact {d.name} failed with visual_save_data_popup_detected'
+                ]
+            seamless_observed = (
+                re.search(r'"seamless_coop_loaded"\s*:\s*true', raw)
+                or re.search(r'"runtime_mode_actual"\s*:\s*"seamless"', raw)
+                or 'SeamlessCoop' in raw
+                or 'ersc.dll' in raw
+            )
+            seamless_expected = re.search(r'"runtime_mode_expected"\s*:\s*"seamless"', raw)
+            if seamless_observed and not seamless_expected:
+                runtime_mode_by_dir.setdefault(d.name, []).append(
+                    f'runtime artifact {d.name} loaded Seamless/ERSC markers while not marked runtime_mode_expected=seamless'
+                )
             if 'simulated_button_presses_total' in raw and re.search(r'"simulated_button_presses_total"\s*:\s*0', raw):
                 proof['zero_input'] = True
             if re.search(r'world[-_ ]?stable|max oracle|SetState5', raw, re.IGNORECASE):
@@ -320,18 +386,31 @@ if rt_root.exists():
             legal_popup_by_dir[d.name] = [
                 f'runtime artifact {d.name} failed immediately with visual_legal_popup_detected but legal OCR evidence file was missing'
             ]
+        save_data_evidence: list[str] = []
+        for save_popup_path in sorted(d.glob('save-data-popup-check-*.json')):
+            try:
+                save_popup_data = json.loads(save_popup_path.read_text(encoding='utf-8', errors='replace'))
+            except Exception:
+                continue
+            if save_popup_data.get('save_data_popup_detected') is True:
+                matches = save_popup_data.get('ocr_matches') or []
+                save_data_evidence.append(f'{save_popup_path.name} matches={matches}')
+        if save_data_evidence:
+            save_data_popup_by_dir[d.name] = [
+                f'runtime artifact {d.name} detected failed-save-data popup from captured target-window OCR evidence: {"; ".join(save_data_evidence)}'
+            ]
         for name in ['autoload-debug-live.final.log', 'continue-trace-game.final.log', 'continue-trace-game.log']:
             p = d / name
             if not p.exists():
                 continue
             text = p.read_text(encoding='utf-8', errors='replace')[-200_000:]
-            if 'SUBMITTED native Continue' in text or 'native Continue submit' in text:
+            if 'native-fullread: SUBMIT' in text or 'FULL-INIT' in text:
                 proof['product_submit'] = True
-            if 'continue_load_67b750' in text:
+            if 'native-fullread: b80 reached RESIDENT' in text or 'full read' in text or 'FULL-INIT' in text:
                 proof['continue_load'] = True
-            if 'b80_deserialize_67b290' in text or 'CAP b80_deserialize' in text or 'MODAL-CONFIRM-DISABLED loaded evidence' in text:
+            if 'native-fullread: DESER' in text or 'b80_deserialize_67b290' in text or 'CAP b80_deserialize' in text:
                 proof['deserialize'] = True
-            if 'CAP continue_confirm' in text or 'continue_confirm' in text or 'STAGE2-SETSTATE5 fired via disabled modal confirm' in text:
+            if 'native-fullread: *** COMMIT continue_confirm' in text or 'CAP continue_confirm' in text or 'STAGE2-SETSTATE5 fired' in text:
                 proof['confirm'] = True
             if 'simulated_button_presses_total=0' in text or 'simulated_button_presses_total": 0' in text:
                 proof['zero_input'] = True
@@ -347,11 +426,49 @@ else:
     missing = [key for key in required_runtime if not proof[key]]
     if missing:
         runtime_failures.append(f'runtime proof best artifact {best_dir.name} missing {",".join(missing)}')
+    runtime_mode_failures.extend(runtime_mode_by_dir.get(best_dir.name, []))
     eula_popup_failures.extend(legal_popup_by_dir.get(best_dir.name, []))
+scored_runtime_dirs = {p.name for p in [best_dir, latest_runtime_dir] if p is not None}
+for dir_name in scored_runtime_dirs:
+    messagebox_dialog_failures.extend(messagebox_by_dir.get(dir_name, []))
+    save_data_popup_failures.extend(save_data_popup_by_dir.get(dir_name, []))
+
+native_trace_blockers: list[str] = []
+native_trace_hits_total = 0
+native_trace_unique_breakpoints = 0
+native_trace_latest = ''
+trace_summaries = []
+if rt_root.exists():
+    trace_summaries = sorted(
+        rt_root.glob('user-drive-trace-*/trace-hit-summary.json'),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+if trace_summaries:
+    latest_trace = trace_summaries[0]
+    native_trace_latest = latest_trace.parent.name
+    try:
+        trace_data = json.loads(latest_trace.read_text(encoding='utf-8', errors='replace'))
+    except Exception as exc:
+        trace_data = {}
+        native_trace_blockers.append(f'native trace summary {latest_trace} is not readable JSON: {exc}')
+    hit_counts = trace_data.get('hit_counts') if isinstance(trace_data.get('hit_counts'), dict) else {}
+    native_trace_hits_total = int(trace_data.get('total_hits') or 0)
+    native_trace_unique_breakpoints = int(trace_data.get('unique_hits') or len(hit_counts))
+    required_trace_hits = ['0x14082c240', '0x14082c2c8', '0x14082c374', '0x14067a810', '0x14082c521']
+    missing_trace_hits = [addr for addr in required_trace_hits if int(hit_counts.get(addr, 0) or 0) <= 0]
+    if missing_trace_hits:
+        native_trace_blockers.append(
+            f'native trace {native_trace_latest} missing key Load Game continuation hits: {",".join(missing_trace_hits)}'
+        )
+    if trace_data.get('attached_marker') is not True or trace_data.get('continuing_marker') is not True:
+        native_trace_blockers.append(f'native trace {native_trace_latest} missing attached/continuing observer markers')
+else:
+    native_trace_blockers.append('native user-driven trace summary missing; tracebreakpoint/tooling blocker may still be unresolved')
 
 false_positives = 0
 all_detail_failures = []
-for group in [legacy_failures, asset_failures, dll_failures, native_failures, field58_failures, direct_failures, input_failures, runtime_failures, eula_popup_failures]:
+for group in [legacy_failures, asset_failures, dll_failures, native_failures, field58_failures, direct_failures, input_failures, runtime_failures, runtime_mode_failures, eula_popup_failures, save_data_popup_failures, messagebox_dialog_failures]:
     all_detail_failures.extend(group)
 
 weights = {
@@ -363,7 +480,10 @@ weights = {
     'direct': 85,
     'input': 85,
     'runtime': 80,
+    'runtime_mode': 120,
     'eula_popup': 80,
+    'save_data_popup': 160,
+    'messagebox_dialog': 160,
     'false_positive': 100,
 }
 penalty = (
@@ -375,13 +495,20 @@ penalty = (
     + len(direct_failures) * weights['direct']
     + len(input_failures) * weights['input']
     + len(runtime_failures) * weights['runtime']
+    + len(runtime_mode_failures) * weights['runtime_mode']
     + len(eula_popup_failures) * weights['eula_popup']
+    + len(save_data_popup_failures) * weights['save_data_popup']
+    + len(messagebox_dialog_failures) * weights['messagebox_dialog']
     + false_positives * weights['false_positive']
 )
 score = max(0, MAX_SCORE - penalty)
 
 for failure in all_detail_failures:
     print(f'DETAIL {failure}')
+for failure in native_trace_blockers:
+    print(f'DETAIL native_trace {failure}')
+if native_trace_latest:
+    print(f'DETAIL native_trace_latest={native_trace_latest}')
 print(f'DETAIL autoload_re_score_penalty={penalty}')
 print(f'METRIC autoload_re_score={score}')
 print(f'METRIC readiness_gate_failures={len(legacy_failures)}')
@@ -396,6 +523,12 @@ print(f'METRIC field58_gate_failures={len(field58_failures)}')
 print(f'METRIC direct_shortcut_failures={len(direct_failures)}')
 print(f'METRIC input_path_failures={len(input_failures)}')
 print(f'METRIC runtime_proof_failures={len(runtime_failures)}')
+print(f'METRIC runtime_mode_failures={len(runtime_mode_failures)}')
 print(f'METRIC eula_popup_failures={len(eula_popup_failures)}')
+print(f'METRIC save_data_popup_failures={len(save_data_popup_failures)}')
+print(f'METRIC messagebox_dialog_failures={len(messagebox_dialog_failures)}')
+print(f'METRIC native_trace_blockers={len(native_trace_blockers)}')
+print(f'METRIC native_trace_hits_total={native_trace_hits_total}')
+print(f'METRIC native_trace_unique_breakpoints={native_trace_unique_breakpoints}')
 print(f'METRIC false_positives={false_positives}')
 PY

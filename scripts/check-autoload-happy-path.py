@@ -10,6 +10,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO_ROOT / "src" / "experiments.rs"
 LIB = REPO_ROOT / "src" / "lib.rs"
+TELEMETRY = REPO_ROOT / "src" / "telemetry.rs"
+WATCHER = REPO_ROOT / "scripts" / "er-readiness-watch.py"
 STAGE_SCRIPT = REPO_ROOT / "scripts" / "stage-autoload-release.sh"
 RUNTIME_PROBE = REPO_ROOT / ".auto" / "runtime_probe.sh"
 MEASURE = REPO_ROOT / ".auto" / "measure.sh"
@@ -104,6 +106,8 @@ def main() -> int:
     experiments = read(EXPERIMENTS)
     lib = read(LIB)
     stage = read(STAGE_SCRIPT)
+    telemetry = read(TELEMETRY)
+    watcher = read(WATCHER)
     runtime_probe = read(RUNTIME_PROBE) if RUNTIME_PROBE.exists() else ""
     measure = read(MEASURE)
 
@@ -231,26 +235,81 @@ def main() -> int:
         failures,
     )
     require(
-        "product_core_autoload_tick still calls broken direct_build path" in measure
-        and "product_continue_autoload_tick" in measure
-        and "product_continue_action_ready" in measure
-        and "CONTINUE_LOAD_RVA" in measure,
-        "measure must enforce product autoload uses the native Continue row load path, not direct_build",
+        "product_core_autoload_tick no longer hands off to idx10 menu-build/direct ProfileLoadDialog path" in measure
+        and "direct_build_enabled() || product_autoload_enabled()" in measure
+        and "B80_FULL_LOAD_INITIATOR_RVA" in measure
+        and "DESERIALIZE_SLOT_RVA" in measure,
+        "measure must enforce product autoload uses the direct ProfileLoadDialog stage2/full-read path, not native Continue row",
         failures,
     )
+    telemetry_src = read(REPO_ROOT / "src" / "telemetry.rs")
     require(
         "MSGBOX_LAST_DIALOG" in lib
+        and "MSGBOX_TOTAL_BUILDS" in lib
         and "MSGBOX_POSTLOAD_BUILDS" in lib
-        and "oracle_postload_modal_seen" in read(REPO_ROOT / "src" / "telemetry.rs")
-        and "oracle_blocking_modal_present" in read(REPO_ROOT / "src" / "telemetry.rs"),
-        "telemetry must expose post-load MessageBoxDialog/blocking-modal oracle evidence",
+        and "oracle_msgbox_total_builds" in telemetry_src
+        and "oracle_msgbox_any_seen" in telemetry_src
+        and "oracle_postload_modal_seen" in telemetry_src
+        and "oracle_blocking_modal_present" in telemetry_src,
+        "telemetry must expose zero-MessageBoxDialog and blocking-modal oracle evidence",
         failures,
     )
     require(
-        "oracle_player_render_ready" in read(REPO_ROOT / "src" / "telemetry.rs")
-        and "chr_flags1c5.enable_render" in read(REPO_ROOT / "src" / "telemetry.rs")
-        and "load_state.draw_group_enabled" in read(REPO_ROOT / "src" / "telemetry.rs"),
+        "oracle_player_render_ready" in telemetry_src
+        and "chr_flags1c5.enable_render" in telemetry_src
+        and "load_state.draw_group_enabled" in telemetry_src,
         "telemetry must expose rendered-player readiness from ChrIns render state, not just save identity",
+        failures,
+    )
+    require(
+        "seamless_coop_loaded" in telemetry_src
+        and "runtime_mode" in telemetry_src
+        and "GetModuleHandleA" in telemetry_src
+        and "ersc.dll" in telemetry_src,
+        "telemetry must expose an ERSC/Seamless runtime-mode semaphore, not infer mode from launch command names",
+        failures,
+    )
+    require(
+        "--expected-runtime-mode" in watcher
+        and "runtime_mode_mismatch" in watcher
+        and "seamless_module_mappings" in watcher
+        and "SEAMLESS_MODULE_MARKERS" in watcher,
+        "readiness watcher must fail closed when Seamless/vanilla runtime mode mismatches the experiment precondition",
+        failures,
+    )
+    require(
+        "--fail-on-messagebox-dialog" in watcher
+        and "native_messagebox_dialog_detected" in watcher
+        and "telemetry_messagebox_dialog_detected" in watcher,
+        "readiness watcher must fail closed when telemetry observes any native MessageBoxDialog build",
+        failures,
+    )
+    require(
+        "--visual-save-data-popup-check" in watcher
+        and "visual_save_data_popup_detected" in watcher
+        and "failed to load save data" in watcher,
+        "readiness watcher must expose a visual semaphore for the failed-save-data popup",
+        failures,
+    )
+    require(
+        "runtime_mode_failures" in measure
+        and "seamless_coop_loaded" in measure
+        and "runtime_mode_expected" in measure,
+        "measure must penalize Seamless-contaminated vanilla runtime proof artifacts",
+        failures,
+    )
+    require(
+        "messagebox_dialog_failures" in measure
+        and "oracle_msgbox_total_builds" in measure
+        and "native_messagebox_dialog_detected" in measure,
+        "measure must expose and penalize any native MessageBoxDialog build as a bad product-proof failure",
+        failures,
+    )
+    require(
+        "save_data_popup_failures" in measure
+        and "visual_save_data_popup_detected" in measure
+        and "save-data-popup-check" in measure,
+        "measure must expose and penalize the failed-save-data popup semaphore",
         failures,
     )
 

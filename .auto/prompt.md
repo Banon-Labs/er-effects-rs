@@ -10,8 +10,8 @@ The desired product chain is:
 A score of `autoload_re_score=1400` means the patch exists, stays in the DLL, follows the asset/native action chain, has no synthetic input or direct-load bypasses, and has bounded runtime proof.
 
 ## Metrics
-- **Primary**: `autoload_re_score` (points, higher is better, max 1400) — composite RE/product-proof score from `.auto/measure.sh`.
-- **Regression/failure metrics**: `readiness_gate_failures`, `asset_chain_failures`, `dll_patch_failures`, `native_continue_failures`, `field58_gate_failures`, `direct_shortcut_failures`, `input_path_failures`, `runtime_proof_failures`, `eula_popup_failures`, `false_positives`.
+- **Primary**: `autoload_re_score` (points, higher is better, max 1400) -- composite RE/product-proof score from `.auto/measure.sh`.
+- **Regression/failure metrics**: `readiness_gate_failures`, `asset_chain_failures`, `dll_patch_failures`, `native_continue_failures`, `field58_gate_failures`, `direct_shortcut_failures`, `input_path_failures`, `runtime_proof_failures`, `runtime_mode_failures`, `eula_popup_failures`, `save_data_popup_failures`, `messagebox_dialog_failures`, `false_positives`.
 - **Legacy secondary metrics**: `target_constants_remaining`, `helpers_missing`, `fixed_wait_predicates`, `autoload_static_failures`.
 
 Score rubric:
@@ -22,17 +22,17 @@ Score rubric:
 - **Static regression guards (300 pts)**: fixed waits remain fail-safe only; checker/measure fail closed for direct shortcuts, input probes, stale `mode=0` gating, and asset-chain regressions; build/checks pass.
 
 ## How to Run
-`./.auto/measure.sh` — emits `METRIC name=value` lines and explanatory `DETAIL ...` lines.
+`./.auto/measure.sh` -- emits `METRIC name=value` lines and explanatory `DETAIL ...` lines.
 
 If re-initializing autoresearch, use metric `autoload_re_score`, unit `points`, direction `higher`, baseline from the current branch, and keep `timeout_seconds <= 120` / `checks_timeout_seconds <= 120` unless `.auto/run_experiment_policy.rego` and its checker/tests are deliberately changed. Runtime probes must finish the runtime portion in <=60s.
 
 ## Files in Scope
-- `src/lib.rs` — constants/layouts/statics for title/menu/profile-load/autoload and hook wiring.
-- `src/experiments.rs` — asset/native Continue tracing, autoload state machine, product submit path, native/static readiness predicates, runtime diagnostics.
-- `scripts/check-autoload-happy-path.py` and `scripts/test-autoload-happy-path.py` — static product-path gate checks.
-- `.auto/measure.sh` — benchmark/static oracle for this autoresearch session.
-- `.auto/ideas.md` — deferred ideas backlog.
-- `docs/file-extraction-tooling.md` and focused docs/recon notes — only for provenance; do not replace executable checks with prose.
+- `src/lib.rs` -- constants/layouts/statics for title/menu/profile-load/autoload and hook wiring.
+- `src/experiments.rs` -- asset/native Continue tracing, autoload state machine, product submit path, native/static readiness predicates, runtime diagnostics.
+- `scripts/check-autoload-happy-path.py` and `scripts/test-autoload-happy-path.py` -- static product-path gate checks.
+- `.auto/measure.sh` -- benchmark/static oracle for this autoresearch session.
+- `.auto/ideas.md` -- deferred ideas backlog.
+- `docs/file-extraction-tooling.md` and focused docs/recon notes -- only for provenance; do not replace executable checks with prose.
 
 ## Off Limits
 - Do not add host input, DInput/keystate/pointer synthesis, XInput injection, or Down/Confirm probes to the product path.
@@ -49,8 +49,8 @@ If re-initializing autoresearch, use metric `autoload_re_score`, unit `points`, 
 - Static RE first. Runtime probes only after the hypothesis, exact hook/edge, stop condition, and teardown are explicit.
 - Frame/call counts may remain only as outer fail-safe timeouts, never as success predicates.
 - Polling semantic predicates once per game tick is allowed; requiring N ticks before success is not.
-- Debug logs should say exactly which field/vtable/state opened or blocked a gate, not “waited N frames”.
-- Runtime proof must be self-validating: target window confirmed by class, input blocking/suppression confirmed where relevant, exact process matching, save/game-file restore, teardown, expected `ER0000.sl2` slot identity match (including non-empty-like character name; `"_"`, `""`, and whitespace-only are empty), expected player animation ID, no native post-load popup/modal builds, and (for disabled modal-confirm) the log must show why the load is already safe to continue instead of polling for a user confirm press. EULA/terms/license/first-boot legal popups are a hard product failure at any point: the DLL must not auto-accept them, and fallback/menu success is invalid while such a popup is visible. `eula_popup_failures` must come from real runtime evidence captured into the artifact (currently `legal-popup-check-*.png/json` target-window OCR evidence, or a future stronger native dialog oracle), must cause the watcher to fail immediately with `visual_legal_popup_detected` when detected, and must reduce the autoresearch score.
+- Debug logs should say exactly which field/vtable/state opened or blocked a gate, not "waited N frames".
+- Runtime proof must be self-validating: target window confirmed by exact class while a live `eldenring.exe` process exists (no title fallback / no screenshotting unrelated apps), input blocking/suppression confirmed where relevant, exact process matching, save/game-file restore, teardown, expected `ER0000.sl2` slot identity match (including non-empty-like character name; `"_"`, `""`, and whitespace-only are empty), expected player animation ID, and zero native `CS::MessageBoxDialog` builds. Any in-game MessageBoxDialog (including "failed to load save data") is a hard product failure: the ideal count is 0, telemetry must expose `oracle_msgbox_total_builds` / `oracle_msgbox_any_seen`, the watcher must fail immediately with `native_messagebox_dialog_detected`, and `messagebox_dialog_failures` must reduce the score. EULA/terms/license/first-boot legal popups are also a hard product failure at any point: the DLL must not auto-accept them, and fallback/menu success is invalid while such a popup is visible. `eula_popup_failures` and `save_data_popup_failures` must come from real runtime evidence captured into the artifact (target-window OCR evidence only after exact ER window/process validation, or a stronger native dialog oracle), must cause the watcher to fail immediately when detected, and must reduce the autoresearch score.
 - The product proof chain must include downstream native evidence (`continue_load_67b750`, `b80_deserialize_67b290`, native `continue_confirm`/SetState5, world-stable/max oracle), not just a title screenshot.
 
 ## Static/runtime evidence already gathered
