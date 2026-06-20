@@ -61,6 +61,7 @@ VISUAL_LOADING_SCREEN_DETECTED = "visual_loading_screen_detected"
 LEGAL_POPUP_DETECTED = "visual_legal_popup_detected"
 SAVE_DATA_POPUP_DETECTED = "visual_save_data_popup_detected"
 MESSAGEBOX_DIALOG_DETECTED = "native_messagebox_dialog_detected"
+TARGET_WINDOW_CAPTURE_UNSAFE = "target_window_capture_unsafe"
 VISUAL_CHECK_SUBPROCESS_TIMEOUT_SECONDS = 10.0
 VISUAL_OCR_PREVIEW_CHARS = 1000
 LEGAL_POPUP_CHECK_INTERVAL_SECONDS = 0.75
@@ -429,6 +430,39 @@ def client_is_game_window(client: dict[str, Any], window_class: str) -> bool:
     return klass == window_class
 
 
+def target_window_capture_problems(window: dict[str, Any], window_class: str) -> list[str]:
+    """Return reasons this Hyprland client is unsafe to capture by screen geometry.
+
+    grim -g captures the current desktop region, not a window backing store. If the
+    Elden Ring client is not the focused/top window, the same geometry can contain
+    an unrelated browser/terminal and produce a false OCR result. Therefore visual
+    checks only capture an exact-class, mapped, unhidden, focused target window with
+    sane geometry; otherwise they fail closed without taking a screenshot.
+    """
+    problems: list[str] = []
+    if not client_is_game_window(window, window_class):
+        problems.append("target_window_class_mismatch")
+    if window.get("mapped") is False:
+        problems.append("target_window_unmapped")
+    if window.get("hidden") is True:
+        problems.append("target_window_hidden")
+    if "focusHistoryID" not in window:
+        problems.append("target_window_focus_unknown")
+    elif as_int(window.get("focusHistoryID"), -1) != 0:
+        problems.append("target_window_not_focused")
+    at = window.get("at") or []
+    size = window.get("size") or []
+    if len(at) != 2 or len(size) != 2:
+        problems.append("target_window_bad_geometry")
+    elif as_int(size[0], 0) <= 0 or as_int(size[1], 0) <= 0:
+        problems.append("target_window_empty_geometry")
+    return problems
+
+
+def window_capture_safe(window: dict[str, Any], window_class: str) -> bool:
+    return not target_window_capture_problems(window, window_class)
+
+
 def as_int(value: Any, default: int = -1) -> int:
     if isinstance(value, bool):
         return int(value)
@@ -603,7 +637,7 @@ def telemetry_world_tick(telemetry: dict[str, Any], fallback: int) -> int:
     return as_int(telemetry.get("game_task_ticks"), fallback)
 
 
-def visual_loading_screen_visible(artifact_dir: Path, windows: list[dict[str, Any]], sample: int) -> bool:
+def visual_loading_screen_visible(artifact_dir: Path, windows: list[dict[str, Any]], sample: int, window_class: str = DEFAULT_WINDOW_CLASS) -> bool:
     check_path = artifact_dir / f"world-stable-visual-check-{sample:03d}.json"
     result: dict[str, Any] = {"sample": sample, "loading_screen_detected": True}
     try:
@@ -620,12 +654,15 @@ def visual_loading_screen_visible(artifact_dir: Path, windows: list[dict[str, An
             result["magick"] = magick
             return True
         win = windows[0]
+        result["window"] = win
+        capture_problems = target_window_capture_problems(win, window_class)
+        result["target_window_capture_valid"] = not capture_problems
+        result["target_window_capture_problems"] = capture_problems
+        if capture_problems:
+            result["error"] = "target_window_not_capture_safe"
+            return True
         at = win.get("at") or []
         size = win.get("size") or []
-        if len(at) != 2 or len(size) != 2:
-            result["error"] = "bad_window_geometry"
-            result["window"] = win
-            return True
         geom = f"{int(at[0])},{int(at[1])} {int(size[0])}x{int(size[1])}"
         png = artifact_dir / f"world-stable-visual-check-{sample:03d}.png"
         grim_run = subprocess.run([grim, "-g", geom, str(png)], capture_output=True, text=True, timeout=VISUAL_CHECK_SUBPROCESS_TIMEOUT_SECONDS)
@@ -691,7 +728,7 @@ def save_data_popup_ocr_matches(text: str) -> list[str]:
     return [pattern.pattern for pattern in SAVE_DATA_POPUP_OCR_PATTERNS if pattern.search(text)]
 
 
-def visual_legal_popup_visible(artifact_dir: Path, windows: list[dict[str, Any]], sample: int) -> bool:
+def visual_legal_popup_visible(artifact_dir: Path, windows: list[dict[str, Any]], sample: int, window_class: str = DEFAULT_WINDOW_CLASS) -> bool:
     check_path = artifact_dir / f"legal-popup-check-{sample:03d}.json"
     result: dict[str, Any] = {"sample": sample, "legal_popup_detected": False}
     try:
@@ -706,12 +743,15 @@ def visual_legal_popup_visible(artifact_dir: Path, windows: list[dict[str, Any]]
             result["error"] = "missing_visual_check_tool"
             return False
         win = windows[0]
+        result["window"] = win
+        capture_problems = target_window_capture_problems(win, window_class)
+        result["target_window_capture_valid"] = not capture_problems
+        result["target_window_capture_problems"] = capture_problems
+        if capture_problems:
+            result["error"] = "target_window_not_capture_safe"
+            return False
         at = win.get("at") or []
         size = win.get("size") or []
-        if len(at) != 2 or len(size) != 2:
-            result["error"] = "bad_window_geometry"
-            result["window"] = win
-            return False
         geom = f"{int(at[0])},{int(at[1])} {int(size[0])}x{int(size[1])}"
         png = artifact_dir / f"legal-popup-check-{sample:03d}.png"
         grim_run = subprocess.run(
@@ -790,7 +830,7 @@ def visual_legal_popup_visible(artifact_dir: Path, windows: list[dict[str, Any]]
         check_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def visual_save_data_popup_visible(artifact_dir: Path, windows: list[dict[str, Any]], sample: int) -> bool:
+def visual_save_data_popup_visible(artifact_dir: Path, windows: list[dict[str, Any]], sample: int, window_class: str = DEFAULT_WINDOW_CLASS) -> bool:
     check_path = artifact_dir / f"save-data-popup-check-{sample:03d}.json"
     result: dict[str, Any] = {"sample": sample, "save_data_popup_detected": False}
     try:
@@ -805,12 +845,15 @@ def visual_save_data_popup_visible(artifact_dir: Path, windows: list[dict[str, A
             result["error"] = "missing_visual_check_tool"
             return False
         win = windows[0]
+        result["window"] = win
+        capture_problems = target_window_capture_problems(win, window_class)
+        result["target_window_capture_valid"] = not capture_problems
+        result["target_window_capture_problems"] = capture_problems
+        if capture_problems:
+            result["error"] = "target_window_not_capture_safe"
+            return False
         at = win.get("at") or []
         size = win.get("size") or []
-        if len(at) != 2 or len(size) != 2:
-            result["error"] = "bad_window_geometry"
-            result["window"] = win
-            return False
         geom = f"{int(at[0])},{int(at[1])} {int(size[0])}x{int(size[1])}"
         png = artifact_dir / f"save-data-popup-check-{sample:03d}.png"
         grim_run = subprocess.run(
@@ -895,6 +938,12 @@ def hypr_windows(window_class: str) -> list[dict[str, Any]]:
                     "workspace": (client.get("workspace") or {}).get("name"),
                     "at": client.get("at"),
                     "size": client.get("size"),
+                    "pid": client.get("pid"),
+                    "mapped": client.get("mapped"),
+                    "hidden": client.get("hidden"),
+                    "focusHistoryID": client.get("focusHistoryID"),
+                    "fullscreen": client.get("fullscreen"),
+                    "address": client.get("address"),
                 }
             )
     return matches
@@ -1095,11 +1144,27 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
                 )
             )
         windows = hypr_windows(args.window_class) if process_running else []
+        if process_running and windows and (args.visual_legal_popup_check or args.visual_save_data_popup_check or args.visual_world_check):
+            if not window_capture_safe(windows[0], args.window_class):
+                return with_runtime_module_info(
+                    ReadinessResult(
+                        False,
+                        TARGET_WINDOW_CAPTURE_UNSAFE,
+                        pid,
+                        bootstrap,
+                        telemetry,
+                        windows,
+                        spawn_polls + poll,
+                        float(args.max_runtime_seconds),
+                        expected_save_oracle=expected_save_oracle,
+                        expected_animation_id=args.expected_animation_id,
+                    )
+                )
         now = time.monotonic()
         if process_running and args.visual_legal_popup_check and windows and now >= next_legal_popup_check_at:
             legal_popup_samples += 1
             next_legal_popup_check_at = now + args.visual_legal_popup_check_interval_seconds
-            if visual_legal_popup_visible(args.artifact_dir, windows, legal_popup_samples):
+            if visual_legal_popup_visible(args.artifact_dir, windows, legal_popup_samples, args.window_class):
                 return with_runtime_module_info(
                     ReadinessResult(
                         False,
@@ -1117,7 +1182,7 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
         if process_running and args.visual_save_data_popup_check and windows and now >= next_save_data_popup_check_at:
             save_data_popup_samples += 1
             next_save_data_popup_check_at = now + args.visual_save_data_popup_check_interval_seconds
-            if visual_save_data_popup_visible(args.artifact_dir, windows, save_data_popup_samples):
+            if visual_save_data_popup_visible(args.artifact_dir, windows, save_data_popup_samples, args.window_class):
                 return with_runtime_module_info(
                     ReadinessResult(
                         False,
@@ -1146,7 +1211,7 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
                     if time.monotonic() - world_stable_since < args.world_stable_dwell_seconds:
                         os.sched_yield()
                         continue
-                    if args.visual_world_check and visual_loading_screen_visible(args.artifact_dir, windows, world_stable_samples):
+                    if args.visual_world_check and visual_loading_screen_visible(args.artifact_dir, windows, world_stable_samples, args.window_class):
                         world_stable_samples = 0
                         last_world_stable_tick = None
                         world_stable_since = None

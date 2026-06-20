@@ -11,7 +11,15 @@ WATCH_PATH = REPO_ROOT / "scripts" / "er-readiness-watch.py"
 TEST_PID = 4242
 TEST_POLLS = 7
 TEST_BUDGET = 3
-TEST_WINDOW = {"class": "steam_app_1245620", "title": "ELDEN RING™"}
+TEST_WINDOW = {
+    "class": "steam_app_1245620",
+    "title": "ELDEN RING™",
+    "at": [2, 23],
+    "size": [640, 360],
+    "mapped": True,
+    "hidden": False,
+    "focusHistoryID": 0,
+}
 
 
 def load_watcher():
@@ -28,11 +36,24 @@ def main() -> int:
     watcher = load_watcher()
 
     assert watcher.client_is_game_window(TEST_WINDOW, watcher.DEFAULT_WINDOW_CLASS)
+    assert watcher.window_capture_safe(TEST_WINDOW, watcher.DEFAULT_WINDOW_CLASS)
     assert not watcher.client_is_game_window(
         {
             "class": "steam_proton",
             "title": "Z:\\home\\banon\\.local\\share\\Steam\\steamapps\\common\\ELDEN RING\\Game\\start_protected_game.exe",
         },
+        watcher.DEFAULT_WINDOW_CLASS,
+    )
+    assert "target_window_not_focused" in watcher.target_window_capture_problems(
+        {**TEST_WINDOW, "focusHistoryID": 1},
+        watcher.DEFAULT_WINDOW_CLASS,
+    )
+    assert "target_window_focus_unknown" in watcher.target_window_capture_problems(
+        {key: value for key, value in TEST_WINDOW.items() if key != "focusHistoryID"},
+        watcher.DEFAULT_WINDOW_CLASS,
+    )
+    assert "target_window_hidden" in watcher.target_window_capture_problems(
+        {**TEST_WINDOW, "hidden": True},
         watcher.DEFAULT_WINDOW_CLASS,
     )
 
