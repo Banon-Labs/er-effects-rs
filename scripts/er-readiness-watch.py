@@ -911,6 +911,20 @@ def visual_save_data_popup_visible(artifact_dir: Path, windows: list[dict[str, A
         check_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def focus_target_window(window_class: str) -> None:
+    hyprctl = shutil.which("hyprctl")
+    if not hyprctl:
+        return
+    selector = f"class:^{re.escape(window_class)}$"
+    subprocess.run(
+        [hyprctl, "dispatch", "focuswindow", selector],
+        capture_output=True,
+        text=True,
+        timeout=OBSERVATION_SUBPROCESS_TIMEOUT_SECONDS,
+        check=False,
+    )
+
+
 def hypr_windows(window_class: str) -> list[dict[str, Any]]:
     try:
         clients = json.loads(
@@ -1146,6 +1160,9 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
         windows = hypr_windows(args.window_class) if process_running else []
         if process_running and windows and (args.visual_legal_popup_check or args.visual_save_data_popup_check or args.visual_world_check):
             if not window_capture_safe(windows[0], args.window_class):
+                focus_target_window(args.window_class)
+                windows = hypr_windows(args.window_class)
+            if not windows or not window_capture_safe(windows[0], args.window_class):
                 return with_runtime_module_info(
                     ReadinessResult(
                         False,
