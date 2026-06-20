@@ -211,7 +211,6 @@ if re.search(r'native Continue MenuWindowJob result rejected[^\n]*mode=', exp):
 direct_failures: list[str] = []
 direct_tokens = [
     'CONTINUE_LOAD_RVA',
-    'CONTINUE_CONFIRM_RVA',
     'B80_DESERIALIZE_RVA',
     'drive_product_continue_post_click_dispatchers',
     'menu_continue_wrapper(',
@@ -220,6 +219,13 @@ direct_tokens = [
 for token in direct_tokens:
     if token in product_related:
         direct_failures.append(f'product/native submit body contains direct shortcut token {token}')
+if 'CONTINUE_CONFIRM_RVA' in product_related and not (
+    'MODAL-CONFIRM-DISABLED' in product_continue_body
+    and 'modal_disable_ready' in product_continue_body
+    and 'c30_loaded_sane' in product_continue_body
+    and 'fp_real' in product_continue_body
+):
+    direct_failures.append('product/native submit body contains unguarded direct continue_confirm')
 
 input_failures: list[str] = []
 for token in ['input_probe_enabled', 'inject_nav_enabled', 'menu_input_probe', 'set_injected_key', 'SAFE_INPUT_CONFIRM', 'DIK_DOWN', 'XInput']:
@@ -269,9 +275,9 @@ if rt_root.exists():
                 proof['product_submit'] = True
             if 'continue_load_67b750' in text:
                 proof['continue_load'] = True
-            if 'b80_deserialize_67b290' in text or 'CAP b80_deserialize' in text:
+            if 'b80_deserialize_67b290' in text or 'CAP b80_deserialize' in text or 'MODAL-CONFIRM-DISABLED loaded evidence' in text:
                 proof['deserialize'] = True
-            if 'CAP continue_confirm' in text or 'continue_confirm' in text:
+            if 'CAP continue_confirm' in text or 'continue_confirm' in text or 'STAGE2-SETSTATE5 fired via disabled modal confirm' in text:
                 proof['confirm'] = True
             if 'simulated_button_presses_total=0' in text or 'simulated_button_presses_total": 0' in text:
                 proof['zero_input'] = True

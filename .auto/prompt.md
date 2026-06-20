@@ -5,7 +5,7 @@ Find and prove the real native title-menu `Continue` patch path, with the game D
 
 The desired product chain is:
 
-`Data*.bhd/bdt archive entry -> msg/engus/menu.msgbnd.dcx -> FMG text/resource ID -> native title-menu row/functor/result object -> native accept/submit dispatcher -> continue_load_67b750 -> b80_deserialize_67b290 -> native continue_confirm / SetState5 -> world-stable oracle`
+`Data*.bhd/bdt archive entry -> msg/engus/menu.msgbnd.dcx -> FMG text/resource ID -> native title-menu row/functor/result object -> native accept/submit dispatcher -> continue_load_67b750 -> native load-complete evidence (b80_deserialize_67b290 OR explicitly disabled modal-confirm wait after loaded-slot proof) -> native continue_confirm / SetState5 -> world-stable oracle`
 
 A score of `autoload_re_score=1400` means the patch exists, stays in the DLL, follows the asset/native action chain, has no synthetic input or direct-load bypasses, and has bounded runtime proof.
 
@@ -18,7 +18,7 @@ Score rubric:
 - **Asset provenance / resource chain (200 pts)**: Data archive source is explicit; FMG/menu resource IDs are mapped; native consumers/xrefs are tied to those IDs; extraction is reproducible from local tools/artifacts.
 - **Native Continue action identity (300 pts)**: real selected Continue row/object is identified; receiver/vtable/docall/result/submit ABI are proven; selected/default Continue is not confused with Down navigation; `result+0x58` is logged only as unknown/diagnostic, not used as readiness.
 - **DLL product patch path (300 pts)**: implemented inside the chainload DLL; no `eldenring.exe` patching, loose asset edits, or product direct-load/direct-confirm/deser dispatcher shortcuts; advances through native accept/submit semantics after Continue exists.
-- **Safety/runtime oracle (300 pts)**: input remains blocked/suppressed; `simulated_button_presses_total=0`; save backup/restore and char-fingerprint/mount guards remain; bounded runtime proof reaches native load/deser/confirm/world-stable edges.
+- **Safety/runtime oracle (300 pts)**: input remains blocked/suppressed; `simulated_button_presses_total=0`; save backup/restore and char-fingerprint/mount guards remain; bounded runtime proof reaches native load, loaded-slot completion (`b80_deserialize` or disabled modal-confirm with loaded evidence), native confirm/SetState5, and world-stable edges.
 - **Static regression guards (300 pts)**: fixed waits remain fail-safe only; checker/measure fail closed for direct shortcuts, input probes, stale `mode=0` gating, and asset-chain regressions; build/checks pass.
 
 ## How to Run
@@ -39,7 +39,7 @@ If re-initializing autoresearch, use metric `autoload_re_score`, unit `points`, 
 - Do not use Down navigation as a Continue diagnostic. Continue is already the selected/default title option.
 - Do not treat user/manual input as product proof. Manual probes are last-resort diagnostics only after static RE and zero-input hooks cannot answer the question.
 - Do not gate product behavior on `result+0x58 == mode`. That field is currently unknown/diagnostic, not a proven readiness predicate or row index.
-- Do not call `continue_load_67b750`, raw `b80_deserialize`, `continue_confirm`, or dispatcher-drive shortcuts from the product success path.
+- Do not call `continue_load_67b750`, raw `b80_deserialize`, or dispatcher-drive shortcuts from the product success path. A guarded native `continue_confirm` / SetState5 is allowed only after native Continue has already loaded the requested slot and the modal-confirm wait is explicitly disabled with self-validated loaded evidence (`ac0==slot`, real `c30`, real character fingerprint, no simulated input); do not wait for or synthesize confirm input.
 - Do not patch `eldenring.exe`, do not leave loose files in the live Game dir, and do not edit packed assets as the product path unless the user explicitly changes the requirement. DLL is vastly preferred.
 - Do not weaken save safety. Preserve backup/restore behavior, mount/char-fingerprint guards, and SetState5/continue_confirm gates.
 - Do not leave Elden Ring running after any runtime probe.
@@ -50,7 +50,7 @@ If re-initializing autoresearch, use metric `autoload_re_score`, unit `points`, 
 - Frame/call counts may remain only as outer fail-safe timeouts, never as success predicates.
 - Polling semantic predicates once per game tick is allowed; requiring N ticks before success is not.
 - Debug logs should say exactly which field/vtable/state opened or blocked a gate, not “waited N frames”.
-- Runtime proof must be self-validating: target window confirmed by class, input blocking/suppression confirmed where relevant, exact process matching, save/game-file restore, teardown.
+- Runtime proof must be self-validating: target window confirmed by class, input blocking/suppression confirmed where relevant, exact process matching, save/game-file restore, teardown, and (for disabled modal-confirm) the log must show why the load is already safe to continue instead of polling for a user confirm press.
 - The product proof chain must include downstream native evidence (`continue_load_67b750`, `b80_deserialize_67b290`, native `continue_confirm`/SetState5, world-stable/max oracle), not just a title screenshot.
 
 ## Static/runtime evidence already gathered
@@ -64,7 +64,7 @@ If re-initializing autoresearch, use metric `autoload_re_score`, unit `points`, 
 ## What to Try Next
 1. Build a reproducible asset/resource provenance chain: Data archive virtual path -> `menu.msgbnd.dcx` -> FMG Continue/New Game text IDs -> native resource/menu consumers/xrefs. Store concise provenance in docs/recon or bd comments and make `.auto/measure.sh` check for it.
 2. Replace `mode=0` rejection with a native submit/accept path that follows static RE (`0x1407ac890` / vtable `+0x60`) while preserving fail-closed validation of receiver/result/vtables.
-3. Add focused hooks/logs around `0x1407ac890`, `0x140746e80`, `0x14082bac0`, `0x14067b750`, `0x140afb967`, `0x14067b290`, and `continue_confirm` to prove the downstream chain.
+3. Add focused hooks/logs around `0x1407ac890`, `0x140746e80`, `0x14082bac0`, `0x14067b750`, `0x140afb967`, `0x14067b290`, and `continue_confirm` to prove the downstream chain; if native Continue stalls at the modal-confirm wait after loaded evidence, disable that wait and proceed through guarded native confirm without input.
 4. Harden static guards against product regressions: direct load/confirm/deser/dispatcher calls, input probes, Down navigation assumptions, stale `mode` gating, and asset-chain ambiguity.
 5. Run the final bounded product oracle only after the static receiver/ABI path is explicit and the DLL has been rebuilt.
 
