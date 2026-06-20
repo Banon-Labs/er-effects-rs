@@ -2515,6 +2515,32 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         unsafe { own_stepper_stage2(owner, module_base, gm, slot, tick, null) };
         return true;
     }
+    if phase == OWN_STEPPER_PHASE_MENU
+        && FULLREAD_PHASE.load(Ordering::SeqCst) == FULLREAD_PHASE_GUARD
+    {
+        // Native Continue can reset title-menu visual latches while its modal-confirm branch waits.
+        // The product intent is to disable that confirm wait after the native load has produced
+        // loaded-slot evidence, so keep the post-submit guard running instead of re-gating on title
+        // visuals that are no longer authoritative.
+        let guard_ready = ProductCoreAutoloadReady {
+            committed: TITLE_STATE_OWNER_GONE,
+            requested: TITLE_STATE_OWNER_GONE,
+            table: null,
+            session: null,
+            game_data_man: null,
+            profile_summary: null,
+            iodev: null,
+            heap_allocator: null,
+            title_dialog: null,
+            title_in_loop: false,
+            title_in_textfadeout: false,
+            menu_opened_latch: null,
+            press_start_proxy: null,
+            press_start_context: null,
+        };
+        unsafe { product_continue_autoload_tick(owner, module_base, gm, slot, tick, &guard_ready) };
+        return true;
+    }
     let Some(ready) = (unsafe { product_core_autoload_ready(owner, module_base, gm, slot) }) else {
         if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
             let committed = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }
@@ -2717,17 +2743,24 @@ unsafe fn submit_native_continue_item_action(
         ));
         return None;
     }
+    let native_submit = base + MENU_ITEM_SUBMIT_RVA;
     let fd4_event_constructor = base + FD4_EVENT_CONSTRUCTOR_RVA;
-    let submit: unsafe extern "system" fn(usize) =
-        unsafe { std::mem::transmute(base + MENU_ITEM_SUBMIT_RVA) };
+    let continue_wrapper = base + TRACE_MENU_CONTINUE_WRAPPER_RVA as usize;
+    let wrapper: unsafe extern "system" fn(usize) -> usize =
+        unsafe { std::mem::transmute(continue_wrapper) };
+    let mut wrapper_event = [
+        TITLE_OWNER_SCAN_START_ADDRESS as u64,
+        TITLE_OWNER_SCAN_START_ADDRESS as u64,
+    ];
     append_autoload_debug(format_args!(
-        "product-core-autoload: native Continue submit ABI proven item=0x{:x} result=0x{:x} result_vt=0x{:x} event_handler=0x{event_handler:x} submit=0x{:x} fd4_event_ctor=0x{fd4_event_constructor:x} diagnostic_mode={diagnostic_mode} -- result+0x58 logged only, never used as readiness",
-        action.item,
-        action.result,
-        action.result_vt,
-        base + MENU_ITEM_SUBMIT_RVA
+        "product-core-autoload: native Continue submit ABI proven item=0x{:x} result=0x{:x} result_vt=0x{:x} event_handler=0x{event_handler:x} native_submit=0x{native_submit:x} fd4_event_ctor=0x{fd4_event_constructor:x} continue_wrapper=0x{continue_wrapper:x} diagnostic_mode={diagnostic_mode} -- result+0x58 logged only, never used as readiness",
+        action.item, action.result, action.result_vt
     ));
-    unsafe { submit(action.result) };
+    unsafe { wrapper(wrapper_event.as_mut_ptr() as usize) };
+    append_autoload_debug(format_args!(
+        "product-core-autoload: native Continue wrapper returned event0=0x{:x} event1=0x{:x} -- modal-confirm event is deliberately disabled downstream after loaded evidence",
+        wrapper_event[0], wrapper_event[1]
+    ));
     Some(diagnostic_mode)
 }
 
@@ -2802,6 +2835,7 @@ unsafe fn product_continue_autoload_tick(
     ready: &ProductCoreAutoloadReady,
 ) {
     const PRODUCT_CONTINUE_C30_ZERO: i32 = 0;
+    const PRODUCT_CONTINUE_B80_MODAL_WAIT: i32 = 1;
     const PRODUCT_CONTINUE_NEW_GAME_BLOCKED: u8 = 1;
     const PRODUCT_CONTINUE_WAIT_LOG_TICKS: u64 = 30;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -2894,22 +2928,55 @@ unsafe fn product_continue_autoload_tick(
         let c30_available =
             c30 == latched && c30 != GAME_MAN_C30_UNSET && c30 != PRODUCT_CONTINUE_C30_ZERO;
         let c30_sane = c30_available && (c30 != GAME_MAN_NEWGAME_DEFAULT_MAP || fp_real);
+        let c30_loaded = c30 != GAME_MAN_C30_UNSET && c30 != PRODUCT_CONTINUE_C30_ZERO;
+        let c30_loaded_sane = c30_loaded && (c30 != GAME_MAN_NEWGAME_DEFAULT_MAP || fp_real);
         let new_game_flag =
             unsafe { safe_read_usize(owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) }
                 .map(|v| v as u8)
                 .unwrap_or(PRODUCT_CONTINUE_NEW_GAME_BLOCKED);
         let commit = native_fullread_commit_enabled();
         let b80_idle = b80 == OWN_STEPPER_B80_IDLE;
+        let b80_modal_wait = b80 == PRODUCT_CONTINUE_B80_MODAL_WAIT;
+        let native_confirmed =
+            OWN_STEPPER_CONFIRMED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS;
+        let modal_disable_ready = commit
+            && !native_confirmed
+            && b80_modal_wait
+            && fp_real
+            && ac0 == expected
+            && expected != OWN_STEPPER_SLOT_NONE
+            && c30_loaded_sane
+            && new_game_flag == FULLREAD_OWNER_NEW_GAME_OK;
+        if modal_disable_ready {
+            let shim = &raw mut OWN_STEPPER_SHIM;
+            unsafe { (*shim)[OWN_STEPPER_SHIM_OWNER_IDX] = owner };
+            let shim_ptr = shim as usize;
+            let confirm: unsafe extern "system" fn(usize) =
+                unsafe { std::mem::transmute(base + CONTINUE_CONFIRM_RVA) };
+            append_autoload_debug(format_args!(
+                "product-core-autoload: MODAL-CONFIRM-DISABLED loaded evidence ac0={ac0} expected={expected} c30=0x{c30:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) b80={b80} owner+0x284={new_game_flag} -> continue_confirm shim=0x{shim_ptr:x} owner=0x{owner:x} (no confirm input)"
+            ));
+            timeline_event(
+                "T_modal_confirm_disabled",
+                tick,
+                format_args!("ac0={ac0} c30=0x{c30:x} b80={b80}"),
+            );
+            unsafe { confirm(shim_ptr) };
+            OWN_STEPPER_CONFIRMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "product-core-autoload: STAGE2-SETSTATE5 fired via disabled modal confirm owner=0x{owner:x} -- native pump now streams the real world"
+            ));
+        }
         let native_confirmed =
             OWN_STEPPER_CONFIRMED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS;
         let proceed = commit
-            && deser_ok
+            && (deser_ok || modal_disable_ready)
             && native_confirmed
             && fp_real
             && ac0 == expected
             && expected != OWN_STEPPER_SLOT_NONE
-            && c30_sane
-            && b80_idle
+            && (c30_sane || c30_loaded_sane)
+            && (b80_idle || modal_disable_ready)
             && new_game_flag == FULLREAD_OWNER_NEW_GAME_OK;
         if waits % PRODUCT_CONTINUE_WAIT_LOG_TICKS == null as u64 || proceed {
             append_autoload_debug(format_args!(
