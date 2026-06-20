@@ -22,6 +22,7 @@ print(json.dumps({
     "no_telemetry_bootstrap_failure": "window_without_bootstrap_or_task_ready",
     "host_input": "none",
     "teardown": "process_tree_and_save_restore",
+    "legal_popup_check": "target_window_ocr_fail_fast",
     "timeout_seconds": timeout_seconds,
 }, sort_keys=True))
 PY
@@ -84,4 +85,5 @@ python3 "$REPO_ROOT/scripts/er-readiness-watch.py" \
   --bootstrap "${BOOTSTRAP_PATH:?BOOTSTRAP_PATH is required}" \
   --bootstrap-state "${BOOTSTRAP_STATE_PATH:?BOOTSTRAP_STATE_PATH is required}" \
   --target "${RUNTIME_WATCH_TARGET:-world-stable}" \
+  --visual-legal-popup-check \
   --max-runtime-seconds "$RUNTIME_TIMEOUT_SECONDS"

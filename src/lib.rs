@@ -2728,7 +2728,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // OPT-IN (off by default): only install when `menu_window_latch_enabled()` is set
     // (env ER_EFFECTS_MENU_WINDOW_LATCH=1 OR GAME_DIR file er-effects-menu-window-latch.txt).
     // When off, the hook is never installed (no MinHook, no detour) -- a clean run has neither.
-    if menu_window_latch_enabled() {
+    if menu_window_latch_enabled() || product_autoload_enabled() {
         START_MENU_WINDOW_LATCH.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-effects-menu-window-latch".to_owned())

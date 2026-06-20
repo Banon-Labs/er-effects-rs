@@ -11,6 +11,7 @@ manual_event_driver_ready if {
     input.no_telemetry_bootstrap_failure == "window_without_bootstrap_or_task_ready"
     input.host_input == "none"
     input.teardown == "process_tree_and_save_restore"
+    input.legal_popup_check == "target_window_ocr_fail_fast"
     input.timeout_seconds > 0
     input.timeout_seconds <= max_timeout_seconds
 }

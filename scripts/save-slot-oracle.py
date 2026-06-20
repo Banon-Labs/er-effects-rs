@@ -47,10 +47,17 @@ FIXTURE_SLOT_VERSION_OFFSET = 0x10
 FIXTURE_MAP_ID_OFFSET = 0x14
 FIXTURE_PLAYER_GAME_DATA_OFFSET = 0xA17C
 FIXTURE_FACE_MAGIC_OFFSET = 0x13718
-# ER0000.sl2/.co2 USER_DATA entries place PlayerGameData earlier than the
-# extracted ER-Save-File-Readers fixture, but the SL2.bt-relative fields inside
-# PlayerGameData and FaceDataBuffer are the same.
+# ClayAmore's SL2.bt Slot layout puts PlayerGameData before FaceData, but the
+# variable-width Gaitem map and Seamless/vanilla profile differences mean the
+# absolute offsets vary in live USER_DATA entries.  The extractor therefore uses
+# these deltas only as fast paths, then falls back to scanning backwards from a
+# FACE buffer for a plausible PlayerGameData block instead of hard-coding a
+# particular character's identity.
+FIXTURE_FACE_TO_PLAYER_GAME_DATA_DELTA = FIXTURE_FACE_MAGIC_OFFSET - FIXTURE_PLAYER_GAME_DATA_OFFSET
 LIVE_FACE_TO_PLAYER_GAME_DATA_DELTA = 0xA26C
+MAX_PLAYER_TO_FACE_SEARCH = 0x20000
+MAX_FACE_MAGIC_OFFSETS = 64
+PLAYER_GAME_DATA_MIN_SIZE = 0x1B0
 FACE_DATA_BUFFER_PAYLOAD_SIZE = 276
 FACE_DATA_BUFFER_SIZE = len(FACE_MAGIC) + U32_SIZE + U32_SIZE + FACE_DATA_BUFFER_PAYLOAD_SIZE
 FIXTURE_MIN_LENGTH = FIXTURE_FACE_MAGIC_OFFSET + FACE_DATA_BUFFER_SIZE
@@ -265,12 +272,36 @@ def find_face_magic_offsets(slot_data: bytes) -> list[int]:
             return offsets
         offsets.append(found)
         search_at = found + len(FACE_MAGIC)
-        if len(offsets) >= SLOT_COUNT:
+        if len(offsets) >= MAX_FACE_MAGIC_OFFSETS:
             return offsets
+
+
+def name_empty_like(value: str) -> bool:
+    stripped = value.strip()
+    return stripped == "" or stripped == "_"
+
+
+def plausible_character_name(name: str) -> bool:
+    return bool(
+        name
+        and "\ufffd" not in name
+        and "\uffff" not in name
+        and all(char.isprintable() for char in name)
+    )
+
+
+def player_game_data_name(slot_data: bytes, player_game_data_offset: int) -> str:
+    return read_fixed_utf16z(
+        slot_data,
+        pgd_offset(player_game_data_offset, PGD_REL_CHARACTER_NAME),
+        PGD_CHARACTER_NAME_UNITS,
+    )
 
 
 def plausible_player_game_data(slot_data: bytes, player_game_data_offset: int, face_magic_offset: int) -> bool:
     if player_game_data_offset < 0 or face_magic_offset + FACE_DATA_BUFFER_SIZE > len(slot_data):
+        return False
+    if player_game_data_offset + PLAYER_GAME_DATA_MIN_SIZE > len(slot_data):
         return False
     if slot_data[face_magic_offset:face_magic_offset + len(FACE_MAGIC)] != FACE_MAGIC:
         return False
@@ -279,22 +310,62 @@ def plausible_player_game_data(slot_data: bytes, player_game_data_offset: int, f
     level = read_u32_le(slot_data, pgd_offset(player_game_data_offset, PGD_REL_LEVEL))
     health = read_u32_le(slot_data, pgd_offset(player_game_data_offset, PGD_REL_HEALTH))
     max_health = read_u32_le(slot_data, pgd_offset(player_game_data_offset, PGD_REL_MAX_HEALTH))
+    base_max_health = read_u32_le(slot_data, pgd_offset(player_game_data_offset, PGD_REL_BASE_MAX_HEALTH))
     gender = read_u8(slot_data, pgd_offset(player_game_data_offset, PGD_REL_GENDER))
+    max_crimson = read_u8(slot_data, pgd_offset(player_game_data_offset, PGD_REL_MAX_CRIMSON_FLASK_COUNT))
+    max_cerulean = read_u8(slot_data, pgd_offset(player_game_data_offset, PGD_REL_MAX_CERULEAN_FLASK_COUNT))
     stats = [
         read_u32_le(slot_data, pgd_offset(player_game_data_offset, PGD_REL_VIGOR + index * U32_SIZE))
         for index in range(PGD_STAT_COUNT)
     ]
-    if None in [face_version, face_size, level, health, max_health, gender] or any(stat is None for stat in stats):
+    if (
+        None in [face_version, face_size, level, health, max_health, base_max_health, gender, max_crimson, max_cerulean]
+        or any(stat is None for stat in stats)
+    ):
         return False
+    name = player_game_data_name(slot_data, player_game_data_offset)
     return bool(
         face_version == 4
         and face_size == FACE_DATA_BUFFER_SIZE
+        and plausible_character_name(name)
         and 0 < level <= 713
-        and health <= 100_000
-        and max_health <= 100_000
+        and 0 < health <= 100_000
+        and 0 < max_health <= 100_000
+        and 0 < base_max_health <= 100_000
+        and health <= max_health
+        and max_health <= base_max_health
         and gender in (0, 1)
-        and all(0 <= int(stat) <= 99 for stat in stats)
+        and 0 <= max_crimson <= 14
+        and 0 <= max_cerulean <= 14
+        and all(1 <= int(stat) <= 99 for stat in stats)
     )
+
+
+def candidate_score(slot_data: bytes, player_game_data_offset: int, face_magic_offset: int) -> tuple[int, int]:
+    level = read_u32_le(slot_data, pgd_offset(player_game_data_offset, PGD_REL_LEVEL)) or 0
+    stats = [
+        read_u32_le(slot_data, pgd_offset(player_game_data_offset, PGD_REL_VIGOR + index * U32_SIZE)) or 0
+        for index in range(PGD_STAT_COUNT)
+    ]
+    name_len = len(player_game_data_name(slot_data, player_game_data_offset))
+    return (name_len + len([stat for stat in stats if stat > 0]) + (1 if level > 0 else 0), -abs(face_magic_offset - player_game_data_offset))
+
+
+def candidate_player_game_data_offsets(slot_data: bytes, face_magic_offset: int) -> list[int]:
+    candidates: set[int] = set()
+    for delta in (FIXTURE_FACE_TO_PLAYER_GAME_DATA_DELTA, LIVE_FACE_TO_PLAYER_GAME_DATA_DELTA):
+        candidate = face_magic_offset - delta
+        if plausible_player_game_data(slot_data, candidate, face_magic_offset):
+            candidates.add(candidate)
+    if candidates:
+        return sorted(candidates)
+
+    start = max(0, face_magic_offset - MAX_PLAYER_TO_FACE_SEARCH)
+    stop = max(start, face_magic_offset - PLAYER_GAME_DATA_MIN_SIZE)
+    for candidate in range(start, stop):
+        if plausible_player_game_data(slot_data, candidate, face_magic_offset):
+            candidates.add(candidate)
+    return sorted(candidates, key=lambda offset: candidate_score(slot_data, offset, face_magic_offset), reverse=True)
 
 
 def decode_fields_at(
@@ -346,6 +417,7 @@ def decode_fields_at(
         "chr_type": read_u32_le(slot_data, pgd(PGD_REL_CHARACTER_TYPE)),
         "name": name,
         "name_len": len(name),
+        "name_empty_like": name_empty_like(name),
         "gender": read_u8(slot_data, pgd(PGD_REL_GENDER)),
         "archetype": read_u8(slot_data, pgd(PGD_REL_ARCHETYPE)),
         "voice_type": read_u8(slot_data, pgd(PGD_REL_VOICE_TYPE)),
@@ -386,38 +458,75 @@ def decode_sl2_bt_fixture_fields(slot_data: bytes) -> dict[str, Any]:
             "sl2-bt-er-save-file-readers-fixture",
         )
 
+    candidates: list[tuple[tuple[int, int], int, int]] = []
     for face_magic_offset in find_face_magic_offsets(slot_data):
-        player_game_data_offset = face_magic_offset - LIVE_FACE_TO_PLAYER_GAME_DATA_DELTA
-        if plausible_player_game_data(slot_data, player_game_data_offset, face_magic_offset):
-            return decode_fields_at(
-                slot_data,
-                player_game_data_offset,
-                face_magic_offset,
-                "sl2-bt-live-user-data",
+        for player_game_data_offset in candidate_player_game_data_offsets(slot_data, face_magic_offset):
+            candidates.append(
+                (
+                    candidate_score(slot_data, player_game_data_offset, face_magic_offset),
+                    player_game_data_offset,
+                    face_magic_offset,
+                )
             )
+    if candidates:
+        _, player_game_data_offset, face_magic_offset = max(candidates, key=lambda item: item[0])
+        return decode_fields_at(
+            slot_data,
+            player_game_data_offset,
+            face_magic_offset,
+            "sl2-bt-live-user-data",
+        )
     return {"layout": "unknown", "decoded_fields": {}}
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--save", required=True, type=Path, help="ER0000.sl2/.co2 BND4 or extracted slot file")
-    parser.add_argument("--slot", type=int, default=0, choices=range(SLOT_COUNT), metavar="0-9")
-    parser.add_argument("--output", type=Path, help="write JSON here instead of stdout")
-    args = parser.parse_args()
-
-    data = args.save.read_bytes()
-    slot_data, source = extract_slot(data, args.slot)
+def decode_save_slot(data: bytes, save_path: Path, slot: int) -> dict[str, Any]:
+    slot_data, source = extract_slot(data, slot)
     fixture = decode_sl2_bt_fixture_fields(slot_data)
     face_offsets = find_face_magic_offsets(slot_data)
-    result = {
-        "source_path": str(args.save),
-        "slot": args.slot,
+    return {
+        "source_path": str(save_path),
+        "slot": slot,
         "slot_sha256": hashlib.sha256(slot_data).hexdigest(),
         "slot_size": len(slot_data),
         "source": source,
         "face_magic_offsets": face_offsets,
         **fixture,
     }
+
+
+def choose_auto_slot(data: bytes, save_path: Path) -> dict[str, Any]:
+    entries = bnd4_entries(data)
+    if not entries:
+        return decode_save_slot(data, save_path, 0)
+    for slot in range(SLOT_COUNT):
+        result = decode_save_slot(data, save_path, slot)
+        fields = result.get("decoded_fields") or {}
+        if fields and fields.get("name_empty_like") is False:
+            return result
+    raise SystemExit("no non-empty-like character slot found in save file")
+
+
+def parse_slot(value: str) -> int | str:
+    if value == "auto":
+        return value
+    try:
+        slot = int(value, 10)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("slot must be 0-9 or auto") from exc
+    if slot < 0 or slot >= SLOT_COUNT:
+        raise argparse.ArgumentTypeError("slot must be 0-9 or auto")
+    return slot
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--save", required=True, type=Path, help="ER0000.sl2/.co2 BND4 or extracted slot file")
+    parser.add_argument("--slot", type=parse_slot, default=0, metavar="0-9|auto")
+    parser.add_argument("--output", type=Path, help="write JSON here instead of stdout")
+    args = parser.parse_args()
+
+    data = args.save.read_bytes()
+    result = choose_auto_slot(data, args.save) if args.slot == "auto" else decode_save_slot(data, args.save, args.slot)
     text = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

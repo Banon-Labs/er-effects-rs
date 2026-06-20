@@ -2149,7 +2149,12 @@ unsafe fn locate_live_loadgame_node(owner: usize, base: usize) -> Option<(usize,
 /// that its SceneProxy capture [+0xa38] + the menu_window are non-null heap BEFORE the call; a
 /// mismatch returns false with NO native call. Zero-input (the game's own factory, no synthesis).
 /// Returns true if the factory was invoked.
-unsafe fn fire_live_loadgame_node(title_dialog: usize, menu_window: usize, base: usize) -> bool {
+unsafe fn fire_live_loadgame_node(
+    title_dialog: usize,
+    menu_window: usize,
+    base: usize,
+    enter_stage2: bool,
+) -> bool {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const HEAP_LO: usize = 0x10000;
     if title_dialog == NULL || menu_window == NULL {
@@ -2207,12 +2212,20 @@ unsafe fn fire_live_loadgame_node(title_dialog: usize, menu_window: usize, base:
     ));
     // FIX 2 (probe-6): drive the RETURNED dialog directly -- do NOT scan the active-screen array
     // 0x143d6d8d0 (probe-2 proved it is MODEL-RENDERERS, never the PLD). If the returned vtable is
-    // the ProfileLoadDialog, store it + transition own_stepper to STAGE2 ACTIVATE on THAT pointer.
+    // the ProfileLoadDialog, the normal autoload path stores it + transitions own_stepper to STAGE2
+    // ACTIVATE on THAT pointer. The invalid/empty Continue UX fallback deliberately stops here so
+    // the user sees the native Load Game menu instead of any automatic load/confirm.
     if dialog_vt != pld_vt {
         append_autoload_debug(format_args!(
             "live-dialog: returned dialog vtable 0x{dialog_vt:x} != ProfileLoadDialog 0x{pld_vt:x} -- fail-closed, STAY (NO-WRITE, no STAGE2)"
         ));
         return false;
+    }
+    if !enter_stage2 {
+        append_autoload_debug(format_args!(
+            "live-dialog: LIVE ProfileLoadDialog=0x{dialog:x} (vt 0x{pld_vt:x}) from factory return -- menu-only fallback, no STAGE2/no confirm"
+        ));
+        return true;
     }
     OWN_STEPPER_DIALOG.store(dialog, Ordering::SeqCst);
     own_stepper_enter_s2_phase(OWN_STEPPER_PHASE_S2_ACTIVATE);
@@ -2743,15 +2756,15 @@ unsafe fn submit_native_continue_item_action(
         ));
         return None;
     }
+    const CONTINUE_WRAPPER_EVENT_WORDS: usize = 2;
+    const CONTINUE_WRAPPER_EVENT_CODE_INDEX: usize = 0;
+    const CONTINUE_WRAPPER_EVENT_PAYLOAD_INDEX: usize = 1;
     let native_submit = base + MENU_ITEM_SUBMIT_RVA;
     let fd4_event_constructor = base + FD4_EVENT_CONSTRUCTOR_RVA;
     let continue_wrapper = base + TRACE_MENU_CONTINUE_WRAPPER_RVA as usize;
     let wrapper: unsafe extern "system" fn(usize) -> usize =
         unsafe { std::mem::transmute(continue_wrapper) };
-    let mut wrapper_event = [
-        TITLE_OWNER_SCAN_START_ADDRESS as u64,
-        TITLE_OWNER_SCAN_START_ADDRESS as u64,
-    ];
+    let mut wrapper_event = [TITLE_OWNER_SCAN_START_ADDRESS as u64; CONTINUE_WRAPPER_EVENT_WORDS];
     append_autoload_debug(format_args!(
         "product-core-autoload: native Continue submit ABI proven item=0x{:x} result=0x{:x} result_vt=0x{:x} event_handler=0x{event_handler:x} native_submit=0x{native_submit:x} fd4_event_ctor=0x{fd4_event_constructor:x} continue_wrapper=0x{continue_wrapper:x} diagnostic_mode={diagnostic_mode} -- result+0x58 logged only, never used as readiness",
         action.item, action.result, action.result_vt
@@ -2759,7 +2772,8 @@ unsafe fn submit_native_continue_item_action(
     unsafe { wrapper(wrapper_event.as_mut_ptr() as usize) };
     append_autoload_debug(format_args!(
         "product-core-autoload: native Continue wrapper returned event0=0x{:x} event1=0x{:x} -- modal-confirm event is deliberately disabled downstream after loaded evidence",
-        wrapper_event[0], wrapper_event[1]
+        wrapper_event[CONTINUE_WRAPPER_EVENT_CODE_INDEX],
+        wrapper_event[CONTINUE_WRAPPER_EVENT_PAYLOAD_INDEX]
     ));
     Some(diagnostic_mode)
 }
@@ -2865,6 +2879,16 @@ unsafe fn product_continue_autoload_tick(
             }
             return;
         }
+        let (continue_fp_real, continue_fp_level, continue_fp_name_len) =
+            unsafe { char_fingerprint(base) };
+        if !continue_fp_real {
+            if tick % PRODUCT_CONTINUE_WAIT_LOG_TICKS == null as u64 {
+                append_autoload_debug(format_args!(
+                    "product-core-autoload: Continue target is empty-like (level={continue_fp_level} name_len={continue_fp_name_len}); fail-closed with no native Load Game fallback, no legal-popup auto-accept, no Continue submit, and no input"
+                ));
+            }
+            return;
+        }
         let Some(action) = (unsafe { product_continue_item_action(base) }) else {
             if tick % PRODUCT_CONTINUE_WAIT_LOG_TICKS == null as u64 {
                 append_autoload_debug(format_args!(
@@ -2924,6 +2948,7 @@ unsafe fn product_continue_autoload_tick(
         let latched = OWN_STEPPER_MOUNT_C30.load(Ordering::SeqCst);
         let deser_ok = OWN_STEPPER_DESER_FIRED.load(Ordering::SeqCst) == OWN_STEPPER_DESER_FIRED_OK;
         let (fp_real, fp_level, fp_name_len) = unsafe { char_fingerprint(base) };
+        let slot_identity = unsafe { requested_slot_identity(expected, c30) };
         let waits = FULLREAD_DRAIN_WAITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
         let c30_available =
             c30 == latched && c30 != GAME_MAN_C30_UNSET && c30 != PRODUCT_CONTINUE_C30_ZERO;
@@ -2943,6 +2968,7 @@ unsafe fn product_continue_autoload_tick(
             && !native_confirmed
             && b80_modal_wait
             && fp_real
+            && slot_identity.matches
             && ac0 == expected
             && expected != OWN_STEPPER_SLOT_NONE
             && c30_loaded_sane
@@ -2954,7 +2980,11 @@ unsafe fn product_continue_autoload_tick(
             let confirm: unsafe extern "system" fn(usize) =
                 unsafe { std::mem::transmute(base + CONTINUE_CONFIRM_RVA) };
             append_autoload_debug(format_args!(
-                "product-core-autoload: MODAL-CONFIRM-DISABLED loaded evidence ac0={ac0} expected={expected} c30=0x{c30:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) b80={b80} owner+0x284={new_game_flag} -> continue_confirm shim=0x{shim_ptr:x} owner=0x{owner:x} (no confirm input)"
+                "product-core-autoload: MODAL-CONFIRM-DISABLED loaded evidence ac0={ac0} expected={expected} c30=0x{c30:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) slot_identity=true(profile=0x{:x} profile_map=0x{:x} profile_level={} profile_name_len={}) b80={b80} owner+0x284={new_game_flag} -> continue_confirm shim=0x{shim_ptr:x} owner=0x{owner:x} (no confirm input)",
+                slot_identity.profile_summary,
+                slot_identity.profile_map,
+                slot_identity.profile_level,
+                slot_identity.profile_name_len
             ));
             timeline_event(
                 "T_modal_confirm_disabled",
@@ -2973,6 +3003,7 @@ unsafe fn product_continue_autoload_tick(
             && (deser_ok || modal_disable_ready)
             && native_confirmed
             && fp_real
+            && slot_identity.matches
             && ac0 == expected
             && expected != OWN_STEPPER_SLOT_NONE
             && (c30_sane || c30_loaded_sane)
@@ -2980,13 +3011,27 @@ unsafe fn product_continue_autoload_tick(
             && new_game_flag == FULLREAD_OWNER_NEW_GAME_OK;
         if waits % PRODUCT_CONTINUE_WAIT_LOG_TICKS == null as u64 || proceed {
             append_autoload_debug(format_args!(
-                "product-core-autoload: Continue post-click GUARD waits={waits} commit={commit} deser_ok={deser_ok} native_confirmed={native_confirmed} ac0={ac0} expected={expected} c30=0x{c30:x} latched=0x{latched:x} c30_sane={c30_sane} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) owner+0x284={new_game_flag} b80={b80} proceed={proceed} -- waiting for native b80/c30 writer + native continue_confirm/SetState5"
+                "product-core-autoload: Continue post-click GUARD waits={waits} commit={commit} deser_ok={deser_ok} native_confirmed={native_confirmed} ac0={ac0} expected={expected} c30=0x{c30:x} latched=0x{latched:x} c30_sane={c30_sane} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) slot_identity={} profile=0x{:x} profile_map=0x{:x} profile_level={} profile_name_len={} pgd_level={} pgd_name_len={} owner+0x284={new_game_flag} b80={b80} proceed={proceed} -- waiting for requested-slot native b80/c30 writer + native continue_confirm/SetState5",
+                slot_identity.matches,
+                slot_identity.profile_summary,
+                slot_identity.profile_map,
+                slot_identity.profile_level,
+                slot_identity.profile_name_len,
+                slot_identity.pgd_level,
+                slot_identity.pgd_name_len
             ));
         }
         if !proceed {
             if waits >= FULLREAD_DRAIN_MAX {
                 append_autoload_debug(format_args!(
-                    "product-core-autoload: Continue post-click GUARD timeout waits={waits} commit={commit} deser_ok={deser_ok} ac0={ac0} expected={expected} c30=0x{c30:x} latched=0x{latched:x} c30_sane={c30_sane} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) owner+0x284={new_game_flag} b80={b80} -- DONE (NO SetState5)"
+                    "product-core-autoload: Continue post-click GUARD timeout waits={waits} commit={commit} deser_ok={deser_ok} ac0={ac0} expected={expected} c30=0x{c30:x} latched=0x{latched:x} c30_sane={c30_sane} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) slot_identity={} profile=0x{:x} profile_map=0x{:x} profile_level={} profile_name_len={} pgd_level={} pgd_name_len={} owner+0x284={new_game_flag} b80={b80} -- DONE (NO SetState5)",
+                    slot_identity.matches,
+                    slot_identity.profile_summary,
+                    slot_identity.profile_map,
+                    slot_identity.profile_level,
+                    slot_identity.profile_name_len,
+                    slot_identity.pgd_level,
+                    slot_identity.pgd_name_len
                 ));
                 FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
                 OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
@@ -2994,7 +3039,7 @@ unsafe fn product_continue_autoload_tick(
             return;
         }
         append_autoload_debug(format_args!(
-            "product-core-autoload: STAGE2-MOUNT-COMMIT native Continue row guard pass ac0={ac0} expected={expected} c30=0x{c30:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) owner+0x284={new_game_flag} b80={b80} -- native continue_confirm/SetState5 already fired"
+            "product-core-autoload: STAGE2-MOUNT-COMMIT native Continue row guard pass ac0={ac0} expected={expected} c30=0x{c30:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) slot_identity=true owner+0x284={new_game_flag} b80={b80} -- native continue_confirm/SetState5 already fired"
         ));
         timeline_event("T_playgame", tick, format_args!("ac0={ac0} c30=0x{c30:x}"));
         FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
@@ -3349,7 +3394,7 @@ unsafe fn own_stepper_live_dialog_fire(
         ));
         // fire_live_loadgame_node returns true ONLY when the factory returned a verified
         // ProfileLoadDialog (it has already stored it + set STAGE2 ACTIVATE on success).
-        if unsafe { fire_live_loadgame_node(ready.title_dialog, ready.menu_window, base) } {
+        if unsafe { fire_live_loadgame_node(ready.title_dialog, ready.menu_window, base, true) } {
             OWN_STEPPER_LIVE_FIRED.store(OWN_STEPPER_LIVE_FIRED_YES, Ordering::SeqCst);
         } else if timed_out {
             append_autoload_debug(format_args!(
@@ -5233,19 +5278,127 @@ unsafe fn own_stepper_stage2(
     }
 }
 
-/// CHAR-FINGERPRINT save-write gate: returns (is_real, level, name_len) by reading the live
-/// CS::PlayerGameData (GameDataMan `[base+0x3d5df38]` -> +0x08 -> PlayerGameData), the validated
-/// reading (the same chain dump_load_correctness uses). A REAL mounted character has level>=1 AND
-/// a non-empty 16-bit name; a new-game default has level 0 / empty name. Pure fault-tolerant
-/// safe_read_usize -> never faults. Used to FAIL-CLOSED SetState(5): the c30 oracle is ambiguous
-/// (m10_01 collision), so the character actually present in PlayerGameData is the decisive signal.
-unsafe fn char_fingerprint(base: usize) -> (bool, u32, usize) {
-    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+fn utf16_name_empty_like(units: &[u16], len: usize) -> bool {
+    const NAME_LEN_NONE: usize = 0;
+    const NAME_LEN_SINGLE: usize = 1;
+    const NAME_UNDERSCORE: u16 = '_' as u16;
+    const NAME_SPACE: u16 = ' ' as u16;
+    if len == NAME_LEN_NONE {
+        return true;
+    }
+    if len == NAME_LEN_SINGLE && units.first().copied() == Some(NAME_UNDERSCORE) {
+        return true;
+    }
+    units.iter().take(len).all(|unit| *unit == NAME_SPACE)
+}
+
+fn utf16_names_equal(left: &[u16], right: &[u16], len: usize) -> bool {
+    left.get(..len) == right.get(..len)
+}
+
+unsafe fn read_utf16_name_units(addr: usize) -> ([u16; PGD_NAME_LEN_U16], usize) {
     const ZERO_U16: u16 = 0;
-    const ZERO_U32: u32 = 0;
     const U16_STRIDE: usize = 2;
     const IDX_START: usize = 0;
     const IDX_STEP: usize = 1;
+    let mut units = [ZERO_U16; PGD_NAME_LEN_U16];
+    let mut len = IDX_START;
+    while len < PGD_NAME_LEN_U16 {
+        let unit = unsafe { safe_read_usize(addr + len * U16_STRIDE) }
+            .map(|value| value as u16)
+            .unwrap_or(ZERO_U16);
+        units[len] = unit;
+        if unit == ZERO_U16 {
+            break;
+        }
+        len += IDX_STEP;
+    }
+    (units, len)
+}
+
+#[derive(Clone, Copy)]
+struct RequestedSlotIdentity {
+    matches: bool,
+    profile_summary: usize,
+    profile_map: i32,
+    profile_level: u32,
+    profile_name_len: usize,
+    pgd_level: u32,
+    pgd_name_len: usize,
+}
+
+unsafe fn requested_slot_identity(slot: i32, c30: i32) -> RequestedSlotIdentity {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const BAD_I32: i32 = -1;
+    const ZERO_U32: u32 = 0;
+    const NAME_LEN_NONE: usize = 0;
+    const PROFILE_RECORD_BASE: usize = 0x18;
+    const PROFILE_RECORD_STRIDE: usize = 0x2a0;
+    const PROFILE_RECORD_LEVEL_OFFSET: usize = 0x24;
+    const PROFILE_RECORD_MAP_OFFSET: usize = 0x30;
+    let mut result = RequestedSlotIdentity {
+        matches: false,
+        profile_summary: NULL,
+        profile_map: BAD_I32,
+        profile_level: ZERO_U32,
+        profile_name_len: NAME_LEN_NONE,
+        pgd_level: ZERO_U32,
+        pgd_name_len: NAME_LEN_NONE,
+    };
+    if slot < OWN_STEPPER_SLOT_ZERO {
+        return result;
+    }
+    let gdm = game_data_man_ptr_or_null();
+    if gdm == NULL {
+        return result;
+    }
+    let pgd =
+        unsafe { safe_read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(NULL);
+    let profile_summary =
+        unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(NULL);
+    result.profile_summary = profile_summary;
+    if pgd == NULL || profile_summary == NULL {
+        return result;
+    }
+    let slot_index = slot as usize;
+    let rec = profile_summary + PROFILE_RECORD_BASE + slot_index * PROFILE_RECORD_STRIDE;
+    let profile_map = unsafe { safe_read_usize(rec + PROFILE_RECORD_MAP_OFFSET) }
+        .map(|value| value as u32 as i32)
+        .unwrap_or(BAD_I32);
+    let profile_level = unsafe { safe_read_usize(rec + PROFILE_RECORD_LEVEL_OFFSET) }
+        .map(|value| value as u32)
+        .unwrap_or(ZERO_U32);
+    let (profile_name, profile_name_len) = unsafe { read_utf16_name_units(rec) };
+    let pgd_level = unsafe { safe_read_usize(pgd + PGD_LEVEL_68_OFFSET) }
+        .map(|value| value as u32)
+        .unwrap_or(ZERO_U32);
+    let (pgd_name, pgd_name_len) = unsafe { read_utf16_name_units(pgd + PGD_NAME_9C_OFFSET) };
+    let profile_name_empty = utf16_name_empty_like(&profile_name, profile_name_len);
+    let pgd_name_empty = utf16_name_empty_like(&pgd_name, pgd_name_len);
+    result.profile_map = profile_map;
+    result.profile_level = profile_level;
+    result.profile_name_len = profile_name_len;
+    result.pgd_level = pgd_level;
+    result.pgd_name_len = pgd_name_len;
+    result.matches = profile_map == c30
+        && profile_level == pgd_level
+        && profile_name_len == pgd_name_len
+        && !profile_name_empty
+        && !pgd_name_empty
+        && utf16_names_equal(&profile_name, &pgd_name, pgd_name_len);
+    result
+}
+
+/// CHAR-FINGERPRINT save-write gate: returns (is_real, level, name_len) by reading the live
+/// CS::PlayerGameData (GameDataMan `[base+0x3d5df38]` -> +0x08 -> PlayerGameData), the validated
+/// reading (the same chain dump_load_correctness uses). A REAL mounted character has level>=1 AND
+/// a non-empty-like 16-bit name (`"_"`, empty, and all-spaces are empty-like). Pure
+/// fault-tolerant safe_read_usize -> never faults. Used to FAIL-CLOSED SetState(5): the c30
+/// oracle is ambiguous (m10_01 collision), so the character actually present in PlayerGameData is
+/// the decisive signal.
+unsafe fn char_fingerprint(base: usize) -> (bool, u32, usize) {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const ZERO_U32: u32 = 0;
     const MIN_REAL_LEVEL: u32 = 1;
     const NAME_LEN_NONE: usize = 0;
     let gdm = game_data_man_ptr_or_null();
@@ -5260,18 +5413,8 @@ unsafe fn char_fingerprint(base: usize) -> (bool, u32, usize) {
     let level = unsafe { safe_read_usize(pgd + PGD_LEVEL_68_OFFSET) }
         .map(|v| v as u32)
         .unwrap_or(ZERO_U32);
-    let mut name_len = NAME_LEN_NONE;
-    while name_len < PGD_NAME_LEN_U16 {
-        let u = unsafe { safe_read_usize(pgd + PGD_NAME_9C_OFFSET + name_len * U16_STRIDE) }
-            .map(|v| v as u16)
-            .unwrap_or(ZERO_U16);
-        if u == ZERO_U16 {
-            break;
-        }
-        name_len += IDX_STEP;
-    }
-    let _ = IDX_START;
-    let is_real = level >= MIN_REAL_LEVEL;
+    let (name_units, name_len) = unsafe { read_utf16_name_units(pgd + PGD_NAME_9C_OFFSET) };
+    let is_real = level >= MIN_REAL_LEVEL && !utf16_name_empty_like(&name_units, name_len);
     (is_real, level, name_len)
 }
 

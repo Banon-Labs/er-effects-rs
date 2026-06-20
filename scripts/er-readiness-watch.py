@@ -58,8 +58,10 @@ SPAWN_BUDGET_EXHAUSTED = "runtime_process_not_observed_within_spawn_poll_budget"
 READINESS_BUDGET_EXHAUSTED = "readiness_poll_budget_exhausted"
 TIMEOUT_BUDGET_EXHAUSTED = "timeout_seconds_budget_exhausted"
 VISUAL_LOADING_SCREEN_DETECTED = "visual_loading_screen_detected"
+LEGAL_POPUP_DETECTED = "visual_legal_popup_detected"
 VISUAL_CHECK_SUBPROCESS_TIMEOUT_SECONDS = 10.0
 VISUAL_OCR_PREVIEW_CHARS = 1000
+LEGAL_POPUP_CHECK_INTERVAL_SECONDS = 0.75
 LOADING_SCREEN_OCR_PATTERNS = [
     re.compile(r"\bcritical hits?\b", re.I),
     re.compile(r"\bcritical hit\b", re.I),
@@ -73,9 +75,26 @@ VISUAL_OCR_CROPS = [
     ("lower_left_tips", "520x220+0+110"),
     ("tip_text", "420x180+0+140"),
 ]
+LEGAL_POPUP_OCR_PATTERNS = [
+    re.compile(r"\bend[- ]user license\b", re.I),
+    re.compile(r"\bsoftware license\b", re.I),
+    re.compile(r"\blicen[cs]e agreement\b", re.I),
+    re.compile(r"\beula\b", re.I),
+    re.compile(r"\bterms of (?:use|service)\b", re.I),
+    re.compile(r"\bprivacy policy\b", re.I),
+    re.compile(r"\buser agreement\b", re.I),
+]
+VISUAL_LEGAL_OCR_CROPS = [
+    ("whole", "640x360+0+0"),
+    ("center_modal", "520x260+60+45"),
+    ("dialog_text", "500x210+70+60"),
+    ("buttons", "360x90+140+260"),
+]
 MIN_REAL_CHARACTER_LEVEL = 1
 MIN_REAL_CHARACTER_HP = 1
+MIN_REAL_CHARACTER_NAME_LEN = 1
 MIN_EXPECTED_STAT_COUNT = 8
+DEFAULT_EXPECTED_ANIMATION_ID = 4050
 
 TASK_READY_STAGES = {
     "game_task_recurring_registered",
@@ -105,9 +124,11 @@ class ReadinessResult:
     runtime_module_base: str | None = None
     runtime_module_mappings: list[dict[str, Any]] | None = None
     world_stable_samples: int = 0
+    expected_save_oracle: dict[str, Any] | None = None
+    expected_animation_id: int | None = None
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        payload = {
             "ready": self.ready,
             "reason": self.reason,
             "pid": self.pid,
@@ -120,6 +141,10 @@ class ReadinessResult:
             "runtime_module_mappings": self.runtime_module_mappings or [],
             "world_stable_samples": self.world_stable_samples,
         }
+        oracle = oracle_summary(self.telemetry, self.expected_save_oracle, self.expected_animation_id)
+        if oracle:
+            payload["oracle"] = oracle
+        return payload
 
 
 def write_result(path: Path, result: ReadinessResult) -> None:
@@ -253,6 +278,8 @@ def with_runtime_module_info(result: ReadinessResult) -> ReadinessResult:
         base,
         mappings,
         result.world_stable_samples,
+        result.expected_save_oracle,
+        result.expected_animation_id,
     )
 
 
@@ -307,10 +334,109 @@ def as_int(value: Any, default: int = -1) -> int:
     return default
 
 
+def expected_save_fields(expected_save_oracle: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(expected_save_oracle, dict):
+        return {}
+    decoded = expected_save_oracle.get("decoded_fields")
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def name_empty_like(value: Any) -> bool:
+    if not isinstance(value, str):
+        return True
+    stripped = value.strip()
+    return stripped == "" or stripped == "_"
+
+
+def telemetry_expected_save_match(telemetry: dict[str, Any], expected_save_oracle: dict[str, Any] | None) -> bool:
+    fields = expected_save_fields(expected_save_oracle)
+    if not fields:
+        return True
+    expected_map = as_int(fields.get("saved_map_c30"), -1)
+    observed_map = as_int(telemetry.get("oracle_saved_map_c30"), -1)
+    expected_slot = as_int(expected_save_oracle.get("slot") if isinstance(expected_save_oracle, dict) else None, -1)
+    observed_slot = as_int(telemetry.get("game_save_slot"), -2)
+    return bool(
+        observed_slot == expected_slot
+        and telemetry.get("oracle_char_name") == fields.get("name")
+        and as_int(telemetry.get("oracle_char_name_len"), -1) == as_int(fields.get("name_len"), -2)
+        and as_int(telemetry.get("oracle_char_level"), -1) == as_int(fields.get("level"), -2)
+        and as_int(telemetry.get("oracle_char_current_hp"), -1) == as_int(fields.get("health"), -2)
+        and telemetry.get("oracle_char_stats") == fields.get("stats")
+        and expected_map == observed_map
+    )
+
+
+def telemetry_expected_animation_match(telemetry: dict[str, Any], expected_animation_id: int | None) -> bool:
+    return expected_animation_id is None or as_int(telemetry.get("current_animation_id"), -1) == expected_animation_id
+
+
+def telemetry_no_postload_popup(telemetry: dict[str, Any]) -> bool:
+    return bool(
+        telemetry.get("oracle_blocking_modal_present") is not True
+        and telemetry.get("oracle_postload_modal_seen") is not True
+        and as_int(telemetry.get("oracle_msgbox_postload_builds"), -1) == 0
+    )
+
+
+def oracle_summary(
+    telemetry: dict[str, Any] | None,
+    expected_save_oracle: dict[str, Any] | None = None,
+    expected_animation_id: int | None = None,
+) -> dict[str, Any]:
+    if telemetry is None:
+        return {}
+    fields = expected_save_fields(expected_save_oracle)
+    expected = {
+        "save_source_path": expected_save_oracle.get("source_path") if isinstance(expected_save_oracle, dict) else None,
+        "save_slot": expected_save_oracle.get("slot") if isinstance(expected_save_oracle, dict) else None,
+        "character_name": fields.get("name"),
+        "character_name_len": fields.get("name_len"),
+        "character_level": fields.get("level"),
+        "character_hp": fields.get("health"),
+        "character_stats": fields.get("stats"),
+        "saved_map_c30": fields.get("saved_map_c30"),
+        "animation_id": expected_animation_id,
+    }
+    expected["character_name_empty_like"] = name_empty_like(expected["character_name"])
+    observed = {
+        "character_name": telemetry.get("oracle_char_name"),
+        "character_name_len": telemetry.get("oracle_char_name_len"),
+        "character_level": telemetry.get("oracle_char_level"),
+        "character_hp": telemetry.get("oracle_char_current_hp"),
+        "character_stats": telemetry.get("oracle_char_stats"),
+        "saved_map_c30": telemetry.get("oracle_saved_map_c30"),
+        "save_slot": telemetry.get("game_save_slot"),
+        "animation_id": telemetry.get("current_animation_id"),
+        "postload_popup_seen": telemetry.get("oracle_postload_modal_seen"),
+        "postload_popup_builds": telemetry.get("oracle_msgbox_postload_builds"),
+        "blocking_modal_present": telemetry.get("oracle_blocking_modal_present"),
+        "simulated_button_presses_total": telemetry.get("simulated_button_presses_total"),
+    }
+    observed["character_name_empty_like"] = name_empty_like(observed["character_name"])
+    return {
+        "character_name": observed["character_name"],
+        "observed": observed,
+        "expected": expected,
+        "expected_save_match": telemetry_expected_save_match(telemetry, expected_save_oracle),
+        "expected_animation_match": telemetry_expected_animation_match(telemetry, expected_animation_id),
+        "no_postload_popup": telemetry_no_postload_popup(telemetry),
+    }
+
+
 def telemetry_real_character_loaded(telemetry: dict[str, Any]) -> bool:
     stats = telemetry.get("oracle_char_stats")
+    name = telemetry.get("oracle_char_name")
+    name_len = as_int(
+        telemetry.get("oracle_char_name_len"),
+        len(name) if isinstance(name, str) else 0,
+    )
     return bool(
-        as_int(telemetry.get("oracle_char_level"), 0) >= MIN_REAL_CHARACTER_LEVEL
+        isinstance(name, str)
+        and not name_empty_like(name)
+        and name_len >= MIN_REAL_CHARACTER_NAME_LEN
+        and len(name) >= MIN_REAL_CHARACTER_NAME_LEN
+        and as_int(telemetry.get("oracle_char_level"), 0) >= MIN_REAL_CHARACTER_LEVEL
         and as_int(telemetry.get("oracle_char_current_hp"), 0) >= MIN_REAL_CHARACTER_HP
         and isinstance(stats, list)
         and len(stats) >= MIN_EXPECTED_STAT_COUNT
@@ -330,22 +456,29 @@ def telemetry_render_semantic_ready(telemetry: dict[str, Any]) -> bool:
     )
 
 
-def telemetry_world_loaded(telemetry: dict[str, Any] | None) -> bool:
+def telemetry_world_loaded(
+    telemetry: dict[str, Any] | None,
+    expected_save_oracle: dict[str, Any] | None = None,
+    expected_animation_id: int | None = None,
+) -> bool:
     if telemetry is None or telemetry.get("game_man_available") is not True:
         return False
     player_seen = telemetry.get("player_available") is True or telemetry.get("player_seen") is True
     load_in_progress_clear = as_int(telemetry.get("oracle_load_in_progress_b80"), -1) == 0
     saved_map_present = as_int(telemetry.get("oracle_saved_map_c30"), -1) != -1
-    blocking_modal_clear = telemetry.get("oracle_blocking_modal_present") is not True
     canonical_world_clear = telemetry.get("oracle_grounded") is True or as_int(telemetry.get("oracle_now_loading"), -1) == 0
-    semantic_world_clear = telemetry_real_character_loaded(telemetry) and telemetry_render_semantic_ready(telemetry)
+    real_character_loaded = telemetry_real_character_loaded(telemetry)
+    semantic_world_clear = real_character_loaded and telemetry_render_semantic_ready(telemetry)
     return bool(
         player_seen
         and telemetry.get("oracle_player_present") is True
         and telemetry.get("oracle_block_id_valid") is True
         and load_in_progress_clear
         and saved_map_present
-        and blocking_modal_clear
+        and telemetry_no_postload_popup(telemetry)
+        and real_character_loaded
+        and telemetry_expected_save_match(telemetry, expected_save_oracle)
+        and telemetry_expected_animation_match(telemetry, expected_animation_id)
         and (canonical_world_clear or semantic_world_clear)
     )
 
@@ -430,6 +563,109 @@ def visual_loading_screen_visible(artifact_dir: Path, windows: list[dict[str, An
     except Exception as exc:
         result["error"] = repr(exc)
         return True
+    finally:
+        check_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def legal_popup_ocr_matches(text: str) -> list[str]:
+    return [pattern.pattern for pattern in LEGAL_POPUP_OCR_PATTERNS if pattern.search(text)]
+
+
+def visual_legal_popup_visible(artifact_dir: Path, windows: list[dict[str, Any]], sample: int) -> bool:
+    check_path = artifact_dir / f"legal-popup-check-{sample:03d}.json"
+    result: dict[str, Any] = {"sample": sample, "legal_popup_detected": False}
+    try:
+        if not windows:
+            result["error"] = "no_target_window"
+            return False
+        grim = shutil.which("grim")
+        tesseract = shutil.which("tesseract")
+        magick = shutil.which("magick") or shutil.which("convert")
+        result["capture_tools"] = {"grim": grim, "tesseract": tesseract, "magick": magick}
+        if not grim or not tesseract or not magick:
+            result["error"] = "missing_visual_check_tool"
+            return False
+        win = windows[0]
+        at = win.get("at") or []
+        size = win.get("size") or []
+        if len(at) != 2 or len(size) != 2:
+            result["error"] = "bad_window_geometry"
+            result["window"] = win
+            return False
+        geom = f"{int(at[0])},{int(at[1])} {int(size[0])}x{int(size[1])}"
+        png = artifact_dir / f"legal-popup-check-{sample:03d}.png"
+        grim_run = subprocess.run(
+            [grim, "-g", geom, str(png)],
+            capture_output=True,
+            text=True,
+            timeout=VISUAL_CHECK_SUBPROCESS_TIMEOUT_SECONDS,
+        )
+        result["geom"] = geom
+        result["png"] = str(png)
+        result["grim_rc"] = grim_run.returncode
+        result["grim_stderr"] = grim_run.stderr.strip()
+        if grim_run.returncode != 0 or not png.exists():
+            result["error"] = "grim_failed"
+            return False
+        ocr_results = []
+        text_parts = []
+        for crop_name, crop in VISUAL_LEGAL_OCR_CROPS:
+            ocr_png = artifact_dir / f"legal-popup-check-{sample:03d}.{crop_name}.ocr.png"
+            magick_run = subprocess.run(
+                [
+                    magick,
+                    str(png),
+                    "-crop",
+                    crop,
+                    "-resize",
+                    "300%",
+                    "-colorspace",
+                    "Gray",
+                    "-normalize",
+                    "-level",
+                    "20%,85%",
+                    "-sharpen",
+                    "0x1",
+                    str(ocr_png),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=VISUAL_CHECK_SUBPROCESS_TIMEOUT_SECONDS,
+            )
+            ocr_input = ocr_png if ocr_png.exists() else png
+            ocr_run = subprocess.run(
+                [tesseract, str(ocr_input), "stdout", "--psm", "6"],
+                capture_output=True,
+                text=True,
+                timeout=VISUAL_CHECK_SUBPROCESS_TIMEOUT_SECONDS,
+            )
+            text_parts.append(ocr_run.stdout)
+            ocr_results.append(
+                {
+                    "crop": crop_name,
+                    "geometry": crop,
+                    "magick_rc": magick_run.returncode,
+                    "magick_stderr": magick_run.stderr.strip(),
+                    "ocr_rc": ocr_run.returncode,
+                    "ocr_stderr": ocr_run.stderr.strip(),
+                    "ocr_preview": ocr_run.stdout[:VISUAL_OCR_PREVIEW_CHARS],
+                }
+            )
+        text = "\n".join(text_parts)
+        matches = legal_popup_ocr_matches(text)
+        detected = bool(matches)
+        result.update(
+            {
+                "legal_popup_detected": detected,
+                "ocr_results": ocr_results,
+                "ocr_matches": matches,
+                "ocr_preview": text[:VISUAL_OCR_PREVIEW_CHARS],
+            }
+        )
+        return detected
+    except Exception as exc:
+        result["error"] = repr(exc)
+        return False
     finally:
         check_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -570,6 +806,7 @@ def classify_snapshot(
 
 def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
     pattern = re.compile(args.process_pattern, re.I)
+    expected_save_oracle = read_json(args.expected_save_oracle) if args.expected_save_oracle else None
     deadline = time.monotonic() + float(args.max_runtime_seconds)
     pid, reason, spawn_polls = select_runtime_pid(
         pattern,
@@ -583,6 +820,8 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
 
     window_stale_polls = 0
     world_stable_samples = 0
+    legal_popup_samples = 0
+    next_legal_popup_check_at = 0.0
     last_world_stable_tick: int | None = None
     world_stable_since: float | None = None
     for poll in range(args.readiness_poll_budget):
@@ -597,6 +836,8 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
                     hypr_windows(args.window_class),
                     spawn_polls + poll,
                     float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
                 )
             )
         module_base, module_mappings = runtime_module_base(pid)
@@ -617,8 +858,27 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
         telemetry = read_json(args.telemetry)
         bootstrap = read_bootstrap(args.bootstrap, args.bootstrap_state)
         windows = hypr_windows(args.window_class)
+        now = time.monotonic()
+        if args.visual_legal_popup_check and windows and now >= next_legal_popup_check_at:
+            legal_popup_samples += 1
+            next_legal_popup_check_at = now + args.visual_legal_popup_check_interval_seconds
+            if visual_legal_popup_visible(args.artifact_dir, windows, legal_popup_samples):
+                return with_runtime_module_info(
+                    ReadinessResult(
+                        False,
+                        LEGAL_POPUP_DETECTED,
+                        pid,
+                        bootstrap,
+                        telemetry,
+                        windows,
+                        spawn_polls + poll,
+                        float(args.max_runtime_seconds),
+                        expected_save_oracle=expected_save_oracle,
+                        expected_animation_id=args.expected_animation_id,
+                    )
+                )
         if args.target == TARGET_WORLD_STABLE:
-            if process_running and telemetry_world_loaded(telemetry):
+            if process_running and telemetry_world_loaded(telemetry, expected_save_oracle, args.expected_animation_id):
                 tick = telemetry_world_tick(telemetry or {}, poll)
                 if tick != last_world_stable_tick:
                     world_stable_samples += 1
@@ -648,6 +908,8 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
                             spawn_polls + poll,
                             float(args.max_runtime_seconds),
                             world_stable_samples=world_stable_samples,
+                            expected_save_oracle=expected_save_oracle,
+                            expected_animation_id=args.expected_animation_id,
                         )
                     )
             else:
@@ -682,6 +944,8 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
                     result.windows,
                     result.polls,
                     float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
                 )
             )
         os.sched_yield()
@@ -696,6 +960,8 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
             hypr_windows(args.window_class),
             spawn_polls + args.readiness_poll_budget,
             float(args.max_runtime_seconds),
+            expected_save_oracle=expected_save_oracle,
+            expected_animation_id=args.expected_animation_id,
         )
     )
 
@@ -728,9 +994,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--world-stable-samples", type=int, default=3)
     parser.add_argument("--world-stable-dwell-seconds", type=float, default=DEFAULT_WORLD_STABLE_DWELL_SECONDS)
     parser.add_argument(
+        "--expected-save-oracle",
+        type=Path,
+        help="Expected save-slot oracle JSON generated from the vanilla ER0000.sl2 file.",
+    )
+    parser.add_argument(
+        "--expected-animation-id",
+        type=int,
+        default=DEFAULT_EXPECTED_ANIMATION_ID,
+        help="Expected in-world player animation ID for the gold-start oracle.",
+    )
+    parser.add_argument(
         "--visual-world-check",
         action="store_true",
         help="Before accepting world-stable telemetry, OCR a target-window screenshot and reject loading-tip screens.",
+    )
+    parser.add_argument(
+        "--visual-legal-popup-check",
+        action="store_true",
+        help="Fail immediately when target-window OCR detects EULA/terms/license/legal-popup text.",
+    )
+    parser.add_argument(
+        "--visual-legal-popup-check-interval-seconds",
+        type=float,
+        default=LEGAL_POPUP_CHECK_INTERVAL_SECONDS,
+        help="Minimum seconds between target-window legal-popup OCR samples.",
     )
     parser.add_argument(
         "--max-runtime-seconds",
@@ -759,6 +1047,10 @@ def main() -> int:
         raise SystemExit("--world-stable-samples must be greater than 0")
     if args.world_stable_dwell_seconds < 0:
         raise SystemExit("--world-stable-dwell-seconds must be greater than or equal to 0")
+    if args.visual_legal_popup_check_interval_seconds <= 0:
+        raise SystemExit("--visual-legal-popup-check-interval-seconds must be greater than 0")
+    if args.expected_save_oracle and read_json(args.expected_save_oracle) is None:
+        raise SystemExit(f"--expected-save-oracle is not readable JSON: {args.expected_save_oracle}")
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
     result = wait_readiness(args)
     output = args.artifact_dir / "readiness-result.json"

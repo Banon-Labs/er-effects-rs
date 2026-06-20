@@ -34,6 +34,7 @@ RUNTIME_POLICY_REQUIRED_SNIPPETS = (
     "window_without_bootstrap_or_task_ready",
     "host_input == \"none\"",
     "process_tree_and_save_restore",
+    "legal_popup_check == \"target_window_ocr_fail_fast\"",
     "timeout_seconds",
     "max_timeout_seconds := 60",
 )
@@ -249,7 +250,7 @@ def scan_contract() -> list[Finding]:
                     0,
                     "runtime-policy-missing-readiness-watcher-gate",
                     ", ".join(missing_snippets),
-                    "Require the manual readiness probe contract: readiness watcher, no-telemetry bootstrap failure, no host input, and process/save teardown.",
+                    "Require the manual readiness probe contract: readiness watcher, no-telemetry bootstrap failure, no host input, process/save teardown, and fail-fast legal-popup evidence capture.",
                 )
             )
         if "runtime probes are disabled" not in text:
@@ -271,6 +272,7 @@ def scan_contract() -> list[Finding]:
                 "RUNTIME_TIMEOUT_SECONDS",
                 '"timeout_seconds"',
                 "--max-runtime-seconds",
+                "--visual-legal-popup-check",
             )
             if snippet not in probe_text
         ]

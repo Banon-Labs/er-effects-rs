@@ -261,9 +261,44 @@ def main() -> int:
         "oracle_load_in_progress_b80": 0,
         "oracle_grounded": True,
         "oracle_saved_map_c30": "0xa010000",
+        "game_save_slot": 0,
+        "oracle_char_name": "Tester",
+        "oracle_char_name_len": 6,
+        "oracle_char_level": 9,
+        "oracle_char_current_hp": 522,
+        "oracle_char_stats": [15, 10, 11, 14, 13, 9, 9, 7],
+        "current_animation_id": watcher.DEFAULT_EXPECTED_ANIMATION_ID,
+        "oracle_msgbox_postload_builds": 0,
+        "oracle_postload_modal_seen": False,
+        "oracle_blocking_modal_present": False,
         "game_task_ticks": TEST_POLLS,
     }
-    assert watcher.telemetry_world_loaded(world_loaded_telemetry)
+    expected_save_oracle = {
+        "source_path": "/tmp/ER0000.sl2",
+        "slot": 0,
+        "decoded_fields": {
+            "name": "Tester",
+            "name_len": 6,
+            "level": 9,
+            "health": 522,
+            "stats": [15, 10, 11, 14, 13, 9, 9, 7],
+            "saved_map_c30": 0x0A010000,
+        },
+    }
+    assert watcher.telemetry_world_loaded(world_loaded_telemetry, expected_save_oracle, watcher.DEFAULT_EXPECTED_ANIMATION_ID)
+    assert watcher.oracle_summary(world_loaded_telemetry, expected_save_oracle, watcher.DEFAULT_EXPECTED_ANIMATION_ID)["character_name"] == "Tester"
+    assert watcher.name_empty_like("")
+    assert watcher.name_empty_like("   ")
+    assert watcher.name_empty_like("_")
+    assert not watcher.name_empty_like("Tester")
+    mismatched_save = {**expected_save_oracle, "decoded_fields": {**expected_save_oracle["decoded_fields"], "name": "Bonky Bean"}}
+    assert not watcher.telemetry_world_loaded(world_loaded_telemetry, mismatched_save, watcher.DEFAULT_EXPECTED_ANIMATION_ID)
+    mismatched_slot = {**expected_save_oracle, "slot": 1}
+    assert not watcher.telemetry_world_loaded(world_loaded_telemetry, mismatched_slot, watcher.DEFAULT_EXPECTED_ANIMATION_ID)
+    assert not watcher.telemetry_world_loaded({**world_loaded_telemetry, "oracle_char_name": "_", "oracle_char_name_len": 1}, expected_save_oracle, watcher.DEFAULT_EXPECTED_ANIMATION_ID)
+    assert not watcher.telemetry_world_loaded({**world_loaded_telemetry, "oracle_char_name": "   ", "oracle_char_name_len": 3}, expected_save_oracle, watcher.DEFAULT_EXPECTED_ANIMATION_ID)
+    assert not watcher.telemetry_world_loaded({**world_loaded_telemetry, "current_animation_id": 999}, expected_save_oracle, watcher.DEFAULT_EXPECTED_ANIMATION_ID)
+    assert not watcher.telemetry_world_loaded({**world_loaded_telemetry, "oracle_msgbox_postload_builds": 1}, expected_save_oracle, watcher.DEFAULT_EXPECTED_ANIMATION_ID)
     assert watcher.telemetry_world_tick(world_loaded_telemetry, 0) == TEST_POLLS
     selector_loaded_telemetry = {
         **world_loaded_telemetry,
@@ -271,6 +306,8 @@ def main() -> int:
         "oracle_now_loading": 1,
         "oracle_char_level": 9,
         "oracle_char_current_hp": 522,
+        "oracle_char_name": "Tester",
+        "oracle_char_name_len": 6,
         "oracle_char_stats": [15, 10, 11, 14, 13, 9, 9, 7],
         "oracle_chr_model_ins_present": True,
         "oracle_chr_ctrl_present": True,
@@ -303,6 +340,10 @@ def main() -> int:
     torch_tip_text = "Using Torches Raise your torch to see further into dark spaces"
     torch_matches = [pattern.pattern for pattern in watcher.LOADING_SCREEN_OCR_PATTERNS if pattern.search(torch_tip_text)]
     assert torch_matches
+    eula_text = "END USER LICENSE AGREEMENT Please read this Software License Agreement Accept Decline"
+    assert watcher.legal_popup_ocr_matches(eula_text)
+    assert watcher.legal_popup_ocr_matches("Terms of Service and Privacy Policy")
+    assert not watcher.legal_popup_ocr_matches("ELDEN RING Continue Load Game System")
 
     manual_world_wait = watcher.classify_snapshot(
         pid=TEST_PID,

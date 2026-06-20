@@ -11,14 +11,14 @@ A score of `autoload_re_score=1400` means the patch exists, stays in the DLL, fo
 
 ## Metrics
 - **Primary**: `autoload_re_score` (points, higher is better, max 1400) — composite RE/product-proof score from `.auto/measure.sh`.
-- **Regression/failure metrics**: `readiness_gate_failures`, `asset_chain_failures`, `dll_patch_failures`, `native_continue_failures`, `field58_gate_failures`, `direct_shortcut_failures`, `input_path_failures`, `runtime_proof_failures`, `false_positives`.
+- **Regression/failure metrics**: `readiness_gate_failures`, `asset_chain_failures`, `dll_patch_failures`, `native_continue_failures`, `field58_gate_failures`, `direct_shortcut_failures`, `input_path_failures`, `runtime_proof_failures`, `eula_popup_failures`, `false_positives`.
 - **Legacy secondary metrics**: `target_constants_remaining`, `helpers_missing`, `fixed_wait_predicates`, `autoload_static_failures`.
 
 Score rubric:
 - **Asset provenance / resource chain (200 pts)**: Data archive source is explicit; FMG/menu resource IDs are mapped; native consumers/xrefs are tied to those IDs; extraction is reproducible from local tools/artifacts.
 - **Native Continue action identity (300 pts)**: real selected Continue row/object is identified; receiver/vtable/docall/result/submit ABI are proven; selected/default Continue is not confused with Down navigation; `result+0x58` is logged only as unknown/diagnostic, not used as readiness.
 - **DLL product patch path (300 pts)**: implemented inside the chainload DLL; no `eldenring.exe` patching, loose asset edits, or product direct-load/direct-confirm/deser dispatcher shortcuts; advances through native accept/submit semantics after Continue exists.
-- **Safety/runtime oracle (300 pts)**: input remains blocked/suppressed; `simulated_button_presses_total=0`; save backup/restore and char-fingerprint/mount guards remain; bounded runtime proof reaches native load, loaded-slot completion (`b80_deserialize` or disabled modal-confirm with loaded evidence), native confirm/SetState5, and world-stable edges.
+- **Safety/runtime oracle (300 pts)**: input remains blocked/suppressed; `simulated_button_presses_total=0`; save backup/restore and char-fingerprint/mount guards remain; bounded runtime proof reaches native load, loaded-slot completion (`b80_deserialize` or disabled modal-confirm with loaded evidence), native confirm/SetState5, and world-stable edges. The gold oracle must derive expected character identity from the vanilla `ER0000.sl2` save slot (not `.co2` except Seamless-specific tests), expose the character name in the oracle summary, require observed telemetry to match that derived save identity, treat `"_"`, `""`, and all-whitespace names as empty-like/non-real, require the expected player animation ID, and require no native post-load popup/modal builds after Continue/load finalizes.
 - **Static regression guards (300 pts)**: fixed waits remain fail-safe only; checker/measure fail closed for direct shortcuts, input probes, stale `mode=0` gating, and asset-chain regressions; build/checks pass.
 
 ## How to Run
@@ -50,7 +50,7 @@ If re-initializing autoresearch, use metric `autoload_re_score`, unit `points`, 
 - Frame/call counts may remain only as outer fail-safe timeouts, never as success predicates.
 - Polling semantic predicates once per game tick is allowed; requiring N ticks before success is not.
 - Debug logs should say exactly which field/vtable/state opened or blocked a gate, not “waited N frames”.
-- Runtime proof must be self-validating: target window confirmed by class, input blocking/suppression confirmed where relevant, exact process matching, save/game-file restore, teardown, and (for disabled modal-confirm) the log must show why the load is already safe to continue instead of polling for a user confirm press.
+- Runtime proof must be self-validating: target window confirmed by class, input blocking/suppression confirmed where relevant, exact process matching, save/game-file restore, teardown, expected `ER0000.sl2` slot identity match (including non-empty-like character name; `"_"`, `""`, and whitespace-only are empty), expected player animation ID, no native post-load popup/modal builds, and (for disabled modal-confirm) the log must show why the load is already safe to continue instead of polling for a user confirm press. EULA/terms/license/first-boot legal popups are a hard product failure at any point: the DLL must not auto-accept them, and fallback/menu success is invalid while such a popup is visible. `eula_popup_failures` must come from real runtime evidence captured into the artifact (currently `legal-popup-check-*.png/json` target-window OCR evidence, or a future stronger native dialog oracle), must cause the watcher to fail immediately with `visual_legal_popup_detected` when detected, and must reduce the autoresearch score.
 - The product proof chain must include downstream native evidence (`continue_load_67b750`, `b80_deserialize_67b290`, native `continue_confirm`/SetState5, world-stable/max oracle), not just a title screenshot.
 
 ## Static/runtime evidence already gathered

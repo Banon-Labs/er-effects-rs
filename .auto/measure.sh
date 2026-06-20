@@ -15,6 +15,13 @@ prompt = (root / '.auto/prompt.md').read_text(encoding='utf-8', errors='replace'
 combined = lib + '\n' + exp
 
 
+def empty_name_like(value) -> bool:
+    if not isinstance(value, str):
+        return True
+    stripped = value.strip()
+    return stripped == '' or stripped == '_'
+
+
 def strip_comments(s: str) -> str:
     out=[]
     for line in s.splitlines():
@@ -244,7 +251,11 @@ if not product_continue_body:
     dll_failures.append('missing product_continue_autoload_tick implementation')
 
 runtime_failures: list[str] = []
-required_runtime = ['ready', 'product_submit', 'continue_load', 'deserialize', 'confirm', 'world', 'zero_input']
+eula_popup_failures: list[str] = []
+if any(token in product_continue_body for token in ['T_loadgame_menu_fallback', 'fire_live_loadgame_node', 'Load Game menu fallback']):
+    eula_popup_failures.append('product path can still open native Load Game fallback instead of failing closed on invalid/empty Continue target')
+required_runtime = ['ready', 'product_submit', 'continue_load', 'deserialize', 'confirm', 'world', 'zero_input', 'expected_save', 'expected_animation', 'no_postload_popup']
+legal_popup_by_dir: dict[str, list[str]] = {}
 best_runtime: tuple[int, Path | None, dict[str, bool]] = (0, None, {key: False for key in required_runtime})
 rt_root = root / 'target/runtime-probe'
 if rt_root.exists():
@@ -266,6 +277,49 @@ if rt_root.exists():
                 proof['zero_input'] = True
             if re.search(r'world[-_ ]?stable|max oracle|SetState5', raw, re.IGNORECASE):
                 proof['world'] = True
+            oracle = data.get('oracle') if isinstance(data.get('oracle'), dict) else {}
+            expected_oracle = oracle.get('expected') if isinstance(oracle.get('expected'), dict) else {}
+            observed_oracle = oracle.get('observed') if isinstance(oracle.get('observed'), dict) else {}
+            observed_name = oracle.get('character_name')
+            expected_name = expected_oracle.get('character_name')
+            if (
+                oracle.get('expected_save_match') is True
+                and observed_name
+                and not empty_name_like(observed_name)
+                and not empty_name_like(expected_name)
+                and observed_oracle.get('character_name_empty_like') is not True
+                and expected_oracle.get('character_name_empty_like') is not True
+            ):
+                proof['expected_save'] = True
+            if oracle.get('expected_animation_match') is True:
+                proof['expected_animation'] = True
+            if oracle.get('no_postload_popup') is True:
+                proof['no_postload_popup'] = True
+        legal_evidence: list[str] = []
+        for legal_path in sorted(d.glob('legal-popup-check-*.json')):
+            try:
+                legal_data = json.loads(legal_path.read_text(encoding='utf-8', errors='replace'))
+            except Exception:
+                continue
+            if legal_data.get('legal_popup_detected') is True:
+                matches = legal_data.get('ocr_matches') or []
+                legal_evidence.append(f'{legal_path.name} matches={matches}')
+        readiness_detected_legal = False
+        p = d / 'readiness-result.json'
+        if p.exists():
+            try:
+                data = json.loads(p.read_text(encoding='utf-8', errors='replace'))
+            except Exception:
+                data = {}
+            readiness_detected_legal = data.get('reason') == 'visual_legal_popup_detected'
+        if legal_evidence:
+            legal_popup_by_dir[d.name] = [
+                f'runtime artifact {d.name} detected EULA/legal popup from captured target-window OCR evidence: {"; ".join(legal_evidence)}'
+            ]
+        elif readiness_detected_legal:
+            legal_popup_by_dir[d.name] = [
+                f'runtime artifact {d.name} failed immediately with visual_legal_popup_detected but legal OCR evidence file was missing'
+            ]
         for name in ['autoload-debug-live.final.log', 'continue-trace-game.final.log', 'continue-trace-game.log']:
             p = d / name
             if not p.exists():
@@ -293,10 +347,11 @@ else:
     missing = [key for key in required_runtime if not proof[key]]
     if missing:
         runtime_failures.append(f'runtime proof best artifact {best_dir.name} missing {",".join(missing)}')
+    eula_popup_failures.extend(legal_popup_by_dir.get(best_dir.name, []))
 
 false_positives = 0
 all_detail_failures = []
-for group in [legacy_failures, asset_failures, dll_failures, native_failures, field58_failures, direct_failures, input_failures, runtime_failures]:
+for group in [legacy_failures, asset_failures, dll_failures, native_failures, field58_failures, direct_failures, input_failures, runtime_failures, eula_popup_failures]:
     all_detail_failures.extend(group)
 
 weights = {
@@ -308,6 +363,7 @@ weights = {
     'direct': 85,
     'input': 85,
     'runtime': 80,
+    'eula_popup': 80,
     'false_positive': 100,
 }
 penalty = (
@@ -319,6 +375,7 @@ penalty = (
     + len(direct_failures) * weights['direct']
     + len(input_failures) * weights['input']
     + len(runtime_failures) * weights['runtime']
+    + len(eula_popup_failures) * weights['eula_popup']
     + false_positives * weights['false_positive']
 )
 score = max(0, MAX_SCORE - penalty)
@@ -339,5 +396,6 @@ print(f'METRIC field58_gate_failures={len(field58_failures)}')
 print(f'METRIC direct_shortcut_failures={len(direct_failures)}')
 print(f'METRIC input_path_failures={len(input_failures)}')
 print(f'METRIC runtime_proof_failures={len(runtime_failures)}')
+print(f'METRIC eula_popup_failures={len(eula_popup_failures)}')
 print(f'METRIC false_positives={false_positives}')
 PY

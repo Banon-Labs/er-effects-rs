@@ -48,6 +48,10 @@ def load_oracle():
 
 def main() -> int:
     oracle = load_oracle()
+    assert oracle.name_empty_like("")
+    assert oracle.name_empty_like("   ")
+    assert oracle.name_empty_like("_")
+    assert not oracle.name_empty_like(EXPECTED_NAME)
     slot_data = FIXTURE_PATH.read_bytes()
     decoded = oracle.decode_sl2_bt_fixture_fields(slot_data)
     fields = decoded["decoded_fields"]
@@ -59,6 +63,7 @@ def main() -> int:
     assert fields["level"] == EXPECTED_LEVEL
     assert fields["stats"] == EXPECTED_STATS
     assert fields["name"] == EXPECTED_NAME
+    assert fields["name_empty_like"] is False
     assert fields["gender"] == EXPECTED_GENDER
     assert fields["max_crimson_flask_count"] == EXPECTED_MAX_CRIMSON_FLASK_COUNT
     assert fields["max_cerulean_flask_count"] == EXPECTED_MAX_CERULEAN_FLASK_COUNT
