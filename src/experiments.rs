@@ -6232,6 +6232,97 @@ fn apply_xor_ret_stub(base: usize, rva: usize, label: &str) {
 /// in rax). Calls the original, then (pre-world, capped) logs the BUILT dialog's vtable/class +
 /// the 4 args (the FMG message id is one of them) + caller, so we can identify the actual
 /// connection-error dialog without guessing. Read-only; never mutates the dialog.
+pub(crate) unsafe extern "system" fn policy_tos_title_ctor_hook(
+    this: usize,
+    rdx: usize,
+    r8: usize,
+    r9: usize,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = POLICY_TOS_TITLE_CTOR_ORIG.load(Ordering::SeqCst);
+    let ret = if orig == HOOK_ORIGINAL_UNSET {
+        null
+    } else {
+        let f: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { f(this, rdx, r8, r9) }
+    };
+    let base = game_module_base().unwrap_or(null);
+    let object = if ret != null { ret } else { this };
+    let vt = if object != null {
+        unsafe { safe_read_usize(object) }.unwrap_or(null)
+    } else {
+        null
+    };
+    POLICY_TOS_TITLE_LAST_THIS.store(object, Ordering::SeqCst);
+    POLICY_TOS_TITLE_LAST_VTABLE.store(vt, Ordering::SeqCst);
+    POLICY_TOS_TITLE_LAST_ARG_RDX.store(rdx, Ordering::SeqCst);
+    POLICY_TOS_TITLE_LAST_ARG_R8.store(r8, Ordering::SeqCst);
+    POLICY_TOS_TITLE_LAST_ARG_R9.store(r9, Ordering::SeqCst);
+    POLICY_TOS_TITLE_TOTAL_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "policy-oracle: TosTitle ctor 0x{:x} built object=0x{object:x} vt=0x{vt:x} expected_vt=0x{:x} args(rdx=0x{rdx:x} r8=0x{r8:x} r9=0x{r9:x}) text_path=0x{:x} -- native/asset-backed Privacy/ToS surface regression",
+        base + POLICY_TOS_TITLE_CTOR_RVA as usize,
+        base + POLICY_TOS_TITLE_VTABLE_RVA,
+        base + POLICY_TOS_TITLE_TEXT_PATH_RVA
+    ));
+    ret
+}
+
+pub(crate) fn install_policy_tos_title_hook() {
+    if POLICY_TOS_TITLE_HOOK_INSTALLED.load(Ordering::SeqCst) != POLICY_TOS_TITLE_HOOK_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "policy-oracle: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(ctor_addr) = game_rva(POLICY_TOS_TITLE_CTOR_RVA) else {
+        append_autoload_debug(format_args!(
+            "policy-oracle: failed to resolve TosTitle ctor rva"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            ctor_addr as *mut c_void,
+            policy_tos_title_ctor_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            POLICY_TOS_TITLE_CTOR_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "policy-oracle: queue_enable TosTitle ctor failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    POLICY_TOS_TITLE_HOOK_INSTALLED
+                        .store(POLICY_TOS_TITLE_HOOK_INSTALLED_YES, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "policy-oracle: hooked TosTitle ctor 0x{ctor_addr:x} (native Privacy/ToS surface oracle)"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "policy-oracle: MH_ApplyQueued TosTitle ctor failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "policy-oracle: MhHook::new TosTitle ctor failed: {status:?}"
+        )),
+    }
+}
+
 pub(crate) unsafe extern "system" fn msgbox_builder_hook(
     a: usize,
     b: usize,

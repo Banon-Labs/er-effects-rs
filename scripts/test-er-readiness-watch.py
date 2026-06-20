@@ -370,6 +370,8 @@ def main() -> int:
     assert watcher.native_legal_text_id(607301) == 607301
     assert watcher.native_legal_text_id(606300) is None
     assert watcher.telemetry_native_legal_popup_detected({"oracle_msgbox_builder_args": [1, 607200, 3, 4]})
+    assert watcher.telemetry_native_legal_popup_detected({"oracle_policy_window_total_builds": 1})
+    assert watcher.telemetry_native_legal_popup_detected({"oracle_policy_window_any_seen": True})
     assert not watcher.telemetry_native_legal_popup_detected({"oracle_msgbox_builder_args": [1, 2, 3, 4]})
 
     manual_world_wait = watcher.classify_snapshot(

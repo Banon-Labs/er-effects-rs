@@ -1744,6 +1744,30 @@ pub(crate) const MSGBOX_BUILDER_RVA: u32 = MsgBoxRva::Builder as u32;
 pub(crate) static MSGBOX_BUILDER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static MSGBOX_BUILDER_LOG: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) const MSGBOX_BUILDER_LOG_MAX: usize = TraceSampleLimit::Value24 as usize;
+/// Native policy/ToS surface oracle: constructor 0x1409b5970 builds the TosTitle UI object and
+/// binds asset UI paths such as `TosTitle`, `TosTitle/Text`, and the ToS_win64-backed text body.
+/// This is NOT a generic string-presence check; a hit means the live policy/privacy screen object
+/// was constructed during runtime. Any hit is invalid product proof.
+pub(crate) const POLICY_TOS_TITLE_CTOR_RVA: u32 = 0x9b5970;
+pub(crate) const POLICY_TOS_TITLE_VTABLE_RVA: usize = 0x2b28100;
+pub(crate) const POLICY_TOS_TITLE_TEXT_PATH_RVA: usize = 0x2b27330;
+pub(crate) static POLICY_TOS_TITLE_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static POLICY_TOS_TITLE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const POLICY_TOS_TITLE_HOOK_NOT_INSTALLED: usize = 0;
+pub(crate) const POLICY_TOS_TITLE_HOOK_INSTALLED_YES: usize = 1;
+pub(crate) static POLICY_TOS_TITLE_TOTAL_BUILDS: AtomicUsize =
+    AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+pub(crate) static POLICY_TOS_TITLE_LAST_THIS: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static POLICY_TOS_TITLE_LAST_VTABLE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static POLICY_TOS_TITLE_LAST_ARG_RDX: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static POLICY_TOS_TITLE_LAST_ARG_R8: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static POLICY_TOS_TITLE_LAST_ARG_R9: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static START_POLICY_TOS_TITLE_HOOK: Once = Once::new();
 pub(crate) static AUTO_ACCEPT_VT_LAST: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static AUTO_ACCEPT_VT_LOG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const AUTO_ACCEPT_VT_LOG_MAX: usize = 24;
@@ -2741,6 +2765,17 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
             let _ = std::thread::Builder::new()
                 .name("er-effects-menu-window-latch".to_owned())
                 .spawn(install_menu_window_latch_hook);
+        });
+    }
+
+    // Native/asset-backed policy-window oracle: hook the TosTitle constructor early in product
+    // autoload runs. Any hit means the Privacy/ToS surface was constructed and the runtime proof is
+    // invalid; this is detection only, never auto-accept.
+    if product_autoload_enabled() {
+        START_POLICY_TOS_TITLE_HOOK.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-policy-oracle".to_owned())
+                .spawn(install_policy_tos_title_hook);
         });
     }
 

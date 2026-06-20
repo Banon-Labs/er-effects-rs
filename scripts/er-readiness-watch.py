@@ -544,10 +544,16 @@ def native_legal_text_id(value: Any) -> int | None:
 def telemetry_native_legal_popup_detected(telemetry: dict[str, Any] | None) -> bool:
     if not isinstance(telemetry, dict):
         return False
+    # CS::MessageBoxDialog path: legal/privacy FMG IDs captured from native builder args.
     args = telemetry.get("oracle_msgbox_builder_args")
-    if not isinstance(args, list):
-        return False
-    return any(native_legal_text_id(arg) is not None for arg in args)
+    msgbox_legal = isinstance(args, list) and any(native_legal_text_id(arg) is not None for arg in args)
+    # TosTitle path: the Privacy/ToS policy surface is not a MessageBoxDialog; constructor hits are
+    # native/asset-backed evidence that the policy UI was built from the ToS_win64-backed layout.
+    policy_window = (
+        telemetry.get("oracle_policy_window_any_seen") is True
+        or as_int(telemetry.get("oracle_policy_window_total_builds"), 0) > 0
+    )
+    return msgbox_legal or policy_window
 
 
 def telemetry_no_postload_popup(telemetry: dict[str, Any]) -> bool:

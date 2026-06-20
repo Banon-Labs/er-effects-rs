@@ -45,7 +45,7 @@ print(json.dumps({
     "no_telemetry_bootstrap_failure": "window_without_bootstrap_or_task_ready",
     "host_input": "none",
     "teardown": "process_tree_and_save_restore",
-    "legal_popup_check": "target_window_ocr_fail_fast",
+    "legal_popup_check": "native_messagebox_and_packed_asset_tos_fmg_fail_fast",
     "timeout_seconds": timeout_seconds,
 }, sort_keys=True))
 PY

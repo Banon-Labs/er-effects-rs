@@ -290,15 +290,18 @@ for token in [
         messagebox_dialog_failures.append(f'readiness watcher missing native MessageBoxDialog fail-fast token {token}')
 for token in [
     'oracle_msgbox_builder_args',
+    'oracle_policy_window_total_builds',
+    'oracle_policy_window_any_seen',
 ]:
     if token not in telemetry_src:
-        eula_popup_failures.append(f'telemetry missing native legal-popup dialog-arg oracle token {token}')
+        eula_popup_failures.append(f'telemetry missing native legal-popup oracle token {token}')
 for token in [
     '--fail-on-native-legal-popup',
     'native_legal_popup_detected',
     'telemetry_native_legal_popup_detected',
     'ToS_win64.fmg',
     '607200',
+    'oracle_policy_window_total_builds',
 ]:
     if token not in watcher:
         eula_popup_failures.append(f'readiness watcher missing non-OCR legal-popup oracle token {token}')
@@ -335,9 +338,13 @@ if rt_root.exists():
             if data.get('ready') is True or data.get('success') is True:
                 proof['ready'] = True
             raw = json.dumps(data)
-            if re.search(r'"reason"\s*:\s*"native_legal_popup_detected"', raw):
+            if (
+                re.search(r'"reason"\s*:\s*"native_legal_popup_detected"', raw)
+                or re.search(r'"oracle_policy_window_any_seen"\s*:\s*true', raw)
+                or re.search(r'"oracle_policy_window_total_builds"\s*:\s*[1-9]\d*', raw)
+            ):
                 legal_popup_by_dir[d.name] = [
-                    f'runtime artifact {d.name} detected EULA/legal popup from native packed-asset Text ID evidence'
+                    f'runtime artifact {d.name} detected EULA/legal/privacy popup from native packed-asset Text ID or TosTitle policy-window evidence'
                 ]
             if re.search(r'"reason"\s*:\s*"native_messagebox_dialog_detected"', raw) or re.search(r'"oracle_msgbox_any_seen"\s*:\s*true', raw) or re.search(r'"oracle_msgbox_total_builds"\s*:\s*[1-9]\d*', raw):
                 messagebox_by_dir[d.name] = [

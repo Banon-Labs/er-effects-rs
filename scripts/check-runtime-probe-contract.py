@@ -34,7 +34,7 @@ RUNTIME_POLICY_REQUIRED_SNIPPETS = (
     "window_without_bootstrap_or_task_ready",
     "host_input == \"none\"",
     "process_tree_and_save_restore",
-    "legal_popup_check == \"target_window_ocr_fail_fast\"",
+    "legal_popup_check == \"native_messagebox_and_packed_asset_tos_fmg_fail_fast\"",
     "timeout_seconds",
     "max_timeout_seconds := 60",
 )
@@ -272,7 +272,8 @@ def scan_contract() -> list[Finding]:
                 "RUNTIME_TIMEOUT_SECONDS",
                 '"timeout_seconds"',
                 "--max-runtime-seconds",
-                "--visual-legal-popup-check",
+                "--fail-on-messagebox-dialog",
+                "--fail-on-native-legal-popup",
             )
             if snippet not in probe_text
         ]

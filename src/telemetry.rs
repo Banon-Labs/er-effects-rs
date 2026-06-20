@@ -535,8 +535,15 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         let msgbox_arg_rdx = MSGBOX_LAST_ARG_RDX.load(Ordering::SeqCst);
         let msgbox_arg_r8 = MSGBOX_LAST_ARG_R8.load(Ordering::SeqCst);
         let msgbox_arg_r9 = MSGBOX_LAST_ARG_R9.load(Ordering::SeqCst);
+        let policy_total_builds = POLICY_TOS_TITLE_TOTAL_BUILDS.load(Ordering::SeqCst);
+        let policy_any_seen = policy_total_builds != NO_MSGBOX_BUILDS;
+        let policy_ptr = POLICY_TOS_TITLE_LAST_THIS.load(Ordering::SeqCst);
+        let policy_vtable = POLICY_TOS_TITLE_LAST_VTABLE.load(Ordering::SeqCst);
+        let policy_arg_rdx = POLICY_TOS_TITLE_LAST_ARG_RDX.load(Ordering::SeqCst);
+        let policy_arg_r8 = POLICY_TOS_TITLE_LAST_ARG_R8.load(Ordering::SeqCst);
+        let policy_arg_r9 = POLICY_TOS_TITLE_LAST_ARG_R9.load(Ordering::SeqCst);
         body.push_str(&format!(
-            "  \"oracle_msgbox_total_builds\": {},\n  \"oracle_msgbox_any_seen\": {},\n  \"oracle_msgbox_postload_builds\": {},\n  \"oracle_postload_modal_seen\": {},\n  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n  \"oracle_msgbox_builder_args\": [{}, {}, {}, {}],\n",
+            "  \"oracle_msgbox_total_builds\": {},\n  \"oracle_msgbox_any_seen\": {},\n  \"oracle_msgbox_postload_builds\": {},\n  \"oracle_postload_modal_seen\": {},\n  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n  \"oracle_msgbox_builder_args\": [{}, {}, {}, {}],\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_args\": [{}, {}, {}],\n",
             msgbox_total_builds,
             msgbox_any_seen,
             msgbox_postload_builds,
@@ -548,7 +555,14 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             msgbox_arg_rcx,
             msgbox_arg_rdx,
             msgbox_arg_r8,
-            msgbox_arg_r9
+            msgbox_arg_r9,
+            policy_total_builds,
+            policy_any_seen,
+            policy_ptr,
+            policy_vtable,
+            policy_arg_rdx,
+            policy_arg_r8,
+            policy_arg_r9
         ));
     }
     if let Ok(player) = unsafe { PlayerIns::local_player_mut() } {
