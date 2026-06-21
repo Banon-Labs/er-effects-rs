@@ -246,6 +246,16 @@ def main() -> int:
         "telemetry must expose passive native result-handler/action-builder hit counts",
         failures,
     )
+    require(
+        "oracle_continue_phase" in telemetry
+        and "oracle_continue_expected_slot" in telemetry
+        and "oracle_continue_deser_fired" in telemetry
+        and "oracle_continue_confirmed" in telemetry
+        and "oracle_continue_mount_c30" in telemetry
+        and "oracle_continue_guard_waits" in telemetry,
+        "telemetry must expose native Continue product phase/guard state for result-chain interpretation",
+        failures,
+    )
 
     online_body = rust_fn_body(experiments, "online_disable_enabled")
     input_body = rust_fn_body(experiments, "block_input_enabled")
@@ -439,7 +449,8 @@ def main() -> int:
         and "oracle_result_action_builder_hits" in measure
         and "RESULT_EVENT_HANDLER_RVA" in lib
         and "RESULT_ACTION_BUILDER_RVA" in lib
-        and "oracle_result_event_handler_hits" in telemetry_src,
+        and "oracle_result_event_handler_hits" in telemetry_src
+        and "oracle_continue_phase" in telemetry_src,
         "measure must fail closed if passive result-chain telemetry/proof hooks disappear",
         failures,
     )

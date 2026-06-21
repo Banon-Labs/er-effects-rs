@@ -345,6 +345,15 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         format_optional_ptr(RESULT_ACTION_LAST_RESULT.load(Ordering::SeqCst)),
         format_optional_ptr(RESULT_ACTION_LAST_EVENT.load(Ordering::SeqCst))
     ));
+    body.push_str(&format!(
+        "  \"oracle_continue_phase\": {},\n  \"oracle_continue_expected_slot\": {},\n  \"oracle_continue_deser_fired\": {},\n  \"oracle_continue_confirmed\": {},\n  \"oracle_continue_mount_c30\": {},\n  \"oracle_continue_guard_waits\": {},\n",
+        FULLREAD_PHASE.load(Ordering::SeqCst),
+        OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst),
+        OWN_STEPPER_DESER_FIRED.load(Ordering::SeqCst),
+        OWN_STEPPER_CONFIRMED.load(Ordering::SeqCst),
+        OWN_STEPPER_MOUNT_C30.load(Ordering::SeqCst),
+        FULLREAD_DRAIN_WAITS.load(Ordering::SeqCst)
+    ));
     // GameMan save-mgr signals: b80 (load-in-progress lane -- the golden-capture mash-stop signal,
     // nonzero once continue is confirmed and the deserialize kicks) + c30 (saved map id, oracle item 2).
     const NULL_PTR: usize = 0;
