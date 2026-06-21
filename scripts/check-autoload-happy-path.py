@@ -384,6 +384,24 @@ def main() -> int:
         failures,
     )
 
+    policy_hook_names = [
+        "policy_tos_title_ctor_wrapper_hook",
+        "policy_tos_selector_wrapper_hook",
+        "policy_tos_selector_ctor_hook",
+        "policy_tos_flag_setter_hook",
+        "policy_tos_status_predicate_hook",
+        "policy_tos_title_ctor_hook",
+    ]
+    for hook_name in policy_hook_names:
+        hook_body = rust_fn_body(experiments, hook_name) or ""
+        caller_pos = hook_body.find("let caller_rva = trace_first_game_caller_rva();")
+        orig_pos = hook_body.find("_ORIG.load")
+        require(
+            caller_pos >= 0 and (orig_pos < 0 or caller_pos < orig_pos),
+            f"{hook_name} must capture caller RVA at hook entry before original call-through",
+            failures,
+        )
+
     require(
         "oracle_continue_phase" in telemetry
         and "oracle_continue_expected_slot" in telemetry
@@ -669,6 +687,7 @@ def main() -> int:
         and "PE_TEXT_SECTION_NAME" in experiments
         and "policy_tos_title_ctor_wrapper_hook" in experiments
         and "policy_tos_record_fields" in experiments
+        and "let caller_rva = trace_first_game_caller_rva();" in experiments
         and "trace_first_game_caller_rva" in experiments
         and "backing_flag_ptr" in experiments
         and "stack_arg0" in experiments

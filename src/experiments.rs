@@ -6313,6 +6313,7 @@ pub(crate) unsafe extern "system" fn policy_tos_title_ctor_wrapper_hook(
     } else {
         TITLE_OWNER_SCAN_START_ADDRESS
     };
+    let caller_rva = trace_first_game_caller_rva();
     let orig = POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG.load(Ordering::SeqCst);
     let ret = if orig == HOOK_ORIGINAL_UNSET {
         null
@@ -6329,7 +6330,7 @@ pub(crate) unsafe extern "system" fn policy_tos_title_ctor_wrapper_hook(
     POLICY_TOS_TITLE_WRAPPER_LAST_STACK_ARG0.store(stack_arg0, Ordering::SeqCst);
     POLICY_TOS_TITLE_WRAPPER_LAST_BACKING_FLAG_PTR.store(backing_flag_ptr, Ordering::SeqCst);
     POLICY_TOS_TITLE_WRAPPER_LAST_RET.store(ret, Ordering::SeqCst);
-    POLICY_TOS_TITLE_WRAPPER_LAST_CALLER_RVA.store(trace_first_game_caller_rva(), Ordering::SeqCst);
+    POLICY_TOS_TITLE_WRAPPER_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
     ret
 }
 
@@ -6354,6 +6355,7 @@ pub(crate) unsafe extern "system" fn policy_tos_selector_wrapper_hook(record: us
     } else {
         null
     };
+    let caller_rva = trace_first_game_caller_rva();
     let orig = POLICY_TOS_SELECTOR_WRAPPER_ORIG.load(Ordering::SeqCst);
     let ret = if orig == HOOK_ORIGINAL_UNSET {
         null
@@ -6369,8 +6371,7 @@ pub(crate) unsafe extern "system" fn policy_tos_selector_wrapper_hook(record: us
     POLICY_TOS_SELECTOR_WRAPPER_LAST_REQUESTED_FLAG.store(requested_flag, Ordering::SeqCst);
     POLICY_TOS_SELECTOR_WRAPPER_LAST_SELECTOR_ARG.store(selector_arg, Ordering::SeqCst);
     POLICY_TOS_SELECTOR_WRAPPER_LAST_RET.store(ret, Ordering::SeqCst);
-    POLICY_TOS_SELECTOR_WRAPPER_LAST_CALLER_RVA
-        .store(trace_first_game_caller_rva(), Ordering::SeqCst);
+    POLICY_TOS_SELECTOR_WRAPPER_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
     ret
 }
 
@@ -6390,6 +6391,7 @@ pub(crate) unsafe extern "system" fn policy_tos_selector_ctor_hook(
         null
     };
     let owner = selector_arg.saturating_sub(0x29d0);
+    let caller_rva = trace_first_game_caller_rva();
     let orig = POLICY_TOS_SELECTOR_CTOR_ORIG.load(Ordering::SeqCst);
     let ret = if orig == HOOK_ORIGINAL_UNSET {
         null
@@ -6426,7 +6428,7 @@ pub(crate) unsafe extern "system" fn policy_tos_selector_ctor_hook(
     POLICY_TOS_SELECTOR_CTOR_LAST_STORED_REQUESTED_FLAG_PTR
         .store(stored_requested_flag_ptr, Ordering::SeqCst);
     POLICY_TOS_SELECTOR_CTOR_LAST_RET.store(ret, Ordering::SeqCst);
-    POLICY_TOS_SELECTOR_CTOR_LAST_CALLER_RVA.store(trace_first_game_caller_rva(), Ordering::SeqCst);
+    POLICY_TOS_SELECTOR_CTOR_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
     ret
 }
 
@@ -6452,6 +6454,7 @@ pub(crate) unsafe extern "system" fn policy_tos_flag_setter_hook(
     value: i32,
     force: u8,
 ) {
+    let caller_rva = trace_first_game_caller_rva();
     let orig = POLICY_TOS_FLAG_SETTER_ORIG.load(Ordering::SeqCst);
     let (_, before) = unsafe { policy_tos_flag_value(owner) };
     if orig != HOOK_ORIGINAL_UNSET {
@@ -6465,11 +6468,12 @@ pub(crate) unsafe extern "system" fn policy_tos_flag_setter_hook(
     POLICY_TOS_FLAG_SETTER_LAST_FORCE.store(force as usize, Ordering::SeqCst);
     POLICY_TOS_FLAG_SETTER_LAST_BEFORE.store(before, Ordering::SeqCst);
     POLICY_TOS_FLAG_SETTER_LAST_AFTER.store(after, Ordering::SeqCst);
-    POLICY_TOS_FLAG_SETTER_LAST_CALLER_RVA.store(trace_first_game_caller_rva(), Ordering::SeqCst);
+    POLICY_TOS_FLAG_SETTER_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
 }
 
 pub(crate) unsafe extern "system" fn policy_tos_status_predicate_hook(this: usize) -> u8 {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let caller_rva = trace_first_game_caller_rva();
     let orig = POLICY_TOS_STATUS_PREDICATE_ORIG.load(Ordering::SeqCst);
     let ret = if orig == HOOK_ORIGINAL_UNSET {
         0
@@ -6485,7 +6489,7 @@ pub(crate) unsafe extern "system" fn policy_tos_status_predicate_hook(this: usiz
     POLICY_TOS_STATUS_LAST_FLAG_PTR.store(flag_ptr, Ordering::SeqCst);
     POLICY_TOS_STATUS_LAST_FLAG_VALUE.store(flag_value, Ordering::SeqCst);
     POLICY_TOS_STATUS_LAST_RET.store(ret as usize, Ordering::SeqCst);
-    POLICY_TOS_STATUS_LAST_CALLER_RVA.store(trace_first_game_caller_rva(), Ordering::SeqCst);
+    POLICY_TOS_STATUS_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
     ret
 }
 
@@ -6498,6 +6502,7 @@ pub(crate) unsafe extern "system" fn policy_tos_title_ctor_hook(
     backing_flag_ptr: usize,
 ) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let caller_rva = trace_first_game_caller_rva();
     let orig = POLICY_TOS_TITLE_CTOR_ORIG.load(Ordering::SeqCst);
     let ret = if orig == HOOK_ORIGINAL_UNSET {
         null
@@ -6542,7 +6547,7 @@ pub(crate) unsafe extern "system" fn policy_tos_title_ctor_hook(
     POLICY_TOS_TITLE_LAST_STORED_BACKING_FLAG_PTR.store(stored_backing_flag_ptr, Ordering::SeqCst);
     POLICY_TOS_TITLE_LAST_BACKING_FLAG_VALUE.store(backing_flag_value, Ordering::SeqCst);
     POLICY_TOS_TITLE_LAST_REQUESTED_FLAG_VALUE.store(requested_flag_value, Ordering::SeqCst);
-    POLICY_TOS_TITLE_LAST_CALLER_RVA.store(trace_first_game_caller_rva(), Ordering::SeqCst);
+    POLICY_TOS_TITLE_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
     POLICY_TOS_TITLE_TOTAL_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "policy-oracle: TosTitle ctor 0x{:x} built object=0x{object:x} vt=0x{vt:x} expected_vt=0x{:x} args(rdx=0x{rdx:x} r8=0x{r8:x} r9=0x{r9:x} stack0=0x{stack_arg0:x} backing_flag_ptr=0x{backing_flag_ptr:x}) stored_backing_flag_ptr=0x{stored_backing_flag_ptr:x} backing_flag_value={backing_flag_value} requested_flag_value={requested_flag_value} text_path=0x{:x} -- native/asset-backed Privacy/ToS surface regression",

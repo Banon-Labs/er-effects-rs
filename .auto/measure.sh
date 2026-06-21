@@ -337,6 +337,7 @@ if (
     or 'PE_TEXT_SECTION_NAME' not in exp_code
     or 'policy_tos_title_ctor_wrapper_hook' not in exp_code
     or 'policy_tos_record_fields' not in exp_code
+    or 'let caller_rva = trace_first_game_caller_rva();' not in exp_code
     or 'trace_first_game_caller_rva' not in exp_code
     or 'backing_flag_ptr' not in exp_code
     or 'stack_arg0' not in exp_code
