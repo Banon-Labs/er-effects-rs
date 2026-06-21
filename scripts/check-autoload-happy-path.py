@@ -435,10 +435,12 @@ def main() -> int:
     )
     require(
         "result.vtable+0x60" in measure
+        and "result_chain" in measure
+        and "oracle_result_action_builder_hits" in measure
         and "RESULT_EVENT_HANDLER_RVA" in lib
         and "RESULT_ACTION_BUILDER_RVA" in lib
         and "oracle_result_event_handler_hits" in telemetry_src,
-        "measure must fail closed if passive result-chain telemetry hooks disappear",
+        "measure must fail closed if passive result-chain telemetry/proof hooks disappear",
         failures,
     )
     require(

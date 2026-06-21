@@ -442,7 +442,7 @@ for token in [
         save_data_popup_failures.append(f'readiness watcher missing save-data-popup semaphore token {token}')
 if any(token in product_continue_body for token in ['T_loadgame_menu_fallback', 'fire_live_loadgame_node', 'Load Game menu fallback']):
     eula_popup_failures.append('product path can still open native Load Game fallback instead of failing closed on invalid/empty Continue target')
-required_runtime = ['ready', 'product_submit', 'continue_load', 'deserialize', 'confirm', 'world', 'zero_input', 'expected_save', 'expected_animation', 'no_postload_popup']
+required_runtime = ['ready', 'product_submit', 'result_chain', 'continue_load', 'deserialize', 'confirm', 'world', 'zero_input', 'expected_save', 'expected_animation', 'no_postload_popup']
 legal_popup_by_dir: dict[str, list[str]] = {}
 save_data_popup_by_dir: dict[str, list[str]] = {}
 messagebox_by_dir: dict[str, list[str]] = {}
@@ -505,6 +505,11 @@ if rt_root.exists():
                 )
             if 'simulated_button_presses_total' in raw and re.search(r'"simulated_button_presses_total"\s*:\s*0', raw):
                 proof['zero_input'] = True
+            if (
+                re.search(r'"oracle_result_event_handler_hits"\s*:\s*[1-9]\d*', raw)
+                and re.search(r'"oracle_result_action_builder_hits"\s*:\s*[1-9]\d*', raw)
+            ):
+                proof['result_chain'] = True
             if re.search(r'world[-_ ]?stable|max oracle|SetState5', raw, re.IGNORECASE):
                 proof['world'] = True
             oracle = data.get('oracle') if isinstance(data.get('oracle'), dict) else {}
