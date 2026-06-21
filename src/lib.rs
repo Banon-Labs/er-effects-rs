@@ -2275,6 +2275,13 @@ pub(crate) static RESULT_ACTION_LAST_WORD0: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static RESULT_ACTION_LAST_WORD1: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static RESULT_ACTION_INSERT_HITS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+pub(crate) static RESULT_ACTION_LAST_INSERT_ARG0: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static RESULT_ACTION_LAST_INSERT_ARG1: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static RESULT_ACTION_LAST_INSERT_RET: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// router_this ctor RVA and its installed (runtime) primary vtable RVA (= base+this at runtime;
 /// on-disk objdump shows 0x2af9270, +0xe00 dump/PE skew).
 /// REAL function entry is 0x1409060d0 (`rex push rbp` prologue, objdump-verified); the doc's

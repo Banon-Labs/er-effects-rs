@@ -746,6 +746,37 @@ pub(crate) fn trace_callers_summary() -> String {
     format!("callers=[{callers}]")
 }
 
+#[cfg(windows)]
+pub(crate) fn callstack_contains_game_rva(start_rva: usize, end_rva: usize) -> bool {
+    let mut frames = [std::ptr::null_mut::<c_void>(); STACK_TRACE_FRAME_COUNT];
+    let captured = unsafe {
+        RtlCaptureStackBackTrace(
+            STACK_TRACE_FRAMES_TO_SKIP,
+            frames.len() as u32,
+            frames.as_mut_ptr(),
+            std::ptr::null_mut(),
+        )
+    } as usize;
+    let module_base = unsafe { GetModuleHandleA(PCSTR::null()) }
+        .ok()
+        .map(|module| module.0 as usize)
+        .unwrap_or(NULL_MODULE_BASE);
+    if module_base == NULL_MODULE_BASE {
+        return false;
+    }
+    frames.iter().take(captured).any(|frame| {
+        let address = *frame as usize;
+        address >= module_base
+            && address.wrapping_sub(module_base) >= start_rva
+            && address.wrapping_sub(module_base) < end_rva
+    })
+}
+
+#[cfg(not(windows))]
+pub(crate) fn callstack_contains_game_rva(_start_rva: usize, _end_rva: usize) -> bool {
+    false
+}
+
 #[cfg(not(windows))]
 pub(crate) fn trace_callers_summary() -> String {
     "callers=[]".to_owned()

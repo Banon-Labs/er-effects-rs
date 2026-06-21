@@ -10080,6 +10080,23 @@ pub(crate) unsafe extern "system" fn task_enqueue_hook(
         ));
     }
     let result = unsafe { call_task_enqueue_original(arg0, arg1) }.unwrap_or(arg1);
+    const RESULT_ACTION_BUILDER_TRACE_SIZE: usize = 0x360;
+    if callstack_contains_game_rva(
+        RESULT_ACTION_BUILDER_RVA as usize,
+        RESULT_ACTION_BUILDER_RVA as usize + RESULT_ACTION_BUILDER_TRACE_SIZE,
+    ) {
+        let hit = RESULT_ACTION_INSERT_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+            + OWN_STEPPER_CALL_INC;
+        RESULT_ACTION_LAST_INSERT_ARG0.store(arg0 as usize, Ordering::SeqCst);
+        RESULT_ACTION_LAST_INSERT_ARG1.store(arg1 as usize, Ordering::SeqCst);
+        RESULT_ACTION_LAST_INSERT_RET.store(result as usize, Ordering::SeqCst);
+        if hit <= CAP_MENU_INSERT_LOG_FIRST {
+            append_continue_trace(format_args!(
+                "result_action_builder_insert seq={hit} arg0={arg0:p} arg1={arg1:p} ret={result:p} -- passive downstream action node insert via 0x{:x}",
+                TRACE_TASK_ENQUEUE_RVA
+            ));
+        }
+    }
     if let Ok(base) = game_module_base() {
         unsafe { capture_continue_task_node_candidate(base, arg1 as usize, "arg1") };
         unsafe { capture_continue_task_node_candidate(base, result as usize, "ret") };

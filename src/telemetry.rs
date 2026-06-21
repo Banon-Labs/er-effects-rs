@@ -337,7 +337,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         format_optional_ptr(continue_member_node)
     ));
     body.push_str(&format!(
-        "  \"oracle_native_submit_hits\": {},\n  \"oracle_native_submit_last_result\": {},\n  \"oracle_result_event_handler_hits\": {},\n  \"oracle_result_action_builder_hits\": {},\n  \"oracle_result_event_last_result\": {},\n  \"oracle_result_event_last_event\": {},\n  \"oracle_result_event_last_raw_qword0\": {},\n  \"oracle_result_event_last_fd4_code\": {},\n  \"oracle_result_event_last_fd4_arg\": {},\n  \"oracle_result_action_last_result\": {},\n  \"oracle_result_action_last_event\": {},\n  \"oracle_result_action_last_word0\": {},\n  \"oracle_result_action_last_word1\": {},\n",
+        "  \"oracle_native_submit_hits\": {},\n  \"oracle_native_submit_last_result\": {},\n  \"oracle_result_event_handler_hits\": {},\n  \"oracle_result_action_builder_hits\": {},\n  \"oracle_result_event_last_result\": {},\n  \"oracle_result_event_last_event\": {},\n  \"oracle_result_event_last_raw_qword0\": {},\n  \"oracle_result_event_last_fd4_code\": {},\n  \"oracle_result_event_last_fd4_arg\": {},\n  \"oracle_result_action_last_result\": {},\n  \"oracle_result_action_last_event\": {},\n  \"oracle_result_action_last_word0\": {},\n  \"oracle_result_action_last_word1\": {},\n  \"oracle_result_action_insert_hits\": {},\n  \"oracle_result_action_last_insert_arg0\": {},\n  \"oracle_result_action_last_insert_arg1\": {},\n  \"oracle_result_action_last_insert_ret\": {},\n",
         NATIVE_SUBMIT_HITS.load(Ordering::SeqCst),
         format_optional_ptr(NATIVE_SUBMIT_LAST_RESULT.load(Ordering::SeqCst)),
         RESULT_EVENT_HANDLER_HITS.load(Ordering::SeqCst),
@@ -350,7 +350,11 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         format_optional_ptr(RESULT_ACTION_LAST_RESULT.load(Ordering::SeqCst)),
         format_optional_ptr(RESULT_ACTION_LAST_EVENT.load(Ordering::SeqCst)),
         format_optional_ptr(RESULT_ACTION_LAST_WORD0.load(Ordering::SeqCst)),
-        format_optional_ptr(RESULT_ACTION_LAST_WORD1.load(Ordering::SeqCst))
+        format_optional_ptr(RESULT_ACTION_LAST_WORD1.load(Ordering::SeqCst)),
+        RESULT_ACTION_INSERT_HITS.load(Ordering::SeqCst),
+        format_optional_ptr(RESULT_ACTION_LAST_INSERT_ARG0.load(Ordering::SeqCst)),
+        format_optional_ptr(RESULT_ACTION_LAST_INSERT_ARG1.load(Ordering::SeqCst)),
+        format_optional_ptr(RESULT_ACTION_LAST_INSERT_RET.load(Ordering::SeqCst))
     ));
     body.push_str(&format!(
         "  \"oracle_continue_phase\": {},\n  \"oracle_continue_expected_slot\": {},\n  \"oracle_continue_deser_fired\": {},\n  \"oracle_continue_confirmed\": {},\n  \"oracle_continue_mount_c30\": {},\n  \"oracle_continue_guard_waits\": {},\n",

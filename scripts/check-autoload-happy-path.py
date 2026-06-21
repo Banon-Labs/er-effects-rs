@@ -251,6 +251,8 @@ def main() -> int:
         and "oracle_result_event_last_fd4_arg" in telemetry
         and "oracle_result_action_last_word0" in telemetry
         and "oracle_result_action_last_word1" in telemetry
+        and "oracle_result_action_insert_hits" in telemetry
+        and "RESULT_ACTION_INSERT_HITS" in telemetry
         and "NATIVE_SUBMIT_HITS" in telemetry
         and "RESULT_EVENT_HANDLER_HITS" in telemetry
         and "RESULT_EVENT_LAST_FD4_CODE" in telemetry
@@ -480,6 +482,9 @@ def main() -> int:
         and "oracle_native_submit_hits" in measure
         and "oracle_result_event_last_fd4_code" in telemetry_src
         and "oracle_result_action_last_word0" in telemetry_src
+        and "oracle_result_action_insert_hits" in telemetry_src
+        and "RESULT_ACTION_INSERT_HITS" in lib
+        and "callstack_contains_game_rva" in experiments
         and "oracle_result_action_builder_hits" in measure
         and "NATIVE_SUBMIT_ORIG" in lib
         and "RESULT_EVENT_HANDLER_RVA" in lib
