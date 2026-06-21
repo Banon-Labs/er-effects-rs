@@ -594,8 +594,13 @@ def main() -> int:
         and "MENU_WINDOW_JOB_CTOR_SEMANTIC_HITS" in experiments
         and "MENU_ITEM_UPDATE_HITS" in experiments
         and "MENU_ITEM_UPDATE_SEMANTIC_HITS" in experiments
+        and "MENU_CONTINUE_CANDIDATE_ITEM" in experiments
+        and "MENU_CONTINUE_CANDIDATE_ACCEPT_CHANGES" in experiments
+        and "record_continue_candidate" in experiments
         and "oracle_menu_window_ctor_hits" in telemetry_src
         and "oracle_menu_item_update_hits" in telemetry_src
+        and "oracle_menu_continue_candidate_item" in telemetry_src
+        and "oracle_menu_continue_candidate_accept_changes" in telemetry_src
         and "title_owner_scan_attempts" in telemetry_src
         and "title_owner_scan_vtable_hits" in telemetry_src
         and "title_owner_scan_last_candidate" in telemetry_src
@@ -607,6 +612,8 @@ def main() -> int:
         and "product_core_last_press_start_context" in watcher
         and "menu_window_ctor_hits" in watcher
         and "menu_item_update_hits" in watcher
+        and "menu_continue_candidate_item" in watcher
+        and "menu_continue_candidate_last_accept" in watcher
         and "product_core_ready_blocker" in telemetry_src
         and "product_core_autoload_ticks" in telemetry_src,
         "DLL telemetry must expose product-core autoload tick/readiness blocker and title-owner scan evidence",

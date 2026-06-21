@@ -124,6 +124,15 @@ pub(crate) static MENU_ITEM_UPDATE_LAST_DOCALL: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_ITEM_UPDATE_LAST_ACCEPT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_CONTINUE_CANDIDATE_ITEM: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_CONTINUE_CANDIDATE_HITS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static MENU_CONTINUE_CANDIDATE_IDLE_ACCEPT_HITS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static MENU_CONTINUE_CANDIDATE_NATIVE_ACCEPT_HITS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static MENU_CONTINUE_CANDIDATE_OTHER_ACCEPT_HITS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static MENU_CONTINUE_CANDIDATE_ACCEPT_CHANGES: AtomicU64 = AtomicU64::new(0);
+pub(crate) static MENU_CONTINUE_CANDIDATE_LAST_ACCEPT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 static B80_NATIVE_DISPATCHER_OWNER: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 static MENU_CONTINUE_ITEM_FIELD_LOG_COUNT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -2836,10 +2845,38 @@ unsafe fn product_continue_action_ready(
     dialog_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA
 }
 
+fn record_continue_candidate(item: usize, accept_predicate: usize, base: usize) {
+    const MENU_ITEM_ACCEPT_IDLE_RVA: usize = 0x007add70;
+    const MENU_ITEM_ACCEPT_NATIVE_RVA: usize = 0x007ad810;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if item == null {
+        return;
+    }
+    MENU_CONTINUE_CANDIDATE_HITS.fetch_add(1, Ordering::SeqCst);
+    MENU_CONTINUE_CANDIDATE_ITEM.store(item, Ordering::SeqCst);
+    let prior = MENU_CONTINUE_CANDIDATE_LAST_ACCEPT.swap(accept_predicate, Ordering::SeqCst);
+    if prior != null && prior != accept_predicate {
+        MENU_CONTINUE_CANDIDATE_ACCEPT_CHANGES.fetch_add(1, Ordering::SeqCst);
+        append_continue_trace(format_args!(
+            "MENU-CONTINUE-CANDIDATE accept predicate changed item=0x{item:x} prior=0x{prior:x} now=0x{accept_predicate:x}"
+        ));
+    }
+    if base != null && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA {
+        MENU_CONTINUE_CANDIDATE_NATIVE_ACCEPT_HITS.fetch_add(1, Ordering::SeqCst);
+    } else if base != null && accept_predicate == base + MENU_ITEM_ACCEPT_IDLE_RVA {
+        MENU_CONTINUE_CANDIDATE_IDLE_ACCEPT_HITS.fetch_add(1, Ordering::SeqCst);
+    } else {
+        MENU_CONTINUE_CANDIDATE_OTHER_ACCEPT_HITS.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
 unsafe fn product_continue_item_action(base: usize) -> Option<NativeContinueItemAction> {
     const DOCALL_VTABLE_SLOT_10: usize = 0x10;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let item = MENU_CONTINUE_ITEM.load(Ordering::SeqCst);
+    let item = match MENU_CONTINUE_ITEM.load(Ordering::SeqCst) {
+        TITLE_OWNER_SCAN_START_ADDRESS => MENU_CONTINUE_CANDIDATE_ITEM.load(Ordering::SeqCst),
+        item => item,
+    };
     if item == null {
         return None;
     }
@@ -2868,6 +2905,7 @@ unsafe fn product_continue_item_action(base: usize) -> Option<NativeContinueItem
     const MENU_ITEM_ACCEPT_IDLE_RVA: usize = 0x007add70;
     const MENU_ITEM_ACCEPT_NATIVE_RVA: usize = 0x007ad810;
     let accept_predicate = unsafe { safe_read_usize(item + MENU_ITEM_ACCEPT_PREDICATE_F8_OFFSET) }?;
+    record_continue_candidate(item, accept_predicate, base);
     if accept_predicate == base + MENU_ITEM_ACCEPT_IDLE_RVA {
         append_autoload_debug(format_args!(
             "product-core-autoload: native Continue MenuWindowJob rejected item=0x{item:x} accept_predicate=0x{accept_predicate:x} (constant false idle predicate) -- not a semantic accept-ready Continue item"
@@ -2880,6 +2918,19 @@ unsafe fn product_continue_item_action(base: usize) -> Option<NativeContinueItem
             base + MENU_ITEM_ACCEPT_NATIVE_RVA
         ));
         return None;
+    }
+    if MENU_CONTINUE_ITEM
+        .compare_exchange(
+            TITLE_OWNER_SCAN_START_ADDRESS,
+            item,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        )
+        .is_ok()
+    {
+        append_autoload_debug(format_args!(
+            "product-core-autoload: promoted candidate native Continue MenuWindowJob item=0x{item:x} accept_predicate=0x{accept_predicate:x}"
+        ));
     }
     let result = unsafe { safe_read_usize(item + MENU_ITEM_DIALOG_RESULT_130_OFFSET) }?;
     if result == null {
@@ -10017,9 +10068,13 @@ pub(crate) unsafe extern "system" fn menu_window_job_ctor_hook(
     MENU_WINDOW_JOB_CTOR_LAST_FUNCTOR.store(functor, Ordering::SeqCst);
     MENU_WINDOW_JOB_CTOR_LAST_DOCALL.store(do_call, Ordering::SeqCst);
     MENU_WINDOW_JOB_CTOR_LAST_ACCEPT.store(accept_predicate, Ordering::SeqCst);
-    let semantic_continue_item = vt == base + MENU_WINDOW_JOB_VTABLE_RVA
-        && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA
-        && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA;
+    let continue_candidate =
+        vt == base + MENU_WINDOW_JOB_VTABLE_RVA && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA;
+    if continue_candidate {
+        record_continue_candidate(item, accept_predicate, base);
+    }
+    let semantic_continue_item =
+        continue_candidate && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA;
     if semantic_continue_item {
         MENU_WINDOW_JOB_CTOR_SEMANTIC_HITS.fetch_add(1, Ordering::SeqCst);
     }
@@ -10097,9 +10152,13 @@ pub(crate) unsafe extern "system" fn cap_menu_item_update_hook(
         MENU_ITEM_UPDATE_LAST_FUNCTOR.store(functor, Ordering::SeqCst);
         MENU_ITEM_UPDATE_LAST_DOCALL.store(do_call, Ordering::SeqCst);
         MENU_ITEM_UPDATE_LAST_ACCEPT.store(accept_predicate, Ordering::SeqCst);
-        let semantic_continue_item = vt == base + MENU_WINDOW_JOB_VTABLE_RVA
-            && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA
-            && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA;
+        let continue_candidate = vt == base + MENU_WINDOW_JOB_VTABLE_RVA
+            && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA;
+        if continue_candidate {
+            record_continue_candidate(item, accept_predicate, base);
+        }
+        let semantic_continue_item =
+            continue_candidate && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA;
         if semantic_continue_item {
             MENU_ITEM_UPDATE_SEMANTIC_HITS.fetch_add(1, Ordering::SeqCst);
         }

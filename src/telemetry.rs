@@ -372,7 +372,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         }
     };
     body.push_str(&format!(
-        "  \"oracle_continue_task_node\": {},\n  \"oracle_continue_member_node\": {},\n  \"oracle_menu_window_ctor_hits\": {},\n  \"oracle_menu_window_ctor_semantic_hits\": {},\n  \"oracle_menu_window_ctor_last_item\": {},\n  \"oracle_menu_window_ctor_last_vt\": {},\n  \"oracle_menu_window_ctor_last_functor\": {},\n  \"oracle_menu_window_ctor_last_docall\": {},\n  \"oracle_menu_window_ctor_last_accept\": {},\n  \"oracle_menu_item_update_hits\": {},\n  \"oracle_menu_item_update_semantic_hits\": {},\n  \"oracle_menu_item_update_last_item\": {},\n  \"oracle_menu_item_update_last_vt\": {},\n  \"oracle_menu_item_update_last_functor\": {},\n  \"oracle_menu_item_update_last_docall\": {},\n  \"oracle_menu_item_update_last_accept\": {},\n",
+        "  \"oracle_continue_task_node\": {},\n  \"oracle_continue_member_node\": {},\n  \"oracle_menu_window_ctor_hits\": {},\n  \"oracle_menu_window_ctor_semantic_hits\": {},\n  \"oracle_menu_window_ctor_last_item\": {},\n  \"oracle_menu_window_ctor_last_vt\": {},\n  \"oracle_menu_window_ctor_last_functor\": {},\n  \"oracle_menu_window_ctor_last_docall\": {},\n  \"oracle_menu_window_ctor_last_accept\": {},\n  \"oracle_menu_item_update_hits\": {},\n  \"oracle_menu_item_update_semantic_hits\": {},\n  \"oracle_menu_item_update_last_item\": {},\n  \"oracle_menu_item_update_last_vt\": {},\n  \"oracle_menu_item_update_last_functor\": {},\n  \"oracle_menu_item_update_last_docall\": {},\n  \"oracle_menu_item_update_last_accept\": {},\n  \"oracle_menu_continue_candidate_item\": {},\n  \"oracle_menu_continue_candidate_hits\": {},\n  \"oracle_menu_continue_candidate_idle_accept_hits\": {},\n  \"oracle_menu_continue_candidate_native_accept_hits\": {},\n  \"oracle_menu_continue_candidate_other_accept_hits\": {},\n  \"oracle_menu_continue_candidate_accept_changes\": {},\n  \"oracle_menu_continue_candidate_last_accept\": {},\n",
         format_optional_ptr(continue_task_node),
         format_optional_ptr(continue_member_node),
         MENU_WINDOW_JOB_CTOR_HITS.load(Ordering::SeqCst),
@@ -388,7 +388,14 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         format_optional_ptr(MENU_ITEM_UPDATE_LAST_VT.load(Ordering::SeqCst)),
         format_optional_ptr(MENU_ITEM_UPDATE_LAST_FUNCTOR.load(Ordering::SeqCst)),
         format_optional_ptr(MENU_ITEM_UPDATE_LAST_DOCALL.load(Ordering::SeqCst)),
-        format_optional_ptr(MENU_ITEM_UPDATE_LAST_ACCEPT.load(Ordering::SeqCst))
+        format_optional_ptr(MENU_ITEM_UPDATE_LAST_ACCEPT.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_CONTINUE_CANDIDATE_ITEM.load(Ordering::SeqCst)),
+        MENU_CONTINUE_CANDIDATE_HITS.load(Ordering::SeqCst),
+        MENU_CONTINUE_CANDIDATE_IDLE_ACCEPT_HITS.load(Ordering::SeqCst),
+        MENU_CONTINUE_CANDIDATE_NATIVE_ACCEPT_HITS.load(Ordering::SeqCst),
+        MENU_CONTINUE_CANDIDATE_OTHER_ACCEPT_HITS.load(Ordering::SeqCst),
+        MENU_CONTINUE_CANDIDATE_ACCEPT_CHANGES.load(Ordering::SeqCst),
+        format_optional_ptr(MENU_CONTINUE_CANDIDATE_LAST_ACCEPT.load(Ordering::SeqCst))
     ));
     body.push_str(&format!(
         "  \"oracle_native_submit_hits\": {},\n  \"oracle_native_submit_last_result\": {},\n  \"oracle_result_event_handler_hits\": {},\n  \"oracle_result_action_builder_hits\": {},\n  \"oracle_result_event_last_result\": {},\n  \"oracle_result_event_last_event\": {},\n  \"oracle_result_event_last_raw_qword0\": {},\n  \"oracle_result_event_last_fd4_code\": {},\n  \"oracle_result_event_last_fd4_arg\": {},\n  \"oracle_result_action_last_result\": {},\n  \"oracle_result_action_last_event\": {},\n  \"oracle_result_action_last_word0\": {},\n  \"oracle_result_action_last_word1\": {},\n  \"oracle_result_action_insert_hits\": {},\n  \"oracle_result_action_last_insert_arg0\": {},\n  \"oracle_result_action_last_insert_arg1\": {},\n  \"oracle_result_action_last_insert_ret\": {},\n  \"oracle_result_action_last_insert_arg1_update_rva\": {},\n  \"oracle_result_action_last_insert_ret_update_rva\": {},\n  \"oracle_result_action_wrapper_builder_hits\": {},\n  \"oracle_result_action_last_wrapper_builder_rcx\": {},\n  \"oracle_result_action_last_wrapper_builder_rdx\": {},\n  \"oracle_result_action_last_wrapper_builder_r8\": {},\n  \"oracle_result_action_last_wrapper_builder_ret\": {},\n  \"oracle_result_action_last_wrapper_builder_ret_update_rva\": {},\n",
