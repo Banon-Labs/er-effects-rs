@@ -246,15 +246,15 @@ def main() -> int:
         "oracle_native_submit_hits" in telemetry
         and "oracle_result_event_handler_hits" in telemetry
         and "oracle_result_action_builder_hits" in telemetry
-        and "oracle_result_event_last_code" in telemetry
-        and "oracle_result_event_last_payload" in telemetry
-        and "oracle_result_action_last_code" in telemetry
-        and "oracle_result_action_last_payload" in telemetry
+        and "oracle_result_event_last_word0" in telemetry
+        and "oracle_result_event_last_word1" in telemetry
+        and "oracle_result_action_last_word0" in telemetry
+        and "oracle_result_action_last_word1" in telemetry
         and "NATIVE_SUBMIT_HITS" in telemetry
         and "RESULT_EVENT_HANDLER_HITS" in telemetry
-        and "RESULT_EVENT_LAST_CODE" in telemetry
+        and "RESULT_EVENT_LAST_WORD0" in telemetry
         and "RESULT_ACTION_BUILDER_HITS" in telemetry
-        and "RESULT_ACTION_LAST_CODE" in telemetry
+        and "RESULT_ACTION_LAST_WORD0" in telemetry
         and "native_submit_entered" in watcher
         and "native_result_chain_same_result" in watcher
         and "native_result_chain_ready" in watcher
@@ -473,8 +473,8 @@ def main() -> int:
         and "native_continue_chain_stage" in measure
         and "oracle_native_submit_last_result" in measure
         and "oracle_native_submit_hits" in measure
-        and "oracle_result_event_last_code" in telemetry_src
-        and "oracle_result_action_last_code" in telemetry_src
+        and "oracle_result_event_last_word0" in telemetry_src
+        and "oracle_result_action_last_word0" in telemetry_src
         and "oracle_result_action_builder_hits" in measure
         and "NATIVE_SUBMIT_ORIG" in lib
         and "RESULT_EVENT_HANDLER_RVA" in lib
