@@ -9994,7 +9994,7 @@ unsafe fn update_target_in_text(base: usize, update: usize) -> bool {
     update >= text_start && update < text_start.saturating_add(text_len)
 }
 
-unsafe fn task_node_update_rva(base: usize, node: usize) -> usize {
+unsafe fn raw_task_node_update_rva(base: usize, node: usize) -> usize {
     const TASK_NODE_UPDATE_VTABLE_SLOT: usize = 0x10;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let Some(vtable) = (unsafe { safe_read_usize(node) }) else {
@@ -10008,6 +10008,17 @@ unsafe fn task_node_update_rva(base: usize, node: usize) -> usize {
     } else {
         null
     }
+}
+
+unsafe fn task_node_update_rva(base: usize, node: usize) -> usize {
+    let direct = unsafe { raw_task_node_update_rva(base, node) };
+    if direct != TITLE_OWNER_SCAN_START_ADDRESS {
+        return direct;
+    }
+    let Some(shared_pointee) = (unsafe { safe_read_usize(node) }) else {
+        return TITLE_OWNER_SCAN_START_ADDRESS;
+    };
+    unsafe { raw_task_node_update_rva(base, shared_pointee) }
 }
 
 unsafe fn qword_window_summary(ptr: usize) -> String {
