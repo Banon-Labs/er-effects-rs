@@ -566,9 +566,17 @@ def main() -> int:
         and "PRODUCT_CORE_READY_SUCCESSES" in experiments
         and "PRODUCT_CORE_LAST_BLOCKER" in experiments
         and "product_core_ready_blocker_label" in experiments
+        and "TITLE_OWNER_SCAN_ATTEMPTS" in experiments
+        and "TITLE_OWNER_SCAN_VTABLE_HITS" in experiments
+        and "TITLE_OWNER_SCAN_TABLE_REJECTS" in experiments
+        and "TITLE_OWNER_SCAN_STATE_REJECTS" in experiments
+        and "title_owner_scan_attempts" in telemetry_src
+        and "title_owner_scan_vtable_hits" in telemetry_src
+        and "title_owner_scan_last_candidate" in telemetry_src
+        and "title_owner_scan_attempts" in watcher
         and "product_core_ready_blocker" in telemetry_src
         and "product_core_autoload_ticks" in telemetry_src,
-        "DLL telemetry must expose product-core autoload tick/readiness blocker evidence",
+        "DLL telemetry must expose product-core autoload tick/readiness blocker and title-owner scan evidence",
         failures,
     )
     require(

@@ -211,14 +211,34 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         TITLE_BOOTSTRAP_SEEN.load(Ordering::SeqCst) != TITLE_BOOTSTRAP_UNSEEN
     ));
     let product_core_blocker = PRODUCT_CORE_LAST_BLOCKER.load(Ordering::SeqCst);
+    let format_scan_ptr = |value: usize| -> String {
+        if value == TITLE_OWNER_SCAN_START_ADDRESS {
+            "null".to_owned()
+        } else {
+            format!("\"0x{value:x}\"")
+        }
+    };
+    let title_owner_state_bits = TITLE_OWNER_SCAN_LAST_STATE_BITS.load(Ordering::SeqCst);
     body.push_str(&format!(
-        "  \"product_autoload_armed\": {},\n  \"product_core_autoload_ticks\": {},\n  \"product_core_ready_blocks\": {},\n  \"product_core_ready_successes\": {},\n  \"product_core_last_phase\": {},\n  \"product_core_ready_blocker\": \"{}\",\n",
+        "  \"product_autoload_armed\": {},\n  \"product_core_autoload_ticks\": {},\n  \"product_core_ready_blocks\": {},\n  \"product_core_ready_successes\": {},\n  \"product_core_last_phase\": {},\n  \"product_core_ready_blocker\": \"{}\",\n  \"title_owner_scan_attempts\": {},\n  \"title_owner_scan_vtable_hits\": {},\n  \"title_owner_scan_table_rejects\": {},\n  \"title_owner_scan_state_rejects\": {},\n  \"title_owner_scan_cached_owner\": {},\n  \"title_owner_scan_last_candidate\": {},\n  \"title_owner_scan_last_table\": {},\n  \"title_owner_scan_last_state\": {},\n",
         product_autoload_enabled(),
         PRODUCT_CORE_AUTOLOAD_TICKS.load(Ordering::SeqCst),
         PRODUCT_CORE_READY_BLOCKS.load(Ordering::SeqCst),
         PRODUCT_CORE_READY_SUCCESSES.load(Ordering::SeqCst),
         PRODUCT_CORE_LAST_PHASE.load(Ordering::SeqCst),
-        json_escape(product_core_ready_blocker_label(product_core_blocker))
+        json_escape(product_core_ready_blocker_label(product_core_blocker)),
+        TITLE_OWNER_SCAN_ATTEMPTS.load(Ordering::SeqCst),
+        TITLE_OWNER_SCAN_VTABLE_HITS.load(Ordering::SeqCst),
+        TITLE_OWNER_SCAN_TABLE_REJECTS.load(Ordering::SeqCst),
+        TITLE_OWNER_SCAN_STATE_REJECTS.load(Ordering::SeqCst),
+        format_scan_ptr(TITLE_OWNER_PTR.load(Ordering::SeqCst)),
+        format_scan_ptr(TITLE_OWNER_SCAN_LAST_CANDIDATE.load(Ordering::SeqCst)),
+        format_scan_ptr(TITLE_OWNER_SCAN_LAST_TABLE.load(Ordering::SeqCst)),
+        if title_owner_state_bits == usize::MAX {
+            "null".to_owned()
+        } else {
+            (title_owner_state_bits as u32 as i32).to_string()
+        }
     ));
     body.push_str(&format!(
         "  \"autoload_attempts\": {},\n",

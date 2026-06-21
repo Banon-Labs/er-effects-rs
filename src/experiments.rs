@@ -72,6 +72,15 @@ pub(crate) static PRODUCT_CORE_READY_SUCCESSES: AtomicU64 = AtomicU64::new(0);
 pub(crate) static PRODUCT_CORE_LAST_PHASE: AtomicUsize = AtomicUsize::new(OWN_STEPPER_PHASE_MENU);
 pub(crate) static PRODUCT_CORE_LAST_BLOCKER: AtomicUsize =
     AtomicUsize::new(PRODUCT_CORE_BLOCKER_UNSEEN);
+pub(crate) static TITLE_OWNER_SCAN_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static TITLE_OWNER_SCAN_VTABLE_HITS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static TITLE_OWNER_SCAN_TABLE_REJECTS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static TITLE_OWNER_SCAN_STATE_REJECTS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static TITLE_OWNER_SCAN_LAST_CANDIDATE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_OWNER_SCAN_LAST_TABLE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_OWNER_SCAN_LAST_STATE_BITS: AtomicUsize = AtomicUsize::new(usize::MAX);
 static MENU_CONTINUE_ENTRY: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 static MENU_CONTINUE_ITEM: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 static B80_NATIVE_DISPATCHER_OWNER: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -8105,6 +8114,7 @@ pub(crate) unsafe fn safe_read_i32(addr: usize) -> Option<i32> {
 }
 
 pub(crate) unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*mut u8> {
+    TITLE_OWNER_SCAN_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
     let target_vtable = module_base.checked_add(TITLE_OWNER_VTABLE_RVA)?;
     let mut scan_buf = vec![MOVIE_SKIP_FLAG_CLEAR; SCAN_CHUNK_SIZE];
     let mut address = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -8156,7 +8166,9 @@ pub(crate) unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*m
                                 .unwrap(),
                         );
                         if vtable == target_vtable {
+                            TITLE_OWNER_SCAN_VTABLE_HITS.fetch_add(1, Ordering::SeqCst);
                             let cursor = chunk_base + i;
+                            TITLE_OWNER_SCAN_LAST_CANDIDATE.store(cursor, Ordering::SeqCst);
                             // Validate the per-instance state-table pointer (rejects
                             // the stray .data match 0x1000ffc58); fault-tolerant.
                             let instance_table = unsafe {
@@ -8164,12 +8176,26 @@ pub(crate) unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*m
                             };
                             let state_value =
                                 unsafe { safe_read_i32(cursor + TITLE_OWNER_STATE_OFFSET) };
-                            if instance_table == Some(module_base + INNER_TITLE_STATE_TABLE_RVA)
-                                && state_value.is_some_and(|s| {
-                                    (TITLE_OWNER_MIN_STATE..=TITLE_OWNER_MAX_STATE).contains(&s)
-                                })
-                            {
+                            TITLE_OWNER_SCAN_LAST_TABLE.store(
+                                instance_table.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS),
+                                Ordering::SeqCst,
+                            );
+                            TITLE_OWNER_SCAN_LAST_STATE_BITS.store(
+                                state_value.map_or(usize::MAX, |s| s as u32 as usize),
+                                Ordering::SeqCst,
+                            );
+                            let table_ok =
+                                instance_table == Some(module_base + INNER_TITLE_STATE_TABLE_RVA);
+                            let state_ok = state_value.is_some_and(|s| {
+                                (TITLE_OWNER_MIN_STATE..=TITLE_OWNER_MAX_STATE).contains(&s)
+                            });
+                            if table_ok && state_ok {
                                 return Some(cursor as *mut u8);
+                            }
+                            if !table_ok {
+                                TITLE_OWNER_SCAN_TABLE_REJECTS.fetch_add(1, Ordering::SeqCst);
+                            } else if !state_ok {
+                                TITLE_OWNER_SCAN_STATE_REJECTS.fetch_add(1, Ordering::SeqCst);
                             }
                         }
                         i += TITLE_OWNER_SCAN_ALIGNMENT;

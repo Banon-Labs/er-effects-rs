@@ -588,16 +588,23 @@ for token in [
     'PRODUCT_CORE_READY_SUCCESSES',
     'PRODUCT_CORE_LAST_BLOCKER',
     'product_core_ready_blocker_label',
+    'TITLE_OWNER_SCAN_ATTEMPTS',
+    'TITLE_OWNER_SCAN_VTABLE_HITS',
+    'TITLE_OWNER_SCAN_TABLE_REJECTS',
+    'TITLE_OWNER_SCAN_STATE_REJECTS',
 ]:
     if token not in exp:
-        runtime_mode_failures.append(f'experiments missing product-core autoload diagnostic token {token}')
+        runtime_mode_failures.append(f'experiments missing product-core/title-owner diagnostic token {token}')
 for token in [
     'product_core_ready_blocker',
     'product_core_autoload_ticks',
     'product_autoload_armed',
+    'title_owner_scan_attempts',
+    'title_owner_scan_vtable_hits',
+    'title_owner_scan_last_candidate',
 ]:
     if token not in telemetry_src:
-        runtime_mode_failures.append(f'telemetry missing product-core autoload diagnostic token {token}')
+        runtime_mode_failures.append(f'telemetry missing product-core/title-owner diagnostic token {token}')
 for token in [
     'oracle_msgbox_total_builds',
     'oracle_msgbox_any_seen',
