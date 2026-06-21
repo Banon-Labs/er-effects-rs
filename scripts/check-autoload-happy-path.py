@@ -184,6 +184,15 @@ def main() -> int:
         "product autoload path must call semantic readiness helpers instead of fixed wait gates",
         failures,
     )
+    product_core = rust_fn_body(experiments, "product_core_autoload_tick")
+    product_ready = rust_fn_body(experiments, "product_core_autoload_ready")
+    require(
+        "TitleTopDialog::open_menu writes latch and does not require Loop/TextFadeout state" in product_core
+        and "ready.title_in_loop\n            && ready.menu_opened_latch" not in product_core
+        and "!title_state.in_loop\n        && !title_state.in_textfadeout" not in product_ready,
+        "product open-menu gate must allow validated title dialog + latch-clear and must not require Loop/TextFadeout-only timing",
+        failures,
+    )
     continue_item_body = rust_fn_body(experiments, "product_continue_item_action")
     require(
         "MENU_ITEM_ACCEPT_IDLE_RVA" in continue_item_body

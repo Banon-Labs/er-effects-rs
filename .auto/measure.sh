@@ -450,6 +450,14 @@ if 'quality gates must include skip-safe native Continue/MenuWindowJob/MenuMembe
     legacy_failures.append('check-autoload-happy-path does not enforce native Continue/MenuMemberFuncJob/result-consumer static checker wiring')
     autoload_static_failures += 1
 if (
+    'TitleTopDialog::open_menu writes latch and does not require Loop/TextFadeout state' not in exp
+    or 'product open-menu gate must allow validated title dialog + latch-clear' not in check
+    or 'ready.title_in_loop\n            && ready.menu_opened_latch' in exp
+    or '!title_state.in_loop\n        && !title_state.in_textfadeout' in exp
+):
+    legacy_failures.append('product open-menu gate still depends on Loop/TextFadeout-only timing instead of validated dialog + latch-clear')
+    autoload_static_failures += 1
+if (
     'ARTIFACT_FORBIDDEN_SCAN_ROOTS' not in launch_guard_check
     or 'artifact_forbidden_launch_findings' not in launch_guard_check
     or 'artifact-forbidden-elden-ring-launch' not in launch_guard_check

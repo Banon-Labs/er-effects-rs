@@ -2543,12 +2543,6 @@ unsafe fn product_core_autoload_ready(
     }
     let press_start = press_start?;
     let title_state = title_state?;
-    if !title_state.in_loop
-        && !title_state.in_textfadeout
-        && title_state.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO
-    {
-        return None;
-    }
     Some(ProductCoreAutoloadReady {
         committed,
         requested,
@@ -2734,8 +2728,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     PRODUCT_CORE_READY_SUCCESSES.fetch_add(1, Ordering::SeqCst);
     PRODUCT_CORE_LAST_BLOCKER.store(PRODUCT_CORE_BLOCKER_READY, Ordering::SeqCst);
     if phase == OWN_STEPPER_PHASE_MENU {
-        if ready.title_in_loop
-            && ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO
+        if ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO
             && OWN_STEPPER_MENU_OPENED
                 .compare_exchange(
                     OWN_STEPPER_MENU_OPENED_NO,
@@ -2757,7 +2750,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 ),
             );
             append_autoload_debug(format_args!(
-                "product-core-autoload: PRESS BUTTON component ready; self-fire open-menu 0x{:x}(dialog=0x{:x}) on Loop+latch-clear before native save-load core",
+                "product-core-autoload: PRESS BUTTON component ready; self-fire native open-menu 0x{:x}(dialog=0x{:x}) on validated title dialog + latch-clear before native save-load core; TitleTopDialog::open_menu writes latch and does not require Loop/TextFadeout state",
                 module_base + TITLE_TOP_DIALOG_OPEN_MENU_RVA,
                 ready.title_dialog
             ));
