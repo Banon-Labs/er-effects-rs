@@ -69,6 +69,9 @@ static PRODUCT_AUTOLOAD_ARMED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PRODUCT_CORE_AUTOLOAD_TICKS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static PRODUCT_CORE_READY_BLOCKS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static PRODUCT_CORE_READY_SUCCESSES: AtomicU64 = AtomicU64::new(0);
+pub(crate) static PRODUCT_CORE_OWNER_TICKS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static PRODUCT_CORE_LAST_OWNER: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static PRODUCT_CORE_LAST_PHASE: AtomicUsize = AtomicUsize::new(OWN_STEPPER_PHASE_MENU);
 pub(crate) static PRODUCT_CORE_LAST_BLOCKER: AtomicUsize =
     AtomicUsize::new(PRODUCT_CORE_BLOCKER_UNSEEN);
@@ -2572,6 +2575,8 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         return true;
     };
     let owner = owner_ptr as usize;
+    PRODUCT_CORE_OWNER_TICKS.fetch_add(1, Ordering::SeqCst);
+    PRODUCT_CORE_LAST_OWNER.store(owner, Ordering::SeqCst);
     let gm = game_man_ptr_or_null();
     if phase == OWN_STEPPER_PHASE_S2_INVOKE
         || phase == OWN_STEPPER_PHASE_S2_ACTIVATE
@@ -2608,82 +2613,81 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         return true;
     }
     let Some(ready) = (unsafe { product_core_autoload_ready(owner, module_base, gm, slot) }) else {
-        if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
-            let committed = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }
-                .unwrap_or(TITLE_STATE_OWNER_GONE);
-            let requested = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_OFFSET) }
-                .unwrap_or(TITLE_STATE_OWNER_GONE);
-            let table = unsafe { safe_read_usize(owner + TITLE_OWNER_INSTANCE_TABLE_OFFSET) }
-                .unwrap_or(null);
-            let session = unsafe { safe_read_usize(module_base + SESSION_SINGLETON_144588E98_RVA) }
-                .unwrap_or(null);
-            let game_data_man = game_data_man_ptr_or_null();
-            let profile_summary = if game_data_man != null {
-                unsafe { safe_read_usize(game_data_man + SLOT_MANAGER_CONTAINER_OFFSET) }
-                    .unwrap_or(null)
+        let committed = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }
+            .unwrap_or(TITLE_STATE_OWNER_GONE);
+        let requested = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_OFFSET) }
+            .unwrap_or(TITLE_STATE_OWNER_GONE);
+        let table =
+            unsafe { safe_read_usize(owner + TITLE_OWNER_INSTANCE_TABLE_OFFSET) }.unwrap_or(null);
+        let session = unsafe { safe_read_usize(module_base + SESSION_SINGLETON_144588E98_RVA) }
+            .unwrap_or(null);
+        let game_data_man = game_data_man_ptr_or_null();
+        let profile_summary = if game_data_man != null {
+            unsafe { safe_read_usize(game_data_man + SLOT_MANAGER_CONTAINER_OFFSET) }
+                .unwrap_or(null)
+        } else {
+            null
+        };
+        let iodev = unsafe { safe_read_usize(module_base + IODEV_GLOBAL_RVA) }.unwrap_or(null);
+        let heap_allocator = crate::runtime_heap_allocator_ptr_or_null();
+        let dialog =
+            unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
+        let dialog_vt = if dialog != null {
+            unsafe { safe_read_usize(dialog) }.unwrap_or(null)
+        } else {
+            null
+        };
+        let press_start_proxy = dialog + TITLE_PRESS_START_SCENE_PROXY_B78_OFFSET;
+        let press_start_vt = if dialog != null {
+            unsafe { safe_read_usize(press_start_proxy) }.unwrap_or(null)
+        } else {
+            null
+        };
+        let press_start_context = if press_start_vt == module_base + SCENE_OBJ_PROXY_VTABLE_RVA {
+            unsafe { safe_read_usize(press_start_proxy + SCENE_OBJ_PROXY_CONTEXT_20_OFFSET) }
+                .unwrap_or(null)
+        } else {
+            null
+        };
+        let (title_loop, title_textfadeout, menu_opened_latch) =
+            if dialog_vt == module_base + TITLE_TOP_DIALOG_VTABLE_RVA {
+                let state = unsafe { title_dialog_state(dialog, module_base) };
+                (state.in_loop, state.in_textfadeout, state.menu_opened_latch)
             } else {
-                null
+                (false, false, null)
             };
-            let iodev = unsafe { safe_read_usize(module_base + IODEV_GLOBAL_RVA) }.unwrap_or(null);
-            let heap_allocator = crate::runtime_heap_allocator_ptr_or_null();
-            let dialog = unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }
-                .unwrap_or(null);
-            let dialog_vt = if dialog != null {
-                unsafe { safe_read_usize(dialog) }.unwrap_or(null)
-            } else {
-                null
-            };
-            let press_start_proxy = dialog + TITLE_PRESS_START_SCENE_PROXY_B78_OFFSET;
-            let press_start_vt = if dialog != null {
-                unsafe { safe_read_usize(press_start_proxy) }.unwrap_or(null)
-            } else {
-                null
-            };
-            let press_start_context = if press_start_vt == module_base + SCENE_OBJ_PROXY_VTABLE_RVA
+        let blocker =
+            if committed != TITLE_STEP_MENU_JOB_WAIT || requested != TITLE_STEP_MENU_JOB_WAIT {
+                PRODUCT_CORE_BLOCKER_TITLE_OWNER_STATE
+            } else if table != module_base + INNER_TITLE_STATE_TABLE_RVA {
+                PRODUCT_CORE_BLOCKER_TITLE_TABLE
+            } else if session == null {
+                PRODUCT_CORE_BLOCKER_SESSION
+            } else if game_data_man == null {
+                PRODUCT_CORE_BLOCKER_GAME_DATA_MAN
+            } else if profile_summary == null {
+                PRODUCT_CORE_BLOCKER_PROFILE_SUMMARY
+            } else if iodev == null {
+                PRODUCT_CORE_BLOCKER_IODEV
+            } else if heap_allocator == null {
+                PRODUCT_CORE_BLOCKER_HEAP_ALLOCATOR
+            } else if dialog_vt != module_base + TITLE_TOP_DIALOG_VTABLE_RVA {
+                PRODUCT_CORE_BLOCKER_TITLE_DIALOG
+            } else if press_start_vt != module_base + SCENE_OBJ_PROXY_VTABLE_RVA
+                || press_start_context == null
             {
-                unsafe { safe_read_usize(press_start_proxy + SCENE_OBJ_PROXY_CONTEXT_20_OFFSET) }
-                    .unwrap_or(null)
+                PRODUCT_CORE_BLOCKER_PRESS_START
+            } else if !title_loop
+                && !title_textfadeout
+                && menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO
+            {
+                PRODUCT_CORE_BLOCKER_TITLE_STATE
             } else {
-                null
+                PRODUCT_CORE_BLOCKER_UNKNOWN
             };
-            let (title_loop, title_textfadeout, menu_opened_latch) =
-                if dialog_vt == module_base + TITLE_TOP_DIALOG_VTABLE_RVA {
-                    let state = unsafe { title_dialog_state(dialog, module_base) };
-                    (state.in_loop, state.in_textfadeout, state.menu_opened_latch)
-                } else {
-                    (false, false, null)
-                };
-            let blocker =
-                if committed != TITLE_STEP_MENU_JOB_WAIT || requested != TITLE_STEP_MENU_JOB_WAIT {
-                    PRODUCT_CORE_BLOCKER_TITLE_OWNER_STATE
-                } else if table != module_base + INNER_TITLE_STATE_TABLE_RVA {
-                    PRODUCT_CORE_BLOCKER_TITLE_TABLE
-                } else if session == null {
-                    PRODUCT_CORE_BLOCKER_SESSION
-                } else if game_data_man == null {
-                    PRODUCT_CORE_BLOCKER_GAME_DATA_MAN
-                } else if profile_summary == null {
-                    PRODUCT_CORE_BLOCKER_PROFILE_SUMMARY
-                } else if iodev == null {
-                    PRODUCT_CORE_BLOCKER_IODEV
-                } else if heap_allocator == null {
-                    PRODUCT_CORE_BLOCKER_HEAP_ALLOCATOR
-                } else if dialog_vt != module_base + TITLE_TOP_DIALOG_VTABLE_RVA {
-                    PRODUCT_CORE_BLOCKER_TITLE_DIALOG
-                } else if press_start_vt != module_base + SCENE_OBJ_PROXY_VTABLE_RVA
-                    || press_start_context == null
-                {
-                    PRODUCT_CORE_BLOCKER_PRESS_START
-                } else if !title_loop
-                    && !title_textfadeout
-                    && menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO
-                {
-                    PRODUCT_CORE_BLOCKER_TITLE_STATE
-                } else {
-                    PRODUCT_CORE_BLOCKER_UNKNOWN
-                };
-            PRODUCT_CORE_READY_BLOCKS.fetch_add(1, Ordering::SeqCst);
-            PRODUCT_CORE_LAST_BLOCKER.store(blocker, Ordering::SeqCst);
+        PRODUCT_CORE_READY_BLOCKS.fetch_add(1, Ordering::SeqCst);
+        PRODUCT_CORE_LAST_BLOCKER.store(blocker, Ordering::SeqCst);
+        if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
             append_autoload_debug(format_args!(
                 "product-core-autoload: waiting for core readiness owner=0x{owner:x} state={committed}/{requested} table=0x{table:x} session=0x{session:x} gm=0x{gm:x} gdm=0x{game_data_man:x} profile=0x{profile_summary:x} iodev=0x{iodev:x} heap=0x{heap_allocator:x} title_loop={title_loop} title_textfadeout={title_textfadeout} menu_latch={menu_opened_latch} press_start_proxy=0x{press_start_proxy:x} press_start_vt=0x{press_start_vt:x} press_start_ctx=0x{press_start_context:x} slot={slot} tick={tick}"
             ));

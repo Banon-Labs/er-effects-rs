@@ -758,6 +758,8 @@ def autoload_progress_summary(telemetry: dict[str, Any] | None) -> dict[str, Any
         "product_core_autoload_ticks": telemetry.get("product_core_autoload_ticks"),
         "product_core_ready_blocks": telemetry.get("product_core_ready_blocks"),
         "product_core_ready_successes": telemetry.get("product_core_ready_successes"),
+        "product_core_owner_ticks": telemetry.get("product_core_owner_ticks"),
+        "product_core_last_owner": telemetry.get("product_core_last_owner"),
         "product_core_last_phase": telemetry.get("product_core_last_phase"),
         "product_core_ready_blocker": telemetry.get("product_core_ready_blocker"),
         "title_owner_scan_attempts": telemetry.get("title_owner_scan_attempts"),

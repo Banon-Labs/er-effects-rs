@@ -564,16 +564,23 @@ def main() -> int:
         "PRODUCT_CORE_AUTOLOAD_TICKS" in experiments
         and "PRODUCT_CORE_READY_BLOCKS" in experiments
         and "PRODUCT_CORE_READY_SUCCESSES" in experiments
+        and "PRODUCT_CORE_OWNER_TICKS" in experiments
+        and "PRODUCT_CORE_LAST_OWNER" in experiments
         and "PRODUCT_CORE_LAST_BLOCKER" in experiments
         and "product_core_ready_blocker_label" in experiments
         and "TITLE_OWNER_SCAN_ATTEMPTS" in experiments
         and "TITLE_OWNER_SCAN_VTABLE_HITS" in experiments
         and "TITLE_OWNER_SCAN_TABLE_REJECTS" in experiments
         and "TITLE_OWNER_SCAN_STATE_REJECTS" in experiments
+        and "PRODUCT_CORE_LAST_BLOCKER.store(blocker, Ordering::SeqCst);\n        if tick % OWN_STEPPER_LOG_INTERVAL" in experiments
+        and "product_core_owner_ticks" in telemetry_src
+        and "product_core_last_owner" in telemetry_src
         and "title_owner_scan_attempts" in telemetry_src
         and "title_owner_scan_vtable_hits" in telemetry_src
         and "title_owner_scan_last_candidate" in telemetry_src
         and "title_owner_scan_attempts" in watcher
+        and "product_core_owner_ticks" in watcher
+        and "product_core_last_owner" in watcher
         and "product_core_ready_blocker" in telemetry_src
         and "product_core_autoload_ticks" in telemetry_src,
         "DLL telemetry must expose product-core autoload tick/readiness blocker and title-owner scan evidence",
