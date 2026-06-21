@@ -52,6 +52,26 @@ CONTINUE_DOCALL = 0x00764B80
 CONTINUE_DOCALL_IMPL = 0x00763FC0
 CONTINUE_DOCALL_TABLE_SLOT = 0x02A9B9D8
 
+# Disabled Continue row builder provenance (traced statically; NOT a product readiness
+# predicate). The idle/constant-false-accept Continue row is built by the function at
+# 0x140764290, which uses the Continue descriptor/vtable table at 0x142a9b808/958/9c8.
+# Its SOLE caller is the title step-update method 0x140766980 (installed as a CSMenu
+# step at 0x1407651cf with step vtable 0x142a9be20). The build is gated by two booleans
+# on the title-step object: this+0x6b0 (build-request) and this+0x6b1 (suppress). The
+# disabled row handle is stored at this+0x708. These offsets describe the DISABLED build
+# path only; they are diagnostic provenance, not a Continue-armed/ready oracle.
+DISABLED_CONTINUE_BUILDER = 0x00764290
+DISABLED_CONTINUE_BUILDER_PROLOGUE = bytes.fromhex("40555657488d6c24b9")
+DISABLED_CONTINUE_BUILDER_CALL = 0x00766E12
+DISABLED_CONTINUE_GATE_6B0 = 0x00766DD1
+DISABLED_CONTINUE_GATE_6B1 = 0x00766DDE
+DISABLED_CONTINUE_GATE_6B0_BYTES = bytes.fromhex("80bbb006000000")
+DISABLED_CONTINUE_GATE_6B1_BYTES = bytes.fromhex("80bbb106000000")
+DISABLED_CONTINUE_STEP_UPDATE = 0x00766980
+DISABLED_CONTINUE_STEP_UPDATE_INSTALL = 0x007651CF
+DISABLED_CONTINUE_STEP_VTABLE_INSTALL = 0x007651C1
+DISABLED_CONTINUE_STEP_VTABLE = 0x02A9BE20
+
 
 def read_image() -> bytes:
     if not IMAGE.exists():
@@ -191,6 +211,46 @@ def main() -> int:
         "Continue docall table slot must point at 0x140764b80",
         failures,
     )
+    require(
+        data[DISABLED_CONTINUE_BUILDER : DISABLED_CONTINUE_BUILDER + len(DISABLED_CONTINUE_BUILDER_PROLOGUE)]
+        == DISABLED_CONTINUE_BUILDER_PROLOGUE,
+        "disabled Continue row builder must remain 0x140764290 (idle-ctor path), not LangSelect readiness",
+        failures,
+    )
+    require(
+        rel32_call_target(data, DISABLED_CONTINUE_BUILDER_CALL) == DISABLED_CONTINUE_BUILDER,
+        "title step-update method must call the disabled Continue builder at 0x140766e12",
+        failures,
+    )
+    require(
+        data[DISABLED_CONTINUE_GATE_6B0 : DISABLED_CONTINUE_GATE_6B0 + len(DISABLED_CONTINUE_GATE_6B0_BYTES)]
+        == DISABLED_CONTINUE_GATE_6B0_BYTES,
+        "disabled Continue build must gate on this+0x6b0 (build-request bool), not on title+0x2610 LangSelect",
+        failures,
+    )
+    require(
+        data[DISABLED_CONTINUE_GATE_6B1 : DISABLED_CONTINUE_GATE_6B1 + len(DISABLED_CONTINUE_GATE_6B1_BYTES)]
+        == DISABLED_CONTINUE_GATE_6B1_BYTES,
+        "disabled Continue build must also test this+0x6b1 (suppress bool); these are the real disable gates",
+        failures,
+    )
+    require(
+        rip_lea_target(data, DISABLED_CONTINUE_STEP_UPDATE_INSTALL) == DISABLED_CONTINUE_STEP_UPDATE,
+        "title step object must install update method 0x140766980 (owner of the disabled Continue builder)",
+        failures,
+    )
+    require(
+        rip_lea_target(data, DISABLED_CONTINUE_STEP_VTABLE_INSTALL) == DISABLED_CONTINUE_STEP_VTABLE,
+        "title step object must install step vtable 0x142a9be20 alongside the disabled Continue update method",
+        failures,
+    )
+
+    builder_callers = find_rel32_callers(data, DISABLED_CONTINUE_BUILDER)
+    require(
+        builder_callers == [DISABLED_CONTINUE_BUILDER_CALL],
+        "disabled Continue builder must have exactly one owner/caller: the title step-update method",
+        failures,
+    )
 
     idle_callers = find_rel32_callers(data, IDLE_CTOR)
     native_a_callers = find_rel32_callers(data, NATIVE_CTOR_A)
@@ -211,7 +271,12 @@ def main() -> int:
         f"disabled_continue_return=0x{BASE + DISABLED_CONTINUE_ENQUEUE_RETURN:x} "
         f"disabled_neighbor_return=0x{BASE + DISABLED_NEIGHBOR_ENQUEUE_RETURN:x} "
         f"langselect_ready_skip=0x{BASE + rel32_jcc_target(data, NATIVE_TITLE_READY_SKIP_JE):x} "
-        "langselect_flags_offset=component+0x48"
+        "langselect_flags_offset=component+0x48 "
+        f"disabled_continue_builder=0x{BASE + DISABLED_CONTINUE_BUILDER:x} "
+        f"disabled_continue_owner=0x{BASE + DISABLED_CONTINUE_STEP_UPDATE:x} "
+        f"disabled_continue_step_vtable=0x{BASE + DISABLED_CONTINUE_STEP_VTABLE:x} "
+        "disabled_continue_gate=this+0x6b0&!this+0x6b1 disabled_continue_row=this+0x708 "
+        f"disabled_continue_builder_callers={len(builder_callers)}"
     )
     return 0
 
