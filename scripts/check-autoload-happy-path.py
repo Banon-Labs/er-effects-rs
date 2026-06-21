@@ -259,6 +259,9 @@ def main() -> int:
         and "oracle_result_action_last_wrapper_builder_ret" in telemetry
         and "oracle_result_action_last_wrapper_builder_ret_update_rva" in telemetry
         and "oracle_policy_window_backing_flag_ptr" in telemetry
+        and "oracle_policy_window_stored_backing_flag_ptr" in telemetry
+        and "oracle_policy_window_backing_flag_value" in telemetry
+        and "oracle_policy_window_requested_flag_value" in telemetry
         and "oracle_policy_ctor_wrapper_hits" in telemetry
         and "oracle_policy_ctor_wrapper_original_this" in telemetry
         and "oracle_policy_ctor_wrapper_original_vtable" in telemetry
@@ -279,6 +282,9 @@ def main() -> int:
         and "RESULT_ACTION_WRAPPER_BUILDER_HITS" in telemetry
         and "RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA" in telemetry
         and "POLICY_TOS_TITLE_LAST_BACKING_FLAG_PTR" in telemetry
+        and "POLICY_TOS_TITLE_LAST_STORED_BACKING_FLAG_PTR" in telemetry
+        and "POLICY_TOS_TITLE_LAST_BACKING_FLAG_VALUE" in telemetry
+        and "POLICY_TOS_TITLE_LAST_REQUESTED_FLAG_VALUE" in telemetry
         and "POLICY_TOS_TITLE_WRAPPER_HITS" in telemetry
         and "POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_THIS" in telemetry
         and "POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_VTABLE" in telemetry
@@ -355,6 +361,8 @@ def main() -> int:
         and "policy ToS selector ctor matches option id against requested flag value" in native_static_check
         and "policy ToS ctor wrapper preserves record pointer from rcx in rsi" in native_static_check
         and "policy ToS ctor wrapper loads backing flag pointer from record+0x8" in native_static_check
+        and "policy ToS constructor stores backing flag pointer at owner+0x29c0" in native_static_check
+        and "policy ToS constructor copies backing flag value into owner+0x29c8 requested flag" in native_static_check
         and "policy ToS constructor reads backing flag pointer from stack arg1" in native_static_check
         and "policy ToS ctor caller passes backing flag pointer as stack arg1" in native_static_check
         and "policy ToS constructor initializes requested flag owner+0x29c8 from current flag" in native_static_check
@@ -582,6 +590,9 @@ def main() -> int:
         and "oracle_result_action_last_wrapper_builder_ret" in telemetry_src
         and "oracle_result_action_last_wrapper_builder_ret_update_rva" in telemetry_src
         and "oracle_policy_window_backing_flag_ptr" in telemetry_src
+        and "oracle_policy_window_stored_backing_flag_ptr" in telemetry_src
+        and "oracle_policy_window_backing_flag_value" in telemetry_src
+        and "oracle_policy_window_requested_flag_value" in telemetry_src
         and "oracle_policy_ctor_wrapper_hits" in telemetry_src
         and "oracle_policy_ctor_wrapper_original_this" in telemetry_src
         and "oracle_policy_ctor_wrapper_original_vtable" in telemetry_src
@@ -602,6 +613,9 @@ def main() -> int:
         and "RESULT_ACTION_WRAPPER_BUILDER_HITS" in lib
         and "RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA" in lib
         and "POLICY_TOS_TITLE_LAST_BACKING_FLAG_PTR" in lib
+        and "POLICY_TOS_TITLE_LAST_STORED_BACKING_FLAG_PTR" in lib
+        and "POLICY_TOS_TITLE_LAST_BACKING_FLAG_VALUE" in lib
+        and "POLICY_TOS_TITLE_LAST_REQUESTED_FLAG_VALUE" in lib
         and "POLICY_TOS_TITLE_CTOR_WRAPPER_RVA" in lib
         and "POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG" in lib
         and "POLICY_TOS_TITLE_WRAPPER_HITS" in lib

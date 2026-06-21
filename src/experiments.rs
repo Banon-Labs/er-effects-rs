@@ -6507,6 +6507,25 @@ pub(crate) unsafe extern "system" fn policy_tos_title_ctor_hook(
     } else {
         null
     };
+    let stored_backing_flag_ptr = if object != null {
+        unsafe { safe_read_usize(object + 0x29c0) }.unwrap_or(null)
+    } else {
+        null
+    };
+    let backing_flag_value = if stored_backing_flag_ptr != null {
+        unsafe { safe_read_i32(stored_backing_flag_ptr) }
+            .map(|value| value.max(0) as usize)
+            .unwrap_or(null)
+    } else {
+        null
+    };
+    let requested_flag_value = if object != null {
+        unsafe { safe_read_i32(object + 0x29c8) }
+            .map(|value| value.max(0) as usize)
+            .unwrap_or(null)
+    } else {
+        null
+    };
     POLICY_TOS_TITLE_LAST_THIS.store(object, Ordering::SeqCst);
     POLICY_TOS_TITLE_LAST_VTABLE.store(vt, Ordering::SeqCst);
     POLICY_TOS_TITLE_LAST_ARG_RDX.store(rdx, Ordering::SeqCst);
@@ -6514,9 +6533,12 @@ pub(crate) unsafe extern "system" fn policy_tos_title_ctor_hook(
     POLICY_TOS_TITLE_LAST_ARG_R9.store(r9, Ordering::SeqCst);
     POLICY_TOS_TITLE_LAST_STACK_ARG0.store(stack_arg0, Ordering::SeqCst);
     POLICY_TOS_TITLE_LAST_BACKING_FLAG_PTR.store(backing_flag_ptr, Ordering::SeqCst);
+    POLICY_TOS_TITLE_LAST_STORED_BACKING_FLAG_PTR.store(stored_backing_flag_ptr, Ordering::SeqCst);
+    POLICY_TOS_TITLE_LAST_BACKING_FLAG_VALUE.store(backing_flag_value, Ordering::SeqCst);
+    POLICY_TOS_TITLE_LAST_REQUESTED_FLAG_VALUE.store(requested_flag_value, Ordering::SeqCst);
     POLICY_TOS_TITLE_TOTAL_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "policy-oracle: TosTitle ctor 0x{:x} built object=0x{object:x} vt=0x{vt:x} expected_vt=0x{:x} args(rdx=0x{rdx:x} r8=0x{r8:x} r9=0x{r9:x} stack0=0x{stack_arg0:x} backing_flag_ptr=0x{backing_flag_ptr:x}) text_path=0x{:x} -- native/asset-backed Privacy/ToS surface regression",
+        "policy-oracle: TosTitle ctor 0x{:x} built object=0x{object:x} vt=0x{vt:x} expected_vt=0x{:x} args(rdx=0x{rdx:x} r8=0x{r8:x} r9=0x{r9:x} stack0=0x{stack_arg0:x} backing_flag_ptr=0x{backing_flag_ptr:x}) stored_backing_flag_ptr=0x{stored_backing_flag_ptr:x} backing_flag_value={backing_flag_value} requested_flag_value={requested_flag_value} text_path=0x{:x} -- native/asset-backed Privacy/ToS surface regression",
         base + POLICY_TOS_TITLE_CTOR_RVA as usize,
         base + POLICY_TOS_TITLE_VTABLE_RVA,
         base + POLICY_TOS_TITLE_TEXT_PATH_RVA

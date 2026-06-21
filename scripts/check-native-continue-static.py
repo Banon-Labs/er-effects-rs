@@ -278,6 +278,10 @@ def main() -> int:
     if POLICY_TOS_SELECTOR_CTOR not in selector_calls:
         fail("policy ToS selector wrapper no longer calls 0x1409b49f0")
 
+    policy_title_ctor = image_bytes(POLICY_TOS_TITLE_CTOR, 0x180)
+    contains(policy_title_ctor, b"\x49\x89\x86\xc0\x29\x00\x00", "policy ToS constructor stores backing flag pointer at owner+0x29c0")
+    contains(policy_title_ctor, b"\x8b\x00\x41\x89\x86\xc8\x29\x00\x00", "policy ToS constructor copies backing flag value into owner+0x29c8 requested flag")
+
     policy_ctor_wrapper = image_bytes(POLICY_TOS_TITLE_CTOR_WRAPPER, 0xa0)
     contains(policy_ctor_wrapper, b"\x48\x8b\xf1", "policy ToS ctor wrapper preserves record pointer from rcx in rsi")
     contains(policy_ctor_wrapper, b"\x4c\x8b\xf2", "policy ToS ctor wrapper preserves menu/context pointer from rdx in r14")

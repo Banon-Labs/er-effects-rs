@@ -271,6 +271,9 @@ if (
     or 'oracle_result_action_last_wrapper_builder_ret' not in telemetry_src
     or 'oracle_result_action_last_wrapper_builder_ret_update_rva' not in telemetry_src
     or 'oracle_policy_window_backing_flag_ptr' not in telemetry_src
+    or 'oracle_policy_window_stored_backing_flag_ptr' not in telemetry_src
+    or 'oracle_policy_window_backing_flag_value' not in telemetry_src
+    or 'oracle_policy_window_requested_flag_value' not in telemetry_src
     or 'oracle_policy_ctor_wrapper_hits' not in telemetry_src
     or 'oracle_policy_ctor_wrapper_original_this' not in telemetry_src
     or 'oracle_policy_ctor_wrapper_original_vtable' not in telemetry_src
@@ -291,6 +294,9 @@ if (
     or 'RESULT_ACTION_WRAPPER_BUILDER_HITS' not in lib_code
     or 'RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA' not in lib_code
     or 'POLICY_TOS_TITLE_LAST_BACKING_FLAG_PTR' not in lib_code
+    or 'POLICY_TOS_TITLE_LAST_STORED_BACKING_FLAG_PTR' not in lib_code
+    or 'POLICY_TOS_TITLE_LAST_BACKING_FLAG_VALUE' not in lib_code
+    or 'POLICY_TOS_TITLE_LAST_REQUESTED_FLAG_VALUE' not in lib_code
     or 'POLICY_TOS_TITLE_CTOR_WRAPPER_RVA' not in lib_code
     or 'POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG' not in lib_code
     or 'POLICY_TOS_TITLE_WRAPPER_HITS' not in lib_code
@@ -382,6 +388,7 @@ if (
     or 'POLICY_TOS_REQUESTED_FLAG_COMMIT' not in native_static_check
     or 'policy ToS status predicate' not in native_static_check
     or 'policy ToS flag setter' not in native_static_check
+    or 'owner+0x29c0' not in native_static_check
     or 'owner+0x29c8' not in native_static_check
     or 'requested-flag binder' not in native_static_check
     or 'requested-flag commit' not in native_static_check
