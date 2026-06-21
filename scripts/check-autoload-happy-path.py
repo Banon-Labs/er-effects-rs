@@ -409,17 +409,24 @@ def main() -> int:
         and "MENU_SUBMIT" in native_static_check
         and "MENU_MEMBER_FUNC_JOB_RUN" in native_static_check
         and "MENU_REGISTRY_INSERT_COPY" in native_static_check
+        and "RESULT_EVENT_HANDLER" in native_static_check
+        and "MENU_JOB_LIST_CONSUMER" in native_static_check
+        and "MENU_JOB_SINGLE_CONSUMER" in native_static_check
         and "node+0x18" in native_static_check
         and "node+0x20" in native_static_check
         and "node+0x10" in native_static_check
+        and "result+0x3b0" in native_static_check
+        and "vtable +0x10 update" in native_static_check
+        and "update return payload" in native_static_check
         and "check-native-continue-static.py" in check_sh,
-        "quality gates must include skip-safe native Continue/MenuWindowJob/MenuMemberFuncJob static byte-window validation",
+        "quality gates must include skip-safe native Continue/MenuWindowJob/MenuMemberFuncJob/result-consumer static byte-window validation",
         failures,
     )
     require(
         "check-native-continue-static.py" in measure
-        and "MenuMemberFuncJob" in measure,
-        "measure must fail closed if the native Continue/MenuMemberFuncJob static checker is not wired into quality gates",
+        and "MenuMemberFuncJob" in measure
+        and "result-consumer" in measure,
+        "measure must fail closed if the native Continue/MenuMemberFuncJob/result-consumer static checker is not wired into quality gates",
         failures,
     )
     require(

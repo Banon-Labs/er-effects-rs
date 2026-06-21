@@ -248,15 +248,21 @@ if (
     or 'MENU_SUBMIT' not in native_static_check
     or 'MENU_MEMBER_FUNC_JOB_RUN' not in native_static_check
     or 'MENU_REGISTRY_INSERT_COPY' not in native_static_check
+    or 'RESULT_EVENT_HANDLER' not in native_static_check
+    or 'MENU_JOB_LIST_CONSUMER' not in native_static_check
+    or 'MENU_JOB_SINGLE_CONSUMER' not in native_static_check
     or 'node+0x18' not in native_static_check
     or 'node+0x20' not in native_static_check
     or 'node+0x10' not in native_static_check
+    or 'result+0x3b0' not in native_static_check
+    or 'vtable +0x10 update' not in native_static_check
+    or 'update return payload' not in native_static_check
     or 'check-native-continue-static.py' not in check_sh
 ):
-    legacy_failures.append('quality gates do not include native Continue/MenuWindowJob/MenuMemberFuncJob static byte-window validation')
+    legacy_failures.append('quality gates do not include native Continue/MenuWindowJob/MenuMemberFuncJob/result-consumer static byte-window validation')
     autoload_static_failures += 1
-if 'quality gates must include skip-safe native Continue/MenuWindowJob/MenuMemberFuncJob static byte-window validation' not in check:
-    legacy_failures.append('check-autoload-happy-path does not enforce native Continue/MenuMemberFuncJob static checker wiring')
+if 'quality gates must include skip-safe native Continue/MenuWindowJob/MenuMemberFuncJob/result-consumer static byte-window validation' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce native Continue/MenuMemberFuncJob/result-consumer static checker wiring')
     autoload_static_failures += 1
 
 asset_failures: list[str] = []

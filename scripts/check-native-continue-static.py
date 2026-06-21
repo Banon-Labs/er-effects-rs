@@ -27,6 +27,12 @@ INPUT_MANAGER_READY = 0x140765F20
 MENU_SUBMIT = 0x1407AC890
 MENU_MEMBER_FUNC_JOB_RUN = 0x1409AABA0
 MENU_REGISTRY_INSERT_COPY = 0x1407A7B60
+RESULT_EVENT_HANDLER = 0x140746E80
+RESULT_ACTION_BUILDER = 0x140746A00
+MENU_JOB_SINGLE_CONSUMER = 0x1407A9600
+MENU_JOB_LIST_CONSUMER = 0x1407AA1F0
+MENU_OUT_IS_ACTIVE = 0x1407A9200
+MENU_OUT_IS_ADVANCE = 0x1407A9210
 
 
 def fail(message: str) -> None:
@@ -126,6 +132,27 @@ def main() -> int:
     contains(registry_insert, b"\x48\x8b\x09", "registry insert loads source shared pointer [rcx]")
     contains(registry_insert, b"\x48\x89\x0a", "registry insert stores source shared pointer into [rdx]")
     contains(registry_insert, b"\x48\x83\xc1\x08", "registry insert retains copied shared pointer control block")
+
+    result_handler = image_bytes(RESULT_EVENT_HANDLER, 0x100)
+    contains(result_handler, b"\x80\xb9\xb0\x03\x00\x00\x00", "result handler gates action build on result+0x3b0")
+    contains(result_handler, b"\xc6\x83\xb0\x03\x00\x00\x01", "result handler marks result+0x3b0 after building actions")
+    result_calls = rel32_targets(RESULT_EVENT_HANDLER, result_handler)
+    if RESULT_ACTION_BUILDER not in result_calls:
+        fail("result handler no longer calls result action builder 0x140746a00")
+
+    single_consumer = image_bytes(MENU_JOB_SINGLE_CONSUMER, 0x140)
+    contains(single_consumer, b"\xff\x50\x10", "single native menu consumer calls job vtable +0x10 update")
+    single_calls = rel32_targets(MENU_JOB_SINGLE_CONSUMER, single_consumer)
+    if MENU_OUT_IS_ACTIVE not in single_calls:
+        fail("single native menu consumer no longer classifies update out-state via 0x1407a9200")
+
+    list_consumer = image_bytes(MENU_JOB_LIST_CONSUMER, 0x180)
+    contains(list_consumer, b"\xff\x50\x10", "list native menu consumer calls job vtable +0x10 update")
+    contains(list_consumer, b"\x48\x8b\x08\x48\x89\x0e", "list native menu consumer copies update return payload into caller out-state")
+    contains(list_consumer, b"\xff\x47\x10", "list native menu consumer advances item cursor only after active/advance out-state")
+    list_calls = rel32_targets(MENU_JOB_LIST_CONSUMER, list_consumer)
+    if MENU_OUT_IS_ACTIVE not in list_calls or MENU_OUT_IS_ADVANCE not in list_calls:
+        fail("list native menu consumer no longer validates update out-state via 0x1407a9200/0x1407a9210")
 
     print("native Continue static checks passed")
     return 0
