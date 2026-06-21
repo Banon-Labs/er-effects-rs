@@ -2761,19 +2761,15 @@ unsafe fn submit_native_continue_item_action(
     const CONTINUE_WRAPPER_EVENT_PAYLOAD_INDEX: usize = 1;
     let native_submit = base + MENU_ITEM_SUBMIT_RVA;
     let fd4_event_constructor = base + FD4_EVENT_CONSTRUCTOR_RVA;
-    let continue_wrapper = base + TRACE_MENU_CONTINUE_WRAPPER_RVA as usize;
-    let wrapper: unsafe extern "system" fn(usize) -> usize =
-        unsafe { std::mem::transmute(continue_wrapper) };
-    let mut wrapper_event = [TITLE_OWNER_SCAN_START_ADDRESS as u64; CONTINUE_WRAPPER_EVENT_WORDS];
+    let native_submit_fn: unsafe extern "system" fn(usize) =
+        unsafe { std::mem::transmute(native_submit) };
     append_autoload_debug(format_args!(
-        "product-core-autoload: native Continue submit ABI proven item=0x{:x} result=0x{:x} result_vt=0x{:x} event_handler=0x{event_handler:x} native_submit=0x{native_submit:x} fd4_event_ctor=0x{fd4_event_constructor:x} continue_wrapper=0x{continue_wrapper:x} diagnostic_mode={diagnostic_mode} -- result+0x58 logged only, never used as readiness",
+        "product-core-autoload: native Continue submit ABI proven item=0x{:x} result=0x{:x} result_vt=0x{:x} event_handler=0x{event_handler:x} native_submit=0x{native_submit:x} fd4_event_ctor=0x{fd4_event_constructor:x} diagnostic_mode={diagnostic_mode} -- result+0x58 logged only, never used as readiness",
         action.item, action.result, action.result_vt
     ));
-    unsafe { wrapper(wrapper_event.as_mut_ptr() as usize) };
+    unsafe { native_submit_fn(action.result) };
     append_autoload_debug(format_args!(
-        "product-core-autoload: native Continue wrapper returned event0=0x{:x} event1=0x{:x} -- modal-confirm event is deliberately disabled downstream after loaded evidence",
-        wrapper_event[CONTINUE_WRAPPER_EVENT_CODE_INDEX],
-        wrapper_event[CONTINUE_WRAPPER_EVENT_PAYLOAD_INDEX]
+        "product-core-autoload: native Continue submit dispatcher returned after event_handler=0x{event_handler:x} -- modal-confirm wait remains disabled downstream until loaded evidence"
     ));
     Some(diagnostic_mode)
 }
