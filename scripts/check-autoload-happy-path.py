@@ -266,6 +266,9 @@ def main() -> int:
         and "oracle_policy_selector_wrapper_hits" in telemetry
         and "oracle_policy_selector_wrapper_requested_flag" in telemetry
         and "oracle_policy_selector_wrapper_selector_arg" in telemetry
+        and "oracle_policy_selector_ctor_hits" in telemetry
+        and "oracle_policy_selector_ctor_requested_flag_ptr" in telemetry
+        and "oracle_policy_selector_ctor_stored_requested_flag_ptr" in telemetry
         and "oracle_policy_status_predicate_hits" in telemetry
         and "oracle_policy_status_predicate_ret" in telemetry
         and "oracle_policy_flag_setter_hits" in telemetry
@@ -283,6 +286,9 @@ def main() -> int:
         and "POLICY_TOS_SELECTOR_WRAPPER_HITS" in telemetry
         and "POLICY_TOS_SELECTOR_WRAPPER_LAST_REQUESTED_FLAG" in telemetry
         and "POLICY_TOS_SELECTOR_WRAPPER_LAST_SELECTOR_ARG" in telemetry
+        and "POLICY_TOS_SELECTOR_CTOR_HITS" in telemetry
+        and "POLICY_TOS_SELECTOR_CTOR_LAST_REQUESTED_FLAG_PTR" in telemetry
+        and "POLICY_TOS_SELECTOR_CTOR_LAST_STORED_REQUESTED_FLAG_PTR" in telemetry
         and "POLICY_TOS_STATUS_HITS" in telemetry
         and "POLICY_TOS_STATUS_LAST_RET" in telemetry
         and "POLICY_TOS_FLAG_SETTER_HITS" in telemetry
@@ -344,6 +350,9 @@ def main() -> int:
         and "policy ToS selector wrapper passes owner+0x29c8 requested flag pointer" in native_static_check
         and "policy ToS selector wrapper passes owner+0x29d0 selector argument" in native_static_check
         and "policy ToS selector wrapper no longer calls 0x1409b49f0" in native_static_check
+        and "policy ToS selector ctor stores selector arg at object+0x1260" in native_static_check
+        and "policy ToS selector ctor stores requested flag pointer at object+0x1268" in native_static_check
+        and "policy ToS selector ctor matches option id against requested flag value" in native_static_check
         and "policy ToS ctor wrapper preserves record pointer from rcx in rsi" in native_static_check
         and "policy ToS ctor wrapper loads backing flag pointer from record+0x8" in native_static_check
         and "policy ToS constructor reads backing flag pointer from stack arg1" in native_static_check
@@ -580,6 +589,9 @@ def main() -> int:
         and "oracle_policy_selector_wrapper_hits" in telemetry_src
         and "oracle_policy_selector_wrapper_requested_flag" in telemetry_src
         and "oracle_policy_selector_wrapper_selector_arg" in telemetry_src
+        and "oracle_policy_selector_ctor_hits" in telemetry_src
+        and "oracle_policy_selector_ctor_requested_flag_ptr" in telemetry_src
+        and "oracle_policy_selector_ctor_stored_requested_flag_ptr" in telemetry_src
         and "oracle_policy_status_predicate_hits" in telemetry_src
         and "oracle_policy_status_predicate_ret" in telemetry_src
         and "oracle_policy_flag_setter_hits" in telemetry_src
@@ -600,6 +612,10 @@ def main() -> int:
         and "POLICY_TOS_SELECTOR_WRAPPER_HITS" in lib
         and "POLICY_TOS_SELECTOR_WRAPPER_LAST_REQUESTED_FLAG" in lib
         and "POLICY_TOS_SELECTOR_WRAPPER_LAST_SELECTOR_ARG" in lib
+        and "POLICY_TOS_SELECTOR_CTOR_RVA" in lib
+        and "POLICY_TOS_SELECTOR_CTOR_HITS" in lib
+        and "POLICY_TOS_SELECTOR_CTOR_LAST_REQUESTED_FLAG_PTR" in lib
+        and "POLICY_TOS_SELECTOR_CTOR_LAST_STORED_REQUESTED_FLAG_PTR" in lib
         and "POLICY_TOS_STATUS_PREDICATE_RVA" in lib
         and "POLICY_TOS_STATUS_PREDICATE_ORIG" in lib
         and "POLICY_TOS_FLAG_SETTER_RVA" in lib

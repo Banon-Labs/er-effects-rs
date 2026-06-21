@@ -264,6 +264,12 @@ def main() -> int:
     if POLICY_TOS_SELECTOR_WRAPPER not in selector_thunk_jumps:
         fail("policy ToS selector wrapper thunk no longer jumps to 0x1409b6140")
 
+    policy_selector_ctor = image_bytes(POLICY_TOS_SELECTOR_CTOR, 0x220)
+    contains(policy_selector_ctor, b"\x48\x8b\xb5\xb0\x01\x00\x00", "policy ToS selector ctor loads requested flag pointer from stack arg0")
+    contains(policy_selector_ctor, b"\x49\x89\xbe\x60\x12\x00\x00", "policy ToS selector ctor stores selector arg at object+0x1260")
+    contains(policy_selector_ctor, b"\x49\x89\xb6\x68\x12\x00\x00", "policy ToS selector ctor stores requested flag pointer at object+0x1268")
+    contains(policy_selector_ctor, b"\x8b\x0e\x39\x48\x08", "policy ToS selector ctor matches option id against requested flag value")
+
     policy_selector_wrapper = image_bytes(POLICY_TOS_SELECTOR_WRAPPER, 0xb0)
     contains(policy_selector_wrapper, b"\x48\x8b\x16", "policy ToS selector wrapper loads owner pointer from adjusted record")
     contains(policy_selector_wrapper, b"\x48\x8d\x8a\xc8\x29\x00\x00", "policy ToS selector wrapper passes owner+0x29c8 requested flag pointer")

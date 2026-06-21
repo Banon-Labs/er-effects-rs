@@ -278,6 +278,9 @@ if (
     or 'oracle_policy_selector_wrapper_hits' not in telemetry_src
     or 'oracle_policy_selector_wrapper_requested_flag' not in telemetry_src
     or 'oracle_policy_selector_wrapper_selector_arg' not in telemetry_src
+    or 'oracle_policy_selector_ctor_hits' not in telemetry_src
+    or 'oracle_policy_selector_ctor_requested_flag_ptr' not in telemetry_src
+    or 'oracle_policy_selector_ctor_stored_requested_flag_ptr' not in telemetry_src
     or 'oracle_policy_status_predicate_hits' not in telemetry_src
     or 'oracle_policy_status_predicate_ret' not in telemetry_src
     or 'oracle_policy_flag_setter_hits' not in telemetry_src
@@ -298,6 +301,10 @@ if (
     or 'POLICY_TOS_SELECTOR_WRAPPER_HITS' not in lib_code
     or 'POLICY_TOS_SELECTOR_WRAPPER_LAST_REQUESTED_FLAG' not in lib_code
     or 'POLICY_TOS_SELECTOR_WRAPPER_LAST_SELECTOR_ARG' not in lib_code
+    or 'POLICY_TOS_SELECTOR_CTOR_RVA' not in lib_code
+    or 'POLICY_TOS_SELECTOR_CTOR_HITS' not in lib_code
+    or 'POLICY_TOS_SELECTOR_CTOR_LAST_REQUESTED_FLAG_PTR' not in lib_code
+    or 'POLICY_TOS_SELECTOR_CTOR_LAST_STORED_REQUESTED_FLAG_PTR' not in lib_code
     or 'POLICY_TOS_STATUS_PREDICATE_RVA' not in lib_code
     or 'POLICY_TOS_STATUS_PREDICATE_ORIG' not in lib_code
     or 'POLICY_TOS_FLAG_SETTER_RVA' not in lib_code
@@ -385,6 +392,9 @@ if (
     or 'SceneProxy' not in native_static_check
     or 'owner+0x29d0 selector argument' not in native_static_check
     or '0x1409b49f0' not in native_static_check
+    or 'object+0x1260' not in native_static_check
+    or 'object+0x1268' not in native_static_check
+    or 'requested flag value' not in native_static_check
     or 'MENU_JOB_LIST_CONSUMER' not in native_static_check
     or 'MENU_JOB_SINGLE_CONSUMER' not in native_static_check
     or 'FD4 event code 3' not in native_static_check
