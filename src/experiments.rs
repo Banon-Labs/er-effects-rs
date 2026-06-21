@@ -9406,24 +9406,49 @@ pub(crate) unsafe extern "system" fn cap_menu_item_update_hook(
     if product_autoload_enabled()
         && item != TITLE_OWNER_SCAN_START_ADDRESS
         && base != TITLE_OWNER_SCAN_START_ADDRESS
-        && MENU_CONTINUE_ITEM
-            .compare_exchange(
-                TITLE_OWNER_SCAN_START_ADDRESS,
-                item,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            )
-            .is_ok()
     {
+        const DOCALL_VTABLE_SLOT_10: usize = 0x10;
+        const MENU_ITEM_ACCEPT_PREDICATE_F8_OFFSET: usize = 0xf8;
+        const MENU_ITEM_ACCEPT_NATIVE_RVA: usize = 0x007ad810;
         let vt = unsafe { safe_read_usize(item) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
-        append_continue_trace(format_args!(
-            "MENU-ITEM-UPDATE captured first title item as native Continue candidate item=0x{item:x} vt=0x{vt:x} item_fields{{{}}} {}",
-            unsafe { menu_item_action_summary(item) },
-            trace_callers_summary()
-        ));
-        append_autoload_debug(format_args!(
-            "product-core-autoload: captured first title MenuWindowJob item=0x{item:x} vt=0x{vt:x} as Continue-row wrapper receiver candidate"
-        ));
+        let functor = unsafe { safe_read_usize(item + MENU_ITEM_FUNCTOR_A8_OFFSET) }
+            .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        let functor_vt = if functor != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { safe_read_usize(functor) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+        } else {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        };
+        let do_call = if functor_vt != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { safe_read_usize(functor_vt + DOCALL_VTABLE_SLOT_10) }
+                .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+        } else {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        };
+        let accept_predicate =
+            unsafe { safe_read_usize(item + MENU_ITEM_ACCEPT_PREDICATE_F8_OFFSET) }
+                .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        let semantic_continue_item = vt == base + MENU_WINDOW_JOB_VTABLE_RVA
+            && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA
+            && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA;
+        if semantic_continue_item
+            && MENU_CONTINUE_ITEM
+                .compare_exchange(
+                    TITLE_OWNER_SCAN_START_ADDRESS,
+                    item,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+        {
+            append_continue_trace(format_args!(
+                "MENU-ITEM-UPDATE captured semantic native Continue item=0x{item:x} vt=0x{vt:x} functor=0x{functor:x} docall=0x{do_call:x} accept_predicate=0x{accept_predicate:x} item_fields{{{}}} {}",
+                unsafe { menu_item_action_summary(item) },
+                trace_callers_summary()
+            ));
+            append_autoload_debug(format_args!(
+                "product-core-autoload: captured semantic native Continue MenuWindowJob item=0x{item:x} vt=0x{vt:x} docall=0x{do_call:x} accept_predicate=0x{accept_predicate:x}"
+            ));
+        }
     }
     if product_autoload_enabled()
         && item != TITLE_OWNER_SCAN_START_ADDRESS

@@ -201,6 +201,17 @@ if (
 if 'product Continue item validation must reject the constant-false idle accept predicate' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce constant-false idle accept predicate rejection')
     autoload_static_failures += 1
+menu_update_body = function_body('cap_menu_item_update_hook', exp_code) or ''
+if (
+    'captured semantic native Continue item' not in menu_update_body
+    or 'semantic_continue_item' not in menu_update_body
+    or 'captured first title item as native Continue' in menu_update_body
+):
+    legacy_failures.append('product Continue capture can latch the first ticked MenuWindowJob instead of a semantic Continue item')
+    autoload_static_failures += 1
+if 'product Continue capture must latch a semantic Continue item, not the first ticked MenuWindowJob' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce semantic Continue item capture')
+    autoload_static_failures += 1
 
 asset_failures: list[str] = []
 docs = doc_text()

@@ -180,6 +180,16 @@ def main() -> int:
         "product Continue item validation must reject the constant-false idle accept predicate before native submit",
         failures,
     )
+    menu_update_body = rust_fn_body(experiments, "cap_menu_item_update_hook")
+    require(
+        "captured semantic native Continue item" in menu_update_body
+        and "semantic_continue_item" in menu_update_body
+        and "MENU_TITLE_CONTINUE_DOCALL_RVA" in menu_update_body
+        and "MENU_ITEM_ACCEPT_NATIVE_RVA" in menu_update_body
+        and "captured first title item as native Continue" not in menu_update_body,
+        "product Continue capture must latch a semantic Continue item, not the first ticked MenuWindowJob",
+        failures,
+    )
 
     online_body = rust_fn_body(experiments, "online_disable_enabled")
     input_body = rust_fn_body(experiments, "block_input_enabled")
@@ -343,6 +353,13 @@ def main() -> int:
         and "MENU_ITEM_ACCEPT_IDLE_RVA" in experiments
         and "MENU_ITEM_ACCEPT_NATIVE_RVA" in experiments,
         "measure must fail closed if product submit can use the constant-false idle accept predicate",
+        failures,
+    )
+    require(
+        "first ticked MenuWindowJob" in measure
+        and "captured semantic native Continue item" in experiments
+        and "semantic_continue_item" in experiments,
+        "measure must fail closed if product capture regresses to first-ticked MenuWindowJob latching",
         failures,
     )
     require(
