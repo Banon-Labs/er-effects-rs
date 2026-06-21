@@ -245,6 +245,29 @@ if 'product tracing must passively latch registered TitleTopDialog Continue Menu
 if 'telemetry must expose passive Continue task/member semantic latch addresses' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce passive Continue latch telemetry')
     autoload_static_failures += 1
+result_event_body = function_body('result_event_handler_hook', exp_code) or ''
+result_action_body = function_body('result_action_builder_hook', exp_code) or ''
+if (
+    'RESULT_EVENT_HANDLER_RVA' not in lib_code
+    or 'RESULT_ACTION_BUILDER_RVA' not in lib_code
+    or 'RESULT_EVENT_HANDLER_ORIG' not in lib_code
+    or 'RESULT_ACTION_BUILDER_ORIG' not in lib_code
+    or 'result_event_handler_746e80' not in exp_code
+    or 'result_action_builder_746a00' not in exp_code
+    or 'call_result_void2_original' not in exp_code
+    or 'continue_load' in result_event_body.lower()
+    or 'continue_load' in result_action_body.lower()
+    or 'oracle_result_event_handler_hits' not in telemetry_src
+    or 'oracle_result_action_builder_hits' not in telemetry_src
+):
+    legacy_failures.append('product tracing lacks passive result.vtable+0x60/action-builder telemetry hooks')
+    autoload_static_failures += 1
+if 'product tracing must passively hook result.vtable+0x60 and action builder without direct load shortcuts' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce passive result-chain hooks')
+    autoload_static_failures += 1
+if 'telemetry must expose passive native result-handler/action-builder hit counts' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce passive result-chain telemetry')
+    autoload_static_failures += 1
 if (
     'MENU_CONTINUE_WRAPPER' not in native_static_check
     or 'MENU_WINDOW_JOB_CTOR' not in native_static_check

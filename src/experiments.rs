@@ -8130,6 +8130,20 @@ pub(crate) fn install_continue_trace_hooks() {
         }
         create_continue_trace_hook(
             &mut hooks,
+            "result_event_handler_746e80",
+            RESULT_EVENT_HANDLER_RVA,
+            result_event_handler_hook as *mut c_void,
+            &RESULT_EVENT_HANDLER_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "result_action_builder_746a00",
+            RESULT_ACTION_BUILDER_RVA,
+            result_action_builder_hook as *mut c_void,
+            &RESULT_ACTION_BUILDER_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
             "task_enqueue_7a7b60",
             TRACE_TASK_ENQUEUE_RVA,
             task_enqueue_hook as *mut c_void,
@@ -8427,6 +8441,21 @@ pub(crate) unsafe fn call_task_enqueue_original(
     let original: unsafe extern "system" fn(*mut c_void, *mut c_void) -> *mut c_void =
         unsafe { std::mem::transmute(original) };
     Some(unsafe { original(arg0, arg1) })
+}
+
+pub(crate) unsafe fn call_result_void2_original(
+    original: &AtomicUsize,
+    result: usize,
+    event: usize,
+) -> Option<()> {
+    let original = original.load(Ordering::SeqCst);
+    if original == HOOK_ORIGINAL_UNSET {
+        return None;
+    }
+    let original: unsafe extern "system" fn(usize, usize) =
+        unsafe { std::mem::transmute(original) };
+    unsafe { original(result, event) };
+    Some(())
 }
 
 /// Defensive default when a b80 trampoline is somehow unset (dead branch: if our hook
@@ -9700,6 +9729,73 @@ pub(crate) unsafe extern "system" fn cap_sequence_iter_hook(
         }
     }
     unsafe { call_cap_original(&SEQUENCE_ITER_ORIG, seq, b, c, d) }
+}
+
+fn format_optional_usize_hex(value: usize) -> String {
+    if value == TITLE_OWNER_SCAN_START_ADDRESS {
+        "null".to_owned()
+    } else {
+        format!("0x{value:x}")
+    }
+}
+
+unsafe fn result_built_flag(result: usize) -> usize {
+    const RESULT_BUILT_3B0_OFFSET: usize = 0x3b0;
+    const U8_MASK: usize = 0xff;
+    if result == TITLE_OWNER_SCAN_START_ADDRESS {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    } else {
+        unsafe { safe_read_usize(result + RESULT_BUILT_3B0_OFFSET) }
+            .map_or(TITLE_OWNER_SCAN_START_ADDRESS, |value| value & U8_MASK)
+    }
+}
+
+pub(crate) unsafe extern "system" fn result_event_handler_hook(result: usize, event: usize) {
+    const TRACE_FIRST: usize = 16;
+    let seq = RESULT_EVENT_HANDLER_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        + OWN_STEPPER_CALL_INC;
+    RESULT_EVENT_LAST_RESULT.store(result, Ordering::SeqCst);
+    RESULT_EVENT_LAST_EVENT.store(event, Ordering::SeqCst);
+    let built_before = unsafe { result_built_flag(result) };
+    if seq <= TRACE_FIRST {
+        append_continue_trace(format_args!(
+            "result_event_handler_746e80 seq={seq} phase=ENTER result=0x{result:x} event=0x{event:x} built_before={} {}",
+            format_optional_usize_hex(built_before),
+            trace_callers_summary()
+        ));
+    }
+    let _ = unsafe { call_result_void2_original(&RESULT_EVENT_HANDLER_ORIG, result, event) };
+    let built_after = unsafe { result_built_flag(result) };
+    if seq <= TRACE_FIRST {
+        append_continue_trace(format_args!(
+            "result_event_handler_746e80 seq={seq} phase=LEAVE result=0x{result:x} event=0x{event:x} built_after={} {}",
+            format_optional_usize_hex(built_after),
+            game_man_trace_summary()
+        ));
+    }
+}
+
+pub(crate) unsafe extern "system" fn result_action_builder_hook(result: usize, event: usize) {
+    const TRACE_FIRST: usize = 16;
+    let seq = RESULT_ACTION_BUILDER_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        + OWN_STEPPER_CALL_INC;
+    RESULT_ACTION_LAST_RESULT.store(result, Ordering::SeqCst);
+    RESULT_ACTION_LAST_EVENT.store(event, Ordering::SeqCst);
+    if seq <= TRACE_FIRST {
+        append_continue_trace(format_args!(
+            "result_action_builder_746a00 seq={seq} phase=ENTER result=0x{result:x} event=0x{event:x} built={} {}",
+            format_optional_usize_hex(unsafe { result_built_flag(result) }),
+            trace_callers_summary()
+        ));
+    }
+    let _ = unsafe { call_result_void2_original(&RESULT_ACTION_BUILDER_ORIG, result, event) };
+    if seq <= TRACE_FIRST {
+        append_continue_trace(format_args!(
+            "result_action_builder_746a00 seq={seq} phase=LEAVE result=0x{result:x} event=0x{event:x} built={} {}",
+            format_optional_usize_hex(unsafe { result_built_flag(result) }),
+            game_man_trace_summary()
+        ));
+    }
 }
 
 pub(crate) unsafe extern "system" fn menu_task_update_wrapper_hook(

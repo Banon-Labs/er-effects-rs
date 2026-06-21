@@ -222,6 +222,30 @@ def main() -> int:
         "telemetry must expose passive Continue task/member semantic latch addresses",
         failures,
     )
+    result_event_body = rust_fn_body(experiments, "result_event_handler_hook")
+    result_action_body = rust_fn_body(experiments, "result_action_builder_hook")
+    require(
+        "RESULT_EVENT_HANDLER_RVA" in lib
+        and "RESULT_ACTION_BUILDER_RVA" in lib
+        and "RESULT_EVENT_HANDLER_ORIG" in lib
+        and "RESULT_ACTION_BUILDER_ORIG" in lib
+        and "result_event_handler_746e80" in experiments
+        and "result_action_builder_746a00" in experiments
+        and "call_result_void2_original" in experiments
+        and "result+0x3b0" not in result_event_body
+        and "continue_load" not in result_event_body.lower()
+        and "continue_load" not in result_action_body.lower(),
+        "product tracing must passively hook result.vtable+0x60 and action builder without direct load shortcuts",
+        failures,
+    )
+    require(
+        "oracle_result_event_handler_hits" in telemetry
+        and "oracle_result_action_builder_hits" in telemetry
+        and "RESULT_EVENT_HANDLER_HITS" in telemetry
+        and "RESULT_ACTION_BUILDER_HITS" in telemetry,
+        "telemetry must expose passive native result-handler/action-builder hit counts",
+        failures,
+    )
 
     online_body = rust_fn_body(experiments, "online_disable_enabled")
     input_body = rust_fn_body(experiments, "block_input_enabled")
@@ -407,6 +431,14 @@ def main() -> int:
         and "capture_continue_member_node_candidate" in experiments
         and "oracle_continue_member_node" in telemetry_src,
         "measure must fail closed if the product lacks passive Continue MenuMemberFuncJob provenance latching/telemetry",
+        failures,
+    )
+    require(
+        "result.vtable+0x60" in measure
+        and "RESULT_EVENT_HANDLER_RVA" in lib
+        and "RESULT_ACTION_BUILDER_RVA" in lib
+        and "oracle_result_event_handler_hits" in telemetry_src,
+        "measure must fail closed if passive result-chain telemetry hooks disappear",
         failures,
     )
     require(

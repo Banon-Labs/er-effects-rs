@@ -415,6 +415,8 @@ pub(crate) const TRACE_MENU_OTHER_LOAD_WRAPPER_RVA: u32 =
 pub(crate) const TRACE_MENU_TASK_UPDATE_WRAPPER_RVA: u32 = MenuTraceRva::TaskUpdateWrapper as u32;
 pub(crate) const TRACE_MENU_TASK_UPDATE_TABLE_RVA: u32 = MenuTraceRva::TaskUpdateTable as u32;
 pub(crate) const TRACE_TASK_ENQUEUE_RVA: u32 = MenuTraceRva::TaskEnqueue as u32;
+pub(crate) const RESULT_EVENT_HANDLER_RVA: u32 = 0x00746e80;
+pub(crate) const RESULT_ACTION_BUILDER_RVA: u32 = 0x00746a00;
 pub(crate) const TRACE_UNKNOWN_TABLE_RVA: u32 = 0;
 
 #[repr(C)]
@@ -2190,6 +2192,8 @@ pub(crate) static MENU_NEW_OR_LOAD_WRAPPER_ORIG: AtomicUsize =
 pub(crate) static MENU_OTHER_LOAD_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static MENU_TASK_UPDATE_WRAPPER_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static RESULT_EVENT_HANDLER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static RESULT_ACTION_BUILDER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static TASK_ENQUEUE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SET_SAVE_SLOT_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SAVE_REQUEST_PROFILE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
@@ -2243,6 +2247,18 @@ pub(crate) static MENU_CONTINUE_TASK_NODE: AtomicUsize =
 /// ContinueWrapper 0x14082bac0. This is a passive semantic latch only; product proof must still
 /// advance through native accept/submit semantics, not direct-load shortcuts.
 pub(crate) static MENU_CONTINUE_MEMBER_NODE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Passive native result-chain telemetry. These hooks only call through and record whether native
+/// submit reached result.vtable+0x60 and its action builder; they must never drive load directly.
+pub(crate) static RESULT_EVENT_HANDLER_HITS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+pub(crate) static RESULT_ACTION_BUILDER_HITS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+pub(crate) static RESULT_EVENT_LAST_RESULT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static RESULT_EVENT_LAST_EVENT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static RESULT_ACTION_LAST_RESULT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static RESULT_ACTION_LAST_EVENT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// router_this ctor RVA and its installed (runtime) primary vtable RVA (= base+this at runtime;
 /// on-disk objdump shows 0x2af9270, +0xe00 dump/PE skew).
