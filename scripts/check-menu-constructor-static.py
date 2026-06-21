@@ -91,6 +91,24 @@ NULL_PLAYER_MENU_CTRL_VTABLE = 0x02A9BCB8
 BACKSCREEN_DATA_INSTALL = 0x00765152
 BACKSCREEN_DATA_VTABLE = 0x02A9BE00
 
+# REAL native Load-Game job (the zero-input autoload target). A menu Continue/Load action
+# enqueues a std::function LoadJob of type MenuJobResult(LoadJobContext&). The callback at
+# 0x14082c240 allocates a 0x280000-byte buffer (== ER save-slot size) via vtable [rax+0x50]
+# and reads/scans the slot -- this is the actual save read, reached through the MenuJob/
+# LoadJob factory (functor vtable 0x142ac7728 built at 6 sites in 0x140827xxx-0x14082axxx),
+# NOT the CSMenuManImp idle/disabled Continue row above. measure.sh's required runtime
+# trace hits (0x14082c240/0x14082c2c8/0x14082c374/0x14067a810/0x14082c521) all live here.
+# Our own stepper must drive THIS job zero-input; pin its identity so the path is not lost.
+#   0x142ac7188 = _Func_base<MenuJobResult, LoadJobContext&>
+#   0x142ac7728 = _Func_impl<MenuJobResult(*)(LoadJobContext&), ...>
+LOADJOB_CALLBACK = 0x0082C240
+LOADJOB_CALLBACK_PROLOGUE = bytes.fromhex("488bc4574154415541564157")
+LOADJOB_CALLBACK_INSTALL = 0x0082AA21
+LOADJOB_FUNCTOR_VTABLE_INSTALL = 0x0082AA15
+LOADJOB_FUNCTOR_VTABLE = 0x02AC7728
+LOADJOB_SAVE_SLOT_SIZE_LOAD = 0x0082C2D5
+LOADJOB_SAVE_SLOT_SIZE_BYTES = bytes.fromhex("ba00002800")  # mov edx, 0x280000
+
 
 def read_image() -> bytes:
     if not IMAGE.exists():
@@ -286,6 +304,27 @@ def main() -> int:
         "title step ctor must install BackScreenData at this+0x710",
         failures,
     )
+    require(
+        data[LOADJOB_CALLBACK : LOADJOB_CALLBACK + len(LOADJOB_CALLBACK_PROLOGUE)] == LOADJOB_CALLBACK_PROLOGUE,
+        "real native LoadJob callback MenuJobResult(LoadJobContext&) must remain at 0x14082c240",
+        failures,
+    )
+    require(
+        rip_lea_target(data, LOADJOB_CALLBACK_INSTALL) == LOADJOB_CALLBACK,
+        "MenuJob/LoadJob factory must install the save-reading LoadJob callback 0x14082c240",
+        failures,
+    )
+    require(
+        rip_lea_target(data, LOADJOB_FUNCTOR_VTABLE_INSTALL) == LOADJOB_FUNCTOR_VTABLE,
+        "LoadJob must use the _Func_impl<MenuJobResult(*)(LoadJobContext&)> functor vtable 0x142ac7728",
+        failures,
+    )
+    require(
+        data[LOADJOB_SAVE_SLOT_SIZE_LOAD : LOADJOB_SAVE_SLOT_SIZE_LOAD + len(LOADJOB_SAVE_SLOT_SIZE_BYTES)]
+        == LOADJOB_SAVE_SLOT_SIZE_BYTES,
+        "LoadJob must allocate/read the 0x280000-byte save-slot buffer (real save read, not a menu row)",
+        failures,
+    )
 
     idle_callers = find_rel32_callers(data, IDLE_CTOR)
     native_a_callers = find_rel32_callers(data, NATIVE_CTOR_A)
@@ -314,7 +353,10 @@ def main() -> int:
         f"disabled_continue_builder_callers={len(builder_callers)} "
         "step_class=CSEzUpdateTask<CSEzTask,CSMenuManImp> "
         "continue_docall_functor=_Func_impl<lambda,MenuWindow*,SceneProxy&> "
-        "title_player_ctrl=NullPlayerMenuCtrl@this+0x6a8 backscreen=BackScreenData@this+0x710"
+        "title_player_ctrl=NullPlayerMenuCtrl@this+0x6a8 backscreen=BackScreenData@this+0x710 "
+        f"native_loadjob=0x{BASE + LOADJOB_CALLBACK:x} "
+        "loadjob_type=MenuJobResult(LoadJobContext&) loadjob_save_slot_size=0x280000 "
+        f"loadjob_functor_vtable=0x{BASE + LOADJOB_FUNCTOR_VTABLE:x}"
     )
     return 0
 
