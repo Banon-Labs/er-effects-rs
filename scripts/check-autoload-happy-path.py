@@ -246,13 +246,14 @@ def main() -> int:
         "oracle_native_submit_hits" in telemetry
         and "oracle_result_event_handler_hits" in telemetry
         and "oracle_result_action_builder_hits" in telemetry
-        and "oracle_result_event_last_word0" in telemetry
-        and "oracle_result_event_last_word1" in telemetry
+        and "oracle_result_event_last_raw_qword0" in telemetry
+        and "oracle_result_event_last_fd4_code" in telemetry
+        and "oracle_result_event_last_fd4_arg" in telemetry
         and "oracle_result_action_last_word0" in telemetry
         and "oracle_result_action_last_word1" in telemetry
         and "NATIVE_SUBMIT_HITS" in telemetry
         and "RESULT_EVENT_HANDLER_HITS" in telemetry
-        and "RESULT_EVENT_LAST_WORD0" in telemetry
+        and "RESULT_EVENT_LAST_FD4_CODE" in telemetry
         and "RESULT_ACTION_BUILDER_HITS" in telemetry
         and "RESULT_ACTION_LAST_WORD0" in telemetry
         and "native_submit_entered" in watcher
@@ -473,7 +474,7 @@ def main() -> int:
         and "native_continue_chain_stage" in measure
         and "oracle_native_submit_last_result" in measure
         and "oracle_native_submit_hits" in measure
-        and "oracle_result_event_last_word0" in telemetry_src
+        and "oracle_result_event_last_fd4_code" in telemetry_src
         and "oracle_result_action_last_word0" in telemetry_src
         and "oracle_result_action_builder_hits" in measure
         and "NATIVE_SUBMIT_ORIG" in lib
@@ -497,6 +498,8 @@ def main() -> int:
         and "MENU_JOB_SINGLE_CONSUMER" in native_static_check
         and "FD4 event code 3" in native_static_check
         and "constructed FD4 event pointer" in native_static_check
+        and "event+0x0" in native_static_check
+        and "event+0x4" in native_static_check
         and "node+0x18" in native_static_check
         and "node+0x20" in native_static_check
         and "node+0x10" in native_static_check

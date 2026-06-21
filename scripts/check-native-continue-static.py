@@ -85,6 +85,11 @@ def main() -> int:
         print(f"native Continue static check skipped: {IMAGE} is absent")
         return 0
 
+    fd4_ctor = image_bytes(FD4_EVENT_CONSTRUCTOR, 0x10)
+    contains(fd4_ctor, b"\x89\x11", "FD4 event constructor stores u32 code at event+0x0")
+    contains(fd4_ctor, b"\x44\x89\x41\x04", "FD4 event constructor stores u32 arg at event+0x4")
+    contains(fd4_ctor, b"\x48\x8b\xc1", "FD4 event constructor returns the event pointer")
+
     wrapper = image_bytes(MENU_CONTINUE_WRAPPER, 0x40)
     contains(wrapper, b"\x83\xc9\xff", "Continue wrapper passes slot=-1")
     contains(wrapper, b"\x33\xd2", "Continue wrapper passes flags=0")

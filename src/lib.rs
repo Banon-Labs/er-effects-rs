@@ -2261,9 +2261,11 @@ pub(crate) static RESULT_EVENT_LAST_RESULT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static RESULT_EVENT_LAST_EVENT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static RESULT_EVENT_LAST_WORD0: AtomicUsize =
+pub(crate) static RESULT_EVENT_LAST_RAW_QWORD0: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static RESULT_EVENT_LAST_WORD1: AtomicUsize =
+pub(crate) static RESULT_EVENT_LAST_FD4_CODE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static RESULT_EVENT_LAST_FD4_ARG: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static RESULT_ACTION_LAST_RESULT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);

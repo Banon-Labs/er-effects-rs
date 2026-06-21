@@ -260,8 +260,9 @@ if (
     or 'oracle_native_submit_hits' not in telemetry_src
     or 'oracle_result_event_handler_hits' not in telemetry_src
     or 'oracle_result_action_builder_hits' not in telemetry_src
-    or 'oracle_result_event_last_word0' not in telemetry_src
-    or 'oracle_result_event_last_word1' not in telemetry_src
+    or 'oracle_result_event_last_raw_qword0' not in telemetry_src
+    or 'oracle_result_event_last_fd4_code' not in telemetry_src
+    or 'oracle_result_event_last_fd4_arg' not in telemetry_src
     or 'oracle_result_action_last_word0' not in telemetry_src
     or 'oracle_result_action_last_word1' not in telemetry_src
     or 'native_submit_entered' not in watcher
@@ -300,6 +301,8 @@ if (
     or 'MENU_JOB_SINGLE_CONSUMER' not in native_static_check
     or 'FD4 event code 3' not in native_static_check
     or 'constructed FD4 event pointer' not in native_static_check
+    or 'event+0x0' not in native_static_check
+    or 'event+0x4' not in native_static_check
     or 'node+0x18' not in native_static_check
     or 'node+0x20' not in native_static_check
     or 'node+0x10' not in native_static_check

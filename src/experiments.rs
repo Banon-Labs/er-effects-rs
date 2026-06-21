@@ -9786,6 +9786,17 @@ unsafe fn native_result_event_words(event: usize) -> (usize, usize) {
     (word0, word1)
 }
 
+fn fd4_event_code_arg(raw_qword0: usize) -> (usize, usize) {
+    const U32_MASK: usize = 0xffff_ffff;
+    if raw_qword0 == TITLE_OWNER_SCAN_START_ADDRESS {
+        return (
+            TITLE_OWNER_SCAN_START_ADDRESS,
+            TITLE_OWNER_SCAN_START_ADDRESS,
+        );
+    }
+    (raw_qword0 & U32_MASK, (raw_qword0 >> 32) & U32_MASK)
+}
+
 pub(crate) unsafe extern "system" fn native_submit_hook(result: usize) {
     const TRACE_FIRST: usize = 16;
     let seq =
@@ -9814,15 +9825,18 @@ pub(crate) unsafe extern "system" fn result_event_handler_hook(result: usize, ev
         + OWN_STEPPER_CALL_INC;
     RESULT_EVENT_LAST_RESULT.store(result, Ordering::SeqCst);
     RESULT_EVENT_LAST_EVENT.store(event, Ordering::SeqCst);
-    let (event_word0, event_word1) = unsafe { native_result_event_words(event) };
-    RESULT_EVENT_LAST_WORD0.store(event_word0, Ordering::SeqCst);
-    RESULT_EVENT_LAST_WORD1.store(event_word1, Ordering::SeqCst);
+    let (event_raw_qword0, _) = unsafe { native_result_event_words(event) };
+    let (fd4_code, fd4_arg) = fd4_event_code_arg(event_raw_qword0);
+    RESULT_EVENT_LAST_RAW_QWORD0.store(event_raw_qword0, Ordering::SeqCst);
+    RESULT_EVENT_LAST_FD4_CODE.store(fd4_code, Ordering::SeqCst);
+    RESULT_EVENT_LAST_FD4_ARG.store(fd4_arg, Ordering::SeqCst);
     let built_before = unsafe { result_built_flag(result) };
     if seq <= TRACE_FIRST {
         append_continue_trace(format_args!(
-            "result_event_handler_746e80 seq={seq} phase=ENTER result=0x{result:x} event=0x{event:x} event_word0={} event_word1={} built_before={} {}",
-            format_optional_usize_hex(event_word0),
-            format_optional_usize_hex(event_word1),
+            "result_event_handler_746e80 seq={seq} phase=ENTER result=0x{result:x} event=0x{event:x} event_raw_qword0={} fd4_code={} fd4_arg={} built_before={} {}",
+            format_optional_usize_hex(event_raw_qword0),
+            format_optional_usize_hex(fd4_code),
+            format_optional_usize_hex(fd4_arg),
             format_optional_usize_hex(built_before),
             trace_callers_summary()
         ));
