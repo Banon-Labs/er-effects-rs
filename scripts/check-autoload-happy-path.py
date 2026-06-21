@@ -258,6 +258,7 @@ def main() -> int:
         and "oracle_result_action_wrapper_builder_hits" in telemetry
         and "oracle_result_action_last_wrapper_builder_ret" in telemetry
         and "oracle_result_action_last_wrapper_builder_ret_update_rva" in telemetry
+        and "oracle_policy_window_backing_flag_ptr" in telemetry
         and "oracle_policy_status_predicate_hits" in telemetry
         and "oracle_policy_status_predicate_ret" in telemetry
         and "oracle_policy_flag_setter_hits" in telemetry
@@ -267,6 +268,7 @@ def main() -> int:
         and "oracle_result_action_last_insert_ret_update_rva" in telemetry
         and "RESULT_ACTION_WRAPPER_BUILDER_HITS" in telemetry
         and "RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA" in telemetry
+        and "POLICY_TOS_TITLE_LAST_BACKING_FLAG_PTR" in telemetry
         and "POLICY_TOS_STATUS_HITS" in telemetry
         and "POLICY_TOS_STATUS_LAST_RET" in telemetry
         and "POLICY_TOS_FLAG_SETTER_HITS" in telemetry
@@ -303,6 +305,7 @@ def main() -> int:
         "RESULT_EVENT_WRAPPER_INNER_BUILD" in native_static_check
         and "POLICY_TOS_STATUS_PREDICATE" in native_static_check
         and "POLICY_TOS_FLAG_SETTER" in native_static_check
+        and "POLICY_TOS_TITLE_CTOR_CALLER" in native_static_check
         and "POLICY_TOS_FLAG_SETTER_CALLER" in native_static_check
         and "POLICY_TOS_REQUESTED_FLAG_INIT" in native_static_check
         and "POLICY_TOS_REQUESTED_FLAG_BIND" in native_static_check
@@ -312,6 +315,8 @@ def main() -> int:
         and "policy ToS status predicate reads fallback pointer at owner+0x29c0" in native_static_check
         and "policy ToS flag setter writes requested value to flag pointer" in native_static_check
         and "policy ToS flag setter caller loads requested flag from owner+0x29c8" in native_static_check
+        and "policy ToS constructor reads backing flag pointer from stack arg1" in native_static_check
+        and "policy ToS ctor caller passes backing flag pointer as stack arg1" in native_static_check
         and "policy ToS constructor initializes requested flag owner+0x29c8 from current flag" in native_static_check
         and "policy ToS requested-flag binder passes pointer to owner+0x29c8" in native_static_check
         and "policy ToS requested-flag commit loads requested flag from owner+0x29c8" in native_static_check,
@@ -536,6 +541,7 @@ def main() -> int:
         and "oracle_result_action_wrapper_builder_hits" in telemetry_src
         and "oracle_result_action_last_wrapper_builder_ret" in telemetry_src
         and "oracle_result_action_last_wrapper_builder_ret_update_rva" in telemetry_src
+        and "oracle_policy_window_backing_flag_ptr" in telemetry_src
         and "oracle_policy_status_predicate_hits" in telemetry_src
         and "oracle_policy_status_predicate_ret" in telemetry_src
         and "oracle_policy_flag_setter_hits" in telemetry_src
@@ -545,6 +551,7 @@ def main() -> int:
         and "oracle_result_action_last_insert_ret_update_rva" in telemetry_src
         and "RESULT_ACTION_WRAPPER_BUILDER_HITS" in lib
         and "RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA" in lib
+        and "POLICY_TOS_TITLE_LAST_BACKING_FLAG_PTR" in lib
         and "POLICY_TOS_STATUS_PREDICATE_RVA" in lib
         and "POLICY_TOS_STATUS_PREDICATE_ORIG" in lib
         and "POLICY_TOS_FLAG_SETTER_RVA" in lib
@@ -556,6 +563,8 @@ def main() -> int:
         and "raw_task_node_update_rva" in experiments
         and "shared_pointee" in experiments
         and "PE_TEXT_SECTION_NAME" in experiments
+        and "backing_flag_ptr" in experiments
+        and "stack_arg0" in experiments
         and "callstack_contains_game_rva" in experiments
         and "oracle_result_action_builder_hits" in measure
         and "NATIVE_SUBMIT_ORIG" in lib

@@ -1774,6 +1774,10 @@ pub(crate) static POLICY_TOS_TITLE_LAST_ARG_R8: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static POLICY_TOS_TITLE_LAST_ARG_R9: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static POLICY_TOS_TITLE_LAST_STACK_ARG0: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static POLICY_TOS_TITLE_LAST_BACKING_FLAG_PTR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// Native policy/status predicate 0x1409b72b0: returns true if the policy gate at 0x140e4fda0
 /// is set, otherwise falls back to `[this+8]+0x29c0`. Hooked passively to explain legal/status
 /// gate failures in direct/offline runs; never used to auto-accept or skip the UI.

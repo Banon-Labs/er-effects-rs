@@ -6347,15 +6347,17 @@ pub(crate) unsafe extern "system" fn policy_tos_title_ctor_hook(
     rdx: usize,
     r8: usize,
     r9: usize,
+    stack_arg0: usize,
+    backing_flag_ptr: usize,
 ) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let orig = POLICY_TOS_TITLE_CTOR_ORIG.load(Ordering::SeqCst);
     let ret = if orig == HOOK_ORIGINAL_UNSET {
         null
     } else {
-        let f: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        let f: unsafe extern "system" fn(usize, usize, usize, usize, usize, usize) -> usize =
             unsafe { std::mem::transmute(orig) };
-        unsafe { f(this, rdx, r8, r9) }
+        unsafe { f(this, rdx, r8, r9, stack_arg0, backing_flag_ptr) }
     };
     let base = game_module_base().unwrap_or(null);
     let object = if ret != null { ret } else { this };
@@ -6369,9 +6371,11 @@ pub(crate) unsafe extern "system" fn policy_tos_title_ctor_hook(
     POLICY_TOS_TITLE_LAST_ARG_RDX.store(rdx, Ordering::SeqCst);
     POLICY_TOS_TITLE_LAST_ARG_R8.store(r8, Ordering::SeqCst);
     POLICY_TOS_TITLE_LAST_ARG_R9.store(r9, Ordering::SeqCst);
+    POLICY_TOS_TITLE_LAST_STACK_ARG0.store(stack_arg0, Ordering::SeqCst);
+    POLICY_TOS_TITLE_LAST_BACKING_FLAG_PTR.store(backing_flag_ptr, Ordering::SeqCst);
     POLICY_TOS_TITLE_TOTAL_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "policy-oracle: TosTitle ctor 0x{:x} built object=0x{object:x} vt=0x{vt:x} expected_vt=0x{:x} args(rdx=0x{rdx:x} r8=0x{r8:x} r9=0x{r9:x}) text_path=0x{:x} -- native/asset-backed Privacy/ToS surface regression",
+        "policy-oracle: TosTitle ctor 0x{:x} built object=0x{object:x} vt=0x{vt:x} expected_vt=0x{:x} args(rdx=0x{rdx:x} r8=0x{r8:x} r9=0x{r9:x} stack0=0x{stack_arg0:x} backing_flag_ptr=0x{backing_flag_ptr:x}) text_path=0x{:x} -- native/asset-backed Privacy/ToS surface regression",
         base + POLICY_TOS_TITLE_CTOR_RVA as usize,
         base + POLICY_TOS_TITLE_VTABLE_RVA,
         base + POLICY_TOS_TITLE_TEXT_PATH_RVA

@@ -712,6 +712,7 @@ def oracle_summary(
         "postload_popup_builds": telemetry.get("oracle_msgbox_postload_builds"),
         "blocking_modal_present": telemetry.get("oracle_blocking_modal_present"),
         "simulated_button_presses_total": telemetry.get("simulated_button_presses_total"),
+        "policy_window_backing_flag_ptr": telemetry.get("oracle_policy_window_backing_flag_ptr"),
         "native_submit_hits": telemetry.get("oracle_native_submit_hits"),
         "native_submit_last_result": telemetry.get("oracle_native_submit_last_result"),
         "result_event_handler_hits": telemetry.get("oracle_result_event_handler_hits"),

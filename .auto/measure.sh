@@ -270,6 +270,7 @@ if (
     or 'oracle_result_action_wrapper_builder_hits' not in telemetry_src
     or 'oracle_result_action_last_wrapper_builder_ret' not in telemetry_src
     or 'oracle_result_action_last_wrapper_builder_ret_update_rva' not in telemetry_src
+    or 'oracle_policy_window_backing_flag_ptr' not in telemetry_src
     or 'oracle_policy_status_predicate_hits' not in telemetry_src
     or 'oracle_policy_status_predicate_ret' not in telemetry_src
     or 'oracle_policy_flag_setter_hits' not in telemetry_src
@@ -279,6 +280,7 @@ if (
     or 'oracle_result_action_last_insert_ret_update_rva' not in telemetry_src
     or 'RESULT_ACTION_WRAPPER_BUILDER_HITS' not in lib_code
     or 'RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA' not in lib_code
+    or 'POLICY_TOS_TITLE_LAST_BACKING_FLAG_PTR' not in lib_code
     or 'POLICY_TOS_STATUS_PREDICATE_RVA' not in lib_code
     or 'POLICY_TOS_STATUS_PREDICATE_ORIG' not in lib_code
     or 'POLICY_TOS_FLAG_SETTER_RVA' not in lib_code
@@ -290,6 +292,8 @@ if (
     or 'raw_task_node_update_rva' not in exp_code
     or 'shared_pointee' not in exp_code
     or 'PE_TEXT_SECTION_NAME' not in exp_code
+    or 'backing_flag_ptr' not in exp_code
+    or 'stack_arg0' not in exp_code
     or 'callstack_contains_game_rva' not in exp_code
     or 'native_submit_entered' not in watcher
     or 'native_result_chain_same_result' not in watcher
@@ -338,6 +342,7 @@ if (
     or 'RESULT_EVENT_WRAPPER_BUILDER' not in native_static_check
     or 'POLICY_TOS_STATUS_PREDICATE' not in native_static_check
     or 'POLICY_TOS_FLAG_SETTER' not in native_static_check
+    or 'POLICY_TOS_TITLE_CTOR_CALLER' not in native_static_check
     or 'POLICY_TOS_FLAG_SETTER_CALLER' not in native_static_check
     or 'POLICY_TOS_REQUESTED_FLAG_INIT' not in native_static_check
     or 'POLICY_TOS_REQUESTED_FLAG_BIND' not in native_static_check

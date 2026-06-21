@@ -32,6 +32,8 @@ RESULT_ACTION_BUILDER = 0x140746A00
 RESULT_EVENT_WRAPPER_BUILDER = 0x140744A60
 RESULT_EVENT_WRAPPER_INNER_BUILD = 0x1407449E0
 POLICY_TOS_STATUS_PREDICATE = 0x1409B72B0
+POLICY_TOS_TITLE_CTOR = 0x1409B5970
+POLICY_TOS_TITLE_CTOR_CALLER = 0x1409B60DA
 POLICY_TOS_FLAG_SETTER = 0x1409B6B30
 POLICY_TOS_FLAG_SETTER_CALLER = 0x1409B5D4C
 POLICY_TOS_REQUESTED_FLAG_INIT = 0x1409B5A9F
@@ -206,9 +208,20 @@ def main() -> int:
         fail("policy ToS flag setter caller no longer calls 0x1409b6b30")
 
     policy_requested_init = image_bytes(POLICY_TOS_REQUESTED_FLAG_INIT, 0x40)
+    contains(policy_requested_init, b"\x48\x8b\x85\x88\x01\x00\x00", "policy ToS constructor reads backing flag pointer from stack arg1")
     contains(policy_requested_init, b"\x49\x89\x86\xc0\x29\x00\x00", "policy ToS constructor stores flag pointer at owner+0x29c0")
     contains(policy_requested_init, b"\x8b\x00", "policy ToS constructor loads current flag value from *owner+0x29c0")
     contains(policy_requested_init, b"\x41\x89\x86\xc8\x29\x00\x00", "policy ToS constructor initializes requested flag owner+0x29c8 from current flag")
+
+    policy_ctor_caller = image_bytes(POLICY_TOS_TITLE_CTOR_CALLER, 0x30)
+    contains(policy_ctor_caller, b"\x48\x8b\x4e\x08", "policy ToS ctor caller loads backing flag pointer from record+0x8")
+    contains(policy_ctor_caller, b"\x48\x89\x4c\x24\x28", "policy ToS ctor caller passes backing flag pointer as stack arg1")
+    contains(policy_ctor_caller, b"\x8b\x4e\x04", "policy ToS ctor caller loads stack arg0 from record+0x4")
+    contains(policy_ctor_caller, b"\x89\x4c\x24\x20", "policy ToS ctor caller passes record+0x4 as stack arg0")
+    contains(policy_ctor_caller, b"\x44\x8b\x0e", "policy ToS ctor caller passes record+0x0 as r9d")
+    ctor_caller_calls = rel32_targets(POLICY_TOS_TITLE_CTOR_CALLER, policy_ctor_caller)
+    if POLICY_TOS_TITLE_CTOR not in ctor_caller_calls:
+        fail("policy ToS ctor caller no longer calls 0x1409b5970")
 
     policy_requested_bind = image_bytes(POLICY_TOS_REQUESTED_FLAG_BIND, 0x40)
     contains(policy_requested_bind, b"\x48\x8b\x16", "policy ToS requested-flag binder loads owner from holder")

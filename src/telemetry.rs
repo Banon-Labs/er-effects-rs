@@ -593,6 +593,8 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         let policy_arg_rdx = POLICY_TOS_TITLE_LAST_ARG_RDX.load(Ordering::SeqCst);
         let policy_arg_r8 = POLICY_TOS_TITLE_LAST_ARG_R8.load(Ordering::SeqCst);
         let policy_arg_r9 = POLICY_TOS_TITLE_LAST_ARG_R9.load(Ordering::SeqCst);
+        let policy_stack_arg0 = POLICY_TOS_TITLE_LAST_STACK_ARG0.load(Ordering::SeqCst);
+        let policy_backing_flag_ptr = POLICY_TOS_TITLE_LAST_BACKING_FLAG_PTR.load(Ordering::SeqCst);
         let policy_status_hits = POLICY_TOS_STATUS_HITS.load(Ordering::SeqCst);
         let policy_status_this = POLICY_TOS_STATUS_LAST_THIS.load(Ordering::SeqCst);
         let policy_status_owner = POLICY_TOS_STATUS_LAST_OWNER.load(Ordering::SeqCst);
@@ -610,7 +612,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         let server_status_state = SERVER_STATUS_LAST_STATE.load(Ordering::SeqCst);
         let server_status_text_id = SERVER_STATUS_LAST_TEXT_ID.load(Ordering::SeqCst);
         body.push_str(&format!(
-            "  \"oracle_msgbox_total_builds\": {},\n  \"oracle_msgbox_any_seen\": {},\n  \"oracle_msgbox_postload_builds\": {},\n  \"oracle_postload_modal_seen\": {},\n  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n  \"oracle_msgbox_builder_args\": [{}, {}, {}, {}],\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_args\": [{}, {}, {}],\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_this\": {},\n  \"oracle_policy_status_predicate_owner\": {},\n  \"oracle_policy_status_predicate_flag_ptr\": {},\n  \"oracle_policy_status_predicate_flag_value\": {},\n  \"oracle_policy_status_predicate_ret\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_owner\": {},\n  \"oracle_policy_flag_setter_value\": {},\n  \"oracle_policy_flag_setter_force\": {},\n  \"oracle_policy_flag_setter_before\": {},\n  \"oracle_policy_flag_setter_after\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {},\n",
+            "  \"oracle_msgbox_total_builds\": {},\n  \"oracle_msgbox_any_seen\": {},\n  \"oracle_msgbox_postload_builds\": {},\n  \"oracle_postload_modal_seen\": {},\n  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n  \"oracle_msgbox_builder_args\": [{}, {}, {}, {}],\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_args\": [{}, {}, {}, {}, {}],\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_this\": {},\n  \"oracle_policy_status_predicate_owner\": {},\n  \"oracle_policy_status_predicate_flag_ptr\": {},\n  \"oracle_policy_status_predicate_flag_value\": {},\n  \"oracle_policy_status_predicate_ret\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_owner\": {},\n  \"oracle_policy_flag_setter_value\": {},\n  \"oracle_policy_flag_setter_force\": {},\n  \"oracle_policy_flag_setter_before\": {},\n  \"oracle_policy_flag_setter_after\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {},\n",
             msgbox_total_builds,
             msgbox_any_seen,
             msgbox_postload_builds,
@@ -630,6 +632,10 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             policy_arg_rdx,
             policy_arg_r8,
             policy_arg_r9,
+            policy_stack_arg0,
+            policy_backing_flag_ptr,
+            policy_stack_arg0,
+            policy_backing_flag_ptr,
             policy_status_hits,
             policy_status_this,
             policy_status_owner,
