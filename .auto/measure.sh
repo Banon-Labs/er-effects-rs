@@ -562,9 +562,11 @@ for token in [
     'runtime_mode_mismatch',
     'seamless_module_mappings',
     'SEAMLESS_MODULE_MARKERS',
+    'preexisting_runtime_pids',
+    'row.pid not in preexisting_runtime_pids',
 ]:
     if token not in watcher:
-        runtime_mode_failures.append(f'readiness watcher missing runtime-mode precondition token {token}')
+        runtime_mode_failures.append(f'readiness watcher missing runtime-mode/preexisting-pid precondition token {token}')
 for token in [
     'oracle_msgbox_total_builds',
     'oracle_msgbox_any_seen',

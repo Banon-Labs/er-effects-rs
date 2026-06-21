@@ -532,8 +532,10 @@ def main() -> int:
         "--expected-runtime-mode" in watcher
         and "runtime_mode_mismatch" in watcher
         and "seamless_module_mappings" in watcher
-        and "SEAMLESS_MODULE_MARKERS" in watcher,
-        "readiness watcher must fail closed when Seamless/vanilla runtime mode mismatches the experiment precondition",
+        and "SEAMLESS_MODULE_MARKERS" in watcher
+        and "preexisting_runtime_pids" in watcher
+        and "row.pid not in preexisting_runtime_pids" in watcher,
+        "readiness watcher must fail closed when Seamless/vanilla runtime mode mismatches the experiment precondition and must not select stale runtime PIDs",
         failures,
     )
     require(

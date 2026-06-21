@@ -409,19 +409,24 @@ def select_runtime_pid(
     allow_async_launcher_exit: bool = False,
 ) -> tuple[int | None, str, int]:
     launcher_pid = pid_file_value(pid_file)
+    preexisting_runtime_pids = {
+        row.pid
+        for row in runtime_process_rows(pattern)
+        if RUNTIME_EXE_NAME in row.args.lower()
+    }
     launcher_exited = False
     for poll in range(poll_budget):
         if time.monotonic() >= deadline:
             return None, TIMEOUT_BUDGET_EXHAUSTED, poll
         rows = runtime_process_rows(pattern)
         for row in rows:
-            if RUNTIME_EXE_NAME in row.args.lower():
+            if RUNTIME_EXE_NAME in row.args.lower() and row.pid not in preexisting_runtime_pids:
                 return row.pid, READY_REASON, poll
         if launcher_pid is not None and not launcher_exited and not pid_running(launcher_pid):
             launcher_exited = True
             rows = runtime_process_rows(pattern)
             for row in rows:
-                if RUNTIME_EXE_NAME in row.args.lower():
+                if RUNTIME_EXE_NAME in row.args.lower() and row.pid not in preexisting_runtime_pids:
                     return row.pid, READY_REASON, poll
             if not allow_async_launcher_exit:
                 return None, PROCESS_EXITED, poll
