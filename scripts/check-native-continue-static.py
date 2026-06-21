@@ -30,6 +30,7 @@ MENU_REGISTRY_INSERT_COPY = 0x1407A7B60
 RESULT_EVENT_HANDLER = 0x140746E80
 RESULT_ACTION_BUILDER = 0x140746A00
 RESULT_EVENT_WRAPPER_BUILDER = 0x140744A60
+RESULT_EVENT_WRAPPER_INNER_BUILD = 0x1407449E0
 MENU_JOB_SINGLE_CONSUMER = 0x1407A9600
 MENU_JOB_LIST_CONSUMER = 0x1407AA1F0
 MENU_OUT_IS_ACTIVE = 0x1407A9200
@@ -159,6 +160,17 @@ def main() -> int:
         fail("result action builder no longer wraps downstream FD4 event via 0x140744a60")
     if MENU_REGISTRY_INSERT_COPY not in action_calls:
         fail("result action builder no longer inserts downstream action node through 0x1407a7b60")
+
+    wrapper_builder = image_bytes(RESULT_EVENT_WRAPPER_BUILDER, 0x1d0)
+    contains(wrapper_builder, b"\x4c\x89\x44\x24\x18", "wrapper builder preserves r8 stack argument at entry")
+    contains(wrapper_builder, b"\x48\x8b\xda", "wrapper builder preserves payload/source object in rbx from rdx")
+    contains(wrapper_builder, b"\x48\x8b\xf9", "wrapper builder preserves output wrapper pointer in rdi from rcx")
+    contains(wrapper_builder, b"\x48\x39\x72\x38", "wrapper builder branches on payload +0x38 child pointer")
+    contains(wrapper_builder, b"\xff\x50\x20", "wrapper builder releases copied std-function/shared payload via vtable +0x20")
+    contains(wrapper_builder, b"\x48\x8b\xc7", "wrapper builder returns the original output wrapper pointer")
+    wrapper_calls = rel32_targets(RESULT_EVENT_WRAPPER_BUILDER, wrapper_builder)
+    if RESULT_EVENT_WRAPPER_INNER_BUILD not in wrapper_calls:
+        fail("result event wrapper builder no longer finalizes payload through 0x1407449e0")
 
     single_consumer = image_bytes(MENU_JOB_SINGLE_CONSUMER, 0x140)
     contains(single_consumer, b"\xff\x50\x10", "single native menu consumer calls job vtable +0x10 update")

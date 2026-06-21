@@ -229,17 +229,21 @@ def main() -> int:
         "NATIVE_SUBMIT_ORIG" in lib
         and "RESULT_EVENT_HANDLER_RVA" in lib
         and "RESULT_ACTION_BUILDER_RVA" in lib
+        and "RESULT_EVENT_WRAPPER_BUILDER_RVA" in lib
         and "RESULT_EVENT_HANDLER_ORIG" in lib
         and "RESULT_ACTION_BUILDER_ORIG" in lib
+        and "RESULT_EVENT_WRAPPER_BUILDER_ORIG" in lib
         and "native_submit_7ac890" in experiments
         and "result_event_handler_746e80" in experiments
         and "result_action_builder_746a00" in experiments
+        and "result_event_wrapper_builder_744a60" in experiments
         and "call_result_void1_original" in experiments
         and "call_result_void2_original" in experiments
+        and "call_wrapper_builder_original" in experiments
         and "continue_load" not in native_submit_body.lower()
         and "continue_load" not in result_event_body.lower()
         and "continue_load" not in result_action_body.lower(),
-        "product tracing must passively hook native submit, result.vtable+0x60, and action builder without direct load shortcuts",
+        "product tracing must passively hook native submit, result.vtable+0x60, action builder, and wrapper builder without direct load shortcuts",
         failures,
     )
     require(
@@ -284,6 +288,14 @@ def main() -> int:
         "telemetry/watcher oracle must expose passive native submit/result-handler/action-builder/wrapper-builder/action-insert hit counts, update-RVA proof, same-result proof, and chain stage", 
         failures,
     )
+    require(
+        "RESULT_EVENT_WRAPPER_INNER_BUILD" in native_static_check
+        and "wrapper builder returns the original output wrapper pointer" in native_static_check
+        and "result event wrapper builder no longer finalizes payload" in native_static_check,
+        "native static checker must pin wrapper-builder ABI and inner finalize edge",
+        failures,
+    )
+
     require(
         "oracle_continue_phase" in telemetry
         and "oracle_continue_expected_slot" in telemetry

@@ -295,11 +295,14 @@ if (
 ):
     legacy_failures.append('product tracing lacks passive result.vtable+0x60/action-builder telemetry hooks or Continue phase telemetry')
     autoload_static_failures += 1
-if 'product tracing must passively hook native submit, result.vtable+0x60, and action builder without direct load shortcuts' not in check:
-    legacy_failures.append('check-autoload-happy-path does not enforce passive submit/result-chain hooks')
+if 'product tracing must passively hook native submit, result.vtable+0x60, action builder, and wrapper builder without direct load shortcuts' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce passive submit/result-chain/action-builder/wrapper-builder hooks')
     autoload_static_failures += 1
 if 'telemetry/watcher oracle must expose passive native submit/result-handler/action-builder/wrapper-builder/action-insert hit counts, update-RVA proof, same-result proof, and chain stage' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce passive submit/result-chain/wrapper-builder/action-insert update-RVA same-result telemetry/stage')
+    autoload_static_failures += 1
+if 'native static checker must pin wrapper-builder ABI and inner finalize edge' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce native wrapper-builder ABI static check')
     autoload_static_failures += 1
 if 'telemetry must expose native Continue product phase/guard state for result-chain interpretation' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce Continue phase telemetry')
