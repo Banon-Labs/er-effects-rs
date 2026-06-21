@@ -6596,6 +6596,21 @@ unsafe fn policy_tos_record_fields(record: usize) -> (usize, usize, usize) {
     (record_id, stack_arg0, backing_flag_ptr)
 }
 
+/// Operator gate for zero-input ToS-modal suppression. Default OFF: the wrapper builds the
+/// TosMultiLangDialog as the game normally would. When enabled (only on a profile where the
+/// Terms of Service is already accepted), `policy_tos_title_ctor_wrapper_hook` skips the
+/// build and returns null, so the unnecessary startup ToS modal is never constructed -- no
+/// input, no auto-accept of an un-accepted policy, no MessageBox.
+pub(crate) fn policy_tos_suppress_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_POLICY_TOS_SUPPRESS").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-policy-tos-suppress.txt")
+        .exists()
+}
+
 pub(crate) unsafe extern "system" fn policy_tos_title_ctor_wrapper_hook(
     record: usize,
     rdx: usize,
@@ -6610,8 +6625,26 @@ pub(crate) unsafe extern "system" fn policy_tos_title_ctor_wrapper_hook(
         TITLE_OWNER_SCAN_START_ADDRESS
     };
     let caller_rva = trace_first_game_caller_rva();
+    let backing_flag_value = if backing_flag_ptr != null {
+        unsafe { safe_read_usize(backing_flag_ptr) }.unwrap_or(0)
+    } else {
+        0
+    };
     let orig = POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG.load(Ordering::SeqCst);
-    let ret = if orig == HOOK_ORIGINAL_UNSET {
+    let ret = if policy_tos_suppress_enabled() {
+        // Replace the native "show ToS" stepper with our own no-op: skip building the
+        // TosMultiLangDialog and return null, mimicking the wrapper's native allocation-
+        // failure path (caller-tolerated). The ToS ctor 0x1409b5970 -- whose only caller is
+        // this wrapper -- never runs, so the policy/ToS ctor hook never fires and
+        // POLICY_TOS_TITLE_TOTAL_BUILDS stays 0: the unnecessary startup modal is never
+        // constructed. Zero input, no auto-accept.
+        POLICY_TOS_TITLE_SUPPRESSED_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "policy-oracle: SUPPRESSED TosMultiLangDialog build (wrapper 0x{:x}) -> returned null (native alloc-fail path) record=0x{record:x} backing_flag_ptr=0x{backing_flag_ptr:x} backing_flag_value={backing_flag_value} -- zero-input ToS-modal suppression",
+            game_module_base().unwrap_or(null) + POLICY_TOS_TITLE_CTOR_WRAPPER_RVA as usize,
+        ));
+        POLICY_TOS_MODAL_SUPPRESSED_RETURN
+    } else if orig == HOOK_ORIGINAL_UNSET {
         null
     } else {
         let f: unsafe extern "system" fn(usize, usize, usize) -> usize =

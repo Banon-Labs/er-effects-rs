@@ -1797,6 +1797,14 @@ pub(crate) const POLICY_TOS_TITLE_HOOK_NOT_INSTALLED: usize = 0;
 pub(crate) const POLICY_TOS_TITLE_HOOK_INSTALLED_YES: usize = 1;
 pub(crate) static POLICY_TOS_TITLE_TOTAL_BUILDS: AtomicUsize =
     AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+/// Count of TosMultiLangDialog builds our wrapper skipped (zero-input ToS-modal
+/// suppression). Non-zero only when `policy_tos_suppress_enabled()` is on; the
+/// suppressed build returns null, mimicking the wrapper's native allocation-failure
+/// path so the unnecessary startup ToS modal is never constructed.
+pub(crate) static POLICY_TOS_TITLE_SUPPRESSED_BUILDS: AtomicUsize = AtomicUsize::new(0);
+/// Return value our suppressed ToS-modal wrapper hands back: 0 (null), identical to the
+/// native wrapper's allocation-failure return, a path the caller already tolerates.
+pub(crate) const POLICY_TOS_MODAL_SUPPRESSED_RETURN: usize = 0;
 pub(crate) static POLICY_TOS_TITLE_LAST_THIS: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static POLICY_TOS_TITLE_LAST_VTABLE: AtomicUsize =
