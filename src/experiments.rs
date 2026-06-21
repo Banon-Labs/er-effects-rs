@@ -6330,6 +6330,16 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
     d: usize,
 ) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if product_autoload_enabled() {
+        let n = MSGBOX_BUILDER_LOG.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+        if n < MSGBOX_BUILDER_LOG_MAX {
+            append_autoload_debug(format_args!(
+                "msgbox-skip #{n}: product autoload suppressed MessageBoxDialog builder before UI allocation args(rcx=0x{a:x} rdx=0x{b:x} r8=0x{c:x} r9=0x{d:x}) {}",
+                trace_callers_summary()
+            ));
+        }
+        return null;
+    }
     let orig = MSGBOX_BUILDER_ORIG.load(Ordering::SeqCst);
     let ret = if orig != null {
         let f: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =

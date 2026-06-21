@@ -2941,12 +2941,15 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
                     let mut state = state_or_return(&state);
                     state.game_task_ticks += GAME_TASK_TICK_INCREMENT;
-                    // Headless startup: auto-accept every pre-load MessageBoxDialog popup
-                    // (connection-error / EULA / warnings) so the autoload never stops on a modal.
-                    // Install the capture hook once, then force OK on the captured dialog each frame.
+                    // Install the MessageBoxDialog builder hook for native telemetry. Product
+                    // autoload must NOT auto-accept: every pre/post-load message box is a hard
+                    // investigation trigger whose semantic side effect must be skipped directly.
+                    // The legacy OK-handler dismiss path remains only for non-product probes.
                     if online_disable_enabled() {
                         install_auto_accept_hook();
-                        force_dismiss_startup_dialog();
+                        if !product_autoload_enabled() {
+                            force_dismiss_startup_dialog();
+                        }
                     }
                     // Observe the natural flow PAST the modal: tap Confirm (game's own input).
                     if auto_confirm_enabled() {
