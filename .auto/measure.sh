@@ -267,6 +267,7 @@ if (
     or 'oracle_result_action_last_word1' not in telemetry_src
     or 'native_submit_entered' not in watcher
     or 'native_result_chain_same_result' not in watcher
+    or 'native_submit_fd4_event_match' not in watcher
     or 'native_result_chain_ready' not in watcher
     or 'native_continue_chain_stage' not in watcher
     or 'result_chain_waiting_continue_load' not in watcher
@@ -538,11 +539,16 @@ if rt_root.exists():
                 and action_result_match
                 and submit_result_match.group(1) == event_result_match.group(1) == action_result_match.group(1)
             )
+            fd4_submit_event_match = bool(
+                re.search(r'"oracle_result_event_last_fd4_code"\s*:\s*"0x3"', raw)
+                and re.search(r'"oracle_result_event_last_fd4_arg"\s*:\s*"0x0"', raw)
+            )
             if (
                 re.search(r'"oracle_native_submit_hits"\s*:\s*[1-9]\d*', raw)
                 and re.search(r'"oracle_result_event_handler_hits"\s*:\s*[1-9]\d*', raw)
                 and re.search(r'"oracle_result_action_builder_hits"\s*:\s*[1-9]\d*', raw)
                 and same_result
+                and fd4_submit_event_match
             ):
                 proof['result_chain'] = True
             if re.search(r'world[-_ ]?stable|max oracle|SetState5', raw, re.IGNORECASE):

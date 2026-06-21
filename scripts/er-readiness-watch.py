@@ -596,12 +596,22 @@ def telemetry_native_result_chain_same_result(telemetry: dict[str, Any]) -> bool
     )
 
 
+def telemetry_native_submit_fd4_event_match(telemetry: dict[str, Any]) -> bool:
+    # Static RE pins native submit 0x1407ac890 to construct FD4 event {code=3,arg=0}
+    # before dispatching result.vtable+0x60. Runtime result-handler telemetry must agree.
+    return bool(
+        as_int(telemetry.get("oracle_result_event_last_fd4_code"), -1) == 3
+        and as_int(telemetry.get("oracle_result_event_last_fd4_arg"), -1) == 0
+    )
+
+
 def telemetry_native_result_chain_ready(telemetry: dict[str, Any]) -> bool:
     return bool(
         telemetry_native_submit_entered(telemetry)
         and as_int(telemetry.get("oracle_result_event_handler_hits"), 0) > 0
         and as_int(telemetry.get("oracle_result_action_builder_hits"), 0) > 0
         and telemetry_native_result_chain_same_result(telemetry)
+        and telemetry_native_submit_fd4_event_match(telemetry)
     )
 
 
@@ -693,6 +703,7 @@ def oracle_summary(
         "expected_animation_match": telemetry_expected_animation_match(telemetry, expected_animation_id),
         "native_submit_entered": telemetry_native_submit_entered(telemetry),
         "native_result_chain_same_result": telemetry_native_result_chain_same_result(telemetry),
+        "native_submit_fd4_event_match": telemetry_native_submit_fd4_event_match(telemetry),
         "native_result_chain_ready": telemetry_native_result_chain_ready(telemetry),
         "native_continue_chain_stage": telemetry_native_continue_chain_stage(telemetry),
         "no_postload_popup": telemetry_no_postload_popup(telemetry),

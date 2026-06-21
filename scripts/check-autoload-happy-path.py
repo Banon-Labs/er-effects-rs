@@ -258,10 +258,12 @@ def main() -> int:
         and "RESULT_ACTION_LAST_WORD0" in telemetry
         and "native_submit_entered" in watcher
         and "native_result_chain_same_result" in watcher
+        and "native_submit_fd4_event_match" in watcher
         and "native_result_chain_ready" in watcher
         and "native_continue_chain_stage" in watcher
         and "telemetry_native_submit_entered" in watcher
         and "telemetry_native_result_chain_same_result" in watcher
+        and "telemetry_native_submit_fd4_event_match" in watcher
         and "telemetry_native_result_chain_ready" in watcher
         and "telemetry_native_continue_chain_stage" in watcher
         and "result_chain_waiting_continue_load" in watcher,
@@ -470,6 +472,8 @@ def main() -> int:
         and "result_chain" in measure
         and "native_submit_entered" in measure
         and "native_result_chain_same_result" in measure
+        and "native_submit_fd4_event_match" in measure
+        and "fd4_submit_event_match" in measure
         and "native_result_chain_ready" in measure
         and "native_continue_chain_stage" in measure
         and "oracle_native_submit_last_result" in measure
