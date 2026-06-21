@@ -498,9 +498,12 @@ def main() -> int:
         and "MENU_MEMBER_FUNC_JOB_RUN" in native_static_check
         and "MENU_REGISTRY_INSERT_COPY" in native_static_check
         and "RESULT_EVENT_HANDLER" in native_static_check
+        and "RESULT_EVENT_WRAPPER_BUILDER" in native_static_check
         and "MENU_JOB_LIST_CONSUMER" in native_static_check
         and "MENU_JOB_SINGLE_CONSUMER" in native_static_check
         and "FD4 event code 3" in native_static_check
+        and "FD4 event code 2" in native_static_check
+        and "downstream action node" in native_static_check
         and "constructed FD4 event pointer" in native_static_check
         and "event+0x0" in native_static_check
         and "event+0x4" in native_static_check

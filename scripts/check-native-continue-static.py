@@ -29,6 +29,7 @@ MENU_MEMBER_FUNC_JOB_RUN = 0x1409AABA0
 MENU_REGISTRY_INSERT_COPY = 0x1407A7B60
 RESULT_EVENT_HANDLER = 0x140746E80
 RESULT_ACTION_BUILDER = 0x140746A00
+RESULT_EVENT_WRAPPER_BUILDER = 0x140744A60
 MENU_JOB_SINGLE_CONSUMER = 0x1407A9600
 MENU_JOB_LIST_CONSUMER = 0x1407AA1F0
 MENU_OUT_IS_ACTIVE = 0x1407A9200
@@ -147,6 +148,17 @@ def main() -> int:
     result_calls = rel32_targets(RESULT_EVENT_HANDLER, result_handler)
     if RESULT_ACTION_BUILDER not in result_calls:
         fail("result handler no longer calls result action builder 0x140746a00")
+
+    action_builder = image_bytes(RESULT_ACTION_BUILDER, 0x360)
+    contains(action_builder, b"\x45\x33\xe4", "action builder zeroes r12 before FD4 event code 2 construction")
+    contains(action_builder, b"\x41\x8d\x54\x24\x02", "action builder constructs downstream FD4 event code 2 via edx=r12+2")
+    action_calls = rel32_targets(RESULT_ACTION_BUILDER, action_builder)
+    if FD4_EVENT_CONSTRUCTOR not in action_calls:
+        fail("result action builder no longer constructs downstream FD4 event code 2")
+    if RESULT_EVENT_WRAPPER_BUILDER not in action_calls:
+        fail("result action builder no longer wraps downstream FD4 event via 0x140744a60")
+    if MENU_REGISTRY_INSERT_COPY not in action_calls:
+        fail("result action builder no longer inserts downstream action node through 0x1407a7b60")
 
     single_consumer = image_bytes(MENU_JOB_SINGLE_CONSUMER, 0x140)
     contains(single_consumer, b"\xff\x50\x10", "single native menu consumer calls job vtable +0x10 update")

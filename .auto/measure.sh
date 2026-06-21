@@ -298,9 +298,12 @@ if (
     or 'MENU_MEMBER_FUNC_JOB_RUN' not in native_static_check
     or 'MENU_REGISTRY_INSERT_COPY' not in native_static_check
     or 'RESULT_EVENT_HANDLER' not in native_static_check
+    or 'RESULT_EVENT_WRAPPER_BUILDER' not in native_static_check
     or 'MENU_JOB_LIST_CONSUMER' not in native_static_check
     or 'MENU_JOB_SINGLE_CONSUMER' not in native_static_check
     or 'FD4 event code 3' not in native_static_check
+    or 'FD4 event code 2' not in native_static_check
+    or 'downstream action node' not in native_static_check
     or 'constructed FD4 event pointer' not in native_static_check
     or 'event+0x0' not in native_static_check
     or 'event+0x4' not in native_static_check
