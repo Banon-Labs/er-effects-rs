@@ -609,6 +609,9 @@ def main() -> int:
         and "MENU_WINDOW_JOB_IDLE_CTOR_HITS" in experiments
         and "MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_HITS" in experiments
         and "MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_CALLER_RVA" in experiments
+        and "MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_OUT_SLOT" in experiments
+        and "arg0_points_to_idle_item" in experiments
+        and "idle_continue_insert_match" in experiments
         and "MENU_CONTINUE_IDLE_INSERT_HITS" in experiments
         and "MENU_CONTINUE_IDLE_INSERT_LAST_CALLER_RVA" in experiments
         and "MENU_CONTINUE_IDLE_INSERT_CALLER_RVA" in experiments
@@ -623,6 +626,7 @@ def main() -> int:
         and "oracle_menu_window_ctor_hits" in telemetry_src
         and "oracle_menu_window_idle_ctor_hits" in telemetry_src
         and "oracle_menu_window_idle_ctor_continue_last_caller_rva" in telemetry_src
+        and "oracle_menu_window_idle_ctor_continue_last_out_slot" in telemetry_src
         and "oracle_menu_continue_idle_insert_hits" in telemetry_src
         and "oracle_menu_continue_idle_insert_last_caller_rva" in telemetry_src
         and "oracle_menu_window_idle_ctor_last_caller_rva" in telemetry_src
@@ -641,6 +645,7 @@ def main() -> int:
         and "menu_window_ctor_hits" in watcher
         and "menu_window_idle_ctor_hits" in watcher
         and "menu_window_idle_ctor_continue_last_caller_rva" in watcher
+        and "menu_window_idle_ctor_continue_last_out_slot" in watcher
         and "menu_continue_idle_insert_hits" in watcher
         and "menu_continue_idle_insert_last_caller_rva" in watcher
         and "menu_window_idle_ctor_last_caller_rva" in watcher

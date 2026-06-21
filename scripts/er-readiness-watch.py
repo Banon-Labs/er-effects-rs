@@ -794,6 +794,7 @@ def autoload_progress_summary(telemetry: dict[str, Any] | None) -> dict[str, Any
         "menu_window_idle_ctor_continue_hits": telemetry.get("oracle_menu_window_idle_ctor_continue_hits"),
         "menu_window_idle_ctor_continue_last_caller_rva": telemetry.get("oracle_menu_window_idle_ctor_continue_last_caller_rva"),
         "menu_window_idle_ctor_continue_last_item": telemetry.get("oracle_menu_window_idle_ctor_continue_last_item"),
+        "menu_window_idle_ctor_continue_last_out_slot": telemetry.get("oracle_menu_window_idle_ctor_continue_last_out_slot"),
         "menu_window_idle_ctor_continue_last_docall": telemetry.get("oracle_menu_window_idle_ctor_continue_last_docall"),
         "menu_window_idle_ctor_continue_last_accept": telemetry.get("oracle_menu_window_idle_ctor_continue_last_accept"),
         "menu_continue_idle_insert_hits": telemetry.get("oracle_menu_continue_idle_insert_hits"),

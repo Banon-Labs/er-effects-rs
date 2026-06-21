@@ -118,6 +118,8 @@ pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_CALLER_RVA: AtomicUsiz
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ITEM: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_OUT_SLOT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_DOCALL: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ACCEPT: AtomicUsize =
@@ -10207,6 +10209,7 @@ pub(crate) unsafe extern "system" fn menu_window_job_idle_ctor_hook(
         MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_HITS.fetch_add(1, Ordering::SeqCst);
         MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
         MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ITEM.store(item, Ordering::SeqCst);
+        MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_OUT_SLOT.store(out_slot, Ordering::SeqCst);
         MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_DOCALL.store(do_call, Ordering::SeqCst);
         MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ACCEPT.store(accept_predicate, Ordering::SeqCst);
         record_continue_candidate(item, accept_predicate, base);
@@ -10886,12 +10889,25 @@ pub(crate) unsafe extern "system" fn task_enqueue_hook(
     const MENU_CONTINUE_IDLE_INSERT_CALLER_RVA: usize = 0x0076432c;
     const MENU_CONTINUE_IDLE_INSERT_CALLER_START_RVA: usize = 0x007642b0;
     const MENU_CONTINUE_IDLE_INSERT_CALLER_END_RVA: usize = 0x007643c0;
-    if caller_rva == MENU_CONTINUE_IDLE_INSERT_CALLER_RVA
+    let idle_ctor_out_slot =
+        MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_OUT_SLOT.load(Ordering::SeqCst);
+    let idle_ctor_item = MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ITEM.load(Ordering::SeqCst);
+    let arg0_points_to_idle_item = if arg0 as usize != TITLE_OWNER_SCAN_START_ADDRESS {
+        unsafe { safe_read_usize(arg0 as usize) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+            == idle_ctor_item
+    } else {
+        false
+    };
+    let idle_continue_insert_match = caller_rva == MENU_CONTINUE_IDLE_INSERT_CALLER_RVA
         || callstack_contains_game_rva(
             MENU_CONTINUE_IDLE_INSERT_CALLER_START_RVA,
             MENU_CONTINUE_IDLE_INSERT_CALLER_END_RVA,
         )
-    {
+        || (idle_ctor_out_slot != TITLE_OWNER_SCAN_START_ADDRESS
+            && arg0 as usize == idle_ctor_out_slot)
+        || (idle_ctor_item != TITLE_OWNER_SCAN_START_ADDRESS
+            && (arg0_points_to_idle_item || arg1 as usize == idle_ctor_item));
+    if idle_continue_insert_match {
         let hit = MENU_CONTINUE_IDLE_INSERT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
         let base = game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
         let arg1_update_rva = if base == TITLE_OWNER_SCAN_START_ADDRESS {
