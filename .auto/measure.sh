@@ -274,20 +274,26 @@ if (
     or 'oracle_policy_window_stored_backing_flag_ptr' not in telemetry_src
     or 'oracle_policy_window_backing_flag_value' not in telemetry_src
     or 'oracle_policy_window_requested_flag_value' not in telemetry_src
+    or 'oracle_policy_window_caller_rva' not in telemetry_src
     or 'oracle_policy_ctor_wrapper_hits' not in telemetry_src
     or 'oracle_policy_ctor_wrapper_original_this' not in telemetry_src
     or 'oracle_policy_ctor_wrapper_original_vtable' not in telemetry_src
     or 'oracle_policy_ctor_wrapper_backing_flag_ptr' not in telemetry_src
+    or 'oracle_policy_ctor_wrapper_caller_rva' not in telemetry_src
     or 'oracle_policy_selector_wrapper_hits' not in telemetry_src
     or 'oracle_policy_selector_wrapper_requested_flag' not in telemetry_src
     or 'oracle_policy_selector_wrapper_selector_arg' not in telemetry_src
+    or 'oracle_policy_selector_wrapper_caller_rva' not in telemetry_src
     or 'oracle_policy_selector_ctor_hits' not in telemetry_src
     or 'oracle_policy_selector_ctor_requested_flag_ptr' not in telemetry_src
     or 'oracle_policy_selector_ctor_stored_requested_flag_ptr' not in telemetry_src
+    or 'oracle_policy_selector_ctor_caller_rva' not in telemetry_src
     or 'oracle_policy_status_predicate_hits' not in telemetry_src
     or 'oracle_policy_status_predicate_ret' not in telemetry_src
+    or 'oracle_policy_status_predicate_caller_rva' not in telemetry_src
     or 'oracle_policy_flag_setter_hits' not in telemetry_src
     or 'oracle_policy_flag_setter_after' not in telemetry_src
+    or 'oracle_policy_flag_setter_caller_rva' not in telemetry_src
     or 'oracle_result_action_insert_hits' not in telemetry_src
     or 'oracle_result_action_last_insert_arg1_update_rva' not in telemetry_src
     or 'oracle_result_action_last_insert_ret_update_rva' not in telemetry_src
@@ -297,24 +303,30 @@ if (
     or 'POLICY_TOS_TITLE_LAST_STORED_BACKING_FLAG_PTR' not in lib_code
     or 'POLICY_TOS_TITLE_LAST_BACKING_FLAG_VALUE' not in lib_code
     or 'POLICY_TOS_TITLE_LAST_REQUESTED_FLAG_VALUE' not in lib_code
+    or 'POLICY_TOS_TITLE_LAST_CALLER_RVA' not in lib_code
     or 'POLICY_TOS_TITLE_CTOR_WRAPPER_RVA' not in lib_code
     or 'POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG' not in lib_code
     or 'POLICY_TOS_TITLE_WRAPPER_HITS' not in lib_code
     or 'POLICY_TOS_TITLE_WRAPPER_THIS_ADJUST' not in lib_code
     or 'POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_THIS' not in lib_code
     or 'POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_VTABLE' not in lib_code
+    or 'POLICY_TOS_TITLE_WRAPPER_LAST_CALLER_RVA' not in lib_code
     or 'POLICY_TOS_SELECTOR_WRAPPER_RVA' not in lib_code
     or 'POLICY_TOS_SELECTOR_WRAPPER_HITS' not in lib_code
     or 'POLICY_TOS_SELECTOR_WRAPPER_LAST_REQUESTED_FLAG' not in lib_code
     or 'POLICY_TOS_SELECTOR_WRAPPER_LAST_SELECTOR_ARG' not in lib_code
+    or 'POLICY_TOS_SELECTOR_WRAPPER_LAST_CALLER_RVA' not in lib_code
     or 'POLICY_TOS_SELECTOR_CTOR_RVA' not in lib_code
     or 'POLICY_TOS_SELECTOR_CTOR_HITS' not in lib_code
     or 'POLICY_TOS_SELECTOR_CTOR_LAST_REQUESTED_FLAG_PTR' not in lib_code
     or 'POLICY_TOS_SELECTOR_CTOR_LAST_STORED_REQUESTED_FLAG_PTR' not in lib_code
+    or 'POLICY_TOS_SELECTOR_CTOR_LAST_CALLER_RVA' not in lib_code
     or 'POLICY_TOS_STATUS_PREDICATE_RVA' not in lib_code
     or 'POLICY_TOS_STATUS_PREDICATE_ORIG' not in lib_code
+    or 'POLICY_TOS_STATUS_LAST_CALLER_RVA' not in lib_code
     or 'POLICY_TOS_FLAG_SETTER_RVA' not in lib_code
     or 'POLICY_TOS_FLAG_SETTER_ORIG' not in lib_code
+    or 'POLICY_TOS_FLAG_SETTER_LAST_CALLER_RVA' not in lib_code
     or 'RESULT_ACTION_INSERT_HITS' not in lib_code
     or 'RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA' not in lib_code
     or 'text_section_bounds' not in exp_code
@@ -324,6 +336,7 @@ if (
     or 'PE_TEXT_SECTION_NAME' not in exp_code
     or 'policy_tos_title_ctor_wrapper_hook' not in exp_code
     or 'policy_tos_record_fields' not in exp_code
+    or 'trace_first_game_caller_rva' not in exp_code
     or 'backing_flag_ptr' not in exp_code
     or 'stack_arg0' not in exp_code
     or 'callstack_contains_game_rva' not in exp_code

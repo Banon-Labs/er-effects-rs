@@ -601,6 +601,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             POLICY_TOS_TITLE_LAST_BACKING_FLAG_VALUE.load(Ordering::SeqCst);
         let policy_requested_flag_value =
             POLICY_TOS_TITLE_LAST_REQUESTED_FLAG_VALUE.load(Ordering::SeqCst);
+        let policy_caller_rva = POLICY_TOS_TITLE_LAST_CALLER_RVA.load(Ordering::SeqCst);
         let policy_wrapper_hits = POLICY_TOS_TITLE_WRAPPER_HITS.load(Ordering::SeqCst);
         let policy_wrapper_record = POLICY_TOS_TITLE_WRAPPER_LAST_RECORD.load(Ordering::SeqCst);
         let policy_wrapper_original_this =
@@ -614,6 +615,8 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         let policy_wrapper_backing_flag_ptr =
             POLICY_TOS_TITLE_WRAPPER_LAST_BACKING_FLAG_PTR.load(Ordering::SeqCst);
         let policy_wrapper_ret = POLICY_TOS_TITLE_WRAPPER_LAST_RET.load(Ordering::SeqCst);
+        let policy_wrapper_caller_rva =
+            POLICY_TOS_TITLE_WRAPPER_LAST_CALLER_RVA.load(Ordering::SeqCst);
         let policy_selector_hits = POLICY_TOS_SELECTOR_WRAPPER_HITS.load(Ordering::SeqCst);
         let policy_selector_record = POLICY_TOS_SELECTOR_WRAPPER_LAST_RECORD.load(Ordering::SeqCst);
         let policy_selector_original_this =
@@ -626,6 +629,8 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         let policy_selector_arg =
             POLICY_TOS_SELECTOR_WRAPPER_LAST_SELECTOR_ARG.load(Ordering::SeqCst);
         let policy_selector_ret = POLICY_TOS_SELECTOR_WRAPPER_LAST_RET.load(Ordering::SeqCst);
+        let policy_selector_caller_rva =
+            POLICY_TOS_SELECTOR_WRAPPER_LAST_CALLER_RVA.load(Ordering::SeqCst);
         let policy_selector_ctor_hits = POLICY_TOS_SELECTOR_CTOR_HITS.load(Ordering::SeqCst);
         let policy_selector_ctor_this = POLICY_TOS_SELECTOR_CTOR_LAST_THIS.load(Ordering::SeqCst);
         let policy_selector_ctor_vtable =
@@ -642,24 +647,29 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         let policy_selector_ctor_stored_requested_flag_ptr =
             POLICY_TOS_SELECTOR_CTOR_LAST_STORED_REQUESTED_FLAG_PTR.load(Ordering::SeqCst);
         let policy_selector_ctor_ret = POLICY_TOS_SELECTOR_CTOR_LAST_RET.load(Ordering::SeqCst);
+        let policy_selector_ctor_caller_rva =
+            POLICY_TOS_SELECTOR_CTOR_LAST_CALLER_RVA.load(Ordering::SeqCst);
         let policy_status_hits = POLICY_TOS_STATUS_HITS.load(Ordering::SeqCst);
         let policy_status_this = POLICY_TOS_STATUS_LAST_THIS.load(Ordering::SeqCst);
         let policy_status_owner = POLICY_TOS_STATUS_LAST_OWNER.load(Ordering::SeqCst);
         let policy_status_flag_ptr = POLICY_TOS_STATUS_LAST_FLAG_PTR.load(Ordering::SeqCst);
         let policy_status_flag_value = POLICY_TOS_STATUS_LAST_FLAG_VALUE.load(Ordering::SeqCst);
         let policy_status_ret = POLICY_TOS_STATUS_LAST_RET.load(Ordering::SeqCst);
+        let policy_status_caller_rva = POLICY_TOS_STATUS_LAST_CALLER_RVA.load(Ordering::SeqCst);
         let policy_flag_setter_hits = POLICY_TOS_FLAG_SETTER_HITS.load(Ordering::SeqCst);
         let policy_flag_setter_owner = POLICY_TOS_FLAG_SETTER_LAST_OWNER.load(Ordering::SeqCst);
         let policy_flag_setter_value = POLICY_TOS_FLAG_SETTER_LAST_VALUE.load(Ordering::SeqCst);
         let policy_flag_setter_force = POLICY_TOS_FLAG_SETTER_LAST_FORCE.load(Ordering::SeqCst);
         let policy_flag_setter_before = POLICY_TOS_FLAG_SETTER_LAST_BEFORE.load(Ordering::SeqCst);
         let policy_flag_setter_after = POLICY_TOS_FLAG_SETTER_LAST_AFTER.load(Ordering::SeqCst);
+        let policy_flag_setter_caller_rva =
+            POLICY_TOS_FLAG_SETTER_LAST_CALLER_RVA.load(Ordering::SeqCst);
         let server_status_total_seen = SERVER_STATUS_TOTAL_SEEN.load(Ordering::SeqCst);
         let server_status_any_seen = server_status_total_seen != NO_MSGBOX_BUILDS;
         let server_status_state = SERVER_STATUS_LAST_STATE.load(Ordering::SeqCst);
         let server_status_text_id = SERVER_STATUS_LAST_TEXT_ID.load(Ordering::SeqCst);
         body.push_str(&format!(
-            "  \"oracle_msgbox_total_builds\": {},\n  \"oracle_msgbox_any_seen\": {},\n  \"oracle_msgbox_postload_builds\": {},\n  \"oracle_postload_modal_seen\": {},\n  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n  \"oracle_msgbox_builder_args\": [{}, {}, {}, {}],\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_args\": [{}, {}, {}, {}, {}],\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_window_stored_backing_flag_ptr\": {},\n  \"oracle_policy_window_backing_flag_value\": {},\n  \"oracle_policy_window_requested_flag_value\": {},\n  \"oracle_policy_ctor_wrapper_hits\": {},\n  \"oracle_policy_ctor_wrapper_record\": {},\n  \"oracle_policy_ctor_wrapper_original_this\": {},\n  \"oracle_policy_ctor_wrapper_original_vtable\": {},\n  \"oracle_policy_ctor_wrapper_record_id\": {},\n  \"oracle_policy_ctor_wrapper_stack_arg0\": {},\n  \"oracle_policy_ctor_wrapper_backing_flag_ptr\": {},\n  \"oracle_policy_ctor_wrapper_ret\": {},\n  \"oracle_policy_selector_wrapper_hits\": {},\n  \"oracle_policy_selector_wrapper_record\": {},\n  \"oracle_policy_selector_wrapper_original_this\": {},\n  \"oracle_policy_selector_wrapper_original_vtable\": {},\n  \"oracle_policy_selector_wrapper_owner\": {},\n  \"oracle_policy_selector_wrapper_requested_flag\": {},\n  \"oracle_policy_selector_wrapper_selector_arg\": {},\n  \"oracle_policy_selector_wrapper_ret\": {},\n  \"oracle_policy_selector_ctor_hits\": {},\n  \"oracle_policy_selector_ctor_this\": {},\n  \"oracle_policy_selector_ctor_vtable\": {},\n  \"oracle_policy_selector_ctor_owner\": {},\n  \"oracle_policy_selector_ctor_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_requested_flag_value\": {},\n  \"oracle_policy_selector_ctor_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_ret\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_this\": {},\n  \"oracle_policy_status_predicate_owner\": {},\n  \"oracle_policy_status_predicate_flag_ptr\": {},\n  \"oracle_policy_status_predicate_flag_value\": {},\n  \"oracle_policy_status_predicate_ret\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_owner\": {},\n  \"oracle_policy_flag_setter_value\": {},\n  \"oracle_policy_flag_setter_force\": {},\n  \"oracle_policy_flag_setter_before\": {},\n  \"oracle_policy_flag_setter_after\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {},\n",
+            "  \"oracle_msgbox_total_builds\": {},\n  \"oracle_msgbox_any_seen\": {},\n  \"oracle_msgbox_postload_builds\": {},\n  \"oracle_postload_modal_seen\": {},\n  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n  \"oracle_msgbox_builder_args\": [{}, {}, {}, {}],\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_args\": [{}, {}, {}, {}, {}],\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_window_stored_backing_flag_ptr\": {},\n  \"oracle_policy_window_backing_flag_value\": {},\n  \"oracle_policy_window_requested_flag_value\": {},\n  \"oracle_policy_window_caller_rva\": {},\n  \"oracle_policy_ctor_wrapper_hits\": {},\n  \"oracle_policy_ctor_wrapper_record\": {},\n  \"oracle_policy_ctor_wrapper_original_this\": {},\n  \"oracle_policy_ctor_wrapper_original_vtable\": {},\n  \"oracle_policy_ctor_wrapper_record_id\": {},\n  \"oracle_policy_ctor_wrapper_stack_arg0\": {},\n  \"oracle_policy_ctor_wrapper_backing_flag_ptr\": {},\n  \"oracle_policy_ctor_wrapper_ret\": {},\n  \"oracle_policy_ctor_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_wrapper_hits\": {},\n  \"oracle_policy_selector_wrapper_record\": {},\n  \"oracle_policy_selector_wrapper_original_this\": {},\n  \"oracle_policy_selector_wrapper_original_vtable\": {},\n  \"oracle_policy_selector_wrapper_owner\": {},\n  \"oracle_policy_selector_wrapper_requested_flag\": {},\n  \"oracle_policy_selector_wrapper_selector_arg\": {},\n  \"oracle_policy_selector_wrapper_ret\": {},\n  \"oracle_policy_selector_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_ctor_hits\": {},\n  \"oracle_policy_selector_ctor_this\": {},\n  \"oracle_policy_selector_ctor_vtable\": {},\n  \"oracle_policy_selector_ctor_owner\": {},\n  \"oracle_policy_selector_ctor_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_requested_flag_value\": {},\n  \"oracle_policy_selector_ctor_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_ret\": {},\n  \"oracle_policy_selector_ctor_caller_rva\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_this\": {},\n  \"oracle_policy_status_predicate_owner\": {},\n  \"oracle_policy_status_predicate_flag_ptr\": {},\n  \"oracle_policy_status_predicate_flag_value\": {},\n  \"oracle_policy_status_predicate_ret\": {},\n  \"oracle_policy_status_predicate_caller_rva\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_owner\": {},\n  \"oracle_policy_flag_setter_value\": {},\n  \"oracle_policy_flag_setter_force\": {},\n  \"oracle_policy_flag_setter_before\": {},\n  \"oracle_policy_flag_setter_after\": {},\n  \"oracle_policy_flag_setter_caller_rva\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {},\n",
             msgbox_total_builds,
             msgbox_any_seen,
             msgbox_postload_builds,
@@ -686,6 +696,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             policy_stored_backing_flag_ptr,
             policy_backing_flag_value,
             policy_requested_flag_value,
+            policy_caller_rva,
             policy_wrapper_hits,
             policy_wrapper_record,
             policy_wrapper_original_this,
@@ -694,6 +705,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             policy_wrapper_stack_arg0,
             policy_wrapper_backing_flag_ptr,
             policy_wrapper_ret,
+            policy_wrapper_caller_rva,
             policy_selector_hits,
             policy_selector_record,
             policy_selector_original_this,
@@ -702,6 +714,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             policy_selector_requested_flag,
             policy_selector_arg,
             policy_selector_ret,
+            policy_selector_caller_rva,
             policy_selector_ctor_hits,
             policy_selector_ctor_this,
             policy_selector_ctor_vtable,
@@ -712,18 +725,21 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             policy_selector_ctor_stored_selector_arg,
             policy_selector_ctor_stored_requested_flag_ptr,
             policy_selector_ctor_ret,
+            policy_selector_ctor_caller_rva,
             policy_status_hits,
             policy_status_this,
             policy_status_owner,
             policy_status_flag_ptr,
             policy_status_flag_value,
             policy_status_ret,
+            policy_status_caller_rva,
             policy_flag_setter_hits,
             policy_flag_setter_owner,
             policy_flag_setter_value,
             policy_flag_setter_force,
             policy_flag_setter_before,
             policy_flag_setter_after,
+            policy_flag_setter_caller_rva,
             server_status_total_seen,
             server_status_any_seen,
             server_status_state,

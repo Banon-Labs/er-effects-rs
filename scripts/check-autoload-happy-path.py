@@ -262,20 +262,26 @@ def main() -> int:
         and "oracle_policy_window_stored_backing_flag_ptr" in telemetry
         and "oracle_policy_window_backing_flag_value" in telemetry
         and "oracle_policy_window_requested_flag_value" in telemetry
+        and "oracle_policy_window_caller_rva" in telemetry
         and "oracle_policy_ctor_wrapper_hits" in telemetry
         and "oracle_policy_ctor_wrapper_original_this" in telemetry
         and "oracle_policy_ctor_wrapper_original_vtable" in telemetry
         and "oracle_policy_ctor_wrapper_backing_flag_ptr" in telemetry
+        and "oracle_policy_ctor_wrapper_caller_rva" in telemetry
         and "oracle_policy_selector_wrapper_hits" in telemetry
         and "oracle_policy_selector_wrapper_requested_flag" in telemetry
         and "oracle_policy_selector_wrapper_selector_arg" in telemetry
+        and "oracle_policy_selector_wrapper_caller_rva" in telemetry
         and "oracle_policy_selector_ctor_hits" in telemetry
         and "oracle_policy_selector_ctor_requested_flag_ptr" in telemetry
         and "oracle_policy_selector_ctor_stored_requested_flag_ptr" in telemetry
+        and "oracle_policy_selector_ctor_caller_rva" in telemetry
         and "oracle_policy_status_predicate_hits" in telemetry
         and "oracle_policy_status_predicate_ret" in telemetry
+        and "oracle_policy_status_predicate_caller_rva" in telemetry
         and "oracle_policy_flag_setter_hits" in telemetry
         and "oracle_policy_flag_setter_after" in telemetry
+        and "oracle_policy_flag_setter_caller_rva" in telemetry
         and "oracle_result_action_insert_hits" in telemetry
         and "oracle_result_action_last_insert_arg1_update_rva" in telemetry
         and "oracle_result_action_last_insert_ret_update_rva" in telemetry
@@ -285,19 +291,25 @@ def main() -> int:
         and "POLICY_TOS_TITLE_LAST_STORED_BACKING_FLAG_PTR" in telemetry
         and "POLICY_TOS_TITLE_LAST_BACKING_FLAG_VALUE" in telemetry
         and "POLICY_TOS_TITLE_LAST_REQUESTED_FLAG_VALUE" in telemetry
+        and "POLICY_TOS_TITLE_LAST_CALLER_RVA" in telemetry
         and "POLICY_TOS_TITLE_WRAPPER_HITS" in telemetry
         and "POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_THIS" in telemetry
         and "POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_VTABLE" in telemetry
         and "POLICY_TOS_TITLE_WRAPPER_LAST_BACKING_FLAG_PTR" in telemetry
+        and "POLICY_TOS_TITLE_WRAPPER_LAST_CALLER_RVA" in telemetry
         and "POLICY_TOS_SELECTOR_WRAPPER_HITS" in telemetry
         and "POLICY_TOS_SELECTOR_WRAPPER_LAST_REQUESTED_FLAG" in telemetry
         and "POLICY_TOS_SELECTOR_WRAPPER_LAST_SELECTOR_ARG" in telemetry
+        and "POLICY_TOS_SELECTOR_WRAPPER_LAST_CALLER_RVA" in telemetry
         and "POLICY_TOS_SELECTOR_CTOR_HITS" in telemetry
         and "POLICY_TOS_SELECTOR_CTOR_LAST_REQUESTED_FLAG_PTR" in telemetry
         and "POLICY_TOS_SELECTOR_CTOR_LAST_STORED_REQUESTED_FLAG_PTR" in telemetry
+        and "POLICY_TOS_SELECTOR_CTOR_LAST_CALLER_RVA" in telemetry
         and "POLICY_TOS_STATUS_HITS" in telemetry
         and "POLICY_TOS_STATUS_LAST_RET" in telemetry
+        and "POLICY_TOS_STATUS_LAST_CALLER_RVA" in telemetry
         and "POLICY_TOS_FLAG_SETTER_HITS" in telemetry
+        and "POLICY_TOS_FLAG_SETTER_LAST_CALLER_RVA" in telemetry
         and "RESULT_ACTION_INSERT_HITS" in telemetry
         and "RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA" in telemetry
         and "NATIVE_SUBMIT_HITS" in telemetry
@@ -593,20 +605,26 @@ def main() -> int:
         and "oracle_policy_window_stored_backing_flag_ptr" in telemetry_src
         and "oracle_policy_window_backing_flag_value" in telemetry_src
         and "oracle_policy_window_requested_flag_value" in telemetry_src
+        and "oracle_policy_window_caller_rva" in telemetry_src
         and "oracle_policy_ctor_wrapper_hits" in telemetry_src
         and "oracle_policy_ctor_wrapper_original_this" in telemetry_src
         and "oracle_policy_ctor_wrapper_original_vtable" in telemetry_src
         and "oracle_policy_ctor_wrapper_backing_flag_ptr" in telemetry_src
+        and "oracle_policy_ctor_wrapper_caller_rva" in telemetry_src
         and "oracle_policy_selector_wrapper_hits" in telemetry_src
         and "oracle_policy_selector_wrapper_requested_flag" in telemetry_src
         and "oracle_policy_selector_wrapper_selector_arg" in telemetry_src
+        and "oracle_policy_selector_wrapper_caller_rva" in telemetry_src
         and "oracle_policy_selector_ctor_hits" in telemetry_src
         and "oracle_policy_selector_ctor_requested_flag_ptr" in telemetry_src
         and "oracle_policy_selector_ctor_stored_requested_flag_ptr" in telemetry_src
+        and "oracle_policy_selector_ctor_caller_rva" in telemetry_src
         and "oracle_policy_status_predicate_hits" in telemetry_src
         and "oracle_policy_status_predicate_ret" in telemetry_src
+        and "oracle_policy_status_predicate_caller_rva" in telemetry_src
         and "oracle_policy_flag_setter_hits" in telemetry_src
         and "oracle_policy_flag_setter_after" in telemetry_src
+        and "oracle_policy_flag_setter_caller_rva" in telemetry_src
         and "oracle_result_action_insert_hits" in telemetry_src
         and "oracle_result_action_last_insert_arg1_update_rva" in telemetry_src
         and "oracle_result_action_last_insert_ret_update_rva" in telemetry_src
@@ -616,24 +634,30 @@ def main() -> int:
         and "POLICY_TOS_TITLE_LAST_STORED_BACKING_FLAG_PTR" in lib
         and "POLICY_TOS_TITLE_LAST_BACKING_FLAG_VALUE" in lib
         and "POLICY_TOS_TITLE_LAST_REQUESTED_FLAG_VALUE" in lib
+        and "POLICY_TOS_TITLE_LAST_CALLER_RVA" in lib
         and "POLICY_TOS_TITLE_CTOR_WRAPPER_RVA" in lib
         and "POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG" in lib
         and "POLICY_TOS_TITLE_WRAPPER_HITS" in lib
         and "POLICY_TOS_TITLE_WRAPPER_THIS_ADJUST" in lib
         and "POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_THIS" in lib
         and "POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_VTABLE" in lib
+        and "POLICY_TOS_TITLE_WRAPPER_LAST_CALLER_RVA" in lib
         and "POLICY_TOS_SELECTOR_WRAPPER_RVA" in lib
         and "POLICY_TOS_SELECTOR_WRAPPER_HITS" in lib
         and "POLICY_TOS_SELECTOR_WRAPPER_LAST_REQUESTED_FLAG" in lib
         and "POLICY_TOS_SELECTOR_WRAPPER_LAST_SELECTOR_ARG" in lib
+        and "POLICY_TOS_SELECTOR_WRAPPER_LAST_CALLER_RVA" in lib
         and "POLICY_TOS_SELECTOR_CTOR_RVA" in lib
         and "POLICY_TOS_SELECTOR_CTOR_HITS" in lib
         and "POLICY_TOS_SELECTOR_CTOR_LAST_REQUESTED_FLAG_PTR" in lib
         and "POLICY_TOS_SELECTOR_CTOR_LAST_STORED_REQUESTED_FLAG_PTR" in lib
+        and "POLICY_TOS_SELECTOR_CTOR_LAST_CALLER_RVA" in lib
         and "POLICY_TOS_STATUS_PREDICATE_RVA" in lib
         and "POLICY_TOS_STATUS_PREDICATE_ORIG" in lib
+        and "POLICY_TOS_STATUS_LAST_CALLER_RVA" in lib
         and "POLICY_TOS_FLAG_SETTER_RVA" in lib
         and "POLICY_TOS_FLAG_SETTER_ORIG" in lib
+        and "POLICY_TOS_FLAG_SETTER_LAST_CALLER_RVA" in lib
         and "RESULT_ACTION_INSERT_HITS" in lib
         and "RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA" in lib
         and "text_section_bounds" in experiments
@@ -643,6 +667,7 @@ def main() -> int:
         and "PE_TEXT_SECTION_NAME" in experiments
         and "policy_tos_title_ctor_wrapper_hook" in experiments
         and "policy_tos_record_fields" in experiments
+        and "trace_first_game_caller_rva" in experiments
         and "backing_flag_ptr" in experiments
         and "stack_arg0" in experiments
         and "callstack_contains_game_rva" in experiments

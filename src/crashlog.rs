@@ -772,9 +772,50 @@ pub(crate) fn callstack_contains_game_rva(start_rva: usize, end_rva: usize) -> b
     })
 }
 
+#[cfg(windows)]
+pub(crate) fn trace_first_game_caller_rva() -> usize {
+    const GAME_TEXT_RVA_LIMIT: usize = 0x0400_0000;
+    let mut frames = [std::ptr::null_mut::<c_void>(); STACK_TRACE_FRAME_COUNT];
+    let captured = unsafe {
+        RtlCaptureStackBackTrace(
+            STACK_TRACE_FRAMES_TO_SKIP,
+            frames.len() as u32,
+            frames.as_mut_ptr(),
+            std::ptr::null_mut(),
+        )
+    } as usize;
+    let module_base = unsafe { GetModuleHandleA(PCSTR::null()) }
+        .ok()
+        .map(|module| module.0 as usize)
+        .unwrap_or(NULL_MODULE_BASE);
+    if module_base == NULL_MODULE_BASE {
+        return TITLE_OWNER_SCAN_START_ADDRESS;
+    }
+    frames
+        .iter()
+        .take(captured)
+        .filter_map(|frame| {
+            let address = *frame as usize;
+            if address >= module_base {
+                let rva = address.wrapping_sub(module_base);
+                if rva < GAME_TEXT_RVA_LIMIT {
+                    return Some(rva);
+                }
+            }
+            None
+        })
+        .next()
+        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+}
+
 #[cfg(not(windows))]
 pub(crate) fn callstack_contains_game_rva(_start_rva: usize, _end_rva: usize) -> bool {
     false
+}
+
+#[cfg(not(windows))]
+pub(crate) fn trace_first_game_caller_rva() -> usize {
+    TITLE_OWNER_SCAN_START_ADDRESS
 }
 
 #[cfg(not(windows))]
