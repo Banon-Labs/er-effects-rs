@@ -331,8 +331,8 @@ if 'product tracing must passively hook native submit, result.vtable+0x60, actio
 if 'telemetry/watcher oracle must expose passive native submit/result-handler/action-builder/wrapper-builder/action-insert hit counts, wrapper/update-RVA proof, same-result proof, and chain stage' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce passive submit/result-chain/wrapper-builder/action-insert wrapper/update-RVA same-result telemetry/stage')
     autoload_static_failures += 1
-if 'native static checker must pin wrapper-builder ABI, ToS status predicate/setter/caller/requested-flag ABI, and inner finalize edge' not in check:
-    legacy_failures.append('check-autoload-happy-path does not enforce native wrapper-builder/ToS predicate+setter+caller/requested-flag ABI static check')
+if 'native static checker must pin wrapper-builder ABI, ToS wrapper vtable/thunk provenance, status predicate/setter/caller/requested-flag ABI, and inner finalize edge' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce native wrapper-builder/ToS vtable+predicate+setter+caller/requested-flag ABI static check')
     autoload_static_failures += 1
 if 'telemetry must expose native Continue product phase/guard state for result-chain interpretation' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce Continue phase telemetry')
@@ -350,6 +350,8 @@ if (
     or 'POLICY_TOS_STATUS_PREDICATE' not in native_static_check
     or 'POLICY_TOS_FLAG_SETTER' not in native_static_check
     or 'POLICY_TOS_TITLE_CTOR_WRAPPER' not in native_static_check
+    or 'POLICY_TOS_TITLE_CTOR_WRAPPER_VTABLE_SLOT' not in native_static_check
+    or 'POLICY_TOS_SELECTOR_WRAPPER_VTABLE_SLOT' not in native_static_check
     or 'POLICY_TOS_TITLE_CTOR_CALLER' not in native_static_check
     or 'POLICY_TOS_FLAG_SETTER_CALLER' not in native_static_check
     or 'POLICY_TOS_REQUESTED_FLAG_INIT' not in native_static_check
@@ -360,6 +362,8 @@ if (
     or 'owner+0x29c8' not in native_static_check
     or 'requested-flag binder' not in native_static_check
     or 'requested-flag commit' not in native_static_check
+    or '0x1409b7380' not in native_static_check
+    or '0x1409b7390' not in native_static_check
     or 'MENU_JOB_LIST_CONSUMER' not in native_static_check
     or 'MENU_JOB_SINGLE_CONSUMER' not in native_static_check
     or 'FD4 event code 3' not in native_static_check

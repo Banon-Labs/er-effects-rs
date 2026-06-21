@@ -34,6 +34,11 @@ RESULT_EVENT_WRAPPER_INNER_BUILD = 0x1407449E0
 POLICY_TOS_STATUS_PREDICATE = 0x1409B72B0
 POLICY_TOS_TITLE_CTOR = 0x1409B5970
 POLICY_TOS_TITLE_CTOR_WRAPPER = 0x1409B6070
+POLICY_TOS_TITLE_CTOR_WRAPPER_THUNK = 0x1409B7380
+POLICY_TOS_TITLE_CTOR_WRAPPER_VTABLE_SLOT = 0x142B28318
+POLICY_TOS_SELECTOR_WRAPPER = 0x1409B6140
+POLICY_TOS_SELECTOR_WRAPPER_THUNK = 0x1409B7390
+POLICY_TOS_SELECTOR_WRAPPER_VTABLE_SLOT = 0x142B28350
 POLICY_TOS_TITLE_CTOR_CALLER = 0x1409B60DA
 POLICY_TOS_FLAG_SETTER = 0x1409B6B30
 POLICY_TOS_FLAG_SETTER_CALLER = 0x1409B5D4C
@@ -91,6 +96,10 @@ def rip_lea_targets(va: int, data: bytes) -> set[int]:
 def contains(data: bytes, needle: bytes, label: str) -> None:
     if needle not in data:
         fail(f"missing byte pattern for {label}: {needle.hex()}")
+
+
+def qword_at(va: int) -> int:
+    return struct.unpack("<Q", image_bytes(va, 8))[0]
 
 
 def main() -> int:
@@ -213,6 +222,19 @@ def main() -> int:
     contains(policy_requested_init, b"\x49\x89\x86\xc0\x29\x00\x00", "policy ToS constructor stores flag pointer at owner+0x29c0")
     contains(policy_requested_init, b"\x8b\x00", "policy ToS constructor loads current flag value from *owner+0x29c0")
     contains(policy_requested_init, b"\x41\x89\x86\xc8\x29\x00\x00", "policy ToS constructor initializes requested flag owner+0x29c8 from current flag")
+
+    if qword_at(POLICY_TOS_TITLE_CTOR_WRAPPER_VTABLE_SLOT) != POLICY_TOS_TITLE_CTOR_WRAPPER_THUNK:
+        fail("policy ToS ctor wrapper vtable slot no longer points at 0x1409b7380")
+    if qword_at(POLICY_TOS_SELECTOR_WRAPPER_VTABLE_SLOT) != POLICY_TOS_SELECTOR_WRAPPER_THUNK:
+        fail("policy ToS selector wrapper vtable slot no longer points at 0x1409b7390")
+    policy_ctor_thunk = image_bytes(POLICY_TOS_TITLE_CTOR_WRAPPER_THUNK, 0x10)
+    ctor_thunk_jumps = rel32_targets(POLICY_TOS_TITLE_CTOR_WRAPPER_THUNK, policy_ctor_thunk, opcode=0xE9)
+    if POLICY_TOS_TITLE_CTOR_WRAPPER not in ctor_thunk_jumps:
+        fail("policy ToS ctor wrapper thunk no longer jumps to 0x1409b6070")
+    policy_selector_thunk = image_bytes(POLICY_TOS_SELECTOR_WRAPPER_THUNK, 0x10)
+    selector_thunk_jumps = rel32_targets(POLICY_TOS_SELECTOR_WRAPPER_THUNK, policy_selector_thunk, opcode=0xE9)
+    if POLICY_TOS_SELECTOR_WRAPPER not in selector_thunk_jumps:
+        fail("policy ToS selector wrapper thunk no longer jumps to 0x1409b6140")
 
     policy_ctor_wrapper = image_bytes(POLICY_TOS_TITLE_CTOR_WRAPPER, 0xa0)
     contains(policy_ctor_wrapper, b"\x48\x8b\xf1", "policy ToS ctor wrapper preserves record pointer from rcx in rsi")

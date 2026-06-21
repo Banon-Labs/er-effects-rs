@@ -310,6 +310,8 @@ def main() -> int:
         and "POLICY_TOS_STATUS_PREDICATE" in native_static_check
         and "POLICY_TOS_FLAG_SETTER" in native_static_check
         and "POLICY_TOS_TITLE_CTOR_WRAPPER" in native_static_check
+        and "POLICY_TOS_TITLE_CTOR_WRAPPER_VTABLE_SLOT" in native_static_check
+        and "POLICY_TOS_SELECTOR_WRAPPER_VTABLE_SLOT" in native_static_check
         and "POLICY_TOS_TITLE_CTOR_CALLER" in native_static_check
         and "POLICY_TOS_FLAG_SETTER_CALLER" in native_static_check
         and "POLICY_TOS_REQUESTED_FLAG_INIT" in native_static_check
@@ -320,6 +322,8 @@ def main() -> int:
         and "policy ToS status predicate reads fallback pointer at owner+0x29c0" in native_static_check
         and "policy ToS flag setter writes requested value to flag pointer" in native_static_check
         and "policy ToS flag setter caller loads requested flag from owner+0x29c8" in native_static_check
+        and "policy ToS ctor wrapper vtable slot no longer points at 0x1409b7380" in native_static_check
+        and "policy ToS selector wrapper vtable slot no longer points at 0x1409b7390" in native_static_check
         and "policy ToS ctor wrapper preserves record pointer from rcx in rsi" in native_static_check
         and "policy ToS ctor wrapper loads backing flag pointer from record+0x8" in native_static_check
         and "policy ToS constructor reads backing flag pointer from stack arg1" in native_static_check
@@ -327,7 +331,7 @@ def main() -> int:
         and "policy ToS constructor initializes requested flag owner+0x29c8 from current flag" in native_static_check
         and "policy ToS requested-flag binder passes pointer to owner+0x29c8" in native_static_check
         and "policy ToS requested-flag commit loads requested flag from owner+0x29c8" in native_static_check,
-        "native static checker must pin wrapper-builder ABI, ToS status predicate/setter/caller/requested-flag ABI, and inner finalize edge",
+        "native static checker must pin wrapper-builder ABI, ToS wrapper vtable/thunk provenance, status predicate/setter/caller/requested-flag ABI, and inner finalize edge",
         failures,
     )
 
