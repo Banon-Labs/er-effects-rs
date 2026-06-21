@@ -257,8 +257,10 @@ if (
     or 'call_result_void2_original' not in exp_code
     or 'continue_load' in result_event_body.lower()
     or 'continue_load' in result_action_body.lower()
+    or 'oracle_native_submit_hits' not in telemetry_src
     or 'oracle_result_event_handler_hits' not in telemetry_src
     or 'oracle_result_action_builder_hits' not in telemetry_src
+    or 'native_submit_entered' not in watcher
     or 'native_result_chain_ready' not in watcher
     or 'native_continue_chain_stage' not in watcher
     or 'result_chain_waiting_continue_load' not in watcher
@@ -271,11 +273,11 @@ if (
 ):
     legacy_failures.append('product tracing lacks passive result.vtable+0x60/action-builder telemetry hooks or Continue phase telemetry')
     autoload_static_failures += 1
-if 'product tracing must passively hook result.vtable+0x60 and action builder without direct load shortcuts' not in check:
-    legacy_failures.append('check-autoload-happy-path does not enforce passive result-chain hooks')
+if 'product tracing must passively hook native submit, result.vtable+0x60, and action builder without direct load shortcuts' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce passive submit/result-chain hooks')
     autoload_static_failures += 1
-if 'telemetry/watcher oracle must expose passive native result-handler/action-builder hit counts and chain stage' not in check:
-    legacy_failures.append('check-autoload-happy-path does not enforce passive result-chain telemetry/stage')
+if 'telemetry/watcher oracle must expose passive native submit/result-handler/action-builder hit counts and chain stage' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce passive submit/result-chain telemetry/stage')
     autoload_static_failures += 1
 if 'telemetry must expose native Continue product phase/guard state for result-chain interpretation' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce Continue phase telemetry')
@@ -518,7 +520,8 @@ if rt_root.exists():
             if 'simulated_button_presses_total' in raw and re.search(r'"simulated_button_presses_total"\s*:\s*0', raw):
                 proof['zero_input'] = True
             if (
-                re.search(r'"oracle_result_event_handler_hits"\s*:\s*[1-9]\d*', raw)
+                re.search(r'"oracle_native_submit_hits"\s*:\s*[1-9]\d*', raw)
+                and re.search(r'"oracle_result_event_handler_hits"\s*:\s*[1-9]\d*', raw)
                 and re.search(r'"oracle_result_action_builder_hits"\s*:\s*[1-9]\d*', raw)
             ):
                 proof['result_chain'] = True

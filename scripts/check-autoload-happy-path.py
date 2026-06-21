@@ -224,31 +224,39 @@ def main() -> int:
     )
     result_event_body = rust_fn_body(experiments, "result_event_handler_hook")
     result_action_body = rust_fn_body(experiments, "result_action_builder_hook")
+    native_submit_body = rust_fn_body(experiments, "native_submit_hook")
     require(
-        "RESULT_EVENT_HANDLER_RVA" in lib
+        "NATIVE_SUBMIT_ORIG" in lib
+        and "RESULT_EVENT_HANDLER_RVA" in lib
         and "RESULT_ACTION_BUILDER_RVA" in lib
         and "RESULT_EVENT_HANDLER_ORIG" in lib
         and "RESULT_ACTION_BUILDER_ORIG" in lib
+        and "native_submit_7ac890" in experiments
         and "result_event_handler_746e80" in experiments
         and "result_action_builder_746a00" in experiments
+        and "call_result_void1_original" in experiments
         and "call_result_void2_original" in experiments
-        and "result+0x3b0" not in result_event_body
+        and "continue_load" not in native_submit_body.lower()
         and "continue_load" not in result_event_body.lower()
         and "continue_load" not in result_action_body.lower(),
-        "product tracing must passively hook result.vtable+0x60 and action builder without direct load shortcuts",
+        "product tracing must passively hook native submit, result.vtable+0x60, and action builder without direct load shortcuts",
         failures,
     )
     require(
-        "oracle_result_event_handler_hits" in telemetry
+        "oracle_native_submit_hits" in telemetry
+        and "oracle_result_event_handler_hits" in telemetry
         and "oracle_result_action_builder_hits" in telemetry
+        and "NATIVE_SUBMIT_HITS" in telemetry
         and "RESULT_EVENT_HANDLER_HITS" in telemetry
         and "RESULT_ACTION_BUILDER_HITS" in telemetry
+        and "native_submit_entered" in watcher
         and "native_result_chain_ready" in watcher
         and "native_continue_chain_stage" in watcher
+        and "telemetry_native_submit_entered" in watcher
         and "telemetry_native_result_chain_ready" in watcher
         and "telemetry_native_continue_chain_stage" in watcher
         and "result_chain_waiting_continue_load" in watcher,
-        "telemetry/watcher oracle must expose passive native result-handler/action-builder hit counts and chain stage",
+        "telemetry/watcher oracle must expose passive native submit/result-handler/action-builder hit counts and chain stage",
         failures,
     )
     require(
@@ -451,9 +459,12 @@ def main() -> int:
     require(
         "result.vtable+0x60" in measure
         and "result_chain" in measure
+        and "native_submit_entered" in measure
         and "native_result_chain_ready" in measure
         and "native_continue_chain_stage" in measure
+        and "oracle_native_submit_hits" in measure
         and "oracle_result_action_builder_hits" in measure
+        and "NATIVE_SUBMIT_ORIG" in lib
         and "RESULT_EVENT_HANDLER_RVA" in lib
         and "RESULT_ACTION_BUILDER_RVA" in lib
         and "oracle_result_event_handler_hits" in telemetry_src

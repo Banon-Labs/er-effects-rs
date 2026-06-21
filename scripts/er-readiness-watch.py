@@ -580,9 +580,14 @@ def telemetry_no_postload_popup(telemetry: dict[str, Any]) -> bool:
     return not telemetry_messagebox_dialog_detected(telemetry)
 
 
+def telemetry_native_submit_entered(telemetry: dict[str, Any]) -> bool:
+    return as_int(telemetry.get("oracle_native_submit_hits"), 0) > 0
+
+
 def telemetry_native_result_chain_ready(telemetry: dict[str, Any]) -> bool:
     return bool(
-        as_int(telemetry.get("oracle_result_event_handler_hits"), 0) > 0
+        telemetry_native_submit_entered(telemetry)
+        and as_int(telemetry.get("oracle_result_event_handler_hits"), 0) > 0
         and as_int(telemetry.get("oracle_result_action_builder_hits"), 0) > 0
     )
 
@@ -600,10 +605,14 @@ def telemetry_native_continue_chain_stage(telemetry: dict[str, Any]) -> str:
         return "deserialized_waiting_confirm"
     if phase >= 3 and result_chain_ready:
         return "result_chain_waiting_continue_load"
-    if phase >= 3:
+    if phase >= 3 and telemetry_native_submit_entered(telemetry):
         return "submitted_without_result_chain"
+    if phase >= 3:
+        return "guard_without_native_submit"
     if result_chain_ready:
         return "result_chain_before_guard"
+    if telemetry_native_submit_entered(telemetry):
+        return "native_submit_before_guard"
     if phase == 0:
         return "pre_submit"
     if phase > 0:
@@ -644,6 +653,8 @@ def oracle_summary(
         "postload_popup_builds": telemetry.get("oracle_msgbox_postload_builds"),
         "blocking_modal_present": telemetry.get("oracle_blocking_modal_present"),
         "simulated_button_presses_total": telemetry.get("simulated_button_presses_total"),
+        "native_submit_hits": telemetry.get("oracle_native_submit_hits"),
+        "native_submit_last_result": telemetry.get("oracle_native_submit_last_result"),
         "result_event_handler_hits": telemetry.get("oracle_result_event_handler_hits"),
         "result_action_builder_hits": telemetry.get("oracle_result_action_builder_hits"),
         "continue_phase": telemetry.get("oracle_continue_phase"),
@@ -660,6 +671,7 @@ def oracle_summary(
         "expected": expected,
         "expected_save_match": telemetry_expected_save_match(telemetry, expected_save_oracle),
         "expected_animation_match": telemetry_expected_animation_match(telemetry, expected_animation_id),
+        "native_submit_entered": telemetry_native_submit_entered(telemetry),
         "native_result_chain_ready": telemetry_native_result_chain_ready(telemetry),
         "native_continue_chain_stage": telemetry_native_continue_chain_stage(telemetry),
         "no_postload_popup": telemetry_no_postload_popup(telemetry),

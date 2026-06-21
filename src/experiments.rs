@@ -8130,6 +8130,13 @@ pub(crate) fn install_continue_trace_hooks() {
         }
         create_continue_trace_hook(
             &mut hooks,
+            "native_submit_7ac890",
+            MENU_ITEM_SUBMIT_RVA as u32,
+            native_submit_hook as *mut c_void,
+            &NATIVE_SUBMIT_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
             "result_event_handler_746e80",
             RESULT_EVENT_HANDLER_RVA,
             result_event_handler_hook as *mut c_void,
@@ -8441,6 +8448,19 @@ pub(crate) unsafe fn call_task_enqueue_original(
     let original: unsafe extern "system" fn(*mut c_void, *mut c_void) -> *mut c_void =
         unsafe { std::mem::transmute(original) };
     Some(unsafe { original(arg0, arg1) })
+}
+
+pub(crate) unsafe fn call_result_void1_original(
+    original: &AtomicUsize,
+    result: usize,
+) -> Option<()> {
+    let original = original.load(Ordering::SeqCst);
+    if original == HOOK_ORIGINAL_UNSET {
+        return None;
+    }
+    let original: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(original) };
+    unsafe { original(result) };
+    Some(())
 }
 
 pub(crate) unsafe fn call_result_void2_original(
@@ -9747,6 +9767,28 @@ unsafe fn result_built_flag(result: usize) -> usize {
     } else {
         unsafe { safe_read_usize(result + RESULT_BUILT_3B0_OFFSET) }
             .map_or(TITLE_OWNER_SCAN_START_ADDRESS, |value| value & U8_MASK)
+    }
+}
+
+pub(crate) unsafe extern "system" fn native_submit_hook(result: usize) {
+    const TRACE_FIRST: usize = 16;
+    let seq =
+        NATIVE_SUBMIT_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) + OWN_STEPPER_CALL_INC;
+    NATIVE_SUBMIT_LAST_RESULT.store(result, Ordering::SeqCst);
+    if seq <= TRACE_FIRST {
+        append_continue_trace(format_args!(
+            "native_submit_7ac890 seq={seq} phase=ENTER result=0x{result:x} built={} {}",
+            format_optional_usize_hex(unsafe { result_built_flag(result) }),
+            trace_callers_summary()
+        ));
+    }
+    let _ = unsafe { call_result_void1_original(&NATIVE_SUBMIT_ORIG, result) };
+    if seq <= TRACE_FIRST {
+        append_continue_trace(format_args!(
+            "native_submit_7ac890 seq={seq} phase=LEAVE result=0x{result:x} built={} {}",
+            format_optional_usize_hex(unsafe { result_built_flag(result) }),
+            game_man_trace_summary()
+        ));
     }
 }
 

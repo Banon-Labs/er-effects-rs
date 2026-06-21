@@ -2192,6 +2192,7 @@ pub(crate) static MENU_NEW_OR_LOAD_WRAPPER_ORIG: AtomicUsize =
 pub(crate) static MENU_OTHER_LOAD_WRAPPER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static MENU_TASK_UPDATE_WRAPPER_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static NATIVE_SUBMIT_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static RESULT_EVENT_HANDLER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static RESULT_ACTION_BUILDER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static TASK_ENQUEUE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
@@ -2248,8 +2249,12 @@ pub(crate) static MENU_CONTINUE_TASK_NODE: AtomicUsize =
 /// advance through native accept/submit semantics, not direct-load shortcuts.
 pub(crate) static MENU_CONTINUE_MEMBER_NODE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// Passive native result-chain telemetry. These hooks only call through and record whether native
-/// submit reached result.vtable+0x60 and its action builder; they must never drive load directly.
+/// Passive native submit/result-chain telemetry. These hooks only call through and record whether
+/// product execution entered native submit, result.vtable+0x60, and the action builder; they must
+/// never drive load directly.
+pub(crate) static NATIVE_SUBMIT_HITS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+pub(crate) static NATIVE_SUBMIT_LAST_RESULT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static RESULT_EVENT_HANDLER_HITS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) static RESULT_ACTION_BUILDER_HITS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) static RESULT_EVENT_LAST_RESULT: AtomicUsize =
