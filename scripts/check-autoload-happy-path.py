@@ -267,9 +267,11 @@ def main() -> int:
         and "telemetry_native_result_chain_same_result" in watcher
         and "telemetry_native_submit_fd4_event_match" in watcher
         and "telemetry_native_result_chain_ready" in watcher
+        and "telemetry_result_action_inserted" in watcher
         and "telemetry_native_continue_chain_stage" in watcher
-        and "result_chain_waiting_continue_load" in watcher,
-        "telemetry/watcher oracle must expose passive native submit/result-handler/action-builder hit counts, same-result proof, and chain stage",
+        and "result_chain_waiting_action_insert" in watcher
+        and "action_insert_waiting_continue_load" in watcher,
+        "telemetry/watcher oracle must expose passive native submit/result-handler/action-builder/action-insert hit counts, same-result proof, and chain stage",
         failures,
     )
     require(
@@ -478,6 +480,8 @@ def main() -> int:
         and "fd4_submit_event_match" in measure
         and "native_result_chain_ready" in measure
         and "native_continue_chain_stage" in measure
+        and "result_action_inserted" in watcher
+        and "action_insert_waiting_continue_load" in watcher
         and "oracle_native_submit_last_result" in measure
         and "oracle_native_submit_hits" in measure
         and "oracle_result_event_last_fd4_code" in telemetry_src

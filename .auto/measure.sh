@@ -273,7 +273,9 @@ if (
     or 'native_submit_fd4_event_match' not in watcher
     or 'native_result_chain_ready' not in watcher
     or 'native_continue_chain_stage' not in watcher
-    or 'result_chain_waiting_continue_load' not in watcher
+    or 'result_action_inserted' not in watcher
+    or 'result_chain_waiting_action_insert' not in watcher
+    or 'action_insert_waiting_continue_load' not in watcher
     or 'oracle_continue_phase' not in telemetry_src
     or 'oracle_continue_expected_slot' not in telemetry_src
     or 'oracle_continue_deser_fired' not in telemetry_src
@@ -286,8 +288,8 @@ if (
 if 'product tracing must passively hook native submit, result.vtable+0x60, and action builder without direct load shortcuts' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce passive submit/result-chain hooks')
     autoload_static_failures += 1
-if 'telemetry/watcher oracle must expose passive native submit/result-handler/action-builder hit counts, same-result proof, and chain stage' not in check:
-    legacy_failures.append('check-autoload-happy-path does not enforce passive submit/result-chain same-result telemetry/stage')
+if 'telemetry/watcher oracle must expose passive native submit/result-handler/action-builder/action-insert hit counts, same-result proof, and chain stage' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce passive submit/result-chain/action-insert same-result telemetry/stage')
     autoload_static_failures += 1
 if 'telemetry must expose native Continue product phase/guard state for result-chain interpretation' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce Continue phase telemetry')

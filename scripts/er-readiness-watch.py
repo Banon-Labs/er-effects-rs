@@ -615,9 +615,14 @@ def telemetry_native_result_chain_ready(telemetry: dict[str, Any]) -> bool:
     )
 
 
+def telemetry_result_action_inserted(telemetry: dict[str, Any]) -> bool:
+    return as_int(telemetry.get("oracle_result_action_insert_hits"), 0) > 0
+
+
 def telemetry_native_continue_chain_stage(telemetry: dict[str, Any]) -> str:
     phase = as_int(telemetry.get("oracle_continue_phase"), -1)
     result_chain_ready = telemetry_native_result_chain_ready(telemetry)
+    action_inserted = telemetry_result_action_inserted(telemetry)
     deser_fired = as_int(telemetry.get("oracle_continue_deser_fired"), 0)
     confirmed = as_int(telemetry.get("oracle_continue_confirmed"), 0)
     if telemetry_world_loaded(telemetry):
@@ -626,8 +631,10 @@ def telemetry_native_continue_chain_stage(telemetry: dict[str, Any]) -> str:
         return "confirmed_waiting_world"
     if deser_fired == 2:
         return "deserialized_waiting_confirm"
+    if phase >= 3 and result_chain_ready and action_inserted:
+        return "action_insert_waiting_continue_load"
     if phase >= 3 and result_chain_ready:
-        return "result_chain_waiting_continue_load"
+        return "result_chain_waiting_action_insert"
     if phase >= 3 and telemetry_native_submit_entered(telemetry):
         return "submitted_without_result_chain"
     if phase >= 3:
@@ -709,6 +716,7 @@ def oracle_summary(
         "native_result_chain_same_result": telemetry_native_result_chain_same_result(telemetry),
         "native_submit_fd4_event_match": telemetry_native_submit_fd4_event_match(telemetry),
         "native_result_chain_ready": telemetry_native_result_chain_ready(telemetry),
+        "result_action_inserted": telemetry_result_action_inserted(telemetry),
         "native_continue_chain_stage": telemetry_native_continue_chain_stage(telemetry),
         "no_postload_popup": telemetry_no_postload_popup(telemetry),
     }
