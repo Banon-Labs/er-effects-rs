@@ -8151,6 +8151,13 @@ pub(crate) fn install_continue_trace_hooks() {
         );
         create_continue_trace_hook(
             &mut hooks,
+            "result_event_wrapper_builder_744a60",
+            RESULT_EVENT_WRAPPER_BUILDER_RVA,
+            result_event_wrapper_builder_hook as *mut c_void,
+            &RESULT_EVENT_WRAPPER_BUILDER_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
             "task_enqueue_7a7b60",
             TRACE_TASK_ENQUEUE_RVA,
             task_enqueue_hook as *mut c_void,
@@ -8476,6 +8483,20 @@ pub(crate) unsafe fn call_result_void2_original(
         unsafe { std::mem::transmute(original) };
     unsafe { original(result, event) };
     Some(())
+}
+
+pub(crate) unsafe fn call_wrapper_builder_original(
+    rcx: usize,
+    rdx: usize,
+    r8: usize,
+) -> Option<usize> {
+    let original = RESULT_EVENT_WRAPPER_BUILDER_ORIG.load(Ordering::SeqCst);
+    if original == HOOK_ORIGINAL_UNSET {
+        return None;
+    }
+    let original: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(original) };
+    Some(unsafe { original(rcx, rdx, r8) })
 }
 
 /// Defensive default when a b80 trampoline is somehow unset (dead branch: if our hook
@@ -9850,6 +9871,35 @@ pub(crate) unsafe extern "system" fn result_event_handler_hook(result: usize, ev
             game_man_trace_summary()
         ));
     }
+}
+
+pub(crate) unsafe extern "system" fn result_event_wrapper_builder_hook(
+    rcx: usize,
+    rdx: usize,
+    r8: usize,
+) -> usize {
+    const TRACE_FIRST: usize = 16;
+    const RESULT_ACTION_BUILDER_TRACE_SIZE: usize = 0x360;
+    let from_result_action_builder = callstack_contains_game_rva(
+        RESULT_ACTION_BUILDER_RVA as usize,
+        RESULT_ACTION_BUILDER_RVA as usize + RESULT_ACTION_BUILDER_TRACE_SIZE,
+    );
+    let result = unsafe { call_wrapper_builder_original(rcx, rdx, r8) }.unwrap_or(rcx);
+    if from_result_action_builder {
+        let seq = RESULT_ACTION_WRAPPER_BUILDER_HITS
+            .fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+            + OWN_STEPPER_CALL_INC;
+        RESULT_ACTION_LAST_WRAPPER_BUILDER_RCX.store(rcx, Ordering::SeqCst);
+        RESULT_ACTION_LAST_WRAPPER_BUILDER_RDX.store(rdx, Ordering::SeqCst);
+        RESULT_ACTION_LAST_WRAPPER_BUILDER_R8.store(r8, Ordering::SeqCst);
+        RESULT_ACTION_LAST_WRAPPER_BUILDER_RET.store(result, Ordering::SeqCst);
+        if seq <= TRACE_FIRST {
+            append_continue_trace(format_args!(
+                "result_event_wrapper_builder_744a60 seq={seq} rcx=0x{rcx:x} rdx=0x{rdx:x} r8=0x{r8:x} ret=0x{result:x} -- passive wrapper-builder call from result action builder"
+            ));
+        }
+    }
+    result
 }
 
 pub(crate) unsafe extern "system" fn result_action_builder_hook(result: usize, event: usize) {
