@@ -263,6 +263,9 @@ def main() -> int:
         and "oracle_policy_ctor_wrapper_original_this" in telemetry
         and "oracle_policy_ctor_wrapper_original_vtable" in telemetry
         and "oracle_policy_ctor_wrapper_backing_flag_ptr" in telemetry
+        and "oracle_policy_selector_wrapper_hits" in telemetry
+        and "oracle_policy_selector_wrapper_requested_flag" in telemetry
+        and "oracle_policy_selector_wrapper_selector_arg" in telemetry
         and "oracle_policy_status_predicate_hits" in telemetry
         and "oracle_policy_status_predicate_ret" in telemetry
         and "oracle_policy_flag_setter_hits" in telemetry
@@ -277,6 +280,9 @@ def main() -> int:
         and "POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_THIS" in telemetry
         and "POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_VTABLE" in telemetry
         and "POLICY_TOS_TITLE_WRAPPER_LAST_BACKING_FLAG_PTR" in telemetry
+        and "POLICY_TOS_SELECTOR_WRAPPER_HITS" in telemetry
+        and "POLICY_TOS_SELECTOR_WRAPPER_LAST_REQUESTED_FLAG" in telemetry
+        and "POLICY_TOS_SELECTOR_WRAPPER_LAST_SELECTOR_ARG" in telemetry
         and "POLICY_TOS_STATUS_HITS" in telemetry
         and "POLICY_TOS_STATUS_LAST_RET" in telemetry
         and "POLICY_TOS_FLAG_SETTER_HITS" in telemetry
@@ -317,6 +323,8 @@ def main() -> int:
         and "POLICY_TOS_TITLE_CTOR_WRAPPER_VTABLE_SLOT" in native_static_check
         and "POLICY_TOS_TITLE_CTOR_WRAPPER_RTTI_COL" in native_static_check
         and "POLICY_TOS_SELECTOR_RTTI_COL" in native_static_check
+        and "POLICY_TOS_SELECTOR_WRAPPER" in native_static_check
+        and "POLICY_TOS_SELECTOR_CTOR" in native_static_check
         and "POLICY_TOS_SELECTOR_WRAPPER_VTABLE_SLOT" in native_static_check
         and "POLICY_TOS_TITLE_CTOR_CALLER" in native_static_check
         and "POLICY_TOS_FLAG_SETTER_CALLER" in native_static_check
@@ -333,6 +341,9 @@ def main() -> int:
         and "policy ToS ctor wrapper thunk adjusts this pointer by +0x8" in native_static_check
         and "policy ToS selector wrapper thunk adjusts this pointer by +0x8" in native_static_check
         and "CommandSelectDialog/SceneProxy/MenuWindow lambda" in native_static_check
+        and "policy ToS selector wrapper passes owner+0x29c8 requested flag pointer" in native_static_check
+        and "policy ToS selector wrapper passes owner+0x29d0 selector argument" in native_static_check
+        and "policy ToS selector wrapper no longer calls 0x1409b49f0" in native_static_check
         and "policy ToS ctor wrapper preserves record pointer from rcx in rsi" in native_static_check
         and "policy ToS ctor wrapper loads backing flag pointer from record+0x8" in native_static_check
         and "policy ToS constructor reads backing flag pointer from stack arg1" in native_static_check
@@ -340,7 +351,7 @@ def main() -> int:
         and "policy ToS constructor initializes requested flag owner+0x29c8 from current flag" in native_static_check
         and "policy ToS requested-flag binder passes pointer to owner+0x29c8" in native_static_check
         and "policy ToS requested-flag commit loads requested flag from owner+0x29c8" in native_static_check,
-        "native static checker must pin wrapper-builder ABI, ToS wrapper vtable/thunk/RTTI provenance, status predicate/setter/caller/requested-flag ABI, and inner finalize edge",
+        "native static checker must pin wrapper-builder ABI, ToS wrapper vtable/thunk/RTTI provenance, selector requested-flag ABI, status predicate/setter/caller/requested-flag ABI, and inner finalize edge",
         failures,
     )
 
@@ -566,6 +577,9 @@ def main() -> int:
         and "oracle_policy_ctor_wrapper_original_this" in telemetry_src
         and "oracle_policy_ctor_wrapper_original_vtable" in telemetry_src
         and "oracle_policy_ctor_wrapper_backing_flag_ptr" in telemetry_src
+        and "oracle_policy_selector_wrapper_hits" in telemetry_src
+        and "oracle_policy_selector_wrapper_requested_flag" in telemetry_src
+        and "oracle_policy_selector_wrapper_selector_arg" in telemetry_src
         and "oracle_policy_status_predicate_hits" in telemetry_src
         and "oracle_policy_status_predicate_ret" in telemetry_src
         and "oracle_policy_flag_setter_hits" in telemetry_src
@@ -582,6 +596,10 @@ def main() -> int:
         and "POLICY_TOS_TITLE_WRAPPER_THIS_ADJUST" in lib
         and "POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_THIS" in lib
         and "POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_VTABLE" in lib
+        and "POLICY_TOS_SELECTOR_WRAPPER_RVA" in lib
+        and "POLICY_TOS_SELECTOR_WRAPPER_HITS" in lib
+        and "POLICY_TOS_SELECTOR_WRAPPER_LAST_REQUESTED_FLAG" in lib
+        and "POLICY_TOS_SELECTOR_WRAPPER_LAST_SELECTOR_ARG" in lib
         and "POLICY_TOS_STATUS_PREDICATE_RVA" in lib
         and "POLICY_TOS_STATUS_PREDICATE_ORIG" in lib
         and "POLICY_TOS_FLAG_SETTER_RVA" in lib

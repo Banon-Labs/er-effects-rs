@@ -275,6 +275,9 @@ if (
     or 'oracle_policy_ctor_wrapper_original_this' not in telemetry_src
     or 'oracle_policy_ctor_wrapper_original_vtable' not in telemetry_src
     or 'oracle_policy_ctor_wrapper_backing_flag_ptr' not in telemetry_src
+    or 'oracle_policy_selector_wrapper_hits' not in telemetry_src
+    or 'oracle_policy_selector_wrapper_requested_flag' not in telemetry_src
+    or 'oracle_policy_selector_wrapper_selector_arg' not in telemetry_src
     or 'oracle_policy_status_predicate_hits' not in telemetry_src
     or 'oracle_policy_status_predicate_ret' not in telemetry_src
     or 'oracle_policy_flag_setter_hits' not in telemetry_src
@@ -291,6 +294,10 @@ if (
     or 'POLICY_TOS_TITLE_WRAPPER_THIS_ADJUST' not in lib_code
     or 'POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_THIS' not in lib_code
     or 'POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_VTABLE' not in lib_code
+    or 'POLICY_TOS_SELECTOR_WRAPPER_RVA' not in lib_code
+    or 'POLICY_TOS_SELECTOR_WRAPPER_HITS' not in lib_code
+    or 'POLICY_TOS_SELECTOR_WRAPPER_LAST_REQUESTED_FLAG' not in lib_code
+    or 'POLICY_TOS_SELECTOR_WRAPPER_LAST_SELECTOR_ARG' not in lib_code
     or 'POLICY_TOS_STATUS_PREDICATE_RVA' not in lib_code
     or 'POLICY_TOS_STATUS_PREDICATE_ORIG' not in lib_code
     or 'POLICY_TOS_FLAG_SETTER_RVA' not in lib_code
@@ -336,8 +343,8 @@ if 'product tracing must passively hook native submit, result.vtable+0x60, actio
 if 'telemetry/watcher oracle must expose passive native submit/result-handler/action-builder/wrapper-builder/action-insert hit counts, wrapper/update-RVA proof, same-result proof, and chain stage' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce passive submit/result-chain/wrapper-builder/action-insert wrapper/update-RVA same-result telemetry/stage')
     autoload_static_failures += 1
-if 'native static checker must pin wrapper-builder ABI, ToS wrapper vtable/thunk/RTTI provenance, status predicate/setter/caller/requested-flag ABI, and inner finalize edge' not in check:
-    legacy_failures.append('check-autoload-happy-path does not enforce native wrapper-builder/ToS vtable+RTTI+predicate+setter+caller/requested-flag ABI static check')
+if 'native static checker must pin wrapper-builder ABI, ToS wrapper vtable/thunk/RTTI provenance, selector requested-flag ABI, status predicate/setter/caller/requested-flag ABI, and inner finalize edge' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce native wrapper-builder/ToS vtable+RTTI+selector+predicate+setter+caller/requested-flag ABI static check')
     autoload_static_failures += 1
 if 'telemetry must expose native Continue product phase/guard state for result-chain interpretation' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce Continue phase telemetry')
@@ -358,6 +365,8 @@ if (
     or 'POLICY_TOS_TITLE_CTOR_WRAPPER_VTABLE_SLOT' not in native_static_check
     or 'POLICY_TOS_TITLE_CTOR_WRAPPER_RTTI_COL' not in native_static_check
     or 'POLICY_TOS_SELECTOR_RTTI_COL' not in native_static_check
+    or 'POLICY_TOS_SELECTOR_WRAPPER' not in native_static_check
+    or 'POLICY_TOS_SELECTOR_CTOR' not in native_static_check
     or 'POLICY_TOS_SELECTOR_WRAPPER_VTABLE_SLOT' not in native_static_check
     or 'POLICY_TOS_TITLE_CTOR_CALLER' not in native_static_check
     or 'POLICY_TOS_FLAG_SETTER_CALLER' not in native_static_check
@@ -374,6 +383,8 @@ if (
     or '+0x8' not in native_static_check
     or 'CommandSelectDialog' not in native_static_check
     or 'SceneProxy' not in native_static_check
+    or 'owner+0x29d0 selector argument' not in native_static_check
+    or '0x1409b49f0' not in native_static_check
     or 'MENU_JOB_LIST_CONSUMER' not in native_static_check
     or 'MENU_JOB_SINGLE_CONSUMER' not in native_static_check
     or 'FD4 event code 3' not in native_static_check

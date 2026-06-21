@@ -6332,6 +6332,45 @@ pub(crate) unsafe extern "system" fn policy_tos_title_ctor_wrapper_hook(
     ret
 }
 
+pub(crate) unsafe extern "system" fn policy_tos_selector_wrapper_hook(record: usize) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let owner = if record != null {
+        unsafe { safe_read_usize(record) }.unwrap_or(null)
+    } else {
+        null
+    };
+    let requested_flag = if owner != null {
+        unsafe { safe_read_i32(owner + 0x29c8) }
+            .map(|value| value.max(0) as usize)
+            .unwrap_or(null)
+    } else {
+        null
+    };
+    let selector_arg = if owner != null { owner + 0x29d0 } else { null };
+    let original_this = record.saturating_sub(POLICY_TOS_TITLE_WRAPPER_THIS_ADJUST);
+    let original_vtable = if original_this != null {
+        unsafe { safe_read_usize(original_this) }.unwrap_or(null)
+    } else {
+        null
+    };
+    let orig = POLICY_TOS_SELECTOR_WRAPPER_ORIG.load(Ordering::SeqCst);
+    let ret = if orig == HOOK_ORIGINAL_UNSET {
+        null
+    } else {
+        let f: unsafe extern "system" fn(usize) -> usize = unsafe { std::mem::transmute(orig) };
+        unsafe { f(record) }
+    };
+    POLICY_TOS_SELECTOR_WRAPPER_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    POLICY_TOS_SELECTOR_WRAPPER_LAST_RECORD.store(record, Ordering::SeqCst);
+    POLICY_TOS_SELECTOR_WRAPPER_LAST_ORIGINAL_THIS.store(original_this, Ordering::SeqCst);
+    POLICY_TOS_SELECTOR_WRAPPER_LAST_ORIGINAL_VTABLE.store(original_vtable, Ordering::SeqCst);
+    POLICY_TOS_SELECTOR_WRAPPER_LAST_OWNER.store(owner, Ordering::SeqCst);
+    POLICY_TOS_SELECTOR_WRAPPER_LAST_REQUESTED_FLAG.store(requested_flag, Ordering::SeqCst);
+    POLICY_TOS_SELECTOR_WRAPPER_LAST_SELECTOR_ARG.store(selector_arg, Ordering::SeqCst);
+    POLICY_TOS_SELECTOR_WRAPPER_LAST_RET.store(ret, Ordering::SeqCst);
+    ret
+}
+
 unsafe fn policy_tos_flag_value(owner: usize) -> (usize, usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let flag_ptr = if owner != null {
@@ -6465,6 +6504,27 @@ pub(crate) fn install_policy_tos_title_hook() {
             std::mem::forget(hook);
         }
     }
+    let Ok(selector_wrapper_addr) = game_rva(POLICY_TOS_SELECTOR_WRAPPER_RVA) else {
+        append_autoload_debug(format_args!(
+            "policy-oracle: failed to resolve ToS selector wrapper rva"
+        ));
+        return;
+    };
+    if let Ok(hook) = unsafe {
+        MhHook::new(
+            selector_wrapper_addr as *mut c_void,
+            policy_tos_selector_wrapper_hook as *mut c_void,
+        )
+    } {
+        POLICY_TOS_SELECTOR_WRAPPER_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+        if let Err(status) = unsafe { hook.queue_enable() } {
+            append_autoload_debug(format_args!(
+                "policy-oracle: queue_enable ToS selector wrapper failed: {status:?}"
+            ));
+        } else {
+            std::mem::forget(hook);
+        }
+    }
     let Ok(predicate_addr) = game_rva(POLICY_TOS_STATUS_PREDICATE_RVA) else {
         append_autoload_debug(format_args!(
             "policy-oracle: failed to resolve ToS status predicate rva"
@@ -6533,7 +6593,7 @@ pub(crate) fn install_policy_tos_title_hook() {
                     POLICY_TOS_TITLE_HOOK_INSTALLED
                         .store(POLICY_TOS_TITLE_HOOK_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "policy-oracle: hooked TosTitle ctor 0x{ctor_addr:x}, ctor wrapper 0x{wrapper_addr:x}, status predicate 0x{predicate_addr:x}, and flag setter 0x{flag_setter_addr:x} (native Privacy/ToS surface oracle)"
+                        "policy-oracle: hooked TosTitle ctor 0x{ctor_addr:x}, ctor wrapper 0x{wrapper_addr:x}, selector wrapper 0x{selector_wrapper_addr:x}, status predicate 0x{predicate_addr:x}, and flag setter 0x{flag_setter_addr:x} (native Privacy/ToS surface oracle)"
                     ));
                 }
                 status => append_autoload_debug(format_args!(

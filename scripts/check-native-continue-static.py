@@ -39,6 +39,7 @@ POLICY_TOS_TITLE_CTOR_WRAPPER_VTABLE_SLOT = 0x142B28318
 POLICY_TOS_TITLE_CTOR_WRAPPER_RTTI_COL = 0x143329B58
 POLICY_TOS_SELECTOR_RTTI_COL = 0x143329BD8
 POLICY_TOS_SELECTOR_WRAPPER = 0x1409B6140
+POLICY_TOS_SELECTOR_CTOR = 0x1409B49F0
 POLICY_TOS_SELECTOR_WRAPPER_THUNK = 0x1409B7390
 POLICY_TOS_SELECTOR_WRAPPER_VTABLE_SLOT = 0x142B28350
 POLICY_TOS_TITLE_CTOR_CALLER = 0x1409B60DA
@@ -262,6 +263,14 @@ def main() -> int:
     selector_thunk_jumps = rel32_targets(POLICY_TOS_SELECTOR_WRAPPER_THUNK, policy_selector_thunk, opcode=0xE9)
     if POLICY_TOS_SELECTOR_WRAPPER not in selector_thunk_jumps:
         fail("policy ToS selector wrapper thunk no longer jumps to 0x1409b6140")
+
+    policy_selector_wrapper = image_bytes(POLICY_TOS_SELECTOR_WRAPPER, 0xb0)
+    contains(policy_selector_wrapper, b"\x48\x8b\x16", "policy ToS selector wrapper loads owner pointer from adjusted record")
+    contains(policy_selector_wrapper, b"\x48\x8d\x8a\xc8\x29\x00\x00", "policy ToS selector wrapper passes owner+0x29c8 requested flag pointer")
+    contains(policy_selector_wrapper, b"\x4c\x8d\x8a\xd0\x29\x00\x00", "policy ToS selector wrapper passes owner+0x29d0 selector argument")
+    selector_calls = rel32_targets(POLICY_TOS_SELECTOR_WRAPPER, policy_selector_wrapper, opcode=0xE8)
+    if POLICY_TOS_SELECTOR_CTOR not in selector_calls:
+        fail("policy ToS selector wrapper no longer calls 0x1409b49f0")
 
     policy_ctor_wrapper = image_bytes(POLICY_TOS_TITLE_CTOR_WRAPPER, 0xa0)
     contains(policy_ctor_wrapper, b"\x48\x8b\xf1", "policy ToS ctor wrapper preserves record pointer from rcx in rsi")
