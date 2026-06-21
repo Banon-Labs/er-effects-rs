@@ -109,6 +109,30 @@ LOADJOB_FUNCTOR_VTABLE = 0x02AC7728
 LOADJOB_SAVE_SLOT_SIZE_LOAD = 0x0082C2D5
 LOADJOB_SAVE_SLOT_SIZE_BYTES = bytes.fromhex("ba00002800")  # mov edx, 0x280000
 
+# Startup ToS/legal modal that the zero-input path must not build unnecessarily. The
+# title flow builds TosMultiLangDialog (the multi-language Terms-of-Service modal) via the
+# wrapper 0x9b6070 -> ctor 0x9b5970, UNCONDITIONALLY once invoked (no accept-gate at the
+# build site). The accept-gate predicate 0x9b72b0 returns "ToS satisfied" if the global
+# gate 0x140e4fda0 is true OR owner+0x29c0->[0] != 0 -- but run-243 telemetry shows it is
+# never consulted before the build (oracle_policy_status_predicate_hits=0), so the modal is
+# constructed even though the accepted flag is already 1. RTTI (deobf-rtti-classmap.tsv):
+#   0x142b28100 = TosMultiLangDialog   (the ToS modal -- ctor 0x9b5970 / wrapper 0x9b6070)
+#   0x142b27788 = TosLangSelectDialog  (language-select surface; the title+0x2610 LangSelect)
+#   0x142b26468 = TitleTopDialog       (the actual title menu, not a legal modal)
+# Goal target: suppress/skip the TosMultiLangDialog build when the accept-gate is satisfied
+# (replace the native "show ToS" stepper with our own), keeping zero input.
+TOS_MULTILANG_DIALOG_CTOR = 0x009B5970
+TOS_MULTILANG_DIALOG_CTOR_WRAPPER = 0x009B6070
+TOS_MULTILANG_DIALOG_WRAPPER_PROLOGUE = bytes.fromhex("488bc456574156")
+TOS_MULTILANG_DIALOG_WRAPPER_CTOR_CALL = 0x009B60F6
+TOS_MULTILANG_DIALOG_VTABLE = 0x02B28100
+TOS_LANGSELECT_DIALOG_VTABLE = 0x02B27788
+TITLE_TOP_DIALOG_VTABLE = 0x02B26468
+TOS_ACCEPTED_PREDICATE = 0x009B72B0
+TOS_ACCEPTED_PREDICATE_PROLOGUE = bytes.fromhex("40534883ec20488b5908")
+TOS_ACCEPTED_GATE_CALL = 0x009B72BA
+TOS_ACCEPTED_GATE = 0x00E4FDA0
+
 
 def read_image() -> bytes:
     if not IMAGE.exists():
@@ -325,6 +349,28 @@ def main() -> int:
         "LoadJob must allocate/read the 0x280000-byte save-slot buffer (real save read, not a menu row)",
         failures,
     )
+    require(
+        data[TOS_MULTILANG_DIALOG_CTOR_WRAPPER : TOS_MULTILANG_DIALOG_CTOR_WRAPPER + len(TOS_MULTILANG_DIALOG_WRAPPER_PROLOGUE)]
+        == TOS_MULTILANG_DIALOG_WRAPPER_PROLOGUE,
+        "TosMultiLangDialog ToS-modal build wrapper must remain at 0x9b6070 (zero-input suppress target)",
+        failures,
+    )
+    require(
+        rel32_call_target(data, TOS_MULTILANG_DIALOG_WRAPPER_CTOR_CALL) == TOS_MULTILANG_DIALOG_CTOR,
+        "TosMultiLangDialog wrapper must build the ToS modal via ctor 0x9b5970 (unconditional once invoked)",
+        failures,
+    )
+    require(
+        data[TOS_ACCEPTED_PREDICATE : TOS_ACCEPTED_PREDICATE + len(TOS_ACCEPTED_PREDICATE_PROLOGUE)]
+        == TOS_ACCEPTED_PREDICATE_PROLOGUE,
+        "ToS accept-gate predicate must remain at 0x9b72b0 (this+0x8 owner, then global gate)",
+        failures,
+    )
+    require(
+        rel32_call_target(data, TOS_ACCEPTED_GATE_CALL) == TOS_ACCEPTED_GATE,
+        "ToS accept-gate predicate must call the global ToS-accepted gate 0x140e4fda0",
+        failures,
+    )
 
     idle_callers = find_rel32_callers(data, IDLE_CTOR)
     native_a_callers = find_rel32_callers(data, NATIVE_CTOR_A)
@@ -356,7 +402,11 @@ def main() -> int:
         "title_player_ctrl=NullPlayerMenuCtrl@this+0x6a8 backscreen=BackScreenData@this+0x710 "
         f"native_loadjob=0x{BASE + LOADJOB_CALLBACK:x} "
         "loadjob_type=MenuJobResult(LoadJobContext&) loadjob_save_slot_size=0x280000 "
-        f"loadjob_functor_vtable=0x{BASE + LOADJOB_FUNCTOR_VTABLE:x}"
+        f"loadjob_functor_vtable=0x{BASE + LOADJOB_FUNCTOR_VTABLE:x} "
+        f"tos_modal_build_wrapper=0x{BASE + TOS_MULTILANG_DIALOG_CTOR_WRAPPER:x} "
+        "tos_modal_class=TosMultiLangDialog tos_modal_build=unconditional "
+        f"tos_accept_predicate=0x{BASE + TOS_ACCEPTED_PREDICATE:x} "
+        f"tos_accept_gate=0x{BASE + TOS_ACCEPTED_GATE:x}"
     )
     return 0
 
