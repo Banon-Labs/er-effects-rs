@@ -298,9 +298,11 @@ def main() -> int:
     )
     require(
         "RESULT_EVENT_WRAPPER_INNER_BUILD" in native_static_check
+        and "POLICY_TOS_STATUS_PREDICATE" in native_static_check
         and "wrapper builder returns the original output wrapper pointer" in native_static_check
-        and "result event wrapper builder no longer finalizes payload" in native_static_check,
-        "native static checker must pin wrapper-builder ABI and inner finalize edge",
+        and "result event wrapper builder no longer finalizes payload" in native_static_check
+        and "policy ToS status predicate reads fallback pointer at owner+0x29c0" in native_static_check,
+        "native static checker must pin wrapper-builder ABI, ToS status predicate ABI, and inner finalize edge",
         failures,
     )
 
