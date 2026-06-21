@@ -137,6 +137,40 @@ pub(crate) static MENU_CONTINUE_IDLE_INSERT_LAST_ARG1_UPDATE_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_CONTINUE_IDLE_INSERT_LAST_RET_UPDATE_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TASK_ENQUEUE_GENERIC_HITS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static TASK_ENQUEUE_GENERIC_LAST_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TASK_ENQUEUE_GENERIC_LAST_ARG0: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TASK_ENQUEUE_GENERIC_LAST_ARG0_POINTEE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TASK_ENQUEUE_GENERIC_LAST_ARG1: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TASK_ENQUEUE_GENERIC_LAST_RET: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TASK_ENQUEUE_GENERIC_SAMPLE0_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TASK_ENQUEUE_GENERIC_SAMPLE0_ARG0: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TASK_ENQUEUE_GENERIC_SAMPLE0_ARG0_POINTEE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TASK_ENQUEUE_GENERIC_SAMPLE0_ARG1: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TASK_ENQUEUE_GENERIC_SAMPLE0_RET: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TASK_ENQUEUE_GENERIC_SAMPLE1_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TASK_ENQUEUE_GENERIC_SAMPLE1_ARG0: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TASK_ENQUEUE_GENERIC_SAMPLE1_ARG0_POINTEE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TASK_ENQUEUE_GENERIC_SAMPLE1_ARG1: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TASK_ENQUEUE_GENERIC_SAMPLE1_RET: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TASK_ENQUEUE_GENERIC_IDLE_ITEM_MATCH_HITS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static TASK_ENQUEUE_GENERIC_IDLE_ITEM_LAST_MATCH_KIND: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_LAST_ITEM: AtomicUsize =
@@ -10886,27 +10920,70 @@ pub(crate) unsafe extern "system" fn task_enqueue_hook(
         ));
     }
     let result = unsafe { call_task_enqueue_original(arg0, arg1) }.unwrap_or(arg1);
+    let arg0_pointee = if arg0 as usize != TITLE_OWNER_SCAN_START_ADDRESS {
+        unsafe { safe_read_usize(arg0 as usize) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    let generic_hit = TASK_ENQUEUE_GENERIC_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    TASK_ENQUEUE_GENERIC_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+    TASK_ENQUEUE_GENERIC_LAST_ARG0.store(arg0 as usize, Ordering::SeqCst);
+    TASK_ENQUEUE_GENERIC_LAST_ARG0_POINTEE.store(arg0_pointee, Ordering::SeqCst);
+    TASK_ENQUEUE_GENERIC_LAST_ARG1.store(arg1 as usize, Ordering::SeqCst);
+    TASK_ENQUEUE_GENERIC_LAST_RET.store(result as usize, Ordering::SeqCst);
+    match generic_hit {
+        1 => {
+            TASK_ENQUEUE_GENERIC_SAMPLE0_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+            TASK_ENQUEUE_GENERIC_SAMPLE0_ARG0.store(arg0 as usize, Ordering::SeqCst);
+            TASK_ENQUEUE_GENERIC_SAMPLE0_ARG0_POINTEE.store(arg0_pointee, Ordering::SeqCst);
+            TASK_ENQUEUE_GENERIC_SAMPLE0_ARG1.store(arg1 as usize, Ordering::SeqCst);
+            TASK_ENQUEUE_GENERIC_SAMPLE0_RET.store(result as usize, Ordering::SeqCst);
+        }
+        2 => {
+            TASK_ENQUEUE_GENERIC_SAMPLE1_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+            TASK_ENQUEUE_GENERIC_SAMPLE1_ARG0.store(arg0 as usize, Ordering::SeqCst);
+            TASK_ENQUEUE_GENERIC_SAMPLE1_ARG0_POINTEE.store(arg0_pointee, Ordering::SeqCst);
+            TASK_ENQUEUE_GENERIC_SAMPLE1_ARG1.store(arg1 as usize, Ordering::SeqCst);
+            TASK_ENQUEUE_GENERIC_SAMPLE1_RET.store(result as usize, Ordering::SeqCst);
+        }
+        _ => {}
+    }
     const MENU_CONTINUE_IDLE_INSERT_CALLER_RVA: usize = 0x0076432c;
     const MENU_CONTINUE_IDLE_INSERT_CALLER_START_RVA: usize = 0x007642b0;
     const MENU_CONTINUE_IDLE_INSERT_CALLER_END_RVA: usize = 0x007643c0;
     let idle_ctor_out_slot =
         MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_OUT_SLOT.load(Ordering::SeqCst);
     let idle_ctor_item = MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ITEM.load(Ordering::SeqCst);
-    let arg0_points_to_idle_item = if arg0 as usize != TITLE_OWNER_SCAN_START_ADDRESS {
-        unsafe { safe_read_usize(arg0 as usize) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
-            == idle_ctor_item
+    let arg0_points_to_idle_item = arg0_pointee == idle_ctor_item;
+    const TASK_ENQUEUE_IDLE_MATCH_CALLER_EXACT: usize = 1;
+    const TASK_ENQUEUE_IDLE_MATCH_CALLER_RANGE: usize = 2;
+    const TASK_ENQUEUE_IDLE_MATCH_ARG0_OUT_SLOT: usize = 3;
+    const TASK_ENQUEUE_IDLE_MATCH_ARG0_POINTEE: usize = 4;
+    const TASK_ENQUEUE_IDLE_MATCH_ARG1_ITEM: usize = 5;
+    let stack_contains_idle_caller = callstack_contains_game_rva(
+        MENU_CONTINUE_IDLE_INSERT_CALLER_START_RVA,
+        MENU_CONTINUE_IDLE_INSERT_CALLER_END_RVA,
+    );
+    let idle_match_kind = if caller_rva == MENU_CONTINUE_IDLE_INSERT_CALLER_RVA {
+        TASK_ENQUEUE_IDLE_MATCH_CALLER_EXACT
+    } else if stack_contains_idle_caller {
+        TASK_ENQUEUE_IDLE_MATCH_CALLER_RANGE
+    } else if idle_ctor_out_slot != TITLE_OWNER_SCAN_START_ADDRESS
+        && arg0 as usize == idle_ctor_out_slot
+    {
+        TASK_ENQUEUE_IDLE_MATCH_ARG0_OUT_SLOT
+    } else if idle_ctor_item != TITLE_OWNER_SCAN_START_ADDRESS && arg0_points_to_idle_item {
+        TASK_ENQUEUE_IDLE_MATCH_ARG0_POINTEE
+    } else if idle_ctor_item != TITLE_OWNER_SCAN_START_ADDRESS && arg1 as usize == idle_ctor_item {
+        TASK_ENQUEUE_IDLE_MATCH_ARG1_ITEM
     } else {
-        false
+        TITLE_OWNER_SCAN_START_ADDRESS
     };
-    let idle_continue_insert_match = caller_rva == MENU_CONTINUE_IDLE_INSERT_CALLER_RVA
-        || callstack_contains_game_rva(
-            MENU_CONTINUE_IDLE_INSERT_CALLER_START_RVA,
-            MENU_CONTINUE_IDLE_INSERT_CALLER_END_RVA,
-        )
-        || (idle_ctor_out_slot != TITLE_OWNER_SCAN_START_ADDRESS
-            && arg0 as usize == idle_ctor_out_slot)
-        || (idle_ctor_item != TITLE_OWNER_SCAN_START_ADDRESS
-            && (arg0_points_to_idle_item || arg1 as usize == idle_ctor_item));
+    let idle_continue_insert_match = idle_match_kind != TITLE_OWNER_SCAN_START_ADDRESS;
+    if idle_continue_insert_match {
+        TASK_ENQUEUE_GENERIC_IDLE_ITEM_MATCH_HITS.fetch_add(1, Ordering::SeqCst);
+        TASK_ENQUEUE_GENERIC_IDLE_ITEM_LAST_MATCH_KIND.store(idle_match_kind, Ordering::SeqCst);
+    }
     if idle_continue_insert_match {
         let hit = MENU_CONTINUE_IDLE_INSERT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
         let base = game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);

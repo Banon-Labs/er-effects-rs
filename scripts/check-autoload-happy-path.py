@@ -618,6 +618,12 @@ def main() -> int:
         and "MENU_CONTINUE_IDLE_INSERT_CALLER_START_RVA" in experiments
         and "MENU_CONTINUE_IDLE_INSERT_CALLER_END_RVA" in experiments
         and "callstack_contains_game_rva" in experiments
+        and "TASK_ENQUEUE_GENERIC_HITS" in experiments
+        and "TASK_ENQUEUE_GENERIC_SAMPLE0_CALLER_RVA" in experiments
+        and "TASK_ENQUEUE_GENERIC_SAMPLE1_ARG0_POINTEE" in experiments
+        and "TASK_ENQUEUE_GENERIC_IDLE_ITEM_MATCH_HITS" in experiments
+        and "TASK_ENQUEUE_IDLE_MATCH_ARG0_POINTEE" in experiments
+        and "TASK_ENQUEUE_IDLE_MATCH_ARG1_ITEM" in experiments
         and "MENU_ITEM_UPDATE_HITS" in experiments
         and "MENU_ITEM_UPDATE_SEMANTIC_HITS" in experiments
         and "MENU_CONTINUE_CANDIDATE_ITEM" in experiments
@@ -629,6 +635,10 @@ def main() -> int:
         and "oracle_menu_window_idle_ctor_continue_last_out_slot" in telemetry_src
         and "oracle_menu_continue_idle_insert_hits" in telemetry_src
         and "oracle_menu_continue_idle_insert_last_caller_rva" in telemetry_src
+        and "oracle_task_enqueue_generic_hits" in telemetry_src
+        and "oracle_task_enqueue_generic_sample0_caller_rva" in telemetry_src
+        and "oracle_task_enqueue_generic_sample1_arg0_pointee" in telemetry_src
+        and "oracle_task_enqueue_generic_idle_item_match_hits" in telemetry_src
         and "oracle_menu_window_idle_ctor_last_caller_rva" in telemetry_src
         and "oracle_menu_item_update_hits" in telemetry_src
         and "oracle_menu_continue_candidate_item" in telemetry_src
@@ -648,6 +658,10 @@ def main() -> int:
         and "menu_window_idle_ctor_continue_last_out_slot" in watcher
         and "menu_continue_idle_insert_hits" in watcher
         and "menu_continue_idle_insert_last_caller_rva" in watcher
+        and "task_enqueue_generic_hits" in watcher
+        and "task_enqueue_generic_sample0_caller_rva" in watcher
+        and "task_enqueue_generic_sample1_arg0_pointee" in watcher
+        and "task_enqueue_generic_idle_item_match_hits" in watcher
         and "menu_window_idle_ctor_last_caller_rva" in watcher
         and "menu_item_update_hits" in watcher
         and "menu_continue_candidate_item" in watcher
