@@ -29,6 +29,15 @@ DISABLED_CONTINUE_ENQUEUE_RETURN = 0x00764338
 DISABLED_NEIGHBOR_CALL = 0x00764457
 DISABLED_NEIGHBOR_ENQUEUE_RETURN = 0x00764468
 NATIVE_CTOR_A_TITLE_CALL = 0x009B6854
+NATIVE_TITLE_READY_CALL = 0x009B676B
+NATIVE_TITLE_READY_SKIP_JE = 0x009B6772
+NATIVE_TITLE_REGISTER_CALL = 0x009B6880
+NATIVE_ACCEPT_PREDICATE_LEA = 0x007AC962
+IDLE_ACCEPT_PREDICATE_LEA = 0x007AD025
+NATIVE_ACCEPT_PREDICATE = 0x007AD810
+IDLE_ACCEPT_PREDICATE = 0x007ADD70
+TITLE_DIALOG_READY_PREDICATE = 0x00733150
+TITLE_MENU_REGISTER = 0x007A9250
 
 CONTINUE_DOCALL = 0x00764B80
 CONTINUE_DOCALL_IMPL = 0x00763FC0
@@ -50,6 +59,20 @@ def rel32_call_target(data: bytes, rva: int) -> int:
         raise AssertionError(f"0x{BASE + rva:x} is not a rel32 call; byte=0x{data[rva]:02x}")
     imm = struct.unpack_from("<i", data, rva + 1)[0]
     return (rva + 5 + imm) & 0xFFFF_FFFF
+
+
+def rel32_jcc_target(data: bytes, rva: int) -> int:
+    if data[rva : rva + 2] != b"\x0f\x84":
+        raise AssertionError(f"0x{BASE + rva:x} is not a rel32 je; bytes={data[rva:rva+2].hex()}")
+    imm = struct.unpack_from("<i", data, rva + 2)[0]
+    return (rva + 6 + imm) & 0xFFFF_FFFF
+
+
+def rip_lea_target(data: bytes, rva: int) -> int:
+    if data[rva : rva + 3] != b"\x48\x8d\x05":
+        raise AssertionError(f"0x{BASE + rva:x} is not a RIP-relative lea into rax; bytes={data[rva:rva+3].hex()}")
+    imm = struct.unpack_from("<i", data, rva + 3)[0]
+    return (rva + 7 + imm) & 0xFFFF_FFFF
 
 
 def find_rel32_callers(data: bytes, target_rva: int) -> list[int]:
@@ -97,6 +120,31 @@ def main() -> int:
         failures,
     )
     require(
+        rel32_call_target(data, NATIVE_TITLE_READY_CALL) == TITLE_DIALOG_READY_PREDICATE,
+        "native title builder must be gated by 0x140733150(this+0x2610) before native-row construction",
+        failures,
+    )
+    require(
+        rel32_jcc_target(data, NATIVE_TITLE_READY_SKIP_JE) == 0x009B6966,
+        "native title builder ready failure must skip native-row construction",
+        failures,
+    )
+    require(
+        rel32_call_target(data, NATIVE_TITLE_REGISTER_CALL) == TITLE_MENU_REGISTER,
+        "native title builder must register the native-accept row through 0x1407a9250(this+0x10, row)",
+        failures,
+    )
+    require(
+        rip_lea_target(data, NATIVE_ACCEPT_PREDICATE_LEA) == NATIVE_ACCEPT_PREDICATE,
+        "native constructor A must install native accept predicate 0x1407ad810",
+        failures,
+    )
+    require(
+        rip_lea_target(data, IDLE_ACCEPT_PREDICATE_LEA) == IDLE_ACCEPT_PREDICATE,
+        "idle constructor must install constant-false accept predicate 0x1407add70",
+        failures,
+    )
+    require(
         data[CONTINUE_DOCALL : CONTINUE_DOCALL + 9]
         == bytes.fromhex("4883c108e937f4ffff"),
         "Continue docall must remain adjustor thunk to 0x140763fc0",
@@ -125,7 +173,8 @@ def main() -> int:
         f"idle_callers={len(idle_callers)} native_a_callers={len(native_a_callers)} "
         f"native_b_callers={len(native_b_callers)} "
         f"disabled_continue_return=0x{BASE + DISABLED_CONTINUE_ENQUEUE_RETURN:x} "
-        f"disabled_neighbor_return=0x{BASE + DISABLED_NEIGHBOR_ENQUEUE_RETURN:x}"
+        f"disabled_neighbor_return=0x{BASE + DISABLED_NEIGHBOR_ENQUEUE_RETURN:x} "
+        f"native_ready_skip=0x{BASE + rel32_jcc_target(data, NATIVE_TITLE_READY_SKIP_JE):x}"
     )
     return 0
 

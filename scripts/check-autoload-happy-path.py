@@ -780,8 +780,14 @@ def main() -> int:
         "DISABLED_CONTINUE_CALL" in menu_ctor_static
         and "DISABLED_CONTINUE_ENQUEUE_CALL" in menu_ctor_static
         and "NATIVE_CTOR_A_TITLE_CALL" in menu_ctor_static
+        and "NATIVE_TITLE_READY_CALL" in menu_ctor_static
+        and "NATIVE_TITLE_READY_SKIP_JE" in menu_ctor_static
+        and "NATIVE_TITLE_REGISTER_CALL" in menu_ctor_static
+        and "NATIVE_ACCEPT_PREDICATE_LEA" in menu_ctor_static
+        and "IDLE_ACCEPT_PREDICATE_LEA" in menu_ctor_static
         and "CONTINUE_DOCALL_TABLE_SLOT" in menu_ctor_static
         and "find_rel32_callers" in menu_ctor_static
+        and "rip_lea_target" in menu_ctor_static
         and "check-menu-constructor-static.py" in check_sh
         and "check-menu-constructor-static.py" in measure,
         "quality gates must include static disabled/native MenuWindowJob constructor provenance validation",

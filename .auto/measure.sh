@@ -476,8 +476,14 @@ if (
     or 'DISABLED_CONTINUE_CALL' not in menu_ctor_static_check
     or 'DISABLED_CONTINUE_ENQUEUE_CALL' not in menu_ctor_static_check
     or 'NATIVE_CTOR_A_TITLE_CALL' not in menu_ctor_static_check
+    or 'NATIVE_TITLE_READY_CALL' not in menu_ctor_static_check
+    or 'NATIVE_TITLE_READY_SKIP_JE' not in menu_ctor_static_check
+    or 'NATIVE_TITLE_REGISTER_CALL' not in menu_ctor_static_check
+    or 'NATIVE_ACCEPT_PREDICATE_LEA' not in menu_ctor_static_check
+    or 'IDLE_ACCEPT_PREDICATE_LEA' not in menu_ctor_static_check
     or 'CONTINUE_DOCALL_TABLE_SLOT' not in menu_ctor_static_check
     or 'find_rel32_callers' not in menu_ctor_static_check
+    or 'rip_lea_target' not in menu_ctor_static_check
     or 'check-native-continue-static.py' not in check_sh
     or 'check-menu-constructor-static.py' not in check_sh
 ):
