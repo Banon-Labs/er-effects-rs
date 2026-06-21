@@ -270,6 +270,9 @@ def main() -> int:
         and "oracle_policy_window_backing_flag_value" in telemetry
         and "oracle_policy_window_requested_flag_value" in telemetry
         and "oracle_policy_window_caller_rva" in telemetry
+        and "write_policy_oracle_snapshot" in telemetry
+        and "policy_oracle_snapshot" in telemetry
+        and "telemetry_snapshot_reason" in telemetry
         and "oracle_policy_ctor_wrapper_hits" in telemetry
         and "oracle_policy_ctor_wrapper_original_this" in telemetry
         and "oracle_policy_ctor_wrapper_original_vtable" in telemetry
@@ -633,6 +636,9 @@ def main() -> int:
         and "oracle_policy_window_backing_flag_value" in telemetry_src
         and "oracle_policy_window_requested_flag_value" in telemetry_src
         and "oracle_policy_window_caller_rva" in telemetry_src
+        and "write_policy_oracle_snapshot" in telemetry_src
+        and "policy_oracle_snapshot" in telemetry_src
+        and "telemetry_snapshot_reason" in telemetry_src
         and "oracle_policy_ctor_wrapper_hits" in telemetry_src
         and "oracle_policy_ctor_wrapper_original_this" in telemetry_src
         and "oracle_policy_ctor_wrapper_original_vtable" in telemetry_src
@@ -693,6 +699,7 @@ def main() -> int:
         and "shared_pointee" in experiments
         and "PE_TEXT_SECTION_NAME" in experiments
         and "policy_tos_title_ctor_wrapper_hook" in experiments
+        and "write_policy_oracle_snapshot(\"tos_title_ctor\")" in experiments
         and "policy_tos_record_fields" in experiments
         and "let caller_rva = trace_first_game_caller_rva();" in experiments
         and "trace_first_game_caller_rva" in experiments

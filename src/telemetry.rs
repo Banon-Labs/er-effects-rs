@@ -915,6 +915,66 @@ pub(crate) fn telemetry_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("er-effects-telemetry.json"))
 }
 
+pub(crate) fn write_policy_oracle_snapshot(reason: &str) {
+    let path = telemetry_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let seamless_loaded = seamless_coop_loaded();
+    let policy_total_builds = POLICY_TOS_TITLE_TOTAL_BUILDS.load(Ordering::SeqCst);
+    let policy_any_seen = policy_total_builds != MENU_TRACE_UNSEEN_SEQ;
+    let msgbox_total_builds = MSGBOX_TOTAL_BUILDS.load(Ordering::SeqCst);
+    let msgbox_any_seen = msgbox_total_builds != MENU_TRACE_UNSEEN_SEQ;
+    let server_status_total_seen = SERVER_STATUS_TOTAL_SEEN.load(Ordering::SeqCst);
+    let server_status_any_seen = server_status_total_seen != MENU_TRACE_UNSEEN_SEQ;
+    let body = format!(
+        "{{\n  \"player_available\": false,\n  \"player_seen\": false,\n  \"runtime_mode\": \"{}\",\n  \"seamless_coop_loaded\": {},\n  \"telemetry_source\": \"policy_oracle_snapshot\",\n  \"telemetry_snapshot_reason\": \"{}\",\n  \"simulated_button_presses_total\": 0,\n  \"oracle_msgbox_total_builds\": {},\n  \"oracle_msgbox_any_seen\": {},\n  \"oracle_msgbox_builder_args\": [{}, {}, {}, {}],\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_window_stored_backing_flag_ptr\": {},\n  \"oracle_policy_window_backing_flag_value\": {},\n  \"oracle_policy_window_requested_flag_value\": {},\n  \"oracle_policy_window_caller_rva\": {},\n  \"oracle_policy_ctor_wrapper_hits\": {},\n  \"oracle_policy_ctor_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_wrapper_hits\": {},\n  \"oracle_policy_selector_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_ctor_hits\": {},\n  \"oracle_policy_selector_ctor_requested_flag_value\": {},\n  \"oracle_policy_selector_ctor_caller_rva\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_caller_rva\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_caller_rva\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {}\n}}\n",
+        if seamless_loaded {
+            RUNTIME_MODE_SEAMLESS
+        } else {
+            RUNTIME_MODE_VANILLA_OR_UNKNOWN
+        },
+        seamless_loaded,
+        json_escape(reason),
+        msgbox_total_builds,
+        msgbox_any_seen,
+        MSGBOX_LAST_ARG_RCX.load(Ordering::SeqCst),
+        MSGBOX_LAST_ARG_RDX.load(Ordering::SeqCst),
+        MSGBOX_LAST_ARG_R8.load(Ordering::SeqCst),
+        MSGBOX_LAST_ARG_R9.load(Ordering::SeqCst),
+        policy_total_builds,
+        policy_any_seen,
+        POLICY_TOS_TITLE_LAST_THIS.load(Ordering::SeqCst),
+        POLICY_TOS_TITLE_LAST_VTABLE.load(Ordering::SeqCst),
+        POLICY_TOS_TITLE_LAST_STACK_ARG0.load(Ordering::SeqCst),
+        POLICY_TOS_TITLE_LAST_BACKING_FLAG_PTR.load(Ordering::SeqCst),
+        POLICY_TOS_TITLE_LAST_STORED_BACKING_FLAG_PTR.load(Ordering::SeqCst),
+        POLICY_TOS_TITLE_LAST_BACKING_FLAG_VALUE.load(Ordering::SeqCst),
+        POLICY_TOS_TITLE_LAST_REQUESTED_FLAG_VALUE.load(Ordering::SeqCst),
+        POLICY_TOS_TITLE_LAST_CALLER_RVA.load(Ordering::SeqCst),
+        POLICY_TOS_TITLE_WRAPPER_HITS.load(Ordering::SeqCst),
+        POLICY_TOS_TITLE_WRAPPER_LAST_CALLER_RVA.load(Ordering::SeqCst),
+        POLICY_TOS_SELECTOR_WRAPPER_HITS.load(Ordering::SeqCst),
+        POLICY_TOS_SELECTOR_WRAPPER_LAST_CALLER_RVA.load(Ordering::SeqCst),
+        POLICY_TOS_SELECTOR_CTOR_HITS.load(Ordering::SeqCst),
+        POLICY_TOS_SELECTOR_CTOR_LAST_REQUESTED_FLAG_VALUE.load(Ordering::SeqCst),
+        POLICY_TOS_SELECTOR_CTOR_LAST_CALLER_RVA.load(Ordering::SeqCst),
+        POLICY_TOS_STATUS_HITS.load(Ordering::SeqCst),
+        POLICY_TOS_STATUS_LAST_CALLER_RVA.load(Ordering::SeqCst),
+        POLICY_TOS_FLAG_SETTER_HITS.load(Ordering::SeqCst),
+        POLICY_TOS_FLAG_SETTER_LAST_CALLER_RVA.load(Ordering::SeqCst),
+        server_status_total_seen,
+        server_status_any_seen,
+        SERVER_STATUS_LAST_STATE.load(Ordering::SeqCst),
+        SERVER_STATUS_LAST_TEXT_ID.load(Ordering::SeqCst)
+    );
+    let tmp_path = path.with_extension("json.tmp");
+    if fs::write(&tmp_path, body).is_ok() {
+        let _ = fs::rename(tmp_path, path);
+    }
+    write_bootstrap_event(BOOTSTRAP_EVENT_POLICY_TELEMETRY_SNAPSHOT, reason);
+}
+
 pub(crate) fn command_path() -> PathBuf {
     std::env::var_os("ER_EFFECTS_COMMAND_PATH")
         .map(PathBuf::from)

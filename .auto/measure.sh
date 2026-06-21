@@ -283,6 +283,9 @@ if (
     or 'oracle_policy_window_backing_flag_value' not in telemetry_src
     or 'oracle_policy_window_requested_flag_value' not in telemetry_src
     or 'oracle_policy_window_caller_rva' not in telemetry_src
+    or 'write_policy_oracle_snapshot' not in telemetry_src
+    or 'policy_oracle_snapshot' not in telemetry_src
+    or 'telemetry_snapshot_reason' not in telemetry_src
     or 'oracle_policy_ctor_wrapper_hits' not in telemetry_src
     or 'oracle_policy_ctor_wrapper_original_this' not in telemetry_src
     or 'oracle_policy_ctor_wrapper_original_vtable' not in telemetry_src
@@ -343,6 +346,7 @@ if (
     or 'shared_pointee' not in exp_code
     or 'PE_TEXT_SECTION_NAME' not in exp_code
     or 'policy_tos_title_ctor_wrapper_hook' not in exp_code
+    or 'write_policy_oracle_snapshot("tos_title_ctor")' not in exp_code
     or 'policy_tos_record_fields' not in exp_code
     or 'let caller_rva = trace_first_game_caller_rva();' not in exp_code
     or 'trace_first_game_caller_rva' not in exp_code
