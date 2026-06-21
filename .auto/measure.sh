@@ -14,6 +14,7 @@ check = (root / 'scripts/check-autoload-happy-path.py').read_text(encoding='utf-
 telemetry_src = (root / 'src/telemetry.rs').read_text(encoding='utf-8', errors='replace')
 watcher = (root / 'scripts/er-readiness-watch.py').read_text(encoding='utf-8', errors='replace')
 native_static_check = (root / 'scripts/check-native-continue-static.py').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/check-native-continue-static.py').exists() else ''
+launch_guard_check = (root / 'scripts/check-launch-guardrails.py').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/check-launch-guardrails.py').exists() else ''
 check_sh = (root / 'scripts/check.sh').read_text(encoding='utf-8', errors='replace')
 prompt = (root / '.auto/prompt.md').read_text(encoding='utf-8', errors='replace') if (root / '.auto/prompt.md').exists() else ''
 combined = lib + '\n' + exp
@@ -341,6 +342,16 @@ if (
     autoload_static_failures += 1
 if 'quality gates must include skip-safe native Continue/MenuWindowJob/MenuMemberFuncJob/result-consumer static byte-window validation' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce native Continue/MenuMemberFuncJob/result-consumer static checker wiring')
+    autoload_static_failures += 1
+if (
+    'ARTIFACT_FORBIDDEN_SCAN_ROOTS' not in launch_guard_check
+    or 'artifact_forbidden_launch_findings' not in launch_guard_check
+    or 'artifact-forbidden-elden-ring-launch' not in launch_guard_check
+    or 'ARTIFACT_FORBIDDEN_LAUNCH_TERMS' not in launch_guard_check
+    or 'steam://rungameid/1245620' not in launch_guard_check
+    or 'check-launch-guardrails.py' not in check_sh
+):
+    legacy_failures.append('quality gates do not scan generated runtime artifacts for forbidden Elden Ring Steam/protected launch forms')
     autoload_static_failures += 1
 
 asset_failures: list[str] = []

@@ -24,6 +24,23 @@ SMOKE_DRIVER = REPO_ROOT / "scripts" / "er-smoke-driver.sh"
 RUNTIME_PROBE = REPO_ROOT / ".auto" / "runtime_probe.sh"
 RELEASE_SCRIPT = REPO_ROOT / "scripts" / "stage-autoload-release.sh"
 AUTO_LOG = REPO_ROOT / ".auto" / "log.jsonl"
+ARTIFACT_FORBIDDEN_SCAN_ROOTS = (
+    REPO_ROOT / "target" / "autoresearch",
+    REPO_ROOT / "target" / "runtime-probe",
+)
+ARTIFACT_TEXT_SUFFIXES = (".sh", ".bash", ".ps1", ".cmd", ".bat")
+ARTIFACT_TEXT_SCAN_MAX_BYTES = 2_000_000
+ARTIFACT_FORBIDDEN_LAUNCH_TERMS = (
+    "steam steam://rungameid/1245620",
+    "steam steam://run/1245620",
+    "steam -applaunch 1245620",
+    "xdg-open steam://rungameid/1245620",
+    "xdg-open steam://run/1245620",
+    "proton-protected-run",
+    "start_protected_game.exe via Proton",
+    'run "$GAME_DIR/start_protected_game.exe"',
+    "run '$GAME_DIR/start_protected_game.exe'",
+)
 
 POLICY_REQUIRED_SNIPPETS = (
     "package cupcake.policies.bash_elden_ring_launch_guard",
@@ -128,6 +145,36 @@ def forbidden_line_findings(path: Path, snippets: tuple[str, ...], rule: str, gu
     return findings
 
 
+def artifact_forbidden_launch_findings() -> list[Finding]:
+    findings: list[Finding] = []
+    for root in ARTIFACT_FORBIDDEN_SCAN_ROOTS:
+        if not root.exists():
+            continue
+        for path in sorted(root.glob("**/*")):
+            if not path.is_file() or path.suffix.lower() not in ARTIFACT_TEXT_SUFFIXES:
+                continue
+            try:
+                if path.stat().st_size > ARTIFACT_TEXT_SCAN_MAX_BYTES:
+                    continue
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for line_no, line in enumerate(text.splitlines(), start=1):
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                for term in ARTIFACT_FORBIDDEN_LAUNCH_TERMS:
+                    if term in line:
+                        findings.append(Finding(
+                            rel(path),
+                            line_no,
+                            "artifact-forbidden-elden-ring-launch",
+                            stripped,
+                            "Delete or regenerate the artifact through an approved direct/offline eldenring.exe runtime path; never run Steam/AppID 1245620 or start_protected_game.exe from agent artifacts.",
+                        ))
+    return findings
+
+
 def artifact_contents_findings() -> list[Finding]:
     findings: list[Finding] = []
     target = REPO_ROOT / "target"
@@ -176,6 +223,7 @@ def scan_contract() -> list[Finding]:
     findings.extend(forbidden_line_findings(SMOKE_DRIVER, SMOKE_DRIVER_FORBIDDEN_SNIPPETS, "smoke-driver-forbidden-launch-mode", "Remove Steam and start_protected_game launch modes from the smoke driver; only direct offline eldenring.exe launch may remain."))
     findings.extend(forbidden_line_findings(RUNTIME_PROBE, RUNTIME_PROBE_FORBIDDEN_SNIPPETS, "runtime-probe-bundles-ersc-into-target", "Do not stage SeamlessCoop/ersc.dll into repo target artifacts; stage locally beside the source file if it must be temporarily moved."))
     findings.extend(forbidden_line_findings(RELEASE_SCRIPT, RELEASE_FORBIDDEN_SNIPPETS, "release-script-bundles-ersc", "Release staging must include only LazyLoader proxy/config and er_effects_rs.dll, never SeamlessCoop/ersc.dll."))
+    findings.extend(artifact_forbidden_launch_findings())
     findings.extend(artifact_contents_findings())
     return findings
 
@@ -198,7 +246,7 @@ def audit_historical_launches() -> list[dict[str, object]]:
                     "forbidden_terms": hits,
                     "remediation": "Do not repeat this launch path; use the approved direct/offline eldenring.exe runtime path only when explicitly authorized.",
                 })
-    current_artifact_findings = [finding.to_json() for finding in artifact_contents_findings()]
+    current_artifact_findings = [finding.to_json() for finding in artifact_forbidden_launch_findings() + artifact_contents_findings()]
     if current_artifact_findings:
         incidents.append({
             "run": None,
