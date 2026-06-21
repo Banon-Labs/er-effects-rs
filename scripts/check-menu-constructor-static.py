@@ -72,6 +72,25 @@ DISABLED_CONTINUE_STEP_UPDATE_INSTALL = 0x007651CF
 DISABLED_CONTINUE_STEP_VTABLE_INSTALL = 0x007651C1
 DISABLED_CONTINUE_STEP_VTABLE = 0x02A9BE20
 
+# RTTI identities for the disabled-Continue builder chain (from
+# docs/recon/deobf-rtti-classmap.tsv). They prove this region is CSMenuManImp's title
+# MenuWindow-building update task and that the row's accept is a constant-false (idle)
+# std::function lambda -- i.e. the idle row the product must NOT promote, and which is
+# unrelated to title+0x2610 LangSelect readiness.
+#   0x142a9be20 = CSEzUpdateTask<CSEzTask, CSMenuManImp>  (the step; owner this = CSMenuManImp menu obj)
+#   0x142a9b958 = _Func_base<MenuWindow*, SceneProxy&>    (Continue row docall functor base)
+#   0x142a9b9c8 = _Func_impl<lambda, MenuWindow*, SceneProxy&> (the lambda impl)
+#   0x142a9bcb8 = NullPlayerMenuCtrl  (installed at this+0x6a8 -- title has no player)
+#   0x142a9be00 = BackScreenData      (installed at this+0x710)
+CONTINUE_FUNC_BASE_LEA = 0x007642DE
+CONTINUE_FUNC_BASE_VTABLE = 0x02A9B958
+CONTINUE_FUNC_IMPL_LEA = 0x007642E9
+CONTINUE_FUNC_IMPL_VTABLE = 0x02A9B9C8
+NULL_PLAYER_MENU_CTRL_INSTALL = 0x00765127
+NULL_PLAYER_MENU_CTRL_VTABLE = 0x02A9BCB8
+BACKSCREEN_DATA_INSTALL = 0x00765152
+BACKSCREEN_DATA_VTABLE = 0x02A9BE00
+
 
 def read_image() -> bytes:
     if not IMAGE.exists():
@@ -251,6 +270,22 @@ def main() -> int:
         "disabled Continue builder must have exactly one owner/caller: the title step-update method",
         failures,
     )
+    require(
+        rip_lea_target(data, CONTINUE_FUNC_BASE_LEA) == CONTINUE_FUNC_BASE_VTABLE
+        and rip_lea_target(data, CONTINUE_FUNC_IMPL_LEA) == CONTINUE_FUNC_IMPL_VTABLE,
+        "disabled Continue builder must build the _Func_base/_Func_impl<MenuWindow*,SceneProxy&> docall functor",
+        failures,
+    )
+    require(
+        rip_lea_target(data, NULL_PLAYER_MENU_CTRL_INSTALL) == NULL_PLAYER_MENU_CTRL_VTABLE,
+        "title step ctor must install NullPlayerMenuCtrl at this+0x6a8 (title has no player)",
+        failures,
+    )
+    require(
+        rip_lea_target(data, BACKSCREEN_DATA_INSTALL) == BACKSCREEN_DATA_VTABLE,
+        "title step ctor must install BackScreenData at this+0x710",
+        failures,
+    )
 
     idle_callers = find_rel32_callers(data, IDLE_CTOR)
     native_a_callers = find_rel32_callers(data, NATIVE_CTOR_A)
@@ -276,7 +311,10 @@ def main() -> int:
         f"disabled_continue_owner=0x{BASE + DISABLED_CONTINUE_STEP_UPDATE:x} "
         f"disabled_continue_step_vtable=0x{BASE + DISABLED_CONTINUE_STEP_VTABLE:x} "
         "disabled_continue_gate=this+0x6b0&!this+0x6b1 disabled_continue_row=this+0x708 "
-        f"disabled_continue_builder_callers={len(builder_callers)}"
+        f"disabled_continue_builder_callers={len(builder_callers)} "
+        "step_class=CSEzUpdateTask<CSEzTask,CSMenuManImp> "
+        "continue_docall_functor=_Func_impl<lambda,MenuWindow*,SceneProxy&> "
+        "title_player_ctrl=NullPlayerMenuCtrl@this+0x6a8 backscreen=BackScreenData@this+0x710"
     )
     return 0
 
