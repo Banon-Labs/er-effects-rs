@@ -260,6 +260,10 @@ if (
     or 'oracle_native_submit_hits' not in telemetry_src
     or 'oracle_result_event_handler_hits' not in telemetry_src
     or 'oracle_result_action_builder_hits' not in telemetry_src
+    or 'oracle_result_event_last_code' not in telemetry_src
+    or 'oracle_result_event_last_payload' not in telemetry_src
+    or 'oracle_result_action_last_code' not in telemetry_src
+    or 'oracle_result_action_last_payload' not in telemetry_src
     or 'native_submit_entered' not in watcher
     or 'native_result_chain_same_result' not in watcher
     or 'native_result_chain_ready' not in watcher

@@ -9770,6 +9770,22 @@ unsafe fn result_built_flag(result: usize) -> usize {
     }
 }
 
+unsafe fn native_result_event_words(event: usize) -> (usize, usize) {
+    const EVENT_CODE_OFFSET: usize = 0;
+    const EVENT_PAYLOAD_OFFSET: usize = core::mem::size_of::<usize>();
+    if event == TITLE_OWNER_SCAN_START_ADDRESS {
+        return (
+            TITLE_OWNER_SCAN_START_ADDRESS,
+            TITLE_OWNER_SCAN_START_ADDRESS,
+        );
+    }
+    let code = unsafe { safe_read_usize(event + EVENT_CODE_OFFSET) }
+        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let payload = unsafe { safe_read_usize(event + EVENT_PAYLOAD_OFFSET) }
+        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    (code, payload)
+}
+
 pub(crate) unsafe extern "system" fn native_submit_hook(result: usize) {
     const TRACE_FIRST: usize = 16;
     let seq =
@@ -9798,10 +9814,15 @@ pub(crate) unsafe extern "system" fn result_event_handler_hook(result: usize, ev
         + OWN_STEPPER_CALL_INC;
     RESULT_EVENT_LAST_RESULT.store(result, Ordering::SeqCst);
     RESULT_EVENT_LAST_EVENT.store(event, Ordering::SeqCst);
+    let (event_code, event_payload) = unsafe { native_result_event_words(event) };
+    RESULT_EVENT_LAST_CODE.store(event_code, Ordering::SeqCst);
+    RESULT_EVENT_LAST_PAYLOAD.store(event_payload, Ordering::SeqCst);
     let built_before = unsafe { result_built_flag(result) };
     if seq <= TRACE_FIRST {
         append_continue_trace(format_args!(
-            "result_event_handler_746e80 seq={seq} phase=ENTER result=0x{result:x} event=0x{event:x} built_before={} {}",
+            "result_event_handler_746e80 seq={seq} phase=ENTER result=0x{result:x} event=0x{event:x} event_code={} event_payload={} built_before={} {}",
+            format_optional_usize_hex(event_code),
+            format_optional_usize_hex(event_payload),
             format_optional_usize_hex(built_before),
             trace_callers_summary()
         ));
@@ -9823,9 +9844,14 @@ pub(crate) unsafe extern "system" fn result_action_builder_hook(result: usize, e
         + OWN_STEPPER_CALL_INC;
     RESULT_ACTION_LAST_RESULT.store(result, Ordering::SeqCst);
     RESULT_ACTION_LAST_EVENT.store(event, Ordering::SeqCst);
+    let (event_code, event_payload) = unsafe { native_result_event_words(event) };
+    RESULT_ACTION_LAST_CODE.store(event_code, Ordering::SeqCst);
+    RESULT_ACTION_LAST_PAYLOAD.store(event_payload, Ordering::SeqCst);
     if seq <= TRACE_FIRST {
         append_continue_trace(format_args!(
-            "result_action_builder_746a00 seq={seq} phase=ENTER result=0x{result:x} event=0x{event:x} built={} {}",
+            "result_action_builder_746a00 seq={seq} phase=ENTER result=0x{result:x} event=0x{event:x} event_code={} event_payload={} built={} {}",
+            format_optional_usize_hex(event_code),
+            format_optional_usize_hex(event_payload),
             format_optional_usize_hex(unsafe { result_built_flag(result) }),
             trace_callers_summary()
         ));
