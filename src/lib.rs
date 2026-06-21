@@ -2239,6 +2239,11 @@ pub(crate) static MENU_CONTINUE_ROW_ENTRY: AtomicUsize =
 /// the FD4 registry enqueue hook after TitleTopDialog::open_menu materializes the native menu.
 pub(crate) static MENU_CONTINUE_TASK_NODE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Native TitleTopDialog Continue MenuMemberFuncJob node whose member function reaches
+/// ContinueWrapper 0x14082bac0. This is a passive semantic latch only; product proof must still
+/// advance through native accept/submit semantics, not direct-load shortcuts.
+pub(crate) static MENU_CONTINUE_MEMBER_NODE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// router_this ctor RVA and its installed (runtime) primary vtable RVA (= base+this at runtime;
 /// on-disk objdump shows 0x2af9270, +0xe00 dump/PE skew).
 /// REAL function entry is 0x1409060d0 (`rex push rbp` prologue, objdump-verified); the doc's

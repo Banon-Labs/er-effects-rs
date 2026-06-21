@@ -9831,6 +9831,53 @@ unsafe fn capture_continue_task_node_candidate(base: usize, candidate: usize, la
     }
 }
 
+unsafe fn capture_continue_member_node_candidate(base: usize, candidate: usize, label: &str) {
+    const MEMBER_DIALOG_10: usize = core::mem::size_of::<usize>() + core::mem::size_of::<usize>();
+    const MEMBER_FN_18: usize = 0x18;
+    const MEMBER_ADJ_20: usize = 0x20;
+    const JMP_HOPS: usize = 6;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if candidate == null {
+        return;
+    }
+    let node_vt = unsafe { safe_read_usize(candidate) }.unwrap_or(null);
+    if node_vt != base + MEMBERFUNCJOB_VTABLE_RVA {
+        return;
+    }
+    let member_fn = unsafe { safe_read_usize(candidate + MEMBER_FN_18) }.unwrap_or(null);
+    if member_fn == null {
+        return;
+    }
+    let continue_wrapper = base + TRACE_MENU_CONTINUE_WRAPPER_RVA as usize;
+    let mut target = member_fn;
+    let mut hop = 0;
+    while hop < JMP_HOPS && target != null {
+        if target == continue_wrapper {
+            let member_dialog =
+                unsafe { safe_read_usize(candidate + MEMBER_DIALOG_10) }.unwrap_or(null);
+            let member_adjust =
+                unsafe { safe_read_usize(candidate + MEMBER_ADJ_20) }.unwrap_or(null);
+            if MENU_CONTINUE_MEMBER_NODE
+                .compare_exchange(null, candidate, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                append_continue_trace(format_args!(
+                    "CAP continue_member_node {label}=0x{candidate:x} node_vt=0x{node_vt:x} member_dialog=0x{member_dialog:x} member_fn=0x{member_fn:x} member_adjust=0x{member_adjust:x} -- captured registered TitleTopDialog Continue MenuMemberFuncJob"
+                ));
+                append_autoload_debug(format_args!(
+                    "product-core-autoload: captured registered TitleTopDialog Continue MenuMemberFuncJob from {label}=0x{candidate:x} member_fn=0x{member_fn:x}"
+                ));
+            }
+            return;
+        }
+        match unsafe { decode_thunk_hop(target) } {
+            Some(next) => target = next,
+            None => break,
+        }
+        hop += 1;
+    }
+}
+
 pub(crate) unsafe extern "system" fn task_enqueue_hook(
     arg0: *mut c_void,
     arg1: *mut c_void,
@@ -9858,6 +9905,8 @@ pub(crate) unsafe extern "system" fn task_enqueue_hook(
     if let Ok(base) = game_module_base() {
         unsafe { capture_continue_task_node_candidate(base, arg1 as usize, "arg1") };
         unsafe { capture_continue_task_node_candidate(base, result as usize, "ret") };
+        unsafe { capture_continue_member_node_candidate(base, arg1 as usize, "arg1") };
+        unsafe { capture_continue_member_node_candidate(base, result as usize, "ret") };
     }
     unsafe {
         log_menu_insert_details(

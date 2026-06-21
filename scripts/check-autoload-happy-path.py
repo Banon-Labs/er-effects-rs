@@ -203,6 +203,18 @@ def main() -> int:
         "product Continue capture must observe MenuWindowJob construction before update-time first-item latching",
         failures,
     )
+    member_latch_body = rust_fn_body(experiments, "capture_continue_member_node_candidate")
+    require(
+        "MENU_CONTINUE_MEMBER_NODE" in lib
+        and "TRACE_MENU_CONTINUE_WRAPPER_RVA" in member_latch_body
+        and "MEMBERFUNCJOB_VTABLE_RVA" in member_latch_body
+        and "MEMBER_FN_18" in member_latch_body
+        and "MEMBER_ADJ_20" in member_latch_body
+        and "capture_continue_member_node_candidate(base, arg1" in experiments
+        and "capture_continue_member_node_candidate(base, result" in experiments,
+        "product tracing must passively latch registered TitleTopDialog Continue MenuMemberFuncJob nodes",
+        failures,
+    )
 
     online_body = rust_fn_body(experiments, "online_disable_enabled")
     input_body = rust_fn_body(experiments, "block_input_enabled")
@@ -380,6 +392,13 @@ def main() -> int:
         and "MENU_WINDOW_JOB_CTOR_RVA" in lib
         and "cap_menu_window_job_ctor_7ac8c0" in experiments,
         "measure must fail closed if the product lacks a constructor-time semantic Continue latch",
+        failures,
+    )
+    require(
+        "registered TitleTopDialog Continue MenuMemberFuncJob" in measure
+        and "MENU_CONTINUE_MEMBER_NODE" in lib
+        and "capture_continue_member_node_candidate" in experiments,
+        "measure must fail closed if the product lacks passive Continue MenuMemberFuncJob provenance latching",
         failures,
     )
     require(

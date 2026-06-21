@@ -225,6 +225,21 @@ if (
 if 'product Continue capture must observe MenuWindowJob construction before update-time first-item latching' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce constructor hook semantic Continue latch')
     autoload_static_failures += 1
+member_latch_body = function_body('capture_continue_member_node_candidate', exp_code) or ''
+if (
+    'MENU_CONTINUE_MEMBER_NODE' not in lib_code
+    or 'TRACE_MENU_CONTINUE_WRAPPER_RVA' not in member_latch_body
+    or 'MEMBERFUNCJOB_VTABLE_RVA' not in member_latch_body
+    or 'MEMBER_FN_18' not in member_latch_body
+    or 'MEMBER_ADJ_20' not in member_latch_body
+    or 'capture_continue_member_node_candidate(base, arg1' not in exp_code
+    or 'capture_continue_member_node_candidate(base, result' not in exp_code
+):
+    legacy_failures.append('product tracing lacks passive registered TitleTopDialog Continue MenuMemberFuncJob latch')
+    autoload_static_failures += 1
+if 'product tracing must passively latch registered TitleTopDialog Continue MenuMemberFuncJob nodes' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce passive Continue MenuMemberFuncJob latch')
+    autoload_static_failures += 1
 if (
     'MENU_CONTINUE_WRAPPER' not in native_static_check
     or 'MENU_WINDOW_JOB_CTOR' not in native_static_check
