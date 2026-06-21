@@ -267,10 +267,12 @@ if (
     or 'oracle_result_action_last_word1' not in telemetry_src
     or 'oracle_result_action_wrapper_builder_hits' not in telemetry_src
     or 'oracle_result_action_last_wrapper_builder_ret' not in telemetry_src
+    or 'oracle_result_action_last_wrapper_builder_ret_update_rva' not in telemetry_src
     or 'oracle_result_action_insert_hits' not in telemetry_src
     or 'oracle_result_action_last_insert_arg1_update_rva' not in telemetry_src
     or 'oracle_result_action_last_insert_ret_update_rva' not in telemetry_src
     or 'RESULT_ACTION_WRAPPER_BUILDER_HITS' not in lib_code
+    or 'RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA' not in lib_code
     or 'RESULT_ACTION_INSERT_HITS' not in lib_code
     or 'RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA' not in lib_code
     or 'callstack_contains_game_rva' not in exp_code
@@ -280,9 +282,11 @@ if (
     or 'native_result_chain_ready' not in watcher
     or 'native_continue_chain_stage' not in watcher
     or 'result_action_wrapper_built' not in watcher
+    or 'result_action_wrapper_has_update_rva' not in watcher
     or 'result_action_inserted' not in watcher
     or 'result_action_insert_has_update_rva' not in watcher
     or 'result_chain_waiting_wrapper_builder' not in watcher
+    or 'wrapper_builder_without_update_rva' not in watcher
     or 'wrapper_builder_waiting_action_insert' not in watcher
     or 'action_insert_without_update_rva' not in watcher
     or 'action_insert_waiting_continue_load' not in watcher
@@ -298,8 +302,8 @@ if (
 if 'product tracing must passively hook native submit, result.vtable+0x60, action builder, and wrapper builder without direct load shortcuts' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce passive submit/result-chain/action-builder/wrapper-builder hooks')
     autoload_static_failures += 1
-if 'telemetry/watcher oracle must expose passive native submit/result-handler/action-builder/wrapper-builder/action-insert hit counts, update-RVA proof, same-result proof, and chain stage' not in check:
-    legacy_failures.append('check-autoload-happy-path does not enforce passive submit/result-chain/wrapper-builder/action-insert update-RVA same-result telemetry/stage')
+if 'telemetry/watcher oracle must expose passive native submit/result-handler/action-builder/wrapper-builder/action-insert hit counts, wrapper/update-RVA proof, same-result proof, and chain stage' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce passive submit/result-chain/wrapper-builder/action-insert wrapper/update-RVA same-result telemetry/stage')
     autoload_static_failures += 1
 if 'native static checker must pin wrapper-builder ABI and inner finalize edge' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce native wrapper-builder ABI static check')

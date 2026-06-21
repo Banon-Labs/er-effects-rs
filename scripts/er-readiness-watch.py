@@ -623,6 +623,11 @@ def telemetry_result_action_wrapper_built(telemetry: dict[str, Any]) -> bool:
     return as_int(telemetry.get("oracle_result_action_wrapper_builder_hits"), 0) > 0
 
 
+def telemetry_result_action_wrapper_has_update_rva(telemetry: dict[str, Any]) -> bool:
+    value = telemetry.get("oracle_result_action_last_wrapper_builder_ret_update_rva")
+    return isinstance(value, str) and value.startswith("0x")
+
+
 def telemetry_result_action_insert_has_update_rva(telemetry: dict[str, Any]) -> bool:
     for key in (
         "oracle_result_action_last_insert_arg1_update_rva",
@@ -638,6 +643,7 @@ def telemetry_native_continue_chain_stage(telemetry: dict[str, Any]) -> str:
     phase = as_int(telemetry.get("oracle_continue_phase"), -1)
     result_chain_ready = telemetry_native_result_chain_ready(telemetry)
     action_wrapper_built = telemetry_result_action_wrapper_built(telemetry)
+    action_wrapper_has_update_rva = telemetry_result_action_wrapper_has_update_rva(telemetry)
     action_inserted = telemetry_result_action_inserted(telemetry)
     action_insert_has_update_rva = telemetry_result_action_insert_has_update_rva(telemetry)
     deser_fired = as_int(telemetry.get("oracle_continue_deser_fired"), 0)
@@ -652,8 +658,10 @@ def telemetry_native_continue_chain_stage(telemetry: dict[str, Any]) -> str:
         return "action_insert_waiting_continue_load"
     if phase >= 3 and result_chain_ready and action_inserted:
         return "action_insert_without_update_rva"
-    if phase >= 3 and result_chain_ready and action_wrapper_built:
+    if phase >= 3 and result_chain_ready and action_wrapper_built and action_wrapper_has_update_rva:
         return "wrapper_builder_waiting_action_insert"
+    if phase >= 3 and result_chain_ready and action_wrapper_built:
+        return "wrapper_builder_without_update_rva"
     if phase >= 3 and result_chain_ready:
         return "result_chain_waiting_wrapper_builder"
     if phase >= 3 and telemetry_native_submit_entered(telemetry):
@@ -720,6 +728,7 @@ def oracle_summary(
         "result_action_last_wrapper_builder_rdx": telemetry.get("oracle_result_action_last_wrapper_builder_rdx"),
         "result_action_last_wrapper_builder_r8": telemetry.get("oracle_result_action_last_wrapper_builder_r8"),
         "result_action_last_wrapper_builder_ret": telemetry.get("oracle_result_action_last_wrapper_builder_ret"),
+        "result_action_last_wrapper_builder_ret_update_rva": telemetry.get("oracle_result_action_last_wrapper_builder_ret_update_rva"),
         "result_action_insert_hits": telemetry.get("oracle_result_action_insert_hits"),
         "result_action_last_insert_arg0": telemetry.get("oracle_result_action_last_insert_arg0"),
         "result_action_last_insert_arg1": telemetry.get("oracle_result_action_last_insert_arg1"),
@@ -745,6 +754,7 @@ def oracle_summary(
         "native_submit_fd4_event_match": telemetry_native_submit_fd4_event_match(telemetry),
         "native_result_chain_ready": telemetry_native_result_chain_ready(telemetry),
         "result_action_wrapper_built": telemetry_result_action_wrapper_built(telemetry),
+        "result_action_wrapper_has_update_rva": telemetry_result_action_wrapper_has_update_rva(telemetry),
         "result_action_inserted": telemetry_result_action_inserted(telemetry),
         "result_action_insert_has_update_rva": telemetry_result_action_insert_has_update_rva(telemetry),
         "native_continue_chain_stage": telemetry_native_continue_chain_stage(telemetry),

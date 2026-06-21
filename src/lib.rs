@@ -2299,6 +2299,8 @@ pub(crate) static RESULT_ACTION_LAST_WRAPPER_BUILDER_R8: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static RESULT_ACTION_LAST_WRAPPER_BUILDER_RET: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// router_this ctor RVA and its installed (runtime) primary vtable RVA (= base+this at runtime;
 /// on-disk objdump shows 0x2af9270, +0xe00 dump/PE skew).
 /// REAL function entry is 0x1409060d0 (`rex push rbp` prologue, objdump-verified); the doc's

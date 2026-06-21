@@ -9889,13 +9889,21 @@ pub(crate) unsafe extern "system" fn result_event_wrapper_builder_hook(
         let seq = RESULT_ACTION_WRAPPER_BUILDER_HITS
             .fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
             + OWN_STEPPER_CALL_INC;
+        let base = game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        let ret_update_rva = if base == TITLE_OWNER_SCAN_START_ADDRESS {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        } else {
+            unsafe { task_node_update_rva(base, result) }
+        };
         RESULT_ACTION_LAST_WRAPPER_BUILDER_RCX.store(rcx, Ordering::SeqCst);
         RESULT_ACTION_LAST_WRAPPER_BUILDER_RDX.store(rdx, Ordering::SeqCst);
         RESULT_ACTION_LAST_WRAPPER_BUILDER_R8.store(r8, Ordering::SeqCst);
         RESULT_ACTION_LAST_WRAPPER_BUILDER_RET.store(result, Ordering::SeqCst);
+        RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA.store(ret_update_rva, Ordering::SeqCst);
         if seq <= TRACE_FIRST {
             append_continue_trace(format_args!(
-                "result_event_wrapper_builder_744a60 seq={seq} rcx=0x{rcx:x} rdx=0x{rdx:x} r8=0x{r8:x} ret=0x{result:x} -- passive wrapper-builder call from result action builder"
+                "result_event_wrapper_builder_744a60 seq={seq} rcx=0x{rcx:x} rdx=0x{rdx:x} r8=0x{r8:x} ret=0x{result:x} ret_update_rva={} -- passive wrapper-builder call from result action builder",
+                format_optional_usize_hex(ret_update_rva)
             ));
         }
     }
