@@ -276,11 +276,12 @@ if (
     or 'TITLE_NATIVE_READY_PREDICATE_LAST_OBJECT' not in title_ready_body
     or 'TITLE_NATIVE_READY_PREDICATE_LAST_MASKED' not in title_ready_body
     or 'oracle_title_native_ready_last_masked' not in telemetry_src
+    or 'oracle_title_langselect_ready_last_masked' not in telemetry_src
 ):
-    legacy_failures.append('product diagnostics lack passive native title-ready predicate flags telemetry')
+    legacy_failures.append('product diagnostics lack corrected LangSelect title-ready predicate flags telemetry')
     autoload_static_failures += 1
-if 'product diagnostics must passively expose native title-ready predicate flags before promoting idle Continue rows' not in check:
-    legacy_failures.append('check-autoload-happy-path does not enforce native title-ready predicate telemetry')
+if 'product diagnostics must passively expose LangSelect title-ready predicate flags without treating them as Continue readiness' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce corrected LangSelect title-ready predicate telemetry')
     autoload_static_failures += 1
 member_latch_body = function_body('capture_continue_member_node_candidate', exp_code) or ''
 if (
@@ -497,6 +498,10 @@ if (
     or 'NATIVE_TITLE_REGISTER_CALL' not in menu_ctor_static_check
     or 'NATIVE_ACCEPT_PREDICATE_LEA' not in menu_ctor_static_check
     or 'IDLE_ACCEPT_PREDICATE_LEA' not in menu_ctor_static_check
+    or 'LANG_SELECT_LABEL' not in menu_ctor_static_check
+    or 'LANG_SELECT_COMPONENT_CTOR_CALL' not in menu_ctor_static_check
+    or 'LANG_SELECT_READY_VTABLE' not in menu_ctor_static_check
+    or 'LANG_SELECT_GETTER_BYTES' not in menu_ctor_static_check
     or 'CONTINUE_DOCALL_TABLE_SLOT' not in menu_ctor_static_check
     or 'find_rel32_callers' not in menu_ctor_static_check
     or 'rip_lea_target' not in menu_ctor_static_check
@@ -648,6 +653,8 @@ for token in [
     '"native_continue_chain_stage"',
     '"title_native_ready_last_masked"',
     '"title_native_ready_last_ret"',
+    '"title_langselect_ready_last_masked"',
+    '"title_langselect_ready_last_ret"',
 ]:
     if token not in watcher:
         runtime_mode_failures.append(f'readiness watcher missing runtime-mode/preexisting-pid/window-capture/autoload-progress diagnostic token {token}')
@@ -728,6 +735,8 @@ for token in [
     'oracle_title_native_ready_last_object',
     'oracle_title_native_ready_last_masked',
     'oracle_title_native_ready_last_ret',
+    'oracle_title_langselect_ready_last_masked',
+    'oracle_title_langselect_ready_last_ret',
     'product_autoload_armed',
     'title_owner_scan_attempts',
     'title_owner_scan_vtable_hits',

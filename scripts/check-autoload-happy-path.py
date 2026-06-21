@@ -257,8 +257,9 @@ def main() -> int:
         and "READY_MASK_8F" in title_ready_body
         and "TITLE_NATIVE_READY_PREDICATE_LAST_OBJECT" in title_ready_body
         and "TITLE_NATIVE_READY_PREDICATE_LAST_MASKED" in title_ready_body
-        and "oracle_title_native_ready_last_masked" in telemetry,
-        "product diagnostics must passively expose native title-ready predicate flags before promoting idle Continue rows",
+        and "oracle_title_native_ready_last_masked" in telemetry
+        and "oracle_title_langselect_ready_last_masked" in telemetry,
+        "product diagnostics must passively expose LangSelect title-ready predicate flags without treating them as Continue readiness",
         failures,
     )
     member_latch_body = rust_fn_body(experiments, "capture_continue_member_node_candidate")
@@ -677,6 +678,7 @@ def main() -> int:
         and "oracle_menu_continue_candidate_accept_changes" in telemetry_src
         and "oracle_title_native_ready_hits" in telemetry_src
         and "oracle_title_native_ready_last_masked" in telemetry_src
+        and "oracle_title_langselect_ready_last_masked" in telemetry_src
         and "title_owner_scan_attempts" in telemetry_src
         and "title_owner_scan_vtable_hits" in telemetry_src
         and "title_owner_scan_last_candidate" in telemetry_src
@@ -704,6 +706,8 @@ def main() -> int:
         and "menu_continue_candidate_last_accept" in watcher
         and "title_native_ready_last_masked" in watcher
         and "title_native_ready_last_ret" in watcher
+        and "title_langselect_ready_last_masked" in watcher
+        and "title_langselect_ready_last_ret" in watcher
         and "product_core_ready_blocker" in telemetry_src
         and "product_core_autoload_ticks" in telemetry_src,
         "DLL telemetry must expose product-core autoload tick/readiness blocker and title-owner scan evidence",
@@ -804,6 +808,10 @@ def main() -> int:
         and "NATIVE_TITLE_REGISTER_CALL" in menu_ctor_static
         and "NATIVE_ACCEPT_PREDICATE_LEA" in menu_ctor_static
         and "IDLE_ACCEPT_PREDICATE_LEA" in menu_ctor_static
+        and "LANG_SELECT_LABEL" in menu_ctor_static
+        and "LANG_SELECT_COMPONENT_CTOR_CALL" in menu_ctor_static
+        and "LANG_SELECT_READY_VTABLE" in menu_ctor_static
+        and "LANG_SELECT_GETTER_BYTES" in menu_ctor_static
         and "CONTINUE_DOCALL_TABLE_SLOT" in menu_ctor_static
         and "find_rel32_callers" in menu_ctor_static
         and "rip_lea_target" in menu_ctor_static

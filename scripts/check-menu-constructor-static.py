@@ -38,6 +38,15 @@ NATIVE_ACCEPT_PREDICATE = 0x007AD810
 IDLE_ACCEPT_PREDICATE = 0x007ADD70
 TITLE_DIALOG_READY_PREDICATE = 0x00733150
 TITLE_MENU_REGISTER = 0x007A9250
+LANG_SELECT_LABEL = 0x02B281D0
+LANG_SELECT_COMPONENT_CTOR_CALL = 0x009B5A0A
+LANG_SELECT_RESET_CALL = 0x009B5B04
+LANG_SELECT_COMPONENT_CTOR = 0x0074A2F0
+LANG_SELECT_SET_BOOL = 0x00733340
+LANG_SELECT_READY_VTABLE = 0x02A94A70
+LANG_SELECT_GETTER_SLOT0 = 0x0074BAF0
+LANG_SELECT_GETTER_SLOT1 = 0x0074BAE0
+LANG_SELECT_GETTER_BYTES = bytes.fromhex("488d4128c3")
 
 CONTINUE_DOCALL = 0x00764B80
 CONTINUE_DOCALL_IMPL = 0x00763FC0
@@ -121,7 +130,34 @@ def main() -> int:
     )
     require(
         rel32_call_target(data, NATIVE_TITLE_READY_CALL) == TITLE_DIALOG_READY_PREDICATE,
-        "native title builder must be gated by 0x140733150(this+0x2610) before native-row construction",
+        "LangSelect native-accept builder is gated by 0x140733150(this+0x2610); this is diagnostic, not Continue proof",
+        failures,
+    )
+    require(
+        data[LANG_SELECT_LABEL : LANG_SELECT_LABEL + len(b"LangSelect\0")] == b"LangSelect\0",
+        "title+0x2610 readiness descriptor must be LangSelect, not the Continue row",
+        failures,
+    )
+    require(
+        rel32_call_target(data, LANG_SELECT_COMPONENT_CTOR_CALL) == LANG_SELECT_COMPONENT_CTOR,
+        "TosTitle ctor must construct title+0x2610 from the LangSelect descriptor through 0x14074a2f0",
+        failures,
+    )
+    require(
+        rel32_call_target(data, LANG_SELECT_RESET_CALL) == LANG_SELECT_SET_BOOL,
+        "TosTitle ctor must reset LangSelect readiness through 0x140733340(..., false)",
+        failures,
+    )
+    require(
+        u64_at(data, LANG_SELECT_READY_VTABLE) == BASE + LANG_SELECT_GETTER_SLOT0
+        and u64_at(data, LANG_SELECT_READY_VTABLE + 0x8) == BASE + LANG_SELECT_GETTER_SLOT1,
+        "LangSelect component vtable must expose getter slots 0/1 used by readiness wrappers",
+        failures,
+    )
+    require(
+        data[LANG_SELECT_GETTER_SLOT0 : LANG_SELECT_GETTER_SLOT0 + len(LANG_SELECT_GETTER_BYTES)] == LANG_SELECT_GETTER_BYTES
+        and data[LANG_SELECT_GETTER_SLOT1 : LANG_SELECT_GETTER_SLOT1 + len(LANG_SELECT_GETTER_BYTES)] == LANG_SELECT_GETTER_BYTES,
+        "LangSelect readiness getter slots must return component+0x28, making flags live at component+0x48",
         failures,
     )
     require(
@@ -174,7 +210,8 @@ def main() -> int:
         f"native_b_callers={len(native_b_callers)} "
         f"disabled_continue_return=0x{BASE + DISABLED_CONTINUE_ENQUEUE_RETURN:x} "
         f"disabled_neighbor_return=0x{BASE + DISABLED_NEIGHBOR_ENQUEUE_RETURN:x} "
-        f"native_ready_skip=0x{BASE + rel32_jcc_target(data, NATIVE_TITLE_READY_SKIP_JE):x}"
+        f"langselect_ready_skip=0x{BASE + rel32_jcc_target(data, NATIVE_TITLE_READY_SKIP_JE):x} "
+        "langselect_flags_offset=component+0x48"
     )
     return 0
 
