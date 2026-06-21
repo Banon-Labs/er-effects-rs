@@ -372,7 +372,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         }
     };
     body.push_str(&format!(
-        "  \"oracle_continue_task_node\": {},\n  \"oracle_continue_member_node\": {},\n  \"oracle_menu_window_ctor_hits\": {},\n  \"oracle_menu_window_ctor_semantic_hits\": {},\n  \"oracle_menu_window_ctor_last_item\": {},\n  \"oracle_menu_window_ctor_last_vt\": {},\n  \"oracle_menu_window_ctor_last_functor\": {},\n  \"oracle_menu_window_ctor_last_docall\": {},\n  \"oracle_menu_window_ctor_last_accept\": {},\n  \"oracle_menu_item_update_hits\": {},\n  \"oracle_menu_item_update_semantic_hits\": {},\n  \"oracle_menu_item_update_last_item\": {},\n  \"oracle_menu_item_update_last_vt\": {},\n  \"oracle_menu_item_update_last_functor\": {},\n  \"oracle_menu_item_update_last_docall\": {},\n  \"oracle_menu_item_update_last_accept\": {},\n  \"oracle_menu_continue_candidate_item\": {},\n  \"oracle_menu_continue_candidate_hits\": {},\n  \"oracle_menu_continue_candidate_idle_accept_hits\": {},\n  \"oracle_menu_continue_candidate_native_accept_hits\": {},\n  \"oracle_menu_continue_candidate_other_accept_hits\": {},\n  \"oracle_menu_continue_candidate_accept_changes\": {},\n  \"oracle_menu_continue_candidate_last_accept\": {},\n",
+        "  \"oracle_continue_task_node\": {},\n  \"oracle_continue_member_node\": {},\n  \"oracle_menu_window_ctor_hits\": {},\n  \"oracle_menu_window_ctor_semantic_hits\": {},\n  \"oracle_menu_window_ctor_last_item\": {},\n  \"oracle_menu_window_ctor_last_vt\": {},\n  \"oracle_menu_window_ctor_last_functor\": {},\n  \"oracle_menu_window_ctor_last_docall\": {},\n  \"oracle_menu_window_ctor_last_accept\": {},\n  \"oracle_menu_window_idle_ctor_hits\": {},\n  \"oracle_menu_window_idle_ctor_continue_hits\": {},\n  \"oracle_menu_window_idle_ctor_continue_last_caller_rva\": {},\n  \"oracle_menu_window_idle_ctor_continue_last_item\": {},\n  \"oracle_menu_window_idle_ctor_continue_last_docall\": {},\n  \"oracle_menu_window_idle_ctor_continue_last_accept\": {},\n  \"oracle_menu_window_idle_ctor_last_caller_rva\": {},\n  \"oracle_menu_window_idle_ctor_last_item\": {},\n  \"oracle_menu_window_idle_ctor_last_vt\": {},\n  \"oracle_menu_window_idle_ctor_last_functor\": {},\n  \"oracle_menu_window_idle_ctor_last_docall\": {},\n  \"oracle_menu_window_idle_ctor_last_accept\": {},\n  \"oracle_menu_item_update_hits\": {},\n  \"oracle_menu_item_update_semantic_hits\": {},\n  \"oracle_menu_item_update_last_item\": {},\n  \"oracle_menu_item_update_last_vt\": {},\n  \"oracle_menu_item_update_last_functor\": {},\n  \"oracle_menu_item_update_last_docall\": {},\n  \"oracle_menu_item_update_last_accept\": {},\n  \"oracle_menu_continue_candidate_item\": {},\n  \"oracle_menu_continue_candidate_hits\": {},\n  \"oracle_menu_continue_candidate_idle_accept_hits\": {},\n  \"oracle_menu_continue_candidate_native_accept_hits\": {},\n  \"oracle_menu_continue_candidate_other_accept_hits\": {},\n  \"oracle_menu_continue_candidate_accept_changes\": {},\n  \"oracle_menu_continue_candidate_last_accept\": {},\n",
         format_optional_ptr(continue_task_node),
         format_optional_ptr(continue_member_node),
         MENU_WINDOW_JOB_CTOR_HITS.load(Ordering::SeqCst),
@@ -382,6 +382,18 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         format_optional_ptr(MENU_WINDOW_JOB_CTOR_LAST_FUNCTOR.load(Ordering::SeqCst)),
         format_optional_ptr(MENU_WINDOW_JOB_CTOR_LAST_DOCALL.load(Ordering::SeqCst)),
         format_optional_ptr(MENU_WINDOW_JOB_CTOR_LAST_ACCEPT.load(Ordering::SeqCst)),
+        MENU_WINDOW_JOB_IDLE_CTOR_HITS.load(Ordering::SeqCst),
+        MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_HITS.load(Ordering::SeqCst),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_CALLER_RVA.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ITEM.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_DOCALL.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ACCEPT.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_LAST_CALLER_RVA.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_LAST_ITEM.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_LAST_VT.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_LAST_FUNCTOR.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_LAST_DOCALL.load(Ordering::SeqCst)),
+        format_optional_ptr(MENU_WINDOW_JOB_IDLE_CTOR_LAST_ACCEPT.load(Ordering::SeqCst)),
         MENU_ITEM_UPDATE_HITS.load(Ordering::SeqCst),
         MENU_ITEM_UPDATE_SEMANTIC_HITS.load(Ordering::SeqCst),
         format_optional_ptr(MENU_ITEM_UPDATE_LAST_ITEM.load(Ordering::SeqCst)),

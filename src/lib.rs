@@ -1060,6 +1060,12 @@ pub(crate) static MENU_ITEM_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORI
 /// semantic Continue item can be latched before the first updated/idle input leaf pollutes state.
 pub(crate) const MENU_WINDOW_JOB_CTOR_RVA: u32 = 0x007ac8c0;
 pub(crate) static MENU_WINDOW_JOB_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+/// MenuWindowJob disabled/idle constructor 0x1407acf80. Product diagnostics observe this variant
+/// because static RE shows it installs the constant-false accept predicate 0x1407add70 into the
+/// same +0xf0 accept functor slot as the native-accept constructors.
+pub(crate) const MENU_WINDOW_JOB_IDLE_CTOR_RVA: u32 = 0x007acf80;
+pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static MENU_LOAD_GAME_ITEM: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// FD4 Sequence::Update / child-iterator 0x1407aa1f0 (RVA). At the opened main menu the

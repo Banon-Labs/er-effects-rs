@@ -221,6 +221,20 @@ def main() -> int:
         "product Continue capture must observe MenuWindowJob construction before update-time first-item latching",
         failures,
     )
+    idle_ctor_body = rust_fn_body(experiments, "menu_window_job_idle_ctor_hook")
+    require(
+        "MENU_WINDOW_JOB_IDLE_CTOR_RVA" in lib
+        and "MENU_ITEM_ACCEPT_IDLE_RVA" in experiments
+        and "cap_menu_window_job_idle_ctor_7acf80" in experiments
+        and "MENU_WINDOW_JOB_IDLE_CTOR_ORIG" in lib
+        and "MENU-WINDOW-IDLE-CTOR observed Continue-looking disabled item" in idle_ctor_body
+        and "record_continue_candidate" in idle_ctor_body
+        and "trace_first_game_caller_rva" in idle_ctor_body
+        and "MENU_CONTINUE_ITEM.store" not in idle_ctor_body
+        and "MENU_CONTINUE_ITEM.compare_exchange" not in idle_ctor_body,
+        "product diagnostics must passively attribute disabled Continue rows to the 0x1407acf80 idle constructor without promoting them",
+        failures,
+    )
     member_latch_body = rust_fn_body(experiments, "capture_continue_member_node_candidate")
     require(
         "MENU_CONTINUE_MEMBER_NODE" in lib
@@ -592,12 +606,18 @@ def main() -> int:
         and "product_core_last_press_start_context" in telemetry_src
         and "MENU_WINDOW_JOB_CTOR_HITS" in experiments
         and "MENU_WINDOW_JOB_CTOR_SEMANTIC_HITS" in experiments
+        and "MENU_WINDOW_JOB_IDLE_CTOR_HITS" in experiments
+        and "MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_HITS" in experiments
+        and "MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_CALLER_RVA" in experiments
         and "MENU_ITEM_UPDATE_HITS" in experiments
         and "MENU_ITEM_UPDATE_SEMANTIC_HITS" in experiments
         and "MENU_CONTINUE_CANDIDATE_ITEM" in experiments
         and "MENU_CONTINUE_CANDIDATE_ACCEPT_CHANGES" in experiments
         and "record_continue_candidate" in experiments
         and "oracle_menu_window_ctor_hits" in telemetry_src
+        and "oracle_menu_window_idle_ctor_hits" in telemetry_src
+        and "oracle_menu_window_idle_ctor_continue_last_caller_rva" in telemetry_src
+        and "oracle_menu_window_idle_ctor_last_caller_rva" in telemetry_src
         and "oracle_menu_item_update_hits" in telemetry_src
         and "oracle_menu_continue_candidate_item" in telemetry_src
         and "oracle_menu_continue_candidate_accept_changes" in telemetry_src
@@ -611,6 +631,9 @@ def main() -> int:
         and "product_core_last_menu_opened_latch" in watcher
         and "product_core_last_press_start_context" in watcher
         and "menu_window_ctor_hits" in watcher
+        and "menu_window_idle_ctor_hits" in watcher
+        and "menu_window_idle_ctor_continue_last_caller_rva" in watcher
+        and "menu_window_idle_ctor_last_caller_rva" in watcher
         and "menu_item_update_hits" in watcher
         and "menu_continue_candidate_item" in watcher
         and "menu_continue_candidate_last_accept" in watcher
@@ -694,6 +717,14 @@ def main() -> int:
         and "MENU_WINDOW_JOB_CTOR_RVA" in lib
         and "cap_menu_window_job_ctor_7ac8c0" in experiments,
         "measure must fail closed if the product lacks a constructor-time semantic Continue latch",
+        failures,
+    )
+    require(
+        "idle MenuWindowJob constructor" in measure
+        and "MENU_WINDOW_JOB_IDLE_CTOR_RVA" in lib
+        and "cap_menu_window_job_idle_ctor_7acf80" in experiments
+        and "oracle_menu_window_idle_ctor_hits" in telemetry_src,
+        "measure must fail closed if disabled-row idle constructor provenance is missing",
         failures,
     )
     require(

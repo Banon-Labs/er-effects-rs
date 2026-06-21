@@ -235,6 +235,21 @@ if (
 if 'product Continue capture must observe MenuWindowJob construction before update-time first-item latching' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce constructor hook semantic Continue latch')
     autoload_static_failures += 1
+idle_ctor_body = function_body('menu_window_job_idle_ctor_hook', exp_code) or ''
+if (
+    'MENU_WINDOW_JOB_IDLE_CTOR_RVA' not in lib_code
+    or 'MENU_ITEM_ACCEPT_IDLE_RVA' not in exp_code
+    or 'cap_menu_window_job_idle_ctor_7acf80' not in exp_code
+    or 'MENU-WINDOW-IDLE-CTOR observed Continue-looking disabled item' not in idle_ctor_body
+    or 'record_continue_candidate' not in idle_ctor_body
+    or 'trace_first_game_caller_rva' not in idle_ctor_body
+    or re.search(r'MENU_CONTINUE_ITEM\s*\.\s*(store|swap|compare_exchange|fetch)', idle_ctor_body)
+):
+    legacy_failures.append('product diagnostics lack passive idle MenuWindowJob constructor provenance or can promote disabled rows')
+    autoload_static_failures += 1
+if 'product diagnostics must passively attribute disabled Continue rows to the 0x1407acf80 idle constructor without promoting them' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce idle MenuWindowJob constructor provenance')
+    autoload_static_failures += 1
 member_latch_body = function_body('capture_continue_member_node_candidate', exp_code) or ''
 if (
     'MENU_CONTINUE_MEMBER_NODE' not in lib_code
@@ -601,6 +616,10 @@ for token in [
     'PRODUCT_CORE_LAST_PRESS_START_CONTEXT',
     'MENU_WINDOW_JOB_CTOR_HITS',
     'MENU_WINDOW_JOB_CTOR_SEMANTIC_HITS',
+    'MENU_WINDOW_JOB_IDLE_CTOR_HITS',
+    'MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_HITS',
+    'MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_CALLER_RVA',
+    'MENU_WINDOW_JOB_IDLE_CTOR_LAST_CALLER_RVA',
     'MENU_ITEM_UPDATE_HITS',
     'MENU_ITEM_UPDATE_SEMANTIC_HITS',
     'MENU_CONTINUE_CANDIDATE_ITEM',
@@ -625,6 +644,9 @@ for token in [
     'product_core_last_menu_opened_latch',
     'product_core_last_press_start_context',
     'oracle_menu_window_ctor_hits',
+    'oracle_menu_window_idle_ctor_hits',
+    'oracle_menu_window_idle_ctor_continue_last_caller_rva',
+    'oracle_menu_window_idle_ctor_last_caller_rva',
     'oracle_menu_item_update_hits',
     'oracle_menu_continue_candidate_item',
     'oracle_menu_continue_candidate_last_accept',
