@@ -122,6 +122,13 @@ else:
         if later_pos != -1 and product_core_pos > later_pos:
             legacy_failures.append(f'product_core_autoload_tick appears after legacy path {later}')
             autoload_static_failures += 1
+if (
+    'BOOTSTRAP_EVENT_GAME_TASK_WAITING_INSTANCE' not in lib_code
+    or 'TASK_INSTANCE_WAIT_LOG_INTERVAL' not in lib_code
+    or 'attempts={wait_attempts}' not in lib_code
+):
+    legacy_failures.append('game task startup no longer reports bounded CSTaskImp wait progress')
+    autoload_static_failures += 1
 
 function_names = [
     'own_stepper_idx10',

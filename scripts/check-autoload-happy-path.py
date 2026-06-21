@@ -132,6 +132,13 @@ def main() -> int:
         failures,
     )
     require(
+        "BOOTSTRAP_EVENT_GAME_TASK_WAITING_INSTANCE" in lib
+        and "TASK_INSTANCE_WAIT_LOG_INTERVAL" in lib
+        and "attempts={wait_attempts}" in lib,
+        "game task startup must report bounded CSTaskImp wait progress before recurring registration",
+        failures,
+    )
+    require(
         lib.find("product_core_autoload_tick") < lib.find("own_stepper_patch_once"),
         "product autoload core must run before the idx10/title-front-end stepper patch path",
         failures,

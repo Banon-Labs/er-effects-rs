@@ -281,6 +281,7 @@ pub(crate) const BOOTSTRAP_EVENT_CONTINUE_TRACE_REQUESTED: &str = "continue_trac
 pub(crate) const BOOTSTRAP_EVENT_GAME_TASK_REQUESTED: &str = "game_task_thread_requested";
 pub(crate) const BOOTSTRAP_EVENT_OVERLAY_SKIPPED_AUTOLOAD: &str = "overlay_skipped_autoload_only";
 pub(crate) const BOOTSTRAP_EVENT_GAME_TASK_THREAD_STARTED: &str = "game_task_thread_started";
+pub(crate) const BOOTSTRAP_EVENT_GAME_TASK_WAITING_INSTANCE: &str = "game_task_waiting_instance";
 pub(crate) const BOOTSTRAP_EVENT_GAME_TASK_INSTANCE_READY: &str = "game_task_instance_ready";
 pub(crate) const BOOTSTRAP_EVENT_GAME_TASK_RECURRING_REGISTERED: &str =
     "game_task_recurring_registered";
@@ -294,6 +295,7 @@ pub(crate) const BOOTSTRAP_DETAIL_PLAYER_AVAILABLE: &str = "player_available";
 pub(crate) const BOOTSTRAP_DETAIL_PLAYER_UNAVAILABLE: &str = "player_unavailable";
 pub(crate) const INITIAL_GAME_TASK_TICKS: u64 = 0;
 pub(crate) const GAME_TASK_TICK_INCREMENT: u64 = 1;
+pub(crate) const TASK_INSTANCE_WAIT_LOG_INTERVAL: u64 = 4096;
 pub(crate) const SAFE_INPUT_MAX_CONFIRM_PULSES: u32 = 16;
 pub(crate) const SAFE_INPUT_DEFAULT_INTERVAL_TICKS: u64 = 30;
 pub(crate) const SAFE_INPUT_INITIAL_LAST_PULSE_TICK: u64 = 0;
@@ -3046,10 +3048,16 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
 }
 
 pub(crate) fn wait_for_task_instance() -> &'static CSTaskImp {
+    let mut wait_attempts = 0_u64;
     loop {
         match unsafe { CSTaskImp::instance() } {
             Ok(instance) => return instance,
             Err(InstanceError::NotFound(_)) | Err(InstanceError::Null(_)) => {
+                wait_attempts = wait_attempts.saturating_add(1);
+                if wait_attempts == 1 || wait_attempts % TASK_INSTANCE_WAIT_LOG_INTERVAL == 0 {
+                    let detail = format!("attempts={wait_attempts}");
+                    write_bootstrap_event(BOOTSTRAP_EVENT_GAME_TASK_WAITING_INSTANCE, &detail);
+                }
                 std::thread::yield_now()
             }
         }
