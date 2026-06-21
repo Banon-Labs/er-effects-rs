@@ -775,6 +775,18 @@ def main() -> int:
         "measure must fail closed if disabled-row idle constructor provenance is missing",
         failures,
     )
+    menu_ctor_static = read_text(ROOT / "scripts/check-menu-constructor-static.py")
+    require(
+        "DISABLED_CONTINUE_CALL" in menu_ctor_static
+        and "DISABLED_CONTINUE_ENQUEUE_CALL" in menu_ctor_static
+        and "NATIVE_CTOR_A_TITLE_CALL" in menu_ctor_static
+        and "CONTINUE_DOCALL_TABLE_SLOT" in menu_ctor_static
+        and "find_rel32_callers" in menu_ctor_static
+        and "check-menu-constructor-static.py" in check_sh
+        and "check-menu-constructor-static.py" in measure,
+        "quality gates must include static disabled/native MenuWindowJob constructor provenance validation",
+        failures,
+    )
     require(
         "registered TitleTopDialog Continue MenuMemberFuncJob" in measure
         and "MENU_CONTINUE_MEMBER_NODE" in lib

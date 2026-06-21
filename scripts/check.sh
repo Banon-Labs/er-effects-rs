@@ -13,6 +13,7 @@ python3 "$repo_root/scripts/test-save-slot-oracle.py"
 python3 "$repo_root/scripts/check-autoload-happy-path.py"
 python3 "$repo_root/scripts/test-autoload-happy-path.py"
 python3 "$repo_root/scripts/check-native-continue-static.py"
+python3 "$repo_root/scripts/check-menu-constructor-static.py"
 command -v cupcake >/dev/null 2>&1 || { echo "missing required command: cupcake" >&2; exit 127; }
 cupcake validate --log-level error
 python3 "$repo_root/scripts/test-cupcake-policies.py"

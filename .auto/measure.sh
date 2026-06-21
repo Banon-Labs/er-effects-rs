@@ -14,6 +14,7 @@ check = (root / 'scripts/check-autoload-happy-path.py').read_text(encoding='utf-
 telemetry_src = (root / 'src/telemetry.rs').read_text(encoding='utf-8', errors='replace')
 watcher = (root / 'scripts/er-readiness-watch.py').read_text(encoding='utf-8', errors='replace')
 native_static_check = (root / 'scripts/check-native-continue-static.py').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/check-native-continue-static.py').exists() else ''
+menu_ctor_static_check = (root / 'scripts/check-menu-constructor-static.py').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/check-menu-constructor-static.py').exists() else ''
 launch_guard_check = (root / 'scripts/check-launch-guardrails.py').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/check-launch-guardrails.py').exists() else ''
 direct_probe = (root / 'scripts/run-product-continue-direct-probe.sh').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/run-product-continue-direct-probe.sh').exists() else ''
 runtime_probe = (root / '.auto/runtime_probe.sh').read_text(encoding='utf-8', errors='replace') if (root / '.auto/runtime_probe.sh').exists() else ''
@@ -472,9 +473,15 @@ if (
     or 'result+0x3b0' not in native_static_check
     or 'vtable +0x10 update' not in native_static_check
     or 'update return payload' not in native_static_check
+    or 'DISABLED_CONTINUE_CALL' not in menu_ctor_static_check
+    or 'DISABLED_CONTINUE_ENQUEUE_CALL' not in menu_ctor_static_check
+    or 'NATIVE_CTOR_A_TITLE_CALL' not in menu_ctor_static_check
+    or 'CONTINUE_DOCALL_TABLE_SLOT' not in menu_ctor_static_check
+    or 'find_rel32_callers' not in menu_ctor_static_check
     or 'check-native-continue-static.py' not in check_sh
+    or 'check-menu-constructor-static.py' not in check_sh
 ):
-    legacy_failures.append('quality gates do not include native Continue/MenuWindowJob/MenuMemberFuncJob/result-consumer static byte-window validation')
+    legacy_failures.append('quality gates do not include native Continue/MenuWindowJob/MenuMemberFuncJob/result-consumer/static constructor provenance validation')
     autoload_static_failures += 1
 if 'quality gates must include skip-safe native Continue/MenuWindowJob/MenuMemberFuncJob/result-consumer static byte-window validation' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce native Continue/MenuMemberFuncJob/result-consumer static checker wiring')
