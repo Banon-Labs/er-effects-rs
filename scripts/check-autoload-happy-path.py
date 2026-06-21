@@ -388,13 +388,19 @@ def main() -> int:
         and "MENU_ACCEPT_IDLE" in native_static_check
         and "MENU_ACCEPT_NATIVE" in native_static_check
         and "MENU_SUBMIT" in native_static_check
+        and "MENU_MEMBER_FUNC_JOB_RUN" in native_static_check
+        and "MENU_REGISTRY_INSERT_COPY" in native_static_check
+        and "node+0x18" in native_static_check
+        and "node+0x20" in native_static_check
+        and "node+0x10" in native_static_check
         and "check-native-continue-static.py" in check_sh,
-        "quality gates must include skip-safe native Continue/MenuWindowJob static byte-window validation",
+        "quality gates must include skip-safe native Continue/MenuWindowJob/MenuMemberFuncJob static byte-window validation",
         failures,
     )
     require(
-        "check-native-continue-static.py" in measure,
-        "measure must fail closed if the native Continue static checker is not wired into quality gates",
+        "check-native-continue-static.py" in measure
+        and "MenuMemberFuncJob" in measure,
+        "measure must fail closed if the native Continue/MenuMemberFuncJob static checker is not wired into quality gates",
         failures,
     )
     require(

@@ -25,6 +25,8 @@ MENU_ACCEPT_IDLE = 0x1407ADD70
 MENU_ACCEPT_NATIVE = 0x1407AD810
 INPUT_MANAGER_READY = 0x140765F20
 MENU_SUBMIT = 0x1407AC890
+MENU_MEMBER_FUNC_JOB_RUN = 0x1409AABA0
+MENU_REGISTRY_INSERT_COPY = 0x1407A7B60
 
 
 def fail(message: str) -> None:
@@ -110,6 +112,20 @@ def main() -> int:
     if FD4_EVENT_CONSTRUCTOR not in submit_calls:
         fail("native submit no longer constructs FD4 event code 3")
     contains(submit, b"\xff\x50\x60", "native submit dispatches result vtable +0x60")
+
+    member_run = image_bytes(MENU_MEMBER_FUNC_JOB_RUN, 0x70)
+    contains(member_run, b"\x4c\x8b\x41\x18", "MenuMemberFuncJob::run loads member function from node+0x18")
+    contains(member_run, b"\x48\x63\x49\x20", "MenuMemberFuncJob::run sign-extends this-adjust from node+0x20")
+    contains(member_run, b"\x48\x03\x48\x10", "MenuMemberFuncJob::run adds object pointer from node+0x10")
+    contains(member_run, b"\x41\xff\xd0", "MenuMemberFuncJob::run calls the loaded member function")
+    member_calls = rel32_targets(MENU_MEMBER_FUNC_JOB_RUN, member_run)
+    if FD4_EVENT_CONSTRUCTOR not in member_calls:
+        fail("MenuMemberFuncJob::run no longer posts FD4 event state after member call")
+
+    registry_insert = image_bytes(MENU_REGISTRY_INSERT_COPY, 0x50)
+    contains(registry_insert, b"\x48\x8b\x09", "registry insert loads source shared pointer [rcx]")
+    contains(registry_insert, b"\x48\x89\x0a", "registry insert stores source shared pointer into [rdx]")
+    contains(registry_insert, b"\x48\x83\xc1\x08", "registry insert retains copied shared pointer control block")
 
     print("native Continue static checks passed")
     return 0
