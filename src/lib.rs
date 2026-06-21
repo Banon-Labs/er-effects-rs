@@ -1768,6 +1768,27 @@ pub(crate) static POLICY_TOS_TITLE_LAST_ARG_R8: AtomicUsize =
 pub(crate) static POLICY_TOS_TITLE_LAST_ARG_R9: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static START_POLICY_TOS_TITLE_HOOK: Once = Once::new();
+/// Native server/login status-text formatter. Static asset/native scan (see
+/// `target/autoresearch/server-semaphore-assets/server-semaphore-static-summary.json`) maps
+/// `GR_System_Message_win64.fmg` status IDs 401120/401150/401160/401165 to state records at
+/// 0x142acbe40. Product proof must fail if this online/login status UI appears.
+pub(crate) const SERVER_STATUS_FORMATTER_RVA: u32 = 0x83ac60;
+pub(crate) const SERVER_STATUS_RECORD_STATE_OFFSET: usize = 0x0;
+pub(crate) const SERVER_STATUS_RECORD_TEXT_ID_OFFSET: usize = 0x10;
+pub(crate) const SERVER_STATUS_CHECKING_NETWORK_TEXT_ID: usize = 401_120;
+pub(crate) const SERVER_STATUS_LOGGING_IN_TEXT_ID: usize = 401_150;
+pub(crate) const SERVER_STATUS_RETRIEVING_DATA_TEXT_ID: usize = 401_160;
+pub(crate) const SERVER_STATUS_SAVING_DATA_TEXT_ID: usize = 401_165;
+pub(crate) static SERVER_STATUS_FORMATTER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SERVER_STATUS_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const SERVER_STATUS_HOOK_NOT_INSTALLED: usize = 0;
+pub(crate) const SERVER_STATUS_HOOK_INSTALLED_YES: usize = 1;
+pub(crate) static SERVER_STATUS_TOTAL_SEEN: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+pub(crate) static SERVER_STATUS_LAST_STATE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static SERVER_STATUS_LAST_TEXT_ID: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static START_SERVER_STATUS_HOOK: Once = Once::new();
 pub(crate) static AUTO_ACCEPT_VT_LAST: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static AUTO_ACCEPT_VT_LOG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const AUTO_ACCEPT_VT_LOG_MAX: usize = 24;
@@ -2776,6 +2797,11 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
             let _ = std::thread::Builder::new()
                 .name("er-effects-policy-oracle".to_owned())
                 .spawn(install_policy_tos_title_hook);
+        });
+        START_SERVER_STATUS_HOOK.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-server-status-oracle".to_owned())
+                .spawn(install_server_status_hook);
         });
     }
 

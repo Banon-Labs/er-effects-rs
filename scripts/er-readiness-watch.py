@@ -62,6 +62,7 @@ LEGAL_POPUP_DETECTED = "visual_legal_popup_detected"
 NATIVE_LEGAL_POPUP_DETECTED = "native_legal_popup_detected"
 SAVE_DATA_POPUP_DETECTED = "visual_save_data_popup_detected"
 MESSAGEBOX_DIALOG_DETECTED = "native_messagebox_dialog_detected"
+SERVER_STATUS_SEMAPHORE_DETECTED = "native_server_status_semaphore_detected"
 TARGET_WINDOW_CAPTURE_UNSAFE = "target_window_capture_unsafe"
 VISUAL_CHECK_SUBPROCESS_TIMEOUT_SECONDS = 10.0
 VISUAL_OCR_PREVIEW_CHARS = 1000
@@ -103,6 +104,14 @@ NATIVE_LEGAL_TEXT_ID_RANGES = [
     range(607200, 607213),
     range(607300, 607302),
 ]
+# Asset-backed from msg/engus/menu.msgbnd.dcx -> GR_System_Message_win64.fmg.
+# Native records at 0x142acbe40 route these IDs through the title/network login status UI.
+SERVER_STATUS_TEXT_IDS = {
+    401120,  # Checking network connection status...
+    401150,  # Logging in to the ELDEN RING game server...
+    401160,  # Retrieving data from the ELDEN RING game server...
+    401165,  # Saving data to the ELDEN RING game server...
+}
 SAVE_DATA_POPUP_OCR_PATTERNS = [
     re.compile(r"\bfailed to load save data\b", re.I),
     re.compile(r"\bsave data (?:could not|cannot|can't) be loaded\b", re.I),
@@ -554,6 +563,17 @@ def telemetry_native_legal_popup_detected(telemetry: dict[str, Any] | None) -> b
         or as_int(telemetry.get("oracle_policy_window_total_builds"), 0) > 0
     )
     return msgbox_legal or policy_window
+
+
+def telemetry_server_status_semaphore_detected(telemetry: dict[str, Any] | None) -> bool:
+    if not isinstance(telemetry, dict):
+        return False
+    text_id = as_int(telemetry.get("oracle_server_status_text_id"), -1)
+    return bool(
+        telemetry.get("oracle_server_status_any_seen") is True
+        or as_int(telemetry.get("oracle_server_status_total_seen"), 0) > 0
+        or text_id in SERVER_STATUS_TEXT_IDS
+    )
 
 
 def telemetry_no_postload_popup(telemetry: dict[str, Any]) -> bool:
@@ -1203,6 +1223,21 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
                     expected_animation_id=args.expected_animation_id,
                 )
             )
+        if args.fail_on_server_status_semaphore and telemetry_server_status_semaphore_detected(telemetry):
+            return with_runtime_module_info(
+                ReadinessResult(
+                    False,
+                    SERVER_STATUS_SEMAPHORE_DETECTED,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
         windows = hypr_windows(args.window_class) if process_running else []
         if process_running and windows and (args.visual_legal_popup_check or args.visual_save_data_popup_check or args.visual_world_check):
             if not window_capture_safe(windows[0], args.window_class):
@@ -1409,6 +1444,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=True,
         help="Fail immediately if in-process telemetry sees a MessageBoxDialog builder arg matching packed ToS_win64.fmg EULA/privacy text IDs.",
+    )
+    parser.add_argument(
+        "--fail-on-server-status-semaphore",
+        action="store_true",
+        default=True,
+        help="Fail immediately if in-process telemetry sees title/network login server status text IDs from GR_System_Message_win64.fmg.",
     )
     parser.add_argument(
         "--visual-legal-popup-check",

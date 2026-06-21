@@ -373,6 +373,13 @@ def main() -> int:
     assert watcher.telemetry_native_legal_popup_detected({"oracle_policy_window_total_builds": 1})
     assert watcher.telemetry_native_legal_popup_detected({"oracle_policy_window_any_seen": True})
     assert not watcher.telemetry_native_legal_popup_detected({"oracle_msgbox_builder_args": [1, 2, 3, 4]})
+    assert 401120 in watcher.SERVER_STATUS_TEXT_IDS
+    assert 401150 in watcher.SERVER_STATUS_TEXT_IDS
+    assert 401160 in watcher.SERVER_STATUS_TEXT_IDS
+    assert watcher.telemetry_server_status_semaphore_detected({"oracle_server_status_text_id": 401120})
+    assert watcher.telemetry_server_status_semaphore_detected({"oracle_server_status_any_seen": True})
+    assert watcher.telemetry_server_status_semaphore_detected({"oracle_server_status_total_seen": 1})
+    assert not watcher.telemetry_server_status_semaphore_detected({"oracle_server_status_text_id": 401110})
 
     manual_world_wait = watcher.classify_snapshot(
         pid=TEST_PID,

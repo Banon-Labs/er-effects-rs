@@ -6359,6 +6359,101 @@ pub(crate) fn install_policy_tos_title_hook() {
     }
 }
 
+pub(crate) fn server_status_text_id_is_product_failure(text_id: usize) -> bool {
+    matches!(
+        text_id,
+        SERVER_STATUS_CHECKING_NETWORK_TEXT_ID
+            | SERVER_STATUS_LOGGING_IN_TEXT_ID
+            | SERVER_STATUS_RETRIEVING_DATA_TEXT_ID
+            | SERVER_STATUS_SAVING_DATA_TEXT_ID
+    )
+}
+
+pub(crate) unsafe extern "system" fn server_status_formatter_hook(
+    record_slot: usize,
+    out_text: usize,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let record = unsafe { safe_read_usize(record_slot) }.unwrap_or(null);
+    if record != null {
+        let state = unsafe { safe_read_i32(record + SERVER_STATUS_RECORD_STATE_OFFSET) }
+            .unwrap_or(-1)
+            .max(0) as usize;
+        let text_id = unsafe { safe_read_i32(record + SERVER_STATUS_RECORD_TEXT_ID_OFFSET) }
+            .unwrap_or(-1)
+            .max(0) as usize;
+        if server_status_text_id_is_product_failure(text_id) {
+            SERVER_STATUS_TOTAL_SEEN.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+            SERVER_STATUS_LAST_STATE.store(state, Ordering::SeqCst);
+            SERVER_STATUS_LAST_TEXT_ID.store(text_id, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "server-status-oracle: state={state} text_id={text_id} via formatter 0x{:x} -- invalid online/login status semaphore {}",
+                game_module_base().unwrap_or(null) + SERVER_STATUS_FORMATTER_RVA as usize,
+                trace_callers_summary()
+            ));
+        }
+    }
+    let orig = SERVER_STATUS_FORMATTER_ORIG.load(Ordering::SeqCst);
+    if orig == null {
+        return out_text;
+    }
+    let f: unsafe extern "system" fn(usize, usize) -> usize = unsafe { std::mem::transmute(orig) };
+    unsafe { f(record_slot, out_text) }
+}
+
+pub(crate) fn install_server_status_hook() {
+    if SERVER_STATUS_HOOK_INSTALLED.load(Ordering::SeqCst) != SERVER_STATUS_HOOK_NOT_INSTALLED {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "server-status-oracle: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(formatter_addr) = game_rva(SERVER_STATUS_FORMATTER_RVA) else {
+        append_autoload_debug(format_args!(
+            "server-status-oracle: failed to resolve formatter rva"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            formatter_addr as *mut c_void,
+            server_status_formatter_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SERVER_STATUS_FORMATTER_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "server-status-oracle: queue_enable formatter failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SERVER_STATUS_HOOK_INSTALLED
+                        .store(SERVER_STATUS_HOOK_INSTALLED_YES, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "server-status-oracle: hooked formatter 0x{formatter_addr:x} (server/login semaphore oracle)"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "server-status-oracle: MH_ApplyQueued formatter failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "server-status-oracle: MhHook::new formatter failed: {status:?}"
+        )),
+    }
+}
+
 pub(crate) unsafe extern "system" fn msgbox_builder_hook(
     a: usize,
     b: usize,

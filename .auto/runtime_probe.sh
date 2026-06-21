@@ -112,5 +112,6 @@ python3 "$REPO_ROOT/scripts/er-readiness-watch.py" \
   --expected-runtime-mode "$RUNTIME_EXPECTED_MODE" \
   --fail-on-messagebox-dialog \
   --fail-on-native-legal-popup \
+  --fail-on-server-status-semaphore \
   --visual-save-data-popup-check \
   --max-runtime-seconds "$RUNTIME_TIMEOUT_SECONDS"

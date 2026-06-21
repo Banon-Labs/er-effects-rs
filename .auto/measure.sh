@@ -259,6 +259,7 @@ runtime_mode_failures: list[str] = []
 eula_popup_failures: list[str] = []
 save_data_popup_failures: list[str] = []
 messagebox_dialog_failures: list[str] = []
+server_status_failures: list[str] = []
 for token in [
     'seamless_coop_loaded',
     'runtime_mode',
@@ -289,6 +290,21 @@ for token in [
     if token not in watcher:
         messagebox_dialog_failures.append(f'readiness watcher missing native MessageBoxDialog fail-fast token {token}')
 for token in [
+    'oracle_server_status_text_id',
+    'oracle_server_status_any_seen',
+]:
+    if token not in telemetry_src:
+        server_status_failures.append(f'telemetry missing native server/login status semaphore token {token}')
+for token in [
+    '--fail-on-server-status-semaphore',
+    'native_server_status_semaphore_detected',
+    'telemetry_server_status_semaphore_detected',
+    '401120',
+    '401160',
+]:
+    if token not in watcher:
+        server_status_failures.append(f'readiness watcher missing server/login status fail-fast token {token}')
+for token in [
     'oracle_msgbox_builder_args',
     'oracle_policy_window_total_builds',
     'oracle_policy_window_any_seen',
@@ -318,6 +334,7 @@ required_runtime = ['ready', 'product_submit', 'continue_load', 'deserialize', '
 legal_popup_by_dir: dict[str, list[str]] = {}
 save_data_popup_by_dir: dict[str, list[str]] = {}
 messagebox_by_dir: dict[str, list[str]] = {}
+server_status_by_dir: dict[str, list[str]] = {}
 runtime_mode_by_dir: dict[str, list[str]] = {}
 best_runtime: tuple[int, Path | None, dict[str, bool]] = (0, None, {key: False for key in required_runtime})
 latest_runtime_dir: Path | None = None
@@ -349,6 +366,15 @@ if rt_root.exists():
             if re.search(r'"reason"\s*:\s*"native_messagebox_dialog_detected"', raw) or re.search(r'"oracle_msgbox_any_seen"\s*:\s*true', raw) or re.search(r'"oracle_msgbox_total_builds"\s*:\s*[1-9]\d*', raw):
                 messagebox_by_dir[d.name] = [
                     f'runtime artifact {d.name} observed native CS::MessageBoxDialog build(s); product proof requires zero MessageBoxDialog popups'
+                ]
+            if (
+                re.search(r'"reason"\s*:\s*"native_server_status_semaphore_detected"', raw)
+                or re.search(r'"oracle_server_status_any_seen"\s*:\s*true', raw)
+                or re.search(r'"oracle_server_status_total_seen"\s*:\s*[1-9]\d*', raw)
+                or re.search(r'"oracle_server_status_text_id"\s*:\s*(401120|401150|401160|401165)', raw)
+            ):
+                server_status_by_dir[d.name] = [
+                    f'runtime artifact {d.name} observed native server/login status semaphore; product proof requires no online status UI'
                 ]
             if re.search(r'"reason"\s*:\s*"visual_save_data_popup_detected"', raw):
                 save_data_popup_by_dir[d.name] = [
@@ -443,7 +469,7 @@ if rt_root.exists():
             if 'world-stable' in text or 'SetState5' in text or 'max oracle' in text:
                 proof['world'] = True
         count = sum(proof.values())
-        hard_popup_dirs = set(messagebox_by_dir) | set(legal_popup_by_dir) | set(save_data_popup_by_dir)
+        hard_popup_dirs = set(messagebox_by_dir) | set(legal_popup_by_dir) | set(save_data_popup_by_dir) | set(server_status_by_dir)
         best_has_hard_popup = best_runtime[1] is not None and best_runtime[1].name in hard_popup_dirs
         has_hard_popup = d.name in hard_popup_dirs
         if count > best_runtime[0] or (count == best_runtime[0] and best_has_hard_popup and not has_hard_popup):
@@ -457,10 +483,12 @@ else:
         runtime_failures.append(f'runtime proof best artifact {best_dir.name} missing {",".join(missing)}')
     runtime_mode_failures.extend(runtime_mode_by_dir.get(best_dir.name, []))
     eula_popup_failures.extend(legal_popup_by_dir.get(best_dir.name, []))
+    server_status_failures.extend(server_status_by_dir.get(best_dir.name, []))
 scored_runtime_dirs = {p.name for p in [best_dir, latest_runtime_dir] if p is not None}
 for dir_name in scored_runtime_dirs:
     messagebox_dialog_failures.extend(messagebox_by_dir.get(dir_name, []))
     save_data_popup_failures.extend(save_data_popup_by_dir.get(dir_name, []))
+    server_status_failures.extend(server_status_by_dir.get(dir_name, []))
 
 native_trace_blockers: list[str] = []
 native_trace_hits_total = 0
@@ -497,7 +525,7 @@ else:
 
 false_positives = 0
 all_detail_failures = []
-for group in [legacy_failures, asset_failures, dll_failures, native_failures, field58_failures, direct_failures, input_failures, runtime_failures, runtime_mode_failures, eula_popup_failures, save_data_popup_failures, messagebox_dialog_failures]:
+for group in [legacy_failures, asset_failures, dll_failures, native_failures, field58_failures, direct_failures, input_failures, runtime_failures, runtime_mode_failures, eula_popup_failures, save_data_popup_failures, messagebox_dialog_failures, server_status_failures]:
     all_detail_failures.extend(group)
 
 weights = {
@@ -513,6 +541,7 @@ weights = {
     'eula_popup': 80,
     'save_data_popup': 160,
     'messagebox_dialog': 160,
+    'server_status': 160,
     'false_positive': 100,
 }
 penalty = (
@@ -528,6 +557,7 @@ penalty = (
     + len(eula_popup_failures) * weights['eula_popup']
     + len(save_data_popup_failures) * weights['save_data_popup']
     + len(messagebox_dialog_failures) * weights['messagebox_dialog']
+    + len(server_status_failures) * weights['server_status']
     + false_positives * weights['false_positive']
 )
 score = max(0, MAX_SCORE - penalty)
@@ -556,6 +586,7 @@ print(f'METRIC runtime_mode_failures={len(runtime_mode_failures)}')
 print(f'METRIC eula_popup_failures={len(eula_popup_failures)}')
 print(f'METRIC save_data_popup_failures={len(save_data_popup_failures)}')
 print(f'METRIC messagebox_dialog_failures={len(messagebox_dialog_failures)}')
+print(f'METRIC server_status_failures={len(server_status_failures)}')
 print(f'METRIC native_trace_blockers={len(native_trace_blockers)}')
 print(f'METRIC native_trace_hits_total={native_trace_hits_total}')
 print(f'METRIC native_trace_unique_breakpoints={native_trace_unique_breakpoints}')

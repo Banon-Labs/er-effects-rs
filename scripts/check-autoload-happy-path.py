@@ -262,6 +262,14 @@ def main() -> int:
         failures,
     )
     require(
+        "SERVER_STATUS_FORMATTER_RVA" in lib
+        and "SERVER_STATUS_TOTAL_SEEN" in lib
+        and "oracle_server_status_text_id" in telemetry_src
+        and "oracle_server_status_any_seen" in telemetry_src,
+        "telemetry must expose native server/login status semaphore evidence from GR_System_Message_win64.fmg IDs",
+        failures,
+    )
+    require(
         "seamless_coop_loaded" in telemetry_src
         and "runtime_mode" in telemetry_src
         and "GetModuleHandleA" in telemetry_src
@@ -285,6 +293,15 @@ def main() -> int:
         failures,
     )
     require(
+        "--fail-on-server-status-semaphore" in watcher
+        and "native_server_status_semaphore_detected" in watcher
+        and "telemetry_server_status_semaphore_detected" in watcher
+        and "401120" in watcher
+        and "401160" in watcher,
+        "readiness watcher must fail closed when native server/login status semaphores appear",
+        failures,
+    )
+    require(
         "--visual-save-data-popup-check" in watcher
         and "visual_save_data_popup_detected" in watcher
         and "failed to load save data" in watcher,
@@ -303,6 +320,13 @@ def main() -> int:
         and "oracle_msgbox_total_builds" in measure
         and "native_messagebox_dialog_detected" in measure,
         "measure must expose and penalize any native MessageBoxDialog build as a bad product-proof failure",
+        failures,
+    )
+    require(
+        "native_server_status_semaphore_detected" in measure
+        and "oracle_server_status_text_id" in measure
+        and "server_status" in measure,
+        "measure must expose and penalize native server/login status semaphore artifacts",
         failures,
     )
     require(
