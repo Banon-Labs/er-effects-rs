@@ -13,6 +13,8 @@ LIB = REPO_ROOT / "src" / "lib.rs"
 TELEMETRY = REPO_ROOT / "src" / "telemetry.rs"
 WATCHER = REPO_ROOT / "scripts" / "er-readiness-watch.py"
 STAGE_SCRIPT = REPO_ROOT / "scripts" / "stage-autoload-release.sh"
+NATIVE_STATIC_CHECK = REPO_ROOT / "scripts" / "check-native-continue-static.py"
+CHECK_SH = REPO_ROOT / "scripts" / "check.sh"
 RUNTIME_PROBE = REPO_ROOT / ".auto" / "runtime_probe.sh"
 MEASURE = REPO_ROOT / ".auto" / "measure.sh"
 
@@ -109,6 +111,8 @@ def main() -> int:
     telemetry = read(TELEMETRY)
     watcher = read(WATCHER)
     runtime_probe = read(RUNTIME_PROBE) if RUNTIME_PROBE.exists() else ""
+    native_static_check = read(NATIVE_STATIC_CHECK) if NATIVE_STATIC_CHECK.exists() else ""
+    check_sh = read(CHECK_SH)
     measure = read(MEASURE)
 
     require(
@@ -376,6 +380,21 @@ def main() -> int:
         and "MENU_WINDOW_JOB_CTOR_RVA" in lib
         and "cap_menu_window_job_ctor_7ac8c0" in experiments,
         "measure must fail closed if the product lacks a constructor-time semantic Continue latch",
+        failures,
+    )
+    require(
+        "MENU_CONTINUE_WRAPPER" in native_static_check
+        and "MENU_WINDOW_JOB_CTOR" in native_static_check
+        and "MENU_ACCEPT_IDLE" in native_static_check
+        and "MENU_ACCEPT_NATIVE" in native_static_check
+        and "MENU_SUBMIT" in native_static_check
+        and "check-native-continue-static.py" in check_sh,
+        "quality gates must include skip-safe native Continue/MenuWindowJob static byte-window validation",
+        failures,
+    )
+    require(
+        "check-native-continue-static.py" in measure,
+        "measure must fail closed if the native Continue static checker is not wired into quality gates",
         failures,
     )
     require(

@@ -13,6 +13,8 @@ exp = (root / 'src/experiments.rs').read_text(encoding='utf-8', errors='replace'
 check = (root / 'scripts/check-autoload-happy-path.py').read_text(encoding='utf-8', errors='replace')
 telemetry_src = (root / 'src/telemetry.rs').read_text(encoding='utf-8', errors='replace')
 watcher = (root / 'scripts/er-readiness-watch.py').read_text(encoding='utf-8', errors='replace')
+native_static_check = (root / 'scripts/check-native-continue-static.py').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/check-native-continue-static.py').exists() else ''
+check_sh = (root / 'scripts/check.sh').read_text(encoding='utf-8', errors='replace')
 prompt = (root / '.auto/prompt.md').read_text(encoding='utf-8', errors='replace') if (root / '.auto/prompt.md').exists() else ''
 combined = lib + '\n' + exp
 
@@ -222,6 +224,19 @@ if (
     autoload_static_failures += 1
 if 'product Continue capture must observe MenuWindowJob construction before update-time first-item latching' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce constructor hook semantic Continue latch')
+    autoload_static_failures += 1
+if (
+    'MENU_CONTINUE_WRAPPER' not in native_static_check
+    or 'MENU_WINDOW_JOB_CTOR' not in native_static_check
+    or 'MENU_ACCEPT_IDLE' not in native_static_check
+    or 'MENU_ACCEPT_NATIVE' not in native_static_check
+    or 'MENU_SUBMIT' not in native_static_check
+    or 'check-native-continue-static.py' not in check_sh
+):
+    legacy_failures.append('quality gates do not include native Continue/MenuWindowJob static byte-window validation')
+    autoload_static_failures += 1
+if 'quality gates must include skip-safe native Continue/MenuWindowJob static byte-window validation' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce native Continue static checker wiring')
     autoload_static_failures += 1
 
 asset_failures: list[str] = []
