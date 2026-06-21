@@ -234,11 +234,16 @@ if (
     or 'MEMBER_ADJ_20' not in member_latch_body
     or 'capture_continue_member_node_candidate(base, arg1' not in exp_code
     or 'capture_continue_member_node_candidate(base, result' not in exp_code
+    or 'oracle_continue_member_node' not in telemetry_src
+    or 'oracle_continue_task_node' not in telemetry_src
 ):
-    legacy_failures.append('product tracing lacks passive registered TitleTopDialog Continue MenuMemberFuncJob latch')
+    legacy_failures.append('product tracing lacks passive registered TitleTopDialog Continue MenuMemberFuncJob latch/telemetry')
     autoload_static_failures += 1
 if 'product tracing must passively latch registered TitleTopDialog Continue MenuMemberFuncJob nodes' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce passive Continue MenuMemberFuncJob latch')
+    autoload_static_failures += 1
+if 'telemetry must expose passive Continue task/member semantic latch addresses' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce passive Continue latch telemetry')
     autoload_static_failures += 1
 if (
     'MENU_CONTINUE_WRAPPER' not in native_static_check

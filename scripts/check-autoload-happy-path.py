@@ -215,6 +215,13 @@ def main() -> int:
         "product tracing must passively latch registered TitleTopDialog Continue MenuMemberFuncJob nodes",
         failures,
     )
+    require(
+        "oracle_continue_task_node" in telemetry
+        and "oracle_continue_member_node" in telemetry
+        and "MENU_CONTINUE_MEMBER_NODE" in telemetry,
+        "telemetry must expose passive Continue task/member semantic latch addresses",
+        failures,
+    )
 
     online_body = rust_fn_body(experiments, "online_disable_enabled")
     input_body = rust_fn_body(experiments, "block_input_enabled")
@@ -397,8 +404,9 @@ def main() -> int:
     require(
         "registered TitleTopDialog Continue MenuMemberFuncJob" in measure
         and "MENU_CONTINUE_MEMBER_NODE" in lib
-        and "capture_continue_member_node_candidate" in experiments,
-        "measure must fail closed if the product lacks passive Continue MenuMemberFuncJob provenance latching",
+        and "capture_continue_member_node_candidate" in experiments
+        and "oracle_continue_member_node" in telemetry_src,
+        "measure must fail closed if the product lacks passive Continue MenuMemberFuncJob provenance latching/telemetry",
         failures,
     )
     require(

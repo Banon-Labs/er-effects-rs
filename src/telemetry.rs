@@ -322,6 +322,20 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         "  \"simulated_button_presses_total\": {},\n",
         crate::hooks::SIMULATED_INPUT_PRESSES_TOTAL.load(Ordering::SeqCst)
     ));
+    let continue_task_node = MENU_CONTINUE_TASK_NODE.load(Ordering::SeqCst);
+    let continue_member_node = MENU_CONTINUE_MEMBER_NODE.load(Ordering::SeqCst);
+    let format_optional_ptr = |value: usize| -> String {
+        if value == TITLE_OWNER_SCAN_START_ADDRESS {
+            "null".to_owned()
+        } else {
+            format!("\"0x{value:x}\"")
+        }
+    };
+    body.push_str(&format!(
+        "  \"oracle_continue_task_node\": {},\n  \"oracle_continue_member_node\": {},\n",
+        format_optional_ptr(continue_task_node),
+        format_optional_ptr(continue_member_node)
+    ));
     // GameMan save-mgr signals: b80 (load-in-progress lane -- the golden-capture mash-stop signal,
     // nonzero once continue is confirmed and the deserialize kicks) + c30 (saved map id, oracle item 2).
     const NULL_PTR: usize = 0;
