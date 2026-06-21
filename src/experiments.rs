@@ -72,6 +72,20 @@ pub(crate) static PRODUCT_CORE_READY_SUCCESSES: AtomicU64 = AtomicU64::new(0);
 pub(crate) static PRODUCT_CORE_OWNER_TICKS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static PRODUCT_CORE_LAST_OWNER: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static PRODUCT_CORE_LAST_TITLE_DIALOG: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static PRODUCT_CORE_LAST_TITLE_DIALOG_VT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static PRODUCT_CORE_LAST_TITLE_IN_LOOP: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PRODUCT_CORE_LAST_TITLE_IN_TEXTFADEOUT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PRODUCT_CORE_LAST_MENU_OPENED_LATCH: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static PRODUCT_CORE_LAST_PRESS_START_PROXY: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static PRODUCT_CORE_LAST_PRESS_START_VT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static PRODUCT_CORE_LAST_PRESS_START_CONTEXT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static PRODUCT_CORE_LAST_PHASE: AtomicUsize = AtomicUsize::new(OWN_STEPPER_PHASE_MENU);
 pub(crate) static PRODUCT_CORE_LAST_BLOCKER: AtomicUsize =
     AtomicUsize::new(PRODUCT_CORE_BLOCKER_UNSEEN);
@@ -2656,6 +2670,14 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             } else {
                 (false, false, null)
             };
+        PRODUCT_CORE_LAST_TITLE_DIALOG.store(dialog, Ordering::SeqCst);
+        PRODUCT_CORE_LAST_TITLE_DIALOG_VT.store(dialog_vt, Ordering::SeqCst);
+        PRODUCT_CORE_LAST_TITLE_IN_LOOP.store(title_loop as usize, Ordering::SeqCst);
+        PRODUCT_CORE_LAST_TITLE_IN_TEXTFADEOUT.store(title_textfadeout as usize, Ordering::SeqCst);
+        PRODUCT_CORE_LAST_MENU_OPENED_LATCH.store(menu_opened_latch, Ordering::SeqCst);
+        PRODUCT_CORE_LAST_PRESS_START_PROXY.store(press_start_proxy, Ordering::SeqCst);
+        PRODUCT_CORE_LAST_PRESS_START_VT.store(press_start_vt, Ordering::SeqCst);
+        PRODUCT_CORE_LAST_PRESS_START_CONTEXT.store(press_start_context, Ordering::SeqCst);
         let blocker =
             if committed != TITLE_STEP_MENU_JOB_WAIT || requested != TITLE_STEP_MENU_JOB_WAIT {
                 PRODUCT_CORE_BLOCKER_TITLE_OWNER_STATE
@@ -2694,6 +2716,21 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         }
         return true;
     };
+    PRODUCT_CORE_LAST_TITLE_DIALOG.store(ready.title_dialog, Ordering::SeqCst);
+    PRODUCT_CORE_LAST_TITLE_DIALOG_VT.store(
+        unsafe { safe_read_usize(ready.title_dialog) }.unwrap_or(null),
+        Ordering::SeqCst,
+    );
+    PRODUCT_CORE_LAST_TITLE_IN_LOOP.store(ready.title_in_loop as usize, Ordering::SeqCst);
+    PRODUCT_CORE_LAST_TITLE_IN_TEXTFADEOUT
+        .store(ready.title_in_textfadeout as usize, Ordering::SeqCst);
+    PRODUCT_CORE_LAST_MENU_OPENED_LATCH.store(ready.menu_opened_latch, Ordering::SeqCst);
+    PRODUCT_CORE_LAST_PRESS_START_PROXY.store(ready.press_start_proxy, Ordering::SeqCst);
+    PRODUCT_CORE_LAST_PRESS_START_VT.store(
+        unsafe { safe_read_usize(ready.press_start_proxy) }.unwrap_or(null),
+        Ordering::SeqCst,
+    );
+    PRODUCT_CORE_LAST_PRESS_START_CONTEXT.store(ready.press_start_context, Ordering::SeqCst);
     PRODUCT_CORE_READY_SUCCESSES.fetch_add(1, Ordering::SeqCst);
     PRODUCT_CORE_LAST_BLOCKER.store(PRODUCT_CORE_BLOCKER_READY, Ordering::SeqCst);
     if phase == OWN_STEPPER_PHASE_MENU {

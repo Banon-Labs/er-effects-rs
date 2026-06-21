@@ -566,6 +566,9 @@ def main() -> int:
         and "PRODUCT_CORE_READY_SUCCESSES" in experiments
         and "PRODUCT_CORE_OWNER_TICKS" in experiments
         and "PRODUCT_CORE_LAST_OWNER" in experiments
+        and "PRODUCT_CORE_LAST_TITLE_IN_LOOP" in experiments
+        and "PRODUCT_CORE_LAST_MENU_OPENED_LATCH" in experiments
+        and "PRODUCT_CORE_LAST_PRESS_START_CONTEXT" in experiments
         and "PRODUCT_CORE_LAST_BLOCKER" in experiments
         and "product_core_ready_blocker_label" in experiments
         and "TITLE_OWNER_SCAN_ATTEMPTS" in experiments
@@ -575,12 +578,18 @@ def main() -> int:
         and "PRODUCT_CORE_LAST_BLOCKER.store(blocker, Ordering::SeqCst);\n        if tick % OWN_STEPPER_LOG_INTERVAL" in experiments
         and "product_core_owner_ticks" in telemetry_src
         and "product_core_last_owner" in telemetry_src
+        and "product_core_last_title_in_loop" in telemetry_src
+        and "product_core_last_menu_opened_latch" in telemetry_src
+        and "product_core_last_press_start_context" in telemetry_src
         and "title_owner_scan_attempts" in telemetry_src
         and "title_owner_scan_vtable_hits" in telemetry_src
         and "title_owner_scan_last_candidate" in telemetry_src
         and "title_owner_scan_attempts" in watcher
         and "product_core_owner_ticks" in watcher
         and "product_core_last_owner" in watcher
+        and "product_core_last_title_in_loop" in watcher
+        and "product_core_last_menu_opened_latch" in watcher
+        and "product_core_last_press_start_context" in watcher
         and "product_core_ready_blocker" in telemetry_src
         and "product_core_autoload_ticks" in telemetry_src,
         "DLL telemetry must expose product-core autoload tick/readiness blocker and title-owner scan evidence",
