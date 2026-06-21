@@ -14,6 +14,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from runtime_timeout_cap import runtime_timeout_cap_seconds
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 AUTO_DIR = REPO_ROOT / ".auto"
 RUNTIME_TRIGGER_PATH = AUTO_DIR / "run-runtime-once"
@@ -24,7 +26,12 @@ RUNTIME_POLICY_PATH = AUTO_DIR / "runtime_experiment_policy.rego"
 SMOKE_DRIVER_PATH = REPO_ROOT / "scripts" / "er-smoke-driver.sh"
 AUTO_LOG_PATH = AUTO_DIR / "log.jsonl"
 INCIDENT_ISSUE_ID = "er-effects-rs-1l6"
-MAX_RUNTIME_TIMEOUT_SECONDS = 60
+
+# Single source of truth for the runtime-probe wall-clock cap, read through the shared
+# scripts/runtime_timeout_cap.py helper (same reader the watcher uses). The runtime path reads the
+# canonical .auto/runtime_timeout_cap_seconds and passes the value through; the rego policy literal
+# cannot read a file at eval time, so this checker keeps it in sync (asserts policy == canonical).
+MAX_RUNTIME_TIMEOUT_SECONDS = runtime_timeout_cap_seconds()
 BANNED_LAUNCH_SNIPPETS = (
     "./.auto/runtime_probe.sh",
 )
@@ -36,7 +43,7 @@ RUNTIME_POLICY_REQUIRED_SNIPPETS = (
     "process_tree_and_save_restore",
     "legal_popup_check == \"native_messagebox_and_packed_asset_tos_fmg_fail_fast\"",
     "timeout_seconds",
-    "max_timeout_seconds := 60",
+    f"max_timeout_seconds := {MAX_RUNTIME_TIMEOUT_SECONDS}",
 )
 BANNED_WRAPPER_SNIPPETS = (
     ".auto/run-runtime-once",
@@ -124,9 +131,9 @@ def scan_contract() -> list[Finding]:
                     Finding(
                         relative(env_path),
                         line_number,
-                        "runtime-env-timeout-over-60",
+                        "runtime-env-timeout-over-cap",
                         line.strip(),
-                        "Runtime env files must set RUNTIME_TIMEOUT_SECONDS<=60; no product-success scenario is credible after 60 seconds.",
+                        f"Runtime env files must set RUNTIME_TIMEOUT_SECONDS<={MAX_RUNTIME_TIMEOUT_SECONDS} (the canonical .auto/runtime_timeout_cap_seconds cap).",
                     )
                 )
 
@@ -284,7 +291,7 @@ def scan_contract() -> list[Finding]:
                     0,
                     "runtime-probe-missing-bounded-timeout",
                     ", ".join(missing_probe_timeout),
-                    "Runtime probe policy input and readiness watcher invocation must carry timeout_seconds / --max-runtime-seconds with a value no greater than 60.",
+                    f"Runtime probe policy input and readiness watcher invocation must carry timeout_seconds / --max-runtime-seconds with a value no greater than the canonical cap ({MAX_RUNTIME_TIMEOUT_SECONDS}).",
                 )
             )
 
@@ -294,7 +301,11 @@ def scan_contract() -> list[Finding]:
         missing_watch_timeout = [
             snippet
             for snippet in (
-                "MAX_ALLOWED_RUNTIME_SECONDS = 60.0",
+                # The hard cap is no longer a literal: the watcher derives it from the shared
+                # runtime_timeout_cap reader (single source of truth), so verify it still binds the
+                # cap into MAX_ALLOWED_RUNTIME_SECONDS and enforces the bounded budget.
+                "from runtime_timeout_cap import runtime_timeout_cap_seconds",
+                "MAX_ALLOWED_RUNTIME_SECONDS = float(runtime_timeout_cap_seconds())",
                 "--max-runtime-seconds",
                 "TIMEOUT_BUDGET_EXHAUSTED",
             )

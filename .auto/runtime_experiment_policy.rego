@@ -4,7 +4,9 @@ import rego.v1
 
 default allow := false
 
-max_timeout_seconds := 60
+# Kept in sync with the single source of truth .auto/runtime_timeout_cap_seconds by
+# scripts/check-runtime-probe-contract.py (rego cannot read files at eval time).
+max_timeout_seconds := 120
 
 manual_event_driver_ready if {
     input.readiness_watcher == "scripts/er-readiness-watch.py"

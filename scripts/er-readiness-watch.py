@@ -2,7 +2,8 @@
 """Watch an Elden Ring launch until DLL telemetry is ready or a structured failure is known.
 
 This helper uses process/window/bootstrap/telemetry observations first, but every
-runtime watch is also hard-bounded by --max-runtime-seconds, capped at 60 seconds,
+runtime watch is also hard-bounded by --max-runtime-seconds, capped at the canonical
+runtime-probe cap (the single source of truth in .auto/runtime_timeout_cap_seconds),
 so a missing DLL telemetry stream cannot strand Elden Ring on-screen indefinitely.
 """
 from __future__ import annotations
@@ -19,6 +20,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from runtime_timeout_cap import runtime_timeout_cap_seconds
+
 DEFAULT_RUNTIME_PROCESS_PATTERN = r"(?:^|[/\\])(eldenring\.exe|start_protected_game\.exe)(?:\s|$)"
 DEFAULT_WINDOW_CLASS = "steam_app_1245620"
 DEFAULT_SPAWN_POLL_BUDGET = 4096
@@ -26,9 +29,13 @@ DEFAULT_READINESS_POLL_BUDGET = 8192
 DEFAULT_WINDOW_STALE_POLL_BUDGET = 4096
 DEFAULT_AUTOLOAD_ATTEMPT_BUDGET = 300
 DEFAULT_POST_REQUEST_TICK_BUDGET = 300
-DEFAULT_MAX_RUNTIME_SECONDS = 60.0
+# Single source of truth for the runtime-probe wall-clock cap: .auto/runtime_timeout_cap_seconds,
+# read through the shared scripts/runtime_timeout_cap.py helper (same reader the contract checker
+# uses). bash (run-product-continue-direct-probe.sh, runtime_probe.sh) reads the same file and
+# passes the value through as --max-runtime-seconds; the rego policy is kept in sync by the checker.
+MAX_ALLOWED_RUNTIME_SECONDS = float(runtime_timeout_cap_seconds())
+DEFAULT_MAX_RUNTIME_SECONDS = MAX_ALLOWED_RUNTIME_SECONDS
 DEFAULT_WORLD_STABLE_DWELL_SECONDS = 5.0
-MAX_ALLOWED_RUNTIME_SECONDS = 60.0
 OBSERVATION_SUBPROCESS_TIMEOUT_SECONDS = 5.0
 SUCCESS_RC = 0
 FAILURE_RC = 1
@@ -1854,7 +1861,7 @@ def parse_args() -> argparse.Namespace:
         "--max-runtime-seconds",
         type=float,
         default=DEFAULT_MAX_RUNTIME_SECONDS,
-        help="Hard wall-clock cap for the readiness watch; must be >0 and <=60.",
+        help="Hard wall-clock cap for the readiness watch; must be >0 and <= the canonical runtime-probe cap (.auto/runtime_timeout_cap_seconds).",
     )
     parser.add_argument(
         "--allow-async-launcher-exit",
@@ -1872,7 +1879,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     if args.max_runtime_seconds <= 0 or args.max_runtime_seconds > MAX_ALLOWED_RUNTIME_SECONDS:
-        raise SystemExit("--max-runtime-seconds must be greater than 0 and no more than 60")
+        raise SystemExit(
+            f"--max-runtime-seconds must be greater than 0 and no more than {MAX_ALLOWED_RUNTIME_SECONDS:g}"
+        )
     if args.world_stable_samples <= 0:
         raise SystemExit("--world-stable-samples must be greater than 0")
     if args.world_stable_dwell_seconds < 0:

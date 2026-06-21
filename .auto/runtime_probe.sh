@@ -3,7 +3,9 @@ set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
-RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-60}"
+# Single source of truth for the runtime-probe wall-clock cap (seconds); fail safe to 60.
+RUNTIME_TIMEOUT_CAP_SECONDS="$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 60)"
+RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-$RUNTIME_TIMEOUT_CAP_SECONDS}"
 RUNTIME_LAZYLOAD_CHAINLOAD_DLL="${RUNTIME_LAZYLOAD_CHAINLOAD_DLL:-er_effects_rs.dll}"
 RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-vanilla}"
 POLICY_PATH="$REPO_ROOT/.auto/runtime_experiment_policy.rego"
@@ -52,12 +54,13 @@ PY
 }
 
 validate_runtime_policy() {
-  python3 - "$RUNTIME_TIMEOUT_SECONDS" <<'PY'
+  python3 - "$RUNTIME_TIMEOUT_SECONDS" "$RUNTIME_TIMEOUT_CAP_SECONDS" <<'PY'
 import sys
 
 timeout_seconds = int(sys.argv[1])
-if timeout_seconds <= 0 or timeout_seconds > 60:
-    raise SystemExit("RUNTIME_TIMEOUT_SECONDS must be greater than 0 and no more than 60")
+cap = int(sys.argv[2])
+if timeout_seconds <= 0 or timeout_seconds > cap:
+    raise SystemExit(f"RUNTIME_TIMEOUT_SECONDS must be greater than 0 and no more than {cap}")
 PY
   if [[ "${AUTO_ALLOW_MANUAL_RUNTIME_PROBE:-0}" != "1" ]]; then
     echo "runtime_probe.sh is disabled fail-closed; set AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 for a deliberate manual run" >&2
