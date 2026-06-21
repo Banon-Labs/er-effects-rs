@@ -304,12 +304,18 @@ def main() -> int:
         and "POLICY_TOS_STATUS_PREDICATE" in native_static_check
         and "POLICY_TOS_FLAG_SETTER" in native_static_check
         and "POLICY_TOS_FLAG_SETTER_CALLER" in native_static_check
+        and "POLICY_TOS_REQUESTED_FLAG_INIT" in native_static_check
+        and "POLICY_TOS_REQUESTED_FLAG_BIND" in native_static_check
+        and "POLICY_TOS_REQUESTED_FLAG_COMMIT" in native_static_check
         and "wrapper builder returns the original output wrapper pointer" in native_static_check
         and "result event wrapper builder no longer finalizes payload" in native_static_check
         and "policy ToS status predicate reads fallback pointer at owner+0x29c0" in native_static_check
         and "policy ToS flag setter writes requested value to flag pointer" in native_static_check
-        and "policy ToS flag setter caller loads requested flag from owner+0x29c8" in native_static_check,
-        "native static checker must pin wrapper-builder ABI, ToS status predicate/setter/caller ABI, and inner finalize edge",
+        and "policy ToS flag setter caller loads requested flag from owner+0x29c8" in native_static_check
+        and "policy ToS constructor initializes requested flag owner+0x29c8 from current flag" in native_static_check
+        and "policy ToS requested-flag binder passes pointer to owner+0x29c8" in native_static_check
+        and "policy ToS requested-flag commit loads requested flag from owner+0x29c8" in native_static_check,
+        "native static checker must pin wrapper-builder ABI, ToS status predicate/setter/caller/requested-flag ABI, and inner finalize edge",
         failures,
     )
 

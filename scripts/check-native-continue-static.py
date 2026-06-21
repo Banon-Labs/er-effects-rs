@@ -34,6 +34,10 @@ RESULT_EVENT_WRAPPER_INNER_BUILD = 0x1407449E0
 POLICY_TOS_STATUS_PREDICATE = 0x1409B72B0
 POLICY_TOS_FLAG_SETTER = 0x1409B6B30
 POLICY_TOS_FLAG_SETTER_CALLER = 0x1409B5D4C
+POLICY_TOS_REQUESTED_FLAG_INIT = 0x1409B5A9F
+POLICY_TOS_REQUESTED_FLAG_BIND = 0x1409B61A7
+POLICY_TOS_REQUESTED_FLAG_COMMIT = 0x1409B7289
+POLICY_TOS_BIND_SELECTOR = 0x1409B49F0
 POLICY_TOS_GATE = 0x140E4FDA0
 MENU_JOB_SINGLE_CONSUMER = 0x1407A9600
 MENU_JOB_LIST_CONSUMER = 0x1407AA1F0
@@ -200,6 +204,27 @@ def main() -> int:
     setter_caller_calls = rel32_targets(POLICY_TOS_FLAG_SETTER_CALLER, policy_setter_caller)
     if POLICY_TOS_FLAG_SETTER not in setter_caller_calls:
         fail("policy ToS flag setter caller no longer calls 0x1409b6b30")
+
+    policy_requested_init = image_bytes(POLICY_TOS_REQUESTED_FLAG_INIT, 0x40)
+    contains(policy_requested_init, b"\x49\x89\x86\xc0\x29\x00\x00", "policy ToS constructor stores flag pointer at owner+0x29c0")
+    contains(policy_requested_init, b"\x8b\x00", "policy ToS constructor loads current flag value from *owner+0x29c0")
+    contains(policy_requested_init, b"\x41\x89\x86\xc8\x29\x00\x00", "policy ToS constructor initializes requested flag owner+0x29c8 from current flag")
+
+    policy_requested_bind = image_bytes(POLICY_TOS_REQUESTED_FLAG_BIND, 0x40)
+    contains(policy_requested_bind, b"\x48\x8b\x16", "policy ToS requested-flag binder loads owner from holder")
+    contains(policy_requested_bind, b"\x48\x8d\x8a\xc8\x29\x00\x00", "policy ToS requested-flag binder passes pointer to owner+0x29c8")
+    contains(policy_requested_bind, b"\x4c\x8d\x8a\xd0\x29\x00\x00", "policy ToS requested-flag binder passes owner+0x29d0 selector state")
+    requested_bind_calls = rel32_targets(POLICY_TOS_REQUESTED_FLAG_BIND, policy_requested_bind)
+    if POLICY_TOS_BIND_SELECTOR not in requested_bind_calls:
+        fail("policy ToS requested-flag binder no longer calls selector binding 0x1409b49f0")
+
+    policy_requested_commit = image_bytes(POLICY_TOS_REQUESTED_FLAG_COMMIT, 0x30)
+    contains(policy_requested_commit, b"\x48\x8b\x49\x08", "policy ToS requested-flag commit loads owner from this+0x8")
+    contains(policy_requested_commit, b"\x45\x33\xc0", "policy ToS requested-flag commit passes r8=0")
+    contains(policy_requested_commit, b"\x8b\x91\xc8\x29\x00\x00", "policy ToS requested-flag commit loads requested flag from owner+0x29c8")
+    requested_commit_jumps = rel32_targets(POLICY_TOS_REQUESTED_FLAG_COMMIT, policy_requested_commit, opcode=0xE9)
+    if POLICY_TOS_FLAG_SETTER not in requested_commit_jumps:
+        fail("policy ToS requested-flag commit no longer tail-calls 0x1409b6b30")
 
     single_consumer = image_bytes(MENU_JOB_SINGLE_CONSUMER, 0x140)
     contains(single_consumer, b"\xff\x50\x10", "single native menu consumer calls job vtable +0x10 update")
