@@ -48,13 +48,18 @@ runtime_pids() {
   local proc pid comm cmdline
   for proc in /proc/[0-9]*; do
     pid=${proc##*/}
-    [[ -r "$proc/comm" && -r "$proc/cmdline" ]] || continue
+    [[ -r "$proc/comm" ]] || continue
     comm=$(<"$proc/comm")
-    cmdline=$(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null || true)
-    if [[ "$comm" == "eldenring.exe" && "$cmdline" == *"ELDEN RING"* && "$cmdline" == *"Game"* ]]; then
+    # The exact process name is specific to the game (not a broad pattern like "wine"), and
+    # "eldenring.exe" (13 chars) is not /proc/comm-truncated. Match it directly so a
+    # wine-reparented process whose cmdline no longer contains the install path is still found
+    # and torn down -- the earlier cmdline-substring-only match leaked such processes.
+    if [[ "$comm" == "eldenring.exe" ]]; then
       printf '%s\n' "$pid"
       continue
     fi
+    [[ -r "$proc/cmdline" ]] || continue
+    cmdline=$(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null || true)
     if [[ "$cmdline" == *"$GAME_DIR/eldenring.exe"* ]]; then
       printf '%s\n' "$pid"
       continue
@@ -94,10 +99,11 @@ terminate_runtime_pids() {
       kill "$pid" 2>/dev/null || true
     fi
   done
-  for _ in $(seq 1 30); do
-    mapfile -t pids < <(runtime_pids)
-    ((${#pids[@]} == 0)) && return 0
-    sleep 0.2
+  # Deterministic, bounded wait for graceful exit (no sleep): block on each pid's exit with
+  # `tail --pid`, hard-capped by a <=30s timeout. tail returns the instant the pid is gone.
+  for pid in "${pids[@]}"; do
+    [[ -n "$pid" ]] || continue
+    timeout 6 tail --pid="$pid" -f /dev/null >/dev/null 2>&1 || true
   done
   mapfile -t pids < <(runtime_pids)
   for pid in "${pids[@]}"; do

@@ -1610,7 +1610,6 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
             if not windows or not window_capture_safe(windows[0], args.window_class):
                 if args.defer_unsafe_visual_capture_until_telemetry and telemetry is None:
                     os.sched_yield()
-                    time.sleep(args.poll_interval_seconds)
                     continue
                 return with_runtime_module_info(
                     ReadinessResult(
@@ -1847,6 +1846,11 @@ def parse_args() -> argparse.Namespace:
         help="Do not abort solely because the target window is unsafe to screenshot until native telemetry has had a chance to arrive; screenshots still require a safe exact target window.",
     )
     parser.add_argument(
+        "--skip-visual-capture",
+        action="store_true",
+        help="Telemetry-only validation mode: rely solely on in-process native telemetry for popup/world detection and never require or perform target-window screenshots, removing the window-focus dependency (no target_window_capture_unsafe bail). The native fail-closed checks (--fail-on-native-legal-popup / --fail-on-messagebox-dialog / --fail-on-server-status-semaphore) stay active. For focus-independent runtime validation, not product proof.",
+    )
+    parser.add_argument(
         "--max-runtime-seconds",
         type=float,
         default=DEFAULT_MAX_RUNTIME_SECONDS,
@@ -1879,6 +1883,14 @@ def main() -> int:
         raise SystemExit("--visual-save-data-popup-check-interval-seconds must be greater than 0")
     if args.expected_save_oracle and read_json(args.expected_save_oracle) is None:
         raise SystemExit(f"--expected-save-oracle is not readable JSON: {args.expected_save_oracle}")
+    if args.skip_visual_capture:
+        # Telemetry-only mode: disable every target-window screenshot path so the watch has
+        # no window-focus dependency. The capture-safe bail and the visual popup/world checks
+        # are all gated on these flags; the native telemetry fail-closed checks run earlier
+        # and are unaffected.
+        args.visual_legal_popup_check = False
+        args.visual_save_data_popup_check = False
+        args.visual_world_check = False
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
     result = replace(with_runtime_mode_info(wait_readiness(args), args.expected_runtime_mode), window_class=args.window_class)
     output = args.artifact_dir / "readiness-result.json"

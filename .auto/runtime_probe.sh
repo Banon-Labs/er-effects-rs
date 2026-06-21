@@ -102,6 +102,18 @@ trap cleanup_runtime EXIT
 validate_runtime_policy
 stage_runtime_mode_payload
 setup_runtime_payload
+
+# Focus-independent telemetry-only validation mode (opt-in). When RUNTIME_SKIP_VISUAL_CAPTURE=1
+# the watcher relies solely on native in-process telemetry for popup/world detection and never
+# requires a focused, screenshot-safe target window -- so a run is not bailed with
+# target_window_capture_unsafe before the title flow advances. The native fail-closed checks
+# (--fail-on-messagebox-dialog / --fail-on-native-legal-popup / --fail-on-server-status-semaphore)
+# stay active. Default off: scored product-proof runs keep the supplemental visual OCR checks.
+watch_extra_args=()
+if [[ "${RUNTIME_SKIP_VISUAL_CAPTURE:-0}" == "1" ]]; then
+  watch_extra_args+=(--skip-visual-capture)
+fi
+
 python3 "$REPO_ROOT/scripts/er-readiness-watch.py" \
   --artifact-dir "${ARTIFACT_DIR:?ARTIFACT_DIR is required}" \
   --pid-file "${PID_FILE:?PID_FILE is required}" \
@@ -115,4 +127,5 @@ python3 "$REPO_ROOT/scripts/er-readiness-watch.py" \
   --fail-on-server-status-semaphore \
   --visual-save-data-popup-check \
   --defer-unsafe-visual-capture-until-telemetry \
+  "${watch_extra_args[@]}" \
   --max-runtime-seconds "$RUNTIME_TIMEOUT_SECONDS"
