@@ -1774,6 +1774,23 @@ pub(crate) static POLICY_TOS_TITLE_LAST_ARG_R8: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static POLICY_TOS_TITLE_LAST_ARG_R9: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Native policy/status predicate 0x1409b72b0: returns true if the policy gate at 0x140e4fda0
+/// is set, otherwise falls back to `[this+8]+0x29c0`. Hooked passively to explain legal/status
+/// gate failures in direct/offline runs; never used to auto-accept or skip the UI.
+pub(crate) const POLICY_TOS_STATUS_PREDICATE_RVA: u32 = 0x9b72b0;
+pub(crate) static POLICY_TOS_STATUS_PREDICATE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static POLICY_TOS_STATUS_HITS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+pub(crate) static POLICY_TOS_STATUS_LAST_THIS: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static POLICY_TOS_STATUS_LAST_OWNER: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static POLICY_TOS_STATUS_LAST_FLAG_PTR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static POLICY_TOS_STATUS_LAST_FLAG_VALUE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static POLICY_TOS_STATUS_LAST_RET: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static START_POLICY_TOS_TITLE_HOOK: Once = Once::new();
 /// Native server/login status-text formatter. Static asset/native scan (see
 /// `target/autoresearch/server-semaphore-assets/server-semaphore-static-summary.json`) maps

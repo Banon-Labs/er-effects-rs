@@ -270,11 +270,15 @@ if (
     or 'oracle_result_action_wrapper_builder_hits' not in telemetry_src
     or 'oracle_result_action_last_wrapper_builder_ret' not in telemetry_src
     or 'oracle_result_action_last_wrapper_builder_ret_update_rva' not in telemetry_src
+    or 'oracle_policy_status_predicate_hits' not in telemetry_src
+    or 'oracle_policy_status_predicate_ret' not in telemetry_src
     or 'oracle_result_action_insert_hits' not in telemetry_src
     or 'oracle_result_action_last_insert_arg1_update_rva' not in telemetry_src
     or 'oracle_result_action_last_insert_ret_update_rva' not in telemetry_src
     or 'RESULT_ACTION_WRAPPER_BUILDER_HITS' not in lib_code
     or 'RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA' not in lib_code
+    or 'POLICY_TOS_STATUS_PREDICATE_RVA' not in lib_code
+    or 'POLICY_TOS_STATUS_PREDICATE_ORIG' not in lib_code
     or 'RESULT_ACTION_INSERT_HITS' not in lib_code
     or 'RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA' not in lib_code
     or 'text_section_bounds' not in exp_code

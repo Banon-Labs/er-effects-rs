@@ -258,11 +258,15 @@ def main() -> int:
         and "oracle_result_action_wrapper_builder_hits" in telemetry
         and "oracle_result_action_last_wrapper_builder_ret" in telemetry
         and "oracle_result_action_last_wrapper_builder_ret_update_rva" in telemetry
+        and "oracle_policy_status_predicate_hits" in telemetry
+        and "oracle_policy_status_predicate_ret" in telemetry
         and "oracle_result_action_insert_hits" in telemetry
         and "oracle_result_action_last_insert_arg1_update_rva" in telemetry
         and "oracle_result_action_last_insert_ret_update_rva" in telemetry
         and "RESULT_ACTION_WRAPPER_BUILDER_HITS" in telemetry
         and "RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA" in telemetry
+        and "POLICY_TOS_STATUS_HITS" in telemetry
+        and "POLICY_TOS_STATUS_LAST_RET" in telemetry
         and "RESULT_ACTION_INSERT_HITS" in telemetry
         and "RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA" in telemetry
         and "NATIVE_SUBMIT_HITS" in telemetry
@@ -517,11 +521,15 @@ def main() -> int:
         and "oracle_result_action_wrapper_builder_hits" in telemetry_src
         and "oracle_result_action_last_wrapper_builder_ret" in telemetry_src
         and "oracle_result_action_last_wrapper_builder_ret_update_rva" in telemetry_src
+        and "oracle_policy_status_predicate_hits" in telemetry_src
+        and "oracle_policy_status_predicate_ret" in telemetry_src
         and "oracle_result_action_insert_hits" in telemetry_src
         and "oracle_result_action_last_insert_arg1_update_rva" in telemetry_src
         and "oracle_result_action_last_insert_ret_update_rva" in telemetry_src
         and "RESULT_ACTION_WRAPPER_BUILDER_HITS" in lib
         and "RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA" in lib
+        and "POLICY_TOS_STATUS_PREDICATE_RVA" in lib
+        and "POLICY_TOS_STATUS_PREDICATE_ORIG" in lib
         and "RESULT_ACTION_INSERT_HITS" in lib
         and "RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA" in lib
         and "text_section_bounds" in experiments
