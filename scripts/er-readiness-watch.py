@@ -164,6 +164,7 @@ class ReadinessResult:
     runtime_mode_actual: str | None = None
     runtime_mode_match: bool | None = None
     seamless_module_mappings: list[dict[str, Any]] | None = None
+    window_class: str = DEFAULT_WINDOW_CLASS
 
     def to_json(self) -> dict[str, Any]:
         payload = {
@@ -182,6 +183,7 @@ class ReadinessResult:
             "runtime_mode_actual": self.runtime_mode_actual,
             "runtime_mode_match": self.runtime_mode_match,
             "seamless_module_mappings": self.seamless_module_mappings or [],
+            "target_window_capture": target_window_capture_diagnostics(self.windows, self.window_class),
         }
         oracle = oracle_summary(self.telemetry, self.expected_save_oracle, self.expected_animation_id)
         if oracle:
@@ -484,6 +486,40 @@ def target_window_capture_problems(window: dict[str, Any], window_class: str) ->
 
 def window_capture_safe(window: dict[str, Any], window_class: str) -> bool:
     return not target_window_capture_problems(window, window_class)
+
+
+def target_window_capture_diagnostics(windows: list[dict[str, Any]], window_class: str) -> dict[str, Any]:
+    if not windows:
+        return {
+            "window_class": window_class,
+            "window_present": False,
+            "capture_safe": False,
+            "problems": ["no_target_window"],
+        }
+    selected = windows[0]
+    problems = target_window_capture_problems(selected, window_class)
+    return {
+        "window_class": window_class,
+        "window_present": True,
+        "capture_safe": not problems,
+        "problems": problems,
+        "selected": {
+            key: selected.get(key)
+            for key in (
+                "class",
+                "workspace",
+                "at",
+                "size",
+                "pid",
+                "mapped",
+                "hidden",
+                "focusHistoryID",
+                "fullscreen",
+                "address",
+            )
+        },
+        "candidate_count": len(windows),
+    }
 
 
 def as_int(value: Any, default: int = -1) -> int:
@@ -1694,7 +1730,7 @@ def main() -> int:
     if args.expected_save_oracle and read_json(args.expected_save_oracle) is None:
         raise SystemExit(f"--expected-save-oracle is not readable JSON: {args.expected_save_oracle}")
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
-    result = with_runtime_mode_info(wait_readiness(args), args.expected_runtime_mode)
+    result = replace(with_runtime_mode_info(wait_readiness(args), args.expected_runtime_mode), window_class=args.window_class)
     output = args.artifact_dir / "readiness-result.json"
     write_result(output, result)
     print(json.dumps(result.to_json(), sort_keys=True))

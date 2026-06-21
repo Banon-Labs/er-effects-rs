@@ -541,6 +541,15 @@ def main() -> int:
         failures,
     )
     require(
+        "target_window_capture_diagnostics" in watcher
+        and '"target_window_capture"' in watcher
+        and '"problems"' in watcher
+        and '"candidate_count"' in watcher
+        and "target_window_capture_problems(selected, window_class)" in watcher,
+        "readiness watcher must report the exact target-window capture safety predicate in readiness-result.json",
+        failures,
+    )
+    require(
         "terminate_runtime_pids" in direct_probe
         and 'comm=$(<"$proc/comm")' in direct_probe
         and '[[ "$comm" == "eldenring.exe"' in direct_probe

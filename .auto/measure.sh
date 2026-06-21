@@ -570,9 +570,12 @@ for token in [
     'SEAMLESS_MODULE_MARKERS',
     'preexisting_runtime_pids',
     'row.pid not in preexisting_runtime_pids',
+    'target_window_capture_diagnostics',
+    '"target_window_capture"',
+    'target_window_capture_problems(selected, window_class)',
 ]:
     if token not in watcher:
-        runtime_mode_failures.append(f'readiness watcher missing runtime-mode/preexisting-pid precondition token {token}')
+        runtime_mode_failures.append(f'readiness watcher missing runtime-mode/preexisting-pid/window-capture diagnostic token {token}')
 for token in [
     'oracle_msgbox_total_builds',
     'oracle_msgbox_any_seen',
