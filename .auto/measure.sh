@@ -15,6 +15,7 @@ telemetry_src = (root / 'src/telemetry.rs').read_text(encoding='utf-8', errors='
 watcher = (root / 'scripts/er-readiness-watch.py').read_text(encoding='utf-8', errors='replace')
 native_static_check = (root / 'scripts/check-native-continue-static.py').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/check-native-continue-static.py').exists() else ''
 launch_guard_check = (root / 'scripts/check-launch-guardrails.py').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/check-launch-guardrails.py').exists() else ''
+direct_probe = (root / 'scripts/run-product-continue-direct-probe.sh').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/run-product-continue-direct-probe.sh').exists() else ''
 check_sh = (root / 'scripts/check.sh').read_text(encoding='utf-8', errors='replace')
 prompt = (root / '.auto/prompt.md').read_text(encoding='utf-8', errors='replace') if (root / '.auto/prompt.md').exists() else ''
 combined = lib + '\n' + exp
@@ -357,6 +358,16 @@ if (
     or 'check-launch-guardrails.py' not in check_sh
 ):
     legacy_failures.append('quality gates do not scan generated runtime artifacts for forbidden Elden Ring Steam/protected launch forms')
+    autoload_static_failures += 1
+if (
+    '.auto/runtime_probe.sh' not in direct_probe
+    or 'eldenring.exe' not in direct_probe
+    or 'steam://rungameid/1245620' in direct_probe
+    or 'steam -applaunch 1245620' in direct_probe
+    or 'start_protected_game.exe' in direct_probe
+    or 'run-product-continue-direct-probe.sh' not in check_sh
+):
+    legacy_failures.append('approved direct/offline product probe wrapper is missing, unguarded, or contains forbidden launch forms')
     autoload_static_failures += 1
 
 asset_failures: list[str] = []

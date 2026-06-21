@@ -19,6 +19,7 @@ python3 "$repo_root/scripts/test-cupcake-policies.py"
 python3 "$repo_root/scripts/check-no-lossy-utf8.py"
 cargo fmt --manifest-path "$repo_root/Cargo.toml" -- --check
 shellcheck "$repo_root/scripts/stage-autoload-release.sh"
+shellcheck "$repo_root/scripts/run-product-continue-direct-probe.sh"
 
 if command -v powershell.exe >/dev/null 2>&1; then
   project_win=$(wslpath -w "$repo_root")
