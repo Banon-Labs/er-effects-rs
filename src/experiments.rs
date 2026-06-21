@@ -122,6 +122,19 @@ pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_DOCALL: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_ACCEPT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_CONTINUE_IDLE_INSERT_HITS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static MENU_CONTINUE_IDLE_INSERT_LAST_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_CONTINUE_IDLE_INSERT_LAST_ARG0: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_CONTINUE_IDLE_INSERT_LAST_ARG1: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_CONTINUE_IDLE_INSERT_LAST_RET: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_CONTINUE_IDLE_INSERT_LAST_ARG1_UPDATE_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_CONTINUE_IDLE_INSERT_LAST_RET_UPDATE_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_LAST_ITEM: AtomicUsize =
@@ -10849,6 +10862,7 @@ pub(crate) unsafe extern "system" fn task_enqueue_hook(
     arg0: *mut c_void,
     arg1: *mut c_void,
 ) -> *mut c_void {
+    let caller_rva = trace_first_game_caller_rva();
     let trace_index = TASK_ENQUEUE_TRACE_COUNT
         .fetch_add(TASK_ENQUEUE_TRACE_INCREMENT, Ordering::SeqCst)
         + TASK_ENQUEUE_TRACE_INCREMENT;
@@ -10869,6 +10883,42 @@ pub(crate) unsafe extern "system" fn task_enqueue_hook(
         ));
     }
     let result = unsafe { call_task_enqueue_original(arg0, arg1) }.unwrap_or(arg1);
+    const MENU_CONTINUE_IDLE_INSERT_CALLER_RVA: usize = 0x0076432c;
+    const MENU_CONTINUE_IDLE_INSERT_CALLER_START_RVA: usize = 0x007642b0;
+    const MENU_CONTINUE_IDLE_INSERT_CALLER_END_RVA: usize = 0x007643c0;
+    if caller_rva == MENU_CONTINUE_IDLE_INSERT_CALLER_RVA
+        || callstack_contains_game_rva(
+            MENU_CONTINUE_IDLE_INSERT_CALLER_START_RVA,
+            MENU_CONTINUE_IDLE_INSERT_CALLER_END_RVA,
+        )
+    {
+        let hit = MENU_CONTINUE_IDLE_INSERT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+        let base = game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        let arg1_update_rva = if base == TITLE_OWNER_SCAN_START_ADDRESS {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        } else {
+            unsafe { task_node_update_rva(base, arg1 as usize) }
+        };
+        let ret_update_rva = if base == TITLE_OWNER_SCAN_START_ADDRESS {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        } else {
+            unsafe { task_node_update_rva(base, result as usize) }
+        };
+        MENU_CONTINUE_IDLE_INSERT_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+        MENU_CONTINUE_IDLE_INSERT_LAST_ARG0.store(arg0 as usize, Ordering::SeqCst);
+        MENU_CONTINUE_IDLE_INSERT_LAST_ARG1.store(arg1 as usize, Ordering::SeqCst);
+        MENU_CONTINUE_IDLE_INSERT_LAST_RET.store(result as usize, Ordering::SeqCst);
+        MENU_CONTINUE_IDLE_INSERT_LAST_ARG1_UPDATE_RVA.store(arg1_update_rva, Ordering::SeqCst);
+        MENU_CONTINUE_IDLE_INSERT_LAST_RET_UPDATE_RVA.store(ret_update_rva, Ordering::SeqCst);
+        if hit <= CAP_MENU_INSERT_LOG_FIRST as u64 {
+            append_continue_trace(format_args!(
+                "MENU-CONTINUE-IDLE-INSERT seq={hit} caller_rva=0x{caller_rva:x} arg0={arg0:p} arg1={arg1:p} arg1_update_rva={} ret={result:p} ret_update_rva={} -- passive disabled Continue insert edge via 0x{:x}",
+                format_optional_usize_hex(arg1_update_rva),
+                format_optional_usize_hex(ret_update_rva),
+                TRACE_TASK_ENQUEUE_RVA
+            ));
+        }
+    }
     const RESULT_ACTION_BUILDER_TRACE_SIZE: usize = 0x360;
     if callstack_contains_game_rva(
         RESULT_ACTION_BUILDER_RVA as usize,
