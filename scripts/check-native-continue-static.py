@@ -33,6 +33,7 @@ RESULT_EVENT_WRAPPER_BUILDER = 0x140744A60
 RESULT_EVENT_WRAPPER_INNER_BUILD = 0x1407449E0
 POLICY_TOS_STATUS_PREDICATE = 0x1409B72B0
 POLICY_TOS_FLAG_SETTER = 0x1409B6B30
+POLICY_TOS_FLAG_SETTER_CALLER = 0x1409B5D4C
 POLICY_TOS_GATE = 0x140E4FDA0
 MENU_JOB_SINGLE_CONSUMER = 0x1407A9600
 MENU_JOB_LIST_CONSUMER = 0x1407AA1F0
@@ -191,6 +192,14 @@ def main() -> int:
     contains(policy_setter, b"\x45\x84\xc0", "policy ToS flag setter tests force/update byte r8b")
     contains(policy_setter, b"\x89\x10", "policy ToS flag setter writes requested value to flag pointer")
     contains(policy_setter, b"\xe8", "policy ToS flag setter calls UI/state refresh helpers after write")
+
+    policy_setter_caller = image_bytes(POLICY_TOS_FLAG_SETTER_CALLER, 0x30)
+    contains(policy_setter_caller, b"\x41\xb0\x01", "policy ToS flag setter caller forces update with r8b=1")
+    contains(policy_setter_caller, b"\x41\x8b\x96\xc8\x29\x00\x00", "policy ToS flag setter caller loads requested flag from owner+0x29c8")
+    contains(policy_setter_caller, b"\x49\x8b\xce", "policy ToS flag setter caller passes owner in rcx")
+    setter_caller_calls = rel32_targets(POLICY_TOS_FLAG_SETTER_CALLER, policy_setter_caller)
+    if POLICY_TOS_FLAG_SETTER not in setter_caller_calls:
+        fail("policy ToS flag setter caller no longer calls 0x1409b6b30")
 
     single_consumer = image_bytes(MENU_JOB_SINGLE_CONSUMER, 0x140)
     contains(single_consumer, b"\xff\x50\x10", "single native menu consumer calls job vtable +0x10 update")
