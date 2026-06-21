@@ -260,6 +260,8 @@ if (
     or 'oracle_result_event_handler_hits' not in telemetry_src
     or 'oracle_result_action_builder_hits' not in telemetry_src
     or 'native_result_chain_ready' not in watcher
+    or 'native_continue_chain_stage' not in watcher
+    or 'result_chain_waiting_continue_load' not in watcher
     or 'oracle_continue_phase' not in telemetry_src
     or 'oracle_continue_expected_slot' not in telemetry_src
     or 'oracle_continue_deser_fired' not in telemetry_src
@@ -272,8 +274,8 @@ if (
 if 'product tracing must passively hook result.vtable+0x60 and action builder without direct load shortcuts' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce passive result-chain hooks')
     autoload_static_failures += 1
-if 'telemetry/watcher oracle must expose passive native result-handler/action-builder hit counts' not in check:
-    legacy_failures.append('check-autoload-happy-path does not enforce passive result-chain telemetry')
+if 'telemetry/watcher oracle must expose passive native result-handler/action-builder hit counts and chain stage' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce passive result-chain telemetry/stage')
     autoload_static_failures += 1
 if 'telemetry must expose native Continue product phase/guard state for result-chain interpretation' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce Continue phase telemetry')

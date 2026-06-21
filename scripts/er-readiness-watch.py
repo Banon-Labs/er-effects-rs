@@ -587,6 +587,30 @@ def telemetry_native_result_chain_ready(telemetry: dict[str, Any]) -> bool:
     )
 
 
+def telemetry_native_continue_chain_stage(telemetry: dict[str, Any]) -> str:
+    phase = as_int(telemetry.get("oracle_continue_phase"), -1)
+    result_chain_ready = telemetry_native_result_chain_ready(telemetry)
+    deser_fired = as_int(telemetry.get("oracle_continue_deser_fired"), 0)
+    confirmed = as_int(telemetry.get("oracle_continue_confirmed"), 0)
+    if telemetry_world_loaded(telemetry):
+        return "world_loaded"
+    if confirmed > 0 and phase >= 3:
+        return "confirmed_waiting_world"
+    if deser_fired == 2:
+        return "deserialized_waiting_confirm"
+    if phase >= 3 and result_chain_ready:
+        return "result_chain_waiting_continue_load"
+    if phase >= 3:
+        return "submitted_without_result_chain"
+    if result_chain_ready:
+        return "result_chain_before_guard"
+    if phase == 0:
+        return "pre_submit"
+    if phase > 0:
+        return "intermediate_without_result_chain"
+    return "unknown"
+
+
 def oracle_summary(
     telemetry: dict[str, Any] | None,
     expected_save_oracle: dict[str, Any] | None = None,
@@ -637,6 +661,7 @@ def oracle_summary(
         "expected_save_match": telemetry_expected_save_match(telemetry, expected_save_oracle),
         "expected_animation_match": telemetry_expected_animation_match(telemetry, expected_animation_id),
         "native_result_chain_ready": telemetry_native_result_chain_ready(telemetry),
+        "native_continue_chain_stage": telemetry_native_continue_chain_stage(telemetry),
         "no_postload_popup": telemetry_no_postload_popup(telemetry),
     }
 
