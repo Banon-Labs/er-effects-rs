@@ -45,7 +45,24 @@ require_file() { [[ -f "$1" ]] || fatal "missing file: $1"; }
 require_executable() { [[ -x "$1" ]] || fatal "missing executable: $1"; }
 
 runtime_pids() {
-  pgrep -f '(^|/|[[:space:]])eldenring\.exe($|[[:space:]])' || true
+  local proc pid comm cmdline
+  for proc in /proc/[0-9]*; do
+    pid=${proc##*/}
+    [[ -r "$proc/comm" && -r "$proc/cmdline" ]] || continue
+    comm=$(<"$proc/comm")
+    cmdline=$(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null || true)
+    if [[ "$comm" == "eldenring.exe" && "$cmdline" == *"ELDEN RING"* && "$cmdline" == *"Game"* ]]; then
+      printf '%s\n' "$pid"
+      continue
+    fi
+    if [[ "$cmdline" == *"$GAME_DIR/eldenring.exe"* ]]; then
+      printf '%s\n' "$pid"
+      continue
+    fi
+    if [[ "$cmdline" == *"ELDEN RING\\Game\\eldenring.exe"* ]]; then
+      printf '%s\n' "$pid"
+    fi
+  done
 }
 
 preflight() {
@@ -68,6 +85,28 @@ write_autoload_request() {
   fi
 }
 
+terminate_runtime_pids() {
+  local pid
+  local -a pids=()
+  mapfile -t pids < <(runtime_pids)
+  for pid in "${pids[@]}"; do
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+    fi
+  done
+  for _ in $(seq 1 30); do
+    mapfile -t pids < <(runtime_pids)
+    ((${#pids[@]} == 0)) && return 0
+    sleep 0.2
+  done
+  mapfile -t pids < <(runtime_pids)
+  for pid in "${pids[@]}"; do
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  done
+}
+
 cleanup() {
   local pid
   if [[ -s "$PID_FILE" ]]; then
@@ -76,6 +115,7 @@ cleanup() {
       kill "$pid" 2>/dev/null || true
     fi
   fi
+  terminate_runtime_pids
 }
 trap cleanup EXIT
 
@@ -92,7 +132,7 @@ if (( DRY_RUN )); then
   cat > "$ARTIFACT_DIR/dry-run-summary.json" <<EOF
 {"artifact_dir":"$ARTIFACT_DIR","launch":"direct-proton-eldenring-exe","watcher":".auto/runtime_probe.sh","timeout_seconds":$RUNTIME_TIMEOUT_SECONDS,"runtime_expected_mode":"$RUNTIME_EXPECTED_MODE"}
 EOF
-  echo "dry-run ok: would start .auto/runtime_probe.sh, launch direct eldenring.exe through Proton, wait <=${RUNTIME_TIMEOUT_SECONDS}s, then tear down owned launcher pid"
+  echo "dry-run ok: would start .auto/runtime_probe.sh, launch direct eldenring.exe through Proton, wait <=${RUNTIME_TIMEOUT_SECONDS}s, then tear down owned launcher pid and exact eldenring.exe runtime pids"
   exit 0
 fi
 

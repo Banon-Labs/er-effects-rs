@@ -462,12 +462,18 @@ if (
 if (
     '.auto/runtime_probe.sh' not in direct_probe
     or 'eldenring.exe' not in direct_probe
+    or 'terminate_runtime_pids' not in direct_probe
+    or 'comm=$(<"$proc/comm")' not in direct_probe
+    or '[[ "$comm" == "eldenring.exe"' not in direct_probe
+    or 'ELDEN RING\\\\Game\\\\eldenring.exe' not in direct_probe
+    or '[[ "$cmdline" == *"$GAME_DIR/eldenring.exe"* ]]' not in direct_probe
+    or 'kill -9 "$pid"' not in direct_probe
     or 'steam://rungameid/1245620' in direct_probe
     or 'steam -applaunch 1245620' in direct_probe
     or 'start_protected_game.exe' in direct_probe
     or 'run-product-continue-direct-probe.sh' not in check_sh
 ):
-    legacy_failures.append('approved direct/offline product probe wrapper is missing, unguarded, or contains forbidden launch forms')
+    legacy_failures.append('approved direct/offline product probe wrapper is missing, unguarded, lacks exact runtime cleanup, or contains forbidden launch forms')
     autoload_static_failures += 1
 
 asset_failures: list[str] = []

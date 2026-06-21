@@ -16,6 +16,7 @@ STAGE_SCRIPT = REPO_ROOT / "scripts" / "stage-autoload-release.sh"
 NATIVE_STATIC_CHECK = REPO_ROOT / "scripts" / "check-native-continue-static.py"
 CHECK_SH = REPO_ROOT / "scripts" / "check.sh"
 RUNTIME_PROBE = REPO_ROOT / ".auto" / "runtime_probe.sh"
+DIRECT_PROBE = REPO_ROOT / "scripts" / "run-product-continue-direct-probe.sh"
 MEASURE = REPO_ROOT / ".auto" / "measure.sh"
 
 REQUIRED_PRODUCT_GATES = {
@@ -111,6 +112,7 @@ def main() -> int:
     telemetry = read(TELEMETRY)
     watcher = read(WATCHER)
     runtime_probe = read(RUNTIME_PROBE) if RUNTIME_PROBE.exists() else ""
+    direct_probe = read(DIRECT_PROBE) if DIRECT_PROBE.exists() else ""
     native_static_check = read(NATIVE_STATIC_CHECK) if NATIVE_STATIC_CHECK.exists() else ""
     check_sh = read(CHECK_SH)
     measure = read(MEASURE)
@@ -536,6 +538,16 @@ def main() -> int:
         and "preexisting_runtime_pids" in watcher
         and "row.pid not in preexisting_runtime_pids" in watcher,
         "readiness watcher must fail closed when Seamless/vanilla runtime mode mismatches the experiment precondition and must not select stale runtime PIDs",
+        failures,
+    )
+    require(
+        "terminate_runtime_pids" in direct_probe
+        and 'comm=$(<"$proc/comm")' in direct_probe
+        and '[[ "$comm" == "eldenring.exe"' in direct_probe
+        and 'ELDEN RING\\\\Game\\\\eldenring.exe' in direct_probe
+        and '[[ "$cmdline" == *"$GAME_DIR/eldenring.exe"* ]]' in direct_probe
+        and "kill -9 \"$pid\"" in direct_probe,
+        "direct/offline probe wrapper must tear down exact owned Wine/POSIX eldenring.exe runtime PIDs, not only the Proton launcher PID",
         failures,
     )
     require(
