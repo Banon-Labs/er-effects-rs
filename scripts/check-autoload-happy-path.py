@@ -221,6 +221,19 @@ def main() -> int:
         "product Continue capture must observe MenuWindowJob construction before update-time first-item latching",
         failures,
     )
+    native_ctor_b_body = rust_fn_body(experiments, "menu_window_job_native_ctor_b_hook")
+    require(
+        "MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA" in lib
+        and "cap_menu_window_job_native_ctor_b_7acb00" in experiments
+        and "MENU_WINDOW_JOB_NATIVE_CTOR_B_ORIG" in lib
+        and "MENU-WINDOW-NATIVE-CTOR-B captured semantic native Continue item" in native_ctor_b_body
+        and "MENU_ITEM_ACCEPT_NATIVE_RVA" in native_ctor_b_body
+        and "MENU_CONTINUE_ITEM" in native_ctor_b_body
+        and "0x007ad810" in native_ctor_b_body
+        and "0x007add70" not in native_ctor_b_body,
+        "product diagnostics must hook native-accept MenuWindowJob constructor B without accepting idle rows",
+        failures,
+    )
     idle_ctor_body = rust_fn_body(experiments, "menu_window_job_idle_ctor_hook")
     require(
         "MENU_WINDOW_JOB_IDLE_CTOR_RVA" in lib
@@ -606,6 +619,8 @@ def main() -> int:
         and "product_core_last_press_start_context" in telemetry_src
         and "MENU_WINDOW_JOB_CTOR_HITS" in experiments
         and "MENU_WINDOW_JOB_CTOR_SEMANTIC_HITS" in experiments
+        and "MENU_WINDOW_JOB_NATIVE_CTOR_B_HITS" in experiments
+        and "MENU_WINDOW_JOB_NATIVE_CTOR_B_CONTINUE_HITS" in experiments
         and "MENU_WINDOW_JOB_IDLE_CTOR_HITS" in experiments
         and "MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_HITS" in experiments
         and "MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_CALLER_RVA" in experiments
@@ -630,6 +645,8 @@ def main() -> int:
         and "MENU_CONTINUE_CANDIDATE_ACCEPT_CHANGES" in experiments
         and "record_continue_candidate" in experiments
         and "oracle_menu_window_ctor_hits" in telemetry_src
+        and "oracle_menu_window_native_ctor_b_hits" in telemetry_src
+        and "oracle_menu_window_native_ctor_b_last_accept" in telemetry_src
         and "oracle_menu_window_idle_ctor_hits" in telemetry_src
         and "oracle_menu_window_idle_ctor_continue_last_caller_rva" in telemetry_src
         and "oracle_menu_window_idle_ctor_continue_last_out_slot" in telemetry_src
@@ -653,6 +670,8 @@ def main() -> int:
         and "product_core_last_menu_opened_latch" in watcher
         and "product_core_last_press_start_context" in watcher
         and "menu_window_ctor_hits" in watcher
+        and "menu_window_native_ctor_b_hits" in watcher
+        and "menu_window_native_ctor_b_last_accept" in watcher
         and "menu_window_idle_ctor_hits" in watcher
         and "menu_window_idle_ctor_continue_last_caller_rva" in watcher
         and "menu_window_idle_ctor_continue_last_out_slot" in watcher

@@ -1060,6 +1060,13 @@ pub(crate) static MENU_ITEM_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORI
 /// semantic Continue item can be latched before the first updated/idle input leaf pollutes state.
 pub(crate) const MENU_WINDOW_JOB_CTOR_RVA: u32 = 0x007ac8c0;
 pub(crate) static MENU_WINDOW_JOB_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+/// MenuWindowJob native-accept constructor variant 0x1407acb00. Static xrefs show many menu
+/// callers use this sibling constructor, and it installs the native accept predicate 0x1407ad810.
+/// Hook passively so product telemetry can distinguish "no native-accept row was constructed" from
+/// "we only hooked the wrong constructor variant".
+pub(crate) const MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA: u32 = 0x007acb00;
+pub(crate) static MENU_WINDOW_JOB_NATIVE_CTOR_B_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// MenuWindowJob disabled/idle constructor 0x1407acf80. Product diagnostics observe this variant
 /// because static RE shows it installs the constant-false accept predicate 0x1407add70 into the
 /// same +0xf0 accept functor slot as the native-accept constructors.

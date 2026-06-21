@@ -112,6 +112,22 @@ pub(crate) static MENU_WINDOW_JOB_CTOR_LAST_DOCALL: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_WINDOW_JOB_CTOR_LAST_ACCEPT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_WINDOW_JOB_NATIVE_CTOR_B_HITS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static MENU_WINDOW_JOB_NATIVE_CTOR_B_CONTINUE_HITS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_ITEM: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_OUT_SLOT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_VT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_FUNCTOR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_DOCALL: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_ACCEPT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_HITS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_HITS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_CALLER_RVA: AtomicUsize =
@@ -8972,6 +8988,15 @@ pub(crate) fn install_continue_trace_hooks() {
             menu_window_job_ctor_hook as *mut c_void,
             &MENU_WINDOW_JOB_CTOR_ORIG,
         );
+        // MenuWindowJob native-accept ctor variant 0x1407acb00: observe/latch semantic Continue
+        // rows built by the sibling constructor that also installs native accept 0x1407ad810.
+        create_continue_trace_hook(
+            &mut hooks,
+            "cap_menu_window_job_native_ctor_b_7acb00",
+            MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA,
+            menu_window_job_native_ctor_b_hook as *mut c_void,
+            &MENU_WINDOW_JOB_NATIVE_CTOR_B_ORIG,
+        );
         // MenuWindowJob idle ctor 0x1407acf80: static RE shows this neighboring constructor
         // installs the constant-false accept predicate 0x1407add70. Observe it separately so a
         // Continue-looking row with idle accept can be attributed to the disabled native path.
@@ -10177,6 +10202,92 @@ pub(crate) unsafe extern "system" fn menu_window_job_ctor_hook(
         append_autoload_debug(format_args!(
             "product-core-autoload: constructor captured semantic native Continue MenuWindowJob item=0x{item:x} vt=0x{vt:x} docall=0x{do_call:x} accept_predicate=0x{accept_predicate:x}"
         ));
+    }
+    ret
+}
+
+/// MenuWindowJob native-accept ctor variant 0x1407acb00 hook: observe constructed menu jobs from
+/// the sibling constructor that static RE shows installs the native accept predicate 0x1407ad810.
+/// This is passive except for the same semantic pointer latch used by the existing 0x1407ac8c0
+/// constructor hook: if the item is a Continue row with native accept, record its pointer so the
+/// product path can later submit through native semantics.
+pub(crate) unsafe extern "system" fn menu_window_job_native_ctor_b_hook(
+    out_slot: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let caller_rva = trace_first_game_caller_rva();
+    let ret = unsafe { call_cap_original(&MENU_WINDOW_JOB_NATIVE_CTOR_B_ORIG, out_slot, b, c, d) };
+    if !product_autoload_enabled() || out_slot == TITLE_OWNER_SCAN_START_ADDRESS {
+        return ret;
+    }
+    let base = {
+        let own = OWN_STEPPER_BASE.load(Ordering::SeqCst);
+        if own != TITLE_OWNER_SCAN_START_ADDRESS {
+            own
+        } else {
+            game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+        }
+    };
+    if base == TITLE_OWNER_SCAN_START_ADDRESS {
+        return ret;
+    }
+    const DOCALL_VTABLE_SLOT_10: usize = 0x10;
+    const MENU_ITEM_ACCEPT_PREDICATE_F8_OFFSET: usize = 0xf8;
+    const MENU_ITEM_ACCEPT_NATIVE_RVA: usize = 0x007ad810;
+    let item = unsafe { safe_read_usize(out_slot) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    if item == TITLE_OWNER_SCAN_START_ADDRESS {
+        return ret;
+    }
+    let vt = unsafe { safe_read_usize(item) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let functor = unsafe { safe_read_usize(item + MENU_ITEM_FUNCTOR_A8_OFFSET) }
+        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let functor_vt = if functor != TITLE_OWNER_SCAN_START_ADDRESS {
+        unsafe { safe_read_usize(functor) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    let do_call = if functor_vt != TITLE_OWNER_SCAN_START_ADDRESS {
+        unsafe { safe_read_usize(functor_vt + DOCALL_VTABLE_SLOT_10) }
+            .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    let accept_predicate = unsafe { safe_read_usize(item + MENU_ITEM_ACCEPT_PREDICATE_F8_OFFSET) }
+        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    MENU_WINDOW_JOB_NATIVE_CTOR_B_HITS.fetch_add(1, Ordering::SeqCst);
+    MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+    MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_ITEM.store(item, Ordering::SeqCst);
+    MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_OUT_SLOT.store(out_slot, Ordering::SeqCst);
+    MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_VT.store(vt, Ordering::SeqCst);
+    MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_FUNCTOR.store(functor, Ordering::SeqCst);
+    MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_DOCALL.store(do_call, Ordering::SeqCst);
+    MENU_WINDOW_JOB_NATIVE_CTOR_B_LAST_ACCEPT.store(accept_predicate, Ordering::SeqCst);
+    let semantic_continue_item = vt == base + MENU_WINDOW_JOB_VTABLE_RVA
+        && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA
+        && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA;
+    if semantic_continue_item {
+        MENU_WINDOW_JOB_NATIVE_CTOR_B_CONTINUE_HITS.fetch_add(1, Ordering::SeqCst);
+        record_continue_candidate(item, accept_predicate, base);
+        if MENU_CONTINUE_ITEM
+            .compare_exchange(
+                TITLE_OWNER_SCAN_START_ADDRESS,
+                item,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+        {
+            append_continue_trace(format_args!(
+                "MENU-WINDOW-NATIVE-CTOR-B captured semantic native Continue item=0x{item:x} caller_rva=0x{caller_rva:x} out=0x{out_slot:x} vt=0x{vt:x} functor=0x{functor:x} docall=0x{do_call:x} accept_predicate=0x{accept_predicate:x} item_fields{{{}}} {}",
+                unsafe { menu_item_action_summary(item) },
+                trace_callers_summary()
+            ));
+            append_autoload_debug(format_args!(
+                "product-core-autoload: native ctor B captured semantic native Continue MenuWindowJob item=0x{item:x} caller_rva=0x{caller_rva:x} accept_predicate=0x{accept_predicate:x}"
+            ));
+        }
     }
     ret
 }

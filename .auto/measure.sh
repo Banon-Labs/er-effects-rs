@@ -235,6 +235,21 @@ if (
 if 'product Continue capture must observe MenuWindowJob construction before update-time first-item latching' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce constructor hook semantic Continue latch')
     autoload_static_failures += 1
+native_ctor_b_body = function_body('menu_window_job_native_ctor_b_hook', exp_code) or ''
+if (
+    'MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA' not in lib_code
+    or 'cap_menu_window_job_native_ctor_b_7acb00' not in exp_code
+    or 'MENU-WINDOW-NATIVE-CTOR-B captured semantic native Continue item' not in native_ctor_b_body
+    or 'MENU_ITEM_ACCEPT_NATIVE_RVA' not in native_ctor_b_body
+    or 'MENU_CONTINUE_ITEM' not in native_ctor_b_body
+    or '0x007ad810' not in native_ctor_b_body
+    or '0x007add70' in native_ctor_b_body
+):
+    legacy_failures.append('product diagnostics lack native-accept MenuWindowJob constructor B hook or can accept idle rows')
+    autoload_static_failures += 1
+if 'product diagnostics must hook native-accept MenuWindowJob constructor B without accepting idle rows' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce native constructor B telemetry')
+    autoload_static_failures += 1
 idle_ctor_body = function_body('menu_window_job_idle_ctor_hook', exp_code) or ''
 if (
     'MENU_WINDOW_JOB_IDLE_CTOR_RVA' not in lib_code
@@ -616,6 +631,8 @@ for token in [
     'PRODUCT_CORE_LAST_PRESS_START_CONTEXT',
     'MENU_WINDOW_JOB_CTOR_HITS',
     'MENU_WINDOW_JOB_CTOR_SEMANTIC_HITS',
+    'MENU_WINDOW_JOB_NATIVE_CTOR_B_HITS',
+    'MENU_WINDOW_JOB_NATIVE_CTOR_B_CONTINUE_HITS',
     'MENU_WINDOW_JOB_IDLE_CTOR_HITS',
     'MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_HITS',
     'MENU_WINDOW_JOB_IDLE_CTOR_CONTINUE_LAST_CALLER_RVA',
@@ -658,6 +675,8 @@ for token in [
     'product_core_last_menu_opened_latch',
     'product_core_last_press_start_context',
     'oracle_menu_window_ctor_hits',
+    'oracle_menu_window_native_ctor_b_hits',
+    'oracle_menu_window_native_ctor_b_last_accept',
     'oracle_menu_window_idle_ctor_hits',
     'oracle_menu_window_idle_ctor_continue_last_caller_rva',
     'oracle_menu_window_idle_ctor_continue_last_out_slot',
