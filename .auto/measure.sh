@@ -573,9 +573,13 @@ for token in [
     'target_window_capture_diagnostics',
     '"target_window_capture"',
     'target_window_capture_problems(selected, window_class)',
+    'autoload_progress_summary',
+    '"autoload_progress"',
+    '"autoload_not_attempted_waiting_title_bootstrap"',
+    '"native_continue_chain_stage"',
 ]:
     if token not in watcher:
-        runtime_mode_failures.append(f'readiness watcher missing runtime-mode/preexisting-pid/window-capture diagnostic token {token}')
+        runtime_mode_failures.append(f'readiness watcher missing runtime-mode/preexisting-pid/window-capture/autoload-progress diagnostic token {token}')
 for token in [
     'oracle_msgbox_total_builds',
     'oracle_msgbox_any_seen',

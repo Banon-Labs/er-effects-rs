@@ -550,6 +550,15 @@ def main() -> int:
         failures,
     )
     require(
+        "autoload_progress_summary" in watcher
+        and '"autoload_progress"' in watcher
+        and '"autoload_not_attempted_waiting_title_bootstrap"' in watcher
+        and '"native_continue_chain_stage"' in watcher
+        and '"result_action_insert_hits"' in watcher,
+        "readiness watcher must report a compact autoload/native-Continue progress summary in readiness-result.json",
+        failures,
+    )
+    require(
         "terminate_runtime_pids" in direct_probe
         and 'comm=$(<"$proc/comm")' in direct_probe
         and '[[ "$comm" == "eldenring.exe"' in direct_probe

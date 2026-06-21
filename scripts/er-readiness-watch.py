@@ -184,6 +184,7 @@ class ReadinessResult:
             "runtime_mode_match": self.runtime_mode_match,
             "seamless_module_mappings": self.seamless_module_mappings or [],
             "target_window_capture": target_window_capture_diagnostics(self.windows, self.window_class),
+            "autoload_progress": autoload_progress_summary(self.telemetry),
         }
         oracle = oracle_summary(self.telemetry, self.expected_save_oracle, self.expected_animation_id)
         if oracle:
@@ -718,6 +719,53 @@ def telemetry_native_continue_chain_stage(telemetry: dict[str, Any]) -> str:
     if phase > 0:
         return "intermediate_without_result_chain"
     return "unknown"
+
+
+def autoload_progress_summary(telemetry: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(telemetry, dict):
+        return {"telemetry_present": False, "blocker": "waiting_for_telemetry"}
+    attempts = as_int(telemetry.get("autoload_attempts"), 0)
+    phase = as_int(telemetry.get("oracle_continue_phase"), -1)
+    title_bootstrap_seen = telemetry.get("title_bootstrap_seen") is True
+    native_stage = telemetry_native_continue_chain_stage(telemetry)
+    if telemetry.get("game_man_available") is not True:
+        blocker = "waiting_for_game_man"
+    elif attempts <= 0 and not title_bootstrap_seen:
+        blocker = "autoload_not_attempted_waiting_title_bootstrap"
+    elif attempts <= 0:
+        blocker = "autoload_not_attempted"
+    elif phase < 3:
+        blocker = "autoload_attempted_before_native_submit_guard"
+    elif native_stage != "world_loaded":
+        blocker = native_stage
+    else:
+        blocker = "world_loaded"
+    return {
+        "telemetry_present": True,
+        "blocker": blocker,
+        "game_man_available": telemetry.get("game_man_available"),
+        "game_task_ticks": telemetry.get("game_task_ticks"),
+        "player_available": telemetry.get("player_available"),
+        "player_seen": telemetry.get("player_seen"),
+        "autoload_slot": telemetry.get("autoload_slot"),
+        "autoload_method": telemetry.get("autoload_method"),
+        "autoload_require_title_bootstrap": telemetry.get("autoload_require_title_bootstrap"),
+        "autoload_attempts": telemetry.get("autoload_attempts"),
+        "autoload_last_status": telemetry.get("autoload_last_status"),
+        "title_bootstrap_seen": telemetry.get("title_bootstrap_seen"),
+        "continue_phase": telemetry.get("oracle_continue_phase"),
+        "continue_member_node": telemetry.get("oracle_continue_member_node"),
+        "continue_task_node": telemetry.get("oracle_continue_task_node"),
+        "native_submit_entered": telemetry_native_submit_entered(telemetry),
+        "native_result_chain_ready": telemetry_native_result_chain_ready(telemetry),
+        "native_continue_chain_stage": native_stage,
+        "result_event_handler_hits": telemetry.get("oracle_result_event_handler_hits"),
+        "result_action_builder_hits": telemetry.get("oracle_result_action_builder_hits"),
+        "result_action_wrapper_builder_hits": telemetry.get("oracle_result_action_wrapper_builder_hits"),
+        "result_action_insert_hits": telemetry.get("oracle_result_action_insert_hits"),
+        "continue_deser_fired": telemetry.get("oracle_continue_deser_fired"),
+        "continue_confirmed": telemetry.get("oracle_continue_confirmed"),
+    }
 
 
 def oracle_summary(
