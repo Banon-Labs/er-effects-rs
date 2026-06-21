@@ -584,11 +584,24 @@ def telemetry_native_submit_entered(telemetry: dict[str, Any]) -> bool:
     return as_int(telemetry.get("oracle_native_submit_hits"), 0) > 0
 
 
+def telemetry_native_result_chain_same_result(telemetry: dict[str, Any]) -> bool:
+    submit_result = telemetry.get("oracle_native_submit_last_result")
+    event_result = telemetry.get("oracle_result_event_last_result")
+    action_result = telemetry.get("oracle_result_action_last_result")
+    return bool(
+        isinstance(submit_result, str)
+        and submit_result.startswith("0x")
+        and submit_result == event_result
+        and submit_result == action_result
+    )
+
+
 def telemetry_native_result_chain_ready(telemetry: dict[str, Any]) -> bool:
     return bool(
         telemetry_native_submit_entered(telemetry)
         and as_int(telemetry.get("oracle_result_event_handler_hits"), 0) > 0
         and as_int(telemetry.get("oracle_result_action_builder_hits"), 0) > 0
+        and telemetry_native_result_chain_same_result(telemetry)
     )
 
 
@@ -672,6 +685,7 @@ def oracle_summary(
         "expected_save_match": telemetry_expected_save_match(telemetry, expected_save_oracle),
         "expected_animation_match": telemetry_expected_animation_match(telemetry, expected_animation_id),
         "native_submit_entered": telemetry_native_submit_entered(telemetry),
+        "native_result_chain_same_result": telemetry_native_result_chain_same_result(telemetry),
         "native_result_chain_ready": telemetry_native_result_chain_ready(telemetry),
         "native_continue_chain_stage": telemetry_native_continue_chain_stage(telemetry),
         "no_postload_popup": telemetry_no_postload_popup(telemetry),

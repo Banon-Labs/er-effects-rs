@@ -250,13 +250,15 @@ def main() -> int:
         and "RESULT_EVENT_HANDLER_HITS" in telemetry
         and "RESULT_ACTION_BUILDER_HITS" in telemetry
         and "native_submit_entered" in watcher
+        and "native_result_chain_same_result" in watcher
         and "native_result_chain_ready" in watcher
         and "native_continue_chain_stage" in watcher
         and "telemetry_native_submit_entered" in watcher
+        and "telemetry_native_result_chain_same_result" in watcher
         and "telemetry_native_result_chain_ready" in watcher
         and "telemetry_native_continue_chain_stage" in watcher
         and "result_chain_waiting_continue_load" in watcher,
-        "telemetry/watcher oracle must expose passive native submit/result-handler/action-builder hit counts and chain stage",
+        "telemetry/watcher oracle must expose passive native submit/result-handler/action-builder hit counts, same-result proof, and chain stage",
         failures,
     )
     require(
@@ -460,8 +462,10 @@ def main() -> int:
         "result.vtable+0x60" in measure
         and "result_chain" in measure
         and "native_submit_entered" in measure
+        and "native_result_chain_same_result" in measure
         and "native_result_chain_ready" in measure
         and "native_continue_chain_stage" in measure
+        and "oracle_native_submit_last_result" in measure
         and "oracle_native_submit_hits" in measure
         and "oracle_result_action_builder_hits" in measure
         and "NATIVE_SUBMIT_ORIG" in lib

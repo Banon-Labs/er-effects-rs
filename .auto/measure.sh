@@ -261,6 +261,7 @@ if (
     or 'oracle_result_event_handler_hits' not in telemetry_src
     or 'oracle_result_action_builder_hits' not in telemetry_src
     or 'native_submit_entered' not in watcher
+    or 'native_result_chain_same_result' not in watcher
     or 'native_result_chain_ready' not in watcher
     or 'native_continue_chain_stage' not in watcher
     or 'result_chain_waiting_continue_load' not in watcher
@@ -276,8 +277,8 @@ if (
 if 'product tracing must passively hook native submit, result.vtable+0x60, and action builder without direct load shortcuts' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce passive submit/result-chain hooks')
     autoload_static_failures += 1
-if 'telemetry/watcher oracle must expose passive native submit/result-handler/action-builder hit counts and chain stage' not in check:
-    legacy_failures.append('check-autoload-happy-path does not enforce passive submit/result-chain telemetry/stage')
+if 'telemetry/watcher oracle must expose passive native submit/result-handler/action-builder hit counts, same-result proof, and chain stage' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce passive submit/result-chain same-result telemetry/stage')
     autoload_static_failures += 1
 if 'telemetry must expose native Continue product phase/guard state for result-chain interpretation' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce Continue phase telemetry')
@@ -519,10 +520,20 @@ if rt_root.exists():
                 )
             if 'simulated_button_presses_total' in raw and re.search(r'"simulated_button_presses_total"\s*:\s*0', raw):
                 proof['zero_input'] = True
+            submit_result_match = re.search(r'"oracle_native_submit_last_result"\s*:\s*"(0x[0-9a-fA-F]+)"', raw)
+            event_result_match = re.search(r'"oracle_result_event_last_result"\s*:\s*"(0x[0-9a-fA-F]+)"', raw)
+            action_result_match = re.search(r'"oracle_result_action_last_result"\s*:\s*"(0x[0-9a-fA-F]+)"', raw)
+            same_result = bool(
+                submit_result_match
+                and event_result_match
+                and action_result_match
+                and submit_result_match.group(1) == event_result_match.group(1) == action_result_match.group(1)
+            )
             if (
                 re.search(r'"oracle_native_submit_hits"\s*:\s*[1-9]\d*', raw)
                 and re.search(r'"oracle_result_event_handler_hits"\s*:\s*[1-9]\d*', raw)
                 and re.search(r'"oracle_result_action_builder_hits"\s*:\s*[1-9]\d*', raw)
+                and same_result
             ):
                 proof['result_chain'] = True
             if re.search(r'world[-_ ]?stable|max oracle|SetState5', raw, re.IGNORECASE):
