@@ -2879,12 +2879,12 @@ unsafe fn product_continue_autoload_tick(
             }
             return;
         }
-        let (continue_fp_real, continue_fp_level, continue_fp_name_len) =
-            unsafe { char_fingerprint(base) };
-        if !continue_fp_real {
+        let (profile_real, profile_map, profile_level, profile_name_len) =
+            unsafe { profile_slot_fingerprint(slot) };
+        if !profile_real {
             if tick % PRODUCT_CONTINUE_WAIT_LOG_TICKS == null as u64 {
                 append_autoload_debug(format_args!(
-                    "product-core-autoload: Continue target is empty-like (level={continue_fp_level} name_len={continue_fp_name_len}); fail-closed with no native Load Game fallback, no legal-popup auto-accept, no Continue submit, and no input"
+                    "product-core-autoload: Continue slot profile is empty-like (slot={slot} map=0x{profile_map:x} level={profile_level} name_len={profile_name_len}); fail-closed with no native Load Game fallback, no legal-popup auto-accept, no Continue submit, and no input"
                 ));
             }
             return;
@@ -5325,6 +5325,46 @@ struct RequestedSlotIdentity {
     profile_name_len: usize,
     pgd_level: u32,
     pgd_name_len: usize,
+}
+
+unsafe fn profile_slot_fingerprint(slot: i32) -> (bool, i32, u32, usize) {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const BAD_I32: i32 = -1;
+    const ZERO_U32: u32 = 0;
+    const NAME_LEN_NONE: usize = 0;
+    const MIN_REAL_LEVEL: u32 = 1;
+    const PROFILE_RECORD_BASE: usize = 0x18;
+    const PROFILE_RECORD_STRIDE: usize = 0x2a0;
+    const PROFILE_RECORD_LEVEL_OFFSET: usize = 0x24;
+    const PROFILE_RECORD_MAP_OFFSET: usize = 0x30;
+    if slot < OWN_STEPPER_SLOT_ZERO {
+        return (false, BAD_I32, ZERO_U32, NAME_LEN_NONE);
+    }
+    let gdm = game_data_man_ptr_or_null();
+    if gdm == NULL {
+        return (false, BAD_I32, ZERO_U32, NAME_LEN_NONE);
+    }
+    let profile_summary =
+        unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(NULL);
+    if profile_summary == NULL {
+        return (false, BAD_I32, ZERO_U32, NAME_LEN_NONE);
+    }
+    let slot_index = slot as usize;
+    let rec = profile_summary + PROFILE_RECORD_BASE + slot_index * PROFILE_RECORD_STRIDE;
+    let profile_map = unsafe { safe_read_usize(rec + PROFILE_RECORD_MAP_OFFSET) }
+        .map(|value| value as u32 as i32)
+        .unwrap_or(BAD_I32);
+    let profile_level = unsafe { safe_read_usize(rec + PROFILE_RECORD_LEVEL_OFFSET) }
+        .map(|value| value as u32)
+        .unwrap_or(ZERO_U32);
+    let (profile_name, profile_name_len) = unsafe { read_utf16_name_units(rec) };
+    let profile_name_empty = utf16_name_empty_like(&profile_name, profile_name_len);
+    (
+        profile_level >= MIN_REAL_LEVEL && !profile_name_empty,
+        profile_map,
+        profile_level,
+        profile_name_len,
+    )
 }
 
 unsafe fn requested_slot_identity(slot: i32, c30: i32) -> RequestedSlotIdentity {
