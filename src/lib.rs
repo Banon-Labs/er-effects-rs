@@ -1073,6 +1073,13 @@ pub(crate) static MENU_WINDOW_JOB_NATIVE_CTOR_B_ORIG: AtomicUsize =
 pub(crate) const MENU_WINDOW_JOB_IDLE_CTOR_RVA: u32 = 0x007acf80;
 pub(crate) static MENU_WINDOW_JOB_IDLE_CTOR_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+/// Tiny native title-row readiness predicate 0x140733150. The native title builder at
+/// 0x1409b6730 calls this on `TitleTopDialog+0x2610`; false branches skip native MenuWindowJob
+/// row construction entirely. The hook records the returned state object and `[obj+0x20] & 0x8f`
+/// result so runtime artifacts can distinguish "waiting for native readiness" from a missing row.
+pub(crate) const TITLE_NATIVE_READY_PREDICATE_RVA: u32 = 0x00733150;
+pub(crate) static TITLE_NATIVE_READY_PREDICATE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static MENU_LOAD_GAME_ITEM: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// FD4 Sequence::Update / child-iterator 0x1407aa1f0 (RVA). At the opened main menu the

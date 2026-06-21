@@ -220,6 +220,20 @@ pub(crate) static MENU_CONTINUE_CANDIDATE_OTHER_ACCEPT_HITS: AtomicU64 = AtomicU
 pub(crate) static MENU_CONTINUE_CANDIDATE_ACCEPT_CHANGES: AtomicU64 = AtomicU64::new(0);
 pub(crate) static MENU_CONTINUE_CANDIDATE_LAST_ACCEPT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_READY_PREDICATE_HITS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static TITLE_NATIVE_READY_PREDICATE_LAST_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_READY_PREDICATE_LAST_THIS: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_READY_PREDICATE_LAST_VTABLE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_READY_PREDICATE_LAST_GETTER: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_READY_PREDICATE_LAST_OBJECT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_READY_PREDICATE_LAST_FLAGS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_NATIVE_READY_PREDICATE_LAST_MASKED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_NATIVE_READY_PREDICATE_LAST_RET: AtomicUsize = AtomicUsize::new(0);
 static B80_NATIVE_DISPATCHER_OWNER: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 static MENU_CONTINUE_ITEM_FIELD_LOG_COUNT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -9007,6 +9021,17 @@ pub(crate) fn install_continue_trace_hooks() {
             menu_window_job_idle_ctor_hook as *mut c_void,
             &MENU_WINDOW_JOB_IDLE_CTOR_ORIG,
         );
+        // Title native-ready predicate 0x140733150: the native title builder calls this on
+        // title_dialog+0x2610 before constructing native-accept rows. Observe the exact result
+        // and state flags so product-core can wait for the native condition instead of promoting
+        // idle rows.
+        create_continue_trace_hook(
+            &mut hooks,
+            "cap_title_native_ready_733150",
+            TITLE_NATIVE_READY_PREDICATE_RVA,
+            title_native_ready_predicate_hook as *mut c_void,
+            &TITLE_NATIVE_READY_PREDICATE_ORIG,
+        );
         // Menu-item Update 0x1407ad1c0: capture the live Load-Game item (functor ->
         // dialog_factory) by letting the native pump walk its own CSMenu tree.
         create_continue_trace_hook(
@@ -10117,6 +10142,50 @@ pub(crate) unsafe extern "system" fn cap_menu_deser_hook(
         "CAP menu_deser LEAVE ret=0x{ret:x} {}",
         b80_mount_trace_summary()
     ));
+    ret
+}
+
+/// Title native-ready predicate 0x140733150 hook. Static RE shows the original body is:
+/// `state = this->vtable[0](this); return (state->flags_20 & 0x8f) != 0`. Re-implement that tiny
+/// body exactly so the hook can record the returned state object/flags without making a second
+/// native getter call or changing success semantics.
+pub(crate) unsafe extern "system" fn title_native_ready_predicate_hook(this: usize) -> usize {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const STATE_FLAGS_20_OFFSET: usize = 0x20;
+    const READY_MASK_8F: usize = 0x8f;
+    type StateGetter = unsafe extern "system" fn(usize) -> usize;
+
+    let caller_rva = trace_first_game_caller_rva();
+    let vtable = unsafe { safe_read_usize(this) }.unwrap_or(NULL);
+    let getter = if vtable != NULL {
+        unsafe { safe_read_usize(vtable) }.unwrap_or(NULL)
+    } else {
+        NULL
+    };
+    let state = if getter != NULL {
+        let f: StateGetter = unsafe { std::mem::transmute(getter) };
+        unsafe { f(this) }
+    } else {
+        NULL
+    };
+    let flags = if state != NULL {
+        unsafe { safe_read_usize(state + STATE_FLAGS_20_OFFSET) }.unwrap_or(0) & 0xff
+    } else {
+        0
+    };
+    let masked = flags & READY_MASK_8F;
+    let ret = if masked != 0 { 1 } else { 0 };
+
+    TITLE_NATIVE_READY_PREDICATE_HITS.fetch_add(1, Ordering::SeqCst);
+    TITLE_NATIVE_READY_PREDICATE_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+    TITLE_NATIVE_READY_PREDICATE_LAST_THIS.store(this, Ordering::SeqCst);
+    TITLE_NATIVE_READY_PREDICATE_LAST_VTABLE.store(vtable, Ordering::SeqCst);
+    TITLE_NATIVE_READY_PREDICATE_LAST_GETTER.store(getter, Ordering::SeqCst);
+    TITLE_NATIVE_READY_PREDICATE_LAST_OBJECT.store(state, Ordering::SeqCst);
+    TITLE_NATIVE_READY_PREDICATE_LAST_FLAGS.store(flags, Ordering::SeqCst);
+    TITLE_NATIVE_READY_PREDICATE_LAST_MASKED.store(masked, Ordering::SeqCst);
+    TITLE_NATIVE_READY_PREDICATE_LAST_RET.store(ret, Ordering::SeqCst);
+
     ret
 }
 

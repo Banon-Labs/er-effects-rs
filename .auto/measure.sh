@@ -266,6 +266,22 @@ if (
 if 'product diagnostics must passively attribute disabled Continue rows to the 0x1407acf80 idle constructor without promoting them' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce idle MenuWindowJob constructor provenance')
     autoload_static_failures += 1
+title_ready_body = function_body('title_native_ready_predicate_hook', exp_code) or ''
+if (
+    'TITLE_NATIVE_READY_PREDICATE_RVA' not in lib_code
+    or 'TITLE_NATIVE_READY_PREDICATE_ORIG' not in lib_code
+    or 'cap_title_native_ready_733150' not in exp_code
+    or 'STATE_FLAGS_20_OFFSET' not in title_ready_body
+    or 'READY_MASK_8F' not in title_ready_body
+    or 'TITLE_NATIVE_READY_PREDICATE_LAST_OBJECT' not in title_ready_body
+    or 'TITLE_NATIVE_READY_PREDICATE_LAST_MASKED' not in title_ready_body
+    or 'oracle_title_native_ready_last_masked' not in telemetry_src
+):
+    legacy_failures.append('product diagnostics lack passive native title-ready predicate flags telemetry')
+    autoload_static_failures += 1
+if 'product diagnostics must passively expose native title-ready predicate flags before promoting idle Continue rows' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce native title-ready predicate telemetry')
+    autoload_static_failures += 1
 member_latch_body = function_body('capture_continue_member_node_candidate', exp_code) or ''
 if (
     'MENU_CONTINUE_MEMBER_NODE' not in lib_code
@@ -630,6 +646,8 @@ for token in [
     '"product_core_autoload_ticks"',
     'product_core_{product_core_blocker}',
     '"native_continue_chain_stage"',
+    '"title_native_ready_last_masked"',
+    '"title_native_ready_last_ret"',
 ]:
     if token not in watcher:
         runtime_mode_failures.append(f'readiness watcher missing runtime-mode/preexisting-pid/window-capture/autoload-progress diagnostic token {token}')
@@ -668,6 +686,9 @@ for token in [
     'MENU_ITEM_UPDATE_SEMANTIC_HITS',
     'MENU_CONTINUE_CANDIDATE_ITEM',
     'MENU_CONTINUE_CANDIDATE_ACCEPT_CHANGES',
+    'TITLE_NATIVE_READY_PREDICATE_HITS',
+    'TITLE_NATIVE_READY_PREDICATE_LAST_OBJECT',
+    'TITLE_NATIVE_READY_PREDICATE_LAST_MASKED',
     'record_continue_candidate',
     'PRODUCT_CORE_LAST_BLOCKER',
     'PRODUCT_CORE_LAST_BLOCKER.store(blocker, Ordering::SeqCst);\n        if tick % OWN_STEPPER_LOG_INTERVAL',
@@ -703,6 +724,10 @@ for token in [
     'oracle_menu_item_update_hits',
     'oracle_menu_continue_candidate_item',
     'oracle_menu_continue_candidate_last_accept',
+    'oracle_title_native_ready_hits',
+    'oracle_title_native_ready_last_object',
+    'oracle_title_native_ready_last_masked',
+    'oracle_title_native_ready_last_ret',
     'product_autoload_armed',
     'title_owner_scan_attempts',
     'title_owner_scan_vtable_hits',

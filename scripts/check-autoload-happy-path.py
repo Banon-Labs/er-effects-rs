@@ -248,6 +248,19 @@ def main() -> int:
         "product diagnostics must passively attribute disabled Continue rows to the 0x1407acf80 idle constructor without promoting them",
         failures,
     )
+    title_ready_body = rust_fn_body(experiments, "title_native_ready_predicate_hook")
+    require(
+        "TITLE_NATIVE_READY_PREDICATE_RVA" in lib
+        and "TITLE_NATIVE_READY_PREDICATE_ORIG" in lib
+        and "cap_title_native_ready_733150" in experiments
+        and "STATE_FLAGS_20_OFFSET" in title_ready_body
+        and "READY_MASK_8F" in title_ready_body
+        and "TITLE_NATIVE_READY_PREDICATE_LAST_OBJECT" in title_ready_body
+        and "TITLE_NATIVE_READY_PREDICATE_LAST_MASKED" in title_ready_body
+        and "oracle_title_native_ready_last_masked" in telemetry,
+        "product diagnostics must passively expose native title-ready predicate flags before promoting idle Continue rows",
+        failures,
+    )
     member_latch_body = rust_fn_body(experiments, "capture_continue_member_node_candidate")
     require(
         "MENU_CONTINUE_MEMBER_NODE" in lib
@@ -643,6 +656,8 @@ def main() -> int:
         and "MENU_ITEM_UPDATE_SEMANTIC_HITS" in experiments
         and "MENU_CONTINUE_CANDIDATE_ITEM" in experiments
         and "MENU_CONTINUE_CANDIDATE_ACCEPT_CHANGES" in experiments
+        and "TITLE_NATIVE_READY_PREDICATE_HITS" in experiments
+        and "TITLE_NATIVE_READY_PREDICATE_LAST_MASKED" in experiments
         and "record_continue_candidate" in experiments
         and "oracle_menu_window_ctor_hits" in telemetry_src
         and "oracle_menu_window_native_ctor_b_hits" in telemetry_src
@@ -660,6 +675,8 @@ def main() -> int:
         and "oracle_menu_item_update_hits" in telemetry_src
         and "oracle_menu_continue_candidate_item" in telemetry_src
         and "oracle_menu_continue_candidate_accept_changes" in telemetry_src
+        and "oracle_title_native_ready_hits" in telemetry_src
+        and "oracle_title_native_ready_last_masked" in telemetry_src
         and "title_owner_scan_attempts" in telemetry_src
         and "title_owner_scan_vtable_hits" in telemetry_src
         and "title_owner_scan_last_candidate" in telemetry_src
@@ -685,6 +702,8 @@ def main() -> int:
         and "menu_item_update_hits" in watcher
         and "menu_continue_candidate_item" in watcher
         and "menu_continue_candidate_last_accept" in watcher
+        and "title_native_ready_last_masked" in watcher
+        and "title_native_ready_last_ret" in watcher
         and "product_core_ready_blocker" in telemetry_src
         and "product_core_autoload_ticks" in telemetry_src,
         "DLL telemetry must expose product-core autoload tick/readiness blocker and title-owner scan evidence",
@@ -775,7 +794,7 @@ def main() -> int:
         "measure must fail closed if disabled-row idle constructor provenance is missing",
         failures,
     )
-    menu_ctor_static = read_text(ROOT / "scripts/check-menu-constructor-static.py")
+    menu_ctor_static = read(REPO_ROOT / "scripts/check-menu-constructor-static.py")
     require(
         "DISABLED_CONTINUE_CALL" in menu_ctor_static
         and "DISABLED_CONTINUE_ENQUEUE_CALL" in menu_ctor_static
