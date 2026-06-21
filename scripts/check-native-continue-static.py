@@ -36,6 +36,8 @@ POLICY_TOS_TITLE_CTOR = 0x1409B5970
 POLICY_TOS_TITLE_CTOR_WRAPPER = 0x1409B6070
 POLICY_TOS_TITLE_CTOR_WRAPPER_THUNK = 0x1409B7380
 POLICY_TOS_TITLE_CTOR_WRAPPER_VTABLE_SLOT = 0x142B28318
+POLICY_TOS_TITLE_CTOR_WRAPPER_RTTI_COL = 0x143329B58
+POLICY_TOS_SELECTOR_RTTI_COL = 0x143329BD8
 POLICY_TOS_SELECTOR_WRAPPER = 0x1409B6140
 POLICY_TOS_SELECTOR_WRAPPER_THUNK = 0x1409B7390
 POLICY_TOS_SELECTOR_WRAPPER_VTABLE_SLOT = 0x142B28350
@@ -100,6 +102,23 @@ def contains(data: bytes, needle: bytes, label: str) -> None:
 
 def qword_at(va: int) -> int:
     return struct.unpack("<Q", image_bytes(va, 8))[0]
+
+
+def u32_at(va: int) -> int:
+    return struct.unpack("<I", image_bytes(va, 4))[0]
+
+
+def c_string_at(va: int, limit: int = 512) -> str:
+    data = image_bytes(va, limit)
+    end = data.find(b"\0")
+    if end < 0:
+        end = limit
+    return data[:end].decode("utf-8", errors="replace")
+
+
+def rtti_type_name_from_col(col_va: int) -> str:
+    type_descriptor_rva = u32_at(col_va + 0x0C)
+    return c_string_at(IMAGE_BASE + type_descriptor_rva + 0x10)
 
 
 def main() -> int:
@@ -227,6 +246,12 @@ def main() -> int:
         fail("policy ToS ctor wrapper vtable slot no longer points at 0x1409b7380")
     if qword_at(POLICY_TOS_SELECTOR_WRAPPER_VTABLE_SLOT) != POLICY_TOS_SELECTOR_WRAPPER_THUNK:
         fail("policy ToS selector wrapper vtable slot no longer points at 0x1409b7390")
+    ctor_wrapper_type = rtti_type_name_from_col(POLICY_TOS_TITLE_CTOR_WRAPPER_RTTI_COL)
+    if "CommandSelectDialog" not in ctor_wrapper_type or "SceneProxy" not in ctor_wrapper_type or "MenuWindow" not in ctor_wrapper_type:
+        fail("policy ToS ctor wrapper RTTI no longer identifies CommandSelectDialog/SceneProxy/MenuWindow lambda")
+    selector_type = rtti_type_name_from_col(POLICY_TOS_SELECTOR_RTTI_COL)
+    if "MenuWindow" not in selector_type or "_Func_impl" not in selector_type:
+        fail("policy ToS selector wrapper RTTI no longer identifies MenuWindow std function lambda")
     policy_ctor_thunk = image_bytes(POLICY_TOS_TITLE_CTOR_WRAPPER_THUNK, 0x10)
     contains(policy_ctor_thunk, b"\x48\x83\xc1\x08", "policy ToS ctor wrapper thunk adjusts this pointer by +0x8")
     ctor_thunk_jumps = rel32_targets(POLICY_TOS_TITLE_CTOR_WRAPPER_THUNK, policy_ctor_thunk, opcode=0xE9)
