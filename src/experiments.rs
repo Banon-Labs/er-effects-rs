@@ -100,6 +100,30 @@ pub(crate) static TITLE_OWNER_SCAN_LAST_TABLE: AtomicUsize =
 pub(crate) static TITLE_OWNER_SCAN_LAST_STATE_BITS: AtomicUsize = AtomicUsize::new(usize::MAX);
 static MENU_CONTINUE_ENTRY: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 static MENU_CONTINUE_ITEM: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_WINDOW_JOB_CTOR_HITS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static MENU_WINDOW_JOB_CTOR_SEMANTIC_HITS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static MENU_WINDOW_JOB_CTOR_LAST_ITEM: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_WINDOW_JOB_CTOR_LAST_VT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_WINDOW_JOB_CTOR_LAST_FUNCTOR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_WINDOW_JOB_CTOR_LAST_DOCALL: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_WINDOW_JOB_CTOR_LAST_ACCEPT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_ITEM_UPDATE_HITS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static MENU_ITEM_UPDATE_SEMANTIC_HITS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static MENU_ITEM_UPDATE_LAST_ITEM: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_ITEM_UPDATE_LAST_VT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_ITEM_UPDATE_LAST_FUNCTOR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_ITEM_UPDATE_LAST_DOCALL: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_ITEM_UPDATE_LAST_ACCEPT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 static B80_NATIVE_DISPATCHER_OWNER: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 static MENU_CONTINUE_ITEM_FIELD_LOG_COUNT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -9987,9 +10011,18 @@ pub(crate) unsafe extern "system" fn menu_window_job_ctor_hook(
     };
     let accept_predicate = unsafe { safe_read_usize(item + MENU_ITEM_ACCEPT_PREDICATE_F8_OFFSET) }
         .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    MENU_WINDOW_JOB_CTOR_HITS.fetch_add(1, Ordering::SeqCst);
+    MENU_WINDOW_JOB_CTOR_LAST_ITEM.store(item, Ordering::SeqCst);
+    MENU_WINDOW_JOB_CTOR_LAST_VT.store(vt, Ordering::SeqCst);
+    MENU_WINDOW_JOB_CTOR_LAST_FUNCTOR.store(functor, Ordering::SeqCst);
+    MENU_WINDOW_JOB_CTOR_LAST_DOCALL.store(do_call, Ordering::SeqCst);
+    MENU_WINDOW_JOB_CTOR_LAST_ACCEPT.store(accept_predicate, Ordering::SeqCst);
     let semantic_continue_item = vt == base + MENU_WINDOW_JOB_VTABLE_RVA
         && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA
         && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA;
+    if semantic_continue_item {
+        MENU_WINDOW_JOB_CTOR_SEMANTIC_HITS.fetch_add(1, Ordering::SeqCst);
+    }
     if semantic_continue_item
         && MENU_CONTINUE_ITEM
             .compare_exchange(
@@ -10058,9 +10091,18 @@ pub(crate) unsafe extern "system" fn cap_menu_item_update_hook(
         let accept_predicate =
             unsafe { safe_read_usize(item + MENU_ITEM_ACCEPT_PREDICATE_F8_OFFSET) }
                 .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        MENU_ITEM_UPDATE_HITS.fetch_add(1, Ordering::SeqCst);
+        MENU_ITEM_UPDATE_LAST_ITEM.store(item, Ordering::SeqCst);
+        MENU_ITEM_UPDATE_LAST_VT.store(vt, Ordering::SeqCst);
+        MENU_ITEM_UPDATE_LAST_FUNCTOR.store(functor, Ordering::SeqCst);
+        MENU_ITEM_UPDATE_LAST_DOCALL.store(do_call, Ordering::SeqCst);
+        MENU_ITEM_UPDATE_LAST_ACCEPT.store(accept_predicate, Ordering::SeqCst);
         let semantic_continue_item = vt == base + MENU_WINDOW_JOB_VTABLE_RVA
             && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA
             && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA;
+        if semantic_continue_item {
+            MENU_ITEM_UPDATE_SEMANTIC_HITS.fetch_add(1, Ordering::SeqCst);
+        }
         if semantic_continue_item
             && MENU_CONTINUE_ITEM
                 .compare_exchange(
