@@ -524,6 +524,9 @@ def main() -> int:
         and "RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA" in lib
         and "RESULT_ACTION_INSERT_HITS" in lib
         and "RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA" in lib
+        and "text_section_bounds" in experiments
+        and "update_target_in_text" in experiments
+        and "PE_TEXT_SECTION_NAME" in experiments
         and "callstack_contains_game_rva" in experiments
         and "oracle_result_action_builder_hits" in measure
         and "NATIVE_SUBMIT_ORIG" in lib

@@ -9964,6 +9964,36 @@ pub(crate) unsafe extern "system" fn menu_task_update_wrapper_hook(
     result
 }
 
+unsafe fn text_section_bounds(base: usize) -> Option<(usize, usize)> {
+    let e_lfanew = unsafe { safe_read_usize(base + PE_DOS_LFANEW_OFFSET) }? & PE_U32_MASK;
+    let nt = base + e_lfanew;
+    let num_sections = unsafe { safe_read_usize(nt + PE_FILE_NUM_SECTIONS_OFFSET) }? & PE_U16_MASK;
+    let size_opt = unsafe { safe_read_usize(nt + PE_FILE_SIZE_OPT_HEADER_OFFSET) }? & PE_U16_MASK;
+    let sections = nt + PE_OPT_HEADER_OFFSET + size_opt;
+    let mut index = PE_SECTION_SCAN_START;
+    while index < num_sections {
+        let header = sections + index * PE_SECTION_HEADER_SIZE;
+        let name = unsafe { safe_read_usize(header) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        if name.to_le_bytes().starts_with(PE_TEXT_SECTION_NAME) {
+            let vsize = unsafe { safe_read_usize(header + PE_SECTION_VSIZE_OFFSET) }? & PE_U32_MASK;
+            let vaddr = unsafe { safe_read_usize(header + PE_SECTION_VADDR_OFFSET) }? & PE_U32_MASK;
+            return Some((base + vaddr, vsize));
+        }
+        index += OWN_STEPPER_CALL_INC;
+    }
+    None
+}
+
+unsafe fn update_target_in_text(base: usize, update: usize) -> bool {
+    if update < base {
+        return false;
+    }
+    let Some((text_start, text_len)) = (unsafe { text_section_bounds(base) }) else {
+        return false;
+    };
+    update >= text_start && update < text_start.saturating_add(text_len)
+}
+
 unsafe fn task_node_update_rva(base: usize, node: usize) -> usize {
     const TASK_NODE_UPDATE_VTABLE_SLOT: usize = 0x10;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -9973,7 +10003,11 @@ unsafe fn task_node_update_rva(base: usize, node: usize) -> usize {
     let Some(update) = (unsafe { safe_read_usize(vtable + TASK_NODE_UPDATE_VTABLE_SLOT) }) else {
         return null;
     };
-    if update >= base { update - base } else { null }
+    if unsafe { update_target_in_text(base, update) } {
+        update - base
+    } else {
+        null
+    }
 }
 
 unsafe fn qword_window_summary(ptr: usize) -> String {

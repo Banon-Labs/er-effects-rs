@@ -276,6 +276,9 @@ if (
     or 'RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA' not in lib_code
     or 'RESULT_ACTION_INSERT_HITS' not in lib_code
     or 'RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA' not in lib_code
+    or 'text_section_bounds' not in exp_code
+    or 'update_target_in_text' not in exp_code
+    or 'PE_TEXT_SECTION_NAME' not in exp_code
     or 'callstack_contains_game_rva' not in exp_code
     or 'native_submit_entered' not in watcher
     or 'native_result_chain_same_result' not in watcher
