@@ -54,6 +54,13 @@ pub struct SaveLoadRequest {
     pub slot: Option<i32>,
     pub method: SaveLoadMethod,
     pub require_title_bootstrap: bool,
+    /// Arm the menu-free own-stepper path (idx10 patch) via the reliable autoload-file channel.
+    /// Equivalent to the `ER_EFFECTS_OWN_STEPPER` env / `er-effects-own-stepper.txt` trigger, but
+    /// configurable through `er-effects-autoload.txt` (read CWD-relative, the only channel that
+    /// reliably reaches the DLL under the Proton probe harness).
+    pub own_stepper: bool,
+    /// Arm the menu-free cold-char-mount save-IO load through the same reliable channel.
+    pub cold_char_mount: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -205,6 +212,18 @@ impl SaveLoader {
     #[must_use]
     pub const fn requires_title_bootstrap(&self) -> bool {
         self.request.require_title_bootstrap
+    }
+
+    /// Whether the autoload config armed the menu-free own-stepper path (idx10 patch).
+    #[must_use]
+    pub const fn own_stepper(&self) -> bool {
+        self.request.own_stepper
+    }
+
+    /// Whether the autoload config armed the menu-free cold-char-mount save-IO load.
+    #[must_use]
+    pub const fn cold_char_mount(&self) -> bool {
+        self.request.cold_char_mount
     }
 
     /// Advance the load request state machine once.
@@ -410,6 +429,8 @@ impl Default for SaveLoadRequest {
             slot: None,
             method: SaveLoadMethod::default(),
             require_title_bootstrap: REQUIRE_TITLE_BOOTSTRAP_DEFAULT,
+            own_stepper: false,
+            cold_char_mount: false,
         }
     }
 }
@@ -439,6 +460,15 @@ impl SaveLoadRequest {
             std::env::var("ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP")
         {
             request.require_title_bootstrap = parse_bool(require_title_bootstrap.trim());
+        }
+        if matches!(std::env::var("ER_EFFECTS_OWN_STEPPER").as_deref(), Ok("1")) {
+            request.own_stepper = true;
+        }
+        if matches!(
+            std::env::var("ER_EFFECTS_COLD_CHAR_MOUNT").as_deref(),
+            Ok("1")
+        ) {
+            request.cold_char_mount = true;
         }
 
         request
@@ -472,6 +502,8 @@ impl SaveLoadRequest {
                 "require_title_bootstrap" => {
                     request.require_title_bootstrap = parse_bool(value.trim())
                 }
+                "own_stepper" => request.own_stepper = parse_bool(value.trim()),
+                "cold_char_mount" => request.cold_char_mount = parse_bool(value.trim()),
                 _ => {}
             }
         }

@@ -79,6 +79,13 @@ preflight() {
   require_executable "$PROTON"
   require_file "$GAME_DIR/eldenring.exe"
   require_file "$REPO_ROOT/.auto/runtime_probe.sh"
+  # Validate the probe harness OFFLINE before spending a launch: py_compile + bash -n the probe
+  # scripts and exercise the watcher's early-exit telemetry predicates against None/empty/oracle
+  # states. A runtime launch must never be burned to discover a pure-Python harness bug.
+  if [[ -f "$REPO_ROOT/scripts/preflight-runtime-watcher.py" ]]; then
+    python3 "$REPO_ROOT/scripts/preflight-runtime-watcher.py" \
+      || fatal "runtime-harness preflight failed; refusing to launch (fix the watcher/probe scripts first)"
+  fi
   [[ -d "$STEAM_COMPAT_DATA_PATH" ]] || fatal "missing compatdata path: $STEAM_COMPAT_DATA_PATH"
   if [[ -n "$(runtime_pids)" ]]; then
     fatal "eldenring.exe is already running; refusing to mix probe ownership"

@@ -66,6 +66,16 @@ pub(crate) const PRODUCT_CORE_BLOCKER_TITLE_STATE: usize = 12;
 pub(crate) const PRODUCT_CORE_BLOCKER_UNKNOWN: usize = 13;
 
 static PRODUCT_AUTOLOAD_ARMED: AtomicUsize = AtomicUsize::new(0);
+/// Armed from the reliable autoload-file channel (`own_stepper=1` / `cold_char_mount=1` in
+/// er-effects-autoload.txt) so the menu-free own-stepper + cold-char-mount paths can be enabled
+/// without depending on env-var propagation through Proton or game_directory_path() trigger files.
+static OWN_STEPPER_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
+static COLD_CHAR_MOUNT_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
+/// Module-level mirror of cold_char_mount_drive's internal MOUNT_PHASE, stored as `phase + 1`
+/// (0 = the cold mount never ran; 5 = PHASE_DONE = terminal, evidence collected). Exposed in
+/// telemetry as `oracle_cold_char_mount_phase` so the readiness watcher can tear the game down the
+/// instant the b80 outcome is observed instead of idling to the wall-clock cap.
+pub(crate) static COLD_CHAR_MOUNT_PHASE_PUB: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PRODUCT_CORE_AUTOLOAD_TICKS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static PRODUCT_CORE_READY_BLOCKS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static PRODUCT_CORE_READY_SUCCESSES: AtomicU64 = AtomicU64::new(0);
@@ -310,10 +320,15 @@ fn own_stepper_s2_elapsed_ms() -> u64 {
 }
 
 pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
-    if request.method() != SaveLoadMethod::DirectMenuLoad {
-        return;
+    // Arm the menu-free path flags from the reliable autoload-file channel, independent of slot
+    // and method, so own_stepper_enabled()/cold_char_mount_enabled() do not depend on env-var
+    // propagation through Proton or game_directory_path() trigger-file resolution.
+    if request.own_stepper() {
+        OWN_STEPPER_FILE_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     }
-
+    if request.cold_char_mount() {
+        COLD_CHAR_MOUNT_FILE_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    }
     let Some(slot) = request.slot() else {
         return;
     };
@@ -322,8 +337,16 @@ pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
         return;
     }
 
+    // OWN_STEPPER_SLOT is the shared target slot for the menu-free own_stepper /
+    // native_fullread / cold_char_mount paths AND the menu-driven product_core path. Set it
+    // whenever a valid slot is configured, regardless of method, so the menu-free paths (which
+    // deliberately do NOT arm product_autoload, to avoid the open_menu self-fire that builds the
+    // ToS) still receive the slot. Only DirectMenuLoad arms product_core (which self-fires
+    // open_menu 0x1409b24e0 and therefore constructs the ToS MenuWindowJob).
     OWN_STEPPER_SLOT.store(slot, Ordering::SeqCst);
-    PRODUCT_AUTOLOAD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    if request.method() == SaveLoadMethod::DirectMenuLoad {
+        PRODUCT_AUTOLOAD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    }
 }
 
 pub(crate) fn product_autoload_enabled() -> bool {
@@ -718,6 +741,7 @@ pub(crate) fn observe_enabled() -> bool {
 
 pub(crate) fn own_stepper_enabled() -> bool {
     product_autoload_enabled()
+        || OWN_STEPPER_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
         || matches!(std::env::var("ER_EFFECTS_OWN_STEPPER").as_deref(), Ok("1"))
         || game_directory_path()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -1000,13 +1024,15 @@ unsafe fn worldres_coldbuild_probe(base: usize) {
 /// drain to resident so 0x67b290 mounts the real char -- zero-input, SAVE-SAFE (reads the save,
 /// applies char to memory; NO SetState, NO save write).
 pub(crate) fn cold_char_mount_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_COLD_CHAR_MOUNT").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-cold-char-mount.txt")
-        .exists()
+    COLD_CHAR_MOUNT_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
+        || matches!(
+            std::env::var("ER_EFFECTS_COLD_CHAR_MOUNT").as_deref(),
+            Ok("1")
+        )
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-cold-char-mount.txt")
+            .exists()
 }
 
 /// Direct ProfileLoadDialog build mode (er-effects-direct-build.txt / ER_EFFECTS_DIRECT_BUILD).
@@ -1165,7 +1191,10 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
     const POLL_ARG: u8 = 0;
     const B80_RESIDENT: i32 = 3;
     const B80_IDLE: i32 = 0;
-    const MOUNT_POLL_MAX: usize = 1200;
+    // A real worker-drained read goes resident within a handful of frames; a stuck cold read never
+    // does. 240 frames (~4s) is ample to distinguish drain-vs-stuck while keeping the probe's
+    // evidence-teardown fast (the old 1200 forced a ~20s stare at press-any-button for no signal).
+    const MOUNT_POLL_MAX: usize = 240;
     const LOG_INTERVAL: usize = 30;
     const WAIT_INC: usize = 1;
     static MOUNT_PHASE: AtomicUsize = AtomicUsize::new(PHASE_INIT);
@@ -1190,6 +1219,9 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
         }
     };
     let phase = MOUNT_PHASE.load(Ordering::SeqCst);
+    // Publish phase+1 so the readiness watcher can observe terminal completion (PHASE_DONE -> 5)
+    // and tear down on evidence rather than on the wall-clock cap.
+    COLD_CHAR_MOUNT_PHASE_PUB.store(phase + 1, Ordering::SeqCst);
     if phase == PHASE_INIT {
         const SLOT_MIN: i32 = 0;
         if want_slot < SLOT_MIN {
@@ -1316,6 +1348,13 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
     if phase == PHASE_POLL {
         // Full-load submit is the b80==2 lane: tick the IO lane and poll every frame, matching the
         // native_fullread drain that proved 0x67b1a0 can make the 0x280000 full-save buffer resident.
+        // NOTE (b80-fullread-CORRECTION-...): a lane-skip A/B run FALSIFIED the "lane 0x679510
+        // prematurely completes the read" hypothesis -- with lane() removed, b80 was ALREADY 0 at
+        // POLL waits=0 (it drops 2->0 in the native frame right after submit, before cold_char_mount
+        // ticks anything). So the recipe-aligned lane+poll drain is restored; the real wall is that
+        // the cold async full read completes EMPTY (b80->0, never resident=3) -- the worker is
+        // registered+scheduler-ticked but does no actual 0x280000 disk IO. Next suspect: the df0
+        // fast-path ([mgr+0xdf0]!=0 -> 0x67b100 skips the read).
         let lane: unsafe extern "system" fn() -> i32 =
             unsafe { std::mem::transmute(base + B80_LANE1_DRIVER_RVA) };
         let _ = unsafe { lane() };

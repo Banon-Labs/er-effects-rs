@@ -46,6 +46,8 @@ TARGET_REQUEST_CONSUMPTION = "request-consumption"
 TARGET_PLAYER_LOAD = "player-load"
 TARGET_WORLD_STABLE = "world-stable"
 READY_REASON = "game_man_telemetry_ready"
+COLD_CHAR_MOUNT_COMPLETE = "cold_char_mount_complete"
+COLD_CHAR_MOUNT_PHASE_DONE = 5  # cold_char_mount_drive MOUNT_PHASE PHASE_DONE, published as phase+1
 MODULE_BASE_READY = "runtime_module_base_observed"
 WORLD_STABLE = "world_stable"
 RUNTIME_EXE_NAME = "eldenring.exe"
@@ -612,6 +614,16 @@ def telemetry_native_legal_popup_detected(telemetry: dict[str, Any] | None) -> b
         or as_int(telemetry.get("oracle_policy_window_total_builds"), 0) > 0
     )
     return msgbox_legal or policy_window
+
+
+def telemetry_cold_char_mount_complete(telemetry: dict[str, Any] | None) -> bool:
+    """True once cold_char_mount_drive reaches its terminal phase (success or timeout). Used for
+    evidence-driven teardown of a no-write cold-mount probe, which never reaches world-stable.
+    Mirrors the codebase pattern: guard a possibly-None telemetry centrally so the caller cannot
+    deref None (the bug that previously crashed the watcher and burned a runtime launch)."""
+    if not isinstance(telemetry, dict):
+        return False
+    return as_int(telemetry.get("oracle_cold_char_mount_phase"), 0) >= COLD_CHAR_MOUNT_PHASE_DONE
 
 
 def telemetry_server_status_semaphore_detected(telemetry: dict[str, Any] | None) -> bool:
@@ -1569,6 +1581,25 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
                 ReadinessResult(
                     False,
                     NATIVE_LEGAL_POPUP_DETECTED,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
+        # Evidence-driven teardown: a no-write cold_char_mount probe never reaches world-stable, so
+        # exit the instant the mount reaches its terminal phase (success or timeout) rather than
+        # idling to the wall-clock cap. The field is 0 on every non-cold-mount run, so this is inert
+        # for those. ready=True so the run is not scored as a failure -- it is a completed diagnostic.
+        if telemetry_cold_char_mount_complete(telemetry):
+            return with_runtime_module_info(
+                ReadinessResult(
+                    True,
+                    COLD_CHAR_MOUNT_COMPLETE,
                     pid,
                     bootstrap,
                     telemetry,

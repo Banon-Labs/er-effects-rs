@@ -210,6 +210,12 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         "  \"title_bootstrap_seen\": {},\n",
         TITLE_BOOTSTRAP_SEEN.load(Ordering::SeqCst) != TITLE_BOOTSTRAP_UNSEEN
     ));
+    // Cold-char-mount progress as phase+1 (0 = never ran, 5 = PHASE_DONE = terminal/evidence
+    // collected). The readiness watcher tears down on the terminal value instead of the cap.
+    body.push_str(&format!(
+        "  \"oracle_cold_char_mount_phase\": {},\n",
+        crate::experiments::COLD_CHAR_MOUNT_PHASE_PUB.load(Ordering::SeqCst)
+    ));
     let product_core_blocker = PRODUCT_CORE_LAST_BLOCKER.load(Ordering::SeqCst);
     let format_scan_ptr = |value: usize| -> String {
         if value == TITLE_OWNER_SCAN_START_ADDRESS {
