@@ -190,6 +190,15 @@ def main() -> int:
         "product Continue capture must latch a semantic Continue item, not the first ticked MenuWindowJob",
         failures,
     )
+    ctor_body = rust_fn_body(experiments, "menu_window_job_ctor_hook")
+    require(
+        "MENU-WINDOW-CTOR captured semantic native Continue item" in ctor_body
+        and "MENU_WINDOW_JOB_CTOR_RVA" in lib
+        and "cap_menu_window_job_ctor_7ac8c0" in experiments
+        and "MENU_WINDOW_JOB_CTOR_ORIG" in lib,
+        "product Continue capture must observe MenuWindowJob construction before update-time first-item latching",
+        failures,
+    )
 
     online_body = rust_fn_body(experiments, "online_disable_enabled")
     input_body = rust_fn_body(experiments, "block_input_enabled")
@@ -360,6 +369,13 @@ def main() -> int:
         and "captured semantic native Continue item" in experiments
         and "semantic_continue_item" in experiments,
         "measure must fail closed if product capture regresses to first-ticked MenuWindowJob latching",
+        failures,
+    )
+    require(
+        "constructor hook" in measure
+        and "MENU_WINDOW_JOB_CTOR_RVA" in lib
+        and "cap_menu_window_job_ctor_7ac8c0" in experiments,
+        "measure must fail closed if the product lacks a constructor-time semantic Continue latch",
         failures,
     )
     require(

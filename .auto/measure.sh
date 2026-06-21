@@ -212,6 +212,17 @@ if (
 if 'product Continue capture must latch a semantic Continue item, not the first ticked MenuWindowJob' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce semantic Continue item capture')
     autoload_static_failures += 1
+ctor_body = function_body('menu_window_job_ctor_hook', exp_code) or ''
+if (
+    'MENU-WINDOW-CTOR captured semantic native Continue item' not in ctor_body
+    or 'MENU_WINDOW_JOB_CTOR_RVA' not in lib_code
+    or 'cap_menu_window_job_ctor_7ac8c0' not in exp_code
+):
+    legacy_failures.append('product Continue capture lacks constructor hook for semantic item latching')
+    autoload_static_failures += 1
+if 'product Continue capture must observe MenuWindowJob construction before update-time first-item latching' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce constructor hook semantic Continue latch')
+    autoload_static_failures += 1
 
 asset_failures: list[str] = []
 docs = doc_text()

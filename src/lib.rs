@@ -1050,6 +1050,10 @@ pub(crate) static OWN_STEPPER_MENU_BUILD_WAITS: AtomicUsize =
 /// (Stage 2) invoke zero-input. 0 = not yet captured.
 pub(crate) const MENU_ITEM_UPDATE_RVA: u32 = ProfileLoadMenuRva::MenuItemUpdate as u32;
 pub(crate) static MENU_ITEM_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+/// MenuWindowJob constructor 0x1407ac8c0. Product autoload observes constructed items so the
+/// semantic Continue item can be latched before the first updated/idle input leaf pollutes state.
+pub(crate) const MENU_WINDOW_JOB_CTOR_RVA: u32 = 0x007ac8c0;
+pub(crate) static MENU_WINDOW_JOB_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static MENU_LOAD_GAME_ITEM: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// FD4 Sequence::Update / child-iterator 0x1407aa1f0 (RVA). At the opened main menu the

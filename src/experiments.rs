@@ -8310,6 +8310,15 @@ pub(crate) fn install_continue_trace_hooks() {
             cap_dialog_factory_hook as *mut c_void,
             &CAP_DIALOG_FACTORY_ORIG,
         );
+        // MenuWindowJob ctor 0x1407ac8c0: latch semantic Continue items at construction before
+        // the first updated/idle title input leaf can poison MENU_CONTINUE_ITEM.
+        create_continue_trace_hook(
+            &mut hooks,
+            "cap_menu_window_job_ctor_7ac8c0",
+            MENU_WINDOW_JOB_CTOR_RVA,
+            menu_window_job_ctor_hook as *mut c_void,
+            &MENU_WINDOW_JOB_CTOR_ORIG,
+        );
         // Menu-item Update 0x1407ad1c0: capture the live Load-Game item (functor ->
         // dialog_factory) by letting the native pump walk its own CSMenu tree.
         create_continue_trace_hook(
@@ -9378,6 +9387,79 @@ pub(crate) unsafe extern "system" fn cap_menu_deser_hook(
         "CAP menu_deser LEAVE ret=0x{ret:x} {}",
         b80_mount_trace_summary()
     ));
+    ret
+}
+
+/// MenuWindowJob ctor 0x1407ac8c0 hook: observe constructed menu jobs and latch the semantic
+/// Continue item only when both the Continue action and native accept predicate are installed.
+/// This avoids poisoning MENU_CONTINUE_ITEM with the first updated title input leaf, whose
+/// accept predicate is the constant-false 0x1407add70 diagnostic dead end.
+pub(crate) unsafe extern "system" fn menu_window_job_ctor_hook(
+    out_slot: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let ret = unsafe { call_cap_original(&MENU_WINDOW_JOB_CTOR_ORIG, out_slot, b, c, d) };
+    if !product_autoload_enabled() || out_slot == TITLE_OWNER_SCAN_START_ADDRESS {
+        return ret;
+    }
+    let base = {
+        let own = OWN_STEPPER_BASE.load(Ordering::SeqCst);
+        if own != TITLE_OWNER_SCAN_START_ADDRESS {
+            own
+        } else {
+            game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+        }
+    };
+    if base == TITLE_OWNER_SCAN_START_ADDRESS {
+        return ret;
+    }
+    const DOCALL_VTABLE_SLOT_10: usize = 0x10;
+    const MENU_ITEM_ACCEPT_PREDICATE_F8_OFFSET: usize = 0xf8;
+    const MENU_ITEM_ACCEPT_NATIVE_RVA: usize = 0x007ad810;
+    let item = unsafe { safe_read_usize(out_slot) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    if item == TITLE_OWNER_SCAN_START_ADDRESS {
+        return ret;
+    }
+    let vt = unsafe { safe_read_usize(item) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let functor = unsafe { safe_read_usize(item + MENU_ITEM_FUNCTOR_A8_OFFSET) }
+        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let functor_vt = if functor != TITLE_OWNER_SCAN_START_ADDRESS {
+        unsafe { safe_read_usize(functor) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    let do_call = if functor_vt != TITLE_OWNER_SCAN_START_ADDRESS {
+        unsafe { safe_read_usize(functor_vt + DOCALL_VTABLE_SLOT_10) }
+            .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    let accept_predicate = unsafe { safe_read_usize(item + MENU_ITEM_ACCEPT_PREDICATE_F8_OFFSET) }
+        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let semantic_continue_item = vt == base + MENU_WINDOW_JOB_VTABLE_RVA
+        && do_call == base + MENU_TITLE_CONTINUE_DOCALL_RVA
+        && accept_predicate == base + MENU_ITEM_ACCEPT_NATIVE_RVA;
+    if semantic_continue_item
+        && MENU_CONTINUE_ITEM
+            .compare_exchange(
+                TITLE_OWNER_SCAN_START_ADDRESS,
+                item,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+    {
+        append_continue_trace(format_args!(
+            "MENU-WINDOW-CTOR captured semantic native Continue item=0x{item:x} out=0x{out_slot:x} vt=0x{vt:x} functor=0x{functor:x} docall=0x{do_call:x} accept_predicate=0x{accept_predicate:x} item_fields{{{}}} {}",
+            unsafe { menu_item_action_summary(item) },
+            trace_callers_summary()
+        ));
+        append_autoload_debug(format_args!(
+            "product-core-autoload: constructor captured semantic native Continue MenuWindowJob item=0x{item:x} vt=0x{vt:x} docall=0x{do_call:x} accept_predicate=0x{accept_predicate:x}"
+        ));
+    }
     ret
 }
 
