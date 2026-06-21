@@ -50,7 +50,28 @@ use crate::*;
 #[allow(unused_imports)]
 use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 
+pub(crate) const PRODUCT_CORE_BLOCKER_UNSEEN: usize = 0;
+pub(crate) const PRODUCT_CORE_BLOCKER_READY: usize = 1;
+pub(crate) const PRODUCT_CORE_BLOCKER_NO_TITLE_OWNER: usize = 2;
+pub(crate) const PRODUCT_CORE_BLOCKER_TITLE_OWNER_STATE: usize = 3;
+pub(crate) const PRODUCT_CORE_BLOCKER_TITLE_TABLE: usize = 4;
+pub(crate) const PRODUCT_CORE_BLOCKER_SESSION: usize = 5;
+pub(crate) const PRODUCT_CORE_BLOCKER_GAME_DATA_MAN: usize = 6;
+pub(crate) const PRODUCT_CORE_BLOCKER_PROFILE_SUMMARY: usize = 7;
+pub(crate) const PRODUCT_CORE_BLOCKER_IODEV: usize = 8;
+pub(crate) const PRODUCT_CORE_BLOCKER_HEAP_ALLOCATOR: usize = 9;
+pub(crate) const PRODUCT_CORE_BLOCKER_TITLE_DIALOG: usize = 10;
+pub(crate) const PRODUCT_CORE_BLOCKER_PRESS_START: usize = 11;
+pub(crate) const PRODUCT_CORE_BLOCKER_TITLE_STATE: usize = 12;
+pub(crate) const PRODUCT_CORE_BLOCKER_UNKNOWN: usize = 13;
+
 static PRODUCT_AUTOLOAD_ARMED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PRODUCT_CORE_AUTOLOAD_TICKS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static PRODUCT_CORE_READY_BLOCKS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static PRODUCT_CORE_READY_SUCCESSES: AtomicU64 = AtomicU64::new(0);
+pub(crate) static PRODUCT_CORE_LAST_PHASE: AtomicUsize = AtomicUsize::new(OWN_STEPPER_PHASE_MENU);
+pub(crate) static PRODUCT_CORE_LAST_BLOCKER: AtomicUsize =
+    AtomicUsize::new(PRODUCT_CORE_BLOCKER_UNSEEN);
 static MENU_CONTINUE_ENTRY: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 static MENU_CONTINUE_ITEM: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 static B80_NATIVE_DISPATCHER_OWNER: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -147,6 +168,25 @@ pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
 
 pub(crate) fn product_autoload_enabled() -> bool {
     PRODUCT_AUTOLOAD_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
+}
+
+pub(crate) fn product_core_ready_blocker_label(blocker: usize) -> &'static str {
+    match blocker {
+        PRODUCT_CORE_BLOCKER_UNSEEN => "unseen",
+        PRODUCT_CORE_BLOCKER_READY => "ready",
+        PRODUCT_CORE_BLOCKER_NO_TITLE_OWNER => "no_title_owner",
+        PRODUCT_CORE_BLOCKER_TITLE_OWNER_STATE => "title_owner_state",
+        PRODUCT_CORE_BLOCKER_TITLE_TABLE => "title_table",
+        PRODUCT_CORE_BLOCKER_SESSION => "session",
+        PRODUCT_CORE_BLOCKER_GAME_DATA_MAN => "game_data_man",
+        PRODUCT_CORE_BLOCKER_PROFILE_SUMMARY => "profile_summary",
+        PRODUCT_CORE_BLOCKER_IODEV => "iodev",
+        PRODUCT_CORE_BLOCKER_HEAP_ALLOCATOR => "heap_allocator",
+        PRODUCT_CORE_BLOCKER_TITLE_DIALOG => "title_dialog",
+        PRODUCT_CORE_BLOCKER_PRESS_START => "press_start",
+        PRODUCT_CORE_BLOCKER_TITLE_STATE => "title_state",
+        _ => "unknown",
+    }
 }
 
 pub(crate) fn game_module_base() -> Result<usize, String> {
@@ -2505,12 +2545,16 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     if !product_autoload_enabled() {
         return false;
     }
+    PRODUCT_CORE_AUTOLOAD_TICKS.fetch_add(1, Ordering::SeqCst);
     let phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
+    PRODUCT_CORE_LAST_PHASE.store(phase, Ordering::SeqCst);
     if phase == OWN_STEPPER_PHASE_DONE {
         return true;
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let Some(owner_ptr) = (unsafe { title_owner(module_base) }) else {
+        PRODUCT_CORE_READY_BLOCKS.fetch_add(1, Ordering::SeqCst);
+        PRODUCT_CORE_LAST_BLOCKER.store(PRODUCT_CORE_BLOCKER_NO_TITLE_OWNER, Ordering::SeqCst);
         if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
             append_autoload_debug(format_args!(
                 "product-core-autoload: waiting for title owner before native save-load core tick={tick}"
@@ -2600,12 +2644,45 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 } else {
                     (false, false, null)
                 };
+            let blocker =
+                if committed != TITLE_STEP_MENU_JOB_WAIT || requested != TITLE_STEP_MENU_JOB_WAIT {
+                    PRODUCT_CORE_BLOCKER_TITLE_OWNER_STATE
+                } else if table != module_base + INNER_TITLE_STATE_TABLE_RVA {
+                    PRODUCT_CORE_BLOCKER_TITLE_TABLE
+                } else if session == null {
+                    PRODUCT_CORE_BLOCKER_SESSION
+                } else if game_data_man == null {
+                    PRODUCT_CORE_BLOCKER_GAME_DATA_MAN
+                } else if profile_summary == null {
+                    PRODUCT_CORE_BLOCKER_PROFILE_SUMMARY
+                } else if iodev == null {
+                    PRODUCT_CORE_BLOCKER_IODEV
+                } else if heap_allocator == null {
+                    PRODUCT_CORE_BLOCKER_HEAP_ALLOCATOR
+                } else if dialog_vt != module_base + TITLE_TOP_DIALOG_VTABLE_RVA {
+                    PRODUCT_CORE_BLOCKER_TITLE_DIALOG
+                } else if press_start_vt != module_base + SCENE_OBJ_PROXY_VTABLE_RVA
+                    || press_start_context == null
+                {
+                    PRODUCT_CORE_BLOCKER_PRESS_START
+                } else if !title_loop
+                    && !title_textfadeout
+                    && menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO
+                {
+                    PRODUCT_CORE_BLOCKER_TITLE_STATE
+                } else {
+                    PRODUCT_CORE_BLOCKER_UNKNOWN
+                };
+            PRODUCT_CORE_READY_BLOCKS.fetch_add(1, Ordering::SeqCst);
+            PRODUCT_CORE_LAST_BLOCKER.store(blocker, Ordering::SeqCst);
             append_autoload_debug(format_args!(
                 "product-core-autoload: waiting for core readiness owner=0x{owner:x} state={committed}/{requested} table=0x{table:x} session=0x{session:x} gm=0x{gm:x} gdm=0x{game_data_man:x} profile=0x{profile_summary:x} iodev=0x{iodev:x} heap=0x{heap_allocator:x} title_loop={title_loop} title_textfadeout={title_textfadeout} menu_latch={menu_opened_latch} press_start_proxy=0x{press_start_proxy:x} press_start_vt=0x{press_start_vt:x} press_start_ctx=0x{press_start_context:x} slot={slot} tick={tick}"
             ));
         }
         return true;
     };
+    PRODUCT_CORE_READY_SUCCESSES.fetch_add(1, Ordering::SeqCst);
+    PRODUCT_CORE_LAST_BLOCKER.store(PRODUCT_CORE_BLOCKER_READY, Ordering::SeqCst);
     if phase == OWN_STEPPER_PHASE_MENU {
         if ready.title_in_loop
             && ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO

@@ -725,11 +725,15 @@ def autoload_progress_summary(telemetry: dict[str, Any] | None) -> dict[str, Any
     if not isinstance(telemetry, dict):
         return {"telemetry_present": False, "blocker": "waiting_for_telemetry"}
     attempts = as_int(telemetry.get("autoload_attempts"), 0)
+    product_core_ticks = as_int(telemetry.get("product_core_autoload_ticks"), 0)
+    product_core_blocker = str(telemetry.get("product_core_ready_blocker") or "unseen")
     phase = as_int(telemetry.get("oracle_continue_phase"), -1)
     title_bootstrap_seen = telemetry.get("title_bootstrap_seen") is True
     native_stage = telemetry_native_continue_chain_stage(telemetry)
     if telemetry.get("game_man_available") is not True:
         blocker = "waiting_for_game_man"
+    elif telemetry.get("product_autoload_armed") is True and product_core_ticks > 0 and attempts <= 0:
+        blocker = f"product_core_{product_core_blocker}"
     elif attempts <= 0 and not title_bootstrap_seen:
         blocker = "autoload_not_attempted_waiting_title_bootstrap"
     elif attempts <= 0:
@@ -750,6 +754,12 @@ def autoload_progress_summary(telemetry: dict[str, Any] | None) -> dict[str, Any
         "autoload_slot": telemetry.get("autoload_slot"),
         "autoload_method": telemetry.get("autoload_method"),
         "autoload_require_title_bootstrap": telemetry.get("autoload_require_title_bootstrap"),
+        "product_autoload_armed": telemetry.get("product_autoload_armed"),
+        "product_core_autoload_ticks": telemetry.get("product_core_autoload_ticks"),
+        "product_core_ready_blocks": telemetry.get("product_core_ready_blocks"),
+        "product_core_ready_successes": telemetry.get("product_core_ready_successes"),
+        "product_core_last_phase": telemetry.get("product_core_last_phase"),
+        "product_core_ready_blocker": telemetry.get("product_core_ready_blocker"),
         "autoload_attempts": telemetry.get("autoload_attempts"),
         "autoload_last_status": telemetry.get("autoload_last_status"),
         "title_bootstrap_seen": telemetry.get("title_bootstrap_seen"),

@@ -210,6 +210,16 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         "  \"title_bootstrap_seen\": {},\n",
         TITLE_BOOTSTRAP_SEEN.load(Ordering::SeqCst) != TITLE_BOOTSTRAP_UNSEEN
     ));
+    let product_core_blocker = PRODUCT_CORE_LAST_BLOCKER.load(Ordering::SeqCst);
+    body.push_str(&format!(
+        "  \"product_autoload_armed\": {},\n  \"product_core_autoload_ticks\": {},\n  \"product_core_ready_blocks\": {},\n  \"product_core_ready_successes\": {},\n  \"product_core_last_phase\": {},\n  \"product_core_ready_blocker\": \"{}\",\n",
+        product_autoload_enabled(),
+        PRODUCT_CORE_AUTOLOAD_TICKS.load(Ordering::SeqCst),
+        PRODUCT_CORE_READY_BLOCKS.load(Ordering::SeqCst),
+        PRODUCT_CORE_READY_SUCCESSES.load(Ordering::SeqCst),
+        PRODUCT_CORE_LAST_PHASE.load(Ordering::SeqCst),
+        json_escape(product_core_ready_blocker_label(product_core_blocker))
+    ));
     body.push_str(&format!(
         "  \"autoload_attempts\": {},\n",
         state.autoload.attempts()

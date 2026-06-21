@@ -575,11 +575,29 @@ for token in [
     'target_window_capture_problems(selected, window_class)',
     'autoload_progress_summary',
     '"autoload_progress"',
-    '"autoload_not_attempted_waiting_title_bootstrap"',
+    '"product_core_ready_blocker"',
+    '"product_core_autoload_ticks"',
+    'product_core_{product_core_blocker}',
     '"native_continue_chain_stage"',
 ]:
     if token not in watcher:
         runtime_mode_failures.append(f'readiness watcher missing runtime-mode/preexisting-pid/window-capture/autoload-progress diagnostic token {token}')
+for token in [
+    'PRODUCT_CORE_AUTOLOAD_TICKS',
+    'PRODUCT_CORE_READY_BLOCKS',
+    'PRODUCT_CORE_READY_SUCCESSES',
+    'PRODUCT_CORE_LAST_BLOCKER',
+    'product_core_ready_blocker_label',
+]:
+    if token not in exp:
+        runtime_mode_failures.append(f'experiments missing product-core autoload diagnostic token {token}')
+for token in [
+    'product_core_ready_blocker',
+    'product_core_autoload_ticks',
+    'product_autoload_armed',
+]:
+    if token not in telemetry_src:
+        runtime_mode_failures.append(f'telemetry missing product-core autoload diagnostic token {token}')
 for token in [
     'oracle_msgbox_total_builds',
     'oracle_msgbox_any_seen',

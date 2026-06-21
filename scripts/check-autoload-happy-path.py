@@ -552,10 +552,23 @@ def main() -> int:
     require(
         "autoload_progress_summary" in watcher
         and '"autoload_progress"' in watcher
-        and '"autoload_not_attempted_waiting_title_bootstrap"' in watcher
+        and '"product_core_ready_blocker"' in watcher
+        and '"product_core_autoload_ticks"' in watcher
+        and 'product_core_{product_core_blocker}' in watcher
         and '"native_continue_chain_stage"' in watcher
         and '"result_action_insert_hits"' in watcher,
-        "readiness watcher must report a compact autoload/native-Continue progress summary in readiness-result.json",
+        "readiness watcher must report a compact autoload/native-Continue/product-core progress summary in readiness-result.json",
+        failures,
+    )
+    require(
+        "PRODUCT_CORE_AUTOLOAD_TICKS" in experiments
+        and "PRODUCT_CORE_READY_BLOCKS" in experiments
+        and "PRODUCT_CORE_READY_SUCCESSES" in experiments
+        and "PRODUCT_CORE_LAST_BLOCKER" in experiments
+        and "product_core_ready_blocker_label" in experiments
+        and "product_core_ready_blocker" in telemetry_src
+        and "product_core_autoload_ticks" in telemetry_src,
+        "DLL telemetry must expose product-core autoload tick/readiness blocker evidence",
         failures,
     )
     require(
