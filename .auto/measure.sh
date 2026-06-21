@@ -272,6 +272,8 @@ if (
     or 'oracle_result_action_last_wrapper_builder_ret_update_rva' not in telemetry_src
     or 'oracle_policy_status_predicate_hits' not in telemetry_src
     or 'oracle_policy_status_predicate_ret' not in telemetry_src
+    or 'oracle_policy_flag_setter_hits' not in telemetry_src
+    or 'oracle_policy_flag_setter_after' not in telemetry_src
     or 'oracle_result_action_insert_hits' not in telemetry_src
     or 'oracle_result_action_last_insert_arg1_update_rva' not in telemetry_src
     or 'oracle_result_action_last_insert_ret_update_rva' not in telemetry_src
@@ -279,6 +281,8 @@ if (
     or 'RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA' not in lib_code
     or 'POLICY_TOS_STATUS_PREDICATE_RVA' not in lib_code
     or 'POLICY_TOS_STATUS_PREDICATE_ORIG' not in lib_code
+    or 'POLICY_TOS_FLAG_SETTER_RVA' not in lib_code
+    or 'POLICY_TOS_FLAG_SETTER_ORIG' not in lib_code
     or 'RESULT_ACTION_INSERT_HITS' not in lib_code
     or 'RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA' not in lib_code
     or 'text_section_bounds' not in exp_code
@@ -316,8 +320,8 @@ if 'product tracing must passively hook native submit, result.vtable+0x60, actio
 if 'telemetry/watcher oracle must expose passive native submit/result-handler/action-builder/wrapper-builder/action-insert hit counts, wrapper/update-RVA proof, same-result proof, and chain stage' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce passive submit/result-chain/wrapper-builder/action-insert wrapper/update-RVA same-result telemetry/stage')
     autoload_static_failures += 1
-if 'native static checker must pin wrapper-builder ABI, ToS status predicate ABI, and inner finalize edge' not in check:
-    legacy_failures.append('check-autoload-happy-path does not enforce native wrapper-builder/ToS predicate ABI static check')
+if 'native static checker must pin wrapper-builder ABI, ToS status predicate/setter ABI, and inner finalize edge' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce native wrapper-builder/ToS predicate+setter ABI static check')
     autoload_static_failures += 1
 if 'telemetry must expose native Continue product phase/guard state for result-chain interpretation' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce Continue phase telemetry')
@@ -333,7 +337,9 @@ if (
     or 'RESULT_EVENT_HANDLER' not in native_static_check
     or 'RESULT_EVENT_WRAPPER_BUILDER' not in native_static_check
     or 'POLICY_TOS_STATUS_PREDICATE' not in native_static_check
+    or 'POLICY_TOS_FLAG_SETTER' not in native_static_check
     or 'policy ToS status predicate' not in native_static_check
+    or 'policy ToS flag setter' not in native_static_check
     or 'MENU_JOB_LIST_CONSUMER' not in native_static_check
     or 'MENU_JOB_SINGLE_CONSUMER' not in native_static_check
     or 'FD4 event code 3' not in native_static_check

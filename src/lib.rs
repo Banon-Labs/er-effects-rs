@@ -1778,8 +1778,10 @@ pub(crate) static POLICY_TOS_TITLE_LAST_ARG_R9: AtomicUsize =
 /// is set, otherwise falls back to `[this+8]+0x29c0`. Hooked passively to explain legal/status
 /// gate failures in direct/offline runs; never used to auto-accept or skip the UI.
 pub(crate) const POLICY_TOS_STATUS_PREDICATE_RVA: u32 = 0x9b72b0;
+pub(crate) const POLICY_TOS_FLAG_SETTER_RVA: u32 = 0x9b6b30;
 pub(crate) static POLICY_TOS_STATUS_PREDICATE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static POLICY_TOS_FLAG_SETTER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static POLICY_TOS_STATUS_HITS: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) static POLICY_TOS_STATUS_LAST_THIS: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -1790,6 +1792,18 @@ pub(crate) static POLICY_TOS_STATUS_LAST_FLAG_PTR: AtomicUsize =
 pub(crate) static POLICY_TOS_STATUS_LAST_FLAG_VALUE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static POLICY_TOS_STATUS_LAST_RET: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static POLICY_TOS_FLAG_SETTER_HITS: AtomicUsize =
+    AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
+pub(crate) static POLICY_TOS_FLAG_SETTER_LAST_OWNER: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static POLICY_TOS_FLAG_SETTER_LAST_VALUE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static POLICY_TOS_FLAG_SETTER_LAST_FORCE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static POLICY_TOS_FLAG_SETTER_LAST_BEFORE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static POLICY_TOS_FLAG_SETTER_LAST_AFTER: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static START_POLICY_TOS_TITLE_HOOK: Once = Once::new();
 /// Native server/login status-text formatter. Static asset/native scan (see

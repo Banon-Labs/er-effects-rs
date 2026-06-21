@@ -260,6 +260,8 @@ def main() -> int:
         and "oracle_result_action_last_wrapper_builder_ret_update_rva" in telemetry
         and "oracle_policy_status_predicate_hits" in telemetry
         and "oracle_policy_status_predicate_ret" in telemetry
+        and "oracle_policy_flag_setter_hits" in telemetry
+        and "oracle_policy_flag_setter_after" in telemetry
         and "oracle_result_action_insert_hits" in telemetry
         and "oracle_result_action_last_insert_arg1_update_rva" in telemetry
         and "oracle_result_action_last_insert_ret_update_rva" in telemetry
@@ -267,6 +269,7 @@ def main() -> int:
         and "RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA" in telemetry
         and "POLICY_TOS_STATUS_HITS" in telemetry
         and "POLICY_TOS_STATUS_LAST_RET" in telemetry
+        and "POLICY_TOS_FLAG_SETTER_HITS" in telemetry
         and "RESULT_ACTION_INSERT_HITS" in telemetry
         and "RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA" in telemetry
         and "NATIVE_SUBMIT_HITS" in telemetry
@@ -299,10 +302,12 @@ def main() -> int:
     require(
         "RESULT_EVENT_WRAPPER_INNER_BUILD" in native_static_check
         and "POLICY_TOS_STATUS_PREDICATE" in native_static_check
+        and "POLICY_TOS_FLAG_SETTER" in native_static_check
         and "wrapper builder returns the original output wrapper pointer" in native_static_check
         and "result event wrapper builder no longer finalizes payload" in native_static_check
-        and "policy ToS status predicate reads fallback pointer at owner+0x29c0" in native_static_check,
-        "native static checker must pin wrapper-builder ABI, ToS status predicate ABI, and inner finalize edge",
+        and "policy ToS status predicate reads fallback pointer at owner+0x29c0" in native_static_check
+        and "policy ToS flag setter writes requested value to flag pointer" in native_static_check,
+        "native static checker must pin wrapper-builder ABI, ToS status predicate/setter ABI, and inner finalize edge",
         failures,
     )
 
@@ -525,6 +530,8 @@ def main() -> int:
         and "oracle_result_action_last_wrapper_builder_ret_update_rva" in telemetry_src
         and "oracle_policy_status_predicate_hits" in telemetry_src
         and "oracle_policy_status_predicate_ret" in telemetry_src
+        and "oracle_policy_flag_setter_hits" in telemetry_src
+        and "oracle_policy_flag_setter_after" in telemetry_src
         and "oracle_result_action_insert_hits" in telemetry_src
         and "oracle_result_action_last_insert_arg1_update_rva" in telemetry_src
         and "oracle_result_action_last_insert_ret_update_rva" in telemetry_src
@@ -532,6 +539,8 @@ def main() -> int:
         and "RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA" in lib
         and "POLICY_TOS_STATUS_PREDICATE_RVA" in lib
         and "POLICY_TOS_STATUS_PREDICATE_ORIG" in lib
+        and "POLICY_TOS_FLAG_SETTER_RVA" in lib
+        and "POLICY_TOS_FLAG_SETTER_ORIG" in lib
         and "RESULT_ACTION_INSERT_HITS" in lib
         and "RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA" in lib
         and "text_section_bounds" in experiments

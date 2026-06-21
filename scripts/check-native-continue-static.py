@@ -32,6 +32,7 @@ RESULT_ACTION_BUILDER = 0x140746A00
 RESULT_EVENT_WRAPPER_BUILDER = 0x140744A60
 RESULT_EVENT_WRAPPER_INNER_BUILD = 0x1407449E0
 POLICY_TOS_STATUS_PREDICATE = 0x1409B72B0
+POLICY_TOS_FLAG_SETTER = 0x1409B6B30
 POLICY_TOS_GATE = 0x140E4FDA0
 MENU_JOB_SINGLE_CONSUMER = 0x1407A9600
 MENU_JOB_LIST_CONSUMER = 0x1407AA1F0
@@ -183,6 +184,13 @@ def main() -> int:
     policy_calls = rel32_targets(POLICY_TOS_STATUS_PREDICATE, policy_predicate)
     if POLICY_TOS_GATE not in policy_calls:
         fail("policy ToS status predicate no longer calls 0x140e4fda0 gate")
+
+    policy_setter = image_bytes(POLICY_TOS_FLAG_SETTER, 0xa0)
+    contains(policy_setter, b"\x48\x8b\x81\xc0\x29\x00\x00", "policy ToS flag setter reads flag pointer at owner+0x29c0")
+    contains(policy_setter, b"\x39\x10", "policy ToS flag setter compares requested value with current flag")
+    contains(policy_setter, b"\x45\x84\xc0", "policy ToS flag setter tests force/update byte r8b")
+    contains(policy_setter, b"\x89\x10", "policy ToS flag setter writes requested value to flag pointer")
+    contains(policy_setter, b"\xe8", "policy ToS flag setter calls UI/state refresh helpers after write")
 
     single_consumer = image_bytes(MENU_JOB_SINGLE_CONSUMER, 0x140)
     contains(single_consumer, b"\xff\x50\x10", "single native menu consumer calls job vtable +0x10 update")
