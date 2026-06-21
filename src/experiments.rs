@@ -6462,10 +6462,18 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
 ) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if product_autoload_enabled() {
+        MSGBOX_LAST_ARG_RCX.store(a, Ordering::SeqCst);
+        MSGBOX_LAST_ARG_RDX.store(b, Ordering::SeqCst);
+        MSGBOX_LAST_ARG_R8.store(c, Ordering::SeqCst);
+        MSGBOX_LAST_ARG_R9.store(d, Ordering::SeqCst);
+        MSGBOX_TOTAL_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+        if IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES {
+            MSGBOX_POSTLOAD_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+        }
         let n = MSGBOX_BUILDER_LOG.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
         if n < MSGBOX_BUILDER_LOG_MAX {
             append_autoload_debug(format_args!(
-                "msgbox-skip #{n}: product autoload suppressed MessageBoxDialog builder before UI allocation args(rcx=0x{a:x} rdx=0x{b:x} r8=0x{c:x} r9=0x{d:x}) {}",
+                "msgbox-skip #{n}: product autoload suppressed MessageBoxDialog builder before UI allocation but counted it as oracle failure args(rcx=0x{a:x} rdx=0x{b:x} r8=0x{c:x} r9=0x{d:x}) {}",
                 trace_callers_summary()
             ));
         }

@@ -323,6 +323,13 @@ def main() -> int:
         failures,
     )
     require(
+        "product autoload suppressed MessageBoxDialog builder before UI allocation but counted it as oracle failure" in experiments
+        and "MSGBOX_TOTAL_BUILDS.fetch_add" in experiments
+        and "MSGBOX_LAST_ARG_RDX.store" in experiments,
+        "product-mode MessageBoxDialog suppression must preserve/count builder args so telemetry still fails closed",
+        failures,
+    )
+    require(
         "native_server_status_semaphore_detected" in measure
         and "oracle_server_status_text_id" in measure
         and "server_status" in measure,

@@ -180,6 +180,17 @@ for helper in helpers:
 if 'OWN_STEPPER_SETTLE_CALLS' not in check or 'NATIVE_LOAD_SETTLE_FRAMES' not in check:
     legacy_failures.append('check-autoload-happy-path does not explicitly forbid target fixed waits')
     autoload_static_failures += 1
+if (
+    'product autoload suppressed MessageBoxDialog builder before UI allocation but counted it as oracle failure' not in exp
+    or 'MSGBOX_TOTAL_BUILDS.fetch_add' not in exp
+    or 'MSGBOX_LAST_ARG_RDX.store' not in exp
+):
+    message = 'product-mode MessageBoxDialog suppression can hide popup builder attempts from telemetry'
+    legacy_failures.append(message)
+    autoload_static_failures += 1
+if 'product-mode MessageBoxDialog suppression must preserve/count builder args' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce counted product-mode MessageBoxDialog suppression')
+    autoload_static_failures += 1
 
 asset_failures: list[str] = []
 docs = doc_text()
