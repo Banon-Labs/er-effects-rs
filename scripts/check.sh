@@ -22,12 +22,10 @@ cargo fmt --manifest-path "$repo_root/Cargo.toml" -- --check
 shellcheck "$repo_root/scripts/stage-autoload-release.sh"
 shellcheck "$repo_root/scripts/run-product-continue-direct-probe.sh"
 
-if command -v powershell.exe >/dev/null 2>&1; then
-  project_win=$(wslpath -w "$repo_root")
-  project_ps=${project_win//\'/\'\'}
-  powershell.exe -NoProfile -Command \
-    "\$ErrorActionPreference = 'Stop'; \$env:CARGO_INCREMENTAL = '0'; \$env:CARGO_TARGET_DIR = Join-Path \$env:TEMP 'er-effects-rs-target'; Set-Location -LiteralPath '$project_ps'; cargo check --target x86_64-pc-windows-msvc"
-elif command -v cargo-xwin >/dev/null 2>&1; then
+# Windows-target check, cross-compiled from Linux via cargo-xwin (preferred). Falls back to
+# a plain cargo check only if cargo-xwin is unavailable (which needs an MSVC toolchain on
+# PATH and will otherwise fail at the C-dependency link step).
+if command -v cargo-xwin >/dev/null 2>&1; then
   cargo xwin check --manifest-path "$repo_root/Cargo.toml" --target x86_64-pc-windows-msvc
 else
   cargo check --manifest-path "$repo_root/Cargo.toml" --target x86_64-pc-windows-msvc

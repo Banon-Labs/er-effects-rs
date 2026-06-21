@@ -7,10 +7,10 @@ analysis machine) and is the drop location for future recon runs.
 ## Workflow
 
 1. Run `FastSpEffectRecon.java` in Ghidra against the Elden Ring binary. It
-   writes `%LOCALAPPDATA%\Temp\ghidra-fast-speffect-recon.txt` (and mirrors
-   every line to the Ghidra console).
-2. Copy the report here as `ghidra-fast-speffect-recon.txt` (from WSL:
-   `cp /mnt/c/Users/<user>/AppData/Local/Temp/ghidra-fast-speffect-recon.txt docs/recon/`).
+   writes `ghidra-fast-speffect-recon.txt` to the JVM temp dir (`$TMPDIR`, usually
+   `/tmp`, on Linux) and mirrors every line to the Ghidra console.
+2. Copy the report here as `ghidra-fast-speffect-recon.txt`, e.g.
+   `cp "${TMPDIR:-/tmp}/ghidra-fast-speffect-recon.txt" docs/recon/`.
 3. Ingest it:
 
    ```bash
@@ -66,7 +66,7 @@ Notes:
 - String **values** are escaped (`\\`, `\"`, `\n`, `\r`); symbol names are
   emitted raw. The parser unescapes values and splits symbol lines from the
   right to tolerate exotic names.
-- "Candidate SpEffect IDs" are distinct 4–9 digit decimal runs found in
+- "Candidate SpEffect IDs" are distinct 4-9 digit decimal runs found in
   matched symbol names and string values.
 - A report without the trailing `done` line means the Ghidra run was
   cancelled or is still in progress; the parser flags this via

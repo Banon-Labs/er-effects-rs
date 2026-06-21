@@ -138,15 +138,15 @@ This repo must be a sibling of a `fromsoftware-rs` checkout (the root crate uses
 
 ```bash
 # Full quality gate: lossy-UTF8 lint, cargo fmt --check,
-# and a windows-target cargo check (routed through powershell.exe under WSL).
+# and a windows-target cargo check (cross-compiled from Linux via cargo-xwin).
 bash scripts/check.sh
 
 # Host-buildable workspace members (no game dependencies):
 cargo test -p er-soulsformats -p er-param-inspect
 cargo check -p er-soulsformats -p er-param-inspect
 
-# The game DLL itself (requires the x86_64-pc-windows-msvc target):
-cargo build --release --target x86_64-pc-windows-msvc
+# The game DLL itself (cross-compiled to x86_64-pc-windows-msvc from Linux via cargo-xwin):
+cargo xwin build --release --target x86_64-pc-windows-msvc
 # Output: target/x86_64-pc-windows-msvc/release/er_effects_rs.dll
 ```
 
