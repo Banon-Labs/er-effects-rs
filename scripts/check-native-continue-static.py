@@ -33,6 +33,7 @@ RESULT_EVENT_WRAPPER_BUILDER = 0x140744A60
 RESULT_EVENT_WRAPPER_INNER_BUILD = 0x1407449E0
 POLICY_TOS_STATUS_PREDICATE = 0x1409B72B0
 POLICY_TOS_TITLE_CTOR = 0x1409B5970
+POLICY_TOS_TITLE_CTOR_WRAPPER = 0x1409B6070
 POLICY_TOS_TITLE_CTOR_CALLER = 0x1409B60DA
 POLICY_TOS_FLAG_SETTER = 0x1409B6B30
 POLICY_TOS_FLAG_SETTER_CALLER = 0x1409B5D4C
@@ -212,6 +213,14 @@ def main() -> int:
     contains(policy_requested_init, b"\x49\x89\x86\xc0\x29\x00\x00", "policy ToS constructor stores flag pointer at owner+0x29c0")
     contains(policy_requested_init, b"\x8b\x00", "policy ToS constructor loads current flag value from *owner+0x29c0")
     contains(policy_requested_init, b"\x41\x89\x86\xc8\x29\x00\x00", "policy ToS constructor initializes requested flag owner+0x29c8 from current flag")
+
+    policy_ctor_wrapper = image_bytes(POLICY_TOS_TITLE_CTOR_WRAPPER, 0xa0)
+    contains(policy_ctor_wrapper, b"\x48\x8b\xf1", "policy ToS ctor wrapper preserves record pointer from rcx in rsi")
+    contains(policy_ctor_wrapper, b"\x4c\x8b\xf2", "policy ToS ctor wrapper preserves menu/context pointer from rdx in r14")
+    contains(policy_ctor_wrapper, b"\x49\x8b\xe8", "policy ToS ctor wrapper preserves r8 as constructor argument in rbp")
+    contains(policy_ctor_wrapper, b"\x48\x8b\x4e\x08", "policy ToS ctor wrapper loads backing flag pointer from record+0x8")
+    contains(policy_ctor_wrapper, b"\x8b\x4e\x04", "policy ToS ctor wrapper loads stack arg0 from record+0x4")
+    contains(policy_ctor_wrapper, b"\x44\x8b\x0e", "policy ToS ctor wrapper loads record+0x0 into r9d")
 
     policy_ctor_caller = image_bytes(POLICY_TOS_TITLE_CTOR_CALLER, 0x30)
     contains(policy_ctor_caller, b"\x48\x8b\x4e\x08", "policy ToS ctor caller loads backing flag pointer from record+0x8")

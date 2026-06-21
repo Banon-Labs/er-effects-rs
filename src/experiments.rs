@@ -6285,6 +6285,45 @@ fn apply_xor_ret_stub(base: usize, rva: usize, label: &str) {
 /// in rax). Calls the original, then (pre-world, capped) logs the BUILT dialog's vtable/class +
 /// the 4 args (the FMG message id is one of them) + caller, so we can identify the actual
 /// connection-error dialog without guessing. Read-only; never mutates the dialog.
+unsafe fn policy_tos_record_fields(record: usize) -> (usize, usize, usize) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if record == null {
+        return (null, null, null);
+    }
+    let record_id = unsafe { safe_read_i32(record) }
+        .map(|value| value.max(0) as usize)
+        .unwrap_or(null);
+    let stack_arg0 = unsafe { safe_read_i32(record + 0x4) }
+        .map(|value| value.max(0) as usize)
+        .unwrap_or(null);
+    let backing_flag_ptr = unsafe { safe_read_usize(record + 0x8) }.unwrap_or(null);
+    (record_id, stack_arg0, backing_flag_ptr)
+}
+
+pub(crate) unsafe extern "system" fn policy_tos_title_ctor_wrapper_hook(
+    record: usize,
+    rdx: usize,
+    r8: usize,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let (record_id, stack_arg0, backing_flag_ptr) = unsafe { policy_tos_record_fields(record) };
+    let orig = POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG.load(Ordering::SeqCst);
+    let ret = if orig == HOOK_ORIGINAL_UNSET {
+        null
+    } else {
+        let f: unsafe extern "system" fn(usize, usize, usize) -> usize =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { f(record, rdx, r8) }
+    };
+    POLICY_TOS_TITLE_WRAPPER_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    POLICY_TOS_TITLE_WRAPPER_LAST_RECORD.store(record, Ordering::SeqCst);
+    POLICY_TOS_TITLE_WRAPPER_LAST_RECORD_ID.store(record_id, Ordering::SeqCst);
+    POLICY_TOS_TITLE_WRAPPER_LAST_STACK_ARG0.store(stack_arg0, Ordering::SeqCst);
+    POLICY_TOS_TITLE_WRAPPER_LAST_BACKING_FLAG_PTR.store(backing_flag_ptr, Ordering::SeqCst);
+    POLICY_TOS_TITLE_WRAPPER_LAST_RET.store(ret, Ordering::SeqCst);
+    ret
+}
+
 unsafe fn policy_tos_flag_value(owner: usize) -> (usize, usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let flag_ptr = if owner != null {
@@ -6397,6 +6436,27 @@ pub(crate) fn install_policy_tos_title_hook() {
             return;
         }
     }
+    let Ok(wrapper_addr) = game_rva(POLICY_TOS_TITLE_CTOR_WRAPPER_RVA) else {
+        append_autoload_debug(format_args!(
+            "policy-oracle: failed to resolve ToS ctor wrapper rva"
+        ));
+        return;
+    };
+    if let Ok(hook) = unsafe {
+        MhHook::new(
+            wrapper_addr as *mut c_void,
+            policy_tos_title_ctor_wrapper_hook as *mut c_void,
+        )
+    } {
+        POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+        if let Err(status) = unsafe { hook.queue_enable() } {
+            append_autoload_debug(format_args!(
+                "policy-oracle: queue_enable ToS ctor wrapper failed: {status:?}"
+            ));
+        } else {
+            std::mem::forget(hook);
+        }
+    }
     let Ok(predicate_addr) = game_rva(POLICY_TOS_STATUS_PREDICATE_RVA) else {
         append_autoload_debug(format_args!(
             "policy-oracle: failed to resolve ToS status predicate rva"
@@ -6465,7 +6525,7 @@ pub(crate) fn install_policy_tos_title_hook() {
                     POLICY_TOS_TITLE_HOOK_INSTALLED
                         .store(POLICY_TOS_TITLE_HOOK_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "policy-oracle: hooked TosTitle ctor 0x{ctor_addr:x}, status predicate 0x{predicate_addr:x}, and flag setter 0x{flag_setter_addr:x} (native Privacy/ToS surface oracle)"
+                        "policy-oracle: hooked TosTitle ctor 0x{ctor_addr:x}, ctor wrapper 0x{wrapper_addr:x}, status predicate 0x{predicate_addr:x}, and flag setter 0x{flag_setter_addr:x} (native Privacy/ToS surface oracle)"
                     ));
                 }
                 status => append_autoload_debug(format_args!(
