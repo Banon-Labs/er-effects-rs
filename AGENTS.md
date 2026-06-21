@@ -135,7 +135,7 @@ reference we adopt from, never as a place we contribute back to.
 This repo must be a sibling of a `fromsoftware-rs` checkout (the root crate uses `../fromsoftware-rs` path dependencies).
 
 ```bash
-# Full quality gate: magic-number lint, lossy-UTF8 lint, cargo fmt --check,
+# Full quality gate: lossy-UTF8 lint, cargo fmt --check,
 # and a windows-target cargo check (routed through powershell.exe under WSL).
 bash scripts/check.sh
 
@@ -158,7 +158,7 @@ cargo build --release --target x86_64-pc-windows-msvc
 
 ## Conventions & Patterns
 
-- **No magic numbers**: every numeric literal in Rust source must appear on a `const`/`static` declaration line (`scripts/check-no-magic-numbers.py` enforces this, including in tests).
+- Prefer named `const`/`static` declarations for reverse-engineered RVAs, offsets, and structure sizes when that improves reviewability; use `scripts/audit-fromsoft-candidates.py` for inventory/triage instead of a blanket magic-number lint.
 - **No lossy UTF-8**: `String::from_utf8_lossy` is banned unless the line (or the line above) carries a `// UTF-8 Lossy:` justification (`scripts/check-no-lossy-utf8.py`).
 - Game-thread state is shared with the render loop via `Arc<Mutex<EffectsState>>`; lock with `state_or_return` (recovers from poisoning) and never hold the lock across game calls longer than needed.
 - The overlay defaults network sync **off**; `apply_speffect(id, dont_sync)` takes an inverted flag -- keep the inversion contained in `EffectCallKind::apply`.

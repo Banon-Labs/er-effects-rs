@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-"""Audit manual numeric constants that look like FromSoft struct/RVA candidates.
+"""Audit named numeric constants that look like FromSoft struct/RVA candidates.
 
-This is intentionally built on the same source-of-truth rule as
-scripts/check-no-magic-numbers.py: Rust numeric literals are only allowed on
-const/static declaration lines. Scanning those declarations gives a complete
-inventory of manual numeric values in project Rust source, then classifies the
-ones likely replaceable by fromsoftware-rs structs, generated RVAs, or related
-helpers.
+This scans Rust const/static declarations to inventory reviewable manual numeric
+values, then classifies the ones likely replaceable by fromsoftware-rs structs,
+generated RVAs, or related helpers.
 """
 from __future__ import annotations
 
