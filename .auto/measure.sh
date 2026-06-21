@@ -16,6 +16,7 @@ watcher = (root / 'scripts/er-readiness-watch.py').read_text(encoding='utf-8', e
 native_static_check = (root / 'scripts/check-native-continue-static.py').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/check-native-continue-static.py').exists() else ''
 launch_guard_check = (root / 'scripts/check-launch-guardrails.py').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/check-launch-guardrails.py').exists() else ''
 direct_probe = (root / 'scripts/run-product-continue-direct-probe.sh').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/run-product-continue-direct-probe.sh').exists() else ''
+runtime_probe = (root / '.auto/runtime_probe.sh').read_text(encoding='utf-8', errors='replace') if (root / '.auto/runtime_probe.sh').exists() else ''
 check_sh = (root / 'scripts/check.sh').read_text(encoding='utf-8', errors='replace')
 prompt = (root / '.auto/prompt.md').read_text(encoding='utf-8', errors='replace') if (root / '.auto/prompt.md').exists() else ''
 combined = lib + '\n' + exp
@@ -601,9 +602,12 @@ for token in [
     '--visual-save-data-popup-check',
     'visual_save_data_popup_detected',
     'failed to load save data',
+    'defer_unsafe_visual_capture_until_telemetry',
 ]:
     if token not in watcher:
         save_data_popup_failures.append(f'readiness watcher missing save-data-popup semaphore token {token}')
+if '--defer-unsafe-visual-capture-until-telemetry' not in runtime_probe:
+    save_data_popup_failures.append('runtime_probe.sh does not defer unsafe screenshot failure until native telemetry can arrive')
 if any(token in product_continue_body for token in ['T_loadgame_menu_fallback', 'fire_live_loadgame_node', 'Load Game menu fallback']):
     eula_popup_failures.append('product path can still open native Load Game fallback instead of failing closed on invalid/empty Continue target')
 required_runtime = ['ready', 'product_submit', 'result_chain', 'continue_load', 'deserialize', 'confirm', 'world', 'zero_input', 'expected_save', 'expected_animation', 'no_postload_popup']

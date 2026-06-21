@@ -1417,6 +1417,10 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
                 focus_target_window(args.window_class)
                 windows = hypr_windows(args.window_class)
             if not windows or not window_capture_safe(windows[0], args.window_class):
+                if args.defer_unsafe_visual_capture_until_telemetry and telemetry is None:
+                    os.sched_yield()
+                    time.sleep(args.poll_interval_seconds)
+                    continue
                 return with_runtime_module_info(
                     ReadinessResult(
                         False,
@@ -1645,6 +1649,11 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=SAVE_DATA_POPUP_CHECK_INTERVAL_SECONDS,
         help="Minimum seconds between target-window save-data-popup OCR samples.",
+    )
+    parser.add_argument(
+        "--defer-unsafe-visual-capture-until-telemetry",
+        action="store_true",
+        help="Do not abort solely because the target window is unsafe to screenshot until native telemetry has had a chance to arrive; screenshots still require a safe exact target window.",
     )
     parser.add_argument(
         "--max-runtime-seconds",

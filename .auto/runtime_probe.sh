@@ -114,4 +114,5 @@ python3 "$REPO_ROOT/scripts/er-readiness-watch.py" \
   --fail-on-native-legal-popup \
   --fail-on-server-status-semaphore \
   --visual-save-data-popup-check \
+  --defer-unsafe-visual-capture-until-telemetry \
   --max-runtime-seconds "$RUNTIME_TIMEOUT_SECONDS"

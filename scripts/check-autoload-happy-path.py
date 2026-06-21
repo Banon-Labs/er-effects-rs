@@ -526,9 +526,11 @@ def main() -> int:
     )
     require(
         "--visual-save-data-popup-check" in watcher
+        and "--defer-unsafe-visual-capture-until-telemetry" in runtime_probe
+        and "defer_unsafe_visual_capture_until_telemetry" in watcher
         and "visual_save_data_popup_detected" in watcher
         and "failed to load save data" in watcher,
-        "readiness watcher must expose a visual semaphore for the failed-save-data popup",
+        "readiness watcher must expose a visual semaphore for the failed-save-data popup while deferring unsafe screenshot failure until telemetry can arrive",
         failures,
     )
     require(
