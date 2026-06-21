@@ -495,6 +495,8 @@ def main() -> int:
         and "RESULT_EVENT_HANDLER" in native_static_check
         and "MENU_JOB_LIST_CONSUMER" in native_static_check
         and "MENU_JOB_SINGLE_CONSUMER" in native_static_check
+        and "FD4 event code 3" in native_static_check
+        and "constructed FD4 event pointer" in native_static_check
         and "node+0x18" in native_static_check
         and "node+0x20" in native_static_check
         and "node+0x10" in native_static_check

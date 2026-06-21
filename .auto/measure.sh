@@ -298,6 +298,8 @@ if (
     or 'RESULT_EVENT_HANDLER' not in native_static_check
     or 'MENU_JOB_LIST_CONSUMER' not in native_static_check
     or 'MENU_JOB_SINGLE_CONSUMER' not in native_static_check
+    or 'FD4 event code 3' not in native_static_check
+    or 'constructed FD4 event pointer' not in native_static_check
     or 'node+0x18' not in native_static_check
     or 'node+0x20' not in native_static_check
     or 'node+0x10' not in native_static_check

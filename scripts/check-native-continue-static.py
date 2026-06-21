@@ -117,6 +117,9 @@ def main() -> int:
     submit_calls = rel32_targets(MENU_SUBMIT, submit)
     if FD4_EVENT_CONSTRUCTOR not in submit_calls:
         fail("native submit no longer constructs FD4 event code 3")
+    contains(submit, b"\x45\x33\xc0", "native submit zeroes r8 before FD4 event construction")
+    contains(submit, b"\x41\x8d\x50\x03", "native submit constructs FD4 event code 3 via edx=r8+3")
+    contains(submit, b"\x48\x8b\x54\x24\x30", "native submit loads constructed FD4 event pointer from stack")
     contains(submit, b"\xff\x50\x60", "native submit dispatches result vtable +0x60")
 
     member_run = image_bytes(MENU_MEMBER_FUNC_JOB_RUN, 0x70)
