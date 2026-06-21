@@ -2296,6 +2296,14 @@ pub(crate) const SELECTBOT_PUMP_RAN_FLAG_OFFSET: usize = 0x6b0;
 /// then keep sampling to observe the cascade.
 pub(crate) const TITLE_STEP_MENU_JOB_WAIT_STATE: i32 = TITLE_STEP_MENU_JOB_WAIT;
 pub(crate) const TITLE_PROCEED_GATE_SET_VALUE: u8 = true as u8;
+/// Global menu-accept byte 0x144589bdc (RVA 0x4589bdc): the decoded "a button was accepted"
+/// flag the input pipeline sets on press, read via getter 0x140e85f50 from TitleTopDialog::update
+/// (and 22 other menu accept-gates). When non-zero at the parked title, update runs the open-menu
+/// registrar 0x1409b24e0 NATURALLY (build Continue/Load + transfer focus -> select-layer build) --
+/// unlike a direct registrar self-fire which opened a competing dialog and reverted. Setting this
+/// flag zero-input is the ToS-style "satisfy the accept side-effect" advance (NOT a synthesized
+/// DInput/keystate/XInput event). bd title-global-accept-byte-144589bdc-zeroinput-advance-2026.
+pub(crate) const TITLE_GLOBAL_ACCEPT_BYTE_RVA: usize = 0x4589bdc;
 /// InGameStep manual-tick experiment (lever / "direct drive the load"). The
 /// load job at `owner+0x2e8` is a `CS::InGameStep` whose step machine only
 /// advances while its FD4StepTemplate::Execute pump (`0x140b0bd60`) is ticked
@@ -2544,6 +2552,9 @@ pub(crate) static SUBMIT_PLAY_GAME_PHASE: std::sync::atomic::AtomicI32 =
 pub(crate) static FORCE_PLAY_GAME_LAST_STATE: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(FORCE_PLAY_GAME_STATE_UNOBSERVED);
 pub(crate) static TITLE_PROCEED_GATE_FIRED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// One-shot latch for the global-accept-byte (0x144589bdc) zero-input title-advance lever.
+pub(crate) static TITLE_ACCEPT_BYTE_GATE_FIRED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 pub(crate) static INGAMESTEP_PUMP_LAST_D8: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(INGAMESTEP_PUMP_D8_UNOBSERVED);
@@ -3414,10 +3425,13 @@ pub(crate) fn process_autoload_request(state: &mut EffectsState) {
         return;
     };
 
-    if selectbot_probe_enabled() || title_proceed_gate_enabled() {
+    if selectbot_probe_enabled() || title_proceed_gate_enabled() || title_accept_byte_gate_enabled()
+    {
         // selectbot_probe_once samples the SelectBot/pump state each title-idle
         // frame; when ER_EFFECTS_TITLE_PROCEED_GATE is set it ALSO fires the
-        // one-shot title-accept latch write (lever 1) at state 10. Returns
+        // one-shot title-accept latch write (lever 1) at state 10, and when
+        // ER_EFFECTS_TITLE_ACCEPT_BYTE is set it fires lever 2 (global accept
+        // byte 0x144589bdc) for the zero-input natural menu-open. Returns
         // without completing the autoload so sampling continues across the
         // cascade.
         unsafe { selectbot_probe_once(game_module_base, state.game_task_ticks) };

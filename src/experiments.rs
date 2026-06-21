@@ -503,6 +503,37 @@ pub(crate) unsafe fn selectbot_probe_once(module_base: usize, tick: u64) {
             "title_proceed_gate: set [0x143d856a0]={after} at state {state} tick={tick}"
         ));
     }
+    // Lever-2 (option c): satisfy the global menu-accept side-effect zero-input. At the parked
+    // press-any-button title (state 10), set the global accept byte 0x144589bdc=1 ONCE so the
+    // native TitleTopDialog::update runs the open-menu registrar on its own next tick -- the
+    // NATURAL advance (builds Continue/Load + transfers focus -> select-layer/router_this), which
+    // a direct registrar self-fire could not do without spawning a competing dialog that reverted.
+    // Not an input event (this is the decoded accept flag, like the ToS-accepted flag). Gated OFF
+    // by default. Sampling above continues so the cascade (menu_opened, router_this) is observed.
+    if title_accept_byte_gate_enabled()
+        && state == TITLE_STEP_MENU_JOB_WAIT_STATE
+        && !TITLE_ACCEPT_BYTE_GATE_FIRED.swap(true, Ordering::SeqCst)
+    {
+        unsafe {
+            *((module_base + TITLE_GLOBAL_ACCEPT_BYTE_RVA) as *mut u8) =
+                TITLE_PROCEED_GATE_SET_VALUE;
+        }
+        let after = unsafe { *((module_base + TITLE_GLOBAL_ACCEPT_BYTE_RVA) as *const u8) };
+        append_autoload_debug(format_args!(
+            "title_accept_byte_gate: set [0x144589bdc]={after} at state {state} tick={tick} -- zero-input natural menu-open"
+        ));
+    }
+}
+
+/// Operator gate for the zero-input global-accept-byte title-advance lever (option c). Default OFF.
+pub(crate) fn title_accept_byte_gate_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_TITLE_ACCEPT_BYTE").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-title-accept-byte.txt")
+        .exists()
 }
 
 pub(crate) fn title_proceed_gate_enabled() -> bool {
