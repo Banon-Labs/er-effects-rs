@@ -2720,6 +2720,23 @@ unsafe fn product_continue_item_action(base: usize) -> Option<NativeContinueItem
         ));
         return None;
     }
+    const MENU_ITEM_ACCEPT_PREDICATE_F8_OFFSET: usize = 0xf8;
+    const MENU_ITEM_ACCEPT_IDLE_RVA: usize = 0x007add70;
+    const MENU_ITEM_ACCEPT_NATIVE_RVA: usize = 0x007ad810;
+    let accept_predicate = unsafe { safe_read_usize(item + MENU_ITEM_ACCEPT_PREDICATE_F8_OFFSET) }?;
+    if accept_predicate == base + MENU_ITEM_ACCEPT_IDLE_RVA {
+        append_autoload_debug(format_args!(
+            "product-core-autoload: native Continue MenuWindowJob rejected item=0x{item:x} accept_predicate=0x{accept_predicate:x} (constant false idle predicate) -- not a semantic accept-ready Continue item"
+        ));
+        return None;
+    }
+    if accept_predicate != base + MENU_ITEM_ACCEPT_NATIVE_RVA {
+        append_autoload_debug(format_args!(
+            "product-core-autoload: native Continue MenuWindowJob rejected item=0x{item:x} accept_predicate=0x{accept_predicate:x} expected native accept predicate 0x{:x}",
+            base + MENU_ITEM_ACCEPT_NATIVE_RVA
+        ));
+        return None;
+    }
     let result = unsafe { safe_read_usize(item + MENU_ITEM_DIALOG_RESULT_130_OFFSET) }?;
     if result == null {
         return None;

@@ -191,6 +191,16 @@ if (
 if 'product-mode MessageBoxDialog suppression must preserve/count builder args' not in check:
     legacy_failures.append('check-autoload-happy-path does not enforce counted product-mode MessageBoxDialog suppression')
     autoload_static_failures += 1
+if (
+    'MENU_ITEM_ACCEPT_IDLE_RVA' not in continue_item_body
+    or 'MENU_ITEM_ACCEPT_NATIVE_RVA' not in continue_item_body
+    or 'constant false idle predicate' not in continue_item_body
+):
+    legacy_failures.append('product Continue submit can use the constant-false idle accept predicate')
+    autoload_static_failures += 1
+if 'product Continue item validation must reject the constant-false idle accept predicate' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce constant-false idle accept predicate rejection')
+    autoload_static_failures += 1
 
 asset_failures: list[str] = []
 docs = doc_text()

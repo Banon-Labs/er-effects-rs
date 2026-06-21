@@ -171,6 +171,15 @@ def main() -> int:
         "product autoload path must call semantic readiness helpers instead of fixed wait gates",
         failures,
     )
+    continue_item_body = rust_fn_body(experiments, "product_continue_item_action")
+    require(
+        "MENU_ITEM_ACCEPT_IDLE_RVA" in continue_item_body
+        and "MENU_ITEM_ACCEPT_NATIVE_RVA" in continue_item_body
+        and "constant false idle predicate" in continue_item_body
+        and "return None" in continue_item_body,
+        "product Continue item validation must reject the constant-false idle accept predicate before native submit",
+        failures,
+    )
 
     online_body = rust_fn_body(experiments, "online_disable_enabled")
     input_body = rust_fn_body(experiments, "block_input_enabled")
@@ -327,6 +336,13 @@ def main() -> int:
         and "MSGBOX_TOTAL_BUILDS.fetch_add" in experiments
         and "MSGBOX_LAST_ARG_RDX.store" in experiments,
         "product-mode MessageBoxDialog suppression must preserve/count builder args so telemetry still fails closed",
+        failures,
+    )
+    require(
+        "constant-false idle accept predicate" in measure
+        and "MENU_ITEM_ACCEPT_IDLE_RVA" in experiments
+        and "MENU_ITEM_ACCEPT_NATIVE_RVA" in experiments,
+        "measure must fail closed if product submit can use the constant-false idle accept predicate",
         failures,
     )
     require(
