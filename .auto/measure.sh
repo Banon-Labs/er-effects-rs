@@ -272,6 +272,8 @@ if (
     or 'oracle_result_action_last_wrapper_builder_ret_update_rva' not in telemetry_src
     or 'oracle_policy_window_backing_flag_ptr' not in telemetry_src
     or 'oracle_policy_ctor_wrapper_hits' not in telemetry_src
+    or 'oracle_policy_ctor_wrapper_original_this' not in telemetry_src
+    or 'oracle_policy_ctor_wrapper_original_vtable' not in telemetry_src
     or 'oracle_policy_ctor_wrapper_backing_flag_ptr' not in telemetry_src
     or 'oracle_policy_status_predicate_hits' not in telemetry_src
     or 'oracle_policy_status_predicate_ret' not in telemetry_src
@@ -286,6 +288,9 @@ if (
     or 'POLICY_TOS_TITLE_CTOR_WRAPPER_RVA' not in lib_code
     or 'POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG' not in lib_code
     or 'POLICY_TOS_TITLE_WRAPPER_HITS' not in lib_code
+    or 'POLICY_TOS_TITLE_WRAPPER_THIS_ADJUST' not in lib_code
+    or 'POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_THIS' not in lib_code
+    or 'POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_VTABLE' not in lib_code
     or 'POLICY_TOS_STATUS_PREDICATE_RVA' not in lib_code
     or 'POLICY_TOS_STATUS_PREDICATE_ORIG' not in lib_code
     or 'POLICY_TOS_FLAG_SETTER_RVA' not in lib_code
@@ -364,6 +369,7 @@ if (
     or 'requested-flag commit' not in native_static_check
     or '0x1409b7380' not in native_static_check
     or '0x1409b7390' not in native_static_check
+    or '+0x8' not in native_static_check
     or 'MENU_JOB_LIST_CONSUMER' not in native_static_check
     or 'MENU_JOB_SINGLE_CONSUMER' not in native_static_check
     or 'FD4 event code 3' not in native_static_check

@@ -260,6 +260,8 @@ def main() -> int:
         and "oracle_result_action_last_wrapper_builder_ret_update_rva" in telemetry
         and "oracle_policy_window_backing_flag_ptr" in telemetry
         and "oracle_policy_ctor_wrapper_hits" in telemetry
+        and "oracle_policy_ctor_wrapper_original_this" in telemetry
+        and "oracle_policy_ctor_wrapper_original_vtable" in telemetry
         and "oracle_policy_ctor_wrapper_backing_flag_ptr" in telemetry
         and "oracle_policy_status_predicate_hits" in telemetry
         and "oracle_policy_status_predicate_ret" in telemetry
@@ -272,6 +274,8 @@ def main() -> int:
         and "RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA" in telemetry
         and "POLICY_TOS_TITLE_LAST_BACKING_FLAG_PTR" in telemetry
         and "POLICY_TOS_TITLE_WRAPPER_HITS" in telemetry
+        and "POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_THIS" in telemetry
+        and "POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_VTABLE" in telemetry
         and "POLICY_TOS_TITLE_WRAPPER_LAST_BACKING_FLAG_PTR" in telemetry
         and "POLICY_TOS_STATUS_HITS" in telemetry
         and "POLICY_TOS_STATUS_LAST_RET" in telemetry
@@ -324,6 +328,8 @@ def main() -> int:
         and "policy ToS flag setter caller loads requested flag from owner+0x29c8" in native_static_check
         and "policy ToS ctor wrapper vtable slot no longer points at 0x1409b7380" in native_static_check
         and "policy ToS selector wrapper vtable slot no longer points at 0x1409b7390" in native_static_check
+        and "policy ToS ctor wrapper thunk adjusts this pointer by +0x8" in native_static_check
+        and "policy ToS selector wrapper thunk adjusts this pointer by +0x8" in native_static_check
         and "policy ToS ctor wrapper preserves record pointer from rcx in rsi" in native_static_check
         and "policy ToS ctor wrapper loads backing flag pointer from record+0x8" in native_static_check
         and "policy ToS constructor reads backing flag pointer from stack arg1" in native_static_check
@@ -554,6 +560,8 @@ def main() -> int:
         and "oracle_result_action_last_wrapper_builder_ret_update_rva" in telemetry_src
         and "oracle_policy_window_backing_flag_ptr" in telemetry_src
         and "oracle_policy_ctor_wrapper_hits" in telemetry_src
+        and "oracle_policy_ctor_wrapper_original_this" in telemetry_src
+        and "oracle_policy_ctor_wrapper_original_vtable" in telemetry_src
         and "oracle_policy_ctor_wrapper_backing_flag_ptr" in telemetry_src
         and "oracle_policy_status_predicate_hits" in telemetry_src
         and "oracle_policy_status_predicate_ret" in telemetry_src
@@ -568,6 +576,9 @@ def main() -> int:
         and "POLICY_TOS_TITLE_CTOR_WRAPPER_RVA" in lib
         and "POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG" in lib
         and "POLICY_TOS_TITLE_WRAPPER_HITS" in lib
+        and "POLICY_TOS_TITLE_WRAPPER_THIS_ADJUST" in lib
+        and "POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_THIS" in lib
+        and "POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_VTABLE" in lib
         and "POLICY_TOS_STATUS_PREDICATE_RVA" in lib
         and "POLICY_TOS_STATUS_PREDICATE_ORIG" in lib
         and "POLICY_TOS_FLAG_SETTER_RVA" in lib

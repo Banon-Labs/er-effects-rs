@@ -6307,6 +6307,12 @@ pub(crate) unsafe extern "system" fn policy_tos_title_ctor_wrapper_hook(
 ) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let (record_id, stack_arg0, backing_flag_ptr) = unsafe { policy_tos_record_fields(record) };
+    let original_this = record.saturating_sub(POLICY_TOS_TITLE_WRAPPER_THIS_ADJUST);
+    let original_vtable = if original_this != TITLE_OWNER_SCAN_START_ADDRESS {
+        unsafe { safe_read_usize(original_this) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
     let orig = POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG.load(Ordering::SeqCst);
     let ret = if orig == HOOK_ORIGINAL_UNSET {
         null
@@ -6317,6 +6323,8 @@ pub(crate) unsafe extern "system" fn policy_tos_title_ctor_wrapper_hook(
     };
     POLICY_TOS_TITLE_WRAPPER_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     POLICY_TOS_TITLE_WRAPPER_LAST_RECORD.store(record, Ordering::SeqCst);
+    POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_THIS.store(original_this, Ordering::SeqCst);
+    POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_VTABLE.store(original_vtable, Ordering::SeqCst);
     POLICY_TOS_TITLE_WRAPPER_LAST_RECORD_ID.store(record_id, Ordering::SeqCst);
     POLICY_TOS_TITLE_WRAPPER_LAST_STACK_ARG0.store(stack_arg0, Ordering::SeqCst);
     POLICY_TOS_TITLE_WRAPPER_LAST_BACKING_FLAG_PTR.store(backing_flag_ptr, Ordering::SeqCst);

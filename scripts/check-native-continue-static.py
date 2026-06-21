@@ -228,10 +228,12 @@ def main() -> int:
     if qword_at(POLICY_TOS_SELECTOR_WRAPPER_VTABLE_SLOT) != POLICY_TOS_SELECTOR_WRAPPER_THUNK:
         fail("policy ToS selector wrapper vtable slot no longer points at 0x1409b7390")
     policy_ctor_thunk = image_bytes(POLICY_TOS_TITLE_CTOR_WRAPPER_THUNK, 0x10)
+    contains(policy_ctor_thunk, b"\x48\x83\xc1\x08", "policy ToS ctor wrapper thunk adjusts this pointer by +0x8")
     ctor_thunk_jumps = rel32_targets(POLICY_TOS_TITLE_CTOR_WRAPPER_THUNK, policy_ctor_thunk, opcode=0xE9)
     if POLICY_TOS_TITLE_CTOR_WRAPPER not in ctor_thunk_jumps:
         fail("policy ToS ctor wrapper thunk no longer jumps to 0x1409b6070")
     policy_selector_thunk = image_bytes(POLICY_TOS_SELECTOR_WRAPPER_THUNK, 0x10)
+    contains(policy_selector_thunk, b"\x83\xc1\x08", "policy ToS selector wrapper thunk adjusts this pointer by +0x8")
     selector_thunk_jumps = rel32_targets(POLICY_TOS_SELECTOR_WRAPPER_THUNK, policy_selector_thunk, opcode=0xE9)
     if POLICY_TOS_SELECTOR_WRAPPER not in selector_thunk_jumps:
         fail("policy ToS selector wrapper thunk no longer jumps to 0x1409b6140")

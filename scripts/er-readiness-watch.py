@@ -714,6 +714,8 @@ def oracle_summary(
         "simulated_button_presses_total": telemetry.get("simulated_button_presses_total"),
         "policy_window_backing_flag_ptr": telemetry.get("oracle_policy_window_backing_flag_ptr"),
         "policy_ctor_wrapper_hits": telemetry.get("oracle_policy_ctor_wrapper_hits"),
+        "policy_ctor_wrapper_original_this": telemetry.get("oracle_policy_ctor_wrapper_original_this"),
+        "policy_ctor_wrapper_original_vtable": telemetry.get("oracle_policy_ctor_wrapper_original_vtable"),
         "policy_ctor_wrapper_record_id": telemetry.get("oracle_policy_ctor_wrapper_record_id"),
         "policy_ctor_wrapper_backing_flag_ptr": telemetry.get("oracle_policy_ctor_wrapper_backing_flag_ptr"),
         "native_submit_hits": telemetry.get("oracle_native_submit_hits"),
