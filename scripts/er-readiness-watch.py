@@ -580,6 +580,13 @@ def telemetry_no_postload_popup(telemetry: dict[str, Any]) -> bool:
     return not telemetry_messagebox_dialog_detected(telemetry)
 
 
+def telemetry_native_result_chain_ready(telemetry: dict[str, Any]) -> bool:
+    return bool(
+        as_int(telemetry.get("oracle_result_event_handler_hits"), 0) > 0
+        and as_int(telemetry.get("oracle_result_action_builder_hits"), 0) > 0
+    )
+
+
 def oracle_summary(
     telemetry: dict[str, Any] | None,
     expected_save_oracle: dict[str, Any] | None = None,
@@ -613,6 +620,14 @@ def oracle_summary(
         "postload_popup_builds": telemetry.get("oracle_msgbox_postload_builds"),
         "blocking_modal_present": telemetry.get("oracle_blocking_modal_present"),
         "simulated_button_presses_total": telemetry.get("simulated_button_presses_total"),
+        "result_event_handler_hits": telemetry.get("oracle_result_event_handler_hits"),
+        "result_action_builder_hits": telemetry.get("oracle_result_action_builder_hits"),
+        "continue_phase": telemetry.get("oracle_continue_phase"),
+        "continue_expected_slot": telemetry.get("oracle_continue_expected_slot"),
+        "continue_deser_fired": telemetry.get("oracle_continue_deser_fired"),
+        "continue_confirmed": telemetry.get("oracle_continue_confirmed"),
+        "continue_mount_c30": telemetry.get("oracle_continue_mount_c30"),
+        "continue_guard_waits": telemetry.get("oracle_continue_guard_waits"),
     }
     observed["character_name_empty_like"] = name_empty_like(observed["character_name"])
     return {
@@ -621,6 +636,7 @@ def oracle_summary(
         "expected": expected,
         "expected_save_match": telemetry_expected_save_match(telemetry, expected_save_oracle),
         "expected_animation_match": telemetry_expected_animation_match(telemetry, expected_animation_id),
+        "native_result_chain_ready": telemetry_native_result_chain_ready(telemetry),
         "no_postload_popup": telemetry_no_postload_popup(telemetry),
     }
 

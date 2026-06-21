@@ -242,8 +242,10 @@ def main() -> int:
         "oracle_result_event_handler_hits" in telemetry
         and "oracle_result_action_builder_hits" in telemetry
         and "RESULT_EVENT_HANDLER_HITS" in telemetry
-        and "RESULT_ACTION_BUILDER_HITS" in telemetry,
-        "telemetry must expose passive native result-handler/action-builder hit counts",
+        and "RESULT_ACTION_BUILDER_HITS" in telemetry
+        and "native_result_chain_ready" in watcher
+        and "telemetry_native_result_chain_ready" in watcher,
+        "telemetry/watcher oracle must expose passive native result-handler/action-builder hit counts",
         failures,
     )
     require(
@@ -446,6 +448,7 @@ def main() -> int:
     require(
         "result.vtable+0x60" in measure
         and "result_chain" in measure
+        and "native_result_chain_ready" in measure
         and "oracle_result_action_builder_hits" in measure
         and "RESULT_EVENT_HANDLER_RVA" in lib
         and "RESULT_ACTION_BUILDER_RVA" in lib
