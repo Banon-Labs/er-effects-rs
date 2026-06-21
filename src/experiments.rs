@@ -536,6 +536,20 @@ pub(crate) fn title_accept_byte_gate_enabled() -> bool {
         .exists()
 }
 
+/// Operator gate for lever-3 (narrow registrar advance): set the menu-transition singleton flag
+/// 0x143d5dea8->+0=1 before the validated open-menu self-fire, replicating the native title
+/// press-accept handler so the menu opens in place without the ToS over-trigger. Default OFF;
+/// used together with own_stepper + self-fire.
+pub(crate) fn title_registrar_advance_gate_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_TITLE_REGISTRAR_ADVANCE").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-title-registrar-advance.txt")
+        .exists()
+}
+
 pub(crate) fn title_proceed_gate_enabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_TITLE_PROCEED_GATE").as_deref(),
@@ -2903,6 +2917,25 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 )
                 .is_ok()
         {
+            // Lever-3 (narrow registrar advance): the native title press-accept handler 0x1409b1260
+            // sets the menu-system singleton's +0 byte to 1 BEFORE tail-jumping to this same
+            // registrar -- the missing piece that makes it open the menu IN PLACE rather than
+            // spawning the competing dialog a bare self-fire produced (and the route that reaches
+            // the main menu without the language/ToS the broad global accept byte over-triggers).
+            // Replicate that flag set, gated, just before the (already vtable-validated) open_menu.
+            // Zero-input, no save write.
+            if title_registrar_advance_gate_enabled() {
+                let singleton = unsafe {
+                    *((module_base + TITLE_MENU_TRANSITION_SINGLETON_RVA) as *const usize)
+                };
+                if singleton != TITLE_OWNER_SCAN_START_ADDRESS && singleton != null {
+                    unsafe { *(singleton as *mut u8) = TITLE_MENU_TRANSITION_FLAG_SET_VALUE };
+                    append_autoload_debug(format_args!(
+                        "title_registrar_advance: set menu-transition singleton [0x{:x}]->+0=1 before open-menu",
+                        module_base + TITLE_MENU_TRANSITION_SINGLETON_RVA
+                    ));
+                }
+            }
             let open_menu: unsafe extern "system" fn(usize) =
                 unsafe { std::mem::transmute(module_base + TITLE_TOP_DIALOG_OPEN_MENU_RVA) };
             unsafe { open_menu(ready.title_dialog) };

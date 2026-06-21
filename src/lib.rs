@@ -2304,6 +2304,15 @@ pub(crate) const TITLE_PROCEED_GATE_SET_VALUE: u8 = true as u8;
 /// flag zero-input is the ToS-style "satisfy the accept side-effect" advance (NOT a synthesized
 /// DInput/keystate/XInput event). bd title-global-accept-byte-144589bdc-zeroinput-advance-2026.
 pub(crate) const TITLE_GLOBAL_ACCEPT_BYTE_RVA: usize = 0x4589bdc;
+/// Menu-system manager singleton pointer global 0x143d5dea8 (89 refs). The title press-accept
+/// handler 0x1409b1260 does `mov rax,[0x143d5dea8]; if rax: movb [rax],1; jmp registrar 0x1409b24e0`
+/// -- it sets the singleton's +0 byte (a "menu-open in progress" flag) then opens the main menu
+/// IN PLACE. Replicating this (set the flag, then registrar on the validated TitleTopDialog) is the
+/// NARROW title-specific advance that should reach the main menu WITHOUT the language/ToS build that
+/// the broad global accept byte over-triggers, and without the competing-dialog revert a bare
+/// registrar self-fire caused. bd title-accept-to-registrar-narrow-path-143d5dea8-2026.
+pub(crate) const TITLE_MENU_TRANSITION_SINGLETON_RVA: usize = 0x3d5dea8;
+pub(crate) const TITLE_MENU_TRANSITION_FLAG_SET_VALUE: u8 = true as u8;
 /// InGameStep manual-tick experiment (lever / "direct drive the load"). The
 /// load job at `owner+0x2e8` is a `CS::InGameStep` whose step machine only
 /// advances while its FD4StepTemplate::Execute pump (`0x140b0bd60`) is ticked
