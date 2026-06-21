@@ -10090,9 +10090,24 @@ pub(crate) unsafe extern "system" fn task_enqueue_hook(
         RESULT_ACTION_LAST_INSERT_ARG0.store(arg0 as usize, Ordering::SeqCst);
         RESULT_ACTION_LAST_INSERT_ARG1.store(arg1 as usize, Ordering::SeqCst);
         RESULT_ACTION_LAST_INSERT_RET.store(result as usize, Ordering::SeqCst);
+        let base = game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+        let arg1_update_rva = if base == TITLE_OWNER_SCAN_START_ADDRESS {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        } else {
+            unsafe { task_node_update_rva(base, arg1 as usize) }
+        };
+        let ret_update_rva = if base == TITLE_OWNER_SCAN_START_ADDRESS {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        } else {
+            unsafe { task_node_update_rva(base, result as usize) }
+        };
+        RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA.store(arg1_update_rva, Ordering::SeqCst);
+        RESULT_ACTION_LAST_INSERT_RET_UPDATE_RVA.store(ret_update_rva, Ordering::SeqCst);
         if hit <= CAP_MENU_INSERT_LOG_FIRST {
             append_continue_trace(format_args!(
-                "result_action_builder_insert seq={hit} arg0={arg0:p} arg1={arg1:p} ret={result:p} -- passive downstream action node insert via 0x{:x}",
+                "result_action_builder_insert seq={hit} arg0={arg0:p} arg1={arg1:p} arg1_update_rva={} ret={result:p} ret_update_rva={} -- passive downstream action node insert via 0x{:x}",
+                format_optional_usize_hex(arg1_update_rva),
+                format_optional_usize_hex(ret_update_rva),
                 TRACE_TASK_ENQUEUE_RVA
             ));
         }

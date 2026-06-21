@@ -266,7 +266,10 @@ if (
     or 'oracle_result_action_last_word0' not in telemetry_src
     or 'oracle_result_action_last_word1' not in telemetry_src
     or 'oracle_result_action_insert_hits' not in telemetry_src
+    or 'oracle_result_action_last_insert_arg1_update_rva' not in telemetry_src
+    or 'oracle_result_action_last_insert_ret_update_rva' not in telemetry_src
     or 'RESULT_ACTION_INSERT_HITS' not in lib_code
+    or 'RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA' not in lib_code
     or 'callstack_contains_game_rva' not in exp_code
     or 'native_submit_entered' not in watcher
     or 'native_result_chain_same_result' not in watcher

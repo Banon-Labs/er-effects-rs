@@ -698,6 +698,8 @@ def oracle_summary(
         "result_action_last_insert_arg0": telemetry.get("oracle_result_action_last_insert_arg0"),
         "result_action_last_insert_arg1": telemetry.get("oracle_result_action_last_insert_arg1"),
         "result_action_last_insert_ret": telemetry.get("oracle_result_action_last_insert_ret"),
+        "result_action_last_insert_arg1_update_rva": telemetry.get("oracle_result_action_last_insert_arg1_update_rva"),
+        "result_action_last_insert_ret_update_rva": telemetry.get("oracle_result_action_last_insert_ret_update_rva"),
         "continue_phase": telemetry.get("oracle_continue_phase"),
         "continue_expected_slot": telemetry.get("oracle_continue_expected_slot"),
         "continue_deser_fired": telemetry.get("oracle_continue_deser_fired"),
