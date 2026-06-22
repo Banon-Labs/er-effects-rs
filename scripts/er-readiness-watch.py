@@ -66,6 +66,14 @@ PROCESS_EXITED = "process_exited_before_ready"
 SPAWN_BUDGET_EXHAUSTED = "runtime_process_not_observed_within_spawn_poll_budget"
 READINESS_BUDGET_EXHAUSTED = "readiness_poll_budget_exhausted"
 TIMEOUT_BUDGET_EXHAUSTED = "timeout_seconds_budget_exhausted"
+GAME_FPS_BELOW_MIN = "game_fps_below_min"
+# FPS semaphore: the game-task tick counter advances ~once per rendered frame, so its rate is an
+# fps proxy. Elden Ring hard-throttles an UNFOCUSED window to a few fps; at that rate the title
+# never boots within the runtime cap and the probe silently burns the whole budget producing a
+# non-representative run. Treat a sustained sub-30-fps game as a crash-class failure and fail fast.
+MIN_GAME_FPS = 30.0
+FPS_STALL_WINDOW_SECONDS = 6.0
+FPS_JUDGE_MIN_TICKS = 120
 VISUAL_LOADING_SCREEN_DETECTED = "visual_loading_screen_detected"
 LEGAL_POPUP_DETECTED = "visual_legal_popup_detected"
 NATIVE_LEGAL_POPUP_DETECTED = "native_legal_popup_detected"
@@ -1521,6 +1529,7 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
     next_save_data_popup_check_at = 0.0
     last_world_stable_tick: int | None = None
     world_stable_since: float | None = None
+    fps_samples: list[tuple[float, int]] = []  # (monotonic, game_task_ticks) for the fps semaphore
     for poll in range(args.readiness_poll_budget):
         if time.monotonic() >= deadline:
             return with_runtime_module_info(
@@ -1554,6 +1563,42 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
             )
         telemetry = read_json(args.telemetry)
         bootstrap = read_bootstrap(args.bootstrap, args.bootstrap_state)
+        # FPS SEMAPHORE (fail fast on a sub-30-fps / throttled-or-hung game). The game-task tick
+        # counter is an fps proxy; once it is clearly running (>= FPS_JUDGE_MIN_TICKS) we require a
+        # sustained >= MIN_GAME_FPS over FPS_STALL_WINDOW_SECONDS, else treat it as a crash-class
+        # failure (e.g. an unfocused window the engine throttles to a few fps). This avoids silently
+        # spending the whole runtime budget on a non-representative run.
+        ticks_now = as_int(telemetry.get("game_task_ticks"), 0) if telemetry is not None else 0
+        now_fps = time.monotonic()
+        if ticks_now >= FPS_JUDGE_MIN_TICKS:
+            fps_samples.append((now_fps, ticks_now))
+            fps_samples = [(t, k) for (t, k) in fps_samples if now_fps - t <= FPS_STALL_WINDOW_SECONDS]
+            if len(fps_samples) >= 2:
+                t0, k0 = fps_samples[0]
+                dt = now_fps - t0
+                if dt >= FPS_STALL_WINDOW_SECONDS:
+                    fps = (ticks_now - k0) / dt if dt > 0 else 0.0
+                    if fps < MIN_GAME_FPS:
+                        print(
+                            f"er-readiness-watch: game fps {fps:.1f} < {MIN_GAME_FPS} "
+                            f"sustained over {dt:.1f}s (ticks {k0}->{ticks_now}); failing fast "
+                            f"(likely unfocused-window throttle or a hang)",
+                            file=sys.stderr,
+                        )
+                        return with_runtime_module_info(
+                            ReadinessResult(
+                                False,
+                                GAME_FPS_BELOW_MIN,
+                                pid,
+                                bootstrap,
+                                telemetry,
+                                hypr_windows(args.window_class),
+                                spawn_polls + poll,
+                                float(args.max_runtime_seconds),
+                                expected_save_oracle=expected_save_oracle,
+                                expected_animation_id=args.expected_animation_id,
+                            )
+                        )
         actual_runtime_mode, seamless_mappings = observed_runtime_mode(pid, telemetry)
         if runtime_mode_definite_mismatch(args.expected_runtime_mode, actual_runtime_mode):
             return with_runtime_module_info(
