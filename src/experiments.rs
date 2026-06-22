@@ -2154,7 +2154,7 @@ unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
 /// slices slot `want_slot`'s plaintext body, installs+arms the gated 0x67b100 hook, calls the native
 /// parser 0x67b290(slot) in-process so it parses OUR body, then reads back GameMan+0xc30 + the
 /// PlayerGameData fingerprint. NO SetState5, NO autosave, NO continue_confirm. Records presses==0.
-unsafe fn own_load_drive(base: usize, gm: usize, want_slot: i32, n: u64) {
+unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_slot: i32, n: u64) {
     const PHASE_INIT: usize = 0;
     const PHASE_DONE: usize = 1;
     const C30_ZERO: i32 = 0;
@@ -2234,12 +2234,47 @@ unsafe fn own_load_drive(base: usize, gm: usize, want_slot: i32, n: u64) {
         base + DESERIALIZE_SLOT_RVA
     ));
     unsafe { dump_load_correctness(base, n) };
+    // OWNER DIAGNOSTIC (er-effects-rs-mr2, save-safe pure reads): the prior continue crash used the
+    // WRONG owner (*(GameDataMan+0x8)). Log EVERY continue_confirm owner candidate + each one's
+    // +0x284 (new-game flag) byte so a VERIFY-ONLY run reveals which is the SetState-able title
+    // owner BEFORE we ever fire continue_confirm. This is independent of the gated continue step.
+    //   title  = the threaded SetState-able title owner the caller validated (own_stepper_idx10),
+    //   recipe = *(base + CONTINUE_MANAGER_GLOBAL_RVA + 8)  (the native-fullread COMMIT recipe's literal),
+    //   mgr_vt = *(base + CONTINUE_MANAGER_GLOBAL_RVA)      (the manager object's vtable ptr),
+    //   gdm8   = *(GameDataMan + 0x8)                       (the prior crash owner).
+    let read284 = |obj: usize| -> u8 {
+        if obj == null {
+            0
+        } else {
+            unsafe { safe_read_usize(obj + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) }
+                .map(|v| v as u8)
+                .unwrap_or(0)
+        }
+    };
+    let recipe_owner = unsafe {
+        safe_read_usize(base + CONTINUE_MANAGER_GLOBAL_RVA + FULLREAD_OWNER_GDM_08_OFFSET)
+    }
+    .unwrap_or(null);
+    let manager_vtable =
+        unsafe { safe_read_usize(base + CONTINUE_MANAGER_GLOBAL_RVA) }.unwrap_or(null);
+    let game_data_man = game_data_man_ptr_or_null();
+    let gdm8 = if game_data_man == null {
+        null
+    } else {
+        unsafe { safe_read_usize(game_data_man + FULLREAD_OWNER_GDM_08_OFFSET) }.unwrap_or(null)
+    };
+    append_autoload_debug(format_args!(
+        "own-load-OWNER-DIAG: title=0x{owner:x} (+284={}) recipe=0x{recipe_owner:x} (+284={}) mgr_vt=0x{manager_vtable:x} gdm8=0x{gdm8:x} (+284={})",
+        read284(owner),
+        read284(recipe_owner),
+        read284(gdm8)
+    ));
     // (5) FINAL STEP (er-effects-rs-mr2): ONLY when explicitly armed (own_load_continue=1), fire the
     // GUARDED continue_confirm/SetState5 to stream the verified character into the PLAYABLE world.
     // SAVE-WRITING (SetState5 autosaves) -- the hard c30/fingerprint guard inside is the absolute
     // backstop. Verify-only stays the default: this is skipped unless own_load_continue_enabled().
     if own_load_continue_enabled() {
-        unsafe { own_load_continue_fire(base, c30, c30_real, fp_real, fp_level, n) };
+        unsafe { own_load_continue_fire(base, owner, c30, c30_real, fp_real, fp_level, n) };
     }
     OWN_LOAD_PHASE.store(PHASE_DONE, Ordering::SeqCst);
     OWN_LOAD_PHASE_PUB.store(PHASE_DONE + 1, Ordering::SeqCst);
@@ -2247,10 +2282,14 @@ unsafe fn own_load_drive(base: usize, gm: usize, want_slot: i32, n: u64) {
 
 /// OWN-LOAD FINAL STEP (er-effects-rs-mr2): after the PROVEN verify-only parse mounted a REAL c30 +
 /// real character, fire the GUARDED native `continue_confirm` 0x140b0e180 -> `SetState5` 0x140b0d960
-/// to stream the character into the PLAYABLE world. Reuses the exact native-fullread COMMIT recipe
-/// (bd reuse-native-fns-not-reimplement): owner = *(GameDataMan + 0x8) (== the recipe's
-/// *(base+0x3d5df38+8)); `continue_confirm` reads GameMan+0xc30 (already REAL from our parse) into
-/// owner+0xbc, then SetState(owner, 5) -> the per-frame title-flow step machine streams the world.
+/// to stream the character into the PLAYABLE world. `continue_confirm` reads owner = [rcx+8] off
+/// the shim, reads GameMan+0xc30 (already REAL from our parse) into owner+0xbc, then
+/// SetState(owner, 5) -> the per-frame title-flow step machine streams the world.
+///
+/// OWNER (er-effects-rs-mr2 fix): the owner MUST be the SetState-able TITLE owner threaded in from
+/// `own_stepper_idx10` (the validated title-flow object), NOT *(GameDataMan+0x8). The prior crash
+/// passed *(GameDataMan+0x8) (a DIFFERENT object) into continue_confirm and crashed inside
+/// SetState5. The OWNER DIAGNOSTIC in the verify path logs all candidates for cross-checking.
 ///
 /// SAVE-SAFETY ABSOLUTE (SetState5 AUTOSAVES). HARD GUARD before firing -- ABORT with a logged
 /// no-write if ANY fails:
@@ -2258,12 +2297,12 @@ unsafe fn own_load_drive(base: usize, gm: usize, want_slot: i32, n: u64) {
 ///     verify path computed -- never fire SetState5 on an unverified/default c30 (the prior crash
 ///     cause -- real char streamed to the wrong map then autosaved over).
 ///   * `fp_real`: the PlayerGameData char fingerprint is real (level/stats non-default).
-///   * `fp_level >= FULLREAD_MIN_REAL_LEVEL`: defense-in-depth level floor (matches native-fullread).
-///   * owner (GameDataMan+0x8) non-null AND owner+0x284 (new-game flag) == 0 (continue_confirm's
-///     LOAD branch; non-zero would take the NewGame path -- fail closed).
+///   * `title_owner` non-null AND title_owner+0x284 (new-game flag) == 0 (continue_confirm's LOAD
+///     branch; non-zero would take the NewGame path -- fail closed).
 /// Keeps `simulated_button_presses_total = 0`: this is a pure in-process native call, no input.
 unsafe fn own_load_continue_fire(
     base: usize,
+    title_owner: usize,
     c30: i32,
     c30_real: bool,
     fp_real: bool,
@@ -2271,45 +2310,52 @@ unsafe fn own_load_continue_fire(
     n: u64,
 ) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    // Hard c30 + fingerprint guard (absolute save-safety backstop).
-    let level_real = fp_level >= FULLREAD_MIN_REAL_LEVEL;
-    if !(c30_real && fp_real && level_real) {
+    // Hard c30 + fingerprint guard (absolute save-safety backstop). NOTE: unlike the native-fullread
+    // COMMIT path (which needs a level>=10 floor to reject the level-9 NEW-GAME PREVIEW), OWN-LOAD has
+    // a STRONGER per-slot signal: `c30_real` means GameMan+0xc30 became the slot's REAL map
+    // (0x1c000000 etc.), NOT the new-game default 0xa010000 -- so a real save is proven directly.
+    // `fp_real` already requires level>=1 AND a non-empty name (see char_fingerprint), so it admits
+    // legitimate LOW-LEVEL real characters (e.g. a level-7 Hero-class save) that a >=10 floor would
+    // wrongly reject. c30_real + fp_real is the correct, save-safe gate here.
+    if !(c30_real && fp_real) {
         append_autoload_debug(format_args!(
-            "own-load-continue: GUARD FAIL (c30=0x{c30:x} c30_real={c30_real} fp_real={fp_real} level={fp_level} level_real={level_real}) -- NO continue_confirm, NO SetState5, NO save write -> ABORT (save-safe)"
+            "own-load-continue: GUARD FAIL (c30=0x{c30:x} c30_real={c30_real} fp_real={fp_real} level={fp_level}) -- NO continue_confirm, NO SetState5, NO save write -> ABORT (save-safe)"
         ));
         return;
     }
-    // Resolve the continue_confirm owner read-only (look before acting): owner = *(GameDataMan+0x8),
-    // the same chain the native-fullread COMMIT path uses.
-    let game_data_man = game_data_man_ptr_or_null();
-    let owner_obj = if game_data_man == null {
-        null
-    } else {
-        unsafe { safe_read_usize(game_data_man + FULLREAD_OWNER_GDM_08_OFFSET) }.unwrap_or(null)
+    // OWNER = the SetState-able TITLE owner threaded in from own_stepper_idx10 (NOT *(GameDataMan+0x8),
+    // which caused the prior crash). It is the validated title-flow object the DLL already SetState's.
+    if title_owner == null {
+        append_autoload_debug(format_args!(
+            "own-load-continue: ABORT -- threaded title_owner is null -> no write"
+        ));
+        return;
+    }
+    let new_game_flag = match unsafe {
+        safe_read_usize(title_owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET)
+    } {
+        Some(v) => v as u8,
+        None => {
+            append_autoload_debug(format_args!(
+                "own-load-continue: ABORT -- title_owner+0x284 (new-game flag) unreadable (title_owner=0x{title_owner:x}) -> no write"
+            ));
+            return;
+        }
     };
-    if owner_obj == null {
-        append_autoload_debug(format_args!(
-            "own-load-continue: ABORT -- continue_confirm owner (GameDataMan=0x{game_data_man:x}, offset=0x{:x}) is null -> no write",
-            FULLREAD_OWNER_GDM_08_OFFSET
-        ));
-        return;
-    }
-    let new_game_flag =
-        unsafe { *((owner_obj + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *const u8) };
     if new_game_flag != FULLREAD_OWNER_NEW_GAME_OK {
         append_autoload_debug(format_args!(
-            "own-load-continue: ABORT -- owner+0x284={new_game_flag} != 0 (continue_confirm LOAD branch requires the new-game flag clear) -> no write"
+            "own-load-continue: ABORT -- title_owner+0x284={new_game_flag} != 0 (continue_confirm LOAD branch requires the new-game flag clear) -> no write"
         ));
         return;
     }
-    // GUARD PASSED. Build the {[OWNER_IDX]=owner} shim and fire the native continue_confirm.
+    // GUARD PASSED. Build the {[OWNER_IDX]=title_owner} shim and fire the native continue_confirm.
     let shim = &raw mut OWN_STEPPER_SHIM;
-    unsafe { (*shim)[OWN_STEPPER_SHIM_OWNER_IDX] = owner_obj };
+    unsafe { (*shim)[OWN_STEPPER_SHIM_OWNER_IDX] = title_owner };
     let shim_ptr = shim as usize;
     let confirm: unsafe extern "system" fn(usize) =
         unsafe { std::mem::transmute(base + CONTINUE_CONFIRM_RVA) };
     append_autoload_debug(format_args!(
-        "own-load-continue: *** GUARD PASS -- COMMIT continue_confirm 0x{:x}(shim=0x{shim_ptr:x} owner=0x{owner_obj:x}) c30=0x{c30:x} level={fp_level} owner+0x284=0 -- continue_confirm fires SetState5 internally (AUTOSAVES) presses=0 ***",
+        "own-load-continue: *** GUARD PASS -- COMMIT continue_confirm 0x{:x}(shim=0x{shim_ptr:x} title_owner=0x{title_owner:x}) c30=0x{c30:x} level={fp_level} title_owner+0x284=0 -- continue_confirm fires SetState5 internally (AUTOSAVES) presses=0 ***",
         base + CONTINUE_CONFIRM_RVA
     ));
     timeline_event(
@@ -5539,7 +5585,7 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
     // native parser 0x67b290(slot), and reads back c30 + the char fingerprint. NO SetState5, NO
     // save write. Bypasses the menu drive while active; pass-through keeps the title ticking.
     if own_load_enabled() && unsafe { title_boot_ready(owner, base) } {
-        unsafe { own_load_drive(base, gm, want_slot, n) };
+        unsafe { own_load_drive(base, gm, owner, want_slot, n) };
         pass_through(false);
         return;
     }

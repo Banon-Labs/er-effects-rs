@@ -942,6 +942,12 @@ pub(crate) const TITLE_STEP_IDX10_SLOT_RVA: usize = 0x3d71620;
 /// Native Continue/Load confirm handler (reads owner=[rcx+8]; slot-select + child
 /// request + SetState(5)). Invoked via a {[+8]=owner} shim.
 pub(crate) const CONTINUE_CONFIRM_RVA: usize = 0xb0e180;
+/// Continue/Load MANAGER object global (.data abs 0x143d5df38; ==0 at rest in the deobf
+/// image, built at runtime). `[mgr]` = the manager vtable, `[mgr + 8]` = the recipe's
+/// literal "owner" used by the native-fullread COMMIT recipe. Used READ-ONLY here for the
+/// OWN-LOAD owner diagnostic; the continue_confirm owner is the threaded SetState-able
+/// title owner (see `own_load_continue_fire`), NOT this literal.
+pub(crate) const CONTINUE_MANAGER_GLOBAL_RVA: usize = 0x3d5df38;
 pub(crate) const OWN_STEPPER_LOG_INTERVAL: u64 = TitleNativeJobTiming::FrameRate as u64;
 pub(crate) const OWN_STEPPER_CALL_INC: usize = true as usize;
 
