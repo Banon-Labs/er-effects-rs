@@ -1285,6 +1285,119 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
             unsafe { std::mem::transmute(base + WORLD_WORKER_BUILD_RVA) };
         unsafe { worker_build(stub_ptr) };
         let worker = crate::runtime_heap_allocator_ptr_or_null();
+        // (1.5) DEVICE MOUNT/BIND (b80-mount-routine-0x140e6e8d0-recipe-...). ROOT CAUSE of
+        // the cold full-read wall: the save IO device is UNMOUNTED cold -- [iodev+0x40]==0
+        // (the device-ready flag the async router 0x140e6eb80 tests) and [iodev+0x30]==
+        // 0xffffffff (no OS handle), so the full read takes the COLD async branch that
+        // completes EMPTY (b80 2->0). The native title->Continue boot binds the device via
+        // mount 0x140e6e8d0(iodev); the menu-free path skips it. Self-validating: log the
+        // ACTUAL cold device state (we have never read +0x40/+0x30 at runtime -- the unbound
+        // conclusion was static inference), call the native mount, log the post-state, then
+        // submit. The mount is internally guarded by 0x14240acd0([0x143d872e0]) which needs
+        // the IO worker registry [0x144843038+0x18]!=0; if it bails (al=0) the log shows it.
+        // SAVE-SAFE: the mount only OPENS a handle + registers paths for READ; no save write.
+        let iodev_before = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
+        let registry = unsafe { *((base + IO_WORKER_REGISTRY_RVA) as *const usize) };
+        let reg_count = if registry != null {
+            unsafe { *((registry + IO_WORKER_REGISTRY_COUNT_18_OFFSET) as *const u32) }
+        } else {
+            0
+        };
+        let read_dev = |iodev: usize| -> (u8, usize) {
+            if iodev == null {
+                (0, null)
+            } else {
+                unsafe {
+                    (
+                        *((iodev + IODEV_READY_FLAG_40_OFFSET) as *const u8),
+                        *((iodev + IODEV_OS_HANDLE_30_OFFSET) as *const usize),
+                    )
+                }
+            }
+        };
+        let (dev40_before, dev30_before) = read_dev(iodev_before);
+        // The getter returns the iodev (lazily creating it if null) -- the exact value the
+        // native boot passes to the mount.
+        let iodev_getter: unsafe extern "system" fn() -> usize =
+            unsafe { std::mem::transmute(base + IODEV_GETTER_RVA) };
+        let iodev = unsafe { iodev_getter() };
+        let mount: unsafe extern "system" fn(usize) -> u8 =
+            unsafe { std::mem::transmute(base + IODEV_MOUNT_OPEN_RVA) };
+        let mount_al = if iodev != null {
+            unsafe { mount(iodev) }
+        } else {
+            0
+        };
+        let (dev40_after, dev30_after) = read_dev(iodev);
+        append_autoload_debug(format_args!(
+            "cold-char-mount: MOUNT 0x{:x}(iodev=0x{iodev:x}) al={mount_al} | registry=0x{registry:x} reg_count={reg_count} | dev40 {dev40_before}->{dev40_after} dev30 0x{dev30_before:x}->0x{dev30_after:x} (al=1 & dev40->nonzero = device bound; submit should now route to the BOUND read)",
+            base + IODEV_MOUNT_OPEN_RVA
+        ));
+        // WORKER-GATE diagnostic (b80-DEVICE-MOUNT-REFUTED-...). The read drops b80 2->0 in
+        // ONE frame = the enqueue 0x14240e420 DISCARDS the request (no-op completion). Two
+        // discard gates: (1) [worker+0x19]!=0 (no-accept/shutdown byte); (2) the registry
+        // intrusive list [registry+0x28] does not contain the caller's key (0x141ee1240).
+        // Read both (no call) to pin which gate fires cold. reg_list_empty when [[+0x28]]==[+0x28].
+        let worker_mgr = unsafe { *((base + FD4_IO_WORKER_MGR_RVA) as *const usize) };
+        let worker_noaccept = if worker_mgr != null {
+            unsafe { *((worker_mgr + FD4_IO_WORKER_NOACCEPT_19_OFFSET) as *const u8) }
+        } else {
+            0xff
+        };
+        let io_pool = unsafe { *((base + FD4_IO_POOL_RVA) as *const usize) };
+        let reg_list_node = if registry != null {
+            unsafe { *((registry + IO_WORKER_REGISTRY_LIST_28_OFFSET) as *const usize) }
+        } else {
+            null
+        };
+        let reg_list_first = if reg_list_node != null {
+            unsafe { *(reg_list_node as *const usize) }
+        } else {
+            null
+        };
+        append_autoload_debug(format_args!(
+            "cold-char-mount: WORKER-GATE worker_mgr=0x{worker_mgr:x} noaccept[+0x19]={worker_noaccept} io_pool=0x{io_pool:x} reg_list_node=0x{reg_list_node:x} reg_list_first=0x{reg_list_first:x} reg_list_empty={} (noaccept!=0 OR list_empty => enqueue 0x14240e420 DISCARDS the read)",
+            reg_list_node == reg_list_first
+        ));
+        // Worker QUEUE snapshot BEFORE submit (b80-DEVICE-MOUNT-REFUTED-...). Compared against the
+        // after-submit snapshot below: if [worker+0x8]/[worker+0x10] CHANGE, the read was ENQUEUED
+        // (so the wall is the worker not processing / read-fail); if UNCHANGED, it was DISCARDED at
+        // a gate in 0x14240e420 (so the wall is the discard gate / caller-context registration).
+        let read_q = |off: usize| -> usize {
+            if worker_mgr != null {
+                unsafe { *((worker_mgr + off) as *const usize) }
+            } else {
+                null
+            }
+        };
+        let q8_before = read_q(FD4_IO_WORKER_QUEUE_08_OFFSET);
+        let q10_before = read_q(FD4_IO_WORKER_QUEUE_10_OFFSET);
+        // Deref the queue fields too: if [worker+0x8]/[worker+0x10] are intrusive-list SENTINELS
+        // (fixed), the field value won't move on enqueue but the sentinel.next ([q8]) will. Reading
+        // the deref before/after disambiguates ENQUEUED (deref changes) from DISCARDED (no change).
+        let qd8_before = unsafe { safe_read_usize(q8_before) }.unwrap_or(null);
+        let qd10_before = unsafe { safe_read_usize(q10_before) }.unwrap_or(null);
+        // (1.75) SAVE-DIRECTORY -- pre-submit population is REFUTED (bd b80-COLD-FIX-REFUTED-pathdb-
+        // transient-setter-wants-char16ptr-2026-06-21). The original plan was to call SETTER
+        // 0x14240a2a0([iodev+0x20], 0, &dir) before submit so the request copy-ctor would inherit a
+        // real directory. RUNTIME PROOF it cannot work: [iodev+0x20] is 0 BEFORE submit (it only
+        // becomes the request handle io20 AFTER submit). STATIC PROOF: the live opcode-0x17/0x18
+        // handler 0x140e6ded0 calls the setter with rcx=[this+0x20] where `this` is a TRANSIENT
+        // per-request command object (the pump 0x140e6e080 bails when [this+0x20]==0), and the setter
+        // wants a RAW char16_t* in r8 (not a std::u16string). So the directory is filled on a
+        // per-request object during its state-machine pump, not on a pokable global. The real fix
+        // needs the request copy-ctor TEMPLATE source (request ctor 0x14240a850 forwards rdx to
+        // copy-ctor 0x1424085b0 -- trace one frame up) OR a post-submit, non-racy write to the live
+        // request. Tracked for the next session; the SAVE_DIR_* consts in lib.rs are kept for it.
+        // We log the cold path-DB pointer (safe read, no call) so the next run confirms the timing.
+        let path_db_cold = if iodev != null {
+            unsafe { safe_read_usize(iodev + IODEV_REQHANDLE_20_OFFSET) }.unwrap_or(null)
+        } else {
+            null
+        };
+        append_autoload_debug(format_args!(
+            "cold-char-mount: SAVE-DIR pre-submit path_db=[iodev+0x20]=0x{path_db_cold:x} (expected 0 pre-submit; the request/path-DB only exists AFTER submit -- pre-submit setter is REFUTED, see bd)"
+        ));
         // (2) Resolve + set the slot, then submit the FULL save read (b80=2). The old
         // preview+LoadSaveData path drained but only left metadata resident, so 0x67b290 could
         // report success while c30 stayed at the default map and the strict world oracle caught a
@@ -1302,9 +1415,57 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
             unsafe { std::mem::transmute(base + B80_FULL_LOAD_INITIATOR_RVA) };
         let sret = unsafe { submit(want_slot) };
         let (io10, io18, io20) = iodev_summary();
+        let q8_after = read_q(FD4_IO_WORKER_QUEUE_08_OFFSET);
+        let q10_after = read_q(FD4_IO_WORKER_QUEUE_10_OFFSET);
+        let qd8_after = unsafe { safe_read_usize(q8_after) }.unwrap_or(null);
+        let qd10_after = unsafe { safe_read_usize(q10_after) }.unwrap_or(null);
         append_autoload_debug(format_args!(
-            "cold-char-mount: FULL-INIT slot={want_slot} b78={b78} worker=0x{worker:x} submit_ret={sret} b80={} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} -> POLL",
+            "cold-char-mount: FULL-INIT slot={want_slot} b78={b78} worker=0x{worker:x} submit_ret={sret} b80={} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} | q8 0x{q8_before:x}->0x{q8_after:x} [q8] 0x{qd8_before:x}->0x{qd8_after:x} q10 0x{q10_before:x}->0x{q10_after:x} [q10] 0x{qd10_before:x}->0x{qd10_after:x} (any change=ENQUEUED; none=DISCARDED) -> POLL",
             read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET)
+        ));
+        // Readback (DIAGNOSTIC, crash-proof): what directory does the live request (io18) hold after
+        // submit? The worker builds the open path from the request's directory std::u16string,
+        // tentatively at io18+0xe8 (data) / +0xf8 (size). This offset is UNVERIFIED for io18 (it was
+        // pinned on the worker-side job object), so every access goes through safe_read_usize (faults
+        // -> None, never a hard crash -- the earlier unguarded version crashed the run) and the size
+        // is sanity-bounded before any decode. size>0 with a real path = the cold request already has
+        // a directory; size 0 / unreadable = it is empty/malformed (the open fails fast -> b80 2->0).
+        const REQ_DIR_DATA_OFFSET: usize = 0xe8;
+        const REQ_DIR_SIZE_OFFSET: usize = 0xf8;
+        // A real save directory path is well under MAX_PATH; anything larger is garbage/wrong-offset.
+        const REQ_DIR_SANE_MAX_CU: usize = 320;
+        let req_dir_data = if io18 != null {
+            unsafe { safe_read_usize(io18 + REQ_DIR_DATA_OFFSET) }.unwrap_or(null)
+        } else {
+            null
+        };
+        let req_dir_size = if io18 != null {
+            unsafe { safe_read_usize(io18 + REQ_DIR_SIZE_OFFSET) }.unwrap_or(0)
+        } else {
+            0
+        };
+        let req_dir_text: String = {
+            let mut s = String::new();
+            if req_dir_data != null && req_dir_size != 0 && req_dir_size <= REQ_DIR_SANE_MAX_CU {
+                // Read 8-byte words via the fault-safe reader and split into char16 code units.
+                let words = req_dir_size.div_ceil(4);
+                'decode: for w in 0..words {
+                    let Some(word) = (unsafe { safe_read_usize(req_dir_data + w * 8) }) else {
+                        break;
+                    };
+                    for b in 0..4 {
+                        let cu = ((word >> (b * 16)) & 0xffff) as u16;
+                        if cu == 0 || w * 4 + b >= req_dir_size {
+                            break 'decode;
+                        }
+                        s.push(char::from_u32(cu as u32).unwrap_or('?'));
+                    }
+                }
+            }
+            s
+        };
+        append_autoload_debug(format_args!(
+            "cold-char-mount: REQ-DIR-READBACK io18=0x{io18:x} dir[+0xe8]=0x{req_dir_data:x} size[+0xf8]={req_dir_size} text=\"{req_dir_text}\" (size>0 & sane = request has a directory; size=0/unreadable = empty/malformed -> open fails fast)"
         ));
         MOUNT_WAITS.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
         MOUNT_PHASE.store(PHASE_POLL, Ordering::SeqCst);

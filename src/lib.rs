@@ -1640,6 +1640,73 @@ pub(crate) const IODEV_INFLIGHT_10_OFFSET: usize = 0x10;
 /// initiator actually started the iodev read (menu-b80-mount-orchestration-sequence).
 pub(crate) const IODEV_REQHANDLE_18_OFFSET: usize = 0x18;
 pub(crate) const IODEV_REQHANDLE_20_OFFSET: usize = 0x20;
+/// The save-DEVICE MOUNT/OPEN routine 0x140e6e8d0(rcx=iodev): the title->Continue boot
+/// (single native call site 0x140defec2) runs it to BIND the .sl2 file to the IO device.
+/// It opens the OS handle (via 0x140e45660), registers the save paths, then writes the
+/// open status byte to [iodev+0x40] @0x140e6eb56 -- the device-ready flag the async
+/// router 0x140e6eb80 tests (jne BOUND real-read 0x140e6f430 / else COLD empty-noop
+/// 0x140e6f5b0). The menu-free cold path SKIPS this, so [iodev+0x40]==0 and the cold
+/// async full read no-ops EMPTY (b80 2->0, never resident=3). Calling it before the
+/// submit routes the read through the bound branch. Internally gated by 0x14240acd0(
+/// [0x143d872e0]) which needs the IO worker registry [0x144843038+0x18]!=0. Decoded in
+/// bd b80-mount-routine-0x140e6e8d0-recipe-and-guard-open-question-2026-06-21.
+pub(crate) const IODEV_MOUNT_OPEN_RVA: usize = 0xe6e8d0;
+/// The iodev getter 0x140e6e060() -> iodev (lazily creates the singleton if null).
+pub(crate) const IODEV_GETTER_RVA: usize = 0xe6e060;
+/// ROOT-CAUSE FIX (b80-ROOTCAUSE-worker-empty-iodev-dir-string-...): the cold full read
+/// completes EMPTY because the worker builds a MALFORMED save path -- the request's
+/// directory std::u16string is unset (the worker's `"%s\%s%s%s"` format yields a bare
+/// `.sl2`). The LIVE title->Continue boot populates that directory via the iodev state
+/// machine (opcode 0x17/0x18 handler 0x140e6ded0): it builds `<userdata>/EldenRing/<steamid>/`
+/// then installs it on the path DB. The menu-free cold path skips that opcode, so the
+/// directory is never set. We replay the two native steps directly before the submit:
+///   1. SAVE_DIR_BUILDER 0x140e0e680(rcx=&out_u16string) -> out (RVO): self-fetches the
+///      userdata folder (SHGetFolderPathW CSIDL 0x1a) + Steam id (0x140e8d550) and formats
+///      `%s/EldenRing/%s/` (fmt @0x142bda858) into out. Guarded by the Steam interface
+///      pointer *0x143b48ff0 being non-null (else it would deref null).
+///   2. SAVE_DIR_SETTER 0x14240a2a0(rcx=[iodev+0x20] path-DB, edx=slot=0, r8=&out): stores
+///      the directory into the path database (via 0x14240dce0 -> +0xb0) -- exactly what the
+///      opcode-0x17/0x18 handler does. The request copy-ctor then inherits a valid directory.
+pub(crate) const SAVE_DIR_BUILDER_RVA: usize = 0xe0e680;
+pub(crate) const SAVE_DIR_SETTER_RVA: usize = 0x240a2a0;
+/// Steam-interface guard pointer (abs 0x143b48ff0): SAVE_DIR_BUILDER derefs the Steam
+/// interface to read the account id; if this is null the builder must be skipped.
+pub(crate) const STEAM_INTERFACE_GUARD_RVA: usize = 0x3b48ff0;
+/// MSVC `std::basic_string<char16_t>` layout (0x20 bytes): SSO buffer/heap-ptr union at +0,
+/// _Mysize (length in code units) at +0x10, _Myres (capacity) at +0x18. A default-empty
+/// string has _Mysize=0 and _Myres=7 (the 8-element SSO buffer holds 7 chars + NUL).
+pub(crate) const U16STRING_SIZE_OFFSET: usize = 0x10;
+pub(crate) const U16STRING_CAP_OFFSET: usize = 0x18;
+pub(crate) const U16STRING_SSO_CAP: usize = 7;
+/// [iodev+0x40] = the device-ready/bound byte flag (0 cold; set by the mount above).
+pub(crate) const IODEV_READY_FLAG_40_OFFSET: usize = 0x40;
+/// [iodev+0x30] = the OS file-handle slot (0xffffffff invalid until the mount opens it).
+pub(crate) const IODEV_OS_HANDLE_30_OFFSET: usize = 0x30;
+/// The FD4 IO worker REGISTRY singleton (abs 0x144843038); its size/count is at +0x18.
+/// The mount's guard 0x14240acd0 bails (no open) when [registry+0x18]==0 (no workers
+/// registered), so logging it tells us whether the mount can fire at the cold state.
+pub(crate) const IO_WORKER_REGISTRY_RVA: usize = 0x4843038;
+pub(crate) const IO_WORKER_REGISTRY_COUNT_18_OFFSET: usize = 0x18;
+/// The FD4 IO worker MANAGER singleton (abs 0x144852f88) the read job is posted to. The
+/// enqueue 0x14240e420 IMMEDIATELY DISCARDS the request (no-op completion 0x14240a000,
+/// status 0xe, b80 2->0 in one frame) when [worker+0x19]!=0 (the worker no-accept/shutdown
+/// byte) @0x14240e472. Prime suspect for the read-completes-empty wall (b80-DEVICE-MOUNT-
+/// REFUTED-...).
+pub(crate) const FD4_IO_WORKER_MGR_RVA: usize = 0x4852f88;
+pub(crate) const FD4_IO_WORKER_NOACCEPT_19_OFFSET: usize = 0x19;
+/// The worker's job QUEUE fields the normal (non-discard) enqueue pushes to: 0x14240e420
+/// pushes onto [worker+0x8] (via 0x14240c060) and [worker+0x10] (via 0x14240f2c0). Reading
+/// these before vs after the submit DISTINGUISHES enqueued (queue changes) from DISCARDED
+/// (queue unchanged) -- the decisive fork for the read-completes-empty wall.
+pub(crate) const FD4_IO_WORKER_QUEUE_08_OFFSET: usize = 0x8;
+pub(crate) const FD4_IO_WORKER_QUEUE_10_OFFSET: usize = 0x10;
+/// The FD4 IO thread POOL singleton (abs 0x144853048).
+pub(crate) const FD4_IO_POOL_RVA: usize = 0x4853048;
+/// The 2nd discard gate 0x141ee1240 searches the worker-registry's intrusive list at
+/// [registry+0x28] for a node matching a key from the calling context (lock 0x141ee05f0);
+/// returns false (=> DISCARD) when not found (e.g. the calling thread is not a registered
+/// IO context). Empty when [[registry+0x28]] == [registry+0x28].
+pub(crate) const IO_WORKER_REGISTRY_LIST_28_OFFSET: usize = 0x28;
 pub(crate) const INPUTMGR_PENDING_13C_OFFSET: usize = 0x13c;
 pub(crate) const ARM_PROBE_MIN_TICK: u64 = 60;
 pub(crate) const ARM_PROBE_TICK_INTERVAL: u64 = 30;
