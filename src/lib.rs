@@ -3321,6 +3321,16 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // against the menu-free OWN-LOAD stall. The observer self-gates and re-resolves the
                 // owner->InGameStep->MoveMapStep chain live from OWN_LOAD_OWNER_CACHED (filled by
                 // own_stepper_idx10 each title frame in golden mode). OBSERVE-ONLY: no load is fired.
+                // OBSERVE-ONLY WorldBlockRes::Update diagnostic detour (worldblockres-phase-machine-
+                // drives-loadstate-to-0xa-2026-06-22): installed ONCE (idempotent) whenever a diagnostic
+                // OWN-LOAD / golden-observe context is armed, so normal play is untouched. The detour is a
+                // pure-read pass-through (bumps a call counter + tracks max phase/gate atomics, then calls
+                // the original and returns its value), so installing early is harmless and never alters
+                // load behavior. It answers: is WorldBlockRes::Update ticked at all on our path, and do
+                // any blocks' phase ([+0x35]) / FD4 gate ([+0x2f]) advance.
+                if own_load_enabled() || own_load_continue_enabled() || golden_observe_enabled() {
+                    install_wbr_update_hook();
+                }
                 if (own_load_enabled() && OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst))
                     || golden_observe_enabled()
                 {

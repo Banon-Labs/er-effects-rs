@@ -2151,6 +2151,123 @@ pub(crate) fn install_own_load_hook() -> bool {
     }
 }
 
+// ===== WorldBlockRes::Update DIAGNOSTIC detour (worldblockres-phase-machine-drives-loadstate-to-0xa)
+//
+// PURPOSE: discriminate WHY the requested map block never reaches loadstate phase 0xa on the menu-free
+// OWN-LOAD path. `WorldBlockRes::Update` (deobf 0x140614870) is the per-block phase state-machine
+// (switch on the phase byte [this+0x35]); the 9->0xa transition fires ONLY when the FD4 file-load
+// completion gate [this+0x2f]!=0. It is ticked per-block-per-frame by the FieldArea/WorldAreaRes
+// block-update loop (FUN_14062f840 / FUN_14063a930) which our menu-free path may never run.
+//
+// The detour is OBSERVE-ONLY: it bumps a call counter, reads the phase byte ([+0x35]) and the gate
+// byte ([+0x2f]) via FAULT-TOLERANT reads (never derefs raw), tracks the MAX phase seen and whether
+// ANY block's gate was set, then calls the original (trampoline) and returns its return value
+// UNCHANGED. No per-call logging (this is high-rate: ~33 blocks * per-frame) -- only atomics.
+//
+// READS:  wbr_update_calls==0 across the stall  => the FieldArea update loop is NOT ticking (cause 1).
+//         calls>0 but max_phase<0xa & any_gate_set=false => loop ticks but the FD4 file-load never
+//         completes -> the IO/CSFile path is the gap (cause 2).
+
+/// `CS::WorldBlockRes::Update` real entry (deobf-grounded; the dump entry FUN_1406148e0 is +0x10).
+const WORLDBLOCKRES_UPDATE_RVA: usize = 0x614870;
+/// Phase byte the switch dispatches on: `this+0x35` (9 -> 0xa is the residency transition).
+const WBR_PHASE_35_OFFSET: usize = 0x35;
+/// FD4 file-load completion gate: `this+0x2f` (recomputed each tick; !=0 lets phase 9 advance to 0xa).
+const WBR_GATE_2F_OFFSET: usize = 0x2f;
+
+/// Total calls to `WorldBlockRes::Update` observed via the detour (per-block-per-frame; 0 == the
+/// FieldArea update loop never ticked our block on this path).
+pub(crate) static OWN_LOAD_WBR_UPDATE_CALLS: AtomicU64 = AtomicU64::new(0);
+/// Max phase byte ([this+0x35]) seen across all observed calls. <0xa across the stall == the block's
+/// resource-stream never reached residency.
+pub(crate) static OWN_LOAD_WBR_MAX_PHASE: AtomicU64 = AtomicU64::new(0);
+/// Whether ANY observed block had its FD4 completion gate ([this+0x2f]) set non-zero. false across the
+/// stall == the FD4 file-load never completed for any block (the IO/CSFile gap).
+pub(crate) static OWN_LOAD_WBR_ANY_GATE_SET: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// Trampoline to the original `WorldBlockRes::Update` (set on hook install).
+static WBR_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+/// One-shot install guard for the `WorldBlockRes::Update` diagnostic detour.
+static WBR_UPDATE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+
+/// `__fastcall WorldBlockRes::Update(this)` diagnostic detour. `rcx` = WorldBlockRes* (`this`).
+/// OBSERVE-ONLY: increments the call counter, fault-tolerantly reads [this+0x35] (phase) and
+/// [this+0x2f] (gate), updates the max-phase / any-gate-set atomics, then ALWAYS calls the original
+/// and returns its return value unchanged (the fn likely returns void/this; declaring usize and
+/// passing through the original's return value is safe for both void and value returns). No load
+/// behavior is altered and nothing is written into `this`.
+pub(crate) unsafe extern "system" fn wbr_update_hook(this: usize) -> usize {
+    OWN_LOAD_WBR_UPDATE_CALLS.fetch_add(1, Ordering::SeqCst);
+    if this != TITLE_OWNER_SCAN_START_ADDRESS {
+        if let Some(phase) = unsafe { safe_read_u8(this + WBR_PHASE_35_OFFSET) } {
+            OWN_LOAD_WBR_MAX_PHASE.fetch_max(u64::from(phase), Ordering::SeqCst);
+        }
+        if let Some(gate) = unsafe { safe_read_u8(this + WBR_GATE_2F_OFFSET) } {
+            if gate != 0 {
+                OWN_LOAD_WBR_ANY_GATE_SET.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+    let orig = WBR_UPDATE_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return TITLE_OWNER_SCAN_START_ADDRESS;
+    }
+    let orig: unsafe extern "system" fn(usize) -> usize = unsafe { std::mem::transmute(orig) };
+    unsafe { orig(this) }
+}
+
+/// Install the OBSERVE-ONLY `WorldBlockRes::Update` diagnostic detour (MhHook + MH_Initialize +
+/// queue_enable + MH_ApplyQueued), mirroring `install_own_load_hook`. Idempotent. The detour is a
+/// pure-read pass-through, so installing it early (when own_load is armed) leaves normal play
+/// untouched and never changes load behavior.
+pub(crate) fn install_wbr_update_hook() -> bool {
+    if WBR_UPDATE_HOOK_INSTALLED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC {
+        return true;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!("wbr-update: MH_Initialize failed: {status:?}"));
+            return false;
+        }
+    }
+    let Ok(update_addr) = game_rva(WORLDBLOCKRES_UPDATE_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "wbr-update: failed to resolve 0x{WORLDBLOCKRES_UPDATE_RVA:x} rva"
+        ));
+        return false;
+    };
+    match unsafe { MhHook::new(update_addr as *mut c_void, wbr_update_hook as *mut c_void) } {
+        Ok(hook) => {
+            WBR_UPDATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!("wbr-update: queue_enable failed: {status:?}"));
+                return false;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    WBR_UPDATE_HOOK_INSTALLED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "wbr-update: hooked 0x{update_addr:x} (OBSERVE-ONLY phase/gate diagnostic; pure pass-through)"
+                    ));
+                    true
+                }
+                status => {
+                    append_autoload_debug(format_args!(
+                        "wbr-update: MH_ApplyQueued failed: {status:?}"
+                    ));
+                    false
+                }
+            }
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!("wbr-update: MhHook::new failed: {status:?}"));
+            false
+        }
+    }
+}
+
 /// Locate the on-disk save file (`.../EldenRing/<steamid>/ER0000.sl2` or `.co2`) and read its bytes.
 /// The directory is built by the NATIVE builder 0x140e0e680 (`SAVE_DIR_BUILDER_RVA`) -- the same
 /// path the engine uses -- so we never hardcode the user-data/steamid prefix. Inside that directory
@@ -2565,13 +2682,19 @@ pub(crate) unsafe fn own_load_stream_observe_recurring(
     OWN_LOAD_STREAM_INGAME_PHASE.store(ingame_phase, Ordering::SeqCst);
     OWN_LOAD_STREAM_REQ_BLOCKID.store(req_blockid, Ordering::SeqCst);
     OWN_LOAD_STREAM_TARGET_BLOCK_PRESENT.store(target_block_present, Ordering::SeqCst);
+    // WorldBlockRes::Update diagnostic atomics (updated by the wbr_update_hook detour). These tell us
+    // whether the per-block phase machine is ticked AT ALL on our path, and how far any block's phase
+    // advanced / whether the FD4 completion gate ever fired -- the cause-1-vs-cause-2 discriminator.
+    let wbr_calls = OWN_LOAD_WBR_UPDATE_CALLS.load(Ordering::SeqCst);
+    let wbr_max_phase = OWN_LOAD_WBR_MAX_PHASE.load(Ordering::SeqCst);
+    let wbr_any_gate_set = OWN_LOAD_WBR_ANY_GATE_SET.load(Ordering::SeqCst);
     let frames = OWN_LOAD_STREAM_RECUR_FRAMES.fetch_add(1, Ordering::SeqCst);
     if frames % OWN_LOAD_STREAM_LOG_INTERVAL == 0 {
         let ig = ingame.unwrap_or(null);
         let mms = movemapstep.unwrap_or(null);
         let rm = resmgr.unwrap_or(null);
         append_autoload_debug(format_args!(
-            "own-load-stream: frame={frames} (recurring) owner=0x{owner:x} owner_state={owner_state} owner_req={owner_req_state} ingame=0x{ig:x} mms=0x{mms:x} mms_state={mms_state} resmgr=0x{rm:x} block_count={block_count} req_coord=0x{req_coord:x} io_inflight=0x{io_inflight:x} io_reqhandle=0x{io_reqhandle:x} c30=0x{c30:x} player_present={player_present}"
+            "own-load-stream: frame={frames} (recurring) owner=0x{owner:x} owner_state={owner_state} owner_req={owner_req_state} ingame=0x{ig:x} mms=0x{mms:x} mms_state={mms_state} resmgr=0x{rm:x} block_count={block_count} req_coord=0x{req_coord:x} io_inflight=0x{io_inflight:x} io_reqhandle=0x{io_reqhandle:x} c30=0x{c30:x} player_present={player_present} wbr_update_calls={wbr_calls} wbr_max_phase=0x{wbr_max_phase:x} wbr_any_gate_set={wbr_any_gate_set}"
         ));
         // Second registration-vs-streaming line: did play_game_submit's handoff run (ingame_phase /
         // req_blockid) and is the coord-derived target block REGISTERED (target_block_present) among
@@ -9994,6 +10117,28 @@ pub(crate) unsafe fn safe_read_i32(addr: usize) -> Option<i32> {
         )
     };
     if ok != HOOK_FALSE_RETURN as i32 && read == std::mem::size_of::<i32>() {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+/// Fault-tolerant single-byte read via ReadProcessMemory (None on unmapped memory). Used by the
+/// WorldBlockRes::Update diagnostic detour to sample the phase ([+0x35]) and gate ([+0x2f]) bytes
+/// without ever dereferencing a raw pointer into possibly-unmapped block memory.
+pub(crate) unsafe fn safe_read_u8(addr: usize) -> Option<u8> {
+    let mut value: u8 = 0;
+    let mut read: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    let ok = unsafe {
+        ReadProcessMemory(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            addr as *const c_void,
+            &mut value as *mut u8 as *mut c_void,
+            std::mem::size_of::<u8>(),
+            &mut read,
+        )
+    };
+    if ok != HOOK_FALSE_RETURN as i32 && read == std::mem::size_of::<u8>() {
         Some(value)
     } else {
         None
