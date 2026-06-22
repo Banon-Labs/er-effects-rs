@@ -1710,17 +1710,26 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
                 o20_pre,
                 o20_post,
             );
-            // PROPER-LOAD DISABLED (dead end, 2026-06-21): the SaveLoad2 load builder CRASHES at the
-            // dump addr 0x140e6da37 (misaligned non-entry) and HANGS the game-task thread at the
-            // correct deobf entry 0x140e6da42 (requestLoad 0x14240ac00 blocks synchronously -- it is
-            // meant to run async via the SaveLoad2 session manager / a worker thread, not inline on
-            // the game task). Source globals were runtime-validated non-null, so it is not a bad-source
-            // issue -- it is a THREADING/sequencing mismatch. Calling the load builder inline is wrong.
-            // Disabled (finalize kept, harmless). The proper drive must enqueue the load via the
-            // session manager and let it run async (like the menu Continue), not call it inline.
-            // See bd b80-proper-load-builder-crash + the hang result.
+            // PROPER-LOAD (off-thread). Calling the load builder (deobf entry 0x140e6da42) INLINE on
+            // the game task HUNG it -- requestLoad (0x14240ac00) blocks on async machinery (FD4 job
+            // pool / session-manager tick) that needs the game task to keep pumping; blocking the game
+            // task in requestLoad deadlocks it. Fix: run the load builder on a SEPARATE thread so the
+            // game task stays free to pump the async read to completion. Also SAFER than inline: a hang
+            // on this thread doesn't freeze the game (teardown cleans it). Preconditions: finalize
+            // (above, game thread) cleared owner+0x10/0x18/0x20; signin forced; source validated
+            // non-null. SAVE-SAFE: requestLoad is a READ. Watch owner+0x20 / b80 in the poll below.
+            // PROPER-LOAD DISABLED -- DEAD END confirmed (3 attempts, all save-safe): the SaveLoad2
+            // load builder (deobf 0x140e6da42) is uncallable in the cold menu-free context. Inline on
+            // the game task HANGS (requestLoad deadlocks); on a SEPARATE thread it CRASHES
+            // (process_exited). Wrong dump addr 0x140e6da37 crashed (misaligned). Sources were
+            // validated non-null, so this is a fundamental boot/session/threading-context mismatch, not
+            // a bad arg. The dead requestLoad path needs the engine's full boot+session-manager+worker
+            // context that the menu-free path lacks. The realistic drive is to let the engine's boot/
+            // session machinery run the load (input-blocked), not synthetic primitive calls -- a major
+            // redesign that revisits the menu-Continue/save-write-risk constraint. finalize kept
+            // (harmless). See bd b80-load-builder-hangs-inline-async-needed + the off-thread crash.
             append_autoload_debug(format_args!(
-                "cold-char-mount: PROPER-LOAD disabled (load builder hangs the game thread inline; needs async session-manager drive) -- finalize 0x{:x}(owner=0x{owner:x}) done, no load call",
+                "cold-char-mount: PROPER-LOAD disabled (load builder uncallable cold: inline hangs, off-thread crashes) -- finalize 0x{:x}(owner=0x{owner:x}) done, no load call",
                 base + NODE_FINALIZER_RVA
             ));
         }
