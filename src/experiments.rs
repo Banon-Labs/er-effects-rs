@@ -1467,7 +1467,8 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
         }
         // Guard: the builder derefs the Steam interface (*0x143b48ff0) for the account id; skip the
         // call (logging the cause) if it is null cold -- that would be hypothesis-2 (Steam not live).
-        let steam_iface = unsafe { safe_read_usize(base + STEAM_INTERFACE_GUARD_RVA) }.unwrap_or(null);
+        let steam_iface =
+            unsafe { safe_read_usize(base + STEAM_INTERFACE_GUARD_RVA) }.unwrap_or(null);
         if steam_iface != null && allocator != null {
             let builder: unsafe extern "system" fn(usize) =
                 unsafe { std::mem::transmute(base + SAVE_DIR_BUILDER_RVA) };
@@ -1496,7 +1497,11 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
         // Readback: re-resolve the slot entry (lookup is find-or-create, idempotent post-setter) and
         // decode its directory at entry+0xb0 to confirm the install landed. The dir there is a bare
         // (stateless-allocator) u16string: data union at +0, size at +0x10.
-        let coll = if io20 != null { unsafe { safe_read_usize(io20) }.unwrap_or(null) } else { null };
+        let coll = if io20 != null {
+            unsafe { safe_read_usize(io20) }.unwrap_or(null)
+        } else {
+            null
+        };
         let key = if io20 != null {
             unsafe { safe_read_usize(io20 + 8) }.unwrap_or(0) as i32
         } else {
@@ -1524,6 +1529,48 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
         let rb_text = decode_u16(rb_data, rb_size);
         append_autoload_debug(format_args!(
             "cold-char-mount: SAVE-DIR INSTALL set_fired={set_fired} io20=0x{io20:x} coll=0x{coll:x} key={key} entry=0x{entry:x} readback size={rb_size} text=\"{rb_text}\" (set_fired & readback matches the built path = slot-0 dir installed -> the full read should now find the .sl2 -> b80->3)"
+        ));
+        // OWNER-FSM GATE MEASUREMENT (bd b80-owner-FSM-lifecycle-gates-2026-06-21). Runtime data
+        // REFUTED the static "empty registry / null early-out" story: reg_count=16 (non-empty) and
+        // io18/io20 (=owner+0x18/+0x20) persist non-null, so the poll's early-out is NOT the wall.
+        // The real bounce is inside the native FSM tick setter 0x140679180: with df0==0 it polls the
+        // owner FSM 0x140e6e080(owner); ONLY state-index 0x14 returns 0 (-> b80=3), any index>=2 (18
+        // ->3, 0x19->2+teardown, 0x19... ) resets b80=0. The index comes from the PURE getter
+        // 0x14240a1f0([owner+0x20]): returns 0x19 when the handle's container ([o20]) is null, else a
+        // real node index; 0x14 only when idle-ready (container built, current-node null, deep gate 0).
+        // Read the handle internals + index here while b80 is still 2, to pin the EXACT failing gate
+        // before building any fix. All reads are fault-safe; the getter is a read-only status query.
+        const STATE_INDEX_GETTER_RVA: usize = 0x240a1f0;
+        const OWNER_HANDLE_CONTAINER_OFFSET: usize = 0x0;
+        const OWNER_HANDLE_H10_OFFSET: usize = 0x10;
+        const OWNER_DF0_OFFSET: usize = 0xdf0;
+        let owner_fsm = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
+        let container = if io20 != null {
+            unsafe { safe_read_usize(io20 + OWNER_HANDLE_CONTAINER_OFFSET) }.unwrap_or(null)
+        } else {
+            null
+        };
+        let h10 = if io20 != null {
+            unsafe { safe_read_usize(io20 + OWNER_HANDLE_H10_OFFSET) }.unwrap_or(null)
+        } else {
+            null
+        };
+        let h10_deep = if h10 != null {
+            unsafe { safe_read_usize(h10 + OWNER_HANDLE_H10_OFFSET) }.unwrap_or(usize::MAX)
+        } else {
+            usize::MAX
+        };
+        let fsm_index = if io20 != null {
+            let idx_getter: unsafe extern "system" fn(usize) -> i32 =
+                unsafe { std::mem::transmute(base + STATE_INDEX_GETTER_RVA) };
+            unsafe { idx_getter(io20) }
+        } else {
+            -1
+        };
+        let df0 = unsafe { *((gm + OWNER_DF0_OFFSET) as *const usize) };
+        let b80_at_init = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
+        append_autoload_debug(format_args!(
+            "cold-char-mount: OWNER-FSM owner=0x{owner_fsm:x} o18=0x{io18:x} o20=0x{io20:x} container=[o20]=0x{container:x} h10=[o20+0x10]=0x{h10:x} h10_deep=[h10+0x10]=0x{h10_deep:x} fsm_index=0x{fsm_index:x} df0=[gm+0xdf0]=0x{df0:x} b80={b80_at_init} (idx 0x14=idle->b80=3; 0x19=container-null; df0!=0=warm fast-path)"
         ));
         MOUNT_WAITS.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
         MOUNT_PHASE.store(PHASE_POLL, Ordering::SeqCst);
@@ -1584,8 +1631,27 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
         let w = MOUNT_WAITS.fetch_add(WAIT_INC, Ordering::SeqCst);
         if w % LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS {
             let (io10, io18, io20) = iodev_summary();
+            // Track the owner-FSM state index + deep gate field across poll frames (bd
+            // b80-owner-FSM-lifecycle-gates). At b80==2 the snapshot showed idx=0x16 (active node,
+            // not the dead 0x19); success needs idx=0x14 with *([o20+0x10]+0x10)==0. Logging the
+            // trajectory reveals whether the FSM stalls at 0x16 or advances into a failure index
+            // that bounces b80 2->0. Pure read + the read-only index getter 0x14240a1f0.
+            const STATE_INDEX_GETTER_RVA: usize = 0x240a1f0;
+            let (fsm_index, h10_deep) = if io20 != null {
+                let idx_getter: unsafe extern "system" fn(usize) -> i32 =
+                    unsafe { std::mem::transmute(base + STATE_INDEX_GETTER_RVA) };
+                let h10 = unsafe { safe_read_usize(io20 + 0x10) }.unwrap_or(null);
+                let deep = if h10 != null {
+                    unsafe { safe_read_usize(h10 + 0x10) }.unwrap_or(usize::MAX)
+                } else {
+                    usize::MAX
+                };
+                (unsafe { idx_getter(io20) }, deep)
+            } else {
+                (-1, usize::MAX)
+            };
             append_autoload_debug(format_args!(
-                "cold-char-mount: POLL waits={w} b80={b80} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x}"
+                "cold-char-mount: POLL waits={w} b80={b80} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} fsm_index=0x{fsm_index:x} h10_deep=0x{h10_deep:x}"
             ));
         }
         let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);

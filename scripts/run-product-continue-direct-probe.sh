@@ -74,6 +74,11 @@ runtime_pids() {
 }
 
 preflight() {
+  # Steam MUST be running: the offline eldenring.exe Proton launch reuses Steam's environment
+  # (wineprefix, CWD, Steam account/save-dir id). With Steam down the game still boots but in a
+  # DIFFERENT environment -- the DLL's debug log lands elsewhere and Steam-dependent state degrades,
+  # producing a non-representative run (observed 2026-06-21). Fail closed rather than burn a launch.
+  pgrep -x steam >/dev/null 2>&1 || fatal "Steam is not running; start Steam first (the offline eldenring.exe launch needs Steam's environment, else the run is degraded)"
   [[ "$RUNTIME_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || fatal "RUNTIME_TIMEOUT_SECONDS must be an integer"
   (( RUNTIME_TIMEOUT_SECONDS > 0 && RUNTIME_TIMEOUT_SECONDS <= RUNTIME_TIMEOUT_CAP_SECONDS )) || fatal "RUNTIME_TIMEOUT_SECONDS must be 1..$RUNTIME_TIMEOUT_CAP_SECONDS"
   require_executable "$PROTON"
@@ -154,6 +159,13 @@ fi
 
 [[ "${ER_EFFECTS_AUTHORIZED_DIRECT_RUNTIME:-0}" == "1" ]] || fatal "set ER_EFFECTS_AUTHORIZED_DIRECT_RUNTIME=1 for the exact runtime invocation"
 [[ "${AUTO_ALLOW_MANUAL_RUNTIME_PROBE:-0}" == "1" ]] || fatal "set AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 for .auto/runtime_probe.sh"
+# Reset stale per-run evidence BEFORE launch so the readiness watcher cannot read a PRIOR run's
+# completion and tear the new game down instantly. Observed 2026-06-21: a reused ARTIFACT_DIR left
+# an old er-effects-telemetry.json at cold_char_mount_phase=5, so every rerun false-positived
+# "cold_char_mount_complete" within ~1s (brief white window) before the new process executed
+# anything. Deleting these reproduces first-run-in-a-fresh-dir behavior; the DLL re-creates them
+# once it boots, and the watcher already tolerates their absence while waiting for fresh telemetry.
+rm -f "$TELEMETRY_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH"
 write_autoload_request
 
 (
