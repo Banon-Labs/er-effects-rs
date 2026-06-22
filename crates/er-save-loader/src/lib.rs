@@ -68,6 +68,11 @@ pub struct SaveLoadRequest {
     /// `.sl2` slot body, calls the native parser (`0x67b290`), and reads back GameMan+0xc30 + the
     /// PlayerGameData fingerprint -- no `SetState5`, no autosave, no `continue_confirm`.
     pub own_load: bool,
+    /// Arm the FINAL OWN-LOAD step: after the proven verify-only parse yields a REAL c30 + real
+    /// character, fire the GUARDED `continue_confirm`/`SetState5` to stream the character into the
+    /// PLAYABLE world. SAVE-WRITING (`SetState5` autosaves): only fires behind the hard c30/fingerprint
+    /// guard in `own_load_continue_drive`. Off by default so the verify-only `own_load` stays safe.
+    pub own_load_continue: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -237,6 +242,13 @@ impl SaveLoader {
     #[must_use]
     pub const fn own_load(&self) -> bool {
         self.request.own_load
+    }
+
+    /// Whether the autoload config armed the FINAL guarded `continue_confirm`/`SetState5` world-stream
+    /// step after the verify-only OWN-LOAD parse. SAVE-WRITING when it fires (behind the c30 guard).
+    #[must_use]
+    pub const fn own_load_continue(&self) -> bool {
+        self.request.own_load_continue
     }
 
     /// Advance the load request state machine once.
@@ -445,6 +457,7 @@ impl Default for SaveLoadRequest {
             own_stepper: false,
             cold_char_mount: false,
             own_load: false,
+            own_load_continue: false,
         }
     }
 }
@@ -487,6 +500,12 @@ impl SaveLoadRequest {
         if matches!(std::env::var("ER_EFFECTS_OWN_LOAD").as_deref(), Ok("1")) {
             request.own_load = true;
         }
+        if matches!(
+            std::env::var("ER_EFFECTS_OWN_LOAD_CONTINUE").as_deref(),
+            Ok("1")
+        ) {
+            request.own_load_continue = true;
+        }
 
         request
     }
@@ -522,6 +541,7 @@ impl SaveLoadRequest {
                 "own_stepper" => request.own_stepper = parse_bool(value.trim()),
                 "cold_char_mount" => request.cold_char_mount = parse_bool(value.trim()),
                 "own_load" => request.own_load = parse_bool(value.trim()),
+                "own_load_continue" => request.own_load_continue = parse_bool(value.trim()),
                 _ => {}
             }
         }
@@ -969,7 +989,7 @@ mod tests {
         ));
         fs::write(
             &path,
-            "save_ext=co2\nslot=9\nmethod=direct_menu_load\nrequire_title_bootstrap=false\nown_load=1\nignored=true\n",
+            "save_ext=co2\nslot=9\nmethod=direct_menu_load\nrequire_title_bootstrap=false\nown_load=1\nown_load_continue=1\nignored=true\n",
         )
         .unwrap();
 
@@ -981,8 +1001,24 @@ mod tests {
         assert_eq!(request.method, SaveLoadMethod::DirectMenuLoad);
         assert!(!request.require_title_bootstrap);
         assert!(request.own_load);
+        assert!(request.own_load_continue);
         assert!(!request.own_stepper);
         assert!(!request.cold_char_mount);
+    }
+
+    #[test]
+    fn own_load_continue_defaults_off_and_is_independent_of_own_load() {
+        let path = std::env::temp_dir().join(format!(
+            "er-save-loader-test-olc-{}-{}.txt",
+            std::process::id(),
+            TEST_TEMP_FILE_DISAMBIGUATOR
+        ));
+        // own_load armed but continue NOT set -> verify-only stays the default.
+        fs::write(&path, "own_load=1\n").unwrap();
+        let request = SaveLoadRequest::from_autoload_file_at(&path);
+        let _ = fs::remove_file(&path);
+        assert!(request.own_load);
+        assert!(!request.own_load_continue);
     }
 
     #[test]
@@ -1011,6 +1047,7 @@ mod tests {
             own_stepper: false,
             cold_char_mount: false,
             own_load: false,
+            own_load_continue: false,
         });
 
         let step = unsafe {
@@ -1044,6 +1081,7 @@ mod tests {
             own_stepper: false,
             cold_char_mount: false,
             own_load: false,
+            own_load_continue: false,
         });
 
         let step = unsafe {

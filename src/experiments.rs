@@ -75,6 +75,11 @@ static COLD_CHAR_MOUNT_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
 /// SAVE-SAFE verify-only OWN-LOAD buffer-feed probe (`own_load_drive`) runs without depending on
 /// env-var propagation through Proton.
 static OWN_LOAD_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
+/// Armed from the reliable autoload-file channel (`own_load_continue=1` in er-effects-autoload.txt)
+/// so the FINAL guarded `continue_confirm`/`SetState5` world-stream step (after the verify-only
+/// `own_load_drive` parse) runs without depending on env-var propagation through Proton.
+/// SAVE-WRITING when it fires -- gated hard on a REAL c30 + char fingerprint inside `own_load_drive`.
+static OWN_LOAD_CONTINUE_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
 /// Module-level mirror of `own_load_drive`'s internal phase, stored as `phase + 1` (0 = the probe
 /// never ran; PHASE_DONE+1 = terminal, evidence collected). Exposed in telemetry as
 /// `oracle_own_load_phase` so the readiness watcher can tear the game down the instant the verify
@@ -342,6 +347,14 @@ pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
         // own_load drives through the idx10 detour (own_stepper_idx10), so arm the own_stepper file
         // flag too -- that is what makes own_stepper_patch_once install the detour so OUR handler
         // runs each frame. own_load takes precedence inside the handler (like cold_char_mount).
+        OWN_LOAD_FILE_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+        OWN_STEPPER_FILE_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    }
+    if request.own_load_continue() {
+        // The final guarded world-stream step rides on the SAME own_load probe (own_load_drive runs
+        // the proven verify-only parse, then fires the guarded continue). Arm own_load too so the
+        // probe actually runs even if only own_load_continue was set in the autoload file.
+        OWN_LOAD_CONTINUE_FILE_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
         OWN_LOAD_FILE_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
         OWN_STEPPER_FILE_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     }
@@ -1063,6 +1076,24 @@ pub(crate) fn own_load_enabled() -> bool {
         || game_directory_path()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("er-effects-own-load.txt")
+            .exists()
+}
+
+/// Whether the FINAL guarded `continue_confirm`/`SetState5` world-stream step is armed. SAVE-WRITING
+/// when it fires (`SetState5` autosaves), so it stays OFF by default: `own_load_drive` is verify-only
+/// unless this is explicitly armed via the autoload-file channel (`own_load_continue=1` in
+/// er-effects-autoload.txt -> `OWN_LOAD_CONTINUE_FILE_ARMED`), env `ER_EFFECTS_OWN_LOAD_CONTINUE=1`,
+/// or a GAME_DIR file `er-effects-own-load-continue.txt`. The hard c30/fingerprint guard inside
+/// `own_load_drive` is the absolute save-safety backstop even when this is armed.
+pub(crate) fn own_load_continue_enabled() -> bool {
+    OWN_LOAD_CONTINUE_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
+        || matches!(
+            std::env::var("ER_EFFECTS_OWN_LOAD_CONTINUE").as_deref(),
+            Ok("1")
+        )
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-own-load-continue.txt")
             .exists()
 }
 
@@ -2203,8 +2234,93 @@ unsafe fn own_load_drive(base: usize, gm: usize, want_slot: i32, n: u64) {
         base + DESERIALIZE_SLOT_RVA
     ));
     unsafe { dump_load_correctness(base, n) };
+    // (5) FINAL STEP (er-effects-rs-mr2): ONLY when explicitly armed (own_load_continue=1), fire the
+    // GUARDED continue_confirm/SetState5 to stream the verified character into the PLAYABLE world.
+    // SAVE-WRITING (SetState5 autosaves) -- the hard c30/fingerprint guard inside is the absolute
+    // backstop. Verify-only stays the default: this is skipped unless own_load_continue_enabled().
+    if own_load_continue_enabled() {
+        unsafe { own_load_continue_fire(base, c30, c30_real, fp_real, fp_level, n) };
+    }
     OWN_LOAD_PHASE.store(PHASE_DONE, Ordering::SeqCst);
     OWN_LOAD_PHASE_PUB.store(PHASE_DONE + 1, Ordering::SeqCst);
+}
+
+/// OWN-LOAD FINAL STEP (er-effects-rs-mr2): after the PROVEN verify-only parse mounted a REAL c30 +
+/// real character, fire the GUARDED native `continue_confirm` 0x140b0e180 -> `SetState5` 0x140b0d960
+/// to stream the character into the PLAYABLE world. Reuses the exact native-fullread COMMIT recipe
+/// (bd reuse-native-fns-not-reimplement): owner = *(GameDataMan + 0x8) (== the recipe's
+/// *(base+0x3d5df38+8)); `continue_confirm` reads GameMan+0xc30 (already REAL from our parse) into
+/// owner+0xbc, then SetState(owner, 5) -> the per-frame title-flow step machine streams the world.
+///
+/// SAVE-SAFETY ABSOLUTE (SetState5 AUTOSAVES). HARD GUARD before firing -- ABORT with a logged
+/// no-write if ANY fails:
+///   * `c30_real` (c30 != 0xa010000 m10-default AND != 0xffffffff unset AND != 0): same flag the
+///     verify path computed -- never fire SetState5 on an unverified/default c30 (the prior crash
+///     cause -- real char streamed to the wrong map then autosaved over).
+///   * `fp_real`: the PlayerGameData char fingerprint is real (level/stats non-default).
+///   * `fp_level >= FULLREAD_MIN_REAL_LEVEL`: defense-in-depth level floor (matches native-fullread).
+///   * owner (GameDataMan+0x8) non-null AND owner+0x284 (new-game flag) == 0 (continue_confirm's
+///     LOAD branch; non-zero would take the NewGame path -- fail closed).
+/// Keeps `simulated_button_presses_total = 0`: this is a pure in-process native call, no input.
+unsafe fn own_load_continue_fire(
+    base: usize,
+    c30: i32,
+    c30_real: bool,
+    fp_real: bool,
+    fp_level: u32,
+    n: u64,
+) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    // Hard c30 + fingerprint guard (absolute save-safety backstop).
+    let level_real = fp_level >= FULLREAD_MIN_REAL_LEVEL;
+    if !(c30_real && fp_real && level_real) {
+        append_autoload_debug(format_args!(
+            "own-load-continue: GUARD FAIL (c30=0x{c30:x} c30_real={c30_real} fp_real={fp_real} level={fp_level} level_real={level_real}) -- NO continue_confirm, NO SetState5, NO save write -> ABORT (save-safe)"
+        ));
+        return;
+    }
+    // Resolve the continue_confirm owner read-only (look before acting): owner = *(GameDataMan+0x8),
+    // the same chain the native-fullread COMMIT path uses.
+    let game_data_man = game_data_man_ptr_or_null();
+    let owner_obj = if game_data_man == null {
+        null
+    } else {
+        unsafe { safe_read_usize(game_data_man + FULLREAD_OWNER_GDM_08_OFFSET) }.unwrap_or(null)
+    };
+    if owner_obj == null {
+        append_autoload_debug(format_args!(
+            "own-load-continue: ABORT -- continue_confirm owner (GameDataMan=0x{game_data_man:x}, offset=0x{:x}) is null -> no write",
+            FULLREAD_OWNER_GDM_08_OFFSET
+        ));
+        return;
+    }
+    let new_game_flag =
+        unsafe { *((owner_obj + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *const u8) };
+    if new_game_flag != FULLREAD_OWNER_NEW_GAME_OK {
+        append_autoload_debug(format_args!(
+            "own-load-continue: ABORT -- owner+0x284={new_game_flag} != 0 (continue_confirm LOAD branch requires the new-game flag clear) -> no write"
+        ));
+        return;
+    }
+    // GUARD PASSED. Build the {[OWNER_IDX]=owner} shim and fire the native continue_confirm.
+    let shim = &raw mut OWN_STEPPER_SHIM;
+    unsafe { (*shim)[OWN_STEPPER_SHIM_OWNER_IDX] = owner_obj };
+    let shim_ptr = shim as usize;
+    let confirm: unsafe extern "system" fn(usize) =
+        unsafe { std::mem::transmute(base + CONTINUE_CONFIRM_RVA) };
+    append_autoload_debug(format_args!(
+        "own-load-continue: *** GUARD PASS -- COMMIT continue_confirm 0x{:x}(shim=0x{shim_ptr:x} owner=0x{owner_obj:x}) c30=0x{c30:x} level={fp_level} owner+0x284=0 -- continue_confirm fires SetState5 internally (AUTOSAVES) presses=0 ***",
+        base + CONTINUE_CONFIRM_RVA
+    ));
+    timeline_event(
+        "T_own_load_continue",
+        n,
+        format_args!("c30=0x{c30:x} level={fp_level}"),
+    );
+    unsafe { confirm(shim_ptr) };
+    append_autoload_debug(format_args!(
+        "own-load-continue: continue_confirm returned -- native pump now streams the real world (#{n}) -> DONE"
+    ));
 }
 
 /// The D-pad Down button mask to inject for poll-frame `n` (counted from the first poll after
