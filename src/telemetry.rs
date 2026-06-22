@@ -216,6 +216,12 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         "  \"oracle_cold_char_mount_phase\": {},\n",
         crate::experiments::COLD_CHAR_MOUNT_PHASE_PUB.load(Ordering::SeqCst)
     ));
+    // OWN-LOAD verify-only probe progress as phase+1 (0 = never ran, 2 = PHASE_DONE = terminal,
+    // evidence collected). The readiness watcher tears down on the terminal value, not the cap.
+    body.push_str(&format!(
+        "  \"oracle_own_load_phase\": {},\n",
+        crate::experiments::OWN_LOAD_PHASE_PUB.load(Ordering::SeqCst)
+    ));
     let product_core_blocker = PRODUCT_CORE_LAST_BLOCKER.load(Ordering::SeqCst);
     let format_scan_ptr = |value: usize| -> String {
         if value == TITLE_OWNER_SCAN_START_ADDRESS {

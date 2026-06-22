@@ -63,6 +63,11 @@ pub struct SaveLoadRequest {
     pub own_stepper: bool,
     /// Arm the menu-free cold-char-mount save-IO load through the same reliable channel.
     pub cold_char_mount: bool,
+    /// Arm the SAVE-SAFE verify-only OWN-LOAD buffer-feed probe through the same reliable channel.
+    /// When set, the DLL hooks the FSM-gated save read (`0x67b100`), feeds it our sliced plaintext
+    /// `.sl2` slot body, calls the native parser (`0x67b290`), and reads back GameMan+0xc30 + the
+    /// PlayerGameData fingerprint -- no `SetState5`, no autosave, no `continue_confirm`.
+    pub own_load: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -226,6 +231,12 @@ impl SaveLoader {
     #[must_use]
     pub const fn cold_char_mount(&self) -> bool {
         self.request.cold_char_mount
+    }
+
+    /// Whether the autoload config armed the SAVE-SAFE verify-only OWN-LOAD buffer-feed probe.
+    #[must_use]
+    pub const fn own_load(&self) -> bool {
+        self.request.own_load
     }
 
     /// Advance the load request state machine once.
@@ -433,6 +444,7 @@ impl Default for SaveLoadRequest {
             require_title_bootstrap: REQUIRE_TITLE_BOOTSTRAP_DEFAULT,
             own_stepper: false,
             cold_char_mount: false,
+            own_load: false,
         }
     }
 }
@@ -472,6 +484,9 @@ impl SaveLoadRequest {
         ) {
             request.cold_char_mount = true;
         }
+        if matches!(std::env::var("ER_EFFECTS_OWN_LOAD").as_deref(), Ok("1")) {
+            request.own_load = true;
+        }
 
         request
     }
@@ -506,6 +521,7 @@ impl SaveLoadRequest {
                 }
                 "own_stepper" => request.own_stepper = parse_bool(value.trim()),
                 "cold_char_mount" => request.cold_char_mount = parse_bool(value.trim()),
+                "own_load" => request.own_load = parse_bool(value.trim()),
                 _ => {}
             }
         }
@@ -953,7 +969,7 @@ mod tests {
         ));
         fs::write(
             &path,
-            "save_ext=co2\nslot=9\nmethod=direct_menu_load\nrequire_title_bootstrap=false\nignored=true\n",
+            "save_ext=co2\nslot=9\nmethod=direct_menu_load\nrequire_title_bootstrap=false\nown_load=1\nignored=true\n",
         )
         .unwrap();
 
@@ -964,6 +980,9 @@ mod tests {
         assert_eq!(request.slot, Some(TEST_SLOT));
         assert_eq!(request.method, SaveLoadMethod::DirectMenuLoad);
         assert!(!request.require_title_bootstrap);
+        assert!(request.own_load);
+        assert!(!request.own_stepper);
+        assert!(!request.cold_char_mount);
     }
 
     #[test]
@@ -991,6 +1010,7 @@ mod tests {
             require_title_bootstrap: REQUIRE_TITLE_BOOTSTRAP_DEFAULT,
             own_stepper: false,
             cold_char_mount: false,
+            own_load: false,
         });
 
         let step = unsafe {
@@ -1023,6 +1043,7 @@ mod tests {
             require_title_bootstrap: REQUIRE_TITLE_BOOTSTRAP_DEFAULT,
             own_stepper: false,
             cold_char_mount: false,
+            own_load: false,
         });
 
         let step = unsafe {

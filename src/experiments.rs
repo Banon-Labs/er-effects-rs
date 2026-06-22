@@ -71,6 +71,15 @@ static PRODUCT_AUTOLOAD_ARMED: AtomicUsize = AtomicUsize::new(0);
 /// without depending on env-var propagation through Proton or game_directory_path() trigger files.
 static OWN_STEPPER_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
 static COLD_CHAR_MOUNT_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
+/// Armed from the reliable autoload-file channel (`own_load=1` in er-effects-autoload.txt) so the
+/// SAVE-SAFE verify-only OWN-LOAD buffer-feed probe (`own_load_drive`) runs without depending on
+/// env-var propagation through Proton.
+static OWN_LOAD_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
+/// Module-level mirror of `own_load_drive`'s internal phase, stored as `phase + 1` (0 = the probe
+/// never ran; PHASE_DONE+1 = terminal, evidence collected). Exposed in telemetry as
+/// `oracle_own_load_phase` so the readiness watcher can tear the game down the instant the verify
+/// outcome is observed instead of idling to the wall-clock cap.
+pub(crate) static OWN_LOAD_PHASE_PUB: AtomicUsize = AtomicUsize::new(0);
 /// Module-level mirror of cold_char_mount_drive's internal MOUNT_PHASE, stored as `phase + 1`
 /// (0 = the cold mount never ran; 5 = PHASE_DONE = terminal, evidence collected). Exposed in
 /// telemetry as `oracle_cold_char_mount_phase` so the readiness watcher can tear the game down the
@@ -328,6 +337,13 @@ pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
     }
     if request.cold_char_mount() {
         COLD_CHAR_MOUNT_FILE_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    }
+    if request.own_load() {
+        // own_load drives through the idx10 detour (own_stepper_idx10), so arm the own_stepper file
+        // flag too -- that is what makes own_stepper_patch_once install the detour so OUR handler
+        // runs each frame. own_load takes precedence inside the handler (like cold_char_mount).
+        OWN_LOAD_FILE_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+        OWN_STEPPER_FILE_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     }
     let Some(slot) = request.slot() else {
         return;
@@ -1032,6 +1048,21 @@ pub(crate) fn cold_char_mount_enabled() -> bool {
         || game_directory_path()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("er-effects-cold-char-mount.txt")
+            .exists()
+}
+
+/// SAVE-SAFE verify-only OWN-LOAD buffer-feed gate. OFF by default; enable via the reliable
+/// autoload-file channel (`own_load=1` in er-effects-autoload.txt -> `OWN_LOAD_FILE_ARMED`), env
+/// `ER_EFFECTS_OWN_LOAD=1`, or a GAME_DIR file `er-effects-own-load.txt`. When ON, `own_load_drive`
+/// hooks the FSM-gated save read 0x67b100, feeds it our sliced plaintext .sl2 slot body, calls the
+/// native parser 0x67b290(slot) in-process, then reads back GameMan+0xc30 + the PlayerGameData
+/// fingerprint. NO SetState5, NO autosave, NO continue_confirm.
+pub(crate) fn own_load_enabled() -> bool {
+    OWN_LOAD_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
+        || matches!(std::env::var("ER_EFFECTS_OWN_LOAD").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-own-load.txt")
             .exists()
 }
 
@@ -1873,6 +1904,307 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
         MOUNT_PHASE.store(PHASE_DONE, Ordering::SeqCst);
         return;
     }
+}
+
+// ===== SAVE-SAFE verify-only OWN-LOAD buffer-feed probe (bd er-effects-rs-lds) ===============
+//
+// MECHANISM (static-validated 2026-06-22): hook the FSM-gated save read 0x67b100(rcx=out_buf,
+// edx=size). When the one-shot gate `OWN_LOAD_GATE` is set, memcpy our sliced PLAINTEXT BND4 slot
+// body (from `er_save_loader::bnd4::slot_body`) into out_buf for min(edx, body.len()) bytes and
+// return al=1; otherwise call the original. Then call the native parser 0x67b290(slot) in-process
+// UNCHANGED -- it allocs the buffer, invokes our hooked 0x67b100 (gets our bytes), and runs the
+// REAL native parse (c30 write 0x67bd70 + stream deserialize + char-apply) with zero
+// re-implementation. The gate is MANDATORY: 0x67b100 is SHARED with the native menu loader (4
+// callers, only one is ours); we must never intercept the menu path. VERIFY is read-back only:
+// GameMan+0xc30 (map id) + the PlayerGameData fingerprint. NO SetState5, NO autosave.
+
+/// FSM-gated save read 0x67b100(rcx=out_buf, edx=size) -> al. The leaf read helper our parser
+/// 0x67b290 invokes (and the native menu loader -- hence the mandatory gate).
+const READ_67B100_RVA: usize = 0x67b100;
+
+/// One-shot gate: true ONLY for the single 0x67b290(slot) call we make from `own_load_drive`. The
+/// hook feeds our body + returns al=1 only while this is set; every other (native menu) read passes
+/// straight through to the original.
+static OWN_LOAD_GATE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Trampoline to the original 0x67b100 (set on hook install).
+static READ_67B100_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+/// One-shot install guard for the 0x67b100 detour.
+static OWN_LOAD_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// The sliced plaintext slot body the hook feeds: a leaked `&'static [u8]`, exposed to the detour
+/// as (ptr, len) atomics so the game-thread detour reads it lock-free. Set BEFORE arming the gate.
+static OWN_LOAD_BODY_PTR: AtomicUsize = AtomicUsize::new(0);
+static OWN_LOAD_BODY_LEN: AtomicUsize = AtomicUsize::new(0);
+/// Count of bytes the gated hook fed into the engine buffer on the latched call (verify telemetry).
+static OWN_LOAD_FED_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+/// Gated detour for 0x67b100. While `OWN_LOAD_GATE` is set, copies our sliced plaintext slot body
+/// into the engine-allocated out_buf (`rcx`) for `min(size, body.len())` bytes and returns al=1 --
+/// the engine then parses OUR bytes instead of reading the FSM-gated iodev resident. Otherwise it
+/// is a pure pass-through to the original (the native menu loader's reads are never disturbed).
+pub(crate) unsafe extern "system" fn read_67b100_hook(out_buf: usize, size: u32) -> u8 {
+    const FEED_SUCCESS_RET: u8 = 1;
+    if OWN_LOAD_GATE.load(Ordering::SeqCst) {
+        let body_ptr = OWN_LOAD_BODY_PTR.load(Ordering::SeqCst);
+        let body_len = OWN_LOAD_BODY_LEN.load(Ordering::SeqCst);
+        if out_buf != TITLE_OWNER_SCAN_START_ADDRESS && body_ptr != 0 && body_len != 0 {
+            // Data-driven length: copy the smaller of the engine's requested size (its own edx) and
+            // our body length -- never assume the 0x280000 literal (bd dont-hardcode-savefile-tied).
+            let n = core::cmp::min(size as usize, body_len);
+            unsafe {
+                std::ptr::copy_nonoverlapping(body_ptr as *const u8, out_buf as *mut u8, n);
+            }
+            OWN_LOAD_FED_BYTES.store(n, Ordering::SeqCst);
+            return FEED_SUCCESS_RET;
+        }
+    }
+    let orig = READ_67B100_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return FEED_SUCCESS_RET;
+    }
+    let orig: unsafe extern "system" fn(usize, u32) -> u8 = unsafe { std::mem::transmute(orig) };
+    unsafe { orig(out_buf, size) }
+}
+
+/// Install the gated 0x67b100 detour (MhHook + MH_Initialize + queue_enable + MH_ApplyQueued),
+/// mirroring the `install_c30_writer_hook` precedent. Idempotent. The detour is harmless until the
+/// gate is armed (pure pass-through), so installing it early is safe.
+pub(crate) fn install_own_load_hook() -> bool {
+    if OWN_LOAD_HOOK_INSTALLED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC {
+        return true;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!("own-load: MH_Initialize failed: {status:?}"));
+            return false;
+        }
+    }
+    let Ok(read_addr) = game_rva(READ_67B100_RVA as u32) else {
+        append_autoload_debug(format_args!("own-load: failed to resolve 0x67b100 rva"));
+        return false;
+    };
+    match unsafe { MhHook::new(read_addr as *mut c_void, read_67b100_hook as *mut c_void) } {
+        Ok(hook) => {
+            READ_67B100_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!("own-load: queue_enable failed: {status:?}"));
+                return false;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    OWN_LOAD_HOOK_INSTALLED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "own-load: hooked 0x{read_addr:x} (GATED feed of sliced .sl2 body; pass-through until armed)"
+                    ));
+                    true
+                }
+                status => {
+                    append_autoload_debug(format_args!(
+                        "own-load: MH_ApplyQueued failed: {status:?}"
+                    ));
+                    false
+                }
+            }
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!("own-load: MhHook::new failed: {status:?}"));
+            false
+        }
+    }
+}
+
+/// Locate the on-disk save file (`.../EldenRing/<steamid>/ER0000.sl2` or `.co2`) and read its bytes.
+/// The directory is built by the NATIVE builder 0x140e0e680 (`SAVE_DIR_BUILDER_RVA`) -- the same
+/// path the engine uses -- so we never hardcode the user-data/steamid prefix. Inside that directory
+/// we pick the save file by extension (`.sl2`/`.co2`) rather than assuming an exact filename, so the
+/// probe works for vanilla and Seamless without a hardcoded name (bd dont-hardcode-savefile-tied).
+unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
+    const REQ_DIR_SANE_MAX_CU: usize = 320;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    // Build the canonical save directory into a stack-resident MSVC stateful-allocator u16string
+    // wrapper (allocator@+0, data@+0x08, size@+0x18, cap@+0x20) -- identical to the cold-char-mount
+    // SAVE-DIR BUILD step, reusing the native builder so the path matches the engine's.
+    let mut wrapper = [0u64; 8];
+    let wbase = wrapper.as_mut_ptr() as usize;
+    let alloc_getter: unsafe extern "system" fn() -> usize =
+        unsafe { std::mem::transmute(base + SAVE_DIR_ALLOC_GETTER_RVA) };
+    let allocator = unsafe { alloc_getter() };
+    unsafe {
+        *((wbase + U16STRING_ALLOC_OFFSET) as *mut usize) = allocator;
+        *((wbase + U16STRING_CAP_OFFSET) as *mut usize) = U16STRING_SSO_CAP;
+    }
+    // The builder derefs the Steam interface (*0x143b48ff0) for the account id; bail (logging) if it
+    // is null cold (Steam not live) rather than crashing.
+    let steam_iface = unsafe { safe_read_usize(base + STEAM_INTERFACE_GUARD_RVA) }.unwrap_or(null);
+    if steam_iface == null || allocator == null {
+        append_autoload_debug(format_args!(
+            "own-load: SAVE-DIR build skipped steam_iface=0x{steam_iface:x} allocator=0x{allocator:x} (need both non-null) -- cannot locate .sl2"
+        ));
+        return None;
+    }
+    let builder: unsafe extern "system" fn(usize) =
+        unsafe { std::mem::transmute(base + SAVE_DIR_BUILDER_RVA) };
+    unsafe { builder(wbase) };
+    let dir_cap = unsafe { *((wbase + U16STRING_CAP_OFFSET) as *const usize) };
+    let dir_size = unsafe { *((wbase + U16STRING_SIZE_OFFSET) as *const usize) };
+    let dir_data = if dir_cap >= 8 {
+        unsafe { *((wbase + U16STRING_DATA_OFFSET) as *const usize) }
+    } else {
+        wbase + U16STRING_DATA_OFFSET
+    };
+    // Decode the UTF-16 directory into a Rust path string (fault-safe, bounded).
+    let mut dir = String::new();
+    if dir_data != null && dir_size != 0 && dir_size <= REQ_DIR_SANE_MAX_CU {
+        let words = dir_size.div_ceil(4);
+        'decode: for w in 0..words {
+            let Some(word) = (unsafe { safe_read_usize(dir_data + w * 8) }) else {
+                break;
+            };
+            for b in 0..4 {
+                let cu = ((word >> (b * 16)) & 0xffff) as u16;
+                if cu == 0 || w * 4 + b >= dir_size {
+                    break 'decode;
+                }
+                dir.push(char::from_u32(cu as u32).unwrap_or('?'));
+            }
+        }
+    }
+    if dir.is_empty() {
+        append_autoload_debug(format_args!(
+            "own-load: SAVE-DIR builder returned empty (cap={dir_cap} size={dir_size}) -- cannot locate .sl2"
+        ));
+        return None;
+    }
+    // The native dir uses backslashes (Windows under Proton); normalise for std::fs lookup.
+    let dir_path = PathBuf::from(dir.replace('\\', "/"));
+    // Pick the save file by extension, not a hardcoded name: prefer .sl2 (vanilla), then .co2
+    // (Seamless). This matches whichever container the active runtime actually wrote.
+    let paths: Vec<PathBuf> = std::fs::read_dir(&dir_path)
+        .map(|rd| rd.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+    let mut chosen: Option<PathBuf> = None;
+    for ext in ["sl2", "co2"] {
+        if let Some(p) = paths
+            .iter()
+            .find(|p| p.extension().and_then(|e| e.to_str()) == Some(ext))
+        {
+            chosen = Some(p.clone());
+            break;
+        }
+    }
+    let Some(path) = chosen else {
+        append_autoload_debug(format_args!(
+            "own-load: no .sl2/.co2 file under dir=\"{}\" -- cannot read save",
+            dir_path.display()
+        ));
+        return None;
+    };
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            append_autoload_debug(format_args!(
+                "own-load: read save file \"{}\" ({} bytes) for slicing",
+                path.display(),
+                bytes.len()
+            ));
+            Some(bytes)
+        }
+        Err(e) => {
+            append_autoload_debug(format_args!(
+                "own-load: failed to read save file \"{}\": {e}",
+                path.display()
+            ));
+            None
+        }
+    }
+}
+
+/// SAVE-SAFE verify-only OWN-LOAD buffer-feed drive (one-shot, phased). Reads the .sl2 from disk,
+/// slices slot `want_slot`'s plaintext body, installs+arms the gated 0x67b100 hook, calls the native
+/// parser 0x67b290(slot) in-process so it parses OUR body, then reads back GameMan+0xc30 + the
+/// PlayerGameData fingerprint. NO SetState5, NO autosave, NO continue_confirm. Records presses==0.
+unsafe fn own_load_drive(base: usize, gm: usize, want_slot: i32, n: u64) {
+    const PHASE_INIT: usize = 0;
+    const PHASE_DONE: usize = 1;
+    const C30_ZERO: i32 = 0;
+    static OWN_LOAD_PHASE: AtomicUsize = AtomicUsize::new(PHASE_INIT);
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let phase = OWN_LOAD_PHASE.load(Ordering::SeqCst);
+    // Publish phase+1 so the readiness watcher tears down on terminal completion (PHASE_DONE -> 2).
+    OWN_LOAD_PHASE_PUB.store(phase + 1, Ordering::SeqCst);
+    if phase != PHASE_INIT {
+        return;
+    }
+    if gm == null {
+        return;
+    }
+    if want_slot < OWN_STEPPER_SLOT_ZERO {
+        append_autoload_debug(format_args!(
+            "own-load: needs an EXPLICIT slot (slot={want_slot}); set slot=N in er-effects-autoload.txt -- ABORT (no-write)"
+        ));
+        OWN_LOAD_PHASE.store(PHASE_DONE, Ordering::SeqCst);
+        return;
+    }
+    // (1) Read + slice the plaintext slot body. er_save_loader::bnd4 is the only glue: the engine's
+    // read path is FSM-gated, so OWN-LOAD must hand it the buffer itself (bd reuse-native-fns).
+    let Some(sl2_bytes) = (unsafe { own_load_read_sl2_bytes(base) }) else {
+        OWN_LOAD_PHASE.store(PHASE_DONE, Ordering::SeqCst);
+        return;
+    };
+    let body: &[u8] = match er_save_loader::bnd4::slot_body(&sl2_bytes, want_slot as usize) {
+        Ok(b) => b,
+        Err(e) => {
+            append_autoload_debug(format_args!(
+                "own-load: slot_body(slot={want_slot}) failed: {e:?} -- ABORT (no-write)"
+            ));
+            OWN_LOAD_PHASE.store(PHASE_DONE, Ordering::SeqCst);
+            return;
+        }
+    };
+    // Leak the sliced body so it outlives this frame and stays valid for the detour to memcpy. One
+    // copy of the (small fraction of the) save -- never the whole file -- kept for the session.
+    let leaked: &'static [u8] = Box::leak(body.to_vec().into_boxed_slice());
+    OWN_LOAD_BODY_PTR.store(leaked.as_ptr() as usize, Ordering::SeqCst);
+    OWN_LOAD_BODY_LEN.store(leaked.len(), Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "own-load: sliced slot {want_slot} body len=0x{:x} (expected 0x{:x}) -> install+arm gate, call native parser 0x{:x}",
+        leaked.len(),
+        er_save_loader::bnd4::SLOT_BODY_LEN,
+        base + DESERIALIZE_SLOT_RVA
+    ));
+    // (2) Install the gated 0x67b100 detour (harmless pass-through until armed).
+    if !install_own_load_hook() {
+        append_autoload_debug(format_args!(
+            "own-load: hook install failed -- ABORT (no-write)"
+        ));
+        OWN_LOAD_PHASE.store(PHASE_DONE, Ordering::SeqCst);
+        return;
+    }
+    let c30_before = unsafe { *((gm + GAME_MAN_SAVED_MAP_C30_OFFSET) as *const i32) };
+    // (3) Set the gate, call native 0x67b290(slot) in-process, clear the gate. 0x67b290 does NOT
+    // re-check b80 after the read (static-confirmed), so our al=1 + body flow into the native parse.
+    OWN_LOAD_GATE.store(true, Ordering::SeqCst);
+    let parser: unsafe extern "system" fn(i32) -> i32 =
+        unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
+    let pret = unsafe { parser(want_slot) };
+    OWN_LOAD_GATE.store(false, Ordering::SeqCst);
+    let fed = OWN_LOAD_FED_BYTES.load(Ordering::SeqCst);
+    // (4) VERIFY (read-back only): GameMan+0xc30 (map id) + the PlayerGameData char fingerprint.
+    let c30 = unsafe { *((gm + GAME_MAN_SAVED_MAP_C30_OFFSET) as *const i32) };
+    let ac0 = unsafe { *((gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) as *const i32) };
+    let (fp_real, fp_level, fp_name_len) = unsafe { char_fingerprint(base) };
+    let c30_real = c30 != GAME_MAN_C30_UNSET && c30 != C30_ZERO && c30 != FULLREAD_C30_M10_DEFAULT;
+    if c30_real && fp_real {
+        OWN_STEPPER_MOUNT_C30.store(c30, Ordering::SeqCst);
+        OWN_STEPPER_DESER_FIRED.store(OWN_STEPPER_DESER_FIRED_OK, Ordering::SeqCst);
+    }
+    append_autoload_debug(format_args!(
+        "own-load: VERIFY parser 0x{:x}(slot={want_slot}) ret={pret} fed_bytes=0x{fed:x} c30 0x{c30_before:x}->0x{c30:x} c30_real={c30_real} ac0={ac0} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) presses=0 (NO SetState5/NO save write)",
+        base + DESERIALIZE_SLOT_RVA
+    ));
+    unsafe { dump_load_correctness(base, n) };
+    OWN_LOAD_PHASE.store(PHASE_DONE, Ordering::SeqCst);
+    OWN_LOAD_PHASE_PUB.store(PHASE_DONE + 1, Ordering::SeqCst);
 }
 
 /// The D-pad Down button mask to inject for poll-frame `n` (counted from the first poll after
@@ -5086,6 +5418,15 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
     // then drive the cold b80 save-IO mount (preview -> poll to b80==3 -> deserialize) so 0x67b290
     // mounts the real char to memory -- NO SetState, NO save write. Bypasses the menu drive while
     // active; pass-through keeps the title ticking so the scheduler ticks the registered worker.
+    // SAVE-SAFE verify-only OWN-LOAD buffer-feed probe (gated OFF by default; one-shot). Takes
+    // precedence over cold_char_mount: hooks 0x67b100 to feed our sliced .sl2 slot body, calls the
+    // native parser 0x67b290(slot), and reads back c30 + the char fingerprint. NO SetState5, NO
+    // save write. Bypasses the menu drive while active; pass-through keeps the title ticking.
+    if own_load_enabled() && unsafe { title_boot_ready(owner, base) } {
+        unsafe { own_load_drive(base, gm, want_slot, n) };
+        pass_through(false);
+        return;
+    }
     if cold_char_mount_enabled() && unsafe { title_boot_ready(owner, base) } {
         unsafe { cold_char_mount_drive(base, gm, want_slot, n) };
         pass_through(false);

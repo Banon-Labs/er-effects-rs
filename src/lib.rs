@@ -3372,7 +3372,11 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     // OWN-STEPPER and the SEPARATE observe-only NATIVE-LOAD gate both install the
                     // idx10 patch so OUR handler runs each frame. own_stepper_idx10 dispatches to
                     // the native-load (observe-only, no forcing) path when native_load_enabled().
-                    if own_stepper_enabled() || native_load_enabled() || native_fullread_enabled() {
+                    if own_stepper_enabled()
+                        || native_load_enabled()
+                        || native_fullread_enabled()
+                        || own_load_enabled()
+                    {
                         if let Ok(base) = game_module_base() {
                             unsafe { own_stepper_patch_once(base) };
                         }
