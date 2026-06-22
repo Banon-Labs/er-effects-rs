@@ -1240,6 +1240,24 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
         // cold path loads as if signed in as user 0. Save-safe (in-memory code patch). Done here, in
         // PHASE_INIT, before the submit so the select op the load triggers sees the patched gates.
         apply_signin_force(base);
+        // (-1.5) SOURCE PROBE (read-only) for a future controlled public-requestLoad (0x14240ac00):
+        // the dead load builder reads source globals that may be invalid cold (it crashed). Before
+        // ever calling requestLoad, log the candidate sources so we know a valid one: SLLoadContent
+        // *0x143d87358, the secondary *0x143d872e0, and owner+8 (what the dead builder passed as the
+        // requestLoad source). Pure reads -- no calls into risky fns.
+        const SLLOADCONTENT_SRC_RVA: usize = 0x3d87358;
+        const SLLOAD_SRC2_RVA: usize = 0x3d872e0;
+        let src1 = unsafe { safe_read_usize(base + SLLOADCONTENT_SRC_RVA) }.unwrap_or(null);
+        let src2 = unsafe { safe_read_usize(base + SLLOAD_SRC2_RVA) }.unwrap_or(null);
+        let owner_probe = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
+        let owner8 = if owner_probe != null {
+            unsafe { safe_read_usize(owner_probe + 8) }.unwrap_or(null)
+        } else {
+            null
+        };
+        append_autoload_debug(format_args!(
+            "cold-char-mount: SOURCE-PROBE SLLoadContent[*0x143d87358]=0x{src1:x} src2[*0x143d872e0]=0x{src2:x} owner=0x{owner_probe:x} owner8=0x{owner8:x} (non-null source needed for a safe public requestLoad 0x14240ac00)"
+        ));
         // (-1) Set the save-file path/name on the container so the device read returns slot N's REAL
         // .sl2 bytes. The native Continue handler runs this slot-mgr peek 0x140678a50 FIRST (reads
         // [GameDataMan+0x8] container, sync-reads the save path token 0x47054, copies the name to
@@ -1692,16 +1710,17 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
                 o20_pre,
                 o20_post,
             );
-            // PROPER-LOAD DISABLED (crash 2026-06-21): calling the "dead" load builder at 0x140e6da37
-            // CRASHED the game -- that address is a misaligned NON-entry (mov rax,[rcx+0x88];
-            // test [rax+0x53],rax is garbage); the real prologue is 0x140e6da42. Even at the correct
-            // entry it is dead code (0 xrefs) that reads [owner+8] as the load source, which is likely
-            // invalid cold -> still crash-risk. Do NOT blindly retry. The proper drive needs a
-            // validated source/args (public requestLoad 0x14240ac00 with a controlled source) or the
-            // session-manager advance select->load. Leaving the finalize (harmless) but no load call;
-            // cold-mount parks as before (no crash). See bd b80-proper-load-builder-crash.
+            // PROPER-LOAD DISABLED (dead end, 2026-06-21): the SaveLoad2 load builder CRASHES at the
+            // dump addr 0x140e6da37 (misaligned non-entry) and HANGS the game-task thread at the
+            // correct deobf entry 0x140e6da42 (requestLoad 0x14240ac00 blocks synchronously -- it is
+            // meant to run async via the SaveLoad2 session manager / a worker thread, not inline on
+            // the game task). Source globals were runtime-validated non-null, so it is not a bad-source
+            // issue -- it is a THREADING/sequencing mismatch. Calling the load builder inline is wrong.
+            // Disabled (finalize kept, harmless). The proper drive must enqueue the load via the
+            // session manager and let it run async (like the menu Continue), not call it inline.
+            // See bd b80-proper-load-builder-crash + the hang result.
             append_autoload_debug(format_args!(
-                "cold-char-mount: PROPER-LOAD disabled (0x140e6da37 crashed=wrong entry; real 0x140e6da42; needs safe source) -- finalize 0x{:x}(owner=0x{owner:x}) done, no load call",
+                "cold-char-mount: PROPER-LOAD disabled (load builder hangs the game thread inline; needs async session-manager drive) -- finalize 0x{:x}(owner=0x{owner:x}) done, no load call",
                 base + NODE_FINALIZER_RVA
             ));
         }
