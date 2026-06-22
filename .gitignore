@@ -16,3 +16,6 @@ eldenring-deobf.bin
 
 ProDebug.dll
 offline-launcher.exe
+
+# Local runtime-probe env files (may contain AUTHORIZED runtime flags)
+.envs/
