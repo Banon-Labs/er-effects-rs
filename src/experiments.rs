@@ -1470,6 +1470,29 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
             "cold-char-mount: FULL-INIT slot={want_slot} b78={b78} worker=0x{worker:x} submit_ret={sret} b80={} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} | q8 0x{q8_before:x}->0x{q8_after:x} [q8] 0x{qd8_before:x}->0x{qd8_after:x} q10 0x{q10_before:x}->0x{q10_after:x} [q10] 0x{qd10_before:x}->0x{qd10_after:x} (any change=ENQUEUED; none=DISCARDED) -> POLL",
             read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET)
         ));
+        // (2.4) SAVE-DIR READ-ONLY VERIFY (bd b80-cold-EXACT-dir-field-slot3-0x142410c60). The worker
+        // (SLLoadSession::_Func02 0x142410cd0) -> name-builder FUN_14240d5b0 -> slot-3 0x142410c60
+        // reads the dir std::u16string from [SLLoadSession+0xe0] == io18, at io18+0xe8 (data/SSO),
+        // size io18+0xf8, cap io18+0x100 (cap>=8 => data is a heap ptr at io18+0xe8, else SSO inline).
+        // Empty cold => slot-3 returns empty => builder ret 0 => _Func02 code 8 => no open. Confirm the
+        // field+emptiness HERE (pure reads) before any write into this transient request object.
+        if io18 != null {
+            let dir_size = unsafe { safe_read_usize(io18 + 0xf8) }.unwrap_or(0);
+            let dir_cap = unsafe { safe_read_usize(io18 + 0x100) }.unwrap_or(0);
+            let dir_data_ptr = if dir_cap >= 8 {
+                unsafe { safe_read_usize(io18 + 0xe8) }.unwrap_or(null)
+            } else {
+                io18 + 0xe8
+            };
+            let first8 = if dir_data_ptr != null {
+                unsafe { safe_read_usize(dir_data_ptr) }.unwrap_or(0)
+            } else {
+                0
+            };
+            append_autoload_debug(format_args!(
+                "cold-char-mount: SAVE-DIR VERIFY io18=0x{io18:x} dir@+0xe8 size={dir_size} cap={dir_cap} data=0x{dir_data_ptr:x} first8=0x{first8:x} (size==0/first8==0 => EMPTY dir = the cold wall: slot-3 0x142410c60 returns empty -> name-builder 0x14240d5b0 ret 0 -> code 8 -> no open)"
+            ));
+        }
         // (2.5) SAVE-DIRECTORY POST-SUBMIT INSTALL (bd savedir-CONFIG-LEVER-setter-0x14240a2a0-...).
         // The cold full read completes EMPTY because the path-DB's slot-0 directory std::u16string
         // is unset, so the worker formats a bare `.sl2` that fails to open. The LIVE Continue boot
