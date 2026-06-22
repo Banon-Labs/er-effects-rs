@@ -1423,39 +1423,27 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
             "cold-char-mount: FULL-INIT slot={want_slot} b78={b78} worker=0x{worker:x} submit_ret={sret} b80={} io10=0x{io10:x} io18=0x{io18:x} io20=0x{io20:x} | q8 0x{q8_before:x}->0x{q8_after:x} [q8] 0x{qd8_before:x}->0x{qd8_after:x} q10 0x{q10_before:x}->0x{q10_after:x} [q10] 0x{qd10_before:x}->0x{qd10_after:x} (any change=ENQUEUED; none=DISCARDED) -> POLL",
             read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET)
         ));
-        // Readback (DIAGNOSTIC, crash-proof): what directory does the live request (io18) hold after
-        // submit? The worker builds the open path from the request's directory std::u16string,
-        // tentatively at io18+0xe8 (data) / +0xf8 (size). This offset is UNVERIFIED for io18 (it was
-        // pinned on the worker-side job object), so every access goes through safe_read_usize (faults
-        // -> None, never a hard crash -- the earlier unguarded version crashed the run) and the size
-        // is sanity-bounded before any decode. size>0 with a real path = the cold request already has
-        // a directory; size 0 / unreadable = it is empty/malformed (the open fails fast -> b80 2->0).
-        const REQ_DIR_DATA_OFFSET: usize = 0xe8;
-        const REQ_DIR_SIZE_OFFSET: usize = 0xf8;
-        // A real save directory path is well under MAX_PATH; anything larger is garbage/wrong-offset.
+        // (2.5) SAVE-DIRECTORY POST-SUBMIT INSTALL (bd savedir-CONFIG-LEVER-setter-0x14240a2a0-...).
+        // The cold full read completes EMPTY because the path-DB's slot-0 directory std::u16string
+        // is unset, so the worker formats a bare `.sl2` that fails to open. The LIVE Continue boot
+        // fills it via the opcode-0x17/0x18 pump handler 0x140e6ded0; the menu-free cold path never
+        // dispatches that opcode, so we replay its two native steps HERE -- on the LIVE io20
+        // (=[iodev+0x20], which only exists AFTER submit) in this SAME task invocation, the tightest
+        // window before the worker drains. A real save directory path is well under MAX_PATH;
+        // anything larger is garbage/wrong-offset and is rejected before any decode or setter call.
         const REQ_DIR_SANE_MAX_CU: usize = 320;
-        let req_dir_data = if io18 != null {
-            unsafe { safe_read_usize(io18 + REQ_DIR_DATA_OFFSET) }.unwrap_or(null)
-        } else {
-            null
-        };
-        let req_dir_size = if io18 != null {
-            unsafe { safe_read_usize(io18 + REQ_DIR_SIZE_OFFSET) }.unwrap_or(0)
-        } else {
-            0
-        };
-        let req_dir_text: String = {
+        // Fault-safe UTF-16 decoder shared by the builder-output log and the slot readback.
+        let decode_u16 = |data: usize, size: usize| -> String {
             let mut s = String::new();
-            if req_dir_data != null && req_dir_size != 0 && req_dir_size <= REQ_DIR_SANE_MAX_CU {
-                // Read 8-byte words via the fault-safe reader and split into char16 code units.
-                let words = req_dir_size.div_ceil(4);
+            if data != null && size != 0 && size <= REQ_DIR_SANE_MAX_CU {
+                let words = size.div_ceil(4);
                 'decode: for w in 0..words {
-                    let Some(word) = (unsafe { safe_read_usize(req_dir_data + w * 8) }) else {
+                    let Some(word) = (unsafe { safe_read_usize(data + w * 8) }) else {
                         break;
                     };
                     for b in 0..4 {
                         let cu = ((word >> (b * 16)) & 0xffff) as u16;
-                        if cu == 0 || w * 4 + b >= req_dir_size {
+                        if cu == 0 || w * 4 + b >= size {
                             break 'decode;
                         }
                         s.push(char::from_u32(cu as u32).unwrap_or('?'));
@@ -1464,8 +1452,78 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
             }
             s
         };
+        // Build the canonical `<userdata>/EldenRing/<steamid>/` into a stack-resident MSVC
+        // stateful-allocator u16string wrapper (allocator@+0, data@+0x08, size@+0x18, cap@+0x20).
+        // The builder ASSUMES a pre-constructed empty string, so install the arena allocator at +0
+        // and cap=7 (empty SSO) first. [u64;8] guarantees 8-byte alignment for the field writes.
+        let mut wrapper = [0u64; 8];
+        let wbase = wrapper.as_mut_ptr() as usize;
+        let alloc_getter: unsafe extern "system" fn() -> usize =
+            unsafe { std::mem::transmute(base + SAVE_DIR_ALLOC_GETTER_RVA) };
+        let allocator = unsafe { alloc_getter() };
+        unsafe {
+            *((wbase + U16STRING_ALLOC_OFFSET) as *mut usize) = allocator;
+            *((wbase + U16STRING_CAP_OFFSET) as *mut usize) = U16STRING_SSO_CAP;
+        }
+        // Guard: the builder derefs the Steam interface (*0x143b48ff0) for the account id; skip the
+        // call (logging the cause) if it is null cold -- that would be hypothesis-2 (Steam not live).
+        let steam_iface = unsafe { safe_read_usize(base + STEAM_INTERFACE_GUARD_RVA) }.unwrap_or(null);
+        if steam_iface != null && allocator != null {
+            let builder: unsafe extern "system" fn(usize) =
+                unsafe { std::mem::transmute(base + SAVE_DIR_BUILDER_RVA) };
+            unsafe { builder(wbase) };
+        }
+        let dir_cap = unsafe { *((wbase + U16STRING_CAP_OFFSET) as *const usize) };
+        let dir_size = unsafe { *((wbase + U16STRING_SIZE_OFFSET) as *const usize) };
+        let dir_data = if dir_cap >= 8 {
+            unsafe { *((wbase + U16STRING_DATA_OFFSET) as *const usize) }
+        } else {
+            wbase + U16STRING_DATA_OFFSET
+        };
+        let built_text = decode_u16(dir_data, dir_size);
         append_autoload_debug(format_args!(
-            "cold-char-mount: REQ-DIR-READBACK io18=0x{io18:x} dir[+0xe8]=0x{req_dir_data:x} size[+0xf8]={req_dir_size} text=\"{req_dir_text}\" (size>0 & sane = request has a directory; size=0/unreadable = empty/malformed -> open fails fast)"
+            "cold-char-mount: SAVE-DIR BUILD steam_iface=0x{steam_iface:x} allocator=0x{allocator:x} cap={dir_cap} size={dir_size} data=0x{dir_data:x} text=\"{built_text}\" (size>0 & real path = builder works cold = hypothesis-1 handler-never-ran; size=0 = Steam not live cold = hypothesis-2)"
+        ));
+        // Install on the LIVE path-DB slot-0 directory. The setter COPIES our buffer into the slot
+        // entry's std::u16string at entry+0xb0 (via 0x14240dce0), so our stack wrapper can be dropped.
+        let setter: unsafe extern "system" fn(usize, i32, usize) =
+            unsafe { std::mem::transmute(base + SAVE_DIR_SETTER_RVA) };
+        let set_fired =
+            io20 != null && dir_data != null && dir_size > 0 && dir_size <= REQ_DIR_SANE_MAX_CU;
+        if set_fired {
+            unsafe { setter(io20, want_slot, dir_data) };
+        }
+        // Readback: re-resolve the slot entry (lookup is find-or-create, idempotent post-setter) and
+        // decode its directory at entry+0xb0 to confirm the install landed. The dir there is a bare
+        // (stateless-allocator) u16string: data union at +0, size at +0x10.
+        let coll = if io20 != null { unsafe { safe_read_usize(io20) }.unwrap_or(null) } else { null };
+        let key = if io20 != null {
+            unsafe { safe_read_usize(io20 + 8) }.unwrap_or(0) as i32
+        } else {
+            0
+        };
+        let entry = if coll != null && set_fired {
+            let lookup: unsafe extern "system" fn(usize, i32) -> usize =
+                unsafe { std::mem::transmute(base + SAVE_DIR_SLOT_LOOKUP_RVA) };
+            unsafe { lookup(coll, key) }
+        } else {
+            null
+        };
+        let (rb_data, rb_size) = if entry != null {
+            let cap = unsafe { safe_read_usize(entry + 0xb0 + 0x18) }.unwrap_or(0);
+            let size = unsafe { safe_read_usize(entry + 0xb0 + 0x10) }.unwrap_or(0);
+            let data = if cap >= 8 {
+                unsafe { safe_read_usize(entry + 0xb0) }.unwrap_or(null)
+            } else {
+                entry + 0xb0
+            };
+            (data, size)
+        } else {
+            (null, 0)
+        };
+        let rb_text = decode_u16(rb_data, rb_size);
+        append_autoload_debug(format_args!(
+            "cold-char-mount: SAVE-DIR INSTALL set_fired={set_fired} io20=0x{io20:x} coll=0x{coll:x} key={key} entry=0x{entry:x} readback size={rb_size} text=\"{rb_text}\" (set_fired & readback matches the built path = slot-0 dir installed -> the full read should now find the .sl2 -> b80->3)"
         ));
         MOUNT_WAITS.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
         MOUNT_PHASE.store(PHASE_POLL, Ordering::SeqCst);

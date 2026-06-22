@@ -1659,24 +1659,40 @@ pub(crate) const IODEV_GETTER_RVA: usize = 0xe6e060;
 /// `.sl2`). The LIVE title->Continue boot populates that directory via the iodev state
 /// machine (opcode 0x17/0x18 handler 0x140e6ded0): it builds `<userdata>/EldenRing/<steamid>/`
 /// then installs it on the path DB. The menu-free cold path skips that opcode, so the
-/// directory is never set. We replay the two native steps directly before the submit:
-///   1. SAVE_DIR_BUILDER 0x140e0e680(rcx=&out_u16string) -> out (RVO): self-fetches the
-///      userdata folder (SHGetFolderPathW CSIDL 0x1a) + Steam id (0x140e8d550) and formats
-///      `%s/EldenRing/%s/` (fmt @0x142bda858) into out. Guarded by the Steam interface
-///      pointer *0x143b48ff0 being non-null (else it would deref null).
-///   2. SAVE_DIR_SETTER 0x14240a2a0(rcx=[iodev+0x20] path-DB, edx=slot=0, r8=&out): stores
-///      the directory into the path database (via 0x14240dce0 -> +0xb0) -- exactly what the
-///      opcode-0x17/0x18 handler does. The request copy-ctor then inherits a valid directory.
+/// directory is never set. PRE-submit replay is REFUTED (io20=[iodev+0x20] is NULL before
+/// submit; bd b80-COLD-FIX-REFUTED-...). The correct replay is POST-submit, on the LIVE
+/// io20, in the SAME game-task invocation (tightest race vs the worker drain):
+///   1. SAVE_DIR_BUILDER 0x140e0e680(rcx=&wrapper): self-fetches the userdata folder
+///      (SHGetFolderPathW CSIDL 0x1a) + Steam id (0x140e8d550) and formats `%s/EldenRing/%s/`
+///      (fmt @0x142bda858) into the wrapper. Guarded by the Steam interface pointer
+///      *0x143b48ff0 being non-null (else it would deref null).
+///   2. SAVE_DIR_SETTER 0x14240a2a0(rcx=io20 path-DB, edx=slot=0, r8=raw char16_t*): stores
+///      the directory into the path database (via 0x14240dce0 -> entry+0xb0, which COPIES
+///      our buffer) -- exactly what the opcode-0x17/0x18 handler does. r8 is the RAW data
+///      pointer (cap>=8 ? heap ptr @+0x08 : &SSO @+0x08), NOT the wrapper object.
 pub(crate) const SAVE_DIR_BUILDER_RVA: usize = 0xe0e680;
 pub(crate) const SAVE_DIR_SETTER_RVA: usize = 0x240a2a0;
+/// The wrapper's stateful allocator getter (0x141eba960): `call 0x141ebb680; add rax,0x28`
+/// -- a trivial singleton accessor returning the arena ptr SAVE_DIR_BUILDER stores at the
+/// wrapper's +0x00 (the string's stateful allocator). Must be installed before the builder.
+pub(crate) const SAVE_DIR_ALLOC_GETTER_RVA: usize = 0x1eba960;
+/// Path-DB slot-entry lookup (0x14240c270): rcx=collection ([io20]), edx=key ([io20+8]) ->
+/// entry (find-or-create; idempotent post-setter). The setter writes the directory into
+/// `entry+0xb0`. Used for the post-setter readback.
+pub(crate) const SAVE_DIR_SLOT_LOOKUP_RVA: usize = 0x240c270;
 /// Steam-interface guard pointer (abs 0x143b48ff0): SAVE_DIR_BUILDER derefs the Steam
 /// interface to read the account id; if this is null the builder must be skipped.
 pub(crate) const STEAM_INTERFACE_GUARD_RVA: usize = 0x3b48ff0;
-/// MSVC `std::basic_string<char16_t>` layout (0x20 bytes): SSO buffer/heap-ptr union at +0,
-/// _Mysize (length in code units) at +0x10, _Myres (capacity) at +0x18. A default-empty
-/// string has _Mysize=0 and _Myres=7 (the 8-element SSO buffer holds 7 chars + NUL).
-pub(crate) const U16STRING_SIZE_OFFSET: usize = 0x10;
-pub(crate) const U16STRING_CAP_OFFSET: usize = 0x18;
+/// SAVE_DIR_BUILDER's output is a MSVC `basic_string<char16_t, ..., StatefulAllocator>`
+/// (the stateful allocator occupies the first member): allocator ptr at +0x00, the _Bx
+/// SSO/heap union at +0x08 (8 char16 SSO when cap<8, else `char16_t*`), _Mysize (code units)
+/// at +0x18, _Myres (capacity) at +0x20. A default-empty string has size=0 and cap=7. The
+/// builder ASSUMES a pre-constructed empty string, so we pre-init allocator/+0x20=7 before
+/// the call. (This differs from a stateless-allocator string whose data union is at +0x00.)
+pub(crate) const U16STRING_ALLOC_OFFSET: usize = 0x00;
+pub(crate) const U16STRING_DATA_OFFSET: usize = 0x08;
+pub(crate) const U16STRING_SIZE_OFFSET: usize = 0x18;
+pub(crate) const U16STRING_CAP_OFFSET: usize = 0x20;
 pub(crate) const U16STRING_SSO_CAP: usize = 7;
 /// [iodev+0x40] = the device-ready/bound byte flag (0 cold; set by the mount above).
 pub(crate) const IODEV_READY_FLAG_40_OFFSET: usize = 0x40;
