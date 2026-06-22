@@ -26,10 +26,12 @@ ER0000.sl2  =  one BND4 container
                       NO encryption -- the 16 bytes are an integrity checksum
 ```
 
-The 12 entries are named `USER_DATA_000` ... `USER_DATA_011`:
-- `USER_DATA_000` ... `USER_DATA_009` -> the **10 character slots** (what we load).
-- `USER_DATA_010` -> small **common/settings** block.
-- `USER_DATA_011` -> **general/profile** block (menu-visible slot list, steam id, etc.).
+The 12 entries are named `USER_DATA000` ... `USER_DATA011` (single underscore,
+inside "USER_DATA" -- the trailing index has NO separating underscore; verified
+against the on-disk name table, see SS4):
+- `USER_DATA000` ... `USER_DATA009` -> the **10 character slots** (what we load).
+- `USER_DATA010` -> small **common/settings** block.
+- `USER_DATA011` -> **general/profile** block (menu-visible slot list, steam id, etc.).
 
 ---
 
@@ -79,12 +81,12 @@ Real entries:
 
 | # | name          | dataOffset | entry size (`+0x08`) | body size (after MD5) | role |
 |---|---------------|-----------|----------------------|-----------------------|------|
-| 0 | USER_DATA_000 | 0x000300  | 0x280010             | **0x280000**          | char slot 0 |
-| 1 | USER_DATA_001 | 0x280310  | 0x280010             | 0x280000              | char slot 1 |
+| 0 | USER_DATA000  | 0x000300  | 0x280010             | **0x280000**          | char slot 0 |
+| 1 | USER_DATA001  | 0x280310  | 0x280010             | 0x280000              | char slot 1 |
 | ... | ...         | ...        | 0x280010             | 0x280000              | char slots 2-8 |
-| 9 | USER_DATA_009 | 0x1680390 | 0x280010             | 0x280000              | char slot 9 |
-| 10| USER_DATA_010 | 0x19003a0 | 0x060010             | 0x060000              | common/settings |
-| 11| USER_DATA_011 | 0x19603b0 | 0x240020             | 0x240010              | general/profile |
+| 9 | USER_DATA009  | 0x1680390 | 0x280010             | 0x280000              | char slot 9 |
+| 10| USER_DATA010  | 0x19003a0 | 0x060010             | 0x060000              | common/settings |
+| 11| USER_DATA011  | 0x19603b0 | 0x240020             | 0x240010              | general/profile |
 
 - Slot `N`'s entry = `[dataOffset(N) .. dataOffset(N)+0x280010)` = `[0x10 MD5][0x280000 body]`.
 - `dataOffset(N+1) = dataOffset(N) + 0x280010` for the slots (they're contiguous).
@@ -98,7 +100,9 @@ Real entries:
 
 Each `nameOffset` points here. Names are UTF-16LE, e.g. bytes at 0x1C0:
 `55 00 53 00 45 00 52 00 5F 00 44 00 41 00 54 00 41 00 30 00 30 00 30 00 00 00`
-= `"USER_DATA_000"` + UTF-16 NUL. They run consecutively `USER_DATA_000`...`USER_DATA_011`.
+= `U S E R _ D A T A 0 0 0` = `"USER_DATA000"` + UTF-16 NUL (note: exactly ONE
+`5F` '_' per name -- the index "000" has no leading underscore). They run
+consecutively `USER_DATA000`...`USER_DATA011`.
 
 ---
 
@@ -142,7 +146,7 @@ The body (`dataOffset + 0x10` .. `+0x280010`, i.e. `0x280000` bytes after the MD
 ## 7. How this feeds the OWN-LOAD plan (simplified -- no decrypt)
 
 1. Read `ER0000.sl2` (path `.../EldenRing/<steamid>/ER0000.sl2`; folder from builder `0x140e0e680`).
-2. Parse the BND4 header + entry headers (SS2-3) -> locate `USER_DATA_00<slot>` (dataOffset).
+2. Parse the BND4 header + entry headers (SS2-3) -> locate `USER_DATA00<slot>` (dataOffset).
 3. Take the **plaintext body** = `file[dataOffset+0x10 .. dataOffset+0x10+0x280000]`. (Optionally
    verify `md5(body)` == the 16-byte prefix.) **No decryption.**
 4. Feed that body to the engine parser (replicate `0x67b290`'s post-read body on it -- bd

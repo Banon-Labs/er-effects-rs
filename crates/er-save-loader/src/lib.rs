@@ -2,6 +2,8 @@ use std::{fs, path::PathBuf};
 
 use er_safe_input::{SafeButton, SafeInputAction, SafeInputConfig, SafeInputError};
 
+pub mod bnd4;
+
 const INITIAL_ATTEMPTS: u64 = 0;
 const ATTEMPT_INCREMENT: u64 = 1;
 const IDLE_SAVE_STATE: u32 = 0;
@@ -987,6 +989,8 @@ mod tests {
             slot: Some(TEST_SLOT),
             method: SaveLoadMethod::Both,
             require_title_bootstrap: REQUIRE_TITLE_BOOTSTRAP_DEFAULT,
+            own_stepper: false,
+            cold_char_mount: false,
         });
 
         let step = unsafe {
@@ -1017,6 +1021,8 @@ mod tests {
             slot: Some(TEST_SLOT),
             method: SaveLoadMethod::DirectMenuLoad,
             require_title_bootstrap: REQUIRE_TITLE_BOOTSTRAP_DEFAULT,
+            own_stepper: false,
+            cold_char_mount: false,
         });
 
         let step = unsafe {
