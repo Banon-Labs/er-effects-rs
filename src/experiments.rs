@@ -1199,6 +1199,8 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
     const WAIT_INC: usize = 1;
     static MOUNT_PHASE: AtomicUsize = AtomicUsize::new(PHASE_INIT);
     static MOUNT_WAITS: AtomicUsize = AtomicUsize::new(0);
+    // Fire the warm FD4 worker-kick (0x67b4e0) at most once per process.
+    static WARM_KICK_FIRED: AtomicUsize = AtomicUsize::new(0);
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if gm == null {
         return;
@@ -1629,6 +1631,121 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
         let _ = unsafe { poll(POLL_ARG, POLL_ARG) };
         let b80 = read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET);
         let w = MOUNT_WAITS.fetch_add(WAIT_INC, Ordering::SeqCst);
+        // WARM WORKER-KICK (bd b80-WARM-kick-0x14067b4e0-worker-0x140e6ec80). The cold submit
+        // 0x67b1a0 only request_transitions state 0xa, so the owner-FSM node parks at idx 0x16 (an
+        // async device-read node) and NOTHING pumps it: the node advances ONLY via the FD4 worker
+        // that the warm Continue step (0x14082ba30) builds by calling 0x67b4e0(cl=0). That kick mints
+        // a handle (0x141ed5fe0), captures it to GameMan+0xb98/0xba0, then 0x140e6ec80 subscribes the
+        // node-advance callback to events 0x7..0x12 AND submits the real save-read as an FD4 job-pool
+        // job (engine-wide, NOT menu-gated). On the menu-free cold path that kick never runs. Fire it
+        // ONCE here -- b80 has bounced to 0, satisfying 0x67b4e0's b80==0 guard -- to pump the parked
+        // node to completion. SAVE-SAFE: it submits a READ job; no save write. The single warm caller
+        // passes cl=0 (xor ecx,ecx at 0x14082ba39).
+        if b80 == B80_IDLE
+            && WARM_KICK_FIRED.swap(WAIT_INC, Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS
+        {
+            const NODE_FINALIZER_RVA: usize = 0xe6f200;
+            const WARM_LOAD_KICK_RVA: usize = 0x67b4e0;
+            const GAME_MAN_LOAD_HANDLE_B98_OFFSET: usize = 0xb98;
+            const GAME_MAN_LOAD_HANDLE_BA0_OFFSET: usize = 0xba0;
+            // RUNTIME-PROVEN cold gate (bd b80-WARM-kick-runtime-0x140e6ec80-returns0-cold): the
+            // worker-builder 0x140e6ec80 (inside the kick) returns al=0 unless BOTH [owner+0x10]==0
+            // (worker) AND [owner+0x20]==0 (node) -- it only builds when nothing exists yet. In the
+            // warm path the worker is built BEFORE the node; our cold flow built the parked node
+            // first (owner+0x20 = io20, non-null), so the kick bailed (ret=0, no FD4 job). Clear the
+            // parked node via the finalizer 0x140e6f200 (zeroes owner+0x10/+0x18/+0x20 -- the same
+            // teardown the idx-0x14 success path runs) so the kick rebuilds worker+node cleanly and
+            // submits the real FD4 read job. owner = iodev = *0x144589390.
+            let owner = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
+            let (o10_pre, o20_pre) = if owner != null {
+                unsafe {
+                    (
+                        safe_read_usize(owner + IODEV_INFLIGHT_10_OFFSET).unwrap_or(null),
+                        safe_read_usize(owner + IODEV_REQHANDLE_20_OFFSET).unwrap_or(null),
+                    )
+                }
+            } else {
+                (null, null)
+            };
+            if owner != null {
+                let finalizer: unsafe extern "system" fn(usize) =
+                    unsafe { std::mem::transmute(base + NODE_FINALIZER_RVA) };
+                unsafe { finalizer(owner) };
+            }
+            let o20_post = if owner != null {
+                unsafe { safe_read_usize(owner + IODEV_REQHANDLE_20_OFFSET) }.unwrap_or(null)
+            } else {
+                null
+            };
+            let kick: unsafe extern "system" fn(u8) -> u8 =
+                unsafe { std::mem::transmute(base + WARM_LOAD_KICK_RVA) };
+            let kret = unsafe { kick(0) };
+            let b98 = unsafe { *((gm + GAME_MAN_LOAD_HANDLE_B98_OFFSET) as *const usize) };
+            let ba0 = unsafe { *((gm + GAME_MAN_LOAD_HANDLE_BA0_OFFSET) as *const usize) };
+            append_autoload_debug(format_args!(
+                "cold-char-mount: WARM-KICK finalize 0x{:x}(owner=0x{owner:x}) o10 0x{o10_pre:x} o20 0x{o20_pre:x}->0x{o20_post:x} | KICK 0x{:x}(cl=0) ret={kret} b80={} b98=0x{b98:x} ba0=0x{ba0:x} (o20_post=0 then ret=1 & b80->1 = FD4 read job submitted -> node advances idx->0x14 -> b80=3)",
+                base + NODE_FINALIZER_RVA,
+                base + WARM_LOAD_KICK_RVA,
+                read_i32(GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET)
+            ));
+        }
+        // PUMP the node advance each frame (bd b80-owner-FSM-node-idx16-decoded). After the warm kick
+        // the node advanced 0x16->0x15 and cleared the final-gate deep field (4->0), but parks: idx
+        // 0x15/0x16 are no-op poll stubs (handler 0x140e6e274 = mov eax,1;ret); the node advances ONLY
+        // via its own advance method (node vtable 0x1431fc640 slot1 = 0x142411aa0), normally fired by
+        // the FD4 event dispatcher -- which the menu-free cold path may not service. Drive it directly
+        // (node = current-node lookup 0x14240c270([io20],[io20+8])) until idx reaches 0x14, where the
+        // poll's success handler 0x140e6e28a sees the cleared deep field and sets b80=3. SAVE-SAFE
+        // (advances an in-flight READ job; no save write).
+        if WARM_KICK_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS {
+            const CURRENT_NODE_LOOKUP_RVA: usize = 0x240c270;
+            const NODE_ADVANCE_RVA: usize = 0x2411aa0;
+            let owner_p = unsafe { *((base + IODEV_GLOBAL_RVA) as *const usize) };
+            let io20_p = if owner_p != null {
+                unsafe { safe_read_usize(owner_p + IODEV_REQHANDLE_20_OFFSET) }.unwrap_or(null)
+            } else {
+                null
+            };
+            let container = if io20_p != null {
+                unsafe { safe_read_usize(io20_p) }.unwrap_or(null)
+            } else {
+                null
+            };
+            if container != null {
+                let key = unsafe { safe_read_usize(io20_p + 8) }.unwrap_or(0) as i32;
+                let lookup: unsafe extern "system" fn(usize, i32) -> usize =
+                    unsafe { std::mem::transmute(base + CURRENT_NODE_LOOKUP_RVA) };
+                let cur_node = unsafe { lookup(container, key) };
+                if cur_node != null {
+                    let advance: unsafe extern "system" fn(usize) =
+                        unsafe { std::mem::transmute(base + NODE_ADVANCE_RVA) };
+                    unsafe { advance(cur_node) };
+                    // Pin WHY the node parks at 0x15: read its IO sub-object (node+0x1d8 = the async
+                    // device-read job; NULL = job never created), error byte (node+0xad), op-state
+                    // ([node+0xa0]+0x10), real-index (node+0x98), and whether the FD4 job pools are
+                    // present (*0x143d87310/308/2e0). NULL job or null pools => read never dispatched
+                    // (worker thread not servicing cold); non-null job stuck => read failing (bad path).
+                    if w % LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS {
+                        let io_job =
+                            unsafe { safe_read_usize(cur_node + 0x1d8) }.unwrap_or(usize::MAX);
+                        let errb = unsafe { *((cur_node + 0xad) as *const u8) };
+                        let nidx =
+                            unsafe { safe_read_usize(cur_node + 0x98) }.unwrap_or(usize::MAX);
+                        let opbase = unsafe { safe_read_usize(cur_node + 0xa0) }.unwrap_or(null);
+                        let opstate = if opbase != null {
+                            unsafe { safe_read_usize(opbase + 0x10) }.unwrap_or(usize::MAX)
+                        } else {
+                            usize::MAX
+                        };
+                        let pool_310 = unsafe { safe_read_usize(base + 0x3d87310) }.unwrap_or(null);
+                        let pool_2e0 = unsafe { safe_read_usize(base + 0x3d872e0) }.unwrap_or(null);
+                        append_autoload_debug(format_args!(
+                            "cold-char-mount: NODE waits={w} node=0x{cur_node:x} idx[+0x98]=0x{nidx:x} io_job[+0x1d8]=0x{io_job:x} errb[+0xad]={errb} op[[+0xa0]+0x10]=0x{opstate:x} pool310=0x{pool_310:x} pool2e0=0x{pool_2e0:x} (io_job=0=read-never-dispatched; nonzero stuck=read-failing)"
+                        ));
+                    }
+                }
+            }
+        }
         if w % LOG_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS {
             let (io10, io18, io20) = iodev_summary();
             // Track the owner-FSM state index + deep gate field across poll frames (bd
