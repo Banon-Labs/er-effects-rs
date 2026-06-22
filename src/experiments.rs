@@ -1258,6 +1258,26 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
         append_autoload_debug(format_args!(
             "cold-char-mount: SOURCE-PROBE SLLoadContent[*0x143d87358]=0x{src1:x} src2[*0x143d872e0]=0x{src2:x} owner=0x{owner_probe:x} owner8=0x{owner8:x} (non-null source needed for a safe public requestLoad 0x14240ac00)"
         ));
+        // SLSYS-PROBE (read-only): is the SaveLoad2 SLSystemImpl + its SESSION MANAGER built cold? If
+        // the session manager (sysimpl+0x8) is NULL, requestLoad derefs null -> that explains the
+        // off-thread crash, and the NARROW menu-free fix is to call SaveLoad2 initialize first (build
+        // the manager) before any load. If it's already built+ready (sysimpl+0x19!=0), the crash is a
+        // deeper threading issue and the synthetic path is a real dead end. *0x144852f88 = SLSystemImpl
+        // ptr; +0x8 = SLSessionManager; +0x10 = device/result table; +0x19 = manager-ready flag.
+        const SLSYSTEMIMPL_PTR_RVA: usize = 0x4852f88;
+        let sysimpl = unsafe { safe_read_usize(base + SLSYSTEMIMPL_PTR_RVA) }.unwrap_or(null);
+        let (sl_mgr, sl_tbl, sl_ready) = if sysimpl != null {
+            let m = unsafe { safe_read_usize(sysimpl + 0x8) }.unwrap_or(null);
+            let t = unsafe { safe_read_usize(sysimpl + 0x10) }.unwrap_or(null);
+            let r = unsafe { safe_read_usize(sysimpl + 0x18) }.unwrap_or(0);
+            // +0x19 is a byte within the +0x18 qword (manager-ready flag).
+            (m, t, (r >> 8) & 0xff)
+        } else {
+            (null, null, 0xff)
+        };
+        append_autoload_debug(format_args!(
+            "cold-char-mount: SLSYS-PROBE SLSystemImpl[*0x144852f88]=0x{sysimpl:x} sessionMgr[+0x8]=0x{sl_mgr:x} table[+0x10]=0x{sl_tbl:x} ready[+0x19]={sl_ready} (sessionMgr=0 => requestLoad null-derefs = need SaveLoad2 initialize first = NARROW menu-free fix; built+ready => deeper dead end)"
+        ));
         // (-1) Set the save-file path/name on the container so the device read returns slot N's REAL
         // .sl2 bytes. The native Continue handler runs this slot-mgr peek 0x140678a50 FIRST (reads
         // [GameDataMan+0x8] container, sync-reads the save path token 0x47054, copies the name to
