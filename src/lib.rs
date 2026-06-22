@@ -760,6 +760,13 @@ pub(crate) const SUBMIT_PHASE_DONE: i32 = 3;
 pub(crate) const MOVEMAPSTEP_UPDATE_RVA: usize = 0xaff640;
 pub(crate) const INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET: usize = 0xe8;
 pub(crate) const INGAMESTEP_PENDING_D8_PENDING: i32 = 1;
+/// play_game_submit-handoff discriminators on the InGameStep object (own-load-worldreswait-is-block-
+/// registration-not-coord-2026-06-22). play_game_submit 0x140aebdc0 sets InGameStep+0xd8=1 and
+/// InGameStep+0x100=requested BlockId. So reading these PURELY (no call) tells us whether the native
+/// request handoff ran: +0x100 == the saved BlockId (e.g. 0x1c000000) means play_game_submit primed
+/// the m28 request; +0x100 == 0/unset means it did NOT. +0xd8 is the matching pending phase byte.
+pub(crate) const INGAMESTEP_PHASE_D8_OFFSET: usize = 0xd8;
+pub(crate) const INGAMESTEP_REQ_BLOCKID_100_OFFSET: usize = 0x100;
 /// Native b80 load INITIATOR 0x14067b4e0(ecx=slot): begins the async slot-IO read
 /// and sets GameMan+0xb80=1. The scheduler ticks CSTaskGroup 20 (MoveMapStep) every
 /// frame (fd4-scheduler-no-group-active-gate-runs-all-2026), so once initiated the
@@ -862,6 +869,24 @@ pub(crate) const WORLDRES_COORD_2C_OFFSET: usize = 0x2c;
 pub(crate) const WORLDRES_BLOCK_ARRAY_B3030_OFFSET: usize = 0xb3030;
 pub(crate) const BLOCK_ENTRY_AREAOBJ_8_OFFSET: usize = 0x8;
 pub(crate) const BLOCK_AREAOBJ_AREA_C_OFFSET: usize = 0xc;
+/// Recurring-observer aliases for the same resmgr block-array layout, named per the registration-vs-
+/// streaming probe (own-load-worldreswait-is-block-registration-not-coord-2026-06-22). Defined as
+/// aliases so the offsets live in exactly one place (no duplicated magic numbers). The recurring
+/// observer scans base_arr = resmgr + RESMGR_BLOCK_ARRAY_B3030_OFFSET, stride 8, and for each
+/// non-null block reads inner = *(block + BLOCK_INNER_8_OFFSET) then areaId = *(inner +
+/// BLOCK_AREA_C_OFFSET) as u8 -- PURE READS, NO block->vtable call this round.
+pub(crate) const RESMGR_BLOCK_ARRAY_B3030_OFFSET: usize = WORLDRES_BLOCK_ARRAY_B3030_OFFSET;
+pub(crate) const BLOCK_INNER_8_OFFSET: usize = BLOCK_ENTRY_AREAOBJ_8_OFFSET;
+pub(crate) const BLOCK_AREA_C_OFFSET: usize = BLOCK_AREAOBJ_AREA_C_OFFSET;
+/// The target areaId is DERIVED from the requested block coord (wrm+0x2c / req_coord), not
+/// hardcoded: areaId = (block_coord >> TARGET_AREA_FROM_COORD_SHIFT) & TARGET_AREA_FROM_COORD_MASK.
+/// For the m28 save the low dword is 0x1c000000 so this yields 0x1c, but the value is data-driven.
+pub(crate) const TARGET_AREA_FROM_COORD_SHIFT: u32 = 24;
+pub(crate) const TARGET_AREA_FROM_COORD_MASK: u32 = 0xff;
+/// Cap the recurring observer's block-array scan at min(block_count, this) for safety.
+pub(crate) const OBSERVER_BLOCK_SCAN_CAP: i64 = 64;
+/// How many distinct areaIds the observer collects for the log line.
+pub(crate) const OBSERVER_AREAID_SAMPLE_MAX: usize = 8;
 pub(crate) const TARGET_AREA_M10: i32 = 0x0a;
 pub(crate) const BLOCK_SCAN_MAX: i32 = 64;
 pub(crate) const BLOCK_ENTRY_STRIDE: usize = 8;
@@ -3291,7 +3316,14 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // task is the ONLY place that keeps logging the world-stream pump THROUGH the loading
                 // screen. Runs BEFORE the player check so it ticks while there is no player yet (the
                 // loading-screen frames are exactly when player_present is false). Pure reads only.
-                if own_load_enabled() && OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst) {
+                // GOLDEN baseline mode (golden_observe_enabled) ALSO drives the observer even though our
+                // continue never fired, so a NORMAL user-driven vanilla load is captured for diffing
+                // against the menu-free OWN-LOAD stall. The observer self-gates and re-resolves the
+                // owner->InGameStep->MoveMapStep chain live from OWN_LOAD_OWNER_CACHED (filled by
+                // own_stepper_idx10 each title frame in golden mode). OBSERVE-ONLY: no load is fired.
+                if (own_load_enabled() && OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst))
+                    || golden_observe_enabled()
+                {
                     if let Ok(base) = game_module_base() {
                         let gm = game_man_ptr_or_null();
                         let player_present = unsafe { PlayerIns::local_player_mut() }.is_ok();

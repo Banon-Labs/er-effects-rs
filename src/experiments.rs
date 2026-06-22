@@ -143,6 +143,20 @@ pub(crate) static OWN_LOAD_STREAM_FRAMES: AtomicU64 = AtomicU64::new(0);
 /// loading screen -> spawn transition (or its absence) alongside mms_state/block_count.
 pub(crate) static OWN_LOAD_STREAM_PLAYER_PRESENT: std::sync::atomic::AtomicI64 =
     std::sync::atomic::AtomicI64::new(OWN_LOAD_STREAM_FIELD_UNREAD);
+/// InGameStep+0xd8 pending phase byte, read PURELY by the recurring observer (no call). Together with
+/// the requested BlockId below it discriminates whether play_game_submit's handoff ran. UNREAD if the
+/// InGameStep handle is null. (own-load-worldreswait-is-block-registration-not-coord-2026-06-22)
+pub(crate) static OWN_LOAD_STREAM_INGAME_PHASE: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(OWN_LOAD_STREAM_FIELD_UNREAD);
+/// InGameStep+0x100 requested BlockId (u32), read PURELY. == the saved BlockId (e.g. 0x1c000000) when
+/// play_game_submit primed the request; 0/unset when it did not. UNREAD if InGameStep is null.
+pub(crate) static OWN_LOAD_STREAM_REQ_BLOCKID: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(OWN_LOAD_STREAM_FIELD_UNREAD);
+/// 1 == a block whose areaId equals the coord-derived target area (e.g. 0x1c for m28) is REGISTERED
+/// in [resmgr+0xb3030]; 0 == absent (registration gap). UNREAD if the resmgr/scan chain is null. The
+/// presence/absence of this block is THE discriminator (registration gap vs streaming gap).
+pub(crate) static OWN_LOAD_STREAM_TARGET_BLOCK_PRESENT: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(OWN_LOAD_STREAM_FIELD_UNREAD);
 /// Set true the instant `own_load_continue_fire` returns from the native continue_confirm (SetState5
 /// started the title->ingame transition). The RECURRING game task gates its world-stream observer on
 /// this flag so it keeps logging THROUGH the loading screen -- own_stepper_idx10 (a TITLE-PHASE task)
@@ -1150,6 +1164,25 @@ pub(crate) fn own_load_enabled() -> bool {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("er-effects-own-load.txt")
             .exists()
+}
+
+/// GOLDEN BASELINE world-stream observe mode (er-effects-golden-observe.txt / ER_EFFECTS_GOLDEN_OBSERVE).
+/// OFF by default; purely ADDITIVE and OBSERVE-ONLY -- it fires NO continue/SetState5/load of any kind.
+/// When armed, the SAME recurring world-stream observer (`own_load_stream_observe_recurring`) runs on a
+/// NORMAL (vanilla, menu-driven) load too, so we can capture a GOLDEN baseline to diff against the
+/// menu-free OWN-LOAD stall. On a vanilla load neither `OWN_LOAD_CONTINUE_FIRED` nor the cached
+/// pointers from our continue_confirm are set, so golden mode instead has `own_stepper_idx10` cache the
+/// live TITLE owner into `OWN_LOAD_OWNER_CACHED` every title frame (the owner pointer is stable), and
+/// the observer re-derives InGameStep/MoveMapStep LIVE from that owner each frame (its existing
+/// `ingame_cached == 0` fallback) as the vanilla load builds the world.
+pub(crate) fn golden_observe_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_GOLDEN_OBSERVE").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-golden-observe.txt")
+        .exists()
 }
 
 /// Whether the FINAL guarded `continue_confirm`/`SetState5` world-stream step is armed. SAVE-WRITING
@@ -2347,9 +2380,12 @@ unsafe fn own_load_stream_telemetry(base: usize, gm: usize, title_owner: usize, 
 
 /// SAVE-SAFE RECURRING world-stream observer, called from the per-frame GAME TASK (NOT the
 /// title-phase own_stepper_idx10, which stops ticking once SetState5 starts the title->ingame
-/// transition). Gated hard on `OWN_LOAD_CONTINUE_FIRED` so it only runs after the guarded
-/// continue_confirm fired -- it never spams during normal play. PURE READS ONLY (safe_read_*; never
-/// changes load behavior).
+/// transition). Runs when `OWN_LOAD_CONTINUE_FIRED` (our menu-free OWN-LOAD path) OR
+/// `golden_observe_enabled()` (GOLDEN baseline mode observing a user-driven vanilla load) is set, so it
+/// never spams during normal play. PURE READS ONLY (safe_read_*; never changes load behavior). In
+/// golden mode `OWN_LOAD_OWNER_CACHED` is filled by own_stepper_idx10 each title frame and the cached
+/// InGameStep stays 0, so the live `ingame_cached == 0` re-derivation below resolves the chain fresh
+/// every frame as the vanilla load builds the world.
 ///
 /// It re-reads the world-stream from the CACHED title owner + InGameStep (snapshotted at fire time),
 /// NOT from a fresh own_stepper owner, so it keeps observing through the whole loading screen:
@@ -2371,7 +2407,11 @@ pub(crate) unsafe fn own_load_stream_observe_recurring(
     gm: usize,
     player_present: bool,
 ) {
-    if !OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst) {
+    // Run after our own continue_confirm fired (OWN-LOAD path) OR in GOLDEN baseline mode (observing a
+    // user-driven vanilla load). Golden mode supplies `owner` via own_stepper_idx10's per-frame cache
+    // and leaves the cached InGameStep at 0, so the `ingame_cached == 0` fallback below re-derives the
+    // chain LIVE each frame. Either way this stays pure-read and never changes load behavior.
+    if !OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst) && !golden_observe_enabled() {
         return;
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -2449,6 +2489,68 @@ pub(crate) unsafe fn own_load_stream_observe_recurring(
         OWN_LOAD_STREAM_FIELD_UNREAD
     };
     let player_present_i64 = i64::from(player_present);
+    // play_game_submit handoff discriminators (PURE READS, no call). InGameStep+0xd8 = pending phase,
+    // InGameStep+0x100 = requested BlockId. req_blockid == saved BlockId means play_game_submit ran;
+    // 0/unset means it did not. UNREAD if the InGameStep handle is null.
+    let ingame_phase = match ingame {
+        Some(ig) => unsafe { safe_read_i32(ig + INGAMESTEP_PHASE_D8_OFFSET) }
+            .map(i64::from)
+            .unwrap_or(OWN_LOAD_STREAM_FIELD_UNREAD),
+        None => OWN_LOAD_STREAM_FIELD_UNREAD,
+    };
+    let req_blockid = match ingame {
+        Some(ig) => unsafe { safe_read_usize(ig + INGAMESTEP_REQ_BLOCKID_100_OFFSET) }
+            .map(|v| i64::from(v as u32))
+            .unwrap_or(OWN_LOAD_STREAM_FIELD_UNREAD),
+        None => OWN_LOAD_STREAM_FIELD_UNREAD,
+    };
+    // resmgr block-array scan (PURE READS, NO block->vtable call this round). The target areaId is
+    // DERIVED from req_coord (the low dword's high byte), not hardcoded. We count how many registered
+    // blocks match the target (presence == the registration-vs-streaming discriminator) and collect
+    // the first OBSERVER_AREAID_SAMPLE_MAX distinct areaIds for the log. Scan is clamped to
+    // min(block_count, OBSERVER_BLOCK_SCAN_CAP) and every deref is null/fault-tolerant.
+    let target_area: u8 = if req_coord != OWN_LOAD_STREAM_FIELD_UNREAD {
+        (((req_coord as u32) >> TARGET_AREA_FROM_COORD_SHIFT) & TARGET_AREA_FROM_COORD_MASK) as u8
+    } else {
+        0
+    };
+    let mut target_block_count: i64 = 0;
+    let mut distinct_areaids: Vec<u8> = Vec::with_capacity(OBSERVER_AREAID_SAMPLE_MAX);
+    let mut scan_chain_ok = false;
+    if let (Some(rm), true) = (resmgr, block_count != OWN_LOAD_STREAM_FIELD_UNREAD) {
+        if block_count > 0 {
+            scan_chain_ok = true;
+            let base_arr = rm + RESMGR_BLOCK_ARRAY_B3030_OFFSET;
+            let n = block_count.min(OBSERVER_BLOCK_SCAN_CAP);
+            let mut i: i64 = 0;
+            while i < n {
+                let slot = base_arr + (i as usize) * BLOCK_ENTRY_STRIDE;
+                if let Some(block) = deref(slot) {
+                    if let Some(inner) = deref(block + BLOCK_INNER_8_OFFSET) {
+                        if let Some(area_u8) =
+                            unsafe { safe_read_usize(inner + BLOCK_AREA_C_OFFSET) }
+                                .map(|v| (v as u32 & TARGET_AREA_FROM_COORD_MASK) as u8)
+                        {
+                            if area_u8 == target_area {
+                                target_block_count += 1;
+                            }
+                            if distinct_areaids.len() < OBSERVER_AREAID_SAMPLE_MAX
+                                && !distinct_areaids.contains(&area_u8)
+                            {
+                                distinct_areaids.push(area_u8);
+                            }
+                        }
+                    }
+                }
+                i += 1;
+            }
+        }
+    }
+    let target_block_present: i64 = if scan_chain_ok {
+        i64::from(target_block_count > 0)
+    } else {
+        OWN_LOAD_STREAM_FIELD_UNREAD
+    };
     // Publish every frame (the oracle_* fields are the machine-readable progress signal); these now
     // keep updating THROUGH the loading screen because this runs in the recurring game task.
     OWN_LOAD_STREAM_OWNER_STATE.store(owner_state, Ordering::SeqCst);
@@ -2460,6 +2562,9 @@ pub(crate) unsafe fn own_load_stream_observe_recurring(
     OWN_LOAD_STREAM_IO_REQHANDLE.store(io_reqhandle, Ordering::SeqCst);
     OWN_LOAD_STREAM_C30.store(c30, Ordering::SeqCst);
     OWN_LOAD_STREAM_PLAYER_PRESENT.store(player_present_i64, Ordering::SeqCst);
+    OWN_LOAD_STREAM_INGAME_PHASE.store(ingame_phase, Ordering::SeqCst);
+    OWN_LOAD_STREAM_REQ_BLOCKID.store(req_blockid, Ordering::SeqCst);
+    OWN_LOAD_STREAM_TARGET_BLOCK_PRESENT.store(target_block_present, Ordering::SeqCst);
     let frames = OWN_LOAD_STREAM_RECUR_FRAMES.fetch_add(1, Ordering::SeqCst);
     if frames % OWN_LOAD_STREAM_LOG_INTERVAL == 0 {
         let ig = ingame.unwrap_or(null);
@@ -2467,6 +2572,13 @@ pub(crate) unsafe fn own_load_stream_observe_recurring(
         let rm = resmgr.unwrap_or(null);
         append_autoload_debug(format_args!(
             "own-load-stream: frame={frames} (recurring) owner=0x{owner:x} owner_state={owner_state} owner_req={owner_req_state} ingame=0x{ig:x} mms=0x{mms:x} mms_state={mms_state} resmgr=0x{rm:x} block_count={block_count} req_coord=0x{req_coord:x} io_inflight=0x{io_inflight:x} io_reqhandle=0x{io_reqhandle:x} c30=0x{c30:x} player_present={player_present}"
+        ));
+        // Second registration-vs-streaming line: did play_game_submit's handoff run (ingame_phase /
+        // req_blockid) and is the coord-derived target block REGISTERED (target_block_present) among
+        // the scanned areaIds? Absent target block => registration gap; present but stuck => streaming.
+        let present = target_block_present == i64::from(true);
+        append_autoload_debug(format_args!(
+            "own-load-blocks: frame={frames} ingame_phase={ingame_phase} req_blockid=0x{req_blockid:x} target_area=0x{target_area:x} target_block_present={present} target_block_count={target_block_count} areaids={distinct_areaids:02x?}"
         ));
     }
 }
@@ -5838,6 +5950,20 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
     let base = OWN_STEPPER_BASE.load(Ordering::SeqCst);
     let phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
     let gm = game_man_ptr_or_null();
+    // GOLDEN BASELINE mode: cache the live TITLE owner (stable pointer, supplied as our first arg every
+    // title frame) into OWN_LOAD_OWNER_CACHED so the RECURRING world-stream observer can re-derive
+    // InGameStep/MoveMapStep live from it on a user-driven vanilla load. We deliberately DO NOT cache
+    // InGameStep here (leave OWN_LOAD_INGAMESTEP_CACHED at 0): on a vanilla load InGameStep is built
+    // later during the loading screen, so the observer's `ingame_cached == 0` fallback must resolve it
+    // fresh each frame. OBSERVE-ONLY -- never fires continue/SetState5/any load. (Skipped once our own
+    // OWN-LOAD continue fired, which already cached the precise owner/InGameStep it kicked the load on.)
+    if golden_observe_enabled()
+        && !OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst)
+        && owner != TITLE_OWNER_SCAN_START_ADDRESS
+        && owner != 0
+    {
+        OWN_LOAD_OWNER_CACHED.store(owner, Ordering::SeqCst);
+    }
     let read_gm = |off: usize| {
         if gm != TITLE_OWNER_SCAN_START_ADDRESS {
             unsafe { *((gm + off) as *const i32) }

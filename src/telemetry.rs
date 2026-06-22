@@ -238,7 +238,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         }
     };
     body.push_str(&format!(
-        "  \"oracle_own_load_stream_frames\": {},\n  \"oracle_own_load_stream_recur_frames\": {},\n  \"oracle_own_load_continue_fired\": {},\n  \"oracle_own_load_stream_owner_state\": {},\n  \"oracle_own_load_stream_owner_req_state\": {},\n  \"oracle_own_load_stream_mms_state\": {},\n  \"oracle_own_load_stream_block_count\": {},\n  \"oracle_own_load_stream_req_coord\": {},\n  \"oracle_own_load_stream_io_inflight\": {},\n  \"oracle_own_load_stream_io_reqhandle\": {},\n  \"oracle_own_load_stream_c30\": {},\n  \"oracle_own_load_stream_player_present\": {},\n",
+        "  \"oracle_own_load_stream_frames\": {},\n  \"oracle_own_load_stream_recur_frames\": {},\n  \"oracle_own_load_continue_fired\": {},\n  \"oracle_own_load_stream_owner_state\": {},\n  \"oracle_own_load_stream_owner_req_state\": {},\n  \"oracle_own_load_stream_mms_state\": {},\n  \"oracle_own_load_stream_block_count\": {},\n  \"oracle_own_load_stream_req_coord\": {},\n  \"oracle_own_load_stream_io_inflight\": {},\n  \"oracle_own_load_stream_io_reqhandle\": {},\n  \"oracle_own_load_stream_c30\": {},\n  \"oracle_own_load_stream_player_present\": {},\n  \"oracle_own_load_ingame_phase\": {},\n  \"oracle_own_load_req_blockid\": {},\n  \"oracle_own_load_target_block_present\": {},\n",
         crate::experiments::OWN_LOAD_STREAM_FRAMES.load(Ordering::SeqCst),
         crate::experiments::OWN_LOAD_STREAM_RECUR_FRAMES.load(Ordering::SeqCst),
         crate::experiments::OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst),
@@ -276,6 +276,18 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         ),
         fmt_stream(
             crate::experiments::OWN_LOAD_STREAM_PLAYER_PRESENT.load(Ordering::SeqCst),
+            false
+        ),
+        fmt_stream(
+            crate::experiments::OWN_LOAD_STREAM_INGAME_PHASE.load(Ordering::SeqCst),
+            false
+        ),
+        fmt_stream(
+            crate::experiments::OWN_LOAD_STREAM_REQ_BLOCKID.load(Ordering::SeqCst),
+            true
+        ),
+        fmt_stream(
+            crate::experiments::OWN_LOAD_STREAM_TARGET_BLOCK_PRESENT.load(Ordering::SeqCst),
             false
         ),
     ));
