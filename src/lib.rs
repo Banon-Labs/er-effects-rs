@@ -1799,6 +1799,20 @@ pub(crate) const FOREGROUND_FORCE_RVA: usize = 0x266df00;
 pub(crate) const FOREGROUND_FORCE_EXPECTED_FIRST: u8 = 0x40;
 /// `mov al,1; ret` -- returns true (foreground) for the whole getter.
 pub(crate) const FOREGROUND_FORCE_STUB: [u8; 3] = [0xb0, 0x01, 0xc3];
+/// Sign-in force (cold save-load gate). The SaveLoad2 storage-select op ctor (deobf 0x14240f1b0)
+/// creates its runnable ONLY if the sign-in check returns true AND the user index is <= 3; cold
+/// (no signed-in user) both fail, so the op is null and the load FSM parks (the b80 wall). Patch
+/// both gate fns to pass so the cold menu-free path loads as if signed in as user 0. Addresses
+/// ground-truthed against the deobf/live binary (the Ghidra dump's FUN_1424129a0 / FUN_14240f480
+/// are shifted; live entries below). Scoped to the cold-mount attempt, not attach.
+/// `CS::..::IsSignedIn`-class check (dump FUN_1424129a0) -> always true.
+pub(crate) const SIGNIN_FORCE_RVA: usize = 0x24129b0;
+pub(crate) const SIGNIN_FORCE_EXPECTED_FIRST: u8 = 0x40;
+pub(crate) const SIGNIN_FORCE_STUB: [u8; 3] = [0xb0, 0x01, 0xc3]; // mov al,1; ret
+/// User-index resolver (dump FUN_14240f480) -> return 0 (valid index, <= 3) instead of 0xffffffff.
+pub(crate) const USERINDEX_FORCE_RVA: usize = 0x240f490;
+pub(crate) const USERINDEX_FORCE_EXPECTED_FIRST: u8 = 0x4c;
+pub(crate) const USERINDEX_FORCE_STUB: [u8; 3] = [0x31, 0xc0, 0xc3]; // xor eax,eax; ret
 /// Login-readiness predicate 0x140cab230 (`sub rsp,0x18; ...`, returns 1 only if all 3 session
 /// mgrs == 2). The boot/menu network-flow step calls it to decide ONLINE-attempt vs OFFLINE; a
 /// non-zero return makes it attempt online login, which FAILS offline -> the connection-error

@@ -1233,11 +1233,13 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
             MOUNT_PHASE.store(PHASE_DONE, Ordering::SeqCst);
             return;
         }
-        // (-2) SIGN-IN VALIDATION probe REMOVED: it used Ghidra-dump addresses (0x141ee1100 /
-        // 0x141ee10a0 / 0x142412960 / 0x14240f480 / 0x1424129a0) which are SHIFTED vs the deobf/live
-        // binary (dump<->deobf are not byte-identical; each landed in a function epilogue -> calling
-        // them would crash). Re-derive the signin pipeline addresses from the deobf binary
-        // (scripts/disas-deobf.sh) before re-adding. See bd b80-ROOTCAUSE-cold-no-user-signin.
+        // (-2) SIGN-IN FORCE (bd b80-ROOTCAUSE-cold-no-user-signin). The SaveLoad2 storage-select op
+        // ctor (0x14240f1b0) builds its runnable ONLY if the sign-in check returns true AND the user
+        // index is <= 3; cold (no signed-in user) both fail -> the op is null and the load FSM parks
+        // at idx 0x16 (the b80 wall). Patch the two gate fns (deobf-verified live entries) so the
+        // cold path loads as if signed in as user 0. Save-safe (in-memory code patch). Done here, in
+        // PHASE_INIT, before the submit so the select op the load triggers sees the patched gates.
+        apply_signin_force(base);
         // (-1) Set the save-file path/name on the container so the device read returns slot N's REAL
         // .sl2 bytes. The native Continue handler runs this slot-mgr peek 0x140678a50 FIRST (reads
         // [GameDataMan+0x8] container, sync-reads the save path token 0x47054, copies the name to
@@ -7082,6 +7084,89 @@ pub(crate) fn apply_foreground_force() {
     append_autoload_debug(format_args!(
         "foreground-force: patched IsGameInForeground 0x{:x} -> mov al,1;ret (no unfocused fps throttle)",
         base + FOREGROUND_FORCE_RVA
+    ));
+}
+
+/// Write a self-contained 3-byte return stub at `base+rva` after validating the expected first
+/// byte. RWX via VirtualProtect, write, restore, icache flush. Returns true on success. Shared by
+/// the gate-force patches (foreground / sign-in / user-index).
+fn patch_3byte_stub(
+    base: usize,
+    rva: usize,
+    expected_first: u8,
+    stub: [u8; 3],
+    label: &str,
+) -> bool {
+    let target = (base + rva) as *mut u8;
+    let existing = unsafe { *target };
+    if existing != expected_first {
+        append_autoload_debug(format_args!(
+            "{label}: ABORT -- byte at 0x{:x} is 0x{existing:x}, expected 0x{expected_first:x}",
+            base + rva
+        ));
+        return false;
+    }
+    let mut old_protect = PAGE_PROTECT_UNSET;
+    let protect_ok = unsafe {
+        VirtualProtect(
+            target as *mut c_void,
+            ONLINE_DISABLE_PATCH_LEN,
+            PAGE_EXECUTE_READWRITE,
+            &mut old_protect,
+        )
+    };
+    if protect_ok == HOOK_FALSE_RETURN as i32 {
+        append_autoload_debug(format_args!("{label}: VirtualProtect failed"));
+        return false;
+    }
+    let mut i = TITLE_OWNER_SCAN_START_ADDRESS;
+    while i < ONLINE_DISABLE_PATCH_LEN {
+        unsafe { *target.add(i) = stub[i] };
+        i += ONLINE_DISABLE_BYTE_STEP;
+    }
+    let mut restored = PAGE_PROTECT_UNSET;
+    unsafe {
+        VirtualProtect(
+            target as *mut c_void,
+            ONLINE_DISABLE_PATCH_LEN,
+            old_protect,
+            &mut restored,
+        )
+    };
+    unsafe {
+        FlushInstructionCache(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            target as *const c_void,
+            ONLINE_DISABLE_PATCH_LEN,
+        )
+    };
+    true
+}
+
+/// Force the SaveLoad2 storage-select op gate to pass cold (bd b80-ROOTCAUSE-cold-no-user-signin):
+/// patch the sign-in check to always return true and the user-index resolver to return 0, so the
+/// select-op ctor (0x14240f1b0) builds the runnable and the load proceeds to SLLoadSession -> read
+/// -> b80 RESIDENT. Save-safe (in-memory code patch; no save write). Called once from the cold-mount
+/// attempt so normal play is unaffected unless a cold mount is requested.
+pub(crate) fn apply_signin_force(base: usize) {
+    let s = patch_3byte_stub(
+        base,
+        SIGNIN_FORCE_RVA,
+        SIGNIN_FORCE_EXPECTED_FIRST,
+        SIGNIN_FORCE_STUB,
+        "signin-force",
+    );
+    let u = patch_3byte_stub(
+        base,
+        USERINDEX_FORCE_RVA,
+        USERINDEX_FORCE_EXPECTED_FIRST,
+        USERINDEX_FORCE_STUB,
+        "userindex-force",
+    );
+    append_autoload_debug(format_args!(
+        "signin-force: signin@0x{:x} ok={s} -> mov al,1;ret | userindex@0x{:x} ok={u} -> xor eax,eax;ret (select-op gate now passes: signed-in as user 0)",
+        base + SIGNIN_FORCE_RVA,
+        base + USERINDEX_FORCE_RVA
     ));
 }
 
