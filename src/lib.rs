@@ -1785,6 +1785,20 @@ pub(crate) const ONLINE_DISABLE_EXPECTED_FIRST: u8 = 0x48;
 pub(crate) const ONLINE_DISABLE_STUB: [u8; 3] = [0x31, 0xc0, 0xc3];
 pub(crate) const ONLINE_DISABLE_PATCH_LEN: usize = 3;
 pub(crate) const ONLINE_DISABLE_BYTE_STEP: usize = 1;
+/// Foreground-force: `CS::CSWindowImp::IsGameInForeground` (0x14266def0,
+/// `return this->windowHandle == GetForegroundWindow()`) is the engine's foreground oracle; the
+/// present/flip pacer `UpdateFlipTiming` (0x140e829d0) and friends throttle the game to a few fps
+/// when it returns false. An UNFOCUSED probe window therefore runs at ~6 fps and never boots in the
+/// runtime cap. Patch it to `mov al,1; ret` so the game always believes it is foreground -> full
+/// speed regardless of focus. Safe for the probe: input is blocked, and "always foreground" only
+/// removes the background throttle/pause. Verified prologue first byte 0x40 (`push rbx`).
+// NB: address ground-truthed against the deobf/live binary (scripts/disas-deobf.sh), NOT the Ghidra
+// dump -- the dump placed this fn at 0x14266def0 but the live entry is 0x14266df00 (dump<->deobf has
+// regional shifts; trust the deobf binary for addresses to patch/call).
+pub(crate) const FOREGROUND_FORCE_RVA: usize = 0x266df00;
+pub(crate) const FOREGROUND_FORCE_EXPECTED_FIRST: u8 = 0x40;
+/// `mov al,1; ret` -- returns true (foreground) for the whole getter.
+pub(crate) const FOREGROUND_FORCE_STUB: [u8; 3] = [0xb0, 0x01, 0xc3];
 /// Login-readiness predicate 0x140cab230 (`sub rsp,0x18; ...`, returns 1 only if all 3 session
 /// mgrs == 2). The boot/menu network-flow step calls it to decide ONLINE-attempt vs OFFLINE; a
 /// non-zero return makes it attempt online login, which FAILS offline -> the connection-error
@@ -2430,6 +2444,7 @@ pub(crate) static START_CONTINUE_TRACE: Once = Once::new();
 pub(crate) static START_SAFE_INPUT_HOOKS: Once = Once::new();
 pub(crate) static START_SPLASH_SKIP: Once = Once::new();
 pub(crate) static START_ONLINE_DISABLE: Once = Once::new();
+pub(crate) static START_FOREGROUND_FORCE: Once = Once::new();
 pub(crate) static BOOTSTRAP_TELEMETRY_SEEN: AtomicUsize =
     AtomicUsize::new(BOOTSTRAP_TELEMETRY_UNSEEN);
 pub(crate) static SAFE_INPUT_CONFIRM_FRAMES_REMAINING: AtomicUsize = AtomicUsize::new(0);
@@ -3089,6 +3104,17 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
                 .spawn(apply_online_disable);
         });
     }
+
+    // Foreground-force: ALWAYS ON (user directive 2026-06-21 -- "if it works, keep it on"),
+    // independent of online-disable. The unfocused-window fps throttle hits during boot (before any
+    // cold-mount runs), so patch it at attach so the game always runs full speed regardless of which
+    // window holds focus. Verified to make a cold probe boot at 60fps unfocused (was ~6fps). Benign:
+    // it only removes the background throttle/auto-pause; input is blocked during probes anyway.
+    START_FOREGROUND_FORCE.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("er-effects-foreground-force".to_owned())
+            .spawn(apply_foreground_force);
+    });
 
     // MenuWindow latch: install the SceneObjProxy ctor hook (0x14074a700) as early as the
     // splash-skip / online-disable patches, from a thread, so it lands BEFORE the title state

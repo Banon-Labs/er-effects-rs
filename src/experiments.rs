@@ -1233,6 +1233,11 @@ unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i32, n: u64) 
             MOUNT_PHASE.store(PHASE_DONE, Ordering::SeqCst);
             return;
         }
+        // (-2) SIGN-IN VALIDATION probe REMOVED: it used Ghidra-dump addresses (0x141ee1100 /
+        // 0x141ee10a0 / 0x142412960 / 0x14240f480 / 0x1424129a0) which are SHIFTED vs the deobf/live
+        // binary (dump<->deobf are not byte-identical; each landed in a function epilogue -> calling
+        // them would crash). Re-derive the signin pipeline addresses from the deobf binary
+        // (scripts/disas-deobf.sh) before re-adding. See bd b80-ROOTCAUSE-cold-no-user-signin.
         // (-1) Set the save-file path/name on the container so the device read returns slot N's REAL
         // .sl2 bytes. The native Continue handler runs this slot-mgr peek 0x140678a50 FIRST (reads
         // [GameDataMan+0x8] container, sync-reads the save path token 0x47054, copies the name to
@@ -7020,6 +7025,64 @@ pub(crate) fn apply_online_disable() {
     // too) AND it broke the OnDecide OK-dispatch (the modal stuck instead of proceeding).
     apply_xor_ret_stub(base, ONLINE_DISABLE_RVA, "IsOnlineMode getter");
     let _ = ONLINE_PREDICATE_DISABLE_RVA;
+}
+
+/// Force `CS::CSWindowImp::IsGameInForeground` (0x14266def0) to always return true (`mov al,1; ret`)
+/// so the engine's flip pacer never applies the unfocused-window fps throttle -- the probe boots at
+/// full speed regardless of focus (bd runtime-probe-unfocused-window-throttle). Same RWX/flush
+/// pattern as the online-disable patch; validates the expected 0x40 prologue first.
+pub(crate) fn apply_foreground_force() {
+    let Ok(base) = game_module_base() else {
+        append_autoload_debug(format_args!("foreground-force: module base unavailable"));
+        return;
+    };
+    let target = (base + FOREGROUND_FORCE_RVA) as *mut u8;
+    let existing = unsafe { *target };
+    if existing != FOREGROUND_FORCE_EXPECTED_FIRST {
+        append_autoload_debug(format_args!(
+            "foreground-force: ABORT -- byte at 0x{:x} is 0x{existing:x}, expected 0x{FOREGROUND_FORCE_EXPECTED_FIRST:x}",
+            base + FOREGROUND_FORCE_RVA
+        ));
+        return;
+    }
+    let mut old_protect = PAGE_PROTECT_UNSET;
+    let protect_ok = unsafe {
+        VirtualProtect(
+            target as *mut c_void,
+            ONLINE_DISABLE_PATCH_LEN,
+            PAGE_EXECUTE_READWRITE,
+            &mut old_protect,
+        )
+    };
+    if protect_ok == HOOK_FALSE_RETURN as i32 {
+        append_autoload_debug(format_args!("foreground-force: VirtualProtect failed"));
+        return;
+    }
+    let mut i = TITLE_OWNER_SCAN_START_ADDRESS;
+    while i < ONLINE_DISABLE_PATCH_LEN {
+        unsafe { *target.add(i) = FOREGROUND_FORCE_STUB[i] };
+        i += ONLINE_DISABLE_BYTE_STEP;
+    }
+    let mut restored = PAGE_PROTECT_UNSET;
+    unsafe {
+        VirtualProtect(
+            target as *mut c_void,
+            ONLINE_DISABLE_PATCH_LEN,
+            old_protect,
+            &mut restored,
+        )
+    };
+    unsafe {
+        FlushInstructionCache(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            target as *const c_void,
+            ONLINE_DISABLE_PATCH_LEN,
+        )
+    };
+    append_autoload_debug(format_args!(
+        "foreground-force: patched IsGameInForeground 0x{:x} -> mov al,1;ret (no unfocused fps throttle)",
+        base + FOREGROUND_FORCE_RVA
+    ));
 }
 
 /// Patch a 0x48-prologue function body to `xor eax,eax; ret` (return 0) at `base+rva`. Validates
