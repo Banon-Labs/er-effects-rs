@@ -883,6 +883,26 @@ pub(crate) fn native_load_enabled() -> bool {
             .exists()
 }
 
+/// OBSERVE-ONLY NATIVE-CONTINUE gate (PATH B, autoload-path-B-drive-native-load-chosen-2026-06-22).
+/// OFF by default; enable via env `ER_EFFECTS_NATIVE_CONTINUE=1` OR a GAME_DIR file
+/// `er-effects-native-continue.txt`. Mirrors `native_load_enabled` (env OR file). When ON, the idx10
+/// handler installs the patch (so OUR handler runs each frame) but does NOT force the title state
+/// machine: it lets OWN_STEPPER_ORIG_IDX10 pass-through advance the native boot naturally (the user
+/// drives past press-any-button + modals in this hybrid test, OR the own-stepper opens the menu),
+/// and ONCE the live TitleTopDialog menu is rendered + settled, it fires the native CONTINUE
+/// (load-most-recent) MenuMemberFuncJob node's run 0x1409aaba0 exactly once -- which drives the FULL
+/// native load (parse + world-asset streaming + spawn). NO SetState(2/3), NO beginlogo-gate clear,
+/// NO registrar self-fire, NO direct_build / cold_char_mount. Observe + one-shot fire only.
+pub(crate) fn native_continue_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_NATIVE_CONTINUE").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-native-continue.txt")
+        .exists()
+}
+
 /// OBSERVE-ONLY NATIVE FULL-SAVE-READ gate (native-full-save-read-slot-resolve-chain-observe-recipe-2026).
 /// OFF by default; enable via env `ER_EFFECTS_NATIVE_FULLREAD=1` OR a GAME_DIR file
 /// `er-effects-native-fullread.txt`. Mirrors `native_load_enabled` (env OR file). When ON, the idx10
@@ -5824,6 +5844,237 @@ unsafe fn native_load_tick(owner: usize, base: usize, n: u64) {
     ));
 }
 
+/// SAVE-SAFE READ-ONLY structural scan of the OPEN TitleTopDialog for the **Continue**
+/// (load-most-recent) `MenuMemberFuncJob` registry node -- the PATH B analog of
+/// `scan_dialog_for_loadgame`. Identical bounded flat scan of the dialog object's own fields, but the
+/// MenuMemberFuncJob it latches is the one whose member-fn (node+0x18) chains through the thunk hops
+/// to the native Continue wrapper `TRACE_MENU_CONTINUE_WRAPPER_RVA` (0x14082bac0), NOT the Load-Game
+/// ProfileLoadDialog factory `LIVE_DIALOG_FACTORY_RVA` (0x14081ead0). This is the SAME discriminator
+/// already proven at runtime by `capture_continue_member_node_candidate` (which captures the
+/// registered Continue MenuMemberFuncJob off the registrar's task-enqueue path); here we resolve it
+/// statically from the live dialog so the native_continue tick can fire its run with no enqueue hook.
+/// Pure ReadProcessMemory (`safe_read_usize` tolerates bad derefs) -> NO writes, NO native calls.
+/// Returns the first matching Continue MenuMemberFuncJob node, or None.
+unsafe fn scan_dialog_for_continue(owner: usize, base: usize) -> Option<usize> {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const DIALOG_E0: usize = TITLE_OWNER_MENU_HOLDER_E0_OFFSET;
+    const MEMBERFUNCJOB_VTABLE_RVA_LOCAL: usize = MEMBERFUNCJOB_VTABLE_RVA;
+    const MEMBER_FN_18: usize = 0x18;
+    const MEMBER_DIALOG_10: usize = core::mem::size_of::<usize>() + core::mem::size_of::<usize>();
+    const MEMBER_ADJ_20: usize = 0x20;
+    const SCAN_QWORDS: usize = 0x500;
+    const PTR_SZ: usize = core::mem::size_of::<usize>();
+    const PTR_ALIGN_MASK: usize = 0x7;
+    const HEAP_LO: usize = 0x10000;
+    const QW_START: usize = 0;
+    const QW_STEP: usize = 1;
+    const JMP_HOPS: usize = 6;
+    const HOP_START: usize = 0;
+    const HOP_STEP: usize = 1;
+    const HIT_CAP: usize = 24;
+    const HIT_START: usize = 0;
+    const HIT_STEP: usize = 1;
+
+    let dialog = unsafe { safe_read_usize(owner + DIALOG_E0) }.unwrap_or(NULL);
+    if dialog == NULL {
+        return None;
+    }
+    let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(NULL);
+    if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+        append_autoload_debug(format_args!(
+            "continue-scan: owner+0xe0=0x{dialog:x} vt=0x{dialog_vt:x} != TitleTopDialog 0x{:x} -- skip",
+            base + TITLE_TOP_DIALOG_VTABLE_RVA
+        ));
+        return None;
+    }
+    let memberjob_vt = base + MEMBERFUNCJOB_VTABLE_RVA_LOCAL;
+    let continue_wrapper_abs = base + TRACE_MENU_CONTINUE_WRAPPER_RVA as usize;
+    let dialog_factory_abs = base + LIVE_DIALOG_FACTORY_RVA;
+    // Resolve a (member-)fn forward through up to JMP_HOPS jmp-thunks; report whether it reaches the
+    // native Continue wrapper (Continue) or the Load-Game dialog factory (so we can log BOTH and so a
+    // probe reveals every node's discriminator even if our hop budget misses one).
+    let classify = |start: usize| -> (bool, bool) {
+        let mut tgt = start;
+        let mut hop = HOP_START;
+        while hop < JMP_HOPS && tgt != NULL {
+            if tgt == continue_wrapper_abs {
+                return (true, false);
+            }
+            if tgt == dialog_factory_abs {
+                return (false, true);
+            }
+            match unsafe { decode_thunk_hop(tgt) } {
+                Some(next) => tgt = next,
+                None => break,
+            }
+            hop += HOP_STEP;
+        }
+        (tgt == continue_wrapper_abs, tgt == dialog_factory_abs)
+    };
+    append_autoload_debug(format_args!(
+        "continue-scan: dialog=0x{dialog:x} memberjob_vt=0x{memberjob_vt:x} continue_wrapper=0x{continue_wrapper_abs:x} dialog_factory=0x{dialog_factory_abs:x} -- scanning {SCAN_QWORDS} qwords"
+    ));
+    let mut found_continue_node: Option<usize> = None;
+    let mut hits = HIT_START;
+    let mut q = QW_START;
+    while q < SCAN_QWORDS {
+        let off = q * PTR_SZ;
+        let p = unsafe { safe_read_usize(dialog + off) }.unwrap_or(NULL);
+        if p != NULL && (p & PTR_ALIGN_MASK) == QW_START && p >= HEAP_LO {
+            let vt = unsafe { safe_read_usize(p) }.unwrap_or(NULL);
+            if vt == memberjob_vt {
+                let mfn = unsafe { safe_read_usize(p + MEMBER_FN_18) }.unwrap_or(NULL);
+                let mdlg = unsafe { safe_read_usize(p + MEMBER_DIALOG_10) }.unwrap_or(NULL);
+                let madj = unsafe { safe_read_usize(p + MEMBER_ADJ_20) }.unwrap_or(NULL);
+                let (is_continue, is_load) = classify(mfn);
+                if hits < HIT_CAP {
+                    append_autoload_debug(format_args!(
+                        "continue-scan: dialog+0x{off:x} MenuMemberFuncJob node=0x{p:x} member_fn=0x{mfn:x} CONTINUE={is_continue} LOAD_GAME={is_load} back=0x{mdlg:x} adj=0x{madj:x}"
+                    ));
+                }
+                // The Continue run target: a MenuMemberFuncJob whose member_fn chains to the native
+                // Continue wrapper. Latch the FIRST such node (run 0x1409aaba0 fires against it).
+                if is_continue && found_continue_node.is_none() {
+                    found_continue_node = Some(p);
+                }
+                hits += HIT_STEP;
+            }
+        }
+        q += QW_STEP;
+    }
+    append_autoload_debug(format_args!(
+        "continue-scan: done hits={hits} found_continue_node=0x{:x}",
+        found_continue_node.unwrap_or(NULL)
+    ));
+    found_continue_node
+}
+
+/// PATH B readiness gate for the native Continue node -- mirror of `title_menu_action_ready` but for
+/// the **Continue** (load-most-recent) MenuMemberFuncJob whose member-fn chains to the native
+/// Continue wrapper (`TRACE_MENU_CONTINUE_WRAPPER_RVA`) instead of the Load-Game dialog factory.
+/// Validates: live TitleTopDialog vtable, [dialog+0xa48] in-image registry, the Continue node's
+/// MenuMemberFuncJob vtable, and the member-fn -> Continue-wrapper thunk chain. Returns the fully
+/// populated `MenuActionNode` (reusing the same struct as Load-Game) so `native_continue_tick` can
+/// fire run 0x1409aaba0 against it with full node telemetry.
+unsafe fn title_menu_continue_action_ready(owner: usize, base: usize) -> Option<MenuActionNode> {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let dialog =
+        unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
+    if dialog == null {
+        return None;
+    }
+    let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(null);
+    if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+        return None;
+    }
+    let registry =
+        unsafe { safe_read_usize(dialog + DIALOG_ROW_REGISTRY_A48_OFFSET) }.unwrap_or(null);
+    if !vtable_in_game_image(registry, base) {
+        return None;
+    }
+    let node = unsafe { scan_dialog_for_continue(owner, base) }?;
+    let node_vt = unsafe { safe_read_usize(node) }.unwrap_or(null);
+    if node_vt != base + MEMBERFUNCJOB_VTABLE_RVA {
+        return None;
+    }
+    const MEMBER_DIALOG_10: usize = core::mem::size_of::<usize>() + core::mem::size_of::<usize>();
+    const MEMBER_FN_18: usize = 0x18;
+    const MEMBER_ADJ_20: usize = 0x20;
+    const JMP_HOPS: usize = 6;
+    const HOP_START: usize = 0;
+    const HOP_STEP: usize = 1;
+    let member_dialog = unsafe { safe_read_usize(node + MEMBER_DIALOG_10) }.unwrap_or(null);
+    let member_fn = unsafe { safe_read_usize(node + MEMBER_FN_18) }.unwrap_or(null);
+    let member_adjust = unsafe { safe_read_usize(node + MEMBER_ADJ_20) }.unwrap_or(null);
+    if member_fn == null {
+        return None;
+    }
+    let continue_wrapper_abs = base + TRACE_MENU_CONTINUE_WRAPPER_RVA as usize;
+    let mut target = member_fn;
+    let mut hop = HOP_START;
+    while hop < JMP_HOPS && target != null {
+        if target == continue_wrapper_abs {
+            return Some(MenuActionNode {
+                node,
+                node_vt,
+                registry,
+                member_dialog,
+                member_fn,
+                member_adjust,
+                window_item: null,
+            });
+        }
+        match unsafe { decode_thunk_hop(target) } {
+            Some(next) => target = next,
+            None => break,
+        }
+        hop += HOP_STEP;
+    }
+    None
+}
+
+/// OBSERVE-ONLY NATIVE-CONTINUE tick (PATH B, native_continue_enabled(), gated OFF by default). The
+/// Continue analog of `native_load_tick`: runs each frame INSTEAD of the own_stepper forcing logic,
+/// then the caller pass-throughs to OWN_STEPPER_ORIG_IDX10 so the NATIVE title machine advances
+/// untouched (the user/own_stepper opens the menu). KEEP vs the normal own_stepper: it does NOT
+/// SetState(owner,2/3), does NOT clear the beginlogo gate, does NOT self-fire the registrar, does NOT
+/// run direct_build / cold_char_mount. It ONLY: (1) read-only checks whether the live TitleTopDialog
+/// menu is rendered and the Continue MenuMemberFuncJob node/action chain is semantically validated;
+/// (2) ONE-SHOT fires that native run MENU_MEMBER_FUNC_JOB_RUN_RVA (0x1409aaba0, rcx=continue_node)
+/// -- which drives the FULL native load (parse + world-asset streaming + spawn). After firing it
+/// observes (the caller keeps writing the golden oracle + the world-stream telemetry as the native
+/// pump streams the world). Pure read-only until the single fire; NO SetState forcing.
+unsafe fn native_continue_tick(owner: usize, base: usize, n: u64) {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    // Already fired: keep observing (oracle written by the caller's pass-through telemetry).
+    if NATIVE_CONTINUE_FIRED.load(Ordering::SeqCst) != NATIVE_CONTINUE_FIRED_NO {
+        if n % NATIVE_CONTINUE_LOG_INTERVAL == NULL as u64 {
+            append_autoload_debug(format_args!(
+                "native-continue: FIRED -- observing native pump (#{n}); golden oracle + world-stream telemetry written via pass-through"
+            ));
+        }
+        return;
+    }
+    let Some(action) = (unsafe { title_menu_continue_action_ready(owner, base) }) else {
+        if n % NATIVE_CONTINUE_LOG_INTERVAL == NULL as u64 {
+            append_autoload_debug(format_args!(
+                "native-continue: waiting for semantic Continue action readiness (#{n}) -- TitleTopDialog/registry/Continue node/member-fn->wrapper chain not all validated yet"
+            ));
+        }
+        return;
+    };
+    // ONE-SHOT fire. The semantic readiness helper already validated the node vtable, registry,
+    // member fn, and Continue-wrapper chain; latch only after that validation succeeds.
+    if NATIVE_CONTINUE_FIRED.swap(NATIVE_CONTINUE_FIRED_YES, Ordering::SeqCst)
+        != NATIVE_CONTINUE_FIRED_NO
+    {
+        return;
+    }
+    let node = action.node;
+    let node_vt = action.node_vt;
+    let m_dlg = action.member_dialog;
+    let m_fn = action.member_fn;
+    let m_adj = action.member_adjust;
+    let run: unsafe extern "system" fn(usize) = unsafe {
+        std::mem::transmute::<usize, unsafe extern "system" fn(usize)>(
+            base + MENU_MEMBER_FUNC_JOB_RUN_RVA,
+        )
+    };
+    append_autoload_debug(format_args!(
+        "native-continue: *** FIRING native Continue run 0x{:x}(rcx=node=0x{node:x}) vt=0x{node_vt:x} [+0x10]=0x{m_dlg:x} [+0x18]=0x{m_fn:x} [+0x20]=0x{m_adj:x} #{n} -- driving the FULL native load (parse+stream+spawn) in the NATURAL menu (zero forcing) ***",
+        base + MENU_MEMBER_FUNC_JOB_RUN_RVA
+    ));
+    timeline_event(
+        "T_native_continue_fire",
+        n,
+        format_args!("node=0x{node:x} member_fn=0x{m_fn:x}"),
+    );
+    unsafe { run(node) };
+    append_autoload_debug(format_args!(
+        "native-continue: native Continue run returned -- observing native pump for golden oracle + world-stream (#{n})"
+    ));
+}
+
 /// Resolve the full-read target slot: a configured OWN_STEPPER_SLOT (>=0, from the trigger-file
 /// "slot=N"), else ER_EFFECTS_AUTOLOAD_SLOT (>=0), else FULLREAD_DEFAULT_SLOT (Banon = 0).
 fn native_fullread_slot() -> i32 {
@@ -6128,6 +6379,24 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
     }
     if native_load_enabled() {
         unsafe { native_load_tick(owner, base, n) };
+        pass_through(false);
+        return;
+    }
+    // OBSERVE-ONLY NATIVE-CONTINUE mode (PATH B, gated OFF by default). Same precedence/structure as
+    // native_load: it does NOT force the title machine -- the native boot advances naturally via
+    // pass-through, and once the live menu is rendered + settled we fire the native Continue
+    // (load-most-recent) node's run exactly once, then keep observing so the golden oracle +
+    // world-stream telemetry are written as the FULL native load (parse+stream+spawn) runs. Pure
+    // read-only until the one-shot fire; NO SetState forcing.
+    if native_continue_enabled() {
+        unsafe { native_continue_tick(owner, base, n) };
+        // Per-frame world-stream telemetry (pure reads, save-safe). native_continue_tick's one-shot
+        // latch fast-forwards to FIRED after the Continue run fires, so this runs EVERY native_continue
+        // frame -- including all the post-fire loading-screen frames where the title owner is still
+        // ticked -- publishing the deepest world-load pump values (mms_state, block_count,
+        // io_inflight, player_present) so a probe log shows whether the world STREAMS (mms_state
+        // advancing past 3, player_present=true) after the Continue fire. Gated to native_continue.
+        unsafe { own_load_stream_telemetry(base, gm, owner, n) };
         pass_through(false);
         return;
     }

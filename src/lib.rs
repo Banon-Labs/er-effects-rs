@@ -1589,6 +1589,25 @@ pub(crate) static NATIVE_LOAD_FIRED: AtomicUsize = AtomicUsize::new(NATIVE_LOAD_
 /// Throttle interval for native-load observe logging (frames).
 pub(crate) const NATIVE_LOAD_LOG_INTERVAL: u64 = 120;
 
+/// NATIVE-CONTINUE fire latch states (one-shot: fire the Continue run exactly once).
+///
+/// PATH B (autoload-path-B-drive-native-load-chosen-2026-06-22): mirror of the native-load latch,
+/// but the one-shot `MENU_MEMBER_FUNC_JOB_RUN_RVA` (0x1409aaba0) fire targets the main-menu
+/// **Continue** (load-most-recent) `MenuMemberFuncJob` registry node instead of Load-Game. The
+/// Continue node is the registry MenuMemberFuncJob whose member-fn (at node+0x18) chains through the
+/// thunk hops to the native Continue wrapper `TRACE_MENU_CONTINUE_WRAPPER_RVA` (0x14082bac0) -- the
+/// SAME discriminator the product Continue capture already uses
+/// (`capture_continue_member_node_candidate`), as opposed to Load-Game whose member-fn chains to the
+/// ProfileLoadDialog factory `LIVE_DIALOG_FACTORY_RVA` (0x14081ead0). Firing Continue at the
+/// NATURALLY-rendered title menu runs the FULL native load (parse + world-asset streaming + spawn),
+/// which the golden proved completes the world-stream in ~6s (vs our menu-free continue_confirm-only
+/// path stalling at WorldBlockRes phase 2).
+pub(crate) const NATIVE_CONTINUE_FIRED_NO: usize = 0;
+pub(crate) const NATIVE_CONTINUE_FIRED_YES: usize = 1;
+pub(crate) static NATIVE_CONTINUE_FIRED: AtomicUsize = AtomicUsize::new(NATIVE_CONTINUE_FIRED_NO);
+/// Throttle interval for native-continue observe logging (frames). Mirrors NATIVE_LOAD_LOG_INTERVAL.
+pub(crate) const NATIVE_CONTINUE_LOG_INTERVAL: u64 = 120;
+
 /// === NATIVE FULL-SAVE-READ observe chain (native-full-save-read-slot-resolve-chain-observe-recipe-2026). ===
 /// The slot-resolve GLOBAL the menu cursor / Continue selection writes: resolver 0x1406793c0 returns
 /// *(u32*)(GameMan+0xb78). Step 1 of the recipe sets GameMan+0xb78=slot before set_save_slot so the
@@ -3436,6 +3455,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     // the native-load (observe-only, no forcing) path when native_load_enabled().
                     if own_stepper_enabled()
                         || native_load_enabled()
+                        || native_continue_enabled()
                         || native_fullread_enabled()
                         || own_load_enabled()
                     {
@@ -3544,7 +3564,11 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // choices), optionally clean stale title-dialog render resources, then run the
                 // one-shot correctness dump.
                 IN_WORLD_REACHED.store(IN_WORLD_REACHED_YES, Ordering::SeqCst);
-                if own_stepper_enabled() || native_load_enabled() || native_fullread_enabled() {
+                if own_stepper_enabled()
+                    || native_load_enabled()
+                    || native_continue_enabled()
+                    || native_fullread_enabled()
+                {
                     if let Ok(base) = game_module_base() {
                         unsafe {
                             cleanup_title_dialog_after_world_once(base, state.game_task_ticks)
@@ -3558,6 +3582,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 if (own_stepper_enabled()
                     || observe_enabled()
                     || native_load_enabled()
+                    || native_continue_enabled()
                     || native_fullread_enabled())
                     && LOAD_CORRECTNESS_DUMPED
                         .swap(GAME_TASK_TICK_INCREMENT as usize, Ordering::SeqCst)
