@@ -222,6 +222,63 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         "  \"oracle_own_load_phase\": {},\n",
         crate::experiments::OWN_LOAD_PHASE_PUB.load(Ordering::SeqCst)
     ));
+    // OWN-LOAD per-frame world-stream stall telemetry (own-load-reaches-loading-screen-2026-06-22 /
+    // full-pipeline-traced-to-worldreswait-map-block-streaming). After own_load_continue fires
+    // continue_confirm/SetState5 the engine reaches the real-char LOADING SCREEN but STALLS; these
+    // mirror the deepest world-load pump values so the readiness watcher / agent can see whether ANY
+    // advances (progress) or all are frozen (genuine stall). UNREAD sentinel -> JSON null (the chain
+    // pointer was null / RPM faulted, distinct from a real 0). All hex except the count fields.
+    let fmt_stream = |v: i64, hex: bool| -> String {
+        if v == crate::experiments::OWN_LOAD_STREAM_FIELD_UNREAD {
+            "null".to_owned()
+        } else if hex {
+            format!("\"{v:#x}\"")
+        } else {
+            v.to_string()
+        }
+    };
+    body.push_str(&format!(
+        "  \"oracle_own_load_stream_frames\": {},\n  \"oracle_own_load_stream_recur_frames\": {},\n  \"oracle_own_load_continue_fired\": {},\n  \"oracle_own_load_stream_owner_state\": {},\n  \"oracle_own_load_stream_owner_req_state\": {},\n  \"oracle_own_load_stream_mms_state\": {},\n  \"oracle_own_load_stream_block_count\": {},\n  \"oracle_own_load_stream_req_coord\": {},\n  \"oracle_own_load_stream_io_inflight\": {},\n  \"oracle_own_load_stream_io_reqhandle\": {},\n  \"oracle_own_load_stream_c30\": {},\n  \"oracle_own_load_stream_player_present\": {},\n",
+        crate::experiments::OWN_LOAD_STREAM_FRAMES.load(Ordering::SeqCst),
+        crate::experiments::OWN_LOAD_STREAM_RECUR_FRAMES.load(Ordering::SeqCst),
+        crate::experiments::OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst),
+        fmt_stream(
+            crate::experiments::OWN_LOAD_STREAM_OWNER_STATE.load(Ordering::SeqCst),
+            false
+        ),
+        fmt_stream(
+            crate::experiments::OWN_LOAD_STREAM_OWNER_REQ_STATE.load(Ordering::SeqCst),
+            false
+        ),
+        fmt_stream(
+            crate::experiments::OWN_LOAD_STREAM_MMS_STATE.load(Ordering::SeqCst),
+            false
+        ),
+        fmt_stream(
+            crate::experiments::OWN_LOAD_STREAM_BLOCK_COUNT.load(Ordering::SeqCst),
+            false
+        ),
+        fmt_stream(
+            crate::experiments::OWN_LOAD_STREAM_REQ_COORD.load(Ordering::SeqCst),
+            true
+        ),
+        fmt_stream(
+            crate::experiments::OWN_LOAD_STREAM_IO_INFLIGHT.load(Ordering::SeqCst),
+            true
+        ),
+        fmt_stream(
+            crate::experiments::OWN_LOAD_STREAM_IO_REQHANDLE.load(Ordering::SeqCst),
+            true
+        ),
+        fmt_stream(
+            crate::experiments::OWN_LOAD_STREAM_C30.load(Ordering::SeqCst),
+            true
+        ),
+        fmt_stream(
+            crate::experiments::OWN_LOAD_STREAM_PLAYER_PRESENT.load(Ordering::SeqCst),
+            false
+        ),
+    ));
     let product_core_blocker = PRODUCT_CORE_LAST_BLOCKER.load(Ordering::SeqCst);
     let format_scan_ptr = |value: usize| -> String {
         if value == TITLE_OWNER_SCAN_START_ADDRESS {

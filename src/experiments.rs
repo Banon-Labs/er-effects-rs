@@ -90,6 +90,79 @@ pub(crate) static OWN_LOAD_PHASE_PUB: AtomicUsize = AtomicUsize::new(0);
 /// telemetry as `oracle_cold_char_mount_phase` so the readiness watcher can tear the game down the
 /// instant the b80 outcome is observed instead of idling to the wall-clock cap.
 pub(crate) static COLD_CHAR_MOUNT_PHASE_PUB: AtomicUsize = AtomicUsize::new(0);
+/// Sentinel for an unreadable / not-yet-sampled world-load telemetry field (distinguishes
+/// "the chain pointer was null / RPM faulted" from a genuine 0). Chosen well outside any real
+/// state/count value so the readiness watcher and the agent can tell "frozen at a real value"
+/// from "never sampled".
+pub(crate) const OWN_LOAD_STREAM_FIELD_UNREAD: i64 = i64::MIN;
+/// Per-frame OWN-LOAD world-stream stall telemetry (own-load-reaches-loading-screen-2026-06-22 /
+/// full-pipeline-traced-to-worldreswait-map-block-streaming). After own_load_continue fires the
+/// guarded continue_confirm/SetState5, the engine reaches the real-char LOADING SCREEN but STALLS
+/// (player never spawns). These mirror the deepest world-load pump values each frame so a probe log
+/// shows whether ANY of them ADVANCE over time (progress) vs are FROZEN (genuine stall). All are
+/// pure fault-tolerant reads (safe_read_*); they NEVER change load behavior.
+/// Title owner committed/live state field (owner+0x48, == TITLE_OWNER_STATE_COMMITTED_OFFSET). 5 ==
+/// PlayGame/streaming after SetState5.
+pub(crate) static OWN_LOAD_STREAM_OWNER_STATE: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(OWN_LOAD_STREAM_FIELD_UNREAD);
+/// Title owner requested/next state field (owner+0x4c, == TITLE_OWNER_STATE_OFFSET; the value the
+/// continue_confirm disasm context writes). Logged alongside +0x48 to disambiguate committed vs next.
+pub(crate) static OWN_LOAD_STREAM_OWNER_REQ_STATE: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(OWN_LOAD_STREAM_FIELD_UNREAD);
+/// MoveMapStep step-machine state (mms_state) = [[InGameStep(owner+0x2e8)+0xe8]+0x48]. The known
+/// stall floor is step 3 = STEP_WorldResWait. UNREAD if the InGameStep/MoveMapStep chain is null
+/// (e.g. before SetState5 builds it). This is the KEY world-load pump state.
+pub(crate) static OWN_LOAD_STREAM_MMS_STATE: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(OWN_LOAD_STREAM_FIELD_UNREAD);
+/// Loaded-block count read by STEP_WorldResWait residency: [[[MoveMapStep+0xf0]+0x10]+0xb3140].
+/// 0 == no map-block registered yet (setup gap); >0 == streaming in progress (the count/phase
+/// is the real progress signal). UNREAD if the resmgr chain is null.
+pub(crate) static OWN_LOAD_STREAM_BLOCK_COUNT: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(OWN_LOAD_STREAM_FIELD_UNREAD);
+/// The world coord/map-id MoveMapStep requests in STEP_WorldResWait ([[MoveMapStep+0xf0]+0x2c]).
+/// byte3 == 0x0a means slot 9's m10 is being requested (loader/streaming issue); 0 means the saved
+/// world position never loaded (coord issue). UNREAD if the chain is null.
+pub(crate) static OWN_LOAD_STREAM_REQ_COORD: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(OWN_LOAD_STREAM_FIELD_UNREAD);
+/// IO device in-flight word [iodev+0x10]. Non-zero == a save/world read is pending in the iodev.
+/// At the observed stall this was 0 (iodev idle -> the stall is NOT in save-IO we bypassed).
+pub(crate) static OWN_LOAD_STREAM_IO_INFLIGHT: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(OWN_LOAD_STREAM_FIELD_UNREAD);
+/// IO device started-request handle [iodev+0x20]. Pairs with +0x18 as a *started* async-IO read.
+pub(crate) static OWN_LOAD_STREAM_IO_REQHANDLE: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(OWN_LOAD_STREAM_FIELD_UNREAD);
+/// GameMan+0xc30 saved-map id (the streamed map). Real (e.g. 0x1c000000) after a successful mount.
+pub(crate) static OWN_LOAD_STREAM_C30: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(OWN_LOAD_STREAM_FIELD_UNREAD);
+/// Monotonic count of frames the per-frame stall telemetry has sampled (since own_load armed). Pairs
+/// with the values above: if frames climb but every value is frozen, that is a genuine stall.
+pub(crate) static OWN_LOAD_STREAM_FRAMES: AtomicU64 = AtomicU64::new(0);
+/// Whether the local player (WorldChrMan/PlayerIns) has resolved during the world-stream observe
+/// window. 1 == present (the world spawned), 0 == absent (still on the loading screen), UNREAD
+/// (i64::MIN) == not yet observed. The recurring observer publishes this so a probe can see the
+/// loading screen -> spawn transition (or its absence) alongside mms_state/block_count.
+pub(crate) static OWN_LOAD_STREAM_PLAYER_PRESENT: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(OWN_LOAD_STREAM_FIELD_UNREAD);
+/// Set true the instant `own_load_continue_fire` returns from the native continue_confirm (SetState5
+/// started the title->ingame transition). The RECURRING game task gates its world-stream observer on
+/// this flag so it keeps logging THROUGH the loading screen -- own_stepper_idx10 (a TITLE-PHASE task)
+/// STOPS ticking once SetState5 starts the transition, so the observer must live in the per-frame
+/// game task instead. (own-load-stream-observer-must-be-recurring-task-2026-06-22)
+pub(crate) static OWN_LOAD_CONTINUE_FIRED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// The SetState-able TITLE owner threaded into continue_confirm, cached at fire time so the recurring
+/// observer reads the world-stream from the SAME object the load was kicked on (NOT a fresh
+/// own_stepper owner, which stops being supplied once the title task dies). 0 == not cached.
+pub(crate) static OWN_LOAD_OWNER_CACHED: AtomicUsize = AtomicUsize::new(0);
+/// InGameStep = *(owner+TITLE_OWNER_JOB_OFFSET), cached at fire time. It was already non-null at
+/// frame 0 (observed 0x7fff21e09a40) so caching it then captures a stable handle the recurring
+/// observer can walk to MoveMapStep even after the title task stops running. 0 == not cached.
+pub(crate) static OWN_LOAD_INGAMESTEP_CACHED: AtomicUsize = AtomicUsize::new(0);
+/// Monotonic frame counter for the RECURRING world-stream observer (advances every game-task frame
+/// the observer is active). Distinct from OWN_LOAD_STREAM_FRAMES (which the old own_stepper-sited
+/// telemetry also bumps): this is the "frame=N" the recurring observer's debug line prints so the
+/// trend across the loading screen is visible.
+pub(crate) static OWN_LOAD_STREAM_RECUR_FRAMES: AtomicU64 = AtomicU64::new(0);
 pub(crate) static PRODUCT_CORE_AUTOLOAD_TICKS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static PRODUCT_CORE_READY_BLOCKS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static PRODUCT_CORE_READY_SUCCESSES: AtomicU64 = AtomicU64::new(0);
@@ -2150,6 +2223,254 @@ unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     }
 }
 
+/// How often (in own_stepper frames) the OWN-LOAD world-stream stall telemetry emits a throttled
+/// debug line. The oracle_* atomics are refreshed EVERY frame; only the human-readable log is
+/// throttled so a probe log shows the trend without flooding.
+pub(crate) const OWN_LOAD_STREAM_LOG_INTERVAL: u64 = 30;
+/// MoveMapStep step-machine state field offset (mms_state). The step machine commits its current
+/// step at +0x48 (same layout as the title owner committed_state); STEP_WorldResWait == 3 is the
+/// observed stall floor. Read [[InGameStep(owner+0x2e8)+0xe8]+0x48].
+pub(crate) const MOVEMAPSTEP_STATE_48_OFFSET: usize = TITLE_OWNER_STATE_COMMITTED_OFFSET;
+
+/// SAVE-SAFE per-frame OWN-LOAD world-stream stall telemetry. PURE READS ONLY (safe_read_*; never
+/// changes load behavior). Walks the deepest world-load pump chain each frame and publishes the
+/// values to the OWN_LOAD_STREAM_* oracle atomics, plus a throttled human-readable debug line, so a
+/// probe log reveals whether ANY value advances over time (progress) or all are frozen (genuine
+/// stall). Gated to the own_load path only -- the caller invokes this exclusively inside the
+/// `own_load_enabled()` branch, so it never spams during normal play.
+///
+/// Chain (full-pipeline-traced-to-worldreswait-map-block-streaming):
+///   title_owner+0x48 = committed/live title state (5 == PlayGame after SetState5)
+///   title_owner+0x4c = requested/next title state
+///   InGameStep = [title_owner+0x2e8] (load_job); MoveMapStep = [InGameStep+0xe8]
+///   mms_state   = [MoveMapStep+0x48]      (STEP_WorldResWait == 3 == the stall floor)
+///   resmgr      = [[MoveMapStep+0xf0]+0x10]; block_count = [resmgr+0xb3140]
+///   req_coord   = [[MoveMapStep+0xf0]+0x2c]
+///   iodev       = [base+IODEV_GLOBAL_RVA]; inflight = [iodev+0x10]; reqhandle = [iodev+0x20]
+///   c30         = [gm+0xc30]
+unsafe fn own_load_stream_telemetry(base: usize, gm: usize, title_owner: usize, n: u64) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    // Fault-tolerant deref helper: returns Some(child) only on a real, non-null read.
+    let deref = |addr: usize| -> Option<usize> {
+        match unsafe { safe_read_usize(addr) } {
+            Some(v) if v != null => Some(v),
+            _ => None,
+        }
+    };
+    // Title owner state fields (owner+0x48 committed, owner+0x4c requested).
+    let owner_state = if title_owner != null {
+        unsafe { safe_read_i32(title_owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }
+            .map(i64::from)
+            .unwrap_or(OWN_LOAD_STREAM_FIELD_UNREAD)
+    } else {
+        OWN_LOAD_STREAM_FIELD_UNREAD
+    };
+    let owner_req_state = if title_owner != null {
+        unsafe { safe_read_i32(title_owner + TITLE_OWNER_STATE_OFFSET) }
+            .map(i64::from)
+            .unwrap_or(OWN_LOAD_STREAM_FIELD_UNREAD)
+    } else {
+        OWN_LOAD_STREAM_FIELD_UNREAD
+    };
+    // InGameStep (owner+0x2e8) -> MoveMapStep (+0xe8) -> mms_state (+0x48).
+    let ingame = if title_owner != null {
+        deref(title_owner + TITLE_OWNER_JOB_OFFSET)
+    } else {
+        None
+    };
+    let movemapstep = ingame.and_then(|ig| deref(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET));
+    let mms_state = match movemapstep {
+        Some(mms) => unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_OFFSET) }
+            .map(i64::from)
+            .unwrap_or(OWN_LOAD_STREAM_FIELD_UNREAD),
+        None => OWN_LOAD_STREAM_FIELD_UNREAD,
+    };
+    // World-resource manager chain: resmgr = [[MoveMapStep+0xf0]+0x10]; block_count = [resmgr+0xb3140].
+    let resmgr = movemapstep
+        .and_then(|mms| deref(mms + MOVEMAPSTEP_WORLDRES_F0_OFFSET))
+        .and_then(|wrm| deref(wrm + WORLDRES_RESMGR_10_OFFSET));
+    let block_count = match resmgr {
+        Some(rm) => unsafe { safe_read_i32(rm + RESMGR_BLOCK_COUNT_B3140_OFFSET) }
+            .map(i64::from)
+            .unwrap_or(OWN_LOAD_STREAM_FIELD_UNREAD),
+        None => OWN_LOAD_STREAM_FIELD_UNREAD,
+    };
+    // Requested world coord/map-id ([[MoveMapStep+0xf0]+0x2c]).
+    let req_coord = match movemapstep.and_then(|mms| deref(mms + MOVEMAPSTEP_WORLDRES_F0_OFFSET)) {
+        Some(wrm) => unsafe { safe_read_usize(wrm + WORLDRES_COORD_2C_OFFSET) }
+            .map(|v| v as i64)
+            .unwrap_or(OWN_LOAD_STREAM_FIELD_UNREAD),
+        None => OWN_LOAD_STREAM_FIELD_UNREAD,
+    };
+    // IO device inflight / started-request handle.
+    let iodev = deref(base + IODEV_GLOBAL_RVA);
+    let io_inflight = match iodev {
+        Some(dev) => unsafe { safe_read_usize(dev + IODEV_INFLIGHT_10_OFFSET) }
+            .map(|v| v as i64)
+            .unwrap_or(OWN_LOAD_STREAM_FIELD_UNREAD),
+        None => OWN_LOAD_STREAM_FIELD_UNREAD,
+    };
+    let io_reqhandle = match iodev {
+        Some(dev) => unsafe { safe_read_usize(dev + IODEV_REQHANDLE_20_OFFSET) }
+            .map(|v| v as i64)
+            .unwrap_or(OWN_LOAD_STREAM_FIELD_UNREAD),
+        None => OWN_LOAD_STREAM_FIELD_UNREAD,
+    };
+    // GameMan+0xc30 saved-map id (the streamed map).
+    let c30 = if gm != null {
+        unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }
+            .map(i64::from)
+            .unwrap_or(OWN_LOAD_STREAM_FIELD_UNREAD)
+    } else {
+        OWN_LOAD_STREAM_FIELD_UNREAD
+    };
+    // Publish every frame (the oracle_* fields are the machine-readable progress signal).
+    OWN_LOAD_STREAM_OWNER_STATE.store(owner_state, Ordering::SeqCst);
+    OWN_LOAD_STREAM_OWNER_REQ_STATE.store(owner_req_state, Ordering::SeqCst);
+    OWN_LOAD_STREAM_MMS_STATE.store(mms_state, Ordering::SeqCst);
+    OWN_LOAD_STREAM_BLOCK_COUNT.store(block_count, Ordering::SeqCst);
+    OWN_LOAD_STREAM_REQ_COORD.store(req_coord, Ordering::SeqCst);
+    OWN_LOAD_STREAM_IO_INFLIGHT.store(io_inflight, Ordering::SeqCst);
+    OWN_LOAD_STREAM_IO_REQHANDLE.store(io_reqhandle, Ordering::SeqCst);
+    OWN_LOAD_STREAM_C30.store(c30, Ordering::SeqCst);
+    let frames = OWN_LOAD_STREAM_FRAMES.fetch_add(1, Ordering::SeqCst);
+    // Throttled human-readable trend line.
+    if frames % OWN_LOAD_STREAM_LOG_INTERVAL == 0 {
+        let ig = ingame.unwrap_or(null);
+        let mms = movemapstep.unwrap_or(null);
+        let rm = resmgr.unwrap_or(null);
+        append_autoload_debug(format_args!(
+            "own-load-stream: frame={frames} (n={n}) owner_state={owner_state} owner_req={owner_req_state} ingame=0x{ig:x} mms=0x{mms:x} mms_state={mms_state} resmgr=0x{rm:x} block_count={block_count} req_coord=0x{req_coord:x} io_inflight=0x{io_inflight:x} io_reqhandle=0x{io_reqhandle:x} c30=0x{c30:x}"
+        ));
+    }
+}
+
+/// SAVE-SAFE RECURRING world-stream observer, called from the per-frame GAME TASK (NOT the
+/// title-phase own_stepper_idx10, which stops ticking once SetState5 starts the title->ingame
+/// transition). Gated hard on `OWN_LOAD_CONTINUE_FIRED` so it only runs after the guarded
+/// continue_confirm fired -- it never spams during normal play. PURE READS ONLY (safe_read_*; never
+/// changes load behavior).
+///
+/// It re-reads the world-stream from the CACHED title owner + InGameStep (snapshotted at fire time),
+/// NOT from a fresh own_stepper owner, so it keeps observing through the whole loading screen:
+///   owner       = OWN_LOAD_OWNER_CACHED              (cached at continue_confirm fire)
+///   InGameStep  = OWN_LOAD_INGAMESTEP_CACHED         (== owner+0x2e8 at fire; non-null at frame 0)
+///   MoveMapStep = [InGameStep+0xe8]                  (INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET)
+///   mms_state   = [MoveMapStep+0x48]                 (MOVEMAPSTEP_STATE_48_OFFSET; 3 == WorldResWait)
+///   resmgr      = [[MoveMapStep+0xf0]+0x10]          (MOVEMAPSTEP_WORLDRES_F0_OFFSET / WORLDRES_RESMGR_10_OFFSET)
+///   block_count = [resmgr+0xb3140]                   (RESMGR_BLOCK_COUNT_B3140_OFFSET)
+///   owner_state = [owner+0x48]                       (TITLE_OWNER_STATE_COMMITTED_OFFSET)
+///   c30         = [gm+0xc30]                          (GAME_MAN_SAVED_MAP_C30_OFFSET)
+///   player_present is resolved by the caller (WorldChrMan/PlayerIns) and passed in.
+///
+/// `frame=N` advances every active frame (OWN_LOAD_STREAM_RECUR_FRAMES) so a probe sees whether
+/// mms_state advances/sticks and whether block_count stays 0 vs grows ACROSS the loading screen.
+/// Publishes the SAME oracle_own_load_stream_* fields so they keep updating through the load.
+pub(crate) unsafe fn own_load_stream_observe_recurring(
+    base: usize,
+    gm: usize,
+    player_present: bool,
+) {
+    if !OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst) {
+        return;
+    }
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let deref = |addr: usize| -> Option<usize> {
+        match unsafe { safe_read_usize(addr) } {
+            Some(v) if v != null && v != 0 => Some(v),
+            _ => None,
+        }
+    };
+    let owner = OWN_LOAD_OWNER_CACHED.load(Ordering::SeqCst);
+    let ingame_cached = OWN_LOAD_INGAMESTEP_CACHED.load(Ordering::SeqCst);
+    // owner+0x48 committed state (5 == PlayGame/streaming after SetState5).
+    let owner_state = if owner != null && owner != 0 {
+        unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }
+            .map(i64::from)
+            .unwrap_or(OWN_LOAD_STREAM_FIELD_UNREAD)
+    } else {
+        OWN_LOAD_STREAM_FIELD_UNREAD
+    };
+    let owner_req_state = if owner != null && owner != 0 {
+        unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_OFFSET) }
+            .map(i64::from)
+            .unwrap_or(OWN_LOAD_STREAM_FIELD_UNREAD)
+    } else {
+        OWN_LOAD_STREAM_FIELD_UNREAD
+    };
+    // Prefer the cached InGameStep; if that snapshot is null/0, re-derive from the cached owner.
+    let ingame = if ingame_cached != null && ingame_cached != 0 {
+        Some(ingame_cached)
+    } else if owner != null && owner != 0 {
+        deref(owner + TITLE_OWNER_JOB_OFFSET)
+    } else {
+        None
+    };
+    let movemapstep = ingame.and_then(|ig| deref(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET));
+    let mms_state = match movemapstep {
+        Some(mms) => unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_OFFSET) }
+            .map(i64::from)
+            .unwrap_or(OWN_LOAD_STREAM_FIELD_UNREAD),
+        None => OWN_LOAD_STREAM_FIELD_UNREAD,
+    };
+    let resmgr = movemapstep
+        .and_then(|mms| deref(mms + MOVEMAPSTEP_WORLDRES_F0_OFFSET))
+        .and_then(|wrm| deref(wrm + WORLDRES_RESMGR_10_OFFSET));
+    let block_count = match resmgr {
+        Some(rm) => unsafe { safe_read_i32(rm + RESMGR_BLOCK_COUNT_B3140_OFFSET) }
+            .map(i64::from)
+            .unwrap_or(OWN_LOAD_STREAM_FIELD_UNREAD),
+        None => OWN_LOAD_STREAM_FIELD_UNREAD,
+    };
+    let req_coord = match movemapstep.and_then(|mms| deref(mms + MOVEMAPSTEP_WORLDRES_F0_OFFSET)) {
+        Some(wrm) => unsafe { safe_read_usize(wrm + WORLDRES_COORD_2C_OFFSET) }
+            .map(|v| v as i64)
+            .unwrap_or(OWN_LOAD_STREAM_FIELD_UNREAD),
+        None => OWN_LOAD_STREAM_FIELD_UNREAD,
+    };
+    let iodev = deref(base + IODEV_GLOBAL_RVA);
+    let io_inflight = match iodev {
+        Some(dev) => unsafe { safe_read_usize(dev + IODEV_INFLIGHT_10_OFFSET) }
+            .map(|v| v as i64)
+            .unwrap_or(OWN_LOAD_STREAM_FIELD_UNREAD),
+        None => OWN_LOAD_STREAM_FIELD_UNREAD,
+    };
+    let io_reqhandle = match iodev {
+        Some(dev) => unsafe { safe_read_usize(dev + IODEV_REQHANDLE_20_OFFSET) }
+            .map(|v| v as i64)
+            .unwrap_or(OWN_LOAD_STREAM_FIELD_UNREAD),
+        None => OWN_LOAD_STREAM_FIELD_UNREAD,
+    };
+    let c30 = if gm != null && gm != 0 {
+        unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }
+            .map(i64::from)
+            .unwrap_or(OWN_LOAD_STREAM_FIELD_UNREAD)
+    } else {
+        OWN_LOAD_STREAM_FIELD_UNREAD
+    };
+    let player_present_i64 = i64::from(player_present);
+    // Publish every frame (the oracle_* fields are the machine-readable progress signal); these now
+    // keep updating THROUGH the loading screen because this runs in the recurring game task.
+    OWN_LOAD_STREAM_OWNER_STATE.store(owner_state, Ordering::SeqCst);
+    OWN_LOAD_STREAM_OWNER_REQ_STATE.store(owner_req_state, Ordering::SeqCst);
+    OWN_LOAD_STREAM_MMS_STATE.store(mms_state, Ordering::SeqCst);
+    OWN_LOAD_STREAM_BLOCK_COUNT.store(block_count, Ordering::SeqCst);
+    OWN_LOAD_STREAM_REQ_COORD.store(req_coord, Ordering::SeqCst);
+    OWN_LOAD_STREAM_IO_INFLIGHT.store(io_inflight, Ordering::SeqCst);
+    OWN_LOAD_STREAM_IO_REQHANDLE.store(io_reqhandle, Ordering::SeqCst);
+    OWN_LOAD_STREAM_C30.store(c30, Ordering::SeqCst);
+    OWN_LOAD_STREAM_PLAYER_PRESENT.store(player_present_i64, Ordering::SeqCst);
+    let frames = OWN_LOAD_STREAM_RECUR_FRAMES.fetch_add(1, Ordering::SeqCst);
+    if frames % OWN_LOAD_STREAM_LOG_INTERVAL == 0 {
+        let ig = ingame.unwrap_or(null);
+        let mms = movemapstep.unwrap_or(null);
+        let rm = resmgr.unwrap_or(null);
+        append_autoload_debug(format_args!(
+            "own-load-stream: frame={frames} (recurring) owner=0x{owner:x} owner_state={owner_state} owner_req={owner_req_state} ingame=0x{ig:x} mms=0x{mms:x} mms_state={mms_state} resmgr=0x{rm:x} block_count={block_count} req_coord=0x{req_coord:x} io_inflight=0x{io_inflight:x} io_reqhandle=0x{io_reqhandle:x} c30=0x{c30:x} player_present={player_present}"
+        ));
+    }
+}
+
 /// SAVE-SAFE verify-only OWN-LOAD buffer-feed drive (one-shot, phased). Reads the .sl2 from disk,
 /// slices slot `want_slot`'s plaintext body, installs+arms the gated 0x67b100 hook, calls the native
 /// parser 0x67b290(slot) in-process so it parses OUR body, then reads back GameMan+0xc30 + the
@@ -2364,8 +2685,19 @@ unsafe fn own_load_continue_fire(
         format_args!("c30=0x{c30:x} level={fp_level}"),
     );
     unsafe { confirm(shim_ptr) };
+    // Cache the pointers the RECURRING world-stream observer needs, then arm it. own_stepper_idx10 (a
+    // TITLE-PHASE task) STOPS ticking once SetState5 starts this transition, so the title `owner` and
+    // its InGameStep (owner+0x2e8) will no longer be threaded in. Snapshot them HERE (InGameStep was
+    // already non-null at frame 0) so the recurring game task can keep walking owner->InGameStep->
+    // MoveMapStep through the whole loading screen. (own-load-stream-observer-must-be-recurring-task-2026-06-22)
+    OWN_LOAD_OWNER_CACHED.store(title_owner, Ordering::SeqCst);
+    let ingame_cached = unsafe { safe_read_usize(title_owner + TITLE_OWNER_JOB_OFFSET) }
+        .filter(|&v| v != null)
+        .unwrap_or(0);
+    OWN_LOAD_INGAMESTEP_CACHED.store(ingame_cached, Ordering::SeqCst);
+    OWN_LOAD_CONTINUE_FIRED.store(true, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "own-load-continue: continue_confirm returned -- native pump now streams the real world (#{n}) -> DONE"
+        "own-load-continue: continue_confirm returned -- native pump now streams the real world (#{n}); recurring world-stream observer ARMED (owner=0x{title_owner:x} ingame=0x{ingame_cached:x}) -> DONE"
     ));
 }
 
@@ -5586,6 +5918,12 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
     // save write. Bypasses the menu drive while active; pass-through keeps the title ticking.
     if own_load_enabled() && unsafe { title_boot_ready(owner, base) } {
         unsafe { own_load_drive(base, gm, owner, want_slot, n) };
+        // Per-frame world-stream stall telemetry (pure reads). own_load_drive's one-shot phase
+        // machine fast-forwards to PHASE_DONE after the verify/continue fires, so this runs EVERY
+        // own_load frame -- including all the post-continue_confirm/SetState5 loading-screen frames
+        // -- and publishes the deepest world-load pump values so a probe log shows whether the
+        // stream advances or is frozen at WorldResWait. Gated to the own_load path: never in play.
+        unsafe { own_load_stream_telemetry(base, gm, owner, n) };
         pass_through(false);
         return;
     }

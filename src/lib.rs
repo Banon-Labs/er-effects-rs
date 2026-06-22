@@ -3284,6 +3284,20 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         unsafe { maybe_arm_c30_watch(base, frame) };
                     }
                 }
+                // RECURRING world-stream observer (own-load-stream-observer-must-be-recurring-task-2026-06-22).
+                // Internally no-ops until own_load_continue_fire sets OWN_LOAD_CONTINUE_FIRED, so it
+                // costs nothing during normal play and never spams. After continue_confirm/SetState5
+                // fires, own_stepper_idx10 (a TITLE-PHASE task) STOPS ticking, so this per-frame game
+                // task is the ONLY place that keeps logging the world-stream pump THROUGH the loading
+                // screen. Runs BEFORE the player check so it ticks while there is no player yet (the
+                // loading-screen frames are exactly when player_present is false). Pure reads only.
+                if own_load_enabled() && OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst) {
+                    if let Ok(base) = game_module_base() {
+                        let gm = game_man_ptr_or_null();
+                        let player_present = unsafe { PlayerIns::local_player_mut() }.is_ok();
+                        unsafe { own_load_stream_observe_recurring(base, gm, player_present) };
+                    }
+                }
                 // Anti-anti-debug (ported from ProDebug, correct base): neutralize FromSoft's
                 // timed anti-debug so debug exceptions / our INT3 breakpoints reach our VEH.
                 // Runs ONCE, BEFORE arming breakpoints, from the game task (game up, .text
