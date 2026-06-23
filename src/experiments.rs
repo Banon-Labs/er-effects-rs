@@ -1395,6 +1395,9 @@ pub(crate) static TFC_CONTINUE_FIRED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TFC_DRAIN_DIALOG: AtomicUsize = AtomicUsize::new(0);
 /// One-shot guard for the autonomous open-menu (`maybe_auto_open_menu`).
 pub(crate) static TFC_AUTO_MENU_OPENED: AtomicUsize = AtomicUsize::new(0);
+/// Throttle counter for the dialog+0x50 load-vector readiness gate in `maybe_fire_tfc_continue`
+/// (logs the count value occasionally while waiting for it to become a valid has-room vector).
+pub(crate) static TFC_LOAD_VEC_WAIT_TICKS: AtomicUsize = AtomicUsize::new(0);
 /// The built LoadGame job pointer (selector's out[0]) to pump directly via `ExecuteMenuJob` each
 /// frame. 0 = nothing to pump. Set by `maybe_fire_tfc_continue`; cleared when the job completes
 /// (ExecuteMenuJob zeroes the slot) or the tick cap is hit. Pumping our own job avoids the dialog's
@@ -3950,6 +3953,29 @@ pub(crate) unsafe fn maybe_fire_tfc_continue(base: usize) {
     if !(tfc > OWNER_CTX_MIN_PLAUSIBLE_PTR && tfc < OWNER_CTX_MAX_PLAUSIBLE_PTR) {
         return;
     }
+    // READINESS GATE on dialog+0x50 (the load MenuWindowJob's push target -- selector sets r8=dialog+
+    // 0x50). A run showed its count field (dialog+0x50+0x48 = dialog+0x98) can hold GARBAGE (a pointer
+    // ~0x7fff..., not a small count) -> dialog+0x50 is not yet a valid/ready vector in our self-opened
+    // flow, and firing then crashes (insert reads garbage count -> 'out of memory'). Fire ONLY when the
+    // count is a plausible small value WITH ROOM (< 8); else WAIT (do NOT consume the one-shot) and
+    // retry next frame. If it never becomes valid we simply never fire (no crash). bd
+    // dialog-plus0x50-NOT-a-vector-built-job-miscontextualized-2026-06-23.
+    let load_vec_count = unsafe {
+        safe_read_usize(dialog + DIALOG_MENUWINDOW_VEC_50_OFFSET + DLFIXEDVECTOR_COUNT_48_OFFSET)
+    }
+    .unwrap_or(usize::MAX);
+    if load_vec_count >= 8 {
+        let waits = TFC_LOAD_VEC_WAIT_TICKS.fetch_add(1, Ordering::SeqCst);
+        if waits % 120 == 0 {
+            append_autoload_debug(format_args!(
+                "fire-tfc-continue: WAIT -- dialog+0x50 load vector not ready (count@dialog+0x98=0x{load_vec_count:x} >= 8, likely uninitialized/garbage) dialog=0x{dialog:x} waits={waits}; not firing"
+            ));
+        }
+        return;
+    }
+    append_autoload_debug(format_args!(
+        "fire-tfc-continue: dialog+0x50 load vector READY (count={load_vec_count} < 8) -- proceeding to fire (dialog=0x{dialog:x})"
+    ));
     let before = unsafe { safe_read_i32(tfc + TFC_DISPATCH_STATE_14C_OFFSET) }.unwrap_or(-1);
     // Set the save slot on mss FIRST (builder reads mss+0x1200 as the factory r8), then the dispatch
     // bit -- mirroring the native confirm handler 0x1409a9250's two key writes.
@@ -4024,6 +4050,20 @@ pub(crate) unsafe fn maybe_fire_tfc_continue(base: usize) {
     let _ = MENUJOB_PUSHBACK_RVA;
     let _ = MENU_DRAIN_WRAPPER_RVA;
     let _ = EXECUTE_MENU_JOB_RVA;
+    // MAKE ROOM in dialog+0x50's cap-8 DLFixedVector<MenuJob*,8> BEFORE our load job pumps. Pinned via
+    // the push-site sw-bp diagnostic (0x1407ad53b rcx=dialog+0x50): our load's CS::MenuWindowJob::Run
+    // pushes its window into dialog+0x50, which is already FULL -> push #9 -> "out of memory"
+    // (DLFixedVector.inl:662) crash. Reset the count (at dialog+0x50+0x48 = dialog+0x98) to 0 so the
+    // push has room. Orphans the dialog's existing windows -- acceptable, we are leaving the title menu
+    // for the load. bd OVERFLOW-VECTOR-PINNED-dialog-plus-0x50-2026-06-23.
+    let vec_count_addr = dialog + DIALOG_MENUWINDOW_VEC_50_OFFSET + DLFIXEDVECTOR_COUNT_48_OFFSET;
+    let old_vec_count = unsafe { safe_read_usize(vec_count_addr) }.unwrap_or(usize::MAX);
+    if old_vec_count != usize::MAX {
+        unsafe { *(vec_count_addr as *mut u64) = 0 };
+        append_autoload_debug(format_args!(
+            "fire-tfc-continue: reset dialog+0x50 MenuWindowJob vector count @0x{vec_count_addr:x} (was {old_vec_count}) -> 0 to make room for the load window push (dialog=0x{dialog:x})"
+        ));
+    }
     // TARGET = owner+0x130, the title flow's ACTIVE MenuJob slot that STEP_MenuJobWait runs
     // ExecuteMenuJob(&owner+0x130) on EVERY frame (the title's own per-frame pump, definitely live at
     // the title menu -- unlike currentTopMenuJob+0xB0 which a run showed is EMPTY/unused by the title).

@@ -242,6 +242,11 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
                         trace_callers_summary()
                     ));
                 }
+                // (Reverted: an OVERFLOW-GUARD here that reset [rcx+0x48] on the 0x7ad53b push was
+                // based on a WRONG premise -- that field is a POINTER (~0x7fff...), not a small count,
+                // so dialog+0x50 is NOT a valid DLFixedVector in our context; zeroing it corrupted the
+                // dialog -> a new AV. The real issue is the load job's mis-contextualized push target,
+                // not an 8-full vector. bd dialog-plus0x50-NOT-a-vector-built-job-miscontextualized.)
                 let orig = (SW_BP_ORIG[slot].load(Ordering::SeqCst) & SW_BP_ORIG_BYTE_MASK) as u8;
                 unsafe { write_code_byte(bp_addr, orig) };
                 unsafe {

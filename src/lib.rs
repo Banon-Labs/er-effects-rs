@@ -1178,6 +1178,15 @@ pub(crate) const CSPOPUP_TOP_JOB_B0_OFFSET: usize = 0xB0;
 pub(crate) const MENU_JOB_ASSIGN3_RVA: usize = 0x7a9460;
 /// CS::MenuJob (DLReferenceCountObject) refcount field at +0x8 (vfptr at +0x0).
 pub(crate) const MENU_JOB_REFCOUNT_8_OFFSET: usize = 0x8;
+/// CS::TitleTopDialog embedded MenuWindowJob `DLFixedVector<MenuJob*,8>` at `dialog+0x50` -- the push
+/// target our built load job's `CS::MenuWindowJob::Run` (`0x1407ad53b call 0x140733ef0`) inserts its
+/// window into. Pinned via the push-site sw-bp diagnostic (rcx=`dialog+0x50`). Cap-8 and already FULL
+/// with the dialog's windows, so the load window's push #9 overflows ("out of memory"
+/// DLFixedVector.inl:662). Reset its count to make room. bd OVERFLOW-VECTOR-PINNED-dialog-plus-0x50.
+pub(crate) const DIALOG_MENUWINDOW_VEC_50_OFFSET: usize = 0x50;
+/// DLFixedVector element-count field at +0x48 (the push reads/increments `[vector+0x48]`, panics >8).
+/// The dialog+0x50 vector's count is thus at `dialog+0x50+0x48 = dialog+0x98`.
+pub(crate) const DLFIXEDVECTOR_COUNT_48_OFFSET: usize = 0x48;
 /// CSMenuSystemSaveLoad save-slot field (`mss+0x1200`). The native confirm handler `0x1409a9250`
 /// writes the slot here (the builder `0x1409ac8b0` reads it at `0x1409ac9d2` as the factory `r8`).
 /// Replicate that write so the direct trigger loads the intended slot.
