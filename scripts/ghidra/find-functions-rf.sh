@@ -22,6 +22,10 @@ THRESHOLD=0.80
 MAX_STARTS=1000
 MIN_RANGE=16
 LOG=""
+# RF classify holds all candidate addresses + feature data in heap; on a large program (e.g. the
+# 94MB deobf image with hundreds of thousands of undefined candidates) the default 2G heap OOMs.
+# Give it room by default (the box has plenty); override with --max-mem or GHIDRA_MAXMEM.
+MAXMEM="${GHIDRA_MAXMEM:-8G}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -30,6 +34,7 @@ while [[ $# -gt 0 ]]; do
     --threshold)  THRESHOLD="$2"; shift 2 ;;
     --max-starts) MAX_STARTS="$2"; shift 2 ;;
     --min-range)  MIN_RANGE="$2"; shift 2 ;;
+    --max-mem)    MAXMEM="$2"; shift 2 ;;
     --log)        LOG="$2"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -42,6 +47,7 @@ TMP=/home/banon/ghidra_maporch/tmp
 mkdir -p "$TMP"
 export TMPDIR="$TMP"
 export GHIDRA_JAVA_OPTIONS="-Djava.io.tmpdir=$TMP"
+export GHIDRA_MAXMEM="$MAXMEM"   # analyzeHeadless reads this to set -Xmx
 
 if [[ -z "$LOG" ]]; then
   LOG="$(mktemp "$TMP/rf-finder.XXXXXX.log")"
