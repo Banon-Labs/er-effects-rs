@@ -126,20 +126,26 @@ scripts/ghidra/mcp-ghidra-daemon.sh start --proj-dir /home/banon/ghidra_maporch/
 ```
 
 The daemon detaches (`setsid`) so the warm program survives across client/session
-restarts; clean shutdown is a stop-file. Default is **read-only** -- a query/analysis
-server. The bridge (launched by `.mcp.json`) connects to the daemon's port and
-reconnects automatically if it restarts. After starting the daemon, restart this MCP
-client so it picks up `.mcp.json`.
+restarts; clean shutdown is a stop-file. Default is **writable with auto-save** -- MCP
+edits (rename/struct/comment/bookmark) **persist** into the project. The bridge
+(launched by `.mcp.json`) connects to the daemon's port and reconnects automatically
+if it restarts. After starting the daemon, restart this MCP client so it picks up
+`.mcp.json`. Pass `--readonly` for a query-only server, `--save-interval N` to tune
+(default 60s; 0 = off).
 
-**Persistence limitation (important).** In headless `-process` mode the program runs
-inside a persistent transaction, so MCP *mutations* (rename/struct/comment/bookmark)
-**cannot be saved back to the project**: `DomainFile.save` fails with "Unable to lock
-due to active transaction", and analyzeHeadless's exit-save does not persist them
-either. Verified: a bookmark set via MCP was gone after both a crash and a clean
-`stop`. So `--writable` lets the mutation tools *run*, but edits are **ephemeral**
-(visible only within the live daemon session, lost on restart). For durable
-annotations, use the Ghidra GUI. The read-only default avoids the misleading
-half-state (and the save-error log spam).
+**How persistence works (the subtle part).** GhidraScript wraps `run()` in an
+auto-transaction named after the script. While it is open, MCP mutations cannot commit
+(`isChanged` stays false) and `save()` fails with "Unable to lock due to active
+transaction" -- and since the daemon blocks forever, that transaction would never
+close, so nothing would ever persist. `MCPServeHeadless.java` calls `end(true)` right
+after the server starts to commit+close that wrapping transaction; MCP mutations then
+commit via their own short transactions, and a periodic `Program.save()` (skipped while
+a mutation is mid-flight, plus a flush on clean stop) writes them back. `end()` is
+idempotent so the framework's own post-`run()` `end(true)` is a safe no-op.
+
+Verified end-to-end: a bookmark set via MCP **survived a `kill -9` crash + restart**
+(periodic save), and edits also flush on clean `stop`. A crash loses at most the last
+`--save-interval` seconds of edits.
 
 Verified end-to-end (headless daemon -> bridge -> MCP): `initialize` ok, 70 tools
 listed, `get_program_info` returns the warm program (`pc_eldenring_runtime.1.16.1`,

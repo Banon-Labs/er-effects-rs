@@ -3,17 +3,17 @@
 # Keeps one analyzeHeadless process alive with a program loaded so MCP tool calls are instant
 # and Ghidra is NOT restarted per operation. The 13bm Go bridge (.mcp.json) connects to PORT.
 #
-#   scripts/ghidra/mcp-ghidra-daemon.sh start   [--proj-dir DIR] [--proj-name NAME] [--port N] [--writable]
+#   scripts/ghidra/mcp-ghidra-daemon.sh start   [--proj-dir DIR] [--proj-name NAME] [--port N] [--readonly] [--save-interval N]
 #   scripts/ghidra/mcp-ghidra-daemon.sh stop
 #   scripts/ghidra/mcp-ghidra-daemon.sh status
 #   scripts/ghidra/mcp-ghidra-daemon.sh restart [same flags as start]
 #
-# Defaults: the symbolized DUMP project (ermaporch), port 8765, READ-ONLY.
-# IMPORTANT: this is a query server. In headless -process mode the program sits in a persistent
-# transaction, so MCP edits CANNOT be saved back (DomainFile.save -> "Unable to lock due to
-# active transaction"; exit-save does not persist either -- verified). --writable lets mutation
-# tools run but edits are EPHEMERAL (in-session only, lost on restart); for durable annotations
-# use the Ghidra GUI. To serve the deobf-native project instead:
+# Defaults: the symbolized DUMP project (ermaporch), port 8765, WRITABLE with auto-save.
+# MCP edits (rename/struct/comment/bookmark) PERSIST into the project: the daemon closes
+# GhidraScript's wrapping transaction (see MCPServeHeadless.java) so mutations commit and a
+# periodic save (default every 60s, plus a flush on clean stop) writes them back. A crash loses
+# at most the last <save-interval seconds of edits. Pass --readonly for a query-only server, or
+# --save-interval 0 to disable periodic save. To serve the deobf-native project instead:
 #   ... start --proj-dir /home/banon/ghidra_maporch/proj-deobf --proj-name erdeobf
 set -euo pipefail
 
@@ -28,15 +28,17 @@ PIDFILE="$RUN_DIR/daemon.pid"
 PROJ_DIR=/home/banon/ghidra_maporch/proj
 PROJ_NAME=ermaporch
 PORT=8765
-RO="-readOnly"   # default read-only (query server). --writable = ephemeral, non-persisted edits.
+RO=""        # default writable; edits persist via the daemon's periodic save. --readonly to opt out.
+SAVE_SEC=60  # periodic auto-save interval (seconds); 0 disables. Edits also flush on clean stop.
 
 CMD="${1:-}"; shift || true
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --proj-dir)  PROJ_DIR="$2"; shift 2 ;;
-    --proj-name) PROJ_NAME="$2"; shift 2 ;;
-    --port)      PORT="$2"; shift 2 ;;
-    --writable)  RO=""; shift ;;
+    --proj-dir)      PROJ_DIR="$2"; shift 2 ;;
+    --proj-name)     PROJ_NAME="$2"; shift 2 ;;
+    --port)          PORT="$2"; shift 2 ;;
+    --readonly)      RO="-readOnly"; shift ;;
+    --save-interval) SAVE_SEC="$2"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -54,7 +56,7 @@ do_start() {
   echo "starting MCP daemon: $PROJ_NAME on port $PORT ${RO:-(writable)}"
   # Fully detach so the daemon outlives this shell/session; the stop-file is the clean exit.
   setsid bash -c "exec '$HEADLESS' '$PROJ_DIR' '$PROJ_NAME' -process -noanalysis $RO \
-    -scriptPath '$SCRIPT_DIR' -postScript MCPServeHeadless.java '$PORT' '$STOPFILE'" \
+    -scriptPath '$SCRIPT_DIR' -postScript MCPServeHeadless.java '$PORT' '$STOPFILE' '$SAVE_SEC'" \
     >"$LOG" 2>&1 < /dev/null &
   echo $! > "$PIDFILE"
   # Wait (bounded) for readiness rather than sleeping blindly.
