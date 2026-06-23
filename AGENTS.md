@@ -65,6 +65,19 @@ Examples:
 
 Use `scripts/disas-deobf.sh --color=always ...` only for direct terminal/Kitty use.
 
+### In-Process Decoding (`iced-x86`)
+
+The `er_disasm` tool and `disas-*.sh` scripts (objdump-backed) are for **offline,
+agent-facing** disassembly. For **in-process, runtime** x86-64 decoding *inside the
+DLL* (instruction-length stepping for the INT3 single-step engine, function-prologue
+validation, byte-pattern confirmation), use the **`iced-x86`** crate -- it is now a
+direct dependency of the root `er-effects-rs` crate (pure-Rust, decoder-only feature
+set, zero cross-compile overhead under cargo-xwin; it was already present
+transitively via `ilhook`). Do **not** hard-code instruction byte lengths or
+prologue byte sequences in new code when `iced-x86` can decode them, and do **not**
+add a second disassembler (e.g. capstone/zydis) -- `iced-x86` already covers in-process
+needs and avoids a C cross-compile burden.
+
 ## Non-Interactive Shell Commands
 
 **ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.

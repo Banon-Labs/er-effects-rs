@@ -221,6 +221,7 @@ dependencies = [
  "er-save-loader",
  "fromsoftware-shared",
  "hudhook",
+ "iced-x86",
 ]
 
 [[package]]

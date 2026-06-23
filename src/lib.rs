@@ -1020,13 +1020,18 @@ pub(crate) const LOADGAME_JOB_BUILD_RVA: usize = 0x826510;
 /// occupant, then `AtomicDecrement`s/releases the PRIOR occupant and zeroes `*src` (move-assign).
 /// Installs the built job into `owner+0x130`, releasing the idle `IfElseJob` it replaces.
 pub(crate) const MENUJOB_ASSIGN_RVA: usize = 0x7a9560;
-/// `CS::MenuJobQueue::PushBackJob` (live entry `0x1407a9254`, dump `FUN_1407a9340`): APPENDS a job into
-/// a MenuJobQueue's ring (`AtomicIncrement`s the job, then ring-push behind the active job) -- it does
-/// NOT replace the active job or zero `*src`. `owner+0x130` is itself a MenuJobQueue (active job at
-/// +0x130, ring at +0x138, count at +0x178), so PushBackJob-ing our LoadGame job here appends it
-/// WITHOUT orphaning the title IfElseJob's sibling MenuWindowJobs (avoids the 0x140733fea menu-tear AV);
-/// STEP_MenuJobWait's ExecuteMenuJob then pops + ticks it. Win64 fastcall `(queue_base, src: *MenuJob*)`.
-pub(crate) const MENUJOB_PUSHBACK_RVA: usize = 0x7a9254;
+/// `CS::MenuJobQueue::PushBackJob` (live entry `0x1407a9250` -- prologue-grounded vs eldenring-deobf.bin:
+/// `mov [rsp+0x10],rdx; push rdi; sub rsp,0x30; movq $-2,[rsp+0x20]`; dump `FUN_1407a9340`). CORRECTED
+/// from the prior `0x7a9254`, which was +4 INTO the first instruction (mid-`mov`) and would execute
+/// garbage -- a latent bug that likely helped kill the gated `own_load_install_job` path. APPENDS a job
+/// into a MenuJobQueue's auto-growing deque ring (`AtomicIncrement`s the job, ring-push behind the
+/// active job) -- does NOT replace the active job or zero `*src`, and is overflow-safe (NOT the cap-8
+/// FixOrderJobSequence). Win64 fastcall `(rcx = queue_base, rdx = src: *MenuJob* (a DLReferenceCount
+/// Pointer slot whose [0] is the job))`. Queue targets: `owner+0x130` (ring +0x138, count +0x178;
+/// STEP_MenuJobWait's ExecuteMenuJob ticks it) OR `dialog+0x10` (ring +0x18; the per-frame menu pump
+/// 0x1409aa680 over the active-screen array drains it -- the native Continue post target).
+/// bd continue-load-POST-primitive-pushbackjob-kick-2026-06-22.
+pub(crate) const MENUJOB_PUSHBACK_RVA: usize = 0x7a9250;
 /// MenuJobQueue field offsets (for diagnostics): the queued-job ring count at +0x178 grows by 1 on a
 /// successful PushBackJob; the active job stays at +0x130.
 pub(crate) const MENUJOB_QUEUE_COUNT_178_OFFSET: usize = 0x178;
@@ -1107,6 +1112,15 @@ pub(crate) const DIALOG_OWNER_CTX_A38_OFFSET: usize = 0xa38;
 /// the candidate DIRECT "Continue pressed" trigger (no input) -- the exact bit we change.
 pub(crate) const TFC_DISPATCH_STATE_14C_OFFSET: usize = 0x14c;
 pub(crate) const TFC_DISPATCH_STATE_LOAD: i32 = 1;
+/// CS::TitleFlowContext `notReleaseFlag55` byte at `tfc+0x18c`. The load dispatcher `0x1409b3070`
+/// gates its BUILD-the-LoadGame-job branch on `IsNotReleaseFlag55` (`0x14082cd60`: `cmpb $0,0x18c(rcx)`
+/// -> returns 1 iff the byte is 0); the dispatcher takes the LOAD branch ONLY when that returns
+/// nonzero, i.e. when `*(u8*)(tfc+0x18c)==0`. The open-menu path sets this nonzero AFTER press-any-
+/// button, so a Continue trigger fired post-menu-open lands on the ABORT branch (empty job, no load).
+/// Force this to 0 before invoking the selector to guarantee the real LoadGame build. bd
+/// dispatcher-abort-branch-force-tfc-18c-zero-2026-06-23.
+pub(crate) const TFC_NOT_RELEASE_FLAG_18C_OFFSET: usize = 0x18c;
+pub(crate) const TFC_NOT_RELEASE_FLAG_CLEAR: u8 = 0;
 /// CS::TitleTopDialog Continue-item SELECTOR `0x1409a8eb0` -- the menu-item-action funclet that the
 /// engine invokes on Continue confirm (it is NOT pumped from the idle menu; setting tfc+0x14c alone
 /// is dormant -- bd tfc-bit-dormant-even-at-open-menu). ABI `__fastcall(rcx = &dialog_slot, rdx = out
@@ -1117,6 +1131,35 @@ pub(crate) const TFC_DISPATCH_STATE_LOAD: i32 = 1;
 /// Verified by disasm of 0x1409a8eb0 + the live user-Continue capture (selector body 0x9a8f09 ->
 /// 0x9b3070). bd LIVE-continue-chain-via-selector-NOT-confirm-handler.
 pub(crate) const TITLE_CONTINUE_SELECTOR_RVA: usize = 0x9a8eb0;
+/// CS::TitleTopDialog MenuJobQueue at `dialog+0x10` (ring at +0x18) -- the queue the native Continue
+/// path posts the built LoadGame job into, drained each frame by the menu pump `0x1409aa680` (which
+/// iterates the active-screen array `0x143d6d8d0` that holds the live `owner+0xe0` dialog). The
+/// selector/dispatcher only BUILD + return the job; we PushBackJob it here so it is pumped to
+/// completion. bd continue-load-POST-primitive-pushbackjob-kick-2026-06-22.
+pub(crate) const DIALOG_MENU_QUEUE_10_OFFSET: usize = 0x10;
+/// Menu-pump KICK pointer: `*(base+0x3b37c98)` holds `0x1409b3ff0` (a `jmp` thunk into the obfuscated
+/// per-frame pump trigger). The native posts a MenuJob then calls this zero-arg to drain it promptly;
+/// we replicate that after PushBackJob. RVA = abs - base; the stored value is an ABSOLUTE code ptr.
+pub(crate) const MENU_PUMP_KICK_PTR_RVA: usize = 0x3b37c98;
+/// MenuJobQueue per-frame DRAIN wrapper (deobf `0x1407a90f0`; dump `FUN_1407a91e0`). The zero-input,
+/// input-free way to pump a job we PushBackJob'd -- this is what the native front-end `Update` /
+/// `STEP_MenuJobWait` call each frame (NOT the Arxan kick, which is a Scaleform render refresh needing
+/// render-thread r8). `__fastcall(rcx = queue_owner /*the dialog: +0x8 active MenuJob* slot, +0x10 the
+/// MenuJobQueue we push into, +0x38 pending*/, rdx = *FD4Time {vtbl; f32 delta@+0x8})`: if the active
+/// slot is empty and a job is pending it pops (`0x1407a8780`) + Assigns (`0x1407a9460`) the queued job
+/// into the active slot, then runs `ExecuteMenuJob` (deobf `0x1407a9600`: `cur->vtable[2](cur,&result,
+/// &FD4Time)`). Call it each frame with rcx=dialog to drive our posted LoadGame job to completion.
+/// Grounded by prologue on eldenring-deobf.bin (dump->deobf shift ~-0xf0 here, anchored on PushBackJob
+/// dump 0x1407a9340 == deobf 0x1407a9250). bd continue-load-drain-via-executemenujob-not-kick-2026-06-23.
+pub(crate) const MENU_DRAIN_WRAPPER_RVA: usize = 0x7a90f0;
+/// `ExecuteMenuJob` (deobf `0x1407a9600`; dump `0x1407a96f0`). `__fastcall(rcx = *MenuJob* (slot),
+/// rdx = *FD4Time {vtbl; f32 delta@+0x8})`: `cur=*rcx; if(!cur) return; AtomicIncrement(cur+8);
+/// cur->vtable[+0x10](cur, &result, &{FD4Time vtbl, delta}); if(!MenuJobResult::ShouldContinue)
+/// *rcx=0; AtomicDecrement`. We call this directly on OUR built job each frame (rcx=&job_slot) to
+/// pump it via its OWN vtable[2] -- correct for the dispatcher's chained LoadGame job, and it avoids
+/// the dialog's `+0x8` slot (which is NOT a MenuJob and AV'd the queue-drain wrapper). Grounded by
+/// prologue on eldenring-deobf.bin (the `vtable[2]` call site `0x1407a968b call *0x10(rax)`).
+pub(crate) const EXECUTE_MENU_JOB_RVA: usize = 0x7a9600;
 /// CSMenuSystemSaveLoad save-slot field (`mss+0x1200`). The native confirm handler `0x1409a9250`
 /// writes the slot here (the builder `0x1409ac8b0` reads it at `0x1409ac9d2` as the factory `r8`).
 /// Replicate that write so the direct trigger loads the intended slot.
@@ -3541,10 +3584,17 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 }
                 // DIRECT "Continue pressed" trigger: at the settled main menu (post press-any-button,
                 // GameMan set up), write the exact bit the native selector consumes
-                // (*(TitleFlowContext+0x14c)=1). Self-gates + fires once; pure field write, no input.
+                // (*(TitleFlowContext+0x14c)=1), invoke the selector to BUILD the LoadGame job, and
+                // PushBackJob it to the dialog queue. Self-gates + fires once; no input. Then DRAIN the
+                // queue each frame (FUN_1407a90f0) so the posted job runs to completion (deser+world).
                 if fire_tfc_continue_enabled() {
                     if let Ok(base) = game_module_base() {
+                        // Autonomous press-any-button: self-fire the open-menu registrar when the
+                        // title settles (zero-input), so no real button press is needed.
+                        unsafe { maybe_auto_open_menu(base) };
                         unsafe { maybe_fire_tfc_continue(base) };
+                        let frame_delta = task_data.delta_time.time;
+                        unsafe { tfc_continue_drain_tick(base, frame_delta) };
                     }
                 }
                 // Anti-anti-debug (ported from ProDebug, correct base): neutralize FromSoft's

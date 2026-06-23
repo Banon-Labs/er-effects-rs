@@ -1389,6 +1389,21 @@ pub(crate) fn fire_tfc_continue_enabled() -> bool {
 }
 /// One-shot guard for `maybe_fire_tfc_continue` (0 = not yet fired).
 pub(crate) static TFC_CONTINUE_FIRED: AtomicUsize = AtomicUsize::new(0);
+/// The queue-owner dialog whose MenuJobQueue (`dialog+0x10`) holds the posted LoadGame job, for the
+/// per-frame drain (`tfc_continue_drain_tick`). 0 = nothing to drain. Set by `maybe_fire_tfc_continue`
+/// after a successful PushBackJob.
+pub(crate) static TFC_DRAIN_DIALOG: AtomicUsize = AtomicUsize::new(0);
+/// One-shot guard for the autonomous open-menu (`maybe_auto_open_menu`).
+pub(crate) static TFC_AUTO_MENU_OPENED: AtomicUsize = AtomicUsize::new(0);
+/// The built LoadGame job pointer (selector's out[0]) to pump directly via `ExecuteMenuJob` each
+/// frame. 0 = nothing to pump. Set by `maybe_fire_tfc_continue`; cleared when the job completes
+/// (ExecuteMenuJob zeroes the slot) or the tick cap is hit. Pumping our own job avoids the dialog's
+/// +0x8 slot that AV'd the queue-drain wrapper.
+pub(crate) static TFC_DRAIN_JOB: AtomicUsize = AtomicUsize::new(0);
+/// Per-frame drain tick counter (caps the drain so a stuck job cannot spin forever).
+pub(crate) static TFC_DRAIN_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Max drain ticks (~ a generous loading-screen budget at 60fps) before giving up on the drain.
+pub(crate) const TFC_DRAIN_TICK_CAP: usize = 4096;
 
 /// Overlay kill switch: when set, the hudhook/ImGui DX12 overlay is NOT initialized (no extra DX12
 /// hooks / render overhead) -- for golden/trace runs that want a clean game with only our diagnostics.
@@ -3822,6 +3837,62 @@ pub(crate) unsafe fn own_load_pump_tick(base: usize, gm: usize, frame_delta: f32
     }
 }
 
+/// AUTONOMOUS press-any-button -> open-menu (zero-input): drive the title to the open main menu
+/// OURSELVES so a run needs no real button press. When the live TitleTopDialog (owner+0xe0) is settled
+/// in the FD4 `Loop` state with the menu-opened latch (dialog+0xa40) still 0, call the native open-menu
+/// registrar `0x1409b24e0(rcx=dialog)` -- the exact action a button press triggers -- to open the menu
+/// (sets a40=1). Requires online-disable (`er-effects-offline.txt`) so the connection modal is skipped
+/// and the SM reaches Loop. One-shot. Then `maybe_fire_tfc_continue` (gated a40==1) fires Continue. No
+/// input. (Same self-fire the own_stepper STAGE1d uses, extracted for the tfc flow.)
+pub(crate) unsafe fn maybe_auto_open_menu(base: usize) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if TFC_AUTO_MENU_OPENED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    let Some(owner_ptr) = (unsafe { title_owner(base) }) else {
+        return;
+    };
+    let owner = owner_ptr as usize;
+    let dialog = unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(0);
+    let dialog_vt = if dialog != 0 {
+        unsafe { safe_read_usize(dialog) }.unwrap_or(0)
+    } else {
+        0
+    };
+    if dialog == 0 || dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+        return;
+    }
+    let a40 = unsafe { safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }
+        .map(|v| v & TITLE_TOP_DIALOG_LATCH_BYTE_MASK)
+        .unwrap_or(1);
+    if a40 != OWN_STEPPER_MENU_OPENED_NO {
+        // Menu already open (a real press or a prior call) -> nothing to do.
+        TFC_AUTO_MENU_OPENED.store(1, Ordering::SeqCst);
+        return;
+    }
+    // Require the dialog SETTLED in Loop: the registrar internally set_state(TextFadeOut) re-checks
+    // node flags&0x8f>=2 and bails if not settled (FadeIn would no-op / corrupt). Read-only probe.
+    let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
+    let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
+        unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
+    let in_loop = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
+    if !in_loop {
+        return;
+    }
+    let open_menu: unsafe extern "system" fn(usize) =
+        unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_OPEN_MENU_RVA) };
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        open_menu(dialog)
+    }));
+    TFC_AUTO_MENU_OPENED.store(1, Ordering::SeqCst);
+    let _ = null;
+    append_autoload_debug(format_args!(
+        "tfc-auto-open: fired open-menu registrar 0x{:x}(dialog=0x{dialog:x}) on Loop+a40==0 (panicked={}) -- autonomous press-any-button equivalent, NO input",
+        base + TITLE_TOP_DIALOG_OPEN_MENU_RVA,
+        r.is_err()
+    ));
+}
+
 /// See `fire_tfc_continue_enabled`. Runs from the recurring game task; self-gates and fires ONCE.
 /// Pure in-process field writes (NO input, NO native call) -- the native menu pump's selector
 /// (`0x1409a8eb0`) picks up `tfc+0x14c==1` on its next tick and dispatches the load through the
@@ -3888,6 +3959,15 @@ pub(crate) unsafe fn maybe_fire_tfc_continue(base: usize) {
         unsafe { *((mss + MSS_SAVE_SLOT_1200_OFFSET) as *mut i32) = want_slot };
     }
     unsafe { *((tfc + TFC_DISPATCH_STATE_14C_OFFSET) as *mut i32) = TFC_DISPATCH_STATE_LOAD };
+    // Force the dispatcher's BUILD branch: clear tfc+0x18c (IsNotReleaseFlag55 0x14082cd60 `cmpb
+    // $0,0x18c(rcx)`). The open-menu path sets this nonzero AFTER press-any-button, which makes the
+    // load dispatcher 0x1409b3070 take its ABORT branch (empty job, no load -- the builder 0x9ac760
+    // never fired). Clearing it guarantees the real LoadGame build. bd dispatcher-abort-branch-force-
+    // tfc-18c-zero-2026-06-23.
+    let nrf_before = unsafe { safe_read_usize(tfc + TFC_NOT_RELEASE_FLAG_18C_OFFSET) }
+        .map(|v| (v & 0xff) as u8)
+        .unwrap_or(0xff);
+    unsafe { *((tfc + TFC_NOT_RELEASE_FLAG_18C_OFFSET) as *mut u8) = TFC_NOT_RELEASE_FLAG_CLEAR };
     TFC_CONTINUE_FIRED.store(1, Ordering::SeqCst);
     // Let the recurring world-stream observer log THROUGH the loading screen.
     OWN_LOAD_CONTINUE_FIRED.store(true, Ordering::SeqCst);
@@ -3910,18 +3990,109 @@ pub(crate) unsafe fn maybe_fire_tfc_continue(base: usize) {
     let sel_ret = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         selector(dialog_slot, out_ptr)
     }));
-    match sel_ret {
-        Ok(ret) => append_autoload_debug(format_args!(
-            "fire-tfc-continue: selector returned 0x{ret:x} out=[0x{:x},0x{:x},0x{:x},0x{:x}] -- LOAD branch should have dispatched 0x{:x} -> native deser + world stream",
-            out_job[0],
-            out_job[1],
-            out_job[2],
-            out_job[3],
-            base + 0x9b3070usize
-        )),
-        Err(_) => append_autoload_debug(format_args!(
+    if sel_ret.is_err() {
+        append_autoload_debug(format_args!(
             "fire-tfc-continue: selector call PANICKED (caught) rcx=owner+0xe0=0x{dialog_slot:x} -- no dispatch (investigate ABI)"
-        )),
+        ));
+        return;
+    }
+    append_autoload_debug(format_args!(
+        "fire-tfc-continue: selector returned 0x{:x} out=[0x{:x},0x{:x},0x{:x},0x{:x}] -- LOAD branch dispatched 0x{:x}; now POSTING the built job",
+        sel_ret.unwrap_or(0),
+        out_job[0],
+        out_job[1],
+        out_job[2],
+        out_job[3],
+        base + 0x9b3070usize
+    ));
+    // ARM the per-frame direct pump: the selector/dispatcher only BUILD + return the LoadGame job (in
+    // out_job[0]); we PUMP it OURSELVES via ExecuteMenuJob each frame (tfc_continue_drain_tick),
+    // calling the job's own vtable[2]. We do NOT use the dialog's MenuJobQueue/drain wrapper -- the
+    // dialog's +0x8 "active slot" is not a MenuJob and AV'd the wrapper's AtomicIncrement. The
+    // selector's wrap (0x1407a7b60) holds a refcount on the job; out_job dropping (Rust, no C++ dtor)
+    // leaks that ref so the job stays alive across frames. With tfc+0x18c forced to 0 above the
+    // dispatcher took the BUILD branch, so out_job[0] is the real LoadGame chain. NO input.
+    // bd drain-dialog-plus8-not-menujob-pump-our-job-directly-2026-06-23.
+    let job = out_job[0];
+    if !(job > OWNER_CTX_MIN_PLAUSIBLE_PTR && job < OWNER_CTX_MAX_PLAUSIBLE_PTR) {
+        append_autoload_debug(format_args!(
+            "fire-tfc-continue: selector out[0]=0x{job:x} is not a plausible built MenuJob -> nothing to pump (dispatcher took the abort/noop branch?)"
+        ));
+        return;
+    }
+    let _ = MENU_PUMP_KICK_PTR_RVA;
+    let _ = TITLE_OWNER_MENU_LIST_130_OFFSET;
+    let _ = DIALOG_MENU_QUEUE_10_OFFSET;
+    let _ = MENUJOB_PUSHBACK_RVA;
+    let _ = MENU_DRAIN_WRAPPER_RVA;
+    TFC_DRAIN_JOB.store(job, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "fire-tfc-continue: *** BUILT job=0x{job:x} (tfc+0x18c was {nrf_before}->0, forced BUILD branch); ARMED per-frame ExecuteMenuJob pump 0x{:x}(rcx=&job). Watch oracle: c30 real, player present, now_loading ***",
+        base + EXECUTE_MENU_JOB_RVA
+    ));
+}
+
+/// Per-frame PUMP for the built LoadGame job (bd drain-dialog-plus8-not-menujob-pump-our-job-directly).
+/// Runs from the recurring game task once `maybe_fire_tfc_continue` armed `TFC_DRAIN_JOB`. Calls
+/// `ExecuteMenuJob(rcx = &job_slot, rdx = &FD4Time)` DIRECTLY on our built job -- it invokes the job's
+/// own `vtable[2]` (the LoadGame chain's Execute), advancing deser/world-stream, and zeroes the slot
+/// when done (`ShouldContinue==false`). We pump OUR job (not the dialog's `+0x8` slot, which is not a
+/// MenuJob and AV'd the queue-drain wrapper). Pure native call (no input). Stops on completion (slot
+/// cleared), in-world, panic, or the tick cap. Every call is `catch_unwind`-guarded.
+pub(crate) unsafe fn tfc_continue_drain_tick(base: usize, frame_delta: f32) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let job = TFC_DRAIN_JOB.load(Ordering::SeqCst);
+    if job == 0 || job == null {
+        return;
+    }
+    if IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES {
+        TFC_DRAIN_JOB.store(0, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "tfc-drain: in-world reached -> stop pumping (load complete)"
+        ));
+        return;
+    }
+    let ticks = TFC_DRAIN_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+    if ticks > TFC_DRAIN_TICK_CAP {
+        TFC_DRAIN_JOB.store(0, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "tfc-drain: tick cap {TFC_DRAIN_TICK_CAP} hit -> stop pumping (job never completed)"
+        ));
+        return;
+    }
+    // FD4Time: ExecuteMenuJob reads only +0x8 (f32 delta). Pass a 16-byte buffer with the frame delta.
+    let mut time: [u8; FD4_TIME_SIZE] = [0u8; FD4_TIME_SIZE];
+    time[FD4_TIME_DELTA_8_OFFSET..FD4_TIME_DELTA_8_OFFSET + core::mem::size_of::<f32>()]
+        .copy_from_slice(&frame_delta.to_le_bytes());
+    let time_ptr = time.as_mut_ptr() as usize;
+    // ExecuteMenuJob(rcx = &job_slot, rdx = &FD4Time): cur=*rcx; AtomicInc(cur+8); cur->vtable[2](...);
+    // if done -> *rcx=0. Pass a local slot (job ptr persists in TFC_DRAIN_JOB across frames).
+    let mut job_slot: usize = job;
+    let slot_ptr = (&raw mut job_slot) as usize;
+    let exec: unsafe extern "system" fn(usize, usize) =
+        unsafe { std::mem::transmute(base + EXECUTE_MENU_JOB_RVA) };
+    let exec_ret = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        exec(slot_ptr, time_ptr)
+    }));
+    if exec_ret.is_err() {
+        TFC_DRAIN_JOB.store(0, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "tfc-drain: ExecuteMenuJob 0x{:x}(rcx=&job=0x{job:x}) PANICKED (caught) at tick {ticks} -> stop pumping",
+            base + EXECUTE_MENU_JOB_RVA
+        ));
+        return;
+    }
+    if job_slot == 0 {
+        TFC_DRAIN_JOB.store(0, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "tfc-drain: job 0x{job:x} COMPLETED (slot cleared by ExecuteMenuJob) at tick {ticks} -> done pumping"
+        ));
+        return;
+    }
+    if ticks == 1 || ticks % (OWN_LOAD_STREAM_LOG_INTERVAL as usize) == 0 {
+        append_autoload_debug(format_args!(
+            "tfc-drain: tick {ticks} ExecuteMenuJob(job=0x{job:x}) delta={frame_delta} (pumping)"
+        ));
     }
 }
 

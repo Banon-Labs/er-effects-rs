@@ -26,6 +26,11 @@ er-safe-input = { path = "crates/er-safe-input" }
 fromsoftware-shared = { path = "../fromsoftware-rs/crates/shared" }
 debug = { path = "../fromsoftware-rs/crates/debug" }
 hudhook = { git = "https://github.com/veeenu/hudhook", features = ["imgui-tables-api", "dx12-fallback-device-check", "poll-cursor-position"] }
+# In-process x86-64 decoding (instruction lengths, prologue/pattern validation).
+# Pure-Rust, already present transitively via ilhook; promoted to a direct dep so
+# the hand-rolled single-step/prologue logic in lib.rs can decode instead of
+# hard-coding byte lengths. Lean feature set: decoder only, no formatters/encoder.
+iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder"] }
 
 [patch."https://github.com/veeenu/hudhook"]
 hudhook = { git = "https://github.com/Banon-Labs/hudhook", branch = "er-proton-cursor-poll" }
