@@ -1,0 +1,323 @@
+diff --git a/mcp-bridge/main.go b/mcp-bridge/main.go
+index 3638e12..eba814d 100644
+--- a/mcp-bridge/main.go
++++ b/mcp-bridge/main.go
+@@ -35,7 +35,7 @@ func forwardWithTargetPort(req mcp.CallToolRequest, method string, params map[st
+ 	if err != nil {
+ 		return mcp.NewToolResultError(err.Error()), nil
+ 	}
+-	return mcp.NewToolResultText(string(result)), nil
++	return mcp.NewToolResultText(renderResult(result)), nil
+ }
+ 
+ // optionalPagination adds offset/limit to params if present in the request.
+@@ -64,6 +64,9 @@ func main() {
+ 	// transport on stdout.
+ 	log.SetOutput(os.Stderr)
+ 
++	// Load the JP->EN dictionary used by the optional `translate` tool param.
++	loadJPDict()
++
+ 	// SEC-1: Prefer the GHIDRA_API_KEY environment variable over the CLI
+ 	// flag to avoid leaking the key in the process table (visible via ps).
+ 	resolvedKey := *apiKey
+diff --git a/mcp-bridge/render.go b/mcp-bridge/render.go
+new file mode 100644
+index 0000000..5a25f75
+--- /dev/null
++++ b/mcp-bridge/render.go
+@@ -0,0 +1,211 @@
++package main
++
++import (
++	"bytes"
++	"encoding/json"
++	"fmt"
++	"os"
++	"sort"
++	"strings"
++
++	"github.com/mark3labs/mcp-go/mcp"
++)
++
++// defaultJPDictPath is used when GHIDRA_JP_DICT is unset. It points at the
++// version-controlled dictionary in the er-effects-rs repo so it is easy to grow.
++const defaultJPDictPath = "/home/banon/projects/er-effects-rs/scripts/ghidra/jp-en-dict.json"
++
++// renderResult turns the Ghidra server's raw JSON-RPC result into human-readable
++// MCP text. The old code returned string(raw), which dumped the JSON verbatim --
++// so multi-line fields like decompiled C had their newlines escaped to "\n" and
++// shown literally. This surfaces text-bearing results with REAL newlines and
++// pretty-prints everything else.
++func renderResult(raw json.RawMessage) string {
++	// Case 1: the result is a bare JSON string (e.g. decompile_function_by_address,
++	// whose server method returns a String). Unmarshalling yields real newlines.
++	var s string
++	if err := json.Unmarshal(raw, &s); err == nil {
++		return s
++	}
++
++	// Case 2: the result is a JSON object.
++	var obj map[string]json.RawMessage
++	if err := json.Unmarshal(raw, &obj); err == nil {
++		// 2a: a single dominant text field -> header + the text itself.
++		for _, key := range []string{"decompiled", "listing", "code", "text", "pcode"} {
++			if v, ok := obj[key]; ok {
++				var txt string
++				if json.Unmarshal(v, &txt) == nil {
++					return objHeader(obj, key) + txt
++				}
++			}
++		}
++		// 2b: disassembly instructions array -> aligned listing lines.
++		if v, ok := obj["instructions"]; ok {
++			if listing := renderInstructions(v); listing != "" {
++				return objHeader(obj, "instructions") + listing
++			}
++		}
++	}
++
++	// Fallback: indented JSON is at least readable (arrays/objects with no big
++	// multi-line string fields, where escaped newlines are not a concern).
++	var buf bytes.Buffer
++	if json.Indent(&buf, raw, "", "  ") == nil {
++		return buf.String()
++	}
++	return string(raw)
++}
++
++// objHeader builds a compact "// name=... address=..." prefix from an object's
++// scalar context fields, skipping the field that carries the main text body.
++func objHeader(obj map[string]json.RawMessage, skip string) string {
++	var parts []string
++	for _, k := range []string{"name", "function", "address", "entry"} {
++		if k == skip {
++			continue
++		}
++		if v, ok := obj[k]; ok {
++			var s string
++			if json.Unmarshal(v, &s) == nil && s != "" {
++				parts = append(parts, k+"="+s)
++			}
++		}
++	}
++	if len(parts) == 0 {
++		return ""
++	}
++	return "// " + strings.Join(parts, "  ") + "\n\n"
++}
++
++// renderInstructions formats a disassembly instruction array as aligned lines.
++func renderInstructions(v json.RawMessage) string {
++	var instrs []struct {
++		Address  string `json:"address"`
++		Text     string `json:"text"`
++		Mnemonic string `json:"mnemonic"`
++	}
++	if json.Unmarshal(v, &instrs) != nil {
++		return ""
++	}
++	var b strings.Builder
++	for _, in := range instrs {
++		t := in.Text
++		if t == "" {
++			t = in.Mnemonic
++		}
++		b.WriteString(fmt.Sprintf("%-16s %s\n", in.Address, t))
++	}
++	return b.String()
++}
++
++// ---------------------------------------------------------------------------
++// JP -> EN localization (opt-in via the `translate` tool param)
++// ---------------------------------------------------------------------------
++
++var (
++	jpDict      map[string]string
++	jpKeysByLen []string // dict keys sorted longest-first for greedy replacement
++)
++
++// loadJPDict loads the JP->EN dictionary once at startup. Missing/invalid file is
++// non-fatal: translation just becomes a no-op until the file is fixed.
++func loadJPDict() {
++	path := os.Getenv("GHIDRA_JP_DICT")
++	if path == "" {
++		path = defaultJPDictPath
++	}
++	data, err := os.ReadFile(path)
++	if err != nil {
++		return
++	}
++	m := map[string]string{}
++	if json.Unmarshal(data, &m) != nil {
++		return
++	}
++	jpDict = m
++	jpKeysByLen = jpKeysByLen[:0]
++	for k := range m {
++		jpKeysByLen = append(jpKeysByLen, k)
++	}
++	// Longest keys first so multi-character terms win over their substrings.
++	sort.Slice(jpKeysByLen, func(i, j int) bool { return len(jpKeysByLen[i]) > len(jpKeysByLen[j]) })
++}
++
++// translateJP applies the dictionary to text and appends any leftover Japanese
++// runs so the dictionary is easy to grow ("update it as we find new words").
++func translateJP(text string) string {
++	if len(jpDict) > 0 {
++		for _, k := range jpKeysByLen {
++			text = strings.ReplaceAll(text, k, jpDict[k])
++		}
++	}
++	if rem := findJPRuns(text); len(rem) > 0 {
++		text += "\n\n// [untranslated JP -- add to " + dictPathForNote() + ": " + strings.Join(rem, ", ") + "]"
++	}
++	return text
++}
++
++func dictPathForNote() string {
++	if p := os.Getenv("GHIDRA_JP_DICT"); p != "" {
++		return p
++	}
++	return defaultJPDictPath
++}
++
++func isJP(r rune) bool {
++	switch {
++	case r >= 0x3040 && r <= 0x30FF: // hiragana + katakana
++		return true
++	case r >= 0x4E00 && r <= 0x9FFF: // CJK unified ideographs
++		return true
++	case r >= 0x3400 && r <= 0x4DBF: // CJK extension A
++		return true
++	case r >= 0xFF66 && r <= 0xFF9D: // halfwidth katakana
++		return true
++	}
++	return false
++}
++
++// findJPRuns returns the unique maximal runs of Japanese characters in s.
++func findJPRuns(s string) []string {
++	seen := map[string]bool{}
++	var out []string
++	var cur []rune
++	flush := func() {
++		if len(cur) > 0 {
++			w := string(cur)
++			if !seen[w] {
++				seen[w] = true
++				out = append(out, w)
++			}
++			cur = cur[:0]
++		}
++	}
++	for _, r := range s {
++		if isJP(r) {
++			cur = append(cur, r)
++		} else {
++			flush()
++		}
++	}
++	flush()
++	return out
++}
++
++// applyTranslate runs JP->EN translation over a text tool result's content.
++func applyTranslate(res *mcp.CallToolResult) *mcp.CallToolResult {
++	if res == nil || res.IsError {
++		return res
++	}
++	var sb strings.Builder
++	for _, c := range res.Content {
++		if tc, ok := c.(mcp.TextContent); ok {
++			sb.WriteString(tc.Text)
++		}
++	}
++	if sb.Len() == 0 {
++		return res
++	}
++	return mcp.NewToolResultText(translateJP(sb.String()))
++}
+diff --git a/mcp-bridge/tools.go b/mcp-bridge/tools.go
+index 578b58b..87889f3 100644
+--- a/mcp-bridge/tools.go
++++ b/mcp-bridge/tools.go
+@@ -152,6 +152,10 @@ func buildHandler(t toolDef) server.ToolHandlerFunc {
+ 
+ 		// Extract declared parameters.
+ 		for _, p := range t.Params {
++			// `translate` is handled locally in the bridge, not forwarded to Ghidra.
++			if p.MCPName == "translate" {
++				continue
++			}
+ 			switch p.Type {
+ 			case paramString:
+ 				v := req.GetString(p.MCPName, "")
+@@ -204,7 +208,12 @@ func buildHandler(t toolDef) server.ToolHandlerFunc {
+ 			optionalPagination(req, params)
+ 		}
+ 
+-		return forwardWithTargetPort(req, t.Method, params)
++		res, err := forwardWithTargetPort(req, t.Method, params)
++		// Opt-in JP->EN localization of the rendered text output.
++		if err == nil && req.GetBool("translate", false) {
++			res = applyTranslate(res)
++		}
++		return res, err
+ 	}
+ }
+ 
+@@ -212,6 +221,14 @@ func buildHandler(t toolDef) server.ToolHandlerFunc {
+ // Tool definitions (70 tools)
+ // ---------------------------------------------------------------------------
+ 
++// translateParam is the shared opt-in flag that runs the bridge's JP->EN
++// dictionary over a tool's text output. Handled locally; never forwarded to Ghidra.
++var translateParam = paramDef{
++	MCPName: "translate",
++	Desc:    "If true, translate Japanese text in the output to English using the maintained JP->EN dictionary (leftover Japanese is flagged so the dictionary can be grown).",
++	Type:    paramBool,
++}
++
+ var allTools = []toolDef{
+ 	// =====================================================================
+ 	// READ-ONLY QUERY TOOLS (1-21)
+@@ -232,22 +249,34 @@ var allTools = []toolDef{
+ 	},
+ 
+ 	{Name: "get_function_by_address", Desc: "Get detailed information about a function at the given address, including name, parameters, callers, and callees.", Title: "Get Function", Method: "getFunctionByAddress", ReadOnly: true,
+-		Params: []paramDef{{MCPName: "address", Desc: "Address of the function (e.g. '0x00401000')", Type: paramString, Required: true}},
++		Params: []paramDef{
++			{MCPName: "address", Desc: "Address of the function (e.g. '0x00401000')", Type: paramString, Required: true},
++			translateParam,
++		},
+ 	},
+ 
+ 	{Name: "get_current_address", Desc: "Get the address currently selected in Ghidra's listing view. Useful for understanding where the analyst is looking.", Title: "Get Current Address", Method: "getCurrentAddress", ReadOnly: true},
+ 	{Name: "get_current_function", Desc: "Get information about the function that contains the currently selected address in Ghidra's listing view.", Title: "Get Current Function", Method: "getCurrentFunction", ReadOnly: true},
+ 
+ 	{Name: "decompile_function", Desc: "Decompile a function by its name and return the C pseudocode. Useful for understanding what a named function does.", Title: "Decompile Function", Method: "decompileFunctionByName", ReadOnly: true,
+-		Params: []paramDef{{MCPName: "name", Desc: "Name of the function to decompile", Type: paramString, Required: true}},
++		Params: []paramDef{
++			{MCPName: "name", Desc: "Name of the function to decompile", Type: paramString, Required: true},
++			translateParam,
++		},
+ 	},
+ 
+ 	{Name: "decompile_function_by_address", Desc: "Decompile a function at the given address and return the C pseudocode. Essential for understanding function logic.", Title: "Decompile by Address", Method: "getDecompiledCode", ReadOnly: true,
+-		Params: []paramDef{{MCPName: "address", Desc: "Address of the function to decompile (e.g. '0x00401000')", Type: paramString, Required: true}},
++		Params: []paramDef{
++			{MCPName: "address", Desc: "Address of the function to decompile (e.g. '0x00401000')", Type: paramString, Required: true},
++			translateParam,
++		},
+ 	},
+ 
+ 	{Name: "disassemble_function", Desc: "Get the assembly instructions for a function at the given address. Returns the raw disassembly listing.", Title: "Disassemble Function", Method: "disassembleFunction", ReadOnly: true,
+-		Params: []paramDef{{MCPName: "address", Desc: "Address of the function to disassemble (e.g. '0x00401000')", Type: paramString, Required: true}},
++		Params: []paramDef{
++			{MCPName: "address", Desc: "Address of the function to disassemble (e.g. '0x00401000')", Type: paramString, Required: true},
++			translateParam,
++		},
+ 	},
+ 
+ 	{Name: "get_xrefs_to", Desc: "Get all cross-references TO a given address. Shows what code references this location (callers, data readers, etc.).", Title: "Get XRefs To", Method: "getXrefsTo", ReadOnly: true, Paginated: true,

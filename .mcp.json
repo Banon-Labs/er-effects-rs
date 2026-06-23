@@ -2,7 +2,10 @@
   "mcpServers": {
     "ghidra": {
       "command": "/home/banon/tools/GhidraMCP-13bm/mcp-bridge/mcp_bridge",
-      "args": ["-host", "localhost", "-port", "8765"]
+      "args": ["-host", "localhost", "-port", "8765"],
+      "env": {
+        "GHIDRA_JP_DICT": "/home/banon/projects/er-effects-rs/scripts/ghidra/jp-en-dict.json"
+      }
     }
   }
 }

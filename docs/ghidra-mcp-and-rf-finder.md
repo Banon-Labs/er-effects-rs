@@ -56,6 +56,29 @@ client. Built **from source** so the auto-launched native bridge is ours:
 - MCP client config: `.mcp.json` (project scope) registers the `ghidra` server
   pointing at the bridge.
 
+### Local bridge patch: output formatting + JP->EN translate
+
+The upstream Go bridge returned every tool result as `string(rawJSON)`, so multi-line
+fields (decompiled C especially) came back as an escaped JSON string with literal
+`\n` and no formatting. Our patch (`scripts/ghidra/ghidramcp-localfmt.patch`, applied
+by `build-ghidramcp.sh`, source-of-truth `mcp-bridge/render.go`) replaces that single
+choke point with `renderResult`, which:
+- returns bare-string results (e.g. `decompile_function_by_address`) with **real
+  newlines**, surfaces a text field (`decompiled`/`listing`/...) under a compact
+  `// name=... address=...` header, renders disassembly as aligned listing lines, and
+  pretty-prints everything else. This fixes the bug for all text tools at once.
+- adds an opt-in **`translate`** boolean param to the text tools (`decompile_function`,
+  `decompile_function_by_address`, `disassemble_function`, `get_function_by_address`).
+  When true, output runs through a maintained JP->EN dictionary
+  (`scripts/ghidra/jp-en-dict.json`, path overridable via `GHIDRA_JP_DICT`, wired in
+  `.mcp.json`). Any **leftover Japanese is flagged** at the end of the output
+  (`// [untranslated JP -- add to ...: Xie Wen Zi , Bai Zhao Huan , ...]`) so the dictionary is
+  trivial to grow as new terms appear. Editing the JSON + restarting the bridge is
+  enough; no rebuild needed.
+
+Verified: `decompile_function_by_address` returns clean multi-line C (0 escaped `\n`);
+`list_strings translate=true` translated known terms and flagged the rest.
+
 ### The key insight: the server does not need the GUI
 
 13bm's `MCPServer`/`MCPContextProvider` are plain objects, not GUI plugins. The
