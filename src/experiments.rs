@@ -4005,18 +4005,16 @@ pub(crate) unsafe fn maybe_fire_tfc_continue(base: usize) {
         out_job[3],
         base + 0x9b3070usize
     ));
-    // ARM the per-frame direct pump: the selector/dispatcher only BUILD + return the LoadGame job (in
-    // out_job[0]); we PUMP it OURSELVES via ExecuteMenuJob each frame (tfc_continue_drain_tick),
-    // calling the job's own vtable[2]. We do NOT use the dialog's MenuJobQueue/drain wrapper -- the
-    // dialog's +0x8 "active slot" is not a MenuJob and AV'd the wrapper's AtomicIncrement. The
-    // selector's wrap (0x1407a7b60) holds a refcount on the job; out_job dropping (Rust, no C++ dtor)
-    // leaks that ref so the job stays alive across frames. With tfc+0x18c forced to 0 above the
-    // dispatcher took the BUILD branch, so out_job[0] is the real LoadGame chain. NO input.
-    // bd drain-dialog-plus8-not-menujob-pump-our-job-directly-2026-06-23.
+    // INSTALL the built job as currentTopMenuJob (CSPopupMenu+0xB0) via CS::MenuJob::Assign, so the
+    // NATIVE per-frame menu pump runs its Run IN CONTEXT -- the fix for the self-pump menu-jumping (our
+    // ExecuteMenuJob/drain-wrapper attempts ran the job out of context and never deserialized). The
+    // selector/dispatcher only BUILD + return the job (out_job[0]); the native flow normally installs
+    // it into a pump-drained slot. We replicate that install. bd menu-job-install-mechanism-2026-06-23
+    // + inject-job-into-native-pump-slots-recipe-2026-06-23. NO input.
     let job = out_job[0];
     if !(job > OWNER_CTX_MIN_PLAUSIBLE_PTR && job < OWNER_CTX_MAX_PLAUSIBLE_PTR) {
         append_autoload_debug(format_args!(
-            "fire-tfc-continue: selector out[0]=0x{job:x} is not a plausible built MenuJob -> nothing to pump (dispatcher took the abort/noop branch?)"
+            "fire-tfc-continue: selector out[0]=0x{job:x} is not a plausible built MenuJob -> nothing to install (dispatcher took the abort/noop branch?)"
         ));
         return;
     }
@@ -4025,10 +4023,36 @@ pub(crate) unsafe fn maybe_fire_tfc_continue(base: usize) {
     let _ = DIALOG_MENU_QUEUE_10_OFFSET;
     let _ = MENUJOB_PUSHBACK_RVA;
     let _ = MENU_DRAIN_WRAPPER_RVA;
-    TFC_DRAIN_JOB.store(job, Ordering::SeqCst);
+    let _ = EXECUTE_MENU_JOB_RVA;
+    // TARGET = owner+0x130, the title flow's ACTIVE MenuJob slot that STEP_MenuJobWait runs
+    // ExecuteMenuJob(&owner+0x130) on EVERY frame (the title's own per-frame pump, definitely live at
+    // the title menu -- unlike currentTopMenuJob+0xB0 which a run showed is EMPTY/unused by the title).
+    // owner+0x130 is a MenuJob* slot (PushBackJob AV'd there because it is NOT a FixOrderJobSequence;
+    // Assign -- a slot replace -- is the right primitive). bd currenttopjob-B0-empty-not-drained.
+    let _ = GLOBAL_CSMENUMAN_RVA;
+    let _ = CSMENUMAN_POPUP_80_OFFSET;
+    let _ = CSPOPUP_TOP_JOB_B0_OFFSET;
+    let dest = owner + TITLE_OWNER_MENU_LIST_130_OFFSET;
+    let old_top = unsafe { safe_read_usize(dest) }.unwrap_or(0);
+    // Pre-bump the job refcount (+0x8) so it survives the Assign regardless of the wrap's count.
+    if let Some(rc) = unsafe { safe_read_usize(job + MENU_JOB_REFCOUNT_8_OFFSET) } {
+        unsafe { *((job + MENU_JOB_REFCOUNT_8_OFFSET) as *mut usize) = rc.wrapping_add(1) };
+    }
+    // Assign(rcx = dest=&owner+0x130 active slot, rdx = &scratch, r8 = &src): unref old, install ours.
+    let mut scratch: usize = 0;
+    let mut src: usize = job;
+    let assign: unsafe extern "system" fn(usize, usize, usize) =
+        unsafe { std::mem::transmute(base + MENU_JOB_ASSIGN3_RVA) };
+    let scratch_ptr = (&raw mut scratch) as usize;
+    let src_ptr = (&raw mut src) as usize;
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        assign(dest, scratch_ptr, src_ptr)
+    }));
+    let new_top = unsafe { safe_read_usize(dest) }.unwrap_or(0);
     append_autoload_debug(format_args!(
-        "fire-tfc-continue: *** BUILT job=0x{job:x} (tfc+0x18c was {nrf_before}->0, forced BUILD branch); ARMED per-frame ExecuteMenuJob pump 0x{:x}(rcx=&job). Watch oracle: c30 real, player present, now_loading ***",
-        base + EXECUTE_MENU_JOB_RVA
+        "fire-tfc-continue: *** INSTALLED job=0x{job:x} into owner+0x130 (STEP_MenuJobWait active slot) via Assign 0x{:x} (tfc+0x18c was {nrf_before}->0; owner=0x{owner:x} dest=0x{dest:x} old_top=0x{old_top:x} new_top=0x{new_top:x} panicked={}) -- STEP_MenuJobWait should pump it IN CONTEXT. Watch oracle: c30 real, player present, now_loading ***",
+        base + MENU_JOB_ASSIGN3_RVA,
+        r.is_err()
     ));
 }
 

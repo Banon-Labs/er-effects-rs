@@ -1160,6 +1160,24 @@ pub(crate) const MENU_DRAIN_WRAPPER_RVA: usize = 0x7a90f0;
 /// the dialog's `+0x8` slot (which is NOT a MenuJob and AV'd the queue-drain wrapper). Grounded by
 /// prologue on eldenring-deobf.bin (the `vtable[2]` call site `0x1407a968b call *0x10(rax)`).
 pub(crate) const EXECUTE_MENU_JOB_RVA: usize = 0x7a9600;
+/// CS::MenuManImp singleton global (`*(base+0x3d6b7b0)` = CSMenuManImp*). Verified: HasTopMenuJob
+/// 0x14080d960 does `mov rax,[0x143d6b7b0]; mov rcx,0x80(rax)` (popupMenu) then reads +0xB0. (Same
+/// singleton whose +0x90 is the menu input bitmap.) bd menu-job-install-mechanism-2026-06-23.
+pub(crate) const GLOBAL_CSMENUMAN_RVA: usize = 0x3d6b7b0;
+/// CSMenuManImp -> CSPopupMenu* at +0x80.
+pub(crate) const CSMENUMAN_POPUP_80_OFFSET: usize = 0x80;
+/// CSPopupMenu -> `currentTopMenuJob` (MenuJob*) at +0xB0 -- the single top-job slot the per-frame
+/// menu pump drains (no cap). Install our built LoadGame job here so the native pump runs its Run
+/// IN CONTEXT (vs our menu-jumping self-pump).
+pub(crate) const CSPOPUP_TOP_JOB_B0_OFFSET: usize = 0xB0;
+/// `CS::MenuJob::Assign(rcx = dest MenuJob**, rdx = out MenuJob**, r8 = src MenuJob**)` (deobf
+/// 0x1407a9460 -- verified prologue: homes r8/rdx, `rbx=*dest`; if `*dest != *src` AtomicDecrements
+/// the old occupant (0x141eba200) + dtors if last, then installs `*dest=*src` + AtomicIncrement).
+/// Refcount-correct slot replace -- use to install our job into currentTopMenuJob without leaking the
+/// displaced title-FSM job. NOTE: distinct from MENUJOB_ASSIGN_RVA (0x7a9560, a 2-arg move-assign).
+pub(crate) const MENU_JOB_ASSIGN3_RVA: usize = 0x7a9460;
+/// CS::MenuJob (DLReferenceCountObject) refcount field at +0x8 (vfptr at +0x0).
+pub(crate) const MENU_JOB_REFCOUNT_8_OFFSET: usize = 0x8;
 /// CSMenuSystemSaveLoad save-slot field (`mss+0x1200`). The native confirm handler `0x1409a9250`
 /// writes the slot here (the builder `0x1409ac8b0` reads it at `0x1409ac9d2` as the factory `r8`).
 /// Replicate that write so the direct trigger loads the intended slot.
