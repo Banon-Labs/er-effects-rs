@@ -170,3 +170,24 @@ listed, `get_program_info` returns the warm program (`pc_eldenring_runtime.1.16.
 > `erdeobf` instance), exactly as before. The two GUI-cursor tools
 > (`get_current_address` / `get_current_function`) are unavailable headless; pass
 > explicit addresses instead.
+
+## 3. Sharing / reproducing on another machine
+
+Three kinds of "result", with different distribution stories:
+
+1. **RF findings** (`scripts/ghidra/erdeobf-rf.json`) -- discovered function-start **VAs +
+   confidence scores**, deobf-native (base `0x140000000`, no shift). Pure addresses, not game
+   code, so shareable as research data; useful to anyone with the **same** ER 1.16.1 deobf image.
+2. **Tooling** -- every script/dict/patch/doc here is in the repo. Another user clones
+   `er-effects-rs` and runs `scripts/ghidra/bootstrap.sh` to rebuild the whole stack (installs the
+   Ghidra ML extension, clones+builds 13bm GhidraMCP with our patch, installs it, points at the
+   deobf project). One command instead of reconstructing the steps.
+3. **Heavy analyzed artifacts** -- the `erdeobf`/`ermaporch` Ghidra projects, the 94MB deobf
+   binary, and the gzf dump are the expensive part (~107-min analysis) **but are derived from
+   copyrighted Elden Ring code**, so they are NOT in the repo (gitignored) and should not be
+   redistributed publicly. Each user supplies their own binary/dump; `bootstrap.sh` +
+   `import-deobf.sh` rebuild the project locally (slow, but automated).
+
+So a new user's path is: clone repo -> supply `eldenring-deobf.bin` -> `bootstrap.sh` ->
+`import-deobf.sh` (once, slow) -> `mcp-ghidra-daemon.sh start` -> reload MCP client. The
+committed `erdeobf-rf.json` lets them skip even the RF run if they only want the function list.
