@@ -35,21 +35,23 @@ public class AnalyzeWithProgress extends GhidraScript {
 		final long startNanos = System.nanoTime();
 		final boolean[] done = { false };
 
+		// The AutoAnalysisManager does not propagate sub-task state through the script monitor in
+		// headless, so we poll CONCRETE program state -- the function/instruction counts climb as
+		// analysis runs, which is a reliable "how far along" signal. The monitor message is shown
+		// when available as a supplementary hint.
 		Thread poller = new Thread(() -> {
-			String last = "";
+			long lastFuncs = -1;
 			while (!done[0]) {
 				try {
-					long prog = mon.getProgress();
-					long max = mon.getMaximum();
-					String msg = mon.getMessage();
+					long funcs = currentProgram.getFunctionManager().getFunctionCount();
+					long instrs = currentProgram.getListing().getNumInstructions();
 					long elapsed = (System.nanoTime() - startNanos) / 1_000_000_000L;
-					String pct = (max > 0 && prog >= 0) ? String.format("%d%%", (100 * prog) / max) : "--";
-					String line = "ANALYZE_PROGRESS: t+" + elapsed + "s [" + pct + "] "
-						+ (msg != null ? msg : "(working)") + " (" + prog + "/" + max + ")";
-					// Skip identical consecutive lines to keep the log readable.
-					if (!line.equals(last)) {
-						println(line);
-						last = line;
+					String msg = mon.getMessage();
+					if (funcs != lastFuncs) {
+						println("ANALYZE_PROGRESS: t+" + elapsed + "s funcs=" + funcs
+							+ " instrs=" + instrs
+							+ (msg != null && !msg.isEmpty() ? " | " + msg : ""));
+						lastFuncs = funcs;
 					}
 					Thread.sleep(intervalMs);
 				}
@@ -57,7 +59,7 @@ public class AnalyzeWithProgress extends GhidraScript {
 					return;
 				}
 				catch (Exception e) {
-					// monitor read races are harmless; keep polling.
+					// concurrent-read races during analysis are harmless; keep polling.
 				}
 			}
 		}, "analyze-progress-poller");
