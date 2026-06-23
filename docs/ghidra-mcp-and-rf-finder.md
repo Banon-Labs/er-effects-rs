@@ -71,7 +71,10 @@ choke point with `renderResult`, which:
   dictionary is present** (toggle a single call off with `translate:false`; force the
   global default either way with `GHIDRA_TRANSLATE=off|on`). When on, output runs through
   a maintained JP->EN dictionary (`scripts/ghidra/jp-en-dict.json`, path overridable via
-  `GHIDRA_JP_DICT`, wired in `.mcp.json`). Any **leftover Japanese is flagged** at the end of the output
+  `GHIDRA_JP_DICT`, wired in `.mcp.json`). Output is footer-flagged two ways so bad
+  translations are obvious: **auto/UNVERIFIED translations used** (every machine-sourced
+  substitution applied -- catches plausible-but-wrong ones) and **leftover Japanese**
+  (missing terms). Verified (manual-dict) entries are not flagged. Specifically, any leftover Japanese is listed
   (`// [untranslated JP -- add to ...: Xie Wen Zi , Bai Zhao Huan , ...]`) so the dictionary is
   trivial to grow as new terms appear. Editing the JSON + restarting the bridge is
   enough; no rebuild needed.

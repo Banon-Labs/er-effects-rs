@@ -23,10 +23,10 @@ index 3638e12..eba814d 100644
  	resolvedKey := *apiKey
 diff --git a/mcp-bridge/render.go b/mcp-bridge/render.go
 new file mode 100644
-index 0000000..cd521b7
+index 0000000..586d9d0
 --- /dev/null
 +++ b/mcp-bridge/render.go
-@@ -0,0 +1,243 @@
+@@ -0,0 +1,289 @@
 +package main
 +
 +import (
@@ -134,8 +134,9 @@ index 0000000..cd521b7
 +
 +var (
 +	jpDict             map[string]string
-+	jpKeysByLen        []string // dict keys sorted longest-first for greedy replacement
-+	translateDefaultOn bool     // whether `translate` defaults on (dict present, not env-disabled)
++	jpKeysByLen        []string        // dict keys sorted longest-first for greedy replacement
++	jpVerified         map[string]bool // keys present in the hand-verified (manual) dict
++	translateDefaultOn bool            // whether `translate` defaults on (dict present, not env-disabled)
 +)
 +
 +// loadJPDict loads the JP->EN dictionary once at startup. It merges two files so
@@ -153,6 +154,9 @@ index 0000000..cd521b7
 +	mergeDictFile(m, strings.TrimSuffix(path, ".json")+".auto.json")
 +	// Manual/verified file second so it wins on conflict.
 +	mergeDictFile(m, path)
++
++	// Record which keys are hand-verified (manual file) so auto/unverified ones can be flagged.
++	jpVerified = readDictKeys(path)
 +
 +	jpDict = m
 +	jpKeysByLen = jpKeysByLen[:0]
@@ -173,6 +177,25 @@ index 0000000..cd521b7
 +	case "on", "1", "true", "yes":
 +		translateDefaultOn = true
 +	}
++}
++
++// readDictKeys returns the key set of a dict JSON file (excluding _comment); empty if absent.
++func readDictKeys(path string) map[string]bool {
++	out := map[string]bool{}
++	data, err := os.ReadFile(path)
++	if err != nil {
++		return out
++	}
++	tmp := map[string]string{}
++	if json.Unmarshal(data, &tmp) != nil {
++		return out
++	}
++	for k := range tmp {
++		if k != "_comment" {
++			out[k] = true
++		}
++	}
++	return out
 +}
 +
 +// mergeDictFile overlays the JSON object at path onto m (later wins). No-op if absent/invalid.
@@ -196,12 +219,35 @@ index 0000000..cd521b7
 +// translateJP applies the dictionary to text and appends any leftover Japanese
 +// runs so the dictionary is easy to grow ("update it as we find new words").
 +func translateJP(text string) string {
++	var usedUnverified []string
 +	if len(jpDict) > 0 {
 +		for _, k := range jpKeysByLen {
++			if !strings.Contains(text, k) {
++				continue
++			}
++			// Flag auto/unverified substitutions so plausible-but-wrong ones are obvious
++			// (the untranslated-JP note below only catches MISSING terms, not wrong ones).
++			if !jpVerified[k] {
++				usedUnverified = append(usedUnverified, k+"->"+jpDict[k])
++			}
 +			text = strings.ReplaceAll(text, k, jpDict[k])
 +		}
 +	}
-+	if rem := findJPRuns(text); len(rem) > 0 {
++	// Compute leftover Japanese on the translated body BEFORE appending any footer, so the
++	// footers' own JP (the keys we echo below) don't get re-counted as "untranslated".
++	rem := findJPRuns(text)
++
++	if len(usedUnverified) > 0 {
++		const maxShown = 40
++		extra := ""
++		if len(usedUnverified) > maxShown {
++			extra = fmt.Sprintf(" (+%d more)", len(usedUnverified)-maxShown)
++			usedUnverified = usedUnverified[:maxShown]
++		}
++		text += "\n\n// [auto/UNVERIFIED translations used -- verify, then move good ones into " +
++			dictPathForNote() + ": " + strings.Join(usedUnverified, ", ") + extra + "]"
++	}
++	if len(rem) > 0 {
 +		text += "\n\n// [untranslated JP -- add to " + dictPathForNote() + ": " + strings.Join(rem, ", ") + "]"
 +	}
 +	return text
