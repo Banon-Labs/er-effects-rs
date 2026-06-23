@@ -18,12 +18,12 @@ GUI and no MCP, and fits the existing `ghidra-query.sh` headless pattern.
   is safe under `-process -readOnly`.
 - Wrapper: `scripts/ghidra/find-functions-rf.sh`
   ```bash
-  # smoke target: the symbolized DUMP (low yield, addresses carry the ~0x10 shift)
-  scripts/ghidra/find-functions-rf.sh --threshold 0.90 --max-starts 500
-  # real target: the deobf-binary project (DEOBF-NATIVE VAs, no shift) -- see below
-  scripts/ghidra/find-functions-rf.sh --proj-dir /home/banon/ghidra_maporch/proj-deobf \
-      --proj-name erdeobf --threshold 0.85
+  # default target is the deobf-native project (erdeobf): DEOBF-NATIVE VAs, no ~0x10 shift
+  scripts/ghidra/find-functions-rf.sh --threshold 0.85
+  # the run logs RF_PROGRESS lines during the slow gather+classify phase
   ```
+  (The dump `ermaporch` is a poor RF target -- slow to classify and exclusively locked
+  by a running MCP daemon -- so it is no longer the default.)
 - Install (one-time): the ML extension ships with Ghidra as a zip and is now
   extracted into `<ghidra>/Ghidra/Extensions/MachineLearning/` so `analyzeHeadless`
   loads it. (Re-extract from `<ghidra>/Extensions/Ghidra/*MachineLearning.zip` if a

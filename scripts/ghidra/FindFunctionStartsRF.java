@@ -72,10 +72,44 @@ public class FindFunctionStartsRF extends GhidraScript {
 
 		GetAddressesToClassifyTask getAddressTask =
 			new GetAddressesToClassifyTask(currentProgram, minUndefinedRange);
+
+		// The gather + classify phases are the slow part and emit nothing on their own. Poll the
+		// monitor from a daemon thread so the run is observable (RF_PROGRESS lines in the log).
+		final boolean[] running = { true };
+		Thread progress = new Thread(() -> {
+			String last = "";
+			while (running[0]) {
+				try {
+					long pr = monitor.getProgress();
+					long mx = monitor.getMaximum();
+					String msg = monitor.getMessage();
+					String pct = (mx > 0 && pr >= 0) ? (100 * pr / mx) + "%" : "--";
+					String line = "RF_PROGRESS: [" + pct + "] " + (msg != null ? msg : "(working)")
+						+ " (" + pr + "/" + mx + ")";
+					if (!line.equals(last)) {
+						println(line);
+						last = line;
+					}
+					Thread.sleep(3000);
+				}
+				catch (InterruptedException e) {
+					return;
+				}
+				catch (Exception e) {
+					// monitor read races are harmless
+				}
+			}
+		}, "rf-progress");
+		progress.setDaemon(true);
+		progress.start();
+
 		getAddressTask.run(monitor);
 		AddressSetView toClassify = getAddressTask.getAddressesToClassify();
+		println("RF_PROGRESS: classifying " + toClassify.getNumAddresses() + " candidate addresses");
 
 		Map<Address, Double> potentialStarts = classifier.classify(toClassify, monitor);
+		running[0] = false;
+		progress.interrupt();
 
 		// Keep only confident hits that are not already defined as functions, high score first.
 		List<Entry<Address, Double>> hits = potentialStarts.entrySet().stream()

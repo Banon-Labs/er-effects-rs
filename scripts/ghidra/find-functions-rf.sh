@@ -14,8 +14,10 @@
 # is a near-full 32G and overflows when Ghidra unpacks program data).
 set -euo pipefail
 
-PROJ_DIR=/home/banon/ghidra_maporch/proj
-PROJ_NAME=ermaporch
+# Default to the deobf-native project (erdeobf): RF is only useful for call/patch-able VAs, and
+# the dump (ermaporch) is both slow to classify and exclusively locked by a running MCP daemon.
+PROJ_DIR=/home/banon/ghidra_maporch/proj-deobf
+PROJ_NAME=erdeobf
 THRESHOLD=0.80
 MAX_STARTS=1000
 MIN_RANGE=16
