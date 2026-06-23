@@ -73,6 +73,18 @@ else
   warn "deobf binary not present ($DEOBF_BIN) -- supply it, then run scripts/ghidra/import-deobf.sh"
 fi
 
+echo "== (optional) dump project (ermaporch, the daemon default) =="
+if [[ -d "$GHIDRA_MAPORCH/proj/ermaporch.rep" ]]; then
+  ok "ermaporch project already built"
+elif [[ -n "${GZF:-}" && -f "${GZF:-}" ]]; then
+  warn "importing dump gzf into ermaporch (fast, ~2 min):"
+  echo "        GZF='$GZF' bash $REPO_DIR/scripts/ghidra/import-dump.sh"
+else
+  warn "no dump gzf (set GZF=/path/to/runtime.gzf then run scripts/ghidra/import-dump.sh) --"
+  warn "without it, start the daemon on the deobf project instead:"
+  echo "        scripts/ghidra/mcp-ghidra-daemon.sh start --proj-dir $GHIDRA_MAPORCH/proj-deobf --proj-name erdeobf"
+fi
+
 echo
 echo "== done =="
 echo "Next:"
