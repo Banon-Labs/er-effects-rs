@@ -4050,20 +4050,13 @@ pub(crate) unsafe fn maybe_fire_tfc_continue(base: usize) {
     let _ = MENUJOB_PUSHBACK_RVA;
     let _ = MENU_DRAIN_WRAPPER_RVA;
     let _ = EXECUTE_MENU_JOB_RVA;
-    // MAKE ROOM in dialog+0x50's cap-8 DLFixedVector<MenuJob*,8> BEFORE our load job pumps. Pinned via
-    // the push-site sw-bp diagnostic (0x1407ad53b rcx=dialog+0x50): our load's CS::MenuWindowJob::Run
-    // pushes its window into dialog+0x50, which is already FULL -> push #9 -> "out of memory"
-    // (DLFixedVector.inl:662) crash. Reset the count (at dialog+0x50+0x48 = dialog+0x98) to 0 so the
-    // push has room. Orphans the dialog's existing windows -- acceptable, we are leaving the title menu
-    // for the load. bd OVERFLOW-VECTOR-PINNED-dialog-plus-0x50-2026-06-23.
-    let vec_count_addr = dialog + DIALOG_MENUWINDOW_VEC_50_OFFSET + DLFIXEDVECTOR_COUNT_48_OFFSET;
-    let old_vec_count = unsafe { safe_read_usize(vec_count_addr) }.unwrap_or(usize::MAX);
-    if old_vec_count != usize::MAX {
-        unsafe { *(vec_count_addr as *mut u64) = 0 };
-        append_autoload_debug(format_args!(
-            "fire-tfc-continue: reset dialog+0x50 MenuWindowJob vector count @0x{vec_count_addr:x} (was {old_vec_count}) -> 0 to make room for the load window push (dialog=0x{dialog:x})"
-        ));
-    }
+    // (REMOVED the dialog+0x50 count-reset hack: a live TitleTopDialog's +0x98 count is provably
+    // always 0..8 -- the garbage we saw means we read a NON-LIVE/transient object, so zeroing it just
+    // masks the real lifecycle problem and would CORRUPT a valid dialog's window list. The readiness
+    // gate above (count<8) + the vtable/a40 gates are the correct fail-closed guard. bd
+    // forge-breaks-lifecycle-native-confirm-is-correct-context-2026-06-23.)
+    let _ = DIALOG_MENUWINDOW_VEC_50_OFFSET;
+    let _ = DLFIXEDVECTOR_COUNT_48_OFFSET;
     // TARGET = owner+0x130, the title flow's ACTIVE MenuJob slot that STEP_MenuJobWait runs
     // ExecuteMenuJob(&owner+0x130) on EVERY frame (the title's own per-frame pump, definitely live at
     // the title menu -- unlike currentTopMenuJob+0xB0 which a run showed is EMPTY/unused by the title).
