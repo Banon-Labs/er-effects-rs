@@ -79,6 +79,26 @@ choke point with `renderResult`, which:
 Verified: `decompile_function_by_address` returns clean multi-line C (0 escaped `\n`);
 `list_strings translate=true` translated known terms and flagged the rest.
 
+#### Bootstrapping the dictionary (extract -> autotranslate -> refine)
+
+Rather than hand-adding terms, the dictionary is bootstrapped from the program itself:
+
+1. **Extract** -- `scripts/ghidra/extract-jp-terms.py` pages `list_strings` over the warm
+   MCP daemon (no second Ghidra open), collects every bounded Japanese run, and writes
+   `scripts/ghidra/jp-terms.json` (frequency-sorted; ~963 unique runs from 63,992 strings).
+2. **Autotranslate** -- `scripts/ghidra/autotranslate-jp.py` translates each run into
+   `scripts/ghidra/jp-en-dict.auto.json`. Default engine is **MyMemory** (free online, no
+   key); `--engine argos` uses a fully **offline** neural model (set up once via
+   `scripts/ghidra/setup-argos.sh`). It is additive/idempotent (skips terms already in
+   either dict) and checkpoints, so it is safe to re-run/resume.
+3. **Refine** -- the bridge loads BOTH files: `jp-en-dict.auto.json` (regenerable bulk)
+   overlaid by `jp-en-dict.json` (hand-verified, **wins on conflict**). To correct a bad
+   machine translation, add the right entry to `jp-en-dict.json`; re-running autotranslate
+   never clobbers it. The "untranslated JP" flag in tool output surfaces anything still missing.
+
+So the loop is: extract -> autotranslate (bulk first pass) -> use -> move corrections into the
+verified dict as you notice them. Updating either JSON + restarting the bridge is enough.
+
 ### The key insight: the server does not need the GUI
 
 13bm's `MCPServer`/`MCPContextProvider` are plain objects, not GUI plugins. The

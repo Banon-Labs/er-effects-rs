@@ -23,10 +23,10 @@ index 3638e12..eba814d 100644
  	resolvedKey := *apiKey
 diff --git a/mcp-bridge/render.go b/mcp-bridge/render.go
 new file mode 100644
-index 0000000..5a25f75
+index 0000000..b8c05c8
 --- /dev/null
 +++ b/mcp-bridge/render.go
-@@ -0,0 +1,211 @@
+@@ -0,0 +1,233 @@
 +package main
 +
 +import (
@@ -137,28 +137,50 @@ index 0000000..5a25f75
 +	jpKeysByLen []string // dict keys sorted longest-first for greedy replacement
 +)
 +
-+// loadJPDict loads the JP->EN dictionary once at startup. Missing/invalid file is
-+// non-fatal: translation just becomes a no-op until the file is fixed.
++// loadJPDict loads the JP->EN dictionary once at startup. It merges two files so
++// machine-generated bulk translations and hand-verified ones stay separate:
++//   <dict>.auto.json  -- regenerable autotranslate output (loaded first)
++//   <dict>            -- hand-verified entries that OVERRIDE the auto ones
++// Missing/invalid files are non-fatal: translation degrades to a no-op.
 +func loadJPDict() {
 +	path := os.Getenv("GHIDRA_JP_DICT")
 +	if path == "" {
 +		path = defaultJPDictPath
 +	}
-+	data, err := os.ReadFile(path)
-+	if err != nil {
-+		return
-+	}
 +	m := map[string]string{}
-+	if json.Unmarshal(data, &m) != nil {
-+		return
-+	}
++	// Auto file first (lower priority).
++	mergeDictFile(m, strings.TrimSuffix(path, ".json")+".auto.json")
++	// Manual/verified file second so it wins on conflict.
++	mergeDictFile(m, path)
++
 +	jpDict = m
 +	jpKeysByLen = jpKeysByLen[:0]
 +	for k := range m {
++		if k == "_comment" {
++			continue
++		}
 +		jpKeysByLen = append(jpKeysByLen, k)
 +	}
 +	// Longest keys first so multi-character terms win over their substrings.
 +	sort.Slice(jpKeysByLen, func(i, j int) bool { return len(jpKeysByLen[i]) > len(jpKeysByLen[j]) })
++}
++
++// mergeDictFile overlays the JSON object at path onto m (later wins). No-op if absent/invalid.
++func mergeDictFile(m map[string]string, path string) {
++	data, err := os.ReadFile(path)
++	if err != nil {
++		return
++	}
++	tmp := map[string]string{}
++	if json.Unmarshal(data, &tmp) != nil {
++		return
++	}
++	for k, v := range tmp {
++		if k == "_comment" {
++			continue
++		}
++		m[k] = v
++	}
 +}
 +
 +// translateJP applies the dictionary to text and appends any leftover Japanese
