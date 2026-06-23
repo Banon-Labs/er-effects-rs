@@ -43,7 +43,7 @@ Output project: `/home/banon/ghidra_maporch/proj-deobf` program `erdeobf`. Then 
 the finder against it (command above). VAs are deobf-native -- ready for
 `er_disasm` / `scripts/disas-deobf.sh` without shifting.
 
-## 2. 13bm GhidraMCP (interactive RE tools, needs the Ghidra GUI)
+## 2. 13bm GhidraMCP, served PRE-WARMED and HEADLESS (no GUI, no Xvfb)
 
 Exposes ~70 RE tools (decompile, xrefs, struct get/edit, search, ...) to this MCP
 client. Built **from source** so the auto-launched native bridge is ours:
@@ -56,21 +56,41 @@ client. Built **from source** so the auto-launched native bridge is ours:
 - MCP client config: `.mcp.json` (project scope) registers the `ghidra` server
   pointing at the bridge.
 
-### Activation (the manual step)
+### The key insight: the server does not need the GUI
 
-The MCP only goes live when a **Ghidra GUI** has the plugin running:
+13bm's `MCPServer`/`MCPContextProvider` are plain objects, not GUI plugins. The
+context provider only dereferences the `PluginTool` in two GUI-cursor tools
+(`get_current_address` / `get_current_function`); every other tool runs off the
+loaded `Program`. So we run the server from a long-lived **headless** GhidraScript
+(`scripts/ghidra/MCPServeHeadless.java`, `new MCPServer(null)`), which keeps one
+program loaded and WARM in a single `analyzeHeadless` process. No GUI, no Xvfb, and
+Ghidra is started ONCE -- not per operation.
 
-1. Open a Ghidra GUI **CodeBrowser** on the target program. Use the gzf-derived
-   `ermaporch` (semantics) and/or `erdeobf` (addresses) -- **never** headless-open
-   the shared `From Software.rep` (locked; forbidden per AGENTS.md).
-2. `File > Configure > GhidraMCP` -> enable **MCPServerPlugin**. It starts a TCP
-   server on `localhost:8765` and auto-launches the bridge.
-3. Restart this MCP client (or reload MCP) so it picks up `.mcp.json`.
+### Pre-warm and reuse
 
-Until step 2, the bridge stays up and retries; the `ghidra` tools simply report no
-connection. Multi-instance: open a second program on another port (8766...) and pass
-`target_port` to route calls -- e.g. one window on `ermaporch`, one on `erdeobf`.
+```bash
+scripts/ghidra/mcp-ghidra-daemon.sh start          # warms ermaporch (semantics) on :8765, read-only
+scripts/ghidra/mcp-ghidra-daemon.sh status
+scripts/ghidra/mcp-ghidra-daemon.sh stop
+# second, address-accurate instance on another port (multi-instance: pass target_port to route):
+scripts/ghidra/mcp-ghidra-daemon.sh start --proj-dir /home/banon/ghidra_maporch/proj-deobf \
+    --proj-name erdeobf --port 8766
+```
 
-> Caveat that does not change: the MCP queries whatever program is open. Addresses
-> from the dump still carry the shift -- ground-truth anything you will call/patch
-> against the deobf binary (`er_disasm` / `disas-deobf.sh`), exactly as before.
+The daemon detaches (`setsid`) so the warm program survives across client/session
+restarts; clean shutdown is a stop-file. Default is **read-only** (the agent's
+rename/struct edits won't mutate the shared project) -- pass `--writable` only when
+you want edits to persist. The bridge (launched by `.mcp.json`) connects to the
+daemon's port and reconnects automatically if it restarts. After starting the
+daemon, restart this MCP client so it picks up `.mcp.json`.
+
+Verified end-to-end (headless daemon -> bridge -> MCP): `initialize` ok, 70 tools
+listed, `get_program_info` returns the warm program (`pc_eldenring_runtime.1.16.1`,
+366744 functions).
+
+> Caveat that does not change: the MCP queries the loaded program. Addresses from
+> the dump (`ermaporch`) carry the ~0x10 shift -- ground-truth anything you will
+> call/patch against the deobf binary (`er_disasm` / `disas-deobf.sh`, or the
+> `erdeobf` instance), exactly as before. The two GUI-cursor tools
+> (`get_current_address` / `get_current_function`) are unavailable headless; pass
+> explicit addresses instead.
