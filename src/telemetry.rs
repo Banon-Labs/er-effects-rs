@@ -207,8 +207,8 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         state.autoload.requires_title_bootstrap()
     ));
     body.push_str(&format!(
-        "  \"title_bootstrap_seen\": {},\n",
-        TITLE_BOOTSTRAP_SEEN.load(Ordering::SeqCst) != TITLE_BOOTSTRAP_UNSEEN
+        "  \"title_handoff_complete\": {},\n",
+        TITLE_HANDOFF_COMPLETE.load(Ordering::SeqCst) != TITLE_HANDOFF_INCOMPLETE
     ));
     // Cold-char-mount progress as phase+1 (0 = never ran, 5 = PHASE_DONE = terminal/evidence
     // collected). The readiness watcher tears down on the terminal value instead of the cap.
@@ -238,7 +238,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         }
     };
     body.push_str(&format!(
-        "  \"oracle_own_load_stream_frames\": {},\n  \"oracle_own_load_stream_recur_frames\": {},\n  \"oracle_own_load_continue_fired\": {},\n  \"oracle_own_load_stream_owner_state\": {},\n  \"oracle_own_load_stream_owner_req_state\": {},\n  \"oracle_own_load_stream_mms_state\": {},\n  \"oracle_own_load_stream_block_count\": {},\n  \"oracle_own_load_stream_req_coord\": {},\n  \"oracle_own_load_stream_io_inflight\": {},\n  \"oracle_own_load_stream_io_reqhandle\": {},\n  \"oracle_own_load_stream_c30\": {},\n  \"oracle_own_load_stream_player_present\": {},\n  \"oracle_own_load_ingame_phase\": {},\n  \"oracle_own_load_req_blockid\": {},\n  \"oracle_own_load_target_block_present\": {},\n  \"oracle_own_load_wbr_update_calls\": {},\n  \"oracle_own_load_wbr_max_phase\": {},\n  \"oracle_own_load_wbr_any_gate_set\": {},\n",
+        "  \"oracle_own_load_stream_frames\": {},\n  \"oracle_own_load_stream_recur_frames\": {},\n  \"oracle_own_load_continue_fired\": {},\n  \"oracle_own_load_stream_owner_state\": {},\n  \"oracle_own_load_stream_owner_req_state\": {},\n  \"oracle_own_load_stream_mms_state\": {},\n  \"oracle_own_load_stream_block_count\": {},\n  \"oracle_own_load_stream_req_coord\": {},\n  \"oracle_own_load_stream_io_inflight\": {},\n  \"oracle_own_load_stream_io_reqhandle\": {},\n  \"oracle_own_load_stream_c30\": {},\n  \"oracle_own_load_stream_player_present\": {},\n  \"oracle_own_load_ingame_phase\": {},\n  \"oracle_own_load_req_blockid\": {},\n  \"oracle_own_load_target_block_present\": {},\n  \"oracle_own_load_wbr_update_calls\": {},\n  \"oracle_own_load_wbr_max_phase\": {},\n  \"oracle_own_load_wbr_any_gate_set\": {},\n  \"oracle_own_m28_dispatch_fired\": {},\n  \"oracle_own_load_install_job_fired\": {},\n  \"oracle_own_load_pump_fired\": {},\n  \"oracle_own_load_pump_state\": {},\n  \"oracle_own_load_pump_subcode\": {},\n  \"oracle_own_load_pump_done\": {},\n",
         crate::experiments::OWN_LOAD_STREAM_FRAMES.load(Ordering::SeqCst),
         crate::experiments::OWN_LOAD_STREAM_RECUR_FRAMES.load(Ordering::SeqCst),
         crate::experiments::OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst),
@@ -296,6 +296,18 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
             true
         ),
         crate::experiments::OWN_LOAD_WBR_ANY_GATE_SET.load(Ordering::SeqCst),
+        crate::experiments::OWN_LOAD_M28_DISPATCH_FIRED.load(Ordering::SeqCst),
+        crate::experiments::OWN_LOAD_INSTALL_JOB_FIRED.load(Ordering::SeqCst),
+        crate::experiments::OWN_LOAD_PUMP_FIRED.load(Ordering::SeqCst),
+        fmt_stream(
+            crate::experiments::OWN_LOAD_PUMP_STATE.load(Ordering::SeqCst),
+            false
+        ),
+        fmt_stream(
+            crate::experiments::OWN_LOAD_PUMP_SUBCODE.load(Ordering::SeqCst),
+            false
+        ),
+        crate::experiments::OWN_LOAD_PUMP_DONE.load(Ordering::SeqCst),
     ));
     let product_core_blocker = PRODUCT_CORE_LAST_BLOCKER.load(Ordering::SeqCst);
     let format_scan_ptr = |value: usize| -> String {
@@ -410,13 +422,25 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
 }
 
 pub(crate) fn write_game_man_telemetry(body: &mut String) {
+    // `loadgame_build_ctx_ready`: the "engine filled enough to drive our own load" gate -- GameDataMan
+    // -> menuSystemSaveLoad -> a PLAUSIBLE TitleFlowContext at mss+0xa38. This is the gate the bypass
+    // arms on. It is DISTINCT from `game_man_instance_resolved` below, which only means the GameMan
+    // pointer is non-null (true from BootPhase4, long before the LoadGame job can be built without an AV).
+    // Computed independently of GameMan::instance() so it is always emitted (both branches below).
+    let loadgame_build_ctx_ready = crate::experiments::game_module_base()
+        .map(|base| unsafe { crate::experiments::loadgame_build_ctx_ready(base) })
+        .unwrap_or(false);
+    body.push_str(&format!(
+        "  \"loadgame_build_ctx_ready\": {loadgame_build_ctx_ready},\n"
+    ));
+
     let Ok(game_man) = (unsafe { GameMan::instance() }) else {
-        body.push_str("  \"game_man_available\": false,\n");
+        body.push_str("  \"game_man_instance_resolved\": false,\n");
         return;
     };
 
     let telemetry = GameManTelemetry::from_game_man(game_man);
-    body.push_str("  \"game_man_available\": true,\n");
+    body.push_str("  \"game_man_instance_resolved\": true,\n");
     body.push_str(&format!("  \"game_save_slot\": {},\n", telemetry.save_slot));
     body.push_str(&format!(
         "  \"game_requested_save_slot_load_index\": {},\n",
@@ -1216,25 +1240,45 @@ pub(crate) fn crash_log_path() -> PathBuf {
         })
 }
 
+/// Monotonic process-attach epoch for self-describing DLL logs. Lazily set on the FIRST log call
+/// (close to DLL_PROCESS_ATTACH in practice), so every emitted line carries `[+<elapsed_ms>ms] `
+/// measured from that common start -- making ordering and gaps obvious in raw logs without needing
+/// the bash launch T0. Mirrors the `TIMELINE_EPOCH` pattern; `Instant` is QPC-backed and works under
+/// wine. Kept lock-light: one short lock that returns a u128, never held across the file write.
+static PROCESS_LOG_EPOCH: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Elapsed milliseconds since the process-log epoch (lazily anchored on first call). Cheap: a single
+/// short-lived lock, poison-tolerant, no file IO under the lock.
+fn process_log_elapsed_ms() -> u128 {
+    let mut guard = match PROCESS_LOG_EPOCH.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    let epoch = guard.get_or_insert_with(Instant::now);
+    epoch.elapsed().as_millis()
+}
+
 pub(crate) fn append_crash_log(args: std::fmt::Arguments<'_>) {
     use std::io::Write;
+    let ms = process_log_elapsed_ms();
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(crash_log_path())
     {
-        let _ = writeln!(file, "{args}");
+        let _ = writeln!(file, "[+{ms}ms] {args}");
     }
 }
 
 pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     use std::io::Write;
 
+    let ms = process_log_elapsed_ms();
     let path = std::env::var("ER_EFFECTS_AUTOLOAD_DEBUG_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("er-effects-autoload-debug.log"));
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "{args}");
+        let _ = writeln!(file, "[+{ms}ms] {args}");
     }
 }
 

@@ -113,6 +113,103 @@ def helper_checks() -> None:
         fail("cold_char_mount_complete did not fire on PHASE_DONE")
     print(f"preflight: validated {len(helpers)} telemetry helpers against {len(TELEMETRY_FIXTURES)} states OK")
 
+    # World-stream stall semaphore: the watermark/armed helpers parse hex-string OWN-LOAD oracle
+    # fields each poll and MUST tolerate every real telemetry state (None/empty/malformed) without
+    # raising -- same class of bug that burned a launch before. The watermark must be None until the
+    # map-load arms (continue fired + player block present) so a slow boot/title never trips it.
+    armed = getattr(module, "world_stream_armed", None)
+    watermark = getattr(module, "world_stream_progress_watermark", None)
+    step = getattr(module, "world_stream_stall_step", None)
+    if armed is None or watermark is None or step is None:
+        fail("world-stream stall semaphore helpers missing")
+    for fixture in TELEMETRY_FIXTURES:
+        try:
+            armed_result = armed(fixture)
+            wm = watermark(fixture)
+            step(fixture, None, None, 0.0, 20.0)
+        except Exception as exc:
+            fail(f"world_stream_* helper raised on {fixture!r}: {type(exc).__name__}: {exc}")
+        if not isinstance(armed_result, bool):
+            fail(f"world_stream_armed({fixture!r}) returned non-bool {armed_result!r}")
+        if wm is not None:
+            fail(f"world_stream_progress_watermark({fixture!r}) armed on a non-OWN-LOAD state")
+    stalled_state = {
+        "oracle_own_load_continue_fired": True,
+        "oracle_own_load_target_block_present": 1,
+        "oracle_own_load_wbr_max_phase": "0x2",
+        "oracle_own_load_stream_io_inflight": "0x0",
+        "oracle_own_load_stream_mms_state": 3,
+        "oracle_own_m28_dispatch_fired": 0,
+        "oracle_player_present": False,
+    }
+    if not armed(stalled_state) or watermark(stalled_state) is None:
+        fail("world-stream watermark did not arm on a begun OWN-LOAD map-load")
+    # Pre-continue must never arm even with everything else flat.
+    if armed({**stalled_state, "oracle_own_load_continue_fired": False}):
+        fail("world-stream stall armed before continue fired")
+    if armed({**stalled_state, "oracle_own_load_target_block_present": 0}):
+        fail("world-stream stall armed before the player block registered")
+    # Flat past the window stalls; forward progress within it does not.
+    _, _, must_stall = step(stalled_state, watermark(stalled_state), 0.0, 25.0, 20.0)
+    if not must_stall:
+        fail("world-stream stall did not fire on a flat watermark past the window")
+    progressed = {**stalled_state, "oracle_own_load_stream_io_inflight": "0x4"}
+    _, _, must_not_stall = step(progressed, watermark(stalled_state), 0.0, 25.0, 20.0)
+    if must_not_stall:
+        fail("world-stream stall fired despite forward streaming progress")
+    print("preflight: validated world-stream stall semaphore (arm gate + watermark + stall window) OK")
+
+    # PER-PHASE PROGRESS WATCHDOG: the phase predicates + progress watermarks + step parse telemetry
+    # each poll and MUST tolerate every real telemetry state (None/empty/malformed) without raising --
+    # same class of bug that burned a launch before. No watched phase may arm before telemetry, and
+    # once continue has fired the watchdog must hand off to world_stream (no watched phase active).
+    phase_step = getattr(module, "phase_progress_stall_step", None)
+    active_phase = getattr(module, "active_watchdog_phase", None)
+    phase_title_active = getattr(module, "phase_title_active", None)
+    phase_continue_active = getattr(module, "phase_continue_active", None)
+    if phase_step is None or active_phase is None or phase_title_active is None or phase_continue_active is None:
+        fail("per-phase progress watchdog helpers missing")
+    for fixture in TELEMETRY_FIXTURES:
+        try:
+            st = {"phase": None, "value": None, "since": None}
+            stalled, name = phase_step(fixture, st, 0.0, 3.0)
+            active_phase(fixture)
+            ta = phase_title_active(fixture)
+            ca = phase_continue_active(fixture)
+        except Exception as exc:
+            fail(f"phase watchdog helper raised on {fixture!r}: {type(exc).__name__}: {exc}")
+        if not isinstance(stalled, bool):
+            fail(f"phase_progress_stall_step({fixture!r}) returned non-bool stalled {stalled!r}")
+        if not isinstance(ta, bool) or not isinstance(ca, bool):
+            fail(f"phase active predicate returned non-bool on {fixture!r}")
+    # Title phase: telemetry present, continue not fired, owner not yet captured -> active + arms a
+    # watermark, and stays flat past the window -> title_stalled.
+    title_state = {
+        "game_task_ticks": 100,
+        "title_owner_scan_attempts": 5,
+        "title_owner_scan_last_state": 4,
+        "title_handoff_complete": False,
+        "oracle_own_load_continue_fired": False,
+    }
+    if not phase_title_active(title_state) or active_phase(title_state) is None:
+        fail("title phase did not arm on a pre-continue title telemetry state")
+    st = {"phase": None, "value": None, "since": None}
+    phase_step(title_state, st, 0.0, 3.0)          # arm
+    flat_stalled, flat_reason = phase_step(title_state, st, 5.0, 3.0)  # flat past window
+    if not flat_stalled or flat_reason != "title_stalled":
+        fail("phase watchdog did not fire title_stalled on a flat title watermark past the window")
+    # Forward progress within the window resets the timer (no false-fail on a slow-but-moving phase).
+    st2 = {"phase": None, "value": None, "since": None}
+    phase_step(title_state, st2, 0.0, 3.0)
+    moved = {**title_state, "game_task_ticks": 200}
+    prog_stalled, _ = phase_step(moved, st2, 5.0, 3.0)
+    if prog_stalled:
+        fail("phase watchdog fired despite forward title progress")
+    # Once continue has fired, no watched phase is active (world_stream owns the tail).
+    if active_phase({**title_state, "oracle_own_load_continue_fired": True}) is not None:
+        fail("phase watchdog stayed armed after continue fired (should hand off to world_stream)")
+    print("preflight: validated per-phase progress watchdog (title/continue arm + watermark + stall window) OK")
+
 
 def main() -> int:
     compile_checks()

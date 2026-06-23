@@ -73,6 +73,29 @@ pub struct SaveLoadRequest {
     /// PLAYABLE world. SAVE-WRITING (`SetState5` autosaves): only fires behind the hard c30/fingerprint
     /// guard in `own_load_continue_drive`. Off by default so the verify-only `own_load` stays safe.
     pub own_load_continue: bool,
+    /// Arm the OWN-LOAD m28 direct-enqueue lever: on our menu-free OWN-LOAD path (after our own
+    /// `continue_confirm` fired), call `FD4::FD4FileCap::AddDefaultFileLoadProcess` ourselves on the
+    /// player block's (m28, area 0x1c) FD4FileCap(s) so the FD4 workers stream the block to residency.
+    /// Reaches ONLY world-asset file-load streaming -- no save IO, cannot autosave. Off by default and
+    /// double-gated (it ALSO requires `OWN_LOAD_CONTINUE_FIRED`), so it can never fire on a vanilla
+    /// native menu load. Env `ER_EFFECTS_OWN_DISPATCH=1` / `own_dispatch=1` in the autoload file.
+    pub own_dispatch: bool,
+    /// Arm the menu-free LoadGame-JOB install lever: instead of the guarded `continue_confirm`/
+    /// `SetState5`, BUILD the native LoadGame `MenuJobWithContext<LoadJobContext>` (factory
+    /// `FUN_140826510`) and INSTALL it into the title owner's `+0x130` MenuJob slot (assign helper
+    /// `FUN_1407a9560`), replacing the idle `IfElseJob`. `STEP_MenuJobWait` then ticks it each frame,
+    /// self-builds, deserializes the save, and streams the world -- no `SetState5`, no save write.
+    /// SAVE-SAFE (build + first-tick deser only READ the save). Off by default; double-gated -- it
+    /// ALSO requires `OWN_LOAD_CONTINUE_FIRED`-style arming via `own_load`. Env
+    /// `ER_EFFECTS_OWN_LOAD_INSTALL_JOB=1` / `own_load_install_job=1` in the autoload file.
+    pub own_load_install_job: bool,
+    /// PATH B "own the load" PRIVATE-PUMP lever. When set (with `own_load`), the verify-only parse is
+    /// followed by BUILD of the LoadGame `MenuJobWithContext` with REAL mss-derived ctx; the recurring
+    /// game task then ticks its `Run` PRIVATELY every frame to completion (deser -> m28 stream) and, on
+    /// `state==Success`, drives the title->ingame transition via the guarded `SetState5`. No
+    /// owner+0x130 install, no MenuJobQueue, no CSMenuMan dialog -- the menu-free subsystem rebuild.
+    /// Off by default. Env `ER_EFFECTS_OWN_LOAD_PUMP=1` / `own_load_pump=1` in the autoload file.
+    pub own_load_pump: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -94,7 +117,16 @@ pub enum SaveLoadMethod {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SaveLoadContext {
     pub game_module_base: usize,
-    pub title_bootstrap_seen: bool,
+    /// True once the natural title flow has handed off into the live menu/save state (first
+    /// system-profile save). Conservative legacy gate -- it only flips AFTER the player advances past
+    /// the press-any-button title.
+    pub title_handoff_complete: bool,
+    /// True once the engine is "filled enough" to build+drive the LoadGame job WITHOUT the title being
+    /// advanced: GameDataMan -> menuSystemSaveLoad -> a PLAUSIBLE TitleFlowContext are all present. This
+    /// is the BYPASS arming signal -- it goes true at the title (GameFlow up) without the system-save
+    /// handoff, so the direct own-load can arm and skip the frontend entirely. See
+    /// `loadgame_build_ctx_ready` in the DLL (loadgame-build-ctx-ready-precondition-2026-06-22).
+    pub loadgame_build_ctx_ready: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -251,6 +283,31 @@ impl SaveLoader {
         self.request.own_load_continue
     }
 
+    /// Whether the autoload config armed the OWN-LOAD m28 direct-enqueue lever
+    /// (`AddDefaultFileLoadProcess` on the player block's FD4FileCap[s]). Reaches only world-asset
+    /// file-load streaming -- no save IO. Double-gated by `OWN_LOAD_CONTINUE_FIRED` at fire time.
+    #[must_use]
+    pub const fn own_dispatch(&self) -> bool {
+        self.request.own_dispatch
+    }
+
+    /// Whether the autoload config armed the menu-free LoadGame-JOB install lever (build the native
+    /// LoadGame `MenuJobWithContext` and install it into the title owner's `+0x130` MenuJob slot).
+    /// SAVE-SAFE (build + first-tick deser only read the save). Off by default.
+    #[must_use]
+    pub const fn own_load_install_job(&self) -> bool {
+        self.request.own_load_install_job
+    }
+
+    /// Whether the autoload config armed the PATH B menu-free PRIVATE-PUMP lever (build the LoadGame
+    /// `MenuJobWithContext` with REAL mss-derived ctx, then tick its `Run` privately each frame to
+    /// completion + drive the transition on Success). SAVE-SAFE at build; only the final SetState5
+    /// transition writes, and it stays guarded. Off by default.
+    #[must_use]
+    pub const fn own_load_pump(&self) -> bool {
+        self.request.own_load_pump
+    }
+
     /// Advance the load request state machine once.
     ///
     /// The direct menu-load path queues the same native flags observed from the
@@ -309,7 +366,12 @@ impl SaveLoader {
             | SaveLoadMethod::DirectTraceSequence
             | SaveLoadMethod::DirectMenuWrapper => {
                 if !self.request.require_title_bootstrap
-                    || context.title_bootstrap_seen
+                    || context.title_handoff_complete
+                    // BYPASS: the engine being filled enough to build the LoadGame job (plausible
+                    // TitleFlowContext) is sufficient to arm the direct own-load AT THE TITLE, without
+                    // waiting for the natural press-any-button -> menu handoff. This is what lets us skip
+                    // the frontend entirely (boot-singleton-order-bypass-feasible-2026-06-22).
+                    || context.loadgame_build_ctx_ready
                     || game_man.save_state() != IDLE_SAVE_STATE
                 {
                     self.direct_seen_initial_save_busy = true;
@@ -458,6 +520,9 @@ impl Default for SaveLoadRequest {
             cold_char_mount: false,
             own_load: false,
             own_load_continue: false,
+            own_dispatch: false,
+            own_load_install_job: false,
+            own_load_pump: false,
         }
     }
 }
@@ -506,6 +571,15 @@ impl SaveLoadRequest {
         ) {
             request.own_load_continue = true;
         }
+        if matches!(std::env::var("ER_EFFECTS_OWN_DISPATCH").as_deref(), Ok("1")) {
+            request.own_dispatch = true;
+        }
+        if matches!(
+            std::env::var("ER_EFFECTS_OWN_LOAD_INSTALL_JOB").as_deref(),
+            Ok("1")
+        ) {
+            request.own_load_install_job = true;
+        }
 
         request
     }
@@ -542,6 +616,9 @@ impl SaveLoadRequest {
                 "cold_char_mount" => request.cold_char_mount = parse_bool(value.trim()),
                 "own_load" => request.own_load = parse_bool(value.trim()),
                 "own_load_continue" => request.own_load_continue = parse_bool(value.trim()),
+                "own_dispatch" => request.own_dispatch = parse_bool(value.trim()),
+                "own_load_install_job" => request.own_load_install_job = parse_bool(value.trim()),
+                "own_load_pump" => request.own_load_pump = parse_bool(value.trim()),
                 _ => {}
             }
         }
@@ -1022,6 +1099,24 @@ mod tests {
     }
 
     #[test]
+    fn own_load_install_job_defaults_off_and_parses() {
+        // Default: off.
+        assert!(!SaveLoadRequest::default().own_load_install_job);
+        let path = std::env::temp_dir().join(format!(
+            "er-save-loader-test-olij-{}-{}.txt",
+            std::process::id(),
+            TEST_TEMP_FILE_DISAMBIGUATOR
+        ));
+        fs::write(&path, "own_load=1\nown_load_install_job=1\n").unwrap();
+        let request = SaveLoadRequest::from_autoload_file_at(&path);
+        let _ = fs::remove_file(&path);
+        assert!(request.own_load);
+        assert!(request.own_load_install_job);
+        // Independent of the save-writing continue lever.
+        assert!(!request.own_load_continue);
+    }
+
+    #[test]
     fn title_accept_fallback_is_bounded_safe_input() {
         let sequence = title_accept_fallback_sequence(SafeInputConfig {
             max_hold_frames: TITLE_ACCEPT_CONFIRM_FRAMES,
@@ -1048,6 +1143,8 @@ mod tests {
             cold_char_mount: false,
             own_load: false,
             own_load_continue: false,
+            own_dispatch: false,
+            own_load_install_job: false,
         });
 
         let step = unsafe {
@@ -1056,7 +1153,8 @@ mod tests {
                     &mut game_man,
                     SaveLoadContext {
                         game_module_base: TEST_MODULE_BASE,
-                        title_bootstrap_seen: false,
+                        title_handoff_complete: false,
+                        loadgame_build_ctx_ready: false,
                     },
                     |_| {},
                 )
@@ -1082,6 +1180,8 @@ mod tests {
             cold_char_mount: false,
             own_load: false,
             own_load_continue: false,
+            own_dispatch: false,
+            own_load_install_job: false,
         });
 
         let step = unsafe {
@@ -1090,7 +1190,7 @@ mod tests {
                     &mut game_man,
                     SaveLoadContext {
                         game_module_base: TEST_NULL_MODULE_BASE,
-                        title_bootstrap_seen: false,
+                        title_handoff_complete: false,
                     },
                     |_| {},
                 )

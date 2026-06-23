@@ -168,19 +168,13 @@ fi
 rm -f "$TELEMETRY_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH"
 write_autoload_request
 
-(
-  cd "$REPO_ROOT"
-  ARTIFACT_DIR="$ARTIFACT_DIR" \
-  PID_FILE="$PID_FILE" \
-  TELEMETRY_PATH="$TELEMETRY_PATH" \
-  BOOTSTRAP_PATH="$BOOTSTRAP_PATH" \
-  BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
-  RUNTIME_TIMEOUT_SECONDS="$RUNTIME_TIMEOUT_SECONDS" \
-  RUNTIME_EXPECTED_MODE="$RUNTIME_EXPECTED_MODE" \
-  AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 \
-  ./.auto/runtime_probe.sh
-) > "$ARTIFACT_DIR/runtime-probe.out" 2> "$ARTIFACT_DIR/runtime-probe.err" &
-watcher_pid=$!
+# TRUE T0 = the closest bash timestamp to eldenring.exe process start. Captured here, immediately
+# before the Proton launch is fired, written to launch-epoch.txt AND exported to the watcher as
+# ER_PROBE_LAUNCH_EPOCH so every milestone delta (and the world-load fail-fast deadline) is measured
+# from the real launch, not from watcher-start. The watcher's spawn-poll tolerates the game process
+# already existing, so starting it just after the launch fire does not race.
+LAUNCH_EPOCH="$(date +%s.%N)"
+printf '%s\n' "$LAUNCH_EPOCH" > "$ARTIFACT_DIR/launch-epoch.txt"
 
 (
   cd "$GAME_DIR"
@@ -191,5 +185,20 @@ watcher_pid=$!
   ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
   "$PROTON" run "$GAME_DIR/eldenring.exe" > "$ARTIFACT_DIR/proton-run.out" 2>&1 & echo $! > "$PID_FILE"
 )
+
+(
+  cd "$REPO_ROOT"
+  ARTIFACT_DIR="$ARTIFACT_DIR" \
+  PID_FILE="$PID_FILE" \
+  TELEMETRY_PATH="$TELEMETRY_PATH" \
+  BOOTSTRAP_PATH="$BOOTSTRAP_PATH" \
+  BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
+  RUNTIME_TIMEOUT_SECONDS="$RUNTIME_TIMEOUT_SECONDS" \
+  RUNTIME_EXPECTED_MODE="$RUNTIME_EXPECTED_MODE" \
+  ER_PROBE_LAUNCH_EPOCH="$LAUNCH_EPOCH" \
+  AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 \
+  ./.auto/runtime_probe.sh
+) > "$ARTIFACT_DIR/runtime-probe.out" 2> "$ARTIFACT_DIR/runtime-probe.err" &
+watcher_pid=$!
 
 wait "$watcher_pid"

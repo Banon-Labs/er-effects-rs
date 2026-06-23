@@ -56,7 +56,7 @@ WINDOW_WITHOUT_TASK = "window_without_game_task_ready"
 WINDOW_WITHOUT_TELEMETRY = "window_without_valid_telemetry"
 TELEMETRY_WITHOUT_GAME_MAN = "telemetry_without_game_man"
 AUTOLOAD_REQUESTED = "autoload_requested"
-TITLE_BOOTSTRAP_SEEN = "title_bootstrap_seen"
+TITLE_HANDOFF_COMPLETE = "title_handoff_complete"
 PLAYER_AVAILABLE = "player_available"
 AUTOLOAD_ATTEMPT_BUDGET_REACHED = "autoload_attempt_budget_reached"
 POST_REQUEST_TICK_BUDGET_REACHED = "post_request_tick_budget_reached"
@@ -67,6 +67,55 @@ SPAWN_BUDGET_EXHAUSTED = "runtime_process_not_observed_within_spawn_poll_budget"
 READINESS_BUDGET_EXHAUSTED = "readiness_poll_budget_exhausted"
 TIMEOUT_BUDGET_EXHAUSTED = "timeout_seconds_budget_exhausted"
 GAME_FPS_BELOW_MIN = "game_fps_below_min"
+WORLD_STREAM_STALLED = "world_stream_stalled"
+TITLE_STALLED = "title_stalled"
+CONTINUE_STALLED = "continue_stalled"
+WORLD_LOAD_DEADLINE_EXCEEDED = "world_load_deadline_exceeded"
+# Fail-fast world-load deadline: once the first telemetry read lands, the world-loaded semaphore
+# (player present / world-stable) must be reached within this many seconds of the TRUE bash launch
+# epoch. A GOLDEN run where the user navigated the native menu SLOWLY reached the map-mount in ~24s
+# from bash launch, so any menu-free automated run that cannot hit world-loaded comfortably under
+# that is failing and should bail well below the 120s runtime cap. Default sits above the 24s golden
+# baseline but far below the cap; defeatable with --no-world-load-deadline. Complementary to the 6s
+# world_stream_stalled semaphore (which catches a flat post-map-load stall even earlier).
+DEFAULT_WORLD_LOAD_DEADLINE_SECONDS = 30.0
+# Milestone names (each a delta-from-launch in the timing dict). Detected from these oracle/telemetry
+# fields, recorded only on the first transition:
+#   t_launch          -> 0.0 by construction (the bash launch epoch)
+#   t_first_telemetry -> first poll the telemetry JSON is readable (telemetry_present)
+#   t_continue_fired  -> telemetry["oracle_own_load_continue_fired"] is True
+#   t_player_present  -> telemetry["oracle_player_present"] is True
+#   t_world_stable    -> the existing world-stable target reached (telemetry_world_loaded + dwell)
+#   t_teardown        -> the watch exits (any reason)
+TIMING_MILESTONES = (
+    "t_launch",
+    "t_first_telemetry",
+    "t_continue_fired",
+    "t_player_present",
+    "t_world_stable",
+    "t_teardown",
+)
+# World-stream stall semaphore: on the menu-free OWN-LOAD path the front half (continue fired +
+# player map block registered) can succeed while the player map block never actually streams --
+# per-block phase pinned at 2, zero IO inflight, player never present -- held flat to the wall-clock
+# cap. A healthy stream advances within ~2-5s (io_inflight goes non-zero, wbr_max_phase climbs past
+# 2, the m28 dispatch counter increments, player_present flips true). We track a monotonic progress
+# watermark and, once map-load has begun, fail fast if it does not improve within this window. 3s of
+# NO movement (flat watermark) is sufficient to call it stalled -- just above a healthy ~2s golden
+# stream, and the watermark resets on ANY forward progress so a working-but-slightly-plateauing stream
+# is not false-tripped. Tunable via --world-stream-stall-seconds.
+DEFAULT_WORLD_STREAM_STALL_SECONDS = 3.0
+# PER-PHASE PROGRESS WATCHDOG: generalizes the tail-stage world-stream stall detector into a
+# per-phase rule -- every phase of the menu-free load pipeline (boot->title, title->continue,
+# continue->map-load, map-load->world) must expose a monotonic progress signal, and the ACTIVE
+# phase must advance that signal within this many seconds or the watchdog fails fast NAMING which
+# phase wedged. Distinguishes "inherent slow but PROGRESSING" (e.g. the ~15s ER boot-to-title and
+# the ~10.7s title_boot_ready wait both keep game_task_ticks incrementing every frame, so the
+# watermark resets and never trips) from "wedged" (a true freeze: ticks flat AND no scan/state/
+# milestone advance for >3s). Same flat-watermark + reset-on-progress contract as
+# world_stream_stall_step, applied per phase. Tunable via --phase-stall-seconds; off with
+# --no-phase-watchdog. The world_stream phase keeps its own --world-stream-stall-seconds window.
+DEFAULT_PHASE_STALL_SECONDS = 3.0
 # FPS semaphore: the game-task tick counter advances ~once per rendered frame, so its rate is an
 # fps proxy. Elden Ring hard-throttles an UNFOCUSED window to a few fps; at that rate the title
 # never boots within the runtime cap and the probe silently burns the whole budget producing a
@@ -162,6 +211,104 @@ class ProcessRow:
     args: str
 
 
+class TimingTracker:
+    """Wall-clock milestone tracker, every delta measured from the TRUE bash launch epoch.
+
+    The headline metric for the unified harness is (world-loaded time) - (bash launch time). The
+    launch epoch is captured in bash at the moment eldenring.exe is fired and passed in via
+    --launch-epoch / ER_PROBE_LAUNCH_EPOCH; if absent we fall back to watcher-start (time.time()).
+    Each milestone is recorded only on its FIRST transition; deltas are seconds from launch_epoch.
+    """
+
+    def __init__(self, launch_epoch: float) -> None:
+        self.launch_epoch = float(launch_epoch)
+        self.deltas: dict[str, float | None] = {name: None for name in TIMING_MILESTONES}
+        # t_launch is 0 by construction (the bash launch epoch itself).
+        self.deltas["t_launch"] = 0.0
+
+    def _now_delta(self) -> float:
+        return max(time.time() - self.launch_epoch, 0.0)
+
+    def mark(self, milestone: str) -> None:
+        """Record `milestone` on its first occurrence and emit a clean greppable TIMING line."""
+        if milestone not in self.deltas or self.deltas.get(milestone) is not None:
+            return
+        delta = self._now_delta()
+        self.deltas[milestone] = delta
+        # Greppable: `TIMING +<delta>s <milestone>` (strip the t_ prefix for the human label).
+        label = milestone[2:] if milestone.startswith("t_") else milestone
+        print(f"TIMING +{delta:.1f}s {label}", file=sys.stderr, flush=True)
+
+    def observe(self, telemetry: dict[str, Any] | None, world_stable: bool = False) -> None:
+        """Update milestone transitions from the latest telemetry read."""
+        if telemetry is not None:
+            self.mark("t_first_telemetry")
+            if telemetry.get("oracle_own_load_continue_fired") is True:
+                self.mark("t_continue_fired")
+            if telemetry.get("oracle_player_present") is True:
+                self.mark("t_player_present")
+        if world_stable:
+            self.mark("t_world_stable")
+
+    def world_load_deadline_exceeded(self, deadline_seconds: float) -> bool:
+        """True once the load has had `deadline_seconds` to reach the world-loaded semaphore and
+        hasn't. ANCHORED to continue_fired (the load actually starting), NOT bash launch: our
+        boot+title latency (~24s) varies and must not eat the load budget, and a launch-anchored
+        deadline preempts the precise 6s world_stream_stalled semaphore. So the budget is measured
+        from continue_fired when it has happened; before continue it falls back to launch-anchored
+        (which then also catches a continue-never-fires hang). Independent of world_stream_stalled."""
+        if self.deltas.get("t_first_telemetry") is None:
+            return False
+        if self.deltas.get("t_player_present") is not None or self.deltas.get("t_world_stable") is not None:
+            return False
+        continue_delta = self.deltas.get("t_continue_fired")
+        anchor = continue_delta if continue_delta is not None else 0.0
+        return (self._now_delta() - anchor) >= float(deadline_seconds)
+
+    def snapshot(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"launch_epoch": self.launch_epoch}
+        for name in TIMING_MILESTONES:
+            value = self.deltas.get(name)
+            payload[name] = round(value, 3) if value is not None else None
+        return payload
+
+    def summary_line(self, reason: str) -> str:
+        def fmt(name: str) -> str:
+            value = self.deltas.get(name)
+            return f"{value:.1f}" if value is not None else "n/a"
+
+        return (
+            "TIMING SUMMARY "
+            f"launch->title={fmt('t_first_telemetry')}s "
+            f"->continue={fmt('t_continue_fired')}s "
+            f"->player={fmt('t_player_present')}s "
+            f"->world={fmt('t_world_stable')}s "
+            f"reason={reason}"
+        )
+
+
+def resolve_launch_epoch(args: argparse.Namespace) -> float:
+    """The TRUE bash launch epoch: --launch-epoch, else ER_PROBE_LAUNCH_EPOCH, else watcher-start.
+
+    The bash probe captures `date +%s.%N` at the moment eldenring.exe is fired (the closest bash
+    timestamp to process start) and threads it here so deltas are from the true launch, not
+    watcher-start. Unparseable/<=0 values fall back to time.time() so the harness never crashes.
+    """
+    candidate: float | None = None
+    if getattr(args, "launch_epoch", None) is not None:
+        candidate = args.launch_epoch
+    else:
+        env_value = os.environ.get("ER_PROBE_LAUNCH_EPOCH")
+        if env_value:
+            try:
+                candidate = float(env_value)
+            except ValueError:
+                candidate = None
+    if candidate is None or candidate <= 0:
+        return time.time()
+    return float(candidate)
+
+
 @dataclass(frozen=True)
 class ReadinessResult:
     ready: bool
@@ -182,6 +329,9 @@ class ReadinessResult:
     runtime_mode_match: bool | None = None
     seamless_module_mappings: list[dict[str, Any]] | None = None
     window_class: str = DEFAULT_WINDOW_CLASS
+    world_stream_stall: dict[str, Any] | None = None
+    phase_progress_stall: dict[str, Any] | None = None
+    timing: dict[str, Any] | None = None
 
     def to_json(self) -> dict[str, Any]:
         payload = {
@@ -202,6 +352,9 @@ class ReadinessResult:
             "seamless_module_mappings": self.seamless_module_mappings or [],
             "target_window_capture": target_window_capture_diagnostics(self.windows, self.window_class),
             "autoload_progress": autoload_progress_summary(self.telemetry),
+            "world_stream_stall": self.world_stream_stall,
+            "phase_progress_stall": self.phase_progress_stall,
+            "timing": self.timing,
         }
         oracle = oracle_summary(self.telemetry, self.expected_save_oracle, self.expected_animation_id)
         if oracle:
@@ -553,6 +706,285 @@ def as_int(value: Any, default: int = -1) -> int:
     return default
 
 
+def world_stream_armed(telemetry: dict[str, Any] | None) -> bool:
+    """True once the OWN-LOAD map-load has actually begun.
+
+    The stall semaphore must never arm before our continue has fired AND the player map block has
+    registered (target block present), so a slow boot / title screen can never trip it. Both gates
+    come from in-process OWN-LOAD telemetry; missing/None reads count as not-yet-armed.
+    """
+    if not isinstance(telemetry, dict):
+        return False
+    if telemetry.get("oracle_own_load_continue_fired") is not True:
+        return False
+    return as_int(telemetry.get("oracle_own_load_target_block_present"), 0) == 1
+
+
+def world_stream_progress_watermark(telemetry: dict[str, Any] | None) -> tuple[int, int, int, int, int] | None:
+    """Comparable monotonic progress watermark for the streaming player map block.
+
+    Returns None when the map-load has not begun (predicate disarmed). Otherwise a tuple that
+    increases strictly on any forward streaming progress, parsed from the OWN-LOAD oracle fields:
+      - oracle_own_load_wbr_max_phase     (per-block phase; hex string, stuck at 0x2 when stalled)
+      - oracle_own_load_stream_io_inflight (hex string; 0 -> no IO dispatched; 1 once it goes non-zero)
+      - oracle_own_load_stream_mms_state   (3 when stalled; advances past 3 when progressing)
+      - oracle_own_m28_dispatch_fired      (dispatch counter; increments on a working stream)
+      - oracle_player_present              (terminal: 1 once the player exists)
+    Null/missing/unparseable fields contribute 0 (treated as "no progress"), never a crash.
+    """
+    if not world_stream_armed(telemetry):
+        return None
+    assert isinstance(telemetry, dict)
+    wbr_max_phase = max(as_int(telemetry.get("oracle_own_load_wbr_max_phase"), 0), 0)
+    io_inflight = 1 if as_int(telemetry.get("oracle_own_load_stream_io_inflight"), 0) > 0 else 0
+    mms_state = max(as_int(telemetry.get("oracle_own_load_stream_mms_state"), 0), 0)
+    m28_dispatch = max(as_int(telemetry.get("oracle_own_m28_dispatch_fired"), 0), 0)
+    player_present = 1 if telemetry.get("oracle_player_present") is True else 0
+    return (player_present, m28_dispatch, mms_state, io_inflight, wbr_max_phase)
+
+
+def world_stream_stall_step(
+    telemetry: dict[str, Any] | None,
+    prev_watermark: tuple[int, int, int, int, int] | None,
+    progress_since: float | None,
+    now: float,
+    stall_seconds: float,
+) -> tuple[tuple[int, int, int, int, int] | None, float | None, bool]:
+    """One poll's worth of world-stream stall bookkeeping.
+
+    Pure so the loop and the tests share the exact same decision. Returns the carried-forward
+    (watermark, progress_since, stalled). `stalled` is True only once the watermark has been flat
+    (no strict improvement) for >= stall_seconds since the map-load armed. Any forward progress --
+    or a disarmed (None watermark) state -- resets the timer so a healthy stream never trips it.
+    """
+    watermark = world_stream_progress_watermark(telemetry)
+    if watermark is None:
+        return None, None, False
+    if prev_watermark is None or watermark > prev_watermark:
+        return watermark, now, False
+    if progress_since is not None and (now - progress_since >= stall_seconds):
+        return watermark, progress_since, True
+    return watermark, progress_since, False
+
+
+def world_stream_stall_snapshot(telemetry: dict[str, Any] | None, stuck_seconds: float) -> dict[str, Any]:
+    """Small diagnostic snapshot describing why the world-stream stall semaphore fired."""
+    fields: dict[str, Any] = {}
+    if isinstance(telemetry, dict):
+        for key in (
+            "oracle_own_load_continue_fired",
+            "oracle_own_load_target_block_present",
+            "oracle_own_load_wbr_max_phase",
+            "oracle_own_load_stream_io_inflight",
+            "oracle_own_load_stream_mms_state",
+            "oracle_own_m28_dispatch_fired",
+            "oracle_player_present",
+            "oracle_now_loading",
+        ):
+            fields[key] = telemetry.get(key)
+    return {
+        "stuck_seconds": round(stuck_seconds, 3),
+        "watermark": list(world_stream_progress_watermark(telemetry) or ()),
+        "fields": fields,
+    }
+
+
+# --- per-phase progress watchdog ------------------------------------------------------------------
+# An ORDERED phase model over the menu-free load pipeline. Each phase exposes:
+#   - name:            the reason-string stem (f"{name}_stalled")
+#   - active(t):       True when this phase is the one currently in flight
+#   - progress(t):     a comparable monotonic tuple that STRICTLY increases on forward progress
+#                      within the phase, or None when the phase is not active / not measurable
+# The watchdog tracks last-progress-value + last-progress-time for the active phase and fails fast
+# when the active phase's progress stays flat (no strict increase) for >= its window. Any increase
+# -- or a phase transition -- resets the timer, so an inherently-slow-but-MOVING phase never trips.
+#
+# Phases, in order of the real run (timing this session, deltas from bash launch):
+#   boot          first_telemetry=3.0s     (covered by the existing spawn/no-telemetry handling;
+#                                            the watchdog STARTS at telemetry_present so it never
+#                                            double-covers the pre-telemetry boot wait)
+#   title         ~3.0s -> ~14.9s          (game boot + title-owner scan; ~12s but PROGRESSING:
+#                                            game_task_ticks + title_owner_scan_attempts climb)
+#   continue      ~14.9s -> ~25.7s         (own_stepper "waiting for title_boot_ready" loop; ~10.7s
+#                                            but ALIVE: game_task_ticks keep incrementing)
+#   world_stream  ~25.7s -> world          (the existing world_stream_stalled tail detector)
+#
+# title and continue are gated on game_task_ticks (advances every rendered frame while the game is
+# alive) so a slow-but-healthy boot/title/wait never false-fails -- only a true freeze trips.
+
+
+def phase_boot_active(telemetry: dict[str, Any] | None) -> bool:
+    """boot: before any telemetry is readable. Not watched here (spawn/no-telemetry handling owns
+    the pre-telemetry wait); kept in the model only so the ordered set is complete."""
+    return telemetry is None
+
+
+def phase_title_active(telemetry: dict[str, Any] | None) -> bool:
+    """title: telemetry present, continue not yet fired, and the title owner not yet captured.
+
+    The own_stepper captures the title owner (title_owner_scan_last_state == 10 at the title screen)
+    before it begins the continue handshake. While the title owner is not yet cached we are still in
+    the boot+title flow.
+    """
+    if not isinstance(telemetry, dict):
+        return False
+    if telemetry.get("oracle_own_load_continue_fired") is True:
+        return False
+    return not phase_title_owner_captured(telemetry)
+
+
+def phase_title_owner_captured(telemetry: dict[str, Any] | None) -> bool:
+    """True once the title-owner scan has locked the title screen (last_state == 10) or cached an
+    owner. This is the boundary between the title phase and the continue phase."""
+    if not isinstance(telemetry, dict):
+        return False
+    if as_int(telemetry.get("title_owner_scan_last_state"), -1) == 10:
+        return True
+    cached = telemetry.get("title_owner_scan_cached_owner")
+    if isinstance(cached, str) and cached not in ("", "0x0", "0", "null"):
+        return True
+    if cached not in (None, 0, "", "0x0", "0", "null") and as_int(cached, 0) != 0:
+        return True
+    return telemetry.get("title_handoff_complete") is True
+
+
+def phase_continue_active(telemetry: dict[str, Any] | None) -> bool:
+    """continue: title owner captured, continue not yet fired. The ~10.7s title_boot_ready wait."""
+    if not isinstance(telemetry, dict):
+        return False
+    if telemetry.get("oracle_own_load_continue_fired") is True:
+        return False
+    return phase_title_owner_captured(telemetry)
+
+
+def phase_title_progress(telemetry: dict[str, Any] | None) -> tuple[int, int, int, int, int] | None:
+    """Monotonic title-phase progress watermark, or None when the title phase is not active.
+
+    Built from signals that climb during a healthy boot/title:
+      game_task_ticks         -- increments every rendered frame while the game is alive
+      title_owner_scan_attempts -- the owner scan runs every tick, so this climbs
+      title_owner_scan_vtable_hits -- climbs as candidate owners are inspected
+      title_owner_scan_last_state  -- advances toward 10 (title-ready)
+      title_handoff_complete as 0/1  -- flips to 1 when the title bootstrap is observed
+    A flatline of ALL of these for >window means the title flow is truly wedged.
+    """
+    if not phase_title_active(telemetry):
+        return None
+    assert isinstance(telemetry, dict)
+    ticks = max(as_int(telemetry.get("game_task_ticks"), 0), 0)
+    scan_attempts = max(as_int(telemetry.get("title_owner_scan_attempts"), 0), 0)
+    vtable_hits = max(as_int(telemetry.get("title_owner_scan_vtable_hits"), 0), 0)
+    last_state = max(as_int(telemetry.get("title_owner_scan_last_state"), 0), 0)
+    bootstrap_seen = 1 if telemetry.get("title_handoff_complete") is True else 0
+    return (bootstrap_seen, last_state, scan_attempts, vtable_hits, ticks)
+
+
+def phase_continue_progress(telemetry: dict[str, Any] | None) -> tuple[int] | None:
+    """Monotonic continue-phase progress watermark, or None when the continue phase is not active.
+
+    Gated ONLY on game_task_ticks: the title_boot_ready wait keeps the game alive (ticks advancing
+    every frame) even though continue has not fired yet -- that is PROGRESSING, not wedged, so it must
+    not trip on "continue is slow". Continue-is-too-slow is handled by the continue-anchored
+    world_load_deadline backstop, not this watchdog. The watchdog fires here ONLY on a true freeze:
+    game_task_ticks flat for >window (the game itself stopped advancing frames).
+    """
+    if not phase_continue_active(telemetry):
+        return None
+    assert isinstance(telemetry, dict)
+    return (max(as_int(telemetry.get("game_task_ticks"), 0), 0),)
+
+
+# Ordered phase registry: (name, reason, active_predicate, progress_fn). The world_stream phase is
+# integrated via its own world_stream_stall_step (different, richer watermark + its own window), so
+# it is intentionally NOT in this table -- this table covers the previously-BLIND gaps (title,
+# continue). boot is listed for completeness but its progress_fn returns None (unwatched here).
+PHASE_WATCHDOG_MODEL: tuple[tuple[str, str, Any, Any], ...] = (
+    ("title", TITLE_STALLED, phase_title_active, phase_title_progress),
+    ("continue", CONTINUE_STALLED, phase_continue_active, phase_continue_progress),
+)
+
+
+def active_watchdog_phase(telemetry: dict[str, Any] | None) -> tuple[str, str, Any] | None:
+    """Return (name, reason, progress_value) for the first active phase whose progress is measurable,
+    else None. Only one phase is active at a time by construction (the predicates are mutually
+    exclusive on continue_fired + title-owner-captured)."""
+    for name, reason, active, progress in PHASE_WATCHDOG_MODEL:
+        if active(telemetry):
+            value = progress(telemetry)
+            if value is not None:
+                return name, reason, value
+    return None
+
+
+def phase_progress_stall_step(
+    telemetry: dict[str, Any] | None,
+    state: dict[str, Any],
+    now: float,
+    stall_seconds: float,
+) -> tuple[bool, str | None]:
+    """One poll of per-phase watchdog bookkeeping. Pure so the loop and tests share the decision.
+
+    `state` is a mutable carry-dict the caller owns across polls with keys:
+      "phase"          -- name of the phase last seen active (or None)
+      "value"          -- last progress watermark for that phase
+      "since"          -- monotonic time the watermark last strictly improved
+    Returns (stalled, reason). `reason` is the f"{phase}_stalled" reason string when stalled, else
+    None. The timer resets on ANY of: a phase transition, a strict increase in the active phase's
+    watermark, or the phase becoming inactive -- so an inherently-slow-but-MOVING phase never trips.
+    Stalls only when the SAME active phase's watermark is flat for >= stall_seconds.
+    """
+    active = active_watchdog_phase(telemetry)
+    if active is None:
+        # No watched phase active (pre-telemetry boot, or continue fired -> world_stream owns it).
+        state["phase"] = None
+        state["value"] = None
+        state["since"] = None
+        return False, None
+    name, reason, value = active
+    if state.get("phase") != name or state.get("value") is None:
+        # Entered (or re-entered) this phase: arm a fresh timer.
+        state["phase"] = name
+        state["value"] = value
+        state["since"] = now
+        return False, None
+    if value > state["value"]:
+        # Forward progress within the phase: reset the timer.
+        state["value"] = value
+        state["since"] = now
+        return False, None
+    since = state.get("since")
+    if since is not None and (now - since) >= stall_seconds:
+        return True, reason
+    return False, None
+
+
+def phase_progress_stall_snapshot(
+    telemetry: dict[str, Any] | None,
+    phase_name: str,
+    stuck_seconds: float,
+) -> dict[str, Any]:
+    """Diagnostic snapshot describing which phase wedged and the signals that stayed flat."""
+    fields: dict[str, Any] = {}
+    if isinstance(telemetry, dict):
+        for key in (
+            "game_task_ticks",
+            "title_owner_scan_attempts",
+            "title_owner_scan_vtable_hits",
+            "title_owner_scan_last_state",
+            "title_owner_scan_cached_owner",
+            "title_handoff_complete",
+            "oracle_own_load_continue_fired",
+        ):
+            fields[key] = telemetry.get(key)
+    value = active_watchdog_phase(telemetry)
+    return {
+        "phase": phase_name,
+        "stuck_seconds": round(stuck_seconds, 3),
+        "watermark": list(value[2]) if value is not None else [],
+        "fields": fields,
+    }
+
+
 def expected_save_fields(expected_save_oracle: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(expected_save_oracle, dict):
         return {}
@@ -755,13 +1187,13 @@ def autoload_progress_summary(telemetry: dict[str, Any] | None) -> dict[str, Any
     product_core_ticks = as_int(telemetry.get("product_core_autoload_ticks"), 0)
     product_core_blocker = str(telemetry.get("product_core_ready_blocker") or "unseen")
     phase = as_int(telemetry.get("oracle_continue_phase"), -1)
-    title_bootstrap_seen = telemetry.get("title_bootstrap_seen") is True
+    title_handoff_complete = telemetry.get("title_handoff_complete") is True
     native_stage = telemetry_native_continue_chain_stage(telemetry)
-    if telemetry.get("game_man_available") is not True:
+    if telemetry.get("game_man_instance_resolved") is not True:
         blocker = "waiting_for_game_man"
     elif telemetry.get("product_autoload_armed") is True and product_core_ticks > 0 and attempts <= 0:
         blocker = f"product_core_{product_core_blocker}"
-    elif attempts <= 0 and not title_bootstrap_seen:
+    elif attempts <= 0 and not title_handoff_complete:
         blocker = "autoload_not_attempted_waiting_title_bootstrap"
     elif attempts <= 0:
         blocker = "autoload_not_attempted"
@@ -774,7 +1206,7 @@ def autoload_progress_summary(telemetry: dict[str, Any] | None) -> dict[str, Any
     return {
         "telemetry_present": True,
         "blocker": blocker,
-        "game_man_available": telemetry.get("game_man_available"),
+        "game_man_instance_resolved": telemetry.get("game_man_instance_resolved"),
         "game_task_ticks": telemetry.get("game_task_ticks"),
         "player_available": telemetry.get("player_available"),
         "player_seen": telemetry.get("player_seen"),
@@ -807,7 +1239,7 @@ def autoload_progress_summary(telemetry: dict[str, Any] | None) -> dict[str, Any
         "title_owner_scan_last_state": telemetry.get("title_owner_scan_last_state"),
         "autoload_attempts": telemetry.get("autoload_attempts"),
         "autoload_last_status": telemetry.get("autoload_last_status"),
-        "title_bootstrap_seen": telemetry.get("title_bootstrap_seen"),
+        "title_handoff_complete": telemetry.get("title_handoff_complete"),
         "continue_phase": telemetry.get("oracle_continue_phase"),
         "continue_member_node": telemetry.get("oracle_continue_member_node"),
         "continue_task_node": telemetry.get("oracle_continue_task_node"),
@@ -1053,7 +1485,7 @@ def telemetry_world_loaded(
     expected_save_oracle: dict[str, Any] | None = None,
     expected_animation_id: int | None = None,
 ) -> bool:
-    if telemetry is None or telemetry.get("game_man_available") is not True:
+    if telemetry is None or telemetry.get("game_man_instance_resolved") is not True:
         return False
     player_seen = telemetry.get("player_available") is True or telemetry.get("player_seen") is True
     load_in_progress_clear = as_int(telemetry.get("oracle_load_in_progress_b80"), -1) == 0
@@ -1421,7 +1853,7 @@ def classify_snapshot(
 ) -> ReadinessResult | None:
     if not process_running:
         return ReadinessResult(False, PROCESS_EXITED, pid, bootstrap, telemetry, windows, polls)
-    if telemetry is not None and telemetry.get("game_man_available") is True:
+    if telemetry is not None and telemetry.get("game_man_instance_resolved") is True:
         if target == TARGET_GAME_MAN:
             return ReadinessResult(True, READY_REASON, pid, bootstrap, telemetry, windows, polls)
         if target == TARGET_WORLD_STABLE:
@@ -1450,8 +1882,8 @@ def classify_snapshot(
             if player_playable:
                 return ReadinessResult(True, PLAYER_AVAILABLE, pid, bootstrap, telemetry, windows, polls)
             game_task_ticks = int(telemetry.get("game_task_ticks") or 0)
-            if target == TARGET_REQUEST_CONSUMPTION and telemetry.get("title_bootstrap_seen") is True:
-                return ReadinessResult(True, TITLE_BOOTSTRAP_SEEN, pid, bootstrap, telemetry, windows, polls)
+            if target == TARGET_REQUEST_CONSUMPTION and telemetry.get("title_handoff_complete") is True:
+                return ReadinessResult(True, TITLE_HANDOFF_COMPLETE, pid, bootstrap, telemetry, windows, polls)
             if game_task_ticks >= post_request_tick_budget:
                 reason = (
                     PLAYER_LOAD_TICK_BUDGET_REACHED
@@ -1480,7 +1912,7 @@ def classify_snapshot(
             )
     if (
         telemetry is not None
-        and telemetry.get("game_man_available") is not True
+        and telemetry.get("game_man_instance_resolved") is not True
         and windows
         and window_stale_polls >= window_stale_poll_budget
     ):
@@ -1507,7 +1939,7 @@ def classify_snapshot(
     return None
 
 
-def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
+def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> ReadinessResult:
     pattern = re.compile(args.process_pattern, re.I)
     expected_save_oracle = read_json(args.expected_save_oracle) if args.expected_save_oracle else None
     deadline = time.monotonic() + float(args.max_runtime_seconds)
@@ -1529,6 +1961,14 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
     next_save_data_popup_check_at = 0.0
     last_world_stable_tick: int | None = None
     world_stable_since: float | None = None
+    # World-stream stall semaphore state: a monotonic progress watermark and the monotonic time it
+    # last improved. Both stay None until the OWN-LOAD map-load arms (continue fired + block present).
+    world_stream_watermark: tuple[int, int, int, int, int] | None = None
+    world_stream_progress_since: float | None = None
+    # Per-phase progress watchdog carry-state: which watched phase (title/continue) was last active,
+    # its last progress watermark, and the monotonic time that watermark last improved. Reset on any
+    # phase transition / forward progress so an inherently-slow-but-moving phase never trips.
+    phase_watchdog_state: dict[str, Any] = {"phase": None, "value": None, "since": None}
     fps_samples: list[tuple[float, int]] = []  # (monotonic, game_task_ticks) for the fps semaphore
     for poll in range(args.readiness_poll_budget):
         if time.monotonic() >= deadline:
@@ -1563,6 +2003,41 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
             )
         telemetry = read_json(args.telemetry)
         bootstrap = read_bootstrap(args.bootstrap, args.bootstrap_state)
+        # Milestone timing (deltas from the TRUE bash launch epoch). Record first telemetry / continue
+        # fired / player present transitions; world-stable is marked at its dedicated success below.
+        timing.observe(telemetry)
+        # FAIL-FAST WORLD-LOAD DEADLINE: the world-loaded semaphore (player present / world-stable)
+        # must be reached within --world-load-deadline-seconds of CONTINUE_FIRED (the load starting),
+        # not bash launch -- so our ~24s boot+title latency doesn't eat the load budget and the
+        # deadline can't preempt the precise 6s world_stream_stalled semaphore. Before continue fires
+        # it's launch-anchored, so it also catches a continue-never-fires hang. Default 30s (room for a
+        # real ER load after continue). Complementary to world_stream_stalled. Off: --no-world-load-deadline.
+        if (
+            args.world_load_deadline_exit
+            and args.target == TARGET_WORLD_STABLE
+            and process_exists(pid)
+            and timing.world_load_deadline_exceeded(args.world_load_deadline_seconds)
+        ):
+            print(
+                "er-readiness-watch: world-loaded semaphore not reached within "
+                f"{args.world_load_deadline_seconds:g}s of continue_fired (load start; "
+                "launch-anchored before continue); failing fast",
+                file=sys.stderr,
+            )
+            return with_runtime_module_info(
+                ReadinessResult(
+                    False,
+                    WORLD_LOAD_DEADLINE_EXCEEDED,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    hypr_windows(args.window_class),
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
         # FPS SEMAPHORE (fail fast on a sub-30-fps / throttled-or-hung game). The game-task tick
         # counter is an fps proxy; once it is clearly running (>= FPS_JUDGE_MIN_TICKS) we require a
         # sustained >= MIN_GAME_FPS over FPS_STALL_WINDOW_SECONDS, else treat it as a crash-class
@@ -1745,8 +2220,97 @@ def wait_readiness(args: argparse.Namespace) -> ReadinessResult:
                         expected_animation_id=args.expected_animation_id,
                     )
                 )
+        # PER-PHASE PROGRESS WATCHDOG: enforce "<=N s between any two consecutive progress semaphores"
+        # for the previously-BLIND gaps (boot->title and the title_boot_ready continue wait). The
+        # active phase (title or continue) must advance its monotonic watermark within
+        # --phase-stall-seconds or we fail fast NAMING which phase wedged (title_stalled /
+        # continue_stalled). Both phases ride game_task_ticks (advances every frame while alive), so a
+        # slow-but-healthy boot/title/wait resets the timer every poll and never false-fails; only a
+        # true freeze (no tick/scan/state advance for >window) trips. The map-load->world tail is
+        # owned by the separate world_stream_stall_step below (its own richer watermark + window).
+        if args.phase_watchdog and process_running:
+            now_phase = time.monotonic()
+            # Capture the active phase name BEFORE the step (the step's snapshot of which phase wedged).
+            active_phase_now = active_watchdog_phase(telemetry)
+            phase_stalled, phase_reason = phase_progress_stall_step(
+                telemetry,
+                phase_watchdog_state,
+                now_phase,
+                args.phase_stall_seconds,
+            )
+            if phase_stalled and phase_reason is not None:
+                since = phase_watchdog_state.get("since")
+                stuck_seconds = (now_phase - since) if since is not None else args.phase_stall_seconds
+                stalled_phase = active_phase_now[0] if active_phase_now is not None else phase_reason
+                print(
+                    f"er-readiness-watch: phase '{stalled_phase}' progress watermark flat for "
+                    f"{stuck_seconds:.1f}s >= {args.phase_stall_seconds:g}s (no game_task_ticks / "
+                    "title-scan / state advance); failing fast",
+                    file=sys.stderr,
+                )
+                return with_runtime_module_info(
+                    replace(
+                        ReadinessResult(
+                            False,
+                            phase_reason,
+                            pid,
+                            bootstrap,
+                            telemetry,
+                            hypr_windows(args.window_class),
+                            spawn_polls + poll,
+                            float(args.max_runtime_seconds),
+                            expected_save_oracle=expected_save_oracle,
+                            expected_animation_id=args.expected_animation_id,
+                        ),
+                        phase_progress_stall=phase_progress_stall_snapshot(
+                            telemetry, stalled_phase, stuck_seconds
+                        ),
+                    )
+                )
+        # World-stream stall semaphore: once the OWN-LOAD map-load has begun, track a monotonic
+        # progress watermark; if it does not strictly improve within --world-stream-stall-seconds
+        # (and the world is not yet stable), the player map block is wedged (phase stuck at 2, zero
+        # IO inflight, player never present) -- tear down fast instead of burning the runtime cap.
+        # Resetting the timer on ANY forward progress means a healthy ~2-5s stream never trips it.
+        if args.world_stream_stall_exit and args.target == TARGET_WORLD_STABLE and process_running:
+            now_stream = time.monotonic()
+            world_stream_watermark, world_stream_progress_since, world_stream_stalled = world_stream_stall_step(
+                telemetry,
+                world_stream_watermark,
+                world_stream_progress_since,
+                now_stream,
+                args.world_stream_stall_seconds,
+            )
+            if world_stream_stalled and world_stream_progress_since is not None:
+                stuck_seconds = now_stream - world_stream_progress_since
+                print(
+                    "er-readiness-watch: world-stream progress watermark flat for "
+                    f"{stuck_seconds:.1f}s >= {args.world_stream_stall_seconds:g}s since map-load "
+                    "began (player block wedged); failing fast",
+                    file=sys.stderr,
+                )
+                return with_runtime_module_info(
+                    replace(
+                        ReadinessResult(
+                            False,
+                            WORLD_STREAM_STALLED,
+                            pid,
+                            bootstrap,
+                            telemetry,
+                            hypr_windows(args.window_class),
+                            spawn_polls + poll,
+                            float(args.max_runtime_seconds),
+                            expected_save_oracle=expected_save_oracle,
+                            expected_animation_id=args.expected_animation_id,
+                        ),
+                        world_stream_stall=world_stream_stall_snapshot(telemetry, stuck_seconds),
+                    )
+                )
         if args.target == TARGET_WORLD_STABLE:
             if process_running and telemetry_world_loaded(telemetry, expected_save_oracle, args.expected_animation_id):
+                # The world-loaded semaphore is reached HERE (first true), so this is the headline
+                # launch->world delta -- recorded before the dwell/visual confirmation wait.
+                timing.mark("t_world_stable")
                 tick = telemetry_world_tick(telemetry or {}, poll)
                 if tick != last_world_stable_tick:
                     world_stable_samples += 1
@@ -1862,6 +2426,69 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--world-stable-samples", type=int, default=3)
     parser.add_argument("--world-stable-dwell-seconds", type=float, default=DEFAULT_WORLD_STABLE_DWELL_SECONDS)
     parser.add_argument(
+        "--world-stream-stall-seconds",
+        type=float,
+        default=DEFAULT_WORLD_STREAM_STALL_SECONDS,
+        help=(
+            "Once the OWN-LOAD map-load has begun (continue fired + player block present), fail fast "
+            "with reason world_stream_stalled if the streaming progress watermark does not improve "
+            "within this window. Sits above a healthy ~2-5s stream but well below --max-runtime-seconds."
+        ),
+    )
+    parser.add_argument(
+        "--no-world-stream-stall-exit",
+        dest="world_stream_stall_exit",
+        action="store_false",
+        default=True,
+        help="Disable the world-stream stall early-exit semaphore (restores old behavior: burn the full runtime cap on a wedged map-load).",
+    )
+    parser.add_argument(
+        "--phase-stall-seconds",
+        type=float,
+        default=DEFAULT_PHASE_STALL_SECONDS,
+        help=(
+            "Per-phase progress watchdog window. The active load phase (title, continue) must advance "
+            "its monotonic progress watermark within this many seconds or the watcher fails fast with "
+            "reason <phase>_stalled. Both phases ride game_task_ticks (advances every frame while alive) "
+            "so a slow-but-healthy boot/title/wait never trips; only a true freeze does."
+        ),
+    )
+    parser.add_argument(
+        "--no-phase-watchdog",
+        dest="phase_watchdog",
+        action="store_false",
+        default=True,
+        help="Disable the per-phase progress watchdog (title_stalled / continue_stalled). The tail-stage world_stream_stalled semaphore is unaffected.",
+    )
+    parser.add_argument(
+        "--launch-epoch",
+        type=float,
+        default=None,
+        help=(
+            "TRUE bash launch epoch (float seconds, e.g. `date +%%s.%%N`), captured at the moment "
+            "eldenring.exe is fired. All timing deltas are measured from this. Falls back to "
+            "ER_PROBE_LAUNCH_EPOCH, then watcher-start if neither is given."
+        ),
+    )
+    parser.add_argument(
+        "--world-load-deadline-seconds",
+        type=float,
+        default=DEFAULT_WORLD_LOAD_DEADLINE_SECONDS,
+        help=(
+            "Fail fast with reason world_load_deadline_exceeded if the world-loaded semaphore "
+            "(player present / world-stable) is not reached within this many seconds of CONTINUE_FIRED "
+            "(the load starting; launch-anchored before continue fires). Default 30s -- room for a real "
+            "ER load after continue, while the 6s world_stream_stalled semaphore does the precise fast-fail."
+        ),
+    )
+    parser.add_argument(
+        "--no-world-load-deadline",
+        dest="world_load_deadline_exit",
+        action="store_false",
+        default=True,
+        help="Disable the world-load fail-fast deadline (let the run go to the full runtime cap).",
+    )
+    parser.add_argument(
         "--expected-save-oracle",
         type=Path,
         help="Expected save-slot oracle JSON generated from the vanilla ER0000.sl2 file.",
@@ -1962,6 +2589,12 @@ def main() -> int:
         raise SystemExit("--world-stable-samples must be greater than 0")
     if args.world_stable_dwell_seconds < 0:
         raise SystemExit("--world-stable-dwell-seconds must be greater than or equal to 0")
+    if args.world_stream_stall_seconds <= 0:
+        raise SystemExit("--world-stream-stall-seconds must be greater than 0")
+    if args.phase_stall_seconds <= 0:
+        raise SystemExit("--phase-stall-seconds must be greater than 0")
+    if args.world_load_deadline_seconds <= 0:
+        raise SystemExit("--world-load-deadline-seconds must be greater than 0")
     if args.visual_legal_popup_check_interval_seconds <= 0:
         raise SystemExit("--visual-legal-popup-check-interval-seconds must be greater than 0")
     if args.visual_save_data_popup_check_interval_seconds <= 0:
@@ -1977,9 +2610,19 @@ def main() -> int:
         args.visual_save_data_popup_check = False
         args.visual_world_check = False
     args.artifact_dir.mkdir(parents=True, exist_ok=True)
-    result = replace(with_runtime_mode_info(wait_readiness(args), args.expected_runtime_mode), window_class=args.window_class)
+    timing = TimingTracker(resolve_launch_epoch(args))
+    timing.mark("t_launch")
+    result = replace(
+        with_runtime_mode_info(wait_readiness(args, timing), args.expected_runtime_mode),
+        window_class=args.window_class,
+    )
+    # Teardown is the watch exit; mark it before snapshotting so the timing dict is complete.
+    timing.mark("t_teardown")
+    result = replace(result, timing=timing.snapshot())
     output = args.artifact_dir / "readiness-result.json"
     write_result(output, result)
+    # One greppable line gives the whole launch->title->continue->player->world picture + reason.
+    print(timing.summary_line(result.reason), file=sys.stderr, flush=True)
     print(json.dumps(result.to_json(), sort_keys=True))
     return SUCCESS_RC if result.ready else FAILURE_RC
 

@@ -220,12 +220,16 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
                     let r9 = read_reg(CONTEXT_R9_OFFSET);
                     let rax = read_reg(CONTEXT_RAX_OFFSET);
                     let rsp = read_reg(CONTEXT_RSP_OFFSET);
+                    // RAW stack qwords (NOT rva'd): in-image game return addresses show as full
+                    // 0x140xxxxxxx (subtract base for the RVA), our DLL frames as 0x6ffe..., stack/heap
+                    // as 0x7ffe..., locals as small values -- so the caller chain up from the BP'd
+                    // function is identifiable. Deepened to capture the map-load orchestrator frames.
                     let mut stack = String::new();
                     let mut q = SW_BP_EMPTY;
                     while q < SW_BP_STACK_DUMP_QWORDS {
                         let v =
                             unsafe { *((rsp + q * core::mem::size_of::<usize>()) as *const usize) };
-                        stack.push_str(&format!("0x{:x},", rva(v)));
+                        stack.push_str(&format!("0x{:x},", v));
                         q += SW_BP_SLOT_STEP;
                     }
                     append_crash_log(format_args!(

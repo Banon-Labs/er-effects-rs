@@ -70,8 +70,8 @@ pub(crate) const ANIM_QUEUE_SLOT_STEP: u32 = 1;
 pub(crate) const ANIM_QUEUE_SCAN_FLOOR: u32 = 0;
 pub(crate) const CUSTOM_CALL_DEFAULT_ID: i32 = 0;
 pub(crate) const NEXT_INDEX_OFFSET: usize = 1;
-pub(crate) const TITLE_BOOTSTRAP_UNSEEN: usize = 0;
-pub(crate) const TITLE_BOOTSTRAP_SEEN_VALUE: usize = 1;
+pub(crate) const TITLE_HANDOFF_INCOMPLETE: usize = 0;
+pub(crate) const TITLE_HANDOFF_COMPLETE_VALUE: usize = 1;
 pub(crate) const STACK_TRACE_FRAME_COUNT: usize = 8;
 pub(crate) const STACK_TRACE_FRAMES_TO_SKIP: u32 = 0;
 pub(crate) const NULL_MODULE_BASE: usize = 0;
@@ -199,7 +199,7 @@ pub(crate) const SW_BP_HIT_INCREMENT: usize = 1;
 pub(crate) const SW_BP_HITS_INIT: usize = 0;
 pub(crate) const SW_BP_SLOT_STEP: usize = 1;
 /// Number of stack qwords to dump on a breakpoint hit (args spilled past r9 + locals).
-pub(crate) const SW_BP_STACK_DUMP_QWORDS: usize = 6;
+pub(crate) const SW_BP_STACK_DUMP_QWORDS: usize = 40;
 pub(crate) static SW_BP_ADDR: [AtomicUsize; SW_BP_MAX] =
     [const { AtomicUsize::new(SW_BP_EMPTY) }; SW_BP_MAX];
 pub(crate) static SW_BP_ORIG: [AtomicUsize; SW_BP_MAX] =
@@ -899,6 +899,38 @@ pub(crate) const BLOCK_SAMPLE_SHIFT: u32 = 8;
 pub(crate) const BLOCK_LOADSTATE_GETTER_VT_10_OFFSET: usize = 0x10;
 pub(crate) const BLOCK_LOADSTATE_FLAG_2D_OFFSET: usize = 0x2d;
 pub(crate) const BLOCK_LOADSTATE_PHASE_35_OFFSET: usize = 0x35;
+/// OWN-LOAD m28 direct-enqueue lever (adddefaultfileloadprocess-lever-viable-2026-06-22).
+/// `FD4::FD4FileCap::AddDefaultFileLoadProcess` deobf VA 0x142658c60 (prologue-grounded
+/// `40 55 56 57 41 56 41 57`; dump 0x142658c50 is +0x10). Stored as an RVA offset from the
+/// 0x140000000 image base, resolved at runtime as `module_base + RVA` like the other native-call
+/// RVAs in this file (e.g. `CONTINUE_CONFIRM_RVA`). Signature (Win64 fastcall):
+/// `bool AddDefaultFileLoadProcess(FD4FileCap* cap /*rcx*/, FD4FileLoadProcess* loadProcess /*rdx*/)`.
+/// It builds the FD4FileLoadProcessor internally + self-enqueues IO to the already-live FD4 workers
+/// (RequestDCX -> RSResourceFileRequest -> GLOBAL_LoadManager). PushTask / AssignFileCap are NOT
+/// needed. Reaches ONLY world-asset file-load streaming -- no save IO, cannot autosave.
+pub(crate) const ADD_DEFAULT_FILE_LOAD_PROCESS_RVA: usize = 0x142658c60 - 0x140000000;
+/// FD4FileCap layout (struct len 0x90): the cap's EXISTING `FD4FileLoadProcess*` lives at +0x78 --
+/// READ it for arg2, we never construct one. `loadState` at +0x88 == 4 means the cap is already
+/// resident (skip). Both grounded in the Ghidra dump decomp of the lever.
+pub(crate) const FILECAP_LOAD_PROCESS_78_OFFSET: usize = 0x78;
+pub(crate) const FILECAP_LOADSTATE_88_OFFSET: usize = 0x88;
+/// `loadState` sentinel meaning the FD4FileCap finished loading (already resident -> do not dispatch).
+pub(crate) const FILECAP_LOADSTATE_COMPLETE: i32 = 4;
+/// WorldBlockRes holds the m28 area's FD4FileCap(s): the primary at +0x40 and an OPTIONAL second at
+/// +0x48 (the IsNonDebugArea branch; m28/0x1c populates both, and phase-2 gates on BOTH). Dispatch
+/// each non-null cap. These are off the SAME WorldBlockRes entry the recurring observer block-walk
+/// already finds for the player area.
+pub(crate) const WORLDBLOCKRES_FILECAP_40_OFFSET: usize = 0x40;
+pub(crate) const WORLDBLOCKRES_FILECAP2_48_OFFSET: usize = 0x48;
+/// The resmgr 0xb3030 array entry `block` is a CONTAINER (WorldBlockData): the WorldBlockRes elements
+/// live in an inline array at `*(block+0xce0)`, count `*(block+0xcd8)` (i32), stride 0xb98 -- decoded
+/// from the keyed getter vt+0x8 (deobf 0x14062f470): `movslq 0xcd8(rcx); mov 0xce0(rcx),r11;
+/// elem=r11+i*0xb98`. Each element is a WorldBlockRes (phase byte +0x35, caps +0x40/+0x48). We iterate
+/// this array DIRECTLY (plain reads) instead of calling the getter -- the getter takes a second `key`
+/// arg in rdx and AV-crashes if called without it.
+pub(crate) const WORLDBLOCK_CONTAINER_COUNT_CD8_OFFSET: usize = 0xcd8;
+pub(crate) const WORLDBLOCK_CONTAINER_ARRAY_CE0_OFFSET: usize = 0xce0;
+pub(crate) const WORLDBLOCKRES_ELEM_STRIDE_B98: usize = 0xb98;
 pub(crate) const DIAG_PHASE_NONE: i32 = -1;
 pub(crate) const DIAG_COUNT_ZERO: i32 = 0;
 pub(crate) const DIAG_COUNT_ONE: i32 = 1;
@@ -973,6 +1005,98 @@ pub(crate) const CONTINUE_CONFIRM_RVA: usize = 0xb0e180;
 /// OWN-LOAD owner diagnostic; the continue_confirm owner is the threaded SetState-able
 /// title owner (see `own_load_continue_fire`), NOT this literal.
 pub(crate) const CONTINUE_MANAGER_GLOBAL_RVA: usize = 0x3d5df38;
+
+/// LoadGame-JOB BUILD factory (`FUN_140826510` live; dump VA `0x140826600` lands +0xF0 mid-instr in
+/// the deobf image -- the real prologue is here, prologue-grounded vs `eldenring-deobf.bin`). Builds
+/// the LoadGame `CS::MenuJobWithContext<LoadJobContext>` via the menu-heap factory and returns it in
+/// `*out` with refcount 1. Win64 fastcall `(out: *DLRefCountPtr<MenuJob>, ctx_parent, save_slot:i32,
+/// owner_ctx)`. Only `out` (our local) and `save_slot` (the int slot) are required by the deser/map
+/// self-build path; `ctx_parent`/`owner_ctx` are the OUTER profile-selection UI context (stored as
+/// lambda captures, every build-path deref null-guarded) -- passed as 0 here (see `own_load_install_job`).
+pub(crate) const LOADGAME_JOB_BUILD_RVA: usize = 0x826510;
+/// `DLUT::DLReferenceCountPointer<MenuJob>` ASSIGN/INSTALL helper (`FUN_1407a9560` live; dump entry
+/// `0x1407a9650` is the same fn, prologue-grounded vs `eldenring-deobf.bin`). Win64 fastcall
+/// `(slot: *MenuJob*, src: *MenuJob* (longlong*))`: writes `*slot = *src`, `AtomicIncrement`s the new
+/// occupant, then `AtomicDecrement`s/releases the PRIOR occupant and zeroes `*src` (move-assign).
+/// Installs the built job into `owner+0x130`, releasing the idle `IfElseJob` it replaces.
+pub(crate) const MENUJOB_ASSIGN_RVA: usize = 0x7a9560;
+/// `CS::MenuJobQueue::PushBackJob` (live entry `0x1407a9254`, dump `FUN_1407a9340`): APPENDS a job into
+/// a MenuJobQueue's ring (`AtomicIncrement`s the job, then ring-push behind the active job) -- it does
+/// NOT replace the active job or zero `*src`. `owner+0x130` is itself a MenuJobQueue (active job at
+/// +0x130, ring at +0x138, count at +0x178), so PushBackJob-ing our LoadGame job here appends it
+/// WITHOUT orphaning the title IfElseJob's sibling MenuWindowJobs (avoids the 0x140733fea menu-tear AV);
+/// STEP_MenuJobWait's ExecuteMenuJob then pops + ticks it. Win64 fastcall `(queue_base, src: *MenuJob*)`.
+pub(crate) const MENUJOB_PUSHBACK_RVA: usize = 0x7a9254;
+/// MenuJobQueue field offsets (for diagnostics): the queued-job ring count at +0x178 grows by 1 on a
+/// successful PushBackJob; the active job stays at +0x130.
+pub(crate) const MENUJOB_QUEUE_COUNT_178_OFFSET: usize = 0x178;
+/// The MenuJob slot `CS::TitleStep::STEP_MenuJobWait` ticks every frame via
+/// `ExecuteMenuJob((MenuJob**)&owner->field85_0x130, &time)`. Installing the LoadGame job here makes
+/// the per-frame title step drive it (self-build -> deser -> world stream). Owner-relative byte offset.
+pub(crate) const TITLE_OWNER_MENUJOB_SLOT_130_OFFSET: usize = 0x130;
+/// LoadGame `MenuJobWithContext<LoadJobContext>` vtable (dump VA `0x142ac71e0`). DIAGNOSTIC ONLY: the
+/// installed job's vtable should read back as this (modulo the dump->live `.rdata` shift) -- logged,
+/// never used to gate the call. The IfElseJob it replaces reads vtable dump `0x142aa2958`.
+pub(crate) const MENUJOB_LOADGAME_VTABLE_DUMP_VA: usize = 0x142ac71e0;
+/// Idle title `CS::MenuJobSequence::IfElseJob` vtable (dump VA `0x142aa2958`) that occupies
+/// `owner+0x130` before install. DIAGNOSTIC ONLY (logged for the before/after vtable-flip evidence).
+pub(crate) const MENUJOB_IFELSE_VTABLE_DUMP_VA: usize = 0x142aa2958;
+/// MenuJob `+0x68` built-flag byte (0 before first Run tick, 1 after self-build) and `+0x70` inner
+/// FixOrderJobSequence ptr (0 -> built). DIAGNOSTIC ONLY: dumped before/after to witness self-build.
+pub(crate) const MENUJOB_BUILT_FLAG_68_OFFSET: usize = 0x68;
+pub(crate) const MENUJOB_INNER_SEQ_70_OFFSET: usize = 0x70;
+/// `CS::FixOrderJobSequence::currentJobIndex` (`+0x10`) on the IfElseJob/inner seq -- advances as the
+/// job sequence steps. DIAGNOSTIC ONLY (dumped before/after install).
+pub(crate) const MENUJOB_CURRENT_JOB_INDEX_10_OFFSET: usize = 0x10;
+
+// ===== PATH B: PRIVATE-PUMP "own the load" (own_load_pump) =====
+// Static-verified 2026-06-22 against the runtime dump (PathBVerify*.java, /home/banon/ghidra_maporch/
+// pathb*_verify_out.txt). The menu-free alternative to BOTH owner+0x130 install (a proven dead end --
+// owner+0x130 is the title IfElseJob, only ticked by STEP_MenuJobWait/CSMenuMan-dialog pumps) AND the
+// SetState5-only continue (reached the loading screen but never mounted m28). We BUILD the LoadGame job
+// with REAL mss-derived ctx, then PRIVATELY pump its Run every frame from our recurring game task until
+// it self-builds + deserializes + map-streams (m28 mount), THEN drive the title->ingame transition.
+
+/// LoadGame `CS::MenuJobWithContext<LoadJobContext>::Run` (vtable+0x10). Live entry 0x140826e10
+/// (dump `FUN_140826e40` lands inside; prologue-grounded vs `eldenring-deobf.bin`). Win64 fastcall
+/// `Run(this /*rcx*/, result: *MenuJobResult /*rdx*/, time: *FD4Time /*r8*/, param4 /*r9*/) -> *MenuJobResult`.
+/// On the first tick (`*(this+0x68)==0`) it builds the inner deser->map FixOrderJobSequence
+/// (`FUN_140828360`) and ticks it; thereafter it forwards to the inner seq's Run. It READS the f32
+/// frame delta at `time+8` and writes the FD4Time vtable into `*time`; it does NOT read `time+0`.
+pub(crate) const LOADGAME_JOB_RUN_RVA: usize = 0x826e10;
+/// `CS::MenuJobResult` size + layout (dump `/auto_structs/MenuJobResult` len 8): `+0x0 MenuJobState
+/// state` (4 bytes), `+0x4 undefined4` (the inner deser sub-code 5/2/6 lands here via `param_2[1]`).
+/// Pass a zero-init 8-byte buffer as `result`; read `state` (+0x0) for the done condition.
+pub(crate) const MENUJOB_RESULT_SIZE: usize = 0x8;
+pub(crate) const MENUJOB_RESULT_STATE_0_OFFSET: usize = 0x0;
+pub(crate) const MENUJOB_RESULT_SUBCODE_4_OFFSET: usize = 0x4;
+/// `CS::MenuJobState` enum (dump `/auto_structs/MenuJobState` len 4): Continue=1, Success=2, Failed=3.
+/// `MenuJobResult::ShouldContinue` (0x1407a92f0) is exactly `Continue < state`, i.e. done == state>1.
+pub(crate) const MENUJOB_STATE_CONTINUE: i32 = 1;
+pub(crate) const MENUJOB_STATE_SUCCESS: i32 = 2;
+pub(crate) const MENUJOB_STATE_FAILED: i32 = 3;
+/// `FD4::FD4Time` size (dump `/FD4/FD4Time` len 16): `+0x0 vtable ptr`, `+0x8 f32 time` (the frame
+/// delta the map-stream sub-job advances on). Run only READS `time+8`. Pass a 16-byte buffer with the
+/// f32 frame delta at +8 (a zeroed buffer => delta 0.0 is valid; the deser self-builds regardless).
+pub(crate) const FD4_TIME_SIZE: usize = 0x10;
+pub(crate) const FD4_TIME_DELTA_8_OFFSET: usize = 0x8;
+/// GameDataMan singleton global (.data abs `0x143d5df38`, == `CONTINUE_MANAGER_GLOBAL_RVA` deref base).
+/// `GetMenuSystemSaveLoad() = GLOBAL_GameDataMan->menuSystemSaveLoad`, i.e. `mss = *(*(base+RVA)+0x60)`.
+pub(crate) const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d5df38;
+/// `GameDataMan->menuSystemSaveLoad` field offset (`mss = *(GameDataMan + 0x60)`).
+pub(crate) const GAME_DATA_MAN_MENU_SAVELOAD_60_OFFSET: usize = 0x60;
+/// LoadGame build factory REAL ctx args (golden Continue trace): `ctx_parent = mss + 0x50`,
+/// `owner_ctx = *(mss + 0xa38)` (CS::TitleFlowContext). Non-null real ctx; the prior ctx=0 build AV'd
+/// when the outer profile-selection sub-job dereffed the captured null.
+pub(crate) const MSS_CTX_PARENT_50_OFFSET: usize = 0x50;
+pub(crate) const MSS_OWNER_CTX_A38_OFFSET: usize = 0xa38;
+/// Plausible-pointer bounds for validating `owner_ctx = *(mss+0xa38)`: at `title_boot_ready` the
+/// TitleFlowContext is often uninitialized (reads as 0x8080808080808080 -- non-null garbage), so a
+/// `!= 0` check is insufficient. A real wine-heap pointer sits roughly in `0x1_0000 .. 0x8000_0000_0000`
+/// (the golden value was 0x7fff..); anything outside is treated as "not built yet" -> pass NULL.
+pub(crate) const OWNER_CTX_MIN_PLAUSIBLE_PTR: usize = 0x1_0000;
+pub(crate) const OWNER_CTX_MAX_PLAUSIBLE_PTR: usize = 0x8000_0000_0000;
+
 pub(crate) const OWN_STEPPER_LOG_INTERVAL: u64 = TitleNativeJobTiming::FrameRate as u64;
 pub(crate) const OWN_STEPPER_CALL_INC: usize = true as usize;
 
@@ -2711,7 +2835,7 @@ pub(crate) static GET_KEY_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static DIRECT_INPUT8_CREATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static DIRECT_INPUT_CREATE_DEVICE_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static DIRECT_INPUT_GET_DEVICE_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_BOOTSTRAP_SEEN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_HANDOFF_COMPLETE: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_OWNER_PTR: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_OWNER_TRACE_COUNT: AtomicUsize = AtomicUsize::new(MENU_TRACE_UNSEEN_SEQ);
 pub(crate) static TITLE_NATIVE_JOB_CALLED: AtomicUsize =
@@ -3250,8 +3374,11 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         move || spawn_game_task(state)
     });
 
+    // Skip the hudhook/ImGui DX12 overlay when autoload-only (no overlay needed) OR when explicitly
+    // disabled via `overlay_disabled()` (env ER_EFFECTS_NO_OVERLAY=1 / GAME_DIR file
+    // er-effects-no-overlay.txt) -- e.g. a golden trace run that wants no extra DX12 hooks/overhead.
     let autoload_without_overlay = state_or_return(&state).autoload.slot().is_some();
-    if autoload_without_overlay {
+    if autoload_without_overlay || overlay_disabled() {
         write_bootstrap_event(
             BOOTSTRAP_EVENT_OVERLAY_SKIPPED_AUTOLOAD,
             BOOTSTRAP_DETAIL_DONE,
@@ -3347,7 +3474,11 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // the original and returns its value), so installing early is harmless and never alters
                 // load behavior. It answers: is WorldBlockRes::Update ticked at all on our path, and do
                 // any blocks' phase ([+0x35]) / FD4 gate ([+0x2f]) advance.
-                if own_load_enabled() || own_load_continue_enabled() || golden_observe_enabled() {
+                if own_load_enabled()
+                    || own_load_continue_enabled()
+                    || own_load_pump_enabled()
+                    || golden_observe_enabled()
+                {
                     install_wbr_update_hook();
                 }
                 if (own_load_enabled() && OWN_LOAD_CONTINUE_FIRED.load(Ordering::SeqCst))
@@ -3357,6 +3488,20 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         let gm = game_man_ptr_or_null();
                         let player_present = unsafe { PlayerIns::local_player_mut() }.is_ok();
                         unsafe { own_load_stream_observe_recurring(base, gm, player_present) };
+                    }
+                }
+                // PATH B PRIVATE PUMP (own_load_pump): if own_load_pump_fire built+armed the LoadGame job,
+                // tick its Run privately EVERY frame here (the game thread) -- replicating native
+                // ExecuteMenuJob's call shape (zero-init MenuJobResult + FD4Time carrying the frame delta)
+                // -- to drive self-build -> deser -> m28 stream, then SetState5 on Success. Self-gates on
+                // OWN_LOAD_PUMP_JOB != 0 / OWN_LOAD_PUMP_DONE, so it costs nothing until armed+built and
+                // never re-pumps once terminal. Must run THROUGH the loading screen (player absent), so it
+                // is here in the recurring game task, before the player check. Pure native call + reads.
+                if own_load_pump_enabled() {
+                    if let Ok(base) = game_module_base() {
+                        let gm = game_man_ptr_or_null();
+                        let frame_delta = task_data.delta_time.time;
+                        unsafe { own_load_pump_tick(base, gm, frame_delta) };
                     }
                 }
                 // Anti-anti-debug (ported from ProDebug, correct base): neutralize FromSoft's
@@ -3685,7 +3830,13 @@ pub(crate) fn process_autoload_request(state: &mut EffectsState) {
 
     let context = SaveLoadContext {
         game_module_base,
-        title_bootstrap_seen: TITLE_BOOTSTRAP_SEEN.load(Ordering::SeqCst) != TITLE_BOOTSTRAP_UNSEEN,
+        title_handoff_complete: TITLE_HANDOFF_COMPLETE.load(Ordering::SeqCst)
+            != TITLE_HANDOFF_INCOMPLETE,
+        // BYPASS arming signal: engine filled enough to build the LoadGame job at the title (GameDataMan
+        // -> mss -> plausible TitleFlowContext), without waiting for the press-any-button handoff.
+        loadgame_build_ctx_ready: unsafe {
+            crate::experiments::loadgame_build_ctx_ready(game_module_base)
+        },
     };
     let _ = unsafe {
         state.autoload.process(game_man, context, |message| {
