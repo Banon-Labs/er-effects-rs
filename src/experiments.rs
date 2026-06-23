@@ -1354,6 +1354,42 @@ pub(crate) fn own_load_pump_enabled() -> bool {
             .exists()
 }
 
+/// SAVE-SAFE PROBE GATE for `own_load_pump`: when set, the pump runs the corrected BUILD + per-frame
+/// `Run` (deser -> map-stream, all READ-only up to world-stream per the path-b spec) but, on reaching
+/// `state==Success`, LOGS the result and latches DONE WITHOUT firing the save-writing SetState5
+/// transition. This isolates the dialog-ctx correction (does the build no longer AV? does the pump
+/// progress to Success?) with ZERO save write -- so it can run against the user's real save with no
+/// swap and no autosave risk. OFF by default; env `ER_EFFECTS_OWN_LOAD_PUMP_VERIFY=1` or a GAME_DIR
+/// file `er-effects-own-load-pump-verify.txt`.
+pub(crate) fn own_load_pump_verify_only() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_OWN_LOAD_PUMP_VERIFY").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-own-load-pump-verify.txt")
+        .exists()
+}
+
+/// DIRECT "Continue pressed" trigger (bd LIVE-continue-chain-via-selector-NOT-confirm-handler):
+/// once the title is at the settled main menu (STEP_MenuJobWait) after press-any-button AND
+/// GameMan/GameDataMan is set up, write the exact bit the native Continue path consumes --
+/// `*(TitleFlowContext+0x14c) = 1` (+ the save slot at `mss+0x1200`) -- so the native selector
+/// `0x1409a8eb0` dispatches the load through the engine's own pump. ZERO simulated input: a pure
+/// in-process field write replicating the confirm handler's side effects. OFF by default; arm via
+/// env `ER_EFFECTS_FIRE_TFC_CONTINUE=1` or a GAME_DIR file `er-effects-fire-tfc-continue.txt`.
+pub(crate) fn fire_tfc_continue_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_FIRE_TFC_CONTINUE").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-fire-tfc-continue.txt")
+        .exists()
+}
+/// One-shot guard for `maybe_fire_tfc_continue` (0 = not yet fired).
+pub(crate) static TFC_CONTINUE_FIRED: AtomicUsize = AtomicUsize::new(0);
+
 /// Overlay kill switch: when set, the hudhook/ImGui DX12 overlay is NOT initialized (no extra DX12
 /// hooks / render overhead) -- for golden/trace runs that want a clean game with only our diagnostics.
 /// OFF by default; env `ER_EFFECTS_NO_OVERLAY=1` or a GAME_DIR file `er-effects-no-overlay.txt`.
@@ -3508,10 +3544,25 @@ unsafe fn resolve_menu_system_save_load(base: usize) -> Option<usize> {
 /// its own-load on THIS, not on `game_man_instance_resolved`.
 /// (loadgame-build-ctx-ready-precondition-2026-06-22)
 pub(crate) unsafe fn loadgame_build_ctx_ready(base: usize) -> bool {
-    let Some(mss) = (unsafe { resolve_menu_system_save_load(base) }) else {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    // CORRECTED (bd loadgame-owner-ctx-is-DIALOG-a38-not-mss-CORRECTION-2026-06-22): the buildable
+    // TitleFlowContext is `*(CS::TitleTopDialog+0xa38)`, NOT `*(mss+0xa38)` (the mss reading was a red
+    // herring -- r13 at the golden factory site is the dialog). Read it off the live dialog
+    // (owner+0xe0, vtable-gated) via the cached title owner, so this arming signal matches exactly the
+    // ctx `own_load_pump_fire` builds with.
+    let owner = TITLE_OWNER_PTR.load(Ordering::SeqCst);
+    if owner == null || owner == 0 {
         return false;
-    };
-    let ctx = unsafe { safe_read_usize(mss + MSS_OWNER_CTX_A38_OFFSET) }.unwrap_or(0);
+    }
+    let dialog = unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(0);
+    if dialog == 0 {
+        return false;
+    }
+    let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(0);
+    if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+        return false;
+    }
+    let ctx = unsafe { safe_read_usize(dialog + DIALOG_OWNER_CTX_A38_OFFSET) }.unwrap_or(0);
     ctx > OWNER_CTX_MIN_PLAUSIBLE_PTR && ctx < OWNER_CTX_MAX_PLAUSIBLE_PTR
 }
 
@@ -3558,39 +3609,49 @@ unsafe fn own_load_pump_fire(
         // Already built+armed (own_load_drive is one-shot, but guard against a re-entrant fire).
         return;
     }
-    // Resolve mss = GameDataMan->menuSystemSaveLoad and the REAL ctx args.
-    let Some(mss) = (unsafe { resolve_menu_system_save_load(base) }) else {
-        append_autoload_debug(format_args!(
-            "own-load-pump: ABORT -- mss (GameDataMan->menuSystemSaveLoad) unresolved -> no build (save-safe)"
-        ));
-        return;
-    };
-    let ctx_parent = mss + MSS_CTX_PARENT_50_OFFSET;
-    // owner_ctx = *(mss+0xa38) = CS::TitleFlowContext. At title_boot_ready it is often NOT yet
-    // constructed -- it reads back as uninitialized garbage (e.g. 0x8080808080808080), which is non-null
-    // so a `!= 0` check would wrongly pass it (and the job's first Run derefs it -> AV, observed). Use it
-    // ONLY when it is a PLAUSIBLE heap pointer (the golden Continue value was 0x7fff..; valid wine heap
-    // is roughly 0x1_0000 .. 0x8000_0000_0000). Otherwise pass NULL (0): the TitleFlowContext is only
-    // used by the null-guarded profile-selection sub-job, NOT the deser->map path, so null skips that
-    // sub-job and lets the load proceed (rather than aborting or feeding garbage).
-    let raw_owner_ctx = unsafe { safe_read_usize(mss + MSS_OWNER_CTX_A38_OFFSET) }.unwrap_or(0);
-    let owner_ctx = if raw_owner_ctx > OWNER_CTX_MIN_PLAUSIBLE_PTR
-        && raw_owner_ctx < OWNER_CTX_MAX_PLAUSIBLE_PTR
-    {
-        raw_owner_ctx
+    // CORRECTED ctx source (bd loadgame-owner-ctx-is-DIALOG-a38-not-mss-CORRECTION-2026-06-22): the
+    // LoadGame factory's owner_ctx (r9) and ctx_parent (rdx) come from the live CS::TitleTopDialog,
+    // NOT from CSMenuSystemSaveLoad. The golden factory site reads `mov 0xa38(%r13),%r9` where r13 IS
+    // the dialog (the prior mss+0xa38 reading misidentified r13 as mss and read back garbage -> the AV).
+    // Locate the live dialog at owner+0xe0 (vtable-gated, same recipe as locate_live_loadgame_node).
+    let dialog = unsafe { safe_read_usize(title_owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }
+        .filter(|&v| v != null && v != 0)
+        .unwrap_or(0);
+    let dialog_vt = if dialog != 0 {
+        unsafe { safe_read_usize(dialog) }.unwrap_or(0)
     } else {
-        append_autoload_debug(format_args!(
-            "own-load-pump: owner_ctx *(mss+0x{:x})=0x{raw_owner_ctx:x} is not a plausible TitleFlowContext (not built yet at title_boot_ready) -> passing NULL (deser path null-guards it; profile-selection sub-job skipped) mss=0x{mss:x}",
-            MSS_OWNER_CTX_A38_OFFSET
-        ));
         0
     };
+    if dialog == 0 || dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+        append_autoload_debug(format_args!(
+            "own-load-pump: ABORT -- live TitleTopDialog not up (owner+0x{:x}=0x{dialog:x} vt=0x{dialog_vt:x} want 0x{:x}) -> no build (save-safe)",
+            TITLE_OWNER_MENU_HOLDER_E0_OFFSET,
+            base + TITLE_TOP_DIALOG_VTABLE_RVA
+        ));
+        return;
+    }
+    let ctx_parent = dialog + DIALOG_CTX_PARENT_50_OFFSET;
+    // owner_ctx = *(dialog+0xa38) = CS::TitleFlowContext (written UNCONDITIONALLY by the dialog ctor
+    // 0x1409a82d0, so it is valid at the settled press-any-button title -- unlike mss+0xa38 which read
+    // back uninitialized garbage). FAIL CLOSED (no build) if it is not a plausible heap pointer:
+    // passing NULL is exactly what AV'd before, and a real ctx is the whole point of the correction.
+    let raw_owner_ctx =
+        unsafe { safe_read_usize(dialog + DIALOG_OWNER_CTX_A38_OFFSET) }.unwrap_or(0);
+    if !(raw_owner_ctx > OWNER_CTX_MIN_PLAUSIBLE_PTR && raw_owner_ctx < OWNER_CTX_MAX_PLAUSIBLE_PTR)
+    {
+        append_autoload_debug(format_args!(
+            "own-load-pump: ABORT -- owner_ctx *(dialog+0x{:x})=0x{raw_owner_ctx:x} is not a plausible TitleFlowContext (dialog=0x{dialog:x}) -> no build (save-safe)",
+            DIALOG_OWNER_CTX_A38_OFFSET
+        ));
+        return;
+    }
+    let owner_ctx = raw_owner_ctx;
     let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "own-load-pump: BUILD 0x{:x}(out, ctx_parent=mss+0x{:x}=0x{ctx_parent:x}, slot={want_slot}, owner_ctx=*(mss+0x{:x})=0x{owner_ctx:x}) mss=0x{mss:x} -- REAL non-null ctx (golden Continue args) presses=0",
+        "own-load-pump: BUILD 0x{:x}(out, ctx_parent=dialog+0x{:x}=0x{ctx_parent:x}, slot={want_slot}, owner_ctx=*(dialog+0x{:x})=0x{owner_ctx:x}) dialog=0x{dialog:x} -- CORRECTED dialog-derived ctx (golden Continue args) presses=0",
         base + LOADGAME_JOB_BUILD_RVA,
-        MSS_CTX_PARENT_50_OFFSET,
-        MSS_OWNER_CTX_A38_OFFSET,
+        DIALOG_CTX_PARENT_50_OFFSET,
+        DIALOG_OWNER_CTX_A38_OFFSET,
     ));
     // BUILD the LoadGame MenuJobWithContext into a local DLRefCountPtr (factory writes the job ptr into
     // *out with refcount 1). Win64 fastcall (out, ctx_parent, save_slot:i32, owner_ctx).
@@ -3744,11 +3805,123 @@ pub(crate) unsafe fn own_load_pump_tick(base: usize, gm: usize, frame_delta: f32
     append_autoload_debug(format_args!(
         "own-load-pump: *** pump #{fired} reached state=Success(2) subcode={subcode} -- deser+map-stream DONE (m28 mounted); driving title->ingame transition ONCE (owner=0x{owner:x} c30_live=0x{c30_live:x} c30_real={c30_real} fp_real={fp_real} level={fp_level}) ***"
     ));
+    // SAVE-SAFE PROBE: if the verify-only gate is set, the pump has proven the corrected dialog-ctx
+    // build reached Success (no AV) with the world map-streamed -- STOP HERE without the save-writing
+    // SetState5 transition, so this can run against the real save with zero write risk.
+    if own_load_pump_verify_only() {
+        append_autoload_debug(format_args!(
+            "own-load-pump: VERIFY-ONLY gate set -- reached Success(2) subcode={subcode} (corrected dialog-ctx build+pump OK, no AV); SKIPPING SetState5 transition -> NO save write, latch DONE (save-safe)"
+        ));
+        return;
+    }
     // The transition is the SAME guarded continue_confirm/SetState5 path the legacy lever uses; it
     // re-checks c30_real && fp_real + the owner new-game flag internally and ABORTs (no write) on any
     // failure. Pass the live-re-verified c30 so the guard reflects the post-pump state.
     unsafe {
         own_load_continue_fire(base, owner, c30_live, c30_real, fp_real, fp_level, fired);
+    }
+}
+
+/// See `fire_tfc_continue_enabled`. Runs from the recurring game task; self-gates and fires ONCE.
+/// Pure in-process field writes (NO input, NO native call) -- the native menu pump's selector
+/// (`0x1409a8eb0`) picks up `tfc+0x14c==1` on its next tick and dispatches the load through the
+/// engine's own job pump (the proven user-Continue path, which avoids the FixOrderJobSequence
+/// overflow that killed the factory-direct `own_load_pump`). Logs before/after so a probe sees the
+/// exact write.
+pub(crate) unsafe fn maybe_fire_tfc_continue(base: usize) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if !fire_tfc_continue_enabled() {
+        return;
+    }
+    if TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    // Resolve+cache the SimpleTitleStep owner (throttled full scan); bail until it exists.
+    let Some(owner_ptr) = (unsafe { title_owner(base) }) else {
+        return;
+    };
+    let owner = owner_ptr as usize;
+    // Require the SETTLED main-menu state (STEP_MenuJobWait), i.e. press-any-button -> BeginLogo done.
+    let committed = unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }
+        .unwrap_or(TITLE_STATE_OWNER_GONE);
+    if committed != TITLE_STEP_MENU_JOB_WAIT {
+        return;
+    }
+    // Require "the rest of GameMan is set up": the GetSaveSlot singleton (*(base+0x3d69918)) non-null.
+    let gm_singleton = unsafe { safe_read_usize(base + GAME_SAVE_SLOT_SINGLETON_RVA) }.unwrap_or(0);
+    if gm_singleton == null || gm_singleton == 0 {
+        return;
+    }
+    // Live TitleTopDialog (owner+0xe0, vtable-gated) -> CS::TitleFlowContext at +0xa38.
+    let dialog = unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(0);
+    let dialog_vt = if dialog != 0 {
+        unsafe { safe_read_usize(dialog) }.unwrap_or(0)
+    } else {
+        0
+    };
+    if dialog == 0 || dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+        return;
+    }
+    // Require the MAIN MENU to be OPEN, not the bare press-any-button screen. State 10
+    // (MenuJobWait) occurs at BOTH; the open-menu registrar 0x1409b24e0 sets the menu-opened latch
+    // [dialog+0xa40]=1. Firing the bit at the closed press-any-button screen is dormant (the selector
+    // that consumes tfc+0x14c is a Continue-item funclet not pumped until the menu is open) -- bd
+    // tfc-14c-bit-dormant-without-menu-open-or-selector-invoke-2026-06-22.
+    let menu_opened = unsafe {
+        safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET)
+            .map(|v| v & TITLE_TOP_DIALOG_LATCH_BYTE_MASK)
+            .unwrap_or(0)
+    };
+    if menu_opened != OWN_STEPPER_CALL_INC {
+        return;
+    }
+    let tfc = unsafe { safe_read_usize(dialog + DIALOG_OWNER_CTX_A38_OFFSET) }.unwrap_or(0);
+    if !(tfc > OWNER_CTX_MIN_PLAUSIBLE_PTR && tfc < OWNER_CTX_MAX_PLAUSIBLE_PTR) {
+        return;
+    }
+    let before = unsafe { safe_read_i32(tfc + TFC_DISPATCH_STATE_14C_OFFSET) }.unwrap_or(-1);
+    // Set the save slot on mss FIRST (builder reads mss+0x1200 as the factory r8), then the dispatch
+    // bit -- mirroring the native confirm handler 0x1409a9250's two key writes.
+    let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+    let mss = unsafe { resolve_menu_system_save_load(base) };
+    if let Some(mss) = mss {
+        unsafe { *((mss + MSS_SAVE_SLOT_1200_OFFSET) as *mut i32) = want_slot };
+    }
+    unsafe { *((tfc + TFC_DISPATCH_STATE_14C_OFFSET) as *mut i32) = TFC_DISPATCH_STATE_LOAD };
+    TFC_CONTINUE_FIRED.store(1, Ordering::SeqCst);
+    // Let the recurring world-stream observer log THROUGH the loading screen.
+    OWN_LOAD_CONTINUE_FIRED.store(true, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "fire-tfc-continue: SET *(tfc+0x{:x})=1 (was {before}) + mss+0x{:x}=slot {want_slot} (tfc=0x{tfc:x} dialog=0x{dialog:x} owner=0x{owner:x} mss={mss:?} gm_singleton=0x{gm_singleton:x}) -- now INVOKING selector 0x{:x} (NO input)",
+        TFC_DISPATCH_STATE_14C_OFFSET,
+        MSS_SAVE_SLOT_1200_OFFSET,
+        base + TITLE_CONTINUE_SELECTOR_RVA
+    ));
+    // INVOKE the Continue-item selector that consumes tfc+0x14c (it is NOT pumped from the idle menu).
+    // Selector 0x1409a8eb0(rcx = &dialog_slot = owner+0xe0, rdx = out MenuJobResult*): reads
+    // *(rcx)->dialog, *(dialog+0xa38)->tfc, *(tfc+0x14c)==1 -> LOAD branch -> sets r8=dialog+0x50 +
+    // calls the load dispatcher 0x1409b3070 (proper ChainMenuJobs enqueue). Wrapped in catch_unwind
+    // (a Rust panic is caught; a hardware AV is not). Keeps simulated_button_presses_total = 0.
+    let dialog_slot = owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET;
+    let mut out_job: [usize; 4] = [0; 4];
+    let out_ptr = out_job.as_mut_ptr() as usize;
+    let selector: unsafe extern "system" fn(usize, usize) -> usize =
+        unsafe { std::mem::transmute(base + TITLE_CONTINUE_SELECTOR_RVA) };
+    let sel_ret = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        selector(dialog_slot, out_ptr)
+    }));
+    match sel_ret {
+        Ok(ret) => append_autoload_debug(format_args!(
+            "fire-tfc-continue: selector returned 0x{ret:x} out=[0x{:x},0x{:x},0x{:x},0x{:x}] -- LOAD branch should have dispatched 0x{:x} -> native deser + world stream",
+            out_job[0],
+            out_job[1],
+            out_job[2],
+            out_job[3],
+            base + 0x9b3070usize
+        )),
+        Err(_) => append_autoload_debug(format_args!(
+            "fire-tfc-continue: selector call PANICKED (caught) rcx=owner+0xe0=0x{dialog_slot:x} -- no dispatch (investigate ABI)"
+        )),
     }
 }
 

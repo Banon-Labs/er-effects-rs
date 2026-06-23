@@ -11,6 +11,11 @@ PID_FILE="${PID_FILE:-$ARTIFACT_DIR/proton-run.pid}"
 TELEMETRY_PATH="${TELEMETRY_PATH:-$ARTIFACT_DIR/er-effects-telemetry.json}"
 BOOTSTRAP_PATH="${BOOTSTRAP_PATH:-$ARTIFACT_DIR/bootstrap.jsonl}"
 BOOTSTRAP_STATE_PATH="${BOOTSTRAP_STATE_PATH:-$ARTIFACT_DIR/bootstrap-state.json}"
+# CONSOLIDATED per-run DLL log outputs: keep the crash log + autoload debug log in the SAME
+# timestamped artifact dir as telemetry/bootstrap, instead of accumulating across runs in the game
+# dir under divergent names. The DLL honors ER_EFFECTS_CRASH_LOG_PATH / ER_EFFECTS_AUTOLOAD_DEBUG_PATH.
+CRASH_LOG_PATH="${CRASH_LOG_PATH:-$ARTIFACT_DIR/er-effects-crash-log.txt}"
+AUTOLOAD_DEBUG_PATH="${AUTOLOAD_DEBUG_PATH:-$ARTIFACT_DIR/er-effects-autoload-debug.log}"
 AUTOLOAD_PATH="${AUTOLOAD_PATH:-$GAME_DIR/er-effects-autoload.txt}"
 AUTOLOAD_REQUEST="${AUTOLOAD_REQUEST:-}"
 # Single source of truth for the runtime-probe wall-clock cap (seconds). Read from the canonical
@@ -146,6 +151,8 @@ PID_FILE=$(realpath -m "$PID_FILE")
 TELEMETRY_PATH=$(realpath -m "$TELEMETRY_PATH")
 BOOTSTRAP_PATH=$(realpath -m "$BOOTSTRAP_PATH")
 BOOTSTRAP_STATE_PATH=$(realpath -m "$BOOTSTRAP_STATE_PATH")
+CRASH_LOG_PATH=$(realpath -m "$CRASH_LOG_PATH")
+AUTOLOAD_DEBUG_PATH=$(realpath -m "$AUTOLOAD_DEBUG_PATH")
 mkdir -p "$ARTIFACT_DIR"
 
 if (( DRY_RUN )); then
@@ -165,7 +172,7 @@ fi
 # "cold_char_mount_complete" within ~1s (brief white window) before the new process executed
 # anything. Deleting these reproduces first-run-in-a-fresh-dir behavior; the DLL re-creates them
 # once it boots, and the watcher already tolerates their absence while waiting for fresh telemetry.
-rm -f "$TELEMETRY_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH"
+rm -f "$TELEMETRY_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH" "$CRASH_LOG_PATH" "$AUTOLOAD_DEBUG_PATH"
 write_autoload_request
 
 # TRUE T0 = the closest bash timestamp to eldenring.exe process start. Captured here, immediately
@@ -183,6 +190,8 @@ printf '%s\n' "$LAUNCH_EPOCH" > "$ARTIFACT_DIR/launch-epoch.txt"
   ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" \
   ER_EFFECTS_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" \
   ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
+  ER_EFFECTS_CRASH_LOG_PATH="$CRASH_LOG_PATH" \
+  ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" \
   "$PROTON" run "$GAME_DIR/eldenring.exe" > "$ARTIFACT_DIR/proton-run.out" 2>&1 & echo $! > "$PID_FILE"
 )
 

@@ -55,6 +55,10 @@ pub(crate) const NO_PROCESS_HANDLE: usize = 0;
 /// normal smoke runs are untouched; enabled for diagnostic runs.
 pub(crate) fn crash_logger_enabled() -> bool {
     matches!(std::env::var("ER_EFFECTS_CRASH_LOG").as_deref(), Ok("1"))
+        // Redirecting the crash log to a consolidated per-run path (e.g. the probe's artifact dir)
+        // implies the logger is wanted -- treat the redirect env as an enable so the sentinel file
+        // is not also required. bd log-output-paths-consolidation.
+        || std::env::var("ER_EFFECTS_CRASH_LOG_PATH").is_ok()
         || game_directory_path()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("er-effects-crash-log.txt")

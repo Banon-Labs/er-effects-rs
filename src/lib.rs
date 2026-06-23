@@ -1090,6 +1090,41 @@ pub(crate) const GAME_DATA_MAN_MENU_SAVELOAD_60_OFFSET: usize = 0x60;
 /// when the outer profile-selection sub-job dereffed the captured null.
 pub(crate) const MSS_CTX_PARENT_50_OFFSET: usize = 0x50;
 pub(crate) const MSS_OWNER_CTX_A38_OFFSET: usize = 0xa38;
+/// CORRECTED LoadGame build ctx args (static RE 2026-06-22, triple-verified: golden factory site
+/// `0x1409ac9cb mov 0xa38(%r13),%r9` where r13 == the live TitleTopDialog; TitleTopDialog ctor
+/// `0x1409a82d0` populates +0xa38; live-SWBP capture `r9=owner+0x138 rdx=dialog+0x50`). The owner
+/// context + parent come from the LIVE `CS::TitleTopDialog`, NOT from `CSMenuSystemSaveLoad`
+/// (`mss+0xa38` was a red herring -- r13 was misidentified as mss). `ctx_parent = dialog+0x50`,
+/// `owner_ctx = *(dialog+0xa38)` (a `CS::TitleFlowContext*`, written UNCONDITIONALLY by the dialog
+/// ctor -> valid at the settled press-any-button title, unlike `mss+0xa38` which read back garbage).
+/// bd `loadgame-owner-ctx-is-DIALOG-a38-not-mss-CORRECTION-2026-06-22`.
+pub(crate) const DIALOG_CTX_PARENT_50_OFFSET: usize = 0x50;
+pub(crate) const DIALOG_OWNER_CTX_A38_OFFSET: usize = 0xa38;
+/// CS::TitleFlowContext dispatch-state field (`tfc = *(TitleTopDialog+0xa38)`; `tfc+0x14c`). The
+/// live user-driven Continue capture (bd LIVE-continue-chain-via-selector-NOT-confirm-handler) showed
+/// the load runs through the selector `0x1409a8eb0` which reads this field and dispatches to the load
+/// dispatcher `0x1409b3070` (0=idle, 1=load, 3/5=busy). Setting it to 1 at the settled main menu is
+/// the candidate DIRECT "Continue pressed" trigger (no input) -- the exact bit we change.
+pub(crate) const TFC_DISPATCH_STATE_14C_OFFSET: usize = 0x14c;
+pub(crate) const TFC_DISPATCH_STATE_LOAD: i32 = 1;
+/// CS::TitleTopDialog Continue-item SELECTOR `0x1409a8eb0` -- the menu-item-action funclet that the
+/// engine invokes on Continue confirm (it is NOT pumped from the idle menu; setting tfc+0x14c alone
+/// is dormant -- bd tfc-bit-dormant-even-at-open-menu). ABI `__fastcall(rcx = &dialog_slot, rdx = out
+/// MenuJobResult*)`: it does `rcx=*(rcx)` (dialog), `*(dialog+0xa38)`=tfc, reads `*(tfc+0x14c)`; when
+/// that == 1 (TFC_DISPATCH_STATE_LOAD) it takes the LOAD branch -- `r8=dialog+0x50`, calls the load
+/// dispatcher `0x1409b3070` (the PROPER CS::MenuJob::ChainMenuJobs enqueue, no FixOrderJobSequence
+/// overflow), and wraps the built job into rdx. Pass rcx = owner+0xe0 (its [0] is the live dialog).
+/// Verified by disasm of 0x1409a8eb0 + the live user-Continue capture (selector body 0x9a8f09 ->
+/// 0x9b3070). bd LIVE-continue-chain-via-selector-NOT-confirm-handler.
+pub(crate) const TITLE_CONTINUE_SELECTOR_RVA: usize = 0x9a8eb0;
+/// CSMenuSystemSaveLoad save-slot field (`mss+0x1200`). The native confirm handler `0x1409a9250`
+/// writes the slot here (the builder `0x1409ac8b0` reads it at `0x1409ac9d2` as the factory `r8`).
+/// Replicate that write so the direct trigger loads the intended slot.
+pub(crate) const MSS_SAVE_SLOT_1200_OFFSET: usize = 0x1200;
+/// GameMan/GameDataMan singleton global read by `GetSaveSlot` (`*(0x143d69918)`, slot at `+0xac0`):
+/// the "rest of GameMan is set up" readiness signal the user observed after press-any-button. The
+/// direct continue trigger only fires once this is non-null. RVA = abs - base.
+pub(crate) const GAME_SAVE_SLOT_SINGLETON_RVA: usize = 0x3d69918;
 /// Plausible-pointer bounds for validating `owner_ctx = *(mss+0xa38)`: at `title_boot_ready` the
 /// TitleFlowContext is often uninitialized (reads as 0x8080808080808080 -- non-null garbage), so a
 /// `!= 0` check is insufficient. A real wine-heap pointer sits roughly in `0x1_0000 .. 0x8000_0000_0000`
@@ -3502,6 +3537,14 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         let gm = game_man_ptr_or_null();
                         let frame_delta = task_data.delta_time.time;
                         unsafe { own_load_pump_tick(base, gm, frame_delta) };
+                    }
+                }
+                // DIRECT "Continue pressed" trigger: at the settled main menu (post press-any-button,
+                // GameMan set up), write the exact bit the native selector consumes
+                // (*(TitleFlowContext+0x14c)=1). Self-gates + fires once; pure field write, no input.
+                if fire_tfc_continue_enabled() {
+                    if let Ok(base) = game_module_base() {
+                        unsafe { maybe_fire_tfc_continue(base) };
                     }
                 }
                 // Anti-anti-debug (ported from ProDebug, correct base): neutralize FromSoft's

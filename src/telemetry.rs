@@ -1234,9 +1234,14 @@ pub(crate) fn crash_log_path() -> PathBuf {
     std::env::var("ER_EFFECTS_CRASH_LOG_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
+            // CANONICAL name `er-effects-crash-log.txt` -- the SAME file the crash-logger enable
+            // sentinel (crash_logger_enabled) and the probe's per-run truncation use. The prior
+            // default `er-effects-crash.log` silently diverged from those, so the probe never
+            // cleared the real crash log (it accumulated across runs) and readers checked the wrong
+            // file (observed 2026-06-22, cost a debug cycle). bd log-output-paths-consolidation.
             game_directory_path()
                 .unwrap_or_else(|| PathBuf::from("."))
-                .join("er-effects-crash.log")
+                .join("er-effects-crash-log.txt")
         })
 }
 
