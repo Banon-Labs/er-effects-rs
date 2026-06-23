@@ -15,7 +15,9 @@ set -uo pipefail
 PROJ_DIR=/home/banon/ghidra_maporch/proj-deobf
 PROJ_NAME=erdeobf
 THRESHOLD=0.80
-MAX_STARTS=500
+# Training fits in ~2G regardless (it was never the OOM -- only the monolithic classify was), so
+# use the full training set for good recall; chunking keeps classify memory bounded either way.
+MAX_STARTS=1000
 MIN_RANGE=16
 CHUNK=20000
 MAXMEM=4G
