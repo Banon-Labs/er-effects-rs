@@ -3,15 +3,17 @@
 # Keeps one analyzeHeadless process alive with a program loaded so MCP tool calls are instant
 # and Ghidra is NOT restarted per operation. The 13bm Go bridge (.mcp.json) connects to PORT.
 #
-#   scripts/ghidra/mcp-ghidra-daemon.sh start   [--proj-dir DIR] [--proj-name NAME] [--port N] [--readonly]
+#   scripts/ghidra/mcp-ghidra-daemon.sh start   [--proj-dir DIR] [--proj-name NAME] [--port N] [--writable]
 #   scripts/ghidra/mcp-ghidra-daemon.sh stop
 #   scripts/ghidra/mcp-ghidra-daemon.sh status
 #   scripts/ghidra/mcp-ghidra-daemon.sh restart [same flags as start]
 #
-# Defaults: the symbolized DUMP project (ermaporch), port 8765, WRITABLE so the agent's
-# rename/struct/comment edits accumulate and PERSIST into the project (saved on a clean stop).
-# This mutates the shared project by design -- pass --readonly to serve query-only instead.
-# To serve the deobf-native project instead:
+# Defaults: the symbolized DUMP project (ermaporch), port 8765, READ-ONLY.
+# IMPORTANT: this is a query server. In headless -process mode the program sits in a persistent
+# transaction, so MCP edits CANNOT be saved back (DomainFile.save -> "Unable to lock due to
+# active transaction"; exit-save does not persist either -- verified). --writable lets mutation
+# tools run but edits are EPHEMERAL (in-session only, lost on restart); for durable annotations
+# use the Ghidra GUI. To serve the deobf-native project instead:
 #   ... start --proj-dir /home/banon/ghidra_maporch/proj-deobf --proj-name erdeobf
 set -euo pipefail
 
@@ -26,7 +28,7 @@ PIDFILE="$RUN_DIR/daemon.pid"
 PROJ_DIR=/home/banon/ghidra_maporch/proj
 PROJ_NAME=ermaporch
 PORT=8765
-RO=""   # default writable; edits persist (saved on clean stop). --readonly to opt out.
+RO="-readOnly"   # default read-only (query server). --writable = ephemeral, non-persisted edits.
 
 CMD="${1:-}"; shift || true
 while [[ $# -gt 0 ]]; do
@@ -34,7 +36,7 @@ while [[ $# -gt 0 ]]; do
     --proj-dir)  PROJ_DIR="$2"; shift 2 ;;
     --proj-name) PROJ_NAME="$2"; shift 2 ;;
     --port)      PORT="$2"; shift 2 ;;
-    --readonly)  RO="-readOnly"; shift ;;
+    --writable)  RO=""; shift ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done

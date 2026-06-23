@@ -19,6 +19,12 @@
  *
  * Args: [0] port (default 8765)   [1] stop-file path (optional; touch it to shut down cleanly)
  *
+ * NOTE: this is a READ / QUERY server. In headless -process mode the program sits inside a
+ * persistent transaction, so MCP mutations (rename/struct/comment) are visible in-session but
+ * CANNOT be saved back to the project (DomainFile.save fails with "Unable to lock due to active
+ * transaction", and analyzeHeadless's exit-save does not persist them either -- verified). Run
+ * the daemon read-only; for durable annotations use the Ghidra GUI.
+ *
  * @category MCP
  */
 
