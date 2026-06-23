@@ -23,10 +23,10 @@ index 3638e12..eba814d 100644
  	resolvedKey := *apiKey
 diff --git a/mcp-bridge/render.go b/mcp-bridge/render.go
 new file mode 100644
-index 0000000..b8c05c8
+index 0000000..cd521b7
 --- /dev/null
 +++ b/mcp-bridge/render.go
-@@ -0,0 +1,233 @@
+@@ -0,0 +1,243 @@
 +package main
 +
 +import (
@@ -133,8 +133,9 @@ index 0000000..b8c05c8
 +// ---------------------------------------------------------------------------
 +
 +var (
-+	jpDict      map[string]string
-+	jpKeysByLen []string // dict keys sorted longest-first for greedy replacement
++	jpDict             map[string]string
++	jpKeysByLen        []string // dict keys sorted longest-first for greedy replacement
++	translateDefaultOn bool     // whether `translate` defaults on (dict present, not env-disabled)
 +)
 +
 +// loadJPDict loads the JP->EN dictionary once at startup. It merges two files so
@@ -163,6 +164,15 @@ index 0000000..b8c05c8
 +	}
 +	// Longest keys first so multi-character terms win over their substrings.
 +	sort.Slice(jpKeysByLen, func(i, j int) bool { return len(jpKeysByLen[i]) > len(jpKeysByLen[j]) })
++
++	// Default translate ON when a dictionary is present; GHIDRA_TRANSLATE forces it either way.
++	translateDefaultOn = len(jpDict) > 0
++	switch strings.ToLower(strings.TrimSpace(os.Getenv("GHIDRA_TRANSLATE"))) {
++	case "off", "0", "false", "no":
++		translateDefaultOn = false
++	case "on", "1", "true", "yes":
++		translateDefaultOn = true
++	}
 +}
 +
 +// mergeDictFile overlays the JSON object at path onto m (later wins). No-op if absent/invalid.
@@ -261,10 +271,41 @@ index 0000000..b8c05c8
 +	return mcp.NewToolResultText(translateJP(sb.String()))
 +}
 diff --git a/mcp-bridge/tools.go b/mcp-bridge/tools.go
-index 578b58b..87889f3 100644
+index 578b58b..a068abe 100644
 --- a/mcp-bridge/tools.go
 +++ b/mcp-bridge/tools.go
-@@ -152,6 +152,10 @@ func buildHandler(t toolDef) server.ToolHandlerFunc {
+@@ -75,12 +75,30 @@ type toolDef struct {
+ // registerAllTools registers every tool from the allTools slice.
+ func registerAllTools(s *server.MCPServer) {
+ 	for _, t := range allTools {
++		t = withTranslateParam(t)
+ 		tool := buildTool(t)
+ 		handler := buildHandler(t)
+ 		s.AddTool(tool, handler)
+ 	}
+ }
+ 
++// withTranslateParam exposes the `translate` toggle on every (non-custom) tool so JP->EN
++// can be turned off per-call when it defaults on. Custom-handler tools bypass renderResult.
++func withTranslateParam(t toolDef) toolDef {
++	if t.Custom != nil {
++		return t
++	}
++	for _, p := range t.Params {
++		if p.MCPName == "translate" {
++			return t
++		}
++	}
++	np := make([]paramDef, len(t.Params), len(t.Params)+1)
++	copy(np, t.Params)
++	t.Params = append(np, translateParam)
++	return t
++}
++
+ // buildTool constructs the mcp.Tool from a toolDef.
+ func buildTool(t toolDef) mcp.Tool {
+ 	opts := []mcp.ToolOption{
+@@ -152,6 +170,10 @@ func buildHandler(t toolDef) server.ToolHandlerFunc {
  
  		// Extract declared parameters.
  		for _, p := range t.Params {
@@ -275,21 +316,21 @@ index 578b58b..87889f3 100644
  			switch p.Type {
  			case paramString:
  				v := req.GetString(p.MCPName, "")
-@@ -204,7 +208,12 @@ func buildHandler(t toolDef) server.ToolHandlerFunc {
+@@ -204,7 +226,12 @@ func buildHandler(t toolDef) server.ToolHandlerFunc {
  			optionalPagination(req, params)
  		}
  
 -		return forwardWithTargetPort(req, t.Method, params)
 +		res, err := forwardWithTargetPort(req, t.Method, params)
-+		// Opt-in JP->EN localization of the rendered text output.
-+		if err == nil && req.GetBool("translate", false) {
++		// JP->EN localization. Defaults on when a dictionary is present; `translate:false` disables.
++		if err == nil && req.GetBool("translate", translateDefaultOn) {
 +			res = applyTranslate(res)
 +		}
 +		return res, err
  	}
  }
  
-@@ -212,6 +221,14 @@ func buildHandler(t toolDef) server.ToolHandlerFunc {
+@@ -212,6 +239,14 @@ func buildHandler(t toolDef) server.ToolHandlerFunc {
  // Tool definitions (70 tools)
  // ---------------------------------------------------------------------------
  
@@ -297,14 +338,14 @@ index 578b58b..87889f3 100644
 +// dictionary over a tool's text output. Handled locally; never forwarded to Ghidra.
 +var translateParam = paramDef{
 +	MCPName: "translate",
-+	Desc:    "If true, translate Japanese text in the output to English using the maintained JP->EN dictionary (leftover Japanese is flagged so the dictionary can be grown).",
++	Desc:    "Translate Japanese in the output to English using the maintained JP->EN dictionary (leftover Japanese is flagged so the dictionary can be grown). Defaults ON when a dictionary is present; pass false to disable for this call.",
 +	Type:    paramBool,
 +}
 +
  var allTools = []toolDef{
  	// =====================================================================
  	// READ-ONLY QUERY TOOLS (1-21)
-@@ -232,22 +249,34 @@ var allTools = []toolDef{
+@@ -232,22 +267,34 @@ var allTools = []toolDef{
  	},
  
  	{Name: "get_function_by_address", Desc: "Get detailed information about a function at the given address, including name, parameters, callers, and callees.", Title: "Get Function", Method: "getFunctionByAddress", ReadOnly: true,

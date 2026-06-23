@@ -67,17 +67,19 @@ choke point with `renderResult`, which:
   newlines**, surfaces a text field (`decompiled`/`listing`/...) under a compact
   `// name=... address=...` header, renders disassembly as aligned listing lines, and
   pretty-prints everything else. This fixes the bug for all text tools at once.
-- adds an opt-in **`translate`** boolean param to the text tools (`decompile_function`,
-  `decompile_function_by_address`, `disassemble_function`, `get_function_by_address`).
-  When true, output runs through a maintained JP->EN dictionary
-  (`scripts/ghidra/jp-en-dict.json`, path overridable via `GHIDRA_JP_DICT`, wired in
-  `.mcp.json`). Any **leftover Japanese is flagged** at the end of the output
+- adds a **`translate`** boolean param to **every** tool. It defaults **ON whenever a
+  dictionary is present** (toggle a single call off with `translate:false`; force the
+  global default either way with `GHIDRA_TRANSLATE=off|on`). When on, output runs through
+  a maintained JP->EN dictionary (`scripts/ghidra/jp-en-dict.json`, path overridable via
+  `GHIDRA_JP_DICT`, wired in `.mcp.json`). Any **leftover Japanese is flagged** at the end of the output
   (`// [untranslated JP -- add to ...: Xie Wen Zi , Bai Zhao Huan , ...]`) so the dictionary is
   trivial to grow as new terms appear. Editing the JSON + restarting the bridge is
   enough; no rebuild needed.
 
 Verified: `decompile_function_by_address` returns clean multi-line C (0 escaped `\n`);
-`list_strings translate=true` translated known terms and flagged the rest.
+translation runs by default (no param) and is skipped with `translate:false`; manual
+entries override the auto ones (e.g. a bad `anime`->"Mechanical rape" auto match is
+overridden to "animation").
 
 #### Bootstrapping the dictionary (extract -> autotranslate -> refine)
 
