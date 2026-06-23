@@ -45,12 +45,34 @@ def argos_translator():
         return out.strip() if out and out.strip() != term else None
     return tr
 
+def is_hiragana_only(s):
+    return s != "" and all(0x3040 <= ord(c) <= 0x309F for c in s)
+
+def acceptable(jp, en):
+    """Reject entries that would pollute the dictionary. Substring replacement of pure-hiragana
+    particles (の, が, では) produces run-together garbage ('uninitializedofsingleton'); non-ASCII
+    English means the translation failed (corrupted chars, '[かぜ] /wind/' dictionary leakage); and
+    a wildly long value for a term is runaway junk (で -> a Facebook ad)."""
+    if not en or not en.strip():
+        return False
+    if is_hiragana_only(jp):
+        return False
+    if any(ord(c) > 0x7F for c in en):
+        return False
+    # Runaway value for a SHORT key is garbage (で -> a Facebook ad); long sentences legitimately
+    # have long translations, so gate on the key being short too.
+    if len(en) > 40 and len(en) > 5 * len(jp):
+        return False
+    return True
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--engine", choices=["mymemory", "argos"], default="mymemory")
     ap.add_argument("--min-count", type=int, default=1, help="only translate runs appearing >= N times")
     ap.add_argument("--max", type=int, default=0, help="cap number of NEW translations this run (0 = no cap)")
     ap.add_argument("--delay", type=float, default=0.3, help="seconds between online requests")
+    ap.add_argument("--clean", action="store_true",
+                    help="drop unacceptable entries (particles/garbage) from the auto dict and exit")
     args = ap.parse_args()
 
     terms = load_json(TERMS, [])
@@ -58,10 +80,23 @@ def main():
     manual = load_json(MANUAL, {})
     if not isinstance(auto, dict): auto = {}
 
+    if args.clean:
+        before = len(auto)
+        dropped = {k: v for k, v in auto.items() if not acceptable(k, v)}
+        auto = {k: v for k, v in auto.items() if acceptable(k, v)}
+        with open(AUTO, "w", encoding="utf-8") as f:
+            json.dump(auto, f, ensure_ascii=False, indent=2, sort_keys=True)
+        print(f"cleaned auto dict: {before} -> {len(auto)} ({len(dropped)} dropped)")
+        for k, v in list(dropped.items())[:30]:
+            print(f"  dropped {k!r} -> {v!r}")
+        return
+
     translate = argos_translator() if args.engine == "argos" else mymemory
 
+    # Skip pure-hiragana particles up front (they only produce run-together garbage).
     todo = [row["jp"] for row in terms
             if row.get("count", 0) >= args.min_count
+            and not is_hiragana_only(row["jp"])
             and row["jp"] not in auto and row["jp"] not in manual and row["jp"] != "_comment"]
     if args.max > 0:
         todo = todo[:args.max]
@@ -75,7 +110,7 @@ def main():
         except Exception as e:
             print(f"  [{i}/{len(todo)}] {term}: ERROR {e}", file=sys.stderr)
             en = None
-        if en:
+        if en and acceptable(term, en):
             auto[term] = en
             done += 1
         if i % 25 == 0 or i == len(todo):

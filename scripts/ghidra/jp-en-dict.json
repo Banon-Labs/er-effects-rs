@@ -1,6 +1,21 @@
 {
   "_comment": "HAND-VERIFIED JP->EN dictionary for the GhidraMCP `translate` param. This file OVERRIDES the machine-generated jp-en-dict.auto.json. Add/correct entries here as you review output; re-running autotranslate never touches this file. Keys match as substrings, longest-first.",
 
+  "未初期化のシングルトンにアクセスしました": "accessed an uninitialized singleton",
+  "初期化されていないエラー": "uninitialized error",
+  "キャラ初期化まで待ち": "wait until character init",
+  "ロウハイテクスチャ初期化": "low/high texture init",
+  "アニメーション初期化": "animation init",
+  "ロウテクスチャ初期化": "low texture init",
+  "ハイテクスチャ初期化": "high texture init",
+  "キャラ初期化": "character init",
+  "モデル初期化": "model init",
+  "数値初期化": "numeric init",
+  "開始初期化": "start init",
+  "未初期化": "uninitialized",
+  "シングルトン": "singleton",
+  "アクセス": "access",
+
   "サウンド用環境音制御用ダミーポイント": "sound-ambient-control dummy point",
   "ソースファイルごとのメモリ使用状況用": "per-source-file memory usage",
   "のロードプロセス用クラスのバージョンが違います": "load-process class version mismatch",
