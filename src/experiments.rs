@@ -1398,6 +1398,10 @@ pub(crate) static TFC_AUTO_MENU_OPENED: AtomicUsize = AtomicUsize::new(0);
 /// Throttle counter for the dialog+0x50 load-vector readiness gate in `maybe_fire_tfc_continue`
 /// (logs the count value occasionally while waiting for it to become a valid has-room vector).
 pub(crate) static TFC_LOAD_VEC_WAIT_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Trampoline for the hooked TitleTopDialog::update (`title_update_detour` -> original). 0 = not hooked.
+pub(crate) static TITLE_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// One-shot guard for installing the TitleTopDialog::update hook (`install_title_update_hook`).
+pub(crate) static TITLE_UPDATE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// The built LoadGame job pointer (selector's out[0]) to pump directly via `ExecuteMenuJob` each
 /// frame. 0 = nothing to pump. Set by `maybe_fire_tfc_continue`; cleared when the job completes
 /// (ExecuteMenuJob zeroes the slot) or the tick cap is hit. Pumping our own job avoids the dialog's
@@ -3882,6 +3886,21 @@ pub(crate) unsafe fn maybe_auto_open_menu(base: usize) {
     if !in_loop {
         return;
     }
+    // ROUTE THE REGISTRAR IN-PLACE (zero-input): the native open-menu call sites write a "mode" byte at
+    // [*(base+TITLE_MENU_TRANSITION_SINGLETON_RVA)]+0 BEFORE jumping to the registrar -- press-accept
+    // 0x1409b1260 sets it =1 (open main menu IN PLACE), pump/back paths set it =0. A bare open_menu with
+    // the byte left STALE may route the registrar into an error-modal branch. Replicate the press-accept
+    // set (subagent-C static RE: product native-open with this byte set reached the menu with 0 msgbox).
+    // Null-/readability-guarded; no save write, no input. bd er-effects-rs-0ye + title-accept-to-registrar-narrow-path-143d5dea8.
+    let transition_singleton =
+        unsafe { safe_read_usize(base + TITLE_MENU_TRANSITION_SINGLETON_RVA) }.unwrap_or(null);
+    if transition_singleton != null && unsafe { safe_read_usize(transition_singleton) }.is_some() {
+        unsafe { *(transition_singleton as *mut u8) = TITLE_MENU_TRANSITION_FLAG_SET_VALUE };
+        append_autoload_debug(format_args!(
+            "tfc-auto-open: set menu-transition mode byte [*(0x{:x})]+0=1 before open-menu (route registrar in-place)",
+            base + TITLE_MENU_TRANSITION_SINGLETON_RVA
+        ));
+    }
     let open_menu: unsafe extern "system" fn(usize) =
         unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_OPEN_MENU_RVA) };
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
@@ -3894,6 +3913,52 @@ pub(crate) unsafe fn maybe_auto_open_menu(base: usize) {
         base + TITLE_TOP_DIALOG_OPEN_MENU_RVA,
         r.is_err()
     ));
+}
+
+/// One-shot log latch for `force_offline_connection_bytes` (only logs the first 1->0 clear).
+pub(crate) static FORCE_OFFLINE_BYTES_CLEARED: AtomicUsize = AtomicUsize::new(0);
+
+/// Connection-state OFFLINE lever (zero-input, save-safe) -- the milestone-3 fix. The title's
+/// network/session event handlers (`CSLuaEventScriptImitation::On{LanCutError,DisconnectGameServer,
+/// FailedGetBlockNum,NpServerSignOut,DisconnectEOSServer,...}`) build the "Cannot connect to network /
+/// connection lost / network error" `GR_System_Message` MessageBoxDialogs that our offline pab boot
+/// raises at menu-open. Each handler is guarded by `if (IsInOnlineMode()) { if
+/// (IsServerConnectionEnabled() && ...) { build popup } }`, which reduces to two `GameMan` bytes:
+/// `isInOnlineMode = [GameMan+0xBC8]`, `serverConnectionEnabled = [GameMan+0xBC9]`
+/// (`GameMan = *(base+GAME_SAVE_SLOT_SINGLETON_RVA)`; getter `0x14067a030` is `mov rax,[0x143d69918];
+/// movzx eax,[rax+0xBC8]; ret` -- VERIFIED by deobf disasm). NOTE the existing online-disable patches
+/// that getter's RETURN value, but the handlers consult the BYTES (directly / via getters our patch
+/// does not cover), so the patch alone does not gate them. Forcing both bytes to 0 each title frame
+/// short-circuits the whole connection-loss family at the source (the guard fails -> no popup is ever
+/// enqueued -- not suppressed, not dismissed). Pure offline state, no save write, no input. Readable-
+/// guarded so a not-yet-initialized GameMan can never fault the game thread. bd er-effects-rs-0ye
+/// (subagent-D GR_System_Message gate, subagent-B premise: modals are network notices not SaveRetry).
+pub(crate) unsafe fn force_offline_connection_bytes(base: usize) {
+    const IS_IN_ONLINE_MODE_BC8_OFFSET: usize = 0xBC8;
+    const SERVER_CONNECTION_ENABLED_BC9_OFFSET: usize = 0xBC9;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let game_man = unsafe { safe_read_usize(base + GAME_SAVE_SLOT_SINGLETON_RVA) }.unwrap_or(null);
+    if game_man == null {
+        return;
+    }
+    let (Some(online), Some(server)) = (
+        unsafe { safe_read_u8(game_man + IS_IN_ONLINE_MODE_BC8_OFFSET) },
+        unsafe { safe_read_u8(game_man + SERVER_CONNECTION_ENABLED_BC9_OFFSET) },
+    ) else {
+        return;
+    };
+    if online == 0 && server == 0 {
+        return;
+    }
+    unsafe {
+        *((game_man + IS_IN_ONLINE_MODE_BC8_OFFSET) as *mut u8) = 0;
+        *((game_man + SERVER_CONNECTION_ENABLED_BC9_OFFSET) as *mut u8) = 0;
+    }
+    if FORCE_OFFLINE_BYTES_CLEARED.fetch_add(1, Ordering::SeqCst) == 0 {
+        append_autoload_debug(format_args!(
+            "force-offline: cleared GameMan+0xBC8 (isInOnlineMode {online}->0) +0xBC9 (serverConnectionEnabled {server}->0) gm=0x{game_man:x} -- gate connection-loss GR_System_Message popups at source"
+        ));
+    }
 }
 
 /// See `fire_tfc_continue_enabled`. Runs from the recurring game task; self-gates and fires ONCE.
@@ -4087,6 +4152,230 @@ pub(crate) unsafe fn maybe_fire_tfc_continue(base: usize) {
         base + MENU_JOB_ASSIGN3_RVA,
         r.is_err()
     ));
+}
+
+/// Detour for CS::TitleTopDialog::update (0x1409aac10, vtable slot 2). Runs IN THE PUMP'S FRAME with
+/// the LIVE dialog (rcx) -- the in-context timing our recurring-game-task build lacked. Calls the
+/// original first (the pump sets up the live dialog state + drains the menu jobs), then runs the gated
+/// one-shot Continue build (`maybe_fire_tfc_continue`), so it builds with the now-live dialog fields
+/// (dialog+0x50 valid -> no mis-context overflow). Build is catch_unwind-wrapped so the pump always
+/// proceeds. bd HOOK-DESIGN-titletopdialog-update-0x1409aac10-incontext-build-2026-06-23.
+pub(crate) unsafe extern "system" fn title_update_detour(dialog: usize, delta: f32, input: usize) {
+    let orig_addr = TITLE_UPDATE_ORIG.load(Ordering::SeqCst);
+    if orig_addr != TITLE_OWNER_SCAN_START_ADDRESS && orig_addr != 0 {
+        let orig: unsafe extern "system" fn(usize, f32, usize) =
+            unsafe { std::mem::transmute(orig_addr) };
+        unsafe { orig(dialog, delta, input) };
+    }
+    // In-context now (pump frame, live dialog). Run the gated one-shot Continue build.
+    if let Ok(base) = game_module_base() {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            maybe_fire_tfc_continue(base)
+        }));
+    }
+}
+
+/// Install the TitleTopDialog::update hook ONCE so the Continue build runs in the pump's live frame.
+/// minhook on 0x1409aac10, mirroring install_continue_trace_hooks (queue_enable + MH_ApplyQueued +
+/// mem::forget to keep the hook alive). Gated by `fire_tfc_continue_enabled` at the call site.
+pub(crate) unsafe fn install_title_update_hook(base: usize) {
+    if TITLE_UPDATE_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        != TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-update-hook: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let mut hooks = Vec::new();
+    unsafe {
+        create_continue_trace_hook(
+            &mut hooks,
+            "titletopdialog_update_9aac10",
+            TITLE_TOP_DIALOG_UPDATE_RVA as u32,
+            title_update_detour as *mut c_void,
+            &TITLE_UPDATE_ORIG,
+        );
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => append_autoload_debug(format_args!(
+            "title-update-hook: INSTALLED on TitleTopDialog::update 0x{:x} -- in-context Continue build armed",
+            base + TITLE_TOP_DIALOG_UPDATE_RVA
+        )),
+        status => append_autoload_debug(format_args!(
+            "title-update-hook: MH_ApplyQueued failed: {status:?}"
+        )),
+    }
+    std::mem::forget(hooks);
+}
+
+// ===== READINESS-GATED press-any-button advance (golden path, zero-input) =====
+// The press-any-button gate is CODE, not a packed asset: the per-frame node-update/builder
+// 0x1407ad1c0 builds the MenuJobWait job into [step+0x130]; the job completes when predicate
+// 0x1407a9200 (= `*rcx>=2`) sees [job+0x1e8]>=2 (the press-count the native node bumps on the bound
+// keycode [job+0x180]). We READINESS-gate the EXISTING job zero-input: hook the node-update, and once
+// the job is built+valid (we are at press-any-button) and settled, write [job+0x1e8]=2 so the job's
+// OWN predicate passes and it completes via its NORMAL path (bootstrap cascade intact). No new job (no
+// cap-8 overflow), no replace, no file mod, no input. Distinct from the DEAD latch-force 0x143d856a0
+// (skipped bookkeeping -> crash). bd press-any-button-golden-lever-job1e8-readiness-2026-06-23.
+
+/// Press-any-button node-update/builder RVA (deobf/live; prologue re-confirmed in the 0x1407adxxx
+/// region, which is otherwise flagged unreliable). `__fastcall(rcx=step, rdx, r8[, r9])`.
+pub(crate) const PAB_NODE_UPDATE_RVA: u32 = 0x7ad1c0;
+/// The built press-any-button job within the node-update receiver: `[step+0x130]`.
+const PAB_JOB_SLOT_130_OFFSET: usize = 0x130;
+/// The job's completion press-count the predicate 0x1407a9200 reads (>=2 == complete).
+const PAB_JOB_PRESS_COUNT_1E8_OFFSET: usize = 0x1e8;
+/// The job's bound keycode (logged for identity validation + the documented fallback input bit).
+const PAB_JOB_KEYCODE_180_OFFSET: usize = 0x180;
+/// The "pressed" value the predicate treats as complete.
+const PAB_PRESS_COUNT_SATISFIED: u32 = 2;
+/// Upper sanity bound for a plausible press-count (reject garbage/unreadable reads -> keep waiting).
+const PAB_COUNT_SANITY_MAX: u32 = 8;
+/// Frames the press-any-button job must be built+valid before we advance (screen settle).
+const PAB_ADVANCE_SETTLE_FRAMES: usize = 10;
+/// Minimum plausible heap pointer (reject not-yet-built / garbage job slots).
+const PAB_MIN_HEAP_PTR: usize = 0x10000;
+
+/// Trampoline to the original PAB node-update. 0 = not hooked.
+pub(crate) static PAB_ADVANCE_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// One-shot guard for installing the PAB node-update hook.
+pub(crate) static PAB_ADVANCE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// One-shot latch: the readiness advance has fired (0 = not yet).
+pub(crate) static PAB_ADVANCE_FIRED: AtomicUsize = AtomicUsize::new(0);
+/// Valid-job-frame settle counter for the readiness advance.
+pub(crate) static PAB_ADVANCE_SETTLE: AtomicUsize = AtomicUsize::new(0);
+
+/// Arm the readiness-gated press-any-button advance. ENV `ER_EFFECTS_PAB_ADVANCE=1` or GAME_DIR file
+/// `er-effects-pab-advance.txt`. DECOUPLED from `fire_tfc_continue_enabled` (that gate previously also
+/// drove `maybe_auto_open_menu`, so removing it stranded a probe at press-any-button).
+pub(crate) fn pab_advance_enabled() -> bool {
+    matches!(std::env::var("ER_EFFECTS_PAB_ADVANCE").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-pab-advance.txt")
+            .exists()
+}
+
+/// Detour for the press-any-button node-update 0x1407ad1c0. Calls the original (builds/updates the job
+/// at `[step+0x130]`) then runs the gated, fail-closed, one-shot readiness advance. Pass-through return.
+pub(crate) unsafe extern "system" fn pab_node_update_detour(
+    step: usize,
+    rdx: usize,
+    r8: usize,
+    r9: usize,
+) -> usize {
+    let orig_addr = PAB_ADVANCE_ORIG.load(Ordering::SeqCst);
+    let ret = if orig_addr != TITLE_OWNER_SCAN_START_ADDRESS && orig_addr != 0 {
+        let orig: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+            unsafe { std::mem::transmute(orig_addr) };
+        unsafe { orig(step, rdx, r8, r9) }
+    } else {
+        0
+    };
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        pab_advance_try(step)
+    }));
+    ret
+}
+
+/// Gated, fail-closed, one-shot readiness advance past press-any-button. Reads the built job at
+/// `[step+0x130]`; once it is a valid in-image job (we are at press-any-button) and has settled, sets
+/// `[job+0x1e8]=2` so the job's own predicate (0x1407a9200) completes it through the native path. Logs
+/// the job struct on first sighting so the run self-confirms the offsets. ZERO input.
+unsafe fn pab_advance_try(step: usize) {
+    if !pab_advance_enabled() || PAB_ADVANCE_FIRED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    if step <= PAB_MIN_HEAP_PTR {
+        return;
+    }
+    let Ok(base) = game_module_base() else {
+        return;
+    };
+    // The press-any-button job the native node-update builds/holds.
+    let job = unsafe { safe_read_usize(step + PAB_JOB_SLOT_130_OFFSET) }.unwrap_or(0);
+    if job <= PAB_MIN_HEAP_PTR || (job & (core::mem::size_of::<usize>() - 1)) != 0 {
+        return; // job not built yet (pre-press-any-button) -> wait
+    }
+    // Identity: a valid in-image vtable (fail closed -> never write a wrong/garbage object).
+    let vt = unsafe { safe_read_usize(job) }.unwrap_or(0);
+    if !vtable_in_game_image(vt, base) {
+        return;
+    }
+    let count = unsafe { safe_read_i32(job + PAB_JOB_PRESS_COUNT_1E8_OFFSET) }.unwrap_or(-1) as u32;
+    let keycode = unsafe { safe_read_i32(job + PAB_JOB_KEYCODE_180_OFFSET) }.unwrap_or(-1) as u32;
+    let settle = PAB_ADVANCE_SETTLE.fetch_add(1, Ordering::SeqCst) + 1;
+    if settle == 1 {
+        append_autoload_debug(format_args!(
+            "pab-advance: press-any-button job READY step=0x{step:x} job=0x{job:x} vt=0x{vt:x} [+0x1e8]count={count} [+0x180]keycode=0x{keycode:x} -- settling {PAB_ADVANCE_SETTLE_FRAMES} frames"
+        ));
+    }
+    if settle < PAB_ADVANCE_SETTLE_FRAMES {
+        return;
+    }
+    if count > PAB_COUNT_SANITY_MAX {
+        return; // unreadable/garbage press-count -> do NOT write or latch; keep waiting
+    }
+    if count >= PAB_PRESS_COUNT_SATISFIED {
+        // Already satisfied (a real press or prior advance) -> latch, nothing to do.
+        PAB_ADVANCE_FIRED.store(1, Ordering::SeqCst);
+        return;
+    }
+    // READINESS ADVANCE (zero-input): satisfy the job's own completion predicate.
+    unsafe {
+        *((job + PAB_JOB_PRESS_COUNT_1E8_OFFSET) as *mut u32) = PAB_PRESS_COUNT_SATISFIED;
+    }
+    PAB_ADVANCE_FIRED.store(1, Ordering::SeqCst);
+    let after = unsafe { safe_read_i32(job + PAB_JOB_PRESS_COUNT_1E8_OFFSET) }.unwrap_or(-1) as u32;
+    append_autoload_debug(format_args!(
+        "pab-advance: *** SET [job+0x1e8]={PAB_PRESS_COUNT_SATISFIED} (was {count}, now {after}) job=0x{job:x} keycode=0x{keycode:x} settle={settle} -- readiness-gated press-any-button advance, ZERO input ***"
+    ));
+}
+
+/// Install the press-any-button node-update hook ONCE (minhook, mirroring `install_title_update_hook`).
+/// Gated by `pab_advance_enabled` at the call site; the detour self-gates too (pass-through until armed).
+pub(crate) unsafe fn install_pab_advance_hook(base: usize) {
+    if PAB_ADVANCE_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        != TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "pab-advance-hook: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let mut hooks = Vec::new();
+    unsafe {
+        create_continue_trace_hook(
+            &mut hooks,
+            "pab_node_update_7ad1c0",
+            PAB_NODE_UPDATE_RVA,
+            pab_node_update_detour as *mut c_void,
+            &PAB_ADVANCE_ORIG,
+        );
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => append_autoload_debug(format_args!(
+            "pab-advance-hook: INSTALLED on PAB node-update 0x{:x} -- readiness press-any-button advance armed (zero-input)",
+            base + PAB_NODE_UPDATE_RVA as usize
+        )),
+        status => append_autoload_debug(format_args!(
+            "pab-advance-hook: MH_ApplyQueued failed: {status:?}"
+        )),
+    }
+    std::mem::forget(hooks);
 }
 
 /// Per-frame PUMP for the built LoadGame job (bd drain-dialog-plus8-not-menujob-pump-our-job-directly).
@@ -6329,6 +6618,14 @@ unsafe fn title_live_dialog_fire_ready(owner: usize, base: usize) -> Option<Live
     })
 }
 
+/// True if `vt` is a startup MessageBoxDialog the auto-accept should drive: the base MessageBoxDialog
+/// vtable OR the CS::SaveRetryDialog subclass vtable (the wrapper 0x1407af9a0 overrides base ->
+/// SaveRetryDialog AFTER the builder, so a base-only check bails once the override lands). bd
+/// offline-title-modal-is-saveretrydialog.
+fn is_startup_msgbox_vtable(vt: usize, base: usize) -> bool {
+    vt == base + MSGBOX_DIALOG_VTABLE_RVA || vt == base + SAVE_RETRY_DIALOG_VTABLE_RVA
+}
+
 fn startup_modal_blocking_state() -> StartupModalBlockingState {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let dialog = CONNECTION_ERROR_DIALOG.load(Ordering::SeqCst);
@@ -6344,7 +6641,7 @@ fn startup_modal_blocking_state() -> StartupModalBlockingState {
         }
     };
     let vt = unsafe { safe_read_usize(dialog) }.unwrap_or(null);
-    if base == null || vt != base + MSGBOX_DIALOG_VTABLE_RVA {
+    if base == null || !is_startup_msgbox_vtable(vt, base) {
         CONNECTION_ERROR_DIALOG.store(null, Ordering::SeqCst);
         return StartupModalBlockingState::Clear;
     }
@@ -10384,6 +10681,73 @@ pub(crate) fn install_server_status_hook() {
     }
 }
 
+/// Read a DLW (UTF-16 / char16_t) `basic_string` at `s` and return up to `max_chars` of its text.
+/// Layout: [+0x10]=length (chars), [+0x18]=capacity (chars); the text is inline at `s` when capacity
+/// < 8, else `*(s)` points at the heap buffer. Every read is fault-guarded so a garbage Spec field can
+/// never AV the game thread. UTF-16 lossy decode (the repo no-lossy lint targets from_utf8_lossy only).
+unsafe fn read_dlw_string(s: usize, max_chars: usize) -> Option<String> {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if s <= null {
+        return None;
+    }
+    let length = unsafe { safe_read_usize(s + 0x10) }?;
+    let capacity = unsafe { safe_read_usize(s + 0x18) }?;
+    if length == null || length > 4096 {
+        return None;
+    }
+    let take = length.min(max_chars);
+    let text_ptr = if capacity < 8 {
+        s
+    } else {
+        unsafe { safe_read_usize(s) }?
+    };
+    if text_ptr <= null {
+        return None;
+    }
+    let mut buf: Vec<u16> = Vec::with_capacity(take);
+    for i in 0..take {
+        let w = (unsafe { safe_read_usize(text_ptr + i * 2) }? & 0xffff) as u16;
+        if w == 0 {
+            break;
+        }
+        buf.push(w);
+    }
+    if buf.is_empty() {
+        return None;
+    }
+    Some(String::from_utf16_lossy(&buf))
+}
+
+/// Diagnostic: dump the MessageBoxDialog builder Spec (`r8`) to NAME the modal's message. The text id
+/// is NOT in rdx/r9 (a pointer pair 0x40 apart) and is NOT fetched via GetGR_System_Message at build
+/// time, so read it straight from the Spec. Tries the reported MenuString offset (+0x8e0) plus a scan
+/// of early offsets for any embedded/pointed-to DLW string. Read-only; logs each decoded string.
+unsafe fn dump_msgbox_spec(c: usize, n: usize) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if c <= null {
+        return;
+    }
+    if let Some(text) =
+        unsafe { read_dlw_string(unsafe { safe_read_usize(c + 0x8e0) }.unwrap_or(null), 80) }
+    {
+        append_autoload_debug(format_args!("spec #{n}: text@*(r8+0x8e0)=\"{text}\""));
+    }
+    let mut off = 0usize;
+    while off < 0x120 {
+        // Inline DLW string at r8+off.
+        if let Some(text) = unsafe { read_dlw_string(c + off, 80) } {
+            append_autoload_debug(format_args!("spec #{n}: inline[r8+0x{off:x}]=\"{text}\""));
+        }
+        // Pointer-to-DLW-string at r8+off.
+        if let Some(ptr) = unsafe { safe_read_usize(c + off) } {
+            if let Some(text) = unsafe { read_dlw_string(ptr, 80) } {
+                append_autoload_debug(format_args!("spec #{n}: *[r8+0x{off:x}]=\"{text}\""));
+            }
+        }
+        off += 8;
+    }
+}
+
 pub(crate) unsafe extern "system" fn msgbox_builder_hook(
     a: usize,
     b: usize,
@@ -10453,6 +10817,8 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
                 "msgbox-builder #{n}: dialog=0x{ret:x} vt=0x{vt:x} vt_rva=0x{vt_rva:x} captured={is_msgbox} in_world={in_world} args(rcx=0x{a:x} rdx=0x{b:x} r8=0x{c:x} r9=0x{d:x}) {}",
                 trace_callers_summary()
             ));
+            // NAME the modal: read its message text straight from the Spec (r8=c).
+            unsafe { dump_msgbox_spec(c, n) };
         }
     }
     ret
@@ -10480,7 +10846,7 @@ pub(crate) fn force_dismiss_startup_dialog() {
         }
     };
     let vt = unsafe { safe_read_usize(dialog) }.unwrap_or(null);
-    if base == null || vt != base + MSGBOX_DIALOG_VTABLE_RVA {
+    if base == null || !is_startup_msgbox_vtable(vt, base) {
         // Dialog consumed/freed/reused -> stop (and let the builder hook re-capture a new one).
         CONNECTION_ERROR_DIALOG.store(null, Ordering::SeqCst);
         return;
@@ -10497,6 +10863,23 @@ pub(crate) fn force_dismiss_startup_dialog() {
             "auto-accept: MessageBoxDialog 0x{dialog:x} closing (latch+0x3b0=1) after {n} OnDecide calls -- dismissed"
         ));
         return;
+    }
+    // Drive the dialog Decided + OK + fade-complete BEFORE the OK-handler so (a) the title-flow's
+    // modal-build poll ([dialog+0x25e8]>0 at 0x1407b04f5) treats it as resolved and PROCEEDS to the
+    // menu, and (b) the OK-handler's fade gate (commit only when fade_current<=fade_target) fires THIS
+    // frame -> instant commit/close, no fade-in render = no flash (vs the ~20 OnDecide frames before).
+    // The dialog is vtable-validated above (base MessageBoxDialog OR SaveRetryDialog). bd
+    // press-any-button-golden-lever-job1e8-readiness-2026-06-23 + offline-title-modal-is-saveretrydialog.
+    unsafe {
+        *((dialog + MSGBOX_STATE_25E8_OFFSET) as *mut i32) = MSGBOX_STATE_DECIDED;
+        *((dialog + MSGBOX_RESULT_BUTTON_25E0_OFFSET) as *mut i32) = MSGBOX_OK_BUTTON;
+    }
+    if let Some(fade_target_bits) =
+        unsafe { safe_read_i32(dialog + MSGBOX_FADE_TARGET_2300_OFFSET) }
+    {
+        unsafe {
+            *((dialog + MSGBOX_FADE_CURRENT_1278_OFFSET) as *mut i32) = fade_target_bits;
+        }
     }
     // PROPER OK (NOT force-stop): OnDecide 0x140927ba0 branches on the chosen button [dialog+0x25e0]
     // -- if == -1 it calls 0x14078dfd0 (the CANCEL/notify-closed path, which kicks the title flow
@@ -10584,6 +10967,319 @@ pub(crate) fn install_auto_accept_hook() {
         }
         Err(status) => append_autoload_debug(format_args!(
             "auto-accept: MhHook::new builder failed: {status:?}"
+        )),
+    }
+}
+
+/// Diagnostic gate (GAME_DIR file `er-effects-grsysmsg-log.txt` or `ER_EFFECTS_GRSYSMSG_LOG=1`):
+/// arm the GR_System_Message id-logger so a probe can DEFINITIVELY name which message(s) the
+/// menu-open MessageBoxDialogs carry (instead of guessing connection vs save). Reusable tool.
+pub(crate) fn grsysmsg_log_enabled() -> bool {
+    matches!(std::env::var("ER_EFFECTS_GRSYSMSG_LOG").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-grsysmsg-log.txt")
+            .exists()
+}
+
+static GR_SYSMSG_LOG_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+static GR_SYSMSG_LOG_ORIG: AtomicUsize = AtomicUsize::new(0);
+static GR_SYSMSG_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// `CS::GetGR_System_Message` (deobf entry 0x140762e30): `MenuString* (rcx=out, edx=int messageId)`.
+/// The dump labels it 0x140762e40 but that is MID-INSTRUCTION (inside `movq $-2,[rsp+0x28]`); the real
+/// MSVC prologue (`mov [rsp+8],rcx; push rdi; sub rsp,0x30`) is at 0x140762e30 -- VERIFIED by deobf
+/// boundary disasm (prev fn ret+int3 at 0x140762e26/27, then this prologue). Body reads FMG repo
+/// [0x143d7d4f8], applies the +0x384 variant, builds the MenuString.
+const GR_SYSTEM_MESSAGE_RVA: u32 = 0x762e30;
+const GR_SYSMSG_LOG_MAX: usize = 64;
+
+/// DIAGNOSTIC detour for GetGR_System_Message 0x140762e40. Once the main menu has opened (skip the
+/// boot-time message flood), log the integer message id (the `edx`/`rdx` arg) + first game caller RVA
+/// for each call, capped. The id maps 1:1 to GR_System_Message_win64 (e.g. 4101 "Cannot connect to
+/// network", 4102 "connection to game server lost", 4190 "network error", 70000 save-data notice,
+/// 4191 "Failed to save game"), so the menu-open modals can be named without guessing. Read-only
+/// passthrough; never mutates.
+pub(crate) unsafe extern "system" fn gr_sysmsg_log_hook(
+    rcx: usize,
+    rdx: usize,
+    r8: usize,
+    r9: usize,
+) -> usize {
+    if TFC_AUTO_MENU_OPENED.load(Ordering::SeqCst) != 0 {
+        let n = GR_SYSMSG_LOG_COUNT.fetch_add(1, Ordering::SeqCst);
+        if n < GR_SYSMSG_LOG_MAX {
+            let msg_id = (rdx & 0xffff_ffff) as i32;
+            let caller_rva = trace_first_game_caller_rva();
+            append_autoload_debug(format_args!(
+                "grsysmsg #{n}: id={msg_id} caller_rva=0x{caller_rva:x} out=0x{rcx:x}"
+            ));
+        }
+    }
+    let orig = GR_SYSMSG_LOG_ORIG.load(Ordering::SeqCst);
+    if orig == TITLE_OWNER_SCAN_START_ADDRESS {
+        return TITLE_OWNER_SCAN_START_ADDRESS;
+    }
+    let f: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    unsafe { f(rcx, rdx, r8, r9) }
+}
+
+/// Install the GR_System_Message id-logger once (MinHook on 0x140762e40), mirroring the auto-accept
+/// builder-hook precedent. Caller-gated by `grsysmsg_log_enabled()`.
+pub(crate) fn install_gr_sysmsg_log_hook() {
+    if GR_SYSMSG_LOG_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        != TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "grsysmsg-log: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(GR_SYSTEM_MESSAGE_RVA) else {
+        append_autoload_debug(format_args!("grsysmsg-log: failed to resolve rva"));
+        return;
+    };
+    match unsafe { MhHook::new(addr as *mut c_void, gr_sysmsg_log_hook as *mut c_void) } {
+        Ok(hook) => {
+            GR_SYSMSG_LOG_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "grsysmsg-log: queue_enable failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    append_autoload_debug(format_args!(
+                        "grsysmsg-log: hooked GetGR_System_Message 0x{addr:x} (log id+caller after menu-open)"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "grsysmsg-log: MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!("grsysmsg-log: MhHook::new failed: {status:?}"))
+        }
+    }
+}
+
+/// CS::NetworkCheckJob::Run RVA (deobf entry 0x140821310). Signature
+/// `MenuJobResult*(rcx=job, rdx=MenuJobResult* result, r8=FD4Time*)`. Entry prologue
+/// (push rbp/rsi/rdi/r14/r15; lea rbp; sub rsp) is a clean MinHook target (disasm-verified).
+const NETWORK_CHECK_JOB_RUN_RVA: u32 = 0x821310;
+/// `FD4::FD4TimeTemplate<float>::vftable` (deobf 0x1429c8e48) -- the value Run's common-return path
+/// writes to `*(param_3)` in every leaf (RVA read from the deobf disasm of the clean leaf).
+const FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA: usize = 0x29c8e48;
+/// `MenuJobState::Continue` (the no-modal result), verified from the deobf clean leaf (`lea edx,[r8+1]`).
+const MENU_JOB_STATE_CONTINUE: i32 = 1;
+
+static NETWORK_CHECK_SHORTCIRCUIT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+static NETWORK_CHECK_SHORTCIRCUIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// THE MILESTONE-3 FIX (zero-input, save-safe). `CS::NetworkCheckJob::Run` is a title-flow MenuJob the
+/// TitleTopDialog registrar chains UNCONDITIONALLY at menu-open. Offline, its Steam-holder check
+/// (FUN_140cab320: all 3 holders field@0x10==2) and EOS check (FUN_140ddfb90) never pass, so every
+/// decision-tree leaf builds a GR_System_Message MessageBoxDialog -- EXCEPT one leaf that does
+/// `MenuJobResult::SetResult(Continue)` with no modal (decompile-verified). This detour REPLACES Run
+/// with exactly that clean leaf, skipping the entire tree, so ZERO modals are ever enqueued regardless
+/// of CSNetMan/CSCheatEOS readiness. The original is never called (its only outputs are the result +
+/// the FD4Time vtable, both replicated). No input, no save write; only armed when offline is forced,
+/// so it never alters an online (Seamless Co-op) network check. bd er-effects-rs-0ye.
+pub(crate) unsafe extern "system" fn network_check_job_run_hook(
+    rcx: usize,
+    rdx: usize,
+    r8: usize,
+    r9: usize,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let result = rdx;
+    // MenuJobResult::SetResult(result, Continue, 0): state @ +0 (i32), field1 @ +4 (i32). The native
+    // SetResult 0x1407a91e0 only writes these two fields, so replicate inline. Readability-guarded.
+    if result > null && unsafe { safe_read_usize(result) }.is_some() {
+        unsafe {
+            *(result as *mut i32) = MENU_JOB_STATE_CONTINUE;
+            *((result + 4) as *mut i32) = 0;
+        }
+    }
+    // param_3->base._vfptr = FD4::FD4TimeTemplate<float>::vftable (Run's common-return sets this).
+    if let Ok(base) = game_module_base() {
+        if r8 > null && unsafe { safe_read_usize(r8) }.is_some() {
+            unsafe { *(r8 as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
+        }
+    }
+    if NETWORK_CHECK_SHORTCIRCUIT_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) == null {
+        append_autoload_debug(format_args!(
+            "network-check-shortcircuit: forced CS::NetworkCheckJob::Run -> MenuJobResult(Continue) result=0x{rdx:x} fd4time=0x{r8:x} -- no GR_System_Message modal enqueued (offline)"
+        ));
+    }
+    let _ = (rcx, r9);
+    result
+}
+
+/// Install the NetworkCheckJob::Run short-circuit ONCE (MinHook on 0x140821310), mirroring the
+/// auto-accept builder-hook precedent. Must arm before menu-open; caller-gated (offline only).
+pub(crate) fn install_network_check_shortcircuit_hook() {
+    if NETWORK_CHECK_SHORTCIRCUIT_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        != TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "network-check-shortcircuit: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(NETWORK_CHECK_JOB_RUN_RVA) else {
+        append_autoload_debug(format_args!(
+            "network-check-shortcircuit: failed to resolve rva"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            network_check_job_run_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "network-check-shortcircuit: queue_enable failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    append_autoload_debug(format_args!(
+                        "network-check-shortcircuit: hooked CS::NetworkCheckJob::Run 0x{addr:x} -- offline modal suppression armed"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "network-check-shortcircuit: MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "network-check-shortcircuit: MhHook::new failed: {status:?}"
+        )),
+    }
+}
+
+/// CS::ShowProgressJob::Run RVA (deobf entry 0x1408349c0; dump 0x140834ab0, region shift -0xf0,
+/// clean prologue disasm-verified). Signature `MenuJobResult*(rcx=ShowProgressJob, rdx=MenuJobResult*
+/// result, r8=FD4Time*)` -- IDENTICAL to NetworkCheckJob::Run.
+const SHOW_PROGRESS_JOB_RUN_RVA: u32 = 0x8349c0;
+/// `MenuJobState::Success` (=2; Continue=1). Verified from FUN_1407a7340's `SetResult(.,Success,0)`
+/// clean leaf (deobf `lea edx,[r8+2]`). A passing check returns Success -> `ShouldContinue` (state>1)
+/// true -> ShowProgressJob::Run propagates it -> flow ADVANCES (no modal). Forcing Continue(1) would
+/// loop the timed job; Success(2) completes it cleanly.
+const MENU_JOB_STATE_SUCCESS: i32 = 2;
+
+static SHOW_PROGRESS_SHORTCIRCUIT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+static SHOW_PROGRESS_SHORTCIRCUIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// THE MILESTONE-3 FIX, part 2 (zero-input, save-safe). `CS::ShowProgressJob::Run` (deobf 0x1408349c0)
+/// is the SHARED Run for the offline title-flow check steps (save=10/network=20/sign-in=30,31/
+/// login=60) the registrar chains at menu-open. Each runs a check delegate (job+0x20, slot +0x10);
+/// offline the delegate returns an ERROR result, which ShowProgressJob::Run propagates so the pump
+/// enqueues a GR_System_Message MessageBox. The 3 observed menu-open modals all come from these
+/// ShowProgressJobs (NOT NetworkCheckJob, which is a separate job already hooked). This detour REPLACES
+/// Run with a passing-check exit: result = {state=Success, field1=0} (exactly what FUN_1407a7340's
+/// SetResult(Success) clean leaf yields) + the FD4Time vtable, skipping the delegate -> the job
+/// completes successfully, the flow advances, and ZERO modals are enqueued. One hook covers all the
+/// check steps. Offline-gated (no effect on an online Seamless Co-op check). bd er-effects-rs-0ye.
+pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
+    rcx: usize,
+    rdx: usize,
+    r8: usize,
+    r9: usize,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let result = rdx;
+    if result > null && unsafe { safe_read_usize(result) }.is_some() {
+        unsafe {
+            *(result as *mut i32) = MENU_JOB_STATE_SUCCESS;
+            *((result + 4) as *mut i32) = 0;
+        }
+    }
+    if let Ok(base) = game_module_base() {
+        if r8 > null && unsafe { safe_read_usize(r8) }.is_some() {
+            unsafe { *(r8 as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
+        }
+    }
+    if SHOW_PROGRESS_SHORTCIRCUIT_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) == null {
+        append_autoload_debug(format_args!(
+            "show-progress-shortcircuit: forced CS::ShowProgressJob::Run -> MenuJobResult(Success) result=0x{rdx:x} fd4time=0x{r8:x} -- offline title-flow check modal(s) suppressed at the shared chokepoint"
+        ));
+    }
+    let _ = (rcx, r9);
+    result
+}
+
+/// Install the ShowProgressJob::Run short-circuit ONCE (MinHook on 0x1408349c0). Must arm before
+/// menu-open; caller-gated (offline only).
+pub(crate) fn install_show_progress_shortcircuit_hook() {
+    if SHOW_PROGRESS_SHORTCIRCUIT_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        != TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "show-progress-shortcircuit: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SHOW_PROGRESS_JOB_RUN_RVA) else {
+        append_autoload_debug(format_args!(
+            "show-progress-shortcircuit: failed to resolve rva"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            show_progress_job_run_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "show-progress-shortcircuit: queue_enable failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    append_autoload_debug(format_args!(
+                        "show-progress-shortcircuit: hooked CS::ShowProgressJob::Run 0x{addr:x} -- offline title-flow check modal suppression armed"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "show-progress-shortcircuit: MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "show-progress-shortcircuit: MhHook::new failed: {status:?}"
         )),
     }
 }

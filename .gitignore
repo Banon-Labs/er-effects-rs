@@ -12,6 +12,11 @@ __pycache__/
 # Deobfuscated (Arxan-decrypted) ER image for static RE -- copyrighted game binary, NEVER commit
 eldenring-deobf.bin
 *.deobf.bin
+# Raw executable bytes exported from the Ghidra runtime DUMP (copyrighted) -- used by
+# scripts/dump-deobf-shift.py to ground-truth dump<->deobf addresses. NEVER commit.
+dump-exec.bin
+# Agent scratch / derived analysis artifacts (TSV dumps of function bytes, etc.)
+/scratchpad/
 
 
 ProDebug.dll

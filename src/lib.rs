@@ -554,6 +554,13 @@ pub(crate) const TITLE_TOP_DIALOG_OPEN_MENU_RVA: usize = TitleDialogRva::OpenMen
 /// CS::TitleTopDialog vtable 0x142b26468 (RVA). Verify [owner+0xe0][0]==base+this before
 /// calling the registrar (wrong receiver would fault on [dialog+0xa38]/[+0xa60]).
 pub(crate) const TITLE_TOP_DIALOG_VTABLE_RVA: usize = TitleDialogRva::Vtable as usize;
+/// CS::TitleTopDialog::update (the per-frame title menu pump) = deobf 0x1409aac10 = vtable slot 2
+/// (`*(vtable+0x10)`, verified by reading the deobf vtable + the prologue). `__fastcall(rcx =
+/// TitleTopDialog*, xmm1 = f32 delta, r8 = *InputData)`. It runs each frame with the LIVE dialog and,
+/// at its tail, calls MenuWindow::Update (the FD4 job pump) which drains the menu jobs. Hooking it
+/// lets our in-context Continue build run in the pump's frame (live dialog fields) -- the timing our
+/// game-task build lacked (mis-context crash). bd HOOK-DESIGN-titletopdialog-update-0x1409aac10.
+pub(crate) const TITLE_TOP_DIALOG_UPDATE_RVA: usize = 0x9aac10;
 /// CS::TitleTopDialog cleanup/destructor body 0x1409a8890 (RVA). Static disassembly shows it
 /// first restores the TitleTopDialog vtable, calls native active-screen clear 0x1409b2db0, then
 /// releases dialog-owned renderer/resources before tail-calling the base cleanup. Unlike the
@@ -2142,6 +2149,18 @@ pub(crate) enum MsgBoxState {
 }
 
 pub(crate) const MSGBOX_STATE_DECIDED: i32 = MsgBoxState::Decided as i32;
+/// CS::SaveRetryDialog vtable (RVA). A MessageBoxDialog SUBCLASS: the wrapper 0x1407af9a0 overrides
+/// the base vtable to this AFTER the builder 0x1409275b0 runs. It is the "save/load failed -- Retry?"
+/// prompt the offline title flow builds (save-data/profile read error in a degraded/offline env). The
+/// auto-accept must recognize it by THIS vtable -- not the base MessageBoxDialog vtable (0x2b03550) --
+/// or it bails before dismissing (the vtable mismatch is why auto-accept never fired). bd
+/// offline-title-modal-is-saveretrydialog + press-any-button-golden-lever-job1e8-readiness-2026-06-23.
+pub(crate) const SAVE_RETRY_DIALOG_VTABLE_RVA: usize = 0x2aaabf8;
+/// SaveRetryDialog fade gate the OK-handler (0x78e030) reads: it commits/closes only when
+/// fade_current (+0x1278) <= fade_target (+0x2300). Writing fade_current = fade_target bits makes it
+/// commit on the first frame (no fade-in animation = no visible flash) instead of ~20 frames.
+pub(crate) const MSGBOX_FADE_CURRENT_1278_OFFSET: usize = 0x1278;
+pub(crate) const MSGBOX_FADE_TARGET_2300_OFFSET: usize = 0x2300;
 pub(crate) const MSGBOX_FINISHED_TRUE: u8 = true as u8;
 pub(crate) const MSGBOX_FINISHED_FALSE: u8 = false as u8;
 pub(crate) const AUTO_ACCEPT_LOG_INTERVAL: usize = 30;
@@ -3619,10 +3638,48 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         // Autonomous press-any-button: self-fire the open-menu registrar when the
                         // title settles (zero-input), so no real button press is needed.
                         unsafe { maybe_auto_open_menu(base) };
-                        unsafe { maybe_fire_tfc_continue(base) };
+                        // The Continue BUILD now runs IN-CONTEXT from the hooked TitleTopDialog::update
+                        // detour (the pump's live-dialog frame), NOT from this game task -- that timing
+                        // was the mis-context cause. Install the hook once; the detour fires the build.
+                        unsafe { install_title_update_hook(base) };
                         let frame_delta = task_data.delta_time.time;
                         unsafe { tfc_continue_drain_tick(base, frame_delta) };
                     }
+                }
+                // GOLDEN-PATH zero-input boot -> open menu (DECOUPLED from fire_tfc_continue): the
+                // readiness-gated press-any-button advance (hook 0x1407ad1c0 -> set [job+0x1e8]=2)
+                // gets PAST press-any-button with no input, then maybe_auto_open_menu opens the main
+                // menu -- with NO selector fire, so an observe run can reach the menu cleanly. bd
+                // press-any-button-golden-lever-job1e8-readiness-2026-06-23.
+                if pab_advance_enabled() {
+                    if let Ok(base) = game_module_base() {
+                        unsafe { install_pab_advance_hook(base) };
+                        unsafe { maybe_auto_open_menu(base) };
+                    }
+                }
+                // OFFLINE connection-state lever (milestone-3 fix): force GameMan+0xBC8/0xBC9 = 0 each
+                // title frame so the connection-loss event handlers -- which build the GR_System_Message
+                // "Cannot connect to network / connection lost" MessageBoxDialogs our offline boot
+                // raises at menu-open -- short-circuit at their `IsInOnlineMode() &&
+                // IsServerConnectionEnabled()` guard before enqueuing any popup. Gated by the offline
+                // flag (this only forces state the offline boot already intends). bd er-effects-rs-0ye.
+                if online_disable_enabled() {
+                    // MILESTONE-3 FIX: short-circuit the offline title-flow check jobs to their
+                    // no-modal exits so the title flow never enqueues a GR_System_Message MessageBox.
+                    // ShowProgressJob::Run is the shared chokepoint for the save/network/sign-in/login
+                    // check steps (the 3 observed modals); NetworkCheckJob::Run is the separate J6 job.
+                    // Installed once, before menu-open. Offline-gated (no effect on an online check).
+                    install_network_check_shortcircuit_hook();
+                    install_show_progress_shortcircuit_hook();
+                    if let Ok(base) = game_module_base() {
+                        unsafe { force_offline_connection_bytes(base) };
+                    }
+                }
+                // DIAGNOSTIC (gated by er-effects-grsysmsg-log.txt): log the GR_System_Message ids the
+                // title flow fetches after menu-open, to DEFINITIVELY name the menu-open MessageBoxDialogs
+                // (connection 4101/4102/4190 vs save 70000/4191) instead of guessing. Self-gates once.
+                if grsysmsg_log_enabled() {
+                    install_gr_sysmsg_log_hook();
                 }
                 // Anti-anti-debug (ported from ProDebug, correct base): neutralize FromSoft's
                 // timed anti-debug so debug exceptions / our INT3 breakpoints reach our VEH.

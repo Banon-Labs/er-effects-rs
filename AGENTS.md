@@ -41,11 +41,12 @@ Steam MUST be running before every Elden Ring runtime probe. Verify with `pgrep 
 **For ANY Elden Ring RE lookup, consult the Ghidra runtime dump FIRST -- before our own static disasm (`scripts/disas-deobf.sh` / `er_disasm`) or any runtime probe -- whenever a Ghidra project is relevant** (resolving a function/VA to a name + signature, decompiling to readable C, getting struct/field layouts, RTTI class names, namespaces). It has real symbols/types that the raw deobf binary lacks, so it is the cheapest, most authoritative first pass; only fall back to disasm/runtime when the dump cannot answer (e.g. runtime-only values, code the dump didn't symbolize).
 
 - Dump file: `/home/banon/projects/reverse/ghidra-projects/pc_eldenring_runtime.1.16.1.exe.gzf` (a pre-analyzed, named export of the live 1.16.1 process; ~1.5 GB). Ghidra install: `/home/banon/tools/ghidra_12.1_PUBLIC`.
-- **CRITICAL -- dump is for SEMANTICS, the deobf binary is for ADDRESSES.** The dump and the deobf/live binary (`eldenring-deobf.bin`, == what the DLL patches/calls at runtime, base `0x140000000`) are NOT byte-identical: they have pervasive small per-region ADDRESS SHIFTS (observed 0x10-0x11; e.g. dump `IsGameInForeground 0x14266def0` -> live `0x14266df00`). So use the dump for function *names*, decompiled C, struct/RTTI/field layouts, and *what code does* -- but NEVER call or patch a dump address directly (it lands mid-function and crashes). For any address you will CALL or PATCH at runtime, ground-truth it against the deobf binary with `scripts/disas-deobf.sh` (find the real entry by its prologue near the dump address, usually within +-0x20). The deobf binary is authoritative for addresses; the dump is authoritative for meaning.
+- **CRITICAL -- dump is for SEMANTICS, the deobf binary is for ADDRESSES.** The dump and the deobf/live binary (`eldenring-deobf.bin`, == what the DLL patches/calls at runtime, base `0x140000000`) are NOT byte-identical: the same function sits at a different VA in each. The offset (`shift = deobf_va - dump_va`) is **piecewise-constant PER CODE REGION and NOT a single constant** -- measured: `0` near the base, an irregular `-0x80..-0x120` staircase through the low `.text` (`0x1401-0x140d`), a rock-solid `-0x20` across `0x140e-0x141e`, a rock-solid `+0x10` across `0x141f-0x1426` (e.g. dump `IsGameInForeground 0x14266def0` -> deobf `0x14266df00`, `+0x10` -- this is just THAT region's value), messy tail beyond. So use the dump for function *names*, decompiled C, struct/RTTI/field layouts, and *what code does* -- but NEVER call or patch a dump address directly (it lands mid-function and crashes). For any address you will CALL or PATCH, ground-truth it with **`scripts/dump-deobf-shift.py 0x<dump_va>`** (relocation-aware content matcher; `--reverse` for deobf->dump). It returns the exact deobf VA + shift, or a clearly-flagged region estimate to verify with disasm. The shift is NOT driven by Arxan (proven: step boundaries don't coincide with Arxan stubs, and regenerating the deobf via dearxan yields a byte-identical file), so there is no dearxan/formula shortcut. The deobf binary is authoritative for addresses; the dump is authoritative for meaning.
 - The standalone `.gzf` is separate from the shared `From Software.rep` project, which is often open in the user's Ghidra GUI (locked). NEVER open `.rep` headless; import the `.gzf` into a throwaway temp project instead. This is also why the dump is "user-approved single program," not the forbidden whole-repo scan.
 - **PERSISTENT PROJECT (use this; no re-import).** The gzf is now imported+analyzed into a persistent project at `/home/banon/ghidra_maporch/proj` (program `ermaporch`). Query it via the wrapper `scripts/ghidra-query.sh <postScript>.java [args...]`, which runs `analyzeHeadless /home/banon/ghidra_maporch/proj ermaporch -process -noanalysis -readOnly -postScript ...` and reopens in **~5s** (vs the ~2-min import; ~20x faster). Use a **Java** GhidraScript (12.1 dropped Jython; Python needs PyGhidra). Batch all lookups/decompiles for a question into one script anyway. The persistent project is the single approved bounded target (no whole-repo scan).
   - The earlier "a `BadDataType` JPMS save error prevents persisting" claim was **WRONG**: the real blocker was `/tmp` (a near-full 32G tmpfs) running out of space while unpacking the gzf. Fix (baked into the wrapper): force `java.io.tmpdir` onto `/home` via `GHIDRA_JAVA_OPTIONS='-Djava.io.tmpdir=/home/banon/ghidra_maporch/tmp'` (plain `TMPDIR` is ignored for `java.io.tmpdir`). The `BadDataType`/`IllegalAccessException` log line still prints on JDK 26 but is **cosmetic/non-fatal** (Save + Import both succeed). See bd `ghidra-persistent-project-reuse-2026-06-22`.
-  - To re-import from scratch (rarely needed, e.g. a new dump version): `/home/banon/ghidra_maporch/scripts/import_persistent.sh`. Reusable query scripts live in `/tmp/ghidra_scripts/` (Dump/Decomp helpers).
+  - To re-import from scratch (rarely needed, e.g. a new dump version): `/home/banon/ghidra_maporch/scripts/import_persistent.sh`.
+  - **Where to put GhidraScripts: `scripts/ghidra/` (version-controlled), NOT `/tmp/ghidra_scripts/`.** Reusable Java postScripts (and their helper shell wrappers) belong in the repo's `scripts/ghidra/` directory so they survive reboots, are reviewable, and are shared across agents/sessions. `ghidra-query.sh` adds the postScript's own directory to `-scriptPath`, so a script in `scripts/ghidra/` runs the same way: `bash scripts/ghidra-query.sh scripts/ghidra/MyQuery.java [args...]`. Do NOT scatter new query scripts into `/tmp/ghidra_scripts/` -- that path is volatile (lost on reboot) and unversioned; older helpers still living there should be migrated into `scripts/ghidra/` when touched.
 - Still respect the bounded-query hygiene below (single known program, no multi-program/whole-repo enumeration).
 
 ## Ghidra Shared Project Hygiene
@@ -75,8 +76,21 @@ direct dependency of the root `er-effects-rs` crate (pure-Rust, decoder-only fea
 set, zero cross-compile overhead under cargo-xwin; it was already present
 transitively via `ilhook`). Do **not** hard-code instruction byte lengths or
 prologue byte sequences in new code when `iced-x86` can decode them, and do **not**
-add a second disassembler (e.g. capstone/zydis) -- `iced-x86` already covers in-process
-needs and avoids a C cross-compile burden.
+add a second disassembler (e.g. capstone/zydis) **into the DLL / in-process Rust** --
+`iced-x86` already covers in-process needs and avoids a C cross-compile burden.
+
+#### Offline Python decoding (`capstone`)
+
+The above `iced-x86`-only rule is about **in-process Rust**. For **offline,
+agent-facing Python tooling** (the `scripts/*.py` helpers), `capstone` is the
+sanctioned x86-64 decoder and is **kept available on purpose** -- it exposes
+per-instruction operand byte offsets (`insn.encoding.disp_offset/disp_size`,
+`imm_offset/imm_size`) that make relocation-aware byte matching trivial (see
+`scripts/dump-deobf-shift.py`). There is no system `pip`; do **not** try to install
+it globally. Run capstone-using scripts under uv, which provisions it ephemerally
+(cached, ~ms): `uv run --with capstone python3 scripts/<tool>.py ...`. The shift tool
+auto-bootstraps this itself (re-execs under `uv run --with capstone` if the import
+fails), so a bare `python3 scripts/dump-deobf-shift.py ...` also works.
 
 ## Non-Interactive Shell Commands
 

@@ -335,6 +335,52 @@ def main() -> int:
             'rtk grep "find"',
             True,
         ),
+        # No authoring scripts into /tmp (artifacts to /tmp are fine).
+        PolicyCase(
+            "deny-write-script-into-tmp",
+            "",
+            False,
+            "authoring a script into /tmp",
+            {"file_path": "/tmp/ghidra_scripts/Foo.java", "content": "class Foo {}"},
+            include_timeout=False,
+            tool_name="Write",
+        ),
+        PolicyCase(
+            "deny-edit-py-script-into-tmp",
+            "",
+            False,
+            "authoring a script into /tmp",
+            {"file_path": "/tmp/scratch/tool.py"},
+            include_timeout=False,
+            tool_name="Edit",
+        ),
+        PolicyCase(
+            "allow-write-data-artifact-into-tmp",
+            "",
+            True,
+            None,
+            {"file_path": "/tmp/claude/dump_funcs.tsv", "content": "a\tb"},
+            include_timeout=False,
+            tool_name="Write",
+        ),
+        PolicyCase(
+            "allow-write-script-into-repo",
+            "",
+            True,
+            None,
+            {"file_path": str(REPO_ROOT / "scripts" / "ghidra" / "Foo.java"), "content": "class Foo {}"},
+            include_timeout=False,
+            tool_name="Write",
+        ),
+        PolicyCase(
+            "allow-write-log-into-tmp",
+            "",
+            True,
+            None,
+            {"file_path": "/tmp/run.log", "content": "ok"},
+            include_timeout=False,
+            tool_name="Write",
+        ),
     ]
     for case in cases:
         run_case(case)
