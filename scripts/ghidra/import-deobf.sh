@@ -14,7 +14,8 @@
 # tmpfs is a near-full 32G and overflows when Ghidra unpacks/analyzes a large program).
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 IMG="$REPO_DIR/eldenring-deobf.bin"
 PROJ=/home/banon/ghidra_maporch/proj-deobf
 PROJ_NAME=erdeobf
@@ -30,10 +31,15 @@ mkdir -p "$TMP" "$PROJ"
 export TMPDIR="$TMP"
 export GHIDRA_JAVA_OPTIONS="-Djava.io.tmpdir=$TMP"
 
+# Import WITHOUT auto-analysis, then run analysis via AnalyzeWithProgress.java so the long
+# analysis phase logs a live progress heartbeat (analyzeHeadless saves the program afterward).
 "$HEADLESS" "$PROJ" "$PROJ_NAME" \
   -import "$IMG" \
   -loader BinaryLoader \
   -loader-baseAddr 0x140000000 \
   -processor x86:LE:64:default \
+  -noanalysis \
+  -scriptPath "$SCRIPT_DIR" \
+  -postScript AnalyzeWithProgress.java 3 \
   -overwrite
 echo "IMPORT_EXIT=$?"
