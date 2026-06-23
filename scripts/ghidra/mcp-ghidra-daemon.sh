@@ -3,13 +3,14 @@
 # Keeps one analyzeHeadless process alive with a program loaded so MCP tool calls are instant
 # and Ghidra is NOT restarted per operation. The 13bm Go bridge (.mcp.json) connects to PORT.
 #
-#   scripts/ghidra/mcp-ghidra-daemon.sh start   [--proj-dir DIR] [--proj-name NAME] [--port N] [--writable]
+#   scripts/ghidra/mcp-ghidra-daemon.sh start   [--proj-dir DIR] [--proj-name NAME] [--port N] [--readonly]
 #   scripts/ghidra/mcp-ghidra-daemon.sh stop
 #   scripts/ghidra/mcp-ghidra-daemon.sh status
 #   scripts/ghidra/mcp-ghidra-daemon.sh restart [same flags as start]
 #
-# Defaults: the symbolized DUMP project (ermaporch), port 8765, READ-ONLY. Use --writable only
-# when you intend the agent's rename/struct edits to persist (mutates the shared project!).
+# Defaults: the symbolized DUMP project (ermaporch), port 8765, WRITABLE so the agent's
+# rename/struct/comment edits accumulate and PERSIST into the project (saved on a clean stop).
+# This mutates the shared project by design -- pass --readonly to serve query-only instead.
 # To serve the deobf-native project instead:
 #   ... start --proj-dir /home/banon/ghidra_maporch/proj-deobf --proj-name erdeobf
 set -euo pipefail
@@ -25,7 +26,7 @@ PIDFILE="$RUN_DIR/daemon.pid"
 PROJ_DIR=/home/banon/ghidra_maporch/proj
 PROJ_NAME=ermaporch
 PORT=8765
-RO="-readOnly"
+RO=""   # default writable; edits persist (saved on clean stop). --readonly to opt out.
 
 CMD="${1:-}"; shift || true
 while [[ $# -gt 0 ]]; do
@@ -33,7 +34,7 @@ while [[ $# -gt 0 ]]; do
     --proj-dir)  PROJ_DIR="$2"; shift 2 ;;
     --proj-name) PROJ_NAME="$2"; shift 2 ;;
     --port)      PORT="$2"; shift 2 ;;
-    --writable)  RO=""; shift ;;
+    --readonly)  RO="-readOnly"; shift ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -83,5 +84,5 @@ case "$CMD" in
   restart) do_stop; do_start ;;
   status)
     if is_running; then echo "running (pid $(pgrep -f MCPServeHeadless.java | tr '\n' ' ')); port $PORT $(port_up && echo up || echo DOWN)"; else echo "stopped"; fi ;;
-  *) echo "usage: $0 {start|stop|status|restart} [--proj-dir DIR] [--proj-name NAME] [--port N] [--writable]" >&2; exit 2 ;;
+  *) echo "usage: $0 {start|stop|status|restart} [--proj-dir DIR] [--proj-name NAME] [--port N] [--readonly]" >&2; exit 2 ;;
 esac

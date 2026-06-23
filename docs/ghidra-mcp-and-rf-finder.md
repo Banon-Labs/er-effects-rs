@@ -78,11 +78,15 @@ scripts/ghidra/mcp-ghidra-daemon.sh start --proj-dir /home/banon/ghidra_maporch/
 ```
 
 The daemon detaches (`setsid`) so the warm program survives across client/session
-restarts; clean shutdown is a stop-file. Default is **read-only** (the agent's
-rename/struct edits won't mutate the shared project) -- pass `--writable` only when
-you want edits to persist. The bridge (launched by `.mcp.json`) connects to the
-daemon's port and reconnects automatically if it restarts. After starting the
-daemon, restart this MCP client so it picks up `.mcp.json`.
+restarts; clean shutdown is a stop-file. Default is **writable** so the agent's
+rename/struct/comment edits accumulate and **persist** into the project (saved on a
+clean `stop`; a crash loses unsaved in-memory edits) -- pass `--readonly` to serve
+query-only instead. The bridge (launched by `.mcp.json`) connects to the daemon's
+port and reconnects automatically if it restarts. After starting the daemon, restart
+this MCP client so it picks up `.mcp.json`.
+
+Write path verified: `set_bookmark` -> `get_bookmarks` -> `remove_bookmark` round-trips
+against the warm program.
 
 Verified end-to-end (headless daemon -> bridge -> MCP): `initialize` ok, 70 tools
 listed, `get_program_info` returns the warm program (`pc_eldenring_runtime.1.16.1`,
