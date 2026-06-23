@@ -147,6 +147,19 @@ Verified end-to-end: a bookmark set via MCP **survived a `kill -9` crash + resta
 (periodic save), and edits also flush on clean `stop`. A crash loses at most the last
 `--save-interval` seconds of edits.
 
+**Exclusivity constraint (one process per project).** Ghidra local projects take an
+exclusive **project-level** lock, so a running daemon **monopolizes its whole project**:
+any other `analyzeHeadless` against the same project (e.g. `scripts/ghidra-query.sh`, the
+RF finder, custom Java analysis) fails with `LockException: Unable to lock project`.
+This is **independent of `--readonly`** (the lock is project-level, not program-level), so
+read-only buys no concurrency -- which is why the default is writable. Practical guidance:
+- For warm queries on the daemon's program, use the **MCP tools** (that's the point).
+- To run a one-shot Java analysis on the **same** project, `mcp-ghidra-daemon.sh stop`
+  first (or pause/restart around it), then `start` again.
+- The RF finder targets the **`erdeobf`** project, not `ermaporch`, so it does not
+  conflict with the default ermaporch daemon -- but don't run a second daemon on
+  `erdeobf` while RF-finding it.
+
 Verified end-to-end (headless daemon -> bridge -> MCP): `initialize` ok, 70 tools
 listed, `get_program_info` returns the warm program (`pc_eldenring_runtime.1.16.1`,
 366744 functions).

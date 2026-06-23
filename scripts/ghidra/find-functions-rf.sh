@@ -52,7 +52,16 @@ fi
   -readOnly \
   -scriptPath "$SCRIPT_DIR" \
   -postScript FindFunctionStartsRF.java "$THRESHOLD" "$MAX_STARTS" "$MIN_RANGE" \
-  >"$LOG" 2>&1 || { echo "analyzeHeadless failed; see $LOG" >&2; tail -40 "$LOG" >&2; exit 1; }
+  >"$LOG" 2>&1 || {
+    if grep -q "Unable to lock project" "$LOG"; then
+      echo "ERROR: project '$PROJ_NAME' is locked -- an MCP daemon (or other Ghidra process)" >&2
+      echo "       holds it. Stop it first: scripts/ghidra/mcp-ghidra-daemon.sh stop" >&2
+    else
+      echo "analyzeHeadless failed; see $LOG" >&2
+      tail -40 "$LOG" >&2
+    fi
+    exit 1
+  }
 
 # Slice the JSON payload out of the headless log between the markers.
 if ! sed -n '/RF_RESULT_JSON_BEGIN/,/RF_RESULT_JSON_END/p' "$LOG" \
