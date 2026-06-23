@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ghidra": {
+      "command": "/home/banon/tools/GhidraMCP-13bm/mcp-bridge/mcp_bridge",
+      "args": ["-host", "localhost", "-port", "8765"]
+    }
+  }
+}
