@@ -164,6 +164,38 @@ struct ThreadSample {
     kernel_100ns: u64,
     user_100ns: u64,
     rip: Option<u64>,
+    /// Best-effort partial call stack: eldenring.exe-module return addresses scanned from RSP
+    /// (stack-scan heuristic). Lets the offline analysis find the driver loop above a hot leaf.
+    stack: Vec<u64>,
+}
+
+/// Scan the suspended thread's stack from `rsp` upward, collecting qwords that point into the
+/// game module's code range [base, base+CODE_SPAN) -- candidate return addresses. Over-captures
+/// (some are non-return in-module pointers); the offline analysis keeps the frequent ones.
+const STACK_SCAN_QWORDS: usize = 64;
+const STACK_FRAMES_MAX: usize = 16;
+const MODULE_CODE_SPAN: u64 = 0x1000_0000;
+
+unsafe fn scan_stack(rsp: u64, base: u64) -> Vec<u64> {
+    let mut out = Vec::new();
+    if base == 0 || rsp == 0 {
+        return out;
+    }
+    let (lo, hi) = (base, base + MODULE_CODE_SPAN);
+    for i in 0..STACK_SCAN_QWORDS {
+        let addr = rsp.wrapping_add((i as u64) * 8) as usize;
+        let Some(v) = (unsafe { safe_read_usize(addr) }) else {
+            break; // hit an unreadable page -> end of committed stack window
+        };
+        let v = v as u64;
+        if v >= lo && v < hi {
+            out.push(v);
+            if out.len() >= STACK_FRAMES_MAX {
+                break;
+            }
+        }
+    }
+    out
 }
 
 /// Public entry: spawn the sampler daemon thread. Idempotent via the `Once` in the caller.
@@ -198,7 +230,7 @@ fn profiler_main() {
     // Header line documents the run for the offline renderer. `module_base` lets RIP samples be made
     // eldenring.exe-relative offline (0 if not yet resolvable at profiler start -- the renderer then
     // falls back to the readiness-result runtime_module_base).
-    let module_base = game_module_base().unwrap_or(0);
+    let mut module_base = game_module_base().unwrap_or(0);
     let _ = writeln!(
         file,
         "{{\"kind\":\"header\",\"ncpu\":{ncpu},\"interval_ms\":{},\"rip\":{},\"pid\":{pid},\"module_base\":{module_base}}}",
@@ -218,6 +250,11 @@ fn profiler_main() {
     while epoch.elapsed() < max {
         let ms = epoch.elapsed().as_millis();
         let do_rip = rip_on && (iter % rip_n == 0);
+        // The game module may not have been loaded when the profiler started; resolve the base
+        // lazily (constant once loaded) so stack-scan filtering works for the whole boot.
+        if module_base == 0 {
+            module_base = game_module_base().unwrap_or(0);
+        }
         let tids = unsafe { enumerate_thread_ids(pid) };
         let mut samples: Vec<ThreadSample> = Vec::with_capacity(tids.len());
 
@@ -240,8 +277,9 @@ fn profiler_main() {
             let _ = unsafe { GetThreadTimes(handle, &mut c0, &mut e0, &mut k, &mut u) };
 
             let mut rip: Option<u64> = None;
+            let mut stack: Vec<u64> = Vec::new();
             if do_rip {
-                // Suspend, read Rip, resume immediately. Skip if suspend fails (terminating thread).
+                // Suspend, read Rip + scan the stack, resume. Skip if suspend fails (terminating).
                 let prev = unsafe { SuspendThread(handle) };
                 if prev != u32::MAX {
                     let mut ctx = CONTEXT {
@@ -250,6 +288,8 @@ fn profiler_main() {
                     };
                     if unsafe { GetThreadContext(handle, &mut ctx) }.is_ok() {
                         rip = Some(ctx.Rip);
+                        // Read the stack while still suspended (a resumed thread's stack is racy).
+                        stack = unsafe { scan_stack(ctx.Rsp, module_base as u64) };
                     }
                     let _ = unsafe { ResumeThread(handle) };
                 }
@@ -267,6 +307,7 @@ fn profiler_main() {
                 kernel_100ns: filetime_to_100ns(k),
                 user_100ns: filetime_to_100ns(u),
                 rip,
+                stack,
             });
             let _ = unsafe { CloseHandle(handle) };
         }
@@ -285,6 +326,16 @@ fn profiler_main() {
             );
             if let Some(rip) = s.rip {
                 let _ = write!(line, ",\"rip\":{rip}");
+            }
+            if !s.stack.is_empty() {
+                let _ = write!(line, ",\"stk\":[");
+                for (j, fr) in s.stack.iter().enumerate() {
+                    if j > 0 {
+                        line.push(',');
+                    }
+                    let _ = write!(line, "{fr}");
+                }
+                line.push(']');
             }
             if let Some(name) = names.get(&s.tid) {
                 let _ = write!(line, ",\"n\":\"{}\"", json_escape(name));
