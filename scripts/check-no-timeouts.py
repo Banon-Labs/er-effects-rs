@@ -45,12 +45,14 @@ SHELL_DURATION_UNITS = {
     "h": 3600.0,
     "d": 86400.0,
 }
+# subprocess.Popen is intentionally excluded: it spawns a long-lived process handle and accepts no
+# `timeout=` kwarg (timeouts belong on the subsequent `.communicate()`/`.wait()` call). Requiring a
+# timeout on the Popen() call itself is impossible to satisfy, so flagging it is a false positive.
 PYTHON_SUBPROCESS_FUNCTIONS = {
     "run",
     "check_call",
     "check_output",
     "call",
-    "Popen",
 }
 
 
@@ -214,18 +216,25 @@ def shell_timeout_duration(tokens: list[str], timeout_index: int) -> float | Non
     return parse_shell_duration_seconds(tokens[index])
 
 
-def shell_read_timeout_duration(tokens: list[str], read_index: int) -> float | None:
+def shell_read_timeout(tokens: list[str], read_index: int) -> tuple[bool, float | None]:
+    """Detect a `read -t` timeout flag by TOKEN, not substring.
+
+    Returns (has_timeout_flag, duration_seconds_or_None). A bare `read -r f` has no `-t` flag, so it
+    must not be flagged even when the surrounding line contains a `-t` substring (e.g. `find -type f`).
+    Handles `-t N`, `-tN`, and single-dash clusters ending in `t` (`-rt N`) or carrying an inline value
+    (`-rtN`).
+    """
     index = read_index + 1
     while index < len(tokens):
         token = tokens[index]
-        if token == "-t":
-            if index + 1 >= len(tokens):
-                return None
-            return parse_shell_duration_seconds(tokens[index + 1])
-        if token.startswith("-t") and len(token) > 2:
-            return parse_shell_duration_seconds(token[2:])
+        if token == "-t" or re.fullmatch(r"-[a-z]*t", token):
+            nxt = tokens[index + 1] if index + 1 < len(tokens) else None
+            return True, (parse_shell_duration_seconds(nxt) if nxt is not None else None)
+        match = re.fullmatch(r"-[a-z]*t([0-9.]+)", token)
+        if match:
+            return True, parse_shell_duration_seconds(match.group(1))
         index += 1
-    return None
+    return False, None
 
 
 def scan_shell_bounded_timeouts(relative: Path, lines: list[str], suffix: str) -> list[Finding]:
@@ -243,8 +252,10 @@ def scan_shell_bounded_timeouts(relative: Path, lines: list[str], suffix: str) -
         for index, token in enumerate(tokens):
             if token == "timeout" and not bounded_seconds(shell_timeout_duration(tokens, index)):
                 findings.append(Finding(relative, line_number, SHELL_TIMEOUT_RULE, line))
-            if token == "read" and "-t" in searchable and not bounded_seconds(shell_read_timeout_duration(tokens, index)):
-                findings.append(Finding(relative, line_number, SHELL_TIMEOUT_RULE, line))
+            if token == "read":
+                has_timeout, duration = shell_read_timeout(tokens, index)
+                if has_timeout and not bounded_seconds(duration):
+                    findings.append(Finding(relative, line_number, SHELL_TIMEOUT_RULE, line))
     return findings
 
 

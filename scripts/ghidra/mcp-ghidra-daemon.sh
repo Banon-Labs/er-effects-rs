@@ -59,16 +59,15 @@ do_start() {
     -scriptPath '$SCRIPT_DIR' -postScript MCPServeHeadless.java '$PORT' '$STOPFILE' '$SAVE_SEC'" \
     >"$LOG" 2>&1 < /dev/null &
   echo $! > "$PIDFILE"
-  # Wait (bounded) for readiness rather than sleeping blindly.
-  for _ in $(seq 1 25); do
-    if grep -q "MCP_HEADLESS: READY" "$LOG" 2>/dev/null; then
-      echo "READY: $(grep 'MCP_HEADLESS: READY' "$LOG" | tail -1)"; return 0
-    fi
-    if grep -q "MCP_HEADLESS: FAILED" "$LOG" 2>/dev/null; then
-      echo "FAILED to start; see $LOG" >&2; tail -20 "$LOG" >&2; return 1
-    fi
-    sleep 1
-  done
+  # Event-driven readiness: block on the daemon's own READY/FAILED heartbeat line via `tail -F`
+  # (retries until the log appears), bounded by a literal safety cap. No polling sleeps.
+  timeout 30 grep -m1 -E "MCP_HEADLESS: (READY|FAILED)" <(tail -F -n +1 "$LOG" 2>/dev/null) >/dev/null 2>&1 || true
+  if grep -q "MCP_HEADLESS: READY" "$LOG" 2>/dev/null; then
+    echo "READY: $(grep 'MCP_HEADLESS: READY' "$LOG" | tail -1)"; return 0
+  fi
+  if grep -q "MCP_HEADLESS: FAILED" "$LOG" 2>/dev/null; then
+    echo "FAILED to start; see $LOG" >&2; tail -20 "$LOG" >&2; return 1
+  fi
   echo "timed out waiting for READY; see $LOG" >&2; tail -20 "$LOG" >&2; return 1
 }
 
@@ -76,7 +75,13 @@ do_stop() {
   if ! is_running; then echo "not running"; rm -f "$STOPFILE"; return 0; fi
   echo "stopping (clean) ..."
   touch "$STOPFILE"
-  for _ in $(seq 1 15); do is_running || { echo "stopped"; rm -f "$STOPFILE"; return 0; }; sleep 1; done
+  local stop_pid; stop_pid="$(pgrep -f 'MCPServeHeadless.java' | head -1 || true)"
+  if [[ -n "$stop_pid" ]]; then
+    # Wait (bounded, literal cap) for the daemon to exit after the stop-file is dropped; `tail --pid`
+    # returns the instant the process is gone. No polling sleeps.
+    timeout 20 tail --pid="$stop_pid" -f /dev/null >/dev/null 2>&1 || true
+  fi
+  if ! is_running; then echo "stopped"; rm -f "$STOPFILE"; return 0; fi
   echo "clean stop timed out; killing" >&2
   pkill -f "MCPServeHeadless.java" || true
   rm -f "$STOPFILE"

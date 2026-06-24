@@ -41,7 +41,7 @@ def configure_module_paths(checker) -> None:
     checker.AUTO_LOG_PATH = checker.AUTO_DIR / "log.jsonl"
 
 
-def base_fixture() -> None:
+def base_fixture(cap: int) -> None:
     write_fixture(
         ".auto/measure.sh",
         "#!/usr/bin/env bash\nset -euo pipefail\necho static-only measurement\n",
@@ -54,9 +54,24 @@ def base_fixture() -> None:
         ".auto/runtime_probe.sh",
         "#!/usr/bin/env bash\nset -euo pipefail\nRUNTIME_TIMEOUT_SECONDS=\"${RUNTIME_TIMEOUT_SECONDS:-30}\"\ntrap cleanup_runtime EXIT\nvalidate_runtime_policy\npython3 - \"$RUNTIME_TIMEOUT_SECONDS\" <<'PY'\nprint({\"timeout_seconds\": 30, \"legal_popup_check\": \"native_messagebox_and_packed_asset_tos_fmg_fail_fast\"})\nPY\nscripts/er-readiness-watch.py --fail-on-messagebox-dialog --fail-on-native-legal-popup --max-runtime-seconds \"$RUNTIME_TIMEOUT_SECONDS\"\nsetup_runtime_payload\n",
     )
+    # The required `max_timeout_seconds` literal is derived from the canonical cap reader (the same
+    # source the checker uses), so this fixture can never drift from .auto/runtime_timeout_cap_seconds.
     write_fixture(
         ".auto/runtime_experiment_policy.rego",
-        "package auto.runtime_experiment\nimport rego.v1\ndefault allow := false\nmax_timeout_seconds := 120\nmanual_event_driver_ready if {\n input.readiness_watcher == \"scripts/er-readiness-watch.py\"\n input.no_telemetry_bootstrap_failure == \"window_without_bootstrap_or_task_ready\"\n input.host_input == \"none\"\n input.teardown == \"process_tree_and_save_restore\"\n input.legal_popup_check == \"native_messagebox_and_packed_asset_tos_fmg_fail_fast\"\n input.timeout_seconds <= max_timeout_seconds\n}\nallow if { manual_event_driver_ready }\ndeny contains message if { message := \"runtime probes are disabled fail-closed\" }\n",
+        (
+            "package auto.runtime_experiment\nimport rego.v1\ndefault allow := false\n"
+            f"max_timeout_seconds := {cap}\n"
+            "manual_event_driver_ready if {\n"
+            " input.readiness_watcher == \"scripts/er-readiness-watch.py\"\n"
+            " input.no_telemetry_bootstrap_failure == \"window_without_bootstrap_or_task_ready\"\n"
+            " input.host_input == \"none\"\n"
+            " input.teardown == \"process_tree_and_save_restore\"\n"
+            " input.legal_popup_check == \"native_messagebox_and_packed_asset_tos_fmg_fail_fast\"\n"
+            " input.timeout_seconds <= max_timeout_seconds\n"
+            "}\n"
+            "allow if { manual_event_driver_ready }\n"
+            "deny contains message if { message := \"runtime probes are disabled fail-closed\" }\n"
+        ),
     )
     write_fixture(
         "scripts/er-smoke-driver.sh",
@@ -75,11 +90,13 @@ def main() -> int:
         shutil.rmtree(FIXTURE_ROOT)
     checker = load_checker()
     configure_module_paths(checker)
+    # Single source of truth for the cap, read the same way the checker reads it.
+    cap = checker.MAX_RUNTIME_TIMEOUT_SECONDS
 
-    base_fixture()
+    base_fixture(cap)
     assert_rules(checker, set())
 
-    write_fixture(".auto/runtime-env.slow", "RUNTIME_TIMEOUT_SECONDS=181\n")
+    write_fixture(".auto/runtime-env.slow", f"RUNTIME_TIMEOUT_SECONDS={cap + 1}\n")
     assert_rules(checker, {"runtime-env-timeout-over-cap"})
     (FIXTURE_ROOT / ".auto" / "runtime-env.slow").unlink()
 
@@ -92,14 +109,14 @@ def main() -> int:
         "#!/usr/bin/env bash\n./.auto/runtime_probe.sh\n",
     )
     assert_rules(checker, {"measure-launches-runtime"})
-    base_fixture()
+    base_fixture(cap)
 
     write_fixture(
         ".auto/run_runtime_experiment.sh",
         "#!/usr/bin/env bash\nprintf probe > .auto/run-runtime-once\nexport AUTO_ALLOW_RUNTIME_PROBE=1\nexec ./.auto/measure.sh\n",
     )
     assert_rules(checker, {"runtime-wrapper-arms-launch"})
-    base_fixture()
+    base_fixture(cap)
 
     write_fixture(
         ".auto/runtime_experiment_policy.rego",
@@ -113,14 +130,14 @@ def main() -> int:
             "runtime-policy-missing-disabled-deny",
         },
     )
-    base_fixture()
+    base_fixture(cap)
 
     write_fixture(
         ".auto/runtime_probe.sh",
         "#!/usr/bin/env bash\nset -euo pipefail\ntrap cleanup_runtime EXIT\nvalidate_runtime_policy\nsetup_runtime_payload\n",
     )
     assert_rules(checker, {"runtime-probe-missing-bounded-timeout"})
-    base_fixture()
+    base_fixture(cap)
 
     write_fixture(
         "scripts/er-smoke-driver.sh",

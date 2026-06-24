@@ -117,8 +117,9 @@ def main():
             print(f"  {i}/{len(todo)} done={done}", file=sys.stderr)
             with open(AUTO, "w", encoding="utf-8") as f:   # checkpoint
                 json.dump(auto, f, ensure_ascii=False, indent=2, sort_keys=True)
-        if args.engine == "mymemory" and i < len(todo):
-            time.sleep(args.delay)
+        # (No client-side throttle between MyMemory calls: the no-timeouts scanner forbids time.sleep.
+        # The free endpoint may rate-limit; per-term errors are caught above and the term is left
+        # untranslated. For bulk runs prefer the offline argos engine, which needs no throttle.)
 
     with open(AUTO, "w", encoding="utf-8") as f:
         json.dump(auto, f, ensure_ascii=False, indent=2, sort_keys=True)

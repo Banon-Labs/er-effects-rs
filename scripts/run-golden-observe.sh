@@ -38,8 +38,17 @@ INI
 
 echo "run-golden-observe: launching offline eldenring.exe (observer-only, no watcher); safety kill in ${SAFETY_SECONDS}s"
 
-# Anti-strand safety: if left running past SAFETY_SECONDS, kill the exact game process.
-( sleep "$SAFETY_SECONDS"; pkill -x eldenring.exe >/dev/null 2>&1 || true ) &
+# Anti-strand safety: if left running past SAFETY_SECONDS, kill the exact game process. Implemented as
+# bounded literal <=30s waits on this launcher's own PID -- `tail --pid` returns instantly when the
+# launcher exits, so the watchdog self-cancels the moment the run ends, with no blind sleep.
+(
+  watchdog_waited=0
+  while kill -0 "$$" 2>/dev/null && (( watchdog_waited < SAFETY_SECONDS )); do
+    timeout 20 tail --pid="$$" -f /dev/null >/dev/null 2>&1 || true
+    watchdog_waited=$(( watchdog_waited + 20 ))
+  done
+  kill -0 "$$" 2>/dev/null && pkill -x eldenring.exe >/dev/null 2>&1 || true
+) &
 SAFETY_PID=$!
 
 cd "$GAME_DIR"

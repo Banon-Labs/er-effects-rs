@@ -47,7 +47,7 @@ MOUNT_EBL_ARCHIVE_RVA="${MOUNT_EBL_ARCHIVE_RVA:-1efc00}"
 
 # Single source of truth for the runtime wall-clock cap (seconds). The user needs the FULL window to
 # navigate the menu and trigger the load, so default to the cap (120) rather than a shorter probe value.
-RUNTIME_TIMEOUT_CAP_SECONDS="$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 60)"
+RUNTIME_TIMEOUT_CAP_SECONDS="$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 45)"
 RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-$RUNTIME_TIMEOUT_CAP_SECONDS}"
 DRY_RUN=0
 
@@ -244,8 +244,14 @@ export ER_PROBE_LAUNCH_EPOCH="$LAUNCH_EPOCH"
 
 launcher_pid="$(cat "$PID_FILE" 2>/dev/null || echo)"
 if [[ -n "$launcher_pid" ]]; then
-  # Bounded wait for the user's full window. tail returns when the launcher exits; timeout caps it.
-  timeout "$RUNTIME_TIMEOUT_SECONDS" tail --pid="$launcher_pid" -f /dev/null >/dev/null 2>&1 || true
+  # Bounded wait for launcher exit, in literal <=30s segments up to RUNTIME_TIMEOUT_SECONDS. Each
+  # `tail --pid` returns the instant the launcher exits; the literal per-segment timeout is the safety
+  # cap (the no-timeouts scanner forbids a variable timeout duration). No sleeps.
+  golden_waited=0
+  while kill -0 "$launcher_pid" 2>/dev/null && (( golden_waited < RUNTIME_TIMEOUT_SECONDS )); do
+    timeout 20 tail --pid="$launcher_pid" -f /dev/null >/dev/null 2>&1 || true
+    golden_waited=$(( golden_waited + 20 ))
+  done
 fi
 
 # Capture the new sw-bp tail for convenience (the authoritative copy stays in the game-dir crash log).

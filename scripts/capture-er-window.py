@@ -79,7 +79,10 @@ def main() -> int:
     addr = w.get("address")
     ws = w.get("workspace")
     ws_id = ws.get("id") if isinstance(ws, dict) else ws
-    for _attempt in range(3):
+    # Re-query after each focus dispatch until the window reports topmost (focusHistoryID == 0),
+    # bounded by a fixed attempt count. Each hyprctl subprocess call is synchronous (timeout=10) and
+    # the re-query itself spawns hyprctl, so the loop paces on real IPC latency -- no sleep needed.
+    for _attempt in range(24):
         try:
             if ws_id is not None:
                 subprocess.run([hyprctl, "dispatch", "workspace", str(ws_id)], capture_output=True, timeout=10)
@@ -88,7 +91,6 @@ def main() -> int:
                 subprocess.run([hyprctl, "dispatch", "alterzorder", f"top,address:{addr}"], capture_output=True, timeout=10)
         except Exception:
             pass
-        time.sleep(0.5)
         w2 = find_er(hypr_clients(hyprctl))
         if w2:
             w = w2

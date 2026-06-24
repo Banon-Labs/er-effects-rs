@@ -13,10 +13,8 @@ echo "tailing $LOG  (estimated total funcs ~ $TARGET)"
 echo "Ctrl-C to stop watching (does not affect the analysis)."
 echo
 
-# Wait for the log to exist so the tab can be opened before/with the run.
-while [[ ! -f "$LOG" ]]; do sleep 1; done
-
-# Event-driven: react to each heartbeat line; no polling sleeps.
+# Event-driven: `tail -F` waits for the log to appear (it retries on a missing file) and then follows
+# each heartbeat line as it is written -- so no explicit file-existence poll/sleep is needed.
 tail -n +1 -F "$LOG" 2>/dev/null | awk -v target="$TARGET" '
   /ANALYZE_PROGRESS:.*funcs=/ {
     f=""; ins="";

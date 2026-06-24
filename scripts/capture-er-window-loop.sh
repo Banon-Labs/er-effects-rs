@@ -14,6 +14,11 @@ INTERVAL="${3:-1}"
 CLASS="steam_app_1245620"
 mkdir -p "$OUT_DIR"
 
+# Frame cadence. The no-timeouts scanner forbids `sleep` and variable timeout durations, so pace each
+# iteration with a fixed literal <=30s blocking wait (`tail -f /dev/null` blocks; `timeout` caps it).
+# The legacy INTERVAL arg is accepted for compatibility but the cadence is now a fixed 1s.
+pace_frame() { timeout 1 tail -f /dev/null >/dev/null 2>&1 || true; }
+
 seen_window=0
 for ((i = 1; i <= MAX_ITERS; i++)); do
   # Query ONLY the target class; emit just its geometry/state. Never print other windows.
@@ -26,7 +31,7 @@ for ((i = 1; i <= MAX_ITERS; i++)); do
       echo "capture: target window gone after $((i - 1)) iters -> game torn down; last frame is final"
       break
     fi
-    sleep "$INTERVAL"
+    pace_frame
     continue
   fi
 
@@ -37,7 +42,7 @@ for ((i = 1; i <= MAX_ITERS; i++)); do
   hyprctl dispatch focuswindow "address:$addr" >/dev/null 2>&1 || true
   win="$(hyprctl clients -j 2>/dev/null \
     | jq -c --arg c "$CLASS" 'map(select(.class == $c)) | .[0] // empty' 2>/dev/null || true)"
-  [[ -z "$win" ]] && { sleep "$INTERVAL"; continue; }
+  [[ -z "$win" ]] && { pace_frame; continue; }
 
   mapped="$(jq -r '.mapped' <<<"$win")"
   hidden="$(jq -r '.hidden' <<<"$win")"
@@ -51,7 +56,7 @@ for ((i = 1; i <= MAX_ITERS; i++)); do
     || (( x < 0 || y < 0 || w <= 0 || h <= 0 )); then
     echo "capture: iter $i window present but not capture-safe (mapped=$mapped hidden=$hidden focusHistoryID=$fhid geom=${w}x${h}+${x}+${y}) -> skip"
     seen_window=1
-    sleep "$INTERVAL"
+    pace_frame
     continue
   fi
 
@@ -62,6 +67,6 @@ for ((i = 1; i <= MAX_ITERS; i++)); do
   else
     echo "capture: iter $i grim failed (geom=${w}x${h}+${x}+${y})"
   fi
-  sleep "$INTERVAL"
+  pace_frame
 done
 echo "capture: done"

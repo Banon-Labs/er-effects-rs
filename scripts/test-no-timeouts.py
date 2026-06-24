@@ -65,6 +65,11 @@ def main() -> int:
         ("bad-js-timer.ts", "setTimeout(resolve, 1);\n", {"js-timer-api"}),
         ("bad-ci.yml", "jobs:\n  check:\n    timeout-minutes: 1\n", {"yaml-timeout-minutes-over-30-seconds"}),
         ("good-read.sh", "#!/usr/bin/env bash\nwhile IFS= read -r line; do printf '%s\\n' \"$line\"; done\n", set()),
+        # A bare `read -r` next to a `-type` operand must not trip the read-timeout rule (the `-t`
+        # substring of `-type` is not a `read -t` flag).
+        ("good-find-read.sh", "#!/usr/bin/env bash\nfind . -type f | while IFS= read -r f; do echo \"$f\"; done\n", set()),
+        # subprocess.Popen takes no timeout= kwarg (timeout belongs on .communicate()/.wait()).
+        ("good-popen.py", "import subprocess\np = subprocess.Popen(['x'], stdout=subprocess.PIPE)\n", set()),
         ("good-rust.rs", "fn f() { std::thread::yield_now(); let _interval = Duration::from_millis(250); }\n", set()),
         ("good-python.py", "event.wait(); process.wait()\n", set()),
         ("good-js.ts", "await readiness; emitter.once('ready', resolve);\n", set()),

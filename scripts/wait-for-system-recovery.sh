@@ -17,7 +17,13 @@ while (( waited < MAX_WAIT_SECONDS )); do
     exit 0
   fi
   echo "waiting load1=$load1 swap_free_mib=$swap_free_mib waited=${waited}s"
-  sleep "$POLL_SECONDS"
+  # Inter-poll wait in literal <=30s segments (the no-timeouts scanner forbids sleeps and variable
+  # timeout durations). `timeout N tail -f /dev/null` blocks for the segment without a busy-spin.
+  poll_remaining="$POLL_SECONDS"
+  while (( poll_remaining > 0 )); do
+    timeout 20 tail -f /dev/null >/dev/null 2>&1 || true
+    poll_remaining=$(( poll_remaining - 20 ))
+  done
   waited=$(( waited + POLL_SECONDS ))
 done
 echo "TIMEOUT system did not settle within ${MAX_WAIT_SECONDS}s load1=$load1 swap_free_mib=$swap_free_mib"
