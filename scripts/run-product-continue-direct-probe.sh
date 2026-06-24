@@ -281,9 +281,50 @@ printf '%s\n' "$LAUNCH_EPOCH" > "$ARTIFACT_DIR/launch-epoch.txt"
 # present-blocks like an occluded host window would). We DRIVE AND OBSERVE the run entirely via
 # in-process RAM telemetry oracles -- gamescope headless cannot be screenshotted and we do not need it
 # to: the oracles are the ground truth (see the title/menu state oracles in telemetry). Requires gamescope.
-command -v gamescope >/dev/null 2>&1 || fatal "gamescope not in PATH (required for the offscreen render)"
-gamescope_prefix=(gamescope --backend headless -W "${GAMESCOPE_W:-1280}" -H "${GAMESCOPE_H:-720}" -r "${GAMESCOPE_FPS:-30}" --)
-echo "render: gamescope headless (offscreen; observed via in-process telemetry oracles, not screenshots)"
+# RUNTIME_ONSCREEN=1: render to a REAL on-screen window (drop gamescope headless) so a human can WATCH
+# the zero-input autoload and TEST the loaded character. The DLL's input block auto-releases in-world
+# (IN_WORLD_REACHED), so the user takes control once the character is in the world. Default is the
+# offscreen headless render (oracle-observed, never on the user's monitor).
+if [[ "${RUNTIME_ONSCREEN:-0}" == "1" ]]; then
+  gamescope_prefix=()
+  echo "render: ON-SCREEN direct Proton window (RUNTIME_ONSCREEN=1) -- watch + test; input block releases in-world"
+else
+  command -v gamescope >/dev/null 2>&1 || fatal "gamescope not in PATH (required for the offscreen render)"
+  gamescope_prefix=(gamescope --backend headless -W "${GAMESCOPE_W:-1280}" -H "${GAMESCOPE_H:-720}" -r "${GAMESCOPE_FPS:-30}" --)
+  echo "render: gamescope headless (offscreen; observed via in-process telemetry oracles, not screenshots)"
+fi
+
+# RUNTIME_NO_TEARDOWN=1: run the game in the FOREGROUND of this launcher (which a human runs detached,
+# e.g. via the agent's background mode) and do NOT run the readiness watcher. Proton's `run` tears the
+# wine tree down if its parent dies, so we must stay as the game's parent for its whole lifetime --
+# backgrounding and exiting kills it (observed). The zero-input autoload then runs on the user's
+# monitor; the DLL input block releases in-world so the user takes over. Tear down with
+# `pkill -x eldenring.exe` (or quit the game). Save-safe: the gold is only read; writes go to the
+# isolated staged copy / pre-wiped default dir, never save-files/...).
+if [[ "${RUNTIME_NO_TEARDOWN:-0}" == "1" ]]; then
+  echo "$$" > "$PID_FILE"
+  echo ""
+  echo "============================================================================"
+  echo " ON-SCREEN WATCH RUN -- NO AUTO-TEARDOWN (RUNTIME_NO_TEARDOWN=1)"
+  echo " Booting Elden Ring on your monitor (~30s to title+load). The zero-input"
+  echo " autoload opens the menu + Continues the gold character; the input block"
+  echo " releases once you are in the world, then you can play."
+  echo " Telemetry: $TELEMETRY_PATH"
+  echo " Debug log: $AUTOLOAD_DEBUG_PATH"
+  echo " TEAR DOWN when done:  pkill -x eldenring.exe"
+  echo "============================================================================"
+  cd "$GAME_DIR"
+  # exec -> this launcher BECOMES the foreground Proton process; it holds the game until quit.
+  exec env \
+    STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_COMPAT_CLIENT_INSTALL_PATH" \
+    STEAM_COMPAT_DATA_PATH="$STEAM_COMPAT_DATA_PATH" \
+    ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" \
+    ER_EFFECTS_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" \
+    ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
+    ER_EFFECTS_CRASH_LOG_PATH="$CRASH_LOG_PATH" \
+    ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" \
+    "$PROTON" run "$GAME_DIR/eldenring.exe" > "$ARTIFACT_DIR/proton-run.out" 2>&1
+fi
 
 (
   cd "$GAME_DIR"
