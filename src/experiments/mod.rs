@@ -649,25 +649,6 @@ struct TitleDialogState {
     menu_opened_latch: usize,
 }
 
-/// PATH B readiness gate for the native Continue node -- mirror of `title_menu_action_ready` but for
-/// the **Continue** (load-most-recent) MenuMemberFuncJob whose member-fn chains to the native
-/// Continue wrapper (`TRACE_MENU_CONTINUE_WRAPPER_RVA`) instead of the Load-Game dialog factory.
-/// Validates: live TitleTopDialog vtable, [dialog+0xa48] in-image registry, the Continue node's
-/// MenuMemberFuncJob vtable, and the member-fn -> Continue-wrapper thunk chain. Returns the fully
-/// populated `MenuActionNode` (reusing the same struct as Load-Game) so `native_continue_tick` can
-/// fire run 0x1409aaba0 against it with full node telemetry.
-/// CONTINUE-READINESS SEMAPHORE (oracle, no screenshot needed). The furthest stage the Continue-action
-/// readiness chain reached this frame -- so "why didn't Continue fire" is answerable from RAM telemetry:
-///   0 no menu-holder | 1 holder present | 2 holder IS TitleTopDialog | 3 row-registry valid
-///   | 4 a Continue node found in the dialog | 5 node vtable is MemberFuncJob | 6 member_fn present
-///   | 7 member_fn->Continue-wrapper chain validated (READY to fire).
-/// Stuck at 3 with CONTINUE_SCAN_NODE_HITS==0 == the dialog is the title menu but its item LIST is
-/// EMPTY (not built) -- the actual current blocker. CONTINUE_DIALOG_VT_SEEN = the active holder's
-/// vtable (identifies WHICH screen is up when stage<2 -- e.g. a modal instead of the title menu).
-pub(crate) static CONTINUE_READY_STAGE: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static CONTINUE_SCAN_NODE_HITS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static CONTINUE_DIALOG_VT_SEEN: AtomicUsize = AtomicUsize::new(0);
-
 /// OWN-THE-STEPPER step 2 (the load driver): runs IN-CONTEXT at idx10 (STEP_MenuJobWait,
 /// rcx=owner, rdx=FD4Time) as a real FD4 step. After letting the boot settle to the
 /// stable press-any-button state, it drives the game's OWN load: SetState(3=BeginTitle)
@@ -745,13 +726,13 @@ pub(crate) unsafe extern "system" fn own_stepper_idx10(owner: usize, framectx: u
     // world-stream telemetry are written as the FULL native load (parse+stream+spawn) runs. Pure
     // read-only until the one-shot fire; NO SetState forcing.
     if native_continue_enabled() {
-        unsafe { native_continue_tick(owner, base, n) };
-        // Per-frame world-stream telemetry (pure reads, save-safe). native_continue_tick's one-shot
-        // latch fast-forwards to FIRED after the Continue run fires, so this runs EVERY native_continue
-        // frame -- including all the post-fire loading-screen frames where the title owner is still
-        // ticked -- publishing the deepest world-load pump values (mms_state, block_count,
-        // io_inflight, player_present) so a probe log shows whether the world STREAMS (mms_state
-        // advancing past 3, player_present=true) after the Continue fire. Gated to native_continue.
+        // native_continue's Continue-node scan/fire was DEAD CODE: the continue-scan never found the
+        // node (found_continue_node=0x0 every frame). The zero-input load actually fires via
+        // pab-advance + title-accept-byte natural menu-open (verified 2026-06-24,
+        // autoload-zero-input-world-reached-validated). Keep only the save-not-loaded watchdog (aborts
+        // if the gold never loads) + per-frame world-stream telemetry (mms_state/block_count/
+        // io_inflight/player_present), then pass through so the NATIVE title machine advances untouched.
+        unsafe { save_load_watchdog() };
         unsafe { own_load_stream_telemetry(base, gm, owner, n) };
         pass_through(false);
         return;

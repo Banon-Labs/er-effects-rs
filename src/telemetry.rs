@@ -1165,23 +1165,10 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
     body.push_str(&format!(
         "  \"oracle_privacy_policy_gate\": {privacy_policy_gate},\n"
     ));
-    // CONTINUE-READINESS SEMAPHORE (answers "why didn't Continue fire" from RAM, no screenshot): the
-    // furthest stage the native Continue-action chain reached (0..7; see CONTINUE_READY_STAGE doc), the
-    // count of MenuMemberFuncJob nodes in the active title dialog (0 = the menu item list is EMPTY/not
-    // built -- the current blocker), and the active menu-holder's vtable (identifies WHICH screen is up
-    // when the stage is <2, e.g. a modal vs the title menu).
-    body.push_str(&format!(
-        "  \"oracle_continue_ready_stage\": {},\n",
-        crate::experiments::CONTINUE_READY_STAGE.load(Ordering::SeqCst)
-    ));
-    body.push_str(&format!(
-        "  \"oracle_continue_scan_node_hits\": {},\n",
-        crate::experiments::CONTINUE_SCAN_NODE_HITS.load(Ordering::SeqCst)
-    ));
-    body.push_str(&format!(
-        "  \"oracle_continue_dialog_vt\": \"{:#x}\",\n",
-        crate::experiments::CONTINUE_DIALOG_VT_SEEN.load(Ordering::SeqCst)
-    ));
+    // oracle_continue_ready_stage / _scan_node_hits / _dialog_vt REMOVED 2026-06-24: they were the
+    // diagnostic for the native_continue Continue-node scan (CONTINUE_READY_STAGE/SCAN_NODE_HITS/
+    // DIALOG_VT_SEEN), which was ripped out as dead code -- the scan never found the node and the
+    // zero-input load fires via pab-advance + title-accept-byte instead.
 }
 
 pub(crate) fn telemetry_path() -> PathBuf {
