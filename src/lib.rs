@@ -3700,13 +3700,23 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 }
                 // GOLDEN-PATH zero-input boot -> open menu (DECOUPLED from fire_tfc_continue): the
                 // readiness-gated press-any-button advance (hook 0x1407ad1c0 -> set [job+0x1e8]=2)
-                // gets PAST press-any-button with no input, then maybe_auto_open_menu opens the main
-                // menu -- with NO selector fire, so an observe run can reach the menu cleanly. bd
+                // gets PAST press-any-button with no input, then the menu opens with NO selector fire,
+                // so an observe run can reach the menu cleanly. bd
                 // press-any-button-golden-lever-job1e8-readiness-2026-06-23.
+                //
+                // The menu OPEN is driven the NATIVE way: set the decoded global accept byte
+                // 0x144589bdc=1 once at the settled title so the game's OWN TitleTopDialog::update
+                // accept-gate runs the open-menu registrar in its native frame -- which POSTS the
+                // Continue/Load/NewGame MenuJob chain AND drains it (MenuWindow::Update) in the same
+                // flow, so the rows actually build. A direct registrar self-fire (maybe_auto_open_menu)
+                // only POSTED the chain; the native update does not drain a chain it did not open, so
+                // the rows never built (continue-scan = 0 nodes, stage 3). Zero-input (decoded accept
+                // flag, not a synthesized event). bd er-effects-rs-e9e + rowbuild-mechanism-incontext-
+                // openmenu-2026-06-23.
                 if pab_advance_enabled() {
                     if let Ok(base) = game_module_base() {
                         unsafe { install_pab_advance_hook(base) };
-                        unsafe { maybe_auto_open_menu(base) };
+                        unsafe { maybe_set_title_accept_byte(base) };
                     }
                 }
                 // OFFLINE connection-state lever (milestone-3 fix): force GameMan+0xBC8/0xBC9 = 0 each

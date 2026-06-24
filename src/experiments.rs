@@ -3917,6 +3917,66 @@ pub(crate) unsafe fn maybe_auto_open_menu(base: usize) {
     ));
 }
 
+/// Zero-input NATURAL menu-open (the row-building path). At the parked press-any-button title
+/// (TitleTopDialog settled in "Loop", menu not yet open a40==0), set the decoded global menu-accept
+/// byte 0x144589bdc=1 ONCE so the game's OWN `TitleTopDialog::update` accept-gate runs the open-menu
+/// registrar in its NATIVE frame -- which POSTS the Continue/Load/NewGame MenuJob chain AND drains it
+/// (MenuWindow::Update 0x140745520) in the same native flow, so the rows actually BUILD. A direct
+/// registrar self-fire (`maybe_auto_open_menu`) only POSTS the chain; the native update does not drain
+/// a chain it did not open itself, so the rows never build (continue-scan = 0 nodes; bd
+/// rowbuild-mechanism-incontext-openmenu-2026-06-23 + title-global-accept-byte-144589bdc). This is the
+/// decoded accept FLAG the input pipeline sets on press -- NOT a synthesized DInput/keystate/XInput
+/// event -> still `simulated_button_presses_total == 0`. Save-safe (menu-UI build, no save write). The
+/// ToS/language over-trigger this byte caused in 2026-06 is now neutralized by the offline-mode +
+/// Menu_IsEnableOnlineMode patches, so it should reach the main menu cleanly; the msgbox/policy oracles
+/// will catch any regression. One-shot via TITLE_ACCEPT_BYTE_GATE_FIRED, latched only after the gating
+/// passes so a not-yet-settled title does not consume the shot.
+pub(crate) unsafe fn maybe_set_title_accept_byte(base: usize) {
+    if TITLE_ACCEPT_BYTE_GATE_FIRED.load(Ordering::SeqCst) {
+        return;
+    }
+    let Some(owner_ptr) = (unsafe { title_owner(base) }) else {
+        return;
+    };
+    let owner = owner_ptr as usize;
+    let dialog = unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(0);
+    let dialog_vt = if dialog != 0 {
+        unsafe { safe_read_usize(dialog) }.unwrap_or(0)
+    } else {
+        0
+    };
+    if dialog == 0 || dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+        return;
+    }
+    // Only at the parked press-any-button (menu not yet open): a40 latch == 0.
+    let a40 = unsafe { safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }
+        .map(|v| v & TITLE_TOP_DIALOG_LATCH_BYTE_MASK)
+        .unwrap_or(1);
+    if a40 != OWN_STEPPER_MENU_OPENED_NO {
+        TITLE_ACCEPT_BYTE_GATE_FIRED.store(true, Ordering::SeqCst); // already open -> nothing to do
+        return;
+    }
+    // Require the dialog SETTLED in Loop so the native update's accept-gate consumes our byte on its
+    // next tick (read-only probe of the live state by name, no side effects).
+    let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
+    let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
+        unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
+    let in_loop = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
+    if !in_loop {
+        return;
+    }
+    if TITLE_ACCEPT_BYTE_GATE_FIRED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    unsafe {
+        *((base + TITLE_GLOBAL_ACCEPT_BYTE_RVA) as *mut u8) = TITLE_PROCEED_GATE_SET_VALUE;
+    }
+    append_autoload_debug(format_args!(
+        "title-accept-byte: set [0x{:x}]=1 on settled TitleTopDialog (Loop, a40==0) -- zero-input NATURAL menu-open (registrar runs in native update frame -> Continue/Load/NewGame rows build + drain)",
+        base + TITLE_GLOBAL_ACCEPT_BYTE_RVA
+    ));
+}
+
 /// One-shot log latch for `force_offline_connection_bytes` (only logs the first 1->0 clear).
 pub(crate) static FORCE_OFFLINE_BYTES_CLEARED: AtomicUsize = AtomicUsize::new(0);
 
