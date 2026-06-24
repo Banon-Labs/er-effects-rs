@@ -25,7 +25,12 @@ from runtime_timeout_cap import runtime_timeout_cap_seconds
 DEFAULT_RUNTIME_PROCESS_PATTERN = r"(?:^|[/\\])(eldenring\.exe|start_protected_game\.exe)(?:\s|$)"
 DEFAULT_WINDOW_CLASS = "steam_app_1245620"
 DEFAULT_SPAWN_POLL_BUDGET = 4096
-DEFAULT_READINESS_POLL_BUDGET = 8192
+# 16384, not 8192: the fast readiness poll loop (~hundreds/s) exhausted 8192 polls at ~29s -- BEFORE
+# the 45s time deadline -- so a world that finished loading at ~27s could not accumulate its 5s
+# world-stable dwell before the budget ran out (ready=False with a fully-loaded character). The poll
+# budget is only a runaway backstop; the real bound is --max-runtime-seconds (the time deadline still
+# binds first at 45s). Raising the COUNT lets the time cap bind -- it does NOT raise the runtime cap.
+DEFAULT_READINESS_POLL_BUDGET = 16384
 DEFAULT_WINDOW_STALE_POLL_BUDGET = 4096
 DEFAULT_AUTOLOAD_ATTEMPT_BUDGET = 300
 DEFAULT_POST_REQUEST_TICK_BUDGET = 300
@@ -1961,6 +1966,14 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
     next_save_data_popup_check_at = 0.0
     last_world_stable_tick: int | None = None
     world_stable_since: float | None = None
+    # The expected-animation oracle confirms a GENUINE fresh load by the appear/spawn animation (e.g.
+    # 4050). That is a TRANSIENT signal: the character plays it for a moment at spawn, then idles, so
+    # current_animation_id stops matching. Requiring it on every world-stable dwell poll would flip the
+    # world-loaded oracle false the instant the spawn animation ends, resetting the 5s dwell forever
+    # (observed: world reached + grounded + stable mms_state for 12s yet world_stable_samples stayed 0).
+    # Latch that the appear animation WAS observed once (correctness satisfied), then stop requiring it
+    # for the dwell -- a player standing idle in the loaded world IS the playable world.
+    appear_animation_seen = args.expected_animation_id is None
     # World-stream stall semaphore state: a monotonic progress watermark and the monotonic time it
     # last improved. Both stay None until the OWN-LOAD map-load arms (continue fired + block present).
     world_stream_watermark: tuple[int, int, int, int, int] | None = None
@@ -2307,7 +2320,16 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
                     )
                 )
         if args.target == TARGET_WORLD_STABLE:
-            if process_running and telemetry_world_loaded(telemetry, expected_save_oracle, args.expected_animation_id):
+            if (
+                not appear_animation_seen
+                and telemetry is not None
+                and telemetry_expected_animation_match(telemetry, args.expected_animation_id)
+            ):
+                appear_animation_seen = True
+            # Once the appear animation has been confirmed once, drop it from the per-poll world-loaded
+            # gate so the dwell measures sustained in-world stability, not the transient spawn animation.
+            effective_expected_animation_id = None if appear_animation_seen else args.expected_animation_id
+            if process_running and telemetry_world_loaded(telemetry, expected_save_oracle, effective_expected_animation_id):
                 # The world-loaded semaphore is reached HERE (first true), so this is the headline
                 # launch->world delta -- recorded before the dwell/visual confirmation wait.
                 timing.mark("t_world_stable")
@@ -2344,7 +2366,15 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
                             expected_animation_id=args.expected_animation_id,
                         )
                     )
-            else:
+            elif telemetry is not None:
+                # Reset the world-stable dwell ONLY on a GENUINE not-loaded read (telemetry present but
+                # the world-loaded oracle is false). A transient None telemetry -- the fast poll loop
+                # (~hundreds/s) caught a partial write while the DLL flushed er-effects-telemetry.json,
+                # so read_json returned None -- is NOT evidence the world unloaded. Resetting on it
+                # prevented headless world-stable from ever accumulating its 5s dwell even though the
+                # in-process oracles showed a stable in-world character the whole time. The oracles are
+                # the primary detector (gamescope headless cannot be screenshotted); a failed file read
+                # must not masquerade as a world-unload. bd accept-byte-gold-load-world-reached-2026-06-23.
                 world_stable_samples = 0
                 last_world_stable_tick = None
                 world_stable_since = None
