@@ -247,6 +247,12 @@ else
   STAGED_SAVE="$STAGED_SAVE_DIR/ER0000.sl2"
   mkdir -p "$STAGED_SAVE_DIR"
   cp -f "$GOLD_SAVE" "$STAGED_SAVE"
+  # A real user's save is WRITABLE; our gold sources are deliberately read-only to protect them, and
+  # `cp` inherits that bit. The title-flow "Updating save data" step writes the save (autosave/backup),
+  # so a read-only staged copy makes it fail -> "Failed to save game. Save data is corrupted." popup
+  # (bd offline-notice-fix-works-revealed-save-update-gate-2026-06-23). Make the ISOLATED staged copy
+  # writable so that write lands on the copy (save-safe: the user's gold is never touched).
+  chmod u+w "$STAGED_SAVE"
   export ER_EFFECTS_SAVE_FILE="$STAGED_SAVE"
   # Steer the native Continue (most-recent) path to the gold character's slot: the DLL calls the
   # game's set_save_slot(GOLD_SLOT) before firing Continue so continue_load(-1) resolves to it. Unset

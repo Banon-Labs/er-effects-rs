@@ -502,13 +502,18 @@ pub(crate) const TITLE_STEP_MENU_JOB_WAIT: i32 = TitleStepState::MenuJobWait as 
 /// game's own SetState, not input synthesis). CAVEAT: STEP_BeginLogo hard-asserts the session
 /// singleton 0x144588e98 at entry (0x140b0c2c3); only SetState(2) when that is non-null.
 pub(crate) const TITLE_STEP_BEGIN_LOGO: i32 = TitleStepState::BeginLogo as i32;
-/// STEP_BeginLogo list-build gate at [owner+0xb8]. STEP_BeginLogo 0x140b0c2a0 builds the FULL
-/// main-menu list (Continue / Load-Game d180 / New Game / Settings / Quit) into owner+0xe0 via
-/// the list builder 0x14081f180 ONLY when [owner+0xb8]==0; if it is SET, BeginLogo short-circuits
-/// (@0x140b0c356) straight to SetState(3) and SKIPS the list build -- producing only the 3 title
-/// composition items (BackScreen/Caption/dialog). That is why our prior SetState(2) never built
-/// the main menu. We clear this gate before SetState(2) so BeginLogo runs the full build
-/// (zero-input, menu-UI only -> save-safe). bd mainmenu-item-builder-into-iterator-tree-2026.
+/// STEP_BeginLogo splash gate at [owner+0xb8]. CORRECTED 2026-06-23 (2 independent Ghidra REs +
+/// deobf disasm, bd `beginlogo-builds-LOGO-not-menu-REFUTES-bd-2026-06-23`): 0x14081f180 builds the
+/// boot LOGO/LEGAL SPLASH chain (05_905_Logo_Copyright / 05_900_Logo_FromSoft / 05_901_Logo_BNE /
+/// 05_902_Logo_ESRB / 05_903_Warn_IllegalCopy), NOT the Continue/Load/NewGame menu. STEP_BeginLogo
+/// 0x140b0c2a0 branches at 0x140b0c356 (`cmpb 0,[owner+0xb8]; je 0x140b0c3b2`): [0xb8]==0 -> 0x3b2 =
+/// play logos (call 0x14081f180) then commit to owner+0x130 + SetState(10); [0xb8]!=0 -> SetState(3)
+/// = STEP_BeginTitle, which SKIPS the logos and is what actually builds the Scaleform `05_000_Title`
+/// menu (builder 0x14081f9f0). The splash-skip patch (0xb0c35d je->jg) makes [0xb8]==0 fall through to
+/// SetState(3), so splash-skip ALREADY routes to the menu builder -- do NOT clear this gate + SetState(2)
+/// to "build the menu" (that just replays the logos). The real continue-blocker is the offline-mode
+/// notice popup; see bd `menu-open-3rd-popup-offline-mode-notice-2026-06-23`. Field kept for the (now
+/// deprecated) own_stepper SetState(2) path only.
 pub(crate) const TITLE_OWNER_BEGINLOGO_LIST_GATE_B8_OFFSET: usize =
     core::mem::offset_of!(TitleOwnerLayout, beginlogo_list_gate);
 /// Cleared value (0) for the BeginLogo list-build gate [owner+0xb8].
@@ -2106,6 +2111,21 @@ pub(crate) const USERINDEX_FORCE_STUB: [u8; 3] = [0x31, 0xc0, 0xc3]; // xor eax,
 /// (return "not ready") makes the flow take the clean OFFLINE fork and NEVER attempt online.
 /// Same 3-byte stub; first byte 0x48 (verified disasm). Applied with the getter patch.
 pub(crate) const ONLINE_PREDICATE_DISABLE_RVA: usize = 0xcab230;
+/// MENU OFFLINE-NOTICE GATE -- the THIRD menu-open popup, root-caused 2026-06-23
+/// (bd `menu-open-3rd-popup-offline-mode-notice-2026-06-23`, Ghidra RE `er-effects-rs-yvf`).
+/// `Menu_IsEnableOnlineMode` (deobf 0x140e56310) is a lazy-init cached getter that DEFAULTS TRUE. The
+/// TitleTopDialog ctx-init step (0x14082d0d0) computes
+/// `TitleFlowContext->notReleaseFlag55 (+0x18C) = !Menu_IsEnableOnlineMode()`. With the getter TRUE and the
+/// boot offline, `notReleaseFlag55 == 0` routes the title-flow offline step (0x14082fda0) into building the
+/// "Starting in offline mode" `GR_System_Message` (id 401170) `CS::MessageBoxDialog` -- which BLOCKS the
+/// Continue/Load/NewGame row build (the stage-3 / 0-node continue-readiness wall). Patching this getter to
+/// `xor eax,eax; ret` (return false) makes the game's OWN ctx-init set `notReleaseFlag55 = 1` every time it
+/// runs, so the offline step takes the clean no-popup branch and the menu rows build with ZERO MessageBoxDialog
+/// builds. Race-free (re-evaluated on each ctx-init, unlike a one-shot field poke). Applied with the
+/// IsOnlineMode getter patch (offline-gated -> Seamless online is unaffected). Verified prologue first byte 0x40
+/// (`push rbx`; deobf disasm). Reuses `ONLINE_DISABLE_STUB` (`xor eax,eax; ret`).
+pub(crate) const MENU_ONLINE_MODE_DISABLE_RVA: usize = 0xe56310;
+pub(crate) const MENU_ONLINE_MODE_EXPECTED_FIRST: u8 = 0x40;
 /// AUTO-ACCEPT every `CS::MessageBoxDialog` popup that appears BEFORE the character is in-world
 /// (connection-error, EULA, warnings, "save data" notices, ...), so the headless autoload never
 /// stops on a startup modal. We hook the dialog's finished-poll getter 0x1407b0cf0

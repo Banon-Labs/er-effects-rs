@@ -10049,6 +10049,23 @@ pub(crate) fn apply_online_disable() {
     // patch (0x140cab230) was REVERTED -- it did not prevent the modal (the offline fork shows it
     // too) AND it broke the OnDecide OK-dispatch (the modal stuck instead of proceeding).
     apply_xor_ret_stub(base, ONLINE_DISABLE_RVA, "IsOnlineMode getter");
+    // The THIRD menu-open popup ("Starting in offline mode", GR_System_Message 401170) is gated by
+    // TitleFlowContext->notReleaseFlag55 = !Menu_IsEnableOnlineMode(). Force that getter false so the
+    // game's own ctx-init (0x14082d0d0) writes notReleaseFlag55=1 each time, the title-flow offline step
+    // (0x14082fda0) takes the clean no-popup branch, and the Continue/Load/NewGame rows build with ZERO
+    // MessageBoxDialog builds. Race-free + offline-gated (Seamless online unaffected). bd
+    // menu-open-3rd-popup-offline-mode-notice-2026-06-23 / er-effects-rs-yvf.
+    let menu_online_off = patch_3byte_stub(
+        base,
+        MENU_ONLINE_MODE_DISABLE_RVA,
+        MENU_ONLINE_MODE_EXPECTED_FIRST,
+        ONLINE_DISABLE_STUB,
+        "menu-online-mode-disable",
+    );
+    append_autoload_debug(format_args!(
+        "online-disable: Menu_IsEnableOnlineMode@0x{:x} patched ok={menu_online_off} -> xor eax,eax;ret (notReleaseFlag55 becomes 1 -> no 'Starting in offline mode' popup -> title rows build)",
+        base + MENU_ONLINE_MODE_DISABLE_RVA
+    ));
     let _ = ONLINE_PREDICATE_DISABLE_RVA;
 }
 
