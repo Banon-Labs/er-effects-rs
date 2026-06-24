@@ -7438,6 +7438,9 @@ unsafe fn scan_dialog_for_continue(owner: usize, base: usize) -> Option<usize> {
         }
         q += QW_STEP;
     }
+    // Semaphore: number of MenuMemberFuncJob nodes in the dialog. 0 == the title menu's item LIST is
+    // empty/not-built (the current Continue-fire blocker) -- exposed as oracle_continue_scan_node_hits.
+    CONTINUE_SCAN_NODE_HITS.store(hits, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "continue-scan: done hits={hits} found_continue_node=0x{:x}",
         found_continue_node.unwrap_or(NULL)
@@ -7452,27 +7455,46 @@ unsafe fn scan_dialog_for_continue(owner: usize, base: usize) -> Option<usize> {
 /// MenuMemberFuncJob vtable, and the member-fn -> Continue-wrapper thunk chain. Returns the fully
 /// populated `MenuActionNode` (reusing the same struct as Load-Game) so `native_continue_tick` can
 /// fire run 0x1409aaba0 against it with full node telemetry.
+/// CONTINUE-READINESS SEMAPHORE (oracle, no screenshot needed). The furthest stage the Continue-action
+/// readiness chain reached this frame -- so "why didn't Continue fire" is answerable from RAM telemetry:
+///   0 no menu-holder | 1 holder present | 2 holder IS TitleTopDialog | 3 row-registry valid
+///   | 4 a Continue node found in the dialog | 5 node vtable is MemberFuncJob | 6 member_fn present
+///   | 7 member_fn->Continue-wrapper chain validated (READY to fire).
+/// Stuck at 3 with CONTINUE_SCAN_NODE_HITS==0 == the dialog is the title menu but its item LIST is
+/// EMPTY (not built) -- the actual current blocker. CONTINUE_DIALOG_VT_SEEN = the active holder's
+/// vtable (identifies WHICH screen is up when stage<2 -- e.g. a modal instead of the title menu).
+pub(crate) static CONTINUE_READY_STAGE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static CONTINUE_SCAN_NODE_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static CONTINUE_DIALOG_VT_SEEN: AtomicUsize = AtomicUsize::new(0);
+
 unsafe fn title_menu_continue_action_ready(owner: usize, base: usize) -> Option<MenuActionNode> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    CONTINUE_READY_STAGE.store(0, Ordering::SeqCst);
     let dialog =
         unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
     if dialog == null {
         return None;
     }
+    CONTINUE_READY_STAGE.store(1, Ordering::SeqCst);
     let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(null);
+    CONTINUE_DIALOG_VT_SEEN.store(dialog_vt, Ordering::SeqCst);
     if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
         return None;
     }
+    CONTINUE_READY_STAGE.store(2, Ordering::SeqCst);
     let registry =
         unsafe { safe_read_usize(dialog + DIALOG_ROW_REGISTRY_A48_OFFSET) }.unwrap_or(null);
     if !vtable_in_game_image(registry, base) {
         return None;
     }
+    CONTINUE_READY_STAGE.store(3, Ordering::SeqCst);
     let node = unsafe { scan_dialog_for_continue(owner, base) }?;
+    CONTINUE_READY_STAGE.store(4, Ordering::SeqCst);
     let node_vt = unsafe { safe_read_usize(node) }.unwrap_or(null);
     if node_vt != base + MEMBERFUNCJOB_VTABLE_RVA {
         return None;
     }
+    CONTINUE_READY_STAGE.store(5, Ordering::SeqCst);
     const MEMBER_DIALOG_10: usize = core::mem::size_of::<usize>() + core::mem::size_of::<usize>();
     const MEMBER_FN_18: usize = 0x18;
     const MEMBER_ADJ_20: usize = 0x20;
@@ -7485,11 +7507,13 @@ unsafe fn title_menu_continue_action_ready(owner: usize, base: usize) -> Option<
     if member_fn == null {
         return None;
     }
+    CONTINUE_READY_STAGE.store(6, Ordering::SeqCst);
     let continue_wrapper_abs = base + TRACE_MENU_CONTINUE_WRAPPER_RVA as usize;
     let mut target = member_fn;
     let mut hop = HOP_START;
     while hop < JMP_HOPS && target != null {
         if target == continue_wrapper_abs {
+            CONTINUE_READY_STAGE.store(7, Ordering::SeqCst);
             return Some(MenuActionNode {
                 node,
                 node_vt,
@@ -9979,7 +10003,14 @@ pub(crate) fn splash_skip_enabled() -> bool {
     // and calls the native parser directly). So enabling splash-skip whenever a load path is armed
     // speeds up our runs without re-introducing the empty-menu break. Plain vanilla play (no load path,
     // no env/file) is unaffected and still builds the full menu.
-    product_autoload_enabled()
+    // De-gated (user 2026-06-23, user-pref-too-many-env-file-gates-default-on-product): splash-skip is
+    // ON for EVERY real-load run, not just product_autoload/own_load or a manual env/file. A real load
+    // is expected whenever we are not telemetry-only (ER_EFFECTS_SAVE_FILE staged) -- that is the whole
+    // point of the autoload, and the boot-logo playback is the biggest chunk of the slow boot to
+    // press-any-button (must beat the 22.69s vanilla baseline). Vanilla play (no DLL save override) is
+    // telemetry-only/absent here and unaffected. The env/file overrides remain as explicit opt-ins.
+    !save_override_telemetry_only()
+        || product_autoload_enabled()
         || own_load_enabled()
         || matches!(std::env::var("ER_EFFECTS_SPLASH_SKIP").as_deref(), Ok("1"))
         || game_directory_path()
