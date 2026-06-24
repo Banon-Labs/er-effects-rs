@@ -1165,6 +1165,25 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
     body.push_str(&format!(
         "  \"oracle_privacy_policy_gate\": {privacy_policy_gate},\n"
     ));
+    // SPLASH-SKIP SEMAPHORE (splash-skip-correctness): the only failure mode of the BeginLogo logo
+    // skip is the je->jg branch flip at base+SPLASH_SKIP_RVA not being live (never applied, or
+    // reverted by Arxan / another mod). So read that .text byte directly each telemetry frame:
+    //   jg (0x7f) = patch LIVE -> STEP_BeginLogo falls through past the ESRB/illegal-copy logo build
+    //               (the logos are skipped, the title advances SetState(2)->(3) without them);
+    //   je (0x74) = UNPATCHED -> splash will play;
+    //   anything else = corrupted/reverted -> splash-skip is BROKEN.
+    // apply_splash_skip runs at DLL attach (before the title runs state 2), so by the time telemetry
+    // writes (at the title/menu) a live jg means the skip already executed this boot. This is the
+    // in-process detector that was MISSING for "are we correctly skipping the splash screens".
+    if let Ok(base) = crate::experiments::game_module_base() {
+        let splash_byte =
+            unsafe { crate::experiments::safe_read_u8(base + crate::SPLASH_SKIP_RVA) }.unwrap_or(0);
+        body.push_str(&format!(
+            "  \"oracle_splash_skip_armed\": {},\n  \"oracle_splash_skip_patch_byte\": \"{:#x}\",\n",
+            splash_byte == crate::SPLASH_SKIP_REPLACEMENT_JG,
+            splash_byte
+        ));
+    }
     // oracle_continue_ready_stage / _scan_node_hits / _dialog_vt REMOVED 2026-06-24: they were the
     // diagnostic for the native_continue Continue-node scan (CONTINUE_READY_STAGE/SCAN_NODE_HITS/
     // DIALOG_VT_SEEN), which was ripped out as dead code -- the scan never found the node and the
