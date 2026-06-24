@@ -597,11 +597,17 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         format_optional_ptr(RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA.load(Ordering::SeqCst))
     ));
     body.push_str(&format!(
-        "  \"oracle_continue_phase\": {},\n  \"oracle_continue_expected_slot\": {},\n  \"oracle_continue_deser_fired\": {},\n  \"oracle_continue_confirmed\": {},\n  \"oracle_continue_mount_c30\": {},\n  \"oracle_continue_guard_waits\": {},\n",
+        // NOTE: oracle_continue_deser_fired / oracle_continue_confirmed were REMOVED
+        // (2026-06-24): they tracked OWN_STEPPER_DESER_FIRED/OWN_STEPPER_CONFIRMED -- the
+        // own_stepper/native_continue confirm-FIRE chain -- NOT whether the character loaded.
+        // The default zero-input autoload (pab-advance + title-accept-byte natural menu-open)
+        // loads without that chain, so the fields read 0 on success and were repeatedly misread
+        // as "load failed". The real load semaphore is world_loaded (player_present + world_stable
+        // + saved_map_c30), already emitted below. The backing statics stay (they gate block_input
+        // release + own_stepper STAGE2).
+        "  \"oracle_continue_phase\": {},\n  \"oracle_continue_expected_slot\": {},\n  \"oracle_continue_mount_c30\": {},\n  \"oracle_continue_guard_waits\": {},\n",
         FULLREAD_PHASE.load(Ordering::SeqCst),
         OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst),
-        OWN_STEPPER_DESER_FIRED.load(Ordering::SeqCst),
-        OWN_STEPPER_CONFIRMED.load(Ordering::SeqCst),
         OWN_STEPPER_MOUNT_C30.load(Ordering::SeqCst),
         FULLREAD_DRAIN_WAITS.load(Ordering::SeqCst)
     ));

@@ -495,13 +495,14 @@ def main() -> int:
     require(
         "oracle_continue_phase" in telemetry
         and "oracle_continue_expected_slot" in telemetry
-        and "oracle_continue_deser_fired" in telemetry
-        and "oracle_continue_confirmed" in telemetry
         and "oracle_continue_mount_c30" in telemetry
         and "oracle_continue_guard_waits" in telemetry,
         "telemetry must expose native Continue product phase/guard state for result-chain interpretation",
         failures,
     )
+    # oracle_continue_deser_fired / oracle_continue_confirmed REMOVED 2026-06-24 (tracked the
+    # own_stepper confirm-fire chain, not the load; misread as load-success). Real load semaphore
+    # is world_loaded (player_present + world_stable + saved_map_c30).
 
     online_body = rust_fn_body(experiments, "online_disable_enabled")
     input_body = rust_fn_body(experiments, "block_input_enabled")

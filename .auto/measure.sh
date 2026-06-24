@@ -422,8 +422,6 @@ if (
     or 'action_insert_waiting_continue_load' not in watcher
     or 'oracle_continue_phase' not in telemetry_src
     or 'oracle_continue_expected_slot' not in telemetry_src
-    or 'oracle_continue_deser_fired' not in telemetry_src
-    or 'oracle_continue_confirmed' not in telemetry_src
     or 'oracle_continue_mount_c30' not in telemetry_src
     or 'oracle_continue_guard_waits' not in telemetry_src
 ):
