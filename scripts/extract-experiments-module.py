@@ -17,6 +17,7 @@ the known header end to stay deterministic.
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -61,7 +62,16 @@ def main() -> int:
             "cannot extract into the preamble"
         )
 
-    preamble = "".join(lines[:preamble_end])
+    # Copy the import/attribute preamble into the submodule, but drop any
+    # `mod <name>;` / `pub(crate) use <name>::*;` submodule declarations that
+    # earlier extractions inserted -- those belong only to mod.rs.
+    preamble_lines = [
+        ln
+        for ln in lines[:preamble_end]
+        if not re.match(r"\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*;\s*$", ln)
+        and not re.match(r"\s*pub(?:\([^)]*\))?\s+use\s+\w+::\*\s*;\s*$", ln)
+    ]
+    preamble = "".join(preamble_lines)
     moved = "".join(lines[start - 1:end])
 
     out = REPO_ROOT / "src" / "experiments" / f"{module}.rs"
