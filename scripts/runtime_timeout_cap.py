@@ -14,11 +14,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_TIMEOUT_CAP_PATH = REPO_ROOT / ".auto" / "runtime_timeout_cap_seconds"
 
-# Fail safe to the historical 60 if the canonical file is missing/unreadable.
-RUNTIME_TIMEOUT_CAP_FALLBACK_SECONDS = 60
-# Absolute hard ceiling -- a fail-safe against a corrupted/tampered file, NOT a target. A runtime
-# probe must stay short; this matches the documented repo absolute max for runtime work.
-RUNTIME_TIMEOUT_CAP_CEILING_SECONDS = 180
+# 45s is the ONE hard truth for the runtime-probe wall-clock cap. The fallback (used if the canonical
+# file is missing/unreadable) and the absolute ceiling (a clamp against a corrupted/tampered file)
+# are both 45 so no other number can ever leak in: a missing file yields 45, and any value above 45
+# is rejected back down to 45. To change the cap, change .auto/runtime_timeout_cap_seconds AND these.
+RUNTIME_TIMEOUT_CAP_FALLBACK_SECONDS = 45
+RUNTIME_TIMEOUT_CAP_CEILING_SECONDS = 45
 
 
 def runtime_timeout_cap_seconds() -> int:

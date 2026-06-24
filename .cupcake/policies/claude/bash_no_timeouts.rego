@@ -1,7 +1,7 @@
 # METADATA
 # scope: package
 # title: Bash Bounded Timeout Guard
-# description: Require agent-invoked Bash commands to carry a tool-level timeout of 120 seconds or less; reject sleeps that hide readiness bugs.
+# description: Require agent-invoked Bash commands to carry a tool-level timeout of 45 seconds or less (the single runtime hard-truth cap); reject sleeps that hide readiness bugs.
 # custom:
 #   severity: HIGH
 #   id: ER-EFFECTS-BASH-BOUNDED-TIMEOUT
@@ -28,19 +28,19 @@ has_tool_timeout if {
 
 valid_seconds_string(value) if {
 	is_string(value)
-	regex.match("^([1-9]|[1-9][0-9]|1[01][0-9]|120)$", value)
+	regex.match("^([1-9]|[1-3][0-9]|4[0-5])$", value)
 }
 
 valid_milliseconds_string(value) if {
 	is_string(value)
-	regex.match("^([1-9][0-9]{0,4}|1[01][0-9]{4}|120000)$", value)
+	regex.match("^([1-9][0-9]{0,3}|[1-3][0-9]{4}|4[0-4][0-9]{3}|45000)$", value)
 }
 
 valid_tool_timeout if {
 	value := object.get(input.tool_input, "timeout", null)
 	is_number(value)
 	not value <= 0
-	value <= 120000
+	value <= 45000
 }
 
 valid_tool_timeout if {
@@ -52,7 +52,7 @@ valid_tool_timeout if {
 	value := object.get(input.tool_input, "timeout_seconds", null)
 	is_number(value)
 	not value <= 0
-	value <= 120
+	value <= 45
 }
 
 valid_tool_timeout if {
@@ -64,7 +64,7 @@ valid_tool_timeout if {
 	value := object.get(input.tool_input, "timeout_ms", null)
 	is_number(value)
 	not value <= 0
-	value <= 120000
+	value <= 45000
 }
 
 valid_tool_timeout if {
@@ -77,7 +77,7 @@ violation_reasons contains "missing Bash tool timeout parameter" if {
 	not has_tool_timeout
 }
 
-violation_reasons contains "Bash tool timeout parameter must be greater than 0 and no more than 120 seconds (timeout/timeout_ms <= 120000ms, timeout_seconds <= 120)" if {
+violation_reasons contains "Bash tool timeout parameter must be greater than 0 and no more than 45 seconds (timeout/timeout_ms <= 45000ms, timeout_seconds <= 45)" if {
 	tool_applies
 	has_tool_timeout
 	not valid_tool_timeout
@@ -106,8 +106,8 @@ deny contains decision if {
 			command,
 			"\n\nDetected: ",
 			concat(", ", reasons),
-			"\n\nWhy this policy exists: unbounded shell commands can strand shared tools, game processes, or remote analysis jobs. Every agent-invoked Bash command must include a tool-level timeout of 120 seconds or less; runtime helpers should still prefer observable completion and structured failures inside that hard cap.",
-			"\n\nHappy path: set the Bash tool timeout to 120 seconds or less. Cupcake receives Bash tool `timeout`/`timeout_ms` in milliseconds and `timeout_seconds` in seconds. Keep long-running workflows split into bounded steps, and avoid `sleep`; use event files, process exit, inotify/file changes, explicit driver acknowledgements, game/task-frame state, or a repo-approved helper that returns before the hard cap.",
+			"\n\nWhy this policy exists: unbounded shell commands can strand shared tools, game processes, or remote analysis jobs. Every agent-invoked Bash command must include a tool-level timeout of 45 seconds or less; runtime helpers should still prefer observable completion and structured failures inside that hard cap.",
+			"\n\nHappy path: set the Bash tool timeout to 45 seconds or less. Cupcake receives Bash tool `timeout`/`timeout_ms` in milliseconds and `timeout_seconds` in seconds. Keep long-running workflows split into bounded steps, and avoid `sleep`; use event files, process exit, inotify/file changes, explicit driver acknowledgements, game/task-frame state, or a repo-approved helper that returns before the hard cap.",
 		]),
 	}
 }

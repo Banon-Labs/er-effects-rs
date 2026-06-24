@@ -318,7 +318,7 @@ def scan_contract() -> list[Finding]:
                     0,
                     "readiness-watch-missing-hard-timeout",
                     ", ".join(missing_watch_timeout),
-                    "The readiness watcher must enforce --max-runtime-seconds and cap it at 60 seconds.",
+                    "The readiness watcher must enforce --max-runtime-seconds and derive its hard cap from the single source of truth .auto/runtime_timeout_cap_seconds (scripts/runtime_timeout_cap.py).",
                 )
             )
 

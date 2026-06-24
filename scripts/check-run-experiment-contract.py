@@ -3,7 +3,7 @@
 
 This cannot intercept Pi's tool call by itself; it is the executable policy source
 for agents and CI/measure gates. Agents must call run_experiment with the same
-input this policy allows: command ./.auto/measure.sh and timeout_seconds <= 120.
+input this policy allows: command ./.auto/measure.sh and timeout_seconds <= 45.
 """
 from __future__ import annotations
 
@@ -16,10 +16,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 POLICY = REPO_ROOT / ".auto" / "run_experiment_policy.rego"
 TESTS = REPO_ROOT / ".auto" / "run_experiment_policy_test.rego"
-MAX_TIMEOUT_SECONDS = 120
+MAX_TIMEOUT_SECONDS = 45
 REQUIRED_SNIPPETS = (
     "package auto.run_experiment",
-    "max_timeout_seconds := 120",
+    "max_timeout_seconds := 45",
     "input.command == \"./.auto/measure.sh\"",
     "input.timeout_seconds <= max_timeout_seconds",
     "input.checks_timeout_seconds <= max_timeout_seconds",
@@ -77,7 +77,7 @@ def main() -> int:
     )
     if allowed != "true" or denied != "false":
         return fail(f"unexpected run_experiment policy result: allowed={allowed!r} denied={denied!r}")
-    print("run_experiment contract ok: command=./.auto/measure.sh timeout_seconds<=120")
+    print("run_experiment contract ok: command=./.auto/measure.sh timeout_seconds<=45")
     return 0
 
 
