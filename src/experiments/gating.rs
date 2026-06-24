@@ -52,13 +52,6 @@ use crate::*;
 #[allow(unused_imports)]
 use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 
-
-
-
-
-
-
-
 use super::*;
 
 /// The `direct_menu_load`/product_core path is experimental and currently distinct from the

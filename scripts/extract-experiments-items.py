@@ -53,12 +53,56 @@ def detect_preamble_end(lines: list[str]) -> int:
     raise SystemExit("could not locate end of preamble")
 
 
+def _significant_chars(line: str):
+    """Yield code characters of a line, skipping // line-comments, /* */ blocks
+    (single-line only, which is all that occurs here), and string/char literals.
+    Bracket/semicolon counting must ignore brackets inside comments and strings."""
+    i = 0
+    n = len(line)
+    while i < n:
+        c = line[i]
+        if c == "/" and i + 1 < n and line[i + 1] == "/":
+            return  # rest of line is a comment
+        if c == "/" and i + 1 < n and line[i + 1] == "*":
+            end = line.find("*/", i + 2)
+            if end == -1:
+                return
+            i = end + 2
+            continue
+        if c == '"':
+            i += 1
+            while i < n:
+                if line[i] == "\\":
+                    i += 2
+                    continue
+                if line[i] == '"':
+                    i += 1
+                    break
+                i += 1
+            continue
+        if c == "'":
+            # char literal or lifetime; only treat as literal if it closes soon
+            j = i + 1
+            if j < n and line[j] == "\\":
+                j += 2
+            else:
+                j += 1
+            if j < n and line[j] == "'":
+                i = j + 1
+                continue
+            # lifetime tick (e.g. 'static) -- not a literal, emit nothing special
+            i += 1
+            continue
+        yield c
+        i += 1
+
+
 def find_item_end(lines: list[str], start: int, kind: str) -> int:
-    """Return the index (inclusive) of the item's last line."""
+    """Return the index (inclusive) of the item's last line (comment/string aware)."""
     if kind in SEMI_ITEMS:
         depth = 0
         for i in range(start, len(lines)):
-            for ch in lines[i]:
+            for ch in _significant_chars(lines[i]):
                 if ch in "([{":
                     depth += 1
                 elif ch in ")]}":
@@ -70,7 +114,7 @@ def find_item_end(lines: list[str], start: int, kind: str) -> int:
     depth = 0
     seen_brace = False
     for i in range(start, len(lines)):
-        for ch in lines[i]:
+        for ch in _significant_chars(lines[i]):
             if ch == "{":
                 depth += 1
                 seen_brace = True
@@ -126,6 +170,11 @@ def main() -> int:
     i = 0
     n = len(lines)
     while i < n:
+        # `mod foo;` / `pub(crate) use foo::*;` submodule decls are not extractable
+        # items; skip them so the scanner never tries to brace-match a `mod foo;`.
+        if DECL_RE.match(lines[i]) or USE_RE.match(lines[i]):
+            i += 1
+            continue
         m = ITEM_RE.match(lines[i])
         if m and (lines[i][0] not in " \t"):
             kind, name = m.group(1), m.group(2)

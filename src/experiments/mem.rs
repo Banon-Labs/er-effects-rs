@@ -52,12 +52,6 @@ use crate::*;
 #[allow(unused_imports)]
 use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 
-
-
-
-
-
-
 use super::*;
 
 pub(crate) fn game_module_base() -> Result<usize, String> {
