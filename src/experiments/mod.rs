@@ -69,6 +69,9 @@ pub(crate) use own_load::*;
 
 mod menu_diag;
 pub(crate) use menu_diag::*;
+
+mod mem;
+pub(crate) use mem::*;
 pub(crate) const PRODUCT_CORE_BLOCKER_UNSEEN: usize = 0;
 pub(crate) const PRODUCT_CORE_BLOCKER_READY: usize = 1;
 pub(crate) const PRODUCT_CORE_BLOCKER_NO_TITLE_OWNER: usize = 2;
@@ -594,15 +597,7 @@ pub(crate) fn product_core_ready_blocker_label(blocker: usize) -> &'static str {
     }
 }
 
-pub(crate) fn game_module_base() -> Result<usize, String> {
-    let module = unsafe { GetModuleHandleA(PCSTR::null()) }
-        .map_err(|error| format!("failed to resolve game module: {error}"))?;
-    Ok(module.0 as usize)
-}
 
-pub(crate) fn game_rva(rva: u32) -> Result<usize, String> {
-    Ok(game_module_base()? + rva as usize)
-}
 
 /// Kill-switch to skip installing the continue_trace hooks (bisecting a ~19s
 /// title crash caused by our DLL). When set, the continue/load-flow hooks are
@@ -3162,17 +3157,7 @@ struct TitleDialogState {
     menu_opened_latch: usize,
 }
 
-unsafe fn is_heap_aligned_ptr(ptr: usize) -> bool {
-    const HEAP_LO: usize = 0x10000;
-    const PTR_ALIGN_MASK: usize = 0x7;
-    ptr >= HEAP_LO && (ptr & PTR_ALIGN_MASK) == TITLE_OWNER_SCAN_START_ADDRESS
-}
 
-fn vtable_in_game_image(vtable: usize, base: usize) -> bool {
-    const MODULE_MIN_OFFSET: usize = 0x1000;
-    const MODULE_SPAN_FALLBACK: usize = 0x3000000;
-    vtable >= base + MODULE_MIN_OFFSET && vtable < base + MODULE_SPAN_FALLBACK
-}
 
 unsafe fn title_press_button_component_ready(
     dialog: usize,
@@ -6651,43 +6636,8 @@ unsafe fn own_stepper_stage2(
     }
 }
 
-fn utf16_name_empty_like(units: &[u16], len: usize) -> bool {
-    const NAME_LEN_NONE: usize = 0;
-    const NAME_LEN_SINGLE: usize = 1;
-    const NAME_UNDERSCORE: u16 = '_' as u16;
-    const NAME_SPACE: u16 = ' ' as u16;
-    if len == NAME_LEN_NONE {
-        return true;
-    }
-    if len == NAME_LEN_SINGLE && units.first().copied() == Some(NAME_UNDERSCORE) {
-        return true;
-    }
-    units.iter().take(len).all(|unit| *unit == NAME_SPACE)
-}
 
-fn utf16_names_equal(left: &[u16], right: &[u16], len: usize) -> bool {
-    left.get(..len) == right.get(..len)
-}
 
-unsafe fn read_utf16_name_units(addr: usize) -> ([u16; PGD_NAME_LEN_U16], usize) {
-    const ZERO_U16: u16 = 0;
-    const U16_STRIDE: usize = 2;
-    const IDX_START: usize = 0;
-    const IDX_STEP: usize = 1;
-    let mut units = [ZERO_U16; PGD_NAME_LEN_U16];
-    let mut len = IDX_START;
-    while len < PGD_NAME_LEN_U16 {
-        let unit = unsafe { safe_read_usize(addr + len * U16_STRIDE) }
-            .map(|value| value as u16)
-            .unwrap_or(ZERO_U16);
-        units[len] = unit;
-        if unit == ZERO_U16 {
-            break;
-        }
-        len += IDX_STEP;
-    }
-    (units, len)
-}
 
 #[derive(Clone, Copy)]
 struct RequestedSlotIdentity {
@@ -7672,61 +7622,6 @@ pub(crate) fn apply_foreground_force() {
     ));
 }
 
-/// Write a self-contained 3-byte return stub at `base+rva` after validating the expected first
-/// byte. RWX via VirtualProtect, write, restore, icache flush. Returns true on success. Shared by
-/// the gate-force patches (foreground / sign-in / user-index).
-fn patch_3byte_stub(
-    base: usize,
-    rva: usize,
-    expected_first: u8,
-    stub: [u8; 3],
-    label: &str,
-) -> bool {
-    let target = (base + rva) as *mut u8;
-    let existing = unsafe { *target };
-    if existing != expected_first {
-        append_autoload_debug(format_args!(
-            "{label}: ABORT -- byte at 0x{:x} is 0x{existing:x}, expected 0x{expected_first:x}",
-            base + rva
-        ));
-        return false;
-    }
-    let mut old_protect = PAGE_PROTECT_UNSET;
-    let protect_ok = unsafe {
-        VirtualProtect(
-            target as *mut c_void,
-            ONLINE_DISABLE_PATCH_LEN,
-            PAGE_EXECUTE_READWRITE,
-            &mut old_protect,
-        )
-    };
-    if protect_ok == HOOK_FALSE_RETURN as i32 {
-        append_autoload_debug(format_args!("{label}: VirtualProtect failed"));
-        return false;
-    }
-    let mut i = TITLE_OWNER_SCAN_START_ADDRESS;
-    while i < ONLINE_DISABLE_PATCH_LEN {
-        unsafe { *target.add(i) = stub[i] };
-        i += ONLINE_DISABLE_BYTE_STEP;
-    }
-    let mut restored = PAGE_PROTECT_UNSET;
-    unsafe {
-        VirtualProtect(
-            target as *mut c_void,
-            ONLINE_DISABLE_PATCH_LEN,
-            old_protect,
-            &mut restored,
-        )
-    };
-    unsafe {
-        FlushInstructionCache(
-            CURRENT_PROCESS_PSEUDO_HANDLE,
-            target as *const c_void,
-            ONLINE_DISABLE_PATCH_LEN,
-        )
-    };
-    true
-}
 
 /// Force the SaveLoad2 storage-select op gate to pass cold (bd b80-ROOTCAUSE-cold-no-user-signin):
 /// patch the sign-in check to always return true and the user-index resolver to return 0, so the
@@ -7755,60 +7650,6 @@ pub(crate) fn apply_signin_force(base: usize) {
     ));
 }
 
-/// Patch a 0x48-prologue function body to `xor eax,eax; ret` (return 0) at `base+rva`. Validates
-/// the expected first byte, VirtualProtects RWX, writes the 3-byte stub, restores protection, and
-/// flushes the icache. Used to force-offline the IsOnlineMode getter + login-readiness predicate.
-fn apply_xor_ret_stub(base: usize, rva: usize, label: &str) {
-    let target = (base + rva) as *mut u8;
-    let existing = unsafe { *target };
-    if existing != ONLINE_DISABLE_EXPECTED_FIRST {
-        append_autoload_debug(format_args!(
-            "online-disable: ABORT {label} -- byte at 0x{:x} is 0x{existing:x}, expected 0x{ONLINE_DISABLE_EXPECTED_FIRST:x}",
-            base + rva
-        ));
-        return;
-    }
-    let mut old_protect = PAGE_PROTECT_UNSET;
-    let protect_ok = unsafe {
-        VirtualProtect(
-            target as *mut c_void,
-            ONLINE_DISABLE_PATCH_LEN,
-            PAGE_EXECUTE_READWRITE,
-            &mut old_protect,
-        )
-    };
-    if protect_ok == HOOK_FALSE_RETURN as i32 {
-        append_autoload_debug(format_args!(
-            "online-disable: VirtualProtect failed for {label}"
-        ));
-        return;
-    }
-    let mut i = TITLE_OWNER_SCAN_START_ADDRESS;
-    while i < ONLINE_DISABLE_PATCH_LEN {
-        unsafe { *target.add(i) = ONLINE_DISABLE_STUB[i] };
-        i += ONLINE_DISABLE_BYTE_STEP;
-    }
-    let mut restored = PAGE_PROTECT_UNSET;
-    unsafe {
-        VirtualProtect(
-            target as *mut c_void,
-            ONLINE_DISABLE_PATCH_LEN,
-            old_protect,
-            &mut restored,
-        )
-    };
-    unsafe {
-        FlushInstructionCache(
-            CURRENT_PROCESS_PSEUDO_HANDLE,
-            target as *const c_void,
-            ONLINE_DISABLE_PATCH_LEN,
-        )
-    };
-    append_autoload_debug(format_args!(
-        "online-disable: patched {label} 0x{:x} -> xor eax,eax;ret (forces offline)",
-        base + rva
-    ));
-}
 
 // (The 0x1407b0cf0 "finished-poll" auto-accept hook was removed: RE showed 0x1407b0cf0 is a
 // "has >= 2 buttons" layout query, not a finished-poll -- it is never called for the
@@ -8284,69 +8125,8 @@ pub(crate) const CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
 /// fault-tolerant scan fast -- a syscall per 8-byte cursor would stall the thread.
 pub(crate) const SCAN_CHUNK_SIZE: usize = 0x10000;
 
-/// Fault-tolerant pointer-sized read via ReadProcessMemory: returns None on
-/// unmapped/freed memory instead of raising an access violation. Used by the
-/// title-owner scan to survive the TOCTOU race against the booting game.
-pub(crate) unsafe fn safe_read_usize(addr: usize) -> Option<usize> {
-    let mut value: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    let mut read: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    let ok = unsafe {
-        ReadProcessMemory(
-            CURRENT_PROCESS_PSEUDO_HANDLE,
-            addr as *const c_void,
-            &mut value as *mut usize as *mut c_void,
-            std::mem::size_of::<usize>(),
-            &mut read,
-        )
-    };
-    if ok != HOOK_FALSE_RETURN as i32 && read == std::mem::size_of::<usize>() {
-        Some(value)
-    } else {
-        None
-    }
-}
 
-/// Fault-tolerant i32 read via ReadProcessMemory (None on unmapped memory).
-pub(crate) unsafe fn safe_read_i32(addr: usize) -> Option<i32> {
-    let mut value: i32 = TITLE_OWNER_SCAN_START_ADDRESS as i32;
-    let mut read: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    let ok = unsafe {
-        ReadProcessMemory(
-            CURRENT_PROCESS_PSEUDO_HANDLE,
-            addr as *const c_void,
-            &mut value as *mut i32 as *mut c_void,
-            std::mem::size_of::<i32>(),
-            &mut read,
-        )
-    };
-    if ok != HOOK_FALSE_RETURN as i32 && read == std::mem::size_of::<i32>() {
-        Some(value)
-    } else {
-        None
-    }
-}
 
-/// Fault-tolerant single-byte read via ReadProcessMemory (None on unmapped memory). Used by the
-/// WorldBlockRes::Update diagnostic detour to sample the phase ([+0x35]) and gate ([+0x2f]) bytes
-/// without ever dereferencing a raw pointer into possibly-unmapped block memory.
-pub(crate) unsafe fn safe_read_u8(addr: usize) -> Option<u8> {
-    let mut value: u8 = 0;
-    let mut read: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    let ok = unsafe {
-        ReadProcessMemory(
-            CURRENT_PROCESS_PSEUDO_HANDLE,
-            addr as *const c_void,
-            &mut value as *mut u8 as *mut c_void,
-            std::mem::size_of::<u8>(),
-            &mut read,
-        )
-    };
-    if ok != HOOK_FALSE_RETURN as i32 && read == std::mem::size_of::<u8>() {
-        Some(value)
-    } else {
-        None
-    }
-}
 
 pub(crate) unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*mut u8> {
     TITLE_OWNER_SCAN_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
