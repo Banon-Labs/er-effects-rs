@@ -157,6 +157,10 @@ cp -rf source dest          # NOT: cp -r source dest
 - If push fails, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->
 
+## Runtime-Affecting Refactor Feasibility
+
+When the user asks whether a runtime-affecting refactor is possible/easy/safe, investigate first before answering. Do not guess from source shape alone. Minimum feasibility check: inspect the runtime entrypoints, loader/export expectations, staging scripts, existing probes, and the current known-working runtime proof path; identify what could break and what smoke would prove non-regression. Do not call the refactor non-breaking until a live runtime smoke passes. Never commit or push a runtime-affecting refactor to `main` before the required smoke proof exists.
+
 ## No Compromises
 
 We accept **no compromises** on the stated objective. Do not propose, accept, or
