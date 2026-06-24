@@ -982,14 +982,38 @@ pub(crate) fn native_load_enabled() -> bool {
 /// (load-most-recent) MenuMemberFuncJob node's run 0x1409aaba0 exactly once -- which drives the FULL
 /// native load (parse + world-asset streaming + spawn). NO SetState(2/3), NO beginlogo-gate clear,
 /// NO registrar self-fire, NO direct_build / cold_char_mount. Observe + one-shot fire only.
+/// Single explicit OFF kill-switch for the always-on product autoload (most-recent native Continue
+/// + the readiness press-any-button advance that gets us to the title menu). Autoload is the DEFAULT
+/// DLL behavior (user directive 2026-06-24 "Autoload should always be the default dll behavior";
+/// product contract `autoload-dll-product-requirements`: "always-on -- no opt-in gate; users install
+/// the DLL knowingly and read docs"). Set `ER_EFFECTS_NO_AUTOLOAD=1` or drop
+/// `er-effects-no-autoload.txt` next to eldenring.exe to suppress it (overlay-only use, or a session
+/// that should not auto-Continue). Mirrors the splash-skip de-gating precedent
+/// (`user-pref-too-many-env-file-gates-default-on-product-2026-06-23`).
+pub(crate) fn autoload_disabled() -> bool {
+    matches!(std::env::var("ER_EFFECTS_NO_AUTOLOAD").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-no-autoload.txt")
+            .exists()
+}
+
 pub(crate) fn native_continue_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_NATIVE_CONTINUE").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-native-continue.txt")
-        .exists()
+    if autoload_disabled() {
+        return false;
+    }
+    // DEFAULT-ON for any real (non-telemetry-only) run: this IS the product autoload path, so it no
+    // longer requires an env var / `er-effects-native-continue.txt` opt-in. A telemetry-only/observe
+    // run (ER_EFFECTS_TELEMETRY_ONLY) stays off. The env/file remain as explicit force-on overrides.
+    !save_override_telemetry_only()
+        || matches!(
+            std::env::var("ER_EFFECTS_NATIVE_CONTINUE").as_deref(),
+            Ok("1")
+        )
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-native-continue.txt")
+            .exists()
 }
 
 /// OBSERVE-ONLY NATIVE FULL-SAVE-READ gate (native-full-save-read-slot-resolve-chain-observe-recipe-2026).
@@ -4331,7 +4355,14 @@ pub(crate) static PAB_ADVANCE_SETTLE: AtomicUsize = AtomicUsize::new(0);
 /// `er-effects-pab-advance.txt`. DECOUPLED from `fire_tfc_continue_enabled` (that gate previously also
 /// drove `maybe_auto_open_menu`, so removing it stranded a probe at press-any-button).
 pub(crate) fn pab_advance_enabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_PAB_ADVANCE").as_deref(), Ok("1"))
+    if autoload_disabled() {
+        return false;
+    }
+    // DEFAULT-ON for any real (non-telemetry-only) run: the readiness advance is part of the always-on
+    // autoload (it gets the front-end to the title menu where native Continue fires). No env/file opt-in
+    // required; telemetry-only runs stay off; the env/file remain as explicit force-on overrides.
+    !save_override_telemetry_only()
+        || matches!(std::env::var("ER_EFFECTS_PAB_ADVANCE").as_deref(), Ok("1"))
         || game_directory_path()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("er-effects-pab-advance.txt")
