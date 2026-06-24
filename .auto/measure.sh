@@ -9,7 +9,12 @@ from pathlib import Path
 MAX_SCORE = 1400
 root = Path.cwd()
 lib = (root / 'src/lib.rs').read_text(encoding='utf-8', errors='replace')
-exp = (root / 'src/experiments.rs').read_text(encoding='utf-8', errors='replace')
+_exp_dir = root / 'src/experiments'
+if _exp_dir.is_dir():
+    _exp_files = sorted(_exp_dir.glob('*.rs'), key=lambda p: (p.name != 'mod.rs', p.name))
+    exp = '\n'.join(p.read_text(encoding='utf-8', errors='replace') for p in _exp_files)
+else:
+    exp = (root / 'src/experiments.rs').read_text(encoding='utf-8', errors='replace')
 check = (root / 'scripts/check-autoload-happy-path.py').read_text(encoding='utf-8', errors='replace')
 telemetry_src = (root / 'src/telemetry.rs').read_text(encoding='utf-8', errors='replace')
 watcher = (root / 'scripts/er-readiness-watch.py').read_text(encoding='utf-8', errors='replace')
@@ -417,8 +422,6 @@ if (
     or 'action_insert_waiting_continue_load' not in watcher
     or 'oracle_continue_phase' not in telemetry_src
     or 'oracle_continue_expected_slot' not in telemetry_src
-    or 'oracle_continue_deser_fired' not in telemetry_src
-    or 'oracle_continue_confirmed' not in telemetry_src
     or 'oracle_continue_mount_c30' not in telemetry_src
     or 'oracle_continue_guard_waits' not in telemetry_src
 ):

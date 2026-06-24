@@ -1152,14 +1152,12 @@ def telemetry_native_continue_chain_stage(telemetry: dict[str, Any]) -> str:
     action_wrapper_has_update_rva = telemetry_result_action_wrapper_has_update_rva(telemetry)
     action_inserted = telemetry_result_action_inserted(telemetry)
     action_insert_has_update_rva = telemetry_result_action_insert_has_update_rva(telemetry)
-    deser_fired = as_int(telemetry.get("oracle_continue_deser_fired"), 0)
-    confirmed = as_int(telemetry.get("oracle_continue_confirmed"), 0)
+    # oracle_continue_deser_fired / oracle_continue_confirmed were REMOVED (2026-06-24): they
+    # tracked the own_stepper confirm-FIRE chain, not the load. world_loaded below is the real
+    # load semaphore and wins first; the intermediate "confirmed_waiting_world" /
+    # "deserialized_waiting_confirm" stall labels are dropped with them.
     if telemetry_world_loaded(telemetry):
         return "world_loaded"
-    if confirmed > 0 and phase >= 3:
-        return "confirmed_waiting_world"
-    if deser_fired == 2:
-        return "deserialized_waiting_confirm"
     if phase >= 3 and result_chain_ready and action_inserted and action_insert_has_update_rva:
         return "action_insert_waiting_continue_load"
     if phase >= 3 and result_chain_ready and action_inserted:
@@ -1329,8 +1327,6 @@ def autoload_progress_summary(telemetry: dict[str, Any] | None) -> dict[str, Any
         "result_action_builder_hits": telemetry.get("oracle_result_action_builder_hits"),
         "result_action_wrapper_builder_hits": telemetry.get("oracle_result_action_wrapper_builder_hits"),
         "result_action_insert_hits": telemetry.get("oracle_result_action_insert_hits"),
-        "continue_deser_fired": telemetry.get("oracle_continue_deser_fired"),
-        "continue_confirmed": telemetry.get("oracle_continue_confirmed"),
     }
 
 
@@ -1428,8 +1424,6 @@ def oracle_summary(
         "policy_flag_setter_caller_rva": telemetry.get("oracle_policy_flag_setter_caller_rva"),
         "continue_phase": telemetry.get("oracle_continue_phase"),
         "continue_expected_slot": telemetry.get("oracle_continue_expected_slot"),
-        "continue_deser_fired": telemetry.get("oracle_continue_deser_fired"),
-        "continue_confirmed": telemetry.get("oracle_continue_confirmed"),
         "continue_mount_c30": telemetry.get("oracle_continue_mount_c30"),
         "continue_guard_waits": telemetry.get("oracle_continue_guard_waits"),
     }

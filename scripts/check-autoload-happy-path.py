@@ -8,7 +8,12 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-EXPERIMENTS = REPO_ROOT / "src" / "experiments.rs"
+# `experiments` is a directory module (src/experiments/{mod,save_redirect,trace,
+# startup_hooks,input_block,own_load,...}.rs). The autoload happy-path tokens and
+# function bodies may live in any submodule, so treat the whole module as one
+# concatenated source for these fail-closed string/fn-body checks.
+EXPERIMENTS_DIR = REPO_ROOT / "src" / "experiments"
+EXPERIMENTS = REPO_ROOT / "src" / "experiments.rs"  # legacy single-file fallback
 LIB = REPO_ROOT / "src" / "lib.rs"
 CONSTANTS = REPO_ROOT / "src" / "constants.rs"
 TELEMETRY = REPO_ROOT / "src" / "telemetry.rs"
@@ -30,6 +35,19 @@ REQUIRED_PRODUCT_GATES = {
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
+
+
+def read_experiments() -> str:
+    """Concatenate every Rust source in the experiments module (or fall back to
+    the legacy single file). mod.rs is placed first so banner/order-sensitive
+    `str.find` comparisons remain stable across the split."""
+    if EXPERIMENTS_DIR.is_dir():
+        files = sorted(
+            EXPERIMENTS_DIR.glob("*.rs"),
+            key=lambda p: (p.name != "mod.rs", p.name),
+        )
+        return "\n".join(read(p) for p in files)
+    return read(EXPERIMENTS)
 
 
 def rust_fn_body(source: str, name: str) -> str:
@@ -107,7 +125,7 @@ def product_path_uses_semantic_readiness(experiments: str) -> bool:
 
 def main() -> int:
     failures: list[str] = []
-    experiments = read(EXPERIMENTS)
+    experiments = read_experiments()
     lib = read(LIB)
     if CONSTANTS.exists():
         lib += "\n" + read(CONSTANTS)
@@ -477,13 +495,14 @@ def main() -> int:
     require(
         "oracle_continue_phase" in telemetry
         and "oracle_continue_expected_slot" in telemetry
-        and "oracle_continue_deser_fired" in telemetry
-        and "oracle_continue_confirmed" in telemetry
         and "oracle_continue_mount_c30" in telemetry
         and "oracle_continue_guard_waits" in telemetry,
         "telemetry must expose native Continue product phase/guard state for result-chain interpretation",
         failures,
     )
+    # oracle_continue_deser_fired / oracle_continue_confirmed REMOVED 2026-06-24 (tracked the
+    # own_stepper confirm-fire chain, not the load; misread as load-success). Real load semaphore
+    # is world_loaded (player_present + world_stable + saved_map_c30).
 
     online_body = rust_fn_body(experiments, "online_disable_enabled")
     input_body = rust_fn_body(experiments, "block_input_enabled")
