@@ -1,0 +1,19 @@
+[package]
+name = "er-runtime"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+er-effects-data = { path = "../effects-data" }
+er-save-loader = { path = "../er-save-loader" }
+er-safe-input = { path = "../er-safe-input" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+debug = { path = "../../../fromsoftware-rs/crates/debug" }
+hudhook = { git = "https://github.com/veeenu/hudhook", features = ["imgui-tables-api", "dx12-fallback-device-check", "poll-cursor-position"] }
+# In-process x86-64 decoding (instruction lengths, prologue/pattern validation).
+# Pure-Rust, already present transitively via ilhook; promoted to a direct dep so
+# the hand-rolled single-step/prologue logic in lib.rs can decode instead of
+# hard-coding byte lengths. Lean feature set: decoder only, no formatters/encoder.
+iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder"] }

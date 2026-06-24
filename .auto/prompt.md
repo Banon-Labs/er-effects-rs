@@ -27,8 +27,8 @@ Score rubric:
 If re-initializing autoresearch, use metric `autoload_re_score`, unit `points`, direction `higher`, baseline from the current branch, and keep `timeout_seconds <= 120` / `checks_timeout_seconds <= 120` unless `.auto/run_experiment_policy.rego` and its checker/tests are deliberately changed. Runtime probes must finish the runtime portion in <=60s.
 
 ## Files in Scope
-- `src/lib.rs` -- constants/layouts/statics for title/menu/profile-load/autoload and hook wiring.
-- `src/experiments.rs` -- asset/native Continue tracing, autoload state machine, product submit path, native/static readiness predicates, runtime diagnostics.
+- `crates/er-runtime/src/lib.rs` -- constants/layouts/statics for title/menu/profile-load/autoload and hook wiring.
+- `crates/er-runtime/src/experiments.rs` -- asset/native Continue tracing, autoload state machine, product submit path, native/static readiness predicates, runtime diagnostics.
 - `scripts/check-autoload-happy-path.py` and `scripts/test-autoload-happy-path.py` -- static product-path gate checks.
 - `.auto/measure.sh` -- benchmark/static oracle for this autoresearch session.
 - `.auto/ideas.md` -- deferred ideas backlog.

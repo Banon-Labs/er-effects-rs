@@ -214,14 +214,7 @@ dependencies = [
 name = "er-effects-rs"
 version = "0.1.0"
 dependencies = [
- "debug",
- "eldenring",
- "er-effects-data",
- "er-safe-input",
- "er-save-loader",
- "fromsoftware-shared",
- "hudhook",
- "iced-x86",
+ "er-runtime",
 ]
 
 [[package]]
@@ -230,6 +223,27 @@ version = "0.1.0"
 dependencies = [
  "er-effects-data",
  "er-soulsformats",
+]
+
+[[package]]
+name = "er-quickload-rs"
+version = "0.1.0"
+dependencies = [
+ "er-runtime",
+]
+
+[[package]]
+name = "er-runtime"
+version = "0.1.0"
+dependencies = [
+ "debug",
+ "eldenring",
+ "er-effects-data",
+ "er-safe-input",
+ "er-save-loader",
+ "fromsoftware-shared",
+ "hudhook",
+ "iced-x86",
 ]
 
 [[package]]

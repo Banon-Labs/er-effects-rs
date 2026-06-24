@@ -10,7 +10,7 @@ Initial scope:
 - Support manual apply/remove buttons for quick testing.
 
 Seeded calls (defined in `data/effects.json`, embedded into the DLL at build
-time — edit that file to change the list, no Rust changes needed):
+time -- edit that file to change the list, no Rust changes needed):
 
 | ID | Name |
 | --- | --- |
@@ -49,14 +49,15 @@ Stage the supported release payload with:
 scripts/stage-autoload-release.sh --output target/autoload-release
 ```
 
-The staged LazyLoader config intentionally uses `[CHAINLOAD] dll=er_effects_rs.dll`
-so er-effects-rs is properly loaded as the dinput8-style mod. Put other
-LazyLoader mods in `dllMods/` and list them under `[LOADORDER]`; do not lazy-load
-er-effects-rs itself through `[LOADORDER]`. Configure the requested slot by
+The staged LazyLoader config intentionally uses `[CHAINLOAD] dll=er_quickload_rs.dll`
+so er-quickload-rs is properly loaded as the autoload mod. The HUD/SpEffect overlay
+continues to build as `er_effects_rs.dll`. Put other LazyLoader mods in `dllMods/`
+and list them under `[LOADORDER]`; do not lazy-load er-quickload-rs itself through
+`[LOADORDER]`. Configure the requested slot by
 copying `er-effects-autoload.txt.example` to `er-effects-autoload.txt` next to
 `eldenring.exe` and editing `slot=N`.
 
-Product autoload enables er-effects-rs' built-in current-version splash skip
+Product autoload enables er-quickload-rs' built-in current-version splash skip
 patch automatically. For non-autoload launches, copy
 `er-effects-splash-skip.txt.example` to `er-effects-splash-skip.txt` next to
 `eldenring.exe` to opt in manually. Do not ship the old external
@@ -71,10 +72,10 @@ compiling and running a small .NET bridge against Smithbox's
 `Andre.Formats`/SoulsFormats libraries. Prerequisites:
 
 1. **A Smithbox checkout or binary install.** Two layouts are supported:
-   - **source checkout** — contains `src/Andre/Andre.Formats/Andre.Formats.csproj`;
+   - **source checkout** -- contains `src/Andre/Andre.Formats/Andre.Formats.csproj`;
      the bridge builds Andre.Formats from source
      (`git clone https://github.com/vawser/Smithbox .deps/Smithbox`);
-   - **binary release install** — contains `Andre.Formats.dll` /
+   - **binary release install** -- contains `Andre.Formats.dll` /
      `Andre.SoulsFormats.dll` at its root; the bridge references the DLLs
      directly and resolves transitive assemblies from the install directory.
 
@@ -108,10 +109,10 @@ cargo run -p er-param-inspect -- validate <path-to-regulation.bin>
 Each SpEffect call takes a "don't sync" flag. The overlay checkbox
 `Sync effect calls over the network` controls it:
 
-- **Off (default):** effects are applied with `dont_sync = true` — local-only,
+- **Off (default):** effects are applied with `dont_sync = true` -- local-only,
   other players never see them. Safe for offline/local testing.
 - **On:** effects are applied with `dont_sync = false`, matching the Cheat
-  Engine `addNetworked(..., id, 0)` pattern — the effect application is
+  Engine `addNetworked(..., id, 0)` pattern -- the effect application is
   propagated to network peers.
 
 Leave it off unless you specifically need peers to observe the effect. Sending
