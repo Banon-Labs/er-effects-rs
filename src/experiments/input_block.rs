@@ -52,10 +52,6 @@ use crate::*;
 #[allow(unused_imports)]
 use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 
-
-
-
-
 use super::*;
 
 /// Render-thread liveness + bootstrap probe. Runs from the ImGui render loop (a
@@ -356,4 +352,3 @@ pub(crate) fn render_liveness_probe() {
         "render_probe: frame={frame} csfeman=0x{csfeman:x} latch={latch}"
     ));
 }
-

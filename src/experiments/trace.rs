@@ -2951,4 +2951,3 @@ pub(crate) unsafe extern "system" fn save_load_state_init_hook() -> u8 {
     ));
     ret
 }
-
