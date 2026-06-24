@@ -87,6 +87,9 @@ pub(crate) use continue_load::*;
 
 mod submit;
 pub(crate) use submit::*;
+
+mod profiler;
+pub(crate) use profiler::*;
 pub(crate) const PRODUCT_CORE_BLOCKER_UNSEEN: usize = 0;
 pub(crate) const PRODUCT_CORE_BLOCKER_READY: usize = 1;
 pub(crate) const PRODUCT_CORE_BLOCKER_NO_TITLE_OWNER: usize = 2;

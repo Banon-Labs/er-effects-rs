@@ -176,6 +176,14 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     }
     write_bootstrap_event(BOOTSTRAP_EVENT_DLL_MAIN_ATTACH, BOOTSTRAP_DETAIL_START);
 
+    // Boot profiler: spawn the independent CPU sampler FIRST so it captures the engine-init threads
+    // during the pre-CSTaskImp-instance gap (the largest uninstrumented boot window). Read-only by
+    // default (QueryThreadCycleTime/GetThreadTimes, no thread suspension); RIP sampling is a separate
+    // opt-in sub-switch. Gated OFF unless ER_EFFECTS_PROFILE=1 / er-effects-profile.txt.
+    if profiler_enabled() {
+        START_BOOT_PROFILER.call_once(spawn_boot_profiler);
+    }
+
     // Install the crash/exit logger first so it can observe an exit or access
     // violation from any later subsystem. Opt-in; off by default.
     if crash_logger_enabled() {
@@ -366,9 +374,21 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             BOOTSTRAP_EVENT_GAME_TASK_INSTANCE_READY,
             BOOTSTRAP_DETAIL_DONE,
         );
+        // Boot-phase marker: CSTaskImp resolved -> bounds the end of the pre-instance engine-init
+        // gap (the largest uninstrumented boot window) in the same [+Nms] timeline the renderer parses.
+        if profiler_enabled() {
+            append_autoload_debug(format_args!("boot-phase: cstask_instance_ready"));
+        }
 
         cs_task.run_recurring(
             move |task_data: &FD4TaskData| {
+                // Boot-phase marker: first frame our recurring task actually ticks.
+                if profiler_enabled()
+                    && BOOT_FIRST_FRAME_LOGGED.swap(GAME_TASK_TICK_INCREMENT as usize, Ordering::SeqCst)
+                        == 0
+                {
+                    append_autoload_debug(format_args!("boot-phase: first_game_frame"));
+                }
                 // Bisect kill-switch: do nothing per frame. Isolates "our task
                 // body crashes the title ~19s" from "the DLL's mere presence".
                 if inert_mode() {
