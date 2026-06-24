@@ -100,8 +100,52 @@ def main() -> int:
     assert live_fields["level"] == EXPECTED_LEVEL
     assert live_fields["face_data_buffer_sha256"] == EXPECTED_FACE_DATA_BUFFER_SHA256
 
+    check_banon_save(oracle)
+
     print("save-slot-oracle regression tests passed")
     return 0
+
+
+# Regression for the inverted MaxHealth/BaseMaxHealth constraint and the
+# FACE-coupled PGD scan that mis-read the 150-Banon save (slot 0 reported EMPTY;
+# slot 1 "Dark Moon Bean" missed because its FaceData size field is not 288).
+# Ground truth is the per-slot CharacterName UTF-16 bytes in each USER_DATA00N,
+# cross-checked against the user's Elden Ring Save Manager (slot 0 = Banon L150).
+BANON_SAVE_PATH = REPO_ROOT / "save-files" / "150-Banon" / "ER0000.sl2"
+BANON_EXPECTED = {
+    0: ("Banon", 150),
+    1: ("Dark Moon Bean", 90),
+    2: ("Vagabond", 9),
+    3: ("Vagabond", 9),
+    4: ("Hero", 7),
+    5: ("Hero", 7),
+    6: ("Prisoner", 9),
+    7: ("Astrologer", 6),
+    8: ("Prophet", 7),
+    9: ("Samurai", 9),
+}
+
+
+def check_banon_save(oracle) -> None:
+    if not BANON_SAVE_PATH.exists():  # fixture not present in every checkout
+        return
+    data = BANON_SAVE_PATH.read_bytes()
+    for slot, (expected_name, expected_level) in BANON_EXPECTED.items():
+        result = oracle.decode_save_slot(data, BANON_SAVE_PATH, slot)
+        fields = result.get("decoded_fields") or {}
+        assert fields.get("name_empty_like") is False, f"150-Banon slot {slot} decoded EMPTY"
+        assert fields.get("name") == expected_name, (
+            f"150-Banon slot {slot}: name {fields.get('name')!r} != {expected_name!r}"
+        )
+        assert fields.get("level") == expected_level, (
+            f"150-Banon slot {slot}: level {fields.get('level')} != {expected_level}"
+        )
+        # Every decoded name must be byte-present in that slot's USER_DATA00N data
+        # (no synthesized/misread identity).
+        slot_data, _ = oracle.extract_slot(data, slot)
+        assert expected_name.encode("utf-16le") in slot_data, (
+            f"150-Banon slot {slot}: name {expected_name!r} not found in slot bytes"
+        )
 
 
 if __name__ == "__main__":

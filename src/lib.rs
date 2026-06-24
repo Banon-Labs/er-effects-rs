@@ -2375,6 +2375,10 @@ pub(crate) static MENU_WINDOW_LATCH_INSTALLED: AtomicUsize = AtomicUsize::new(0)
 pub(crate) const MENU_WINDOW_LATCH_NOT_INSTALLED: usize = 0;
 pub(crate) const MENU_WINDOW_LATCH_INSTALLED_YES: usize = 1;
 pub(crate) static START_MENU_WINDOW_LATCH: Once = Once::new();
+/// One-shot spawn guard for the save-source redirect hook install (CreateFileW/CopyFileW path
+/// redirect). Armed at process attach only when `enforce_save_override_or_abort` resolved a valid
+/// env save source (Redirect mode); see save-override-no-default-fallback-mandatory-env-2026-06-23.
+pub(crate) static START_SAVE_REDIRECT: Once = Once::new();
 /// One-shot install guard for the SAVE-SAFE c30-writer diagnostic hook (mirrors
 /// MENU_WINDOW_LATCH_INSTALLED). Installed unconditionally at process attach; the
 /// hook is a pure passthrough that logs the c30-write gate, c30 before/after, and a
@@ -3392,6 +3396,34 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         install_crash_logger();
     }
 
+    // SAVE-SOURCE ENFORCEMENT (save-override-no-default-fallback-mandatory-env-2026-06-23).
+    // The DLL must NEVER assume / read the default user save directory. Unless this is a pure
+    // telemetry/observe-only run (loads nothing), a valid `ER_EFFECTS_SAVE_FILE` MUST be present or
+    // the process ABORTS here -- before the title flow or any save IO runs. On success, install the
+    // CreateFileW/CopyFileW save-path redirect (scoped Win32 hook) so every save artifact (.sl2/.co2/
+    // .bak, read AND write) is served from the env-provided directory instead of the default dir.
+    match enforce_save_override_or_abort() {
+        // Telemetry-only: install the hooks ONLY when the save-trace gate is on (diagnostics only --
+        // no redirect dir, so the detours just log and pass through). Lets us trace the working
+        // vanilla save-read (char-present save in the real appdata, no redirect).
+        SaveOverrideMode::TelemetryOnly => {
+            if save_trace_enabled() {
+                START_SAVE_REDIRECT.call_once(|| {
+                    let _ = std::thread::Builder::new()
+                        .name("er-effects-save-trace".to_owned())
+                        .spawn(install_save_redirect_hooks);
+                });
+            }
+        }
+        SaveOverrideMode::Redirect => {
+            START_SAVE_REDIRECT.call_once(|| {
+                let _ = std::thread::Builder::new()
+                    .name("er-effects-save-redirect".to_owned())
+                    .spawn(install_save_redirect_hooks);
+            });
+        }
+    }
+
     let initial_state = EffectsState::default();
     arm_product_autoload_from_request(&initial_state.autoload);
     let state = Arc::new(Mutex::new(initial_state));
@@ -3678,7 +3710,13 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // DIAGNOSTIC (gated by er-effects-grsysmsg-log.txt): log the GR_System_Message ids the
                 // title flow fetches after menu-open, to DEFINITIVELY name the menu-open MessageBoxDialogs
                 // (connection 4101/4102/4190 vs save 70000/4191) instead of guessing. Self-gates once.
-                if grsysmsg_log_enabled() {
+                // Also install whenever a save load is expected (not telemetry-only / not trace):
+                // the same GetGR_System_Message hook carries the corrupted-save SEMAPHORE
+                // (oracle_corrupted_save_seen_id), so a load probe records the "save data is corrupted"
+                // popup as RAM-read telemetry instead of a one-off on-screen image.
+                if grsysmsg_log_enabled()
+                    || (!save_override_telemetry_only() && !save_trace_enabled())
+                {
                     install_gr_sysmsg_log_hook();
                 }
                 // Anti-anti-debug (ported from ProDebug, correct base): neutralize FromSoft's

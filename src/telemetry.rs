@@ -1139,6 +1139,26 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
         "  \"game_save_deserialize_ready_df0\": {},\n",
         deserialize_ready.map_or_else(|| "null".to_owned(), |value| format!("\"{value:#x}\""))
     ));
+    // Corrupted-save SEMAPHORE: the GR_System_Message id (0 = none) the game fetched for a "save data
+    // is corrupted" dialog -- our RAM-read detector for that popup (the gold save was read but rejected
+    // on validate/write). See CORRUPTED_SAVE_MSG_IDS.
+    body.push_str(&format!(
+        "  \"oracle_corrupted_save_seen_id\": {},\n",
+        crate::experiments::CORRUPTED_SAVE_SEEN_ID.load(Ordering::SeqCst)
+    ));
+    // PRIVACY-POLICY SEMAPHORE (privacy-policy-gated-on-character-presence-CONFIRMED-2026-06-23):
+    // the Bandai-Namco PRIVACY POLICY boot screen is gated SOLELY on character presence -- it appears
+    // iff the active profile summary is loaded but reports ZERO active slots (no character). This is
+    // 1:1 with the on-screen privacy policy. When a gold load is EXPECTED (not telemetry-only), a true
+    // value is the BAD blocker: the gold did NOT load, so the main menu / Continue is never reached
+    // (the privacy-policy gate sits in front of it). On a real load this is false (char present ->
+    // policy skipped). This is the in-process detector that was MISSING when the screen blocked runs.
+    let privacy_policy_gate = profile_summary != NULL_POINTER_VALUE
+        && slot_active_bytes == Some(0)
+        && !crate::experiments::save_override_telemetry_only();
+    body.push_str(&format!(
+        "  \"oracle_privacy_policy_gate\": {privacy_policy_gate},\n"
+    ));
 }
 
 pub(crate) fn telemetry_path() -> PathBuf {

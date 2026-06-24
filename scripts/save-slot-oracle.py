@@ -56,6 +56,15 @@ FIXTURE_FACE_MAGIC_OFFSET = 0x13718
 FIXTURE_FACE_TO_PLAYER_GAME_DATA_DELTA = FIXTURE_FACE_MAGIC_OFFSET - FIXTURE_PLAYER_GAME_DATA_OFFSET
 LIVE_FACE_TO_PLAYER_GAME_DATA_DELTA = 0xA26C
 MAX_PLAYER_TO_FACE_SEARCH = 0x20000
+# A character's OWN FaceData (the first FACE magic in its USER_DATA00N slot) sits a
+# short, version-dependent distance after its PlayerGameData.  Measured deltas
+# (150-Banon): slot 0 = 0xa26c, slots 1-9 = 0xa22c.  We window the name-anchored
+# PGD scan to this bracket before the slot's leading FACE magic occurrence(s) so
+# the scan stays fast (a ~0x600-byte window, not a whole-slot walk) while still
+# tolerating the per-version delta variance with margin.
+PGD_FACE_DELTA_WINDOW_LOW = 0xA000
+PGD_FACE_DELTA_WINDOW_HIGH = 0xA600
+PGD_SCAN_LEADING_FACE_COUNT = 4
 MAX_FACE_MAGIC_OFFSETS = 64
 PLAYER_GAME_DATA_MIN_SIZE = 0x1B0
 FACE_DATA_BUFFER_PAYLOAD_SIZE = 276
@@ -333,12 +342,125 @@ def plausible_player_game_data(slot_data: bytes, player_game_data_offset: int, f
         and 0 < max_health <= 100_000
         and 0 < base_max_health <= 100_000
         and health <= max_health
-        and max_health <= base_max_health
+        # SL2.bt PlayerGameData.MaxHealth is the *effective* max HP (base + talisman
+        # / buff modifiers), while BaseMaxHealth is the unmodified base from Vigor.
+        # An equipped/leveled character therefore has base_max_health <= max_health
+        # (NOT the reverse) -- the earlier `max_health <= base_max_health` constraint
+        # was inverted and rejected every real high-level/equipped character, forcing
+        # the decoder into a backwards FACE scan that latched onto garbage
+        # character-creation template remnants in empty slots.  Evidence: 150-Banon
+        # slot 0 has health=2343, max_health=2343, base_max_health=1704.
+        and base_max_health <= max_health
         and gender in (0, 1)
         and 0 <= max_crimson <= 14
         and 0 <= max_cerulean <= 14
         and all(1 <= int(stat) <= 99 for stat in stats)
     )
+
+
+def plausible_player_game_data_core(slot_data: bytes, player_game_data_offset: int) -> bool:
+    """Validate a PlayerGameData block on its OWN fields, independent of any FACE buffer.
+
+    The FACE-anchored predicate (``plausible_player_game_data``) additionally
+    requires a co-located, well-formed FaceDataBuffer (version 4, size 288).  That
+    gate is too strong: some real characters (observed: 150-Banon slot 1
+    "Dark Moon Bean" L90) store a FaceData whose ``size`` field is not 288 at the
+    usual delta, so no FACE buffer validates next to the PGD even though the PGD
+    itself is sound.  This core predicate anchors only on the SL2.bt
+    PlayerGameData fields, so name+level+stats decode correctly even when the
+    face buffer is absent or in an unexpected format.
+    """
+    if player_game_data_offset < 0:
+        return False
+    if player_game_data_offset + PLAYER_GAME_DATA_MIN_SIZE > len(slot_data):
+        return False
+    level = read_u32_le(slot_data, pgd_offset(player_game_data_offset, PGD_REL_LEVEL))
+    health = read_u32_le(slot_data, pgd_offset(player_game_data_offset, PGD_REL_HEALTH))
+    max_health = read_u32_le(slot_data, pgd_offset(player_game_data_offset, PGD_REL_MAX_HEALTH))
+    base_max_health = read_u32_le(slot_data, pgd_offset(player_game_data_offset, PGD_REL_BASE_MAX_HEALTH))
+    gender = read_u8(slot_data, pgd_offset(player_game_data_offset, PGD_REL_GENDER))
+    max_crimson = read_u8(slot_data, pgd_offset(player_game_data_offset, PGD_REL_MAX_CRIMSON_FLASK_COUNT))
+    max_cerulean = read_u8(slot_data, pgd_offset(player_game_data_offset, PGD_REL_MAX_CERULEAN_FLASK_COUNT))
+    stats = [
+        read_u32_le(slot_data, pgd_offset(player_game_data_offset, PGD_REL_VIGOR + index * U32_SIZE))
+        for index in range(PGD_STAT_COUNT)
+    ]
+    if (
+        None in [level, health, max_health, base_max_health, gender, max_crimson, max_cerulean]
+        or any(stat is None for stat in stats)
+    ):
+        return False
+    name = player_game_data_name(slot_data, player_game_data_offset)
+    return bool(
+        plausible_character_name(name)
+        and 0 < level <= 713
+        and 0 < health <= 100_000
+        and 0 < max_health <= 100_000
+        and 0 < base_max_health <= 100_000
+        and health <= max_health
+        # SL2.bt PlayerGameData.MaxHealth is the *effective* max HP (base + talisman
+        # / buff modifiers); BaseMaxHealth is the unmodified base from Vigor.  A
+        # leveled/equipped character has base_max_health <= max_health (not the
+        # reverse).  Evidence: 150-Banon slot 0 health=2343 max_health=2343
+        # base_max_health=1704.
+        and base_max_health <= max_health
+        and gender in (0, 1)
+        and 0 <= max_crimson <= 14
+        and 0 <= max_cerulean <= 14
+        and all(1 <= int(stat) <= 99 for stat in stats)
+    )
+
+
+def scan_player_game_data_offsets(slot_data: bytes) -> list[int]:
+    """Locate PlayerGameData blocks using the FACE-independent core validator.
+
+    Every occupied SL2.bt slot stores its FaceData (a ``FACE`` magic) a short,
+    version-dependent distance AFTER its PlayerGameData.  We therefore window the
+    search to the region preceding each ``FACE`` magic occurrence (the magic bytes
+    are found even when the buffer's version/size fields are malformed, as happens
+    for some characters' own FaceData -- e.g. 150-Banon slot 1 "Dark Moon Bean",
+    whose nearest FACE has size!=288).  Within each window we accept any PGD that
+    passes ``plausible_player_game_data_core`` -- which anchors only on the
+    CharacterName / PlayerGameData fields, NOT on a well-formed FaceDataBuffer.
+    This is both correct (finds PGDs the FACE-coupled scan misses) and bounded
+    (a few windows of MAX_PLAYER_TO_FACE_SEARCH instead of a whole-slot byte walk).
+    """
+    offsets: set[int] = set()
+    leading_faces = find_face_magic_offsets(slot_data)[:PGD_SCAN_LEADING_FACE_COUNT]
+    for face_magic_offset in leading_faces:
+        start = max(0, face_magic_offset - PGD_FACE_DELTA_WINDOW_HIGH)
+        stop = max(start, face_magic_offset - PGD_FACE_DELTA_WINDOW_LOW)
+        for player_game_data_offset in range(start, stop):
+            if plausible_player_game_data_core(slot_data, player_game_data_offset):
+                offsets.add(player_game_data_offset)
+    return sorted(offsets)
+
+
+def face_magic_offset_for_pgd(slot_data: bytes, player_game_data_offset: int) -> int:
+    """Pick the FACE buffer offset to use for secondary face-data fields.
+
+    Prefer a well-formed FaceDataBuffer (FACE + version 4 + size 288) located at
+    one of the known PGD->FACE deltas; otherwise the nearest well-formed FACE
+    after the PGD; otherwise the fixed LIVE delta location (face bytes may then be
+    partial -- face fields are best-effort and never gate identity decoding).
+    """
+    def is_well_formed(face_magic_offset: int) -> bool:
+        if face_magic_offset < 0 or face_magic_offset + FACE_DATA_BUFFER_SIZE > len(slot_data):
+            return False
+        if slot_data[face_magic_offset:face_magic_offset + len(FACE_MAGIC)] != FACE_MAGIC:
+            return False
+        version = read_u32_le(slot_data, face_buffer_offset(face_magic_offset, len(FACE_MAGIC)))
+        size = read_u32_le(slot_data, face_buffer_offset(face_magic_offset, len(FACE_MAGIC) + U32_SIZE))
+        return version == 4 and size == FACE_DATA_BUFFER_SIZE
+
+    for delta in (LIVE_FACE_TO_PLAYER_GAME_DATA_DELTA, FIXTURE_FACE_TO_PLAYER_GAME_DATA_DELTA):
+        candidate = player_game_data_offset + delta
+        if is_well_formed(candidate):
+            return candidate
+    nearest = [off for off in find_face_magic_offsets(slot_data) if off >= player_game_data_offset and is_well_formed(off)]
+    if nearest:
+        return min(nearest, key=lambda off: off - player_game_data_offset)
+    return player_game_data_offset + LIVE_FACE_TO_PLAYER_GAME_DATA_DELTA
 
 
 def candidate_score(slot_data: bytes, player_game_data_offset: int, face_magic_offset: int) -> tuple[int, int]:
@@ -449,8 +571,15 @@ def decode_fields_at(
 
 
 def decode_sl2_bt_fixture_fields(slot_data: bytes) -> dict[str, Any]:
+    # Fixture fast-path: only trust the hard-coded fixture offsets when the PGD
+    # they point at actually validates -- otherwise a coincidental FACE byte at
+    # FIXTURE_FACE_MAGIC_OFFSET would mis-decode a differently-laid-out live save.
     face_at_fixture_offset = slot_data[FIXTURE_FACE_MAGIC_OFFSET:FIXTURE_FACE_MAGIC_OFFSET + len(FACE_MAGIC)] == FACE_MAGIC
-    if len(slot_data) >= FIXTURE_MIN_LENGTH and face_at_fixture_offset:
+    if (
+        len(slot_data) >= FIXTURE_MIN_LENGTH
+        and face_at_fixture_offset
+        and plausible_player_game_data(slot_data, FIXTURE_PLAYER_GAME_DATA_OFFSET, FIXTURE_FACE_MAGIC_OFFSET)
+    ):
         return decode_fields_at(
             slot_data,
             FIXTURE_PLAYER_GAME_DATA_OFFSET,
@@ -458,6 +587,30 @@ def decode_sl2_bt_fixture_fields(slot_data: bytes) -> dict[str, Any]:
             "sl2-bt-er-save-file-readers-fixture",
         )
 
+    # Primary live path: anchor on the CharacterName / PlayerGameData fields
+    # directly (FACE-independent).  This locates the true PGD for every occupied
+    # slot, including characters whose FaceDataBuffer is missing or in an
+    # unexpected format next to the PGD (e.g. 150-Banon slot 1 "Dark Moon Bean").
+    pgd_candidates = scan_player_game_data_offsets(slot_data)
+    if pgd_candidates:
+        scored = [
+            (
+                candidate_score(slot_data, player_game_data_offset, face_magic_offset_for_pgd(slot_data, player_game_data_offset)),
+                player_game_data_offset,
+            )
+            for player_game_data_offset in pgd_candidates
+        ]
+        _, player_game_data_offset = max(scored, key=lambda item: item[0])
+        face_magic_offset = face_magic_offset_for_pgd(slot_data, player_game_data_offset)
+        return decode_fields_at(
+            slot_data,
+            player_game_data_offset,
+            face_magic_offset,
+            "sl2-bt-live-user-data",
+        )
+
+    # Fallback: FACE-anchored scan (kept for saves where the name-anchored core
+    # validator finds nothing but a co-located valid FACE buffer exists).
     candidates: list[tuple[tuple[int, int], int, int]] = []
     for face_magic_offset in find_face_magic_offsets(slot_data):
         for player_game_data_offset in candidate_player_game_data_offsets(slot_data, face_magic_offset):

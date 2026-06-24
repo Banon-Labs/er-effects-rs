@@ -25,6 +25,31 @@ RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-$RUNTIME_TIMEOUT_CAP_SECONDS
 RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-vanilla}"
 DRY_RUN=0
 
+# SAVE-SOURCE STAGING (save-override-no-default-fallback-mandatory-env-2026-06-23).
+# The DLL refuses to assume the default user save dir: it requires ER_EFFECTS_SAVE_FILE (or an
+# explicit telemetry-only run). The GOLD SAVE does NOT live in appdata -- the user holds it and
+# supplies it via ER_EFFECTS_GOLD_SAVE. Every load probe stages a COPY of that gold save and points
+# the DLL at it (autosaves then land in the copy, never anywhere user-owned). Pure observe/menu-reach
+# probes set RUNTIME_TELEMETRY_ONLY=1 instead.
+GOLD_SAVE="${ER_EFFECTS_GOLD_SAVE:-}"
+RUNTIME_TELEMETRY_ONLY="${RUNTIME_TELEMETRY_ONLY:-0}"
+# A real fixed-slot ER0000.sl2 BND4 is ~28MB even with empty slots; reject anything implausibly small.
+GOLD_SAVE_MIN_BYTES="${GOLD_SAVE_MIN_BYTES:-1048576}"
+# Root of the per-account default save dirs. Their SAVE FILES are wiped before launch AND on teardown
+# so the game can never read a default character -- a successful load can ONLY come from our override.
+# NEVER back these up: the user holds their own backups (never-backup-user-saves-2026-06-23).
+APPDATA_ER_ROOT="${APPDATA_ER_ROOT:-$HOME/.local/share/Steam/steamapps/compatdata/1245620/pfx/drive_c/users/steamuser/AppData/Roaming/EldenRing}"
+
+# Wipe (delete, no backup) every save artifact under the default appdata save dirs. Idempotent.
+# Skipped when RUNTIME_SKIP_APPDATA_WIPE=1 (the vanilla save-read TRACE needs a char-present save to
+# survive in the real appdata so we can observe how the working case opens ER0000.sl2).
+wipe_appdata_saves() {
+  [[ "${RUNTIME_SKIP_APPDATA_WIPE:-0}" == "1" ]] && return 0
+  [[ -d "$APPDATA_ER_ROOT" ]] || return 0
+  find "$APPDATA_ER_ROOT" -maxdepth 2 -type f \
+    \( -name '*.sl2' -o -name '*.co2' -o -name '*.bak' \) -delete 2>/dev/null || true
+}
+
 usage() {
   cat <<EOF
 Usage: $0 [--dry-run] [--autoload-request PATH]
@@ -100,6 +125,17 @@ preflight() {
   if [[ -n "$(runtime_pids)" ]]; then
     fatal "eldenring.exe is already running; refusing to mix probe ownership"
   fi
+  # SAVE-PRESENCE GUARD (fail-closed): unless this is an explicit telemetry-only run, a real gold
+  # save MUST exist to stage -- otherwise the DLL would abort at init anyway, and historically a
+  # missing/empty save silently degraded the run to the level-9 default with NO signal. Catch it
+  # here, before burning a launch.
+  if [[ "$RUNTIME_TELEMETRY_ONLY" != "1" ]]; then
+    [[ -n "$GOLD_SAVE" ]] || fatal "ER_EFFECTS_GOLD_SAVE is unset -- the gold save is NOT in appdata; supply its absolute path (or set RUNTIME_TELEMETRY_ONLY=1 for an observe-only run)"
+    [[ -f "$GOLD_SAVE" ]] || fatal "gold save not found: $GOLD_SAVE"
+    local gold_bytes
+    gold_bytes=$(stat -c '%s' "$GOLD_SAVE" 2>/dev/null || echo 0)
+    (( gold_bytes >= GOLD_SAVE_MIN_BYTES )) || fatal "gold save too small ($gold_bytes bytes < $GOLD_SAVE_MIN_BYTES): $GOLD_SAVE -- not a real save"
+  fi
 }
 
 write_autoload_request() {
@@ -135,6 +171,12 @@ terminate_runtime_pids() {
 
 cleanup() {
   local pid
+  # Teardown/crash/trap EVIDENCE: low-quality screenshot of the ER window BEFORE we kill it
+  # (best-effort, privacy fail-closed -- only the validated ER window, else a .txt note; never the
+  # desktop). Must run while the game window still exists, so it is the FIRST thing in cleanup.
+  if [[ -n "${ARTIFACT_DIR:-}" && -d "${ARTIFACT_DIR:-/nonexistent}" ]]; then
+    python3 "$REPO_ROOT/scripts/capture-er-window.py" "$ARTIFACT_DIR/teardown-screenshot.jpg" 2>/dev/null || true
+  fi
   if [[ -s "$PID_FILE" ]]; then
     IFS= read -r pid < "$PID_FILE" || pid=""
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
@@ -142,8 +184,10 @@ cleanup() {
     fi
   fi
   terminate_runtime_pids
+  # Teardown wipe: leave the default appdata save dirs with NO save files, every time.
+  wipe_appdata_saves
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM HUP
 
 preflight
 ARTIFACT_DIR=$(realpath -m "$ARTIFACT_DIR")
@@ -173,7 +217,46 @@ fi
 # anything. Deleting these reproduces first-run-in-a-fresh-dir behavior; the DLL re-creates them
 # once it boots, and the watcher already tolerates their absence while waiting for fresh telemetry.
 rm -f "$TELEMETRY_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH" "$CRASH_LOG_PATH" "$AUTOLOAD_DEBUG_PATH"
+# Wipe any prior teardown screenshot BEFORE the run (never after -- we keep this run's for inspection)
+# so a fail-closed/absent capture this run is OBVIOUS (no file) instead of a STALE image we might
+# mis-read as current. (Capture is written at teardown in cleanup().)
+rm -f "$ARTIFACT_DIR/teardown-screenshot.jpg" "$ARTIFACT_DIR/teardown-screenshot.png" "$ARTIFACT_DIR/teardown-screenshot.txt"
 write_autoload_request
+
+# SAVE SOURCE: the DLL never assumes the default user save dir. Either declare telemetry-only
+# (loads nothing) or stage an isolated copy of the gold save and point the DLL at it. Staging a
+# COPY (named ER0000.sl2 so the DLL's basename-preserving redirect lands on it) means the game's
+# autosaves write to the copy, never the user's real save -- save-safe by construction.
+if [[ "$RUNTIME_TELEMETRY_ONLY" == "1" ]]; then
+  export ER_EFFECTS_TELEMETRY_ONLY=1
+  echo "save-source: TELEMETRY-ONLY (no character load; default save dir not read)"
+else
+  # Stage into an EldenRing/<steamid>/ subtree: the DLL redirects the whole
+  # %APPDATA%\Roaming\EldenRing directory handle (the game decides "save present?" by enumerating it,
+  # never opening ER0000.sl2 by path), so the staged tree must mirror that structure with the ACTIVE
+  # account's SteamID so the game's <steamid> path resolves into our copy.
+  ACTIVE_STEAMID="${ER_EFFECTS_ACTIVE_STEAMID:-76561197986456766}"
+  STAGED_ROOT="$ARTIFACT_DIR/save"
+  # Stage matching the game's own case (EldenRing/<steamid>/ER0000.sl2, as the vanilla-created file).
+  # The DLL redirects the %APPDATA% ROOT via SHGetFolderPathW, so the game builds these exact paths
+  # under our tree and opens them natively -- an exact-case match is the safest under Wine.
+  STAGED_SAVE_DIR="$STAGED_ROOT/EldenRing/$ACTIVE_STEAMID"
+  STAGED_SAVE="$STAGED_SAVE_DIR/ER0000.sl2"
+  mkdir -p "$STAGED_SAVE_DIR"
+  cp -f "$GOLD_SAVE" "$STAGED_SAVE"
+  export ER_EFFECTS_SAVE_FILE="$STAGED_SAVE"
+  # Steer the native Continue (most-recent) path to the gold character's slot: the DLL calls the
+  # game's set_save_slot(GOLD_SLOT) before firing Continue so continue_load(-1) resolves to it. Unset
+  # GOLD_SLOT (or -1) leaves the game's true most-recent selection.
+  if [[ -n "${ER_EFFECTS_GOLD_SLOT:-}" && "${ER_EFFECTS_GOLD_SLOT}" != "-1" ]]; then
+    export ER_EFFECTS_AUTOLOAD_SLOT="$ER_EFFECTS_GOLD_SLOT"
+  fi
+  echo "save-source: staged gold save -> $STAGED_SAVE (ER_EFFECTS_SAVE_FILE); slot=${ER_EFFECTS_GOLD_SLOT:-most-recent}; autosaves isolated from $GOLD_SAVE"
+fi
+
+# Pre-launch wipe: the default appdata save dirs must start empty so the game cannot read a default
+# character -- any character that loads can ONLY have come from our redirect. (Also wiped on teardown.)
+wipe_appdata_saves
 
 # TRUE T0 = the closest bash timestamp to eldenring.exe process start. Captured here, immediately
 # before the Proton launch is fired, written to launch-epoch.txt AND exported to the watcher as
@@ -182,6 +265,21 @@ write_autoload_request
 # already existing, so starting it just after the launch fire does not race.
 LAUNCH_EPOCH="$(date +%s.%N)"
 printf '%s\n' "$LAUNCH_EPOCH" > "$ARTIFACT_DIR/launch-epoch.txt"
+
+# Optional: render Elden Ring inside a gamescope HEADLESS nested compositor (GAMESCOPE_HEADLESS=1).
+# gamescope's headless backend always drives the present loop into an offscreen buffer, so the game
+# runs at full speed regardless of the host compositor's focus/visibility -- this is what lets a probe
+# run CONCURRENTLY while the user plays another game. Without it, an unfocused/occluded ER surface
+# gets no Wayland frame callbacks and Present blocks (verdict: the stall is present-block, NOT a code
+# throttle -- bd unfocused-throttle-is-present-block-not-code-2026-06-23). Headless = no host window
+# at all, so nothing ever appears on the user's monitor and no compositor mutation is needed.
+gamescope_prefix=()
+if [[ "${GAMESCOPE_HEADLESS:-0}" == "1" ]]; then
+  command -v gamescope >/dev/null 2>&1 || fatal "GAMESCOPE_HEADLESS=1 but gamescope is not in PATH"
+  # Modest offscreen size + fps to limit GPU contention with the user's foreground game.
+  gamescope_prefix=(gamescope --backend headless -W "${GAMESCOPE_W:-1280}" -H "${GAMESCOPE_H:-720}" -r "${GAMESCOPE_FPS:-30}" --)
+  echo "render: gamescope headless backend ${GAMESCOPE_W:-1280}x${GAMESCOPE_H:-720}@${GAMESCOPE_FPS:-30} (offscreen, focus-independent)"
+fi
 
 (
   cd "$GAME_DIR"
@@ -192,7 +290,7 @@ printf '%s\n' "$LAUNCH_EPOCH" > "$ARTIFACT_DIR/launch-epoch.txt"
   ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
   ER_EFFECTS_CRASH_LOG_PATH="$CRASH_LOG_PATH" \
   ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" \
-  "$PROTON" run "$GAME_DIR/eldenring.exe" > "$ARTIFACT_DIR/proton-run.out" 2>&1 & echo $! > "$PID_FILE"
+  "${gamescope_prefix[@]}" "$PROTON" run "$GAME_DIR/eldenring.exe" > "$ARTIFACT_DIR/proton-run.out" 2>&1 & echo $! > "$PID_FILE"
 )
 
 (
