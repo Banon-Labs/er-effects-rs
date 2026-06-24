@@ -8,11 +8,10 @@ from pathlib import Path
 
 MAX_SCORE = 1400
 root = Path.cwd()
-runtime_src = root / 'crates' / 'er-runtime' / 'src'
-lib = (runtime_src / 'lib.rs').read_text(encoding='utf-8', errors='replace')
-exp = (runtime_src / 'experiments.rs').read_text(encoding='utf-8', errors='replace')
+lib = (root / 'src/lib.rs').read_text(encoding='utf-8', errors='replace')
+exp = (root / 'src/experiments.rs').read_text(encoding='utf-8', errors='replace')
 check = (root / 'scripts/check-autoload-happy-path.py').read_text(encoding='utf-8', errors='replace')
-telemetry_src = (runtime_src / 'telemetry.rs').read_text(encoding='utf-8', errors='replace')
+telemetry_src = (root / 'src/telemetry.rs').read_text(encoding='utf-8', errors='replace')
 watcher = (root / 'scripts/er-readiness-watch.py').read_text(encoding='utf-8', errors='replace')
 native_static_check = (root / 'scripts/check-native-continue-static.py').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/check-native-continue-static.py').exists() else ''
 menu_ctor_static_check = (root / 'scripts/check-menu-constructor-static.py').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/check-menu-constructor-static.py').exists() else ''

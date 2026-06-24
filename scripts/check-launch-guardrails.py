@@ -222,7 +222,7 @@ def scan_contract() -> list[Finding]:
     findings.extend(snippet_findings(AGENTS, AGENTS_REQUIRED_SNIPPETS, "agents-missing-launch-guard-instructions", "Record the launch/bundle rule in AGENTS.md so future agents see it before acting."))
     findings.extend(forbidden_line_findings(SMOKE_DRIVER, SMOKE_DRIVER_FORBIDDEN_SNIPPETS, "smoke-driver-forbidden-launch-mode", "Remove Steam and start_protected_game launch modes from the smoke driver; only direct offline eldenring.exe launch may remain."))
     findings.extend(forbidden_line_findings(RUNTIME_PROBE, RUNTIME_PROBE_FORBIDDEN_SNIPPETS, "runtime-probe-bundles-ersc-into-target", "Do not stage SeamlessCoop/ersc.dll into repo target artifacts; stage locally beside the source file if it must be temporarily moved."))
-    findings.extend(forbidden_line_findings(RELEASE_SCRIPT, RELEASE_FORBIDDEN_SNIPPETS, "release-script-bundles-ersc", "Release staging must include only LazyLoader proxy/config and er_quickload_rs.dll, never SeamlessCoop/ersc.dll."))
+    findings.extend(forbidden_line_findings(RELEASE_SCRIPT, RELEASE_FORBIDDEN_SNIPPETS, "release-script-bundles-ersc", "Release staging must include only LazyLoader proxy/config and er_effects_rs.dll, never SeamlessCoop/ersc.dll."))
     findings.extend(artifact_forbidden_launch_findings())
     findings.extend(artifact_contents_findings())
     return findings

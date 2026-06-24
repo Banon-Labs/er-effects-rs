@@ -214,28 +214,6 @@ dependencies = [
 name = "er-effects-rs"
 version = "0.1.0"
 dependencies = [
- "er-runtime",
-]
-
-[[package]]
-name = "er-param-inspect"
-version = "0.1.0"
-dependencies = [
- "er-effects-data",
- "er-soulsformats",
-]
-
-[[package]]
-name = "er-quickload-rs"
-version = "0.1.0"
-dependencies = [
- "er-runtime",
-]
-
-[[package]]
-name = "er-runtime"
-version = "0.1.0"
-dependencies = [
  "debug",
  "eldenring",
  "er-effects-data",
@@ -244,6 +222,14 @@ dependencies = [
  "fromsoftware-shared",
  "hudhook",
  "iced-x86",
+]
+
+[[package]]
+name = "er-param-inspect"
+version = "0.1.0"
+dependencies = [
+ "er-effects-data",
+ "er-soulsformats",
 ]
 
 [[package]]

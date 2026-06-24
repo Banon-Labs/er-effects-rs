@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 STAGE_SCRIPT = REPO_ROOT / "scripts" / "stage-autoload-release.sh"
 
 EXPECTED_LAZYLOAD = """; LazyLoader by Church Guard
-; er-quickload-rs must be properly loaded, not lazy-loaded, so it is the CHAINLOAD DLL.
+; er-effects-rs must be properly loaded, not lazy-loaded, so it is the CHAINLOAD DLL.
 ; Put additional LazyLoader mods in dllMods and list them under [LOADORDER].
 
 [LAZYLOAD]
@@ -22,7 +22,7 @@ dllModFolderName=dllMods
 [LOADORDER]
 
 [CHAINLOAD]
-dll=er_quickload_rs.dll
+dll=er_effects_rs.dll
 """
 
 EXPECTED_AUTOLOAD = """slot=0
@@ -31,7 +31,7 @@ require_title_bootstrap=false
 """
 
 EXPECTED_SPLASH_SKIP = """# Copy this file to er-effects-splash-skip.txt next to eldenring.exe to enable
-# er-quickload-rs' built-in current-version splash skip patch.
+# er-effects-rs' built-in current-version splash skip patch.
 """
 
 
@@ -41,13 +41,13 @@ def main() -> int:
         lazyloader = tmp_path / "lazyloader"
         lazyloader.mkdir()
         (lazyloader / "dinput8.dll").write_bytes(b"fake lazyloader proxy\n")
-        quickload_dll = tmp_path / "er_quickload_rs.dll"
-        quickload_dll.write_bytes(b"fake er quickload dll\n")
+        er_dll = tmp_path / "er_effects_rs.dll"
+        er_dll.write_bytes(b"fake er effects dll\n")
         out = tmp_path / "release"
 
         env = os.environ.copy()
         env["LAZYLOADER_DIR"] = str(lazyloader)
-        env["ER_QUICKLOAD_DLL"] = str(quickload_dll)
+        env["ER_EFFECTS_DLL"] = str(er_dll)
         result = subprocess.run(
             [str(STAGE_SCRIPT), "--no-build", "--output", str(out)],
             cwd=REPO_ROOT,
@@ -65,7 +65,7 @@ def main() -> int:
         expected_files = {
             "dinput8.dll",
             "lazyLoad.ini",
-            "er_quickload_rs.dll",
+            "er_effects_rs.dll",
             "er-effects-autoload.txt.example",
             "er-effects-splash-skip.txt.example",
             "SHA256SUMS.txt",
@@ -80,7 +80,7 @@ def main() -> int:
         if (out / "er-effects-splash-skip.txt.example").read_text(encoding="utf-8") != EXPECTED_SPLASH_SKIP:
             raise SystemExit("splash-skip example does not document the built-in current-version patch")
         if list((out / "dllMods").glob("*.dll")):
-            raise SystemExit("dllMods should be empty in the clean er-quickload-rs chainload package")
+            raise SystemExit("dllMods should be empty in the clean er-effects-rs chainload package")
         if shutil.which("sha256sum") is None:
             raise SystemExit("sha256sum unexpectedly unavailable after staging")
 

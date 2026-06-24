@@ -106,8 +106,6 @@ fails), so a bare `python3 scripts/dump-deobf-shift.py ...` also works.
 
 Shell commands like `cp`, `mv`, and `rm` may be aliased to include `-i` (interactive) mode on some systems, causing the agent to hang indefinitely waiting for y/n input.
 
-Cupcake also blocks top-level Bash command chains split with `;`; use separate bounded Bash calls or a named repo script instead of semicolon-packed one-liners.
-
 **Use these forms instead:**
 ```bash
 # Force overwrite without prompting
@@ -196,19 +194,15 @@ bash scripts/check.sh
 cargo test -p er-soulsformats -p er-param-inspect
 cargo check -p er-soulsformats -p er-param-inspect
 
-# The game DLLs (cross-compiled to x86_64-pc-windows-msvc from Linux via cargo-xwin):
-cargo xwin build --release --target x86_64-pc-windows-msvc -p er-effects-rs -p er-quickload-rs
-# Outputs:
-#   target/x86_64-pc-windows-msvc/release/er_effects_rs.dll
-#   target/x86_64-pc-windows-msvc/release/er_quickload_rs.dll
+# The game DLL itself (cross-compiled to x86_64-pc-windows-msvc from Linux via cargo-xwin):
+cargo xwin build --release --target x86_64-pc-windows-msvc
+# Output: target/x86_64-pc-windows-msvc/release/er_effects_rs.dll
 ```
 
 ## Architecture Overview
 
-- `src/lib.rs` -- thin `er_effects_rs.dll` wrapper that exports the DINPUT8 proxy surface plus `DllMain` for the HUD/SpEffect overlay DLL.
-- `crates/er-quickload-rs` -- thin `er_quickload_rs.dll` wrapper that exports only `DllMain` for the quickload/autoload DLL.
-- `crates/er-runtime` -- shared injected runtime used by both DLL wrappers. The effects mode spawns the recurring game task and hudhook/ImGui overlay; quickload mode initializes the autoload/telemetry path without the overlay or SpEffect application.
-- `data/effects.json` -- the named SpEffect call list, embedded into the runtime at compile time and validated offline against `SpEffectParam`.
+- `src/lib.rs` -- the injectable DLL. On `DLL_PROCESS_ATTACH` it spawns a recurring game task (via `CSTaskImp`) that watches the local player's TimeAct animation queue and applies the selected SpEffects, plus a hudhook/ImGui overlay for toggling effects, manual apply/remove, and live status.
+- `data/effects.json` -- the named SpEffect call list, embedded into the DLL at compile time and validated offline against `SpEffectParam`.
 - `crates/soulsformats` (`er-soulsformats`) -- host-side library that drives a generated .NET "bridge" project against Smithbox's `Andre.Formats`/SoulsFormats to read `regulation.bin` params. Also contains the parser for FastSpEffectRecon Ghidra output (`recon` module).
 - `tools/er-param-inspect` -- CLI over `er-soulsformats`: inspect param rows and validate `data/effects.json` against a regulation file.
 - `docs/` -- reference-tree research notes and recon data (`docs/recon/`).

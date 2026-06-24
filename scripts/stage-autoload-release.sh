@@ -11,15 +11,15 @@ Usage: scripts/stage-autoload-release.sh [--output DIR] [--no-build]
 
 Stages the supported zero-input autoload release payload:
   dinput8.dll                  LazyLoader proxy
-  lazyLoad.ini                 CHAINLOAD er_quickload_rs.dll as the properly-loaded autoload mod
-  er_quickload_rs.dll          quickload/autoload DLL loaded through LazyLoader [CHAINLOAD]
+  lazyLoad.ini                 CHAINLOAD er_effects_rs.dll as the properly-loaded mod
+  er_effects_rs.dll            repo DLL loaded through LazyLoader [CHAINLOAD]
   dllMods/                     available for other LazyLoader mods
   er-effects-autoload.txt.example
   er-effects-splash-skip.txt.example  optional built-in splash-skip toggle
 
 Environment:
-  LAZYLOADER_DIR    directory containing LazyLoader dinput8.dll
-  ER_QUICKLOAD_DLL  prebuilt er_quickload_rs.dll path (defaults to target release DLL)
+  LAZYLOADER_DIR  directory containing LazyLoader dinput8.dll
+  ER_EFFECTS_DLL  prebuilt er_effects_rs.dll path (defaults to target release DLL)
 EOF
 }
 
@@ -47,18 +47,18 @@ done
 
 lazyloader_dir="${LAZYLOADER_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game/dllMods.disabled/lazyloader-20260611-234916}"
 lazyloader_proxy="$lazyloader_dir/dinput8.dll"
-er_quickload_dll="${ER_QUICKLOAD_DLL:-$repo_root/target/x86_64-pc-windows-msvc/release/er_quickload_rs.dll}"
+er_effects_dll="${ER_EFFECTS_DLL:-$repo_root/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll}"
 
 if [[ "$build" == "1" ]]; then
-  cargo xwin build --manifest-path "$repo_root/Cargo.toml" --target x86_64-pc-windows-msvc --release -p er-quickload-rs
+  cargo xwin build --manifest-path "$repo_root/Cargo.toml" --target x86_64-pc-windows-msvc --release
 fi
 
 if [[ ! -f "$lazyloader_proxy" ]]; then
   echo "missing LazyLoader dinput8.dll: $lazyloader_proxy" >&2
   exit 1
 fi
-if [[ ! -f "$er_quickload_dll" ]]; then
-  echo "missing er_quickload_rs.dll: $er_quickload_dll" >&2
+if [[ ! -f "$er_effects_dll" ]]; then
+  echo "missing er_effects_rs.dll: $er_effects_dll" >&2
   exit 1
 fi
 
@@ -68,10 +68,10 @@ rm -rf "$tmp_dir"
 mkdir -p "$tmp_dir/dllMods"
 
 cp -f "$lazyloader_proxy" "$tmp_dir/dinput8.dll"
-cp -f "$er_quickload_dll" "$tmp_dir/er_quickload_rs.dll"
+cp -f "$er_effects_dll" "$tmp_dir/er_effects_rs.dll"
 cat > "$tmp_dir/lazyLoad.ini" <<'EOF'
 ; LazyLoader by Church Guard
-; er-quickload-rs must be properly loaded, not lazy-loaded, so it is the CHAINLOAD DLL.
+; er-effects-rs must be properly loaded, not lazy-loaded, so it is the CHAINLOAD DLL.
 ; Put additional LazyLoader mods in dllMods and list them under [LOADORDER].
 
 [LAZYLOAD]
@@ -80,7 +80,7 @@ dllModFolderName=dllMods
 [LOADORDER]
 
 [CHAINLOAD]
-dll=er_quickload_rs.dll
+dll=er_effects_rs.dll
 EOF
 cat > "$tmp_dir/er-effects-autoload.txt.example" <<'EOF'
 slot=0
@@ -89,11 +89,11 @@ require_title_bootstrap=false
 EOF
 cat > "$tmp_dir/er-effects-splash-skip.txt.example" <<'EOF'
 # Copy this file to er-effects-splash-skip.txt next to eldenring.exe to enable
-# er-quickload-rs' built-in current-version splash skip patch.
+# er-effects-rs' built-in current-version splash skip patch.
 EOF
 (
   cd "$tmp_dir"
-  sha256sum dinput8.dll lazyLoad.ini er_quickload_rs.dll er-effects-autoload.txt.example er-effects-splash-skip.txt.example > SHA256SUMS.txt
+  sha256sum dinput8.dll lazyLoad.ini er_effects_rs.dll er-effects-autoload.txt.example er-effects-splash-skip.txt.example > SHA256SUMS.txt
 )
 
 rm -rf "$out_dir"

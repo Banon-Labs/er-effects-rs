@@ -8,10 +8,9 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-RUNTIME_SRC = REPO_ROOT / "crates" / "er-runtime" / "src"
-EXPERIMENTS = RUNTIME_SRC / "experiments.rs"
-LIB = RUNTIME_SRC / "lib.rs"
-TELEMETRY = RUNTIME_SRC / "telemetry.rs"
+EXPERIMENTS = REPO_ROOT / "src" / "experiments.rs"
+LIB = REPO_ROOT / "src" / "lib.rs"
+TELEMETRY = REPO_ROOT / "src" / "telemetry.rs"
 WATCHER = REPO_ROOT / "scripts" / "er-readiness-watch.py"
 STAGE_SCRIPT = REPO_ROOT / "scripts" / "stage-autoload-release.sh"
 NATIVE_STATIC_CHECK = REPO_ROOT / "scripts" / "check-native-continue-static.py"
@@ -481,8 +480,8 @@ def main() -> int:
     require("own_stepper_enabled()" in online_body, "product autoload must inherit offline mode via own_stepper_enabled()", failures)
     require("own_stepper_enabled()" in input_body, "product autoload must inherit input blocking via own_stepper_enabled()", failures)
 
-    require("dll=er_quickload_rs.dll" in stage, "release staging must CHAINLOAD er_quickload_rs.dll as the properly-loaded autoload mod", failures)
-    require("0=er_quickload_rs.dll" not in stage, "release staging must not lazy-load er_quickload_rs.dll through LOADORDER", failures)
+    require("dll=er_effects_rs.dll" in stage, "release staging must CHAINLOAD er_effects_rs.dll as the properly-loaded mod", failures)
+    require("0=er_effects_rs.dll" not in stage, "release staging must not lazy-load er_effects_rs.dll through LOADORDER", failures)
     require("dllModFolderName=dllMods" in stage, "release staging must use dllMods as LazyLoader folder", failures)
     require("er_skip_splash_screens.dll" not in stage, "release staging must not include stale skip-splash DLLs", failures)
     require("er-effects-autoload.txt.example" in stage, "release staging must include an autoload request example", failures)
@@ -546,7 +545,7 @@ def main() -> int:
         "measure must enforce product autoload uses the native Continue row load path, not direct_build",
         failures,
     )
-    telemetry_src = read(TELEMETRY)
+    telemetry_src = read(REPO_ROOT / "src" / "telemetry.rs")
     require(
         "MSGBOX_LAST_DIALOG" in lib
         and "MSGBOX_TOTAL_BUILDS" in lib
