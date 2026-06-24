@@ -531,6 +531,23 @@ fn parse_bool(value: &str) -> bool {
     matches!(value, "1" | "true" | "yes" | "on")
 }
 
+fn experimental_direct_menu_load_env_enabled() -> bool {
+    std::env::var("ER_EFFECTS_EXPERIMENTAL_DIRECT_MENU_LOAD")
+        .is_ok_and(|value| parse_bool(value.trim()))
+}
+
+fn normalize_experimental_direct_menu_load(
+    request: &mut SaveLoadRequest,
+    experimental_direct_menu_load: bool,
+) {
+    if request.method == SaveLoadMethod::DirectMenuLoad
+        && !experimental_direct_menu_load
+        && !experimental_direct_menu_load_env_enabled()
+    {
+        request.method = SaveLoadMethod::SaveRequested;
+    }
+}
+
 impl SaveLoadRequest {
     #[must_use]
     pub fn from_env() -> Self {
@@ -545,8 +562,10 @@ impl SaveLoadRequest {
         {
             request.slot = Some(slot);
         }
+        let mut method_from_env = false;
         if let Ok(method) = std::env::var("ER_EFFECTS_AUTOLOAD_METHOD") {
             request.method = SaveLoadMethod::from_label(&method);
+            method_from_env = true;
         }
         if let Ok(require_title_bootstrap) =
             std::env::var("ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP")
@@ -580,6 +599,9 @@ impl SaveLoadRequest {
         ) {
             request.own_load_install_job = true;
         }
+        if method_from_env {
+            normalize_experimental_direct_menu_load(&mut request, false);
+        }
 
         request
     }
@@ -599,6 +621,7 @@ impl SaveLoadRequest {
             return request;
         };
 
+        let mut experimental_direct_menu_load = false;
         for line in contents.lines().map(str::trim) {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
@@ -619,9 +642,13 @@ impl SaveLoadRequest {
                 "own_dispatch" => request.own_dispatch = parse_bool(value.trim()),
                 "own_load_install_job" => request.own_load_install_job = parse_bool(value.trim()),
                 "own_load_pump" => request.own_load_pump = parse_bool(value.trim()),
+                "experimental_direct_menu_load" => {
+                    experimental_direct_menu_load = parse_bool(value.trim())
+                }
                 _ => {}
             }
         }
+        normalize_experimental_direct_menu_load(&mut request, experimental_direct_menu_load);
 
         request
     }
@@ -1066,7 +1093,7 @@ mod tests {
         ));
         fs::write(
             &path,
-            "save_ext=co2\nslot=9\nmethod=direct_menu_load\nrequire_title_bootstrap=false\nown_load=1\nown_load_continue=1\nignored=true\n",
+            "save_ext=co2\nslot=9\nmethod=direct_menu_load\nexperimental_direct_menu_load=1\nrequire_title_bootstrap=false\nown_load=1\nown_load_continue=1\nignored=true\n",
         )
         .unwrap();
 
@@ -1081,6 +1108,22 @@ mod tests {
         assert!(request.own_load_continue);
         assert!(!request.own_stepper);
         assert!(!request.cold_char_mount);
+    }
+
+    #[test]
+    fn direct_menu_load_downgrades_without_experimental_gate() {
+        let path = std::env::temp_dir().join(format!(
+            "er-save-loader-test-direct-gate-{}-{}.txt",
+            std::process::id(),
+            TEST_TEMP_FILE_DISAMBIGUATOR
+        ));
+        fs::write(&path, "slot=9\nmethod=direct_menu_load\n").unwrap();
+
+        let request = SaveLoadRequest::from_autoload_file_at(&path);
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(request.slot, Some(TEST_SLOT));
+        assert_eq!(request.method, SaveLoadMethod::SaveRequested);
     }
 
     #[test]
@@ -1145,6 +1188,7 @@ mod tests {
             own_load_continue: false,
             own_dispatch: false,
             own_load_install_job: false,
+            own_load_pump: false,
         });
 
         let step = unsafe {
@@ -1182,6 +1226,7 @@ mod tests {
             own_load_continue: false,
             own_dispatch: false,
             own_load_install_job: false,
+            own_load_pump: false,
         });
 
         let step = unsafe {
@@ -1191,6 +1236,7 @@ mod tests {
                     SaveLoadContext {
                         game_module_base: TEST_NULL_MODULE_BASE,
                         title_handoff_complete: false,
+                        loadgame_build_ctx_ready: false,
                     },
                     |_| {},
                 )

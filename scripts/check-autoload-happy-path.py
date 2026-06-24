@@ -10,6 +10,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO_ROOT / "src" / "experiments.rs"
 LIB = REPO_ROOT / "src" / "lib.rs"
+CONSTANTS = REPO_ROOT / "src" / "constants.rs"
 TELEMETRY = REPO_ROOT / "src" / "telemetry.rs"
 WATCHER = REPO_ROOT / "scripts" / "er-readiness-watch.py"
 STAGE_SCRIPT = REPO_ROOT / "scripts" / "stage-autoload-release.sh"
@@ -108,6 +109,8 @@ def main() -> int:
     failures: list[str] = []
     experiments = read(EXPERIMENTS)
     lib = read(LIB)
+    if CONSTANTS.exists():
+        lib += "\n" + read(CONSTANTS)
     stage = read(STAGE_SCRIPT)
     telemetry = read(TELEMETRY)
     watcher = read(WATCHER)
@@ -152,11 +155,18 @@ def main() -> int:
     )
 
     arm_body = rust_fn_body(experiments, "arm_product_autoload_from_request")
-    require("SaveLoadMethod::DirectMenuLoad" in arm_body, "product arm must be limited to direct_menu_load", failures)
+    require("SaveLoadMethod::DirectMenuLoad" in arm_body, "product arm must recognize direct_menu_load", failures)
+    require("experimental_direct_menu_load_enabled()" in arm_body, "direct_menu_load/product_core must require the explicit experimental gate", failures)
     require("request.slot()" in arm_body, "product arm must require an explicit slot", failures)
     require("OWN_STEPPER_SLOT.store(slot" in arm_body, "product arm must propagate the requested slot", failures)
     require("PRODUCT_AUTOLOAD_ARMED.store" in arm_body, "product arm must latch PRODUCT_AUTOLOAD_ARMED", failures)
     require("append_autoload_debug" not in arm_body, "product arm must not perform early debug/file I/O", failures)
+    require(
+        "ER_EFFECTS_EXPERIMENTAL_DIRECT_MENU_LOAD" in experiments
+        and "er-effects-experimental-direct-menu-load.txt" in experiments,
+        "direct_menu_load/product_core experiment must have an explicit env/file gate",
+        failures,
+    )
 
     for gate in sorted(REQUIRED_PRODUCT_GATES):
         body = rust_fn_body(experiments, gate)
@@ -486,13 +496,14 @@ def main() -> int:
     require("er_skip_splash_screens.dll" not in stage, "release staging must not include stale skip-splash DLLs", failures)
     require("er-effects-autoload.txt.example" in stage, "release staging must include an autoload request example", failures)
     require(
-        re.search(r"method=direct_menu_load", stage) is not None,
-        "release staging autoload example must use direct_menu_load",
+        re.search(r"method=direct_menu_load", stage) is None,
+        "release staging autoload example must not arm experimental direct_menu_load/product_core by default",
         failures,
     )
     require(
-        re.search(r"require_title_bootstrap=false", stage) is not None,
-        "release staging autoload example must not require title/front-end bootstrap",
+        "er-effects-native-continue.txt.example" in stage
+        and "er-effects-pab-advance.txt.example" in stage,
+        "release staging must document the supported native Continue + PAB zero-input gates",
         failures,
     )
 

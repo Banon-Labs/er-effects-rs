@@ -530,15 +530,28 @@ pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
     }
 
     // OWN_STEPPER_SLOT is the shared target slot for the menu-free own_stepper /
-    // native_fullread / cold_char_mount paths AND the menu-driven product_core path. Set it
-    // whenever a valid slot is configured, regardless of method, so the menu-free paths (which
-    // deliberately do NOT arm product_autoload, to avoid the open_menu self-fire that builds the
-    // ToS) still receive the slot. Only DirectMenuLoad arms product_core (which self-fires
-    // open_menu 0x1409b24e0 and therefore constructs the ToS MenuWindowJob).
+    // native_fullread / cold_char_mount / native-continue paths AND the experimental menu-driven
+    // product_core path. Set it whenever a valid slot is configured, regardless of method, so the
+    // known-good zero-input smoke path does not depend on a fragile env-method side effect.
     OWN_STEPPER_SLOT.store(slot, Ordering::SeqCst);
-    if request.method() == SaveLoadMethod::DirectMenuLoad {
+    if request.method() == SaveLoadMethod::DirectMenuLoad && experimental_direct_menu_load_enabled()
+    {
         PRODUCT_AUTOLOAD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     }
+}
+
+/// The `direct_menu_load`/product_core path is experimental and currently distinct from the
+/// known-good zero-input gold-load smoke path (`save_requested` + native Continue/PAB gates). Keep it
+/// fail-closed unless an operator deliberately asks for that experiment; stale `ER_EFFECTS_AUTOLOAD_*`
+/// env or release examples must not silently flip product smoke into the broken menu-core path.
+pub(crate) fn experimental_direct_menu_load_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_EXPERIMENTAL_DIRECT_MENU_LOAD").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-experimental-direct-menu-load.txt")
+        .exists()
 }
 
 pub(crate) fn product_autoload_enabled() -> bool {

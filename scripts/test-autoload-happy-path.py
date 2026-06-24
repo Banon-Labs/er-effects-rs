@@ -25,9 +25,19 @@ dllModFolderName=dllMods
 dll=er_effects_rs.dll
 """
 
-EXPECTED_AUTOLOAD = """slot=0
-method=direct_menu_load
-require_title_bootstrap=false
+EXPECTED_AUTOLOAD = """# Product/default zero-input gold-load request.
+# Do not set the direct-menu-load method here: that arms the experimental product_core/menu path only
+# when er-effects-experimental-direct-menu-load.txt or ER_EFFECTS_EXPERIMENTAL_DIRECT_MENU_LOAD=1 is
+# also present. The supported path keeps product_core off and uses the native Continue/PAB gates.
+slot=0
+"""
+
+EXPECTED_NATIVE_CONTINUE = """# Copy to er-effects-native-continue.txt next to eldenring.exe to enable the supported
+# zero-input native Continue path.
+"""
+
+EXPECTED_PAB_ADVANCE = """# Copy to er-effects-pab-advance.txt next to eldenring.exe to enable the supported
+# zero-input press-any-button/menu-open advance.
 """
 
 EXPECTED_SPLASH_SKIP = """# Copy this file to er-effects-splash-skip.txt next to eldenring.exe to enable
@@ -67,6 +77,8 @@ def main() -> int:
             "lazyLoad.ini",
             "er_effects_rs.dll",
             "er-effects-autoload.txt.example",
+            "er-effects-native-continue.txt.example",
+            "er-effects-pab-advance.txt.example",
             "er-effects-splash-skip.txt.example",
             "SHA256SUMS.txt",
         }
@@ -76,7 +88,11 @@ def main() -> int:
         if (out / "lazyLoad.ini").read_text(encoding="utf-8") != EXPECTED_LAZYLOAD:
             raise SystemExit("lazyLoad.ini is not the clean single-DLL config")
         if (out / "er-effects-autoload.txt.example").read_text(encoding="utf-8") != EXPECTED_AUTOLOAD:
-            raise SystemExit("autoload example is not the product direct_menu_load request")
+            raise SystemExit("autoload example must keep direct_menu_load/product_core off by default")
+        if (out / "er-effects-native-continue.txt.example").read_text(encoding="utf-8") != EXPECTED_NATIVE_CONTINUE:
+            raise SystemExit("native-continue example does not document the supported zero-input path")
+        if (out / "er-effects-pab-advance.txt.example").read_text(encoding="utf-8") != EXPECTED_PAB_ADVANCE:
+            raise SystemExit("pab-advance example does not document the supported zero-input path")
         if (out / "er-effects-splash-skip.txt.example").read_text(encoding="utf-8") != EXPECTED_SPLASH_SKIP:
             raise SystemExit("splash-skip example does not document the built-in current-version patch")
         if list((out / "dllMods").glob("*.dll")):
