@@ -24,3 +24,7 @@ offline-launcher.exe
 
 # Local runtime-probe env files (may contain AUTHORIZED runtime flags)
 .envs/
+
+# Third-party reference binaries for RE/compat analysis (copyrighted; NEVER commit,
+# NEVER bundle into product/release/target). Seamless Co-op (ersc.dll) lives here.
+/vendor/

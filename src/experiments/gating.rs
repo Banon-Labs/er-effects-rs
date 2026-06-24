@@ -737,7 +737,20 @@ pub(crate) fn splash_skip_enabled() -> bool {
 /// Gated (not always-on) so it never forces offline on a co-op/online launch that wants the
 /// getter live.
 pub(crate) fn online_disable_enabled() -> bool {
-    own_stepper_enabled()
+    // DEFAULT-ON for any real (non-telemetry-only) run: the always-on autoload boots vanilla-OFFLINE
+    // so the native-Continue front-end never raises the "Unable to start in online mode" modal and the
+    // title rows build with zero MessageBoxDialog -- NO `er-effects-offline.txt` opt-in required
+    // (mirrors the native_continue/pab/splash de-gating, user-pref-too-many-env-file-gates-default-on-
+    // product). This was the LAST config-file dependency of the zero-input autoload.
+    //
+    // VALIDATED Seamless-safe (2026-06-24, binary-checked vendor/seamless-coop-v1.9.9): ersc.dll is a
+    // non-EAC mod that runs its OWN Steam-lobby session (imports SteamMatchMaking009 /
+    // SteamNetworking006 / SteamNetworkingMessages002, password-keyed, .co2 saves) and does NOT use
+    // vanilla FromSoft matchmaking / GameMan::IsOnlineMode -- so forcing that getter offline does not
+    // affect Seamless co-op (it already runs with vanilla online unreachable). A telemetry-only/observe
+    // run stays online-capable; the env/file remain as explicit force-on overrides.
+    !save_override_telemetry_only()
+        || own_stepper_enabled()
         || matches!(std::env::var("ER_EFFECTS_OFFLINE").as_deref(), Ok("1"))
         || game_directory_path()
             .unwrap_or_else(|| PathBuf::from("."))

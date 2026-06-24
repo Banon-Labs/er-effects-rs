@@ -112,16 +112,37 @@ pub(crate) fn block_input_enabled() -> bool {
     let product_world_stream_pending = product_autoload_enabled()
         && OWN_STEPPER_CONFIRMED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS
         && IN_WORLD_REACHED.load(Ordering::SeqCst) != IN_WORLD_REACHED_YES;
-    // ZERO-INPUT INVARIANT (always-block-input-zero-input-invariant-2026-06-22): block ALL foreign
-    // input whenever ANY automated load lever is armed (not just own_stepper) until in-world, so no
-    // probe can be contaminated and no path can secretly rely on input. own_load covers its pump/
-    // continue/install sub-levers (they all ride on own_load being armed). Normal play and user-driven
-    // golden traces (no lever armed) never block; the in-world release lets the user play after load.
-    (own_stepper_enabled() || own_load_enabled() || product_autoload_enabled())
+    // ZERO-INPUT INVARIANT (always-block-input-zero-input-invariant-2026-06-22, extended
+    // 2026-06-24 user-directive "block input until the load has started -- our side is done"):
+    // block ALL foreign input whenever ANY automated load lever is armed until in-world, so no probe
+    // can be contaminated and no path can secretly rely on input. This now INCLUDES the DEFAULT
+    // zero-input autoload path (native_continue + the readiness PAB advance), which is on for every
+    // real (non-telemetry-only) run -- previously only own_stepper/own_load/product_autoload engaged
+    // the block, so the default path ran with input LIVE and a human Continue press could (and did,
+    // 2026-06-24 gold-load run) drive the load instead of our DLL, masking that native_continue never
+    // found the Continue node. Blocking the default path makes the zero-input claim honest: if our
+    // drive cannot fire the load with input suppressed, the run stalls (correct failure) rather than
+    // riding on a foreign press. Normal play and user-driven golden traces (no lever armed, or
+    // telemetry-only) never block; the in-world release lets the user take over after the load.
+    //
+    // TODO(load-start release): release at the LOAD-STARTED semaphore (NowLoading flag set / the
+    // MoveMapStep load sequence begun) instead of full in-world, once the zero-input drive reliably
+    // fires the load -- so "our side is done" releases the user the moment the engine commits, not
+    // after the world finishes streaming.
+    let autoload_armed = own_stepper_enabled()
+        || own_load_enabled()
+        || product_autoload_enabled()
+        || native_continue_enabled()
+        || pab_advance_enabled();
+    autoload_armed
         && !own_stepper_passive_enabled()
         && IN_WORLD_REACHED.load(Ordering::SeqCst) != IN_WORLD_REACHED_YES
         && (OWN_STEPPER_PHASE.load(Ordering::SeqCst) != OWN_STEPPER_PHASE_DONE
-            || product_world_stream_pending)
+            || product_world_stream_pending
+            // The default native_continue/pab path does not drive the own_stepper phase machine, so
+            // its phase stays 0 (!= DONE) -- keep it blocked until in-world regardless.
+            || native_continue_enabled()
+            || pab_advance_enabled())
 }
 
 /// Release the input block (DInput + XInput) once `block_input_enabled()` flips false mid-run.
