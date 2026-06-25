@@ -224,6 +224,18 @@ impl SoulsFormats {
         let bridge_root = self.repo_root.join(BRIDGE_PROJECT_DIR);
         fs::create_dir_all(&bridge_root).map_err(SoulsFormatsError::BridgeWriteFailed)?;
 
+        // Target whichever .NET the Andre stack is built for so the bridge runs
+        // against both net9 and net10 installs (binary: read it from the dll;
+        // source: from the Andre.Formats csproj). RollForward in the templates
+        // then lets the framework-dependent bridge run on a newer-major runtime.
+        let tfm = match self.layout {
+            SmithboxLayout::Binary => shaders::detect_dotnet_tfm(&self.smithbox_root),
+            SmithboxLayout::Source => {
+                read_csproj_tfm(&andre_formats_project_path(&self.smithbox_root))
+            }
+        }
+        .unwrap_or_else(|| shaders::DEFAULT_TFM.to_owned());
+
         let project = match self.layout {
             SmithboxLayout::Source => {
                 let andre_formats_project = andre_formats_project_path(&self.smithbox_root);
@@ -242,7 +254,8 @@ impl SoulsFormats {
                     .replace("{{ANDRE_FORMATS_DLL}}", &escape_xml(&formats_dll))
                     .replace("{{ANDRE_SOULSFORMATS_DLL}}", &escape_xml(&soulsformats_dll))
             }
-        };
+        }
+        .replace("{{TFM}}", &tfm);
 
         // Skip the write when contents are unchanged so the project files keep
         // their mtimes and `dotnet run` can reuse the previous build instead of
@@ -340,6 +353,20 @@ fn current_repo_root() -> Result<PathBuf, SoulsFormatsError> {
 
 fn andre_formats_project_path(smithbox_root: &Path) -> PathBuf {
     smithbox_root.join(ANDRE_FORMATS_PROJECT_PATH)
+}
+
+/// Read a single `<TargetFramework>` from a `.csproj`. Returns `None` for
+/// multi-targeted (`<TargetFrameworks>`) or unreadable projects so the caller
+/// falls back to the default TFM.
+fn read_csproj_tfm(csproj: &Path) -> Option<String> {
+    let text = fs::read_to_string(csproj).ok()?;
+    if text.contains("<TargetFrameworks>") {
+        return None;
+    }
+    let start = text.find("<TargetFramework>")? + "<TargetFramework>".len();
+    let end = text[start..].find("</TargetFramework>")? + start;
+    let tfm = text[start..end].trim();
+    tfm.starts_with("net").then(|| tfm.to_owned())
 }
 
 fn detect_smithbox_layout(smithbox_root: &Path) -> Option<SmithboxLayout> {

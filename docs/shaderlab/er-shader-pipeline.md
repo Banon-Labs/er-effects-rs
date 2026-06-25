@@ -131,5 +131,11 @@ chunk (DXContainer header -> part table -> DxilProgramHeader/DxilBitcodeHeader),
 - **`er-shaderbridge`** (`crates/soulsformats/shaderbridge/`) -- the win-x64 .NET worker run
   under wine for the decrypt/decompress/unbind half (needs ER's `oo2core` Oodle DLL). Kept
   separate from the host-native `param-rows` bridge in `crates/soulsformats/bridge/`.
+- **Both .NET versions:** both bridges target whichever framework the installed Andre stack
+  is built for -- the TFM is auto-detected from `Andre.SoulsFormats.dll`'s
+  `TargetFrameworkAttribute` (`detect_dotnet_tfm`), so net9 *and* net10 Smithbox installs
+  work. The shader bridge is self-contained (bundles its runtime); the framework-dependent
+  `param-rows` bridge adds `RollForward=Major` so it also runs on a newer-major runtime than
+  it targets. (This Smithbox is net9.0.)
 - E2E read-path test: `cargo test -p er-soulsformats --test shaders_e2e -- --ignored`
   (skips cleanly when the game/tools are absent).

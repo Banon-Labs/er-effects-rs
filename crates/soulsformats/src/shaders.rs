@@ -38,6 +38,9 @@ const BRIDGE_OUT_SUBDIR: &str = "target/er-shaderbridge/publish";
 const BRIDGE_PROJECT_SUBDIR: &str = "target/er-shaderbridge/project";
 const BRIDGE_EXE: &str = "er-shaderbridge.exe";
 
+/// Fallback TFM when the Andre assembly's framework can't be read.
+pub(crate) const DEFAULT_TFM: &str = "net10.0";
+
 const CSPROJ_TEMPLATE: &str = include_str!("../shaderbridge/shaderbridge.csproj.template");
 const BRIDGE_PROGRAM: &str = include_str!("../shaderbridge/Program.cs");
 
@@ -365,8 +368,10 @@ fn ensure_bridge(config: &ShaderConfig) -> Result<PathBuf> {
         fs::create_dir_all(&project_dir),
     )?;
 
-    let csproj =
-        CSPROJ_TEMPLATE.replace("{{SMITHBOX_DIR}}", &config.smithbox_dir.to_string_lossy());
+    let tfm = detect_dotnet_tfm(&config.smithbox_dir).unwrap_or_else(|| DEFAULT_TFM.to_owned());
+    let csproj = CSPROJ_TEMPLATE
+        .replace("{{SMITHBOX_DIR}}", &config.smithbox_dir.to_string_lossy())
+        .replace("{{TFM}}", &tfm);
     write_if_changed(&project_dir.join("shaderbridge.csproj"), &csproj)?;
     write_if_changed(&project_dir.join("Program.cs"), BRIDGE_PROGRAM)?;
 
@@ -486,6 +491,31 @@ fn discover_dxc_root() -> Option<PathBuf> {
     which("dxc")
         .and_then(|p| p.parent().and_then(Path::parent).map(Path::to_path_buf))
         .filter(|root| valid(root))
+}
+
+/// Detect the .NET target framework the installed Andre stack is built for, by
+/// reading the `TargetFrameworkAttribute` value embedded in `Andre.SoulsFormats.dll`
+/// (a `.NETCoreApp,Version=vMAJOR.MINOR` string in the assembly metadata). Returns
+/// e.g. `"net10.0"`. `dir` is a Smithbox binary install. `None` if the dll/marker
+/// is absent, so callers fall back to [`DEFAULT_TFM`]. This is what lets the bridge
+/// build against whichever .NET (net9 or net10) the Smithbox install targets.
+pub(crate) fn detect_dotnet_tfm(dir: &Path) -> Option<String> {
+    let bytes = fs::read(dir.join(SMITHBOX_MARKER)).ok()?;
+    tfm_from_assembly_bytes(&bytes)
+}
+
+fn tfm_from_assembly_bytes(bytes: &[u8]) -> Option<String> {
+    const NEEDLE: &[u8] = b".NETCoreApp,Version=v";
+    let pos = bytes.windows(NEEDLE.len()).position(|w| w == NEEDLE)?;
+    let rest = &bytes[pos + NEEDLE.len()..];
+    let ver: String = rest
+        .iter()
+        .take_while(|&&b| b.is_ascii_digit() || b == b'.')
+        .map(|&b| b as char)
+        .collect();
+    // Need at least "MAJOR.MINOR".
+    (ver.contains('.') && ver.split('.').next().is_some_and(|m| !m.is_empty()))
+        .then(|| format!("net{ver}"))
 }
 
 fn which(program: &str) -> Option<PathBuf> {
@@ -618,5 +648,17 @@ mod tests {
     #[test]
     fn to_wine_path_maps_to_z_drive() {
         assert_eq!(to_wine_path(Path::new("/home/x/Game")), r"Z:\home\x\Game");
+    }
+
+    #[test]
+    fn tfm_parsed_from_target_framework_attribute() {
+        // The TargetFrameworkAttribute string as it appears in assembly metadata.
+        let blob = b"\x01\x00\x18.NETCoreApp,Version=v10.0\x01\x00".as_slice();
+        assert_eq!(tfm_from_assembly_bytes(blob).as_deref(), Some("net10.0"));
+
+        let net9 = b"junk.NETCoreApp,Version=v9.0\x00more".as_slice();
+        assert_eq!(tfm_from_assembly_bytes(net9).as_deref(), Some("net9.0"));
+
+        assert_eq!(tfm_from_assembly_bytes(b"no framework here"), None);
     }
 }
