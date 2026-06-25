@@ -324,10 +324,10 @@ if 'telemetry must expose passive Continue task/member semantic latch addresses'
 result_event_body = function_body('result_event_handler_hook', exp_code) or ''
 result_action_body = function_body('result_action_builder_hook', exp_code) or ''
 if (
-    'RESULT_EVENT_HANDLER_RVA' not in lib_code
-    or 'RESULT_ACTION_BUILDER_RVA' not in lib_code
-    or 'RESULT_EVENT_HANDLER_ORIG' not in lib_code
-    or 'RESULT_ACTION_BUILDER_ORIG' not in lib_code
+    'RESULT_EVENT_HANDLER_RVA' not in code
+    or 'RESULT_ACTION_BUILDER_RVA' not in code
+    or 'RESULT_EVENT_HANDLER_ORIG' not in code
+    or 'RESULT_ACTION_BUILDER_ORIG' not in code
     or 'result_event_handler_746e80' not in exp_code
     or 'result_action_builder_746a00' not in exp_code
     or 'call_result_void2_original' not in exp_code
@@ -374,38 +374,38 @@ if (
     or 'oracle_result_action_insert_hits' not in telemetry_src
     or 'oracle_result_action_last_insert_arg1_update_rva' not in telemetry_src
     or 'oracle_result_action_last_insert_ret_update_rva' not in telemetry_src
-    or 'RESULT_ACTION_WRAPPER_BUILDER_HITS' not in lib_code
-    or 'RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA' not in lib_code
-    or 'POLICY_TOS_TITLE_LAST_BACKING_FLAG_PTR' not in lib_code
-    or 'POLICY_TOS_TITLE_LAST_STORED_BACKING_FLAG_PTR' not in lib_code
-    or 'POLICY_TOS_TITLE_LAST_BACKING_FLAG_VALUE' not in lib_code
-    or 'POLICY_TOS_TITLE_LAST_REQUESTED_FLAG_VALUE' not in lib_code
-    or 'POLICY_TOS_TITLE_LAST_CALLER_RVA' not in lib_code
-    or 'POLICY_TOS_TITLE_CTOR_WRAPPER_RVA' not in lib_code
-    or 'POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG' not in lib_code
-    or 'POLICY_TOS_TITLE_WRAPPER_HITS' not in lib_code
-    or 'POLICY_TOS_TITLE_WRAPPER_THIS_ADJUST' not in lib_code
-    or 'POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_THIS' not in lib_code
-    or 'POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_VTABLE' not in lib_code
-    or 'POLICY_TOS_TITLE_WRAPPER_LAST_CALLER_RVA' not in lib_code
-    or 'POLICY_TOS_SELECTOR_WRAPPER_RVA' not in lib_code
-    or 'POLICY_TOS_SELECTOR_WRAPPER_HITS' not in lib_code
-    or 'POLICY_TOS_SELECTOR_WRAPPER_LAST_REQUESTED_FLAG' not in lib_code
-    or 'POLICY_TOS_SELECTOR_WRAPPER_LAST_SELECTOR_ARG' not in lib_code
-    or 'POLICY_TOS_SELECTOR_WRAPPER_LAST_CALLER_RVA' not in lib_code
-    or 'POLICY_TOS_SELECTOR_CTOR_RVA' not in lib_code
-    or 'POLICY_TOS_SELECTOR_CTOR_HITS' not in lib_code
-    or 'POLICY_TOS_SELECTOR_CTOR_LAST_REQUESTED_FLAG_PTR' not in lib_code
-    or 'POLICY_TOS_SELECTOR_CTOR_LAST_STORED_REQUESTED_FLAG_PTR' not in lib_code
-    or 'POLICY_TOS_SELECTOR_CTOR_LAST_CALLER_RVA' not in lib_code
-    or 'POLICY_TOS_STATUS_PREDICATE_RVA' not in lib_code
-    or 'POLICY_TOS_STATUS_PREDICATE_ORIG' not in lib_code
-    or 'POLICY_TOS_STATUS_LAST_CALLER_RVA' not in lib_code
-    or 'POLICY_TOS_FLAG_SETTER_RVA' not in lib_code
-    or 'POLICY_TOS_FLAG_SETTER_ORIG' not in lib_code
-    or 'POLICY_TOS_FLAG_SETTER_LAST_CALLER_RVA' not in lib_code
-    or 'RESULT_ACTION_INSERT_HITS' not in lib_code
-    or 'RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA' not in lib_code
+    or 'RESULT_ACTION_WRAPPER_BUILDER_HITS' not in code
+    or 'RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA' not in code
+    or 'POLICY_TOS_TITLE_LAST_BACKING_FLAG_PTR' not in code
+    or 'POLICY_TOS_TITLE_LAST_STORED_BACKING_FLAG_PTR' not in code
+    or 'POLICY_TOS_TITLE_LAST_BACKING_FLAG_VALUE' not in code
+    or 'POLICY_TOS_TITLE_LAST_REQUESTED_FLAG_VALUE' not in code
+    or 'POLICY_TOS_TITLE_LAST_CALLER_RVA' not in code
+    or 'POLICY_TOS_TITLE_CTOR_WRAPPER_RVA' not in code
+    or 'POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG' not in code
+    or 'POLICY_TOS_TITLE_WRAPPER_HITS' not in code
+    or 'POLICY_TOS_TITLE_WRAPPER_THIS_ADJUST' not in code
+    or 'POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_THIS' not in code
+    or 'POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_VTABLE' not in code
+    or 'POLICY_TOS_TITLE_WRAPPER_LAST_CALLER_RVA' not in code
+    or 'POLICY_TOS_SELECTOR_WRAPPER_RVA' not in code
+    or 'POLICY_TOS_SELECTOR_WRAPPER_HITS' not in code
+    or 'POLICY_TOS_SELECTOR_WRAPPER_LAST_REQUESTED_FLAG' not in code
+    or 'POLICY_TOS_SELECTOR_WRAPPER_LAST_SELECTOR_ARG' not in code
+    or 'POLICY_TOS_SELECTOR_WRAPPER_LAST_CALLER_RVA' not in code
+    or 'POLICY_TOS_SELECTOR_CTOR_RVA' not in code
+    or 'POLICY_TOS_SELECTOR_CTOR_HITS' not in code
+    or 'POLICY_TOS_SELECTOR_CTOR_LAST_REQUESTED_FLAG_PTR' not in code
+    or 'POLICY_TOS_SELECTOR_CTOR_LAST_STORED_REQUESTED_FLAG_PTR' not in code
+    or 'POLICY_TOS_SELECTOR_CTOR_LAST_CALLER_RVA' not in code
+    or 'POLICY_TOS_STATUS_PREDICATE_RVA' not in code
+    or 'POLICY_TOS_STATUS_PREDICATE_ORIG' not in code
+    or 'POLICY_TOS_STATUS_LAST_CALLER_RVA' not in code
+    or 'POLICY_TOS_FLAG_SETTER_RVA' not in code
+    or 'POLICY_TOS_FLAG_SETTER_ORIG' not in code
+    or 'POLICY_TOS_FLAG_SETTER_LAST_CALLER_RVA' not in code
+    or 'RESULT_ACTION_INSERT_HITS' not in code
+    or 'RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA' not in code
     or 'text_section_bounds' not in exp_code
     or 'update_target_in_text' not in exp_code
     or 'raw_task_node_update_rva' not in exp_code
