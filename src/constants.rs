@@ -475,44 +475,10 @@ pub(crate) const TITLE_FD4_SETSTATE_RVA: usize = 0x7499e0;
 /// One-shot latch: the zero-input FadeIn->Loop transition has fired.
 pub(crate) static TITLE_FADEIN_SKIP_FIRED: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-// TITLE INIT-READINESS OVERRIDE lever (bd title-init-ready-override-NOT-a-press-lever-2026-06-24,
-// corrects bd pab-job-playout-is-the-3.5s-NOT-menu-build-2026-06-24). Between pab-advance and the
-// native press handler (SetState(2)) the title FixOrderJobSequence at TitleStep+0x130 stalls on TWO
-// boolean wait-predicate jobs before reaching job#4 (the press handler -> SetState(2)). The predicates
-// (deobf disasm-confirmed):
-//   A) FUN_140b0e130: `mov rax,[0x143d6b7b0]; cmpb 0,0x21(rax); sete al` -> waits while CSMenuMan+0x21==0.
-//   B) FUN_140b0e0f0: `mov rax,[rcx+8](=TitleStep); mov rcx,[rax+0x2e8]; cmpb 0,0xdc(rcx); sete al`
-//      -> waits while (*(InGameStep at TitleStep+0x2e8))+0xdc == 0.
-// CORRECTION (RTTI/xref RE 2026-06-24): these are NOT button-press flags. They are INIT-READINESS
-// milestones, set by native init steps, with NO input reader on either path:
-//   A) CSMenuMan+0x21 is set by CS::CSScaleformStep::STEP_Wait_forResidentResourceLoad when the
-//      Scaleform menu RESIDENT RESOURCES finish loading.
-//   B) (*(TitleStep+0x2e8) = CS::InGameStep*)+0xdc is set by CS::InGameStep::STEP_InitWait when the
-//      InGameStep child init-wait completes.
-// The ACTUAL press-any-button dismissal is the global accept byte 0x144589bdc (read by
-// CS::TitleTopDialog::update) + the BackScreen job+0x1e8 the pab-advance lever pokes -- a SEPARATE
-// mechanism. So forcing BOTH flags to 1 (zero-input) is an INIT-READY OVERRIDE: it tells the title
-// sequence "menu resources + InGameStep init are ready, proceed", draining the sequence through both
-// predicates + the two action jobs and firing job#4 (press handler 0x140b0b6b0 -> SetState(2)) EXACTLY
-// ONCE -- no double-build, no manual SetState. SAVE-SAFE (RE-blessed: races ahead of init-waits that
-// complete anyway; runtime-validated gold-loads/zero-input/zero-MessageBoxDialog). CAVEAT: it asserts
-// "resources ready" before they truly are, so the menu still cannot RENDER until the real Scaleform
-// load completes (~15.4s floor) -- the win is skipping the wait-poll scheduling (~1s), not the load
-// itself; and on slower-disk systems the early assertion is an init-race to watch.
-/// GLOBAL_CSMenuMan singleton pointer, deobf RVA (abs 0x143d6b7b0). Holds the live CSMenuManImp*.
-pub(crate) const GLOBAL_CSMENUMAN_PTR_RVA: usize = 0x3d6b7b0;
-/// CSMenuMan+0x21 = "Scaleform menu resident-resources loaded" flag (set by
-/// CS::CSScaleformStep::STEP_Wait_forResidentResourceLoad). Predicate A waits while ==0; the override
-/// sets =1 early. NOT a button-press flag.
-pub(crate) const CSMENUMAN_SCALEFORM_RESIDENT_LOADED_21_OFFSET: usize = 0x21;
-/// TitleStep+0x2e8 = the CS::InGameStep* sub-object pointer (registered by the TitleStep ctor).
-pub(crate) const TITLE_OWNER_INGAMESTEP_2E8_OFFSET: usize = 0x2e8;
-/// InGameStep+0xdc = "InGameStep init-wait complete" flag (set by CS::InGameStep::STEP_InitWait).
-/// Predicate B waits while ==0; the override sets =1 early. NOT a button-press flag.
-pub(crate) const INGAMESTEP_INIT_WAIT_DONE_DC_OFFSET: usize = 0xdc;
-/// One-shot latch: the title init-readiness override has fired (both init-ready flags forced).
-pub(crate) static TITLE_INIT_READY_OVERRIDE_FIRED: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+// (Removed: TITLE INIT-READINESS OVERRIDE lever -- it forced CSMenuMan+0x21, which RE later showed is
+// the WHOLE-game resident-UI-ready flag, not title-only; asserting it early risked later in-game menus
+// finding chrome not resident, for an illusory ~1s (the real floor is the Scaleform resident load).
+// Reverted per user 2026-06-24. RE preserved in bd title-init-ready-override-NOT-a-press-lever-2026-06-24.)
 #[repr(i32)]
 pub(crate) enum TitleStepState {
     Min = 0,

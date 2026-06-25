@@ -911,80 +911,6 @@ unsafe fn title_anim_fadein_skip(owner: usize) {
     ));
 }
 
-/// TITLE INIT-READINESS OVERRIDE (zero-input): the title FixOrderJobSequence at owner+0x130 stalls on
-/// two boolean wait-predicate jobs before it reaches job#4 (the native press handler -> SetState(2)).
-/// The predicates wait on two INIT-READINESS flags (deobf disasm + RTTI/xref-confirmed; these are NOT
-/// button-press flags -- bd title-init-ready-override-NOT-a-press-lever-2026-06-24):
-///   A) CSMenuMan+0x21 == 0   (FUN_140b0e130) -- "Scaleform menu resident-resources loaded" milestone,
-///      normally set by CS::CSScaleformStep::STEP_Wait_forResidentResourceLoad.
-///   B) (*(owner+0x2e8 = InGameStep))+0xdc == 0   (FUN_140b0e0f0) -- "InGameStep init-wait complete"
-///      milestone, normally set by CS::InGameStep::STEP_InitWait.
-/// Setting BOTH to 1 lets the sequence drain through both predicates + the two action jobs, firing
-/// job#4 (press handler 0x140b0b6b0 -> SetState(2)) EXACTLY ONCE -- the engine's own completion path,
-/// so no double-build and no manual SetState. This is an INIT-SKIP, not the press dismissal (that is
-/// the accept-byte 0x144589bdc + BackScreen job+0x1e8 the pab-advance lever already drives). Gated
-/// behind PAB_ADVANCE_FIRED so we only override once the front-end has reached the press stage.
-/// One-shot via TITLE_INIT_READY_OVERRIDE_FIRED; all reads/writes are null/heap/alignment-guarded.
-/// SAVE-SAFE (RE-blessed: races ahead of init-waits that complete anyway; runtime-validated). CAVEAT:
-/// it asserts "ready" before the resources truly are, so the menu still can't RENDER until the real
-/// Scaleform load finishes (~15.4s floor); the win is skipping the wait-poll scheduling (~1s).
-unsafe fn title_init_ready_override(owner: usize) {
-    if !title_init_ready_override_enabled() {
-        return;
-    }
-    if TITLE_INIT_READY_OVERRIDE_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS {
-        return; // one-shot: already fired
-    }
-    if IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES {
-        return;
-    }
-    // Only once the front-end has reached the press stage (pab-advance fired) -- keeps the pab_dismiss
-    // timeline marker and bounds the override to the title's press/menu-build window.
-    if PAB_ADVANCE_FIRED.load(Ordering::SeqCst) == 0 {
-        return;
-    }
-    if owner <= PAB_MIN_HEAP_PTR {
-        return;
-    }
-    let Ok(base) = game_module_base() else {
-        return;
-    };
-    // Require the title parked at MenuJobWait(10) with the FixOrderJobSequence live at owner+0x130.
-    let committed =
-        unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }.unwrap_or(-999);
-    if committed != TITLE_STEP_MENU_JOB_WAIT {
-        return;
-    }
-    let seq = unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_LIST_130_OFFSET) }.unwrap_or(0);
-    if seq <= PAB_MIN_HEAP_PTR {
-        return; // sequence not present -> wait
-    }
-    // Resolve both init-ready source pointers BEFORE writing, so we only fire when both are satisfiable.
-    let csmenuman = unsafe { safe_read_usize(base + GLOBAL_CSMENUMAN_PTR_RVA) }.unwrap_or(0);
-    let ingamestep =
-        unsafe { safe_read_usize(owner + TITLE_OWNER_INGAMESTEP_2E8_OFFSET) }.unwrap_or(0);
-    if csmenuman <= PAB_MIN_HEAP_PTR || ingamestep <= PAB_MIN_HEAP_PTR {
-        return; // a source object isn't live yet -> wait (fail closed)
-    }
-    // Claim the one-shot before writing (lose the race -> bail).
-    if TITLE_INIT_READY_OVERRIDE_FIRED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
-        != TITLE_OWNER_SCAN_START_ADDRESS
-    {
-        return;
-    }
-    let a_before =
-        unsafe { safe_read_i32(csmenuman + CSMENUMAN_SCALEFORM_RESIDENT_LOADED_21_OFFSET) }
-            .unwrap_or(-1);
-    let b_before =
-        unsafe { safe_read_i32(ingamestep + INGAMESTEP_INIT_WAIT_DONE_DC_OFFSET) }.unwrap_or(-1);
-    unsafe {
-        *((csmenuman + CSMENUMAN_SCALEFORM_RESIDENT_LOADED_21_OFFSET) as *mut u8) = 1; // A: Scaleform-resident-loaded
-        *((ingamestep + INGAMESTEP_INIT_WAIT_DONE_DC_OFFSET) as *mut u8) = 1; // B: InGameStep-init-wait-done
-    }
-    append_autoload_debug(format_args!(
-        "title-init-ready-override: *** SET CSMenuMan(0x{csmenuman:x})+0x21=1 (was 0x{a_before:x}, Scaleform-resident-load) + InGameStep(0x{ingamestep:x})+0xdc=1 (was 0x{b_before:x}, init-wait-done) -- zero-input init-ready override; drains the title FixOrderJobSequence -> press handler/SetState(2) fires once (NOT a press; real render still waits on Scaleform load) ***"
-    ));
-}
 /// Detour for STEP_MenuJobWait (0x140b0d400, `__fastcall(rcx=owner, rdx=task_data, ...)`). Drives the
 /// one-shot FadeIn->Loop skip from the live SM state, then passes through to the original unchanged.
 pub(crate) unsafe extern "system" fn title_menujob_speed_detour(
@@ -995,12 +921,6 @@ pub(crate) unsafe extern "system" fn title_menujob_speed_detour(
 ) -> usize {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         title_anim_fadein_skip(owner)
-    }));
-    // Title init-readiness override: drain the FixOrderJobSequence's two init-ready wait-predicates
-    // (Scaleform-resident-load + InGameStep-init-wait) so it advances to SetState(2) without polling
-    // those waits (zero-input, one-shot, gated). NOT a press lever. Separately guarded.
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        title_init_ready_override(owner)
     }));
     let orig_addr = TITLE_ANIM_SPEED_ORIG.load(Ordering::SeqCst);
     if orig_addr == TITLE_OWNER_SCAN_START_ADDRESS {
