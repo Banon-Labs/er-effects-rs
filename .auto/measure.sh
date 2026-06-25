@@ -286,8 +286,8 @@ if 'product diagnostics must passively attribute disabled Continue rows to the 0
     autoload_static_failures += 1
 title_ready_body = function_body('title_native_ready_predicate_hook', exp_code) or ''
 if (
-    'TITLE_NATIVE_READY_PREDICATE_RVA' not in lib_code
-    or 'TITLE_NATIVE_READY_PREDICATE_ORIG' not in lib_code
+    'TITLE_NATIVE_READY_PREDICATE_RVA' not in code
+    or 'TITLE_NATIVE_READY_PREDICATE_ORIG' not in code
     or 'cap_title_native_ready_733150' not in exp_code
     or 'STATE_FLAGS_20_OFFSET' not in title_ready_body
     or 'READY_MASK_8F' not in title_ready_body
@@ -303,7 +303,7 @@ if 'product diagnostics must passively expose LangSelect title-ready predicate f
     autoload_static_failures += 1
 member_latch_body = function_body('capture_continue_member_node_candidate', exp_code) or ''
 if (
-    'MENU_CONTINUE_MEMBER_NODE' not in lib_code
+    'MENU_CONTINUE_MEMBER_NODE' not in code
     or 'TRACE_MENU_CONTINUE_WRAPPER_RVA' not in member_latch_body
     or 'MEMBERFUNCJOB_VTABLE_RVA' not in member_latch_body
     or 'MEMBER_FN_18' not in member_latch_body
