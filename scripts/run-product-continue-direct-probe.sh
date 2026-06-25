@@ -52,6 +52,31 @@ wipe_appdata_saves() {
     \( -name '*.sl2' -o -name '*.co2' -o -name '*.bak' \) -delete 2>/dev/null || true
 }
 
+# Path to the freshly-built chainload DLL the LazyLoader [CHAINLOAD] loads from GAME_DIR root.
+BUILT_DLL="${BUILT_DLL:-$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll}"
+
+# Remove EVERY stale mod DLL from the LazyLoader LOADORDER folder so a leftover DLL can never be
+# loaded as a mod and contaminate the run. SURGICAL: only *.dll under dllMods/ -- never the chainload
+# DLL at GAME_DIR root, dinput8.dll, lazyLoad.ini, or game files. Idempotent; missing dir is fine.
+clean_stale_mod_dlls() {
+  [[ -d "$GAME_DIR/dllMods" ]] || return 0
+  rm -f "$GAME_DIR/dllMods/"*.dll 2>/dev/null || true
+}
+
+# DEPLOY HYGIENE (setup): both the onscreen RUNTIME_NO_TEARDOWN path and the gated watcher path funnel
+# through THIS script, but the onscreen path exec()s the game BEFORE ever reaching .auto/runtime_probe.sh's
+# setup_runtime_payload() -- so without this, an onscreen run silently uses whatever stale
+# $GAME_DIR/er_effects_rs.dll was last deployed and ignores a fresh `cargo xwin build` (observed: a run
+# used a ~28-min-old DLL with none of the new debug lines). Mirror the proven .auto/runtime_probe.sh
+# pattern: clean stale mod DLLs, then deploy the freshly-built chainload DLL beside LazyLoader.
+deploy_chainload_dll() {
+  clean_stale_mod_dlls
+  # Fail closed if the build is missing -- never silently run an old DLL.
+  [[ -f "$BUILT_DLL" ]] || fatal "built DLL not found: $BUILT_DLL -- run 'cargo xwin build --release --target x86_64-pc-windows-msvc' first (refusing to run a stale chainload DLL)"
+  cp -f "$BUILT_DLL" "$GAME_DIR/er_effects_rs.dll"
+  echo "deploy: cleaned $GAME_DIR/dllMods/*.dll; deployed fresh chainload DLL -> $GAME_DIR/er_effects_rs.dll"
+}
+
 usage() {
   cat <<EOF
 Usage: $0 [--dry-run] [--autoload-request PATH]
@@ -191,6 +216,9 @@ cleanup() {
   terminate_runtime_pids
   # Teardown wipe: leave the default appdata save dirs with NO save files, every time.
   wipe_appdata_saves
+  # Teardown DLL hygiene: clear any stale mod DLLs from the LazyLoader LOADORDER folder so the next
+  # run (or a manual launch) cannot pick up a leftover mod DLL. Surgical: only dllMods/*.dll.
+  clean_stale_mod_dlls
 }
 trap cleanup EXIT INT TERM HUP
 
@@ -229,6 +257,12 @@ rm -f "$TELEMETRY_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH" "$CRASH_LOG_PA
 rm -f "$ARTIFACT_DIR/teardown-screenshot.jpg" "$ARTIFACT_DIR/teardown-screenshot.png" "$ARTIFACT_DIR/teardown-screenshot.txt"
 write_autoload_request
 
+# DEPLOY THE FRESH CHAINLOAD DLL + clean stale mod DLLs BEFORE any launch branch. Placed here (after
+# the auth gates so --dry-run/-h never touch the game dir, before both the RUNTIME_NO_TEARDOWN exec
+# path and the gamescope/watcher path) so EVERY real launch through this script runs the just-built
+# DLL. Fails closed if the build is missing rather than silently running a stale DLL.
+deploy_chainload_dll
+
 # SAVE SOURCE: the DLL never assumes the default user save dir. Either declare telemetry-only
 # (loads nothing) or stage an isolated copy of the gold save and point the DLL at it. Staging a
 # COPY (named ER0000.sl2 so the DLL's basename-preserving redirect lands on it) means the game's
@@ -264,6 +298,24 @@ else
     export ER_EFFECTS_AUTOLOAD_SLOT="$ER_EFFECTS_GOLD_SLOT"
   fi
   echo "save-source: staged gold save -> $STAGED_SAVE (ER_EFFECTS_SAVE_FILE); slot=${ER_EFFECTS_GOLD_SLOT:-most-recent}; autosaves isolated from $GOLD_SAVE"
+
+  # GOLDEN GRAPHICS CONFIG: seed our durable GraphicsConfig.xml (windowed 1280x720 LOW) into the
+  # redirected EldenRing dir so EVERY run reuses the same display config instead of the game
+  # regenerating defaults / inheriting the user's real-appdata config. The DLL redirects the whole
+  # %APPDATA%\EldenRing dir, so the game reads graphicsconfig.xml from this staged root (observed
+  # lowercase basename). Staged WRITABLE so any in-game settings change lands on the per-run copy and
+  # is discarded at teardown -- the golden source in the repo is never modified by a run. To UPDATE
+  # the golden, re-copy a run's graphicsconfig.xml over $GOLD_GRAPHICS_CONFIG.
+  GOLD_GRAPHICS_CONFIG="${ER_EFFECTS_GOLD_GRAPHICS_CONFIG:-$REPO_ROOT/save-files/golden-graphics/GraphicsConfig.xml}"
+  if [[ -f "$GOLD_GRAPHICS_CONFIG" ]]; then
+    STAGED_GRAPHICS_CONFIG="$STAGED_ROOT/EldenRing/graphicsconfig.xml"
+    mkdir -p "$STAGED_ROOT/EldenRing"
+    cp -f "$GOLD_GRAPHICS_CONFIG" "$STAGED_GRAPHICS_CONFIG"
+    chmod u+w "$STAGED_GRAPHICS_CONFIG"
+    echo "graphics-config: staged golden -> $STAGED_GRAPHICS_CONFIG (reused every run; source $GOLD_GRAPHICS_CONFIG)"
+  else
+    echo "graphics-config: WARN no golden config at $GOLD_GRAPHICS_CONFIG -- game will regenerate defaults"
+  fi
 fi
 
 # Pre-launch wipe: the default appdata save dirs must start empty so the game cannot read a default

@@ -505,6 +505,20 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         unsafe { maybe_set_title_accept_byte(base) };
                     }
                 }
+                // Title transition fast-forward (pab_dismiss -> menu_open): scale the title
+                // frame-delta so the FadeIn/TextFadeOut/menu Scaleform animation reaches its end
+                // frame in fewer wall-clock frames. Default-on product behavior for real runs (the
+                // detour self-gates per frame); install once. bd er-effects-rs-urw.
+                if title_anim_speedup_enabled() {
+                    if let Ok(base) = game_module_base() {
+                        unsafe { install_title_anim_speed_hook(base) };
+                        // READ-ONLY native state-transition timeline (menu-build-overlap lever
+                        // "look before acting" instrument): logs every SetState(owner,int) with a
+                        // timestamp so we learn exactly when BeginTitle(3) fires and whether the
+                        // 05_000_Title build has headroom to start earlier. Save-safe pass-through.
+                        unsafe { install_title_setstate_trace_hook(base) };
+                    }
+                }
                 // OFFLINE connection-state lever (milestone-3 fix): force GameMan+0xBC8/0xBC9 = 0 each
                 // title frame so the connection-loss event handlers -- which build the GR_System_Message
                 // "Cannot connect to network / connection lost" MessageBoxDialogs our offline boot

@@ -444,6 +444,60 @@ pub(crate) const TITLE_NATIVE_JOB_DELTA_OFFSET_START: usize =
 pub(crate) const TITLE_NATIVE_JOB_DELTA_OFFSET_END: usize =
     TITLE_NATIVE_JOB_DELTA_OFFSET_START + core::mem::size_of::<f32>();
 pub(crate) const TITLE_NATIVE_JOB_CALLED_VALUE: usize = true as usize;
+
+// ── Title-animation speedup lever (pab_dismiss -> menu_open) ─────────────────────────────────
+// The title/menu transition is a Scaleform/GFx animation advanced by the FD4 frame-delta f32 the
+// STEP_MenuJobWait tick (0x140b0d400) reads from its task_data+0x08 and forwards to
+// CS::TitleTopDialog::update. FadeIn->Loop / TextFadeOut completion is frame-count CHECKED
+// (current==total), NOT time-gated, so SCALING this delta makes the animation reach its end frame
+// in fewer wall-clock frames -- every downstream predicate (Scaleform tick, completion compare,
+// (flags&0x8f)>1 settle gate) is satisfied naturally; nothing is bypassed and the load does not
+// desync. bd autoload-menu-speed-lever-framedelta-2026-06-22.
+/// Clamp range for the speedup factor.
+pub(crate) const TITLE_ANIM_SPEEDUP_MIN: f32 = 1.0;
+pub(crate) const TITLE_ANIM_SPEEDUP_MAX: f32 = 16.0;
+/// DEFAULT-ON for real autoload runs (no opt-in). Any value > 1.0 ARMS the FadeIn skip; the magnitude
+/// no longer scales anything (the dt-scale and frame-burst levers were both runtime-falsified -- bd
+/// title-anim-framedelta-lever-FALSIFIED-runtime-2026-06-24 + pab-to-menuopen-real-breakdown-build-not-
+/// anim-2026-06-24 -- the FadeIn is wall-clock/present-bound, so we skip it at the completion predicate
+/// instead). Kept as an f32 toggle so the existing env/file override (set to 1.0 = off) still works.
+pub(crate) const TITLE_ANIM_SPEEDUP_DEFAULT: f32 = 4.0;
+/// Diagnostic frame counter for the title-anim lever (logs SM state every Nth detour call).
+pub(crate) static TITLE_ANIM_DIAG_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// Log the title SM state every this many detour calls.
+pub(crate) const TITLE_ANIM_DIAG_INTERVAL: usize = 60;
+/// FD4 state-machine `SetState`/request-transition (deobf 0x1407499e0; dump 0x140749ae0, shift -0x100).
+/// `__fastcall(rcx = FD4StateMachine* sm, rdx = StateDesc* desc)`. Routes the transition through the
+/// SM owner's vtable[0x150] and no-ops unless the current node is settled (`[node+0x20]&0x8f >= 2`), so
+/// it cannot corrupt the SM. This is the call CS::TitleTopDialog::update's input-skip branch makes to
+/// move FadeIn->Loop on a button press. bd fadein-* RE 2026-06-24.
+pub(crate) const TITLE_FD4_SETSTATE_RVA: usize = 0x7499e0;
+/// One-shot latch: the zero-input FadeIn->Loop transition has fired.
+pub(crate) static TITLE_FADEIN_SKIP_FIRED: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+// PRESS-ANY-BUTTON OUTRO-SKIP lever (bd pab-job-playout-is-the-3.5s-NOT-menu-build-2026-06-24). The
+// ~3.4s between pab-advance (press registered) and the native press handler (SetState(2)) is the title
+// FixOrderJobSequence at TitleStep+0x130 stalling on TWO boolean wait-predicate jobs before it reaches
+// job#4 (the press handler -> SetState(2)). The predicates (deobf disasm-confirmed):
+//   A) FUN_140b0e130: `mov rax,[0x143d6b7b0]; cmpb 0,0x21(rax); sete al` -> waits while CSMenuMan+0x21==0.
+//   B) FUN_140b0e0f0: `mov rax,[rcx+8](=TitleStep); mov rcx,[rax+0x2e8]; cmpb 0,0xdc(rcx); sete al`
+//      -> waits while (*(TitleStep+0x2e8))+0xdc == 0.
+// These are the source flags the player's button-press normally flips (via the BackScreen input path +
+// fade gating). Setting BOTH to 1 (zero-input) drains the sequence through both predicates and the two
+// action jobs, firing job#4 (press handler 0x140b0b6b0 -> SetState(2)) EXACTLY ONCE -- no double-build
+// (the sequence's own completion invokes the callback; no manual SetState/teardown), fps-independent
+// (the frames were spent waiting on flags, not animating).
+/// GLOBAL_CSMenuMan singleton pointer, deobf RVA (abs 0x143d6b7b0). Holds the live CSMenuManImp*.
+pub(crate) const GLOBAL_CSMENUMAN_PTR_RVA: usize = 0x3d6b7b0;
+/// Predicate-A source flag at CSMenuMan+0x21 (waits while ==0; set =1 to satisfy).
+pub(crate) const CSMENUMAN_TITLE_READY_21_OFFSET: usize = 0x21;
+/// Predicate-B: the sub-object pointer at TitleStep+0x2e8 whose +0xdc byte gates the wait.
+pub(crate) const TITLE_OWNER_PRED_B_SUBOBJ_2E8_OFFSET: usize = 0x2e8;
+/// Predicate-B source flag at (*(TitleStep+0x2e8))+0xdc (waits while ==0; set =1 to satisfy).
+pub(crate) const TITLE_PRED_B_READY_DC_OFFSET: usize = 0xdc;
+/// One-shot latch: the press-any-button outro-skip lever has fired (both predicate flags set).
+pub(crate) static PAB_OUTRO_SKIP_FIRED: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 #[repr(i32)]
 pub(crate) enum TitleStepState {
     Min = 0,
@@ -2938,6 +2992,15 @@ pub(crate) static TITLE_NATIVE_JOB_CALLED: AtomicUsize =
     AtomicUsize::new(TITLE_NATIVE_JOB_NOT_CALLED);
 pub(crate) static FORCE_PLAY_GAME_CALLED: AtomicUsize =
     AtomicUsize::new(TITLE_NATIVE_JOB_NOT_CALLED);
+/// Trampoline to the original STEP_MenuJobWait (0x140b0d400) for the title-anim speedup hook. 0 = not hooked.
+pub(crate) static TITLE_ANIM_SPEED_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// One-shot guard for installing the title-anim speedup hook.
+pub(crate) static TITLE_ANIM_SPEED_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Trampoline to the original title step-setter `SetState(owner,int)` (0x140b0d960) for the
+/// read-only state-transition trace hook. 0 = not hooked. bd menu-build-overlap-lever-2026-06-24.
+pub(crate) static TITLE_SETSTATE_TRACE_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// One-shot guard for installing the title step-setter trace hook.
+pub(crate) static TITLE_SETSTATE_TRACE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SUBMIT_PLAY_GAME_PHASE: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(SUBMIT_PHASE_INIT);
 pub(crate) static FORCE_PLAY_GAME_LAST_STATE: std::sync::atomic::AtomicI32 =

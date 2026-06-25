@@ -826,6 +826,292 @@ pub(crate) unsafe fn install_pab_advance_hook(base: usize) {
     }
     std::mem::forget(hooks);
 }
+/// Read the TitleTopDialog FD4 state machine by NAME (is_in_state) given the title `owner` (rcx of
+/// STEP_MenuJobWait). Returns `(dialog_ptr, in_fadein, in_loop, in_textfadeout, menu_opened_latch)` or
+/// `None` if the dialog isn't the TitleTopDialog yet. Read-only / no side effects. Mirrors STAGE1d.
+unsafe fn title_dialog_sm_state(owner: usize, base: usize) -> Option<(usize, bool, bool, bool, usize)> {
+    if owner == TITLE_OWNER_SCAN_START_ADDRESS {
+        return None;
+    }
+    let dialog =
+        unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(0);
+    if dialog == 0 {
+        return None;
+    }
+    let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(0);
+    if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+        return None;
+    }
+    let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
+    let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
+        unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
+    let in_fadein =
+        unsafe { is_in_state(sm, base + TITLE_STATE_DESC_FADEIN_RVA) } != OWN_STEPPER_FALSE;
+    let in_loop =
+        unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
+    let in_textfadeout =
+        unsafe { is_in_state(sm, base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) } != OWN_STEPPER_FALSE;
+    let latch = unsafe { safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }
+        .map(|v| v & TITLE_TOP_DIALOG_LATCH_BYTE_MASK)
+        .unwrap_or(0);
+    Some((dialog, in_fadein, in_loop, in_textfadeout, latch))
+}
+
+/// Skip the title FadeIn ONCE: the first frame the dialog SM is settled in FadeIn (menu-open latch
+/// clear), drive the FD4 state machine FadeIn->Loop by calling the game's OWN transition `SetState`
+/// (deobf 0x1407499e0) with `(sm = dialog+0xa60, desc = Loop 0x142a8f9e8)`. This is EXACTLY the call
+/// `CS::TitleTopDialog::update`'s input-skip branch makes on a confirm/cancel press (Ghidra: bd
+/// fadein-* RE), so it is save-safe and routes through the SM's own vtable[0x150] request path (no
+/// struct stomp) -- but ZERO input. `SetState` internally no-ops unless the current node is settled
+/// (`[node+0x20]&0x8f >= 2`), so an early call before the node is eligible cannot corrupt the SM.
+/// One-shot via `TITLE_FADEIN_SKIP_FIRED`; the dt-scale / frame-burst / anim-complete-predicate levers
+/// were all runtime-falsified (bd title-anim-framedelta / pab-to-menuopen-real-breakdown / fadein-
+/// predicate-75cea0). The FadeIn IS frame-paced animation -- it is just skipped by the state transition,
+/// not by pacing.
+unsafe fn title_anim_fadein_skip(owner: usize) {
+    if TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS {
+        return; // one-shot: already transitioned
+    }
+    if IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES {
+        return;
+    }
+    if !(title_anim_speedup_factor() > TITLE_ANIM_SPEEDUP_MIN) {
+        return; // lever off / forced to 1.0
+    }
+    let Ok(base) = game_module_base() else {
+        return;
+    };
+    let st = unsafe { title_dialog_sm_state(owner, base) };
+    // Light diagnostic so the SM timeline stays visible across boots.
+    let n = TITLE_ANIM_DIAG_CALLS.fetch_add(1, Ordering::SeqCst);
+    if n % TITLE_ANIM_DIAG_INTERVAL == 0 {
+        append_autoload_debug(format_args!(
+            "title-anim-diag: detour#{n} sm(dialog,fadein,loop,tfo,latch)={st:?}"
+        ));
+    }
+    let Some((dialog, true, _, _, latch)) = st else {
+        return; // not the TitleTopDialog, or not in FadeIn yet
+    };
+    if latch != TITLE_OWNER_SCAN_START_ADDRESS {
+        return; // menu already opening -> leave the SM alone
+    }
+    // Fire the game's own FadeIn->Loop transition once (zero-input).
+    if TITLE_FADEIN_SKIP_FIRED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        != TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return; // lost the one-shot race
+    }
+    let set_state: unsafe extern "system" fn(usize, usize) =
+        unsafe { std::mem::transmute(base + TITLE_FD4_SETSTATE_RVA) };
+    let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
+    unsafe { set_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) };
+    append_autoload_debug(format_args!(
+        "title-anim-skip: *** SetState(sm=0x{sm:x}, Loop) via 0x{:x} -- zero-input FadeIn->Loop transition (game's own input-skip path, save-safe), skipping the title fade ***",
+        base + TITLE_FD4_SETSTATE_RVA
+    ));
+}
+
+/// PRESS-ANY-BUTTON OUTRO SKIP (zero-input): collapse the ~3.4s the title FixOrderJobSequence at
+/// owner+0x130 spends stalled on its two boolean wait-predicates between the registered press
+/// (pab-advance) and the native press handler firing SetState(2). The predicates wait on two source
+/// flags (deobf disasm-confirmed, bd pab-job-playout-is-the-3.5s-NOT-menu-build-2026-06-24):
+///   A) CSMenuMan+0x21 == 0   (FUN_140b0e130)
+///   B) (*(owner+0x2e8))+0xdc == 0   (FUN_140b0e0f0)
+/// Setting BOTH to 1 lets the sequence drain through both predicates + the two action jobs, firing
+/// job#4 (press handler 0x140b0b6b0 -> SetState(2)) EXACTLY ONCE -- the engine's own completion path,
+/// so no double-build and no manual SetState. Gated behind PAB_ADVANCE_FIRED so the press is already
+/// registered (keeps the pab_dismiss marker; this is a pure accelerator of the post-press wait).
+/// One-shot via PAB_OUTRO_SKIP_FIRED; all reads/writes are null/heap/alignment-guarded (fail closed).
+unsafe fn pab_outro_skip(owner: usize) {
+    if !pab_outro_skip_enabled() {
+        return;
+    }
+    if PAB_OUTRO_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS {
+        return; // one-shot: already fired
+    }
+    if IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES {
+        return;
+    }
+    // Only after the press is registered (pab-advance set the BackScreen press count) -- keeps the
+    // pab_dismiss timeline marker and makes this a pure post-press accelerator, never a phantom press.
+    if PAB_ADVANCE_FIRED.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+    if owner <= PAB_MIN_HEAP_PTR {
+        return;
+    }
+    let Ok(base) = game_module_base() else {
+        return;
+    };
+    // Require the title parked at MenuJobWait(10) with the FixOrderJobSequence live at owner+0x130.
+    let committed =
+        unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }.unwrap_or(-999);
+    if committed != TITLE_STEP_MENU_JOB_WAIT {
+        return;
+    }
+    let seq = unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_LIST_130_OFFSET) }.unwrap_or(0);
+    if seq <= PAB_MIN_HEAP_PTR {
+        return; // sequence not present -> wait
+    }
+    // Resolve both predicate source pointers BEFORE writing, so we only fire when both are satisfiable.
+    let csmenuman = unsafe { safe_read_usize(base + GLOBAL_CSMENUMAN_PTR_RVA) }.unwrap_or(0);
+    let subobj = unsafe { safe_read_usize(owner + TITLE_OWNER_PRED_B_SUBOBJ_2E8_OFFSET) }.unwrap_or(0);
+    if csmenuman <= PAB_MIN_HEAP_PTR || subobj <= PAB_MIN_HEAP_PTR {
+        return; // a source object isn't live yet -> wait (fail closed)
+    }
+    // Claim the one-shot before writing (lose the race -> bail).
+    if PAB_OUTRO_SKIP_FIRED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        != TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return;
+    }
+    let a_before = unsafe { safe_read_i32(csmenuman + CSMENUMAN_TITLE_READY_21_OFFSET) }.unwrap_or(-1);
+    let b_before = unsafe { safe_read_i32(subobj + TITLE_PRED_B_READY_DC_OFFSET) }.unwrap_or(-1);
+    unsafe {
+        *((csmenuman + CSMENUMAN_TITLE_READY_21_OFFSET) as *mut u8) = 1; // predicate A
+        *((subobj + TITLE_PRED_B_READY_DC_OFFSET) as *mut u8) = 1; // predicate B
+    }
+    append_autoload_debug(format_args!(
+        "pab-outro-skip: *** SET CSMenuMan(0x{csmenuman:x})+0x21=1 (was 0x{a_before:x}) + (*(owner+0x2e8)=0x{subobj:x})+0xdc=1 (was 0x{b_before:x}) -- zero-input drain of the title FixOrderJobSequence's two wait-predicates -> press handler/SetState(2) fires once, skipping the ~3.4s press-any-button outro ***"
+    ));
+}
+/// Detour for STEP_MenuJobWait (0x140b0d400, `__fastcall(rcx=owner, rdx=task_data, ...)`). Drives the
+/// one-shot FadeIn->Loop skip from the live SM state, then passes through to the original unchanged.
+pub(crate) unsafe extern "system" fn title_menujob_speed_detour(
+    owner: usize,
+    task_data: usize,
+    r8: usize,
+    r9: usize,
+) -> usize {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        title_anim_fadein_skip(owner)
+    }));
+    // Press-any-button outro skip: collapse the ~3.4s the FixOrderJobSequence stalls on its two
+    // wait-predicates after the press is registered (zero-input, one-shot, gated). Separately guarded.
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        pab_outro_skip(owner)
+    }));
+    let orig_addr = TITLE_ANIM_SPEED_ORIG.load(Ordering::SeqCst);
+    if orig_addr == TITLE_OWNER_SCAN_START_ADDRESS {
+        return 0;
+    }
+    let orig: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig_addr) };
+    unsafe { orig(owner, task_data, r8, r9) }
+}
+
+/// Install the title-anim speedup hook ONCE (MinHook, mirroring `install_pab_advance_hook`). Gated by
+/// `title_anim_speedup_enabled` at the call site; the detour self-gates per frame too.
+pub(crate) unsafe fn install_title_anim_speed_hook(base: usize) {
+    if TITLE_ANIM_SPEED_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        != TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-anim-speed-hook: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let mut hooks = Vec::new();
+    unsafe {
+        create_continue_trace_hook(
+            &mut hooks,
+            "title_menujob_speed_b0d400",
+            TITLE_MENU_JOB_WAIT_RVA as u32,
+            title_menujob_speed_detour as *mut c_void,
+            &TITLE_ANIM_SPEED_ORIG,
+        );
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => append_autoload_debug(format_args!(
+            "title-anim-speed-hook: INSTALLED on STEP_MenuJobWait 0x{:x} -- one-shot FadeIn->Loop skip armed (zero-input, save-safe)",
+            base + TITLE_MENU_JOB_WAIT_RVA,
+        )),
+        status => append_autoload_debug(format_args!(
+            "title-anim-speed-hook: MH_ApplyQueued failed: {status:?}"
+        )),
+    }
+    std::mem::forget(hooks);
+}
+/// READ-ONLY trace detour for the title step-setter `SetState(owner, int state)` (deobf 0x140b0d960).
+/// Logs every native state transition with a timestamp + the current owner+0xe0 (TitleTopDialog
+/// holder) liveness, then calls the original UNCHANGED. Pure observation -- this is the
+/// "look before acting" instrument for the menu-build-overlap lever: it reveals the exact wall-clock
+/// at which BeginTitle(3) fires natively (and the full state sequence during boot), so we can decide
+/// whether the 05_000_Title build has any headroom to be started earlier (overlap with init) before
+/// risking a forced SetState (which has NO double-build guard). bd menu-build-overlap-lever-2026-06-24.
+pub(crate) unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i32) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let dialog = if owner > PAB_MIN_HEAP_PTR {
+            unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(0)
+        } else {
+            0
+        };
+        let committed = if owner > PAB_MIN_HEAP_PTR {
+            unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }.unwrap_or(-999)
+        } else {
+            -999
+        };
+        let b8 = if owner > PAB_MIN_HEAP_PTR {
+            unsafe { safe_read_usize(owner + TITLE_OWNER_BEGINLOGO_LIST_GATE_B8_OFFSET) }
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        append_autoload_debug(format_args!(
+            "title-setstate-trace: SetState(owner=0x{owner:x}, state={state}) committed_was={committed} owner+0xe0(dialog)=0x{dialog:x} owner+0xb8(gate)=0x{b8:x}"
+        ));
+    }));
+    let orig = TITLE_SETSTATE_TRACE_ORIG.load(Ordering::SeqCst);
+    if orig == TITLE_OWNER_SCAN_START_ADDRESS || orig == 0 {
+        return;
+    }
+    let f: unsafe extern "system" fn(usize, i32) = unsafe { std::mem::transmute(orig) };
+    unsafe { f(owner, state) };
+}
+/// Install the READ-ONLY title step-setter trace hook ONCE. Mirrors `install_pab_advance_hook`.
+/// Save-safe: the detour only logs + passes through. bd menu-build-overlap-lever-2026-06-24.
+pub(crate) unsafe fn install_title_setstate_trace_hook(base: usize) {
+    if TITLE_SETSTATE_TRACE_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        != TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-setstate-trace-hook: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let mut hooks = Vec::new();
+    unsafe {
+        create_continue_trace_hook(
+            &mut hooks,
+            "title_setstate_b0d960",
+            TITLE_SET_STATE_RVA as u32,
+            title_setstate_trace_detour as *mut c_void,
+            &TITLE_SETSTATE_TRACE_ORIG,
+        );
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => append_autoload_debug(format_args!(
+            "title-setstate-trace-hook: INSTALLED on SetState(owner,int) 0x{:x} -- read-only native state-transition timeline armed",
+            base + TITLE_SET_STATE_RVA,
+        )),
+        status => append_autoload_debug(format_args!(
+            "title-setstate-trace-hook: MH_ApplyQueued failed: {status:?}"
+        )),
+    }
+    std::mem::forget(hooks);
+}
 /// Per-frame PUMP for the built LoadGame job (bd drain-dialog-plus8-not-menujob-pump-our-job-directly).
 /// Runs from the recurring game task once `maybe_fire_tfc_continue` armed `TFC_DRAIN_JOB`. Calls
 /// `ExecuteMenuJob(rcx = &job_slot, rdx = &FD4Time)` DIRECTLY on our built job -- it invokes the job's

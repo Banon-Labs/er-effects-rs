@@ -626,6 +626,53 @@ pub(crate) fn pab_advance_enabled() -> bool {
             .join("er-effects-pab-advance.txt")
             .exists()
 }
+// ENV-GATE RATIONALE (required by .auto/env_gate_comment_policy.rego): this is NOT an on/off
+// feature flag. The title-anim speedup is DEFAULT-ON product behavior for every real autoload run
+// (returns TITLE_ANIM_SPEEDUP_DEFAULT, no opt-in) -- matching the always-on autoload levers and the
+// "No Compromises" rule that the deliverable is product behavior, not a flag-gated experiment. The
+// env/file override exists ONLY to (a) SWEEP the factor K at runtime during the empirical animation-
+// speed search -- a cross-compile per candidate K is minutes, a runtime knob is seconds -- and (b)
+// force K=1.0 for a clean A/B against the recorded baseline. Telemetry/trace-only runs stay at 1.0 so
+// they observe unmodified native pacing.
+/// Title-animation speedup factor for the pab_dismiss -> menu_open transition. Default-on
+/// (`TITLE_ANIM_SPEEDUP_DEFAULT`) for real autoload runs; overridable at runtime via env
+/// `ER_EFFECTS_TITLE_ANIM_SPEEDUP=<f32>` or GAME_DIR file `er-effects-title-anim-speedup.txt`
+/// (contents parsed as f32). Result is clamped to [MIN, MAX]; an override that is unparseable or
+/// <=1.0 forces no scaling. bd autoload-menu-speed-lever-framedelta-2026-06-22.
+pub(crate) fn title_anim_speedup_factor() -> f32 {
+    if autoload_disabled() {
+        return TITLE_ANIM_SPEEDUP_MIN; // no autoload -> never perturb the title delta
+    }
+    // Explicit runtime override (tuning / force-off) wins when present.
+    let override_raw = std::env::var("ER_EFFECTS_TITLE_ANIM_SPEEDUP")
+        .ok()
+        .or_else(|| {
+            std::fs::read_to_string(
+                game_directory_path()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join("er-effects-title-anim-speedup.txt"),
+            )
+            .ok()
+        });
+    if let Some(raw) = override_raw {
+        return match raw.trim().parse::<f32>() {
+            Ok(k) if k.is_finite() && k > TITLE_ANIM_SPEEDUP_MIN => k.min(TITLE_ANIM_SPEEDUP_MAX),
+            _ => TITLE_ANIM_SPEEDUP_MIN, // junk / <=1.0 -> force off
+        };
+    }
+    // No override: DEFAULT-ON for real runs, off for telemetry/trace-only observation.
+    if save_override_telemetry_only() {
+        TITLE_ANIM_SPEEDUP_MIN
+    } else {
+        TITLE_ANIM_SPEEDUP_DEFAULT
+    }
+}
+
+/// True when the title-anim speedup lever is armed (factor > 1.0).
+pub(crate) fn title_anim_speedup_enabled() -> bool {
+    title_anim_speedup_factor() > TITLE_ANIM_SPEEDUP_MIN
+}
+
 /// AUTO-CONFIRM observe mode (er-effects-auto-confirm.txt): drive the game's OWN natural title
 /// flow with Confirm input-taps so we can finally observe the view PAST the modal. No SetState
 /// forcing, no input block, no custom dismiss -- just the press the game polls for.
@@ -756,6 +803,23 @@ pub(crate) fn online_disable_enabled() -> bool {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("er-effects-offline.txt")
             .exists()
+}
+/// Press-any-button outro-skip: DEFAULT-ON product behavior for every real autoload run -- NO
+/// per-feature env/file knob (user directive 2026-06-24: stop adding env-gated features; tie product
+/// levers to existing autoload state). It force-satisfies the title FixOrderJobSequence's two
+/// wait-predicate source flags (CSMenuMan+0x21 and (*(owner+0x2e8))+0xdc) so the sequence drains and
+/// fires the native press handler/SetState(2) at once instead of stalling ~3.4s; bd
+/// pab-job-playout-is-the-3.5s-NOT-menu-build-2026-06-24. VALIDATED 2026-06-24 (onscreen runs
+/// 165803/170156, default-on): zero simulated input, gold loads (oracle_char_name=Banon), zero
+/// MessageBoxDialog, pab_dismiss->menu_open ~3.46s->~2.2-2.7s, no double-build (routes through the
+/// engine's own sequence completion). Gated by the SAME condition as the other always-on autoload
+/// levers (splash-skip / pab-advance / title-anim-speedup): on for any real (non-telemetry-only) run,
+/// off for telemetry/observe, suppressed with all of autoload by ER_EFFECTS_NO_AUTOLOAD.
+pub(crate) fn pab_outro_skip_enabled() -> bool {
+    if autoload_disabled() {
+        return false;
+    }
+    !save_override_telemetry_only()
 }
 pub(crate) fn ingamestep_unpin_enabled() -> bool {
     matches!(
