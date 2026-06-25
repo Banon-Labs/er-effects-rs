@@ -475,28 +475,43 @@ pub(crate) const TITLE_FD4_SETSTATE_RVA: usize = 0x7499e0;
 /// One-shot latch: the zero-input FadeIn->Loop transition has fired.
 pub(crate) static TITLE_FADEIN_SKIP_FIRED: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-// PRESS-ANY-BUTTON OUTRO-SKIP lever (bd pab-job-playout-is-the-3.5s-NOT-menu-build-2026-06-24). The
-// ~3.4s between pab-advance (press registered) and the native press handler (SetState(2)) is the title
-// FixOrderJobSequence at TitleStep+0x130 stalling on TWO boolean wait-predicate jobs before it reaches
-// job#4 (the press handler -> SetState(2)). The predicates (deobf disasm-confirmed):
+// TITLE INIT-READINESS OVERRIDE lever (bd title-init-ready-override-NOT-a-press-lever-2026-06-24,
+// corrects bd pab-job-playout-is-the-3.5s-NOT-menu-build-2026-06-24). Between pab-advance and the
+// native press handler (SetState(2)) the title FixOrderJobSequence at TitleStep+0x130 stalls on TWO
+// boolean wait-predicate jobs before reaching job#4 (the press handler -> SetState(2)). The predicates
+// (deobf disasm-confirmed):
 //   A) FUN_140b0e130: `mov rax,[0x143d6b7b0]; cmpb 0,0x21(rax); sete al` -> waits while CSMenuMan+0x21==0.
 //   B) FUN_140b0e0f0: `mov rax,[rcx+8](=TitleStep); mov rcx,[rax+0x2e8]; cmpb 0,0xdc(rcx); sete al`
-//      -> waits while (*(TitleStep+0x2e8))+0xdc == 0.
-// These are the source flags the player's button-press normally flips (via the BackScreen input path +
-// fade gating). Setting BOTH to 1 (zero-input) drains the sequence through both predicates and the two
-// action jobs, firing job#4 (press handler 0x140b0b6b0 -> SetState(2)) EXACTLY ONCE -- no double-build
-// (the sequence's own completion invokes the callback; no manual SetState/teardown), fps-independent
-// (the frames were spent waiting on flags, not animating).
+//      -> waits while (*(InGameStep at TitleStep+0x2e8))+0xdc == 0.
+// CORRECTION (RTTI/xref RE 2026-06-24): these are NOT button-press flags. They are INIT-READINESS
+// milestones, set by native init steps, with NO input reader on either path:
+//   A) CSMenuMan+0x21 is set by CS::CSScaleformStep::STEP_Wait_forResidentResourceLoad when the
+//      Scaleform menu RESIDENT RESOURCES finish loading.
+//   B) (*(TitleStep+0x2e8) = CS::InGameStep*)+0xdc is set by CS::InGameStep::STEP_InitWait when the
+//      InGameStep child init-wait completes.
+// The ACTUAL press-any-button dismissal is the global accept byte 0x144589bdc (read by
+// CS::TitleTopDialog::update) + the BackScreen job+0x1e8 the pab-advance lever pokes -- a SEPARATE
+// mechanism. So forcing BOTH flags to 1 (zero-input) is an INIT-READY OVERRIDE: it tells the title
+// sequence "menu resources + InGameStep init are ready, proceed", draining the sequence through both
+// predicates + the two action jobs and firing job#4 (press handler 0x140b0b6b0 -> SetState(2)) EXACTLY
+// ONCE -- no double-build, no manual SetState. SAVE-SAFE (RE-blessed: races ahead of init-waits that
+// complete anyway; runtime-validated gold-loads/zero-input/zero-MessageBoxDialog). CAVEAT: it asserts
+// "resources ready" before they truly are, so the menu still cannot RENDER until the real Scaleform
+// load completes (~15.4s floor) -- the win is skipping the wait-poll scheduling (~1s), not the load
+// itself; and on slower-disk systems the early assertion is an init-race to watch.
 /// GLOBAL_CSMenuMan singleton pointer, deobf RVA (abs 0x143d6b7b0). Holds the live CSMenuManImp*.
 pub(crate) const GLOBAL_CSMENUMAN_PTR_RVA: usize = 0x3d6b7b0;
-/// Predicate-A source flag at CSMenuMan+0x21 (waits while ==0; set =1 to satisfy).
-pub(crate) const CSMENUMAN_TITLE_READY_21_OFFSET: usize = 0x21;
-/// Predicate-B: the sub-object pointer at TitleStep+0x2e8 whose +0xdc byte gates the wait.
-pub(crate) const TITLE_OWNER_PRED_B_SUBOBJ_2E8_OFFSET: usize = 0x2e8;
-/// Predicate-B source flag at (*(TitleStep+0x2e8))+0xdc (waits while ==0; set =1 to satisfy).
-pub(crate) const TITLE_PRED_B_READY_DC_OFFSET: usize = 0xdc;
-/// One-shot latch: the press-any-button outro-skip lever has fired (both predicate flags set).
-pub(crate) static PAB_OUTRO_SKIP_FIRED: AtomicUsize =
+/// CSMenuMan+0x21 = "Scaleform menu resident-resources loaded" flag (set by
+/// CS::CSScaleformStep::STEP_Wait_forResidentResourceLoad). Predicate A waits while ==0; the override
+/// sets =1 early. NOT a button-press flag.
+pub(crate) const CSMENUMAN_SCALEFORM_RESIDENT_LOADED_21_OFFSET: usize = 0x21;
+/// TitleStep+0x2e8 = the CS::InGameStep* sub-object pointer (registered by the TitleStep ctor).
+pub(crate) const TITLE_OWNER_INGAMESTEP_2E8_OFFSET: usize = 0x2e8;
+/// InGameStep+0xdc = "InGameStep init-wait complete" flag (set by CS::InGameStep::STEP_InitWait).
+/// Predicate B waits while ==0; the override sets =1 early. NOT a button-press flag.
+pub(crate) const INGAMESTEP_INIT_WAIT_DONE_DC_OFFSET: usize = 0xdc;
+/// One-shot latch: the title init-readiness override has fired (both init-ready flags forced).
+pub(crate) static TITLE_INIT_READY_OVERRIDE_FIRED: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 #[repr(i32)]
 pub(crate) enum TitleStepState {

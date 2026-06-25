@@ -804,18 +804,23 @@ pub(crate) fn online_disable_enabled() -> bool {
             .join("er-effects-offline.txt")
             .exists()
 }
-/// Press-any-button outro-skip: DEFAULT-ON product behavior for every real autoload run -- NO
+/// Title init-readiness override: DEFAULT-ON product behavior for every real autoload run -- NO
 /// per-feature env/file knob (user directive 2026-06-24: stop adding env-gated features; tie product
 /// levers to existing autoload state). It force-satisfies the title FixOrderJobSequence's two
-/// wait-predicate source flags (CSMenuMan+0x21 and (*(owner+0x2e8))+0xdc) so the sequence drains and
-/// fires the native press handler/SetState(2) at once instead of stalling ~3.4s; bd
-/// pab-job-playout-is-the-3.5s-NOT-menu-build-2026-06-24. VALIDATED 2026-06-24 (onscreen runs
+/// INIT-READINESS gate flags (CSMenuMan+0x21 = Scaleform resident-resource load complete;
+/// (*(owner+0x2e8) = InGameStep)+0xdc = InGameStep init-wait complete) so the sequence drains and
+/// fires the native press handler/SetState(2) at once instead of stalling on those waits. NOTE these
+/// are init milestones, NOT button-press flags -- the actual press dismissal is accept-byte
+/// 0x144589bdc + BackScreen job+0x1e8 (pab-advance); this is an init-skip, not a press lever
+/// (bd title-init-ready-override-NOT-a-press-lever-2026-06-24). VALIDATED 2026-06-24 (onscreen runs
 /// 165803/170156, default-on): zero simulated input, gold loads (oracle_char_name=Banon), zero
 /// MessageBoxDialog, pab_dismiss->menu_open ~3.46s->~2.2-2.7s, no double-build (routes through the
-/// engine's own sequence completion). Gated by the SAME condition as the other always-on autoload
-/// levers (splash-skip / pab-advance / title-anim-speedup): on for any real (non-telemetry-only) run,
-/// off for telemetry/observe, suppressed with all of autoload by ER_EFFECTS_NO_AUTOLOAD.
-pub(crate) fn pab_outro_skip_enabled() -> bool {
+/// engine's own sequence completion). The residual to menu_open is the genuine Scaleform resident
+/// load (~15.4s floor) -- the override skips wait-poll scheduling, not the load. Gated by the SAME
+/// condition as the other always-on autoload levers (splash-skip / pab-advance / title-anim-speedup):
+/// on for any real (non-telemetry-only) run, off for telemetry/observe, suppressed with all of
+/// autoload by ER_EFFECTS_NO_AUTOLOAD.
+pub(crate) fn title_init_ready_override_enabled() -> bool {
     if autoload_disabled() {
         return false;
     }
