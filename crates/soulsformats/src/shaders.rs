@@ -233,6 +233,11 @@ pub fn extract(
 ) -> Result<ExtractManifest> {
     let exe = ensure_bridge(config)?;
     io("create out dir", fs::create_dir_all(out_dir))?;
+    // The bridge runs under wine with its CWD set to the Smithbox dir, and
+    // `to_wine_path` maps `/a/b` -> `Z:\a\b` but a *relative* path -> a
+    // drive-relative `Z:rel\...` that wine resolves against that CWD. Absolutize
+    // here so a relative out_dir lands in the caller's tree, not under Smithbox.
+    let out_dir = io("resolve out dir", fs::canonicalize(out_dir))?;
     let out = run_bridge(
         config,
         &exe,
@@ -240,7 +245,7 @@ pub fn extract(
             "extract",
             &to_wine_path(&config.game_dir),
             logical_path,
-            &to_wine_path(out_dir),
+            &to_wine_path(&out_dir),
         ],
     )?;
     let line = last_json_line(&out, '{');

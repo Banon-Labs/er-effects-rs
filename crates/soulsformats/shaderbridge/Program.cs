@@ -158,7 +158,12 @@ static int Extract(string gameDir, string logicalPath, string outDir)
         {
             var bytes = f.Bytes.ToArray();
             var name = (f.Name ?? "unnamed").Replace('\\', '/');
-            var dest = Path.Combine(outDir, name.Replace('/', '_'));
+            // Member names can be full Windows roots (e.g. "N:\...\c4800_Body.matbin").
+            // Flatten to a single filename: the '/' -> '_' join plus stripping the
+            // drive ':' keeps Path.Combine from treating "N:..." as a rooted path
+            // and silently discarding outDir.
+            var safe = name.Replace('/', '_').Replace(':', '_');
+            var dest = Path.Combine(outDir, safe);
             File.WriteAllBytes(dest, bytes);
             members.Add(new { name, size = bytes.Length, file = Path.GetFileName(dest) });
         }

@@ -18,7 +18,22 @@ use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 
 use er_shaderkit::render::Headless;
 
+mod object;
+use object::{LoadedObject, ObjectSource};
+
 const RENDER_SIZE: u32 = 256;
+
+/// The two views the app can show; Tab toggles between them when an object is loaded.
+#[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+enum View {
+    #[default]
+    Shader,
+    Object,
+}
+
+/// Marks shader-view entities (2D camera, canvas, UI) for teardown on view switch.
+#[derive(Component)]
+struct ShaderEntity;
 
 #[derive(Resource)]
 struct Lib {
@@ -55,6 +70,8 @@ fn main() {
     ));
     let mut shot = None;
     let mut start_idx = 0usize;
+    let mut object_source: Option<ObjectSource> = None;
+    let mut rdc: Option<String> = None;
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
     while i < args.len() {
@@ -67,12 +84,59 @@ fn main() {
                 start_idx = args.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(0);
                 i += 2;
             }
+            "--flver" => {
+                object_source = args.get(i + 1).map(|p| ObjectSource::FlverPath(p.into()));
+                i += 2;
+            }
+            "--object" => {
+                object_source = args.get(i + 1).map(|c| ObjectSource::Character(c.clone()));
+                i += 2;
+            }
+            "--rdc-capture" => {
+                rdc = args
+                    .get(i + 1)
+                    .cloned()
+                    .or_else(|| Some("/tmp/er-cap".to_owned()));
+                i += 2;
+            }
             other => {
                 dir = std::path::PathBuf::from(other);
                 i += 1;
             }
         }
     }
+
+    // Resolve the object up front so load failures print to the terminal (not an
+    // empty window), and decide which view to open in.
+    let loaded = object_source
+        .as_ref()
+        .and_then(|src| match object::load(src) {
+            Ok(l) => {
+                let tris: usize = l
+                    .object
+                    .meshes
+                    .iter()
+                    .map(|m| m.mesh.triangle_count())
+                    .sum();
+                eprintln!(
+                    "loaded object '{}': {} meshes, {} textured, {} tris",
+                    l.label,
+                    l.object.meshes.len(),
+                    l.object.textured_mesh_count(),
+                    tris
+                );
+                Some(l)
+            }
+            Err(e) => {
+                eprintln!("object load failed: {e}");
+                None
+            }
+        });
+    let initial = if loaded.is_some() {
+        View::Object
+    } else {
+        View::Shader
+    };
 
     let (names, paths) = scan(&dir);
     eprintln!("loaded {} shaders from {}", names.len(), dir.display());
@@ -100,12 +164,84 @@ fn main() {
         dirty: true,
     })
     .insert_resource(Backend(Headless::new().ok()))
-    .add_systems(Startup, setup)
-    .add_systems(Update, (navigate, render_selected, screenshot_then_exit));
+    .insert_state(initial)
+    .add_systems(OnEnter(View::Shader), setup_shader)
+    .add_systems(OnExit(View::Shader), teardown_shader)
+    .add_systems(OnEnter(View::Object), object::setup_object)
+    .add_systems(OnExit(View::Object), object::teardown_object)
+    .add_systems(
+        Update,
+        (
+            (navigate, render_selected).run_if(in_state(View::Shader)),
+            object::orbit_controls.run_if(in_state(View::Object)),
+            toggle_view,
+            screenshot_then_exit,
+            rdc_capture_then_exit,
+        ),
+    );
+    if let Some(l) = loaded {
+        app.insert_resource(l);
+    }
     if let Some(path) = shot {
         app.insert_resource(ShotMode { path, frame: 0 });
     }
+    if let Some(out) = rdc {
+        app.insert_resource(RdcMode { out, frame: 0 });
+    }
     app.run();
+}
+
+/// When `--rdc-capture <path>` is set, trigger an in-app RenderDoc capture of one
+/// settled frame, then exit. No-op unless launched under `renderdoccmd`/RenderDoc
+/// (where `librenderdoc` is loaded). The capture's `.rdc` lands at `<path>_frameN.rdc`.
+#[derive(Resource)]
+struct RdcMode {
+    out: String,
+    frame: u32,
+}
+
+fn rdc_capture_then_exit(mode: Option<ResMut<RdcMode>>, mut exit: MessageWriter<AppExit>) {
+    let Some(mut mode) = mode else {
+        return;
+    };
+    mode.frame += 1;
+    // Let the scene settle + assets upload before capturing.
+    if mode.frame == 90 {
+        match renderdoc::RenderDoc::<renderdoc::V141>::new() {
+            Ok(mut rd) => {
+                rd.set_capture_file_path_template(&mode.out);
+                rd.trigger_capture();
+                info!("RenderDoc: triggered capture -> {}_frameN.rdc", mode.out);
+            }
+            Err(e) => warn!("RenderDoc not available (run under renderdoccmd): {e}"),
+        }
+    }
+    // The capture is written on the next present; give it a few frames, then quit.
+    if mode.frame > 130 {
+        exit.write(AppExit::Success);
+    }
+}
+
+/// Tab switches between the shader list and the loaded object (no-op if no object).
+fn toggle_view(
+    keys: Res<ButtonInput<KeyCode>>,
+    loaded: Option<Res<LoadedObject>>,
+    state: Res<State<View>>,
+    mut next: ResMut<NextState<View>>,
+) {
+    if loaded.is_none() || !keys.just_pressed(KeyCode::Tab) {
+        return;
+    }
+    next.set(match state.get() {
+        View::Shader => View::Object,
+        View::Object => View::Shader,
+    });
+}
+
+fn teardown_shader(mut commands: Commands, q: Query<Entity, With<ShaderEntity>>) {
+    for e in &q {
+        commands.entity(e).despawn();
+    }
 }
 
 fn scan(dir: &std::path::Path) -> (Vec<String>, Vec<std::path::PathBuf>) {
@@ -129,8 +265,11 @@ fn scan(dir: &std::path::Path) -> (Vec<String>, Vec<std::path::PathBuf>) {
     (names, entries)
 }
 
-fn setup(mut commands: Commands) {
-    commands.spawn(Camera2d);
+fn setup_shader(mut commands: Commands, mut sel: ResMut<Sel>) {
+    // Re-render the selection when (re)entering the shader view.
+    sel.dirty = true;
+
+    commands.spawn((Camera2d, ShaderEntity));
 
     // The rendered shader output, shown as a sprite on the right.
     commands.spawn((
@@ -140,6 +279,7 @@ fn setup(mut commands: Commands) {
         },
         Transform::from_xyz(180.0, 0.0, 0.0),
         Canvas,
+        ShaderEntity,
     ));
 
     // Left UI panel: title, scrolling list window, status line.
@@ -154,6 +294,7 @@ fn setup(mut commands: Commands) {
                 ..default()
             },
             BackgroundColor(Color::srgba(0.04, 0.04, 0.05, 0.9)),
+            ShaderEntity,
         ))
         .with_children(|p| {
             p.spawn((
