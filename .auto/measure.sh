@@ -256,7 +256,7 @@ if 'product Continue capture must observe MenuWindowJob construction before upda
     autoload_static_failures += 1
 native_ctor_b_body = function_body('menu_window_job_native_ctor_b_hook', exp_code) or ''
 if (
-    'MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA' not in lib_code
+    'MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA' not in code
     or 'cap_menu_window_job_native_ctor_b_7acb00' not in exp_code
     or 'MENU-WINDOW-NATIVE-CTOR-B captured semantic native Continue item' not in native_ctor_b_body
     or 'MENU_ITEM_ACCEPT_NATIVE_RVA' not in native_ctor_b_body
@@ -271,7 +271,7 @@ if 'product diagnostics must hook native-accept MenuWindowJob constructor B with
     autoload_static_failures += 1
 idle_ctor_body = function_body('menu_window_job_idle_ctor_hook', exp_code) or ''
 if (
-    'MENU_WINDOW_JOB_IDLE_CTOR_RVA' not in lib_code
+    'MENU_WINDOW_JOB_IDLE_CTOR_RVA' not in code
     or 'MENU_ITEM_ACCEPT_IDLE_RVA' not in exp_code
     or 'cap_menu_window_job_idle_ctor_7acf80' not in exp_code
     or 'MENU-WINDOW-IDLE-CTOR observed Continue-looking disabled item' not in idle_ctor_body
