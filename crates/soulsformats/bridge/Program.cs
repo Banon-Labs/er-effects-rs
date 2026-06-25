@@ -50,12 +50,28 @@ static int Run(string[] args)
     {
         var data = File.ReadAllBytes(regulationPath);
         using var binder = SoulsFormats.SFUtil.DecryptERRegulation(data);
+
+        // Regulation binder entry names can carry Windows-style paths (e.g.
+        // "N:\\...\\SpEffectParam.param"). Path.GetFileNameWithoutExtension only
+        // treats the *current platform's* separator as a directory boundary, so on
+        // Linux a '\\' is kept verbatim and the stem never matches. Normalize to
+        // '/' first so the bare param name is recovered on every OS.
+        static string ParamStem(string name) =>
+            Path.GetFileNameWithoutExtension(name.Replace('\\', '/'));
+
         var binderFile = binder.Files.FirstOrDefault(file =>
-            Path.GetFileNameWithoutExtension(file.Name).Equals(paramName, StringComparison.OrdinalIgnoreCase));
+            ParamStem(file.Name).Equals(paramName, StringComparison.OrdinalIgnoreCase));
 
         if (binderFile is null)
         {
-            Console.Error.WriteLine($"Param not found: {paramName}");
+            var available = binder.Files
+                .Select(file => ParamStem(file.Name))
+                .Where(name => name.Length > 0)
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            Console.Error.WriteLine(
+                $"Param not found: {paramName}. {available.Count} entries available; first 20: "
+                + string.Join(", ", available.Take(20)));
             return FailureExitCode;
         }
 
