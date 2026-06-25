@@ -6,6 +6,7 @@ members = [
     "crates/er-save-loader",
     "crates/soulsformats",
     "tools/er-param-inspect",
+    "tools/er-shaderlab",
 ]
 resolver = "2"
 

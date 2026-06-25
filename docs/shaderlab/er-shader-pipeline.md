@@ -98,7 +98,7 @@ legacy `fxc`/DXBC tooling.
 ## 6. Read path -- validated 2026-06-25
 
 Toolchain (Linux): prebuilt **dxc** from microsoft/DirectXShaderCompiler releases
-(`linux_dxc_*.tar.gz`) at `~/tools/dxc`; wrapper `scripts/shaderlab/dxc.sh`. Modern
+(`linux_dxc_*.tar.gz`; installed by `er-shaderlab setup` to `~/tools/dxc`). Modern
 `llvm-dis` (LLVM 22) CANNOT read DXIL bitcode (`error: i8 must be 8-bit aligned`) -- DXIL is
 a custom LLVM-3.7 fork, so dxc's bundled disassembler is required.
 
@@ -109,18 +109,27 @@ Data0.bhd/bdt -> RSA-decrypt BHD5 -> read BDT -> DCX-KRAK (Oodle, under wine)
   -> BND4 -> member (DXContainer) -> dxc -dumpbin -> readable DXIL
 ```
 
-`bash scripts/shaderlab/dxc.sh -dumpbin <member>` yields: I/O signatures; the original
-FromSoft debug path (`..\Dist\GR\WIN_D3D12_Pdb\flver\..._DptA.ppo.pdb`); shader hash + PSV
-runtime info (`Pixel Shader`, SM6); **named cbuffers/fields** (`FC_GlowScale`,
+`er-shaderlab disasm /shader/gxflvershader.shaderbnd.dcx GXFlver...DptA.ppo` yields: I/O
+signatures; the original FromSoft debug path (`..\Dist\GR\WIN_D3D12_Pdb\flver\..._DptA.ppo.pdb`);
+shader hash + PSV runtime info (`Pixel Shader`, SM6); **named cbuffers/fields** (`FC_GlowScale`,
 `FC_EmissiveColor`, `FC_PhantomEdgeColor`, `FC_BloodAmount`, world matrices...) -- reflection
 intact; and the DXIL IR: `target triple = "dxil-ms-dx"`, `define void @ps_main()` calling
 `@dx.op.sample.f32` / `@dx.op.cbufferLoadLegacy` / `@dx.op.createHandle` / `@dx.op.discard`,
 plus `!dx.shaderModel` / `!dx.entryPoints`.
 
-`scripts/shaderlab/dxil-extract.py` also carves the raw LLVM bitcode out of the `DXIL` chunk
-(parses DXContainer header -> part table -> DxilProgramHeader/DxilBitcodeHeader).
+`er_soulsformats::shaders::carve_dxil` also carves the raw LLVM bitcode out of the `DXIL`
+chunk (DXContainer header -> part table -> DxilProgramHeader/DxilBitcodeHeader), in pure Rust.
 
 ## Tooling
 
-`scripts/shaderlab/extract` -- the .NET extractor (see its README). `scripts/shaderlab/probe`
--- throwaway reflection probes used to discover the Andre/SoulsFormats API.
+- **`er-shaderlab`** (`tools/er-shaderlab`) -- the CLI: `doctor` / `setup` / `survey` /
+  `extract <logical-path> <out-dir>` / `disasm <logical-path> <member-substr>`. Discovers
+  Smithbox, the game, wine, dotnet and dxc (env overrides: `SMITHBOX_BINARY_DIR`,
+  `ER_GAME_DIR`, `DXC_ROOT`).
+- **`er_soulsformats::shaders`** (`crates/soulsformats/src/shaders.rs`) -- the library:
+  config discovery, bridge build/run, DXContainer classify/carve, dxc disasm.
+- **`er-shaderbridge`** (`crates/soulsformats/shaderbridge/`) -- the win-x64 .NET worker run
+  under wine for the decrypt/decompress/unbind half (needs ER's `oo2core` Oodle DLL). Kept
+  separate from the host-native `param-rows` bridge in `crates/soulsformats/bridge/`.
+- E2E read-path test: `cargo test -p er-soulsformats --test shaders_e2e -- --ignored`
+  (skips cleanly when the game/tools are absent).

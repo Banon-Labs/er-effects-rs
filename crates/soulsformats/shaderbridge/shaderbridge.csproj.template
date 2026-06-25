@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- Andre/SoulsFormats binaries are built for net10; match them. -->
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <LangVersion>13</LangVersion>
+    <AssemblyName>er-shaderbridge</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Andre.Core"><HintPath>{{SMITHBOX_DIR}}/Andre.Core.dll</HintPath></Reference>
+    <Reference Include="Andre.Formats"><HintPath>{{SMITHBOX_DIR}}/Andre.Formats.dll</HintPath></Reference>
+    <Reference Include="Andre.SoulsFormats"><HintPath>{{SMITHBOX_DIR}}/Andre.SoulsFormats.dll</HintPath></Reference>
+  </ItemGroup>
+</Project>
