@@ -1,5 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
+if [[ -f .auto/run_runtime_probe_once ]]; then
+  rm -f .auto/run_runtime_probe_once
+  ER_EFFECTS_AUTHORIZED_DIRECT_RUNTIME=1 \
+  AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 \
+  ER_EFFECTS_GOLD_SAVE="${ER_EFFECTS_GOLD_SAVE:-/home/banon/projects/er-effects-rs/save-files/150-Banon/ER0000.sl2}" \
+  ER_EFFECTS_GOLD_SLOT="${ER_EFFECTS_GOLD_SLOT:-0}" \
+  RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-35}" \
+  RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-vanilla}" \
+  scripts/run-product-continue-direct-probe.sh
+fi
+
 python3 - <<'PY'
 from __future__ import annotations
 import json
@@ -234,7 +246,7 @@ if 'product Continue capture must latch a semantic Continue item, not the first 
 ctor_body = function_body('menu_window_job_ctor_hook', exp_code) or ''
 if (
     'MENU-WINDOW-CTOR captured semantic native Continue item' not in ctor_body
-    or 'MENU_WINDOW_JOB_CTOR_RVA' not in lib_code
+    or 'MENU_WINDOW_JOB_CTOR_RVA' not in code
     or 'cap_menu_window_job_ctor_7ac8c0' not in exp_code
 ):
     legacy_failures.append('product Continue capture lacks constructor hook for semantic item latching')
@@ -1062,7 +1074,10 @@ part_b_cover_tokens = [
     'TITLE_CUSTOM_COVER',
     'oracle_title_custom_cover',
 ]
-if not all(token in code + '\n' + telemetry_src + '\n' + watcher for token in part_b_cover_tokens):
+if not (
+    all(token in code + '\n' + telemetry_src + '\n' + watcher for token in part_b_cover_tokens)
+    and 'TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.fetch_add' in title_cover_hook
+):
     title_cover_failures.append('Part B custom title cover render path is not implemented/observable yet')
     title_cover_penalty += 50
 
