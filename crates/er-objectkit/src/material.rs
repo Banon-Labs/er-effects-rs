@@ -42,6 +42,51 @@ impl ResolvedMaterial {
             })
             .map(|(_, p)| p.as_str())
     }
+
+    /// Texture bindings keyed by shader register, recovered from the sampler names
+    /// (`..._Texture2D_7_AlbedoMap` -> register 7, role AlbedoMap). This is the
+    /// texture->register map the passthrough pipeline binds against, derived purely
+    /// from the matbin (no shader-binary reflection needed).
+    pub fn texture_bindings(&self) -> Vec<TextureBinding> {
+        self.textures
+            .iter()
+            .filter_map(|(name, path)| {
+                let (register, role) = parse_sampler_register(name)?;
+                Some(TextureBinding {
+                    register,
+                    role,
+                    sampler: name.clone(),
+                    path: path.clone(),
+                })
+            })
+            .collect()
+    }
+}
+
+/// A material texture bound to a shader register.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextureBinding {
+    /// Shader texture register (`t<register>`).
+    pub register: u32,
+    /// Role keyword (`AlbedoMap`, `NormalMap`, `MetallicMap`, ...).
+    pub role: String,
+    pub sampler: String,
+    pub path: String,
+}
+
+/// Parse `(register, role)` from a sampler name. The matbin encodes the texture
+/// register and role as `...Texture<dim>_<register>_<Role>` (e.g.
+/// `C_Detail3Blend__snp_Texture2D_7_AlbedoMap` -> `(7, "AlbedoMap")`).
+pub fn parse_sampler_register(name: &str) -> Option<(u32, String)> {
+    let start = name.find("Texture")?;
+    let segs: Vec<&str> = name[start..].split('_').collect();
+    // segs = ["Texture2D", "<register>", "<role...>"]
+    if segs.len() < 3 {
+        return None;
+    }
+    let register: u32 = segs[1].parse().ok()?;
+    let role = segs[2..].join("_");
+    Some((register, role))
 }
 
 /// Lowercased `.matxml` leaf, the join key between FLVER `mtd` and matbin `source_path`.
@@ -128,6 +173,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sampler_register_and_role() {
+        assert_eq!(
+            parse_sampler_register("C_Detail3Blend__snp_Texture2D_7_AlbedoMap"),
+            Some((7, "AlbedoMap".into()))
+        );
+        assert_eq!(
+            parse_sampler_register("g_snp_TextureCube_0_NormalMap"),
+            Some((0, "NormalMap".into()))
+        );
+        assert_eq!(parse_sampler_register("g_DiffuseTexture"), None);
+    }
+
+    #[test]
     fn matxml_key_normalizes() {
         assert_eq!(
             matxml_key("N:\\GR\\mtd\\Chr\\C[c4800]_Robe.matxml"),
@@ -177,5 +235,18 @@ mod tests {
         );
         assert!(hit > 0, "no FLVER material joined to a matbin");
         assert!(with_tex > 0, "no resolved material had textures");
+
+        // Texture->register bindings recovered from sampler names.
+        let any = resolved.iter().find(|r| !r.textures.is_empty()).unwrap();
+        let binds = any.texture_bindings();
+        assert!(!binds.is_empty(), "no register bindings parsed");
+        assert!(binds.iter().any(|b| b.role.contains("Albedo")));
+        eprintln!(
+            "{} bindings e.g. t{}={} ({})",
+            binds.len(),
+            binds[0].register,
+            binds[0].role,
+            binds[0].path.rsplit(['\\', '/']).next().unwrap_or("")
+        );
     }
 }

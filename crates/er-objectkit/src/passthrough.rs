@@ -49,11 +49,15 @@ mod tests {
     fn a_bundle() -> Option<Vec<u8>> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/er-objectkit/shaderbdle");
-        let p = std::fs::read_dir(&dir)
+        // Deterministic: sort so the suite picks the same bundle every run (read_dir
+        // order is arbitrary and a different bundle's first pair may not translate).
+        let mut paths: Vec<_> = std::fs::read_dir(&dir)
             .ok()?
             .filter_map(|e| e.ok().map(|e| e.path()))
-            .find(|p| p.extension().and_then(|x| x.to_str()) == Some("shaderbdle"))?;
-        std::fs::read(p).ok()
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("shaderbdle"))
+            .collect();
+        paths.sort();
+        std::fs::read(paths.into_iter().next()?).ok()
     }
 
     /// Real compiled vertex+pixel shaders from a `.shaderbdle` translate to SPIR-V and
