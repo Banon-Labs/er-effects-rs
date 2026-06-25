@@ -827,7 +827,11 @@ best_runtime: tuple[int, Path | None, dict[str, bool]] = (0, None, {key: False f
 latest_runtime_dir: Path | None = None
 rt_root = root / 'target/runtime-probe'
 if rt_root.exists():
-    candidates = sorted((p for p in rt_root.glob('product-core-*') if p.is_dir()), key=lambda p: p.stat().st_mtime, reverse=True)[:200]
+    candidates = sorted(
+        (p for pattern in ('product-core-*', 'product-continue-direct-*') for p in rt_root.glob(pattern) if p.is_dir()),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )[:200]
     latest_runtime_dir = candidates[0] if candidates else None
     for d in candidates:
         proof = {key: False for key in required_runtime}

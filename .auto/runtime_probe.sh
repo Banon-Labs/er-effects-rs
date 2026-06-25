@@ -134,6 +134,9 @@ fi
 # Extra watcher args passthrough (space-separated), e.g. for a moment-of-truth load run that should not
 # be killed by the continue+30s deadline: RUNTIME_EXTRA_WATCH_ARGS="--no-world-load-deadline". The 3s
 # per-phase stall watchdog + the runtime cap still bound the run.
+if [[ -n "${RUNTIME_EXPECTED_SAVE_ORACLE:-}" ]]; then
+  watch_extra_args+=(--expected-save-oracle "$RUNTIME_EXPECTED_SAVE_ORACLE")
+fi
 if [[ -n "${RUNTIME_EXTRA_WATCH_ARGS:-}" ]]; then
   # shellcheck disable=SC2206
   watch_extra_args+=(${RUNTIME_EXTRA_WATCH_ARGS})

@@ -134,6 +134,7 @@ NATIVE_LEGAL_POPUP_DETECTED = "native_legal_popup_detected"
 SAVE_DATA_POPUP_DETECTED = "visual_save_data_popup_detected"
 MESSAGEBOX_DIALOG_DETECTED = "native_messagebox_dialog_detected"
 SERVER_STATUS_SEMAPHORE_DETECTED = "native_server_status_semaphore_detected"
+PLACEHOLDER_CHARACTER_DETECTED = "placeholder_character_detected"
 TARGET_WINDOW_CAPTURE_UNSAFE = "target_window_capture_unsafe"
 VISUAL_CHECK_SUBPROCESS_TIMEOUT_SECONDS = 10.0
 VISUAL_OCR_PREVIEW_CHARS = 1000
@@ -1025,6 +1026,24 @@ def telemetry_expected_save_match(telemetry: dict[str, Any], expected_save_oracl
 
 def telemetry_expected_animation_match(telemetry: dict[str, Any], expected_animation_id: int | None) -> bool:
     return expected_animation_id is None or as_int(telemetry.get("current_animation_id"), -1) == expected_animation_id
+
+
+def telemetry_placeholder_character_detected(
+    telemetry: dict[str, Any] | None,
+    expected_save_oracle: dict[str, Any] | None,
+) -> bool:
+    """Fail-fast oracle for the default/empty New Game character path.
+
+    The world-loaded gate already rejects empty-like names, but waiting until the wall-clock cap after
+    the player semaphore appears wastes runtime and can make a visible New Game cutscene look
+    ambiguous. Once a product proof has an expected save oracle and the game reports a live player,
+    names like "_" / empty / whitespace are native evidence that the expected save did not load.
+    """
+    if not isinstance(telemetry, dict) or not expected_save_fields(expected_save_oracle):
+        return False
+    if telemetry.get("oracle_player_present") is not True and telemetry.get("player_available") is not True:
+        return False
+    return name_empty_like(telemetry.get("oracle_char_name"))
 
 
 def telemetry_messagebox_dialog_detected(telemetry: dict[str, Any] | None) -> bool:
@@ -2165,6 +2184,21 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
                 ReadinessResult(
                     False,
                     SERVER_STATUS_SEMAPHORE_DETECTED,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
+        if telemetry_placeholder_character_detected(telemetry, expected_save_oracle):
+            return with_runtime_module_info(
+                ReadinessResult(
+                    False,
+                    PLACEHOLDER_CHARACTER_DETECTED,
                     pid,
                     bootstrap,
                     telemetry,

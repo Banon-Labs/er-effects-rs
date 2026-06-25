@@ -313,6 +313,11 @@ def main() -> int:
     assert watcher.name_empty_like("   ")
     assert watcher.name_empty_like("_")
     assert not watcher.name_empty_like("Tester")
+    assert not watcher.telemetry_placeholder_character_detected(world_loaded_telemetry, expected_save_oracle)
+    placeholder_live = {**world_loaded_telemetry, "oracle_char_name": "_", "oracle_char_name_len": 1}
+    assert watcher.telemetry_placeholder_character_detected(placeholder_live, expected_save_oracle)
+    assert not watcher.telemetry_placeholder_character_detected({**placeholder_live, "oracle_player_present": False, "player_available": False}, expected_save_oracle)
+    assert not watcher.telemetry_placeholder_character_detected(placeholder_live, None)
     mismatched_save = {**expected_save_oracle, "decoded_fields": {**expected_save_oracle["decoded_fields"], "name": "Bonky Bean"}}
     assert not watcher.telemetry_world_loaded(world_loaded_telemetry, mismatched_save, watcher.DEFAULT_EXPECTED_ANIMATION_ID)
     mismatched_slot = {**expected_save_oracle, "slot": 1}
