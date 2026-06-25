@@ -30,6 +30,7 @@ const DEC_LOCATION: u32 = 30;
 const SC_UNIFORM_CONSTANT: u32 = 0; // sampled images / samplers
 const SC_INPUT: u32 = 1;
 const SC_UNIFORM: u32 = 2; // cbuffers (and SSBO under some lowerings)
+const SC_OUTPUT: u32 = 3;
 const SC_STORAGE_BUFFER: u32 = 12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,8 +64,13 @@ pub struct Binding {
 #[derive(Debug, Clone, Default)]
 pub struct Reflection {
     pub stage: Stage,
+    /// `OpEntryPoint` name — required to build a pipeline from a passthrough module
+    /// (wgpu can't reflect it). dxil-spirv typically emits `main`.
+    pub entry_name: String,
     /// Vertex input attribute locations (only meaningful for the vertex stage).
     pub input_locations: Vec<u32>,
+    /// Fragment output locations = render-target count (fragment stage).
+    pub output_locations: Vec<u32>,
     pub bindings: Vec<Binding>,
 }
 
@@ -108,7 +114,9 @@ pub fn reflect(spirv: &[u8]) -> Result<Reflection, ReflectError> {
     let mut ptr_pointee: HashMap<u32, u32> = HashMap::new(); // pointer type -> pointee type
     let mut variables: Vec<(u32, u32, u32)> = Vec::new(); // (result id, storage class, pointer type)
     let mut input_ids: Vec<u32> = Vec::new();
+    let mut output_ids: Vec<u32> = Vec::new();
     let mut stage = Stage::Other;
+    let mut entry_name = String::new();
 
     let mut i = 5usize; // skip 5-word header
     while i < words.len() {
@@ -121,7 +129,7 @@ pub fn reflect(spirv: &[u8]) -> Result<Reflection, ReflectError> {
         let operands = &words[i + 1..i + len];
         match op {
             OP_ENTRY_POINT => {
-                // operands[0] = execution model (0=Vertex,4=Fragment,5=GLCompute)
+                // operands: [execution model, entry id, name..., interface ids...]
                 if let Some(&model) = operands.first() {
                     stage = match model {
                         0 => Stage::Vertex,
@@ -129,6 +137,9 @@ pub fn reflect(spirv: &[u8]) -> Result<Reflection, ReflectError> {
                         5 => Stage::Compute,
                         _ => Stage::Other,
                     };
+                }
+                if operands.len() > 2 {
+                    entry_name = decode_string(&operands[2..]);
                 }
             }
             OP_NAME => {
@@ -189,6 +200,8 @@ pub fn reflect(spirv: &[u8]) -> Result<Reflection, ReflectError> {
                     variables.push((result, sc, ptr_type));
                     if sc == SC_INPUT {
                         input_ids.push(result);
+                    } else if sc == SC_OUTPUT {
+                        output_ids.push(result);
                     }
                 }
             }
@@ -203,6 +216,13 @@ pub fn reflect(spirv: &[u8]) -> Result<Reflection, ReflectError> {
         .collect();
     input_locations.sort_unstable();
     input_locations.dedup();
+
+    let mut output_locations: Vec<u32> = output_ids
+        .iter()
+        .filter_map(|id| locs.get(id).copied())
+        .collect();
+    output_locations.sort_unstable();
+    output_locations.dedup();
 
     // Resolve a pointer type to its underlying resource type, seeing through arrays.
     let resolve_kind = |ptr_type: u32, sc: u32| -> Option<BindingKind> {
@@ -252,7 +272,9 @@ pub fn reflect(spirv: &[u8]) -> Result<Reflection, ReflectError> {
 
     Ok(Reflection {
         stage,
+        entry_name,
         input_locations,
+        output_locations,
         bindings,
     })
 }

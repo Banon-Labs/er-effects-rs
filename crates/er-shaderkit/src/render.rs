@@ -30,6 +30,34 @@ pub enum RenderError {
 /// One RGBA8 pixel.
 pub type Rgba = [u8; 4];
 
+/// Resource kind for an object-pipeline binding (from passthrough reflection).
+#[derive(Clone, Copy, Debug)]
+pub enum ObjBind {
+    Texture,
+    Sampler,
+    Uniform,
+    Storage,
+}
+
+/// A reconstructed object render pipeline: passthrough vertex+pixel SPIR-V plus the
+/// vertex-input + bind-group layout recovered from reflection (er-objectkit supplies
+/// this). Creating it validates the layout against the real shader interface — the
+/// Vulkan driver checks compatibility at pipeline creation.
+pub struct ObjPipeline<'a> {
+    pub vertex_spirv: &'a [u8],
+    pub pixel_spirv: &'a [u8],
+    /// Entry-point names (passthrough modules carry no reflection, so wgpu needs
+    /// these explicitly). dxil-spirv typically emits `main`.
+    pub vertex_entry: &'a str,
+    pub pixel_entry: &'a str,
+    /// Vertex input attribute locations (each fed `Float32x4`).
+    pub vertex_locations: &'a [u32],
+    /// `(set, binding, kind)` for every resource the shaders use.
+    pub bindings: &'a [(u32, u32, ObjBind)],
+    /// Number of colour render targets (fragment output locations).
+    pub color_targets: usize,
+}
+
 impl Headless {
     /// Initialise a headless device on any available backend. Errors (does not
     /// panic) when no adapter can be acquired.
@@ -65,6 +93,10 @@ impl Headless {
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("er-shaderkit headless"),
                 required_features,
+                // ER shaders bind far more than the downlevel defaults (e.g. 18
+                // sampled textures vs the default 16); ask for the adapter's full
+                // limits so reconstructed pipelines aren't rejected on limits.
+                required_limits: adapter.limits(),
                 ..Default::default()
             })
             .block_on()
@@ -662,6 +694,150 @@ impl Headless {
             }
         }
         Ok(pixels)
+    }
+
+    /// Build an object render pipeline from passthrough vertex+pixel SPIR-V and a
+    /// reconstructed vertex/bind layout, returning `Ok` if the driver accepts it (the
+    /// real check that the reconstructed interface matches the shaders). Does not draw;
+    /// pipeline creation alone validates the layout/shader compatibility.
+    pub fn create_object_pipeline_passthrough(&self, p: &ObjPipeline) -> Result<(), RenderError> {
+        if !self.passthrough {
+            return Err(RenderError::NoAdapter(
+                "SPIRV passthrough unsupported".into(),
+            ));
+        }
+        let make = |spirv: &[u8], label: &'static str| unsafe {
+            self.device
+                .create_shader_module_passthrough(wgpu::ShaderModuleDescriptorPassthrough {
+                    label: Some(label),
+                    num_workgroups: (0, 0, 0),
+                    spirv: Some(wgpu::util::make_spirv_raw(spirv)),
+                    dxil: None,
+                    hlsl: None,
+                    metallib: None,
+                    msl: None,
+                    glsl: None,
+                    wgsl: None,
+                })
+        };
+
+        let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let vs = make(p.vertex_spirv, "obj-vs");
+        let fs = make(p.pixel_spirv, "obj-fs");
+
+        // Bind-group layouts grouped by descriptor set.
+        use std::collections::BTreeMap;
+        let mut by_set: BTreeMap<u32, Vec<(u32, ObjBind)>> = BTreeMap::new();
+        for &(set, binding, kind) in p.bindings {
+            by_set.entry(set).or_default().push((binding, kind));
+        }
+        let vis = wgpu::ShaderStages::VERTEX_FRAGMENT;
+        let bgls: Vec<wgpu::BindGroupLayout> = by_set
+            .values()
+            .map(|binds| {
+                let entries: Vec<wgpu::BindGroupLayoutEntry> = binds
+                    .iter()
+                    .map(|&(binding, kind)| wgpu::BindGroupLayoutEntry {
+                        binding,
+                        visibility: vis,
+                        ty: match kind {
+                            ObjBind::Texture => wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            ObjBind::Sampler => {
+                                wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)
+                            }
+                            ObjBind::Uniform => wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            ObjBind::Storage => wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                        },
+                        count: None,
+                    })
+                    .collect();
+                self.device
+                    .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                        label: Some("obj-bgl"),
+                        entries: &entries,
+                    })
+            })
+            .collect();
+        let bgl_refs: Vec<Option<&wgpu::BindGroupLayout>> = bgls.iter().map(Some).collect();
+        let layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("obj-pl"),
+                bind_group_layouts: &bgl_refs,
+                immediate_size: 0,
+            });
+
+        // One interleaved vertex buffer, Float32x4 per input location.
+        let attrs: Vec<wgpu::VertexAttribute> = p
+            .vertex_locations
+            .iter()
+            .enumerate()
+            .map(|(i, &loc)| wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: (i as u64) * 16,
+                shader_location: loc,
+            })
+            .collect();
+        let vbl = wgpu::VertexBufferLayout {
+            array_stride: ((p.vertex_locations.len() as u64) * 16).max(16),
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &attrs,
+        };
+
+        let targets: Vec<Option<wgpu::ColorTargetState>> = (0..p.color_targets.max(1))
+            .map(|_| {
+                Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })
+            })
+            .collect();
+
+        let _pipe = self
+            .device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("obj-pipeline"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &vs,
+                    entry_point: Some(p.vertex_entry),
+                    compilation_options: Default::default(),
+                    buffers: &[vbl],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &fs,
+                    entry_point: Some(p.pixel_entry),
+                    compilation_options: Default::default(),
+                    targets: &targets,
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
+
+        match scope.pop().block_on() {
+            Some(err) => Err(RenderError::Pipeline(err.to_string())),
+            None => Ok(()),
+        }
     }
 }
 

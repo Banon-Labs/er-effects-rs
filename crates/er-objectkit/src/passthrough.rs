@@ -41,6 +41,18 @@ pub fn first_pair(shaders: &[BundleShader]) -> Option<(&BundleShader, &BundleSha
     Some((v, p))
 }
 
+/// Map reflected binding kinds to the render harness's pipeline binding kinds.
+pub fn to_obj_bind(kind: crate::spirv_reflect::BindingKind) -> er_shaderkit::render::ObjBind {
+    use crate::spirv_reflect::BindingKind as K;
+    use er_shaderkit::render::ObjBind as O;
+    match kind {
+        K::Texture => O::Texture,
+        K::Sampler => O::Sampler,
+        K::Buffer => O::Uniform,
+        K::StorageBuffer => O::Storage,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,6 +111,80 @@ mod tests {
                 eprintln!("GPU accepted both real ER shaders via passthrough");
             }
             _ => eprintln!("skip GPU acceptance: no passthrough-capable adapter"),
+        }
+    }
+
+    /// M3b milestone: build a full object render pipeline (vertex+pixel passthrough +
+    /// reconstructed vertex-input + bind-group layouts) and confirm the Vulkan driver
+    /// accepts it — i.e. the reconstructed interface matches the real shaders.
+    #[test]
+    fn real_object_pipeline_creates() {
+        use crate::spirv_reflect::reflect;
+        if er_shaderkit::discover_dxil_spirv().is_none() {
+            eprintln!("skip: dxil-spirv not built");
+            return;
+        }
+        let Ok(h) = er_shaderkit::render::Headless::new() else {
+            eprintln!("skip: no GPU");
+            return;
+        };
+        if !h.supports_passthrough() {
+            eprintln!("skip: no passthrough adapter");
+            return;
+        }
+        // Deterministic bundle + a colour pass (Fwd) vertex+pixel pair.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/er-objectkit/shaderbdle");
+        let mut files: Vec<_> = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("shaderbdle"))
+            .collect();
+        files.sort();
+        let Some(file) = files.first() else {
+            eprintln!("skip: no bundles");
+            return;
+        };
+        let shaders = parse_bundle(&std::fs::read(file).unwrap()).unwrap();
+        let (v, p) = first_pair(&shaders).unwrap();
+        let spv = translate_pass(v, p).unwrap();
+
+        let vr = reflect(&spv.vertex).unwrap();
+        let pr = reflect(&spv.pixel).unwrap();
+
+        // Union of resource bindings used by either stage, keyed by (set, binding).
+        use std::collections::BTreeMap;
+        let mut binds: BTreeMap<(u32, u32), er_shaderkit::render::ObjBind> = BTreeMap::new();
+        for b in vr.bindings.iter().chain(pr.bindings.iter()) {
+            binds
+                .entry((b.set, b.binding))
+                .or_insert(to_obj_bind(b.kind));
+        }
+        let bindings: Vec<(u32, u32, er_shaderkit::render::ObjBind)> =
+            binds.into_iter().map(|((s, b), k)| (s, b, k)).collect();
+
+        eprintln!(
+            "entry points: vs={:?} ps={:?}",
+            vr.entry_name, pr.entry_name
+        );
+        let desc = er_shaderkit::render::ObjPipeline {
+            vertex_spirv: &spv.vertex,
+            pixel_spirv: &spv.pixel,
+            vertex_entry: &vr.entry_name,
+            pixel_entry: &pr.entry_name,
+            vertex_locations: &vr.input_locations,
+            bindings: &bindings,
+            color_targets: pr.output_locations.len().max(1),
+        };
+        match h.create_object_pipeline_passthrough(&desc) {
+            Ok(()) => eprintln!(
+                "object pipeline accepted: {} vtx inputs, {} bindings, {} targets",
+                vr.input_locations.len(),
+                bindings.len(),
+                pr.output_locations.len().max(1)
+            ),
+            Err(e) => panic!("driver rejected object pipeline: {e}"),
         }
     }
 }
