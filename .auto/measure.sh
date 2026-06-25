@@ -6,9 +6,10 @@ import json
 import re
 from pathlib import Path
 
-MAX_SCORE = 1400
+MAX_SCORE = 1600
 root = Path.cwd()
 lib = (root / 'src/lib.rs').read_text(encoding='utf-8', errors='replace')
+constants_src = (root / 'src/constants.rs').read_text(encoding='utf-8', errors='replace')
 _exp_dir = root / 'src/experiments'
 if _exp_dir.is_dir():
     _exp_files = sorted(_exp_dir.glob('*.rs'), key=lambda p: (p.name != 'mod.rs', p.name))
@@ -25,7 +26,7 @@ direct_probe = (root / 'scripts/run-product-continue-direct-probe.sh').read_text
 runtime_probe = (root / '.auto/runtime_probe.sh').read_text(encoding='utf-8', errors='replace') if (root / '.auto/runtime_probe.sh').exists() else ''
 check_sh = (root / 'scripts/check.sh').read_text(encoding='utf-8', errors='replace')
 prompt = (root / '.auto/prompt.md').read_text(encoding='utf-8', errors='replace') if (root / '.auto/prompt.md').exists() else ''
-combined = lib + '\n' + exp
+combined = lib + '\n' + constants_src + '\n' + exp
 
 
 def empty_name_like(value) -> bool:
@@ -1020,9 +1021,40 @@ if trace_summaries:
 else:
     native_trace_blockers.append('native user-driven trace summary missing; tracebreakpoint/tooling blocker may still be unresolved')
 
+title_cover_failures: list[str] = []
+title_cover_gate = function_body('title_native_menu_visual_suppression_enabled', exp_code) or ''
+title_cover_hook = function_body('title_native_menu_visual_begin_title_hook', exp_code) or ''
+if not (
+    '!save_override_telemetry_only()' in title_cover_gate
+    and 'autoload_disabled()' in title_cover_gate
+    and 'std::env::var' not in title_cover_gate
+    and 'er-effects-' not in title_cover_gate
+    and 'START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once' in lib_code
+    and 'install_title_native_menu_visual_suppression_hook' in lib_code
+    and lib_code.find('START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once') < lib_code.find('START_MENU_WINDOW_LATCH.call_once')
+    and 'TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA: usize = 0x81f9f0' in code
+    and 'TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA: usize = 0x7acbf0' in code
+    and 'TITLE_NATIVE_MENU_VISUAL_NAME: &str = "05_000_Title"' in code
+    and '(out_slot as *mut usize).write(null)' in title_cover_hook
+    and 'TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS.fetch_add' in title_cover_hook
+    and 'oracle_title_native_menu_visual_suppressed_builds' in telemetry_src
+    and 'title_native_menu_visual_suppressed_builds' in watcher
+):
+    title_cover_failures.append('Part A native 05_000_Title BeginTitle visual suppression is missing or not independently observable')
+
+part_b_cover_tokens = [
+    'SYSTEX_Menu_Profile',
+    'MENU_DummyProfileFace',
+    'CSMenuProfModelRend',
+    'TITLE_CUSTOM_COVER',
+    'oracle_title_custom_cover',
+]
+if not all(token in code + '\n' + telemetry_src + '\n' + watcher for token in part_b_cover_tokens):
+    title_cover_failures.append('Part B custom title cover render path is not implemented/observable yet')
+
 false_positives = 0
 all_detail_failures = []
-for group in [legacy_failures, asset_failures, dll_failures, native_failures, field58_failures, direct_failures, input_failures, runtime_failures, runtime_mode_failures, eula_popup_failures, save_data_popup_failures, messagebox_dialog_failures, server_status_failures]:
+for group in [legacy_failures, asset_failures, dll_failures, native_failures, field58_failures, direct_failures, input_failures, runtime_failures, runtime_mode_failures, eula_popup_failures, save_data_popup_failures, messagebox_dialog_failures, server_status_failures, title_cover_failures]:
     all_detail_failures.extend(group)
 
 weights = {
@@ -1039,6 +1071,7 @@ weights = {
     'save_data_popup': 160,
     'messagebox_dialog': 160,
     'server_status': 160,
+    'title_cover': 100,
     'false_positive': 100,
 }
 penalty = (
@@ -1055,6 +1088,7 @@ penalty = (
     + len(save_data_popup_failures) * weights['save_data_popup']
     + len(messagebox_dialog_failures) * weights['messagebox_dialog']
     + len(server_status_failures) * weights['server_status']
+    + len(title_cover_failures) * weights['title_cover']
     + false_positives * weights['false_positive']
 )
 score = max(0, MAX_SCORE - penalty)
@@ -1084,6 +1118,7 @@ print(f'METRIC eula_popup_failures={len(eula_popup_failures)}')
 print(f'METRIC save_data_popup_failures={len(save_data_popup_failures)}')
 print(f'METRIC messagebox_dialog_failures={len(messagebox_dialog_failures)}')
 print(f'METRIC server_status_failures={len(server_status_failures)}')
+print(f'METRIC title_cover_failures={len(title_cover_failures)}')
 print(f'METRIC native_trace_blockers={len(native_trace_blockers)}')
 print(f'METRIC native_trace_hits_total={native_trace_hits_total}')
 print(f'METRIC native_trace_unique_breakpoints={native_trace_unique_breakpoints}')

@@ -1,17 +1,20 @@
-# Autoresearch: asset-backed native Continue DLL patch
+# Autoresearch: clean title-cover masquerade for zero-input gold autoload
 
 ## Objective
-Find and prove the real native title-menu `Continue` patch path, with the game DLL as the preferred/expected product vehicle. The target is **not** another timing tweak and not a diagnostic shortcut: once the native title menu has produced the real Continue entry/action from game assets, the DLL should advance through that same semantic action without waiting for a user input event.
+Masquerade the irreducible ~15.4s boot-init/resident-UI load behind an intentional custom title/loading cover while the zero-input gold autoload continues behind it. There is **no ms target**: success is visual coverage plus the hard product constraints. Split the work into two independently validatable parts:
 
-The desired product chain is:
+- **Part A -- disable native title visual:** suppress the BeginTitle `05_000_Title` MenuWindowJob build/render (`FUN_14081f9f0 -> FUN_1407acbf0`) while leaving TitleStep, FixOrderJobSequence, native Continue logic, and world-load chain intact. Do **not** touch STEP_Wait or `CSMenuMan+0x21`.
+- **Part B -- inject custom cover:** render our own image in a title-safe slot, preferably through the profile-model-render / `SYSTEX_Menu_ProfileNN` texture pipeline, or via a small custom Scaleform target if `05_001_Title_Logo` has no remappable dummy texture symbol.
 
-`Data*.bhd/bdt archive entry -> msg/engus/menu.msgbnd.dcx -> FMG text/resource ID -> native title-menu row/functor/result object -> native accept/submit dispatcher -> continue_load_67b750 -> native load-complete evidence (b80_deserialize_67b290 OR explicitly disabled modal-confirm wait after loaded-slot proof) -> native continue_confirm / SetState5 -> world-stable oracle`
+The desired product chain remains:
 
-A score of `autoload_re_score=1400` means the patch exists, stays in the DLL, follows the asset/native action chain, has no synthetic input or direct-load bypasses, and has bounded runtime proof.
+`clean custom title/loading cover visible -> native Continue/load proceeds behind it -> continue_load_67b750 -> native load-complete evidence (b80_deserialize_67b290 OR explicitly disabled modal-confirm wait after loaded-slot proof) -> native continue_confirm / SetState5 -> world-stable oracle`
+
+A score of `autoload_re_score=1600` means the native title visual is suppressed, the custom cover path exists and is observable, the native Continue/load chain remains intact, there is no synthetic input or direct-load bypass, and bounded runtime proof satisfies the hard constraints.
 
 ## Metrics
-- **Primary**: `autoload_re_score` (points, higher is better, max 1400) -- composite RE/product-proof score from `.auto/measure.sh`.
-- **Regression/failure metrics**: `readiness_gate_failures`, `asset_chain_failures`, `dll_patch_failures`, `native_continue_failures`, `field58_gate_failures`, `direct_shortcut_failures`, `input_path_failures`, `runtime_proof_failures`, `runtime_mode_failures`, `eula_popup_failures`, `save_data_popup_failures`, `messagebox_dialog_failures`, `false_positives`.
+- **Primary**: `autoload_re_score` (points, higher is better, max 1600) -- composite visual-cover/RE/product-proof score from `.auto/measure.sh`.
+- **Regression/failure metrics**: `title_cover_failures`, `readiness_gate_failures`, `asset_chain_failures`, `dll_patch_failures`, `native_continue_failures`, `field58_gate_failures`, `direct_shortcut_failures`, `input_path_failures`, `runtime_proof_failures`, `runtime_mode_failures`, `eula_popup_failures`, `save_data_popup_failures`, `messagebox_dialog_failures`, `false_positives`.
 - **Legacy secondary metrics**: `target_constants_remaining`, `helpers_missing`, `fixed_wait_predicates`, `autoload_static_failures`.
 
 Score rubric:
@@ -20,11 +23,12 @@ Score rubric:
 - **DLL product patch path (300 pts)**: implemented inside the chainload DLL; no `eldenring.exe` patching, loose asset edits, or product direct-load/direct-confirm/deser dispatcher shortcuts; advances through native accept/submit semantics after Continue exists.
 - **Safety/runtime oracle (300 pts)**: input remains blocked/suppressed; `simulated_button_presses_total=0`; save backup/restore and char-fingerprint/mount guards remain; bounded runtime proof reaches native load, loaded-slot completion (`b80_deserialize` or disabled modal-confirm with loaded evidence), native confirm/SetState5, and world-stable edges. The gold oracle must derive expected character identity from the vanilla `ER0000.sl2` save slot (not `.co2` except Seamless-specific tests), expose the character name in the oracle summary, require observed telemetry to match that derived save identity, treat `"_"`, `""`, and all-whitespace names as empty-like/non-real, require the expected player animation ID, and require no native post-load popup/modal builds after Continue/load finalizes.
 - **Static regression guards (300 pts)**: fixed waits remain fail-safe only; checker/measure fail closed for direct shortcuts, input probes, stale `mode=0` gating, and asset-chain regressions; build/checks pass.
+- **Title-cover visual masquerade (200 pts)**: Part A hooks/suppresses only the native `05_000_Title` BeginTitle visual wrapper and exposes telemetry; Part B exposes an observable custom cover render path (`SYSTEX_Menu_ProfileNN`/dummy texture or custom Scaleform) without weakening the load chain.
 
 ## How to Run
 `./.auto/measure.sh` -- emits `METRIC name=value` lines and explanatory `DETAIL ...` lines.
 
-If re-initializing autoresearch, use metric `autoload_re_score`, unit `points`, direction `higher`, baseline from the current branch, and keep `timeout_seconds <= 120` / `checks_timeout_seconds <= 120` unless `.auto/run_experiment_policy.rego` and its checker/tests are deliberately changed. Runtime probes must finish the runtime portion in <=60s.
+If re-initializing autoresearch, use metric `autoload_re_score`, unit `points`, direction `higher`, baseline from the current branch, and keep `timeout_seconds <= 45` / `checks_timeout_seconds <= 45`. Runtime probes must finish the runtime portion within the cap read from `.auto/runtime_timeout_cap_seconds`.
 
 ## Files in Scope
 - `src/lib.rs` -- constants/layouts/statics for title/menu/profile-load/autoload and hook wiring.
@@ -62,11 +66,10 @@ If re-initializing autoresearch, use metric `autoload_re_score`, unit `points`, 
 - A row-result candidate exists with expected vtable/docall, but previous code over-gated on `result+0x58` (`mode=0`). Static RE of `0x1407ac890` shows native submit constructs an event and calls vtable `+0x60`; `result+0x58` must not be treated as the product readiness gate.
 
 ## What to Try Next
-1. Build a reproducible asset/resource provenance chain: Data archive virtual path -> `menu.msgbnd.dcx` -> FMG Continue/New Game text IDs -> native resource/menu consumers/xrefs. Store concise provenance in docs/recon or bd comments and make `.auto/measure.sh` check for it.
-2. Replace `mode=0` rejection with a native submit/accept path that follows static RE (`0x1407ac890` / vtable `+0x60`) while preserving fail-closed validation of receiver/result/vtables.
-3. Add focused hooks/logs around `0x1407ac890`, `0x140746e80`, `0x14082bac0`, `0x14067b750`, `0x140afb967`, `0x14067b290`, and `continue_confirm` to prove the downstream chain; if native Continue stalls at the modal-confirm wait after loaded evidence, disable that wait and proceed through guarded native confirm without input.
-4. Harden static guards against product regressions: direct load/confirm/deser/dispatcher calls, input probes, Down navigation assumptions, stale `mode` gating, and asset-chain ambiguity.
-5. Run the final bounded product oracle only after the static receiver/ABI path is explicit and the DLL has been rebuilt.
+1. Validate Part A statically and then at runtime: hook `FUN_14081f9f0`, return a null out-job for `05_000_Title`, expose `oracle_title_native_menu_visual_*`, and prove native title view is gone while gold still loads.
+2. Resolve Part B's asset-side blocker: inspect `05_001_Title_Logo` / `TitleBackViewParts` / `MenuResource` for a remappable dummy-texture symbol; if absent, author a tiny custom Scaleform target referencing `MENU_DummyProfileFace_NN` / `SYSTEX_Menu_ProfileNN`.
+3. Keep downstream proof intact: `continue_load_67b750`, `b80_deserialize_67b290`, native `continue_confirm`/SetState5, world-stable/max oracle, `oracle_char_name=Banon`, zero MessageBoxDialog.
+4. Harden static guards so Part A and Part B are independently observable and cannot regress the kept levers (splash-skip, pab-advance, FadeIn-skip).
 
 ## What's Been Tried / Dead Ends
 - Fixed timing gates were removed/reduced as success predicates; do not retune wait numbers.

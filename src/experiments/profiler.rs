@@ -32,6 +32,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use windows::Win32::System::Diagnostics::Debug::{CONTEXT, CONTEXT_FLAGS};
 use windows::Win32::{
     Foundation::{CloseHandle, FILETIME, HANDLE},
     System::{
@@ -51,7 +52,6 @@ use windows::Win32::{
         WindowsProgramming::QueryThreadCycleTime,
     },
 };
-use windows::Win32::System::Diagnostics::Debug::{CONTEXT, CONTEXT_FLAGS};
 
 use super::*;
 

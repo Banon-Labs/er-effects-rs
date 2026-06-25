@@ -829,12 +829,14 @@ pub(crate) unsafe fn install_pab_advance_hook(base: usize) {
 /// Read the TitleTopDialog FD4 state machine by NAME (is_in_state) given the title `owner` (rcx of
 /// STEP_MenuJobWait). Returns `(dialog_ptr, in_fadein, in_loop, in_textfadeout, menu_opened_latch)` or
 /// `None` if the dialog isn't the TitleTopDialog yet. Read-only / no side effects. Mirrors STAGE1d.
-unsafe fn title_dialog_sm_state(owner: usize, base: usize) -> Option<(usize, bool, bool, bool, usize)> {
+unsafe fn title_dialog_sm_state(
+    owner: usize,
+    base: usize,
+) -> Option<(usize, bool, bool, bool, usize)> {
     if owner == TITLE_OWNER_SCAN_START_ADDRESS {
         return None;
     }
-    let dialog =
-        unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(0);
+    let dialog = unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(0);
     if dialog == 0 {
         return None;
     }
@@ -847,8 +849,7 @@ unsafe fn title_dialog_sm_state(owner: usize, base: usize) -> Option<(usize, boo
         unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
     let in_fadein =
         unsafe { is_in_state(sm, base + TITLE_STATE_DESC_FADEIN_RVA) } != OWN_STEPPER_FALSE;
-    let in_loop =
-        unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
+    let in_loop = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
     let in_textfadeout =
         unsafe { is_in_state(sm, base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) } != OWN_STEPPER_FALSE;
     let latch = unsafe { safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }

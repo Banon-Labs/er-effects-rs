@@ -189,6 +189,48 @@ def main() -> int:
     for gate in sorted(REQUIRED_PRODUCT_GATES):
         body = rust_fn_body(experiments, gate)
         require("product_autoload_enabled()" in body, f"{gate} must be enabled by product_autoload_enabled()", failures)
+
+    title_cover_gate = rust_fn_body(experiments, "title_native_menu_visual_suppression_enabled")
+    title_cover_hook = rust_fn_body(experiments, "title_native_menu_visual_begin_title_hook")
+    require(
+        "!save_override_telemetry_only()" in title_cover_gate
+        and "autoload_disabled()" in title_cover_gate
+        and "std::env::var" not in title_cover_gate
+        and "er-effects-" not in title_cover_gate,
+        "title native visual suppression must be default-on for real autoload runs without a new env/file gate",
+        failures,
+    )
+    require(
+        "START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once" in lib
+        and "install_title_native_menu_visual_suppression_hook" in lib
+        and lib.find("START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once") < lib.find("START_MENU_WINDOW_LATCH.call_once"),
+        "title native visual suppression hook must install at process attach before MenuWindow/title visual construction",
+        failures,
+    )
+    require(
+        "TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA: usize = 0x81f9f0" in lib
+        and "TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA: usize = 0x7acbf0" in lib
+        and "TITLE_NATIVE_MENU_VISUAL_NAME: &str = \"05_000_Title\"" in lib,
+        "title native visual suppression must pin the RE-proven BeginTitle wrapper/factory/05_000_Title anchors",
+        failures,
+    )
+    require(
+        "(out_slot as *mut usize).write(null)" in title_cover_hook
+        and "TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS.fetch_add" in title_cover_hook
+        and "TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA" in title_cover_hook
+        and "TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA" in title_cover_hook,
+        "title native visual suppression must null only the BeginTitle 05_000_Title out slot and expose runtime telemetry",
+        failures,
+    )
+    require(
+        "oracle_title_native_menu_visual_suppress_installed" in telemetry
+        and "oracle_title_native_menu_visual_suppressed_builds" in telemetry
+        and "oracle_title_native_menu_visual_any_suppressed" in telemetry
+        and "title_native_menu_visual_suppressed_builds" in watcher,
+        "title native visual suppression must be visible in telemetry/readiness summaries for independent Part-A validation",
+        failures,
+    )
+
     for legacy_gate in ("live_dialog_enabled", "menu_window_latch_enabled"):
         body = rust_fn_body(experiments, legacy_gate)
         require(

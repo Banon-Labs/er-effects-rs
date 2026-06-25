@@ -672,6 +672,16 @@ pub(crate) fn title_anim_speedup_factor() -> f32 {
 pub(crate) fn title_anim_speedup_enabled() -> bool {
     title_anim_speedup_factor() > TITLE_ANIM_SPEEDUP_MIN
 }
+/// DEFAULT-ON product masquerade cover Part A: suppress only the native `05_000_Title`
+/// MenuWindowJob visual wrapper while the zero-input autoload runs. This is tied to the existing
+/// autoload/save-override contract, not a new env/file knob: a real autoload wants a clean cover;
+/// telemetry-only observation and `ER_EFFECTS_NO_AUTOLOAD` must preserve vanilla visuals.
+pub(crate) fn title_native_menu_visual_suppression_enabled() -> bool {
+    if autoload_disabled() {
+        return false;
+    }
+    !save_override_telemetry_only()
+}
 
 /// AUTO-CONFIRM observe mode (er-effects-auto-confirm.txt): drive the game's OWN natural title
 /// flow with Confirm input-taps so we can finally observe the view PAST the modal. No SetState

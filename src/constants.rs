@@ -475,6 +475,32 @@ pub(crate) const TITLE_FD4_SETSTATE_RVA: usize = 0x7499e0;
 /// One-shot latch: the zero-input FadeIn->Loop transition has fired.
 pub(crate) static TITLE_FADEIN_SKIP_FIRED: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// PART-A title-cover masquerade: `STEP_BeginTitle`'s only native visual side effect is wrapper
+/// 0x14081f9f0 building the `05_000_Title` MenuWindowJob through factory 0x1407acbf0. Suppressing
+/// this wrapper hides the native press-any-button/title Scaleform while leaving TitleStep state,
+/// FixOrderJobSequence, native Continue/save-load state, and STEP_PlayGame untouched. It must never
+/// touch the global resident-UI flag (CSMenuMan+0x21 / STEP_Wait). Ghidra dump addresses are +0xf0;
+/// these constants are deobf/live RVAs used for the actual hook.
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA: usize = 0x81f9f0;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA: usize = 0x7acbf0;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_NAME: &str = "05_000_Title";
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_SUPPRESS_NOT_INSTALLED: usize = 0;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED_YES: usize = 1;
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_SUPPRESS_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED: AtomicUsize =
+    AtomicUsize::new(TITLE_NATIVE_MENU_VISUAL_SUPPRESS_NOT_INSTALLED);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_OUT_SLOT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_PREV_OUT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_ARG_RDX: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_ARG_R8: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 // (Removed: TITLE INIT-READINESS OVERRIDE lever -- it forced CSMenuMan+0x21, which RE later showed is
 // the WHOLE-game resident-UI-ready flag, not title-only; asserting it early risked later in-game menus
 // finding chrome not resident, for an illusory ~1s (the real floor is the Scaleform resident load).
@@ -2761,6 +2787,7 @@ pub(crate) static START_SAFE_INPUT_HOOKS: Once = Once::new();
 pub(crate) static START_SPLASH_SKIP: Once = Once::new();
 pub(crate) static START_ONLINE_DISABLE: Once = Once::new();
 pub(crate) static START_FOREGROUND_FORCE: Once = Once::new();
+pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS: Once = Once::new();
 pub(crate) static START_BOOT_PROFILER: Once = Once::new();
 /// One-shot latch for the "first game-task frame ran" boot-phase marker (0 = not yet logged).
 pub(crate) static BOOT_FIRST_FRAME_LOGGED: AtomicUsize = AtomicUsize::new(0);

@@ -254,6 +254,18 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
             .spawn(apply_foreground_force);
     });
 
+    // Title-cover masquerade Part A: install the BeginTitle `05_000_Title` visual-suppression hook
+    // as early as splash/foreground patches, before STEP_BeginTitle can build the native title
+    // Scaleform. This does NOT touch STEP_Wait or CSMenuMan+0x21; it only replaces the wrapper's
+    // `MenuWindowJob* out` with null so the title flow continues without the native visual job.
+    if title_native_menu_visual_suppression_enabled() {
+        START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-cover-part-a".to_owned())
+                .spawn(install_title_native_menu_visual_suppression_hook);
+        });
+    }
+
     // MenuWindow latch: install the SceneObjProxy ctor hook (0x14074a700) as early as the
     // splash-skip / online-disable patches, from a thread, so it lands BEFORE the title state
     // machine builds the title dialog during boot. On each VALID call it latches rdx (the engine-
@@ -384,7 +396,8 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             move |task_data: &FD4TaskData| {
                 // Boot-phase marker: first frame our recurring task actually ticks.
                 if profiler_enabled()
-                    && BOOT_FIRST_FRAME_LOGGED.swap(GAME_TASK_TICK_INCREMENT as usize, Ordering::SeqCst)
+                    && BOOT_FIRST_FRAME_LOGGED
+                        .swap(GAME_TASK_TICK_INCREMENT as usize, Ordering::SeqCst)
                         == 0
                 {
                     append_autoload_debug(format_args!("boot-phase: first_game_frame"));

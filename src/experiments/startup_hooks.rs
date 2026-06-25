@@ -1351,6 +1351,102 @@ pub(crate) unsafe extern "system" fn scene_obj_proxy_ctor_hook(
     unsafe { f(rcx, rdx, r8, r9) }
 }
 
+/// Detour for BeginTitle's `05_000_Title` visual wrapper (deobf 0x14081f9f0). Static RE shows the
+/// wrapper's only side effect is constructing a CSScaleformLoadInfo with filename `05_000_Title` and
+/// calling factory 0x1407acbf0 to allocate/return a MenuWindowJob. For the title-cover masquerade we
+/// deliberately skip that factory and write a null job pointer into the caller's out slot, matching
+/// the factory's allocation-failure shape. This suppresses the native title visual without changing
+/// TitleStep, FixOrderJobSequence, native Continue, STEP_PlayGame, or the resident-UI CSMenuMan+0x21
+/// gate. Zero input, save-safe.
+pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
+    out_slot: usize,
+    rdx: usize,
+    r8: usize,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let prev_out = if out_slot != null {
+        unsafe { safe_read_usize(out_slot) }.unwrap_or(null)
+    } else {
+        null
+    };
+    if out_slot != null {
+        unsafe { (out_slot as *mut usize).write(null) };
+    }
+    let caller_rva = trace_first_game_caller_rva();
+    TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_LAST_OUT_SLOT.store(out_slot, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_LAST_PREV_OUT.store(prev_out, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_LAST_ARG_RDX.store(rdx, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_LAST_ARG_R8.store(r8, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "title-cover-part-a: SUPPRESSED {TITLE_NATIVE_MENU_VISUAL_NAME} BeginTitle wrapper 0x{:x}; skipped factory 0x{:x}, wrote *out_slot=null (out_slot=0x{out_slot:x} prev=0x{prev_out:x} rdx=0x{rdx:x} r8=0x{r8:x} caller_rva=0x{caller_rva:x})",
+        game_module_base().unwrap_or(null) + TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA,
+        game_module_base().unwrap_or(null) + TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA,
+    ));
+    out_slot
+}
+
+/// Install the Part-A title visual suppression hook once. It must run at process attach before
+/// STEP_BeginTitle; installing from the recurring game task can be too late for the first title build.
+pub(crate) fn install_title_native_menu_visual_suppression_hook() {
+    if TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED.load(Ordering::SeqCst)
+        != TITLE_NATIVE_MENU_VISUAL_SUPPRESS_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-a: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(begin_title_addr) = game_rva(TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-cover-part-a: failed to resolve BeginTitle visual wrapper rva 0x{TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            begin_title_addr as *mut c_void,
+            title_native_menu_visual_begin_title_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            TITLE_NATIVE_MENU_VISUAL_SUPPRESS_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-a: queue_enable BeginTitle wrapper failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED.store(
+                        TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED_YES,
+                        Ordering::SeqCst,
+                    );
+                    append_autoload_debug(format_args!(
+                        "title-cover-part-a: hooked BeginTitle visual wrapper 0x{begin_title_addr:x}; native {TITLE_NATIVE_MENU_VISUAL_NAME} MenuWindowJob will be nulled, STEP_Wait/CSMenuMan+0x21 untouched"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "title-cover-part-a: MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "title-cover-part-a: MhHook::new BeginTitle wrapper failed: {status:?}"
+        )),
+    }
+}
+
 /// Install the MenuWindow-latch hook once (MinHook on the SceneObjProxy ctor 0x14074a700),
 /// matching the auto-accept builder-hook precedent exactly (MhHook::new + queue_enable +
 /// MH_ApplyQueued). Must run at process attach BEFORE the title builds during boot so the ctor's
