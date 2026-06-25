@@ -64,10 +64,11 @@ If re-initializing autoresearch, use metric `autoload_re_score`, unit `points`, 
 - Visual proof exists that the native title menu reaches `Continue` highlighted, but that is not load proof.
 - First-title-item wrapper fallback was falsified: calling `menu_continue_wrapper(this=first MenuWindowJob)` produced `slot=-1` and process exit.
 - A row-result candidate exists with expected vtable/docall, but previous code over-gated on `result+0x58` (`mode=0`). Static RE of `0x1407ac890` shows native submit constructs an event and calls vtable `+0x60`; `result+0x58` must not be treated as the product readiness gate.
+- Part B asset blocker resolved: `/home/banon/er-extract/nuxe-menu-20260619-170932/menu/05_001_title_logo.gfx` contains only static title-logo texture symbols (`MENU_Title_GR`, `MENU_Title_EldenRing`, `MENU_DS3_LOGO`, `MENU_Title_EldenRing_01`) and no `MENU_DummyProfileFace` / `SYSTEX_Menu_Profile`; use a custom Scaleform target or another surface with dummy-profile symbols. See `docs/recon/title-cover-asset-decision-2026-06-25.md`.
 
 ## What to Try Next
 1. Validate Part A statically and then at runtime: hook `FUN_14081f9f0`, return a null out-job for `05_000_Title`, expose `oracle_title_native_menu_visual_*`, and prove native title view is gone while gold still loads.
-2. Resolve Part B's asset-side blocker: inspect `05_001_Title_Logo` / `TitleBackViewParts` / `MenuResource` for a remappable dummy-texture symbol; if absent, author a tiny custom Scaleform target referencing `MENU_DummyProfileFace_NN` / `SYSTEX_Menu_ProfileNN`.
+2. Implement Part B now that the asset fork is resolved: author/inject a tiny custom Scaleform target referencing `MENU_DummyProfileFace_NN` / `SYSTEX_Menu_ProfileNN`, or locate another existing surface with that dummy symbol; do not keep trying to remap `05_001_Title_Logo`.
 3. Keep downstream proof intact: `continue_load_67b750`, `b80_deserialize_67b290`, native `continue_confirm`/SetState5, world-stable/max oracle, `oracle_char_name=Banon`, zero MessageBoxDialog.
 4. Harden static guards so Part A and Part B are independently observable and cannot regress the kept levers (splash-skip, pab-advance, FadeIn-skip).
 

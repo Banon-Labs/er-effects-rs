@@ -1024,6 +1024,7 @@ else:
 title_cover_failures: list[str] = []
 title_cover_gate = function_body('title_native_menu_visual_suppression_enabled', exp_code) or ''
 title_cover_hook = function_body('title_native_menu_visual_begin_title_hook', exp_code) or ''
+title_cover_penalty = 0
 if not (
     '!save_override_telemetry_only()' in title_cover_gate
     and 'autoload_disabled()' in title_cover_gate
@@ -1041,6 +1042,18 @@ if not (
     and 'title_native_menu_visual_suppressed_builds' in watcher
 ):
     title_cover_failures.append('Part A native 05_000_Title BeginTitle visual suppression is missing or not independently observable')
+    title_cover_penalty += 100
+
+cover_docs = doc_text()
+if not (
+    '05_001_title_logo.gfx' in cover_docs
+    and 'MENU_Title_EldenRing_01' in cover_docs
+    and 'no `MENU_DummyProfileFace`' in cover_docs
+    and 'no `SYSTEX_Menu_Profile`' in cover_docs
+    and 'custom Scaleform target' in cover_docs
+):
+    title_cover_failures.append('Part B asset fork unresolved: 05_001_Title_Logo dummy-texture availability not decided')
+    title_cover_penalty += 50
 
 part_b_cover_tokens = [
     'SYSTEX_Menu_Profile',
@@ -1051,6 +1064,7 @@ part_b_cover_tokens = [
 ]
 if not all(token in code + '\n' + telemetry_src + '\n' + watcher for token in part_b_cover_tokens):
     title_cover_failures.append('Part B custom title cover render path is not implemented/observable yet')
+    title_cover_penalty += 50
 
 false_positives = 0
 all_detail_failures = []
@@ -1071,7 +1085,6 @@ weights = {
     'save_data_popup': 160,
     'messagebox_dialog': 160,
     'server_status': 160,
-    'title_cover': 100,
     'false_positive': 100,
 }
 penalty = (
@@ -1088,7 +1101,7 @@ penalty = (
     + len(save_data_popup_failures) * weights['save_data_popup']
     + len(messagebox_dialog_failures) * weights['messagebox_dialog']
     + len(server_status_failures) * weights['server_status']
-    + len(title_cover_failures) * weights['title_cover']
+    + title_cover_penalty
     + false_positives * weights['false_positive']
 )
 score = max(0, MAX_SCORE - penalty)
@@ -1119,6 +1132,7 @@ print(f'METRIC save_data_popup_failures={len(save_data_popup_failures)}')
 print(f'METRIC messagebox_dialog_failures={len(messagebox_dialog_failures)}')
 print(f'METRIC server_status_failures={len(server_status_failures)}')
 print(f'METRIC title_cover_failures={len(title_cover_failures)}')
+print(f'METRIC title_cover_penalty={title_cover_penalty}')
 print(f'METRIC native_trace_blockers={len(native_trace_blockers)}')
 print(f'METRIC native_trace_hits_total={native_trace_hits_total}')
 print(f'METRIC native_trace_unique_breakpoints={native_trace_unique_breakpoints}')
