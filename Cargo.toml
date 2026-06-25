@@ -5,6 +5,7 @@ members = [
     "crates/er-safe-input",
     "crates/er-save-loader",
     "crates/soulsformats",
+    "crates/er-shaderkit",
     "tools/er-param-inspect",
     "tools/er-shaderlab",
 ]

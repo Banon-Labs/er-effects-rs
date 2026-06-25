@@ -1,0 +1,27 @@
+[package]
+name = "er-shaderkit"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Host-only shader-ingestion kit: naga-based CPU validation of WGSL/SPIR-V plus an
+# optional headless wgpu render harness. Not part of the Windows cdylib (`cargo xwin
+# check` targets only the root package), so wgpu/naga never reach the game DLL.
+
+[features]
+# The deterministic naga validation core is always available and GPU-free. The
+# headless wgpu render+readback harness is opt-in so the CPU TDD loop never waits
+# on (or breaks against) the heavier graphics stack.
+default = []
+gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+
+[dependencies]
+# CPU validation core (GPU-free, deterministic): parse WGSL/SPIR-V into naga IR and
+# run the same validator wgpu uses before pipeline creation.
+naga = { version = "29", features = ["wgsl-in", "spv-in", "spv-out"] }
+thiserror = "2"
+
+# Headless render harness (real-GPU pixel proof), only compiled with `--features gpu`.
+wgpu = { version = "29", default-features = false, features = ["wgsl", "spirv", "vulkan"], optional = true }
+pollster = { version = "0.4", optional = true }
+bytemuck = { version = "1", optional = true }
