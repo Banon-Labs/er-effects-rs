@@ -317,6 +317,8 @@ def main() -> int:
     placeholder_live = {**world_loaded_telemetry, "oracle_char_name": "_", "oracle_char_name_len": 1}
     assert watcher.telemetry_placeholder_character_detected(placeholder_live, expected_save_oracle)
     assert not watcher.telemetry_placeholder_character_detected({**placeholder_live, "oracle_player_present": False, "player_available": False}, expected_save_oracle)
+    title_placeholder = {**placeholder_live, "current_animation_id": None, "oracle_havok_pos": None, "oracle_block_id_valid": False}
+    assert not watcher.telemetry_placeholder_character_detected(title_placeholder, expected_save_oracle)
     assert not watcher.telemetry_placeholder_character_detected(placeholder_live, None)
     mismatched_save = {**expected_save_oracle, "decoded_fields": {**expected_save_oracle["decoded_fields"], "name": "Bonky Bean"}}
     assert not watcher.telemetry_world_loaded(world_loaded_telemetry, mismatched_save, watcher.DEFAULT_EXPECTED_ANIMATION_ID)

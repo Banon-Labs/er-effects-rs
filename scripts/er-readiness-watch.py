@@ -1041,7 +1041,13 @@ def telemetry_placeholder_character_detected(
     """
     if not isinstance(telemetry, dict) or not expected_save_fields(expected_save_oracle):
         return False
-    if telemetry.get("oracle_player_present") is not True and telemetry.get("player_available") is not True:
+    player_seen = telemetry.get("oracle_player_present") is True or telemetry.get("player_available") is True
+    loaded_character_signal = (
+        as_int(telemetry.get("current_animation_id"), -1) >= 0
+        or telemetry.get("oracle_block_id_valid") is True
+        or isinstance(telemetry.get("oracle_havok_pos"), list)
+    )
+    if not (player_seen and loaded_character_signal):
         return False
     return name_empty_like(telemetry.get("oracle_char_name"))
 
