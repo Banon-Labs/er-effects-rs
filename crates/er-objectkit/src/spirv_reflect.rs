@@ -15,6 +15,11 @@ const OP_NAME: u16 = 5;
 const OP_DECORATE: u16 = 71;
 const OP_VARIABLE: u16 = 59;
 const OP_TYPE_POINTER: u16 = 32;
+const OP_TYPE_IMAGE: u16 = 25;
+const OP_TYPE_SAMPLER: u16 = 26;
+const OP_TYPE_SAMPLED_IMAGE: u16 = 27;
+const OP_TYPE_ARRAY: u16 = 28;
+const OP_TYPE_RUNTIME_ARRAY: u16 = 29;
 
 // Decoration enums.
 const DEC_BINDING: u32 = 33;
@@ -41,8 +46,10 @@ pub enum BindingKind {
     Buffer,
     /// Read/write or read-only storage buffer (ER's `--ssbo-*` lowering).
     StorageBuffer,
-    /// Sampled image / texture or sampler (`UniformConstant`).
+    /// Sampled texture (`OpTypeImage` / `OpTypeSampledImage`).
     Texture,
+    /// Separate sampler (`OpTypeSampler`).
+    Sampler,
 }
 
 #[derive(Debug, Clone)]
@@ -89,14 +96,17 @@ pub fn reflect(spirv: &[u8]) -> Result<Reflection, ReflectError> {
     }
 
     // id -> (set, binding, location), id -> name, id -> storage class.
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     let mut sets: HashMap<u32, u32> = HashMap::new();
     let mut binds: HashMap<u32, u32> = HashMap::new();
     let mut locs: HashMap<u32, u32> = HashMap::new();
     let mut names: HashMap<u32, String> = HashMap::new();
-    // result-id of an OpTypePointer -> its storage class.
-    let mut ptr_storage: HashMap<u32, u32> = HashMap::new();
-    let mut variables: Vec<(u32, u32)> = Vec::new(); // (result id, storage class)
+    // Type-id classification, to tell textures from samplers from buffers.
+    let mut image_types: HashSet<u32> = HashSet::new(); // OpTypeImage / OpTypeSampledImage
+    let mut sampler_types: HashSet<u32> = HashSet::new(); // OpTypeSampler
+    let mut array_elem: HashMap<u32, u32> = HashMap::new(); // array type -> element type
+    let mut ptr_pointee: HashMap<u32, u32> = HashMap::new(); // pointer type -> pointee type
+    let mut variables: Vec<(u32, u32, u32)> = Vec::new(); // (result id, storage class, pointer type)
     let mut input_ids: Vec<u32> = Vec::new();
     let mut stage = Stage::Other;
 
@@ -148,18 +158,35 @@ pub fn reflect(spirv: &[u8]) -> Result<Reflection, ReflectError> {
                     }
                 }
             }
-            OP_TYPE_POINTER => {
-                // result, storage class, type
+            OP_TYPE_IMAGE | OP_TYPE_SAMPLED_IMAGE => {
+                if let Some(&id) = operands.first() {
+                    image_types.insert(id);
+                }
+            }
+            OP_TYPE_SAMPLER => {
+                if let Some(&id) = operands.first() {
+                    sampler_types.insert(id);
+                }
+            }
+            OP_TYPE_ARRAY | OP_TYPE_RUNTIME_ARRAY => {
+                // result, element type, [length]
                 if operands.len() >= 2 {
-                    ptr_storage.insert(operands[0], operands[1]);
+                    array_elem.insert(operands[0], operands[1]);
+                }
+            }
+            OP_TYPE_POINTER => {
+                // result, storage class, pointee type
+                if operands.len() >= 3 {
+                    ptr_pointee.insert(operands[0], operands[2]);
                 }
             }
             OP_VARIABLE => {
-                // result type, result id, storage class
+                // result type (a pointer), result id, storage class
                 if operands.len() >= 3 {
+                    let ptr_type = operands[0];
                     let result = operands[1];
                     let sc = operands[2];
-                    variables.push((result, sc));
+                    variables.push((result, sc, ptr_type));
                     if sc == SC_INPUT {
                         input_ids.push(result);
                     }
@@ -177,16 +204,42 @@ pub fn reflect(spirv: &[u8]) -> Result<Reflection, ReflectError> {
     input_locations.sort_unstable();
     input_locations.dedup();
 
+    // Resolve a pointer type to its underlying resource type, seeing through arrays.
+    let resolve_kind = |ptr_type: u32, sc: u32| -> Option<BindingKind> {
+        match sc {
+            SC_UNIFORM => return Some(BindingKind::Buffer),
+            SC_STORAGE_BUFFER => return Some(BindingKind::StorageBuffer),
+            SC_UNIFORM_CONSTANT => {}
+            _ => return None,
+        }
+        // UniformConstant: distinguish image vs sampler via the pointee type.
+        let mut t = *ptr_pointee.get(&ptr_type)?;
+        // unwrap arrays (bindless texture/sampler arrays)
+        for _ in 0..8 {
+            if let Some(&elem) = array_elem.get(&t) {
+                t = elem;
+            } else {
+                break;
+            }
+        }
+        if image_types.contains(&t) {
+            Some(BindingKind::Texture)
+        } else if sampler_types.contains(&t) {
+            Some(BindingKind::Sampler)
+        } else {
+            // Unknown UniformConstant shape (e.g. combined sampler we didn't map) —
+            // treat as a texture so it still gets a binding slot.
+            Some(BindingKind::Texture)
+        }
+    };
+
     let mut bindings = Vec::new();
-    for (id, sc) in variables {
+    for (id, sc, ptr_type) in variables {
         let (Some(&set), Some(&binding)) = (sets.get(&id), binds.get(&id)) else {
             continue;
         };
-        let kind = match sc {
-            SC_UNIFORM_CONSTANT => BindingKind::Texture,
-            SC_UNIFORM => BindingKind::Buffer,
-            SC_STORAGE_BUFFER => BindingKind::StorageBuffer,
-            _ => continue, // Input/Output aren't resource bindings
+        let Some(kind) = resolve_kind(ptr_type, sc) else {
+            continue;
         };
         bindings.push(Binding {
             set,
@@ -283,17 +336,23 @@ mod tests {
             .iter()
             .filter(|b| b.kind == BindingKind::Texture)
             .count();
+        let samplers = pr
+            .bindings
+            .iter()
+            .filter(|b| b.kind == BindingKind::Sampler)
+            .count();
         let bufs = pr
             .bindings
             .iter()
             .filter(|b| matches!(b.kind, BindingKind::Buffer | BindingKind::StorageBuffer))
             .count();
         eprintln!(
-            "{}: vertex inputs {:?}; pixel {} ({} textures, {} buffers)",
+            "{}: vertex inputs {:?}; pixel {} ({} textures, {} samplers, {} buffers)",
             file.file_name().unwrap().to_string_lossy(),
             vr.input_locations,
             p.name,
             tex,
+            samplers,
             bufs
         );
         // dxil-spirv does NOT preserve HLSL resource names (measured: 0 named), so
