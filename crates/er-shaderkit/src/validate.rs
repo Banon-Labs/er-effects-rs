@@ -90,11 +90,32 @@ pub fn validate_spirv(bytes: &[u8]) -> Result<ShaderInfo, ValidationError> {
 }
 
 fn run_validator(module: &naga::Module, src: &str) -> Result<ShaderInfo, ValidationError> {
+    validate_module(module, src)?;
+    Ok(extract_info(module))
+}
+
+fn validate_module(
+    module: &naga::Module,
+    src: &str,
+) -> Result<naga::valid::ModuleInfo, ValidationError> {
     let mut validator = Validator::new(ValidationFlags::all(), Capabilities::all());
     validator
         .validate(module)
-        .map_err(|e| ValidationError::Validate(e.emit_to_string(src)))?;
-    Ok(extract_info(module))
+        .map_err(|e| ValidationError::Validate(e.emit_to_string(src)))
+}
+
+/// Convert SPIR-V to WGSL via naga (spv-in -> wgsl-out). Only works for shaders
+/// naga's frontend accepts — for ER, that is the subset of fragment/simple
+/// shaders that avoid `DrawParameters`/bindless caps (see the viewer
+/// determination). The resulting WGSL is what the viewer feeds Bevy's normal
+/// material pipeline; shaders that fail here go through SPIR-V passthrough instead.
+pub fn spirv_to_wgsl(bytes: &[u8]) -> Result<String, ValidationError> {
+    let options = naga::front::spv::Options::default();
+    let module = naga::front::spv::parse_u8_slice(bytes, &options)
+        .map_err(|e| ValidationError::Parse(e.to_string()))?;
+    let info = validate_module(&module, "")?;
+    naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
+        .map_err(|e| ValidationError::Validate(e.to_string()))
 }
 
 fn extract_info(module: &naga::Module) -> ShaderInfo {
@@ -221,6 +242,13 @@ mod tests {
 
         let info = validate_spirv(TRIANGLE_FRAG_SPV)
             .expect("er-shaderkit should ingest glslang-produced SPIR-V");
+
+        // Same fixture also round-trips to WGSL (the Tier-A path that feeds Bevy).
+        let wgsl = spirv_to_wgsl(TRIANGLE_FRAG_SPV).expect("SPIR-V should convert to WGSL");
+        assert!(
+            wgsl.contains("@fragment") && wgsl.contains("fn main"),
+            "expected a fragment entry in generated WGSL:\n{wgsl}"
+        );
 
         assert!(
             info.entry_points.contains(&EntryPointInfo {

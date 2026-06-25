@@ -34,7 +34,8 @@ fn main() {
         .filter(|p| {
             matches!(
                 p.extension().and_then(|e| e.to_str()),
-                Some("vpo" | "fpo" | "cpo")
+                // .vpo vertex, .ppo pixel/fragment, .cpo compute/lib (.fpo legacy alias)
+                Some("vpo" | "ppo" | "fpo" | "cpo")
             )
         })
         .collect();

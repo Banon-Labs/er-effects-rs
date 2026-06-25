@@ -20,6 +20,6 @@ pub mod validate;
 pub use translate::{TranslateError, discover_dxil_spirv, dxil_file_to_spirv, dxil_to_spirv};
 
 pub use validate::{
-    BindingInfo, EntryPointInfo, ShaderInfo, ShaderStage, ValidationError, validate_spirv,
-    validate_wgsl,
+    BindingInfo, EntryPointInfo, ShaderInfo, ShaderStage, ValidationError, spirv_to_wgsl,
+    validate_spirv, validate_wgsl,
 };

@@ -18,10 +18,17 @@ gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
 [dependencies]
 # CPU validation core (GPU-free, deterministic): parse WGSL/SPIR-V into naga IR and
 # run the same validator wgpu uses before pipeline creation.
-naga = { version = "29", features = ["wgsl-in", "spv-in", "spv-out"] }
+naga = { version = "29", features = ["wgsl-in", "wgsl-out", "spv-in", "spv-out"] }
 thiserror = "2"
 
 # Headless render harness (real-GPU pixel proof), only compiled with `--features gpu`.
 wgpu = { version = "29", default-features = false, features = ["wgsl", "spirv", "vulkan"], optional = true }
 pollster = { version = "0.4", optional = true }
 bytemuck = { version = "1", optional = true }
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[[example]]
+name = "render_png"
+required-features = ["gpu"]

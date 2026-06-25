@@ -8,6 +8,7 @@ members = [
     "crates/er-shaderkit",
     "tools/er-param-inspect",
     "tools/er-shaderlab",
+    "tools/er-shader-viewer",
 ]
 resolver = "2"
 
