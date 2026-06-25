@@ -230,6 +230,18 @@ def main() -> int:
         "title native visual suppression must be visible in telemetry/readiness summaries for independent Part-A validation",
         failures,
     )
+    require(
+        "TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA: usize = 0x81f6f0" in lib
+        and "TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL" in lib
+        and "MENU_DummyProfileFace_01" in lib
+        and "SYSTEX_Menu_Profile00" in lib
+        and "CSMenuProfModelRend" in lib
+        and "TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.fetch_add" in title_cover_hook
+        and "oracle_title_custom_cover_profile_select_builds" in telemetry
+        and "title_custom_cover_profile_select_builds" in watcher,
+        "Part B custom cover must build an observable ProfileSelect/SYSTEX dummy-profile cover target",
+        failures,
+    )
 
     for legacy_gate in ("live_dialog_enabled", "menu_window_latch_enabled"):
         body = rust_fn_body(experiments, legacy_gate)

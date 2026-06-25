@@ -19,6 +19,9 @@ Can the existing native title-logo Scaleform `05_001_Title_Logo` be remapped to 
 ## Decision
 `05_001_Title_Logo` is not a reusable dummy-texture target for the profile renderer. Part B should author or inject a small custom Scaleform target that references `MENU_DummyProfileFace_NN` / `SYSTEX_Menu_ProfileNN`, or use another already-existing Scaleform surface that contains that dummy symbol. Do not spend more runs trying to remap `05_001_Title_Logo` directly.
 
+## Follow-up target found
+The existing extracted `/home/banon/er-extract/nuxe-menu-20260619-170932/menu/05_010_profileselect.gfx` contains `MENU_DummyProfileFace_01..10`. Ghidra xrefs on `05_010_ProfileSelect` found native wrappers at dump `0x14081f6f0` and `0x14081f7e0`; `scripts/dump-deobf-shift.py` maps the second wrapper to deobf/live `0x14081f6f0`. The current Part B spike uses that wrapper as the cover replacement for suppressed `05_000_Title`, exposing `oracle_title_custom_cover_profile_select_*` telemetry for runtime validation.
+
 ## Validation command
 
 ```bash

@@ -1354,16 +1354,19 @@ pub(crate) unsafe extern "system" fn scene_obj_proxy_ctor_hook(
 /// Detour for BeginTitle's `05_000_Title` visual wrapper (deobf 0x14081f9f0). Static RE shows the
 /// wrapper's only side effect is constructing a CSScaleformLoadInfo with filename `05_000_Title` and
 /// calling factory 0x1407acbf0 to allocate/return a MenuWindowJob. For the title-cover masquerade we
-/// deliberately skip that factory and write a null job pointer into the caller's out slot, matching
-/// the factory's allocation-failure shape. This suppresses the native title visual without changing
-/// TitleStep, FixOrderJobSequence, native Continue, STEP_PlayGame, or the resident-UI CSMenuMan+0x21
-/// gate. Zero input, save-safe.
+/// skip that native title factory, clear the caller's out slot, then build the existing
+/// `05_010_ProfileSelect` Scaleform as our custom cover target. That surface contains
+/// `MENU_DummyProfileFace_01..10` placeholders mapped by CSMenuProfModelRend to
+/// `SYSTEX_Menu_Profile00..09`, unlike `05_001_Title_Logo`. This replaces the native title visual
+/// without touching TitleStep, FixOrderJobSequence, native Continue, STEP_PlayGame, or the resident-UI
+/// CSMenuMan+0x21 gate. Zero input, save-safe.
 pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
     out_slot: usize,
     rdx: usize,
     r8: usize,
 ) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let base = game_module_base().unwrap_or(null);
     let prev_out = if out_slot != null {
         unsafe { safe_read_usize(out_slot) }.unwrap_or(null)
     } else {
@@ -1379,12 +1382,32 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
     TITLE_NATIVE_MENU_VISUAL_LAST_ARG_RDX.store(rdx, Ordering::SeqCst);
     TITLE_NATIVE_MENU_VISUAL_LAST_ARG_R8.store(r8, Ordering::SeqCst);
     TITLE_NATIVE_MENU_VISUAL_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+
+    let mut cover_ret = out_slot;
+    if base != null {
+        let cover_builder: unsafe extern "system" fn(usize, usize, usize) -> usize =
+            unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA) };
+        cover_ret = unsafe { cover_builder(out_slot, rdx, r8) };
+        let cover_job = if out_slot != null {
+            unsafe { safe_read_usize(out_slot) }.unwrap_or(null)
+        } else {
+            null
+        };
+        TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+        TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_RET.store(cover_ret, Ordering::SeqCst);
+        TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_JOB.store(cover_job, Ordering::SeqCst);
+        TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "title-cover-part-b: BUILT custom cover {TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME} via 0x{:x} -> ret=0x{cover_ret:x} job=0x{cover_job:x}; dummy={TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL} target={TITLE_CUSTOM_COVER_SYSTEX_TARGET} renderer={TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS}",
+            base + TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA,
+        ));
+    }
     append_autoload_debug(format_args!(
-        "title-cover-part-a: SUPPRESSED {TITLE_NATIVE_MENU_VISUAL_NAME} BeginTitle wrapper 0x{:x}; skipped factory 0x{:x}, wrote *out_slot=null (out_slot=0x{out_slot:x} prev=0x{prev_out:x} rdx=0x{rdx:x} r8=0x{r8:x} caller_rva=0x{caller_rva:x})",
-        game_module_base().unwrap_or(null) + TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA,
-        game_module_base().unwrap_or(null) + TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA,
+        "title-cover-part-a: SUPPRESSED {TITLE_NATIVE_MENU_VISUAL_NAME} BeginTitle wrapper 0x{:x}; skipped native factory 0x{:x}, replaced with custom cover (out_slot=0x{out_slot:x} prev=0x{prev_out:x} rdx=0x{rdx:x} r8=0x{r8:x} caller_rva=0x{caller_rva:x})",
+        base + TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA,
+        base + TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA,
     ));
-    out_slot
+    cover_ret
 }
 
 /// Install the Part-A title visual suppression hook once. It must run at process attach before
@@ -1433,7 +1456,7 @@ pub(crate) fn install_title_native_menu_visual_suppression_hook() {
                         Ordering::SeqCst,
                     );
                     append_autoload_debug(format_args!(
-                        "title-cover-part-a: hooked BeginTitle visual wrapper 0x{begin_title_addr:x}; native {TITLE_NATIVE_MENU_VISUAL_NAME} MenuWindowJob will be nulled, STEP_Wait/CSMenuMan+0x21 untouched"
+                        "title-cover-part-a: hooked BeginTitle visual wrapper 0x{begin_title_addr:x}; native {TITLE_NATIVE_MENU_VISUAL_NAME} MenuWindowJob will be replaced by {TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME}, STEP_Wait/CSMenuMan+0x21 untouched"
                     ));
                 }
                 status => append_autoload_debug(format_args!(
