@@ -854,6 +854,7 @@ save_data_popup_by_dir: dict[str, list[str]] = {}
 messagebox_by_dir: dict[str, list[str]] = {}
 server_status_by_dir: dict[str, list[str]] = {}
 runtime_mode_by_dir: dict[str, list[str]] = {}
+title_cover_runtime_by_dir: dict[str, list[str]] = {}
 best_runtime: tuple[int, Path | None, dict[str, bool]] = (0, None, {key: False for key in required_runtime})
 latest_runtime_dir: Path | None = None
 rt_root = root / 'target/runtime-probe'
@@ -866,7 +867,7 @@ if rt_root.exists():
     latest_runtime_dir = candidates[0] if candidates else None
     for d in candidates:
         proof = {key: False for key in required_runtime}
-        for name in ['readiness-result.json', 'max-oracle-result.json', 'telemetry.json']:
+        for name in ['readiness-result.json', 'max-oracle-result.json', 'telemetry.json', 'er-effects-telemetry.json']:
             p = d / name
             if not p.exists():
                 continue
@@ -938,6 +939,21 @@ if rt_root.exists():
                 proof['result_chain'] = True
             if re.search(r'world[-_ ]?stable|max oracle|SetState5', raw, re.IGNORECASE):
                 proof['world'] = True
+            if (
+                re.search(r'"native_continue_chain_stage"\s*:\s*"world_loaded"', raw)
+                or re.search(r'"oracle_player_present"\s*:\s*true', raw)
+                and re.search(r'"oracle_char_name"\s*:\s*"[^"_\s][^"]*"', raw)
+                and re.search(r'"oracle_saved_map_c30"\s*:\s*"?0x[0-9a-fA-F]+"?', raw)
+            ):
+                proof['world'] = True
+            if re.search(r'"native_continue_chain_stage"\s*:\s*"world_loaded"', raw):
+                proof['continue_load'] = True
+                proof['deserialize'] = True
+                proof['confirm'] = True
+            if re.search(r'"oracle_title_profile_cover_bound_to_logo_surface"\s*:\s*false', raw):
+                title_cover_runtime_by_dir.setdefault(d.name, []).append(
+                    f'runtime artifact {d.name} has no custom/profile cover bound to the visible logo/title surface'
+                )
             oracle = data.get('oracle') if isinstance(data.get('oracle'), dict) else {}
             expected_oracle = oracle.get('expected') if isinstance(oracle.get('expected'), dict) else {}
             observed_oracle = oracle.get('observed') if isinstance(oracle.get('observed'), dict) else {}
@@ -1025,7 +1041,9 @@ if best_dir is None:
 else:
     missing = [key for key in required_runtime if not proof[key]]
     if missing:
-        runtime_failures.append(f'runtime proof best artifact {best_dir.name} missing {",".join(missing)}')
+        severe_runtime_keys = {'ready', 'world', 'zero_input', 'expected_save', 'no_postload_popup'}
+        severity = 'severe' if any(key in severe_runtime_keys for key in missing) else 'detail'
+        runtime_failures.append(f'runtime proof {severity} artifact {best_dir.name} missing {",".join(missing)}')
     runtime_mode_failures.extend(runtime_mode_by_dir.get(best_dir.name, []))
     eula_popup_failures.extend(legal_popup_by_dir.get(best_dir.name, []))
     server_status_failures.extend(server_status_by_dir.get(best_dir.name, []))
@@ -1069,10 +1087,15 @@ else:
     native_trace_blockers.append('native user-driven trace summary missing; tracebreakpoint/tooling blocker may still be unresolved')
 
 title_cover_failures: list[str] = []
+runtime_title_cover_failure_count = 0
+for dir_name in scored_runtime_dirs:
+    runtime_cover_failures = title_cover_runtime_by_dir.get(dir_name, [])
+    runtime_title_cover_failure_count += len(runtime_cover_failures)
+    title_cover_failures.extend(runtime_cover_failures)
 title_cover_gate = function_body('title_native_menu_visual_suppression_enabled', exp_code) or ''
 title_cover_hook = function_body('title_native_menu_visual_begin_title_hook', exp_code) or ''
 title_cover_render_hook = function_body('title_native_menu_visual_window_fadein_hook', exp_code) or ''
-title_cover_penalty = 0
+title_cover_penalty = runtime_title_cover_failure_count * 50
 part_a_common = (
     '!save_override_telemetry_only()' in title_cover_gate
     and 'autoload_disabled()' in title_cover_gate
@@ -1172,6 +1195,7 @@ all_detail_failures = []
 for group in [legacy_failures, asset_failures, dll_failures, native_failures, field58_failures, direct_failures, input_failures, runtime_failures, runtime_mode_failures, eula_popup_failures, save_data_popup_failures, messagebox_dialog_failures, server_status_failures, title_cover_failures]:
     all_detail_failures.extend(group)
 
+runtime_weight = 320 if any('runtime proof severe' in failure for failure in runtime_failures) else 80
 weights = {
     'readiness': 15,
     'asset': 35,
@@ -1180,9 +1204,7 @@ weights = {
     'field58': 100,
     'direct': 85,
     'input': 85,
-    # Missing the downstream character/world-load proof is a major product failure, not a small
-    # diagnostic gap: a blank Load Game/ProfileSelect canvas is not the target cover.
-    'runtime': 320,
+    'runtime': runtime_weight,
     'runtime_mode': 120,
     'eula_popup': 80,
     'save_data_popup': 160,
