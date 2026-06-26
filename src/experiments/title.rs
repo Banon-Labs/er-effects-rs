@@ -1537,21 +1537,8 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 .is_ok()
             {
                 append_autoload_debug(format_args!(
-                    "product-core-autoload: PRESS BUTTON component ready; armed native title accept byte for in-update open-menu/drain (dialog=0x{:x} press_start_proxy=0x{:x}) -- no game-task open_menu self-fire",
+                    "product-core-autoload: PRESS BUTTON component ready; armed native title accept byte for in-update open-menu/drain (dialog=0x{:x} press_start_proxy=0x{:x}) -- TitleTopDialog::open_menu writes latch and does not require Loop/TextFadeout state; no game-task open_menu self-fire",
                     ready.title_dialog, ready.press_start_proxy
-                ));
-            }
-            return true;
-        }
-        if !ready.title_in_textfadeout && ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO {
-            if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
-                append_autoload_debug(format_args!(
-                    "product-core-autoload: waiting for title open-menu semantic confirmation dialog=0x{:x} loop={} textfadeout={} latch={} press_start_proxy=0x{:x} slot={slot} tick={tick}",
-                    ready.title_dialog,
-                    ready.title_in_loop,
-                    ready.title_in_textfadeout,
-                    ready.menu_opened_latch,
-                    ready.press_start_proxy
                 ));
             }
             return true;
