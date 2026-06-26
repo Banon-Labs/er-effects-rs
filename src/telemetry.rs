@@ -939,6 +939,32 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_AFTER.load(Ordering::SeqCst);
         let title_visual_render_last_caller_rva =
             TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_CALLER_RVA.load(Ordering::SeqCst);
+        let title_visual_current_menu_id = if title_visual_native_window != NULL_PTR
+            && title_visual_native_window != TITLE_OWNER_SCAN_START_ADDRESS
+        {
+            unsafe { crate::experiments::safe_read_u16(title_visual_native_window + 0x180) }
+                .map_or(TITLE_OWNER_SCAN_START_ADDRESS, usize::from)
+        } else {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        };
+        let title_visual_current_flags = if title_visual_current_menu_id < 0x47 {
+            let cs_menu_man = unsafe { crate::experiments::safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
+                .unwrap_or(NULL_PTR);
+            if cs_menu_man != NULL_PTR {
+                unsafe {
+                    crate::experiments::safe_read_u8(
+                        cs_menu_man + 0x90 + title_visual_current_menu_id,
+                    )
+                }
+                .map_or(TITLE_OWNER_SCAN_START_ADDRESS, usize::from)
+            } else {
+                TITLE_OWNER_SCAN_START_ADDRESS
+            }
+        } else {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        };
+        let title_visual_current_draw_bit_set = title_visual_current_flags != TITLE_OWNER_SCAN_START_ADDRESS
+            && (title_visual_current_flags & TITLE_NATIVE_MENU_VISUAL_DRAW_BIT as usize) != 0;
         let title_custom_cover_profile_select_builds =
             TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.load(Ordering::SeqCst);
         let title_custom_cover_profile_select_last_ret =
@@ -1025,7 +1051,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             server_status_text_id
         ));
         body.push_str(&format!(
-            "  \"oracle_title_native_menu_visual_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_suppressed_builds\": {},\n  \"oracle_title_native_menu_visual_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_last_out_slot\": {},\n  \"oracle_title_native_menu_visual_last_prev_out\": {},\n  \"oracle_title_native_menu_visual_last_args\": [{}, {}],\n  \"oracle_title_native_menu_visual_last_caller_rva\": {},\n  \"oracle_title_native_menu_visual_native_job\": {},\n  \"oracle_title_native_menu_visual_native_window\": {},\n  \"oracle_title_native_menu_visual_render_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_render_suppressed_windows\": {},\n  \"oracle_title_native_menu_visual_render_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_render_last_window\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_before\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_after\": {},\n  \"oracle_title_native_menu_visual_render_last_caller_rva\": {},\n  \"oracle_title_custom_cover_profile_select_builds\": {},\n  \"oracle_title_custom_cover_profile_select_any_built\": {},\n  \"oracle_title_custom_cover_profile_select_last_ret\": {},\n  \"oracle_title_custom_cover_profile_select_last_job\": {},\n  \"oracle_title_custom_cover_profile_select_last_caller_rva\": {},\n",
+            "  \"oracle_title_native_menu_visual_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_suppressed_builds\": {},\n  \"oracle_title_native_menu_visual_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_last_out_slot\": {},\n  \"oracle_title_native_menu_visual_last_prev_out\": {},\n  \"oracle_title_native_menu_visual_last_args\": [{}, {}],\n  \"oracle_title_native_menu_visual_last_caller_rva\": {},\n  \"oracle_title_native_menu_visual_native_job\": {},\n  \"oracle_title_native_menu_visual_native_window\": {},\n  \"oracle_title_native_menu_visual_current_menu_id\": {},\n  \"oracle_title_native_menu_visual_current_flags\": {},\n  \"oracle_title_native_menu_visual_current_draw_bit_set\": {},\n  \"oracle_title_native_menu_visual_render_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_render_suppressed_windows\": {},\n  \"oracle_title_native_menu_visual_render_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_render_last_window\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_before\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_after\": {},\n  \"oracle_title_native_menu_visual_render_last_caller_rva\": {},\n  \"oracle_title_custom_cover_profile_select_builds\": {},\n  \"oracle_title_custom_cover_profile_select_any_built\": {},\n  \"oracle_title_custom_cover_profile_select_last_ret\": {},\n  \"oracle_title_custom_cover_profile_select_last_job\": {},\n  \"oracle_title_custom_cover_profile_select_last_caller_rva\": {},\n",
             title_visual_suppress_installed,
             title_visual_suppressed_builds,
             title_visual_suppressed_builds != 0,
@@ -1036,6 +1062,9 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             title_visual_last_caller_rva,
             title_visual_native_job,
             title_visual_native_window,
+            title_visual_current_menu_id,
+            title_visual_current_flags,
+            title_visual_current_draw_bit_set,
             title_visual_render_suppress_installed,
             title_visual_render_suppressed_windows,
             title_visual_render_suppressed_windows != 0,

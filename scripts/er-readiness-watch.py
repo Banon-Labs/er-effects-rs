@@ -1040,19 +1040,8 @@ def telemetry_title_native_visual_unsuppressed(telemetry: dict[str, Any] | None)
     native_title_built = as_int(telemetry.get("oracle_title_native_menu_visual_suppressed_builds"), 0) > 0
     render_suppress_installed = telemetry.get("oracle_title_native_menu_visual_render_suppress_installed") is True
     native_window_known = as_int(telemetry.get("oracle_title_native_menu_visual_native_window"), 0) > 0
-    render_suppressed = as_int(telemetry.get("oracle_title_native_menu_visual_render_suppressed_windows"), 0) > 0
-    menu_or_world_reached = (
-        as_int(telemetry.get("product_core_last_menu_opened_latch"), 0) != 0
-        or telemetry.get("oracle_player_present") is True
-        or telemetry.get("player_available") is True
-    )
-    return bool(
-        native_title_built
-        and render_suppress_installed
-        and native_window_known
-        and menu_or_world_reached
-        and not render_suppressed
-    )
+    draw_bit_set = telemetry.get("oracle_title_native_menu_visual_current_draw_bit_set") is True
+    return bool(native_title_built and render_suppress_installed and native_window_known and draw_bit_set)
 
 
 def telemetry_placeholder_character_detected(
