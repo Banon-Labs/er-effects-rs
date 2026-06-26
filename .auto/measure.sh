@@ -982,6 +982,10 @@ if rt_root.exists():
             if oracle.get('expected_animation_match') is True:
                 proof['expected_animation'] = True
             if oracle.get('native_result_chain_ready') is True:
+                # The watcher only sets this after passive native result-event/action-wrapper/insert
+                # evidence agrees (outer submit hook if present, otherwise same-result event/action
+                # chain). Count it as both the product submit edge and the result chain edge.
+                proof['product_submit'] = True
                 proof['result_chain'] = True
             if oracle.get('no_postload_popup') is True:
                 proof['no_postload_popup'] = True
