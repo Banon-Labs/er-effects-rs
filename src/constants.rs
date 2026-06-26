@@ -640,24 +640,6 @@ pub(crate) static RENDER_LOADING_LAYER_LAST_CSSCALEFORM: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static RENDER_LOADING_LAYER_LAST_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static RENDER_LOADING_LAYER_VISIBLE_LAST_RENDMAN_VTABLE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static RENDER_LOADING_LAYER_VISIBLE_LAST_CSGRAPHICS_VTABLE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static RENDER_LOADING_LAYER_VISIBLE_LAST_CSSCALEFORM_VTABLE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_28_VTABLE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_30_VTABLE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_38_VTABLE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_40_VTABLE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_78_VTABLE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static RENDER_LOADING_LAYER_VISIBLE_LAST_CSGRAPHICS_FIELD68_VTABLE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// Passive observer for native Scaleform image-symbol -> system texture bindings.
 /// Dump `FUN_1407452c0` maps to live/deobf `0x1407451c0`. It receives an owning resource/list field
 /// in rcx and a pair of DLString<char> values in rdx. Do not call it from product code; observe native

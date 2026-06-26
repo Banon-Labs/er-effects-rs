@@ -123,12 +123,48 @@ def product_path_uses_semantic_readiness(experiments: str) -> bool:
     )
 
 
+def loading_layer_runtime_deref_guarded(telemetry: str, constants: str) -> bool:
+    """Loading-screen draw-layer child objects are actively used by the renderer.
+
+    Runtime artifact product-continue-direct-20260625-232857 showed that even
+    telemetry-only vtable reads through RendMan CSEzDraw layer pointers during
+    CSFakeLoadingScreen visibility can coincide with process exit before world
+    stable. Keep runtime telemetry to pointer/mask sampling; classify child
+    objects through static Ghidra evidence instead.
+    """
+    forbidden_tokens = {
+        "read_vtable = |ptr",
+        "RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_28_VTABLE",
+        "RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_30_VTABLE",
+        "RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_38_VTABLE",
+        "RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_40_VTABLE",
+        "RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_78_VTABLE",
+        "RENDER_LOADING_LAYER_VISIBLE_LAST_CSGRAPHICS_FIELD68_VTABLE",
+        "oracle_render_loading_visible_slot_28_vtable",
+        "oracle_render_loading_visible_slot_30_vtable",
+        "oracle_render_loading_visible_slot_38_vtable",
+        "oracle_render_loading_visible_slot_40_vtable",
+        "oracle_render_loading_visible_slot_78_vtable",
+        "oracle_render_loading_visible_csgraphics_field68_vtable",
+    }
+    combined = telemetry + "\n" + constants
+    if any(token in combined for token in forbidden_tokens):
+        return False
+    unsafe_patterns = [
+        r"safe_read_usize\(\s*rend_slot_(?:28|30|38|40|78)\s*\)",
+        r"safe_read_usize\(\s*csgraphics_field68\s*\)",
+        r"safe_read_usize\(\s*\w+\s*\+\s*0\s*\).*loading.*vtable",
+    ]
+    return not any(re.search(pattern, telemetry, re.IGNORECASE | re.DOTALL) for pattern in unsafe_patterns)
+
+
 def main() -> int:
     failures: list[str] = []
     experiments = read_experiments()
     lib = read(LIB)
-    if CONSTANTS.exists():
-        lib += "\n" + read(CONSTANTS)
+    constants = read(CONSTANTS) if CONSTANTS.exists() else ""
+    if constants:
+        lib += "\n" + constants
     stage = read(STAGE_SCRIPT)
     telemetry = read(TELEMETRY)
     watcher = read(WATCHER)
@@ -169,6 +205,11 @@ def main() -> int:
     require(
         lib.find("product_core_autoload_tick") < lib.find("title_accept_tick"),
         "product autoload core must run before legacy title-accept input injection paths",
+        failures,
+    )
+    require(
+        loading_layer_runtime_deref_guarded(telemetry, constants),
+        "loading RenderMan/CSEzDraw layer telemetry must remain pointer/mask-only; do not dereference child layer vtables during CSFakeLoadingScreen visibility",
         failures,
     )
 

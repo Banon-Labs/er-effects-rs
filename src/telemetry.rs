@@ -931,22 +931,6 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         } else {
             unsafe { crate::experiments::safe_read_usize(csgraphics + 0x68) }.unwrap_or(NULL_PTR)
         };
-        let read_vtable = |ptr: usize| -> usize {
-            if ptr == NULL_PTR {
-                NULL_PTR
-            } else {
-                unsafe { crate::experiments::safe_read_usize(ptr) }.unwrap_or(NULL_PTR)
-            }
-        };
-        let rendman_vtable = read_vtable(rendman);
-        let csgraphics_vtable = read_vtable(csgraphics);
-        let csscaleform_vtable = read_vtable(csscaleform);
-        let rend_slot_28_vtable = read_vtable(rend_slot_28);
-        let rend_slot_30_vtable = read_vtable(rend_slot_30);
-        let rend_slot_38_vtable = read_vtable(rend_slot_38);
-        let rend_slot_40_vtable = read_vtable(rend_slot_40);
-        let rend_slot_78_vtable = read_vtable(rend_slot_78);
-        let csgraphics_field68_vtable = read_vtable(csgraphics_field68);
         let mut slots_mask = 0usize;
         if rend_slot_28 != NULL_PTR {
             slots_mask |= 1 << 0;
@@ -979,79 +963,25 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
                 RENDER_LOADING_LAYER_NONNULL_SAMPLES.fetch_add(1, Ordering::SeqCst);
             }
             RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK.fetch_or(slots_mask, Ordering::SeqCst);
-            RENDER_LOADING_LAYER_VISIBLE_LAST_RENDMAN_VTABLE
-                .store(rendman_vtable, Ordering::SeqCst);
-            RENDER_LOADING_LAYER_VISIBLE_LAST_CSGRAPHICS_VTABLE
-                .store(csgraphics_vtable, Ordering::SeqCst);
-            RENDER_LOADING_LAYER_VISIBLE_LAST_CSSCALEFORM_VTABLE
-                .store(csscaleform_vtable, Ordering::SeqCst);
-            RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_28_VTABLE
-                .store(rend_slot_28_vtable, Ordering::SeqCst);
-            RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_30_VTABLE
-                .store(rend_slot_30_vtable, Ordering::SeqCst);
-            RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_38_VTABLE
-                .store(rend_slot_38_vtable, Ordering::SeqCst);
-            RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_40_VTABLE
-                .store(rend_slot_40_vtable, Ordering::SeqCst);
-            RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_78_VTABLE
-                .store(rend_slot_78_vtable, Ordering::SeqCst);
-            RENDER_LOADING_LAYER_VISIBLE_LAST_CSGRAPHICS_FIELD68_VTABLE
-                .store(csgraphics_field68_vtable, Ordering::SeqCst);
         }
         let render_loading_samples = RENDER_LOADING_LAYER_SAMPLE_COUNT.load(Ordering::SeqCst);
         let render_loading_nonnull_samples =
             RENDER_LOADING_LAYER_NONNULL_SAMPLES.load(Ordering::SeqCst);
         let render_loading_visible_slots_mask =
             RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK.load(Ordering::SeqCst);
-        let render_visible_rendman_vtable =
-            RENDER_LOADING_LAYER_VISIBLE_LAST_RENDMAN_VTABLE.load(Ordering::SeqCst);
-        let render_visible_csgraphics_vtable =
-            RENDER_LOADING_LAYER_VISIBLE_LAST_CSGRAPHICS_VTABLE.load(Ordering::SeqCst);
-        let render_visible_csscaleform_vtable =
-            RENDER_LOADING_LAYER_VISIBLE_LAST_CSSCALEFORM_VTABLE.load(Ordering::SeqCst);
-        let render_visible_slot_28_vtable =
-            RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_28_VTABLE.load(Ordering::SeqCst);
-        let render_visible_slot_30_vtable =
-            RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_30_VTABLE.load(Ordering::SeqCst);
-        let render_visible_slot_38_vtable =
-            RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_38_VTABLE.load(Ordering::SeqCst);
-        let render_visible_slot_40_vtable =
-            RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_40_VTABLE.load(Ordering::SeqCst);
-        let render_visible_slot_78_vtable =
-            RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_78_VTABLE.load(Ordering::SeqCst);
-        let render_visible_csgraphics_field68_vtable =
-            RENDER_LOADING_LAYER_VISIBLE_LAST_CSGRAPHICS_FIELD68_VTABLE.load(Ordering::SeqCst);
         body.push_str(&format!(
-            "  \"oracle_now_loading\": {now_loading},\n  \"oracle_fake_loading_screen\": {},\n  \"oracle_fake_loading_visible\": {fake_loading_visible},\n  \"oracle_fake_loading_field_c\": {fake_loading_field_c},\n  \"oracle_fake_loading_field_10\": {fake_loading_field_10},\n  \"oracle_fake_loading_sample_count\": {fake_loading_samples},\n  \"oracle_fake_loading_visible_samples\": {fake_loading_visible_samples},\n  \"oracle_fake_loading_any_visible\": {},\n  \"oracle_render_loading_rendman\": {},\n  \"oracle_render_loading_csgraphics\": {},\n  \"oracle_render_loading_csscaleform\": {},\n  \"oracle_render_loading_rendman_vtable\": {},\n  \"oracle_render_loading_csgraphics_vtable\": {},\n  \"oracle_render_loading_csscaleform_vtable\": {},\n  \"oracle_render_loading_rendman_pause\": {rendman_pause},\n  \"oracle_render_loading_slot_28\": {},\n  \"oracle_render_loading_slot_30\": {},\n  \"oracle_render_loading_slot_38\": {},\n  \"oracle_render_loading_slot_40\": {},\n  \"oracle_render_loading_slot_78\": {},\n  \"oracle_render_loading_csgraphics_field68\": {},\n  \"oracle_render_loading_slot_28_vtable\": {},\n  \"oracle_render_loading_slot_30_vtable\": {},\n  \"oracle_render_loading_slot_38_vtable\": {},\n  \"oracle_render_loading_slot_40_vtable\": {},\n  \"oracle_render_loading_slot_78_vtable\": {},\n  \"oracle_render_loading_csgraphics_field68_vtable\": {},\n  \"oracle_render_loading_visible_rendman_vtable\": {},\n  \"oracle_render_loading_visible_csgraphics_vtable\": {},\n  \"oracle_render_loading_visible_csscaleform_vtable\": {},\n  \"oracle_render_loading_visible_slot_28_vtable\": {},\n  \"oracle_render_loading_visible_slot_30_vtable\": {},\n  \"oracle_render_loading_visible_slot_38_vtable\": {},\n  \"oracle_render_loading_visible_slot_40_vtable\": {},\n  \"oracle_render_loading_visible_slot_78_vtable\": {},\n  \"oracle_render_loading_visible_csgraphics_field68_vtable\": {},\n  \"oracle_render_loading_last_slots_mask\": {slots_mask},\n  \"oracle_render_loading_visible_slots_mask\": {render_loading_visible_slots_mask},\n  \"oracle_render_loading_sample_count\": {render_loading_samples},\n  \"oracle_render_loading_nonnull_samples\": {render_loading_nonnull_samples},\n",
+            "  \"oracle_now_loading\": {now_loading},\n  \"oracle_fake_loading_screen\": {},\n  \"oracle_fake_loading_visible\": {fake_loading_visible},\n  \"oracle_fake_loading_field_c\": {fake_loading_field_c},\n  \"oracle_fake_loading_field_10\": {fake_loading_field_10},\n  \"oracle_fake_loading_sample_count\": {fake_loading_samples},\n  \"oracle_fake_loading_visible_samples\": {fake_loading_visible_samples},\n  \"oracle_fake_loading_any_visible\": {},\n  \"oracle_render_loading_rendman\": {},\n  \"oracle_render_loading_csgraphics\": {},\n  \"oracle_render_loading_csscaleform\": {},\n  \"oracle_render_loading_rendman_pause\": {rendman_pause},\n  \"oracle_render_loading_slot_28\": {},\n  \"oracle_render_loading_slot_30\": {},\n  \"oracle_render_loading_slot_38\": {},\n  \"oracle_render_loading_slot_40\": {},\n  \"oracle_render_loading_slot_78\": {},\n  \"oracle_render_loading_csgraphics_field68\": {},\n  \"oracle_render_loading_last_slots_mask\": {slots_mask},\n  \"oracle_render_loading_visible_slots_mask\": {render_loading_visible_slots_mask},\n  \"oracle_render_loading_sample_count\": {render_loading_samples},\n  \"oracle_render_loading_nonnull_samples\": {render_loading_nonnull_samples},\n",
             format_optional_ptr(fake_loading_screen),
             fake_loading_visible_samples > 0,
             format_optional_ptr(rendman),
             format_optional_ptr(csgraphics),
             format_optional_ptr(csscaleform),
-            format_optional_ptr(rendman_vtable),
-            format_optional_ptr(csgraphics_vtable),
-            format_optional_ptr(csscaleform_vtable),
             format_optional_ptr(rend_slot_28),
             format_optional_ptr(rend_slot_30),
             format_optional_ptr(rend_slot_38),
             format_optional_ptr(rend_slot_40),
             format_optional_ptr(rend_slot_78),
             format_optional_ptr(csgraphics_field68),
-            format_optional_ptr(rend_slot_28_vtable),
-            format_optional_ptr(rend_slot_30_vtable),
-            format_optional_ptr(rend_slot_38_vtable),
-            format_optional_ptr(rend_slot_40_vtable),
-            format_optional_ptr(rend_slot_78_vtable),
-            format_optional_ptr(csgraphics_field68_vtable),
-            format_optional_ptr(render_visible_rendman_vtable),
-            format_optional_ptr(render_visible_csgraphics_vtable),
-            format_optional_ptr(render_visible_csscaleform_vtable),
-            format_optional_ptr(render_visible_slot_28_vtable),
-            format_optional_ptr(render_visible_slot_30_vtable),
-            format_optional_ptr(render_visible_slot_38_vtable),
-            format_optional_ptr(render_visible_slot_40_vtable),
-            format_optional_ptr(render_visible_slot_78_vtable),
-            format_optional_ptr(render_visible_csgraphics_field68_vtable),
         ));
         let msgbox_dialog = MSGBOX_LAST_DIALOG.load(Ordering::SeqCst);
         let msgbox_vtable = if msgbox_dialog == NULL_PTR {
