@@ -689,8 +689,17 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     // component through its native open-menu registrar; readiness is checked
                     // inside product_core_autoload_tick.
                     if product_autoload_enabled() {
-                        if let (Ok(base), Some(slot)) = (game_module_base(), state.autoload.slot())
-                        {
+                        PRODUCT_CORE_CALLSITE_TICKS.fetch_add(1, Ordering::SeqCst);
+                        let base_result = game_module_base();
+                        if base_result.is_ok() {
+                            PRODUCT_CORE_CALLSITE_BASE_OK_TICKS.fetch_add(1, Ordering::SeqCst);
+                        }
+                        let slot_result = state.autoload.slot();
+                        if let Some(slot) = slot_result {
+                            PRODUCT_CORE_CALLSITE_SLOT_OK_TICKS.fetch_add(1, Ordering::SeqCst);
+                            PRODUCT_CORE_CALLSITE_LAST_SLOT.store(slot as usize, Ordering::SeqCst);
+                        }
+                        if let (Ok(base), Some(slot)) = (base_result, slot_result) {
                             unsafe {
                                 product_core_autoload_tick(base, slot, state.game_task_ticks)
                             };
