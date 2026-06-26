@@ -5,7 +5,11 @@ members = [
     "crates/er-safe-input",
     "crates/er-save-loader",
     "crates/soulsformats",
+    "crates/er-shaderkit",
+    "crates/er-objectkit",
     "tools/er-param-inspect",
+    "tools/er-shaderlab",
+    "tools/er-shader-viewer",
 ]
 resolver = "2"
 

@@ -1,0 +1,18 @@
+[package]
+name = "er-shader-viewer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Native GUI (Bevy) that displays a sphere and lets you pick from pre-defined
+# shaders (view only, no edit). The shaders are derived from real Elden Ring
+# shaders via the er-shaderkit backend (DXIL -> SPIR-V -> WGSL). Host-only; not in
+# the Windows cdylib check.
+
+[dependencies]
+bevy = "0.19"
+er-shaderkit = { path = "../../crates/er-shaderkit", features = ["gpu"] }
+er-objectkit = { path = "../../crates/er-objectkit" }
+# In-app RenderDoc trigger so the viewer can self-capture a frame under
+# `renderdoccmd capture` (no GUI; works around qrenderdoc's Wayland unsupport).
+renderdoc = "0.12"

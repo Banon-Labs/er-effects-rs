@@ -1,0 +1,28 @@
+{
+    "rdocCaptureSettings": 1,
+    "settings": {
+        "autoStart": true,
+        "commandLine": "--object c4800",
+        "environment": [
+        ],
+        "executable": "/home/banon/projects/er-effects-rs/.worktrees/er-shaders/target/debug/er-shader-viewer",
+        "inject": false,
+        "numQueuedFrames": 5,
+        "options": {
+            "allowFullscreen": true,
+            "allowVSync": true,
+            "apiValidation": false,
+            "captureAllCmdLists": false,
+            "captureCallstacks": false,
+            "captureCallstacksOnlyDraws": false,
+            "debugOutputMute": true,
+            "delayForDebugger": 0,
+            "hookIntoChildren": true,
+            "refAllResources": false,
+            "softMemoryLimit": 0,
+            "verifyBufferAccess": false
+        },
+        "queuedFrameCap": 17,
+        "workingDir": ""
+    }
+}
