@@ -303,6 +303,11 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
                 .name("er-effects-title-bind-observer".to_owned())
                 .spawn(install_title_scaleform_bind_observer_hook);
         });
+        START_NOW_LOADING_HELPER_OBSERVER.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-now-loading-observer".to_owned())
+                .spawn(install_now_loading_helper_observer_hooks);
+        });
     }
 
     // MenuWindow latch: install the SceneObjProxy ctor hook (0x14074a700) as early as the

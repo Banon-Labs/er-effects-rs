@@ -1679,6 +1679,143 @@ unsafe fn copy_ascii_preview(ptr: usize, out: &mut [u8]) -> usize {
     n
 }
 
+unsafe fn sample_now_loading_helper(this: usize) {
+    if this == 0 || this == TITLE_OWNER_SCAN_START_ADDRESS {
+        return;
+    }
+    NOW_LOADING_HELPER_LAST_THIS.store(this, Ordering::SeqCst);
+    NOW_LOADING_HELPER_LAST_MENU_INDEX.store(
+        unsafe { safe_read_usize(this + 0xd0) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS),
+        Ordering::SeqCst,
+    );
+    NOW_LOADING_HELPER_LAST_REPLACE_TEX_INFO.store(
+        unsafe { safe_read_usize(this + 0xd8) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS),
+        Ordering::SeqCst,
+    );
+    NOW_LOADING_HELPER_LAST_REQUESTED_REPLACE_TEX_INFO.store(
+        unsafe { safe_read_usize(this + 0xe0) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS),
+        Ordering::SeqCst,
+    );
+    let request_done = unsafe { safe_read_u8(this + 0xec) }.unwrap_or(0) as usize;
+    let load_done = unsafe { safe_read_u8(this + 0xed) }.unwrap_or(0) as usize;
+    NOW_LOADING_HELPER_LAST_FLAGS.store(request_done | (load_done << 8), Ordering::SeqCst);
+}
+
+pub(crate) unsafe extern "system" fn now_loading_helper_ctor_hook(this: usize) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = NOW_LOADING_HELPER_CTOR_ORIG.load(Ordering::SeqCst);
+    let ret = if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let original: unsafe extern "system" fn(usize) -> usize =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { original(this) }
+    } else {
+        this
+    };
+    let hits = NOW_LOADING_HELPER_CTOR_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        + OWN_STEPPER_CALL_INC;
+    unsafe { sample_now_loading_helper(ret) };
+    if hits <= 4 {
+        append_autoload_debug(format_args!(
+            "title-cover-part-b: observed CSNowLoadingHelperImp ctor this=0x{ret:x} hits={hits}; now-loading surface candidate for custom masquerade"
+        ));
+    }
+    ret
+}
+
+pub(crate) unsafe extern "system" fn now_loading_helper_update_hook(this: usize, time: usize) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = NOW_LOADING_HELPER_UPDATE_ORIG.load(Ordering::SeqCst);
+    if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let original: unsafe extern "system" fn(usize, usize) =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { original(this, time) };
+    }
+    let hits = NOW_LOADING_HELPER_UPDATE_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        + OWN_STEPPER_CALL_INC;
+    unsafe { sample_now_loading_helper(this) };
+    if hits <= 8 || hits.is_power_of_two() {
+        append_autoload_debug(format_args!(
+            "title-cover-part-b: observed CSNowLoadingHelperImp update this=0x{this:x} hits={hits} menu_index=0x{:x} replace=0x{:x} requested=0x{:x} flags=0x{:x}",
+            NOW_LOADING_HELPER_LAST_MENU_INDEX.load(Ordering::SeqCst),
+            NOW_LOADING_HELPER_LAST_REPLACE_TEX_INFO.load(Ordering::SeqCst),
+            NOW_LOADING_HELPER_LAST_REQUESTED_REPLACE_TEX_INFO.load(Ordering::SeqCst),
+            NOW_LOADING_HELPER_LAST_FLAGS.load(Ordering::SeqCst),
+        ));
+    }
+}
+
+pub(crate) fn install_now_loading_helper_observer_hooks() {
+    if NOW_LOADING_HELPER_HOOKS_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-b: now-loading observer MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(ctor) = game_rva(NOW_LOADING_HELPER_CTOR_RVA as u32) else {
+        return;
+    };
+    let Ok(update) = game_rva(NOW_LOADING_HELPER_UPDATE_RVA as u32) else {
+        return;
+    };
+    let mut ok = true;
+    match unsafe {
+        MhHook::new(
+            ctor as *mut c_void,
+            now_loading_helper_ctor_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            NOW_LOADING_HELPER_CTOR_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            ok &= unsafe { hook.queue_enable() }.is_ok();
+            std::mem::forget(hook);
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-b: now-loading ctor hook failed: {status:?}"
+            ));
+            ok = false;
+        }
+    }
+    match unsafe {
+        MhHook::new(
+            update as *mut c_void,
+            now_loading_helper_update_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            NOW_LOADING_HELPER_UPDATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            ok &= unsafe { hook.queue_enable() }.is_ok();
+            std::mem::forget(hook);
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-b: now-loading update hook failed: {status:?}"
+            ));
+            ok = false;
+        }
+    }
+    if !ok {
+        return;
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => {
+            NOW_LOADING_HELPER_HOOKS_INSTALLED.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "title-cover-part-b: hooked CSNowLoadingHelperImp observer ctor=0x{ctor:x} update=0x{update:x}; observe-only"
+            ));
+        }
+        status => append_autoload_debug(format_args!(
+            "title-cover-part-b: now-loading observer MH_ApplyQueued failed: {status:?}"
+        )),
+    }
+}
+
 pub(crate) unsafe extern "system" fn title_scaleform_bind_observer_hook(owner: usize, pair: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let symbol_ptr = unsafe { read_native_dlstring_ascii_ptr(pair) };

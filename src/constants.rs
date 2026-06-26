@@ -593,6 +593,27 @@ pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_COVER_WINDOW: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_RET: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Observe the native now-loading helper visible during the black/progress-bar loading surface.
+/// This is the first-pass target for a separate custom loading/masquerade surface after live title-logo
+/// remaps proved crash-prone.
+pub(crate) const NOW_LOADING_HELPER_CTOR_RVA: usize = 0x2a20e0;
+pub(crate) const NOW_LOADING_HELPER_UPDATE_RVA: usize = 0x2a2c40;
+pub(crate) static NOW_LOADING_HELPER_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static NOW_LOADING_HELPER_UPDATE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static NOW_LOADING_HELPER_HOOKS_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static NOW_LOADING_HELPER_CTOR_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static NOW_LOADING_HELPER_UPDATE_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static NOW_LOADING_HELPER_LAST_THIS: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static NOW_LOADING_HELPER_LAST_MENU_INDEX: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static NOW_LOADING_HELPER_LAST_REPLACE_TEX_INFO: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static NOW_LOADING_HELPER_LAST_REQUESTED_REPLACE_TEX_INFO: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static NOW_LOADING_HELPER_LAST_FLAGS: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// Passive observer for native Scaleform image-symbol -> system texture bindings.
 /// Dump `FUN_1407452c0` maps to live/deobf `0x1407451c0`. It receives an owning resource/list field
 /// in rcx and a pair of DLString<char> values in rdx. Do not call it from product code; observe native
@@ -3006,6 +3027,7 @@ pub(crate) static START_TITLE_PAB_INFORMATION_COVER: Once = Once::new();
 pub(crate) static START_TITLE_GFX_VALUE_SET_VISIBLE: Once = Once::new();
 pub(crate) static START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND: Once = Once::new();
 pub(crate) static START_TITLE_SCALEFORM_BIND_OBSERVER: Once = Once::new();
+pub(crate) static START_NOW_LOADING_HELPER_OBSERVER: Once = Once::new();
 pub(crate) static START_TITLE_CUSTOM_COVER_RUN: Once = Once::new();
 pub(crate) static START_BOOT_PROFILER: Once = Once::new();
 /// One-shot latch for the "first game-task frame ran" boot-phase marker (0 = not yet logged).
