@@ -134,6 +134,7 @@ NATIVE_LEGAL_POPUP_DETECTED = "native_legal_popup_detected"
 SAVE_DATA_POPUP_DETECTED = "visual_save_data_popup_detected"
 MESSAGEBOX_DIALOG_DETECTED = "native_messagebox_dialog_detected"
 SERVER_STATUS_SEMAPHORE_DETECTED = "native_server_status_semaphore_detected"
+TITLE_NATIVE_VISUAL_UNSUPPRESSED = "native_title_visual_render_unsuppressed"
 PLACEHOLDER_CHARACTER_DETECTED = "placeholder_character_detected"
 TARGET_WINDOW_CAPTURE_UNSAFE = "target_window_capture_unsafe"
 VISUAL_CHECK_SUBPROCESS_TIMEOUT_SECONDS = 10.0
@@ -1025,7 +1026,33 @@ def telemetry_expected_save_match(telemetry: dict[str, Any], expected_save_oracl
 
 
 def telemetry_expected_animation_match(telemetry: dict[str, Any], expected_animation_id: int | None) -> bool:
-    return expected_animation_id is None or as_int(telemetry.get("current_animation_id"), -1) == expected_animation_id
+    if expected_animation_id is None:
+        return True
+    return bool(
+        as_int(telemetry.get("current_animation_id"), -1) == expected_animation_id
+        or telemetry.get("expected_animation_seen") is True
+    )
+
+
+def telemetry_title_native_visual_unsuppressed(telemetry: dict[str, Any] | None) -> bool:
+    if not isinstance(telemetry, dict):
+        return False
+    native_title_built = as_int(telemetry.get("oracle_title_native_menu_visual_suppressed_builds"), 0) > 0
+    render_suppress_installed = telemetry.get("oracle_title_native_menu_visual_render_suppress_installed") is True
+    native_window_known = as_int(telemetry.get("oracle_title_native_menu_visual_native_window"), 0) > 0
+    render_suppressed = as_int(telemetry.get("oracle_title_native_menu_visual_render_suppressed_windows"), 0) > 0
+    menu_or_world_reached = (
+        as_int(telemetry.get("product_core_last_menu_opened_latch"), 0) != 0
+        or telemetry.get("oracle_player_present") is True
+        or telemetry.get("player_available") is True
+    )
+    return bool(
+        native_title_built
+        and render_suppress_installed
+        and native_window_known
+        and menu_or_world_reached
+        and not render_suppressed
+    )
 
 
 def telemetry_placeholder_character_detected(
@@ -2209,6 +2236,21 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
                     expected_animation_id=args.expected_animation_id,
                 )
             )
+        if args.fail_on_title_native_visual and telemetry_title_native_visual_unsuppressed(telemetry):
+            return with_runtime_module_info(
+                ReadinessResult(
+                    False,
+                    TITLE_NATIVE_VISUAL_UNSUPPRESSED,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
         if telemetry_placeholder_character_detected(telemetry, expected_save_oracle):
             return with_runtime_module_info(
                 ReadinessResult(
@@ -2608,6 +2650,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=True,
         help="Fail immediately if in-process telemetry sees title/network login server status text IDs from GR_System_Message_win64.fmg.",
+    )
+    parser.add_argument(
+        "--fail-on-title-native-visual",
+        action="store_true",
+        default=True,
+        help="Fail immediately if the preserved native title visual reaches menu/world without its draw bit being cleared.",
     )
     parser.add_argument(
         "--visual-legal-popup-check",

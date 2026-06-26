@@ -183,6 +183,10 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
             .current_animation_id
             .map_or_else(|| "null".to_owned(), |id| id.to_string())
     ));
+    body.push_str(&format!(
+        "  \"expected_animation_seen\": {},\n",
+        state.expected_animation_seen
+    ));
     body.push_str(&format!("  \"network_sync\": {},\n", state.network_sync));
     body.push_str(&format!(
         "  \"autoload_save_extension\": {},\n",

@@ -80,6 +80,9 @@ pub(crate) struct EffectsState {
     /// instead of silently starting with an empty list.
     load_error: Option<String>,
     current_animation_id: Option<i32>,
+    /// Latched when the expected appear animation is observed either as current or as a queue write
+    /// between task ticks; runtime proof needs the semantic event, not a one-frame sampling race.
+    expected_animation_seen: bool,
     applied_for_current_appear: bool,
     /// TimeAct queue write index at the previous tick; used to detect appear
     /// animations that were enqueued (and possibly finished) between ticks.
@@ -116,6 +119,7 @@ impl Default for EffectsState {
             calls,
             load_error,
             current_animation_id: None,
+            expected_animation_seen: false,
             applied_for_current_appear: false,
             last_write_idx: None,
             manual_apply_requested: false,
@@ -807,6 +811,11 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 }
                 let observation = observe_animation(player, state.last_write_idx);
                 state.current_animation_id = observation.current_animation_id;
+                if observation.current_animation_id == Some(APPEAR_ANIMATION_ID)
+                    || observation.appear_newly_queued
+                {
+                    state.expected_animation_seen = true;
+                }
                 state.last_write_idx = Some(observation.write_idx);
 
                 remove_requested_calls(player, &mut state);

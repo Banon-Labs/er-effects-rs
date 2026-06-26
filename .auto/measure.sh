@@ -10,6 +10,11 @@ if [[ -f .auto/run_runtime_probe_once ]]; then
     exit 1
   }
   runtime_autoload_request=$(mktemp "${TMPDIR:-/tmp}/er-effects-autoload.XXXXXX")
+  runtime_expected_save_oracle=$(mktemp "${TMPDIR:-/tmp}/er-effects-save-oracle.XXXXXX.json")
+  python3 scripts/save-slot-oracle.py \
+    --save "${ER_EFFECTS_GOLD_SAVE:-/home/banon/projects/er-effects-rs/save-files/150-Banon/ER0000.sl2}" \
+    --slot "${ER_EFFECTS_GOLD_SLOT:-0}" \
+    --output "$runtime_expected_save_oracle"
   printf 'slot=%s\nmethod=direct_menu_load\nrequire_title_bootstrap=false\n' "${ER_EFFECTS_GOLD_SLOT:-0}" > "$runtime_autoload_request"
   ER_EFFECTS_AUTHORIZED_DIRECT_RUNTIME=1 \
   AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 \
@@ -18,8 +23,9 @@ if [[ -f .auto/run_runtime_probe_once ]]; then
   ER_EFFECTS_GOLD_SLOT="${ER_EFFECTS_GOLD_SLOT:-0}" \
   RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-35}" \
   RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-vanilla}" \
+  RUNTIME_EXPECTED_SAVE_ORACLE="$runtime_expected_save_oracle" \
   scripts/run-product-continue-direct-probe.sh --autoload-request "$runtime_autoload_request"
-  rm -f "$runtime_autoload_request"
+  rm -f "$runtime_autoload_request" "$runtime_expected_save_oracle"
 fi
 
 if [[ -f .auto/run_manual_profile_trace_once ]]; then
