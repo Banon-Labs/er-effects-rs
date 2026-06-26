@@ -1507,6 +1507,12 @@ pub(crate) const OWNER_CTX_MAX_PLAUSIBLE_PTR: usize = 0x8000_0000_0000;
 pub(crate) const GLOBAL_CS_REGULATION_MANAGER_RVA: usize = 0x3d86c58;
 pub(crate) const TFC_REGULATION_VERSION_148_OFFSET: usize = 0x148;
 pub(crate) const REGULATION_MANAGER_VERSION_44_OFFSET: usize = 0x44;
+/// Native TFC regulation-version record helper: dump FUN_14082cbf0 -> deobf/live 0x14082cb00.
+pub(crate) const TITLE_FLOW_CONTEXT_RECORD_REGULATION_VERSION_RVA: usize = 0x82cb00;
+pub(crate) static TITLE_FLOW_CONTEXT_RECORD_REGULATION_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_FLOW_CONTEXT_RECORD_REGULATION_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_FLOW_CONTEXT_RECORD_REGULATION_FIXUPS: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) const OWN_STEPPER_LOG_INTERVAL: u64 = TitleNativeJobTiming::FrameRate as u64;
 pub(crate) const OWN_STEPPER_CALL_INC: usize = true as usize;
@@ -3064,6 +3070,7 @@ pub(crate) static START_TITLE_PAB_INFORMATION_COVER: Once = Once::new();
 pub(crate) static START_TITLE_GFX_VALUE_SET_VISIBLE: Once = Once::new();
 pub(crate) static START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND: Once = Once::new();
 pub(crate) static START_TITLE_SCALEFORM_BIND_OBSERVER: Once = Once::new();
+pub(crate) static START_TITLE_FLOW_CONTEXT_RECORD_REGULATION: Once = Once::new();
 pub(crate) static START_NOW_LOADING_HELPER_OBSERVER: Once = Once::new();
 pub(crate) static START_TITLE_CUSTOM_COVER_RUN: Once = Once::new();
 pub(crate) static START_BOOT_PROFILER: Once = Once::new();

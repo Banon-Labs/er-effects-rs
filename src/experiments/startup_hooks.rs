@@ -1850,6 +1850,106 @@ pub(crate) unsafe extern "system" fn title_scaleform_bind_observer_hook(owner: u
     }
 }
 
+pub(crate) unsafe extern "system" fn title_flow_context_record_regulation_fix_hook(tfc: usize) {
+    let base = game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let before = if tfc > OWNER_CTX_MIN_PLAUSIBLE_PTR && tfc < OWNER_CTX_MAX_PLAUSIBLE_PTR {
+        unsafe { safe_read_i32(tfc + TFC_REGULATION_VERSION_148_OFFSET) }.unwrap_or(0)
+    } else {
+        0
+    };
+    let orig = TITLE_FLOW_CONTEXT_RECORD_REGULATION_ORIG.load(Ordering::SeqCst);
+    if orig != TITLE_OWNER_SCAN_START_ADDRESS && orig != HOOK_ORIGINAL_UNSET {
+        let f: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(orig) };
+        unsafe { f(tfc) };
+    }
+    let after_orig = if tfc > OWNER_CTX_MIN_PLAUSIBLE_PTR && tfc < OWNER_CTX_MAX_PLAUSIBLE_PTR {
+        unsafe { safe_read_i32(tfc + TFC_REGULATION_VERSION_148_OFFSET) }.unwrap_or(0)
+    } else {
+        0
+    };
+    let reg_manager =
+        unsafe { safe_read_usize(base + GLOBAL_CS_REGULATION_MANAGER_RVA) }.unwrap_or(0);
+    let manager44 = if reg_manager > OWNER_CTX_MIN_PLAUSIBLE_PTR
+        && reg_manager < OWNER_CTX_MAX_PLAUSIBLE_PTR
+    {
+        unsafe { safe_read_i32(reg_manager + REGULATION_MANAGER_VERSION_44_OFFSET) }.unwrap_or(0)
+    } else {
+        0
+    };
+    if tfc > OWNER_CTX_MIN_PLAUSIBLE_PTR
+        && tfc < OWNER_CTX_MAX_PLAUSIBLE_PTR
+        && manager44 > 0
+        && after_orig < manager44
+    {
+        unsafe {
+            ((tfc + TFC_REGULATION_VERSION_148_OFFSET) as *mut i32).write_volatile(manager44)
+        };
+        TITLE_FLOW_CONTEXT_RECORD_REGULATION_FIXUPS
+            .fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    }
+    let after_fix = if tfc > OWNER_CTX_MIN_PLAUSIBLE_PTR && tfc < OWNER_CTX_MAX_PLAUSIBLE_PTR {
+        unsafe { safe_read_i32(tfc + TFC_REGULATION_VERSION_148_OFFSET) }.unwrap_or(0)
+    } else {
+        0
+    };
+    append_autoload_debug(format_args!(
+        "title-flow-context-record-fix: tfc=0x{tfc:x} before={before} after_orig={after_orig} after_fix={after_fix} manager44={manager44}"
+    ));
+}
+
+pub(crate) fn install_title_flow_context_record_regulation_fix_hook() {
+    if TITLE_FLOW_CONTEXT_RECORD_REGULATION_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-flow-context-record-fix: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(TITLE_FLOW_CONTEXT_RECORD_REGULATION_VERSION_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-flow-context-record-fix: failed to resolve record rva 0x{TITLE_FLOW_CONTEXT_RECORD_REGULATION_VERSION_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            title_flow_context_record_regulation_fix_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            TITLE_FLOW_CONTEXT_RECORD_REGULATION_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "title-flow-context-record-fix: queue_enable failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    TITLE_FLOW_CONTEXT_RECORD_REGULATION_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "title-flow-context-record-fix: hooked native record helper 0x{addr:x}"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "title-flow-context-record-fix: MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "title-flow-context-record-fix: MhHook::new failed: {status:?}"
+        )),
+    }
+}
+
 pub(crate) fn install_title_scaleform_bind_observer_hook() {
     if TITLE_SCALEFORM_BIND_OBSERVER_INSTALLED.load(Ordering::SeqCst) != 0 {
         return;

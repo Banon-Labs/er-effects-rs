@@ -510,14 +510,12 @@ pub(crate) fn write_game_man_telemetry(body: &mut String) {
     } else {
         0
     };
-    let title_flow_context = if base != 0
-        && dialog != 0
-        && dialog_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA
-    {
-        unsafe { safe_read_usize(dialog + DIALOG_OWNER_CTX_A38_OFFSET) }.unwrap_or(0)
-    } else {
-        0
-    };
+    let title_flow_context =
+        if base != 0 && dialog != 0 && dialog_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA {
+            unsafe { safe_read_usize(dialog + DIALOG_OWNER_CTX_A38_OFFSET) }.unwrap_or(0)
+        } else {
+            0
+        };
     let tfc_version = if title_flow_context > OWNER_CTX_MIN_PLAUSIBLE_PTR
         && title_flow_context < OWNER_CTX_MAX_PLAUSIBLE_PTR
     {
@@ -530,13 +528,12 @@ pub(crate) fn write_game_man_telemetry(body: &mut String) {
     } else {
         0
     };
-    let regulation_manager_version = if regulation_manager != 0
-        && regulation_manager != TITLE_OWNER_SCAN_START_ADDRESS
-    {
-        unsafe { safe_read_i32(regulation_manager + REGULATION_MANAGER_VERSION_44_OFFSET) }
-    } else {
-        None
-    };
+    let regulation_manager_version =
+        if regulation_manager != 0 && regulation_manager != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { safe_read_i32(regulation_manager + REGULATION_MANAGER_VERSION_44_OFFSET) }
+        } else {
+            None
+        };
     body.push_str(&format!(
         "  \"oracle_title_flow_context_ptr\": \"0x{title_flow_context:x}\",\n"
     ));

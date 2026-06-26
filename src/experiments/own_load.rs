@@ -1381,7 +1381,8 @@ pub(crate) unsafe fn loadgame_build_ctx_ready(base: usize) -> bool {
     }
     // Native `FUN_14082d090` checks this singleton before comparing regulation versions; our readiness
     // predicate must not claim the title/load context is usable before the same singleton exists.
-    let regulation_manager = unsafe { safe_read_usize(base + GLOBAL_CS_REGULATION_MANAGER_RVA) }.unwrap_or(0);
+    let regulation_manager =
+        unsafe { safe_read_usize(base + GLOBAL_CS_REGULATION_MANAGER_RVA) }.unwrap_or(0);
     regulation_manager != 0 && regulation_manager != null
 }
 
