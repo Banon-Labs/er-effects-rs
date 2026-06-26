@@ -1311,6 +1311,30 @@ pub(crate) unsafe fn product_core_autoload_ready(
         press_start_context: press_start.context,
     })
 }
+pub(crate) unsafe fn maybe_hide_title_press_start(base: usize, ready: &ProductCoreAutoloadReady) {
+    if ready.press_start_proxy == TITLE_OWNER_SCAN_START_ADDRESS || ready.press_start_proxy == 0 {
+        return;
+    }
+    let set_visible: unsafe extern "system" fn(usize, u8) =
+        unsafe { std::mem::transmute(base + TITLE_PRESS_START_SET_VISIBLE_RVA) };
+    unsafe { set_visible(ready.press_start_proxy, 0) };
+    let prev = TITLE_PRESS_START_GFX_HIDE_CALLS.fetch_add(1, Ordering::SeqCst);
+    TITLE_PRESS_START_GFX_HIDE_LAST_DIALOG.store(ready.title_dialog, Ordering::SeqCst);
+    TITLE_PRESS_START_GFX_HIDE_LAST_PROXY.store(ready.press_start_proxy, Ordering::SeqCst);
+    TITLE_PRESS_START_GFX_HIDE_LAST_CONTEXT.store(ready.press_start_context, Ordering::SeqCst);
+    TITLE_PRESS_START_GFX_HIDE_LAST_CALLER_PHASE
+        .store(OWN_STEPPER_PHASE.load(Ordering::SeqCst), Ordering::SeqCst);
+    if prev == 0 {
+        append_autoload_debug(format_args!(
+            "title-cover-part-a: hid 05_000_Title PressStart/StaticSystemText_101000 via SceneObjProxy visibility wrapper 0x{:x} dialog=0x{:x} proxy=0x{:x} context=0x{:x}",
+            base + TITLE_PRESS_START_SET_VISIBLE_RVA,
+            ready.title_dialog,
+            ready.press_start_proxy,
+            ready.press_start_context,
+        ));
+    }
+}
+
 pub(crate) unsafe fn maybe_hide_title_logo_surface(base: usize, ready: &ProductCoreAutoloadReady) {
     if ready.title_dialog == TITLE_OWNER_SCAN_START_ADDRESS || ready.title_dialog == 0 {
         return;
@@ -1530,6 +1554,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     PRODUCT_CORE_READY_SUCCESSES.fetch_add(1, Ordering::SeqCst);
     PRODUCT_CORE_LAST_BLOCKER.store(PRODUCT_CORE_BLOCKER_READY, Ordering::SeqCst);
     if phase == OWN_STEPPER_PHASE_MENU {
+        unsafe { maybe_hide_title_press_start(module_base, &ready) };
         unsafe { maybe_hide_title_logo_surface(module_base, &ready) };
         if ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO {
             unsafe { maybe_refresh_title_profile_cover(module_base, &ready) };

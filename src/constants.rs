@@ -763,6 +763,19 @@ pub(crate) const SCENE_OBJ_PROXY_CONTEXT_20_OFFSET: usize = 0x20;
 /// TitleTopDialog constructor xref at 0x1409a8275 calls the named-child proxy constructor with
 /// rdx=dialog+0xb78 and r8="PressStart" (RVA 0x2b26500).
 pub(crate) const TITLE_PRESS_START_SCENE_PROXY_B78_OFFSET: usize = 0xb78;
+/// Generic SceneObjProxy display visibility wrapper for a proxy (`dump 0x140733440 -> live/deobf
+/// 0x140733340`). It resolves the proxy's Scaleform value and calls the GFx visibility setter; use
+/// this for the 05_000_Title `PressStart` component rather than hiding the whole MenuWindowJob.
+pub(crate) const TITLE_PRESS_START_SET_VISIBLE_RVA: usize = 0x733340;
+pub(crate) static TITLE_PRESS_START_GFX_HIDE_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PRESS_START_GFX_HIDE_LAST_DIALOG: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_GFX_HIDE_LAST_PROXY: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_GFX_HIDE_LAST_CONTEXT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_GFX_HIDE_LAST_CALLER_PHASE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// Actual visible native title-logo layer. Static RE of `TitleTopDialog` (dump 0x1409a82d0 ->
 /// live 0x1409a8180) shows `CS::TitleBackViewParts` embedded at dialog+0xaa8 and constructed from
 /// the `05_001_Title_Logo` resource; this is distinct from the preserved `05_000_Title` MenuWindowJob.
