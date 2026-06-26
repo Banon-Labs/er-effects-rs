@@ -762,6 +762,17 @@ pub(crate) const TITLE_LOGO_GFX_MAIN_ASSET_NAME: &str = "MENU_Title_EldenRing_01
 /// `TitleTopDialog` itself calls this with `1` in the start-login path (dump 0x1409b3050), so using
 /// it with `0` is a native visibility semantic, not a timeline FadeIn/FadeOut guess.
 pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA: usize = 0x9a62c0;
+/// TitleTopDialog start-login/native accept path (dump 0x1409b3050 -> deobf/live 0x1409b2f00).
+/// It calls `TitleBackViewParts::SetVisible(1)` on dialog+0xaa8 before continuing through native
+/// login/save-load setup, so detouring it and hiding the logo after the original is the earliest
+/// proven TitleTopDialog-owned logo visibility point on the zero-input Continue path.
+pub(crate) const TITLE_TOP_START_LOGIN_RVA: usize = 0x9b2f00;
+pub(crate) const TITLE_TOP_START_LOGIN_HIDE_NOT_INSTALLED: usize = 0;
+pub(crate) const TITLE_TOP_START_LOGIN_HIDE_INSTALLED_YES: usize = 1;
+pub(crate) static TITLE_TOP_START_LOGIN_HIDE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_TOP_START_LOGIN_HIDE_INSTALLED: AtomicUsize =
+    AtomicUsize::new(TITLE_TOP_START_LOGIN_HIDE_NOT_INSTALLED);
 pub(crate) static TITLE_LOGO_GFX_HIDE_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_LOGO_GFX_HIDE_LAST_DIALOG: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -2891,6 +2902,7 @@ pub(crate) static START_ONLINE_DISABLE: Once = Once::new();
 pub(crate) static START_FOREGROUND_FORCE: Once = Once::new();
 pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS: Once = Once::new();
 pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS: Once = Once::new();
+pub(crate) static START_TITLE_LOGO_START_LOGIN_HIDE: Once = Once::new();
 pub(crate) static START_BOOT_PROFILER: Once = Once::new();
 /// One-shot latch for the "first game-task frame ran" boot-phase marker (0 = not yet logged).
 pub(crate) static BOOT_FIRST_FRAME_LOGGED: AtomicUsize = AtomicUsize::new(0);

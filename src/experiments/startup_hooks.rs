@@ -1427,6 +1427,40 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
     native_ret
 }
 
+pub(crate) unsafe extern "system" fn title_top_start_login_hide_hook(
+    dialog: usize,
+    param_2: usize,
+) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let base = game_module_base().unwrap_or(null);
+    let orig = TITLE_TOP_START_LOGIN_HIDE_ORIG.load(Ordering::SeqCst);
+    if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let original: unsafe extern "system" fn(usize, usize) =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { original(dialog, param_2) };
+    }
+    if base == null || dialog == null || dialog == TITLE_OWNER_SCAN_START_ADDRESS {
+        return;
+    }
+    let logo = dialog + TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET;
+    if unsafe { safe_read_usize(logo) }.is_none() {
+        return;
+    }
+    let set_visible: unsafe extern "system" fn(usize, u8) =
+        unsafe { std::mem::transmute(base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA) };
+    unsafe { set_visible(logo, 0) };
+    let calls = TITLE_LOGO_GFX_HIDE_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        + OWN_STEPPER_CALL_INC;
+    TITLE_LOGO_GFX_HIDE_LAST_DIALOG.store(dialog, Ordering::SeqCst);
+    TITLE_LOGO_GFX_HIDE_LAST_LOGO.store(logo, Ordering::SeqCst);
+    TITLE_LOGO_GFX_HIDE_LAST_CALLER_PHASE
+        .store(OWN_STEPPER_PHASE.load(Ordering::SeqCst), Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "title-cover-part-a: hid {TITLE_LOGO_BACK_VIEW_PARTS_NAME}/{TITLE_LOGO_RESOURCE_NAME} after native TitleTopDialog start-login via 0x{:x} dialog=0x{dialog:x} logo=0x{logo:x} hide_calls={calls}",
+        base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
+    ));
+}
+
 pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook(
     window: usize,
     param_2: usize,
@@ -1489,6 +1523,61 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook
     append_autoload_debug(format_args!(
         "title-cover-part-a: render-suppressed preserved native {TITLE_NATIVE_MENU_VISUAL_NAME} window=0x{window:x} menu_id={menu_id} flags 0x{flags_before:02x}->0x{flags_after:02x} via CSMenuMan+0x90 caller_rva=0x{caller_rva:x}"
     ));
+}
+
+pub(crate) fn install_title_logo_start_login_hide_hook() {
+    if TITLE_TOP_START_LOGIN_HIDE_INSTALLED.load(Ordering::SeqCst)
+        != TITLE_TOP_START_LOGIN_HIDE_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-a: start-login MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(start_login_addr) = game_rva(TITLE_TOP_START_LOGIN_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-cover-part-a: failed to resolve TitleTopDialog start-login rva 0x{TITLE_TOP_START_LOGIN_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            start_login_addr as *mut c_void,
+            title_top_start_login_hide_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            TITLE_TOP_START_LOGIN_HIDE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-a: queue_enable start-login hide failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    TITLE_TOP_START_LOGIN_HIDE_INSTALLED
+                        .store(TITLE_TOP_START_LOGIN_HIDE_INSTALLED_YES, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "title-cover-part-a: hooked TitleTopDialog start-login 0x{start_login_addr:x}; will hide {TITLE_LOGO_BACK_VIEW_PARTS_NAME}/{TITLE_LOGO_RESOURCE_NAME} after native SetVisible(1)"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "title-cover-part-a: start-login MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "title-cover-part-a: MhHook::new start-login hide failed: {status:?}"
+        )),
+    }
 }
 
 /// Install the Part-A title visual suppression hook once. It must run at process attach before
