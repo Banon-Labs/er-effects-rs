@@ -984,7 +984,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             TITLE_OWNER_SCAN_START_ADDRESS
         };
         let title_logo_profile_summary = {
-            let game_data_man = crate::experiments::game_data_man_ptr_or_null();
+            let game_data_man = crate::game_data_man_ptr_or_null();
             if game_data_man != NULL_PTR {
                 unsafe { crate::experiments::safe_read_usize(game_data_man + SLOT_MANAGER_CONTAINER_OFFSET) }
                     .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
