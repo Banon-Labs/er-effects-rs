@@ -1592,6 +1592,9 @@ pub(crate) unsafe extern "system" fn title_custom_cover_menu_window_run_hook(
     if TITLE_CUSTOM_COVER_RUN_RECURSION.load(Ordering::SeqCst) != 0 {
         return ret;
     }
+    if !TITLE_ACCEPT_BYTE_GATE_FIRED.load(Ordering::SeqCst) {
+        return ret;
+    }
     let title_job = TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.load(Ordering::SeqCst);
     let pab_job = TITLE_PAB_INFORMATION_VISUAL_LAST_JOB.load(Ordering::SeqCst);
     let cover_job = TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_JOB.load(Ordering::SeqCst);
@@ -1621,7 +1624,7 @@ pub(crate) unsafe extern "system" fn title_custom_cover_menu_window_run_hook(
     TITLE_CUSTOM_COVER_RUN_LAST_RET.store(cover_ret, Ordering::SeqCst);
     if calls <= 8 {
         append_autoload_debug(format_args!(
-            "title-cover-part-b: ran custom cover {TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME} job=0x{cover_job:x} alongside native title/PAB job=0x{native_job:x}; ret=0x{cover_ret:x} window=0x{cover_window:x} calls={calls}"
+            "title-cover-part-b: ran post-accept custom cover {TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME} job=0x{cover_job:x} alongside native title/PAB job=0x{native_job:x}; ret=0x{cover_ret:x} window=0x{cover_window:x} calls={calls}"
         ));
     }
     ret
