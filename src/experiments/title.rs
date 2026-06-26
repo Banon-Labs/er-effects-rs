@@ -454,6 +454,19 @@ pub(crate) unsafe fn maybe_set_title_accept_byte(base: usize) {
     if TITLE_ACCEPT_BYTE_GATE_FIRED.swap(true, Ordering::SeqCst) {
         return;
     }
+    let press_start_proxy = dialog + TITLE_PRESS_START_SCENE_PROXY_B78_OFFSET;
+    let press_start_vt = unsafe { safe_read_usize(press_start_proxy) }.unwrap_or(0);
+    let press_start_context = if press_start_vt == base + SCENE_OBJ_PROXY_VTABLE_RVA {
+        unsafe { safe_read_usize(press_start_proxy + SCENE_OBJ_PROXY_CONTEXT_20_OFFSET) }
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    if press_start_vt == base + SCENE_OBJ_PROXY_VTABLE_RVA {
+        unsafe {
+            hide_title_press_start_proxy(base, dialog, press_start_proxy, press_start_context)
+        };
+    }
     unsafe {
         *((base + TITLE_GLOBAL_ACCEPT_BYTE_RVA) as *mut u8) = TITLE_PROCEED_GATE_SET_VALUE;
     }
@@ -1311,28 +1324,36 @@ pub(crate) unsafe fn product_core_autoload_ready(
         press_start_context: press_start.context,
     })
 }
-pub(crate) unsafe fn maybe_hide_title_press_start(base: usize, ready: &ProductCoreAutoloadReady) {
-    if ready.press_start_proxy == TITLE_OWNER_SCAN_START_ADDRESS || ready.press_start_proxy == 0 {
+unsafe fn hide_title_press_start_proxy(base: usize, dialog: usize, proxy: usize, context: usize) {
+    if proxy == TITLE_OWNER_SCAN_START_ADDRESS || proxy == 0 {
         return;
     }
     let set_visible: unsafe extern "system" fn(usize, u8) =
         unsafe { std::mem::transmute(base + TITLE_PRESS_START_SET_VISIBLE_RVA) };
-    unsafe { set_visible(ready.press_start_proxy, 0) };
+    unsafe { set_visible(proxy, 0) };
     let prev = TITLE_PRESS_START_GFX_HIDE_CALLS.fetch_add(1, Ordering::SeqCst);
-    TITLE_PRESS_START_GFX_HIDE_LAST_DIALOG.store(ready.title_dialog, Ordering::SeqCst);
-    TITLE_PRESS_START_GFX_HIDE_LAST_PROXY.store(ready.press_start_proxy, Ordering::SeqCst);
-    TITLE_PRESS_START_GFX_HIDE_LAST_CONTEXT.store(ready.press_start_context, Ordering::SeqCst);
+    TITLE_PRESS_START_GFX_HIDE_LAST_DIALOG.store(dialog, Ordering::SeqCst);
+    TITLE_PRESS_START_GFX_HIDE_LAST_PROXY.store(proxy, Ordering::SeqCst);
+    TITLE_PRESS_START_GFX_HIDE_LAST_CONTEXT.store(context, Ordering::SeqCst);
     TITLE_PRESS_START_GFX_HIDE_LAST_CALLER_PHASE
         .store(OWN_STEPPER_PHASE.load(Ordering::SeqCst), Ordering::SeqCst);
     if prev == 0 {
         append_autoload_debug(format_args!(
-            "title-cover-part-a: hid 05_000_Title PressStart/StaticSystemText_101000 via SceneObjProxy visibility wrapper 0x{:x} dialog=0x{:x} proxy=0x{:x} context=0x{:x}",
+            "title-cover-part-a: hid 05_000_Title PressStart/StaticSystemText_101000 via SceneObjProxy visibility wrapper 0x{:x} dialog=0x{dialog:x} proxy=0x{proxy:x} context=0x{context:x}",
             base + TITLE_PRESS_START_SET_VISIBLE_RVA,
+        ));
+    }
+}
+
+pub(crate) unsafe fn maybe_hide_title_press_start(base: usize, ready: &ProductCoreAutoloadReady) {
+    unsafe {
+        hide_title_press_start_proxy(
+            base,
             ready.title_dialog,
             ready.press_start_proxy,
             ready.press_start_context,
-        ));
-    }
+        )
+    };
 }
 
 pub(crate) unsafe fn maybe_hide_title_logo_surface(base: usize, ready: &ProductCoreAutoloadReady) {
