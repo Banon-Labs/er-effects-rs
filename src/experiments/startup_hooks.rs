@@ -1467,87 +1467,6 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
     native_ret
 }
 
-#[repr(C)]
-struct NativeStaticDlString {
-    allocator: usize,
-    ptr: *const i8,
-    pad10: usize,
-    len: usize,
-    capacity: usize,
-    encoding: u8,
-    pad29: [u8; 7],
-}
-
-#[repr(C)]
-struct NativeStaticDlStringPair {
-    image_symbol: NativeStaticDlString,
-    systex_target: NativeStaticDlString,
-}
-
-impl NativeStaticDlString {
-    const fn static_ascii(bytes_with_nul: &'static [u8], len: usize) -> Self {
-        Self {
-            allocator: 0,
-            ptr: bytes_with_nul.as_ptr() as *const i8,
-            pad10: 0,
-            len,
-            capacity: 0x10,
-            encoding: 3,
-            pad29: [0; 7],
-        }
-    }
-}
-
-const TITLE_IMAGE_SYMBOL_BYTES: &[u8] = b"MENU_Title_EldenRing_01\0";
-const TITLE_SYSTEX_TARGET_BYTES: &[u8] = b"SYSTEX_Menu_Profile00\0";
-const _: () = assert!(core::mem::size_of::<NativeStaticDlString>() == 0x30);
-const _: () = assert!(core::mem::size_of::<NativeStaticDlStringPair>() == 0x60);
-
-unsafe fn bind_title_logo_resource_to_systex_at_ctor(base: usize, logo: usize) -> bool {
-    if base == TITLE_OWNER_SCAN_START_ADDRESS
-        || base == 0
-        || logo == 0
-        || logo == TITLE_OWNER_SCAN_START_ADDRESS
-    {
-        return false;
-    }
-    if TITLE_CUSTOM_COVER_LOGO_REMAP_CALLS.load(Ordering::SeqCst) != 0 {
-        return true;
-    }
-    let logo_resource = logo + 0x8;
-    let pair = NativeStaticDlStringPair {
-        image_symbol: NativeStaticDlString::static_ascii(
-            TITLE_IMAGE_SYMBOL_BYTES,
-            TITLE_CUSTOM_COVER_TITLE_IMAGE_SYMBOL.len(),
-        ),
-        systex_target: NativeStaticDlString::static_ascii(
-            TITLE_SYSTEX_TARGET_BYTES,
-            TITLE_CUSTOM_COVER_SYSTEX_TARGET.len(),
-        ),
-    };
-    let bind: unsafe extern "system" fn(usize, usize) =
-        unsafe { std::mem::transmute(base + TITLE_SCALEFORM_BIND_OBSERVER_RVA) };
-    unsafe { bind(logo_resource, (&raw const pair) as usize) };
-    TITLE_CUSTOM_COVER_LOGO_REMAP_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
-    TITLE_CUSTOM_COVER_LOGO_REMAP_LAST_LOGO.store(logo, Ordering::SeqCst);
-    TITLE_CUSTOM_COVER_LOGO_REMAP_LAST_RESOURCE.store(logo_resource, Ordering::SeqCst);
-    TITLE_CUSTOM_COVER_LOGO_REMAP_RENDERER_NONNULL.store(
-        unsafe { safe_read_usize(base + ACTIVE_SCREEN_ARRAY_RVA) }.unwrap_or(0),
-        Ordering::SeqCst,
-    );
-    let set_visible_orig = TITLE_LOGO_SET_VISIBLE_ORIG.load(Ordering::SeqCst);
-    if set_visible_orig != 0 && set_visible_orig != HOOK_ORIGINAL_UNSET {
-        let set_visible: unsafe extern "system" fn(usize, u8) =
-            unsafe { std::mem::transmute(set_visible_orig) };
-        unsafe { set_visible(logo, 1) };
-    }
-    append_autoload_debug(format_args!(
-        "title-cover-part-b: ctor-remapped TitleBackViewParts MenuResource 0x{logo_resource:x}: {TITLE_CUSTOM_COVER_TITLE_IMAGE_SYMBOL} -> {TITLE_CUSTOM_COVER_SYSTEX_TARGET} through 0x{:x} logo=0x{logo:x}",
-        base + TITLE_SCALEFORM_BIND_OBSERVER_RVA,
-    ));
-    true
-}
-
 unsafe fn force_hide_title_logo_surface(
     base: usize,
     logo: usize,
@@ -1558,7 +1477,6 @@ unsafe fn force_hide_title_logo_surface(
         || base == 0
         || logo == 0
         || logo == TITLE_OWNER_SCAN_START_ADDRESS
-        || TITLE_CUSTOM_COVER_LOGO_REMAP_CALLS.load(Ordering::SeqCst) != 0
     {
         return;
     }
@@ -1587,15 +1505,6 @@ pub(crate) unsafe extern "system" fn title_logo_set_visible_force_hidden_hook(
 ) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let base = game_module_base().unwrap_or(null);
-    let orig = TITLE_LOGO_SET_VISIBLE_ORIG.load(Ordering::SeqCst);
-    if TITLE_CUSTOM_COVER_LOGO_REMAP_CALLS.load(Ordering::SeqCst) != 0 {
-        if orig != null && orig != HOOK_ORIGINAL_UNSET {
-            let original: unsafe extern "system" fn(usize, u8) =
-                unsafe { std::mem::transmute(orig) };
-            unsafe { original(logo, visible) };
-        }
-        return;
-    }
     unsafe { force_hide_title_logo_surface(base, logo, visible as usize, "SetVisible detour") };
 }
 
@@ -1615,9 +1524,7 @@ pub(crate) unsafe extern "system" fn title_logo_ctor_force_hidden_hook(
     } else {
         logo
     };
-    if unsafe { !bind_title_logo_resource_to_systex_at_ctor(base, logo) } {
-        unsafe { force_hide_title_logo_surface(base, logo, 0, "ctor detour") };
-    }
+    unsafe { force_hide_title_logo_surface(base, logo, 0, "ctor detour") };
     ret
 }
 

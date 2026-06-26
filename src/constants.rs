@@ -555,7 +555,6 @@ pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA: usize = 0x81f6f0
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME: &str = "05_010_ProfileSelect";
 pub(crate) const TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL: &str = "MENU_DummyProfileFace_01";
 pub(crate) const TITLE_CUSTOM_COVER_SYSTEX_TARGET: &str = "SYSTEX_Menu_Profile00";
-pub(crate) const TITLE_CUSTOM_COVER_TITLE_IMAGE_SYMBOL: &str = "MENU_Title_EldenRing_01";
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS: &str = "CSMenuProfModelRend";
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA: usize = 0x2b80128;
 /// Profile portrait refresh/display pipeline: live 0x1409aa680 (dump 0x1409aa7d0) reads the loaded
@@ -612,14 +611,6 @@ pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_SYMBOL_PTR: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_TARGET_PTR: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_CALLS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_LAST_DIALOG: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_LAST_LOGO: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_LAST_RESOURCE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_RENDERER_NONNULL: AtomicUsize = AtomicUsize::new(0);
 // (Removed: TITLE INIT-READINESS OVERRIDE lever -- it forced CSMenuMan+0x21, which RE later showed is
 // the WHOLE-game resident-UI-ready flag, not title-only; asserting it early risked later in-game menus
 // finding chrome not resident, for an illusory ~1s (the real floor is the Scaleform resident load).
