@@ -1505,6 +1505,8 @@ pub(crate) const OWNER_CTX_MAX_PLAUSIBLE_PTR: usize = 0x8000_0000_0000;
 /// `GLOBAL_CSRegulationManager` singleton pointer. Native corrupted-save branch `FUN_14082d090`
 /// checks this for null before comparing `TitleFlowContext+0x148` against manager `+0x44`.
 pub(crate) const GLOBAL_CS_REGULATION_MANAGER_RVA: usize = 0x3d86c58;
+pub(crate) const TFC_REGULATION_VERSION_148_OFFSET: usize = 0x148;
+pub(crate) const REGULATION_MANAGER_VERSION_44_OFFSET: usize = 0x44;
 
 pub(crate) const OWN_STEPPER_LOG_INTERVAL: u64 = TitleNativeJobTiming::FrameRate as u64;
 pub(crate) const OWN_STEPPER_CALL_INC: usize = true as usize;
