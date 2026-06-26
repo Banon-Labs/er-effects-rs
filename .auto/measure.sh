@@ -950,13 +950,14 @@ if rt_root.exists():
                 proof['continue_load'] = True
                 proof['deserialize'] = True
                 proof['confirm'] = True
-            if (
-                re.search(r'"oracle_title_profile_cover_bound_to_logo_surface"\s*:\s*false', raw)
-                and not re.search(r'"oracle_title_overlay_cover_rendered"\s*:\s*true', raw)
-            ):
-                title_cover_runtime_by_dir.setdefault(d.name, []).append(
-                    f'runtime artifact {d.name} has no custom/profile cover bound to the visible logo/title surface or real overlay cover render'
-                )
+            if re.search(r'"oracle_title_profile_cover_bound_to_logo_surface"\s*:\s*false', raw):
+                # Count this runtime artifact's missing-cover semaphore once. Several JSON evidence
+                # files in the same artifact dir can contain the same oracle snapshot; charging the
+                # same artifact once per file over-penalizes a single product failure.
+                title_cover_runtime_by_dir.setdefault(d.name, [])
+                missing_cover_msg = f'runtime artifact {d.name} has no custom/profile cover bound to the visible logo/title surface'
+                if missing_cover_msg not in title_cover_runtime_by_dir[d.name]:
+                    title_cover_runtime_by_dir[d.name].append(missing_cover_msg)
             oracle = data.get('oracle') if isinstance(data.get('oracle'), dict) else {}
             expected_oracle = oracle.get('expected') if isinstance(oracle.get('expected'), dict) else {}
             observed_oracle = oracle.get('observed') if isinstance(oracle.get('observed'), dict) else {}
@@ -1192,13 +1193,8 @@ actual_logo_profile_cover_observable = (
     and 'oracle_title_logo_gfx_visibility' in telemetry_src + '\n' + watcher
     and 'oracle_title_profile_cover_bound_to_logo_surface' in telemetry_src + '\n' + watcher
 )
-actual_overlay_cover_observable = (
-    'TITLE_OVERLAY_COVER_RENDER_CALLS' in constants_src
-    and 'oracle_title_overlay_cover_rendered' in telemetry_src
-    and 'oracle_title_overlay_cover_last_display_size' in telemetry_src
-)
-if not (actual_logo_profile_cover_observable or actual_overlay_cover_observable):
-    title_cover_failures.append('Part B false-positive guard: no GFx logo binding oracle or real DLL overlay cover render oracle proves a custom title/loading cover')
+if not actual_logo_profile_cover_observable:
+    title_cover_failures.append('Part B false-positive guard: no GFx visibility/binding oracle proves SYSTEX profile portrait replaced or covered the visible 05_001_Title_Logo surface')
     title_cover_penalty += 50
 
 false_positives = 0
