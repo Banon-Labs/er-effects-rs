@@ -1410,6 +1410,7 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook
     param_3: usize,
     param_4: usize,
 ) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let orig = TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_ORIG.load(Ordering::SeqCst);
     if orig != null && orig != HOOK_ORIGINAL_UNSET {
         let native_fadein: unsafe extern "system" fn(usize, usize, usize, usize) =
@@ -1417,7 +1418,6 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook
         unsafe { native_fadein(window, param_2, param_3, param_4) };
     }
 
-    let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let caller_rva = trace_first_game_caller_rva();
     if caller_rva != TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA {
         return;
