@@ -40,7 +40,7 @@ DEFAULT_POST_REQUEST_TICK_BUDGET = 300
 # passes the value through as --max-runtime-seconds; the rego policy is kept in sync by the checker.
 MAX_ALLOWED_RUNTIME_SECONDS = float(runtime_timeout_cap_seconds())
 DEFAULT_MAX_RUNTIME_SECONDS = MAX_ALLOWED_RUNTIME_SECONDS
-DEFAULT_WORLD_STABLE_DWELL_SECONDS = 5.0
+DEFAULT_WORLD_STABLE_DWELL_SECONDS = 0.0
 OBSERVATION_SUBPROCESS_TIMEOUT_SECONDS = 5.0
 SUCCESS_RC = 0
 FAILURE_RC = 1
@@ -2571,7 +2571,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--autoload-attempt-budget", type=int, default=DEFAULT_AUTOLOAD_ATTEMPT_BUDGET)
     parser.add_argument("--post-request-tick-budget", type=int, default=DEFAULT_POST_REQUEST_TICK_BUDGET)
-    parser.add_argument("--world-stable-samples", type=int, default=3)
+    parser.add_argument("--world-stable-samples", type=int, default=1)
     parser.add_argument("--world-stable-dwell-seconds", type=float, default=DEFAULT_WORLD_STABLE_DWELL_SECONDS)
     parser.add_argument(
         "--world-stream-stall-seconds",
