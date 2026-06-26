@@ -293,6 +293,11 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
                 .name("er-effects-title-gfx-visible".to_owned())
                 .spawn(install_title_gfx_value_set_visible_hook);
         });
+        START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-child-bind".to_owned())
+                .spawn(install_title_scene_obj_proxy_named_child_bind_hook);
+        });
         START_TITLE_CUSTOM_COVER_RUN.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-effects-title-cover-run".to_owned())

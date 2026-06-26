@@ -3,7 +3,7 @@
 #![allow(unused_imports)]
 
 use std::{
-    ffi::c_void,
+    ffi::{CStr, c_void},
     fmt::Write as _,
     fs,
     path::PathBuf,
@@ -1689,6 +1689,111 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook
     append_autoload_debug(format_args!(
         "title-cover-part-a: render-suppressed preserved native {TITLE_NATIVE_MENU_VISUAL_NAME} window=0x{window:x} menu_id={menu_id} flags 0x{flags_before:02x}->0x{flags_after:02x} via CSMenuMan+0x90 caller_rva=0x{caller_rva:x}"
     ));
+}
+
+unsafe fn title_child_name_matches(name_ptr: usize) -> bool {
+    if name_ptr == 0 || name_ptr == TITLE_OWNER_SCAN_START_ADDRESS {
+        return false;
+    }
+    let Ok(name) = (unsafe { CStr::from_ptr(name_ptr as *const i8).to_str() }) else {
+        return false;
+    };
+    name == "PressStart" || name == "StaticSystemText_101000" || name == "PRESS BUTTON"
+}
+
+pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook(
+    parent: usize,
+    out_proxy: usize,
+    name_ptr: usize,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst);
+    if orig == null || orig == HOOK_ORIGINAL_UNSET {
+        return out_proxy;
+    }
+    let f: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    let ret = unsafe { f(parent, out_proxy, name_ptr) };
+    if unsafe { title_child_name_matches(name_ptr) } {
+        let context = unsafe { safe_read_usize(out_proxy + SCENE_OBJ_PROXY_CONTEXT_20_OFFSET) }
+            .unwrap_or(null);
+        let value = out_proxy + 0x18;
+        TITLE_PRESS_START_BIND_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+        TITLE_PRESS_START_BIND_LAST_PARENT.store(parent, Ordering::SeqCst);
+        TITLE_PRESS_START_BIND_LAST_OUT.store(out_proxy, Ordering::SeqCst);
+        TITLE_PRESS_START_BIND_LAST_NAME.store(name_ptr, Ordering::SeqCst);
+        TITLE_PRESS_START_BIND_LAST_CONTEXT.store(context, Ordering::SeqCst);
+        TITLE_PRESS_START_GFX_VALUE.store(value, Ordering::SeqCst);
+        let base = game_module_base().unwrap_or(null);
+        if base != null {
+            let set_visible: unsafe extern "system" fn(usize, u8) =
+                unsafe { std::mem::transmute(base + TITLE_PRESS_START_SET_VISIBLE_RVA) };
+            unsafe { set_visible(out_proxy, 0) };
+            let calls = TITLE_PRESS_START_BIND_HIDE_CALLS
+                .fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+                + OWN_STEPPER_CALL_INC;
+            if calls <= 8 {
+                let name = unsafe { CStr::from_ptr(name_ptr as *const i8) }.to_string_lossy();
+                append_autoload_debug(format_args!(
+                    "title-cover-part-a: named-child bind hid {name} out_proxy=0x{out_proxy:x} parent=0x{parent:x} context=0x{context:x} value=0x{value:x} calls={calls}"
+                ));
+            }
+        }
+    }
+    ret
+}
+
+pub(crate) fn install_title_scene_obj_proxy_named_child_bind_hook() {
+    if TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-a: named-child bind MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-cover-part-a: failed to resolve named-child bind rva 0x{TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            title_scene_obj_proxy_named_child_bind_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-a: queue_enable named-child bind failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "title-cover-part-a: hooked named-child SceneObjProxy binder 0x{addr:x}; PressStart/StaticSystemText will be hidden at bind time"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "title-cover-part-a: named-child bind MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "title-cover-part-a: MhHook::new named-child bind failed: {status:?}"
+        )),
+    }
 }
 
 pub(crate) unsafe extern "system" fn title_gfx_value_set_visible_hook(
