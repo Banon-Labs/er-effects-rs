@@ -624,7 +624,7 @@ enum StartupModalBlockingState {
     },
 }
 
-struct ProductCoreAutoloadReady {
+pub(crate) struct ProductCoreAutoloadReady {
     committed: i32,
     requested: i32,
     table: usize,

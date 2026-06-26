@@ -1048,9 +1048,12 @@ def telemetry_title_native_visual_unsuppressed(telemetry: dict[str, Any] | None)
 def telemetry_title_profile_render_refresh_missing(telemetry: dict[str, Any] | None) -> bool:
     if not isinstance(telemetry, dict):
         return False
-    profile_ready = telemetry.get("oracle_title_logo_profile_summary_ready") is True
+    # `oracle_title_logo_profile_summary_ready` is only a non-null profile-summary pointer and can
+    # become true before the product-core title/PressStart/gameman/iodev gate that actually calls
+    # maybe_refresh_title_profile_cover(). Fail fast only when that exact refresh gate is ready.
+    gate_ready = telemetry.get("oracle_title_profile_render_refresh_gate_ready") is True
     refresh_calls = as_int(telemetry.get("oracle_title_custom_cover_profile_render_refresh_calls"), 0)
-    return bool(profile_ready and refresh_calls <= 0)
+    return bool(gate_ready and refresh_calls <= 0)
 
 
 def telemetry_placeholder_character_detected(
@@ -2673,7 +2676,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--fail-on-missing-title-profile-render-refresh",
         action="store_true",
-        help="Fail immediately once title profile-summary is ready but oracle_title_custom_cover_profile_render_refresh_calls is still zero; diagnostic fail-fast for cover-trigger probes.",
+        help="Fail immediately once the exact title profile-render refresh gate is ready but oracle_title_custom_cover_profile_render_refresh_calls is still zero; diagnostic fail-fast for cover-trigger probes.",
     )
     parser.add_argument(
         "--visual-legal-popup-check",
