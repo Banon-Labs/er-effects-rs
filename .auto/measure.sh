@@ -1129,7 +1129,10 @@ part_b_cover_tokens = [
 ]
 if not (
     all(token in code + '\n' + telemetry_src + '\n' + watcher for token in part_b_cover_tokens)
-    and 'TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.fetch_add' in title_cover_hook
+    and 'TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.fetch_add' in code
+    and 'TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA: usize = 0x81f8d0' in code
+    and 'TITLE_PAB_INFORMATION_VISUAL_NAME: &str = "05_020_TitleInformation"' in code
+    and 'oracle_title_pab_information_visual_any_built' in telemetry_src
 ):
     title_cover_failures.append('Part B custom title cover render path is not implemented/observable yet')
     title_cover_penalty += 50

@@ -1351,6 +1351,71 @@ pub(crate) unsafe extern "system" fn scene_obj_proxy_ctor_hook(
     unsafe { f(rcx, rdx, r8, r9) }
 }
 
+unsafe fn build_profile_select_cover_job(
+    base: usize,
+    rdx: usize,
+    r8: usize,
+    caller_rva: usize,
+    source: &str,
+) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if base == null || base == 0 {
+        return;
+    }
+    let mut cover_slot = null;
+    let cover_builder: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA) };
+    let cover_ret = unsafe { cover_builder((&raw mut cover_slot) as usize, rdx, r8) };
+    let cover_job = cover_slot;
+    TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_RET.store(cover_ret, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_JOB.store(cover_job, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "title-cover-part-b: BUILT non-returned custom cover {TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME} via 0x{:x} from {source} -> ret=0x{cover_ret:x} job=0x{cover_job:x}; dummy={TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL} target={TITLE_CUSTOM_COVER_SYSTEX_TARGET} renderer={TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS}",
+        base + TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA,
+    ));
+}
+
+pub(crate) unsafe extern "system" fn title_pab_information_visual_hook(
+    out_slot: usize,
+    rdx: usize,
+    r8: usize,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let base = game_module_base().unwrap_or(null);
+    let caller_rva = trace_first_game_caller_rva();
+    let orig = TITLE_PAB_INFORMATION_VISUAL_ORIG.load(Ordering::SeqCst);
+    let mut native_ret = out_slot;
+    if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let native_wrapper: unsafe extern "system" fn(usize, usize, usize) -> usize =
+            unsafe { std::mem::transmute(orig) };
+        native_ret = unsafe { native_wrapper(out_slot, rdx, r8) };
+    }
+    let native_job = if out_slot != null {
+        unsafe { safe_read_usize(out_slot) }.unwrap_or(null)
+    } else {
+        null
+    };
+    let native_window = if native_job != null {
+        unsafe { safe_read_usize(native_job + 0x130) }.unwrap_or(null)
+    } else {
+        null
+    };
+    TITLE_PAB_INFORMATION_VISUAL_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    TITLE_PAB_INFORMATION_VISUAL_LAST_JOB.store(native_job, Ordering::SeqCst);
+    TITLE_PAB_INFORMATION_VISUAL_LAST_WINDOW.store(native_window, Ordering::SeqCst);
+    TITLE_PAB_INFORMATION_VISUAL_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+    unsafe {
+        build_profile_select_cover_job(base, rdx, r8, caller_rva, TITLE_PAB_INFORMATION_VISUAL_NAME)
+    };
+    append_autoload_debug(format_args!(
+        "title-cover-part-a: PRESERVED native {TITLE_PAB_INFORMATION_VISUAL_NAME} wrapper 0x{:x}; latched job=0x{native_job:x} window=0x{native_window:x} for PAB cover (out_slot=0x{out_slot:x} rdx=0x{rdx:x} r8=0x{r8:x} caller_rva=0x{caller_rva:x})",
+        base + TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA,
+    ));
+    native_ret
+}
+
 /// Detour for BeginTitle's `05_000_Title` visual wrapper (deobf 0x14081f9f0). Static RE shows the
 /// wrapper constructs a CSScaleformLoadInfo with filename `05_000_Title` and calls factory
 /// 0x1407acbf0 to allocate/return a MenuWindowJob. For the title-cover masquerade we now preserve
@@ -1403,21 +1468,9 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
     // `05_010_ProfileSelect` and forwards to the same MenuWindowJob factory; preserving `native_job`
     // keeps the native title/Continue sequence authoritative while making the custom-cover resource
     // path observable for telemetry.
-    if base != null {
-        let mut cover_slot = null;
-        let cover_builder: unsafe extern "system" fn(usize, usize, usize) -> usize =
-            unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA) };
-        let cover_ret = unsafe { cover_builder((&raw mut cover_slot) as usize, rdx, r8) };
-        let cover_job = cover_slot;
-        TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
-        TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_RET.store(cover_ret, Ordering::SeqCst);
-        TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_JOB.store(cover_job, Ordering::SeqCst);
-        TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "title-cover-part-b: BUILT non-returned custom cover {TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME} via 0x{:x} -> ret=0x{cover_ret:x} job=0x{cover_job:x}; dummy={TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL} target={TITLE_CUSTOM_COVER_SYSTEX_TARGET} renderer={TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS}; native {TITLE_NATIVE_MENU_VISUAL_NAME} job remains authoritative",
-            base + TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA,
-        ));
-    }
+    unsafe {
+        build_profile_select_cover_job(base, rdx, r8, caller_rva, TITLE_NATIVE_MENU_VISUAL_NAME)
+    };
 
     append_autoload_debug(format_args!(
         "title-cover-part-a: PRESERVED native {TITLE_NATIVE_MENU_VISUAL_NAME} wrapper 0x{:x}/factory 0x{:x}; latched job=0x{native_job:x} window=0x{native_window:x} for render-only suppression (out_slot=0x{out_slot:x} prev=0x{prev_out:x} rdx=0x{rdx:x} r8=0x{r8:x} caller_rva=0x{caller_rva:x})",
@@ -1539,9 +1592,17 @@ pub(crate) unsafe extern "system" fn title_custom_cover_menu_window_run_hook(
     if TITLE_CUSTOM_COVER_RUN_RECURSION.load(Ordering::SeqCst) != 0 {
         return ret;
     }
-    let native_job = TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.load(Ordering::SeqCst);
+    let title_job = TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.load(Ordering::SeqCst);
+    let pab_job = TITLE_PAB_INFORMATION_VISUAL_LAST_JOB.load(Ordering::SeqCst);
     let cover_job = TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_JOB.load(Ordering::SeqCst);
-    if job != native_job
+    let native_job = if job == title_job {
+        title_job
+    } else if job == pab_job {
+        pab_job
+    } else {
+        null
+    };
+    if native_job == null
         || cover_job == null
         || cover_job == TITLE_OWNER_SCAN_START_ADDRESS
         || cover_job == native_job
@@ -1560,7 +1621,7 @@ pub(crate) unsafe extern "system" fn title_custom_cover_menu_window_run_hook(
     TITLE_CUSTOM_COVER_RUN_LAST_RET.store(cover_ret, Ordering::SeqCst);
     if calls <= 8 {
         append_autoload_debug(format_args!(
-            "title-cover-part-b: ran custom cover {TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME} job=0x{cover_job:x} alongside native {TITLE_NATIVE_MENU_VISUAL_NAME} job=0x{native_job:x}; ret=0x{cover_ret:x} window=0x{cover_window:x} calls={calls}"
+            "title-cover-part-b: ran custom cover {TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME} job=0x{cover_job:x} alongside native title/PAB job=0x{native_job:x}; ret=0x{cover_ret:x} window=0x{cover_window:x} calls={calls}"
         ));
     }
     ret
@@ -1813,6 +1874,58 @@ pub(crate) fn install_title_logo_start_login_hide_hook() {
 
 /// Install the Part-A title visual suppression hook once. It must run at process attach before
 /// STEP_BeginTitle; installing from the recurring game task can be too late for the first title build.
+pub(crate) fn install_title_pab_information_visual_hook() {
+    if TITLE_PAB_INFORMATION_VISUAL_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-a: PAB/TitleInformation MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-cover-part-a: failed to resolve PAB/TitleInformation wrapper rva 0x{TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            title_pab_information_visual_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            TITLE_PAB_INFORMATION_VISUAL_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-a: queue_enable PAB/TitleInformation wrapper failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    TITLE_PAB_INFORMATION_VISUAL_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "title-cover-part-a: hooked PAB/TitleInformation wrapper 0x{addr:x}; native {TITLE_PAB_INFORMATION_VISUAL_NAME} preserved and covered"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "title-cover-part-a: PAB/TitleInformation MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "title-cover-part-a: MhHook::new PAB/TitleInformation wrapper failed: {status:?}"
+        )),
+    }
+}
+
 pub(crate) fn install_title_native_menu_visual_suppression_hook() {
     if TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED.load(Ordering::SeqCst)
         != TITLE_NATIVE_MENU_VISUAL_SUPPRESS_NOT_INSTALLED
