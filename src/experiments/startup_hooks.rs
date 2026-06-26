@@ -1691,6 +1691,80 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook
     ));
 }
 
+pub(crate) unsafe extern "system" fn title_gfx_value_set_visible_hook(
+    value: usize,
+    visible: u8,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = TITLE_GFX_VALUE_SET_VISIBLE_ORIG.load(Ordering::SeqCst);
+    if orig == null || orig == HOOK_ORIGINAL_UNSET {
+        return value;
+    }
+    let target = TITLE_PRESS_START_GFX_VALUE.load(Ordering::SeqCst);
+    let forced_visible = if target != null && target != 0 && value == target {
+        TITLE_PRESS_START_GFX_FORCE_FALSE_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+        TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_VALUE.store(value, Ordering::SeqCst);
+        TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_REQUESTED.store(visible as usize, Ordering::SeqCst);
+        0
+    } else {
+        visible
+    };
+    let f: unsafe extern "system" fn(usize, u8) -> usize = unsafe { std::mem::transmute(orig) };
+    unsafe { f(value, forced_visible) }
+}
+
+pub(crate) fn install_title_gfx_value_set_visible_hook() {
+    if TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-a: GFx visibility MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(TITLE_GFX_VALUE_SET_VISIBLE_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-cover-part-a: failed to resolve GFx visibility setter rva 0x{TITLE_GFX_VALUE_SET_VISIBLE_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            title_gfx_value_set_visible_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            TITLE_GFX_VALUE_SET_VISIBLE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-a: queue_enable GFx visibility setter failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "title-cover-part-a: hooked GFx visibility setter 0x{addr:x}; only PressStart value will be forced hidden"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "title-cover-part-a: GFx visibility MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "title-cover-part-a: MhHook::new GFx visibility setter failed: {status:?}"
+        )),
+    }
+}
+
 pub(crate) fn install_title_custom_cover_run_hook() {
     if TITLE_CUSTOM_COVER_RUN_INSTALLED.load(Ordering::SeqCst) != 0 {
         return;

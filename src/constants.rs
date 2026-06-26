@@ -767,6 +767,20 @@ pub(crate) const TITLE_PRESS_START_SCENE_PROXY_B78_OFFSET: usize = 0xb78;
 /// 0x140733340`). It resolves the proxy's Scaleform value and calls the GFx visibility setter; use
 /// this for the 05_000_Title `PressStart` component rather than hiding the whole MenuWindowJob.
 pub(crate) const TITLE_PRESS_START_SET_VISIBLE_RVA: usize = 0x733340;
+/// Lower-level GFx visibility setter (`dump 0x140d84580 -> live/deobf 0x140d844d0`). It has one
+/// code caller, the SceneObjProxy wrapper above. The hook only forces false for the latched
+/// PressStart CSScaleformValue pointer, not globally.
+pub(crate) const TITLE_GFX_VALUE_SET_VISIBLE_RVA: usize = 0xd844d0;
+pub(crate) static TITLE_GFX_VALUE_SET_VISIBLE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PRESS_START_GFX_VALUE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_VALUE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_REQUESTED: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_PRESS_START_GFX_HIDE_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_PRESS_START_GFX_HIDE_LAST_DIALOG: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -2953,6 +2967,7 @@ pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS: Once = Once::n
 pub(crate) static START_TITLE_LOGO_START_LOGIN_HIDE: Once = Once::new();
 pub(crate) static START_TITLE_LOGO_FORCE_HIDDEN: Once = Once::new();
 pub(crate) static START_TITLE_PAB_INFORMATION_COVER: Once = Once::new();
+pub(crate) static START_TITLE_GFX_VALUE_SET_VISIBLE: Once = Once::new();
 pub(crate) static START_TITLE_CUSTOM_COVER_RUN: Once = Once::new();
 pub(crate) static START_BOOT_PROFILER: Once = Once::new();
 /// One-shot latch for the "first game-task frame ran" boot-phase marker (0 = not yet logged).

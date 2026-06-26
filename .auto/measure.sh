@@ -1134,7 +1134,10 @@ if not (
     and 'TITLE_PAB_INFORMATION_VISUAL_NAME: &str = "05_020_TitleInformation"' in code
     and 'oracle_title_pab_information_visual_any_built' in telemetry_src
     and 'TITLE_PRESS_START_SET_VISIBLE_RVA: usize = 0x733340' in code
+    and 'TITLE_GFX_VALUE_SET_VISIBLE_RVA: usize = 0xd844d0' in code
+    and 'install_title_gfx_value_set_visible_hook' in lib_code
     and 'oracle_title_press_start_gfx_any_hidden' in telemetry_src
+    and 'oracle_title_press_start_gfx_force_false_any' in telemetry_src
 ):
     title_cover_failures.append('Part B custom title cover render path is not implemented/observable yet')
     title_cover_penalty += 50

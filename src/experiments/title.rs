@@ -1328,6 +1328,8 @@ unsafe fn hide_title_press_start_proxy(base: usize, dialog: usize, proxy: usize,
     if proxy == TITLE_OWNER_SCAN_START_ADDRESS || proxy == 0 {
         return;
     }
+    let value = proxy + 0x18;
+    TITLE_PRESS_START_GFX_VALUE.store(value, Ordering::SeqCst);
     let set_visible: unsafe extern "system" fn(usize, u8) =
         unsafe { std::mem::transmute(base + TITLE_PRESS_START_SET_VISIBLE_RVA) };
     unsafe { set_visible(proxy, 0) };

@@ -288,6 +288,11 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
                 .name("er-effects-title-pab-cover".to_owned())
                 .spawn(install_title_pab_information_visual_hook);
         });
+        START_TITLE_GFX_VALUE_SET_VISIBLE.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-gfx-visible".to_owned())
+                .spawn(install_title_gfx_value_set_visible_hook);
+        });
         START_TITLE_CUSTOM_COVER_RUN.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-effects-title-cover-run".to_owned())
