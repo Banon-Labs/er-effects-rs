@@ -132,6 +132,7 @@ VISUAL_LOADING_SCREEN_DETECTED = "visual_loading_screen_detected"
 LEGAL_POPUP_DETECTED = "visual_legal_popup_detected"
 NATIVE_LEGAL_POPUP_DETECTED = "native_legal_popup_detected"
 SAVE_DATA_POPUP_DETECTED = "visual_save_data_popup_detected"
+NATIVE_CORRUPTED_SAVE_DETECTED = "native_corrupted_save_detected"
 MESSAGEBOX_DIALOG_DETECTED = "native_messagebox_dialog_detected"
 SERVER_STATUS_SEMAPHORE_DETECTED = "native_server_status_semaphore_detected"
 TITLE_NATIVE_VISUAL_UNSUPPRESSED = "native_title_visual_render_unsuppressed"
@@ -1099,6 +1100,12 @@ def telemetry_messagebox_dialog_detected(telemetry: dict[str, Any] | None) -> bo
         or telemetry.get("oracle_postload_modal_seen") is True
         or as_int(telemetry.get("oracle_msgbox_postload_builds"), 0) > 0
     )
+
+
+def telemetry_native_corrupted_save_detected(telemetry: dict[str, Any] | None) -> bool:
+    if not isinstance(telemetry, dict):
+        return False
+    return as_int(telemetry.get("oracle_corrupted_save_seen_id"), 0) > 0
 
 
 def native_legal_text_id(value: Any) -> int | None:
@@ -2206,6 +2213,21 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
                 ReadinessResult(
                     True,
                     COLD_CHAR_MOUNT_COMPLETE,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
+        if telemetry_native_corrupted_save_detected(telemetry):
+            return with_runtime_module_info(
+                ReadinessResult(
+                    False,
+                    NATIVE_CORRUPTED_SAVE_DETECTED,
                     pid,
                     bootstrap,
                     telemetry,
