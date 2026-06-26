@@ -545,18 +545,30 @@ pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_AFTER: AtomicUsize 
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// PART-B custom cover target: `05_010_ProfileSelect` is an existing Scaleform surface with
-/// `MENU_DummyProfileFace_01..10` symbols that the profile renderer maps to
-/// `SYSTEX_Menu_Profile00..09` (via CSMenuProfModelRend / active-screen render targets). The wrapper
-/// below is the deobf/live address for the native `05_010_ProfileSelect` MenuWindowJob builder
-/// (Ghidra dump 0x14081f7e0 -> deobf 0x14081f6f0). We use it as the initial custom cover surface
-/// instead of trying to remap `05_001_Title_Logo`, which has no dummy-profile symbol.
+/// PART-B custom cover target. Do NOT run the `05_010_ProfileSelect` MenuWindowJob as a cover:
+/// runtime/user validation showed that canvas can block/interfere with title advance and is not the
+/// clean cover. The safe target is the already-root-reachable title logo `MenuResource` inside
+/// `TitleBackViewParts`: static RE of dump `0x1409a62d0` shows `TitleBackViewParts+0x8` is the
+/// `MenuResource`, and `FUN_140749290` uses that resource's mapping vector before constructing the
+/// visible logo SceneObjProxy at `TitleBackViewParts+0x70`.
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA: usize = 0x81f6f0;
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME: &str = "05_010_ProfileSelect";
-pub(crate) const TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL: &str = "MENU_DummyProfileFace_01";
+pub(crate) const TITLE_CUSTOM_COVER_TITLE_IMAGE_SYMBOL: &str = "MENU_Title_EldenRing_01";
 pub(crate) const TITLE_CUSTOM_COVER_SYSTEX_TARGET: &str = "SYSTEX_Menu_Profile00";
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS: &str = "CSMenuProfModelRend";
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA: usize = 0x2b80128;
+/// Native image-symbol -> SYSTEX binding helper: dump `FUN_1407452c0` -> live/deobf `0x1407451c0`.
+/// It must be called on the owning resource/binding object (for the logo: `TitleBackViewParts+0x8`),
+/// not on the parent TitleTopDialog.
+pub(crate) const TITLE_CUSTOM_COVER_SCALEFORM_BIND_RVA: usize = 0x7451c0;
+pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_LAST_DIALOG: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_LAST_LOGO: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_LAST_RESOURCE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_RENDERER_NONNULL: AtomicUsize = AtomicUsize::new(0);
 /// Profile portrait refresh/display pipeline: live 0x1409aa680 (dump 0x1409aa7d0) reads the loaded
 /// `ProfileSummary`, loops 10 slots, fills CSMenuProfModelRend / face/player model data, and maps
 /// each active slot to `SYSTEX_Menu_ProfileNN` through `FUN_140bb8cf0(renderer, slot*2)`. It must run
