@@ -567,10 +567,23 @@ pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_LAST_LOGO: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_LAST_FIELD: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Profile renderer scene generation: live `0x1409af3a0` (dump `0x1409af4f0`) allocates and fills
+/// the `DAT_143d6d8d0` / `ACTIVE_SCREEN_ARRAY_RVA` slots with `CSMenuProfModelRend` objects. The
+/// refresh below dereferences those renderer pointers, so this generator must run first.
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_RVA: usize = 0x9af3a0;
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_CALLS: AtomicUsize =
+    AtomicUsize::new(0);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_LAST_SLOT0_BEFORE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_LAST_SLOT0_AFTER: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_NONNULL_AFTER: AtomicUsize =
+    AtomicUsize::new(0);
 /// Profile portrait refresh/display pipeline: live 0x1409aa680 (dump 0x1409aa7d0) reads the loaded
 /// `ProfileSummary`, loops 10 slots, fills CSMenuProfModelRend / face/player model data, and maps
 /// each active slot to `SYSTEX_Menu_ProfileNN` through `FUN_140bb8cf0(renderer, slot*2)`. It must run
-/// after SL2/profile readiness, not at early `05_001_Title_Logo` construction time.
+/// after SL2/profile readiness and after the renderer scene array exists, not at early
+/// `05_001_Title_Logo` construction time.
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA: usize = 0x9aa680;
 pub(crate) static TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_CALLS: AtomicUsize =
     AtomicUsize::new(0);

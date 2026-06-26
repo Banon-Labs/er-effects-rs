@@ -1419,11 +1419,66 @@ const TITLE_SYSTEX_TARGET_BYTES: &[u8] = b"SYSTEX_Menu_Profile00\0";
 const _: () = assert!(core::mem::size_of::<NativeStaticDlString>() == 0x30);
 const _: () = assert!(core::mem::size_of::<NativeStaticDlStringPair>() == 0x60);
 
+unsafe fn count_profile_renderer_slots(base: usize) -> usize {
+    let mut count = 0;
+    for idx in 0..ACTIVE_SCREEN_ARRAY_SLOTS {
+        let slot_addr = base + ACTIVE_SCREEN_ARRAY_RVA + idx * ACTIVE_SCREEN_ARRAY_STRIDE;
+        let ptr = unsafe { safe_read_usize(slot_addr) }.unwrap_or(0);
+        if ptr != 0 && ptr != TITLE_OWNER_SCAN_START_ADDRESS {
+            count += 1;
+        }
+    }
+    count
+}
+
+pub(crate) unsafe fn maybe_generate_title_profile_cover_scene(
+    base: usize,
+    ready: &ProductCoreAutoloadReady,
+) {
+    if ready.profile_summary == TITLE_OWNER_SCAN_START_ADDRESS || ready.profile_summary == 0 {
+        return;
+    }
+    let slot0_before = unsafe { safe_read_usize(base + ACTIVE_SCREEN_ARRAY_RVA) }
+        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_LAST_SLOT0_BEFORE
+        .store(slot0_before, Ordering::SeqCst);
+    if slot0_before != 0 && slot0_before != TITLE_OWNER_SCAN_START_ADDRESS {
+        let nonnull = unsafe { count_profile_renderer_slots(base) };
+        TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_LAST_SLOT0_AFTER
+            .store(slot0_before, Ordering::SeqCst);
+        TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_NONNULL_AFTER.store(nonnull, Ordering::SeqCst);
+        return;
+    }
+    if TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_CALLS
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+    let generate: unsafe extern "system" fn() =
+        unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_RVA) };
+    unsafe { generate() };
+    let slot0_after = unsafe { safe_read_usize(base + ACTIVE_SCREEN_ARRAY_RVA) }
+        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let nonnull = unsafe { count_profile_renderer_slots(base) };
+    TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_LAST_SLOT0_AFTER.store(slot0_after, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_NONNULL_AFTER.store(nonnull, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "title-cover-part-b: generated CSMenuProfModelRend scene array via 0x{:x} after save/profile readiness profile_summary=0x{:x} slot0_before=0x{slot0_before:x} slot0_after=0x{slot0_after:x} nonnull_slots={nonnull}",
+        base + TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_RVA,
+        ready.profile_summary,
+    ));
+}
+
 pub(crate) unsafe fn maybe_refresh_title_profile_cover(
     base: usize,
     ready: &ProductCoreAutoloadReady,
 ) {
     if ready.profile_summary == TITLE_OWNER_SCAN_START_ADDRESS || ready.profile_summary == 0 {
+        return;
+    }
+    let slot0 = unsafe { safe_read_usize(base + ACTIVE_SCREEN_ARRAY_RVA) }.unwrap_or(0);
+    if slot0 == 0 || slot0 == TITLE_OWNER_SCAN_START_ADDRESS {
         return;
     }
     if TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_CALLS
@@ -1660,6 +1715,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     if phase == OWN_STEPPER_PHASE_MENU {
         unsafe { maybe_hide_title_press_start(module_base, &ready) };
         if ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO {
+            unsafe { maybe_generate_title_profile_cover_scene(module_base, &ready) };
             unsafe { maybe_refresh_title_profile_cover(module_base, &ready) };
             unsafe { maybe_bind_title_logo_to_systex_cover(module_base, &ready) };
             if TITLE_CUSTOM_COVER_LOGO_REMAP_CALLS.load(Ordering::SeqCst) == 0 {
