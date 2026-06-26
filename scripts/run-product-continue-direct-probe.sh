@@ -400,6 +400,10 @@ fi
 # The watcher remains oracle-first even for on-screen runs; screenshots are diagnostic only and the
 # product proof comes from in-process telemetry. Keep the phase/deadline relaxations unless a probe is
 # explicitly tightened, because both gamescope and visible Proton launches can have compositor/GPU jitter.
+DEFAULT_RUNTIME_EXTRA_WATCH_ARGS="--no-phase-watchdog --no-world-load-deadline"
+if [[ "${ER_EFFECTS_EXPERIMENTAL_DIRECT_MENU_LOAD:-0}" == "1" ]]; then
+  DEFAULT_RUNTIME_EXTRA_WATCH_ARGS="$DEFAULT_RUNTIME_EXTRA_WATCH_ARGS --fail-on-missing-title-profile-render-refresh"
+fi
 (
   cd "$REPO_ROOT"
   ARTIFACT_DIR="$ARTIFACT_DIR" \
@@ -412,7 +416,7 @@ fi
   ER_PROBE_LAUNCH_EPOCH="$LAUNCH_EPOCH" \
   AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 \
   RUNTIME_SKIP_VISUAL_CAPTURE=1 \
-  RUNTIME_EXTRA_WATCH_ARGS="${RUNTIME_EXTRA_WATCH_ARGS:-"--no-phase-watchdog --no-world-load-deadline --fail-on-missing-title-profile-render-refresh"}" \
+  RUNTIME_EXTRA_WATCH_ARGS="${RUNTIME_EXTRA_WATCH_ARGS:-$DEFAULT_RUNTIME_EXTRA_WATCH_ARGS}" \
   ./.auto/runtime_probe.sh
 ) > "$ARTIFACT_DIR/runtime-probe.out" 2> "$ARTIFACT_DIR/runtime-probe.err" &
 watcher_pid=$!
