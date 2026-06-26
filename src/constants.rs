@@ -597,6 +597,12 @@ pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_COVER_WINDOW: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_RET: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Real DLL-owned fallback cover drawn through the existing hudhook/ImGui render path.
+/// This does not touch the game's live CSEzDraw/CSScaleform child objects and must stop
+/// once a player exists. It is a visible render operation, not a native-slot oracle.
+pub(crate) static TITLE_OVERLAY_COVER_RENDER_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_OVERLAY_COVER_LAST_DISPLAY_W: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_OVERLAY_COVER_LAST_DISPLAY_H: AtomicUsize = AtomicUsize::new(0);
 /// Observe the native now-loading helper visible during the black/progress-bar loading surface.
 /// This is the first-pass target for a separate custom loading/masquerade surface after live title-logo
 /// remaps proved crash-prone.

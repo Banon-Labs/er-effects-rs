@@ -4,8 +4,10 @@ use debug::InputBlocker;
 use eldenring::cs::PlayerIns;
 use hudhook::{
     ImguiRenderLoop, MessageFilter,
-    imgui::{Condition, Context, Ui},
+    imgui::{Condition, Context, ImColor32, Ui},
 };
+
+use std::sync::atomic::Ordering;
 
 use crate::*;
 
@@ -17,6 +19,44 @@ impl EffectsOverlay {
     pub(crate) fn new(state: Arc<Mutex<EffectsState>>) -> Self {
         Self { state }
     }
+}
+
+fn draw_title_overlay_cover(ui: &Ui) {
+    let [width, height] = ui.io().display_size;
+    if width <= 1.0 || height <= 1.0 {
+        return;
+    }
+    TITLE_OVERLAY_COVER_RENDER_CALLS.fetch_add(1, Ordering::SeqCst);
+    TITLE_OVERLAY_COVER_LAST_DISPLAY_W.store(width as usize, Ordering::SeqCst);
+    TITLE_OVERLAY_COVER_LAST_DISPLAY_H.store(height as usize, Ordering::SeqCst);
+    let draw_list = ui.get_background_draw_list();
+    draw_list
+        .add_rect(
+            [0.0, 0.0],
+            [width, height],
+            ImColor32::from_rgba(4, 6, 10, 232),
+        )
+        .filled(true)
+        .build();
+    draw_list
+        .add_rect(
+            [width * 0.08, height * 0.12],
+            [width * 0.92, height * 0.88],
+            ImColor32::from_rgba(190, 156, 96, 180),
+        )
+        .rounding(18.0)
+        .thickness(3.0)
+        .build();
+    draw_list.add_text(
+        [width * 0.11, height * 0.16],
+        ImColor32::from_rgba(232, 208, 154, 255),
+        "ER Effects: loading Banon",
+    );
+    draw_list.add_text(
+        [width * 0.11, height * 0.16 + 28.0],
+        ImColor32::from_rgba(188, 196, 208, 230),
+        "Native Continue/load continues behind this zero-input cover",
+    );
 }
 
 impl ImguiRenderLoop for EffectsOverlay {
@@ -56,6 +96,9 @@ impl ImguiRenderLoop for EffectsOverlay {
             process_autoload_request(&mut state);
             false
         };
+        if product_autoload_enabled() && !player_available {
+            draw_title_overlay_cover(ui);
+        }
         write_telemetry_throttled(&mut state, player_available);
 
         ui.window("ER Effects")
