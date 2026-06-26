@@ -1095,7 +1095,10 @@ for dir_name in scored_runtime_dirs:
 title_cover_gate = function_body('title_native_menu_visual_suppression_enabled', exp_code) or ''
 title_cover_hook = function_body('title_native_menu_visual_begin_title_hook', exp_code) or ''
 title_cover_render_hook = function_body('title_native_menu_visual_window_fadein_hook', exp_code) or ''
-title_cover_penalty = runtime_title_cover_failure_count * 50
+# Missing the actual masquerade scene/character cover is a major product failure. A run that only
+# hides the native title/PAB and reaches Banon is not close to complete Part B and must not rank as
+# a high-water mark.
+title_cover_penalty = runtime_title_cover_failure_count * 200
 part_a_common = (
     '!save_override_telemetry_only()' in title_cover_gate
     and 'autoload_disabled()' in title_cover_gate
