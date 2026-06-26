@@ -400,7 +400,7 @@ fi
 # The watcher remains oracle-first even for on-screen runs; screenshots are diagnostic only and the
 # product proof comes from in-process telemetry. Keep the phase/deadline relaxations unless a probe is
 # explicitly tightened, because both gamescope and visible Proton launches can have compositor/GPU jitter.
-DEFAULT_RUNTIME_EXTRA_WATCH_ARGS="--no-phase-watchdog --no-world-load-deadline --fail-on-missing-title-profile-render-refresh"
+DEFAULT_RUNTIME_EXTRA_WATCH_ARGS="--no-phase-watchdog --no-world-load-deadline"
 (
   cd "$REPO_ROOT"
   ARTIFACT_DIR="$ARTIFACT_DIR" \

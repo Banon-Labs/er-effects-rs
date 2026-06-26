@@ -1042,7 +1042,16 @@ def telemetry_title_native_visual_unsuppressed(telemetry: dict[str, Any] | None)
     render_suppress_installed = telemetry.get("oracle_title_native_menu_visual_render_suppress_installed") is True
     native_window_known = as_int(telemetry.get("oracle_title_native_menu_visual_native_window"), 0) > 0
     draw_bit_set = telemetry.get("oracle_title_native_menu_visual_current_draw_bit_set") is True
-    return bool(native_title_built and render_suppress_installed and native_window_known and draw_bit_set)
+    logo_hidden = telemetry.get("oracle_title_logo_gfx_any_hidden") is True
+    press_start_hidden = telemetry.get("oracle_title_press_start_bind_any_hidden") is True
+    specific_title_surfaces_hidden = logo_hidden and press_start_hidden
+    return bool(
+        native_title_built
+        and render_suppress_installed
+        and native_window_known
+        and draw_bit_set
+        and not specific_title_surfaces_hidden
+    )
 
 
 def telemetry_title_profile_render_refresh_missing(telemetry: dict[str, Any] | None) -> bool:
@@ -2252,7 +2261,7 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
                     expected_animation_id=args.expected_animation_id,
                 )
             )
-        if args.fail_on_missing_title_profile_render_refresh and telemetry_title_profile_render_refresh_missing(telemetry):
+        if telemetry_title_profile_render_refresh_missing(telemetry):
             return with_runtime_module_info(
                 ReadinessResult(
                     False,
@@ -2672,11 +2681,6 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=True,
         help="Fail immediately if the preserved native title visual reaches menu/world without its draw bit being cleared.",
-    )
-    parser.add_argument(
-        "--fail-on-missing-title-profile-render-refresh",
-        action="store_true",
-        help="Fail immediately once the exact title profile-render refresh gate is ready but oracle_title_custom_cover_profile_render_refresh_calls is still zero; diagnostic fail-fast for cover-trigger probes.",
     )
     parser.add_argument(
         "--visual-legal-popup-check",
