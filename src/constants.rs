@@ -46,6 +46,9 @@ pub(crate) const HOOK_FALSE_RETURN: u8 = 0;
 pub(crate) enum RuntimeGlobalRva {
     NowLoadingSingleton = 0x3d60ec8,
     FakeLoadingScreenSingleton = 0x3d74868,
+    CsGraphicsSingleton = 0x3d71c48,
+    RendManSingleton = 0x3d7b0c0,
+    CsScaleformSingleton = 0x3d83148,
     Fd4IoPool = 0x4853048,
     Fd4IoWorkerManager = 0x4852f88,
     IoDeviceSingleton = 0x4589390,
@@ -627,6 +630,16 @@ pub(crate) static FAKE_LOADING_SCREEN_LAST_FIELD_C: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static FAKE_LOADING_SCREEN_LAST_FIELD_10: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static RENDER_LOADING_LAYER_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static RENDER_LOADING_LAYER_NONNULL_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static RENDER_LOADING_LAYER_LAST_RENDMAN: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static RENDER_LOADING_LAYER_LAST_CSGRAPHICS: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static RENDER_LOADING_LAYER_LAST_CSSCALEFORM: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static RENDER_LOADING_LAYER_LAST_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
 /// Passive observer for native Scaleform image-symbol -> system texture bindings.
 /// Dump `FUN_1407452c0` maps to live/deobf `0x1407451c0`. It receives an owning resource/list field
 /// in rcx and a pair of DLString<char> values in rdx. Do not call it from product code; observe native

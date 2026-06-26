@@ -897,10 +897,91 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         let fake_loading_samples = FAKE_LOADING_SCREEN_SAMPLE_COUNT.load(Ordering::SeqCst);
         let fake_loading_visible_samples =
             FAKE_LOADING_SCREEN_VISIBLE_SAMPLES.load(Ordering::SeqCst);
+        const RENDMAN_SINGLETON_RVA: usize = RuntimeGlobalRva::RendManSingleton as usize;
+        const CSGRAPHICS_SINGLETON_RVA: usize = RuntimeGlobalRva::CsGraphicsSingleton as usize;
+        const CSSCALEFORM_SINGLETON_RVA: usize = RuntimeGlobalRva::CsScaleformSingleton as usize;
+        let rendman = unsafe { crate::experiments::safe_read_usize(base + RENDMAN_SINGLETON_RVA) }
+            .unwrap_or(NULL_PTR);
+        let csgraphics =
+            unsafe { crate::experiments::safe_read_usize(base + CSGRAPHICS_SINGLETON_RVA) }
+                .unwrap_or(NULL_PTR);
+        let csscaleform =
+            unsafe { crate::experiments::safe_read_usize(base + CSSCALEFORM_SINGLETON_RVA) }
+                .unwrap_or(NULL_PTR);
+        let read_rend = |offset: usize| -> usize {
+            if rendman == NULL_PTR {
+                NULL_PTR
+            } else {
+                unsafe { crate::experiments::safe_read_usize(rendman + offset) }.unwrap_or(NULL_PTR)
+            }
+        };
+        let rend_slot_28 = read_rend(0x28);
+        let rend_slot_30 = read_rend(0x30);
+        let rend_slot_38 = read_rend(0x38);
+        let rend_slot_40 = read_rend(0x40);
+        let rend_slot_78 = read_rend(0x78);
+        let rendman_pause = if rendman == NULL_PTR {
+            READ_FAIL_SENTINEL
+        } else {
+            unsafe { crate::experiments::safe_read_usize(rendman + 0x90) }
+                .map_or(READ_FAIL_SENTINEL, |v| (v & NOW_LOADING_BYTE_MASK) as i32)
+        };
+        let csgraphics_field68 = if csgraphics == NULL_PTR {
+            NULL_PTR
+        } else {
+            unsafe { crate::experiments::safe_read_usize(csgraphics + 0x68) }.unwrap_or(NULL_PTR)
+        };
+        let mut slots_mask = 0usize;
+        if rend_slot_28 != NULL_PTR {
+            slots_mask |= 1 << 0;
+        }
+        if rend_slot_30 != NULL_PTR {
+            slots_mask |= 1 << 1;
+        }
+        if rend_slot_38 != NULL_PTR {
+            slots_mask |= 1 << 2;
+        }
+        if rend_slot_40 != NULL_PTR {
+            slots_mask |= 1 << 3;
+        }
+        if rend_slot_78 != NULL_PTR {
+            slots_mask |= 1 << 4;
+        }
+        if csgraphics_field68 != NULL_PTR {
+            slots_mask |= 1 << 5;
+        }
+        if csscaleform != NULL_PTR {
+            slots_mask |= 1 << 6;
+        }
+        RENDER_LOADING_LAYER_LAST_RENDMAN.store(rendman, Ordering::SeqCst);
+        RENDER_LOADING_LAYER_LAST_CSGRAPHICS.store(csgraphics, Ordering::SeqCst);
+        RENDER_LOADING_LAYER_LAST_CSSCALEFORM.store(csscaleform, Ordering::SeqCst);
+        RENDER_LOADING_LAYER_LAST_SLOTS_MASK.store(slots_mask, Ordering::SeqCst);
+        if fake_loading_visible > 0 {
+            RENDER_LOADING_LAYER_SAMPLE_COUNT.fetch_add(1, Ordering::SeqCst);
+            if slots_mask != 0 {
+                RENDER_LOADING_LAYER_NONNULL_SAMPLES.fetch_add(1, Ordering::SeqCst);
+            }
+            RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK.fetch_or(slots_mask, Ordering::SeqCst);
+        }
+        let render_loading_samples = RENDER_LOADING_LAYER_SAMPLE_COUNT.load(Ordering::SeqCst);
+        let render_loading_nonnull_samples =
+            RENDER_LOADING_LAYER_NONNULL_SAMPLES.load(Ordering::SeqCst);
+        let render_loading_visible_slots_mask =
+            RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK.load(Ordering::SeqCst);
         body.push_str(&format!(
-            "  \"oracle_now_loading\": {now_loading},\n  \"oracle_fake_loading_screen\": {},\n  \"oracle_fake_loading_visible\": {fake_loading_visible},\n  \"oracle_fake_loading_field_c\": {fake_loading_field_c},\n  \"oracle_fake_loading_field_10\": {fake_loading_field_10},\n  \"oracle_fake_loading_sample_count\": {fake_loading_samples},\n  \"oracle_fake_loading_visible_samples\": {fake_loading_visible_samples},\n  \"oracle_fake_loading_any_visible\": {},\n",
+            "  \"oracle_now_loading\": {now_loading},\n  \"oracle_fake_loading_screen\": {},\n  \"oracle_fake_loading_visible\": {fake_loading_visible},\n  \"oracle_fake_loading_field_c\": {fake_loading_field_c},\n  \"oracle_fake_loading_field_10\": {fake_loading_field_10},\n  \"oracle_fake_loading_sample_count\": {fake_loading_samples},\n  \"oracle_fake_loading_visible_samples\": {fake_loading_visible_samples},\n  \"oracle_fake_loading_any_visible\": {},\n  \"oracle_render_loading_rendman\": {},\n  \"oracle_render_loading_csgraphics\": {},\n  \"oracle_render_loading_csscaleform\": {},\n  \"oracle_render_loading_rendman_pause\": {rendman_pause},\n  \"oracle_render_loading_slot_28\": {},\n  \"oracle_render_loading_slot_30\": {},\n  \"oracle_render_loading_slot_38\": {},\n  \"oracle_render_loading_slot_40\": {},\n  \"oracle_render_loading_slot_78\": {},\n  \"oracle_render_loading_csgraphics_field68\": {},\n  \"oracle_render_loading_last_slots_mask\": {slots_mask},\n  \"oracle_render_loading_visible_slots_mask\": {render_loading_visible_slots_mask},\n  \"oracle_render_loading_sample_count\": {render_loading_samples},\n  \"oracle_render_loading_nonnull_samples\": {render_loading_nonnull_samples},\n",
             format_optional_ptr(fake_loading_screen),
             fake_loading_visible_samples > 0,
+            format_optional_ptr(rendman),
+            format_optional_ptr(csgraphics),
+            format_optional_ptr(csscaleform),
+            format_optional_ptr(rend_slot_28),
+            format_optional_ptr(rend_slot_30),
+            format_optional_ptr(rend_slot_38),
+            format_optional_ptr(rend_slot_40),
+            format_optional_ptr(rend_slot_78),
+            format_optional_ptr(csgraphics_field68),
         ));
         let msgbox_dialog = MSGBOX_LAST_DIALOG.load(Ordering::SeqCst);
         let msgbox_vtable = if msgbox_dialog == NULL_PTR {
