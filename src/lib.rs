@@ -303,11 +303,6 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
                 .name("er-effects-title-bind-observer".to_owned())
                 .spawn(install_title_scaleform_bind_observer_hook);
         });
-        START_NOW_LOADING_HELPER_OBSERVER.call_once(|| {
-            let _ = std::thread::Builder::new()
-                .name("er-effects-now-loading-observer".to_owned())
-                .spawn(install_now_loading_helper_observer_hooks);
-        });
     }
 
     // MenuWindow latch: install the SceneObjProxy ctor hook (0x14074a700) as early as the
@@ -561,6 +556,15 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         unsafe { install_pab_advance_hook(base) };
                         unsafe { maybe_set_title_accept_byte(base) };
                     }
+                }
+                // Now-loading helper observer: attach only after the native title accept byte fired.
+                // Attach-time detours on CSNowLoadingHelperImp exited before readiness; this delayed
+                // install avoids touching the loading helper until the title path has already advanced.
+                if product_autoload_enabled()
+                    && TITLE_ACCEPT_BYTE_GATE_FIRED.load(Ordering::SeqCst)
+                    && NOW_LOADING_HELPER_HOOKS_INSTALLED.load(Ordering::SeqCst) == 0
+                {
+                    install_now_loading_helper_observer_hooks();
                 }
                 // Title transition fast-forward (pab_dismiss -> menu_open): scale the title
                 // frame-delta so the FadeIn/TextFadeOut/menu Scaleform animation reaches its end
