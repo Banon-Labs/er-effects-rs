@@ -12,6 +12,12 @@ The desired product chain remains:
 
 A score of `autoload_re_score=1600` means the native title visual is suppressed, the custom cover path exists and is observable, the native Continue/load chain remains intact, there is no synthetic input or direct-load bypass, and bounded runtime proof satisfies the hard constraints.
 
+## Current strategic anchor (do not lose across long autoresearch)
+- `main` at `ca5b2df` is the known-good baseline for the pre-title-cover product path. A no-teardown on-screen run from `/home/banon/projects/er-effects-rs-main-watch` launched 2026-06-25 went through Press Any Button and Continue/load as expected.
+- Therefore **Path B is a preservation/regression problem, not an unknown RE problem**. Do not re-derive Continue from scratch or keep experimenting with synthetic Continue/docall/result fallbacks unless a branch-specific diff first proves `main`'s path cannot be reused.
+- The current branch should restore/preserve `main`'s PAB + native Continue/load behavior, then make title-cover changes visual-only around it. If a runtime probe fails before load, first test/inspect whether a title-cover hook or branch-only runtime/guard change diverged from `main`.
+- Screenshots/visual state are diagnostic only. Stop/product proof must come from RAM/in-process telemetry. Seeing `LOAD GAME`/ProfileSelect while unfinished is expected cover behavior, not a stop oracle.
+
 ## Metrics
 - **Primary**: `autoload_re_score` (points, higher is better, max 1600) -- composite visual-cover/RE/product-proof score from `.auto/measure.sh`.
 - **Regression/failure metrics**: `title_cover_failures`, `readiness_gate_failures`, `asset_chain_failures`, `dll_patch_failures`, `native_continue_failures`, `field58_gate_failures`, `direct_shortcut_failures`, `input_path_failures`, `runtime_proof_failures`, `runtime_mode_failures`, `eula_popup_failures`, `save_data_popup_failures`, `messagebox_dialog_failures`, `false_positives`.
@@ -70,10 +76,11 @@ If re-initializing autoresearch, use metric `autoload_re_score`, unit `points`, 
 - Existing cover target found but not product-safe as a direct title-job replacement: `/home/banon/er-extract/nuxe-menu-20260619-170932/menu/05_010_profileselect.gfx` contains `MENU_DummyProfileFace_01..10`; native wrapper `05_010_ProfileSelect` at dump `0x14081f7e0` maps to deobf `0x14081f6f0`. Runtime spike `product-continue-direct-20260624-184915` proved replacing the `05_000_Title` out-job with this ProfileSelect job suppresses/builds cover telemetry (`suppressed=1`, `cover_builds=1`, zero input, zero MessageBox) but leaves title owner parked at state 10 and never loads Banon before timeout. Do not return the ProfileSelect job in the BeginTitle out slot; Part B needs a non-blocking/custom surface.
 
 ## What to Try Next
-1. Validate Part A statically and then at runtime: hook `FUN_14081f9f0`, return a null out-job for `05_000_Title`, expose `oracle_title_native_menu_visual_*`, and prove native title view is gone while gold still loads.
-2. Runtime-validate Part A null suppression: `05_000_Title` suppressed, no replacement job in the title out slot, gold still loads behind it. For Part B, author a non-blocking custom Scaleform/cover surface with `MENU_DummyProfileFace_NN` rather than returning ProfileSelect as the title job.
-3. Keep downstream proof intact: `continue_load_67b750`, `b80_deserialize_67b290`, native `continue_confirm`/SetState5, world-stable/max oracle, `oracle_char_name=Banon`, zero MessageBoxDialog.
-4. Harden static guards so Part A and Part B are independently observable and cannot regress the kept levers (splash-skip, pab-advance, FadeIn-skip).
+1. Re-anchor current branch to `main`'s working product path: compare branch-only changes touching PAB/Continue/load/runtime guards and disable/revert any title-cover-adjacent change that changes the known-good `main` behavior.
+2. Runtime probe current branch with title-cover hooks disabled/bypassed. If load works, the blocker is title-cover hook behavior; reintroduce cover changes incrementally. If load still fails, diff the branch against `main` until the product-path regression is isolated.
+3. Once `main`'s PAB + Continue/load behavior is preserved again, resume Part A/visual work as visual-only: hide/suppress/cover `05_000_Title` without replacing or weakening the native Continue/load chain.
+4. Keep downstream proof intact: `continue_load_67b750`, `b80_deserialize_67b290`, native `continue_confirm`/SetState5, world-stable/max oracle, `oracle_char_name=Banon`, zero MessageBoxDialog, zero simulated input.
+5. Harden static guards so Part A and Part B are independently observable and cannot regress the kept levers (splash-skip, pab-advance, FadeIn-skip, and `main`'s working Continue/load behavior).
 
 ## What's Been Tried / Dead Ends
 - Fixed timing gates were removed/reduced as success predicates; do not retune wait numbers.

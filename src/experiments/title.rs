@@ -1478,8 +1478,28 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     PRODUCT_CORE_READY_SUCCESSES.fetch_add(1, Ordering::SeqCst);
     PRODUCT_CORE_LAST_BLOCKER.store(PRODUCT_CORE_BLOCKER_READY, Ordering::SeqCst);
     if phase == OWN_STEPPER_PHASE_MENU {
-        if ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO
-            && OWN_STEPPER_MENU_OPENED
+        if ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO {
+            // Main-branch preservation: do NOT call TitleTopDialog::open_menu from this game-task
+            // context. Static disasm of TitleTopDialog::update shows the natural path only calls
+            // open_menu from inside the live update frame after the accept gate, then immediately
+            // drains the MenuWindow job pump at the tail of the same function. Direct game-task
+            // open_menu set a40 but left only the idle Continue candidate observable. Use the decoded
+            // zero-input accept byte lever instead and wait for the native update frame to build/drain
+            // the real Continue row.
+            unsafe { maybe_set_title_accept_byte(module_base) };
+            if !TITLE_ACCEPT_BYTE_GATE_FIRED.load(Ordering::SeqCst) {
+                if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
+                    append_autoload_debug(format_args!(
+                        "product-core-autoload: waiting to arm native title accept byte dialog=0x{:x} loop={} textfadeout={} latch={} slot={slot} tick={tick}",
+                        ready.title_dialog,
+                        ready.title_in_loop,
+                        ready.title_in_textfadeout,
+                        ready.menu_opened_latch
+                    ));
+                }
+                return true;
+            }
+            if OWN_STEPPER_MENU_OPENED
                 .compare_exchange(
                     OWN_STEPPER_MENU_OPENED_NO,
                     OWN_STEPPER_CALL_INC,
@@ -1487,42 +1507,12 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                     Ordering::SeqCst,
                 )
                 .is_ok()
-        {
-            // Lever-3 (narrow registrar advance): the native title press-accept handler 0x1409b1260
-            // sets the menu-system singleton's +0 byte to 1 BEFORE tail-jumping to this same
-            // registrar -- the missing piece that makes it open the menu IN PLACE rather than
-            // spawning the competing dialog a bare self-fire produced (and the route that reaches
-            // the main menu without the language/ToS the broad global accept byte over-triggers).
-            // Replicate that flag set, gated, just before the (already vtable-validated) open_menu.
-            // Zero-input, no save write.
-            if title_registrar_advance_gate_enabled() {
-                let singleton = unsafe {
-                    *((module_base + TITLE_MENU_TRANSITION_SINGLETON_RVA) as *const usize)
-                };
-                if singleton != TITLE_OWNER_SCAN_START_ADDRESS && singleton != null {
-                    unsafe { *(singleton as *mut u8) = TITLE_MENU_TRANSITION_FLAG_SET_VALUE };
-                    append_autoload_debug(format_args!(
-                        "title_registrar_advance: set menu-transition singleton [0x{:x}]->+0=1 before open-menu",
-                        module_base + TITLE_MENU_TRANSITION_SINGLETON_RVA
-                    ));
-                }
-            }
-            let open_menu: unsafe extern "system" fn(usize) =
-                unsafe { std::mem::transmute(module_base + TITLE_TOP_DIALOG_OPEN_MENU_RVA) };
-            unsafe { open_menu(ready.title_dialog) };
-            timeline_event(
-                "T_menu_open",
-                tick,
-                format_args!(
-                    "product-core dialog=0x{:x} press_start_proxy=0x{:x}",
+            {
+                append_autoload_debug(format_args!(
+                    "product-core-autoload: PRESS BUTTON component ready; armed native title accept byte for in-update open-menu/drain (dialog=0x{:x} press_start_proxy=0x{:x}) -- no game-task open_menu self-fire",
                     ready.title_dialog, ready.press_start_proxy
-                ),
-            );
-            append_autoload_debug(format_args!(
-                "product-core-autoload: PRESS BUTTON component ready; self-fire native open-menu 0x{:x}(dialog=0x{:x}) on validated title dialog + latch-clear before native save-load core; TitleTopDialog::open_menu writes latch and does not require Loop/TextFadeout state",
-                module_base + TITLE_TOP_DIALOG_OPEN_MENU_RVA,
-                ready.title_dialog
-            ));
+                ));
+            }
             return true;
         }
         if !ready.title_in_textfadeout && ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO {
