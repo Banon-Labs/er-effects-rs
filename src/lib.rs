@@ -254,15 +254,20 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
             .spawn(apply_foreground_force);
     });
 
-    // Title-cover masquerade Part A: install the BeginTitle `05_000_Title` visual-suppression hook
-    // as early as splash/foreground patches, before STEP_BeginTitle can build the native title
-    // Scaleform. This does NOT touch STEP_Wait or CSMenuMan+0x21; it only replaces the wrapper's
-    // `MenuWindowJob* out` with null so the title flow continues without the native visual job.
+    // Title-cover masquerade Part A: install the BeginTitle `05_000_Title` hook as early as
+    // splash/foreground patches, before STEP_BeginTitle can build the native title Scaleform. This
+    // does NOT touch STEP_Wait or CSMenuMan+0x21; it preserves the native MenuWindowJob and hides
+    // only its draw bit from the MenuWindowJob::Run/FadeIn path.
     if title_native_menu_visual_suppression_enabled() {
         START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-effects-title-cover-part-a".to_owned())
                 .spawn(install_title_native_menu_visual_suppression_hook);
+        });
+        START_TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-cover-render".to_owned())
+                .spawn(install_title_native_menu_visual_render_suppression_hook);
         });
     }
 

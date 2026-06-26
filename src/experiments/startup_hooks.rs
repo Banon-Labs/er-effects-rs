@@ -1352,14 +1352,11 @@ pub(crate) unsafe extern "system" fn scene_obj_proxy_ctor_hook(
 }
 
 /// Detour for BeginTitle's `05_000_Title` visual wrapper (deobf 0x14081f9f0). Static RE shows the
-/// wrapper's only side effect is constructing a CSScaleformLoadInfo with filename `05_000_Title` and
-/// calling factory 0x1407acbf0 to allocate/return a MenuWindowJob. For the title-cover masquerade we
-/// skip that native title factory, clear the caller's out slot, then build the existing
-/// `05_010_ProfileSelect` Scaleform as our custom cover target. That surface contains
-/// `MENU_DummyProfileFace_01..10` placeholders mapped by CSMenuProfModelRend to
-/// `SYSTEX_Menu_Profile00..09`, unlike `05_001_Title_Logo`. This replaces the native title visual
-/// without touching TitleStep, FixOrderJobSequence, native Continue, STEP_PlayGame, or the resident-UI
-/// CSMenuMan+0x21 gate. Zero input, save-safe.
+/// wrapper constructs a CSScaleformLoadInfo with filename `05_000_Title` and calls factory
+/// 0x1407acbf0 to allocate/return a MenuWindowJob. For the title-cover masquerade we now preserve
+/// that native MenuWindowJob and only latch it for the render-only FadeIn suppressor below. This keeps
+/// TitleStep, FixOrderJobSequence, native Continue, STEP_PlayGame, and the resident-UI CSMenuMan+0x21
+/// gate untouched; the draw bit is cleared later only for this preserved native title window.
 pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
     out_slot: usize,
     rdx: usize,
@@ -1372,9 +1369,6 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
     } else {
         null
     };
-    if out_slot != null {
-        unsafe { (out_slot as *mut usize).write(null) };
-    }
     let caller_rva = trace_first_game_caller_rva();
     TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     TITLE_NATIVE_MENU_VISUAL_LAST_OUT_SLOT.store(out_slot, Ordering::SeqCst);
@@ -1383,31 +1377,93 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
     TITLE_NATIVE_MENU_VISUAL_LAST_ARG_R8.store(r8, Ordering::SeqCst);
     TITLE_NATIVE_MENU_VISUAL_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
 
-    let mut cover_ret = out_slot;
-    if base != null {
-        let cover_builder: unsafe extern "system" fn(usize, usize, usize) -> usize =
-            unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA) };
-        cover_ret = unsafe { cover_builder(out_slot, rdx, r8) };
-        let cover_job = if out_slot != null {
-            unsafe { safe_read_usize(out_slot) }.unwrap_or(null)
-        } else {
-            null
-        };
-        TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
-        TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_RET.store(cover_ret, Ordering::SeqCst);
-        TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_JOB.store(cover_job, Ordering::SeqCst);
-        TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "title-cover-part-b: BUILT custom cover {TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME} via 0x{:x} -> ret=0x{cover_ret:x} job=0x{cover_job:x}; dummy={TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL} target={TITLE_CUSTOM_COVER_SYSTEX_TARGET} renderer={TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS}",
-            base + TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA,
-        ));
+    let orig = TITLE_NATIVE_MENU_VISUAL_SUPPRESS_ORIG.load(Ordering::SeqCst);
+    let mut native_ret = out_slot;
+    if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let native_wrapper: unsafe extern "system" fn(usize, usize, usize) -> usize =
+            unsafe { std::mem::transmute(orig) };
+        native_ret = unsafe { native_wrapper(out_slot, rdx, r8) };
     }
+    let native_job = if out_slot != null {
+        unsafe { safe_read_usize(out_slot) }.unwrap_or(null)
+    } else {
+        null
+    };
+    let native_window = if native_job != null {
+        unsafe { safe_read_usize(native_job + 0x130) }.unwrap_or(null)
+    } else {
+        null
+    };
+    TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.store(native_job, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW.store(native_window, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "title-cover-part-a: SUPPRESSED {TITLE_NATIVE_MENU_VISUAL_NAME} BeginTitle wrapper 0x{:x}; skipped native factory 0x{:x}, replaced with custom cover (out_slot=0x{out_slot:x} prev=0x{prev_out:x} rdx=0x{rdx:x} r8=0x{r8:x} caller_rva=0x{caller_rva:x})",
+        "title-cover-part-a: PRESERVED native {TITLE_NATIVE_MENU_VISUAL_NAME} wrapper 0x{:x}/factory 0x{:x}; latched job=0x{native_job:x} window=0x{native_window:x} for render-only suppression (out_slot=0x{out_slot:x} prev=0x{prev_out:x} rdx=0x{rdx:x} r8=0x{r8:x} caller_rva=0x{caller_rva:x})",
         base + TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA,
         base + TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA,
     ));
-    cover_ret
+    native_ret
+}
+
+pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook(
+    window: usize,
+    param_2: usize,
+    param_3: usize,
+    param_4: usize,
+) {
+    let orig = TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_ORIG.load(Ordering::SeqCst);
+    if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let native_fadein: unsafe extern "system" fn(usize, usize, usize, usize) =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { native_fadein(window, param_2, param_3, param_4) };
+    }
+
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let caller_rva = trace_first_game_caller_rva();
+    if caller_rva != TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA {
+        return;
+    }
+    let native_job = TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.load(Ordering::SeqCst);
+    let mut native_window = TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW.load(Ordering::SeqCst);
+    if native_window == null && native_job != null {
+        native_window = unsafe { safe_read_usize(native_job + 0x130) }.unwrap_or(null);
+        TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW.store(native_window, Ordering::SeqCst);
+    }
+    if native_window == null || window != native_window {
+        return;
+    }
+
+    let Some(menu_id) = (unsafe { safe_read_u16(window + 0x180) }) else {
+        return;
+    };
+    if menu_id >= 0x47 {
+        return;
+    }
+    let base = game_module_base().unwrap_or(null);
+    let cs_menu_man = if base != null {
+        unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(null)
+    } else {
+        null
+    };
+    if cs_menu_man == null {
+        return;
+    }
+    let flags_addr = cs_menu_man + 0x90 + menu_id as usize;
+    let Some(flags_before) = (unsafe { safe_read_u8(flags_addr) }) else {
+        return;
+    };
+    let flags_after = flags_before & !TITLE_NATIVE_MENU_VISUAL_DRAW_BIT;
+    if flags_after == flags_before {
+        return;
+    }
+    unsafe { (flags_addr as *mut u8).write_volatile(flags_after) };
+    TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESSED_WINDOWS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_WINDOW.store(window, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_BEFORE.store(flags_before as usize, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_AFTER.store(flags_after as usize, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "title-cover-part-a: render-suppressed preserved native {TITLE_NATIVE_MENU_VISUAL_NAME} window=0x{window:x} menu_id={menu_id} flags 0x{flags_before:02x}->0x{flags_after:02x} via CSMenuMan+0x90 caller_rva=0x{caller_rva:x}"
+    ));
 }
 
 /// Install the Part-A title visual suppression hook once. It must run at process attach before
@@ -1466,6 +1522,64 @@ pub(crate) fn install_title_native_menu_visual_suppression_hook() {
         }
         Err(status) => append_autoload_debug(format_args!(
             "title-cover-part-a: MhHook::new BeginTitle wrapper failed: {status:?}"
+        )),
+    }
+}
+
+pub(crate) fn install_title_native_menu_visual_render_suppression_hook() {
+    if TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED.load(Ordering::SeqCst)
+        != TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-a: render MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(fadein_addr) = game_rva(TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-cover-part-a: failed to resolve MenuWindowJob FadeIn helper rva 0x{TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            fadein_addr as *mut c_void,
+            title_native_menu_visual_window_fadein_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-a: queue_enable FadeIn helper failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED.store(
+                        TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED_YES,
+                        Ordering::SeqCst,
+                    );
+                    append_autoload_debug(format_args!(
+                        "title-cover-part-a: hooked MenuWindowJob FadeIn helper 0x{fadein_addr:x}; preserved native {TITLE_NATIVE_MENU_VISUAL_NAME} will clear only draw bit 0x{TITLE_NATIVE_MENU_VISUAL_DRAW_BIT:x} from CSMenuMan+0x90 when Run returns at rva 0x{TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA:x}"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "title-cover-part-a: render MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "title-cover-part-a: MhHook::new FadeIn helper failed: {status:?}"
         )),
     }
 }

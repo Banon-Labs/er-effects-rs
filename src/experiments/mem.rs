@@ -277,3 +277,22 @@ pub(crate) unsafe fn safe_read_u8(addr: usize) -> Option<u8> {
         None
     }
 }
+
+pub(crate) unsafe fn safe_read_u16(addr: usize) -> Option<u16> {
+    let mut value: u16 = 0;
+    let mut read: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    let ok = unsafe {
+        ReadProcessMemory(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            addr as *const c_void,
+            &mut value as *mut u16 as *mut c_void,
+            std::mem::size_of::<u16>(),
+            &mut read,
+        )
+    };
+    if ok != HOOK_FALSE_RETURN as i32 && read == std::mem::size_of::<u16>() {
+        Some(value)
+    } else {
+        None
+    }
+}

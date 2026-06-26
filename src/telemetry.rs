@@ -920,6 +920,21 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         let title_visual_last_arg_r8 = TITLE_NATIVE_MENU_VISUAL_LAST_ARG_R8.load(Ordering::SeqCst);
         let title_visual_last_caller_rva =
             TITLE_NATIVE_MENU_VISUAL_LAST_CALLER_RVA.load(Ordering::SeqCst);
+        let title_visual_native_job = TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.load(Ordering::SeqCst);
+        let title_visual_native_window = TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW.load(Ordering::SeqCst);
+        let title_visual_render_suppress_installed = TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED
+            .load(Ordering::SeqCst)
+            == TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED_YES;
+        let title_visual_render_suppressed_windows =
+            TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESSED_WINDOWS.load(Ordering::SeqCst);
+        let title_visual_render_last_window =
+            TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_WINDOW.load(Ordering::SeqCst);
+        let title_visual_render_last_flags_before =
+            TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_BEFORE.load(Ordering::SeqCst);
+        let title_visual_render_last_flags_after =
+            TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_AFTER.load(Ordering::SeqCst);
+        let title_visual_render_last_caller_rva =
+            TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_CALLER_RVA.load(Ordering::SeqCst);
         let title_custom_cover_profile_select_builds =
             TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.load(Ordering::SeqCst);
         let title_custom_cover_profile_select_last_ret =
@@ -1006,7 +1021,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             server_status_text_id
         ));
         body.push_str(&format!(
-            "  \"oracle_title_native_menu_visual_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_suppressed_builds\": {},\n  \"oracle_title_native_menu_visual_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_last_out_slot\": {},\n  \"oracle_title_native_menu_visual_last_prev_out\": {},\n  \"oracle_title_native_menu_visual_last_args\": [{}, {}],\n  \"oracle_title_native_menu_visual_last_caller_rva\": {},\n  \"oracle_title_custom_cover_profile_select_builds\": {},\n  \"oracle_title_custom_cover_profile_select_any_built\": {},\n  \"oracle_title_custom_cover_profile_select_last_ret\": {},\n  \"oracle_title_custom_cover_profile_select_last_job\": {},\n  \"oracle_title_custom_cover_profile_select_last_caller_rva\": {},\n",
+            "  \"oracle_title_native_menu_visual_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_suppressed_builds\": {},\n  \"oracle_title_native_menu_visual_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_last_out_slot\": {},\n  \"oracle_title_native_menu_visual_last_prev_out\": {},\n  \"oracle_title_native_menu_visual_last_args\": [{}, {}],\n  \"oracle_title_native_menu_visual_last_caller_rva\": {},\n  \"oracle_title_native_menu_visual_native_job\": {},\n  \"oracle_title_native_menu_visual_native_window\": {},\n  \"oracle_title_native_menu_visual_render_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_render_suppressed_windows\": {},\n  \"oracle_title_native_menu_visual_render_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_render_last_window\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_before\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_after\": {},\n  \"oracle_title_native_menu_visual_render_last_caller_rva\": {},\n  \"oracle_title_custom_cover_profile_select_builds\": {},\n  \"oracle_title_custom_cover_profile_select_any_built\": {},\n  \"oracle_title_custom_cover_profile_select_last_ret\": {},\n  \"oracle_title_custom_cover_profile_select_last_job\": {},\n  \"oracle_title_custom_cover_profile_select_last_caller_rva\": {},\n",
             title_visual_suppress_installed,
             title_visual_suppressed_builds,
             title_visual_suppressed_builds != 0,
@@ -1015,6 +1030,15 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             title_visual_last_arg_rdx,
             title_visual_last_arg_r8,
             title_visual_last_caller_rva,
+            title_visual_native_job,
+            title_visual_native_window,
+            title_visual_render_suppress_installed,
+            title_visual_render_suppressed_windows,
+            title_visual_render_suppressed_windows != 0,
+            title_visual_render_last_window,
+            title_visual_render_last_flags_before,
+            title_visual_render_last_flags_after,
+            title_visual_render_last_caller_rva,
             title_custom_cover_profile_select_builds,
             title_custom_cover_profile_select_builds != 0,
             title_custom_cover_profile_select_last_ret,

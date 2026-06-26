@@ -501,6 +501,38 @@ pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_ARG_R8: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Native `MenuWindowJob*` and live window preserved by the BeginTitle wrapper. The render-only
+/// suppressor uses these to clear the native title draw bit without removing the job from the native
+/// title sequence.
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Render-only Part-A suppression: `MenuWindowJob::Run` calls the FadeIn helper at deobf
+/// 0x140744dd0 from return RVA 0x1407ad530 with rcx=`[MenuWindowJob+0x130]`. The helper sets
+/// `GLOBAL_CSMenuMan->field106_0x90[id] |= 3`; after preserving the native helper, clear only the
+/// draw bit for the preserved `05_000_Title` window. This keeps the title job/sequence alive while
+/// hiding its visual layer.
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA: usize = 0x744dd0;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA: usize = 0x7ad530;
+pub(crate) const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_DRAW_BIT: u8 = 0x2;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_NOT_INSTALLED: usize = 0;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED_YES: usize = 1;
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED: AtomicUsize =
+    AtomicUsize::new(TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_NOT_INSTALLED);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESSED_WINDOWS: AtomicUsize =
+    AtomicUsize::new(0);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_WINDOW: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_BEFORE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_AFTER: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// PART-B custom cover target: `05_010_ProfileSelect` is an existing Scaleform surface with
 /// `MENU_DummyProfileFace_01..10` symbols that the profile renderer maps to
 /// `SYSTEX_Menu_Profile00..09` (via CSMenuProfModelRend / active-screen render targets). The wrapper
@@ -2807,6 +2839,7 @@ pub(crate) static START_SPLASH_SKIP: Once = Once::new();
 pub(crate) static START_ONLINE_DISABLE: Once = Once::new();
 pub(crate) static START_FOREGROUND_FORCE: Once = Once::new();
 pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS: Once = Once::new();
+pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS: Once = Once::new();
 pub(crate) static START_BOOT_PROFILER: Once = Once::new();
 /// One-shot latch for the "first game-task frame ran" boot-phase marker (0 = not yet logged).
 pub(crate) static BOOT_FIRST_FRAME_LOGGED: AtomicUsize = AtomicUsize::new(0);
