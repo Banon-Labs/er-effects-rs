@@ -1549,6 +1549,73 @@ pub(crate) fn install_title_native_menu_visual_suppression_hook() {
     }
 }
 
+pub(crate) unsafe extern "system" fn title_logo_back_view_parts_fadein_hook(this: usize) {
+    let caller_rva = trace_first_game_caller_rva();
+    TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_SUPPRESSED.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_LAST_THIS.store(this, Ordering::SeqCst);
+    TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "title-cover-part-a: suppressed {TITLE_LOGO_BACK_VIEW_PARTS_NAME} {TITLE_LOGO_RESOURCE_NAME} FadeIn this=0x{this:x} caller_rva=0x{caller_rva:x}; native Continue/load chain unchanged"
+    ));
+}
+
+pub(crate) fn install_title_logo_back_view_parts_fadein_suppression_hook() {
+    if TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_INSTALLED.load(Ordering::SeqCst)
+        != TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-a: TitleBackViewParts FadeIn MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(fadein_addr) = game_rva(TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-cover-part-a: failed to resolve TitleBackViewParts FadeIn rva 0x{TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            fadein_addr as *mut c_void,
+            title_logo_back_view_parts_fadein_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-a: queue_enable TitleBackViewParts FadeIn failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_INSTALLED.store(
+                        TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_INSTALLED_YES,
+                        Ordering::SeqCst,
+                    );
+                    append_autoload_debug(format_args!(
+                        "title-cover-part-a: hooked TitleBackViewParts FadeIn 0x{fadein_addr:x}; {TITLE_LOGO_RESOURCE_NAME} native FadeIn will be suppressed"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "title-cover-part-a: TitleBackViewParts FadeIn MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "title-cover-part-a: MhHook::new TitleBackViewParts FadeIn failed: {status:?}"
+        )),
+    }
+}
+
 pub(crate) fn install_title_native_menu_visual_render_suppression_hook() {
     if TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED.load(Ordering::SeqCst)
         != TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_NOT_INSTALLED
