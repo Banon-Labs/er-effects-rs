@@ -119,6 +119,60 @@ pub(crate) fn write_bootstrap_event(stage: &str, detail: &str) {
     let _ = fs::write(state_path, payload);
 }
 
+fn title_logo_gfx_alpha_for_frame(frame: i32) -> i32 {
+    match frame {
+        TITLE_LOGO_GFX_UNKNOWN_FRAME => TITLE_LOGO_GFX_UNKNOWN_ALPHA,
+        // Frame 1 has the root depth-3 sprite placed with no color transform. The FadeIn label at
+        // frame 2 explicitly sets alpha=0 before ramping; frame 60 is identity/full alpha.
+        1 => TITLE_LOGO_GFX_FULL_ALPHA,
+        2 => 0,
+        3..=59 => 1,
+        60..=113 => TITLE_LOGO_GFX_FULL_ALPHA,
+        114..=132 => 1,
+        133 => 0,
+        _ => TITLE_LOGO_GFX_UNKNOWN_ALPHA,
+    }
+}
+
+unsafe fn title_logo_gfx_current_frame(base: usize, title_logo_back_view_parts: usize) -> i32 {
+    if title_logo_back_view_parts == TITLE_OWNER_SCAN_START_ADDRESS
+        || title_logo_back_view_parts == 0
+    {
+        return TITLE_LOGO_GFX_UNKNOWN_FRAME;
+    }
+    let gfx_value = title_logo_back_view_parts + TITLE_LOGO_GFX_VALUE_88_OFFSET;
+    let Some(handle) = (unsafe { crate::experiments::safe_read_usize(gfx_value) }) else {
+        return TITLE_LOGO_GFX_UNKNOWN_FRAME;
+    };
+    if handle == 0 || handle == TITLE_OWNER_SCAN_START_ADDRESS {
+        return TITLE_LOGO_GFX_UNKNOWN_FRAME;
+    }
+    let Some(vtable) = (unsafe { crate::experiments::safe_read_usize(handle) }) else {
+        return TITLE_LOGO_GFX_UNKNOWN_FRAME;
+    };
+    if vtable == 0 || vtable == TITLE_OWNER_SCAN_START_ADDRESS {
+        return TITLE_LOGO_GFX_UNKNOWN_FRAME;
+    }
+    let Some(resolve_value_addr) = (unsafe { crate::experiments::safe_read_usize(vtable + 0x8) })
+    else {
+        return TITLE_LOGO_GFX_UNKNOWN_FRAME;
+    };
+    if resolve_value_addr == 0 || resolve_value_addr == TITLE_OWNER_SCAN_START_ADDRESS {
+        return TITLE_LOGO_GFX_UNKNOWN_FRAME;
+    }
+    // Mirrors native helpers at 0x140749980/0x1407499e0: load *(gfx_value) into rcx, call vtable+8,
+    // then pass the resolved Scaleform value to FUN_140d82620 to read the current 1-based frame.
+    let resolve_value: unsafe extern "system" fn(usize) -> usize =
+        unsafe { std::mem::transmute(resolve_value_addr) };
+    let value = unsafe { resolve_value(handle) };
+    if value == 0 || value == TITLE_OWNER_SCAN_START_ADDRESS {
+        return TITLE_LOGO_GFX_UNKNOWN_FRAME;
+    }
+    let current_frame: unsafe extern "system" fn(usize) -> i32 =
+        unsafe { std::mem::transmute(base + TITLE_LOGO_GFX_CURRENT_FRAME_RVA) };
+    unsafe { current_frame(value) }
+}
+
 pub(crate) fn write_telemetry_throttled(state: &mut EffectsState, player_available: bool) {
     const TELEMETRY_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -925,10 +979,11 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         let title_visual_last_caller_rva =
             TITLE_NATIVE_MENU_VISUAL_LAST_CALLER_RVA.load(Ordering::SeqCst);
         let title_visual_native_job = TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.load(Ordering::SeqCst);
-        let title_visual_native_window = TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW.load(Ordering::SeqCst);
-        let title_visual_render_suppress_installed = TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED
-            .load(Ordering::SeqCst)
-            == TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED_YES;
+        let title_visual_native_window =
+            TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW.load(Ordering::SeqCst);
+        let title_visual_render_suppress_installed =
+            TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED.load(Ordering::SeqCst)
+                == TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED_YES;
         let title_visual_render_suppressed_windows =
             TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESSED_WINDOWS.load(Ordering::SeqCst);
         let title_visual_render_last_window =
@@ -948,8 +1003,9 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             TITLE_OWNER_SCAN_START_ADDRESS
         };
         let title_visual_current_flags = if title_visual_current_menu_id < 0x47 {
-            let cs_menu_man = unsafe { crate::experiments::safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
-                .unwrap_or(NULL_PTR);
+            let cs_menu_man =
+                unsafe { crate::experiments::safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
+                    .unwrap_or(NULL_PTR);
             if cs_menu_man != NULL_PTR {
                 unsafe {
                     crate::experiments::safe_read_u8(
@@ -963,8 +1019,10 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         } else {
             TITLE_OWNER_SCAN_START_ADDRESS
         };
-        let title_visual_current_draw_bit_set = title_visual_current_flags != TITLE_OWNER_SCAN_START_ADDRESS
-            && (title_visual_current_flags & TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK as usize) != 0;
+        let title_visual_current_draw_bit_set = title_visual_current_flags
+            != TITLE_OWNER_SCAN_START_ADDRESS
+            && (title_visual_current_flags & TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK as usize)
+                != 0;
         // Actual visible logo surface telemetry: `TitleBackViewParts` / `05_001_Title_Logo` is an
         // embedded object at TitleTopDialog+0xaa8, separate from the preserved `05_000_Title`
         // MenuWindowJob. A real portrait cover depends on post-SL2 profile_summary readiness and the
@@ -977,22 +1035,41 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         } else {
             TITLE_OWNER_SCAN_START_ADDRESS
         };
-        let title_logo_back_view_parts_vtable = if title_logo_back_view_parts != TITLE_OWNER_SCAN_START_ADDRESS {
-            unsafe { crate::experiments::safe_read_usize(title_logo_back_view_parts) }
-                .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
-        } else {
-            TITLE_OWNER_SCAN_START_ADDRESS
-        };
+        let title_logo_back_view_parts_vtable =
+            if title_logo_back_view_parts != TITLE_OWNER_SCAN_START_ADDRESS {
+                unsafe { crate::experiments::safe_read_usize(title_logo_back_view_parts) }
+                    .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+            } else {
+                TITLE_OWNER_SCAN_START_ADDRESS
+            };
+        let title_logo_gfx_frame =
+            if title_logo_back_view_parts_vtable != TITLE_OWNER_SCAN_START_ADDRESS {
+                unsafe { title_logo_gfx_current_frame(base, title_logo_back_view_parts) }
+            } else {
+                TITLE_LOGO_GFX_UNKNOWN_FRAME
+            };
+        let title_logo_gfx_alpha_mult_term = title_logo_gfx_alpha_for_frame(title_logo_gfx_frame);
+        let title_logo_gfx_visibility = title_logo_gfx_alpha_mult_term > 0;
+        // Real false until a later mutation binds the post-SL2 profile/SYSTEX portrait to the
+        // 05_001_Title_Logo root-depth-3 surface. `05_010_ProfileSelect` dummy faces are exported
+        // bitmap classes only (0 timeline placements), so profile_summary readiness alone is not a
+        // visible cover binding.
+        let title_profile_cover_bound_to_logo_surface = false;
         let title_logo_profile_summary = {
             let game_data_man = crate::game_data_man_ptr_or_null();
             if game_data_man != NULL_PTR {
-                unsafe { crate::experiments::safe_read_usize(game_data_man + SLOT_MANAGER_CONTAINER_OFFSET) }
-                    .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+                unsafe {
+                    crate::experiments::safe_read_usize(
+                        game_data_man + SLOT_MANAGER_CONTAINER_OFFSET,
+                    )
+                }
+                .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
             } else {
                 TITLE_OWNER_SCAN_START_ADDRESS
             }
         };
-        let title_logo_profile_summary_ready = title_logo_profile_summary != TITLE_OWNER_SCAN_START_ADDRESS
+        let title_logo_profile_summary_ready = title_logo_profile_summary
+            != TITLE_OWNER_SCAN_START_ADDRESS
             && title_logo_profile_summary != NULL_PTR;
         let title_custom_cover_profile_render_refresh_calls =
             TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_CALLS.load(Ordering::SeqCst);
@@ -1086,7 +1163,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             server_status_text_id
         ));
         body.push_str(&format!(
-            "  \"oracle_title_native_menu_visual_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_suppressed_builds\": {},\n  \"oracle_title_native_menu_visual_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_last_out_slot\": {},\n  \"oracle_title_native_menu_visual_last_prev_out\": {},\n  \"oracle_title_native_menu_visual_last_args\": [{}, {}],\n  \"oracle_title_native_menu_visual_last_caller_rva\": {},\n  \"oracle_title_native_menu_visual_native_job\": {},\n  \"oracle_title_native_menu_visual_native_window\": {},\n  \"oracle_title_native_menu_visual_current_menu_id\": {},\n  \"oracle_title_native_menu_visual_current_flags\": {},\n  \"oracle_title_native_menu_visual_current_draw_bit_set\": {},\n  \"oracle_title_native_menu_visual_render_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_render_suppressed_windows\": {},\n  \"oracle_title_native_menu_visual_render_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_render_last_window\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_before\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_after\": {},\n  \"oracle_title_native_menu_visual_render_last_caller_rva\": {},\n  \"oracle_title_logo_surface_name\": \"{}\",\n  \"oracle_title_logo_resource_name\": \"{}\",\n  \"oracle_title_logo_back_view_parts\": {},\n  \"oracle_title_logo_back_view_parts_vtable\": {},\n  \"oracle_title_logo_profile_summary\": {},\n  \"oracle_title_logo_profile_summary_ready\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_calls\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_last_profile_summary\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_last_caller_phase\": {},\n  \"oracle_title_custom_cover_profile_select_builds\": {},\n  \"oracle_title_custom_cover_profile_select_any_built\": {},\n  \"oracle_title_custom_cover_profile_select_last_ret\": {},\n  \"oracle_title_custom_cover_profile_select_last_job\": {},\n  \"oracle_title_custom_cover_profile_select_last_caller_rva\": {},\n",
+            "  \"oracle_title_native_menu_visual_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_suppressed_builds\": {},\n  \"oracle_title_native_menu_visual_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_last_out_slot\": {},\n  \"oracle_title_native_menu_visual_last_prev_out\": {},\n  \"oracle_title_native_menu_visual_last_args\": [{}, {}],\n  \"oracle_title_native_menu_visual_last_caller_rva\": {},\n  \"oracle_title_native_menu_visual_native_job\": {},\n  \"oracle_title_native_menu_visual_native_window\": {},\n  \"oracle_title_native_menu_visual_current_menu_id\": {},\n  \"oracle_title_native_menu_visual_current_flags\": {},\n  \"oracle_title_native_menu_visual_current_draw_bit_set\": {},\n  \"oracle_title_native_menu_visual_render_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_render_suppressed_windows\": {},\n  \"oracle_title_native_menu_visual_render_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_render_last_window\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_before\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_after\": {},\n  \"oracle_title_native_menu_visual_render_last_caller_rva\": {},\n  \"oracle_title_logo_surface_name\": \"{}\",\n  \"oracle_title_logo_resource_name\": \"{}\",\n  \"oracle_title_logo_gfx_root_depth\": {},\n  \"oracle_title_logo_gfx_root_sprite_char\": {},\n  \"oracle_title_logo_gfx_main_asset_char\": {},\n  \"oracle_title_logo_gfx_main_asset_name\": \"{}\",\n  \"oracle_title_logo_back_view_parts\": {},\n  \"oracle_title_logo_back_view_parts_vtable\": {},\n  \"oracle_title_logo_gfx_frame\": {},\n  \"oracle_title_logo_gfx_alpha_mult_term\": {},\n  \"oracle_title_logo_gfx_visibility\": {},\n  \"oracle_title_profile_cover_bound_to_logo_surface\": {},\n  \"oracle_title_logo_profile_summary\": {},\n  \"oracle_title_logo_profile_summary_ready\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_calls\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_last_profile_summary\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_last_caller_phase\": {},\n  \"oracle_title_custom_cover_profile_select_builds\": {},\n  \"oracle_title_custom_cover_profile_select_any_built\": {},\n  \"oracle_title_custom_cover_profile_select_last_ret\": {},\n  \"oracle_title_custom_cover_profile_select_last_job\": {},\n  \"oracle_title_custom_cover_profile_select_last_caller_rva\": {},\n",
             title_visual_suppress_installed,
             title_visual_suppressed_builds,
             title_visual_suppressed_builds != 0,
@@ -1109,8 +1186,16 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             title_visual_render_last_caller_rva,
             TITLE_LOGO_BACK_VIEW_PARTS_NAME,
             TITLE_LOGO_RESOURCE_NAME,
+            TITLE_LOGO_GFX_ROOT_DEPTH,
+            TITLE_LOGO_GFX_ROOT_SPRITE_CHAR,
+            TITLE_LOGO_GFX_MAIN_ASSET_CHAR,
+            TITLE_LOGO_GFX_MAIN_ASSET_NAME,
             title_logo_back_view_parts,
             title_logo_back_view_parts_vtable,
+            title_logo_gfx_frame,
+            title_logo_gfx_alpha_mult_term,
+            title_logo_gfx_visibility,
+            title_profile_cover_bound_to_logo_surface,
             title_logo_profile_summary,
             title_logo_profile_summary_ready,
             title_custom_cover_profile_render_refresh_calls,

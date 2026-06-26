@@ -550,9 +550,12 @@ pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA: usize = 0x2b801
 /// each active slot to `SYSTEX_Menu_ProfileNN` through `FUN_140bb8cf0(renderer, slot*2)`. It must run
 /// after SL2/profile readiness, not at early `05_001_Title_Logo` construction time.
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA: usize = 0x9aa680;
-pub(crate) static TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_CALLS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_PROFILE_SUMMARY: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_CALLER_PHASE: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_CALLS: AtomicUsize =
+    AtomicUsize::new(0);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_PROFILE_SUMMARY: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_CALLER_PHASE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_754: usize = 0x754;
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_755: usize = 0x755;
 pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS: AtomicUsize = AtomicUsize::new(0);
@@ -738,6 +741,21 @@ pub(crate) const TITLE_PRESS_START_SCENE_PROXY_B78_OFFSET: usize = 0xb78;
 pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET: usize = 0xaa8;
 pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_NAME: &str = "TitleBackViewParts";
 pub(crate) const TITLE_LOGO_RESOURCE_NAME: &str = "05_001_Title_Logo";
+/// `TitleBackViewParts` embeds its `SceneObjProxy` at `this+0x70`; the GFx/ScaleformValue handle
+/// used by the native label/frame helpers is the proxy field at `this+0x88` (`SceneObjProxy+0x18`).
+pub(crate) const TITLE_LOGO_GFX_VALUE_88_OFFSET: usize = 0x88;
+/// Current-frame reader for the resolved Scaleform value (`FUN_140d82620`, dump 0x140d82620 ->
+/// live/deobf 0x140d82570). Static FFDec XML for `05_001_title_logo.gfx` shows root depth 3 is the
+/// visible logo surface and maps frames to alpha: FadeIn 2..60, TextFadeIn 60, TextFadeOut 93,
+/// Title_TopMenu 112, FadeOut 113..133.
+pub(crate) const TITLE_LOGO_GFX_CURRENT_FRAME_RVA: usize = 0xd82570;
+pub(crate) const TITLE_LOGO_GFX_UNKNOWN_FRAME: i32 = -1;
+pub(crate) const TITLE_LOGO_GFX_UNKNOWN_ALPHA: i32 = -1;
+pub(crate) const TITLE_LOGO_GFX_FULL_ALPHA: i32 = 256;
+pub(crate) const TITLE_LOGO_GFX_ROOT_DEPTH: usize = 3;
+pub(crate) const TITLE_LOGO_GFX_ROOT_SPRITE_CHAR: usize = 7;
+pub(crate) const TITLE_LOGO_GFX_MAIN_ASSET_CHAR: usize = 4;
+pub(crate) const TITLE_LOGO_GFX_MAIN_ASSET_NAME: &str = "MENU_Title_EldenRing_01";
 /// Dead-end note: `CS::TitleBackViewParts::FadeIn` (dump 0x1409a63f0 -> live 0x1409a62a0)
 /// only calls the state transition helper on `this+0x88` with `"FadeIn"`; runtime/user evidence
 /// proved suppressing it does NOT hide the visible logo. Keep as RE context, not a product hook.

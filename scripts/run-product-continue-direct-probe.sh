@@ -327,17 +327,12 @@ wipe_appdata_saves
 LAUNCH_EPOCH="$(date +%s.%N)"
 printf '%s\n' "$LAUNCH_EPOCH" > "$ARTIFACT_DIR/launch-epoch.txt"
 
-# Elden Ring ALWAYS renders inside a gamescope HEADLESS nested compositor. This is the DEFAULT, not a
-# toggle: it is OFFSCREEN (no host-compositor window at all -- never on the user's monitor, never
-# steals focus) AND full-speed (gamescope always drives Present into its offscreen buffer, so ER never
-# present-blocks like an occluded host window would). We DRIVE AND OBSERVE the run entirely via
-# in-process RAM telemetry oracles -- gamescope headless cannot be screenshotted and we do not need it
-# to: the oracles are the ground truth (see the title/menu state oracles in telemetry). Requires gamescope.
-# RUNTIME_ONSCREEN=1: render to a REAL on-screen window (drop gamescope headless) so a human can WATCH
-# the zero-input autoload and TEST the loaded character. The DLL's input block auto-releases in-world
-# (IN_WORLD_REACHED), so the user takes control once the character is in the world. Default is the
-# offscreen headless render (oracle-observed, never on the user's monitor).
-if [[ "${RUNTIME_ONSCREEN:-0}" == "1" ]]; then
+# Session-default runtime probes render to a REAL on-screen window so the user can WATCH the
+# zero-input autoload and falsify any title-cover claim visually. The DLL's input block auto-releases
+# in-world (IN_WORLD_REACHED), so the user takes control once the character is in the world.
+# RUNTIME_ONSCREEN=0: force the old gamescope headless/offscreen compositor path for oracle-only runs
+# that should never appear on the user's monitor.
+if [[ "${RUNTIME_ONSCREEN:-1}" == "1" ]]; then
   gamescope_prefix=()
   echo "render: ON-SCREEN direct Proton window (RUNTIME_ONSCREEN=1) -- watch + test; input block releases in-world"
 else
@@ -402,9 +397,9 @@ fi
   "${gamescope_prefix[@]}" "$PROTON" run "$GAME_DIR/eldenring.exe" > "$ARTIFACT_DIR/proton-run.out" 2>&1 & echo $! > "$PID_FILE"
 )
 
-# ER renders nested in gamescope, so the steam_app_1245620 Hyprland window the watcher screenshots
-# never exists -> always rely on in-process telemetry (not a toggle). And the gamescope boot is
-# GPU-contended/slower, so the title/world phase-stall watchdogs would false-positive -> disabled.
+# The watcher remains oracle-first even for on-screen runs; screenshots are diagnostic only and the
+# product proof comes from in-process telemetry. Keep the phase/deadline relaxations unless a probe is
+# explicitly tightened, because both gamescope and visible Proton launches can have compositor/GPU jitter.
 (
   cd "$REPO_ROOT"
   ARTIFACT_DIR="$ARTIFACT_DIR" \

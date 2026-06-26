@@ -1479,9 +1479,11 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook
         return;
     }
     unsafe { (flags_addr as *mut u8).write_volatile(flags_after) };
-    TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESSED_WINDOWS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESSED_WINDOWS
+        .fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_WINDOW.store(window, Ordering::SeqCst);
-    TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_BEFORE.store(flags_before as usize, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_BEFORE
+        .store(flags_before as usize, Ordering::SeqCst);
     TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_AFTER.store(flags_after as usize, Ordering::SeqCst);
     TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
     append_autoload_debug(format_args!(

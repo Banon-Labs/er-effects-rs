@@ -1311,7 +1311,10 @@ pub(crate) unsafe fn product_core_autoload_ready(
         press_start_context: press_start.context,
     })
 }
-pub(crate) unsafe fn maybe_refresh_title_profile_cover(base: usize, ready: &ProductCoreAutoloadReady) {
+pub(crate) unsafe fn maybe_refresh_title_profile_cover(
+    base: usize,
+    ready: &ProductCoreAutoloadReady,
+) {
     if ready.profile_summary == TITLE_OWNER_SCAN_START_ADDRESS || ready.profile_summary == 0 {
         return;
     }
