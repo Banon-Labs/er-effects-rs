@@ -1016,11 +1016,15 @@ if rt_root.exists():
             save_data_popup_by_dir[d.name] = [
                 f'runtime artifact {d.name} detected failed-save-data popup from captured target-window OCR evidence: {"; ".join(save_data_evidence)}'
             ]
-        for name in ['autoload-debug-live.final.log', 'continue-trace-game.final.log', 'continue-trace-game.log']:
+        for name in ['er-effects-autoload-debug.log', 'autoload-debug-live.final.log', 'continue-trace-game.final.log', 'continue-trace-game.log']:
             p = d / name
             if not p.exists():
                 continue
             text = p.read_text(encoding='utf-8', errors='replace')[-200_000:]
+            if 'CORRUPTED-SAVE SEMAPHORE' in text or 'GetGR_System_Message id=401106' in text:
+                save_data_popup_by_dir.setdefault(d.name, []).append(
+                    f'runtime artifact {d.name} detected corrupted-save native semaphore in {name}'
+                )
             if 'native-fullread: SUBMIT' in text or 'FULL-INIT' in text:
                 proof['product_submit'] = True
             if 'native-fullread: b80 reached RESIDENT' in text or 'full read' in text or 'FULL-INIT' in text:
