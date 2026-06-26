@@ -964,7 +964,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             TITLE_OWNER_SCAN_START_ADDRESS
         };
         let title_visual_current_draw_bit_set = title_visual_current_flags != TITLE_OWNER_SCAN_START_ADDRESS
-            && (title_visual_current_flags & TITLE_NATIVE_MENU_VISUAL_DRAW_BIT as usize) != 0;
+            && (title_visual_current_flags & TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK as usize) != 0;
         let title_custom_cover_profile_select_builds =
             TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.load(Ordering::SeqCst);
         let title_custom_cover_profile_select_last_ret =

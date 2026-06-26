@@ -1097,10 +1097,10 @@ part_a_render_only = (
     and 'TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA: usize = 0x744dd0' in code
     and 'TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA: usize = 0x7ad530' in code
     and 'CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0' in code
-    and 'TITLE_NATIVE_MENU_VISUAL_DRAW_BIT: u8 = 0x2' in code
+    and 'TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK: u8 = 0x3' in code
     and 'TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESSED_WINDOWS' in title_cover_render_hook
     and 'fetch_add' in title_cover_render_hook
-    and 'flags_before & !TITLE_NATIVE_MENU_VISUAL_DRAW_BIT' in title_cover_render_hook
+    and 'flags_before & !TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK' in title_cover_render_hook
     and '.write_volatile(flags_after)' in title_cover_render_hook
     and 'oracle_title_native_menu_visual_render_suppressed_windows' in telemetry_src
     and 'title_native_menu_visual_render_suppressed_windows' in watcher

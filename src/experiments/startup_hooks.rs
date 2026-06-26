@@ -1474,7 +1474,7 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook
     let Some(flags_before) = (unsafe { safe_read_u8(flags_addr) }) else {
         return;
     };
-    let flags_after = flags_before & !TITLE_NATIVE_MENU_VISUAL_DRAW_BIT;
+    let flags_after = flags_before & !TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK;
     if flags_after == flags_before {
         return;
     }
@@ -1593,7 +1593,7 @@ pub(crate) fn install_title_native_menu_visual_render_suppression_hook() {
                         Ordering::SeqCst,
                     );
                     append_autoload_debug(format_args!(
-                        "title-cover-part-a: hooked MenuWindowJob FadeIn helper 0x{fadein_addr:x}; preserved native {TITLE_NATIVE_MENU_VISUAL_NAME} will clear only draw bit 0x{TITLE_NATIVE_MENU_VISUAL_DRAW_BIT:x} from CSMenuMan+0x90 when Run returns at rva 0x{TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA:x}"
+                        "title-cover-part-a: hooked MenuWindowJob FadeIn helper 0x{fadein_addr:x}; preserved native {TITLE_NATIVE_MENU_VISUAL_NAME} will clear visible flags mask 0x{TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK:x} from CSMenuMan+0x90 when Run returns at rva 0x{TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA:x}"
                     ));
                 }
                 status => append_autoload_debug(format_args!(

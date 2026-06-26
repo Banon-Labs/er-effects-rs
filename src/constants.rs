@@ -508,15 +508,15 @@ pub(crate) static TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// Render-only Part-A suppression: `MenuWindowJob::Run` calls the FadeIn helper at deobf
-/// 0x140744dd0 from return RVA 0x1407ad530 with rcx=`[MenuWindowJob+0x130]`. The helper sets
-/// `GLOBAL_CSMenuMan->field106_0x90[id] |= 3`; after preserving the native helper, clear only the
-/// draw bit for the preserved `05_000_Title` window. This keeps the title job/sequence alive while
-/// hiding its visual layer.
+/// Render-only Part-A suppression: `MenuWindowJob::Run` writes the native window visible flags at
+/// `GLOBAL_CSMenuMan->field106_0x90[id]`: the Run body sets `|=1` before calling FadeIn, and the
+/// FadeIn helper at deobf 0x140744dd0 sets `|=3`. User-visible runtime falsified the old `0x2`
+/// draw-bit-only assumption: the title logo / PAB / Continue can still show with flags==1. Therefore
+/// product suppression clears the full native-visible mask for the preserved `05_000_Title` window.
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA: usize = 0x744dd0;
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA: usize = 0x7ad530;
 pub(crate) const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
-pub(crate) const TITLE_NATIVE_MENU_VISUAL_DRAW_BIT: u8 = 0x2;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK: u8 = 0x3;
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_NOT_INSTALLED: usize = 0;
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED_YES: usize = 1;
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_ORIG: AtomicUsize =
