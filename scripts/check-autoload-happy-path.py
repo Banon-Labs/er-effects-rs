@@ -158,6 +158,22 @@ def loading_layer_runtime_deref_guarded(telemetry: str, constants: str) -> bool:
     return not any(re.search(pattern, telemetry, re.IGNORECASE | re.DOTALL) for pattern in unsafe_patterns)
 
 
+def continue_candidate_is_diagnostic_only(experiments: str) -> bool:
+    """The diagnostic Continue candidate can be the disabled/idle 0x1407add70 job.
+
+    Only MENU_CONTINUE_ITEM is promoted by constructor hooks after the native
+    accept predicate is present. The product submit path must not fall back to
+    MENU_CONTINUE_CANDIDATE_ITEM, or it can chase the constant-false idle job
+    forever and obscure the real missing semantic row/action producer.
+    """
+    body = rust_fn_body(experiments, "product_continue_item_action")
+    forbidden_patterns = [
+        r"TITLE_OWNER_SCAN_START_ADDRESS\s*=>\s*MENU_CONTINUE_CANDIDATE_ITEM\.load",
+        r"let\s+item\s*=\s*match\s+MENU_CONTINUE_ITEM\.load[\s\S]*MENU_CONTINUE_CANDIDATE_ITEM\.load",
+    ]
+    return not any(re.search(pattern, body) for pattern in forbidden_patterns)
+
+
 def main() -> int:
     failures: list[str] = []
     experiments = read_experiments()
@@ -210,6 +226,11 @@ def main() -> int:
     require(
         loading_layer_runtime_deref_guarded(telemetry, constants),
         "loading RenderMan/CSEzDraw layer telemetry must remain pointer/mask-only; do not dereference child layer vtables during CSFakeLoadingScreen visibility",
+        failures,
+    )
+    require(
+        continue_candidate_is_diagnostic_only(experiments),
+        "product submit path must not fall back from MENU_CONTINUE_ITEM to diagnostic MENU_CONTINUE_CANDIDATE_ITEM",
         failures,
     )
 
