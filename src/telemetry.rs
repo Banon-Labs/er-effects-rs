@@ -857,7 +857,51 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
                     .map_or(READ_FAIL_SENTINEL, |v| (v & NOW_LOADING_BYTE_MASK) as i32)
             }
         };
-        body.push_str(&format!("  \"oracle_now_loading\": {now_loading},\n"));
+        const FAKE_LOADING_SCREEN_SINGLETON_RVA: usize =
+            RuntimeGlobalRva::FakeLoadingScreenSingleton as usize;
+        let fake_loading_screen = unsafe {
+            crate::experiments::safe_read_usize(base + FAKE_LOADING_SCREEN_SINGLETON_RVA)
+        }
+        .unwrap_or(NULL_PTR);
+        let fake_loading_visible = if fake_loading_screen == NULL_PTR {
+            READ_FAIL_SENTINEL
+        } else {
+            unsafe { crate::experiments::safe_read_usize(fake_loading_screen + 0x8) }
+                .map_or(READ_FAIL_SENTINEL, |v| (v & NOW_LOADING_BYTE_MASK) as i32)
+        };
+        let fake_loading_field_c = if fake_loading_screen == NULL_PTR {
+            READ_FAIL_SENTINEL
+        } else {
+            unsafe { crate::experiments::safe_read_usize(fake_loading_screen + 0xc) }
+                .map_or(READ_FAIL_SENTINEL, |v| v as u32 as i32)
+        };
+        let fake_loading_field_10 = if fake_loading_screen == NULL_PTR {
+            READ_FAIL_SENTINEL
+        } else {
+            unsafe { crate::experiments::safe_read_usize(fake_loading_screen + 0x10) }
+                .map_or(READ_FAIL_SENTINEL, |v| v as u32 as i32)
+        };
+        if fake_loading_screen != NULL_PTR {
+            FAKE_LOADING_SCREEN_SAMPLE_COUNT.fetch_add(1, Ordering::SeqCst);
+            FAKE_LOADING_SCREEN_LAST_PTR.store(fake_loading_screen, Ordering::SeqCst);
+            FAKE_LOADING_SCREEN_LAST_VISIBLE
+                .store(fake_loading_visible.max(0) as usize, Ordering::SeqCst);
+            FAKE_LOADING_SCREEN_LAST_FIELD_C
+                .store(fake_loading_field_c.max(0) as usize, Ordering::SeqCst);
+            FAKE_LOADING_SCREEN_LAST_FIELD_10
+                .store(fake_loading_field_10.max(0) as usize, Ordering::SeqCst);
+            if fake_loading_visible > 0 {
+                FAKE_LOADING_SCREEN_VISIBLE_SAMPLES.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let fake_loading_samples = FAKE_LOADING_SCREEN_SAMPLE_COUNT.load(Ordering::SeqCst);
+        let fake_loading_visible_samples =
+            FAKE_LOADING_SCREEN_VISIBLE_SAMPLES.load(Ordering::SeqCst);
+        body.push_str(&format!(
+            "  \"oracle_now_loading\": {now_loading},\n  \"oracle_fake_loading_screen\": {},\n  \"oracle_fake_loading_visible\": {fake_loading_visible},\n  \"oracle_fake_loading_field_c\": {fake_loading_field_c},\n  \"oracle_fake_loading_field_10\": {fake_loading_field_10},\n  \"oracle_fake_loading_sample_count\": {fake_loading_samples},\n  \"oracle_fake_loading_visible_samples\": {fake_loading_visible_samples},\n  \"oracle_fake_loading_any_visible\": {},\n",
+            format_optional_ptr(fake_loading_screen),
+            fake_loading_visible_samples > 0,
+        ));
         let msgbox_dialog = MSGBOX_LAST_DIALOG.load(Ordering::SeqCst);
         let msgbox_vtable = if msgbox_dialog == NULL_PTR {
             NULL_PTR
