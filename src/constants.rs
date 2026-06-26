@@ -722,6 +722,12 @@ pub(crate) const SCENE_OBJ_PROXY_CONTEXT_20_OFFSET: usize = 0x20;
 /// TitleTopDialog constructor xref at 0x1409a8275 calls the named-child proxy constructor with
 /// rdx=dialog+0xb78 and r8="PressStart" (RVA 0x2b26500).
 pub(crate) const TITLE_PRESS_START_SCENE_PROXY_B78_OFFSET: usize = 0xb78;
+/// Actual visible native title-logo layer. Static RE of `TitleTopDialog` (dump 0x1409a82d0 ->
+/// live 0x1409a8180) shows `CS::TitleBackViewParts` embedded at dialog+0xaa8 and constructed from
+/// the `05_001_Title_Logo` resource; this is distinct from the preserved `05_000_Title` MenuWindowJob.
+pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET: usize = 0xaa8;
+pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_NAME: &str = "TitleBackViewParts";
+pub(crate) const TITLE_LOGO_RESOURCE_NAME: &str = "05_001_Title_Logo";
 pub(crate) const TITLE_PRESS_START_NAME_RVA: usize = 0x2b26500;
 /// Diagnostic span: if *(proxy) is NOT SceneObjProxy, scan [proxy .. proxy+0x40] stride 8 logging
 /// each qword + its [0] vtable so the next probe reveals the real layout. Also bounds the fallback.

@@ -965,6 +965,35 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         };
         let title_visual_current_draw_bit_set = title_visual_current_flags != TITLE_OWNER_SCAN_START_ADDRESS
             && (title_visual_current_flags & TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK as usize) != 0;
+        // Actual visible logo surface telemetry: `TitleBackViewParts` / `05_001_Title_Logo` is an
+        // embedded object at TitleTopDialog+0xaa8, separate from the preserved `05_000_Title`
+        // MenuWindowJob. A real portrait cover depends on post-SL2 profile_summary readiness and the
+        // SYSTEX_Menu_Profile render pipeline, so expose both in RAM telemetry before any mutation.
+        let title_logo_dialog = PRODUCT_CORE_LAST_TITLE_DIALOG.load(Ordering::SeqCst);
+        let title_logo_back_view_parts = if title_logo_dialog != NULL_PTR
+            && title_logo_dialog != TITLE_OWNER_SCAN_START_ADDRESS
+        {
+            title_logo_dialog + TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET
+        } else {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        };
+        let title_logo_back_view_parts_vtable = if title_logo_back_view_parts != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { crate::experiments::safe_read_usize(title_logo_back_view_parts) }
+                .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+        } else {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        };
+        let title_logo_profile_summary = {
+            let game_data_man = crate::experiments::game_data_man_ptr_or_null();
+            if game_data_man != NULL_PTR {
+                unsafe { crate::experiments::safe_read_usize(game_data_man + SLOT_MANAGER_CONTAINER_OFFSET) }
+                    .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+            } else {
+                TITLE_OWNER_SCAN_START_ADDRESS
+            }
+        };
+        let title_logo_profile_summary_ready = title_logo_profile_summary != TITLE_OWNER_SCAN_START_ADDRESS
+            && title_logo_profile_summary != NULL_PTR;
         let title_custom_cover_profile_select_builds =
             TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.load(Ordering::SeqCst);
         let title_custom_cover_profile_select_last_ret =
@@ -1051,7 +1080,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             server_status_text_id
         ));
         body.push_str(&format!(
-            "  \"oracle_title_native_menu_visual_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_suppressed_builds\": {},\n  \"oracle_title_native_menu_visual_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_last_out_slot\": {},\n  \"oracle_title_native_menu_visual_last_prev_out\": {},\n  \"oracle_title_native_menu_visual_last_args\": [{}, {}],\n  \"oracle_title_native_menu_visual_last_caller_rva\": {},\n  \"oracle_title_native_menu_visual_native_job\": {},\n  \"oracle_title_native_menu_visual_native_window\": {},\n  \"oracle_title_native_menu_visual_current_menu_id\": {},\n  \"oracle_title_native_menu_visual_current_flags\": {},\n  \"oracle_title_native_menu_visual_current_draw_bit_set\": {},\n  \"oracle_title_native_menu_visual_render_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_render_suppressed_windows\": {},\n  \"oracle_title_native_menu_visual_render_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_render_last_window\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_before\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_after\": {},\n  \"oracle_title_native_menu_visual_render_last_caller_rva\": {},\n  \"oracle_title_custom_cover_profile_select_builds\": {},\n  \"oracle_title_custom_cover_profile_select_any_built\": {},\n  \"oracle_title_custom_cover_profile_select_last_ret\": {},\n  \"oracle_title_custom_cover_profile_select_last_job\": {},\n  \"oracle_title_custom_cover_profile_select_last_caller_rva\": {},\n",
+            "  \"oracle_title_native_menu_visual_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_suppressed_builds\": {},\n  \"oracle_title_native_menu_visual_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_last_out_slot\": {},\n  \"oracle_title_native_menu_visual_last_prev_out\": {},\n  \"oracle_title_native_menu_visual_last_args\": [{}, {}],\n  \"oracle_title_native_menu_visual_last_caller_rva\": {},\n  \"oracle_title_native_menu_visual_native_job\": {},\n  \"oracle_title_native_menu_visual_native_window\": {},\n  \"oracle_title_native_menu_visual_current_menu_id\": {},\n  \"oracle_title_native_menu_visual_current_flags\": {},\n  \"oracle_title_native_menu_visual_current_draw_bit_set\": {},\n  \"oracle_title_native_menu_visual_render_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_render_suppressed_windows\": {},\n  \"oracle_title_native_menu_visual_render_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_render_last_window\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_before\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_after\": {},\n  \"oracle_title_native_menu_visual_render_last_caller_rva\": {},\n  \"oracle_title_logo_surface_name\": \"{}\",\n  \"oracle_title_logo_resource_name\": \"{}\",\n  \"oracle_title_logo_back_view_parts\": {},\n  \"oracle_title_logo_back_view_parts_vtable\": {},\n  \"oracle_title_logo_profile_summary\": {},\n  \"oracle_title_logo_profile_summary_ready\": {},\n  \"oracle_title_custom_cover_profile_select_builds\": {},\n  \"oracle_title_custom_cover_profile_select_any_built\": {},\n  \"oracle_title_custom_cover_profile_select_last_ret\": {},\n  \"oracle_title_custom_cover_profile_select_last_job\": {},\n  \"oracle_title_custom_cover_profile_select_last_caller_rva\": {},\n",
             title_visual_suppress_installed,
             title_visual_suppressed_builds,
             title_visual_suppressed_builds != 0,
@@ -1072,6 +1101,12 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             title_visual_render_last_flags_before,
             title_visual_render_last_flags_after,
             title_visual_render_last_caller_rva,
+            TITLE_LOGO_BACK_VIEW_PARTS_NAME,
+            TITLE_LOGO_RESOURCE_NAME,
+            title_logo_back_view_parts,
+            title_logo_back_view_parts_vtable,
+            title_logo_profile_summary,
+            title_logo_profile_summary_ready,
             title_custom_cover_profile_select_builds,
             title_custom_cover_profile_select_builds != 0,
             title_custom_cover_profile_select_last_ret,
