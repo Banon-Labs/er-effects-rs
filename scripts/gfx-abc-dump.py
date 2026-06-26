@@ -60,10 +60,13 @@ def parse_gfx_xml(xml_path: Path) -> dict[str, Any]:
 
     placement_counts: dict[str, int] = {}
     timeline_summaries: list[dict[str, Any]] = []
+    root_placed_character_ids: list[str] = []
+    sprite_children: dict[str, list[str]] = {}
 
-    def iter_rows(container: ET.Element) -> tuple[int, list[dict[str, Any]]]:
+    def iter_rows(container: ET.Element) -> tuple[int, list[dict[str, Any]], list[str]]:
         frame = 1
         rows: list[dict[str, Any]] = []
+        placed_character_ids: list[str] = []
         for it in list(container):
             typ = it.attrib.get("type")
             if typ == "FrameLabelTag":
@@ -72,6 +75,7 @@ def parse_gfx_xml(xml_path: Path) -> dict[str, Any]:
                 char_id = it.attrib.get("characterId")
                 if char_id:
                     placement_counts[char_id] = placement_counts.get(char_id, 0) + 1
+                    placed_character_ids.append(char_id)
                 matrix = it.find("matrix")
                 color = it.find("colorTransform")
                 alpha = None
@@ -99,11 +103,11 @@ def parse_gfx_xml(xml_path: Path) -> dict[str, Any]:
                 rows.append({"frame": frame, "kind": "remove", "depth": it.attrib.get("depth")})
             elif typ == "ShowFrameTag":
                 frame += 1
-        return frame, rows
+        return frame, rows, placed_character_ids
 
     tags = root.find("tags")
     if tags is not None:
-        frame_end, rows = iter_rows(tags)
+        frame_end, rows, root_placed_character_ids = iter_rows(tags)
         timeline_summaries.append({"name": "root/tags", "frame_end": frame_end, "rows": rows})
 
     for e in root.iter("item"):
@@ -112,12 +116,15 @@ def parse_gfx_xml(xml_path: Path) -> dict[str, Any]:
         sub = e.find("subTags")
         if sub is None:
             continue
-        frame_end, rows = iter_rows(sub)
+        frame_end, rows, placed_character_ids = iter_rows(sub)
+        sprite_id = e.attrib.get("spriteId")
+        if sprite_id:
+            sprite_children[sprite_id] = placed_character_ids
         if rows:
             timeline_summaries.append(
                 {
-                    "name": f"sprite {e.attrib.get('spriteId')}",
-                    "sprite_id": e.attrib.get("spriteId"),
+                    "name": f"sprite {sprite_id}",
+                    "sprite_id": sprite_id,
                     "frame_count": e.attrib.get("frameCount"),
                     "frame_end": frame_end,
                     "rows": rows,
@@ -127,10 +134,28 @@ def parse_gfx_xml(xml_path: Path) -> dict[str, Any]:
     for cid in images:
         placement_counts.setdefault(cid, 0)
 
+    reachable_external_images: dict[str, dict[str, str | None]] = {}
+    seen: set[str] = set()
+
+    def visit_character(cid: str) -> None:
+        if cid in seen:
+            return
+        seen.add(cid)
+        if cid in images:
+            reachable_external_images[cid] = images[cid]
+        for child in sprite_children.get(cid, []):
+            visit_character(child)
+
+    for cid in root_placed_character_ids:
+        visit_character(cid)
+
     return {
         "xml": str(xml_path),
         "external_images": images,
         "placement_counts": placement_counts,
+        "root_placed_character_ids": root_placed_character_ids,
+        "sprite_children": sprite_children,
+        "root_reachable_external_images": reachable_external_images,
         "timelines": timeline_summaries,
     }
 
@@ -146,6 +171,12 @@ def interesting_rows(summary: dict[str, Any]) -> list[str]:
         lines.append(
             f"  char {cid}: {image.get('exportName')} {image.get('targetWidth')}x{image.get('targetHeight')} placements={counts.get(cid, 0)}"
         )
+    lines.append("root_placed_character_ids: " + repr(summary.get("root_placed_character_ids", [])))
+    reachable = summary.get("root_reachable_external_images", {})
+    lines.append("root_reachable_external_images:")
+    for cid in sorted(reachable, key=lambda s: int(s) if s.isdigit() else 999999):
+        image = reachable[cid]
+        lines.append(f"  char {cid}: {image.get('exportName')}")
     lines.append("timelines:")
     for tl in summary["timelines"]:
         rows = tl["rows"]
