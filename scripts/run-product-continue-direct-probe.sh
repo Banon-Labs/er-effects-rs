@@ -198,14 +198,11 @@ terminate_runtime_pids() {
 
 cleanup() {
   local pid
-  # Teardown/crash/trap EVIDENCE: low-quality screenshot of the ER window BEFORE we kill it
-  # (best-effort, privacy fail-closed -- only the validated ER window, else a .txt note; never the
-  # desktop). Must run while the game window still exists, so it is the FIRST thing in cleanup.
-  if [[ -n "${ARTIFACT_DIR:-}" && -d "${ARTIFACT_DIR:-/nonexistent}" ]]; then
+  # Automatic teardown screenshots are disabled by default: visible/on-screen runs are allowed to be
+  # unfocused while the user keeps using the computer, and screenshots are now an explicit on-demand
+  # action. Keep the old capture path opt-in for one-off diagnostics only.
+  if [[ "${AUTO_TEARDOWN_SCREENSHOT:-0}" == "1" && -n "${ARTIFACT_DIR:-}" && -d "${ARTIFACT_DIR:-/nonexistent}" ]]; then
     python3 "$REPO_ROOT/scripts/capture-er-window.py" "$ARTIFACT_DIR/teardown-screenshot.jpg" 2>/dev/null || true
-    # NOTE: under gamescope --backend headless there is no host window and no screencopy, so the
-    # capture above fail-closes to a .txt note -- expected. We observe via in-process telemetry oracles
-    # (title/menu state, privacy-policy gate, continue/char oracles), NOT screenshots.
   fi
   if [[ -s "$PID_FILE" ]]; then
     IFS= read -r pid < "$PID_FILE" || pid=""

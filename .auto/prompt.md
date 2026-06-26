@@ -50,6 +50,8 @@ If re-initializing autoresearch, use metric `autoload_re_score`, unit `points`, 
 - Do not file upstream issues/PRs/reports.
 
 ## Constraints
+- Before every research spike/iteration, search Beads persistent memories first (`/home/banon/.local/bin/bd memories <terms> --json` and `bd recall <key>`) using terms from the current hypothesis (for example `Continue`, `continue_load`, `SetSaveSlot`, `TitleTopDialog`, `ProfileLoadDialog`, `LoadJobContext`, `MenuJobResult`, `saveSlot`). Incorporate high-signal memories before doing new static/runtime work so prior findings and dead ends are not re-derived.
+- At the end of each research spike/iteration, upsert durable new findings into Beads memories with `/home/banon/.local/bin/bd remember --key <key> <finding>`. If the new finding makes an existing Beads memory stale or inaccurate, first upsert the replacement/correction, then remove the stale memory with `/home/banon/.local/bin/bd forget <stale-key>` (or update it as retracted if preserving the historical warning is safer than deletion).
 - Static RE first. Runtime probes only after the hypothesis, exact hook/edge, stop condition, and teardown are explicit.
 - Frame/call counts may remain only as outer fail-safe timeouts, never as success predicates.
 - Polling semantic predicates once per game tick is allowed; requiring N ticks before success is not.

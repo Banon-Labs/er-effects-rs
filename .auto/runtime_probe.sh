@@ -11,8 +11,14 @@ RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-vanilla}"
 POLICY_PATH="$REPO_ROOT/.auto/runtime_experiment_policy.rego"
 SEAMLESS_DLL_PATH="$GAME_DIR/SeamlessCoop/ersc.dll"
 SEAMLESS_STAGED_PATH="${SEAMLESS_STAGED_PATH:-$GAME_DIR/SeamlessCoop/ersc.dll.er-effects-staged}"
+HOST_PROCESS_TRACE_PATH="${HOST_PROCESS_TRACE_PATH:-${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe}/host-process-lifetime.jsonl}"
+host_process_sampler_pid=""
 
 cleanup_runtime() {
+  if [[ -n "$host_process_sampler_pid" ]] && kill -0 "$host_process_sampler_pid" 2>/dev/null; then
+    kill "$host_process_sampler_pid" 2>/dev/null || true
+    wait "$host_process_sampler_pid" 2>/dev/null || true
+  fi
   if [[ "$RUNTIME_EXPECTED_MODE" == "seamless" && -f "$SEAMLESS_STAGED_PATH" && ! -f "$SEAMLESS_DLL_PATH" ]]; then
     mkdir -p "$(dirname "$SEAMLESS_DLL_PATH")"
     mv -f "$SEAMLESS_STAGED_PATH" "$SEAMLESS_DLL_PATH"
@@ -74,6 +80,138 @@ PY
     runtime_policy_input | opa eval --format pretty -d "$POLICY_PATH" -I 'data.auto.runtime_experiment.deny' >&2 || true
     exit 2
   fi
+}
+
+start_host_process_sampler() {
+  mkdir -p "$(dirname "$HOST_PROCESS_TRACE_PATH")"
+  python3 - "$PID_FILE" "$HOST_PROCESS_TRACE_PATH" "$RUNTIME_TIMEOUT_SECONDS" <<'PY' &
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+pid_file = Path(sys.argv[1])
+out_path = Path(sys.argv[2])
+timeout = float(sys.argv[3])
+interval = float(os.environ.get("RUNTIME_HOST_PROCESS_SAMPLE_INTERVAL", "0.25"))
+deadline = time.monotonic() + timeout + 5.0
+start = time.monotonic()
+
+def read_text(path: Path) -> str | None:
+    try:
+        return path.read_text(errors="replace")
+    except OSError:
+        return None
+
+def executable_maps_for(pid: int, name: str | None) -> list[dict]:
+    # Only the target game process gets map capture. This keeps the artifact bounded and avoids
+    # dumping unrelated Wine helper process maps while still making crash addresses symbolizable.
+    if name != "eldenring.exe":
+        return []
+    maps_text = read_text(Path("/proc") / str(pid) / "maps") or ""
+    out = []
+    for line in maps_text.splitlines():
+        parts = line.split(None, 5)
+        if len(parts) < 5:
+            continue
+        addr, perms = parts[0], parts[1]
+        path = parts[5] if len(parts) >= 6 else ""
+        if "x" not in perms or not path or path.startswith("["):
+            continue
+        try:
+            start_s, end_s = addr.split("-", 1)
+            start_i = int(start_s, 16)
+            end_i = int(end_s, 16)
+        except Exception:
+            continue
+        out.append({
+            "start": f"0x{start_i:x}",
+            "end": f"0x{end_i:x}",
+            "perms": perms,
+            "path": path[-220:],
+        })
+        if len(out) >= 120:
+            break
+    return out
+
+def proc_entry(pid: int) -> dict:
+    base = Path("/proc") / str(pid)
+    status_text = read_text(base / "status") or ""
+    ppid = None
+    state = None
+    name = None
+    for line in status_text.splitlines():
+        if line.startswith("Name:"):
+            name = line.split(None, 1)[1] if len(line.split(None, 1)) > 1 else ""
+        elif line.startswith("State:"):
+            state = line.split(None, 1)[1] if len(line.split(None, 1)) > 1 else ""
+        elif line.startswith("PPid:"):
+            try:
+                ppid = int(line.split()[1])
+            except Exception:
+                ppid = None
+    cmd_raw = read_text(base / "cmdline")
+    cmdline = (cmd_raw or "").replace("\x00", " ").strip()
+    entry = {"pid": pid, "exists": base.exists(), "ppid": ppid, "state": state, "name": name, "cmdline": cmdline[:500]}
+    maps = executable_maps_for(pid, name)
+    if maps:
+        entry["exec_maps"] = maps
+    return entry
+
+def direct_ppids() -> dict[int, list[int]]:
+    parents: dict[int, list[int]] = {}
+    for child_dir in Path("/proc").iterdir():
+        if not child_dir.name.isdigit():
+            continue
+        pid = int(child_dir.name)
+        status_text = read_text(child_dir / "status") or ""
+        ppid = None
+        for line in status_text.splitlines():
+            if line.startswith("PPid:"):
+                try:
+                    ppid = int(line.split()[1])
+                except Exception:
+                    ppid = None
+                break
+        if ppid is not None:
+            parents.setdefault(ppid, []).append(pid)
+    return parents
+
+def tree(root_pid: int) -> list[dict]:
+    parents = direct_ppids()
+    seen = set()
+    pending = [root_pid]
+    out = []
+    while pending and len(seen) < 64:
+        pid = pending.pop(0)
+        if pid in seen:
+            continue
+        seen.add(pid)
+        out.append(proc_entry(pid))
+        pending.extend(parents.get(pid, []))
+    return out
+
+with out_path.open("a", encoding="utf-8") as fh:
+    while time.monotonic() < deadline:
+        pid_text = read_text(pid_file)
+        root_pid = None
+        if pid_text:
+            try:
+                root_pid = int(pid_text.strip().splitlines()[0])
+            except Exception:
+                root_pid = None
+        sample = {
+            "t": round(time.monotonic() - start, 3),
+            "pid_file_pid": root_pid,
+            "tree": tree(root_pid) if root_pid else [],
+        }
+        fh.write(json.dumps(sample, sort_keys=True) + "\n")
+        fh.flush()
+        time.sleep(interval)
+PY
+  host_process_sampler_pid=$!
+  echo "host-process-sampler: pid=$host_process_sampler_pid trace=$HOST_PROCESS_TRACE_PATH" >&2
 }
 
 setup_runtime_payload() {
@@ -141,6 +279,8 @@ if [[ -n "${RUNTIME_EXTRA_WATCH_ARGS:-}" ]]; then
   # shellcheck disable=SC2206
   watch_extra_args+=(${RUNTIME_EXTRA_WATCH_ARGS})
 fi
+
+start_host_process_sampler
 
 python3 "$REPO_ROOT/scripts/er-readiness-watch.py" \
   --artifact-dir "${ARTIFACT_DIR:?ARTIFACT_DIR is required}" \

@@ -1,14 +1,34 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export RUNTIME_ONSCREEN="${RUNTIME_ONSCREEN:-1}"
+
 if [[ -f .auto/run_runtime_probe_once ]]; then
   rm -f .auto/run_runtime_probe_once
+  runtime_autoload_request=$(mktemp "${TMPDIR:-/tmp}/er-effects-autoload.XXXXXX")
+  printf 'slot=%s\nmethod=direct_menu_load\nrequire_title_bootstrap=false\n' "${ER_EFFECTS_GOLD_SLOT:-0}" > "$runtime_autoload_request"
   ER_EFFECTS_AUTHORIZED_DIRECT_RUNTIME=1 \
   AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 \
+  ER_EFFECTS_EXPERIMENTAL_DIRECT_MENU_LOAD=1 \
   ER_EFFECTS_GOLD_SAVE="${ER_EFFECTS_GOLD_SAVE:-/home/banon/projects/er-effects-rs/save-files/150-Banon/ER0000.sl2}" \
   ER_EFFECTS_GOLD_SLOT="${ER_EFFECTS_GOLD_SLOT:-0}" \
   RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-35}" \
   RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-vanilla}" \
+  scripts/run-product-continue-direct-probe.sh --autoload-request "$runtime_autoload_request"
+  rm -f "$runtime_autoload_request"
+fi
+
+if [[ -f .auto/run_manual_profile_trace_once ]]; then
+  rm -f .auto/run_manual_profile_trace_once
+  ER_EFFECTS_AUTHORIZED_DIRECT_RUNTIME=1 \
+  AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 \
+  ER_EFFECTS_GOLD_SAVE="${ER_EFFECTS_GOLD_SAVE:-/home/banon/projects/er-effects-rs/save-files/150-Banon/ER0000.sl2}" \
+  ER_EFFECTS_GOLD_SLOT="${ER_EFFECTS_GOLD_SLOT:-0}" \
+  RUNTIME_ONSCREEN=1 \
+  RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-45}" \
+  RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-any}" \
+  ER_EFFECTS_NO_AUTOLOAD=1 \
+  ER_EFFECTS_TRACE_CONTINUE=1 \
   scripts/run-product-continue-direct-probe.sh
 fi
 
@@ -226,11 +246,12 @@ if (
     'MENU_ITEM_ACCEPT_IDLE_RVA' not in continue_item_body
     or 'MENU_ITEM_ACCEPT_NATIVE_RVA' not in continue_item_body
     or 'constant false idle predicate' not in continue_item_body
+    or 'promoted candidate native Continue MenuWindowJob' not in continue_item_body
 ):
-    legacy_failures.append('product Continue submit can use the constant-false idle accept predicate')
+    legacy_failures.append('product Continue submit must reject idle rows and promote only native-accept Continue candidates')
     autoload_static_failures += 1
-if 'product Continue item validation must reject the constant-false idle accept predicate' not in check:
-    legacy_failures.append('check-autoload-happy-path does not enforce constant-false idle accept predicate rejection')
+if 'product Continue item validation must reject the constant-false idle accept predicate before native submit' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce idle-reject/native-accept submit guard')
     autoload_static_failures += 1
 menu_update_body = function_body('cap_menu_item_update_hook', exp_code) or ''
 if (
@@ -1040,8 +1061,9 @@ else:
 title_cover_failures: list[str] = []
 title_cover_gate = function_body('title_native_menu_visual_suppression_enabled', exp_code) or ''
 title_cover_hook = function_body('title_native_menu_visual_begin_title_hook', exp_code) or ''
+title_cover_render_hook = function_body('title_native_menu_visual_window_fadein_hook', exp_code) or ''
 title_cover_penalty = 0
-if not (
+part_a_common = (
     '!save_override_telemetry_only()' in title_cover_gate
     and 'autoload_disabled()' in title_cover_gate
     and 'std::env::var' not in title_cover_gate
@@ -1052,11 +1074,28 @@ if not (
     and 'TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA: usize = 0x81f9f0' in code
     and 'TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA: usize = 0x7acbf0' in code
     and 'TITLE_NATIVE_MENU_VISUAL_NAME: &str = "05_000_Title"' in code
-    and '(out_slot as *mut usize).write(null)' in title_cover_hook
     and 'TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS.fetch_add' in title_cover_hook
     and 'oracle_title_native_menu_visual_suppressed_builds' in telemetry_src
     and 'title_native_menu_visual_suppressed_builds' in watcher
-):
+)
+part_a_null_slot = '(out_slot as *mut usize).write(null)' in title_cover_hook
+part_a_render_only = (
+    'TITLE_NATIVE_MENU_VISUAL_SUPPRESS_ORIG.load' in title_cover_hook
+    and 'native_job' in title_cover_hook
+    and 'START_TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS.call_once' in lib_code
+    and 'install_title_native_menu_visual_render_suppression_hook' in lib_code
+    and 'TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA: usize = 0x744dd0' in code
+    and 'TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA: usize = 0x7ad530' in code
+    and 'CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0' in code
+    and 'TITLE_NATIVE_MENU_VISUAL_DRAW_BIT: u8 = 0x2' in code
+    and 'TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESSED_WINDOWS' in title_cover_render_hook
+    and 'fetch_add' in title_cover_render_hook
+    and 'flags_before & !TITLE_NATIVE_MENU_VISUAL_DRAW_BIT' in title_cover_render_hook
+    and '.write_volatile(flags_after)' in title_cover_render_hook
+    and 'oracle_title_native_menu_visual_render_suppressed_windows' in telemetry_src
+    and 'title_native_menu_visual_render_suppressed_windows' in watcher
+)
+if not (part_a_common and (part_a_null_slot or part_a_render_only)):
     title_cover_failures.append('Part A native 05_000_Title BeginTitle visual suppression is missing or not independently observable')
     title_cover_penalty += 100
 
