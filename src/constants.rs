@@ -545,45 +545,22 @@ pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_AFTER: AtomicUsize 
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// PART-B custom cover target: do NOT run the `05_010_ProfileSelect` MenuWindowJob as a cover.
-/// Runtime/user validation showed that canvas can block/interfere with title advance and is not the
-/// desired clean cover. Instead, try a non-MenuWindow remap of the already root-reachable
-/// `05_001_Title_Logo` image symbol to the profile renderer SYSTEX target.
+/// PART-B custom cover target: `05_010_ProfileSelect` is an existing Scaleform surface with
+/// `MENU_DummyProfileFace_01..10` symbols that the profile renderer maps to
+/// `SYSTEX_Menu_Profile00..09` (via CSMenuProfModelRend / active-screen render targets). The wrapper
+/// below is the deobf/live address for the native `05_010_ProfileSelect` MenuWindowJob builder
+/// (Ghidra dump 0x14081f7e0 -> deobf 0x14081f6f0). We use it as the initial custom cover surface
+/// instead of trying to remap `05_001_Title_Logo`, which has no dummy-profile symbol.
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA: usize = 0x81f6f0;
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME: &str = "05_010_ProfileSelect";
-pub(crate) const TITLE_CUSTOM_COVER_TITLE_IMAGE_SYMBOL: &str = "MENU_Title_EldenRing_01";
+pub(crate) const TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL: &str = "MENU_DummyProfileFace_01";
 pub(crate) const TITLE_CUSTOM_COVER_SYSTEX_TARGET: &str = "SYSTEX_Menu_Profile00";
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS: &str = "CSMenuProfModelRend";
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA: usize = 0x2b80128;
-/// Native image-symbol -> SYSTEX binding helper. Dump `FUN_1407452c0` -> live/deobf `0x1407451c0`.
-/// ProfileSelect uses it to map `MENU_DummyProfileFace_NN` to `SYSTEX_Menu_ProfileNN`; this product
-/// experiment maps the title logo image symbol to `SYSTEX_Menu_Profile00` without constructing the
-/// blocking ProfileSelect MenuWindowJob.
-pub(crate) const TITLE_CUSTOM_COVER_SCALEFORM_BIND_RVA: usize = 0x7451c0;
-pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_CALLS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_LAST_DIALOG: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_LAST_LOGO: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_LAST_FIELD: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// Profile renderer scene generation: live `0x1409af3a0` (dump `0x1409af4f0`) allocates and fills
-/// the `DAT_143d6d8d0` / `ACTIVE_SCREEN_ARRAY_RVA` slots with `CSMenuProfModelRend` objects. The
-/// refresh below dereferences those renderer pointers, so this generator must run first.
-pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_RVA: usize = 0x9af3a0;
-pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_CALLS: AtomicUsize =
-    AtomicUsize::new(0);
-pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_LAST_SLOT0_BEFORE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_LAST_SLOT0_AFTER: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_NONNULL_AFTER: AtomicUsize =
-    AtomicUsize::new(0);
 /// Profile portrait refresh/display pipeline: live 0x1409aa680 (dump 0x1409aa7d0) reads the loaded
 /// `ProfileSummary`, loops 10 slots, fills CSMenuProfModelRend / face/player model data, and maps
 /// each active slot to `SYSTEX_Menu_ProfileNN` through `FUN_140bb8cf0(renderer, slot*2)`. It must run
-/// after SL2/profile readiness and after the renderer scene array exists, not at early
-/// `05_001_Title_Logo` construction time.
+/// after SL2/profile readiness, not at early `05_001_Title_Logo` construction time.
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA: usize = 0x9aa680;
 pub(crate) static TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_CALLS: AtomicUsize =
     AtomicUsize::new(0);

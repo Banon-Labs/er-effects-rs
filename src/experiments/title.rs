@@ -1383,102 +1383,11 @@ pub(crate) unsafe fn maybe_hide_title_logo_surface(base: usize, ready: &ProductC
     }
 }
 
-#[repr(C)]
-struct NativeStaticDlString {
-    allocator: usize,
-    ptr: *const i8,
-    pad10: usize,
-    len: usize,
-    capacity: usize,
-    encoding: u8,
-    pad29: [u8; 7],
-}
-
-#[repr(C)]
-struct NativeStaticDlStringPair {
-    image_symbol: NativeStaticDlString,
-    systex_target: NativeStaticDlString,
-}
-
-impl NativeStaticDlString {
-    const fn static_ascii(bytes_with_nul: &'static [u8], len: usize) -> Self {
-        Self {
-            allocator: 0,
-            ptr: bytes_with_nul.as_ptr() as *const i8,
-            pad10: 0,
-            len,
-            capacity: 0x10,
-            encoding: 3,
-            pad29: [0; 7],
-        }
-    }
-}
-
-const TITLE_IMAGE_SYMBOL_BYTES: &[u8] = b"MENU_Title_EldenRing_01\0";
-const TITLE_SYSTEX_TARGET_BYTES: &[u8] = b"SYSTEX_Menu_Profile00\0";
-const _: () = assert!(core::mem::size_of::<NativeStaticDlString>() == 0x30);
-const _: () = assert!(core::mem::size_of::<NativeStaticDlStringPair>() == 0x60);
-
-unsafe fn count_profile_renderer_slots(base: usize) -> usize {
-    let mut count = 0;
-    for idx in 0..ACTIVE_SCREEN_ARRAY_SLOTS {
-        let slot_addr = base + ACTIVE_SCREEN_ARRAY_RVA + idx * ACTIVE_SCREEN_ARRAY_STRIDE;
-        let ptr = unsafe { safe_read_usize(slot_addr) }.unwrap_or(0);
-        if ptr != 0 && ptr != TITLE_OWNER_SCAN_START_ADDRESS {
-            count += 1;
-        }
-    }
-    count
-}
-
-pub(crate) unsafe fn maybe_generate_title_profile_cover_scene(
-    base: usize,
-    ready: &ProductCoreAutoloadReady,
-) {
-    if ready.profile_summary == TITLE_OWNER_SCAN_START_ADDRESS || ready.profile_summary == 0 {
-        return;
-    }
-    let slot0_before = unsafe { safe_read_usize(base + ACTIVE_SCREEN_ARRAY_RVA) }
-        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
-    TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_LAST_SLOT0_BEFORE
-        .store(slot0_before, Ordering::SeqCst);
-    if slot0_before != 0 && slot0_before != TITLE_OWNER_SCAN_START_ADDRESS {
-        let nonnull = unsafe { count_profile_renderer_slots(base) };
-        TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_LAST_SLOT0_AFTER
-            .store(slot0_before, Ordering::SeqCst);
-        TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_NONNULL_AFTER.store(nonnull, Ordering::SeqCst);
-        return;
-    }
-    if TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_CALLS
-        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return;
-    }
-    let generate: unsafe extern "system" fn() =
-        unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_RVA) };
-    unsafe { generate() };
-    let slot0_after = unsafe { safe_read_usize(base + ACTIVE_SCREEN_ARRAY_RVA) }
-        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
-    let nonnull = unsafe { count_profile_renderer_slots(base) };
-    TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_LAST_SLOT0_AFTER.store(slot0_after, Ordering::SeqCst);
-    TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_NONNULL_AFTER.store(nonnull, Ordering::SeqCst);
-    append_autoload_debug(format_args!(
-        "title-cover-part-b: generated CSMenuProfModelRend scene array via 0x{:x} after save/profile readiness profile_summary=0x{:x} slot0_before=0x{slot0_before:x} slot0_after=0x{slot0_after:x} nonnull_slots={nonnull}",
-        base + TITLE_CUSTOM_COVER_PROFILE_SCENE_GENERATE_RVA,
-        ready.profile_summary,
-    ));
-}
-
 pub(crate) unsafe fn maybe_refresh_title_profile_cover(
     base: usize,
     ready: &ProductCoreAutoloadReady,
 ) {
     if ready.profile_summary == TITLE_OWNER_SCAN_START_ADDRESS || ready.profile_summary == 0 {
-        return;
-    }
-    let slot0 = unsafe { safe_read_usize(base + ACTIVE_SCREEN_ARRAY_RVA) }.unwrap_or(0);
-    if slot0 == 0 || slot0 == TITLE_OWNER_SCAN_START_ADDRESS {
         return;
     }
     if TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_CALLS
@@ -1498,51 +1407,6 @@ pub(crate) unsafe fn maybe_refresh_title_profile_cover(
         "title-cover-part-b: refreshed post-SL2 profile portrait render targets via 0x{:x} profile_summary=0x{:x} target={TITLE_CUSTOM_COVER_SYSTEX_TARGET} renderer={TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS} ready_fields=+0x{TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_754:x}/+0x{TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_755:x}",
         base + TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA,
         ready.profile_summary,
-    ));
-}
-
-pub(crate) unsafe fn maybe_bind_title_logo_to_systex_cover(
-    base: usize,
-    ready: &ProductCoreAutoloadReady,
-) {
-    if ready.title_dialog == TITLE_OWNER_SCAN_START_ADDRESS
-        || ready.title_dialog == 0
-        || ready.profile_summary == TITLE_OWNER_SCAN_START_ADDRESS
-        || ready.profile_summary == 0
-    {
-        return;
-    }
-    if TITLE_CUSTOM_COVER_LOGO_REMAP_CALLS
-        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return;
-    }
-    let logo = ready.title_dialog + TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET;
-    let pair = NativeStaticDlStringPair {
-        image_symbol: NativeStaticDlString::static_ascii(
-            TITLE_IMAGE_SYMBOL_BYTES,
-            TITLE_CUSTOM_COVER_TITLE_IMAGE_SYMBOL.len(),
-        ),
-        systex_target: NativeStaticDlString::static_ascii(
-            TITLE_SYSTEX_TARGET_BYTES,
-            TITLE_CUSTOM_COVER_SYSTEX_TARGET.len(),
-        ),
-    };
-    let bind: unsafe extern "system" fn(usize, usize) =
-        unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_SCALEFORM_BIND_RVA) };
-    unsafe { bind(ready.title_dialog + 0x3b8, (&raw const pair) as usize) };
-    TITLE_CUSTOM_COVER_LOGO_REMAP_LAST_DIALOG.store(ready.title_dialog, Ordering::SeqCst);
-    TITLE_CUSTOM_COVER_LOGO_REMAP_LAST_LOGO.store(logo, Ordering::SeqCst);
-    TITLE_CUSTOM_COVER_LOGO_REMAP_LAST_FIELD.store(ready.title_dialog + 0x3b8, Ordering::SeqCst);
-    let set_visible: unsafe extern "system" fn(usize, u8) =
-        unsafe { std::mem::transmute(base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA) };
-    unsafe { set_visible(logo, 1) };
-    append_autoload_debug(format_args!(
-        "title-cover-part-b: remapped root title image {TITLE_CUSTOM_COVER_TITLE_IMAGE_SYMBOL} -> {TITLE_CUSTOM_COVER_SYSTEX_TARGET} through 0x{:x} field=0x{:x} dialog=0x{:x} logo=0x{logo:x}; re-showed TitleBackViewParts",
-        base + TITLE_CUSTOM_COVER_SCALEFORM_BIND_RVA,
-        ready.title_dialog + 0x3b8,
-        ready.title_dialog,
     ));
 }
 
@@ -1714,13 +1578,9 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     PRODUCT_CORE_LAST_BLOCKER.store(PRODUCT_CORE_BLOCKER_READY, Ordering::SeqCst);
     if phase == OWN_STEPPER_PHASE_MENU {
         unsafe { maybe_hide_title_press_start(module_base, &ready) };
+        unsafe { maybe_hide_title_logo_surface(module_base, &ready) };
         if ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO {
-            unsafe { maybe_generate_title_profile_cover_scene(module_base, &ready) };
             unsafe { maybe_refresh_title_profile_cover(module_base, &ready) };
-            unsafe { maybe_bind_title_logo_to_systex_cover(module_base, &ready) };
-            if TITLE_CUSTOM_COVER_LOGO_REMAP_CALLS.load(Ordering::SeqCst) == 0 {
-                unsafe { maybe_hide_title_logo_surface(module_base, &ready) };
-            }
             // Main-branch preservation: do NOT call TitleTopDialog::open_menu from this game-task
             // context. Static disasm of TitleTopDialog::update shows the natural path only calls
             // open_menu from inside the live update frame after the accept gate, then immediately

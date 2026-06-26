@@ -1351,6 +1351,32 @@ pub(crate) unsafe extern "system" fn scene_obj_proxy_ctor_hook(
     unsafe { f(rcx, rdx, r8, r9) }
 }
 
+unsafe fn build_profile_select_cover_job(
+    base: usize,
+    rdx: usize,
+    r8: usize,
+    caller_rva: usize,
+    source: &str,
+) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if base == null || base == 0 {
+        return;
+    }
+    let mut cover_slot = null;
+    let cover_builder: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA) };
+    let cover_ret = unsafe { cover_builder((&raw mut cover_slot) as usize, rdx, r8) };
+    let cover_job = cover_slot;
+    TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_RET.store(cover_ret, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_JOB.store(cover_job, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "title-cover-part-b: BUILT non-returned custom cover {TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME} via 0x{:x} from {source} -> ret=0x{cover_ret:x} job=0x{cover_job:x}; dummy={TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL} target={TITLE_CUSTOM_COVER_SYSTEX_TARGET} renderer={TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS}",
+        base + TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA,
+    ));
+}
+
 pub(crate) unsafe extern "system" fn title_pab_information_visual_hook(
     out_slot: usize,
     rdx: usize,
@@ -1451,7 +1477,6 @@ unsafe fn force_hide_title_logo_surface(
         || base == 0
         || logo == 0
         || logo == TITLE_OWNER_SCAN_START_ADDRESS
-        || TITLE_CUSTOM_COVER_LOGO_REMAP_CALLS.load(Ordering::SeqCst) != 0
     {
         return;
     }
@@ -1515,11 +1540,7 @@ pub(crate) unsafe extern "system" fn title_top_start_login_hide_hook(
             unsafe { std::mem::transmute(orig) };
         unsafe { original(dialog, param_2) };
     }
-    if base == null
-        || dialog == null
-        || dialog == TITLE_OWNER_SCAN_START_ADDRESS
-        || TITLE_CUSTOM_COVER_LOGO_REMAP_CALLS.load(Ordering::SeqCst) != 0
-    {
+    if base == null || dialog == null || dialog == TITLE_OWNER_SCAN_START_ADDRESS {
         return;
     }
     let logo = dialog + TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET;
