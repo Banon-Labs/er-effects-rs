@@ -1427,6 +1427,67 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
     native_ret
 }
 
+unsafe fn force_hide_title_logo_surface(
+    base: usize,
+    logo: usize,
+    requested_visible: usize,
+    source: &str,
+) {
+    if base == TITLE_OWNER_SCAN_START_ADDRESS
+        || base == 0
+        || logo == 0
+        || logo == TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return;
+    }
+    let orig = TITLE_LOGO_SET_VISIBLE_ORIG.load(Ordering::SeqCst);
+    let set_visible: unsafe extern "system" fn(usize, u8) =
+        if orig != 0 && orig != HOOK_ORIGINAL_UNSET {
+            unsafe { std::mem::transmute(orig) }
+        } else {
+            unsafe { std::mem::transmute(base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA) }
+        };
+    unsafe { set_visible(logo, 0) };
+    let calls = TITLE_LOGO_GFX_HIDE_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        + OWN_STEPPER_CALL_INC;
+    TITLE_LOGO_GFX_HIDE_LAST_LOGO.store(logo, Ordering::SeqCst);
+    TITLE_LOGO_GFX_HIDE_LAST_CALLER_PHASE
+        .store(OWN_STEPPER_PHASE.load(Ordering::SeqCst), Ordering::SeqCst);
+    TITLE_LOGO_GFX_HIDE_LAST_REQUESTED_VISIBLE.store(requested_visible, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "title-cover-part-a: forced {TITLE_LOGO_BACK_VIEW_PARTS_NAME}/{TITLE_LOGO_RESOURCE_NAME} hidden via {source} logo=0x{logo:x} requested_visible={requested_visible} hide_calls={calls}"
+    ));
+}
+
+pub(crate) unsafe extern "system" fn title_logo_set_visible_force_hidden_hook(
+    logo: usize,
+    visible: u8,
+) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let base = game_module_base().unwrap_or(null);
+    unsafe { force_hide_title_logo_surface(base, logo, visible as usize, "SetVisible detour") };
+}
+
+pub(crate) unsafe extern "system" fn title_logo_ctor_force_hidden_hook(
+    logo: usize,
+    resource: usize,
+    param_3: usize,
+    param_4: usize,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let base = game_module_base().unwrap_or(null);
+    let orig = TITLE_LOGO_CTOR_ORIG.load(Ordering::SeqCst);
+    let ret = if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let original: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { original(logo, resource, param_3, param_4) }
+    } else {
+        logo
+    };
+    unsafe { force_hide_title_logo_surface(base, logo, 0, "ctor detour") };
+    ret
+}
+
 pub(crate) unsafe extern "system" fn title_top_start_login_hide_hook(
     dialog: usize,
     param_2: usize,
@@ -1523,6 +1584,80 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook
     append_autoload_debug(format_args!(
         "title-cover-part-a: render-suppressed preserved native {TITLE_NATIVE_MENU_VISUAL_NAME} window=0x{window:x} menu_id={menu_id} flags 0x{flags_before:02x}->0x{flags_after:02x} via CSMenuMan+0x90 caller_rva=0x{caller_rva:x}"
     ));
+}
+
+pub(crate) fn install_title_logo_force_hidden_hooks() {
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-a: logo-force MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    if TITLE_LOGO_SET_VISIBLE_INSTALLED.load(Ordering::SeqCst) == 0 {
+        match game_rva(TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA as u32) {
+            Ok(addr) => match unsafe {
+                MhHook::new(
+                    addr as *mut c_void,
+                    title_logo_set_visible_force_hidden_hook as *mut c_void,
+                )
+            } {
+                Ok(hook) => {
+                    TITLE_LOGO_SET_VISIBLE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+                    if let Err(status) = unsafe { hook.queue_enable() } {
+                        append_autoload_debug(format_args!(
+                            "title-cover-part-a: queue_enable logo SetVisible failed: {status:?}"
+                        ));
+                    } else if unsafe { MH_ApplyQueued() } == MH_STATUS::MH_OK {
+                        std::mem::forget(hook);
+                        TITLE_LOGO_SET_VISIBLE_INSTALLED.store(1, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "title-cover-part-a: hooked {TITLE_LOGO_BACK_VIEW_PARTS_NAME} SetVisible 0x{addr:x}; forcing visible=false"
+                        ));
+                    }
+                }
+                Err(status) => append_autoload_debug(format_args!(
+                    "title-cover-part-a: MhHook::new logo SetVisible failed: {status:?}"
+                )),
+            },
+            Err(_) => append_autoload_debug(format_args!(
+                "title-cover-part-a: failed to resolve logo SetVisible rva 0x{TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA:x}"
+            )),
+        }
+    }
+    if TITLE_LOGO_CTOR_INSTALLED.load(Ordering::SeqCst) == 0 {
+        match game_rva(TITLE_LOGO_BACK_VIEW_PARTS_CTOR_RVA as u32) {
+            Ok(addr) => match unsafe {
+                MhHook::new(
+                    addr as *mut c_void,
+                    title_logo_ctor_force_hidden_hook as *mut c_void,
+                )
+            } {
+                Ok(hook) => {
+                    TITLE_LOGO_CTOR_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+                    if let Err(status) = unsafe { hook.queue_enable() } {
+                        append_autoload_debug(format_args!(
+                            "title-cover-part-a: queue_enable logo ctor failed: {status:?}"
+                        ));
+                    } else if unsafe { MH_ApplyQueued() } == MH_STATUS::MH_OK {
+                        std::mem::forget(hook);
+                        TITLE_LOGO_CTOR_INSTALLED.store(1, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "title-cover-part-a: hooked {TITLE_LOGO_BACK_VIEW_PARTS_NAME} ctor 0x{addr:x}; hiding immediately after construction"
+                        ));
+                    }
+                }
+                Err(status) => append_autoload_debug(format_args!(
+                    "title-cover-part-a: MhHook::new logo ctor failed: {status:?}"
+                )),
+            },
+            Err(_) => append_autoload_debug(format_args!(
+                "title-cover-part-a: failed to resolve logo ctor rva 0x{TITLE_LOGO_BACK_VIEW_PARTS_CTOR_RVA:x}"
+            )),
+        }
+    }
 }
 
 pub(crate) fn install_title_logo_start_login_hide_hook() {
