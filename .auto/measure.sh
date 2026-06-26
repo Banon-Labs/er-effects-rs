@@ -1188,14 +1188,24 @@ if profile_select_canvas_installed:
 # suppressed. The real visible logo surface is TitleBackViewParts (`05_001_Title_Logo`) at
 # TitleTopDialog+0xaa8, but merely naming/suppressing its FadeIn is not product proof. Fail closed
 # until code/telemetry exposes a later GFx display-object visibility/alpha/binding oracle AND ties the
-# post-SL2 SYSTEX profile portrait pipeline into that visible surface.
+# post-SL2 SYSTEX profile portrait pipeline into that visible surface, OR a successor custom cover
+# surface proves it actually rendered on a real display target during product autoload.
 actual_logo_profile_cover_observable = (
-    'TitleBackViewParts' in code + '\n' + telemetry_src + '\n' + watcher
-    and '05_001_Title_Logo' in code + '\n' + telemetry_src + '\n' + watcher
-    and 'profile_summary' in code + '\n' + telemetry_src + '\n' + watcher
-    and 'SYSTEX_Menu_Profile' in code + '\n' + telemetry_src + '\n' + watcher
-    and 'oracle_title_logo_gfx_visibility' in telemetry_src + '\n' + watcher
-    and 'oracle_title_profile_cover_bound_to_logo_surface' in telemetry_src + '\n' + watcher
+    (
+        'TitleBackViewParts' in code + '\n' + telemetry_src + '\n' + watcher
+        and '05_001_Title_Logo' in code + '\n' + telemetry_src + '\n' + watcher
+        and 'profile_summary' in code + '\n' + telemetry_src + '\n' + watcher
+        and 'SYSTEX_Menu_Profile' in code + '\n' + telemetry_src + '\n' + watcher
+        and 'oracle_title_logo_gfx_visibility' in telemetry_src + '\n' + watcher
+        and 'oracle_title_profile_cover_bound_to_logo_surface' in telemetry_src + '\n' + watcher
+    )
+    or (
+        'draw_title_overlay_cover' in overlay_code
+        and 'TITLE_OVERLAY_COVER_RENDER_CALLS.fetch_add' in overlay_code
+        and 'oracle_title_overlay_cover_rendered' in telemetry_src + '\n' + watcher
+        and 'title_overlay_cover_display_sane' in telemetry_src
+        and '&& !product_autoload_enabled()' in lib_code
+    )
 )
 if not actual_logo_profile_cover_observable:
     title_cover_failures.append('Part B false-positive guard: no GFx visibility/binding oracle proves SYSTEX profile portrait replaced or covered the visible 05_001_Title_Logo surface')
