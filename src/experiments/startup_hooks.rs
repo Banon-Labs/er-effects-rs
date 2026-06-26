@@ -1442,9 +1442,9 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook
     }
 
     let caller_rva = trace_first_game_caller_rva();
-    if caller_rva != TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA {
-        return;
-    }
+    // Do not gate on the caller RVA here: MinHook/trampoline unwinding can hide the direct
+    // MenuWindowJob::Run return address. The preserved native window pointer is the stronger RAM
+    // identity oracle, and the caller RVA remains telemetry only.
     let native_job = TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.load(Ordering::SeqCst);
     let mut native_window = TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW.load(Ordering::SeqCst);
     if native_window == null && native_job != null {
