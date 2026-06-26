@@ -756,6 +756,19 @@ pub(crate) const TITLE_LOGO_GFX_ROOT_DEPTH: usize = 3;
 pub(crate) const TITLE_LOGO_GFX_ROOT_SPRITE_CHAR: usize = 7;
 pub(crate) const TITLE_LOGO_GFX_MAIN_ASSET_CHAR: usize = 4;
 pub(crate) const TITLE_LOGO_GFX_MAIN_ASSET_NAME: &str = "MENU_Title_EldenRing_01";
+/// Stronger native hide lever than FadeIn/FadeOut: `CS::TitleBackViewParts::SetVisible` (dump
+/// 0x1409a6410 -> deobf/live 0x1409a62c0, content verified as `add rcx,0x70; jmp 0x140733340`)
+/// calls the generic `SceneObjProxy` visible setter on the embedded proxy at `this+0x70`.
+/// `TitleTopDialog` itself calls this with `1` in the start-login path (dump 0x1409b3050), so using
+/// it with `0` is a native visibility semantic, not a timeline FadeIn/FadeOut guess.
+pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA: usize = 0x9a62c0;
+pub(crate) static TITLE_LOGO_GFX_HIDE_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_LOGO_GFX_HIDE_LAST_DIALOG: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_LOGO_GFX_HIDE_LAST_LOGO: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_LOGO_GFX_HIDE_LAST_CALLER_PHASE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// Dead-end note: `CS::TitleBackViewParts::FadeIn` (dump 0x1409a63f0 -> live 0x1409a62a0)
 /// only calls the state transition helper on `this+0x88` with `"FadeIn"`; runtime/user evidence
 /// proved suppressing it does NOT hide the visible logo. Keep as RE context, not a product hook.

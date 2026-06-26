@@ -1311,6 +1311,31 @@ pub(crate) unsafe fn product_core_autoload_ready(
         press_start_context: press_start.context,
     })
 }
+pub(crate) unsafe fn maybe_hide_title_logo_surface(base: usize, ready: &ProductCoreAutoloadReady) {
+    if ready.title_dialog == TITLE_OWNER_SCAN_START_ADDRESS || ready.title_dialog == 0 {
+        return;
+    }
+    let logo = ready.title_dialog + TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET;
+    if unsafe { safe_read_usize(logo) }.is_none() {
+        return;
+    }
+    let set_visible: unsafe extern "system" fn(usize, u8) =
+        unsafe { std::mem::transmute(base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA) };
+    unsafe { set_visible(logo, 0) };
+    let prev = TITLE_LOGO_GFX_HIDE_CALLS.fetch_add(1, Ordering::SeqCst);
+    TITLE_LOGO_GFX_HIDE_LAST_DIALOG.store(ready.title_dialog, Ordering::SeqCst);
+    TITLE_LOGO_GFX_HIDE_LAST_LOGO.store(logo, Ordering::SeqCst);
+    TITLE_LOGO_GFX_HIDE_LAST_CALLER_PHASE
+        .store(OWN_STEPPER_PHASE.load(Ordering::SeqCst), Ordering::SeqCst);
+    if prev == 0 {
+        append_autoload_debug(format_args!(
+            "title-cover-part-a: hid {TITLE_LOGO_BACK_VIEW_PARTS_NAME}/{TITLE_LOGO_RESOURCE_NAME} via native SceneObjProxy visibility wrapper 0x{:x} dialog=0x{:x} logo=0x{logo:x}",
+            base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
+            ready.title_dialog,
+        ));
+    }
+}
+
 pub(crate) unsafe fn maybe_refresh_title_profile_cover(
     base: usize,
     ready: &ProductCoreAutoloadReady,
@@ -1505,6 +1530,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     PRODUCT_CORE_READY_SUCCESSES.fetch_add(1, Ordering::SeqCst);
     PRODUCT_CORE_LAST_BLOCKER.store(PRODUCT_CORE_BLOCKER_READY, Ordering::SeqCst);
     if phase == OWN_STEPPER_PHASE_MENU {
+        unsafe { maybe_hide_title_logo_surface(module_base, &ready) };
         if ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO {
             unsafe { maybe_refresh_title_profile_cover(module_base, &ready) };
             // Main-branch preservation: do NOT call TitleTopDialog::open_menu from this game-task
