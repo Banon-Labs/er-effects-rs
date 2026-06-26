@@ -135,6 +135,7 @@ SAVE_DATA_POPUP_DETECTED = "visual_save_data_popup_detected"
 MESSAGEBOX_DIALOG_DETECTED = "native_messagebox_dialog_detected"
 SERVER_STATUS_SEMAPHORE_DETECTED = "native_server_status_semaphore_detected"
 TITLE_NATIVE_VISUAL_UNSUPPRESSED = "native_title_visual_render_unsuppressed"
+TITLE_PROFILE_RENDER_REFRESH_MISSING = "title_profile_render_refresh_missing"
 PLACEHOLDER_CHARACTER_DETECTED = "placeholder_character_detected"
 TARGET_WINDOW_CAPTURE_UNSAFE = "target_window_capture_unsafe"
 VISUAL_CHECK_SUBPROCESS_TIMEOUT_SECONDS = 10.0
@@ -1042,6 +1043,14 @@ def telemetry_title_native_visual_unsuppressed(telemetry: dict[str, Any] | None)
     native_window_known = as_int(telemetry.get("oracle_title_native_menu_visual_native_window"), 0) > 0
     draw_bit_set = telemetry.get("oracle_title_native_menu_visual_current_draw_bit_set") is True
     return bool(native_title_built and render_suppress_installed and native_window_known and draw_bit_set)
+
+
+def telemetry_title_profile_render_refresh_missing(telemetry: dict[str, Any] | None) -> bool:
+    if not isinstance(telemetry, dict):
+        return False
+    profile_ready = telemetry.get("oracle_title_logo_profile_summary_ready") is True
+    refresh_calls = as_int(telemetry.get("oracle_title_custom_cover_profile_render_refresh_calls"), 0)
+    return bool(profile_ready and refresh_calls <= 0)
 
 
 def telemetry_placeholder_character_detected(
@@ -2240,6 +2249,21 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
                     expected_animation_id=args.expected_animation_id,
                 )
             )
+        if args.fail_on_missing_title_profile_render_refresh and telemetry_title_profile_render_refresh_missing(telemetry):
+            return with_runtime_module_info(
+                ReadinessResult(
+                    False,
+                    TITLE_PROFILE_RENDER_REFRESH_MISSING,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
         if telemetry_placeholder_character_detected(telemetry, expected_save_oracle):
             return with_runtime_module_info(
                 ReadinessResult(
@@ -2645,6 +2669,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=True,
         help="Fail immediately if the preserved native title visual reaches menu/world without its draw bit being cleared.",
+    )
+    parser.add_argument(
+        "--fail-on-missing-title-profile-render-refresh",
+        action="store_true",
+        help="Fail immediately once title profile-summary is ready but oracle_title_custom_cover_profile_render_refresh_calls is still zero; diagnostic fail-fast for cover-trigger probes.",
     )
     parser.add_argument(
         "--visual-legal-popup-check",

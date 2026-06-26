@@ -412,7 +412,7 @@ fi
   ER_PROBE_LAUNCH_EPOCH="$LAUNCH_EPOCH" \
   AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 \
   RUNTIME_SKIP_VISUAL_CAPTURE=1 \
-  RUNTIME_EXTRA_WATCH_ARGS="${RUNTIME_EXTRA_WATCH_ARGS:-"--no-phase-watchdog --no-world-load-deadline"}" \
+  RUNTIME_EXTRA_WATCH_ARGS="${RUNTIME_EXTRA_WATCH_ARGS:-"--no-phase-watchdog --no-world-load-deadline --fail-on-missing-title-profile-render-refresh"}" \
   ./.auto/runtime_probe.sh
 ) > "$ARTIFACT_DIR/runtime-probe.out" 2> "$ARTIFACT_DIR/runtime-probe.err" &
 watcher_pid=$!
