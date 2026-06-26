@@ -122,14 +122,16 @@ pub(crate) fn write_bootstrap_event(stage: &str, detail: &str) {
 fn title_logo_gfx_alpha_for_frame(frame: i32) -> i32 {
     match frame {
         TITLE_LOGO_GFX_UNKNOWN_FRAME => TITLE_LOGO_GFX_UNKNOWN_ALPHA,
-        // Frame 1 has the root depth-3 sprite placed with no color transform. The FadeIn label at
-        // frame 2 explicitly sets alpha=0 before ramping; frame 60 is identity/full alpha.
+        // Disk correlation: `target/autoresearch/gfx-analysis/script-smoke/summary.json` for
+        // `05_001_title_logo.gfx` shows root depth 3 is placed at frame 1 with no color transform,
+        // then moved by FadeIn frames 2..60 using alphaMultTerm 0..256, remains full through
+        // Title_TopMenu/FadeOut frame 113, and fades to 0 by frame 133. The in-memory oracle reads
+        // the live Scaleform current frame through `FUN_140d82620`, so convert that frame back into
+        // the on-disk alpha term instead of treating the entire ramp as a generic visible boolean.
         1 => TITLE_LOGO_GFX_FULL_ALPHA,
-        2 => 0,
-        3..=59 => 1,
-        60..=113 => TITLE_LOGO_GFX_FULL_ALPHA,
-        114..=132 => 1,
-        133 => 0,
+        2..=60 => ((frame - 2) * TITLE_LOGO_GFX_FULL_ALPHA + 29) / 58,
+        61..=113 => TITLE_LOGO_GFX_FULL_ALPHA,
+        114..=133 => ((133 - frame) * TITLE_LOGO_GFX_FULL_ALPHA + 10) / 20,
         _ => TITLE_LOGO_GFX_UNKNOWN_ALPHA,
     }
 }
