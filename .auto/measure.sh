@@ -1134,6 +1134,21 @@ if not (
     title_cover_failures.append('Part B custom title cover render path is not implemented/observable yet')
     title_cover_penalty += 50
 
+# User-visible runtime falsified the old Part-A/B semaphore: native title/logo/PAB/Continue remained
+# visible while CSMenuMan+0x90 said hidden. The real visible logo surface is TitleBackViewParts
+# (`05_001_Title_Logo`) at TitleTopDialog+0xaa8, and a real character portrait is only available
+# after SL2/profile data has loaded into the ProfileSelect/SYSTEX render pipeline. Fail closed until
+# code/telemetry names that dependency explicitly; docs-only provenance is not product proof.
+actual_logo_profile_cover_observable = (
+    'TitleBackViewParts' in code + '\n' + telemetry_src + '\n' + watcher
+    and '05_001_Title_Logo' in code + '\n' + telemetry_src + '\n' + watcher
+    and 'profile_summary' in code + '\n' + telemetry_src + '\n' + watcher
+    and 'SYSTEX_Menu_Profile' in code + '\n' + telemetry_src + '\n' + watcher
+)
+if not actual_logo_profile_cover_observable:
+    title_cover_failures.append('Part B false-positive guard: actual TitleBackViewParts 05_001_Title_Logo surface is not tied to post-SL2 profile portrait readiness')
+    title_cover_penalty += 50
+
 false_positives = 0
 all_detail_failures = []
 for group in [legacy_failures, asset_failures, dll_failures, native_failures, field58_failures, direct_failures, input_failures, runtime_failures, runtime_mode_failures, eula_popup_failures, save_data_popup_failures, messagebox_dialog_failures, server_status_failures, title_cover_failures]:
