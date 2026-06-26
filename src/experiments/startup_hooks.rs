@@ -1522,6 +1522,50 @@ pub(crate) unsafe extern "system" fn title_top_start_login_hide_hook(
     ));
 }
 
+pub(crate) unsafe extern "system" fn title_custom_cover_menu_window_run_hook(
+    job: usize,
+    load_params: usize,
+    fd4_time: usize,
+    menu_man: usize,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = TITLE_CUSTOM_COVER_RUN_ORIG.load(Ordering::SeqCst);
+    if orig == null || orig == HOOK_ORIGINAL_UNSET {
+        return null;
+    }
+    let run: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    let ret = unsafe { run(job, load_params, fd4_time, menu_man) };
+    if TITLE_CUSTOM_COVER_RUN_RECURSION.load(Ordering::SeqCst) != 0 {
+        return ret;
+    }
+    let native_job = TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.load(Ordering::SeqCst);
+    let cover_job = TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_JOB.load(Ordering::SeqCst);
+    if job != native_job
+        || cover_job == null
+        || cover_job == TITLE_OWNER_SCAN_START_ADDRESS
+        || cover_job == native_job
+    {
+        return ret;
+    }
+    TITLE_CUSTOM_COVER_RUN_RECURSION.store(1, Ordering::SeqCst);
+    let cover_ret = unsafe { run(cover_job, load_params, fd4_time, menu_man) };
+    TITLE_CUSTOM_COVER_RUN_RECURSION.store(0, Ordering::SeqCst);
+    let cover_window = unsafe { safe_read_usize(cover_job + 0x130) }.unwrap_or(null);
+    let calls = TITLE_CUSTOM_COVER_RUN_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        + OWN_STEPPER_CALL_INC;
+    TITLE_CUSTOM_COVER_RUN_LAST_NATIVE_JOB.store(native_job, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_RUN_LAST_COVER_JOB.store(cover_job, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_RUN_LAST_COVER_WINDOW.store(cover_window, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_RUN_LAST_RET.store(cover_ret, Ordering::SeqCst);
+    if calls <= 8 {
+        append_autoload_debug(format_args!(
+            "title-cover-part-b: ran custom cover {TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME} job=0x{cover_job:x} alongside native {TITLE_NATIVE_MENU_VISUAL_NAME} job=0x{native_job:x}; ret=0x{cover_ret:x} window=0x{cover_window:x} calls={calls}"
+        ));
+    }
+    ret
+}
+
 pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook(
     window: usize,
     param_2: usize,
@@ -1584,6 +1628,58 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook
     append_autoload_debug(format_args!(
         "title-cover-part-a: render-suppressed preserved native {TITLE_NATIVE_MENU_VISUAL_NAME} window=0x{window:x} menu_id={menu_id} flags 0x{flags_before:02x}->0x{flags_after:02x} via CSMenuMan+0x90 caller_rva=0x{caller_rva:x}"
     ));
+}
+
+pub(crate) fn install_title_custom_cover_run_hook() {
+    if TITLE_CUSTOM_COVER_RUN_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-b: MenuWindowJob::Run MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(run_addr) = game_rva(MENU_WINDOW_JOB_RUN_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-cover-part-b: failed to resolve MenuWindowJob::Run rva 0x{MENU_WINDOW_JOB_RUN_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            run_addr as *mut c_void,
+            title_custom_cover_menu_window_run_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            TITLE_CUSTOM_COVER_RUN_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-b: queue_enable MenuWindowJob::Run failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    TITLE_CUSTOM_COVER_RUN_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "title-cover-part-b: hooked MenuWindowJob::Run 0x{run_addr:x}; ProfileSelect cover will run alongside preserved native title job"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "title-cover-part-b: MenuWindowJob::Run MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "title-cover-part-b: MhHook::new MenuWindowJob::Run failed: {status:?}"
+        )),
+    }
 }
 
 pub(crate) fn install_title_logo_force_hidden_hooks() {
