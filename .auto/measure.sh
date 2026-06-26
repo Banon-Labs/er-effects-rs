@@ -5,6 +5,10 @@ export RUNTIME_ONSCREEN="${RUNTIME_ONSCREEN:-1}"
 
 if [[ -f .auto/run_runtime_probe_once ]]; then
   rm -f .auto/run_runtime_probe_once
+  cargo xwin build --release --target x86_64-pc-windows-msvc >/tmp/er-effects-runtime-build.log 2>&1 || {
+    tail -80 /tmp/er-effects-runtime-build.log >&2
+    exit 1
+  }
   runtime_autoload_request=$(mktemp "${TMPDIR:-/tmp}/er-effects-autoload.XXXXXX")
   printf 'slot=%s\nmethod=direct_menu_load\nrequire_title_bootstrap=false\n' "${ER_EFFECTS_GOLD_SLOT:-0}" > "$runtime_autoload_request"
   ER_EFFECTS_AUTHORIZED_DIRECT_RUNTIME=1 \

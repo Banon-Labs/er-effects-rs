@@ -1396,6 +1396,29 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
     };
     TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.store(native_job, Ordering::SeqCst);
     TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW.store(native_window, Ordering::SeqCst);
+
+    // Part B probe/warmup: construct the existing ProfileSelect dummy-profile surface through the
+    // native wrapper into a private slot, but do not return or install it in the BeginTitle out slot.
+    // Static RE of FUN_14081f7e0 shows this wrapper only prepares CSScaleformLoadInfo for
+    // `05_010_ProfileSelect` and forwards to the same MenuWindowJob factory; preserving `native_job`
+    // keeps the native title/Continue sequence authoritative while making the custom-cover resource
+    // path observable for telemetry.
+    if base != null {
+        let mut cover_slot = null;
+        let cover_builder: unsafe extern "system" fn(usize, usize, usize) -> usize =
+            unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA) };
+        let cover_ret = unsafe { cover_builder((&raw mut cover_slot) as usize, rdx, r8) };
+        let cover_job = cover_slot;
+        TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+        TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_RET.store(cover_ret, Ordering::SeqCst);
+        TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_JOB.store(cover_job, Ordering::SeqCst);
+        TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "title-cover-part-b: BUILT non-returned custom cover {TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME} via 0x{:x} -> ret=0x{cover_ret:x} job=0x{cover_job:x}; dummy={TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL} target={TITLE_CUSTOM_COVER_SYSTEX_TARGET} renderer={TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS}; native {TITLE_NATIVE_MENU_VISUAL_NAME} job remains authoritative",
+            base + TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA,
+        ));
+    }
+
     append_autoload_debug(format_args!(
         "title-cover-part-a: PRESERVED native {TITLE_NATIVE_MENU_VISUAL_NAME} wrapper 0x{:x}/factory 0x{:x}; latched job=0x{native_job:x} window=0x{native_window:x} for render-only suppression (out_slot=0x{out_slot:x} prev=0x{prev_out:x} rdx=0x{rdx:x} r8=0x{r8:x} caller_rva=0x{caller_rva:x})",
         base + TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA,
