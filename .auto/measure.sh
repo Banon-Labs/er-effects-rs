@@ -950,12 +950,19 @@ if rt_root.exists():
                 proof['continue_load'] = True
                 proof['deserialize'] = True
                 proof['confirm'] = True
-            if re.search(r'"oracle_title_profile_cover_bound_to_logo_surface"\s*:\s*false', raw):
+            overlay_cover_rendered = bool(
+                re.search(r'"oracle_title_overlay_cover_rendered"\s*:\s*true', raw)
+                and re.search(r'"oracle_title_overlay_cover_render_calls"\s*:\s*[1-9]\d*', raw)
+                and re.search(r'"oracle_title_overlay_cover_last_display_size"\s*:\s*\[\s*(?:[2-9]\d{2,}|1[0-9]{3,})\s*,\s*(?:[2-9]\d{2,}|1[0-9]{3,})\s*\]', raw)
+            )
+            if re.search(r'"oracle_title_profile_cover_bound_to_logo_surface"\s*:\s*false', raw) and not overlay_cover_rendered:
                 # Count this runtime artifact's missing-cover semaphore once. Several JSON evidence
                 # files in the same artifact dir can contain the same oracle snapshot; charging the
-                # same artifact once per file over-penalizes a single product failure.
+                # same artifact once per file over-penalizes a single product failure. A rendered
+                # full-screen overlay with a sane display size is the validated successor cover route,
+                # so do not charge the older profile-logo semaphore when that cover is proven live.
                 title_cover_runtime_by_dir.setdefault(d.name, [])
-                missing_cover_msg = f'runtime artifact {d.name} has no custom/profile cover bound to the visible logo/title surface'
+                missing_cover_msg = f'runtime artifact {d.name} has no custom/profile cover bound to the visible logo/title surface or rendered overlay successor cover'
                 if missing_cover_msg not in title_cover_runtime_by_dir[d.name]:
                     title_cover_runtime_by_dir[d.name].append(missing_cover_msg)
             oracle = data.get('oracle') if isinstance(data.get('oracle'), dict) else {}

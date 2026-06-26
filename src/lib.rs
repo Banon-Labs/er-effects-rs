@@ -380,10 +380,13 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         move || spawn_game_task(state)
     });
 
-    // Skip the hudhook/ImGui DX12 overlay when autoload-only (no overlay needed) OR when explicitly
-    // disabled via `overlay_disabled()` (env ER_EFFECTS_NO_OVERLAY=1 / GAME_DIR file
-    // er-effects-no-overlay.txt) -- e.g. a golden trace run that wants no extra DX12 hooks/overhead.
-    let autoload_without_overlay = state_or_return(&state).autoload.slot().is_some();
+    // Skip the hudhook/ImGui DX12 overlay for non-product autoload-only runs (no overlay needed) OR
+    // when explicitly disabled via `overlay_disabled()` (env ER_EFFECTS_NO_OVERLAY=1 / GAME_DIR file
+    // er-effects-no-overlay.txt). Product autoload keeps hudhook enabled so the title/loading cover
+    // can render through the existing full-screen custom overlay path; runtime telemetry still has
+    // to prove `oracle_title_overlay_cover_rendered` before it can count as product cover evidence.
+    let autoload_without_overlay =
+        state_or_return(&state).autoload.slot().is_some() && !product_autoload_enabled();
     if autoload_without_overlay || overlay_disabled() {
         write_bootstrap_event(
             BOOTSTRAP_EVENT_OVERLAY_SKIPPED_AUTOLOAD,
