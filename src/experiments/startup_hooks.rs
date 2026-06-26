@@ -1351,6 +1351,32 @@ pub(crate) unsafe extern "system" fn scene_obj_proxy_ctor_hook(
     unsafe { f(rcx, rdx, r8, r9) }
 }
 
+unsafe fn build_profile_select_cover_job(
+    base: usize,
+    rdx: usize,
+    r8: usize,
+    caller_rva: usize,
+    source: &str,
+) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if base == null || base == 0 {
+        return;
+    }
+    let mut cover_slot = null;
+    let cover_builder: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA) };
+    let cover_ret = unsafe { cover_builder((&raw mut cover_slot) as usize, rdx, r8) };
+    let cover_job = cover_slot;
+    TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_RET.store(cover_ret, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_JOB.store(cover_job, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "title-cover-part-b: BUILT non-returned custom cover {TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME} via 0x{:x} from {source} -> ret=0x{cover_ret:x} job=0x{cover_job:x}; dummy={TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL} target={TITLE_CUSTOM_COVER_SYSTEX_TARGET} renderer={TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS}",
+        base + TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA,
+    ));
+}
+
 pub(crate) unsafe extern "system" fn title_pab_information_visual_hook(
     out_slot: usize,
     rdx: usize,
@@ -1451,7 +1477,6 @@ unsafe fn force_hide_title_logo_surface(
         || base == 0
         || logo == 0
         || logo == TITLE_OWNER_SCAN_START_ADDRESS
-        || TITLE_CUSTOM_COVER_LOGO_REMAP_CALLS.load(Ordering::SeqCst) != 0
     {
         return;
     }
@@ -1515,11 +1540,7 @@ pub(crate) unsafe extern "system" fn title_top_start_login_hide_hook(
             unsafe { std::mem::transmute(orig) };
         unsafe { original(dialog, param_2) };
     }
-    if base == null
-        || dialog == null
-        || dialog == TITLE_OWNER_SCAN_START_ADDRESS
-        || TITLE_CUSTOM_COVER_LOGO_REMAP_CALLS.load(Ordering::SeqCst) != 0
-    {
+    if base == null || dialog == null || dialog == TITLE_OWNER_SCAN_START_ADDRESS {
         return;
     }
     let logo = dialog + TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET;
@@ -1594,6 +1615,154 @@ pub(crate) unsafe extern "system" fn title_custom_cover_menu_window_run_hook(
         ));
     }
     ret
+}
+
+unsafe fn read_native_dlstring_ascii_ptr(s: usize) -> usize {
+    if s == 0 || s == TITLE_OWNER_SCAN_START_ADDRESS {
+        return TITLE_OWNER_SCAN_START_ADDRESS;
+    }
+    let capacity = unsafe { safe_read_usize(s + 0x20) }.unwrap_or(0);
+    if capacity <= 0xf {
+        s + 0x8
+    } else {
+        unsafe { safe_read_usize(s + 0x8) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    }
+}
+
+unsafe fn bounded_ascii_contains(ptr: usize, needle: &[u8]) -> bool {
+    if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS || needle.is_empty() {
+        return false;
+    }
+    let mut window = [0u8; 32];
+    let mut n = 0usize;
+    for i in 0..96usize {
+        let Some(b) = (unsafe { safe_read_u8(ptr + i) }) else {
+            break;
+        };
+        if b == 0 {
+            break;
+        }
+        if n < window.len() {
+            window[n] = b.to_ascii_lowercase();
+            n += 1;
+        } else {
+            window.rotate_left(1);
+            window[window.len() - 1] = b.to_ascii_lowercase();
+        }
+        let hay = &window[..n.min(window.len())];
+        if hay.windows(needle.len()).any(|w| w == needle) {
+            return true;
+        }
+    }
+    false
+}
+
+unsafe fn copy_ascii_preview(ptr: usize, out: &mut [u8]) -> usize {
+    if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS || out.is_empty() {
+        return 0;
+    }
+    let mut n = 0usize;
+    while n + 1 < out.len() && n < 80 {
+        let Some(b) = (unsafe { safe_read_u8(ptr + n) }) else {
+            break;
+        };
+        if b == 0 {
+            break;
+        }
+        out[n] = if b.is_ascii_graphic() || b == b' ' {
+            b
+        } else {
+            b'?'
+        };
+        n += 1;
+    }
+    n
+}
+
+pub(crate) unsafe extern "system" fn title_scaleform_bind_observer_hook(owner: usize, pair: usize) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let symbol_ptr = unsafe { read_native_dlstring_ascii_ptr(pair) };
+    let target_ptr = unsafe { read_native_dlstring_ascii_ptr(pair + 0x30) };
+    let hit = TITLE_SCALEFORM_BIND_OBSERVER_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    TITLE_SCALEFORM_BIND_OBSERVER_LAST_OWNER.store(owner, Ordering::SeqCst);
+    TITLE_SCALEFORM_BIND_OBSERVER_LAST_PAIR.store(pair, Ordering::SeqCst);
+    TITLE_SCALEFORM_BIND_OBSERVER_LAST_SYMBOL_PTR.store(symbol_ptr, Ordering::SeqCst);
+    TITLE_SCALEFORM_BIND_OBSERVER_LAST_TARGET_PTR.store(target_ptr, Ordering::SeqCst);
+    let interesting = unsafe { bounded_ascii_contains(symbol_ptr, b"menu_") }
+        || unsafe { bounded_ascii_contains(target_ptr, b"systex") }
+        || unsafe { bounded_ascii_contains(symbol_ptr, b"title") }
+        || unsafe { bounded_ascii_contains(symbol_ptr, b"profile") };
+    if unsafe { bounded_ascii_contains(target_ptr, b"systex") } {
+        TITLE_SCALEFORM_BIND_OBSERVER_SYSTEX_HITS.fetch_add(1, Ordering::SeqCst);
+    }
+    if interesting && hit <= 128 {
+        let mut sym = [0u8; 96];
+        let mut tgt = [0u8; 96];
+        let sn = unsafe { copy_ascii_preview(symbol_ptr, &mut sym) };
+        let tn = unsafe { copy_ascii_preview(target_ptr, &mut tgt) };
+        let sym = core::str::from_utf8(&sym[..sn]).unwrap_or("?");
+        let tgt = core::str::from_utf8(&tgt[..tn]).unwrap_or("?");
+        append_autoload_debug(format_args!(
+            "title-cover-part-b: observed native Scaleform bind owner=0x{owner:x} pair=0x{pair:x} symbol='{sym}' target='{tgt}' hit={hit}"
+        ));
+    }
+    let orig = TITLE_SCALEFORM_BIND_OBSERVER_ORIG.load(Ordering::SeqCst);
+    if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let f: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(orig) };
+        unsafe { f(owner, pair) };
+    }
+}
+
+pub(crate) fn install_title_scaleform_bind_observer_hook() {
+    if TITLE_SCALEFORM_BIND_OBSERVER_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-b: bind observer MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(TITLE_SCALEFORM_BIND_OBSERVER_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-cover-part-b: failed to resolve Scaleform bind observer rva 0x{TITLE_SCALEFORM_BIND_OBSERVER_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            title_scaleform_bind_observer_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            TITLE_SCALEFORM_BIND_OBSERVER_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-b: queue_enable bind observer failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    TITLE_SCALEFORM_BIND_OBSERVER_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "title-cover-part-b: hooked passive Scaleform bind observer 0x{addr:x}; no product bind calls added"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "title-cover-part-b: bind observer MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "title-cover-part-b: MhHook::new bind observer failed: {status:?}"
+        )),
+    }
 }
 
 pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook(

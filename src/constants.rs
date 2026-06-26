@@ -545,30 +545,18 @@ pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_AFTER: AtomicUsize 
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// PART-B custom cover target. Do NOT run the `05_010_ProfileSelect` MenuWindowJob as a cover:
-/// runtime/user validation showed that canvas can block/interfere with title advance and is not the
-/// clean cover. The safe target is the already-root-reachable title logo `MenuResource` inside
-/// `TitleBackViewParts`: static RE of dump `0x1409a62d0` shows `TitleBackViewParts+0x8` is the
-/// `MenuResource`, and `FUN_140749290` uses that resource's mapping vector before constructing the
-/// visible logo SceneObjProxy at `TitleBackViewParts+0x70`.
+/// PART-B custom cover target: `05_010_ProfileSelect` is an existing Scaleform surface with
+/// `MENU_DummyProfileFace_01..10` symbols that the profile renderer maps to
+/// `SYSTEX_Menu_Profile00..09` (via CSMenuProfModelRend / active-screen render targets). The wrapper
+/// below is the deobf/live address for the native `05_010_ProfileSelect` MenuWindowJob builder
+/// (Ghidra dump 0x14081f7e0 -> deobf 0x14081f6f0). We use it as the initial custom cover surface
+/// instead of trying to remap `05_001_Title_Logo`, which has no dummy-profile symbol.
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA: usize = 0x81f6f0;
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME: &str = "05_010_ProfileSelect";
-pub(crate) const TITLE_CUSTOM_COVER_TITLE_IMAGE_SYMBOL: &str = "MENU_Title_EldenRing_01";
+pub(crate) const TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL: &str = "MENU_DummyProfileFace_01";
 pub(crate) const TITLE_CUSTOM_COVER_SYSTEX_TARGET: &str = "SYSTEX_Menu_Profile00";
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS: &str = "CSMenuProfModelRend";
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA: usize = 0x2b80128;
-/// Native image-symbol -> SYSTEX binding helper: dump `FUN_1407452c0` -> live/deobf `0x1407451c0`.
-/// It must be called on the owning resource/binding object (for the logo: `TitleBackViewParts+0x8`),
-/// not on the parent TitleTopDialog.
-pub(crate) const TITLE_CUSTOM_COVER_SCALEFORM_BIND_RVA: usize = 0x7451c0;
-pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_CALLS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_LAST_DIALOG: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_LAST_LOGO: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_LAST_RESOURCE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_CUSTOM_COVER_LOGO_REMAP_RENDERER_NONNULL: AtomicUsize = AtomicUsize::new(0);
 /// Profile portrait refresh/display pipeline: live 0x1409aa680 (dump 0x1409aa7d0) reads the loaded
 /// `ProfileSummary`, loops 10 slots, fills CSMenuProfModelRend / face/player model data, and maps
 /// each active slot to `SYSTEX_Menu_ProfileNN` through `FUN_140bb8cf0(renderer, slot*2)`. It must run
@@ -604,6 +592,24 @@ pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_COVER_JOB: AtomicUsize =
 pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_COVER_WINDOW: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_RET: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Passive observer for native Scaleform image-symbol -> system texture bindings.
+/// Dump `FUN_1407452c0` maps to live/deobf `0x1407451c0`. It receives an owning resource/list field
+/// in rcx and a pair of DLString<char> values in rdx. Do not call it from product code; observe native
+/// calls to learn valid owner/resource contexts for SYSTEX-backed surfaces.
+pub(crate) const TITLE_SCALEFORM_BIND_OBSERVER_RVA: usize = 0x7451c0;
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_SYSTEX_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_OWNER: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_PAIR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_SYMBOL_PTR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_TARGET_PTR: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 // (Removed: TITLE INIT-READINESS OVERRIDE lever -- it forced CSMenuMan+0x21, which RE later showed is
 // the WHOLE-game resident-UI-ready flag, not title-only; asserting it early risked later in-game menus
@@ -2999,6 +3005,7 @@ pub(crate) static START_TITLE_LOGO_FORCE_HIDDEN: Once = Once::new();
 pub(crate) static START_TITLE_PAB_INFORMATION_COVER: Once = Once::new();
 pub(crate) static START_TITLE_GFX_VALUE_SET_VISIBLE: Once = Once::new();
 pub(crate) static START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND: Once = Once::new();
+pub(crate) static START_TITLE_SCALEFORM_BIND_OBSERVER: Once = Once::new();
 pub(crate) static START_TITLE_CUSTOM_COVER_RUN: Once = Once::new();
 pub(crate) static START_BOOT_PROFILER: Once = Once::new();
 /// One-shot latch for the "first game-task frame ran" boot-phase marker (0 = not yet logged).
