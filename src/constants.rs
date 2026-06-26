@@ -1502,6 +1502,9 @@ pub(crate) const GAME_SAVE_SLOT_SINGLETON_RVA: usize = 0x3d69918;
 /// (the golden value was 0x7fff..); anything outside is treated as "not built yet" -> pass NULL.
 pub(crate) const OWNER_CTX_MIN_PLAUSIBLE_PTR: usize = 0x1_0000;
 pub(crate) const OWNER_CTX_MAX_PLAUSIBLE_PTR: usize = 0x8000_0000_0000;
+/// `GLOBAL_CSRegulationManager` singleton pointer. Native corrupted-save branch `FUN_14082d090`
+/// checks this for null before comparing `TitleFlowContext+0x148` against manager `+0x44`.
+pub(crate) const GLOBAL_CS_REGULATION_MANAGER_RVA: usize = 0x3d86c58;
 
 pub(crate) const OWN_STEPPER_LOG_INTERVAL: u64 = TitleNativeJobTiming::FrameRate as u64;
 pub(crate) const OWN_STEPPER_CALL_INC: usize = true as usize;

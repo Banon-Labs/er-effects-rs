@@ -1376,7 +1376,13 @@ pub(crate) unsafe fn loadgame_build_ctx_ready(base: usize) -> bool {
         return false;
     }
     let ctx = unsafe { safe_read_usize(dialog + DIALOG_OWNER_CTX_A38_OFFSET) }.unwrap_or(0);
-    ctx > OWNER_CTX_MIN_PLAUSIBLE_PTR && ctx < OWNER_CTX_MAX_PLAUSIBLE_PTR
+    if !(ctx > OWNER_CTX_MIN_PLAUSIBLE_PTR && ctx < OWNER_CTX_MAX_PLAUSIBLE_PTR) {
+        return false;
+    }
+    // Native `FUN_14082d090` checks this singleton before comparing regulation versions; our readiness
+    // predicate must not claim the title/load context is usable before the same singleton exists.
+    let regulation_manager = unsafe { safe_read_usize(base + GLOBAL_CS_REGULATION_MANAGER_RVA) }.unwrap_or(0);
+    regulation_manager != 0 && regulation_manager != null
 }
 
 /// PATH B "OWN THE LOAD" -- BUILD the LoadGame job with REAL mss-derived ctx, store its pointer for the
