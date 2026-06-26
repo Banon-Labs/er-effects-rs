@@ -1311,6 +1311,30 @@ pub(crate) unsafe fn product_core_autoload_ready(
         press_start_context: press_start.context,
     })
 }
+pub(crate) unsafe fn maybe_refresh_title_profile_cover(base: usize, ready: &ProductCoreAutoloadReady) {
+    if ready.profile_summary == TITLE_OWNER_SCAN_START_ADDRESS || ready.profile_summary == 0 {
+        return;
+    }
+    if TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_CALLS
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+    let refresh: unsafe extern "system" fn() =
+        unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA) };
+    unsafe { refresh() };
+    TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_PROFILE_SUMMARY
+        .store(ready.profile_summary, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_CALLER_PHASE
+        .store(OWN_STEPPER_PHASE.load(Ordering::SeqCst), Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "title-cover-part-b: refreshed post-SL2 profile portrait render targets via 0x{:x} profile_summary=0x{:x} target={TITLE_CUSTOM_COVER_SYSTEX_TARGET} renderer={TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS} ready_fields=+0x{TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_754:x}/+0x{TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_755:x}",
+        base + TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA,
+        ready.profile_summary,
+    ));
+}
+
 pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u64) -> bool {
     if !product_autoload_enabled() {
         return false;
@@ -1479,6 +1503,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     PRODUCT_CORE_LAST_BLOCKER.store(PRODUCT_CORE_BLOCKER_READY, Ordering::SeqCst);
     if phase == OWN_STEPPER_PHASE_MENU {
         if ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO {
+            unsafe { maybe_refresh_title_profile_cover(module_base, &ready) };
             // Main-branch preservation: do NOT call TitleTopDialog::open_menu from this game-task
             // context. Static disasm of TitleTopDialog::update shows the natural path only calls
             // open_menu from inside the live update frame after the accept gate, then immediately
