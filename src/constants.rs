@@ -738,16 +738,10 @@ pub(crate) const TITLE_PRESS_START_SCENE_PROXY_B78_OFFSET: usize = 0xb78;
 pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET: usize = 0xaa8;
 pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_NAME: &str = "TitleBackViewParts";
 pub(crate) const TITLE_LOGO_RESOURCE_NAME: &str = "05_001_Title_Logo";
-/// `CS::TitleBackViewParts::FadeIn` for the actual logo surface. Dump 0x1409a63f0 maps to live
-/// 0x1409a62a0 and only calls the state transition helper on `this+0x88` with `"FadeIn"`.
+/// Dead-end note: `CS::TitleBackViewParts::FadeIn` (dump 0x1409a63f0 -> live 0x1409a62a0)
+/// only calls the state transition helper on `this+0x88` with `"FadeIn"`; runtime/user evidence
+/// proved suppressing it does NOT hide the visible logo. Keep as RE context, not a product hook.
 pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_RVA: usize = 0x9a62a0;
-pub(crate) static TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_NOT_INSTALLED: usize = 0;
-pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_INSTALLED_YES: usize = 1;
-pub(crate) static TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_INSTALLED: AtomicUsize = AtomicUsize::new(TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_NOT_INSTALLED);
-pub(crate) static TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_SUPPRESSED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_LAST_THIS: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) static TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_LAST_CALLER_RVA: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) const TITLE_PRESS_START_NAME_RVA: usize = 0x2b26500;
 /// Diagnostic span: if *(proxy) is NOT SceneObjProxy, scan [proxy .. proxy+0x40] stride 8 logging
 /// each qword + its [0] vtable so the next probe reveals the real layout. Also bounds the fallback.
@@ -2866,7 +2860,6 @@ pub(crate) static START_ONLINE_DISABLE: Once = Once::new();
 pub(crate) static START_FOREGROUND_FORCE: Once = Once::new();
 pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS: Once = Once::new();
 pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS: Once = Once::new();
-pub(crate) static START_TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_SUPPRESS: Once = Once::new();
 pub(crate) static START_BOOT_PROFILER: Once = Once::new();
 /// One-shot latch for the "first game-task frame ran" boot-phase marker (0 = not yet logged).
 pub(crate) static BOOT_FIRST_FRAME_LOGGED: AtomicUsize = AtomicUsize::new(0);

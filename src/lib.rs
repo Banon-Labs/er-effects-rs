@@ -273,11 +273,6 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
                 .name("er-effects-title-cover-render".to_owned())
                 .spawn(install_title_native_menu_visual_render_suppression_hook);
         });
-        START_TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_SUPPRESS.call_once(|| {
-            let _ = std::thread::Builder::new()
-                .name("er-effects-title-logo-fadein".to_owned())
-                .spawn(install_title_logo_back_view_parts_fadein_suppression_hook);
-        });
     }
 
     // MenuWindow latch: install the SceneObjProxy ctor hook (0x14074a700) as early as the
