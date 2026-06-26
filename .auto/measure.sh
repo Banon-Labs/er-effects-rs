@@ -1120,17 +1120,8 @@ if not (
     title_cover_failures.append('Part B asset fork unresolved: 05_001_Title_Logo dummy-texture availability not decided')
     title_cover_penalty += 50
 
-part_b_cover_tokens = [
-    'SYSTEX_Menu_Profile',
-    'MENU_DummyProfileFace',
-    'CSMenuProfModelRend',
-    'TITLE_CUSTOM_COVER',
-    'oracle_title_custom_cover',
-]
-if not (
-    all(token in code + '\n' + telemetry_src + '\n' + watcher for token in part_b_cover_tokens)
-    and 'TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.fetch_add' in code
-    and 'TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA: usize = 0x81f8d0' in code
+part_b_pressstart_suppression = (
+    'TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA: usize = 0x81f8d0' in code
     and 'TITLE_PAB_INFORMATION_VISUAL_NAME: &str = "05_020_TitleInformation"' in code
     and 'oracle_title_pab_information_visual_any_built' in telemetry_src
     and 'TITLE_PRESS_START_SET_VISIBLE_RVA: usize = 0x733340' in code
@@ -1141,9 +1132,22 @@ if not (
     and 'oracle_title_press_start_gfx_any_hidden' in telemetry_src
     and 'oracle_title_press_start_bind_any_hidden' in telemetry_src
     and 'oracle_title_press_start_gfx_force_false_any' in telemetry_src
-):
-    title_cover_failures.append('Part B custom title cover render path is not implemented/observable yet')
+)
+if not part_b_pressstart_suppression:
+    title_cover_failures.append('Part B/PAB suppression path is not independently observable yet')
     title_cover_penalty += 50
+
+# The experimental 05_010_ProfileSelect/MenuWindowJob canvas was user-falsified: it can advance to a
+# blank Load Game/ProfileSelect frame but is not the clean custom title cover and can interfere with
+# PAB/title advance. Do not count ProfileSelect canvas build/run telemetry as Part B success.
+profile_select_canvas_installed = (
+    'START_TITLE_CUSTOM_COVER_RUN.call_once' in lib_code
+    or 'install_title_custom_cover_run_hook' in lib_code
+    or 'build_profile_select_cover_job(base, rdx, r8' in code
+)
+if profile_select_canvas_installed:
+    title_cover_failures.append('Part B false-positive guard: ProfileSelect/MenuWindowJob canvas is still installed; it is not a valid custom title cover')
+    title_cover_penalty += 100
 
 # User-visible runtime falsified the old Part-A/B semaphores twice: native title/logo/PAB/Continue
 # remained visible while CSMenuMan+0x90 said hidden, and again while TitleBackViewParts FadeIn was
@@ -1176,7 +1180,9 @@ weights = {
     'field58': 100,
     'direct': 85,
     'input': 85,
-    'runtime': 80,
+    # Missing the downstream character/world-load proof is a major product failure, not a small
+    # diagnostic gap: a blank Load Game/ProfileSelect canvas is not the target cover.
+    'runtime': 320,
     'runtime_mode': 120,
     'eula_popup': 80,
     'save_data_popup': 160,

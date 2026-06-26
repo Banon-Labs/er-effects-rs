@@ -1406,9 +1406,6 @@ pub(crate) unsafe extern "system" fn title_pab_information_visual_hook(
     TITLE_PAB_INFORMATION_VISUAL_LAST_JOB.store(native_job, Ordering::SeqCst);
     TITLE_PAB_INFORMATION_VISUAL_LAST_WINDOW.store(native_window, Ordering::SeqCst);
     TITLE_PAB_INFORMATION_VISUAL_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
-    unsafe {
-        build_profile_select_cover_job(base, rdx, r8, caller_rva, TITLE_PAB_INFORMATION_VISUAL_NAME)
-    };
     append_autoload_debug(format_args!(
         "title-cover-part-a: PRESERVED native {TITLE_PAB_INFORMATION_VISUAL_NAME} wrapper 0x{:x}; latched job=0x{native_job:x} window=0x{native_window:x} for PAB cover (out_slot=0x{out_slot:x} rdx=0x{rdx:x} r8=0x{r8:x} caller_rva=0x{caller_rva:x})",
         base + TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA,
@@ -1461,16 +1458,6 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
     };
     TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.store(native_job, Ordering::SeqCst);
     TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW.store(native_window, Ordering::SeqCst);
-
-    // Part B probe/warmup: construct the existing ProfileSelect dummy-profile surface through the
-    // native wrapper into a private slot, but do not return or install it in the BeginTitle out slot.
-    // Static RE of FUN_14081f7e0 shows this wrapper only prepares CSScaleformLoadInfo for
-    // `05_010_ProfileSelect` and forwards to the same MenuWindowJob factory; preserving `native_job`
-    // keeps the native title/Continue sequence authoritative while making the custom-cover resource
-    // path observable for telemetry.
-    unsafe {
-        build_profile_select_cover_job(base, rdx, r8, caller_rva, TITLE_NATIVE_MENU_VISUAL_NAME)
-    };
 
     append_autoload_debug(format_args!(
         "title-cover-part-a: PRESERVED native {TITLE_NATIVE_MENU_VISUAL_NAME} wrapper 0x{:x}/factory 0x{:x}; latched job=0x{native_job:x} window=0x{native_window:x} for render-only suppression (out_slot=0x{out_slot:x} prev=0x{prev_out:x} rdx=0x{rdx:x} r8=0x{r8:x} caller_rva=0x{caller_rva:x})",
