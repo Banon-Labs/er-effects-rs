@@ -199,15 +199,11 @@ terminate_runtime_pids() {
 
 cleanup() {
   local pid
-  # Automatic teardown screenshots are disabled by default: visible/on-screen runs are allowed to be
-  # unfocused while the user keeps using the computer, and screenshots are now an explicit on-demand
-  # action. Keep the old capture path opt-in for one-off diagnostics only.
-  if [[ "${AUTO_TEARDOWN_SCREENSHOT:-0}" == "1" && -n "${ARTIFACT_DIR:-}" && -d "${ARTIFACT_DIR:-/nonexistent}" ]]; then
-    # Diagnostic-only grace period: after the watcher says the run is done, leave the live ER window
-    # up briefly so the teardown screenshot captures the post-success state instead of the exact
-    # watcher-trigger frame. This is NOT a synchronization predicate; product proof still comes from
-    # in-process telemetry/readiness before cleanup starts.
-    sleep "${AUTO_TEARDOWN_SCREENSHOT_DELAY_SECONDS:-2}"
+  # Mandatory teardown evidence for every bounded runtime/autoresearch probe: capture the exact ER
+  # window region before killing the game. The capture helper is focus-independent (it raises the
+  # exact steam_app_1245620 window best-effort and does not fail merely because it was not focused),
+  # and writes teardown-screenshot.txt if the game/window is already gone.
+  if [[ -n "${ARTIFACT_DIR:-}" && -d "${ARTIFACT_DIR:-/nonexistent}" ]]; then
     python3 "$REPO_ROOT/scripts/capture-er-window.py" "$ARTIFACT_DIR/teardown-screenshot.jpg" 2>/dev/null || true
   fi
   if [[ -s "$HYPR_PLACER_PID_FILE" ]]; then

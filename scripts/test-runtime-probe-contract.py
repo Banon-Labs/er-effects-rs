@@ -37,6 +37,8 @@ def configure_module_paths(checker) -> None:
     checker.RUNTIME_WRAPPER_PATH = checker.AUTO_DIR / "run_runtime_experiment.sh"
     checker.RUNTIME_PROBE_PATH = checker.AUTO_DIR / "runtime_probe.sh"
     checker.RUNTIME_POLICY_PATH = checker.AUTO_DIR / "runtime_experiment_policy.rego"
+    checker.DIRECT_PROBE_PATH = FIXTURE_ROOT / "scripts" / "run-product-continue-direct-probe.sh"
+    checker.CAPTURE_HELPER_PATH = FIXTURE_ROOT / "scripts" / "capture-er-window.py"
     checker.SMOKE_DRIVER_PATH = FIXTURE_ROOT / "scripts" / "er-smoke-driver.sh"
     checker.AUTO_LOG_PATH = checker.AUTO_DIR / "log.jsonl"
 
@@ -72,6 +74,14 @@ def base_fixture(cap: int) -> None:
             "allow if { manual_event_driver_ready }\n"
             "deny contains message if { message := \"runtime probes are disabled fail-closed\" }\n"
         ),
+    )
+    write_fixture(
+        "scripts/run-product-continue-direct-probe.sh",
+        "#!/usr/bin/env bash\nset -euo pipefail\nterminate_runtime_pids() { :; }\ncleanup() {\n  if [[ -n \"${ARTIFACT_DIR:-}\" && -d \"${ARTIFACT_DIR:-/nonexistent}\" ]]; then\n    python3 \"$REPO_ROOT/scripts/capture-er-window.py\" \"$ARTIFACT_DIR/teardown-screenshot.jpg\" 2>/dev/null || true\n  fi\n  terminate_runtime_pids\n}\nrm -f \"$ARTIFACT_DIR/teardown-screenshot.jpg\" \"$ARTIFACT_DIR/teardown-screenshot.png\" \"$ARTIFACT_DIR/teardown-screenshot.txt\"\ntrap cleanup EXIT\n",
+    )
+    write_fixture(
+        "scripts/capture-er-window.py",
+        "WINDOW_CLASS = \"steam_app_1245620\"\ndef problems(w):\n    p = []\n    if w.get('mapped') is False:\n        p.append('unmapped')\n    if w.get('hidden') is True:\n        p.append('hidden')\n    at, size = w.get('at') or [], w.get('size') or []\n    if len(at) != 2 or len(size) != 2:\n        p.append('bad_geometry')\n    return p\n# uses hyprctl, grim, and records focusHistoryID in the note\n",
     )
     write_fixture(
         "scripts/er-smoke-driver.sh",
@@ -137,6 +147,27 @@ def main() -> int:
         "#!/usr/bin/env bash\nset -euo pipefail\ntrap cleanup_runtime EXIT\nvalidate_runtime_policy\nsetup_runtime_payload\n",
     )
     assert_rules(checker, {"runtime-probe-missing-bounded-timeout"})
+    base_fixture(cap)
+
+    write_fixture(
+        "scripts/run-product-continue-direct-probe.sh",
+        "#!/usr/bin/env bash\nset -euo pipefail\nterminate_runtime_pids() { :; }\ncleanup() {\n  if [[ \"${AUTO_TEARDOWN_SCREENSHOT:-0}\" == \"1\" ]]; then\n    python3 \"$REPO_ROOT/scripts/capture-er-window.py\" \"$ARTIFACT_DIR/teardown-screenshot.jpg\" 2>/dev/null || true\n  fi\n  terminate_runtime_pids\n}\nrm -f \"$ARTIFACT_DIR/teardown-screenshot.jpg\" \"$ARTIFACT_DIR/teardown-screenshot.txt\"\n",
+    )
+    assert_rules(checker, {"teardown-screenshot-env-gated"})
+    base_fixture(cap)
+
+    write_fixture(
+        "scripts/run-product-continue-direct-probe.sh",
+        "#!/usr/bin/env bash\nset -euo pipefail\nterminate_runtime_pids() { :; }\ncleanup() {\n  terminate_runtime_pids\n  python3 \"$REPO_ROOT/scripts/capture-er-window.py\" \"$ARTIFACT_DIR/teardown-screenshot.jpg\" 2>/dev/null || true\n}\nrm -f \"$ARTIFACT_DIR/teardown-screenshot.jpg\" \"$ARTIFACT_DIR/teardown-screenshot.txt\"\n",
+    )
+    assert_rules(checker, {"teardown-screenshot-not-before-kill"})
+    base_fixture(cap)
+
+    write_fixture(
+        "scripts/capture-er-window.py",
+        "WINDOW_CLASS = \"steam_app_1245620\"\ndef problems(w):\n    p = []\n    p.append('focus_unknown')\n    p.append('not_focused')\n    p.append('bad_geometry')\n    return p\n# hyprctl grim focusHistoryID\n",
+    )
+    assert_rules(checker, {"teardown-screenshot-focus-dependent"})
     base_fixture(cap)
 
     write_fixture(
