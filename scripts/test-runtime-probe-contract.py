@@ -82,7 +82,7 @@ def base_fixture(cap: int) -> None:
     )
     write_fixture(
         "scripts/er-readiness-watch.py",
-        "from runtime_timeout_cap import runtime_timeout_cap_seconds\nMAX_ALLOWED_RUNTIME_SECONDS = float(runtime_timeout_cap_seconds())\nTIMEOUT_BUDGET_EXHAUSTED = 'timeout_seconds_budget_exhausted'\n# --max-runtime-seconds\nfrom pathlib import Path\ndef telemetry_logo_replacement_capture_ready(t):\n    return bool(t and t.get('oracle_title_portrait_visible_surface_bound'))\ndef maybe_capture_logo_replacement(artifact_dir, telemetry):\n    return Path('logo-replacement-screenshot.jpg').name and 'capture-er-window.py'\n",
+        "from runtime_timeout_cap import runtime_timeout_cap_seconds\nMAX_ALLOWED_RUNTIME_SECONDS = float(runtime_timeout_cap_seconds())\nTIMEOUT_BUDGET_EXHAUSTED = 'timeout_seconds_budget_exhausted'\n# --max-runtime-seconds\nfrom pathlib import Path\ndef telemetry_logo_replacement_capture_ready(t):\n    return bool(t and t.get('oracle_title_portrait_visible_surface_bound'))\ndef maybe_capture_logo_replacement(artifact_dir, telemetry):\n    return Path('logo-replacement-screenshot.jpg').name and 'logo-replacement-screenshot-analysis.json' and 'capture-er-window.py' and 'analyze-logo-replacement-screenshot.py'\n",
     )
     write_fixture(
         "scripts/capture-er-window.py",

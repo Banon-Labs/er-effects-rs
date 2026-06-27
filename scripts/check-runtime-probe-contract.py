@@ -335,9 +335,11 @@ def scan_contract() -> list[Finding]:
         watch_text = READINESS_WATCH_PATH.read_text(encoding="utf-8", errors="replace")
         required_logo_capture = [
             "logo-replacement-screenshot.jpg",
+            "logo-replacement-screenshot-analysis.json",
             "telemetry_logo_replacement_capture_ready",
             "oracle_title_portrait_visible_surface_bound",
             "capture-er-window.py",
+            "analyze-logo-replacement-screenshot.py",
         ]
         missing_logo_capture = [snippet for snippet in required_logo_capture if snippet not in watch_text]
         if missing_logo_capture:

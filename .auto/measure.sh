@@ -1035,6 +1035,21 @@ if rt_root.exists():
             save_data_popup_by_dir[d.name] = [
                 f'runtime artifact {d.name} detected failed-save-data popup from captured target-window OCR evidence: {"; ".join(save_data_evidence)}'
             ]
+        logo_analysis_path = d / 'logo-replacement-screenshot-analysis.json'
+        if logo_analysis_path.exists():
+            try:
+                logo_analysis = json.loads(logo_analysis_path.read_text(encoding='utf-8', errors='replace'))
+            except Exception:
+                logo_analysis = {}
+            if logo_analysis.get('known_false_positive_signature') is True:
+                ratio = logo_analysis.get('black32_ratio')
+                title_cover_runtime_by_dir.setdefault(d.name, [])
+                msg = (
+                    f'runtime artifact {d.name} logo-replacement screenshot has black32_ratio={ratio}; '
+                    'matches the known dark LOAD GAME/ProfileSelect false-positive panel rather than a portrait-on-black cover'
+                )
+                if msg not in title_cover_runtime_by_dir[d.name]:
+                    title_cover_runtime_by_dir[d.name].append(msg)
         for name in ['er-effects-autoload-debug.log', 'autoload-debug-live.final.log', 'continue-trace-game.final.log', 'continue-trace-game.log']:
             p = d / name
             if not p.exists():

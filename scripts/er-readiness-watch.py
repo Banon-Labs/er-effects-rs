@@ -704,6 +704,21 @@ def maybe_capture_logo_replacement(artifact_dir: Path, telemetry: dict[str, Any]
         subprocess.run([sys.executable, str(helper), str(out)], text=True, capture_output=True, timeout=25)
     except Exception as exc:
         note.write_text(f"logo replacement capture failed: {exc}\n", encoding="utf-8")
+    analysis_path = artifact_dir / "logo-replacement-screenshot-analysis.json"
+    analyzer = Path(__file__).with_name("analyze-logo-replacement-screenshot.py")
+    if out.exists() and analyzer.exists():
+        try:
+            subprocess.run(
+                [sys.executable, str(analyzer), str(out), str(analysis_path)],
+                text=True,
+                capture_output=True,
+                timeout=35,
+            )
+        except Exception as exc:
+            analysis_path.write_text(
+                json.dumps({"error": str(exc), "known_false_positive_signature": True}, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
     event.write_text(
         json.dumps(
             {
