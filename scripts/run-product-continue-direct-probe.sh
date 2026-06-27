@@ -18,6 +18,7 @@ CRASH_LOG_PATH="${CRASH_LOG_PATH:-$ARTIFACT_DIR/er-effects-crash-log.txt}"
 AUTOLOAD_DEBUG_PATH="${AUTOLOAD_DEBUG_PATH:-$ARTIFACT_DIR/er-effects-autoload-debug.log}"
 # Boot profiler (opt-in via ER_EFFECTS_PROFILE=1): per-run CPU sample stream in the artifact dir.
 PROFILE_PATH="${PROFILE_PATH:-$ARTIFACT_DIR/er-effects-profile.jsonl}"
+HYPR_PLACER_PID_FILE="${HYPR_PLACER_PID_FILE:-$ARTIFACT_DIR/hypr-window-placer.pid}"
 AUTOLOAD_PATH="${AUTOLOAD_PATH:-$GAME_DIR/er-effects-autoload.txt}"
 AUTOLOAD_REQUEST="${AUTOLOAD_REQUEST:-}"
 # Single source of truth for the runtime-probe wall-clock cap (seconds). Read from the canonical
@@ -202,7 +203,18 @@ cleanup() {
   # unfocused while the user keeps using the computer, and screenshots are now an explicit on-demand
   # action. Keep the old capture path opt-in for one-off diagnostics only.
   if [[ "${AUTO_TEARDOWN_SCREENSHOT:-0}" == "1" && -n "${ARTIFACT_DIR:-}" && -d "${ARTIFACT_DIR:-/nonexistent}" ]]; then
+    # Diagnostic-only grace period: after the watcher says the run is done, leave the live ER window
+    # up briefly so the teardown screenshot captures the post-success state instead of the exact
+    # watcher-trigger frame. This is NOT a synchronization predicate; product proof still comes from
+    # in-process telemetry/readiness before cleanup starts.
+    sleep "${AUTO_TEARDOWN_SCREENSHOT_DELAY_SECONDS:-2}"
     python3 "$REPO_ROOT/scripts/capture-er-window.py" "$ARTIFACT_DIR/teardown-screenshot.jpg" 2>/dev/null || true
+  fi
+  if [[ -s "$HYPR_PLACER_PID_FILE" ]]; then
+    IFS= read -r pid < "$HYPR_PLACER_PID_FILE" || pid=""
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+    fi
   fi
   if [[ -s "$PID_FILE" ]]; then
     IFS= read -r pid < "$PID_FILE" || pid=""
@@ -228,6 +240,7 @@ BOOTSTRAP_STATE_PATH=$(realpath -m "$BOOTSTRAP_STATE_PATH")
 CRASH_LOG_PATH=$(realpath -m "$CRASH_LOG_PATH")
 AUTOLOAD_DEBUG_PATH=$(realpath -m "$AUTOLOAD_DEBUG_PATH")
 PROFILE_PATH=$(realpath -m "$PROFILE_PATH")
+HYPR_PLACER_PID_FILE=$(realpath -m "$HYPR_PLACER_PID_FILE")
 mkdir -p "$ARTIFACT_DIR"
 
 if (( DRY_RUN )); then
@@ -340,6 +353,33 @@ else
   gamescope_prefix=(gamescope --backend headless -W "${GAMESCOPE_W:-1280}" -H "${GAMESCOPE_H:-720}" -r "${GAMESCOPE_FPS:-30}" --)
   echo "render: gamescope headless (offscreen; observed via in-process telemetry oracles, not screenshots)"
 fi
+
+start_hypr_window_placer() {
+  [[ "${RUNTIME_ONSCREEN:-1}" == "1" ]] || return 0
+  [[ "${ER_EFFECTS_HYPR_PLACE_WINDOW:-1}" == "1" ]] || return 0
+  command -v hyprctl >/dev/null 2>&1 || { echo "hypr-place: hyprctl unavailable; skipping visible-window clamp"; return 0; }
+  local -a focus_args=()
+  if [[ "${ER_EFFECTS_HYPR_FOCUS:-0}" == "1" ]]; then
+    focus_args=(--focus)
+  fi
+  python3 "$REPO_ROOT/scripts/place-er-window-hyprland.py" \
+    --class steam_app_1245620 \
+    --monitor "${ER_EFFECTS_HYPR_MONITOR:-window}" \
+    --workspace "${ER_EFFECTS_HYPR_WORKSPACE:-window}" \
+    --width "${ER_EFFECTS_HYPR_WIDTH:-1280}" \
+    --height "${ER_EFFECTS_HYPR_HEIGHT:-720}" \
+    --duration "${ER_EFFECTS_HYPR_PLACE_SECONDS:-$RUNTIME_TIMEOUT_SECONDS}" \
+    --interval "${ER_EFFECTS_HYPR_PLACE_INTERVAL:-0.25}" \
+    --always \
+    "${focus_args[@]}" \
+    --log "$ARTIFACT_DIR/hypr-window-placer.jsonl" \
+    > "$ARTIFACT_DIR/hypr-window-placer.out" \
+    2> "$ARTIFACT_DIR/hypr-window-placer.err" &
+  echo "$!" > "$HYPR_PLACER_PID_FILE"
+  echo "hypr-place: started target-only visible-window clamp pid=$! log=$ARTIFACT_DIR/hypr-window-placer.jsonl monitor=${ER_EFFECTS_HYPR_MONITOR:-window} workspace=${ER_EFFECTS_HYPR_WORKSPACE:-window}"
+}
+
+start_hypr_window_placer
 
 # RUNTIME_NO_TEARDOWN=1: run the game in the FOREGROUND of this launcher (which a human runs detached,
 # e.g. via the agent's background mode) and do NOT run the readiness watcher. Proton's `run` tears the

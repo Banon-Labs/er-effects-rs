@@ -60,6 +60,7 @@ else:
     exp = (root / 'src/experiments.rs').read_text(encoding='utf-8', errors='replace')
 check = (root / 'scripts/check-autoload-happy-path.py').read_text(encoding='utf-8', errors='replace')
 telemetry_src = (root / 'src/telemetry.rs').read_text(encoding='utf-8', errors='replace')
+overlay_code = (root / 'src/overlay.rs').read_text(encoding='utf-8', errors='replace') if (root / 'src/overlay.rs').exists() else ''
 watcher = (root / 'scripts/er-readiness-watch.py').read_text(encoding='utf-8', errors='replace')
 native_static_check = (root / 'scripts/check-native-continue-static.py').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/check-native-continue-static.py').exists() else ''
 menu_ctor_static_check = (root / 'scripts/check-menu-constructor-static.py').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/check-menu-constructor-static.py').exists() else ''
@@ -1197,10 +1198,22 @@ if profile_select_canvas_installed:
 # User-visible runtime falsified the old Part-A/B semaphores twice: native title/logo/PAB/Continue
 # remained visible while CSMenuMan+0x90 said hidden, and again while TitleBackViewParts FadeIn was
 # suppressed. The real visible logo surface is TitleBackViewParts (`05_001_Title_Logo`) at
-# TitleTopDialog+0xaa8, but merely naming/suppressing its FadeIn is not product proof. Fail closed
-# until code/telemetry exposes a later GFx display-object visibility/alpha/binding oracle AND ties the
-# post-SL2 SYSTEX profile portrait pipeline into that visible surface, OR a successor custom cover
-# surface proves it actually rendered on a real display target during product autoload.
+# TitleTopDialog+0xaa8, but merely naming/suppressing its FadeIn is not product proof. The product
+# goal is now narrower than "any clean cover": render the loaded character portrait/profile during
+# boot-init and keep it up until the native map-loading screen takes over. A generic text/rectangle
+# hudhook overlay is useful diagnostic scaffolding but must not score as final cover success.
+portrait_overlay_cover_observable = (
+    'draw_title_overlay_cover' in overlay_code
+    and 'TITLE_OVERLAY_COVER_RENDER_CALLS.fetch_add' in overlay_code
+    and 'oracle_title_overlay_cover_rendered' in telemetry_src + '\n' + watcher
+    and 'title_overlay_cover_display_sane' in telemetry_src
+    and (
+        'SYSTEX_Menu_Profile' in overlay_code
+        or 'profile portrait' in overlay_code.lower()
+        or 'character portrait' in overlay_code.lower()
+    )
+    and '&& !product_autoload_enabled()' in lib_code
+)
 actual_logo_profile_cover_observable = (
     (
         'TitleBackViewParts' in code + '\n' + telemetry_src + '\n' + watcher
@@ -1210,16 +1223,13 @@ actual_logo_profile_cover_observable = (
         and 'oracle_title_logo_gfx_visibility' in telemetry_src + '\n' + watcher
         and 'oracle_title_profile_cover_bound_to_logo_surface' in telemetry_src + '\n' + watcher
     )
-    or (
-        'draw_title_overlay_cover' in overlay_code
-        and 'TITLE_OVERLAY_COVER_RENDER_CALLS.fetch_add' in overlay_code
-        and 'oracle_title_overlay_cover_rendered' in telemetry_src + '\n' + watcher
-        and 'title_overlay_cover_display_sane' in telemetry_src
-        and '&& !product_autoload_enabled()' in lib_code
-    )
+    or portrait_overlay_cover_observable
 )
+if 'draw_title_overlay_cover' in overlay_code and not portrait_overlay_cover_observable:
+    title_cover_failures.append('Part B false-positive guard: hudhook cover is still generic text/rectangle scaffolding, not the loaded character portrait')
+    title_cover_penalty += 100
 if not actual_logo_profile_cover_observable:
-    title_cover_failures.append('Part B false-positive guard: no GFx visibility/binding oracle proves SYSTEX profile portrait replaced or covered the visible 05_001_Title_Logo surface')
+    title_cover_failures.append('Part B false-positive guard: no RAM-backed oracle proves the loaded character portrait covers boot-init until the native map-loading screen takes over')
     title_cover_penalty += 50
 
 false_positives = 0

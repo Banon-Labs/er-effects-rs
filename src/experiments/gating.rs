@@ -572,9 +572,21 @@ pub(crate) fn fire_tfc_continue_enabled() -> bool {
         .join("er-effects-fire-tfc-continue.txt")
         .exists()
 }
+/// Hudhook/ImGui overlay feature flag. OFF by default: product/autoload runs should not install
+/// hudhook/DX12 render hooks unless a run explicitly opts into the visual overlay path.
+/// Enable via env `ER_EFFECTS_ENABLE_HUDHOOK=1` or GAME_DIR file `er-effects-enable-hudhook.txt`.
+pub(crate) fn hudhook_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_ENABLE_HUDHOOK").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-enable-hudhook.txt")
+        .exists()
+}
+
 /// Overlay kill switch: when set, the hudhook/ImGui DX12 overlay is NOT initialized (no extra DX12
-/// hooks / render overhead) -- for golden/trace runs that want a clean game with only our diagnostics.
-/// OFF by default; env `ER_EFFECTS_NO_OVERLAY=1` or a GAME_DIR file `er-effects-no-overlay.txt`.
+/// hooks / render overhead) even if the positive feature flag is present.
 pub(crate) fn overlay_disabled() -> bool {
     matches!(std::env::var("ER_EFFECTS_NO_OVERLAY").as_deref(), Ok("1"))
         || game_directory_path()
