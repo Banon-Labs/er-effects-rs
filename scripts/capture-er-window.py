@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Low-quality screenshot of ONLY the Elden Ring window, for teardown/crash/trap evidence.
+"""Low-quality screenshot of ONLY the Elden Ring window for a specific probe event.
 
 Captures only an exact-class (steam_app_1245620), mapped, unhidden window with sane geometry.
-This teardown helper is focus-independent: it switches to the window's workspace and raises the
-exact ER window before capture, but it does not fail merely because Hyprland still reports a
-nonzero focusHistoryID. grim -g captures the validated ER window region only (never the full desktop
-or an unrelated fallback window), so the artifact exists even when ER was not focused before teardown.
+This helper is focus-independent: it switches to the window's workspace and raises the exact ER
+window before capture, but it does not fail merely because Hyprland still reports a nonzero
+focusHistoryID. grim -g captures the validated ER window region only (never the full desktop or an
+unrelated fallback window), so the artifact can be taken at the logo-replacement/portrait-cover
+moment instead of at teardown.
 
 Usage: capture-er-window.py <out.jpg>
-Exit 0 always (best-effort evidence; never fails the caller's teardown).
+Exit 0 always (best-effort evidence; never fails the caller's runtime probe).
 """
 from __future__ import annotations
 

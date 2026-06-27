@@ -39,6 +39,7 @@ def configure_module_paths(checker) -> None:
     checker.RUNTIME_POLICY_PATH = checker.AUTO_DIR / "runtime_experiment_policy.rego"
     checker.DIRECT_PROBE_PATH = FIXTURE_ROOT / "scripts" / "run-product-continue-direct-probe.sh"
     checker.CAPTURE_HELPER_PATH = FIXTURE_ROOT / "scripts" / "capture-er-window.py"
+    checker.READINESS_WATCH_PATH = FIXTURE_ROOT / "scripts" / "er-readiness-watch.py"
     checker.SMOKE_DRIVER_PATH = FIXTURE_ROOT / "scripts" / "er-smoke-driver.sh"
     checker.AUTO_LOG_PATH = checker.AUTO_DIR / "log.jsonl"
 
@@ -77,7 +78,11 @@ def base_fixture(cap: int) -> None:
     )
     write_fixture(
         "scripts/run-product-continue-direct-probe.sh",
-        "#!/usr/bin/env bash\nset -euo pipefail\nterminate_runtime_pids() { :; }\ncleanup() {\n  if [[ -n \"${ARTIFACT_DIR:-}\" && -d \"${ARTIFACT_DIR:-/nonexistent}\" ]]; then\n    python3 \"$REPO_ROOT/scripts/capture-er-window.py\" \"$ARTIFACT_DIR/teardown-screenshot.jpg\" 2>/dev/null || true\n  fi\n  terminate_runtime_pids\n}\nrm -f \"$ARTIFACT_DIR/teardown-screenshot.jpg\" \"$ARTIFACT_DIR/teardown-screenshot.png\" \"$ARTIFACT_DIR/teardown-screenshot.txt\"\ntrap cleanup EXIT\n",
+        "#!/usr/bin/env bash\nset -euo pipefail\nterminate_runtime_pids() { :; }\ncleanup() {\n  terminate_runtime_pids\n}\nrm -f \"$ARTIFACT_DIR/logo-replacement-screenshot.jpg\" \"$ARTIFACT_DIR/logo-replacement-screenshot.png\" \"$ARTIFACT_DIR/logo-replacement-screenshot.txt\"\ntrap cleanup EXIT\n",
+    )
+    write_fixture(
+        "scripts/er-readiness-watch.py",
+        "from runtime_timeout_cap import runtime_timeout_cap_seconds\nMAX_ALLOWED_RUNTIME_SECONDS = float(runtime_timeout_cap_seconds())\nTIMEOUT_BUDGET_EXHAUSTED = 'timeout_seconds_budget_exhausted'\n# --max-runtime-seconds\nfrom pathlib import Path\ndef telemetry_logo_replacement_capture_ready(t):\n    return bool(t and t.get('oracle_title_portrait_visible_surface_bound'))\ndef maybe_capture_logo_replacement(artifact_dir, telemetry):\n    return Path('logo-replacement-screenshot.jpg').name and 'capture-er-window.py'\n",
     )
     write_fixture(
         "scripts/capture-er-window.py",
@@ -151,23 +156,30 @@ def main() -> int:
 
     write_fixture(
         "scripts/run-product-continue-direct-probe.sh",
-        "#!/usr/bin/env bash\nset -euo pipefail\nterminate_runtime_pids() { :; }\ncleanup() {\n  if [[ \"${AUTO_TEARDOWN_SCREENSHOT:-0}\" == \"1\" ]]; then\n    python3 \"$REPO_ROOT/scripts/capture-er-window.py\" \"$ARTIFACT_DIR/teardown-screenshot.jpg\" 2>/dev/null || true\n  fi\n  terminate_runtime_pids\n}\nrm -f \"$ARTIFACT_DIR/teardown-screenshot.jpg\" \"$ARTIFACT_DIR/teardown-screenshot.txt\"\n",
+        "#!/usr/bin/env bash\nset -euo pipefail\nterminate_runtime_pids() { :; }\ncleanup() {\n  python3 \"$REPO_ROOT/scripts/capture-er-window.py\" \"$ARTIFACT_DIR/teardown-screenshot.jpg\" 2>/dev/null || true\n  terminate_runtime_pids\n}\nrm -f \"$ARTIFACT_DIR/logo-replacement-screenshot.jpg\" \"$ARTIFACT_DIR/logo-replacement-screenshot.txt\"\n",
     )
-    assert_rules(checker, {"teardown-screenshot-env-gated"})
+    assert_rules(checker, {"teardown-screenshot-still-wired"})
     base_fixture(cap)
 
     write_fixture(
         "scripts/run-product-continue-direct-probe.sh",
-        "#!/usr/bin/env bash\nset -euo pipefail\nterminate_runtime_pids() { :; }\ncleanup() {\n  terminate_runtime_pids\n  python3 \"$REPO_ROOT/scripts/capture-er-window.py\" \"$ARTIFACT_DIR/teardown-screenshot.jpg\" 2>/dev/null || true\n}\nrm -f \"$ARTIFACT_DIR/teardown-screenshot.jpg\" \"$ARTIFACT_DIR/teardown-screenshot.txt\"\n",
+        "#!/usr/bin/env bash\nset -euo pipefail\nterminate_runtime_pids() { :; }\ncleanup() { terminate_runtime_pids; }\nrm -f \"$ARTIFACT_DIR/other.jpg\"\n",
     )
-    assert_rules(checker, {"teardown-screenshot-not-before-kill"})
+    assert_rules(checker, {"logo-replacement-screenshot-stale-reset-missing"})
+    base_fixture(cap)
+
+    write_fixture(
+        "scripts/er-readiness-watch.py",
+        "from runtime_timeout_cap import runtime_timeout_cap_seconds\nMAX_ALLOWED_RUNTIME_SECONDS = float(runtime_timeout_cap_seconds())\nTIMEOUT_BUDGET_EXHAUSTED = 'timeout_seconds_budget_exhausted'\n# --max-runtime-seconds; missing logo replacement event capture\n",
+    )
+    assert_rules(checker, {"logo-replacement-event-capture-missing"})
     base_fixture(cap)
 
     write_fixture(
         "scripts/capture-er-window.py",
         "WINDOW_CLASS = \"steam_app_1245620\"\ndef problems(w):\n    p = []\n    p.append('focus_unknown')\n    p.append('not_focused')\n    p.append('bad_geometry')\n    return p\n# hyprctl grim focusHistoryID\n",
     )
-    assert_rules(checker, {"teardown-screenshot-focus-dependent"})
+    assert_rules(checker, {"event-capture-focus-dependent"})
     base_fixture(cap)
 
     write_fixture(

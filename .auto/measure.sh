@@ -1249,7 +1249,9 @@ actual_logo_profile_cover_observable = (
         and 'oracle_title_profile_cover_bound_to_logo_surface' in telemetry_src + '\n' + watcher
     )
     or portrait_overlay_cover_observable
-    or 'oracle_title_portrait_visible_surface_bound' in telemetry_src + '\n' + watcher
+    # `oracle_title_portrait_visible_surface_bound` alone is no longer acceptable: the
+    # logo-replacement event screenshot showed it can assert while the screen is still a dark
+    # LOAD GAME/ProfileSelect panel. Future success needs a real pixel/native visibility semaphore.
 )
 if 'draw_title_overlay_cover' in overlay_code and not portrait_overlay_cover_observable:
     title_cover_failures.append('Part B false-positive guard: hudhook cover is still generic text/rectangle scaffolding, not the loaded character portrait')
@@ -1275,6 +1277,12 @@ portrait_render_oracle_true = any(
     re.search(r'"oracle_title_loaded_character_portrait_rendered"\s*:\s*true', raw)
     and re.search(r'"oracle_title_loaded_character_portrait_visible_during_boot"\s*:\s*true', raw)
     and re.search(r'"oracle_title_loaded_character_portrait_held_until_loading_takeover"\s*:\s*true', raw)
+    and re.search(r'"oracle_title_portrait_pixels_visible"\s*:\s*true', raw)
+    for raw in scored_runtime_artifacts_raw
+)
+visible_surface_without_pixels_false_positive = any(
+    re.search(r'"oracle_title_portrait_visible_surface_bound"\s*:\s*true', raw)
+    and not re.search(r'"oracle_title_portrait_pixels_visible"\s*:\s*true', raw)
     for raw in scored_runtime_artifacts_raw
 )
 profile_select_transform_false_positive = any(
@@ -1287,11 +1295,14 @@ profile_select_transform_false_positive = any(
     and not re.search(r'"oracle_title_portrait_visible_surface_bound"\s*:\s*true', raw)
     for raw in scored_runtime_artifacts_raw
 )
-if profile_select_transform_false_positive:
+if visible_surface_without_pixels_false_positive:
+    title_cover_failures.append('Part B hard gate: visible-surface/ProfileSelect bind semaphore was visually falsified by logo-replacement screenshot; require oracle_title_portrait_pixels_visible or an equivalent native/pixel semaphore')
+    title_cover_penalty += MAX_SCORE
+elif profile_select_transform_false_positive:
     title_cover_failures.append('Part B hard gate: ProfileSelect one-tick transform/SYSTEX semaphores are a proven visual false positive; require a real visible-pixel/surface oracle, not transform flags')
     title_cover_penalty += MAX_SCORE
 elif not (portrait_render_oracle_present and portrait_render_oracle_true):
-    title_cover_failures.append('Part B hard gate: no runtime oracle proves the loaded character portrait itself is rendered at the right time; source/texture-handle telemetry and generic overlay drawing are not product success')
+    title_cover_failures.append('Part B hard gate: no runtime oracle proves the loaded character portrait pixels are visible at the right time; source/texture-handle/visible-surface telemetry and generic overlay drawing are not product success')
     title_cover_penalty += MAX_SCORE
 
 overlay_body = function_body('draw_title_overlay_cover', overlay_code) or ''
@@ -1304,7 +1315,7 @@ if generic_black_overlay_false_positive:
     title_cover_failures.append('Part B visual-beauty gate: fullscreen black/dark rectangle overlay is a product false positive; the cover must visibly render the loaded character portrait')
     title_cover_penalty += 100
 
-false_positives = 1 if generic_black_overlay_false_positive else 0
+false_positives = 1 if (generic_black_overlay_false_positive or visible_surface_without_pixels_false_positive) else 0
 all_detail_failures = []
 for group in [legacy_failures, asset_failures, dll_failures, native_failures, field58_failures, direct_failures, input_failures, runtime_failures, runtime_mode_failures, eula_popup_failures, save_data_popup_failures, messagebox_dialog_failures, server_status_failures, title_cover_failures]:
     all_detail_failures.extend(group)

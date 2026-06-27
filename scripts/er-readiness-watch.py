@@ -668,6 +668,68 @@ def window_capture_safe(window: dict[str, Any], window_class: str) -> bool:
     return not target_window_capture_problems(window, window_class)
 
 
+
+def telemetry_logo_replacement_capture_ready(telemetry: dict[str, Any] | None) -> bool:
+    """True when the portrait-cover/logo-replacement moment is worth visually capturing.
+
+    This screenshot is for agent visual review until a stronger pixel/native-surface memory
+    semaphore exists. It is intentionally event-timed: teardown/world screenshots do not prove the
+    logo replacement ever looked correct.
+    """
+    if telemetry is None:
+        return False
+    return (
+        telemetry.get("oracle_title_portrait_visible_surface_bound") is True
+        and as_int(telemetry.get("oracle_title_portrait_visible_surface_bind_rewrites"), 0) > 0
+        and telemetry.get("oracle_title_loaded_character_portrait_rendered") is True
+        and telemetry.get("oracle_title_loaded_character_portrait_visible_during_boot") is True
+    )
+
+
+def maybe_capture_logo_replacement(artifact_dir: Path, telemetry: dict[str, Any] | None) -> bool:
+    """Best-effort exact-window capture at the logo-replacement/portrait-cover oracle edge.
+
+    Product proof still comes from telemetry. This image exists specifically for the agent to inspect
+    whether the visual proof-of-concept looks right before trusting/strengthening memory semaphores.
+    """
+    out = artifact_dir / "logo-replacement-screenshot.jpg"
+    note = out.with_suffix(".txt")
+    event = artifact_dir / "logo-replacement-screenshot-event.json"
+    if out.exists() or note.exists() or event.exists():
+        return True
+    if not telemetry_logo_replacement_capture_ready(telemetry):
+        return False
+    helper = Path(__file__).with_name("capture-er-window.py")
+    try:
+        subprocess.run([sys.executable, str(helper), str(out)], text=True, capture_output=True, timeout=25)
+    except Exception as exc:
+        note.write_text(f"logo replacement capture failed: {exc}\n", encoding="utf-8")
+    event.write_text(
+        json.dumps(
+            {
+                "reason": "portrait_cover_logo_replacement_oracle_asserted",
+                "screenshot": str(out),
+                "note": str(note),
+                "oracle_title_portrait_visible_surface_bound": bool(
+                    telemetry.get("oracle_title_portrait_visible_surface_bound") if telemetry else False
+                ),
+                "oracle_title_portrait_visible_surface_bind_rewrites": as_int(
+                    telemetry.get("oracle_title_portrait_visible_surface_bind_rewrites") if telemetry else 0, 0
+                ),
+                "oracle_title_loaded_character_portrait_rendered": bool(
+                    telemetry.get("oracle_title_loaded_character_portrait_rendered") if telemetry else False
+                ),
+                "oracle_title_loaded_character_portrait_visible_during_boot": bool(
+                    telemetry.get("oracle_title_loaded_character_portrait_visible_during_boot") if telemetry else False
+                ),
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return out.exists() or note.exists() or event.exists()
+
 def target_window_capture_diagnostics(windows: list[dict[str, Any]], window_class: str) -> dict[str, Any]:
     if not windows:
         return {
@@ -2079,6 +2141,7 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
     # phase transition / forward progress so an inherently-slow-but-moving phase never trips.
     phase_watchdog_state: dict[str, Any] = {"phase": None, "value": None, "since": None}
     fps_samples: list[tuple[float, int]] = []  # (monotonic, game_task_ticks) for the fps semaphore
+    logo_replacement_capture_done = False
     for poll in range(args.readiness_poll_budget):
         if time.monotonic() >= deadline:
             return with_runtime_module_info(
@@ -2115,6 +2178,8 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
         # Milestone timing (deltas from the TRUE bash launch epoch). Record first telemetry / continue
         # fired / player present transitions; world-stable is marked at its dedicated success below.
         timing.observe(telemetry)
+        if not logo_replacement_capture_done:
+            logo_replacement_capture_done = maybe_capture_logo_replacement(args.artifact_dir, telemetry)
         # FAIL-FAST WORLD-LOAD DEADLINE: the world-loaded semaphore (player present / world-stable)
         # must be reached within --world-load-deadline-seconds of CONTINUE_FIRED (the load starting),
         # not bash launch -- so our ~24s boot+title latency doesn't eat the load budget and the

@@ -199,13 +199,9 @@ terminate_runtime_pids() {
 
 cleanup() {
   local pid
-  # Mandatory teardown evidence for every bounded runtime/autoresearch probe: capture the exact ER
-  # window region before killing the game. The capture helper is focus-independent (it raises the
-  # exact steam_app_1245620 window best-effort and does not fail merely because it was not focused),
-  # and writes teardown-screenshot.txt if the game/window is already gone.
-  if [[ -n "${ARTIFACT_DIR:-}" && -d "${ARTIFACT_DIR:-/nonexistent}" ]]; then
-    python3 "$REPO_ROOT/scripts/capture-er-window.py" "$ARTIFACT_DIR/teardown-screenshot.jpg" 2>/dev/null || true
-  fi
+  # No teardown screenshot: teardown already proves the world-stable end state, not the logo
+  # replacement moment. The readiness watcher captures logo-replacement-screenshot.jpg when the
+  # in-process portrait-cover oracle first asserts, while the logo replacement is still on screen.
   if [[ -s "$HYPR_PLACER_PID_FILE" ]]; then
     IFS= read -r pid < "$HYPR_PLACER_PID_FILE" || pid=""
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
@@ -257,10 +253,10 @@ fi
 # anything. Deleting these reproduces first-run-in-a-fresh-dir behavior; the DLL re-creates them
 # once it boots, and the watcher already tolerates their absence while waiting for fresh telemetry.
 rm -f "$TELEMETRY_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH" "$CRASH_LOG_PATH" "$AUTOLOAD_DEBUG_PATH" "$PROFILE_PATH"
-# Wipe any prior teardown screenshot BEFORE the run (never after -- we keep this run's for inspection)
-# so a fail-closed/absent capture this run is OBVIOUS (no file) instead of a STALE image we might
-# mis-read as current. (Capture is written at teardown in cleanup().)
-rm -f "$ARTIFACT_DIR/teardown-screenshot.jpg" "$ARTIFACT_DIR/teardown-screenshot.png" "$ARTIFACT_DIR/teardown-screenshot.txt"
+# Wipe any prior logo-replacement screenshot BEFORE the run so a fail-closed/absent capture this run
+# is OBVIOUS (no file) instead of a STALE image we might mis-read as current. The readiness watcher
+# writes it at the exact portrait-cover/logo-replacement oracle transition, not at teardown.
+rm -f "$ARTIFACT_DIR/logo-replacement-screenshot.jpg" "$ARTIFACT_DIR/logo-replacement-screenshot.png" "$ARTIFACT_DIR/logo-replacement-screenshot.txt"
 write_autoload_request
 
 # DEPLOY THE FRESH CHAINLOAD DLL + clean stale mod DLLs BEFORE any launch branch. Placed here (after

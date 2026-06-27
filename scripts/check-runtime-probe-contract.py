@@ -25,6 +25,7 @@ RUNTIME_PROBE_PATH = AUTO_DIR / "runtime_probe.sh"
 RUNTIME_POLICY_PATH = AUTO_DIR / "runtime_experiment_policy.rego"
 DIRECT_PROBE_PATH = REPO_ROOT / "scripts" / "run-product-continue-direct-probe.sh"
 CAPTURE_HELPER_PATH = REPO_ROOT / "scripts" / "capture-er-window.py"
+READINESS_WATCH_PATH = REPO_ROOT / "scripts" / "er-readiness-watch.py"
 SMOKE_DRIVER_PATH = REPO_ROOT / "scripts" / "er-smoke-driver.sh"
 AUTO_LOG_PATH = AUTO_DIR / "log.jsonl"
 INCIDENT_ISSUE_ID = "er-effects-rs-1l6"
@@ -302,56 +303,51 @@ def scan_contract() -> list[Finding]:
             Finding(
                 relative(DIRECT_PROBE_PATH),
                 0,
-                "missing-mandatory-teardown-screenshot",
+                "missing-logo-replacement-screenshot-reset",
                 "<missing>",
-                "The direct runtime/autoresearch probe wrapper must capture teardown-screenshot.jpg unconditionally before killing Elden Ring.",
+                "The direct runtime/autoresearch probe wrapper must reset logo-replacement-screenshot.{jpg,png,txt} before launch; the readiness watcher captures the logo replacement moment.",
             )
         )
     else:
         direct_text = DIRECT_PROBE_PATH.read_text(encoding="utf-8", errors="replace")
-        cleanup_index = direct_text.find("cleanup() {")
-        cleanup_text = direct_text[cleanup_index:] if cleanup_index != -1 else ""
-        capture_snippet = 'python3 "$REPO_ROOT/scripts/capture-er-window.py" "$ARTIFACT_DIR/teardown-screenshot.jpg"'
-        capture_index = cleanup_text.find(capture_snippet)
-        terminate_index = cleanup_text.find("terminate_runtime_pids")
-        if cleanup_index == -1 or capture_index == -1:
+        if "teardown-screenshot" in direct_text:
             findings.append(
                 Finding(
                     relative(DIRECT_PROBE_PATH),
                     0,
-                    "missing-mandatory-teardown-screenshot",
-                    "capture-er-window.py teardown-screenshot.jpg missing from cleanup()",
-                    "Call scripts/capture-er-window.py in cleanup() for every runtime/autoresearch probe teardown, without an opt-in env gate.",
+                    "teardown-screenshot-still-wired",
+                    "teardown-screenshot",
+                    "Runtime visual proof must capture the logo-replacement/portrait-cover moment, not teardown/world-stable state.",
                 )
             )
-        elif terminate_index != -1 and capture_index > terminate_index:
+        if "logo-replacement-screenshot.jpg" not in direct_text or "logo-replacement-screenshot.txt" not in direct_text:
             findings.append(
                 Finding(
                     relative(DIRECT_PROBE_PATH),
                     0,
-                    "teardown-screenshot-not-before-kill",
-                    "capture occurs after terminate_runtime_pids",
-                    "Capture teardown-screenshot.jpg before terminating Elden Ring so the window evidence is still present.",
+                    "logo-replacement-screenshot-stale-reset-missing",
+                    "logo-replacement-screenshot reset missing",
+                    "Delete stale logo-replacement-screenshot.{jpg,png,txt} before launch so an absent/fail-closed capture cannot be confused with a prior run.",
                 )
             )
-        if "AUTO_TEARDOWN_SCREENSHOT" in cleanup_text:
+
+    if READINESS_WATCH_PATH.exists():
+        watch_text = READINESS_WATCH_PATH.read_text(encoding="utf-8", errors="replace")
+        required_logo_capture = [
+            "logo-replacement-screenshot.jpg",
+            "telemetry_logo_replacement_capture_ready",
+            "oracle_title_portrait_visible_surface_bound",
+            "capture-er-window.py",
+        ]
+        missing_logo_capture = [snippet for snippet in required_logo_capture if snippet not in watch_text]
+        if missing_logo_capture:
             findings.append(
                 Finding(
-                    relative(DIRECT_PROBE_PATH),
+                    relative(READINESS_WATCH_PATH),
                     0,
-                    "teardown-screenshot-env-gated",
-                    "AUTO_TEARDOWN_SCREENSHOT",
-                    "Teardown screenshots are mandatory; do not hide them behind AUTO_TEARDOWN_SCREENSHOT or another opt-in gate.",
-                )
-            )
-        if "teardown-screenshot.txt" not in direct_text:
-            findings.append(
-                Finding(
-                    relative(DIRECT_PROBE_PATH),
-                    0,
-                    "teardown-screenshot-stale-reset-missing",
-                    "teardown-screenshot.txt reset missing",
-                    "Delete stale teardown-screenshot.{jpg,png,txt} before launch so an absent/fail-closed capture cannot be confused with a prior run.",
+                    "logo-replacement-event-capture-missing",
+                    ", ".join(missing_logo_capture),
+                    "The readiness watcher must capture logo-replacement-screenshot.jpg when the portrait-cover oracle asserts, while the replacement is on-screen.",
                 )
             )
 
@@ -360,9 +356,9 @@ def scan_contract() -> list[Finding]:
             Finding(
                 relative(CAPTURE_HELPER_PATH),
                 0,
-                "missing-teardown-capture-helper",
+                "missing-event-capture-helper",
                 "<missing>",
-                "scripts/capture-er-window.py must exist and target only steam_app_1245620 for teardown evidence.",
+                "scripts/capture-er-window.py must exist and target only steam_app_1245620 for logo-replacement/portrait-cover event evidence.",
             )
         )
     else:
@@ -383,9 +379,9 @@ def scan_contract() -> list[Finding]:
                 Finding(
                     relative(CAPTURE_HELPER_PATH),
                     0,
-                    "teardown-capture-helper-missing-target-validation",
+                    "event-capture-helper-missing-target-validation",
                     ", ".join(missing_capture_snippets),
-                    "The teardown capture helper must select the exact ER window, record focus state, and validate geometry before grim capture.",
+                    "The event capture helper must select the exact ER window, record focus state, and validate geometry before grim capture.",
                 )
             )
         if "not_focused" in capture_text or "focus_unknown" in capture_text:
@@ -393,15 +389,14 @@ def scan_contract() -> list[Finding]:
                 Finding(
                     relative(CAPTURE_HELPER_PATH),
                     0,
-                    "teardown-screenshot-focus-dependent",
+                    "event-capture-focus-dependent",
                     "not_focused/focus_unknown",
-                    "Teardown capture must be focus-independent: best-effort raise the exact ER window but do not fail solely because it was not focused.",
+                    "Event capture must be focus-independent: best-effort raise the exact ER window but do not fail solely because it was not focused.",
                 )
             )
 
-    readiness_watch_path = REPO_ROOT / "scripts" / "er-readiness-watch.py"
-    if readiness_watch_path.exists():
-        readiness_text = readiness_watch_path.read_text(encoding="utf-8", errors="replace")
+    if READINESS_WATCH_PATH.exists():
+        readiness_text = READINESS_WATCH_PATH.read_text(encoding="utf-8", errors="replace")
         missing_watch_timeout = [
             snippet
             for snippet in (
@@ -418,7 +413,7 @@ def scan_contract() -> list[Finding]:
         if missing_watch_timeout:
             findings.append(
                 Finding(
-                    relative(readiness_watch_path),
+                    relative(READINESS_WATCH_PATH),
                     0,
                     "readiness-watch-missing-hard-timeout",
                     ", ".join(missing_watch_timeout),
