@@ -1383,6 +1383,78 @@ pub(crate) unsafe fn maybe_hide_title_logo_surface(base: usize, ready: &ProductC
     }
 }
 
+pub(crate) unsafe fn sample_title_profile_portrait_source(base: usize, slot: i32) -> bool {
+    if slot < OWN_STEPPER_SLOT_ZERO {
+        return false;
+    }
+    let slot = slot as usize;
+    if slot >= TITLE_PROFILE_SLOT_COUNT {
+        return false;
+    }
+    let renderer_slot =
+        base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA + slot * core::mem::size_of::<usize>();
+    let renderer =
+        unsafe { safe_read_usize(renderer_slot) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let renderer_vtable = if renderer != TITLE_OWNER_SCAN_START_ADDRESS && renderer != 0 {
+        unsafe { safe_read_usize(renderer) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    let offscreen = if renderer_vtable == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA {
+        unsafe {
+            safe_read_usize(renderer + TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET)
+        }
+        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    let tex_rescap = if offscreen != TITLE_OWNER_SCAN_START_ADDRESS && offscreen != 0 {
+        unsafe {
+            safe_read_usize(offscreen + TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET)
+        }
+        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    let tex_index = if renderer_vtable == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA {
+        unsafe { safe_read_usize(renderer + TITLE_CUSTOM_COVER_PROFILE_RENDERER_TEX_INDEX_OFFSET) }
+            .map(|value| value & 0xffff_ffff)
+            .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    let ready_754 = if renderer != TITLE_OWNER_SCAN_START_ADDRESS && renderer != 0 {
+        unsafe { safe_read_u8(renderer + TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_754) }
+            .map(usize::from)
+            .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    let ready_755 = if renderer != TITLE_OWNER_SCAN_START_ADDRESS && renderer != 0 {
+        unsafe { safe_read_u8(renderer + TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_755) }
+            .map(usize::from)
+            .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    TITLE_CUSTOM_COVER_PROFILE_SOURCE_SAMPLE_CALLS.fetch_add(1, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SOURCE_SLOT.store(slot, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SOURCE_RENDERER.store(renderer, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SOURCE_RENDERER_VTABLE.store(renderer_vtable, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SOURCE_OFFSCREEN_REND.store(offscreen, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_RESCAP.store(tex_rescap, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_INDEX.store(tex_index, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_754.store(ready_754, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_755.store(ready_755, Ordering::SeqCst);
+    renderer_vtable == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+        && offscreen != TITLE_OWNER_SCAN_START_ADDRESS
+        && offscreen != 0
+        && tex_rescap != TITLE_OWNER_SCAN_START_ADDRESS
+        && tex_rescap != 0
+        && ready_754 != TITLE_OWNER_SCAN_START_ADDRESS
+        && ready_755 != TITLE_OWNER_SCAN_START_ADDRESS
+}
+
 pub(crate) unsafe fn maybe_refresh_title_profile_cover(
     base: usize,
     ready: &ProductCoreAutoloadReady,
@@ -1396,15 +1468,20 @@ pub(crate) unsafe fn maybe_refresh_title_profile_cover(
     {
         return;
     }
+    let init: unsafe extern "system" fn() =
+        unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA) };
     let refresh: unsafe extern "system" fn() =
         unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA) };
+    unsafe { init() };
     unsafe { refresh() };
+    unsafe { sample_title_profile_portrait_source(base, OWN_STEPPER_SLOT_ZERO) };
     TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_PROFILE_SUMMARY
         .store(ready.profile_summary, Ordering::SeqCst);
     TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_CALLER_PHASE
         .store(OWN_STEPPER_PHASE.load(Ordering::SeqCst), Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "title-cover-part-b: refreshed post-SL2 profile portrait render targets via 0x{:x} profile_summary=0x{:x} target={TITLE_CUSTOM_COVER_SYSTEX_TARGET} renderer={TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS} ready_fields=+0x{TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_754:x}/+0x{TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_755:x}",
+        "title-cover-part-b: initialized profile renderer table via 0x{:x}, refreshed post-SL2 profile portrait render targets via 0x{:x} profile_summary=0x{:x} target={TITLE_CUSTOM_COVER_SYSTEX_TARGET} renderer={TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS}",
+        base + TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA,
         base + TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA,
         ready.profile_summary,
     ));

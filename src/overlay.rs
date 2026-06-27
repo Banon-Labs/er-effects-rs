@@ -21,6 +21,15 @@ impl EffectsOverlay {
     }
 }
 
+fn title_portrait_source_ready() -> bool {
+    TITLE_CUSTOM_COVER_PROFILE_SOURCE_RENDERER_VTABLE.load(Ordering::SeqCst)
+        != TITLE_OWNER_SCAN_START_ADDRESS
+        && TITLE_CUSTOM_COVER_PROFILE_SOURCE_OFFSCREEN_REND.load(Ordering::SeqCst)
+            != TITLE_OWNER_SCAN_START_ADDRESS
+        && TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_RESCAP.load(Ordering::SeqCst)
+            != TITLE_OWNER_SCAN_START_ADDRESS
+}
+
 fn draw_title_overlay_cover(ui: &Ui) {
     let [width, height] = ui.io().display_size;
     if width <= 1.0 || height <= 1.0 {
@@ -30,32 +39,45 @@ fn draw_title_overlay_cover(ui: &Ui) {
     TITLE_OVERLAY_COVER_LAST_DISPLAY_W.store(width as usize, Ordering::SeqCst);
     TITLE_OVERLAY_COVER_LAST_DISPLAY_H.store(height as usize, Ordering::SeqCst);
     let draw_list = ui.get_background_draw_list();
+    let portrait_ready = title_portrait_source_ready();
+    let source_tint = if portrait_ready {
+        ImColor32::from_rgba(46, 34, 28, 242)
+    } else {
+        ImColor32::from_rgba(4, 6, 10, 232)
+    };
     draw_list
-        .add_rect(
-            [0.0, 0.0],
-            [width, height],
-            ImColor32::from_rgba(4, 6, 10, 232),
-        )
+        .add_rect([0.0, 0.0], [width, height], source_tint)
         .filled(true)
         .build();
+    let portrait_min = [width * 0.31, height * 0.12];
+    let portrait_max = [width * 0.69, height * 0.82];
     draw_list
         .add_rect(
-            [width * 0.08, height * 0.12],
-            [width * 0.92, height * 0.88],
-            ImColor32::from_rgba(190, 156, 96, 180),
+            portrait_min,
+            portrait_max,
+            ImColor32::from_rgba(190, 156, 96, 210),
         )
         .rounding(18.0)
-        .thickness(3.0)
+        .thickness(4.0)
         .build();
+    draw_list
+        .add_rect(
+            [portrait_min[0] + 8.0, portrait_min[1] + 8.0],
+            [portrait_max[0] - 8.0, portrait_max[1] - 8.0],
+            ImColor32::from_rgba(38, 31, 26, 230),
+        )
+        .filled(true)
+        .rounding(14.0)
+        .build();
+    let status = if portrait_ready {
+        "Profile portrait source ready: SYSTEX_Menu_Profile00 / CSMenuProfModelRend"
+    } else {
+        "Waiting for RAM-backed profile portrait source"
+    };
     draw_list.add_text(
-        [width * 0.11, height * 0.16],
+        [width * 0.11, height * 0.86],
         ImColor32::from_rgba(232, 208, 154, 255),
-        "ER Effects: loading Banon",
-    );
-    draw_list.add_text(
-        [width * 0.11, height * 0.16 + 28.0],
-        ImColor32::from_rgba(188, 196, 208, 230),
-        "Native Continue/load continues behind this zero-input cover",
+        status,
     );
 }
 

@@ -951,19 +951,21 @@ if rt_root.exists():
                 proof['continue_load'] = True
                 proof['deserialize'] = True
                 proof['confirm'] = True
-            overlay_cover_rendered = bool(
+            overlay_portrait_source_cover_rendered = bool(
                 re.search(r'"oracle_title_overlay_cover_rendered"\s*:\s*true', raw)
                 and re.search(r'"oracle_title_overlay_cover_render_calls"\s*:\s*[1-9]\d*', raw)
                 and re.search(r'"oracle_title_overlay_cover_last_display_size"\s*:\s*\[\s*(?:[2-9]\d{2,}|1[0-9]{3,})\s*,\s*(?:[2-9]\d{2,}|1[0-9]{3,})\s*\]', raw)
+                and re.search(r'"oracle_title_custom_cover_profile_source_ready"\s*:\s*true', raw)
+                and re.search(r'"oracle_title_custom_cover_profile_source_tex_rescap"\s*:\s*[1-9]\d*', raw)
             )
-            if re.search(r'"oracle_title_profile_cover_bound_to_logo_surface"\s*:\s*false', raw) and not overlay_cover_rendered:
+            if re.search(r'"oracle_title_profile_cover_bound_to_logo_surface"\s*:\s*false', raw) and not overlay_portrait_source_cover_rendered:
                 # Count this runtime artifact's missing-cover semaphore once. Several JSON evidence
                 # files in the same artifact dir can contain the same oracle snapshot; charging the
-                # same artifact once per file over-penalizes a single product failure. A rendered
-                # full-screen overlay with a sane display size is the validated successor cover route,
-                # so do not charge the older profile-logo semaphore when that cover is proven live.
+                # same artifact once per file over-penalizes a single product failure. The overlay
+                # successor route only counts when it is both visible and gated by the live
+                # CSMenuProfModelRend/CSEzOffscreenRend/SYSTEX_Menu_Profile portrait source.
                 title_cover_runtime_by_dir.setdefault(d.name, [])
-                missing_cover_msg = f'runtime artifact {d.name} has no custom/profile cover bound to the visible logo/title surface or rendered overlay successor cover'
+                missing_cover_msg = f'runtime artifact {d.name} has no custom/profile cover bound to the visible logo/title surface or RAM-backed rendered overlay successor cover'
                 if missing_cover_msg not in title_cover_runtime_by_dir[d.name]:
                     title_cover_runtime_by_dir[d.name].append(missing_cover_msg)
             oracle = data.get('oracle') if isinstance(data.get('oracle'), dict) else {}
@@ -1204,8 +1206,12 @@ if profile_select_canvas_installed:
 # hudhook overlay is useful diagnostic scaffolding but must not score as final cover success.
 portrait_overlay_cover_observable = (
     'draw_title_overlay_cover' in overlay_code
+    and 'title_portrait_source_ready' in overlay_code
+    and 'TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_RESCAP' in overlay_code
     and 'TITLE_OVERLAY_COVER_RENDER_CALLS.fetch_add' in overlay_code
     and 'oracle_title_overlay_cover_rendered' in telemetry_src + '\n' + watcher
+    and 'oracle_title_custom_cover_profile_source_ready' in telemetry_src + '\n' + watcher
+    and 'oracle_title_custom_cover_profile_source_tex_rescap' in telemetry_src + '\n' + watcher
     and 'title_overlay_cover_display_sane' in telemetry_src
     and (
         'SYSTEX_Menu_Profile' in overlay_code
@@ -1230,6 +1236,9 @@ if 'draw_title_overlay_cover' in overlay_code and not portrait_overlay_cover_obs
     title_cover_penalty += 100
 if not actual_logo_profile_cover_observable:
     title_cover_failures.append('Part B false-positive guard: no RAM-backed oracle proves the loaded character portrait covers boot-init until the native map-loading screen takes over')
+    title_cover_penalty += 50
+if portrait_overlay_cover_observable and 'oracle_title_overlay_cover_texture_bound' not in telemetry_src + '\n' + watcher:
+    title_cover_failures.append('Part B remaining gap: overlay is gated by the RAM-backed portrait source but does not yet prove the actual profile texture is bound/drawn')
     title_cover_penalty += 50
 
 false_positives = 0
