@@ -1334,9 +1334,6 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_CALLS.load(Ordering::SeqCst);
         let title_custom_cover_profile_render_refresh_last_profile_summary =
             TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_PROFILE_SUMMARY.load(Ordering::SeqCst);
-        if title_custom_cover_profile_render_refresh_calls != 0 {
-            let _ = unsafe { sample_title_profile_portrait_source(base, OWN_STEPPER_SLOT_ZERO) };
-        }
         let title_custom_cover_profile_render_refresh_last_caller_phase =
             TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_CALLER_PHASE.load(Ordering::SeqCst);
         let title_custom_cover_profile_source_sample_calls =

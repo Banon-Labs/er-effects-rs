@@ -1473,8 +1473,8 @@ pub(crate) unsafe fn maybe_refresh_title_profile_cover(
     let refresh: unsafe extern "system" fn() =
         unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA) };
     unsafe { init() };
-    unsafe { refresh() };
     unsafe { sample_title_profile_portrait_source(base, OWN_STEPPER_SLOT_ZERO) };
+    unsafe { refresh() };
     TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_PROFILE_SUMMARY
         .store(ready.profile_summary, Ordering::SeqCst);
     TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_CALLER_PHASE
