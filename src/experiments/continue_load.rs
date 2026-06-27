@@ -97,11 +97,14 @@ pub(crate) fn record_continue_candidate(item: usize, accept_predicate: usize, ba
 pub(crate) unsafe fn product_continue_item_action(base: usize) -> Option<NativeContinueItemAction> {
     const DOCALL_VTABLE_SLOT_10: usize = 0x10;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let item = match MENU_CONTINUE_ITEM.load(Ordering::SeqCst) {
-        TITLE_OWNER_SCAN_START_ADDRESS => MENU_CONTINUE_CANDIDATE_ITEM.load(Ordering::SeqCst),
-        item => item,
-    };
+    let item = MENU_CONTINUE_ITEM.load(Ordering::SeqCst);
     if item == null {
+        let candidate = MENU_CONTINUE_CANDIDATE_ITEM.load(Ordering::SeqCst);
+        if candidate != null {
+            append_autoload_debug(format_args!(
+                "product-core-autoload: ignoring diagnostic Continue candidate=0x{candidate:x}; waiting for semantic native-accept MENU_CONTINUE_ITEM instead"
+            ));
+        }
         return None;
     }
     let item_vt = unsafe { safe_read_usize(item) }?;

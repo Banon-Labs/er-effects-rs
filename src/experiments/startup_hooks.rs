@@ -3,7 +3,7 @@
 #![allow(unused_imports)]
 
 use std::{
-    ffi::c_void,
+    ffi::{CStr, c_void},
     fmt::Write as _,
     fs,
     path::PathBuf,
@@ -1349,6 +1349,1251 @@ pub(crate) unsafe extern "system" fn scene_obj_proxy_ctor_hook(
     let f: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig) };
     unsafe { f(rcx, rdx, r8, r9) }
+}
+
+unsafe fn build_profile_select_cover_job(
+    base: usize,
+    rdx: usize,
+    r8: usize,
+    caller_rva: usize,
+    source: &str,
+) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if base == null || base == 0 {
+        return;
+    }
+    let mut cover_slot = null;
+    let cover_builder: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA) };
+    let cover_ret = unsafe { cover_builder((&raw mut cover_slot) as usize, rdx, r8) };
+    let cover_job = cover_slot;
+    TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_RET.store(cover_ret, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_JOB.store(cover_job, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "title-cover-part-b: BUILT non-returned custom cover {TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME} via 0x{:x} from {source} -> ret=0x{cover_ret:x} job=0x{cover_job:x}; dummy={TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL} target={TITLE_CUSTOM_COVER_SYSTEX_TARGET} renderer={TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS}",
+        base + TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA,
+    ));
+}
+
+pub(crate) unsafe extern "system" fn title_pab_information_visual_hook(
+    out_slot: usize,
+    rdx: usize,
+    r8: usize,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let base = game_module_base().unwrap_or(null);
+    let caller_rva = trace_first_game_caller_rva();
+    let orig = TITLE_PAB_INFORMATION_VISUAL_ORIG.load(Ordering::SeqCst);
+    let mut native_ret = out_slot;
+    if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let native_wrapper: unsafe extern "system" fn(usize, usize, usize) -> usize =
+            unsafe { std::mem::transmute(orig) };
+        native_ret = unsafe { native_wrapper(out_slot, rdx, r8) };
+    }
+    let native_job = if out_slot != null {
+        unsafe { safe_read_usize(out_slot) }.unwrap_or(null)
+    } else {
+        null
+    };
+    let native_window = if native_job != null {
+        unsafe { safe_read_usize(native_job + 0x130) }.unwrap_or(null)
+    } else {
+        null
+    };
+    TITLE_PAB_INFORMATION_VISUAL_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    TITLE_PAB_INFORMATION_VISUAL_LAST_JOB.store(native_job, Ordering::SeqCst);
+    TITLE_PAB_INFORMATION_VISUAL_LAST_WINDOW.store(native_window, Ordering::SeqCst);
+    TITLE_PAB_INFORMATION_VISUAL_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "title-cover-part-a: PRESERVED native {TITLE_PAB_INFORMATION_VISUAL_NAME} wrapper 0x{:x}; latched job=0x{native_job:x} window=0x{native_window:x} for PAB cover (out_slot=0x{out_slot:x} rdx=0x{rdx:x} r8=0x{r8:x} caller_rva=0x{caller_rva:x})",
+        base + TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA,
+    ));
+    native_ret
+}
+
+/// Detour for BeginTitle's `05_000_Title` visual wrapper (deobf 0x14081f9f0). Static RE shows the
+/// wrapper constructs a CSScaleformLoadInfo with filename `05_000_Title` and calls factory
+/// 0x1407acbf0 to allocate/return a MenuWindowJob. For the title-cover masquerade we now preserve
+/// that native MenuWindowJob and only latch it for the render-only FadeIn suppressor below. This keeps
+/// TitleStep, FixOrderJobSequence, native Continue, STEP_PlayGame, and the resident-UI CSMenuMan+0x21
+/// gate untouched; the draw bit is cleared later only for this preserved native title window.
+pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
+    out_slot: usize,
+    rdx: usize,
+    r8: usize,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let base = game_module_base().unwrap_or(null);
+    let prev_out = if out_slot != null {
+        unsafe { safe_read_usize(out_slot) }.unwrap_or(null)
+    } else {
+        null
+    };
+    let caller_rva = trace_first_game_caller_rva();
+    TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_LAST_OUT_SLOT.store(out_slot, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_LAST_PREV_OUT.store(prev_out, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_LAST_ARG_RDX.store(rdx, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_LAST_ARG_R8.store(r8, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+
+    let orig = TITLE_NATIVE_MENU_VISUAL_SUPPRESS_ORIG.load(Ordering::SeqCst);
+    let mut native_ret = out_slot;
+    if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let native_wrapper: unsafe extern "system" fn(usize, usize, usize) -> usize =
+            unsafe { std::mem::transmute(orig) };
+        native_ret = unsafe { native_wrapper(out_slot, rdx, r8) };
+    }
+    let native_job = if out_slot != null {
+        unsafe { safe_read_usize(out_slot) }.unwrap_or(null)
+    } else {
+        null
+    };
+    let native_window = if native_job != null {
+        unsafe { safe_read_usize(native_job + 0x130) }.unwrap_or(null)
+    } else {
+        null
+    };
+    TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.store(native_job, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW.store(native_window, Ordering::SeqCst);
+
+    append_autoload_debug(format_args!(
+        "title-cover-part-a: PRESERVED native {TITLE_NATIVE_MENU_VISUAL_NAME} wrapper 0x{:x}/factory 0x{:x}; latched job=0x{native_job:x} window=0x{native_window:x} for render-only suppression (out_slot=0x{out_slot:x} prev=0x{prev_out:x} rdx=0x{rdx:x} r8=0x{r8:x} caller_rva=0x{caller_rva:x})",
+        base + TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA,
+        base + TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA,
+    ));
+    native_ret
+}
+
+unsafe fn force_hide_title_logo_surface(
+    base: usize,
+    logo: usize,
+    requested_visible: usize,
+    source: &str,
+) {
+    if base == TITLE_OWNER_SCAN_START_ADDRESS
+        || base == 0
+        || logo == 0
+        || logo == TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return;
+    }
+    let orig = TITLE_LOGO_SET_VISIBLE_ORIG.load(Ordering::SeqCst);
+    let set_visible: unsafe extern "system" fn(usize, u8) =
+        if orig != 0 && orig != HOOK_ORIGINAL_UNSET {
+            unsafe { std::mem::transmute(orig) }
+        } else {
+            unsafe { std::mem::transmute(base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA) }
+        };
+    unsafe { set_visible(logo, 0) };
+    let calls = TITLE_LOGO_GFX_HIDE_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        + OWN_STEPPER_CALL_INC;
+    TITLE_LOGO_GFX_HIDE_LAST_LOGO.store(logo, Ordering::SeqCst);
+    TITLE_LOGO_GFX_HIDE_LAST_CALLER_PHASE
+        .store(OWN_STEPPER_PHASE.load(Ordering::SeqCst), Ordering::SeqCst);
+    TITLE_LOGO_GFX_HIDE_LAST_REQUESTED_VISIBLE.store(requested_visible, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "title-cover-part-a: forced {TITLE_LOGO_BACK_VIEW_PARTS_NAME}/{TITLE_LOGO_RESOURCE_NAME} hidden via {source} logo=0x{logo:x} requested_visible={requested_visible} hide_calls={calls}"
+    ));
+}
+
+pub(crate) unsafe extern "system" fn title_logo_set_visible_force_hidden_hook(
+    logo: usize,
+    visible: u8,
+) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let base = game_module_base().unwrap_or(null);
+    unsafe { force_hide_title_logo_surface(base, logo, visible as usize, "SetVisible detour") };
+}
+
+pub(crate) unsafe extern "system" fn title_logo_ctor_force_hidden_hook(
+    logo: usize,
+    resource: usize,
+    param_3: usize,
+    param_4: usize,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let base = game_module_base().unwrap_or(null);
+    let orig = TITLE_LOGO_CTOR_ORIG.load(Ordering::SeqCst);
+    let ret = if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let original: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { original(logo, resource, param_3, param_4) }
+    } else {
+        logo
+    };
+    unsafe { force_hide_title_logo_surface(base, logo, 0, "ctor detour") };
+    ret
+}
+
+pub(crate) unsafe extern "system" fn title_top_start_login_hide_hook(
+    dialog: usize,
+    param_2: usize,
+) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let base = game_module_base().unwrap_or(null);
+    let orig = TITLE_TOP_START_LOGIN_HIDE_ORIG.load(Ordering::SeqCst);
+    if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let original: unsafe extern "system" fn(usize, usize) =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { original(dialog, param_2) };
+    }
+    if base == null || dialog == null || dialog == TITLE_OWNER_SCAN_START_ADDRESS {
+        return;
+    }
+    let logo = dialog + TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET;
+    if unsafe { safe_read_usize(logo) }.is_none() {
+        return;
+    }
+    let set_visible: unsafe extern "system" fn(usize, u8) =
+        unsafe { std::mem::transmute(base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA) };
+    unsafe { set_visible(logo, 0) };
+    let calls = TITLE_LOGO_GFX_HIDE_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        + OWN_STEPPER_CALL_INC;
+    TITLE_LOGO_GFX_HIDE_LAST_DIALOG.store(dialog, Ordering::SeqCst);
+    TITLE_LOGO_GFX_HIDE_LAST_LOGO.store(logo, Ordering::SeqCst);
+    TITLE_LOGO_GFX_HIDE_LAST_CALLER_PHASE
+        .store(OWN_STEPPER_PHASE.load(Ordering::SeqCst), Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "title-cover-part-a: hid {TITLE_LOGO_BACK_VIEW_PARTS_NAME}/{TITLE_LOGO_RESOURCE_NAME} after native TitleTopDialog start-login via 0x{:x} dialog=0x{dialog:x} logo=0x{logo:x} hide_calls={calls}",
+        base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
+    ));
+}
+
+pub(crate) unsafe extern "system" fn title_custom_cover_menu_window_run_hook(
+    job: usize,
+    load_params: usize,
+    fd4_time: usize,
+    menu_man: usize,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = TITLE_CUSTOM_COVER_RUN_ORIG.load(Ordering::SeqCst);
+    if orig == null || orig == HOOK_ORIGINAL_UNSET {
+        return null;
+    }
+    let run: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    let ret = unsafe { run(job, load_params, fd4_time, menu_man) };
+    if TITLE_CUSTOM_COVER_RUN_RECURSION.load(Ordering::SeqCst) != 0 {
+        return ret;
+    }
+    if !TITLE_ACCEPT_BYTE_GATE_FIRED.load(Ordering::SeqCst) {
+        return ret;
+    }
+    let title_job = TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.load(Ordering::SeqCst);
+    let pab_job = TITLE_PAB_INFORMATION_VISUAL_LAST_JOB.load(Ordering::SeqCst);
+    let cover_job = TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_JOB.load(Ordering::SeqCst);
+    let native_job = if job == title_job {
+        title_job
+    } else if job == pab_job {
+        pab_job
+    } else {
+        null
+    };
+    if native_job == null
+        || cover_job == null
+        || cover_job == TITLE_OWNER_SCAN_START_ADDRESS
+        || cover_job == native_job
+    {
+        return ret;
+    }
+    TITLE_CUSTOM_COVER_RUN_RECURSION.store(1, Ordering::SeqCst);
+    let cover_ret = unsafe { run(cover_job, load_params, fd4_time, menu_man) };
+    TITLE_CUSTOM_COVER_RUN_RECURSION.store(0, Ordering::SeqCst);
+    let cover_window = unsafe { safe_read_usize(cover_job + 0x130) }.unwrap_or(null);
+    let calls = TITLE_CUSTOM_COVER_RUN_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        + OWN_STEPPER_CALL_INC;
+    TITLE_CUSTOM_COVER_RUN_LAST_NATIVE_JOB.store(native_job, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_RUN_LAST_COVER_JOB.store(cover_job, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_RUN_LAST_COVER_WINDOW.store(cover_window, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_RUN_LAST_RET.store(cover_ret, Ordering::SeqCst);
+    if calls <= 8 {
+        append_autoload_debug(format_args!(
+            "title-cover-part-b: ran post-accept custom cover {TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME} job=0x{cover_job:x} alongside native title/PAB job=0x{native_job:x}; ret=0x{cover_ret:x} window=0x{cover_window:x} calls={calls}"
+        ));
+    }
+    ret
+}
+
+unsafe fn read_native_dlstring_ascii_ptr(s: usize) -> usize {
+    if s == 0 || s == TITLE_OWNER_SCAN_START_ADDRESS {
+        return TITLE_OWNER_SCAN_START_ADDRESS;
+    }
+    let capacity = unsafe { safe_read_usize(s + 0x20) }.unwrap_or(0);
+    if capacity <= 0xf {
+        s + 0x8
+    } else {
+        unsafe { safe_read_usize(s + 0x8) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    }
+}
+
+unsafe fn bounded_ascii_contains(ptr: usize, needle: &[u8]) -> bool {
+    if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS || needle.is_empty() {
+        return false;
+    }
+    let mut window = [0u8; 32];
+    let mut n = 0usize;
+    for i in 0..96usize {
+        let Some(b) = (unsafe { safe_read_u8(ptr + i) }) else {
+            break;
+        };
+        if b == 0 {
+            break;
+        }
+        if n < window.len() {
+            window[n] = b.to_ascii_lowercase();
+            n += 1;
+        } else {
+            window.rotate_left(1);
+            window[window.len() - 1] = b.to_ascii_lowercase();
+        }
+        let hay = &window[..n.min(window.len())];
+        if hay.windows(needle.len()).any(|w| w == needle) {
+            return true;
+        }
+    }
+    false
+}
+
+unsafe fn copy_ascii_preview(ptr: usize, out: &mut [u8]) -> usize {
+    if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS || out.is_empty() {
+        return 0;
+    }
+    let mut n = 0usize;
+    while n + 1 < out.len() && n < 80 {
+        let Some(b) = (unsafe { safe_read_u8(ptr + n) }) else {
+            break;
+        };
+        if b == 0 {
+            break;
+        }
+        out[n] = if b.is_ascii_graphic() || b == b' ' {
+            b
+        } else {
+            b'?'
+        };
+        n += 1;
+    }
+    n
+}
+
+unsafe fn sample_now_loading_helper(this: usize) {
+    if this == 0 || this == TITLE_OWNER_SCAN_START_ADDRESS {
+        return;
+    }
+    NOW_LOADING_HELPER_LAST_THIS.store(this, Ordering::SeqCst);
+    NOW_LOADING_HELPER_LAST_MENU_INDEX.store(
+        unsafe { safe_read_usize(this + 0xd0) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS),
+        Ordering::SeqCst,
+    );
+    NOW_LOADING_HELPER_LAST_REPLACE_TEX_INFO.store(
+        unsafe { safe_read_usize(this + 0xd8) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS),
+        Ordering::SeqCst,
+    );
+    NOW_LOADING_HELPER_LAST_REQUESTED_REPLACE_TEX_INFO.store(
+        unsafe { safe_read_usize(this + 0xe0) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS),
+        Ordering::SeqCst,
+    );
+    let request_done = unsafe { safe_read_u8(this + 0xec) }.unwrap_or(0) as usize;
+    let load_done = unsafe { safe_read_u8(this + 0xed) }.unwrap_or(0) as usize;
+    NOW_LOADING_HELPER_LAST_FLAGS.store(request_done | (load_done << 8), Ordering::SeqCst);
+}
+
+pub(crate) unsafe extern "system" fn now_loading_helper_ctor_hook(this: usize) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = NOW_LOADING_HELPER_CTOR_ORIG.load(Ordering::SeqCst);
+    let ret = if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let original: unsafe extern "system" fn(usize) -> usize =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { original(this) }
+    } else {
+        this
+    };
+    let hits = NOW_LOADING_HELPER_CTOR_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        + OWN_STEPPER_CALL_INC;
+    unsafe { sample_now_loading_helper(ret) };
+    if hits <= 4 {
+        append_autoload_debug(format_args!(
+            "title-cover-part-b: observed CSNowLoadingHelperImp ctor this=0x{ret:x} hits={hits}; now-loading surface candidate for custom masquerade"
+        ));
+    }
+    ret
+}
+
+pub(crate) unsafe extern "system" fn now_loading_helper_update_hook(this: usize, time: usize) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = NOW_LOADING_HELPER_UPDATE_ORIG.load(Ordering::SeqCst);
+    if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let original: unsafe extern "system" fn(usize, usize) =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { original(this, time) };
+    }
+    let hits = NOW_LOADING_HELPER_UPDATE_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        + OWN_STEPPER_CALL_INC;
+    unsafe { sample_now_loading_helper(this) };
+    if hits <= 8 || hits.is_power_of_two() {
+        append_autoload_debug(format_args!(
+            "title-cover-part-b: observed CSNowLoadingHelperImp update this=0x{this:x} hits={hits} menu_index=0x{:x} replace=0x{:x} requested=0x{:x} flags=0x{:x}",
+            NOW_LOADING_HELPER_LAST_MENU_INDEX.load(Ordering::SeqCst),
+            NOW_LOADING_HELPER_LAST_REPLACE_TEX_INFO.load(Ordering::SeqCst),
+            NOW_LOADING_HELPER_LAST_REQUESTED_REPLACE_TEX_INFO.load(Ordering::SeqCst),
+            NOW_LOADING_HELPER_LAST_FLAGS.load(Ordering::SeqCst),
+        ));
+    }
+}
+
+pub(crate) fn install_now_loading_helper_observer_hooks() {
+    if NOW_LOADING_HELPER_HOOKS_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-b: now-loading observer MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(ctor) = game_rva(NOW_LOADING_HELPER_CTOR_RVA as u32) else {
+        return;
+    };
+    let Ok(update) = game_rva(NOW_LOADING_HELPER_UPDATE_RVA as u32) else {
+        return;
+    };
+    let mut ok = true;
+    match unsafe {
+        MhHook::new(
+            ctor as *mut c_void,
+            now_loading_helper_ctor_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            NOW_LOADING_HELPER_CTOR_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            ok &= unsafe { hook.queue_enable() }.is_ok();
+            std::mem::forget(hook);
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-b: now-loading ctor hook failed: {status:?}"
+            ));
+            ok = false;
+        }
+    }
+    match unsafe {
+        MhHook::new(
+            update as *mut c_void,
+            now_loading_helper_update_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            NOW_LOADING_HELPER_UPDATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            ok &= unsafe { hook.queue_enable() }.is_ok();
+            std::mem::forget(hook);
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-b: now-loading update hook failed: {status:?}"
+            ));
+            ok = false;
+        }
+    }
+    if !ok {
+        return;
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => {
+            NOW_LOADING_HELPER_HOOKS_INSTALLED.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "title-cover-part-b: hooked CSNowLoadingHelperImp observer ctor=0x{ctor:x} update=0x{update:x}; observe-only"
+            ));
+        }
+        status => append_autoload_debug(format_args!(
+            "title-cover-part-b: now-loading observer MH_ApplyQueued failed: {status:?}"
+        )),
+    }
+}
+
+pub(crate) unsafe extern "system" fn title_scaleform_bind_observer_hook(owner: usize, pair: usize) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let symbol_ptr = unsafe { read_native_dlstring_ascii_ptr(pair) };
+    let target_ptr = unsafe { read_native_dlstring_ascii_ptr(pair + 0x30) };
+    let hit = TITLE_SCALEFORM_BIND_OBSERVER_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    TITLE_SCALEFORM_BIND_OBSERVER_LAST_OWNER.store(owner, Ordering::SeqCst);
+    TITLE_SCALEFORM_BIND_OBSERVER_LAST_PAIR.store(pair, Ordering::SeqCst);
+    TITLE_SCALEFORM_BIND_OBSERVER_LAST_SYMBOL_PTR.store(symbol_ptr, Ordering::SeqCst);
+    TITLE_SCALEFORM_BIND_OBSERVER_LAST_TARGET_PTR.store(target_ptr, Ordering::SeqCst);
+    let interesting = unsafe { bounded_ascii_contains(symbol_ptr, b"menu_") }
+        || unsafe { bounded_ascii_contains(target_ptr, b"systex") }
+        || unsafe { bounded_ascii_contains(symbol_ptr, b"title") }
+        || unsafe { bounded_ascii_contains(symbol_ptr, b"profile") };
+    if unsafe { bounded_ascii_contains(target_ptr, b"systex") } {
+        TITLE_SCALEFORM_BIND_OBSERVER_SYSTEX_HITS.fetch_add(1, Ordering::SeqCst);
+    }
+    if interesting && hit <= 128 {
+        let mut sym = [0u8; 96];
+        let mut tgt = [0u8; 96];
+        let sn = unsafe { copy_ascii_preview(symbol_ptr, &mut sym) };
+        let tn = unsafe { copy_ascii_preview(target_ptr, &mut tgt) };
+        let sym = core::str::from_utf8(&sym[..sn]).unwrap_or("?");
+        let tgt = core::str::from_utf8(&tgt[..tn]).unwrap_or("?");
+        append_autoload_debug(format_args!(
+            "title-cover-part-b: observed native Scaleform bind owner=0x{owner:x} pair=0x{pair:x} symbol='{sym}' target='{tgt}' hit={hit}"
+        ));
+    }
+    let orig = TITLE_SCALEFORM_BIND_OBSERVER_ORIG.load(Ordering::SeqCst);
+    if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let f: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(orig) };
+        unsafe { f(owner, pair) };
+    }
+}
+
+pub(crate) unsafe extern "system" fn title_flow_context_record_regulation_fix_hook(tfc: usize) {
+    let base = game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let before = if tfc > OWNER_CTX_MIN_PLAUSIBLE_PTR && tfc < OWNER_CTX_MAX_PLAUSIBLE_PTR {
+        unsafe { safe_read_i32(tfc + TFC_REGULATION_VERSION_148_OFFSET) }.unwrap_or(0)
+    } else {
+        0
+    };
+    let orig = TITLE_FLOW_CONTEXT_RECORD_REGULATION_ORIG.load(Ordering::SeqCst);
+    if orig != TITLE_OWNER_SCAN_START_ADDRESS && orig != HOOK_ORIGINAL_UNSET {
+        let f: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(orig) };
+        unsafe { f(tfc) };
+    }
+    let after_orig = if tfc > OWNER_CTX_MIN_PLAUSIBLE_PTR && tfc < OWNER_CTX_MAX_PLAUSIBLE_PTR {
+        unsafe { safe_read_i32(tfc + TFC_REGULATION_VERSION_148_OFFSET) }.unwrap_or(0)
+    } else {
+        0
+    };
+    let reg_manager =
+        unsafe { safe_read_usize(base + GLOBAL_CS_REGULATION_MANAGER_RVA) }.unwrap_or(0);
+    let manager44 = if reg_manager > OWNER_CTX_MIN_PLAUSIBLE_PTR
+        && reg_manager < OWNER_CTX_MAX_PLAUSIBLE_PTR
+    {
+        unsafe { safe_read_i32(reg_manager + REGULATION_MANAGER_VERSION_44_OFFSET) }.unwrap_or(0)
+    } else {
+        0
+    };
+    if tfc > OWNER_CTX_MIN_PLAUSIBLE_PTR
+        && tfc < OWNER_CTX_MAX_PLAUSIBLE_PTR
+        && manager44 > 0
+        && after_orig < manager44
+    {
+        unsafe {
+            ((tfc + TFC_REGULATION_VERSION_148_OFFSET) as *mut i32).write_volatile(manager44)
+        };
+        TITLE_FLOW_CONTEXT_RECORD_REGULATION_FIXUPS
+            .fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    }
+    let after_fix = if tfc > OWNER_CTX_MIN_PLAUSIBLE_PTR && tfc < OWNER_CTX_MAX_PLAUSIBLE_PTR {
+        unsafe { safe_read_i32(tfc + TFC_REGULATION_VERSION_148_OFFSET) }.unwrap_or(0)
+    } else {
+        0
+    };
+    append_autoload_debug(format_args!(
+        "title-flow-context-record-fix: tfc=0x{tfc:x} before={before} after_orig={after_orig} after_fix={after_fix} manager44={manager44}"
+    ));
+}
+
+pub(crate) fn install_title_flow_context_record_regulation_fix_hook() {
+    if TITLE_FLOW_CONTEXT_RECORD_REGULATION_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-flow-context-record-fix: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(TITLE_FLOW_CONTEXT_RECORD_REGULATION_VERSION_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-flow-context-record-fix: failed to resolve record rva 0x{TITLE_FLOW_CONTEXT_RECORD_REGULATION_VERSION_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            title_flow_context_record_regulation_fix_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            TITLE_FLOW_CONTEXT_RECORD_REGULATION_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "title-flow-context-record-fix: queue_enable failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    TITLE_FLOW_CONTEXT_RECORD_REGULATION_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "title-flow-context-record-fix: hooked native record helper 0x{addr:x}"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "title-flow-context-record-fix: MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "title-flow-context-record-fix: MhHook::new failed: {status:?}"
+        )),
+    }
+}
+
+pub(crate) fn install_title_scaleform_bind_observer_hook() {
+    if TITLE_SCALEFORM_BIND_OBSERVER_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-b: bind observer MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(TITLE_SCALEFORM_BIND_OBSERVER_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-cover-part-b: failed to resolve Scaleform bind observer rva 0x{TITLE_SCALEFORM_BIND_OBSERVER_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            title_scaleform_bind_observer_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            TITLE_SCALEFORM_BIND_OBSERVER_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-b: queue_enable bind observer failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    TITLE_SCALEFORM_BIND_OBSERVER_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "title-cover-part-b: hooked passive Scaleform bind observer 0x{addr:x}; no product bind calls added"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "title-cover-part-b: bind observer MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "title-cover-part-b: MhHook::new bind observer failed: {status:?}"
+        )),
+    }
+}
+
+pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook(
+    window: usize,
+    param_2: usize,
+    param_3: usize,
+    param_4: usize,
+) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_ORIG.load(Ordering::SeqCst);
+    if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let native_fadein: unsafe extern "system" fn(usize, usize, usize, usize) =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { native_fadein(window, param_2, param_3, param_4) };
+    }
+
+    let caller_rva = trace_first_game_caller_rva();
+    // Do not gate on the caller RVA here: MinHook/trampoline unwinding can hide the direct
+    // MenuWindowJob::Run return address. The preserved native window pointer is the stronger RAM
+    // identity oracle, and the caller RVA remains telemetry only.
+    let native_job = TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.load(Ordering::SeqCst);
+    let mut native_window = TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW.load(Ordering::SeqCst);
+    if native_window == null && native_job != null {
+        native_window = unsafe { safe_read_usize(native_job + 0x130) }.unwrap_or(null);
+        TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW.store(native_window, Ordering::SeqCst);
+    }
+    if native_window == null || window != native_window {
+        return;
+    }
+
+    let Some(menu_id) = (unsafe { safe_read_u16(window + 0x180) }) else {
+        return;
+    };
+    if menu_id >= 0x47 {
+        return;
+    }
+    let base = game_module_base().unwrap_or(null);
+    let cs_menu_man = if base != null {
+        unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(null)
+    } else {
+        null
+    };
+    if cs_menu_man == null {
+        return;
+    }
+    let flags_addr = cs_menu_man + 0x90 + menu_id as usize;
+    let Some(flags_before) = (unsafe { safe_read_u8(flags_addr) }) else {
+        return;
+    };
+    let flags_after = flags_before & !TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK;
+    if flags_after == flags_before {
+        return;
+    }
+    unsafe { (flags_addr as *mut u8).write_volatile(flags_after) };
+    TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESSED_WINDOWS
+        .fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_WINDOW.store(window, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_BEFORE
+        .store(flags_before as usize, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_AFTER.store(flags_after as usize, Ordering::SeqCst);
+    TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "title-cover-part-a: render-suppressed preserved native {TITLE_NATIVE_MENU_VISUAL_NAME} window=0x{window:x} menu_id={menu_id} flags 0x{flags_before:02x}->0x{flags_after:02x} via CSMenuMan+0x90 caller_rva=0x{caller_rva:x}"
+    ));
+}
+
+unsafe fn title_child_name_matches(name_ptr: usize) -> bool {
+    if name_ptr == 0 || name_ptr == TITLE_OWNER_SCAN_START_ADDRESS {
+        return false;
+    }
+    let Ok(name) = (unsafe { CStr::from_ptr(name_ptr as *const i8).to_str() }) else {
+        return false;
+    };
+    name == "PressStart" || name == "StaticSystemText_101000" || name == "PRESS BUTTON"
+}
+
+pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook(
+    parent: usize,
+    out_proxy: usize,
+    name_ptr: usize,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst);
+    if orig == null || orig == HOOK_ORIGINAL_UNSET {
+        return out_proxy;
+    }
+    let f: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    let ret = unsafe { f(parent, out_proxy, name_ptr) };
+    if unsafe { title_child_name_matches(name_ptr) } {
+        let context = unsafe { safe_read_usize(out_proxy + SCENE_OBJ_PROXY_CONTEXT_20_OFFSET) }
+            .unwrap_or(null);
+        let value = out_proxy + 0x18;
+        TITLE_PRESS_START_BIND_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+        TITLE_PRESS_START_BIND_LAST_PARENT.store(parent, Ordering::SeqCst);
+        TITLE_PRESS_START_BIND_LAST_OUT.store(out_proxy, Ordering::SeqCst);
+        TITLE_PRESS_START_BIND_LAST_NAME.store(name_ptr, Ordering::SeqCst);
+        TITLE_PRESS_START_BIND_LAST_CONTEXT.store(context, Ordering::SeqCst);
+        TITLE_PRESS_START_GFX_VALUE.store(value, Ordering::SeqCst);
+        let base = game_module_base().unwrap_or(null);
+        if base != null {
+            let set_visible: unsafe extern "system" fn(usize, u8) =
+                unsafe { std::mem::transmute(base + TITLE_PRESS_START_SET_VISIBLE_RVA) };
+            unsafe { set_visible(out_proxy, 0) };
+            let calls = TITLE_PRESS_START_BIND_HIDE_CALLS
+                .fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+                + OWN_STEPPER_CALL_INC;
+            if calls <= 8 {
+                let name = unsafe { CStr::from_ptr(name_ptr as *const i8) }.to_string_lossy();
+                append_autoload_debug(format_args!(
+                    "title-cover-part-a: named-child bind hid {name} out_proxy=0x{out_proxy:x} parent=0x{parent:x} context=0x{context:x} value=0x{value:x} calls={calls}"
+                ));
+            }
+        }
+    }
+    ret
+}
+
+pub(crate) fn install_title_scene_obj_proxy_named_child_bind_hook() {
+    if TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-a: named-child bind MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-cover-part-a: failed to resolve named-child bind rva 0x{TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            title_scene_obj_proxy_named_child_bind_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-a: queue_enable named-child bind failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "title-cover-part-a: hooked named-child SceneObjProxy binder 0x{addr:x}; PressStart/StaticSystemText will be hidden at bind time"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "title-cover-part-a: named-child bind MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "title-cover-part-a: MhHook::new named-child bind failed: {status:?}"
+        )),
+    }
+}
+
+pub(crate) unsafe extern "system" fn title_gfx_value_set_visible_hook(
+    value: usize,
+    visible: u8,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = TITLE_GFX_VALUE_SET_VISIBLE_ORIG.load(Ordering::SeqCst);
+    if orig == null || orig == HOOK_ORIGINAL_UNSET {
+        return value;
+    }
+    let target = TITLE_PRESS_START_GFX_VALUE.load(Ordering::SeqCst);
+    let forced_visible = if target != null && target != 0 && value == target {
+        TITLE_PRESS_START_GFX_FORCE_FALSE_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+        TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_VALUE.store(value, Ordering::SeqCst);
+        TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_REQUESTED.store(visible as usize, Ordering::SeqCst);
+        0
+    } else {
+        visible
+    };
+    let f: unsafe extern "system" fn(usize, u8) -> usize = unsafe { std::mem::transmute(orig) };
+    unsafe { f(value, forced_visible) }
+}
+
+pub(crate) fn install_title_gfx_value_set_visible_hook() {
+    if TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-a: GFx visibility MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(TITLE_GFX_VALUE_SET_VISIBLE_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-cover-part-a: failed to resolve GFx visibility setter rva 0x{TITLE_GFX_VALUE_SET_VISIBLE_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            title_gfx_value_set_visible_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            TITLE_GFX_VALUE_SET_VISIBLE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-a: queue_enable GFx visibility setter failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "title-cover-part-a: hooked GFx visibility setter 0x{addr:x}; only PressStart value will be forced hidden"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "title-cover-part-a: GFx visibility MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "title-cover-part-a: MhHook::new GFx visibility setter failed: {status:?}"
+        )),
+    }
+}
+
+pub(crate) fn install_title_custom_cover_run_hook() {
+    if TITLE_CUSTOM_COVER_RUN_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-b: MenuWindowJob::Run MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(run_addr) = game_rva(MENU_WINDOW_JOB_RUN_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-cover-part-b: failed to resolve MenuWindowJob::Run rva 0x{MENU_WINDOW_JOB_RUN_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            run_addr as *mut c_void,
+            title_custom_cover_menu_window_run_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            TITLE_CUSTOM_COVER_RUN_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-b: queue_enable MenuWindowJob::Run failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    TITLE_CUSTOM_COVER_RUN_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "title-cover-part-b: hooked MenuWindowJob::Run 0x{run_addr:x}; ProfileSelect cover will run alongside preserved native title job"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "title-cover-part-b: MenuWindowJob::Run MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "title-cover-part-b: MhHook::new MenuWindowJob::Run failed: {status:?}"
+        )),
+    }
+}
+
+pub(crate) fn install_title_logo_force_hidden_hooks() {
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-a: logo-force MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    if TITLE_LOGO_SET_VISIBLE_INSTALLED.load(Ordering::SeqCst) == 0 {
+        match game_rva(TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA as u32) {
+            Ok(addr) => match unsafe {
+                MhHook::new(
+                    addr as *mut c_void,
+                    title_logo_set_visible_force_hidden_hook as *mut c_void,
+                )
+            } {
+                Ok(hook) => {
+                    TITLE_LOGO_SET_VISIBLE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+                    if let Err(status) = unsafe { hook.queue_enable() } {
+                        append_autoload_debug(format_args!(
+                            "title-cover-part-a: queue_enable logo SetVisible failed: {status:?}"
+                        ));
+                    } else if unsafe { MH_ApplyQueued() } == MH_STATUS::MH_OK {
+                        std::mem::forget(hook);
+                        TITLE_LOGO_SET_VISIBLE_INSTALLED.store(1, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "title-cover-part-a: hooked {TITLE_LOGO_BACK_VIEW_PARTS_NAME} SetVisible 0x{addr:x}; forcing visible=false"
+                        ));
+                    }
+                }
+                Err(status) => append_autoload_debug(format_args!(
+                    "title-cover-part-a: MhHook::new logo SetVisible failed: {status:?}"
+                )),
+            },
+            Err(_) => append_autoload_debug(format_args!(
+                "title-cover-part-a: failed to resolve logo SetVisible rva 0x{TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA:x}"
+            )),
+        }
+    }
+    if TITLE_LOGO_CTOR_INSTALLED.load(Ordering::SeqCst) == 0 {
+        match game_rva(TITLE_LOGO_BACK_VIEW_PARTS_CTOR_RVA as u32) {
+            Ok(addr) => match unsafe {
+                MhHook::new(
+                    addr as *mut c_void,
+                    title_logo_ctor_force_hidden_hook as *mut c_void,
+                )
+            } {
+                Ok(hook) => {
+                    TITLE_LOGO_CTOR_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+                    if let Err(status) = unsafe { hook.queue_enable() } {
+                        append_autoload_debug(format_args!(
+                            "title-cover-part-a: queue_enable logo ctor failed: {status:?}"
+                        ));
+                    } else if unsafe { MH_ApplyQueued() } == MH_STATUS::MH_OK {
+                        std::mem::forget(hook);
+                        TITLE_LOGO_CTOR_INSTALLED.store(1, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "title-cover-part-a: hooked {TITLE_LOGO_BACK_VIEW_PARTS_NAME} ctor 0x{addr:x}; hiding immediately after construction"
+                        ));
+                    }
+                }
+                Err(status) => append_autoload_debug(format_args!(
+                    "title-cover-part-a: MhHook::new logo ctor failed: {status:?}"
+                )),
+            },
+            Err(_) => append_autoload_debug(format_args!(
+                "title-cover-part-a: failed to resolve logo ctor rva 0x{TITLE_LOGO_BACK_VIEW_PARTS_CTOR_RVA:x}"
+            )),
+        }
+    }
+}
+
+pub(crate) fn install_title_logo_start_login_hide_hook() {
+    if TITLE_TOP_START_LOGIN_HIDE_INSTALLED.load(Ordering::SeqCst)
+        != TITLE_TOP_START_LOGIN_HIDE_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-a: start-login MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(start_login_addr) = game_rva(TITLE_TOP_START_LOGIN_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-cover-part-a: failed to resolve TitleTopDialog start-login rva 0x{TITLE_TOP_START_LOGIN_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            start_login_addr as *mut c_void,
+            title_top_start_login_hide_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            TITLE_TOP_START_LOGIN_HIDE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-a: queue_enable start-login hide failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    TITLE_TOP_START_LOGIN_HIDE_INSTALLED
+                        .store(TITLE_TOP_START_LOGIN_HIDE_INSTALLED_YES, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "title-cover-part-a: hooked TitleTopDialog start-login 0x{start_login_addr:x}; will hide {TITLE_LOGO_BACK_VIEW_PARTS_NAME}/{TITLE_LOGO_RESOURCE_NAME} after native SetVisible(1)"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "title-cover-part-a: start-login MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "title-cover-part-a: MhHook::new start-login hide failed: {status:?}"
+        )),
+    }
+}
+
+/// Install the Part-A title visual suppression hook once. It must run at process attach before
+/// STEP_BeginTitle; installing from the recurring game task can be too late for the first title build.
+pub(crate) fn install_title_pab_information_visual_hook() {
+    if TITLE_PAB_INFORMATION_VISUAL_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-a: PAB/TitleInformation MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-cover-part-a: failed to resolve PAB/TitleInformation wrapper rva 0x{TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            title_pab_information_visual_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            TITLE_PAB_INFORMATION_VISUAL_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-a: queue_enable PAB/TitleInformation wrapper failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    TITLE_PAB_INFORMATION_VISUAL_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "title-cover-part-a: hooked PAB/TitleInformation wrapper 0x{addr:x}; native {TITLE_PAB_INFORMATION_VISUAL_NAME} preserved and covered"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "title-cover-part-a: PAB/TitleInformation MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "title-cover-part-a: MhHook::new PAB/TitleInformation wrapper failed: {status:?}"
+        )),
+    }
+}
+
+pub(crate) fn install_title_native_menu_visual_suppression_hook() {
+    if TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED.load(Ordering::SeqCst)
+        != TITLE_NATIVE_MENU_VISUAL_SUPPRESS_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-a: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(begin_title_addr) = game_rva(TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-cover-part-a: failed to resolve BeginTitle visual wrapper rva 0x{TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            begin_title_addr as *mut c_void,
+            title_native_menu_visual_begin_title_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            TITLE_NATIVE_MENU_VISUAL_SUPPRESS_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-a: queue_enable BeginTitle wrapper failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED.store(
+                        TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED_YES,
+                        Ordering::SeqCst,
+                    );
+                    append_autoload_debug(format_args!(
+                        "title-cover-part-a: hooked BeginTitle visual wrapper 0x{begin_title_addr:x}; native {TITLE_NATIVE_MENU_VISUAL_NAME} MenuWindowJob will be replaced by {TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME}, STEP_Wait/CSMenuMan+0x21 untouched"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "title-cover-part-a: MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "title-cover-part-a: MhHook::new BeginTitle wrapper failed: {status:?}"
+        )),
+    }
+}
+
+pub(crate) fn install_title_native_menu_visual_render_suppression_hook() {
+    if TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED.load(Ordering::SeqCst)
+        != TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-cover-part-a: render MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(fadein_addr) = game_rva(TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-cover-part-a: failed to resolve MenuWindowJob FadeIn helper rva 0x{TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            fadein_addr as *mut c_void,
+            title_native_menu_visual_window_fadein_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "title-cover-part-a: queue_enable FadeIn helper failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED.store(
+                        TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED_YES,
+                        Ordering::SeqCst,
+                    );
+                    append_autoload_debug(format_args!(
+                        "title-cover-part-a: hooked MenuWindowJob FadeIn helper 0x{fadein_addr:x}; preserved native {TITLE_NATIVE_MENU_VISUAL_NAME} will clear visible flags mask 0x{TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK:x} from CSMenuMan+0x90 when Run returns at rva 0x{TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA:x}"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "title-cover-part-a: render MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "title-cover-part-a: MhHook::new FadeIn helper failed: {status:?}"
+        )),
+    }
 }
 
 /// Install the MenuWindow-latch hook once (MinHook on the SceneObjProxy ctor 0x14074a700),

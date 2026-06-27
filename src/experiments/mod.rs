@@ -87,6 +87,9 @@ pub(crate) use continue_load::*;
 
 mod submit;
 pub(crate) use submit::*;
+
+mod profiler;
+pub(crate) use profiler::*;
 pub(crate) const PRODUCT_CORE_BLOCKER_UNSEEN: usize = 0;
 pub(crate) const PRODUCT_CORE_BLOCKER_READY: usize = 1;
 pub(crate) const PRODUCT_CORE_BLOCKER_NO_TITLE_OWNER: usize = 2;
@@ -257,6 +260,10 @@ pub(crate) static OWN_LOAD_PUMP_FIRED: AtomicU64 = AtomicU64::new(0);
 /// was handled, so we never re-pump or re-transition. Exposed as `oracle_own_load_pump_done`.
 pub(crate) static OWN_LOAD_PUMP_DONE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+pub(crate) static PRODUCT_CORE_CALLSITE_TICKS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static PRODUCT_CORE_CALLSITE_BASE_OK_TICKS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static PRODUCT_CORE_CALLSITE_SLOT_OK_TICKS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static PRODUCT_CORE_CALLSITE_LAST_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub(crate) static PRODUCT_CORE_AUTOLOAD_TICKS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static PRODUCT_CORE_READY_BLOCKS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static PRODUCT_CORE_READY_SUCCESSES: AtomicU64 = AtomicU64::new(0);
@@ -621,7 +628,7 @@ enum StartupModalBlockingState {
     },
 }
 
-struct ProductCoreAutoloadReady {
+pub(crate) struct ProductCoreAutoloadReady {
     committed: i32,
     requested: i32,
     table: usize,

@@ -123,12 +123,64 @@ def product_path_uses_semantic_readiness(experiments: str) -> bool:
     )
 
 
+def loading_layer_runtime_deref_guarded(telemetry: str, constants: str) -> bool:
+    """Loading-screen draw-layer child objects are actively used by the renderer.
+
+    Runtime artifact product-continue-direct-20260625-232857 showed that even
+    telemetry-only vtable reads through RendMan CSEzDraw layer pointers during
+    CSFakeLoadingScreen visibility can coincide with process exit before world
+    stable. Keep runtime telemetry to pointer/mask sampling; classify child
+    objects through static Ghidra evidence instead.
+    """
+    forbidden_tokens = {
+        "read_vtable = |ptr",
+        "RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_28_VTABLE",
+        "RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_30_VTABLE",
+        "RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_38_VTABLE",
+        "RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_40_VTABLE",
+        "RENDER_LOADING_LAYER_VISIBLE_LAST_SLOT_78_VTABLE",
+        "RENDER_LOADING_LAYER_VISIBLE_LAST_CSGRAPHICS_FIELD68_VTABLE",
+        "oracle_render_loading_visible_slot_28_vtable",
+        "oracle_render_loading_visible_slot_30_vtable",
+        "oracle_render_loading_visible_slot_38_vtable",
+        "oracle_render_loading_visible_slot_40_vtable",
+        "oracle_render_loading_visible_slot_78_vtable",
+        "oracle_render_loading_visible_csgraphics_field68_vtable",
+    }
+    combined = telemetry + "\n" + constants
+    if any(token in combined for token in forbidden_tokens):
+        return False
+    unsafe_patterns = [
+        r"safe_read_usize\(\s*rend_slot_(?:28|30|38|40|78)\s*\)",
+        r"safe_read_usize\(\s*csgraphics_field68\s*\)",
+        r"safe_read_usize\(\s*\w+\s*\+\s*0\s*\).*loading.*vtable",
+    ]
+    return not any(re.search(pattern, telemetry, re.IGNORECASE | re.DOTALL) for pattern in unsafe_patterns)
+
+
+def continue_candidate_is_diagnostic_only(experiments: str) -> bool:
+    """The diagnostic Continue candidate can be the disabled/idle 0x1407add70 job.
+
+    Only MENU_CONTINUE_ITEM is promoted by constructor hooks after the native
+    accept predicate is present. The product submit path must not fall back to
+    MENU_CONTINUE_CANDIDATE_ITEM, or it can chase the constant-false idle job
+    forever and obscure the real missing semantic row/action producer.
+    """
+    body = rust_fn_body(experiments, "product_continue_item_action")
+    forbidden_patterns = [
+        r"TITLE_OWNER_SCAN_START_ADDRESS\s*=>\s*MENU_CONTINUE_CANDIDATE_ITEM\.load",
+        r"let\s+item\s*=\s*match\s+MENU_CONTINUE_ITEM\.load[\s\S]*MENU_CONTINUE_CANDIDATE_ITEM\.load",
+    ]
+    return not any(re.search(pattern, body) for pattern in forbidden_patterns)
+
+
 def main() -> int:
     failures: list[str] = []
     experiments = read_experiments()
     lib = read(LIB)
-    if CONSTANTS.exists():
-        lib += "\n" + read(CONSTANTS)
+    constants = read(CONSTANTS) if CONSTANTS.exists() else ""
+    if constants:
+        lib += "\n" + constants
     stage = read(STAGE_SCRIPT)
     telemetry = read(TELEMETRY)
     watcher = read(WATCHER)
@@ -171,6 +223,16 @@ def main() -> int:
         "product autoload core must run before legacy title-accept input injection paths",
         failures,
     )
+    require(
+        loading_layer_runtime_deref_guarded(telemetry, constants),
+        "loading RenderMan/CSEzDraw layer telemetry must remain pointer/mask-only; do not dereference child layer vtables during CSFakeLoadingScreen visibility",
+        failures,
+    )
+    require(
+        continue_candidate_is_diagnostic_only(experiments),
+        "product submit path must not fall back from MENU_CONTINUE_ITEM to diagnostic MENU_CONTINUE_CANDIDATE_ITEM",
+        failures,
+    )
 
     arm_body = rust_fn_body(experiments, "arm_product_autoload_from_request")
     require("SaveLoadMethod::DirectMenuLoad" in arm_body, "product arm must recognize direct_menu_load", failures)
@@ -189,6 +251,60 @@ def main() -> int:
     for gate in sorted(REQUIRED_PRODUCT_GATES):
         body = rust_fn_body(experiments, gate)
         require("product_autoload_enabled()" in body, f"{gate} must be enabled by product_autoload_enabled()", failures)
+
+    title_cover_gate = rust_fn_body(experiments, "title_native_menu_visual_suppression_enabled")
+    title_cover_hook = rust_fn_body(experiments, "title_native_menu_visual_begin_title_hook")
+    require(
+        "!save_override_telemetry_only()" in title_cover_gate
+        and "autoload_disabled()" in title_cover_gate
+        and "std::env::var" not in title_cover_gate
+        and "er-effects-" not in title_cover_gate,
+        "title native visual suppression must be default-on for real autoload runs without a new env/file gate",
+        failures,
+    )
+    require(
+        "START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once" in lib
+        and "install_title_native_menu_visual_suppression_hook" in lib
+        and lib.find("START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once") < lib.find("START_MENU_WINDOW_LATCH.call_once"),
+        "title native visual suppression hook must install at process attach before MenuWindow/title visual construction",
+        failures,
+    )
+    require(
+        "TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA: usize = 0x81f9f0" in lib
+        and "TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA: usize = 0x7acbf0" in lib
+        and "TITLE_NATIVE_MENU_VISUAL_NAME: &str = \"05_000_Title\"" in lib,
+        "title native visual suppression must pin the RE-proven BeginTitle wrapper/factory/05_000_Title anchors",
+        failures,
+    )
+    require(
+        "(out_slot as *mut usize).write(null)" in title_cover_hook
+        and "TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS.fetch_add" in title_cover_hook
+        and "TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA" in title_cover_hook
+        and "TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA" in title_cover_hook,
+        "title native visual suppression must null only the BeginTitle 05_000_Title out slot and expose runtime telemetry",
+        failures,
+    )
+    require(
+        "oracle_title_native_menu_visual_suppress_installed" in telemetry
+        and "oracle_title_native_menu_visual_suppressed_builds" in telemetry
+        and "oracle_title_native_menu_visual_any_suppressed" in telemetry
+        and "title_native_menu_visual_suppressed_builds" in watcher,
+        "title native visual suppression must be visible in telemetry/readiness summaries for independent Part-A validation",
+        failures,
+    )
+    require(
+        "TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA: usize = 0x81f6f0" in lib
+        and "TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL" in lib
+        and "MENU_DummyProfileFace_01" in lib
+        and "SYSTEX_Menu_Profile00" in lib
+        and "CSMenuProfModelRend" in lib
+        and "TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.fetch_add" in title_cover_hook
+        and "oracle_title_custom_cover_profile_select_builds" in telemetry
+        and "title_custom_cover_profile_select_builds" in watcher,
+        "Part B custom cover must build an observable ProfileSelect/SYSTEX dummy-profile cover target",
+        failures,
+    )
+
     for legacy_gate in ("live_dialog_enabled", "menu_window_latch_enabled"):
         body = rust_fn_body(experiments, legacy_gate)
         require(

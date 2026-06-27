@@ -572,9 +572,21 @@ pub(crate) fn fire_tfc_continue_enabled() -> bool {
         .join("er-effects-fire-tfc-continue.txt")
         .exists()
 }
+/// Hudhook/ImGui overlay feature flag. OFF by default: product/autoload runs should not install
+/// hudhook/DX12 render hooks unless a run explicitly opts into the visual overlay path.
+/// Enable via env `ER_EFFECTS_ENABLE_HUDHOOK=1` or GAME_DIR file `er-effects-enable-hudhook.txt`.
+pub(crate) fn hudhook_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_ENABLE_HUDHOOK").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-enable-hudhook.txt")
+        .exists()
+}
+
 /// Overlay kill switch: when set, the hudhook/ImGui DX12 overlay is NOT initialized (no extra DX12
-/// hooks / render overhead) -- for golden/trace runs that want a clean game with only our diagnostics.
-/// OFF by default; env `ER_EFFECTS_NO_OVERLAY=1` or a GAME_DIR file `er-effects-no-overlay.txt`.
+/// hooks / render overhead) even if the positive feature flag is present.
 pub(crate) fn overlay_disabled() -> bool {
     matches!(std::env::var("ER_EFFECTS_NO_OVERLAY").as_deref(), Ok("1"))
         || game_directory_path()
@@ -626,6 +638,63 @@ pub(crate) fn pab_advance_enabled() -> bool {
             .join("er-effects-pab-advance.txt")
             .exists()
 }
+// ENV-GATE RATIONALE (required by .auto/env_gate_comment_policy.rego): this is NOT an on/off
+// feature flag. The title-anim speedup is DEFAULT-ON product behavior for every real autoload run
+// (returns TITLE_ANIM_SPEEDUP_DEFAULT, no opt-in) -- matching the always-on autoload levers and the
+// "No Compromises" rule that the deliverable is product behavior, not a flag-gated experiment. The
+// env/file override exists ONLY to (a) SWEEP the factor K at runtime during the empirical animation-
+// speed search -- a cross-compile per candidate K is minutes, a runtime knob is seconds -- and (b)
+// force K=1.0 for a clean A/B against the recorded baseline. Telemetry/trace-only runs stay at 1.0 so
+// they observe unmodified native pacing.
+/// Title-animation speedup factor for the pab_dismiss -> menu_open transition. Default-on
+/// (`TITLE_ANIM_SPEEDUP_DEFAULT`) for real autoload runs; overridable at runtime via env
+/// `ER_EFFECTS_TITLE_ANIM_SPEEDUP=<f32>` or GAME_DIR file `er-effects-title-anim-speedup.txt`
+/// (contents parsed as f32). Result is clamped to [MIN, MAX]; an override that is unparseable or
+/// <=1.0 forces no scaling. bd autoload-menu-speed-lever-framedelta-2026-06-22.
+pub(crate) fn title_anim_speedup_factor() -> f32 {
+    if autoload_disabled() {
+        return TITLE_ANIM_SPEEDUP_MIN; // no autoload -> never perturb the title delta
+    }
+    // Explicit runtime override (tuning / force-off) wins when present.
+    let override_raw = std::env::var("ER_EFFECTS_TITLE_ANIM_SPEEDUP")
+        .ok()
+        .or_else(|| {
+            std::fs::read_to_string(
+                game_directory_path()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join("er-effects-title-anim-speedup.txt"),
+            )
+            .ok()
+        });
+    if let Some(raw) = override_raw {
+        return match raw.trim().parse::<f32>() {
+            Ok(k) if k.is_finite() && k > TITLE_ANIM_SPEEDUP_MIN => k.min(TITLE_ANIM_SPEEDUP_MAX),
+            _ => TITLE_ANIM_SPEEDUP_MIN, // junk / <=1.0 -> force off
+        };
+    }
+    // No override: DEFAULT-ON for real runs, off for telemetry/trace-only observation.
+    if save_override_telemetry_only() {
+        TITLE_ANIM_SPEEDUP_MIN
+    } else {
+        TITLE_ANIM_SPEEDUP_DEFAULT
+    }
+}
+
+/// True when the title-anim speedup lever is armed (factor > 1.0).
+pub(crate) fn title_anim_speedup_enabled() -> bool {
+    title_anim_speedup_factor() > TITLE_ANIM_SPEEDUP_MIN
+}
+/// DEFAULT-ON product masquerade cover Part A: suppress only the native `05_000_Title`
+/// MenuWindowJob visual wrapper while the zero-input autoload runs. This is tied to the existing
+/// autoload/save-override contract, not a new env/file knob: a real autoload wants a clean cover;
+/// telemetry-only observation and `ER_EFFECTS_NO_AUTOLOAD` must preserve vanilla visuals.
+pub(crate) fn title_native_menu_visual_suppression_enabled() -> bool {
+    if autoload_disabled() {
+        return false;
+    }
+    !save_override_telemetry_only()
+}
+
 /// AUTO-CONFIRM observe mode (er-effects-auto-confirm.txt): drive the game's OWN natural title
 /// flow with Confirm input-taps so we can finally observe the view PAST the modal. No SetState
 /// forcing, no input block, no custom dismiss -- just the press the game polls for.

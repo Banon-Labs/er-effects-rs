@@ -80,6 +80,9 @@ pub(crate) struct EffectsState {
     /// instead of silently starting with an empty list.
     load_error: Option<String>,
     current_animation_id: Option<i32>,
+    /// Latched when the expected appear animation is observed either as current or as a queue write
+    /// between task ticks; runtime proof needs the semantic event, not a one-frame sampling race.
+    expected_animation_seen: bool,
     applied_for_current_appear: bool,
     /// TimeAct queue write index at the previous tick; used to detect appear
     /// animations that were enqueued (and possibly finished) between ticks.
@@ -116,6 +119,7 @@ impl Default for EffectsState {
             calls,
             load_error,
             current_animation_id: None,
+            expected_animation_seen: false,
             applied_for_current_appear: false,
             last_write_idx: None,
             manual_apply_requested: false,
@@ -175,6 +179,14 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         return DLL_MAIN_SUCCESS;
     }
     write_bootstrap_event(BOOTSTRAP_EVENT_DLL_MAIN_ATTACH, BOOTSTRAP_DETAIL_START);
+
+    // Boot profiler: spawn the independent CPU sampler FIRST so it captures the engine-init threads
+    // during the pre-CSTaskImp-instance gap (the largest uninstrumented boot window). Read-only by
+    // default (QueryThreadCycleTime/GetThreadTimes, no thread suspension); RIP sampling is a separate
+    // opt-in sub-switch. Gated OFF unless ER_EFFECTS_PROFILE=1 / er-effects-profile.txt.
+    if profiler_enabled() {
+        START_BOOT_PROFILER.call_once(spawn_boot_profiler);
+    }
 
     // Install the crash/exit logger first so it can observe an exit or access
     // violation from any later subsystem. Opt-in; off by default.
@@ -246,6 +258,58 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
             .spawn(apply_foreground_force);
     });
 
+    // Title-cover masquerade Part A: install the BeginTitle `05_000_Title` hook as early as
+    // splash/foreground patches, before STEP_BeginTitle can build the native title Scaleform. This
+    // does NOT touch STEP_Wait or CSMenuMan+0x21; it preserves the native MenuWindowJob and hides
+    // only its draw bit from the MenuWindowJob::Run/FadeIn path.
+    if title_native_menu_visual_suppression_enabled() {
+        START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-cover-part-a".to_owned())
+                .spawn(install_title_native_menu_visual_suppression_hook);
+        });
+        START_TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-cover-render".to_owned())
+                .spawn(install_title_native_menu_visual_render_suppression_hook);
+        });
+        START_TITLE_LOGO_FORCE_HIDDEN.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-logo-force-hidden".to_owned())
+                .spawn(install_title_logo_force_hidden_hooks);
+        });
+        START_TITLE_LOGO_START_LOGIN_HIDE.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-logo-start-login-hide".to_owned())
+                .spawn(install_title_logo_start_login_hide_hook);
+        });
+        START_TITLE_PAB_INFORMATION_COVER.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-pab-cover".to_owned())
+                .spawn(install_title_pab_information_visual_hook);
+        });
+        START_TITLE_GFX_VALUE_SET_VISIBLE.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-gfx-visible".to_owned())
+                .spawn(install_title_gfx_value_set_visible_hook);
+        });
+        START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-child-bind".to_owned())
+                .spawn(install_title_scene_obj_proxy_named_child_bind_hook);
+        });
+        START_TITLE_SCALEFORM_BIND_OBSERVER.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-bind-observer".to_owned())
+                .spawn(install_title_scaleform_bind_observer_hook);
+        });
+        START_TITLE_FLOW_CONTEXT_RECORD_REGULATION.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-tfc-record-fix".to_owned())
+                .spawn(install_title_flow_context_record_regulation_fix_hook);
+        });
+    }
+
     // MenuWindow latch: install the SceneObjProxy ctor hook (0x14074a700) as early as the
     // splash-skip / online-disable patches, from a thread, so it lands BEFORE the title state
     // machine builds the title dialog during boot. On each VALID call it latches rdx (the engine-
@@ -316,11 +380,12 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         move || spawn_game_task(state)
     });
 
-    // Skip the hudhook/ImGui DX12 overlay when autoload-only (no overlay needed) OR when explicitly
-    // disabled via `overlay_disabled()` (env ER_EFFECTS_NO_OVERLAY=1 / GAME_DIR file
-    // er-effects-no-overlay.txt) -- e.g. a golden trace run that wants no extra DX12 hooks/overhead.
-    let autoload_without_overlay = state_or_return(&state).autoload.slot().is_some();
-    if autoload_without_overlay || overlay_disabled() {
+    // Hudhook/ImGui DX12 overlay is feature-flagged OFF by default. Enable only for runs that
+    // explicitly want the ER Effects overlay/title-cover render path via ER_EFFECTS_ENABLE_HUDHOOK=1
+    // (or er-effects-enable-hudhook.txt). ER_EFFECTS_NO_OVERLAY remains a kill switch.
+    let autoload_without_overlay =
+        state_or_return(&state).autoload.slot().is_some() && !product_autoload_enabled();
+    if autoload_without_overlay || !hudhook_enabled() || overlay_disabled() {
         write_bootstrap_event(
             BOOTSTRAP_EVENT_OVERLAY_SKIPPED_AUTOLOAD,
             BOOTSTRAP_DETAIL_DONE,
@@ -366,9 +431,22 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             BOOTSTRAP_EVENT_GAME_TASK_INSTANCE_READY,
             BOOTSTRAP_DETAIL_DONE,
         );
+        // Boot-phase marker: CSTaskImp resolved -> bounds the end of the pre-instance engine-init
+        // gap (the largest uninstrumented boot window) in the same [+Nms] timeline the renderer parses.
+        if profiler_enabled() {
+            append_autoload_debug(format_args!("boot-phase: cstask_instance_ready"));
+        }
 
         cs_task.run_recurring(
             move |task_data: &FD4TaskData| {
+                // Boot-phase marker: first frame our recurring task actually ticks.
+                if profiler_enabled()
+                    && BOOT_FIRST_FRAME_LOGGED
+                        .swap(GAME_TASK_TICK_INCREMENT as usize, Ordering::SeqCst)
+                        == 0
+                {
+                    append_autoload_debug(format_args!("boot-phase: first_game_frame"));
+                }
                 // Bisect kill-switch: do nothing per frame. Isolates "our task
                 // body crashes the title ~19s" from "the DLL's mere presence".
                 if inert_mode() {
@@ -485,6 +563,29 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         unsafe { maybe_set_title_accept_byte(base) };
                     }
                 }
+                // Now-loading helper observer: attach only after the native title accept byte fired.
+                // Attach-time detours on CSNowLoadingHelperImp exited before readiness; this delayed
+                // install avoids touching the loading helper until the title path has already advanced.
+                if product_autoload_enabled()
+                    && TITLE_ACCEPT_BYTE_GATE_FIRED.load(Ordering::SeqCst)
+                    && NOW_LOADING_HELPER_HOOKS_INSTALLED.load(Ordering::SeqCst) == 0
+                {
+                    install_now_loading_helper_observer_hooks();
+                }
+                // Title transition fast-forward (pab_dismiss -> menu_open): scale the title
+                // frame-delta so the FadeIn/TextFadeOut/menu Scaleform animation reaches its end
+                // frame in fewer wall-clock frames. Default-on product behavior for real runs (the
+                // detour self-gates per frame); install once. bd er-effects-rs-urw.
+                if title_anim_speedup_enabled() {
+                    if let Ok(base) = game_module_base() {
+                        unsafe { install_title_anim_speed_hook(base) };
+                        // READ-ONLY native state-transition timeline (menu-build-overlap lever
+                        // "look before acting" instrument): logs every SetState(owner,int) with a
+                        // timestamp so we learn exactly when BeginTitle(3) fires and whether the
+                        // 05_000_Title build has headroom to start earlier. Save-safe pass-through.
+                        unsafe { install_title_setstate_trace_hook(base) };
+                    }
+                }
                 // OFFLINE connection-state lever (milestone-3 fix): force GameMan+0xBC8/0xBC9 = 0 each
                 // title frame so the connection-loss event handlers -- which build the GR_System_Message
                 // "Cannot connect to network / connection lost" MessageBoxDialogs our offline boot
@@ -594,8 +695,17 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     // component through its native open-menu registrar; readiness is checked
                     // inside product_core_autoload_tick.
                     if product_autoload_enabled() {
-                        if let (Ok(base), Some(slot)) = (game_module_base(), state.autoload.slot())
-                        {
+                        PRODUCT_CORE_CALLSITE_TICKS.fetch_add(1, Ordering::SeqCst);
+                        let base_result = game_module_base();
+                        if base_result.is_ok() {
+                            PRODUCT_CORE_CALLSITE_BASE_OK_TICKS.fetch_add(1, Ordering::SeqCst);
+                        }
+                        let slot_result = state.autoload.slot();
+                        if let Some(slot) = slot_result {
+                            PRODUCT_CORE_CALLSITE_SLOT_OK_TICKS.fetch_add(1, Ordering::SeqCst);
+                            PRODUCT_CORE_CALLSITE_LAST_SLOT.store(slot as usize, Ordering::SeqCst);
+                        }
+                        if let (Ok(base), Some(slot)) = (base_result, slot_result) {
                             unsafe {
                                 product_core_autoload_tick(base, slot, state.game_task_ticks)
                             };
@@ -755,6 +865,11 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 }
                 let observation = observe_animation(player, state.last_write_idx);
                 state.current_animation_id = observation.current_animation_id;
+                if observation.current_animation_id == Some(APPEAR_ANIMATION_ID)
+                    || observation.appear_newly_queued
+                {
+                    state.expected_animation_seen = true;
+                }
                 state.last_write_idx = Some(observation.write_idx);
 
                 remove_requested_calls(player, &mut state);

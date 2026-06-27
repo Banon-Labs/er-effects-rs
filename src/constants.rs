@@ -45,6 +45,10 @@ pub(crate) const HOOK_FALSE_RETURN: u8 = 0;
 #[repr(usize)]
 pub(crate) enum RuntimeGlobalRva {
     NowLoadingSingleton = 0x3d60ec8,
+    FakeLoadingScreenSingleton = 0x3d74868,
+    CsGraphicsSingleton = 0x3d71c48,
+    RendManSingleton = 0x3d7b0c0,
+    CsScaleformSingleton = 0x3d83148,
     Fd4IoPool = 0x4853048,
     Fd4IoWorkerManager = 0x4852f88,
     IoDeviceSingleton = 0x4589390,
@@ -444,6 +448,263 @@ pub(crate) const TITLE_NATIVE_JOB_DELTA_OFFSET_START: usize =
 pub(crate) const TITLE_NATIVE_JOB_DELTA_OFFSET_END: usize =
     TITLE_NATIVE_JOB_DELTA_OFFSET_START + core::mem::size_of::<f32>();
 pub(crate) const TITLE_NATIVE_JOB_CALLED_VALUE: usize = true as usize;
+
+// ── Title-animation speedup lever (pab_dismiss -> menu_open) ─────────────────────────────────
+// The title/menu transition is a Scaleform/GFx animation advanced by the FD4 frame-delta f32 the
+// STEP_MenuJobWait tick (0x140b0d400) reads from its task_data+0x08 and forwards to
+// CS::TitleTopDialog::update. FadeIn->Loop / TextFadeOut completion is frame-count CHECKED
+// (current==total), NOT time-gated, so SCALING this delta makes the animation reach its end frame
+// in fewer wall-clock frames -- every downstream predicate (Scaleform tick, completion compare,
+// (flags&0x8f)>1 settle gate) is satisfied naturally; nothing is bypassed and the load does not
+// desync. bd autoload-menu-speed-lever-framedelta-2026-06-22.
+/// Clamp range for the speedup factor.
+pub(crate) const TITLE_ANIM_SPEEDUP_MIN: f32 = 1.0;
+pub(crate) const TITLE_ANIM_SPEEDUP_MAX: f32 = 16.0;
+/// DEFAULT-ON for real autoload runs (no opt-in). Any value > 1.0 ARMS the FadeIn skip; the magnitude
+/// no longer scales anything (the dt-scale and frame-burst levers were both runtime-falsified -- bd
+/// title-anim-framedelta-lever-FALSIFIED-runtime-2026-06-24 + pab-to-menuopen-real-breakdown-build-not-
+/// anim-2026-06-24 -- the FadeIn is wall-clock/present-bound, so we skip it at the completion predicate
+/// instead). Kept as an f32 toggle so the existing env/file override (set to 1.0 = off) still works.
+pub(crate) const TITLE_ANIM_SPEEDUP_DEFAULT: f32 = 4.0;
+/// Diagnostic frame counter for the title-anim lever (logs SM state every Nth detour call).
+pub(crate) static TITLE_ANIM_DIAG_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// Log the title SM state every this many detour calls.
+pub(crate) const TITLE_ANIM_DIAG_INTERVAL: usize = 60;
+/// FD4 state-machine `SetState`/request-transition (deobf 0x1407499e0; dump 0x140749ae0, shift -0x100).
+/// `__fastcall(rcx = FD4StateMachine* sm, rdx = StateDesc* desc)`. Routes the transition through the
+/// SM owner's vtable[0x150] and no-ops unless the current node is settled (`[node+0x20]&0x8f >= 2`), so
+/// it cannot corrupt the SM. This is the call CS::TitleTopDialog::update's input-skip branch makes to
+/// move FadeIn->Loop on a button press. bd fadein-* RE 2026-06-24.
+pub(crate) const TITLE_FD4_SETSTATE_RVA: usize = 0x7499e0;
+/// One-shot latch: the zero-input FadeIn->Loop transition has fired.
+pub(crate) static TITLE_FADEIN_SKIP_FIRED: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// PART-A title-cover masquerade: `STEP_BeginTitle`'s only native visual side effect is wrapper
+/// 0x14081f9f0 building the `05_000_Title` MenuWindowJob through factory 0x1407acbf0. Suppressing
+/// this wrapper hides the native press-any-button/title Scaleform while leaving TitleStep state,
+/// FixOrderJobSequence, native Continue/save-load state, and STEP_PlayGame untouched. It must never
+/// touch the global resident-UI flag (CSMenuMan+0x21 / STEP_Wait). Ghidra dump addresses are +0xf0;
+/// these constants are deobf/live RVAs used for the actual hook.
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA: usize = 0x81f9f0;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA: usize = 0x81f8d0;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA: usize = 0x7acbf0;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_NAME: &str = "05_000_Title";
+pub(crate) const TITLE_PAB_INFORMATION_VISUAL_NAME: &str = "05_020_TitleInformation";
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_SUPPRESS_NOT_INSTALLED: usize = 0;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED_YES: usize = 1;
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_SUPPRESS_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED: AtomicUsize =
+    AtomicUsize::new(TITLE_NATIVE_MENU_VISUAL_SUPPRESS_NOT_INSTALLED);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_OUT_SLOT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_PREV_OUT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_ARG_RDX: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_ARG_R8: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Native `MenuWindowJob*` and live window preserved by the BeginTitle wrapper. The render-only
+/// suppressor uses these to clear the native title draw bit without removing the job from the native
+/// title sequence.
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PAB_INFORMATION_VISUAL_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_PAB_INFORMATION_VISUAL_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PAB_INFORMATION_VISUAL_BUILDS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PAB_INFORMATION_VISUAL_LAST_JOB: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PAB_INFORMATION_VISUAL_LAST_WINDOW: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PAB_INFORMATION_VISUAL_LAST_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Render-only Part-A suppression: `MenuWindowJob::Run` writes the native window visible flags at
+/// `GLOBAL_CSMenuMan->field106_0x90[id]`: the Run body sets `|=1` before calling FadeIn, and the
+/// FadeIn helper at deobf 0x140744dd0 sets `|=3`. User-visible runtime falsified the old `0x2`
+/// draw-bit-only assumption: the title logo / PAB / Continue can still show with flags==1. Therefore
+/// product suppression clears the full native-visible mask for the preserved `05_000_Title` window.
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA: usize = 0x744dd0;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA: usize = 0x7ad530;
+pub(crate) const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK: u8 = 0x3;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_NOT_INSTALLED: usize = 0;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED_YES: usize = 1;
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED: AtomicUsize =
+    AtomicUsize::new(TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_NOT_INSTALLED);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESSED_WINDOWS: AtomicUsize =
+    AtomicUsize::new(0);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_WINDOW: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_BEFORE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_AFTER: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// PART-B custom cover target: `05_010_ProfileSelect` is an existing Scaleform surface with
+/// `MENU_DummyProfileFace_01..10` symbols that the profile renderer maps to
+/// `SYSTEX_Menu_Profile00..09` (via CSMenuProfModelRend / active-screen render targets). The wrapper
+/// below is the deobf/live address for the native `05_010_ProfileSelect` MenuWindowJob builder
+/// (Ghidra dump 0x14081f7e0 -> deobf 0x14081f6f0). We use it as the initial custom cover surface
+/// instead of trying to remap `05_001_Title_Logo`, which has no dummy-profile symbol.
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA: usize = 0x81f6f0;
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME: &str = "05_010_ProfileSelect";
+pub(crate) const TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL: &str = "MENU_DummyProfileFace_01";
+pub(crate) const TITLE_CUSTOM_COVER_SYSTEX_TARGET: &str = "SYSTEX_Menu_Profile00";
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS: &str = "CSMenuProfModelRend";
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA: usize = 0x2b80128;
+/// Profile renderer table initializer: live 0x1409af3a0 (dump 0x1409af4f0) allocates the ten
+/// CSMenuProfModelRend instances and writes DAT_143d6d8d0 before the refresh/feed pass below.
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA: usize = 0x9af3a0;
+/// Profile portrait refresh/display pipeline: live 0x1409aa680 (dump 0x1409aa7d0) reads the loaded
+/// `ProfileSummary`, loops 10 slots, fills CSMenuProfModelRend / face/player model data, and maps
+/// each active slot to `SYSTEX_Menu_ProfileNN` through `FUN_140bb8cf0(renderer, slot*2)`. It must run
+/// after SL2/profile readiness, not at early `05_001_Title_Logo` construction time.
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA: usize = 0x9aa680;
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_CALLS: AtomicUsize =
+    AtomicUsize::new(0);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_PROFILE_SUMMARY: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_CALLER_PHASE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_754: usize = 0x754;
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_755: usize = 0x755;
+/// Live table of the ten CSMenuProfModelRend pointers filled by the title/profile renderer setup.
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA: usize = 0x3d6d8d0;
+pub(crate) const TITLE_PROFILE_SLOT_COUNT: usize = 10;
+/// CSMenuAsmModelRend base stores CSEzOffscreenRend* at +0xa8; CSEzOffscreenRend stores
+/// CSRuntimeTexResCap* registered under SYSTEX_Menu_ProfileNN at +0x10.
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET: usize = 0xa8;
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET: usize = 0x10;
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_TEX_INDEX_OFFSET: usize = 0x9a8;
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_SAMPLE_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_SLOT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_RENDERER: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_RENDERER_VTABLE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_OFFSCREEN_REND: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_RESCAP: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_INDEX: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_754: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_755: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_RET: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_JOB: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// MenuWindowJob::Run (dump 0x1407ad2b0 -> deobf/live 0x1407ad1c0). Part B uses the native
+/// title job's own pump context to run the separately-built ProfileSelect cover job alongside the
+/// preserved title job, instead of replacing the authoritative BeginTitle out-slot.
+pub(crate) const MENU_WINDOW_JOB_RUN_RVA: usize = 0x7ad1c0;
+pub(crate) static TITLE_CUSTOM_COVER_RUN_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_CUSTOM_COVER_RUN_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_CUSTOM_COVER_RUN_RECURSION: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_CUSTOM_COVER_RUN_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_NATIVE_JOB: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_COVER_JOB: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_COVER_WINDOW: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_RET: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Real DLL-owned fallback cover drawn through the existing hudhook/ImGui render path.
+/// This does not touch the game's live CSEzDraw/CSScaleform child objects and must stop
+/// once a player exists. It is a visible render operation, not a native-slot oracle.
+pub(crate) static TITLE_OVERLAY_COVER_RENDER_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_OVERLAY_COVER_LAST_DISPLAY_W: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_OVERLAY_COVER_LAST_DISPLAY_H: AtomicUsize = AtomicUsize::new(0);
+/// `CS::TexResCap` embeds the draw-usable `CSGxTexture*` at +0x78, and that wrapper keeps
+/// the backing graphics texture/reference at +0x10. The overlay cannot safely reinterpret this as
+/// an ImGui texture ID yet, but observing these handles during the draw is a concrete draw-side
+/// consumption oracle for the RAM-backed profile portrait source rather than generic scaffolding.
+pub(crate) const TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET: usize = 0x78;
+pub(crate) const TITLE_CUSTOM_COVER_GX_TEXTURE_RESOURCE_OFFSET: usize = 0x10;
+pub(crate) static TITLE_OVERLAY_COVER_TEXTURE_BOUND: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_OVERLAY_COVER_LAST_GX_TEXTURE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_OVERLAY_COVER_LAST_TEXTURE_RESOURCE: AtomicUsize = AtomicUsize::new(0);
+/// Observe the native now-loading helper visible during the black/progress-bar loading surface.
+/// This is the first-pass target for a separate custom loading/masquerade surface after live title-logo
+/// remaps proved crash-prone.
+pub(crate) const NOW_LOADING_HELPER_CTOR_RVA: usize = 0x2a20e0;
+pub(crate) const NOW_LOADING_HELPER_UPDATE_RVA: usize = 0x2a2c40;
+pub(crate) static NOW_LOADING_HELPER_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static NOW_LOADING_HELPER_UPDATE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static NOW_LOADING_HELPER_HOOKS_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static NOW_LOADING_HELPER_CTOR_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static NOW_LOADING_HELPER_UPDATE_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static NOW_LOADING_HELPER_LAST_THIS: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static NOW_LOADING_HELPER_LAST_MENU_INDEX: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static NOW_LOADING_HELPER_LAST_REPLACE_TEX_INFO: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static NOW_LOADING_HELPER_LAST_REQUESTED_REPLACE_TEX_INFO: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static NOW_LOADING_HELPER_LAST_FLAGS: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Read-only latch of the native CSFakeLoadingScreen singleton visible during the black/progress
+/// loading UI. Sampled from telemetry writes; no hooks or native calls.
+pub(crate) static FAKE_LOADING_SCREEN_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static FAKE_LOADING_SCREEN_VISIBLE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static FAKE_LOADING_SCREEN_LAST_PTR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static FAKE_LOADING_SCREEN_LAST_VISIBLE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static FAKE_LOADING_SCREEN_LAST_FIELD_C: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static FAKE_LOADING_SCREEN_LAST_FIELD_10: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static RENDER_LOADING_LAYER_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static RENDER_LOADING_LAYER_NONNULL_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static RENDER_LOADING_LAYER_LAST_RENDMAN: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static RENDER_LOADING_LAYER_LAST_CSGRAPHICS: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static RENDER_LOADING_LAYER_LAST_CSSCALEFORM: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static RENDER_LOADING_LAYER_LAST_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
+/// Passive observer for native Scaleform image-symbol -> system texture bindings.
+/// Dump `FUN_1407452c0` maps to live/deobf `0x1407451c0`. It receives an owning resource/list field
+/// in rcx and a pair of DLString<char> values in rdx. Do not call it from product code; observe native
+/// calls to learn valid owner/resource contexts for SYSTEX-backed surfaces.
+pub(crate) const TITLE_SCALEFORM_BIND_OBSERVER_RVA: usize = 0x7451c0;
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_SYSTEX_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_OWNER: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_PAIR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_SYMBOL_PTR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_TARGET_PTR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+// (Removed: TITLE INIT-READINESS OVERRIDE lever -- it forced CSMenuMan+0x21, which RE later showed is
+// the WHOLE-game resident-UI-ready flag, not title-only; asserting it early risked later in-game menus
+// finding chrome not resident, for an illusory ~1s (the real floor is the Scaleform resident load).
+// Reverted per user 2026-06-24. RE preserved in bd title-init-ready-override-NOT-a-press-lever-2026-06-24.)
 #[repr(i32)]
 pub(crate) enum TitleStepState {
     Min = 0,
@@ -610,6 +871,107 @@ pub(crate) const SCENE_OBJ_PROXY_CONTEXT_20_OFFSET: usize = 0x20;
 /// TitleTopDialog constructor xref at 0x1409a8275 calls the named-child proxy constructor with
 /// rdx=dialog+0xb78 and r8="PressStart" (RVA 0x2b26500).
 pub(crate) const TITLE_PRESS_START_SCENE_PROXY_B78_OFFSET: usize = 0xb78;
+/// Generic SceneObjProxy display visibility wrapper for a proxy (`dump 0x140733440 -> live/deobf
+/// 0x140733340`). It resolves the proxy's Scaleform value and calls the GFx visibility setter; use
+/// this for the 05_000_Title `PressStart` component rather than hiding the whole MenuWindowJob.
+pub(crate) const TITLE_PRESS_START_SET_VISIBLE_RVA: usize = 0x733340;
+/// Lower-level GFx visibility setter (`dump 0x140d84580 -> live/deobf 0x140d844d0`). It has one
+/// code caller, the SceneObjProxy wrapper above. The hook only forces false for the latched
+/// PressStart CSScaleformValue pointer, not globally.
+pub(crate) const TITLE_GFX_VALUE_SET_VISIBLE_RVA: usize = 0xd844d0;
+pub(crate) static TITLE_GFX_VALUE_SET_VISIBLE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PRESS_START_GFX_VALUE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_VALUE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_REQUESTED: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Named child SceneObjProxy binder (`live/deobf 0x14074a2f0`). TitleTopDialog ctor calls it with
+/// r8="PressStart" and output `dialog+0xb78`; hook it to identify the actual bound display object(s)
+/// and hide PAB immediately after native binding.
+pub(crate) const TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA: usize = 0x74a2f0;
+pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_INSTALLED: AtomicUsize =
+    AtomicUsize::new(0);
+pub(crate) static TITLE_PRESS_START_BIND_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PRESS_START_BIND_LAST_PARENT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_BIND_LAST_OUT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_BIND_LAST_NAME: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_BIND_LAST_CONTEXT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_BIND_HIDE_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PRESS_START_GFX_HIDE_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PRESS_START_GFX_HIDE_LAST_DIALOG: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_GFX_HIDE_LAST_PROXY: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_GFX_HIDE_LAST_CONTEXT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_GFX_HIDE_LAST_CALLER_PHASE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Actual visible native title-logo layer. Static RE of `TitleTopDialog` (dump 0x1409a82d0 ->
+/// live 0x1409a8180) shows `CS::TitleBackViewParts` embedded at dialog+0xaa8 and constructed from
+/// the `05_001_Title_Logo` resource; this is distinct from the preserved `05_000_Title` MenuWindowJob.
+pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET: usize = 0xaa8;
+pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_NAME: &str = "TitleBackViewParts";
+pub(crate) const TITLE_LOGO_RESOURCE_NAME: &str = "05_001_Title_Logo";
+/// `TitleBackViewParts` embeds its `SceneObjProxy` at `this+0x70`; the GFx/ScaleformValue handle
+/// used by the native label/frame helpers is the proxy field at `this+0x88` (`SceneObjProxy+0x18`).
+pub(crate) const TITLE_LOGO_GFX_VALUE_88_OFFSET: usize = 0x88;
+/// Current-frame reader for the resolved Scaleform value (`FUN_140d82620`, dump 0x140d82620 ->
+/// live/deobf 0x140d82570). Static FFDec XML for `05_001_title_logo.gfx` shows root depth 3 is the
+/// visible logo surface and maps frames to alpha: FadeIn 2..60, TextFadeIn 60, TextFadeOut 93,
+/// Title_TopMenu 112, FadeOut 113..133.
+pub(crate) const TITLE_LOGO_GFX_CURRENT_FRAME_RVA: usize = 0xd82570;
+pub(crate) const TITLE_LOGO_GFX_UNKNOWN_FRAME: i32 = -1;
+pub(crate) const TITLE_LOGO_GFX_UNKNOWN_ALPHA: i32 = -1;
+pub(crate) const TITLE_LOGO_GFX_FULL_ALPHA: i32 = 256;
+pub(crate) const TITLE_LOGO_GFX_ROOT_DEPTH: usize = 3;
+pub(crate) const TITLE_LOGO_GFX_ROOT_SPRITE_CHAR: usize = 7;
+pub(crate) const TITLE_LOGO_GFX_MAIN_ASSET_CHAR: usize = 4;
+pub(crate) const TITLE_LOGO_GFX_MAIN_ASSET_NAME: &str = "MENU_Title_EldenRing_01";
+/// Stronger native hide lever than FadeIn/FadeOut: `CS::TitleBackViewParts::SetVisible` (dump
+/// 0x1409a6410 -> deobf/live 0x1409a62c0, content verified as `add rcx,0x70; jmp 0x140733340`)
+/// calls the generic `SceneObjProxy` visible setter on the embedded proxy at `this+0x70`.
+/// `TitleTopDialog` itself calls this with `1` in the start-login path (dump 0x1409b3050), so using
+/// it with `0` is a native visibility semantic, not a timeline FadeIn/FadeOut guess.
+pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_CTOR_RVA: usize = 0x9a6180;
+pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA: usize = 0x9a62c0;
+/// TitleTopDialog start-login/native accept path (dump 0x1409b3050 -> deobf/live 0x1409b2f00).
+/// It calls `TitleBackViewParts::SetVisible(1)` on dialog+0xaa8 before continuing through native
+/// login/save-load setup, so detouring it and hiding the logo after the original is the earliest
+/// proven TitleTopDialog-owned logo visibility point on the zero-input Continue path.
+pub(crate) const TITLE_TOP_START_LOGIN_RVA: usize = 0x9b2f00;
+pub(crate) const TITLE_TOP_START_LOGIN_HIDE_NOT_INSTALLED: usize = 0;
+pub(crate) const TITLE_TOP_START_LOGIN_HIDE_INSTALLED_YES: usize = 1;
+pub(crate) static TITLE_TOP_START_LOGIN_HIDE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_TOP_START_LOGIN_HIDE_INSTALLED: AtomicUsize =
+    AtomicUsize::new(TITLE_TOP_START_LOGIN_HIDE_NOT_INSTALLED);
+pub(crate) static TITLE_LOGO_SET_VISIBLE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_LOGO_SET_VISIBLE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_LOGO_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_LOGO_CTOR_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_LOGO_GFX_HIDE_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_LOGO_GFX_HIDE_LAST_DIALOG: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_LOGO_GFX_HIDE_LAST_LOGO: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_LOGO_GFX_HIDE_LAST_CALLER_PHASE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_LOGO_GFX_HIDE_LAST_REQUESTED_VISIBLE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Dead-end note: `CS::TitleBackViewParts::FadeIn` (dump 0x1409a63f0 -> live 0x1409a62a0)
+/// only calls the state transition helper on `this+0x88` with `"FadeIn"`; runtime/user evidence
+/// proved suppressing it does NOT hide the visible logo. Keep as RE context, not a product hook.
+pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_RVA: usize = 0x9a62a0;
 pub(crate) const TITLE_PRESS_START_NAME_RVA: usize = 0x2b26500;
 /// Diagnostic span: if *(proxy) is NOT SceneObjProxy, scan [proxy .. proxy+0x40] stride 8 logging
 /// each qword + its [0] vtable so the next probe reveals the real layout. Also bounds the fallback.
@@ -1177,6 +1539,17 @@ pub(crate) const GAME_SAVE_SLOT_SINGLETON_RVA: usize = 0x3d69918;
 /// (the golden value was 0x7fff..); anything outside is treated as "not built yet" -> pass NULL.
 pub(crate) const OWNER_CTX_MIN_PLAUSIBLE_PTR: usize = 0x1_0000;
 pub(crate) const OWNER_CTX_MAX_PLAUSIBLE_PTR: usize = 0x8000_0000_0000;
+/// `GLOBAL_CSRegulationManager` singleton pointer. Native corrupted-save branch `FUN_14082d090`
+/// checks this for null before comparing `TitleFlowContext+0x148` against manager `+0x44`.
+pub(crate) const GLOBAL_CS_REGULATION_MANAGER_RVA: usize = 0x3d86c58;
+pub(crate) const TFC_REGULATION_VERSION_148_OFFSET: usize = 0x148;
+pub(crate) const REGULATION_MANAGER_VERSION_44_OFFSET: usize = 0x44;
+/// Native TFC regulation-version record helper: dump FUN_14082cbf0 -> deobf/live 0x14082cb00.
+pub(crate) const TITLE_FLOW_CONTEXT_RECORD_REGULATION_VERSION_RVA: usize = 0x82cb00;
+pub(crate) static TITLE_FLOW_CONTEXT_RECORD_REGULATION_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_FLOW_CONTEXT_RECORD_REGULATION_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_FLOW_CONTEXT_RECORD_REGULATION_FIXUPS: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) const OWN_STEPPER_LOG_INTERVAL: u64 = TitleNativeJobTiming::FrameRate as u64;
 pub(crate) const OWN_STEPPER_CALL_INC: usize = true as usize;
@@ -2726,6 +3099,20 @@ pub(crate) static START_SAFE_INPUT_HOOKS: Once = Once::new();
 pub(crate) static START_SPLASH_SKIP: Once = Once::new();
 pub(crate) static START_ONLINE_DISABLE: Once = Once::new();
 pub(crate) static START_FOREGROUND_FORCE: Once = Once::new();
+pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS: Once = Once::new();
+pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS: Once = Once::new();
+pub(crate) static START_TITLE_LOGO_START_LOGIN_HIDE: Once = Once::new();
+pub(crate) static START_TITLE_LOGO_FORCE_HIDDEN: Once = Once::new();
+pub(crate) static START_TITLE_PAB_INFORMATION_COVER: Once = Once::new();
+pub(crate) static START_TITLE_GFX_VALUE_SET_VISIBLE: Once = Once::new();
+pub(crate) static START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND: Once = Once::new();
+pub(crate) static START_TITLE_SCALEFORM_BIND_OBSERVER: Once = Once::new();
+pub(crate) static START_TITLE_FLOW_CONTEXT_RECORD_REGULATION: Once = Once::new();
+pub(crate) static START_NOW_LOADING_HELPER_OBSERVER: Once = Once::new();
+pub(crate) static START_TITLE_CUSTOM_COVER_RUN: Once = Once::new();
+pub(crate) static START_BOOT_PROFILER: Once = Once::new();
+/// One-shot latch for the "first game-task frame ran" boot-phase marker (0 = not yet logged).
+pub(crate) static BOOT_FIRST_FRAME_LOGGED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static BOOTSTRAP_TELEMETRY_SEEN: AtomicUsize =
     AtomicUsize::new(BOOTSTRAP_TELEMETRY_UNSEEN);
 pub(crate) static SAFE_INPUT_CONFIRM_FRAMES_REMAINING: AtomicUsize = AtomicUsize::new(0);
@@ -2935,6 +3322,15 @@ pub(crate) static TITLE_NATIVE_JOB_CALLED: AtomicUsize =
     AtomicUsize::new(TITLE_NATIVE_JOB_NOT_CALLED);
 pub(crate) static FORCE_PLAY_GAME_CALLED: AtomicUsize =
     AtomicUsize::new(TITLE_NATIVE_JOB_NOT_CALLED);
+/// Trampoline to the original STEP_MenuJobWait (0x140b0d400) for the title-anim speedup hook. 0 = not hooked.
+pub(crate) static TITLE_ANIM_SPEED_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// One-shot guard for installing the title-anim speedup hook.
+pub(crate) static TITLE_ANIM_SPEED_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Trampoline to the original title step-setter `SetState(owner,int)` (0x140b0d960) for the
+/// read-only state-transition trace hook. 0 = not hooked. bd menu-build-overlap-lever-2026-06-24.
+pub(crate) static TITLE_SETSTATE_TRACE_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// One-shot guard for installing the title step-setter trace hook.
+pub(crate) static TITLE_SETSTATE_TRACE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SUBMIT_PLAY_GAME_PHASE: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(SUBMIT_PHASE_INIT);
 pub(crate) static FORCE_PLAY_GAME_LAST_STATE: std::sync::atomic::AtomicI32 =

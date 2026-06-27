@@ -1,17 +1,36 @@
-# Autoresearch: asset-backed native Continue DLL patch
+# Autoresearch: clean title-cover masquerade for zero-input gold autoload
 
 ## Objective
-Find and prove the real native title-menu `Continue` patch path, with the game DLL as the preferred/expected product vehicle. The target is **not** another timing tweak and not a diagnostic shortcut: once the native title menu has produced the real Continue entry/action from game assets, the DLL should advance through that same semantic action without waiting for a user input event.
+Masquerade the irreducible boot-init/resident-UI load behind the **loaded character portrait** while the zero-input native Continue/load chain proceeds behind it. The target visual is not "some cover" and not the generic hudhook text/rectangle scaffold: it is the character/profile portrait derived from the selected SL2/profile pipeline, visible during boot init and held until the game's native map-loading screen takes over.
 
-The desired product chain is:
+There is **no ms target**: success is portrait coverage plus the hard product constraints. Split the work into two independently validatable parts:
 
-`Data*.bhd/bdt archive entry -> msg/engus/menu.msgbnd.dcx -> FMG text/resource ID -> native title-menu row/functor/result object -> native accept/submit dispatcher -> continue_load_67b750 -> native load-complete evidence (b80_deserialize_67b290 OR explicitly disabled modal-confirm wait after loaded-slot proof) -> native continue_confirm / SetState5 -> world-stable oracle`
+- **Part A -- disable native title visual:** suppress the BeginTitle `05_000_Title` MenuWindowJob build/render (`FUN_14081f9f0 -> FUN_1407acbf0`) while leaving TitleStep, FixOrderJobSequence, native Continue logic, profile/portrait renderers, and world-load chain intact. Do **not** touch STEP_Wait or `CSMenuMan+0x21`.
+- **Part B -- render portrait cover:** render the loaded character portrait in a title-safe surface, preferably through the profile-model-render / `SYSTEX_Menu_ProfileNN` texture pipeline, or via a small custom Scaleform/overlay target that consumes the same RAM-backed portrait source. A generic text/rectangle overlay is diagnostic scaffolding only and must not be scored as final success.
 
-A score of `autoload_re_score=1400` means the patch exists, stays in the DLL, follows the asset/native action chain, has no synthetic input or direct-load bypasses, and has bounded runtime proof.
+The desired product chain remains:
+
+`loaded character portrait cover visible during boot init -> native Continue/load proceeds behind it -> portrait remains until native map-loading screen takes over -> continue_load_67b750 -> native load-complete evidence (b80_deserialize_67b290 OR explicitly disabled modal-confirm wait after loaded-slot proof) -> native continue_confirm / SetState5 -> world-stable oracle`
+
+A score of `autoload_re_score=1600` means the native title visual is suppressed, the RAM-backed character portrait cover path exists and is observable, the native Continue/load chain remains intact, there is no synthetic input or direct-load bypass, and bounded runtime proof satisfies the hard constraints.
+
+## Current strategic anchor (do not lose across long autoresearch)
+- `main` at `ca5b2df` is the known-good baseline for the pre-title-cover product path. A no-teardown on-screen run from `/home/banon/projects/er-effects-rs-main-watch` launched 2026-06-25 went through Press Any Button and Continue/load as expected.
+- Therefore **Path B is a preservation/regression problem, not an unknown RE problem**. Do not re-derive Continue from scratch or keep experimenting with synthetic Continue/docall/result fallbacks unless a branch-specific diff first proves `main`'s path cannot be reused.
+- The current branch should restore/preserve `main`'s PAB + native Continue/load behavior, then make title-cover changes visual-only around it. If a runtime probe fails before load, first test/inspect whether a title-cover hook or branch-only runtime/guard change diverged from `main`.
+- Screenshots/visual state are diagnostic only. Stop/product proof must come from RAM/in-process telemetry. Seeing `LOAD GAME`/ProfileSelect while unfinished is expected cover behavior, not a stop oracle.
+
+## Current title-cover / portrait-cover metric contract
+- The next autoresearch target is **not** higher than 1600 under the old rubric. The old 1600 ceiling proved native zero-input load and generic cover scaffolding; it did not prove the desired character portrait cover. Treat old 1600 runs as baseline regression proof, not as the product finish line.
+- `05_010_ProfileSelect` cover telemetry (`oracle_title_custom_cover_profile_select_builds`, `oracle_title_custom_cover_run_calls`, `oracle_title_scaleform_bind_observer_profile00_bound`, and related SYSTEX/dummy-profile bind counters) is **native plumbing evidence**, not by itself product portrait-cover acceptance.
+- 2026-06-26 user-visible no-teardown correction: ProfileSelect one-tick transform/SYSTEX semaphores are a proven visual false positive. Artifact `product-continue-direct-20260626-183818` reported loaded-character portrait booleans, SYSTEX hits, transform flags, Banon/player, and render-loading semaphores, but the actual screen was a blank/cursed ProfileSelect panel stuck at `Select profile to load`. Do not score or retry that path as product proof. A future pass needs a real visible-pixel/surface oracle (`oracle_title_portrait_pixels_visible=true` or equivalent) tied to the displayed loaded-character portrait.
+- `oracle_title_profile_cover_bound_to_logo_surface=true` is not required as the only possible future product route, because `05_001_Title_Logo` lacks dummy-profile/SYSTEX symbols; however, replacing it requires a new RAM-backed visible-cover oracle that ties the character portrait source to an active rendered title-safe surface after native title/PAB suppression.
+- Hudhook/fullscreen overlay is allowed only if it renders the loaded character portrait (or a RAM-backed image produced from the same `SYSTEX_Menu_ProfileNN`/profile renderer source) and its telemetry proves sane display size plus portrait-source linkage. The current text/rectangle overlay is a false-positive scaffold and must not score as final cover success.
+- Do not score a ProfileSelect build/run/bind-only artifact or a generic overlay as final product success. Final success still requires zero simulated input, zero messagebox/legal/server/save popups, native Continue/load/confirm edges, expected save identity, portrait cover held until native map-loading takeover, and world-loaded proof.
 
 ## Metrics
-- **Primary**: `autoload_re_score` (points, higher is better, max 1400) -- composite RE/product-proof score from `.auto/measure.sh`.
-- **Regression/failure metrics**: `readiness_gate_failures`, `asset_chain_failures`, `dll_patch_failures`, `native_continue_failures`, `field58_gate_failures`, `direct_shortcut_failures`, `input_path_failures`, `runtime_proof_failures`, `runtime_mode_failures`, `eula_popup_failures`, `save_data_popup_failures`, `messagebox_dialog_failures`, `false_positives`.
+- **Primary**: `autoload_re_score` (points, higher is better, max 1600) -- composite visual-cover/RE/product-proof score from `.auto/measure.sh`.
+- **Regression/failure metrics**: `title_cover_failures`, `readiness_gate_failures`, `asset_chain_failures`, `dll_patch_failures`, `native_continue_failures`, `field58_gate_failures`, `direct_shortcut_failures`, `input_path_failures`, `runtime_proof_failures`, `runtime_mode_failures`, `eula_popup_failures`, `save_data_popup_failures`, `messagebox_dialog_failures`, `false_positives`.
 - **Legacy secondary metrics**: `target_constants_remaining`, `helpers_missing`, `fixed_wait_predicates`, `autoload_static_failures`.
 
 Score rubric:
@@ -20,11 +39,12 @@ Score rubric:
 - **DLL product patch path (300 pts)**: implemented inside the chainload DLL; no `eldenring.exe` patching, loose asset edits, or product direct-load/direct-confirm/deser dispatcher shortcuts; advances through native accept/submit semantics after Continue exists.
 - **Safety/runtime oracle (300 pts)**: input remains blocked/suppressed; `simulated_button_presses_total=0`; save backup/restore and char-fingerprint/mount guards remain; bounded runtime proof reaches native load, loaded-slot completion (`b80_deserialize` or disabled modal-confirm with loaded evidence), native confirm/SetState5, and world-stable edges. The gold oracle must derive expected character identity from the vanilla `ER0000.sl2` save slot (not `.co2` except Seamless-specific tests), expose the character name in the oracle summary, require observed telemetry to match that derived save identity, treat `"_"`, `""`, and all-whitespace names as empty-like/non-real, require the expected player animation ID, and require no native post-load popup/modal builds after Continue/load finalizes.
 - **Static regression guards (300 pts)**: fixed waits remain fail-safe only; checker/measure fail closed for direct shortcuts, input probes, stale `mode=0` gating, and asset-chain regressions; build/checks pass.
+- **Title-cover visual masquerade (200 pts)**: Part A hooks/suppresses only the native `05_000_Title` BeginTitle visual wrapper and exposes telemetry; Part B exposes an observable **character portrait** render path (`SYSTEX_Menu_ProfileNN`/dummy texture, custom Scaleform, or portrait-backed overlay) without weakening the load chain. Generic text/rectangle covers are false positives.
 
 ## How to Run
 `./.auto/measure.sh` -- emits `METRIC name=value` lines and explanatory `DETAIL ...` lines.
 
-If re-initializing autoresearch, use metric `autoload_re_score`, unit `points`, direction `higher`, baseline from the current branch, and keep `timeout_seconds <= 120` / `checks_timeout_seconds <= 120` unless `.auto/run_experiment_policy.rego` and its checker/tests are deliberately changed. Runtime probes must finish the runtime portion in <=60s.
+If re-initializing autoresearch, use metric `autoload_re_score`, unit `points`, direction `higher`, baseline from the current branch, and keep `timeout_seconds <= 45` / `checks_timeout_seconds <= 45`. Runtime probes must finish the runtime portion within the cap read from `.auto/runtime_timeout_cap_seconds`.
 
 ## Files in Scope
 - `src/lib.rs` -- constants/layouts/statics for title/menu/profile-load/autoload and hook wiring.
@@ -46,6 +66,8 @@ If re-initializing autoresearch, use metric `autoload_re_score`, unit `points`, 
 - Do not file upstream issues/PRs/reports.
 
 ## Constraints
+- Before every research spike/iteration, search Beads persistent memories first (`/home/banon/.local/bin/bd memories <terms> --json` and `bd recall <key>`) using terms from the current hypothesis (for example `Continue`, `continue_load`, `SetSaveSlot`, `TitleTopDialog`, `ProfileLoadDialog`, `LoadJobContext`, `MenuJobResult`, `saveSlot`). Incorporate high-signal memories before doing new static/runtime work so prior findings and dead ends are not re-derived.
+- At the end of each research spike/iteration, upsert durable new findings into Beads memories with `/home/banon/.local/bin/bd remember --key <key> <finding>`. If the new finding makes an existing Beads memory stale or inaccurate, first upsert the replacement/correction, then remove the stale memory with `/home/banon/.local/bin/bd forget <stale-key>` (or update it as retracted if preserving the historical warning is safer than deletion).
 - Static RE first. Runtime probes only after the hypothesis, exact hook/edge, stop condition, and teardown are explicit.
 - Frame/call counts may remain only as outer fail-safe timeouts, never as success predicates.
 - Polling semantic predicates once per game tick is allowed; requiring N ticks before success is not.
@@ -60,13 +82,20 @@ If re-initializing autoresearch, use metric `autoload_re_score`, unit `points`, 
 - Visual proof exists that the native title menu reaches `Continue` highlighted, but that is not load proof.
 - First-title-item wrapper fallback was falsified: calling `menu_continue_wrapper(this=first MenuWindowJob)` produced `slot=-1` and process exit.
 - A row-result candidate exists with expected vtable/docall, but previous code over-gated on `result+0x58` (`mode=0`). Static RE of `0x1407ac890` shows native submit constructs an event and calls vtable `+0x60`; `result+0x58` must not be treated as the product readiness gate.
+- Part B asset blocker resolved: `/home/banon/er-extract/nuxe-menu-20260619-170932/menu/05_001_title_logo.gfx` contains only static title-logo texture symbols (`MENU_Title_GR`, `MENU_Title_EldenRing`, `MENU_DS3_LOGO`, `MENU_Title_EldenRing_01`) and no `MENU_DummyProfileFace` / `SYSTEX_Menu_Profile`; use a custom Scaleform target or another surface with dummy-profile symbols. See `docs/recon/title-cover-asset-decision-2026-06-25.md`.
+- Existing cover target found but not product-safe as a direct title-job replacement: `/home/banon/er-extract/nuxe-menu-20260619-170932/menu/05_010_profileselect.gfx` contains `MENU_DummyProfileFace_01..10`; native wrapper `05_010_ProfileSelect` at dump `0x14081f7e0` maps to deobf `0x14081f6f0`. Runtime spike `product-continue-direct-20260624-184915` proved replacing the `05_000_Title` out-job with this ProfileSelect job suppresses/builds cover telemetry (`suppressed=1`, `cover_builds=1`, zero input, zero MessageBox) but leaves title owner parked at state 10 and never loads Banon before timeout. Do not return the ProfileSelect job in the BeginTitle out slot; Part B needs a non-blocking/custom surface.
 
 ## What to Try Next
-1. Build a reproducible asset/resource provenance chain: Data archive virtual path -> `menu.msgbnd.dcx` -> FMG Continue/New Game text IDs -> native resource/menu consumers/xrefs. Store concise provenance in docs/recon or bd comments and make `.auto/measure.sh` check for it.
-2. Replace `mode=0` rejection with a native submit/accept path that follows static RE (`0x1407ac890` / vtable `+0x60`) while preserving fail-closed validation of receiver/result/vtables.
-3. Add focused hooks/logs around `0x1407ac890`, `0x140746e80`, `0x14082bac0`, `0x14067b750`, `0x140afb967`, `0x14067b290`, and `continue_confirm` to prove the downstream chain; if native Continue stalls at the modal-confirm wait after loaded evidence, disable that wait and proceed through guarded native confirm without input.
-4. Harden static guards against product regressions: direct load/confirm/deser/dispatcher calls, input probes, Down navigation assumptions, stale `mode` gating, and asset-chain ambiguity.
-5. Run the final bounded product oracle only after the static receiver/ABI path is explicit and the DLL has been rebuilt.
+1. Build the missing RAM-backed **portrait-cover** oracle; do **not** relax scoring back to generic cover success. Current ProfileSelect semaphores and the hudhook text rectangle are plumbing/scaffold only. The next keepable improvement should connect these proofs:
+   - **portrait source**: active-screen slot/profile renderer -> `CSMenuProfModelRend` vtable (`base+0x2b80128`) -> `renderer+0xa8` `CSEzOffscreenRend` -> `offscreen+0x10` runtime texture resource cap, with `renderer+0x754/+0x755 == 0` and `renderer+0x9a8 == slot*2`;
+   - **display destination**: either `TitleTopDialog+0xaa8` -> `TitleBackViewParts`, `+0x8` embedded `MenuResource("05_001_Title_Logo")`, `+0x70` `SceneObjProxy`, `+0x88` GFx/ScaleformValue handle, OR a custom title-safe overlay/Scaleform surface whose draw code consumes the RAM-backed portrait source;
+   - **linkage/visibility**: a telemetry oracle that proves the loaded character portrait, not a placeholder rectangle/text, is rendered on the live cover surface while native Continue/load proceeds;
+   - **lifetime**: the portrait cover remains visible from the boot-init/title gap until the native map-loading screen/helper takes over (`oracle_title_now_loading_helper_*` or a stronger in-process loading-screen takeover semaphore).
+2. The immediate code-facing seed is the existing profile-render refresh telemetry (`oracle_title_logo_profile_summary_ready`, `oracle_title_profile_render_refresh_gate_ready`, `oracle_title_custom_cover_profile_render_refresh_calls`, and related SYSTEX/profile renderer evidence). Use these only as source proof; add destination/visibility/lifetime classification before any product predicate flips true.
+3. Best next static/runtime-instrumentation candidate: hook/read `FUN_140749290` (dump `0x140749290`, re-ground live RVA with `scripts/dump-deobf-shift.py` before adding a constant) to capture `param_1` MenuResource owner, `param_2` SceneObjProxy out, `param_1+0x60`, `param_1+0x48` name, and whether `param_2 == TitleBackViewParts+0x70` / `param_1 == TitleBackViewParts+0x8`. If that path cannot re-bind live assets, pivot to a custom overlay/Scaleform surface that reads the same portrait source instead of fighting `05_001_Title_Logo`.
+4. Secondary candidate: extend `title_scaleform_bind_observer_hook` to classify its `owner` against known active title/resource/window objects before setting any new oracle. `MENU_DummyProfileFace_01 -> SYSTEX_Menu_Profile00` currently ties to ProfileSelect only; do not infer title-logo coverage from the pair text.
+5. Use the recent Hyprland placement fix only as smoke-test infrastructure: on-screen runs now stay visible via `scripts/place-er-window-hyprland.py`, but screenshots remain diagnostic. Product proof must be in-process telemetry for portrait source, visible cover surface, takeover by native loading screen, and the zero-input native load chain.
+6. After portrait-cover oracle work, return to product ordering: preserve manual/native Banon load proof and zero-input/no-popup gates. Any title accept/menu-open/save-data `ShowProgress` issue is a blocker to solve without weakening the portrait or native-load requirements.
 
 ## What's Been Tried / Dead Ends
 - Fixed timing gates were removed/reduced as success predicates; do not retune wait numbers.

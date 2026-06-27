@@ -16,6 +16,9 @@ BOOTSTRAP_STATE_PATH="${BOOTSTRAP_STATE_PATH:-$ARTIFACT_DIR/bootstrap-state.json
 # dir under divergent names. The DLL honors ER_EFFECTS_CRASH_LOG_PATH / ER_EFFECTS_AUTOLOAD_DEBUG_PATH.
 CRASH_LOG_PATH="${CRASH_LOG_PATH:-$ARTIFACT_DIR/er-effects-crash-log.txt}"
 AUTOLOAD_DEBUG_PATH="${AUTOLOAD_DEBUG_PATH:-$ARTIFACT_DIR/er-effects-autoload-debug.log}"
+# Boot profiler (opt-in via ER_EFFECTS_PROFILE=1): per-run CPU sample stream in the artifact dir.
+PROFILE_PATH="${PROFILE_PATH:-$ARTIFACT_DIR/er-effects-profile.jsonl}"
+HYPR_PLACER_PID_FILE="${HYPR_PLACER_PID_FILE:-$ARTIFACT_DIR/hypr-window-placer.pid}"
 AUTOLOAD_PATH="${AUTOLOAD_PATH:-$GAME_DIR/er-effects-autoload.txt}"
 AUTOLOAD_REQUEST="${AUTOLOAD_REQUEST:-}"
 # Single source of truth for the runtime-probe wall-clock cap (seconds). Read from the canonical
@@ -48,6 +51,31 @@ wipe_appdata_saves() {
   [[ -d "$APPDATA_ER_ROOT" ]] || return 0
   find "$APPDATA_ER_ROOT" -maxdepth 2 -type f \
     \( -name '*.sl2' -o -name '*.co2' -o -name '*.bak' \) -delete 2>/dev/null || true
+}
+
+# Path to the freshly-built chainload DLL the LazyLoader [CHAINLOAD] loads from GAME_DIR root.
+BUILT_DLL="${BUILT_DLL:-$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll}"
+
+# Remove EVERY stale mod DLL from the LazyLoader LOADORDER folder so a leftover DLL can never be
+# loaded as a mod and contaminate the run. SURGICAL: only *.dll under dllMods/ -- never the chainload
+# DLL at GAME_DIR root, dinput8.dll, lazyLoad.ini, or game files. Idempotent; missing dir is fine.
+clean_stale_mod_dlls() {
+  [[ -d "$GAME_DIR/dllMods" ]] || return 0
+  rm -f "$GAME_DIR/dllMods/"*.dll 2>/dev/null || true
+}
+
+# DEPLOY HYGIENE (setup): both the onscreen RUNTIME_NO_TEARDOWN path and the gated watcher path funnel
+# through THIS script, but the onscreen path exec()s the game BEFORE ever reaching .auto/runtime_probe.sh's
+# setup_runtime_payload() -- so without this, an onscreen run silently uses whatever stale
+# $GAME_DIR/er_effects_rs.dll was last deployed and ignores a fresh `cargo xwin build` (observed: a run
+# used a ~28-min-old DLL with none of the new debug lines). Mirror the proven .auto/runtime_probe.sh
+# pattern: clean stale mod DLLs, then deploy the freshly-built chainload DLL beside LazyLoader.
+deploy_chainload_dll() {
+  clean_stale_mod_dlls
+  # Fail closed if the build is missing -- never silently run an old DLL.
+  [[ -f "$BUILT_DLL" ]] || fatal "built DLL not found: $BUILT_DLL -- run 'cargo xwin build --release --target x86_64-pc-windows-msvc' first (refusing to run a stale chainload DLL)"
+  cp -f "$BUILT_DLL" "$GAME_DIR/er_effects_rs.dll"
+  echo "deploy: cleaned $GAME_DIR/dllMods/*.dll; deployed fresh chainload DLL -> $GAME_DIR/er_effects_rs.dll"
 }
 
 usage() {
@@ -171,14 +199,18 @@ terminate_runtime_pids() {
 
 cleanup() {
   local pid
-  # Teardown/crash/trap EVIDENCE: low-quality screenshot of the ER window BEFORE we kill it
-  # (best-effort, privacy fail-closed -- only the validated ER window, else a .txt note; never the
-  # desktop). Must run while the game window still exists, so it is the FIRST thing in cleanup.
+  # Mandatory teardown evidence for every bounded runtime/autoresearch probe: capture the exact ER
+  # window region before killing the game. The capture helper is focus-independent (it raises the
+  # exact steam_app_1245620 window best-effort and does not fail merely because it was not focused),
+  # and writes teardown-screenshot.txt if the game/window is already gone.
   if [[ -n "${ARTIFACT_DIR:-}" && -d "${ARTIFACT_DIR:-/nonexistent}" ]]; then
     python3 "$REPO_ROOT/scripts/capture-er-window.py" "$ARTIFACT_DIR/teardown-screenshot.jpg" 2>/dev/null || true
-    # NOTE: under gamescope --backend headless there is no host window and no screencopy, so the
-    # capture above fail-closes to a .txt note -- expected. We observe via in-process telemetry oracles
-    # (title/menu state, privacy-policy gate, continue/char oracles), NOT screenshots.
+  fi
+  if [[ -s "$HYPR_PLACER_PID_FILE" ]]; then
+    IFS= read -r pid < "$HYPR_PLACER_PID_FILE" || pid=""
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+    fi
   fi
   if [[ -s "$PID_FILE" ]]; then
     IFS= read -r pid < "$PID_FILE" || pid=""
@@ -189,6 +221,9 @@ cleanup() {
   terminate_runtime_pids
   # Teardown wipe: leave the default appdata save dirs with NO save files, every time.
   wipe_appdata_saves
+  # Teardown DLL hygiene: clear any stale mod DLLs from the LazyLoader LOADORDER folder so the next
+  # run (or a manual launch) cannot pick up a leftover mod DLL. Surgical: only dllMods/*.dll.
+  clean_stale_mod_dlls
 }
 trap cleanup EXIT INT TERM HUP
 
@@ -200,6 +235,8 @@ BOOTSTRAP_PATH=$(realpath -m "$BOOTSTRAP_PATH")
 BOOTSTRAP_STATE_PATH=$(realpath -m "$BOOTSTRAP_STATE_PATH")
 CRASH_LOG_PATH=$(realpath -m "$CRASH_LOG_PATH")
 AUTOLOAD_DEBUG_PATH=$(realpath -m "$AUTOLOAD_DEBUG_PATH")
+PROFILE_PATH=$(realpath -m "$PROFILE_PATH")
+HYPR_PLACER_PID_FILE=$(realpath -m "$HYPR_PLACER_PID_FILE")
 mkdir -p "$ARTIFACT_DIR"
 
 if (( DRY_RUN )); then
@@ -219,12 +256,18 @@ fi
 # "cold_char_mount_complete" within ~1s (brief white window) before the new process executed
 # anything. Deleting these reproduces first-run-in-a-fresh-dir behavior; the DLL re-creates them
 # once it boots, and the watcher already tolerates their absence while waiting for fresh telemetry.
-rm -f "$TELEMETRY_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH" "$CRASH_LOG_PATH" "$AUTOLOAD_DEBUG_PATH"
+rm -f "$TELEMETRY_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH" "$CRASH_LOG_PATH" "$AUTOLOAD_DEBUG_PATH" "$PROFILE_PATH"
 # Wipe any prior teardown screenshot BEFORE the run (never after -- we keep this run's for inspection)
 # so a fail-closed/absent capture this run is OBVIOUS (no file) instead of a STALE image we might
 # mis-read as current. (Capture is written at teardown in cleanup().)
 rm -f "$ARTIFACT_DIR/teardown-screenshot.jpg" "$ARTIFACT_DIR/teardown-screenshot.png" "$ARTIFACT_DIR/teardown-screenshot.txt"
 write_autoload_request
+
+# DEPLOY THE FRESH CHAINLOAD DLL + clean stale mod DLLs BEFORE any launch branch. Placed here (after
+# the auth gates so --dry-run/-h never touch the game dir, before both the RUNTIME_NO_TEARDOWN exec
+# path and the gamescope/watcher path) so EVERY real launch through this script runs the just-built
+# DLL. Fails closed if the build is missing rather than silently running a stale DLL.
+deploy_chainload_dll
 
 # SAVE SOURCE: the DLL never assumes the default user save dir. Either declare telemetry-only
 # (loads nothing) or stage an isolated copy of the gold save and point the DLL at it. Staging a
@@ -261,6 +304,24 @@ else
     export ER_EFFECTS_AUTOLOAD_SLOT="$ER_EFFECTS_GOLD_SLOT"
   fi
   echo "save-source: staged gold save -> $STAGED_SAVE (ER_EFFECTS_SAVE_FILE); slot=${ER_EFFECTS_GOLD_SLOT:-most-recent}; autosaves isolated from $GOLD_SAVE"
+
+  # GOLDEN GRAPHICS CONFIG: seed our durable GraphicsConfig.xml (windowed 1280x720 LOW) into the
+  # redirected EldenRing dir so EVERY run reuses the same display config instead of the game
+  # regenerating defaults / inheriting the user's real-appdata config. The DLL redirects the whole
+  # %APPDATA%\EldenRing dir, so the game reads graphicsconfig.xml from this staged root (observed
+  # lowercase basename). Staged WRITABLE so any in-game settings change lands on the per-run copy and
+  # is discarded at teardown -- the golden source in the repo is never modified by a run. To UPDATE
+  # the golden, re-copy a run's graphicsconfig.xml over $GOLD_GRAPHICS_CONFIG.
+  GOLD_GRAPHICS_CONFIG="${ER_EFFECTS_GOLD_GRAPHICS_CONFIG:-$REPO_ROOT/save-files/golden-graphics/GraphicsConfig.xml}"
+  if [[ -f "$GOLD_GRAPHICS_CONFIG" ]]; then
+    STAGED_GRAPHICS_CONFIG="$STAGED_ROOT/EldenRing/graphicsconfig.xml"
+    mkdir -p "$STAGED_ROOT/EldenRing"
+    cp -f "$GOLD_GRAPHICS_CONFIG" "$STAGED_GRAPHICS_CONFIG"
+    chmod u+w "$STAGED_GRAPHICS_CONFIG"
+    echo "graphics-config: staged golden -> $STAGED_GRAPHICS_CONFIG (reused every run; source $GOLD_GRAPHICS_CONFIG)"
+  else
+    echo "graphics-config: WARN no golden config at $GOLD_GRAPHICS_CONFIG -- game will regenerate defaults"
+  fi
 fi
 
 # Pre-launch wipe: the default appdata save dirs must start empty so the game cannot read a default
@@ -275,17 +336,12 @@ wipe_appdata_saves
 LAUNCH_EPOCH="$(date +%s.%N)"
 printf '%s\n' "$LAUNCH_EPOCH" > "$ARTIFACT_DIR/launch-epoch.txt"
 
-# Elden Ring ALWAYS renders inside a gamescope HEADLESS nested compositor. This is the DEFAULT, not a
-# toggle: it is OFFSCREEN (no host-compositor window at all -- never on the user's monitor, never
-# steals focus) AND full-speed (gamescope always drives Present into its offscreen buffer, so ER never
-# present-blocks like an occluded host window would). We DRIVE AND OBSERVE the run entirely via
-# in-process RAM telemetry oracles -- gamescope headless cannot be screenshotted and we do not need it
-# to: the oracles are the ground truth (see the title/menu state oracles in telemetry). Requires gamescope.
-# RUNTIME_ONSCREEN=1: render to a REAL on-screen window (drop gamescope headless) so a human can WATCH
-# the zero-input autoload and TEST the loaded character. The DLL's input block auto-releases in-world
-# (IN_WORLD_REACHED), so the user takes control once the character is in the world. Default is the
-# offscreen headless render (oracle-observed, never on the user's monitor).
-if [[ "${RUNTIME_ONSCREEN:-0}" == "1" ]]; then
+# Session-default runtime probes render to a REAL on-screen window so the user can WATCH the
+# zero-input autoload and falsify any title-cover claim visually. The DLL's input block auto-releases
+# in-world (IN_WORLD_REACHED), so the user takes control once the character is in the world.
+# RUNTIME_ONSCREEN=0: force the old gamescope headless/offscreen compositor path for oracle-only runs
+# that should never appear on the user's monitor.
+if [[ "${RUNTIME_ONSCREEN:-1}" == "1" ]]; then
   gamescope_prefix=()
   echo "render: ON-SCREEN direct Proton window (RUNTIME_ONSCREEN=1) -- watch + test; input block releases in-world"
 else
@@ -293,6 +349,33 @@ else
   gamescope_prefix=(gamescope --backend headless -W "${GAMESCOPE_W:-1280}" -H "${GAMESCOPE_H:-720}" -r "${GAMESCOPE_FPS:-30}" --)
   echo "render: gamescope headless (offscreen; observed via in-process telemetry oracles, not screenshots)"
 fi
+
+start_hypr_window_placer() {
+  [[ "${RUNTIME_ONSCREEN:-1}" == "1" ]] || return 0
+  [[ "${ER_EFFECTS_HYPR_PLACE_WINDOW:-1}" == "1" ]] || return 0
+  command -v hyprctl >/dev/null 2>&1 || { echo "hypr-place: hyprctl unavailable; skipping visible-window clamp"; return 0; }
+  local -a focus_args=()
+  if [[ "${ER_EFFECTS_HYPR_FOCUS:-0}" == "1" ]]; then
+    focus_args=(--focus)
+  fi
+  python3 "$REPO_ROOT/scripts/place-er-window-hyprland.py" \
+    --class steam_app_1245620 \
+    --monitor "${ER_EFFECTS_HYPR_MONITOR:-window}" \
+    --workspace "${ER_EFFECTS_HYPR_WORKSPACE:-window}" \
+    --width "${ER_EFFECTS_HYPR_WIDTH:-1280}" \
+    --height "${ER_EFFECTS_HYPR_HEIGHT:-720}" \
+    --duration "${ER_EFFECTS_HYPR_PLACE_SECONDS:-$RUNTIME_TIMEOUT_SECONDS}" \
+    --interval "${ER_EFFECTS_HYPR_PLACE_INTERVAL:-0.25}" \
+    --always \
+    "${focus_args[@]}" \
+    --log "$ARTIFACT_DIR/hypr-window-placer.jsonl" \
+    > "$ARTIFACT_DIR/hypr-window-placer.out" \
+    2> "$ARTIFACT_DIR/hypr-window-placer.err" &
+  echo "$!" > "$HYPR_PLACER_PID_FILE"
+  echo "hypr-place: started target-only visible-window clamp pid=$! log=$ARTIFACT_DIR/hypr-window-placer.jsonl monitor=${ER_EFFECTS_HYPR_MONITOR:-window} workspace=${ER_EFFECTS_HYPR_WORKSPACE:-window}"
+}
+
+start_hypr_window_placer
 
 # RUNTIME_NO_TEARDOWN=1: run the game in the FOREGROUND of this launcher (which a human runs detached,
 # e.g. via the agent's background mode) and do NOT run the readiness watcher. Proton's `run` tears the
@@ -323,6 +406,12 @@ if [[ "${RUNTIME_NO_TEARDOWN:-0}" == "1" ]]; then
     ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
     ER_EFFECTS_CRASH_LOG_PATH="$CRASH_LOG_PATH" \
     ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" \
+    ER_EFFECTS_PROFILE_PATH="$PROFILE_PATH" \
+    ER_EFFECTS_PROFILE="${ER_EFFECTS_PROFILE:-}" \
+    ER_EFFECTS_PROFILE_RIP="${ER_EFFECTS_PROFILE_RIP:-}" \
+    ER_EFFECTS_PROFILE_INTERVAL_MS="${ER_EFFECTS_PROFILE_INTERVAL_MS:-}" \
+    ER_EFFECTS_PROFILE_RIP_EVERY="${ER_EFFECTS_PROFILE_RIP_EVERY:-}" \
+    VKD3D_SHADER_CACHE_PATH="${VKD3D_SHADER_CACHE_PATH:-}" \
     "$PROTON" run "$GAME_DIR/eldenring.exe" > "$ARTIFACT_DIR/proton-run.out" 2>&1
 fi
 
@@ -335,12 +424,19 @@ fi
   ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
   ER_EFFECTS_CRASH_LOG_PATH="$CRASH_LOG_PATH" \
   ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" \
+  ER_EFFECTS_PROFILE_PATH="$PROFILE_PATH" \
+  ER_EFFECTS_PROFILE="${ER_EFFECTS_PROFILE:-}" \
+  ER_EFFECTS_PROFILE_RIP="${ER_EFFECTS_PROFILE_RIP:-}" \
+  ER_EFFECTS_PROFILE_INTERVAL_MS="${ER_EFFECTS_PROFILE_INTERVAL_MS:-}" \
+  ER_EFFECTS_PROFILE_RIP_EVERY="${ER_EFFECTS_PROFILE_RIP_EVERY:-}" \
+  VKD3D_SHADER_CACHE_PATH="${VKD3D_SHADER_CACHE_PATH:-}" \
   "${gamescope_prefix[@]}" "$PROTON" run "$GAME_DIR/eldenring.exe" > "$ARTIFACT_DIR/proton-run.out" 2>&1 & echo $! > "$PID_FILE"
 )
 
-# ER renders nested in gamescope, so the steam_app_1245620 Hyprland window the watcher screenshots
-# never exists -> always rely on in-process telemetry (not a toggle). And the gamescope boot is
-# GPU-contended/slower, so the title/world phase-stall watchdogs would false-positive -> disabled.
+# The watcher remains oracle-first even for on-screen runs; screenshots are diagnostic only and the
+# product proof comes from in-process telemetry. Keep the phase/deadline relaxations unless a probe is
+# explicitly tightened, because both gamescope and visible Proton launches can have compositor/GPU jitter.
+DEFAULT_RUNTIME_EXTRA_WATCH_ARGS="--no-phase-watchdog --no-world-load-deadline"
 (
   cd "$REPO_ROOT"
   ARTIFACT_DIR="$ARTIFACT_DIR" \
@@ -353,7 +449,7 @@ fi
   ER_PROBE_LAUNCH_EPOCH="$LAUNCH_EPOCH" \
   AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 \
   RUNTIME_SKIP_VISUAL_CAPTURE=1 \
-  RUNTIME_EXTRA_WATCH_ARGS="${RUNTIME_EXTRA_WATCH_ARGS:-"--no-phase-watchdog --no-world-load-deadline"}" \
+  RUNTIME_EXTRA_WATCH_ARGS="${RUNTIME_EXTRA_WATCH_ARGS:-$DEFAULT_RUNTIME_EXTRA_WATCH_ARGS}" \
   ./.auto/runtime_probe.sh
 ) > "$ARTIFACT_DIR/runtime-probe.out" 2> "$ARTIFACT_DIR/runtime-probe.err" &
 watcher_pid=$!
