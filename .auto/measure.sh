@@ -1195,8 +1195,17 @@ profile_select_canvas_installed = (
     or 'install_title_custom_cover_run_hook' in lib_code
     or 'build_profile_select_cover_job(base, rdx, r8' in code
 )
-if profile_select_canvas_installed:
-    title_cover_failures.append('Part B false-positive guard: ProfileSelect/MenuWindowJob canvas is still installed; it is not a valid custom title cover')
+profile_select_one_tick_cropped = (
+    'current_calls >= 1' in code
+    and 'MENU_DummyProfileFace_01' in code
+    and 'TITLE_PROFILE_FACE_TRANSFORM_APPLIED' in code
+    and 'TITLE_PROFILE_FACE_OTHER_HIDDEN' in code
+    and 'TITLE_GFX_VALUE_SET_POSITION_RVA' in code
+    and 'TITLE_GFX_VALUE_SET_SCALE_RVA' in code
+    and 'oracle_title_loaded_character_portrait_rendered' in telemetry_src + '\n' + watcher
+)
+if profile_select_canvas_installed and not profile_select_one_tick_cropped:
+    title_cover_failures.append('Part B false-positive guard: ProfileSelect/MenuWindowJob canvas is still installed without one-tick crop/scale portrait proof')
     title_cover_penalty += 100
 
 # User-visible runtime falsified the old Part-A/B semaphores twice: native title/logo/PAB/Continue

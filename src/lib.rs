@@ -303,6 +303,11 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
                 .name("er-effects-title-bind-observer".to_owned())
                 .spawn(install_title_scaleform_bind_observer_hook);
         });
+        START_TITLE_CUSTOM_COVER_RUN.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-profile-canvas".to_owned())
+                .spawn(install_title_custom_cover_run_hook);
+        });
         START_TITLE_FLOW_CONTEXT_RECORD_REGULATION.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-effects-tfc-record-fix".to_owned())
