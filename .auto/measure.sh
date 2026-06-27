@@ -857,6 +857,7 @@ server_status_by_dir: dict[str, list[str]] = {}
 runtime_mode_by_dir: dict[str, list[str]] = {}
 title_cover_runtime_by_dir: dict[str, list[str]] = {}
 runtime_artifacts_raw: list[str] = []
+runtime_artifacts_raw_by_dir: dict[str, list[str]] = {}
 best_runtime: tuple[int, Path | None, dict[str, bool]] = (0, None, {key: False for key in required_runtime})
 latest_runtime_dir: Path | None = None
 rt_root = root / 'target/runtime-probe'
@@ -881,6 +882,7 @@ if rt_root.exists():
                 proof['ready'] = True
             raw = json.dumps(data)
             runtime_artifacts_raw.append(raw)
+            runtime_artifacts_raw_by_dir.setdefault(d.name, []).append(raw)
             if (
                 re.search(r'"reason"\s*:\s*"native_legal_popup_detected"', raw)
                 or re.search(r'"oracle_policy_window_any_seen"\s*:\s*true', raw)
@@ -960,7 +962,8 @@ if rt_root.exists():
                 and re.search(r'"oracle_title_custom_cover_profile_source_ready"\s*:\s*true', raw)
                 and re.search(r'"oracle_title_custom_cover_profile_source_tex_rescap"\s*:\s*[1-9]\d*', raw)
             )
-            if re.search(r'"oracle_title_profile_cover_bound_to_logo_surface"\s*:\s*false', raw) and not overlay_portrait_source_cover_rendered:
+            portrait_visible_surface_bound = bool(re.search(r'"oracle_title_portrait_visible_surface_bound"\s*:\s*true', raw))
+            if re.search(r'"oracle_title_profile_cover_bound_to_logo_surface"\s*:\s*false', raw) and not overlay_portrait_source_cover_rendered and not portrait_visible_surface_bound:
                 # Count this runtime artifact's missing-cover semaphore once. Several JSON evidence
                 # files in the same artifact dir can contain the same oracle snapshot; charging the
                 # same artifact once per file over-penalizes a single product failure. The overlay
@@ -1072,6 +1075,11 @@ else:
     eula_popup_failures.extend(legal_popup_by_dir.get(best_dir.name, []))
     server_status_failures.extend(server_status_by_dir.get(best_dir.name, []))
 scored_runtime_dirs = {p.name for p in [best_dir, latest_runtime_dir] if p is not None}
+scored_runtime_artifacts_raw = [
+    raw
+    for dir_name in scored_runtime_dirs
+    for raw in runtime_artifacts_raw_by_dir.get(dir_name, [])
+]
 for dir_name in scored_runtime_dirs:
     messagebox_dialog_failures.extend(messagebox_by_dir.get(dir_name, []))
     save_data_popup_failures.extend(save_data_popup_by_dir.get(dir_name, []))
@@ -1241,6 +1249,7 @@ actual_logo_profile_cover_observable = (
         and 'oracle_title_profile_cover_bound_to_logo_surface' in telemetry_src + '\n' + watcher
     )
     or portrait_overlay_cover_observable
+    or 'oracle_title_portrait_visible_surface_bound' in telemetry_src + '\n' + watcher
 )
 if 'draw_title_overlay_cover' in overlay_code and not portrait_overlay_cover_observable:
     title_cover_failures.append('Part B false-positive guard: hudhook cover is still generic text/rectangle scaffolding, not the loaded character portrait')
@@ -1266,7 +1275,7 @@ portrait_render_oracle_true = any(
     re.search(r'"oracle_title_loaded_character_portrait_rendered"\s*:\s*true', raw)
     and re.search(r'"oracle_title_loaded_character_portrait_visible_during_boot"\s*:\s*true', raw)
     and re.search(r'"oracle_title_loaded_character_portrait_held_until_loading_takeover"\s*:\s*true', raw)
-    for raw in runtime_artifacts_raw
+    for raw in scored_runtime_artifacts_raw
 )
 profile_select_transform_false_positive = any(
     re.search(r'"oracle_title_loaded_character_portrait_rendered"\s*:\s*true', raw)
@@ -1275,7 +1284,8 @@ profile_select_transform_false_positive = any(
     and re.search(r'"oracle_title_profile_face_transform_applied"\s*:\s*true', raw)
     and re.search(r'"oracle_title_profile_cover_bound_to_logo_surface"\s*:\s*false', raw)
     and not re.search(r'"oracle_title_portrait_pixels_visible"\s*:\s*true', raw)
-    for raw in runtime_artifacts_raw
+    and not re.search(r'"oracle_title_portrait_visible_surface_bound"\s*:\s*true', raw)
+    for raw in scored_runtime_artifacts_raw
 )
 if profile_select_transform_false_positive:
     title_cover_failures.append('Part B hard gate: ProfileSelect one-tick transform/SYSTEX semaphores are a proven visual false positive; require a real visible-pixel/surface oracle, not transform flags')
@@ -1284,7 +1294,17 @@ elif not (portrait_render_oracle_present and portrait_render_oracle_true):
     title_cover_failures.append('Part B hard gate: no runtime oracle proves the loaded character portrait itself is rendered at the right time; source/texture-handle telemetry and generic overlay drawing are not product success')
     title_cover_penalty += MAX_SCORE
 
-false_positives = 0
+overlay_body = function_body('draw_title_overlay_cover', overlay_code) or ''
+generic_black_overlay_false_positive = (
+    'add_rect([0.0, 0.0], [width, height]' in overlay_body
+    and '.filled(true)' in overlay_body
+    and 'add_image' not in overlay_body
+)
+if generic_black_overlay_false_positive:
+    title_cover_failures.append('Part B visual-beauty gate: fullscreen black/dark rectangle overlay is a product false positive; the cover must visibly render the loaded character portrait')
+    title_cover_penalty += 100
+
+false_positives = 1 if generic_black_overlay_false_positive else 0
 all_detail_failures = []
 for group in [legacy_failures, asset_failures, dll_failures, native_failures, field58_failures, direct_failures, input_failures, runtime_failures, runtime_mode_failures, eula_popup_failures, save_data_popup_failures, messagebox_dialog_failures, server_status_failures, title_cover_failures]:
     all_detail_failures.extend(group)

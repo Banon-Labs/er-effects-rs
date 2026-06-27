@@ -701,6 +701,17 @@ pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_SYMBOL_PTR: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_TARGET_PTR: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Experimental visible-surface bind rewrite for the replayed ProfileSelect cover: the native
+/// SYSTEX profile texture normally targets `MENU_DummyProfileFace_01`; rewrite slot0 to the
+/// visibly placed `MENU_FL_40135_Profile` surface and expose it as a distinct oracle.
+pub(crate) const TITLE_PROFILE_VISIBLE_SURFACE_SYMBOL: &str = "MENU_FL_40135_Profile";
+pub(crate) static TITLE_PROFILE_VISIBLE_SURFACE_BIND_REWRITES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_OWNER: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_PAIR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_SYMBOL_PTR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 // (Removed: TITLE INIT-READINESS OVERRIDE lever -- it forced CSMenuMan+0x21, which RE later showed is
 // the WHOLE-game resident-UI-ready flag, not title-only; asserting it early risked later in-game menus
 // finding chrome not resident, for an illusory ~1s (the real floor is the Scaleform resident load).
@@ -879,6 +890,10 @@ pub(crate) const TITLE_PRESS_START_SET_VISIBLE_RVA: usize = 0x733340;
 /// code caller, the SceneObjProxy wrapper above. The hook only forces false for the latched
 /// PressStart CSScaleformValue pointer, not globally.
 pub(crate) const TITLE_GFX_VALUE_SET_VISIBLE_RVA: usize = 0xd844d0;
+/// Lower-level GFx display-info setters for CSScaleformValue position(x,y) and scale(x,y).
+/// Dump 0x140d83ed0 / 0x140d84140 -> deobf/live 0x140d83e20 / 0x140d84090.
+pub(crate) const TITLE_GFX_VALUE_SET_POSITION_RVA: usize = 0xd83e20;
+pub(crate) const TITLE_GFX_VALUE_SET_SCALE_RVA: usize = 0xd84090;
 pub(crate) static TITLE_GFX_VALUE_SET_VISIBLE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
@@ -897,6 +912,11 @@ pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_INSTALLED: AtomicUsize =
     AtomicUsize::new(0);
+pub(crate) static TITLE_PROFILE_FACE_BIND_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PROFILE_FACE_TRANSFORM_APPLIED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PROFILE_FACE_OTHER_HIDDEN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PROFILE_FACE_LAST_PROXY: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PROFILE_FACE_LAST_VALUE: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_PRESS_START_BIND_HITS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_PRESS_START_BIND_LAST_PARENT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
