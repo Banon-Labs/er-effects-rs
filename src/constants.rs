@@ -631,6 +631,15 @@ pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_RET: AtomicUsize =
 pub(crate) static TITLE_OVERLAY_COVER_RENDER_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_OVERLAY_COVER_LAST_DISPLAY_W: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_OVERLAY_COVER_LAST_DISPLAY_H: AtomicUsize = AtomicUsize::new(0);
+/// `CS::TexResCap` embeds the draw-usable `CSGxTexture*` at +0x78, and that wrapper keeps
+/// the backing graphics texture/reference at +0x10. The overlay cannot safely reinterpret this as
+/// an ImGui texture ID yet, but observing these handles during the draw is a concrete draw-side
+/// consumption oracle for the RAM-backed profile portrait source rather than generic scaffolding.
+pub(crate) const TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET: usize = 0x78;
+pub(crate) const TITLE_CUSTOM_COVER_GX_TEXTURE_RESOURCE_OFFSET: usize = 0x10;
+pub(crate) static TITLE_OVERLAY_COVER_TEXTURE_BOUND: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_OVERLAY_COVER_LAST_GX_TEXTURE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_OVERLAY_COVER_LAST_TEXTURE_RESOURCE: AtomicUsize = AtomicUsize::new(0);
 /// Observe the native now-loading helper visible during the black/progress-bar loading surface.
 /// This is the first-pass target for a separate custom loading/masquerade surface after live title-logo
 /// remaps proved crash-prone.

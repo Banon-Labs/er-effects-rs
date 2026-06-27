@@ -40,6 +40,28 @@ fn draw_title_overlay_cover(ui: &Ui) {
     TITLE_OVERLAY_COVER_LAST_DISPLAY_H.store(height as usize, Ordering::SeqCst);
     let draw_list = ui.get_background_draw_list();
     let portrait_ready = title_portrait_source_ready();
+    if portrait_ready {
+        let tex_rescap = TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_RESCAP.load(Ordering::SeqCst);
+        let gx_texture = unsafe {
+            safe_read_usize(tex_rescap + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET)
+        }
+        .unwrap_or(0);
+        let texture_resource = if gx_texture != 0 {
+            unsafe { safe_read_usize(gx_texture + TITLE_CUSTOM_COVER_GX_TEXTURE_RESOURCE_OFFSET) }
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        if gx_texture != 0 {
+            TITLE_OVERLAY_COVER_LAST_GX_TEXTURE.store(gx_texture, Ordering::SeqCst);
+        }
+        if texture_resource != 0 {
+            TITLE_OVERLAY_COVER_LAST_TEXTURE_RESOURCE.store(texture_resource, Ordering::SeqCst);
+        }
+        if gx_texture != 0 && texture_resource != 0 {
+            TITLE_OVERLAY_COVER_TEXTURE_BOUND.store(1, Ordering::SeqCst);
+        }
+    }
     let source_tint = if portrait_ready {
         ImColor32::from_rgba(46, 34, 28, 242)
     } else {
