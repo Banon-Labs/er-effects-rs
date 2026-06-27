@@ -856,6 +856,7 @@ messagebox_by_dir: dict[str, list[str]] = {}
 server_status_by_dir: dict[str, list[str]] = {}
 runtime_mode_by_dir: dict[str, list[str]] = {}
 title_cover_runtime_by_dir: dict[str, list[str]] = {}
+runtime_artifacts_raw: list[str] = []
 best_runtime: tuple[int, Path | None, dict[str, bool]] = (0, None, {key: False for key in required_runtime})
 latest_runtime_dir: Path | None = None
 rt_root = root / 'target/runtime-probe'
@@ -879,6 +880,7 @@ if rt_root.exists():
             if data.get('ready') is True or data.get('success') is True:
                 proof['ready'] = True
             raw = json.dumps(data)
+            runtime_artifacts_raw.append(raw)
             if (
                 re.search(r'"reason"\s*:\s*"native_legal_popup_detected"', raw)
                 or re.search(r'"oracle_policy_window_any_seen"\s*:\s*true', raw)
@@ -1240,6 +1242,26 @@ if not actual_logo_profile_cover_observable:
 if portrait_overlay_cover_observable and 'oracle_title_overlay_cover_texture_bound' not in telemetry_src + '\n' + watcher:
     title_cover_failures.append('Part B remaining gap: overlay is gated by the RAM-backed portrait source but does not yet prove the actual profile texture is bound/drawn')
     title_cover_penalty += 50
+
+# Hard fail-closed product gate: source/texture-handle consumption is not equivalent to rendering
+# the loaded character portrait at the right time. A valid max-score artifact must expose a runtime
+# oracle that proves the portrait itself was rendered on the cover surface during boot-init and was
+# held until native loading-screen takeover. Until that oracle exists and is asserted in the latest
+# runtime proof, the portrait-cover objective is objectively unmet and the score must be 0.
+portrait_render_oracle_present = (
+    'oracle_title_loaded_character_portrait_rendered' in telemetry_src + '\n' + watcher
+    and 'oracle_title_loaded_character_portrait_visible_during_boot' in telemetry_src + '\n' + watcher
+    and 'oracle_title_loaded_character_portrait_held_until_loading_takeover' in telemetry_src + '\n' + watcher
+)
+portrait_render_oracle_true = any(
+    re.search(r'"oracle_title_loaded_character_portrait_rendered"\s*:\s*true', raw)
+    and re.search(r'"oracle_title_loaded_character_portrait_visible_during_boot"\s*:\s*true', raw)
+    and re.search(r'"oracle_title_loaded_character_portrait_held_until_loading_takeover"\s*:\s*true', raw)
+    for raw in runtime_artifacts_raw
+)
+if not (portrait_render_oracle_present and portrait_render_oracle_true):
+    title_cover_failures.append('Part B hard gate: no runtime oracle proves the loaded character portrait itself is rendered at the right time; source/texture-handle telemetry and generic overlay drawing are not product success')
+    title_cover_penalty += MAX_SCORE
 
 false_positives = 0
 all_detail_failures = []
