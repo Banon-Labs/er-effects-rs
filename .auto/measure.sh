@@ -1268,7 +1268,19 @@ portrait_render_oracle_true = any(
     and re.search(r'"oracle_title_loaded_character_portrait_held_until_loading_takeover"\s*:\s*true', raw)
     for raw in runtime_artifacts_raw
 )
-if not (portrait_render_oracle_present and portrait_render_oracle_true):
+profile_select_transform_false_positive = any(
+    re.search(r'"oracle_title_loaded_character_portrait_rendered"\s*:\s*true', raw)
+    and re.search(r'"oracle_title_custom_cover_profile_select_builds"\s*:\s*[1-9]', raw)
+    and re.search(r'"oracle_title_custom_cover_run_calls"\s*:\s*1', raw)
+    and re.search(r'"oracle_title_profile_face_transform_applied"\s*:\s*true', raw)
+    and re.search(r'"oracle_title_profile_cover_bound_to_logo_surface"\s*:\s*false', raw)
+    and not re.search(r'"oracle_title_portrait_pixels_visible"\s*:\s*true', raw)
+    for raw in runtime_artifacts_raw
+)
+if profile_select_transform_false_positive:
+    title_cover_failures.append('Part B hard gate: ProfileSelect one-tick transform/SYSTEX semaphores are a proven visual false positive; require a real visible-pixel/surface oracle, not transform flags')
+    title_cover_penalty += MAX_SCORE
+elif not (portrait_render_oracle_present and portrait_render_oracle_true):
     title_cover_failures.append('Part B hard gate: no runtime oracle proves the loaded character portrait itself is rendered at the right time; source/texture-handle telemetry and generic overlay drawing are not product success')
     title_cover_penalty += MAX_SCORE
 

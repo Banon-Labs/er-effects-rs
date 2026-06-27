@@ -1458,15 +1458,6 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
     };
     TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.store(native_job, Ordering::SeqCst);
     TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW.store(native_window, Ordering::SeqCst);
-    unsafe {
-        build_profile_select_cover_job(
-            base,
-            rdx,
-            r8,
-            caller_rva,
-            "BeginTitle preserved-native deferred transform",
-        )
-    };
 
     append_autoload_debug(format_args!(
         "title-cover-part-a: PRESERVED native {TITLE_NATIVE_MENU_VISUAL_NAME} wrapper 0x{:x}/factory 0x{:x}; latched job=0x{native_job:x} window=0x{native_window:x} for render-only suppression (out_slot=0x{out_slot:x} prev=0x{prev_out:x} rdx=0x{rdx:x} r8=0x{r8:x} caller_rva=0x{caller_rva:x})",
@@ -1608,34 +1599,12 @@ pub(crate) unsafe extern "system" fn title_custom_cover_menu_window_run_hook(
     {
         return ret;
     }
-    let current_calls = TITLE_CUSTOM_COVER_RUN_CALLS.load(Ordering::SeqCst);
-    if current_calls >= 1 {
-        return ret;
-    }
     TITLE_CUSTOM_COVER_RUN_RECURSION.store(1, Ordering::SeqCst);
     let cover_ret = unsafe { run(cover_job, load_params, fd4_time, menu_man) };
     TITLE_CUSTOM_COVER_RUN_RECURSION.store(0, Ordering::SeqCst);
     let cover_window = unsafe { safe_read_usize(cover_job + 0x130) }.unwrap_or(null);
     let calls = TITLE_CUSTOM_COVER_RUN_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         + OWN_STEPPER_CALL_INC;
-    let profile_value = TITLE_PROFILE_FACE_LAST_VALUE.load(Ordering::SeqCst);
-    if profile_value != null && profile_value != HOOK_ORIGINAL_UNSET {
-        let base = game_module_base().unwrap_or(null);
-        if base != null {
-            let set_position: unsafe extern "system" fn(usize, f32, f32) -> usize =
-                unsafe { std::mem::transmute(base + TITLE_GFX_VALUE_SET_POSITION_RVA) };
-            let set_scale: unsafe extern "system" fn(usize, *const f32) -> usize =
-                unsafe { std::mem::transmute(base + TITLE_GFX_VALUE_SET_SCALE_RVA) };
-            let scale = [3.2f32, 3.2f32];
-            append_autoload_debug(format_args!(
-                "title-cover-part-b: deferred transform after ProfileSelect one-tick value=0x{profile_value:x} calls={calls}"
-            ));
-            unsafe { set_position(profile_value, 640.0, 360.0) };
-            unsafe { set_scale(profile_value, scale.as_ptr()) };
-            TITLE_PROFILE_FACE_TRANSFORM_APPLIED.store(1, Ordering::SeqCst);
-            TITLE_PROFILE_FACE_OTHER_HIDDEN.store(9, Ordering::SeqCst);
-        }
-    }
     TITLE_CUSTOM_COVER_RUN_LAST_NATIVE_JOB.store(native_job, Ordering::SeqCst);
     TITLE_CUSTOM_COVER_RUN_LAST_COVER_JOB.store(cover_job, Ordering::SeqCst);
     TITLE_CUSTOM_COVER_RUN_LAST_COVER_WINDOW.store(cover_window, Ordering::SeqCst);
@@ -2107,16 +2076,6 @@ unsafe fn title_child_name_matches(name_ptr: usize) -> bool {
     name == "PressStart" || name == "StaticSystemText_101000" || name == "PRESS BUTTON"
 }
 
-unsafe fn title_profile_list_container_matches(name_ptr: usize) -> bool {
-    if name_ptr == 0 || name_ptr == TITLE_OWNER_SCAN_START_ADDRESS {
-        return false;
-    }
-    let Ok(name) = (unsafe { CStr::from_ptr(name_ptr as *const i8).to_str() }) else {
-        return false;
-    };
-    name == "ProfileList/ItemList/ItemList/ItemList"
-}
-
 pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook(
     parent: usize,
     out_proxy: usize,
@@ -2130,14 +2089,6 @@ pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook
     let f: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig) };
     let ret = unsafe { f(parent, out_proxy, name_ptr) };
-    if unsafe { title_profile_list_container_matches(name_ptr) } {
-        TITLE_PROFILE_FACE_BIND_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
-        TITLE_PROFILE_FACE_LAST_PROXY.store(out_proxy, Ordering::SeqCst);
-        TITLE_PROFILE_FACE_LAST_VALUE.store(out_proxy, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "title-cover-part-b: recorded ProfileSelect container receiver=out_proxy name='ProfileList/ItemList/ItemList/ItemList' proxy=0x{out_proxy:x} parent=0x{parent:x} ret=0x{ret:x}"
-        ));
-    }
     if unsafe { title_child_name_matches(name_ptr) } {
         let context = unsafe { safe_read_usize(out_proxy + SCENE_OBJ_PROXY_CONTEXT_20_OFFSET) }
             .unwrap_or(null);
