@@ -7,8 +7,6 @@ use hudhook::{
     imgui::{Condition, Context, Ui},
 };
 
-use std::sync::atomic::Ordering;
-
 use crate::*;
 
 pub(crate) struct EffectsOverlay {
@@ -18,46 +16,6 @@ pub(crate) struct EffectsOverlay {
 impl EffectsOverlay {
     pub(crate) fn new(state: Arc<Mutex<EffectsState>>) -> Self {
         Self { state }
-    }
-}
-
-fn title_portrait_source_ready() -> bool {
-    TITLE_CUSTOM_COVER_PROFILE_SOURCE_RENDERER_VTABLE.load(Ordering::SeqCst)
-        != TITLE_OWNER_SCAN_START_ADDRESS
-        && TITLE_CUSTOM_COVER_PROFILE_SOURCE_OFFSCREEN_REND.load(Ordering::SeqCst)
-            != TITLE_OWNER_SCAN_START_ADDRESS
-        && TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_RESCAP.load(Ordering::SeqCst)
-            != TITLE_OWNER_SCAN_START_ADDRESS
-}
-
-fn sample_title_portrait_source_for_telemetry(ui: &Ui) {
-    let [width, height] = ui.io().display_size;
-    if width <= 1.0 || height <= 1.0 || !title_portrait_source_ready() {
-        return;
-    }
-
-    // Telemetry-only: no generic fullscreen/text scaffold. A keepable cover must come from
-    // native visible-surface evidence or a future real portrait texture bridge.
-    TITLE_OVERLAY_COVER_LAST_DISPLAY_W.store(width as usize, Ordering::SeqCst);
-    TITLE_OVERLAY_COVER_LAST_DISPLAY_H.store(height as usize, Ordering::SeqCst);
-    let tex_rescap = TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_RESCAP.load(Ordering::SeqCst);
-    let gx_texture =
-        unsafe { safe_read_usize(tex_rescap + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) }
-            .unwrap_or(0);
-    let texture_resource = if gx_texture != 0 {
-        unsafe { safe_read_usize(gx_texture + TITLE_CUSTOM_COVER_GX_TEXTURE_RESOURCE_OFFSET) }
-            .unwrap_or(0)
-    } else {
-        0
-    };
-    if gx_texture != 0 {
-        TITLE_OVERLAY_COVER_LAST_GX_TEXTURE.store(gx_texture, Ordering::SeqCst);
-    }
-    if texture_resource != 0 {
-        TITLE_OVERLAY_COVER_LAST_TEXTURE_RESOURCE.store(texture_resource, Ordering::SeqCst);
-    }
-    if gx_texture != 0 && texture_resource != 0 {
-        TITLE_OVERLAY_COVER_TEXTURE_BOUND.store(1, Ordering::SeqCst);
     }
 }
 
@@ -98,9 +56,6 @@ impl ImguiRenderLoop for EffectsOverlay {
             process_autoload_request(&mut state);
             false
         };
-        if product_autoload_enabled() && !player_available {
-            sample_title_portrait_source_for_telemetry(ui);
-        }
         write_telemetry_throttled(&mut state, player_available);
 
         ui.window("ER Effects")

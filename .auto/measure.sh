@@ -26,11 +26,8 @@ fi
 
 if [[ -f .auto/run_runtime_probe_once ]]; then
   rm -f .auto/run_runtime_probe_once
-  runtime_enable_hudhook="${ER_EFFECTS_ENABLE_HUDHOOK:-0}"
-  if [[ -f .auto/enable_hudhook_runtime_once ]]; then
-    rm -f .auto/enable_hudhook_runtime_once
-    runtime_enable_hudhook=1
-  fi
+  rm -f .auto/enable_hudhook_runtime_once
+  runtime_enable_hudhook=0
   cargo xwin build --release --target x86_64-pc-windows-msvc >/tmp/er-effects-runtime-build.log 2>&1 || {
     tail -80 /tmp/er-effects-runtime-build.log >&2
     exit 1
@@ -1325,31 +1322,10 @@ portrait_render_oracle_true = any(
     and re.search(r'"oracle_title_portrait_pixels_visible"\s*:\s*true', raw)
     for raw in scored_runtime_artifacts_raw
 )
+# User directive 2026-06-27: remove the hudhook/FaceData title-cover lane. Keep these legacy
+# metric names at zero for log continuity, but do not mine stale artifacts or reward this path.
 offline_face_texture_runtime_drawn = 0
 stylized_facedata_pixel_oracle = 0
-stylized_facedata_pixel_reason = ''
-if best_dir is not None:
-    runtime_raw = (best_dir / 'readiness-result.json').read_text(encoding='utf-8', errors='replace') if (best_dir / 'readiness-result.json').exists() else ''
-    runtime_raw += '\n'
-    runtime_raw += (best_dir / 'er-effects-telemetry.json').read_text(encoding='utf-8', errors='replace') if (best_dir / 'er-effects-telemetry.json').exists() else ''
-    if re.search(r'"oracle_title_offline_face_texture_uploaded"\s*:\s*true', runtime_raw) and re.search(r'"oracle_title_offline_face_texture_drawn"\s*:\s*true', runtime_raw):
-        offline_face_texture_runtime_drawn = 1
-    analysis_path = best_dir / 'logo-replacement-screenshot-analysis.json'
-    if offline_face_texture_runtime_drawn and analysis_path.exists():
-        try:
-            analysis = json.loads(analysis_path.read_text(encoding='utf-8', errors='replace'))
-            if (
-                analysis.get('black_ratio_sane_for_portrait_stage') is True
-                and analysis.get('known_false_positive_signature') is False
-                and float(analysis.get('black32_ratio', 0.0)) >= float(analysis.get('black32_min_ratio', 0.55))
-                and float(analysis.get('dark64_ratio', 1.0)) <= float(analysis.get('dark64_max_ratio', 0.95))
-            ):
-                stylized_facedata_pixel_oracle = 1
-                stylized_facedata_pixel_reason = f"black32={analysis.get('black32_ratio')} dark64={analysis.get('dark64_ratio')}"
-        except Exception as exc:
-            stylized_facedata_pixel_reason = f'analysis parse failed: {exc}'
-if stylized_facedata_pixel_oracle:
-    print(f'DETAIL stylized_facedata_pixel_oracle visible diagnostic passed ({stylized_facedata_pixel_reason}); secondary diagnostic only, not final portrait_pixels_visible proof')
 
 visible_surface_without_pixels_false_positive = (
     not stylized_facedata_pixel_oracle
@@ -1434,8 +1410,8 @@ offline_face_source_ready = 0
 offline_face_source_errors: list[str] = []
 offline_face_source_hash = ''
 offline_face_source_name = ''
+# Legacy metric kept for log continuity; the title-cover hudhook bridge path was removed per user directive.
 hudhook_cpu_texture_bridge_ready = 0
-hudhook_cpu_texture_bridge_errors: list[str] = []
 try:
     with tempfile.NamedTemporaryFile(prefix='er-face-source-', suffix='.json', delete=False) as tmp:
         tmp_path = Path(tmp.name)
@@ -1531,23 +1507,6 @@ for failure in offline_face_source_errors:
 if offline_face_source_ready:
     print(f'DETAIL offline_face_source ready name={offline_face_source_name} face_sha256={offline_face_source_hash}')
 
-hudhook_sources = []
-for hudhook_root in (Path.home() / '.cargo/git/checkouts').glob('hudhook-*') if (Path.home() / '.cargo/git/checkouts').exists() else []:
-    for lib_rs in hudhook_root.glob('*/src/lib.rs'):
-        try:
-            hudhook_sources.append(lib_rs.read_text(encoding='utf-8', errors='replace'))
-        except OSError:
-            pass
-if not any('pub trait RenderContext' in src and 'fn load_texture(&mut self, data: &[u8], width: u32, height: u32)' in src for src in hudhook_sources):
-    hudhook_cpu_texture_bridge_errors.append('local hudhook checkout does not expose RenderContext::load_texture(data,width,height)')
-if not re.search(r'fn initialize\(&mut self, ctx: &mut Context, [A-Za-z_][A-Za-z0-9_]*: &mut dyn (?:hudhook::)?RenderContext\)', overlay_code):
-    hudhook_cpu_texture_bridge_errors.append('overlay initialize does not receive a hudhook RenderContext for CPU texture upload')
-if not hudhook_cpu_texture_bridge_errors:
-    hudhook_cpu_texture_bridge_ready = 1
-for failure in hudhook_cpu_texture_bridge_errors:
-    print(f'DETAIL hudhook_cpu_texture_bridge {failure}')
-if hudhook_cpu_texture_bridge_ready:
-    print('DETAIL hudhook_cpu_texture_bridge ready: RenderContext::load_texture can upload CPU RGBA into a TextureId during overlay initialize')
 
 for failure in all_detail_failures:
     print(f'DETAIL {failure}')
