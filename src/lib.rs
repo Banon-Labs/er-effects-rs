@@ -5,13 +5,14 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        Arc, Mutex, Once,
         atomic::{AtomicUsize, Ordering},
+        Arc, Mutex, Once,
     },
     time::{Duration, Instant},
 };
 
-use debug::InputBlocker;
+use crate::input_blocker::InputBlocker;
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MhHook, MH_STATUS};
 use eldenring::{
     cs::{
         CSTaskGroupIndex, CSTaskImp, ChrInsExt, FaceData, FaceDataBuffer, GameDataMan, GameMan,
@@ -23,26 +24,20 @@ use eldenring::{
 use er_effects_data::embedded_effects;
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoader};
 use fromsoftware_shared::{F32Vector4, FromStatic, InstanceError, SharedTaskImpExt};
-use hudhook::{
-    ImguiRenderLoop, MessageFilter,
-    hooks::dx12::ImguiDx12Hooks,
-    imgui::{Condition, Context, Ui},
-    mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook},
-    windows::{
-        Win32::{
-            Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
-            System::{
-                LibraryLoader::{GetModuleHandleA, GetProcAddress, LoadLibraryA},
-                Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-                SystemServices::DLL_PROCESS_ATTACH,
-                Threading::GetCurrentProcessId,
-            },
-            UI::WindowsAndMessaging::{
-                EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
-                WM_KEYUP,
-            },
+use windows::{
+    core::{BOOL, PCSTR},
+    Win32::{
+        Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
+        System::{
+            LibraryLoader::{GetModuleHandleA, GetProcAddress, LoadLibraryA},
+            Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION},
+            SystemServices::DLL_PROCESS_ATTACH,
+            Threading::GetCurrentProcessId,
         },
-        core::{BOOL, PCSTR},
+        UI::WindowsAndMessaging::{
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
+            WM_KEYUP,
+        },
     },
 };
 
@@ -52,13 +47,13 @@ mod effects;
 mod experiments;
 mod ffi;
 mod hooks;
-mod overlay;
+mod input_blocker;
+mod mh;
 mod telemetry;
 
 #[allow(unused_imports)]
 use crate::{
-    constants::*, crashlog::*, effects::*, experiments::*, ffi::*, hooks::*, overlay::*,
-    telemetry::*,
+    constants::*, crashlog::*, effects::*, experiments::*, ffi::*, hooks::*, telemetry::*,
 };
 
 // Constants/statics live in constants.rs; keep lib.rs focused on DLL entrypoints and task wiring.
@@ -174,7 +169,7 @@ pub unsafe extern "system" fn DirectInput8Create(
 /// # Safety
 ///
 /// This is called by Windows when the DLL is loaded. Do not call it directly.
-pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mut c_void) -> i32 {
+pub unsafe extern "C" fn DllMain(_hmodule: HINSTANCE, reason: u32, _reserved: *mut c_void) -> i32 {
     if reason != DLL_PROCESS_ATTACH {
         return DLL_MAIN_SUCCESS;
     }
@@ -303,11 +298,8 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
                 .name("er-effects-title-bind-observer".to_owned())
                 .spawn(install_title_scaleform_bind_observer_hook);
         });
-        START_TITLE_CUSTOM_COVER_RUN.call_once(|| {
-            let _ = std::thread::Builder::new()
-                .name("er-effects-title-profile-canvas".to_owned())
-                .spawn(install_title_custom_cover_run_hook);
-        });
+        // Baseline check: keep the new custom black-cover MenuWindowJob pump disabled until a
+        // same-path probe proves the immediate pre-black-cover title path is not the crash source.
         START_TITLE_FLOW_CONTEXT_RECORD_REGULATION.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-effects-tfc-record-fix".to_owned())
@@ -395,27 +387,11 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         move || spawn_game_task(state)
     });
 
-    // Hudhook/ImGui DX12 overlay is feature-flagged OFF by default. Enable only for runs that
-    // explicitly want the ER Effects overlay/title-cover render path via ER_EFFECTS_ENABLE_HUDHOOK=1
-    // (or er-effects-enable-hudhook.txt). ER_EFFECTS_NO_OVERLAY remains a kill switch.
-    let autoload_without_overlay =
-        state_or_return(&state).autoload.slot().is_some() && !product_autoload_enabled();
-    if autoload_without_overlay || !hudhook_enabled() || overlay_disabled() {
-        write_bootstrap_event(
-            BOOTSTRAP_EVENT_OVERLAY_SKIPPED_AUTOLOAD,
-            BOOTSTRAP_DETAIL_DONE,
-        );
-        return DLL_MAIN_SUCCESS;
-    }
-
-    debug::initialize::<ImguiDx12Hooks>(
-        hmodule,
-        reason,
-        || {
-            let _ = wait_for_task_instance();
-        },
-        EffectsOverlay::new(state),
-    )
+    write_bootstrap_event(
+        BOOTSTRAP_EVENT_OVERLAY_SKIPPED_AUTOLOAD,
+        BOOTSTRAP_DETAIL_DONE,
+    );
+    DLL_MAIN_SUCCESS
 }
 
 pub(crate) fn wait_for_task_instance() -> &'static CSTaskImp {
@@ -470,7 +446,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // Hardware write-watchpoint on GameMan+0xc30: (re)arm each frame until
                 // the save-mount write is caught, so the VEH logs the exact writer. Runs
                 // HARD input block (DInput keyboard+mouse + XInput gamepad), driven from the
-                // game task so it is active EVEN when the hudhook render loop is not running
+                // game task so it is active even when no render callback is running
                 // (it does not under the offline launcher at the title). Runs every frame the
                 // task ticks -- before the player check -- so a focused window cannot inject any
                 // real input during the zero-input own-stepper/autoload probe. Pure suppression,

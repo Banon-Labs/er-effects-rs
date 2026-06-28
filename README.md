@@ -6,22 +6,16 @@ Initial scope:
 
 - Detect local player animation `63010`.
 - Apply selected named SpEffect calls once per trigger animation.
-- Provide an ImGui overlay for selecting/deselecting calls.
-- Support manual apply/remove buttons for quick testing.
+- Apply/remove configured calls through the runtime driver.
 
 Seeded calls (defined in `data/effects.json`, embedded into the DLL at build
-time — edit that file to change the list, no Rust changes needed):
+time -- edit that file to change the list, no Rust changes needed):
 
 | ID | Name |
 | --- | --- |
 | `4330` | Player all black |
 | `20018100` | Player right eye red |
 | `20018101` | Player left eye red |
-
-The overlay also has a `Custom SpEffect ID` field for adding arbitrary IDs at
-runtime, shows per-call `[active]` / `[inactive]` / `[apply failed]` status
-(read back from the player's live SpEffect list), and surfaces a parse error
-if the embedded `data/effects.json` is invalid.
 
 The code uses `../fromsoftware-rs` path dependencies, so keep this project as a sibling of `fromsoftware-rs` unless you update `Cargo.toml`.
 
@@ -71,10 +65,10 @@ compiling and running a small .NET bridge against Smithbox's
 `Andre.Formats`/SoulsFormats libraries. Prerequisites:
 
 1. **A Smithbox checkout or binary install.** Two layouts are supported:
-   - **source checkout** — contains `src/Andre/Andre.Formats/Andre.Formats.csproj`;
+   - **source checkout** -- contains `src/Andre/Andre.Formats/Andre.Formats.csproj`;
      the bridge builds Andre.Formats from source
      (`git clone https://github.com/vawser/Smithbox .deps/Smithbox`);
-   - **binary release install** — contains `Andre.Formats.dll` /
+   - **binary release install** -- contains `Andre.Formats.dll` /
      `Andre.SoulsFormats.dll` at its root; the bridge references the DLLs
      directly and resolves transitive assemblies from the install directory.
 
@@ -108,10 +102,10 @@ cargo run -p er-param-inspect -- validate <path-to-regulation.bin>
 Each SpEffect call takes a "don't sync" flag. The overlay checkbox
 `Sync effect calls over the network` controls it:
 
-- **Off (default):** effects are applied with `dont_sync = true` — local-only,
+- **Off (default):** effects are applied with `dont_sync = true` -- local-only,
   other players never see them. Safe for offline/local testing.
 - **On:** effects are applied with `dont_sync = false`, matching the Cheat
-  Engine `addNetworked(..., id, 0)` pattern — the effect application is
+  Engine `addNetworked(..., id, 0)` pattern -- the effect application is
   propagated to network peers.
 
 Leave it off unless you specifically need peers to observe the effect. Sending

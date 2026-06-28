@@ -126,7 +126,7 @@ arm_scout_files() {
     printf '%s\n' "$_rva" >> "$BREAKPOINTS_FILE"
   done
   cp -f "$BREAKPOINTS_FILE" "$ARTIFACT_DIR/er-effects-breakpoints.txt"
-  # 1b) Overlay OFF: no hudhook/ImGui DX12 overlay (no extra hooks/overhead) for a clean trace run.
+  # 1b) UI overlay OFF: no extra render hooks/overhead for a clean trace run.
   : > "$GAME_DIR/er-effects-no-overlay.txt"
   # 2) Crash log on (file channel; reliable through Proton). Do NOT truncate er-effects-crash.log --
   #    the new sw-bp lines APPEND to whatever the user already has.

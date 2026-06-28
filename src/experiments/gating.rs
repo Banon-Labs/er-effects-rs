@@ -8,42 +8,37 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        Arc, Mutex, Once, OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc, Mutex, Once, OnceLock,
     },
     time::{Duration, Instant},
 };
 
 use std::os::windows::ffi::OsStrExt as _;
 
-use debug::{InputBlocker, InputFlags};
+use crate::input_blocker::{InputBlocker, InputFlags};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MhHook, MH_STATUS};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
 };
-use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
+use er_effects_data::{embedded_effects, EffectCallSpec, EffectKindSpec};
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
-use hudhook::{
-    ImguiRenderLoop, MessageFilter,
-    hooks::dx12::ImguiDx12Hooks,
-    imgui::{Condition, Context, Ui},
-    mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook},
-    windows::{
-        Win32::{
-            Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
-            System::{
-                LibraryLoader::{GetModuleHandleA, GetProcAddress},
-                Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-                SystemServices::DLL_PROCESS_ATTACH,
-                Threading::GetCurrentProcessId,
-            },
-            UI::WindowsAndMessaging::{
-                ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-                WM_KEYDOWN, WM_KEYUP,
-            },
+use windows::{
+    core::{BOOL, PCSTR},
+    Win32::{
+        Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
+        System::{
+            LibraryLoader::{GetModuleHandleA, GetProcAddress},
+            Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION},
+            SystemServices::DLL_PROCESS_ATTACH,
+            Threading::GetCurrentProcessId,
         },
-        core::{BOOL, PCSTR},
+        UI::WindowsAndMessaging::{
+            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+            WM_KEYDOWN, WM_KEYUP,
+        },
     },
 };
 
@@ -584,28 +579,6 @@ pub(crate) fn fire_tfc_continue_enabled() -> bool {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("er-effects-fire-tfc-continue.txt")
         .exists()
-}
-/// Hudhook/ImGui overlay feature flag. OFF by default: product/autoload runs should not install
-/// hudhook/DX12 render hooks unless a run explicitly opts into the visual overlay path.
-/// Enable via env `ER_EFFECTS_ENABLE_HUDHOOK=1` or GAME_DIR file `er-effects-enable-hudhook.txt`.
-pub(crate) fn hudhook_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_ENABLE_HUDHOOK").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-enable-hudhook.txt")
-        .exists()
-}
-
-/// Overlay kill switch: when set, the hudhook/ImGui DX12 overlay is NOT initialized (no extra DX12
-/// hooks / render overhead) even if the positive feature flag is present.
-pub(crate) fn overlay_disabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_NO_OVERLAY").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-no-overlay.txt")
-            .exists()
 }
 /// Direct ProfileLoadDialog build mode (er-effects-direct-build.txt / ER_EFFECTS_DIRECT_BUILD).
 /// OFF by default: a plain own_stepper run stays the safe read-only scan; the native dialog build

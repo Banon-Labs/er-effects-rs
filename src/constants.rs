@@ -6,18 +6,18 @@
 #![allow(unused_imports)]
 
 use std::sync::{
-    Once,
     atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU64, AtomicUsize},
+    Once,
 };
 
-use debug::InputBlocker;
+use crate::input_blocker::InputBlocker;
 use eldenring::{
     cs::{ChrAsm, EquipGameData, FaceData, FaceDataBuffer, GameDataMan, GameMan, PlayerGameData},
     dlkr::DLAllocator,
     fd4::FD4TaskData,
 };
 use fromsoftware_shared::{F32Vector4, FromStatic};
-use hudhook::windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::HWND;
 
 pub(crate) const DLL_MAIN_SUCCESS: i32 = 1;
 pub(crate) const DIRECTINPUT_FORWARD_UNRESOLVED: usize = 0;
@@ -557,6 +557,12 @@ pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_CALLER_RVA: AtomicUsize =
 /// instead of trying to remap `05_001_Title_Logo`, which has no dummy-profile symbol.
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA: usize = 0x81f6f0;
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME: &str = "05_010_ProfileSelect";
+/// Native full-screen black Scaleform/MenuWindowJob surface. Ghidra dump 0x140793c10 ->
+/// deobf/live 0x140793b20 (content-unique) builds `01_900_Black` with the same
+/// MenuWindow/SceneProxy host ABI as the title wrappers. This is the first diagnostic carrier for
+/// proving an engine-owned custom surface can stay above PRESS ANY BUTTON / Continue.
+pub(crate) const TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA: usize = 0x793b20;
+pub(crate) const TITLE_CUSTOM_COVER_BLACK_NAME: &str = "01_900_Black";
 pub(crate) const TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL: &str = "MENU_DummyProfileFace_01";
 pub(crate) const TITLE_CUSTOM_COVER_SYSTEX_TARGET: &str = "SYSTEX_Menu_Profile00";
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS: &str = "CSMenuProfModelRend";
@@ -609,6 +615,13 @@ pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_JOB: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_BLACK_BUILDS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_CUSTOM_COVER_BLACK_LAST_RET: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_BLACK_LAST_JOB: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_BLACK_LAST_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// MenuWindowJob::Run (dump 0x1407ad2b0 -> deobf/live 0x1407ad1c0). Part B uses the native
 /// title job's own pump context to run the separately-built ProfileSelect cover job alongside the
 /// preserved title job, instead of replacing the authoritative BeginTitle out-slot.
@@ -625,16 +638,15 @@ pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_COVER_WINDOW: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_RET: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// Real DLL-owned fallback cover drawn through the existing hudhook/ImGui render path.
-/// This does not touch the game's live CSEzDraw/CSScaleform child objects and must stop
-/// once a player exists. It is a visible render operation, not a native-slot oracle.
+/// Removed fallback-cover counters kept only so older telemetry references compile during cleanup.
+/// Product title/loading cover work must use native CSEzDraw/Scaleform/game-render surfaces.
 pub(crate) static TITLE_OVERLAY_COVER_RENDER_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_OVERLAY_COVER_LAST_DISPLAY_W: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_OVERLAY_COVER_LAST_DISPLAY_H: AtomicUsize = AtomicUsize::new(0);
 /// `CS::TexResCap` embeds the draw-usable `CSGxTexture*` at +0x78, and that wrapper keeps
 /// the backing graphics texture/reference at +0x10. The overlay cannot safely reinterpret this as
-/// an ImGui texture ID yet, but observing these handles during the draw is a concrete draw-side
-/// consumption oracle for the RAM-backed profile portrait source rather than generic scaffolding.
+/// a generic texture ID yet, but observing these handles during a native draw would be a concrete
+/// draw-side consumption oracle for the RAM-backed profile portrait source rather than generic scaffolding.
 pub(crate) const TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET: usize = 0x78;
 pub(crate) const TITLE_CUSTOM_COVER_GX_TEXTURE_RESOURCE_OFFSET: usize = 0x10;
 pub(crate) static TITLE_OVERLAY_COVER_TEXTURE_BOUND: AtomicUsize = AtomicUsize::new(0);

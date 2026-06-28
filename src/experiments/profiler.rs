@@ -39,8 +39,8 @@ use windows::Win32::{
         Diagnostics::{
             Debug::GetThreadContext,
             ToolHelp::{
-                CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First,
-                Thread32Next,
+                CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD,
+                THREADENTRY32,
             },
         },
         SystemInformation::{GetSystemInfo, SYSTEM_INFO},

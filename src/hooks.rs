@@ -7,40 +7,35 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        Arc, Mutex, Once,
         atomic::{AtomicUsize, Ordering},
+        Arc, Mutex, Once,
     },
     time::{Duration, Instant},
 };
 
-use debug::InputBlocker;
+use crate::input_blocker::InputBlocker;
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MhHook, MH_STATUS};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
 };
-use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
+use er_effects_data::{embedded_effects, EffectCallSpec, EffectKindSpec};
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
-use hudhook::{
-    ImguiRenderLoop, MessageFilter,
-    hooks::dx12::ImguiDx12Hooks,
-    imgui::{Condition, Context, Ui},
-    mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook},
-    windows::{
-        Win32::{
-            Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
-            System::{
-                LibraryLoader::{GetModuleHandleA, GetProcAddress},
-                Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-                SystemServices::DLL_PROCESS_ATTACH,
-                Threading::GetCurrentProcessId,
-            },
-            UI::WindowsAndMessaging::{
-                EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
-                WM_KEYUP,
-            },
+use windows::{
+    core::{BOOL, PCSTR},
+    Win32::{
+        Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
+        System::{
+            LibraryLoader::{GetModuleHandleA, GetProcAddress},
+            Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION},
+            SystemServices::DLL_PROCESS_ATTACH,
+            Threading::GetCurrentProcessId,
         },
-        core::{BOOL, PCSTR},
+        UI::WindowsAndMessaging::{
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
+            WM_KEYUP,
+        },
     },
 };
 
@@ -266,7 +261,11 @@ pub(crate) fn own_window() -> Option<HWND> {
             LPARAM((&mut hwnd as *mut HWND).cast::<()>() as isize),
         );
     }
-    if hwnd.0.is_null() { None } else { Some(hwnd) }
+    if hwnd.0.is_null() {
+        None
+    } else {
+        Some(hwnd)
+    }
 }
 
 /// Total synthesized-input presses the DLL has injected anywhere (DInput device-state fill,

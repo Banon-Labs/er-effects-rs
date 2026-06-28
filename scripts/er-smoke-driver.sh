@@ -245,7 +245,7 @@ click_call_checkbox() {
   geometry=$(hyprctl clients -j | jq -r '.[] | select(.class == "steam_app_1245620") | "\(.at[0]) \(.at[1]) \(.size[0]) \(.size[1])"' | head -1)
   [[ -n "$geometry" ]] || { echo "missing Elden Ring window geometry" >&2; return 1; }
   read -r x y width height <<<"$geometry"
-  # Overlay default is 24x24 ImGui points. These coordinates target the named-call
+  # Historical UI default was 24x24 points. These coordinates target the named-call
   # checkbox rows in logical Hyprland coordinates, avoiding OCR/template matching.
   click_x=$((x + 42))
   click_y=$((y + 236 + CALL_INDEX * 20))

@@ -26,8 +26,6 @@ fi
 
 if [[ -f .auto/run_runtime_probe_once ]]; then
   rm -f .auto/run_runtime_probe_once
-  rm -f .auto/enable_hudhook_runtime_once
-  runtime_enable_hudhook=0
   cargo xwin build --release --target x86_64-pc-windows-msvc >/tmp/er-effects-runtime-build.log 2>&1 || {
     tail -80 /tmp/er-effects-runtime-build.log >&2
     exit 1
@@ -42,7 +40,6 @@ if [[ -f .auto/run_runtime_probe_once ]]; then
   ER_EFFECTS_AUTHORIZED_DIRECT_RUNTIME=1 \
   AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 \
   ER_EFFECTS_EXPERIMENTAL_DIRECT_MENU_LOAD=1 \
-  ER_EFFECTS_ENABLE_HUDHOOK="$runtime_enable_hudhook" \
   ER_EFFECTS_GOLD_SAVE="${ER_EFFECTS_GOLD_SAVE:-/home/banon/projects/er-effects-rs/save-files/150-Banon/ER0000.sl2}" \
   ER_EFFECTS_GOLD_SLOT="${ER_EFFECTS_GOLD_SLOT:-0}" \
   RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-35}" \
@@ -1264,7 +1261,7 @@ if profile_select_canvas_installed and not profile_select_one_tick_cropped:
 # TitleTopDialog+0xaa8, but merely naming/suppressing its FadeIn is not product proof. The product
 # goal is now narrower than "any clean cover": render the loaded character portrait/profile during
 # boot-init and keep it up until the native map-loading screen takes over. A generic text/rectangle
-# hudhook overlay is useful diagnostic scaffolding but must not score as final cover success.
+# Generic overlay scaffolding must not score as final cover success.
 portrait_overlay_cover_observable = (
     'draw_title_overlay_cover' in overlay_code
     and 'title_portrait_source_ready' in overlay_code
@@ -1281,6 +1278,15 @@ portrait_overlay_cover_observable = (
     )
     and '&& !product_autoload_enabled()' in lib_code
 )
+native_csez_portrait_cover_observable = (
+    'TITLE_PORTRAIT_CSEZ_EXEC_RVA: usize = 0x269b500' in code
+    and 'TITLE_PORTRAIT_CSEZ_EXEC_PROFILE_TEXTURE_HITS' in code
+    and 'TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_RESCAP' in code
+    and 'TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET' in code
+    and 'TITLE_CUSTOM_COVER_GX_TEXTURE_RESOURCE_OFFSET' in code
+    and 'oracle_title_portrait_native_surface_visible' in telemetry_src + '\n' + watcher
+    and 'oracle_title_portrait_csez_exec_profile_texture_hits' in telemetry_src + '\n' + watcher
+)
 actual_logo_profile_cover_observable = (
     (
         'TitleBackViewParts' in code + '\n' + telemetry_src + '\n' + watcher
@@ -1291,12 +1297,13 @@ actual_logo_profile_cover_observable = (
         and 'oracle_title_profile_cover_bound_to_logo_surface' in telemetry_src + '\n' + watcher
     )
     or portrait_overlay_cover_observable
+    or native_csez_portrait_cover_observable
     # `oracle_title_portrait_visible_surface_bound` alone is no longer acceptable: the
     # logo-replacement event screenshot showed it can assert while the screen is still a dark
     # LOAD GAME/ProfileSelect panel. Future success needs a real pixel/native visibility semaphore.
 )
 if 'draw_title_overlay_cover' in overlay_code and not portrait_overlay_cover_observable:
-    title_cover_failures.append('Part B false-positive guard: hudhook cover is still generic text/rectangle scaffolding, not the loaded character portrait')
+    title_cover_failures.append('Part B false-positive guard: generic cover is still text/rectangle scaffolding, not the loaded character portrait')
     title_cover_penalty += 100
 if not actual_logo_profile_cover_observable:
     title_cover_failures.append('Part B false-positive guard: no RAM-backed oracle proves the loaded character portrait covers boot-init until the native map-loading screen takes over')
@@ -1314,15 +1321,22 @@ portrait_render_oracle_present = (
     'oracle_title_loaded_character_portrait_rendered' in telemetry_src + '\n' + watcher
     and 'oracle_title_loaded_character_portrait_visible_during_boot' in telemetry_src + '\n' + watcher
     and 'oracle_title_loaded_character_portrait_held_until_loading_takeover' in telemetry_src + '\n' + watcher
+    and (
+        'oracle_title_portrait_pixels_visible' in telemetry_src + '\n' + watcher
+        or 'oracle_title_portrait_native_surface_visible' in telemetry_src + '\n' + watcher
+    )
 )
 portrait_render_oracle_true = any(
     re.search(r'"oracle_title_loaded_character_portrait_rendered"\s*:\s*true', raw)
     and re.search(r'"oracle_title_loaded_character_portrait_visible_during_boot"\s*:\s*true', raw)
     and re.search(r'"oracle_title_loaded_character_portrait_held_until_loading_takeover"\s*:\s*true', raw)
-    and re.search(r'"oracle_title_portrait_pixels_visible"\s*:\s*true', raw)
+    and (
+        re.search(r'"oracle_title_portrait_pixels_visible"\s*:\s*true', raw)
+        or re.search(r'"oracle_title_portrait_native_surface_visible"\s*:\s*true', raw)
+    )
     for raw in scored_runtime_artifacts_raw
 )
-# User directive 2026-06-27: remove the hudhook/FaceData title-cover lane. Keep these legacy
+# User directive 2026-06-27: remove the FaceData title-cover lane. Keep these legacy
 # metric names at zero for log continuity, but do not mine stale artifacts or reward this path.
 offline_face_texture_runtime_drawn = 0
 stylized_facedata_pixel_oracle = 0
@@ -1332,6 +1346,7 @@ visible_surface_without_pixels_false_positive = (
     and any(
         re.search(r'"oracle_title_portrait_visible_surface_bound"\s*:\s*true', raw)
         and not re.search(r'"oracle_title_portrait_pixels_visible"\s*:\s*true', raw)
+        and not re.search(r'"oracle_title_portrait_native_surface_visible"\s*:\s*true', raw)
         for raw in scored_runtime_artifacts_raw
     )
 )
@@ -1352,7 +1367,7 @@ elif profile_select_transform_false_positive:
     title_cover_failures.append('Part B hard gate: ProfileSelect one-tick transform/SYSTEX semaphores are a proven visual false positive; require a real visible-pixel/surface oracle, not transform flags')
     title_cover_penalty += MAX_SCORE
 elif not (portrait_render_oracle_present and portrait_render_oracle_true):
-    title_cover_failures.append('Part B hard gate: no runtime oracle proves the loaded character portrait pixels are visible at the right time; source/texture-handle/visible-surface telemetry and generic overlay drawing are not product success')
+    title_cover_failures.append('Part B hard gate: no runtime oracle proves the loaded character portrait pixels or an equivalent native logo-surface binding are visible at the right time; source/texture-handle/ProfileSelect visible-surface telemetry and generic overlay drawing are not product success')
     title_cover_penalty += MAX_SCORE
 
 overlay_body = function_body('draw_title_overlay_cover', overlay_code) or ''
@@ -1410,8 +1425,8 @@ offline_face_source_ready = 0
 offline_face_source_errors: list[str] = []
 offline_face_source_hash = ''
 offline_face_source_name = ''
-# Legacy metric kept for log continuity; the title-cover hudhook bridge path was removed per user directive.
-hudhook_cpu_texture_bridge_ready = 0
+# Legacy metric kept for log continuity; the removed CPU texture bridge path stays disabled.
+removed_cpu_texture_bridge_ready = 0
 try:
     with tempfile.NamedTemporaryFile(prefix='er-face-source-', suffix='.json', delete=False) as tmp:
         tmp_path = Path(tmp.name)
@@ -1540,7 +1555,7 @@ print(f'METRIC native_trace_hits_total={native_trace_hits_total}')
 print(f'METRIC native_trace_unique_breakpoints={native_trace_unique_breakpoints}')
 print(f'METRIC false_positives={false_positives}')
 print(f'METRIC offline_face_source_ready={offline_face_source_ready}')
-print(f'METRIC hudhook_cpu_texture_bridge_ready={hudhook_cpu_texture_bridge_ready}')
+print(f'METRIC removed_cpu_texture_bridge_ready={removed_cpu_texture_bridge_ready}')
 print(f'METRIC offline_face_texture_runtime_drawn={offline_face_texture_runtime_drawn}')
 print(f'METRIC stylized_facedata_pixel_oracle={stylized_facedata_pixel_oracle}')
 print(f'METRIC real_portrait_asset_candidates={real_portrait_asset_candidates}')

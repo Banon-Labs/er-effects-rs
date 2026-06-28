@@ -3,47 +3,42 @@
 #![allow(unused_imports)]
 
 use std::{
-    ffi::{CStr, c_void},
+    ffi::{c_void, CStr},
     fmt::Write as _,
     fs,
     path::PathBuf,
     sync::{
-        Arc, Mutex, Once, OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc, Mutex, Once, OnceLock,
     },
     time::{Duration, Instant},
 };
 
 use std::os::windows::ffi::OsStrExt as _;
 
-use debug::{InputBlocker, InputFlags};
+use crate::input_blocker::{InputBlocker, InputFlags};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MhHook, MH_STATUS};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
 };
-use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
+use er_effects_data::{embedded_effects, EffectCallSpec, EffectKindSpec};
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
-use hudhook::{
-    ImguiRenderLoop, MessageFilter,
-    hooks::dx12::ImguiDx12Hooks,
-    imgui::{Condition, Context, Ui},
-    mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook},
-    windows::{
-        Win32::{
-            Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
-            System::{
-                LibraryLoader::{GetModuleHandleA, GetProcAddress},
-                Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-                SystemServices::DLL_PROCESS_ATTACH,
-                Threading::GetCurrentProcessId,
-            },
-            UI::WindowsAndMessaging::{
-                ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-                WM_KEYDOWN, WM_KEYUP,
-            },
+use windows::{
+    core::{BOOL, PCSTR},
+    Win32::{
+        Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
+        System::{
+            LibraryLoader::{GetModuleHandleA, GetProcAddress},
+            Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION},
+            SystemServices::DLL_PROCESS_ATTACH,
+            Threading::GetCurrentProcessId,
         },
-        core::{BOOL, PCSTR},
+        UI::WindowsAndMessaging::{
+            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+            WM_KEYDOWN, WM_KEYUP,
+        },
     },
 };
 
@@ -1377,6 +1372,29 @@ unsafe fn build_profile_select_cover_job(
     ));
 }
 
+unsafe fn build_black_cover_job(base: usize, rdx: usize, caller_rva: usize, source: &str) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if base == null || base == 0 {
+        return;
+    }
+    if TITLE_CUSTOM_COVER_BLACK_BUILDS.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    let mut cover_slot = null;
+    let cover_builder: unsafe extern "system" fn(usize, usize) -> usize =
+        unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA) };
+    let cover_ret = unsafe { cover_builder((&raw mut cover_slot) as usize, rdx) };
+    let cover_job = cover_slot;
+    TITLE_CUSTOM_COVER_BLACK_BUILDS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_BLACK_LAST_RET.store(cover_ret, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_BLACK_LAST_JOB.store(cover_job, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_BLACK_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "title-cover-part-b: BUILT non-returned custom black cover {TITLE_CUSTOM_COVER_BLACK_NAME} via 0x{:x} from {source} -> ret=0x{cover_ret:x} job=0x{cover_job:x}; will be pumped above native title/PAB jobs",
+        base + TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA,
+    ));
+}
+
 pub(crate) unsafe extern "system" fn title_pab_information_visual_hook(
     out_slot: usize,
     rdx: usize,
@@ -1458,15 +1476,9 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
     };
     TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.store(native_job, Ordering::SeqCst);
     TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW.store(native_window, Ordering::SeqCst);
-    unsafe {
-        build_profile_select_cover_job(
-            base,
-            rdx,
-            r8,
-            caller_rva,
-            "BeginTitle preserved-native deferred transform",
-        )
-    };
+    append_autoload_debug(format_args!(
+        "title-cover-part-b: baseline check: custom black cover build disabled; preserving native title/PAB path only"
+    ));
 
     append_autoload_debug(format_args!(
         "title-cover-part-a: PRESERVED native {TITLE_NATIVE_MENU_VISUAL_NAME} wrapper 0x{:x}/factory 0x{:x}; latched job=0x{native_job:x} window=0x{native_window:x} for render-only suppression (out_slot=0x{out_slot:x} prev=0x{prev_out:x} rdx=0x{rdx:x} r8=0x{r8:x} caller_rva=0x{caller_rva:x})",
@@ -1588,12 +1600,9 @@ pub(crate) unsafe extern "system" fn title_custom_cover_menu_window_run_hook(
     if TITLE_CUSTOM_COVER_RUN_RECURSION.load(Ordering::SeqCst) != 0 {
         return ret;
     }
-    if !TITLE_ACCEPT_BYTE_GATE_FIRED.load(Ordering::SeqCst) {
-        return ret;
-    }
     let title_job = TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.load(Ordering::SeqCst);
     let pab_job = TITLE_PAB_INFORMATION_VISUAL_LAST_JOB.load(Ordering::SeqCst);
-    let cover_job = TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_JOB.load(Ordering::SeqCst);
+    let cover_job = TITLE_CUSTOM_COVER_BLACK_LAST_JOB.load(Ordering::SeqCst);
     let native_job = if job == title_job {
         title_job
     } else if job == pab_job {
@@ -1606,10 +1615,6 @@ pub(crate) unsafe extern "system" fn title_custom_cover_menu_window_run_hook(
         || cover_job == TITLE_OWNER_SCAN_START_ADDRESS
         || cover_job == native_job
     {
-        return ret;
-    }
-    let current_calls = TITLE_CUSTOM_COVER_RUN_CALLS.load(Ordering::SeqCst);
-    if current_calls >= 1 {
         return ret;
     }
     TITLE_CUSTOM_COVER_RUN_RECURSION.store(1, Ordering::SeqCst);
@@ -1628,7 +1633,7 @@ pub(crate) unsafe extern "system" fn title_custom_cover_menu_window_run_hook(
                 unsafe { std::mem::transmute(base + TITLE_GFX_VALUE_SET_SCALE_RVA) };
             let scale = [3.2f32, 3.2f32];
             append_autoload_debug(format_args!(
-                "title-cover-part-b: deferred transform after ProfileSelect one-tick value=0x{profile_value:x} calls={calls}"
+                "title-cover-part-b: deferred transform after custom cover value=0x{profile_value:x} calls={calls}"
             ));
             unsafe { set_position(profile_value, 640.0, 360.0) };
             unsafe { set_scale(profile_value, scale.as_ptr()) };
@@ -1640,9 +1645,9 @@ pub(crate) unsafe extern "system" fn title_custom_cover_menu_window_run_hook(
     TITLE_CUSTOM_COVER_RUN_LAST_COVER_JOB.store(cover_job, Ordering::SeqCst);
     TITLE_CUSTOM_COVER_RUN_LAST_COVER_WINDOW.store(cover_window, Ordering::SeqCst);
     TITLE_CUSTOM_COVER_RUN_LAST_RET.store(cover_ret, Ordering::SeqCst);
-    if calls <= 8 {
+    if calls <= 16 || calls.is_power_of_two() {
         append_autoload_debug(format_args!(
-            "title-cover-part-b: ran post-accept custom cover {TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME} job=0x{cover_job:x} alongside native title/PAB job=0x{native_job:x}; ret=0x{cover_ret:x} window=0x{cover_window:x} calls={calls}"
+            "title-cover-part-b: ran custom black cover {TITLE_CUSTOM_COVER_BLACK_NAME} job=0x{cover_job:x} alongside native title/PAB job=0x{native_job:x}; ret=0x{cover_ret:x} window=0x{cover_window:x} calls={calls}"
         ));
     }
     ret
