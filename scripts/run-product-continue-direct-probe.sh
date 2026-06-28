@@ -28,6 +28,11 @@ RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-$RUNTIME_TIMEOUT_CAP_SECONDS
 RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-vanilla}"
 DRY_RUN=0
 
+VISUAL_RESOURCE_MUTATION_ENVS=(
+  ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX
+  ER_EFFECTS_TITLE_05_000_MEMORY_GFX
+)
+
 # SAVE-SOURCE STAGING (save-override-no-default-fallback-mandatory-env-2026-06-23).
 # The DLL refuses to assume the default user save dir: it requires ER_EFFECTS_SAVE_FILE (or an
 # explicit telemetry-only run). The GOLD SAVE does NOT live in appdata -- the user holds it and
@@ -131,7 +136,25 @@ runtime_pids() {
   done
 }
 
+visual_resource_mutation_envs_set() {
+  local name value
+  for name in "${VISUAL_RESOURCE_MUTATION_ENVS[@]}"; do
+    value="${!name:-}"
+    if [[ -n "${value//[[:space:]]/}" ]]; then
+      printf '%s\n' "$name"
+    fi
+  done
+}
+
 preflight() {
+  local -a conflicting_visual_envs=()
+  if [[ "$RUNTIME_TELEMETRY_ONLY" == "1" ]]; then
+    mapfile -t conflicting_visual_envs < <(visual_resource_mutation_envs_set)
+    if (( ${#conflicting_visual_envs[@]} )); then
+      fatal "RUNTIME_TELEMETRY_ONLY=1 cannot be combined with mutating visual resource env(s): ${conflicting_visual_envs[*]}; use a non-telemetry visual probe mode instead"
+    fi
+  fi
+
   # Steam MUST be running: the offline eldenring.exe Proton launch reuses Steam's environment
   # (wineprefix, CWD, Steam account/save-dir id). With Steam down the game still boots but in a
   # DIFFERENT environment -- the DLL's debug log lands elsewhere and Steam-dependent state degrades,
@@ -362,7 +385,6 @@ start_hypr_window_placer() {
     --height "${ER_EFFECTS_HYPR_HEIGHT:-720}" \
     --duration "${ER_EFFECTS_HYPR_PLACE_SECONDS:-$RUNTIME_TIMEOUT_SECONDS}" \
     --interval "${ER_EFFECTS_HYPR_PLACE_INTERVAL:-0.25}" \
-    --always \
     "${focus_args[@]}" \
     --log "$ARTIFACT_DIR/hypr-window-placer.jsonl" \
     > "$ARTIFACT_DIR/hypr-window-placer.out" \

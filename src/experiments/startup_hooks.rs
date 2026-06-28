@@ -3,13 +3,13 @@
 #![allow(unused_imports)]
 
 use std::{
-    ffi::{c_void, CStr},
+    ffi::{CStr, c_void},
     fmt::Write as _,
     fs,
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex, Once, OnceLock,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -17,21 +17,20 @@ use std::{
 use std::os::windows::ffi::OsStrExt as _;
 
 use crate::input_blocker::{InputBlocker, InputFlags};
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MhHook, MH_STATUS};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
 };
-use er_effects_data::{embedded_effects, EffectCallSpec, EffectKindSpec};
+use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
 use windows::{
-    core::{BOOL, PCSTR},
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
         System::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION},
+            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
             SystemServices::DLL_PROCESS_ATTACH,
             Threading::GetCurrentProcessId,
         },
@@ -40,6 +39,7 @@ use windows::{
             WM_KEYDOWN, WM_KEYUP,
         },
     },
+    core::{BOOL, PCSTR},
 };
 
 #[allow(unused_imports)]
@@ -48,6 +48,75 @@ use crate::*;
 use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 
 use super::*;
+
+static TITLE_SCALEFORM_MEMORY_GFX: OnceLock<Vec<u8>> = OnceLock::new();
+static TITLE_SCALEFORM_05_000_MEMORY_GFX: OnceLock<Vec<u8>> = OnceLock::new();
+
+fn load_memory_gfx_from_env(var: &str, slot: &OnceLock<Vec<u8>>, label: &str) {
+    let Ok(path) = std::env::var(var) else {
+        return;
+    };
+    let trimmed = path.trim();
+    if trimmed.is_empty() || slot.get().is_some() {
+        return;
+    }
+    if trimmed.eq_ignore_ascii_case("embedded:minimal-magenta")
+        || trimmed.eq_ignore_ascii_case("embedded:minimal-magenta-counter")
+    {
+        let bytes = if trimmed.eq_ignore_ascii_case("embedded:minimal-magenta-counter") {
+            TITLE_MINIMAL_MAGENTA_COUNTER_GFX.to_vec()
+        } else {
+            TITLE_MINIMAL_MAGENTA_GFX.to_vec()
+        };
+        TITLE_SCALEFORM_MEMORY_GFX_BYTES.fetch_add(bytes.len(), Ordering::SeqCst);
+        let _ = slot.set(bytes);
+        append_autoload_debug(format_args!(
+            "title-resource-observer: loaded embedded memory-backed {label} selector='{}' bytes={}",
+            trimmed,
+            slot.get().map(|bytes| bytes.len()).unwrap_or(0)
+        ));
+        return;
+    }
+    match fs::read(trimmed) {
+        Ok(bytes) if bytes.starts_with(b"GFX") => {
+            TITLE_SCALEFORM_MEMORY_GFX_BYTES.fetch_add(bytes.len(), Ordering::SeqCst);
+            let _ = slot.set(bytes);
+            append_autoload_debug(format_args!(
+                "title-resource-observer: loaded memory-backed {label} bytes={} from '{}'",
+                slot.get().map(|bytes| bytes.len()).unwrap_or(0),
+                trimmed
+            ));
+        }
+        Ok(bytes) => {
+            TITLE_SCALEFORM_MEMORY_GFX_FAILURES.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "title-resource-observer: refused memory-backed {label} '{}' bytes={} (missing GFX magic)",
+                trimmed,
+                bytes.len()
+            ));
+        }
+        Err(err) => {
+            TITLE_SCALEFORM_MEMORY_GFX_FAILURES.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "title-resource-observer: failed to read memory-backed {label} '{}': {err}",
+                trimmed
+            ));
+        }
+    }
+}
+
+fn load_title_scaleform_memory_gfx() {
+    load_memory_gfx_from_env(
+        "ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX",
+        &TITLE_SCALEFORM_MEMORY_GFX,
+        "05_001_title_logo GFX",
+    );
+    load_memory_gfx_from_env(
+        "ER_EFFECTS_TITLE_05_000_MEMORY_GFX",
+        &TITLE_SCALEFORM_05_000_MEMORY_GFX,
+        "05_000_title GFX",
+    );
+}
 
 /// DIAGNOSTIC detour for the dialog builder 0x1409275b0 (4 register args rcx/rdx/r8/r9 -> dialog
 /// in rax). Calls the original, then (pre-world, capped) logs the BUILT dialog's vtable/class +
@@ -1477,7 +1546,7 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_begin_title_hook(
     TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.store(native_job, Ordering::SeqCst);
     TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW.store(native_window, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "title-cover-part-b: baseline check: custom black cover build disabled; preserving native title/PAB path only"
+        "title-cover-part-b: independent 01_900_Black build disabled; prior pump proof stalled title flow (no completion epilogue)"
     ));
 
     append_autoload_debug(format_args!(
@@ -1877,6 +1946,419 @@ pub(crate) fn install_now_loading_helper_observer_hooks() {
     }
 }
 
+unsafe fn wide_ascii_contains_ci(ptr: usize, needle: &[u8]) -> bool {
+    if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS || needle.is_empty() {
+        return false;
+    }
+    let mut hay = [0u8; 128];
+    let mut n = 0usize;
+    while n < hay.len() {
+        let Some(ch) = (unsafe { safe_read_u16(ptr + n * core::mem::size_of::<u16>()) }) else {
+            break;
+        };
+        if ch == 0 {
+            break;
+        }
+        hay[n] = if ch <= 0x7f {
+            (ch as u8).to_ascii_lowercase()
+        } else {
+            b'?'
+        };
+        n += 1;
+    }
+    hay[..n].windows(needle.len()).any(|w| w == needle)
+}
+
+unsafe fn copy_wide_ascii_preview(ptr: usize, out: &mut [u8]) -> usize {
+    if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS || out.is_empty() {
+        return 0;
+    }
+    let mut n = 0usize;
+    while n + 1 < out.len() && n < 96 {
+        let Some(ch) = (unsafe { safe_read_u16(ptr + n * core::mem::size_of::<u16>()) }) else {
+            break;
+        };
+        if ch == 0 {
+            break;
+        }
+        out[n] = if (0x20..=0x7e).contains(&ch) {
+            ch as u8
+        } else {
+            b'?'
+        };
+        n += 1;
+    }
+    n
+}
+
+pub(crate) unsafe extern "system" fn title_menu_resource_acquire_observer_hook(
+    this: usize,
+    load_params: usize,
+    param3: u8,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let filename_ptr = if load_params != 0 && load_params != null {
+        unsafe { safe_read_usize(load_params + 0x8) }.unwrap_or(null)
+    } else {
+        null
+    };
+    let hit = TITLE_MENU_RESOURCE_ACQUIRE_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    let caller_rva = trace_first_game_caller_rva();
+    TITLE_MENU_RESOURCE_ACQUIRE_LAST_THIS.store(this, Ordering::SeqCst);
+    TITLE_MENU_RESOURCE_ACQUIRE_LAST_LOAD_PARAMS.store(load_params, Ordering::SeqCst);
+    TITLE_MENU_RESOURCE_ACQUIRE_LAST_FILENAME_PTR.store(filename_ptr, Ordering::SeqCst);
+    TITLE_MENU_RESOURCE_ACQUIRE_LAST_PARAM3.store(param3 as usize, Ordering::SeqCst);
+    TITLE_MENU_RESOURCE_ACQUIRE_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+    let is_title_logo = unsafe { wide_ascii_contains_ci(filename_ptr, b"05_001_title_logo") }
+        || unsafe { wide_ascii_contains_ci(filename_ptr, b"05_001_title") };
+
+    let orig = TITLE_MENU_RESOURCE_ACQUIRE_ORIG.load(Ordering::SeqCst);
+    let ret = if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let f: unsafe extern "system" fn(usize, usize, u8) -> usize =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { f(this, load_params, param3) }
+    } else {
+        null
+    };
+    TITLE_MENU_RESOURCE_ACQUIRE_LAST_RET.store(ret, Ordering::SeqCst);
+
+    if is_title_logo {
+        let logo_hit = TITLE_MENU_RESOURCE_ACQUIRE_LOGO_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut name = [0u8; 128];
+        let name_len = unsafe { copy_wide_ascii_preview(filename_ptr, &mut name) };
+        let name = core::str::from_utf8(&name[..name_len]).unwrap_or("?");
+        append_autoload_debug(format_args!(
+            "title-resource-observer: AcquireMenuResource title-logo hit={logo_hit} total={hit} this=0x{this:x} load_params=0x{load_params:x} filename_ptr=0x{filename_ptr:x} filename='{name}' param3={param3} ret=0x{ret:x} caller_rva=0x{caller_rva:x}; observe-only"
+        ));
+    } else if hit <= 24 {
+        let mut name = [0u8; 96];
+        let name_len = unsafe { copy_wide_ascii_preview(filename_ptr, &mut name) };
+        let name = core::str::from_utf8(&name[..name_len]).unwrap_or("?");
+        append_autoload_debug(format_args!(
+            "title-resource-observer: AcquireMenuResource sample total={hit} filename='{name}' ret=0x{ret:x} caller_rva=0x{caller_rva:x}"
+        ));
+    }
+    ret
+}
+
+unsafe fn construct_title_scaleform_memory_file(
+    base: usize,
+    url: usize,
+    bytes: &[u8],
+) -> Option<usize> {
+    if bytes.is_empty() || bytes.len() > u32::MAX as usize {
+        return None;
+    }
+    let memory_global = unsafe { safe_read_usize(base + SCALEFORM_MEMORY_GLOBAL_RVA) }?;
+    let memory_vtable = unsafe { safe_read_usize(memory_global) }?;
+    let alloc_fn = unsafe { safe_read_usize(memory_vtable + 0x50) }?;
+    if alloc_fn == 0 || alloc_fn == TITLE_OWNER_SCAN_START_ADDRESS {
+        return None;
+    }
+    let alloc: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(alloc_fn) };
+    let file = unsafe { alloc(memory_global, SCALEFORM_MEMORY_FILE_SIZE, 0) };
+    if file == 0 || file == TITLE_OWNER_SCAN_START_ADDRESS {
+        return None;
+    }
+    let dlstring_copy: unsafe extern "system" fn(usize, usize) -> usize =
+        unsafe { std::mem::transmute(base + SCALEFORM_DLSTRING_CHAR_COPY_RVA) };
+    unsafe {
+        core::ptr::write(file as *mut usize, base + SCALEFORM_MEMORY_FILE_VTABLE_RVA);
+        core::ptr::write(
+            (file + SCALEFORM_MEMORY_FILE_REFCOUNT_OFFSET) as *mut u32,
+            1,
+        );
+        dlstring_copy(file + SCALEFORM_MEMORY_FILE_NAME_OFFSET, url);
+        core::ptr::write(
+            (file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) as *mut usize,
+            bytes.as_ptr() as usize,
+        );
+        core::ptr::write(
+            (file + SCALEFORM_MEMORY_FILE_LEN_OFFSET) as *mut u32,
+            bytes.len() as u32,
+        );
+        core::ptr::write((file + SCALEFORM_MEMORY_FILE_CURSOR_OFFSET) as *mut u32, 0);
+        core::ptr::write((file + SCALEFORM_MEMORY_FILE_VALID_OFFSET) as *mut u8, 1);
+    }
+    Some(file)
+}
+
+pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
+    loader: usize,
+    url: usize,
+    flags: u32,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let hit = TITLE_SCALEFORM_FILE_OPEN_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    let caller_rva = trace_first_game_caller_rva();
+    TITLE_SCALEFORM_FILE_OPEN_LAST_LOADER.store(loader, Ordering::SeqCst);
+    TITLE_SCALEFORM_FILE_OPEN_LAST_URL_PTR.store(url, Ordering::SeqCst);
+    TITLE_SCALEFORM_FILE_OPEN_LAST_FLAGS.store(flags as usize, Ordering::SeqCst);
+    TITLE_SCALEFORM_FILE_OPEN_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+    let is_title_logo = unsafe { bounded_ascii_contains(url, b"05_001_title_logo") }
+        || unsafe { bounded_ascii_contains(url, b"05_001_title") };
+    let is_title_05_000 = unsafe { bounded_ascii_contains(url, b"05_000_title") };
+
+    let base = game_module_base().unwrap_or(null);
+    let mut memory_replacement = false;
+    let mut memory_label = "";
+    let memory_bytes = if is_title_logo {
+        memory_label = "05_001_title_logo";
+        TITLE_SCALEFORM_MEMORY_GFX.get().map(Vec::as_slice)
+    } else if is_title_05_000 {
+        memory_label = "05_000_title";
+        TITLE_SCALEFORM_05_000_MEMORY_GFX.get().map(Vec::as_slice)
+    } else {
+        None
+    };
+    let orig = TITLE_SCALEFORM_FILE_OPEN_ORIG.load(Ordering::SeqCst);
+    let ret = if base != null {
+        if let Some(bytes) = memory_bytes {
+            match unsafe { construct_title_scaleform_memory_file(base, url, bytes) } {
+                Some(file) => {
+                    memory_replacement = true;
+                    TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS.fetch_add(1, Ordering::SeqCst);
+                    TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE.store(file, Ordering::SeqCst);
+                    file
+                }
+                None => {
+                    TITLE_SCALEFORM_MEMORY_GFX_FAILURES.fetch_add(1, Ordering::SeqCst);
+                    if orig != null && orig != HOOK_ORIGINAL_UNSET {
+                        let f: unsafe extern "system" fn(usize, usize, u32) -> usize =
+                            unsafe { std::mem::transmute(orig) };
+                        unsafe { f(loader, url, flags) }
+                    } else {
+                        null
+                    }
+                }
+            }
+        } else if orig != null && orig != HOOK_ORIGINAL_UNSET {
+            let f: unsafe extern "system" fn(usize, usize, u32) -> usize =
+                unsafe { std::mem::transmute(orig) };
+            unsafe { f(loader, url, flags) }
+        } else {
+            null
+        }
+    } else if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let f: unsafe extern "system" fn(usize, usize, u32) -> usize =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { f(loader, url, flags) }
+    } else {
+        null
+    };
+    let ret_vtable = if ret != null && ret != HOOK_ORIGINAL_UNSET {
+        unsafe { safe_read_usize(ret) }.unwrap_or(null)
+    } else {
+        null
+    };
+    TITLE_SCALEFORM_FILE_OPEN_LAST_RET.store(ret, Ordering::SeqCst);
+    TITLE_SCALEFORM_FILE_OPEN_LAST_RET_VTABLE.store(ret_vtable, Ordering::SeqCst);
+
+    if is_title_logo || is_title_05_000 {
+        let logo_hit = if is_title_logo {
+            TITLE_SCALEFORM_FILE_OPEN_LOGO_HITS.fetch_add(1, Ordering::SeqCst) + 1
+        } else {
+            0
+        };
+        let mut name = [0u8; 128];
+        let name_len = unsafe { copy_ascii_preview(url, &mut name) };
+        let name = core::str::from_utf8(&name[..name_len]).unwrap_or("?");
+        append_autoload_debug(format_args!(
+            "title-resource-observer: Scaleform file-open title-memory label={memory_label} logo_hit={logo_hit} total={hit} loader=0x{loader:x} url=0x{url:x} '{name}' flags=0x{flags:x} ret=0x{ret:x} ret_vtable=0x{ret_vtable:x} caller_rva=0x{caller_rva:x} memory_replacement={memory_replacement} total_memory_bytes={}",
+            TITLE_SCALEFORM_MEMORY_GFX_BYTES.load(Ordering::SeqCst)
+        ));
+    } else if hit <= 24 {
+        let mut name = [0u8; 96];
+        let name_len = unsafe { copy_ascii_preview(url, &mut name) };
+        let name = core::str::from_utf8(&name[..name_len]).unwrap_or("?");
+        append_autoload_debug(format_args!(
+            "title-resource-observer: Scaleform file-open sample total={hit} url='{name}' flags=0x{flags:x} ret=0x{ret:x} ret_vtable=0x{ret_vtable:x} caller_rva=0x{caller_rva:x}"
+        ));
+    }
+    ret
+}
+
+pub(crate) unsafe extern "system" fn title_scaleform_resource_ctor_observer_hook(
+    out_resource: usize,
+    loader_data: usize,
+    file_type: u32,
+    url: usize,
+    file_obj: usize,
+    external_flag: u8,
+    heap_arg: usize,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let hit = TITLE_SCALEFORM_RESOURCE_CTOR_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    let caller_rva = trace_first_game_caller_rva();
+    TITLE_SCALEFORM_RESOURCE_CTOR_LAST_OUT.store(out_resource, Ordering::SeqCst);
+    TITLE_SCALEFORM_RESOURCE_CTOR_LAST_URL_PTR.store(url, Ordering::SeqCst);
+    TITLE_SCALEFORM_RESOURCE_CTOR_LAST_FILE.store(file_obj, Ordering::SeqCst);
+    TITLE_SCALEFORM_RESOURCE_CTOR_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+    let is_title_logo = unsafe { bounded_ascii_contains(url, b"05_001_title_logo") }
+        || unsafe { bounded_ascii_contains(url, b"05_001_title") };
+
+    let orig = TITLE_SCALEFORM_RESOURCE_CTOR_ORIG.load(Ordering::SeqCst);
+    let ret = if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let f: unsafe extern "system" fn(usize, usize, u32, usize, usize, u8, usize) -> usize =
+            unsafe { std::mem::transmute(orig) };
+        unsafe {
+            f(
+                out_resource,
+                loader_data,
+                file_type,
+                url,
+                file_obj,
+                external_flag,
+                heap_arg,
+            )
+        }
+    } else {
+        null
+    };
+    let movie_data = if ret != null && ret != HOOK_ORIGINAL_UNSET {
+        unsafe { safe_read_usize(ret + 0x40) }.unwrap_or(null)
+    } else {
+        null
+    };
+    TITLE_SCALEFORM_RESOURCE_CTOR_LAST_RET.store(ret, Ordering::SeqCst);
+    TITLE_SCALEFORM_RESOURCE_CTOR_LAST_MOVIE_DATA.store(movie_data, Ordering::SeqCst);
+
+    if is_title_logo {
+        let logo_hit = TITLE_SCALEFORM_RESOURCE_CTOR_LOGO_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut name = [0u8; 128];
+        let name_len = unsafe { copy_ascii_preview(url, &mut name) };
+        let name = core::str::from_utf8(&name[..name_len]).unwrap_or("?");
+        append_autoload_debug(format_args!(
+            "title-resource-observer: Scaleform resource-ctor title-logo hit={logo_hit} total={hit} out=0x{out_resource:x} url=0x{url:x} '{name}' file=0x{file_obj:x} file_type={file_type} external_flag={external_flag} ret=0x{ret:x} movie_data=0x{movie_data:x} caller_rva=0x{caller_rva:x}; observe-only"
+        ));
+    } else if hit <= 24 {
+        let mut name = [0u8; 96];
+        let name_len = unsafe { copy_ascii_preview(url, &mut name) };
+        let name = core::str::from_utf8(&name[..name_len]).unwrap_or("?");
+        append_autoload_debug(format_args!(
+            "title-resource-observer: Scaleform resource-ctor sample total={hit} url='{name}' file=0x{file_obj:x} file_type={file_type} ret=0x{ret:x} movie_data=0x{movie_data:x} caller_rva=0x{caller_rva:x}"
+        ));
+    }
+    ret
+}
+
+pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
+    if TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.load(Ordering::SeqCst) != 0
+        && TITLE_SCALEFORM_FILE_OPEN_INSTALLED.load(Ordering::SeqCst) != 0
+        && TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED.load(Ordering::SeqCst) != 0
+    {
+        return;
+    }
+    load_title_scaleform_memory_gfx();
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-resource-observer: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(TITLE_MENU_RESOURCE_ACQUIRE_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-resource-observer: failed to resolve AcquireMenuResource rva 0x{TITLE_MENU_RESOURCE_ACQUIRE_RVA:x}"
+        ));
+        return;
+    };
+    let Ok(file_open_addr) = game_rva(TITLE_SCALEFORM_FILE_OPEN_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-resource-observer: failed to resolve Scaleform file-open rva 0x{TITLE_SCALEFORM_FILE_OPEN_RVA:x}"
+        ));
+        return;
+    };
+    let Ok(resource_ctor_addr) = game_rva(TITLE_SCALEFORM_RESOURCE_CTOR_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "title-resource-observer: failed to resolve Scaleform resource-ctor rva 0x{TITLE_SCALEFORM_RESOURCE_CTOR_RVA:x}"
+        ));
+        return;
+    };
+    let mut ok = true;
+    if TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.load(Ordering::SeqCst) == 0 {
+        match unsafe {
+            MhHook::new(
+                addr as *mut c_void,
+                title_menu_resource_acquire_observer_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                TITLE_MENU_RESOURCE_ACQUIRE_ORIG
+                    .store(hook.trampoline() as usize, Ordering::SeqCst);
+                ok &= unsafe { hook.queue_enable() }.is_ok();
+                std::mem::forget(hook);
+            }
+            Err(status) => {
+                append_autoload_debug(format_args!(
+                    "title-resource-observer: AcquireMenuResource MhHook::new failed: {status:?}"
+                ));
+                ok = false;
+            }
+        }
+    }
+    if TITLE_SCALEFORM_FILE_OPEN_INSTALLED.load(Ordering::SeqCst) == 0 {
+        match unsafe {
+            MhHook::new(
+                file_open_addr as *mut c_void,
+                title_scaleform_file_open_observer_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                TITLE_SCALEFORM_FILE_OPEN_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+                ok &= unsafe { hook.queue_enable() }.is_ok();
+                std::mem::forget(hook);
+            }
+            Err(status) => {
+                append_autoload_debug(format_args!(
+                    "title-resource-observer: Scaleform file-open MhHook::new failed: {status:?}"
+                ));
+                ok = false;
+            }
+        }
+    }
+    if TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED.load(Ordering::SeqCst) == 0 {
+        match unsafe {
+            MhHook::new(
+                resource_ctor_addr as *mut c_void,
+                title_scaleform_resource_ctor_observer_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                TITLE_SCALEFORM_RESOURCE_CTOR_ORIG
+                    .store(hook.trampoline() as usize, Ordering::SeqCst);
+                ok &= unsafe { hook.queue_enable() }.is_ok();
+                std::mem::forget(hook);
+            }
+            Err(status) => {
+                append_autoload_debug(format_args!(
+                    "title-resource-observer: Scaleform resource-ctor MhHook::new failed: {status:?}"
+                ));
+                ok = false;
+            }
+        }
+    }
+    if !ok {
+        return;
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => {
+            TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.store(1, Ordering::SeqCst);
+            TITLE_SCALEFORM_FILE_OPEN_INSTALLED.store(1, Ordering::SeqCst);
+            TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "title-resource-observer: hooked AcquireMenuResource 0x{addr:x}, Scaleform file-open 0x{file_open_addr:x}, resource-ctor 0x{resource_ctor_addr:x}; observe-only"
+            ));
+        }
+        status => append_autoload_debug(format_args!(
+            "title-resource-observer: MH_ApplyQueued failed: {status:?}"
+        )),
+    }
+}
+
 pub(crate) unsafe extern "system" fn title_scaleform_bind_observer_hook(owner: usize, pair: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let symbol_ptr = unsafe { read_native_dlstring_ascii_ptr(pair) };
@@ -2149,7 +2631,17 @@ unsafe fn title_child_name_matches(name_ptr: usize) -> bool {
     let Ok(name) = (unsafe { CStr::from_ptr(name_ptr as *const i8).to_str() }) else {
         return false;
     };
-    name == "PressStart" || name == "StaticSystemText_101000" || name == "PRESS BUTTON"
+    matches!(
+        name,
+        "PressStart"
+            | "StaticSystemText_101000"
+            | "PRESS BUTTON"
+            | "CopyrightText"
+            | "ProgressInfo"
+            | "Install_ProgressInfo"
+            | "StaticSystemText_100100"
+            | "Info"
+    )
 }
 
 unsafe fn title_profile_list_container_matches(name_ptr: usize) -> bool {
@@ -2160,6 +2652,31 @@ unsafe fn title_profile_list_container_matches(name_ptr: usize) -> bool {
         return false;
     };
     name == "ProfileList/ItemList/ItemList/ItemList"
+}
+
+fn record_title_text_gfx_value(value: usize) {
+    if value == 0 || value == TITLE_OWNER_SCAN_START_ADDRESS {
+        return;
+    }
+    for slot in TITLE_TEXT_GFX_VALUES.iter() {
+        if slot.load(Ordering::SeqCst) == value {
+            return;
+        }
+    }
+    for slot in TITLE_TEXT_GFX_VALUES.iter() {
+        if slot
+            .compare_exchange(
+                TITLE_OWNER_SCAN_START_ADDRESS,
+                value,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+        {
+            TITLE_TEXT_GFX_VALUE_COUNT.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+            return;
+        }
+    }
 }
 
 pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook(
@@ -2193,6 +2710,7 @@ pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook
         TITLE_PRESS_START_BIND_LAST_NAME.store(name_ptr, Ordering::SeqCst);
         TITLE_PRESS_START_BIND_LAST_CONTEXT.store(context, Ordering::SeqCst);
         TITLE_PRESS_START_GFX_VALUE.store(value, Ordering::SeqCst);
+        record_title_text_gfx_value(value);
         let base = game_module_base().unwrap_or(null);
         if base != null {
             let set_visible: unsafe extern "system" fn(usize, u8) =
@@ -2274,8 +2792,14 @@ pub(crate) unsafe extern "system" fn title_gfx_value_set_visible_hook(
     if orig == null || orig == HOOK_ORIGINAL_UNSET {
         return value;
     }
-    let target = TITLE_PRESS_START_GFX_VALUE.load(Ordering::SeqCst);
-    let forced_visible = if target != null && target != 0 && value == target {
+    let single_target = TITLE_PRESS_START_GFX_VALUE.load(Ordering::SeqCst);
+    let in_text_hide_set = TITLE_TEXT_GFX_VALUES.iter().any(|slot| {
+        let target = slot.load(Ordering::SeqCst);
+        target != null && target != 0 && value == target
+    });
+    let forced_visible = if (single_target != null && single_target != 0 && value == single_target)
+        || in_text_hide_set
+    {
         TITLE_PRESS_START_GFX_FORCE_FALSE_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
         TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_VALUE.store(value, Ordering::SeqCst);
         TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_REQUESTED.store(visible as usize, Ordering::SeqCst);

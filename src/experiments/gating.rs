@@ -8,8 +8,8 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex, Once, OnceLock,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -17,21 +17,20 @@ use std::{
 use std::os::windows::ffi::OsStrExt as _;
 
 use crate::input_blocker::{InputBlocker, InputFlags};
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MhHook, MH_STATUS};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
 };
-use er_effects_data::{embedded_effects, EffectCallSpec, EffectKindSpec};
+use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
 use windows::{
-    core::{BOOL, PCSTR},
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
         System::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION},
+            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
             SystemServices::DLL_PROCESS_ATTACH,
             Threading::GetCurrentProcessId,
         },
@@ -40,6 +39,7 @@ use windows::{
             WM_KEYDOWN, WM_KEYUP,
         },
     },
+    core::{BOOL, PCSTR},
 };
 
 #[allow(unused_imports)]
@@ -670,15 +670,41 @@ pub(crate) fn title_anim_speedup_factor() -> f32 {
 pub(crate) fn title_anim_speedup_enabled() -> bool {
     title_anim_speedup_factor() > TITLE_ANIM_SPEEDUP_MIN
 }
+/// True when the branch is replacing the native `05_001_Title_Logo` GFX bytes through the
+/// Scaleform MemoryFile seam. This is not a vanilla/main restore switch: it means the branch now
+/// owns that TitleBack resource, so old hooks that hide TitleBack would hide our replacement.
+pub(crate) fn title_resource_memory_gfx_enabled() -> bool {
+    std::env::var("ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
 /// DEFAULT-ON product masquerade cover Part A: suppress only the native `05_000_Title`
-/// MenuWindowJob visual wrapper while the zero-input autoload runs. This is tied to the existing
-/// autoload/save-override contract, not a new env/file knob: a real autoload wants a clean cover;
-/// telemetry-only observation and `ER_EFFECTS_NO_AUTOLOAD` must preserve vanilla visuals.
+/// MenuWindowJob visual wrapper while the zero-input autoload runs. If memory-GFX replacement is
+/// active, do not install the old TitleBack hide hooks: `05_001_Title_Logo` is the replacement
+/// surface on this branch, not a vanilla/main object to suppress.
 pub(crate) fn title_native_menu_visual_suppression_enabled() -> bool {
-    if autoload_disabled() || native_profile_capture_enabled() {
+    if title_resource_memory_gfx_enabled()
+        || autoload_disabled()
+        || native_profile_capture_enabled()
+    {
         return false;
     }
     !save_override_telemetry_only()
+}
+
+/// Passive, epilogue-neutral observer for native Scaleform menu-resource acquisition. This is
+/// intentionally separate from the title-cover/hide bundle: resource/memory-GFX proof needs the
+/// replaced `05_001_Title_Logo` visible, not hidden by TitleBackViewParts suppression hooks.
+pub(crate) fn title_menu_resource_observer_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_TITLE_RESOURCE_OBSERVER").as_deref(),
+        Ok("1")
+    ) || title_resource_memory_gfx_enabled()
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-title-resource-observer.txt")
+            .exists()
 }
 
 /// AUTO-CONFIRM observe mode (er-effects-auto-confirm.txt): drive the game's OWN natural title
@@ -780,6 +806,7 @@ pub(crate) fn splash_skip_enabled() -> bool {
     !save_override_telemetry_only()
         || product_autoload_enabled()
         || own_load_enabled()
+        || title_menu_resource_observer_enabled()
         || matches!(std::env::var("ER_EFFECTS_SPLASH_SKIP").as_deref(), Ok("1"))
         || game_directory_path()
             .unwrap_or_else(|| PathBuf::from("."))

@@ -330,6 +330,27 @@ def scan_contract() -> list[Finding]:
                     "Delete stale logo-replacement-screenshot.{jpg,png,txt} before launch so an absent/fail-closed capture cannot be confused with a prior run.",
                 )
             )
+        missing_visual_telemetry_guard = [
+            snippet
+            for snippet in (
+                "VISUAL_RESOURCE_MUTATION_ENVS",
+                "ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX",
+                "ER_EFFECTS_TITLE_05_000_MEMORY_GFX",
+                "visual_resource_mutation_envs_set",
+                "RUNTIME_TELEMETRY_ONLY=1 cannot be combined with mutating visual resource env(s)",
+            )
+            if snippet not in direct_text
+        ]
+        if missing_visual_telemetry_guard:
+            findings.append(
+                Finding(
+                    relative(DIRECT_PROBE_PATH),
+                    0,
+                    "telemetry-only-visual-resource-mutation-guard-missing",
+                    ", ".join(missing_visual_telemetry_guard),
+                    "The direct runtime probe preflight must fail closed when RUNTIME_TELEMETRY_ONLY=1 is combined with mutating visual resource replacement env vars.",
+                )
+            )
 
     if READINESS_WATCH_PATH.exists():
         watch_text = READINESS_WATCH_PATH.read_text(encoding="utf-8", errors="replace")

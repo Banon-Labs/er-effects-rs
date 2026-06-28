@@ -8,8 +8,8 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex, Once, OnceLock,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -17,21 +17,20 @@ use std::{
 use std::os::windows::ffi::OsStrExt as _;
 
 use crate::input_blocker::{InputBlocker, InputFlags};
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MhHook, MH_STATUS};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
 };
-use er_effects_data::{embedded_effects, EffectCallSpec, EffectKindSpec};
+use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
 use windows::{
-    core::{BOOL, PCSTR},
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
         System::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION},
+            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
             SystemServices::DLL_PROCESS_ATTACH,
             Threading::GetCurrentProcessId,
         },
@@ -40,6 +39,7 @@ use windows::{
             WM_KEYDOWN, WM_KEYUP,
         },
     },
+    core::{BOOL, PCSTR},
 };
 
 #[allow(unused_imports)]
@@ -294,7 +294,7 @@ unsafe fn install_xinput_block() {
     }
 }
 
-/// Tracks whether the DInput keyboard+mouse `install_hooks` has run (once).
+/// Tracks whether the DInput keyboard+mouse `install_hooks` has succeeded.
 static DINPUT_BLOCK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 
 /// Enforce the comprehensive input block for this frame. Self-contained (no args) so it can
@@ -309,12 +309,22 @@ static DINPUT_BLOCK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// Genuinely zero-input: it only SUPPRESSES device reads -- it never synthesizes any input.
 pub(crate) fn enforce_input_block_now() {
     let blocker = InputBlocker::get_instance();
-    if DINPUT_BLOCK_INSTALLED.swap(BLOCK_INPUT_ON, Ordering::SeqCst)
-        == TITLE_OWNER_SCAN_START_ADDRESS
-    {
-        append_autoload_debug(format_args!(
-            "input-block diagnostic: DInput ilhook install SKIPPED for no-hudhook crash isolation (XInput still hooks); not product proof"
-        ));
+    if DINPUT_BLOCK_INSTALLED.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS {
+        let res = std::panic::catch_unwind(|| unsafe { blocker.install_hooks() });
+        match res {
+            Ok(Ok(())) => {
+                DINPUT_BLOCK_INSTALLED.store(BLOCK_INPUT_ON, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "input-block: DInput8 GetDeviceState hooks INSTALLED (minhook, no-hudhook)"
+                ));
+            }
+            Ok(Err(status)) => append_autoload_debug(format_args!(
+                "input-block: DInput8 GetDeviceState hook install failed: {status:?}; will retry"
+            )),
+            Err(_) => append_autoload_debug(format_args!(
+                "input-block: DInput8 probe/hook install panicked (dinput8/device not ready?); will retry"
+            )),
+        }
     }
     BLOCK_INPUT_ACTIVE.store(BLOCK_INPUT_ON, Ordering::SeqCst);
     blocker.block_only(InputFlags::all());

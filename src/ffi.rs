@@ -7,28 +7,27 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Mutex, Once,
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use crate::input_blocker::InputBlocker;
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MhHook, MH_STATUS};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
 };
-use er_effects_data::{embedded_effects, EffectCallSpec, EffectKindSpec};
+use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
 use windows::{
-    core::{BOOL, PCSTR},
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
         System::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION},
+            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
             SystemServices::DLL_PROCESS_ATTACH,
             Threading::GetCurrentProcessId,
         },
@@ -37,6 +36,7 @@ use windows::{
             WM_KEYUP,
         },
     },
+    core::{BOOL, PCSTR},
 };
 
 #[allow(unused_imports)]
@@ -68,6 +68,7 @@ unsafe extern "system" {
 /// dedicated movie window so the intro thread's fade/quiesce completes cleanly.
 /// HWND is passed as a raw pointer read from the movie object (M+8).
 #[cfg(windows)]
+#[link(name = "user32")]
 unsafe extern "system" {
     pub(crate) fn GetSystemMenu(hwnd: *mut c_void, brevert: i32) -> *mut c_void;
     pub(crate) fn DeleteMenu(hmenu: *mut c_void, uposition: u32, uflags: u32) -> i32;

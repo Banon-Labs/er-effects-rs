@@ -165,7 +165,7 @@ def main() -> int:
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--duration", type=float, default=0.0, help="seconds to keep correcting; 0 means one attempt")
     parser.add_argument("--interval", type=float, default=0.25)
-    parser.add_argument("--always", action="store_true", help="reapply placement even if the target is already visible")
+    parser.add_argument("--always", action="store_true", help="debug-only: reapply placement even if already visible; causes visible bounce on ER/Gamescope and should not be used by runtime probes")
     parser.add_argument("--focus", action="store_true", help="focus the target after placement; off by default to avoid active-monitor churn")
     parser.add_argument("--log", type=Path)
     args = parser.parse_args()

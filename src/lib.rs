@@ -5,14 +5,14 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Mutex, Once,
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use crate::input_blocker::InputBlocker;
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MhHook, MH_STATUS};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use eldenring::{
     cs::{
         CSTaskGroupIndex, CSTaskImp, ChrInsExt, FaceData, FaceDataBuffer, GameDataMan, GameMan,
@@ -25,12 +25,11 @@ use er_effects_data::embedded_effects;
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoader};
 use fromsoftware_shared::{F32Vector4, FromStatic, InstanceError, SharedTaskImpExt};
 use windows::{
-    core::{BOOL, PCSTR},
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
         System::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress, LoadLibraryA},
-            Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION},
+            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
             SystemServices::DLL_PROCESS_ATTACH,
             Threading::GetCurrentProcessId,
         },
@@ -39,6 +38,7 @@ use windows::{
             WM_KEYUP,
         },
     },
+    core::{BOOL, PCSTR},
 };
 
 mod constants;
@@ -253,6 +253,17 @@ pub unsafe extern "C" fn DllMain(_hmodule: HINSTANCE, reason: u32, _reserved: *m
             .spawn(apply_foreground_force);
     });
 
+    // Passive title-resource observer is deliberately independent of the cover/hide bundle: recent
+    // branches have kept the stock logo invisible, so resource-path proof must not depend on any
+    // visual/logo-hide state.
+    if title_menu_resource_observer_enabled() {
+        START_TITLE_MENU_RESOURCE_ACQUIRE_OBSERVER.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-resource-observer".to_owned())
+                .spawn(install_title_menu_resource_acquire_observer_hook);
+        });
+    }
+
     // Title-cover masquerade Part A: install the BeginTitle `05_000_Title` hook as early as
     // splash/foreground patches, before STEP_BeginTitle can build the native title Scaleform. This
     // does NOT touch STEP_Wait or CSMenuMan+0x21; it preserves the native MenuWindowJob and hides
@@ -298,12 +309,44 @@ pub unsafe extern "C" fn DllMain(_hmodule: HINSTANCE, reason: u32, _reserved: *m
                 .name("er-effects-title-bind-observer".to_owned())
                 .spawn(install_title_scaleform_bind_observer_hook);
         });
-        // Baseline check: keep the new custom black-cover MenuWindowJob pump disabled until a
-        // same-path probe proves the immediate pre-black-cover title path is not the crash source.
+        START_TITLE_MENU_RESOURCE_ACQUIRE_OBSERVER.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-resource-observer".to_owned())
+                .spawn(install_title_menu_resource_acquire_observer_hook);
+        });
+        // Do not install the independent custom-cover MenuWindowJob pump here. Runtime artifact
+        // product-continue-direct-20260628-121039 proved that pumping a separate 01_900_Black job
+        // keeps job+0x130 live and stalls the title flow before player/world. Future cover work must
+        // use an epilogue-neutral path (mutate an already-scheduled title surface/resource, or prove
+        // explicit completion semantics before adding an independent MenuWindowJob).
         START_TITLE_FLOW_CONTEXT_RECORD_REGULATION.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-effects-tfc-record-fix".to_owned())
                 .spawn(install_title_flow_context_record_regulation_fix_hook);
+        });
+    } else if title_resource_memory_gfx_enabled() {
+        // Branch-owned `05_001_Title_Logo` replacement: keep TitleBack visible, but hide the later
+        // title text layers (`PRESS ANY BUTTON` / Continue-ish title information) so the custom
+        // resource is not overdrawn by native text. Do not install the TitleBack/logo hide hooks here.
+        START_TITLE_PAB_INFORMATION_COVER.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-text-latch".to_owned())
+                .spawn(install_title_pab_information_visual_hook);
+        });
+        START_TITLE_GFX_VALUE_SET_VISIBLE.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-text-gfx-visible".to_owned())
+                .spawn(install_title_gfx_value_set_visible_hook);
+        });
+        START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-text-child-bind".to_owned())
+                .spawn(install_title_scene_obj_proxy_named_child_bind_hook);
+        });
+        START_TITLE_SCALEFORM_BIND_OBSERVER.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-text-bind-observer".to_owned())
+                .spawn(install_title_scaleform_bind_observer_hook);
         });
     } else if native_profile_capture_enabled() {
         // Native ProfileSelect diagnostic: install only the passive Scaleform bind observer. Do not

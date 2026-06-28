@@ -7,28 +7,27 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Mutex, Once,
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use crate::input_blocker::InputBlocker;
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MhHook, MH_STATUS};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
 };
-use er_effects_data::{embedded_effects, EffectCallSpec, EffectKindSpec};
+use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
 use windows::{
-    core::{BOOL, PCSTR},
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
         System::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
-            Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION},
+            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
             SystemServices::DLL_PROCESS_ATTACH,
             Threading::GetCurrentProcessId,
         },
@@ -37,6 +36,7 @@ use windows::{
             WM_KEYUP,
         },
     },
+    core::{BOOL, PCSTR},
 };
 
 #[allow(unused_imports)]
@@ -129,6 +129,40 @@ fn title_logo_gfx_alpha_for_frame(frame: i32) -> i32 {
         114..=133 => ((133 - frame) * TITLE_LOGO_GFX_FULL_ALPHA + 10) / 20,
         _ => TITLE_LOGO_GFX_UNKNOWN_ALPHA,
     }
+}
+
+fn push_json_usize(body: &mut String, name: &str, value: usize) {
+    body.push_str(&format!("  \"{name}\": {value},\n"));
+}
+
+fn push_json_bool(body: &mut String, name: &str, value: bool) {
+    body.push_str(&format!("  \"{name}\": {value},\n"));
+}
+
+fn title_menu_window_id_flags(base: usize, window: usize) -> (usize, usize, bool) {
+    const NULL_PTR: usize = 0;
+    if window == NULL_PTR || window == TITLE_OWNER_SCAN_START_ADDRESS {
+        return (
+            TITLE_OWNER_SCAN_START_ADDRESS,
+            TITLE_OWNER_SCAN_START_ADDRESS,
+            false,
+        );
+    }
+    let menu_id = unsafe { crate::experiments::safe_read_u16(window + 0x180) }
+        .map_or(TITLE_OWNER_SCAN_START_ADDRESS, usize::from);
+    if menu_id >= 0x47 {
+        return (menu_id, TITLE_OWNER_SCAN_START_ADDRESS, false);
+    }
+    let cs_menu_man = unsafe { crate::experiments::safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
+        .unwrap_or(NULL_PTR);
+    if cs_menu_man == NULL_PTR {
+        return (menu_id, TITLE_OWNER_SCAN_START_ADDRESS, false);
+    }
+    let flags = unsafe { crate::experiments::safe_read_u8(cs_menu_man + 0x90 + menu_id) }
+        .map_or(TITLE_OWNER_SCAN_START_ADDRESS, usize::from);
+    let draw_bit_set = flags != TITLE_OWNER_SCAN_START_ADDRESS
+        && (flags & TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK as usize) != 0;
+    (menu_id, flags, draw_bit_set)
 }
 
 unsafe fn title_logo_gfx_current_frame(base: usize, title_logo_back_view_parts: usize) -> i32 {
@@ -1171,35 +1205,11 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_AFTER.load(Ordering::SeqCst);
         let title_visual_render_last_caller_rva =
             TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_CALLER_RVA.load(Ordering::SeqCst);
-        let title_visual_current_menu_id = if title_visual_native_window != NULL_PTR
-            && title_visual_native_window != TITLE_OWNER_SCAN_START_ADDRESS
-        {
-            unsafe { crate::experiments::safe_read_u16(title_visual_native_window + 0x180) }
-                .map_or(TITLE_OWNER_SCAN_START_ADDRESS, usize::from)
-        } else {
-            TITLE_OWNER_SCAN_START_ADDRESS
-        };
-        let title_visual_current_flags = if title_visual_current_menu_id < 0x47 {
-            let cs_menu_man =
-                unsafe { crate::experiments::safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
-                    .unwrap_or(NULL_PTR);
-            if cs_menu_man != NULL_PTR {
-                unsafe {
-                    crate::experiments::safe_read_u8(
-                        cs_menu_man + 0x90 + title_visual_current_menu_id,
-                    )
-                }
-                .map_or(TITLE_OWNER_SCAN_START_ADDRESS, usize::from)
-            } else {
-                TITLE_OWNER_SCAN_START_ADDRESS
-            }
-        } else {
-            TITLE_OWNER_SCAN_START_ADDRESS
-        };
-        let title_visual_current_draw_bit_set = title_visual_current_flags
-            != TITLE_OWNER_SCAN_START_ADDRESS
-            && (title_visual_current_flags & TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK as usize)
-                != 0;
+        let (
+            title_visual_current_menu_id,
+            title_visual_current_flags,
+            title_visual_current_draw_bit_set,
+        ) = title_menu_window_id_flags(base, title_visual_native_window);
         // Actual visible logo surface telemetry: `TitleBackViewParts` / `05_001_Title_Logo` is an
         // embedded object at TitleTopDialog+0xaa8, separate from the preserved `05_000_Title`
         // MenuWindowJob. A real portrait cover depends on post-SL2 profile_summary readiness and the
@@ -1235,6 +1245,67 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             TITLE_LOGO_GFX_HIDE_LAST_CALLER_PHASE.load(Ordering::SeqCst);
         let title_logo_gfx_hide_last_requested_visible =
             TITLE_LOGO_GFX_HIDE_LAST_REQUESTED_VISIBLE.load(Ordering::SeqCst);
+        let title_menu_resource_acquire_installed =
+            TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.load(Ordering::SeqCst) != 0;
+        let title_menu_resource_acquire_hits =
+            TITLE_MENU_RESOURCE_ACQUIRE_HITS.load(Ordering::SeqCst);
+        let title_menu_resource_acquire_logo_hits =
+            TITLE_MENU_RESOURCE_ACQUIRE_LOGO_HITS.load(Ordering::SeqCst);
+        let title_menu_resource_acquire_last_this =
+            TITLE_MENU_RESOURCE_ACQUIRE_LAST_THIS.load(Ordering::SeqCst);
+        let title_menu_resource_acquire_last_load_params =
+            TITLE_MENU_RESOURCE_ACQUIRE_LAST_LOAD_PARAMS.load(Ordering::SeqCst);
+        let title_menu_resource_acquire_last_filename_ptr =
+            TITLE_MENU_RESOURCE_ACQUIRE_LAST_FILENAME_PTR.load(Ordering::SeqCst);
+        let title_menu_resource_acquire_last_param3 =
+            TITLE_MENU_RESOURCE_ACQUIRE_LAST_PARAM3.load(Ordering::SeqCst);
+        let title_menu_resource_acquire_last_ret =
+            TITLE_MENU_RESOURCE_ACQUIRE_LAST_RET.load(Ordering::SeqCst);
+        let title_menu_resource_acquire_last_caller_rva =
+            TITLE_MENU_RESOURCE_ACQUIRE_LAST_CALLER_RVA.load(Ordering::SeqCst);
+        let title_scaleform_file_open_installed =
+            TITLE_SCALEFORM_FILE_OPEN_INSTALLED.load(Ordering::SeqCst) != 0;
+        let title_scaleform_file_open_hits = TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst);
+        let title_scaleform_file_open_logo_hits =
+            TITLE_SCALEFORM_FILE_OPEN_LOGO_HITS.load(Ordering::SeqCst);
+        let title_scaleform_file_open_last_loader =
+            TITLE_SCALEFORM_FILE_OPEN_LAST_LOADER.load(Ordering::SeqCst);
+        let title_scaleform_file_open_last_url_ptr =
+            TITLE_SCALEFORM_FILE_OPEN_LAST_URL_PTR.load(Ordering::SeqCst);
+        let title_scaleform_file_open_last_flags =
+            TITLE_SCALEFORM_FILE_OPEN_LAST_FLAGS.load(Ordering::SeqCst);
+        let title_scaleform_file_open_last_ret =
+            TITLE_SCALEFORM_FILE_OPEN_LAST_RET.load(Ordering::SeqCst);
+        let title_scaleform_file_open_last_ret_vtable =
+            TITLE_SCALEFORM_FILE_OPEN_LAST_RET_VTABLE.load(Ordering::SeqCst);
+        let title_scaleform_file_open_last_caller_rva =
+            TITLE_SCALEFORM_FILE_OPEN_LAST_CALLER_RVA.load(Ordering::SeqCst);
+        let title_scaleform_memory_gfx_bytes =
+            TITLE_SCALEFORM_MEMORY_GFX_BYTES.load(Ordering::SeqCst);
+        let title_scaleform_memory_gfx_replacements =
+            TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS.load(Ordering::SeqCst);
+        let title_scaleform_memory_gfx_failures =
+            TITLE_SCALEFORM_MEMORY_GFX_FAILURES.load(Ordering::SeqCst);
+        let title_scaleform_memory_gfx_last_file =
+            TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE.load(Ordering::SeqCst);
+        let title_scaleform_resource_ctor_installed =
+            TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED.load(Ordering::SeqCst) != 0;
+        let title_scaleform_resource_ctor_hits =
+            TITLE_SCALEFORM_RESOURCE_CTOR_HITS.load(Ordering::SeqCst);
+        let title_scaleform_resource_ctor_logo_hits =
+            TITLE_SCALEFORM_RESOURCE_CTOR_LOGO_HITS.load(Ordering::SeqCst);
+        let title_scaleform_resource_ctor_last_out =
+            TITLE_SCALEFORM_RESOURCE_CTOR_LAST_OUT.load(Ordering::SeqCst);
+        let title_scaleform_resource_ctor_last_url_ptr =
+            TITLE_SCALEFORM_RESOURCE_CTOR_LAST_URL_PTR.load(Ordering::SeqCst);
+        let title_scaleform_resource_ctor_last_file =
+            TITLE_SCALEFORM_RESOURCE_CTOR_LAST_FILE.load(Ordering::SeqCst);
+        let title_scaleform_resource_ctor_last_ret =
+            TITLE_SCALEFORM_RESOURCE_CTOR_LAST_RET.load(Ordering::SeqCst);
+        let title_scaleform_resource_ctor_last_movie_data =
+            TITLE_SCALEFORM_RESOURCE_CTOR_LAST_MOVIE_DATA.load(Ordering::SeqCst);
+        let title_scaleform_resource_ctor_last_caller_rva =
+            TITLE_SCALEFORM_RESOURCE_CTOR_LAST_CALLER_RVA.load(Ordering::SeqCst);
         let title_press_start_gfx_hide_calls =
             TITLE_PRESS_START_GFX_HIDE_CALLS.load(Ordering::SeqCst);
         let title_press_start_gfx_hide_last_dialog =
@@ -1424,6 +1495,36 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             TITLE_PAB_INFORMATION_VISUAL_LAST_WINDOW.load(Ordering::SeqCst);
         let title_pab_information_visual_last_caller_rva =
             TITLE_PAB_INFORMATION_VISUAL_LAST_CALLER_RVA.load(Ordering::SeqCst);
+        let title_custom_cover_black_cover_window = if title_custom_cover_run_last_cover_window
+            != NULL_PTR
+            && title_custom_cover_run_last_cover_window != TITLE_OWNER_SCAN_START_ADDRESS
+        {
+            title_custom_cover_run_last_cover_window
+        } else if title_custom_cover_black_last_job != NULL_PTR
+            && title_custom_cover_black_last_job != TITLE_OWNER_SCAN_START_ADDRESS
+        {
+            unsafe {
+                crate::experiments::safe_read_usize(title_custom_cover_black_last_job + 0x130)
+            }
+            .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+        } else {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        };
+        let (
+            title_custom_cover_black_cover_menu_id,
+            title_custom_cover_black_cover_flags,
+            title_custom_cover_black_cover_draw_bit_set,
+        ) = title_menu_window_id_flags(base, title_custom_cover_black_cover_window);
+        let (
+            title_pab_information_visual_current_menu_id,
+            title_pab_information_visual_current_flags,
+            title_pab_information_visual_current_draw_bit_set,
+        ) = title_menu_window_id_flags(base, title_pab_information_visual_last_window);
+        let title_custom_cover_black_exclusive_visible = title_custom_cover_black_builds != 0
+            && title_custom_cover_run_calls != 0
+            && title_custom_cover_black_cover_draw_bit_set
+            && !title_visual_current_draw_bit_set
+            && !title_pab_information_visual_current_draw_bit_set;
         body.push_str(&format!(
             "  \"oracle_msgbox_total_builds\": {},\n  \"oracle_msgbox_any_seen\": {},\n  \"oracle_msgbox_postload_builds\": {},\n  \"oracle_postload_modal_seen\": {},\n  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n  \"oracle_msgbox_builder_args\": [{}, {}, {}, {}],\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_args\": [{}, {}, {}, {}, {}],\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_window_stored_backing_flag_ptr\": {},\n  \"oracle_policy_window_backing_flag_value\": {},\n  \"oracle_policy_window_requested_flag_value\": {},\n  \"oracle_policy_window_caller_rva\": {},\n  \"oracle_policy_ctor_wrapper_hits\": {},\n  \"oracle_policy_ctor_wrapper_record\": {},\n  \"oracle_policy_ctor_wrapper_original_this\": {},\n  \"oracle_policy_ctor_wrapper_original_vtable\": {},\n  \"oracle_policy_ctor_wrapper_record_id\": {},\n  \"oracle_policy_ctor_wrapper_stack_arg0\": {},\n  \"oracle_policy_ctor_wrapper_backing_flag_ptr\": {},\n  \"oracle_policy_ctor_wrapper_ret\": {},\n  \"oracle_policy_ctor_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_wrapper_hits\": {},\n  \"oracle_policy_selector_wrapper_record\": {},\n  \"oracle_policy_selector_wrapper_original_this\": {},\n  \"oracle_policy_selector_wrapper_original_vtable\": {},\n  \"oracle_policy_selector_wrapper_owner\": {},\n  \"oracle_policy_selector_wrapper_requested_flag\": {},\n  \"oracle_policy_selector_wrapper_selector_arg\": {},\n  \"oracle_policy_selector_wrapper_ret\": {},\n  \"oracle_policy_selector_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_ctor_hits\": {},\n  \"oracle_policy_selector_ctor_this\": {},\n  \"oracle_policy_selector_ctor_vtable\": {},\n  \"oracle_policy_selector_ctor_owner\": {},\n  \"oracle_policy_selector_ctor_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_requested_flag_value\": {},\n  \"oracle_policy_selector_ctor_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_ret\": {},\n  \"oracle_policy_selector_ctor_caller_rva\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_this\": {},\n  \"oracle_policy_status_predicate_owner\": {},\n  \"oracle_policy_status_predicate_flag_ptr\": {},\n  \"oracle_policy_status_predicate_flag_value\": {},\n  \"oracle_policy_status_predicate_ret\": {},\n  \"oracle_policy_status_predicate_caller_rva\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_owner\": {},\n  \"oracle_policy_flag_setter_value\": {},\n  \"oracle_policy_flag_setter_force\": {},\n  \"oracle_policy_flag_setter_before\": {},\n  \"oracle_policy_flag_setter_after\": {},\n  \"oracle_policy_flag_setter_caller_rva\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {},\n",
             msgbox_total_builds,
@@ -1638,6 +1739,221 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             title_pab_information_visual_last_window,
             title_pab_information_visual_last_caller_rva
         ));
+        push_json_usize(
+            body,
+            "oracle_title_custom_cover_black_cover_window",
+            title_custom_cover_black_cover_window,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_custom_cover_black_cover_menu_id",
+            title_custom_cover_black_cover_menu_id,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_custom_cover_black_cover_flags",
+            title_custom_cover_black_cover_flags,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_custom_cover_black_cover_draw_bit_set",
+            title_custom_cover_black_cover_draw_bit_set,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_custom_cover_black_exclusive_visible",
+            title_custom_cover_black_exclusive_visible,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_pab_information_visual_current_menu_id",
+            title_pab_information_visual_current_menu_id,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_pab_information_visual_current_flags",
+            title_pab_information_visual_current_flags,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_pab_information_visual_current_draw_bit_set",
+            title_pab_information_visual_current_draw_bit_set,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_menu_resource_acquire_observer_installed",
+            title_menu_resource_acquire_installed,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_menu_resource_acquire_hits",
+            title_menu_resource_acquire_hits,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_menu_resource_acquire_logo_hits",
+            title_menu_resource_acquire_logo_hits,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_menu_resource_acquire_logo_seen",
+            title_menu_resource_acquire_logo_hits != 0,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_menu_resource_acquire_last_this",
+            title_menu_resource_acquire_last_this,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_menu_resource_acquire_last_load_params",
+            title_menu_resource_acquire_last_load_params,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_menu_resource_acquire_last_filename_ptr",
+            title_menu_resource_acquire_last_filename_ptr,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_menu_resource_acquire_last_param3",
+            title_menu_resource_acquire_last_param3,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_menu_resource_acquire_last_ret",
+            title_menu_resource_acquire_last_ret,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_menu_resource_acquire_last_caller_rva",
+            title_menu_resource_acquire_last_caller_rva,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_scaleform_file_open_observer_installed",
+            title_scaleform_file_open_installed,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_file_open_hits",
+            title_scaleform_file_open_hits,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_file_open_logo_hits",
+            title_scaleform_file_open_logo_hits,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_scaleform_file_open_logo_seen",
+            title_scaleform_file_open_logo_hits != 0,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_file_open_last_loader",
+            title_scaleform_file_open_last_loader,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_file_open_last_url_ptr",
+            title_scaleform_file_open_last_url_ptr,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_file_open_last_flags",
+            title_scaleform_file_open_last_flags,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_file_open_last_ret",
+            title_scaleform_file_open_last_ret,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_file_open_last_ret_vtable",
+            title_scaleform_file_open_last_ret_vtable,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_file_open_last_caller_rva",
+            title_scaleform_file_open_last_caller_rva,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_memory_gfx_bytes",
+            title_scaleform_memory_gfx_bytes,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_memory_gfx_replacements",
+            title_scaleform_memory_gfx_replacements,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_scaleform_memory_gfx_replaced",
+            title_scaleform_memory_gfx_replacements != 0,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_memory_gfx_failures",
+            title_scaleform_memory_gfx_failures,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_memory_gfx_last_file",
+            title_scaleform_memory_gfx_last_file,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_scaleform_resource_ctor_observer_installed",
+            title_scaleform_resource_ctor_installed,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_resource_ctor_hits",
+            title_scaleform_resource_ctor_hits,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_resource_ctor_logo_hits",
+            title_scaleform_resource_ctor_logo_hits,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_scaleform_resource_ctor_logo_seen",
+            title_scaleform_resource_ctor_logo_hits != 0,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_resource_ctor_last_out",
+            title_scaleform_resource_ctor_last_out,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_resource_ctor_last_url_ptr",
+            title_scaleform_resource_ctor_last_url_ptr,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_resource_ctor_last_file",
+            title_scaleform_resource_ctor_last_file,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_resource_ctor_last_ret",
+            title_scaleform_resource_ctor_last_ret,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_resource_ctor_last_movie_data",
+            title_scaleform_resource_ctor_last_movie_data,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_resource_ctor_last_caller_rva",
+            title_scaleform_resource_ctor_last_caller_rva,
+        );
         body.push_str(&format!(
             "  \"oracle_native_profile_capture_enabled\": {},\n  \"oracle_native_load_game_fired\": {},\n  \"oracle_native_load_game_last_node\": {},\n  \"oracle_native_load_game_last_node_vtable\": {},\n  \"oracle_native_load_game_last_member_dialog\": {},\n  \"oracle_native_load_game_last_member_fn\": {},\n  \"oracle_native_load_game_last_member_adjust\": {},\n  \"oracle_native_profile_source_ready\": {},\n  \"oracle_native_profile_source_name\": \"{}\",\n  \"oracle_native_profile_renderer_class\": \"{}\",\n",
             native_profile_capture_enabled(),

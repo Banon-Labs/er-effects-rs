@@ -1,12 +1,12 @@
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::ffi::c_void;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 use bitflags::bitflags;
-use ilhook::x64::*;
-use windows::core::{s, GUID};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+use windows::core::{GUID, s};
 
-pub use ilhook::HookError;
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 
 static INPUT_BLOCKER: OnceLock<&'static InputBlocker> = OnceLock::new();
 static INJECTED_KEY: AtomicU8 = AtomicU8::new(0);
@@ -42,11 +42,13 @@ impl InputBlocker {
     /// # Safety
     ///
     /// Installs DirectInput hooks; must run in the target process after dinput8.dll is loaded.
-    pub unsafe fn install_hooks(&self) -> Result<(), HookError> {
-        if self.hooks_installed.swap(true, Ordering::Relaxed) {
+    pub unsafe fn install_hooks(&self) -> Result<(), MH_STATUS> {
+        if self.hooks_installed.load(Ordering::Relaxed) {
             return Ok(());
         }
-        unsafe { install_dinput_hooks() }
+        unsafe { install_dinput_hooks()? };
+        self.hooks_installed.store(true, Ordering::Relaxed);
+        Ok(())
     }
 
     pub fn block(&self, inputs: InputFlags) {
@@ -153,32 +155,67 @@ unsafe fn with_probe_device(
     unsafe { release_di8(di8) };
 }
 
-fn make_get_state_closure(
-    flags: InputFlags,
-) -> impl Fn(*mut ilhook::x64::Registers, usize) -> usize {
-    move |reg, original| {
-        let size = unsafe { (*reg).rdx };
-        let data = unsafe { (*reg).r8 as *mut u8 };
+type GetDeviceStateFn = unsafe extern "system" fn(usize, u32, *mut u8) -> i32;
 
-        let original: unsafe extern "system" fn(u64, u64, u64) -> usize =
-            unsafe { std::mem::transmute(original) };
-        let hr = unsafe { original((*reg).rcx, size, data as u64) };
+static DINPUT_KB_GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
+static DINPUT_MOUSE_GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
+static DINPUT_KB_ALSO_MOUSE: AtomicBool = AtomicBool::new(false);
 
-        if hr == 0 && is_blocked(flags) {
-            unsafe { std::ptr::write_bytes(data, 0, size as usize) };
-            if flags.contains(InputFlags::Keyboard) {
-                const DIK_PRESSED: u8 = 0x80;
-                let dik = INJECTED_KEY.load(Ordering::Relaxed);
-                if dik != 0 && (dik as u64) < size {
-                    unsafe { *data.add(dik as usize) = DIK_PRESSED };
-                }
-            }
+unsafe extern "system" fn dinput_kb_get_state_hook(device: usize, size: u32, data: *mut u8) -> i32 {
+    let original_addr = DINPUT_KB_GET_STATE_ORIG.load(Ordering::Relaxed);
+    if original_addr == 0 {
+        return 0;
+    }
+    let original: GetDeviceStateFn = unsafe { std::mem::transmute(original_addr) };
+    let hr = unsafe { original(device, size, data) };
+    let flags = if DINPUT_KB_ALSO_MOUSE.load(Ordering::Relaxed) {
+        InputFlags::Keyboard | InputFlags::Mouse
+    } else {
+        InputFlags::Keyboard
+    };
+    zero_blocked_dinput_state(hr, size, data, flags);
+    hr
+}
+
+unsafe extern "system" fn dinput_mouse_get_state_hook(
+    device: usize,
+    size: u32,
+    data: *mut u8,
+) -> i32 {
+    let original_addr = DINPUT_MOUSE_GET_STATE_ORIG.load(Ordering::Relaxed);
+    if original_addr == 0 {
+        return 0;
+    }
+    let original: GetDeviceStateFn = unsafe { std::mem::transmute(original_addr) };
+    let hr = unsafe { original(device, size, data) };
+    zero_blocked_dinput_state(hr, size, data, InputFlags::Mouse);
+    hr
+}
+
+fn zero_blocked_dinput_state(hr: i32, size: u32, data: *mut u8, flags: InputFlags) {
+    if hr != 0 || data.is_null() || size == 0 || !is_blocked(flags) {
+        return;
+    }
+
+    let size = size as usize;
+    unsafe { std::ptr::write_bytes(data, 0, size) };
+    if flags.contains(InputFlags::Keyboard) && size >= DINPUT_KEYBOARD_BUFFER_LEN {
+        const DIK_PRESSED: u8 = 0x80;
+        let dik = INJECTED_KEY.load(Ordering::Relaxed);
+        if dik != 0 && (dik as usize) < DINPUT_KEYBOARD_BUFFER_LEN {
+            unsafe { *data.add(dik as usize) = DIK_PRESSED };
         }
-        hr
     }
 }
 
-unsafe fn install_dinput_hooks() -> Result<(), ilhook::HookError> {
+const DINPUT_KEYBOARD_BUFFER_LEN: usize = 256;
+
+unsafe fn install_dinput_hooks() -> Result<(), MH_STATUS> {
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => return Err(status),
+    }
+
     let dinput8 = unsafe { GetModuleHandleA(s!("dinput8.dll")).expect("dinput8.dll not loaded") };
     let di8_create: DInput8CreateFn = unsafe {
         std::mem::transmute(
@@ -198,35 +235,30 @@ unsafe fn install_dinput_hooks() -> Result<(), ilhook::HookError> {
     };
     unsafe { with_probe_device(di8_create, hinstance, &GUID_SYS_MOUSE, |a| mouse_addr = a) };
 
-    let kb_flags = if keyboard_addr == mouse_addr {
-        InputFlags::Keyboard | InputFlags::Mouse
-    } else {
-        InputFlags::Keyboard
-    };
-
     let kb_hook = unsafe {
-        hook_closure_retn(
-            keyboard_addr,
-            make_get_state_closure(kb_flags),
-            CallbackOption::None,
-            HookFlags::empty(),
+        MhHook::new(
+            keyboard_addr as *mut c_void,
+            dinput_kb_get_state_hook as *mut c_void,
         )?
     };
+    DINPUT_KB_GET_STATE_ORIG.store(kb_hook.trampoline() as usize, Ordering::Relaxed);
+    unsafe { kb_hook.queue_enable()? };
 
-    let mut hooks = vec![kb_hook];
-
-    if keyboard_addr != mouse_addr {
-        let ms_hook = unsafe {
-            hook_closure_retn(
-                mouse_addr,
-                make_get_state_closure(InputFlags::Mouse),
-                CallbackOption::None,
-                HookFlags::empty(),
+    if keyboard_addr == mouse_addr {
+        DINPUT_KB_ALSO_MOUSE.store(true, Ordering::Relaxed);
+    } else {
+        let mouse_hook = unsafe {
+            MhHook::new(
+                mouse_addr as *mut c_void,
+                dinput_mouse_get_state_hook as *mut c_void,
             )?
         };
-        hooks.push(ms_hook);
+        DINPUT_MOUSE_GET_STATE_ORIG.store(mouse_hook.trampoline() as usize, Ordering::Relaxed);
+        unsafe { mouse_hook.queue_enable()? };
+        std::mem::forget(mouse_hook);
     }
 
-    std::mem::forget(hooks);
+    unsafe { MH_ApplyQueued() }.ok_context("DInput MH_ApplyQueued")?;
+    std::mem::forget(kb_hook);
     Ok(())
 }
