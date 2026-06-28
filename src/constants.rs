@@ -12,7 +12,7 @@ use std::sync::{
 
 use debug::InputBlocker;
 use eldenring::{
-    cs::{FaceData, FaceDataBuffer, GameDataMan, GameMan, PlayerGameData},
+    cs::{ChrAsm, EquipGameData, FaceData, FaceDataBuffer, GameDataMan, GameMan, PlayerGameData},
     dlkr::DLAllocator,
     fd4::FD4TaskData,
 };
@@ -2036,6 +2036,11 @@ pub(crate) const PGD_RUNE_COUNT_6C_OFFSET: usize =
 pub(crate) const PGD_RUNE_MEMORY_70_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, rune_memory);
 pub(crate) const PGD_CHR_TYPE_98_OFFSET: usize = core::mem::offset_of!(PlayerGameData, chr_type);
+pub(crate) const PGD_EQUIP_GAME_DATA_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, equipment);
+pub(crate) const EQUIP_GAME_DATA_CHR_ASM_OFFSET: usize =
+    core::mem::offset_of!(EquipGameData, chr_asm);
+pub(crate) const CHR_ASM_SIZE: usize = core::mem::size_of::<ChrAsm>();
 pub(crate) const PGD_GENDER_BE_OFFSET: usize = core::mem::offset_of!(PlayerGameData, gender);
 pub(crate) const PGD_ARCHETYPE_BF_OFFSET: usize = core::mem::offset_of!(PlayerGameData, archetype);
 pub(crate) const PGD_VOICE_TYPE_C2_OFFSET: usize =
@@ -2182,6 +2187,16 @@ pub(crate) const DIALOG_ROW_REGISTRY_A48_OFFSET: usize =
 pub(crate) const NATIVE_LOAD_FIRED_NO: usize = 0;
 pub(crate) const NATIVE_LOAD_FIRED_YES: usize = 1;
 pub(crate) static NATIVE_LOAD_FIRED: AtomicUsize = AtomicUsize::new(NATIVE_LOAD_FIRED_NO);
+pub(crate) static NATIVE_LOAD_LAST_NODE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static NATIVE_LOAD_LAST_NODE_VTABLE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static NATIVE_LOAD_LAST_MEMBER_DIALOG: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static NATIVE_LOAD_LAST_MEMBER_FN: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static NATIVE_LOAD_LAST_MEMBER_ADJUST: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// The native-load observer now fires only when `title_menu_action_ready` validates the concrete
 /// Load-Game `MenuMemberFuncJob` node/action; there is no fixed post-menu settle frame count.
 /// Throttle interval for native-load observe logging (frames).

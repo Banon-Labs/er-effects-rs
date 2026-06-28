@@ -1629,6 +1629,19 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             title_pab_information_visual_last_window,
             title_pab_information_visual_last_caller_rva
         ));
+        body.push_str(&format!(
+            "  \"oracle_native_profile_capture_enabled\": {},\n  \"oracle_native_load_game_fired\": {},\n  \"oracle_native_load_game_last_node\": {},\n  \"oracle_native_load_game_last_node_vtable\": {},\n  \"oracle_native_load_game_last_member_dialog\": {},\n  \"oracle_native_load_game_last_member_fn\": {},\n  \"oracle_native_load_game_last_member_adjust\": {},\n  \"oracle_native_profile_source_ready\": {},\n  \"oracle_native_profile_source_name\": \"{}\",\n  \"oracle_native_profile_renderer_class\": \"{}\",\n",
+            native_profile_capture_enabled(),
+            NATIVE_LOAD_FIRED.load(Ordering::SeqCst) == NATIVE_LOAD_FIRED_YES,
+            NATIVE_LOAD_LAST_NODE.load(Ordering::SeqCst),
+            NATIVE_LOAD_LAST_NODE_VTABLE.load(Ordering::SeqCst),
+            NATIVE_LOAD_LAST_MEMBER_DIALOG.load(Ordering::SeqCst),
+            NATIVE_LOAD_LAST_MEMBER_FN.load(Ordering::SeqCst),
+            NATIVE_LOAD_LAST_MEMBER_ADJUST.load(Ordering::SeqCst),
+            title_custom_cover_profile_source_ready,
+            TITLE_CUSTOM_COVER_SYSTEX_TARGET,
+            TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS,
+        ));
     }
     if let Ok(player) = unsafe { PlayerIns::local_player_mut() } {
         let pos = player.chr_ins.modules.physics.position;
@@ -1799,12 +1812,14 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
         crate::experiments::CORRUPTED_SAVE_SEEN_ID.load(Ordering::SeqCst)
     ));
     // PRIVACY-POLICY SEMAPHORE (privacy-policy-gated-on-character-presence-CONFIRMED-2026-06-23):
-    // the Bandai-Namco PRIVACY POLICY boot screen is gated SOLELY on character presence -- it appears
-    // iff the active profile summary is loaded but reports ZERO active slots (no character). This is
-    // 1:1 with the on-screen privacy policy. When a gold load is EXPECTED (not telemetry-only), a true
-    // value is the BAD blocker: the gold did NOT load, so the main menu / Continue is never reached
-    // (the privacy-policy gate sits in front of it). On a real load this is false (char present ->
-    // policy skipped). This is the in-process detector that was MISSING when the screen blocked runs.
+    // this is a pre-render character/profile-summary gate, not evidence that a ToS/policy renderer was
+    // reached. The Bandai-Namco PRIVACY POLICY boot screen appears iff the active ProfileSummary exists
+    // but reports ZERO active slots (`slot_active_bytes == 0`, no character). When a gold/native-profile
+    // load is expected (not telemetry-only), `true` means the profile summary was not populated before
+    // the title gate, so the native menu / Continue / ProfileSelect renderer path will not be reached.
+    // On a real loaded profile this is false (at least one active slot -> policy skipped). Do not fix a
+    // true value by pressing E/OK or by suppressing the policy UI; satisfy the underlying native profile
+    // read/summary-population precondition so the gate is false before row/portrait rendering.
     let privacy_policy_gate = profile_summary != NULL_POINTER_VALUE
         && slot_active_bytes == Some(0)
         && !crate::experiments::save_override_telemetry_only();

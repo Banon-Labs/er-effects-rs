@@ -37,27 +37,32 @@ inline_env_assignment if {
 	some statement in statements
 	object.get(statement, "env_setting", false) == true
 	object.get(statement, "command_name", null) != null
+	env_prefix_assignment
 }
 
 inline_env_assignment if {
 	no_usable_ast
-	# Fallback mode is intentionally conservative: catch conventional uppercase
-	# environment assignments before a command without treating ordinary shell
-	# bookkeeping such as rc=$? as an exported environment override. Matched
-	# against the scrubbed command so an `=` inside a quoted argument (e.g.
-	# rtk grep "FOO=bar") is not mistaken for an assignment. The value part is
-	# `*` (not `+`) because a quoted value (FOO="bar" ./cmd) scrubs to empty.
-	regex.match("(^|\\n|[;&|()][ \\t]*)[A-Z_][A-Z0-9_]*=[^ \\t\\n;&|()]*[ \\t]+[^ \\t\\n;&|()=]+", scrubbed_command)
+	env_prefix_assignment
 }
 
 inline_env_assignment if {
-	no_usable_ast
 	regex.match("(^|[;&|()][[:space:]]*)export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*(=|[[:space:];]|$)", scrubbed_command)
 }
 
 inline_env_assignment if {
-	no_usable_ast
 	regex.match("(^|[;&|()][[:space:]]*)env[[:space:]]+[A-Za-z_][A-Za-z0-9_]*=", scrubbed_command)
+}
+
+# Direct environment prefixes are conventional uppercase assignments in the
+# same simple command as the command they affect, e.g. `FOO=bar ./cmd`. This
+# source-text confirmation avoids over-trusting coarse AST `env_setting` markers
+# that can cover lowercase local shell bookkeeping before later commands.
+env_prefix_assignment if {
+	regex.match("(^|\\n|[;&|()][ \\t]*)[A-Z_][A-Z0-9_]*=[^ \\t\\n;&|()$]*[ \\t]+[^ \\t\\n;&|()=]+", scrubbed_command)
+}
+
+env_prefix_assignment if {
+	regex.match("(^|\\n|[;&|()][ \\t]*)[A-Z_][A-Z0-9_]*=\\$\\([^\\n]*\\)[ \\t]+[^ \\t\\n;&|()=]+", scrubbed_command)
 }
 
 # Scrub the command of quoted spans and heredoc bodies so a `=` that lives inside

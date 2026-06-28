@@ -2319,7 +2319,9 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
                     expected_animation_id=args.expected_animation_id,
                 )
             )
-        if telemetry_native_corrupted_save_detected(telemetry):
+        if telemetry_native_corrupted_save_detected(telemetry) and not (
+            telemetry is not None and telemetry.get("oracle_native_profile_capture_enabled") is True
+        ):
             return with_runtime_module_info(
                 ReadinessResult(
                     False,

@@ -3,8 +3,34 @@ set -euo pipefail
 
 export RUNTIME_ONSCREEN="${RUNTIME_ONSCREEN:-1}"
 
+if [[ -f .auto/run_profile_portrait_capture_once ]]; then
+  rm -f .auto/run_profile_portrait_capture_once
+  cargo xwin build --release --target x86_64-pc-windows-msvc >/tmp/er-effects-runtime-build.log 2>&1 || {
+    tail -80 /tmp/er-effects-runtime-build.log >&2
+    exit 1
+  }
+  profile_capture_dir="target/runtime-probe/profile-portrait-capture-$(date +%Y%m%d-%H%M%S)"
+  set +e
+  PROFILE_CAPTURE_SKIP_BUILD=1 \
+  ARTIFACT_DIR="$profile_capture_dir" \
+  ER_EFFECTS_GOLD_SAVE="${ER_EFFECTS_GOLD_SAVE:-/home/banon/projects/er-effects-rs/save-files/150-Banon/ER0000.sl2}" \
+  ER_EFFECTS_GOLD_SLOT="${ER_EFFECTS_GOLD_SLOT:-0}" \
+  RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-45}" \
+  scripts/run-profile-portrait-capture-probe.sh
+  profile_capture_rc=$?
+  set -e
+  if (( profile_capture_rc != 0 )) && [[ ! -f "$profile_capture_dir/profile-portrait-failure.json" ]]; then
+    exit "$profile_capture_rc"
+  fi
+fi
+
 if [[ -f .auto/run_runtime_probe_once ]]; then
   rm -f .auto/run_runtime_probe_once
+  runtime_enable_hudhook="${ER_EFFECTS_ENABLE_HUDHOOK:-0}"
+  if [[ -f .auto/enable_hudhook_runtime_once ]]; then
+    rm -f .auto/enable_hudhook_runtime_once
+    runtime_enable_hudhook=1
+  fi
   cargo xwin build --release --target x86_64-pc-windows-msvc >/tmp/er-effects-runtime-build.log 2>&1 || {
     tail -80 /tmp/er-effects-runtime-build.log >&2
     exit 1
@@ -19,6 +45,7 @@ if [[ -f .auto/run_runtime_probe_once ]]; then
   ER_EFFECTS_AUTHORIZED_DIRECT_RUNTIME=1 \
   AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 \
   ER_EFFECTS_EXPERIMENTAL_DIRECT_MENU_LOAD=1 \
+  ER_EFFECTS_ENABLE_HUDHOOK="$runtime_enable_hudhook" \
   ER_EFFECTS_GOLD_SAVE="${ER_EFFECTS_GOLD_SAVE:-/home/banon/projects/er-effects-rs/save-files/150-Banon/ER0000.sl2}" \
   ER_EFFECTS_GOLD_SLOT="${ER_EFFECTS_GOLD_SLOT:-0}" \
   RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-35}" \
@@ -45,7 +72,10 @@ fi
 python3 - <<'PY'
 from __future__ import annotations
 import json
+import os
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 
 MAX_SCORE = 1600
@@ -1295,10 +1325,39 @@ portrait_render_oracle_true = any(
     and re.search(r'"oracle_title_portrait_pixels_visible"\s*:\s*true', raw)
     for raw in scored_runtime_artifacts_raw
 )
-visible_surface_without_pixels_false_positive = any(
-    re.search(r'"oracle_title_portrait_visible_surface_bound"\s*:\s*true', raw)
-    and not re.search(r'"oracle_title_portrait_pixels_visible"\s*:\s*true', raw)
-    for raw in scored_runtime_artifacts_raw
+offline_face_texture_runtime_drawn = 0
+stylized_facedata_pixel_oracle = 0
+stylized_facedata_pixel_reason = ''
+if best_dir is not None:
+    runtime_raw = (best_dir / 'readiness-result.json').read_text(encoding='utf-8', errors='replace') if (best_dir / 'readiness-result.json').exists() else ''
+    runtime_raw += '\n'
+    runtime_raw += (best_dir / 'er-effects-telemetry.json').read_text(encoding='utf-8', errors='replace') if (best_dir / 'er-effects-telemetry.json').exists() else ''
+    if re.search(r'"oracle_title_offline_face_texture_uploaded"\s*:\s*true', runtime_raw) and re.search(r'"oracle_title_offline_face_texture_drawn"\s*:\s*true', runtime_raw):
+        offline_face_texture_runtime_drawn = 1
+    analysis_path = best_dir / 'logo-replacement-screenshot-analysis.json'
+    if offline_face_texture_runtime_drawn and analysis_path.exists():
+        try:
+            analysis = json.loads(analysis_path.read_text(encoding='utf-8', errors='replace'))
+            if (
+                analysis.get('black_ratio_sane_for_portrait_stage') is True
+                and analysis.get('known_false_positive_signature') is False
+                and float(analysis.get('black32_ratio', 0.0)) >= float(analysis.get('black32_min_ratio', 0.55))
+                and float(analysis.get('dark64_ratio', 1.0)) <= float(analysis.get('dark64_max_ratio', 0.95))
+            ):
+                stylized_facedata_pixel_oracle = 1
+                stylized_facedata_pixel_reason = f"black32={analysis.get('black32_ratio')} dark64={analysis.get('dark64_ratio')}"
+        except Exception as exc:
+            stylized_facedata_pixel_reason = f'analysis parse failed: {exc}'
+if stylized_facedata_pixel_oracle:
+    print(f'DETAIL stylized_facedata_pixel_oracle visible diagnostic passed ({stylized_facedata_pixel_reason}); secondary diagnostic only, not final portrait_pixels_visible proof')
+
+visible_surface_without_pixels_false_positive = (
+    not stylized_facedata_pixel_oracle
+    and any(
+        re.search(r'"oracle_title_portrait_visible_surface_bound"\s*:\s*true', raw)
+        and not re.search(r'"oracle_title_portrait_pixels_visible"\s*:\s*true', raw)
+        for raw in scored_runtime_artifacts_raw
+    )
 )
 profile_select_transform_false_positive = any(
     re.search(r'"oracle_title_loaded_character_portrait_rendered"\s*:\s*true', raw)
@@ -1371,6 +1430,125 @@ penalty = (
 )
 score = max(0, MAX_SCORE - penalty)
 
+offline_face_source_ready = 0
+offline_face_source_errors: list[str] = []
+offline_face_source_hash = ''
+offline_face_source_name = ''
+hudhook_cpu_texture_bridge_ready = 0
+hudhook_cpu_texture_bridge_errors: list[str] = []
+try:
+    with tempfile.NamedTemporaryFile(prefix='er-face-source-', suffix='.json', delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        subprocess.run(
+            [
+                'python3',
+                str(root / 'scripts/save-slot-oracle.py'),
+                '--save',
+                os.environ.get('ER_EFFECTS_GOLD_SAVE', str(root / 'save-files/150-Banon/ER0000.sl2')),
+                '--slot',
+                os.environ.get('ER_EFFECTS_GOLD_SLOT', '0'),
+                '--output',
+                str(tmp_path),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+        )
+        face_oracle = json.loads(tmp_path.read_text(encoding='utf-8', errors='replace'))
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    decoded = face_oracle.get('decoded_fields', {}) if isinstance(face_oracle, dict) else {}
+    face_hash = decoded.get('face_data_buffer_sha256')
+    face_fields = decoded.get('face_body_fields')
+    name = decoded.get('name') or decoded.get('character_name') or ''
+    offline_face_source_name = str(name)
+    if isinstance(face_hash, str):
+        offline_face_source_hash = face_hash
+    if not isinstance(face_hash, str) or not re.fullmatch(r'[0-9a-f]{64}', face_hash):
+        offline_face_source_errors.append('save-slot-oracle did not expose a 64-hex FaceData buffer hash')
+    if not isinstance(face_fields, dict) or len(face_fields) < 8:
+        offline_face_source_errors.append('save-slot-oracle did not expose a populated face/body field map')
+    if empty_name_like(str(name)):
+        offline_face_source_errors.append('save-slot-oracle decoded an empty-like character name for the gold slot')
+    if not offline_face_source_errors:
+        offline_face_source_ready = 1
+except Exception as exc:
+    offline_face_source_errors.append(f'offline face source check crashed: {exc}')
+
+real_portrait_asset_candidates = 0
+profile_placeholder_assets_only = 0
+portrait_asset_inventory_details: list[str] = []
+portrait_asset_roots = [
+    root / 'target/autoresearch/gfx-analysis/ffdec-export/images/05_010_profileselect.gfx',
+    root / 'target/autoresearch/gfx-analysis/script-smoke/ffdec-export/image/05_010_profileselect.gfx',
+]
+placeholder_assets = []
+chrome_assets = []
+real_candidate_assets = []
+chrome_tokens = (
+    'cursor',
+    'base',
+    'profileselect',
+    'menu_fl_',
+    'line',
+    'kick',
+    'option',
+    'deco',
+    'waku',
+    'bar',
+    'arrow',
+    'bloodmessage',
+)
+for asset_root in portrait_asset_roots:
+    if not asset_root.exists():
+        continue
+    for path in asset_root.glob('*.png'):
+        lower = path.name.lower()
+        if 'dummyprofileface' in lower:
+            placeholder_assets.append(path)
+        elif any(token in lower for token in chrome_tokens):
+            chrome_assets.append(path)
+        elif any(token in lower for token in ('profile', 'face', 'portrait')):
+            real_candidate_assets.append(path)
+if real_candidate_assets:
+    real_portrait_asset_candidates = len(real_candidate_assets)
+    portrait_asset_inventory_details.append('real-looking non-chrome profile/face candidates: ' + ', '.join(str(p) for p in real_candidate_assets[:5]))
+elif placeholder_assets:
+    profile_placeholder_assets_only = 1
+    portrait_asset_inventory_details.append(f'only dummy ProfileSelect placeholder face assets found ({len(placeholder_assets)} pngs); excluded {len(chrome_assets)} ProfileSelect chrome/surface PNGs; no loaded-character/precomputed portrait asset is present in FFDEC exports')
+elif chrome_assets:
+    portrait_asset_inventory_details.append(f'only ProfileSelect chrome/surface PNGs found ({len(chrome_assets)} pngs); no loaded-character/precomputed portrait asset is present in FFDEC exports')
+else:
+    portrait_asset_inventory_details.append('no profile/face/portrait PNG assets found in known FFDEC export roots')
+for detail in portrait_asset_inventory_details:
+    print(f'DETAIL portrait_asset_inventory {detail}')
+
+for failure in offline_face_source_errors:
+    print(f'DETAIL offline_face_source {failure}')
+if offline_face_source_ready:
+    print(f'DETAIL offline_face_source ready name={offline_face_source_name} face_sha256={offline_face_source_hash}')
+
+hudhook_sources = []
+for hudhook_root in (Path.home() / '.cargo/git/checkouts').glob('hudhook-*') if (Path.home() / '.cargo/git/checkouts').exists() else []:
+    for lib_rs in hudhook_root.glob('*/src/lib.rs'):
+        try:
+            hudhook_sources.append(lib_rs.read_text(encoding='utf-8', errors='replace'))
+        except OSError:
+            pass
+if not any('pub trait RenderContext' in src and 'fn load_texture(&mut self, data: &[u8], width: u32, height: u32)' in src for src in hudhook_sources):
+    hudhook_cpu_texture_bridge_errors.append('local hudhook checkout does not expose RenderContext::load_texture(data,width,height)')
+if not re.search(r'fn initialize\(&mut self, ctx: &mut Context, [A-Za-z_][A-Za-z0-9_]*: &mut dyn (?:hudhook::)?RenderContext\)', overlay_code):
+    hudhook_cpu_texture_bridge_errors.append('overlay initialize does not receive a hudhook RenderContext for CPU texture upload')
+if not hudhook_cpu_texture_bridge_errors:
+    hudhook_cpu_texture_bridge_ready = 1
+for failure in hudhook_cpu_texture_bridge_errors:
+    print(f'DETAIL hudhook_cpu_texture_bridge {failure}')
+if hudhook_cpu_texture_bridge_ready:
+    print('DETAIL hudhook_cpu_texture_bridge ready: RenderContext::load_texture can upload CPU RGBA into a TextureId during overlay initialize')
+
 for failure in all_detail_failures:
     print(f'DETAIL {failure}')
 for failure in native_trace_blockers:
@@ -1402,4 +1580,10 @@ print(f'METRIC native_trace_blockers={len(native_trace_blockers)}')
 print(f'METRIC native_trace_hits_total={native_trace_hits_total}')
 print(f'METRIC native_trace_unique_breakpoints={native_trace_unique_breakpoints}')
 print(f'METRIC false_positives={false_positives}')
+print(f'METRIC offline_face_source_ready={offline_face_source_ready}')
+print(f'METRIC hudhook_cpu_texture_bridge_ready={hudhook_cpu_texture_bridge_ready}')
+print(f'METRIC offline_face_texture_runtime_drawn={offline_face_texture_runtime_drawn}')
+print(f'METRIC stylized_facedata_pixel_oracle={stylized_facedata_pixel_oracle}')
+print(f'METRIC real_portrait_asset_candidates={real_portrait_asset_candidates}')
+print(f'METRIC profile_placeholder_assets_only={profile_placeholder_assets_only}')
 PY

@@ -103,6 +103,70 @@ def main() -> int:
             },
         ),
         PolicyCase(
+            "deny-command-substitution-inline-env",
+            "FOO=$(python3 -c 'print(1)') ./scripts/check.sh",
+            False,
+            "named-env.env",
+        ),
+        PolicyCase(
+            "deny-export-with-ast",
+            "export FOO=bar",
+            False,
+            "named-env.env",
+            {
+                "command_ast": {
+                    "parse_ok": True,
+                    "statements": [
+                        {
+                            "env_setting": False,
+                            "command_name": "export",
+                        }
+                    ],
+                }
+            },
+        ),
+        PolicyCase(
+            "deny-env-command-with-ast",
+            "env FOO=bar ./scripts/check.sh",
+            False,
+            "named-env.env",
+            {
+                "command_ast": {
+                    "parse_ok": True,
+                    "statements": [
+                        {
+                            "env_setting": False,
+                            "command_name": "env",
+                        }
+                    ],
+                }
+            },
+        ),
+        PolicyCase(
+            "allow-local-shell-vars-before-commands-with-coarse-ast",
+            "run_id=$(date +%Y%m%d-%H%M%S)\n"
+            "log_dir=\"target/runtime-probe/profile-portrait-capture-measure-$run_id\"\n"
+            "mkdir -p \"$log_dir\"\n"
+            "touch .auto/run_profile_portrait_capture_once\n"
+            "nohup ./.auto/measure.sh > \"$log_dir/measure.out\" 2> \"$log_dir/measure.err\" &\n"
+            "pid=$!\n"
+            "echo \"$pid\" > \"$log_dir/measure.pid\"\n"
+            "echo \"$log_dir\"",
+            True,
+            None,
+            {
+                "command_ast": {
+                    "parse_ok": True,
+                    "statements": [
+                        {
+                            "env_setting": True,
+                            "command_name": "mkdir",
+                        }
+                    ],
+                }
+            },
+        ),
+        PolicyCase(
             "allow-shell-variable-bookkeeping",
             "./scripts/check-no-timeouts.py\nrc=$?\necho \"$rc\"",
             True,

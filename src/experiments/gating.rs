@@ -70,6 +70,19 @@ pub(crate) fn experimental_direct_menu_load_enabled() -> bool {
 pub(crate) fn product_autoload_enabled() -> bool {
     PRODUCT_AUTOLOAD_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
 }
+/// Diagnostic mode for native ProfileSelect/profile-renderer portrait capture. This mode must not
+/// arm product title-cover/custom-cover mutations or default Continue autoload; it only permits the
+/// zero-host-input native menu open plus passive/native Load-Game row firing used by the capture
+/// harness.
+pub(crate) fn native_profile_capture_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_PROFILE_CAPTURE_NATIVE").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-profile-capture-native.txt")
+        .exists()
+}
 /// Kill-switch to skip installing the continue_trace hooks (bisecting a ~19s
 /// title crash caused by our DLL). When set, the continue/load-flow hooks are
 /// not installed even if autoload is configured.
@@ -256,7 +269,7 @@ pub(crate) fn autoload_disabled() -> bool {
             .exists()
 }
 pub(crate) fn native_continue_enabled() -> bool {
-    if autoload_disabled() {
+    if autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
     // DEFAULT-ON for any real (non-telemetry-only) run: this IS the product autoload path, so it no
@@ -689,7 +702,7 @@ pub(crate) fn title_anim_speedup_enabled() -> bool {
 /// autoload/save-override contract, not a new env/file knob: a real autoload wants a clean cover;
 /// telemetry-only observation and `ER_EFFECTS_NO_AUTOLOAD` must preserve vanilla visuals.
 pub(crate) fn title_native_menu_visual_suppression_enabled() -> bool {
-    if autoload_disabled() {
+    if autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
     !save_override_telemetry_only()

@@ -467,6 +467,14 @@ pub(crate) unsafe fn maybe_set_title_accept_byte(base: usize) {
             hide_title_press_start_proxy(base, dialog, press_start_proxy, press_start_context)
         };
     }
+    if native_profile_capture_enabled() {
+        const TITLE_CURSOR_LOAD_GAME: i32 = 1;
+        let before = unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }.unwrap_or(-1);
+        unsafe { *((dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) as *mut i32) = TITLE_CURSOR_LOAD_GAME };
+        append_autoload_debug(format_args!(
+            "title-accept-byte: native-profile-capture set TitleTopDialog cursor [dialog+0xb0c] {before}->1 before native accept byte"
+        ));
+    }
     unsafe {
         *((base + TITLE_GLOBAL_ACCEPT_BYTE_RVA) as *mut u8) = TITLE_PROCEED_GATE_SET_VALUE;
     }
@@ -1732,9 +1740,10 @@ pub(crate) unsafe fn title_menu_action_ready(owner: usize, base: usize) -> Optio
     }
     let registry =
         unsafe { safe_read_usize(dialog + DIALOG_ROW_REGISTRY_A48_OFFSET) }.unwrap_or(null);
-    if !vtable_in_game_image(registry, base) {
-        return None;
-    }
+    // In the native profile-capture direct-open path this slot can be a live heap/registry value
+    // instead of an image vtable-shaped value. Treat it as provenance, not as a pre-scan hard gate:
+    // the bounded scanner below still validates the actual MenuMemberFuncJob vtable/member_fn chain
+    // before returning anything fireable.
     let (member_node, window_item) = unsafe { scan_dialog_for_loadgame(owner, base) };
     let node = member_node?;
     let node_vt = unsafe { safe_read_usize(node) }.unwrap_or(null);

@@ -313,6 +313,15 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
                 .name("er-effects-tfc-record-fix".to_owned())
                 .spawn(install_title_flow_context_record_regulation_fix_hook);
         });
+    } else if native_profile_capture_enabled() {
+        // Native ProfileSelect diagnostic: install only the passive Scaleform bind observer. Do not
+        // install title-cover/custom-cover hooks; this mode is specifically meant to prove native
+        // ProfileSelect/profile-renderer provenance without the product cover mutation path.
+        START_TITLE_SCALEFORM_BIND_OBSERVER.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-native-profile-bind-observer".to_owned())
+                .spawn(install_title_scaleform_bind_observer_hook);
+        });
     }
 
     // MenuWindow latch: install the SceneObjProxy ctor hook (0x14074a700) as early as the
@@ -322,7 +331,8 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // OPT-IN (off by default): only install when `menu_window_latch_enabled()` is set
     // (env ER_EFFECTS_MENU_WINDOW_LATCH=1 OR GAME_DIR file er-effects-menu-window-latch.txt).
     // When off, the hook is never installed (no MinHook, no detour) -- a clean run has neither.
-    if menu_window_latch_enabled() || product_autoload_enabled() {
+    if menu_window_latch_enabled() || product_autoload_enabled() || native_profile_capture_enabled()
+    {
         START_MENU_WINDOW_LATCH.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-effects-menu-window-latch".to_owned())
@@ -565,7 +575,9 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 if pab_advance_enabled() {
                     if let Ok(base) = game_module_base() {
                         unsafe { install_pab_advance_hook(base) };
-                        unsafe { maybe_set_title_accept_byte(base) };
+                        if !native_profile_capture_enabled() {
+                            unsafe { maybe_set_title_accept_byte(base) };
+                        }
                     }
                 }
                 // Now-loading helper observer: attach only after the native title accept byte fired.

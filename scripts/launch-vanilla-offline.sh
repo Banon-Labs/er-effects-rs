@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # USER-INTERACTIVE vanilla offline boot for the privacy-policy persistence experiment. Launches the
 # approved direct/offline eldenring.exe via Proton (NOT Steam applaunch, NOT the protected launcher),
-# with our LazyLoader DLL DISABLED (so it is genuinely vanilla: no fail-closed abort, no input block,
-# no agent teardown). The USER drives it (accept the privacy policy, quit). Modes:
-#   launch   -- disable DLL, launch detached, print pid
+# with our LazyLoader DLL DISABLED by default (so it is genuinely vanilla: no fail-closed abort,
+# no input block, no agent teardown). The USER drives it (accept the privacy policy, quit).
+# Set KEEP_LAZYLOADER=1 for anti-debug/debugging runs that must keep dinput8.dll enabled while
+# preserving this script's known-good Proton/offline launch path. Modes:
+#   launch   -- disable DLL by default, launch detached, print pid
 #   teardown -- kill any eldenring.exe (if the user wants the agent to close it)
 #   restore  -- re-enable our LazyLoader DLL
 set -uo pipefail
@@ -12,6 +14,7 @@ GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}
 PROTON="${PROTON:-$HOME/.local/share/Steam/steamapps/common/Proton - Experimental/proton}"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
 STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}"
+KEEP_LAZYLOADER="${KEEP_LAZYLOADER:-0}"
 DINPUT="$GAME_DIR/dinput8.dll"
 DINPUT_OFF="$GAME_DIR/dinput8.dll.er-disabled"
 
@@ -30,8 +33,16 @@ case "$MODE" in
     for proc in /proc/[0-9]*; do
       [[ -r "$proc/comm" && "$(<"$proc/comm" 2>/dev/null)" == "eldenring.exe" ]] && { echo "eldenring.exe already running; teardown first" >&2; exit 2; }
     done
-    # Disable our LazyLoader so the boot is genuinely vanilla (no DLL).
-    [[ -f "$DINPUT" ]] && mv -f "$DINPUT" "$DINPUT_OFF" && echo "disabled LazyLoader ($DINPUT -> $DINPUT_OFF)"
+    dll_state="OFF"
+    if [[ "$KEEP_LAZYLOADER" == "1" ]]; then
+      [[ -f "$DINPUT_OFF" && ! -f "$DINPUT" ]] && mv -f "$DINPUT_OFF" "$DINPUT" && echo "kept LazyLoader enabled ($DINPUT_OFF -> $DINPUT)"
+      [[ -f "$DINPUT" ]] || { echo "KEEP_LAZYLOADER=1 requested but missing LazyLoader dinput8.dll" >&2; exit 2; }
+      dll_state="ON"
+      echo "KEEP_LAZYLOADER=1: not disabling LazyLoader"
+    else
+      # Disable our LazyLoader so the boot is genuinely vanilla (no DLL).
+      [[ -f "$DINPUT" ]] && mv -f "$DINPUT" "$DINPUT_OFF" && echo "disabled LazyLoader ($DINPUT -> $DINPUT_OFF)"
+    fi
     (
       cd "$GAME_DIR"
       STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_COMPAT_CLIENT_INSTALL_PATH" \
@@ -39,7 +50,7 @@ case "$MODE" in
       "$PROTON" run "$GAME_DIR/eldenring.exe" > "$GAME_DIR/er-vanilla-proton.out" 2>&1 &
       echo "$!" > "$GAME_DIR/er-vanilla.pid"
     )
-    echo "launched vanilla offline eldenring.exe (proton pid $(cat "$GAME_DIR/er-vanilla.pid" 2>/dev/null)). DLL is OFF."
+    echo "launched vanilla offline eldenring.exe (proton pid $(cat "$GAME_DIR/er-vanilla.pid" 2>/dev/null)). DLL is $dll_state."
     echo "Accept the privacy policy and quit when done; then tell the agent."
     ;;
   teardown)
