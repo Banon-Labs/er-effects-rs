@@ -46,6 +46,16 @@ For Pi `run_experiment` in this repo, the cap is the **same single 45s hard trut
 
 Steam MUST be running before every Elden Ring runtime probe. Verify with `pgrep -x steam` first; if it is absent, ask the user to start Steam (interactive login) before launching any probe. The offline `eldenring.exe` Proton launch reuses Steam's environment (wineprefix, CWD, account/save-dir id); with Steam down the game still boots but in a different environment, so the DLL debug log lands elsewhere and Steam-dependent state degrades into a non-representative run (observed 2026-06-21: a run came back `cold_char_mount_phase=5` yet appended zero debug lines and the default level-9 character). `scripts/run-product-continue-direct-probe.sh` now fails closed in `preflight()` when Steam is down.
 
+## linux-x86-debug Sibling Toolkit (attach / trace / DLL inject)
+
+`linux-x86-debug` main landed runtime DLL injection support on 2026-06-27. Use it as a sibling toolkit for Wine/Proton Elden Ring runtime inspection when an attach-based path is safer than baking a probe into the chainloader:
+
+- Capabilities: `inject_library`, `remove_library`, and `list_modules` load/unload/list DLLs in an already-running Wine/Proton process by calling `LoadLibraryA` through the existing `winedbg --gdb` attach path. It detaches and leaves the target running; no native ptrace addon is required.
+- er-effects-rs use case: attach to approved offline/direct `eldenring.exe`, inject `er_effects_rs.dll` without the LazyLoader/chainloader path, and use `list_modules` for live PE module bases that help telemetry/oracle work. This rides the same Wine attach mechanism already used for tracebreakpoint evidence.
+- Access paths: MCP server `linux-x86-debug-attach`, or import `#library-injection` / `#pe-export-table` from the linux-x86-debug package.
+- Hard safety boundary: x86-64 only. Do **not** attach to or inject into `start_protected_game.exe` / EAC launcher processes. Only use the approved offline/direct `eldenring.exe` target.
+- Hang caveat: the inferior `LoadLibraryA` call runs while target threads are frozen; a blocking `DllMain` or a thread holding the loader lock can hang the attach/inject operation. Keep injected DLL attach paths bounded and non-blocking.
+
 ## Ghidra Runtime Dump: First-Pass RE Source
 
 **For ANY Elden Ring RE lookup, consult the Ghidra runtime dump FIRST -- before our own static disasm (`scripts/disas-deobf.sh` / `er_disasm`) or any runtime probe -- whenever a Ghidra project is relevant** (resolving a function/VA to a name + signature, decompiling to readable C, getting struct/field layouts, RTTI class names, namespaces). It has real symbols/types that the raw deobf binary lacks, so it is the cheapest, most authoritative first pass; only fall back to disasm/runtime when the dump cannot answer (e.g. runtime-only values, code the dump didn't symbolize).
