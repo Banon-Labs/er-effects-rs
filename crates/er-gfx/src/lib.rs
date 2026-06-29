@@ -81,6 +81,10 @@ const TAG_PLACE_OBJECT2: u16 = 26;
 /// `DefineScalingGrid` (code 78): a `u16` characterId followed by a `RECT` (the
 /// nine-slice scaling grid).
 const TAG_DEFINE_SCALING_GRID: u16 = 78;
+/// `PlaceObject3` (code 70): like `PlaceObject2` plus a second flags byte that
+/// adds an image bit, class name, bitmap cache, blend mode, a SURFACEFILTERLIST,
+/// and a visible/background-color pair. See [`Tag::PlaceObject3`].
+const TAG_PLACE_OBJECT3: u16 = 70;
 
 // --- PlaceObject2 flag bits (MSB-to-LSB within the flags byte; SWF order). ---
 /// `PlaceFlagMove`: this tag moves an existing object at `depth`. Stored only in
@@ -103,6 +107,45 @@ const PO2_HAS_CLIPDEPTH: u8 = 0x40;
 /// `PlaceFlagHasClipActions`: a CLIPACTIONS block follows (unmodelled; see
 /// [`Tag`] -- such a PlaceObject2 is kept as [`Tag::Unknown`]).
 const PO2_HAS_CLIPACTIONS: u8 = 0x80;
+
+// --- PlaceObject3 second flags byte (MSB-first SWF v10+ layout). Empirically,
+// the Elden Ring corpus only ever sets HasFilterList/HasBlendMode/
+// HasCacheAsBitmap/HasImage (HasImage bears no extra field); HasClassName,
+// HasVisible, and the two reserved high bits never occur. We still model the
+// className / visible+background fields for completeness, and treat the two
+// reserved bits as a fall-back-to-[`Tag::Unknown`] signal (their semantics are
+// unverifiable since the corpus never exercises them). ---
+/// `PlaceFlagHasFilterList`: a SURFACEFILTERLIST follows.
+const PO3_HAS_FILTERLIST: u8 = 0x01;
+/// `PlaceFlagHasBlendMode`: a `u8` blend mode follows.
+const PO3_HAS_BLENDMODE: u8 = 0x02;
+/// `PlaceFlagHasCacheAsBitmap`: a `u8` bitmap-cache flag follows.
+const PO3_HAS_CACHE_AS_BITMAP: u8 = 0x04;
+/// `PlaceFlagHasClassName`: a NUL-terminated class name follows (right after
+/// `depth`). Never set in the corpus, but modelled. Note: the SWF spec's
+/// alternative "(HasImage AND HasCharacter)" class-name trigger is NOT honored
+/// by this Scaleform exporter -- those bodies carry `characterId`+`MATRIX`
+/// directly after `depth` with no class name (corpus-proven), so class name is
+/// gated SOLELY by this bit.
+const PO3_HAS_CLASSNAME: u8 = 0x08;
+/// `PlaceFlagHasImage`: marks an image/bitmap placement. Bears NO extra field
+/// (corpus-proven); the bit is preserved verbatim in `flags2`.
+#[allow(dead_code)]
+const PO3_HAS_IMAGE: u8 = 0x10;
+/// `PlaceFlagHasVisible`: a `u8` visible flag + an `RGBA` background color
+/// follow. Never set in the corpus, but modelled.
+const PO3_HAS_VISIBLE: u8 = 0x20;
+/// The two high bits of `flags2` (`OpaqueBackground` + a reserved bit). Never
+/// set in the corpus; if either is set we fall back to [`Tag::Unknown`] rather
+/// than guess an unverifiable layout.
+const PO3_RESERVED_MASK: u8 = 0xc0;
+
+// --- SURFACEFILTERLIST filter ids (only those present in the corpus are typed;
+// any other id forces the whole PlaceObject3 back to [`Tag::Unknown`]). ---
+/// `DropShadowFilter` filter id.
+const FILTER_DROP_SHADOW: u8 = 0;
+/// `GlowFilter` filter id.
+const FILTER_GLOW: u8 = 2;
 
 /// Short-form length sentinel: `len == 0x3f` means a `u32` long length follows.
 const LONG_LEN_SENTINEL: u16 = 0x3f;
@@ -245,6 +288,54 @@ pub enum Tag {
         name: Option<String>,
         /// `clipDepth` (flag `HasClipDepth` `0x40`).
         clip_depth: Option<u16>,
+        /// Whether the source encoded this tag's `RecordHeader` in long form.
+        force_long: bool,
+    },
+    /// `PlaceObject3` (code 70): `PlaceObject2` plus a second flags byte. Both
+    /// flag bytes are stored verbatim and govern which optional fields are
+    /// present; each optional field below is `Some` iff its flag bit is set.
+    ///
+    /// Field order (corpus-proven byte-identical over all 5,360 instances):
+    /// `depth`, `class_name` (`flags2` `HasClassName`), `character_id`
+    /// (`flags1` `HasCharacter`), `matrix`, `color_transform`, `ratio`, `name`,
+    /// `clip_depth`, `filters` (`flags2` `HasFilterList`), `blend_mode`
+    /// (`HasBlendMode`), `bitmap_cache` (`HasCacheAsBitmap`), `visible`
+    /// (`HasVisible`: a `u8` flag + `RGBA` background).
+    ///
+    /// A PlaceObject3 carrying `clipActions` (`flags1` `0x80`), a reserved
+    /// `flags2` bit (`0xc0`), or an unmodelled SURFACEFILTERLIST filter id is
+    /// kept as [`Tag::Unknown`] (none occur in the corpus).
+    PlaceObject3 {
+        /// First flags byte (same bit layout as [`Tag::PlaceObject2`]'s flags).
+        flags1: u8,
+        /// Second flags byte (`HasImage`/`HasClassName`/`HasCacheAsBitmap`/
+        /// `HasBlendMode`/`HasFilterList`/`HasVisible`, plus reserved).
+        flags2: u8,
+        depth: u16,
+        /// Class name (flag `flags2` `HasClassName` `0x08`); NUL implicit.
+        class_name: Option<String>,
+        /// `characterId` (flag `flags1` `HasCharacter` `0x02`).
+        character_id: Option<u16>,
+        /// Placement `MATRIX` (flag `flags1` `HasMatrix` `0x04`).
+        matrix: Option<Matrix>,
+        /// `CXFORMWITHALPHA` (flag `flags1` `HasColorTransform` `0x08`).
+        color_transform: Option<CxformWithAlpha>,
+        /// Morph `ratio` (flag `flags1` `HasRatio` `0x10`).
+        ratio: Option<u16>,
+        /// Instance `name` (flag `flags1` `HasName` `0x20`); NUL implicit.
+        name: Option<String>,
+        /// `clipDepth` (flag `flags1` `HasClipDepth` `0x40`).
+        clip_depth: Option<u16>,
+        /// SURFACEFILTERLIST (flag `flags2` `HasFilterList` `0x01`). The `u8`
+        /// count is derived from the vector length on write.
+        filters: Option<Vec<Filter>>,
+        /// Blend mode (flag `flags2` `HasBlendMode` `0x02`).
+        blend_mode: Option<u8>,
+        /// Bitmap-cache flag (flag `flags2` `HasCacheAsBitmap` `0x04`).
+        bitmap_cache: Option<u8>,
+        /// `(visible, [r, g, b, a] background)` (flag `flags2` `HasVisible`
+        /// `0x20`).
+        visible: Option<(u8, [u8; 4])>,
         /// Whether the source encoded this tag's `RecordHeader` in long form.
         force_long: bool,
     },
@@ -929,6 +1020,136 @@ impl CxformWithAlpha {
     }
 }
 
+/// One entry of a `PlaceObject3` SURFACEFILTERLIST.
+///
+/// Only the filter ids that actually occur in the Elden Ring menu corpus are
+/// typed: [`Filter::DropShadow`] (id 0, 2,849 instances) and [`Filter::Glow`]
+/// (id 2, 31 instances). The fixed-point fields (`FIXED` is 16.16, `FIXED8` is
+/// 8.8) are stored as their raw little-endian signed integers so byte-identity
+/// is exact without committing to a float representation; `flags` holds the
+/// filter's trailing `InnerShadow`/`Knockout`/`CompositeSource`/`Passes`
+/// sub-byte verbatim. Any other filter id forces the whole `PlaceObject3` back
+/// to [`Tag::Unknown`] (none occur -- 0 of 2,880 filters).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Filter {
+    /// `DropShadowFilter` (id 0): `RGBA` color, BlurX/BlurY/Angle/Distance
+    /// (`FIXED` 16.16), Strength (`FIXED8` 8.8), and a trailing flags byte.
+    DropShadow {
+        /// `[red, green, blue, alpha]` shadow color.
+        color: [u8; 4],
+        /// BlurX, raw 16.16 fixed (`FIXED`).
+        blur_x: i32,
+        /// BlurY, raw 16.16 fixed.
+        blur_y: i32,
+        /// Angle, raw 16.16 fixed (radians).
+        angle: i32,
+        /// Distance, raw 16.16 fixed.
+        distance: i32,
+        /// Strength, raw 8.8 fixed (`FIXED8`).
+        strength: i16,
+        /// `InnerShadow`(0x80) / `Knockout`(0x40) / `CompositeSource`(0x20) /
+        /// `Passes`(low 5 bits), stored verbatim.
+        flags: u8,
+    },
+    /// `GlowFilter` (id 2): `RGBA` color, BlurX/BlurY (`FIXED`), Strength
+    /// (`FIXED8`), and a trailing flags byte.
+    Glow {
+        /// `[red, green, blue, alpha]` glow color.
+        color: [u8; 4],
+        /// BlurX, raw 16.16 fixed.
+        blur_x: i32,
+        /// BlurY, raw 16.16 fixed.
+        blur_y: i32,
+        /// Strength, raw 8.8 fixed.
+        strength: i16,
+        /// `InnerGlow`(0x80) / `Knockout`(0x40) / `CompositeSource`(0x20) /
+        /// `Passes`(low 5 bits), stored verbatim.
+        flags: u8,
+    },
+}
+
+impl Filter {
+    /// Read one filter: a `u8` id followed by its body. Returns `Ok(None)` for an
+    /// unmodelled filter id so the caller can fall the whole `PlaceObject3` back
+    /// to [`Tag::Unknown`] (the id byte is NOT consumed in that case, but the
+    /// caller discards `r` anyway and re-emits the raw body).
+    fn read(r: &mut GfxReader) -> Result<Option<Filter>, GfxError> {
+        let id = r.read_u8()?;
+        match id {
+            FILTER_DROP_SHADOW => {
+                let color = [r.read_u8()?, r.read_u8()?, r.read_u8()?, r.read_u8()?];
+                let blur_x = r.read_u32()? as i32;
+                let blur_y = r.read_u32()? as i32;
+                let angle = r.read_u32()? as i32;
+                let distance = r.read_u32()? as i32;
+                let strength = r.read_u16()? as i16;
+                let flags = r.read_u8()?;
+                Ok(Some(Filter::DropShadow {
+                    color,
+                    blur_x,
+                    blur_y,
+                    angle,
+                    distance,
+                    strength,
+                    flags,
+                }))
+            }
+            FILTER_GLOW => {
+                let color = [r.read_u8()?, r.read_u8()?, r.read_u8()?, r.read_u8()?];
+                let blur_x = r.read_u32()? as i32;
+                let blur_y = r.read_u32()? as i32;
+                let strength = r.read_u16()? as i16;
+                let flags = r.read_u8()?;
+                Ok(Some(Filter::Glow {
+                    color,
+                    blur_x,
+                    blur_y,
+                    strength,
+                    flags,
+                }))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn write(&self, w: &mut GfxWriter) {
+        match self {
+            Filter::DropShadow {
+                color,
+                blur_x,
+                blur_y,
+                angle,
+                distance,
+                strength,
+                flags,
+            } => {
+                w.write_u8(FILTER_DROP_SHADOW);
+                w.write_bytes(color);
+                w.write_u32(*blur_x as u32);
+                w.write_u32(*blur_y as u32);
+                w.write_u32(*angle as u32);
+                w.write_u32(*distance as u32);
+                w.write_u16(*strength as u16);
+                w.write_u8(*flags);
+            }
+            Filter::Glow {
+                color,
+                blur_x,
+                blur_y,
+                strength,
+                flags,
+            } => {
+                w.write_u8(FILTER_GLOW);
+                w.write_bytes(color);
+                w.write_u32(*blur_x as u32);
+                w.write_u32(*blur_y as u32);
+                w.write_u16(*strength as u16);
+                w.write_u8(*flags);
+            }
+        }
+    }
+}
+
 impl Movie {
     /// Parse a complete uncompressed GFX movie from `data`.
     pub fn parse(data: &[u8]) -> Result<Movie, GfxError> {
@@ -1156,6 +1377,7 @@ fn decode_tag_body(code: u16, body: Vec<u8>, force_long: bool) -> Result<Tag, Gf
             })
         }
         TAG_PLACE_OBJECT2 => decode_place_object2(body, force_long),
+        TAG_PLACE_OBJECT3 => decode_place_object3(body, force_long),
         TAG_DEFINE_SCALING_GRID => {
             let mut br = GfxReader::new(&body);
             let character_id = br.read_u16()?;
@@ -1266,6 +1488,138 @@ fn decode_place_object2(body: Vec<u8>, force_long: bool) -> Result<Tag, GfxError
         ratio,
         name,
         clip_depth,
+        force_long,
+    })
+}
+
+/// Decode a `PlaceObject3` (code 70) body. Two flags bytes govern the optional
+/// fields (the first reuses the `PlaceObject2` bit layout; the second adds the
+/// PO3 extras). MATRIX/CXFORMWITHALPHA are bit-packed and byte-align at their
+/// end. A PlaceObject3 that sets `clipActions`, a reserved `flags2` bit, or
+/// carries an unmodelled filter id is kept as [`Tag::Unknown`] -- those paths
+/// never occur in the corpus, so keeping them opaque preserves byte-identity
+/// without guessing their structure.
+fn decode_place_object3(body: Vec<u8>, force_long: bool) -> Result<Tag, GfxError> {
+    let code = TAG_PLACE_OBJECT3;
+    // Need at least flags1 + flags2 + depth.
+    if body.len() < 4 {
+        return Ok(Tag::Unknown {
+            code,
+            raw: body,
+            force_long,
+        });
+    }
+    let flags1 = body[0];
+    let flags2 = body[1];
+    // Unmodelled (never-occurring) layouts -> opaque Unknown.
+    if flags1 & PO2_HAS_CLIPACTIONS != 0 || flags2 & PO3_RESERVED_MASK != 0 {
+        return Ok(Tag::Unknown {
+            code,
+            raw: body,
+            force_long,
+        });
+    }
+
+    let mut r = GfxReader::new(&body);
+    r.pos = 2;
+    let depth = r.read_u16()?;
+
+    let class_name = if flags2 & PO3_HAS_CLASSNAME != 0 {
+        Some(r.read_cstring(code)?)
+    } else {
+        None
+    };
+    let character_id = if flags1 & PO2_HAS_CHARACTER != 0 {
+        Some(r.read_u16()?)
+    } else {
+        None
+    };
+    let matrix = if flags1 & PO2_HAS_MATRIX != 0 {
+        let mut bits = BitReader::new_at_byte(&body, r.pos);
+        let m = Matrix::read(&mut bits)?;
+        r.pos = bits.byte_pos();
+        Some(m)
+    } else {
+        None
+    };
+    let color_transform = if flags1 & PO2_HAS_CXFORM != 0 {
+        let mut bits = BitReader::new_at_byte(&body, r.pos);
+        let c = CxformWithAlpha::read(&mut bits)?;
+        r.pos = bits.byte_pos();
+        Some(c)
+    } else {
+        None
+    };
+    let ratio = if flags1 & PO2_HAS_RATIO != 0 {
+        Some(r.read_u16()?)
+    } else {
+        None
+    };
+    let name = if flags1 & PO2_HAS_NAME != 0 {
+        Some(r.read_cstring(code)?)
+    } else {
+        None
+    };
+    let clip_depth = if flags1 & PO2_HAS_CLIPDEPTH != 0 {
+        Some(r.read_u16()?)
+    } else {
+        None
+    };
+    let filters = if flags2 & PO3_HAS_FILTERLIST != 0 {
+        let count = r.read_u8()?;
+        let mut v = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            match Filter::read(&mut r)? {
+                Some(f) => v.push(f),
+                // Unmodelled filter id: discard the partial decode and keep the
+                // whole tag opaque (the raw body re-emits byte-identically).
+                None => {
+                    return Ok(Tag::Unknown {
+                        code,
+                        raw: body.clone(),
+                        force_long,
+                    });
+                }
+            }
+        }
+        Some(v)
+    } else {
+        None
+    };
+    let blend_mode = if flags2 & PO3_HAS_BLENDMODE != 0 {
+        Some(r.read_u8()?)
+    } else {
+        None
+    };
+    let bitmap_cache = if flags2 & PO3_HAS_CACHE_AS_BITMAP != 0 {
+        Some(r.read_u8()?)
+    } else {
+        None
+    };
+    let visible = if flags2 & PO3_HAS_VISIBLE != 0 {
+        let v = r.read_u8()?;
+        let bg = [r.read_u8()?, r.read_u8()?, r.read_u8()?, r.read_u8()?];
+        Some((v, bg))
+    } else {
+        None
+    };
+
+    ensure_consumed(code, r.pos, body.len())?;
+    Ok(Tag::PlaceObject3 {
+        flags1,
+        flags2,
+        depth,
+        class_name,
+        character_id,
+        matrix,
+        color_transform,
+        ratio,
+        name,
+        clip_depth,
+        filters,
+        blend_mode,
+        bitmap_cache,
+        visible,
         force_long,
     })
 }
@@ -1469,6 +1823,87 @@ fn write_tag(w: &mut GfxWriter, tag: &Tag) -> Result<(), GfxError> {
             w.write_record_header(TAG_PLACE_OBJECT2, body.buf.len(), *force_long)?;
             w.write_bytes(&body.buf);
         }
+        Tag::PlaceObject3 {
+            flags1,
+            flags2,
+            depth,
+            class_name,
+            character_id,
+            matrix,
+            color_transform,
+            ratio,
+            name,
+            clip_depth,
+            filters,
+            blend_mode,
+            bitmap_cache,
+            visible,
+            force_long,
+        } => {
+            let mut body = GfxWriter::new();
+            // Both flags bytes are the source of truth; each optional field is
+            // present iff its flag bit is set (guaranteed consistent by decode).
+            body.write_u8(*flags1);
+            body.write_u8(*flags2);
+            body.write_u16(*depth);
+            if flags2 & PO3_HAS_CLASSNAME != 0 {
+                body.write_cstring(
+                    class_name
+                        .as_deref()
+                        .expect("HasClassName without class_name"),
+                );
+            }
+            if flags1 & PO2_HAS_CHARACTER != 0 {
+                body.write_u16(character_id.expect("HasCharacter set without character_id"));
+            }
+            if flags1 & PO2_HAS_MATRIX != 0 {
+                let mut bw = BitWriter::new();
+                matrix
+                    .as_ref()
+                    .expect("HasMatrix set without matrix")
+                    .write(&mut bw);
+                body.write_bytes(&bw.into_bytes());
+            }
+            if flags1 & PO2_HAS_CXFORM != 0 {
+                let mut bw = BitWriter::new();
+                color_transform
+                    .as_ref()
+                    .expect("HasColorTransform set without color_transform")
+                    .write(&mut bw);
+                body.write_bytes(&bw.into_bytes());
+            }
+            if flags1 & PO2_HAS_RATIO != 0 {
+                body.write_u16(ratio.expect("HasRatio set without ratio"));
+            }
+            if flags1 & PO2_HAS_NAME != 0 {
+                body.write_cstring(name.as_deref().expect("HasName set without name"));
+            }
+            if flags1 & PO2_HAS_CLIPDEPTH != 0 {
+                body.write_u16(clip_depth.expect("HasClipDepth set without clip_depth"));
+            }
+            if flags2 & PO3_HAS_FILTERLIST != 0 {
+                let fs = filters.as_ref().expect("HasFilterList set without filters");
+                body.write_u8(fs.len() as u8);
+                for f in fs {
+                    f.write(&mut body);
+                }
+            }
+            if flags2 & PO3_HAS_BLENDMODE != 0 {
+                body.write_u8(blend_mode.expect("HasBlendMode set without blend_mode"));
+            }
+            if flags2 & PO3_HAS_CACHE_AS_BITMAP != 0 {
+                body.write_u8(bitmap_cache.expect("HasCacheAsBitmap set without bitmap_cache"));
+            }
+            if flags2 & PO3_HAS_VISIBLE != 0 {
+                let (v, bg) = visible.as_ref().expect("HasVisible set without visible");
+                body.write_u8(*v);
+                body.write_bytes(bg);
+            }
+            // clipActions / reserved flags2 bits never reach here: such tags
+            // stay Tag::Unknown.
+            w.write_record_header(TAG_PLACE_OBJECT3, body.buf.len(), *force_long)?;
+            w.write_bytes(&body.buf);
+        }
         Tag::DefineScalingGrid {
             character_id,
             grid,
@@ -1529,8 +1964,11 @@ mod tests {
         d.push(0x00);
         d.extend_from_slice(&30u16.to_le_bytes());
         d.extend_from_slice(&1u16.to_le_bytes());
-        // Unknown tag code 70, long form, body 2 bytes.
-        let word: u16 = (70u16 << 6) | 0x3f;
+        // Unknown tag code 2 (DefineShape -- still unmodelled), long form, body
+        // 2 bytes. (Code 70 is now the typed PlaceObject3, so this generic
+        // "overlong header on an unknown code" test uses a code that stays
+        // Tag::Unknown.)
+        let word: u16 = (2u16 << 6) | 0x3f;
         d.extend_from_slice(&word.to_le_bytes());
         d.extend_from_slice(&2u32.to_le_bytes());
         d.extend_from_slice(&[0x11, 0x22]);
@@ -2096,6 +2534,231 @@ mod tests {
                 assert_eq!(grid.y_max, 184);
             }
             other => panic!("expected DefineScalingGrid, got {other:?}"),
+        }
+    }
+
+    // --- Tier-2b: PlaceObject3 (code 70) tests --------------------------------
+
+    #[test]
+    fn place_object3_dropshadow_instance() {
+        // Corpus 01_000_fe.gfx: Move|HasMatrix|HasName (flags1 0x26), flags2 0x01
+        // (HasFilterList), depth 1, characterId 103, name "Text", matrix
+        // translate-only (40,40), one DropShadowFilter. Field values are
+        // ffdec(-swf2xml)-confirmed: blurX=blurY=4.0, angle=0.7853851 (=45deg),
+        // distance=3.0, strength=1.0, color black/alpha 255, compositeSource +
+        // 3 passes (flags byte 0x23).
+        let body =
+            hx("2601010067000ea14054657874000100000000ff00000400000004000fc9000000000300000123");
+        match parse_first(&rec(TAG_PLACE_OBJECT3, &body, false)) {
+            Tag::PlaceObject3 {
+                flags1,
+                flags2,
+                depth,
+                character_id,
+                name,
+                matrix,
+                filters,
+                blend_mode,
+                bitmap_cache,
+                visible,
+                class_name,
+                color_transform,
+                ratio,
+                clip_depth,
+                force_long,
+            } => {
+                assert_eq!(flags1, 0x26);
+                assert_eq!(flags2, 0x01);
+                assert!(!force_long);
+                assert_eq!(depth, 1);
+                assert_eq!(character_id, Some(103));
+                assert_eq!(name.as_deref(), Some("Text"));
+                assert_eq!(class_name, None);
+                assert_eq!(color_transform, None);
+                assert_eq!(ratio, None);
+                assert_eq!(clip_depth, None);
+                assert_eq!(blend_mode, None);
+                assert_eq!(bitmap_cache, None);
+                assert_eq!(visible, None);
+                let m = matrix.expect("a MATRIX");
+                assert!(!m.has_scale && !m.has_rotate);
+                assert_eq!(m.translate_nbits, 7);
+                assert_eq!((m.translate_x, m.translate_y), (40, 40));
+                let fs = filters.expect("a filter list");
+                assert_eq!(fs.len(), 1);
+                match &fs[0] {
+                    Filter::DropShadow {
+                        color,
+                        blur_x,
+                        blur_y,
+                        angle,
+                        distance,
+                        strength,
+                        flags,
+                    } => {
+                        assert_eq!(*color, [0x00, 0x00, 0x00, 0xff]); // black, alpha 255
+                        assert_eq!(*blur_x, 0x0004_0000); // 4.0 in 16.16
+                        assert_eq!(*blur_y, 0x0004_0000);
+                        assert_eq!(*angle, 0x0000_c90f); // 0.7853851 rad (45 deg)
+                        assert_eq!(*distance, 0x0003_0000); // 3.0
+                        assert_eq!(*strength, 0x0100); // 1.0 in 8.8
+                        assert_eq!(*flags, 0x23); // CompositeSource + 3 passes
+                    }
+                    other => panic!("expected DropShadow, got {other:?}"),
+                }
+            }
+            other => panic!("expected PlaceObject3, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn place_object3_glow_filter_and_blend_mode_instance() {
+        // Corpus 01_000_fe.gfx: flags1 0x1e (HasChar|HasMatrix|HasCxform|HasRatio),
+        // flags2 0x03 (HasFilterList|HasBlendMode), depth 3, characterId 107,
+        // ratio 18, blendMode 8 (=add), one GlowFilter (ffdec-confirmed: red
+        // glow ff0000/alpha 255, blur 0, strength 0, compositeSource + 1 pass =
+        // flags 0x21).
+        let body = hx("1e0303006b0017cde91869004010000012000102ff0000ff000000000000000000002108");
+        match parse_first(&rec(TAG_PLACE_OBJECT3, &body, false)) {
+            Tag::PlaceObject3 {
+                flags1,
+                flags2,
+                depth,
+                character_id,
+                ratio,
+                blend_mode,
+                filters,
+                color_transform,
+                ..
+            } => {
+                assert_eq!(flags1, 0x1e);
+                assert_eq!(flags2, 0x03);
+                assert_eq!(depth, 3);
+                assert_eq!(character_id, Some(107));
+                assert_eq!(ratio, Some(18));
+                assert_eq!(blend_mode, Some(8)); // SWF blend mode 8 = add
+                assert!(color_transform.is_some());
+                let fs = filters.expect("a filter list");
+                assert_eq!(fs.len(), 1);
+                match &fs[0] {
+                    Filter::Glow {
+                        color,
+                        blur_x,
+                        blur_y,
+                        strength,
+                        flags,
+                    } => {
+                        assert_eq!(*color, [0xff, 0x00, 0x00, 0xff]); // red, alpha 255
+                        assert_eq!(*blur_x, 0);
+                        assert_eq!(*blur_y, 0);
+                        assert_eq!(*strength, 0);
+                        assert_eq!(*flags, 0x21); // CompositeSource + 1 pass
+                    }
+                    other => panic!("expected Glow, got {other:?}"),
+                }
+            }
+            other => panic!("expected PlaceObject3, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn filter_dropshadow_roundtrip() {
+        // A DropShadowFilter primitive must re-encode to the exact corpus bytes.
+        let raw = hx("00000000ff00000400000004000fc9000000000300000123");
+        let mut r = GfxReader::new(&raw);
+        let f = Filter::read(&mut r).unwrap().expect("a modelled filter");
+        assert_eq!(r.pos, raw.len(), "filter consumed its whole body");
+        match &f {
+            Filter::DropShadow {
+                angle, strength, ..
+            } => {
+                assert_eq!(*angle, 0x0000_c90f);
+                assert_eq!(*strength, 0x0100);
+            }
+            other => panic!("expected DropShadow, got {other:?}"),
+        }
+        let mut w = GfxWriter::new();
+        f.write(&mut w);
+        assert_eq!(w.buf, raw, "DropShadow re-encode byte-identical");
+    }
+
+    #[test]
+    fn filter_unknown_id_falls_back_to_unknown() {
+        // A filter id we do not model (e.g. 3 = BevelFilter) must force the whole
+        // PlaceObject3 back to Tag::Unknown, re-emitting the raw body verbatim.
+        let mut body = vec![0x00u8, 0x01]; // flags1=0 (no PO2 fields), flags2=HasFilterList
+        body.extend_from_slice(&9u16.to_le_bytes()); // depth
+        body.push(0x01); // filter count = 1
+        body.push(0x03); // filter id 3 (BevelFilter -- unmodelled)
+        body.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]); // opaque filter tail
+        match parse_first(&rec(TAG_PLACE_OBJECT3, &body, false)) {
+            Tag::Unknown { code, raw, .. } => {
+                assert_eq!(code, TAG_PLACE_OBJECT3);
+                assert_eq!(raw, body);
+            }
+            other => panic!("expected Unknown fallback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn place_object3_clip_actions_falls_back_to_unknown() {
+        // clipActions (flags1 0x80) is unmodelled; such a tag stays Tag::Unknown
+        // and round-trips via the opaque body. (None occur in the corpus.)
+        let mut body = vec![0x80u8, 0x00]; // flags1 HasClipActions, flags2 none
+        body.extend_from_slice(&7u16.to_le_bytes()); // depth
+        body.extend_from_slice(&[0xca, 0xfe, 0xba, 0xbe]); // opaque clipActions tail
+        match parse_first(&rec(TAG_PLACE_OBJECT3, &body, false)) {
+            Tag::Unknown { code, raw, .. } => {
+                assert_eq!(code, TAG_PLACE_OBJECT3);
+                assert_eq!(raw, body);
+            }
+            other => panic!("expected Unknown fallback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn place_object3_reserved_flag_falls_back_to_unknown() {
+        // A reserved flags2 bit (0xc0 mask) has unverifiable semantics (never set
+        // in the corpus); setting one must fall the tag back to Tag::Unknown.
+        let mut body = vec![0x00u8, 0x40]; // flags2 = OpaqueBackground (reserved here)
+        body.extend_from_slice(&3u16.to_le_bytes()); // depth
+        body.extend_from_slice(&[0x12, 0x34]); // opaque tail
+        match parse_first(&rec(TAG_PLACE_OBJECT3, &body, false)) {
+            Tag::Unknown { code, raw, .. } => {
+                assert_eq!(code, TAG_PLACE_OBJECT3);
+                assert_eq!(raw, body);
+            }
+            other => panic!("expected Unknown fallback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn place_object3_visible_and_classname_synthetic_roundtrip() {
+        // HasClassName (0x08) and HasVisible (0x20) never occur in the corpus but
+        // are modelled. This synthetic instance exercises both the class-name
+        // string and the visible+background fields so the encoder/decoder stay
+        // mutually consistent (byte-identity self-check).
+        let mut body = Vec::new();
+        body.push(0x00u8); // flags1: no PO2 optional fields
+        body.push(0x08 | 0x20); // flags2: HasClassName | HasVisible
+        body.extend_from_slice(&5u16.to_le_bytes()); // depth
+        body.extend_from_slice(b"my.Class\0"); // class name
+        body.push(0x01); // visible = 1
+        body.extend_from_slice(&[0x10, 0x20, 0x30, 0x40]); // background RGBA
+        match parse_first(&rec(TAG_PLACE_OBJECT3, &body, false)) {
+            Tag::PlaceObject3 {
+                flags2,
+                depth,
+                class_name,
+                visible,
+                ..
+            } => {
+                assert_eq!(flags2, 0x28);
+                assert_eq!(depth, 5);
+                assert_eq!(class_name.as_deref(), Some("my.Class"));
+                assert_eq!(visible, Some((0x01, [0x10, 0x20, 0x30, 0x40])));
+            }
+            other => panic!("expected PlaceObject3, got {other:?}"),
         }
     }
 
