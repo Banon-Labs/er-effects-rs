@@ -2389,6 +2389,31 @@ pub(crate) unsafe extern "system" fn title_scaleform_bind_observer_hook(owner: u
             TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_SYMBOL_PTR
                 .store(new_symbol_ptr, Ordering::SeqCst);
         }
+        // er-tpf Tier-4 DRAW redirect (ONE-SHOT, fail-closed): once our in-memory cover texture is
+        // registered in GLOBAL_TexRepository (ER_TPF_COVER_REGISTERED), repoint THIS visible profile
+        // bind's TARGET DLString (pair+0x30) from `systex_menu_profile00` to our unique key. The native
+        // bind then resolves our key; the Scaleform repo misses and bridges to GLOBAL_TexRepository by
+        // name (FUN_140d66220 -> CS::TexRepositoryImp::GetResCap) -> our magenta cover wraps + binds to
+        // the visible surface above PRESS ANY BUTTON. Until registered, the target is left native (the
+        // real portrait draws) -- no harm; the one-shot is only consumed on a committed rewrite.
+        if ER_TPF_COVER_REGISTERED.load(Ordering::SeqCst) != 0
+            && ER_TPF_COVER_TARGET_REWRITE_FIRED.swap(1, Ordering::SeqCst) == 0
+        {
+            let rewrote =
+                unsafe { rewrite_native_dlstring_ascii(pair + 0x30, ER_TPF_COVER_SYSTEX_KEY) }
+                    .is_some();
+            if rewrote {
+                ER_TPF_COVER_BOUND.fetch_add(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "er-tpf-cover: REDIRECTED visible profile bind target -> '{ER_TPF_COVER_SYSTEX_KEY}' owner=0x{owner:x} pair=0x{pair:x} -- in-memory cover now resolves on the visible surface (rescap=0x{:x})",
+                    ER_TPF_COVER_LAST_RESCAP.load(Ordering::SeqCst)
+                ));
+            } else {
+                // capacity too small / unreadable -> un-consume the one-shot so a later bind can retry.
+                ER_TPF_COVER_TARGET_REWRITE_FIRED.store(0, Ordering::SeqCst);
+                ER_TPF_COVER_FAILURES.fetch_add(1, Ordering::SeqCst);
+            }
+        }
     }
     if interesting && hit <= 128 {
         let mut sym = [0u8; 96];

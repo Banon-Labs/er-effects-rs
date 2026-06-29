@@ -139,6 +139,10 @@ fn push_json_bool(body: &mut String, name: &str, value: bool) {
     body.push_str(&format!("  \"{name}\": {value},\n"));
 }
 
+fn push_json_str(body: &mut String, name: &str, value: &str) {
+    body.push_str(&format!("  \"{name}\": \"{value}\",\n"));
+}
+
 fn title_menu_window_id_flags(base: usize, window: usize) -> (usize, usize, bool) {
     const NULL_PTR: usize = 0;
     if window == NULL_PTR || window == TITLE_OWNER_SCAN_START_ADDRESS {
@@ -1953,6 +1957,44 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             body,
             "oracle_title_scaleform_resource_ctor_last_caller_rva",
             title_scaleform_resource_ctor_last_caller_rva,
+        );
+        // er-tpf Tier-4 in-memory cover wire-up oracles (memory-read telemetry, NOT screenshot): a
+        // runtime watcher can observe build/register/bind progress + failures without an image.
+        push_json_bool(
+            body,
+            "oracle_tpf_texture_built",
+            ER_TPF_COVER_TEXTURE_BUILT.load(Ordering::SeqCst) != 0,
+        );
+        push_json_usize(
+            body,
+            "oracle_tpf_texture_blob_len",
+            ER_TPF_COVER_BLOB_LEN.load(Ordering::SeqCst),
+        );
+        push_json_str(body, "oracle_tpf_texture_key", ER_TPF_COVER_SYSTEX_KEY);
+        push_json_bool(
+            body,
+            "oracle_tpf_texture_registered",
+            ER_TPF_COVER_REGISTERED.load(Ordering::SeqCst) != 0,
+        );
+        push_json_usize(
+            body,
+            "oracle_tpf_texture_last_rescap",
+            ER_TPF_COVER_LAST_RESCAP.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_tpf_texture_bound",
+            ER_TPF_COVER_BOUND.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_tpf_texture_failures",
+            ER_TPF_COVER_FAILURES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_tpf_texture_last_error",
+            ER_TPF_COVER_LAST_ERROR.load(Ordering::SeqCst),
         );
         body.push_str(&format!(
             "  \"oracle_native_profile_capture_enabled\": {},\n  \"oracle_native_load_game_fired\": {},\n  \"oracle_native_load_game_last_node\": {},\n  \"oracle_native_load_game_last_node_vtable\": {},\n  \"oracle_native_load_game_last_member_dialog\": {},\n  \"oracle_native_load_game_last_member_fn\": {},\n  \"oracle_native_load_game_last_member_adjust\": {},\n  \"oracle_native_profile_source_ready\": {},\n  \"oracle_native_profile_source_name\": \"{}\",\n  \"oracle_native_profile_renderer_class\": \"{}\",\n",

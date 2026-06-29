@@ -24,6 +24,7 @@ use eldenring::{
 };
 use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
+use er_tpf::{DdsHeaderMode, DdsImage, Tpf};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
 use windows::{
     Win32::{
@@ -1458,6 +1459,115 @@ pub(crate) unsafe fn sample_title_profile_portrait_source(base: usize, slot: i32
         && ready_755 != TITLE_OWNER_SCAN_START_ADDRESS
 }
 
+/// Build the er-tpf Tier-4 cover blob ONCE and cache it for the process lifetime. A bright
+/// magenta/white checker (unmistakable on the logo-replacement screenshot), encoded uncompressed
+/// `R8G8B8A8_UNORM` with a LEGACY DDS header (maps to DXGI 28 and bypasses the DX10 format validator),
+/// wrapped in a one-entry TPF003 whose ENTRY NAME == `ER_TPF_COVER_SYSTEX_KEY` (which becomes the
+/// `GLOBAL_TexRepository` GPU key the Scaleform bridge resolves). Held alive forever so the engine's
+/// deferred GPU upload can never read freed bytes. Pure CPU; no native call, no disk.
+fn er_tpf_cover_blob() -> &'static [u8] {
+    static BLOB: OnceLock<Vec<u8>> = OnceLock::new();
+    BLOB.get_or_init(|| {
+        let img = DdsImage::checker(
+            ER_TPF_COVER_TEX_DIM,
+            ER_TPF_COVER_TEX_DIM,
+            ER_TPF_COVER_TEX_CELL,
+            [255, 0, 255, 255],   // magenta
+            [255, 255, 255, 255], // white
+        );
+        let dds = img.to_dds_bytes_with(DdsHeaderMode::LegacyRgba8);
+        match Tpf::single_pc(ER_TPF_COVER_SYSTEX_KEY, dds, 1).build() {
+            Ok(bytes) => {
+                ER_TPF_COVER_TEXTURE_BUILT.store(1, Ordering::SeqCst);
+                ER_TPF_COVER_BLOB_LEN.store(bytes.len(), Ordering::SeqCst);
+                bytes
+            }
+            Err(_) => Vec::new(),
+        }
+    })
+}
+
+/// er-tpf Tier-4 ONE-SHOT, fail-closed register of our in-memory cover texture into the live texture
+/// repositories via the engine's own raw-(ptr,len) TPF factory `CS::CreateTpfResCap` (deobf
+/// `CREATE_TPF_RES_CAP_RVA`), mirroring the FaceGen call exactly. Runs on the CSTaskImp game-task thread
+/// (post-graphics-init), NEVER from DllMain/loader. Validates every precondition before the first native
+/// call (module base resolved, `GLOBAL_TpfRepository` + `GLOBAL_TexRepository` non-null == gfx up, blob
+/// non-empty), wraps the call in `catch_unwind`, and on any failure bumps `ER_TPF_COVER_FAILURES` +
+/// records `ER_TPF_COVER_LAST_ERROR` and bails (never crashes). Does NOT consume the one-shot until a
+/// real call is attempted, so a not-yet-initialized repo simply retries next tick. The actual DRAW
+/// redirect (pointing the visible profile surface's bind TARGET at our key) is a separate one-shot in
+/// the Scaleform bind observer, gated on `ER_TPF_COVER_REGISTERED`.
+pub(crate) unsafe fn maybe_register_er_tpf_cover_texture(base: usize) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if ER_TPF_COVER_REGISTER_ATTEMPTED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    if base == 0 || base == null {
+        ER_TPF_COVER_LAST_ERROR.store(ER_TPF_COVER_ERR_BASE_UNRESOLVED, Ordering::SeqCst);
+        return; // base not resolved yet -> retry (one-shot not consumed)
+    }
+    // Precondition: both singletons live (gfx + repos initialized). A null repo would make the engine's
+    // own DLPanic fire (non-returning). Do NOT latch the one-shot here -- just retry next tick.
+    let tpf_repo = unsafe { safe_read_usize(base + GLOBAL_TPF_REPOSITORY_RVA) }.unwrap_or(0);
+    if tpf_repo == 0 || tpf_repo == null {
+        ER_TPF_COVER_LAST_ERROR.store(ER_TPF_COVER_ERR_TPF_REPO_NULL, Ordering::SeqCst);
+        return;
+    }
+    let tex_repo = unsafe { safe_read_usize(base + GLOBAL_TEX_REPOSITORY_RVA) }.unwrap_or(0);
+    if tex_repo == 0 || tex_repo == null {
+        ER_TPF_COVER_LAST_ERROR.store(ER_TPF_COVER_ERR_TEX_REPO_NULL, Ordering::SeqCst);
+        return;
+    }
+    // Preconditions met: commit the ONE-SHOT now so the native call fires exactly once even on failure.
+    if ER_TPF_COVER_REGISTER_ATTEMPTED.swap(1, Ordering::SeqCst) != 0 {
+        return;
+    }
+    let blob = er_tpf_cover_blob();
+    if blob.is_empty() {
+        ER_TPF_COVER_FAILURES.fetch_add(1, Ordering::SeqCst);
+        ER_TPF_COVER_LAST_ERROR.store(ER_TPF_COVER_ERR_BLOB_EMPTY, Ordering::SeqCst);
+        return;
+    }
+    // wchar_t* texName for the TpfRepository file-cap label (NUL-terminated UTF-16). Reuse the key
+    // string; the GPU repo key still derives from the TPF entry name, not this label.
+    let mut name_w: Vec<u16> = ER_TPF_COVER_SYSTEX_KEY.encode_utf16().collect();
+    name_w.push(0);
+    let create: unsafe extern "system" fn(usize, *const u16, *const u8, usize, bool, u32) -> usize =
+        unsafe { std::mem::transmute(base + CREATE_TPF_RES_CAP_RVA) };
+    let blob_ptr = blob.as_ptr();
+    let blob_len = blob.len();
+    let name_ptr = name_w.as_ptr();
+    // Mirror FaceGen: param_5 = false, param_6 (count) = 0.
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        create(tpf_repo, name_ptr, blob_ptr, blob_len, false, 0)
+    }));
+    match res {
+        Ok(rescap) if rescap != 0 && rescap != null => {
+            ER_TPF_COVER_LAST_RESCAP.store(rescap, Ordering::SeqCst);
+            ER_TPF_COVER_LAST_ERROR.store(ER_TPF_COVER_ERR_NONE, Ordering::SeqCst);
+            ER_TPF_COVER_REGISTERED.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "er-tpf-cover: REGISTERED in-memory TPF texture via CreateTpfResCap 0x{:x}(tpf_repo=0x{tpf_repo:x}) key='{ER_TPF_COVER_SYSTEX_KEY}' blob_len={blob_len} rescap=0x{rescap:x} tex_repo=0x{tex_repo:x} -- bind observer will redirect the visible profile surface target to this key (NO disk, NO input)",
+                base + CREATE_TPF_RES_CAP_RVA
+            ));
+        }
+        Ok(_) => {
+            ER_TPF_COVER_FAILURES.fetch_add(1, Ordering::SeqCst);
+            ER_TPF_COVER_LAST_ERROR.store(ER_TPF_COVER_ERR_RESCAP_NULL, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "er-tpf-cover: CreateTpfResCap returned null TpfResCap (blob_len={blob_len} tpf_repo=0x{tpf_repo:x}); will retry next tick"
+            ));
+        }
+        Err(_) => {
+            ER_TPF_COVER_FAILURES.fetch_add(1, Ordering::SeqCst);
+            ER_TPF_COVER_LAST_ERROR.store(ER_TPF_COVER_ERR_PANIC, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "er-tpf-cover: CreateTpfResCap call PANICKED (caught) blob_len={blob_len} tpf_repo=0x{tpf_repo:x}; not retrying this tick"
+            ));
+        }
+    }
+}
+
 pub(crate) unsafe fn maybe_refresh_title_profile_cover(
     base: usize,
     ready: &ProductCoreAutoloadReady,
@@ -1497,6 +1607,10 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     PRODUCT_CORE_AUTOLOAD_TICKS.fetch_add(1, Ordering::SeqCst);
     let phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
     PRODUCT_CORE_LAST_PHASE.store(phase, Ordering::SeqCst);
+    // er-tpf Tier-4: register our in-memory cover texture into the live texture repos as soon as
+    // graphics is up (self-gating one-shot; runs on this CSTaskImp game-task thread, post-gfx-init).
+    // The visible-surface redirect happens in the Scaleform bind observer once this succeeds.
+    unsafe { maybe_register_er_tpf_cover_texture(module_base) };
     if phase == OWN_STEPPER_PHASE_DONE {
         return true;
     }

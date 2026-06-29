@@ -127,6 +127,7 @@ dependencies = [
  "er-effects-data",
  "er-safe-input",
  "er-save-loader",
+ "er-tpf",
  "fromsoftware-shared",
  "iced-x86",
  "windows 0.62.2",
