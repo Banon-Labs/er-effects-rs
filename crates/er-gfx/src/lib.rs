@@ -72,6 +72,38 @@ const TAG_CSM_TEXT_SETTINGS: u16 = 74;
 const TAG_SYMBOL_CLASS: u16 = 76;
 /// `Metadata`: a single NUL-terminated string (typically XMP RDF).
 const TAG_METADATA: u16 = 77;
+
+// --- Tier-2 typed tag codes (carry bit-packed primitives). ---
+/// `PlaceObject2` (code 26): the dominant display-list tag. Body is a `u8` flags
+/// byte, a `u16` depth, then per-flag optional `characterId`, `MATRIX`,
+/// `CXFORMWITHALPHA`, `ratio`, `name`, `clipDepth`, and (unmodelled) clipActions.
+const TAG_PLACE_OBJECT2: u16 = 26;
+/// `DefineScalingGrid` (code 78): a `u16` characterId followed by a `RECT` (the
+/// nine-slice scaling grid).
+const TAG_DEFINE_SCALING_GRID: u16 = 78;
+
+// --- PlaceObject2 flag bits (MSB-to-LSB within the flags byte; SWF order). ---
+/// `PlaceFlagMove`: this tag moves an existing object at `depth`. Stored only in
+/// the raw `flags` byte (it gates no optional field), so it is not branched on;
+/// retained as a named documented bit.
+#[allow(dead_code)]
+const PO2_MOVE: u8 = 0x01;
+/// `PlaceFlagHasCharacter`: a `u16` characterId follows.
+const PO2_HAS_CHARACTER: u8 = 0x02;
+/// `PlaceFlagHasMatrix`: a `MATRIX` follows.
+const PO2_HAS_MATRIX: u8 = 0x04;
+/// `PlaceFlagHasColorTransform`: a `CXFORMWITHALPHA` follows.
+const PO2_HAS_CXFORM: u8 = 0x08;
+/// `PlaceFlagHasRatio`: a `u16` morph ratio follows.
+const PO2_HAS_RATIO: u8 = 0x10;
+/// `PlaceFlagHasName`: a NUL-terminated instance name follows.
+const PO2_HAS_NAME: u8 = 0x20;
+/// `PlaceFlagHasClipDepth`: a `u16` clip depth follows.
+const PO2_HAS_CLIPDEPTH: u8 = 0x40;
+/// `PlaceFlagHasClipActions`: a CLIPACTIONS block follows (unmodelled; see
+/// [`Tag`] -- such a PlaceObject2 is kept as [`Tag::Unknown`]).
+const PO2_HAS_CLIPACTIONS: u8 = 0x80;
+
 /// Short-form length sentinel: `len == 0x3f` means a `u32` long length follows.
 const LONG_LEN_SENTINEL: u16 = 0x3f;
 /// Maximum tag code representable in a `RecordHeader` (`u16 >> 6`).
@@ -189,6 +221,41 @@ pub enum Tag {
         force_long: bool,
     },
 
+    // --- Tier-2 typed tags (carry bit-packed primitives; see module docs). ---
+    /// `PlaceObject2` (code 26): the dominant display-list tag. The `flags` byte
+    /// is stored verbatim and governs which optional fields are present; each
+    /// optional field below is `Some` iff its flag bit is set in `flags`.
+    ///
+    /// `clipActions` (flag `0x80`) is NOT modelled; a PlaceObject2 carrying it is
+    /// kept as [`Tag::Unknown`] (none occur in the corpus -- 0 of 171,728).
+    PlaceObject2 {
+        /// Raw flags byte (`Move`/`HasCharacter`/`HasMatrix`/`HasColorTransform`/
+        /// `HasRatio`/`HasName`/`HasClipDepth`/`HasClipActions`, LSB-to-MSB).
+        flags: u8,
+        depth: u16,
+        /// `characterId` (flag `HasCharacter` `0x02`).
+        character_id: Option<u16>,
+        /// Placement `MATRIX` (flag `HasMatrix` `0x04`).
+        matrix: Option<Matrix>,
+        /// `CXFORMWITHALPHA` color transform (flag `HasColorTransform` `0x08`).
+        color_transform: Option<CxformWithAlpha>,
+        /// Morph `ratio` (flag `HasRatio` `0x10`).
+        ratio: Option<u16>,
+        /// Instance `name` (flag `HasName` `0x20`); NUL terminator implicit.
+        name: Option<String>,
+        /// `clipDepth` (flag `HasClipDepth` `0x40`).
+        clip_depth: Option<u16>,
+        /// Whether the source encoded this tag's `RecordHeader` in long form.
+        force_long: bool,
+    },
+    /// `DefineScalingGrid` (code 78): a `characterId` and a nine-slice `RECT`.
+    DefineScalingGrid {
+        character_id: u16,
+        grid: Rect,
+        /// Whether the source encoded this tag's `RecordHeader` in long form.
+        force_long: bool,
+    },
+
     /// Any tag not otherwise modelled; body bytes re-emitted verbatim.
     Unknown {
         code: u16,
@@ -242,6 +309,14 @@ pub enum GfxError {
         expected: usize,
         got: usize,
     },
+    /// A bit-packed primitive read past the end of its tag body. `context` names
+    /// the primitive (`"MATRIX"`, `"CXFORM"`, `"RECT"`).
+    BitstreamEof { context: &'static str },
+    /// A bit-packed primitive's byte-alignment padding bits were non-zero. The
+    /// whole corpus pads with zero bits; a non-zero pad would make a stored-field
+    /// re-encode silently diverge, so we reject it loudly instead. `context`
+    /// names the primitive.
+    NonZeroBitPadding { context: &'static str },
 }
 
 impl fmt::Display for GfxError {
@@ -285,6 +360,12 @@ impl fmt::Display for GfxError {
                 f,
                 "tag code {code} body length {got} != expected {expected}"
             ),
+            GfxError::BitstreamEof { context } => {
+                write!(f, "bitstream EOF while reading {context}")
+            }
+            GfxError::NonZeroBitPadding { context } => {
+                write!(f, "non-zero byte-alignment padding in {context}")
+            }
         }
     }
 }
@@ -432,6 +513,419 @@ impl GfxWriter {
             self.write_u16(word);
         }
         Ok(())
+    }
+}
+
+// ===========================================================================
+// Tier-2 bit-packed primitive layer (MSB-first bit order -- the SWF convention)
+// ===========================================================================
+//
+// SWF/GFX bit-packed structures (RECT, MATRIX, CXFORM[WITHALPHA]) read bits
+// most-significant-first and byte-align at the end of each structure. The fields
+// `Nbits` (RECT), `NScaleBits`/`NRotateBits`/`NTranslateBits` (MATRIX), and
+// `Nbits` (CXFORM) are NOT guaranteed minimal: the Scaleform exporter is
+// confirmed non-minimal (2,413 MATRIX instances in the 114-file corpus use more
+// translate bits than the minimal width; 21 scale, 14 rotate). Byte-identity
+// therefore REQUIRES storing each source nbits verbatim and re-encoding with it,
+// never recomputing a minimal width. Byte-alignment padding is always zero
+// across the corpus (0 non-zero pads over 171,728 MATRIX, 20,157 CXFORM, 124
+// RECT); the reader rejects a non-zero pad ([`GfxError::NonZeroBitPadding`])
+// rather than silently dropping bits, and the writer zero-fills.
+
+/// MSB-first bit cursor over a byte slice (typically a single tag body).
+struct BitReader<'a> {
+    data: &'a [u8],
+    /// Absolute bit position from the start of `data`.
+    bitpos: usize,
+}
+
+impl<'a> BitReader<'a> {
+    /// Construct a reader positioned at byte `byte_off` (bit-aligned). Bit-packed
+    /// SWF/GFX structures always begin on a byte boundary.
+    fn new_at_byte(data: &'a [u8], byte_off: usize) -> Self {
+        BitReader {
+            data,
+            bitpos: byte_off * 8,
+        }
+    }
+
+    /// Read `n` (<= 32) unsigned bits, MSB-first.
+    fn read_ubits(&mut self, n: u32, context: &'static str) -> Result<u32, GfxError> {
+        let mut acc: u64 = 0;
+        for _ in 0..n {
+            let byte_idx = self.bitpos >> 3;
+            if byte_idx >= self.data.len() {
+                return Err(GfxError::BitstreamEof { context });
+            }
+            let bit = (self.data[byte_idx] >> (7 - (self.bitpos & 7))) & 1;
+            acc = (acc << 1) | bit as u64;
+            self.bitpos += 1;
+        }
+        Ok(acc as u32)
+    }
+
+    /// Read `n` (<= 32) bits and sign-extend (two's complement).
+    fn read_sbits(&mut self, n: u32, context: &'static str) -> Result<i32, GfxError> {
+        if n == 0 {
+            return Ok(0);
+        }
+        let u = self.read_ubits(n, context)?;
+        let v = if n < 32 && (u & (1u32 << (n - 1))) != 0 {
+            // Sign bit set: extend the high bits.
+            (u | !((1u32 << n) - 1)) as i32
+        } else {
+            u as i32
+        };
+        Ok(v)
+    }
+
+    /// Read an `FB` fixed-point value as its raw signed integer (16.16 fixed is a
+    /// signed integer at the bit level; callers interpret the scaling). Identical
+    /// bit handling to [`read_sbits`](Self::read_sbits).
+    fn read_fbits(&mut self, n: u32, context: &'static str) -> Result<i32, GfxError> {
+        self.read_sbits(n, context)
+    }
+
+    /// Consume padding bits up to the next byte boundary. The padding must be
+    /// zero (corpus-proven) or this errors loudly.
+    fn byte_align(&mut self, context: &'static str) -> Result<(), GfxError> {
+        let rem = (8 - (self.bitpos & 7)) & 7;
+        let pad = self.read_ubits(rem as u32, context)?;
+        if pad != 0 {
+            return Err(GfxError::NonZeroBitPadding { context });
+        }
+        Ok(())
+    }
+
+    /// Current byte offset (must be byte-aligned, e.g. just after `byte_align`).
+    fn byte_pos(&self) -> usize {
+        debug_assert_eq!(self.bitpos & 7, 0, "BitReader not byte aligned");
+        self.bitpos >> 3
+    }
+}
+
+/// MSB-first bit sink. Bits accumulate into a current byte (MSB-first) and flush
+/// on each completed byte; [`byte_align`](Self::byte_align) zero-fills.
+struct BitWriter {
+    buf: Vec<u8>,
+    cur: u8,
+    nbits: u8,
+}
+
+impl BitWriter {
+    fn new() -> Self {
+        BitWriter {
+            buf: Vec::new(),
+            cur: 0,
+            nbits: 0,
+        }
+    }
+
+    fn write_bit(&mut self, bit: u32) {
+        self.cur = (self.cur << 1) | (bit as u8 & 1);
+        self.nbits += 1;
+        if self.nbits == 8 {
+            self.buf.push(self.cur);
+            self.cur = 0;
+            self.nbits = 0;
+        }
+    }
+
+    fn write_ubits(&mut self, value: u32, n: u32) {
+        for i in (0..n).rev() {
+            self.write_bit((value >> i) & 1);
+        }
+    }
+
+    fn write_sbits(&mut self, value: i32, n: u32) {
+        if n == 0 {
+            return;
+        }
+        let mask = if n >= 32 { u32::MAX } else { (1u32 << n) - 1 };
+        self.write_ubits((value as u32) & mask, n);
+    }
+
+    fn write_fbits(&mut self, value: i32, n: u32) {
+        self.write_sbits(value, n);
+    }
+
+    /// Zero-fill to the next byte boundary.
+    fn byte_align(&mut self) {
+        while self.nbits != 0 {
+            self.write_bit(0);
+        }
+    }
+
+    /// Finish, asserting byte alignment, and return the bytes.
+    fn into_bytes(self) -> Vec<u8> {
+        debug_assert_eq!(self.nbits, 0, "BitWriter not byte aligned");
+        self.buf
+    }
+}
+
+/// A bit-packed `RECT` (Nbits-aware). Used by [`Tag::DefineScalingGrid`] and
+/// reusable for shape bounds later. `nbits` is stored exactly (not recomputed)
+/// so the source's bit width is reproduced even when non-minimal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rect {
+    /// Bit width of each of the four signed coordinates (the source's `Nbits`).
+    pub nbits: u32,
+    pub x_min: i32,
+    pub x_max: i32,
+    pub y_min: i32,
+    pub y_max: i32,
+}
+
+impl Rect {
+    const CTX: &'static str = "RECT";
+
+    fn read(br: &mut BitReader) -> Result<Rect, GfxError> {
+        let nbits = br.read_ubits(5, Self::CTX)?;
+        let x_min = br.read_sbits(nbits, Self::CTX)?;
+        let x_max = br.read_sbits(nbits, Self::CTX)?;
+        let y_min = br.read_sbits(nbits, Self::CTX)?;
+        let y_max = br.read_sbits(nbits, Self::CTX)?;
+        br.byte_align(Self::CTX)?;
+        Ok(Rect {
+            nbits,
+            x_min,
+            x_max,
+            y_min,
+            y_max,
+        })
+    }
+
+    fn write(&self, bw: &mut BitWriter) {
+        bw.write_ubits(self.nbits, 5);
+        bw.write_sbits(self.x_min, self.nbits);
+        bw.write_sbits(self.x_max, self.nbits);
+        bw.write_sbits(self.y_min, self.nbits);
+        bw.write_sbits(self.y_max, self.nbits);
+        bw.byte_align();
+    }
+}
+
+/// A bit-packed `MATRIX` with each source bit width preserved exactly.
+///
+/// `scale_x/y` and `rotate_skew0/1` are 16.16 fixed-point; `translate_x/y` are
+/// twips. All are stored as their raw signed integers. The `*_nbits` fields hold
+/// the SOURCE's bit widths; they are reproduced verbatim because the exporter is
+/// not minimal (see the primitive-layer module comment).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Matrix {
+    pub has_scale: bool,
+    /// `NScaleBits` (only meaningful when `has_scale`).
+    pub scale_nbits: u32,
+    pub scale_x: i32,
+    pub scale_y: i32,
+    pub has_rotate: bool,
+    /// `NRotateBits` (only meaningful when `has_rotate`).
+    pub rotate_nbits: u32,
+    pub rotate_skew0: i32,
+    pub rotate_skew1: i32,
+    /// `NTranslateBits`. Translate is always present.
+    pub translate_nbits: u32,
+    pub translate_x: i32,
+    pub translate_y: i32,
+}
+
+impl Matrix {
+    const CTX: &'static str = "MATRIX";
+
+    fn read(br: &mut BitReader) -> Result<Matrix, GfxError> {
+        let has_scale = br.read_ubits(1, Self::CTX)? != 0;
+        let (scale_nbits, scale_x, scale_y) = if has_scale {
+            let n = br.read_ubits(5, Self::CTX)?;
+            (
+                n,
+                br.read_fbits(n, Self::CTX)?,
+                br.read_fbits(n, Self::CTX)?,
+            )
+        } else {
+            (0, 0, 0)
+        };
+        let has_rotate = br.read_ubits(1, Self::CTX)? != 0;
+        let (rotate_nbits, rotate_skew0, rotate_skew1) = if has_rotate {
+            let n = br.read_ubits(5, Self::CTX)?;
+            (
+                n,
+                br.read_fbits(n, Self::CTX)?,
+                br.read_fbits(n, Self::CTX)?,
+            )
+        } else {
+            (0, 0, 0)
+        };
+        let translate_nbits = br.read_ubits(5, Self::CTX)?;
+        let translate_x = br.read_sbits(translate_nbits, Self::CTX)?;
+        let translate_y = br.read_sbits(translate_nbits, Self::CTX)?;
+        br.byte_align(Self::CTX)?;
+        Ok(Matrix {
+            has_scale,
+            scale_nbits,
+            scale_x,
+            scale_y,
+            has_rotate,
+            rotate_nbits,
+            rotate_skew0,
+            rotate_skew1,
+            translate_nbits,
+            translate_x,
+            translate_y,
+        })
+    }
+
+    fn write(&self, bw: &mut BitWriter) {
+        bw.write_ubits(self.has_scale as u32, 1);
+        if self.has_scale {
+            bw.write_ubits(self.scale_nbits, 5);
+            bw.write_fbits(self.scale_x, self.scale_nbits);
+            bw.write_fbits(self.scale_y, self.scale_nbits);
+        }
+        bw.write_ubits(self.has_rotate as u32, 1);
+        if self.has_rotate {
+            bw.write_ubits(self.rotate_nbits, 5);
+            bw.write_fbits(self.rotate_skew0, self.rotate_nbits);
+            bw.write_fbits(self.rotate_skew1, self.rotate_nbits);
+        }
+        bw.write_ubits(self.translate_nbits, 5);
+        bw.write_sbits(self.translate_x, self.translate_nbits);
+        bw.write_sbits(self.translate_y, self.translate_nbits);
+        bw.byte_align();
+    }
+}
+
+/// A bit-packed `CXFORM` (no alpha): RGB multiply/add terms. `nbits` preserved
+/// exactly. Not used by a typed tag yet (it is the `PlaceObject`/`DefineButton`
+/// color transform) but provided as a reusable primitive with its own tests.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cxform {
+    pub has_add: bool,
+    pub has_mult: bool,
+    pub nbits: u32,
+    /// `[red, green, blue]` multiply terms, present iff `has_mult`.
+    pub mult: Option<[i32; 3]>,
+    /// `[red, green, blue]` add terms, present iff `has_add`.
+    pub add: Option<[i32; 3]>,
+}
+
+impl Cxform {
+    const CTX: &'static str = "CXFORM";
+
+    fn read(br: &mut BitReader) -> Result<Cxform, GfxError> {
+        let has_add = br.read_ubits(1, Self::CTX)? != 0;
+        let has_mult = br.read_ubits(1, Self::CTX)? != 0;
+        let nbits = br.read_ubits(4, Self::CTX)?;
+        let mult = if has_mult {
+            Some([
+                br.read_sbits(nbits, Self::CTX)?,
+                br.read_sbits(nbits, Self::CTX)?,
+                br.read_sbits(nbits, Self::CTX)?,
+            ])
+        } else {
+            None
+        };
+        let add = if has_add {
+            Some([
+                br.read_sbits(nbits, Self::CTX)?,
+                br.read_sbits(nbits, Self::CTX)?,
+                br.read_sbits(nbits, Self::CTX)?,
+            ])
+        } else {
+            None
+        };
+        br.byte_align(Self::CTX)?;
+        Ok(Cxform {
+            has_add,
+            has_mult,
+            nbits,
+            mult,
+            add,
+        })
+    }
+
+    fn write(&self, bw: &mut BitWriter) {
+        bw.write_ubits(self.has_add as u32, 1);
+        bw.write_ubits(self.has_mult as u32, 1);
+        bw.write_ubits(self.nbits, 4);
+        if let Some(m) = self.mult {
+            for v in m {
+                bw.write_sbits(v, self.nbits);
+            }
+        }
+        if let Some(a) = self.add {
+            for v in a {
+                bw.write_sbits(v, self.nbits);
+            }
+        }
+        bw.byte_align();
+    }
+}
+
+/// A bit-packed `CXFORMWITHALPHA`: RGBA multiply/add terms. `nbits` preserved
+/// exactly. This is the color transform carried by [`Tag::PlaceObject2`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CxformWithAlpha {
+    pub has_add: bool,
+    pub has_mult: bool,
+    pub nbits: u32,
+    /// `[red, green, blue, alpha]` multiply terms, present iff `has_mult`.
+    pub mult: Option<[i32; 4]>,
+    /// `[red, green, blue, alpha]` add terms, present iff `has_add`.
+    pub add: Option<[i32; 4]>,
+}
+
+impl CxformWithAlpha {
+    const CTX: &'static str = "CXFORM";
+
+    fn read(br: &mut BitReader) -> Result<CxformWithAlpha, GfxError> {
+        let has_add = br.read_ubits(1, Self::CTX)? != 0;
+        let has_mult = br.read_ubits(1, Self::CTX)? != 0;
+        let nbits = br.read_ubits(4, Self::CTX)?;
+        let mult = if has_mult {
+            Some([
+                br.read_sbits(nbits, Self::CTX)?,
+                br.read_sbits(nbits, Self::CTX)?,
+                br.read_sbits(nbits, Self::CTX)?,
+                br.read_sbits(nbits, Self::CTX)?,
+            ])
+        } else {
+            None
+        };
+        let add = if has_add {
+            Some([
+                br.read_sbits(nbits, Self::CTX)?,
+                br.read_sbits(nbits, Self::CTX)?,
+                br.read_sbits(nbits, Self::CTX)?,
+                br.read_sbits(nbits, Self::CTX)?,
+            ])
+        } else {
+            None
+        };
+        br.byte_align(Self::CTX)?;
+        Ok(CxformWithAlpha {
+            has_add,
+            has_mult,
+            nbits,
+            mult,
+            add,
+        })
+    }
+
+    fn write(&self, bw: &mut BitWriter) {
+        bw.write_ubits(self.has_add as u32, 1);
+        bw.write_ubits(self.has_mult as u32, 1);
+        bw.write_ubits(self.nbits, 4);
+        if let Some(m) = self.mult {
+            for v in m {
+                bw.write_sbits(v, self.nbits);
+            }
+        }
+        if let Some(a) = self.add {
+            for v in a {
+                bw.write_sbits(v, self.nbits);
+            }
+        }
+        bw.byte_align();
     }
 }
 
@@ -661,12 +1155,119 @@ fn decode_tag_body(code: u16, body: Vec<u8>, force_long: bool) -> Result<Tag, Gf
                 force_long,
             })
         }
+        TAG_PLACE_OBJECT2 => decode_place_object2(body, force_long),
+        TAG_DEFINE_SCALING_GRID => {
+            let mut br = GfxReader::new(&body);
+            let character_id = br.read_u16()?;
+            let mut bits = BitReader::new_at_byte(&body, br.pos);
+            let grid = Rect::read(&mut bits)?;
+            ensure_consumed(code, bits.byte_pos(), body.len())?;
+            Ok(Tag::DefineScalingGrid {
+                character_id,
+                grid,
+                force_long,
+            })
+        }
         _ => Ok(Tag::Unknown {
             code,
             raw: body,
             force_long,
         }),
     }
+}
+
+/// Decode a `PlaceObject2` (code 26) body. The `flags` byte governs which
+/// optional fields follow (MATRIX/CXFORMWITHALPHA are bit-packed and byte-align
+/// at their end). A PlaceObject2 carrying clipActions (flag `0x80`) is kept as
+/// [`Tag::Unknown`] -- that field is unmodelled and never occurs in the corpus;
+/// keeping it opaque preserves byte-identity without guessing its structure.
+fn decode_place_object2(body: Vec<u8>, force_long: bool) -> Result<Tag, GfxError> {
+    let code = TAG_PLACE_OBJECT2;
+    if body.len() < 3 {
+        return Err(GfxError::UnexpectedTagBodyLen {
+            code,
+            expected: 3,
+            got: body.len(),
+        });
+    }
+    let flags = body[0];
+    // clipActions is unmodelled: fall back to opaque Unknown (see doc comment).
+    if flags & PO2_HAS_CLIPACTIONS != 0 {
+        return Ok(Tag::Unknown {
+            code,
+            raw: body,
+            force_long,
+        });
+    }
+    let depth = u16::from_le_bytes([body[1], body[2]]);
+    let mut pos = 3usize;
+
+    let mut read_u16_at = |pos: &mut usize| -> Result<u16, GfxError> {
+        if *pos + 2 > body.len() {
+            return Err(GfxError::UnexpectedEof {
+                pos: *pos,
+                need: 2,
+                have: body.len().saturating_sub(*pos),
+            });
+        }
+        let v = u16::from_le_bytes([body[*pos], body[*pos + 1]]);
+        *pos += 2;
+        Ok(v)
+    };
+
+    let character_id = if flags & PO2_HAS_CHARACTER != 0 {
+        Some(read_u16_at(&mut pos)?)
+    } else {
+        None
+    };
+    let matrix = if flags & PO2_HAS_MATRIX != 0 {
+        let mut bits = BitReader::new_at_byte(&body, pos);
+        let m = Matrix::read(&mut bits)?;
+        pos = bits.byte_pos();
+        Some(m)
+    } else {
+        None
+    };
+    let color_transform = if flags & PO2_HAS_CXFORM != 0 {
+        let mut bits = BitReader::new_at_byte(&body, pos);
+        let c = CxformWithAlpha::read(&mut bits)?;
+        pos = bits.byte_pos();
+        Some(c)
+    } else {
+        None
+    };
+    let ratio = if flags & PO2_HAS_RATIO != 0 {
+        Some(read_u16_at(&mut pos)?)
+    } else {
+        None
+    };
+    let name = if flags & PO2_HAS_NAME != 0 {
+        let mut nr = GfxReader::new(&body);
+        nr.pos = pos;
+        let s = nr.read_cstring(code)?;
+        pos = nr.pos;
+        Some(s)
+    } else {
+        None
+    };
+    let clip_depth = if flags & PO2_HAS_CLIPDEPTH != 0 {
+        Some(read_u16_at(&mut pos)?)
+    } else {
+        None
+    };
+
+    ensure_consumed(code, pos, body.len())?;
+    Ok(Tag::PlaceObject2 {
+        flags,
+        depth,
+        character_id,
+        matrix,
+        color_transform,
+        ratio,
+        name,
+        clip_depth,
+        force_long,
+    })
 }
 
 /// Assert a fixed-width Tier-1 tag body is exactly `expected` bytes.
@@ -818,6 +1419,67 @@ fn write_tag(w: &mut GfxWriter, tag: &Tag) -> Result<(), GfxError> {
             body.write_u32(sharpness.to_bits());
             body.write_u8(*reserved);
             w.write_record_header(TAG_CSM_TEXT_SETTINGS, body.buf.len(), *force_long)?;
+            w.write_bytes(&body.buf);
+        }
+        Tag::PlaceObject2 {
+            flags,
+            depth,
+            character_id,
+            matrix,
+            color_transform,
+            ratio,
+            name,
+            clip_depth,
+            force_long,
+        } => {
+            let mut body = GfxWriter::new();
+            // The flags byte is the source of truth; each optional field is
+            // present iff its flag bit is set (guaranteed consistent by decode).
+            body.write_u8(*flags);
+            body.write_u16(*depth);
+            if flags & PO2_HAS_CHARACTER != 0 {
+                body.write_u16(character_id.expect("HasCharacter set without character_id"));
+            }
+            if flags & PO2_HAS_MATRIX != 0 {
+                let mut bw = BitWriter::new();
+                matrix
+                    .as_ref()
+                    .expect("HasMatrix set without matrix")
+                    .write(&mut bw);
+                body.write_bytes(&bw.into_bytes());
+            }
+            if flags & PO2_HAS_CXFORM != 0 {
+                let mut bw = BitWriter::new();
+                color_transform
+                    .as_ref()
+                    .expect("HasColorTransform set without color_transform")
+                    .write(&mut bw);
+                body.write_bytes(&bw.into_bytes());
+            }
+            if flags & PO2_HAS_RATIO != 0 {
+                body.write_u16(ratio.expect("HasRatio set without ratio"));
+            }
+            if flags & PO2_HAS_NAME != 0 {
+                body.write_cstring(name.as_deref().expect("HasName set without name"));
+            }
+            if flags & PO2_HAS_CLIPDEPTH != 0 {
+                body.write_u16(clip_depth.expect("HasClipDepth set without clip_depth"));
+            }
+            // PO2_HAS_CLIPACTIONS never reaches here: such tags stay Tag::Unknown.
+            w.write_record_header(TAG_PLACE_OBJECT2, body.buf.len(), *force_long)?;
+            w.write_bytes(&body.buf);
+        }
+        Tag::DefineScalingGrid {
+            character_id,
+            grid,
+            force_long,
+        } => {
+            let mut body = GfxWriter::new();
+            body.write_u16(*character_id);
+            let mut bw = BitWriter::new();
+            grid.write(&mut bw);
+            body.write_bytes(&bw.into_bytes());
+            w.write_record_header(TAG_DEFINE_SCALING_GRID, body.buf.len(), *force_long)?;
             w.write_bytes(&body.buf);
         }
     }
@@ -1153,5 +1815,300 @@ mod tests {
 
         // And it still re-serializes byte-identically end to end.
         assert_eq!(m.write().expect("write"), bytes);
+    }
+
+    // --- Tier-2 primitive + tag tests ---------------------------------------
+
+    /// Decode a hex string like "0d8000" into bytes.
+    fn hx(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn bit_reader_writer_msb_first_roundtrip() {
+        // Mixed unsigned/signed fields, then byte-align.
+        let mut bw = BitWriter::new();
+        bw.write_ubits(0b101, 3);
+        bw.write_sbits(-3, 5); // 11101
+        bw.write_ubits(0xab, 8);
+        bw.byte_align();
+        let bytes = bw.into_bytes();
+
+        let mut br = BitReader::new_at_byte(&bytes, 0);
+        assert_eq!(br.read_ubits(3, "T").unwrap(), 0b101);
+        assert_eq!(br.read_sbits(5, "T").unwrap(), -3);
+        assert_eq!(br.read_ubits(8, "T").unwrap(), 0xab);
+        br.byte_align("T").unwrap();
+        assert_eq!(br.byte_pos(), bytes.len());
+    }
+
+    #[test]
+    fn rect_primitive_non_minimal_nbits_roundtrip() {
+        // Deliberately over-wide: nbits=12 holds tiny values (minimal would be 2).
+        // The primitive must preserve the source width, not recompute a minimal.
+        let r = Rect {
+            nbits: 12,
+            x_min: -1,
+            x_max: 1,
+            y_min: 0,
+            y_max: 2,
+        };
+        let mut bw = BitWriter::new();
+        r.write(&mut bw);
+        let bytes = bw.into_bytes();
+        let mut br = BitReader::new_at_byte(&bytes, 0);
+        let r2 = Rect::read(&mut br).unwrap();
+        assert_eq!(r2, r);
+        assert_eq!(r2.nbits, 12, "non-minimal nbits must be preserved");
+        assert_eq!(br.byte_pos(), bytes.len());
+    }
+
+    #[test]
+    fn matrix_primitive_non_minimal_translate_bits_exact_bytes() {
+        // From corpus 01_000_fe.gfx PlaceObject2 body `0501000d8000`: the MATRIX
+        // body is `0d8000`. translate uses 6 bits though the values (-16, 0) only
+        // need 5 -- the exporter is non-minimal, so storing translate_nbits=6 is
+        // mandatory for byte-identity.
+        let m = Matrix {
+            has_scale: false,
+            scale_nbits: 0,
+            scale_x: 0,
+            scale_y: 0,
+            has_rotate: false,
+            rotate_nbits: 0,
+            rotate_skew0: 0,
+            rotate_skew1: 0,
+            translate_nbits: 6,
+            translate_x: -16,
+            translate_y: 0,
+        };
+        let mut bw = BitWriter::new();
+        m.write(&mut bw);
+        assert_eq!(bw.into_bytes(), hx("0d8000"), "exact corpus matrix bytes");
+
+        let bytes = hx("0d8000");
+        let mut br = BitReader::new_at_byte(&bytes, 0);
+        let decoded = Matrix::read(&mut br).unwrap();
+        assert_eq!(decoded, m);
+        assert_eq!(
+            decoded.translate_nbits, 6,
+            "non-minimal translate nbits preserved (minimal would be 5)"
+        );
+        assert_eq!(br.byte_pos(), bytes.len());
+    }
+
+    #[test]
+    fn matrix_primitive_with_scale_and_rotate_roundtrip() {
+        // Exercise the has_scale/has_rotate paths (rare-ish in corpus) with
+        // 16.16-fixed scale and rotate skews; over-wide nbits on purpose.
+        let m = Matrix {
+            has_scale: true,
+            scale_nbits: 20,
+            scale_x: 0x1_0000, // 1.0 in 16.16
+            scale_y: -0x8000,  // -0.5
+            has_rotate: true,
+            rotate_nbits: 18,
+            rotate_skew0: 0x2000,
+            rotate_skew1: -0x100,
+            translate_nbits: 14,
+            translate_x: 3000, // must fit in 14 signed bits (|v| <= 8191)
+            translate_y: -1920,
+        };
+        let mut bw = BitWriter::new();
+        m.write(&mut bw);
+        let bytes = bw.into_bytes();
+        let mut br = BitReader::new_at_byte(&bytes, 0);
+        let m2 = Matrix::read(&mut br).unwrap();
+        assert_eq!(m2, m);
+        assert_eq!(br.byte_pos(), bytes.len());
+    }
+
+    #[test]
+    fn cxform_with_alpha_non_minimal_roundtrip() {
+        // nbits=10 holding values that fit in fewer bits -- preserve the width.
+        let c = CxformWithAlpha {
+            has_add: false,
+            has_mult: true,
+            nbits: 10,
+            mult: Some([256, 256, 256, 102]),
+            add: None,
+        };
+        let mut bw = BitWriter::new();
+        c.write(&mut bw);
+        let bytes = bw.into_bytes();
+        let mut br = BitReader::new_at_byte(&bytes, 0);
+        let c2 = CxformWithAlpha::read(&mut br).unwrap();
+        assert_eq!(c2, c);
+        assert_eq!(c2.nbits, 10);
+        assert_eq!(br.byte_pos(), bytes.len());
+    }
+
+    #[test]
+    fn cxform_no_alpha_roundtrip_with_both_terms() {
+        // The non-alpha CXFORM primitive (no typed tag uses it yet) with both
+        // add and mult terms, including negatives.
+        let c = Cxform {
+            has_add: true,
+            has_mult: true,
+            nbits: 9,
+            // Values must fit in 9 signed bits (-256..=255).
+            mult: Some([255, 128, -64]),
+            add: Some([-1, 0, 1]),
+        };
+        let mut bw = BitWriter::new();
+        c.write(&mut bw);
+        let bytes = bw.into_bytes();
+        let mut br = BitReader::new_at_byte(&bytes, 0);
+        let c2 = Cxform::read(&mut br).unwrap();
+        assert_eq!(c2, c);
+        assert_eq!(br.byte_pos(), bytes.len());
+    }
+
+    #[test]
+    fn place_object2_fade_cxform_instance() {
+        // Corpus 01_002_fe_saveicon.gfx: a fade frame -- Move + HasColorTransform
+        // only, depth 1, CXFORMWITHALPHA alpha mult 244 (ffdec-confirmed).
+        let body = hx("0901006900401003d0");
+        match parse_first(&rec(TAG_PLACE_OBJECT2, &body, false)) {
+            Tag::PlaceObject2 {
+                flags,
+                depth,
+                character_id,
+                matrix,
+                color_transform,
+                ratio,
+                name,
+                clip_depth,
+                ..
+            } => {
+                assert_eq!(flags, 0x09);
+                assert_eq!(flags & PO2_MOVE, PO2_MOVE);
+                assert_eq!(depth, 1);
+                assert_eq!(character_id, None);
+                assert_eq!(matrix, None);
+                assert_eq!(ratio, None);
+                assert_eq!(name, None);
+                assert_eq!(clip_depth, None);
+                let c = color_transform.expect("a CXFORMWITHALPHA");
+                assert!(c.has_mult && !c.has_add);
+                assert_eq!(c.nbits, 10);
+                assert_eq!(c.mult, Some([256, 256, 256, 244]));
+                assert_eq!(c.add, None);
+            }
+            other => panic!("expected PlaceObject2, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn place_object2_autosave_icon_full_instance() {
+        // Corpus 01_002_fe_saveicon.gfx, force_long: characterId 5, matrix
+        // (translate-only, 17 bits, 36000/1920), CXFORMWITHALPHA alpha 102,
+        // name "AutoSaveIcon" (all ffdec-confirmed).
+        let body = hx("2e01000500228ca003c0006900401001984175746f5361766549636f6e00");
+        match parse_first(&rec(TAG_PLACE_OBJECT2, &body, true)) {
+            Tag::PlaceObject2 {
+                flags,
+                depth,
+                character_id,
+                matrix,
+                color_transform,
+                ratio,
+                name,
+                clip_depth,
+                force_long,
+            } => {
+                assert_eq!(flags, 0x2e); // HasChar|HasMatrix|HasCxform|HasName
+                assert!(force_long);
+                assert_eq!(depth, 1);
+                assert_eq!(character_id, Some(5));
+                assert_eq!(ratio, None);
+                assert_eq!(clip_depth, None);
+                assert_eq!(name.as_deref(), Some("AutoSaveIcon"));
+                let m = matrix.expect("a MATRIX");
+                assert!(!m.has_scale && !m.has_rotate);
+                assert_eq!(m.translate_nbits, 17);
+                assert_eq!(m.translate_x, 36000);
+                assert_eq!(m.translate_y, 1920);
+                let c = color_transform.expect("a CXFORMWITHALPHA");
+                assert_eq!(c.nbits, 10);
+                assert_eq!(c.mult, Some([256, 256, 256, 102]));
+            }
+            other => panic!("expected PlaceObject2, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn place_object2_non_minimal_matrix_instance() {
+        // Corpus 01_000_fe.gfx: Move + HasMatrix, translate_nbits=6 while the
+        // values need only 5 -- proves byte-identity requires the stored width.
+        let body = hx("0501000d8000");
+        match parse_first(&rec(TAG_PLACE_OBJECT2, &body, false)) {
+            Tag::PlaceObject2 {
+                flags,
+                depth,
+                matrix,
+                ..
+            } => {
+                assert_eq!(flags, 0x05);
+                assert_eq!(depth, 1);
+                let m = matrix.expect("a MATRIX");
+                assert_eq!(m.translate_nbits, 6);
+                assert_eq!(m.translate_x, -16);
+                assert_eq!(m.translate_y, 0);
+            }
+            other => panic!("expected PlaceObject2, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn place_object2_with_clip_actions_falls_back_to_unknown() {
+        // HasClipActions (0x80) is unmodelled; such a tag must stay Tag::Unknown
+        // and still round-trip byte-identically via the opaque body.
+        let mut body = vec![0x80u8]; // flags: only HasClipActions
+        body.extend_from_slice(&7u16.to_le_bytes()); // depth
+        body.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]); // opaque clipActions tail
+        match parse_first(&rec(TAG_PLACE_OBJECT2, &body, false)) {
+            Tag::Unknown { code, raw, .. } => {
+                assert_eq!(code, TAG_PLACE_OBJECT2);
+                assert_eq!(raw, body);
+            }
+            other => panic!("expected Unknown fallback, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn define_scaling_grid_instance() {
+        // Corpus 01_010_messagebox.gfx: characterId 14, RECT nbits=9,
+        // (-172,178,-183,184) -- ffdec-confirmed.
+        let body = hx("0e004d5165495c00");
+        match parse_first(&rec(TAG_DEFINE_SCALING_GRID, &body, false)) {
+            Tag::DefineScalingGrid {
+                character_id, grid, ..
+            } => {
+                assert_eq!(character_id, 14);
+                assert_eq!(grid.nbits, 9);
+                assert_eq!(grid.x_min, -172);
+                assert_eq!(grid.x_max, 178);
+                assert_eq!(grid.y_min, -183);
+                assert_eq!(grid.y_max, 184);
+            }
+            other => panic!("expected DefineScalingGrid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_zero_bit_padding_is_rejected() {
+        // A RECT whose alignment padding bits are non-zero must fail loudly
+        // rather than silently dropping them. nbits=0 -> 5 bits used, 3 pad bits;
+        // set a pad bit. Byte 0b00000_001 = 0x01.
+        let body = vec![0x01u8];
+        let mut br = BitReader::new_at_byte(&body, 0);
+        match Rect::read(&mut br) {
+            Err(GfxError::NonZeroBitPadding { context }) => assert_eq!(context, "RECT"),
+            other => panic!("expected NonZeroBitPadding, got {other:?}"),
+        }
     }
 }
