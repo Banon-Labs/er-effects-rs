@@ -1,0 +1,12 @@
+[package]
+name = "er-tpf"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Tier-0/Tier-1 in-memory texture-payload builder: an uncompressed R8G8B8A8 DDS encoder wrapped in an uncompressed TPF003 (PC) container -- the raster analog of er-gfx's Scaleform MemoryFile."
+
+[lib]
+# Pure-Rust, host-testable. No game/Windows/disk/Kraken dependencies.
+
+[dependencies]
+# Intentionally none. The Tier-0 DDS encoder and Tier-1 TPF003 wrap are std-only.
