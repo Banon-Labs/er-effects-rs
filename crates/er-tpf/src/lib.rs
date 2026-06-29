@@ -11,7 +11,12 @@
 //!   blob: the `DDS ` magic, the 124-byte `DDS_HEADER`, a `DDS_HEADER_DXT10`,
 //!   then the raw pixel bytes (single mip). Layout follows the Microsoft DDS
 //!   programming guide exactly so the byte assertions in the tests are spec
-//!   citations, not guesses.
+//!   citations, not guesses. Two header forms are available via
+//!   [`DdsHeaderMode`]: the strict [`DdsHeaderMode::Dx10`] form (a
+//!   `DDS_HEADER_DXT10` with `dxgiFormat = 28`, the default), and a legacy
+//!   [`DdsHeaderMode::LegacyRgba8`] form (classic `DDS_PIXELFORMAT` RGBA bit
+//!   masks, **no** `DDS_HEADER_DXT10`) that maps to the same DXGI `28` through
+//!   the engine's legacy path and bypasses the DX10 format validator.
 //! * **Tier 1 -- TPF003 wrap** ([`Tpf`]). Wraps one (or more) Tier-0 DDS blobs
 //!   in an uncompressed TPF version-3 / PC (`TPFPlatform.PC`) container, mirroring
 //!   the documented SoulsFormats `TPF` layout. The wrap is **never** Kraken/DCX
@@ -87,6 +92,36 @@ pub const DXGI_FORMAT_R8G8B8A8_UNORM: u32 = 28;
 /// `D3D10_RESOURCE_DIMENSION_TEXTURE2D`.
 pub const D3D10_RESOURCE_DIMENSION_TEXTURE2D: u32 = 3;
 
+// --- Legacy (non-DX10) DDS_PIXELFORMAT masked path. ---
+// The classic R8G8B8A8 surface description: no `DX10` four-CC and no
+// `DDS_HEADER_DXT10`, just the four channel bit masks. The engine's legacy DDS
+// path maps this to DXGI 28, which sidesteps the strict DX10 format validator.
+
+/// `DDPF_ALPHAPIXELS`: an alpha channel is present (`dwABitMask` is valid).
+pub const DDPF_ALPHAPIXELS: u32 = 0x0000_0001;
+/// `DDPF_RGB`: uncompressed RGB data is present (the four channel masks are
+/// valid).
+pub const DDPF_RGB: u32 = 0x0000_0040;
+/// The legacy `DDS_PIXELFORMAT.dwFlags` for an RGBA8 surface:
+/// `DDPF_RGB | DDPF_ALPHAPIXELS` = `0x41`.
+pub const DDPF_RGBA: u32 = DDPF_RGB | DDPF_ALPHAPIXELS;
+
+/// Legacy R8G8B8A8 `dwRGBBitCount` (32 bits per pixel).
+pub const RGBA8_BIT_COUNT: u32 = 32;
+/// Legacy `dwRBitMask` for R8G8B8A8 (red is the low byte, matching the in-memory
+/// `R,G,B,A` byte order).
+pub const RGBA8_R_MASK: u32 = 0x0000_00ff;
+/// Legacy `dwGBitMask` for R8G8B8A8.
+pub const RGBA8_G_MASK: u32 = 0x0000_ff00;
+/// Legacy `dwBBitMask` for R8G8B8A8.
+pub const RGBA8_B_MASK: u32 = 0x00ff_0000;
+/// Legacy `dwABitMask` for R8G8B8A8 (alpha is the high byte).
+pub const RGBA8_A_MASK: u32 = 0xff00_0000;
+
+/// Byte offset of the first pixel in a legacy (non-DX10) DDS: 4 (magic) + 124
+/// (`DDS_HEADER`), with **no** `DDS_HEADER_DXT10`.
+pub const DDS_LEGACY_PIXEL_DATA_OFFSET: usize = 4 + DDS_HEADER_SIZE as usize;
+
 /// Bytes per `R8G8B8A8_UNORM` pixel.
 const RGBA8_BYTES_PER_PIXEL: usize = 4;
 
@@ -157,6 +192,15 @@ pub enum TpfError {
     MissingDxt10Header,
     /// `DDS_HEADER_DXT10.dxgiFormat` was not `R8G8B8A8_UNORM` (28).
     UnsupportedDxgiFormat(u32),
+    /// A legacy (non-DX10) `DDS_PIXELFORMAT` advertised RGB bit masks that do not
+    /// match the `R8G8B8A8_UNORM` layout this crate's legacy path supports.
+    UnsupportedLegacyPixelFormat {
+        rgb_bits: u32,
+        r_mask: u32,
+        g_mask: u32,
+        b_mask: u32,
+        a_mask: u32,
+    },
     /// A single-mip DDS carried more pixel bytes than `width * height * 4`.
     TrailingDdsBytes { remaining: usize },
     /// The parser only supports `TPFPlatform.PC` (0).
@@ -211,6 +255,18 @@ impl fmt::Display for TpfError {
                     "unsupported dxgiFormat {fmt} (expected 28 R8G8B8A8_UNORM)"
                 )
             }
+            TpfError::UnsupportedLegacyPixelFormat {
+                rgb_bits,
+                r_mask,
+                g_mask,
+                b_mask,
+                a_mask,
+            } => write!(
+                f,
+                "unsupported legacy DDS_PIXELFORMAT (rgbBitCount {rgb_bits}, masks \
+                 R={r_mask:#010x} G={g_mask:#010x} B={b_mask:#010x} A={a_mask:#010x}); \
+                 expected R8G8B8A8_UNORM"
+            ),
             TpfError::TrailingDdsBytes { remaining } => {
                 write!(
                     f,
@@ -344,6 +400,24 @@ impl<'a> LeReader<'a> {
 // Tier 0 -- DDS encoder (uncompressed R8G8B8A8_UNORM, single mip)
 // ===========================================================================
 
+/// Selects which DDS header form [`DdsImage::to_dds_bytes_with`] emits. Both
+/// describe the same uncompressed 32-bpp `R8G8B8A8_UNORM` pixels; they differ
+/// only in the header the engine's loader reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum DdsHeaderMode {
+    /// `DX10` four-CC + a `DDS_HEADER_DXT10` carrying `dxgiFormat = 28`. The
+    /// strict modern form; the pixel data begins at [`DDS_PIXEL_DATA_OFFSET`]
+    /// (148). This is the default ([`DdsImage::to_dds_bytes`]).
+    #[default]
+    Dx10,
+    /// Legacy `DDS_PIXELFORMAT` masks (`DDPF_RGB | DDPF_ALPHAPIXELS`, 32-bpp with
+    /// the R8G8B8A8 channel masks) and **no** `DDS_HEADER_DXT10`, so the pixel
+    /// data begins at [`DDS_LEGACY_PIXEL_DATA_OFFSET`] (128). Maps to DXGI `28`
+    /// via the engine's legacy path and bypasses the DX10 format validator --
+    /// the safest first-proof form.
+    LegacyRgba8,
+}
+
 /// An uncompressed `R8G8B8A8_UNORM` image: a `width x height` row-major RGBA8
 /// pixel buffer. `pixels.len()` is always `width * height * 4`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -394,9 +468,26 @@ impl DdsImage {
         self.width * RGBA8_BYTES_PER_PIXEL as u32
     }
 
-    /// Encode the Tier-0 DDS blob: `DDS ` magic + 124-byte `DDS_HEADER` +
-    /// 20-byte `DDS_HEADER_DXT10` + raw RGBA pixel bytes (single mip).
+    /// Encode the Tier-0 DDS blob using the default [`DdsHeaderMode::Dx10`]
+    /// header: `DDS ` magic + 124-byte `DDS_HEADER` + 20-byte `DDS_HEADER_DXT10`
+    /// + raw RGBA pixel bytes (single mip).
     pub fn to_dds_bytes(&self) -> Vec<u8> {
+        self.to_dds_bytes_with(DdsHeaderMode::Dx10)
+    }
+
+    /// Encode the Tier-0 DDS blob with a caller-chosen header form.
+    ///
+    /// Both forms emit the same `DDS ` magic, 124-byte `DDS_HEADER`, and raw
+    /// single-mip RGBA pixels. They differ only in `DDS_PIXELFORMAT` and the
+    /// presence of `DDS_HEADER_DXT10`:
+    ///
+    /// * [`DdsHeaderMode::Dx10`] -- `DDPF_FOURCC` + `DX10` four-CC, then a
+    ///   20-byte `DDS_HEADER_DXT10` with `dxgiFormat = 28`. Pixels at
+    ///   [`DDS_PIXEL_DATA_OFFSET`] (148).
+    /// * [`DdsHeaderMode::LegacyRgba8`] -- `DDPF_RGB | DDPF_ALPHAPIXELS`, the
+    ///   32-bpp R8G8B8A8 channel masks, four-CC `0`, and **no**
+    ///   `DDS_HEADER_DXT10`. Pixels at [`DDS_LEGACY_PIXEL_DATA_OFFSET`] (128).
+    pub fn to_dds_bytes_with(&self, mode: DdsHeaderMode) -> Vec<u8> {
         debug_assert_eq!(
             self.pixels.len(),
             (self.width as usize) * (self.height as usize) * RGBA8_BYTES_PER_PIXEL,
@@ -424,15 +515,29 @@ impl DdsImage {
         w.u32(0); // dwDepth
         w.u32(mips); // dwMipMapCount
         w.zeros(44); // dwReserved1[11]
-        // DDS_PIXELFORMAT (32 bytes)
+        // DDS_PIXELFORMAT (32 bytes) -- the only header region that differs by
+        // mode.
         w.u32(DDS_PIXELFORMAT_SIZE); // dwSize = 32
-        w.u32(DDPF_FOURCC); // dwFlags = DDPF_FOURCC
-        w.u32(FOURCC_DX10); // dwFourCC = 'DX10' (DXT10 header follows)
-        w.u32(0); // dwRGBBitCount (unused with DX10)
-        w.u32(0); // dwRBitMask
-        w.u32(0); // dwGBitMask
-        w.u32(0); // dwBBitMask
-        w.u32(0); // dwABitMask
+        match mode {
+            DdsHeaderMode::Dx10 => {
+                w.u32(DDPF_FOURCC); // dwFlags = DDPF_FOURCC
+                w.u32(FOURCC_DX10); // dwFourCC = 'DX10' (DXT10 header follows)
+                w.u32(0); // dwRGBBitCount (unused with DX10)
+                w.u32(0); // dwRBitMask
+                w.u32(0); // dwGBitMask
+                w.u32(0); // dwBBitMask
+                w.u32(0); // dwABitMask
+            }
+            DdsHeaderMode::LegacyRgba8 => {
+                w.u32(DDPF_RGBA); // dwFlags = DDPF_RGB | DDPF_ALPHAPIXELS (0x41)
+                w.u32(0); // dwFourCC = 0 (no DX10 extension)
+                w.u32(RGBA8_BIT_COUNT); // dwRGBBitCount = 32
+                w.u32(RGBA8_R_MASK); // dwRBitMask = 0x000000ff
+                w.u32(RGBA8_G_MASK); // dwGBitMask = 0x0000ff00
+                w.u32(RGBA8_B_MASK); // dwBBitMask = 0x00ff0000
+                w.u32(RGBA8_A_MASK); // dwABitMask = 0xff000000
+            }
+        }
         // caps
         w.u32(DDSCAPS_TEXTURE); // dwCaps
         w.u32(0); // dwCaps2
@@ -440,23 +545,41 @@ impl DdsImage {
         w.u32(0); // dwCaps4
         w.u32(0); // dwReserved2
 
-        // --- DDS_HEADER_DXT10 (20 bytes) ---
-        w.u32(DXGI_FORMAT_R8G8B8A8_UNORM); // dxgiFormat = 28
-        w.u32(D3D10_RESOURCE_DIMENSION_TEXTURE2D); // resourceDimension = 3
-        w.u32(0); // miscFlag
-        w.u32(1); // arraySize
-        w.u32(0); // miscFlags2
-
-        debug_assert_eq!(w.pos(), DDS_PIXEL_DATA_OFFSET, "DDS header layout drift");
+        match mode {
+            DdsHeaderMode::Dx10 => {
+                // --- DDS_HEADER_DXT10 (20 bytes) ---
+                w.u32(DXGI_FORMAT_R8G8B8A8_UNORM); // dxgiFormat = 28
+                w.u32(D3D10_RESOURCE_DIMENSION_TEXTURE2D); // resourceDimension = 3
+                w.u32(0); // miscFlag
+                w.u32(1); // arraySize
+                w.u32(0); // miscFlags2
+                debug_assert_eq!(w.pos(), DDS_PIXEL_DATA_OFFSET, "DDS header layout drift");
+            }
+            DdsHeaderMode::LegacyRgba8 => {
+                // No DDS_HEADER_DXT10: pixels follow the 124-byte header.
+                debug_assert_eq!(
+                    w.pos(),
+                    DDS_LEGACY_PIXEL_DATA_OFFSET,
+                    "legacy DDS header layout drift"
+                );
+            }
+        }
 
         // --- pixel data (single mip) ---
         w.bytes(&self.pixels);
         w.buf
     }
 
-    /// Parse a Tier-0 DDS blob back into a [`DdsImage`]. Validates the magic, the
-    /// header sizes, the `DX10` four-CC, and that `dxgiFormat == 28`, then slices
-    /// exactly `width * height * 4` pixel bytes (single mip).
+    /// Parse a Tier-0 DDS blob back into a [`DdsImage`]. Accepts **both** header
+    /// forms emitted by [`DdsImage::to_dds_bytes_with`]:
+    ///
+    /// * [`DdsHeaderMode::Dx10`]: requires the `DX10` four-CC and a
+    ///   `DDS_HEADER_DXT10` with `dxgiFormat == 28`.
+    /// * [`DdsHeaderMode::LegacyRgba8`]: requires `DDPF_RGB` with the exact
+    ///   32-bpp R8G8B8A8 channel masks and no `DDS_HEADER_DXT10`.
+    ///
+    /// Either way it then slices exactly `width * height * 4` pixel bytes
+    /// (single mip).
     pub fn parse(data: &[u8]) -> Result<DdsImage, TpfError> {
         let mut r = LeReader::new(data);
 
@@ -484,23 +607,47 @@ impl DdsImage {
         }
         let pf_flags = r.u32()?;
         let fourcc = r.u32()?;
-        let _rgb_bits = r.u32()?;
-        r.skip(16)?; // R/G/B/A bit masks
+        let rgb_bits = r.u32()?;
+        let r_mask = r.u32()?;
+        let g_mask = r.u32()?;
+        let b_mask = r.u32()?;
+        let a_mask = r.u32()?;
         let _caps = r.u32()?;
         r.skip(16)?; // dwCaps2/3/4 + dwReserved2
 
-        if pf_flags & DDPF_FOURCC == 0 || fourcc != FOURCC_DX10 {
+        if pf_flags & DDPF_FOURCC != 0 {
+            // DX10 form: a DDS_HEADER_DXT10 follows the DDS_HEADER.
+            if fourcc != FOURCC_DX10 {
+                return Err(TpfError::MissingDxt10Header);
+            }
+            let dxgi = r.u32()?;
+            let _dim = r.u32()?;
+            let _misc = r.u32()?;
+            let _array = r.u32()?;
+            let _misc2 = r.u32()?;
+            if dxgi != DXGI_FORMAT_R8G8B8A8_UNORM {
+                return Err(TpfError::UnsupportedDxgiFormat(dxgi));
+            }
+        } else if pf_flags & DDPF_RGB != 0 {
+            // Legacy form: the channel masks must describe exactly R8G8B8A8, and
+            // pixel data follows the 124-byte header with no DXT10 extension.
+            if rgb_bits != RGBA8_BIT_COUNT
+                || r_mask != RGBA8_R_MASK
+                || g_mask != RGBA8_G_MASK
+                || b_mask != RGBA8_B_MASK
+                || a_mask != RGBA8_A_MASK
+            {
+                return Err(TpfError::UnsupportedLegacyPixelFormat {
+                    rgb_bits,
+                    r_mask,
+                    g_mask,
+                    b_mask,
+                    a_mask,
+                });
+            }
+        } else {
+            // Neither a DX10 four-CC nor an RGB-masked legacy surface.
             return Err(TpfError::MissingDxt10Header);
-        }
-
-        // DDS_HEADER_DXT10
-        let dxgi = r.u32()?;
-        let _dim = r.u32()?;
-        let _misc = r.u32()?;
-        let _array = r.u32()?;
-        let _misc2 = r.u32()?;
-        if dxgi != DXGI_FORMAT_R8G8B8A8_UNORM {
-            return Err(TpfError::UnsupportedDxgiFormat(dxgi));
         }
 
         let expected = (width as usize) * (height as usize) * RGBA8_BYTES_PER_PIXEL;
@@ -529,7 +676,12 @@ impl DdsImage {
 /// with [`DdsImage::parse`] if the typed image is wanted).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TpfTexture {
-    /// Texture name (no path/extension; the DDS payload is implicit).
+    /// Texture name (no path/extension; the DDS payload is implicit). This is a
+    /// caller-set, per-entry field: the game's in-memory TPF upload derives the
+    /// `GLOBAL_TexRepository` (SYSTEX) key from this very string, so it is the
+    /// repository key the runtime binds to. Set it to the key the engine should
+    /// resolve. Written verbatim at the entry's `nameOffset` (see
+    /// [`Tpf::single_pc`] for the one-entry convenience constructor).
     pub name: String,
     /// The TPF `format` byte (see [`TPF_FORMAT_R8G8B8A8_UNORM`]).
     pub format: u8,
@@ -897,6 +1049,89 @@ mod tests {
         }
     }
 
+    // --- Tier 0: legacy (non-DX10) RGBA8 DDS header ----------------------
+
+    #[test]
+    fn dds_legacy_exact_bytes_and_total_length() {
+        let w = 4u32;
+        let h = 2u32;
+        let img = DdsImage::solid(w, h, [0x10, 0x20, 0x30, 0x40]);
+        let dds = img.to_dds_bytes_with(DdsHeaderMode::LegacyRgba8);
+
+        // Magic 'DDS '.
+        assert_eq!(&dds[0..4], b"DDS ");
+        assert_eq!(u32_at(&dds, 0), DDS_MAGIC);
+        // DDS_HEADER.dwSize == 124.
+        assert_eq!(u32_at(&dds, 4), 124);
+        // dwFlags == required set (single mip, no MIPMAPCOUNT bit).
+        assert_eq!(u32_at(&dds, 8), 0x0000_100F);
+        // dwHeight @ +12, dwWidth @ +16.
+        assert_eq!(u32_at(&dds, 12), h);
+        assert_eq!(u32_at(&dds, 16), w);
+        // dwPitchOrLinearSize == width*4 (PITCH).
+        assert_eq!(u32_at(&dds, 20), w * 4);
+        // DDS_PIXELFORMAT.dwSize == 32 @ +76.
+        assert_eq!(u32_at(&dds, 76), 32);
+        // DDS_PIXELFORMAT.dwFlags == DDPF_RGB|DDPF_ALPHAPIXELS == 0x41 @ +80.
+        assert_eq!(u32_at(&dds, 80), 0x41);
+        assert_eq!(u32_at(&dds, 80), DDPF_RGBA);
+        // dwFourCC == 0 @ +84 (legacy: no DX10 extension).
+        assert_eq!(u32_at(&dds, 84), 0);
+        // dwRGBBitCount == 32 @ +88.
+        assert_eq!(u32_at(&dds, 88), 32);
+        // The four channel masks @ +92/+96/+100/+104.
+        assert_eq!(u32_at(&dds, 92), 0x0000_00ff); // dwRBitMask
+        assert_eq!(u32_at(&dds, 96), 0x0000_ff00); // dwGBitMask
+        assert_eq!(u32_at(&dds, 100), 0x00ff_0000); // dwBBitMask
+        assert_eq!(u32_at(&dds, 104), 0xff00_0000); // dwABitMask
+        // dwCaps == DDSCAPS_TEXTURE @ +108.
+        assert_eq!(u32_at(&dds, 108), DDSCAPS_TEXTURE);
+        // Pixel data starts at +128 (no 20-byte DDS_HEADER_DXT10).
+        assert_eq!(DDS_LEGACY_PIXEL_DATA_OFFSET, 128);
+        assert_eq!(&dds[128..132], &[0x10, 0x20, 0x30, 0x40]);
+        // Total length == 4 + 124 + w*h*4 (no DXT10 header).
+        assert_eq!(dds.len(), 4 + 124 + (w * h * 4) as usize);
+    }
+
+    #[test]
+    fn dds_legacy_self_roundtrip() {
+        let img = DdsImage::checker(16, 16, 4, [9, 8, 7, 6], [1, 2, 3, 255]);
+        let dds = img.to_dds_bytes_with(DdsHeaderMode::LegacyRgba8);
+        let parsed = DdsImage::parse(&dds).expect("parse legacy DDS");
+        assert_eq!(parsed, img);
+    }
+
+    #[test]
+    fn dds_legacy_and_dx10_decode_to_same_image() {
+        let img = DdsImage::checker(8, 4, 2, [10, 20, 30, 40], [200, 150, 100, 50]);
+        let dx10_bytes = img.to_dds_bytes_with(DdsHeaderMode::Dx10);
+        let legacy_bytes = img.to_dds_bytes_with(DdsHeaderMode::LegacyRgba8);
+
+        // Both header forms describe the same pixels and parse to the same image.
+        let dx10 = DdsImage::parse(&dx10_bytes).expect("parse dx10");
+        let legacy = DdsImage::parse(&legacy_bytes).expect("parse legacy");
+        assert_eq!(dx10, img);
+        assert_eq!(legacy, img);
+        assert_eq!(dx10, legacy);
+
+        // The only size difference is the 20-byte DDS_HEADER_DXT10.
+        assert_eq!(dx10_bytes.len() - legacy_bytes.len(), DDS_DXT10_HEADER_SIZE);
+        // Default to_dds_bytes() is still the DX10 form (byte-identical).
+        assert_eq!(img.to_dds_bytes(), dx10_bytes);
+    }
+
+    #[test]
+    fn dds_legacy_parse_rejects_wrong_masks() {
+        let mut dds = DdsImage::solid(2, 2, [0; 4]).to_dds_bytes_with(DdsHeaderMode::LegacyRgba8);
+        // Corrupt dwBBitMask @ +100 (B8G8R8A8-style swap), which no longer
+        // matches the R8G8B8A8 layout the legacy path accepts.
+        dds[100..104].copy_from_slice(&0x0000_00ffu32.to_le_bytes());
+        match DdsImage::parse(&dds) {
+            Err(TpfError::UnsupportedLegacyPixelFormat { .. }) => {}
+            other => panic!("expected UnsupportedLegacyPixelFormat, got {other:?}"),
+        }
+    }
+
     // --- Tier 1: TPF003 wrap + self round-trip ---------------------------
 
     #[test]
@@ -934,6 +1169,32 @@ mod tests {
         assert_eq!(&blob[data_offset..data_offset + 4], b"DDS ");
         // Name string at nameOffset is "cover\0".
         assert_eq!(&blob[name_offset..name_offset + 6], b"cover\0");
+    }
+
+    #[test]
+    fn tpf_entry_name_settable_lands_at_offset_and_roundtrips() {
+        // The game's in-memory TPF upload derives the GLOBAL_TexRepository
+        // (SYSTEX) key from the entry's own texture-name string, so a
+        // caller-set name must land verbatim at nameOffset (Shift-JIS/ASCII:
+        // raw bytes + a single NUL) and survive the parse round-trip.
+        let key = "SYSTEX_TitleCover_00";
+        let dds = DdsImage::solid(2, 2, [1, 2, 3, 4]).to_dds_bytes();
+        let tpf = Tpf::single_pc(key, dds, 1);
+        let blob = tpf.build().expect("build");
+
+        // nameOffset is the entry's 5th field @ +0x1C.
+        let name_offset = u32_at(&blob, 0x1C) as usize;
+        let mut expected = key.as_bytes().to_vec();
+        expected.push(0); // NUL terminator
+        assert_eq!(
+            &blob[name_offset..name_offset + expected.len()],
+            &expected[..]
+        );
+
+        // And it round-trips through the parser to exactly the set key.
+        let parsed = Tpf::parse(&blob).expect("parse");
+        assert_eq!(parsed.textures[0].name, key);
+        assert_eq!(parsed, tpf);
     }
 
     #[test]
