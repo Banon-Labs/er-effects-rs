@@ -7,7 +7,16 @@ members = [
     "crates/er-save-loader",
     "crates/er-tpf",
     "crates/soulsformats",
+    # Host-only shader subcrates (naga/wgpu/bevy). NOT depended on by the root
+    # `er-effects-rs` cdylib, so `cargo xwin check` (which selects only the root
+    # package) never cross-compiles them into the game DLL; built only when
+    # targeted explicitly (`cargo check -p er-shaderkit ...`).
+    "crates/er-shaderkit",
+    "crates/er-objectkit",
     "tools/er-param-inspect",
+    "tools/bevy-shader-lab",
+    "tools/er-shaderlab",
+    "tools/er-shader-viewer",
 ]
 resolver = "2"
 

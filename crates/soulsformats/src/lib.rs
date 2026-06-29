@@ -1,4 +1,5 @@
 pub mod recon;
+pub mod shaders;
 
 use std::{
     env, fs,
