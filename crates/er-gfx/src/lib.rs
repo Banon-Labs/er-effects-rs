@@ -99,6 +99,94 @@ const TAG_DEFINE_SHAPE3: u16 = 32;
 /// `edgeBounds` RECT and a flags byte before the SHAPEWITHSTYLE.
 const TAG_DEFINE_SHAPE4: u16 = 83;
 
+// --- Tier-4 typed tag codes (text/font tags reusing the RECT + SHAPE machinery). ---
+/// `DefineEditText` (code 37): a dynamic/input text field. Body is a
+/// `characterId`, a bounds `RECT` (byte-aligns), a 2-byte flag field, then a set
+/// of per-flag optional fields and two trailing strings. See [`Tag::DefineEditText`].
+const TAG_DEFINE_EDIT_TEXT: u16 = 37;
+/// `DefineFont3` (code 75): a glyph font. Body is a `fontId`, a flags byte, a
+/// language code, a length-prefixed font name, then the glyph offset table, the
+/// glyph `SHAPE`s (reusing the edge bitstream), a code table, and an optional
+/// layout block (advances, glyph bounds, kerning). See [`Tag::DefineFont3`].
+const TAG_DEFINE_FONT3: u16 = 75;
+
+// --- DefineEditText flag byte 1 (MSB-to-LSB, SWF bit order). The 8 bits are
+// stored verbatim in `flags1`; the four that gate an optional field are branched
+// on, the rest are documented but carry no extra body. ---
+/// `HasText`: an `initialText` cstring follows (last field).
+const ET_HAS_TEXT: u8 = 0x80;
+/// `WordWrap`: word-wrap rendering hint. No extra field.
+#[allow(dead_code)]
+const ET_WORD_WRAP: u8 = 0x40;
+/// `Multiline`: multi-line field hint. No extra field.
+#[allow(dead_code)]
+const ET_MULTILINE: u8 = 0x20;
+/// `Password`: password field hint. No extra field.
+#[allow(dead_code)]
+const ET_PASSWORD: u8 = 0x10;
+/// `ReadOnly`: read-only field hint. No extra field.
+#[allow(dead_code)]
+const ET_READONLY: u8 = 0x08;
+/// `HasTextColor`: an `RGBA` text color follows.
+const ET_HAS_TEXT_COLOR: u8 = 0x04;
+/// `HasMaxLength`: a `u16` max length follows. Never set in the corpus, but
+/// modelled (decode-then-verify keeps it safe either way).
+const ET_HAS_MAX_LENGTH: u8 = 0x02;
+/// `HasFont`: a `u16` `FontID` follows (and, jointly with `HasFontClass`, a
+/// `FontHeight`).
+const ET_HAS_FONT: u8 = 0x01;
+
+// --- DefineEditText flag byte 2 (MSB-to-LSB, SWF bit order), stored in `flags2`. ---
+/// `HasFontClass`: a `FontClass` cstring follows (and a `FontHeight`).
+const ET2_HAS_FONT_CLASS: u8 = 0x80;
+/// `AutoSize`: auto-size hint. No extra field.
+#[allow(dead_code)]
+const ET2_AUTOSIZE: u8 = 0x40;
+/// `HasLayout`: a layout block (align + margins + indent + leading) follows.
+const ET2_HAS_LAYOUT: u8 = 0x20;
+/// `NoSelect`: non-selectable hint. No extra field.
+#[allow(dead_code)]
+const ET2_NOSELECT: u8 = 0x10;
+/// `Border`: draw-border hint. No extra field.
+#[allow(dead_code)]
+const ET2_BORDER: u8 = 0x08;
+/// `WasStatic`: was-static hint. No extra field.
+#[allow(dead_code)]
+const ET2_WAS_STATIC: u8 = 0x04;
+/// `HTML`: the `initialText` is HTML. No extra field (the text is still a cstring).
+#[allow(dead_code)]
+const ET2_HTML: u8 = 0x02;
+/// `UseOutlines`: render with font outlines. No extra field.
+#[allow(dead_code)]
+const ET2_USE_OUTLINES: u8 = 0x01;
+
+// --- DefineFont3 flags byte (MSB-to-LSB, SWF bit order), stored verbatim. ---
+/// `HasLayout`: the trailing layout block (ascent/descent/leading + advance,
+/// bounds, and kerning tables) is present.
+const F3_HAS_LAYOUT: u8 = 0x80;
+/// `ShiftJIS`: codes are Shift-JIS. No structural effect here. Never set in the
+/// corpus.
+#[allow(dead_code)]
+const F3_SHIFT_JIS: u8 = 0x40;
+/// `SmallText`: small-text rendering hint. No structural effect.
+#[allow(dead_code)]
+const F3_SMALL_TEXT: u8 = 0x20;
+/// `ANSI`: codes are ANSI. No structural effect here. Never set in the corpus.
+#[allow(dead_code)]
+const F3_ANSI: u8 = 0x10;
+/// `WideOffsets`: the glyph offset table (and code-table offset) entries are
+/// `u32` rather than `u16`.
+const F3_WIDE_OFFSETS: u8 = 0x08;
+/// `WideCodes`: code-table (and kerning-record code) entries are `u16` rather
+/// than `u8`. Always set for DefineFont3 in the corpus.
+const F3_WIDE_CODES: u8 = 0x04;
+/// `Italic`: italic hint. No structural effect.
+#[allow(dead_code)]
+const F3_ITALIC: u8 = 0x02;
+/// `Bold`: bold hint. No structural effect.
+#[allow(dead_code)]
+const F3_BOLD: u8 = 0x01;
+
 // --- PlaceObject2 flag bits (MSB-to-LSB within the flags byte; SWF order). ---
 /// `PlaceFlagMove`: this tag moves an existing object at `depth`. Stored only in
 /// the raw `flags` byte (it gates no optional field), so it is not branched on;
@@ -388,6 +476,91 @@ pub enum Tag {
         flags_byte: Option<u8>,
         /// The `SHAPEWITHSTYLE` (fill/line style arrays + shape records).
         shapes: ShapeWithStyle,
+        /// Whether the source encoded this tag's `RecordHeader` in long form.
+        force_long: bool,
+    },
+
+    /// `DefineEditText` (code 37): a dynamic/input text field -- the dominant
+    /// text mechanism in the corpus (1,479 instances across 102 files). Both
+    /// flag bytes are stored verbatim and are the source of truth for which
+    /// optional field is present (each is `Some` iff its flag bit is set).
+    ///
+    /// Field order (corpus-proven byte-identical over all instances): `bounds`
+    /// `RECT` (byte-aligns), `flags1`+`flags2`, `font_id` (`flags1` `HasFont`),
+    /// `font_class` (`flags2` `HasFontClass`), `font_height` (present iff
+    /// `HasFont` OR `HasFontClass`), `text_color` (`flags1` `HasTextColor`,
+    /// `RGBA`), `max_length` (`flags1` `HasMaxLength`), `layout` (`flags2`
+    /// `HasLayout`), `variable_name` (always), `initial_text` (`flags1`
+    /// `HasText`).
+    ///
+    /// Decode-then-verified: if the parsed fields do not re-serialize to the
+    /// exact source body (e.g. a non-UTF-8 string, or any structural surprise),
+    /// the tag falls back to [`Tag::Unknown`] so byte-identity is never lost.
+    DefineEditText {
+        character_id: u16,
+        /// The field's bounding box `RECT`.
+        bounds: Rect,
+        /// First flags byte (`HasText`/`WordWrap`/`Multiline`/`Password`/
+        /// `ReadOnly`/`HasTextColor`/`HasMaxLength`/`HasFont`, MSB-to-LSB).
+        flags1: u8,
+        /// Second flags byte (`HasFontClass`/`AutoSize`/`HasLayout`/`NoSelect`/
+        /// `Border`/`WasStatic`/`HTML`/`UseOutlines`, MSB-to-LSB).
+        flags2: u8,
+        /// `FontID` (flag `flags1` `HasFont` `0x01`).
+        font_id: Option<u16>,
+        /// `FontClass` name (flag `flags2` `HasFontClass` `0x80`); NUL implicit.
+        font_class: Option<String>,
+        /// `FontHeight` in twips, present iff `HasFont` OR `HasFontClass`.
+        font_height: Option<u16>,
+        /// `[red, green, blue, alpha]` text color (flag `flags1` `HasTextColor`
+        /// `0x04`).
+        text_color: Option<[u8; 4]>,
+        /// `MaxLength` (flag `flags1` `HasMaxLength` `0x02`). Never set in the
+        /// corpus, but modelled.
+        max_length: Option<u16>,
+        /// Layout block (flag `flags2` `HasLayout` `0x20`).
+        layout: Option<EditTextLayout>,
+        /// `VariableName` (always present); NUL implicit. Empty across the corpus.
+        variable_name: String,
+        /// `InitialText` (flag `flags1` `HasText` `0x80`); NUL implicit.
+        initial_text: Option<String>,
+        /// Whether the source encoded this tag's `RecordHeader` in long form.
+        force_long: bool,
+    },
+
+    /// `DefineFont3` (code 75): a glyph font (7 fonts across 3 corpus files).
+    /// The `flags` byte is stored verbatim and is the source of truth for
+    /// `WideOffsets` (offset table width), `WideCodes` (code/kerning width), and
+    /// `HasLayout` (layout-block presence).
+    ///
+    /// The glyph offset table values are stored verbatim (never recomputed) so
+    /// byte-identity holds even if the exporter's offsets were non-canonical;
+    /// each glyph `SHAPE` reuses the Tier-3 edge bitstream (its own
+    /// `NumFillBits`/`NumLineBits` header, no style arrays). Decode-then-verified:
+    /// any byte mismatch falls the whole tag back to [`Tag::Unknown`].
+    DefineFont3 {
+        font_id: u16,
+        /// Raw flags byte (`HasLayout`/`ShiftJIS`/`SmallText`/`ANSI`/
+        /// `WideOffsets`/`WideCodes`/`Italic`/`Bold`, MSB-to-LSB).
+        flags: u8,
+        /// `LanguageCode` byte (stored raw).
+        language_code: u8,
+        /// `FontName`, length-prefixed (the `u8` length is `font_name.len()`).
+        /// Stored as raw bytes because the exporter includes a trailing NUL
+        /// *inside* the counted length and the bytes are not guaranteed UTF-8.
+        font_name: Vec<u8>,
+        /// The glyph offset table plus trailing code-table offset
+        /// (`glyphs.len() + 1` values), stored verbatim. Emitted as `u32` iff
+        /// `flags & WideOffsets`, else `u16`.
+        offsets: Vec<u32>,
+        /// The `numGlyphs` glyph `SHAPE`s.
+        glyphs: Vec<GlyphShape>,
+        /// The `numGlyphs` character codes. Emitted as `u16` iff `flags &
+        /// WideCodes`, else `u8`.
+        codes: Vec<u16>,
+        /// Layout block (`flags & HasLayout`): ascent/descent/leading, the
+        /// per-glyph advance + bounds tables, and the kerning table.
+        layout: Option<Font3Layout>,
         /// Whether the source encoded this tag's `RecordHeader` in long form.
         force_long: bool,
     },
@@ -2075,6 +2248,518 @@ fn decode_define_shape(code: u16, body: Vec<u8>, force_long: bool) -> Tag {
     }
 }
 
+// ===========================================================================
+// Tier-4: DefineEditText (37) + DefineFont3 (75) -- text/font tags that reuse
+// the RECT primitive and the SHAPERECORD edge bitstream.
+// ===========================================================================
+//
+// Both tags are decode-then-verified exactly like the DefineShape family: the
+// body is parsed into typed fields, re-serialized, and byte-compared against the
+// source; any structural surprise or byte mismatch falls the whole tag back to
+// [`Tag::Unknown`] so byte-identity can never be silently lost. Across the
+// 114-file corpus all 1,479 DefineEditText and all 7 DefineFont3 decode to their
+// typed variants byte-cleanly (python ground-truth verifier).
+
+/// The `DefineEditText` layout block (present iff `flags2` `HasLayout`).
+/// `leading` is signed; the rest are unsigned twips/indices.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EditTextLayout {
+    /// Paragraph alignment (0 left, 1 right, 2 center, 3 justify).
+    pub align: u8,
+    pub left_margin: u16,
+    pub right_margin: u16,
+    pub indent: u16,
+    /// `Leading` (signed twips between lines).
+    pub leading: i16,
+}
+
+/// One glyph `SHAPE` inside a [`Tag::DefineFont3`]. Unlike a `SHAPEWITHSTYLE` it
+/// carries no fill/line style arrays -- just its own starting `NumFillBits`/
+/// `NumLineBits` (stored verbatim) and the SHAPERECORD stream (terminated by its
+/// [`ShapeRecord::End`]), reusing the Tier-3 edge machinery. A glyph SHAPE never
+/// carries a StateNewStyles record (it has no style arrays); one would fall the
+/// owning font back to [`Tag::Unknown`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GlyphShape {
+    pub num_fill_bits: u32,
+    pub num_line_bits: u32,
+    pub records: Vec<ShapeRecord>,
+}
+
+/// One `KERNINGRECORD` in a [`Font3Layout`] kerning table. The two character
+/// codes are `u16` iff the font's `WideCodes` flag is set (else `u8`); the
+/// adjustment is a signed twip delta.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KerningRecord {
+    pub code1: u16,
+    pub code2: u16,
+    pub adjustment: i16,
+}
+
+/// The `DefineFont3` layout block (present iff `flags` `HasLayout`). The advance
+/// and bounds tables have one entry per glyph; the kerning table is `u16`-counted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Font3Layout {
+    pub ascent: i16,
+    pub descent: i16,
+    pub leading: i16,
+    /// Per-glyph advance widths (`numGlyphs` entries).
+    pub advance: Vec<i16>,
+    /// Per-glyph bounding boxes (`numGlyphs` `RECT`s, each byte-aligned).
+    pub bounds: Vec<Rect>,
+    /// Kerning pairs (`count` is `kernings.len()` on write).
+    pub kernings: Vec<KerningRecord>,
+}
+
+/// Parsed `DefineEditText` fields (the intermediate of [`decode_define_edit_text`],
+/// which re-serializes and verifies them).
+struct EditTextParts {
+    character_id: u16,
+    bounds: Rect,
+    flags1: u8,
+    flags2: u8,
+    font_id: Option<u16>,
+    font_class: Option<String>,
+    font_height: Option<u16>,
+    text_color: Option<[u8; 4]>,
+    max_length: Option<u16>,
+    layout: Option<EditTextLayout>,
+    variable_name: String,
+    initial_text: Option<String>,
+}
+
+/// Parse a `DefineEditText` (code 37) body into its typed fields. The `bounds`
+/// RECT is bit-packed and byte-aligns; everything after the two flag bytes is
+/// byte-structured. The two flag bytes are the source of truth for optional-field
+/// presence.
+fn parse_define_edit_text(body: &[u8]) -> Result<EditTextParts, GfxError> {
+    let code = TAG_DEFINE_EDIT_TEXT;
+    let mut r = GfxReader::new(body);
+    let character_id = r.read_u16()?;
+    let mut bits = BitReader::new_at_byte(body, r.pos);
+    let bounds = Rect::read(&mut bits)?;
+    r.pos = bits.byte_pos();
+    let flags1 = r.read_u8()?;
+    let flags2 = r.read_u8()?;
+
+    let has_font = flags1 & ET_HAS_FONT != 0;
+    let has_font_class = flags2 & ET2_HAS_FONT_CLASS != 0;
+    let font_id = if has_font { Some(r.read_u16()?) } else { None };
+    let font_class = if has_font_class {
+        Some(r.read_cstring(code)?)
+    } else {
+        None
+    };
+    let font_height = if has_font || has_font_class {
+        Some(r.read_u16()?)
+    } else {
+        None
+    };
+    let text_color = if flags1 & ET_HAS_TEXT_COLOR != 0 {
+        Some([r.read_u8()?, r.read_u8()?, r.read_u8()?, r.read_u8()?])
+    } else {
+        None
+    };
+    let max_length = if flags1 & ET_HAS_MAX_LENGTH != 0 {
+        Some(r.read_u16()?)
+    } else {
+        None
+    };
+    let layout = if flags2 & ET2_HAS_LAYOUT != 0 {
+        Some(EditTextLayout {
+            align: r.read_u8()?,
+            left_margin: r.read_u16()?,
+            right_margin: r.read_u16()?,
+            indent: r.read_u16()?,
+            leading: r.read_u16()? as i16,
+        })
+    } else {
+        None
+    };
+    let variable_name = r.read_cstring(code)?;
+    let initial_text = if flags1 & ET_HAS_TEXT != 0 {
+        Some(r.read_cstring(code)?)
+    } else {
+        None
+    };
+    ensure_consumed(code, r.pos, body.len())?;
+    Ok(EditTextParts {
+        character_id,
+        bounds,
+        flags1,
+        flags2,
+        font_id,
+        font_class,
+        font_height,
+        text_color,
+        max_length,
+        layout,
+        variable_name,
+        initial_text,
+    })
+}
+
+/// Serialize a `DefineEditText` body from typed fields (used by both the
+/// decode-then-verify check and the writer). Each optional field is emitted iff
+/// its flag bit is set; the flag bytes are the source of truth.
+#[allow(clippy::too_many_arguments)]
+fn serialize_edit_text_body(
+    character_id: u16,
+    bounds: &Rect,
+    flags1: u8,
+    flags2: u8,
+    font_id: Option<u16>,
+    font_class: Option<&str>,
+    font_height: Option<u16>,
+    text_color: Option<&[u8; 4]>,
+    max_length: Option<u16>,
+    layout: Option<&EditTextLayout>,
+    variable_name: &str,
+    initial_text: Option<&str>,
+) -> Vec<u8> {
+    let mut w = GfxWriter::new();
+    w.write_u16(character_id);
+    let mut bw = BitWriter::new();
+    bounds.write(&mut bw);
+    w.write_bytes(&bw.into_bytes());
+    w.write_u8(flags1);
+    w.write_u8(flags2);
+    if flags1 & ET_HAS_FONT != 0 {
+        w.write_u16(font_id.expect("HasFont set without font_id"));
+    }
+    if flags2 & ET2_HAS_FONT_CLASS != 0 {
+        w.write_cstring(font_class.expect("HasFontClass set without font_class"));
+    }
+    if flags1 & ET_HAS_FONT != 0 || flags2 & ET2_HAS_FONT_CLASS != 0 {
+        w.write_u16(font_height.expect("font present without font_height"));
+    }
+    if flags1 & ET_HAS_TEXT_COLOR != 0 {
+        w.write_bytes(text_color.expect("HasTextColor set without text_color"));
+    }
+    if flags1 & ET_HAS_MAX_LENGTH != 0 {
+        w.write_u16(max_length.expect("HasMaxLength set without max_length"));
+    }
+    if flags2 & ET2_HAS_LAYOUT != 0 {
+        let l = layout.expect("HasLayout set without layout");
+        w.write_u8(l.align);
+        w.write_u16(l.left_margin);
+        w.write_u16(l.right_margin);
+        w.write_u16(l.indent);
+        w.write_u16(l.leading as u16);
+    }
+    w.write_cstring(variable_name);
+    if flags1 & ET_HAS_TEXT != 0 {
+        w.write_cstring(initial_text.expect("HasText set without initial_text"));
+    }
+    w.buf
+}
+
+/// Decode a `DefineEditText` (code 37) body, decode-then-verified: parse, then
+/// re-serialize and byte-compare; on any mismatch or structural surprise fall
+/// back to [`Tag::Unknown`] so byte-identity is never silently lost. Always
+/// returns `Ok` (the fallback is data, not an error).
+fn decode_define_edit_text(body: Vec<u8>, force_long: bool) -> Tag {
+    match parse_define_edit_text(&body) {
+        Ok(p) => {
+            let reencoded = serialize_edit_text_body(
+                p.character_id,
+                &p.bounds,
+                p.flags1,
+                p.flags2,
+                p.font_id,
+                p.font_class.as_deref(),
+                p.font_height,
+                p.text_color.as_ref(),
+                p.max_length,
+                p.layout.as_ref(),
+                &p.variable_name,
+                p.initial_text.as_deref(),
+            );
+            if reencoded == body {
+                Tag::DefineEditText {
+                    character_id: p.character_id,
+                    bounds: p.bounds,
+                    flags1: p.flags1,
+                    flags2: p.flags2,
+                    font_id: p.font_id,
+                    font_class: p.font_class,
+                    font_height: p.font_height,
+                    text_color: p.text_color,
+                    max_length: p.max_length,
+                    layout: p.layout,
+                    variable_name: p.variable_name,
+                    initial_text: p.initial_text,
+                    force_long,
+                }
+            } else {
+                Tag::Unknown {
+                    code: TAG_DEFINE_EDIT_TEXT,
+                    raw: body,
+                    force_long,
+                }
+            }
+        }
+        Err(_) => Tag::Unknown {
+            code: TAG_DEFINE_EDIT_TEXT,
+            raw: body,
+            force_long,
+        },
+    }
+}
+
+/// Read one glyph `SHAPE` (a `SHAPE`, not `SHAPEWITHSTYLE`): a `NumFillBits`/
+/// `NumLineBits` header then the SHAPERECORD stream, byte-aligning at its end (the
+/// font offset table packs glyphs on byte boundaries). Passes `version = 1` so a
+/// StateNewStyles record (invalid in a styleless glyph SHAPE) errors out and
+/// falls the font back to [`Tag::Unknown`]; `rgba` is irrelevant without styles.
+fn read_glyph_shape(br: &mut BitReader) -> Result<GlyphShape, GfxError> {
+    const CTX: &str = "GLYPH";
+    let num_fill_bits = br.read_ubits(4, CTX)?;
+    let num_line_bits = br.read_ubits(4, CTX)?;
+    let records = read_shape_records(br, 1, false, num_fill_bits, num_line_bits)?;
+    br.byte_align(CTX)?;
+    Ok(GlyphShape {
+        num_fill_bits,
+        num_line_bits,
+        records,
+    })
+}
+
+/// Write one glyph `SHAPE`, mirroring [`read_glyph_shape`].
+fn write_glyph_shape(bw: &mut BitWriter, g: &GlyphShape) {
+    bw.write_ubits(g.num_fill_bits, 4);
+    bw.write_ubits(g.num_line_bits, 4);
+    write_shape_records(bw, &g.records, g.num_fill_bits, g.num_line_bits);
+    bw.byte_align();
+}
+
+/// Parsed `DefineFont3` fields (the intermediate of [`decode_define_font3`]).
+struct Font3Parts {
+    font_id: u16,
+    flags: u8,
+    language_code: u8,
+    font_name: Vec<u8>,
+    offsets: Vec<u32>,
+    glyphs: Vec<GlyphShape>,
+    codes: Vec<u16>,
+    layout: Option<Font3Layout>,
+}
+
+/// Parse a `DefineFont3` (code 75) body into its typed fields. The offset table
+/// values are read verbatim (never recomputed); each glyph `SHAPE` reuses the
+/// edge bitstream and byte-aligns. `WideOffsets`/`WideCodes`/`HasLayout` come from
+/// the `flags` byte.
+fn parse_define_font3(body: &[u8]) -> Result<Font3Parts, GfxError> {
+    let code = TAG_DEFINE_FONT3;
+    let mut r = GfxReader::new(body);
+    let font_id = r.read_u16()?;
+    let flags = r.read_u8()?;
+    let language_code = r.read_u8()?;
+    let name_len = r.read_u8()? as usize;
+    let font_name = r.read_bytes(name_len)?;
+    let num_glyphs = r.read_u16()? as usize;
+    let wide_offsets = flags & F3_WIDE_OFFSETS != 0;
+    let wide_codes = flags & F3_WIDE_CODES != 0;
+
+    // OffsetTable: numGlyphs glyph offsets + 1 CodeTableOffset (same width).
+    let mut offsets = Vec::with_capacity(num_glyphs + 1);
+    for _ in 0..num_glyphs + 1 {
+        offsets.push(if wide_offsets {
+            r.read_u32()?
+        } else {
+            r.read_u16()? as u32
+        });
+    }
+    // GlyphShapeTable: numGlyphs SHAPEs (byte-aligned via the offset table).
+    let mut glyphs = Vec::with_capacity(num_glyphs);
+    for _ in 0..num_glyphs {
+        let mut bits = BitReader::new_at_byte(body, r.pos);
+        let g = read_glyph_shape(&mut bits)?;
+        r.pos = bits.byte_pos();
+        glyphs.push(g);
+    }
+    // CodeTable: numGlyphs codes.
+    let mut codes = Vec::with_capacity(num_glyphs);
+    for _ in 0..num_glyphs {
+        codes.push(if wide_codes {
+            r.read_u16()?
+        } else {
+            r.read_u8()? as u16
+        });
+    }
+
+    let layout = if flags & F3_HAS_LAYOUT != 0 {
+        let ascent = r.read_u16()? as i16;
+        let descent = r.read_u16()? as i16;
+        let leading = r.read_u16()? as i16;
+        let mut advance = Vec::with_capacity(num_glyphs);
+        for _ in 0..num_glyphs {
+            advance.push(r.read_u16()? as i16);
+        }
+        let mut bounds = Vec::with_capacity(num_glyphs);
+        for _ in 0..num_glyphs {
+            let mut bits = BitReader::new_at_byte(body, r.pos);
+            let rect = Rect::read(&mut bits)?;
+            r.pos = bits.byte_pos();
+            bounds.push(rect);
+        }
+        let kerning_count = r.read_u16()? as usize;
+        let mut kernings = Vec::with_capacity(kerning_count);
+        for _ in 0..kerning_count {
+            let code1 = if wide_codes {
+                r.read_u16()?
+            } else {
+                r.read_u8()? as u16
+            };
+            let code2 = if wide_codes {
+                r.read_u16()?
+            } else {
+                r.read_u8()? as u16
+            };
+            let adjustment = r.read_u16()? as i16;
+            kernings.push(KerningRecord {
+                code1,
+                code2,
+                adjustment,
+            });
+        }
+        Some(Font3Layout {
+            ascent,
+            descent,
+            leading,
+            advance,
+            bounds,
+            kernings,
+        })
+    } else {
+        None
+    };
+
+    ensure_consumed(code, r.pos, body.len())?;
+    Ok(Font3Parts {
+        font_id,
+        flags,
+        language_code,
+        font_name,
+        offsets,
+        glyphs,
+        codes,
+        layout,
+    })
+}
+
+/// Serialize a `DefineFont3` body from typed fields (used by both the
+/// decode-then-verify check and the writer). `numGlyphs` is derived from
+/// `glyphs.len()`; the offset table is emitted verbatim. Widths come from `flags`.
+#[allow(clippy::too_many_arguments)]
+fn serialize_font3_body(
+    font_id: u16,
+    flags: u8,
+    language_code: u8,
+    font_name: &[u8],
+    offsets: &[u32],
+    glyphs: &[GlyphShape],
+    codes: &[u16],
+    layout: Option<&Font3Layout>,
+) -> Vec<u8> {
+    let wide_offsets = flags & F3_WIDE_OFFSETS != 0;
+    let wide_codes = flags & F3_WIDE_CODES != 0;
+    let mut w = GfxWriter::new();
+    w.write_u16(font_id);
+    w.write_u8(flags);
+    w.write_u8(language_code);
+    w.write_u8(font_name.len() as u8);
+    w.write_bytes(font_name);
+    w.write_u16(glyphs.len() as u16);
+    for &off in offsets {
+        if wide_offsets {
+            w.write_u32(off);
+        } else {
+            w.write_u16(off as u16);
+        }
+    }
+    for g in glyphs {
+        let mut bw = BitWriter::new();
+        write_glyph_shape(&mut bw, g);
+        w.write_bytes(&bw.into_bytes());
+    }
+    for &c in codes {
+        if wide_codes {
+            w.write_u16(c);
+        } else {
+            w.write_u8(c as u8);
+        }
+    }
+    if let Some(l) = layout {
+        w.write_u16(l.ascent as u16);
+        w.write_u16(l.descent as u16);
+        w.write_u16(l.leading as u16);
+        for &a in &l.advance {
+            w.write_u16(a as u16);
+        }
+        for rect in &l.bounds {
+            let mut bw = BitWriter::new();
+            rect.write(&mut bw);
+            w.write_bytes(&bw.into_bytes());
+        }
+        w.write_u16(l.kernings.len() as u16);
+        for k in &l.kernings {
+            if wide_codes {
+                w.write_u16(k.code1);
+                w.write_u16(k.code2);
+            } else {
+                w.write_u8(k.code1 as u8);
+                w.write_u8(k.code2 as u8);
+            }
+            w.write_u16(k.adjustment as u16);
+        }
+    }
+    w.buf
+}
+
+/// Decode a `DefineFont3` (code 75) body, decode-then-verified like the other
+/// Tier-3/4 typed tags. Always returns `Ok`.
+fn decode_define_font3(body: Vec<u8>, force_long: bool) -> Tag {
+    match parse_define_font3(&body) {
+        Ok(p) => {
+            let reencoded = serialize_font3_body(
+                p.font_id,
+                p.flags,
+                p.language_code,
+                &p.font_name,
+                &p.offsets,
+                &p.glyphs,
+                &p.codes,
+                p.layout.as_ref(),
+            );
+            if reencoded == body {
+                Tag::DefineFont3 {
+                    font_id: p.font_id,
+                    flags: p.flags,
+                    language_code: p.language_code,
+                    font_name: p.font_name,
+                    offsets: p.offsets,
+                    glyphs: p.glyphs,
+                    codes: p.codes,
+                    layout: p.layout,
+                    force_long,
+                }
+            } else {
+                Tag::Unknown {
+                    code: TAG_DEFINE_FONT3,
+                    raw: body,
+                    force_long,
+                }
+            }
+        }
+        Err(_) => Tag::Unknown {
+            code: TAG_DEFINE_FONT3,
+            raw: body,
+            force_long,
+        },
+    }
+}
+
 impl Movie {
     /// Parse a complete uncompressed GFX movie from `data`.
     pub fn parse(data: &[u8]) -> Result<Movie, GfxError> {
@@ -2306,6 +2991,8 @@ fn decode_tag_body(code: u16, body: Vec<u8>, force_long: bool) -> Result<Tag, Gf
         TAG_DEFINE_SHAPE | TAG_DEFINE_SHAPE2 | TAG_DEFINE_SHAPE3 | TAG_DEFINE_SHAPE4 => {
             Ok(decode_define_shape(code, body, force_long))
         }
+        TAG_DEFINE_EDIT_TEXT => Ok(decode_define_edit_text(body, force_long)),
+        TAG_DEFINE_FONT3 => Ok(decode_define_font3(body, force_long)),
         TAG_DEFINE_SCALING_GRID => {
             let mut br = GfxReader::new(&body);
             let character_id = br.read_u16()?;
@@ -2863,6 +3550,62 @@ fn write_tag(w: &mut GfxWriter, tag: &Tag) -> Result<(), GfxError> {
                 shapes,
             );
             w.write_record_header(shape_version_to_code(*version), body.len(), *force_long)?;
+            w.write_bytes(&body);
+        }
+        Tag::DefineEditText {
+            character_id,
+            bounds,
+            flags1,
+            flags2,
+            font_id,
+            font_class,
+            font_height,
+            text_color,
+            max_length,
+            layout,
+            variable_name,
+            initial_text,
+            force_long,
+        } => {
+            let body = serialize_edit_text_body(
+                *character_id,
+                bounds,
+                *flags1,
+                *flags2,
+                *font_id,
+                font_class.as_deref(),
+                *font_height,
+                text_color.as_ref(),
+                *max_length,
+                layout.as_ref(),
+                variable_name,
+                initial_text.as_deref(),
+            );
+            w.write_record_header(TAG_DEFINE_EDIT_TEXT, body.len(), *force_long)?;
+            w.write_bytes(&body);
+        }
+        Tag::DefineFont3 {
+            font_id,
+            flags,
+            language_code,
+            font_name,
+            offsets,
+            glyphs,
+            codes,
+            layout,
+            force_long,
+        } => {
+            let body = serialize_font3_body(
+                *font_id,
+                *flags,
+                *language_code,
+                font_name,
+                offsets,
+                glyphs,
+                codes,
+                layout.as_ref(),
+            );
+            w.write_record_header(TAG_DEFINE_FONT3, body.len(), *force_long)?;
             w.write_bytes(&body);
         }
     }
@@ -3997,5 +4740,380 @@ mod tests {
             }
             other => panic!("expected Unknown fallback, got {other:?}"),
         }
+    }
+
+    // --- Tier-4: DefineEditText (37) tests -----------------------------------
+
+    #[test]
+    fn define_edit_text_corpus_instance() {
+        // Corpus 01_010_messagebox.gfx characterId 20: bounds RECT nbits=14
+        // (-40,7960,-40,680), flags1=0x8c (HasText|ReadOnly|HasTextColor),
+        // flags2=0xb1 (HasFontClass|HasLayout|NoSelect|UseOutlines), FontClass
+        // "MenuFont_01", FontHeight 480, text color cccccc/alpha 255, layout
+        // (align=center,0,0,0,0), empty variableName, initialText "初期化".
+        // Verifier-confirmed against the raw body (python ground truth).
+        let body = hx(
+            "140077fb0f8c7fb015408cb14d656e75466f6e745f303100e001ccccccff02000000000000000000e5889de69c9fe58c9600",
+        );
+        match parse_first(&rec(TAG_DEFINE_EDIT_TEXT, &body, false)) {
+            Tag::DefineEditText {
+                character_id,
+                bounds,
+                flags1,
+                flags2,
+                font_id,
+                font_class,
+                font_height,
+                text_color,
+                max_length,
+                layout,
+                variable_name,
+                initial_text,
+                force_long,
+            } => {
+                assert_eq!(character_id, 20);
+                assert!(!force_long);
+                assert_eq!(flags1, 0x8c);
+                assert_eq!(flags2, 0xb1);
+                assert_eq!(bounds.nbits, 14);
+                assert_eq!(
+                    (bounds.x_min, bounds.x_max, bounds.y_min, bounds.y_max),
+                    (-40, 7960, -40, 680)
+                );
+                assert_eq!(font_id, None);
+                assert_eq!(font_class.as_deref(), Some("MenuFont_01"));
+                assert_eq!(font_height, Some(480));
+                assert_eq!(text_color, Some([0xcc, 0xcc, 0xcc, 0xff]));
+                assert_eq!(max_length, None);
+                let l = layout.expect("a layout block");
+                assert_eq!(l.align, 2); // center
+                assert_eq!(
+                    (l.left_margin, l.right_margin, l.indent, l.leading),
+                    (0, 0, 0, 0)
+                );
+                assert_eq!(variable_name, "");
+                assert_eq!(initial_text.as_deref(), Some("初期化"));
+            }
+            other => panic!("expected DefineEditText, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn define_edit_text_with_font_id_and_max_length_roundtrip() {
+        // Synthetic instance exercising the HasFont (FontID) and HasMaxLength
+        // paths -- HasMaxLength never occurs in the corpus, so this keeps the
+        // encoder/decoder mutually consistent for it. flags1 = HasText|
+        // HasTextColor|HasMaxLength|HasFont (0x87), flags2 = 0 (no layout/class).
+        let mut body = Vec::new();
+        body.extend_from_slice(&7u16.to_le_bytes()); // characterId
+        body.push(0x00); // RECT nbits=0 -> 1 byte, byte-aligned
+        let f1 = ET_HAS_TEXT | ET_HAS_TEXT_COLOR | ET_HAS_MAX_LENGTH | ET_HAS_FONT;
+        body.push(f1);
+        body.push(0x00); // flags2
+        body.extend_from_slice(&42u16.to_le_bytes()); // FontID
+        body.extend_from_slice(&240u16.to_le_bytes()); // FontHeight
+        body.extend_from_slice(&[0x11, 0x22, 0x33, 0x44]); // text color RGBA
+        body.extend_from_slice(&100u16.to_le_bytes()); // MaxLength
+        body.extend_from_slice(b"var\0"); // variableName
+        body.extend_from_slice(b"hello\0"); // initialText
+        match parse_first(&rec(TAG_DEFINE_EDIT_TEXT, &body, true)) {
+            Tag::DefineEditText {
+                font_id,
+                font_class,
+                font_height,
+                max_length,
+                layout,
+                variable_name,
+                initial_text,
+                force_long,
+                ..
+            } => {
+                assert!(force_long);
+                assert_eq!(font_id, Some(42));
+                assert_eq!(font_class, None);
+                assert_eq!(font_height, Some(240));
+                assert_eq!(max_length, Some(100));
+                assert_eq!(layout, None);
+                assert_eq!(variable_name, "var");
+                assert_eq!(initial_text.as_deref(), Some("hello"));
+            }
+            other => panic!("expected DefineEditText, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn define_edit_text_non_utf8_falls_back_to_unknown() {
+        // A non-UTF-8 variableName cannot be modelled as a Rust String; the tag
+        // must fall back to Tag::Unknown and re-emit its raw body verbatim so
+        // byte-identity is preserved even for un-modellable text.
+        let mut body = Vec::new();
+        body.extend_from_slice(&1u16.to_le_bytes()); // characterId
+        body.push(0x00); // RECT nbits=0
+        body.push(0x00); // flags1: no optional fields, no HasText
+        body.push(0x00); // flags2
+        body.push(0xff); // non-UTF-8 byte in variableName
+        body.push(0x00); // NUL terminator
+        match parse_first(&rec(TAG_DEFINE_EDIT_TEXT, &body, false)) {
+            Tag::Unknown { code, raw, .. } => {
+                assert_eq!(code, TAG_DEFINE_EDIT_TEXT);
+                assert_eq!(raw, body);
+            }
+            other => panic!("expected Unknown fallback, got {other:?}"),
+        }
+    }
+
+    /// Every `DefineEditText` across the whole corpus must decode to the typed
+    /// [`Tag::DefineEditText`] variant -- not silently fall back to
+    /// [`Tag::Unknown`]. The `tests/roundtrip.rs` byte-identity gate passes
+    /// either way, so this separately proves the Tier-4 text codec handles all
+    /// corpus instances byte-cleanly. Skips when assets are absent.
+    #[test]
+    fn corpus_define_edit_texts_all_typed() {
+        // 1,479 DefineEditText across the 114-file corpus (python verifier).
+        const EXPECTED_TYPED: usize = 1479;
+        let root = "/home/banon/er-extract/nuxe-menu-20260619-170932/menu";
+        if !std::path::Path::new(root).exists() {
+            eprintln!("SKIP: corpus root {root} not present; edit-text-typing test skipped");
+            return;
+        }
+
+        fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    collect(&p, out);
+                } else if p.extension().and_then(|s| s.to_str()) == Some("gfx") {
+                    out.push(p);
+                }
+            }
+        }
+
+        fn count(tags: &[Tag], typed: &mut usize, fell_back: &mut usize) {
+            for t in tags {
+                match t {
+                    Tag::DefineEditText { .. } => *typed += 1,
+                    Tag::Unknown { code, .. } if *code == TAG_DEFINE_EDIT_TEXT => *fell_back += 1,
+                    Tag::DefineSprite { tags, .. } => count(tags, typed, fell_back),
+                    _ => {}
+                }
+            }
+        }
+
+        let mut files = Vec::new();
+        collect(std::path::Path::new(root), &mut files);
+        files.sort();
+        let mut typed = 0usize;
+        let mut fell_back = 0usize;
+        for path in &files {
+            let bytes = std::fs::read(path).expect("read corpus file");
+            let movie = Movie::parse(&bytes).expect("parse corpus file");
+            count(&movie.tags, &mut typed, &mut fell_back);
+        }
+        assert_eq!(
+            fell_back, 0,
+            "{fell_back} DefineEditText tag(s) fell back to Tag::Unknown instead of typing"
+        );
+        assert_eq!(
+            typed, EXPECTED_TYPED,
+            "expected {EXPECTED_TYPED} typed DefineEditText tags, found {typed}"
+        );
+    }
+
+    // --- Tier-4: DefineFont3 (75) tests --------------------------------------
+
+    #[test]
+    fn define_font3_minimal_roundtrip() {
+        // Synthetic single-glyph font (no layout) exercising the offset table,
+        // a styleless glyph SHAPE (End-only), and the code table. flags =
+        // WideCodes only (so codes are u16, offsets u16).
+        let mut body = Vec::new();
+        body.extend_from_slice(&1u16.to_le_bytes()); // fontId
+        body.push(F3_WIDE_CODES); // flags
+        body.push(0x00); // languageCode
+        body.push(0x00); // fontNameLen = 0 (empty name)
+        body.extend_from_slice(&1u16.to_le_bytes()); // numGlyphs
+        // OffsetTable: 2 u16 values. offset_table_start is here; the 2-entry
+        // table is 4 bytes, glyph0 (End-only) is 2 bytes.
+        body.extend_from_slice(&4u16.to_le_bytes()); // glyph0 offset
+        body.extend_from_slice(&6u16.to_le_bytes()); // codeTableOffset
+        body.extend_from_slice(&[0x00, 0x00]); // glyph0: nfb=0,nlb=0,End,align
+        body.extend_from_slice(&65u16.to_le_bytes()); // code 'A'
+        match parse_first(&rec(TAG_DEFINE_FONT3, &body, false)) {
+            Tag::DefineFont3 {
+                font_id,
+                font_name,
+                offsets,
+                glyphs,
+                codes,
+                layout,
+                ..
+            } => {
+                assert_eq!(font_id, 1);
+                assert!(font_name.is_empty());
+                assert_eq!(offsets, vec![4, 6]);
+                assert_eq!(glyphs.len(), 1);
+                assert_eq!(glyphs[0].records, vec![ShapeRecord::End]);
+                assert_eq!(codes, vec![65]);
+                assert_eq!(layout, None);
+            }
+            other => panic!("expected DefineFont3, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn define_font3_layout_roundtrip() {
+        // Synthetic single-glyph font WITH a layout block (ascent/descent/leading
+        // + advance + bounds + empty kerning table), exercising the HasLayout path
+        // even when the corpus is absent.
+        let mut body = Vec::new();
+        body.extend_from_slice(&1u16.to_le_bytes()); // fontId
+        body.push(F3_HAS_LAYOUT | F3_WIDE_CODES); // flags
+        body.push(0x00); // languageCode
+        body.push(0x00); // fontNameLen = 0
+        body.extend_from_slice(&1u16.to_le_bytes()); // numGlyphs
+        body.extend_from_slice(&4u16.to_le_bytes()); // glyph0 offset
+        body.extend_from_slice(&6u16.to_le_bytes()); // codeTableOffset
+        body.extend_from_slice(&[0x00, 0x00]); // glyph0 End-only
+        body.extend_from_slice(&65u16.to_le_bytes()); // code 'A'
+        body.extend_from_slice(&100i16.to_le_bytes()); // ascent
+        body.extend_from_slice(&20i16.to_le_bytes()); // descent
+        body.extend_from_slice(&10i16.to_le_bytes()); // leading
+        body.extend_from_slice(&50i16.to_le_bytes()); // advance[0]
+        body.push(0x00); // bounds[0] RECT nbits=0 -> 1 byte
+        body.extend_from_slice(&0u16.to_le_bytes()); // kerning count = 0
+        match parse_first(&rec(TAG_DEFINE_FONT3, &body, true)) {
+            Tag::DefineFont3 { layout, .. } => {
+                let l = layout.expect("a layout block");
+                assert_eq!((l.ascent, l.descent, l.leading), (100, 20, 10));
+                assert_eq!(l.advance, vec![50]);
+                assert_eq!(l.bounds.len(), 1);
+                assert_eq!(l.bounds[0].nbits, 0);
+                assert!(l.kernings.is_empty());
+            }
+            other => panic!("expected DefineFont3, got {other:?}"),
+        }
+    }
+
+    /// Field-level assertions against a real corpus DefineFont3, plus an
+    /// end-to-end byte-identity check. Skips when assets are absent.
+    #[test]
+    fn define_font3_corpus_instance() {
+        let path =
+            "/home/banon/er-extract/nuxe-menu-20260619-170932/menu/02_123_worldmap_commandlist.gfx";
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(_) => {
+                eprintln!("SKIP: {path} not present");
+                return;
+            }
+        };
+        let m = Movie::parse(&bytes).expect("parse corpus file");
+        let font = m
+            .tags
+            .iter()
+            .find_map(|t| match t {
+                Tag::DefineFont3 {
+                    font_id,
+                    font_name,
+                    glyphs,
+                    codes,
+                    layout,
+                    ..
+                } => Some((*font_id, font_name, glyphs, codes, layout)),
+                _ => None,
+            })
+            .expect("a DefineFont3");
+        let (font_id, font_name, glyphs, codes, layout) = font;
+        assert_eq!(font_id, 24);
+        // The length-prefixed name includes a trailing NUL inside its count.
+        assert_eq!(font_name.as_slice(), b"FOT-Cezanne ProN DB\0");
+        assert_eq!(glyphs.len(), 8);
+        assert_eq!(codes[0], 78);
+        assert!(layout.is_some());
+        // Glyph 0's first EDGE record is a vertical straight edge dy=-14870, with
+        // a stored NumBits field of 13 (verifier-confirmed).
+        let first_edge = glyphs[0]
+            .records
+            .iter()
+            .find(|r| {
+                matches!(
+                    r,
+                    ShapeRecord::StraightEdge { .. } | ShapeRecord::CurvedEdge { .. }
+                )
+            })
+            .expect("a glyph edge record");
+        match first_edge {
+            ShapeRecord::StraightEdge {
+                num_bits,
+                edge: StraightEdge::Vertical { dy },
+            } => {
+                assert_eq!(*num_bits, 13);
+                assert_eq!(*dy, -14870);
+            }
+            other => panic!("expected vertical straight edge, got {other:?}"),
+        }
+        // And the whole file still re-serializes byte-identically.
+        assert_eq!(m.write().expect("write"), bytes);
+    }
+
+    /// Every `DefineFont3` across the whole corpus must decode to the typed
+    /// [`Tag::DefineFont3`] variant rather than fall back to [`Tag::Unknown`].
+    /// Skips when assets are absent.
+    #[test]
+    fn corpus_define_font3_all_typed() {
+        // 7 DefineFont3 across the 114-file corpus (python verifier).
+        const EXPECTED_TYPED: usize = 7;
+        let root = "/home/banon/er-extract/nuxe-menu-20260619-170932/menu";
+        if !std::path::Path::new(root).exists() {
+            eprintln!("SKIP: corpus root {root} not present; font3-typing test skipped");
+            return;
+        }
+
+        fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    collect(&p, out);
+                } else if p.extension().and_then(|s| s.to_str()) == Some("gfx") {
+                    out.push(p);
+                }
+            }
+        }
+
+        fn count(tags: &[Tag], typed: &mut usize, fell_back: &mut usize) {
+            for t in tags {
+                match t {
+                    Tag::DefineFont3 { .. } => *typed += 1,
+                    Tag::Unknown { code, .. } if *code == TAG_DEFINE_FONT3 => *fell_back += 1,
+                    Tag::DefineSprite { tags, .. } => count(tags, typed, fell_back),
+                    _ => {}
+                }
+            }
+        }
+
+        let mut files = Vec::new();
+        collect(std::path::Path::new(root), &mut files);
+        files.sort();
+        let mut typed = 0usize;
+        let mut fell_back = 0usize;
+        for path in &files {
+            let bytes = std::fs::read(path).expect("read corpus file");
+            let movie = Movie::parse(&bytes).expect("parse corpus file");
+            count(&movie.tags, &mut typed, &mut fell_back);
+        }
+        assert_eq!(
+            fell_back, 0,
+            "{fell_back} DefineFont3 tag(s) fell back to Tag::Unknown instead of typing"
+        );
+        assert_eq!(
+            typed, EXPECTED_TYPED,
+            "expected {EXPECTED_TYPED} typed DefineFont3 tags, found {typed}"
+        );
     }
 }
