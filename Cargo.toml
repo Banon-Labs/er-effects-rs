@@ -2,6 +2,7 @@
 members = [
     ".",
     "crates/effects-data",
+    "crates/er-gfx",
     "crates/er-safe-input",
     "crates/er-save-loader",
     "crates/soulsformats",

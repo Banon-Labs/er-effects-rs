@@ -1,0 +1,12 @@
+[package]
+name = "er-gfx"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Tier-0 lossless Scaleform-GFX (uncompressed 'GFX' v11) reader/writer for Elden Ring menu .gfx files."
+
+[lib]
+# Pure-Rust, host-testable. No game/Windows dependencies.
+
+[dependencies]
+# Intentionally none. Tier-0 codec is std-only.

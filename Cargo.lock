@@ -133,6 +133,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-gfx"
+version = "0.1.0"
+
+[[package]]
 name = "er-param-inspect"
 version = "0.1.0"
 dependencies = [
