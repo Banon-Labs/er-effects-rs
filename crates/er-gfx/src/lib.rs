@@ -86,6 +86,19 @@ const TAG_DEFINE_SCALING_GRID: u16 = 78;
 /// and a visible/background-color pair. See [`Tag::PlaceObject3`].
 const TAG_PLACE_OBJECT3: u16 = 70;
 
+// --- Tier-3 typed tag codes (the DefineShape family + SHAPEWITHSTYLE). ---
+/// `DefineShape` (code 2): shape version 1. RGB colors, LINESTYLE, no extended
+/// fill/line counts, no StateNewStyles.
+const TAG_DEFINE_SHAPE: u16 = 2;
+/// `DefineShape2` (code 22): shape version 2. RGB colors, LINESTYLE, adds the
+/// `0xFF`-extended u16 fill/line counts and StateNewStyles.
+const TAG_DEFINE_SHAPE2: u16 = 22;
+/// `DefineShape3` (code 32): shape version 3. RGBA colors, LINESTYLE.
+const TAG_DEFINE_SHAPE3: u16 = 32;
+/// `DefineShape4` (code 83): shape version 4. RGBA colors, LINESTYLE2, plus an
+/// `edgeBounds` RECT and a flags byte before the SHAPEWITHSTYLE.
+const TAG_DEFINE_SHAPE4: u16 = 83;
+
 // --- PlaceObject2 flag bits (MSB-to-LSB within the flags byte; SWF order). ---
 /// `PlaceFlagMove`: this tag moves an existing object at `depth`. Stored only in
 /// the raw `flags` byte (it gates no optional field), so it is not branched on;
@@ -347,6 +360,38 @@ pub enum Tag {
         force_long: bool,
     },
 
+    /// The `DefineShape` family (`DefineShape` 2, `DefineShape2` 22,
+    /// `DefineShape3` 32, `DefineShape4` 83). All four are modelled by one
+    /// variant discriminated by its `version` field (1..=4), which governs
+    /// RGB-vs-RGBA colors, LINESTYLE-vs-LINESTYLE2, the `0xFF`-extended fill/line
+    /// counts, and StateNewStyles availability.
+    ///
+    /// The body is decode-then-verified: the parser reproduces the whole
+    /// SHAPEWITHSTYLE bitstream (every source bit width preserved verbatim --
+    /// the edge `NumBits` are non-minimal in 1,133 of the 16,902 corpus edge
+    /// records) and the decoder re-serializes it; if that does not reproduce the
+    /// source body byte-for-byte (an unmodelled fill type, line-style sub-form,
+    /// gradient layout, or any structural surprise), the tag falls back to
+    /// [`Tag::Unknown`] so byte-identity can never be silently lost. All 366
+    /// `DefineShape*` across the 114-file corpus decode to this typed variant.
+    DefineShape {
+        /// Shape version 1/2/3/4 (tag code 2/22/32/83).
+        version: u8,
+        shape_id: u16,
+        /// The shape's bounding box `RECT`.
+        shape_bounds: Rect,
+        /// `edgeBounds` RECT (DefineShape4 only; `None` otherwise).
+        edge_bounds: Option<Rect>,
+        /// The DefineShape4 flags byte (`UsesFillWindingRule`/
+        /// `UsesNonScalingStrokes`/`UsesScalingStrokes` in its low bits), stored
+        /// verbatim. `None` for versions 1/2/3.
+        flags_byte: Option<u8>,
+        /// The `SHAPEWITHSTYLE` (fill/line style arrays + shape records).
+        shapes: ShapeWithStyle,
+        /// Whether the source encoded this tag's `RecordHeader` in long form.
+        force_long: bool,
+    },
+
     /// Any tag not otherwise modelled; body bytes re-emitted verbatim.
     Unknown {
         code: u16,
@@ -408,6 +453,14 @@ pub enum GfxError {
     /// re-encode silently diverge, so we reject it loudly instead. `context`
     /// names the primitive.
     NonZeroBitPadding { context: &'static str },
+    /// A FILLSTYLE carried a type byte the Tier-3 shape codec does not model.
+    /// Internally signals the owning `DefineShape*` to fall back to
+    /// [`Tag::Unknown`] (the raw body still re-emits byte-identically).
+    UnknownFillStyleType(u8),
+    /// A SHAPERECORD set StateNewStyles in a `DefineShape` (version 1) body,
+    /// where that feature does not exist. Signals a fall-back to
+    /// [`Tag::Unknown`].
+    ShapeNewStylesUnsupported,
 }
 
 impl fmt::Display for GfxError {
@@ -456,6 +509,12 @@ impl fmt::Display for GfxError {
             }
             GfxError::NonZeroBitPadding { context } => {
                 write!(f, "non-zero byte-alignment padding in {context}")
+            }
+            GfxError::UnknownFillStyleType(t) => {
+                write!(f, "unmodelled FILLSTYLE type 0x{t:02x}")
+            }
+            GfxError::ShapeNewStylesUnsupported => {
+                write!(f, "StateNewStyles in a DefineShape (version 1) body")
             }
         }
     }
@@ -693,6 +752,39 @@ impl<'a> BitReader<'a> {
         debug_assert_eq!(self.bitpos & 7, 0, "BitReader not byte aligned");
         self.bitpos >> 3
     }
+
+    /// Read one whole byte at the current (byte-aligned) position. Used by the
+    /// shape codec, whose FILLSTYLEARRAY/LINESTYLEARRAY/GRADRECORD fields are
+    /// byte-structured even though they are embedded in the larger bitstream.
+    fn read_u8_aligned(&mut self, context: &'static str) -> Result<u8, GfxError> {
+        debug_assert_eq!(self.bitpos & 7, 0, "read_u8_aligned not byte aligned");
+        let idx = self.bitpos >> 3;
+        if idx >= self.data.len() {
+            return Err(GfxError::BitstreamEof { context });
+        }
+        let v = self.data[idx];
+        self.bitpos += 8;
+        Ok(v)
+    }
+
+    /// Read a little-endian `u16` at the current (byte-aligned) position.
+    fn read_u16_aligned(&mut self, context: &'static str) -> Result<u16, GfxError> {
+        let lo = self.read_u8_aligned(context)?;
+        let hi = self.read_u8_aligned(context)?;
+        Ok(u16::from_le_bytes([lo, hi]))
+    }
+
+    /// Read `n` whole bytes at the current (byte-aligned) position.
+    fn read_bytes_aligned(&mut self, n: usize, context: &'static str) -> Result<Vec<u8>, GfxError> {
+        debug_assert_eq!(self.bitpos & 7, 0, "read_bytes_aligned not byte aligned");
+        let idx = self.bitpos >> 3;
+        if idx + n > self.data.len() {
+            return Err(GfxError::BitstreamEof { context });
+        }
+        let s = self.data[idx..idx + n].to_vec();
+        self.bitpos += n * 8;
+        Ok(s)
+    }
 }
 
 /// MSB-first bit sink. Bits accumulate into a current byte (MSB-first) and flush
@@ -745,6 +837,25 @@ impl BitWriter {
         while self.nbits != 0 {
             self.write_bit(0);
         }
+    }
+
+    /// Write one whole byte at the current (byte-aligned) position. Counterpart
+    /// to [`BitReader::read_u8_aligned`]; used by the shape codec.
+    fn write_u8_aligned(&mut self, v: u8) {
+        debug_assert_eq!(self.nbits, 0, "write_u8_aligned not byte aligned");
+        self.buf.push(v);
+    }
+
+    /// Write a little-endian `u16` at the current (byte-aligned) position.
+    fn write_u16_aligned(&mut self, v: u16) {
+        self.write_u8_aligned((v & 0xff) as u8);
+        self.write_u8_aligned((v >> 8) as u8);
+    }
+
+    /// Write whole bytes at the current (byte-aligned) position.
+    fn write_bytes_aligned(&mut self, b: &[u8]) {
+        debug_assert_eq!(self.nbits, 0, "write_bytes_aligned not byte aligned");
+        self.buf.extend_from_slice(b);
     }
 
     /// Finish, asserting byte alignment, and return the bytes.
@@ -1150,6 +1261,820 @@ impl Filter {
     }
 }
 
+// ===========================================================================
+// Tier-3: the DefineShape family + SHAPEWITHSTYLE / SHAPERECORD bitstream.
+// ===========================================================================
+//
+// A SHAPEWITHSTYLE is one continuous MSB-first bitstream that mixes byte-aligned
+// sub-structures (FILLSTYLEARRAY, LINESTYLEARRAY, GRADRECORD, the embedded
+// MATRIX/RECT primitives) with truly bit-packed SHAPERECORDs. Every source bit
+// width is preserved verbatim because the Scaleform exporter is non-minimal: of
+// the 16,902 edge records in the 114-file corpus, 1,133 use more delta bits than
+// the minimal width (the SHAPEWITHSTYLE NumFillBits/NumLineBits happen to be
+// minimal in this corpus, but are still stored, never recomputed). The decoder
+// re-serializes every parsed shape and compares against the source body; any
+// mismatch (or structural surprise) falls the whole tag back to [`Tag::Unknown`]
+// so the raw body re-emits byte-identically -- see [`decode_define_shape`].
+
+/// A shape color: 3-byte `RGB` (DefineShape/DefineShape2) or 4-byte `RGBA`
+/// (DefineShape3/DefineShape4). The byte width is dictated by the shape version,
+/// captured here so colors re-encode without re-deriving the width.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Color {
+    /// 3-byte `[red, green, blue]`.
+    Rgb([u8; 3]),
+    /// 4-byte `[red, green, blue, alpha]`.
+    Rgba([u8; 4]),
+}
+
+impl Color {
+    fn read(br: &mut BitReader, rgba: bool, context: &'static str) -> Result<Color, GfxError> {
+        if rgba {
+            let b = br.read_bytes_aligned(4, context)?;
+            Ok(Color::Rgba([b[0], b[1], b[2], b[3]]))
+        } else {
+            let b = br.read_bytes_aligned(3, context)?;
+            Ok(Color::Rgb([b[0], b[1], b[2]]))
+        }
+    }
+
+    fn write(&self, bw: &mut BitWriter) {
+        match self {
+            Color::Rgb(c) => bw.write_bytes_aligned(c),
+            Color::Rgba(c) => bw.write_bytes_aligned(c),
+        }
+    }
+}
+
+/// One `GRADRECORD`: a ratio (`0..=255`) and a [`Color`] (RGB for Shape1/2,
+/// RGBA for Shape3/4).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GradRecord {
+    pub ratio: u8,
+    pub color: Color,
+}
+
+/// A `GRADIENT` / `FOCALGRADIENT`. The `(SpreadMode:2, InterpolationMode:2,
+/// NumGradients:4)` byte is bit-packed (empirically the same layout for every
+/// shape version in the corpus); `NumGradients` is derived from `records.len()`
+/// on write. `focal_point` is the trailing `FIXED8` present only for focal
+/// gradients (fill type `0x13`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Gradient {
+    /// `SpreadMode` (2 bits): 0 pad, 1 reflect, 2 repeat.
+    pub spread_mode: u8,
+    /// `InterpolationMode` (2 bits): 0 normal RGB, 1 linear RGB.
+    pub interpolation_mode: u8,
+    /// Gradient stops (`NumGradients` is `records.len()`, max 15).
+    pub records: Vec<GradRecord>,
+    /// Focal point `FIXED8` (raw little-endian `i16`), present iff focal-radial.
+    pub focal_point: Option<i16>,
+}
+
+impl Gradient {
+    fn read(
+        br: &mut BitReader,
+        rgba: bool,
+        focal: bool,
+        context: &'static str,
+    ) -> Result<Gradient, GfxError> {
+        let spread_mode = br.read_ubits(2, context)? as u8;
+        let interpolation_mode = br.read_ubits(2, context)? as u8;
+        let num = br.read_ubits(4, context)?;
+        // 2 + 2 + 4 = 8 bits -> back to byte alignment for the GRADRECORDs.
+        let mut records = Vec::with_capacity(num as usize);
+        for _ in 0..num {
+            let ratio = br.read_u8_aligned(context)?;
+            let color = Color::read(br, rgba, context)?;
+            records.push(GradRecord { ratio, color });
+        }
+        let focal_point = if focal {
+            Some(br.read_u16_aligned(context)? as i16)
+        } else {
+            None
+        };
+        Ok(Gradient {
+            spread_mode,
+            interpolation_mode,
+            records,
+            focal_point,
+        })
+    }
+
+    fn write(&self, bw: &mut BitWriter) {
+        bw.write_ubits(self.spread_mode as u32, 2);
+        bw.write_ubits(self.interpolation_mode as u32, 2);
+        bw.write_ubits(self.records.len() as u32, 4);
+        for r in &self.records {
+            bw.write_u8_aligned(r.ratio);
+            r.color.write(bw);
+        }
+        if let Some(fp) = self.focal_point {
+            bw.write_u16_aligned(fp as u16);
+        }
+    }
+}
+
+/// A `FILLSTYLE`. The leading type byte is stored inside the `Gradient`/`Bitmap`
+/// variants (`fill_type`) so the exact sub-kind (`0x10` linear / `0x12` radial /
+/// `0x13` focal; `0x40`-`0x43` bitmap clip/tile flavors) is reproduced verbatim.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FillStyle {
+    /// Solid color (type `0x00`): `RGB` (Shape1/2) or `RGBA` (Shape3/4).
+    Solid(Color),
+    /// Gradient (type `0x10` linear, `0x12` radial, `0x13` focal-radial): a
+    /// `MATRIX` and a [`Gradient`].
+    Gradient {
+        /// Fill type byte (`0x10`/`0x12`/`0x13`), preserved verbatim.
+        fill_type: u8,
+        matrix: Matrix,
+        gradient: Gradient,
+    },
+    /// Bitmap fill (types `0x40`-`0x43`): a `bitmapId` and a `MATRIX`.
+    Bitmap {
+        /// Fill type byte (`0x40`-`0x43`), preserved verbatim.
+        fill_type: u8,
+        bitmap_id: u16,
+        matrix: Matrix,
+    },
+}
+
+impl FillStyle {
+    const CTX: &'static str = "FILLSTYLE";
+
+    fn read(br: &mut BitReader, rgba: bool) -> Result<FillStyle, GfxError> {
+        let t = br.read_u8_aligned(Self::CTX)?;
+        match t {
+            0x00 => Ok(FillStyle::Solid(Color::read(br, rgba, Self::CTX)?)),
+            0x10 | 0x12 | 0x13 => {
+                let matrix = Matrix::read(br)?;
+                let gradient = Gradient::read(br, rgba, t == 0x13, Self::CTX)?;
+                Ok(FillStyle::Gradient {
+                    fill_type: t,
+                    matrix,
+                    gradient,
+                })
+            }
+            0x40 | 0x41 | 0x42 | 0x43 => {
+                let bitmap_id = br.read_u16_aligned(Self::CTX)?;
+                let matrix = Matrix::read(br)?;
+                Ok(FillStyle::Bitmap {
+                    fill_type: t,
+                    bitmap_id,
+                    matrix,
+                })
+            }
+            other => Err(GfxError::UnknownFillStyleType(other)),
+        }
+    }
+
+    fn write(&self, bw: &mut BitWriter) {
+        match self {
+            FillStyle::Solid(color) => {
+                bw.write_u8_aligned(0x00);
+                color.write(bw);
+            }
+            FillStyle::Gradient {
+                fill_type,
+                matrix,
+                gradient,
+            } => {
+                bw.write_u8_aligned(*fill_type);
+                matrix.write(bw);
+                gradient.write(bw);
+            }
+            FillStyle::Bitmap {
+                fill_type,
+                bitmap_id,
+                matrix,
+            } => {
+                bw.write_u8_aligned(*fill_type);
+                bw.write_u16_aligned(*bitmap_id);
+                matrix.write(bw);
+            }
+        }
+    }
+}
+
+/// A `FILLSTYLEARRAY`: a count (`u8`, or `0xFF`-extended `u16` for Shape2/3/4)
+/// then the fill styles. `count_ext` records whether the extended form was used
+/// so a non-minimal count encoding (none occur in the corpus) is preserved.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FillStyleArray {
+    /// Whether the `0xFF`-extended `u16` count form was used.
+    pub count_ext: bool,
+    pub styles: Vec<FillStyle>,
+}
+
+impl FillStyleArray {
+    const CTX: &'static str = "FILLSTYLEARRAY";
+
+    fn read(br: &mut BitReader, version: u8, rgba: bool) -> Result<FillStyleArray, GfxError> {
+        let first = br.read_u8_aligned(Self::CTX)?;
+        let (count, count_ext) = if first == 0xFF && version >= 2 {
+            (br.read_u16_aligned(Self::CTX)? as usize, true)
+        } else {
+            (first as usize, false)
+        };
+        let mut styles = Vec::with_capacity(count);
+        for _ in 0..count {
+            styles.push(FillStyle::read(br, rgba)?);
+        }
+        Ok(FillStyleArray { count_ext, styles })
+    }
+
+    fn write(&self, bw: &mut BitWriter) {
+        if self.count_ext {
+            bw.write_u8_aligned(0xFF);
+            bw.write_u16_aligned(self.styles.len() as u16);
+        } else {
+            bw.write_u8_aligned(self.styles.len() as u8);
+        }
+        for fs in &self.styles {
+            fs.write(bw);
+        }
+    }
+}
+
+/// The fill carried by a `LINESTYLE2` (DefineShape4): either an `RGBA` color or,
+/// when its `HasFill` flag is set, a nested [`FillStyle`] (never set in the
+/// corpus, but modelled).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LineFill {
+    /// `[red, green, blue, alpha]` line color (HasFill clear).
+    Color([u8; 4]),
+    /// A nested fill style (HasFill set).
+    Fill(Box<FillStyle>),
+}
+
+/// A `LINESTYLE` (Shape1/2/3) or `LINESTYLE2` (Shape4). For `LINESTYLE2` the
+/// 16-bit caps/join/flags word is stored verbatim and governs the optional
+/// `miter_limit` (present iff JoinStyle == 2) and whether `fill` is a color or a
+/// nested fill (HasFill bit).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LineStyle {
+    /// `LINESTYLE`: width + `RGB` (Shape1/2) or `RGBA` (Shape3) color.
+    Plain { width: u16, color: Color },
+    /// `LINESTYLE2`: width + 16-bit flags + optional miter limit + fill.
+    Style2 {
+        width: u16,
+        /// The 16-bit caps/join/HasFill/NoHScale/NoVScale/PixelHinting/NoClose/
+        /// EndCap flags word, stored verbatim.
+        flags: u16,
+        /// `MiterLimitFactor` (`u16`), present iff JoinStyle (`flags` bits 12-13)
+        /// is 2.
+        miter_limit: Option<u16>,
+        /// Color (HasFill clear) or nested fill (HasFill set, `flags` bit 11).
+        fill: LineFill,
+    },
+}
+
+impl LineStyle {
+    const CTX: &'static str = "LINESTYLE";
+
+    fn read(br: &mut BitReader, version: u8, rgba: bool) -> Result<LineStyle, GfxError> {
+        let width = br.read_u16_aligned(Self::CTX)?;
+        if version == 4 {
+            let flags = br.read_u16_aligned(Self::CTX)?;
+            let join = (flags >> 12) & 0x3;
+            let has_fill = (flags >> 11) & 0x1 != 0;
+            let miter_limit = if join == 2 {
+                Some(br.read_u16_aligned(Self::CTX)?)
+            } else {
+                None
+            };
+            let fill = if has_fill {
+                LineFill::Fill(Box::new(FillStyle::read(br, rgba)?))
+            } else {
+                let b = br.read_bytes_aligned(4, Self::CTX)?;
+                LineFill::Color([b[0], b[1], b[2], b[3]])
+            };
+            Ok(LineStyle::Style2 {
+                width,
+                flags,
+                miter_limit,
+                fill,
+            })
+        } else {
+            let color = Color::read(br, rgba, Self::CTX)?;
+            Ok(LineStyle::Plain { width, color })
+        }
+    }
+
+    fn write(&self, bw: &mut BitWriter) {
+        match self {
+            LineStyle::Plain { width, color } => {
+                bw.write_u16_aligned(*width);
+                color.write(bw);
+            }
+            LineStyle::Style2 {
+                width,
+                flags,
+                miter_limit,
+                fill,
+            } => {
+                bw.write_u16_aligned(*width);
+                bw.write_u16_aligned(*flags);
+                if let Some(m) = miter_limit {
+                    bw.write_u16_aligned(*m);
+                }
+                match fill {
+                    LineFill::Color(c) => bw.write_bytes_aligned(c),
+                    LineFill::Fill(fs) => fs.write(bw),
+                }
+            }
+        }
+    }
+}
+
+/// A `LINESTYLEARRAY`: a count (`u8`, or `0xFF`-extended `u16` for Shape2/3/4)
+/// then the line styles.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LineStyleArray {
+    /// Whether the `0xFF`-extended `u16` count form was used.
+    pub count_ext: bool,
+    pub styles: Vec<LineStyle>,
+}
+
+impl LineStyleArray {
+    const CTX: &'static str = "LINESTYLEARRAY";
+
+    fn read(br: &mut BitReader, version: u8, rgba: bool) -> Result<LineStyleArray, GfxError> {
+        let first = br.read_u8_aligned(Self::CTX)?;
+        let (count, count_ext) = if first == 0xFF && version >= 2 {
+            (br.read_u16_aligned(Self::CTX)? as usize, true)
+        } else {
+            (first as usize, false)
+        };
+        let mut styles = Vec::with_capacity(count);
+        for _ in 0..count {
+            styles.push(LineStyle::read(br, version, rgba)?);
+        }
+        Ok(LineStyleArray { count_ext, styles })
+    }
+
+    fn write(&self, bw: &mut BitWriter) {
+        if self.count_ext {
+            bw.write_u8_aligned(0xFF);
+            bw.write_u16_aligned(self.styles.len() as u16);
+        } else {
+            bw.write_u8_aligned(self.styles.len() as u8);
+        }
+        for ls in &self.styles {
+            ls.write(bw);
+        }
+    }
+}
+
+/// A `MOVETO` sub-record of a STYLECHANGERECORD. `num_bits` (the source
+/// `MoveBits`) is stored verbatim.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MoveTo {
+    /// `MoveBits` (the signed delta width).
+    pub num_bits: u32,
+    pub dx: i32,
+    pub dy: i32,
+}
+
+/// The geometry of a STRAIGHTEDGERECORD: a general line (both deltas), or a
+/// horizontal/vertical line (one delta).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StraightEdge {
+    /// `GeneralLineFlag` set: both deltas present.
+    General { dx: i32, dy: i32 },
+    /// Horizontal line (`GeneralLineFlag` clear, `VertLineFlag` clear).
+    Horizontal { dx: i32 },
+    /// Vertical line (`GeneralLineFlag` clear, `VertLineFlag` set).
+    Vertical { dy: i32 },
+}
+
+/// A fresh fill/line style set introduced by a STYLECHANGERECORD's StateNewStyles
+/// (Shape2/3/4 only). Reading byte-aligns before the new arrays and the trailing
+/// `(NumFillBits:4, NumLineBits:4)` reset the bit widths for the records that
+/// follow.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NewStyles {
+    pub fill_styles: FillStyleArray,
+    pub line_styles: LineStyleArray,
+    /// New `NumFillBits` for subsequent fill-index reads.
+    pub num_fill_bits: u32,
+    /// New `NumLineBits` for subsequent line-index reads.
+    pub num_line_bits: u32,
+}
+
+/// One `SHAPERECORD`. The shape stream is terminated by [`ShapeRecord::End`]
+/// (the all-zero non-edge record). Edge records store the source `NumBits` field
+/// verbatim (actual delta width is `num_bits + 2`); it is non-minimal in 1,133
+/// corpus edges.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ShapeRecord {
+    /// ENDSHAPERECORD: `TypeFlag=0` plus five zero state bits.
+    End,
+    /// STYLECHANGERECORD. The 5-bit `flags`
+    /// (`StateNewStyles`/`StateLineStyle`/`StateFillStyle1`/`StateFillStyle0`/
+    /// `StateMoveTo`, MSB-to-LSB) are the source of truth; each optional field is
+    /// `Some` iff its state bit is set.
+    StyleChange {
+        flags: u8,
+        move_to: Option<MoveTo>,
+        /// `FillStyle0` index (`StateFillStyle0`), `NumFillBits` wide.
+        fill_style0: Option<u32>,
+        /// `FillStyle1` index (`StateFillStyle1`), `NumFillBits` wide.
+        fill_style1: Option<u32>,
+        /// `LineStyle` index (`StateLineStyle`), `NumLineBits` wide.
+        line_style: Option<u32>,
+        /// New style arrays (`StateNewStyles`, Shape2/3/4 only).
+        new_styles: Option<NewStyles>,
+    },
+    /// STRAIGHTEDGERECORD. `num_bits` is the source field (delta width `+2`).
+    StraightEdge { num_bits: u32, edge: StraightEdge },
+    /// CURVEDEDGERECORD. `num_bits` is the source field (delta width `+2`).
+    CurvedEdge {
+        num_bits: u32,
+        control_dx: i32,
+        control_dy: i32,
+        anchor_dx: i32,
+        anchor_dy: i32,
+    },
+}
+
+/// A `SHAPEWITHSTYLE`: the initial fill/line style arrays, the starting
+/// `(NumFillBits:4, NumLineBits:4)`, and the SHAPERECORD stream (including its
+/// terminating [`ShapeRecord::End`]). The initial `num_fill_bits`/
+/// `num_line_bits` are stored verbatim, never recomputed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShapeWithStyle {
+    pub fill_styles: FillStyleArray,
+    pub line_styles: LineStyleArray,
+    pub num_fill_bits: u32,
+    pub num_line_bits: u32,
+    pub records: Vec<ShapeRecord>,
+}
+
+impl ShapeWithStyle {
+    const CTX: &'static str = "SHAPEWITHSTYLE";
+
+    fn read(br: &mut BitReader, version: u8) -> Result<ShapeWithStyle, GfxError> {
+        let rgba = version >= 3;
+        let fill_styles = FillStyleArray::read(br, version, rgba)?;
+        let line_styles = LineStyleArray::read(br, version, rgba)?;
+        let num_fill_bits = br.read_ubits(4, Self::CTX)?;
+        let num_line_bits = br.read_ubits(4, Self::CTX)?;
+        let records = read_shape_records(br, version, rgba, num_fill_bits, num_line_bits)?;
+        Ok(ShapeWithStyle {
+            fill_styles,
+            line_styles,
+            num_fill_bits,
+            num_line_bits,
+            records,
+        })
+    }
+
+    fn write(&self, bw: &mut BitWriter) {
+        self.fill_styles.write(bw);
+        self.line_styles.write(bw);
+        bw.write_ubits(self.num_fill_bits, 4);
+        bw.write_ubits(self.num_line_bits, 4);
+        write_shape_records(bw, &self.records, self.num_fill_bits, self.num_line_bits);
+    }
+}
+
+/// Read the SHAPERECORD stream up to and including the ENDSHAPERECORD. The fill/
+/// line bit widths shadow the SHAPEWITHSTYLE defaults and are reset by any
+/// StateNewStyles record.
+fn read_shape_records(
+    br: &mut BitReader,
+    version: u8,
+    rgba: bool,
+    mut num_fill_bits: u32,
+    mut num_line_bits: u32,
+) -> Result<Vec<ShapeRecord>, GfxError> {
+    const CTX: &str = "SHAPERECORD";
+    let mut records = Vec::new();
+    loop {
+        let type_flag = br.read_ubits(1, CTX)?;
+        if type_flag == 0 {
+            let flags = br.read_ubits(5, CTX)? as u8;
+            if flags == 0 {
+                records.push(ShapeRecord::End);
+                break;
+            }
+            let new_styles_flag = flags & 0x10 != 0;
+            let state_line = flags & 0x08 != 0;
+            let state_fill1 = flags & 0x04 != 0;
+            let state_fill0 = flags & 0x02 != 0;
+            let state_move = flags & 0x01 != 0;
+
+            let move_to = if state_move {
+                let mb = br.read_ubits(5, CTX)?;
+                let dx = br.read_sbits(mb, CTX)?;
+                let dy = br.read_sbits(mb, CTX)?;
+                Some(MoveTo {
+                    num_bits: mb,
+                    dx,
+                    dy,
+                })
+            } else {
+                None
+            };
+            let fill_style0 = if state_fill0 {
+                Some(br.read_ubits(num_fill_bits, CTX)?)
+            } else {
+                None
+            };
+            let fill_style1 = if state_fill1 {
+                Some(br.read_ubits(num_fill_bits, CTX)?)
+            } else {
+                None
+            };
+            let line_style = if state_line {
+                Some(br.read_ubits(num_line_bits, CTX)?)
+            } else {
+                None
+            };
+            let new_styles = if new_styles_flag {
+                if version < 2 {
+                    return Err(GfxError::ShapeNewStylesUnsupported);
+                }
+                // StateNewStyles byte-aligns before the new (byte-structured)
+                // style arrays (corpus-proven over 24 records).
+                br.byte_align(CTX)?;
+                let fill_styles = FillStyleArray::read(br, version, rgba)?;
+                let line_styles = LineStyleArray::read(br, version, rgba)?;
+                let nf = br.read_ubits(4, CTX)?;
+                let nl = br.read_ubits(4, CTX)?;
+                num_fill_bits = nf;
+                num_line_bits = nl;
+                Some(NewStyles {
+                    fill_styles,
+                    line_styles,
+                    num_fill_bits: nf,
+                    num_line_bits: nl,
+                })
+            } else {
+                None
+            };
+            records.push(ShapeRecord::StyleChange {
+                flags,
+                move_to,
+                fill_style0,
+                fill_style1,
+                line_style,
+                new_styles,
+            });
+        } else {
+            let straight = br.read_ubits(1, CTX)? != 0;
+            let num_bits = br.read_ubits(4, CTX)?;
+            let bits = num_bits + 2;
+            if straight {
+                let general = br.read_ubits(1, CTX)? != 0;
+                let edge = if general {
+                    StraightEdge::General {
+                        dx: br.read_sbits(bits, CTX)?,
+                        dy: br.read_sbits(bits, CTX)?,
+                    }
+                } else {
+                    let vert = br.read_ubits(1, CTX)? != 0;
+                    if vert {
+                        StraightEdge::Vertical {
+                            dy: br.read_sbits(bits, CTX)?,
+                        }
+                    } else {
+                        StraightEdge::Horizontal {
+                            dx: br.read_sbits(bits, CTX)?,
+                        }
+                    }
+                };
+                records.push(ShapeRecord::StraightEdge { num_bits, edge });
+            } else {
+                records.push(ShapeRecord::CurvedEdge {
+                    num_bits,
+                    control_dx: br.read_sbits(bits, CTX)?,
+                    control_dy: br.read_sbits(bits, CTX)?,
+                    anchor_dx: br.read_sbits(bits, CTX)?,
+                    anchor_dy: br.read_sbits(bits, CTX)?,
+                });
+            }
+        }
+    }
+    Ok(records)
+}
+
+/// Write the SHAPERECORD stream. The fill/line bit widths shadow the
+/// SHAPEWITHSTYLE defaults and are reset by any StateNewStyles record, exactly
+/// as on read.
+fn write_shape_records(
+    bw: &mut BitWriter,
+    records: &[ShapeRecord],
+    mut num_fill_bits: u32,
+    mut num_line_bits: u32,
+) {
+    for rec in records {
+        match rec {
+            ShapeRecord::End => {
+                bw.write_ubits(0, 1); // TypeFlag = 0
+                bw.write_ubits(0, 5); // all state bits clear
+            }
+            ShapeRecord::StyleChange {
+                flags,
+                move_to,
+                fill_style0,
+                fill_style1,
+                line_style,
+                new_styles,
+            } => {
+                bw.write_ubits(0, 1); // TypeFlag = 0
+                bw.write_ubits(*flags as u32, 5);
+                if let Some(m) = move_to {
+                    bw.write_ubits(m.num_bits, 5);
+                    bw.write_sbits(m.dx, m.num_bits);
+                    bw.write_sbits(m.dy, m.num_bits);
+                }
+                if let Some(f0) = fill_style0 {
+                    bw.write_ubits(*f0, num_fill_bits);
+                }
+                if let Some(f1) = fill_style1 {
+                    bw.write_ubits(*f1, num_fill_bits);
+                }
+                if let Some(l) = line_style {
+                    bw.write_ubits(*l, num_line_bits);
+                }
+                if let Some(ns) = new_styles {
+                    bw.byte_align();
+                    ns.fill_styles.write(bw);
+                    ns.line_styles.write(bw);
+                    bw.write_ubits(ns.num_fill_bits, 4);
+                    bw.write_ubits(ns.num_line_bits, 4);
+                    num_fill_bits = ns.num_fill_bits;
+                    num_line_bits = ns.num_line_bits;
+                }
+            }
+            ShapeRecord::StraightEdge { num_bits, edge } => {
+                bw.write_ubits(1, 1); // TypeFlag = 1
+                bw.write_ubits(1, 1); // StraightFlag = 1
+                bw.write_ubits(*num_bits, 4);
+                let bits = num_bits + 2;
+                match edge {
+                    StraightEdge::General { dx, dy } => {
+                        bw.write_ubits(1, 1); // GeneralLineFlag = 1
+                        bw.write_sbits(*dx, bits);
+                        bw.write_sbits(*dy, bits);
+                    }
+                    StraightEdge::Vertical { dy } => {
+                        bw.write_ubits(0, 1); // GeneralLineFlag = 0
+                        bw.write_ubits(1, 1); // VertLineFlag = 1
+                        bw.write_sbits(*dy, bits);
+                    }
+                    StraightEdge::Horizontal { dx } => {
+                        bw.write_ubits(0, 1); // GeneralLineFlag = 0
+                        bw.write_ubits(0, 1); // VertLineFlag = 0
+                        bw.write_sbits(*dx, bits);
+                    }
+                }
+            }
+            ShapeRecord::CurvedEdge {
+                num_bits,
+                control_dx,
+                control_dy,
+                anchor_dx,
+                anchor_dy,
+            } => {
+                bw.write_ubits(1, 1); // TypeFlag = 1
+                bw.write_ubits(0, 1); // StraightFlag = 0
+                bw.write_ubits(*num_bits, 4);
+                let bits = num_bits + 2;
+                bw.write_sbits(*control_dx, bits);
+                bw.write_sbits(*control_dy, bits);
+                bw.write_sbits(*anchor_dx, bits);
+                bw.write_sbits(*anchor_dy, bits);
+            }
+        }
+    }
+}
+
+/// Map a shape `version` (1..=4) to its tag code.
+fn shape_version_to_code(version: u8) -> u16 {
+    match version {
+        1 => TAG_DEFINE_SHAPE,
+        2 => TAG_DEFINE_SHAPE2,
+        3 => TAG_DEFINE_SHAPE3,
+        _ => TAG_DEFINE_SHAPE4,
+    }
+}
+
+/// Parse a `DefineShape*` body into its typed parts (the bitstream model). Used
+/// by [`decode_define_shape`], which re-serializes and verifies the result.
+struct DefineShapeParts {
+    shape_id: u16,
+    shape_bounds: Rect,
+    edge_bounds: Option<Rect>,
+    flags_byte: Option<u8>,
+    shapes: ShapeWithStyle,
+}
+
+fn parse_define_shape(body: &[u8], version: u8) -> Result<DefineShapeParts, GfxError> {
+    const CTX: &str = "DefineShape";
+    let mut br = BitReader::new_at_byte(body, 0);
+    let shape_id = br.read_u16_aligned(CTX)?;
+    let shape_bounds = Rect::read(&mut br)?;
+    let (edge_bounds, flags_byte) = if version == 4 {
+        let eb = Rect::read(&mut br)?;
+        let fb = br.read_u8_aligned(CTX)?;
+        (Some(eb), Some(fb))
+    } else {
+        (None, None)
+    };
+    let shapes = ShapeWithStyle::read(&mut br, version)?;
+    br.byte_align(CTX)?;
+    // Trailing bytes after the byte-aligned shape end are a structural surprise;
+    // the decode-then-verify byte comparison would also catch it, but fail here
+    // so the caller falls back without re-serializing.
+    if br.byte_pos() != body.len() {
+        return Err(GfxError::TrailingTagBytes {
+            code: shape_version_to_code(version),
+            remaining: body.len() - br.byte_pos(),
+        });
+    }
+    Ok(DefineShapeParts {
+        shape_id,
+        shape_bounds,
+        edge_bounds,
+        flags_byte,
+        shapes,
+    })
+}
+
+/// Serialize a `DefineShape*` body from its typed parts.
+fn serialize_shape_body(
+    version: u8,
+    shape_id: u16,
+    shape_bounds: &Rect,
+    edge_bounds: Option<&Rect>,
+    flags_byte: Option<u8>,
+    shapes: &ShapeWithStyle,
+) -> Vec<u8> {
+    let mut bw = BitWriter::new();
+    bw.write_u16_aligned(shape_id);
+    shape_bounds.write(&mut bw);
+    if version == 4 {
+        edge_bounds
+            .expect("DefineShape4 without edge_bounds")
+            .write(&mut bw);
+        bw.write_u8_aligned(flags_byte.expect("DefineShape4 without flags_byte"));
+    }
+    shapes.write(&mut bw);
+    bw.byte_align();
+    bw.into_bytes()
+}
+
+/// Decode a `DefineShape*` (code 2/22/32/83) body. The body is decode-then-
+/// verified: it is fully parsed, re-serialized, and compared against the source;
+/// on any structural surprise or byte mismatch it falls back to [`Tag::Unknown`]
+/// so byte-identity is never silently lost. Always returns `Ok` -- the fallback
+/// is data, not an error.
+fn decode_define_shape(code: u16, body: Vec<u8>, force_long: bool) -> Tag {
+    let version = match code {
+        TAG_DEFINE_SHAPE => 1u8,
+        TAG_DEFINE_SHAPE2 => 2,
+        TAG_DEFINE_SHAPE3 => 3,
+        _ => 4,
+    };
+    match parse_define_shape(&body, version) {
+        Ok(parts) => {
+            let reencoded = serialize_shape_body(
+                version,
+                parts.shape_id,
+                &parts.shape_bounds,
+                parts.edge_bounds.as_ref(),
+                parts.flags_byte,
+                &parts.shapes,
+            );
+            if reencoded == body {
+                Tag::DefineShape {
+                    version,
+                    shape_id: parts.shape_id,
+                    shape_bounds: parts.shape_bounds,
+                    edge_bounds: parts.edge_bounds,
+                    flags_byte: parts.flags_byte,
+                    shapes: parts.shapes,
+                    force_long,
+                }
+            } else {
+                Tag::Unknown {
+                    code,
+                    raw: body,
+                    force_long,
+                }
+            }
+        }
+        Err(_) => Tag::Unknown {
+            code,
+            raw: body,
+            force_long,
+        },
+    }
+}
+
 impl Movie {
     /// Parse a complete uncompressed GFX movie from `data`.
     pub fn parse(data: &[u8]) -> Result<Movie, GfxError> {
@@ -1378,6 +2303,9 @@ fn decode_tag_body(code: u16, body: Vec<u8>, force_long: bool) -> Result<Tag, Gf
         }
         TAG_PLACE_OBJECT2 => decode_place_object2(body, force_long),
         TAG_PLACE_OBJECT3 => decode_place_object3(body, force_long),
+        TAG_DEFINE_SHAPE | TAG_DEFINE_SHAPE2 | TAG_DEFINE_SHAPE3 | TAG_DEFINE_SHAPE4 => {
+            Ok(decode_define_shape(code, body, force_long))
+        }
         TAG_DEFINE_SCALING_GRID => {
             let mut br = GfxReader::new(&body);
             let character_id = br.read_u16()?;
@@ -1917,6 +2845,26 @@ fn write_tag(w: &mut GfxWriter, tag: &Tag) -> Result<(), GfxError> {
             w.write_record_header(TAG_DEFINE_SCALING_GRID, body.buf.len(), *force_long)?;
             w.write_bytes(&body.buf);
         }
+        Tag::DefineShape {
+            version,
+            shape_id,
+            shape_bounds,
+            edge_bounds,
+            flags_byte,
+            shapes,
+            force_long,
+        } => {
+            let body = serialize_shape_body(
+                *version,
+                *shape_id,
+                shape_bounds,
+                edge_bounds.as_ref(),
+                *flags_byte,
+                shapes,
+            );
+            w.write_record_header(shape_version_to_code(*version), body.len(), *force_long)?;
+            w.write_bytes(&body);
+        }
     }
     Ok(())
 }
@@ -2253,6 +3201,81 @@ mod tests {
 
         // And it still re-serializes byte-identically end to end.
         assert_eq!(m.write().expect("write"), bytes);
+    }
+
+    /// Every `DefineShape*` across the whole corpus must decode to the typed
+    /// [`Tag::DefineShape`] variant -- NOT silently fall back to [`Tag::Unknown`].
+    /// The `tests/roundtrip.rs` byte-identity gate passes either way (an opaque
+    /// body also round-trips), so this gate separately proves the Tier-3 typed
+    /// shape codec actually handles all 366 corpus shapes byte-cleanly rather
+    /// than punting them to the opaque path. Skips when assets are absent.
+    #[test]
+    fn corpus_define_shapes_all_typed() {
+        // Total DefineShape* characters across the 114-file corpus (276 Shape1 +
+        // 8 Shape2 + 69 Shape3 + 13 Shape4), proven by the python ground-truth
+        // verifier before this codec was written.
+        const EXPECTED_TYPED_SHAPES: usize = 366;
+        let root = "/home/banon/er-extract/nuxe-menu-20260619-170932/menu";
+        if !std::path::Path::new(root).exists() {
+            eprintln!("SKIP: corpus root {root} not present; shape-typing test skipped");
+            return;
+        }
+
+        fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    collect(&p, out);
+                } else if p.extension().and_then(|s| s.to_str()) == Some("gfx") {
+                    out.push(p);
+                }
+            }
+        }
+
+        fn count(tags: &[Tag], typed: &mut usize, fell_back: &mut usize) {
+            for t in tags {
+                match t {
+                    Tag::DefineShape { .. } => *typed += 1,
+                    Tag::Unknown { code, .. }
+                        if matches!(
+                            *code,
+                            TAG_DEFINE_SHAPE
+                                | TAG_DEFINE_SHAPE2
+                                | TAG_DEFINE_SHAPE3
+                                | TAG_DEFINE_SHAPE4
+                        ) =>
+                    {
+                        *fell_back += 1
+                    }
+                    Tag::DefineSprite { tags, .. } => count(tags, typed, fell_back),
+                    _ => {}
+                }
+            }
+        }
+
+        let mut files = Vec::new();
+        collect(std::path::Path::new(root), &mut files);
+        files.sort();
+
+        let mut typed = 0usize;
+        let mut fell_back = 0usize;
+        for path in &files {
+            let bytes = std::fs::read(path).expect("read corpus file");
+            let movie = Movie::parse(&bytes).expect("parse corpus file");
+            count(&movie.tags, &mut typed, &mut fell_back);
+        }
+
+        assert_eq!(
+            fell_back, 0,
+            "{fell_back} DefineShape* tag(s) fell back to Tag::Unknown instead of typing"
+        );
+        assert_eq!(
+            typed, EXPECTED_TYPED_SHAPES,
+            "expected {EXPECTED_TYPED_SHAPES} typed DefineShape* tags, found {typed}"
+        );
     }
 
     // --- Tier-2 primitive + tag tests ---------------------------------------
@@ -2772,6 +3795,207 @@ mod tests {
         match Rect::read(&mut br) {
             Err(GfxError::NonZeroBitPadding { context }) => assert_eq!(context, "RECT"),
             other => panic!("expected NonZeroBitPadding, got {other:?}"),
+        }
+    }
+
+    // --- Tier-3: DefineShape family + SHAPEWITHSTYLE tests --------------------
+
+    #[test]
+    fn shape_solid_fill_rectangle_instance() {
+        // Corpus 01_000_fe.gfx DefineShape (tag 2, version 1): a 30x210 solid
+        // red rectangle. fill[0] = solid RGB 0x5b0000; records: a StyleChange
+        // (moveTo + fillStyle1) then four straight edges + End. Field values are
+        // verifier-confirmed against the raw bitstream.
+        let body = hx("49014008fc932001005b000000101503f25dd696845bb2ed0780");
+        match parse_first(&rec(TAG_DEFINE_SHAPE, &body, false)) {
+            Tag::DefineShape {
+                version,
+                shape_id,
+                shape_bounds,
+                edge_bounds,
+                flags_byte,
+                shapes,
+                ..
+            } => {
+                assert_eq!(version, 1);
+                assert_eq!(shape_id, 329);
+                assert_eq!(edge_bounds, None);
+                assert_eq!(flags_byte, None);
+                assert_eq!(shape_bounds.nbits, 8);
+                assert_eq!(
+                    (
+                        shape_bounds.x_min,
+                        shape_bounds.x_max,
+                        shape_bounds.y_min,
+                        shape_bounds.y_max
+                    ),
+                    (1, 31, -110, 100)
+                );
+                assert!(shapes.line_styles.styles.is_empty());
+                assert_eq!(shapes.fill_styles.styles.len(), 1);
+                match &shapes.fill_styles.styles[0] {
+                    FillStyle::Solid(Color::Rgb(c)) => assert_eq!(*c, [0x5b, 0x00, 0x00]),
+                    other => panic!("expected solid RGB fill, got {other:?}"),
+                }
+                // First record: StyleChange with moveTo (8 bits) to (31,-110)
+                // selecting fillStyle1 = 1.
+                match &shapes.records[0] {
+                    ShapeRecord::StyleChange {
+                        move_to,
+                        fill_style1,
+                        ..
+                    } => {
+                        let m = move_to.as_ref().expect("a moveTo");
+                        assert_eq!(m.num_bits, 8);
+                        assert_eq!((m.dx, m.dy), (31, -110));
+                        assert_eq!(*fill_style1, Some(1));
+                    }
+                    other => panic!("expected StyleChange, got {other:?}"),
+                }
+                // Second record: a vertical straight edge dy=210, stored 7-bit
+                // NumBits field (delta width 9).
+                match &shapes.records[1] {
+                    ShapeRecord::StraightEdge {
+                        num_bits,
+                        edge: StraightEdge::Vertical { dy },
+                    } => {
+                        assert_eq!(*num_bits, 7);
+                        assert_eq!(*dy, 210);
+                    }
+                    other => panic!("expected vertical edge, got {other:?}"),
+                }
+                // Third record: a horizontal straight edge dx=-30.
+                match &shapes.records[2] {
+                    ShapeRecord::StraightEdge {
+                        num_bits,
+                        edge: StraightEdge::Horizontal { dx },
+                    } => {
+                        assert_eq!(*num_bits, 4);
+                        assert_eq!(*dx, -30);
+                    }
+                    other => panic!("expected horizontal edge, got {other:?}"),
+                }
+                assert!(matches!(shapes.records.last(), Some(ShapeRecord::End)));
+            }
+            other => panic!("expected DefineShape, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shape_bitmap_fill_instance() {
+        // Corpus 02_020_inventory.gfx DefineShape (tag 2): a 520x520
+        // bitmap-filled square. fill[0] = bitmap type 0x40, bitmapId 6, with a
+        // scale-only MATRIX (NScaleBits=20, scale 266252).
+        let body = hx("bf005800410001040001400600d104031040300000101568200079504725f8e5bf1c882000");
+        match parse_first(&rec(TAG_DEFINE_SHAPE, &body, false)) {
+            Tag::DefineShape {
+                shape_id, shapes, ..
+            } => {
+                assert_eq!(shape_id, 191);
+                match &shapes.fill_styles.styles[0] {
+                    FillStyle::Bitmap {
+                        fill_type,
+                        bitmap_id,
+                        matrix,
+                    } => {
+                        assert_eq!(*fill_type, 0x40);
+                        assert_eq!(*bitmap_id, 6);
+                        assert!(matrix.has_scale);
+                        assert_eq!(matrix.scale_nbits, 20);
+                        assert_eq!(matrix.scale_x, 266252);
+                        assert_eq!(matrix.scale_y, 266252);
+                        assert_eq!((matrix.translate_x, matrix.translate_y), (0, 0));
+                    }
+                    other => panic!("expected bitmap fill, got {other:?}"),
+                }
+            }
+            other => panic!("expected DefineShape, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shape_gradient_fill_instance() {
+        // Corpus 05_000_title.gfx DefineShape3 (tag 32): the title-screen
+        // darkening gradient -- a linear gradient (fill type 0x10) fading
+        // transparent black (ratio 0, RGBA 00000000) to opaque black (ratio 255,
+        // RGBA 000000ff). RGBA colors confirm the version-3 4-byte color path.
+        let body = hx(
+            "1000758f09c478d00000011084c3e3413881400468020000000000ff000000ff001015c9c478d1e5731e963c396347a2710000",
+        );
+        match parse_first(&rec(TAG_DEFINE_SHAPE3, &body, false)) {
+            Tag::DefineShape {
+                version,
+                shape_id,
+                shapes,
+                ..
+            } => {
+                assert_eq!(version, 3);
+                assert_eq!(shape_id, 16);
+                match &shapes.fill_styles.styles[0] {
+                    FillStyle::Gradient {
+                        fill_type,
+                        gradient,
+                        matrix,
+                    } => {
+                        assert_eq!(*fill_type, 0x10); // linear
+                        assert_eq!(gradient.spread_mode, 0);
+                        assert_eq!(gradient.interpolation_mode, 0);
+                        assert_eq!(gradient.focal_point, None);
+                        assert_eq!(gradient.records.len(), 2);
+                        assert_eq!(gradient.records[0].ratio, 0);
+                        assert_eq!(gradient.records[0].color, Color::Rgba([0, 0, 0, 0]));
+                        assert_eq!(gradient.records[1].ratio, 255);
+                        assert_eq!(gradient.records[1].color, Color::Rgba([0, 0, 0, 0xff]));
+                        assert!(matrix.has_scale);
+                    }
+                    other => panic!("expected gradient fill, got {other:?}"),
+                }
+            }
+            other => panic!("expected DefineShape, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shape_records_preserve_non_minimal_edge_nbits() {
+        // A straight edge whose stored NumBits field (10 -> delta width 12) is
+        // wider than the minimal width for dx=3 (which needs 3 bits). Byte
+        // identity REQUIRES preserving the source width, not recomputing a
+        // minimal one -- the corpus has 1,133 such non-minimal edges.
+        let recs = vec![
+            ShapeRecord::StraightEdge {
+                num_bits: 10,
+                edge: StraightEdge::Horizontal { dx: 3 },
+            },
+            ShapeRecord::End,
+        ];
+        let mut bw = BitWriter::new();
+        write_shape_records(&mut bw, &recs, 0, 0);
+        bw.byte_align();
+        let bytes = bw.into_bytes();
+        let mut br = BitReader::new_at_byte(&bytes, 0);
+        let back = read_shape_records(&mut br, 1, false, 0, 0).unwrap();
+        assert_eq!(back, recs);
+        match &back[0] {
+            ShapeRecord::StraightEdge { num_bits, .. } => {
+                assert_eq!(*num_bits, 10, "non-minimal edge NumBits preserved");
+            }
+            other => panic!("expected straight edge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shape_unknown_fill_type_falls_back_to_unknown() {
+        // A DefineShape whose FILLSTYLE carries an unmodelled type byte (0xAA)
+        // must fall back to Tag::Unknown and re-emit its raw body verbatim, so
+        // byte-identity is preserved even for shapes the typed codec can't model.
+        // body: shapeId=1, RECT nbits=0 (1 byte), fill count=1, fill type 0xAA, tail.
+        let body = vec![0x01, 0x00, 0x00, 0x01, 0xAA, 0xBB];
+        match parse_first(&rec(TAG_DEFINE_SHAPE, &body, false)) {
+            Tag::Unknown { code, raw, .. } => {
+                assert_eq!(code, TAG_DEFINE_SHAPE);
+                assert_eq!(raw, body);
+            }
+            other => panic!("expected Unknown fallback, got {other:?}"),
         }
     }
 }
