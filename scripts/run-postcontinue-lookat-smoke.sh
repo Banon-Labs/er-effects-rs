@@ -20,5 +20,13 @@ source .envs/manual-portrait-drive.env
 set +a
 : "${ARTIFACT_DIR:=$PWD/target/runtime-probe/postcontinue-lookat-smoke}"
 export ARTIFACT_DIR
-echo "postcontinue-lookat-smoke: ARTIFACT_DIR=$ARTIFACT_DIR (autoload ON -- drives the post-Continue spared renderer)"
+# HARD 45s CAP, ENFORCED (not prose): never run no-teardown -- route through the probe's watcher cap...
+export RUNTIME_NO_TEARDOWN=0
+# ...AND a belt-and-suspenders independent watchdog that hard-kills eldenring.exe at the canonical cap
+# regardless of what the probe/watcher does. The cap value comes from the single source of truth.
+CAP="$(python3 -c 'import sys; sys.path.insert(0,"scripts"); from runtime_timeout_cap import runtime_timeout_cap_seconds as f; print(f())' 2>/dev/null || true)"
+case "$CAP" in ''|*[!0-9]*) CAP=45 ;; esac
+echo "postcontinue-lookat-smoke: ARTIFACT_DIR=$ARTIFACT_DIR (autoload ON, HARD ${CAP}s cap)"
+( sleep "$CAP"; pkill -x eldenring.exe >/dev/null 2>&1; pkill -f 'eldenring.exe' >/dev/null 2>&1 ) &
+disown || true
 exec bash scripts/run-product-continue-direct-probe.sh
