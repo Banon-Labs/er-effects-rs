@@ -2106,6 +2106,12 @@ unsafe fn sample_portrait_gxtexture(base: usize, slot: i32) -> usize {
 unsafe fn refresh_loading_bg_live_gx(base: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
+    // DISABLED: binding the live offscreen SRV every frame samples a flickering/black texture on the
+    // composited frames. We now show the STATIC baked-portrait TPF instead (build_portrait_tpf), so do not
+    // overwrite the forged container's baked GX. Kept as a no-op for now (the bake path is the product path).
+    if true {
+        return;
+    }
     let cap = LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT.load(Ordering::SeqCst);
     if !valid(cap) {
         return;
@@ -3698,6 +3704,9 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // container the forge already injected (the background binds BEFORE our renderer exists and never
     // re-binds, so the live RT must be pushed into the displayed container after the fact).
     unsafe { refresh_loading_bg_live_gx(base) };
+    // Once the real IBL-lit menu portrait has been baked into LOADING_BG_PORTRAIT_RGBA, re-forge the first
+    // (displayed) now-loading rti so the loading screen swaps the checker for the real character portrait.
+    unsafe { maybe_reforge_loading_portrait(base) };
     // HIGHER-RES (one-shot, EARLY -- runs before the table-ready guard below so it lands before
     // TitleTopDialog constructs the renderers). Patch each per-slot offscreen base-size entry that
     // still holds the init value (128x128, written by FUN_1400a7bb0) to 1024x1024 base AND zero the
@@ -3912,6 +3921,24 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             };
             if let Some((w, h, px)) = unsafe { readback_offscreen_rgba8(off) } {
                 let nb = portrait_center_nonblack(w, h, &px);
+                // BAKE SOURCE: store the TARGET slot's REAL, IBL-LIT menu portrait into
+                // LOADING_BG_PORTRAIT_RGBA (one-shot) so the now-loading forge bakes IT into the static TPF
+                // -- this runs during the menu (~16s, full 1024x1024 IBL render) BEFORE the forge's bind,
+                // so the loading screen shows the real well-lit character, not the checker or the dark
+                // post-Continue rebuild. Require a lit (ibl_region != 0) nonblack render.
+                if s == OWN_STEPPER_SLOT.load(Ordering::SeqCst)
+                    && nb
+                    && ibl_region != 0
+                    && PROFILE_BAKE_RGBA_CAPTURED.swap(1, Ordering::SeqCst) == 0
+                {
+                    dump_portrait_rgba(110, w, h, &px);
+                    if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
+                        *g = Some((w, h, px.clone()));
+                    }
+                    append_autoload_debug(format_args!(
+                        "loading-portrait: BAKE-CAPTURED real menu portrait slot={s} dims={w}x{h} ibl_region=0x{ibl_region:x} -> LOADING_BG_PORTRAIT_RGBA (forge will bake it)"
+                    ));
+                }
                 dump_portrait_rgba(s, w, h, &px);
                 PROFILE_SLOT_DUMP_MASK.fetch_or(bit, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
@@ -4058,7 +4085,10 @@ pub(crate) fn install_profile_renderer_teardown_spare_hook() {
 /// EXACTLY `symbol`, so the CSScaleform pump's name-registration binds it to the now-loading image.
 /// (Real loaded-character portrait pixels are a follow-up; this proves the injection + object shape.)
 fn build_portrait_test_tpf(symbol: &str) -> Option<Vec<u8>> {
-    let dds = er_tpf::DdsImage::checker(512, 512, 32, [255, 0, 255, 255], [255, 255, 0, 255])
+    // 1024x1024 to MATCH the captured menu-portrait dims, so once the real portrait is read back we can
+    // D3D12-upload it straight into THIS (already-registered) displayed texture (the Scaleform pump binds
+    // the name only on the first bind, so a re-forge can't swap it -- we overwrite the live pixels instead).
+    let dds = er_tpf::DdsImage::checker(1024, 1024, 64, [255, 0, 255, 255], [255, 255, 0, 255])
         .to_dds_bytes_with(er_tpf::DdsHeaderMode::LegacyRgba8);
     er_tpf::Tpf::single_pc(symbol, dds, 1).build().ok()
 }
@@ -4142,16 +4172,53 @@ pub(crate) unsafe extern "system" fn loading_bg_replace_bind_hook(rti: usize, sy
     let Ok(base) = game_module_base() else {
         return call_orig();
     };
-    // Build the TPF with its single texture named EXACTLY the bare GFx symbol, and key the factory by
-    // that same name, so the pump's name-registration binds our texture to the loading image.
-    let name_z: Vec<u16> = tex_name.encode_utf16().chain(core::iter::once(0)).collect();
-    let Some(tpf_bytes) = build_portrait_tpf(&tex_name) else {
-        LOADING_BG_TEXTURE_REDIRECT_LAST_SYMBOL_MATCH.store(2, Ordering::SeqCst);
+    let Some(cap) = (unsafe { forge_into_rti(base, rti, &tex_name, encoding, symbol) }) else {
         return call_orig();
     };
+    let commits = LOADING_BG_TEXTURE_REDIRECT_COMMITS.fetch_add(1, Ordering::SeqCst) + 1;
+    LOADING_BG_TEXTURE_REDIRECT_LAST_SYMBOL_MATCH.store(1, Ordering::SeqCst);
+    LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT.store(cap, Ordering::SeqCst);
+    // Remember the FIRST (displayed) rti + its name/encoding so we can RE-FORGE it once the real portrait
+    // is baked (the sprite commits to this first bind, which happens before the portrait is captured).
+    if LOADING_BG_FIRST_RTI
+        .compare_exchange(0, rti, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        LOADING_BG_FIRST_ENCODING.store(encoding as usize, Ordering::SeqCst);
+        if let Ok(mut g) = LOADING_BG_FIRST_TEX_NAME.lock() {
+            *g = Some(tex_name.clone());
+        }
+    }
+    let baked = LOADING_BG_PORTRAIT_RGBA
+        .lock()
+        .map(|g| g.is_some())
+        .unwrap_or(false);
+    if commits <= 8 {
+        append_autoload_debug(format_args!(
+            "loading-portrait: forged now-loading background symbol='{sym_string}' -> cap=0x{cap:x} baked_rgba={baked} tpf commits={commits} attempts={attempts}"
+        ));
+    }
+    1
+}
+
+/// Build a now-loading TPF (baking LOADING_BG_PORTRAIT_RGBA if captured, else the checker), materialize it
+/// through the game's in-memory CreateTpfResCap factory, wrap it in a fresh TpfFileCap, and bind it to
+/// `rti`. `substr_symbol != 0` copies that DLString into the rti's symbol field (the initial forge);
+/// pass 0 to leave the rti's existing symbol (a RE-FORGE of an already-bound rti). Returns the cap on
+/// success. The PINs/refcount bump match the original forge so the CSScaleform GC can't free our graph.
+unsafe fn forge_into_rti(
+    base: usize,
+    rti: usize,
+    tex_name: &str,
+    encoding: u8,
+    substr_symbol: usize,
+) -> Option<usize> {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let name_z: Vec<u16> = tex_name.encode_utf16().chain(core::iter::once(0)).collect();
+    let tpf_bytes = build_portrait_tpf(tex_name)?;
     let tpf_repo = unsafe { safe_read_usize(base + GLOBAL_TPF_REPOSITORY_RVA) }.unwrap_or(0);
     if tpf_repo == 0 {
-        return call_orig();
+        return None;
     }
     let create_rescap: unsafe extern "system" fn(
         usize,
@@ -4171,56 +4238,24 @@ pub(crate) unsafe extern "system" fn loading_bg_replace_bind_hook(rti: usize, sy
             0,
         )
     };
-    if container == 0 {
-        LOADING_BG_TEXTURE_REDIRECT_LAST_SYMBOL_MATCH.store(3, Ordering::SeqCst);
-        return call_orig();
-    }
-    // Swap our portrait's CSGxTexture into this container's first TexResCap so the loading screen
-    // composites the real character portrait. PREFER the LIVE offscreen RT GX texture from the
-    // post-Continue OWN-RENDERER we built (renderer -> +0xa8 CSEzOffscreenRend -> +0x10 CSRuntimeTexResCap
-    // -> CSGxTexture): GFx re-samples that GX every composite frame, and our feed window keeps the model
-    // rendering into it, so the loading screen shows the live, animated portrait -- not a static snapshot.
-    // Fall back to the old kept-capture (LOADING_BG_PORTRAIT_GX_KEPT), then to the forged checker, if the
-    // live RT is not up yet on this bind (the now-loading background rotates, so a later bind picks it up).
-    let target_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
-    let live_gx = unsafe { sample_portrait_gxtexture(base, target_slot) };
-    let kept_capture = LOADING_BG_PORTRAIT_GX_KEPT.load(Ordering::SeqCst);
-    let kept_portrait = if live_gx != 0 { live_gx } else { kept_capture };
-    let mut used_portrait = false;
-    if kept_portrait != 0 {
-        let count = unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_COUNT_OFFSET) }
-            .unwrap_or(0)
-            & 0xffff_ffff;
-        let array =
-            unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_ARRAY_OFFSET) }.unwrap_or(0);
-        if count >= 1 && array != 0 && array != null {
-            let tex_rescap0 = unsafe { safe_read_usize(array) }.unwrap_or(0);
-            if tex_rescap0 != 0 && tex_rescap0 != null {
-                unsafe {
-                    ((tex_rescap0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) as *mut usize)
-                        .write_volatile(kept_portrait)
-                };
-                used_portrait = true;
-            }
-        }
+    if container == 0 || container == null {
+        return None;
     }
     let main_heap = unsafe { safe_read_usize(base + GLOBAL_MAIN_HEAP_ALLOCATOR_RVA) }.unwrap_or(0);
     if main_heap == 0 {
-        return call_orig();
+        return None;
     }
     let heap_alloc: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(base + GAME_HEAP_ALLOC_RVA) };
     let cap = unsafe { heap_alloc(TPF_FILE_CAP_ALLOC_SIZE, TPF_FILE_CAP_ALLOC_ALIGN, main_heap) };
     if cap == 0 {
-        LOADING_BG_TEXTURE_REDIRECT_LAST_SYMBOL_MATCH.store(4, Ordering::SeqCst);
-        return call_orig();
+        return None;
     }
     let cap_ctor: unsafe extern "system" fn(usize, usize) -> usize =
         unsafe { std::mem::transmute(base + TPF_FILE_CAP_CTOR_RVA) };
     unsafe { cap_ctor(cap, 0) };
     unsafe {
-        ((cap + TPF_FILE_CAP_LOAD_STATE_OFFSET) as *mut u8)
-            .write_volatile(TPF_FILE_CAP_LOADED_STATE)
+        ((cap + TPF_FILE_CAP_LOAD_STATE_OFFSET) as *mut u8).write_volatile(TPF_FILE_CAP_LOADED_STATE)
     };
     let prev_flags = unsafe { safe_read_u8(cap + TPF_FILE_CAP_FLAGS_OFFSET) }.unwrap_or(0);
     unsafe {
@@ -4228,35 +4263,81 @@ pub(crate) unsafe extern "system" fn loading_bg_replace_bind_hook(rti: usize, sy
             .write_volatile(prev_flags | TPF_FILE_CAP_READY_FLAG_BIT)
     };
     unsafe { ((cap + TPF_FILE_CAP_TEX_RESCAP_OFFSET) as *mut usize).write_volatile(container) };
-    // Set the rti symbol (substr full copy of the source) + encodingType, then bind the cap.
     unsafe { ((rti + REPLACE_TEX_INFO_ENCODING_OFFSET) as *mut u8).write_volatile(encoding) };
-    let substr: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
-        unsafe { std::mem::transmute(base + DLSTRING_WCHAR_SUBSTR_RVA) };
-    unsafe { substr(rti + REPLACE_TEX_INFO_SYMBOL_OFFSET, symbol, 0, usize::MAX) };
+    if substr_symbol != 0 {
+        let substr: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+            unsafe { std::mem::transmute(base + DLSTRING_WCHAR_SUBSTR_RVA) };
+        unsafe { substr(rti + REPLACE_TEX_INFO_SYMBOL_OFFSET, substr_symbol, 0, usize::MAX) };
+    }
     unsafe { ((rti + REPLACE_TEX_INFO_TPF_FILE_CAP_OFFSET) as *mut usize).write_volatile(cap) };
     unsafe { ((rti + REPLACE_TEX_INFO_READY_OFFSET) as *mut u8).write_volatile(0) };
-    // Pin the forged rti so the CSScaleform Update GC and producer-list teardown never drive its
-    // refcount to 0 (which would run a destructor over our hand-built graph and double-free). A
-    // refcount-audited clean teardown is a follow-up; for the POC accept the leak to stay crash-free.
     let rc = unsafe {
         &*((rti + REPLACE_TEX_INFO_REFCOUNT_OFFSET) as *const core::sync::atomic::AtomicI32)
     };
     rc.fetch_add(0x10000, Ordering::SeqCst);
-    let commits = LOADING_BG_TEXTURE_REDIRECT_COMMITS.fetch_add(1, Ordering::SeqCst) + 1;
-    LOADING_BG_TEXTURE_REDIRECT_LAST_SYMBOL_MATCH.store(1, Ordering::SeqCst);
-    LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT.store(cap, Ordering::SeqCst);
-    // Observe whether the live portrait CSGxTexture is still present via the renderer chain at forge
-    // time (expected 0 -- torn down at Continue); the displayed texture comes from `kept_portrait`.
-    // Sample the autoload's target slot (the loaded character's absolute slot), not a hardcoded 0.
-    let portrait_gx =
-        unsafe { sample_portrait_gxtexture(base, OWN_STEPPER_SLOT.load(Ordering::SeqCst)) };
-    if commits <= 8 {
-        append_autoload_debug(format_args!(
-            "loading-portrait: forged now-loading background symbol='{sym_string}' -> cap=0x{cap:x} container=0x{container:x} used_portrait={used_portrait} live_gx=0x{live_gx:x} kept_capture=0x{kept_capture:x} bound_gx=0x{kept_portrait:x} portrait_gx_live=0x{portrait_gx:x} tpf_len={} commits={commits} attempts={attempts}",
-            tpf_bytes.len()
-        ));
+    Some(cap)
+}
+
+/// Once the real portrait is baked into LOADING_BG_PORTRAIT_RGBA, OVERWRITE the displayed now-loading
+/// background texture's PIXELS in place via D3D12 upload. Re-forging a new cap doesn't work -- the
+/// Scaleform pump registers the texture by NAME only on the first bind and won't re-read a swapped cap --
+/// so we keep the first forged (1024x1024 checker) texture the pump already bound and just replace its
+/// pixels with the captured 1024 portrait. One-shot. Render/D3D12 work mirrors the slot-dump readback
+/// which runs safely from this same game-thread task.
+pub(crate) unsafe fn maybe_reforge_loading_portrait(base: usize) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let valid = |p: usize| p != 0 && p != null;
+    if PROFILE_BAKE_RGBA_CAPTURED.load(Ordering::SeqCst) == 0 {
+        return;
     }
-    1
+    if LOADING_BG_REFORGE_DONE.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    // The DISPLAYED texture is the one the Scaleform sprite samples by NAME from GLOBAL_TexRepository --
+    // NOT the forge's source container GX. Look it up: GetResCap(GLOBAL_TexRepository, name).gxTexture.
+    let tex_repo = unsafe { safe_read_usize(base + GLOBAL_TEX_REPOSITORY_RVA) }.unwrap_or(0);
+    if !valid(tex_repo) {
+        return;
+    }
+    let tex_name = match LOADING_BG_FIRST_TEX_NAME.lock() {
+        Ok(g) => match g.as_ref() {
+            Some(s) => s.clone(),
+            None => return,
+        },
+        Err(_) => return,
+    };
+    let name_z: Vec<u16> = tex_name.encode_utf16().chain(core::iter::once(0)).collect();
+    let get_res_cap: unsafe extern "system" fn(usize, *const u16) -> usize =
+        unsafe { std::mem::transmute(base + TEX_REPOSITORY_GET_RES_CAP_RVA) };
+    let res_cap = unsafe { get_res_cap(tex_repo, name_z.as_ptr()) };
+    if !valid(res_cap) {
+        return;
+    }
+    let gx = unsafe { safe_read_usize(res_cap + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) }
+        .unwrap_or(0);
+    if !valid(gx) {
+        return;
+    }
+    // Snapshot the captured portrait pixels.
+    let snapshot = match LOADING_BG_PORTRAIT_RGBA.lock() {
+        Ok(g) => g.clone(),
+        Err(_) => return,
+    };
+    let Some((w, h, px)) = snapshot else {
+        return;
+    };
+    if LOADING_BG_REFORGE_DONE.swap(1, Ordering::SeqCst) != 0 {
+        return;
+    }
+    let ok = unsafe { upload_rgba_to_texture(gx, w, h, &px) };
+    append_autoload_debug(format_args!(
+        "loading-portrait: UPLOADED real portrait {w}x{h} into displayed now-loading texture gx=0x{gx:x} ok={ok} (loading screen now shows the real character)"
+    ));
+    if !ok {
+        // Allow a retry next frame if the upload failed (e.g. dim mismatch or transient device state).
+        LOADING_BG_REFORGE_DONE.store(0, Ordering::SeqCst);
+    }
+    let _ = base;
 }
 
 pub(crate) fn install_loading_bg_replace_bind_hook() {

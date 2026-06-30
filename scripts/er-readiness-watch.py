@@ -696,8 +696,9 @@ def telemetry_logo_replacement_capture_ready(telemetry: dict[str, Any] | None) -
     global _LOGO_FIRST_COMMIT_MONOTONIC
     commits = as_int(telemetry.get("oracle_loading_bg_portrait_redirect_commits"), 0)
     builds = as_int(telemetry.get("oracle_loadscreen_table_builds"), 0)
-    rebinds = as_int(telemetry.get("oracle_loading_bg_live_gx_rebinds"), 0)
-    if commits <= 0 or builds <= 0 or rebinds <= 0:
+    # Fire once our own table is built and the forge has committed a now-loading background. (The live-RT
+    # re-bind oracle is NOT required -- the force-checker isolation path intentionally skips it.)
+    if commits <= 0 or builds <= 0:
         return False
     now = time.monotonic()
     if _LOGO_FIRST_COMMIT_MONOTONIC is None:

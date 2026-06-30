@@ -1275,6 +1275,23 @@ pub(crate) static PROFILE_RT_SRV_COPIES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_RT_SRV_COPY_DIAGGED: AtomicUsize = AtomicUsize::new(0);
 /// One-shot guard for dumping the excluding-SRV content texture (slot 102) for visual inspection.
 pub(crate) static PROFILE_CONTENT_EXCL_DUMPED: AtomicUsize = AtomicUsize::new(0);
+/// One-shot guard: set once the target slot's real IBL-lit menu portrait has been captured into
+/// LOADING_BG_PORTRAIT_RGBA for the now-loading forge to bake.
+pub(crate) static PROFILE_BAKE_RGBA_CAPTURED: AtomicUsize = AtomicUsize::new(0);
+/// The FIRST (displayed) now-loading rti the forge bound, plus its bare texture name + encoding. The
+/// sprite commits to the first bind, which happens BEFORE the real portrait is captured -- so once the
+/// portrait is baked we RE-FORGE this exact rti to swap the checker for the portrait on the live screen.
+pub(crate) static LOADING_BG_FIRST_RTI: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LOADING_BG_FIRST_ENCODING: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LOADING_BG_FIRST_TEX_NAME: std::sync::Mutex<Option<String>> =
+    std::sync::Mutex::new(None);
+/// One-shot guard: set once we've re-forged the first rti with the baked portrait.
+pub(crate) static LOADING_BG_REFORGE_DONE: AtomicUsize = AtomicUsize::new(0);
+/// `CS::TexRepositoryImp::GetResCap(repo, wchar_t* name) -> TexResCap*` (dump 0x140b80a90 -> deobf, shift
+/// -0xf0). The TexResCap's `gxTexture` (+TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET = +0x78) is the
+/// EXACT CSGxTexture the Scaleform now-loading sprite samples by name -- distinct from the forge's source
+/// container GX, so we upload the captured portrait into THIS one to actually update the screen.
+pub(crate) const TEX_REPOSITORY_GET_RES_CAP_RVA: usize = 0xb809a0;
 /// Same RGB/ALPHA-max stats but from a readback of the texture actually BOUND into the now-loading
 /// container (what GFx samples), not the renderer's offscreen RT. If the RT (above) has content but this
 /// reads black, the sampleable CSGxTexture is a separate/unresolved resource from the render target.

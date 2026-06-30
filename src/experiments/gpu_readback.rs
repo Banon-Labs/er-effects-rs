@@ -24,7 +24,8 @@ use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12_COMMAND_QUEUE_FLAG_NONE,
     D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_FENCE_FLAG_NONE, D3D12_HEAP_FLAG_NONE,
-    D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_READBACK, D3D12_MEMORY_POOL_UNKNOWN,
+    D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_READBACK, D3D12_HEAP_TYPE_UPLOAD,
+    D3D12_MEMORY_POOL_UNKNOWN, D3D12_RESOURCE_STATE_GENERIC_READ,
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RANGE, D3D12_RESOURCE_BARRIER,
     D3D12_RESOURCE_BARRIER_0, D3D12_RESOURCE_BARRIER_FLAG_NONE,
     D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_BUFFER,
@@ -597,6 +598,213 @@ unsafe fn copy_offscreen_rt_to_srv_inner(src_gpu_child: usize, dst_gpu_child: us
             D3D12_RESOURCE_STATE_COMMON,
         )
     };
+    unsafe {
+        record_transition(
+            &list,
+            &dst,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_COMMON,
+        )
+    };
+    if unsafe { list.Close() }.is_err() {
+        return false;
+    }
+    let Ok(base_list) = list.cast::<ID3D12CommandList>() else {
+        return false;
+    };
+    unsafe { queue.ExecuteCommandLists(&[Some(base_list)]) };
+    let Ok(fence) = (unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }) else {
+        return false;
+    };
+    if unsafe { queue.Signal(&fence, READBACK_FENCE_TARGET) }.is_err() {
+        return false;
+    }
+    if unsafe { fence.GetCompletedValue() } < READBACK_FENCE_TARGET {
+        let Ok(event) = (unsafe { CreateEventW(None, false, false, None) }) else {
+            return false;
+        };
+        if unsafe { fence.SetEventOnCompletion(READBACK_FENCE_TARGET, event) }.is_err() {
+            let _ = unsafe { CloseHandle(event) };
+            return false;
+        }
+        let wait = unsafe { WaitForSingleObject(event, READBACK_FENCE_WAIT_MS) };
+        let _ = unsafe { CloseHandle(event) };
+        if wait != WAIT_OBJECT_0 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Upload tightly-packed RGBA8 `pixels` (`w`x`h`) into the TEXTURE2D found in `dst_gpu_child`'s nest --
+/// overwriting the displayed now-loading background texture's pixels in place, so the Scaleform sprite
+/// (which already registered that texture by name on the first bind) composites the real portrait without
+/// any re-registration. Dims/format must match the destination (R8G8B8A8_UNORM, same w/h). Our own
+/// upload heap + queue/list/fence; the game's resource is borrowed (never Released). Never panics.
+pub(crate) unsafe fn upload_rgba_to_texture(
+    dst_gpu_child: usize,
+    w: u32,
+    h: u32,
+    pixels: &[u8],
+) -> bool {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        upload_rgba_to_texture_inner(dst_gpu_child, w, h, pixels)
+    }))
+    .unwrap_or(false)
+}
+
+unsafe fn upload_rgba_to_texture_inner(
+    dst_gpu_child: usize,
+    w: u32,
+    h: u32,
+    pixels: &[u8],
+) -> bool {
+    if pixels.len() < (w as usize) * (h as usize) * RGBA8_BPP {
+        return false;
+    }
+    let Some(dst) = (unsafe { find_d3d12_resource(dst_gpu_child) }) else {
+        return false;
+    };
+    let desc: D3D12_RESOURCE_DESC = unsafe { dst.GetDesc() };
+    if desc.Width as u32 != w || desc.Height != h {
+        return false; // dim mismatch -- caller must match (e.g. 1024x1024 checker <- 1024 portrait)
+    }
+    let mut device_opt: Option<ID3D12Device> = None;
+    if unsafe { dst.GetDevice(&mut device_opt) }.is_err() {
+        return false;
+    }
+    let Some(device) = device_opt else {
+        return false;
+    };
+    // Copyable footprint of subresource 0 (256-aligned row pitch).
+    let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+    let mut num_rows: u32 = 0;
+    let mut row_size_bytes: u64 = 0;
+    let mut total_bytes: u64 = 0;
+    unsafe {
+        device.GetCopyableFootprints(
+            &desc,
+            0,
+            1,
+            0,
+            Some(&mut footprint),
+            Some(&mut num_rows),
+            Some(&mut row_size_bytes),
+            Some(&mut total_bytes),
+        )
+    };
+    if total_bytes == 0 || footprint.Footprint.RowPitch == 0 {
+        return false;
+    }
+    // UPLOAD-heap buffer sized to the footprint; fill it with the RGBA rows at the 256-aligned pitch.
+    let heap_props = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_UPLOAD,
+        CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+        CreationNodeMask: 1,
+        VisibleNodeMask: 1,
+    };
+    let buffer_desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+        Alignment: 0,
+        Width: total_bytes,
+        Height: 1,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: DXGI_FORMAT_UNKNOWN,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+        Flags: D3D12_RESOURCE_FLAG_NONE,
+    };
+    let mut upload_opt: Option<ID3D12Resource> = None;
+    if unsafe {
+        device.CreateCommittedResource(
+            &heap_props,
+            D3D12_HEAP_FLAG_NONE,
+            &buffer_desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            None,
+            &mut upload_opt,
+        )
+    }
+    .is_err()
+    {
+        return false;
+    }
+    let Some(upload) = upload_opt else {
+        return false;
+    };
+    let row_pitch = footprint.Footprint.RowPitch as usize;
+    let src_row = (w as usize) * RGBA8_BPP;
+    let mut mapped: *mut c_void = std::ptr::null_mut();
+    if unsafe { upload.Map(0, None, Some(&mut mapped)) }.is_err() || mapped.is_null() {
+        return false;
+    }
+    let dstp = mapped as *mut u8;
+    for y in 0..h as usize {
+        let so = y * src_row;
+        let d_o = y * row_pitch;
+        if so + src_row > pixels.len() || (d_o + src_row) as u64 > total_bytes {
+            break;
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(pixels.as_ptr().add(so), dstp.add(d_o), src_row);
+        }
+    }
+    unsafe { upload.Unmap(0, None) };
+    // Record list: dst COMMON -> COPY_DEST, CopyTextureRegion(upload -> dst sub 0), dst back to COMMON.
+    let queue_desc = D3D12_COMMAND_QUEUE_DESC {
+        Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+        Priority: 0,
+        Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
+        NodeMask: 0,
+    };
+    let Ok(queue) = (unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue_desc) }) else {
+        return false;
+    };
+    let Ok(allocator) = (unsafe {
+        device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)
+    }) else {
+        return false;
+    };
+    let Ok(list) = (unsafe {
+        device.CreateCommandList::<_, _, ID3D12GraphicsCommandList>(
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            &allocator,
+            None,
+        )
+    }) else {
+        return false;
+    };
+    unsafe {
+        record_transition(
+            &list,
+            &dst,
+            D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+        )
+    };
+    let mut src_loc = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(upload.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            PlacedFootprint: footprint,
+        },
+    };
+    let mut dst_loc = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(dst.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            SubresourceIndex: 0,
+        },
+    };
+    unsafe { list.CopyTextureRegion(&dst_loc, 0, 0, 0, &src_loc, None) };
+    unsafe { ManuallyDrop::drop(&mut src_loc.pResource) };
+    unsafe { ManuallyDrop::drop(&mut dst_loc.pResource) };
     unsafe {
         record_transition(
             &list,
