@@ -2814,6 +2814,11 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize) {
         unsafe { thunk(spared) };
         PROFILE_PERFRAME_SPARED_DRAWS.fetch_add(1, Ordering::SeqCst);
     }
+    // Q4 KEEPALIVE ORACLE: read the GX render-pass queue (non-destructively) each draw frame to learn
+    // whether a GX pass is queued -- the precondition for any offscreen render producing pixels. Sanity:
+    // it should be non-empty during the menu (things render); the decisive question is whether it stays
+    // non-empty during the now-loading screen (post-Continue).
+    unsafe { profile_gx_queue_sample(base) };
     // IN-PROCESS PIXEL ORACLE (selftest only): after the draw, sample the live slot's offscreen RT and
     // record nonblack% + same-slot hash-change% -- the numbers that replace the human eyeball. Called
     // every frame but self-gates on a live model (no readback cost when none is present), so it catches
@@ -2822,6 +2827,35 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize) {
     let _ = LOOKAT_RT_SAMPLE_INTERVAL;
     if PROFILE_LOOKAT_SELFTEST_ON.load(Ordering::SeqCst) {
         unsafe { profile_lookat_rt_sample(base) };
+    }
+}
+
+/// Q4 keepalive oracle: read the GX render-pass queue head/tail (non-destructively -- NO pop) to detect
+/// whether a GX pass is queued this frame (the precondition the offscreen draw checks via FUN_1419e5850).
+/// g_GxDrawContext may be a pointer-global (heap ctx) or the struct itself; resolve defensively and fall
+/// back to the global address. All reads fault-guarded.
+unsafe fn profile_gx_queue_sample(base: usize) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let valid = |p: usize| p != 0 && p != null;
+    let global = base + GX_DRAW_CONTEXT_RVA;
+    let readable = |c: usize| {
+        valid(c)
+            && unsafe { safe_read_usize(c + GX_DRAW_CONTEXT_QUEUE_HEAD_OFFSET) }.is_some()
+            && unsafe { safe_read_usize(c + GX_DRAW_CONTEXT_QUEUE_TAIL_OFFSET) }.is_some()
+    };
+    // Primary: g_GxDrawContext holds the context pointer (the game passes it directly as the ctx base).
+    let mut ctx = unsafe { safe_read_usize(global) }.unwrap_or(0);
+    if !readable(ctx) {
+        ctx = global; // fallback: the global IS the context struct
+    }
+    if !readable(ctx) {
+        return;
+    }
+    let head = unsafe { safe_read_usize(ctx + GX_DRAW_CONTEXT_QUEUE_HEAD_OFFSET) }.unwrap_or(0);
+    let tail = unsafe { safe_read_usize(ctx + GX_DRAW_CONTEXT_QUEUE_TAIL_OFFSET) }.unwrap_or(0);
+    PROFILE_GX_QUEUE_SAMPLES.fetch_add(1, Ordering::SeqCst);
+    if head != tail {
+        PROFILE_GX_QUEUE_NONEMPTY.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -3005,12 +3039,14 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
             })
             .collect();
         append_autoload_debug(format_args!(
-            "lookat-phase-sweep: frame_begin={n} selected={}({}) selftest={} render_drives={} hook_hits={} rt[samples={} nonblack={} changed={}] spared[ptr=0x{:x} model_ok={} draws={} hits={}] stage0[{}] phase_ticks[{}]",
+            "lookat-phase-sweep: frame_begin={n} selected={}({}) selftest={} render_drives={} hook_hits={} gx[samples={} nonempty={}] rt[samples={} nonblack={} changed={}] spared[ptr=0x{:x} model_ok={} draws={} hits={}] stage0[{}] phase_ticks[{}]",
             PROFILE_LOOKAT_SELECTED_PHASE.load(Ordering::SeqCst),
             LOOKAT_DRAW_PHASE_NAMES[PROFILE_LOOKAT_SELECTED_PHASE.load(Ordering::SeqCst)],
             PROFILE_LOOKAT_SELFTEST_ON.load(Ordering::SeqCst) as u8,
             PROFILE_LOOKAT_RENDER_DRIVES.load(Ordering::SeqCst),
             PROFILE_LOOKAT_HOOK_HITS.load(Ordering::SeqCst),
+            PROFILE_GX_QUEUE_SAMPLES.load(Ordering::SeqCst),
+            PROFILE_GX_QUEUE_NONEMPTY.load(Ordering::SeqCst),
             PROFILE_LOOKAT_RT_SAMPLES.load(Ordering::SeqCst),
             PROFILE_LOOKAT_RT_NONBLACK.load(Ordering::SeqCst),
             PROFILE_LOOKAT_RT_CHANGED.load(Ordering::SeqCst),

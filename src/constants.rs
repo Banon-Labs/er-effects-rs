@@ -1116,6 +1116,16 @@ pub(crate) static PROFILE_PERFRAME_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 /// whether it still has a live model post-Continue -- the persistent-model path the cycling menu can't give.
 pub(crate) static PROFILE_PERFRAME_SPARED_DRAWS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_SPARED_MODEL_OK: AtomicUsize = AtomicUsize::new(0);
+/// Q4 keepalive oracle: g_GxDrawContext global (gamebase + this RVA). The offscreen draw rasterizes only
+/// when FUN_1419e5850(ctx) returns non-zero, i.e. the GX render-pass queue is non-empty: *(ctx+0xf8) !=
+/// *(ctx+0x100). We READ those two qwords non-destructively each draw frame (NO pop) to detect whether a
+/// GX pass is queued -- the decisive runtime question for whether a post-Continue / now-loading offscreen
+/// render can produce pixels at all. Counters: total samples vs frames the queue was non-empty.
+pub(crate) const GX_DRAW_CONTEXT_RVA: usize = 0x47ef360;
+pub(crate) const GX_DRAW_CONTEXT_QUEUE_HEAD_OFFSET: usize = 0xf8;
+pub(crate) const GX_DRAW_CONTEXT_QUEUE_TAIL_OFFSET: usize = 0x100;
+pub(crate) static PROFILE_GX_QUEUE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_GX_QUEUE_NONEMPTY: AtomicUsize = AtomicUsize::new(0);
 /// Registry of the live profile PoseHolder pointers the game-task tick has resolved as "ours" (0 =
 /// empty). The hook only applies look-at to a holder in this set; the c0000 head/neck/spine2 indices
 /// are the shared `PROFILE_LOOKAT_*_IDX` globals above, and the angle is the shared yaw/pitch below.
