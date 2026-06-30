@@ -2254,6 +2254,364 @@ pub(crate) fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
 /// path -- this validates P1 (the model build) in isolation. Targets slot 0 (the staged single-profile
 /// gold save's character). `slot` is the target save slot (0 for the staged single-profile gold
 /// save; the autoload path passes its own target slot).
+/// Read the OS mouse cursor -- which IS the menu cursor ER drives via `GetCursorPos` -- normalized to
+/// the ER window client space: returns `(nx, ny)` where `(0,0)` is the window CENTER, `nx`/`ny` in
+/// roughly `[-1, 1]` (left/up negative, right/down positive). `None` if the window or cursor can't be
+/// resolved. Used to aim the portrait look-at at the cursor. (Cheap pure Win32; no game state touched.)
+fn read_cursor_normalized() -> Option<(f32, f32)> {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, GetWindowRect};
+    let hwnd = own_window()?;
+    let mut pt = POINT { x: 0, y: 0 };
+    if unsafe { GetCursorPos(&mut pt) }.is_err() {
+        return None;
+    }
+    // Window rect is screen-space; ER's borderless window == its client area, so normalizing the
+    // screen cursor against it gives the cursor position relative to the rendered image.
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
+        return None;
+    }
+    let w = (rect.right - rect.left).max(1) as f32;
+    let h = (rect.bottom - rect.top).max(1) as f32;
+    let nx = ((pt.x - rect.left) as f32 / w) * 2.0 - 1.0;
+    let ny = ((pt.y - rect.top) as f32 / h) * 2.0 - 1.0;
+    // Clamp a little beyond the edges so an off-window cursor saturates rather than flailing.
+    Some((nx.clamp(-1.5, 1.5), ny.clamp(-1.5, 1.5)))
+}
+
+/// Hamilton product `a * b` of two `(x, y, z, w)` quaternions (w = scalar, matching `BoneData.q`).
+fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    let [ax, ay, az, aw] = a;
+    let [bx, by, bz, bw] = b;
+    [
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
+    ]
+}
+
+/// A small look rotation: `yaw` about the local Y axis then `pitch` about the local X axis, as a
+/// `(x, y, z, w)` quaternion. (Which local axis actually reads as horizontal/vertical for the head
+/// bone needs one runtime visual calibration; the `LOOKAT_*_SIGN` consts flip it without a code change.)
+fn quat_from_yaw_pitch(yaw: f32, pitch: f32) -> [f32; 4] {
+    let (sy, cy) = (yaw * 0.5).sin_cos();
+    let (sp, cp) = (pitch * 0.5).sin_cos();
+    let q_yaw = [0.0, sy, 0.0, cy];
+    let q_pitch = [sp, 0.0, 0.0, cp];
+    quat_mul(q_yaw, q_pitch)
+}
+
+/// Read a bounded null-terminated ASCII bone name from an `hkStringPtr` (low bit is an ownership flag,
+/// masked by the caller). `None` on unmapped memory or non-UTF8 (bone names are ASCII; no lossy decode).
+unsafe fn read_bone_name(ptr: usize) -> Option<String> {
+    if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(32);
+    for i in 0..64usize {
+        let b = unsafe { safe_read_u8(ptr + i) }?;
+        if b == 0 {
+            break;
+        }
+        bytes.push(b);
+    }
+    if bytes.is_empty() {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
+}
+
+/// Reach the live Havok `PoseHolder` from the renderer: `poseHolder = *(*(R+0x948)+0x20) + 0x48`,
+/// guarded on the built model (`R+0x778`). `None` until the model + animation location are live.
+unsafe fn profile_pose_holder(renderer: usize) -> Option<usize> {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let valid = |p: usize| p != 0 && p != null;
+    let model = unsafe { safe_read_usize(renderer + PROFILE_RENDERER_MODEL_INS_OFFSET) }?;
+    if !valid(model) {
+        return None;
+    }
+    let x = unsafe { safe_read_usize(renderer + PROFILE_LOOKAT_ANIM_LOCATION_OFFSET) }?;
+    if !valid(x) {
+        return None;
+    }
+    let importer = unsafe { safe_read_usize(x + PROFILE_LOOKAT_IMPORTER_OFFSET) }?;
+    if !valid(importer) {
+        return None;
+    }
+    Some(importer + PROFILE_LOOKAT_POSEHOLDER_OFFSET)
+}
+
+/// Enumerate the skeleton's bones, dump names+indices ONCE per slot (diagnostic), and resolve the
+/// Head/Neck/Spine2 indices by name. Returns `(head, neck, spine2)` indices (`-1` = not found).
+unsafe fn dump_and_resolve_lookat_bones(bones: usize, count: usize, slot: i32) -> (i32, i32, i32) {
+    let (mut head, mut neck, mut spine2) = (-1i32, -1i32, -1i32);
+    let dump = (PROFILE_LOOKAT_BONES_DUMPED_MASK.load(Ordering::SeqCst) & (1usize << slot)) == 0;
+    let mut dumped = String::new();
+    for i in 0..count.min(LOOKAT_MAX_BONES) {
+        let name_ptr =
+            unsafe { safe_read_usize(bones + i * HKA_BONE_STRIDE + HKA_BONE_NAME_OFFSET) }
+                .unwrap_or(0)
+                & !1usize;
+        let Some(name) = (unsafe { read_bone_name(name_ptr) }) else {
+            continue;
+        };
+        if name.eq_ignore_ascii_case(LOOKAT_BONE_HEAD) {
+            head = i as i32;
+        } else if name.eq_ignore_ascii_case(LOOKAT_BONE_NECK) {
+            neck = i as i32;
+        } else if name.eq_ignore_ascii_case(LOOKAT_BONE_SPINE2) {
+            spine2 = i as i32;
+        }
+        if dump {
+            let _ = write!(dumped, "{i}:{name} ");
+        }
+    }
+    if dump {
+        PROFILE_LOOKAT_BONES_DUMPED_MASK.fetch_or(1usize << slot, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "lookat-bones: slot={slot} count={count} head={head} neck={neck} spine2={spine2} :: {dumped}"
+        ));
+    }
+    (head, neck, spine2)
+}
+
+/// Pack a normalized cursor `(cx, cy)` into a usize as two i16 milli-units for telemetry.
+fn pack_cursor(cx: f32, cy: f32) -> usize {
+    let xi = (cx.clamp(-2.0, 2.0) * 1000.0) as i16 as u16 as usize;
+    let yi = (cy.clamp(-2.0, 2.0) * 1000.0) as i16 as u16 as usize;
+    (xi << 16) | yi
+}
+
+/// LOOK-AT LEVER: rotate the loaded character's Head/Neck/Spine2 bones toward the mouse cursor so the
+/// portrait's gaze (eyes welded to the Head bone) follows it. Per tick: reach the pose holder, resolve
+/// + latch the base pose ONCE, read the cursor, write each bone's LOCAL quaternion = `base ⊗ delta`,
+/// then mark every bone's model-space dirty + `isUpdated=false` so the render's `updateBoneModelSpace`
+/// rebuilds the chain (and the head's children) before the offscreen draw. `renderer` must be a
+/// validated live CSMenuProfModelRend. Returns true once a rotation was written.
+unsafe fn apply_profile_lookat(renderer: usize, slot: i32) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let valid = |p: usize| p != 0 && p != null;
+    let idx = slot as usize;
+    if idx >= TITLE_PROFILE_SLOT_COUNT {
+        return false;
+    }
+    let holder = match unsafe { profile_pose_holder(renderer) } {
+        Some(h) => h,
+        None => {
+            // Model/pose not live yet: unregister so the hook won't touch a stale holder pointer.
+            PROFILE_LOOKAT_HOLDERS[idx].store(0, Ordering::SeqCst);
+            return false;
+        }
+    };
+    let skel = unsafe { safe_read_usize(holder + POSEHOLDER_SKELETON_OFFSET) }.unwrap_or(0);
+    if !valid(skel) {
+        return false;
+    }
+    let bones = unsafe { safe_read_usize(skel + HKA_SKELETON_BONES_DATA_OFFSET) }.unwrap_or(0);
+    let count = unsafe { safe_read_i32(skel + HKA_SKELETON_BONES_SIZE_OFFSET) }.unwrap_or(0);
+    if !valid(bones) || count <= 0 || count as usize > LOOKAT_MAX_BONES {
+        return false;
+    }
+    let count = count as usize;
+    PROFILE_LOOKAT_BONE_COUNT.store(count, Ordering::SeqCst);
+    // Resolve the Head/Neck/Spine2 indices once per slot (+ dump bone names once). The hook reads the
+    // shared PROFILE_LOOKAT_*_IDX globals; per-slot caching here just avoids re-dumping the names.
+    {
+        let mut guard = match PROFILE_LOOKAT_SLOTS.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if guard[idx].is_none() {
+            let (head, neck, spine2) = unsafe { dump_and_resolve_lookat_bones(bones, count, slot) };
+            if head < 0 {
+                return false; // head bone not found yet; retry next tick
+            }
+            guard[idx] = Some(LookatSlot { head, neck, spine2 });
+            PROFILE_LOOKAT_HEAD_IDX.store(head as usize, Ordering::SeqCst);
+            PROFILE_LOOKAT_NECK_IDX.store(
+                if neck >= 0 { neck as usize } else { usize::MAX },
+                Ordering::SeqCst,
+            );
+            PROFILE_LOOKAT_SPINE2_IDX.store(
+                if spine2 >= 0 {
+                    spine2 as usize
+                } else {
+                    usize::MAX
+                },
+                Ordering::SeqCst,
+            );
+        }
+    }
+    // Register this holder as ours and publish the latest cursor angle. The actual pose write happens
+    // in the updateBoneModelSpace hook (a game-task write is clobbered by the per-frame anim re-import).
+    PROFILE_LOOKAT_HOLDERS[idx].store(holder, Ordering::SeqCst);
+    let (cx, cy) = read_cursor_normalized().unwrap_or((0.0, 0.0));
+    PROFILE_LOOKAT_LAST_CURSOR.store(pack_cursor(cx, cy), Ordering::SeqCst);
+    PROFILE_LOOKAT_YAW_BITS.store((cx * LOOKAT_YAW_SIGN).to_bits() as usize, Ordering::SeqCst);
+    PROFILE_LOOKAT_PITCH_BITS.store(
+        (cy * LOOKAT_PITCH_SIGN).to_bits() as usize,
+        Ordering::SeqCst,
+    );
+    install_lookat_hook();
+    PROFILE_LOOKAT_APPLY_CALLS.fetch_add(1, Ordering::SeqCst);
+    true
+}
+
+/// Read a `BoneData` quaternion (4 f32 at `addr`) with fault-guarded reads; `None` on unmapped memory.
+unsafe fn read_quat(addr: usize) -> Option<[f32; 4]> {
+    Some([
+        f32::from_bits(unsafe { safe_read_i32(addr) }? as u32),
+        f32::from_bits(unsafe { safe_read_i32(addr + 4) }? as u32),
+        f32::from_bits(unsafe { safe_read_i32(addr + 8) }? as u32),
+        f32::from_bits(unsafe { safe_read_i32(addr + 12) }? as u32),
+    ])
+}
+
+/// Compose the cursor look rotation onto a registered profile holder's Head/Neck/Spine2 LOCAL
+/// quaternions (post-multiplied onto the current anim pose) and mark all bones model-space dirty, so the
+/// `updateBoneModelSpace` original we are about to call rebuilds the final rendered pose with the
+/// look-at baked in. Runs on the render thread inside the hook; every read is fault-guarded + bounded.
+unsafe fn lookat_write_local(holder: usize) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let valid = |p: usize| p != 0 && p != null;
+    let local = unsafe { safe_read_usize(holder + POSEHOLDER_LOCAL_BONE_DATA_OFFSET) }.unwrap_or(0);
+    let dirty = unsafe { safe_read_usize(holder + POSEHOLDER_DIRTY_FLAGS_OFFSET) }.unwrap_or(0);
+    let skel = unsafe { safe_read_usize(holder + POSEHOLDER_SKELETON_OFFSET) }.unwrap_or(0);
+    if !valid(local) || !valid(dirty) || !valid(skel) {
+        return;
+    }
+    let count = unsafe { safe_read_i32(skel + HKA_SKELETON_BONES_SIZE_OFFSET) }.unwrap_or(0);
+    if count <= 0 || count as usize > LOOKAT_MAX_BONES {
+        return;
+    }
+    let count = count as usize;
+    let yaw = f32::from_bits(PROFILE_LOOKAT_YAW_BITS.load(Ordering::SeqCst) as u32);
+    let pitch = f32::from_bits(PROFILE_LOOKAT_PITCH_BITS.load(Ordering::SeqCst) as u32);
+    let drives = [
+        (
+            PROFILE_LOOKAT_HEAD_IDX.load(Ordering::SeqCst),
+            LOOKAT_HEAD_YAW_GAIN,
+            LOOKAT_HEAD_PITCH_GAIN,
+        ),
+        (
+            PROFILE_LOOKAT_NECK_IDX.load(Ordering::SeqCst),
+            LOOKAT_NECK_YAW_GAIN,
+            LOOKAT_NECK_PITCH_GAIN,
+        ),
+        (
+            PROFILE_LOOKAT_SPINE2_IDX.load(Ordering::SeqCst),
+            LOOKAT_SPINE2_YAW_GAIN,
+            LOOKAT_SPINE2_PITCH_GAIN,
+        ),
+    ];
+    let mut any = false;
+    for (bidx, yg, pg) in drives {
+        if bidx == usize::MAX || bidx >= count {
+            continue;
+        }
+        let q0 = local + bidx * BONE_DATA_STRIDE + BONE_DATA_Q_OFFSET;
+        let Some(cur) = (unsafe { read_quat(q0) }) else {
+            continue;
+        };
+        let q = quat_mul(cur, quat_from_yaw_pitch(yaw * yg, pitch * pg));
+        if !q.iter().all(|f| f.is_finite()) {
+            continue;
+        }
+        unsafe {
+            core::ptr::write_volatile(q0 as *mut f32, q[0]);
+            core::ptr::write_volatile((q0 + 4) as *mut f32, q[1]);
+            core::ptr::write_volatile((q0 + 8) as *mut f32, q[2]);
+            core::ptr::write_volatile((q0 + 12) as *mut f32, q[3]);
+        }
+        any = true;
+    }
+    if any {
+        for i in 0..count {
+            let f = dirty + i * 4;
+            let cur = unsafe { safe_read_i32(f) }.unwrap_or(0) as u32;
+            unsafe {
+                core::ptr::write_volatile(f as *mut u32, cur | POSE_DIRTY_MODEL_SPACE_BIT);
+            }
+        }
+        unsafe {
+            core::ptr::write_volatile((holder + POSEHOLDER_IS_UPDATED_OFFSET) as *mut u8, 0);
+        }
+        PROFILE_LOOKAT_HOOK_HITS.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// Hook on `updateBoneModelSpace`: for a registered profile holder, write the look-at into the local
+/// pose BEFORE the original recomputes model-space, so the rotation cascades into the rendered pose.
+pub(crate) unsafe extern "system" fn update_bone_model_space_hook(holder: usize) {
+    if holder != 0 {
+        let ours = PROFILE_LOOKAT_HOLDERS
+            .iter()
+            .any(|h| h.load(Ordering::SeqCst) == holder);
+        if ours {
+            unsafe { lookat_write_local(holder) };
+        }
+    }
+    let orig = PROFILE_LOOKAT_HOOK_ORIG.load(Ordering::SeqCst);
+    if orig != TITLE_OWNER_SCAN_START_ADDRESS && orig != HOOK_ORIGINAL_UNSET {
+        let f: unsafe extern "system" fn(usize) = unsafe { core::mem::transmute(orig) };
+        unsafe { f(holder) };
+    }
+}
+
+fn install_lookat_hook() {
+    if PROFILE_LOOKAT_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "lookat-hook: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(target) = game_rva(UPDATE_BONE_MODEL_SPACE_RVA as u32) else {
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            target as *mut c_void,
+            update_bone_model_space_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            PROFILE_LOOKAT_HOOK_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if unsafe { hook.queue_enable() }.is_err() {
+                append_autoload_debug(format_args!(
+                    "lookat-hook: queue_enable failed for 0x{target:x}"
+                ));
+                return;
+            }
+            std::mem::forget(hook);
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!("lookat-hook: MhHook::new failed: {status:?}"));
+            return;
+        }
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => append_autoload_debug(format_args!(
+            "lookat-hook: installed on updateBoneModelSpace 0x{target:x}"
+        )),
+        status => append_autoload_debug(format_args!(
+            "lookat-hook: MH_ApplyQueued failed: {status:?}"
+        )),
+    }
+}
+
 /// CAMERA LEVER: override one profile renderer's orbit camera with a custom viewport (closer, off-axis
 /// framing), proving the lever on the still dump. Replicates the tail of the engine's own camera routine
 /// `FUN_140bbe190` WITHOUT its `MenuOffscrRendParam` read (so it never clobbers our override): latch the
@@ -2470,6 +2828,13 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
         append_autoload_debug(format_args!(
             "force-profile-render: REBUILD cycle (counter={counter}) -- cleared latches + marked ALL 10 + refreshed (summary=0x{summary:x})"
         ));
+        // The model is being rebuilt: drop the cached look-at indices/base so they re-resolve and
+        // re-latch the idle base from the fresh skeleton (guards a stale index if a different/smaller
+        // skeleton ever occupies the slot post-rebuild).
+        match PROFILE_LOOKAT_SLOTS.lock() {
+            Ok(mut g) => *g = [None; 10],
+            Err(p) => *p.into_inner() = [None; 10],
+        }
     }
     // ~80 ticks AFTER each rebuild kick, reset the dump mask so the freshly-rebuilt models (not the
     // stale pre-clear model_ins) get re-dumped. Each cycle's dumps overwrite the per-slot files.
@@ -2487,6 +2852,25 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                     == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
             {
                 unsafe { apply_profile_camera_override(base, r, s) };
+            }
+        }
+    }
+    // LOOK-AT LEVER: every tick, rotate each live renderer's Head/Neck/Spine2 bones toward the mouse
+    // cursor so the portrait's gaze follows it (eyes are welded to the Head bone). Separate gate from
+    // the camera/dump so the riskier bone-write path can be toggled on its own.
+    if portrait_lookat_enabled() {
+        for s in 0..TITLE_PROFILE_SLOT_COUNT as i32 {
+            let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
+            if valid(r)
+                && unsafe { safe_read_usize(r) }.unwrap_or(0)
+                    == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+            {
+                unsafe { apply_profile_lookat(r, s) };
+                // NOTE: driving the offscreen re-render per-tick from the game task (FUN_140bb8d90) was
+                // tried to fix the ~4s render-cadence lag, but it renders BLACK (the render must run on
+                // the render thread -- the keepalive TIER-2 blocker), clobbering the good rebuild render.
+                // So the look-at tracks the cursor at the model-rebuild cadence until keepalive lands.
+                let _ = PROFILE_OFFSCREEN_DRIVE_RVA;
             }
         }
     }

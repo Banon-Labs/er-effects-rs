@@ -133,6 +133,21 @@ pub(crate) fn portrait_real_pixels_enabled() -> bool {
         .join("er-effects-portrait-real-pixels.txt")
         .exists()
 }
+/// DEFAULT-OFF gate for the portrait LOOK-AT lever (head/eyes follow the mouse cursor). When on, the
+/// per-tick `force_profile_render_tick` reaches the loaded character's Havok pose holder and rotates the
+/// Head/Neck/Spine2 bone local quaternions toward the cursor (ER eyes are welded to the Head bone, so
+/// the eyes track as the head turns). Isolated from `portrait_real_pixels` so the riskier bone-write
+/// path can be toggled independently of the proven camera/dump path. Mirrors `force_profile_render`
+/// (env OR file). Requires `force_profile_render` (the render that builds the model + drives the pose).
+pub(crate) fn portrait_lookat_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_PORTRAIT_LOOKAT").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-portrait-lookat.txt")
+        .exists()
+}
 /// Kill-switch to skip installing the continue_trace hooks (bisecting a ~19s
 /// title crash caused by our DLL). When set, the continue/load-flow hooks are
 /// not installed even if autoload is configured.

@@ -1008,6 +1008,97 @@ pub(crate) struct OffscreenRenderCamParams {
 }
 const _: () = assert!(core::mem::size_of::<OffscreenRenderCamParams>() == 0xc4);
 const _: () = assert!(core::mem::align_of::<OffscreenRenderCamParams>() == 4);
+// ---------------------------------------------------------------------------------------------------
+// LOOK-AT LEVER (portrait head/eyes follow the mouse cursor). VERIFIED RE 2026-06-29 -- bd
+// `portrait-lookat-RE-VERIFIED-2026-06-29`. ER's c0000 rig has NO eye bone: the eyes are FaceGen mesh
+// rigidly skinned to the single "Head" bone, so gaze is delivered by rotating Spine2->Neck->Head; the
+// eyes follow because they ride the head. We rotate those bones' LOCAL quaternions toward the cursor.
+//
+// REACH (per tick, from renderer R = CSMenuProfModelRend*): require *(R+0x778) != 0 (model built);
+// X = *(R + ANIM_LOCATION) ; importer = *(X + IMPORTER) ; poseHolder = importer + POSEHOLDER (embedded,
+// not a deref). Verified at FUN_140bba7d0 + GetPosHolder (lea rax,[rcx+0x48]).
+pub(crate) const PROFILE_LOOKAT_ANIM_LOCATION_OFFSET: usize = 0x948;
+pub(crate) const PROFILE_LOOKAT_IMPORTER_OFFSET: usize = 0x20;
+pub(crate) const PROFILE_LOOKAT_POSEHOLDER_OFFSET: usize = 0x48;
+/// `CSFD4LocationHkaPoseImporter::PoseHolder` (0x50) field offsets.
+pub(crate) const POSEHOLDER_SKELETON_OFFSET: usize = 0x0; // hkaSkeleton*
+pub(crate) const POSEHOLDER_LOCAL_BONE_DATA_OFFSET: usize = 0x8; // hkArray<BoneData>.data
+pub(crate) const POSEHOLDER_MODEL_BONE_DATA_OFFSET: usize = 0x18; // hkArray<BoneData>.data
+pub(crate) const POSEHOLDER_DIRTY_FLAGS_OFFSET: usize = 0x28; // uint*[boneCount] bitflags (stride 4)
+pub(crate) const POSEHOLDER_IS_UPDATED_OFFSET: usize = 0x38; // bool
+/// `BoneData` (0x30): xyz @+0x0, q (quaternion x,y,z,w) @+0x10, scale @+0x20.
+pub(crate) const BONE_DATA_STRIDE: usize = 0x30;
+pub(crate) const BONE_DATA_Q_OFFSET: usize = 0x10;
+/// `hkaSkeleton` (0x90, get_structure-verified) + `hkaBone` (0x10) field offsets.
+pub(crate) const HKA_SKELETON_PARENT_INDICES_DATA_OFFSET: usize = 0x20; // hkArray<i16>.data
+pub(crate) const HKA_SKELETON_BONES_DATA_OFFSET: usize = 0x30; // hkArray<hkaBone>.data
+pub(crate) const HKA_SKELETON_BONES_SIZE_OFFSET: usize = 0x38; // i32 bone count
+pub(crate) const HKA_BONE_STRIDE: usize = 0x10;
+pub(crate) const HKA_BONE_NAME_OFFSET: usize = 0x0; // hkStringPtr (char* ASCII; mask bit0 owner flag)
+/// `dirtyFlags[idx] |= this` marks a bone's model-space transform stale so `updateBoneModelSpace`
+/// rebuilds it (and its descendants) from the local pose before the offscreen render.
+pub(crate) const POSE_DIRTY_MODEL_SPACE_BIT: u32 = 0x2;
+/// Bone names we drive (standard ER c0000 names, confirmed via the ragdoll bone map FUN_141d700c0).
+pub(crate) const LOOKAT_BONE_HEAD: &str = "Head";
+pub(crate) const LOOKAT_BONE_NECK: &str = "Neck";
+pub(crate) const LOOKAT_BONE_SPINE2: &str = "Spine2";
+/// Max bones we will scan/dump (a c0000 skeleton is well under this; bounds the runtime enumeration).
+pub(crate) const LOOKAT_MAX_BONES: usize = 512;
+/// Cursor -> look angle gains (radians at the window edge). Head carries the bulk (eyes are welded to
+/// it); neck/spine2 add a natural distributed turn. Yaw = horizontal, pitch = vertical. SIGN + which
+/// local bone axis each maps to need ONE runtime visual calibration (the portrait camera mirrors L/R).
+pub(crate) const LOOKAT_HEAD_YAW_GAIN: f32 = 0.34;
+pub(crate) const LOOKAT_HEAD_PITCH_GAIN: f32 = 0.22;
+pub(crate) const LOOKAT_NECK_YAW_GAIN: f32 = 0.15;
+pub(crate) const LOOKAT_NECK_PITCH_GAIN: f32 = 0.10;
+pub(crate) const LOOKAT_SPINE2_YAW_GAIN: f32 = 0.08;
+pub(crate) const LOOKAT_SPINE2_PITCH_GAIN: f32 = 0.05;
+/// Sign flips for runtime calibration without a rebuild loop (set from the first visual check).
+pub(crate) const LOOKAT_YAW_SIGN: f32 = 1.0;
+pub(crate) const LOOKAT_PITCH_SIGN: f32 = 1.0;
+/// Per-renderer-slot cached look-at state: the resolved Head/Neck/Spine2 bone indices and the latched
+/// base (idle) local quaternions, captured ONCE so the per-tick rotation composes from an immutable
+/// base (drift-free). `-1` index = bone not found in this slot's skeleton.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LookatSlot {
+    pub head: i32,
+    pub neck: i32,
+    pub spine2: i32,
+}
+pub(crate) static PROFILE_LOOKAT_SLOTS: std::sync::Mutex<[Option<LookatSlot>; 10]> =
+    std::sync::Mutex::new([None; 10]);
+/// Look-at telemetry (RAM semaphores): apply count, resolved bone indices (packed), live bone count,
+/// last normalized cursor (packed i16 x/y * 1000), and a one-shot bone-name dump latch (bit per slot).
+pub(crate) static PROFILE_LOOKAT_APPLY_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_LOOKAT_HEAD_IDX: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static PROFILE_LOOKAT_NECK_IDX: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static PROFILE_LOOKAT_SPINE2_IDX: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static PROFILE_LOOKAT_BONE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_LOOKAT_LAST_CURSOR: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_LOOKAT_BONES_DUMPED_MASK: AtomicUsize = AtomicUsize::new(0);
+/// `updateBoneModelSpace` (dump 0x141653370) -> deobf 0x141653350 (shift -0x20, content-unique). The
+/// render calls this (via `GetBoneModelSpace`) each frame to rebuild `modelSpaceBoneData` from the
+/// (anim-imported) `localSpaceBoneData` for every dirty bone. We HOOK it: before the original runs, we
+/// compose the cursor rotation onto the Head/Neck/Spine2 LOCAL quaternions and mark all bones dirty, so
+/// the original's recompute cascades our rotation into the final pose the render skins from. This is the
+/// only injection point that survives the per-frame anim re-import (a game-task write is clobbered).
+pub(crate) const UPDATE_BONE_MODEL_SPACE_RVA: usize = 0x1653350;
+/// Registry of the live profile PoseHolder pointers the game-task tick has resolved as "ours" (0 =
+/// empty). The hook only applies look-at to a holder in this set; the c0000 head/neck/spine2 indices
+/// are the shared `PROFILE_LOOKAT_*_IDX` globals above, and the angle is the shared yaw/pitch below.
+pub(crate) static PROFILE_LOOKAT_HOLDERS: [AtomicUsize; 10] = [const { AtomicUsize::new(0) }; 10];
+/// Latest cursor look angles (f32 bits), written by the tick, read by the hook each render frame.
+pub(crate) static PROFILE_LOOKAT_YAW_BITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_LOOKAT_PITCH_BITS: AtomicUsize = AtomicUsize::new(0);
+/// `updateBoneModelSpace` hook trampoline / install latch / per-frame hit count (RAM semaphore that the
+/// hook is firing for our holders -- the proof the injection point is on the menu render path).
+pub(crate) static PROFILE_LOOKAT_HOOK_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static PROFILE_LOOKAT_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_LOOKAT_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Count of per-tick offscreen re-render drives (`FUN_140bb8d90`). Without this the forced portrait only
+/// re-renders at the ~4s model-rebuild cadence, so the head appears to track the cursor with seconds of
+/// lag; driving the offscreen render each tick (menu phase only -- valid GxDrawContext) makes it smooth.
+pub(crate) static PROFILE_LOOKAT_RENDER_DRIVES: AtomicUsize = AtomicUsize::new(0);
 /// DEFAULT-OFF gate for the ProfileSelect load flow (see `profile_select_load_flow_enabled`). When
 /// false (default) `product_core_autoload_tick` takes the PROVEN native Continue commit, byte-for-byte
 /// unchanged; the human flips this on only to probe-test the portrait-rendering ProfileSelect path

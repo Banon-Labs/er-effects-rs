@@ -2041,6 +2041,58 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_profile_cam_last_matrix_ok",
             PROFILE_CAM_LAST_MATRIX_OK.load(Ordering::SeqCst) != 0,
         );
+        // Look-at lever RAM semaphores: a watcher can confirm the pose was reached, the Head/Neck/
+        // Spine2 bones were resolved, and the per-tick rotation is firing -- without an image.
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_apply_calls",
+            PROFILE_LOOKAT_APPLY_CALLS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_bone_count",
+            PROFILE_LOOKAT_BONE_COUNT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_head_idx",
+            PROFILE_LOOKAT_HEAD_IDX.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_neck_idx",
+            PROFILE_LOOKAT_NECK_IDX.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_spine2_idx",
+            PROFILE_LOOKAT_SPINE2_IDX.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_bones_dumped_mask",
+            PROFILE_LOOKAT_BONES_DUMPED_MASK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_last_cursor",
+            PROFILE_LOOKAT_LAST_CURSOR.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_hook_installed",
+            PROFILE_LOOKAT_HOOK_INSTALLED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_hook_hits",
+            PROFILE_LOOKAT_HOOK_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_render_drives",
+            PROFILE_LOOKAT_RENDER_DRIVES.load(Ordering::SeqCst),
+        );
         body.push_str(&format!(
             "  \"oracle_native_profile_capture_enabled\": {},\n  \"oracle_native_load_game_fired\": {},\n  \"oracle_native_load_game_last_node\": {},\n  \"oracle_native_load_game_last_node_vtable\": {},\n  \"oracle_native_load_game_last_member_dialog\": {},\n  \"oracle_native_load_game_last_member_fn\": {},\n  \"oracle_native_load_game_last_member_adjust\": {},\n  \"oracle_native_profile_source_ready\": {},\n  \"oracle_native_profile_source_name\": \"{}\",\n  \"oracle_native_profile_renderer_class\": \"{}\",\n",
             native_profile_capture_enabled(),
