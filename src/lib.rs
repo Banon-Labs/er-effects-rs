@@ -1027,6 +1027,25 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             move |_task_data: &FD4TaskData| profile_lookat_phase_diag_tick(),
             CSTaskGroupIndex::FrameBegin,
         );
+        // BUILD-OWN LIVE-RENDER DRIVER (gated, FrameBegin = GAME thread, ticks EVERY frame incl. the
+        // loading screen). force_profile_render_tick's only other call sites are menu-phase-only (they
+        // `return` before Continue), so maybe_build_profile_table_for_loading + the mark/refresh feed never
+        // ran post-Continue -> loadbuilds=0, the loaded character never re-built. Driving it here gives the
+        // build-own path a post-Continue game-thread driver: it builds our OWN profile renderers (engine
+        // 10-slot builder), which self-register their ResMan model build/draw tasks and OWN their model with
+        // OUR lifetime (no teardown-free -> no AV, unlike re-attaching the dying menu model). The fn
+        // self-gates heavily (table-ready, feature gates, one-shots), so an every-frame call is idempotent.
+        // Gated by portrait_render_drive_enabled so it can be A/B'd against the safe checker baseline.
+        cs_task.run_recurring(
+            move |_task_data: &FD4TaskData| {
+                if portrait_render_drive_enabled() {
+                    if let Ok(base) = game_module_base() {
+                        unsafe { force_profile_render_tick(base, FORCE_PROFILE_RENDER_MANUAL_SLOT) };
+                    }
+                }
+            },
+            CSTaskGroupIndex::FrameBegin,
+        );
     });
 }
 

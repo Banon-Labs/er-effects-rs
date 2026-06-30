@@ -100,6 +100,10 @@ unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32)
     if this_u == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
         let base = GAME_BASE.load(Ordering::SeqCst);
         if base != 0 {
+            // NOTE: the offscreen RASTERIZE is NOT driven here. Present is the WRONG GX phase -- the frame's
+            // GX recording is already closed, so the subcontext pool pop no-ops (black). The rasterize is
+            // driven from profile_lookat_realtime_draw_tick (a DRAW-phase CSTaskImp task, live recording
+            // frame). This hook only does the static composite of an already-captured RGBA.
             let _ = unsafe { composite_portrait_on_swapchain(base, this_u) };
         }
     }

@@ -1519,76 +1519,12 @@ fn er_tpf_cover_blob() -> &'static [u8] {
 /// real call is attempted, so a not-yet-initialized repo simply retries next tick. The actual DRAW
 /// redirect (pointing the visible profile surface's bind TARGET at our key) is a separate one-shot in
 /// the Scaleform bind observer, gated on `ER_TPF_COVER_REGISTERED`.
-pub(crate) unsafe fn maybe_register_er_tpf_cover_texture(base: usize) {
-    let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    if ER_TPF_COVER_REGISTER_ATTEMPTED.load(Ordering::SeqCst) != 0 {
-        return;
-    }
-    if base == 0 || base == null {
-        ER_TPF_COVER_LAST_ERROR.store(ER_TPF_COVER_ERR_BASE_UNRESOLVED, Ordering::SeqCst);
-        return; // base not resolved yet -> retry (one-shot not consumed)
-    }
-    // Precondition: both singletons live (gfx + repos initialized). A null repo would make the engine's
-    // own DLPanic fire (non-returning). Do NOT latch the one-shot here -- just retry next tick.
-    let tpf_repo = unsafe { safe_read_usize(base + GLOBAL_TPF_REPOSITORY_RVA) }.unwrap_or(0);
-    if tpf_repo == 0 || tpf_repo == null {
-        ER_TPF_COVER_LAST_ERROR.store(ER_TPF_COVER_ERR_TPF_REPO_NULL, Ordering::SeqCst);
-        return;
-    }
-    let tex_repo = unsafe { safe_read_usize(base + GLOBAL_TEX_REPOSITORY_RVA) }.unwrap_or(0);
-    if tex_repo == 0 || tex_repo == null {
-        ER_TPF_COVER_LAST_ERROR.store(ER_TPF_COVER_ERR_TEX_REPO_NULL, Ordering::SeqCst);
-        return;
-    }
-    // Preconditions met: commit the ONE-SHOT now so the native call fires exactly once even on failure.
-    if ER_TPF_COVER_REGISTER_ATTEMPTED.swap(1, Ordering::SeqCst) != 0 {
-        return;
-    }
-    let blob = er_tpf_cover_blob();
-    if blob.is_empty() {
-        ER_TPF_COVER_FAILURES.fetch_add(1, Ordering::SeqCst);
-        ER_TPF_COVER_LAST_ERROR.store(ER_TPF_COVER_ERR_BLOB_EMPTY, Ordering::SeqCst);
-        return;
-    }
-    // wchar_t* texName for the TpfRepository file-cap label (NUL-terminated UTF-16). Reuse the key
-    // string; the GPU repo key still derives from the TPF entry name, not this label.
-    let mut name_w: Vec<u16> = ER_TPF_COVER_SYSTEX_KEY.encode_utf16().collect();
-    name_w.push(0);
-    let create: unsafe extern "system" fn(usize, *const u16, *const u8, usize, bool, u32) -> usize =
-        unsafe { std::mem::transmute(base + CREATE_TPF_RES_CAP_RVA) };
-    let blob_ptr = blob.as_ptr();
-    let blob_len = blob.len();
-    let name_ptr = name_w.as_ptr();
-    // Mirror FaceGen: param_5 = false, param_6 (count) = 0.
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        create(tpf_repo, name_ptr, blob_ptr, blob_len, false, 0)
-    }));
-    match res {
-        Ok(rescap) if rescap != 0 && rescap != null => {
-            ER_TPF_COVER_LAST_RESCAP.store(rescap, Ordering::SeqCst);
-            ER_TPF_COVER_LAST_ERROR.store(ER_TPF_COVER_ERR_NONE, Ordering::SeqCst);
-            ER_TPF_COVER_REGISTERED.store(1, Ordering::SeqCst);
-            append_autoload_debug(format_args!(
-                "er-tpf-cover: REGISTERED in-memory TPF texture via CreateTpfResCap 0x{:x}(tpf_repo=0x{tpf_repo:x}) key='{ER_TPF_COVER_SYSTEX_KEY}' blob_len={blob_len} rescap=0x{rescap:x} tex_repo=0x{tex_repo:x} -- bind observer will redirect the visible profile surface target to this key (NO disk, NO input)",
-                base + CREATE_TPF_RES_CAP_RVA
-            ));
-        }
-        Ok(_) => {
-            ER_TPF_COVER_FAILURES.fetch_add(1, Ordering::SeqCst);
-            ER_TPF_COVER_LAST_ERROR.store(ER_TPF_COVER_ERR_RESCAP_NULL, Ordering::SeqCst);
-            append_autoload_debug(format_args!(
-                "er-tpf-cover: CreateTpfResCap returned null TpfResCap (blob_len={blob_len} tpf_repo=0x{tpf_repo:x}); will retry next tick"
-            ));
-        }
-        Err(_) => {
-            ER_TPF_COVER_FAILURES.fetch_add(1, Ordering::SeqCst);
-            ER_TPF_COVER_LAST_ERROR.store(ER_TPF_COVER_ERR_PANIC, Ordering::SeqCst);
-            append_autoload_debug(format_args!(
-                "er-tpf-cover: CreateTpfResCap call PANICKED (caught) blob_len={blob_len} tpf_repo=0x{tpf_repo:x}; not retrying this tick"
-            ));
-        }
-    }
-}
+/// RETIRED (2026-06-30, user): the `SYSTEX_ErTpf_Cover00` POC cover -- a 1024x1024 magenta/YELLOW checker
+/// -- was the early "prove we own the title/loading surface" test feature. The real character portrait now
+/// displays, so it is dead weight AND actively harmful: being the same 1024 size as the head RT, the
+/// portrait readback's "largest TEXTURE2D" scan grabbed IT instead of the head (nondeterministic
+/// magenta/yellow checker on the loading screen). The registration is removed -- this is now a no-op.
+pub(crate) unsafe fn maybe_register_er_tpf_cover_texture(_base: usize) {}
 
 pub(crate) unsafe fn maybe_refresh_title_profile_cover(
     base: usize,

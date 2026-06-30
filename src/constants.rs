@@ -786,6 +786,24 @@ pub(crate) static LOADING_BG_PORTRAIT_RGBA: std::sync::Mutex<Option<(u32, u32, V
 /// 1 if the read-back portrait has any non-black texel (max(R,G,B) > 24) inside a center 64x64
 /// region, else 0 (a black/blank capture). Exposed as `oracle_loading_bg_portrait_gx_nonblack`.
 pub(crate) static LOADING_BG_PORTRAIT_NONBLACK: AtomicUsize = AtomicUsize::new(0);
+/// Bumped every time LOADING_BG_PORTRAIT_RGBA is REPLACED with a fresh capture. The present-overlay
+/// composite watches this: when it changes, the overlay re-uploads its source texture from the new RGBA,
+/// so a LIVE per-frame (throttled) readback of the built renderer's offscreen makes the displayed head
+/// UPDATE (look-at follows) instead of freezing on the first captured frame.
+pub(crate) static LOADING_BG_PORTRAIT_RGBA_VERSION: AtomicUsize = AtomicUsize::new(0);
+/// One-shot log latch for the live-display-feed (built RT content -> overlay).
+pub(crate) static PROFILE_LIVE_FEED_LOGGED: AtomicUsize = AtomicUsize::new(0);
+/// The LOADING_BG_PORTRAIT_RGBA_VERSION last uploaded into the displayed now-loading texture by
+/// maybe_reforge_loading_portrait. usize::MAX = never. Re-upload only when the version advances (new live
+/// frame) so the displayed loading-screen head TRACKS the look-at, while never per-frame-hammering a
+/// dim-mismatched/freed texture (the old crash). One log latch for the first successful upload.
+pub(crate) static LOADING_BG_REFORGE_VERSION: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static LOADING_BG_REFORGE_LOGGED: AtomicUsize = AtomicUsize::new(0);
+/// 1 if the read-back portrait looks like a SOLID-COLOR-CHECKER PLACEHOLDER (magenta/white|yellow cover or
+/// an unrendered RT) rather than a real shaded 3D head -- see `portrait_looks_like_checker`. The
+/// `..._gx_nonblack` flag alone is a FALSE POSITIVE (a bright checker passes max(R,G,B)>24), so REAL-face
+/// proof = `nonblack && !is_checker`. Exposed as `oracle_loading_bg_portrait_is_checker`.
+pub(crate) static LOADING_BG_PORTRAIT_IS_CHECKER: AtomicUsize = AtomicUsize::new(0);
 /// Read-back portrait dimensions packed as `(width << 16) | height`. 0 until captured. Exposed as
 /// `oracle_loading_bg_portrait_gx_dims`.
 pub(crate) static LOADING_BG_PORTRAIT_DIMS: AtomicUsize = AtomicUsize::new(0);
@@ -812,6 +830,20 @@ pub(crate) const PROFILE_GX_GPU_WRAPPER_VTABLE_RVA: usize = 0x2b80278;
 pub(crate) const PROFILE_GX_GPU_WRAPPER_RESOURCE_PRIMARY_OFFSET: usize = 0x18;
 /// Wrapper -> real `ID3D12Resource` fallback slot (`gpu_child + 0x10`); used when +0x18 is null.
 pub(crate) const PROFILE_GX_GPU_WRAPPER_RESOURCE_FALLBACK_OFFSET: usize = 0x10;
+/// DETERMINISTIC content-RT resolution chain (RE'd from a live /proc dump 2026-06-29, bd
+/// live-portrait-d3d12-resource-buried-in-gx-wrapper-nest). The vkd3d ID3D12Resource is 4 fixed hops from
+/// the CSGxTexture -- following these avoids the memory-scan+QI that races the teardown free:
+///   srv_gx +0x10  -> CSOffscreenGxTexture  (vt game_base+PROFILE_GX_GPU_WRAPPER_VTABLE_RVA 0x2b80278)
+///   +0x18         -> holder A              (vt game_base+0x2f05a60)
+///   +0x40         -> holder B              (vt game_base+0x30a3ef0)
+///   +0x20         -> ID3D12Resource        (vt in d3d12core.dll)
+/// Each intermediate's vtable is validated so a layout change fails closed (no readback) instead of
+/// dereferencing garbage. The final object's vtable must land in a d3d12 module.
+pub(crate) const GX_RES_CHAIN_HOLDER_A_OFFSET: usize = 0x18;
+pub(crate) const GX_RES_CHAIN_HOLDER_A_VTABLE_RVA: usize = 0x2f05a60;
+pub(crate) const GX_RES_CHAIN_HOLDER_B_OFFSET: usize = 0x40;
+pub(crate) const GX_RES_CHAIN_HOLDER_B_VTABLE_RVA: usize = 0x30a3ef0;
+pub(crate) const GX_RES_CHAIN_RESOURCE_OFFSET: usize = 0x20;
 /// TpfResCap container (the 0xb8 object CreateTpfResCap returns): texture count and the array of
 /// `TexResCap*`. We rewrite `array[0]`'s `+0x78` CSGxTexture to the kept portrait.
 pub(crate) const TPF_RESCAP_CONTAINER_COUNT_OFFSET: usize = 0x78;
@@ -828,6 +860,11 @@ pub(crate) const PROFILE_RENDERER_TEARDOWN_RVA: usize = 0x9b2db0;
 /// render via `FUN_140bb73a0(*(renderer+0xa8))`, reading the global GxDrawContext itself (no arg).
 /// The menu-owned per-frame caller stops at Continue, so we call this ourselves each frame.
 pub(crate) const PROFILE_OFFSCREEN_DRIVE_RVA: usize = 0xbb8ca0;
+/// Count of render-thread offscreen drives issued from the Present hook (gate
+/// `portrait_render_drive_enabled`). Exposed as `oracle_portrait_render_drive_hits` -- proves the drive
+/// ran on the render thread during loading; pair with `oracle_loading_bg_portrait_is_checker` flipping to
+/// 0 (real face) as the success signal that the drive actually rasterized the head into the RT.
+pub(crate) static PROFILE_RENDER_DRIVE_HITS: AtomicUsize = AtomicUsize::new(0);
 /// Profile-portrait draw step `FUN_1409aa3e0` (dump VA) -> deobf RVA 0x1409aa290 (content-unique, shift
 /// -0x150, ground-truthed via dump-deobf-shift). No-arg: loops the 10-slot renderer title table at
 /// base+0x3d6d8d0 and, for each non-null slot, calls the offscreen-draw thunk (PROFILE_OFFSCREEN_DRIVE_RVA)
@@ -909,6 +946,10 @@ pub(crate) static PROFILE_FORCE_TICK_COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// The menu kept its models live by feeding across a long dwell; the brief now-loading window needs the
 /// feed driven continuously or the build is kicked once and decays (observed 2026-06-29: built[m] 10->0).
 pub(crate) static PROFILE_LOADSCREEN_FEED_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// One-shot log latch for the IMMEDIATE build-kick (edge-triggered when the autoload target slot's
+/// fingerprint first goes real and its renderer's +0x754 build-request latch is still 0). The kick
+/// itself is idempotent via +0x754, but the debug line should print once.
+pub(crate) static PROFILE_REAL_SLOT_KICK_LOGGED: AtomicUsize = AtomicUsize::new(0);
 /// How many ticks to keep the post-Continue feed window open after an own-renderer build (~bounded so it
 /// can't churn forever). Generous enough to outlast a real load; the refresh is idempotent so extra feeds
 /// no-op once the model is built.
@@ -988,11 +1029,15 @@ pub(crate) const PROFILE_CAM_PUSH_RVA: usize = 0xbba460;
 /// tilted portrait framing vs the engine's straight-on default. These exact values are the framing the
 /// user approved in the 2026-06-29 runtime smoke (a tight zoom with a strong upward pitch into the
 /// face); the deltas are correctly named after the pitch/yaw fix and remain free knobs to retune.
-pub(crate) const PROFILE_CAM_DISTANCE_SCALE: f32 = 0.62;
-/// Large vertical tilt into the upper face -- the dominant framing change the user approved.
-pub(crate) const PROFILE_CAM_PITCH_DELTA_RAD: f32 = 0.40;
-/// Small horizontal turn off the straight-on axis.
-pub(crate) const PROFILE_CAM_YAW_DELTA_RAD: f32 = -0.06;
+// ZOOM-OUT (2026-06-30, user: loading-screen face was way too zoomed -- only forehead/eyes visible).
+// Pull the camera BACK past the engine baseline (>1.0) to a head-and-shoulders product shot, and drop the
+// strong upward pitch that framed the forehead. Free knobs -- retune from the user's image.
+pub(crate) const PROFILE_CAM_DISTANCE_SCALE: f32 = 1.7;
+/// Slight vertical tilt only (was 0.40 = a forehead close-up).
+pub(crate) const PROFILE_CAM_PITCH_DELTA_RAD: f32 = 0.05;
+/// Head-on by default (2026-06-30, user): zero horizontal turn so the camera faces the character
+/// straight-on (was -0.06, a slight off-axis turn).
+pub(crate) const PROFILE_CAM_YAW_DELTA_RAD: f32 = 0.0;
 pub(crate) const PROFILE_CAM_FOV_SCALE: f32 = 1.0;
 /// Per-slot latched baseline orbit, captured ONCE (before the first override write) so every per-tick
 /// override is derived from an immutable baseline -- drift-free and clobber-proof even if a refresh
@@ -1285,7 +1330,9 @@ pub(crate) static LOADING_BG_FIRST_RTI: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static LOADING_BG_FIRST_ENCODING: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static LOADING_BG_FIRST_TEX_NAME: std::sync::Mutex<Option<String>> =
     std::sync::Mutex::new(None);
-/// One-shot guard: set once we've re-forged the first rti with the baked portrait.
+/// (Retired one-shot guard; the reforge is now version-gated via LOADING_BG_REFORGE_VERSION for live
+/// re-upload.) Kept allocated to avoid churn; not read.
+#[allow(dead_code)]
 pub(crate) static LOADING_BG_REFORGE_DONE: AtomicUsize = AtomicUsize::new(0);
 /// `CS::TexRepositoryImp::GetResCap(repo, wchar_t* name) -> TexResCap*` (dump 0x140b80a90 -> deobf, shift
 /// -0xf0). The TexResCap's `gxTexture` (+TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET = +0x78) is the

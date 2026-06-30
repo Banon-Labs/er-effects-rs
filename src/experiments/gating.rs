@@ -133,6 +133,24 @@ pub(crate) fn portrait_real_pixels_enabled() -> bool {
         .join("er-effects-portrait-real-pixels.txt")
         .exists()
 }
+/// DEFAULT-OFF gate for the RENDER-THREAD offscreen drive (the keepalive keystone). When on, the
+/// Present hook (`present_hook`, render thread, every frame, fires during the loading screen) drives the
+/// profile renderer's offscreen draw (`PROFILE_OFFSCREEN_DRIVE_RVA` -> reads g_GxDrawContext, submits to
+/// the GX pool) for the spared/built slot-0 renderer, so the loaded character's 3D head is actually
+/// RENDERED into the offscreen RT after the menu's own render driver dies post-Continue. Without this the
+/// model builds but is never drawn -> the RT holds a placeholder checker (oracle_loading_bg_portrait_is_
+/// checker=True). The game-task drive renders BLACK / crashes (wrong thread + frame phase); the render
+/// thread inside the Present hook is the surviving point. OFF by default (risky: GX pool/sub-ctx phase at
+/// Present time is unproven) -- enable explicitly to validate. Mirrors the env OR file pattern.
+pub(crate) fn portrait_render_drive_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_PORTRAIT_RENDER_DRIVE").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-portrait-render-drive.txt")
+        .exists()
+}
 /// DEFAULT-OFF gate for the portrait LOOK-AT lever (head/eyes follow the mouse cursor). When on, the
 /// per-tick `force_profile_render_tick` reaches the loaded character's Havok pose holder and rotates the
 /// Head/Neck/Spine2 bone local quaternions toward the cursor (ER eyes are welded to the Head bone, so

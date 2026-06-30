@@ -696,9 +696,15 @@ def telemetry_logo_replacement_capture_ready(telemetry: dict[str, Any] | None) -
     global _LOGO_FIRST_COMMIT_MONOTONIC
     commits = as_int(telemetry.get("oracle_loading_bg_portrait_redirect_commits"), 0)
     builds = as_int(telemetry.get("oracle_loadscreen_table_builds"), 0)
-    # Fire once our own table is built and the forge has committed a now-loading background. (The live-RT
-    # re-bind oracle is NOT required -- the force-checker isolation path intentionally skips it.)
-    if commits <= 0 or builds <= 0:
+    # Fire once the forge has committed a now-loading background AND we have a real portrait to show.
+    # "Something real to show" is EITHER our own post-Continue renderer table was built
+    # (oracle_loadscreen_table_builds > 0) OR the menu's still-live table yielded a non-black captured
+    # portrait (oracle_loading_bg_portrait_gx_nonblack) -- the immediate-build-kick path captures via the
+    # menu table without our builder ever running (builds stays 0), so requiring builds>0 alone misses the
+    # exact frame worth seeing. (The live-RT re-bind oracle is NOT required -- the force-checker isolation
+    # path intentionally skips it.)
+    gx_nonblack = bool(telemetry.get("oracle_loading_bg_portrait_gx_nonblack"))
+    if commits <= 0 or not (builds > 0 or gx_nonblack):
         return False
     now = time.monotonic()
     if _LOGO_FIRST_COMMIT_MONOTONIC is None:

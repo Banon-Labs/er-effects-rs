@@ -2120,25 +2120,52 @@ unsafe fn sample_portrait_gxtexture(base: usize, slot: i32) -> usize {
 unsafe fn refresh_loading_bg_live_gx(base: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
-    // DISABLED: binding the live offscreen SRV every frame samples a flickering/black texture on the
-    // composited frames. We now show the STATIC baked-portrait TPF instead (build_portrait_tpf), so do not
-    // overwrite the forged container's baked GX. Kept as a no-op for now (the bake path is the product path).
-    if true {
+    // DISABLED (crashes): binding the built-own renderer's LIVE offscreen SRV into the now-loading
+    // Scaleform container makes dxgi/vkd3d AV ~330ms later when the GFx sampler reads it (run 2026-06-30:
+    // RE-BOUND +18003ms -> 0xc0000005 in vkd3d at +18336ms). The offscreen SRV is a render-target resource,
+    // not valid as a Scaleform shader-resource (format/descriptor/state mismatch), so the container's
+    // sampler faults. Native Scaleform GX rebind is a dead end (the menu-renderer variant UAF'd; this
+    // built-own variant format-faults). The SAFE display path is the present-overlay D3D12 composite
+    // (CopyTextureRegion, not a sampler) fed by a per-frame READBACK of the live built SRV -- see bd
+    // portrait-live-render-reattach-crashes-build-own-2026-06-30. Kept gated-off here for reference.
+    if true || !portrait_render_drive_enabled() {
+        return;
+    }
+    if PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst) == 0 {
         return;
     }
     let cap = LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT.load(Ordering::SeqCst);
     if !valid(cap) {
         return;
     }
-    // Bind the AddRef'd CAPTURED CSGxTexture (LOADING_BG_PORTRAIT_GX_KEPT), NOT the live renderer RT.
-    // `sample_portrait_gxtexture` returns the renderer's LIVE offscreen-RT GX, which is freed when the
-    // profile renderer is torn down at Continue; binding that left the now-loading container pointing at
-    // a FREED CSGxTexture, so dxgi sampled freed memory during the loading screen -> use-after-free
-    // (0xc0000005). `maybe_capture_portrait_gxtexture` AddRefs the captured texture specifically so it
-    // survives teardown, so binding it is lifetime-safe. If nothing has been captured yet, skip the
-    // rebind (the loading screen keeps its default background) rather than bind a freeable pointer.
-    // bd autoload-load-FIXED-display-crash-remains-2026-06-30.
-    let bind_gx = LOADING_BG_PORTRAIT_GX_KEPT.load(Ordering::SeqCst);
+    // Resolve the LIVE SRV from our built target-slot renderer: table[slot] -> +0xa8 (offscreen) -> +0x10
+    // (TexResCap) -> +GX = the sampleable CSGxTexture the engine re-renders each frame. Validate the vtable
+    // so a torn/rebuilding slot can't bind a bad pointer.
+    let slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+    let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, slot)) }.unwrap_or(0);
+    if !valid(r)
+        || unsafe { safe_read_usize(r) }.unwrap_or(0)
+            != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+    {
+        return;
+    }
+    let off = unsafe {
+        safe_read_usize(r + TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET)
+    }
+    .unwrap_or(0);
+    if !valid(off) {
+        return;
+    }
+    let trc = unsafe {
+        safe_read_usize(off + TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET)
+    }
+    .unwrap_or(0);
+    if !valid(trc) {
+        return;
+    }
+    let bind_gx =
+        unsafe { safe_read_usize(trc + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) }
+            .unwrap_or(0);
     if !valid(bind_gx) {
         return;
     }
@@ -2303,7 +2330,9 @@ pub(crate) fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
         if let Some((w, h, px)) = unsafe { readback_offscreen_rgba8(offscreen) } {
             // `readback_offscreen_rgba8` already recorded LOADING_BG_PORTRAIT_FORMAT (the DXGI value).
             let nonblack = portrait_center_nonblack(w, h, &px);
+            let is_checker = portrait_looks_like_checker(w, h, &px);
             LOADING_BG_PORTRAIT_NONBLACK.store(nonblack as usize, Ordering::SeqCst);
+            LOADING_BG_PORTRAIT_IS_CHECKER.store(is_checker as usize, Ordering::SeqCst);
             LOADING_BG_PORTRAIT_DIMS.store(((w as usize) << 16) | (h as usize), Ordering::SeqCst);
             let bytes = px.len();
             dump_portrait_rgba(slot, w, h, &px);
@@ -2311,9 +2340,10 @@ pub(crate) fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
                 *g = Some((w, h, px));
             }
             append_autoload_debug(format_args!(
-                "portrait-readback: dims={w}x{h} format={} nonblack={} bytes={bytes}",
+                "portrait-readback: dims={w}x{h} format={} nonblack={} is_checker={} (real-face proof = nonblack && !is_checker) bytes={bytes}",
                 LOADING_BG_PORTRAIT_FORMAT.load(Ordering::SeqCst),
-                nonblack as usize
+                nonblack as usize,
+                is_checker as usize
             ));
         } else {
             append_autoload_debug(format_args!(
@@ -2935,6 +2965,39 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize) {
                             PROFILE_CONTENT_EXCL_DUMPED.store(0, Ordering::SeqCst);
                         }
                     }
+                    // LIVE TRACKING -- EVERY FRAME, now SCAN-FREE. readback_cached_content_rgba8 resolves the
+                    // content RT via the DETERMINISTIC GX wrapper chain ONCE (no memory scan/QI -> nothing to
+                    // race the teardown free), caches it AddRef'd, then re-copies it each frame. So the head
+                    // tracks the look-at smoothly without the prior scan-vs-teardown AV. Bumps the RGBA
+                    // version each frame -> maybe_reforge_loading_portrait re-uploads -> the displayed
+                    // loading-screen head updates per frame.
+                    if portrait_render_drive_enabled() {
+                        if let Some((cw, ch, cpx)) =
+                            unsafe { readback_cached_content_rgba8(off, srv_gx) }
+                        {
+                            if !portrait_looks_like_checker(cw, ch, &cpx) {
+                                let nb = portrait_center_nonblack(cw, ch, &cpx);
+                                LOADING_BG_PORTRAIT_NONBLACK.store(nb as usize, Ordering::SeqCst);
+                                LOADING_BG_PORTRAIT_IS_CHECKER.store(0, Ordering::SeqCst);
+                                LOADING_BG_PORTRAIT_DIMS.store(
+                                    ((cw as usize) << 16) | (ch as usize),
+                                    Ordering::SeqCst,
+                                );
+                                if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
+                                    *g = Some((cw, ch, cpx));
+                                }
+                                LOADING_BG_PORTRAIT_RGBA_VERSION
+                                    .fetch_add(1, Ordering::SeqCst);
+                                // Gate the present-overlay on (now there is a real live head to show).
+                                PROFILE_BAKE_RGBA_CAPTURED.store(1, Ordering::SeqCst);
+                                if PROFILE_LIVE_FEED_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+                                    append_autoload_debug(format_args!(
+                                        "live-feed: published built RT content {cw}x{ch} (real head, !checker) -> overlay (version bump); present-overlay will composite the LIVE head"
+                                    ));
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2949,6 +3012,12 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize) {
         && unsafe { safe_read_usize(spared) }.unwrap_or(0)
             == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
     {
+        // NOTE: re-attaching the captured model into the spared renderer's +0x778 was tried and CRASHES
+        // (run 2026-06-30: AV in the ResMan/offscreen-draw path +28ms after the write) -- the teardown frees
+        // the model's deeper render deps even though its vtable still reads valid. Dead end. The live render
+        // comes from BUILDING OUR OWN renderers post-Continue (force_profile_render_tick driven from a
+        // FrameBegin task), which own their model+deps with our lifetime. See bd
+        // portrait-live-render-reattach-crashes-build-own-2026-06-30.
         let thunk: unsafe extern "system" fn(usize) =
             unsafe { core::mem::transmute(base + PROFILE_OFFSCREEN_DRIVE_RVA) };
         unsafe { thunk(spared) };
@@ -3820,6 +3889,71 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     {
         return;
     }
+    // IMMEDIATE BUILD KICK (regression fix -- goal issue 1, grounded in the 06-29 vs 06-30 capture diff):
+    // the 240-tick / feed cadence below can fire BEFORE the native boot ProfileSummary read makes the
+    // autoload target slot real (~+17s). When it does, the mark loop marks 0 real slots, refresh requests
+    // nothing, the renderer's +0x754 "load-requested" latch stays 0, and the model never builds in the
+    // brief now-loading window -> nothing to capture (06-30 runs: req754=0 req755=0 model=0x0). 06-29 runs
+    // that captured a portrait marked the slot WHILE refresh ran (req755=1 -> model=0x<nonzero>); the
+    // all-slots-mark removal (correctly gated on a real fingerprint to avoid contaminating empty slots'
+    // saveSlotsStates) lost that build-request for slot 0 because the cadence no longer coincides with the
+    // moment the slot goes real. So here, edge-triggered: the instant a slot's fingerprint is real AND its
+    // renderer's +0x754 is still 0, mark + refresh it immediately (off-cadence) and open the feed window to
+    // drive the async build to completion. Idempotent -- once +0x754 latches to 1 this no-ops, so no churn.
+    // Only marks REAL slots (post-read), identical to the cadence loop's gate, so it can't pre-empt the read.
+    // ONLY THE LOADED SLOT (2026-06-30, user: a DIFFERENT character showed on the loading screen). The
+    // save holds multiple characters (all 10 slots build models), and the slot-0 readback grabbed a
+    // neighbouring slot's identical-size 1024 RT -> wrong face. Build + mark ONLY the autoload target slot
+    // so the loaded character (Banon, slot 0) is the ONLY portrait model that exists -> no wrong-slot grab.
+    let target_slot = {
+        let s = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+        if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&s) {
+            s
+        } else {
+            0
+        }
+    };
+    {
+        let mark: unsafe extern "system" fn(usize, i32) -> u8 =
+            unsafe { core::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
+        let mut kicked = 0u32;
+        let mut kicked_mask = 0u32;
+        for s in 0..10i32 {
+            if s != target_slot {
+                continue;
+            }
+            if !unsafe { profile_slot_fingerprint(s).0 } {
+                continue;
+            }
+            let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
+            if !valid(r)
+                || unsafe { safe_read_usize(r) }.unwrap_or(0)
+                    != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+            {
+                continue;
+            }
+            // +0x754 = the refresh's "load-requested" idempotency latch. 0 = the async model build was
+            // never kicked for this slot -> kick it now. Non-zero -> already requested, skip.
+            if unsafe { safe_read_u8(r + 0x754) }.unwrap_or(0xff) != 0 {
+                continue;
+            }
+            let _ = unsafe { mark(summary, s) };
+            kicked += 1;
+            kicked_mask |= 1 << s;
+        }
+        if kicked > 0 {
+            let refresh: unsafe extern "system" fn() =
+                unsafe { core::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
+            unsafe { refresh() };
+            // Drive the freshly-requested build to completion + keep it latched through the loading screen.
+            PROFILE_LOADSCREEN_FEED_TICKS.store(PROFILE_LOADSCREEN_FEED_WINDOW_TICKS, Ordering::SeqCst);
+            if PROFILE_REAL_SLOT_KICK_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+                append_autoload_debug(format_args!(
+                    "force-profile-render: IMMEDIATE build kick -- {kicked} real slot(s) (mask=0x{kicked_mask:x}) became available with req754=0; marked + refreshed off-cadence + opened feed window (summary=0x{summary:x})"
+                ));
+            }
+        }
+    }
     // MODEL BUILD: every ~240 ticks, mark all 10 profile slots used + call the refresh that kicks the
     // async character-model build. refresh is IDEMPOTENT per slot via the +0x754 "load-requested" latch,
     // so by default this builds each model ONCE and then leaves it -- the model stays LIVE every frame,
@@ -3845,13 +3979,13 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             unsafe { core::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
         let mut marked = 0u32;
         for s in 0..10i32 {
-            // Only mark slots that hold a REAL character (per the RECORD the native boot ProfileSummary
-            // read populates: level>=1 + non-empty name). NEVER mark all 10 / empty slots: that
-            // contaminated `ProfileSummary->saveSlotsStates[s]` so `IsAnySavedCharacterPresent` reported
-            // "saves present" for empty slots, and pre-marking before the disk read could mask it. A real
-            // slot is only `is_real` AFTER the native read has populated it, so this also can't pre-empt
-            // the read. Marking only real slots still builds the loaded character's portrait model.
-            // bd autoload-regression-lookat-breaks-bootread-2026-06-30.
+            // ONLY the autoload target slot (the loaded character). Building every real slot rendered all
+            // the save's other characters, and the slot-0 readback grabbed a wrong one -> wrong face shown.
+            if s != target_slot {
+                continue;
+            }
+            // Real-character gate (per the native boot ProfileSummary read: level>=1 + non-empty name).
+            // Never mark before the read populates the slot (can't pre-empt it / contaminate saveSlotsStates).
             if !unsafe { profile_slot_fingerprint(s).0 } {
                 continue;
             }
@@ -3997,14 +4131,18 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             };
             if let Some((w, h, px)) = unsafe { readback_offscreen_rgba8(off) } {
                 let nb = portrait_center_nonblack(w, h, &px);
+                let checker = portrait_looks_like_checker(w, h, &px);
                 // BAKE SOURCE: store the TARGET slot's menu portrait into LOADING_BG_PORTRAIT_RGBA so the
-                // now-loading forge bakes IT into the static TPF (the proven decode-time display path). The
-                // forge fires in a tight race with the portrait render (~15.7-16.2s either way); capture the
-                // FIRST nonblack render (dropping the slower IBL-residency wait) to capture as EARLY as
-                // possible and win the race in more runs -- so the forge bakes the real character, not the
-                // checker. (A dim/pre-IBL face still beats the checker; IBL refinement is a follow-up.)
+                // now-loading forge bakes IT into the static TPF (the proven decode-time display path) AND the
+                // present-overlay composite (gated on PROFILE_BAKE_RGBA_CAPTURED) displays it. ONLY latch on a
+                // REAL FACE: nonblack alone false-passes the magenta/white checker (an unrendered RT or our
+                // cover placeholder) -- latching that is exactly what put a center checker square on screen and
+                // made oracle_..._gx_nonblack a false success. Requiring !checker means we keep re-checking each
+                // dump cycle and latch only once a real shaded head has actually rendered into the offscreen
+                // (which needs the render-thread offscreen drive -- see portrait_render_drive). One-shot via swap.
                 if s == OWN_STEPPER_SLOT.load(Ordering::SeqCst)
                     && nb
+                    && !checker
                     && PROFILE_BAKE_RGBA_CAPTURED.swap(1, Ordering::SeqCst) == 0
                 {
                     let _ = ibl_region;
@@ -4177,7 +4315,11 @@ fn build_portrait_test_tpf(symbol: &str) -> Option<Vec<u8>> {
 /// the checker display correctly. Otherwise (default, or no capture yet) fall back to the proven
 /// magenta/yellow checker, byte-for-byte unchanged.
 fn build_portrait_tpf(symbol: &str) -> Option<Vec<u8>> {
-    if portrait_real_pixels_enabled() {
+    // ONE-HEAD CONSOLIDATION: when the live build-own path is active, the present-overlay composite is the
+    // SOLE deterministic display. Baking the real head into the forge TPF here produces a SECOND head (it
+    // displays when the forge wins the bind race -- user-observed). So in render-drive mode the forge stays
+    // a neutral checker background; the overlay draws the one head on top.
+    if portrait_real_pixels_enabled() && !portrait_render_drive_enabled() {
         if let Ok(slot) = LOADING_BG_PORTRAIT_RGBA.lock() {
             if let Some((w, h, px)) = slot.as_ref() {
                 let dds = er_tpf::DdsImage {
@@ -4375,8 +4517,14 @@ pub(crate) unsafe fn maybe_reforge_loading_portrait(base: usize) {
     if PROFILE_BAKE_RGBA_CAPTURED.load(Ordering::SeqCst) == 0 {
         return;
     }
-    if LOADING_BG_REFORGE_DONE.load(Ordering::SeqCst) != 0 {
-        return;
+    // LIVE RE-UPLOAD (version-gated): re-upload the displayed now-loading texture whenever the live feed
+    // publishes a new frame (version advanced) so the loading-screen head TRACKS the look-at. The earlier
+    // re-upload crash was the READBACK's D3D12 object SCAN racing teardown (now fixed: cached resource, no
+    // re-scan); the upload writes into the already-bound, stable now-loading texture (the one-shot upload
+    // persisted crash-free through the whole loading screen), so per-version re-upload is safe.
+    let cur_ver = LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst);
+    if LOADING_BG_REFORGE_VERSION.load(Ordering::SeqCst) == cur_ver {
+        return; // already uploaded this frame's content
     }
     // The DISPLAYED texture is the one the Scaleform sprite samples by NAME from GLOBAL_TexRepository --
     // NOT the forge's source container GX. Look it up: GetResCap(GLOBAL_TexRepository, name).gxTexture.
@@ -4411,9 +4559,6 @@ pub(crate) unsafe fn maybe_reforge_loading_portrait(base: usize) {
     let Some((w, h, px)) = snapshot else {
         return;
     };
-    if LOADING_BG_REFORGE_DONE.swap(1, Ordering::SeqCst) != 0 {
-        return;
-    }
     let ok = unsafe { upload_rgba_to_texture(gx, w, h, &px) };
     // VERIFY: read back the SAME gx right after the upload. If it now reads the portrait, the upload DID
     // land in this texture (so any remaining checker on screen means Scaleform samples a DIFFERENT copy);
@@ -4428,13 +4573,18 @@ pub(crate) unsafe fn maybe_reforge_loading_portrait(base: usize) {
             verify_rgb = (vpx[idx], vpx[idx + 1], vpx[idx + 2]);
         }
     }
-    append_autoload_debug(format_args!(
-        "loading-portrait: UPLOADED real portrait {w}x{h} into displayed now-loading texture gx=0x{gx:x} ok={ok} verify_center_rgb=({},{},{}) (loading screen now shows the real character)",
-        verify_rgb.0, verify_rgb.1, verify_rgb.2
-    ));
-    if !ok {
-        // Allow a retry next frame if the upload failed (e.g. dim mismatch or transient device state).
-        LOADING_BG_REFORGE_DONE.store(0, Ordering::SeqCst);
+    // Advance the version latch ONLY on a successful upload (dims matched). On failure we leave the latch
+    // behind so a later same-version frame can retry once -- but since the version only advances when the
+    // live feed publishes a NEW frame, this never per-frame-hammers (the old dim-mismatch crash). Same dims
+    // (1024) throughout the build-own path, so ok is reliably true.
+    if ok {
+        LOADING_BG_REFORGE_VERSION.store(cur_ver, Ordering::SeqCst);
+    }
+    if LOADING_BG_REFORGE_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+        append_autoload_debug(format_args!(
+            "loading-portrait: UPLOADED real portrait {w}x{h} into displayed now-loading texture gx=0x{gx:x} ok={ok} verify_center_rgb=({},{},{}) (loading screen now shows the LIVE character, re-uploads per version)",
+            verify_rgb.0, verify_rgb.1, verify_rgb.2
+        ));
     }
     let _ = base;
 }
