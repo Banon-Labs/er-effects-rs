@@ -76,6 +76,11 @@ static GAME_PRESENT_HOOKED: AtomicUsize = AtomicUsize::new(0);
 static GAME_SWAPCHAIN_FIND_TRIES: AtomicUsize = AtomicUsize::new(0);
 /// The dummy swapchain's Present addr -- only used as a same-module hint for the swapchain-vtable filter.
 static PRESENT_RESOLVED_ADDR: AtomicUsize = AtomicUsize::new(0);
+/// The found GAME swapchain pointer + game module base, latched in `try_install_game_present_hook`. The
+/// Present detour composites the portrait only when `this` matches `GAME_SWAPCHAIN` -- the shared dxgi
+/// vtable means the detour ALSO fires for our throwaway dummy swapchain, which we must never draw on.
+static GAME_SWAPCHAIN: AtomicUsize = AtomicUsize::new(0);
+static GAME_BASE: AtomicUsize = AtomicUsize::new(0);
 
 /// Detour for `IDXGISwapChain::Present(this, SyncInterval, Flags)`. Phase 1: log-only, then tail-call the
 /// original. `this` IS the game's swapchain (we never created it), so a real overlay draws onto its
@@ -88,6 +93,15 @@ unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32)
             this as usize
         ));
         unsafe { log_backbuffer_desc(this) };
+    }
+    // Composite the captured portrait onto the backbuffer (gated; never panics). Only on the GAME's
+    // swapchain -- the shared dxgi vtable means this detour also fires for our throwaway dummy swapchain.
+    let this_u = this as usize;
+    if this_u == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
+        let base = GAME_BASE.load(Ordering::SeqCst);
+        if base != 0 {
+            let _ = unsafe { composite_portrait_on_swapchain(base, this_u) };
+        }
     }
     let orig = PRESENT_ORIG.load(Ordering::SeqCst);
     if orig != 0 {
@@ -112,6 +126,15 @@ unsafe extern "system" fn present1_hook(
             this as usize
         ));
         unsafe { log_backbuffer_desc(this) };
+    }
+    // Composite the captured portrait onto the backbuffer (gated; never panics). Only on the GAME's
+    // swapchain -- the shared dxgi vtable means this detour also fires for our throwaway dummy swapchain.
+    let this_u = this as usize;
+    if this_u == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
+        let base = GAME_BASE.load(Ordering::SeqCst);
+        if base != 0 {
+            let _ = unsafe { composite_portrait_on_swapchain(base, this_u) };
+        }
     }
     let orig = PRESENT1_ORIG.load(Ordering::SeqCst);
     if orig != 0 {
@@ -547,6 +570,9 @@ pub(crate) unsafe fn try_install_game_present_hook(base: usize) {
     if GAME_PRESENT_HOOKED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
+    // Latch the found swapchain + base so the detours can gate the composite to the GAME's swapchain.
+    GAME_SWAPCHAIN.store(sc, Ordering::SeqCst);
+    GAME_BASE.store(base, Ordering::SeqCst);
     // Save the originals FIRST (the detours tail-call them), then VMT-swap the swapchain's vtable slots.
     // We patch the vtable DATA pointers, NOT the function bodies: MinHook's code-page byte-patch reports
     // MH_OK on Wine's dxgi.dll yet never intercepts (HOOKED-but-never-fired, a W^X code-page refusal),

@@ -3653,7 +3653,7 @@ unsafe fn apply_profile_camera_override(base: usize, renderer: usize, slot: i32)
 
 /// True while the engine's now-loading screen is active (reads the NowLoading singleton the telemetry
 /// uses: helper = *(base+NowLoadingSingleton); flag = *(helper+loading_flag) & 0xff). Fault-guarded.
-unsafe fn now_loading_active(base: usize) -> bool {
+pub(crate) unsafe fn now_loading_active(base: usize) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let helper = unsafe { safe_read_usize(base + RuntimeGlobalRva::NowLoadingSingleton as usize) }
         .unwrap_or(0);
@@ -3662,6 +3662,23 @@ unsafe fn now_loading_active(base: usize) -> bool {
     }
     let off = core::mem::offset_of!(NowLoadingHelperLayout, loading_flag);
     unsafe { safe_read_usize(helper + off) }
+        .map(|v| (v & 0xff) != 0)
+        .unwrap_or(false)
+}
+
+/// True while the "fake" loading screen (the Continue->world transition cover) is VISIBLE: helper =
+/// *(base+FakeLoadingScreenSingleton); visible = *(helper+0x8) & 0xff. This is the continuous signal for
+/// the menu->world loading screen the portrait belongs on -- distinct from `now_loading_active`, which reads
+/// the in-world NowLoading streaming singleton and stays 0 during this menu-background phase. Fault-guarded.
+pub(crate) unsafe fn fake_loading_screen_visible(base: usize) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let helper =
+        unsafe { safe_read_usize(base + RuntimeGlobalRva::FakeLoadingScreenSingleton as usize) }
+            .unwrap_or(0);
+    if helper == 0 || helper == null {
+        return false;
+    }
+    unsafe { safe_read_usize(helper + 0x8) }
         .map(|v| (v & 0xff) != 0)
         .unwrap_or(false)
 }

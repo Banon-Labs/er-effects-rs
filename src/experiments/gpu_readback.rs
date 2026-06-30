@@ -18,29 +18,31 @@
 
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Direct3D12::{
-    D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12_COMMAND_QUEUE_FLAG_NONE,
-    D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_FENCE_FLAG_NONE, D3D12_HEAP_FLAG_NONE,
-    D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_READBACK, D3D12_HEAP_TYPE_UPLOAD,
-    D3D12_MEMORY_POOL_UNKNOWN, D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RANGE,
-    D3D12_RESOURCE_BARRIER, D3D12_RESOURCE_BARRIER_0, D3D12_RESOURCE_BARRIER_FLAG_NONE,
-    D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_BUFFER,
-    D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COMMON,
-    D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE,
-    D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATES, D3D12_RESOURCE_TRANSITION_BARRIER,
-    D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
+    D3D12_BOX, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC,
+    D3D12_COMMAND_QUEUE_FLAG_NONE, D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_FENCE_FLAG_NONE,
+    D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_DEFAULT, D3D12_HEAP_TYPE_READBACK,
+    D3D12_HEAP_TYPE_UPLOAD, D3D12_MEMORY_POOL_UNKNOWN, D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
+    D3D12_RANGE, D3D12_RESOURCE_BARRIER, D3D12_RESOURCE_BARRIER_0,
+    D3D12_RESOURCE_BARRIER_FLAG_NONE, D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, D3D12_RESOURCE_DESC,
+    D3D12_RESOURCE_DIMENSION_BUFFER, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_FLAG_NONE,
+    D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE,
+    D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATES,
+    D3D12_RESOURCE_TRANSITION_BARRIER, D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
     D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-    D3D12_TEXTURE_LAYOUT_ROW_MAJOR, ID3D12CommandAllocator, ID3D12CommandList, ID3D12CommandQueue,
-    ID3D12Device, ID3D12Fence, ID3D12GraphicsCommandList, ID3D12Resource,
+    D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_TEXTURE_LAYOUT_UNKNOWN, ID3D12CommandAllocator,
+    ID3D12CommandList, ID3D12CommandQueue, ID3D12Device, ID3D12Fence, ID3D12GraphicsCommandList,
+    ID3D12Resource,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
     DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_UNKNOWN,
     DXGI_SAMPLE_DESC,
 };
+use windows::Win32::Graphics::Dxgi::IDXGISwapChain3;
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 use windows::core::{IUnknown, Interface, PCSTR};
@@ -56,6 +58,32 @@ const MAX_RT_DIM: u32 = 16384;
 const READBACK_FENCE_WAIT_MS: u32 = 2000;
 /// The fence value our single command-list submission signals.
 const READBACK_FENCE_TARGET: u64 = 1;
+
+/// GX swapchain command-queue global: deobf RVA of the qword holding the game's `ID3D12CommandQueue` (the
+/// `pDevice` arg the GX backend passes to `IDXGIFactory::CreateSwapChain` -- for a D3D12 swapchain that arg
+/// IS the command queue). Dump `0x1448012a8` (= `&DAT_1448012a0 + 8`, resolved from the swapchain creator
+/// `FUN_141e9cc70` via `FUN_141e888c0`). RETAINED FOR REFERENCE ONLY: submitting our composite on the
+/// game's queue from the Present hook caused a vkd3d access violation, so we now use our own private queue.
+#[allow(dead_code)]
+const GX_COMMAND_QUEUE_RVA: usize = 0x8012a8;
+
+// Persistent portrait-overlay draw state. The COM objects are leaked (`into_raw`) for the process lifetime
+// and re-borrowed (`from_raw_borrowed`) each Present -- storing raw `usize` keeps them `Send` across the
+// `static` boundary (windows-rs COM types are `!Send`). State machine: 0=uninit, 1=ready, 2=failed/give-up.
+static OVERLAY_DRAW_STATE: AtomicUsize = AtomicUsize::new(0);
+static OVERLAY_PORTRAIT_TEX: AtomicUsize = AtomicUsize::new(0); // ID3D12Resource (DEFAULT heap, COPY_SOURCE)
+static OVERLAY_ALLOCATOR: AtomicUsize = AtomicUsize::new(0); // ID3D12CommandAllocator (DIRECT)
+static OVERLAY_LIST: AtomicUsize = AtomicUsize::new(0); // ID3D12GraphicsCommandList (DIRECT, kept closed)
+static OVERLAY_FENCE: AtomicUsize = AtomicUsize::new(0); // ID3D12Fence
+static OVERLAY_QUEUE: AtomicUsize = AtomicUsize::new(0); // our OWN private DIRECT ID3D12CommandQueue (leaked)
+static OVERLAY_FENCE_VAL: AtomicU64 = AtomicU64::new(0); // monotonically incremented per submit
+static OVERLAY_PORTRAIT_W: AtomicUsize = AtomicUsize::new(0);
+static OVERLAY_PORTRAIT_H: AtomicUsize = AtomicUsize::new(0);
+/// Successful backbuffer composites submitted (RAM semaphore that the portrait is actually being drawn).
+pub(crate) static OVERLAY_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Latches once the in-world NowLoading streaming screen has been seen, so we can detect world-ready
+/// (NowLoading seen, then both loading signals down) and stop compositing once the player is in the world.
+static OVERLAY_NOW_LOADING_SEEN: AtomicUsize = AtomicUsize::new(0);
 
 /// PE image range `[base, base+SizeOfImage)` read from the in-memory PE headers at `base`.
 unsafe fn pe_image_range(base: usize) -> Option<(usize, usize)> {
@@ -846,6 +874,460 @@ unsafe fn upload_rgba_to_texture_inner(
         if wait != WAIT_OBJECT_0 {
             return false;
         }
+    }
+    true
+}
+
+/// Create a persistent DEFAULT-heap R8G8B8A8 TEXTURE2D, upload `pixels` into it via a one-shot private
+/// queue, and leave it in `COPY_SOURCE` so the per-frame composite can use it as a `CopyTextureRegion`
+/// source. Returns the texture (the temp queue/allocator/list/upload-buffer are released here). `None` on
+/// any failure -- never panics.
+unsafe fn create_portrait_source_texture(
+    device: &ID3D12Device,
+    pw: u32,
+    ph: u32,
+    pixels: &[u8],
+) -> Option<ID3D12Resource> {
+    let tex_heap = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_DEFAULT,
+        CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+        CreationNodeMask: 1,
+        VisibleNodeMask: 1,
+    };
+    let tex_desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        Alignment: 0,
+        Width: pw as u64,
+        Height: ph,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+        Flags: D3D12_RESOURCE_FLAG_NONE,
+    };
+    let mut tex_opt: Option<ID3D12Resource> = None;
+    if unsafe {
+        device.CreateCommittedResource(
+            &tex_heap,
+            D3D12_HEAP_FLAG_NONE,
+            &tex_desc,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            None,
+            &mut tex_opt,
+        )
+    }
+    .is_err()
+    {
+        return None;
+    }
+    let tex = tex_opt?;
+
+    // Copyable footprint of subresource 0 (256-aligned row pitch).
+    let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+    let mut total_bytes: u64 = 0;
+    unsafe {
+        device.GetCopyableFootprints(
+            &tex_desc,
+            0,
+            1,
+            0,
+            Some(&mut footprint),
+            None,
+            None,
+            Some(&mut total_bytes),
+        )
+    };
+    if total_bytes == 0 || footprint.Footprint.RowPitch == 0 {
+        return None;
+    }
+    let buf_heap = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_UPLOAD,
+        CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+        CreationNodeMask: 1,
+        VisibleNodeMask: 1,
+    };
+    let buf_desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+        Alignment: 0,
+        Width: total_bytes,
+        Height: 1,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: DXGI_FORMAT_UNKNOWN,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+        Flags: D3D12_RESOURCE_FLAG_NONE,
+    };
+    let mut upload_opt: Option<ID3D12Resource> = None;
+    if unsafe {
+        device.CreateCommittedResource(
+            &buf_heap,
+            D3D12_HEAP_FLAG_NONE,
+            &buf_desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            None,
+            &mut upload_opt,
+        )
+    }
+    .is_err()
+    {
+        return None;
+    }
+    let upload = upload_opt?;
+    let row_pitch = footprint.Footprint.RowPitch as usize;
+    let src_row = (pw as usize) * RGBA8_BPP;
+    let mut mapped: *mut c_void = std::ptr::null_mut();
+    if unsafe { upload.Map(0, None, Some(&mut mapped)) }.is_err() || mapped.is_null() {
+        return None;
+    }
+    let dstp = mapped as *mut u8;
+    for y in 0..ph as usize {
+        let so = y * src_row;
+        let d_o = y * row_pitch;
+        if so + src_row > pixels.len() || (d_o + src_row) as u64 > total_bytes {
+            break;
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(pixels.as_ptr().add(so), dstp.add(d_o), src_row);
+        }
+    }
+    unsafe { upload.Unmap(0, None) };
+
+    let queue_desc = D3D12_COMMAND_QUEUE_DESC {
+        Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+        Priority: 0,
+        Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
+        NodeMask: 0,
+    };
+    let queue = unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue_desc) }.ok()?;
+    let allocator = unsafe {
+        device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)
+    }
+    .ok()?;
+    let list = unsafe {
+        device.CreateCommandList::<_, _, ID3D12GraphicsCommandList>(
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            &allocator,
+            None,
+        )
+    }
+    .ok()?;
+    // tex was created in COPY_DEST -- copy upload -> tex sub 0, then transition tex to COPY_SOURCE.
+    let mut src_loc = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(upload.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            PlacedFootprint: footprint,
+        },
+    };
+    let mut dst_loc = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(tex.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            SubresourceIndex: 0,
+        },
+    };
+    unsafe { list.CopyTextureRegion(&dst_loc, 0, 0, 0, &src_loc, None) };
+    unsafe { ManuallyDrop::drop(&mut src_loc.pResource) };
+    unsafe { ManuallyDrop::drop(&mut dst_loc.pResource) };
+    unsafe {
+        record_transition(
+            &list,
+            &tex,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+        )
+    };
+    if unsafe { list.Close() }.is_err() {
+        return None;
+    }
+    let base_list = list.cast::<ID3D12CommandList>().ok()?;
+    unsafe { queue.ExecuteCommandLists(&[Some(base_list)]) };
+    let fence = unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }.ok()?;
+    if unsafe { queue.Signal(&fence, READBACK_FENCE_TARGET) }.is_err() {
+        return None;
+    }
+    if unsafe { fence.GetCompletedValue() } < READBACK_FENCE_TARGET {
+        let event = unsafe { CreateEventW(None, false, false, None) }.ok()?;
+        let _ = unsafe { fence.SetEventOnCompletion(READBACK_FENCE_TARGET, event) };
+        let wait = unsafe { WaitForSingleObject(event, READBACK_FENCE_WAIT_MS) };
+        let _ = unsafe { CloseHandle(event) };
+        if wait != WAIT_OBJECT_0 {
+            return None;
+        }
+    }
+    Some(tex)
+}
+
+/// One-time setup for the per-frame composite: derive the device from the backbuffer, read the captured
+/// portrait, build the persistent source texture + command allocator/list/fence + our OWN private DIRECT
+/// queue. We do NOT submit on the game's command queue -- doing so from the Present hook caused a vkd3d
+/// access violation; instead we CPU-fence-wait our copy to completion before the original Present runs.
+/// Stores every object as a leaked raw pointer. `false` on any failure. The step logs localize a hardware
+/// fault (catch_unwind cannot catch an access violation inside a D3D12 call).
+unsafe fn init_overlay_draw_state(backbuffer: &ID3D12Resource) -> bool {
+    let mut device_opt: Option<ID3D12Device> = None;
+    if unsafe { backbuffer.GetDevice(&mut device_opt) }.is_err() {
+        return false;
+    }
+    let Some(device) = device_opt else {
+        return false;
+    };
+
+    let (pw, ph, pixels) = {
+        let Ok(g) = LOADING_BG_PORTRAIT_RGBA.lock() else {
+            return false;
+        };
+        match g.as_ref() {
+            Some((w, h, px)) => (*w, *h, px.clone()),
+            None => return false,
+        }
+    };
+    if pw == 0 || ph == 0 || pw > MAX_RT_DIM || ph > MAX_RT_DIM {
+        return false;
+    }
+    if pixels.len() < (pw as usize) * (ph as usize) * RGBA8_BPP {
+        return false;
+    }
+    append_autoload_debug(format_args!(
+        "present-overlay: draw init step1 device + portrait ok ({pw}x{ph}, {} bytes)",
+        pixels.len()
+    ));
+
+    let Some(tex) = (unsafe { create_portrait_source_texture(&device, pw, ph, &pixels) }) else {
+        return false;
+    };
+    append_autoload_debug(format_args!(
+        "present-overlay: draw init step2 portrait source texture ready"
+    ));
+    let Ok(allocator) = (unsafe {
+        device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)
+    }) else {
+        return false;
+    };
+    let Ok(list) = (unsafe {
+        device.CreateCommandList::<_, _, ID3D12GraphicsCommandList>(
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            &allocator,
+            None,
+        )
+    }) else {
+        return false;
+    };
+    // CreateCommandList returns the list OPEN; close it so the first per-frame `Reset` is valid.
+    if unsafe { list.Close() }.is_err() {
+        return false;
+    }
+    let Ok(fence) = (unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }) else {
+        return false;
+    };
+
+    // Our OWN persistent DIRECT queue (the proven readback/upload pattern). We never touch the game's queue.
+    let queue_desc = D3D12_COMMAND_QUEUE_DESC {
+        Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+        Priority: 0,
+        Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
+        NodeMask: 0,
+    };
+    let Ok(queue) = (unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue_desc) })
+    else {
+        return false;
+    };
+    append_autoload_debug(format_args!(
+        "present-overlay: draw init step3 cmd objects + own queue ready"
+    ));
+
+    OVERLAY_PORTRAIT_TEX.store(tex.into_raw() as usize, Ordering::SeqCst);
+    OVERLAY_ALLOCATOR.store(allocator.into_raw() as usize, Ordering::SeqCst);
+    OVERLAY_LIST.store(list.into_raw() as usize, Ordering::SeqCst);
+    OVERLAY_FENCE.store(fence.into_raw() as usize, Ordering::SeqCst);
+    OVERLAY_QUEUE.store(queue.into_raw() as usize, Ordering::SeqCst);
+    OVERLAY_PORTRAIT_W.store(pw as usize, Ordering::SeqCst);
+    OVERLAY_PORTRAIT_H.store(ph as usize, Ordering::SeqCst);
+    true
+}
+
+/// Composite the captured portrait onto the swapchain backbuffer. Called from the Present detour every
+/// frame while the now-loading screen is up. `catch_unwind` + every COM call checked -> never panics or
+/// crashes on the game's render thread; on any failure it draws nothing and returns `false`.
+pub(crate) unsafe fn composite_portrait_on_swapchain(base: usize, swapchain_raw: usize) -> bool {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        composite_portrait_inner(base, swapchain_raw)
+    }))
+    .unwrap_or(false)
+}
+
+unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
+    if PROFILE_BAKE_RGBA_CAPTURED.load(Ordering::SeqCst) == 0 {
+        return false;
+    }
+    // Draw from the EARLIEST loading-screen frame. The menu->world transition cover (where the user
+    // currently sees the checkerboard) is signalled by the now-loading background FORGE
+    // (LOADING_BG_TEXTURE_REDIRECT_COMMITS, true from the first MENU_Load bind ~loading-screen-start, ~+15s),
+    // many seconds BEFORE the later world-streaming fake-loading / NowLoading singletons go true. So gate on
+    // the forge OR either streaming screen. Stop once the world is playable: latch when NowLoading has been
+    // seen, then both streaming signals fall (world ready). The forge counter is cumulative, so this latch
+    // is what ends the draw -- without it the portrait would persist over gameplay.
+    let fake_vis = unsafe { fake_loading_screen_visible(base) };
+    let now_load = unsafe { now_loading_active(base) };
+    if now_load {
+        OVERLAY_NOW_LOADING_SEEN.store(1, Ordering::SeqCst);
+    }
+    let world_ready =
+        OVERLAY_NOW_LOADING_SEEN.load(Ordering::SeqCst) != 0 && !now_load && !fake_vis;
+    let forge_committed = LOADING_BG_TEXTURE_REDIRECT_COMMITS.load(Ordering::SeqCst) > 0;
+    if world_ready || !(forge_committed || fake_vis || now_load) {
+        return false;
+    }
+    if OVERLAY_DRAW_STATE.load(Ordering::SeqCst) == 2 {
+        return false;
+    }
+
+    let sc_raw = swapchain_raw as *mut c_void;
+    let Some(sc) = (unsafe { IDXGISwapChain3::from_raw_borrowed(&sc_raw) }) else {
+        return false;
+    };
+    let idx = unsafe { sc.GetCurrentBackBufferIndex() };
+    let Ok(backbuffer) = (unsafe { sc.GetBuffer::<ID3D12Resource>(idx) }) else {
+        return false;
+    };
+
+    if OVERLAY_DRAW_STATE.load(Ordering::SeqCst) == 0 {
+        if unsafe { init_overlay_draw_state(&backbuffer) } {
+            OVERLAY_DRAW_STATE.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "present-overlay: draw state READY (portrait {}x{})",
+                OVERLAY_PORTRAIT_W.load(Ordering::SeqCst),
+                OVERLAY_PORTRAIT_H.load(Ordering::SeqCst)
+            ));
+        } else {
+            OVERLAY_DRAW_STATE.store(2, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "present-overlay: draw init FAILED -- giving up"
+            ));
+            return false;
+        }
+    }
+
+    let tex_raw = OVERLAY_PORTRAIT_TEX.load(Ordering::SeqCst) as *mut c_void;
+    let alloc_raw = OVERLAY_ALLOCATOR.load(Ordering::SeqCst) as *mut c_void;
+    let list_raw = OVERLAY_LIST.load(Ordering::SeqCst) as *mut c_void;
+    let fence_raw = OVERLAY_FENCE.load(Ordering::SeqCst) as *mut c_void;
+    let queue_raw = OVERLAY_QUEUE.load(Ordering::SeqCst) as *mut c_void;
+    let (Some(tex), Some(allocator), Some(list), Some(fence), Some(queue)) = (unsafe {
+        (
+            ID3D12Resource::from_raw_borrowed(&tex_raw),
+            ID3D12CommandAllocator::from_raw_borrowed(&alloc_raw),
+            ID3D12GraphicsCommandList::from_raw_borrowed(&list_raw),
+            ID3D12Fence::from_raw_borrowed(&fence_raw),
+            ID3D12CommandQueue::from_raw_borrowed(&queue_raw),
+        )
+    }) else {
+        return false;
+    };
+
+    let bb_desc = unsafe { backbuffer.GetDesc() };
+    let bw = bb_desc.Width as u32;
+    let bh = bb_desc.Height;
+    let pw = OVERLAY_PORTRAIT_W.load(Ordering::SeqCst) as u32;
+    let ph = OVERLAY_PORTRAIT_H.load(Ordering::SeqCst) as u32;
+    if bw == 0 || bh == 0 || pw == 0 || ph == 0 {
+        return false;
+    }
+    // Clamp the copy to the backbuffer and center it (CopyTextureRegion does not scale).
+    let cw = pw.min(bw);
+    let ch = ph.min(bh);
+    let dx = (bw - cw) / 2;
+    let dy = (bh - ch) / 2;
+
+    if unsafe { allocator.Reset() }.is_err() {
+        return false;
+    }
+    if unsafe { list.Reset(allocator, None) }.is_err() {
+        return false;
+    }
+    unsafe {
+        record_transition(
+            list,
+            &backbuffer,
+            D3D12_RESOURCE_STATE_PRESENT,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+        )
+    };
+    let src_box = D3D12_BOX {
+        left: 0,
+        top: 0,
+        front: 0,
+        right: cw,
+        bottom: ch,
+        back: 1,
+    };
+    let mut src_loc = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(tex.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            SubresourceIndex: 0,
+        },
+    };
+    let mut dst_loc = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(backbuffer.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            SubresourceIndex: 0,
+        },
+    };
+    unsafe { list.CopyTextureRegion(&dst_loc, dx, dy, 0, &src_loc, Some(&src_box)) };
+    unsafe { ManuallyDrop::drop(&mut src_loc.pResource) };
+    unsafe { ManuallyDrop::drop(&mut dst_loc.pResource) };
+    unsafe {
+        record_transition(
+            list,
+            &backbuffer,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PRESENT,
+        )
+    };
+    if unsafe { list.Close() }.is_err() {
+        return false;
+    }
+    let Ok(base_list) = list.cast::<ID3D12CommandList>() else {
+        return false;
+    };
+    unsafe { queue.ExecuteCommandLists(&[Some(base_list)]) };
+    let val = OVERLAY_FENCE_VAL.fetch_add(1, Ordering::SeqCst) + 1;
+    if unsafe { queue.Signal(fence, val) }.is_err() {
+        return false;
+    }
+    if unsafe { fence.GetCompletedValue() } < val {
+        let Ok(event) = (unsafe { CreateEventW(None, false, false, None) }) else {
+            return false;
+        };
+        if unsafe { fence.SetEventOnCompletion(val, event) }.is_err() {
+            let _ = unsafe { CloseHandle(event) };
+            return false;
+        }
+        let wait = unsafe { WaitForSingleObject(event, READBACK_FENCE_WAIT_MS) };
+        let _ = unsafe { CloseHandle(event) };
+        if wait != WAIT_OBJECT_0 {
+            return false;
+        }
+    }
+    let hits = OVERLAY_DRAW_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    if hits == 1 {
+        append_autoload_debug(format_args!(
+            "present-overlay: portrait COMPOSITED onto backbuffer {bw}x{bh} (portrait {pw}x{ph} at {dx},{dy})"
+        ));
     }
     true
 }
