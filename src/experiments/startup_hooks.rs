@@ -4352,8 +4352,22 @@ pub(crate) unsafe fn maybe_reforge_loading_portrait(base: usize) {
         return;
     }
     let ok = unsafe { upload_rgba_to_texture(gx, w, h, &px) };
+    // VERIFY: read back the SAME gx right after the upload. If it now reads the portrait, the upload DID
+    // land in this texture (so any remaining checker on screen means Scaleform samples a DIFFERENT copy);
+    // if it still reads the checker (bright magenta/yellow, rgb~255 with high variance), find_d3d12_resource
+    // picked the wrong same-size texture and the upload missed -> fixable by targeting deterministically.
+    let mut verify_rgb = (0u8, 0u8, 0u8);
+    if let Some((vw, vh, vpx)) = unsafe { readback_offscreen_rgba8(gx) } {
+        let n = (vw as usize) * (vh as usize);
+        if vpx.len() >= n * 4 {
+            let (cx, cy) = (vw as usize / 2, vh as usize / 2);
+            let idx = (cy * vw as usize + cx) * 4;
+            verify_rgb = (vpx[idx], vpx[idx + 1], vpx[idx + 2]);
+        }
+    }
     append_autoload_debug(format_args!(
-        "loading-portrait: UPLOADED real portrait {w}x{h} into displayed now-loading texture gx=0x{gx:x} ok={ok} (loading screen now shows the real character)"
+        "loading-portrait: UPLOADED real portrait {w}x{h} into displayed now-loading texture gx=0x{gx:x} ok={ok} verify_center_rgb=({},{},{}) (loading screen now shows the real character)",
+        verify_rgb.0, verify_rgb.1, verify_rgb.2
     ));
     if !ok {
         // Allow a retry next frame if the upload failed (e.g. dim mismatch or transient device state).
