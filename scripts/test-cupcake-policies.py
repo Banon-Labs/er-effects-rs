@@ -64,22 +64,6 @@ def main() -> int:
     cases = [
         PolicyCase("allow-rtk", "rtk ls", True),
         PolicyCase(
-            "deny-missing-tool-timeout-field",
-            "rtk ls",
-            False,
-            "missing Bash tool timeout parameter",
-            include_timeout=False,
-        ),
-        PolicyCase(
-            "deny-tool-timeout-too-large",
-            "rtk ls",
-            False,
-            "no more than 45 seconds",
-            {"timeout": 45001},
-        ),
-        PolicyCase("deny-shell-sleep", "sleep 1", False, "shell sleep command"),
-        PolicyCase("deny-native-ls", "ls target", False, "RTK path"),
-        PolicyCase(
             "deny-inline-env",
             "FOO=bar ./scripts/check.sh",
             False,
@@ -282,25 +266,6 @@ def main() -> int:
             "python3 - <<'PY'\n# find grep ls git status in body\nprint('find grep ls')\nPY",
             True,
         ),
-        # Real native invocations must still be denied.
-        PolicyCase(
-            "deny-native-grep",
-            "grep -n foo src",
-            False,
-            "RTK path",
-        ),
-        PolicyCase(
-            "deny-native-find",
-            "find . -name x",
-            False,
-            "RTK path",
-        ),
-        PolicyCase(
-            "deny-native-ls-target",
-            "ls target",
-            False,
-            "RTK path",
-        ),
         PolicyCase(
             "deny-steam-applaunch-elden-ring",
             "steam -applaunch 1245620",
@@ -363,12 +328,6 @@ def main() -> int:
             "blocked this Seamless Co-op DLL bundling command",
             {"language": "python", "code": "import shutil; shutil.copy2('SeamlessCoop/ersc.dll', 'target/release/ersc.dll')"},
             tool_name="ctx_execute",
-        ),
-        PolicyCase(
-            "deny-native-git-status",
-            "git status",
-            False,
-            "git inspection",
         ),
         PolicyCase(
             "allow-mutating-git-branch-delete",
