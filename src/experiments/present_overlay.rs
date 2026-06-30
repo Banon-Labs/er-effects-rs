@@ -57,12 +57,21 @@ const PRESENT1_VTABLE_INDEX: usize = 22;
 type PresentFn = unsafe extern "system" fn(*mut c_void, u32, u32) -> i32;
 type Present1Fn = unsafe extern "system" fn(*mut c_void, u32, u32, *const c_void) -> i32;
 
-/// `GLOBAL_CSGraphics` (the GX device singleton) deobf RVA -- from the dump (0x143d71c48, stored by
-/// `FUN_140b1dc40`). The 0x130-byte CS::CSGraphicsImp it points to holds the live IDXGISwapChain several
-/// sub-objects deep.
-const GLOBAL_CSGRAPHICS_RVA: usize = 0x3d71c48;
-/// Set once we've found the GAME's swapchain and hooked its REAL Present/Present1 (the dummy-swapchain
-/// vtable funcs differ under vkd3d-proton, so hooking those never fired -- we must hook the game's own).
+/// `g_GxDrawContext` (GXSR::GxDrawContext singleton) deobf RVA -- the RE-confirmed root of the live
+/// swapchain. The deobf binary stores this singleton at 0x1419e637c (`mov [rip]=0x1447ef360`) right before
+/// the `GxDrawContext::Initilize` fall-through (ground-truthed against the deobf binary, not a formula).
+/// The 0x1010-byte GxDrawContext holds the per-window render-output vector at +0x120 (begin ptr at +0x128);
+/// each inline 0x170-byte entry's first qword is the per-window output object, whose first qword IS the live
+/// `IDXGISwapChain3*`. Chain: `*(base+RVA)` -> `+0x128` -> `*entry[0]` -> `*output` = swapchain. (Supersedes
+/// the old `GLOBAL_CSGraphics` root, which never held the swapchain -- CSGraphics is unrelated to GX present.)
+const G_GX_DRAW_CONTEXT_RVA: usize = 0x47ef360;
+/// `GxDrawContext+0x128` = begin pointer of the per-window render-output vector (vector object at +0x120).
+const GXDC_OUTPUT_VEC_BEGIN_OFFSET: usize = 0x128;
+/// Set once we've found the GAME's swapchain and hooked its REAL Present/Present1. (The earlier "dummy
+/// swapchain vtable funcs differ under vkd3d-proton" theory was unsound -- under Proton all dxgi.dll
+/// swapchains share one DXVK `CDXGISwapChain` vtable, so Present(8)/Present1(22) are the same function for
+/// every swapchain. The real prior blocker was the FIND missing the object, so MinHook was never attempted
+/// on a real swapchain; dinput8 MinHooks fire, so the hook path itself is sound.)
 static GAME_PRESENT_HOOKED: AtomicUsize = AtomicUsize::new(0);
 static GAME_SWAPCHAIN_FIND_TRIES: AtomicUsize = AtomicUsize::new(0);
 /// The dummy swapchain's Present addr -- only used as a same-module hint for the swapchain-vtable filter.
@@ -370,15 +379,46 @@ unsafe fn is_idxgi_swapchain(obj: usize) -> bool {
     .unwrap_or(false)
 }
 
-/// Find the GAME's live `IDXGISwapChain` by a bounded BFS over the GX device (`GLOBAL_CSGraphics`) object
-/// tree: any reachable object whose vtable is in dxgi.dll AND QIs as IDXGISwapChain is it. Read-only
-/// pointer-walking + a confirming QI; returns the swapchain object pointer.
+/// Find the GAME's live `IDXGISwapChain3*` via the RE-confirmed deref chain rooted at `g_GxDrawContext`:
+/// `*(base+RVA)` (GxDrawContext) -> `+0x128` (output-vector begin) -> `*entry[0]` (per-window output) ->
+/// `*output` (the swapchain). A confirming QI (`is_idxgi_swapchain`) self-validates, so a wrong/drifted
+/// offset degrades to `None` (then the BFS fallback) -- never a crash or a wrong hook. Read-only walking.
 unsafe fn find_game_swapchain(base: usize) -> Option<usize> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let gx = unsafe { safe_read_usize(base + GLOBAL_CSGRAPHICS_RVA) }.unwrap_or(0);
-    if gx == 0 || gx == null {
-        return None;
+    let read_nn = |a: usize| -> Option<usize> {
+        let v = unsafe { safe_read_usize(a) }?;
+        if v < 0x10000 || v == null || v >= 0x8000_0000_0000 {
+            None
+        } else {
+            Some(v)
+        }
+    };
+    let ctx = read_nn(base + G_GX_DRAW_CONTEXT_RVA)?; // GxDrawContext*
+    // Precise chain: output-vector begin -> entry[0] output object -> output[0] swapchain.
+    if let Some(sc) = read_nn(ctx + GXDC_OUTPUT_VEC_BEGIN_OFFSET)
+        .and_then(read_nn)
+        .and_then(read_nn)
+    {
+        if unsafe { is_idxgi_swapchain(sc) } {
+            let t = GAME_SWAPCHAIN_FIND_TRIES.load(Ordering::SeqCst);
+            if t <= 1 {
+                append_autoload_debug(format_args!(
+                    "present-overlay: FOUND game swapchain 0x{sc:x} via g_GxDrawContext chain (ctx=0x{ctx:x})"
+                ));
+            }
+            return Some(sc);
+        }
     }
+    // Chain not yet populated (early frame) or layout drift: fall back to a bounded BFS rooted at the
+    // GxDrawContext (a far closer root than the old CSGraphics), gated by the same confirming QI.
+    unsafe { find_game_swapchain_bfs(ctx) }
+}
+
+/// Fallback for [`find_game_swapchain`]: bounded BFS from `root` (the `g_GxDrawContext`) for any reachable
+/// object whose vtable is in dxgi.dll AND QIs as `IDXGISwapChain`. Insurance for the case where the precise
+/// chain offset drifts; self-validating via the same QI. Read-only pointer-walking.
+unsafe fn find_game_swapchain_bfs(root: usize) -> Option<usize> {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let dxgi = unsafe { module_range(b"dxgi.dll\0") };
     let hint = PRESENT_RESOLVED_ADDR.load(Ordering::SeqCst);
     let vt_ok = |v: usize| -> bool {
@@ -390,7 +430,7 @@ unsafe fn find_game_swapchain(base: usize) -> Option<usize> {
         }
     };
     let mut visited: Vec<usize> = Vec::with_capacity(2048);
-    let mut queue: Vec<(usize, u32)> = vec![(gx, 0)];
+    let mut queue: Vec<(usize, u32)> = vec![(root, 0)];
     let mut budget = 0u32;
     let mut dxgi_candidates = 0u32;
     while let Some((obj, depth)) = queue.pop() {
@@ -410,7 +450,7 @@ unsafe fn find_game_swapchain(base: usize) -> Option<usize> {
             dxgi_candidates += 1;
             if unsafe { is_idxgi_swapchain(obj) } {
                 append_autoload_debug(format_args!(
-                    "present-overlay: FOUND game swapchain 0x{obj:x} (vtable=0x{vt:x}) after {budget} objs depth={depth}"
+                    "present-overlay: FOUND game swapchain 0x{obj:x} (vtable=0x{vt:x}) via BFS after {budget} objs depth={depth}"
                 ));
                 return Some(obj);
             }
@@ -431,7 +471,7 @@ unsafe fn find_game_swapchain(base: usize) -> Option<usize> {
     let t = GAME_SWAPCHAIN_FIND_TRIES.load(Ordering::SeqCst);
     if t == 1 || t == 300 || t == 1200 {
         append_autoload_debug(format_args!(
-            "present-overlay: scan miss try={t} gx=0x{gx:x} dxgi_module={} objs={budget} dxgi_vtable_candidates={dxgi_candidates} visited={}",
+            "present-overlay: scan miss try={t} root=0x{root:x} dxgi_module={} objs={budget} dxgi_vtable_candidates={dxgi_candidates} visited={}",
             dxgi.map(|(l, h)| format!("[0x{l:x},0x{h:x})"))
                 .unwrap_or_else(|| "NONE".to_string()),
             visited.len()
@@ -440,9 +480,44 @@ unsafe fn find_game_swapchain(base: usize) -> Option<usize> {
     None
 }
 
-/// Per-frame (from a recurring game task): once the GX device is up, find the GAME's swapchain and hook
-/// its REAL Present(8)/Present1(22) -- the dummy-swapchain funcs differ under vkd3d-proton, so this is the
-/// only way the hook fires on the game's frames. One-shot (latched on success); bounded retries.
+/// Overwrite the COM `vtable[index]` slot at `slot_addr` so it points at `new_fn`, returning the previous
+/// function pointer (for call-through), or `None` if the page could not be made writable. Patches a DATA
+/// pointer in the dxgi vtable -- NOT the function body -- so it sidesteps the W^X code-page patch that
+/// MinHook cannot apply on Wine's dxgi.dll (it reports MH_OK yet the detour never fires). `VirtualProtect`
+/// the 8-byte slot to RW, swap the pointer, then restore the original page protection.
+unsafe fn vtable_swap_slot(slot_addr: usize, new_fn: usize) -> Option<usize> {
+    use windows::Win32::System::Memory::{PAGE_PROTECTION_FLAGS, PAGE_READWRITE, VirtualProtect};
+    let slot = slot_addr as *mut usize;
+    let mut old_prot = PAGE_PROTECTION_FLAGS(0);
+    if unsafe {
+        VirtualProtect(
+            slot_addr as *const c_void,
+            std::mem::size_of::<usize>(),
+            PAGE_READWRITE,
+            &mut old_prot,
+        )
+    }
+    .is_err()
+    {
+        return None;
+    }
+    let old = unsafe { core::ptr::read_volatile(slot) };
+    unsafe { core::ptr::write_volatile(slot, new_fn) };
+    let mut restored = PAGE_PROTECTION_FLAGS(0);
+    let _ = unsafe {
+        VirtualProtect(
+            slot_addr as *const c_void,
+            std::mem::size_of::<usize>(),
+            old_prot,
+            &mut restored,
+        )
+    };
+    Some(old)
+}
+
+/// Per-frame (from a recurring game task): once the GX device is up, find the GAME's swapchain and redirect
+/// its REAL Present(8)/Present1(22) via a vtable-slot swap (NOT a MinHook code patch -- that reports MH_OK
+/// but never fires on Wine's dxgi.dll). One-shot (latched on success); bounded retries.
 pub(crate) unsafe fn try_install_game_present_hook(base: usize) {
     if !portrait_lookat_enabled()
         || PRESENT_HOOK_INSTALLED.load(Ordering::SeqCst) == 0
@@ -468,36 +543,30 @@ pub(crate) unsafe fn try_install_game_present_hook(base: usize) {
     if present8 <= 0x10000 || present22 <= 0x10000 {
         return;
     }
-    // Latch BEFORE hooking so a retry can't double-install.
+    // Latch BEFORE swapping so a retry can't double-install.
     if GAME_PRESENT_HOOKED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
-    match unsafe { MhHook::new(present8 as *mut c_void, present_hook as *mut c_void) } {
-        Ok(hook) => {
-            PRESENT_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            std::mem::forget(hook);
-        }
-        Err(e) => append_autoload_debug(format_args!(
-            "present-overlay: hook game Present failed: {e:?}"
-        )),
-    }
-    match unsafe { MhHook::new(present22 as *mut c_void, present1_hook as *mut c_void) } {
-        Ok(hook) => {
-            PRESENT1_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            std::mem::forget(hook);
-        }
-        Err(e) => append_autoload_debug(format_args!(
-            "present-overlay: hook game Present1 failed: {e:?}"
-        )),
-    }
-    match unsafe { MH_ApplyQueued() } {
-        MH_STATUS::MH_OK => append_autoload_debug(format_args!(
-            "present-overlay: HOOKED game swapchain 0x{sc:x} Present8=0x{present8:x} Present1_22=0x{present22:x} (tries={tries})"
-        )),
-        status => append_autoload_debug(format_args!(
-            "present-overlay: game-present MH_ApplyQueued failed: {status:?}"
-        )),
-    }
+    // Save the originals FIRST (the detours tail-call them), then VMT-swap the swapchain's vtable slots.
+    // We patch the vtable DATA pointers, NOT the function bodies: MinHook's code-page byte-patch reports
+    // MH_OK on Wine's dxgi.dll yet never intercepts (HOOKED-but-never-fired, a W^X code-page refusal),
+    // whereas a vtable-slot swap redirects the game's `swapchain->vtable[8]/[22]` calls deterministically.
+    // The slot is 8-byte aligned, so the render thread reading it concurrently sees old-or-new, never torn.
+    PRESENT_ORIG.store(present8, Ordering::SeqCst);
+    PRESENT1_ORIG.store(present22, Ordering::SeqCst);
+    let slot8 = vt + PRESENT_VTABLE_INDEX * 8;
+    let slot22 = vt + PRESENT1_VTABLE_INDEX * 8;
+    let swap8 = unsafe { vtable_swap_slot(slot8, present_hook as usize) }.is_some();
+    let swap22 = unsafe { vtable_swap_slot(slot22, present1_hook as usize) }.is_some();
+    // Read the slots back so a failed patch is visible in the log (self-validating: a later FIRED line plus
+    // readback=true proves the redirect took; readback=true with no FIRED means the game presents elsewhere).
+    let now8 = unsafe { safe_read_usize(slot8) }.unwrap_or(0);
+    let now22 = unsafe { safe_read_usize(slot22) }.unwrap_or(0);
+    append_autoload_debug(format_args!(
+        "present-overlay: VMT-swap game swapchain 0x{sc:x} (tries={tries}) Present8=0x{present8:x} Present1_22=0x{present22:x} slot8@0x{slot8:x} swap={swap8} readback={} slot22@0x{slot22:x} swap={swap22} readback={}",
+        now8 == present_hook as usize,
+        now22 == present1_hook as usize,
+    ));
 }
 
 unsafe extern "system" fn dummy_wndproc(
