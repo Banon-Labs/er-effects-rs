@@ -2096,6 +2096,58 @@ unsafe fn sample_portrait_gxtexture(base: usize, slot: i32) -> usize {
         .unwrap_or(0)
 }
 
+/// Re-bind the LIVE offscreen-RT CSGxTexture of our post-Continue built renderer into the now-loading
+/// background container that the forge already injected. The now-loading background binds ~15-17s (BEFORE
+/// our renderer's RT is live) and never re-binds, so the displayed container holds the forged checker; this
+/// swaps our live GX into that container's first TexResCap every tick once the RT is up, and GFx -- which
+/// re-samples the bound CSGxTexture each composite frame -- then shows the live animated portrait. The
+/// CSGxTexture identity is stable while our feed window keeps the renderer alive, so this is idempotent
+/// once latched. Read/validate-guarded; writes only the single GX pointer slot.
+unsafe fn refresh_loading_bg_live_gx(base: usize) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let valid = |p: usize| p != 0 && p != null;
+    let cap = LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT.load(Ordering::SeqCst);
+    if !valid(cap) {
+        return;
+    }
+    let live_gx = unsafe { sample_portrait_gxtexture(base, OWN_STEPPER_SLOT.load(Ordering::SeqCst)) };
+    if !valid(live_gx) {
+        return;
+    }
+    let container = unsafe { safe_read_usize(cap + TPF_FILE_CAP_TEX_RESCAP_OFFSET) }.unwrap_or(0);
+    if !valid(container) {
+        return;
+    }
+    let count = unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_COUNT_OFFSET) }
+        .unwrap_or(0)
+        & 0xffff_ffff;
+    let array =
+        unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_ARRAY_OFFSET) }.unwrap_or(0);
+    if count < 1 || !valid(array) {
+        return;
+    }
+    let tex_rescap0 = unsafe { safe_read_usize(array) }.unwrap_or(0);
+    if !valid(tex_rescap0) {
+        return;
+    }
+    let cur = unsafe { safe_read_usize(tex_rescap0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) }
+        .unwrap_or(0);
+    if cur == live_gx {
+        return; // already bound to the live RT
+    }
+    unsafe {
+        ((tex_rescap0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) as *mut usize)
+            .write_volatile(live_gx)
+    };
+    LOADING_BG_LIVE_GX_BOUND.store(live_gx, Ordering::SeqCst);
+    let n = LOADING_BG_LIVE_GX_REBINDS.fetch_add(1, Ordering::SeqCst) + 1;
+    if n == 1 {
+        append_autoload_debug(format_args!(
+            "loading-portrait: RE-BOUND live offscreen RT into the now-loading container -- live_gx=0x{live_gx:x} (was 0x{cur:x}) cap=0x{cap:x} container=0x{container:x}; loading screen now samples the live portrait"
+        ));
+    }
+}
+
 /// Per-frame: keep the spared profile renderer drawing and capture the portrait once its model
 /// finishes loading. After Continue the menu-owned offscreen-draw MenuJob stops, so we drive the
 /// spared renderer's offscreen render ourselves each frame (`FUN_140bb8d90`); the global ResMan task
@@ -3102,11 +3154,13 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
             }
         }
         append_autoload_debug(format_args!(
-            "lookat-spared-sweep: frame={n} nowload={} loadbuilds={} built[r={built_r} m={built_m}] model_raw=0x{model_raw:x} cap_model=0x{cap_model:x} cap_vt=0x{cap_vt:x} spared[ptr=0x{:x} model_ok={} draws={} hits={}] rt[samples={} nonblack={} changed={}]",
+            "lookat-spared-sweep: frame={n} nowload={} loadbuilds={} built[r={built_r} m={built_m}] rebind[n={} gx=0x{:x}] model_raw=0x{model_raw:x} cap_model=0x{cap_model:x} cap_vt=0x{cap_vt:x} spared[ptr=0x{:x} model_ok={} draws={} hits={}] rt[samples={} nonblack={} changed={}]",
             game_module_base()
                 .map(|b| unsafe { now_loading_active(b) } as u8)
                 .unwrap_or(0),
             PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst),
+            LOADING_BG_LIVE_GX_REBINDS.load(Ordering::SeqCst),
+            LOADING_BG_LIVE_GX_BOUND.load(Ordering::SeqCst),
             LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst),
             PROFILE_SPARED_MODEL_OK.load(Ordering::SeqCst),
             PROFILE_PERFRAME_SPARED_DRAWS.load(Ordering::SeqCst),
@@ -3459,6 +3513,10 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // torn-down post-Continue table), repopulate the table during now-loading so the rest of this tick
     // (mark+refresh feed) and the look-at/draw/oracle run on the loading screen.
     unsafe { maybe_build_profile_table_for_loading(base) };
+    // VISIBILITY: once our built renderer's offscreen RT is live, swap it into the now-loading background
+    // container the forge already injected (the background binds BEFORE our renderer exists and never
+    // re-binds, so the live RT must be pushed into the displayed container after the fact).
+    unsafe { refresh_loading_bg_live_gx(base) };
     // HIGHER-RES (one-shot, EARLY -- runs before the table-ready guard below so it lands before
     // TitleTopDialog constructs the renderers). Patch each per-slot offscreen base-size entry that
     // still holds the init value (128x128, written by FUN_1400a7bb0) to 1024x1024 base AND zero the
@@ -3868,7 +3926,10 @@ pub(crate) unsafe extern "system" fn loading_bg_replace_bind_hook(rti: usize, sy
         }
     };
     let total = LOADING_BG_REPLACE_BIND_TOTAL_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
-    let pae = product_autoload_enabled();
+    // Fire on the portrait-lookat path too, not just product autoload: the native-continue smoke arms the
+    // portrait via portrait_lookat_enabled() and does NOT set product_autoload_enabled() (observed pae=false
+    // on the MENU_Load binds), so gating on pae alone never forged. Mirrors the teardown-spare gating fix.
+    let pae = product_autoload_enabled() || portrait_lookat_enabled();
     let sym = unsafe { read_dlstring_u16(symbol) };
     // Diagnostic: log the first calls' symbols (ungated) so we can confirm whether the now-loading
     // MENU_Load_ background symbols actually reach this bind function and how they decode.
@@ -3933,10 +3994,17 @@ pub(crate) unsafe extern "system" fn loading_bg_replace_bind_hook(rti: usize, sy
         LOADING_BG_TEXTURE_REDIRECT_LAST_SYMBOL_MATCH.store(3, Ordering::SeqCst);
         return call_orig();
     }
-    // If we captured the live portrait CSGxTexture during ProfileSelect (kept alive past the
-    // ProfileSelect teardown), swap it into this container's first TexResCap so the loading screen
-    // composites the real character portrait. Falls back to the checker if no portrait was captured.
-    let kept_portrait = LOADING_BG_PORTRAIT_GX_KEPT.load(Ordering::SeqCst);
+    // Swap our portrait's CSGxTexture into this container's first TexResCap so the loading screen
+    // composites the real character portrait. PREFER the LIVE offscreen RT GX texture from the
+    // post-Continue OWN-RENDERER we built (renderer -> +0xa8 CSEzOffscreenRend -> +0x10 CSRuntimeTexResCap
+    // -> CSGxTexture): GFx re-samples that GX every composite frame, and our feed window keeps the model
+    // rendering into it, so the loading screen shows the live, animated portrait -- not a static snapshot.
+    // Fall back to the old kept-capture (LOADING_BG_PORTRAIT_GX_KEPT), then to the forged checker, if the
+    // live RT is not up yet on this bind (the now-loading background rotates, so a later bind picks it up).
+    let target_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+    let live_gx = unsafe { sample_portrait_gxtexture(base, target_slot) };
+    let kept_capture = LOADING_BG_PORTRAIT_GX_KEPT.load(Ordering::SeqCst);
+    let kept_portrait = if live_gx != 0 { live_gx } else { kept_capture };
     let mut used_portrait = false;
     if kept_portrait != 0 {
         let count = unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_COUNT_OFFSET) }
@@ -4001,9 +4069,9 @@ pub(crate) unsafe extern "system" fn loading_bg_replace_bind_hook(rti: usize, sy
     // Sample the autoload's target slot (the loaded character's absolute slot), not a hardcoded 0.
     let portrait_gx =
         unsafe { sample_portrait_gxtexture(base, OWN_STEPPER_SLOT.load(Ordering::SeqCst)) };
-    if commits <= 4 {
+    if commits <= 8 {
         append_autoload_debug(format_args!(
-            "loading-portrait: forged now-loading background symbol='{sym_string}' -> cap=0x{cap:x} container=0x{container:x} used_portrait={used_portrait} kept_portrait=0x{kept_portrait:x} portrait_gx_live=0x{portrait_gx:x} tpf_len={} commits={commits} attempts={attempts}",
+            "loading-portrait: forged now-loading background symbol='{sym_string}' -> cap=0x{cap:x} container=0x{container:x} used_portrait={used_portrait} live_gx=0x{live_gx:x} kept_capture=0x{kept_capture:x} bound_gx=0x{kept_portrait:x} portrait_gx_live=0x{portrait_gx:x} tpf_len={} commits={commits} attempts={attempts}",
             tpf_bytes.len()
         ));
     }

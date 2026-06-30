@@ -688,14 +688,22 @@ def telemetry_logo_replacement_capture_ready(telemetry: dict[str, Any] | None) -
     # couple seconds before the art "Now Loading" screen actually renders during world streaming).
     # Capturing at the first commit catches the title PRESS-ANY-BUTTON screen, so wait a short delay
     # after the first commit so the screenshot lands while the art screen (our forged bg) is on-screen.
+    # The now-loading background binds BEFORE our post-Continue own-renderer exists, so the forge commit
+    # alone catches the checker/title transition. The frame worth capturing is when our OWN built renderer
+    # is up (oracle_loadscreen_table_builds > 0) AND we have re-bound its live offscreen RT into the
+    # displayed now-loading container (oracle_loading_bg_live_gx_rebinds > 0). Wait a short settle so the
+    # model has rendered a few frames into the bound RT before the screenshot.
     global _LOGO_FIRST_COMMIT_MONOTONIC
-    if as_int(telemetry.get("oracle_loading_bg_portrait_redirect_commits"), 0) <= 0:
+    commits = as_int(telemetry.get("oracle_loading_bg_portrait_redirect_commits"), 0)
+    builds = as_int(telemetry.get("oracle_loadscreen_table_builds"), 0)
+    rebinds = as_int(telemetry.get("oracle_loading_bg_live_gx_rebinds"), 0)
+    if commits <= 0 or builds <= 0 or rebinds <= 0:
         return False
     now = time.monotonic()
     if _LOGO_FIRST_COMMIT_MONOTONIC is None:
         _LOGO_FIRST_COMMIT_MONOTONIC = now
         return False
-    return (now - _LOGO_FIRST_COMMIT_MONOTONIC) >= 2.5
+    return (now - _LOGO_FIRST_COMMIT_MONOTONIC) >= 1.0
 
 
 def maybe_capture_logo_replacement(artifact_dir: Path, telemetry: dict[str, Any] | None) -> bool:

@@ -20,6 +20,13 @@ source .envs/postcontinue-lookat.env
 set +a
 : "${ARTIFACT_DIR:=$PWD/target/runtime-probe/postcontinue-lookat-smoke}"
 export ARTIFACT_DIR
+# Clean the previous run's logo-replacement capture artifacts: maybe_capture_logo_replacement() returns
+# early if any of these already exist (capture-once guard), so a stale file from a prior run silently
+# suppresses this run's screenshot -- the whole point of the run. Remove them so each run captures fresh.
+rm -f "$ARTIFACT_DIR"/logo-replacement-screenshot.jpg \
+      "$ARTIFACT_DIR"/logo-replacement-screenshot.txt \
+      "$ARTIFACT_DIR"/logo-replacement-screenshot-event.json \
+      "$ARTIFACT_DIR"/logo-replacement-screenshot-analysis.json 2>/dev/null || true
 # HARD 45s CAP, ENFORCED (not prose): never run no-teardown -- route through the probe's watcher cap...
 export RUNTIME_NO_TEARDOWN=0
 # ...AND a belt-and-suspenders independent watchdog that hard-kills eldenring.exe at the canonical cap

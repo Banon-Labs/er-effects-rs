@@ -762,6 +762,13 @@ pub(crate) static LOADING_BG_TEXTURE_REDIRECT_LAST_SYMBOL_MATCH: AtomicUsize = A
 /// Last forged TpfFileCap pointer.
 pub(crate) static LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Times we re-bound the live offscreen-RT CSGxTexture into the already-forged now-loading container
+/// AFTER the bind (the now-loading background binds ~15-17s, BEFORE our post-Continue renderer's RT is
+/// live, and never re-binds -- so the live portrait must be swapped into the displayed container after the
+/// fact). >0 means the loading screen's displayed background is now sampling our live animated portrait.
+pub(crate) static LOADING_BG_LIVE_GX_REBINDS: AtomicUsize = AtomicUsize::new(0);
+/// The live CSGxTexture currently re-bound into the now-loading container (telemetry/sweep).
+pub(crate) static LOADING_BG_LIVE_GX_BOUND: AtomicUsize = AtomicUsize::new(0);
 /// Diagnostic: total calls into the replace-bind hook (every symbol, ungated), so we can tell
 /// whether `FUN_140d69880` is even on the now-loading background path vs the producer cache-hit path.
 pub(crate) static LOADING_BG_REPLACE_BIND_TOTAL_CALLS: AtomicUsize = AtomicUsize::new(0);
