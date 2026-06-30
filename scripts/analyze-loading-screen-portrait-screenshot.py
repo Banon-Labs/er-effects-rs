@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Analyze a logo-replacement screenshot for a lean visual false-positive oracle.
+"""Analyze a loading-screen-portrait screenshot for a lean visual false-positive oracle.
 
 The current false-positive panel is mostly dark gray / translucent UI, not the intended
 portrait-on-black composition. Until a better native/pixel portrait semaphore exists,
 record the fraction of truly black/dark pixels so measure.sh can fail closed on screenshots
 that look like the known bad LOAD GAME/ProfileSelect panel.
 
-Usage: analyze-logo-replacement-screenshot.py <screenshot.jpg> <out.json>
+Usage: analyze-loading-screen-portrait-screenshot.py <screenshot.jpg> <out.json>
 """
 from __future__ import annotations
 

@@ -219,8 +219,8 @@ terminate_runtime_pids() {
 cleanup() {
   local pid
   # No teardown screenshot: teardown already proves the world-stable end state, not the logo
-  # replacement moment. The readiness watcher captures logo-replacement-screenshot.jpg when the
-  # in-process portrait-cover oracle first asserts, while the logo replacement is still on screen.
+  # replacement moment. The readiness watcher captures loading-screen-portrait-screenshot.jpg when the
+  # in-process portrait-cover oracle first asserts, while the loading-screen-portrait is still on screen.
   if [[ -s "$HYPR_PLACER_PID_FILE" ]]; then
     IFS= read -r pid < "$HYPR_PLACER_PID_FILE" || pid=""
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
@@ -270,10 +270,10 @@ fi
 # anything. Deleting these reproduces first-run-in-a-fresh-dir behavior; the DLL re-creates them
 # once it boots, and the watcher already tolerates their absence while waiting for fresh telemetry.
 rm -f "$TELEMETRY_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH" "$CRASH_LOG_PATH" "$AUTOLOAD_DEBUG_PATH" "$PROFILE_PATH"
-# Wipe any prior logo-replacement screenshot BEFORE the run so a fail-closed/absent capture this run
+# Wipe any prior loading-screen-portrait screenshot BEFORE the run so a fail-closed/absent capture this run
 # is OBVIOUS (no file) instead of a STALE image we might mis-read as current. The readiness watcher
-# writes it at the exact portrait-cover/logo-replacement oracle transition, not at teardown.
-rm -f "$ARTIFACT_DIR/logo-replacement-screenshot.jpg" "$ARTIFACT_DIR/logo-replacement-screenshot.png" "$ARTIFACT_DIR/logo-replacement-screenshot.txt"
+# writes it at the exact portrait-cover/loading-screen-portrait oracle transition, not at teardown.
+rm -f "$ARTIFACT_DIR/loading-screen-portrait-screenshot.jpg" "$ARTIFACT_DIR/loading-screen-portrait-screenshot.png" "$ARTIFACT_DIR/loading-screen-portrait-screenshot.txt"
 write_autoload_request
 
 # DEPLOY THE FRESH CHAINLOAD DLL + clean stale mod DLLs BEFORE any launch branch. Placed here (after

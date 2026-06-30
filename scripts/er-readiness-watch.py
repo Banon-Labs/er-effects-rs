@@ -672,7 +672,7 @@ def window_capture_safe(window: dict[str, Any], window_class: str) -> bool:
 _LOGO_FIRST_COMMIT_MONOTONIC: float | None = None
 
 
-def telemetry_logo_replacement_capture_ready(telemetry: dict[str, Any] | None) -> bool:
+def telemetry_loading_screen_portrait_capture_ready(telemetry: dict[str, Any] | None) -> bool:
     """True when the loading-screen portrait moment is worth visually capturing.
 
     The product surface is the now-loading screen (full-screen background art), not the title logo.
@@ -713,26 +713,26 @@ def telemetry_logo_replacement_capture_ready(telemetry: dict[str, Any] | None) -
     return (now - _LOGO_FIRST_COMMIT_MONOTONIC) >= 1.0
 
 
-def maybe_capture_logo_replacement(artifact_dir: Path, telemetry: dict[str, Any] | None) -> bool:
-    """Best-effort exact-window capture at the logo-replacement/portrait-cover oracle edge.
+def maybe_capture_loading_screen_portrait(artifact_dir: Path, telemetry: dict[str, Any] | None) -> bool:
+    """Best-effort exact-window capture at the loading-screen-portrait/portrait-cover oracle edge.
 
     Product proof still comes from telemetry. This image exists specifically for the agent to inspect
     whether the visual proof-of-concept looks right before trusting/strengthening memory semaphores.
     """
-    out = artifact_dir / "logo-replacement-screenshot.jpg"
+    out = artifact_dir / "loading-screen-portrait-screenshot.jpg"
     note = out.with_suffix(".txt")
-    event = artifact_dir / "logo-replacement-screenshot-event.json"
+    event = artifact_dir / "loading-screen-portrait-screenshot-event.json"
     if out.exists() or note.exists() or event.exists():
         return True
-    if not telemetry_logo_replacement_capture_ready(telemetry):
+    if not telemetry_loading_screen_portrait_capture_ready(telemetry):
         return False
     helper = Path(__file__).with_name("capture-er-window.py")
     try:
         subprocess.run([sys.executable, str(helper), str(out)], text=True, capture_output=True, timeout=25)
     except Exception as exc:
-        note.write_text(f"logo replacement capture failed: {exc}\n", encoding="utf-8")
-    analysis_path = artifact_dir / "logo-replacement-screenshot-analysis.json"
-    analyzer = Path(__file__).with_name("analyze-logo-replacement-screenshot.py")
+        note.write_text(f"loading-screen-portrait capture failed: {exc}\n", encoding="utf-8")
+    analysis_path = artifact_dir / "loading-screen-portrait-screenshot-analysis.json"
+    analyzer = Path(__file__).with_name("analyze-loading-screen-portrait-screenshot.py")
     if out.exists() and analyzer.exists():
         try:
             subprocess.run(
@@ -749,7 +749,7 @@ def maybe_capture_logo_replacement(artifact_dir: Path, telemetry: dict[str, Any]
     event.write_text(
         json.dumps(
             {
-                "reason": "portrait_cover_logo_replacement_oracle_asserted",
+                "reason": "portrait_cover_loading_screen_portrait_oracle_asserted",
                 "screenshot": str(out),
                 "note": str(note),
                 "oracle_title_portrait_visible_surface_bound": bool(
@@ -2183,7 +2183,7 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
     # phase transition / forward progress so an inherently-slow-but-moving phase never trips.
     phase_watchdog_state: dict[str, Any] = {"phase": None, "value": None, "since": None}
     fps_samples: list[tuple[float, int]] = []  # (monotonic, game_task_ticks) for the fps semaphore
-    logo_replacement_capture_done = False
+    loading_screen_portrait_capture_done = False
     for poll in range(args.readiness_poll_budget):
         if time.monotonic() >= deadline:
             return with_runtime_module_info(
@@ -2220,8 +2220,8 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
         # Milestone timing (deltas from the TRUE bash launch epoch). Record first telemetry / continue
         # fired / player present transitions; world-stable is marked at its dedicated success below.
         timing.observe(telemetry)
-        if not logo_replacement_capture_done:
-            logo_replacement_capture_done = maybe_capture_logo_replacement(args.artifact_dir, telemetry)
+        if not loading_screen_portrait_capture_done:
+            loading_screen_portrait_capture_done = maybe_capture_loading_screen_portrait(args.artifact_dir, telemetry)
         # FAIL-FAST WORLD-LOAD DEADLINE: the world-loaded semaphore (player present / world-stable)
         # must be reached within --world-load-deadline-seconds of CONTINUE_FIRED (the load starting),
         # not bash launch -- so our ~24s boot+title latency doesn't eat the load budget and the

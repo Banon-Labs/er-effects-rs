@@ -303,9 +303,9 @@ def scan_contract() -> list[Finding]:
             Finding(
                 relative(DIRECT_PROBE_PATH),
                 0,
-                "missing-logo-replacement-screenshot-reset",
+                "missing-loading-screen-portrait-screenshot-reset",
                 "<missing>",
-                "The direct runtime/autoresearch probe wrapper must reset logo-replacement-screenshot.{jpg,png,txt} before launch; the readiness watcher captures the logo replacement moment.",
+                "The direct runtime/autoresearch probe wrapper must reset loading-screen-portrait-screenshot.{jpg,png,txt} before launch; the readiness watcher captures the loading-screen-portrait moment.",
             )
         )
     else:
@@ -317,17 +317,17 @@ def scan_contract() -> list[Finding]:
                     0,
                     "teardown-screenshot-still-wired",
                     "teardown-screenshot",
-                    "Runtime visual proof must capture the logo-replacement/portrait-cover moment, not teardown/world-stable state.",
+                    "Runtime visual proof must capture the loading-screen-portrait/portrait-cover moment, not teardown/world-stable state.",
                 )
             )
-        if "logo-replacement-screenshot.jpg" not in direct_text or "logo-replacement-screenshot.txt" not in direct_text:
+        if "loading-screen-portrait-screenshot.jpg" not in direct_text or "loading-screen-portrait-screenshot.txt" not in direct_text:
             findings.append(
                 Finding(
                     relative(DIRECT_PROBE_PATH),
                     0,
-                    "logo-replacement-screenshot-stale-reset-missing",
-                    "logo-replacement-screenshot reset missing",
-                    "Delete stale logo-replacement-screenshot.{jpg,png,txt} before launch so an absent/fail-closed capture cannot be confused with a prior run.",
+                    "loading-screen-portrait-screenshot-stale-reset-missing",
+                    "loading-screen-portrait-screenshot reset missing",
+                    "Delete stale loading-screen-portrait-screenshot.{jpg,png,txt} before launch so an absent/fail-closed capture cannot be confused with a prior run.",
                 )
             )
         missing_visual_telemetry_guard = [
@@ -355,12 +355,12 @@ def scan_contract() -> list[Finding]:
     if READINESS_WATCH_PATH.exists():
         watch_text = READINESS_WATCH_PATH.read_text(encoding="utf-8", errors="replace")
         required_logo_capture = [
-            "logo-replacement-screenshot.jpg",
-            "logo-replacement-screenshot-analysis.json",
-            "telemetry_logo_replacement_capture_ready",
+            "loading-screen-portrait-screenshot.jpg",
+            "loading-screen-portrait-screenshot-analysis.json",
+            "telemetry_loading_screen_portrait_capture_ready",
             "oracle_title_portrait_visible_surface_bound",
             "capture-er-window.py",
-            "analyze-logo-replacement-screenshot.py",
+            "analyze-loading-screen-portrait-screenshot.py",
         ]
         missing_logo_capture = [snippet for snippet in required_logo_capture if snippet not in watch_text]
         if missing_logo_capture:
@@ -368,9 +368,9 @@ def scan_contract() -> list[Finding]:
                 Finding(
                     relative(READINESS_WATCH_PATH),
                     0,
-                    "logo-replacement-event-capture-missing",
+                    "loading-screen-portrait-event-capture-missing",
                     ", ".join(missing_logo_capture),
-                    "The readiness watcher must capture logo-replacement-screenshot.jpg when the portrait-cover oracle asserts, while the replacement is on-screen.",
+                    "The readiness watcher must capture loading-screen-portrait-screenshot.jpg when the portrait-cover oracle asserts, while the replacement is on-screen.",
                 )
             )
 
@@ -381,7 +381,7 @@ def scan_contract() -> list[Finding]:
                 0,
                 "missing-event-capture-helper",
                 "<missing>",
-                "scripts/capture-er-window.py must exist and target only steam_app_1245620 for logo-replacement/portrait-cover event evidence.",
+                "scripts/capture-er-window.py must exist and target only steam_app_1245620 for loading-screen-portrait/portrait-cover event evidence.",
             )
         )
     else:

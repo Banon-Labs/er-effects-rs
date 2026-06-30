@@ -1482,7 +1482,7 @@ pub(crate) unsafe fn sample_title_profile_portrait_source(base: usize, slot: i32
 }
 
 /// Build the er-tpf Tier-4 cover blob ONCE and cache it for the process lifetime. A bright
-/// magenta/white checker (unmistakable on the logo-replacement screenshot), encoded uncompressed
+/// magenta/white checker (unmistakable on the loading-screen-portrait screenshot), encoded uncompressed
 /// `R8G8B8A8_UNORM` with a LEGACY DDS header (maps to DXGI 28 and bypasses the DX10 format validator),
 /// wrapped in a one-entry TPF003 whose ENTRY NAME == `ER_TPF_COVER_SYSTEX_KEY` (which becomes the
 /// `GLOBAL_TexRepository` GPU key the Scaleform bridge resolves). Held alive forever so the engine's

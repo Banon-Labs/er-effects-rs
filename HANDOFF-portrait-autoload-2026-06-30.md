@@ -95,6 +95,6 @@ er-effects-force-profile-render.txt, er-effects-portrait-lookat-selftest.txt; NO
 Steam must be up. Build: `cargo xwin build --release --target x86_64-pc-windows-msvc`. fmt:
 `cargo fmt --check -p er-effects-rs`.
 **Success = `LOAD-CORRECTNESS` shows the REAL Banon (name non-empty, level 150, runes>0), in_cutscene=0, and
-the logo-replacement screenshot shows the real face** -- NOT name="_" level=9.
+the loading-screen-portrait screenshot shows the real face** -- NOT name="_" level=9.
 Artifacts: `target/runtime-probe/postcontinue-lookat-smoke/` (er-effects-autoload-debug.log,
-er-effects-telemetry.json, logo-replacement-screenshot.jpg).
+er-effects-telemetry.json, loading-screen-portrait-screenshot.jpg).

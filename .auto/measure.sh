@@ -1055,7 +1055,7 @@ if rt_root.exists():
             save_data_popup_by_dir[d.name] = [
                 f'runtime artifact {d.name} detected failed-save-data popup from captured target-window OCR evidence: {"; ".join(save_data_evidence)}'
             ]
-        logo_analysis_path = d / 'logo-replacement-screenshot-analysis.json'
+        logo_analysis_path = d / 'loading-screen-portrait-screenshot-analysis.json'
         if logo_analysis_path.exists():
             try:
                 logo_analysis = json.loads(logo_analysis_path.read_text(encoding='utf-8', errors='replace'))
@@ -1065,7 +1065,7 @@ if rt_root.exists():
                 ratio = logo_analysis.get('black32_ratio')
                 title_cover_runtime_by_dir.setdefault(d.name, [])
                 msg = (
-                    f'runtime artifact {d.name} logo-replacement screenshot has black32_ratio={ratio}; '
+                    f'runtime artifact {d.name} loading-screen-portrait screenshot has black32_ratio={ratio}; '
                     'matches the known dark LOAD GAME/ProfileSelect false-positive panel rather than a portrait-on-black cover'
                 )
                 if msg not in title_cover_runtime_by_dir[d.name]:
@@ -1295,7 +1295,7 @@ actual_logo_profile_cover_observable = (
     or portrait_overlay_cover_observable
     or native_csez_portrait_cover_observable
     # `oracle_title_portrait_visible_surface_bound` alone is no longer acceptable: the
-    # logo-replacement event screenshot showed it can assert while the screen is still a dark
+    # loading-screen-portrait event screenshot showed it can assert while the screen is still a dark
     # LOAD GAME/ProfileSelect panel. Future success needs a real pixel/native visibility semaphore.
 )
 if 'draw_title_overlay_cover' in overlay_code and not portrait_overlay_cover_observable:
@@ -1357,7 +1357,7 @@ profile_select_transform_false_positive = any(
     for raw in scored_runtime_artifacts_raw
 )
 if visible_surface_without_pixels_false_positive:
-    title_cover_failures.append('Part B hard gate: visible-surface/ProfileSelect bind semaphore was visually falsified by logo-replacement screenshot; require oracle_title_portrait_pixels_visible or an equivalent native/pixel semaphore')
+    title_cover_failures.append('Part B hard gate: visible-surface/ProfileSelect bind semaphore was visually falsified by loading-screen-portrait screenshot; require oracle_title_portrait_pixels_visible or an equivalent native/pixel semaphore')
     title_cover_penalty += MAX_SCORE
 elif profile_select_transform_false_positive:
     title_cover_failures.append('Part B hard gate: ProfileSelect one-tick transform/SYSTEX semaphores are a proven visual false positive; require a real visible-pixel/surface oracle, not transform flags')
