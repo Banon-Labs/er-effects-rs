@@ -3078,11 +3078,35 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
         // restore the portrait (object alive) or whether the model must be rebuilt/refcounted (freed).
         let cap_model = PROFILE_SPARE_CANDIDATE_MODEL.load(Ordering::SeqCst);
         let cap_vt = unsafe { safe_read_usize(cap_model) }.unwrap_or(0);
+        // Scan the (re)built profile table: how many of the 10 slots now hold a valid CSMenuProfModelRend
+        // (built[r]) and how many of those have a live model_ins (built[m]). This is the DIRECT measure of
+        // whether our own builder's fresh renderers are constructing + latching their own models post-
+        // Continue -- independent of the spared (empty) renderer the rest of this line reports.
+        let null = TITLE_OWNER_SCAN_START_ADDRESS;
+        let (mut built_r, mut built_m) = (0u32, 0u32);
+        if let Ok(b) = game_module_base() {
+            for s in 0..TITLE_PROFILE_SLOT_COUNT as i32 {
+                let r = unsafe { safe_read_usize(portrait_renderer_table_entry(b, s)) }.unwrap_or(0);
+                if r != 0
+                    && r != null
+                    && unsafe { safe_read_usize(r) }.unwrap_or(0)
+                        == b + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                {
+                    built_r += 1;
+                    let m = unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
+                        .unwrap_or(0);
+                    if m != 0 && m != null {
+                        built_m += 1;
+                    }
+                }
+            }
+        }
         append_autoload_debug(format_args!(
-            "lookat-spared-sweep: frame={n} nowload={} model_raw=0x{model_raw:x} cap_model=0x{cap_model:x} cap_vt=0x{cap_vt:x} spared[ptr=0x{:x} model_ok={} draws={} hits={}] rt[samples={} nonblack={} changed={}]",
+            "lookat-spared-sweep: frame={n} nowload={} loadbuilds={} built[r={built_r} m={built_m}] model_raw=0x{model_raw:x} cap_model=0x{cap_model:x} cap_vt=0x{cap_vt:x} spared[ptr=0x{:x} model_ok={} draws={} hits={}] rt[samples={} nonblack={} changed={}]",
             game_module_base()
                 .map(|b| unsafe { now_loading_active(b) } as u8)
                 .unwrap_or(0),
+            PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst),
             LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst),
             PROFILE_SPARED_MODEL_OK.load(Ordering::SeqCst),
             PROFILE_PERFRAME_SPARED_DRAWS.load(Ordering::SeqCst),
@@ -3370,32 +3394,57 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     if base == 0 || base == null {
         return;
     }
-    if !unsafe { now_loading_active(base) } {
-        PROFILE_LOADSCREEN_REBUILT.store(0, Ordering::SeqCst); // reset latch outside the load window
-        return;
-    }
-    if PROFILE_LOADSCREEN_REBUILT.load(Ordering::SeqCst) != 0 {
-        return;
-    }
-    // If the table is already populated (e.g. menu built it), leave it -- existing machinery feeds/draws it.
+    // If the table is already populated (menu built it, or our own build already ran), leave it -- the
+    // existing mark+refresh feed + look-at + draw + oracle drive it. A live table also RE-ARMS the latch:
+    // a subsequent Continue teardown empties it again and we rebuild our own for that load window.
     let t0 = unsafe { safe_read_usize(portrait_renderer_table_entry(base, 0)) }.unwrap_or(0);
     let populated = t0 != 0
         && t0 != null
         && unsafe { safe_read_usize(t0) }.unwrap_or(0)
             == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA;
     if populated {
-        PROFILE_LOADSCREEN_REBUILT.store(1, Ordering::SeqCst); // already have a table this load; don't rebuild
+        PROFILE_TABLE_EMPTY_STREAK.store(0, Ordering::SeqCst);
+        PROFILE_TABLE_WAS_POPULATED.store(1, Ordering::SeqCst);
+        PROFILE_LOADSCREEN_REBUILT.store(0, Ordering::SeqCst);
         return;
     }
-    // Empty table + now-loading: build it via the engine's own 10-slot builder (teardown is a no-op on a
-    // null table). Self-contained off process-lifetime singletons (RE-confirmed).
+    // Table is EMPTY this tick -- count the streak. The menu's own teardown+rebuild is synchronous, so a
+    // sustained-empty table across ticks means the Continue teardown ran with no menu rebuild (we've left
+    // the menu into the load), which happens ~17s -- well before the now-loading flag flips (~21s on the
+    // fast gold-save load). Build as soon as EITHER signal fires so ResMan has time to build the model.
+    let streak = PROFILE_TABLE_EMPTY_STREAK.fetch_add(1, Ordering::SeqCst) + 1;
+    if PROFILE_LOADSCREEN_REBUILT.load(Ordering::SeqCst) != 0 {
+        return; // already built our table for this load window
+    }
+    // HARD SAFETY: never call the builder until the menu has built a table at least once. At the title
+    // screen the table is empty too, but the engine/ResMan are not up and the builder access-violates.
+    if PROFILE_TABLE_WAS_POPULATED.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+    let nowload = unsafe { now_loading_active(base) };
+    if !(nowload || streak >= PROFILE_TABLE_EMPTY_STREAK_BUILD_THRESHOLD) {
+        return;
+    }
+    // Build it via the engine's own 10-slot builder (teardown is a no-op on a null table). Each fresh
+    // CSMenuProfModelRend self-registers its ResMan model build/draw tasks, so it builds + OWNS its own
+    // model with our lifetime -- not borrowed from the torn-down menu. Self-contained off process-lifetime
+    // singletons (RE-confirmed).
     let builder: unsafe extern "system" fn() =
         unsafe { core::mem::transmute(base + PROFILE_TABLE_BUILDER_RVA) };
     unsafe { builder() };
+    // Kick the model build THIS tick: the mark+refresh feed that requests the async character-model build
+    // only runs every 240 ticks (counter % 240 == 0). The post-Continue now-loading window is shorter than
+    // 240 ticks, so without this the freshly-built renderers are never fed -> they stay model-less (m=0).
+    // Resetting the counter to 0 makes the feed fire on the very next pass through force_profile_render_tick.
+    PROFILE_FORCE_TICK_COUNTER.store(0, Ordering::SeqCst);
+    // Open the post-Continue feed window so the mark+refresh runs frequently (not just every 240 ticks) and
+    // drives the async ResMan model build to completion + keeps it latched through the loading screen.
+    PROFILE_LOADSCREEN_FEED_TICKS.store(PROFILE_LOADSCREEN_FEED_WINDOW_TICKS, Ordering::SeqCst);
     PROFILE_LOADSCREEN_REBUILT.store(1, Ordering::SeqCst);
     PROFILE_LOADSCREEN_TABLE_BUILDS.fetch_add(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "loading-portrait: now-loading + empty profile table -> called builder 0x{:x} to repopulate for the post-Continue portrait",
+        "loading-portrait: empty profile table (trigger={} streak={streak}) -> called builder 0x{:x} to build our own renderers for the post-Continue portrait",
+        if nowload { "now-loading" } else { "empty-streak" },
         base + PROFILE_TABLE_BUILDER_RVA
     ));
 }
@@ -3470,7 +3519,15 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // re-capture the post-FaceData face (an early build before LOAD GAME loads FaceData = default head),
     // then off. See `portrait_force_rebuild_enabled` and bd portrait-lookat-realtime-drawphase-design.
     let counter = PROFILE_FORCE_TICK_COUNTER.fetch_add(1, Ordering::SeqCst);
-    if counter % 240 == 0 {
+    // Post-Continue feed window: while it is open, run the (idempotent) mark+refresh every 8 ticks so the
+    // freshly-built renderers' async model build is driven to completion and stays latched -- the once-per-
+    // 240 baseline is too sparse for the brief now-loading window. Outside the window keep the 240 cadence.
+    let feed_window = PROFILE_LOADSCREEN_FEED_TICKS.load(Ordering::SeqCst) > 0;
+    if feed_window {
+        PROFILE_LOADSCREEN_FEED_TICKS.fetch_sub(1, Ordering::SeqCst);
+    }
+    if counter % 240 == 0 || (feed_window && counter % 8 == 0) {
+        let log_this = counter % 240 == 0; // throttle the in-window feed log to once per 240
         let force_rebuild = portrait_force_rebuild_enabled();
         let mark: unsafe extern "system" fn(usize, i32) -> u8 =
             unsafe { core::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
@@ -3491,9 +3548,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
         let refresh: unsafe extern "system" fn() =
             unsafe { core::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
         unsafe { refresh() };
-        append_autoload_debug(format_args!(
-            "force-profile-render: build cycle (counter={counter}) force_rebuild={force_rebuild} -- marked ALL 10 + refreshed (summary=0x{summary:x})"
-        ));
+        if log_this {
+            append_autoload_debug(format_args!(
+                "force-profile-render: build cycle (counter={counter}) force_rebuild={force_rebuild} feed_window={feed_window} -- marked ALL 10 + refreshed (summary=0x{summary:x})"
+            ));
+        }
         // Only when we forced a fresh build: drop the cached look-at indices/base so they re-resolve and
         // re-latch the idle base from the fresh skeleton. Without a forced rebuild the model (and its
         // skeleton) persist, so KEEP the cache -> the look-at keeps driving every frame with no re-resolve gap.

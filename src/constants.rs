@@ -843,6 +843,22 @@ pub(crate) const PROFILE_TABLE_BUILDER_RVA: usize = 0x9af3a0;
 pub(crate) static PROFILE_LOADSCREEN_REBUILT: AtomicUsize = AtomicUsize::new(0);
 /// Count of post-Continue profile-table (re)builds for the loading-screen portrait (telemetry/sweep).
 pub(crate) static PROFILE_LOADSCREEN_TABLE_BUILDS: AtomicUsize = AtomicUsize::new(0);
+/// Consecutive ticks the profile-renderer title table has been observed EMPTY. The menu's own
+/// teardown+rebuild is synchronous (FUN_1409af3a0 tears down then re-ctors in one call), so the table is
+/// never seen empty across our async ticks during menu cycling -- only a real Continue (teardown with NO
+/// rebuild) leaves it sustained-empty. A short streak therefore fires the post-Continue own-renderer build
+/// EARLY (right after teardown, ~17s) instead of waiting for the now-loading flag (~21s on a fast load,
+/// too late for ResMan to build the model). Reset to 0 whenever a populated table is observed.
+pub(crate) static PROFILE_TABLE_EMPTY_STREAK: AtomicUsize = AtomicUsize::new(0);
+/// Empty-table streak (ticks) that triggers the early post-Continue own-renderer build. Small: the menu
+/// never shows a multi-tick empty table, so even a few frames unambiguously means "Continue happened."
+pub(crate) const PROFILE_TABLE_EMPTY_STREAK_BUILD_THRESHOLD: usize = 3;
+/// Set once we've observed a POPULATED profile table (the menu built it -> the engine/ResMan are up and we
+/// are past the title screen). The early empty-streak build MUST require this: at boot the table is empty
+/// too, and calling the builder before the engine is ready crashes inside FUN_1409af3a0 (observed
+/// 2026-06-29: access-violation in the builder at title, game_man unresolved). A later empty table after
+/// this latch is set therefore means a genuine Continue teardown, when the builder is safe to call.
+pub(crate) static PROFILE_TABLE_WAS_POPULATED: AtomicUsize = AtomicUsize::new(0);
 /// The spared slot-0 CSMenuProfModelRend renderer (0 until the Continue teardown spares it). Its
 /// global ResMan model-update task keeps loading/animating the model while the object lives.
 pub(crate) static LOADING_BG_PORTRAIT_SPARED_RENDERER: AtomicUsize = AtomicUsize::new(0);
@@ -880,6 +896,16 @@ pub(crate) static PROFILE_SLOT_DUMP_MASK: AtomicUsize = AtomicUsize::new(0);
 /// (the timing test: a LATER rebuild, after LOAD GAME has loaded each slot's FaceData, should render
 /// the real character instead of the default).
 pub(crate) static PROFILE_FORCE_TICK_COUNTER: AtomicUsize = AtomicUsize::new(0);
+/// Post-Continue feed window: ticks remaining during which the mark+refresh feed runs frequently (not just
+/// every 240 ticks) to DRIVE the freshly-built renderers' async ResMan model build to completion and keep
+/// it latched. Set when we build our own table post-Continue; decremented each force_profile_render_tick.
+/// The menu kept its models live by feeding across a long dwell; the brief now-loading window needs the
+/// feed driven continuously or the build is kicked once and decays (observed 2026-06-29: built[m] 10->0).
+pub(crate) static PROFILE_LOADSCREEN_FEED_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// How many ticks to keep the post-Continue feed window open after an own-renderer build (~bounded so it
+/// can't churn forever). Generous enough to outlast a real load; the refresh is idempotent so extra feeds
+/// no-op once the model is built.
+pub(crate) const PROFILE_LOADSCREEN_FEED_WINDOW_TICKS: usize = 1800;
 /// HIGHER-RES. Per-slot offscreen base-size table read by `CSMenuProfModelRend` ctor (0x140bbe010):
 /// `width = *(u32*)(base+0x3b39848 + slot*0x20)`, `height = *(u32*)(...+0x4)` -> packed u64
 /// `(height<<32)|width`. Static init `FUN_1400a7bb0` writes every slot `0x8000000080` (base 128x128;
