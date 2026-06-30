@@ -1110,9 +1110,15 @@ const NETWORK_CHECK_JOB_RUN_RVA: u32 = 0x821310;
 const FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA: usize = 0x29c8e48;
 /// `MenuJobState::Continue` (the no-modal result), verified from the deobf clean leaf (`lea edx,[r8+1]`).
 const MENU_JOB_STATE_CONTINUE: i32 = 1;
+/// A "still running" MenuJobState (> Continue, so `MenuJobResult::ShouldContinue` keeps the job polling
+/// and the menu open). Used to HOLD the network-check job until the real portrait is captured.
+const MENU_JOB_STATE_HOLD_RUNNING: i32 = 2;
 
 static NETWORK_CHECK_SHORTCIRCUIT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 static NETWORK_CHECK_SHORTCIRCUIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Ticks the network-check job has been HELD waiting for the portrait capture (hard-bounded so the
+/// autoload always proceeds even if the capture never happens / the hold value is wrong).
+static NETWORK_CHECK_HOLD_TICKS: AtomicUsize = AtomicUsize::new(0);
 
 /// THE MILESTONE-3 FIX (zero-input, save-safe). `CS::NetworkCheckJob::Run` is a title-flow MenuJob the
 /// TitleTopDialog registrar chains UNCONDITIONALLY at menu-open. Offline, its Steam-holder check
@@ -1131,11 +1137,27 @@ pub(crate) unsafe extern "system" fn network_check_job_run_hook(
 ) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let result = rdx;
-    // MenuJobResult::SetResult(result, Continue, 0): state @ +0 (i32), field1 @ +4 (i32). The native
+    // PORTRAIT HOLD: the real IBL-lit menu portrait isn't captured until ~0.3s AFTER this job fires
+    // Continue, so the first now-loading forge bakes the checker. Hold the job in a RUNNING state (>1, so
+    // MenuJobResult::ShouldContinue keeps it polling + the menu stays open) until the portrait is captured
+    // (PROFILE_BAKE_RGBA_CAPTURED) -- then proceed, and the first forge bakes the real portrait. HARD-
+    // BOUNDED by PORTRAIT_HOLD_MAX_TICKS so the autoload ALWAYS proceeds within ~4s even if the hold value
+    // is wrong (worst case == today's behavior). We REPLACE Run either way, so no real check / modal runs
+    // -> save-safe + online-safe; only armed on the portrait path (portrait_lookat + real_pixels).
+    let want_hold = portrait_lookat_enabled()
+        && portrait_real_pixels_enabled()
+        && PROFILE_BAKE_RGBA_CAPTURED.load(Ordering::SeqCst) == 0
+        && NETWORK_CHECK_HOLD_TICKS.fetch_add(1, Ordering::SeqCst) < PORTRAIT_HOLD_MAX_TICKS;
+    let state = if want_hold {
+        MENU_JOB_STATE_HOLD_RUNNING
+    } else {
+        MENU_JOB_STATE_CONTINUE
+    };
+    // MenuJobResult::SetResult(result, state, 0): state @ +0 (i32), field1 @ +4 (i32). The native
     // SetResult 0x1407a91e0 only writes these two fields, so replicate inline. Readability-guarded.
     if result > null && unsafe { safe_read_usize(result) }.is_some() {
         unsafe {
-            *(result as *mut i32) = MENU_JOB_STATE_CONTINUE;
+            *(result as *mut i32) = state;
             *((result + 4) as *mut i32) = 0;
         }
     }
