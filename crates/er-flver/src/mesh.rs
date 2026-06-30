@@ -1,21 +1,19 @@
-//! FLVER geometry extraction -> renderer-agnostic [`ObjectModel`].
+//! The **normalized** FLVER view: renderer-agnostic [`ObjectModel`] with parallel
+//! attribute arrays, for the Bevy PBR / studio-camera path.
 //!
-//! Uses `fstools_formats::flver::reader::FLVER` for the structure (materials, meshes,
-//! facesets, buffer layouts) and decodes the vertex attribute bytes from the FLVER's
-//! data region here (the reader exposes layout offsets/formats but not decoded
-//! vertices). Output is engine-agnostic so the Bevy viewer (or any renderer) can
-//! consume it without depending on the FLVER crate.
+//! Also home to the shared index extraction (main faceset + triangle-strip de-strip)
+//! used by both this path and the raw passthrough path in [`crate::layout`].
 
-use std::io::Cursor;
+use fstools_formats::flver::reader::{
+    FLVER, FLVERFaceSetIndices, FLVERMesh, VertexAttributeSemantic as Sem,
+};
 
-use fstools_formats::flver::reader::{FLVER, FLVERFaceSetIndices, VertexAttributeSemantic as Sem};
-use thiserror::Error;
+use crate::error::FlverError;
+use crate::vertex::{read_dir3, read_tangent, read_uv, read_vec3};
 
-#[derive(Debug, Error)]
-pub enum FlverError {
-    #[error("FLVER parse: {0}")]
-    Parse(#[from] std::io::Error),
-}
+/// A vertex member whose format is the edge-compression sentinel (geometry can't be
+/// decoded without an Edge decompressor).
+pub(crate) const EDGE_COMPRESSED: u32 = 0xF0;
 
 /// One drawable submesh: parallel attribute arrays + a triangle-list index buffer.
 #[derive(Debug, Clone, Default)]
@@ -26,8 +24,8 @@ pub struct ObjectMesh {
     pub uvs: Vec<[f32; 2]>,
     pub tangents: Vec<[f32; 4]>,
     pub indices: Vec<u32>,
-    /// True if any vertex buffer used edge-compression we couldn't decode (geometry
-    /// will be empty for this mesh — surfaced, not silently dropped).
+    /// True if any vertex buffer used edge-compression we couldn't decode (geometry is
+    /// empty for this mesh — surfaced, not silently dropped).
     pub edge_compressed: bool,
 }
 
@@ -58,28 +56,71 @@ impl ObjectModel {
     pub fn total_triangles(&self) -> usize {
         self.meshes.iter().map(|m| m.triangle_count()).sum()
     }
-    /// Resolve a mesh's material name via its material_index.
+    /// Resolve a mesh's material via its `material_index`.
     pub fn material_of(&self, mesh: &ObjectMesh) -> Option<&ObjectMaterial> {
         self.materials.get(mesh.material_index)
     }
 }
 
-const EDGE_COMPRESSED: u32 = 0xF0;
-
-/// Parse a (decompressed) `.flver` member into geometry.
-pub fn parse(bytes: &[u8]) -> Result<ObjectModel, FlverError> {
-    let flver = FLVER::from_reader(&mut Cursor::new(bytes))?;
-    let data_off = flver.data_offset as usize;
-
-    let materials = flver
+/// Map a FLVER's materials to the renderer-agnostic [`ObjectMaterial`].
+pub(crate) fn materials(flver: &FLVER) -> Vec<ObjectMaterial> {
+    flver
         .materials
         .iter()
         .map(|m| ObjectMaterial {
             name: m.name.clone(),
             mtd: m.mtd.clone(),
         })
-        .collect();
+        .collect()
+}
 
+pub(crate) fn bounding_box(flver: &FLVER) -> ([f32; 3], [f32; 3]) {
+    (
+        [
+            flver.bounding_box_min.x,
+            flver.bounding_box_min.y,
+            flver.bounding_box_min.z,
+        ],
+        [
+            flver.bounding_box_max.x,
+            flver.bounding_box_max.y,
+            flver.bounding_box_max.z,
+        ],
+    )
+}
+
+/// Extract a mesh's MAIN faceset (skipping LOD/shadow/motion variants) as a triangle
+/// list (de-stripping and dropping degenerate triangles when needed). Shared by both
+/// the normalized and raw paths.
+pub(crate) fn extract_main_indices(flver: &FLVER, mesh: &FLVERMesh) -> Vec<u32> {
+    for &fs_idx in &mesh.face_set_indices {
+        let Some(fs) = flver.face_sets.get(fs_idx as usize) else {
+            continue;
+        };
+        if !fs.flags.is_main() {
+            continue;
+        }
+        let raw: Vec<u32> = match &fs.indices {
+            FLVERFaceSetIndices::Byte0 => Vec::new(),
+            FLVERFaceSetIndices::Byte1(v) => v.iter().map(|&i| i as u32).collect(),
+            FLVERFaceSetIndices::Byte2(v) => v.iter().map(|&i| i as u32).collect(),
+            FLVERFaceSetIndices::Byte4(v) => v.clone(),
+        };
+        return if fs.triangle_strip {
+            destrip(&raw)
+        } else {
+            raw
+        };
+    }
+    Vec::new()
+}
+
+/// Parse a (decompressed) `.flver` into the normalized [`ObjectModel`].
+pub fn parse(bytes: &[u8]) -> Result<ObjectModel, FlverError> {
+    let flver = crate::parse_structural(bytes)?;
+    let data_off = flver.data_offset as usize;
+
+    let materials = materials(&flver);
     let mut meshes = Vec::with_capacity(flver.meshes.len());
     for mesh in &flver.meshes {
         let mut out = ObjectMesh {
@@ -130,53 +171,20 @@ pub fn parse(bytes: &[u8]) -> Result<ObjectModel, FlverError> {
             }
         }
 
-        // Indices: the MAIN faceset only (skip LOD/shadow/motion variants), expanded
-        // to a triangle list.
-        for &fs_idx in &mesh.face_set_indices {
-            let Some(fs) = flver.face_sets.get(fs_idx as usize) else {
-                continue;
-            };
-            if !fs.flags.is_main() {
-                continue;
-            }
-            let raw: Vec<u32> = match &fs.indices {
-                FLVERFaceSetIndices::Byte0 => Vec::new(),
-                FLVERFaceSetIndices::Byte1(v) => v.iter().map(|&i| i as u32).collect(),
-                FLVERFaceSetIndices::Byte2(v) => v.iter().map(|&i| i as u32).collect(),
-                FLVERFaceSetIndices::Byte4(v) => v.clone(),
-            };
-            out.indices = if fs.triangle_strip {
-                destrip(&raw)
-            } else {
-                raw
-            };
-            break;
-        }
-
+        out.indices = extract_main_indices(&flver, mesh);
         meshes.push(out);
     }
 
     Ok(ObjectModel {
         meshes,
         materials,
-        bounding_box: (
-            [
-                flver.bounding_box_min.x,
-                flver.bounding_box_min.y,
-                flver.bounding_box_min.z,
-            ],
-            [
-                flver.bounding_box_max.x,
-                flver.bounding_box_max.y,
-                flver.bounding_box_max.z,
-            ],
-        ),
+        bounding_box: bounding_box(&flver),
     })
 }
 
 /// Expand a triangle strip (with FromSoft's `0xFFFF` / repeated-index restarts) to a
 /// triangle list, dropping degenerate triangles.
-fn destrip(strip: &[u32]) -> Vec<u32> {
+pub(crate) fn destrip(strip: &[u32]) -> Vec<u32> {
     let mut out = Vec::new();
     if strip.len() < 3 {
         return out;
@@ -194,67 +202,6 @@ fn destrip(strip: &[u32]) -> Vec<u32> {
         }
     }
     out
-}
-
-// --- attribute decoders (LE) ------------------------------------------------
-
-fn f32_le(b: &[u8], off: usize) -> f32 {
-    b.get(off..off + 4)
-        .and_then(|s| s.try_into().ok())
-        .map(f32::from_le_bytes)
-        .unwrap_or(0.0)
-}
-fn i16_le(b: &[u8], off: usize) -> i16 {
-    b.get(off..off + 2)
-        .and_then(|s| s.try_into().ok())
-        .map(i16::from_le_bytes)
-        .unwrap_or(0)
-}
-
-fn read_vec3(b: &[u8], off: usize) -> [f32; 3] {
-    [f32_le(b, off), f32_le(b, off + 4), f32_le(b, off + 8)]
-}
-
-/// Normal/tangent direction. Float formats read directly; byte formats are unsigned
-/// [0,255] mapped to [-1,1]; short formats snorm.
-fn read_dir3(b: &[u8], off: usize, format: u32) -> [f32; 3] {
-    match format {
-        0x01 | 0x02 | 0x03 | 0x04 => [f32_le(b, off), f32_le(b, off + 4), f32_le(b, off + 8)],
-        0x1A | 0x2E => [
-            i16_le(b, off) as f32 / 32767.0,
-            i16_le(b, off + 2) as f32 / 32767.0,
-            i16_le(b, off + 4) as f32 / 32767.0,
-        ],
-        // Byte4 variants (0x10/0x11/0x12/0x13/0x2F): unsigned byte -> [-1,1].
-        _ => [
-            b.get(off).map_or(0.0, |&v| v as f32 / 127.5 - 1.0),
-            b.get(off + 1).map_or(0.0, |&v| v as f32 / 127.5 - 1.0),
-            b.get(off + 2).map_or(0.0, |&v| v as f32 / 127.5 - 1.0),
-        ],
-    }
-}
-
-fn read_tangent(b: &[u8], off: usize, format: u32) -> [f32; 4] {
-    let d = read_dir3(b, off, format);
-    let w = match format {
-        0x01 | 0x02 | 0x03 | 0x04 => f32_le(b, off + 12),
-        0x1A | 0x2E => i16_le(b, off + 6) as f32 / 32767.0,
-        _ => b.get(off + 3).map_or(1.0, |&v| v as f32 / 127.5 - 1.0),
-    };
-    [d[0], d[1], d[2], if w >= 0.0 { 1.0 } else { -1.0 }]
-}
-
-/// UV. Float2 direct; short formats use a fixed scale (display-only; exact UV factor
-/// is supplied per-material at texturing time in M3).
-fn read_uv(b: &[u8], off: usize, format: u32) -> [f32; 2] {
-    match format {
-        0x01 | 0x03 => [f32_le(b, off), f32_le(b, off + 4)],
-        // Short2 / packed short formats.
-        _ => [
-            i16_le(b, off) as f32 / 1024.0,
-            i16_le(b, off + 2) as f32 / 1024.0,
-        ],
-    }
 }
 
 #[cfg(test)]
@@ -297,8 +244,6 @@ mod tests {
             "tris={}",
             model.total_triangles()
         );
-
-        // Every index must be in range for its mesh.
         for m in &model.meshes {
             if m.positions.is_empty() {
                 continue;
@@ -306,17 +251,7 @@ mod tests {
             let n = m.positions.len() as u32;
             assert!(m.indices.iter().all(|&i| i < n), "oob index in mesh");
         }
-        eprintln!(
-            "c4800: {} meshes, {} verts, {} tris, {} materials; mtd[0]={:?}",
-            model.meshes.len(),
-            model.total_vertices(),
-            model.total_triangles(),
-            model.materials.len(),
-            model.materials.first().map(|m| &m.mtd),
-        );
-        // Header bbox must be a sane, non-degenerate volume (sanity for framing).
         let (lo, hi) = model.bounding_box;
         assert!(hi[1] > lo[1], "degenerate bbox {:?}", model.bounding_box);
-        eprintln!("bbox: {lo:?}..{hi:?}");
     }
 }

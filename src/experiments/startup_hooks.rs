@@ -60,16 +60,18 @@ fn load_memory_gfx_from_env(var: &str, slot: &OnceLock<Vec<u8>>, label: &str) {
     if trimmed.is_empty() || slot.get().is_some() {
         return;
     }
-    if trimmed.eq_ignore_ascii_case("embedded:minimal-magenta")
-        || trimmed.eq_ignore_ascii_case("embedded:minimal-magenta-counter")
-    {
-        let bytes = if trimmed.eq_ignore_ascii_case("embedded:minimal-magenta-counter") {
-            TITLE_MINIMAL_MAGENTA_COUNTER_GFX.to_vec()
-        } else {
-            TITLE_MINIMAL_MAGENTA_GFX.to_vec()
-        };
+    let embedded_bytes = if trimmed.eq_ignore_ascii_case("embedded:title-05-000-suppressed") {
+        Some(TITLE_05_000_TEXT_SUPPRESSED_GFX)
+    } else if trimmed.eq_ignore_ascii_case("embedded:minimal-magenta") {
+        Some(TITLE_MINIMAL_MAGENTA_GFX)
+    } else if trimmed.eq_ignore_ascii_case("embedded:minimal-magenta-counter") {
+        Some(TITLE_MINIMAL_MAGENTA_COUNTER_GFX)
+    } else {
+        None
+    };
+    if let Some(bytes) = embedded_bytes {
         TITLE_SCALEFORM_MEMORY_GFX_BYTES.fetch_add(bytes.len(), Ordering::SeqCst);
-        let _ = slot.set(bytes);
+        let _ = slot.set(bytes.to_vec());
         append_autoload_debug(format_args!(
             "title-resource-observer: loaded embedded memory-backed {label} selector='{}' bytes={}",
             trimmed,
@@ -1989,6 +1991,888 @@ unsafe fn copy_wide_ascii_preview(ptr: usize, out: &mut [u8]) -> usize {
         n += 1;
     }
     n
+}
+
+/// Read an incoming `DLString<wchar_t>` (the producer's symbol arg) into a `Vec<u16>` (no trailing
+/// NUL) plus its encodingType byte. SSO-aware: the data is a heap pointer at `+0x8` when capacity
+/// `> 7`, otherwise inline at `+0x8`.
+unsafe fn read_dlstring_u16(s: usize) -> Option<(Vec<u16>, u8)> {
+    if s == 0 || s == TITLE_OWNER_SCAN_START_ADDRESS {
+        return None;
+    }
+    let capacity = unsafe { safe_read_usize(s + DLSTRING_U16_CAPACITY_OFFSET) }?;
+    let length = unsafe { safe_read_usize(s + DLSTRING_U16_LENGTH_OFFSET) }?;
+    if length > 4096 {
+        return None; // implausible symbol length
+    }
+    let data_ptr = if capacity > DLSTRING_U16_SSO_THRESHOLD {
+        unsafe { safe_read_usize(s + DLSTRING_U16_INLINE_OFFSET) }?
+    } else {
+        s + DLSTRING_U16_INLINE_OFFSET
+    };
+    if data_ptr == 0 || data_ptr == TITLE_OWNER_SCAN_START_ADDRESS {
+        return None;
+    }
+    let mut out = Vec::with_capacity(length);
+    for i in 0..length {
+        out.push(unsafe { safe_read_u16(data_ptr + i * core::mem::size_of::<u16>()) }?);
+    }
+    let encoding = unsafe { safe_read_u8(s + DLSTRING_U16_ENCODING_OFFSET) }.unwrap_or(1);
+    Some((out, encoding))
+}
+
+/// Extract the bare GFx background texture symbol (e.g. `MENU_Load_00008`) from a now-loading TPF
+/// path symbol like `menutpfbnd:/00_Solo/MENU_Load_00008.tpf`. The pump registers this bare name into
+/// the Scaleform texture repository, so it must be exactly the symbol the loading GFx resolves.
+/// Returns None when the path has no `MENU_Load_` segment (i.e. not a now-loading background).
+fn extract_menu_load_tex_name(path: &str) -> Option<String> {
+    let lower = path.to_ascii_lowercase();
+    let idx = lower.find("menu_load_")?;
+    // Lowercasing ASCII preserves byte indices, so `idx` is valid in the original `path`.
+    let tail = path.get(idx..)?;
+    let name = tail.split('.').next().unwrap_or(tail);
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+/// Bounded ASCII preview of a UTF-16 buffer for debug logging.
+fn utf16_ascii_preview(units: &[u16]) -> String {
+    units
+        .iter()
+        .take(64)
+        .map(|&u| {
+            if (0x20..=0x7e).contains(&u) {
+                u as u8 as char
+            } else {
+                '?'
+            }
+        })
+        .collect()
+}
+
+/// Absolute address of the profile renderer table entry for `slot` (`DAT_143d6d8d0[slot]`, the
+/// `CSMenuProfModelRend*` for that ABSOLUTE save slot; offscreen tex index `slot*2`). Out-of-range
+/// slots fall back to entry 0, preserving the historical table[0] behavior for `slot == 0` or unknown.
+pub(crate) fn portrait_renderer_table_entry(base: usize, slot: i32) -> usize {
+    let idx = if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
+        slot as usize
+    } else {
+        0
+    };
+    base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA + idx * core::mem::size_of::<usize>()
+}
+
+/// Walk the CSMenuProfModelRend chain for `slot` to its live portrait `CSGxTexture`, or 0 if the
+/// renderer/offscreen/tex-rescap chain is not present (e.g. already torn down). Read-only.
+unsafe fn sample_portrait_gxtexture(base: usize, slot: i32) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let renderer =
+        unsafe { safe_read_usize(portrait_renderer_table_entry(base, slot)) }.unwrap_or(0);
+    if renderer == 0 || renderer == null {
+        return 0;
+    }
+    let vt = unsafe { safe_read_usize(renderer) }.unwrap_or(0);
+    if vt != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA {
+        return 0;
+    }
+    let offscreen = unsafe {
+        safe_read_usize(renderer + TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET)
+    }
+    .unwrap_or(0);
+    if offscreen == 0 || offscreen == null {
+        return 0;
+    }
+    let tex_rescap = unsafe {
+        safe_read_usize(offscreen + TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET)
+    }
+    .unwrap_or(0);
+    if tex_rescap == 0 || tex_rescap == null {
+        return 0;
+    }
+    unsafe { safe_read_usize(tex_rescap + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) }
+        .unwrap_or(0)
+}
+
+/// Per-frame: keep the spared profile renderer drawing and capture the portrait once its model
+/// finishes loading. After Continue the menu-owned offscreen-draw MenuJob stops, so we drive the
+/// spared renderer's offscreen render ourselves each frame (`FUN_140bb8d90`); the global ResMan task
+/// keeps loading/animating the model (`renderer+0x778`) automatically. Once the model has latched and
+/// the GPU texture is uploaded, AddRef the `CSGxTexture` (+ its GPU child) so it survives, and cache
+/// it for the now-loading forge (the next MENU_Load rotation displays the real portrait). One-shot.
+/// Diagnostic: dump the captured portrait RGBA8 to `<debug-log-dir>/portrait-capture.bin`
+/// (header: b"ERPX", u32 LE width, u32 LE height, then width*height*4 RGBA8) so the agent can
+/// convert it to a PNG offline and visually confirm it is the loaded character's head (not the
+/// depth buffer / garbage). Best-effort; gated by the same default-OFF readback path.
+fn dump_portrait_rgba(slot: i32, width: u32, height: u32, px: &[u8]) {
+    use std::io::Write;
+    let dir = std::env::var("ER_EFFECTS_AUTOLOAD_DEBUG_PATH")
+        .ok()
+        .and_then(|p| PathBuf::from(p).parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."));
+    let name = if slot >= 0 {
+        format!("portrait-capture-slot{slot}.bin")
+    } else {
+        "portrait-capture.bin".to_string()
+    };
+    let path = dir.join(&name);
+    if let Ok(mut f) = fs::File::create(&path) {
+        let _ = f.write_all(b"ERPX");
+        let _ = f.write_all(&width.to_le_bytes());
+        let _ = f.write_all(&height.to_le_bytes());
+        let _ = f.write_all(px);
+        append_autoload_debug(format_args!(
+            "portrait-dump: slot={slot} wrote {width}x{height} ({} bytes) -> {name}",
+            px.len()
+        ));
+    }
+}
+
+pub(crate) fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
+    if LOADING_BG_PORTRAIT_GX_KEPT.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if base == 0 || base == null {
+        return;
+    }
+    let valid = |p: usize| p != 0 && p != null;
+    // Prefer the spared renderer (alive past Continue); before Continue use the live table slot.
+    let spared = LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst);
+    let renderer = if valid(spared) {
+        spared
+    } else {
+        unsafe { safe_read_usize(portrait_renderer_table_entry(base, slot)) }.unwrap_or(0)
+    };
+    if !valid(renderer) {
+        return;
+    }
+    let vt = unsafe { safe_read_usize(renderer) }.unwrap_or(0);
+    if vt != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA {
+        return;
+    }
+    // NOTE: driving the menu offscreen render (FUN_140bb8d90) post-Continue crashes during world-load
+    // (g_GxDrawContext invalid out of menu phase), and the character model never loads once the menu
+    // phase ends -- so the in-loading-screen drive is disabled. The real no-delay path is to make the
+    // ProfileSelect portrait render during the title phase (valid menu context) and capture it before
+    // Continue. The spare + capture below stay safe (read-only) and fire only if the model ever loads.
+    let _ = PROFILE_OFFSCREEN_DRIVE_RVA;
+    let marked =
+        unsafe { safe_read_u8(renderer + PROFILE_RENDERER_MARKED_DELETE_OFFSET) }.unwrap_or(1);
+    let model =
+        unsafe { safe_read_usize(renderer + PROFILE_RENDERER_MODEL_INS_OFFSET) }.unwrap_or(0);
+    let offscreen = unsafe {
+        safe_read_usize(renderer + TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET)
+    }
+    .unwrap_or(0);
+    let tex_rescap = if valid(offscreen) {
+        unsafe {
+            safe_read_usize(offscreen + TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET)
+        }
+        .unwrap_or(0)
+    } else {
+        0
+    };
+    let gx = if valid(tex_rescap) {
+        unsafe { safe_read_usize(tex_rescap + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) }
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let gpu = if valid(gx) {
+        unsafe { safe_read_usize(gx + GX_TEXTURE_GPU_RESOURCE_OFFSET) }.unwrap_or(0)
+    } else {
+        0
+    };
+    // +0x754/+0x755 are the refresh's "load-requested" idempotency flags: 1 = the async character
+    // model build was kicked for this slot, 0 = never requested (the Continue path may not set up the
+    // profile model data, so the portrait would never render no matter how long we wait).
+    let req754 = unsafe { safe_read_u8(renderer + 0x754) }.unwrap_or(0xff);
+    let req755 = unsafe { safe_read_u8(renderer + 0x755) }.unwrap_or(0xff);
+    let seen = LOADING_BG_PORTRAIT_GX_CAPTURE_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    if seen <= 60 && seen % 4 == 1 {
+        append_autoload_debug(format_args!(
+            "loading-portrait-capture: spared=0x{spared:x} renderer=0x{renderer:x} marked={marked} req754={req754} req755={req755} model=0x{model:x} gx=0x{gx:x} gpu=0x{gpu:x} seen={seen}"
+        ));
+    }
+    // Require the character model to have async-loaded (`+0x778`) so we capture a rendered portrait,
+    // not a blank offscreen.
+    if !(marked == 0 && valid(model) && valid(gx) && valid(gpu)) {
+        return;
+    }
+    // Ready: keepalive the CSGxTexture and its GPU child so the teardown release cannot free them.
+    let gx_rc =
+        unsafe { &*((gx + GX_TEXTURE_REFCOUNT_OFFSET) as *const core::sync::atomic::AtomicI32) };
+    gx_rc.fetch_add(0x10000, Ordering::SeqCst);
+    let gpu_rc =
+        unsafe { &*((gpu + GX_TEXTURE_REFCOUNT_OFFSET) as *const core::sync::atomic::AtomicI32) };
+    gpu_rc.fetch_add(0x10000, Ordering::SeqCst);
+    LOADING_BG_PORTRAIT_GX_KEPT.store(gx, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "loading-portrait: CAPTURED portrait CSGxTexture gx=0x{gx:x} gpu=0x{gpu:x} renderer=0x{renderer:x} -- kept alive for now-loading forge"
+    ));
+    // REAL PIXELS (gated): D3D12-read the rendered offscreen render target into CPU RGBA8 once, so
+    // the now-loading forge can build its TPF from the actual character head instead of the checker
+    // placeholder. Default OFF -> behavior is byte-identical to the proven checker path.
+    if portrait_real_pixels_enabled() {
+        // Scan from the OFFSCREEN render object (renderer+0xa8), not the gx sub-nest -- the real RT
+        // hangs off the offscreen; the gx sub-nest holds only 1x1 vkd3d dummy textures.
+        if let Some((w, h, px)) = unsafe { readback_offscreen_rgba8(offscreen) } {
+            // `readback_offscreen_rgba8` already recorded LOADING_BG_PORTRAIT_FORMAT (the DXGI value).
+            let nonblack = portrait_center_nonblack(w, h, &px);
+            LOADING_BG_PORTRAIT_NONBLACK.store(nonblack as usize, Ordering::SeqCst);
+            LOADING_BG_PORTRAIT_DIMS.store(((w as usize) << 16) | (h as usize), Ordering::SeqCst);
+            let bytes = px.len();
+            dump_portrait_rgba(slot, w, h, &px);
+            if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
+                *g = Some((w, h, px));
+            }
+            append_autoload_debug(format_args!(
+                "portrait-readback: dims={w}x{h} format={} nonblack={} bytes={bytes}",
+                LOADING_BG_PORTRAIT_FORMAT.load(Ordering::SeqCst),
+                nonblack as usize
+            ));
+        } else {
+            append_autoload_debug(format_args!(
+                "portrait-readback: readback_offscreen_rgba8 returned None (offscreen=0x{offscreen:x} gpu=0x{gpu:x})"
+            ));
+        }
+    }
+}
+
+/// FORCE LIVE PROFILE PORTRAIT RENDER (diagnostic, `force_profile_render_enabled`). Runs each
+/// menu-phase frame (no local player). One-shot: mark the target slot used
+/// (`MarkProfileIndexAsUsed` -- the ONLY gate the refresh checks per STEP-0 RE: it sets
+/// `ProfileSummary->saveSlotsStates[slot]=true` with no other side effect), then call the argless
+/// profile-render refresh (`0x9aa680`), which equips ChrAsm + copies FaceData + kicks the async
+/// character-model build that eventually sets `renderer+0x778`. The menu's OWN per-frame callbacks
+/// then composite the live 3D head into the renderer's offscreen (no compositor call from us).
+/// `maybe_capture_portrait_gxtexture` keeps the rendered gx once `+0x778` latches. Menu-phase only
+/// (the user holds ProfileSelect; we never commit Continue) so there is no teardown/world-load crash
+/// path -- this validates P1 (the model build) in isolation. Targets slot 0 (the staged single-profile
+/// gold save's character). `slot` is the target save slot (0 for the staged single-profile gold
+/// save; the autoload path passes its own target slot).
+/// CAMERA LEVER: override one profile renderer's orbit camera with a custom viewport (closer, off-axis
+/// framing), proving the lever on the still dump. Replicates the tail of the engine's own camera routine
+/// `FUN_140bbe190` WITHOUT its `MenuOffscrRendParam` read (so it never clobbers our override): latch the
+/// engine baseline once, write the orbit fields from `baseline + offsets`, rebuild the view matrix via
+/// the engine builder, copy it into the renderer's matrix slot, then push the CSPersCam into the
+/// offscreen render. Re-applied every tick so a refresh that re-runs the engine setup can't win.
+/// `renderer` must already be a validated live CSMenuProfModelRend (vtable checked by the caller).
+/// Returns true once the camera was pushed. See bd `camera-lever-RE-VERIFIED-offsets-and-call-addrs-2026-06-29`.
+unsafe fn apply_profile_camera_override(base: usize, renderer: usize, slot: i32) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if renderer == 0 || renderer == null {
+        return false;
+    }
+    let idx = slot as usize;
+    if idx >= TITLE_PROFILE_SLOT_COUNT {
+        return false;
+    }
+    let read_f32 = |off: usize| -> Option<f32> {
+        unsafe { safe_read_i32(renderer + off) }.map(|b| f32::from_bits(b as u32))
+    };
+    // The push dereferences the offscreen-render pointer at renderer+0xa8; if it is not populated yet
+    // (or has been torn down) skip entirely, so the engine push can never fault on a null offscreen.
+    if unsafe {
+        safe_read_usize(renderer + TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET)
+    }
+    .unwrap_or(0)
+        == 0
+    {
+        return false;
+    }
+    // Latch the engine baseline ONCE per slot, BEFORE the first override write, so all overrides derive
+    // from an immutable baseline. The lock is never held across a game call.
+    let baseline = {
+        let mut guard = match PROFILE_CAM_BASELINE.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if guard[idx].is_none() {
+            let (Some(tx), Some(ty), Some(tz), Some(dist), Some(pitch), Some(yaw), Some(fov)) = (
+                read_f32(PROFILE_CAM_TARGET_OFFSET),
+                read_f32(PROFILE_CAM_TARGET_OFFSET + 4),
+                read_f32(PROFILE_CAM_TARGET_OFFSET + 8),
+                read_f32(PROFILE_CAM_DISTANCE_OFFSET),
+                read_f32(PROFILE_CAM_PITCH_OFFSET),
+                read_f32(PROFILE_CAM_YAW_OFFSET),
+                read_f32(PROFILE_CAM_FOV_OFFSET),
+            ) else {
+                return false;
+            };
+            // The engine frames the head at a real positive distance with a real fov, and the target /
+            // angles are finite. If anything is not set yet (0 / NaN), skip latching this tick and retry
+            // once the ctor camera setup has run -- so a degenerate baseline is never captured.
+            if !(dist.is_finite()
+                && dist > 0.001
+                && fov.is_finite()
+                && fov > 0.0
+                && tx.is_finite()
+                && ty.is_finite()
+                && tz.is_finite()
+                && pitch.is_finite()
+                && yaw.is_finite())
+            {
+                return false;
+            }
+            guard[idx] = Some(ProfileCamBaseline {
+                target: [tx, ty, tz],
+                distance: dist,
+                pitch,
+                yaw,
+                fov,
+            });
+            PROFILE_CAM_LATCHED_MASK.fetch_or(1usize << idx, Ordering::SeqCst);
+        }
+        guard[idx].unwrap()
+    };
+    // Custom viewport derived from the immutable baseline.
+    let target = baseline.target;
+    let distance = baseline.distance * PROFILE_CAM_DISTANCE_SCALE;
+    let pitch = baseline.pitch + PROFILE_CAM_PITCH_DELTA_RAD;
+    let yaw = baseline.yaw + PROFILE_CAM_YAW_DELTA_RAD;
+    let fov = baseline.fov * PROFILE_CAM_FOV_SCALE;
+    // Write the orbit fields (mirrors `FUN_140bbe190`'s field writes, minus the param read). The
+    // renderer is a validated live object spanning well past +0xa24, so direct volatile writes are safe.
+    unsafe {
+        core::ptr::write_volatile(
+            (renderer + PROFILE_CAM_TARGET_OFFSET) as *mut f32,
+            target[0],
+        );
+        core::ptr::write_volatile(
+            (renderer + PROFILE_CAM_TARGET_OFFSET + 4) as *mut f32,
+            target[1],
+        );
+        core::ptr::write_volatile(
+            (renderer + PROFILE_CAM_TARGET_OFFSET + 8) as *mut f32,
+            target[2],
+        );
+        core::ptr::write_volatile((renderer + PROFILE_CAM_TARGET_W_OFFSET) as *mut f32, 1.0);
+        core::ptr::write_volatile(
+            (renderer + PROFILE_CAM_DISTANCE_OFFSET) as *mut f32,
+            distance,
+        );
+        core::ptr::write_volatile((renderer + PROFILE_CAM_PITCH_OFFSET) as *mut f32, pitch);
+        core::ptr::write_volatile((renderer + PROFILE_CAM_YAW_OFFSET) as *mut f32, yaw);
+        core::ptr::write_volatile((renderer + PROFILE_CAM_FOV_OFFSET) as *mut f32, fov);
+    }
+    // Rebuild the view matrix with the engine's own builder (correct handedness/basis), then copy the 16
+    // floats into the renderer's matrix slot (== the CSPersCam view matrix).
+    let build: unsafe extern "system" fn(usize, *mut f32) -> *mut f32 =
+        unsafe { core::mem::transmute(base + PROFILE_CAM_BUILD_MATRIX_RVA) };
+    let mut matrix = [0f32; 16];
+    unsafe { build(renderer, matrix.as_mut_ptr()) };
+    if !matrix.iter().all(|f| f.is_finite()) {
+        PROFILE_CAM_LAST_MATRIX_OK.store(0, Ordering::SeqCst);
+        return false;
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            matrix.as_ptr(),
+            (renderer + PROFILE_CAM_VIEW_MATRIX_OFFSET) as *mut f32,
+            16,
+        );
+    }
+    // Push the CSPersCam into the offscreen render so the next offscreen frame uses our camera.
+    let push: unsafe extern "system" fn(usize, usize) =
+        unsafe { core::mem::transmute(base + PROFILE_CAM_PUSH_RVA) };
+    unsafe { push(renderer, renderer + PROFILE_CAM_PERSCAM_OFFSET) };
+    PROFILE_CAM_APPLY_CALLS.fetch_add(1, Ordering::SeqCst);
+    PROFILE_CAM_LAST_SLOT.store(idx, Ordering::SeqCst);
+    PROFILE_CAM_LAST_MATRIX_OK.store(1, Ordering::SeqCst);
+    true
+}
+
+pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if base == 0 || base == null {
+        return;
+    }
+    let valid = |p: usize| p != 0 && p != null;
+    // HIGHER-RES (one-shot, EARLY -- runs before the table-ready guard below so it lands before
+    // TitleTopDialog constructs the renderers). Patch each per-slot offscreen base-size entry that
+    // still holds the init value (128x128, written by FUN_1400a7bb0) to 1024x1024 base AND zero the
+    // per-slot supersample-enable byte (+0x8) so the env-dependent x2 is off -> a predictable
+    // 1024x1024 RT. The .data table is writable (the game's own init writes it), so a direct volatile
+    // write suffices. Self-validating: only entries still holding the exact init value are touched.
+    if portrait_real_pixels_enabled() && PROFILE_SIZE_PATCHED.swap(1, Ordering::SeqCst) == 0 {
+        let table = base + PROFILE_OFFSCREEN_SIZE_TABLE_RVA;
+        let mut patched = 0u32;
+        for s in 0..10usize {
+            let row = table + s * PROFILE_OFFSCREEN_SIZE_TABLE_STRIDE;
+            if unsafe { safe_read_usize(row) } == Some(PROFILE_OFFSCREEN_SIZE_INIT) {
+                unsafe {
+                    core::ptr::write_volatile(
+                        row as *mut u64,
+                        PROFILE_OFFSCREEN_SIZE_TARGET as u64,
+                    );
+                    core::ptr::write_volatile(
+                        (row + PROFILE_OFFSCREEN_SIZE_SUPERSAMPLE_FLAG_OFFSET) as *mut u8,
+                        0,
+                    );
+                }
+                patched += 1;
+            }
+        }
+        append_autoload_debug(format_args!(
+            "higher-res: patched {patched}/10 offscreen-size entries -> 1024x1024 base, supersample off"
+        ));
+    }
+    // ProfileSummary = GameDataMan -> slot-manager container.
+    let gdm = game_data_man_ptr_or_null();
+    if !valid(gdm) {
+        return;
+    }
+    let summary = unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(0);
+    if !valid(summary) {
+        return;
+    }
+    // GUARD (crash fix): only call refresh once the renderer table is LIVE -- it is populated at
+    // TitleTopDialog ctor (main menu), NOT at early title. Calling refresh before the table exists
+    // AVs inside refresh (observed crash rva 0x9aa6d4 = refresh+0x54 at +8939ms). Require slot-0's
+    // table entry to be a valid CSMenuProfModelRend before marking/refreshing.
+    let probe = unsafe { safe_read_usize(portrait_renderer_table_entry(base, 0)) }.unwrap_or(0);
+    if !valid(probe)
+        || unsafe { safe_read_usize(probe) }.unwrap_or(0)
+            != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+    {
+        return;
+    }
+    // PERIODIC REBUILD (timing test): every ~240 ticks (~4s), CLEAR each slot's build latch
+    // (+0x754/+0x755) then mark-all + refresh, forcing a FRESH model build. refresh is idempotent per
+    // slot via +0x754, so clearing it is required to rebuild. The point: an EARLY build (before LOAD
+    // GAME loaded per-slot FaceData) renders the default head; a LATER build (after FaceData is loaded)
+    // should render the real character. Dumps overwrite each cycle, so the final dumps reflect the
+    // latest FaceData state. Reset the dump mask each cycle so every rebuild re-dumps.
+    let counter = PROFILE_FORCE_TICK_COUNTER.fetch_add(1, Ordering::SeqCst);
+    if counter % 240 == 0 {
+        let mark: unsafe extern "system" fn(usize, i32) -> u8 =
+            unsafe { core::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
+        for s in 0..10i32 {
+            let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
+            if valid(r)
+                && unsafe { safe_read_usize(r) }.unwrap_or(0)
+                    == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+            {
+                unsafe {
+                    core::ptr::write_volatile((r + 0x754) as *mut u8, 0);
+                    core::ptr::write_volatile((r + 0x755) as *mut u8, 0);
+                }
+            }
+            let _ = unsafe { mark(summary, s) };
+        }
+        let refresh: unsafe extern "system" fn() =
+            unsafe { core::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
+        unsafe { refresh() };
+        append_autoload_debug(format_args!(
+            "force-profile-render: REBUILD cycle (counter={counter}) -- cleared latches + marked ALL 10 + refreshed (summary=0x{summary:x})"
+        ));
+    }
+    // ~80 ticks AFTER each rebuild kick, reset the dump mask so the freshly-rebuilt models (not the
+    // stale pre-clear model_ins) get re-dumped. Each cycle's dumps overwrite the per-slot files.
+    if counter % 240 == 80 {
+        PROFILE_SLOT_DUMP_MASK.store(0, Ordering::SeqCst);
+    }
+    // CAMERA LEVER: every tick, override each live renderer's orbit camera with our custom viewport.
+    // Re-applied so a refresh that re-runs the engine camera setup can't win; the dump loop below then
+    // captures the custom-framed RT. Gated under the same `portrait_real_pixels` diagnostic as the dump.
+    if portrait_real_pixels_enabled() {
+        for s in 0..TITLE_PROFILE_SLOT_COUNT as i32 {
+            let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
+            if valid(r)
+                && unsafe { safe_read_usize(r) }.unwrap_or(0)
+                    == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+            {
+                unsafe { apply_profile_camera_override(base, r, s) };
+            }
+        }
+    }
+    // Per-slot: once a slot's model (+0x778) has built, readback its COLOR offscreen RT and dump to
+    // portrait-capture-slot{N}.bin ONCE (tracked via PROFILE_SLOT_DUMP_MASK). Inspect the 10 dumps
+    // offline and match to the known disk characters to map renderer-slot -> character.
+    if portrait_real_pixels_enabled() {
+        for s in 0..10i32 {
+            let bit = 1usize << s;
+            if PROFILE_SLOT_DUMP_MASK.load(Ordering::SeqCst) & bit != 0 {
+                continue;
+            }
+            let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
+            if !valid(r)
+                || unsafe { safe_read_usize(r) }.unwrap_or(0)
+                    != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+            {
+                continue;
+            }
+            let model =
+                unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }.unwrap_or(0);
+            if !valid(model) {
+                continue;
+            }
+            let off = unsafe {
+                safe_read_usize(r + TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET)
+            }
+            .unwrap_or(0);
+            if !valid(off) {
+                continue;
+            }
+            // LIGHTING residency oracle: envObj = renderer+0x760; *(envObj) is the registered IBL
+            // env-region id, non-zero ONLY if the GILM env map was resident when the IBL built.
+            let env_obj =
+                unsafe { safe_read_usize(r + PROFILE_RENDERER_ENV_REGION_OFFSET) }.unwrap_or(0);
+            let ibl_region = if valid(env_obj) {
+                unsafe { safe_read_usize(env_obj) }.unwrap_or(0)
+            } else {
+                0
+            };
+            if let Some((w, h, px)) = unsafe { readback_offscreen_rgba8(off) } {
+                let nb = portrait_center_nonblack(w, h, &px);
+                dump_portrait_rgba(s, w, h, &px);
+                PROFILE_SLOT_DUMP_MASK.fetch_or(bit, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "profile-slot-dump: slot={s} renderer=0x{r:x} model=0x{model:x} dims={w}x{h} nonblack={} env_obj=0x{env_obj:x} ibl_region=0x{ibl_region:x}",
+                    nb as u8
+                ));
+            }
+        }
+    }
+}
+
+/// Hook on the CSMenuProfModelRend teardown-all (`FUN_1409b2f00`). One-shot: before the original
+/// runs, save slot-0's renderer and null its table entry so the original's null-guarded delete
+/// enqueue skips it -- sparing the loaded character's portrait renderer from the Continue teardown so
+/// we can keep rendering it into the now-loading screen. The original then tears down slots 1-9.
+pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) == 0 && product_autoload_enabled()
+    {
+        if let Ok(base) = game_module_base() {
+            // Spare the autoload's TARGET save slot, not a hardcoded slot 0 (the loaded character may
+            // live in any absolute slot). Falls back to entry 0 when the slot is unset/out of range.
+            let slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+            let table = portrait_renderer_table_entry(base, slot);
+            let renderer = unsafe { safe_read_usize(table) }.unwrap_or(0);
+            if renderer != 0 && renderer != null {
+                let vt = unsafe { safe_read_usize(renderer) }.unwrap_or(0);
+                if vt == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA {
+                    LOADING_BG_PORTRAIT_SPARED_RENDERER.store(renderer, Ordering::SeqCst);
+                    PROFILE_RENDERER_SPARE_HITS.fetch_add(1, Ordering::SeqCst);
+                    // Spare table[slot]: the original then enqueues null for it (no-op) and tears down
+                    // the rest of the 10 slots.
+                    unsafe { (table as *mut usize).write_volatile(0) };
+                    append_autoload_debug(format_args!(
+                        "loading-portrait: SPARED slot{slot} portrait renderer=0x{renderer:x} from teardown -- will render it into the now-loading screen"
+                    ));
+                }
+            }
+        }
+    }
+    let orig = PROFILE_RENDERER_TEARDOWN_HOOK_ORIG.load(Ordering::SeqCst);
+    if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let f: unsafe extern "system" fn() = unsafe { std::mem::transmute(orig) };
+        unsafe { f() };
+    }
+}
+
+pub(crate) fn install_profile_renderer_teardown_spare_hook() {
+    if PROFILE_RENDERER_TEARDOWN_HOOK_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "loading-portrait: teardown-spare MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(target) = game_rva(PROFILE_RENDERER_TEARDOWN_RVA as u32) else {
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            target as *mut c_void,
+            profile_renderer_teardown_spare_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            PROFILE_RENDERER_TEARDOWN_HOOK_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if unsafe { hook.queue_enable() }.is_err() {
+                append_autoload_debug(format_args!(
+                    "loading-portrait: teardown-spare queue_enable failed for 0x{target:x}"
+                ));
+                return;
+            }
+            std::mem::forget(hook);
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "loading-portrait: teardown-spare MhHook::new failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => {
+            PROFILE_RENDERER_TEARDOWN_HOOK_INSTALLED.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "loading-portrait: hooked profile-renderer teardown 0x{target:x} to spare slot0 for the now-loading portrait"
+            ));
+        }
+        status => append_autoload_debug(format_args!(
+            "loading-portrait: teardown-spare MH_ApplyQueued failed: {status:?}"
+        )),
+    }
+}
+
+/// Build a distinctive POC test-image TPF (magenta/yellow checker) whose single texture is named
+/// EXACTLY `symbol`, so the CSScaleform pump's name-registration binds it to the now-loading image.
+/// (Real loaded-character portrait pixels are a follow-up; this proves the injection + object shape.)
+fn build_portrait_test_tpf(symbol: &str) -> Option<Vec<u8>> {
+    let dds = er_tpf::DdsImage::checker(512, 512, 32, [255, 0, 255, 255], [255, 255, 0, 255])
+        .to_dds_bytes_with(er_tpf::DdsHeaderMode::LegacyRgba8);
+    er_tpf::Tpf::single_pc(symbol, dds, 1).build().ok()
+}
+
+/// Build the now-loading background TPF named exactly `symbol`. When `portrait_real_pixels_enabled()`
+/// AND a live portrait readback is available (`LOADING_BG_PORTRAIT_RGBA` is `Some`), build the TPF
+/// from the REAL rendered character-head RGBA8 pixels (uncompressed legacy-RGBA8 DDS). The engine
+/// rebuilds a correct SRV from these bytes at `CreateTpfResCap` time -- the same mechanism that makes
+/// the checker display correctly. Otherwise (default, or no capture yet) fall back to the proven
+/// magenta/yellow checker, byte-for-byte unchanged.
+fn build_portrait_tpf(symbol: &str) -> Option<Vec<u8>> {
+    if portrait_real_pixels_enabled() {
+        if let Ok(slot) = LOADING_BG_PORTRAIT_RGBA.lock() {
+            if let Some((w, h, px)) = slot.as_ref() {
+                let dds = er_tpf::DdsImage {
+                    width: *w,
+                    height: *h,
+                    pixels: px.clone(),
+                }
+                .to_dds_bytes_with(er_tpf::DdsHeaderMode::LegacyRgba8);
+                return er_tpf::Tpf::single_pc(symbol, dds, 1).build().ok();
+            }
+        }
+    }
+    build_portrait_test_tpf(symbol)
+}
+
+/// `FUN_140d69880` (deobf `LOADING_BG_REPLACE_BIND_RVA`) full-replace: the producer's "bind a
+/// TpfFileCap to this rti from the symbol" step. For the now-loading background symbols
+/// `MENU_Load_NNNNN`, build our own portrait TPF named exactly the symbol, materialize it through the
+/// game's in-memory `CreateTpfResCap` factory, wrap it in a freshly-allocated `TpfFileCap`
+/// (loadState=4), set it + the symbol on the rti, and return 1 -- so the producer lists the rti and
+/// the unmodified per-frame CSScaleform pump registers our texture name, making GFx composite the
+/// portrait as the loading-screen background. Every other symbol (and any build/alloc failure)
+/// tail-calls the original, so the stock random background renders unchanged.
+pub(crate) unsafe extern "system" fn loading_bg_replace_bind_hook(rti: usize, symbol: usize) -> u8 {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = LOADING_BG_TEXTURE_REDIRECT_ORIG.load(Ordering::SeqCst);
+    let call_orig = move || -> u8 {
+        if orig != null && orig != HOOK_ORIGINAL_UNSET {
+            let f: unsafe extern "system" fn(usize, usize) -> u8 =
+                unsafe { std::mem::transmute(orig) };
+            unsafe { f(rti, symbol) }
+        } else {
+            0
+        }
+    };
+    let total = LOADING_BG_REPLACE_BIND_TOTAL_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+    let pae = product_autoload_enabled();
+    let sym = unsafe { read_dlstring_u16(symbol) };
+    // Diagnostic: log the first calls' symbols (ungated) so we can confirm whether the now-loading
+    // MENU_Load_ background symbols actually reach this bind function and how they decode.
+    if total <= 48 {
+        let (preview, len) = match &sym {
+            Some((u, _)) => (utf16_ascii_preview(u), u.len()),
+            None => ("<read-fail>".to_string(), 0),
+        };
+        append_autoload_debug(format_args!(
+            "loading-portrait-probe: call#{total} pae={pae} rti=0x{rti:x} symlen={len} sym='{preview}'"
+        ));
+    }
+    if !pae || rti == 0 || rti == null {
+        return call_orig();
+    }
+    let Some((units, encoding)) = sym else {
+        return call_orig();
+    };
+    let Ok(sym_string) = String::from_utf16(&units) else {
+        return call_orig();
+    };
+    // The producer symbol is a virtual TPF path, e.g. "menutpfbnd:/00_Solo/MENU_Load_00008.tpf".
+    // Extract the bare GFx image symbol ("MENU_Load_00008"); skip anything that is not a now-loading
+    // background.
+    let Some(tex_name) = extract_menu_load_tex_name(&sym_string) else {
+        return call_orig();
+    };
+    let attempts = LOADING_BG_TEXTURE_REDIRECT_ATTEMPTS.fetch_add(1, Ordering::SeqCst) + 1;
+    let Ok(base) = game_module_base() else {
+        return call_orig();
+    };
+    // Build the TPF with its single texture named EXACTLY the bare GFx symbol, and key the factory by
+    // that same name, so the pump's name-registration binds our texture to the loading image.
+    let name_z: Vec<u16> = tex_name.encode_utf16().chain(core::iter::once(0)).collect();
+    let Some(tpf_bytes) = build_portrait_tpf(&tex_name) else {
+        LOADING_BG_TEXTURE_REDIRECT_LAST_SYMBOL_MATCH.store(2, Ordering::SeqCst);
+        return call_orig();
+    };
+    let tpf_repo = unsafe { safe_read_usize(base + GLOBAL_TPF_REPOSITORY_RVA) }.unwrap_or(0);
+    if tpf_repo == 0 {
+        return call_orig();
+    }
+    let create_rescap: unsafe extern "system" fn(
+        usize,
+        *const u16,
+        *const u8,
+        u64,
+        u8,
+        u32,
+    ) -> usize = unsafe { std::mem::transmute(base + CREATE_TPF_RESCAP_RVA) };
+    let container = unsafe {
+        create_rescap(
+            tpf_repo,
+            name_z.as_ptr(),
+            tpf_bytes.as_ptr(),
+            tpf_bytes.len() as u64,
+            0,
+            0,
+        )
+    };
+    if container == 0 {
+        LOADING_BG_TEXTURE_REDIRECT_LAST_SYMBOL_MATCH.store(3, Ordering::SeqCst);
+        return call_orig();
+    }
+    // If we captured the live portrait CSGxTexture during ProfileSelect (kept alive past the
+    // ProfileSelect teardown), swap it into this container's first TexResCap so the loading screen
+    // composites the real character portrait. Falls back to the checker if no portrait was captured.
+    let kept_portrait = LOADING_BG_PORTRAIT_GX_KEPT.load(Ordering::SeqCst);
+    let mut used_portrait = false;
+    if kept_portrait != 0 {
+        let count = unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_COUNT_OFFSET) }
+            .unwrap_or(0)
+            & 0xffff_ffff;
+        let array =
+            unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_ARRAY_OFFSET) }.unwrap_or(0);
+        if count >= 1 && array != 0 && array != null {
+            let tex_rescap0 = unsafe { safe_read_usize(array) }.unwrap_or(0);
+            if tex_rescap0 != 0 && tex_rescap0 != null {
+                unsafe {
+                    ((tex_rescap0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) as *mut usize)
+                        .write_volatile(kept_portrait)
+                };
+                used_portrait = true;
+            }
+        }
+    }
+    let main_heap = unsafe { safe_read_usize(base + GLOBAL_MAIN_HEAP_ALLOCATOR_RVA) }.unwrap_or(0);
+    if main_heap == 0 {
+        return call_orig();
+    }
+    let heap_alloc: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(base + GAME_HEAP_ALLOC_RVA) };
+    let cap = unsafe { heap_alloc(TPF_FILE_CAP_ALLOC_SIZE, TPF_FILE_CAP_ALLOC_ALIGN, main_heap) };
+    if cap == 0 {
+        LOADING_BG_TEXTURE_REDIRECT_LAST_SYMBOL_MATCH.store(4, Ordering::SeqCst);
+        return call_orig();
+    }
+    let cap_ctor: unsafe extern "system" fn(usize, usize) -> usize =
+        unsafe { std::mem::transmute(base + TPF_FILE_CAP_CTOR_RVA) };
+    unsafe { cap_ctor(cap, 0) };
+    unsafe {
+        ((cap + TPF_FILE_CAP_LOAD_STATE_OFFSET) as *mut u8)
+            .write_volatile(TPF_FILE_CAP_LOADED_STATE)
+    };
+    let prev_flags = unsafe { safe_read_u8(cap + TPF_FILE_CAP_FLAGS_OFFSET) }.unwrap_or(0);
+    unsafe {
+        ((cap + TPF_FILE_CAP_FLAGS_OFFSET) as *mut u8)
+            .write_volatile(prev_flags | TPF_FILE_CAP_READY_FLAG_BIT)
+    };
+    unsafe { ((cap + TPF_FILE_CAP_TEX_RESCAP_OFFSET) as *mut usize).write_volatile(container) };
+    // Set the rti symbol (substr full copy of the source) + encodingType, then bind the cap.
+    unsafe { ((rti + REPLACE_TEX_INFO_ENCODING_OFFSET) as *mut u8).write_volatile(encoding) };
+    let substr: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(base + DLSTRING_WCHAR_SUBSTR_RVA) };
+    unsafe { substr(rti + REPLACE_TEX_INFO_SYMBOL_OFFSET, symbol, 0, usize::MAX) };
+    unsafe { ((rti + REPLACE_TEX_INFO_TPF_FILE_CAP_OFFSET) as *mut usize).write_volatile(cap) };
+    unsafe { ((rti + REPLACE_TEX_INFO_READY_OFFSET) as *mut u8).write_volatile(0) };
+    // Pin the forged rti so the CSScaleform Update GC and producer-list teardown never drive its
+    // refcount to 0 (which would run a destructor over our hand-built graph and double-free). A
+    // refcount-audited clean teardown is a follow-up; for the POC accept the leak to stay crash-free.
+    let rc = unsafe {
+        &*((rti + REPLACE_TEX_INFO_REFCOUNT_OFFSET) as *const core::sync::atomic::AtomicI32)
+    };
+    rc.fetch_add(0x10000, Ordering::SeqCst);
+    let commits = LOADING_BG_TEXTURE_REDIRECT_COMMITS.fetch_add(1, Ordering::SeqCst) + 1;
+    LOADING_BG_TEXTURE_REDIRECT_LAST_SYMBOL_MATCH.store(1, Ordering::SeqCst);
+    LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT.store(cap, Ordering::SeqCst);
+    // Observe whether the live portrait CSGxTexture is still present via the renderer chain at forge
+    // time (expected 0 -- torn down at Continue); the displayed texture comes from `kept_portrait`.
+    // Sample the autoload's target slot (the loaded character's absolute slot), not a hardcoded 0.
+    let portrait_gx =
+        unsafe { sample_portrait_gxtexture(base, OWN_STEPPER_SLOT.load(Ordering::SeqCst)) };
+    if commits <= 4 {
+        append_autoload_debug(format_args!(
+            "loading-portrait: forged now-loading background symbol='{sym_string}' -> cap=0x{cap:x} container=0x{container:x} used_portrait={used_portrait} kept_portrait=0x{kept_portrait:x} portrait_gx_live=0x{portrait_gx:x} tpf_len={} commits={commits} attempts={attempts}",
+            tpf_bytes.len()
+        ));
+    }
+    1
+}
+
+pub(crate) fn install_loading_bg_replace_bind_hook() {
+    if LOADING_BG_TEXTURE_REDIRECT_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "loading-portrait: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(target) = game_rva(LOADING_BG_REPLACE_BIND_RVA as u32) else {
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            target as *mut c_void,
+            loading_bg_replace_bind_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            LOADING_BG_TEXTURE_REDIRECT_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if unsafe { hook.queue_enable() }.is_err() {
+                append_autoload_debug(format_args!(
+                    "loading-portrait: queue_enable failed for replace-bind 0x{target:x}"
+                ));
+                return;
+            }
+            std::mem::forget(hook);
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "loading-portrait: replace-bind MhHook::new failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => {
+            LOADING_BG_TEXTURE_REDIRECT_INSTALLED.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "loading-portrait: hooked now-loading replace-bind 0x{target:x}; will forge a portrait TPF for {LOADING_BG_SYMBOL_PREFIX}NNNNN backgrounds under product autoload"
+            ));
+        }
+        status => append_autoload_debug(format_args!(
+            "loading-portrait: MH_ApplyQueued failed: {status:?}"
+        )),
+    }
 }
 
 pub(crate) unsafe extern "system" fn title_menu_resource_acquire_observer_hook(

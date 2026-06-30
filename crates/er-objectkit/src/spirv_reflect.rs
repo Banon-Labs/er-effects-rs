@@ -20,11 +20,20 @@ const OP_TYPE_SAMPLER: u16 = 26;
 const OP_TYPE_SAMPLED_IMAGE: u16 = 27;
 const OP_TYPE_ARRAY: u16 = 28;
 const OP_TYPE_RUNTIME_ARRAY: u16 = 29;
+const OP_MEMBER_DECORATE: u16 = 72;
+const OP_CONSTANT: u16 = 43;
+const OP_TYPE_FLOAT: u16 = 22;
+const OP_TYPE_INT: u16 = 21;
+const OP_TYPE_VECTOR: u16 = 23;
+const OP_TYPE_MATRIX: u16 = 24;
+const OP_TYPE_STRUCT: u16 = 30;
 
 // Decoration enums.
 const DEC_BINDING: u32 = 33;
 const DEC_DESCRIPTOR_SET: u32 = 34;
 const DEC_LOCATION: u32 = 30;
+const DEC_ARRAY_STRIDE: u32 = 6;
+const DEC_OFFSET: u32 = 35;
 
 // Storage classes.
 const SC_UNIFORM_CONSTANT: u32 = 0; // sampled images / samplers
@@ -295,11 +304,214 @@ fn decode_string(words: &[u32]) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
+use std::collections::HashMap;
+
+/// Type graph needed to compute a block's byte size from SPIR-V.
+#[derive(Default)]
+struct TypeCtx {
+    float_w: HashMap<u32, u32>,
+    int_w: HashMap<u32, u32>,
+    vec_ty: HashMap<u32, (u32, u32)>, // (component type, count)
+    mat_ty: HashMap<u32, (u32, u32)>, // (column type, count)
+    array_elem: HashMap<u32, u32>,
+    array_len: HashMap<u32, u32>,    // array type -> length-constant id
+    array_stride: HashMap<u32, u32>, // array type -> byte stride
+    const_val: HashMap<u32, u32>,    // constant id -> value
+    struct_members: HashMap<u32, Vec<u32>>,
+    member_offset: HashMap<(u32, u32), u32>, // (struct, member) -> byte offset
+}
+
+impl TypeCtx {
+    /// Byte size of a type. Arrays use their `ArrayStride`; structs take the max member
+    /// `(offset + size)`; matrices use a 16-byte column stride (cbuffer/std140 rule).
+    fn size(&self, t: u32, depth: u32) -> u64 {
+        if depth > 24 {
+            return 0;
+        }
+        if let Some(&w) = self.float_w.get(&t) {
+            return (w / 8) as u64;
+        }
+        if let Some(&w) = self.int_w.get(&t) {
+            return (w / 8) as u64;
+        }
+        if let Some(&(c, n)) = self.vec_ty.get(&t) {
+            return self.size(c, depth + 1) * n as u64;
+        }
+        if let Some(&(col, n)) = self.mat_ty.get(&t) {
+            return self.size(col, depth + 1).max(16) * n as u64;
+        }
+        if self.array_elem.contains_key(&t) {
+            let len = self
+                .array_len
+                .get(&t)
+                .and_then(|c| self.const_val.get(c))
+                .copied()
+                .unwrap_or(0) as u64;
+            let stride = match self.array_stride.get(&t) {
+                Some(&s) => s as u64,
+                None => self.size(self.array_elem[&t], depth + 1),
+            };
+            return stride * len;
+        }
+        if let Some(members) = self.struct_members.get(&t) {
+            let mut max = 0u64;
+            for (idx, &m) in members.iter().enumerate() {
+                let off = self
+                    .member_offset
+                    .get(&(t, idx as u32))
+                    .copied()
+                    .unwrap_or(0) as u64;
+                max = max.max(off + self.size(m, depth + 1));
+            }
+            return max;
+        }
+        0
+    }
+}
+
+/// Compute each descriptor-bound uniform/storage block's byte size, sorted by `(set,
+/// binding)`. dxil-spirv lays a cbuffer as `struct { vec4 data[N] }`, so the size is the
+/// member's `ArrayStride × N`. Used to match a captured cbuffer to OUR shader's cbuffer by
+/// SIZE — vkd3d-proton's descriptor buffers erase the D3D register, but byte sizes survive.
+pub fn block_byte_sizes(spirv: &[u8]) -> Vec<(u32, u32, u64)> {
+    if spirv.len() < 20 {
+        return Vec::new();
+    }
+    let words: Vec<u32> = spirv
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    if words[0] != MAGIC {
+        return Vec::new();
+    }
+
+    let mut sets: HashMap<u32, u32> = HashMap::new();
+    let mut binds: HashMap<u32, u32> = HashMap::new();
+    let mut ptr_pointee: HashMap<u32, u32> = HashMap::new();
+    let mut variables: Vec<(u32, u32, u32)> = Vec::new(); // (id, storage class, ptr type)
+    let mut ctx = TypeCtx::default();
+
+    let mut i = 5usize;
+    while i < words.len() {
+        let word0 = words[i];
+        let op = (word0 & 0xFFFF) as u16;
+        let len = (word0 >> 16) as usize;
+        if len == 0 || i + len > words.len() {
+            break;
+        }
+        let o = &words[i + 1..i + len];
+        match op {
+            OP_DECORATE if o.len() >= 2 => match o[1] {
+                DEC_DESCRIPTOR_SET => {
+                    if let Some(&v) = o.get(2) {
+                        sets.insert(o[0], v);
+                    }
+                }
+                DEC_BINDING => {
+                    if let Some(&v) = o.get(2) {
+                        binds.insert(o[0], v);
+                    }
+                }
+                DEC_ARRAY_STRIDE => {
+                    if let Some(&v) = o.get(2) {
+                        ctx.array_stride.insert(o[0], v);
+                    }
+                }
+                _ => {}
+            },
+            OP_MEMBER_DECORATE if o.len() >= 4 && o[2] == DEC_OFFSET => {
+                ctx.member_offset.insert((o[0], o[1]), o[3]);
+            }
+            OP_TYPE_POINTER if o.len() >= 3 => {
+                ptr_pointee.insert(o[0], o[2]);
+            }
+            OP_TYPE_STRUCT if !o.is_empty() => {
+                ctx.struct_members.insert(o[0], o[1..].to_vec());
+            }
+            OP_TYPE_ARRAY if o.len() >= 3 => {
+                ctx.array_elem.insert(o[0], o[1]);
+                ctx.array_len.insert(o[0], o[2]);
+            }
+            OP_TYPE_RUNTIME_ARRAY if o.len() >= 2 => {
+                ctx.array_elem.insert(o[0], o[1]);
+            }
+            OP_TYPE_FLOAT if o.len() >= 2 => {
+                ctx.float_w.insert(o[0], o[1]);
+            }
+            OP_TYPE_INT if o.len() >= 2 => {
+                ctx.int_w.insert(o[0], o[1]);
+            }
+            OP_TYPE_VECTOR if o.len() >= 3 => {
+                ctx.vec_ty.insert(o[0], (o[1], o[2]));
+            }
+            OP_TYPE_MATRIX if o.len() >= 3 => {
+                ctx.mat_ty.insert(o[0], (o[1], o[2]));
+            }
+            OP_CONSTANT if o.len() >= 3 => {
+                ctx.const_val.insert(o[1], o[2]);
+            }
+            OP_VARIABLE if o.len() >= 3 => {
+                variables.push((o[1], o[2], o[0]));
+            }
+            _ => {}
+        }
+        i += len;
+    }
+
+    let mut out = Vec::new();
+    for (id, sc, ptr_type) in variables {
+        if sc != SC_UNIFORM && sc != SC_STORAGE_BUFFER {
+            continue;
+        }
+        let (Some(&set), Some(&binding)) = (sets.get(&id), binds.get(&id)) else {
+            continue;
+        };
+        if let Some(&pointee) = ptr_pointee.get(&ptr_type) {
+            out.push((set, binding, ctx.size(pointee, 0)));
+        }
+    }
+    out.sort_by_key(|&(s, b, _)| (s, b));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::passthrough::{first_pair, translate};
     use crate::shaderbundle::parse_bundle;
+
+    /// Hand-built module: a cbuffer laid out the dxil-spirv way — `struct { vec4 data[128] }`
+    /// at (set 0, binding 8) — must compute to 128 × 16 = 2048 bytes (the size we observe
+    /// for `cbSceneParam` in a real capture). Validates the size-match enabler offline.
+    #[test]
+    fn block_size_flat_vec4_array() {
+        // ids: 1=float32, 2=vec4, 3=uint32, 4=const(128), 5=array, 6=struct, 7=ptr, 8=var
+        let mut w: Vec<u32> = vec![MAGIC, 0x0001_0600, 0, 20, 0];
+        let ins = |w: &mut Vec<u32>, op: u16, ops: &[u32]| {
+            w.push(((ops.len() as u32 + 1) << 16) | op as u32);
+            w.extend_from_slice(ops);
+        };
+        ins(&mut w, OP_TYPE_FLOAT, &[1, 32]);
+        ins(&mut w, OP_TYPE_VECTOR, &[2, 1, 4]); // vec4 of float
+        ins(&mut w, OP_TYPE_INT, &[3, 32, 0]);
+        ins(&mut w, OP_CONSTANT, &[3, 4, 128]); // uint 128
+        ins(&mut w, OP_TYPE_ARRAY, &[5, 2, 4]); // vec4[128]
+        ins(&mut w, OP_DECORATE, &[5, DEC_ARRAY_STRIDE, 16]);
+        ins(&mut w, OP_TYPE_STRUCT, &[6, 5]); // struct { vec4[128] }
+        ins(&mut w, OP_MEMBER_DECORATE, &[6, 0, DEC_OFFSET, 0]);
+        ins(&mut w, OP_TYPE_POINTER, &[7, SC_UNIFORM, 6]);
+        ins(&mut w, OP_VARIABLE, &[7, 8, SC_UNIFORM]);
+        ins(&mut w, OP_DECORATE, &[8, DEC_DESCRIPTOR_SET, 0]);
+        ins(&mut w, OP_DECORATE, &[8, DEC_BINDING, 8]);
+
+        let bytes: Vec<u8> = w.iter().flat_map(|x| x.to_le_bytes()).collect();
+        let sizes = block_byte_sizes(&bytes);
+        assert_eq!(
+            sizes,
+            vec![(0, 8, 2048)],
+            "flat vec4[128] cbuffer should be 2048B"
+        );
+    }
 
     /// Reflect a real translated ER shader pair: the vertex stage must expose input
     /// locations and the pixel stage must expose texture + buffer bindings (it samples

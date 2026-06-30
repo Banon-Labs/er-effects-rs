@@ -156,6 +156,11 @@ const SAVE_REDIRECT_LOG_MAX: usize = 8;
 static SAVE_CREATEFILEW_CALLS: AtomicUsize = AtomicUsize::new(0);
 static SAVE_CREATEFILEW_DIAG_LOGGED: AtomicUsize = AtomicUsize::new(0);
 const SAVE_CREATEFILEW_DIAG_MAX: usize = 200;
+/// Sparse-sampling counter for the save-LIKE CreateFileW diag line (the `save_like` opens churn
+/// thousands of identical lines per run). Logs the first 8 hits then only at power-of-two intervals
+/// (16/32/64/...) -- same rate-limit pattern as `now_loading_helper_update_hook` -- so the diagnostic
+/// keeps its early window and a sparse tail without flooding the debug log.
+static SAVE_CREATEFILEW_DIAG_HITS: AtomicUsize = AtomicUsize::new(0);
 /// DEDICATED budget for save-FILE queries (paths ending .sl2 / .co2 or containing ER0000): the shared
 /// CreateFileW/existence-check diag cap above is exhausted by early-boot `eldenring\` dir churn
 /// (GraphicsConfig.xml etc.) BEFORE the actual save read, hiding whether/with-what-steamid the game
@@ -448,13 +453,13 @@ unsafe extern "system" fn save_redirect_createfilew_hook(
             || wide_ends_with_ci_ascii(path, CO2D)
             || wide_ends_with_ci_ascii(path, BAKD);
         if calls == 0 || save_like {
-            let d = SAVE_CREATEFILEW_DIAG_LOGGED.load(Ordering::SeqCst);
-            if d < SAVE_CREATEFILEW_DIAG_MAX {
-                SAVE_CREATEFILEW_DIAG_LOGGED.store(d + 1, Ordering::SeqCst);
+            // Rate-limit: log the first 8 save-LIKE opens, then only at power-of-two hit counts.
+            let hits = SAVE_CREATEFILEW_DIAG_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+            if hits <= 8 || hits.is_power_of_two() {
                 // UTF-8 Lossy: log-only decode of a Windows wide path for probe diagnosis.
                 let p = String::from_utf16_lossy(path);
                 append_autoload_debug(format_args!(
-                    "save-override: CreateFileW diag call#{calls} save_like={save_like} '{p}'"
+                    "save-override: CreateFileW diag call#{calls} save_like={save_like} diag_hits={hits} '{p}'"
                 ));
             }
         }
@@ -777,13 +782,15 @@ unsafe extern "system" fn save_ntcreatefile_diag_hook(
         )
     };
     if let Some((p, is_sl2)) = save_diag {
-        let d = SAVE_NTCREATE_DIAG_LOGGED.fetch_add(1, Ordering::SeqCst);
-        if d < SAVE_NTCREATE_DIAG_MAX {
+        // Rate-limit: log the first 8 .sl2 opens, then only at power-of-two hit counts (the capture
+        // pre-gate above still bounds this counter at SAVE_NTCREATE_DIAG_MAX).
+        let hits = SAVE_NTCREATE_DIAG_LOGGED.fetch_add(1, Ordering::SeqCst) + 1;
+        if hits <= 8 || hits.is_power_of_two() {
             // ret is NTSTATUS (0 == STATUS_SUCCESS). is_write keys off GENERIC_WRITE (0x40000000)
             // or FILE_WRITE_DATA (0x2) so a failing save COMMIT is unambiguous in the log.
             let is_write = access & 0x4000_0000 != 0 || access & 0x2 != 0;
             append_autoload_debug(format_args!(
-                "save-override: NtCreateFile diag access=0x{access:x} disp={disposition} opts=0x{options:x} write={is_write} sl2={is_sl2} ret=0x{ret:x} '{p}'"
+                "save-override: NtCreateFile diag access=0x{access:x} disp={disposition} opts=0x{options:x} write={is_write} sl2={is_sl2} diag_hits={hits} '{p}'"
             ));
         }
     }

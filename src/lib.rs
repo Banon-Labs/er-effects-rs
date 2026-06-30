@@ -359,6 +359,24 @@ pub unsafe extern "C" fn DllMain(_hmodule: HINSTANCE, reason: u32, _reserved: *m
         });
     }
 
+    // Now-loading background portrait forge: install the replace-bind hook early (well before the
+    // ~17s now-loading-screen lifecycle) so it is resident when the first MENU_Load_ background is
+    // produced. The hook self-gates on product_autoload_enabled() + the MENU_Load_ symbol and is
+    // fail-open (any non-matching symbol or build/alloc failure tail-calls the original), so
+    // installing it unconditionally is inert outside the product autoload path. Route-independent.
+    START_LOADING_BG_REPLACE_BIND.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("er-effects-loading-bg-portrait".to_owned())
+            .spawn(install_loading_bg_replace_bind_hook);
+    });
+    // Portrait-renderer teardown SPARE hook is intentionally NOT installed: the portrait render window
+    // (product_core_autoload_tick) captures the rendered portrait PRE-commit on the live table[0], so
+    // the renderer need not survive the Continue teardown. Installing the spare would mis-fire on
+    // maybe_refresh's init() teardown (sparing a blank pre-render renderer). Kept available for the
+    // (rejected) drive-into-loading-screen path; re-enable only if the pre-commit window is removed.
+    let _ = install_profile_renderer_teardown_spare_hook;
+    let _ = &START_PROFILE_RENDERER_TEARDOWN_SPARE;
+
     // MenuWindow latch: install the SceneObjProxy ctor hook (0x14074a700) as early as the
     // splash-skip / online-disable patches, from a thread, so it lands BEFORE the title state
     // machine builds the title dialog during boot. On each VALID call it latches rdx (the engine-
@@ -744,6 +762,26 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         if let (Ok(base), Some(slot)) = (base_result, slot_result) {
                             unsafe {
                                 product_core_autoload_tick(base, slot, state.game_task_ticks)
+                            };
+                            // Per-frame: capture the live character portrait CSGxTexture while the
+                            // ProfileSelect renderer still exists (it is torn down at Continue), so
+                            // the now-loading background forge can display the real portrait. One-shot.
+                            // Read the autoload's TARGET slot's renderer table entry, not a hardcoded 0.
+                            maybe_capture_portrait_gxtexture(base, slot);
+                        }
+                        write_telemetry_throttled(&mut state, false);
+                        return;
+                    }
+                    // FORCE LIVE PROFILE PORTRAIT RENDER (diagnostic, default-OFF): while the user
+                    // holds the ProfileSelect/Load-Game screen (valid menu render context, NO
+                    // Continue commit), mark the target slot used + kick the async character-model
+                    // build so the renderer renders the live 3D head into its offscreen. Menu-phase
+                    // only -> no Continue/teardown/world-load crash path. The capture keeps the gx
+                    // once the model latches (+0x778). Validates P1 (the build) in isolation.
+                    if force_profile_render_enabled() {
+                        if let Ok(base) = game_module_base() {
+                            unsafe {
+                                force_profile_render_tick(base, FORCE_PROFILE_RENDER_MANUAL_SLOT)
                             };
                         }
                         write_telemetry_throttled(&mut state, false);

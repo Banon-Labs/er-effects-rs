@@ -669,21 +669,33 @@ def window_capture_safe(window: dict[str, Any], window_class: str) -> bool:
 
 
 
-def telemetry_logo_replacement_capture_ready(telemetry: dict[str, Any] | None) -> bool:
-    """True when the portrait-cover/logo-replacement moment is worth visually capturing.
+_LOGO_FIRST_COMMIT_MONOTONIC: float | None = None
 
-    This screenshot is for agent visual review until a stronger pixel/native-surface memory
-    semaphore exists. It is intentionally event-timed: teardown/world screenshots do not prove the
-    logo replacement ever looked correct.
+
+def telemetry_logo_replacement_capture_ready(telemetry: dict[str, Any] | None) -> bool:
+    """True when the loading-screen portrait moment is worth visually capturing.
+
+    The product surface is the now-loading screen (full-screen background art), not the title logo.
+    Capture while the CSFakeLoadingScreen is CURRENTLY on-screen (oracle_fake_loading_visible is an
+    int 0/1, not a bool) AND our now-loading background forge has committed a replacement texture
+    (oracle_loading_bg_portrait_redirect_commits > 0) -- that is the frame where the forged portrait
+    should be the loading background. Stop/continue decisions still come from the RAM oracles, not
+    this image; it is the visual confirmation that the injected texture actually displays.
     """
     if telemetry is None:
         return False
-    return (
-        telemetry.get("oracle_title_portrait_visible_surface_bound") is True
-        and as_int(telemetry.get("oracle_title_portrait_visible_surface_bind_rewrites"), 0) > 0
-        and telemetry.get("oracle_title_loaded_character_portrait_rendered") is True
-        and telemetry.get("oracle_title_loaded_character_portrait_visible_during_boot") is True
-    )
+    # The forge commits during the title->load transition (the now-loading helper requests its image a
+    # couple seconds before the art "Now Loading" screen actually renders during world streaming).
+    # Capturing at the first commit catches the title PRESS-ANY-BUTTON screen, so wait a short delay
+    # after the first commit so the screenshot lands while the art screen (our forged bg) is on-screen.
+    global _LOGO_FIRST_COMMIT_MONOTONIC
+    if as_int(telemetry.get("oracle_loading_bg_portrait_redirect_commits"), 0) <= 0:
+        return False
+    now = time.monotonic()
+    if _LOGO_FIRST_COMMIT_MONOTONIC is None:
+        _LOGO_FIRST_COMMIT_MONOTONIC = now
+        return False
+    return (now - _LOGO_FIRST_COMMIT_MONOTONIC) >= 2.5
 
 
 def maybe_capture_logo_replacement(artifact_dir: Path, telemetry: dict[str, Any] | None) -> bool:

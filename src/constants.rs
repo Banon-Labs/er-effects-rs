@@ -695,6 +695,338 @@ pub(crate) static RENDER_LOADING_LAYER_LAST_CSSCALEFORM: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static RENDER_LOADING_LAYER_LAST_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
+/// CSFakeLoadingScreen visibility flag offset: `*(u8*)(singleton + 0x8)` is 1 while the loading
+/// screen is up (singleton = base + RuntimeGlobalRva::FakeLoadingScreenSingleton).
+pub(crate) const FAKE_LOADING_SCREEN_VISIBLE_OFFSET: usize = 0x8;
+/// Now-loading background portrait forge. The pseudorandom loading-screen background is
+/// `helper->replaceTexInfo` (a CSScaleformReplaceTexInfo*), PRODUCED for symbol `MENU_Load_%05d` by
+/// `GetOrCreateReplaceTexInfo`, whose symbol-bind step is `FUN_140d69880` (dump 0x140d69880 -> deobf
+/// 0x140d697d0, shift -0xb0). We full-replace that bind for `MENU_Load_*`: build an er-tpf TPF named
+/// exactly the requested symbol, turn it into a TpfResCap container via the game's in-memory
+/// `CreateTpfResCap` factory, wrap it in a TpfFileCap, and hand it back on the rti so the unmodified
+/// per-frame CSScaleform pump registers our texture name and GFx composites the portrait as the
+/// loading background. `fn(rti: *mut CSScaleformReplaceTexInfo /rcx/, symbol: *mut DLString<u16>
+/// /rdx/) -> u8` (1 = bound; producer then lists the rti).
+pub(crate) const LOADING_BG_REPLACE_BIND_RVA: usize = 0xd697d0;
+/// In-memory TPF -> TpfResCap factory `CreateTpfResCap` (dump 0x140b83770 -> deobf 0x140b83680).
+/// `fn(tpfRepo /rcx = *GLOBAL_TpfRepository/, name: *const u16 /rdx/, bytes: *const u8 /r8/, size: u64
+/// /r9/, flag: u8 /stack=0/, extra: u32 /stack=0/) -> *mut TpfResCap` (0xb8; +0x78 count, +0x80 array).
+pub(crate) const CREATE_TPF_RESCAP_RVA: usize = 0xb83680;
+/// `CS::TpfFileCap::TpfFileCap` ctor (dump 0x140226010 -> deobf 0x140225f60). `fn(this: *mut /0x98
+/// from MainHeap/, loadTask=0) -> this`; only inits the FD4FileCap base and zeroes `+0x90`.
+pub(crate) const TPF_FILE_CAP_CTOR_RVA: usize = 0x225f60;
+/// Game heap allocator wrapper (dump 0x141eb9ec0 -> deobf 0x141eb9ed0). `fn(size /rcx/, align /rdx/,
+/// allocator_obj /r8/) -> *mut u8`; allocator_obj is the dereferenced DLAllocator* (== the repo's
+/// `runtime_heap_allocator` for MainHeap).
+pub(crate) const GAME_HEAP_ALLOC_RVA: usize = 0x1eb9ed0;
+/// `DLString<wchar_t>::substr` (dump 0x140116c90 -> deobf 0x140116c70). `fn(dest /rcx/, src /rdx/,
+/// start /r8 = 0/, count /r9 = usize::MAX = to-end/) -> dest`; copies the symbol into the rti symbol.
+pub(crate) const DLSTRING_WCHAR_SUBSTR_RVA: usize = 0x116c70;
+// `GLOBAL_TpfRepository` singleton pointer (deref -> rcx for CreateTpfResCap) is defined below as
+// the existing `GLOBAL_TPF_REPOSITORY_RVA` (0x3d73fb8).
+/// `GLOBAL_MainHeapAllocator` singleton pointer (data, 0x143d872e0; identical RVA to the repo's
+/// `runtime_heap_allocator`). Deref -> the allocator object for the 0x98-byte TpfFileCap allocation.
+pub(crate) const GLOBAL_MAIN_HEAP_ALLOCATOR_RVA: usize = 0x3d872e0;
+/// CSScaleformReplaceTexInfo (size 0x50) field offsets.
+pub(crate) const REPLACE_TEX_INFO_REFCOUNT_OFFSET: usize = 0x8; // i32 DLReferenceCountObject refcount
+pub(crate) const REPLACE_TEX_INFO_SYMBOL_OFFSET: usize = 0x10; // DLString<u16>
+pub(crate) const REPLACE_TEX_INFO_ENCODING_OFFSET: usize = 0x38; // u8
+pub(crate) const REPLACE_TEX_INFO_TPF_FILE_CAP_OFFSET: usize = 0x40; // TpfFileCap*
+pub(crate) const REPLACE_TEX_INFO_READY_OFFSET: usize = 0x48; // u8 (leave 0 so the pump processes it)
+/// TpfFileCap (size 0x98) field offsets.
+pub(crate) const TPF_FILE_CAP_LOAD_STATE_OFFSET: usize = 0x88; // u8
+pub(crate) const TPF_FILE_CAP_FLAGS_OFFSET: usize = 0x89; // u8
+pub(crate) const TPF_FILE_CAP_TEX_RESCAP_OFFSET: usize = 0x90; // -> TpfResCap container
+pub(crate) const TPF_FILE_CAP_LOADED_STATE: u8 = 4;
+pub(crate) const TPF_FILE_CAP_READY_FLAG_BIT: u8 = 0x20;
+pub(crate) const TPF_FILE_CAP_ALLOC_SIZE: usize = 0x98;
+pub(crate) const TPF_FILE_CAP_ALLOC_ALIGN: usize = 8;
+/// Incoming symbol DLString<wchar_t> (rdx, standalone, size 0x30) field offsets.
+pub(crate) const DLSTRING_U16_INLINE_OFFSET: usize = 0x8; // inline buffer, or heap ptr if cap > 7
+pub(crate) const DLSTRING_U16_LENGTH_OFFSET: usize = 0x18; // code units
+pub(crate) const DLSTRING_U16_CAPACITY_OFFSET: usize = 0x20; // code units; SSO threshold > 7 -> heap
+pub(crate) const DLSTRING_U16_ENCODING_OFFSET: usize = 0x28; // u8 DLCharacterSet
+pub(crate) const DLSTRING_U16_SSO_THRESHOLD: usize = 7;
+/// The now-loading background image symbols are MENU_Load_00001..00034; match by prefix.
+pub(crate) const LOADING_BG_SYMBOL_PREFIX: &str = "MENU_Load_";
+pub(crate) static LOADING_BG_TEXTURE_REDIRECT_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static LOADING_BG_TEXTURE_REDIRECT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Times the producer-bind hook saw a MENU_Load_ symbol (a now-loading background request).
+pub(crate) static LOADING_BG_TEXTURE_REDIRECT_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+/// Times we successfully forged + injected our portrait TPF cap on the rti (the proof oracle: >0
+/// means our texture was bound as the loading-screen background).
+pub(crate) static LOADING_BG_TEXTURE_REDIRECT_COMMITS: AtomicUsize = AtomicUsize::new(0);
+/// Last forge outcome code: 1=injected, 2=tpf-build-fail, 3=createrescap-null, 4=alloc-null.
+pub(crate) static LOADING_BG_TEXTURE_REDIRECT_LAST_SYMBOL_MATCH: AtomicUsize = AtomicUsize::new(0);
+/// Last forged TpfFileCap pointer.
+pub(crate) static LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Diagnostic: total calls into the replace-bind hook (every symbol, ungated), so we can tell
+/// whether `FUN_140d69880` is even on the now-loading background path vs the producer cache-hit path.
+pub(crate) static LOADING_BG_REPLACE_BIND_TOTAL_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// The kept-alive portrait `CSGxTexture` captured during ProfileSelect (0 until captured). When set,
+/// the forge swaps it into its TpfResCap container's TexResCap so the loading screen shows the real
+/// rendered character portrait instead of the placeholder checker.
+pub(crate) static LOADING_BG_PORTRAIT_GX_KEPT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LOADING_BG_PORTRAIT_GX_CAPTURE_HITS: AtomicUsize = AtomicUsize::new(0);
+/// The live profile-portrait offscreen render target, read back via D3D12 into CPU RGBA8 once the
+/// character head has rendered (`portrait_real_pixels_enabled()` gate). Tuple = (width, height,
+/// tightly-packed `width*height*4` RGBA8 pixels). `None` until a successful readback. When `Some`,
+/// the now-loading forge builds its TPF from these REAL pixels instead of the magenta/yellow checker.
+pub(crate) static LOADING_BG_PORTRAIT_RGBA: std::sync::Mutex<Option<(u32, u32, Vec<u8>)>> =
+    std::sync::Mutex::new(None);
+/// 1 if the read-back portrait has any non-black texel (max(R,G,B) > 24) inside a center 64x64
+/// region, else 0 (a black/blank capture). Exposed as `oracle_loading_bg_portrait_gx_nonblack`.
+pub(crate) static LOADING_BG_PORTRAIT_NONBLACK: AtomicUsize = AtomicUsize::new(0);
+/// Read-back portrait dimensions packed as `(width << 16) | height`. 0 until captured. Exposed as
+/// `oracle_loading_bg_portrait_gx_dims`.
+pub(crate) static LOADING_BG_PORTRAIT_DIMS: AtomicUsize = AtomicUsize::new(0);
+/// The DXGI_FORMAT value of the read-back offscreen render target. 0 until captured. Exposed as
+/// `oracle_loading_bg_portrait_gx_format`.
+pub(crate) static LOADING_BG_PORTRAIT_FORMAT: AtomicUsize = AtomicUsize::new(0);
+/// CSMenuProfModelRend "marked-for-delete" byte (renderer+0x756) and the CSChrAsmModelIns* pointer
+/// (renderer+0x778) that is non-null only once the character model has finished async-loading -- the
+/// real "portrait is rendering" gate (the +0x754/+0x755 bytes are only a setup-submitted latch).
+pub(crate) const PROFILE_RENDERER_MARKED_DELETE_OFFSET: usize = 0x756;
+pub(crate) const PROFILE_RENDERER_MODEL_INS_OFFSET: usize = 0x778;
+/// `CSGxTexture` GPU-resource child pointer (gx+0x10): non-null once at least one offscreen draw has
+/// uploaded the texture. Refcount is the uniform DLReferenceCountObject i32 at obj+0x8.
+pub(crate) const GX_TEXTURE_GPU_RESOURCE_OFFSET: usize = 0x10;
+pub(crate) const GX_TEXTURE_REFCOUNT_OFFSET: usize = 0x8;
+/// The GPU child of a profile-portrait `CSGxTexture` (gx+0x10) may be a `CSOffscreenGxTexture` C++
+/// WRAPPER rather than a raw `ID3D12Resource`. Its C++ vtable lives at `game_base + this RVA`; when
+/// `*(gpu_child)` equals that absolute address the gpu_child is a wrapper and the real
+/// `ID3D12Resource` lives at one of the offsets below. The underlying COM resource MUST be resolved
+/// before any D3D12 call -- invoking a COM vtable method on a non-COM pointer crashes. See
+/// `experiments::gpu_readback::readback_offscreen_rgba8`.
+pub(crate) const PROFILE_GX_GPU_WRAPPER_VTABLE_RVA: usize = 0x2b80278;
+/// Wrapper -> real `ID3D12Resource` primary slot (`gpu_child + 0x18`); used when non-null.
+pub(crate) const PROFILE_GX_GPU_WRAPPER_RESOURCE_PRIMARY_OFFSET: usize = 0x18;
+/// Wrapper -> real `ID3D12Resource` fallback slot (`gpu_child + 0x10`); used when +0x18 is null.
+pub(crate) const PROFILE_GX_GPU_WRAPPER_RESOURCE_FALLBACK_OFFSET: usize = 0x10;
+/// TpfResCap container (the 0xb8 object CreateTpfResCap returns): texture count and the array of
+/// `TexResCap*`. We rewrite `array[0]`'s `+0x78` CSGxTexture to the kept portrait.
+pub(crate) const TPF_RESCAP_CONTAINER_COUNT_OFFSET: usize = 0x78;
+pub(crate) const TPF_RESCAP_CONTAINER_ARRAY_OFFSET: usize = 0x80;
+/// No-delay portrait render: the ProfileSelect portrait is a live per-frame 3D model render that the
+/// fast autoload never finishes before the Continue teardown. To get it WITHOUT delaying boot we
+/// SPARE slot-0's renderer from the teardown and keep driving its offscreen render into the (free,
+/// multi-second) now-loading screen until the character model latches, then capture it.
+/// Teardown-all `FUN_1409b2f00` (deobf 0x1409b2db0): unconditional 10-slot loop of
+/// `FUN_140e77540(GLOBAL_CSDelayDeleteMan, table[i]); table[i]=0`. The enqueue is null-guarded, so we
+/// null `table[slot]` before the original to spare that slot (its enqueue becomes a no-op).
+pub(crate) const PROFILE_RENDERER_TEARDOWN_RVA: usize = 0x9b2db0;
+/// Offscreen-draw driver `FUN_140bb8d90` (deobf 0x140bb8ca0): `fn(renderer)` -> submits the offscreen
+/// render via `FUN_140bb73a0(*(renderer+0xa8))`, reading the global GxDrawContext itself (no arg).
+/// The menu-owned per-frame caller stops at Continue, so we call this ourselves each frame.
+pub(crate) const PROFILE_OFFSCREEN_DRIVE_RVA: usize = 0xbb8ca0;
+/// The spared slot-0 CSMenuProfModelRend renderer (0 until the Continue teardown spares it). Its
+/// global ResMan model-update task keeps loading/animating the model while the object lives.
+pub(crate) static LOADING_BG_PORTRAIT_SPARED_RENDERER: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_RENDERER_TEARDOWN_HOOK_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static PROFILE_RENDERER_TEARDOWN_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_RENDERER_SPARE_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Minimal-delay portrait hold: the autoload's load-commit (`maybe_fire_tfc_continue`) waits at the
+/// open main menu -- where the ProfileSelect render context is valid -- until the character portrait
+/// has rendered + been captured (`LOADING_BG_PORTRAIT_GX_KEPT` set), or this many recurring-task
+/// ticks elapse, then proceeds. ~60 ticks/s, so 240 ≈ a ~4s cap on the added delay.
+pub(crate) static PORTRAIT_HOLD_WAIT_TICKS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const PORTRAIT_HOLD_MAX_TICKS: usize = 240;
+/// Profile-render refresh `FUN_1409aa7d0` (deobf 0x1409aa680): no-arg; gets GameDataMan ProfileSummary
+/// and, per enabled slot with a profile + `+0x754/+0x755 == 0`, equips ChrAsm + copies FaceData +
+/// kicks the async character-model build. The Continue autoload never runs it for our slot (req754=0),
+/// so we call it ourselves once the renderer table is populated to REQUEST the portrait model render.
+pub(crate) const PROFILE_RENDERER_REFRESH_RVA: usize = 0x9aa680;
+pub(crate) static PROFILE_REFRESH_KICKED: AtomicUsize = AtomicUsize::new(0);
+/// Bitmask (bit per slot 0..9) of which profile-renderer slots have had their forced render dumped
+/// to `portrait-capture-slot{N}.bin` -- so the all-slot diagnostic dumps each slot exactly once.
+pub(crate) static PROFILE_SLOT_DUMP_MASK: AtomicUsize = AtomicUsize::new(0);
+/// Per-call tick counter for `force_profile_render_tick`, used to re-fire the model build on a timer
+/// (the timing test: a LATER rebuild, after LOAD GAME has loaded each slot's FaceData, should render
+/// the real character instead of the default).
+pub(crate) static PROFILE_FORCE_TICK_COUNTER: AtomicUsize = AtomicUsize::new(0);
+/// HIGHER-RES. Per-slot offscreen base-size table read by `CSMenuProfModelRend` ctor (0x140bbe010):
+/// `width = *(u32*)(base+0x3b39848 + slot*0x20)`, `height = *(u32*)(...+0x4)` -> packed u64
+/// `(height<<32)|width`. Static init `FUN_1400a7bb0` writes every slot `0x8000000080` (base 128x128;
+/// the menu's x2 supersample makes the observed 256x256 RT). Patch each entry that still holds the
+/// init value to a larger base BEFORE the renderers are constructed (TitleTopDialog ctor) so the
+/// offscreen render targets are bigger; the D3D12 readback reads desc.Width/Height dynamically.
+pub(crate) const PROFILE_OFFSCREEN_SIZE_TABLE_RVA: usize = 0x3b39848;
+pub(crate) const PROFILE_OFFSCREEN_SIZE_TABLE_STRIDE: usize = 0x20;
+/// The value `FUN_1400a7bb0` writes (base 128x128 = `(128<<32)|128`); self-validate before patching.
+pub(crate) const PROFILE_OFFSCREEN_SIZE_INIT: usize = 0x8000000080;
+/// Target base 1024x1024 = `(1024<<32)|1024`. We ALSO zero the per-slot supersample-enable byte at
+/// `row+0x8` so the engine's env-dependent x2 (`FUN_140bbeee0`: `base*2` iff global flag &&
+/// `size_struct[+0x8]`) is disabled -- giving a PREDICTABLE 1024x1024 RT instead of a settings-
+/// dependent 1024-or-2048. (We capture the RT directly, so the x2 is just a costlier render, not AA.)
+pub(crate) const PROFILE_OFFSCREEN_SIZE_TARGET: usize = 0x0000_0400_0000_0400;
+/// Byte offset within a size-table row of the per-slot supersample-enable flag (read as
+/// `size_struct[+0x8]` by `FUN_140bbeee0`); zero it to force x1.
+pub(crate) const PROFILE_OFFSCREEN_SIZE_SUPERSAMPLE_FLAG_OFFSET: usize = 0x8;
+/// One-shot latch for the higher-res offscreen-size patch.
+pub(crate) static PROFILE_SIZE_PATCHED: AtomicUsize = AtomicUsize::new(0);
+/// LIGHTING. Renderer field holding the IBL env-map-region object (`param_1[0xec]`, allocated by
+/// FUN_140b399e0, filled by the IBL build FUN_140b39a30). The IBL build stores the registered
+/// env-region id into `*envObj` ONLY when the `GILM####_rem` env map is resident; if it was skipped
+/// (GILM not resident at construction) `*envObj` stays 0 -> head is unlit/dark. So
+/// `*(renderer+0x760)` then deref again = the residency oracle (non-zero = IBL built).
+pub(crate) const PROFILE_RENDERER_ENV_REGION_OFFSET: usize = 0x760;
+// ---------------------------------------------------------------------------------------------------
+// CAMERA LEVER (custom profile-portrait viewport). VERIFIED RE 2026-06-29 -- bd
+// `camera-lever-RE-VERIFIED-offsets-and-call-addrs-2026-06-29`. The interactive-face roadmap's camera
+// function addresses were garbled (dump-vs-deobf space confusion); these are ground-truthed against the
+// Ghidra runtime dump (`pc_eldenring_runtime.1.16.1.exe`) + `scripts/dump-deobf-shift.py`.
+//
+// The `CSMenuProfModelRend` ctor (dump 0x140bbe010) sets the orbit camera ONCE from `MenuOffscrRendParam`
+// via `FUN_140bbe190`, which (a) writes the orbit fields below, (b) builds a view matrix into `+0x9e0`
+// via `FUN_140bbe480`, (c) pushes the CSPersCam (`+0x9d0`) into the offscreen render via `FUN_140bba550`.
+// We replicate steps (b)+(c) AFTER writing our own orbit fields, and never call `FUN_140bbe190` itself
+// (it re-reads the param and clobbers the orbit fields).
+//
+// All offsets are BYTE offsets from the renderer (CSMenuProfModelRend) base.
+/// Orbit look-at point, `Vec3` (x@+0x9b4, y@+0x9b8, z@+0x9bc); `w`@+0x9c0 is 1.0.
+pub(crate) const PROFILE_CAM_TARGET_OFFSET: usize = 0x9b4;
+pub(crate) const PROFILE_CAM_TARGET_W_OFFSET: usize = 0x9c0;
+/// Orbit distance (f32). Consumed sign-flipped by the matrix builder (camera sits behind the target);
+/// a SMALLER value = closer.
+pub(crate) const PROFILE_CAM_DISTANCE_OFFSET: usize = 0x9c4;
+/// Orbit yaw (f32, radians) -- horizontal turn (Y-axis rotation in the matrix builder). Confirmed by
+/// the 2026-06-29 runtime smoke: a large delta on the OTHER field (+0x9cc) shifted the framing
+/// vertically, so +0x9c8 is yaw and +0x9cc is pitch (corrects the initial swapped labels).
+pub(crate) const PROFILE_CAM_YAW_OFFSET: usize = 0x9c8;
+/// Orbit pitch (f32, radians) -- vertical tilt (X-axis rotation in the matrix builder).
+pub(crate) const PROFILE_CAM_PITCH_OFFSET: usize = 0x9cc;
+/// The embedded `CSPersCam` subobject (the `rdx` argument to the push). Its view matrix lives at
+/// CSCam+0x10 == renderer+0x9e0; `fov`@+0xa20, `aspectRatio`@+0xa24 (far=10000, near=0.05 defaults).
+pub(crate) const PROFILE_CAM_PERSCAM_OFFSET: usize = 0x9d0;
+/// The computed 4x4 view matrix (16 f32 = 64 bytes), == the CSPersCam view matrix.
+pub(crate) const PROFILE_CAM_VIEW_MATRIX_OFFSET: usize = 0x9e0;
+/// Field-of-view (f32, radians) == CSPersCam.fov.
+pub(crate) const PROFILE_CAM_FOV_OFFSET: usize = 0xa20;
+/// Aspect ratio (f32) == CSPersCam.aspectRatio.
+pub(crate) const PROFILE_CAM_ASPECT_OFFSET: usize = 0xa24;
+/// View-matrix builder `FUN_140bbe480` (dump) -> deobf 0x140bbe390 (shift -0xf0, content-unique).
+/// `fn(renderer /rcx/, out: *mut f32[16] /rdx/) -> *mut f32`. Pure orbit->view-matrix math (sinf/cosf
+/// of pitch/yaw, target, -distance); reads renderer+0x9b4/+0x9c4/+0x9c8/+0x9cc; no render context,
+/// allocation, or lock.
+pub(crate) const PROFILE_CAM_BUILD_MATRIX_RVA: usize = 0xbbe390;
+/// Camera push `FUN_140bba550` (dump) -> deobf 0x140bba460 (shift -0xf0, content-unique).
+/// `fn(renderer /rcx/, persCam = renderer+0x9d0 /rdx/)`. Copies the cam matrix+projection into the
+/// offscreen render's view-state (`*(renderer+0xa8)`) and recomputes derived matrices/viewport. Verified
+/// pure CPU state (no GPU submit / allocation / lock) -- safe on the CSTaskImp game thread; it is the
+/// exact path the engine runs at renderer construction.
+pub(crate) const PROFILE_CAM_PUSH_RVA: usize = 0xbba460;
+/// Custom-viewport transform applied to the engine's latched baseline orbit. Produces a visibly closer,
+/// tilted portrait framing vs the engine's straight-on default. These exact values are the framing the
+/// user approved in the 2026-06-29 runtime smoke (a tight zoom with a strong upward pitch into the
+/// face); the deltas are correctly named after the pitch/yaw fix and remain free knobs to retune.
+pub(crate) const PROFILE_CAM_DISTANCE_SCALE: f32 = 0.62;
+/// Large vertical tilt into the upper face -- the dominant framing change the user approved.
+pub(crate) const PROFILE_CAM_PITCH_DELTA_RAD: f32 = 0.40;
+/// Small horizontal turn off the straight-on axis.
+pub(crate) const PROFILE_CAM_YAW_DELTA_RAD: f32 = -0.06;
+pub(crate) const PROFILE_CAM_FOV_SCALE: f32 = 1.0;
+/// Per-slot latched baseline orbit, captured ONCE (before the first override write) so every per-tick
+/// override is derived from an immutable baseline -- drift-free and clobber-proof even if a refresh
+/// re-runs the engine camera setup. `Copy` so the array-repeat initializer below is const.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ProfileCamBaseline {
+    pub target: [f32; 3],
+    pub distance: f32,
+    pub pitch: f32,
+    pub yaw: f32,
+    pub fov: f32,
+}
+pub(crate) static PROFILE_CAM_BASELINE: std::sync::Mutex<[Option<ProfileCamBaseline>; 10]> =
+    std::sync::Mutex::new([None; 10]);
+/// Camera-override telemetry (RAM semaphores): total applies (matrix build + push), bit-per-slot
+/// latched-baseline mask, last applied slot, and whether the last built view matrix was all-finite.
+pub(crate) static PROFILE_CAM_APPLY_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_CAM_LATCHED_MASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_CAM_LAST_SLOT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static PROFILE_CAM_LAST_MATRIX_OK: AtomicUsize = AtomicUsize::new(0);
+/// Offscreen render camera-params POD (the ~0xc4-byte block `FUN_140cca450` blits, dump 0x140cca450).
+/// VERIFIED RE 2026-06-29. Reached via the camera push: `FUN_140bba550` -> `FUN_140bb7da0` ->
+/// `FUN_141ad94e0` -> `FUN_140cca450(dst = *(offscreenRend+0x20) + 0xd0, src = *(offscreenRend+0x28))`.
+/// The leading 4x4 view matrix at +0x00 is written by `FUN_141a536b0` (copies exactly 0x40 bytes); the
+/// 1280x720 (0x500x0x2d0) viewport rects and the fov/aspect copies are written by `FUN_140b12260`.
+/// Fields named where the RE is confident; the rest are kept as offset-named `u32`/`f32` so the exact
+/// layout is preserved and editable as future RE resolves them. This represents the 0xc4 bytes
+/// `FUN_140cca450` copies; the containing allocation may be larger. `#[repr(C)]` with all-4-byte fields
+/// keeps every field naturally aligned at its true offset (the engine reads some as unaligned u64).
+/// Documentary/layout type: never constructed at runtime (the engine populates the real block) -- kept
+/// for future view/use/edit, with the size/align asserts below as the compile-time layout guard.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub(crate) struct OffscreenRenderCamParams {
+    /// +0x00: 4x4 view matrix (row-major as the engine stores it). Written by `FUN_141a536b0`.
+    pub view_matrix: [f32; 16],
+    /// +0x40: inferred camera position / extra row (set outside the copy path; unconfirmed).
+    pub field_0x40: [f32; 4],
+    /// +0x50: field-of-view (copied from view-state+0x50 by `FUN_140b12260`).
+    pub fov: f32,
+    /// +0x54, +0x58: inferred near/far plane (copied from view-state+0x58/+0x5c).
+    pub field_0x54: f32,
+    pub field_0x58: f32,
+    /// +0x5c/+0x60: primary viewport width/height (set to 1280/720 by `FUN_140b12260`).
+    pub viewport_width_a: u32,
+    pub viewport_height_a: u32,
+    /// +0x64, +0x68: unknown.
+    pub field_0x64: u32,
+    pub field_0x68: u32,
+    /// +0x6c: aspect ratio (copied from view-state+0x54 by `FUN_140b12260`).
+    pub aspect_ratio: f32,
+    /// +0x70: unknown (NOT copied by `FUN_140cca450`; present in the layout).
+    pub field_0x70: u32,
+    /// +0x74..+0x9c: unknown.
+    pub field_0x74: u32,
+    pub field_0x78: u32,
+    pub field_0x7c: u32,
+    pub field_0x80: u32,
+    pub field_0x84: u32,
+    pub field_0x88: u32,
+    pub field_0x8c: u32,
+    pub field_0x90: u32,
+    pub field_0x94: u32,
+    pub field_0x98: u32,
+    pub field_0x9c: u32,
+    /// +0xa0..+0xb7: three more viewport width/height rects (also 1280/720; scissor/full/etc.).
+    pub viewport_width_b: u32,
+    pub viewport_height_b: u32,
+    pub viewport_width_c: u32,
+    pub viewport_height_c: u32,
+    pub viewport_width_d: u32,
+    pub viewport_height_d: u32,
+    /// +0xb8..+0xc3: unknown (tail of the copied region).
+    pub field_0xb8: u32,
+    pub field_0xbc: u32,
+    pub field_0xc0: u32,
+}
+const _: () = assert!(core::mem::size_of::<OffscreenRenderCamParams>() == 0xc4);
+const _: () = assert!(core::mem::align_of::<OffscreenRenderCamParams>() == 4);
+/// DEFAULT-OFF gate for the ProfileSelect load flow (see `profile_select_load_flow_enabled`). When
+/// false (default) `product_core_autoload_tick` takes the PROVEN native Continue commit, byte-for-byte
+/// unchanged; the human flips this on only to probe-test the portrait-rendering ProfileSelect path
+/// (fire the Load-Game row -> live ProfileLoadDialog -> hold for the portrait render -> STAGE2 commit).
+pub(crate) const PROFILE_SELECT_LOAD_FLOW_ENABLED: bool = false; // proven Continue char-load is the default; ProfileSelect flow is blocked by the accept-byte open+drain coupling (the only reliable menu-open commits Continue), so it can't get a window to navigate Load-Game -- left gated-off for the record
+/// `MarkProfileIndexAsUsed` (deobf 0x140262250): sets `ProfileSummary->saveSlotsStates[slot] = true`
+/// (the `bool[10]` at `ProfileSummary+0x8` that the refresh `FUN_1409aa680` gates each slot's portrait
+/// render on). `fn(summary, slot)`. NOT called by the ProfileSelect flow by default -- the live
+/// ProfileLoadDialog's own header-read marks the slots; wire a call only if a runtime probe shows the
+/// target slot stays unmarked (`saveSlotsStates[slot]==0`) inside the open dialog.
+pub(crate) const PROFILE_MARK_SLOT_USED_RVA: usize = 0x262250;
+/// Target save slot for the menu-phase `force_profile_render` manual diagnostic (the staged
+/// single-profile gold save's character is slot 0). The autoload path passes its own target slot
+/// instead of this constant.
+pub(crate) const FORCE_PROFILE_RENDER_MANUAL_SLOT: i32 = 0;
+/// Latched once the portrait render window (hold-the-load-commit-until-the-portrait-renders) has
+/// released -- either the portrait was captured or the hold timed out -- so the load commits exactly
+/// once thereafter.
+pub(crate) static PORTRAIT_RENDER_WINDOW_DONE: AtomicUsize = AtomicUsize::new(0);
 /// Passive observer for native Scaleform image-symbol -> system texture bindings.
 /// Dump `FUN_1407452c0` maps to live/deobf `0x1407451c0`. It receives an owning resource/list field
 /// in rcx and a pair of DLString<char> values in rdx. Do not call it from product code; observe native
@@ -1141,6 +1473,9 @@ pub(crate) static TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS: AtomicUsize = AtomicU
 pub(crate) static TITLE_SCALEFORM_MEMORY_GFX_FAILURES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+
+include!("title_05_000_text_suppressed_bytes.rs");
+
 /// From-scratch minimal diagnostic GFX: one frame, magenta background + full-screen magenta shape.
 /// Generated via FFDEC XML (`target/custom-gfx-lab/title-logo-minimal/...`) and embedded so the
 /// product path can prove no loose runtime GFX file is needed. Selector:
@@ -3741,6 +4076,8 @@ pub(crate) static START_TITLE_SCALEFORM_BIND_OBSERVER: Once = Once::new();
 pub(crate) static START_TITLE_MENU_RESOURCE_ACQUIRE_OBSERVER: Once = Once::new();
 pub(crate) static START_TITLE_FLOW_CONTEXT_RECORD_REGULATION: Once = Once::new();
 pub(crate) static START_NOW_LOADING_HELPER_OBSERVER: Once = Once::new();
+pub(crate) static START_LOADING_BG_REPLACE_BIND: Once = Once::new();
+pub(crate) static START_PROFILE_RENDERER_TEARDOWN_SPARE: Once = Once::new();
 pub(crate) static START_TITLE_CUSTOM_COVER_RUN: Once = Once::new();
 pub(crate) static START_BOOT_PROFILER: Once = Once::new();
 /// One-shot latch for the "first game-task frame ran" boot-phase marker (0 = not yet logged).

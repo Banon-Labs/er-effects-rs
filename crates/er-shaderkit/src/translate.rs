@@ -62,11 +62,16 @@ pub fn dxil_to_spirv(
 ) -> Result<Vec<u8>, TranslateError> {
     let bin = discover_dxil_spirv().ok_or(TranslateError::BinaryMissing)?;
 
-    // Unique scratch paths so concurrent test threads don't collide.
+    // Unique scratch paths so concurrent calls don't collide. pid+len is NOT enough:
+    // two shaders of equal byte length (e.g. a vpo+ppo pair, or two bundle members)
+    // map to the same path, and one call's cleanup deletes the other's output mid-read.
+    // A process-global counter makes every call's scratch path distinct.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let stamp = format!(
-        "er-shaderkit-{}-{}",
+        "er-shaderkit-{}-{}-{}",
         std::process::id(),
-        container_bytes.len()
+        container_bytes.len(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
     );
     let dir = env::temp_dir();
     let in_path = dir.join(format!("{stamp}.dxbc"));

@@ -65,6 +65,29 @@ pub(crate) fn experimental_direct_menu_load_enabled() -> bool {
 pub(crate) fn product_autoload_enabled() -> bool {
     PRODUCT_AUTOLOAD_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
 }
+/// Portrait render window: hold the autoload's own load-commit at the open main menu until the loaded
+/// character's profile portrait has rendered, so the now-loading screen can show it.
+///
+/// DISABLED (2026-06-29): a runtime probe proved this BREAKS the core char-load -- kicking the refresh
+/// (0x9aa680) at menu-open + holding the commit crashed during world-load (access-violation, run
+/// product-continue-direct-20260629-104328), and the refresh gate fails there anyway (req754 stayed 0:
+/// the ProfileSummary slot entry is not loaded at the open main menu, only when navigating to the
+/// Load-Game/ProfileSelect submenu). The proven now-loading injection mechanism is unaffected. Leaving
+/// the (gated-off) implementation in place for the record; do not re-enable without a safe render path.
+pub(crate) fn portrait_render_window_enabled() -> bool {
+    false
+}
+/// DEFAULT-OFF gate for the ProfileSelect load flow. When false (the default) `product_core_autoload_tick`
+/// takes the PROVEN native Continue char-load commit, byte-for-byte unchanged. When the human flips
+/// `PROFILE_SELECT_LOAD_FLOW_ENABLED` on to probe-test, the menu branch instead fires the title menu's
+/// Load-Game row to open a LIVE `ProfileLoadDialog` (the render context in which the profile renderer's
+/// per-slot refresh gate -- `ProfileSummary->saveSlotsStates[slot]` -- is satisfied), HOLDS the load
+/// commit until the loaded character's portrait has rendered + been captured (so the now-loading screen
+/// can display it), then drives the same STAGE2 commit (load_activate -> selector ->
+/// continue_confirm/SetState5). Compile-time `const` so the OFF path is dead-code-eliminated.
+pub(crate) fn profile_select_load_flow_enabled() -> bool {
+    PROFILE_SELECT_LOAD_FLOW_ENABLED
+}
 /// Diagnostic mode for native ProfileSelect/profile-renderer portrait capture. This mode must not
 /// arm product title-cover/custom-cover mutations or default Continue autoload; it only permits the
 /// zero-host-input native menu open plus passive/native Load-Game row firing used by the capture
@@ -76,6 +99,38 @@ pub(crate) fn native_profile_capture_enabled() -> bool {
     ) || game_directory_path()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("er-effects-profile-capture-native.txt")
+        .exists()
+}
+/// DEFAULT-OFF diagnostic: force the live profile-portrait 3D model render at the title/menu phase
+/// (where the GxDrawContext is valid), independent of the autoload Continue path. When on, the
+/// recurring task runs `force_profile_render_tick` each menu-phase frame: it marks the target slot
+/// used (`MarkProfileIndexAsUsed`) then calls the argless profile-render refresh to kick the async
+/// model build, and read-only-captures the rendered CSGxTexture once the model latches. Menu-phase
+/// only -- it does NOT commit Continue, so there is no teardown/world-load crash path. Used to prove
+/// P1 (the build) in isolation while the user holds the ProfileSelect/Load-Game screen.
+pub(crate) fn force_profile_render_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_FORCE_PROFILE_RENDER").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-force-profile-render.txt")
+        .exists()
+}
+/// DEFAULT-OFF gate for the live-portrait D3D12 readback. When on, the moment
+/// `maybe_capture_portrait_gxtexture` pins the rendered offscreen `CSGxTexture`
+/// (`LOADING_BG_PORTRAIT_GX_KEPT`), the DLL reads back that render target into CPU RGBA8
+/// (`readback_offscreen_rgba8`) and stores it in `LOADING_BG_PORTRAIT_RGBA`, so the now-loading forge
+/// can build its TPF from the REAL rendered character head instead of the magenta/yellow checker
+/// placeholder. OFF by default -- with neither this nor `force_profile_render` set, the behavior is
+/// byte-identical to the proven checker path. Mirrors `force_profile_render_enabled` (env OR file).
+pub(crate) fn portrait_real_pixels_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_PORTRAIT_REAL_PIXELS").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-portrait-real-pixels.txt")
         .exists()
 }
 /// Kill-switch to skip installing the continue_trace hooks (bisecting a ~19s

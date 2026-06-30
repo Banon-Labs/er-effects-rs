@@ -9,4 +9,5 @@ description = "Tier-0 lossless Scaleform-GFX (uncompressed 'GFX' v11) reader/wri
 # Pure-Rust, host-testable. No game/Windows dependencies.
 
 [dependencies]
+bitflags = "2.11.0"
 # Intentionally none. Tier-0 codec is std-only.

@@ -12,6 +12,7 @@ members = [
     # package) never cross-compiles them into the game DLL; built only when
     # targeted explicitly (`cargo check -p er-shaderkit ...`).
     "crates/er-shaderkit",
+    "crates/er-flver",
     "crates/er-objectkit",
     "tools/er-param-inspect",
     "tools/bevy-shader-lab",
@@ -58,6 +59,14 @@ windows = { version = "0.62", features = [
     "Win32_System_Memory",
     "Win32_System_SystemServices",
     "Win32_UI_WindowsAndMessaging",
+    # CreateEventW (fence-completion event for the D3D12 readback wait) is gated behind Win32_Security.
+    "Win32_Security",
+    # D3D12 readback of the live profile-portrait offscreen render target, so the now-loading
+    # forge can display the real rendered character head instead of the placeholder checker.
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Direct3D",
 ] }
 
 [build-dependencies]

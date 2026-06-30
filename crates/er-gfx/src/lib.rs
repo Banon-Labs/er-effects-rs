@@ -44,6 +44,7 @@
 //! we encode it as such and reject a long-form End as malformed so a regression
 //! would fail loudly rather than silently diverge.
 
+use bitflags::bitflags;
 use std::fmt;
 
 /// Tag code for `DefineSprite`. Its body is `spriteId: u16`, `frameCount: u16`,

@@ -14,6 +14,10 @@ publish = false
 er-soulsformats = { path = "../soulsformats" }
 # Real compiled shaders -> SPIR-V (dxil-spirv) + headless wgpu passthrough render.
 er-shaderkit = { path = "../er-shaderkit", features = ["gpu"] }
+# FLVER geometry: normalized ObjectModel (re-exported here) + the raw vertex-declaration
+# view for binding real geometry to the native .vpo via passthrough. The `wgpu` feature
+# adds VertexFormat::to_wgpu / wgpu_layout for building the native vertex-buffer layout.
+er-flver = { path = "../er-flver", features = ["wgpu"] }
 thiserror = "2"
 # Pure-Rust FLVER reader (owned API: materials, meshes, facesets, buffer layouts).
 # Pinned; only the `formats` parsers are used — never its Oodle/dvdbnd (decompression
@@ -22,5 +26,12 @@ fstools_formats = { git = "https://github.com/soulsmods/fstools-rs", rev = "4b0d
 # DDS/BCn decode for TPF textures -> RGBA. default-features=false drops the Intel
 # ISPC C++ *encoder* (intel-tex) we don't use; decode is pure Rust.
 image_dds = { version = "0.7", default-features = false, features = ["ddsfile", "image"] }
+# Capture manifest (de)serialization for the frame-replay harness (crate::capture).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [dev-dependencies]
+# Save a PNG of the native-shader draw (examples/native_draw.rs) for visual proof.
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Name wgpu::VertexFormat in the native_draw example (unified with er-shaderkit's wgpu).
+wgpu = { version = "29", default-features = false }

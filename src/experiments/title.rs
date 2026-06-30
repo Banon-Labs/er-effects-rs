@@ -574,6 +574,8 @@ pub(crate) unsafe fn maybe_fire_tfc_continue(base: usize) {
     if menu_opened != OWN_STEPPER_CALL_INC {
         return;
     }
+    // NOTE: this function is NOT the active load-commit path in the product autoload (the native
+    // accept-byte drain is). The real portrait render window is implemented in product_core_autoload_tick.
     let tfc = unsafe { safe_read_usize(dialog + DIALOG_OWNER_CTX_A38_OFFSET) }.unwrap_or(0);
     if !(tfc > OWNER_CTX_MIN_PLAUSIBLE_PTR && tfc < OWNER_CTX_MAX_PLAUSIBLE_PTR) {
         return;
@@ -1811,6 +1813,60 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             }
             return true;
         }
+        // After menu-open (a40==1): commit the load. DEFAULT = the PROVEN native Continue char-load
+        // (the unchanged block below). The default-OFF ProfileSelect load flow instead fires the
+        // Load-Game row to open a LIVE ProfileLoadDialog (the render context in which the profile
+        // renderer's per-slot refresh gate is satisfied), HOLDS for the portrait render, then drives
+        // the same STAGE2 commit. `profile_select_load_flow_enabled()` is a compile-time const, so
+        // when OFF this branch is dead-code-eliminated and execution falls through to the unchanged
+        // Continue path below (byte-identical).
+        if profile_select_load_flow_enabled() {
+            unsafe { product_profile_select_load_flow(owner, module_base, slot, tick) };
+            return true;
+        }
+        // FORCE LIVE PROFILE RENDER (diagnostic, default-OFF) in the autoload path: at the open main
+        // menu (renderers live from TitleTopDialog ctor) kick the live character-model build + capture
+        // the rendered gx so the now-loading forge can display the real head. One-shot mark+refresh;
+        // the build is fast (~133ms, proven run 130619) and the teardown-spare hook keeps the kept gx
+        // alive across Continue. NO hold -- the proven Continue commit proceeds unchanged; if the build
+        // loses the race the capture simply never fires (degrades to current behavior, no crash).
+        if force_profile_render_enabled() {
+            unsafe { force_profile_render_tick(module_base, slot) };
+        }
+        // PORTRAIT RENDER WINDOW (bounded, fail-open): the main menu is OPEN (a40=1) -> valid menu
+        // render context, and the load is NOT yet committed (the commit is product_continue_autoload_tick
+        // below -- our own code on a later tick). Kick the async character-model build once (refresh
+        // 0x9aa680, idempotent per-slot via +0x754), then HOLD our commit until the portrait has
+        // rendered + been captured (maybe_capture_portrait_gxtexture sets LOADING_BG_PORTRAIT_GX_KEPT)
+        // or a timeout, so the now-loading screen shows the real character portrait. Fail-open: after
+        // the cap we commit regardless, so the char-load can never be permanently blocked.
+        if portrait_render_window_enabled()
+            && PORTRAIT_RENDER_WINDOW_DONE.load(Ordering::SeqCst) == 0
+        {
+            if PROFILE_REFRESH_KICKED.swap(1, Ordering::SeqCst) == 0 {
+                let refresh: unsafe extern "system" fn() =
+                    unsafe { std::mem::transmute(module_base + PROFILE_RENDERER_REFRESH_RVA) };
+                unsafe { refresh() };
+                append_autoload_debug(format_args!(
+                    "portrait-window: kicked profile refresh 0x{:x} to request the model render (menu open)",
+                    module_base + PROFILE_RENDERER_REFRESH_RVA
+                ));
+            }
+            let captured = LOADING_BG_PORTRAIT_GX_KEPT.load(Ordering::SeqCst) != 0;
+            let waited = PORTRAIT_HOLD_WAIT_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+            if !captured && waited < PORTRAIT_HOLD_MAX_TICKS {
+                if waited % 30 == 1 {
+                    append_autoload_debug(format_args!(
+                        "portrait-window: holding load-commit for portrait render (captured={captured} waited={waited}/{PORTRAIT_HOLD_MAX_TICKS})"
+                    ));
+                }
+                return true;
+            }
+            PORTRAIT_RENDER_WINDOW_DONE.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "portrait-window: release -> commit load (captured={captured} waited={waited})"
+            ));
+        }
         if !unsafe { product_continue_action_ready(&ready, module_base, gm, slot) } {
             if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
                 append_autoload_debug(format_args!(
@@ -1835,6 +1891,83 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         unsafe { own_stepper_stage2(owner, module_base, gm, slot, tick, null) };
     }
     true
+}
+/// DEFAULT-OFF ProfileSelect load flow (gate: `profile_select_load_flow_enabled`). Runs only in
+/// PHASE_MENU after menu-open (a40==1). Distinct from the PROVEN native Continue commit: it renders
+/// the loaded character's profile portrait (for the now-loading screen) by firing the title menu's
+/// Load-Game row to open a LIVE `ProfileLoadDialog` -- the only render context in which the profile
+/// renderer refresh's per-slot gate (`ProfileSummary->saveSlotsStates[slot]`) is satisfied, so the
+/// portrait actually renders (it never does at the bare main menu) -- holds the load-commit until the
+/// portrait has rendered + been captured, then drives the SAME STAGE2 commit (load_activate ->
+/// selector -> continue_confirm/SetState5) the Continue path's STAGE2 uses. Fail-open: commits after
+/// `PORTRAIT_HOLD_MAX_TICKS` regardless of capture, so the char-load can never be permanently blocked.
+///
+/// State is derived from existing latches: `OWN_STEPPER_TITLE_FIRED` (Load-Game row fired) and
+/// `OWN_STEPPER_DIALOG` (the live ProfileLoadDialog, latched by `cap_dialog_factory_hook` once the
+/// native factory builds it -- that hook defers its STAGE2 transition to us under this gate).
+unsafe fn product_profile_select_load_flow(owner: usize, base: usize, slot: i32, tick: u64) {
+    const PORTRAIT_HOLD_LOG_INTERVAL: usize = 30;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    // (a) Fire the Load-Game row ONCE -> opens the live ProfileLoadDialog (factory hook latches it).
+    if OWN_STEPPER_TITLE_FIRED.load(Ordering::SeqCst) == null {
+        let Some(action) = (unsafe { title_menu_action_ready(owner, base) }) else {
+            if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
+                append_autoload_debug(format_args!(
+                    "profile-select-flow: waiting for native Load-Game MenuMemberFuncJob row owner=0x{owner:x} slot={slot} tick={tick}"
+                ));
+            }
+            return;
+        };
+        unsafe { fire_product_title_load_action(action, base, tick, slot) };
+        return;
+    }
+    // (b) Wait for the factory hook to latch the live ProfileLoadDialog.
+    let dialog = OWN_STEPPER_DIALOG.load(Ordering::SeqCst);
+    if dialog == null {
+        if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
+            append_autoload_debug(format_args!(
+                "profile-select-flow: Load-Game fired; waiting for ProfileLoadDialog factory-hook capture (OWN_STEPPER_DIALOG) slot={slot} tick={tick}"
+            ));
+        }
+        return;
+    }
+    // (b cont.) PORTRAIT HOLD: re-kick the refresh each frame (idempotent per-slot via +0x754) while
+    // the ProfileLoadDialog is open, capture table[slot]'s rendered portrait, and HOLD the commit
+    // until captured or the tick cap. Fail-open at the cap.
+    if PORTRAIT_RENDER_WINDOW_DONE.load(Ordering::SeqCst) == 0 {
+        let refresh: unsafe extern "system" fn() =
+            unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
+        unsafe { refresh() };
+        if PROFILE_REFRESH_KICKED.swap(1, Ordering::SeqCst) == 0 {
+            append_autoload_debug(format_args!(
+                "profile-select-flow: kicked profile refresh 0x{:x} with ProfileLoadDialog=0x{dialog:x} open (slot={slot}) -- saveSlotsStates[slot] now set, portrait can render",
+                base + PROFILE_RENDERER_REFRESH_RVA
+            ));
+        }
+        maybe_capture_portrait_gxtexture(base, slot);
+        let captured = LOADING_BG_PORTRAIT_GX_KEPT.load(Ordering::SeqCst) != 0;
+        let waited = PORTRAIT_HOLD_WAIT_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+        if !captured && waited < PORTRAIT_HOLD_MAX_TICKS {
+            if waited % PORTRAIT_HOLD_LOG_INTERVAL == 1 {
+                append_autoload_debug(format_args!(
+                    "profile-select-flow: holding load-commit for portrait render (captured={captured} waited={waited}/{PORTRAIT_HOLD_MAX_TICKS} dialog=0x{dialog:x} slot={slot})"
+                ));
+            }
+            return;
+        }
+        PORTRAIT_RENDER_WINDOW_DONE.store(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "profile-select-flow: portrait window release -> commit (captured={captured} waited={waited} dialog=0x{dialog:x} slot={slot})"
+        ));
+    }
+    // (c) COMMIT: hand the latched ProfileLoadDialog to the existing STAGE2 dispatch (it reads
+    // OWN_STEPPER_DIALOG). The next product_core_autoload_tick frame runs own_stepper_stage2.
+    if OWN_STEPPER_PHASE.load(Ordering::SeqCst) == OWN_STEPPER_PHASE_MENU {
+        own_stepper_enter_s2_phase(OWN_STEPPER_PHASE_S2_ACTIVATE);
+        append_autoload_debug(format_args!(
+            "profile-select-flow: COMMIT -> STAGE2 ACTIVATE dialog=0x{dialog:x} slot={slot} tick={tick}"
+        ));
+    }
 }
 pub(crate) unsafe fn title_menu_action_ready(owner: usize, base: usize) -> Option<MenuActionNode> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;

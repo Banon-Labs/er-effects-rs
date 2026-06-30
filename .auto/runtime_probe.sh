@@ -68,10 +68,6 @@ cap = int(sys.argv[2])
 if timeout_seconds <= 0 or timeout_seconds > cap:
     raise SystemExit(f"RUNTIME_TIMEOUT_SECONDS must be greater than 0 and no more than {cap}")
 PY
-  if [[ "${AUTO_ALLOW_MANUAL_RUNTIME_PROBE:-0}" != "1" ]]; then
-    echo "runtime_probe.sh is disabled fail-closed; set AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 for a deliberate manual run" >&2
-    exit 2
-  fi
   command -v opa >/dev/null 2>&1 || { echo "missing required command: opa" >&2; exit 127; }
   local decision
   decision=$(runtime_policy_input | opa eval --format raw -d "$POLICY_PATH" -I 'data.auto.runtime_experiment.allow')

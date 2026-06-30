@@ -2749,6 +2749,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-flver"
+version = "0.1.0"
+dependencies = [
+ "fstools_formats",
+ "thiserror 2.0.18",
+ "wgpu",
+]
+
+[[package]]
 name = "er-gfx"
 version = "0.1.0"
 dependencies = [
@@ -2759,11 +2768,16 @@ dependencies = [
 name = "er-objectkit"
 version = "0.1.0"
 dependencies = [
+ "er-flver",
  "er-shaderkit",
  "er-soulsformats",
  "fstools_formats",
+ "image",
  "image_dds",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
+ "wgpu",
 ]
 
 [[package]]

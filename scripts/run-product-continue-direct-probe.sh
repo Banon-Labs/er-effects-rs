@@ -90,10 +90,6 @@ Usage: $0 [--dry-run] [--autoload-request PATH]
 Launches the approved direct/offline eldenring.exe runtime path and runs
 .auto/runtime_probe.sh as the bounded readiness watcher. This intentionally has
 no Steam/AppID launch path and no protected launcher path.
-
-Required for real execution:
-  ER_EFFECTS_AUTHORIZED_DIRECT_RUNTIME=1
-  AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1
 EOF
 }
 
@@ -267,8 +263,6 @@ EOF
   exit 0
 fi
 
-[[ "${ER_EFFECTS_AUTHORIZED_DIRECT_RUNTIME:-0}" == "1" ]] || fatal "set ER_EFFECTS_AUTHORIZED_DIRECT_RUNTIME=1 for the exact runtime invocation"
-[[ "${AUTO_ALLOW_MANUAL_RUNTIME_PROBE:-0}" == "1" ]] || fatal "set AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 for .auto/runtime_probe.sh"
 # Reset stale per-run evidence BEFORE launch so the readiness watcher cannot read a PRIOR run's
 # completion and tear the new game down instantly. Observed 2026-06-21: a reused ARTIFACT_DIR left
 # an old er-effects-telemetry.json at cold_char_mount_phase=5, so every rerun false-positived
@@ -324,22 +318,22 @@ else
   fi
   echo "save-source: staged gold save -> $STAGED_SAVE (ER_EFFECTS_SAVE_FILE); slot=${ER_EFFECTS_GOLD_SLOT:-most-recent}; autosaves isolated from $GOLD_SAVE"
 
-  # GOLDEN GRAPHICS CONFIG: seed our durable GraphicsConfig.xml (windowed 1280x720 LOW) into the
-  # redirected EldenRing dir so EVERY run reuses the same display config instead of the game
-  # regenerating defaults / inheriting the user's real-appdata config. The DLL redirects the whole
-  # %APPDATA%\EldenRing dir, so the game reads graphicsconfig.xml from this staged root (observed
-  # lowercase basename). Staged WRITABLE so any in-game settings change lands on the per-run copy and
-  # is discarded at teardown -- the golden source in the repo is never modified by a run. To UPDATE
-  # the golden, re-copy a run's graphicsconfig.xml over $GOLD_GRAPHICS_CONFIG.
-  GOLD_GRAPHICS_CONFIG="${ER_EFFECTS_GOLD_GRAPHICS_CONFIG:-$REPO_ROOT/save-files/golden-graphics/GraphicsConfig.xml}"
-  if [[ -f "$GOLD_GRAPHICS_CONFIG" ]]; then
+  # DISPLAY CONFIG: the redirected %APPDATA%\EldenRing root also redirects graphicsconfig.xml.
+  # For on-screen probes, default to the user's real appdata GraphicsConfig.xml so direct/offline
+  # probe launches use the same display config as the known-good manual offline launcher. A stale
+  # repo golden config can encode the wrong monitor/display dimensions and make startup window
+  # reconfiguration jump across Hyprland monitor coordinate origins. Staged WRITABLE so any in-game
+  # settings write lands on the per-run copy and is discarded at teardown.
+  DEFAULT_GRAPHICS_CONFIG="$APPDATA_ER_ROOT/GraphicsConfig.xml"
+  GRAPHICS_CONFIG_SOURCE="${ER_EFFECTS_GRAPHICS_CONFIG_SOURCE:-${ER_EFFECTS_GOLD_GRAPHICS_CONFIG:-$DEFAULT_GRAPHICS_CONFIG}}"
+  if [[ -f "$GRAPHICS_CONFIG_SOURCE" ]]; then
     STAGED_GRAPHICS_CONFIG="$STAGED_ROOT/EldenRing/graphicsconfig.xml"
     mkdir -p "$STAGED_ROOT/EldenRing"
-    cp -f "$GOLD_GRAPHICS_CONFIG" "$STAGED_GRAPHICS_CONFIG"
+    cp -f "$GRAPHICS_CONFIG_SOURCE" "$STAGED_GRAPHICS_CONFIG"
     chmod u+w "$STAGED_GRAPHICS_CONFIG"
-    echo "graphics-config: staged golden -> $STAGED_GRAPHICS_CONFIG (reused every run; source $GOLD_GRAPHICS_CONFIG)"
+    echo "graphics-config: staged -> $STAGED_GRAPHICS_CONFIG (source $GRAPHICS_CONFIG_SOURCE)"
   else
-    echo "graphics-config: WARN no golden config at $GOLD_GRAPHICS_CONFIG -- game will regenerate defaults"
+    echo "graphics-config: WARN no config at $GRAPHICS_CONFIG_SOURCE -- game will regenerate defaults"
   fi
 fi
 
@@ -371,26 +365,14 @@ fi
 
 start_hypr_window_placer() {
   [[ "${RUNTIME_ONSCREEN:-1}" == "1" ]] || return 0
-  [[ "${ER_EFFECTS_HYPR_PLACE_WINDOW:-1}" == "1" ]] || return 0
-  command -v hyprctl >/dev/null 2>&1 || { echo "hypr-place: hyprctl unavailable; skipping visible-window clamp"; return 0; }
-  local -a focus_args=()
-  if [[ "${ER_EFFECTS_HYPR_FOCUS:-0}" == "1" ]]; then
-    focus_args=(--focus)
+  # Do not move/resize Elden Ring during startup. The old polling Hypr placer could move a
+  # live XWayland/Wine window across monitor/workspace coordinate spaces before the game
+  # finished reconfiguring its startup window, producing invalid crops and off-screen
+  # coordinates such as x=-3069 on the 3072px-offset monitor layout.
+  if [[ "${ER_EFFECTS_HYPR_PLACE_WINDOW:-0}" != "0" ]]; then
+    fatal "ER_EFFECTS_HYPR_PLACE_WINDOW is disabled: runtime probes must observe Elden Ring's natural mapped geometry, not move/resize it"
   fi
-  python3 "$REPO_ROOT/scripts/place-er-window-hyprland.py" \
-    --class steam_app_1245620 \
-    --monitor "${ER_EFFECTS_HYPR_MONITOR:-window}" \
-    --workspace "${ER_EFFECTS_HYPR_WORKSPACE:-window}" \
-    --width "${ER_EFFECTS_HYPR_WIDTH:-1280}" \
-    --height "${ER_EFFECTS_HYPR_HEIGHT:-720}" \
-    --duration "${ER_EFFECTS_HYPR_PLACE_SECONDS:-$RUNTIME_TIMEOUT_SECONDS}" \
-    --interval "${ER_EFFECTS_HYPR_PLACE_INTERVAL:-0.25}" \
-    "${focus_args[@]}" \
-    --log "$ARTIFACT_DIR/hypr-window-placer.jsonl" \
-    > "$ARTIFACT_DIR/hypr-window-placer.out" \
-    2> "$ARTIFACT_DIR/hypr-window-placer.err" &
-  echo "$!" > "$HYPR_PLACER_PID_FILE"
-  echo "hypr-place: started target-only visible-window clamp pid=$! log=$ARTIFACT_DIR/hypr-window-placer.jsonl monitor=${ER_EFFECTS_HYPR_MONITOR:-window} workspace=${ER_EFFECTS_HYPR_WORKSPACE:-window}"
+  echo "hypr-place: disabled; not moving/resizing Elden Ring"
 }
 
 start_hypr_window_placer
@@ -465,7 +447,6 @@ DEFAULT_RUNTIME_EXTRA_WATCH_ARGS="--no-phase-watchdog --no-world-load-deadline"
   RUNTIME_TIMEOUT_SECONDS="$RUNTIME_TIMEOUT_SECONDS" \
   RUNTIME_EXPECTED_MODE="$RUNTIME_EXPECTED_MODE" \
   ER_PROBE_LAUNCH_EPOCH="$LAUNCH_EPOCH" \
-  AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 \
   RUNTIME_SKIP_VISUAL_CAPTURE=1 \
   RUNTIME_EXTRA_WATCH_ARGS="${RUNTIME_EXTRA_WATCH_ARGS:-$DEFAULT_RUNTIME_EXTRA_WATCH_ARGS}" \
   ./.auto/runtime_probe.sh

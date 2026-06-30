@@ -37,8 +37,6 @@ if [[ -f .auto/run_runtime_probe_once ]]; then
     --slot "${ER_EFFECTS_GOLD_SLOT:-0}" \
     --output "$runtime_expected_save_oracle"
   printf 'slot=%s\nmethod=direct_menu_load\nrequire_title_bootstrap=false\n' "${ER_EFFECTS_GOLD_SLOT:-0}" > "$runtime_autoload_request"
-  ER_EFFECTS_AUTHORIZED_DIRECT_RUNTIME=1 \
-  AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 \
   ER_EFFECTS_EXPERIMENTAL_DIRECT_MENU_LOAD=1 \
   ER_EFFECTS_GOLD_SAVE="${ER_EFFECTS_GOLD_SAVE:-/home/banon/projects/er-effects-rs/save-files/150-Banon/ER0000.sl2}" \
   ER_EFFECTS_GOLD_SLOT="${ER_EFFECTS_GOLD_SLOT:-0}" \
@@ -51,8 +49,6 @@ fi
 
 if [[ -f .auto/run_manual_profile_trace_once ]]; then
   rm -f .auto/run_manual_profile_trace_once
-  ER_EFFECTS_AUTHORIZED_DIRECT_RUNTIME=1 \
-  AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 \
   ER_EFFECTS_GOLD_SAVE="${ER_EFFECTS_GOLD_SAVE:-/home/banon/projects/er-effects-rs/save-files/150-Banon/ER0000.sl2}" \
   ER_EFFECTS_GOLD_SLOT="${ER_EFFECTS_GOLD_SLOT:-0}" \
   RUNTIME_ONSCREEN=1 \

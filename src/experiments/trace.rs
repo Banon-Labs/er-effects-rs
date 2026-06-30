@@ -1632,9 +1632,22 @@ pub(crate) unsafe extern "system" fn cap_dialog_factory_hook(
         && ret_vt == base + PROFILE_LOAD_DIALOG_VTABLE_RVA
     {
         OWN_STEPPER_DIALOG.store(ret, Ordering::SeqCst);
-        own_stepper_enter_s2_phase(OWN_STEPPER_PHASE_S2_ACTIVATE);
+        // DEFAULT (gate OFF): latch the live ProfileLoadDialog and immediately enter STAGE2 ACTIVATE
+        // -- byte-identical to before (this branch is only reached when OWN_STEPPER_TITLE_FIRED is set,
+        // which the proven native Continue commit never does, so the default char-load is untouched).
+        // ProfileSelect load flow (gate ON): keep the dialog latched but HOLD at PHASE_MENU so the
+        // flow can render+capture the portrait first; it drives the STAGE2 transition itself.
+        if !profile_select_load_flow_enabled() {
+            own_stepper_enter_s2_phase(OWN_STEPPER_PHASE_S2_ACTIVATE);
+        }
         append_autoload_debug(format_args!(
-            "product-core-autoload: native TitleTopDialog Load-Game factory returned ProfileLoadDialog=0x{ret:x} vt=0x{ret_vt:x}; captured by factory hook -> STAGE2 ACTIVATE"
+            "product-core-autoload: native TitleTopDialog Load-Game factory returned ProfileLoadDialog=0x{ret:x} vt=0x{ret_vt:x}; captured by factory hook (profile_select_flow={} -> {})",
+            profile_select_load_flow_enabled(),
+            if profile_select_load_flow_enabled() {
+                "HOLD at MENU for portrait"
+            } else {
+                "STAGE2 ACTIVATE"
+            }
         ));
     }
     ret

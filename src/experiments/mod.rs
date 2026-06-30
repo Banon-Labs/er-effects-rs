@@ -56,6 +56,9 @@ pub(crate) use trace::*;
 mod startup_hooks;
 pub(crate) use startup_hooks::*;
 
+mod gpu_readback;
+pub(crate) use gpu_readback::*;
+
 mod input_block;
 pub(crate) use input_block::*;
 

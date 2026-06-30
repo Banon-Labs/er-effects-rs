@@ -12,11 +12,22 @@
 //!   end-to-end pixel proof on the real GPU. Gated at call time on adapter
 //!   availability so the deterministic CPU layer never depends on a display.
 
+pub mod dxbc;
 #[cfg(feature = "gpu")]
 pub mod render;
+pub mod spirv_patch;
 pub mod translate;
 pub mod validate;
 
+pub use spirv_patch::{
+    assign_unique_bindings, compact_descriptor_bindings, compact_descriptor_bindings_unified,
+    force_readonly_ssbo_loads_zero, neutralize_draw_parameters,
+};
+
+pub use dxbc::{
+    DxbcPart, Rdef, RdefBindKind, RdefCBuffer, RdefResource, RdefVariable, SignatureInput,
+    find_part, find_world_view_proj, parse_input_signature, parse_rdef, parts,
+};
 pub use translate::{TranslateError, discover_dxil_spirv, dxil_file_to_spirv, dxil_to_spirv};
 
 pub use validate::{
