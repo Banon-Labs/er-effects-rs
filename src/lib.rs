@@ -369,6 +369,17 @@ pub unsafe extern "C" fn DllMain(_hmodule: HINSTANCE, reason: u32, _reserved: *m
             .name("er-effects-loading-bg-portrait".to_owned())
             .spawn(install_loading_bg_replace_bind_hook);
     });
+    // D3D12 PRESENT OVERLAY: the deterministic display path -- draw the captured portrait directly onto the
+    // swapchain backbuffer when the now-loading screen is up (the in-pipeline forge/Scaleform routes cannot
+    // drive the displayed image). Install only on the portrait path (diagnostic), via the dummy-swapchain
+    // vtable technique. Phase 1 is log-only (proves the hook fires) before any backbuffer write.
+    if portrait_lookat_enabled() {
+        START_PRESENT_OVERLAY.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-present-overlay".to_owned())
+                .spawn(install_present_overlay_hook);
+        });
+    }
     // Portrait-renderer teardown SPARE hook: keep the loaded character's portrait renderer alive past the
     // Continue teardown so we can drive realtime look-at + render it post-Continue (the persistent-model
     // path -- the cycling menu can't show a stable portrait). The hook self-gates on product_autoload and

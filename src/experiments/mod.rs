@@ -59,6 +59,9 @@ pub(crate) use startup_hooks::*;
 mod gpu_readback;
 pub(crate) use gpu_readback::*;
 
+mod present_overlay;
+pub(crate) use present_overlay::*;
+
 mod input_block;
 pub(crate) use input_block::*;
 
