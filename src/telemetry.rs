@@ -2120,6 +2120,16 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         // version-bumped LOADING_BG_PORTRAIT_RGBA (the displayed head actually tracked, not frozen).
         push_json_usize(
             body,
+            "oracle_profile_readback_some",
+            PROFILE_READBACK_SOME.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_readback_checker",
+            PROFILE_READBACK_CHECKER.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
             "oracle_present_hook_hits",
             PRESENT_HOOK_HITS.load(Ordering::SeqCst),
         );

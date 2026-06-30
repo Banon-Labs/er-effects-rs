@@ -3028,6 +3028,16 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize) {
                         if let Some((cw, ch, cpx)) =
                             unsafe { readback_cached_content_rgba8(off, srv_gx) }
                         {
+                            // DIAGNOSTIC: count readbacks + checker-classified frames, and one-shot dump a
+                            // "checker" frame (slot 103) so we can SEE what the ~216 non-published frames
+                            // actually contain (forge magenta/yellow placeholder vs black vs partial head).
+                            PROFILE_READBACK_SOME.fetch_add(1, Ordering::SeqCst);
+                            if portrait_looks_like_checker(cw, ch, &cpx) {
+                                PROFILE_READBACK_CHECKER.fetch_add(1, Ordering::SeqCst);
+                                if PROFILE_CHECKER_DUMPED.swap(true, Ordering::SeqCst) != true {
+                                    dump_portrait_rgba(103, cw, ch, &cpx);
+                                }
+                            }
                             if !portrait_looks_like_checker(cw, ch, &cpx) {
                                 let nb = portrait_center_nonblack(cw, ch, &cpx);
                                 LOADING_BG_PORTRAIT_NONBLACK.store(nb as usize, Ordering::SeqCst);

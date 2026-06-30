@@ -1217,6 +1217,13 @@ pub(crate) static PROFILE_LOOKAT_BONES_DUMPED_MASK: AtomicUsize = AtomicUsize::n
 /// decisive before/after that the head pose tracks the drive signal (= the normalized cursor in
 /// product). Mask == 0b111 once all three captured (`oracle_profile_lookat_track_buckets`).
 pub(crate) static PROFILE_LOOKAT_TRACK_BUCKETS: AtomicUsize = AtomicUsize::new(0);
+/// DIAGNOSTIC: per-frame readback outcomes -- how many readbacks returned content, and how many of those
+/// were classified as a checker/placeholder (so did NOT publish). `oracle_profile_readback_some` /
+/// `oracle_profile_readback_checker`; `_some - _checker` == the publish count.
+pub(crate) static PROFILE_READBACK_SOME: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_READBACK_CHECKER: AtomicUsize = AtomicUsize::new(0);
+/// One-shot latch: dump a single checker frame (slot 103) to see what the non-published frames hold.
+pub(crate) static PROFILE_CHECKER_DUMPED: AtomicBool = AtomicBool::new(false);
 /// `updateBoneModelSpace` (dump 0x141653370) -> deobf 0x141653350 (shift -0x20, content-unique). The
 /// render calls this (via `GetBoneModelSpace`) each frame to rebuild `modelSpaceBoneData` from the
 /// (anim-imported) `localSpaceBoneData` for every dirty bone. We HOOK it: before the original runs, we
