@@ -369,13 +369,15 @@ pub unsafe extern "C" fn DllMain(_hmodule: HINSTANCE, reason: u32, _reserved: *m
             .name("er-effects-loading-bg-portrait".to_owned())
             .spawn(install_loading_bg_replace_bind_hook);
     });
-    // Portrait-renderer teardown SPARE hook is intentionally NOT installed: the portrait render window
-    // (product_core_autoload_tick) captures the rendered portrait PRE-commit on the live table[0], so
-    // the renderer need not survive the Continue teardown. Installing the spare would mis-fire on
-    // maybe_refresh's init() teardown (sparing a blank pre-render renderer). Kept available for the
-    // (rejected) drive-into-loading-screen path; re-enable only if the pre-commit window is removed.
-    let _ = install_profile_renderer_teardown_spare_hook;
-    let _ = &START_PROFILE_RENDERER_TEARDOWN_SPARE;
+    // Portrait-renderer teardown SPARE hook: keep the loaded character's portrait renderer alive past the
+    // Continue teardown so we can drive realtime look-at + render it post-Continue (the persistent-model
+    // path -- the cycling menu can't show a stable portrait). The hook self-gates on product_autoload and
+    // only spares a renderer whose model is BUILT (the blank-renderer misfire is guarded in the hook).
+    START_PROFILE_RENDERER_TEARDOWN_SPARE.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("er-effects-portrait-spare".to_owned())
+            .spawn(install_profile_renderer_teardown_spare_hook);
+    });
 
     // MenuWindow latch: install the SceneObjProxy ctor hook (0x14074a700) as early as the
     // splash-skip / online-disable patches, from a thread, so it lands BEFORE the title state

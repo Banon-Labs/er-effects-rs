@@ -1112,6 +1112,10 @@ pub(crate) const PROFILE_PER_FRAME_PUSH_RVA: usize = 0xbba6e0;
 pub(crate) static PROFILE_PERFRAME_HOOK_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static PROFILE_PERFRAME_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_PERFRAME_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Count of direct draws of the POST-Continue SPARED renderer (via the offscreen thunk), and an oracle of
+/// whether it still has a live model post-Continue -- the persistent-model path the cycling menu can't give.
+pub(crate) static PROFILE_PERFRAME_SPARED_DRAWS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_SPARED_MODEL_OK: AtomicUsize = AtomicUsize::new(0);
 /// Registry of the live profile PoseHolder pointers the game-task tick has resolved as "ours" (0 =
 /// empty). The hook only applies look-at to a holder in this set; the c0000 head/neck/spine2 indices
 /// are the shared `PROFILE_LOOKAT_*_IDX` globals above, and the angle is the shared yaw/pitch below.
