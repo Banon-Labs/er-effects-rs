@@ -2847,10 +2847,69 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize) {
     // Rasterize all profile offscreen RTs on the render thread inside the live GX frame, so the pose the
     // push hook propagated this frame is re-rendered (the engine does not redraw thumbnails per frame).
     // The draw step skips null slots and fail-closes if the GX pool is empty, so it is safe every frame.
-    let draw_step: unsafe extern "system" fn() =
-        unsafe { core::mem::transmute(base + PROFILE_DRAW_STEP_RVA) };
-    unsafe { draw_step() };
-    PROFILE_LOOKAT_RENDER_DRIVES.fetch_add(1, Ordering::SeqCst);
+    // draw_step (FUN_1409aa3e0 -> per-slot FUN_140bb73a0) is a CLEAR-render-target, NOT a rasterize
+    // (FUN_141e8af80 = ClearRTV; RE-confirmed). Post-Continue the offscreen is a SINGLE texture (RT==SRV,
+    // proven: find_d3d12_resource(off)==find_d3d12_resource(srv_gx)), so clearing it every frame WIPES the
+    // rendered head before GFx samples it -> the now-loading background reads mostly-black. Once our own
+    // table is built, SKIP the clear so the last-rendered portrait persists in the sampleable texture.
+    if PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst) == 0 {
+        let draw_step: unsafe extern "system" fn() =
+            unsafe { core::mem::transmute(base + PROFILE_DRAW_STEP_RVA) };
+        unsafe { draw_step() };
+        PROFILE_LOOKAT_RENDER_DRIVES.fetch_add(1, Ordering::SeqCst);
+    }
+    // FORCE THE RT->SRV RESOLVE: the engine's per-frame resolve almost never fires post-Continue (the
+    // offscreen RENDER TARGET holds the rendered head but the sampleable SRV the forge binds stays black),
+    // so D3D12-copy the target slot's RT into its SRV every render-thread frame. src = renderer+0xa8
+    // (offscreen; find_d3d12_resource reaches the content RT), dst = offscreen+0x10's CSGxTexture (the SRV
+    // GFx samples). Render-thread context (same as the readback), bounded + fail-closed.
+    {
+        let slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+        let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, slot)) }.unwrap_or(0);
+        if r != 0
+            && r != null
+            && unsafe { safe_read_usize(r) }.unwrap_or(0)
+                == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+        {
+            let off = unsafe {
+                safe_read_usize(r + TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET)
+            }
+            .unwrap_or(0);
+            if off != 0 && off != null {
+                let trc = unsafe {
+                    safe_read_usize(off + TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET)
+                }
+                .unwrap_or(0);
+                let srv_gx = if trc != 0 && trc != null {
+                    unsafe {
+                        safe_read_usize(trc + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET)
+                    }
+                    .unwrap_or(0)
+                } else {
+                    0
+                };
+                // src_start = off (the offscreen nest, which contains BOTH the content RT and the SRV);
+                // the copy resolves the SRV from srv_gx and then the largest OTHER texture in off as the
+                // content source, so the RT/SRV ambiguity is handled inside the copy.
+                if srv_gx != 0 && srv_gx != null {
+                    if unsafe { copy_offscreen_rt_to_srv(off, srv_gx) } {
+                        PROFILE_RT_SRV_COPIES.fetch_add(1, Ordering::SeqCst);
+                    }
+                    // One-shot dump of the EXCLUDING-SRV content texture (slot 102) so we can SEE whether
+                    // the largest non-SRV texture in the offscreen nest is the portrait (and at what res).
+                    if PROFILE_CONTENT_EXCL_DUMPED.swap(1, Ordering::SeqCst) == 0 {
+                        if let Some((cw, ch, cpx)) =
+                            unsafe { readback_excluding_rgba8(off, srv_gx) }
+                        {
+                            dump_portrait_rgba(102, cw, ch, &cpx);
+                        } else {
+                            PROFILE_CONTENT_EXCL_DUMPED.store(0, Ordering::SeqCst);
+                        }
+                    }
+                }
+            }
+        }
+    }
     // POST-CONTINUE: the spared renderer is NOT in the menu table (the draw step above skips it), so
     // rasterize it directly via the offscreen-draw thunk (fn(renderer) -> renders *(renderer+0xa8)). This
     // is the persistent-model path; whether it produces pixels post-Continue is the keepalive question the
@@ -3000,6 +3059,11 @@ unsafe fn profile_lookat_rt_sample(base: usize) {
             }
             PROFILE_LOOKAT_RT_RGB_MAX.store(rgb_max as usize, Ordering::SeqCst);
             PROFILE_LOOKAT_RT_ALPHA_MAX.store(a_max as usize, Ordering::SeqCst);
+            // One-shot dump of the readback "content" RT (slot 100) on a frame where it actually has
+            // content, so we can visually confirm whether it is the portrait or a scratch/world RT.
+            if rgb_max > 24 && PROFILE_RT_CONTENT_DUMPED.swap(1, Ordering::SeqCst) == 0 {
+                dump_portrait_rgba(100, w, h, &px);
+            }
         }
     }
     // SAMPLEABLE-TEXTURE READBACK: read the texture actually BOUND into the now-loading container (what
@@ -3037,6 +3101,13 @@ unsafe fn profile_lookat_rt_sample(base: usize) {
                     }
                     PROFILE_BOUND_GX_RGB_MAX.store(rgb_max as usize, Ordering::SeqCst);
                     PROFILE_BOUND_GX_ALPHA_MAX.store(a_max as usize, Ordering::SeqCst);
+                    // One-shot dump of the bound SRV (slot 101) once we've also captured the content RT,
+                    // so the two can be compared side by side (is the SRV black? is the RT the portrait?).
+                    if PROFILE_RT_CONTENT_DUMPED.load(Ordering::SeqCst) != 0
+                        && PROFILE_SRV_DUMPED.swap(1, Ordering::SeqCst) == 0
+                    {
+                        dump_portrait_rgba(101, bw, bh, &bpx);
+                    }
                 }
             }
         }
@@ -3256,7 +3327,8 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
             }
         }
         append_autoload_debug(format_args!(
-            "loading-portrait-chain: built_slot_r=0x{ch_r:x} off=0x{ch_off:x} trc=0x{ch_trc:x} chain_gx=0x{ch_gx:x} | bound_gx=0x{bound_gx:x} rt[rgb_max={} alpha_max={}] boundtex[rgb_max={} alpha_max={}]",
+            "loading-portrait-chain: built_slot_r=0x{ch_r:x} off=0x{ch_off:x} trc=0x{ch_trc:x} chain_gx=0x{ch_gx:x} | bound_gx=0x{bound_gx:x} copies={} rt[rgb_max={} alpha_max={}] boundtex[rgb_max={} alpha_max={}]",
+            PROFILE_RT_SRV_COPIES.load(Ordering::SeqCst),
             PROFILE_LOOKAT_RT_RGB_MAX.load(Ordering::SeqCst),
             PROFILE_LOOKAT_RT_ALPHA_MAX.load(Ordering::SeqCst),
             PROFILE_BOUND_GX_RGB_MAX.load(Ordering::SeqCst),

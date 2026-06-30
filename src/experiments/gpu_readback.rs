@@ -126,6 +126,14 @@ unsafe fn try_texture2d(ptr: usize) -> Option<(ID3D12Resource, u64)> {
 /// `live-portrait-d3d12-resource-buried-in-gx-wrapper-nest-2026-06-29`). Returns the validated,
 /// QI-owned resource. Pure read-only pointer-walking until the QI on a confirmed-d3d12 candidate.
 unsafe fn find_d3d12_resource(start: usize) -> Option<ID3D12Resource> {
+    unsafe { find_d3d12_resource_ex(start, 0) }.map(|(r, _)| r)
+}
+
+/// Like `find_d3d12_resource` but (a) returns the candidate object pointer alongside the resource, and
+/// (b) skips any candidate whose pointer == `exclude_v`. Lets the RT->SRV copy pick the SRV from its own
+/// single-texture nest, then the LARGEST OTHER texture in the offscreen nest as the content source --
+/// deterministic where plain "largest texture" is ambiguous between two same-size textures.
+unsafe fn find_d3d12_resource_ex(start: usize, exclude_v: usize) -> Option<(ID3D12Resource, usize)> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if start == 0 || start == null {
         return None;
@@ -186,7 +194,9 @@ unsafe fn find_d3d12_resource(start: usize) -> Option<ID3D12Resource> {
                         if in_ranges(vt, &d3d) {
                             // Confirmed d3d12-module vtable -> safe to QI for ID3D12Resource.
                             d3d_hits += 1;
-                            if let Some((res, area)) = unsafe { try_texture2d(v) } {
+                            if v == exclude_v {
+                                // Caller-excluded texture (e.g. the SRV) -- skip so we pick a different one.
+                            } else if let Some((res, area)) = unsafe { try_texture2d(v) } {
                                 if best.as_ref().is_none_or(|&(_, a, _)| area > a) {
                                     best = Some((res, area, v));
                                 }
@@ -206,7 +216,7 @@ unsafe fn find_d3d12_resource(start: usize) -> Option<ID3D12Resource> {
         append_autoload_debug(format_args!(
             "portrait-scan: FOUND largest TEXTURE2D at 0x{v:x} area={area} objs={budget} d3d_hits={d3d_hits} qi_fails={qi_fails}"
         ));
-        return Some(res);
+        return Some((res, v));
     }
     append_autoload_debug(format_args!(
         "portrait-scan: no TEXTURE2D RT found -- objs={budget} d3d_hits={d3d_hits} qi_fails={qi_fails} (all d3d textures were 1x1 dummies or non-resources => offscreen not composited)"
@@ -253,11 +263,30 @@ pub(crate) unsafe fn readback_offscreen_rgba8(gpu_child: usize) -> Option<(u32, 
     .flatten()
 }
 
+/// Readback the largest TEXTURE2D in `start`'s nest EXCLUDING whichever texture is found from
+/// `exclude_start` (e.g. read the content RT while excluding the SRV). For visual diagnosis of which
+/// texture holds the portrait when several same-/different-size textures share the offscreen nest.
+pub(crate) unsafe fn readback_excluding_rgba8(
+    start: usize,
+    exclude_start: usize,
+) -> Option<(u32, u32, Vec<u8>)> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let exclude_v = find_d3d12_resource_ex(exclude_start, 0).map(|(_, v)| v).unwrap_or(0);
+        let (resource, _) = find_d3d12_resource_ex(start, exclude_v)?;
+        readback_resource_rgba8_inner(resource)
+    }))
+    .ok()
+    .flatten()
+}
+
 unsafe fn readback_offscreen_rgba8_inner(gpu_child: usize) -> Option<(u32, u32, Vec<u8>)> {
     // Scan the wrapper nest for the real VKD3D ID3D12Resource (validated TEXTURE2D, QI-owned ref;
     // its Drop balances the QI AddRef, so the game's object is left net-untouched).
     let resource = unsafe { find_d3d12_resource(gpu_child) }?;
+    unsafe { readback_resource_rgba8_inner(resource) }
+}
 
+unsafe fn readback_resource_rgba8_inner(resource: ID3D12Resource) -> Option<(u32, u32, Vec<u8>)> {
     // GetDevice AddRefs the device; that ref is ours, dropped normally at scope end.
     let mut device_opt: Option<ID3D12Device> = None;
     unsafe { resource.GetDevice(&mut device_opt) }.ok()?;
@@ -458,6 +487,152 @@ unsafe fn readback_offscreen_rgba8_inner(gpu_child: usize) -> Option<(u32, u32, 
     unsafe { readback.Unmap(0, Some(&write_range)) };
 
     Some((width, height, out))
+}
+
+/// Force the offscreen RT->SRV resolve in D3D12: CopyResource the render-target texture behind
+/// `src_gpu_child` (the renderer's offscreen RT, which holds the rendered head) into the sampleable SRV
+/// texture behind `dst_gpu_child` (offscreen+0x10's CSGxTexture, what the loading-screen forge binds and
+/// GFx samples). The engine's own per-frame resolve almost never fires post-Continue (RT has content, SRV
+/// stays black), so we do the copy ourselves every render-thread frame. Returns true on a completed copy
+/// (or when src==dst so no copy is needed). Same safety contract as the readback: our OWN
+/// queue/allocator/list/fence, game resources borrowed (never Released), never panics/crashes.
+pub(crate) unsafe fn copy_offscreen_rt_to_srv(src_gpu_child: usize, dst_gpu_child: usize) -> bool {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        copy_offscreen_rt_to_srv_inner(src_gpu_child, dst_gpu_child)
+    }))
+    .unwrap_or(false)
+}
+
+unsafe fn copy_offscreen_rt_to_srv_inner(src_gpu_child: usize, dst_gpu_child: usize) -> bool {
+    // Resolve the SRV (dst) first from its OWN single-texture nest -> deterministic, plus its candidate
+    // pointer. Then resolve the source as the largest texture in the offscreen nest EXCLUDING that SRV,
+    // so we never pick the (black) SRV as the source and self-skip.
+    let Some((dst, dst_v)) = (unsafe { find_d3d12_resource_ex(dst_gpu_child, 0) }) else {
+        return false;
+    };
+    let Some((src, _src_v)) = (unsafe { find_d3d12_resource_ex(src_gpu_child, dst_v) }) else {
+        return false;
+    };
+    // CopyResource requires identical dimensions + format.
+    let sd: D3D12_RESOURCE_DESC = unsafe { src.GetDesc() };
+    let dd: D3D12_RESOURCE_DESC = unsafe { dst.GetDesc() };
+    // One-shot diagnostic: are src (RT) and dst (SRV) distinct resources, and do their descs match? If
+    // find_d3d12_resource returns the SAME resource for both starts (RT==SRV by BFS), the copy is a
+    // self-skip and can never populate the SRV -- the signature of the BFS "largest texture" ambiguity.
+    if PROFILE_RT_SRV_COPY_DIAGGED.fetch_add(1, Ordering::SeqCst) < 6 {
+        append_autoload_debug(format_args!(
+            "rt-srv-copy-diag: src=0x{:x} dst=0x{:x} same={} src_dims={}x{} fmt={} dst_dims={}x{} fmt={}",
+            src.as_raw() as usize,
+            dst.as_raw() as usize,
+            (src.as_raw() == dst.as_raw()) as u8,
+            sd.Width,
+            sd.Height,
+            sd.Format.0,
+            dd.Width,
+            dd.Height,
+            dd.Format.0,
+        ));
+    }
+    // Same physical resource (already resolved / single texture) -> nothing to copy.
+    if src.as_raw() == dst.as_raw() {
+        return true;
+    }
+    if sd.Width != dd.Width || sd.Height != dd.Height || sd.Format != dd.Format {
+        return false;
+    }
+    let mut device_opt: Option<ID3D12Device> = None;
+    if unsafe { src.GetDevice(&mut device_opt) }.is_err() {
+        return false;
+    }
+    let Some(device) = device_opt else {
+        return false;
+    };
+    let queue_desc = D3D12_COMMAND_QUEUE_DESC {
+        Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+        Priority: 0,
+        Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
+        NodeMask: 0,
+    };
+    let Ok(queue) = (unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue_desc) }) else {
+        return false;
+    };
+    let Ok(allocator) =
+        (unsafe { device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT) })
+    else {
+        return false;
+    };
+    let Ok(list) = (unsafe {
+        device.CreateCommandList::<_, _, ID3D12GraphicsCommandList>(
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            &allocator,
+            None,
+        )
+    }) else {
+        return false;
+    };
+    // src (RT): COMMON -> COPY_SOURCE; dst (SRV): COMMON -> COPY_DEST; copy; both back to COMMON.
+    unsafe {
+        record_transition(
+            &list,
+            &src,
+            D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+        )
+    };
+    unsafe {
+        record_transition(
+            &list,
+            &dst,
+            D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+        )
+    };
+    unsafe { list.CopyResource(&dst, &src) };
+    unsafe {
+        record_transition(
+            &list,
+            &src,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_RESOURCE_STATE_COMMON,
+        )
+    };
+    unsafe {
+        record_transition(
+            &list,
+            &dst,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_COMMON,
+        )
+    };
+    if unsafe { list.Close() }.is_err() {
+        return false;
+    }
+    let Ok(base_list) = list.cast::<ID3D12CommandList>() else {
+        return false;
+    };
+    unsafe { queue.ExecuteCommandLists(&[Some(base_list)]) };
+    let Ok(fence) = (unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }) else {
+        return false;
+    };
+    if unsafe { queue.Signal(&fence, READBACK_FENCE_TARGET) }.is_err() {
+        return false;
+    }
+    if unsafe { fence.GetCompletedValue() } < READBACK_FENCE_TARGET {
+        let Ok(event) = (unsafe { CreateEventW(None, false, false, None) }) else {
+            return false;
+        };
+        if unsafe { fence.SetEventOnCompletion(READBACK_FENCE_TARGET, event) }.is_err() {
+            let _ = unsafe { CloseHandle(event) };
+            return false;
+        }
+        let wait = unsafe { WaitForSingleObject(event, READBACK_FENCE_WAIT_MS) };
+        let _ = unsafe { CloseHandle(event) };
+        if wait != WAIT_OBJECT_0 {
+            return false;
+        }
+    }
+    true
 }
 
 /// True if the read-back RGBA8 image has any non-black texel (`max(R,G,B) > 24`) inside a center

@@ -1263,6 +1263,18 @@ pub(crate) static PROFILE_LOOKAT_RT_CHANGED: AtomicUsize = AtomicUsize::new(0);
 /// signature of "renders black despite content" via a zero/premultiplied alpha channel.
 pub(crate) static PROFILE_LOOKAT_RT_RGB_MAX: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_LOOKAT_RT_ALPHA_MAX: AtomicUsize = AtomicUsize::new(0);
+/// One-shot guards for dumping the content RT and the bound SRV to disk for visual inspection (0 = not
+/// yet dumped). Lets the agent SEE whether the readback "content" texture is actually the portrait vs a
+/// scratch/world RT, and what the SRV holds, before choosing the fix.
+pub(crate) static PROFILE_RT_CONTENT_DUMPED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_SRV_DUMPED: AtomicUsize = AtomicUsize::new(0);
+/// Count of forced D3D12 RT->SRV CopyResource calls (so the sampleable SRV the forge binds gets the
+/// rendered head every frame instead of the engine's rarely-fired resolve). >0 = the copy path runs.
+pub(crate) static PROFILE_RT_SRV_COPIES: AtomicUsize = AtomicUsize::new(0);
+/// One-shot guard for the RT/SRV resource-identity diagnostic log.
+pub(crate) static PROFILE_RT_SRV_COPY_DIAGGED: AtomicUsize = AtomicUsize::new(0);
+/// One-shot guard for dumping the excluding-SRV content texture (slot 102) for visual inspection.
+pub(crate) static PROFILE_CONTENT_EXCL_DUMPED: AtomicUsize = AtomicUsize::new(0);
 /// Same RGB/ALPHA-max stats but from a readback of the texture actually BOUND into the now-loading
 /// container (what GFx samples), not the renderer's offscreen RT. If the RT (above) has content but this
 /// reads black, the sampleable CSGxTexture is a separate/unresolved resource from the render target.
