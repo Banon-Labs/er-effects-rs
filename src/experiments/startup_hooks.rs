@@ -3062,6 +3062,36 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
             ticks.join(" ")
         ));
     }
+    // Dense post-Continue capture: the now-loading window between the teardown-spare and world-load is
+    // only ~2s on a fast gold-save load, far shorter than the 240-tick coarse sweep above. Once a renderer
+    // has actually been spared (LOADING_BG_PORTRAIT_SPARED_RENDERER != 0), emit a compact sweep every 20
+    // ticks so the post-Continue rasterization (model_ok / rt changed) is sampled inside that brief window.
+    if LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0 && n % 20 == 0 {
+        let spared_ptr = LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst);
+        // Raw live read of renderer+model_ins: distinguishes the field being ZEROED (renderer detached from
+        // its model) from a DANGLING pointer (field intact but the model object behind it freed).
+        let model_raw =
+            unsafe { safe_read_usize(spared_ptr + PROFILE_RENDERER_MODEL_INS_OFFSET) }.unwrap_or(0);
+        // Liveness probe of the model OBJECT captured at record-time: read its first qword (vtable). If
+        // the object is still mapped/live its vtable reads as a plausible pointer; if freed/unmapped the
+        // read fails (cap_vt=0). This decides whether re-attaching cap_model into renderer+0x778 could
+        // restore the portrait (object alive) or whether the model must be rebuilt/refcounted (freed).
+        let cap_model = PROFILE_SPARE_CANDIDATE_MODEL.load(Ordering::SeqCst);
+        let cap_vt = unsafe { safe_read_usize(cap_model) }.unwrap_or(0);
+        append_autoload_debug(format_args!(
+            "lookat-spared-sweep: frame={n} nowload={} model_raw=0x{model_raw:x} cap_model=0x{cap_model:x} cap_vt=0x{cap_vt:x} spared[ptr=0x{:x} model_ok={} draws={} hits={}] rt[samples={} nonblack={} changed={}]",
+            game_module_base()
+                .map(|b| unsafe { now_loading_active(b) } as u8)
+                .unwrap_or(0),
+            LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst),
+            PROFILE_SPARED_MODEL_OK.load(Ordering::SeqCst),
+            PROFILE_PERFRAME_SPARED_DRAWS.load(Ordering::SeqCst),
+            PROFILE_PERFRAME_HOOK_HITS.load(Ordering::SeqCst),
+            PROFILE_LOOKAT_RT_SAMPLES.load(Ordering::SeqCst),
+            PROFILE_LOOKAT_RT_NONBLACK.load(Ordering::SeqCst),
+            PROFILE_LOOKAT_RT_CHANGED.load(Ordering::SeqCst),
+        ));
+    }
 }
 
 /// One candidate draw-phase task tick (registered once per phase index). Always bumps that phase's
@@ -3535,8 +3565,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                         .unwrap_or(false)
                 {
                     PROFILE_SPARE_CANDIDATE.store(r, Ordering::SeqCst);
+                    let model =
+                        unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }.unwrap_or(0);
+                    PROFILE_SPARE_CANDIDATE_MODEL.store(model, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "loading-portrait: pre-recorded spare candidate renderer=0x{r:x} slot={s} (model built at menu)"
+                        "loading-portrait: pre-recorded spare candidate renderer=0x{r:x} slot={s} model_ins=0x{model:x} (model built at menu)"
                     ));
                 }
             }
@@ -3655,8 +3688,11 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
                         s.base_latched = false;
                     }
                 }
+                let model_at_spare =
+                    unsafe { safe_read_usize(renderer + PROFILE_RENDERER_MODEL_INS_OFFSET) }
+                        .unwrap_or(0);
                 append_autoload_debug(format_args!(
-                    "loading-portrait: SPARED slot{spared_slot} renderer=0x{renderer:x} (candidate=0x{candidate:x}) from teardown -- drive look-at + render it post-Continue"
+                    "loading-portrait: SPARED slot{spared_slot} renderer=0x{renderer:x} (candidate=0x{candidate:x}) model_ins=0x{model_at_spare:x} from teardown -- drive look-at + render it post-Continue"
                 ));
             }
         }

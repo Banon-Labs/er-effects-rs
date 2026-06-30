@@ -852,6 +852,11 @@ pub(crate) static LOADING_BG_PORTRAIT_SPARED_RENDERER: AtomicUsize = AtomicUsize
 /// hook then protects THIS exact renderer (nulls its table entry) regardless of whether model_ins happens
 /// to be valid at the single teardown instant. 0 = none recorded yet.
 pub(crate) static PROFILE_SPARE_CANDIDATE: AtomicUsize = AtomicUsize::new(0);
+/// The model_ins (renderer+0x778) captured at the instant the spare candidate is recorded -- when the
+/// model is still built. By spare-time the renderer's own +0x778 field is already zeroed, so this holds
+/// the only reference to the model object; used to probe whether the model OBJECT survives Continue (vs
+/// just the renderer's pointer being cleared) and, if it does, to re-attach it post-Continue.
+pub(crate) static PROFILE_SPARE_CANDIDATE_MODEL: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_RENDERER_TEARDOWN_HOOK_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static PROFILE_RENDERER_TEARDOWN_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
