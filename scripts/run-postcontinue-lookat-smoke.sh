@@ -16,7 +16,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 set -a
 # shellcheck disable=SC1091
-source .envs/manual-portrait-drive.env
+source .envs/postcontinue-lookat.env
 set +a
 : "${ARTIFACT_DIR:=$PWD/target/runtime-probe/postcontinue-lookat-smoke}"
 export ARTIFACT_DIR
