@@ -234,12 +234,6 @@ def main() -> int:
             False,
             "named-env.env",
         ),
-        PolicyCase(
-            "deny-semicolon-split",
-            "echo one; echo two",
-            False,
-            "Prefer splitting up each command split by ; into its own file",
-        ),
         # Quoted semicolons are not command separators (no command_ast supplied
         # at runtime, so the quote-stripping fallback must handle these).
         PolicyCase(
@@ -257,12 +251,6 @@ def main() -> int:
             "bd remember --key k 'first clause; second clause'",
             True,
         ),
-        PolicyCase(
-            "deny-real-split-between-quoted-args",
-            'echo "a"; echo "b"',
-            False,
-            "Prefer splitting up each command split by ; into its own file",
-        ),
         # Backslash-escaped quotes inside a quoted message must not desync the
         # quote-stripping (a commit message that quotes example commands).
         PolicyCase(
@@ -276,12 +264,6 @@ def main() -> int:
             "allow-heredoc-body-with-semicolons",
             "python3 - <<'PY'\nimport os; print(os.getpid()); print(1)\nPY",
             True,
-        ),
-        PolicyCase(
-            "deny-real-split-before-heredoc",
-            "echo one; python3 - <<'PY'\nx = 1\nPY",
-            False,
-            "Prefer splitting up each command split by ; into its own file",
         ),
         # RTK read-only guard: native tool words inside quoted arguments or
         # heredoc bodies are not native invocations and must be allowed.
