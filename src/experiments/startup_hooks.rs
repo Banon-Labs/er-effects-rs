@@ -2981,6 +2981,66 @@ unsafe fn profile_lookat_rt_sample(base: usize) {
     if portrait_center_nonblack(w, h, &px) {
         PROFILE_LOOKAT_RT_NONBLACK.fetch_add(1, Ordering::SeqCst);
     }
+    // ALPHA vs RGB: max RGB and max alpha over the same center region. If rgb_max>0 but alpha_max==0 the
+    // RT has a portrait that GFx will composite as fully transparent (the "renders black despite content"
+    // signature). Decides the color-space/alpha question without a screenshot.
+    {
+        let (wq, hq) = (w as usize, h as usize);
+        if wq > 0 && hq > 0 && px.len() >= wq * hq * 4 {
+            let (cx, cy) = (wq / 2, hq / 2);
+            let (x0, x1) = (cx.saturating_sub(32), (cx + 32).min(wq));
+            let (y0, y1) = (cy.saturating_sub(32), (cy + 32).min(hq));
+            let (mut rgb_max, mut a_max) = (0u8, 0u8);
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let idx = (y * wq + x) * 4;
+                    rgb_max = rgb_max.max(px[idx]).max(px[idx + 1]).max(px[idx + 2]);
+                    a_max = a_max.max(px[idx + 3]);
+                }
+            }
+            PROFILE_LOOKAT_RT_RGB_MAX.store(rgb_max as usize, Ordering::SeqCst);
+            PROFILE_LOOKAT_RT_ALPHA_MAX.store(a_max as usize, Ordering::SeqCst);
+        }
+    }
+    // SAMPLEABLE-TEXTURE READBACK: read the texture actually BOUND into the now-loading container (what
+    // GFx samples) and compare to the render target above. Same render-thread context (safe). If the RT
+    // has content but this reads black, the bound CSGxTexture is a separate/unresolved resource.
+    {
+        let cap = LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT.load(Ordering::SeqCst);
+        let mut bgx = 0usize;
+        if valid(cap) {
+            let container = unsafe { safe_read_usize(cap + TPF_FILE_CAP_TEX_RESCAP_OFFSET) }.unwrap_or(0);
+            if valid(container) {
+                let array = unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_ARRAY_OFFSET) }.unwrap_or(0);
+                if valid(array) {
+                    let trc0 = unsafe { safe_read_usize(array) }.unwrap_or(0);
+                    if valid(trc0) {
+                        bgx = unsafe { safe_read_usize(trc0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) }.unwrap_or(0);
+                    }
+                }
+            }
+        }
+        if valid(bgx) {
+            if let Some((bw, bh, bpx)) = unsafe { readback_offscreen_rgba8(bgx) } {
+                let (wq, hq) = (bw as usize, bh as usize);
+                if wq > 0 && hq > 0 && bpx.len() >= wq * hq * 4 {
+                    let (cx, cy) = (wq / 2, hq / 2);
+                    let (x0, x1) = (cx.saturating_sub(32), (cx + 32).min(wq));
+                    let (y0, y1) = (cy.saturating_sub(32), (cy + 32).min(hq));
+                    let (mut rgb_max, mut a_max) = (0u8, 0u8);
+                    for y in y0..y1 {
+                        for x in x0..x1 {
+                            let idx = (y * wq + x) * 4;
+                            rgb_max = rgb_max.max(bpx[idx]).max(bpx[idx + 1]).max(bpx[idx + 2]);
+                            a_max = a_max.max(bpx[idx + 3]);
+                        }
+                    }
+                    PROFILE_BOUND_GX_RGB_MAX.store(rgb_max as usize, Ordering::SeqCst);
+                    PROFILE_BOUND_GX_ALPHA_MAX.store(a_max as usize, Ordering::SeqCst);
+                }
+            }
+        }
+    }
     // Cheap strided FNV-1a hash of the RT to detect frame-to-frame content change without storing pixels.
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     let step = (px.len() / 4096).max(1);
@@ -3153,6 +3213,55 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
                 }
             }
         }
+        // CHAIN DIAGNOSTIC: for the autoload target slot's BUILT renderer, walk renderer -> +0xa8
+        // (CSEzOffscreenRend) -> +0x10 (CSRuntimeTexResCap) -> +GX (CSGxTexture) -- the exact texture the
+        // forge re-bind should publish. And read the bound container's CURRENT first-TexResCap GX. If
+        // chain_gx != bound_gx, the re-bind is publishing the wrong (stale menu) texture, not our live RT.
+        let (mut ch_r, mut ch_off, mut ch_trc, mut ch_gx, mut bound_gx) = (0usize, 0usize, 0usize, 0usize, 0usize);
+        if let Ok(b) = game_module_base() {
+            let slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+            let r = unsafe { safe_read_usize(portrait_renderer_table_entry(b, slot)) }.unwrap_or(0);
+            if r != 0 && r != null {
+                ch_r = r;
+                ch_off = unsafe {
+                    safe_read_usize(r + TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET)
+                }
+                .unwrap_or(0);
+                if ch_off != 0 && ch_off != null {
+                    ch_trc = unsafe {
+                        safe_read_usize(ch_off + TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET)
+                    }
+                    .unwrap_or(0);
+                    if ch_trc != 0 && ch_trc != null {
+                        ch_gx = unsafe {
+                            safe_read_usize(ch_trc + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET)
+                        }
+                        .unwrap_or(0);
+                    }
+                }
+            }
+            // Bound container's first TexResCap GX (what the loading screen actually samples).
+            let cap = LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT.load(Ordering::SeqCst);
+            if cap != 0 && cap != null {
+                let container = unsafe { safe_read_usize(cap + TPF_FILE_CAP_TEX_RESCAP_OFFSET) }.unwrap_or(0);
+                if container != 0 && container != null {
+                    let array = unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_ARRAY_OFFSET) }.unwrap_or(0);
+                    if array != 0 && array != null {
+                        let trc0 = unsafe { safe_read_usize(array) }.unwrap_or(0);
+                        if trc0 != 0 && trc0 != null {
+                            bound_gx = unsafe { safe_read_usize(trc0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) }.unwrap_or(0);
+                        }
+                    }
+                }
+            }
+        }
+        append_autoload_debug(format_args!(
+            "loading-portrait-chain: built_slot_r=0x{ch_r:x} off=0x{ch_off:x} trc=0x{ch_trc:x} chain_gx=0x{ch_gx:x} | bound_gx=0x{bound_gx:x} rt[rgb_max={} alpha_max={}] boundtex[rgb_max={} alpha_max={}]",
+            PROFILE_LOOKAT_RT_RGB_MAX.load(Ordering::SeqCst),
+            PROFILE_LOOKAT_RT_ALPHA_MAX.load(Ordering::SeqCst),
+            PROFILE_BOUND_GX_RGB_MAX.load(Ordering::SeqCst),
+            PROFILE_BOUND_GX_ALPHA_MAX.load(Ordering::SeqCst),
+        ));
         append_autoload_debug(format_args!(
             "lookat-spared-sweep: frame={n} nowload={} loadbuilds={} built[r={built_r} m={built_m}] rebind[n={} gx=0x{:x}] model_raw=0x{model_raw:x} cap_model=0x{cap_model:x} cap_vt=0x{cap_vt:x} spared[ptr=0x{:x} model_ok={} draws={} hits={}] rt[samples={} nonblack={} changed={}]",
             game_module_base()

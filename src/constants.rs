@@ -1257,6 +1257,18 @@ pub(crate) static PROFILE_LOOKAT_DRAW_FRAME: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_LOOKAT_RT_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_LOOKAT_RT_NONBLACK: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_LOOKAT_RT_CHANGED: AtomicUsize = AtomicUsize::new(0);
+/// Last RT center-region max RGB and max ALPHA (0..255) from the readback. The nonblack oracle only
+/// checks RGB, so a portrait that renders RGB content but with ALPHA=0 reads "nonblack" yet GFx
+/// alpha-composites it to fully transparent (black shows through). rgb_max>0 with alpha_max==0 is the
+/// signature of "renders black despite content" via a zero/premultiplied alpha channel.
+pub(crate) static PROFILE_LOOKAT_RT_RGB_MAX: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_LOOKAT_RT_ALPHA_MAX: AtomicUsize = AtomicUsize::new(0);
+/// Same RGB/ALPHA-max stats but from a readback of the texture actually BOUND into the now-loading
+/// container (what GFx samples), not the renderer's offscreen RT. If the RT (above) has content but this
+/// reads black, the sampleable CSGxTexture is a separate/unresolved resource from the render target.
+/// 0xffff sentinel = readback did not run / found no resource this sample.
+pub(crate) static PROFILE_BOUND_GX_RGB_MAX: AtomicUsize = AtomicUsize::new(0xffff);
+pub(crate) static PROFILE_BOUND_GX_ALPHA_MAX: AtomicUsize = AtomicUsize::new(0xffff);
 pub(crate) static PROFILE_LOOKAT_RT_LASTHASH: AtomicUsize = AtomicUsize::new(0);
 /// Last slot the oracle sampled (the present-model slot cycles), so "changed" is only counted when two
 /// consecutive samples are the SAME slot -- otherwise a slot switch (different character) would look like
