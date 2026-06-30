@@ -830,9 +830,28 @@ pub(crate) const PROFILE_OFFSCREEN_DRIVE_RVA: usize = 0xbb8ca0;
 /// where a GX frame is actively recording so the GX subcontext pool pop succeeds (it returns 0 -> a black
 /// no-op at FrameBegin, before the frame records -- the real reason a game-task-thread drive went black).
 pub(crate) const PROFILE_DRAW_STEP_RVA: usize = 0x9aa290;
+/// Profile-renderer table BUILDER `FUN_1409af4f0` (dump) -> deobf RVA 0x1409af3a0 (content-unique, shift
+/// -0x150). No-arg: tears down the existing 10 (FUN_1409b2f00, no-op on an already-null table) then
+/// HeapAllocs (0xa30, align 0x10, GLOBAL_GfxHeapAllocator) + ctor's a fresh CSMenuProfModelRend into each
+/// of the 10 title-table slots (base+0x3d6d8d0), each self-registering its build/draw tasks with ResMan.
+/// We call it ONCE post-Continue (now-loading, table torn down) to repopulate the table so the existing
+/// mark+refresh feed + per-frame look-at + draw + oracle re-engage on the loading screen. RE-confirmed the
+/// ctor is self-contained off process-lifetime singletons (no TitleTopDialog dependency).
+pub(crate) const PROFILE_TABLE_BUILDER_RVA: usize = 0x9af3a0;
+/// One-shot latch: set when we've rebuilt the profile table for the current load window; cleared when
+/// now-loading drops, so each load rebuilds at most once (no per-frame churn / teardown thrash).
+pub(crate) static PROFILE_LOADSCREEN_REBUILT: AtomicUsize = AtomicUsize::new(0);
+/// Count of post-Continue profile-table (re)builds for the loading-screen portrait (telemetry/sweep).
+pub(crate) static PROFILE_LOADSCREEN_TABLE_BUILDS: AtomicUsize = AtomicUsize::new(0);
 /// The spared slot-0 CSMenuProfModelRend renderer (0 until the Continue teardown spares it). Its
 /// global ResMan model-update task keeps loading/animating the model while the object lives.
 pub(crate) static LOADING_BG_PORTRAIT_SPARED_RENDERER: AtomicUsize = AtomicUsize::new(0);
+/// Pre-recorded spare CANDIDATE: the target slot's renderer pointer, captured by force_profile_render at
+/// the MENU on a frame where its model is actually built (+0x778 valid). Because the menu cycles model_ins
+/// (~4-11% of frames), capturing the candidate during the long menu dwell is robust; the teardown-spare
+/// hook then protects THIS exact renderer (nulls its table entry) regardless of whether model_ins happens
+/// to be valid at the single teardown instant. 0 = none recorded yet.
+pub(crate) static PROFILE_SPARE_CANDIDATE: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_RENDERER_TEARDOWN_HOOK_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static PROFILE_RENDERER_TEARDOWN_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);

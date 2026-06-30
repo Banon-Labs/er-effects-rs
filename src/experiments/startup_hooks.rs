@@ -3039,10 +3039,14 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
             })
             .collect();
         append_autoload_debug(format_args!(
-            "lookat-phase-sweep: frame_begin={n} selected={}({}) selftest={} render_drives={} hook_hits={} gx[samples={} nonempty={}] rt[samples={} nonblack={} changed={}] spared[ptr=0x{:x} model_ok={} draws={} hits={}] stage0[{}] phase_ticks[{}]",
+            "lookat-phase-sweep: frame_begin={n} selected={}({}) selftest={} nowload={} loadbuilds={} render_drives={} hook_hits={} gx[samples={} nonempty={}] rt[samples={} nonblack={} changed={}] spared[ptr=0x{:x} model_ok={} draws={} hits={}] stage0[{}] phase_ticks[{}]",
             PROFILE_LOOKAT_SELECTED_PHASE.load(Ordering::SeqCst),
             LOOKAT_DRAW_PHASE_NAMES[PROFILE_LOOKAT_SELECTED_PHASE.load(Ordering::SeqCst)],
             PROFILE_LOOKAT_SELFTEST_ON.load(Ordering::SeqCst) as u8,
+            game_module_base()
+                .map(|b| unsafe { now_loading_active(b) } as u8)
+                .unwrap_or(0),
+            PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst),
             PROFILE_LOOKAT_RENDER_DRIVES.load(Ordering::SeqCst),
             PROFILE_LOOKAT_HOOK_HITS.load(Ordering::SeqCst),
             PROFILE_GX_QUEUE_SAMPLES.load(Ordering::SeqCst),
@@ -3308,12 +3312,74 @@ unsafe fn apply_profile_camera_override(base: usize, renderer: usize, slot: i32)
     true
 }
 
+/// True while the engine's now-loading screen is active (reads the NowLoading singleton the telemetry
+/// uses: helper = *(base+NowLoadingSingleton); flag = *(helper+loading_flag) & 0xff). Fault-guarded.
+unsafe fn now_loading_active(base: usize) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let helper = unsafe { safe_read_usize(base + RuntimeGlobalRva::NowLoadingSingleton as usize) }
+        .unwrap_or(0);
+    if helper == 0 || helper == null {
+        return false;
+    }
+    let off = core::mem::offset_of!(NowLoadingHelperLayout, loading_flag);
+    unsafe { safe_read_usize(helper + off) }
+        .map(|v| (v & 0xff) != 0)
+        .unwrap_or(false)
+}
+
+/// POST-CONTINUE PORTRAIT: when the now-loading screen is up but the profile-renderer title table has been
+/// torn down (native-continue is menu-free, so the menu never built it, or Continue tore it down), call
+/// the engine's own builder ONCE to repopulate the 10-slot table. The existing mark+refresh feed +
+/// per-frame look-at hook + draw + pixel oracle then re-engage on the loading screen automatically (they
+/// all key off this table). Latched per load (reset when now-loading drops) so there's no per-frame churn.
+pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
+    if !portrait_lookat_enabled() {
+        return;
+    }
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if base == 0 || base == null {
+        return;
+    }
+    if !unsafe { now_loading_active(base) } {
+        PROFILE_LOADSCREEN_REBUILT.store(0, Ordering::SeqCst); // reset latch outside the load window
+        return;
+    }
+    if PROFILE_LOADSCREEN_REBUILT.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    // If the table is already populated (e.g. menu built it), leave it -- existing machinery feeds/draws it.
+    let t0 = unsafe { safe_read_usize(portrait_renderer_table_entry(base, 0)) }.unwrap_or(0);
+    let populated = t0 != 0
+        && t0 != null
+        && unsafe { safe_read_usize(t0) }.unwrap_or(0)
+            == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA;
+    if populated {
+        PROFILE_LOADSCREEN_REBUILT.store(1, Ordering::SeqCst); // already have a table this load; don't rebuild
+        return;
+    }
+    // Empty table + now-loading: build it via the engine's own 10-slot builder (teardown is a no-op on a
+    // null table). Self-contained off process-lifetime singletons (RE-confirmed).
+    let builder: unsafe extern "system" fn() =
+        unsafe { core::mem::transmute(base + PROFILE_TABLE_BUILDER_RVA) };
+    unsafe { builder() };
+    PROFILE_LOADSCREEN_REBUILT.store(1, Ordering::SeqCst);
+    PROFILE_LOADSCREEN_TABLE_BUILDS.fetch_add(1, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "loading-portrait: now-loading + empty profile table -> called builder 0x{:x} to repopulate for the post-Continue portrait",
+        base + PROFILE_TABLE_BUILDER_RVA
+    ));
+}
+
 pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if base == 0 || base == null {
         return;
     }
     let valid = |p: usize| p != 0 && p != null;
+    // POST-CONTINUE PORTRAIT: before the table-ready guard below (which would early-return on the
+    // torn-down post-Continue table), repopulate the table during now-loading so the rest of this tick
+    // (mark+refresh feed) and the look-at/draw/oracle run on the loading screen.
+    unsafe { maybe_build_profile_table_for_loading(base) };
     // HIGHER-RES (one-shot, EARLY -- runs before the table-ready guard below so it lands before
     // TitleTopDialog constructs the renderers). Patch each per-slot offscreen base-size entry that
     // still holds the init value (128x128, written by FUN_1400a7bb0) to 1024x1024 base AND zero the
@@ -3450,6 +3516,29 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                 // old per-tick game-task offscreen drive rendered black (FrameBegin = before the GX frame
                 // records); the draw-phase task is the fix.
                 unsafe { apply_profile_lookat(r, s) };
+                // SPARE PRE-RECORD: capture the autoload target slot's renderer as the spare candidate on
+                // a frame where its model is actually BUILT (+0x778 valid), so the teardown-spare hook can
+                // protect this exact renderer through Continue even though the menu cycles model_ins. The
+                // long menu dwell makes catching a built frame reliable.
+                let target = {
+                    let own = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+                    if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&own) {
+                        own
+                    } else {
+                        0
+                    }
+                };
+                if s == target
+                    && PROFILE_SPARE_CANDIDATE.load(Ordering::SeqCst) == 0
+                    && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
+                        .map(|m| valid(m))
+                        .unwrap_or(false)
+                {
+                    PROFILE_SPARE_CANDIDATE.store(r, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "loading-portrait: pre-recorded spare candidate renderer=0x{r:x} slot={s} (model built at menu)"
+                    ));
+                }
             }
         }
     }
@@ -3509,46 +3598,66 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
 /// we can keep rendering it into the now-loading screen. The original then tears down slots 1-9.
 pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    if LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) == 0 && product_autoload_enabled()
+    let valid = |p: usize| p != 0 && p != null;
+    // Gate on the look-at/portrait feature OR product autoload -- the native-continue path does NOT set
+    // PRODUCT_AUTOLOAD_ARMED, so gating on product_autoload alone never spared anything there.
+    if LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) == 0
+        && (product_autoload_enabled() || portrait_lookat_enabled())
     {
         if let Ok(base) = game_module_base() {
-            // Spare the autoload's TARGET save slot, not a hardcoded slot 0 (the loaded character may
-            // live in any absolute slot). Falls back to entry 0 when the slot is unset/out of range.
             let slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
-            let table = portrait_renderer_table_entry(base, slot);
-            let renderer = unsafe { safe_read_usize(table) }.unwrap_or(0);
-            // GUARD (avoid the blank-renderer hazard): only spare a renderer whose character model is
-            // actually built (+0x778 != 0). The refresh init() teardown can fire this hook on a blank,
-            // pre-render renderer; sparing that would keep an empty portrait. Sparing only a built model
-            // ensures the spared renderer holds the loaded character.
-            let model_built = renderer != 0
-                && renderer != null
-                && unsafe { safe_read_usize(renderer + PROFILE_RENDERER_MODEL_INS_OFFSET) }
-                    .map(|m| m != 0 && m != null)
-                    .unwrap_or(false);
-            if model_built {
-                let vt = unsafe { safe_read_usize(renderer) }.unwrap_or(0);
-                if vt == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA {
-                    LOADING_BG_PORTRAIT_SPARED_RENDERER.store(renderer, Ordering::SeqCst);
-                    PROFILE_RENDERER_SPARE_HITS.fetch_add(1, Ordering::SeqCst);
-                    // Spare table[slot]: the original then enqueues null for it (no-op) and tears down
-                    // the rest of the 10 slots.
-                    unsafe { (table as *mut usize).write_volatile(0) };
-                    // Clear this slot's look-at base latch so the spared renderer re-latches a clean idle
-                    // base from its POST-Continue model (a different model instance than the menu one).
-                    if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
-                        let mut guard = match PROFILE_LOOKAT_SLOTS.lock() {
-                            Ok(g) => g,
-                            Err(p) => p.into_inner(),
-                        };
-                        if let Some(s) = guard[slot as usize].as_mut() {
-                            s.base_latched = false;
-                        }
+            let slot = if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
+                slot
+            } else {
+                0
+            };
+            // Prefer the PRE-RECORDED candidate (captured at the menu on a model-built frame -- robust to
+            // the menu's model_ins cycling). Find its table slot and protect it. Fall back to reading
+            // table[slot] + a model-built guard if no candidate was recorded.
+            let candidate = PROFILE_SPARE_CANDIDATE.load(Ordering::SeqCst);
+            let (renderer, table, spared_slot) = if valid(candidate) {
+                // locate the candidate's table entry so we can null it
+                let mut found = (candidate, 0usize, slot);
+                for s in 0..TITLE_PROFILE_SLOT_COUNT as i32 {
+                    let te = portrait_renderer_table_entry(base, s);
+                    if unsafe { safe_read_usize(te) }.unwrap_or(0) == candidate {
+                        found = (candidate, te, s);
+                        break;
                     }
-                    append_autoload_debug(format_args!(
-                        "loading-portrait: SPARED slot{slot} portrait renderer=0x{renderer:x} (model built) from teardown -- will drive look-at + render it post-Continue"
-                    ));
                 }
+                found
+            } else {
+                let te = portrait_renderer_table_entry(base, slot);
+                let r = unsafe { safe_read_usize(te) }.unwrap_or(0);
+                let model_built = valid(r)
+                    && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
+                        .map(|m| valid(m))
+                        .unwrap_or(false);
+                (if model_built { r } else { 0 }, te, slot)
+            };
+            if valid(renderer)
+                && unsafe { safe_read_usize(renderer) }.unwrap_or(0)
+                    == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+            {
+                LOADING_BG_PORTRAIT_SPARED_RENDERER.store(renderer, Ordering::SeqCst);
+                PROFILE_RENDERER_SPARE_HITS.fetch_add(1, Ordering::SeqCst);
+                // Null the table entry so the original's null-guarded delete-enqueue skips it.
+                if table != 0 {
+                    unsafe { (table as *mut usize).write_volatile(0) };
+                }
+                // Re-latch the look-at base from the post-Continue model (a different model instance).
+                if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&spared_slot) {
+                    let mut guard = match PROFILE_LOOKAT_SLOTS.lock() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    if let Some(s) = guard[spared_slot as usize].as_mut() {
+                        s.base_latched = false;
+                    }
+                }
+                append_autoload_debug(format_args!(
+                    "loading-portrait: SPARED slot{spared_slot} renderer=0x{renderer:x} (candidate=0x{candidate:x}) from teardown -- drive look-at + render it post-Continue"
+                ));
             }
         }
     }
