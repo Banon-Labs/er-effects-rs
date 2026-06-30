@@ -20,22 +20,23 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::{
-    D3D12CreateDevice, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC,
-    D3D12_COMMAND_QUEUE_FLAG_NONE, ID3D12CommandQueue, ID3D12Device,
+    D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12_COMMAND_QUEUE_FLAG_NONE,
+    D3D12CreateDevice, ID3D12CommandQueue, ID3D12Device,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_ALPHA_MODE_UNSPECIFIED, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
-    DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIFactory4, IDXGISwapChain1,
+    DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIFactory4, IDXGISwapChain,
+    IDXGISwapChain1,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, UnregisterClassW, CW_USEDEFAULT,
-    WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW,
+    UnregisterClassW, WINDOW_EX_STYLE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
-use windows::core::{Interface, w};
+use windows::core::{IUnknown, Interface, w};
 
 use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 
@@ -55,6 +56,17 @@ const PRESENT1_VTABLE_INDEX: usize = 22;
 
 type PresentFn = unsafe extern "system" fn(*mut c_void, u32, u32) -> i32;
 type Present1Fn = unsafe extern "system" fn(*mut c_void, u32, u32, *const c_void) -> i32;
+
+/// `GLOBAL_CSGraphics` (the GX device singleton) deobf RVA -- from the dump (0x143d71c48, stored by
+/// `FUN_140b1dc40`). The 0x130-byte CS::CSGraphicsImp it points to holds the live IDXGISwapChain several
+/// sub-objects deep.
+const GLOBAL_CSGRAPHICS_RVA: usize = 0x3d71c48;
+/// Set once we've found the GAME's swapchain and hooked its REAL Present/Present1 (the dummy-swapchain
+/// vtable funcs differ under vkd3d-proton, so hooking those never fired -- we must hook the game's own).
+static GAME_PRESENT_HOOKED: AtomicUsize = AtomicUsize::new(0);
+static GAME_SWAPCHAIN_FIND_TRIES: AtomicUsize = AtomicUsize::new(0);
+/// The dummy swapchain's Present addr -- only used as a same-module hint for the swapchain-vtable filter.
+static PRESENT_RESOLVED_ADDR: AtomicUsize = AtomicUsize::new(0);
 
 /// Detour for `IDXGISwapChain::Present(this, SyncInterval, Flags)`. Phase 1: log-only, then tail-call the
 /// original. `this` IS the game's swapchain (we never created it), so a real overlay draws onto its
@@ -102,7 +114,8 @@ unsafe extern "system" fn present1_hook(
 }
 
 static FACTORY2_ORIG: AtomicUsize = AtomicUsize::new(0);
-type Factory2Fn = unsafe extern "system" fn(u32, *const windows::core::GUID, *mut *mut c_void) -> i32;
+type Factory2Fn =
+    unsafe extern "system" fn(u32, *const windows::core::GUID, *mut *mut c_void) -> i32;
 
 /// Detour for the `dxgi.dll!CreateDXGIFactory2` EXPORT -- logs that the GAME created a DXGI factory AFTER
 /// our hook installed (the timing precondition for catching its swapchain creation via the export chain).
@@ -118,7 +131,11 @@ unsafe extern "system" fn factory2_hook(
     } else {
         -1
     };
-    let factory = if out.is_null() { 0 } else { (unsafe { *out }) as usize };
+    let factory = if out.is_null() {
+        0
+    } else {
+        (unsafe { *out }) as usize
+    };
     append_autoload_debug(format_args!(
         "present-overlay: GAME called CreateDXGIFactory2 (export) -> hr={hr} factory=0x{factory:x} (export chain viable)"
     ));
@@ -163,63 +180,35 @@ fn install_dxgi_factory_export_hook() {
     }
 }
 
-/// Install the Present hook ONCE. Creates a THROWAWAY dummy swapchain (its own hidden window + device +
-/// queue) purely to read `IDXGISwapChain::Present` out of the shared DXGI vtable, MinHooks that function,
-/// then tears the dummy down (the vtable function persists, and the game's swapchain shares it). The hook
-/// then fires on the GAME's Present. Returns without effect on any failure (overlay simply inert).
+/// Prep the Present overlay ONCE (early): init MinHook + build a throwaway dummy swapchain only to learn
+/// the IDXGISwapChain vtable module (the same-module hint for the runtime swapchain scan). The dummy's own
+/// vtable funcs are NOT hooked -- under vkd3d-proton the game's swapchain is a different object, so the
+/// REAL Present hook is installed later by `try_install_game_present_hook` once the GX device is up.
 pub(crate) fn install_present_overlay_hook() {
     if PRESENT_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
         return;
     }
-    let (present_addr, present1_addr) = match unsafe { resolve_present_addrs() } {
-        Some(a) => a,
-        None => {
-            append_autoload_debug(format_args!(
-                "present-overlay: could not resolve Present/Present1 (dummy swapchain failed)"
-            ));
-            return;
-        }
-    };
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
         status => {
             append_autoload_debug(format_args!(
                 "present-overlay: MH_Initialize failed: {status:?}"
             ));
+            PRESENT_HOOK_INSTALLED.store(0, Ordering::SeqCst);
             return;
         }
     }
-    // Also hook the CreateDXGIFactory2 export -- if the game creates its DXGI factory after us, the export
-    // chain (factory -> swapchain -> Present) catches its ACTUAL swapchain (the dummy-vtable Present did
-    // NOT fire, so the game's swapchain vtable differs from the dummy's under vkd3d-proton).
-    install_dxgi_factory_export_hook();
-    // Hook BOTH Present(8) and Present1(22) -- flip-model swapchains usually present via Present1, but we
-    // don't know which Elden Ring uses; the hit log identifies it. Both detours bump PRESENT_HOOK_HITS.
-    match unsafe { MhHook::new(present_addr as *mut c_void, present_hook as *mut c_void) } {
-        Ok(hook) => {
-            PRESENT_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            std::mem::forget(hook);
-        }
-        Err(e) => append_autoload_debug(format_args!("present-overlay: hook Present failed: {e:?}")),
-    }
-    match unsafe { MhHook::new(present1_addr as *mut c_void, present1_hook as *mut c_void) } {
-        Ok(hook) => {
-            PRESENT1_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            std::mem::forget(hook);
-        }
-        Err(e) => append_autoload_debug(format_args!("present-overlay: hook Present1 failed: {e:?}")),
-    }
-    match unsafe { MH_ApplyQueued() } {
-        MH_STATUS::MH_OK => {
-            append_autoload_debug(format_args!(
-                "present-overlay: hooked Present 0x{present_addr:x} + Present1 0x{present1_addr:x} (overlay armed)"
-            ));
-        }
-        status => {
-            append_autoload_debug(format_args!(
-                "present-overlay: MH_ApplyQueued failed: {status:?}"
-            ));
-        }
+    // Module hint only: the dummy's Present addr identifies which module implements IDXGISwapChain, so the
+    // runtime BFS can filter swapchain candidates by vtable-in-that-module.
+    if let Some((present_addr, _)) = unsafe { resolve_present_addrs() } {
+        PRESENT_RESOLVED_ADDR.store(present_addr, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "present-overlay: prepared (module hint Present=0x{present_addr:x}); scanning for game swapchain per-frame"
+        ));
+    } else {
+        append_autoload_debug(format_args!(
+            "present-overlay: prepared (no module hint; will filter by Wine-module window)"
+        ));
     }
 }
 
@@ -231,13 +220,17 @@ unsafe fn resolve_present_addrs() -> Option<(usize, usize)> {
         let factory: IDXGIFactory4 = match CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0)) {
             Ok(f) => f,
             Err(e) => {
-                append_autoload_debug(format_args!("present-overlay: CreateDXGIFactory2 failed: {e:?}"));
+                append_autoload_debug(format_args!(
+                    "present-overlay: CreateDXGIFactory2 failed: {e:?}"
+                ));
                 return None;
             }
         };
         let mut device_opt: Option<ID3D12Device> = None;
         if let Err(e) = D3D12CreateDevice(None, D3D_FEATURE_LEVEL_11_0, &mut device_opt) {
-            append_autoload_debug(format_args!("present-overlay: D3D12CreateDevice failed: {e:?}"));
+            append_autoload_debug(format_args!(
+                "present-overlay: D3D12CreateDevice failed: {e:?}"
+            ));
             return None;
         }
         let device = device_opt?;
@@ -250,7 +243,9 @@ unsafe fn resolve_present_addrs() -> Option<(usize, usize)> {
         let queue: ID3D12CommandQueue = match device.CreateCommandQueue(&queue_desc) {
             Ok(q) => q,
             Err(e) => {
-                append_autoload_debug(format_args!("present-overlay: CreateCommandQueue failed: {e:?}"));
+                append_autoload_debug(format_args!(
+                    "present-overlay: CreateCommandQueue failed: {e:?}"
+                ));
                 return None;
             }
         };
@@ -258,7 +253,9 @@ unsafe fn resolve_present_addrs() -> Option<(usize, usize)> {
         let hinstance = match GetModuleHandleW(None) {
             Ok(h) => h,
             Err(e) => {
-                append_autoload_debug(format_args!("present-overlay: GetModuleHandleW failed: {e:?}"));
+                append_autoload_debug(format_args!(
+                    "present-overlay: GetModuleHandleW failed: {e:?}"
+                ));
                 return None;
             }
         };
@@ -286,7 +283,9 @@ unsafe fn resolve_present_addrs() -> Option<(usize, usize)> {
         ) {
             Ok(h) => h,
             Err(e) => {
-                append_autoload_debug(format_args!("present-overlay: CreateWindowExW failed: {e:?}"));
+                append_autoload_debug(format_args!(
+                    "present-overlay: CreateWindowExW failed: {e:?}"
+                ));
                 let _ = UnregisterClassW(class_name, Some(hinstance.into()));
                 return None;
             }
@@ -353,6 +352,152 @@ unsafe fn log_backbuffer_desc(this: *mut c_void) {
             }
         }
     }));
+}
+
+/// True if `obj` is a live COM object that QIs as `IDXGISwapChain`. Borrow-wraps (no AddRef on `obj`);
+/// the QI result is owned + dropped (its Release balances the QI AddRef), leaving the game object net 0.
+unsafe fn is_idxgi_swapchain(obj: usize) -> bool {
+    if obj < 0x10000 {
+        return false;
+    }
+    let raw = obj as *mut c_void;
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        match unsafe { IUnknown::from_raw_borrowed(&raw) } {
+            Some(unk) => unk.cast::<IDXGISwapChain>().is_ok(),
+            None => false,
+        }
+    }))
+    .unwrap_or(false)
+}
+
+/// Find the GAME's live `IDXGISwapChain` by a bounded BFS over the GX device (`GLOBAL_CSGraphics`) object
+/// tree: any reachable object whose vtable is in dxgi.dll AND QIs as IDXGISwapChain is it. Read-only
+/// pointer-walking + a confirming QI; returns the swapchain object pointer.
+unsafe fn find_game_swapchain(base: usize) -> Option<usize> {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let gx = unsafe { safe_read_usize(base + GLOBAL_CSGRAPHICS_RVA) }.unwrap_or(0);
+    if gx == 0 || gx == null {
+        return None;
+    }
+    let dxgi = unsafe { module_range(b"dxgi.dll\0") };
+    let hint = PRESENT_RESOLVED_ADDR.load(Ordering::SeqCst);
+    let vt_ok = |v: usize| -> bool {
+        if let Some((lo, hi)) = dxgi {
+            lo <= v && v < hi
+        } else {
+            // same high-module window as the resolved Present (Wine modules at 0x6fff_xxxx_xxxx).
+            hint != 0 && (v >> 24) == (hint >> 24)
+        }
+    };
+    let mut visited: Vec<usize> = Vec::with_capacity(2048);
+    let mut queue: Vec<(usize, u32)> = vec![(gx, 0)];
+    let mut budget = 0u32;
+    let mut dxgi_candidates = 0u32;
+    while let Some((obj, depth)) = queue.pop() {
+        if budget >= 24000 {
+            break;
+        }
+        budget += 1;
+        if obj < 0x10000 || obj == null || visited.contains(&obj) {
+            continue;
+        }
+        visited.push(obj);
+        let vt = match unsafe { safe_read_usize(obj) } {
+            Some(v) => v,
+            None => continue,
+        };
+        if vt_ok(vt) {
+            dxgi_candidates += 1;
+            if unsafe { is_idxgi_swapchain(obj) } {
+                append_autoload_debug(format_args!(
+                    "present-overlay: FOUND game swapchain 0x{obj:x} (vtable=0x{vt:x}) after {budget} objs depth={depth}"
+                ));
+                return Some(obj);
+            }
+        }
+        if depth < 12 {
+            let mut off = 0usize;
+            while off < 0x300 {
+                if let Some(v) = unsafe { safe_read_usize(obj + off) } {
+                    if v >= 0x10000 && v < 0x8000_0000_0000 && (v & 7) == 0 {
+                        queue.push((v, depth + 1));
+                    }
+                }
+                off += 8;
+            }
+        }
+    }
+    // Throttled diagnostic (the scan runs every frame): why no swapchain found.
+    let t = GAME_SWAPCHAIN_FIND_TRIES.load(Ordering::SeqCst);
+    if t == 1 || t == 300 || t == 1200 {
+        append_autoload_debug(format_args!(
+            "present-overlay: scan miss try={t} gx=0x{gx:x} dxgi_module={} objs={budget} dxgi_vtable_candidates={dxgi_candidates} visited={}",
+            dxgi.map(|(l, h)| format!("[0x{l:x},0x{h:x})"))
+                .unwrap_or_else(|| "NONE".to_string()),
+            visited.len()
+        ));
+    }
+    None
+}
+
+/// Per-frame (from a recurring game task): once the GX device is up, find the GAME's swapchain and hook
+/// its REAL Present(8)/Present1(22) -- the dummy-swapchain funcs differ under vkd3d-proton, so this is the
+/// only way the hook fires on the game's frames. One-shot (latched on success); bounded retries.
+pub(crate) unsafe fn try_install_game_present_hook(base: usize) {
+    if !portrait_lookat_enabled()
+        || PRESENT_HOOK_INSTALLED.load(Ordering::SeqCst) == 0
+        || GAME_PRESENT_HOOKED.load(Ordering::SeqCst) != 0
+    {
+        return;
+    }
+    // Bound the find attempts (each is a budgeted BFS) so a never-appearing swapchain can't spin forever.
+    let tries = GAME_SWAPCHAIN_FIND_TRIES.fetch_add(1, Ordering::SeqCst) + 1;
+    if tries > 3600 {
+        return;
+    }
+    let sc = match unsafe { find_game_swapchain(base) } {
+        Some(s) => s,
+        None => return,
+    };
+    let vt = match unsafe { safe_read_usize(sc) } {
+        Some(v) => v,
+        None => return,
+    };
+    let present8 = unsafe { safe_read_usize(vt + PRESENT_VTABLE_INDEX * 8) }.unwrap_or(0);
+    let present22 = unsafe { safe_read_usize(vt + PRESENT1_VTABLE_INDEX * 8) }.unwrap_or(0);
+    if present8 <= 0x10000 || present22 <= 0x10000 {
+        return;
+    }
+    // Latch BEFORE hooking so a retry can't double-install.
+    if GAME_PRESENT_HOOKED.swap(1, Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MhHook::new(present8 as *mut c_void, present_hook as *mut c_void) } {
+        Ok(hook) => {
+            PRESENT_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            std::mem::forget(hook);
+        }
+        Err(e) => append_autoload_debug(format_args!(
+            "present-overlay: hook game Present failed: {e:?}"
+        )),
+    }
+    match unsafe { MhHook::new(present22 as *mut c_void, present1_hook as *mut c_void) } {
+        Ok(hook) => {
+            PRESENT1_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            std::mem::forget(hook);
+        }
+        Err(e) => append_autoload_debug(format_args!(
+            "present-overlay: hook game Present1 failed: {e:?}"
+        )),
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => append_autoload_debug(format_args!(
+            "present-overlay: HOOKED game swapchain 0x{sc:x} Present8=0x{present8:x} Present1_22=0x{present22:x} (tries={tries})"
+        )),
+        status => append_autoload_debug(format_args!(
+            "present-overlay: game-present MH_ApplyQueued failed: {status:?}"
+        )),
+    }
 }
 
 unsafe extern "system" fn dummy_wndproc(

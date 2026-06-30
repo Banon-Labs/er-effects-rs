@@ -2138,7 +2138,8 @@ unsafe fn refresh_loading_bg_live_gx(base: usize) {
     if !valid(cap) {
         return;
     }
-    let live_gx = unsafe { sample_portrait_gxtexture(base, OWN_STEPPER_SLOT.load(Ordering::SeqCst)) };
+    let live_gx =
+        unsafe { sample_portrait_gxtexture(base, OWN_STEPPER_SLOT.load(Ordering::SeqCst)) };
     if !valid(live_gx) {
         return;
     }
@@ -2158,8 +2159,9 @@ unsafe fn refresh_loading_bg_live_gx(base: usize) {
     if !valid(tex_rescap0) {
         return;
     }
-    let cur = unsafe { safe_read_usize(tex_rescap0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) }
-        .unwrap_or(0);
+    let cur =
+        unsafe { safe_read_usize(tex_rescap0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) }
+            .unwrap_or(0);
     if cur == live_gx {
         return; // already bound to the live RT
     }
@@ -3101,13 +3103,19 @@ unsafe fn profile_lookat_rt_sample(base: usize) {
         let cap = LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT.load(Ordering::SeqCst);
         let mut bgx = 0usize;
         if valid(cap) {
-            let container = unsafe { safe_read_usize(cap + TPF_FILE_CAP_TEX_RESCAP_OFFSET) }.unwrap_or(0);
+            let container =
+                unsafe { safe_read_usize(cap + TPF_FILE_CAP_TEX_RESCAP_OFFSET) }.unwrap_or(0);
             if valid(container) {
-                let array = unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_ARRAY_OFFSET) }.unwrap_or(0);
+                let array =
+                    unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_ARRAY_OFFSET) }
+                        .unwrap_or(0);
                 if valid(array) {
                     let trc0 = unsafe { safe_read_usize(array) }.unwrap_or(0);
                     if valid(trc0) {
-                        bgx = unsafe { safe_read_usize(trc0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) }.unwrap_or(0);
+                        bgx = unsafe {
+                            safe_read_usize(trc0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET)
+                        }
+                        .unwrap_or(0);
                     }
                 }
             }
@@ -3297,7 +3305,8 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
         let (mut built_r, mut built_m) = (0u32, 0u32);
         if let Ok(b) = game_module_base() {
             for s in 0..TITLE_PROFILE_SLOT_COUNT as i32 {
-                let r = unsafe { safe_read_usize(portrait_renderer_table_entry(b, s)) }.unwrap_or(0);
+                let r =
+                    unsafe { safe_read_usize(portrait_renderer_table_entry(b, s)) }.unwrap_or(0);
                 if r != 0
                     && r != null
                     && unsafe { safe_read_usize(r) }.unwrap_or(0)
@@ -3316,7 +3325,8 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
         // (CSEzOffscreenRend) -> +0x10 (CSRuntimeTexResCap) -> +GX (CSGxTexture) -- the exact texture the
         // forge re-bind should publish. And read the bound container's CURRENT first-TexResCap GX. If
         // chain_gx != bound_gx, the re-bind is publishing the wrong (stale menu) texture, not our live RT.
-        let (mut ch_r, mut ch_off, mut ch_trc, mut ch_gx, mut bound_gx) = (0usize, 0usize, 0usize, 0usize, 0usize);
+        let (mut ch_r, mut ch_off, mut ch_trc, mut ch_gx, mut bound_gx) =
+            (0usize, 0usize, 0usize, 0usize, 0usize);
         if let Ok(b) = game_module_base() {
             let slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
             let r = unsafe { safe_read_usize(portrait_renderer_table_entry(b, slot)) }.unwrap_or(0);
@@ -3328,12 +3338,16 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
                 .unwrap_or(0);
                 if ch_off != 0 && ch_off != null {
                     ch_trc = unsafe {
-                        safe_read_usize(ch_off + TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET)
+                        safe_read_usize(
+                            ch_off + TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET,
+                        )
                     }
                     .unwrap_or(0);
                     if ch_trc != 0 && ch_trc != null {
                         ch_gx = unsafe {
-                            safe_read_usize(ch_trc + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET)
+                            safe_read_usize(
+                                ch_trc + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET,
+                            )
                         }
                         .unwrap_or(0);
                     }
@@ -3342,13 +3356,21 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
             // Bound container's first TexResCap GX (what the loading screen actually samples).
             let cap = LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT.load(Ordering::SeqCst);
             if cap != 0 && cap != null {
-                let container = unsafe { safe_read_usize(cap + TPF_FILE_CAP_TEX_RESCAP_OFFSET) }.unwrap_or(0);
+                let container =
+                    unsafe { safe_read_usize(cap + TPF_FILE_CAP_TEX_RESCAP_OFFSET) }.unwrap_or(0);
                 if container != 0 && container != null {
-                    let array = unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_ARRAY_OFFSET) }.unwrap_or(0);
+                    let array =
+                        unsafe { safe_read_usize(container + TPF_RESCAP_CONTAINER_ARRAY_OFFSET) }
+                            .unwrap_or(0);
                     if array != 0 && array != null {
                         let trc0 = unsafe { safe_read_usize(array) }.unwrap_or(0);
                         if trc0 != 0 && trc0 != null {
-                            bound_gx = unsafe { safe_read_usize(trc0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) }.unwrap_or(0);
+                            bound_gx = unsafe {
+                                safe_read_usize(
+                                    trc0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET,
+                                )
+                            }
+                            .unwrap_or(0);
                         }
                     }
                 }
@@ -3707,7 +3729,11 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     PROFILE_LOADSCREEN_TABLE_BUILDS.fetch_add(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "loading-portrait: empty profile table (trigger={} streak={streak}) -> called builder 0x{:x} to build our own renderers for the post-Continue portrait",
-        if nowload { "now-loading" } else { "empty-streak" },
+        if nowload {
+            "now-loading"
+        } else {
+            "empty-streak"
+        },
         base + PROFILE_TABLE_BUILDER_RVA
     ));
 }
@@ -3894,8 +3920,8 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                         .unwrap_or(false)
                 {
                     PROFILE_SPARE_CANDIDATE.store(r, Ordering::SeqCst);
-                    let model =
-                        unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }.unwrap_or(0);
+                    let model = unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
+                        .unwrap_or(0);
                     PROFILE_SPARE_CANDIDATE_MODEL.store(model, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         "loading-portrait: pre-recorded spare candidate renderer=0x{r:x} slot={s} model_ins=0x{model:x} (model built at menu)"
@@ -4278,7 +4304,8 @@ unsafe fn forge_into_rti(
         unsafe { std::mem::transmute(base + TPF_FILE_CAP_CTOR_RVA) };
     unsafe { cap_ctor(cap, 0) };
     unsafe {
-        ((cap + TPF_FILE_CAP_LOAD_STATE_OFFSET) as *mut u8).write_volatile(TPF_FILE_CAP_LOADED_STATE)
+        ((cap + TPF_FILE_CAP_LOAD_STATE_OFFSET) as *mut u8)
+            .write_volatile(TPF_FILE_CAP_LOADED_STATE)
     };
     let prev_flags = unsafe { safe_read_u8(cap + TPF_FILE_CAP_FLAGS_OFFSET) }.unwrap_or(0);
     unsafe {
@@ -4290,7 +4317,14 @@ unsafe fn forge_into_rti(
     if substr_symbol != 0 {
         let substr: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
             unsafe { std::mem::transmute(base + DLSTRING_WCHAR_SUBSTR_RVA) };
-        unsafe { substr(rti + REPLACE_TEX_INFO_SYMBOL_OFFSET, substr_symbol, 0, usize::MAX) };
+        unsafe {
+            substr(
+                rti + REPLACE_TEX_INFO_SYMBOL_OFFSET,
+                substr_symbol,
+                0,
+                usize::MAX,
+            )
+        };
     }
     unsafe { ((rti + REPLACE_TEX_INFO_TPF_FILE_CAP_OFFSET) as *mut usize).write_volatile(cap) };
     unsafe { ((rti + REPLACE_TEX_INFO_READY_OFFSET) as *mut u8).write_volatile(0) };

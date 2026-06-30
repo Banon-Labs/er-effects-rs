@@ -530,6 +530,12 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 } else {
                     release_input_block_now();
                 }
+                // D3D12 PRESENT OVERLAY: once the GX device is up, find the game's live swapchain and hook
+                // its REAL Present (the dummy-swapchain vtable differs under vkd3d-proton). Self-gated
+                // (portrait path only, one-shot on success, bounded retries) so it's cheap every frame.
+                if let Ok(base) = game_module_base() {
+                    unsafe { try_install_game_present_hook(base) };
+                }
                 // before the player check so it arms at the title (pre-load), independent
                 // of the active observe/own-stepper mode.
                 if c30_watch_enabled() {

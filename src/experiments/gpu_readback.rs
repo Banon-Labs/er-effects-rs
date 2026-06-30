@@ -25,13 +25,13 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12_COMMAND_QUEUE_FLAG_NONE,
     D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_FENCE_FLAG_NONE, D3D12_HEAP_FLAG_NONE,
     D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_READBACK, D3D12_HEAP_TYPE_UPLOAD,
-    D3D12_MEMORY_POOL_UNKNOWN, D3D12_RESOURCE_STATE_GENERIC_READ,
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RANGE, D3D12_RESOURCE_BARRIER,
-    D3D12_RESOURCE_BARRIER_0, D3D12_RESOURCE_BARRIER_FLAG_NONE,
+    D3D12_MEMORY_POOL_UNKNOWN, D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RANGE,
+    D3D12_RESOURCE_BARRIER, D3D12_RESOURCE_BARRIER_0, D3D12_RESOURCE_BARRIER_FLAG_NONE,
     D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_BUFFER,
     D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COMMON,
-    D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATES,
-    D3D12_RESOURCE_TRANSITION_BARRIER, D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
+    D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE,
+    D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_STATES, D3D12_RESOURCE_TRANSITION_BARRIER,
+    D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
     D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
     D3D12_TEXTURE_LAYOUT_ROW_MAJOR, ID3D12CommandAllocator, ID3D12CommandList, ID3D12CommandQueue,
     ID3D12Device, ID3D12Fence, ID3D12GraphicsCommandList, ID3D12Resource,
@@ -71,7 +71,7 @@ unsafe fn pe_image_range(base: usize) -> Option<(usize, usize)> {
 }
 
 /// `[base, base+SizeOfImage)` for a loaded module by null-terminated ASCII name, or `None`.
-unsafe fn module_range(name: &[u8]) -> Option<(usize, usize)> {
+pub(crate) unsafe fn module_range(name: &[u8]) -> Option<(usize, usize)> {
     let h = unsafe { GetModuleHandleA(PCSTR(name.as_ptr())) }.ok()?;
     unsafe { pe_image_range(h.0 as usize) }
 }
@@ -134,7 +134,10 @@ unsafe fn find_d3d12_resource(start: usize) -> Option<ID3D12Resource> {
 /// (b) skips any candidate whose pointer == `exclude_v`. Lets the RT->SRV copy pick the SRV from its own
 /// single-texture nest, then the LARGEST OTHER texture in the offscreen nest as the content source --
 /// deterministic where plain "largest texture" is ambiguous between two same-size textures.
-unsafe fn find_d3d12_resource_ex(start: usize, exclude_v: usize) -> Option<(ID3D12Resource, usize)> {
+unsafe fn find_d3d12_resource_ex(
+    start: usize,
+    exclude_v: usize,
+) -> Option<(ID3D12Resource, usize)> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if start == 0 || start == null {
         return None;
@@ -272,7 +275,9 @@ pub(crate) unsafe fn readback_excluding_rgba8(
     exclude_start: usize,
 ) -> Option<(u32, u32, Vec<u8>)> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        let exclude_v = find_d3d12_resource_ex(exclude_start, 0).map(|(_, v)| v).unwrap_or(0);
+        let exclude_v = find_d3d12_resource_ex(exclude_start, 0)
+            .map(|(_, v)| v)
+            .unwrap_or(0);
         let (resource, _) = find_d3d12_resource_ex(start, exclude_v)?;
         readback_resource_rgba8_inner(resource)
     }))
@@ -554,12 +559,13 @@ unsafe fn copy_offscreen_rt_to_srv_inner(src_gpu_child: usize, dst_gpu_child: us
         Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
         NodeMask: 0,
     };
-    let Ok(queue) = (unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue_desc) }) else {
+    let Ok(queue) = (unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue_desc) })
+    else {
         return false;
     };
-    let Ok(allocator) =
-        (unsafe { device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT) })
-    else {
+    let Ok(allocator) = (unsafe {
+        device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)
+    }) else {
         return false;
     };
     let Ok(list) = (unsafe {
@@ -762,7 +768,8 @@ unsafe fn upload_rgba_to_texture_inner(
         Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
         NodeMask: 0,
     };
-    let Ok(queue) = (unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue_desc) }) else {
+    let Ok(queue) = (unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue_desc) })
+    else {
         return false;
     };
     let Ok(allocator) = (unsafe {
