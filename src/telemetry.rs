@@ -2042,6 +2042,11 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         );
         push_json_usize(
             body,
+            "oracle_profile_cam_face_yaw_latched_mask",
+            PROFILE_CAM_FACE_YAW_LATCHED_MASK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
             "oracle_profile_cam_last_slot",
             PROFILE_CAM_LAST_SLOT.load(Ordering::SeqCst),
         );

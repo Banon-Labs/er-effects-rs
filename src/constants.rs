@@ -815,6 +815,16 @@ pub(crate) static LOADING_BG_PORTRAIT_FORMAT: AtomicUsize = AtomicUsize::new(0);
 /// real "portrait is rendering" gate (the +0x754/+0x755 bytes are only a setup-submitted latch).
 pub(crate) const PROFILE_RENDERER_MARKED_DELETE_OFFSET: usize = 0x756;
 pub(crate) const PROFILE_RENDERER_MODEL_INS_OFFSET: usize = 0x778;
+/// `CSMenuAsmModelRend`'s row-major model transform (`renderer+0x900..0x93f`), copied into the
+/// rendered `CSModelIns` every rabbit-task tick by `FUN_140bba820`. The identity default is loaded from
+/// `FLOAT_ARRAY_1430b07a0`; when this changes, its Z axis is the model's backing orientation and the
+/// portrait camera should orbit to the model's face, not a hard-coded screen yaw.
+pub(crate) const PROFILE_RENDERER_MODEL_MATRIX_OFFSET: usize = 0x900;
+/// Per-slot model-facing yaw latched from the first live model pose/matrix and added to the profile camera
+/// orbit. This keeps the loading portrait facing the viewer even when the model/root pose is off-axis.
+pub(crate) static PROFILE_CAM_FACE_YAW: std::sync::Mutex<[Option<f32>; 10]> =
+    std::sync::Mutex::new([None; 10]);
+pub(crate) static PROFILE_CAM_FACE_YAW_LATCHED_MASK: AtomicUsize = AtomicUsize::new(0);
 /// `CSGxTexture` GPU-resource child pointer (gx+0x10): non-null once at least one offscreen draw has
 /// uploaded the texture. Refcount is the uniform DLReferenceCountObject i32 at obj+0x8.
 pub(crate) const GX_TEXTURE_GPU_RESOURCE_OFFSET: usize = 0x10;
@@ -1158,6 +1168,12 @@ pub(crate) const LOOKAT_MAX_BONES: usize = 512;
 /// Cursor -> look angle gains (radians at the window edge). Head carries the bulk (eyes are welded to
 /// it); neck/spine2 add a natural distributed turn. Yaw = horizontal, pitch = vertical. SIGN + which
 /// local bone axis each maps to need ONE runtime visual calibration (the portrait camera mirrors L/R).
+/// GAIN CALIBRATION IS BLOCKED until the model faces the camera (2026-06-30): once the posed model
+/// re-rasterizes per frame, the rendered head shows the BACK of the head at BOTH cursor extremes AND at
+/// center (look-at~0) -- so the model root/skeleton renders facing AWAY, independent of these gains
+/// (cutting them 6x in calib-6 changed nothing). Until the facing is fixed (camera orbit to the model's
+/// front; cf the concurrent PROFILE_CAM_FACE_YAW effort) the face is not visible, so the look-at strength
+/// cannot be visually tuned. Keeping the original gains (they gave a clear ~23-37/px head-turn signal).
 pub(crate) const LOOKAT_HEAD_YAW_GAIN: f32 = 0.34;
 pub(crate) const LOOKAT_HEAD_PITCH_GAIN: f32 = 0.22;
 pub(crate) const LOOKAT_NECK_YAW_GAIN: f32 = 0.15;

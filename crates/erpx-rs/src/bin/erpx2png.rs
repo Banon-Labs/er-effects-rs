@@ -48,7 +48,11 @@ fn main() -> ExitCode {
         input.display(),
         img.width,
         img.height,
-        if img.is_complete() { "complete" } else { "TRUNCATED " },
+        if img.is_complete() {
+            "complete"
+        } else {
+            "TRUNCATED "
+        },
         img.rgba.len(),
         output.display()
     );

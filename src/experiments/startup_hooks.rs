@@ -2149,23 +2149,20 @@ unsafe fn refresh_loading_bg_live_gx(base: usize) {
     {
         return;
     }
-    let off = unsafe {
-        safe_read_usize(r + TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET)
-    }
-    .unwrap_or(0);
+    let off =
+        unsafe { safe_read_usize(r + TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET) }
+            .unwrap_or(0);
     if !valid(off) {
         return;
     }
-    let trc = unsafe {
-        safe_read_usize(off + TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET)
-    }
-    .unwrap_or(0);
+    let trc =
+        unsafe { safe_read_usize(off + TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET) }
+            .unwrap_or(0);
     if !valid(trc) {
         return;
     }
-    let bind_gx =
-        unsafe { safe_read_usize(trc + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) }
-            .unwrap_or(0);
+    let bind_gx = unsafe { safe_read_usize(trc + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) }
+        .unwrap_or(0);
     if !valid(bind_gx) {
         return;
     }
@@ -2976,6 +2973,21 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize) {
             }
             .unwrap_or(0);
             if off != 0 && off != null {
+                // RE-RASTERIZE the posed model into OUR built renderer's offscreen RT each render-thread
+                // frame. draw_step (the per-slot rasterize loop over the title table) does NOT include our
+                // own-built renderer, and the engine only redraws on profile data-change -- so without this
+                // the look-at bone writes never reach the RT and the captured head is a STALE render (proven:
+                // cursor LEFT vs RIGHT dumps were 95% identical, head centroid did not move). The offscreen
+                // thunk (FUN_140bb8ca0) submits FUN_140bb73a0(*(r+0xa8)) using the live global GxDrawContext;
+                // we OWN this renderer (force_profile_render built it) so its model+deps are alive (unlike the
+                // teardown-freed spared renderer this crashes on). Runs before the RT->SRV copy + readback so
+                // they capture the fresh pose. Gated by the existing render-drive lever; bumps the hits oracle.
+                if portrait_render_drive_enabled() {
+                    let drive: unsafe extern "system" fn(usize) =
+                        unsafe { core::mem::transmute(base + PROFILE_OFFSCREEN_DRIVE_RVA) };
+                    unsafe { drive(r) };
+                    PROFILE_RENDER_DRIVE_HITS.fetch_add(1, Ordering::SeqCst);
+                }
                 let trc = unsafe {
                     safe_read_usize(off + TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET)
                 }
@@ -3020,10 +3032,8 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize) {
                                 let nb = portrait_center_nonblack(cw, ch, &cpx);
                                 LOADING_BG_PORTRAIT_NONBLACK.store(nb as usize, Ordering::SeqCst);
                                 LOADING_BG_PORTRAIT_IS_CHECKER.store(0, Ordering::SeqCst);
-                                LOADING_BG_PORTRAIT_DIMS.store(
-                                    ((cw as usize) << 16) | (ch as usize),
-                                    Ordering::SeqCst,
-                                );
+                                LOADING_BG_PORTRAIT_DIMS
+                                    .store(((cw as usize) << 16) | (ch as usize), Ordering::SeqCst);
                                 // MOUSE-TRACK PROOF (selftest): one-shot dump the LIVE head at three
                                 // held yaw buckets so the look-left/center/look-right poses are
                                 // visually inspectable. The selftest sinusoid sweeps `yaw` across
@@ -3055,8 +3065,7 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize) {
                                 if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
                                     *g = Some((cw, ch, cpx));
                                 }
-                                LOADING_BG_PORTRAIT_RGBA_VERSION
-                                    .fetch_add(1, Ordering::SeqCst);
+                                LOADING_BG_PORTRAIT_RGBA_VERSION.fetch_add(1, Ordering::SeqCst);
                                 // Gate the present-overlay on (now there is a real live head to show).
                                 PROFILE_BAKE_RGBA_CAPTURED.store(1, Ordering::SeqCst);
                                 if PROFILE_LIVE_FEED_LOGGED.swap(1, Ordering::SeqCst) == 0 {
@@ -3657,7 +3666,137 @@ fn install_per_frame_push_hook() {
     }
 }
 
-/// CAMERA LEVER: override one profile renderer's orbit camera with a custom viewport (closer, off-axis
+/// Rotate a vector by an `(x,y,z,w)` quaternion. Used for extracting the portrait model's face direction
+/// from the Head bone's model-space orientation without depending on any screen-space visual heuristic.
+fn quat_rotate_vec3(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
+    let [x, y, z, w] = q;
+    let [vx, vy, vz] = v;
+    let tx = 2.0 * (y * vz - z * vy);
+    let ty = 2.0 * (z * vx - x * vz);
+    let tz = 2.0 * (x * vy - y * vx);
+    [
+        vx + w * tx + (y * tz - z * ty),
+        vy + w * ty + (z * tx - x * tz),
+        vz + w * tz + (x * ty - y * tx),
+    ]
+}
+
+/// Read the model transform's horizontal facing yaw from the `CSMenuAsmModelRend` row-major matrix at
+/// `renderer+0x900`. The model's face is its local `-Z`; the matrix stores basis vectors by column, so the
+/// Z axis lives at row0.z/row1.z/row2.z. Identity -> face direction `(0,0,-1)` -> yaw 0.
+unsafe fn profile_model_matrix_facing_yaw(renderer: usize) -> Option<f32> {
+    let read_f32 = |off: usize| -> Option<f32> {
+        unsafe { safe_read_i32(renderer + off) }.map(|b| f32::from_bits(b as u32))
+    };
+    let zx = read_f32(PROFILE_RENDERER_MODEL_MATRIX_OFFSET + 0x8)?;
+    let zz = read_f32(PROFILE_RENDERER_MODEL_MATRIX_OFFSET + 0x28)?;
+    if !(zx.is_finite() && zz.is_finite()) {
+        return None;
+    }
+    if zx * zx + zz * zz < 0.0001 {
+        return None;
+    }
+    Some(zx.atan2(zz))
+}
+
+unsafe fn resolve_head_bone_index(skel: usize, count: usize) -> Option<usize> {
+    let bones = unsafe { safe_read_usize(skel + HKA_SKELETON_BONES_DATA_OFFSET) }.unwrap_or(0);
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if bones == 0 || bones == null {
+        return None;
+    }
+    for i in 0..count.min(LOOKAT_MAX_BONES) {
+        let name_ptr =
+            unsafe { safe_read_usize(bones + i * HKA_BONE_STRIDE + HKA_BONE_NAME_OFFSET) }?
+                & !1usize;
+        let Some(name) = (unsafe { read_bone_name(name_ptr) }) else {
+            continue;
+        };
+        if name.eq_ignore_ascii_case(LOOKAT_BONE_HEAD) {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Prefer the live Head bone's model-space quaternion when the model has already built: it captures the
+/// actual face direction of the rendered pose (including any native idle/root orientation). Fall back to
+/// the renderer model matrix while the skeleton is not live yet.
+unsafe fn profile_model_facing_yaw(renderer: usize) -> Option<f32> {
+    let holder = unsafe { profile_pose_holder(renderer) }?;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let valid = |p: usize| p != 0 && p != null;
+    let skel = unsafe { safe_read_usize(holder + POSEHOLDER_SKELETON_OFFSET) }.unwrap_or(0);
+    if !valid(skel) {
+        return unsafe { profile_model_matrix_facing_yaw(renderer) };
+    }
+    let count = unsafe { safe_read_i32(skel + HKA_SKELETON_BONES_SIZE_OFFSET) }.unwrap_or(0);
+    if count <= 0 || count as usize > LOOKAT_MAX_BONES {
+        return unsafe { profile_model_matrix_facing_yaw(renderer) };
+    }
+    let head = match unsafe { resolve_head_bone_index(skel, count as usize) } {
+        Some(idx) => idx,
+        None => return unsafe { profile_model_matrix_facing_yaw(renderer) },
+    };
+    let model = unsafe { safe_read_usize(holder + POSEHOLDER_MODEL_BONE_DATA_OFFSET) }.unwrap_or(0);
+    if !valid(model) {
+        return unsafe { profile_model_matrix_facing_yaw(renderer) };
+    }
+    let Some(mut q) = (unsafe { read_quat(model + head * BONE_DATA_STRIDE + BONE_DATA_Q_OFFSET) })
+    else {
+        return unsafe { profile_model_matrix_facing_yaw(renderer) };
+    };
+    let len2 = q.iter().map(|v| v * v).sum::<f32>();
+    if !(len2.is_finite() && len2 > 0.0001) {
+        return unsafe { profile_model_matrix_facing_yaw(renderer) };
+    }
+    let inv_len = len2.sqrt().recip();
+    for v in &mut q {
+        *v *= inv_len;
+    }
+    // Elden Ring c0000 faces local -Z in the portrait renderer: identity pose + yaw 0 already shows the
+    // character front-on. Convert the rotated face vector into the camera-orbit yaw whose target->camera
+    // vector is `(-sin(yaw), 0, -cos(yaw))`.
+    let face = quat_rotate_vec3(q, [0.0, 0.0, -1.0]);
+    let xz2 = face[0] * face[0] + face[2] * face[2];
+    if !(xz2.is_finite() && xz2 > 0.0001) {
+        return unsafe { profile_model_matrix_facing_yaw(renderer) };
+    }
+    Some((-face[0]).atan2(-face[2]))
+}
+
+unsafe fn latched_profile_model_facing_yaw(renderer: usize, idx: usize) -> f32 {
+    if idx >= TITLE_PROFILE_SLOT_COUNT {
+        return 0.0;
+    }
+    {
+        let guard = match PROFILE_CAM_FACE_YAW.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if let Some(yaw) = guard[idx] {
+            return yaw;
+        }
+    }
+    let Some(yaw) = (unsafe { profile_model_facing_yaw(renderer) }) else {
+        return 0.0;
+    };
+    if !yaw.is_finite() {
+        return 0.0;
+    }
+    let mut guard = match PROFILE_CAM_FACE_YAW.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    let yaw = *guard[idx].get_or_insert(yaw);
+    PROFILE_CAM_FACE_YAW_LATCHED_MASK.fetch_or(1usize << idx, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "profile-camera: latched model-facing yaw slot={idx} yaw_rad={yaw:.4}"
+    ));
+    yaw
+}
+
+/// CAMERA LEVER: override one profile renderer's orbit camera with a custom viewport (closer, model-facing
 /// framing), proving the lever on the still dump. Replicates the tail of the engine's own camera routine
 /// `FUN_140bbe190` WITHOUT its `MenuOffscrRendParam` read (so it never clobbers our override): latch the
 /// engine baseline once, write the orbit fields from `baseline + offsets`, rebuild the view matrix via
@@ -3736,6 +3875,14 @@ unsafe fn apply_profile_camera_override(base: usize, renderer: usize, slot: i32)
     let target = baseline.target;
     let distance = baseline.distance * PROFILE_CAM_DISTANCE_SCALE;
     let pitch = baseline.pitch + PROFILE_CAM_PITCH_DELTA_RAD;
+    // FACING: the engine baseline.yaw (latched from the engine's param-derived camera) ALREADY frames the
+    // model FRONT-on -- the natural profile render shows the face. The detected model-facing yaw is the
+    // model's intrinsic orientation, which is REDUNDANT with that baseline: adding it (here ~-π) orbits the
+    // camera a further ~180deg to the BACK of the head (observed calib-6: facing latched -3.14, render = back
+    // of head at every cursor position). So do NOT add it to the camera yaw; keep the detection for the
+    // telemetry/log only. (If a future renderer's baseline does NOT face front, revisit -- but our own-built
+    // renderer inherits the engine's front-facing param camera.)
+    let _facing_yaw = unsafe { latched_profile_model_facing_yaw(renderer, idx) };
     let yaw = baseline.yaw + PROFILE_CAM_YAW_DELTA_RAD;
     let fov = baseline.fov * PROFILE_CAM_FOV_SCALE;
     // Write the orbit fields (mirrors `FUN_140bbe190`'s field writes, minus the param read). The
@@ -4016,7 +4163,8 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                 unsafe { core::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
             unsafe { refresh() };
             // Drive the freshly-requested build to completion + keep it latched through the loading screen.
-            PROFILE_LOADSCREEN_FEED_TICKS.store(PROFILE_LOADSCREEN_FEED_WINDOW_TICKS, Ordering::SeqCst);
+            PROFILE_LOADSCREEN_FEED_TICKS
+                .store(PROFILE_LOADSCREEN_FEED_WINDOW_TICKS, Ordering::SeqCst);
             if PROFILE_REAL_SLOT_KICK_LOGGED.swap(1, Ordering::SeqCst) == 0 {
                 append_autoload_debug(format_args!(
                     "force-profile-render: IMMEDIATE build kick -- {kicked} real slot(s) (mask=0x{kicked_mask:x}) became available with req754=0; marked + refreshed off-cadence + opened feed window (summary=0x{summary:x})"
@@ -4089,6 +4237,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                 Ok(mut g) => *g = [None; 10],
                 Err(p) => *p.into_inner() = [None; 10],
             }
+            match PROFILE_CAM_FACE_YAW.lock() {
+                Ok(mut g) => *g = [None; 10],
+                Err(p) => *p.into_inner() = [None; 10],
+            }
+            PROFILE_CAM_FACE_YAW_LATCHED_MASK.store(0, Ordering::SeqCst);
             // The models are being rebuilt -> the cached PoseHolder pointers are about to go stale. Drop
             // them so they re-resolve against the fresh skeletons (and re-latch a clean base) before the
             // sticky-keep path above starts driving them again.

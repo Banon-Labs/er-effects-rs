@@ -1040,7 +1040,9 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             move |_task_data: &FD4TaskData| {
                 if portrait_render_drive_enabled() {
                     if let Ok(base) = game_module_base() {
-                        unsafe { force_profile_render_tick(base, FORCE_PROFILE_RENDER_MANUAL_SLOT) };
+                        unsafe {
+                            force_profile_render_tick(base, FORCE_PROFILE_RENDER_MANUAL_SLOT)
+                        };
                     }
                 }
             },

@@ -1326,8 +1326,10 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
     if OVERLAY_DRAW_STATE.load(Ordering::SeqCst) == 0 {
         if unsafe { init_overlay_draw_state(&backbuffer) } {
             OVERLAY_DRAW_STATE.store(1, Ordering::SeqCst);
-            OVERLAY_PORTRAIT_VERSION
-                .store(LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst), Ordering::SeqCst);
+            OVERLAY_PORTRAIT_VERSION.store(
+                LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst),
+                Ordering::SeqCst,
+            );
             append_autoload_debug(format_args!(
                 "present-overlay: draw state READY (portrait {}x{})",
                 OVERLAY_PORTRAIT_W.load(Ordering::SeqCst),
@@ -1348,10 +1350,7 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
     // failure keep the previous texture (draw the last good frame). Our own queue/device, no game state.
     let cur_ver = LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst);
     if cur_ver != OVERLAY_PORTRAIT_VERSION.load(Ordering::SeqCst) {
-        let snap = LOADING_BG_PORTRAIT_RGBA
-            .lock()
-            .ok()
-            .and_then(|g| g.clone());
+        let snap = LOADING_BG_PORTRAIT_RGBA.lock().ok().and_then(|g| g.clone());
         if let Some((nw, nh, npx)) = snap {
             if nw as usize == OVERLAY_PORTRAIT_W.load(Ordering::SeqCst)
                 && nh as usize == OVERLAY_PORTRAIT_H.load(Ordering::SeqCst)
