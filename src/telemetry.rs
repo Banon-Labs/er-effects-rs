@@ -2114,6 +2114,33 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_profile_lookat_track_buckets",
             PROFILE_LOOKAT_TRACK_BUCKETS.load(Ordering::SeqCst),
         );
+        // DISPLAY path (keepalive): the loading-screen image follows the cursor per-frame only if the
+        // Present overlay composites + re-uploads each frame. present_hook_hits = Present detour frames;
+        // overlay_draw_hits = backbuffer composites; overlay_reuploads = per-frame texture rebuilds from a
+        // version-bumped LOADING_BG_PORTRAIT_RGBA (the displayed head actually tracked, not frozen).
+        push_json_usize(
+            body,
+            "oracle_present_hook_hits",
+            PRESENT_HOOK_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_overlay_draw_hits",
+            OVERLAY_DRAW_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_overlay_reuploads",
+            OVERLAY_REUPLOADS.load(Ordering::SeqCst),
+        );
+        // The draw-tick readback's per-frame republish count (==RGBA version). If ~= render_drive_hits the
+        // readback publishes per-frame (so a low overlay_reuploads means the composite upload is the
+        // bottleneck); if this is itself ~4 the per-frame readback/publish is.
+        push_json_usize(
+            body,
+            "oracle_loading_bg_portrait_rgba_version",
+            LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst),
+        );
         body.push_str(&format!(
             "  \"oracle_native_profile_capture_enabled\": {},\n  \"oracle_native_load_game_fired\": {},\n  \"oracle_native_load_game_last_node\": {},\n  \"oracle_native_load_game_last_node_vtable\": {},\n  \"oracle_native_load_game_last_member_dialog\": {},\n  \"oracle_native_load_game_last_member_fn\": {},\n  \"oracle_native_load_game_last_member_adjust\": {},\n  \"oracle_native_profile_source_ready\": {},\n  \"oracle_native_profile_source_name\": \"{}\",\n  \"oracle_native_profile_renderer_class\": \"{}\",\n",
             native_profile_capture_enabled(),

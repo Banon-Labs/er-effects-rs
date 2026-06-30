@@ -82,6 +82,10 @@ static OVERLAY_PORTRAIT_W: AtomicUsize = AtomicUsize::new(0);
 static OVERLAY_PORTRAIT_H: AtomicUsize = AtomicUsize::new(0);
 /// Successful backbuffer composites submitted (RAM semaphore that the portrait is actually being drawn).
 pub(crate) static OVERLAY_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Count of LIVE RE-UPLOADS: each time the overlay source texture was rebuilt from a fresh
+/// (version-bumped) `LOADING_BG_PORTRAIT_RGBA` -> proves the DISPLAYED head updated per-frame (followed
+/// the cursor), not froze on the first captured frame. `oracle_overlay_reuploads`.
+pub(crate) static OVERLAY_REUPLOADS: AtomicUsize = AtomicUsize::new(0);
 /// Latches once the in-world NowLoading streaming screen has been seen, so we can detect world-ready
 /// (NowLoading seen, then both loading signals down) and stop compositing once the player is in the world.
 static OVERLAY_NOW_LOADING_SEEN: AtomicUsize = AtomicUsize::new(0);
@@ -317,6 +321,19 @@ pub(crate) unsafe fn readback_excluding_rgba8(
 /// Cached AddRef'd content-RT `ID3D12Resource` raw pointer (0 = not yet resolved). Set once by the first
 /// `readback_cached_content_rgba8` scan; re-copied every frame after without re-scanning.
 pub(crate) static PROFILE_LIVE_RT_RES: AtomicUsize = AtomicUsize::new(0);
+/// PER-FRAME readback resource cache (created ONCE on the game device, reused every frame). The original
+/// per-call readback created a fresh command queue + allocator + list + fence + buffer EACH frame; under
+/// the loading screen that mostly failed at resource creation (command-queue creation is limited), so the
+/// readback published only ~4x and the displayed head froze. Caching them lets the per-frame readback be a
+/// cheap reset+copy+wait, so it publishes every frame and the overlay re-uploads the tracking head per
+/// frame. Raw COM pointers owned by these statics (released only on dims change).
+static RB_FAST_QUEUE: AtomicUsize = AtomicUsize::new(0);
+static RB_FAST_ALLOC: AtomicUsize = AtomicUsize::new(0);
+static RB_FAST_LIST: AtomicUsize = AtomicUsize::new(0);
+static RB_FAST_FENCE: AtomicUsize = AtomicUsize::new(0);
+static RB_FAST_BUFFER: AtomicUsize = AtomicUsize::new(0);
+static RB_FAST_BUFSIZE: AtomicU64 = AtomicU64::new(0);
+static RB_FAST_FENCEVAL: AtomicU64 = AtomicU64::new(0);
 /// Counter so the deterministic-resolve diagnostic logs only the first few attempts.
 static PROFILE_DET_RESOLVE_DIAG: AtomicUsize = AtomicUsize::new(0);
 
@@ -413,7 +430,9 @@ pub(crate) unsafe fn readback_cached_content_rgba8(
             // value into the readback (which drops that clone normally).
             let raw = cached as *mut c_void;
             let res = ID3D12Resource::from_raw_borrowed(&raw)?;
-            return readback_resource_rgba8_inner(res.clone());
+            // Cached-resource readback: reuse RB_FAST_* objects so this succeeds EVERY frame (the per-call
+            // version created a new queue each frame and mostly failed -> published only ~4x).
+            return readback_resource_cached_fast(res.clone());
         }
         // First resolve: deterministic chain (no scan); else a ONE-TIME scan of the OFFSCREEN nest, then
         // cache an AddRef'd ref for all future frames. The build-own (post-Continue) renderer's GX wrapper
@@ -431,7 +450,7 @@ pub(crate) unsafe fn readback_cached_content_rgba8(
         append_autoload_debug(format_args!(
             "live-feed: content RT resolved from start=0x{start:x} srv_gx=0x{srv_gx:x} via {how} -> cached resource -- per-frame tracking now safe"
         ));
-        readback_resource_rgba8_inner(resource)
+        readback_resource_cached_fast(resource)
     }))
     .ok()
     .flatten()
@@ -644,6 +663,222 @@ unsafe fn readback_resource_rgba8_inner(resource: ID3D12Resource) -> Option<(u32
     let write_range = D3D12_RANGE { Begin: 0, End: 0 };
     unsafe { readback.Unmap(0, Some(&write_range)) };
 
+    Some((width, height, out))
+}
+
+/// Per-frame readback of `resource` reusing the CACHED `RB_FAST_*` queue/allocator/list/fence/buffer
+/// (created once on the game device). Identical copy+wait+de-swizzle to `readback_resource_rgba8_inner`
+/// but it does NOT create new D3D12 objects each call -- which is why the per-call version published only
+/// ~4x under loading (command-queue creation kept failing). With the cache the readback succeeds every
+/// frame so the displayed head follows the cursor. Returns `None` on any failure (draws the last frame).
+unsafe fn readback_resource_cached_fast(resource: ID3D12Resource) -> Option<(u32, u32, Vec<u8>)> {
+    let mut device_opt: Option<ID3D12Device> = None;
+    unsafe { resource.GetDevice(&mut device_opt) }.ok()?;
+    let device = device_opt?;
+    let desc: D3D12_RESOURCE_DESC = unsafe { resource.GetDesc() };
+    let width = desc.Width as u32;
+    let height = desc.Height;
+    let format = desc.Format;
+    LOADING_BG_PORTRAIT_FORMAT.store(format.0 as usize, Ordering::SeqCst);
+    if width == 0 || height == 0 || width > MAX_RT_DIM || height > MAX_RT_DIM {
+        return None;
+    }
+    let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+    let mut num_rows: u32 = 0;
+    let mut row_size_bytes: u64 = 0;
+    let mut total_bytes: u64 = 0;
+    unsafe {
+        device.GetCopyableFootprints(
+            &desc,
+            0,
+            1,
+            0,
+            Some(&mut footprint),
+            Some(&mut num_rows),
+            Some(&mut row_size_bytes),
+            Some(&mut total_bytes),
+        )
+    };
+    if total_bytes == 0 || footprint.Footprint.RowPitch == 0 {
+        return None;
+    }
+    // Create the cached queue/allocator/list/fence ONCE (the list is left Closed so the first Reset works).
+    if RB_FAST_QUEUE.load(Ordering::SeqCst) == 0 {
+        let queue_desc = D3D12_COMMAND_QUEUE_DESC {
+            Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+            Priority: 0,
+            Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
+            NodeMask: 0,
+        };
+        let queue: ID3D12CommandQueue = unsafe { device.CreateCommandQueue(&queue_desc) }.ok()?;
+        let allocator: ID3D12CommandAllocator =
+            unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }.ok()?;
+        let list: ID3D12GraphicsCommandList = unsafe {
+            device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)
+        }
+        .ok()?;
+        unsafe { list.Close() }.ok()?;
+        let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }.ok()?;
+        RB_FAST_QUEUE.store(queue.into_raw() as usize, Ordering::SeqCst);
+        RB_FAST_ALLOC.store(allocator.into_raw() as usize, Ordering::SeqCst);
+        RB_FAST_LIST.store(list.into_raw() as usize, Ordering::SeqCst);
+        RB_FAST_FENCE.store(fence.into_raw() as usize, Ordering::SeqCst);
+    }
+    // (Re)create the cached readback buffer if the footprint size changed (it won't for a fixed RT).
+    if RB_FAST_BUFSIZE.load(Ordering::SeqCst) != total_bytes {
+        let heap_props = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_READBACK,
+            CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+            MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+            CreationNodeMask: 1,
+            VisibleNodeMask: 1,
+        };
+        let buffer_desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+            Alignment: 0,
+            Width: total_bytes,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: DXGI_FORMAT_UNKNOWN,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            Flags: D3D12_RESOURCE_FLAG_NONE,
+        };
+        let mut readback_opt: Option<ID3D12Resource> = None;
+        unsafe {
+            device.CreateCommittedResource(
+                &heap_props,
+                D3D12_HEAP_FLAG_NONE,
+                &buffer_desc,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                None,
+                &mut readback_opt,
+            )
+        }
+        .ok()?;
+        let buf = readback_opt?;
+        let old = RB_FAST_BUFFER.swap(buf.into_raw() as usize, Ordering::SeqCst);
+        if old != 0 {
+            drop(unsafe { ID3D12Resource::from_raw(old as *mut c_void) });
+        }
+        RB_FAST_BUFSIZE.store(total_bytes, Ordering::SeqCst);
+    }
+    // Borrow the cached COM objects (no refcount change; the statics own them).
+    let q_raw = RB_FAST_QUEUE.load(Ordering::SeqCst) as *mut c_void;
+    let a_raw = RB_FAST_ALLOC.load(Ordering::SeqCst) as *mut c_void;
+    let l_raw = RB_FAST_LIST.load(Ordering::SeqCst) as *mut c_void;
+    let f_raw = RB_FAST_FENCE.load(Ordering::SeqCst) as *mut c_void;
+    let b_raw = RB_FAST_BUFFER.load(Ordering::SeqCst) as *mut c_void;
+    let (Some(queue), Some(allocator), Some(list), Some(fence), Some(readback)) = (unsafe {
+        (
+            ID3D12CommandQueue::from_raw_borrowed(&q_raw),
+            ID3D12CommandAllocator::from_raw_borrowed(&a_raw),
+            ID3D12GraphicsCommandList::from_raw_borrowed(&l_raw),
+            ID3D12Fence::from_raw_borrowed(&f_raw),
+            ID3D12Resource::from_raw_borrowed(&b_raw),
+        )
+    }) else {
+        return None;
+    };
+    // The previous frame's fence wait guarantees the GPU is done, so resetting the allocator is safe.
+    if unsafe { allocator.Reset() }.is_err() {
+        return None;
+    }
+    if unsafe { list.Reset(allocator, None) }.is_err() {
+        return None;
+    }
+    unsafe {
+        record_transition(
+            list,
+            &resource,
+            D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+        )
+    };
+    let mut src_location = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(resource.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            SubresourceIndex: 0,
+        },
+    };
+    let mut dst_location = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(readback.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            PlacedFootprint: footprint,
+        },
+    };
+    unsafe { list.CopyTextureRegion(&dst_location, 0, 0, 0, &src_location, None) };
+    unsafe { ManuallyDrop::drop(&mut src_location.pResource) };
+    unsafe { ManuallyDrop::drop(&mut dst_location.pResource) };
+    unsafe {
+        record_transition(
+            list,
+            &resource,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_RESOURCE_STATE_COMMON,
+        )
+    };
+    if unsafe { list.Close() }.is_err() {
+        return None;
+    }
+    let base_list: ID3D12CommandList = list.cast().ok()?;
+    unsafe { queue.ExecuteCommandLists(&[Some(base_list)]) };
+    let val = RB_FAST_FENCEVAL.fetch_add(1, Ordering::SeqCst) + 1;
+    unsafe { queue.Signal(fence, val) }.ok()?;
+    if unsafe { fence.GetCompletedValue() } < val {
+        let event: HANDLE = unsafe { CreateEventW(None, false, false, None) }.ok()?;
+        unsafe { fence.SetEventOnCompletion(val, event) }.ok()?;
+        let wait = unsafe { WaitForSingleObject(event, READBACK_FENCE_WAIT_MS) };
+        let _ = unsafe { CloseHandle(event) };
+        if wait != WAIT_OBJECT_0 {
+            return None;
+        }
+    }
+    let read_range = D3D12_RANGE {
+        Begin: 0,
+        End: total_bytes as usize,
+    };
+    let mut mapped: *mut c_void = std::ptr::null_mut();
+    unsafe { readback.Map(0, Some(&read_range), Some(&mut mapped)) }.ok()?;
+    if mapped.is_null() {
+        return None;
+    }
+    let w = width as usize;
+    let h = height as usize;
+    let row_pitch = footprint.Footprint.RowPitch as usize;
+    let out_row = w * RGBA8_BPP;
+    let mut out = vec![0u8; w * h * RGBA8_BPP];
+    let total = total_bytes as usize;
+    let src = mapped as *const u8;
+    let swap_rb = matches!(
+        format,
+        DXGI_FORMAT_B8G8R8A8_UNORM | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
+    );
+    for y in 0..h {
+        let row_off = y * row_pitch;
+        if row_off >= total {
+            break;
+        }
+        let avail = total - row_off;
+        let copy_bytes = out_row.min(row_pitch).min(avail);
+        let src_row = unsafe { src.add(row_off) };
+        let dst_row = &mut out[y * out_row..y * out_row + copy_bytes];
+        unsafe { std::ptr::copy_nonoverlapping(src_row, dst_row.as_mut_ptr(), copy_bytes) };
+        if swap_rb {
+            let texels = copy_bytes / RGBA8_BPP;
+            for t in 0..texels {
+                dst_row.swap(t * RGBA8_BPP, t * RGBA8_BPP + 2);
+            }
+        }
+    }
+    let write_range = D3D12_RANGE { Begin: 0, End: 0 };
+    unsafe { readback.Unmap(0, Some(&write_range)) };
     Some((width, height, out))
 }
 
@@ -1296,9 +1531,14 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
     if PROFILE_BAKE_RGBA_CAPTURED.load(Ordering::SeqCst) == 0 {
         return false;
     }
-    if portrait_render_drive_enabled() {
-        return false;
-    }
+    // NOTE: this used to bail when render-drive was on, back when "render-drive" meant the Present hook
+    // itself drove the offscreen rasterize (so compositing here would have fought it). The rasterize now
+    // runs in the draw-phase task (profile_lookat_realtime_draw_tick -> drive(r)), which re-renders the
+    // posed model and the readback republishes LOADING_BG_PORTRAIT_RGBA (version bump) EVERY frame. So the
+    // Present hook is free to composite -- and MUST, to push that per-frame tracking head to the screen for
+    // the whole loading screen (the forge redirect only commits ~twice -> a frozen displayed head). The
+    // live-re-upload block below rebuilds the overlay texture on each version bump, so the displayed head
+    // follows the cursor until loading completes.
     let fake_vis = unsafe { fake_loading_screen_visible(base) };
     let now_load = unsafe { now_loading_active(base) };
     if now_load {
@@ -1369,6 +1609,7 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
                                 drop(unsafe { ID3D12Resource::from_raw(old as *mut c_void) });
                             }
                             OVERLAY_PORTRAIT_VERSION.store(cur_ver, Ordering::SeqCst);
+                            OVERLAY_REUPLOADS.fetch_add(1, Ordering::SeqCst);
                         }
                     }
                 }
