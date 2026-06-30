@@ -3943,16 +3943,17 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             };
             if let Some((w, h, px)) = unsafe { readback_offscreen_rgba8(off) } {
                 let nb = portrait_center_nonblack(w, h, &px);
-                // BAKE SOURCE: store the TARGET slot's REAL, IBL-LIT menu portrait into
-                // LOADING_BG_PORTRAIT_RGBA (one-shot) so the now-loading forge bakes IT into the static TPF
-                // -- this runs during the menu (~16s, full 1024x1024 IBL render) BEFORE the forge's bind,
-                // so the loading screen shows the real well-lit character, not the checker or the dark
-                // post-Continue rebuild. Require a lit (ibl_region != 0) nonblack render.
+                // BAKE SOURCE: store the TARGET slot's menu portrait into LOADING_BG_PORTRAIT_RGBA so the
+                // now-loading forge bakes IT into the static TPF (the proven decode-time display path). The
+                // forge fires in a tight race with the portrait render (~15.7-16.2s either way); capture the
+                // FIRST nonblack render (dropping the slower IBL-residency wait) to capture as EARLY as
+                // possible and win the race in more runs -- so the forge bakes the real character, not the
+                // checker. (A dim/pre-IBL face still beats the checker; IBL refinement is a follow-up.)
                 if s == OWN_STEPPER_SLOT.load(Ordering::SeqCst)
                     && nb
-                    && ibl_region != 0
                     && PROFILE_BAKE_RGBA_CAPTURED.swap(1, Ordering::SeqCst) == 0
                 {
+                    let _ = ibl_region;
                     dump_portrait_rgba(110, w, h, &px);
                     if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
                         *g = Some((w, h, px.clone()));
