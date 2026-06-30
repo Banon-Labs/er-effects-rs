@@ -606,7 +606,27 @@ pub(crate) unsafe fn maybe_fire_tfc_continue(base: usize) {
     let before = unsafe { safe_read_i32(tfc + TFC_DISPATCH_STATE_14C_OFFSET) }.unwrap_or(-1);
     // Set the save slot on mss FIRST (builder reads mss+0x1200 as the factory r8), then the dispatch
     // bit -- mirroring the native confirm handler 0x1409a9250's two key writes.
-    let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+    // GUARD (user spec 3+4 "any slot active" / "never load a slot if none active"): resolve the ACTIVE
+    // slot holding a real character instead of blindly loading the configured slot. The gold save's
+    // configured slot 0 is a NULL slot -> loading it spawns the new-game INTRO cutscene + a null character.
+    // resolve_active_load_slot() validates via the contamination-free RECORD fingerprint and falls back to
+    // the best active slot; OWN_STEPPER_SLOT_NONE means nothing loadable (or profile records not ready).
+    let configured = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+    let want_slot = unsafe { resolve_active_load_slot(configured) };
+    if want_slot < OWN_STEPPER_SLOT_ZERO {
+        let waits = TFC_LOAD_VEC_WAIT_TICKS.fetch_add(1, Ordering::SeqCst);
+        if waits % 120 == 0 {
+            append_autoload_debug(format_args!(
+                "fire-tfc-continue: REFUSE to fire -- no ACTIVE save slot (configured={configured}; profile records not real/ready). Never loading a null slot (would spawn the new-game intro). waits={waits}"
+            ));
+        }
+        return;
+    }
+    if want_slot != configured {
+        append_autoload_debug(format_args!(
+            "fire-tfc-continue: configured slot {configured} is null/inactive -> loading best ACTIVE slot {want_slot} instead (user guard: load an active slot, never a null one)"
+        ));
+    }
     let mss = unsafe { resolve_menu_system_save_load(base) };
     if let Some(mss) = mss {
         unsafe { *((mss + MSS_SAVE_SLOT_1200_OFFSET) as *mut i32) = want_slot };

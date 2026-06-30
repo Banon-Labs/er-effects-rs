@@ -1298,6 +1298,36 @@ pub(crate) unsafe fn profile_slot_fingerprint(slot: i32) -> (bool, i32, u32, usi
         profile_name_len,
     )
 }
+/// The save slot to auto-load: the ACTIVE slot holding the most-progressed real character (highest level;
+/// lowest index on a tie). "Active/real" is judged by the RECORD-based `profile_slot_fingerprint`
+/// (level>=1 && non-empty name) -- NOT the `profile_summary+0x8` active byte, which the DLL writes itself
+/// (PROFILE_SLOT_ACTIVATE / seed) and so reads all-active even for a NULL slot. Returns
+/// `OWN_STEPPER_SLOT_NONE` (-1) when NO slot holds a real character (or the profile summary is not yet
+/// populated); callers MUST refuse to load on the sentinel -- never load a null slot (which spawns the
+/// new-game intro cutscene + a null character).
+pub(crate) unsafe fn best_active_slot() -> i32 {
+    let mut best_slot = OWN_STEPPER_SLOT_NONE;
+    let mut best_level: u32 = 0;
+    let mut slot: i32 = OWN_STEPPER_SLOT_ZERO;
+    while (slot as usize) < TITLE_PROFILE_SLOT_COUNT {
+        let (is_real, _map, level, _name_len) = unsafe { profile_slot_fingerprint(slot) };
+        if is_real && level > best_level {
+            best_level = level;
+            best_slot = slot;
+        }
+        slot += 1;
+    }
+    best_slot
+}
+/// Resolve the slot to actually load under the user's guards: honor a configured slot ONLY if it holds a
+/// real character; otherwise fall back to `best_active_slot()` ("whatever is indicated as an active slot on
+/// disk"). Returns `OWN_STEPPER_SLOT_NONE` when nothing is loadable so the caller refuses to load.
+pub(crate) unsafe fn resolve_active_load_slot(configured: i32) -> i32 {
+    if configured >= OWN_STEPPER_SLOT_ZERO && unsafe { profile_slot_fingerprint(configured).0 } {
+        return configured;
+    }
+    unsafe { best_active_slot() }
+}
 pub(crate) unsafe fn requested_slot_identity(slot: i32, c30: i32) -> RequestedSlotIdentity {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const BAD_I32: i32 = -1;
