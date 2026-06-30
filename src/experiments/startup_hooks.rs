@@ -1110,15 +1110,9 @@ const NETWORK_CHECK_JOB_RUN_RVA: u32 = 0x821310;
 const FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA: usize = 0x29c8e48;
 /// `MenuJobState::Continue` (the no-modal result), verified from the deobf clean leaf (`lea edx,[r8+1]`).
 const MENU_JOB_STATE_CONTINUE: i32 = 1;
-/// A "still running" MenuJobState (> Continue, so `MenuJobResult::ShouldContinue` keeps the job polling
-/// and the menu open). Used to HOLD the network-check job until the real portrait is captured.
-const MENU_JOB_STATE_HOLD_RUNNING: i32 = 2;
 
 static NETWORK_CHECK_SHORTCIRCUIT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 static NETWORK_CHECK_SHORTCIRCUIT_COUNT: AtomicUsize = AtomicUsize::new(0);
-/// Ticks the network-check job has been HELD waiting for the portrait capture (hard-bounded so the
-/// autoload always proceeds even if the capture never happens / the hold value is wrong).
-static NETWORK_CHECK_HOLD_TICKS: AtomicUsize = AtomicUsize::new(0);
 
 /// THE MILESTONE-3 FIX (zero-input, save-safe). `CS::NetworkCheckJob::Run` is a title-flow MenuJob the
 /// TitleTopDialog registrar chains UNCONDITIONALLY at menu-open. Offline, its Steam-holder check
@@ -1137,22 +1131,20 @@ pub(crate) unsafe extern "system" fn network_check_job_run_hook(
 ) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let result = rdx;
-    // PORTRAIT HOLD: the real IBL-lit menu portrait isn't captured until ~0.3s AFTER this job fires
-    // Continue, so the first now-loading forge bakes the checker. Hold the job in a RUNNING state (>1, so
-    // MenuJobResult::ShouldContinue keeps it polling + the menu stays open) until the portrait is captured
-    // (PROFILE_BAKE_RGBA_CAPTURED) -- then proceed, and the first forge bakes the real portrait. HARD-
-    // BOUNDED by PORTRAIT_HOLD_MAX_TICKS so the autoload ALWAYS proceeds within ~4s even if the hold value
-    // is wrong (worst case == today's behavior). We REPLACE Run either way, so no real check / modal runs
-    // -> save-safe + online-safe; only armed on the portrait path (portrait_lookat + real_pixels).
-    let want_hold = portrait_lookat_enabled()
-        && portrait_real_pixels_enabled()
-        && PROFILE_BAKE_RGBA_CAPTURED.load(Ordering::SeqCst) == 0
-        && NETWORK_CHECK_HOLD_TICKS.fetch_add(1, Ordering::SeqCst) < PORTRAIT_HOLD_MAX_TICKS;
-    let state = if want_hold {
-        MENU_JOB_STATE_HOLD_RUNNING
-    } else {
-        MENU_JOB_STATE_CONTINUE
-    };
+    // Always exit to the no-modal Continue (offline modal suppression). This job is REPLACED either
+    // way, so no real check / modal runs -> save-safe + online-safe.
+    //
+    // REGRESSION FIX (2026-06-30): a prior "PORTRAIT HOLD" held this job in a RUNNING state (>1, so
+    // MenuJobResult::ShouldContinue keeps it polling) until the menu portrait was captured. That was
+    // self-defeating: holding NetworkCheckJob stalls the title-flow check chain, so the SAVE-data
+    // ShowProgressJob (the boot ProfileSummary read) never runs -> the profile stays empty -> the
+    // autoload starts a NEW GAME instead of loading the real character (and the stalled flow crashed
+    // the world-load). The hold waited on a capture that could not happen until the read it was
+    // blocking completed. Runtime-confirmed: with the hold gone, the boot read fires (showprog PASS),
+    // the real character loads, and the world reaches `player_present`. The portrait-capture timing is
+    // owned DOWNSTREAM by `portrait_render_window` instead, which holds the load COMMIT after menu-open
+    // (i.e. AFTER the boot read has populated the slot). bd autoload-regression-lookat-breaks-bootread-2026-06-30.
+    let state = MENU_JOB_STATE_CONTINUE;
     // MenuJobResult::SetResult(result, state, 0): state @ +0 (i32), field1 @ +4 (i32). The native
     // SetResult 0x1407a91e0 only writes these two fields, so replicate inline. Readability-guarded.
     if result > null && unsafe { safe_read_usize(result) }.is_some() {
@@ -2138,9 +2130,16 @@ unsafe fn refresh_loading_bg_live_gx(base: usize) {
     if !valid(cap) {
         return;
     }
-    let live_gx =
-        unsafe { sample_portrait_gxtexture(base, OWN_STEPPER_SLOT.load(Ordering::SeqCst)) };
-    if !valid(live_gx) {
+    // Bind the AddRef'd CAPTURED CSGxTexture (LOADING_BG_PORTRAIT_GX_KEPT), NOT the live renderer RT.
+    // `sample_portrait_gxtexture` returns the renderer's LIVE offscreen-RT GX, which is freed when the
+    // profile renderer is torn down at Continue; binding that left the now-loading container pointing at
+    // a FREED CSGxTexture, so dxgi sampled freed memory during the loading screen -> use-after-free
+    // (0xc0000005). `maybe_capture_portrait_gxtexture` AddRefs the captured texture specifically so it
+    // survives teardown, so binding it is lifetime-safe. If nothing has been captured yet, skip the
+    // rebind (the loading screen keeps its default background) rather than bind a freeable pointer.
+    // bd autoload-load-FIXED-display-crash-remains-2026-06-30.
+    let bind_gx = LOADING_BG_PORTRAIT_GX_KEPT.load(Ordering::SeqCst);
+    if !valid(bind_gx) {
         return;
     }
     let container = unsafe { safe_read_usize(cap + TPF_FILE_CAP_TEX_RESCAP_OFFSET) }.unwrap_or(0);
@@ -2162,18 +2161,18 @@ unsafe fn refresh_loading_bg_live_gx(base: usize) {
     let cur =
         unsafe { safe_read_usize(tex_rescap0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) }
             .unwrap_or(0);
-    if cur == live_gx {
-        return; // already bound to the live RT
+    if cur == bind_gx {
+        return; // already bound to the captured RT
     }
     unsafe {
         ((tex_rescap0 + TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET) as *mut usize)
-            .write_volatile(live_gx)
+            .write_volatile(bind_gx)
     };
-    LOADING_BG_LIVE_GX_BOUND.store(live_gx, Ordering::SeqCst);
+    LOADING_BG_LIVE_GX_BOUND.store(bind_gx, Ordering::SeqCst);
     let n = LOADING_BG_LIVE_GX_REBINDS.fetch_add(1, Ordering::SeqCst) + 1;
     if n == 1 {
         append_autoload_debug(format_args!(
-            "loading-portrait: RE-BOUND live offscreen RT into the now-loading container -- live_gx=0x{live_gx:x} (was 0x{cur:x}) cap=0x{cap:x} container=0x{container:x}; loading screen now samples the live portrait"
+            "loading-portrait: RE-BOUND captured (AddRef'd) portrait RT into the now-loading container -- bind_gx=0x{bind_gx:x} (was 0x{cur:x}) cap=0x{cap:x} container=0x{container:x}; loading screen samples the lifetime-safe portrait"
         ));
     }
 }
@@ -3844,7 +3843,18 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
         let force_rebuild = portrait_force_rebuild_enabled();
         let mark: unsafe extern "system" fn(usize, i32) -> u8 =
             unsafe { core::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
+        let mut marked = 0u32;
         for s in 0..10i32 {
+            // Only mark slots that hold a REAL character (per the RECORD the native boot ProfileSummary
+            // read populates: level>=1 + non-empty name). NEVER mark all 10 / empty slots: that
+            // contaminated `ProfileSummary->saveSlotsStates[s]` so `IsAnySavedCharacterPresent` reported
+            // "saves present" for empty slots, and pre-marking before the disk read could mask it. A real
+            // slot is only `is_real` AFTER the native read has populated it, so this also can't pre-empt
+            // the read. Marking only real slots still builds the loaded character's portrait model.
+            // bd autoload-regression-lookat-breaks-bootread-2026-06-30.
+            if !unsafe { profile_slot_fingerprint(s).0 } {
+                continue;
+            }
             let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
             if force_rebuild
                 && valid(r)
@@ -3857,13 +3867,14 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                 }
             }
             let _ = unsafe { mark(summary, s) };
+            marked += 1;
         }
         let refresh: unsafe extern "system" fn() =
             unsafe { core::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
         unsafe { refresh() };
         if log_this {
             append_autoload_debug(format_args!(
-                "force-profile-render: build cycle (counter={counter}) force_rebuild={force_rebuild} feed_window={feed_window} -- marked ALL 10 + refreshed (summary=0x{summary:x})"
+                "force-profile-render: build cycle (counter={counter}) force_rebuild={force_rebuild} feed_window={feed_window} -- marked {marked} real slot(s) + refreshed (summary=0x{summary:x})"
             ));
         }
         // Only when we forced a fresh build: drop the cached look-at indices/base so they re-resolve and
