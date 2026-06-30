@@ -2405,8 +2405,14 @@ unsafe fn apply_profile_lookat(renderer: usize, slot: i32) -> bool {
     let holder = match unsafe { profile_pose_holder(renderer) } {
         Some(h) => h,
         None => {
-            // Model/pose not live yet: unregister so the hook won't touch a stale holder pointer.
-            PROFILE_LOOKAT_HOLDERS[idx].store(0, Ordering::SeqCst);
+            // The engine refreshes a menu model's anim location-holder only intermittently (~6 Hz), so
+            // `profile_pose_holder` returns None on ~89% of frames even though the model + its PoseHolder
+            // persist. The caller only invokes us for a still-valid (vtable-checked) renderer, so a
+            // transient None here is just the throttle -- KEEP the last resolved holder registered so the
+            // draw-phase task can drive + recompute + redraw it EVERY frame (60 Hz tracking), decoupled
+            // from the engine's throttled pose update. A genuinely stale holder (model rebuilt/torn down)
+            // is dropped explicitly: the force-rebuild path clears PROFILE_LOOKAT_HOLDERS, and the
+            // teardown spare hook owns post-Continue lifetime. Do NOT unregister on transient None.
             return false;
         }
     };
@@ -2433,7 +2439,15 @@ unsafe fn apply_profile_lookat(renderer: usize, slot: i32) -> bool {
             if head < 0 {
                 return false; // head bone not found yet; retry next tick
             }
-            guard[idx] = Some(LookatSlot { head, neck, spine2 });
+            guard[idx] = Some(LookatSlot {
+                head,
+                neck,
+                spine2,
+                head_base: [0.0; 4],
+                neck_base: [0.0; 4],
+                spine2_base: [0.0; 4],
+                base_latched: false,
+            });
             PROFILE_LOOKAT_HEAD_IDX.store(head as usize, Ordering::SeqCst);
             PROFILE_LOOKAT_NECK_IDX.store(
                 if neck >= 0 { neck as usize } else { usize::MAX },
@@ -2449,17 +2463,14 @@ unsafe fn apply_profile_lookat(renderer: usize, slot: i32) -> bool {
             );
         }
     }
-    // Register this holder as ours and publish the latest cursor angle. The actual pose write happens
-    // in the updateBoneModelSpace hook (a game-task write is clobbered by the per-frame anim re-import).
+    // FrameBegin role: resolve + cache the Head/Neck/Spine2 indices (above) and register the holder. The
+    // drive ANGLE is published by the draw-phase task (cursor or selftest sinusoid) -- do NOT publish it
+    // here too, or this FrameBegin cursor value would race/override the draw task's value within a frame
+    // and the per-frame push hook would read the wrong angle. The pose WRITE happens in the per-frame push
+    // hook (which propagates to the GPU-skinned submodels); install it here so it is live once a renderer is.
     PROFILE_LOOKAT_HOLDERS[idx].store(holder, Ordering::SeqCst);
-    let (cx, cy) = read_cursor_normalized().unwrap_or((0.0, 0.0));
-    PROFILE_LOOKAT_LAST_CURSOR.store(pack_cursor(cx, cy), Ordering::SeqCst);
-    PROFILE_LOOKAT_YAW_BITS.store((cx * LOOKAT_YAW_SIGN).to_bits() as usize, Ordering::SeqCst);
-    PROFILE_LOOKAT_PITCH_BITS.store(
-        (cy * LOOKAT_PITCH_SIGN).to_bits() as usize,
-        Ordering::SeqCst,
-    );
     install_lookat_hook();
+    install_per_frame_push_hook();
     PROFILE_LOOKAT_APPLY_CALLS.fetch_add(1, Ordering::SeqCst);
     true
 }
@@ -2479,6 +2490,12 @@ unsafe fn read_quat(addr: usize) -> Option<[f32; 4]> {
 /// `updateBoneModelSpace` original we are about to call rebuilds the final rendered pose with the
 /// look-at baked in. Runs on the render thread inside the hook; every read is fault-guarded + bounded.
 unsafe fn lookat_write_local(holder: usize) {
+    // Realtime mode owns the write+recompute+draw from the draw-phase task (composing from a latched
+    // base). The detour must then be a pure passthrough -- a second post-multiply here would double-apply
+    // the rotation onto the same frame's local pose. See `profile_lookat_realtime_draw_tick`.
+    if PROFILE_LOOKAT_REALTIME.load(Ordering::SeqCst) {
+        return;
+    }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
     let local = unsafe { safe_read_usize(holder + POSEHOLDER_LOCAL_BONE_DATA_OFFSET) }.unwrap_or(0);
@@ -2608,6 +2625,462 @@ fn install_lookat_hook() {
         )),
         status => append_autoload_debug(format_args!(
             "lookat-hook: MH_ApplyQueued failed: {status:?}"
+        )),
+    }
+}
+
+/// Resolve the clean `updateBoneModelSpace` entry to recompute model-space from local bones WITHOUT
+/// re-entering the look-at detour: prefer the hook trampoline (the saved original), else the raw RVA.
+/// Pure SIMD math, touches no GX context, so it is safe to call from any phase.
+unsafe fn lookat_recompute_fn() -> Option<unsafe extern "system" fn(usize)> {
+    let orig = PROFILE_LOOKAT_HOOK_ORIG.load(Ordering::SeqCst);
+    if orig != TITLE_OWNER_SCAN_START_ADDRESS && orig != HOOK_ORIGINAL_UNSET {
+        return Some(unsafe { core::mem::transmute(orig) });
+    }
+    match game_rva(UPDATE_BONE_MODEL_SPACE_RVA as u32) {
+        Ok(addr) => Some(unsafe { core::mem::transmute(addr) }),
+        Err(_) => None,
+    }
+}
+
+/// Per-frame look-at for ONE registered profile holder, driven from the draw-phase task: latch the clean
+/// idle local quats once (drift-free base), write `base ⊗ delta(yaw,pitch)` into Head/Neck/Spine2 local
+/// quats, mark all bones model-space-dirty + `isUpdated=false`, then recompute model-space so the draw
+/// that follows skins from the rotated pose. Returns true if any bone was driven. Every read is bounded.
+unsafe fn lookat_apply_realtime(holder: usize, slot_idx: usize, yaw: f32, pitch: f32) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let valid = |p: usize| p != 0 && p != null;
+    let local = unsafe { safe_read_usize(holder + POSEHOLDER_LOCAL_BONE_DATA_OFFSET) }.unwrap_or(0);
+    let dirty = unsafe { safe_read_usize(holder + POSEHOLDER_DIRTY_FLAGS_OFFSET) }.unwrap_or(0);
+    let skel = unsafe { safe_read_usize(holder + POSEHOLDER_SKELETON_OFFSET) }.unwrap_or(0);
+    if !valid(local) || !valid(dirty) || !valid(skel) {
+        return false;
+    }
+    let count = unsafe { safe_read_i32(skel + HKA_SKELETON_BONES_SIZE_OFFSET) }.unwrap_or(0);
+    if count <= 0 || count as usize > LOOKAT_MAX_BONES {
+        return false;
+    }
+    let count = count as usize;
+    // Pull this slot's resolved indices + latched base (copy out, release the lock before any game read).
+    let (head, neck, spine2, mut base, latched) = {
+        let guard = match PROFILE_LOOKAT_SLOTS.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        match guard[slot_idx] {
+            Some(s) => (
+                s.head,
+                s.neck,
+                s.spine2,
+                [s.head_base, s.neck_base, s.spine2_base],
+                s.base_latched,
+            ),
+            None => return false,
+        }
+    };
+    // (bone index, yaw gain, pitch gain, base-slot)
+    let drives = [
+        (head, LOOKAT_HEAD_YAW_GAIN, LOOKAT_HEAD_PITCH_GAIN, 0usize),
+        (neck, LOOKAT_NECK_YAW_GAIN, LOOKAT_NECK_PITCH_GAIN, 1usize),
+        (
+            spine2,
+            LOOKAT_SPINE2_YAW_GAIN,
+            LOOKAT_SPINE2_PITCH_GAIN,
+            2usize,
+        ),
+    ];
+    let q_addr = |bidx: i32| -> Option<usize> {
+        if bidx < 0 || bidx as usize >= count {
+            None
+        } else {
+            Some(local + bidx as usize * BONE_DATA_STRIDE + BONE_DATA_Q_OFFSET)
+        }
+    };
+    // Latch the clean idle base ONCE (the slot is reset to None on each rebuild, so `local` here is the
+    // freshly-rebuilt idle pose -- captured before this frame's look-at write contaminates it).
+    if !latched {
+        for (bidx, _, _, bslot) in drives {
+            if let Some(addr) = q_addr(bidx) {
+                if let Some(q) = unsafe { read_quat(addr) } {
+                    base[bslot] = q;
+                }
+            }
+        }
+        let mut guard = match PROFILE_LOOKAT_SLOTS.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if let Some(s) = guard[slot_idx].as_mut() {
+            s.head_base = base[0];
+            s.neck_base = base[1];
+            s.spine2_base = base[2];
+            s.base_latched = true;
+        }
+    }
+    let mut any = false;
+    for (bidx, yg, pg, bslot) in drives {
+        let Some(addr) = q_addr(bidx) else { continue };
+        let q = quat_mul(base[bslot], quat_from_yaw_pitch(yaw * yg, pitch * pg));
+        if !q.iter().all(|f| f.is_finite()) {
+            continue;
+        }
+        unsafe {
+            core::ptr::write_volatile(addr as *mut f32, q[0]);
+            core::ptr::write_volatile((addr + 4) as *mut f32, q[1]);
+            core::ptr::write_volatile((addr + 8) as *mut f32, q[2]);
+            core::ptr::write_volatile((addr + 12) as *mut f32, q[3]);
+        }
+        any = true;
+    }
+    if !any {
+        return false;
+    }
+    for i in 0..count {
+        let f = dirty + i * 4;
+        let cur = unsafe { safe_read_i32(f) }.unwrap_or(0) as u32;
+        unsafe {
+            core::ptr::write_volatile(f as *mut u32, cur | POSE_DIRTY_MODEL_SPACE_BIT);
+        }
+    }
+    unsafe {
+        core::ptr::write_volatile((holder + POSEHOLDER_IS_UPDATED_OFFSET) as *mut u8, 0);
+    }
+    // Recompute model-space from the local pose so the upcoming draw skins from the look-at rotation.
+    if let Some(recompute) = unsafe { lookat_recompute_fn() } {
+        unsafe { recompute(holder) };
+    }
+    PROFILE_LOOKAT_HOOK_HITS.fetch_add(1, Ordering::SeqCst);
+    true
+}
+
+/// REALTIME LOOK-AT DRAW TICK -- registered as a recurring task in a DRAW phase
+/// (`CSTaskGroupIndex::GameSceneDraw`), so it runs on the render thread INSIDE an actively-recording GX
+/// frame (unlike the FrameBegin game task, where the GX subcontext pool is still empty -> a black no-op).
+/// Each frame: read the live cursor, drive every registered profile holder's Head/Neck/Spine2 toward it
+/// (drift-free `base ⊗ delta`) + recompute model-space, then call the profile draw step to rasterize ALL
+/// portraits' offscreen RTs with the fresh pose. The engine only redraws thumbnails on profile
+/// data-change, so without this they track the cursor only at the ~4s model-rebuild cadence; here they
+/// track every frame. The draw step fail-closes (the GX pool pop returns 0 -> no-op) if a phase ever
+/// lacks a live frame, so it can never crash from being driven off a recording frame.
+pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize) {
+    if !portrait_lookat_enabled() {
+        return;
+    }
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if base == 0 || base == null {
+        return;
+    }
+    // The 0x1653350 detour stays a passthrough (the per-frame PUSH hook owns the pose write now).
+    PROFILE_LOOKAT_REALTIME.store(true, Ordering::SeqCst);
+    // Ensure the per-frame push hook is installed -- it writes our pose into the importer + lets the
+    // engine propagate it to the GPU-skinned submodels each frame (the actual head movement).
+    install_per_frame_push_hook();
+    let frame = PROFILE_LOOKAT_DRAW_FRAME.fetch_add(1, Ordering::SeqCst);
+    // PUBLISH the drive angle for the per-frame push hook to consume: a deterministic SINUSOID in selftest
+    // (zero-input, reproducible -> the pixel oracle proves the head moves with the driven angle), else the
+    // live cursor (the product input). The pose WRITE happens in the push hook; here we only publish + draw.
+    let (yaw, pitch) = if PROFILE_LOOKAT_SELFTEST_ON.load(Ordering::SeqCst) {
+        let t = frame as f32 * LOOKAT_SELFTEST_W;
+        (
+            t.sin() * LOOKAT_SELFTEST_YAW_AMP * LOOKAT_YAW_SIGN,
+            (t * 0.7).sin() * LOOKAT_SELFTEST_PITCH_AMP * LOOKAT_PITCH_SIGN,
+        )
+    } else {
+        let (cx, cy) = read_cursor_normalized().unwrap_or((0.0, 0.0));
+        PROFILE_LOOKAT_LAST_CURSOR.store(pack_cursor(cx, cy), Ordering::SeqCst);
+        (cx * LOOKAT_YAW_SIGN, cy * LOOKAT_PITCH_SIGN)
+    };
+    PROFILE_LOOKAT_YAW_BITS.store(yaw.to_bits() as usize, Ordering::SeqCst);
+    PROFILE_LOOKAT_PITCH_BITS.store(pitch.to_bits() as usize, Ordering::SeqCst);
+    // Rasterize all profile offscreen RTs on the render thread inside the live GX frame, so the pose the
+    // push hook propagated this frame is re-rendered (the engine does not redraw thumbnails per frame).
+    // The draw step skips null slots and fail-closes if the GX pool is empty, so it is safe every frame.
+    let draw_step: unsafe extern "system" fn() =
+        unsafe { core::mem::transmute(base + PROFILE_DRAW_STEP_RVA) };
+    unsafe { draw_step() };
+    PROFILE_LOOKAT_RENDER_DRIVES.fetch_add(1, Ordering::SeqCst);
+    // IN-PROCESS PIXEL ORACLE (selftest only): after the draw, sample the live slot's offscreen RT and
+    // record nonblack% + same-slot hash-change% -- the numbers that replace the human eyeball. Called
+    // every frame but self-gates on a live model (no readback cost when none is present), so it catches
+    // the sparse frames a menu model actually exists. The LOOKAT_RT_SAMPLE_INTERVAL const is retained for
+    // reference but no longer throttles (model presence is the natural throttle).
+    let _ = LOOKAT_RT_SAMPLE_INTERVAL;
+    if PROFILE_LOOKAT_SELFTEST_ON.load(Ordering::SeqCst) {
+        unsafe { profile_lookat_rt_sample(base) };
+    }
+}
+
+/// Pixel oracle sample: scan for the FIRST slot whose model is currently live (model_ins present), read
+/// back its offscreen RT (AFTER the draw step) and record nonblack + whether the content hash changed vs
+/// the previous sample OF THE SAME SLOT. Sampling the live slot (not a fixed one) is required because the
+/// engine keeps barely one menu model built at a time (cycling); "changed" is gated to same-slot so a
+/// slot switch (different character) is not mistaken for head motion. Only does the (costly) readback when
+/// a live model exists, so it is free when none is present. Read-only + fault-guarded.
+unsafe fn profile_lookat_rt_sample(base: usize) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let valid = |p: usize| p != 0 && p != null;
+    let mut chosen = usize::MAX;
+    let mut off = 0usize;
+    for s in 0..TITLE_PROFILE_SLOT_COUNT {
+        let r =
+            unsafe { safe_read_usize(portrait_renderer_table_entry(base, s as i32)) }.unwrap_or(0);
+        if !valid(r)
+            || unsafe { safe_read_usize(r) }.unwrap_or(0)
+                != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+        {
+            continue;
+        }
+        // model present?
+        if !valid(unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }.unwrap_or(0)) {
+            continue;
+        }
+        let o = unsafe {
+            safe_read_usize(r + TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET)
+        }
+        .unwrap_or(0);
+        if valid(o) {
+            chosen = s;
+            off = o;
+            break;
+        }
+    }
+    if chosen == usize::MAX {
+        return; // no live model this frame -> no readback cost
+    }
+    let Some((w, h, px)) = (unsafe { readback_offscreen_rgba8(off) }) else {
+        return;
+    };
+    PROFILE_LOOKAT_RT_SAMPLES.fetch_add(1, Ordering::SeqCst);
+    if portrait_center_nonblack(w, h, &px) {
+        PROFILE_LOOKAT_RT_NONBLACK.fetch_add(1, Ordering::SeqCst);
+    }
+    // Cheap strided FNV-1a hash of the RT to detect frame-to-frame content change without storing pixels.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let step = (px.len() / 4096).max(1);
+    let mut i = 0;
+    while i < px.len() {
+        hash ^= px[i] as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        i += step;
+    }
+    let h32 = (hash as usize) & 0xffff_ffff;
+    let last_slot = PROFILE_LOOKAT_RT_LASTSLOT.swap(chosen, Ordering::SeqCst);
+    let last_hash = PROFILE_LOOKAT_RT_LASTHASH.swap(h32, Ordering::SeqCst);
+    // Count motion only when the same slot was sampled consecutively (so a slot switch isn't "motion").
+    if last_slot == chosen && h32 != last_hash {
+        PROFILE_LOOKAT_RT_CHANGED.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// DRAW-PHASE SWEEP diagnostic, run from a FrameBegin task (ticks every frame). Throttled: (1) re-read
+/// the live phase selector `er-effects-lookat-phase.txt` (a single integer index 0..LOOKAT_DRAW_PHASE_COUNT)
+/// into `PROFILE_LOOKAT_SELECTED_PHASE` so the active draw phase can be switched without recompiling; and
+/// (2) log each candidate phase's per-frame tick count + the draw count, so one run reveals which phases
+/// actually tick per-frame at the menu (the world-gated GameSceneDraw does not). No-op unless look-at is on.
+/// Walk the look-at resolution chain for a fixed probe slot (0) and bump per-stage validity counters, so
+/// the sweep log pinpoints exactly which deref drops from ~100% to ~11% (instead of guessing). Read-only.
+unsafe fn profile_lookat_stage_probe(base: usize) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let valid = |p: usize| p != 0 && p != null;
+    PROFILE_LOOKAT_STAGE_OK[7].fetch_add(1, Ordering::SeqCst); // frames probed
+    let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, 0)) }.unwrap_or(0);
+    if !valid(r)
+        || unsafe { safe_read_usize(r) }.unwrap_or(0)
+            != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+    {
+        return;
+    }
+    PROFILE_LOOKAT_STAGE_OK[0].fetch_add(1, Ordering::SeqCst);
+    let model = unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }.unwrap_or(0);
+    if valid(model) {
+        PROFILE_LOOKAT_STAGE_OK[1].fetch_add(1, Ordering::SeqCst);
+    }
+    let x = unsafe { safe_read_usize(r + PROFILE_LOOKAT_ANIM_LOCATION_OFFSET) }.unwrap_or(0);
+    if !valid(x) {
+        return;
+    }
+    PROFILE_LOOKAT_STAGE_OK[2].fetch_add(1, Ordering::SeqCst);
+    let importer = unsafe { safe_read_usize(x + PROFILE_LOOKAT_IMPORTER_OFFSET) }.unwrap_or(0);
+    if !valid(importer) {
+        return;
+    }
+    PROFILE_LOOKAT_STAGE_OK[3].fetch_add(1, Ordering::SeqCst);
+    let holder = importer + PROFILE_LOOKAT_POSEHOLDER_OFFSET;
+    let skel = unsafe { safe_read_usize(holder + POSEHOLDER_SKELETON_OFFSET) }.unwrap_or(0);
+    if !valid(skel) {
+        return;
+    }
+    PROFILE_LOOKAT_STAGE_OK[4].fetch_add(1, Ordering::SeqCst);
+    let local = unsafe { safe_read_usize(holder + POSEHOLDER_LOCAL_BONE_DATA_OFFSET) }.unwrap_or(0);
+    if valid(local) {
+        PROFILE_LOOKAT_STAGE_OK[5].fetch_add(1, Ordering::SeqCst);
+    }
+    let count = unsafe { safe_read_i32(skel + HKA_SKELETON_BONES_SIZE_OFFSET) }.unwrap_or(0);
+    if count > 0 && count as usize <= LOOKAT_MAX_BONES {
+        PROFILE_LOOKAT_STAGE_OK[6].fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+pub(crate) fn profile_lookat_phase_diag_tick() {
+    if !portrait_lookat_enabled() {
+        return;
+    }
+    if let Ok(base) = game_module_base() {
+        unsafe { profile_lookat_stage_probe(base) };
+    }
+    let n = PROFILE_LOOKAT_PHASE_DIAG_COUNTER.fetch_add(1, Ordering::SeqCst);
+    if n % 60 == 0 {
+        // Live phase selector: a single integer in er-effects-lookat-phase.txt picks the active draw phase.
+        let path = game_directory_path()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("er-effects-lookat-phase.txt");
+        if let Ok(s) = std::fs::read_to_string(&path) {
+            if let Ok(idx) = s.trim().parse::<usize>() {
+                if idx < LOOKAT_DRAW_PHASE_COUNT {
+                    PROFILE_LOOKAT_SELECTED_PHASE.store(idx, Ordering::SeqCst);
+                }
+            }
+        }
+        // Refresh the cached selftest flag here (throttled) so the draw task never does a per-frame stat.
+        PROFILE_LOOKAT_SELFTEST_ON.store(portrait_lookat_selftest_enabled(), Ordering::SeqCst);
+    }
+    if n % 240 == 0 {
+        let ticks: Vec<String> = (0..LOOKAT_DRAW_PHASE_COUNT)
+            .map(|i| {
+                format!(
+                    "{}={}",
+                    LOOKAT_DRAW_PHASE_NAMES[i],
+                    PROFILE_LOOKAT_PHASE_TICKS[i].load(Ordering::SeqCst)
+                )
+            })
+            .collect();
+        let stages: Vec<String> = (0..PROFILE_LOOKAT_STAGE_COUNT)
+            .map(|i| {
+                format!(
+                    "{}={}",
+                    PROFILE_LOOKAT_STAGE_NAMES[i],
+                    PROFILE_LOOKAT_STAGE_OK[i].load(Ordering::SeqCst)
+                )
+            })
+            .collect();
+        append_autoload_debug(format_args!(
+            "lookat-phase-sweep: frame_begin={n} selected={}({}) selftest={} render_drives={} hook_hits={} rt[samples={} nonblack={} changed={}] stage0[{}] phase_ticks[{}]",
+            PROFILE_LOOKAT_SELECTED_PHASE.load(Ordering::SeqCst),
+            LOOKAT_DRAW_PHASE_NAMES[PROFILE_LOOKAT_SELECTED_PHASE.load(Ordering::SeqCst)],
+            PROFILE_LOOKAT_SELFTEST_ON.load(Ordering::SeqCst) as u8,
+            PROFILE_LOOKAT_RENDER_DRIVES.load(Ordering::SeqCst),
+            PROFILE_LOOKAT_HOOK_HITS.load(Ordering::SeqCst),
+            PROFILE_LOOKAT_RT_SAMPLES.load(Ordering::SeqCst),
+            PROFILE_LOOKAT_RT_NONBLACK.load(Ordering::SeqCst),
+            PROFILE_LOOKAT_RT_CHANGED.load(Ordering::SeqCst),
+            stages.join(" "),
+            ticks.join(" ")
+        ));
+    }
+}
+
+/// One candidate draw-phase task tick (registered once per phase index). Always bumps that phase's
+/// per-frame tick counter (for the sweep), and drives the realtime look-at draw ONLY when this phase is
+/// the selected active one -- so exactly one phase rasterizes per frame regardless of how many are registered.
+pub(crate) unsafe fn profile_lookat_phase_draw_tick(phase_index: usize) {
+    if phase_index < LOOKAT_DRAW_PHASE_COUNT {
+        PROFILE_LOOKAT_PHASE_TICKS[phase_index].fetch_add(1, Ordering::SeqCst);
+    }
+    if PROFILE_LOOKAT_SELECTED_PHASE.load(Ordering::SeqCst) != phase_index {
+        return;
+    }
+    if let Ok(base) = game_module_base() {
+        unsafe { profile_lookat_realtime_draw_tick(base) };
+    }
+}
+
+/// HOOK on the per-frame per-model PUSH task (deobf 0x140bba6e0). For our profile renderers, write the
+/// cursor/sinusoid Head/Neck/Spine2 rotation into the importer PoseHolder (+ recompute its model-space)
+/// BEFORE the original runs, so the original's submodel propagation (FUN_1409e9ac0) copies OUR pose into
+/// every submodel's modelSpaceBoneData -- the buffer the GPU actually skins from -- using the engine's
+/// own (correct) `frame` arg. This is the fix for "head doesn't move": our prior code wrote the importer
+/// PoseHolder but never propagated to the submodels. Fires per model per frame (only when the model is
+/// live), so it naturally tracks the engine's model build/teardown cycling.
+pub(crate) unsafe extern "system" fn per_frame_push_hook(renderer: usize, frame: usize) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if portrait_lookat_enabled() && renderer != 0 && renderer != null {
+        if let Ok(base) = game_module_base() {
+            let vt_ok = unsafe { safe_read_usize(renderer) }.unwrap_or(0)
+                == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA;
+            if vt_ok {
+                // Map renderer -> slot index (the look-at indices/base are cached per slot by the
+                // FrameBegin apply_profile_lookat); skip if this renderer isn't in the profile table.
+                let mut slot = usize::MAX;
+                for s in 0..TITLE_PROFILE_SLOT_COUNT {
+                    if unsafe { safe_read_usize(portrait_renderer_table_entry(base, s as i32)) }
+                        .unwrap_or(0)
+                        == renderer
+                    {
+                        slot = s;
+                        break;
+                    }
+                }
+                if slot != usize::MAX {
+                    if let Some(holder) = unsafe { profile_pose_holder(renderer) } {
+                        let yaw =
+                            f32::from_bits(PROFILE_LOOKAT_YAW_BITS.load(Ordering::SeqCst) as u32);
+                        let pitch =
+                            f32::from_bits(PROFILE_LOOKAT_PITCH_BITS.load(Ordering::SeqCst) as u32);
+                        if unsafe { lookat_apply_realtime(holder, slot, yaw, pitch) } {
+                            PROFILE_PERFRAME_HOOK_HITS.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let orig = PROFILE_PERFRAME_HOOK_ORIG.load(Ordering::SeqCst);
+    if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let f: unsafe extern "system" fn(usize, usize) = unsafe { core::mem::transmute(orig) };
+        unsafe { f(renderer, frame) };
+    }
+}
+
+fn install_per_frame_push_hook() {
+    if PROFILE_PERFRAME_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "perframe-push-hook: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(target) = game_rva(PROFILE_PER_FRAME_PUSH_RVA as u32) else {
+        return;
+    };
+    match unsafe { MhHook::new(target as *mut c_void, per_frame_push_hook as *mut c_void) } {
+        Ok(hook) => {
+            PROFILE_PERFRAME_HOOK_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if unsafe { hook.queue_enable() }.is_err() {
+                append_autoload_debug(format_args!(
+                    "perframe-push-hook: queue_enable failed for 0x{target:x}"
+                ));
+                return;
+            }
+            std::mem::forget(hook);
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "perframe-push-hook: MhHook::new failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => append_autoload_debug(format_args!(
+            "perframe-push-hook: installed on per-frame push 0x{target:x} (submodel pose propagation)"
+        )),
+        status => append_autoload_debug(format_args!(
+            "perframe-push-hook: MH_ApplyQueued failed: {status:?}"
         )),
     }
 }
@@ -2799,19 +3272,25 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     {
         return;
     }
-    // PERIODIC REBUILD (timing test): every ~240 ticks (~4s), CLEAR each slot's build latch
-    // (+0x754/+0x755) then mark-all + refresh, forcing a FRESH model build. refresh is idempotent per
-    // slot via +0x754, so clearing it is required to rebuild. The point: an EARLY build (before LOAD
-    // GAME loaded per-slot FaceData) renders the default head; a LATER build (after FaceData is loaded)
-    // should render the real character. Dumps overwrite each cycle, so the final dumps reflect the
-    // latest FaceData state. Reset the dump mask each cycle so every rebuild re-dumps.
+    // MODEL BUILD: every ~240 ticks, mark all 10 profile slots used + call the refresh that kicks the
+    // async character-model build. refresh is IDEMPOTENT per slot via the +0x754 "load-requested" latch,
+    // so by default this builds each model ONCE and then leaves it -- the model stays LIVE every frame,
+    // which is what the realtime look-at draw needs (an invalid/rebuilding pose-holder fails the draw).
+    //
+    // DESTRUCTIVE REBUILD (default OFF, `portrait_force_rebuild_enabled`): clear each build latch
+    // (+0x754/+0x755) + reset the look-at slot cache to force a FRESH build. The churn leaves models
+    // not-live most of the time (~88% draw failures -> flicker), so it is opt-in: flip it on briefly to
+    // re-capture the post-FaceData face (an early build before LOAD GAME loads FaceData = default head),
+    // then off. See `portrait_force_rebuild_enabled` and bd portrait-lookat-realtime-drawphase-design.
     let counter = PROFILE_FORCE_TICK_COUNTER.fetch_add(1, Ordering::SeqCst);
     if counter % 240 == 0 {
+        let force_rebuild = portrait_force_rebuild_enabled();
         let mark: unsafe extern "system" fn(usize, i32) -> u8 =
             unsafe { core::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
         for s in 0..10i32 {
             let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
-            if valid(r)
+            if force_rebuild
+                && valid(r)
                 && unsafe { safe_read_usize(r) }.unwrap_or(0)
                     == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
             {
@@ -2826,14 +3305,22 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             unsafe { core::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
         unsafe { refresh() };
         append_autoload_debug(format_args!(
-            "force-profile-render: REBUILD cycle (counter={counter}) -- cleared latches + marked ALL 10 + refreshed (summary=0x{summary:x})"
+            "force-profile-render: build cycle (counter={counter}) force_rebuild={force_rebuild} -- marked ALL 10 + refreshed (summary=0x{summary:x})"
         ));
-        // The model is being rebuilt: drop the cached look-at indices/base so they re-resolve and
-        // re-latch the idle base from the fresh skeleton (guards a stale index if a different/smaller
-        // skeleton ever occupies the slot post-rebuild).
-        match PROFILE_LOOKAT_SLOTS.lock() {
-            Ok(mut g) => *g = [None; 10],
-            Err(p) => *p.into_inner() = [None; 10],
+        // Only when we forced a fresh build: drop the cached look-at indices/base so they re-resolve and
+        // re-latch the idle base from the fresh skeleton. Without a forced rebuild the model (and its
+        // skeleton) persist, so KEEP the cache -> the look-at keeps driving every frame with no re-resolve gap.
+        if force_rebuild {
+            match PROFILE_LOOKAT_SLOTS.lock() {
+                Ok(mut g) => *g = [None; 10],
+                Err(p) => *p.into_inner() = [None; 10],
+            }
+            // The models are being rebuilt -> the cached PoseHolder pointers are about to go stale. Drop
+            // them so they re-resolve against the fresh skeletons (and re-latch a clean base) before the
+            // sticky-keep path above starts driving them again.
+            for h in PROFILE_LOOKAT_HOLDERS.iter() {
+                h.store(0, Ordering::SeqCst);
+            }
         }
     }
     // ~80 ticks AFTER each rebuild kick, reset the dump mask so the freshly-rebuilt models (not the
@@ -2865,12 +3352,13 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                 && unsafe { safe_read_usize(r) }.unwrap_or(0)
                     == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
             {
+                // FrameBegin role (this task): REGISTER the holder + resolve Head/Neck/Spine2 indices +
+                // publish the cursor. The per-frame write+recompute+DRAW that makes the head track the
+                // cursor in realtime now happens in `profile_lookat_realtime_draw_tick`, a separate
+                // recurring task in the GameSceneDraw phase (render thread, inside a live GX frame). The
+                // old per-tick game-task offscreen drive rendered black (FrameBegin = before the GX frame
+                // records); the draw-phase task is the fix.
                 unsafe { apply_profile_lookat(r, s) };
-                // NOTE: driving the offscreen re-render per-tick from the game task (FUN_140bb8d90) was
-                // tried to fix the ~4s render-cadence lag, but it renders BLACK (the render must run on
-                // the render thread -- the keepalive TIER-2 blocker), clobbering the good rebuild render.
-                // So the look-at tracks the cursor at the model-rebuild cadence until keepalive lands.
-                let _ = PROFILE_OFFSCREEN_DRIVE_RVA;
             }
         }
     }

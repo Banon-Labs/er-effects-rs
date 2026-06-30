@@ -821,6 +821,15 @@ pub(crate) const PROFILE_RENDERER_TEARDOWN_RVA: usize = 0x9b2db0;
 /// render via `FUN_140bb73a0(*(renderer+0xa8))`, reading the global GxDrawContext itself (no arg).
 /// The menu-owned per-frame caller stops at Continue, so we call this ourselves each frame.
 pub(crate) const PROFILE_OFFSCREEN_DRIVE_RVA: usize = 0xbb8ca0;
+/// Profile-portrait draw step `FUN_1409aa3e0` (dump VA) -> deobf RVA 0x1409aa290 (content-unique, shift
+/// -0x150, ground-truthed via dump-deobf-shift). No-arg: loops the 10-slot renderer title table at
+/// base+0x3d6d8d0 and, for each non-null slot, calls the offscreen-draw thunk (PROFILE_OFFSCREEN_DRIVE_RVA)
+/// to rasterize that portrait into its offscreen RT. The engine only invokes it on profile data-change
+/// (e.g. the reset/save menu action `FUN_14082bb20`), NOT per frame -- so the thumbnails are static. We
+/// call it ourselves every frame from a DRAW-PHASE recurring task (CSTaskGroupIndex::GameSceneDraw),
+/// where a GX frame is actively recording so the GX subcontext pool pop succeeds (it returns 0 -> a black
+/// no-op at FrameBegin, before the frame records -- the real reason a game-task-thread drive went black).
+pub(crate) const PROFILE_DRAW_STEP_RVA: usize = 0x9aa290;
 /// The spared slot-0 CSMenuProfModelRend renderer (0 until the Continue teardown spares it). Its
 /// global ResMan model-update task keeps loading/animating the model while the object lives.
 pub(crate) static LOADING_BG_PORTRAIT_SPARED_RENDERER: AtomicUsize = AtomicUsize::new(0);
@@ -1064,6 +1073,14 @@ pub(crate) struct LookatSlot {
     pub head: i32,
     pub neck: i32,
     pub spine2: i32,
+    /// Idle (clean) LOCAL quaternions for Head/Neck/Spine2, latched ONCE from the freshly-rebuilt
+    /// pose so the per-frame look-at composes `base ⊗ delta` (drift-free) instead of `current ⊗ delta`
+    /// (which compounds at 60 Hz when the draw-phase task drives every frame). Re-latched on rebuild
+    /// (the slot is reset to `None` each model rebuild, so this re-captures the clean pose).
+    pub head_base: [f32; 4],
+    pub neck_base: [f32; 4],
+    pub spine2_base: [f32; 4],
+    pub base_latched: bool,
 }
 pub(crate) static PROFILE_LOOKAT_SLOTS: std::sync::Mutex<[Option<LookatSlot>; 10]> =
     std::sync::Mutex::new([None; 10]);
@@ -1083,6 +1100,18 @@ pub(crate) static PROFILE_LOOKAT_BONES_DUMPED_MASK: AtomicUsize = AtomicUsize::n
 /// the original's recompute cascades our rotation into the final pose the render skins from. This is the
 /// only injection point that survives the per-frame anim re-import (a game-task write is clobbered).
 pub(crate) const UPDATE_BONE_MODEL_SPACE_RVA: usize = 0x1653350;
+/// Per-frame per-model PUSH task `FUN_140bba7d0` (dump) -> deobf RVA 0x140bba6e0 (content-unique, shift
+/// -0xf0). `fn(renderer, frame)`: if model_ins(+0x778) && X(+0x948) it reads importer=*(X+0x20) and calls
+/// the submodel propagation `FUN_1409e9ac0(model_ins, frame, importer)` which copies the importer's
+/// MODEL-space bones into every submodel's own poseHolder.modelSpaceBoneData (what the GPU skins from).
+/// We HOOK it: write our Head/Neck/Spine2 rotation into the importer PoseHolder + updateBoneModelSpace
+/// BEFORE the original, so the original propagates OUR pose to the submodels at 60 Hz with the correct
+/// `frame` arg (which we cannot synthesize -- it feeds the render-entity commit + cloth). See bd
+/// portrait-lookat-submodel-propagation-RE-2026-06-29.
+pub(crate) const PROFILE_PER_FRAME_PUSH_RVA: usize = 0xbba6e0;
+pub(crate) static PROFILE_PERFRAME_HOOK_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static PROFILE_PERFRAME_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_PERFRAME_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 /// Registry of the live profile PoseHolder pointers the game-task tick has resolved as "ours" (0 =
 /// empty). The hook only applies look-at to a holder in this set; the c0000 head/neck/spine2 indices
 /// are the shared `PROFILE_LOOKAT_*_IDX` globals above, and the angle is the shared yaw/pitch below.
@@ -1099,6 +1128,80 @@ pub(crate) static PROFILE_LOOKAT_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 /// re-renders at the ~4s model-rebuild cadence, so the head appears to track the cursor with seconds of
 /// lag; driving the offscreen render each tick (menu phase only -- valid GxDrawContext) makes it smooth.
 pub(crate) static PROFILE_LOOKAT_RENDER_DRIVES: AtomicUsize = AtomicUsize::new(0);
+/// Set true once the DRAW-PHASE realtime task (`profile_lookat_realtime_draw_tick`) is live. While set,
+/// the `updateBoneModelSpace` detour SKIPS its own look-at write (passthrough only): the draw-phase task
+/// owns the write+recompute+draw each frame via the trampoline, so the detour must not also post-multiply
+/// (that would double-apply / drift). The detour stays installed only to provide the clean recompute
+/// trampoline and to passthrough the engine's own natural recompute calls.
+pub(crate) static PROFILE_LOOKAT_REALTIME: AtomicBool = AtomicBool::new(false);
+/// DRAW-PHASE SWEEP (diagnostic): the realtime draw task is registered in EACH of these candidate CS
+/// task-group phases; every registration bumps its own `PROFILE_LOOKAT_PHASE_TICKS[i]` each frame, but
+/// only the phase whose index == `PROFILE_LOOKAT_SELECTED_PHASE` actually drives the draw. This lets one
+/// run measure which phases tick per-frame at the menu (vs GameSceneDraw, world-gated ~11%) AND switch
+/// the active draw phase live (write the index to `er-effects-lookat-phase.txt`) without recompiling,
+/// until one renders the portrait smoothly every frame. Order MUST match `LOOKAT_DRAW_PHASE_NAMES` and
+/// the registration array in `spawn_game_task`. Default = AdhocDraw (index 5): adjacent to GameSceneDraw
+/// (same draw region -> live GX pool) but not world-scene-gated, so the best first bet for per-frame.
+pub(crate) const LOOKAT_DRAW_PHASE_COUNT: usize = 8;
+pub(crate) const LOOKAT_DRAW_PHASE_NAMES: [&str; LOOKAT_DRAW_PHASE_COUNT] = [
+    "Draw_Pre",
+    "GraphicsStep",
+    "DrawStep",
+    "DrawBegin",
+    "GameSceneDraw",
+    "AdhocDraw",
+    "DrawEnd",
+    "Draw_Post",
+];
+pub(crate) const LOOKAT_DRAW_PHASE_DEFAULT: usize = 5;
+pub(crate) static PROFILE_LOOKAT_PHASE_TICKS: [AtomicUsize; LOOKAT_DRAW_PHASE_COUNT] =
+    [const { AtomicUsize::new(0) }; LOOKAT_DRAW_PHASE_COUNT];
+pub(crate) static PROFILE_LOOKAT_SELECTED_PHASE: AtomicUsize =
+    AtomicUsize::new(LOOKAT_DRAW_PHASE_DEFAULT);
+/// FrameBegin-paced throttle counter for `profile_lookat_phase_diag_tick` (selector re-read + sweep log).
+pub(crate) static PROFILE_LOOKAT_PHASE_DIAG_COUNTER: AtomicUsize = AtomicUsize::new(0);
+/// Per-stage validity counters for the look-at resolution chain on a fixed probe slot (slot 0), bumped
+/// every FrameBegin frame so the sweep log shows EXACTLY where the ~89% drop is (vs guessing). Stages:
+/// [0]=renderer table-valid, [1]=model_ins(+0x778), [2]=anim-holder X(+0x948), [3]=importer(*(X+0x20)),
+/// [4]=skeleton, [5]=local-bone-data, [6]=bone-count-sane, [7]=frames-probed (denominator).
+pub(crate) const PROFILE_LOOKAT_STAGE_COUNT: usize = 8;
+pub(crate) const PROFILE_LOOKAT_STAGE_NAMES: [&str; PROFILE_LOOKAT_STAGE_COUNT] = [
+    "rend",
+    "model_ins",
+    "anim948",
+    "importer",
+    "skel",
+    "local",
+    "bones",
+    "frames",
+];
+pub(crate) static PROFILE_LOOKAT_STAGE_OK: [AtomicUsize; PROFILE_LOOKAT_STAGE_COUNT] =
+    [const { AtomicUsize::new(0) }; PROFILE_LOOKAT_STAGE_COUNT];
+/// Draw-task frame counter (drives the selftest sinusoid + throttles the RT-readback oracle).
+pub(crate) static PROFILE_LOOKAT_DRAW_FRAME: AtomicUsize = AtomicUsize::new(0);
+/// IN-PROCESS PIXEL ORACLE (replaces the human-eyeball check). Each sample reads back the probe slot's
+/// offscreen RT AFTER the draw step and records: rt_samples (readbacks taken), rt_nonblack (head rendered,
+/// not black -> no flicker), rt_changed (hash != previous -> RT content moved with the driven angle ->
+/// tracking), rt_lasthash. PASS under the sinusoid selftest = nonblack≈samples AND changed≈samples.
+pub(crate) static PROFILE_LOOKAT_RT_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_LOOKAT_RT_NONBLACK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_LOOKAT_RT_CHANGED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_LOOKAT_RT_LASTHASH: AtomicUsize = AtomicUsize::new(0);
+/// Last slot the oracle sampled (the present-model slot cycles), so "changed" is only counted when two
+/// consecutive samples are the SAME slot -- otherwise a slot switch (different character) would look like
+/// motion. usize::MAX = none yet.
+pub(crate) static PROFILE_LOOKAT_RT_LASTSLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Cached selftest flag (the draw task reads this atomic; the FrameBegin diag tick refreshes it from the
+/// file throttled, so the draw path never does a per-frame file stat).
+pub(crate) static PROFILE_LOOKAT_SELFTEST_ON: AtomicBool = AtomicBool::new(false);
+/// Selftest sinusoid: angular step per draw-frame and yaw/pitch amplitudes (same units as the normalized
+/// cursor, so the downstream Head/Neck/Spine2 gains apply identically). ~150-frame period -> ~2.5 s sweep.
+pub(crate) const LOOKAT_SELFTEST_W: f32 = 0.0419; // 2*pi/150
+pub(crate) const LOOKAT_SELFTEST_YAW_AMP: f32 = 1.0;
+pub(crate) const LOOKAT_SELFTEST_PITCH_AMP: f32 = 0.6;
+/// RT-readback oracle throttle: sample every N draw-frames (readback is a GPU->CPU stall; don't do it
+/// every frame). 8 -> ~7 samples/s, plenty to measure nonblack% and hash-change%.
+pub(crate) const LOOKAT_RT_SAMPLE_INTERVAL: usize = 8;
 /// DEFAULT-OFF gate for the ProfileSelect load flow (see `profile_select_load_flow_enabled`). When
 /// false (default) `product_core_autoload_tick` takes the PROVEN native Continue commit, byte-for-byte
 /// unchanged; the human flips this on only to probe-test the portrait-rendering ProfileSelect path

@@ -148,6 +148,37 @@ pub(crate) fn portrait_lookat_enabled() -> bool {
         .join("er-effects-portrait-lookat.txt")
         .exists()
 }
+/// DEFAULT-OFF: when set, `force_profile_render_tick` does the DESTRUCTIVE periodic rebuild -- every ~240
+/// ticks it CLEARS each renderer's build latch (+0x754/+0x755) + resets the look-at slot cache, forcing a
+/// FRESH async model build. That churn leaves the models in a not-live (rebuilding) state most of the time,
+/// which makes the realtime look-at draw fail ~88% of frames -> flicker. So it is OFF by default: the model
+/// builds ONCE (idempotent mark+refresh) and PERSISTS, so the pose-holder stays live every frame and the
+/// portrait tracks the cursor smoothly. Flip this on briefly (then off) only to force a fresh rebuild that
+/// re-captures the post-FaceData face. Mirrors `portrait_lookat_enabled` (env OR file).
+pub(crate) fn portrait_force_rebuild_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_PORTRAIT_FORCE_REBUILD").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-portrait-force-rebuild.txt")
+        .exists()
+}
+/// DEFAULT-OFF self-validation: when set, the realtime draw task drives Head/Neck/Spine2 from a
+/// DETERMINISTIC SINUSOID (frame-counter based) instead of GetCursorPos -- zero-input, reproducible, no
+/// human mouse -- and reads back the portrait offscreen RT each sample to record nonblack% + hash-change%
+/// as in-process telemetry semaphores (oracle_profile_lookat_rt_*). PASS = nonblack≈100% (no flicker) AND
+/// changed≈100% under the sinusoid (the rendered head moves with the driven angle) AND render_drives≈frames
+/// (per-frame redraw). This replaces the human-eyeball oracle. Mirrors `portrait_lookat_enabled`.
+pub(crate) fn portrait_lookat_selftest_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_PORTRAIT_LOOKAT_SELFTEST").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-portrait-lookat-selftest.txt")
+        .exists()
+}
 /// Kill-switch to skip installing the continue_trace hooks (bisecting a ~19s
 /// title crash caused by our DLL). When set, the continue/load-flow hooks are
 /// not installed even if autoload is configured.
