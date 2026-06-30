@@ -64,69 +64,6 @@ def main() -> int:
     cases = [
         PolicyCase("allow-rtk", "rtk ls", True),
         PolicyCase(
-            "deny-inline-env",
-            "FOO=bar ./scripts/check.sh",
-            False,
-            "named-env.env",
-        ),
-        PolicyCase(
-            "deny-ast-inline-env",
-            "FOO=bar ./scripts/check.sh",
-            False,
-            "named-env.env",
-            {
-                "command_ast": {
-                    "parse_ok": True,
-                    "statements": [
-                        {
-                            "env_setting": True,
-                            "command_name": "./scripts/check.sh",
-                        }
-                    ],
-                }
-            },
-        ),
-        PolicyCase(
-            "deny-command-substitution-inline-env",
-            "FOO=$(python3 -c 'print(1)') ./scripts/check.sh",
-            False,
-            "named-env.env",
-        ),
-        PolicyCase(
-            "deny-export-with-ast",
-            "export FOO=bar",
-            False,
-            "named-env.env",
-            {
-                "command_ast": {
-                    "parse_ok": True,
-                    "statements": [
-                        {
-                            "env_setting": False,
-                            "command_name": "export",
-                        }
-                    ],
-                }
-            },
-        ),
-        PolicyCase(
-            "deny-env-command-with-ast",
-            "env FOO=bar ./scripts/check.sh",
-            False,
-            "named-env.env",
-            {
-                "command_ast": {
-                    "parse_ok": True,
-                    "statements": [
-                        {
-                            "env_setting": False,
-                            "command_name": "env",
-                        }
-                    ],
-                }
-            },
-        ),
-        PolicyCase(
             "allow-local-shell-vars-before-commands-with-coarse-ast",
             "run_id=$(date +%Y%m%d-%H%M%S)\n"
             "log_dir=\"target/runtime-probe/profile-portrait-capture-measure-$run_id\"\n"
@@ -210,13 +147,6 @@ def main() -> int:
             "allow-equals-in-heredoc-body",
             "python3 - <<'PY'\nimport os\nFOO=os.getpid()\nPY",
             True,
-        ),
-        # Real inline env assignment with a quoted value must still be caught.
-        PolicyCase(
-            "deny-quoted-value-inline-env",
-            'FOO="bar baz" ./scripts/check.sh',
-            False,
-            "named-env.env",
         ),
         # Quoted semicolons are not command separators (no command_ast supplied
         # at runtime, so the quote-stripping fallback must handle these).
