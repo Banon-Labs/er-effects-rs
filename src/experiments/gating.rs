@@ -197,6 +197,22 @@ pub(crate) fn portrait_lookat_selftest_enabled() -> bool {
         .join("er-effects-portrait-lookat-selftest.txt")
         .exists()
 }
+/// DEFAULT-OFF cursor-tracking PROOF: when set, the realtime draw task deterministically self-drives the
+/// OS cursor (`SetCursorPos`) through held left/center/right positions over the Elden Ring window, then
+/// reads it back through the SAME `GetCursorPos` path the product uses and drives the head from that read
+/// cursor (NO sinusoid shortcut). It dumps the live head at each held cursor position
+/// (`portrait-capture-slot{200,201,202}.bin`), so the three distinct poses prove the head tracks the
+/// ACTUAL cursor input -- zero foreign input (the DLL warps the cursor itself, at the exact stage the game
+/// polls). Takes precedence over `selftest`. Mirrors `portrait_lookat_enabled` (env OR file).
+pub(crate) fn portrait_cursor_sweep_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_PORTRAIT_CURSOR_SWEEP").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-portrait-cursor-sweep.txt")
+        .exists()
+}
 /// Kill-switch to skip installing the continue_trace hooks (bisecting a ~19s
 /// title crash caused by our DLL). When set, the continue/load-flow hooks are
 /// not installed even if autoload is configured.

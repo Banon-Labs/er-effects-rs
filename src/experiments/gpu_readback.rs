@@ -400,10 +400,10 @@ unsafe fn resolve_content_resource_deterministic(srv_gx: usize) -> Option<ID3D12
 /// -- during the menu->world teardown it QIs a freed object -> uncatchable AV. With the deterministic chain
 /// there is no scan, and the cached resource is our built renderer's RT (our lifetime), so per-frame
 /// re-copy is safe through the whole loading screen -> the head tracks the look-at without crashing.
-/// `srv_gx` is the renderer offscreen's CSGxTexture (post-Continue the offscreen is a single RT==SRV
-/// texture, so this IS the rendered-head RT). `_start` retained for call-site compatibility.
+/// `srv_gx` is the renderer offscreen's CSGxTexture; `start` is the offscreen nest (`renderer+0xa8`)
+/// that `readback_offscreen_rgba8` reads the real head from.
 pub(crate) unsafe fn readback_cached_content_rgba8(
-    _start: usize,
+    start: usize,
     srv_gx: usize,
 ) -> Option<(u32, u32, Vec<u8>)> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
@@ -415,11 +415,21 @@ pub(crate) unsafe fn readback_cached_content_rgba8(
             let res = ID3D12Resource::from_raw_borrowed(&raw)?;
             return readback_resource_rgba8_inner(res.clone());
         }
-        // First resolve: deterministic chain (no scan), then cache an AddRef'd ref for all future frames.
-        let resource = resolve_content_resource_deterministic(srv_gx)?;
+        // First resolve: deterministic chain (no scan); else a ONE-TIME scan of the OFFSCREEN nest, then
+        // cache an AddRef'd ref for all future frames. The build-own (post-Continue) renderer's GX wrapper
+        // layout differs from the menu renderer the chain was RE'd from -- the det-resolve-dump shows
+        // h1+0x18 is null there, so hop 2 fails closed; AND scanning `srv_gx` itself finds nothing. The
+        // proven head path is `find_d3d12_resource(start)` over the OFFSCREEN nest (renderer+0xa8) -- the
+        // exact resolve `readback_offscreen_rgba8(off)` uses to read back the real head (dumped as slot
+        // 100). The teardown-race AV was a PER-FRAME scan; a one-time scan while the renderer is alive
+        // mid-loading, cached here, never re-scans -> no race.
+        let (resource, how) = match resolve_content_resource_deterministic(srv_gx) {
+            Some(r) => (r, "deterministic chain"),
+            None => (find_d3d12_resource(start)?, "one-time offscreen nest scan"),
+        };
         PROFILE_LIVE_RT_RES.store(resource.clone().into_raw() as usize, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "live-feed: DETERMINISTIC content RT resolved from srv_gx=0x{srv_gx:x} -> cached resource (no scan) -- per-frame tracking now safe"
+            "live-feed: content RT resolved from start=0x{start:x} srv_gx=0x{srv_gx:x} via {how} -> cached resource -- per-frame tracking now safe"
         ));
         readback_resource_rgba8_inner(resource)
     }))

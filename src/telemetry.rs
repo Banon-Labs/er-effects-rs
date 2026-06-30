@@ -2102,6 +2102,13 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_profile_lookat_render_drives",
             PROFILE_LOOKAT_RENDER_DRIVES.load(Ordering::SeqCst),
         );
+        // Mouse-track proof: bitmask of look-left/center/look-right head dumps captured (0b111 = all
+        // three distinct poses dumped to portrait-capture-slot{200,201,202}.bin during selftest).
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_track_buckets",
+            PROFILE_LOOKAT_TRACK_BUCKETS.load(Ordering::SeqCst),
+        );
         body.push_str(&format!(
             "  \"oracle_native_profile_capture_enabled\": {},\n  \"oracle_native_load_game_fired\": {},\n  \"oracle_native_load_game_last_node\": {},\n  \"oracle_native_load_game_last_node_vtable\": {},\n  \"oracle_native_load_game_last_member_dialog\": {},\n  \"oracle_native_load_game_last_member_fn\": {},\n  \"oracle_native_load_game_last_member_adjust\": {},\n  \"oracle_native_profile_source_ready\": {},\n  \"oracle_native_profile_source_name\": \"{}\",\n  \"oracle_native_profile_renderer_class\": \"{}\",\n",
             native_profile_capture_enabled(),

@@ -1195,6 +1195,12 @@ pub(crate) static PROFILE_LOOKAT_SPINE2_IDX: AtomicUsize = AtomicUsize::new(usiz
 pub(crate) static PROFILE_LOOKAT_BONE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_LOOKAT_LAST_CURSOR: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_LOOKAT_BONES_DUMPED_MASK: AtomicUsize = AtomicUsize::new(0);
+/// MOUSE-TRACK PROOF latch (selftest only): bit 0/1/2 set once the live head has been dumped at a
+/// look-left / center / look-right yaw bucket (`portrait-capture-slot{200,201,202}.bin`). The three
+/// dumps are visually distinct head poses, converting the ambiguous per-frame `rt changed%` into a
+/// decisive before/after that the head pose tracks the drive signal (= the normalized cursor in
+/// product). Mask == 0b111 once all three captured (`oracle_profile_lookat_track_buckets`).
+pub(crate) static PROFILE_LOOKAT_TRACK_BUCKETS: AtomicUsize = AtomicUsize::new(0);
 /// `updateBoneModelSpace` (dump 0x141653370) -> deobf 0x141653350 (shift -0x20, content-unique). The
 /// render calls this (via `GetBoneModelSpace`) each frame to rebuild `modelSpaceBoneData` from the
 /// (anim-imported) `localSpaceBoneData` for every dirty bone. We HOOK it: before the original runs, we
@@ -1353,6 +1359,20 @@ pub(crate) static PROFILE_LOOKAT_RT_LASTSLOT: AtomicUsize = AtomicUsize::new(usi
 /// Cached selftest flag (the draw task reads this atomic; the FrameBegin diag tick refreshes it from the
 /// file throttled, so the draw path never does a per-frame file stat).
 pub(crate) static PROFILE_LOOKAT_SELFTEST_ON: AtomicBool = AtomicBool::new(false);
+/// Cached cursor-sweep PROOF flag (same latch pattern as selftest). When set, the draw task self-drives
+/// the OS cursor through held L/C/R positions and drives the head from the read-back cursor.
+pub(crate) static PROFILE_CURSOR_SWEEP_ON: AtomicBool = AtomicBool::new(false);
+/// One-shot latch so the cursor-sweep helper logs only its first `SetCursorPos` warp + result.
+pub(crate) static PROFILE_CURSOR_SWEEP_FIRST_WARP: AtomicBool = AtomicBool::new(false);
+/// Cursor-sweep proof: draw-frames held at each cursor position (~24 frames ≈ 1s at ~23fps), and the
+/// per-hold cursor X target as a fraction of the ER window width (left / center / right). Y is held at
+/// mid-height. `SetCursorPos(rect.left + fx*w, rect.top + 0.5*h)`.
+// Hold of 6 draw-frames per position: a full L/C/R cycle is ~18 frames (<1s), so every position is
+// visited several times within the (short) post-Continue live-render window -> all three one-shot bucket
+// dumps fill before the menu renderer winds down. The bone drive is instant (no interpolation), so each
+// captured frame's pose exactly matches that frame's cursor even at this cadence.
+pub(crate) const CURSOR_SWEEP_HOLD_FRAMES: usize = 6;
+pub(crate) const CURSOR_SWEEP_TARGETS_X: [f32; 3] = [0.10, 0.50, 0.90];
 /// Selftest sinusoid: angular step per draw-frame and yaw/pitch amplitudes (same units as the normalized
 /// cursor, so the downstream Head/Neck/Spine2 gains apply identically). ~150-frame period -> ~2.5 s sweep.
 pub(crate) const LOOKAT_SELFTEST_W: f32 = 0.0419; // 2*pi/150
@@ -1444,7 +1464,7 @@ pub(crate) const GLOBAL_TEX_REPOSITORY_RVA: usize = 0x3d73e58;
 /// ASCII and <= the 21-char native target length so the in-place DLString target rewrite fits.
 pub(crate) const ER_TPF_COVER_SYSTEX_KEY: &str = "SYSTEX_ErTpf_Cover00";
 /// er-tpf cover texture dimensions + checker cell (bright magenta/white checker = unmistakable on the
-/// logo-replacement screenshot). 256x256 RGBA8 (uncompressed, legacy DDS header -> DXGI 28).
+/// loading-screen-portrait screenshot). 256x256 RGBA8 (uncompressed, legacy DDS header -> DXGI 28).
 pub(crate) const ER_TPF_COVER_TEX_DIM: u32 = 256;
 pub(crate) const ER_TPF_COVER_TEX_CELL: u32 = 32;
 /// Last-error codes recorded in `ER_TPF_COVER_LAST_ERROR` (a memory-read oracle, not a screenshot).

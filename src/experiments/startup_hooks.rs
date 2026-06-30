@@ -2215,7 +2215,6 @@ unsafe fn refresh_loading_bg_live_gx(base: usize) {
 /// convert it to a PNG offline and visually confirm it is the loaded character's head (not the
 /// depth buffer / garbage). Best-effort; gated by the same default-OFF readback path.
 fn dump_portrait_rgba(slot: i32, width: u32, height: u32, px: &[u8]) {
-    use std::io::Write;
     let dir = std::env::var("ER_EFFECTS_AUTOLOAD_DEBUG_PATH")
         .ok()
         .and_then(|p| PathBuf::from(p).parent().map(|d| d.to_path_buf()))
@@ -2227,10 +2226,9 @@ fn dump_portrait_rgba(slot: i32, width: u32, height: u32, px: &[u8]) {
     };
     let path = dir.join(&name);
     if let Ok(mut f) = fs::File::create(&path) {
-        let _ = f.write_all(b"ERPX");
-        let _ = f.write_all(&width.to_le_bytes());
-        let _ = f.write_all(&height.to_le_bytes());
-        let _ = f.write_all(px);
+        // Encode through the erpx-rs crate (single source of truth for the ERPX container header),
+        // so the on-disk format can never drift from the host-side decoder/`erpx2png` tool.
+        let _ = erpx_rs::write_to(&mut f, width, height, px);
         append_autoload_debug(format_args!(
             "portrait-dump: slot={slot} wrote {width}x{height} ({} bytes) -> {name}",
             px.len()
@@ -2394,6 +2392,38 @@ fn read_cursor_normalized() -> Option<(f32, f32)> {
     let ny = ((pt.y - rect.top) as f32 / h) * 2.0 - 1.0;
     // Clamp a little beyond the edges so an off-window cursor saturates rather than flailing.
     Some((nx.clamp(-1.5, 1.5), ny.clamp(-1.5, 1.5)))
+}
+
+/// CURSOR-SWEEP PROOF helper: warp the OS cursor to `(fx, fy)` as a fraction of the Elden Ring window's
+/// client rect (`fx=0.10` left .. `0.90` right; `fy=0.5` mid-height), via `SetCursorPos`. This runs INSIDE
+/// the game process, so it sets the same Wine cursor that [`read_cursor_normalized`]'s `GetCursorPos` reads
+/// back -- a zero-foreign-input self-drive at the exact stage the look-at polls. Logs the first warp +
+/// result. Best-effort: `None` if the window/SetCursorPos is unavailable (the proof then visibly fails:
+/// the head won't move and the buckets won't fill).
+fn drive_cursor_to_window_fraction(fx: f32, fy: f32) -> Option<()> {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, SetCursorPos};
+    let hwnd = own_window()?;
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
+        return None;
+    }
+    let w = (rect.right - rect.left).max(1) as f32;
+    let h = (rect.bottom - rect.top).max(1) as f32;
+    let x = rect.left + (fx * w) as i32;
+    let y = rect.top + (fy * h) as i32;
+    let ok = unsafe { SetCursorPos(x, y) }.is_ok();
+    if PROFILE_CURSOR_SWEEP_FIRST_WARP.swap(true, Ordering::SeqCst) != true {
+        append_autoload_debug(format_args!(
+            "cursor-sweep: first SetCursorPos({x},{y}) ok={ok} window=[{},{} {}x{}] frac=({fx},{fy})",
+            rect.left, rect.top, w as i32, h as i32
+        ));
+    }
+    ok.then_some(())
 }
 
 /// Hamilton product `a * b` of two `(x, y, z, w)` quaternions (w = scalar, matching `BoneData.q`).
@@ -2890,7 +2920,18 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize) {
     // PUBLISH the drive angle for the per-frame push hook to consume: a deterministic SINUSOID in selftest
     // (zero-input, reproducible -> the pixel oracle proves the head moves with the driven angle), else the
     // live cursor (the product input). The pose WRITE happens in the push hook; here we only publish + draw.
-    let (yaw, pitch) = if PROFILE_LOOKAT_SELFTEST_ON.load(Ordering::SeqCst) {
+    let (yaw, pitch) = if PROFILE_CURSOR_SWEEP_ON.load(Ordering::SeqCst) {
+        // CURSOR-TRACKING PROOF: deterministically warp the OS cursor to a held L/C/R position over the ER
+        // window, THEN read it back through the SAME GetCursorPos path the product uses, and drive the head
+        // from that read cursor (no sinusoid). Zero foreign input: the DLL self-drives the cursor at the
+        // exact stage the look-at polls it. The yaw lands in a left/center/right bucket -> the bucket dump
+        // below captures the head at each real cursor position.
+        let hold = (frame / CURSOR_SWEEP_HOLD_FRAMES) % CURSOR_SWEEP_TARGETS_X.len();
+        drive_cursor_to_window_fraction(CURSOR_SWEEP_TARGETS_X[hold], 0.5);
+        let (cx, cy) = read_cursor_normalized().unwrap_or((0.0, 0.0));
+        PROFILE_LOOKAT_LAST_CURSOR.store(pack_cursor(cx, cy), Ordering::SeqCst);
+        (cx * LOOKAT_YAW_SIGN, cy * LOOKAT_PITCH_SIGN)
+    } else if PROFILE_LOOKAT_SELFTEST_ON.load(Ordering::SeqCst) {
         let t = frame as f32 * LOOKAT_SELFTEST_W;
         (
             t.sin() * LOOKAT_SELFTEST_YAW_AMP * LOOKAT_YAW_SIGN,
@@ -2983,6 +3024,34 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize) {
                                     ((cw as usize) << 16) | (ch as usize),
                                     Ordering::SeqCst,
                                 );
+                                // MOUSE-TRACK PROOF (selftest): one-shot dump the LIVE head at three
+                                // held yaw buckets so the look-left/center/look-right poses are
+                                // visually inspectable. The selftest sinusoid sweeps `yaw` across
+                                // [-1,1] each period, so all three buckets fill within one loading
+                                // window. In product the same PROFILE_LOOKAT_YAW_BITS atomic is set
+                                // from the normalized cursor, so distinct poses here = the head pose
+                                // tracks the drive signal. Dump from `&cpx` BEFORE it moves into the
+                                // overlay lock below.
+                                if PROFILE_LOOKAT_SELFTEST_ON.load(Ordering::SeqCst)
+                                    || PROFILE_CURSOR_SWEEP_ON.load(Ordering::SeqCst)
+                                {
+                                    let bucket = if yaw <= -0.5 {
+                                        Some(0usize)
+                                    } else if yaw >= 0.5 {
+                                        Some(2usize)
+                                    } else if yaw.abs() <= 0.15 {
+                                        Some(1usize)
+                                    } else {
+                                        None
+                                    };
+                                    if let Some(b) = bucket {
+                                        let prev = PROFILE_LOOKAT_TRACK_BUCKETS
+                                            .fetch_or(1 << b, Ordering::SeqCst);
+                                        if prev & (1 << b) == 0 {
+                                            dump_portrait_rgba(200 + b as i32, cw, ch, &cpx);
+                                        }
+                                    }
+                                }
                                 if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
                                     *g = Some((cw, ch, cpx));
                                 }
@@ -3305,6 +3374,7 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
         }
         // Refresh the cached selftest flag here (throttled) so the draw task never does a per-frame stat.
         PROFILE_LOOKAT_SELFTEST_ON.store(portrait_lookat_selftest_enabled(), Ordering::SeqCst);
+        PROFILE_CURSOR_SWEEP_ON.store(portrait_cursor_sweep_enabled(), Ordering::SeqCst);
     }
     if n % 240 == 0 {
         let ticks: Vec<String> = (0..LOOKAT_DRAW_PHASE_COUNT)
