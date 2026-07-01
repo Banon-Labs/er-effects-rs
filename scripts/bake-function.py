@@ -150,6 +150,7 @@ def reassemble(va, paths=200, budget=1500):
     branch_targets = set()
     arxan_jmp = {}                          # addr -> resolved successor (collapsed gadget)
     arxan_ret = set()                       # addr -> Arxan return-gadget exit (emit `ret`)
+    stack_ret = set()                       # addr -> inline stack-gadget ret (jmp [rsp] == ret)
     for addr in in_fn:
         ins = next(md.disasm(img[addr - BASE:addr - BASE + 16], addr), None)
         if ins is None:
@@ -176,6 +177,10 @@ def reassemble(va, paths=200, budget=1500):
                 branch_targets.add(t)
         if ins.mnemonic == "call" and ins.op_str.startswith("0x") and is_arx(int(ins.op_str, 16)):
             return None, f"flattened/thunk: call into Arxan section at {hex(addr)} (needs gadget-collapse phase)"
+        # inline Arxan ret-gadget living in game .text: `lea rsp,[rsp+8]; jmp qword [rsp-8]`
+        # == ret. Recovery followed it to the caller and marked the jmp terminal="ret".
+        if ins.mnemonic == "jmp" and "[rsp" in ins.op_str and r.terminals.get(addr) == "ret":
+            stack_ret.add(addr)
 
     # If the function returns via an Arxan return-gadget, its real prologue/epilogue
     # (frame allocation + callee-saved pushes) live in the dropped Arxan trampolines.
@@ -220,10 +225,19 @@ def reassemble(va, paths=200, budget=1500):
             if ins is None:
                 return None, f"undecodable instruction at {hex(addr)}"
             m, o = ins.mnemonic, ins.op_str
-            # gadget detection
-            if m == "lea" and re.match(r"rsp, \[rsp [+-]", o):
+            # inline stack-gadget ret: `lea rsp,[rsp+8]; jmp [rsp-8]` == ret. Drop the paired
+            # lea (its +8 is subsumed by ret's pop) and emit ret -- but only when that exact
+            # pattern holds; a wrong collapse would shift rsp, so otherwise leave it flagged.
+            if addr in stack_ret:
+                if lines and re.search(r"lea rsp, \[rsp \+ (0x8|8)\]$", lines[-1].strip()):
+                    lines.pop(); lines.append("    ret"); continue
                 gadgets.append(hex(addr))
-            if m == "jmp" and "[rsp" in o:
+            # gadget detection: lea rsp,[rsp±N] and its pop/push encodings are valid x86 that
+            # clang/rev.ng handle -- don't flag them. Only an UNRESOLVED indirect jmp/call
+            # through the stack is a real blocker (a resolved ret-gadget is collapsed above).
+            if m == "jmp" and "[rsp" in o and addr not in stack_ret:
+                gadgets.append(hex(addr))
+            if m == "call" and "[rsp" in o:
                 gadgets.append(hex(addr))
             # rip-relative operands -> local data symbol
             for op in ins.operands:
@@ -260,6 +274,7 @@ def reassemble(va, paths=200, budget=1500):
     meta = {"callees": sorted(callees), "data_syms": data_syms, "gadgets": gadgets,
             "collapsed_gadgets": {hex(k): hex(v) for k, v in arxan_jmp.items()},
             "collapsed_rets": sorted(hex(a) for a in arxan_ret),
+            "collapsed_stack_rets": sorted(hex(a) for a in stack_ret),
             "recon_frame": ({"size": hex(fr["frame_size"]), "saved": fr["saved"]} if arxan_ret else None),
             "nblocks": len(blocks), "ninsns": len(r.text)}
     return "\n".join(lines) + "\n", meta
