@@ -479,10 +479,15 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         )
     ));
     body.push_str(&format!(
-        "  \"system_quit_profile_load_activate_count\": {},\n  \"system_quit_profile_load_confirmed_block_count\": {},\n  \"system_quit_profile_load_confirmed_allow_count\": {},\n  \"system_quit_profile_load_activate_last_dialog\": {},\n  \"system_quit_profile_load_activate_last_cursor\": {},\n  \"system_quit_profile_load_activate_last_bound\": {},\n",
+        "  \"system_quit_profile_load_activate_count\": {},\n  \"system_quit_profile_load_confirmed_block_count\": {},\n  \"system_quit_profile_load_confirmed_allow_count\": {},\n  \"system_quit_profile_load_job_run_block_count\": {},\n  \"system_quit_profile_load_job_run_allow_count\": {},\n  \"system_quit_profile_load_job_run_last_job\": {},\n  \"system_quit_profile_load_job_run_last_list\": {},\n  \"system_quit_profile_load_job_run_last_profile_id\": {},\n  \"system_quit_profile_load_activate_last_dialog\": {},\n  \"system_quit_profile_load_activate_last_cursor\": {},\n  \"system_quit_profile_load_activate_last_bound\": {},\n",
         SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ALLOW_COUNT.load(Ordering::SeqCst),
+        format_scan_ptr(SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_JOB.load(Ordering::SeqCst)),
+        format_scan_ptr(SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_LIST.load(Ordering::SeqCst)),
+        SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_PROFILE_ID.load(Ordering::SeqCst),
         format_scan_ptr(SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG.load(Ordering::SeqCst)),
         SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR.load(Ordering::SeqCst),
         SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_BOUND.load(Ordering::SeqCst)

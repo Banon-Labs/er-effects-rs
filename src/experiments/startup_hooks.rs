@@ -1108,6 +1108,8 @@ const NETWORK_CHECK_JOB_RUN_RVA: u32 = 0x821310;
 /// `FD4::FD4TimeTemplate<float>::vftable` (deobf 0x1429c8e48) -- the value Run's common-return path
 /// writes to `*(param_3)` in every leaf (RVA read from the deobf disasm of the clean leaf).
 const FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA: usize = 0x29c8e48;
+/// `MenuJobState::Failed` blocks a chained job sequence without running downstream success jobs.
+const MENU_JOB_STATE_FAILED: i32 = 0;
 /// `MenuJobState::Continue` (the no-modal result), verified from the deobf clean leaf (`lea edx,[r8+1]`).
 const MENU_JOB_STATE_CONTINUE: i32 = 1;
 
@@ -7144,6 +7146,68 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_confirmed_hook(
     0
 }
 
+pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
+    job: usize,
+    result: usize,
+    fd4_time: usize,
+    d: usize,
+) -> usize {
+    let orig = SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: ProfileLoadDialog load-job trampoline unset for job=0x{job:x} -- fail-closed result=0x{result:x}"
+        ));
+        if result > TITLE_OWNER_SCAN_START_ADDRESS && unsafe { safe_read_usize(result) }.is_some() {
+            unsafe {
+                *(result as *mut i32) = MENU_JOB_STATE_FAILED;
+                *((result + 4) as *mut i32) = 0;
+            }
+        }
+        return result;
+    }
+    let original: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    let profile_window = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+    let list = unsafe { safe_read_usize(job + 0x50) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let profile_id = unsafe { safe_read_i32(job + 0x58) }.unwrap_or(-1);
+    SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_JOB.store(job, Ordering::SeqCst);
+    SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_LIST.store(list, Ordering::SeqCst);
+    SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_PROFILE_ID.store(profile_id as usize, Ordering::SeqCst);
+    let system_quit_profile_active = profile_window != 0
+        && list == profile_window + 0x50
+        && SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0;
+    if !system_quit_profile_active {
+        return unsafe { original(job, result, fd4_time, d) };
+    }
+
+    if system_quit_profile_load_activation_allowed() {
+        SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-dup: ProfileSelect load-job Run ALLOWED job=0x{job:x} list=0x{list:x} profile_id={profile_id}; forwarding native load path (known crash risk: CSGaitemImp::Deserialize rva 0x67141a)"
+        ));
+        return unsafe { original(job, result, fd4_time, d) };
+    }
+
+    SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst);
+    if result > TITLE_OWNER_SCAN_START_ADDRESS && unsafe { safe_read_usize(result) }.is_some() {
+        unsafe {
+            *(result as *mut i32) = MENU_JOB_STATE_FAILED;
+            *((result + 4) as *mut i32) = 0;
+        }
+    }
+    if let Ok(base) = game_module_base() {
+        if fd4_time > TITLE_OWNER_SCAN_START_ADDRESS
+            && unsafe { safe_read_usize(fd4_time) }.is_some()
+        {
+            unsafe { *(fd4_time as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
+        }
+    }
+    append_autoload_debug(format_args!(
+        "system-quit-dup: ProfileSelect load-job Run BLOCKED save-safe job=0x{job:x} result=0x{result:x} list=0x{list:x} profile_id={profile_id}; confirmation accepted but actual load/deser was not entered"
+    ));
+    result
+}
+
 fn install_system_quit_profile_load_activate_hook() {
     if SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED.load(Ordering::SeqCst)
         != SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_NOT_INSTALLED
@@ -7260,6 +7324,64 @@ fn install_system_quit_profile_load_confirmed_hook() {
     }
 }
 
+fn install_system_quit_profile_load_job_run_hook() {
+    if SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: MH_Initialize for ProfileLoadDialog load-job Run hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: failed to resolve ProfileLoadDialog load-job Run rva 0x{SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_profile_load_job_run_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: queue_enable ProfileLoadDialog load-job Run hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED.store(
+                        SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED_YES,
+                        Ordering::SeqCst,
+                    );
+                    append_autoload_debug(format_args!(
+                        "system-quit-dup: hooked ProfileLoadDialog load-job Run 0x{addr:x}; actual in-world load/deser is blocked by default"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-dup: MH_ApplyQueued ProfileLoadDialog load-job Run hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-dup: MhHook::new ProfileLoadDialog load-job Run hook failed: {status:?}"
+        )),
+    }
+}
+
 fn apply_system_quit_multislot_layout_patch() {
     let Ok(base) = game_module_base() else {
         append_autoload_debug(format_args!(
@@ -7326,6 +7448,7 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     install_system_quit_noop_action_hook();
     install_system_quit_profile_load_activate_hook();
     install_system_quit_profile_load_confirmed_hook();
+    install_system_quit_profile_load_job_run_hook();
     if SYSTEM_QUIT_DUPLICATE_INSTALLED.load(Ordering::SeqCst) != SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED
     {
         return;
