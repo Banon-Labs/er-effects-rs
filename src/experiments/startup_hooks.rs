@@ -3783,6 +3783,9 @@ pub(crate) unsafe fn profile_lookat_phase_draw_tick(phase_index: usize, task_dat
     if PROFILE_LOOKAT_SELECTED_PHASE.load(Ordering::SeqCst) != phase_index {
         return;
     }
+    if IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES {
+        return;
+    }
     if let Ok(base) = game_module_base() {
         unsafe { profile_lookat_realtime_draw_tick(base, task_data) };
     }
@@ -4276,6 +4279,9 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
 }
 
 pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
+    if IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES {
+        return;
+    }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if base == 0 || base == null {
         return;
@@ -6347,6 +6353,170 @@ pub(crate) fn install_title_native_menu_visual_render_suppression_hook() {
         }
         Err(status) => append_autoload_debug(format_args!(
             "title-cover-part-a: MhHook::new FadeIn helper failed: {status:?}"
+        )),
+    }
+}
+
+pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hook(
+    dialog: usize,
+    label: usize,
+    action_fn: usize,
+    enabled_fn: usize,
+    keyguide_fn: usize,
+) -> usize {
+    let orig = SYSTEM_QUIT_DUPLICATE_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: original AddCancelButton trampoline is unset -- fail-open return 0"
+        ));
+        return 0;
+    }
+    let original: unsafe extern "system" fn(usize, usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    let caller_match = callstack_contains_game_rva(
+        SYSTEM_QUIT_DUPLICATE_DESKTOP_RETURN_RVA
+            .saturating_sub(SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES),
+        SYSTEM_QUIT_DUPLICATE_DESKTOP_RETURN_RVA + SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES,
+    );
+    let before =
+        unsafe { safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET) }
+            .unwrap_or(0);
+    let ret = unsafe { original(dialog, label, action_fn, enabled_fn, keyguide_fn) };
+    if caller_match {
+        let after_native =
+            unsafe { safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET) }
+                .unwrap_or(0);
+        if after_native < 0x10 {
+            let dup_ret = unsafe { original(dialog, label, action_fn, enabled_fn, keyguide_fn) };
+            let after_dup = unsafe {
+                safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET)
+            }
+            .unwrap_or(0);
+            SYSTEM_QUIT_DUPLICATE_COUNT.fetch_add(1, Ordering::SeqCst);
+            SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE.store(before, Ordering::SeqCst);
+            SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER.store(after_dup, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "system-quit-dup: duplicated Return-to-Desktop AddCancelButton dialog=0x{dialog:x} count {before}->{after_native}->{after_dup} ret=0x{ret:x} dup_ret=0x{dup_ret:x}"
+            ));
+        } else {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: matched Return-to-Desktop call but count after native is {after_native}, not duplicating"
+            ));
+        }
+    }
+    ret
+}
+
+fn apply_system_quit_multislot_layout_patch() {
+    let Ok(base) = game_module_base() else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: component-index patch skipped -- module base unavailable"
+        ));
+        return;
+    };
+    let target = (base + SYSTEM_QUIT_COMPONENT_INDEX_PATCH_RVA) as *mut u8;
+    let existing = unsafe { *target };
+    if existing == SYSTEM_QUIT_COMPONENT_INDEX_REPLACEMENT_MULTI_SLOT {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: component-index patch already applied at 0x{:x} value=0x{existing:x}",
+            base + SYSTEM_QUIT_COMPONENT_INDEX_PATCH_RVA
+        ));
+        return;
+    }
+    if existing != SYSTEM_QUIT_COMPONENT_INDEX_EXPECTED_GAME_END {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: component-index patch ABORT -- byte at 0x{:x} is 0x{existing:x}, expected 0x{SYSTEM_QUIT_COMPONENT_INDEX_EXPECTED_GAME_END:x}",
+            base + SYSTEM_QUIT_COMPONENT_INDEX_PATCH_RVA
+        ));
+        return;
+    }
+    let mut old_protect = PAGE_PROTECT_UNSET;
+    let protect_ok = unsafe {
+        VirtualProtect(
+            target as *mut c_void,
+            SYSTEM_QUIT_COMPONENT_INDEX_PATCH_LEN,
+            PAGE_EXECUTE_READWRITE,
+            &mut old_protect,
+        )
+    };
+    if protect_ok == HOOK_FALSE_RETURN as i32 {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: component-index patch VirtualProtect failed"
+        ));
+        return;
+    }
+    unsafe {
+        *target = SYSTEM_QUIT_COMPONENT_INDEX_REPLACEMENT_MULTI_SLOT;
+    }
+    let mut restored = PAGE_PROTECT_UNSET;
+    unsafe {
+        VirtualProtect(
+            target as *mut c_void,
+            SYSTEM_QUIT_COMPONENT_INDEX_PATCH_LEN,
+            old_protect,
+            &mut restored,
+        )
+    };
+    append_autoload_debug(format_args!(
+        "system-quit-dup: patched Quit Game component index 0x{:x} 0x{SYSTEM_QUIT_COMPONENT_INDEX_EXPECTED_GAME_END:x}->0x{SYSTEM_QUIT_COMPONENT_INDEX_REPLACEMENT_MULTI_SLOT:x} (multi-slot layout proof)",
+        base + SYSTEM_QUIT_COMPONENT_INDEX_PATCH_RVA
+    ));
+}
+
+/// Install the System -> Quit Game duplicate-button proof hook once. Opt-in only; the detour is a
+/// pass-through for every `AddCancelButton` call except the second call from the Quit Game tab
+/// builder, where it invokes the original trampoline a second time with the same native args.
+pub(crate) fn install_system_quit_duplicate_button_hook() {
+    apply_system_quit_multislot_layout_patch();
+    if SYSTEM_QUIT_DUPLICATE_INSTALLED.load(Ordering::SeqCst) != SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: failed to resolve AddCancelButton rva 0x{SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_duplicate_add_cancel_button_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_DUPLICATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: queue_enable AddCancelButton failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_DUPLICATE_INSTALLED
+                        .store(SYSTEM_QUIT_DUPLICATE_INSTALLED_YES, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-dup: hooked AddCancelButton 0x{addr:x}; will duplicate caller rva 0x{SYSTEM_QUIT_DUPLICATE_DESKTOP_RETURN_RVA:x} (Return to Desktop proof row)"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-dup: MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-dup: MhHook::new AddCancelButton failed: {status:?}"
         )),
     }
 }

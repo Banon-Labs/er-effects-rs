@@ -4125,6 +4125,35 @@ pub(crate) static MENU_WINDOW_LATCH_INSTALLED: AtomicUsize = AtomicUsize::new(0)
 pub(crate) const MENU_WINDOW_LATCH_NOT_INSTALLED: usize = 0;
 pub(crate) const MENU_WINDOW_LATCH_INSTALLED_YES: usize = 1;
 pub(crate) static START_MENU_WINDOW_LATCH: Once = Once::new();
+/// Proof hook for the System -> Quit Game tab: duplicate the native Return-to-Desktop
+/// `AddCancelButton` call once so the tab shows a third button with a native-cloned label/help/action.
+/// This is deliberately an opt-in proof gate: it avoids custom MSVC std::function shims, FMG edits,
+/// ProfileLoadDialog, or save/load semantics while proving the native list can fit and dispatch a
+/// third row. Address is deobf/live (dump AddCancelButton 0x140920d80 -> live 0x140920c90).
+pub(crate) const SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA: u32 = 0x920c90;
+/// Return address immediately after the second `AddCancelButton` in the Quit Game tab builder
+/// (dump `FUN_140958a00` -> live `0x140958910`). The second native row is Return to Desktop.
+pub(crate) const SYSTEM_QUIT_DUPLICATE_DESKTOP_RETURN_RVA: usize = 0x958b37;
+pub(crate) const SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES: usize = 0x20;
+/// Immediate byte in the Quit Game subdialog factory that selects the one-slot `GameEnd` GFX
+/// component (`movb $0xe, 0x20(%rsp)` in live/deobf `FUN_14093bba0`). For the duplicate-button
+/// proof, patch it to the multi-slot controls component index used by `FUN_140958d40`; the Quit
+/// Game builder callback is left unchanged, so only the visible layout changes.
+pub(crate) const SYSTEM_QUIT_COMPONENT_INDEX_PATCH_RVA: usize = 0x93bb41;
+pub(crate) const SYSTEM_QUIT_COMPONENT_INDEX_EXPECTED_GAME_END: u8 = 0x0e;
+pub(crate) const SYSTEM_QUIT_COMPONENT_INDEX_REPLACEMENT_MULTI_SLOT: u8 = 0x02;
+pub(crate) const SYSTEM_QUIT_COMPONENT_INDEX_PATCH_LEN: usize = 1;
+/// `PropertyEditDialog.properties.items.count`: 0x1260 + BasicViewItemList.items(+8) +
+/// DLFixedVector<EditProperty>.count(+0x888). Pure diagnostic read only.
+pub(crate) const PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET: usize = 0x1af0;
+pub(crate) static SYSTEM_QUIT_DUPLICATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SYSTEM_QUIT_DUPLICATE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED: usize = 0;
+pub(crate) const SYSTEM_QUIT_DUPLICATE_INSTALLED_YES: usize = 1;
+pub(crate) static SYSTEM_QUIT_DUPLICATE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static START_SYSTEM_QUIT_DUPLICATE_BUTTON_HOOK: Once = Once::new();
 /// One-shot spawn guard for the save-source redirect hook install (CreateFileW/CopyFileW path
 /// redirect). Armed at process attach only when `enforce_save_override_or_abort` resolved a valid
 /// env save source (Redirect mode); see save-override-no-default-fallback-mandatory-env-2026-06-23.

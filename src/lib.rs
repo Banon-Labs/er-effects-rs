@@ -397,6 +397,17 @@ pub unsafe extern "C" fn DllMain(_hmodule: HINSTANCE, reason: u32, _reserved: *m
             .spawn(install_profile_renderer_teardown_spare_hook);
     });
 
+    // System -> Quit Game third-button proof: opt-in multi-slot layout patch plus duplicate of the
+    // native Return-to-Desktop AddCancelButton call. This proves a third native row can be rendered
+    // and selected before touching save/load/ProfileLoadDialog semantics.
+    if system_quit_duplicate_button_enabled() {
+        START_SYSTEM_QUIT_DUPLICATE_BUTTON_HOOK.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-system-quit-dup".to_owned())
+                .spawn(install_system_quit_duplicate_button_hook);
+        });
+    }
+
     // MenuWindow latch: install the SceneObjProxy ctor hook (0x14074a700) as early as the
     // splash-skip / online-disable patches, from a thread, so it lands BEFORE the title state
     // machine builds the title dialog during boot. On each VALID call it latches rdx (the engine-
