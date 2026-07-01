@@ -1108,8 +1108,6 @@ const NETWORK_CHECK_JOB_RUN_RVA: u32 = 0x821310;
 /// `FD4::FD4TimeTemplate<float>::vftable` (deobf 0x1429c8e48) -- the value Run's common-return path
 /// writes to `*(param_3)` in every leaf (RVA read from the deobf disasm of the clean leaf).
 const FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA: usize = 0x29c8e48;
-/// `MenuJobState::Failed` blocks a chained job sequence without running downstream success jobs.
-const MENU_JOB_STATE_FAILED: i32 = 0;
 /// `MenuJobState::Continue` (the no-modal result), verified from the deobf clean leaf (`lea edx,[r8+1]`).
 const MENU_JOB_STATE_CONTINUE: i32 = 1;
 
@@ -7104,7 +7102,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
 
     SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.fetch_add(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "system-quit-dup: ProfileSelect slot activation dialog ALLOWED dialog=0x{dialog:x} cursor={cursor} bound={bound} profile_window=0x{profile_window:x}; confirmation-accepted transition remains guarded"
+        "system-quit-dup: ProfileSelect slot activation dialog ALLOWED dialog=0x{dialog:x} cursor={cursor} bound={bound} profile_window=0x{profile_window:x}; load-job Run remains guarded"
     ));
     unsafe { original(dialog, b, c, d) }
 }
@@ -7131,19 +7129,11 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_confirmed_hook(
         return unsafe { original(action_obj) };
     }
 
-    if system_quit_profile_load_activation_allowed() {
-        SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "system-quit-dup: ProfileSelect confirmed-load transition ALLOWED action=0x{action_obj:x} dialog=0x{dialog:x}; forwarding native transition (known crash risk: CSGaitemImp::Deserialize rva 0x67141a)"
-        ));
-        return unsafe { original(action_obj) };
-    }
-
-    SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst);
+    SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "system-quit-dup: ProfileSelect confirmed-load transition BLOCKED save-safe action=0x{action_obj:x} dialog=0x{dialog:x}; confirmation dialog was allowed, actual load requires ER_EFFECTS_SYSTEM_QUIT_ALLOW_PROFILE_LOAD=1"
+        "system-quit-dup: ProfileSelect confirmed-load transition ALLOWED action=0x{action_obj:x} dialog=0x{dialog:x}; actual load/deser is guarded at LoadJobContext::Run"
     ));
-    0
+    unsafe { original(action_obj) }
 }
 
 pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
@@ -7159,7 +7149,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
         ));
         if result > TITLE_OWNER_SCAN_START_ADDRESS && unsafe { safe_read_usize(result) }.is_some() {
             unsafe {
-                *(result as *mut i32) = MENU_JOB_STATE_FAILED;
+                *(result as *mut i32) = MENU_JOB_STATE_SUCCESS;
                 *((result + 4) as *mut i32) = 0;
             }
         }
@@ -7191,7 +7181,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
     SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst);
     if result > TITLE_OWNER_SCAN_START_ADDRESS && unsafe { safe_read_usize(result) }.is_some() {
         unsafe {
-            *(result as *mut i32) = MENU_JOB_STATE_FAILED;
+            *(result as *mut i32) = MENU_JOB_STATE_SUCCESS;
             *((result + 4) as *mut i32) = 0;
         }
     }
@@ -7203,7 +7193,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
         }
     }
     append_autoload_debug(format_args!(
-        "system-quit-dup: ProfileSelect load-job Run BLOCKED save-safe job=0x{job:x} result=0x{result:x} list=0x{list:x} profile_id={profile_id}; confirmation accepted but actual load/deser was not entered"
+        "system-quit-dup: ProfileSelect load-job Run BLOCKED save-safe job=0x{job:x} result=0x{result:x} list=0x{list:x} profile_id={profile_id}; returning Success to consume native confirmation without entering load/deser"
     ));
     result
 }
@@ -7310,7 +7300,7 @@ fn install_system_quit_profile_load_confirmed_hook() {
                         Ordering::SeqCst,
                     );
                     append_autoload_debug(format_args!(
-                        "system-quit-dup: hooked ProfileLoadDialog confirmed-load transition 0x{addr:x}; actual in-world load is blocked by default"
+                        "system-quit-dup: hooked ProfileLoadDialog confirmed-load transition 0x{addr:x}; transition is allowed after load-job guard"
                     ));
                 }
                 status => append_autoload_debug(format_args!(

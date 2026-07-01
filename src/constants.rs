@@ -4220,8 +4220,9 @@ pub(crate) const SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED_YES: usize = 1;
 /// `0x1409a4670`). This builds/submits the native confirmation dialog for the selected profile.
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA: u32 = 0x9a4670;
 /// Live/deobf `<lambda_4c99...>::operator()` (`dump 0x1409a4ee0` -> deobf `0x1409a4d90`). This
-/// writes `*(dialog+0x1cc8+0x14c)=2` and `dialog+0x1e8=Success`, but runtime evidence showed the
-/// crash happens before this lambda is reached when the confirmation is accepted.
+/// only writes `*(dialog+0x1cc8+0x14c)=2` and `dialog+0x1e8=Success`; runtime evidence showed the
+/// crash happens before this lambda is reached when the confirmation is accepted, so this transition
+/// is safe to allow after blocking the actual load job.
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA: u32 = 0x9a4d90;
 /// Live/deobf `CS::MenuJobWithContext<LoadJobContext,...>::Run` (`dump 0x140826e40` -> deobf
 /// `0x140826d50`). This is the load job queued behind the native confirmation dialog; accepting
