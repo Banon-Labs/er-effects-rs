@@ -83,19 +83,21 @@ def reason_bucket(res):
     return f"{stage}"
 
 
-def score(va, kind, bf, workbase, paths, budget):
+def score(va, kind, bf, workbase, paths, budget, real_callees=False):
     wd = os.path.join(workbase, va)
     shutil.rmtree(wd, ignore_errors=True)
     bf.WORK = wd
     t0 = time.time()
     try:
-        res = bf.bake(int(va, 16), paths, budget)
+        res = bf.bake(int(va, 16), paths, budget, real_callees=real_callees)
     except Exception as e:
         res = {"ok": False, "stage": "exception", "err": repr(e)[:300]}
     dt = round(time.time() - t0, 1)
     shutil.rmtree(wd, ignore_errors=True)
     return {"va": va, "kind": kind, "ok": bool(res.get("ok")),
             "input_dependent": bool(res.get("input_dependent")),
+            "all_callees_real": bool(res.get("all_callees_real")),
+            "nwired": len(res.get("wired_callees") or []),
             "stage": res.get("stage"), "ref": res.get("ref"), "recompiled": res.get("recompiled"),
             "collapsed": len(res.get("collapsed_gadgets") or {}),
             "ncallees": len(res.get("callees") or []),
@@ -115,6 +117,8 @@ def main():
     ap.add_argument("--out", default=os.path.expanduser("~/er-llvm-spike/corpus-score.json"))
     ap.add_argument("--workbase", default=os.path.expanduser("~/er-llvm-spike/corpus-work"))
     ap.add_argument("--baseline", help="prior summary JSON to diff against for regressions")
+    ap.add_argument("--real-callees", action="store_true",
+                    help="wire real recovered callees (not return-0 stubs); required for a PRIMARY count")
     args = ap.parse_args()
 
     bf = load_bake()
@@ -128,7 +132,7 @@ def main():
     results = []
     with open(jsonl, "w") as jl:
         for i, r in enumerate(sample, 1):
-            res = score(r["va"], r["kind"], bf, args.workbase, args.paths, args.budget)
+            res = score(r["va"], r["kind"], bf, args.workbase, args.paths, args.budget, args.real_callees)
             results.append(res)
             jl.write(json.dumps(res) + "\n"); jl.flush()
             tag = ("PASS*" if res["ok"] and res["input_dependent"] else
@@ -136,14 +140,19 @@ def main():
             print(f"[{i:>4}/{len(sample)}] {tag} {res['va']} {res['kind']:<11} "
                   f"{res['bucket']:<34} {res['seconds']}s", flush=True)
 
-    primary = sum(1 for r in results if r["ok"] and r["input_dependent"])
+    # PRIMARY (reinjection-ready): verified + input-dependent + ALL callees wired real
+    # (not stubs). Without --real-callees, all_callees_real is False, so PRIMARY is 0 by
+    # construction -- a stub pass never counts as PRIMARY.
+    def is_primary(r):
+        return r["ok"] and r["input_dependent"] and r["all_callees_real"]
+    primary = sum(1 for r in results if is_primary(r))
     secondary = sum(1 for r in results if r["ok"])
     per_kind = {}
     for k in sorted(keep):
         ks = [r for r in results if r["kind"] == k]
         per_kind[k] = {"n": len(ks),
                        "baked": sum(1 for r in ks if r["ok"]),
-                       "input_dependent": sum(1 for r in ks if r["ok"] and r["input_dependent"])}
+                       "primary": sum(1 for r in ks if is_primary(r))}
     buckets = Counter(r["bucket"] for r in results)
 
     summary = {"sample": len(results), "seed": args.seed, "sample_per_kind": args.sample,
@@ -174,7 +183,7 @@ def main():
     print("\n==== SUMMARY ====")
     print(f"sample={len(results)}  PRIMARY(input_dependent)={primary}  SECONDARY(baked)={secondary}")
     for k, v in per_kind.items():
-        print(f"  {k:<12} n={v['n']:<4} baked={v['baked']:<4} input_dependent={v['input_dependent']}")
+        print(f"  {k:<12} n={v['n']:<4} baked={v['baked']:<4} primary={v['primary']}")
     print("buckets (direction signal):")
     for b, c in buckets.most_common():
         print(f"  {c:>4}  {b}")
