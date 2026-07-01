@@ -37,6 +37,9 @@ def configure_module_paths(checker) -> None:
     checker.RUNTIME_WRAPPER_PATH = checker.AUTO_DIR / "run_runtime_experiment.sh"
     checker.RUNTIME_PROBE_PATH = checker.AUTO_DIR / "runtime_probe.sh"
     checker.RUNTIME_POLICY_PATH = checker.AUTO_DIR / "runtime_experiment_policy.rego"
+    checker.DIRECT_PROBE_PATH = FIXTURE_ROOT / "scripts" / "run-product-continue-direct-probe.sh"
+    checker.CAPTURE_HELPER_PATH = FIXTURE_ROOT / "scripts" / "capture-er-window.py"
+    checker.READINESS_WATCH_PATH = FIXTURE_ROOT / "scripts" / "er-readiness-watch.py"
     checker.SMOKE_DRIVER_PATH = FIXTURE_ROOT / "scripts" / "er-smoke-driver.sh"
     checker.AUTO_LOG_PATH = checker.AUTO_DIR / "log.jsonl"
 
@@ -72,6 +75,18 @@ def base_fixture(cap: int) -> None:
             "allow if { manual_event_driver_ready }\n"
             "deny contains message if { message := \"runtime probes are disabled fail-closed\" }\n"
         ),
+    )
+    write_fixture(
+        "scripts/run-product-continue-direct-probe.sh",
+        "#!/usr/bin/env bash\nset -euo pipefail\nVISUAL_RESOURCE_MUTATION_ENVS=(ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX ER_EFFECTS_TITLE_05_000_MEMORY_GFX)\nvisual_resource_mutation_envs_set() { :; }\npreflight() {\n  fatal \"RUNTIME_TELEMETRY_ONLY=1 cannot be combined with mutating visual resource env(s)\"\n}\nterminate_runtime_pids() { :; }\ncleanup() {\n  terminate_runtime_pids\n}\nrm -f \"$ARTIFACT_DIR/loading-screen-portrait-screenshot.jpg\" \"$ARTIFACT_DIR/loading-screen-portrait-screenshot.png\" \"$ARTIFACT_DIR/loading-screen-portrait-screenshot.txt\"\ntrap cleanup EXIT\n",
+    )
+    write_fixture(
+        "scripts/er-readiness-watch.py",
+        "from runtime_timeout_cap import runtime_timeout_cap_seconds\nMAX_ALLOWED_RUNTIME_SECONDS = float(runtime_timeout_cap_seconds())\nTIMEOUT_BUDGET_EXHAUSTED = 'timeout_seconds_budget_exhausted'\n# --max-runtime-seconds\nfrom pathlib import Path\ndef telemetry_loading_screen_portrait_capture_ready(t):\n    return bool(t and t.get('oracle_title_portrait_visible_surface_bound'))\ndef maybe_capture_loading_screen_portrait(artifact_dir, telemetry):\n    return Path('loading-screen-portrait-screenshot.jpg').name and 'loading-screen-portrait-screenshot-analysis.json' and 'capture-er-window.py' and 'analyze-loading-screen-portrait-screenshot.py'\n",
+    )
+    write_fixture(
+        "scripts/capture-er-window.py",
+        "WINDOW_CLASS = \"steam_app_1245620\"\ndef problems(w):\n    p = []\n    if w.get('mapped') is False:\n        p.append('unmapped')\n    if w.get('hidden') is True:\n        p.append('hidden')\n    at, size = w.get('at') or [], w.get('size') or []\n    if len(at) != 2 or len(size) != 2:\n        p.append('bad_geometry')\n    return p\n# uses hyprctl, grim, and records focusHistoryID in the note\n",
     )
     write_fixture(
         "scripts/er-smoke-driver.sh",
@@ -137,6 +152,41 @@ def main() -> int:
         "#!/usr/bin/env bash\nset -euo pipefail\ntrap cleanup_runtime EXIT\nvalidate_runtime_policy\nsetup_runtime_payload\n",
     )
     assert_rules(checker, {"runtime-probe-missing-bounded-timeout"})
+    base_fixture(cap)
+
+    write_fixture(
+        "scripts/run-product-continue-direct-probe.sh",
+        "#!/usr/bin/env bash\nset -euo pipefail\nVISUAL_RESOURCE_MUTATION_ENVS=(ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX ER_EFFECTS_TITLE_05_000_MEMORY_GFX)\nvisual_resource_mutation_envs_set() { :; }\npreflight() {\n  fatal \"RUNTIME_TELEMETRY_ONLY=1 cannot be combined with mutating visual resource env(s)\"\n}\nterminate_runtime_pids() { :; }\ncleanup() {\n  python3 \"$REPO_ROOT/scripts/capture-er-window.py\" \"$ARTIFACT_DIR/teardown-screenshot.jpg\" 2>/dev/null || true\n  terminate_runtime_pids\n}\nrm -f \"$ARTIFACT_DIR/loading-screen-portrait-screenshot.jpg\" \"$ARTIFACT_DIR/loading-screen-portrait-screenshot.txt\"\n",
+    )
+    assert_rules(checker, {"teardown-screenshot-still-wired"})
+    base_fixture(cap)
+
+    write_fixture(
+        "scripts/run-product-continue-direct-probe.sh",
+        "#!/usr/bin/env bash\nset -euo pipefail\nVISUAL_RESOURCE_MUTATION_ENVS=(ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX ER_EFFECTS_TITLE_05_000_MEMORY_GFX)\nvisual_resource_mutation_envs_set() { :; }\npreflight() {\n  fatal \"RUNTIME_TELEMETRY_ONLY=1 cannot be combined with mutating visual resource env(s)\"\n}\nterminate_runtime_pids() { :; }\ncleanup() { terminate_runtime_pids; }\nrm -f \"$ARTIFACT_DIR/other.jpg\"\n",
+    )
+    assert_rules(checker, {"loading-screen-portrait-screenshot-stale-reset-missing"})
+    base_fixture(cap)
+
+    write_fixture(
+        "scripts/run-product-continue-direct-probe.sh",
+        "#!/usr/bin/env bash\nset -euo pipefail\nterminate_runtime_pids() { :; }\ncleanup() { terminate_runtime_pids; }\nrm -f \"$ARTIFACT_DIR/loading-screen-portrait-screenshot.jpg\" \"$ARTIFACT_DIR/loading-screen-portrait-screenshot.png\" \"$ARTIFACT_DIR/loading-screen-portrait-screenshot.txt\"\n",
+    )
+    assert_rules(checker, {"telemetry-only-visual-resource-mutation-guard-missing"})
+    base_fixture(cap)
+
+    write_fixture(
+        "scripts/er-readiness-watch.py",
+        "from runtime_timeout_cap import runtime_timeout_cap_seconds\nMAX_ALLOWED_RUNTIME_SECONDS = float(runtime_timeout_cap_seconds())\nTIMEOUT_BUDGET_EXHAUSTED = 'timeout_seconds_budget_exhausted'\n# --max-runtime-seconds; missing loading-screen-portrait event capture\n",
+    )
+    assert_rules(checker, {"loading-screen-portrait-event-capture-missing"})
+    base_fixture(cap)
+
+    write_fixture(
+        "scripts/capture-er-window.py",
+        "WINDOW_CLASS = \"steam_app_1245620\"\ndef problems(w):\n    p = []\n    p.append('focus_unknown')\n    p.append('not_focused')\n    p.append('bad_geometry')\n    return p\n# hyprctl grim focusHistoryID\n",
+    )
+    assert_rules(checker, {"event-capture-focus-dependent"})
     base_fixture(cap)
 
     write_fixture(

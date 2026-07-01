@@ -1,0 +1,8 @@
+[package]
+name = "er-shaderlab"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+er-soulsformats = { path = "../../crates/soulsformats" }

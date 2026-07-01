@@ -16,35 +16,31 @@ use std::{
 
 use std::os::windows::ffi::OsStrExt as _;
 
-use debug::{InputBlocker, InputFlags};
+use crate::input_blocker::{InputBlocker, InputFlags};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
 };
 use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
+use er_tpf::{DdsHeaderMode, DdsImage, Tpf};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
-use hudhook::{
-    ImguiRenderLoop, MessageFilter,
-    hooks::dx12::ImguiDx12Hooks,
-    imgui::{Condition, Context, Ui},
-    mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook},
-    windows::{
-        Win32::{
-            Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
-            System::{
-                LibraryLoader::{GetModuleHandleA, GetProcAddress},
-                Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-                SystemServices::DLL_PROCESS_ATTACH,
-                Threading::GetCurrentProcessId,
-            },
-            UI::WindowsAndMessaging::{
-                ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-                WM_KEYDOWN, WM_KEYUP,
-            },
+use windows::{
+    Win32::{
+        Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
+        System::{
+            LibraryLoader::{GetModuleHandleA, GetProcAddress},
+            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
+            SystemServices::DLL_PROCESS_ATTACH,
+            Threading::GetCurrentProcessId,
         },
-        core::{BOOL, PCSTR},
+        UI::WindowsAndMessaging::{
+            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+            WM_KEYDOWN, WM_KEYUP,
+        },
     },
+    core::{BOOL, PCSTR},
 };
 
 #[allow(unused_imports)]
@@ -454,6 +450,27 @@ pub(crate) unsafe fn maybe_set_title_accept_byte(base: usize) {
     if TITLE_ACCEPT_BYTE_GATE_FIRED.swap(true, Ordering::SeqCst) {
         return;
     }
+    let press_start_proxy = dialog + TITLE_PRESS_START_SCENE_PROXY_B78_OFFSET;
+    let press_start_vt = unsafe { safe_read_usize(press_start_proxy) }.unwrap_or(0);
+    let press_start_context = if press_start_vt == base + SCENE_OBJ_PROXY_VTABLE_RVA {
+        unsafe { safe_read_usize(press_start_proxy + SCENE_OBJ_PROXY_CONTEXT_20_OFFSET) }
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    if press_start_vt == base + SCENE_OBJ_PROXY_VTABLE_RVA {
+        unsafe {
+            hide_title_press_start_proxy(base, dialog, press_start_proxy, press_start_context)
+        };
+    }
+    if native_profile_capture_enabled() {
+        const TITLE_CURSOR_LOAD_GAME: i32 = 1;
+        let before = unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }.unwrap_or(-1);
+        unsafe { *((dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) as *mut i32) = TITLE_CURSOR_LOAD_GAME };
+        append_autoload_debug(format_args!(
+            "title-accept-byte: native-profile-capture set TitleTopDialog cursor [dialog+0xb0c] {before}->1 before native accept byte"
+        ));
+    }
     unsafe {
         *((base + TITLE_GLOBAL_ACCEPT_BYTE_RVA) as *mut u8) = TITLE_PROCEED_GATE_SET_VALUE;
     }
@@ -557,6 +574,8 @@ pub(crate) unsafe fn maybe_fire_tfc_continue(base: usize) {
     if menu_opened != OWN_STEPPER_CALL_INC {
         return;
     }
+    // NOTE: this function is NOT the active load-commit path in the product autoload (the native
+    // accept-byte drain is). The real portrait render window is implemented in product_core_autoload_tick.
     let tfc = unsafe { safe_read_usize(dialog + DIALOG_OWNER_CTX_A38_OFFSET) }.unwrap_or(0);
     if !(tfc > OWNER_CTX_MIN_PLAUSIBLE_PTR && tfc < OWNER_CTX_MAX_PLAUSIBLE_PTR) {
         return;
@@ -587,7 +606,27 @@ pub(crate) unsafe fn maybe_fire_tfc_continue(base: usize) {
     let before = unsafe { safe_read_i32(tfc + TFC_DISPATCH_STATE_14C_OFFSET) }.unwrap_or(-1);
     // Set the save slot on mss FIRST (builder reads mss+0x1200 as the factory r8), then the dispatch
     // bit -- mirroring the native confirm handler 0x1409a9250's two key writes.
-    let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+    // GUARD (user spec 3+4 "any slot active" / "never load a slot if none active"): resolve the ACTIVE
+    // slot holding a real character instead of blindly loading the configured slot. The gold save's
+    // configured slot 0 is a NULL slot -> loading it spawns the new-game INTRO cutscene + a null character.
+    // resolve_active_load_slot() validates via the contamination-free RECORD fingerprint and falls back to
+    // the best active slot; OWN_STEPPER_SLOT_NONE means nothing loadable (or profile records not ready).
+    let configured = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+    let want_slot = unsafe { resolve_active_load_slot(configured) };
+    if want_slot < OWN_STEPPER_SLOT_ZERO {
+        let waits = TFC_LOAD_VEC_WAIT_TICKS.fetch_add(1, Ordering::SeqCst);
+        if waits % 120 == 0 {
+            append_autoload_debug(format_args!(
+                "fire-tfc-continue: REFUSE to fire -- no ACTIVE save slot (configured={configured}; profile records not real/ready). Never loading a null slot (would spawn the new-game intro). waits={waits}"
+            ));
+        }
+        return;
+    }
+    if want_slot != configured {
+        append_autoload_debug(format_args!(
+            "fire-tfc-continue: configured slot {configured} is null/inactive -> loading best ACTIVE slot {want_slot} instead (user guard: load an active slot, never a null one)"
+        ));
+    }
     let mss = unsafe { resolve_menu_system_save_load(base) };
     if let Some(mss) = mss {
         unsafe { *((mss + MSS_SAVE_SLOT_1200_OFFSET) as *mut i32) = want_slot };
@@ -822,6 +861,224 @@ pub(crate) unsafe fn install_pab_advance_hook(base: usize) {
         )),
         status => append_autoload_debug(format_args!(
             "pab-advance-hook: MH_ApplyQueued failed: {status:?}"
+        )),
+    }
+    std::mem::forget(hooks);
+}
+/// Read the TitleTopDialog FD4 state machine by NAME (is_in_state) given the title `owner` (rcx of
+/// STEP_MenuJobWait). Returns `(dialog_ptr, in_fadein, in_loop, in_textfadeout, menu_opened_latch)` or
+/// `None` if the dialog isn't the TitleTopDialog yet. Read-only / no side effects. Mirrors STAGE1d.
+unsafe fn title_dialog_sm_state(
+    owner: usize,
+    base: usize,
+) -> Option<(usize, bool, bool, bool, usize)> {
+    if owner == TITLE_OWNER_SCAN_START_ADDRESS {
+        return None;
+    }
+    let dialog = unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(0);
+    if dialog == 0 {
+        return None;
+    }
+    let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(0);
+    if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+        return None;
+    }
+    let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
+    let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
+        unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
+    let in_fadein =
+        unsafe { is_in_state(sm, base + TITLE_STATE_DESC_FADEIN_RVA) } != OWN_STEPPER_FALSE;
+    let in_loop = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
+    let in_textfadeout =
+        unsafe { is_in_state(sm, base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) } != OWN_STEPPER_FALSE;
+    let latch = unsafe { safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }
+        .map(|v| v & TITLE_TOP_DIALOG_LATCH_BYTE_MASK)
+        .unwrap_or(0);
+    Some((dialog, in_fadein, in_loop, in_textfadeout, latch))
+}
+
+/// Skip the title FadeIn ONCE: the first frame the dialog SM is settled in FadeIn (menu-open latch
+/// clear), drive the FD4 state machine FadeIn->Loop by calling the game's OWN transition `SetState`
+/// (deobf 0x1407499e0) with `(sm = dialog+0xa60, desc = Loop 0x142a8f9e8)`. This is EXACTLY the call
+/// `CS::TitleTopDialog::update`'s input-skip branch makes on a confirm/cancel press (Ghidra: bd
+/// fadein-* RE), so it is save-safe and routes through the SM's own vtable[0x150] request path (no
+/// struct stomp) -- but ZERO input. `SetState` internally no-ops unless the current node is settled
+/// (`[node+0x20]&0x8f >= 2`), so an early call before the node is eligible cannot corrupt the SM.
+/// One-shot via `TITLE_FADEIN_SKIP_FIRED`; the dt-scale / frame-burst / anim-complete-predicate levers
+/// were all runtime-falsified (bd title-anim-framedelta / pab-to-menuopen-real-breakdown / fadein-
+/// predicate-75cea0). The FadeIn IS frame-paced animation -- it is just skipped by the state transition,
+/// not by pacing.
+unsafe fn title_anim_fadein_skip(owner: usize) {
+    if TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS {
+        return; // one-shot: already transitioned
+    }
+    if IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES {
+        return;
+    }
+    if !(title_anim_speedup_factor() > TITLE_ANIM_SPEEDUP_MIN) {
+        return; // lever off / forced to 1.0
+    }
+    let Ok(base) = game_module_base() else {
+        return;
+    };
+    let st = unsafe { title_dialog_sm_state(owner, base) };
+    // Light diagnostic so the SM timeline stays visible across boots.
+    let n = TITLE_ANIM_DIAG_CALLS.fetch_add(1, Ordering::SeqCst);
+    if n % TITLE_ANIM_DIAG_INTERVAL == 0 {
+        append_autoload_debug(format_args!(
+            "title-anim-diag: detour#{n} sm(dialog,fadein,loop,tfo,latch)={st:?}"
+        ));
+    }
+    let Some((dialog, true, _, _, latch)) = st else {
+        return; // not the TitleTopDialog, or not in FadeIn yet
+    };
+    if latch != TITLE_OWNER_SCAN_START_ADDRESS {
+        return; // menu already opening -> leave the SM alone
+    }
+    // Fire the game's own FadeIn->Loop transition once (zero-input).
+    if TITLE_FADEIN_SKIP_FIRED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        != TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return; // lost the one-shot race
+    }
+    let set_state: unsafe extern "system" fn(usize, usize) =
+        unsafe { std::mem::transmute(base + TITLE_FD4_SETSTATE_RVA) };
+    let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
+    unsafe { set_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) };
+    append_autoload_debug(format_args!(
+        "title-anim-skip: *** SetState(sm=0x{sm:x}, Loop) via 0x{:x} -- zero-input FadeIn->Loop transition (game's own input-skip path, save-safe), skipping the title fade ***",
+        base + TITLE_FD4_SETSTATE_RVA
+    ));
+}
+
+/// Detour for STEP_MenuJobWait (0x140b0d400, `__fastcall(rcx=owner, rdx=task_data, ...)`). Drives the
+/// one-shot FadeIn->Loop skip from the live SM state, then passes through to the original unchanged.
+pub(crate) unsafe extern "system" fn title_menujob_speed_detour(
+    owner: usize,
+    task_data: usize,
+    r8: usize,
+    r9: usize,
+) -> usize {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        title_anim_fadein_skip(owner)
+    }));
+    let orig_addr = TITLE_ANIM_SPEED_ORIG.load(Ordering::SeqCst);
+    if orig_addr == TITLE_OWNER_SCAN_START_ADDRESS {
+        return 0;
+    }
+    let orig: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig_addr) };
+    unsafe { orig(owner, task_data, r8, r9) }
+}
+
+/// Install the title-anim speedup hook ONCE (MinHook, mirroring `install_pab_advance_hook`). Gated by
+/// `title_anim_speedup_enabled` at the call site; the detour self-gates per frame too.
+pub(crate) unsafe fn install_title_anim_speed_hook(base: usize) {
+    if TITLE_ANIM_SPEED_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        != TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-anim-speed-hook: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let mut hooks = Vec::new();
+    unsafe {
+        create_continue_trace_hook(
+            &mut hooks,
+            "title_menujob_speed_b0d400",
+            TITLE_MENU_JOB_WAIT_RVA as u32,
+            title_menujob_speed_detour as *mut c_void,
+            &TITLE_ANIM_SPEED_ORIG,
+        );
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => append_autoload_debug(format_args!(
+            "title-anim-speed-hook: INSTALLED on STEP_MenuJobWait 0x{:x} -- one-shot FadeIn->Loop skip armed (zero-input, save-safe)",
+            base + TITLE_MENU_JOB_WAIT_RVA,
+        )),
+        status => append_autoload_debug(format_args!(
+            "title-anim-speed-hook: MH_ApplyQueued failed: {status:?}"
+        )),
+    }
+    std::mem::forget(hooks);
+}
+/// READ-ONLY trace detour for the title step-setter `SetState(owner, int state)` (deobf 0x140b0d960).
+/// Logs every native state transition with a timestamp + the current owner+0xe0 (TitleTopDialog
+/// holder) liveness, then calls the original UNCHANGED. Pure observation -- this is the
+/// "look before acting" instrument for the menu-build-overlap lever: it reveals the exact wall-clock
+/// at which BeginTitle(3) fires natively (and the full state sequence during boot), so we can decide
+/// whether the 05_000_Title build has any headroom to be started earlier (overlap with init) before
+/// risking a forced SetState (which has NO double-build guard). bd menu-build-overlap-lever-2026-06-24.
+pub(crate) unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i32) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let dialog = if owner > PAB_MIN_HEAP_PTR {
+            unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(0)
+        } else {
+            0
+        };
+        let committed = if owner > PAB_MIN_HEAP_PTR {
+            unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }.unwrap_or(-999)
+        } else {
+            -999
+        };
+        let b8 = if owner > PAB_MIN_HEAP_PTR {
+            unsafe { safe_read_usize(owner + TITLE_OWNER_BEGINLOGO_LIST_GATE_B8_OFFSET) }
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        append_autoload_debug(format_args!(
+            "title-setstate-trace: SetState(owner=0x{owner:x}, state={state}) committed_was={committed} owner+0xe0(dialog)=0x{dialog:x} owner+0xb8(gate)=0x{b8:x}"
+        ));
+    }));
+    let orig = TITLE_SETSTATE_TRACE_ORIG.load(Ordering::SeqCst);
+    if orig == TITLE_OWNER_SCAN_START_ADDRESS || orig == 0 {
+        return;
+    }
+    let f: unsafe extern "system" fn(usize, i32) = unsafe { std::mem::transmute(orig) };
+    unsafe { f(owner, state) };
+}
+/// Install the READ-ONLY title step-setter trace hook ONCE. Mirrors `install_pab_advance_hook`.
+/// Save-safe: the detour only logs + passes through. bd menu-build-overlap-lever-2026-06-24.
+pub(crate) unsafe fn install_title_setstate_trace_hook(base: usize) {
+    if TITLE_SETSTATE_TRACE_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        != TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-setstate-trace-hook: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let mut hooks = Vec::new();
+    unsafe {
+        create_continue_trace_hook(
+            &mut hooks,
+            "title_setstate_b0d960",
+            TITLE_SET_STATE_RVA as u32,
+            title_setstate_trace_detour as *mut c_void,
+            &TITLE_SETSTATE_TRACE_ORIG,
+        );
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => append_autoload_debug(format_args!(
+            "title-setstate-trace-hook: INSTALLED on SetState(owner,int) 0x{:x} -- read-only native state-transition timeline armed",
+            base + TITLE_SET_STATE_RVA,
+        )),
+        status => append_autoload_debug(format_args!(
+            "title-setstate-trace-hook: MH_ApplyQueued failed: {status:?}"
         )),
     }
     std::mem::forget(hooks);
@@ -1093,6 +1350,214 @@ pub(crate) unsafe fn product_core_autoload_ready(
         press_start_context: press_start.context,
     })
 }
+unsafe fn hide_title_press_start_proxy(base: usize, dialog: usize, proxy: usize, context: usize) {
+    if proxy == TITLE_OWNER_SCAN_START_ADDRESS || proxy == 0 {
+        return;
+    }
+    let value = proxy + 0x18;
+    TITLE_PRESS_START_GFX_VALUE.store(value, Ordering::SeqCst);
+    let set_visible: unsafe extern "system" fn(usize, u8) =
+        unsafe { std::mem::transmute(base + TITLE_PRESS_START_SET_VISIBLE_RVA) };
+    unsafe { set_visible(proxy, 0) };
+    let prev = TITLE_PRESS_START_GFX_HIDE_CALLS.fetch_add(1, Ordering::SeqCst);
+    TITLE_PRESS_START_GFX_HIDE_LAST_DIALOG.store(dialog, Ordering::SeqCst);
+    TITLE_PRESS_START_GFX_HIDE_LAST_PROXY.store(proxy, Ordering::SeqCst);
+    TITLE_PRESS_START_GFX_HIDE_LAST_CONTEXT.store(context, Ordering::SeqCst);
+    TITLE_PRESS_START_GFX_HIDE_LAST_CALLER_PHASE
+        .store(OWN_STEPPER_PHASE.load(Ordering::SeqCst), Ordering::SeqCst);
+    if prev == 0 {
+        append_autoload_debug(format_args!(
+            "title-cover-part-a: hid 05_000_Title PressStart/StaticSystemText_101000 via SceneObjProxy visibility wrapper 0x{:x} dialog=0x{dialog:x} proxy=0x{proxy:x} context=0x{context:x}",
+            base + TITLE_PRESS_START_SET_VISIBLE_RVA,
+        ));
+    }
+}
+
+pub(crate) unsafe fn maybe_hide_title_press_start(base: usize, ready: &ProductCoreAutoloadReady) {
+    unsafe {
+        hide_title_press_start_proxy(
+            base,
+            ready.title_dialog,
+            ready.press_start_proxy,
+            ready.press_start_context,
+        )
+    };
+}
+
+pub(crate) unsafe fn maybe_hide_title_logo_surface(base: usize, ready: &ProductCoreAutoloadReady) {
+    if ready.title_dialog == TITLE_OWNER_SCAN_START_ADDRESS || ready.title_dialog == 0 {
+        return;
+    }
+    let logo = ready.title_dialog + TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET;
+    if unsafe { safe_read_usize(logo) }.is_none() {
+        return;
+    }
+    let set_visible: unsafe extern "system" fn(usize, u8) =
+        unsafe { std::mem::transmute(base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA) };
+    unsafe { set_visible(logo, 0) };
+    let prev = TITLE_LOGO_GFX_HIDE_CALLS.fetch_add(1, Ordering::SeqCst);
+    TITLE_LOGO_GFX_HIDE_LAST_DIALOG.store(ready.title_dialog, Ordering::SeqCst);
+    TITLE_LOGO_GFX_HIDE_LAST_LOGO.store(logo, Ordering::SeqCst);
+    TITLE_LOGO_GFX_HIDE_LAST_CALLER_PHASE
+        .store(OWN_STEPPER_PHASE.load(Ordering::SeqCst), Ordering::SeqCst);
+    if prev == 0 {
+        append_autoload_debug(format_args!(
+            "title-cover-part-a: hid {TITLE_LOGO_BACK_VIEW_PARTS_NAME}/{TITLE_LOGO_RESOURCE_NAME} via native SceneObjProxy visibility wrapper 0x{:x} dialog=0x{:x} logo=0x{logo:x}",
+            base + TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA,
+            ready.title_dialog,
+        ));
+    }
+}
+
+pub(crate) unsafe fn sample_title_profile_portrait_source(base: usize, slot: i32) -> bool {
+    if slot < OWN_STEPPER_SLOT_ZERO {
+        return false;
+    }
+    let slot = slot as usize;
+    if slot >= TITLE_PROFILE_SLOT_COUNT {
+        return false;
+    }
+    let renderer_slot =
+        base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA + slot * core::mem::size_of::<usize>();
+    let renderer =
+        unsafe { safe_read_usize(renderer_slot) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let renderer_vtable = if renderer != TITLE_OWNER_SCAN_START_ADDRESS && renderer != 0 {
+        unsafe { safe_read_usize(renderer) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    let offscreen = if renderer_vtable == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA {
+        unsafe {
+            safe_read_usize(renderer + TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET)
+        }
+        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    let tex_rescap = if offscreen != TITLE_OWNER_SCAN_START_ADDRESS && offscreen != 0 {
+        unsafe {
+            safe_read_usize(offscreen + TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET)
+        }
+        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    let tex_index = if renderer_vtable == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA {
+        unsafe { safe_read_usize(renderer + TITLE_CUSTOM_COVER_PROFILE_RENDERER_TEX_INDEX_OFFSET) }
+            .map(|value| value & 0xffff_ffff)
+            .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    let ready_754 = if renderer != TITLE_OWNER_SCAN_START_ADDRESS && renderer != 0 {
+        unsafe { safe_read_u8(renderer + TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_754) }
+            .map(usize::from)
+            .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    let ready_755 = if renderer != TITLE_OWNER_SCAN_START_ADDRESS && renderer != 0 {
+        unsafe { safe_read_u8(renderer + TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_755) }
+            .map(usize::from)
+            .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    TITLE_CUSTOM_COVER_PROFILE_SOURCE_SAMPLE_CALLS.fetch_add(1, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SOURCE_SLOT.store(slot, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SOURCE_RENDERER.store(renderer, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SOURCE_RENDERER_VTABLE.store(renderer_vtable, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SOURCE_OFFSCREEN_REND.store(offscreen, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_RESCAP.store(tex_rescap, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_INDEX.store(tex_index, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_754.store(ready_754, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_755.store(ready_755, Ordering::SeqCst);
+    renderer_vtable == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+        && offscreen != TITLE_OWNER_SCAN_START_ADDRESS
+        && offscreen != 0
+        && tex_rescap != TITLE_OWNER_SCAN_START_ADDRESS
+        && tex_rescap != 0
+        && ready_754 != TITLE_OWNER_SCAN_START_ADDRESS
+        && ready_755 != TITLE_OWNER_SCAN_START_ADDRESS
+}
+
+/// Build the er-tpf Tier-4 cover blob ONCE and cache it for the process lifetime. A bright
+/// magenta/white checker (unmistakable on the loading-screen-portrait screenshot), encoded uncompressed
+/// `R8G8B8A8_UNORM` with a LEGACY DDS header (maps to DXGI 28 and bypasses the DX10 format validator),
+/// wrapped in a one-entry TPF003 whose ENTRY NAME == `ER_TPF_COVER_SYSTEX_KEY` (which becomes the
+/// `GLOBAL_TexRepository` GPU key the Scaleform bridge resolves). Held alive forever so the engine's
+/// deferred GPU upload can never read freed bytes. Pure CPU; no native call, no disk.
+fn er_tpf_cover_blob() -> &'static [u8] {
+    static BLOB: OnceLock<Vec<u8>> = OnceLock::new();
+    BLOB.get_or_init(|| {
+        let img = DdsImage::checker(
+            ER_TPF_COVER_TEX_DIM,
+            ER_TPF_COVER_TEX_DIM,
+            ER_TPF_COVER_TEX_CELL,
+            [255, 0, 255, 255],   // magenta
+            [255, 255, 255, 255], // white
+        );
+        let dds = img.to_dds_bytes_with(DdsHeaderMode::LegacyRgba8);
+        match Tpf::single_pc(ER_TPF_COVER_SYSTEX_KEY, dds, 1).build() {
+            Ok(bytes) => {
+                ER_TPF_COVER_TEXTURE_BUILT.store(1, Ordering::SeqCst);
+                ER_TPF_COVER_BLOB_LEN.store(bytes.len(), Ordering::SeqCst);
+                bytes
+            }
+            Err(_) => Vec::new(),
+        }
+    })
+}
+
+/// er-tpf Tier-4 ONE-SHOT, fail-closed register of our in-memory cover texture into the live texture
+/// repositories via the engine's own raw-(ptr,len) TPF factory `CS::CreateTpfResCap` (deobf
+/// `CREATE_TPF_RES_CAP_RVA`), mirroring the FaceGen call exactly. Runs on the CSTaskImp game-task thread
+/// (post-graphics-init), NEVER from DllMain/loader. Validates every precondition before the first native
+/// call (module base resolved, `GLOBAL_TpfRepository` + `GLOBAL_TexRepository` non-null == gfx up, blob
+/// non-empty), wraps the call in `catch_unwind`, and on any failure bumps `ER_TPF_COVER_FAILURES` +
+/// records `ER_TPF_COVER_LAST_ERROR` and bails (never crashes). Does NOT consume the one-shot until a
+/// real call is attempted, so a not-yet-initialized repo simply retries next tick. The actual DRAW
+/// redirect (pointing the visible profile surface's bind TARGET at our key) is a separate one-shot in
+/// the Scaleform bind observer, gated on `ER_TPF_COVER_REGISTERED`.
+/// RETIRED (2026-06-30, user): the `SYSTEX_ErTpf_Cover00` POC cover -- a 1024x1024 magenta/YELLOW checker
+/// -- was the early "prove we own the title/loading surface" test feature. The real character portrait now
+/// displays, so it is dead weight AND actively harmful: being the same 1024 size as the head RT, the
+/// portrait readback's "largest TEXTURE2D" scan grabbed IT instead of the head (nondeterministic
+/// magenta/yellow checker on the loading screen). The registration is removed -- this is now a no-op.
+pub(crate) unsafe fn maybe_register_er_tpf_cover_texture(_base: usize) {}
+
+pub(crate) unsafe fn maybe_refresh_title_profile_cover(
+    base: usize,
+    ready: &ProductCoreAutoloadReady,
+) {
+    if ready.profile_summary == TITLE_OWNER_SCAN_START_ADDRESS || ready.profile_summary == 0 {
+        return;
+    }
+    if TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_CALLS
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+    let init: unsafe extern "system" fn() =
+        unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA) };
+    let refresh: unsafe extern "system" fn() =
+        unsafe { std::mem::transmute(base + TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA) };
+    unsafe { init() };
+    unsafe { sample_title_profile_portrait_source(base, OWN_STEPPER_SLOT_ZERO) };
+    unsafe { refresh() };
+    TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_PROFILE_SUMMARY
+        .store(ready.profile_summary, Ordering::SeqCst);
+    TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_CALLER_PHASE
+        .store(OWN_STEPPER_PHASE.load(Ordering::SeqCst), Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "title-cover-part-b: initialized profile renderer table via 0x{:x}, refreshed post-SL2 profile portrait render targets via 0x{:x} profile_summary=0x{:x} target={TITLE_CUSTOM_COVER_SYSTEX_TARGET} renderer={TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS}",
+        base + TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA,
+        base + TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA,
+        ready.profile_summary,
+    ));
+}
+
 pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u64) -> bool {
     if !product_autoload_enabled() {
         return false;
@@ -1100,6 +1565,10 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     PRODUCT_CORE_AUTOLOAD_TICKS.fetch_add(1, Ordering::SeqCst);
     let phase = OWN_STEPPER_PHASE.load(Ordering::SeqCst);
     PRODUCT_CORE_LAST_PHASE.store(phase, Ordering::SeqCst);
+    // er-tpf Tier-4: register our in-memory cover texture into the live texture repos as soon as
+    // graphics is up (self-gating one-shot; runs on this CSTaskImp game-task thread, post-gfx-init).
+    // The visible-surface redirect happens in the Scaleform bind observer once this succeeds.
+    unsafe { maybe_register_er_tpf_cover_texture(module_base) };
     if phase == OWN_STEPPER_PHASE_DONE {
         return true;
     }
@@ -1260,8 +1729,31 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     PRODUCT_CORE_READY_SUCCESSES.fetch_add(1, Ordering::SeqCst);
     PRODUCT_CORE_LAST_BLOCKER.store(PRODUCT_CORE_BLOCKER_READY, Ordering::SeqCst);
     if phase == OWN_STEPPER_PHASE_MENU {
-        if ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO
-            && OWN_STEPPER_MENU_OPENED
+        unsafe { maybe_hide_title_press_start(module_base, &ready) };
+        unsafe { maybe_hide_title_logo_surface(module_base, &ready) };
+        if ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO {
+            unsafe { maybe_refresh_title_profile_cover(module_base, &ready) };
+            // Main-branch preservation: do NOT call TitleTopDialog::open_menu from this game-task
+            // context. Static disasm of TitleTopDialog::update shows the natural path only calls
+            // open_menu from inside the live update frame after the accept gate, then immediately
+            // drains the MenuWindow job pump at the tail of the same function. Direct game-task
+            // open_menu set a40 but left only the idle Continue candidate observable. Use the decoded
+            // zero-input accept byte lever instead and wait for the native update frame to build/drain
+            // the real Continue row.
+            unsafe { maybe_set_title_accept_byte(module_base) };
+            if !TITLE_ACCEPT_BYTE_GATE_FIRED.load(Ordering::SeqCst) {
+                if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
+                    append_autoload_debug(format_args!(
+                        "product-core-autoload: waiting to arm native title accept byte dialog=0x{:x} loop={} textfadeout={} latch={} slot={slot} tick={tick}",
+                        ready.title_dialog,
+                        ready.title_in_loop,
+                        ready.title_in_textfadeout,
+                        ready.menu_opened_latch
+                    ));
+                }
+                return true;
+            }
+            if OWN_STEPPER_MENU_OPENED
                 .compare_exchange(
                     OWN_STEPPER_MENU_OPENED_NO,
                     OWN_STEPPER_CALL_INC,
@@ -1269,56 +1761,67 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                     Ordering::SeqCst,
                 )
                 .is_ok()
-        {
-            // Lever-3 (narrow registrar advance): the native title press-accept handler 0x1409b1260
-            // sets the menu-system singleton's +0 byte to 1 BEFORE tail-jumping to this same
-            // registrar -- the missing piece that makes it open the menu IN PLACE rather than
-            // spawning the competing dialog a bare self-fire produced (and the route that reaches
-            // the main menu without the language/ToS the broad global accept byte over-triggers).
-            // Replicate that flag set, gated, just before the (already vtable-validated) open_menu.
-            // Zero-input, no save write.
-            if title_registrar_advance_gate_enabled() {
-                let singleton = unsafe {
-                    *((module_base + TITLE_MENU_TRANSITION_SINGLETON_RVA) as *const usize)
-                };
-                if singleton != TITLE_OWNER_SCAN_START_ADDRESS && singleton != null {
-                    unsafe { *(singleton as *mut u8) = TITLE_MENU_TRANSITION_FLAG_SET_VALUE };
-                    append_autoload_debug(format_args!(
-                        "title_registrar_advance: set menu-transition singleton [0x{:x}]->+0=1 before open-menu",
-                        module_base + TITLE_MENU_TRANSITION_SINGLETON_RVA
-                    ));
-                }
-            }
-            let open_menu: unsafe extern "system" fn(usize) =
-                unsafe { std::mem::transmute(module_base + TITLE_TOP_DIALOG_OPEN_MENU_RVA) };
-            unsafe { open_menu(ready.title_dialog) };
-            timeline_event(
-                "T_menu_open",
-                tick,
-                format_args!(
-                    "product-core dialog=0x{:x} press_start_proxy=0x{:x}",
-                    ready.title_dialog, ready.press_start_proxy
-                ),
-            );
-            append_autoload_debug(format_args!(
-                "product-core-autoload: PRESS BUTTON component ready; self-fire native open-menu 0x{:x}(dialog=0x{:x}) on validated title dialog + latch-clear before native save-load core; TitleTopDialog::open_menu writes latch and does not require Loop/TextFadeout state",
-                module_base + TITLE_TOP_DIALOG_OPEN_MENU_RVA,
-                ready.title_dialog
-            ));
-            return true;
-        }
-        if !ready.title_in_textfadeout && ready.menu_opened_latch == OWN_STEPPER_MENU_OPENED_NO {
-            if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
+            {
                 append_autoload_debug(format_args!(
-                    "product-core-autoload: waiting for title open-menu semantic confirmation dialog=0x{:x} loop={} textfadeout={} latch={} press_start_proxy=0x{:x} slot={slot} tick={tick}",
-                    ready.title_dialog,
-                    ready.title_in_loop,
-                    ready.title_in_textfadeout,
-                    ready.menu_opened_latch,
-                    ready.press_start_proxy
+                    "product-core-autoload: PRESS BUTTON component ready; armed native title accept byte for in-update open-menu/drain (dialog=0x{:x} press_start_proxy=0x{:x}) -- TitleTopDialog::open_menu writes latch and does not require Loop/TextFadeout state; no game-task open_menu self-fire",
+                    ready.title_dialog, ready.press_start_proxy
                 ));
             }
             return true;
+        }
+        // After menu-open (a40==1): commit the load. DEFAULT = the PROVEN native Continue char-load
+        // (the unchanged block below). The default-OFF ProfileSelect load flow instead fires the
+        // Load-Game row to open a LIVE ProfileLoadDialog (the render context in which the profile
+        // renderer's per-slot refresh gate is satisfied), HOLDS for the portrait render, then drives
+        // the same STAGE2 commit. `profile_select_load_flow_enabled()` is a compile-time const, so
+        // when OFF this branch is dead-code-eliminated and execution falls through to the unchanged
+        // Continue path below (byte-identical).
+        if profile_select_load_flow_enabled() {
+            unsafe { product_profile_select_load_flow(owner, module_base, slot, tick) };
+            return true;
+        }
+        // FORCE LIVE PROFILE RENDER (diagnostic, default-OFF) in the autoload path: at the open main
+        // menu (renderers live from TitleTopDialog ctor) kick the live character-model build + capture
+        // the rendered gx so the now-loading forge can display the real head. One-shot mark+refresh;
+        // the build is fast (~133ms, proven run 130619) and the teardown-spare hook keeps the kept gx
+        // alive across Continue. NO hold -- the proven Continue commit proceeds unchanged; if the build
+        // loses the race the capture simply never fires (degrades to current behavior, no crash).
+        if force_profile_render_enabled() {
+            unsafe { force_profile_render_tick(module_base, slot) };
+        }
+        // PORTRAIT RENDER WINDOW (bounded, fail-open): the main menu is OPEN (a40=1) -> valid menu
+        // render context, and the load is NOT yet committed (the commit is product_continue_autoload_tick
+        // below -- our own code on a later tick). Kick the async character-model build once (refresh
+        // 0x9aa680, idempotent per-slot via +0x754), then HOLD our commit until the portrait has
+        // rendered + been captured (maybe_capture_portrait_gxtexture sets LOADING_BG_PORTRAIT_GX_KEPT)
+        // or a timeout, so the now-loading screen shows the real character portrait. Fail-open: after
+        // the cap we commit regardless, so the char-load can never be permanently blocked.
+        if portrait_render_window_enabled()
+            && PORTRAIT_RENDER_WINDOW_DONE.load(Ordering::SeqCst) == 0
+        {
+            if PROFILE_REFRESH_KICKED.swap(1, Ordering::SeqCst) == 0 {
+                let refresh: unsafe extern "system" fn() =
+                    unsafe { std::mem::transmute(module_base + PROFILE_RENDERER_REFRESH_RVA) };
+                unsafe { refresh() };
+                append_autoload_debug(format_args!(
+                    "portrait-window: kicked profile refresh 0x{:x} to request the model render (menu open)",
+                    module_base + PROFILE_RENDERER_REFRESH_RVA
+                ));
+            }
+            let captured = LOADING_BG_PORTRAIT_GX_KEPT.load(Ordering::SeqCst) != 0;
+            let waited = PORTRAIT_HOLD_WAIT_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+            if !captured && waited < PORTRAIT_HOLD_MAX_TICKS {
+                if waited % 30 == 1 {
+                    append_autoload_debug(format_args!(
+                        "portrait-window: holding load-commit for portrait render (captured={captured} waited={waited}/{PORTRAIT_HOLD_MAX_TICKS})"
+                    ));
+                }
+                return true;
+            }
+            PORTRAIT_RENDER_WINDOW_DONE.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "portrait-window: release -> commit load (captured={captured} waited={waited})"
+            ));
         }
         if !unsafe { product_continue_action_ready(&ready, module_base, gm, slot) } {
             if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
@@ -1345,6 +1848,83 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     }
     true
 }
+/// DEFAULT-OFF ProfileSelect load flow (gate: `profile_select_load_flow_enabled`). Runs only in
+/// PHASE_MENU after menu-open (a40==1). Distinct from the PROVEN native Continue commit: it renders
+/// the loaded character's profile portrait (for the now-loading screen) by firing the title menu's
+/// Load-Game row to open a LIVE `ProfileLoadDialog` -- the only render context in which the profile
+/// renderer refresh's per-slot gate (`ProfileSummary->saveSlotsStates[slot]`) is satisfied, so the
+/// portrait actually renders (it never does at the bare main menu) -- holds the load-commit until the
+/// portrait has rendered + been captured, then drives the SAME STAGE2 commit (load_activate ->
+/// selector -> continue_confirm/SetState5) the Continue path's STAGE2 uses. Fail-open: commits after
+/// `PORTRAIT_HOLD_MAX_TICKS` regardless of capture, so the char-load can never be permanently blocked.
+///
+/// State is derived from existing latches: `OWN_STEPPER_TITLE_FIRED` (Load-Game row fired) and
+/// `OWN_STEPPER_DIALOG` (the live ProfileLoadDialog, latched by `cap_dialog_factory_hook` once the
+/// native factory builds it -- that hook defers its STAGE2 transition to us under this gate).
+unsafe fn product_profile_select_load_flow(owner: usize, base: usize, slot: i32, tick: u64) {
+    const PORTRAIT_HOLD_LOG_INTERVAL: usize = 30;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    // (a) Fire the Load-Game row ONCE -> opens the live ProfileLoadDialog (factory hook latches it).
+    if OWN_STEPPER_TITLE_FIRED.load(Ordering::SeqCst) == null {
+        let Some(action) = (unsafe { title_menu_action_ready(owner, base) }) else {
+            if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
+                append_autoload_debug(format_args!(
+                    "profile-select-flow: waiting for native Load-Game MenuMemberFuncJob row owner=0x{owner:x} slot={slot} tick={tick}"
+                ));
+            }
+            return;
+        };
+        unsafe { fire_product_title_load_action(action, base, tick, slot) };
+        return;
+    }
+    // (b) Wait for the factory hook to latch the live ProfileLoadDialog.
+    let dialog = OWN_STEPPER_DIALOG.load(Ordering::SeqCst);
+    if dialog == null {
+        if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
+            append_autoload_debug(format_args!(
+                "profile-select-flow: Load-Game fired; waiting for ProfileLoadDialog factory-hook capture (OWN_STEPPER_DIALOG) slot={slot} tick={tick}"
+            ));
+        }
+        return;
+    }
+    // (b cont.) PORTRAIT HOLD: re-kick the refresh each frame (idempotent per-slot via +0x754) while
+    // the ProfileLoadDialog is open, capture table[slot]'s rendered portrait, and HOLD the commit
+    // until captured or the tick cap. Fail-open at the cap.
+    if PORTRAIT_RENDER_WINDOW_DONE.load(Ordering::SeqCst) == 0 {
+        let refresh: unsafe extern "system" fn() =
+            unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
+        unsafe { refresh() };
+        if PROFILE_REFRESH_KICKED.swap(1, Ordering::SeqCst) == 0 {
+            append_autoload_debug(format_args!(
+                "profile-select-flow: kicked profile refresh 0x{:x} with ProfileLoadDialog=0x{dialog:x} open (slot={slot}) -- saveSlotsStates[slot] now set, portrait can render",
+                base + PROFILE_RENDERER_REFRESH_RVA
+            ));
+        }
+        maybe_capture_portrait_gxtexture(base, slot);
+        let captured = LOADING_BG_PORTRAIT_GX_KEPT.load(Ordering::SeqCst) != 0;
+        let waited = PORTRAIT_HOLD_WAIT_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+        if !captured && waited < PORTRAIT_HOLD_MAX_TICKS {
+            if waited % PORTRAIT_HOLD_LOG_INTERVAL == 1 {
+                append_autoload_debug(format_args!(
+                    "profile-select-flow: holding load-commit for portrait render (captured={captured} waited={waited}/{PORTRAIT_HOLD_MAX_TICKS} dialog=0x{dialog:x} slot={slot})"
+                ));
+            }
+            return;
+        }
+        PORTRAIT_RENDER_WINDOW_DONE.store(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "profile-select-flow: portrait window release -> commit (captured={captured} waited={waited} dialog=0x{dialog:x} slot={slot})"
+        ));
+    }
+    // (c) COMMIT: hand the latched ProfileLoadDialog to the existing STAGE2 dispatch (it reads
+    // OWN_STEPPER_DIALOG). The next product_core_autoload_tick frame runs own_stepper_stage2.
+    if OWN_STEPPER_PHASE.load(Ordering::SeqCst) == OWN_STEPPER_PHASE_MENU {
+        own_stepper_enter_s2_phase(OWN_STEPPER_PHASE_S2_ACTIVATE);
+        append_autoload_debug(format_args!(
+            "profile-select-flow: COMMIT -> STAGE2 ACTIVATE dialog=0x{dialog:x} slot={slot} tick={tick}"
+        ));
+    }
+}
 pub(crate) unsafe fn title_menu_action_ready(owner: usize, base: usize) -> Option<MenuActionNode> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let dialog =
@@ -1358,9 +1938,10 @@ pub(crate) unsafe fn title_menu_action_ready(owner: usize, base: usize) -> Optio
     }
     let registry =
         unsafe { safe_read_usize(dialog + DIALOG_ROW_REGISTRY_A48_OFFSET) }.unwrap_or(null);
-    if !vtable_in_game_image(registry, base) {
-        return None;
-    }
+    // In the native profile-capture direct-open path this slot can be a live heap/registry value
+    // instead of an image vtable-shaped value. Treat it as provenance, not as a pre-scan hard gate:
+    // the bounded scanner below still validates the actual MenuMemberFuncJob vtable/member_fn chain
+    // before returning anything fireable.
     let (member_node, window_item) = unsafe { scan_dialog_for_loadgame(owner, base) };
     let node = member_node?;
     let node_vt = unsafe { safe_read_usize(node) }.unwrap_or(null);

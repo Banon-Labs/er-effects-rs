@@ -23,6 +23,9 @@ MEASURE_PATH = AUTO_DIR / "measure.sh"
 RUNTIME_WRAPPER_PATH = AUTO_DIR / "run_runtime_experiment.sh"
 RUNTIME_PROBE_PATH = AUTO_DIR / "runtime_probe.sh"
 RUNTIME_POLICY_PATH = AUTO_DIR / "runtime_experiment_policy.rego"
+DIRECT_PROBE_PATH = REPO_ROOT / "scripts" / "run-product-continue-direct-probe.sh"
+CAPTURE_HELPER_PATH = REPO_ROOT / "scripts" / "capture-er-window.py"
+READINESS_WATCH_PATH = REPO_ROOT / "scripts" / "er-readiness-watch.py"
 SMOKE_DRIVER_PATH = REPO_ROOT / "scripts" / "er-smoke-driver.sh"
 AUTO_LOG_PATH = AUTO_DIR / "log.jsonl"
 INCIDENT_ISSUE_ID = "er-effects-rs-1l6"
@@ -295,9 +298,128 @@ def scan_contract() -> list[Finding]:
                 )
             )
 
-    readiness_watch_path = REPO_ROOT / "scripts" / "er-readiness-watch.py"
-    if readiness_watch_path.exists():
-        readiness_text = readiness_watch_path.read_text(encoding="utf-8", errors="replace")
+    if not DIRECT_PROBE_PATH.exists():
+        findings.append(
+            Finding(
+                relative(DIRECT_PROBE_PATH),
+                0,
+                "missing-loading-screen-portrait-screenshot-reset",
+                "<missing>",
+                "The direct runtime/autoresearch probe wrapper must reset loading-screen-portrait-screenshot.{jpg,png,txt} before launch; the readiness watcher captures the loading-screen-portrait moment.",
+            )
+        )
+    else:
+        direct_text = DIRECT_PROBE_PATH.read_text(encoding="utf-8", errors="replace")
+        if "teardown-screenshot" in direct_text:
+            findings.append(
+                Finding(
+                    relative(DIRECT_PROBE_PATH),
+                    0,
+                    "teardown-screenshot-still-wired",
+                    "teardown-screenshot",
+                    "Runtime visual proof must capture the loading-screen-portrait/portrait-cover moment, not teardown/world-stable state.",
+                )
+            )
+        if "loading-screen-portrait-screenshot.jpg" not in direct_text or "loading-screen-portrait-screenshot.txt" not in direct_text:
+            findings.append(
+                Finding(
+                    relative(DIRECT_PROBE_PATH),
+                    0,
+                    "loading-screen-portrait-screenshot-stale-reset-missing",
+                    "loading-screen-portrait-screenshot reset missing",
+                    "Delete stale loading-screen-portrait-screenshot.{jpg,png,txt} before launch so an absent/fail-closed capture cannot be confused with a prior run.",
+                )
+            )
+        missing_visual_telemetry_guard = [
+            snippet
+            for snippet in (
+                "VISUAL_RESOURCE_MUTATION_ENVS",
+                "ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX",
+                "ER_EFFECTS_TITLE_05_000_MEMORY_GFX",
+                "visual_resource_mutation_envs_set",
+                "RUNTIME_TELEMETRY_ONLY=1 cannot be combined with mutating visual resource env(s)",
+            )
+            if snippet not in direct_text
+        ]
+        if missing_visual_telemetry_guard:
+            findings.append(
+                Finding(
+                    relative(DIRECT_PROBE_PATH),
+                    0,
+                    "telemetry-only-visual-resource-mutation-guard-missing",
+                    ", ".join(missing_visual_telemetry_guard),
+                    "The direct runtime probe preflight must fail closed when RUNTIME_TELEMETRY_ONLY=1 is combined with mutating visual resource replacement env vars.",
+                )
+            )
+
+    if READINESS_WATCH_PATH.exists():
+        watch_text = READINESS_WATCH_PATH.read_text(encoding="utf-8", errors="replace")
+        required_logo_capture = [
+            "loading-screen-portrait-screenshot.jpg",
+            "loading-screen-portrait-screenshot-analysis.json",
+            "telemetry_loading_screen_portrait_capture_ready",
+            "oracle_title_portrait_visible_surface_bound",
+            "capture-er-window.py",
+            "analyze-loading-screen-portrait-screenshot.py",
+        ]
+        missing_logo_capture = [snippet for snippet in required_logo_capture if snippet not in watch_text]
+        if missing_logo_capture:
+            findings.append(
+                Finding(
+                    relative(READINESS_WATCH_PATH),
+                    0,
+                    "loading-screen-portrait-event-capture-missing",
+                    ", ".join(missing_logo_capture),
+                    "The readiness watcher must capture loading-screen-portrait-screenshot.jpg when the portrait-cover oracle asserts, while the replacement is on-screen.",
+                )
+            )
+
+    if not CAPTURE_HELPER_PATH.exists():
+        findings.append(
+            Finding(
+                relative(CAPTURE_HELPER_PATH),
+                0,
+                "missing-event-capture-helper",
+                "<missing>",
+                "scripts/capture-er-window.py must exist and target only steam_app_1245620 for loading-screen-portrait/portrait-cover event evidence.",
+            )
+        )
+    else:
+        capture_text = CAPTURE_HELPER_PATH.read_text(encoding="utf-8", errors="replace")
+        missing_capture_snippets = [
+            snippet
+            for snippet in (
+                'WINDOW_CLASS = "steam_app_1245620"',
+                "hyprctl",
+                "grim",
+                "focusHistoryID",
+                "bad_geometry",
+            )
+            if snippet not in capture_text
+        ]
+        if missing_capture_snippets:
+            findings.append(
+                Finding(
+                    relative(CAPTURE_HELPER_PATH),
+                    0,
+                    "event-capture-helper-missing-target-validation",
+                    ", ".join(missing_capture_snippets),
+                    "The event capture helper must select the exact ER window, record focus state, and validate geometry before grim capture.",
+                )
+            )
+        if "not_focused" in capture_text or "focus_unknown" in capture_text:
+            findings.append(
+                Finding(
+                    relative(CAPTURE_HELPER_PATH),
+                    0,
+                    "event-capture-focus-dependent",
+                    "not_focused/focus_unknown",
+                    "Event capture must be focus-independent: best-effort raise the exact ER window but do not fail solely because it was not focused.",
+                )
+            )
+
+    if READINESS_WATCH_PATH.exists():
+        readiness_text = READINESS_WATCH_PATH.read_text(encoding="utf-8", errors="replace")
         missing_watch_timeout = [
             snippet
             for snippet in (
@@ -314,7 +436,7 @@ def scan_contract() -> list[Finding]:
         if missing_watch_timeout:
             findings.append(
                 Finding(
-                    relative(readiness_watch_path),
+                    relative(READINESS_WATCH_PATH),
                     0,
                     "readiness-watch-missing-hard-timeout",
                     ", ".join(missing_watch_timeout),

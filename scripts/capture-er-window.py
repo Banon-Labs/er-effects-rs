@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Low-quality screenshot of ONLY the Elden Ring window, for teardown/crash/trap evidence.
+"""Low-quality screenshot of ONLY the Elden Ring window for a specific probe event.
 
-Privacy fail-closed (matches the runtime-probe rule + er-readiness-watch validation): captures only
-an exact-class (steam_app_1245620), mapped, unhidden, focused/topmost (focusHistoryID==0) window
-with sane geometry. grim -g captures a screen REGION, so if the ER window is not topmost the region
-could contain other apps -- therefore we focus the window first, then re-validate, and if it still
-isn't safe we write a .txt note and take NO screenshot (never the desktop / other windows).
+Captures only an exact-class (steam_app_1245620), mapped, unhidden window with sane geometry.
+This helper is focus-independent: it switches to the window's workspace and raises the exact ER
+window before capture, but it does not fail merely because Hyprland still reports a nonzero
+focusHistoryID. grim -g captures the validated ER window region only (never the full desktop or an
+unrelated fallback window), so the artifact can be taken at the loading-screen-portrait/portrait-cover
+moment instead of at teardown.
 
 Usage: capture-er-window.py <out.jpg>
-Exit 0 always (best-effort evidence; never fails the caller's teardown).
+Exit 0 always (best-effort evidence; never fails the caller's runtime probe).
 """
 from __future__ import annotations
 
@@ -44,11 +45,6 @@ def problems(w: dict) -> list[str]:
         p.append("unmapped")
     if w.get("hidden") is True:
         p.append("hidden")
-    fh = w.get("focusHistoryID")
-    if fh is None:
-        p.append("focus_unknown")
-    elif int(fh) != 0:  # 0 == most-recently-focused/topmost (do NOT use `or` -- 0 is falsy)
-        p.append("not_focused")
     at, size = w.get("at") or [], w.get("size") or []
     if len(at) != 2 or len(size) != 2 or int(size[0] or 0) <= 0 or int(size[1] or 0) <= 0:
         p.append("bad_geometry")
@@ -73,15 +69,16 @@ def main() -> int:
         note.write_text(f"capture fail-closed: no window class={WINDOW_CLASS} (game gone/crashed)\n")
         return 0
 
-    # Focus the ER window so the grim screen-region is guaranteed to be the game, then re-validate.
+    # Make the ER window visible for grim's region capture, but do not require focus to stick.
     # Switch to its workspace first (grim captures the visible output; the window must be on it),
     # focus + raise to top, and retry -- a single focuswindow often doesn't win focus on teardown.
     addr = w.get("address")
     ws = w.get("workspace")
     ws_id = ws.get("id") if isinstance(ws, dict) else ws
-    # Re-query after each focus dispatch until the window reports topmost (focusHistoryID == 0),
-    # bounded by a fixed attempt count. Each hyprctl subprocess call is synchronous (timeout=10) and
-    # the re-query itself spawns hyprctl, so the loop paces on real IPC latency -- no sleep needed.
+    # Re-query after each dispatch so geometry follows any compositor move/resize. Focus is
+    # best-effort only; not-focused teardown captures are mandatory now, not a fail-closed reason.
+    # Each hyprctl subprocess call is synchronous (timeout=10) and the re-query itself spawns
+    # hyprctl, so the loop paces on real IPC latency -- no sleep needed.
     for _attempt in range(24):
         try:
             if ws_id is not None:

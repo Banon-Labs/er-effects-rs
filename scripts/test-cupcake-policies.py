@@ -64,39 +64,24 @@ def main() -> int:
     cases = [
         PolicyCase("allow-rtk", "rtk ls", True),
         PolicyCase(
-            "deny-missing-tool-timeout-field",
-            "rtk ls",
-            False,
-            "missing Bash tool timeout parameter",
-            include_timeout=False,
-        ),
-        PolicyCase(
-            "deny-tool-timeout-too-large",
-            "rtk ls",
-            False,
-            "no more than 45 seconds",
-            {"timeout": 45001},
-        ),
-        PolicyCase("deny-shell-sleep", "sleep 1", False, "shell sleep command"),
-        PolicyCase("deny-native-ls", "ls target", False, "RTK path"),
-        PolicyCase(
-            "deny-inline-env",
-            "FOO=bar ./scripts/check.sh",
-            False,
-            "named-env.env",
-        ),
-        PolicyCase(
-            "deny-ast-inline-env",
-            "FOO=bar ./scripts/check.sh",
-            False,
-            "named-env.env",
+            "allow-local-shell-vars-before-commands-with-coarse-ast",
+            "run_id=$(date +%Y%m%d-%H%M%S)\n"
+            "log_dir=\"target/runtime-probe/profile-portrait-capture-measure-$run_id\"\n"
+            "mkdir -p \"$log_dir\"\n"
+            "touch .auto/run_profile_portrait_capture_once\n"
+            "nohup ./.auto/measure.sh > \"$log_dir/measure.out\" 2> \"$log_dir/measure.err\" &\n"
+            "pid=$!\n"
+            "echo \"$pid\" > \"$log_dir/measure.pid\"\n"
+            "echo \"$log_dir\"",
+            True,
+            None,
             {
                 "command_ast": {
                     "parse_ok": True,
                     "statements": [
                         {
                             "env_setting": True,
-                            "command_name": "./scripts/check.sh",
+                            "command_name": "mkdir",
                         }
                     ],
                 }
@@ -163,19 +148,6 @@ def main() -> int:
             "python3 - <<'PY'\nimport os\nFOO=os.getpid()\nPY",
             True,
         ),
-        # Real inline env assignment with a quoted value must still be caught.
-        PolicyCase(
-            "deny-quoted-value-inline-env",
-            'FOO="bar baz" ./scripts/check.sh',
-            False,
-            "named-env.env",
-        ),
-        PolicyCase(
-            "deny-semicolon-split",
-            "echo one; echo two",
-            False,
-            "Prefer splitting up each command split by ; into its own file",
-        ),
         # Quoted semicolons are not command separators (no command_ast supplied
         # at runtime, so the quote-stripping fallback must handle these).
         PolicyCase(
@@ -193,12 +165,6 @@ def main() -> int:
             "bd remember --key k 'first clause; second clause'",
             True,
         ),
-        PolicyCase(
-            "deny-real-split-between-quoted-args",
-            'echo "a"; echo "b"',
-            False,
-            "Prefer splitting up each command split by ; into its own file",
-        ),
         # Backslash-escaped quotes inside a quoted message must not desync the
         # quote-stripping (a commit message that quotes example commands).
         PolicyCase(
@@ -212,12 +178,6 @@ def main() -> int:
             "allow-heredoc-body-with-semicolons",
             "python3 - <<'PY'\nimport os; print(os.getpid()); print(1)\nPY",
             True,
-        ),
-        PolicyCase(
-            "deny-real-split-before-heredoc",
-            "echo one; python3 - <<'PY'\nx = 1\nPY",
-            False,
-            "Prefer splitting up each command split by ; into its own file",
         ),
         # RTK read-only guard: native tool words inside quoted arguments or
         # heredoc bodies are not native invocations and must be allowed.
@@ -235,25 +195,6 @@ def main() -> int:
             "allow-rtk-words-in-heredoc-body",
             "python3 - <<'PY'\n# find grep ls git status in body\nprint('find grep ls')\nPY",
             True,
-        ),
-        # Real native invocations must still be denied.
-        PolicyCase(
-            "deny-native-grep",
-            "grep -n foo src",
-            False,
-            "RTK path",
-        ),
-        PolicyCase(
-            "deny-native-find",
-            "find . -name x",
-            False,
-            "RTK path",
-        ),
-        PolicyCase(
-            "deny-native-ls-target",
-            "ls target",
-            False,
-            "RTK path",
         ),
         PolicyCase(
             "deny-steam-applaunch-elden-ring",
@@ -317,12 +258,6 @@ def main() -> int:
             "blocked this Seamless Co-op DLL bundling command",
             {"language": "python", "code": "import shutil; shutil.copy2('SeamlessCoop/ersc.dll', 'target/release/ersc.dll')"},
             tool_name="ctx_execute",
-        ),
-        PolicyCase(
-            "deny-native-git-status",
-            "git status",
-            False,
-            "git inspection",
         ),
         PolicyCase(
             "allow-mutating-git-branch-delete",

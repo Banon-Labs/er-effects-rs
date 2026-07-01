@@ -18,6 +18,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 set -a
 # shellcheck disable=SC1091
 [ -f "$REPO_ROOT/.envs/native-continue-probe.env" ] && . "$REPO_ROOT/.envs/native-continue-probe.env"
+# Optional boot-profiler overlay: when present, enables/tunes the CPU+RIP sampler for this run.
+# shellcheck disable=SC1091
+[ -f "$REPO_ROOT/.envs/boot-profile.env" ] && . "$REPO_ROOT/.envs/boot-profile.env"
 RUNTIME_ONSCREEN=1
 RUNTIME_NO_TEARDOWN=1
 set +a

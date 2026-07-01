@@ -16,7 +16,8 @@ use std::{
 
 use std::os::windows::ffi::OsStrExt as _;
 
-use debug::{InputBlocker, InputFlags};
+use crate::input_blocker::{InputBlocker, InputFlags};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
@@ -24,27 +25,21 @@ use eldenring::{
 use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
-use hudhook::{
-    ImguiRenderLoop, MessageFilter,
-    hooks::dx12::ImguiDx12Hooks,
-    imgui::{Condition, Context, Ui},
-    mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook},
-    windows::{
-        Win32::{
-            Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
-            System::{
-                LibraryLoader::{GetModuleHandleA, GetProcAddress},
-                Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-                SystemServices::DLL_PROCESS_ATTACH,
-                Threading::GetCurrentProcessId,
-            },
-            UI::WindowsAndMessaging::{
-                ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-                WM_KEYDOWN, WM_KEYUP,
-            },
+use windows::{
+    Win32::{
+        Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
+        System::{
+            LibraryLoader::{GetModuleHandleA, GetProcAddress},
+            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
+            SystemServices::DLL_PROCESS_ATTACH,
+            Threading::GetCurrentProcessId,
         },
-        core::{BOOL, PCSTR},
+        UI::WindowsAndMessaging::{
+            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+            WM_KEYDOWN, WM_KEYUP,
+        },
     },
+    core::{BOOL, PCSTR},
 };
 
 #[allow(unused_imports)]
@@ -54,13 +49,13 @@ use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 
 use super::*;
 
-/// Render-thread liveness + bootstrap probe. Runs from the ImGui render loop (a
+/// Render-thread liveness + bootstrap probe. Runs from an optional render callback (a
 /// separate thread from the game-task scheduler), so it keeps reporting after the
 /// title->menu phase transition stops the title CSTask. Distinguishes "the title
 /// advanced (render alive + CSFeMan builds)" from "the game hung (render frozen)".
 #[allow(dead_code)]
 /// When set, ALL game input is hard-blocked at the API layer (see `enforce_input_block`):
-/// DInput8 keyboard+mouse (state zeroed by the `debug::InputBlocker` hook) AND XInput
+/// DInput8 keyboard+mouse (state zeroed by the `InputBlocker` hook) AND XInput
 /// gamepad (this module's hook). Read by `xinput_get_state_hook` each poll so the block is
 /// authoritative regardless of window focus.
 pub(crate) static BLOCK_INPUT_ACTIVE: AtomicUsize = AtomicUsize::new(0);
@@ -299,12 +294,12 @@ unsafe fn install_xinput_block() {
     }
 }
 
-/// Tracks whether the DInput keyboard+mouse `install_hooks` has run (once).
+/// Tracks whether the DInput keyboard+mouse `install_hooks` has succeeded.
 static DINPUT_BLOCK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 
 /// Enforce the comprehensive input block for this frame. Self-contained (no args) so it can
 /// run from EITHER the game task OR the render loop -- critical because under the offline
-/// launcher the hudhook render loop does NOT execute at the title, so the render-loop call
+/// launcher no render callback executes at the title, so the render-loop call
 /// alone never engaged the block (that was the contamination hole). Driven every frame from
 /// the game task while `block_input_enabled()`:
 ///   1. ONCE: install the DInput8 keyboard+mouse `GetDeviceState` block (panics on probe
@@ -314,23 +309,20 @@ static DINPUT_BLOCK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// Genuinely zero-input: it only SUPPRESSES device reads -- it never synthesizes any input.
 pub(crate) fn enforce_input_block_now() {
     let blocker = InputBlocker::get_instance();
-    if DINPUT_BLOCK_INSTALLED.swap(BLOCK_INPUT_ON, Ordering::SeqCst)
-        == TITLE_OWNER_SCAN_START_ADDRESS
-    {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-            blocker.install_hooks()
-        }));
-        match result {
+    if DINPUT_BLOCK_INSTALLED.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS {
+        let res = std::panic::catch_unwind(|| unsafe { blocker.install_hooks() });
+        match res {
             Ok(Ok(())) => {
+                DINPUT_BLOCK_INSTALLED.store(BLOCK_INPUT_ON, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "input-block: DInput keyboard+mouse GetDeviceState hook installed"
+                    "input-block: DInput8 GetDeviceState hooks INSTALLED (minhook, no-hudhook)"
                 ));
             }
             Ok(Err(status)) => append_autoload_debug(format_args!(
-                "input-block: DInput install_hooks failed: {status:?} (XInput still hooks)"
+                "input-block: DInput8 GetDeviceState hook install failed: {status:?}; will retry"
             )),
             Err(_) => append_autoload_debug(format_args!(
-                "input-block: DInput install_hooks panicked (contained; XInput still hooks)"
+                "input-block: DInput8 probe/hook install panicked (dinput8/device not ready?); will retry"
             )),
         }
     }

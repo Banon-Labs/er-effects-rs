@@ -11,7 +11,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use debug::InputBlocker;
+use crate::input_blocker::InputBlocker;
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use eldenring::{
     cs::{
         CSTaskGroupIndex, CSTaskImp, ChrInsExt, FaceData, FaceDataBuffer, GameDataMan, GameMan,
@@ -23,27 +24,21 @@ use eldenring::{
 use er_effects_data::embedded_effects;
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoader};
 use fromsoftware_shared::{F32Vector4, FromStatic, InstanceError, SharedTaskImpExt};
-use hudhook::{
-    ImguiRenderLoop, MessageFilter,
-    hooks::dx12::ImguiDx12Hooks,
-    imgui::{Condition, Context, Ui},
-    mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook},
-    windows::{
-        Win32::{
-            Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
-            System::{
-                LibraryLoader::{GetModuleHandleA, GetProcAddress, LoadLibraryA},
-                Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-                SystemServices::DLL_PROCESS_ATTACH,
-                Threading::GetCurrentProcessId,
-            },
-            UI::WindowsAndMessaging::{
-                EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
-                WM_KEYUP,
-            },
+use windows::{
+    Win32::{
+        Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
+        System::{
+            LibraryLoader::{GetModuleHandleA, GetProcAddress, LoadLibraryA},
+            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
+            SystemServices::DLL_PROCESS_ATTACH,
+            Threading::GetCurrentProcessId,
         },
-        core::{BOOL, PCSTR},
+        UI::WindowsAndMessaging::{
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
+            WM_KEYUP,
+        },
     },
+    core::{BOOL, PCSTR},
 };
 
 mod constants;
@@ -52,13 +47,13 @@ mod effects;
 mod experiments;
 mod ffi;
 mod hooks;
-mod overlay;
+mod input_blocker;
+mod mh;
 mod telemetry;
 
 #[allow(unused_imports)]
 use crate::{
-    constants::*, crashlog::*, effects::*, experiments::*, ffi::*, hooks::*, overlay::*,
-    telemetry::*,
+    constants::*, crashlog::*, effects::*, experiments::*, ffi::*, hooks::*, telemetry::*,
 };
 
 // Constants/statics live in constants.rs; keep lib.rs focused on DLL entrypoints and task wiring.
@@ -80,6 +75,9 @@ pub(crate) struct EffectsState {
     /// instead of silently starting with an empty list.
     load_error: Option<String>,
     current_animation_id: Option<i32>,
+    /// Latched when the expected appear animation is observed either as current or as a queue write
+    /// between task ticks; runtime proof needs the semantic event, not a one-frame sampling race.
+    expected_animation_seen: bool,
     applied_for_current_appear: bool,
     /// TimeAct queue write index at the previous tick; used to detect appear
     /// animations that were enqueued (and possibly finished) between ticks.
@@ -116,6 +114,7 @@ impl Default for EffectsState {
             calls,
             load_error,
             current_animation_id: None,
+            expected_animation_seen: false,
             applied_for_current_appear: false,
             last_write_idx: None,
             manual_apply_requested: false,
@@ -170,11 +169,19 @@ pub unsafe extern "system" fn DirectInput8Create(
 /// # Safety
 ///
 /// This is called by Windows when the DLL is loaded. Do not call it directly.
-pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mut c_void) -> i32 {
+pub unsafe extern "C" fn DllMain(_hmodule: HINSTANCE, reason: u32, _reserved: *mut c_void) -> i32 {
     if reason != DLL_PROCESS_ATTACH {
         return DLL_MAIN_SUCCESS;
     }
     write_bootstrap_event(BOOTSTRAP_EVENT_DLL_MAIN_ATTACH, BOOTSTRAP_DETAIL_START);
+
+    // Boot profiler: spawn the independent CPU sampler FIRST so it captures the engine-init threads
+    // during the pre-CSTaskImp-instance gap (the largest uninstrumented boot window). Read-only by
+    // default (QueryThreadCycleTime/GetThreadTimes, no thread suspension); RIP sampling is a separate
+    // opt-in sub-switch. Gated OFF unless ER_EFFECTS_PROFILE=1 / er-effects-profile.txt.
+    if profiler_enabled() {
+        START_BOOT_PROFILER.call_once(spawn_boot_profiler);
+    }
 
     // Install the crash/exit logger first so it can observe an exit or access
     // violation from any later subsystem. Opt-in; off by default.
@@ -246,6 +253,150 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
             .spawn(apply_foreground_force);
     });
 
+    // Passive title-resource observer is deliberately independent of the cover/hide bundle: recent
+    // branches have kept the stock logo invisible, so resource-path proof must not depend on any
+    // visual/logo-hide state.
+    if title_menu_resource_observer_enabled() {
+        START_TITLE_MENU_RESOURCE_ACQUIRE_OBSERVER.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-resource-observer".to_owned())
+                .spawn(install_title_menu_resource_acquire_observer_hook);
+        });
+    }
+
+    // Title-cover masquerade Part A: install the BeginTitle `05_000_Title` hook as early as
+    // splash/foreground patches, before STEP_BeginTitle can build the native title Scaleform. This
+    // does NOT touch STEP_Wait or CSMenuMan+0x21; it preserves the native MenuWindowJob and hides
+    // only its draw bit from the MenuWindowJob::Run/FadeIn path.
+    if title_native_menu_visual_suppression_enabled() {
+        START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-cover-part-a".to_owned())
+                .spawn(install_title_native_menu_visual_suppression_hook);
+        });
+        START_TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-cover-render".to_owned())
+                .spawn(install_title_native_menu_visual_render_suppression_hook);
+        });
+        START_TITLE_LOGO_FORCE_HIDDEN.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-logo-force-hidden".to_owned())
+                .spawn(install_title_logo_force_hidden_hooks);
+        });
+        START_TITLE_LOGO_START_LOGIN_HIDE.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-logo-start-login-hide".to_owned())
+                .spawn(install_title_logo_start_login_hide_hook);
+        });
+        START_TITLE_PAB_INFORMATION_COVER.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-pab-cover".to_owned())
+                .spawn(install_title_pab_information_visual_hook);
+        });
+        START_TITLE_GFX_VALUE_SET_VISIBLE.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-gfx-visible".to_owned())
+                .spawn(install_title_gfx_value_set_visible_hook);
+        });
+        START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-child-bind".to_owned())
+                .spawn(install_title_scene_obj_proxy_named_child_bind_hook);
+        });
+        START_TITLE_SCALEFORM_BIND_OBSERVER.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-bind-observer".to_owned())
+                .spawn(install_title_scaleform_bind_observer_hook);
+        });
+        START_TITLE_MENU_RESOURCE_ACQUIRE_OBSERVER.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-resource-observer".to_owned())
+                .spawn(install_title_menu_resource_acquire_observer_hook);
+        });
+        // Do not install the independent custom-cover MenuWindowJob pump here. Runtime artifact
+        // product-continue-direct-20260628-121039 proved that pumping a separate 01_900_Black job
+        // keeps job+0x130 live and stalls the title flow before player/world. Future cover work must
+        // use an epilogue-neutral path (mutate an already-scheduled title surface/resource, or prove
+        // explicit completion semantics before adding an independent MenuWindowJob).
+        START_TITLE_FLOW_CONTEXT_RECORD_REGULATION.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-tfc-record-fix".to_owned())
+                .spawn(install_title_flow_context_record_regulation_fix_hook);
+        });
+    } else if title_resource_memory_gfx_enabled() {
+        // Branch-owned `05_001_Title_Logo` replacement: keep TitleBack visible, but hide the later
+        // title text layers (`PRESS ANY BUTTON` / Continue-ish title information) so the custom
+        // resource is not overdrawn by native text. Do not install the TitleBack/logo hide hooks here.
+        START_TITLE_PAB_INFORMATION_COVER.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-text-latch".to_owned())
+                .spawn(install_title_pab_information_visual_hook);
+        });
+        START_TITLE_GFX_VALUE_SET_VISIBLE.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-text-gfx-visible".to_owned())
+                .spawn(install_title_gfx_value_set_visible_hook);
+        });
+        START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-text-child-bind".to_owned())
+                .spawn(install_title_scene_obj_proxy_named_child_bind_hook);
+        });
+        START_TITLE_SCALEFORM_BIND_OBSERVER.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-title-text-bind-observer".to_owned())
+                .spawn(install_title_scaleform_bind_observer_hook);
+        });
+    } else if native_profile_capture_enabled() {
+        // Native ProfileSelect diagnostic: install only the passive Scaleform bind observer. Do not
+        // install title-cover/custom-cover hooks; this mode is specifically meant to prove native
+        // ProfileSelect/profile-renderer provenance without the product cover mutation path.
+        START_TITLE_SCALEFORM_BIND_OBSERVER.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-native-profile-bind-observer".to_owned())
+                .spawn(install_title_scaleform_bind_observer_hook);
+        });
+    }
+
+    // Now-loading background portrait forge: install the replace-bind hook early (well before the
+    // ~17s now-loading-screen lifecycle) so it is resident when the first MENU_Load_ background is
+    // produced. The hook self-gates on product_autoload_enabled() + the MENU_Load_ symbol and is
+    // fail-open (any non-matching symbol or build/alloc failure tail-calls the original), so
+    // installing it unconditionally is inert outside the product autoload path. Route-independent.
+    // NOT on the portrait-lookat path: there the live present-overlay (below) owns the display, gated by the
+    // forge-independent PROFILE_LOADSCREEN_TABLE_BUILDS latch. The forged native background portrait would
+    // render a SECOND, FROZEN head (its per-frame live-rebind crashes vkd3d, so the forged bg can only be a
+    // static snapshot). Install the forge only for the pure product-autoload cover path, where it is the sole
+    // display surface. (Overlay-only, user choice 2026-06-30 -- see keepalive-DISPLAY-FIXED memory.)
+    if !portrait_lookat_enabled() {
+        START_LOADING_BG_REPLACE_BIND.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-loading-bg-portrait".to_owned())
+                .spawn(install_loading_bg_replace_bind_hook);
+        });
+    }
+    // D3D12 PRESENT OVERLAY: the deterministic display path -- draw the captured portrait directly onto the
+    // swapchain backbuffer when the now-loading screen is up (the in-pipeline forge/Scaleform routes cannot
+    // drive the displayed image). Install only on the portrait path (diagnostic), via the dummy-swapchain
+    // vtable technique. Phase 1 is log-only (proves the hook fires) before any backbuffer write.
+    if portrait_lookat_enabled() {
+        START_PRESENT_OVERLAY.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-present-overlay".to_owned())
+                .spawn(install_present_overlay_hook);
+        });
+    }
+    // Portrait-renderer teardown SPARE hook: keep the loaded character's portrait renderer alive past the
+    // Continue teardown so we can drive realtime look-at + render it post-Continue (the persistent-model
+    // path -- the cycling menu can't show a stable portrait). The hook self-gates on product_autoload and
+    // only spares a renderer whose model is BUILT (the blank-renderer misfire is guarded in the hook).
+    START_PROFILE_RENDERER_TEARDOWN_SPARE.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("er-effects-portrait-spare".to_owned())
+            .spawn(install_profile_renderer_teardown_spare_hook);
+    });
+
     // MenuWindow latch: install the SceneObjProxy ctor hook (0x14074a700) as early as the
     // splash-skip / online-disable patches, from a thread, so it lands BEFORE the title state
     // machine builds the title dialog during boot. On each VALID call it latches rdx (the engine-
@@ -253,7 +404,8 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // OPT-IN (off by default): only install when `menu_window_latch_enabled()` is set
     // (env ER_EFFECTS_MENU_WINDOW_LATCH=1 OR GAME_DIR file er-effects-menu-window-latch.txt).
     // When off, the hook is never installed (no MinHook, no detour) -- a clean run has neither.
-    if menu_window_latch_enabled() || product_autoload_enabled() {
+    if menu_window_latch_enabled() || product_autoload_enabled() || native_profile_capture_enabled()
+    {
         START_MENU_WINDOW_LATCH.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-effects-menu-window-latch".to_owned())
@@ -316,26 +468,11 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         move || spawn_game_task(state)
     });
 
-    // Skip the hudhook/ImGui DX12 overlay when autoload-only (no overlay needed) OR when explicitly
-    // disabled via `overlay_disabled()` (env ER_EFFECTS_NO_OVERLAY=1 / GAME_DIR file
-    // er-effects-no-overlay.txt) -- e.g. a golden trace run that wants no extra DX12 hooks/overhead.
-    let autoload_without_overlay = state_or_return(&state).autoload.slot().is_some();
-    if autoload_without_overlay || overlay_disabled() {
-        write_bootstrap_event(
-            BOOTSTRAP_EVENT_OVERLAY_SKIPPED_AUTOLOAD,
-            BOOTSTRAP_DETAIL_DONE,
-        );
-        return DLL_MAIN_SUCCESS;
-    }
-
-    debug::initialize::<ImguiDx12Hooks>(
-        hmodule,
-        reason,
-        || {
-            let _ = wait_for_task_instance();
-        },
-        EffectsOverlay::new(state),
-    )
+    write_bootstrap_event(
+        BOOTSTRAP_EVENT_OVERLAY_SKIPPED_AUTOLOAD,
+        BOOTSTRAP_DETAIL_DONE,
+    );
+    DLL_MAIN_SUCCESS
 }
 
 pub(crate) fn wait_for_task_instance() -> &'static CSTaskImp {
@@ -366,9 +503,22 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
             BOOTSTRAP_EVENT_GAME_TASK_INSTANCE_READY,
             BOOTSTRAP_DETAIL_DONE,
         );
+        // Boot-phase marker: CSTaskImp resolved -> bounds the end of the pre-instance engine-init
+        // gap (the largest uninstrumented boot window) in the same [+Nms] timeline the renderer parses.
+        if profiler_enabled() {
+            append_autoload_debug(format_args!("boot-phase: cstask_instance_ready"));
+        }
 
         cs_task.run_recurring(
             move |task_data: &FD4TaskData| {
+                // Boot-phase marker: first frame our recurring task actually ticks.
+                if profiler_enabled()
+                    && BOOT_FIRST_FRAME_LOGGED
+                        .swap(GAME_TASK_TICK_INCREMENT as usize, Ordering::SeqCst)
+                        == 0
+                {
+                    append_autoload_debug(format_args!("boot-phase: first_game_frame"));
+                }
                 // Bisect kill-switch: do nothing per frame. Isolates "our task
                 // body crashes the title ~19s" from "the DLL's mere presence".
                 if inert_mode() {
@@ -377,7 +527,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // Hardware write-watchpoint on GameMan+0xc30: (re)arm each frame until
                 // the save-mount write is caught, so the VEH logs the exact writer. Runs
                 // HARD input block (DInput keyboard+mouse + XInput gamepad), driven from the
-                // game task so it is active EVEN when the hudhook render loop is not running
+                // game task so it is active even when no render callback is running
                 // (it does not under the offline launcher at the title). Runs every frame the
                 // task ticks -- before the player check -- so a focused window cannot inject any
                 // real input during the zero-input own-stepper/autoload probe. Pure suppression,
@@ -386,6 +536,12 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     enforce_input_block_now();
                 } else {
                     release_input_block_now();
+                }
+                // D3D12 PRESENT OVERLAY: once the GX device is up, find the game's live swapchain and hook
+                // its REAL Present (the dummy-swapchain vtable differs under vkd3d-proton). Self-gated
+                // (portrait path only, one-shot on success, bounded retries) so it's cheap every frame.
+                if let Ok(base) = game_module_base() {
+                    unsafe { try_install_game_present_hook(base) };
                 }
                 // before the player check so it arms at the title (pre-load), independent
                 // of the active observe/own-stepper mode.
@@ -482,7 +638,32 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 if pab_advance_enabled() {
                     if let Ok(base) = game_module_base() {
                         unsafe { install_pab_advance_hook(base) };
-                        unsafe { maybe_set_title_accept_byte(base) };
+                        if !native_profile_capture_enabled() {
+                            unsafe { maybe_set_title_accept_byte(base) };
+                        }
+                    }
+                }
+                // Now-loading helper observer: attach only after the native title accept byte fired.
+                // Attach-time detours on CSNowLoadingHelperImp exited before readiness; this delayed
+                // install avoids touching the loading helper until the title path has already advanced.
+                if product_autoload_enabled()
+                    && TITLE_ACCEPT_BYTE_GATE_FIRED.load(Ordering::SeqCst)
+                    && NOW_LOADING_HELPER_HOOKS_INSTALLED.load(Ordering::SeqCst) == 0
+                {
+                    install_now_loading_helper_observer_hooks();
+                }
+                // Title transition fast-forward (pab_dismiss -> menu_open): scale the title
+                // frame-delta so the FadeIn/TextFadeOut/menu Scaleform animation reaches its end
+                // frame in fewer wall-clock frames. Default-on product behavior for real runs (the
+                // detour self-gates per frame); install once. bd er-effects-rs-urw.
+                if title_anim_speedup_enabled() {
+                    if let Ok(base) = game_module_base() {
+                        unsafe { install_title_anim_speed_hook(base) };
+                        // READ-ONLY native state-transition timeline (menu-build-overlap lever
+                        // "look before acting" instrument): logs every SetState(owner,int) with a
+                        // timestamp so we learn exactly when BeginTitle(3) fires and whether the
+                        // 05_000_Title build has headroom to start earlier. Save-safe pass-through.
+                        unsafe { install_title_setstate_trace_hook(base) };
                     }
                 }
                 // OFFLINE connection-state lever (milestone-3 fix): force GameMan+0xBC8/0xBC9 = 0 each
@@ -594,10 +775,39 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     // component through its native open-menu registrar; readiness is checked
                     // inside product_core_autoload_tick.
                     if product_autoload_enabled() {
-                        if let (Ok(base), Some(slot)) = (game_module_base(), state.autoload.slot())
-                        {
+                        PRODUCT_CORE_CALLSITE_TICKS.fetch_add(1, Ordering::SeqCst);
+                        let base_result = game_module_base();
+                        if base_result.is_ok() {
+                            PRODUCT_CORE_CALLSITE_BASE_OK_TICKS.fetch_add(1, Ordering::SeqCst);
+                        }
+                        let slot_result = state.autoload.slot();
+                        if let Some(slot) = slot_result {
+                            PRODUCT_CORE_CALLSITE_SLOT_OK_TICKS.fetch_add(1, Ordering::SeqCst);
+                            PRODUCT_CORE_CALLSITE_LAST_SLOT.store(slot as usize, Ordering::SeqCst);
+                        }
+                        if let (Ok(base), Some(slot)) = (base_result, slot_result) {
                             unsafe {
                                 product_core_autoload_tick(base, slot, state.game_task_ticks)
+                            };
+                            // Per-frame: capture the live character portrait CSGxTexture while the
+                            // ProfileSelect renderer still exists (it is torn down at Continue), so
+                            // the now-loading background forge can display the real portrait. One-shot.
+                            // Read the autoload's TARGET slot's renderer table entry, not a hardcoded 0.
+                            maybe_capture_portrait_gxtexture(base, slot);
+                        }
+                        write_telemetry_throttled(&mut state, false);
+                        return;
+                    }
+                    // FORCE LIVE PROFILE PORTRAIT RENDER (diagnostic, default-OFF): while the user
+                    // holds the ProfileSelect/Load-Game screen (valid menu render context, NO
+                    // Continue commit), mark the target slot used + kick the async character-model
+                    // build so the renderer renders the live 3D head into its offscreen. Menu-phase
+                    // only -> no Continue/teardown/world-load crash path. The capture keeps the gx
+                    // once the model latches (+0x778). Validates P1 (the build) in isolation.
+                    if force_profile_render_enabled() {
+                        if let Ok(base) = game_module_base() {
+                            unsafe {
+                                force_profile_render_tick(base, FORCE_PROFILE_RENDER_MANUAL_SLOT)
                             };
                         }
                         write_telemetry_throttled(&mut state, false);
@@ -755,6 +965,11 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 }
                 let observation = observe_animation(player, state.last_write_idx);
                 state.current_animation_id = observation.current_animation_id;
+                if observation.current_animation_id == Some(APPEAR_ANIMATION_ID)
+                    || observation.appear_newly_queued
+                {
+                    state.expected_animation_seen = true;
+                }
                 state.last_write_idx = Some(observation.write_idx);
 
                 remove_requested_calls(player, &mut state);
@@ -787,6 +1002,60 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
         write_bootstrap_event(
             BOOTSTRAP_EVENT_GAME_TASK_RECURRING_REGISTERED,
             BOOTSTRAP_DETAIL_DONE,
+        );
+        // REALTIME PORTRAIT LOOK-AT draw-phase SWEEP: register the realtime draw task in EACH candidate
+        // DRAW phase, so it runs on the render thread inside an actively-recording GX frame (where the
+        // profile draw step's GX subcontext-pool pop succeeds -- FrameBegin, above, is before the frame
+        // records, so a draw there is a black no-op). Each registration bumps its own per-frame tick
+        // counter; only the phase whose index == PROFILE_LOOKAT_SELECTED_PHASE actually rasterizes, so
+        // exactly one phase draws per frame. The active phase is switchable live via
+        // er-effects-lookat-phase.txt (no recompile), to find one that ticks per-frame at the menu
+        // (GameSceneDraw measured ~11% -- world-gated). We own these tasks (cancel() is a fromsoftware-rs
+        // no-op + self-leaked Arc), so the chosen one persists past Continue = the loading-screen port.
+        // Order MUST match constants::LOOKAT_DRAW_PHASE_NAMES.
+        let lookat_phases = [
+            CSTaskGroupIndex::Draw_Pre,
+            CSTaskGroupIndex::GraphicsStep,
+            CSTaskGroupIndex::DrawStep,
+            CSTaskGroupIndex::DrawBegin,
+            CSTaskGroupIndex::GameSceneDraw,
+            CSTaskGroupIndex::AdhocDraw,
+            CSTaskGroupIndex::DrawEnd,
+            CSTaskGroupIndex::Draw_Post,
+        ];
+        for (i, phase) in lookat_phases.into_iter().enumerate() {
+            cs_task.run_recurring(
+                move |task_data: &FD4TaskData| unsafe {
+                    profile_lookat_phase_draw_tick(i, task_data)
+                },
+                phase,
+            );
+        }
+        // Sweep diagnostic + live selector re-read, paced by a FrameBegin task (ticks every frame).
+        cs_task.run_recurring(
+            move |_task_data: &FD4TaskData| profile_lookat_phase_diag_tick(),
+            CSTaskGroupIndex::FrameBegin,
+        );
+        // BUILD-OWN LIVE-RENDER DRIVER (gated, FrameBegin = GAME thread, ticks EVERY frame incl. the
+        // loading screen). force_profile_render_tick's only other call sites are menu-phase-only (they
+        // `return` before Continue), so maybe_build_profile_table_for_loading + the mark/refresh feed never
+        // ran post-Continue -> loadbuilds=0, the loaded character never re-built. Driving it here gives the
+        // build-own path a post-Continue game-thread driver: it builds our OWN profile renderers (engine
+        // 10-slot builder), which self-register their ResMan model build/draw tasks and OWN their model with
+        // OUR lifetime (no teardown-free -> no AV, unlike re-attaching the dying menu model). The fn
+        // self-gates heavily (table-ready, feature gates, one-shots), so an every-frame call is idempotent.
+        // Gated by portrait_render_drive_enabled so it can be A/B'd against the safe checker baseline.
+        cs_task.run_recurring(
+            move |_task_data: &FD4TaskData| {
+                if portrait_render_drive_enabled() {
+                    if let Ok(base) = game_module_base() {
+                        unsafe {
+                            force_profile_render_tick(base, FORCE_PROFILE_RENDER_MANUAL_SLOT)
+                        };
+                    }
+                }
+            },
+            CSTaskGroupIndex::FrameBegin,
         );
     });
 }

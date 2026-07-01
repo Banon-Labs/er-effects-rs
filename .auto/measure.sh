@@ -1,14 +1,77 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
+export RUNTIME_ONSCREEN="${RUNTIME_ONSCREEN:-1}"
+
+if [[ -f .auto/run_profile_portrait_capture_once ]]; then
+  rm -f .auto/run_profile_portrait_capture_once
+  cargo xwin build --release --target x86_64-pc-windows-msvc >/tmp/er-effects-runtime-build.log 2>&1 || {
+    tail -80 /tmp/er-effects-runtime-build.log >&2
+    exit 1
+  }
+  profile_capture_dir="target/runtime-probe/profile-portrait-capture-$(date +%Y%m%d-%H%M%S)"
+  set +e
+  PROFILE_CAPTURE_SKIP_BUILD=1 \
+  ARTIFACT_DIR="$profile_capture_dir" \
+  ER_EFFECTS_GOLD_SAVE="${ER_EFFECTS_GOLD_SAVE:-/home/banon/projects/er-effects-rs/save-files/150-Banon/ER0000.sl2}" \
+  ER_EFFECTS_GOLD_SLOT="${ER_EFFECTS_GOLD_SLOT:-0}" \
+  RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-45}" \
+  scripts/run-profile-portrait-capture-probe.sh
+  profile_capture_rc=$?
+  set -e
+  if (( profile_capture_rc != 0 )) && [[ ! -f "$profile_capture_dir/profile-portrait-failure.json" ]]; then
+    exit "$profile_capture_rc"
+  fi
+fi
+
+if [[ -f .auto/run_runtime_probe_once ]]; then
+  rm -f .auto/run_runtime_probe_once
+  cargo xwin build --release --target x86_64-pc-windows-msvc >/tmp/er-effects-runtime-build.log 2>&1 || {
+    tail -80 /tmp/er-effects-runtime-build.log >&2
+    exit 1
+  }
+  runtime_autoload_request=$(mktemp "${TMPDIR:-/tmp}/er-effects-autoload.XXXXXX")
+  runtime_expected_save_oracle=$(mktemp "${TMPDIR:-/tmp}/er-effects-save-oracle.XXXXXX.json")
+  python3 scripts/save-slot-oracle.py \
+    --save "${ER_EFFECTS_GOLD_SAVE:-/home/banon/projects/er-effects-rs/save-files/150-Banon/ER0000.sl2}" \
+    --slot "${ER_EFFECTS_GOLD_SLOT:-0}" \
+    --output "$runtime_expected_save_oracle"
+  printf 'slot=%s\nmethod=direct_menu_load\nrequire_title_bootstrap=false\n' "${ER_EFFECTS_GOLD_SLOT:-0}" > "$runtime_autoload_request"
+  ER_EFFECTS_EXPERIMENTAL_DIRECT_MENU_LOAD=1 \
+  ER_EFFECTS_GOLD_SAVE="${ER_EFFECTS_GOLD_SAVE:-/home/banon/projects/er-effects-rs/save-files/150-Banon/ER0000.sl2}" \
+  ER_EFFECTS_GOLD_SLOT="${ER_EFFECTS_GOLD_SLOT:-0}" \
+  RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-35}" \
+  RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-vanilla}" \
+  RUNTIME_EXPECTED_SAVE_ORACLE="$runtime_expected_save_oracle" \
+  scripts/run-product-continue-direct-probe.sh --autoload-request "$runtime_autoload_request"
+  rm -f "$runtime_autoload_request" "$runtime_expected_save_oracle"
+fi
+
+if [[ -f .auto/run_manual_profile_trace_once ]]; then
+  rm -f .auto/run_manual_profile_trace_once
+  ER_EFFECTS_GOLD_SAVE="${ER_EFFECTS_GOLD_SAVE:-/home/banon/projects/er-effects-rs/save-files/150-Banon/ER0000.sl2}" \
+  ER_EFFECTS_GOLD_SLOT="${ER_EFFECTS_GOLD_SLOT:-0}" \
+  RUNTIME_ONSCREEN=1 \
+  RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-45}" \
+  RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-any}" \
+  ER_EFFECTS_NO_AUTOLOAD=1 \
+  ER_EFFECTS_TRACE_CONTINUE=1 \
+  scripts/run-product-continue-direct-probe.sh
+fi
+
 python3 - <<'PY'
 from __future__ import annotations
 import json
+import os
 import re
+import subprocess
+import tempfile
 from pathlib import Path
 
-MAX_SCORE = 1400
+MAX_SCORE = 1600
 root = Path.cwd()
 lib = (root / 'src/lib.rs').read_text(encoding='utf-8', errors='replace')
+constants_src = (root / 'src/constants.rs').read_text(encoding='utf-8', errors='replace')
 _exp_dir = root / 'src/experiments'
 if _exp_dir.is_dir():
     _exp_files = sorted(_exp_dir.glob('*.rs'), key=lambda p: (p.name != 'mod.rs', p.name))
@@ -17,6 +80,7 @@ else:
     exp = (root / 'src/experiments.rs').read_text(encoding='utf-8', errors='replace')
 check = (root / 'scripts/check-autoload-happy-path.py').read_text(encoding='utf-8', errors='replace')
 telemetry_src = (root / 'src/telemetry.rs').read_text(encoding='utf-8', errors='replace')
+overlay_code = (root / 'src/overlay.rs').read_text(encoding='utf-8', errors='replace') if (root / 'src/overlay.rs').exists() else ''
 watcher = (root / 'scripts/er-readiness-watch.py').read_text(encoding='utf-8', errors='replace')
 native_static_check = (root / 'scripts/check-native-continue-static.py').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/check-native-continue-static.py').exists() else ''
 menu_ctor_static_check = (root / 'scripts/check-menu-constructor-static.py').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/check-menu-constructor-static.py').exists() else ''
@@ -25,7 +89,7 @@ direct_probe = (root / 'scripts/run-product-continue-direct-probe.sh').read_text
 runtime_probe = (root / '.auto/runtime_probe.sh').read_text(encoding='utf-8', errors='replace') if (root / '.auto/runtime_probe.sh').exists() else ''
 check_sh = (root / 'scripts/check.sh').read_text(encoding='utf-8', errors='replace')
 prompt = (root / '.auto/prompt.md').read_text(encoding='utf-8', errors='replace') if (root / '.auto/prompt.md').exists() else ''
-combined = lib + '\n' + exp
+combined = lib + '\n' + constants_src + '\n' + exp
 
 
 def empty_name_like(value) -> bool:
@@ -213,11 +277,12 @@ if (
     'MENU_ITEM_ACCEPT_IDLE_RVA' not in continue_item_body
     or 'MENU_ITEM_ACCEPT_NATIVE_RVA' not in continue_item_body
     or 'constant false idle predicate' not in continue_item_body
+    or 'promoted candidate native Continue MenuWindowJob' not in continue_item_body
 ):
-    legacy_failures.append('product Continue submit can use the constant-false idle accept predicate')
+    legacy_failures.append('product Continue submit must reject idle rows and promote only native-accept Continue candidates')
     autoload_static_failures += 1
-if 'product Continue item validation must reject the constant-false idle accept predicate' not in check:
-    legacy_failures.append('check-autoload-happy-path does not enforce constant-false idle accept predicate rejection')
+if 'product Continue item validation must reject the constant-false idle accept predicate before native submit' not in check:
+    legacy_failures.append('check-autoload-happy-path does not enforce idle-reject/native-accept submit guard')
     autoload_static_failures += 1
 menu_update_body = function_body('cap_menu_item_update_hook', exp_code) or ''
 if (
@@ -233,7 +298,7 @@ if 'product Continue capture must latch a semantic Continue item, not the first 
 ctor_body = function_body('menu_window_job_ctor_hook', exp_code) or ''
 if (
     'MENU-WINDOW-CTOR captured semantic native Continue item' not in ctor_body
-    or 'MENU_WINDOW_JOB_CTOR_RVA' not in lib_code
+    or 'MENU_WINDOW_JOB_CTOR_RVA' not in code
     or 'cap_menu_window_job_ctor_7ac8c0' not in exp_code
 ):
     legacy_failures.append('product Continue capture lacks constructor hook for semantic item latching')
@@ -243,7 +308,7 @@ if 'product Continue capture must observe MenuWindowJob construction before upda
     autoload_static_failures += 1
 native_ctor_b_body = function_body('menu_window_job_native_ctor_b_hook', exp_code) or ''
 if (
-    'MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA' not in lib_code
+    'MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA' not in code
     or 'cap_menu_window_job_native_ctor_b_7acb00' not in exp_code
     or 'MENU-WINDOW-NATIVE-CTOR-B captured semantic native Continue item' not in native_ctor_b_body
     or 'MENU_ITEM_ACCEPT_NATIVE_RVA' not in native_ctor_b_body
@@ -258,7 +323,7 @@ if 'product diagnostics must hook native-accept MenuWindowJob constructor B with
     autoload_static_failures += 1
 idle_ctor_body = function_body('menu_window_job_idle_ctor_hook', exp_code) or ''
 if (
-    'MENU_WINDOW_JOB_IDLE_CTOR_RVA' not in lib_code
+    'MENU_WINDOW_JOB_IDLE_CTOR_RVA' not in code
     or 'MENU_ITEM_ACCEPT_IDLE_RVA' not in exp_code
     or 'cap_menu_window_job_idle_ctor_7acf80' not in exp_code
     or 'MENU-WINDOW-IDLE-CTOR observed Continue-looking disabled item' not in idle_ctor_body
@@ -273,8 +338,8 @@ if 'product diagnostics must passively attribute disabled Continue rows to the 0
     autoload_static_failures += 1
 title_ready_body = function_body('title_native_ready_predicate_hook', exp_code) or ''
 if (
-    'TITLE_NATIVE_READY_PREDICATE_RVA' not in lib_code
-    or 'TITLE_NATIVE_READY_PREDICATE_ORIG' not in lib_code
+    'TITLE_NATIVE_READY_PREDICATE_RVA' not in code
+    or 'TITLE_NATIVE_READY_PREDICATE_ORIG' not in code
     or 'cap_title_native_ready_733150' not in exp_code
     or 'STATE_FLAGS_20_OFFSET' not in title_ready_body
     or 'READY_MASK_8F' not in title_ready_body
@@ -290,7 +355,7 @@ if 'product diagnostics must passively expose LangSelect title-ready predicate f
     autoload_static_failures += 1
 member_latch_body = function_body('capture_continue_member_node_candidate', exp_code) or ''
 if (
-    'MENU_CONTINUE_MEMBER_NODE' not in lib_code
+    'MENU_CONTINUE_MEMBER_NODE' not in code
     or 'TRACE_MENU_CONTINUE_WRAPPER_RVA' not in member_latch_body
     or 'MEMBERFUNCJOB_VTABLE_RVA' not in member_latch_body
     or 'MEMBER_FN_18' not in member_latch_body
@@ -311,10 +376,10 @@ if 'telemetry must expose passive Continue task/member semantic latch addresses'
 result_event_body = function_body('result_event_handler_hook', exp_code) or ''
 result_action_body = function_body('result_action_builder_hook', exp_code) or ''
 if (
-    'RESULT_EVENT_HANDLER_RVA' not in lib_code
-    or 'RESULT_ACTION_BUILDER_RVA' not in lib_code
-    or 'RESULT_EVENT_HANDLER_ORIG' not in lib_code
-    or 'RESULT_ACTION_BUILDER_ORIG' not in lib_code
+    'RESULT_EVENT_HANDLER_RVA' not in code
+    or 'RESULT_ACTION_BUILDER_RVA' not in code
+    or 'RESULT_EVENT_HANDLER_ORIG' not in code
+    or 'RESULT_ACTION_BUILDER_ORIG' not in code
     or 'result_event_handler_746e80' not in exp_code
     or 'result_action_builder_746a00' not in exp_code
     or 'call_result_void2_original' not in exp_code
@@ -361,38 +426,38 @@ if (
     or 'oracle_result_action_insert_hits' not in telemetry_src
     or 'oracle_result_action_last_insert_arg1_update_rva' not in telemetry_src
     or 'oracle_result_action_last_insert_ret_update_rva' not in telemetry_src
-    or 'RESULT_ACTION_WRAPPER_BUILDER_HITS' not in lib_code
-    or 'RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA' not in lib_code
-    or 'POLICY_TOS_TITLE_LAST_BACKING_FLAG_PTR' not in lib_code
-    or 'POLICY_TOS_TITLE_LAST_STORED_BACKING_FLAG_PTR' not in lib_code
-    or 'POLICY_TOS_TITLE_LAST_BACKING_FLAG_VALUE' not in lib_code
-    or 'POLICY_TOS_TITLE_LAST_REQUESTED_FLAG_VALUE' not in lib_code
-    or 'POLICY_TOS_TITLE_LAST_CALLER_RVA' not in lib_code
-    or 'POLICY_TOS_TITLE_CTOR_WRAPPER_RVA' not in lib_code
-    or 'POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG' not in lib_code
-    or 'POLICY_TOS_TITLE_WRAPPER_HITS' not in lib_code
-    or 'POLICY_TOS_TITLE_WRAPPER_THIS_ADJUST' not in lib_code
-    or 'POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_THIS' not in lib_code
-    or 'POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_VTABLE' not in lib_code
-    or 'POLICY_TOS_TITLE_WRAPPER_LAST_CALLER_RVA' not in lib_code
-    or 'POLICY_TOS_SELECTOR_WRAPPER_RVA' not in lib_code
-    or 'POLICY_TOS_SELECTOR_WRAPPER_HITS' not in lib_code
-    or 'POLICY_TOS_SELECTOR_WRAPPER_LAST_REQUESTED_FLAG' not in lib_code
-    or 'POLICY_TOS_SELECTOR_WRAPPER_LAST_SELECTOR_ARG' not in lib_code
-    or 'POLICY_TOS_SELECTOR_WRAPPER_LAST_CALLER_RVA' not in lib_code
-    or 'POLICY_TOS_SELECTOR_CTOR_RVA' not in lib_code
-    or 'POLICY_TOS_SELECTOR_CTOR_HITS' not in lib_code
-    or 'POLICY_TOS_SELECTOR_CTOR_LAST_REQUESTED_FLAG_PTR' not in lib_code
-    or 'POLICY_TOS_SELECTOR_CTOR_LAST_STORED_REQUESTED_FLAG_PTR' not in lib_code
-    or 'POLICY_TOS_SELECTOR_CTOR_LAST_CALLER_RVA' not in lib_code
-    or 'POLICY_TOS_STATUS_PREDICATE_RVA' not in lib_code
-    or 'POLICY_TOS_STATUS_PREDICATE_ORIG' not in lib_code
-    or 'POLICY_TOS_STATUS_LAST_CALLER_RVA' not in lib_code
-    or 'POLICY_TOS_FLAG_SETTER_RVA' not in lib_code
-    or 'POLICY_TOS_FLAG_SETTER_ORIG' not in lib_code
-    or 'POLICY_TOS_FLAG_SETTER_LAST_CALLER_RVA' not in lib_code
-    or 'RESULT_ACTION_INSERT_HITS' not in lib_code
-    or 'RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA' not in lib_code
+    or 'RESULT_ACTION_WRAPPER_BUILDER_HITS' not in code
+    or 'RESULT_ACTION_LAST_WRAPPER_BUILDER_RET_UPDATE_RVA' not in code
+    or 'POLICY_TOS_TITLE_LAST_BACKING_FLAG_PTR' not in code
+    or 'POLICY_TOS_TITLE_LAST_STORED_BACKING_FLAG_PTR' not in code
+    or 'POLICY_TOS_TITLE_LAST_BACKING_FLAG_VALUE' not in code
+    or 'POLICY_TOS_TITLE_LAST_REQUESTED_FLAG_VALUE' not in code
+    or 'POLICY_TOS_TITLE_LAST_CALLER_RVA' not in code
+    or 'POLICY_TOS_TITLE_CTOR_WRAPPER_RVA' not in code
+    or 'POLICY_TOS_TITLE_CTOR_WRAPPER_ORIG' not in code
+    or 'POLICY_TOS_TITLE_WRAPPER_HITS' not in code
+    or 'POLICY_TOS_TITLE_WRAPPER_THIS_ADJUST' not in code
+    or 'POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_THIS' not in code
+    or 'POLICY_TOS_TITLE_WRAPPER_LAST_ORIGINAL_VTABLE' not in code
+    or 'POLICY_TOS_TITLE_WRAPPER_LAST_CALLER_RVA' not in code
+    or 'POLICY_TOS_SELECTOR_WRAPPER_RVA' not in code
+    or 'POLICY_TOS_SELECTOR_WRAPPER_HITS' not in code
+    or 'POLICY_TOS_SELECTOR_WRAPPER_LAST_REQUESTED_FLAG' not in code
+    or 'POLICY_TOS_SELECTOR_WRAPPER_LAST_SELECTOR_ARG' not in code
+    or 'POLICY_TOS_SELECTOR_WRAPPER_LAST_CALLER_RVA' not in code
+    or 'POLICY_TOS_SELECTOR_CTOR_RVA' not in code
+    or 'POLICY_TOS_SELECTOR_CTOR_HITS' not in code
+    or 'POLICY_TOS_SELECTOR_CTOR_LAST_REQUESTED_FLAG_PTR' not in code
+    or 'POLICY_TOS_SELECTOR_CTOR_LAST_STORED_REQUESTED_FLAG_PTR' not in code
+    or 'POLICY_TOS_SELECTOR_CTOR_LAST_CALLER_RVA' not in code
+    or 'POLICY_TOS_STATUS_PREDICATE_RVA' not in code
+    or 'POLICY_TOS_STATUS_PREDICATE_ORIG' not in code
+    or 'POLICY_TOS_STATUS_LAST_CALLER_RVA' not in code
+    or 'POLICY_TOS_FLAG_SETTER_RVA' not in code
+    or 'POLICY_TOS_FLAG_SETTER_ORIG' not in code
+    or 'POLICY_TOS_FLAG_SETTER_LAST_CALLER_RVA' not in code
+    or 'RESULT_ACTION_INSERT_HITS' not in code
+    or 'RESULT_ACTION_LAST_INSERT_ARG1_UPDATE_RVA' not in code
     or 'text_section_bounds' not in exp_code
     or 'update_target_in_text' not in exp_code
     or 'raw_task_node_update_rva' not in exp_code
@@ -810,15 +875,22 @@ save_data_popup_by_dir: dict[str, list[str]] = {}
 messagebox_by_dir: dict[str, list[str]] = {}
 server_status_by_dir: dict[str, list[str]] = {}
 runtime_mode_by_dir: dict[str, list[str]] = {}
+title_cover_runtime_by_dir: dict[str, list[str]] = {}
+runtime_artifacts_raw: list[str] = []
+runtime_artifacts_raw_by_dir: dict[str, list[str]] = {}
 best_runtime: tuple[int, Path | None, dict[str, bool]] = (0, None, {key: False for key in required_runtime})
 latest_runtime_dir: Path | None = None
 rt_root = root / 'target/runtime-probe'
 if rt_root.exists():
-    candidates = sorted((p for p in rt_root.glob('product-core-*') if p.is_dir()), key=lambda p: p.stat().st_mtime, reverse=True)[:200]
+    candidates = sorted(
+        (p for pattern in ('product-core-*', 'product-continue-direct-*') for p in rt_root.glob(pattern) if p.is_dir()),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )[:200]
     latest_runtime_dir = candidates[0] if candidates else None
     for d in candidates:
         proof = {key: False for key in required_runtime}
-        for name in ['readiness-result.json', 'max-oracle-result.json', 'telemetry.json']:
+        for name in ['readiness-result.json', 'max-oracle-result.json', 'telemetry.json', 'er-effects-telemetry.json']:
             p = d / name
             if not p.exists():
                 continue
@@ -829,6 +901,8 @@ if rt_root.exists():
             if data.get('ready') is True or data.get('success') is True:
                 proof['ready'] = True
             raw = json.dumps(data)
+            runtime_artifacts_raw.append(raw)
+            runtime_artifacts_raw_by_dir.setdefault(d.name, []).append(raw)
             if (
                 re.search(r'"reason"\s*:\s*"native_legal_popup_detected"', raw)
                 or re.search(r'"oracle_policy_window_any_seen"\s*:\s*true', raw)
@@ -890,6 +964,35 @@ if rt_root.exists():
                 proof['result_chain'] = True
             if re.search(r'world[-_ ]?stable|max oracle|SetState5', raw, re.IGNORECASE):
                 proof['world'] = True
+            if (
+                re.search(r'"native_continue_chain_stage"\s*:\s*"world_loaded"', raw)
+                or re.search(r'"oracle_player_present"\s*:\s*true', raw)
+                and re.search(r'"oracle_char_name"\s*:\s*"[^"_\s][^"]*"', raw)
+                and re.search(r'"oracle_saved_map_c30"\s*:\s*"?0x[0-9a-fA-F]+"?', raw)
+            ):
+                proof['world'] = True
+            if re.search(r'"native_continue_chain_stage"\s*:\s*"world_loaded"', raw):
+                proof['continue_load'] = True
+                proof['deserialize'] = True
+                proof['confirm'] = True
+            overlay_portrait_source_cover_rendered = bool(
+                re.search(r'"oracle_title_overlay_cover_rendered"\s*:\s*true', raw)
+                and re.search(r'"oracle_title_overlay_cover_render_calls"\s*:\s*[1-9]\d*', raw)
+                and re.search(r'"oracle_title_overlay_cover_last_display_size"\s*:\s*\[\s*(?:[2-9]\d{2,}|1[0-9]{3,})\s*,\s*(?:[2-9]\d{2,}|1[0-9]{3,})\s*\]', raw)
+                and re.search(r'"oracle_title_custom_cover_profile_source_ready"\s*:\s*true', raw)
+                and re.search(r'"oracle_title_custom_cover_profile_source_tex_rescap"\s*:\s*[1-9]\d*', raw)
+            )
+            portrait_visible_surface_bound = bool(re.search(r'"oracle_title_portrait_visible_surface_bound"\s*:\s*true', raw))
+            if re.search(r'"oracle_title_profile_cover_bound_to_logo_surface"\s*:\s*false', raw) and not overlay_portrait_source_cover_rendered and not portrait_visible_surface_bound:
+                # Count this runtime artifact's missing-cover semaphore once. Several JSON evidence
+                # files in the same artifact dir can contain the same oracle snapshot; charging the
+                # same artifact once per file over-penalizes a single product failure. The overlay
+                # successor route only counts when it is both visible and gated by the live
+                # CSMenuProfModelRend/CSEzOffscreenRend/SYSTEX_Menu_Profile portrait source.
+                title_cover_runtime_by_dir.setdefault(d.name, [])
+                missing_cover_msg = f'runtime artifact {d.name} has no custom/profile cover bound to the visible logo/title surface or RAM-backed rendered overlay successor cover'
+                if missing_cover_msg not in title_cover_runtime_by_dir[d.name]:
+                    title_cover_runtime_by_dir[d.name].append(missing_cover_msg)
             oracle = data.get('oracle') if isinstance(data.get('oracle'), dict) else {}
             expected_oracle = oracle.get('expected') if isinstance(oracle.get('expected'), dict) else {}
             observed_oracle = oracle.get('observed') if isinstance(oracle.get('observed'), dict) else {}
@@ -907,6 +1010,10 @@ if rt_root.exists():
             if oracle.get('expected_animation_match') is True:
                 proof['expected_animation'] = True
             if oracle.get('native_result_chain_ready') is True:
+                # The watcher only sets this after passive native result-event/action-wrapper/insert
+                # evidence agrees (outer submit hook if present, otherwise same-result event/action
+                # chain). Count it as both the product submit edge and the result chain edge.
+                proof['product_submit'] = True
                 proof['result_chain'] = True
             if oracle.get('no_postload_popup') is True:
                 proof['no_postload_popup'] = True
@@ -948,11 +1055,30 @@ if rt_root.exists():
             save_data_popup_by_dir[d.name] = [
                 f'runtime artifact {d.name} detected failed-save-data popup from captured target-window OCR evidence: {"; ".join(save_data_evidence)}'
             ]
-        for name in ['autoload-debug-live.final.log', 'continue-trace-game.final.log', 'continue-trace-game.log']:
+        logo_analysis_path = d / 'loading-screen-portrait-screenshot-analysis.json'
+        if logo_analysis_path.exists():
+            try:
+                logo_analysis = json.loads(logo_analysis_path.read_text(encoding='utf-8', errors='replace'))
+            except Exception:
+                logo_analysis = {}
+            if logo_analysis.get('known_false_positive_signature') is True:
+                ratio = logo_analysis.get('black32_ratio')
+                title_cover_runtime_by_dir.setdefault(d.name, [])
+                msg = (
+                    f'runtime artifact {d.name} loading-screen-portrait screenshot has black32_ratio={ratio}; '
+                    'matches the known dark LOAD GAME/ProfileSelect false-positive panel rather than a portrait-on-black cover'
+                )
+                if msg not in title_cover_runtime_by_dir[d.name]:
+                    title_cover_runtime_by_dir[d.name].append(msg)
+        for name in ['er-effects-autoload-debug.log', 'autoload-debug-live.final.log', 'continue-trace-game.final.log', 'continue-trace-game.log']:
             p = d / name
             if not p.exists():
                 continue
             text = p.read_text(encoding='utf-8', errors='replace')[-200_000:]
+            if 'CORRUPTED-SAVE SEMAPHORE' in text or 'GetGR_System_Message id=401106' in text:
+                save_data_popup_by_dir.setdefault(d.name, []).append(
+                    f'runtime artifact {d.name} detected corrupted-save native semaphore in {name}'
+                )
             if 'native-fullread: SUBMIT' in text or 'FULL-INIT' in text:
                 proof['product_submit'] = True
             if 'native-fullread: b80 reached RESIDENT' in text or 'full read' in text or 'FULL-INIT' in text:
@@ -977,11 +1103,18 @@ if best_dir is None:
 else:
     missing = [key for key in required_runtime if not proof[key]]
     if missing:
-        runtime_failures.append(f'runtime proof best artifact {best_dir.name} missing {",".join(missing)}')
+        severe_runtime_keys = {'ready', 'world', 'zero_input', 'expected_save', 'no_postload_popup'}
+        severity = 'severe' if any(key in severe_runtime_keys for key in missing) else 'detail'
+        runtime_failures.append(f'runtime proof {severity} artifact {best_dir.name} missing {",".join(missing)}')
     runtime_mode_failures.extend(runtime_mode_by_dir.get(best_dir.name, []))
     eula_popup_failures.extend(legal_popup_by_dir.get(best_dir.name, []))
     server_status_failures.extend(server_status_by_dir.get(best_dir.name, []))
 scored_runtime_dirs = {p.name for p in [best_dir, latest_runtime_dir] if p is not None}
+scored_runtime_artifacts_raw = [
+    raw
+    for dir_name in scored_runtime_dirs
+    for raw in runtime_artifacts_raw_by_dir.get(dir_name, [])
+]
 for dir_name in scored_runtime_dirs:
     messagebox_dialog_failures.extend(messagebox_by_dir.get(dir_name, []))
     save_data_popup_failures.extend(save_data_popup_by_dir.get(dir_name, []))
@@ -1020,11 +1153,235 @@ if trace_summaries:
 else:
     native_trace_blockers.append('native user-driven trace summary missing; tracebreakpoint/tooling blocker may still be unresolved')
 
-false_positives = 0
+title_cover_failures: list[str] = []
+runtime_title_cover_failure_count = 0
+for dir_name in scored_runtime_dirs:
+    runtime_cover_failures = title_cover_runtime_by_dir.get(dir_name, [])
+    runtime_title_cover_failure_count += len(runtime_cover_failures)
+    title_cover_failures.extend(runtime_cover_failures)
+title_cover_gate = function_body('title_native_menu_visual_suppression_enabled', exp_code) or ''
+title_cover_hook = function_body('title_native_menu_visual_begin_title_hook', exp_code) or ''
+title_cover_render_hook = function_body('title_native_menu_visual_window_fadein_hook', exp_code) or ''
+# Missing the actual masquerade scene/character cover is a major product failure. A run that only
+# hides the native title/PAB and reaches Banon is not close to complete Part B and must not rank as
+# a high-water mark.
+title_cover_penalty = runtime_title_cover_failure_count * 200
+part_a_common = (
+    '!save_override_telemetry_only()' in title_cover_gate
+    and 'autoload_disabled()' in title_cover_gate
+    and 'std::env::var' not in title_cover_gate
+    and 'er-effects-' not in title_cover_gate
+    and 'START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once' in lib_code
+    and 'install_title_native_menu_visual_suppression_hook' in lib_code
+    and lib_code.find('START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once') < lib_code.find('START_MENU_WINDOW_LATCH.call_once')
+    and 'TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA: usize = 0x81f9f0' in code
+    and 'TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA: usize = 0x7acbf0' in code
+    and 'TITLE_NATIVE_MENU_VISUAL_NAME: &str = "05_000_Title"' in code
+    and 'TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS.fetch_add' in title_cover_hook
+    and 'oracle_title_native_menu_visual_suppressed_builds' in telemetry_src
+    and 'title_native_menu_visual_suppressed_builds' in watcher
+)
+part_a_null_slot = '(out_slot as *mut usize).write(null)' in title_cover_hook
+part_a_render_only = (
+    'TITLE_NATIVE_MENU_VISUAL_SUPPRESS_ORIG.load' in title_cover_hook
+    and 'native_job' in title_cover_hook
+    and 'START_TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS.call_once' in lib_code
+    and 'install_title_native_menu_visual_render_suppression_hook' in lib_code
+    and 'TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA: usize = 0x744dd0' in code
+    and 'TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA: usize = 0x7ad530' in code
+    and 'CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0' in code
+    and 'TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK: u8 = 0x3' in code
+    and 'TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESSED_WINDOWS' in title_cover_render_hook
+    and 'fetch_add' in title_cover_render_hook
+    and 'flags_before & !TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK' in title_cover_render_hook
+    and '.write_volatile(flags_after)' in title_cover_render_hook
+    and 'oracle_title_native_menu_visual_render_suppressed_windows' in telemetry_src
+    and 'title_native_menu_visual_render_suppressed_windows' in watcher
+)
+if not (part_a_common and (part_a_null_slot or part_a_render_only)):
+    title_cover_failures.append('Part A native 05_000_Title BeginTitle visual suppression is missing or not independently observable')
+    title_cover_penalty += 100
+
+cover_docs = doc_text()
+if not (
+    '05_001_title_logo.gfx' in cover_docs
+    and 'MENU_Title_EldenRing_01' in cover_docs
+    and 'no `MENU_DummyProfileFace`' in cover_docs
+    and 'no `SYSTEX_Menu_Profile`' in cover_docs
+    and 'custom Scaleform target' in cover_docs
+):
+    title_cover_failures.append('Part B asset fork unresolved: 05_001_Title_Logo dummy-texture availability not decided')
+    title_cover_penalty += 50
+
+part_b_pressstart_suppression = (
+    'TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA: usize = 0x81f8d0' in code
+    and 'TITLE_PAB_INFORMATION_VISUAL_NAME: &str = "05_020_TitleInformation"' in code
+    and 'oracle_title_pab_information_visual_any_built' in telemetry_src
+    and 'TITLE_PRESS_START_SET_VISIBLE_RVA: usize = 0x733340' in code
+    and 'TITLE_GFX_VALUE_SET_VISIBLE_RVA: usize = 0xd844d0' in code
+    and 'TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA: usize = 0x74a2f0' in code
+    and 'install_title_gfx_value_set_visible_hook' in lib_code
+    and 'install_title_scene_obj_proxy_named_child_bind_hook' in lib_code
+    and 'oracle_title_press_start_gfx_any_hidden' in telemetry_src
+    and 'oracle_title_press_start_bind_any_hidden' in telemetry_src
+    and 'oracle_title_press_start_gfx_force_false_any' in telemetry_src
+)
+if not part_b_pressstart_suppression:
+    title_cover_failures.append('Part B/PAB suppression path is not independently observable yet')
+    title_cover_penalty += 50
+
+# The experimental 05_010_ProfileSelect/MenuWindowJob canvas was user-falsified: it can advance to a
+# blank Load Game/ProfileSelect frame but is not the clean custom title cover and can interfere with
+# PAB/title advance. Do not count ProfileSelect canvas build/run telemetry as Part B success.
+profile_select_canvas_installed = (
+    'START_TITLE_CUSTOM_COVER_RUN.call_once' in lib_code
+    or 'install_title_custom_cover_run_hook' in lib_code
+    or 'build_profile_select_cover_job(base, rdx, r8' in code
+)
+profile_select_one_tick_cropped = (
+    'current_calls >= 1' in code
+    and 'MENU_DummyProfileFace_01' in code
+    and 'TITLE_PROFILE_FACE_TRANSFORM_APPLIED' in code
+    and 'TITLE_PROFILE_FACE_OTHER_HIDDEN' in code
+    and 'TITLE_GFX_VALUE_SET_POSITION_RVA' in code
+    and 'TITLE_GFX_VALUE_SET_SCALE_RVA' in code
+    and 'oracle_title_loaded_character_portrait_rendered' in telemetry_src + '\n' + watcher
+)
+if profile_select_canvas_installed and not profile_select_one_tick_cropped:
+    title_cover_failures.append('Part B false-positive guard: ProfileSelect/MenuWindowJob canvas is still installed without one-tick crop/scale portrait proof')
+    title_cover_penalty += 100
+
+# User-visible runtime falsified the old Part-A/B semaphores twice: native title/logo/PAB/Continue
+# remained visible while CSMenuMan+0x90 said hidden, and again while TitleBackViewParts FadeIn was
+# suppressed. The real visible logo surface is TitleBackViewParts (`05_001_Title_Logo`) at
+# TitleTopDialog+0xaa8, but merely naming/suppressing its FadeIn is not product proof. The product
+# goal is now narrower than "any clean cover": render the loaded character portrait/profile during
+# boot-init and keep it up until the native map-loading screen takes over. A generic text/rectangle
+# Generic overlay scaffolding must not score as final cover success.
+portrait_overlay_cover_observable = (
+    'draw_title_overlay_cover' in overlay_code
+    and 'title_portrait_source_ready' in overlay_code
+    and 'TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_RESCAP' in overlay_code
+    and 'TITLE_OVERLAY_COVER_RENDER_CALLS.fetch_add' in overlay_code
+    and 'oracle_title_overlay_cover_rendered' in telemetry_src + '\n' + watcher
+    and 'oracle_title_custom_cover_profile_source_ready' in telemetry_src + '\n' + watcher
+    and 'oracle_title_custom_cover_profile_source_tex_rescap' in telemetry_src + '\n' + watcher
+    and 'title_overlay_cover_display_sane' in telemetry_src
+    and (
+        'SYSTEX_Menu_Profile' in overlay_code
+        or 'profile portrait' in overlay_code.lower()
+        or 'character portrait' in overlay_code.lower()
+    )
+    and '&& !product_autoload_enabled()' in lib_code
+)
+native_csez_portrait_cover_observable = (
+    'TITLE_PORTRAIT_CSEZ_EXEC_RVA: usize = 0x269b500' in code
+    and 'TITLE_PORTRAIT_CSEZ_EXEC_PROFILE_TEXTURE_HITS' in code
+    and 'TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_RESCAP' in code
+    and 'TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET' in code
+    and 'TITLE_CUSTOM_COVER_GX_TEXTURE_RESOURCE_OFFSET' in code
+    and 'oracle_title_portrait_native_surface_visible' in telemetry_src + '\n' + watcher
+    and 'oracle_title_portrait_csez_exec_profile_texture_hits' in telemetry_src + '\n' + watcher
+)
+actual_logo_profile_cover_observable = (
+    (
+        'TitleBackViewParts' in code + '\n' + telemetry_src + '\n' + watcher
+        and '05_001_Title_Logo' in code + '\n' + telemetry_src + '\n' + watcher
+        and 'profile_summary' in code + '\n' + telemetry_src + '\n' + watcher
+        and 'SYSTEX_Menu_Profile' in code + '\n' + telemetry_src + '\n' + watcher
+        and 'oracle_title_logo_gfx_visibility' in telemetry_src + '\n' + watcher
+        and 'oracle_title_profile_cover_bound_to_logo_surface' in telemetry_src + '\n' + watcher
+    )
+    or portrait_overlay_cover_observable
+    or native_csez_portrait_cover_observable
+    # `oracle_title_portrait_visible_surface_bound` alone is no longer acceptable: the
+    # loading-screen-portrait event screenshot showed it can assert while the screen is still a dark
+    # LOAD GAME/ProfileSelect panel. Future success needs a real pixel/native visibility semaphore.
+)
+if 'draw_title_overlay_cover' in overlay_code and not portrait_overlay_cover_observable:
+    title_cover_failures.append('Part B false-positive guard: generic cover is still text/rectangle scaffolding, not the loaded character portrait')
+    title_cover_penalty += 100
+if not actual_logo_profile_cover_observable:
+    title_cover_failures.append('Part B false-positive guard: no RAM-backed oracle proves the loaded character portrait covers boot-init until the native map-loading screen takes over')
+    title_cover_penalty += 50
+if portrait_overlay_cover_observable and 'oracle_title_overlay_cover_texture_bound' not in telemetry_src + '\n' + watcher:
+    title_cover_failures.append('Part B remaining gap: overlay is gated by the RAM-backed portrait source but does not yet prove the actual profile texture is bound/drawn')
+    title_cover_penalty += 50
+
+# Hard fail-closed product gate: source/texture-handle consumption is not equivalent to rendering
+# the loaded character portrait at the right time. A valid max-score artifact must expose a runtime
+# oracle that proves the portrait itself was rendered on the cover surface during boot-init and was
+# held until native loading-screen takeover. Until that oracle exists and is asserted in the latest
+# runtime proof, the portrait-cover objective is objectively unmet and the score must be 0.
+portrait_render_oracle_present = (
+    'oracle_title_loaded_character_portrait_rendered' in telemetry_src + '\n' + watcher
+    and 'oracle_title_loaded_character_portrait_visible_during_boot' in telemetry_src + '\n' + watcher
+    and 'oracle_title_loaded_character_portrait_held_until_loading_takeover' in telemetry_src + '\n' + watcher
+    and (
+        'oracle_title_portrait_pixels_visible' in telemetry_src + '\n' + watcher
+        or 'oracle_title_portrait_native_surface_visible' in telemetry_src + '\n' + watcher
+    )
+)
+portrait_render_oracle_true = any(
+    re.search(r'"oracle_title_loaded_character_portrait_rendered"\s*:\s*true', raw)
+    and re.search(r'"oracle_title_loaded_character_portrait_visible_during_boot"\s*:\s*true', raw)
+    and re.search(r'"oracle_title_loaded_character_portrait_held_until_loading_takeover"\s*:\s*true', raw)
+    and (
+        re.search(r'"oracle_title_portrait_pixels_visible"\s*:\s*true', raw)
+        or re.search(r'"oracle_title_portrait_native_surface_visible"\s*:\s*true', raw)
+    )
+    for raw in scored_runtime_artifacts_raw
+)
+# User directive 2026-06-27: remove the FaceData title-cover lane. Keep these legacy
+# metric names at zero for log continuity, but do not mine stale artifacts or reward this path.
+offline_face_texture_runtime_drawn = 0
+stylized_facedata_pixel_oracle = 0
+
+visible_surface_without_pixels_false_positive = (
+    not stylized_facedata_pixel_oracle
+    and any(
+        re.search(r'"oracle_title_portrait_visible_surface_bound"\s*:\s*true', raw)
+        and not re.search(r'"oracle_title_portrait_pixels_visible"\s*:\s*true', raw)
+        and not re.search(r'"oracle_title_portrait_native_surface_visible"\s*:\s*true', raw)
+        for raw in scored_runtime_artifacts_raw
+    )
+)
+profile_select_transform_false_positive = any(
+    re.search(r'"oracle_title_loaded_character_portrait_rendered"\s*:\s*true', raw)
+    and re.search(r'"oracle_title_custom_cover_profile_select_builds"\s*:\s*[1-9]', raw)
+    and re.search(r'"oracle_title_custom_cover_run_calls"\s*:\s*1', raw)
+    and re.search(r'"oracle_title_profile_face_transform_applied"\s*:\s*true', raw)
+    and re.search(r'"oracle_title_profile_cover_bound_to_logo_surface"\s*:\s*false', raw)
+    and not re.search(r'"oracle_title_portrait_pixels_visible"\s*:\s*true', raw)
+    and not re.search(r'"oracle_title_portrait_visible_surface_bound"\s*:\s*true', raw)
+    for raw in scored_runtime_artifacts_raw
+)
+if visible_surface_without_pixels_false_positive:
+    title_cover_failures.append('Part B hard gate: visible-surface/ProfileSelect bind semaphore was visually falsified by loading-screen-portrait screenshot; require oracle_title_portrait_pixels_visible or an equivalent native/pixel semaphore')
+    title_cover_penalty += MAX_SCORE
+elif profile_select_transform_false_positive:
+    title_cover_failures.append('Part B hard gate: ProfileSelect one-tick transform/SYSTEX semaphores are a proven visual false positive; require a real visible-pixel/surface oracle, not transform flags')
+    title_cover_penalty += MAX_SCORE
+elif not (portrait_render_oracle_present and portrait_render_oracle_true):
+    title_cover_failures.append('Part B hard gate: no runtime oracle proves the loaded character portrait pixels or an equivalent native logo-surface binding are visible at the right time; source/texture-handle/ProfileSelect visible-surface telemetry and generic overlay drawing are not product success')
+    title_cover_penalty += MAX_SCORE
+
+overlay_body = function_body('draw_title_overlay_cover', overlay_code) or ''
+generic_black_overlay_false_positive = (
+    'add_rect([0.0, 0.0], [width, height]' in overlay_body
+    and '.filled(true)' in overlay_body
+    and 'add_image' not in overlay_body
+)
+if generic_black_overlay_false_positive:
+    title_cover_failures.append('Part B visual-beauty gate: fullscreen black/dark rectangle overlay is a product false positive; the cover must visibly render the loaded character portrait')
+    title_cover_penalty += 100
+
+false_positives = 1 if (generic_black_overlay_false_positive or visible_surface_without_pixels_false_positive) else 0
 all_detail_failures = []
-for group in [legacy_failures, asset_failures, dll_failures, native_failures, field58_failures, direct_failures, input_failures, runtime_failures, runtime_mode_failures, eula_popup_failures, save_data_popup_failures, messagebox_dialog_failures, server_status_failures]:
+for group in [legacy_failures, asset_failures, dll_failures, native_failures, field58_failures, direct_failures, input_failures, runtime_failures, runtime_mode_failures, eula_popup_failures, save_data_popup_failures, messagebox_dialog_failures, server_status_failures, title_cover_failures]:
     all_detail_failures.extend(group)
 
+runtime_weight = 320 if any('runtime proof severe' in failure for failure in runtime_failures) else 80
 weights = {
     'readiness': 15,
     'asset': 35,
@@ -1033,7 +1390,7 @@ weights = {
     'field58': 100,
     'direct': 85,
     'input': 85,
-    'runtime': 80,
+    'runtime': runtime_weight,
     'runtime_mode': 120,
     'eula_popup': 80,
     'save_data_popup': 160,
@@ -1055,9 +1412,112 @@ penalty = (
     + len(save_data_popup_failures) * weights['save_data_popup']
     + len(messagebox_dialog_failures) * weights['messagebox_dialog']
     + len(server_status_failures) * weights['server_status']
+    + title_cover_penalty
     + false_positives * weights['false_positive']
 )
 score = max(0, MAX_SCORE - penalty)
+
+offline_face_source_ready = 0
+offline_face_source_errors: list[str] = []
+offline_face_source_hash = ''
+offline_face_source_name = ''
+# Legacy metric kept for log continuity; the removed CPU texture bridge path stays disabled.
+removed_cpu_texture_bridge_ready = 0
+try:
+    with tempfile.NamedTemporaryFile(prefix='er-face-source-', suffix='.json', delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        subprocess.run(
+            [
+                'python3',
+                str(root / 'scripts/save-slot-oracle.py'),
+                '--save',
+                os.environ.get('ER_EFFECTS_GOLD_SAVE', str(root / 'save-files/150-Banon/ER0000.sl2')),
+                '--slot',
+                os.environ.get('ER_EFFECTS_GOLD_SLOT', '0'),
+                '--output',
+                str(tmp_path),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+        )
+        face_oracle = json.loads(tmp_path.read_text(encoding='utf-8', errors='replace'))
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    decoded = face_oracle.get('decoded_fields', {}) if isinstance(face_oracle, dict) else {}
+    face_hash = decoded.get('face_data_buffer_sha256')
+    face_fields = decoded.get('face_body_fields')
+    name = decoded.get('name') or decoded.get('character_name') or ''
+    offline_face_source_name = str(name)
+    if isinstance(face_hash, str):
+        offline_face_source_hash = face_hash
+    if not isinstance(face_hash, str) or not re.fullmatch(r'[0-9a-f]{64}', face_hash):
+        offline_face_source_errors.append('save-slot-oracle did not expose a 64-hex FaceData buffer hash')
+    if not isinstance(face_fields, dict) or len(face_fields) < 8:
+        offline_face_source_errors.append('save-slot-oracle did not expose a populated face/body field map')
+    if empty_name_like(str(name)):
+        offline_face_source_errors.append('save-slot-oracle decoded an empty-like character name for the gold slot')
+    if not offline_face_source_errors:
+        offline_face_source_ready = 1
+except Exception as exc:
+    offline_face_source_errors.append(f'offline face source check crashed: {exc}')
+
+real_portrait_asset_candidates = 0
+profile_placeholder_assets_only = 0
+portrait_asset_inventory_details: list[str] = []
+portrait_asset_roots = [
+    root / 'target/autoresearch/gfx-analysis/ffdec-export/images/05_010_profileselect.gfx',
+    root / 'target/autoresearch/gfx-analysis/script-smoke/ffdec-export/image/05_010_profileselect.gfx',
+]
+placeholder_assets = []
+chrome_assets = []
+real_candidate_assets = []
+chrome_tokens = (
+    'cursor',
+    'base',
+    'profileselect',
+    'menu_fl_',
+    'line',
+    'kick',
+    'option',
+    'deco',
+    'waku',
+    'bar',
+    'arrow',
+    'bloodmessage',
+)
+for asset_root in portrait_asset_roots:
+    if not asset_root.exists():
+        continue
+    for path in asset_root.glob('*.png'):
+        lower = path.name.lower()
+        if 'dummyprofileface' in lower:
+            placeholder_assets.append(path)
+        elif any(token in lower for token in chrome_tokens):
+            chrome_assets.append(path)
+        elif any(token in lower for token in ('profile', 'face', 'portrait')):
+            real_candidate_assets.append(path)
+if real_candidate_assets:
+    real_portrait_asset_candidates = len(real_candidate_assets)
+    portrait_asset_inventory_details.append('real-looking non-chrome profile/face candidates: ' + ', '.join(str(p) for p in real_candidate_assets[:5]))
+elif placeholder_assets:
+    profile_placeholder_assets_only = 1
+    portrait_asset_inventory_details.append(f'only dummy ProfileSelect placeholder face assets found ({len(placeholder_assets)} pngs); excluded {len(chrome_assets)} ProfileSelect chrome/surface PNGs; no loaded-character/precomputed portrait asset is present in FFDEC exports')
+elif chrome_assets:
+    portrait_asset_inventory_details.append(f'only ProfileSelect chrome/surface PNGs found ({len(chrome_assets)} pngs); no loaded-character/precomputed portrait asset is present in FFDEC exports')
+else:
+    portrait_asset_inventory_details.append('no profile/face/portrait PNG assets found in known FFDEC export roots')
+for detail in portrait_asset_inventory_details:
+    print(f'DETAIL portrait_asset_inventory {detail}')
+
+for failure in offline_face_source_errors:
+    print(f'DETAIL offline_face_source {failure}')
+if offline_face_source_ready:
+    print(f'DETAIL offline_face_source ready name={offline_face_source_name} face_sha256={offline_face_source_hash}')
+
 
 for failure in all_detail_failures:
     print(f'DETAIL {failure}')
@@ -1084,8 +1544,16 @@ print(f'METRIC eula_popup_failures={len(eula_popup_failures)}')
 print(f'METRIC save_data_popup_failures={len(save_data_popup_failures)}')
 print(f'METRIC messagebox_dialog_failures={len(messagebox_dialog_failures)}')
 print(f'METRIC server_status_failures={len(server_status_failures)}')
+print(f'METRIC title_cover_failures={len(title_cover_failures)}')
+print(f'METRIC title_cover_penalty={title_cover_penalty}')
 print(f'METRIC native_trace_blockers={len(native_trace_blockers)}')
 print(f'METRIC native_trace_hits_total={native_trace_hits_total}')
 print(f'METRIC native_trace_unique_breakpoints={native_trace_unique_breakpoints}')
 print(f'METRIC false_positives={false_positives}')
+print(f'METRIC offline_face_source_ready={offline_face_source_ready}')
+print(f'METRIC removed_cpu_texture_bridge_ready={removed_cpu_texture_bridge_ready}')
+print(f'METRIC offline_face_texture_runtime_drawn={offline_face_texture_runtime_drawn}')
+print(f'METRIC stylized_facedata_pixel_oracle={stylized_facedata_pixel_oracle}')
+print(f'METRIC real_portrait_asset_candidates={real_portrait_asset_candidates}')
+print(f'METRIC profile_placeholder_assets_only={profile_placeholder_assets_only}')
 PY

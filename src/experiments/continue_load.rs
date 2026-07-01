@@ -16,7 +16,8 @@ use std::{
 
 use std::os::windows::ffi::OsStrExt as _;
 
-use debug::{InputBlocker, InputFlags};
+use crate::input_blocker::{InputBlocker, InputFlags};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
@@ -24,27 +25,21 @@ use eldenring::{
 use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
-use hudhook::{
-    ImguiRenderLoop, MessageFilter,
-    hooks::dx12::ImguiDx12Hooks,
-    imgui::{Condition, Context, Ui},
-    mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook},
-    windows::{
-        Win32::{
-            Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
-            System::{
-                LibraryLoader::{GetModuleHandleA, GetProcAddress},
-                Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-                SystemServices::DLL_PROCESS_ATTACH,
-                Threading::GetCurrentProcessId,
-            },
-            UI::WindowsAndMessaging::{
-                ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-                WM_KEYDOWN, WM_KEYUP,
-            },
+use windows::{
+    Win32::{
+        Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
+        System::{
+            LibraryLoader::{GetModuleHandleA, GetProcAddress},
+            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
+            SystemServices::DLL_PROCESS_ATTACH,
+            Threading::GetCurrentProcessId,
         },
-        core::{BOOL, PCSTR},
+        UI::WindowsAndMessaging::{
+            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+            WM_KEYDOWN, WM_KEYUP,
+        },
     },
+    core::{BOOL, PCSTR},
 };
 
 #[allow(unused_imports)]
@@ -97,11 +92,14 @@ pub(crate) fn record_continue_candidate(item: usize, accept_predicate: usize, ba
 pub(crate) unsafe fn product_continue_item_action(base: usize) -> Option<NativeContinueItemAction> {
     const DOCALL_VTABLE_SLOT_10: usize = 0x10;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let item = match MENU_CONTINUE_ITEM.load(Ordering::SeqCst) {
-        TITLE_OWNER_SCAN_START_ADDRESS => MENU_CONTINUE_CANDIDATE_ITEM.load(Ordering::SeqCst),
-        item => item,
-    };
+    let item = MENU_CONTINUE_ITEM.load(Ordering::SeqCst);
     if item == null {
+        let candidate = MENU_CONTINUE_CANDIDATE_ITEM.load(Ordering::SeqCst);
+        if candidate != null {
+            append_autoload_debug(format_args!(
+                "product-core-autoload: ignoring diagnostic Continue candidate=0x{candidate:x}; waiting for semantic native-accept MENU_CONTINUE_ITEM instead"
+            ));
+        }
         return None;
     }
     let item_vt = unsafe { safe_read_usize(item) }?;
@@ -627,13 +625,309 @@ pub(crate) unsafe fn menu_input_probe(owner: usize, base: usize) {
 /// MENU_MEMBER_FUNC_JOB_RUN_RVA (0x1409aaba0, rcx=node) -- which builds the LIVE registered
 /// ProfileLoadDialog the native pump drives. After firing it observes (the caller keeps writing the
 /// golden oracle as the native pump hopefully loads the char). Pure read-only until the single fire.
+unsafe fn seed_profile_summary_slot_from_staged_save(
+    base: usize,
+    profile_summary: usize,
+    slot: i32,
+) -> bool {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET: usize = 0x8;
+    const PROFILE_SUMMARY_SLOT_DATA_OFFSET: usize = 0x18;
+    const PROFILE_SUMMARY_SLOT_STRIDE: usize = 0x2a0;
+    const SAVE_BODY_PLAYER_GAME_DATA_OFFSET: usize = 0xebae;
+    const PROFILE_SUMMARY_NAME_BYTES: usize = 0x22;
+    const PROFILE_SUMMARY_LEVEL_OFFSET: usize = 0x24;
+    const PROFILE_SUMMARY_PLAYTIME_OFFSET: usize = 0x28;
+    const PROFILE_SUMMARY_RUNE_MEMORY_OFFSET: usize = 0x2c;
+    /// Native ProfileSummary slot layout: `FaceData` wrapper at slot+0x38; its inner
+    /// `FaceDataBuffer` (`FACE` magic) starts at slot+0x40. 2026-06-27 native row dumps showed
+    /// the staged SL2 inner `FaceDataBuffer` bytes match the native row exactly, but the saved
+    /// `FaceData` wrapper header does not. Mirror `FUN_14025f9b0`: call
+    /// `FaceData::CopyFromBuffer` instead of memcpy'ing the saved wrapper over the live slot.
+    const PROFILE_SUMMARY_FACE_DATA_OFFSET: usize = 0x38;
+    const FACE_DATA_COPY_FROM_BUFFER_RVA: usize = 0x00252f70;
+    /// Native row builder passes slot+0x1a8 to the equipment renderer. Mirror `FUN_14025f9b0`
+    /// by copying the saved `PlayerGameData.equipment.chr_asm` through the same native helper instead
+    /// of leaving a zero/default `ChrAsm` that only proves renderer plumbing.
+    const PROFILE_SUMMARY_CHR_ASM_OFFSET: usize = 0x1a8;
+    const CHR_ASM_COPY_RVA: usize = 0x00245c00;
+    const PROFILE_SUMMARY_GENDER_OFFSET: usize = 0x290;
+    const PROFILE_SUMMARY_ARCHETYPE_OFFSET: usize = 0x291;
+    const PROFILE_SUMMARY_STARTING_GIFT_OFFSET: usize = 0x292;
+    const PROFILE_SUMMARY_FIELD_C4_OFFSET: usize = 0x293;
+    if profile_summary <= NULL
+        || slot < OWN_STEPPER_SLOT_ZERO
+        || slot as usize >= TITLE_PROFILE_SLOT_COUNT
+    {
+        return false;
+    }
+    let Ok(save_path) = std::env::var("ER_EFFECTS_SAVE_FILE") else {
+        append_autoload_debug(format_args!(
+            "native-profile-capture: staged ProfileSummary seed unavailable -- ER_EFFECTS_SAVE_FILE unset"
+        ));
+        return false;
+    };
+    let Ok(save_bytes) = fs::read(&save_path) else {
+        append_autoload_debug(format_args!(
+            "native-profile-capture: staged ProfileSummary seed failed to read '{save_path}'"
+        ));
+        return false;
+    };
+    let Ok(body) = er_save_loader::bnd4::slot_body(&save_bytes, slot as usize) else {
+        append_autoload_debug(format_args!(
+            "native-profile-capture: staged ProfileSummary seed failed to locate USER_DATA{slot:03} in '{save_path}'"
+        ));
+        return false;
+    };
+    let min_name_len =
+        SAVE_BODY_PLAYER_GAME_DATA_OFFSET + PGD_NAME_9C_OFFSET + PROFILE_SUMMARY_NAME_BYTES;
+    let min_face_len = SAVE_BODY_PLAYER_GAME_DATA_OFFSET
+        + PGD_FACE_DATA_OFFSET
+        + FACE_DATA_BUFFER_OFFSET
+        + FACE_DATA_BUFFER_TOTAL_SIZE;
+    let min_chr_asm_len = SAVE_BODY_PLAYER_GAME_DATA_OFFSET
+        + PGD_EQUIP_GAME_DATA_OFFSET
+        + EQUIP_GAME_DATA_CHR_ASM_OFFSET
+        + CHR_ASM_SIZE;
+    if body.len() < min_name_len || body.len() < min_face_len || body.len() < min_chr_asm_len {
+        append_autoload_debug(format_args!(
+            "native-profile-capture: staged ProfileSummary seed body too short len={} for PGD offset 0x{SAVE_BODY_PLAYER_GAME_DATA_OFFSET:x} required_name=0x{min_name_len:x} required_face=0x{min_face_len:x} required_chr_asm=0x{min_chr_asm_len:x}",
+            body.len()
+        ));
+        return false;
+    }
+    let pgd = body
+        .as_ptr()
+        .wrapping_add(SAVE_BODY_PLAYER_GAME_DATA_OFFSET) as usize;
+    let slot_data = profile_summary
+        + PROFILE_SUMMARY_SLOT_DATA_OFFSET
+        + slot as usize * PROFILE_SUMMARY_SLOT_STRIDE;
+    unsafe {
+        core::ptr::write_bytes(slot_data as *mut u8, 0, PROFILE_SUMMARY_SLOT_STRIDE);
+        core::ptr::copy_nonoverlapping(
+            (pgd + PGD_NAME_9C_OFFSET) as *const u8,
+            slot_data as *mut u8,
+            PROFILE_SUMMARY_NAME_BYTES,
+        );
+        *(slot_data.wrapping_add(PROFILE_SUMMARY_LEVEL_OFFSET) as *mut i32) =
+            *((pgd + PGD_LEVEL_68_OFFSET) as *const i32);
+        *(slot_data.wrapping_add(PROFILE_SUMMARY_PLAYTIME_OFFSET) as *mut u32) = 0;
+        *(slot_data.wrapping_add(PROFILE_SUMMARY_RUNE_MEMORY_OFFSET) as *mut i32) =
+            *((pgd + PGD_RUNE_MEMORY_70_OFFSET) as *const i32);
+        let copy_face_data_from_buffer: unsafe extern "system" fn(usize, usize) =
+            std::mem::transmute(base + FACE_DATA_COPY_FROM_BUFFER_RVA);
+        let copy_chr_asm: unsafe extern "system" fn(usize, usize) -> usize =
+            std::mem::transmute(base + CHR_ASM_COPY_RVA);
+        copy_face_data_from_buffer(
+            slot_data.wrapping_add(PROFILE_SUMMARY_FACE_DATA_OFFSET),
+            pgd + PGD_FACE_DATA_OFFSET + FACE_DATA_BUFFER_OFFSET,
+        );
+        copy_chr_asm(
+            slot_data.wrapping_add(PROFILE_SUMMARY_CHR_ASM_OFFSET),
+            pgd + PGD_EQUIP_GAME_DATA_OFFSET + EQUIP_GAME_DATA_CHR_ASM_OFFSET,
+        );
+        *(slot_data.wrapping_add(PROFILE_SUMMARY_GENDER_OFFSET) as *mut u8) =
+            *((pgd + PGD_GENDER_BE_OFFSET) as *const u8);
+        *(slot_data.wrapping_add(PROFILE_SUMMARY_ARCHETYPE_OFFSET) as *mut u8) =
+            *((pgd + PGD_ARCHETYPE_BF_OFFSET) as *const u8);
+        *(slot_data.wrapping_add(PROFILE_SUMMARY_STARTING_GIFT_OFFSET) as *mut u8) =
+            *((pgd + PGD_STARTING_GIFT_C3_OFFSET) as *const u8);
+        *(slot_data.wrapping_add(PROFILE_SUMMARY_FIELD_C4_OFFSET) as *mut u8) =
+            *((pgd + 0xc4) as *const u8);
+        *(profile_summary.wrapping_add(PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot as usize)
+            as *mut u8) = 1;
+    }
+    let level = unsafe { *((slot_data + PROFILE_SUMMARY_LEVEL_OFFSET) as *const i32) };
+    append_autoload_debug(format_args!(
+        "native-profile-capture: staged ProfileSummary seed wrote slot={slot} from '{save_path}' pgd_off=0x{SAVE_BODY_PLAYER_GAME_DATA_OFFSET:x} slot_data=0x{slot_data:x} level={level} (scalar + native FaceData::CopyFromBuffer + native ChrAsm copy)"
+    ));
+    true
+}
+
 pub(crate) unsafe fn native_load_tick(owner: usize, base: usize, n: u64) {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    if native_profile_capture_enabled() {
+        if NATIVE_LOAD_FIRED.load(Ordering::SeqCst) != NATIVE_LOAD_FIRED_NO {
+            unsafe { sample_title_profile_portrait_source(base, OWN_STEPPER_SLOT_ZERO) };
+            return;
+        }
+        let Some((title_dialog, _menu_window)) =
+            (unsafe { locate_live_loadgame_node(owner, base) })
+        else {
+            if n % NATIVE_LOAD_LOG_INTERVAL == NULL as u64 {
+                append_autoload_debug(format_args!(
+                    "native-profile-capture: waiting for live TitleTopDialog/ProfileSelect builder context (#{n})"
+                ));
+            }
+            return;
+        };
+        const MENU_SYSTEM_SAVE_LOAD_GETTER_RVA: usize = 0x00256360;
+        const GET_PROFILE_SUMMARY_RVA: usize = 0x002567b0;
+        const MARK_PROFILE_INDEX_AS_USED_RVA: usize = 0x00262250;
+        const NATIVE_LOAD_SAVE_DATA_RVA: usize = 0x0067b200;
+        const TITLE_FLOW_CONTEXT_SAVE_INIT_RVA: usize = 0x0082d0d0;
+        const MENU_SYSTEM_SAVE_SLOT_OFFSET: usize = 0x1200;
+        const PROFILE_SELECT_JOB_BUILDER_RVA: usize = 0x009ad0e0;
+        const MENU_JOB_QUEUE_RVA: usize = 0x007a9250;
+        const TITLE_MENU_WINDOW_JOB_QUEUE_OFFSET: usize = 0x10;
+        let capture =
+            unsafe { safe_read_usize(title_dialog + DIALOG_SCENE_PROXY_CAPTURE_A38_OFFSET) }
+                .unwrap_or(NULL);
+        let title_window_base = title_dialog + 0x50;
+        let mut save_init_flag: u8 = 0;
+        let get_menu_system_save_load: unsafe extern "system" fn() -> usize =
+            unsafe { std::mem::transmute(base + MENU_SYSTEM_SAVE_LOAD_GETTER_RVA) };
+        let get_profile_summary: unsafe extern "system" fn() -> usize =
+            unsafe { std::mem::transmute(base + GET_PROFILE_SUMMARY_RVA) };
+        let mark_profile_index_as_used: unsafe extern "system" fn(usize, i32) -> u8 =
+            unsafe { std::mem::transmute(base + MARK_PROFILE_INDEX_AS_USED_RVA) };
+        let native_load_save_data: unsafe extern "system" fn(u32) -> usize =
+            unsafe { std::mem::transmute(base + NATIVE_LOAD_SAVE_DATA_RVA) };
+        let set_save_slot: unsafe extern "system" fn(i32) =
+            unsafe { std::mem::transmute(base + er_save_loader::SET_SAVE_SLOT_RVA as usize) };
+        let request_save: unsafe extern "system" fn(u8) =
+            unsafe { std::mem::transmute(base + er_save_loader::REQUEST_SAVE_RVA as usize) };
+        let save_request_profile: unsafe extern "system" fn(u8) = unsafe {
+            std::mem::transmute(base + er_save_loader::SAVE_REQUEST_PROFILE_RVA as usize)
+        };
+        const GET_SAVE_SYSTEM_RVA: usize = 0x00e6e060;
+        let get_save_system: unsafe extern "system" fn() -> usize =
+            unsafe { std::mem::transmute(base + GET_SAVE_SYSTEM_RVA) };
+        const NATIVE_LOAD_SAVE_DATA_POLL_RVA: usize = 0x00679180;
+        const PROFILE_SUMMARY_POPULATE_SLOT_RVA: usize = 0x00262270;
+        static NATIVE_PROFILE_READ_PHASE: AtomicUsize = AtomicUsize::new(0);
+        static NATIVE_PROFILE_READ_LAST_POLL_STATUS: AtomicUsize = AtomicUsize::new(usize::MAX);
+        let poll_save_load: unsafe extern "system" fn(u8, u32) -> i32 =
+            unsafe { std::mem::transmute(base + NATIVE_LOAD_SAVE_DATA_POLL_RVA) };
+        let populate_profile_summary_slot: unsafe extern "system" fn(usize, u32) -> usize =
+            unsafe { std::mem::transmute(base + PROFILE_SUMMARY_POPULATE_SLOT_RVA) };
+        let init_title_flow_context: unsafe extern "system" fn(usize, *mut u8, usize) =
+            unsafe { std::mem::transmute(base + TITLE_FLOW_CONTEXT_SAVE_INIT_RVA) };
+        let menu_system_save_load = unsafe { get_menu_system_save_load() };
+        let profile_summary = unsafe { get_profile_summary() };
+        let read_phase = NATIVE_PROFILE_READ_PHASE.load(Ordering::SeqCst);
+        if read_phase == 0 {
+            unsafe {
+                set_save_slot(OWN_STEPPER_SLOT_ZERO);
+                request_save(1);
+                save_request_profile(1);
+            }
+            let marked_profile = if profile_summary != NULL {
+                unsafe { mark_profile_index_as_used(profile_summary, OWN_STEPPER_SLOT_ZERO) }
+            } else {
+                0
+            };
+            let save_system_before = unsafe { get_save_system() };
+            let native_read_requested = if profile_summary != NULL && marked_profile != 0 {
+                unsafe { native_load_save_data(OWN_STEPPER_SLOT_ZERO as u32) }
+            } else {
+                0
+            };
+            let save_system_after = unsafe { get_save_system() };
+            let read_ctx = unsafe { safe_read_usize(save_system_after + 0x18) }.unwrap_or(NULL);
+            let read_job = unsafe { safe_read_usize(save_system_after + 0x20) }.unwrap_or(NULL);
+            let read_slot = unsafe { safe_read_i32(save_system_after + 0x34) }.unwrap_or(-1);
+            append_autoload_debug(format_args!(
+                "native-profile-capture: phase0 SET_SLOT/REQUESTS + MARK/QUEUE native save read profile_summary=0x{profile_summary:x} marked={marked_profile} read_ret=0x{native_read_requested:x} save_sys_before=0x{save_system_before:x} save_sys_after=0x{save_system_after:x} handles[+18]=0x{read_ctx:x} [+20]=0x{read_job:x} slot_field=0x{read_slot:x} via 0x{:x} #{n}",
+                base + NATIVE_LOAD_SAVE_DATA_RVA
+            ));
+            if native_read_requested != 0 {
+                NATIVE_PROFILE_READ_PHASE.store(1, Ordering::SeqCst);
+            }
+            return;
+        }
+        let poll_status = unsafe { poll_save_load(0, 0) };
+        let poll_status_key = poll_status as isize as usize;
+        let last_poll_status =
+            NATIVE_PROFILE_READ_LAST_POLL_STATUS.swap(poll_status_key, Ordering::SeqCst);
+        if poll_status_key != last_poll_status || n % NATIVE_LOAD_LOG_INTERVAL == NULL as u64 {
+            let save_system = unsafe { get_save_system() };
+            let read_ctx = unsafe { safe_read_usize(save_system + 0x18) }.unwrap_or(NULL);
+            let read_job = unsafe { safe_read_usize(save_system + 0x20) }.unwrap_or(NULL);
+            append_autoload_debug(format_args!(
+                "native-profile-capture: phase1 native save read poll 0x{:x}(false,0) -> {poll_status} profile_summary=0x{profile_summary:x} handles[+18]=0x{read_ctx:x} [+20]=0x{read_job:x} #{n}",
+                base + NATIVE_LOAD_SAVE_DATA_POLL_RVA
+            ));
+        }
+        let seeded_from_staged_save = if poll_status == 0 {
+            false
+        } else if poll_status == 5 {
+            unsafe {
+                seed_profile_summary_slot_from_staged_save(
+                    base,
+                    profile_summary,
+                    OWN_STEPPER_SLOT_ZERO,
+                )
+            }
+        } else {
+            false
+        };
+        if poll_status != 0 && !seeded_from_staged_save {
+            return;
+        }
+        let populate_ret = if seeded_from_staged_save {
+            1
+        } else if profile_summary != NULL {
+            unsafe { populate_profile_summary_slot(profile_summary, OWN_STEPPER_SLOT_ZERO as u32) }
+        } else {
+            0
+        };
+        if NATIVE_LOAD_FIRED.swap(NATIVE_LOAD_FIRED_YES, Ordering::SeqCst) != NATIVE_LOAD_FIRED_NO {
+            return;
+        }
+        if capture != NULL && menu_system_save_load != NULL {
+            unsafe {
+                init_title_flow_context(
+                    capture,
+                    &mut save_init_flag as *mut u8,
+                    menu_system_save_load + MENU_SYSTEM_SAVE_SLOT_OFFSET,
+                )
+            };
+        }
+        let mut job_ref: usize = NULL;
+        let build_profile_select: unsafe extern "system" fn(
+            usize,
+            *mut usize,
+            usize,
+        ) -> *mut usize = unsafe { std::mem::transmute(base + PROFILE_SELECT_JOB_BUILDER_RVA) };
+        let queue_job: unsafe extern "system" fn(usize, *mut usize) =
+            unsafe { std::mem::transmute(base + MENU_JOB_QUEUE_RVA) };
+        append_autoload_debug(format_args!(
+            "native-profile-capture: *** SAVE READ COMPLETE poll=0 populate_ret=0x{populate_ret:x} profile_summary=0x{profile_summary:x}; INIT TFC 0x{:x}(capture=0x{capture:x}, flag={}, mss+0x1200=0x{:x}) then BUILD native ProfileSelect job 0x{:x}(title_dialog=0x{title_dialog:x}, out=&job_ref, title_dialog+0x50=0x{title_window_base:x}) then queue 0x{:x}(title_dialog+0x10, &job_ref) #{n} -- native 05_010_ProfileSelect path, no title accept/Continue ***",
+            base + TITLE_FLOW_CONTEXT_SAVE_INIT_RVA,
+            save_init_flag,
+            menu_system_save_load + MENU_SYSTEM_SAVE_SLOT_OFFSET,
+            base + PROFILE_SELECT_JOB_BUILDER_RVA,
+            base + MENU_JOB_QUEUE_RVA
+        ));
+        unsafe {
+            build_profile_select(title_dialog, &mut job_ref as *mut usize, title_window_base)
+        };
+        NATIVE_LOAD_LAST_NODE.store(job_ref, Ordering::SeqCst);
+        NATIVE_LOAD_LAST_NODE_VTABLE.store(
+            unsafe { safe_read_usize(job_ref) }.unwrap_or(NULL),
+            Ordering::SeqCst,
+        );
+        NATIVE_LOAD_LAST_MEMBER_DIALOG.store(title_dialog, Ordering::SeqCst);
+        NATIVE_LOAD_LAST_MEMBER_FN.store(base + PROFILE_SELECT_JOB_BUILDER_RVA, Ordering::SeqCst);
+        NATIVE_LOAD_LAST_MEMBER_ADJUST.store(title_window_base, Ordering::SeqCst);
+        if job_ref != NULL {
+            unsafe {
+                queue_job(
+                    title_dialog + TITLE_MENU_WINDOW_JOB_QUEUE_OFFSET,
+                    &mut job_ref as *mut usize,
+                )
+            };
+        }
+        unsafe { sample_title_profile_portrait_source(base, OWN_STEPPER_SLOT_ZERO) };
+        return;
+    }
     // Already fired: keep observing (oracle written by the caller's pass-through telemetry).
     if NATIVE_LOAD_FIRED.load(Ordering::SeqCst) != NATIVE_LOAD_FIRED_NO {
+        unsafe { sample_title_profile_portrait_source(base, OWN_STEPPER_SLOT_ZERO) };
         if n % NATIVE_LOAD_LOG_INTERVAL == NULL as u64 {
             append_autoload_debug(format_args!(
-                "native-load: FIRED -- observing native pump (#{n}); golden oracle written via telemetry"
+                "native-load: FIRED -- observing native pump/profile renderer (#{n}); golden oracle written via telemetry"
             ));
         }
         return;
@@ -656,6 +950,11 @@ pub(crate) unsafe fn native_load_tick(owner: usize, base: usize, n: u64) {
     let m_dlg = action.member_dialog;
     let m_fn = action.member_fn;
     let m_adj = action.member_adjust;
+    NATIVE_LOAD_LAST_NODE.store(node, Ordering::SeqCst);
+    NATIVE_LOAD_LAST_NODE_VTABLE.store(node_vt, Ordering::SeqCst);
+    NATIVE_LOAD_LAST_MEMBER_DIALOG.store(m_dlg, Ordering::SeqCst);
+    NATIVE_LOAD_LAST_MEMBER_FN.store(m_fn, Ordering::SeqCst);
+    NATIVE_LOAD_LAST_MEMBER_ADJUST.store(m_adj, Ordering::SeqCst);
     let run: unsafe extern "system" fn(usize) = unsafe {
         std::mem::transmute::<usize, unsafe extern "system" fn(usize)>(
             base + MENU_MEMBER_FUNC_JOB_RUN_RVA,
@@ -671,8 +970,9 @@ pub(crate) unsafe fn native_load_tick(owner: usize, base: usize, n: u64) {
         format_args!("node=0x{node:x} member_fn=0x{m_fn:x}"),
     );
     unsafe { run(node) };
+    unsafe { sample_title_profile_portrait_source(base, OWN_STEPPER_SLOT_ZERO) };
     append_autoload_debug(format_args!(
-        "native-load: native Load-Game run returned -- observing native pump for golden oracle (#{n})"
+        "native-load: native Load-Game run returned -- observing native pump/profile renderer for golden oracle (#{n})"
     ));
 }
 /// Crash-on-not-loaded watchdog (privacy-policy-gated-on-character-presence-CONFIRMED-2026-06-23):
@@ -997,6 +1297,36 @@ pub(crate) unsafe fn profile_slot_fingerprint(slot: i32) -> (bool, i32, u32, usi
         profile_level,
         profile_name_len,
     )
+}
+/// The save slot to auto-load: the ACTIVE slot holding the most-progressed real character (highest level;
+/// lowest index on a tie). "Active/real" is judged by the RECORD-based `profile_slot_fingerprint`
+/// (level>=1 && non-empty name) -- NOT the `profile_summary+0x8` active byte, which the DLL writes itself
+/// (PROFILE_SLOT_ACTIVATE / seed) and so reads all-active even for a NULL slot. Returns
+/// `OWN_STEPPER_SLOT_NONE` (-1) when NO slot holds a real character (or the profile summary is not yet
+/// populated); callers MUST refuse to load on the sentinel -- never load a null slot (which spawns the
+/// new-game intro cutscene + a null character).
+pub(crate) unsafe fn best_active_slot() -> i32 {
+    let mut best_slot = OWN_STEPPER_SLOT_NONE;
+    let mut best_level: u32 = 0;
+    let mut slot: i32 = OWN_STEPPER_SLOT_ZERO;
+    while (slot as usize) < TITLE_PROFILE_SLOT_COUNT {
+        let (is_real, _map, level, _name_len) = unsafe { profile_slot_fingerprint(slot) };
+        if is_real && level > best_level {
+            best_level = level;
+            best_slot = slot;
+        }
+        slot += 1;
+    }
+    best_slot
+}
+/// Resolve the slot to actually load under the user's guards: honor a configured slot ONLY if it holds a
+/// real character; otherwise fall back to `best_active_slot()` ("whatever is indicated as an active slot on
+/// disk"). Returns `OWN_STEPPER_SLOT_NONE` when nothing is loadable so the caller refuses to load.
+pub(crate) unsafe fn resolve_active_load_slot(configured: i32) -> i32 {
+    if configured >= OWN_STEPPER_SLOT_ZERO && unsafe { profile_slot_fingerprint(configured).0 } {
+        return configured;
+    }
+    unsafe { best_active_slot() }
 }
 pub(crate) unsafe fn requested_slot_identity(slot: i32, c30: i32) -> RequestedSlotIdentity {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;

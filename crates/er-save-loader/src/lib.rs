@@ -531,19 +531,49 @@ fn parse_bool(value: &str) -> bool {
     matches!(value, "1" | "true" | "yes" | "on")
 }
 
-fn experimental_direct_menu_load_env_enabled() -> bool {
-    std::env::var("ER_EFFECTS_EXPERIMENTAL_DIRECT_MENU_LOAD")
+/// The experimental-direct-menu-load gate as the DLL sees it (mirror of the DLL's
+/// `experimental_direct_menu_load_enabled` in `gating.rs`): armed by EITHER the
+/// `ER_EFFECTS_EXPERIMENTAL_DIRECT_MENU_LOAD` env var OR the
+/// `er-effects-experimental-direct-menu-load.txt` flag file next to the game exe.
+///
+/// `from_env` previously consulted only the env var. A run that armed the gate via the FILE (the
+/// product/portrait smoke) but supplied the method via `ER_EFFECTS_AUTOLOAD_METHOD=direct_menu_load`
+/// therefore had its `DirectMenuLoad` method silently downgraded to `SaveRequested` here -> the DLL's
+/// `arm_product_autoload_from_request` never set `PRODUCT_AUTOLOAD_ARMED` -> `product_core_autoload_tick`
+/// never ran -> only the slot-less accept-byte fallback advanced the menu, which starts a NEW GAME
+/// (a fresh Vagabond, not the configured save). Honoring the same file flag here keeps the host request
+/// and the DLL gate consistent so the env-method + file-flag combination arms the product path.
+fn experimental_direct_menu_load_gate_enabled() -> bool {
+    if std::env::var("ER_EFFECTS_EXPERIMENTAL_DIRECT_MENU_LOAD")
         .is_ok_and(|value| parse_bool(value.trim()))
+    {
+        return true;
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-experimental-direct-menu-load.txt")
+        .exists()
+}
+
+/// Pure downgrade policy: `DirectMenuLoad` is the experimental product path, so it is neutralized to
+/// `SaveRequested` UNLESS the experimental gate is enabled. Only `DirectMenuLoad` is gated this way
+/// (other `Direct*` methods are unaffected). Pure (no env/fs reads) so the policy is unit-testable;
+/// callers resolve the gate and pass it in.
+const fn should_downgrade_direct_menu_load(
+    method: SaveLoadMethod,
+    experimental_gate_enabled: bool,
+) -> bool {
+    matches!(method, SaveLoadMethod::DirectMenuLoad) && !experimental_gate_enabled
 }
 
 fn normalize_experimental_direct_menu_load(
     request: &mut SaveLoadRequest,
     experimental_direct_menu_load: bool,
 ) {
-    if request.method == SaveLoadMethod::DirectMenuLoad
-        && !experimental_direct_menu_load
-        && !experimental_direct_menu_load_env_enabled()
-    {
+    let gate = experimental_direct_menu_load || experimental_direct_menu_load_gate_enabled();
+    if should_downgrade_direct_menu_load(request.method, gate) {
         request.method = SaveLoadMethod::SaveRequested;
     }
 }
@@ -1124,6 +1154,49 @@ mod tests {
 
         assert_eq!(request.slot, Some(TEST_SLOT));
         assert_eq!(request.method, SaveLoadMethod::SaveRequested);
+    }
+
+    #[test]
+    fn downgrade_policy_only_neutralizes_gated_direct_menu_load() {
+        // The experimental product path (DirectMenuLoad) is neutralized to SaveRequested ONLY when the
+        // gate is off; with the gate on it survives. No other method is touched by this policy.
+        assert!(should_downgrade_direct_menu_load(
+            SaveLoadMethod::DirectMenuLoad,
+            false
+        ));
+        assert!(!should_downgrade_direct_menu_load(
+            SaveLoadMethod::DirectMenuLoad,
+            true
+        ));
+        for method in [
+            SaveLoadMethod::SaveRequested,
+            SaveLoadMethod::RequestedIndex,
+            SaveLoadMethod::Both,
+            SaveLoadMethod::DirectMapLoad,
+            SaveLoadMethod::DirectCombinedLoad,
+            SaveLoadMethod::DirectMenuWrapper,
+        ] {
+            assert!(
+                !should_downgrade_direct_menu_load(method, false),
+                "only DirectMenuLoad is gated, not {method:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn experimental_flag_keeps_direct_menu_load_method() {
+        // The file-driven path passes `experimental_direct_menu_load=true`; that alone must keep the
+        // DirectMenuLoad method regardless of env/flag-file state, so the host request then satisfies the
+        // DLL arming condition `request.method() == DirectMenuLoad`. (The product/portrait smoke instead
+        // arms the gate via the `er-effects-experimental-direct-menu-load.txt` flag file, which
+        // `experimental_direct_menu_load_gate_enabled` now also honors for the env-method path.)
+        let mut request = SaveLoadRequest {
+            method: SaveLoadMethod::DirectMenuLoad,
+            slot: Some(TEST_SLOT),
+            ..SaveLoadRequest::default()
+        };
+        normalize_experimental_direct_menu_load(&mut request, true);
+        assert_eq!(request.method, SaveLoadMethod::DirectMenuLoad);
     }
 
     #[test]

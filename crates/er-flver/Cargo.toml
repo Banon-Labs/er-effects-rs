@@ -1,0 +1,30 @@
+[package]
+name = "er-flver"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Host-only Elden Ring FLVER reader. Wraps `fstools_formats`' structural FLVER parser
+# and adds two views over one parse:
+#   (a) a RAW vertex-declaration view (interleaved buffer slices + per-member format
+#       code -> wgpu::VertexFormat) for binding real geometry to the game's compiled
+#       `.vpo` vertex shader via SPIR-V passthrough (matched to its ISG1 input signature);
+#   (b) a normalized positions/normals/uvs/tangents decode for the Bevy PBR / studio
+#       camera path.
+# Parses ALREADY-DECOMPRESSED `.flver` bytes only — DCX/Oodle decompression stays in the
+# er-soulsformats wine shaderbridge, so this crate never pulls in fstools' Oodle/dvdbnd.
+# Not part of the Windows cdylib (`cargo xwin check` targets only the root package).
+
+[features]
+default = []
+# Adds `VertexFormat::to_wgpu` + a `wgpu::VertexBufferLayout` builder. Off by default so
+# non-render consumers (trace/inspect tools) don't drag in the graphics stack.
+wgpu = ["dep:wgpu"]
+
+[dependencies]
+thiserror = "2"
+# Structural FLVER parse only (header/materials/meshes/facesets/buffer-layouts). Pinned to
+# the same rev er-objectkit uses. We never touch fstools' Oodle/dvdbnd.
+fstools_formats = { git = "https://github.com/soulsmods/fstools-rs", rev = "4b0db28d1c419cdedc62cc8e8def9c6eaad38d12" }
+# Only `wgpu::VertexFormat`/`VertexBufferLayout` (core types, no GPU backend needed).
+wgpu = { version = "29", default-features = false, optional = true }

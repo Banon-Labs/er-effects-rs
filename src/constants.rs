@@ -10,14 +10,14 @@ use std::sync::{
     atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU64, AtomicUsize},
 };
 
-use debug::InputBlocker;
+use crate::input_blocker::InputBlocker;
 use eldenring::{
-    cs::{FaceData, FaceDataBuffer, GameDataMan, GameMan, PlayerGameData},
+    cs::{ChrAsm, EquipGameData, FaceData, FaceDataBuffer, GameDataMan, GameMan, PlayerGameData},
     dlkr::DLAllocator,
     fd4::FD4TaskData,
 };
 use fromsoftware_shared::{F32Vector4, FromStatic};
-use hudhook::windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::HWND;
 
 pub(crate) const DLL_MAIN_SUCCESS: i32 = 1;
 pub(crate) const DIRECTINPUT_FORWARD_UNRESOLVED: usize = 0;
@@ -45,6 +45,10 @@ pub(crate) const HOOK_FALSE_RETURN: u8 = 0;
 #[repr(usize)]
 pub(crate) enum RuntimeGlobalRva {
     NowLoadingSingleton = 0x3d60ec8,
+    FakeLoadingScreenSingleton = 0x3d74868,
+    CsGraphicsSingleton = 0x3d71c48,
+    RendManSingleton = 0x3d7b0c0,
+    CsScaleformSingleton = 0x3d83148,
     Fd4IoPool = 0x4853048,
     Fd4IoWorkerManager = 0x4852f88,
     IoDeviceSingleton = 0x4589390,
@@ -444,6 +448,1131 @@ pub(crate) const TITLE_NATIVE_JOB_DELTA_OFFSET_START: usize =
 pub(crate) const TITLE_NATIVE_JOB_DELTA_OFFSET_END: usize =
     TITLE_NATIVE_JOB_DELTA_OFFSET_START + core::mem::size_of::<f32>();
 pub(crate) const TITLE_NATIVE_JOB_CALLED_VALUE: usize = true as usize;
+
+// ── Title-animation speedup lever (pab_dismiss -> menu_open) ─────────────────────────────────
+// The title/menu transition is a Scaleform/GFx animation advanced by the FD4 frame-delta f32 the
+// STEP_MenuJobWait tick (0x140b0d400) reads from its task_data+0x08 and forwards to
+// CS::TitleTopDialog::update. FadeIn->Loop / TextFadeOut completion is frame-count CHECKED
+// (current==total), NOT time-gated, so SCALING this delta makes the animation reach its end frame
+// in fewer wall-clock frames -- every downstream predicate (Scaleform tick, completion compare,
+// (flags&0x8f)>1 settle gate) is satisfied naturally; nothing is bypassed and the load does not
+// desync. bd autoload-menu-speed-lever-framedelta-2026-06-22.
+/// Clamp range for the speedup factor.
+pub(crate) const TITLE_ANIM_SPEEDUP_MIN: f32 = 1.0;
+pub(crate) const TITLE_ANIM_SPEEDUP_MAX: f32 = 16.0;
+/// DEFAULT-ON for real autoload runs (no opt-in). Any value > 1.0 ARMS the FadeIn skip; the magnitude
+/// no longer scales anything (the dt-scale and frame-burst levers were both runtime-falsified -- bd
+/// title-anim-framedelta-lever-FALSIFIED-runtime-2026-06-24 + pab-to-menuopen-real-breakdown-build-not-
+/// anim-2026-06-24 -- the FadeIn is wall-clock/present-bound, so we skip it at the completion predicate
+/// instead). Kept as an f32 toggle so the existing env/file override (set to 1.0 = off) still works.
+pub(crate) const TITLE_ANIM_SPEEDUP_DEFAULT: f32 = 4.0;
+/// Diagnostic frame counter for the title-anim lever (logs SM state every Nth detour call).
+pub(crate) static TITLE_ANIM_DIAG_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// Log the title SM state every this many detour calls.
+pub(crate) const TITLE_ANIM_DIAG_INTERVAL: usize = 60;
+/// FD4 state-machine `SetState`/request-transition (deobf 0x1407499e0; dump 0x140749ae0, shift -0x100).
+/// `__fastcall(rcx = FD4StateMachine* sm, rdx = StateDesc* desc)`. Routes the transition through the
+/// SM owner's vtable[0x150] and no-ops unless the current node is settled (`[node+0x20]&0x8f >= 2`), so
+/// it cannot corrupt the SM. This is the call CS::TitleTopDialog::update's input-skip branch makes to
+/// move FadeIn->Loop on a button press. bd fadein-* RE 2026-06-24.
+pub(crate) const TITLE_FD4_SETSTATE_RVA: usize = 0x7499e0;
+/// One-shot latch: the zero-input FadeIn->Loop transition has fired.
+pub(crate) static TITLE_FADEIN_SKIP_FIRED: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// PART-A title-cover masquerade: `STEP_BeginTitle`'s only native visual side effect is wrapper
+/// 0x14081f9f0 building the `05_000_Title` MenuWindowJob through factory 0x1407acbf0. Suppressing
+/// this wrapper hides the native press-any-button/title Scaleform while leaving TitleStep state,
+/// FixOrderJobSequence, native Continue/save-load state, and STEP_PlayGame untouched. It must never
+/// touch the global resident-UI flag (CSMenuMan+0x21 / STEP_Wait). Ghidra dump addresses are +0xf0;
+/// these constants are deobf/live RVAs used for the actual hook.
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA: usize = 0x81f9f0;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA: usize = 0x81f8d0;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA: usize = 0x7acbf0;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_NAME: &str = "05_000_Title";
+pub(crate) const TITLE_PAB_INFORMATION_VISUAL_NAME: &str = "05_020_TitleInformation";
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_SUPPRESS_NOT_INSTALLED: usize = 0;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED_YES: usize = 1;
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_SUPPRESS_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED: AtomicUsize =
+    AtomicUsize::new(TITLE_NATIVE_MENU_VISUAL_SUPPRESS_NOT_INSTALLED);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_OUT_SLOT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_PREV_OUT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_ARG_RDX: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_ARG_R8: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_LAST_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Native `MenuWindowJob*` and live window preserved by the BeginTitle wrapper. The render-only
+/// suppressor uses these to clear the native title draw bit without removing the job from the native
+/// title sequence.
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PAB_INFORMATION_VISUAL_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_PAB_INFORMATION_VISUAL_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PAB_INFORMATION_VISUAL_BUILDS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PAB_INFORMATION_VISUAL_LAST_JOB: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PAB_INFORMATION_VISUAL_LAST_WINDOW: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PAB_INFORMATION_VISUAL_LAST_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Render-only Part-A suppression: `MenuWindowJob::Run` writes the native window visible flags at
+/// `GLOBAL_CSMenuMan->field106_0x90[id]`: the Run body sets `|=1` before calling FadeIn, and the
+/// FadeIn helper at deobf 0x140744dd0 sets `|=3`. User-visible runtime falsified the old `0x2`
+/// draw-bit-only assumption: the title logo / PAB / Continue can still show with flags==1. Therefore
+/// product suppression clears the full native-visible mask for the preserved `05_000_Title` window.
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA: usize = 0x744dd0;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA: usize = 0x7ad530;
+pub(crate) const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK: u8 = 0x3;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_NOT_INSTALLED: usize = 0;
+pub(crate) const TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED_YES: usize = 1;
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED: AtomicUsize =
+    AtomicUsize::new(TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_NOT_INSTALLED);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESSED_WINDOWS: AtomicUsize =
+    AtomicUsize::new(0);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_WINDOW: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_BEFORE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_AFTER: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// PART-B custom cover target: `05_010_ProfileSelect` is an existing Scaleform surface with
+/// `MENU_DummyProfileFace_01..10` symbols that the profile renderer maps to
+/// `SYSTEX_Menu_Profile00..09` (via CSMenuProfModelRend / active-screen render targets). The wrapper
+/// below is the deobf/live address for the native `05_010_ProfileSelect` MenuWindowJob builder
+/// (Ghidra dump 0x14081f7e0 -> deobf 0x14081f6f0). We use it as the initial custom cover surface
+/// instead of trying to remap `05_001_Title_Logo`, which has no dummy-profile symbol.
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA: usize = 0x81f6f0;
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME: &str = "05_010_ProfileSelect";
+/// Native full-screen black Scaleform/MenuWindowJob surface. Ghidra dump 0x140793c10 ->
+/// deobf/live 0x140793b20 (content-unique) builds `01_900_Black` with the same
+/// MenuWindow/SceneProxy host ABI as the title wrappers. This is the first diagnostic carrier for
+/// proving an engine-owned custom surface can stay above PRESS ANY BUTTON / Continue.
+pub(crate) const TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA: usize = 0x793b20;
+pub(crate) const TITLE_CUSTOM_COVER_BLACK_NAME: &str = "01_900_Black";
+pub(crate) const TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL: &str = "MENU_DummyProfileFace_01";
+pub(crate) const TITLE_CUSTOM_COVER_SYSTEX_TARGET: &str = "SYSTEX_Menu_Profile00";
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS: &str = "CSMenuProfModelRend";
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA: usize = 0x2b80128;
+/// Profile renderer table initializer: live 0x1409af3a0 (dump 0x1409af4f0) allocates the ten
+/// CSMenuProfModelRend instances and writes DAT_143d6d8d0 before the refresh/feed pass below.
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDER_INIT_RVA: usize = 0x9af3a0;
+/// Profile portrait refresh/display pipeline: live 0x1409aa680 (dump 0x1409aa7d0) reads the loaded
+/// `ProfileSummary`, loops 10 slots, fills CSMenuProfModelRend / face/player model data, and maps
+/// each active slot to `SYSTEX_Menu_ProfileNN` through `FUN_140bb8cf0(renderer, slot*2)`. It must run
+/// after SL2/profile readiness, not at early `05_001_Title_Logo` construction time.
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_RVA: usize = 0x9aa680;
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_CALLS: AtomicUsize =
+    AtomicUsize::new(0);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_PROFILE_SUMMARY: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_CALLER_PHASE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_754: usize = 0x754;
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_755: usize = 0x755;
+/// Live table of the ten CSMenuProfModelRend pointers filled by the title/profile renderer setup.
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA: usize = 0x3d6d8d0;
+pub(crate) const TITLE_PROFILE_SLOT_COUNT: usize = 10;
+/// CSMenuAsmModelRend base stores CSEzOffscreenRend* at +0xa8; CSEzOffscreenRend stores
+/// CSRuntimeTexResCap* registered under SYSTEX_Menu_ProfileNN at +0x10.
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET: usize = 0xa8;
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET: usize = 0x10;
+pub(crate) const TITLE_CUSTOM_COVER_PROFILE_RENDERER_TEX_INDEX_OFFSET: usize = 0x9a8;
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_SAMPLE_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_SLOT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_RENDERER: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_RENDERER_VTABLE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_OFFSCREEN_REND: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_RESCAP: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_INDEX: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_754: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_755: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_RET: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_JOB: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_BLACK_BUILDS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_CUSTOM_COVER_BLACK_LAST_RET: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_BLACK_LAST_JOB: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_BLACK_LAST_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// MenuWindowJob::Run (dump 0x1407ad2b0 -> deobf/live 0x1407ad1c0). Part B uses the native
+/// title job's own pump context to run the separately-built ProfileSelect cover job alongside the
+/// preserved title job, instead of replacing the authoritative BeginTitle out-slot.
+pub(crate) const MENU_WINDOW_JOB_RUN_RVA: usize = 0x7ad1c0;
+pub(crate) static TITLE_CUSTOM_COVER_RUN_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_CUSTOM_COVER_RUN_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_CUSTOM_COVER_RUN_RECURSION: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_CUSTOM_COVER_RUN_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_NATIVE_JOB: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_COVER_JOB: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_COVER_WINDOW: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_RET: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Removed fallback-cover counters kept only so older telemetry references compile during cleanup.
+/// Product title/loading cover work must use native CSEzDraw/Scaleform/game-render surfaces.
+pub(crate) static TITLE_OVERLAY_COVER_RENDER_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_OVERLAY_COVER_LAST_DISPLAY_W: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_OVERLAY_COVER_LAST_DISPLAY_H: AtomicUsize = AtomicUsize::new(0);
+/// `CS::TexResCap` embeds the draw-usable `CSGxTexture*` at +0x78, and that wrapper keeps
+/// the backing graphics texture/reference at +0x10. The overlay cannot safely reinterpret this as
+/// a generic texture ID yet, but observing these handles during a native draw would be a concrete
+/// draw-side consumption oracle for the RAM-backed profile portrait source rather than generic scaffolding.
+pub(crate) const TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET: usize = 0x78;
+pub(crate) const TITLE_CUSTOM_COVER_GX_TEXTURE_RESOURCE_OFFSET: usize = 0x10;
+pub(crate) static TITLE_OVERLAY_COVER_TEXTURE_BOUND: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_OVERLAY_COVER_LAST_GX_TEXTURE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_OVERLAY_COVER_LAST_TEXTURE_RESOURCE: AtomicUsize = AtomicUsize::new(0);
+/// Observe the native now-loading helper visible during the black/progress-bar loading surface.
+/// This is the first-pass target for a separate custom loading/masquerade surface after live title-logo
+/// remaps proved crash-prone.
+pub(crate) const NOW_LOADING_HELPER_CTOR_RVA: usize = 0x2a20e0;
+pub(crate) const NOW_LOADING_HELPER_UPDATE_RVA: usize = 0x2a2c40;
+pub(crate) static NOW_LOADING_HELPER_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static NOW_LOADING_HELPER_UPDATE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static NOW_LOADING_HELPER_HOOKS_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static NOW_LOADING_HELPER_CTOR_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static NOW_LOADING_HELPER_UPDATE_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static NOW_LOADING_HELPER_LAST_THIS: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static NOW_LOADING_HELPER_LAST_MENU_INDEX: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static NOW_LOADING_HELPER_LAST_REPLACE_TEX_INFO: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static NOW_LOADING_HELPER_LAST_REQUESTED_REPLACE_TEX_INFO: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static NOW_LOADING_HELPER_LAST_FLAGS: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Read-only latch of the native CSFakeLoadingScreen singleton visible during the black/progress
+/// loading UI. Sampled from telemetry writes; no hooks or native calls.
+pub(crate) static FAKE_LOADING_SCREEN_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static FAKE_LOADING_SCREEN_VISIBLE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static FAKE_LOADING_SCREEN_LAST_PTR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static FAKE_LOADING_SCREEN_LAST_VISIBLE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static FAKE_LOADING_SCREEN_LAST_FIELD_C: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static FAKE_LOADING_SCREEN_LAST_FIELD_10: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static RENDER_LOADING_LAYER_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static RENDER_LOADING_LAYER_NONNULL_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static RENDER_LOADING_LAYER_LAST_RENDMAN: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static RENDER_LOADING_LAYER_LAST_CSGRAPHICS: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static RENDER_LOADING_LAYER_LAST_CSSCALEFORM: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static RENDER_LOADING_LAYER_LAST_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
+/// CSFakeLoadingScreen visibility flag offset: `*(u8*)(singleton + 0x8)` is 1 while the loading
+/// screen is up (singleton = base + RuntimeGlobalRva::FakeLoadingScreenSingleton).
+pub(crate) const FAKE_LOADING_SCREEN_VISIBLE_OFFSET: usize = 0x8;
+/// Now-loading background portrait forge. The pseudorandom loading-screen background is
+/// `helper->replaceTexInfo` (a CSScaleformReplaceTexInfo*), PRODUCED for symbol `MENU_Load_%05d` by
+/// `GetOrCreateReplaceTexInfo`, whose symbol-bind step is `FUN_140d69880` (dump 0x140d69880 -> deobf
+/// 0x140d697d0, shift -0xb0). We full-replace that bind for `MENU_Load_*`: build an er-tpf TPF named
+/// exactly the requested symbol, turn it into a TpfResCap container via the game's in-memory
+/// `CreateTpfResCap` factory, wrap it in a TpfFileCap, and hand it back on the rti so the unmodified
+/// per-frame CSScaleform pump registers our texture name and GFx composites the portrait as the
+/// loading background. `fn(rti: *mut CSScaleformReplaceTexInfo /rcx/, symbol: *mut DLString<u16>
+/// /rdx/) -> u8` (1 = bound; producer then lists the rti).
+pub(crate) const LOADING_BG_REPLACE_BIND_RVA: usize = 0xd697d0;
+/// In-memory TPF -> TpfResCap factory `CreateTpfResCap` (dump 0x140b83770 -> deobf 0x140b83680).
+/// `fn(tpfRepo /rcx = *GLOBAL_TpfRepository/, name: *const u16 /rdx/, bytes: *const u8 /r8/, size: u64
+/// /r9/, flag: u8 /stack=0/, extra: u32 /stack=0/) -> *mut TpfResCap` (0xb8; +0x78 count, +0x80 array).
+pub(crate) const CREATE_TPF_RESCAP_RVA: usize = 0xb83680;
+/// `CS::TpfFileCap::TpfFileCap` ctor (dump 0x140226010 -> deobf 0x140225f60). `fn(this: *mut /0x98
+/// from MainHeap/, loadTask=0) -> this`; only inits the FD4FileCap base and zeroes `+0x90`.
+pub(crate) const TPF_FILE_CAP_CTOR_RVA: usize = 0x225f60;
+/// Game heap allocator wrapper (dump 0x141eb9ec0 -> deobf 0x141eb9ed0). `fn(size /rcx/, align /rdx/,
+/// allocator_obj /r8/) -> *mut u8`; allocator_obj is the dereferenced DLAllocator* (== the repo's
+/// `runtime_heap_allocator` for MainHeap).
+pub(crate) const GAME_HEAP_ALLOC_RVA: usize = 0x1eb9ed0;
+/// `DLString<wchar_t>::substr` (dump 0x140116c90 -> deobf 0x140116c70). `fn(dest /rcx/, src /rdx/,
+/// start /r8 = 0/, count /r9 = usize::MAX = to-end/) -> dest`; copies the symbol into the rti symbol.
+pub(crate) const DLSTRING_WCHAR_SUBSTR_RVA: usize = 0x116c70;
+// `GLOBAL_TpfRepository` singleton pointer (deref -> rcx for CreateTpfResCap) is defined below as
+// the existing `GLOBAL_TPF_REPOSITORY_RVA` (0x3d73fb8).
+/// `GLOBAL_MainHeapAllocator` singleton pointer (data, 0x143d872e0; identical RVA to the repo's
+/// `runtime_heap_allocator`). Deref -> the allocator object for the 0x98-byte TpfFileCap allocation.
+pub(crate) const GLOBAL_MAIN_HEAP_ALLOCATOR_RVA: usize = 0x3d872e0;
+/// CSScaleformReplaceTexInfo (size 0x50) field offsets.
+pub(crate) const REPLACE_TEX_INFO_REFCOUNT_OFFSET: usize = 0x8; // i32 DLReferenceCountObject refcount
+pub(crate) const REPLACE_TEX_INFO_SYMBOL_OFFSET: usize = 0x10; // DLString<u16>
+pub(crate) const REPLACE_TEX_INFO_ENCODING_OFFSET: usize = 0x38; // u8
+pub(crate) const REPLACE_TEX_INFO_TPF_FILE_CAP_OFFSET: usize = 0x40; // TpfFileCap*
+pub(crate) const REPLACE_TEX_INFO_READY_OFFSET: usize = 0x48; // u8 (leave 0 so the pump processes it)
+/// TpfFileCap (size 0x98) field offsets.
+pub(crate) const TPF_FILE_CAP_LOAD_STATE_OFFSET: usize = 0x88; // u8
+pub(crate) const TPF_FILE_CAP_FLAGS_OFFSET: usize = 0x89; // u8
+pub(crate) const TPF_FILE_CAP_TEX_RESCAP_OFFSET: usize = 0x90; // -> TpfResCap container
+pub(crate) const TPF_FILE_CAP_LOADED_STATE: u8 = 4;
+pub(crate) const TPF_FILE_CAP_READY_FLAG_BIT: u8 = 0x20;
+pub(crate) const TPF_FILE_CAP_ALLOC_SIZE: usize = 0x98;
+pub(crate) const TPF_FILE_CAP_ALLOC_ALIGN: usize = 8;
+/// Incoming symbol DLString<wchar_t> (rdx, standalone, size 0x30) field offsets.
+pub(crate) const DLSTRING_U16_INLINE_OFFSET: usize = 0x8; // inline buffer, or heap ptr if cap > 7
+pub(crate) const DLSTRING_U16_LENGTH_OFFSET: usize = 0x18; // code units
+pub(crate) const DLSTRING_U16_CAPACITY_OFFSET: usize = 0x20; // code units; SSO threshold > 7 -> heap
+pub(crate) const DLSTRING_U16_ENCODING_OFFSET: usize = 0x28; // u8 DLCharacterSet
+pub(crate) const DLSTRING_U16_SSO_THRESHOLD: usize = 7;
+/// The now-loading background image symbols are MENU_Load_00001..00034; match by prefix.
+pub(crate) const LOADING_BG_SYMBOL_PREFIX: &str = "MENU_Load_";
+pub(crate) static LOADING_BG_TEXTURE_REDIRECT_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static LOADING_BG_TEXTURE_REDIRECT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Times the producer-bind hook saw a MENU_Load_ symbol (a now-loading background request).
+pub(crate) static LOADING_BG_TEXTURE_REDIRECT_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+/// Times we successfully forged + injected our portrait TPF cap on the rti (the proof oracle: >0
+/// means our texture was bound as the loading-screen background).
+pub(crate) static LOADING_BG_TEXTURE_REDIRECT_COMMITS: AtomicUsize = AtomicUsize::new(0);
+/// Last forge outcome code: 1=injected, 2=tpf-build-fail, 3=createrescap-null, 4=alloc-null.
+pub(crate) static LOADING_BG_TEXTURE_REDIRECT_LAST_SYMBOL_MATCH: AtomicUsize = AtomicUsize::new(0);
+/// Last forged TpfFileCap pointer.
+pub(crate) static LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Times we re-bound the live offscreen-RT CSGxTexture into the already-forged now-loading container
+/// AFTER the bind (the now-loading background binds ~15-17s, BEFORE our post-Continue renderer's RT is
+/// live, and never re-binds -- so the live portrait must be swapped into the displayed container after the
+/// fact). >0 means the loading screen's displayed background is now sampling our live animated portrait.
+pub(crate) static LOADING_BG_LIVE_GX_REBINDS: AtomicUsize = AtomicUsize::new(0);
+/// The live CSGxTexture currently re-bound into the now-loading container (telemetry/sweep).
+pub(crate) static LOADING_BG_LIVE_GX_BOUND: AtomicUsize = AtomicUsize::new(0);
+/// Diagnostic: total calls into the replace-bind hook (every symbol, ungated), so we can tell
+/// whether `FUN_140d69880` is even on the now-loading background path vs the producer cache-hit path.
+pub(crate) static LOADING_BG_REPLACE_BIND_TOTAL_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// The kept-alive portrait `CSGxTexture` captured during ProfileSelect (0 until captured). When set,
+/// the forge swaps it into its TpfResCap container's TexResCap so the loading screen shows the real
+/// rendered character portrait instead of the placeholder checker.
+pub(crate) static LOADING_BG_PORTRAIT_GX_KEPT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LOADING_BG_PORTRAIT_GX_CAPTURE_HITS: AtomicUsize = AtomicUsize::new(0);
+/// The live profile-portrait offscreen render target, read back via D3D12 into CPU RGBA8 once the
+/// character head has rendered (`portrait_real_pixels_enabled()` gate). Tuple = (width, height,
+/// tightly-packed `width*height*4` RGBA8 pixels). `None` until a successful readback. When `Some`,
+/// the now-loading forge builds its TPF from these REAL pixels instead of the magenta/yellow checker.
+pub(crate) static LOADING_BG_PORTRAIT_RGBA: std::sync::Mutex<Option<(u32, u32, Vec<u8>)>> =
+    std::sync::Mutex::new(None);
+/// 1 if the read-back portrait has any non-black texel (max(R,G,B) > 24) inside a center 64x64
+/// region, else 0 (a black/blank capture). Exposed as `oracle_loading_bg_portrait_gx_nonblack`.
+pub(crate) static LOADING_BG_PORTRAIT_NONBLACK: AtomicUsize = AtomicUsize::new(0);
+/// Bumped every time LOADING_BG_PORTRAIT_RGBA is REPLACED with a fresh capture. The present-overlay
+/// composite watches this: when it changes, the overlay re-uploads its source texture from the new RGBA,
+/// so a LIVE per-frame (throttled) readback of the built renderer's offscreen makes the displayed head
+/// UPDATE (look-at follows) instead of freezing on the first captured frame.
+pub(crate) static LOADING_BG_PORTRAIT_RGBA_VERSION: AtomicUsize = AtomicUsize::new(0);
+/// One-shot log latch for the live-display-feed (built RT content -> overlay).
+pub(crate) static PROFILE_LIVE_FEED_LOGGED: AtomicUsize = AtomicUsize::new(0);
+/// The LOADING_BG_PORTRAIT_RGBA_VERSION last uploaded into the displayed now-loading texture by
+/// maybe_reforge_loading_portrait. usize::MAX = never. Re-upload only when the version advances (new live
+/// frame) so the displayed loading-screen head TRACKS the look-at, while never per-frame-hammering a
+/// dim-mismatched/freed texture (the old crash). One log latch for the first successful upload.
+pub(crate) static LOADING_BG_REFORGE_VERSION: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static LOADING_BG_REFORGE_LOGGED: AtomicUsize = AtomicUsize::new(0);
+/// 1 if the read-back portrait looks like a SOLID-COLOR-CHECKER PLACEHOLDER (magenta/white|yellow cover or
+/// an unrendered RT) rather than a real shaded 3D head -- see `portrait_looks_like_checker`. The
+/// `..._gx_nonblack` flag alone is a FALSE POSITIVE (a bright checker passes max(R,G,B)>24), so REAL-face
+/// proof = `nonblack && !is_checker`. Exposed as `oracle_loading_bg_portrait_is_checker`.
+pub(crate) static LOADING_BG_PORTRAIT_IS_CHECKER: AtomicUsize = AtomicUsize::new(0);
+/// Read-back portrait dimensions packed as `(width << 16) | height`. 0 until captured. Exposed as
+/// `oracle_loading_bg_portrait_gx_dims`.
+pub(crate) static LOADING_BG_PORTRAIT_DIMS: AtomicUsize = AtomicUsize::new(0);
+/// The DXGI_FORMAT value of the read-back offscreen render target. 0 until captured. Exposed as
+/// `oracle_loading_bg_portrait_gx_format`.
+pub(crate) static LOADING_BG_PORTRAIT_FORMAT: AtomicUsize = AtomicUsize::new(0);
+/// CSMenuProfModelRend "marked-for-delete" byte (renderer+0x756) and the CSChrAsmModelIns* pointer
+/// (renderer+0x778) that is non-null only once the character model has finished async-loading -- the
+/// real "portrait is rendering" gate (the +0x754/+0x755 bytes are only a setup-submitted latch).
+pub(crate) const PROFILE_RENDERER_MARKED_DELETE_OFFSET: usize = 0x756;
+pub(crate) const PROFILE_RENDERER_MODEL_INS_OFFSET: usize = 0x778;
+/// `CSMenuAsmModelRend`'s row-major model transform (`renderer+0x900..0x93f`), copied into the
+/// rendered `CSModelIns` every rabbit-task tick by `FUN_140bba820`. The identity default is loaded from
+/// `FLOAT_ARRAY_1430b07a0`; when this changes, its Z axis is the model's backing orientation and the
+/// portrait camera should orbit to the model's face, not a hard-coded screen yaw.
+pub(crate) const PROFILE_RENDERER_MODEL_MATRIX_OFFSET: usize = 0x900;
+/// Per-slot model-facing yaw latched from the first live model pose/matrix and added to the profile camera
+/// orbit. This keeps the loading portrait facing the viewer even when the model/root pose is off-axis.
+pub(crate) static PROFILE_CAM_FACE_YAW: std::sync::Mutex<[Option<f32>; 10]> =
+    std::sync::Mutex::new([None; 10]);
+pub(crate) static PROFILE_CAM_FACE_YAW_LATCHED_MASK: AtomicUsize = AtomicUsize::new(0);
+/// `CSGxTexture` GPU-resource child pointer (gx+0x10): non-null once at least one offscreen draw has
+/// uploaded the texture. Refcount is the uniform DLReferenceCountObject i32 at obj+0x8.
+pub(crate) const GX_TEXTURE_GPU_RESOURCE_OFFSET: usize = 0x10;
+pub(crate) const GX_TEXTURE_REFCOUNT_OFFSET: usize = 0x8;
+/// The GPU child of a profile-portrait `CSGxTexture` (gx+0x10) may be a `CSOffscreenGxTexture` C++
+/// WRAPPER rather than a raw `ID3D12Resource`. Its C++ vtable lives at `game_base + this RVA`; when
+/// `*(gpu_child)` equals that absolute address the gpu_child is a wrapper and the real
+/// `ID3D12Resource` lives at one of the offsets below. The underlying COM resource MUST be resolved
+/// before any D3D12 call -- invoking a COM vtable method on a non-COM pointer crashes. See
+/// `experiments::gpu_readback::readback_offscreen_rgba8`.
+pub(crate) const PROFILE_GX_GPU_WRAPPER_VTABLE_RVA: usize = 0x2b80278;
+/// Wrapper -> real `ID3D12Resource` primary slot (`gpu_child + 0x18`); used when non-null.
+pub(crate) const PROFILE_GX_GPU_WRAPPER_RESOURCE_PRIMARY_OFFSET: usize = 0x18;
+/// Wrapper -> real `ID3D12Resource` fallback slot (`gpu_child + 0x10`); used when +0x18 is null.
+pub(crate) const PROFILE_GX_GPU_WRAPPER_RESOURCE_FALLBACK_OFFSET: usize = 0x10;
+/// DETERMINISTIC content-RT resolution chain (RE'd from a live /proc dump 2026-06-29, bd
+/// live-portrait-d3d12-resource-buried-in-gx-wrapper-nest). The vkd3d ID3D12Resource is 4 fixed hops from
+/// the CSGxTexture -- following these avoids the memory-scan+QI that races the teardown free:
+///   srv_gx +0x10  -> CSOffscreenGxTexture  (vt game_base+PROFILE_GX_GPU_WRAPPER_VTABLE_RVA 0x2b80278)
+///   +0x18         -> holder A              (vt game_base+0x2f05a60)
+///   +0x40         -> holder B              (vt game_base+0x30a3ef0)
+///   +0x20         -> ID3D12Resource        (vt in d3d12core.dll)
+/// Each intermediate's vtable is validated so a layout change fails closed (no readback) instead of
+/// dereferencing garbage. The final object's vtable must land in a d3d12 module.
+pub(crate) const GX_RES_CHAIN_HOLDER_A_OFFSET: usize = 0x18;
+pub(crate) const GX_RES_CHAIN_HOLDER_A_VTABLE_RVA: usize = 0x2f05a60;
+pub(crate) const GX_RES_CHAIN_HOLDER_B_OFFSET: usize = 0x40;
+pub(crate) const GX_RES_CHAIN_HOLDER_B_VTABLE_RVA: usize = 0x30a3ef0;
+pub(crate) const GX_RES_CHAIN_RESOURCE_OFFSET: usize = 0x20;
+/// TpfResCap container (the 0xb8 object CreateTpfResCap returns): texture count and the array of
+/// `TexResCap*`. We rewrite `array[0]`'s `+0x78` CSGxTexture to the kept portrait.
+pub(crate) const TPF_RESCAP_CONTAINER_COUNT_OFFSET: usize = 0x78;
+pub(crate) const TPF_RESCAP_CONTAINER_ARRAY_OFFSET: usize = 0x80;
+/// No-delay portrait render: the ProfileSelect portrait is a live per-frame 3D model render that the
+/// fast autoload never finishes before the Continue teardown. To get it WITHOUT delaying boot we
+/// SPARE slot-0's renderer from the teardown and keep driving its offscreen render into the (free,
+/// multi-second) now-loading screen until the character model latches, then capture it.
+/// Teardown-all `FUN_1409b2f00` (deobf 0x1409b2db0): unconditional 10-slot loop of
+/// `FUN_140e77540(GLOBAL_CSDelayDeleteMan, table[i]); table[i]=0`. The enqueue is null-guarded, so we
+/// null `table[slot]` before the original to spare that slot (its enqueue becomes a no-op).
+pub(crate) const PROFILE_RENDERER_TEARDOWN_RVA: usize = 0x9b2db0;
+/// Offscreen-draw driver `FUN_140bb8d90` (deobf 0x140bb8ca0): `fn(renderer)` -> submits the offscreen
+/// render via `FUN_140bb73a0(*(renderer+0xa8))`, reading the global GxDrawContext itself (no arg).
+/// The menu-owned per-frame caller stops at Continue, so we call this ourselves each frame.
+pub(crate) const PROFILE_OFFSCREEN_DRIVE_RVA: usize = 0xbb8ca0;
+/// Count of render-thread offscreen drives issued from the Present hook (gate
+/// `portrait_render_drive_enabled`). Exposed as `oracle_portrait_render_drive_hits` -- proves the drive
+/// ran on the render thread during loading; pair with `oracle_loading_bg_portrait_is_checker` flipping to
+/// 0 (real face) as the success signal that the drive actually rasterized the head into the RT.
+pub(crate) static PROFILE_RENDER_DRIVE_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Profile-portrait draw step `FUN_1409aa3e0` (dump VA) -> deobf RVA 0x1409aa290 (content-unique, shift
+/// -0x150, ground-truthed via dump-deobf-shift). No-arg: loops the 10-slot renderer title table at
+/// base+0x3d6d8d0 and, for each non-null slot, calls the offscreen-draw thunk (PROFILE_OFFSCREEN_DRIVE_RVA)
+/// to rasterize that portrait into its offscreen RT. The engine only invokes it on profile data-change
+/// (e.g. the reset/save menu action `FUN_14082bb20`), NOT per frame -- so the thumbnails are static. We
+/// call it ourselves every frame from a DRAW-PHASE recurring task (CSTaskGroupIndex::GameSceneDraw),
+/// where a GX frame is actively recording so the GX subcontext pool pop succeeds (it returns 0 -> a black
+/// no-op at FrameBegin, before the frame records -- the real reason a game-task-thread drive went black).
+pub(crate) const PROFILE_DRAW_STEP_RVA: usize = 0x9aa290;
+/// Profile-renderer table BUILDER `FUN_1409af4f0` (dump) -> deobf RVA 0x1409af3a0 (content-unique, shift
+/// -0x150). No-arg: tears down the existing 10 (FUN_1409b2f00, no-op on an already-null table) then
+/// HeapAllocs (0xa30, align 0x10, GLOBAL_GfxHeapAllocator) + ctor's a fresh CSMenuProfModelRend into each
+/// of the 10 title-table slots (base+0x3d6d8d0), each self-registering its build/draw tasks with ResMan.
+/// We call it ONCE post-Continue (now-loading, table torn down) to repopulate the table so the existing
+/// mark+refresh feed + per-frame look-at + draw + oracle re-engage on the loading screen. RE-confirmed the
+/// ctor is self-contained off process-lifetime singletons (no TitleTopDialog dependency).
+pub(crate) const PROFILE_TABLE_BUILDER_RVA: usize = 0x9af3a0;
+/// One-shot latch: set when we've rebuilt the profile table for the current load window; cleared when
+/// now-loading drops, so each load rebuilds at most once (no per-frame churn / teardown thrash).
+pub(crate) static PROFILE_LOADSCREEN_REBUILT: AtomicUsize = AtomicUsize::new(0);
+/// Count of post-Continue profile-table (re)builds for the loading-screen portrait (telemetry/sweep).
+pub(crate) static PROFILE_LOADSCREEN_TABLE_BUILDS: AtomicUsize = AtomicUsize::new(0);
+/// Consecutive ticks the profile-renderer title table has been observed EMPTY. The menu's own
+/// teardown+rebuild is synchronous (FUN_1409af3a0 tears down then re-ctors in one call), so the table is
+/// never seen empty across our async ticks during menu cycling -- only a real Continue (teardown with NO
+/// rebuild) leaves it sustained-empty. A short streak therefore fires the post-Continue own-renderer build
+/// EARLY (right after teardown, ~17s) instead of waiting for the now-loading flag (~21s on a fast load,
+/// too late for ResMan to build the model). Reset to 0 whenever a populated table is observed.
+pub(crate) static PROFILE_TABLE_EMPTY_STREAK: AtomicUsize = AtomicUsize::new(0);
+/// Empty-table streak (ticks) that triggers the early post-Continue own-renderer build. Small: the menu
+/// never shows a multi-tick empty table, so even a few frames unambiguously means "Continue happened."
+pub(crate) const PROFILE_TABLE_EMPTY_STREAK_BUILD_THRESHOLD: usize = 3;
+/// Set once we've observed a POPULATED profile table (the menu built it -> the engine/ResMan are up and we
+/// are past the title screen). The early empty-streak build MUST require this: at boot the table is empty
+/// too, and calling the builder before the engine is ready crashes inside FUN_1409af3a0 (observed
+/// 2026-06-29: access-violation in the builder at title, game_man unresolved). A later empty table after
+/// this latch is set therefore means a genuine Continue teardown, when the builder is safe to call.
+pub(crate) static PROFILE_TABLE_WAS_POPULATED: AtomicUsize = AtomicUsize::new(0);
+/// The spared slot-0 CSMenuProfModelRend renderer (0 until the Continue teardown spares it). Its
+/// global ResMan model-update task keeps loading/animating the model while the object lives.
+pub(crate) static LOADING_BG_PORTRAIT_SPARED_RENDERER: AtomicUsize = AtomicUsize::new(0);
+/// Pre-recorded spare CANDIDATE: the target slot's renderer pointer, captured by force_profile_render at
+/// the MENU on a frame where its model is actually built (+0x778 valid). Because the menu cycles model_ins
+/// (~4-11% of frames), capturing the candidate during the long menu dwell is robust; the teardown-spare
+/// hook then protects THIS exact renderer (nulls its table entry) regardless of whether model_ins happens
+/// to be valid at the single teardown instant. 0 = none recorded yet.
+pub(crate) static PROFILE_SPARE_CANDIDATE: AtomicUsize = AtomicUsize::new(0);
+/// The model_ins (renderer+0x778) captured at the instant the spare candidate is recorded -- when the
+/// model is still built. By spare-time the renderer's own +0x778 field is already zeroed, so this holds
+/// the only reference to the model object; used to probe whether the model OBJECT survives Continue (vs
+/// just the renderer's pointer being cleared) and, if it does, to re-attach it post-Continue.
+pub(crate) static PROFILE_SPARE_CANDIDATE_MODEL: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_RENDERER_TEARDOWN_HOOK_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static PROFILE_RENDERER_TEARDOWN_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_RENDERER_SPARE_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Minimal-delay portrait hold: the autoload's load-commit (`maybe_fire_tfc_continue`) waits at the
+/// open main menu -- where the ProfileSelect render context is valid -- until the character portrait
+/// has rendered + been captured (`LOADING_BG_PORTRAIT_GX_KEPT` set), or this many recurring-task
+/// ticks elapse, then proceeds. ~60 ticks/s, so 240 ≈ a ~4s cap on the added delay.
+pub(crate) static PORTRAIT_HOLD_WAIT_TICKS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const PORTRAIT_HOLD_MAX_TICKS: usize = 240;
+/// Profile-render refresh `FUN_1409aa7d0` (deobf 0x1409aa680): no-arg; gets GameDataMan ProfileSummary
+/// and, per enabled slot with a profile + `+0x754/+0x755 == 0`, equips ChrAsm + copies FaceData +
+/// kicks the async character-model build. The Continue autoload never runs it for our slot (req754=0),
+/// so we call it ourselves once the renderer table is populated to REQUEST the portrait model render.
+pub(crate) const PROFILE_RENDERER_REFRESH_RVA: usize = 0x9aa680;
+pub(crate) static PROFILE_REFRESH_KICKED: AtomicUsize = AtomicUsize::new(0);
+/// Bitmask (bit per slot 0..9) of which profile-renderer slots have had their forced render dumped
+/// to `portrait-capture-slot{N}.bin` -- so the all-slot diagnostic dumps each slot exactly once.
+pub(crate) static PROFILE_SLOT_DUMP_MASK: AtomicUsize = AtomicUsize::new(0);
+/// Per-call tick counter for `force_profile_render_tick`, used to re-fire the model build on a timer
+/// (the timing test: a LATER rebuild, after LOAD GAME has loaded each slot's FaceData, should render
+/// the real character instead of the default).
+pub(crate) static PROFILE_FORCE_TICK_COUNTER: AtomicUsize = AtomicUsize::new(0);
+/// Post-Continue feed window: ticks remaining during which the mark+refresh feed runs frequently (not just
+/// every 240 ticks) to DRIVE the freshly-built renderers' async ResMan model build to completion and keep
+/// it latched. Set when we build our own table post-Continue; decremented each force_profile_render_tick.
+/// The menu kept its models live by feeding across a long dwell; the brief now-loading window needs the
+/// feed driven continuously or the build is kicked once and decays (observed 2026-06-29: built[m] 10->0).
+pub(crate) static PROFILE_LOADSCREEN_FEED_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// One-shot log latch for the IMMEDIATE build-kick (edge-triggered when the autoload target slot's
+/// fingerprint first goes real and its renderer's +0x754 build-request latch is still 0). The kick
+/// itself is idempotent via +0x754, but the debug line should print once.
+pub(crate) static PROFILE_REAL_SLOT_KICK_LOGGED: AtomicUsize = AtomicUsize::new(0);
+/// How many ticks to keep the post-Continue feed window open after an own-renderer build (~bounded so it
+/// can't churn forever). Generous enough to outlast a real load; the refresh is idempotent so extra feeds
+/// no-op once the model is built.
+pub(crate) const PROFILE_LOADSCREEN_FEED_WINDOW_TICKS: usize = 1800;
+/// HIGHER-RES. Per-slot offscreen base-size table read by `CSMenuProfModelRend` ctor (0x140bbe010):
+/// `width = *(u32*)(base+0x3b39848 + slot*0x20)`, `height = *(u32*)(...+0x4)` -> packed u64
+/// `(height<<32)|width`. Static init `FUN_1400a7bb0` writes every slot `0x8000000080` (base 128x128;
+/// the menu's x2 supersample makes the observed 256x256 RT). Patch each entry that still holds the
+/// init value to a larger base BEFORE the renderers are constructed (TitleTopDialog ctor) so the
+/// offscreen render targets are bigger; the D3D12 readback reads desc.Width/Height dynamically.
+pub(crate) const PROFILE_OFFSCREEN_SIZE_TABLE_RVA: usize = 0x3b39848;
+pub(crate) const PROFILE_OFFSCREEN_SIZE_TABLE_STRIDE: usize = 0x20;
+/// The value `FUN_1400a7bb0` writes (base 128x128 = `(128<<32)|128`); self-validate before patching.
+pub(crate) const PROFILE_OFFSCREEN_SIZE_INIT: usize = 0x8000000080;
+/// Target base 1024x1024 = `(1024<<32)|1024`. We ALSO zero the per-slot supersample-enable byte at
+/// `row+0x8` so the engine's env-dependent x2 (`FUN_140bbeee0`: `base*2` iff global flag &&
+/// `size_struct[+0x8]`) is disabled -- giving a PREDICTABLE 1024x1024 RT instead of a settings-
+/// dependent 1024-or-2048. (We capture the RT directly, so the x2 is just a costlier render, not AA.)
+pub(crate) const PROFILE_OFFSCREEN_SIZE_TARGET: usize = 0x0000_0400_0000_0400;
+/// Byte offset within a size-table row of the per-slot supersample-enable flag (read as
+/// `size_struct[+0x8]` by `FUN_140bbeee0`); zero it to force x1.
+pub(crate) const PROFILE_OFFSCREEN_SIZE_SUPERSAMPLE_FLAG_OFFSET: usize = 0x8;
+/// One-shot latch for the higher-res offscreen-size patch.
+pub(crate) static PROFILE_SIZE_PATCHED: AtomicUsize = AtomicUsize::new(0);
+/// LIGHTING. Renderer field holding the IBL env-map-region object (`param_1[0xec]`, allocated by
+/// FUN_140b399e0, filled by the IBL build FUN_140b39a30). The IBL build stores the registered
+/// env-region id into `*envObj` ONLY when the `GILM####_rem` env map is resident; if it was skipped
+/// (GILM not resident at construction) `*envObj` stays 0 -> head is unlit/dark. So
+/// `*(renderer+0x760)` then deref again = the residency oracle (non-zero = IBL built).
+pub(crate) const PROFILE_RENDERER_ENV_REGION_OFFSET: usize = 0x760;
+// ---------------------------------------------------------------------------------------------------
+// CAMERA LEVER (custom profile-portrait viewport). VERIFIED RE 2026-06-29 -- bd
+// `camera-lever-RE-VERIFIED-offsets-and-call-addrs-2026-06-29`. The interactive-face roadmap's camera
+// function addresses were garbled (dump-vs-deobf space confusion); these are ground-truthed against the
+// Ghidra runtime dump (`pc_eldenring_runtime.1.16.1.exe`) + `scripts/dump-deobf-shift.py`.
+//
+// The `CSMenuProfModelRend` ctor (dump 0x140bbe010) sets the orbit camera ONCE from `MenuOffscrRendParam`
+// via `FUN_140bbe190`, which (a) writes the orbit fields below, (b) builds a view matrix into `+0x9e0`
+// via `FUN_140bbe480`, (c) pushes the CSPersCam (`+0x9d0`) into the offscreen render via `FUN_140bba550`.
+// We replicate steps (b)+(c) AFTER writing our own orbit fields, and never call `FUN_140bbe190` itself
+// (it re-reads the param and clobbers the orbit fields).
+//
+// All offsets are BYTE offsets from the renderer (CSMenuProfModelRend) base.
+/// Orbit look-at point, `Vec3` (x@+0x9b4, y@+0x9b8, z@+0x9bc); `w`@+0x9c0 is 1.0.
+pub(crate) const PROFILE_CAM_TARGET_OFFSET: usize = 0x9b4;
+pub(crate) const PROFILE_CAM_TARGET_W_OFFSET: usize = 0x9c0;
+/// Orbit distance (f32). Consumed sign-flipped by the matrix builder (camera sits behind the target);
+/// a SMALLER value = closer.
+pub(crate) const PROFILE_CAM_DISTANCE_OFFSET: usize = 0x9c4;
+/// Orbit yaw (f32, radians) -- horizontal turn (Y-axis rotation in the matrix builder). Confirmed by
+/// the 2026-06-29 runtime smoke: a large delta on the OTHER field (+0x9cc) shifted the framing
+/// vertically, so +0x9c8 is yaw and +0x9cc is pitch (corrects the initial swapped labels).
+pub(crate) const PROFILE_CAM_YAW_OFFSET: usize = 0x9c8;
+/// Orbit pitch (f32, radians) -- vertical tilt (X-axis rotation in the matrix builder).
+pub(crate) const PROFILE_CAM_PITCH_OFFSET: usize = 0x9cc;
+/// The embedded `CSPersCam` subobject (the `rdx` argument to the push). Its view matrix lives at
+/// CSCam+0x10 == renderer+0x9e0; `fov`@+0xa20, `aspectRatio`@+0xa24 (far=10000, near=0.05 defaults).
+pub(crate) const PROFILE_CAM_PERSCAM_OFFSET: usize = 0x9d0;
+/// The computed 4x4 view matrix (16 f32 = 64 bytes), == the CSPersCam view matrix.
+pub(crate) const PROFILE_CAM_VIEW_MATRIX_OFFSET: usize = 0x9e0;
+/// Field-of-view (f32, radians) == CSPersCam.fov.
+pub(crate) const PROFILE_CAM_FOV_OFFSET: usize = 0xa20;
+/// Aspect ratio (f32) == CSPersCam.aspectRatio.
+pub(crate) const PROFILE_CAM_ASPECT_OFFSET: usize = 0xa24;
+/// View-matrix builder `FUN_140bbe480` (dump) -> deobf 0x140bbe390 (shift -0xf0, content-unique).
+/// `fn(renderer /rcx/, out: *mut f32[16] /rdx/) -> *mut f32`. Pure orbit->view-matrix math (sinf/cosf
+/// of pitch/yaw, target, -distance); reads renderer+0x9b4/+0x9c4/+0x9c8/+0x9cc; no render context,
+/// allocation, or lock.
+pub(crate) const PROFILE_CAM_BUILD_MATRIX_RVA: usize = 0xbbe390;
+/// Camera push `FUN_140bba550` (dump) -> deobf 0x140bba460 (shift -0xf0, content-unique).
+/// `fn(renderer /rcx/, persCam = renderer+0x9d0 /rdx/)`. Copies the cam matrix+projection into the
+/// offscreen render's view-state (`*(renderer+0xa8)`) and recomputes derived matrices/viewport. Verified
+/// pure CPU state (no GPU submit / allocation / lock) -- safe on the CSTaskImp game thread; it is the
+/// exact path the engine runs at renderer construction.
+pub(crate) const PROFILE_CAM_PUSH_RVA: usize = 0xbba460;
+/// Custom-viewport transform applied to the engine's latched baseline orbit. Produces a visibly closer,
+/// tilted portrait framing vs the engine's straight-on default. These exact values are the framing the
+/// user approved in the 2026-06-29 runtime smoke (a tight zoom with a strong upward pitch into the
+/// face); the deltas are correctly named after the pitch/yaw fix and remain free knobs to retune.
+// ZOOM-OUT (2026-06-30, user: loading-screen face was way too zoomed -- only forehead/eyes visible).
+// Pull the camera BACK past the engine baseline (>1.0) to a head-and-shoulders product shot, and drop the
+// strong upward pitch that framed the forehead. Free knobs -- retune from the user's image.
+pub(crate) const PROFILE_CAM_DISTANCE_SCALE: f32 = 1.7;
+/// Slight vertical tilt only (was 0.40 = a forehead close-up).
+pub(crate) const PROFILE_CAM_PITCH_DELTA_RAD: f32 = 0.05;
+/// Head-on by default (2026-06-30, user): zero horizontal turn so the camera faces the character
+/// straight-on (was -0.06, a slight off-axis turn).
+pub(crate) const PROFILE_CAM_YAW_DELTA_RAD: f32 = 0.0;
+pub(crate) const PROFILE_CAM_FOV_SCALE: f32 = 1.0;
+/// Per-slot latched baseline orbit, captured ONCE (before the first override write) so every per-tick
+/// override is derived from an immutable baseline -- drift-free and clobber-proof even if a refresh
+/// re-runs the engine camera setup. `Copy` so the array-repeat initializer below is const.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ProfileCamBaseline {
+    pub target: [f32; 3],
+    pub distance: f32,
+    pub pitch: f32,
+    pub yaw: f32,
+    pub fov: f32,
+}
+pub(crate) static PROFILE_CAM_BASELINE: std::sync::Mutex<[Option<ProfileCamBaseline>; 10]> =
+    std::sync::Mutex::new([None; 10]);
+/// Camera-override telemetry (RAM semaphores): total applies (matrix build + push), bit-per-slot
+/// latched-baseline mask, last applied slot, and whether the last built view matrix was all-finite.
+pub(crate) static PROFILE_CAM_APPLY_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_CAM_LATCHED_MASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_CAM_LAST_SLOT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static PROFILE_CAM_LAST_MATRIX_OK: AtomicUsize = AtomicUsize::new(0);
+/// Offscreen render camera-params POD (the ~0xc4-byte block `FUN_140cca450` blits, dump 0x140cca450).
+/// VERIFIED RE 2026-06-29. Reached via the camera push: `FUN_140bba550` -> `FUN_140bb7da0` ->
+/// `FUN_141ad94e0` -> `FUN_140cca450(dst = *(offscreenRend+0x20) + 0xd0, src = *(offscreenRend+0x28))`.
+/// The leading 4x4 view matrix at +0x00 is written by `FUN_141a536b0` (copies exactly 0x40 bytes); the
+/// 1280x720 (0x500x0x2d0) viewport rects and the fov/aspect copies are written by `FUN_140b12260`.
+/// Fields named where the RE is confident; the rest are kept as offset-named `u32`/`f32` so the exact
+/// layout is preserved and editable as future RE resolves them. This represents the 0xc4 bytes
+/// `FUN_140cca450` copies; the containing allocation may be larger. `#[repr(C)]` with all-4-byte fields
+/// keeps every field naturally aligned at its true offset (the engine reads some as unaligned u64).
+/// Documentary/layout type: never constructed at runtime (the engine populates the real block) -- kept
+/// for future view/use/edit, with the size/align asserts below as the compile-time layout guard.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub(crate) struct OffscreenRenderCamParams {
+    /// +0x00: 4x4 view matrix (row-major as the engine stores it). Written by `FUN_141a536b0`.
+    pub view_matrix: [f32; 16],
+    /// +0x40: inferred camera position / extra row (set outside the copy path; unconfirmed).
+    pub field_0x40: [f32; 4],
+    /// +0x50: field-of-view (copied from view-state+0x50 by `FUN_140b12260`).
+    pub fov: f32,
+    /// +0x54, +0x58: inferred near/far plane (copied from view-state+0x58/+0x5c).
+    pub field_0x54: f32,
+    pub field_0x58: f32,
+    /// +0x5c/+0x60: primary viewport width/height (set to 1280/720 by `FUN_140b12260`).
+    pub viewport_width_a: u32,
+    pub viewport_height_a: u32,
+    /// +0x64, +0x68: unknown.
+    pub field_0x64: u32,
+    pub field_0x68: u32,
+    /// +0x6c: aspect ratio (copied from view-state+0x54 by `FUN_140b12260`).
+    pub aspect_ratio: f32,
+    /// +0x70: unknown (NOT copied by `FUN_140cca450`; present in the layout).
+    pub field_0x70: u32,
+    /// +0x74..+0x9c: unknown.
+    pub field_0x74: u32,
+    pub field_0x78: u32,
+    pub field_0x7c: u32,
+    pub field_0x80: u32,
+    pub field_0x84: u32,
+    pub field_0x88: u32,
+    pub field_0x8c: u32,
+    pub field_0x90: u32,
+    pub field_0x94: u32,
+    pub field_0x98: u32,
+    pub field_0x9c: u32,
+    /// +0xa0..+0xb7: three more viewport width/height rects (also 1280/720; scissor/full/etc.).
+    pub viewport_width_b: u32,
+    pub viewport_height_b: u32,
+    pub viewport_width_c: u32,
+    pub viewport_height_c: u32,
+    pub viewport_width_d: u32,
+    pub viewport_height_d: u32,
+    /// +0xb8..+0xc3: unknown (tail of the copied region).
+    pub field_0xb8: u32,
+    pub field_0xbc: u32,
+    pub field_0xc0: u32,
+}
+const _: () = assert!(core::mem::size_of::<OffscreenRenderCamParams>() == 0xc4);
+const _: () = assert!(core::mem::align_of::<OffscreenRenderCamParams>() == 4);
+// ---------------------------------------------------------------------------------------------------
+// LOOK-AT LEVER (portrait head/eyes follow the mouse cursor). VERIFIED RE 2026-06-29 -- bd
+// `portrait-lookat-RE-VERIFIED-2026-06-29`. ER's c0000 rig has NO eye bone: the eyes are FaceGen mesh
+// rigidly skinned to the single "Head" bone, so gaze is delivered by rotating Spine2->Neck->Head; the
+// eyes follow because they ride the head. We rotate those bones' LOCAL quaternions toward the cursor.
+//
+// REACH (per tick, from renderer R = CSMenuProfModelRend*): require *(R+0x778) != 0 (model built);
+// X = *(R + ANIM_LOCATION) ; importer = *(X + IMPORTER) ; poseHolder = importer + POSEHOLDER (embedded,
+// not a deref). Verified at FUN_140bba7d0 + GetPosHolder (lea rax,[rcx+0x48]).
+pub(crate) const PROFILE_LOOKAT_ANIM_LOCATION_OFFSET: usize = 0x948;
+pub(crate) const PROFILE_LOOKAT_IMPORTER_OFFSET: usize = 0x20;
+pub(crate) const PROFILE_LOOKAT_POSEHOLDER_OFFSET: usize = 0x48;
+/// `CSFD4LocationHkaPoseImporter::PoseHolder` (0x50) field offsets.
+pub(crate) const POSEHOLDER_SKELETON_OFFSET: usize = 0x0; // hkaSkeleton*
+pub(crate) const POSEHOLDER_LOCAL_BONE_DATA_OFFSET: usize = 0x8; // hkArray<BoneData>.data
+pub(crate) const POSEHOLDER_MODEL_BONE_DATA_OFFSET: usize = 0x18; // hkArray<BoneData>.data
+pub(crate) const POSEHOLDER_DIRTY_FLAGS_OFFSET: usize = 0x28; // uint*[boneCount] bitflags (stride 4)
+pub(crate) const POSEHOLDER_IS_UPDATED_OFFSET: usize = 0x38; // bool
+/// `BoneData` (0x30): xyz @+0x0, q (quaternion x,y,z,w) @+0x10, scale @+0x20.
+pub(crate) const BONE_DATA_STRIDE: usize = 0x30;
+pub(crate) const BONE_DATA_Q_OFFSET: usize = 0x10;
+/// `hkaSkeleton` (0x90, get_structure-verified) + `hkaBone` (0x10) field offsets.
+pub(crate) const HKA_SKELETON_PARENT_INDICES_DATA_OFFSET: usize = 0x20; // hkArray<i16>.data
+pub(crate) const HKA_SKELETON_BONES_DATA_OFFSET: usize = 0x30; // hkArray<hkaBone>.data
+pub(crate) const HKA_SKELETON_BONES_SIZE_OFFSET: usize = 0x38; // i32 bone count
+pub(crate) const HKA_BONE_STRIDE: usize = 0x10;
+pub(crate) const HKA_BONE_NAME_OFFSET: usize = 0x0; // hkStringPtr (char* ASCII; mask bit0 owner flag)
+/// `dirtyFlags[idx] |= this` marks a bone's model-space transform stale so `updateBoneModelSpace`
+/// rebuilds it (and its descendants) from the local pose before the offscreen render.
+pub(crate) const POSE_DIRTY_MODEL_SPACE_BIT: u32 = 0x2;
+/// Bone names we drive (standard ER c0000 names, confirmed via the ragdoll bone map FUN_141d700c0).
+pub(crate) const LOOKAT_BONE_HEAD: &str = "Head";
+pub(crate) const LOOKAT_BONE_NECK: &str = "Neck";
+pub(crate) const LOOKAT_BONE_SPINE2: &str = "Spine2";
+/// Max bones we will scan/dump (a c0000 skeleton is well under this; bounds the runtime enumeration).
+pub(crate) const LOOKAT_MAX_BONES: usize = 512;
+/// Cursor -> look angle gains (radians at the window edge). Head carries the bulk (eyes are welded to
+/// it); neck/spine2 add a natural distributed turn. Yaw = horizontal, pitch = vertical. SIGN + which
+/// local bone axis each maps to need ONE runtime visual calibration (the portrait camera mirrors L/R).
+/// GAIN CALIBRATION IS BLOCKED until the model faces the camera (2026-06-30): once the posed model
+/// re-rasterizes per frame, the rendered head shows the BACK of the head at BOTH cursor extremes AND at
+/// center (look-at~0) -- so the model root/skeleton renders facing AWAY, independent of these gains
+/// (cutting them 6x in calib-6 changed nothing). Until the facing is fixed (camera orbit to the model's
+/// front; cf the concurrent PROFILE_CAM_FACE_YAW effort) the face is not visible, so the look-at strength
+/// cannot be visually tuned. Keeping the original gains (they gave a clear ~23-37/px head-turn signal).
+pub(crate) const LOOKAT_HEAD_YAW_GAIN: f32 = 0.34;
+pub(crate) const LOOKAT_HEAD_PITCH_GAIN: f32 = 0.22;
+pub(crate) const LOOKAT_NECK_YAW_GAIN: f32 = 0.15;
+pub(crate) const LOOKAT_NECK_PITCH_GAIN: f32 = 0.10;
+pub(crate) const LOOKAT_SPINE2_YAW_GAIN: f32 = 0.08;
+pub(crate) const LOOKAT_SPINE2_PITCH_GAIN: f32 = 0.05;
+/// Sign flips for runtime calibration without a rebuild loop (set from the first visual check).
+pub(crate) const LOOKAT_YAW_SIGN: f32 = 1.0;
+pub(crate) const LOOKAT_PITCH_SIGN: f32 = 1.0;
+/// Per-renderer-slot cached look-at state: the resolved Head/Neck/Spine2 bone indices and the latched
+/// base (idle) local quaternions, captured ONCE so the per-tick rotation composes from an immutable
+/// base (drift-free). `-1` index = bone not found in this slot's skeleton.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LookatSlot {
+    pub head: i32,
+    pub neck: i32,
+    pub spine2: i32,
+    /// Idle (clean) LOCAL quaternions for Head/Neck/Spine2, latched ONCE from the freshly-rebuilt
+    /// pose so the per-frame look-at composes `base ⊗ delta` (drift-free) instead of `current ⊗ delta`
+    /// (which compounds at 60 Hz when the draw-phase task drives every frame). Re-latched on rebuild
+    /// (the slot is reset to `None` each model rebuild, so this re-captures the clean pose).
+    pub head_base: [f32; 4],
+    pub neck_base: [f32; 4],
+    pub spine2_base: [f32; 4],
+    pub base_latched: bool,
+}
+pub(crate) static PROFILE_LOOKAT_SLOTS: std::sync::Mutex<[Option<LookatSlot>; 10]> =
+    std::sync::Mutex::new([None; 10]);
+/// Look-at telemetry (RAM semaphores): apply count, resolved bone indices (packed), live bone count,
+/// last normalized cursor (packed i16 x/y * 1000), and a one-shot bone-name dump latch (bit per slot).
+pub(crate) static PROFILE_LOOKAT_APPLY_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_LOOKAT_HEAD_IDX: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static PROFILE_LOOKAT_NECK_IDX: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static PROFILE_LOOKAT_SPINE2_IDX: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static PROFILE_LOOKAT_BONE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_LOOKAT_LAST_CURSOR: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_LOOKAT_BONES_DUMPED_MASK: AtomicUsize = AtomicUsize::new(0);
+/// MOUSE-TRACK PROOF latch (selftest only): bit 0/1/2 set once the live head has been dumped at a
+/// look-left / center / look-right yaw bucket (`portrait-capture-slot{200,201,202}.bin`). The three
+/// dumps are visually distinct head poses, converting the ambiguous per-frame `rt changed%` into a
+/// decisive before/after that the head pose tracks the drive signal (= the normalized cursor in
+/// product). Mask == 0b111 once all three captured (`oracle_profile_lookat_track_buckets`).
+pub(crate) static PROFILE_LOOKAT_TRACK_BUCKETS: AtomicUsize = AtomicUsize::new(0);
+/// DIAGNOSTIC: per-frame readback outcomes -- how many readbacks returned content, and how many of those
+/// were classified as a checker/placeholder (so did NOT publish). `oracle_profile_readback_some` /
+/// `oracle_profile_readback_checker`; `_some - _checker` == the publish count.
+pub(crate) static PROFILE_READBACK_SOME: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_READBACK_CHECKER: AtomicUsize = AtomicUsize::new(0);
+/// DEFERRED-READBACK DIAGNOSTIC (H2 vs H3): a readback of the content RT taken at the START of the draw
+/// tick, BEFORE this frame's `drive(r)` queues a new rasterize -- so it captures the texture state left by
+/// the PREVIOUS frame's GX work. If `_deferred_nonblack` is high while the post-drive immediate
+/// `_some - _checker` is ~4, the blackness is a cross-queue TIMING artifact (the rasterize lands but our
+/// same-tick readback races ahead of the game's GX queue) -> fix by syncing/reading at a settled point.
+/// If `_deferred_nonblack` is ALSO ~4, the rasterize genuinely is not landing in this texture (H3).
+pub(crate) static PROFILE_READBACK_DEFERRED_SOME: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_READBACK_DEFERRED_NONBLACK: AtomicUsize = AtomicUsize::new(0);
+/// One-shot latch: dump a single checker frame (slot 103) to see what the non-published frames hold.
+pub(crate) static PROFILE_CHECKER_DUMPED: AtomicBool = AtomicBool::new(false);
+/// `updateBoneModelSpace` (dump 0x141653370) -> deobf 0x141653350 (shift -0x20, content-unique). The
+/// render calls this (via `GetBoneModelSpace`) each frame to rebuild `modelSpaceBoneData` from the
+/// (anim-imported) `localSpaceBoneData` for every dirty bone. We HOOK it: before the original runs, we
+/// compose the cursor rotation onto the Head/Neck/Spine2 LOCAL quaternions and mark all bones dirty, so
+/// the original's recompute cascades our rotation into the final pose the render skins from. This is the
+/// only injection point that survives the per-frame anim re-import (a game-task write is clobbered).
+pub(crate) const UPDATE_BONE_MODEL_SPACE_RVA: usize = 0x1653350;
+/// Per-frame per-model PUSH task `FUN_140bba7d0` (dump) -> deobf RVA 0x140bba6e0 (content-unique, shift
+/// -0xf0). `fn(renderer, frame)`: if model_ins(+0x778) && X(+0x948) it reads importer=*(X+0x20) and calls
+/// the submodel propagation `FUN_1409e9ac0(model_ins, frame, importer)` which copies the importer's
+/// MODEL-space bones into every submodel's own poseHolder.modelSpaceBoneData (what the GPU skins from).
+/// We HOOK it: write our Head/Neck/Spine2 rotation into the importer PoseHolder + updateBoneModelSpace
+/// BEFORE the original, so the original propagates OUR pose to the submodels at 60 Hz with the correct
+/// `frame` arg (which we cannot synthesize -- it feeds the render-entity commit + cloth). See bd
+/// portrait-lookat-submodel-propagation-RE-2026-06-29.
+pub(crate) const PROFILE_PER_FRAME_PUSH_RVA: usize = 0xbba6e0;
+pub(crate) static PROFILE_PERFRAME_HOOK_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static PROFILE_PERFRAME_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_PERFRAME_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Profile-renderer UPDATE task `FUN_140bba820` (dump) -> deobf RVA 0x140bba730 (content-unique, shift
+/// -0xf0). `fn(renderer, FD4TaskData*)`: runs the FD4 state-machine stepper (vtable+0xc0) then refreshes the
+/// model transform/animation (anim step with `*(td+8)` delta-time, model matrix, FaceData) for the tick.
+/// Paired with the DRAW task (== `PROFILE_PER_FRAME_PUSH_RVA`). RE-confirmed: both are `CSEzUpdateTask`s
+/// the renderer self-registers; post-Continue their ResMan driver under-schedules them (~4-19x/loading
+/// screen) so the model rasterizes sparsely. We drive both ourselves per render-thread frame to make the
+/// portrait re-rasterize the live look-at pose EVERY frame. See keepalive-POOL-REFUTED-readback-crossqueue.
+pub(crate) const PROFILE_MODEL_UPDATE_TASK_RVA: usize = 0xbba730;
+/// The live `FD4TaskData*` (`param_2`/`frame` arg) the ENGINE passes to the profile DRAW task on its own
+/// (sparse) calls -- captured in `per_frame_push_hook`. The GX enqueue routes the model into the correct
+/// OFFSCREEN render pass via this context, so driving the draw with OUR draw-phase task_data renders to the
+/// wrong pass (nothing lands in the portrait RT). We reuse the most-recently-captured engine context for our
+/// per-frame drive instead. RE note: prior agents found this `frame` arg cannot be synthesized.
+pub(crate) static PROFILE_DRAW_TASK_CTX: AtomicUsize = AtomicUsize::new(0);
+/// Guard so `per_frame_push_hook` does NOT re-capture the context while WE are driving it (only the engine's
+/// own natural calls should seed `PROFILE_DRAW_TASK_CTX`).
+pub(crate) static PROFILE_IN_OUR_DRIVE: AtomicBool = AtomicBool::new(false);
+/// Diagnostic: the captured engine ctx pointer + its `+8` delta-time bits, logged once, to learn whether the
+/// context is a stable persistent structure (safe to reuse across frames) or a transient per-call one.
+pub(crate) static PROFILE_DRAW_TASK_CTX_LOGGED: AtomicUsize = AtomicUsize::new(0);
+/// Count of per-frame model DRAW-task drives we issue (the enqueue/rasterize). Pairs with
+/// `oracle_loading_bg_portrait_rgba_version`: once this is ~per-frame, the version should climb past the
+/// old stuck ~4 if the per-frame rasterize lands.
+pub(crate) static PROFILE_PERFRAME_MODEL_DRAWS: AtomicUsize = AtomicUsize::new(0);
+/// Count of direct draws of the POST-Continue SPARED renderer (via the offscreen thunk), and an oracle of
+/// whether it still has a live model post-Continue -- the persistent-model path the cycling menu can't give.
+pub(crate) static PROFILE_PERFRAME_SPARED_DRAWS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_SPARED_MODEL_OK: AtomicUsize = AtomicUsize::new(0);
+/// Q4 keepalive oracle: g_GxDrawContext global (gamebase + this RVA). The offscreen draw rasterizes only
+/// when FUN_1419e5850(ctx) returns non-zero, i.e. the GX render-pass queue is non-empty: *(ctx+0xf8) !=
+/// *(ctx+0x100). We READ those two qwords non-destructively each draw frame (NO pop) to detect whether a
+/// GX pass is queued -- the decisive runtime question for whether a post-Continue / now-loading offscreen
+/// render can produce pixels at all. Counters: total samples vs frames the queue was non-empty.
+pub(crate) const GX_DRAW_CONTEXT_RVA: usize = 0x47ef360;
+pub(crate) const GX_DRAW_CONTEXT_QUEUE_HEAD_OFFSET: usize = 0xf8;
+pub(crate) const GX_DRAW_CONTEXT_QUEUE_TAIL_OFFSET: usize = 0x100;
+pub(crate) static PROFILE_GX_QUEUE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_GX_QUEUE_NONEMPTY: AtomicUsize = AtomicUsize::new(0);
+/// GX SUBCONTEXT POOL stat offsets (RE-confirmed via Ghidra Initilize@0x1419e7d10 + pop FUN_1419e5850):
+/// the `+0xf0` member is a `Vector<subctx*>` whose floor pointer is at `+0xf8` and movable stack-top at
+/// `+0x100` (the pop checks `*(ctx+0xf8) == *(ctx+0x100)` for EMPTY, else pops `*(top-8)`, `top -= 8`). So
+/// the number of FREE (poppable) subcontexts this frame == `(*(ctx+0x100) - *(ctx+0xf8)) / 8`. The
+/// `+0x110` field is a 32-bit lazy-init USED-MASK indexed by `subctx+0x2580 & 0x1f`; once the pool has been
+/// fully exercised its popcount == N (the allocated subcontext count = `min(config + clamp(threads,2,16),
+/// 32)`). DECISIVE OBSERVABLE: if free-depth stays > 0 across the loading screen, the pool is NOT the cause
+/// of the ~4x head refresh (pop never fails) -> the black readback is a cross-queue rasterize/sync issue.
+pub(crate) const GX_DRAW_CONTEXT_POOL_FLOOR_OFFSET: usize = 0xf8;
+pub(crate) const GX_DRAW_CONTEXT_POOL_TOP_OFFSET: usize = 0x100;
+pub(crate) const GX_DRAW_CONTEXT_POOL_USED_MASK_OFFSET: usize = 0x110;
+/// Min free-depth seen across the loading screen (init to usize::MAX; a value > 0 at run end proves the
+/// pool always had a poppable subcontext -> refutes the "pop fails 96%" pool-contention theory).
+pub(crate) static PROFILE_GX_POOL_FREE_MIN: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Most-recent free-depth sample (diagnostic).
+pub(crate) static PROFILE_GX_POOL_FREE_LAST: AtomicUsize = AtomicUsize::new(0);
+/// Raw `+0x110` used-mask (popcount == N, the allocated subcontext count). Tells us the headroom under 32.
+pub(crate) static PROFILE_GX_POOL_USED_MASK: AtomicUsize = AtomicUsize::new(0);
+/// Registry of the live profile PoseHolder pointers the game-task tick has resolved as "ours" (0 =
+/// empty). The hook only applies look-at to a holder in this set; the c0000 head/neck/spine2 indices
+/// are the shared `PROFILE_LOOKAT_*_IDX` globals above, and the angle is the shared yaw/pitch below.
+pub(crate) static PROFILE_LOOKAT_HOLDERS: [AtomicUsize; 10] = [const { AtomicUsize::new(0) }; 10];
+/// Latest cursor look angles (f32 bits), written by the tick, read by the hook each render frame.
+pub(crate) static PROFILE_LOOKAT_YAW_BITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_LOOKAT_PITCH_BITS: AtomicUsize = AtomicUsize::new(0);
+/// `updateBoneModelSpace` hook trampoline / install latch / per-frame hit count (RAM semaphore that the
+/// hook is firing for our holders -- the proof the injection point is on the menu render path).
+pub(crate) static PROFILE_LOOKAT_HOOK_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static PROFILE_LOOKAT_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_LOOKAT_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Count of per-tick offscreen re-render drives (`FUN_140bb8d90`). Without this the forced portrait only
+/// re-renders at the ~4s model-rebuild cadence, so the head appears to track the cursor with seconds of
+/// lag; driving the offscreen render each tick (menu phase only -- valid GxDrawContext) makes it smooth.
+pub(crate) static PROFILE_LOOKAT_RENDER_DRIVES: AtomicUsize = AtomicUsize::new(0);
+/// Set true once the DRAW-PHASE realtime task (`profile_lookat_realtime_draw_tick`) is live. While set,
+/// the `updateBoneModelSpace` detour SKIPS its own look-at write (passthrough only): the draw-phase task
+/// owns the write+recompute+draw each frame via the trampoline, so the detour must not also post-multiply
+/// (that would double-apply / drift). The detour stays installed only to provide the clean recompute
+/// trampoline and to passthrough the engine's own natural recompute calls.
+pub(crate) static PROFILE_LOOKAT_REALTIME: AtomicBool = AtomicBool::new(false);
+/// DRAW-PHASE SWEEP (diagnostic): the realtime draw task is registered in EACH of these candidate CS
+/// task-group phases; every registration bumps its own `PROFILE_LOOKAT_PHASE_TICKS[i]` each frame, but
+/// only the phase whose index == `PROFILE_LOOKAT_SELECTED_PHASE` actually drives the draw. This lets one
+/// run measure which phases tick per-frame at the menu (vs GameSceneDraw, world-gated ~11%) AND switch
+/// the active draw phase live (write the index to `er-effects-lookat-phase.txt`) without recompiling,
+/// until one renders the portrait smoothly every frame. Order MUST match `LOOKAT_DRAW_PHASE_NAMES` and
+/// the registration array in `spawn_game_task`. Default = AdhocDraw (index 5): adjacent to GameSceneDraw
+/// (same draw region -> live GX pool) but not world-scene-gated, so the best first bet for per-frame.
+pub(crate) const LOOKAT_DRAW_PHASE_COUNT: usize = 8;
+pub(crate) const LOOKAT_DRAW_PHASE_NAMES: [&str; LOOKAT_DRAW_PHASE_COUNT] = [
+    "Draw_Pre",
+    "GraphicsStep",
+    "DrawStep",
+    "DrawBegin",
+    "GameSceneDraw",
+    "AdhocDraw",
+    "DrawEnd",
+    "Draw_Post",
+];
+pub(crate) const LOOKAT_DRAW_PHASE_DEFAULT: usize = 5;
+pub(crate) static PROFILE_LOOKAT_PHASE_TICKS: [AtomicUsize; LOOKAT_DRAW_PHASE_COUNT] =
+    [const { AtomicUsize::new(0) }; LOOKAT_DRAW_PHASE_COUNT];
+pub(crate) static PROFILE_LOOKAT_SELECTED_PHASE: AtomicUsize =
+    AtomicUsize::new(LOOKAT_DRAW_PHASE_DEFAULT);
+/// FrameBegin-paced throttle counter for `profile_lookat_phase_diag_tick` (selector re-read + sweep log).
+pub(crate) static PROFILE_LOOKAT_PHASE_DIAG_COUNTER: AtomicUsize = AtomicUsize::new(0);
+/// Per-stage validity counters for the look-at resolution chain on a fixed probe slot (slot 0), bumped
+/// every FrameBegin frame so the sweep log shows EXACTLY where the ~89% drop is (vs guessing). Stages:
+/// [0]=renderer table-valid, [1]=model_ins(+0x778), [2]=anim-holder X(+0x948), [3]=importer(*(X+0x20)),
+/// [4]=skeleton, [5]=local-bone-data, [6]=bone-count-sane, [7]=frames-probed (denominator).
+pub(crate) const PROFILE_LOOKAT_STAGE_COUNT: usize = 8;
+pub(crate) const PROFILE_LOOKAT_STAGE_NAMES: [&str; PROFILE_LOOKAT_STAGE_COUNT] = [
+    "rend",
+    "model_ins",
+    "anim948",
+    "importer",
+    "skel",
+    "local",
+    "bones",
+    "frames",
+];
+pub(crate) static PROFILE_LOOKAT_STAGE_OK: [AtomicUsize; PROFILE_LOOKAT_STAGE_COUNT] =
+    [const { AtomicUsize::new(0) }; PROFILE_LOOKAT_STAGE_COUNT];
+/// Draw-task frame counter (drives the selftest sinusoid + throttles the RT-readback oracle).
+pub(crate) static PROFILE_LOOKAT_DRAW_FRAME: AtomicUsize = AtomicUsize::new(0);
+/// IN-PROCESS PIXEL ORACLE (replaces the human-eyeball check). Each sample reads back the probe slot's
+/// offscreen RT AFTER the draw step and records: rt_samples (readbacks taken), rt_nonblack (head rendered,
+/// not black -> no flicker), rt_changed (hash != previous -> RT content moved with the driven angle ->
+/// tracking), rt_lasthash. PASS under the sinusoid selftest = nonblack≈samples AND changed≈samples.
+pub(crate) static PROFILE_LOOKAT_RT_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_LOOKAT_RT_NONBLACK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_LOOKAT_RT_CHANGED: AtomicUsize = AtomicUsize::new(0);
+/// Last RT center-region max RGB and max ALPHA (0..255) from the readback. The nonblack oracle only
+/// checks RGB, so a portrait that renders RGB content but with ALPHA=0 reads "nonblack" yet GFx
+/// alpha-composites it to fully transparent (black shows through). rgb_max>0 with alpha_max==0 is the
+/// signature of "renders black despite content" via a zero/premultiplied alpha channel.
+pub(crate) static PROFILE_LOOKAT_RT_RGB_MAX: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_LOOKAT_RT_ALPHA_MAX: AtomicUsize = AtomicUsize::new(0);
+/// One-shot guards for dumping the content RT and the bound SRV to disk for visual inspection (0 = not
+/// yet dumped). Lets the agent SEE whether the readback "content" texture is actually the portrait vs a
+/// scratch/world RT, and what the SRV holds, before choosing the fix.
+pub(crate) static PROFILE_RT_CONTENT_DUMPED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_SRV_DUMPED: AtomicUsize = AtomicUsize::new(0);
+/// Count of forced D3D12 RT->SRV CopyResource calls (so the sampleable SRV the forge binds gets the
+/// rendered head every frame instead of the engine's rarely-fired resolve). >0 = the copy path runs.
+pub(crate) static PROFILE_RT_SRV_COPIES: AtomicUsize = AtomicUsize::new(0);
+/// One-shot guard for the RT/SRV resource-identity diagnostic log.
+pub(crate) static PROFILE_RT_SRV_COPY_DIAGGED: AtomicUsize = AtomicUsize::new(0);
+/// One-shot guard for dumping the excluding-SRV content texture (slot 102) for visual inspection.
+pub(crate) static PROFILE_CONTENT_EXCL_DUMPED: AtomicUsize = AtomicUsize::new(0);
+/// One-shot guard: set once the target slot's real IBL-lit menu portrait has been captured into
+/// LOADING_BG_PORTRAIT_RGBA for the now-loading forge to bake.
+pub(crate) static PROFILE_BAKE_RGBA_CAPTURED: AtomicUsize = AtomicUsize::new(0);
+/// The FIRST (displayed) now-loading rti the forge bound, plus its bare texture name + encoding. The
+/// sprite commits to the first bind, which happens BEFORE the real portrait is captured -- so once the
+/// portrait is baked we RE-FORGE this exact rti to swap the checker for the portrait on the live screen.
+pub(crate) static LOADING_BG_FIRST_RTI: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LOADING_BG_FIRST_ENCODING: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LOADING_BG_FIRST_TEX_NAME: std::sync::Mutex<Option<String>> =
+    std::sync::Mutex::new(None);
+/// (Retired one-shot guard; the reforge is now version-gated via LOADING_BG_REFORGE_VERSION for live
+/// re-upload.) Kept allocated to avoid churn; not read.
+#[allow(dead_code)]
+pub(crate) static LOADING_BG_REFORGE_DONE: AtomicUsize = AtomicUsize::new(0);
+/// `CS::TexRepositoryImp::GetResCap(repo, wchar_t* name) -> TexResCap*` (dump 0x140b80a90 -> deobf, shift
+/// -0xf0). The TexResCap's `gxTexture` (+TITLE_CUSTOM_COVER_TEX_RESCAP_GX_TEXTURE_OFFSET = +0x78) is the
+/// EXACT CSGxTexture the Scaleform now-loading sprite samples by name -- distinct from the forge's source
+/// container GX, so we upload the captured portrait into THIS one to actually update the screen.
+pub(crate) const TEX_REPOSITORY_GET_RES_CAP_RVA: usize = 0xb809a0;
+/// Same RGB/ALPHA-max stats but from a readback of the texture actually BOUND into the now-loading
+/// container (what GFx samples), not the renderer's offscreen RT. If the RT (above) has content but this
+/// reads black, the sampleable CSGxTexture is a separate/unresolved resource from the render target.
+/// 0xffff sentinel = readback did not run / found no resource this sample.
+pub(crate) static PROFILE_BOUND_GX_RGB_MAX: AtomicUsize = AtomicUsize::new(0xffff);
+pub(crate) static PROFILE_BOUND_GX_ALPHA_MAX: AtomicUsize = AtomicUsize::new(0xffff);
+pub(crate) static PROFILE_LOOKAT_RT_LASTHASH: AtomicUsize = AtomicUsize::new(0);
+/// Last slot the oracle sampled (the present-model slot cycles), so "changed" is only counted when two
+/// consecutive samples are the SAME slot -- otherwise a slot switch (different character) would look like
+/// motion. usize::MAX = none yet.
+pub(crate) static PROFILE_LOOKAT_RT_LASTSLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Cached selftest flag (the draw task reads this atomic; the FrameBegin diag tick refreshes it from the
+/// file throttled, so the draw path never does a per-frame file stat).
+pub(crate) static PROFILE_LOOKAT_SELFTEST_ON: AtomicBool = AtomicBool::new(false);
+/// Cached cursor-sweep PROOF flag (same latch pattern as selftest). When set, the draw task self-drives
+/// the OS cursor through held L/C/R positions and drives the head from the read-back cursor.
+pub(crate) static PROFILE_CURSOR_SWEEP_ON: AtomicBool = AtomicBool::new(false);
+/// One-shot latch so the cursor-sweep helper logs only its first `SetCursorPos` warp + result.
+pub(crate) static PROFILE_CURSOR_SWEEP_FIRST_WARP: AtomicBool = AtomicBool::new(false);
+/// Cursor-sweep proof: draw-frames held at each cursor position (~24 frames ≈ 1s at ~23fps), and the
+/// per-hold cursor X target as a fraction of the ER window width (left / center / right). Y is held at
+/// mid-height. `SetCursorPos(rect.left + fx*w, rect.top + 0.5*h)`.
+// Hold of 6 draw-frames per position: a full L/C/R cycle is ~18 frames (<1s), so every position is
+// visited several times within the (short) post-Continue live-render window -> all three one-shot bucket
+// dumps fill before the menu renderer winds down. The bone drive is instant (no interpolation), so each
+// captured frame's pose exactly matches that frame's cursor even at this cadence.
+pub(crate) const CURSOR_SWEEP_HOLD_FRAMES: usize = 6;
+pub(crate) const CURSOR_SWEEP_TARGETS_X: [f32; 3] = [0.10, 0.50, 0.90];
+/// Selftest sinusoid: angular step per draw-frame and yaw/pitch amplitudes (same units as the normalized
+/// cursor, so the downstream Head/Neck/Spine2 gains apply identically). ~150-frame period -> ~2.5 s sweep.
+pub(crate) const LOOKAT_SELFTEST_W: f32 = 0.0419; // 2*pi/150
+pub(crate) const LOOKAT_SELFTEST_YAW_AMP: f32 = 1.0;
+pub(crate) const LOOKAT_SELFTEST_PITCH_AMP: f32 = 0.6;
+/// RT-readback oracle throttle: sample every N draw-frames (readback is a GPU->CPU stall; don't do it
+/// every frame). 8 -> ~7 samples/s, plenty to measure nonblack% and hash-change%.
+pub(crate) const LOOKAT_RT_SAMPLE_INTERVAL: usize = 8;
+/// DEFAULT-OFF gate for the ProfileSelect load flow (see `profile_select_load_flow_enabled`). When
+/// false (default) `product_core_autoload_tick` takes the PROVEN native Continue commit, byte-for-byte
+/// unchanged; the human flips this on only to probe-test the portrait-rendering ProfileSelect path
+/// (fire the Load-Game row -> live ProfileLoadDialog -> hold for the portrait render -> STAGE2 commit).
+pub(crate) const PROFILE_SELECT_LOAD_FLOW_ENABLED: bool = false; // proven Continue char-load is the default; ProfileSelect flow is blocked by the accept-byte open+drain coupling (the only reliable menu-open commits Continue), so it can't get a window to navigate Load-Game -- left gated-off for the record
+/// `MarkProfileIndexAsUsed` (deobf 0x140262250): sets `ProfileSummary->saveSlotsStates[slot] = true`
+/// (the `bool[10]` at `ProfileSummary+0x8` that the refresh `FUN_1409aa680` gates each slot's portrait
+/// render on). `fn(summary, slot)`. NOT called by the ProfileSelect flow by default -- the live
+/// ProfileLoadDialog's own header-read marks the slots; wire a call only if a runtime probe shows the
+/// target slot stays unmarked (`saveSlotsStates[slot]==0`) inside the open dialog.
+pub(crate) const PROFILE_MARK_SLOT_USED_RVA: usize = 0x262250;
+/// Target save slot for the menu-phase `force_profile_render` manual diagnostic (the staged
+/// single-profile gold save's character is slot 0). The autoload path passes its own target slot
+/// instead of this constant.
+pub(crate) const FORCE_PROFILE_RENDER_MANUAL_SLOT: i32 = 0;
+/// Latched once the portrait render window (hold-the-load-commit-until-the-portrait-renders) has
+/// released -- either the portrait was captured or the hold timed out -- so the load commits exactly
+/// once thereafter.
+pub(crate) static PORTRAIT_RENDER_WINDOW_DONE: AtomicUsize = AtomicUsize::new(0);
+/// Passive observer for native Scaleform image-symbol -> system texture bindings.
+/// Dump `FUN_1407452c0` maps to live/deobf `0x1407451c0`. It receives an owning resource/list field
+/// in rcx and a pair of DLString<char> values in rdx. Do not call it from product code; observe native
+/// calls to learn valid owner/resource contexts for SYSTEX-backed surfaces.
+pub(crate) const TITLE_SCALEFORM_BIND_OBSERVER_RVA: usize = 0x7451c0;
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_SYSTEX_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_OWNER: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_PAIR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_SYMBOL_PTR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_BIND_OBSERVER_LAST_TARGET_PTR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Experimental visible-surface bind rewrite for the replayed ProfileSelect cover: the native
+/// SYSTEX profile texture normally targets `MENU_DummyProfileFace_01`; rewrite slot0 to the
+/// visibly placed `MENU_FL_40135_Profile` surface and expose it as a distinct oracle.
+pub(crate) const TITLE_PROFILE_VISIBLE_SURFACE_SYMBOL: &str = "MENU_FL_40135_Profile";
+pub(crate) static TITLE_PROFILE_VISIBLE_SURFACE_BIND_REWRITES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_OWNER: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_PAIR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_SYMBOL_PTR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+
+// === er-tpf Tier-4 in-memory texture wire-up (Route B, static-RE confirmed 2026-06-28) ===========
+// In-process build of an er-tpf TPF003 blob -> the engine's own raw-(ptr,len) TPF->GPU factory ->
+// register a CSGxTexture/TexResCap under our SYSTEX key in GLOBAL_TexRepository, then redirect the
+// visible title-cover Scaleform image symbol's TARGET DLString to that key. NO disk, NO game launch.
+//
+// Canonical engine call mirrored: CS::CreateTpfResCap (dump 0x140b83770 -> deobf 0x140b83680,
+// shift -0xf0, content-unique via scripts/dump-deobf-shift.py). The FaceGen caller FUN_1401ec840 does
+// `CreateTpfResCap(GLOBAL_TpfRepository, L"FaceGenTexture", bnd4Base+dataOff, size, /*param_5*/0,
+// /*count*/0)`. Win64 fastcall: rcx=GLOBAL_TpfRepository, rdx=wchar_t* texName, r8=tpf bytes ptr,
+// r9=tpf byte len, [rsp+0x20]=param_5 (bool, =0), [rsp+0x28]=param_6 (u32 count, =0). It allocs a
+// CS::TpfResCap, InsertResCapIfNotExistWithRefCount(TpfRepository+0x78, texName, resCap), then
+// FUN_140b83ec0(resCap, ptr, len, /*flags*/0, count) which loops GXCGTextureBuilder_TPF (deobf
+// 0x141a004c0) + FUN_140b81110(GLOBAL_TexRepository, name=NULL, builder, ...) -- name=NULL DERIVES the
+// GLOBAL_TexRepository GPU key from the TPF ENTRY name (FUN_141a00950(builder)). So the TPF entry name
+// (not texName) is the GPU repo key. Returns the TpfResCap* (non-null on success).
+pub(crate) const CREATE_TPF_RES_CAP_RVA: usize = 0xb83680;
+/// `GLOBAL_TpfRepository` singleton pointer (dump 0x143d73fb8; data RVA = dump_va - 0x140000000, the
+/// 0-shift data convention used by the other singleton RVAs here). MUST be read + null-checked before
+/// the CreateTpfResCap call -- the engine's own `accessed an uninitialized singleton` DLPanic is
+/// non-returning (== crash), so a null repo is a fail-closed bail, never a call.
+pub(crate) const GLOBAL_TPF_REPOSITORY_RVA: usize = 0x3d73fb8;
+/// `GLOBAL_TexRepository` singleton pointer (dump 0x143d73e58). The CS texture repo the in-memory TPF
+/// GPU texture is registered into. The Scaleform repo bridges to it BY NAME on a first-resolve miss:
+/// `FUN_140d66220 -> CS::TexRepositoryImp::GetResCap(GLOBAL_TexRepository, name)` wraps that CSGxTexture
+/// into a Scaleform texture. Non-null also serves as the "graphics/repos initialized" precondition.
+pub(crate) const GLOBAL_TEX_REPOSITORY_RVA: usize = 0x3d73e58;
+/// Unique in-RAM SYSTEX key for the er-tpf cover. Used BOTH as the TPF003 entry name (== the
+/// GLOBAL_TexRepository GPU key the Scaleform bridge looks up) AND as the rewritten bind TARGET so the
+/// visible profile surface resolves OUR texture. Deliberately distinct from the native
+/// `SYSTEX_Menu_Profile00` (which the profile renderer owns / may already be cached in the Scaleform
+/// repo): a never-seen key guarantees a Scaleform-repo miss -> bridge pull from GLOBAL_TexRepository.
+/// ASCII and <= the 21-char native target length so the in-place DLString target rewrite fits.
+pub(crate) const ER_TPF_COVER_SYSTEX_KEY: &str = "SYSTEX_ErTpf_Cover00";
+/// er-tpf cover texture dimensions + checker cell (bright magenta/white checker = unmistakable on the
+/// loading-screen-portrait screenshot). 256x256 RGBA8 (uncompressed, legacy DDS header -> DXGI 28).
+pub(crate) const ER_TPF_COVER_TEX_DIM: u32 = 256;
+pub(crate) const ER_TPF_COVER_TEX_CELL: u32 = 32;
+/// Last-error codes recorded in `ER_TPF_COVER_LAST_ERROR` (a memory-read oracle, not a screenshot).
+pub(crate) const ER_TPF_COVER_ERR_NONE: usize = 0;
+pub(crate) const ER_TPF_COVER_ERR_BLOB_EMPTY: usize = 1;
+pub(crate) const ER_TPF_COVER_ERR_TPF_REPO_NULL: usize = 2;
+pub(crate) const ER_TPF_COVER_ERR_TEX_REPO_NULL: usize = 3;
+pub(crate) const ER_TPF_COVER_ERR_PANIC: usize = 4;
+pub(crate) const ER_TPF_COVER_ERR_RESCAP_NULL: usize = 5;
+pub(crate) const ER_TPF_COVER_ERR_BASE_UNRESOLVED: usize = 6;
+/// 1 once the er-tpf TPF003 byte blob was built (pure CPU, no native call).
+pub(crate) static ER_TPF_COVER_TEXTURE_BUILT: AtomicUsize = AtomicUsize::new(0);
+/// Built TPF003 blob length in bytes (0 until built).
+pub(crate) static ER_TPF_COVER_BLOB_LEN: AtomicUsize = AtomicUsize::new(0);
+/// 1 once the native CreateTpfResCap call has been ATTEMPTED (success or failure). Latched the moment a
+/// real call is made so the register fires exactly ONCE; precondition-not-ready bails (repos still null
+/// during boot) do NOT set this and keep retrying until graphics is up.
+pub(crate) static ER_TPF_COVER_REGISTER_ATTEMPTED: AtomicUsize = AtomicUsize::new(0);
+/// 1 once CreateTpfResCap returned a non-null TpfResCap (the GPU texture registered into the repos).
+pub(crate) static ER_TPF_COVER_REGISTERED: AtomicUsize = AtomicUsize::new(0);
+/// The TpfResCap* CreateTpfResCap returned (0 until registered).
+pub(crate) static ER_TPF_COVER_LAST_RESCAP: AtomicUsize = AtomicUsize::new(0);
+/// Count of bind-observer target rewrites that pointed the visible profile surface at our key.
+pub(crate) static ER_TPF_COVER_BOUND: AtomicUsize = AtomicUsize::new(0);
+/// Number of failed/abandoned register attempts (precondition miss or caught panic).
+pub(crate) static ER_TPF_COVER_FAILURES: AtomicUsize = AtomicUsize::new(0);
+/// Last error code (see `ER_TPF_COVER_ERR_*`).
+pub(crate) static ER_TPF_COVER_LAST_ERROR: AtomicUsize = AtomicUsize::new(ER_TPF_COVER_ERR_NONE);
+/// One-shot latch for the bind-observer target rewrite (fires once after registration).
+pub(crate) static ER_TPF_COVER_TARGET_REWRITE_FIRED: AtomicUsize = AtomicUsize::new(0);
+
+// (Removed: TITLE INIT-READINESS OVERRIDE lever -- it forced CSMenuMan+0x21, which RE later showed is
+// the WHOLE-game resident-UI-ready flag, not title-only; asserting it early risked later in-game menus
+// finding chrome not resident, for an illusory ~1s (the real floor is the Scaleform resident load).
+// Reverted per user 2026-06-24. RE preserved in bd title-init-ready-override-NOT-a-press-lever-2026-06-24.)
 #[repr(i32)]
 pub(crate) enum TitleStepState {
     Min = 0,
@@ -610,6 +1739,636 @@ pub(crate) const SCENE_OBJ_PROXY_CONTEXT_20_OFFSET: usize = 0x20;
 /// TitleTopDialog constructor xref at 0x1409a8275 calls the named-child proxy constructor with
 /// rdx=dialog+0xb78 and r8="PressStart" (RVA 0x2b26500).
 pub(crate) const TITLE_PRESS_START_SCENE_PROXY_B78_OFFSET: usize = 0xb78;
+/// Generic SceneObjProxy display visibility wrapper for a proxy (`dump 0x140733440 -> live/deobf
+/// 0x140733340`). It resolves the proxy's Scaleform value and calls the GFx visibility setter; use
+/// this for the 05_000_Title `PressStart` component rather than hiding the whole MenuWindowJob.
+pub(crate) const TITLE_PRESS_START_SET_VISIBLE_RVA: usize = 0x733340;
+/// Lower-level GFx visibility setter (`dump 0x140d84580 -> live/deobf 0x140d844d0`). It has one
+/// code caller, the SceneObjProxy wrapper above. The hook only forces false for the latched
+/// PressStart CSScaleformValue pointer, not globally.
+pub(crate) const TITLE_GFX_VALUE_SET_VISIBLE_RVA: usize = 0xd844d0;
+/// Lower-level GFx display-info setters for CSScaleformValue position(x,y) and scale(x,y).
+/// Dump 0x140d83ed0 / 0x140d84140 -> deobf/live 0x140d83e20 / 0x140d84090.
+pub(crate) const TITLE_GFX_VALUE_SET_POSITION_RVA: usize = 0xd83e20;
+pub(crate) const TITLE_GFX_VALUE_SET_SCALE_RVA: usize = 0xd84090;
+pub(crate) static TITLE_GFX_VALUE_SET_VISIBLE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PRESS_START_GFX_VALUE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Small fixed set of title text CSScaleformValue pointers that must remain hidden while the
+/// branch-owned `05_001_Title_Logo` replacement surface is visible. One slot was insufficient:
+/// ProgressInfo/Install_ProgressInfo/CopyrightText can overwrite the original PressStart value.
+pub(crate) static TITLE_TEXT_GFX_VALUES: [AtomicUsize; 8] = [
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS),
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS),
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS),
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS),
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS),
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS),
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS),
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS),
+];
+pub(crate) static TITLE_TEXT_GFX_VALUE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_VALUE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_REQUESTED: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Named child SceneObjProxy binder (`live/deobf 0x14074a2f0`). TitleTopDialog ctor calls it with
+/// r8="PressStart" and output `dialog+0xb78`; hook it to identify the actual bound display object(s)
+/// and hide PAB immediately after native binding.
+pub(crate) const TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA: usize = 0x74a2f0;
+pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_INSTALLED: AtomicUsize =
+    AtomicUsize::new(0);
+pub(crate) static TITLE_PROFILE_FACE_BIND_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PROFILE_FACE_TRANSFORM_APPLIED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PROFILE_FACE_OTHER_HIDDEN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PROFILE_FACE_LAST_PROXY: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PROFILE_FACE_LAST_VALUE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PRESS_START_BIND_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PRESS_START_BIND_LAST_PARENT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_BIND_LAST_OUT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_BIND_LAST_NAME: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_BIND_LAST_CONTEXT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_BIND_HIDE_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PRESS_START_GFX_HIDE_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_PRESS_START_GFX_HIDE_LAST_DIALOG: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_GFX_HIDE_LAST_PROXY: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_GFX_HIDE_LAST_CONTEXT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_PRESS_START_GFX_HIDE_LAST_CALLER_PHASE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Actual visible native title-logo layer. Static RE of `TitleTopDialog` (dump 0x1409a82d0 ->
+/// live 0x1409a8180) shows `CS::TitleBackViewParts` embedded at dialog+0xaa8 and constructed from
+/// the `05_001_Title_Logo` resource; this is distinct from the preserved `05_000_Title` MenuWindowJob.
+pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET: usize = 0xaa8;
+pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_NAME: &str = "TitleBackViewParts";
+pub(crate) const TITLE_LOGO_RESOURCE_NAME: &str = "05_001_Title_Logo";
+/// `TitleBackViewParts` embeds its `SceneObjProxy` at `this+0x70`; the GFx/ScaleformValue handle
+/// used by the native label/frame helpers is the proxy field at `this+0x88` (`SceneObjProxy+0x18`).
+pub(crate) const TITLE_LOGO_GFX_VALUE_88_OFFSET: usize = 0x88;
+/// Current-frame reader for the resolved Scaleform value (`FUN_140d82620`, dump 0x140d82620 ->
+/// live/deobf 0x140d82570). Static FFDec XML for `05_001_title_logo.gfx` shows root depth 3 is the
+/// visible logo surface and maps frames to alpha: FadeIn 2..60, TextFadeIn 60, TextFadeOut 93,
+/// Title_TopMenu 112, FadeOut 113..133.
+pub(crate) const TITLE_LOGO_GFX_CURRENT_FRAME_RVA: usize = 0xd82570;
+pub(crate) const TITLE_LOGO_GFX_UNKNOWN_FRAME: i32 = -1;
+pub(crate) const TITLE_LOGO_GFX_UNKNOWN_ALPHA: i32 = -1;
+pub(crate) const TITLE_LOGO_GFX_FULL_ALPHA: i32 = 256;
+pub(crate) const TITLE_LOGO_GFX_ROOT_DEPTH: usize = 3;
+pub(crate) const TITLE_LOGO_GFX_ROOT_SPRITE_CHAR: usize = 7;
+pub(crate) const TITLE_LOGO_GFX_MAIN_ASSET_CHAR: usize = 4;
+pub(crate) const TITLE_LOGO_GFX_MAIN_ASSET_NAME: &str = "MENU_Title_EldenRing_01";
+/// Stronger native hide lever than FadeIn/FadeOut: `CS::TitleBackViewParts::SetVisible` (dump
+/// 0x1409a6410 -> deobf/live 0x1409a62c0, content verified as `add rcx,0x70; jmp 0x140733340`)
+/// calls the generic `SceneObjProxy` visible setter on the embedded proxy at `this+0x70`.
+/// `TitleTopDialog` itself calls this with `1` in the start-login path (dump 0x1409b3050), so using
+/// it with `0` is a native visibility semantic, not a timeline FadeIn/FadeOut guess.
+pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_CTOR_RVA: usize = 0x9a6180;
+pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_SET_VISIBLE_RVA: usize = 0x9a62c0;
+/// TitleTopDialog start-login/native accept path (dump 0x1409b3050 -> deobf/live 0x1409b2f00).
+/// It calls `TitleBackViewParts::SetVisible(1)` on dialog+0xaa8 before continuing through native
+/// login/save-load setup, so detouring it and hiding the logo after the original is the earliest
+/// proven TitleTopDialog-owned logo visibility point on the zero-input Continue path.
+pub(crate) const TITLE_TOP_START_LOGIN_RVA: usize = 0x9b2f00;
+pub(crate) const TITLE_TOP_START_LOGIN_HIDE_NOT_INSTALLED: usize = 0;
+pub(crate) const TITLE_TOP_START_LOGIN_HIDE_INSTALLED_YES: usize = 1;
+pub(crate) static TITLE_TOP_START_LOGIN_HIDE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_TOP_START_LOGIN_HIDE_INSTALLED: AtomicUsize =
+    AtomicUsize::new(TITLE_TOP_START_LOGIN_HIDE_NOT_INSTALLED);
+pub(crate) static TITLE_LOGO_SET_VISIBLE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_LOGO_SET_VISIBLE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_LOGO_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_LOGO_CTOR_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_LOGO_GFX_HIDE_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_LOGO_GFX_HIDE_LAST_DIALOG: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_LOGO_GFX_HIDE_LAST_LOGO: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_LOGO_GFX_HIDE_LAST_CALLER_PHASE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_LOGO_GFX_HIDE_LAST_REQUESTED_VISIBLE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Passive observer for `CSScaleformSystem::AcquireMenuResource` (`dump 0x140d786e0 ->
+/// deobf/live 0x140d78630`). Signature from Ghidra dump:
+/// `resource = f(CSScaleformSystem* this, CSScaleformLoadInfo* loadParams, u8 flags)`, where
+/// `loadParams+0x8` is the UTF-16 resource filename/key. This is the epilogue-neutral seam for
+/// replacing the already-scheduled `TitleBackViewParts` / `05_001_Title_Logo` resource; keep the
+/// first hook observe-only until the native request/return is proven in telemetry.
+pub(crate) const TITLE_MENU_RESOURCE_ACQUIRE_RVA: usize = 0xd78630;
+pub(crate) static TITLE_MENU_RESOURCE_ACQUIRE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_MENU_RESOURCE_ACQUIRE_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_MENU_RESOURCE_ACQUIRE_LOGO_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_MENU_RESOURCE_ACQUIRE_LAST_THIS: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_MENU_RESOURCE_ACQUIRE_LAST_LOAD_PARAMS: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_MENU_RESOURCE_ACQUIRE_LAST_FILENAME_PTR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_MENU_RESOURCE_ACQUIRE_LAST_PARAM3: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_MENU_RESOURCE_ACQUIRE_LAST_RET: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_MENU_RESOURCE_ACQUIRE_LAST_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Scaleform LoaderImpl file-open wrapper (`dump 0x1411ceda0 -> deobf/live 0x1411ced80`).
+/// Signature: `file = f(loader_impl, char* url, flags)`, calls FileOpener vtable +0x18. Observe-only
+/// until we know the exact returned file object's vtable/buffer contract.
+pub(crate) const TITLE_SCALEFORM_FILE_OPEN_RVA: usize = 0x11ced80;
+pub(crate) static TITLE_SCALEFORM_FILE_OPEN_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_SCALEFORM_FILE_OPEN_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_SCALEFORM_FILE_OPEN_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_SCALEFORM_FILE_OPEN_LOGO_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_SCALEFORM_FILE_OPEN_LAST_LOADER: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_FILE_OPEN_LAST_URL_PTR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_FILE_OPEN_LAST_FLAGS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_SCALEFORM_FILE_OPEN_LAST_RET: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_FILE_OPEN_LAST_RET_VTABLE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_FILE_OPEN_LAST_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// MemoryFile-backed replacement state for `ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX`. The replacement
+/// is deliberately opt-in: default file-open observer mode still calls the original loader.
+pub(crate) const SCALEFORM_MEMORY_GLOBAL_RVA: usize = 0x4593250;
+pub(crate) const SCALEFORM_MEMORY_FILE_VTABLE_RVA: usize = 0x2ba4c80;
+pub(crate) const SCALEFORM_DLSTRING_CHAR_COPY_RVA: usize = 0x1140ec0;
+pub(crate) const SCALEFORM_MEMORY_FILE_SIZE: usize = 0x30;
+pub(crate) const SCALEFORM_MEMORY_FILE_REFCOUNT_OFFSET: usize = 0x8;
+pub(crate) const SCALEFORM_MEMORY_FILE_NAME_OFFSET: usize = 0x10;
+pub(crate) const SCALEFORM_MEMORY_FILE_DATA_OFFSET: usize = 0x18;
+pub(crate) const SCALEFORM_MEMORY_FILE_LEN_OFFSET: usize = 0x20;
+pub(crate) const SCALEFORM_MEMORY_FILE_CURSOR_OFFSET: usize = 0x24;
+pub(crate) const SCALEFORM_MEMORY_FILE_VALID_OFFSET: usize = 0x28;
+pub(crate) static TITLE_SCALEFORM_MEMORY_GFX_BYTES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_SCALEFORM_MEMORY_GFX_FAILURES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+
+include!("title_05_000_text_suppressed_bytes.rs");
+
+/// From-scratch minimal diagnostic GFX: one frame, magenta background + full-screen magenta shape.
+/// Generated via FFDEC XML (`target/custom-gfx-lab/title-logo-minimal/...`) and embedded so the
+/// product path can prove no loose runtime GFX file is needed. Selector:
+/// `ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX=embedded:minimal-magenta`.
+pub(crate) const TITLE_MINIMAL_MAGENTA_GFX: &[u8] = &[
+    0x47, 0x46, 0x58, 0x0b, 0x7d, 0x00, 0x00, 0x00, 0x88, 0x00, 0x01, 0x2c, 0x00, 0x00, 0x00, 0x2a,
+    0x30, 0x00, 0x00, 0x1e, 0x01, 0x00, 0x22, 0xfa, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x0d, 0x00,
+    0x00, 0x16, 0x65, 0x72, 0x5f, 0x65, 0x66, 0x66, 0x65, 0x63, 0x74, 0x73, 0x5f, 0x74, 0x69, 0x74,
+    0x6c, 0x65, 0x5f, 0x63, 0x6f, 0x76, 0x65, 0x72, 0x00, 0x00, 0x44, 0x11, 0x08, 0x00, 0x00, 0x00,
+    0x43, 0x02, 0xff, 0x00, 0xff, 0xbf, 0x00, 0x26, 0x00, 0x00, 0x00, 0x01, 0x00, 0x88, 0x00, 0x01,
+    0x2c, 0x00, 0x00, 0x00, 0x2a, 0x30, 0x00, 0x01, 0x00, 0xff, 0x00, 0xff, 0x00, 0x10, 0x16, 0x29,
+    0x60, 0x02, 0xa3, 0x07, 0xf2, 0xd4, 0x01, 0xf3, 0x57, 0x41, 0xf8, 0x96, 0x00, 0xf9, 0x54, 0x60,
+    0x00, 0x86, 0x06, 0x06, 0x01, 0x00, 0x01, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00,
+];
+
+/// Diagnostic animated title replacement GFX: magenta background plus an in-game binary frame
+/// counter rendered by the same Scaleform MemoryFile path. The six top-left bits encode the
+/// replacement movie timeline frame modulo 64 (bit 0 is rightmost). This is intentionally a game-
+/// rendered marker, not an extractor/ffmpeg overlay, so video frames can be correlated to the
+/// asset timeline without trusting recorder timing. Selector:
+/// `ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX=embedded:minimal-magenta-counter`.
+pub(crate) const TITLE_MINIMAL_MAGENTA_COUNTER_GFX: &[u8] = &[
+    0x47, 0x46, 0x58, 0x0b, 0xe7, 0x18, 0x00, 0x00, 0x88, 0x00, 0x01, 0x2c, 0x00, 0x00, 0x00, 0x2a,
+    0x30, 0x00, 0x00, 0x1e, 0x40, 0x00, 0x2a, 0xfa, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x0d, 0x00,
+    0x00, 0x1e, 0x65, 0x72, 0x5f, 0x65, 0x66, 0x66, 0x65, 0x63, 0x74, 0x73, 0x5f, 0x74, 0x69, 0x74,
+    0x6c, 0x65, 0x5f, 0x63, 0x6f, 0x76, 0x65, 0x72, 0x5f, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x65, 0x72,
+    0x00, 0x00, 0x44, 0x11, 0x08, 0x00, 0x00, 0x00, 0x43, 0x02, 0xff, 0x00, 0xff, 0xbf, 0x00, 0x26,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x88, 0x00, 0x01, 0x2c, 0x00, 0x00, 0x00, 0x2a, 0x30, 0x00, 0x01,
+    0x00, 0xff, 0x00, 0xff, 0x00, 0x10, 0x16, 0x29, 0x60, 0x02, 0xa3, 0x07, 0xf2, 0xd4, 0x01, 0xf3,
+    0x57, 0x41, 0xf8, 0x96, 0x00, 0xf9, 0x54, 0x60, 0x00, 0xbf, 0x00, 0x21, 0x00, 0x00, 0x00, 0x02,
+    0x00, 0x68, 0x00, 0x1c, 0x20, 0x00, 0x01, 0xc2, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+    0x15, 0xae, 0x10, 0x1c, 0x27, 0xb2, 0x3e, 0x1c, 0xb1, 0xf3, 0xb1, 0xc2, 0x1c, 0xae, 0x10, 0x00,
+    0xbf, 0x00, 0x1f, 0x00, 0x00, 0x00, 0x03, 0x00, 0x58, 0x00, 0x34, 0x80, 0x01, 0x04, 0x00, 0x01,
+    0x00, 0xff, 0xff, 0xff, 0x00, 0x10, 0x15, 0x66, 0x91, 0x04, 0x78, 0x25, 0xce, 0x5b, 0xf1, 0xc0,
+    0xd2, 0x72, 0xa0, 0x80, 0x00, 0x9f, 0x06, 0x2e, 0x01, 0x00, 0x01, 0x00, 0x00, 0x69, 0x00, 0x40,
+    0x10, 0x04, 0x00, 0x6d, 0x61, 0x67, 0x65, 0x6e, 0x74, 0x61, 0x5f, 0x62, 0x61, 0x63, 0x6b, 0x67,
+    0x72, 0x6f, 0x75, 0x6e, 0x64, 0x00, 0x9d, 0x06, 0x2e, 0x02, 0x00, 0x02, 0x00, 0x12, 0xf0, 0x78,
+    0x00, 0x69, 0x00, 0x40, 0x10, 0x02, 0xd0, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x65, 0x72, 0x5f, 0x70,
+    0x61, 0x6e, 0x65, 0x6c, 0x00, 0x9e, 0x06, 0x2e, 0x0a, 0x00, 0x03, 0x00, 0x1a, 0xbc, 0xc0, 0xd7,
+    0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x65, 0x72, 0x5f, 0x62,
+    0x69, 0x74, 0x5f, 0x30, 0x00, 0x9e, 0x06, 0x2e, 0x0b, 0x00, 0x03, 0x00, 0x1a, 0x9d, 0x80, 0xd7,
+    0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x65, 0x72, 0x5f, 0x62,
+    0x69, 0x74, 0x5f, 0x31, 0x00, 0x9d, 0x06, 0x2e, 0x0c, 0x00, 0x03, 0x00, 0x18, 0xfc, 0x83, 0x5c,
+    0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x65, 0x72, 0x5f, 0x62, 0x69,
+    0x74, 0x5f, 0x32, 0x00, 0x9d, 0x06, 0x2e, 0x0d, 0x00, 0x03, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x65, 0x72, 0x5f, 0x62, 0x69, 0x74,
+    0x5f, 0x33, 0x00, 0x9d, 0x06, 0x2e, 0x0e, 0x00, 0x03, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00,
+    0x40, 0x10, 0x00, 0x00, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x65, 0x72, 0x5f, 0x62, 0x69, 0x74, 0x5f,
+    0x34, 0x00, 0x9d, 0x06, 0x2e, 0x0f, 0x00, 0x03, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40,
+    0x10, 0x00, 0x00, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x65, 0x72, 0x5f, 0x62, 0x69, 0x74, 0x5f, 0x35,
+    0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40,
+    0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40,
+    0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10,
+    0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00,
+    0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00,
+    0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x40,
+    0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00,
+    0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04,
+    0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00,
+    0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d,
+    0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06,
+    0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x40, 0x00, 0x8e,
+    0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e,
+    0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d,
+    0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06,
+    0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d,
+    0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f,
+    0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d,
+    0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d,
+    0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d,
+    0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d,
+    0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00,
+    0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16,
+    0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00,
+    0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00,
+    0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00,
+    0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18,
+    0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff,
+    0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d,
+    0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc,
+    0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d,
+    0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc,
+    0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03,
+    0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70,
+    0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7,
+    0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7,
+    0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c,
+    0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00,
+    0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40,
+    0x10, 0x00, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00,
+    0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40,
+    0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10,
+    0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00,
+    0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40,
+    0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40,
+    0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10,
+    0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04,
+    0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00,
+    0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x40,
+    0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00,
+    0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04,
+    0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00,
+    0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d,
+    0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06,
+    0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x40, 0x00, 0x8e,
+    0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e,
+    0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d,
+    0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06,
+    0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d,
+    0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f,
+    0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d,
+    0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d,
+    0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d,
+    0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d,
+    0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00,
+    0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16,
+    0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00,
+    0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00,
+    0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00,
+    0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18,
+    0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff,
+    0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d,
+    0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc,
+    0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d,
+    0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc,
+    0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03,
+    0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70,
+    0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7,
+    0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7,
+    0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c,
+    0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69,
+    0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00,
+    0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40,
+    0x10, 0x00, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00,
+    0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40,
+    0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10,
+    0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00,
+    0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40,
+    0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40,
+    0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10,
+    0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00,
+    0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00,
+    0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x40,
+    0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00,
+    0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04,
+    0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00,
+    0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d,
+    0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06,
+    0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x40, 0x00, 0x8e,
+    0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e,
+    0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d,
+    0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06,
+    0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d,
+    0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f,
+    0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d,
+    0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d,
+    0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d,
+    0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d,
+    0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00,
+    0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16,
+    0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00,
+    0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00,
+    0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00,
+    0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18,
+    0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff,
+    0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d,
+    0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc,
+    0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d,
+    0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc,
+    0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03,
+    0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70,
+    0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7,
+    0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7,
+    0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c,
+    0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00,
+    0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40,
+    0x10, 0x00, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00,
+    0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40,
+    0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10,
+    0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00,
+    0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40,
+    0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40,
+    0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10,
+    0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04,
+    0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00,
+    0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x40,
+    0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00,
+    0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04,
+    0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00,
+    0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d,
+    0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06,
+    0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x40, 0x00, 0x8e,
+    0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e,
+    0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d,
+    0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06,
+    0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d,
+    0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f,
+    0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d,
+    0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d,
+    0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d,
+    0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d,
+    0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00,
+    0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16,
+    0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00,
+    0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00,
+    0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00,
+    0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18,
+    0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff,
+    0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d,
+    0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc,
+    0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d,
+    0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc,
+    0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03,
+    0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70,
+    0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7,
+    0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7,
+    0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c,
+    0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69,
+    0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00,
+    0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40,
+    0x10, 0x00, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00,
+    0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40,
+    0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10,
+    0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04,
+    0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40,
+    0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40,
+    0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10,
+    0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00,
+    0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00,
+    0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x40,
+    0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00,
+    0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04,
+    0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00,
+    0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d,
+    0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06,
+    0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x40, 0x00, 0x8e,
+    0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e,
+    0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d,
+    0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06,
+    0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d,
+    0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f,
+    0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d,
+    0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d,
+    0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d,
+    0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d,
+    0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00,
+    0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16,
+    0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00,
+    0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00,
+    0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00,
+    0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18,
+    0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff,
+    0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d,
+    0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc,
+    0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d,
+    0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc,
+    0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03,
+    0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70,
+    0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69,
+    0x00, 0x40, 0x10, 0x04, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7,
+    0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7,
+    0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c,
+    0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00,
+    0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40,
+    0x10, 0x04, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00,
+    0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40,
+    0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10,
+    0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04,
+    0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40,
+    0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40,
+    0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10,
+    0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04,
+    0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00,
+    0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x40,
+    0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00,
+    0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04,
+    0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00,
+    0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d,
+    0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06,
+    0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x40, 0x00, 0x8e,
+    0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e,
+    0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d,
+    0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06,
+    0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d,
+    0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f,
+    0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d,
+    0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d,
+    0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d,
+    0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d,
+    0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00,
+    0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16,
+    0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00,
+    0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00,
+    0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00,
+    0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18,
+    0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff,
+    0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d,
+    0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc,
+    0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d,
+    0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc,
+    0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03,
+    0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70,
+    0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69,
+    0x00, 0x40, 0x10, 0x04, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7,
+    0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7,
+    0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c,
+    0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69,
+    0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00,
+    0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40,
+    0x10, 0x04, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00,
+    0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40,
+    0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10,
+    0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04,
+    0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40,
+    0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40,
+    0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10,
+    0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00,
+    0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00,
+    0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x40,
+    0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00,
+    0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04,
+    0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00,
+    0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d,
+    0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06,
+    0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x40, 0x00, 0x8e,
+    0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e,
+    0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d,
+    0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06,
+    0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d,
+    0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f,
+    0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d,
+    0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d,
+    0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d,
+    0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d,
+    0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00,
+    0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16,
+    0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00,
+    0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00,
+    0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00,
+    0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18,
+    0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff,
+    0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d,
+    0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc,
+    0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d,
+    0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc,
+    0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03,
+    0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70,
+    0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69,
+    0x00, 0x40, 0x10, 0x04, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7,
+    0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7,
+    0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c,
+    0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00,
+    0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40,
+    0x10, 0x04, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69,
+    0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00,
+    0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40,
+    0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10,
+    0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04,
+    0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40,
+    0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40,
+    0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10,
+    0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04,
+    0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00,
+    0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x40,
+    0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00,
+    0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04,
+    0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00,
+    0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d,
+    0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06,
+    0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x40, 0x00, 0x8e,
+    0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e,
+    0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d,
+    0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06,
+    0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d,
+    0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f,
+    0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d,
+    0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d,
+    0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d,
+    0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d,
+    0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00,
+    0x16, 0xff, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16,
+    0x82, 0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00,
+    0x1a, 0xbc, 0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00,
+    0x1a, 0x9d, 0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00,
+    0x18, 0xfc, 0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18,
+    0xbe, 0x03, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff,
+    0x0d, 0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d,
+    0x70, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc,
+    0xc0, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x00, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d,
+    0x80, 0xd7, 0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc,
+    0x83, 0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03,
+    0x5c, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70,
+    0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69,
+    0x00, 0x40, 0x10, 0x04, 0x00, 0x40, 0x00, 0x8e, 0x06, 0x0d, 0x0a, 0x00, 0x1a, 0xbc, 0xc0, 0xd7,
+    0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8e, 0x06, 0x0d, 0x0b, 0x00, 0x1a, 0x9d, 0x80, 0xd7,
+    0x00, 0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0c, 0x00, 0x18, 0xfc, 0x83, 0x5c,
+    0x69, 0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0d, 0x00, 0x18, 0xbe, 0x03, 0x5c, 0x69,
+    0x00, 0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0e, 0x00, 0x16, 0xff, 0x0d, 0x70, 0x69, 0x00,
+    0x40, 0x10, 0x04, 0x00, 0x8d, 0x06, 0x0d, 0x0f, 0x00, 0x16, 0x82, 0x0d, 0x70, 0x69, 0x00, 0x40,
+    0x10, 0x04, 0x00, 0x40, 0x00, 0x00, 0x00,
+];
+/// Scaleform GFx resource/movie constructor (`dump 0x14116a930 -> deobf/live 0x14116a910`).
+/// Signature from dump: `resource = f(out_resource, loader_data, file_type, char* url, file_obj,
+/// external_flag, heap_arg)`. After return, `resource+0x40` holds the movie-data pointer.
+pub(crate) const TITLE_SCALEFORM_RESOURCE_CTOR_RVA: usize = 0x116a910;
+pub(crate) static TITLE_SCALEFORM_RESOURCE_CTOR_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_SCALEFORM_RESOURCE_CTOR_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_SCALEFORM_RESOURCE_CTOR_LOGO_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_SCALEFORM_RESOURCE_CTOR_LAST_OUT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_RESOURCE_CTOR_LAST_URL_PTR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_RESOURCE_CTOR_LAST_FILE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_RESOURCE_CTOR_LAST_RET: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_RESOURCE_CTOR_LAST_MOVIE_DATA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static TITLE_SCALEFORM_RESOURCE_CTOR_LAST_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Dead-end note: `CS::TitleBackViewParts::FadeIn` (dump 0x1409a63f0 -> live 0x1409a62a0)
+/// only calls the state transition helper on `this+0x88` with `"FadeIn"`; runtime/user evidence
+/// proved suppressing it does NOT hide the visible logo. Keep as RE context, not a product hook.
+pub(crate) const TITLE_LOGO_BACK_VIEW_PARTS_FADEIN_RVA: usize = 0x9a62a0;
 pub(crate) const TITLE_PRESS_START_NAME_RVA: usize = 0x2b26500;
 /// Diagnostic span: if *(proxy) is NOT SceneObjProxy, scan [proxy .. proxy+0x40] stride 8 logging
 /// each qword + its [0] vtable so the next probe reveals the real layout. Also bounds the fallback.
@@ -1177,6 +2936,17 @@ pub(crate) const GAME_SAVE_SLOT_SINGLETON_RVA: usize = 0x3d69918;
 /// (the golden value was 0x7fff..); anything outside is treated as "not built yet" -> pass NULL.
 pub(crate) const OWNER_CTX_MIN_PLAUSIBLE_PTR: usize = 0x1_0000;
 pub(crate) const OWNER_CTX_MAX_PLAUSIBLE_PTR: usize = 0x8000_0000_0000;
+/// `GLOBAL_CSRegulationManager` singleton pointer. Native corrupted-save branch `FUN_14082d090`
+/// checks this for null before comparing `TitleFlowContext+0x148` against manager `+0x44`.
+pub(crate) const GLOBAL_CS_REGULATION_MANAGER_RVA: usize = 0x3d86c58;
+pub(crate) const TFC_REGULATION_VERSION_148_OFFSET: usize = 0x148;
+pub(crate) const REGULATION_MANAGER_VERSION_44_OFFSET: usize = 0x44;
+/// Native TFC regulation-version record helper: dump FUN_14082cbf0 -> deobf/live 0x14082cb00.
+pub(crate) const TITLE_FLOW_CONTEXT_RECORD_REGULATION_VERSION_RVA: usize = 0x82cb00;
+pub(crate) static TITLE_FLOW_CONTEXT_RECORD_REGULATION_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_FLOW_CONTEXT_RECORD_REGULATION_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_FLOW_CONTEXT_RECORD_REGULATION_FIXUPS: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) const OWN_STEPPER_LOG_INTERVAL: u64 = TitleNativeJobTiming::FrameRate as u64;
 pub(crate) const OWN_STEPPER_CALL_INC: usize = true as usize;
@@ -1643,6 +3413,11 @@ pub(crate) const PGD_RUNE_COUNT_6C_OFFSET: usize =
 pub(crate) const PGD_RUNE_MEMORY_70_OFFSET: usize =
     core::mem::offset_of!(PlayerGameData, rune_memory);
 pub(crate) const PGD_CHR_TYPE_98_OFFSET: usize = core::mem::offset_of!(PlayerGameData, chr_type);
+pub(crate) const PGD_EQUIP_GAME_DATA_OFFSET: usize =
+    core::mem::offset_of!(PlayerGameData, equipment);
+pub(crate) const EQUIP_GAME_DATA_CHR_ASM_OFFSET: usize =
+    core::mem::offset_of!(EquipGameData, chr_asm);
+pub(crate) const CHR_ASM_SIZE: usize = core::mem::size_of::<ChrAsm>();
 pub(crate) const PGD_GENDER_BE_OFFSET: usize = core::mem::offset_of!(PlayerGameData, gender);
 pub(crate) const PGD_ARCHETYPE_BF_OFFSET: usize = core::mem::offset_of!(PlayerGameData, archetype);
 pub(crate) const PGD_VOICE_TYPE_C2_OFFSET: usize =
@@ -1789,6 +3564,16 @@ pub(crate) const DIALOG_ROW_REGISTRY_A48_OFFSET: usize =
 pub(crate) const NATIVE_LOAD_FIRED_NO: usize = 0;
 pub(crate) const NATIVE_LOAD_FIRED_YES: usize = 1;
 pub(crate) static NATIVE_LOAD_FIRED: AtomicUsize = AtomicUsize::new(NATIVE_LOAD_FIRED_NO);
+pub(crate) static NATIVE_LOAD_LAST_NODE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static NATIVE_LOAD_LAST_NODE_VTABLE: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static NATIVE_LOAD_LAST_MEMBER_DIALOG: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static NATIVE_LOAD_LAST_MEMBER_FN: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static NATIVE_LOAD_LAST_MEMBER_ADJUST: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// The native-load observer now fires only when `title_menu_action_ready` validates the concrete
 /// Load-Game `MenuMemberFuncJob` node/action; there is no fixed post-menu settle frame count.
 /// Throttle interval for native-load observe logging (frames).
@@ -2726,6 +4511,25 @@ pub(crate) static START_SAFE_INPUT_HOOKS: Once = Once::new();
 pub(crate) static START_SPLASH_SKIP: Once = Once::new();
 pub(crate) static START_ONLINE_DISABLE: Once = Once::new();
 pub(crate) static START_FOREGROUND_FORCE: Once = Once::new();
+pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS: Once = Once::new();
+pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS: Once = Once::new();
+pub(crate) static START_TITLE_LOGO_START_LOGIN_HIDE: Once = Once::new();
+pub(crate) static START_TITLE_LOGO_FORCE_HIDDEN: Once = Once::new();
+pub(crate) static START_TITLE_PAB_INFORMATION_COVER: Once = Once::new();
+pub(crate) static START_TITLE_GFX_VALUE_SET_VISIBLE: Once = Once::new();
+pub(crate) static START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND: Once = Once::new();
+pub(crate) static START_TITLE_SCALEFORM_BIND_OBSERVER: Once = Once::new();
+pub(crate) static START_TITLE_MENU_RESOURCE_ACQUIRE_OBSERVER: Once = Once::new();
+pub(crate) static START_TITLE_FLOW_CONTEXT_RECORD_REGULATION: Once = Once::new();
+pub(crate) static START_NOW_LOADING_HELPER_OBSERVER: Once = Once::new();
+pub(crate) static START_LOADING_BG_REPLACE_BIND: Once = Once::new();
+/// One-shot install latch for the D3D12 Present overlay (the deterministic loading-portrait display path).
+pub(crate) static START_PRESENT_OVERLAY: Once = Once::new();
+pub(crate) static START_PROFILE_RENDERER_TEARDOWN_SPARE: Once = Once::new();
+pub(crate) static START_TITLE_CUSTOM_COVER_RUN: Once = Once::new();
+pub(crate) static START_BOOT_PROFILER: Once = Once::new();
+/// One-shot latch for the "first game-task frame ran" boot-phase marker (0 = not yet logged).
+pub(crate) static BOOT_FIRST_FRAME_LOGGED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static BOOTSTRAP_TELEMETRY_SEEN: AtomicUsize =
     AtomicUsize::new(BOOTSTRAP_TELEMETRY_UNSEEN);
 pub(crate) static SAFE_INPUT_CONFIRM_FRAMES_REMAINING: AtomicUsize = AtomicUsize::new(0);
@@ -2935,6 +4739,15 @@ pub(crate) static TITLE_NATIVE_JOB_CALLED: AtomicUsize =
     AtomicUsize::new(TITLE_NATIVE_JOB_NOT_CALLED);
 pub(crate) static FORCE_PLAY_GAME_CALLED: AtomicUsize =
     AtomicUsize::new(TITLE_NATIVE_JOB_NOT_CALLED);
+/// Trampoline to the original STEP_MenuJobWait (0x140b0d400) for the title-anim speedup hook. 0 = not hooked.
+pub(crate) static TITLE_ANIM_SPEED_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// One-shot guard for installing the title-anim speedup hook.
+pub(crate) static TITLE_ANIM_SPEED_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Trampoline to the original title step-setter `SetState(owner,int)` (0x140b0d960) for the
+/// read-only state-transition trace hook. 0 = not hooked. bd menu-build-overlap-lever-2026-06-24.
+pub(crate) static TITLE_SETSTATE_TRACE_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// One-shot guard for installing the title step-setter trace hook.
+pub(crate) static TITLE_SETSTATE_TRACE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SUBMIT_PLAY_GAME_PHASE: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(SUBMIT_PHASE_INIT);
 pub(crate) static FORCE_PLAY_GAME_LAST_STATE: std::sync::atomic::AtomicI32 =

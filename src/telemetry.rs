@@ -13,7 +13,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use debug::InputBlocker;
+use crate::input_blocker::InputBlocker;
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
@@ -21,27 +22,21 @@ use eldenring::{
 use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
-use hudhook::{
-    ImguiRenderLoop, MessageFilter,
-    hooks::dx12::ImguiDx12Hooks,
-    imgui::{Condition, Context, Ui},
-    mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook},
-    windows::{
-        Win32::{
-            Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
-            System::{
-                LibraryLoader::{GetModuleHandleA, GetProcAddress},
-                Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-                SystemServices::DLL_PROCESS_ATTACH,
-                Threading::GetCurrentProcessId,
-            },
-            UI::WindowsAndMessaging::{
-                EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
-                WM_KEYUP,
-            },
+use windows::{
+    Win32::{
+        Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
+        System::{
+            LibraryLoader::{GetModuleHandleA, GetProcAddress},
+            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
+            SystemServices::DLL_PROCESS_ATTACH,
+            Threading::GetCurrentProcessId,
         },
-        core::{BOOL, PCSTR},
+        UI::WindowsAndMessaging::{
+            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
+            WM_KEYUP,
+        },
     },
+    core::{BOOL, PCSTR},
 };
 
 #[allow(unused_imports)]
@@ -119,6 +114,100 @@ pub(crate) fn write_bootstrap_event(stage: &str, detail: &str) {
     let _ = fs::write(state_path, payload);
 }
 
+fn title_logo_gfx_alpha_for_frame(frame: i32) -> i32 {
+    match frame {
+        TITLE_LOGO_GFX_UNKNOWN_FRAME => TITLE_LOGO_GFX_UNKNOWN_ALPHA,
+        // Disk correlation: `target/autoresearch/gfx-analysis/script-smoke/summary.json` for
+        // `05_001_title_logo.gfx` shows root depth 3 is placed at frame 1 with no color transform,
+        // then moved by FadeIn frames 2..60 using alphaMultTerm 0..256, remains full through
+        // Title_TopMenu/FadeOut frame 113, and fades to 0 by frame 133. The in-memory oracle reads
+        // the live Scaleform current frame through `FUN_140d82620`, so convert that frame back into
+        // the on-disk alpha term instead of treating the entire ramp as a generic visible boolean.
+        1 => TITLE_LOGO_GFX_FULL_ALPHA,
+        2..=60 => ((frame - 2) * TITLE_LOGO_GFX_FULL_ALPHA + 29) / 58,
+        61..=113 => TITLE_LOGO_GFX_FULL_ALPHA,
+        114..=133 => ((133 - frame) * TITLE_LOGO_GFX_FULL_ALPHA + 10) / 20,
+        _ => TITLE_LOGO_GFX_UNKNOWN_ALPHA,
+    }
+}
+
+fn push_json_usize(body: &mut String, name: &str, value: usize) {
+    body.push_str(&format!("  \"{name}\": {value},\n"));
+}
+
+fn push_json_bool(body: &mut String, name: &str, value: bool) {
+    body.push_str(&format!("  \"{name}\": {value},\n"));
+}
+
+fn push_json_str(body: &mut String, name: &str, value: &str) {
+    body.push_str(&format!("  \"{name}\": \"{value}\",\n"));
+}
+
+fn title_menu_window_id_flags(base: usize, window: usize) -> (usize, usize, bool) {
+    const NULL_PTR: usize = 0;
+    if window == NULL_PTR || window == TITLE_OWNER_SCAN_START_ADDRESS {
+        return (
+            TITLE_OWNER_SCAN_START_ADDRESS,
+            TITLE_OWNER_SCAN_START_ADDRESS,
+            false,
+        );
+    }
+    let menu_id = unsafe { crate::experiments::safe_read_u16(window + 0x180) }
+        .map_or(TITLE_OWNER_SCAN_START_ADDRESS, usize::from);
+    if menu_id >= 0x47 {
+        return (menu_id, TITLE_OWNER_SCAN_START_ADDRESS, false);
+    }
+    let cs_menu_man = unsafe { crate::experiments::safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
+        .unwrap_or(NULL_PTR);
+    if cs_menu_man == NULL_PTR {
+        return (menu_id, TITLE_OWNER_SCAN_START_ADDRESS, false);
+    }
+    let flags = unsafe { crate::experiments::safe_read_u8(cs_menu_man + 0x90 + menu_id) }
+        .map_or(TITLE_OWNER_SCAN_START_ADDRESS, usize::from);
+    let draw_bit_set = flags != TITLE_OWNER_SCAN_START_ADDRESS
+        && (flags & TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK as usize) != 0;
+    (menu_id, flags, draw_bit_set)
+}
+
+unsafe fn title_logo_gfx_current_frame(base: usize, title_logo_back_view_parts: usize) -> i32 {
+    if title_logo_back_view_parts == TITLE_OWNER_SCAN_START_ADDRESS
+        || title_logo_back_view_parts == 0
+    {
+        return TITLE_LOGO_GFX_UNKNOWN_FRAME;
+    }
+    let gfx_value = title_logo_back_view_parts + TITLE_LOGO_GFX_VALUE_88_OFFSET;
+    let Some(handle) = (unsafe { crate::experiments::safe_read_usize(gfx_value) }) else {
+        return TITLE_LOGO_GFX_UNKNOWN_FRAME;
+    };
+    if handle == 0 || handle == TITLE_OWNER_SCAN_START_ADDRESS {
+        return TITLE_LOGO_GFX_UNKNOWN_FRAME;
+    }
+    let Some(vtable) = (unsafe { crate::experiments::safe_read_usize(handle) }) else {
+        return TITLE_LOGO_GFX_UNKNOWN_FRAME;
+    };
+    if vtable == 0 || vtable == TITLE_OWNER_SCAN_START_ADDRESS {
+        return TITLE_LOGO_GFX_UNKNOWN_FRAME;
+    }
+    let Some(resolve_value_addr) = (unsafe { crate::experiments::safe_read_usize(vtable + 0x8) })
+    else {
+        return TITLE_LOGO_GFX_UNKNOWN_FRAME;
+    };
+    if resolve_value_addr == 0 || resolve_value_addr == TITLE_OWNER_SCAN_START_ADDRESS {
+        return TITLE_LOGO_GFX_UNKNOWN_FRAME;
+    }
+    // Mirrors native helpers at 0x140749980/0x1407499e0: load *(gfx_value) into rcx, call vtable+8,
+    // then pass the resolved Scaleform value to FUN_140d82620 to read the current 1-based frame.
+    let resolve_value: unsafe extern "system" fn(usize) -> usize =
+        unsafe { std::mem::transmute(resolve_value_addr) };
+    let value = unsafe { resolve_value(handle) };
+    if value == 0 || value == TITLE_OWNER_SCAN_START_ADDRESS {
+        return TITLE_LOGO_GFX_UNKNOWN_FRAME;
+    }
+    let current_frame: unsafe extern "system" fn(usize) -> i32 =
+        unsafe { std::mem::transmute(base + TITLE_LOGO_GFX_CURRENT_FRAME_RVA) };
+    unsafe { current_frame(value) }
+}
+
 pub(crate) fn write_telemetry_throttled(state: &mut EffectsState, player_available: bool) {
     const TELEMETRY_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -182,6 +271,10 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         state
             .current_animation_id
             .map_or_else(|| "null".to_owned(), |id| id.to_string())
+    ));
+    body.push_str(&format!(
+        "  \"expected_animation_seen\": {},\n",
+        state.expected_animation_seen
     ));
     body.push_str(&format!("  \"network_sync\": {},\n", state.network_sync));
     body.push_str(&format!(
@@ -319,8 +412,12 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     };
     let title_owner_state_bits = TITLE_OWNER_SCAN_LAST_STATE_BITS.load(Ordering::SeqCst);
     body.push_str(&format!(
-        "  \"product_autoload_armed\": {},\n  \"product_core_autoload_ticks\": {},\n  \"product_core_ready_blocks\": {},\n  \"product_core_ready_successes\": {},\n  \"product_core_owner_ticks\": {},\n  \"product_core_last_owner\": {},\n  \"product_core_last_title_dialog\": {},\n  \"product_core_last_title_dialog_vt\": {},\n  \"product_core_last_title_in_loop\": {},\n  \"product_core_last_title_in_textfadeout\": {},\n  \"product_core_last_menu_opened_latch\": {},\n  \"product_core_last_press_start_proxy\": {},\n  \"product_core_last_press_start_vt\": {},\n  \"product_core_last_press_start_context\": {},\n  \"product_core_last_phase\": {},\n  \"product_core_ready_blocker\": \"{}\",\n  \"title_owner_scan_attempts\": {},\n  \"title_owner_scan_vtable_hits\": {},\n  \"title_owner_scan_table_rejects\": {},\n  \"title_owner_scan_state_rejects\": {},\n  \"title_owner_scan_cached_owner\": {},\n  \"title_owner_scan_last_candidate\": {},\n  \"title_owner_scan_last_table\": {},\n  \"title_owner_scan_last_state\": {},\n",
+        "  \"product_autoload_armed\": {},\n  \"product_core_callsite_ticks\": {},\n  \"product_core_callsite_base_ok_ticks\": {},\n  \"product_core_callsite_slot_ok_ticks\": {},\n  \"product_core_callsite_last_slot\": {},\n  \"product_core_autoload_ticks\": {},\n  \"product_core_ready_blocks\": {},\n  \"product_core_ready_successes\": {},\n  \"product_core_owner_ticks\": {},\n  \"product_core_last_owner\": {},\n  \"product_core_last_title_dialog\": {},\n  \"product_core_last_title_dialog_vt\": {},\n  \"product_core_last_title_in_loop\": {},\n  \"product_core_last_title_in_textfadeout\": {},\n  \"product_core_last_menu_opened_latch\": {},\n  \"product_core_last_press_start_proxy\": {},\n  \"product_core_last_press_start_vt\": {},\n  \"product_core_last_press_start_context\": {},\n  \"product_core_last_phase\": {},\n  \"product_core_ready_blocker\": \"{}\",\n  \"title_owner_scan_attempts\": {},\n  \"title_owner_scan_vtable_hits\": {},\n  \"title_owner_scan_table_rejects\": {},\n  \"title_owner_scan_state_rejects\": {},\n  \"title_owner_scan_cached_owner\": {},\n  \"title_owner_scan_last_candidate\": {},\n  \"title_owner_scan_last_table\": {},\n  \"title_owner_scan_last_state\": {},\n",
         product_autoload_enabled(),
+        PRODUCT_CORE_CALLSITE_TICKS.load(Ordering::SeqCst),
+        PRODUCT_CORE_CALLSITE_BASE_OK_TICKS.load(Ordering::SeqCst),
+        PRODUCT_CORE_CALLSITE_SLOT_OK_TICKS.load(Ordering::SeqCst),
+        PRODUCT_CORE_CALLSITE_LAST_SLOT.load(Ordering::SeqCst),
         PRODUCT_CORE_AUTOLOAD_TICKS.load(Ordering::SeqCst),
         PRODUCT_CORE_READY_BLOCKS.load(Ordering::SeqCst),
         PRODUCT_CORE_READY_SUCCESSES.load(Ordering::SeqCst),
@@ -432,6 +529,57 @@ pub(crate) fn write_game_man_telemetry(body: &mut String) {
         .unwrap_or(false);
     body.push_str(&format!(
         "  \"loadgame_build_ctx_ready\": {loadgame_build_ctx_ready},\n"
+    ));
+
+    let base = crate::experiments::game_module_base().unwrap_or(0);
+    let owner = TITLE_OWNER_PTR.load(Ordering::SeqCst);
+    let dialog = if owner != 0 && owner != TITLE_OWNER_SCAN_START_ADDRESS {
+        unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(0)
+    } else {
+        0
+    };
+    let dialog_vt = if dialog != 0 {
+        unsafe { safe_read_usize(dialog) }.unwrap_or(0)
+    } else {
+        0
+    };
+    let title_flow_context =
+        if base != 0 && dialog != 0 && dialog_vt == base + TITLE_TOP_DIALOG_VTABLE_RVA {
+            unsafe { safe_read_usize(dialog + DIALOG_OWNER_CTX_A38_OFFSET) }.unwrap_or(0)
+        } else {
+            0
+        };
+    let tfc_version = if title_flow_context > OWNER_CTX_MIN_PLAUSIBLE_PTR
+        && title_flow_context < OWNER_CTX_MAX_PLAUSIBLE_PTR
+    {
+        unsafe { safe_read_i32(title_flow_context + TFC_REGULATION_VERSION_148_OFFSET) }
+    } else {
+        None
+    };
+    let regulation_manager = if base != 0 {
+        unsafe { safe_read_usize(base + GLOBAL_CS_REGULATION_MANAGER_RVA) }.unwrap_or(0)
+    } else {
+        0
+    };
+    let regulation_manager_version =
+        if regulation_manager != 0 && regulation_manager != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { safe_read_i32(regulation_manager + REGULATION_MANAGER_VERSION_44_OFFSET) }
+        } else {
+            None
+        };
+    body.push_str(&format!(
+        "  \"oracle_title_flow_context_ptr\": \"0x{title_flow_context:x}\",\n"
+    ));
+    body.push_str(&format!(
+        "  \"oracle_title_flow_context_regulation_version\": {},\n",
+        tfc_version.map_or_else(|| "null".to_owned(), |value| value.to_string())
+    ));
+    body.push_str(&format!(
+        "  \"oracle_regulation_manager_ptr\": \"0x{regulation_manager:x}\",\n"
+    ));
+    body.push_str(&format!(
+        "  \"oracle_regulation_manager_version\": {},\n",
+        regulation_manager_version.map_or_else(|| "null".to_owned(), |value| value.to_string())
     ));
 
     let Ok(game_man) = (unsafe { GameMan::instance() }) else {
@@ -797,7 +945,132 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
                     .map_or(READ_FAIL_SENTINEL, |v| (v & NOW_LOADING_BYTE_MASK) as i32)
             }
         };
-        body.push_str(&format!("  \"oracle_now_loading\": {now_loading},\n"));
+        const FAKE_LOADING_SCREEN_SINGLETON_RVA: usize =
+            RuntimeGlobalRva::FakeLoadingScreenSingleton as usize;
+        let fake_loading_screen = unsafe {
+            crate::experiments::safe_read_usize(base + FAKE_LOADING_SCREEN_SINGLETON_RVA)
+        }
+        .unwrap_or(NULL_PTR);
+        let fake_loading_visible = if fake_loading_screen == NULL_PTR {
+            READ_FAIL_SENTINEL
+        } else {
+            unsafe { crate::experiments::safe_read_usize(fake_loading_screen + 0x8) }
+                .map_or(READ_FAIL_SENTINEL, |v| (v & NOW_LOADING_BYTE_MASK) as i32)
+        };
+        let fake_loading_field_c = if fake_loading_screen == NULL_PTR {
+            READ_FAIL_SENTINEL
+        } else {
+            unsafe { crate::experiments::safe_read_usize(fake_loading_screen + 0xc) }
+                .map_or(READ_FAIL_SENTINEL, |v| v as u32 as i32)
+        };
+        let fake_loading_field_10 = if fake_loading_screen == NULL_PTR {
+            READ_FAIL_SENTINEL
+        } else {
+            unsafe { crate::experiments::safe_read_usize(fake_loading_screen + 0x10) }
+                .map_or(READ_FAIL_SENTINEL, |v| v as u32 as i32)
+        };
+        if fake_loading_screen != NULL_PTR {
+            FAKE_LOADING_SCREEN_SAMPLE_COUNT.fetch_add(1, Ordering::SeqCst);
+            FAKE_LOADING_SCREEN_LAST_PTR.store(fake_loading_screen, Ordering::SeqCst);
+            FAKE_LOADING_SCREEN_LAST_VISIBLE
+                .store(fake_loading_visible.max(0) as usize, Ordering::SeqCst);
+            FAKE_LOADING_SCREEN_LAST_FIELD_C
+                .store(fake_loading_field_c.max(0) as usize, Ordering::SeqCst);
+            FAKE_LOADING_SCREEN_LAST_FIELD_10
+                .store(fake_loading_field_10.max(0) as usize, Ordering::SeqCst);
+            if fake_loading_visible > 0 {
+                FAKE_LOADING_SCREEN_VISIBLE_SAMPLES.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let fake_loading_samples = FAKE_LOADING_SCREEN_SAMPLE_COUNT.load(Ordering::SeqCst);
+        let fake_loading_visible_samples =
+            FAKE_LOADING_SCREEN_VISIBLE_SAMPLES.load(Ordering::SeqCst);
+        const RENDMAN_SINGLETON_RVA: usize = RuntimeGlobalRva::RendManSingleton as usize;
+        const CSGRAPHICS_SINGLETON_RVA: usize = RuntimeGlobalRva::CsGraphicsSingleton as usize;
+        const CSSCALEFORM_SINGLETON_RVA: usize = RuntimeGlobalRva::CsScaleformSingleton as usize;
+        let rendman = unsafe { crate::experiments::safe_read_usize(base + RENDMAN_SINGLETON_RVA) }
+            .unwrap_or(NULL_PTR);
+        let csgraphics =
+            unsafe { crate::experiments::safe_read_usize(base + CSGRAPHICS_SINGLETON_RVA) }
+                .unwrap_or(NULL_PTR);
+        let csscaleform =
+            unsafe { crate::experiments::safe_read_usize(base + CSSCALEFORM_SINGLETON_RVA) }
+                .unwrap_or(NULL_PTR);
+        let read_rend = |offset: usize| -> usize {
+            if rendman == NULL_PTR {
+                NULL_PTR
+            } else {
+                unsafe { crate::experiments::safe_read_usize(rendman + offset) }.unwrap_or(NULL_PTR)
+            }
+        };
+        let rend_slot_28 = read_rend(0x28);
+        let rend_slot_30 = read_rend(0x30);
+        let rend_slot_38 = read_rend(0x38);
+        let rend_slot_40 = read_rend(0x40);
+        let rend_slot_78 = read_rend(0x78);
+        let rendman_pause = if rendman == NULL_PTR {
+            READ_FAIL_SENTINEL
+        } else {
+            unsafe { crate::experiments::safe_read_usize(rendman + 0x90) }
+                .map_or(READ_FAIL_SENTINEL, |v| (v & NOW_LOADING_BYTE_MASK) as i32)
+        };
+        let csgraphics_field68 = if csgraphics == NULL_PTR {
+            NULL_PTR
+        } else {
+            unsafe { crate::experiments::safe_read_usize(csgraphics + 0x68) }.unwrap_or(NULL_PTR)
+        };
+        let mut slots_mask = 0usize;
+        if rend_slot_28 != NULL_PTR {
+            slots_mask |= 1 << 0;
+        }
+        if rend_slot_30 != NULL_PTR {
+            slots_mask |= 1 << 1;
+        }
+        if rend_slot_38 != NULL_PTR {
+            slots_mask |= 1 << 2;
+        }
+        if rend_slot_40 != NULL_PTR {
+            slots_mask |= 1 << 3;
+        }
+        if rend_slot_78 != NULL_PTR {
+            slots_mask |= 1 << 4;
+        }
+        if csgraphics_field68 != NULL_PTR {
+            slots_mask |= 1 << 5;
+        }
+        if csscaleform != NULL_PTR {
+            slots_mask |= 1 << 6;
+        }
+        RENDER_LOADING_LAYER_LAST_RENDMAN.store(rendman, Ordering::SeqCst);
+        RENDER_LOADING_LAYER_LAST_CSGRAPHICS.store(csgraphics, Ordering::SeqCst);
+        RENDER_LOADING_LAYER_LAST_CSSCALEFORM.store(csscaleform, Ordering::SeqCst);
+        RENDER_LOADING_LAYER_LAST_SLOTS_MASK.store(slots_mask, Ordering::SeqCst);
+        if fake_loading_visible > 0 {
+            RENDER_LOADING_LAYER_SAMPLE_COUNT.fetch_add(1, Ordering::SeqCst);
+            if slots_mask != 0 {
+                RENDER_LOADING_LAYER_NONNULL_SAMPLES.fetch_add(1, Ordering::SeqCst);
+            }
+            RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK.fetch_or(slots_mask, Ordering::SeqCst);
+        }
+        let render_loading_samples = RENDER_LOADING_LAYER_SAMPLE_COUNT.load(Ordering::SeqCst);
+        let render_loading_nonnull_samples =
+            RENDER_LOADING_LAYER_NONNULL_SAMPLES.load(Ordering::SeqCst);
+        let render_loading_visible_slots_mask =
+            RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK.load(Ordering::SeqCst);
+        body.push_str(&format!(
+            "  \"oracle_now_loading\": {now_loading},\n  \"oracle_fake_loading_screen\": {},\n  \"oracle_fake_loading_visible\": {fake_loading_visible},\n  \"oracle_fake_loading_field_c\": {fake_loading_field_c},\n  \"oracle_fake_loading_field_10\": {fake_loading_field_10},\n  \"oracle_fake_loading_sample_count\": {fake_loading_samples},\n  \"oracle_fake_loading_visible_samples\": {fake_loading_visible_samples},\n  \"oracle_fake_loading_any_visible\": {},\n  \"oracle_render_loading_rendman\": {},\n  \"oracle_render_loading_csgraphics\": {},\n  \"oracle_render_loading_csscaleform\": {},\n  \"oracle_render_loading_rendman_pause\": {rendman_pause},\n  \"oracle_render_loading_slot_28\": {},\n  \"oracle_render_loading_slot_30\": {},\n  \"oracle_render_loading_slot_38\": {},\n  \"oracle_render_loading_slot_40\": {},\n  \"oracle_render_loading_slot_78\": {},\n  \"oracle_render_loading_csgraphics_field68\": {},\n  \"oracle_render_loading_last_slots_mask\": {slots_mask},\n  \"oracle_render_loading_visible_slots_mask\": {render_loading_visible_slots_mask},\n  \"oracle_render_loading_sample_count\": {render_loading_samples},\n  \"oracle_render_loading_nonnull_samples\": {render_loading_nonnull_samples},\n",
+            format_optional_ptr(fake_loading_screen),
+            fake_loading_visible_samples > 0,
+            format_optional_ptr(rendman),
+            format_optional_ptr(csgraphics),
+            format_optional_ptr(csscaleform),
+            format_optional_ptr(rend_slot_28),
+            format_optional_ptr(rend_slot_30),
+            format_optional_ptr(rend_slot_38),
+            format_optional_ptr(rend_slot_40),
+            format_optional_ptr(rend_slot_78),
+            format_optional_ptr(csgraphics_field68),
+        ));
         let msgbox_dialog = MSGBOX_LAST_DIALOG.load(Ordering::SeqCst);
         let msgbox_vtable = if msgbox_dialog == NULL_PTR {
             NULL_PTR
@@ -906,6 +1179,375 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         let server_status_any_seen = server_status_total_seen != NO_MSGBOX_BUILDS;
         let server_status_state = SERVER_STATUS_LAST_STATE.load(Ordering::SeqCst);
         let server_status_text_id = SERVER_STATUS_LAST_TEXT_ID.load(Ordering::SeqCst);
+        let title_visual_suppress_installed = TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED
+            .load(Ordering::SeqCst)
+            == TITLE_NATIVE_MENU_VISUAL_SUPPRESS_INSTALLED_YES;
+        let title_visual_suppressed_builds =
+            TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS.load(Ordering::SeqCst);
+        let title_visual_last_out_slot =
+            TITLE_NATIVE_MENU_VISUAL_LAST_OUT_SLOT.load(Ordering::SeqCst);
+        let title_visual_last_prev_out =
+            TITLE_NATIVE_MENU_VISUAL_LAST_PREV_OUT.load(Ordering::SeqCst);
+        let title_visual_last_arg_rdx =
+            TITLE_NATIVE_MENU_VISUAL_LAST_ARG_RDX.load(Ordering::SeqCst);
+        let title_visual_last_arg_r8 = TITLE_NATIVE_MENU_VISUAL_LAST_ARG_R8.load(Ordering::SeqCst);
+        let title_visual_last_caller_rva =
+            TITLE_NATIVE_MENU_VISUAL_LAST_CALLER_RVA.load(Ordering::SeqCst);
+        let title_visual_native_job = TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.load(Ordering::SeqCst);
+        let title_visual_native_window =
+            TITLE_NATIVE_MENU_VISUAL_NATIVE_WINDOW.load(Ordering::SeqCst);
+        let title_visual_render_suppress_installed =
+            TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED.load(Ordering::SeqCst)
+                == TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED_YES;
+        let title_visual_render_suppressed_windows =
+            TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESSED_WINDOWS.load(Ordering::SeqCst);
+        let title_visual_render_last_window =
+            TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_WINDOW.load(Ordering::SeqCst);
+        let title_visual_render_last_flags_before =
+            TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_BEFORE.load(Ordering::SeqCst);
+        let title_visual_render_last_flags_after =
+            TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_AFTER.load(Ordering::SeqCst);
+        let title_visual_render_last_caller_rva =
+            TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_CALLER_RVA.load(Ordering::SeqCst);
+        let (
+            title_visual_current_menu_id,
+            title_visual_current_flags,
+            title_visual_current_draw_bit_set,
+        ) = title_menu_window_id_flags(base, title_visual_native_window);
+        // Actual visible logo surface telemetry: `TitleBackViewParts` / `05_001_Title_Logo` is an
+        // embedded object at TitleTopDialog+0xaa8, separate from the preserved `05_000_Title`
+        // MenuWindowJob. A real portrait cover depends on post-SL2 profile_summary readiness and the
+        // SYSTEX_Menu_Profile render pipeline, so expose both in RAM telemetry before any mutation.
+        let title_logo_dialog = PRODUCT_CORE_LAST_TITLE_DIALOG.load(Ordering::SeqCst);
+        let title_logo_back_view_parts = if title_logo_dialog != NULL_PTR
+            && title_logo_dialog != TITLE_OWNER_SCAN_START_ADDRESS
+        {
+            title_logo_dialog + TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET
+        } else {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        };
+        let title_logo_back_view_parts_vtable =
+            if title_logo_back_view_parts != TITLE_OWNER_SCAN_START_ADDRESS {
+                unsafe { crate::experiments::safe_read_usize(title_logo_back_view_parts) }
+                    .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+            } else {
+                TITLE_OWNER_SCAN_START_ADDRESS
+            };
+        let title_logo_gfx_frame =
+            if title_logo_back_view_parts_vtable != TITLE_OWNER_SCAN_START_ADDRESS {
+                unsafe { title_logo_gfx_current_frame(base, title_logo_back_view_parts) }
+            } else {
+                TITLE_LOGO_GFX_UNKNOWN_FRAME
+            };
+        let title_logo_gfx_alpha_mult_term = title_logo_gfx_alpha_for_frame(title_logo_gfx_frame);
+        let title_logo_gfx_visibility = title_logo_gfx_alpha_mult_term > 0;
+        let title_logo_gfx_hide_calls = TITLE_LOGO_GFX_HIDE_CALLS.load(Ordering::SeqCst);
+        let title_logo_gfx_hide_last_dialog =
+            TITLE_LOGO_GFX_HIDE_LAST_DIALOG.load(Ordering::SeqCst);
+        let title_logo_gfx_hide_last_logo = TITLE_LOGO_GFX_HIDE_LAST_LOGO.load(Ordering::SeqCst);
+        let title_logo_gfx_hide_last_caller_phase =
+            TITLE_LOGO_GFX_HIDE_LAST_CALLER_PHASE.load(Ordering::SeqCst);
+        let title_logo_gfx_hide_last_requested_visible =
+            TITLE_LOGO_GFX_HIDE_LAST_REQUESTED_VISIBLE.load(Ordering::SeqCst);
+        let title_menu_resource_acquire_installed =
+            TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.load(Ordering::SeqCst) != 0;
+        let title_menu_resource_acquire_hits =
+            TITLE_MENU_RESOURCE_ACQUIRE_HITS.load(Ordering::SeqCst);
+        let title_menu_resource_acquire_logo_hits =
+            TITLE_MENU_RESOURCE_ACQUIRE_LOGO_HITS.load(Ordering::SeqCst);
+        let title_menu_resource_acquire_last_this =
+            TITLE_MENU_RESOURCE_ACQUIRE_LAST_THIS.load(Ordering::SeqCst);
+        let title_menu_resource_acquire_last_load_params =
+            TITLE_MENU_RESOURCE_ACQUIRE_LAST_LOAD_PARAMS.load(Ordering::SeqCst);
+        let title_menu_resource_acquire_last_filename_ptr =
+            TITLE_MENU_RESOURCE_ACQUIRE_LAST_FILENAME_PTR.load(Ordering::SeqCst);
+        let title_menu_resource_acquire_last_param3 =
+            TITLE_MENU_RESOURCE_ACQUIRE_LAST_PARAM3.load(Ordering::SeqCst);
+        let title_menu_resource_acquire_last_ret =
+            TITLE_MENU_RESOURCE_ACQUIRE_LAST_RET.load(Ordering::SeqCst);
+        let title_menu_resource_acquire_last_caller_rva =
+            TITLE_MENU_RESOURCE_ACQUIRE_LAST_CALLER_RVA.load(Ordering::SeqCst);
+        let title_scaleform_file_open_installed =
+            TITLE_SCALEFORM_FILE_OPEN_INSTALLED.load(Ordering::SeqCst) != 0;
+        let title_scaleform_file_open_hits = TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst);
+        let title_scaleform_file_open_logo_hits =
+            TITLE_SCALEFORM_FILE_OPEN_LOGO_HITS.load(Ordering::SeqCst);
+        let title_scaleform_file_open_last_loader =
+            TITLE_SCALEFORM_FILE_OPEN_LAST_LOADER.load(Ordering::SeqCst);
+        let title_scaleform_file_open_last_url_ptr =
+            TITLE_SCALEFORM_FILE_OPEN_LAST_URL_PTR.load(Ordering::SeqCst);
+        let title_scaleform_file_open_last_flags =
+            TITLE_SCALEFORM_FILE_OPEN_LAST_FLAGS.load(Ordering::SeqCst);
+        let title_scaleform_file_open_last_ret =
+            TITLE_SCALEFORM_FILE_OPEN_LAST_RET.load(Ordering::SeqCst);
+        let title_scaleform_file_open_last_ret_vtable =
+            TITLE_SCALEFORM_FILE_OPEN_LAST_RET_VTABLE.load(Ordering::SeqCst);
+        let title_scaleform_file_open_last_caller_rva =
+            TITLE_SCALEFORM_FILE_OPEN_LAST_CALLER_RVA.load(Ordering::SeqCst);
+        let title_scaleform_memory_gfx_bytes =
+            TITLE_SCALEFORM_MEMORY_GFX_BYTES.load(Ordering::SeqCst);
+        let title_scaleform_memory_gfx_replacements =
+            TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS.load(Ordering::SeqCst);
+        let title_scaleform_memory_gfx_failures =
+            TITLE_SCALEFORM_MEMORY_GFX_FAILURES.load(Ordering::SeqCst);
+        let title_scaleform_memory_gfx_last_file =
+            TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE.load(Ordering::SeqCst);
+        let title_scaleform_resource_ctor_installed =
+            TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED.load(Ordering::SeqCst) != 0;
+        let title_scaleform_resource_ctor_hits =
+            TITLE_SCALEFORM_RESOURCE_CTOR_HITS.load(Ordering::SeqCst);
+        let title_scaleform_resource_ctor_logo_hits =
+            TITLE_SCALEFORM_RESOURCE_CTOR_LOGO_HITS.load(Ordering::SeqCst);
+        let title_scaleform_resource_ctor_last_out =
+            TITLE_SCALEFORM_RESOURCE_CTOR_LAST_OUT.load(Ordering::SeqCst);
+        let title_scaleform_resource_ctor_last_url_ptr =
+            TITLE_SCALEFORM_RESOURCE_CTOR_LAST_URL_PTR.load(Ordering::SeqCst);
+        let title_scaleform_resource_ctor_last_file =
+            TITLE_SCALEFORM_RESOURCE_CTOR_LAST_FILE.load(Ordering::SeqCst);
+        let title_scaleform_resource_ctor_last_ret =
+            TITLE_SCALEFORM_RESOURCE_CTOR_LAST_RET.load(Ordering::SeqCst);
+        let title_scaleform_resource_ctor_last_movie_data =
+            TITLE_SCALEFORM_RESOURCE_CTOR_LAST_MOVIE_DATA.load(Ordering::SeqCst);
+        let title_scaleform_resource_ctor_last_caller_rva =
+            TITLE_SCALEFORM_RESOURCE_CTOR_LAST_CALLER_RVA.load(Ordering::SeqCst);
+        let title_press_start_gfx_hide_calls =
+            TITLE_PRESS_START_GFX_HIDE_CALLS.load(Ordering::SeqCst);
+        let title_press_start_gfx_hide_last_dialog =
+            TITLE_PRESS_START_GFX_HIDE_LAST_DIALOG.load(Ordering::SeqCst);
+        let title_press_start_gfx_hide_last_proxy =
+            TITLE_PRESS_START_GFX_HIDE_LAST_PROXY.load(Ordering::SeqCst);
+        let title_press_start_gfx_hide_last_context =
+            TITLE_PRESS_START_GFX_HIDE_LAST_CONTEXT.load(Ordering::SeqCst);
+        let title_press_start_gfx_hide_last_caller_phase =
+            TITLE_PRESS_START_GFX_HIDE_LAST_CALLER_PHASE.load(Ordering::SeqCst);
+        let title_press_start_gfx_value = TITLE_PRESS_START_GFX_VALUE.load(Ordering::SeqCst);
+        let title_press_start_gfx_force_false_calls =
+            TITLE_PRESS_START_GFX_FORCE_FALSE_CALLS.load(Ordering::SeqCst);
+        let title_press_start_gfx_force_false_last_value =
+            TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_VALUE.load(Ordering::SeqCst);
+        let title_press_start_gfx_force_false_last_requested =
+            TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_REQUESTED.load(Ordering::SeqCst);
+        let title_press_start_bind_hits = TITLE_PRESS_START_BIND_HITS.load(Ordering::SeqCst);
+        let title_press_start_bind_last_parent =
+            TITLE_PRESS_START_BIND_LAST_PARENT.load(Ordering::SeqCst);
+        let title_press_start_bind_last_out =
+            TITLE_PRESS_START_BIND_LAST_OUT.load(Ordering::SeqCst);
+        let title_press_start_bind_last_name =
+            TITLE_PRESS_START_BIND_LAST_NAME.load(Ordering::SeqCst);
+        let title_press_start_bind_last_context =
+            TITLE_PRESS_START_BIND_LAST_CONTEXT.load(Ordering::SeqCst);
+        let title_press_start_bind_hide_calls =
+            TITLE_PRESS_START_BIND_HIDE_CALLS.load(Ordering::SeqCst);
+        // Real false until a later mutation binds the post-SL2 profile/SYSTEX portrait to the
+        // 05_001_Title_Logo root-depth-3 surface. `05_010_ProfileSelect` dummy faces are exported
+        // bitmap classes only (0 timeline placements), so profile_summary readiness alone is not a
+        // visible cover binding.
+        let title_profile_cover_bound_to_logo_surface = false;
+        let title_overlay_cover_render_calls =
+            TITLE_OVERLAY_COVER_RENDER_CALLS.load(Ordering::SeqCst);
+        let title_overlay_cover_last_display_w =
+            TITLE_OVERLAY_COVER_LAST_DISPLAY_W.load(Ordering::SeqCst);
+        let title_overlay_cover_last_display_h =
+            TITLE_OVERLAY_COVER_LAST_DISPLAY_H.load(Ordering::SeqCst);
+        let title_overlay_cover_display_sane =
+            title_overlay_cover_last_display_w >= 200 && title_overlay_cover_last_display_h >= 200;
+        let title_overlay_cover_texture_bound =
+            TITLE_OVERLAY_COVER_TEXTURE_BOUND.load(Ordering::SeqCst) != 0;
+        let title_overlay_cover_last_gx_texture =
+            TITLE_OVERLAY_COVER_LAST_GX_TEXTURE.load(Ordering::SeqCst);
+        let title_overlay_cover_last_texture_resource =
+            TITLE_OVERLAY_COVER_LAST_TEXTURE_RESOURCE.load(Ordering::SeqCst);
+        let title_logo_profile_summary = {
+            let game_data_man = crate::game_data_man_ptr_or_null();
+            if game_data_man != NULL_PTR {
+                unsafe {
+                    crate::experiments::safe_read_usize(
+                        game_data_man + SLOT_MANAGER_CONTAINER_OFFSET,
+                    )
+                }
+                .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+            } else {
+                TITLE_OWNER_SCAN_START_ADDRESS
+            }
+        };
+        let title_logo_profile_summary_ready = title_logo_profile_summary
+            != TITLE_OWNER_SCAN_START_ADDRESS
+            && title_logo_profile_summary != NULL_PTR;
+        let title_profile_render_refresh_gate_ready = unsafe {
+            product_core_autoload_ready(
+                PRODUCT_CORE_LAST_OWNER.load(Ordering::SeqCst),
+                base,
+                game_man_ptr_or_null(),
+                OWN_STEPPER_SLOT_ZERO,
+            )
+        }
+        .is_some();
+        let title_profile_face_bind_hits = TITLE_PROFILE_FACE_BIND_HITS.load(Ordering::SeqCst);
+        let title_profile_face_transform_applied =
+            TITLE_PROFILE_FACE_TRANSFORM_APPLIED.load(Ordering::SeqCst) != 0;
+        let title_profile_face_other_hidden =
+            TITLE_PROFILE_FACE_OTHER_HIDDEN.load(Ordering::SeqCst);
+        let title_profile_face_last_proxy = TITLE_PROFILE_FACE_LAST_PROXY.load(Ordering::SeqCst);
+        let title_profile_face_last_value = TITLE_PROFILE_FACE_LAST_VALUE.load(Ordering::SeqCst);
+        let title_loaded_character_portrait_rendered = title_profile_face_bind_hits != 0
+            && title_profile_face_transform_applied
+            && title_profile_face_other_hidden >= 9
+            && TITLE_SCALEFORM_BIND_OBSERVER_SYSTEX_HITS.load(Ordering::SeqCst) >= 10
+            && TITLE_CUSTOM_COVER_RUN_CALLS.load(Ordering::SeqCst) == 1;
+        let title_loaded_character_portrait_visible_during_boot =
+            title_loaded_character_portrait_rendered
+                && TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS.load(Ordering::SeqCst) != 0
+                && TITLE_LOGO_GFX_HIDE_CALLS.load(Ordering::SeqCst) != 0;
+        let title_loaded_character_portrait_held_until_loading_takeover =
+            title_loaded_character_portrait_rendered
+                && (RENDER_LOADING_LAYER_NONNULL_SAMPLES.load(Ordering::SeqCst) != 0
+                    || RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK.load(Ordering::SeqCst) != 0);
+        let title_scaleform_bind_observer_hits =
+            TITLE_SCALEFORM_BIND_OBSERVER_HITS.load(Ordering::SeqCst);
+        let title_scaleform_bind_observer_systex_hits =
+            TITLE_SCALEFORM_BIND_OBSERVER_SYSTEX_HITS.load(Ordering::SeqCst);
+        let title_scaleform_bind_observer_last_owner =
+            TITLE_SCALEFORM_BIND_OBSERVER_LAST_OWNER.load(Ordering::SeqCst);
+        let title_scaleform_bind_observer_last_pair =
+            TITLE_SCALEFORM_BIND_OBSERVER_LAST_PAIR.load(Ordering::SeqCst);
+        let title_scaleform_bind_observer_last_symbol_ptr =
+            TITLE_SCALEFORM_BIND_OBSERVER_LAST_SYMBOL_PTR.load(Ordering::SeqCst);
+        let title_scaleform_bind_observer_last_target_ptr =
+            TITLE_SCALEFORM_BIND_OBSERVER_LAST_TARGET_PTR.load(Ordering::SeqCst);
+        let title_profile_visible_surface_bind_rewrites =
+            TITLE_PROFILE_VISIBLE_SURFACE_BIND_REWRITES.load(Ordering::SeqCst);
+        let title_profile_visible_surface_bind_last_owner =
+            TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_OWNER.load(Ordering::SeqCst);
+        let title_profile_visible_surface_bind_last_pair =
+            TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_PAIR.load(Ordering::SeqCst);
+        let title_profile_visible_surface_bind_last_symbol_ptr =
+            TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_SYMBOL_PTR.load(Ordering::SeqCst);
+        let now_loading_helper_hooks_installed =
+            NOW_LOADING_HELPER_HOOKS_INSTALLED.load(Ordering::SeqCst);
+        let now_loading_helper_ctor_hits = NOW_LOADING_HELPER_CTOR_HITS.load(Ordering::SeqCst);
+        let now_loading_helper_update_hits = NOW_LOADING_HELPER_UPDATE_HITS.load(Ordering::SeqCst);
+        let now_loading_helper_last_this = NOW_LOADING_HELPER_LAST_THIS.load(Ordering::SeqCst);
+        let now_loading_helper_last_menu_index =
+            NOW_LOADING_HELPER_LAST_MENU_INDEX.load(Ordering::SeqCst);
+        let now_loading_helper_last_replace_tex_info =
+            NOW_LOADING_HELPER_LAST_REPLACE_TEX_INFO.load(Ordering::SeqCst);
+        let now_loading_helper_last_requested_replace_tex_info =
+            NOW_LOADING_HELPER_LAST_REQUESTED_REPLACE_TEX_INFO.load(Ordering::SeqCst);
+        let now_loading_helper_last_flags = NOW_LOADING_HELPER_LAST_FLAGS.load(Ordering::SeqCst);
+        let loading_bg_portrait_redirect_installed =
+            LOADING_BG_TEXTURE_REDIRECT_INSTALLED.load(Ordering::SeqCst);
+        let loading_bg_portrait_redirect_attempts =
+            LOADING_BG_TEXTURE_REDIRECT_ATTEMPTS.load(Ordering::SeqCst);
+        let loading_bg_portrait_redirect_commits =
+            LOADING_BG_TEXTURE_REDIRECT_COMMITS.load(Ordering::SeqCst);
+        let loading_bg_live_gx_rebinds = LOADING_BG_LIVE_GX_REBINDS.load(Ordering::SeqCst);
+        let loadscreen_table_builds = PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst);
+        let loading_bg_portrait_redirect_last_symbol_match =
+            LOADING_BG_TEXTURE_REDIRECT_LAST_SYMBOL_MATCH.load(Ordering::SeqCst);
+        let loading_bg_portrait_redirect_last_portrait =
+            LOADING_BG_TEXTURE_REDIRECT_LAST_PORTRAIT.load(Ordering::SeqCst);
+        let loading_bg_portrait_gx_nonblack =
+            LOADING_BG_PORTRAIT_NONBLACK.load(Ordering::SeqCst) != 0;
+        let loading_bg_portrait_is_checker =
+            LOADING_BG_PORTRAIT_IS_CHECKER.load(Ordering::SeqCst) != 0;
+        let portrait_render_drive_hits = PROFILE_RENDER_DRIVE_HITS.load(Ordering::SeqCst);
+        let loading_bg_portrait_gx_dims = LOADING_BG_PORTRAIT_DIMS.load(Ordering::SeqCst);
+        let loading_bg_portrait_gx_format = LOADING_BG_PORTRAIT_FORMAT.load(Ordering::SeqCst);
+        let title_custom_cover_profile_render_refresh_calls =
+            TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_CALLS.load(Ordering::SeqCst);
+        let title_custom_cover_profile_render_refresh_last_profile_summary =
+            TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_PROFILE_SUMMARY.load(Ordering::SeqCst);
+        let title_custom_cover_profile_render_refresh_last_caller_phase =
+            TITLE_CUSTOM_COVER_PROFILE_RENDER_REFRESH_LAST_CALLER_PHASE.load(Ordering::SeqCst);
+        let title_custom_cover_profile_source_sample_calls =
+            TITLE_CUSTOM_COVER_PROFILE_SOURCE_SAMPLE_CALLS.load(Ordering::SeqCst);
+        let title_custom_cover_profile_source_slot =
+            TITLE_CUSTOM_COVER_PROFILE_SOURCE_SLOT.load(Ordering::SeqCst);
+        let title_custom_cover_profile_source_renderer =
+            TITLE_CUSTOM_COVER_PROFILE_SOURCE_RENDERER.load(Ordering::SeqCst);
+        let title_custom_cover_profile_source_renderer_vtable =
+            TITLE_CUSTOM_COVER_PROFILE_SOURCE_RENDERER_VTABLE.load(Ordering::SeqCst);
+        let title_custom_cover_profile_source_offscreen_rend =
+            TITLE_CUSTOM_COVER_PROFILE_SOURCE_OFFSCREEN_REND.load(Ordering::SeqCst);
+        let title_custom_cover_profile_source_tex_rescap =
+            TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_RESCAP.load(Ordering::SeqCst);
+        let title_custom_cover_profile_source_tex_index =
+            TITLE_CUSTOM_COVER_PROFILE_SOURCE_TEX_INDEX.load(Ordering::SeqCst);
+        let title_custom_cover_profile_source_ready_754 =
+            TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_754.load(Ordering::SeqCst);
+        let title_custom_cover_profile_source_ready_755 =
+            TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_755.load(Ordering::SeqCst);
+        let title_custom_cover_profile_source_ready =
+            title_custom_cover_profile_source_renderer_vtable
+                == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                && title_custom_cover_profile_source_offscreen_rend
+                    != TITLE_OWNER_SCAN_START_ADDRESS
+                && title_custom_cover_profile_source_offscreen_rend != NULL_PTR
+                && title_custom_cover_profile_source_tex_rescap != TITLE_OWNER_SCAN_START_ADDRESS
+                && title_custom_cover_profile_source_tex_rescap != NULL_PTR;
+        let title_custom_cover_profile_select_builds =
+            TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.load(Ordering::SeqCst);
+        let title_custom_cover_profile_select_last_ret =
+            TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_RET.load(Ordering::SeqCst);
+        let title_custom_cover_profile_select_last_job =
+            TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_JOB.load(Ordering::SeqCst);
+        let title_custom_cover_profile_select_last_caller_rva =
+            TITLE_CUSTOM_COVER_PROFILE_SELECT_LAST_CALLER_RVA.load(Ordering::SeqCst);
+        let title_custom_cover_black_builds =
+            TITLE_CUSTOM_COVER_BLACK_BUILDS.load(Ordering::SeqCst);
+        let title_custom_cover_black_last_ret =
+            TITLE_CUSTOM_COVER_BLACK_LAST_RET.load(Ordering::SeqCst);
+        let title_custom_cover_black_last_job =
+            TITLE_CUSTOM_COVER_BLACK_LAST_JOB.load(Ordering::SeqCst);
+        let title_custom_cover_black_last_caller_rva =
+            TITLE_CUSTOM_COVER_BLACK_LAST_CALLER_RVA.load(Ordering::SeqCst);
+        let title_custom_cover_run_calls = TITLE_CUSTOM_COVER_RUN_CALLS.load(Ordering::SeqCst);
+        let title_custom_cover_run_last_native_job =
+            TITLE_CUSTOM_COVER_RUN_LAST_NATIVE_JOB.load(Ordering::SeqCst);
+        let title_custom_cover_run_last_cover_job =
+            TITLE_CUSTOM_COVER_RUN_LAST_COVER_JOB.load(Ordering::SeqCst);
+        let title_custom_cover_run_last_cover_window =
+            TITLE_CUSTOM_COVER_RUN_LAST_COVER_WINDOW.load(Ordering::SeqCst);
+        let title_custom_cover_run_last_ret =
+            TITLE_CUSTOM_COVER_RUN_LAST_RET.load(Ordering::SeqCst);
+        let title_pab_information_visual_builds =
+            TITLE_PAB_INFORMATION_VISUAL_BUILDS.load(Ordering::SeqCst);
+        let title_pab_information_visual_last_job =
+            TITLE_PAB_INFORMATION_VISUAL_LAST_JOB.load(Ordering::SeqCst);
+        let title_pab_information_visual_last_window =
+            TITLE_PAB_INFORMATION_VISUAL_LAST_WINDOW.load(Ordering::SeqCst);
+        let title_pab_information_visual_last_caller_rva =
+            TITLE_PAB_INFORMATION_VISUAL_LAST_CALLER_RVA.load(Ordering::SeqCst);
+        let title_custom_cover_black_cover_window = if title_custom_cover_run_last_cover_window
+            != NULL_PTR
+            && title_custom_cover_run_last_cover_window != TITLE_OWNER_SCAN_START_ADDRESS
+        {
+            title_custom_cover_run_last_cover_window
+        } else if title_custom_cover_black_last_job != NULL_PTR
+            && title_custom_cover_black_last_job != TITLE_OWNER_SCAN_START_ADDRESS
+        {
+            unsafe {
+                crate::experiments::safe_read_usize(title_custom_cover_black_last_job + 0x130)
+            }
+            .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+        } else {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        };
+        let (
+            title_custom_cover_black_cover_menu_id,
+            title_custom_cover_black_cover_flags,
+            title_custom_cover_black_cover_draw_bit_set,
+        ) = title_menu_window_id_flags(base, title_custom_cover_black_cover_window);
+        let (
+            title_pab_information_visual_current_menu_id,
+            title_pab_information_visual_current_flags,
+            title_pab_information_visual_current_draw_bit_set,
+        ) = title_menu_window_id_flags(base, title_pab_information_visual_last_window);
+        let title_custom_cover_black_exclusive_visible = title_custom_cover_black_builds != 0
+            && title_custom_cover_run_calls != 0
+            && title_custom_cover_black_cover_draw_bit_set
+            && !title_visual_current_draw_bit_set
+            && !title_pab_information_visual_current_draw_bit_set;
         body.push_str(&format!(
             "  \"oracle_msgbox_total_builds\": {},\n  \"oracle_msgbox_any_seen\": {},\n  \"oracle_msgbox_postload_builds\": {},\n  \"oracle_postload_modal_seen\": {},\n  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n  \"oracle_msgbox_builder_args\": [{}, {}, {}, {}],\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_args\": [{}, {}, {}, {}, {}],\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_window_stored_backing_flag_ptr\": {},\n  \"oracle_policy_window_backing_flag_value\": {},\n  \"oracle_policy_window_requested_flag_value\": {},\n  \"oracle_policy_window_caller_rva\": {},\n  \"oracle_policy_ctor_wrapper_hits\": {},\n  \"oracle_policy_ctor_wrapper_record\": {},\n  \"oracle_policy_ctor_wrapper_original_this\": {},\n  \"oracle_policy_ctor_wrapper_original_vtable\": {},\n  \"oracle_policy_ctor_wrapper_record_id\": {},\n  \"oracle_policy_ctor_wrapper_stack_arg0\": {},\n  \"oracle_policy_ctor_wrapper_backing_flag_ptr\": {},\n  \"oracle_policy_ctor_wrapper_ret\": {},\n  \"oracle_policy_ctor_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_wrapper_hits\": {},\n  \"oracle_policy_selector_wrapper_record\": {},\n  \"oracle_policy_selector_wrapper_original_this\": {},\n  \"oracle_policy_selector_wrapper_original_vtable\": {},\n  \"oracle_policy_selector_wrapper_owner\": {},\n  \"oracle_policy_selector_wrapper_requested_flag\": {},\n  \"oracle_policy_selector_wrapper_selector_arg\": {},\n  \"oracle_policy_selector_wrapper_ret\": {},\n  \"oracle_policy_selector_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_ctor_hits\": {},\n  \"oracle_policy_selector_ctor_this\": {},\n  \"oracle_policy_selector_ctor_vtable\": {},\n  \"oracle_policy_selector_ctor_owner\": {},\n  \"oracle_policy_selector_ctor_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_requested_flag_value\": {},\n  \"oracle_policy_selector_ctor_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_ret\": {},\n  \"oracle_policy_selector_ctor_caller_rva\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_this\": {},\n  \"oracle_policy_status_predicate_owner\": {},\n  \"oracle_policy_status_predicate_flag_ptr\": {},\n  \"oracle_policy_status_predicate_flag_value\": {},\n  \"oracle_policy_status_predicate_ret\": {},\n  \"oracle_policy_status_predicate_caller_rva\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_owner\": {},\n  \"oracle_policy_flag_setter_value\": {},\n  \"oracle_policy_flag_setter_force\": {},\n  \"oracle_policy_flag_setter_before\": {},\n  \"oracle_policy_flag_setter_after\": {},\n  \"oracle_policy_flag_setter_caller_rva\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {},\n",
             msgbox_total_builds,
@@ -982,6 +1624,563 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             server_status_any_seen,
             server_status_state,
             server_status_text_id
+        ));
+        body.push_str(&format!(
+            "  \"oracle_title_native_menu_visual_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_suppressed_builds\": {},\n  \"oracle_title_native_menu_visual_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_last_out_slot\": {},\n  \"oracle_title_native_menu_visual_last_prev_out\": {},\n  \"oracle_title_native_menu_visual_last_args\": [{}, {}],\n  \"oracle_title_native_menu_visual_last_caller_rva\": {},\n  \"oracle_title_native_menu_visual_native_job\": {},\n  \"oracle_title_native_menu_visual_native_window\": {},\n  \"oracle_title_native_menu_visual_current_menu_id\": {},\n  \"oracle_title_native_menu_visual_current_flags\": {},\n  \"oracle_title_native_menu_visual_current_draw_bit_set\": {},\n  \"oracle_title_native_menu_visual_render_suppress_installed\": {},\n  \"oracle_title_native_menu_visual_render_suppressed_windows\": {},\n  \"oracle_title_native_menu_visual_render_any_suppressed\": {},\n  \"oracle_title_native_menu_visual_render_last_window\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_before\": {},\n  \"oracle_title_native_menu_visual_render_last_flags_after\": {},\n  \"oracle_title_native_menu_visual_render_last_caller_rva\": {},\n  \"oracle_title_logo_surface_name\": \"{}\",\n  \"oracle_title_logo_resource_name\": \"{}\",\n  \"oracle_title_logo_gfx_root_depth\": {},\n  \"oracle_title_logo_gfx_root_sprite_char\": {},\n  \"oracle_title_logo_gfx_main_asset_char\": {},\n  \"oracle_title_logo_gfx_main_asset_name\": \"{}\",\n  \"oracle_title_logo_back_view_parts\": {},\n  \"oracle_title_logo_back_view_parts_vtable\": {},\n  \"oracle_title_logo_gfx_frame\": {},\n  \"oracle_title_logo_gfx_alpha_mult_term\": {},\n  \"oracle_title_logo_gfx_visibility\": {},\n  \"oracle_title_logo_gfx_hide_calls\": {},\n  \"oracle_title_logo_gfx_any_hidden\": {},\n  \"oracle_title_logo_gfx_hide_last_dialog\": {},\n  \"oracle_title_logo_gfx_hide_last_logo\": {},\n  \"oracle_title_logo_gfx_hide_last_caller_phase\": {},\n  \"oracle_title_logo_gfx_hide_last_requested_visible\": {},\n  \"oracle_title_press_start_surface_name\": \"PressStart\",\n  \"oracle_title_press_start_text_name\": \"StaticSystemText_101000\",\n  \"oracle_title_press_start_text_initial\": \"PRESS BUTTON\",\n  \"oracle_title_press_start_gfx_hide_calls\": {},\n  \"oracle_title_press_start_gfx_any_hidden\": {},\n  \"oracle_title_press_start_gfx_hide_last_dialog\": {},\n  \"oracle_title_press_start_gfx_hide_last_proxy\": {},\n  \"oracle_title_press_start_gfx_hide_last_context\": {},\n  \"oracle_title_press_start_gfx_hide_last_caller_phase\": {},\n  \"oracle_title_press_start_gfx_value\": {},\n  \"oracle_title_press_start_gfx_force_false_calls\": {},\n  \"oracle_title_press_start_gfx_force_false_any\": {},\n  \"oracle_title_press_start_gfx_force_false_last_value\": {},\n  \"oracle_title_press_start_gfx_force_false_last_requested\": {},\n  \"oracle_title_press_start_bind_hits\": {},\n  \"oracle_title_press_start_bind_any\": {},\n  \"oracle_title_press_start_bind_last_parent\": {},\n  \"oracle_title_press_start_bind_last_out\": {},\n  \"oracle_title_press_start_bind_last_name\": {},\n  \"oracle_title_press_start_bind_last_context\": {},\n  \"oracle_title_press_start_bind_hide_calls\": {},\n  \"oracle_title_press_start_bind_any_hidden\": {},\n  \"oracle_title_profile_cover_bound_to_logo_surface\": {},\n  \"oracle_title_overlay_cover_render_calls\": {},\n  \"oracle_title_overlay_cover_rendered\": {},\n  \"oracle_title_overlay_cover_last_display_size\": [{}, {}],\n  \"oracle_title_overlay_cover_display_sane\": {},\n  \"oracle_title_overlay_cover_texture_bound\": {},\n  \"oracle_title_overlay_cover_last_gx_texture\": {},\n  \"oracle_title_overlay_cover_last_texture_resource\": {},\n  \"oracle_title_profile_face_bind_hits\": {},\n  \"oracle_title_profile_face_transform_applied\": {},\n  \"oracle_title_profile_face_other_hidden\": {},\n  \"oracle_title_profile_face_last_proxy\": {},\n  \"oracle_title_profile_face_last_value\": {},\n  \"oracle_title_loaded_character_portrait_rendered\": {},\n  \"oracle_title_loaded_character_portrait_visible_during_boot\": {},\n  \"oracle_title_loaded_character_portrait_held_until_loading_takeover\": {},\n  \"oracle_title_scaleform_bind_observer_hits\": {},\n  \"oracle_title_scaleform_bind_observer_systex_hits\": {},\n  \"oracle_title_scaleform_bind_observer_last_owner\": {},\n  \"oracle_title_scaleform_bind_observer_last_pair\": {},\n  \"oracle_title_scaleform_bind_observer_last_symbol_ptr\": {},\n  \"oracle_title_scaleform_bind_observer_last_target_ptr\": {},\n  \"oracle_title_portrait_visible_surface_symbol\": \"{}\",\n  \"oracle_title_portrait_visible_surface_bind_rewrites\": {},\n  \"oracle_title_portrait_visible_surface_bound\": {},\n  \"oracle_title_portrait_visible_surface_bind_last_owner\": {},\n  \"oracle_title_portrait_visible_surface_bind_last_pair\": {},\n  \"oracle_title_portrait_visible_surface_bind_last_symbol_ptr\": {},\n  \"oracle_title_now_loading_helper_hooks_installed\": {},\n  \"oracle_title_now_loading_helper_ctor_hits\": {},\n  \"oracle_title_now_loading_helper_update_hits\": {},\n  \"oracle_title_now_loading_helper_last_this\": {},\n  \"oracle_title_now_loading_helper_last_menu_index\": {},\n  \"oracle_title_now_loading_helper_last_replace_tex_info\": {},\n  \"oracle_title_now_loading_helper_last_requested_replace_tex_info\": {},\n  \"oracle_title_now_loading_helper_last_flags\": {},\n  \"oracle_loading_bg_portrait_redirect_installed\": {},\n  \"oracle_loading_bg_portrait_redirect_attempts\": {},\n  \"oracle_loading_bg_portrait_redirect_commits\": {},\n  \"oracle_loading_bg_live_gx_rebinds\": {},\n  \"oracle_loadscreen_table_builds\": {},\n  \"oracle_loading_bg_portrait_redirect_last_symbol_match\": {},\n  \"oracle_loading_bg_portrait_redirect_last_portrait\": {},\n  \"oracle_loading_bg_portrait_gx_nonblack\": {},\n  \"oracle_loading_bg_portrait_is_checker\": {},\n  \"oracle_portrait_render_drive_hits\": {},\n  \"oracle_loading_bg_portrait_gx_dims\": {},\n  \"oracle_loading_bg_portrait_gx_format\": {},\n  \"oracle_title_logo_profile_summary\": {},\n  \"oracle_title_logo_profile_summary_ready\": {},\n  \"oracle_title_profile_render_refresh_gate_ready\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_calls\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_last_profile_summary\": {},\n  \"oracle_title_custom_cover_profile_render_refresh_last_caller_phase\": {},\n  \"oracle_title_custom_cover_profile_source_sample_calls\": {},\n  \"oracle_title_custom_cover_profile_source_slot\": {},\n  \"oracle_title_custom_cover_profile_source_renderer\": {},\n  \"oracle_title_custom_cover_profile_source_renderer_vtable\": {},\n  \"oracle_title_custom_cover_profile_source_offscreen_rend\": {},\n  \"oracle_title_custom_cover_profile_source_tex_rescap\": {},\n  \"oracle_title_custom_cover_profile_source_tex_index\": {},\n  \"oracle_title_custom_cover_profile_source_ready_754\": {},\n  \"oracle_title_custom_cover_profile_source_ready_755\": {},\n  \"oracle_title_custom_cover_profile_source_ready\": {},\n  \"oracle_title_custom_cover_profile_source_name\": \"{}\",\n  \"oracle_title_custom_cover_profile_renderer_class\": \"{}\",\n  \"oracle_title_custom_cover_profile_select_builds\": {},\n  \"oracle_title_custom_cover_profile_select_any_built\": {},\n  \"oracle_title_custom_cover_profile_select_last_ret\": {},\n  \"oracle_title_custom_cover_profile_select_last_job\": {},\n  \"oracle_title_custom_cover_profile_select_last_caller_rva\": {},\n  \"oracle_title_custom_cover_black_surface_name\": \"{}\",\n  \"oracle_title_custom_cover_black_builds\": {},\n  \"oracle_title_custom_cover_black_any_built\": {},\n  \"oracle_title_custom_cover_black_last_ret\": {},\n  \"oracle_title_custom_cover_black_last_job\": {},\n  \"oracle_title_custom_cover_black_last_caller_rva\": {},\n  \"oracle_title_custom_cover_run_calls\": {},\n  \"oracle_title_custom_cover_run_any\": {},\n  \"oracle_title_custom_cover_run_last_native_job\": {},\n  \"oracle_title_custom_cover_run_last_cover_job\": {},\n  \"oracle_title_custom_cover_run_last_cover_window\": {},\n  \"oracle_title_custom_cover_run_last_ret\": {},\n  \"oracle_title_pab_information_visual_name\": \"{}\",\n  \"oracle_title_pab_information_visual_builds\": {},\n  \"oracle_title_pab_information_visual_any_built\": {},\n  \"oracle_title_pab_information_visual_last_job\": {},\n  \"oracle_title_pab_information_visual_last_window\": {},\n  \"oracle_title_pab_information_visual_last_caller_rva\": {},\n",
+            title_visual_suppress_installed,
+            title_visual_suppressed_builds,
+            title_visual_suppressed_builds != 0,
+            title_visual_last_out_slot,
+            title_visual_last_prev_out,
+            title_visual_last_arg_rdx,
+            title_visual_last_arg_r8,
+            title_visual_last_caller_rva,
+            title_visual_native_job,
+            title_visual_native_window,
+            title_visual_current_menu_id,
+            title_visual_current_flags,
+            title_visual_current_draw_bit_set,
+            title_visual_render_suppress_installed,
+            title_visual_render_suppressed_windows,
+            title_visual_render_suppressed_windows != 0,
+            title_visual_render_last_window,
+            title_visual_render_last_flags_before,
+            title_visual_render_last_flags_after,
+            title_visual_render_last_caller_rva,
+            TITLE_LOGO_BACK_VIEW_PARTS_NAME,
+            TITLE_LOGO_RESOURCE_NAME,
+            TITLE_LOGO_GFX_ROOT_DEPTH,
+            TITLE_LOGO_GFX_ROOT_SPRITE_CHAR,
+            TITLE_LOGO_GFX_MAIN_ASSET_CHAR,
+            TITLE_LOGO_GFX_MAIN_ASSET_NAME,
+            title_logo_back_view_parts,
+            title_logo_back_view_parts_vtable,
+            title_logo_gfx_frame,
+            title_logo_gfx_alpha_mult_term,
+            title_logo_gfx_visibility,
+            title_logo_gfx_hide_calls,
+            title_logo_gfx_hide_calls != 0,
+            title_logo_gfx_hide_last_dialog,
+            title_logo_gfx_hide_last_logo,
+            title_logo_gfx_hide_last_caller_phase,
+            title_logo_gfx_hide_last_requested_visible,
+            title_press_start_gfx_hide_calls,
+            title_press_start_gfx_hide_calls != 0,
+            title_press_start_gfx_hide_last_dialog,
+            title_press_start_gfx_hide_last_proxy,
+            title_press_start_gfx_hide_last_context,
+            title_press_start_gfx_hide_last_caller_phase,
+            title_press_start_gfx_value,
+            title_press_start_gfx_force_false_calls,
+            title_press_start_gfx_force_false_calls != 0,
+            title_press_start_gfx_force_false_last_value,
+            title_press_start_gfx_force_false_last_requested,
+            title_press_start_bind_hits,
+            title_press_start_bind_hits != 0,
+            title_press_start_bind_last_parent,
+            title_press_start_bind_last_out,
+            title_press_start_bind_last_name,
+            title_press_start_bind_last_context,
+            title_press_start_bind_hide_calls,
+            title_press_start_bind_hide_calls != 0,
+            title_profile_cover_bound_to_logo_surface,
+            title_overlay_cover_render_calls,
+            title_overlay_cover_render_calls != 0,
+            title_overlay_cover_last_display_w,
+            title_overlay_cover_last_display_h,
+            title_overlay_cover_display_sane,
+            title_overlay_cover_texture_bound,
+            title_overlay_cover_last_gx_texture,
+            title_overlay_cover_last_texture_resource,
+            title_profile_face_bind_hits,
+            title_profile_face_transform_applied,
+            title_profile_face_other_hidden,
+            title_profile_face_last_proxy,
+            title_profile_face_last_value,
+            title_loaded_character_portrait_rendered,
+            title_loaded_character_portrait_visible_during_boot,
+            title_loaded_character_portrait_held_until_loading_takeover,
+            title_scaleform_bind_observer_hits,
+            title_scaleform_bind_observer_systex_hits,
+            title_scaleform_bind_observer_last_owner,
+            title_scaleform_bind_observer_last_pair,
+            title_scaleform_bind_observer_last_symbol_ptr,
+            title_scaleform_bind_observer_last_target_ptr,
+            TITLE_PROFILE_VISIBLE_SURFACE_SYMBOL,
+            title_profile_visible_surface_bind_rewrites,
+            title_profile_visible_surface_bind_rewrites != 0,
+            title_profile_visible_surface_bind_last_owner,
+            title_profile_visible_surface_bind_last_pair,
+            title_profile_visible_surface_bind_last_symbol_ptr,
+            now_loading_helper_hooks_installed,
+            now_loading_helper_ctor_hits,
+            now_loading_helper_update_hits,
+            now_loading_helper_last_this,
+            now_loading_helper_last_menu_index,
+            now_loading_helper_last_replace_tex_info,
+            now_loading_helper_last_requested_replace_tex_info,
+            now_loading_helper_last_flags,
+            loading_bg_portrait_redirect_installed,
+            loading_bg_portrait_redirect_attempts,
+            loading_bg_portrait_redirect_commits,
+            loading_bg_live_gx_rebinds,
+            loadscreen_table_builds,
+            loading_bg_portrait_redirect_last_symbol_match,
+            loading_bg_portrait_redirect_last_portrait,
+            loading_bg_portrait_gx_nonblack,
+            loading_bg_portrait_is_checker,
+            portrait_render_drive_hits,
+            loading_bg_portrait_gx_dims,
+            loading_bg_portrait_gx_format,
+            title_logo_profile_summary,
+            title_logo_profile_summary_ready,
+            title_profile_render_refresh_gate_ready,
+            title_custom_cover_profile_render_refresh_calls,
+            title_custom_cover_profile_render_refresh_last_profile_summary,
+            title_custom_cover_profile_render_refresh_last_caller_phase,
+            title_custom_cover_profile_source_sample_calls,
+            title_custom_cover_profile_source_slot,
+            title_custom_cover_profile_source_renderer,
+            title_custom_cover_profile_source_renderer_vtable,
+            title_custom_cover_profile_source_offscreen_rend,
+            title_custom_cover_profile_source_tex_rescap,
+            title_custom_cover_profile_source_tex_index,
+            title_custom_cover_profile_source_ready_754,
+            title_custom_cover_profile_source_ready_755,
+            title_custom_cover_profile_source_ready,
+            TITLE_CUSTOM_COVER_SYSTEX_TARGET,
+            TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS,
+            title_custom_cover_profile_select_builds,
+            title_custom_cover_profile_select_builds != 0,
+            title_custom_cover_profile_select_last_ret,
+            title_custom_cover_profile_select_last_job,
+            title_custom_cover_profile_select_last_caller_rva,
+            TITLE_CUSTOM_COVER_BLACK_NAME,
+            title_custom_cover_black_builds,
+            title_custom_cover_black_builds != 0,
+            title_custom_cover_black_last_ret,
+            title_custom_cover_black_last_job,
+            title_custom_cover_black_last_caller_rva,
+            title_custom_cover_run_calls,
+            title_custom_cover_run_calls != 0,
+            title_custom_cover_run_last_native_job,
+            title_custom_cover_run_last_cover_job,
+            title_custom_cover_run_last_cover_window,
+            title_custom_cover_run_last_ret,
+            TITLE_PAB_INFORMATION_VISUAL_NAME,
+            title_pab_information_visual_builds,
+            title_pab_information_visual_builds != 0,
+            title_pab_information_visual_last_job,
+            title_pab_information_visual_last_window,
+            title_pab_information_visual_last_caller_rva
+        ));
+        push_json_usize(
+            body,
+            "oracle_title_custom_cover_black_cover_window",
+            title_custom_cover_black_cover_window,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_custom_cover_black_cover_menu_id",
+            title_custom_cover_black_cover_menu_id,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_custom_cover_black_cover_flags",
+            title_custom_cover_black_cover_flags,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_custom_cover_black_cover_draw_bit_set",
+            title_custom_cover_black_cover_draw_bit_set,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_custom_cover_black_exclusive_visible",
+            title_custom_cover_black_exclusive_visible,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_pab_information_visual_current_menu_id",
+            title_pab_information_visual_current_menu_id,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_pab_information_visual_current_flags",
+            title_pab_information_visual_current_flags,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_pab_information_visual_current_draw_bit_set",
+            title_pab_information_visual_current_draw_bit_set,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_menu_resource_acquire_observer_installed",
+            title_menu_resource_acquire_installed,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_menu_resource_acquire_hits",
+            title_menu_resource_acquire_hits,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_menu_resource_acquire_logo_hits",
+            title_menu_resource_acquire_logo_hits,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_menu_resource_acquire_logo_seen",
+            title_menu_resource_acquire_logo_hits != 0,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_menu_resource_acquire_last_this",
+            title_menu_resource_acquire_last_this,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_menu_resource_acquire_last_load_params",
+            title_menu_resource_acquire_last_load_params,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_menu_resource_acquire_last_filename_ptr",
+            title_menu_resource_acquire_last_filename_ptr,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_menu_resource_acquire_last_param3",
+            title_menu_resource_acquire_last_param3,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_menu_resource_acquire_last_ret",
+            title_menu_resource_acquire_last_ret,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_menu_resource_acquire_last_caller_rva",
+            title_menu_resource_acquire_last_caller_rva,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_scaleform_file_open_observer_installed",
+            title_scaleform_file_open_installed,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_file_open_hits",
+            title_scaleform_file_open_hits,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_file_open_logo_hits",
+            title_scaleform_file_open_logo_hits,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_scaleform_file_open_logo_seen",
+            title_scaleform_file_open_logo_hits != 0,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_file_open_last_loader",
+            title_scaleform_file_open_last_loader,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_file_open_last_url_ptr",
+            title_scaleform_file_open_last_url_ptr,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_file_open_last_flags",
+            title_scaleform_file_open_last_flags,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_file_open_last_ret",
+            title_scaleform_file_open_last_ret,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_file_open_last_ret_vtable",
+            title_scaleform_file_open_last_ret_vtable,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_file_open_last_caller_rva",
+            title_scaleform_file_open_last_caller_rva,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_memory_gfx_bytes",
+            title_scaleform_memory_gfx_bytes,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_memory_gfx_replacements",
+            title_scaleform_memory_gfx_replacements,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_scaleform_memory_gfx_replaced",
+            title_scaleform_memory_gfx_replacements != 0,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_memory_gfx_failures",
+            title_scaleform_memory_gfx_failures,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_memory_gfx_last_file",
+            title_scaleform_memory_gfx_last_file,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_scaleform_resource_ctor_observer_installed",
+            title_scaleform_resource_ctor_installed,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_resource_ctor_hits",
+            title_scaleform_resource_ctor_hits,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_resource_ctor_logo_hits",
+            title_scaleform_resource_ctor_logo_hits,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_scaleform_resource_ctor_logo_seen",
+            title_scaleform_resource_ctor_logo_hits != 0,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_resource_ctor_last_out",
+            title_scaleform_resource_ctor_last_out,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_resource_ctor_last_url_ptr",
+            title_scaleform_resource_ctor_last_url_ptr,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_resource_ctor_last_file",
+            title_scaleform_resource_ctor_last_file,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_resource_ctor_last_ret",
+            title_scaleform_resource_ctor_last_ret,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_resource_ctor_last_movie_data",
+            title_scaleform_resource_ctor_last_movie_data,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_resource_ctor_last_caller_rva",
+            title_scaleform_resource_ctor_last_caller_rva,
+        );
+        // er-tpf Tier-4 in-memory cover wire-up oracles (memory-read telemetry, NOT screenshot): a
+        // runtime watcher can observe build/register/bind progress + failures without an image.
+        push_json_bool(
+            body,
+            "oracle_tpf_texture_built",
+            ER_TPF_COVER_TEXTURE_BUILT.load(Ordering::SeqCst) != 0,
+        );
+        push_json_usize(
+            body,
+            "oracle_tpf_texture_blob_len",
+            ER_TPF_COVER_BLOB_LEN.load(Ordering::SeqCst),
+        );
+        push_json_str(body, "oracle_tpf_texture_key", ER_TPF_COVER_SYSTEX_KEY);
+        push_json_bool(
+            body,
+            "oracle_tpf_texture_registered",
+            ER_TPF_COVER_REGISTERED.load(Ordering::SeqCst) != 0,
+        );
+        push_json_usize(
+            body,
+            "oracle_tpf_texture_last_rescap",
+            ER_TPF_COVER_LAST_RESCAP.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_tpf_texture_bound",
+            ER_TPF_COVER_BOUND.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_tpf_texture_failures",
+            ER_TPF_COVER_FAILURES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_tpf_texture_last_error",
+            ER_TPF_COVER_LAST_ERROR.load(Ordering::SeqCst),
+        );
+        // Camera-lever (custom profile-portrait viewport) RAM semaphores: a runtime watcher can confirm
+        // the override path ran and produced a sane matrix without an image. See bd
+        // `camera-lever-RE-VERIFIED-offsets-and-call-addrs-2026-06-29`.
+        push_json_usize(
+            body,
+            "oracle_profile_cam_apply_calls",
+            PROFILE_CAM_APPLY_CALLS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_cam_latched_mask",
+            PROFILE_CAM_LATCHED_MASK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_cam_face_yaw_latched_mask",
+            PROFILE_CAM_FACE_YAW_LATCHED_MASK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_cam_last_slot",
+            PROFILE_CAM_LAST_SLOT.load(Ordering::SeqCst),
+        );
+        push_json_bool(
+            body,
+            "oracle_profile_cam_last_matrix_ok",
+            PROFILE_CAM_LAST_MATRIX_OK.load(Ordering::SeqCst) != 0,
+        );
+        // Look-at lever RAM semaphores: a watcher can confirm the pose was reached, the Head/Neck/
+        // Spine2 bones were resolved, and the per-tick rotation is firing -- without an image.
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_apply_calls",
+            PROFILE_LOOKAT_APPLY_CALLS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_bone_count",
+            PROFILE_LOOKAT_BONE_COUNT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_head_idx",
+            PROFILE_LOOKAT_HEAD_IDX.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_neck_idx",
+            PROFILE_LOOKAT_NECK_IDX.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_spine2_idx",
+            PROFILE_LOOKAT_SPINE2_IDX.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_bones_dumped_mask",
+            PROFILE_LOOKAT_BONES_DUMPED_MASK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_last_cursor",
+            PROFILE_LOOKAT_LAST_CURSOR.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_hook_installed",
+            PROFILE_LOOKAT_HOOK_INSTALLED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_hook_hits",
+            PROFILE_LOOKAT_HOOK_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_render_drives",
+            PROFILE_LOOKAT_RENDER_DRIVES.load(Ordering::SeqCst),
+        );
+        // Mouse-track proof: bitmask of look-left/center/look-right head dumps captured (0b111 = all
+        // three distinct poses dumped to portrait-capture-slot{200,201,202}.bin during selftest).
+        push_json_usize(
+            body,
+            "oracle_profile_lookat_track_buckets",
+            PROFILE_LOOKAT_TRACK_BUCKETS.load(Ordering::SeqCst),
+        );
+        // DISPLAY path (keepalive): the loading-screen image follows the cursor per-frame only if the
+        // Present overlay composites + re-uploads each frame. present_hook_hits = Present detour frames;
+        // overlay_draw_hits = backbuffer composites; overlay_reuploads = per-frame texture rebuilds from a
+        // version-bumped LOADING_BG_PORTRAIT_RGBA (the displayed head actually tracked, not frozen).
+        push_json_usize(
+            body,
+            "oracle_profile_readback_some",
+            PROFILE_READBACK_SOME.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_readback_checker",
+            PROFILE_READBACK_CHECKER.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_hook_hits",
+            PRESENT_HOOK_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_overlay_draw_hits",
+            OVERLAY_DRAW_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_overlay_reuploads",
+            OVERLAY_REUPLOADS.load(Ordering::SeqCst),
+        );
+        // DEPTH-KEY transparent-background semaphores: frames where the depth key actually cut out a
+        // background (clean bg/head depth separation + >0 pixels alpha'd to 0), and the last frame's
+        // background-masked fraction in whole percent. A RAM/pixel oracle for the transparent bg cutout.
+        push_json_usize(
+            body,
+            "oracle_depth_key_applied",
+            DEPTH_KEY_APPLIED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_depth_key_bg_pct",
+            DEPTH_KEY_BG_PCT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_depth_key_fresh",
+            DEPTH_KEY_FRESH.load(Ordering::SeqCst),
+        );
+        // The draw-tick readback's per-frame republish count (==RGBA version). If ~= render_drive_hits the
+        // readback publishes per-frame (so a low overlay_reuploads means the composite upload is the
+        // bottleneck); if this is itself ~4 the per-frame readback/publish is.
+        push_json_usize(
+            body,
+            "oracle_loading_bg_portrait_rgba_version",
+            LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst),
+        );
+        body.push_str(&format!(
+            "  \"oracle_native_profile_capture_enabled\": {},\n  \"oracle_native_load_game_fired\": {},\n  \"oracle_native_load_game_last_node\": {},\n  \"oracle_native_load_game_last_node_vtable\": {},\n  \"oracle_native_load_game_last_member_dialog\": {},\n  \"oracle_native_load_game_last_member_fn\": {},\n  \"oracle_native_load_game_last_member_adjust\": {},\n  \"oracle_native_profile_source_ready\": {},\n  \"oracle_native_profile_source_name\": \"{}\",\n  \"oracle_native_profile_renderer_class\": \"{}\",\n",
+            native_profile_capture_enabled(),
+            NATIVE_LOAD_FIRED.load(Ordering::SeqCst) == NATIVE_LOAD_FIRED_YES,
+            NATIVE_LOAD_LAST_NODE.load(Ordering::SeqCst),
+            NATIVE_LOAD_LAST_NODE_VTABLE.load(Ordering::SeqCst),
+            NATIVE_LOAD_LAST_MEMBER_DIALOG.load(Ordering::SeqCst),
+            NATIVE_LOAD_LAST_MEMBER_FN.load(Ordering::SeqCst),
+            NATIVE_LOAD_LAST_MEMBER_ADJUST.load(Ordering::SeqCst),
+            title_custom_cover_profile_source_ready,
+            TITLE_CUSTOM_COVER_SYSTEX_TARGET,
+            TITLE_CUSTOM_COVER_PROFILE_RENDERER_CLASS,
         ));
     }
     if let Ok(player) = unsafe { PlayerIns::local_player_mut() } {
@@ -1153,12 +2352,14 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
         crate::experiments::CORRUPTED_SAVE_SEEN_ID.load(Ordering::SeqCst)
     ));
     // PRIVACY-POLICY SEMAPHORE (privacy-policy-gated-on-character-presence-CONFIRMED-2026-06-23):
-    // the Bandai-Namco PRIVACY POLICY boot screen is gated SOLELY on character presence -- it appears
-    // iff the active profile summary is loaded but reports ZERO active slots (no character). This is
-    // 1:1 with the on-screen privacy policy. When a gold load is EXPECTED (not telemetry-only), a true
-    // value is the BAD blocker: the gold did NOT load, so the main menu / Continue is never reached
-    // (the privacy-policy gate sits in front of it). On a real load this is false (char present ->
-    // policy skipped). This is the in-process detector that was MISSING when the screen blocked runs.
+    // this is a pre-render character/profile-summary gate, not evidence that a ToS/policy renderer was
+    // reached. The Bandai-Namco PRIVACY POLICY boot screen appears iff the active ProfileSummary exists
+    // but reports ZERO active slots (`slot_active_bytes == 0`, no character). When a gold/native-profile
+    // load is expected (not telemetry-only), `true` means the profile summary was not populated before
+    // the title gate, so the native menu / Continue / ProfileSelect renderer path will not be reached.
+    // On a real loaded profile this is false (at least one active slot -> policy skipped). Do not fix a
+    // true value by pressing E/OK or by suppressing the policy UI; satisfy the underlying native profile
+    // read/summary-population precondition so the gate is false before row/portrait rendering.
     let privacy_policy_gate = profile_summary != NULL_POINTER_VALUE
         && slot_active_bytes == Some(0)
         && !crate::experiments::save_override_telemetry_only();

@@ -1,0 +1,22 @@
+[package]
+name = "erpx-rs"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "ERPX: a trivial container for raw RGBA8 portrait dumps from the er-effects DLL (4-byte magic + u32 width/height + R8G8B8A8 pixels). Single source of truth for encode/decode, shared by the in-process DLL and host tooling."
+
+# The core (encode/decode) is pure-Rust, std-only, ZERO external deps, so it cross-compiles into the
+# game DLL (`cargo xwin`, default-features off) for free. The `png` feature is host-only tooling
+# (decoder CLI) and is deliberately NOT pulled into the DLL build.
+[dependencies]
+png = { version = "0.17", optional = true }
+
+[features]
+default = []
+png = ["dep:png"]
+
+# Host-side decoder CLI: `cargo run -p erpx-rs --features png --bin erpx2png -- dump.bin out.png`.
+# Gated on the `png` feature so the DLL (which never builds bins) never sees the png crate.
+[[bin]]
+name = "erpx2png"
+required-features = ["png"]

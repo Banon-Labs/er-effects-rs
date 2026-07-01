@@ -16,7 +16,8 @@ use std::{
 
 use std::os::windows::ffi::OsStrExt as _;
 
-use debug::{InputBlocker, InputFlags};
+use crate::input_blocker::{InputBlocker, InputFlags};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
@@ -24,27 +25,21 @@ use eldenring::{
 use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
-use hudhook::{
-    ImguiRenderLoop, MessageFilter,
-    hooks::dx12::ImguiDx12Hooks,
-    imgui::{Condition, Context, Ui},
-    mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook},
-    windows::{
-        Win32::{
-            Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
-            System::{
-                LibraryLoader::{GetModuleHandleA, GetProcAddress},
-                Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-                SystemServices::DLL_PROCESS_ATTACH,
-                Threading::GetCurrentProcessId,
-            },
-            UI::WindowsAndMessaging::{
-                ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-                WM_KEYDOWN, WM_KEYUP,
-            },
+use windows::{
+    Win32::{
+        Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
+        System::{
+            LibraryLoader::{GetModuleHandleA, GetProcAddress},
+            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
+            SystemServices::DLL_PROCESS_ATTACH,
+            Threading::GetCurrentProcessId,
         },
-        core::{BOOL, PCSTR},
+        UI::WindowsAndMessaging::{
+            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+            WM_KEYDOWN, WM_KEYUP,
+        },
     },
+    core::{BOOL, PCSTR},
 };
 
 #[allow(unused_imports)]
@@ -1376,7 +1371,14 @@ pub(crate) unsafe fn loadgame_build_ctx_ready(base: usize) -> bool {
         return false;
     }
     let ctx = unsafe { safe_read_usize(dialog + DIALOG_OWNER_CTX_A38_OFFSET) }.unwrap_or(0);
-    ctx > OWNER_CTX_MIN_PLAUSIBLE_PTR && ctx < OWNER_CTX_MAX_PLAUSIBLE_PTR
+    if !(ctx > OWNER_CTX_MIN_PLAUSIBLE_PTR && ctx < OWNER_CTX_MAX_PLAUSIBLE_PTR) {
+        return false;
+    }
+    // Native `FUN_14082d090` checks this singleton before comparing regulation versions; our readiness
+    // predicate must not claim the title/load context is usable before the same singleton exists.
+    let regulation_manager =
+        unsafe { safe_read_usize(base + GLOBAL_CS_REGULATION_MANAGER_RVA) }.unwrap_or(0);
+    regulation_manager != 0 && regulation_manager != null
 }
 
 /// PATH B "OWN THE LOAD" -- BUILD the LoadGame job with REAL mss-derived ctx, store its pointer for the

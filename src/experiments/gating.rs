@@ -16,7 +16,8 @@ use std::{
 
 use std::os::windows::ffi::OsStrExt as _;
 
-use debug::{InputBlocker, InputFlags};
+use crate::input_blocker::{InputBlocker, InputFlags};
+use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
@@ -24,27 +25,21 @@ use eldenring::{
 use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
 use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
-use hudhook::{
-    ImguiRenderLoop, MessageFilter,
-    hooks::dx12::ImguiDx12Hooks,
-    imgui::{Condition, Context, Ui},
-    mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook},
-    windows::{
-        Win32::{
-            Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
-            System::{
-                LibraryLoader::{GetModuleHandleA, GetProcAddress},
-                Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-                SystemServices::DLL_PROCESS_ATTACH,
-                Threading::GetCurrentProcessId,
-            },
-            UI::WindowsAndMessaging::{
-                ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-                WM_KEYDOWN, WM_KEYUP,
-            },
+use windows::{
+    Win32::{
+        Foundation::{HINSTANCE, HWND, LPARAM, RECT, WPARAM},
+        System::{
+            LibraryLoader::{GetModuleHandleA, GetProcAddress},
+            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
+            SystemServices::DLL_PROCESS_ATTACH,
+            Threading::GetCurrentProcessId,
         },
-        core::{BOOL, PCSTR},
+        UI::WindowsAndMessaging::{
+            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+            WM_KEYDOWN, WM_KEYUP,
+        },
     },
+    core::{BOOL, PCSTR},
 };
 
 #[allow(unused_imports)]
@@ -69,6 +64,194 @@ pub(crate) fn experimental_direct_menu_load_enabled() -> bool {
 }
 pub(crate) fn product_autoload_enabled() -> bool {
     PRODUCT_AUTOLOAD_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
+}
+/// Portrait render window: hold the autoload's own load-commit at the open main menu until the loaded
+/// character's profile portrait has rendered, so the now-loading screen can show it.
+///
+/// DISABLED (2026-06-29): a runtime probe proved this BREAKS the core char-load -- kicking the refresh
+/// (0x9aa680) at menu-open + holding the commit crashed during world-load (access-violation, run
+/// product-continue-direct-20260629-104328), and the refresh gate fails there anyway (req754 stayed 0:
+/// the ProfileSummary slot entry is not loaded at the open main menu, only when navigating to the
+/// Load-Game/ProfileSelect submenu). The proven now-loading injection mechanism is unaffected. Leaving
+/// the (gated-off) implementation in place for the record; do not re-enable without a safe render path.
+pub(crate) fn portrait_render_window_enabled() -> bool {
+    false
+}
+/// DEFAULT-OFF gate for the ProfileSelect load flow. When false (the default) `product_core_autoload_tick`
+/// takes the PROVEN native Continue char-load commit, byte-for-byte unchanged. When the human flips
+/// `PROFILE_SELECT_LOAD_FLOW_ENABLED` on to probe-test, the menu branch instead fires the title menu's
+/// Load-Game row to open a LIVE `ProfileLoadDialog` (the render context in which the profile renderer's
+/// per-slot refresh gate -- `ProfileSummary->saveSlotsStates[slot]` -- is satisfied), HOLDS the load
+/// commit until the loaded character's portrait has rendered + been captured (so the now-loading screen
+/// can display it), then drives the same STAGE2 commit (load_activate -> selector ->
+/// continue_confirm/SetState5). Compile-time `const` so the OFF path is dead-code-eliminated.
+pub(crate) fn profile_select_load_flow_enabled() -> bool {
+    PROFILE_SELECT_LOAD_FLOW_ENABLED
+}
+/// Diagnostic mode for native ProfileSelect/profile-renderer portrait capture. This mode must not
+/// arm product title-cover/custom-cover mutations or default Continue autoload; it only permits the
+/// zero-host-input native menu open plus passive/native Load-Game row firing used by the capture
+/// harness.
+pub(crate) fn native_profile_capture_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_PROFILE_CAPTURE_NATIVE").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-profile-capture-native.txt")
+        .exists()
+}
+/// Force the live profile-portrait 3D model render at the title/menu phase (where the GxDrawContext is
+/// valid). The recurring task runs `force_profile_render_tick` each menu-phase frame: it marks the target
+/// slot used (`MarkProfileIndexAsUsed`) then calls the argless profile-render refresh to kick the async
+/// model build, and read-only-captures the rendered CSGxTexture once the model latches. Menu-phase only --
+/// it does NOT commit Continue, so there is no teardown/world-load crash path.
+///
+/// DE-GATED to DEFAULT-ON for real (non-telemetry) runs (user 2026-06-30 "just a feature without a gate";
+/// mirrors the native_continue/pab/splash de-gating precedent
+/// `user-pref-too-many-env-file-gates-default-on-product`): the loading-screen portrait is now product
+/// behavior, so it builds the model on every real autoload run without a staged flag. Master off:
+/// `autoload_disabled()`; telemetry-only/native-capture runs stay off; env/file remain force-on overrides.
+pub(crate) fn force_profile_render_enabled() -> bool {
+    if autoload_disabled() || native_profile_capture_enabled() {
+        return false;
+    }
+    !save_override_telemetry_only()
+        || matches!(
+            std::env::var("ER_EFFECTS_FORCE_PROFILE_RENDER").as_deref(),
+            Ok("1")
+        )
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-force-profile-render.txt")
+            .exists()
+}
+/// DEFAULT-OFF gate for the live-portrait D3D12 readback. When on, the moment
+/// `maybe_capture_portrait_gxtexture` pins the rendered offscreen `CSGxTexture`
+/// (`LOADING_BG_PORTRAIT_GX_KEPT`), the DLL reads back that render target into CPU RGBA8
+/// (`readback_offscreen_rgba8`) and stores it in `LOADING_BG_PORTRAIT_RGBA`, so the now-loading forge
+/// can build its TPF from the REAL rendered character head instead of the magenta/yellow checker
+/// placeholder. It also drives the 1024x1024 higher-res offscreen upsize (the size-table patch is gated on
+/// this), so the portrait renders at full resolution instead of the 128x2 = 256 default.
+///
+/// DE-GATED to DEFAULT-ON for real (non-telemetry) runs (user 2026-06-30 "just a feature without a gate";
+/// mirrors the de-gating precedent `user-pref-too-many-env-file-gates-default-on-product`). Master off:
+/// `autoload_disabled()`; telemetry-only/native-capture runs stay off; env/file remain force-on overrides.
+pub(crate) fn portrait_real_pixels_enabled() -> bool {
+    if autoload_disabled() || native_profile_capture_enabled() {
+        return false;
+    }
+    !save_override_telemetry_only()
+        || matches!(
+            std::env::var("ER_EFFECTS_PORTRAIT_REAL_PIXELS").as_deref(),
+            Ok("1")
+        )
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-portrait-real-pixels.txt")
+            .exists()
+}
+/// DEFAULT-OFF gate for the RENDER-THREAD offscreen drive (the keepalive keystone). When on, the
+/// Present hook (`present_hook`, render thread, every frame, fires during the loading screen) drives the
+/// profile renderer's offscreen draw (`PROFILE_OFFSCREEN_DRIVE_RVA` -> reads g_GxDrawContext, submits to
+/// the GX pool) for the spared/built slot-0 renderer, so the loaded character's 3D head is actually
+/// RENDERED into the offscreen RT after the menu's own render driver dies post-Continue. Without this the
+/// model builds but is never drawn -> the RT holds a placeholder checker (oracle_loading_bg_portrait_is_
+/// checker=True). The game-task drive renders BLACK / crashes (wrong thread + frame phase); the render
+/// thread inside the Present hook is the surviving point.
+///
+/// DE-GATED to DEFAULT-ON for real (non-telemetry) runs (user 2026-06-30 "just a feature without a gate";
+/// mirrors the de-gating precedent `user-pref-too-many-env-file-gates-default-on-product`). The earlier
+/// "risky/unproven" caveat is retired: runtime-proven safe across the 2026-06-30 smokes (145-168 per-frame
+/// Present-hook composites, no crash). This also runs the per-frame depth-alpha-key + CPU-blend composite.
+/// Master off: `autoload_disabled()`; telemetry-only/native-capture runs stay off; env/file remain
+/// force-on overrides.
+pub(crate) fn portrait_render_drive_enabled() -> bool {
+    if autoload_disabled() || native_profile_capture_enabled() {
+        return false;
+    }
+    !save_override_telemetry_only()
+        || matches!(
+            std::env::var("ER_EFFECTS_PORTRAIT_RENDER_DRIVE").as_deref(),
+            Ok("1")
+        )
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-portrait-render-drive.txt")
+            .exists()
+}
+/// DEFAULT-OFF gate for the portrait LOOK-AT lever (head/eyes follow the mouse cursor). When on, the
+/// per-tick `force_profile_render_tick` reaches the loaded character's Havok pose holder and rotates the
+/// Head/Neck/Spine2 bone local quaternions toward the cursor (ER eyes are welded to the Head bone, so
+/// the eyes track as the head turns). Also selects OVERLAY-ONLY display (the live present-overlay owns the
+/// loading-screen surface; the native forge/re-forge is suppressed so there is only ONE head). Requires
+/// `force_profile_render` (the render that builds the model + drives the pose).
+///
+/// DE-GATED to DEFAULT-ON for real (non-telemetry) runs (user 2026-06-30 "just a feature without a gate";
+/// mirrors the de-gating precedent `user-pref-too-many-env-file-gates-default-on-product`). Runtime-proven
+/// safe across the 2026-06-30 smokes. Master off: `autoload_disabled()`; telemetry-only/native-capture
+/// runs stay off; env/file remain force-on overrides. (The zero-input test drivers -- lookat-selftest,
+/// cursor-sweep, force-rebuild -- stay OFF by default; product look-at tracks the real cursor.)
+pub(crate) fn portrait_lookat_enabled() -> bool {
+    if autoload_disabled() || native_profile_capture_enabled() {
+        return false;
+    }
+    !save_override_telemetry_only()
+        || matches!(
+            std::env::var("ER_EFFECTS_PORTRAIT_LOOKAT").as_deref(),
+            Ok("1")
+        )
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-portrait-lookat.txt")
+            .exists()
+}
+/// DEFAULT-OFF: when set, `force_profile_render_tick` does the DESTRUCTIVE periodic rebuild -- every ~240
+/// ticks it CLEARS each renderer's build latch (+0x754/+0x755) + resets the look-at slot cache, forcing a
+/// FRESH async model build. That churn leaves the models in a not-live (rebuilding) state most of the time,
+/// which makes the realtime look-at draw fail ~88% of frames -> flicker. So it is OFF by default: the model
+/// builds ONCE (idempotent mark+refresh) and PERSISTS, so the pose-holder stays live every frame and the
+/// portrait tracks the cursor smoothly. Flip this on briefly (then off) only to force a fresh rebuild that
+/// re-captures the post-FaceData face. Mirrors `portrait_lookat_enabled` (env OR file).
+pub(crate) fn portrait_force_rebuild_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_PORTRAIT_FORCE_REBUILD").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-portrait-force-rebuild.txt")
+        .exists()
+}
+/// DEFAULT-OFF self-validation: when set, the realtime draw task drives Head/Neck/Spine2 from a
+/// DETERMINISTIC SINUSOID (frame-counter based) instead of GetCursorPos -- zero-input, reproducible, no
+/// human mouse -- and reads back the portrait offscreen RT each sample to record nonblack% + hash-change%
+/// as in-process telemetry semaphores (oracle_profile_lookat_rt_*). PASS = nonblack≈100% (no flicker) AND
+/// changed≈100% under the sinusoid (the rendered head moves with the driven angle) AND render_drives≈frames
+/// (per-frame redraw). This replaces the human-eyeball oracle. Mirrors `portrait_lookat_enabled`.
+pub(crate) fn portrait_lookat_selftest_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_PORTRAIT_LOOKAT_SELFTEST").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-portrait-lookat-selftest.txt")
+        .exists()
+}
+/// DEFAULT-OFF cursor-tracking PROOF: when set, the realtime draw task deterministically self-drives the
+/// OS cursor (`SetCursorPos`) through held left/center/right positions over the Elden Ring window, then
+/// reads it back through the SAME `GetCursorPos` path the product uses and drives the head from that read
+/// cursor (NO sinusoid shortcut). It dumps the live head at each held cursor position
+/// (`portrait-capture-slot{200,201,202}.bin`), so the three distinct poses prove the head tracks the
+/// ACTUAL cursor input -- zero foreign input (the DLL warps the cursor itself, at the exact stage the game
+/// polls). Takes precedence over `selftest`. Mirrors `portrait_lookat_enabled` (env OR file).
+pub(crate) fn portrait_cursor_sweep_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_PORTRAIT_CURSOR_SWEEP").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-portrait-cursor-sweep.txt")
+        .exists()
 }
 /// Kill-switch to skip installing the continue_trace hooks (bisecting a ~19s
 /// title crash caused by our DLL). When set, the continue/load-flow hooks are
@@ -256,7 +439,7 @@ pub(crate) fn autoload_disabled() -> bool {
             .exists()
 }
 pub(crate) fn native_continue_enabled() -> bool {
-    if autoload_disabled() {
+    if autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
     // DEFAULT-ON for any real (non-telemetry-only) run: this IS the product autoload path, so it no
@@ -572,16 +755,6 @@ pub(crate) fn fire_tfc_continue_enabled() -> bool {
         .join("er-effects-fire-tfc-continue.txt")
         .exists()
 }
-/// Overlay kill switch: when set, the hudhook/ImGui DX12 overlay is NOT initialized (no extra DX12
-/// hooks / render overhead) -- for golden/trace runs that want a clean game with only our diagnostics.
-/// OFF by default; env `ER_EFFECTS_NO_OVERLAY=1` or a GAME_DIR file `er-effects-no-overlay.txt`.
-pub(crate) fn overlay_disabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_NO_OVERLAY").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-no-overlay.txt")
-            .exists()
-}
 /// Direct ProfileLoadDialog build mode (er-effects-direct-build.txt / ER_EFFECTS_DIRECT_BUILD).
 /// OFF by default: a plain own_stepper run stays the safe read-only scan; the native dialog build
 /// (which leads to a guarded SetState(5) save-write via STAGE 2) fires only when deliberately
@@ -626,6 +799,89 @@ pub(crate) fn pab_advance_enabled() -> bool {
             .join("er-effects-pab-advance.txt")
             .exists()
 }
+// ENV-GATE RATIONALE (required by .auto/env_gate_comment_policy.rego): this is NOT an on/off
+// feature flag. The title-anim speedup is DEFAULT-ON product behavior for every real autoload run
+// (returns TITLE_ANIM_SPEEDUP_DEFAULT, no opt-in) -- matching the always-on autoload levers and the
+// "No Compromises" rule that the deliverable is product behavior, not a flag-gated experiment. The
+// env/file override exists ONLY to (a) SWEEP the factor K at runtime during the empirical animation-
+// speed search -- a cross-compile per candidate K is minutes, a runtime knob is seconds -- and (b)
+// force K=1.0 for a clean A/B against the recorded baseline. Telemetry/trace-only runs stay at 1.0 so
+// they observe unmodified native pacing.
+/// Title-animation speedup factor for the pab_dismiss -> menu_open transition. Default-on
+/// (`TITLE_ANIM_SPEEDUP_DEFAULT`) for real autoload runs; overridable at runtime via env
+/// `ER_EFFECTS_TITLE_ANIM_SPEEDUP=<f32>` or GAME_DIR file `er-effects-title-anim-speedup.txt`
+/// (contents parsed as f32). Result is clamped to [MIN, MAX]; an override that is unparseable or
+/// <=1.0 forces no scaling. bd autoload-menu-speed-lever-framedelta-2026-06-22.
+pub(crate) fn title_anim_speedup_factor() -> f32 {
+    if autoload_disabled() {
+        return TITLE_ANIM_SPEEDUP_MIN; // no autoload -> never perturb the title delta
+    }
+    // Explicit runtime override (tuning / force-off) wins when present.
+    let override_raw = std::env::var("ER_EFFECTS_TITLE_ANIM_SPEEDUP")
+        .ok()
+        .or_else(|| {
+            std::fs::read_to_string(
+                game_directory_path()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join("er-effects-title-anim-speedup.txt"),
+            )
+            .ok()
+        });
+    if let Some(raw) = override_raw {
+        return match raw.trim().parse::<f32>() {
+            Ok(k) if k.is_finite() && k > TITLE_ANIM_SPEEDUP_MIN => k.min(TITLE_ANIM_SPEEDUP_MAX),
+            _ => TITLE_ANIM_SPEEDUP_MIN, // junk / <=1.0 -> force off
+        };
+    }
+    // No override: DEFAULT-ON for real runs, off for telemetry/trace-only observation.
+    if save_override_telemetry_only() {
+        TITLE_ANIM_SPEEDUP_MIN
+    } else {
+        TITLE_ANIM_SPEEDUP_DEFAULT
+    }
+}
+
+/// True when the title-anim speedup lever is armed (factor > 1.0).
+pub(crate) fn title_anim_speedup_enabled() -> bool {
+    title_anim_speedup_factor() > TITLE_ANIM_SPEEDUP_MIN
+}
+/// True when the branch is replacing the native `05_001_Title_Logo` GFX bytes through the
+/// Scaleform MemoryFile seam. This is not a vanilla/main restore switch: it means the branch now
+/// owns that TitleBack resource, so old hooks that hide TitleBack would hide our replacement.
+pub(crate) fn title_resource_memory_gfx_enabled() -> bool {
+    std::env::var("ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
+/// DEFAULT-ON product masquerade cover Part A: suppress only the native `05_000_Title`
+/// MenuWindowJob visual wrapper while the zero-input autoload runs. If memory-GFX replacement is
+/// active, do not install the old TitleBack hide hooks: `05_001_Title_Logo` is the replacement
+/// surface on this branch, not a vanilla/main object to suppress.
+pub(crate) fn title_native_menu_visual_suppression_enabled() -> bool {
+    if title_resource_memory_gfx_enabled()
+        || autoload_disabled()
+        || native_profile_capture_enabled()
+    {
+        return false;
+    }
+    !save_override_telemetry_only()
+}
+
+/// Passive, epilogue-neutral observer for native Scaleform menu-resource acquisition. This is
+/// intentionally separate from the title-cover/hide bundle: resource/memory-GFX proof needs the
+/// replaced `05_001_Title_Logo` visible, not hidden by TitleBackViewParts suppression hooks.
+pub(crate) fn title_menu_resource_observer_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_TITLE_RESOURCE_OBSERVER").as_deref(),
+        Ok("1")
+    ) || title_resource_memory_gfx_enabled()
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-title-resource-observer.txt")
+            .exists()
+}
+
 /// AUTO-CONFIRM observe mode (er-effects-auto-confirm.txt): drive the game's OWN natural title
 /// flow with Confirm input-taps so we can finally observe the view PAST the modal. No SetState
 /// forcing, no input block, no custom dismiss -- just the press the game polls for.
@@ -725,6 +981,7 @@ pub(crate) fn splash_skip_enabled() -> bool {
     !save_override_telemetry_only()
         || product_autoload_enabled()
         || own_load_enabled()
+        || title_menu_resource_observer_enabled()
         || matches!(std::env::var("ER_EFFECTS_SPLASH_SKIP").as_deref(), Ok("1"))
         || game_directory_path()
             .unwrap_or_else(|| PathBuf::from("."))

@@ -1,0 +1,37 @@
+[package]
+name = "er-objectkit"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Host-only library that traces an Elden Ring shader/material back to the OBJECTS
+# (FLVER models) that use it, and assembles the data needed to re-render a whole
+# object as in-game. M1 = the offline trace (MATBIN parse + shader->object index).
+# Decompression/extraction is delegated to er-soulsformats' wine shaderbridge; this
+# crate parses the already-decompressed member bytes in pure Rust on Linux.
+
+[dependencies]
+er-soulsformats = { path = "../soulsformats" }
+# Real compiled shaders -> SPIR-V (dxil-spirv) + headless wgpu passthrough render.
+er-shaderkit = { path = "../er-shaderkit", features = ["gpu"] }
+# FLVER geometry: normalized ObjectModel (re-exported here) + the raw vertex-declaration
+# view for binding real geometry to the native .vpo via passthrough. The `wgpu` feature
+# adds VertexFormat::to_wgpu / wgpu_layout for building the native vertex-buffer layout.
+er-flver = { path = "../er-flver", features = ["wgpu"] }
+thiserror = "2"
+# Pure-Rust FLVER reader (owned API: materials, meshes, facesets, buffer layouts).
+# Pinned; only the `formats` parsers are used — never its Oodle/dvdbnd (decompression
+# stays in the er-soulsformats wine bridge), so no Oodle lib is needed at build/run.
+fstools_formats = { git = "https://github.com/soulsmods/fstools-rs", rev = "4b0db28d1c419cdedc62cc8e8def9c6eaad38d12" }
+# DDS/BCn decode for TPF textures -> RGBA. default-features=false drops the Intel
+# ISPC C++ *encoder* (intel-tex) we don't use; decode is pure Rust.
+image_dds = { version = "0.7", default-features = false, features = ["ddsfile", "image"] }
+# Capture manifest (de)serialization for the frame-replay harness (crate::capture).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+# Save a PNG of the native-shader draw (examples/native_draw.rs) for visual proof.
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Name wgpu::VertexFormat in the native_draw example (unified with er-shaderkit's wgpu).
+wgpu = { version = "29", default-features = false }
