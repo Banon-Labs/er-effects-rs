@@ -331,7 +331,7 @@ def ensure_quiet_wineprefix():
     _WINE_QUIETED = True
 
 
-def bake(va, paths, budget, ninputs=200000):
+def bake(va, paths, budget, ninputs=200000, real_callees=False):
     asm, meta = reassemble(va, paths, budget)
     if asm is None:
         return {"ok": False, "stage": "reassemble", "err": meta}
@@ -343,10 +343,30 @@ def bake(va, paths, budget, ninputs=200000):
     p = lambda n: os.path.join(WORK, n)
     open(p("bf_rf.s"), "w").write(asm)
 
-    # deterministic callee stubs: return 0 (constant -> no arg-ABI drift between ref &
-    # recompiled; 0 tends to keep the function's own input-dependent path live).
-    cst = ["/* deterministic callee stubs (return 0) */"]
-    for c in meta["callees"]:
+    # Callees. In real_callees mode, wire each DIRECT callee as its own recovered code
+    # (separate object -- reassemble emits local data symbols, so they don't collide),
+    # linked into BOTH ref and recomp; fall back to a return-0 stub if the callee doesn't
+    # reassemble. Their own callees are stubbed (depth-1). Real callees make the caller's
+    # verification reinjection-faithful and let input-dependence flow through them (PRIMARY).
+    # Default (stub) mode is unchanged: every callee returns 0.
+    real_objs, wired = [], []
+    stub_set = set(meta["callees"])
+    if real_callees:
+        for c in meta["callees"]:
+            kasm, kmeta = reassemble(c, paths, budget)
+            if kasm is None or kmeta.get("gadgets"):
+                continue
+            kasm = kasm.replace(".global recovered_func", f".global sub_{c:x}").replace(
+                "recovered_func:", f"sub_{c:x}:")
+            open(p(f"cal_{c:x}.s"), "w").write(kasm)
+            r = sh(f'clang --target=x86_64-pc-windows-msvc -c "{p(f"cal_{c:x}.s")}" -o "{p(f"cal_{c:x}.obj")}"')
+            if r.returncode:
+                continue
+            real_objs.append(f"cal_{c:x}.obj"); wired.append(c)
+            stub_set |= set(kmeta["callees"])
+        stub_set -= set(wired)
+    cst = ["/* return-0 stubs for the non-real callees */"]
+    for c in sorted(stub_set):
         cst.append(f"unsigned long long sub_{c:x}(void){{ return 0ULL; }}")
     open(p("bf_callees.c"), "w").write("\n".join(cst) + "\n")
 
@@ -375,7 +395,7 @@ def bake(va, paths, budget, ninputs=200000):
     link = lambda objs, out, extra="": sh(
         f'lld-link {" ".join(p(o) for o in objs)} /out:{p(out)} /entry:entry '
         f'/subsystem:console {libp} {extra}')
-    r = link(["bf_harness.obj", "bf_rf.obj", "bf_callees.obj"], "bf_ref.exe", f"/map:{p('bf_ref.map')}")
+    r = link(["bf_harness.obj", "bf_rf.obj", "bf_callees.obj"] + real_objs, "bf_ref.exe", f"/map:{p('bf_ref.map')}")
     if r.returncode:
         return {"ok": False, "stage": "link-ref", "err": r.stderr[-500:]}
     ref_exit = wine_exit(p("bf_ref.exe"))
@@ -435,7 +455,7 @@ def bake(va, paths, budget, ninputs=200000):
     if r.returncode:
         return {"ok": False, "stage": "rtstub", "err": r.stderr[-500:]}
 
-    r = link(["bf_harness.obj", "bf.rf.rc.obj", "bf_callees.obj", "bf_rtstub.obj"], "bf_recomp.exe")
+    r = link(["bf_harness.obj", "bf.rf.rc.obj", "bf_callees.obj", "bf_rtstub.obj"] + real_objs, "bf_recomp.exe")
     if r.returncode:
         return {"ok": False, "stage": "link-recomp", "err": r.stderr[-600:]}
     rc_exit = wine_exit(p("bf_recomp.exe"))
@@ -443,7 +463,10 @@ def bake(va, paths, budget, ninputs=200000):
     varied = bool(ref_exit is not None and ref_exit & 0x80)
     return {"ok": rc_exit == ref_exit, "stage": "verify", "ref": ref_exit, "recompiled": rc_exit,
             "input_dependent": varied, "nblocks": meta["nblocks"], "ninsns": meta["ninsns"],
-            "callees": [hex(c) for c in meta["callees"]], "residue": sorted(residue)}
+            "callees": [hex(c) for c in meta["callees"]],
+            "wired_callees": [hex(c) for c in wired],
+            "all_callees_real": len(wired) == len(meta["callees"]),
+            "residue": sorted(residue)}
 
 
 def main():
