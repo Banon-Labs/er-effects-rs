@@ -479,9 +479,10 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         )
     ));
     body.push_str(&format!(
-        "  \"system_quit_profile_load_activate_block_count\": {},\n  \"system_quit_profile_load_activate_allow_count\": {},\n  \"system_quit_profile_load_activate_last_dialog\": {},\n  \"system_quit_profile_load_activate_last_cursor\": {},\n  \"system_quit_profile_load_activate_last_bound\": {},\n",
-        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_BLOCK_COUNT.load(Ordering::SeqCst),
-        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ALLOW_COUNT.load(Ordering::SeqCst),
+        "  \"system_quit_profile_load_activate_count\": {},\n  \"system_quit_profile_load_confirmed_block_count\": {},\n  \"system_quit_profile_load_confirmed_allow_count\": {},\n  \"system_quit_profile_load_activate_last_dialog\": {},\n  \"system_quit_profile_load_activate_last_cursor\": {},\n  \"system_quit_profile_load_activate_last_bound\": {},\n",
+        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.load(Ordering::SeqCst),
         format_scan_ptr(SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG.load(Ordering::SeqCst)),
         SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR.load(Ordering::SeqCst),
         SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_BOUND.load(Ordering::SeqCst)

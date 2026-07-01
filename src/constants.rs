@@ -4217,16 +4217,27 @@ pub(crate) static SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED: AtomicUsize = AtomicUs
 pub(crate) const SYSTEM_QUIT_WINDOW_LIST_PUSH_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED_YES: usize = 1;
 /// Live/deobf `CS::ProfileLoadDialog` activation vtable target (`dump 0x1409a47c0` -> deobf
-/// `0x1409a4670`). This is the native slot-load path that crashed in in-world System-menu tests at
-/// CSGaitemImp::Deserialize live/deobf `0x14067141a`, so the System Quit hook blocks it by default.
+/// `0x1409a4670`). This builds/submits the native confirmation dialog for the selected profile.
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA: u32 = 0x9a4670;
+/// Live/deobf `<lambda_4c99...>::operator()` (`dump 0x1409a4ee0` -> deobf `0x1409a4d90`). This
+/// is the confirmation-accepted transition inside the dialog chain: it writes
+/// `*(dialog+0x1cc8+0x14c)=2` and `dialog+0x1e8=Success`, which lets the downstream load/deser run.
+/// The prior in-world crash reached CSGaitemImp::Deserialize live/deobf `0x14067141a`, so this
+/// transition is blocked by default for the injected System Quit route while confirmation UI is allowed.
+pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA: u32 = 0x9a4d90;
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED_YES: usize = 1;
-pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_NOT_INSTALLED: usize = 0;
+pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED_YES: usize = 1;
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR: AtomicUsize =
     AtomicUsize::new(usize::MAX);

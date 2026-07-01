@@ -7100,17 +7100,46 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR.store(cursor as usize, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_BOUND.store(bound as usize, Ordering::SeqCst);
 
-    if system_quit_profile_load_activation_allowed() {
-        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
+    SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.fetch_add(1, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-dup: ProfileSelect slot activation dialog ALLOWED dialog=0x{dialog:x} cursor={cursor} bound={bound} profile_window=0x{profile_window:x}; confirmation-accepted transition remains guarded"
+    ));
+    unsafe { original(dialog, b, c, d) }
+}
+
+pub(crate) unsafe extern "system" fn system_quit_profile_load_confirmed_hook(
+    action_obj: usize,
+) -> usize {
+    let orig = SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
         append_autoload_debug(format_args!(
-            "system-quit-dup: ProfileSelect slot activation ALLOWED dialog=0x{dialog:x} cursor={cursor} bound={bound} profile_window=0x{profile_window:x}; forwarding native load path (known crash risk: CSGaitemImp::Deserialize rva 0x67141a)"
+            "system-quit-dup: ProfileLoadDialog confirmed-load trampoline unset for action=0x{action_obj:x} -- fail-closed return 0"
         ));
-        return unsafe { original(dialog, b, c, d) };
+        return 0;
+    }
+    let original: unsafe extern "system" fn(usize) -> usize = unsafe { std::mem::transmute(orig) };
+    let dialog =
+        unsafe { safe_read_usize(action_obj + 0x8) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let profile_window = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+    let system_quit_profile_active = dialog != TITLE_OWNER_SCAN_START_ADDRESS
+        && profile_window != 0
+        && dialog == profile_window
+        && SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0;
+    if !system_quit_profile_active {
+        return unsafe { original(action_obj) };
     }
 
-    SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst);
+    if system_quit_profile_load_activation_allowed() {
+        SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-dup: ProfileSelect confirmed-load transition ALLOWED action=0x{action_obj:x} dialog=0x{dialog:x}; forwarding native transition (known crash risk: CSGaitemImp::Deserialize rva 0x67141a)"
+        ));
+        return unsafe { original(action_obj) };
+    }
+
+    SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "system-quit-dup: ProfileSelect slot activation BLOCKED save-safe dialog=0x{dialog:x} cursor={cursor} bound={bound} profile_window=0x{profile_window:x}; set ER_EFFECTS_SYSTEM_QUIT_ALLOW_PROFILE_LOAD=1 only for a staged crash-risk load probe"
+        "system-quit-dup: ProfileSelect confirmed-load transition BLOCKED save-safe action=0x{action_obj:x} dialog=0x{dialog:x}; confirmation dialog was allowed, actual load requires ER_EFFECTS_SYSTEM_QUIT_ALLOW_PROFILE_LOAD=1"
     ));
     0
 }
@@ -7159,7 +7188,7 @@ fn install_system_quit_profile_load_activate_hook() {
                         Ordering::SeqCst,
                     );
                     append_autoload_debug(format_args!(
-                        "system-quit-dup: hooked ProfileLoadDialog activation 0x{addr:x}; injected in-world ProfileSelect slot loads are blocked by default"
+                        "system-quit-dup: hooked ProfileLoadDialog activation 0x{addr:x}; injected in-world ProfileSelect can build confirmation dialog"
                     ));
                 }
                 status => append_autoload_debug(format_args!(
@@ -7169,6 +7198,64 @@ fn install_system_quit_profile_load_activate_hook() {
         }
         Err(status) => append_autoload_debug(format_args!(
             "system-quit-dup: MhHook::new ProfileLoadDialog activation hook failed: {status:?}"
+        )),
+    }
+}
+
+fn install_system_quit_profile_load_confirmed_hook() {
+    if SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: MH_Initialize for ProfileLoadDialog confirmed-load hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: failed to resolve ProfileLoadDialog confirmed-load rva 0x{SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_profile_load_confirmed_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: queue_enable ProfileLoadDialog confirmed-load hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED.store(
+                        SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED_YES,
+                        Ordering::SeqCst,
+                    );
+                    append_autoload_debug(format_args!(
+                        "system-quit-dup: hooked ProfileLoadDialog confirmed-load transition 0x{addr:x}; actual in-world load is blocked by default"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-dup: MH_ApplyQueued ProfileLoadDialog confirmed-load hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-dup: MhHook::new ProfileLoadDialog confirmed-load hook failed: {status:?}"
         )),
     }
 }
@@ -7238,6 +7325,7 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     install_system_quit_window_list_push_hook();
     install_system_quit_noop_action_hook();
     install_system_quit_profile_load_activate_hook();
+    install_system_quit_profile_load_confirmed_hook();
     if SYSTEM_QUIT_DUPLICATE_INSTALLED.load(Ordering::SeqCst) != SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED
     {
         return;
