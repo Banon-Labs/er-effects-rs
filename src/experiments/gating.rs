@@ -521,16 +521,17 @@ pub(crate) fn menu_window_latch_enabled() -> bool {
         .join("er-effects-menu-window-latch.txt")
         .exists()
 }
-/// OPT-IN proof gate for duplicating the System -> Quit Game tab's native Return-to-Desktop button.
-/// This intentionally proves only that the native list can fit/dispatch a third row; it does not
-/// alter save/load semantics and does not build the future Load Character handler.
-pub(crate) fn system_quit_duplicate_button_enabled() -> bool {
+/// Explicit opt-in to let the injected in-world System -> Quit Game -> ProfileSelect route perform
+/// the native slot-load activation. Default OFF because the prior live attempt crashed inside
+/// CSGaitemImp::Deserialize at live/deobf 0x14067141a; default behavior logs the selected cursor and
+/// suppresses the activation so profile-selection investigation stays save-safe.
+pub(crate) fn system_quit_profile_load_activation_allowed() -> bool {
     matches!(
-        std::env::var("ER_EFFECTS_SYSTEM_QUIT_DUPLICATE_BUTTON").as_deref(),
+        std::env::var("ER_EFFECTS_SYSTEM_QUIT_ALLOW_PROFILE_LOAD").as_deref(),
         Ok("1")
     ) || game_directory_path()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-system-quit-duplicate-button.txt")
+        .join("er-effects-system-quit-allow-profile-load.txt")
         .exists()
 }
 /// OPT-IN gate for the c30-writer diagnostic hook (hot deserialize-internal 0x67bd70).

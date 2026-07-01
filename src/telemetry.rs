@@ -479,6 +479,14 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         )
     ));
     body.push_str(&format!(
+        "  \"system_quit_profile_load_activate_block_count\": {},\n  \"system_quit_profile_load_activate_allow_count\": {},\n  \"system_quit_profile_load_activate_last_dialog\": {},\n  \"system_quit_profile_load_activate_last_cursor\": {},\n  \"system_quit_profile_load_activate_last_bound\": {},\n",
+        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_BLOCK_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ALLOW_COUNT.load(Ordering::SeqCst),
+        format_scan_ptr(SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG.load(Ordering::SeqCst)),
+        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR.load(Ordering::SeqCst),
+        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_BOUND.load(Ordering::SeqCst)
+    ));
+    body.push_str(&format!(
         "  \"autoload_last_status\": {},\n",
         state.autoload.last_status().map_or_else(
             || "null".to_owned(),

@@ -397,16 +397,14 @@ pub unsafe extern "C" fn DllMain(_hmodule: HINSTANCE, reason: u32, _reserved: *m
             .spawn(install_profile_renderer_teardown_spare_hook);
     });
 
-    // System -> Quit Game third-button proof: opt-in multi-slot layout patch plus duplicate of the
-    // native Return-to-Desktop AddCancelButton call. This proves a third native row can be rendered
-    // and selected before touching save/load/ProfileLoadDialog semantics.
-    if system_quit_duplicate_button_enabled() {
-        START_SYSTEM_QUIT_DUPLICATE_BUTTON_HOOK.call_once(|| {
-            let _ = std::thread::Builder::new()
-                .name("er-effects-system-quit-dup".to_owned())
-                .spawn(install_system_quit_duplicate_button_hook);
-        });
-    }
+    // System -> Quit Game quick-loading button: always-on multi-slot layout patch plus a third row
+    // that opens native 05_010_ProfileSelect. Slot activation from that injected in-world route is
+    // separately blocked by default until the crash-risk load semantics are pinned.
+    START_SYSTEM_QUIT_DUPLICATE_BUTTON_HOOK.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("er-effects-system-quit-load".to_owned())
+            .spawn(install_system_quit_duplicate_button_hook);
+    });
 
     // MenuWindow latch: install the SceneObjProxy ctor hook (0x14074a700) as early as the
     // splash-skip / online-disable patches, from a thread, so it lands BEFORE the title state
@@ -779,9 +777,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     if lite_mode() {
                         return;
                     }
-                    if system_quit_duplicate_button_enabled() {
-                        unsafe { system_quit_profile_select_top_menu_tick() };
-                    }
+                    unsafe { system_quit_profile_select_top_menu_tick() };
                     // Product autoload: run the native title open-menu predicate + minimal
                     // native save-load core from the recurring game task, before the idx10
                     // MenuJobWait hook path is needed. This bypasses title-accept/input

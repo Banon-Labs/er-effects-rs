@@ -4125,11 +4125,12 @@ pub(crate) static MENU_WINDOW_LATCH_INSTALLED: AtomicUsize = AtomicUsize::new(0)
 pub(crate) const MENU_WINDOW_LATCH_NOT_INSTALLED: usize = 0;
 pub(crate) const MENU_WINDOW_LATCH_INSTALLED_YES: usize = 1;
 pub(crate) static START_MENU_WINDOW_LATCH: Once = Once::new();
-/// Proof hook for the System -> Quit Game tab: duplicate the native Return-to-Desktop
-/// `AddCancelButton` call once so the tab shows a third button with a native-cloned label/help/action.
-/// This is deliberately an opt-in proof gate: it avoids custom MSVC std::function shims, FMG edits,
-/// ProfileLoadDialog, or save/load semantics while proving the native list can fit and dispatch a
-/// third row. Address is deobf/live (dump AddCancelButton 0x140920d80 -> live 0x140920c90).
+/// Quick-loading button hook for the System -> Quit Game tab: duplicate the native
+/// Return-to-Desktop `AddCancelButton` call once, retitle that clone as `Select profile to load`,
+/// and route its action to native 05_010_ProfileSelect. The hook is always installed; slot-load
+/// activation from the injected in-world ProfileSelect is separately guarded below while the crash
+/// at CSGaitemImp::Deserialize is investigated. Address is deobf/live (dump AddCancelButton
+/// 0x140920d80 -> live 0x140920c90).
 pub(crate) const SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA: u32 = 0x920c90;
 /// Return address immediately after the second `AddCancelButton` in the Quit Game tab builder
 /// (dump `FUN_140958a00` -> live `0x140958910`). The second native row is Return to Desktop.
@@ -4215,6 +4216,21 @@ pub(crate) static SYSTEM_QUIT_WINDOW_LIST_PUSH_ORIG: AtomicUsize =
 pub(crate) static SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const SYSTEM_QUIT_WINDOW_LIST_PUSH_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED_YES: usize = 1;
+/// Live/deobf `CS::ProfileLoadDialog` activation vtable target (`dump 0x1409a47c0` -> deobf
+/// `0x1409a4670`). This is the native slot-load path that crashed in in-world System-menu tests at
+/// CSGaitemImp::Deserialize live/deobf `0x14067141a`, so the System Quit hook blocks it by default.
+pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA: u32 = 0x9a4670;
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_NOT_INSTALLED: usize = 0;
+pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED_YES: usize = 1;
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR: AtomicUsize =
+    AtomicUsize::new(usize::MAX);
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_BOUND: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_TOP_HIDE_ARMED_LIST: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_TOP_HIDE_ARMED_DIALOG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_TOP_HIDE_TOP_WINDOW: AtomicUsize = AtomicUsize::new(0);

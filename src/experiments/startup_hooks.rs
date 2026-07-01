@@ -7065,6 +7065,114 @@ fn install_system_quit_noop_action_hook() {
     }
 }
 
+pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
+    dialog: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let orig = SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: ProfileLoadDialog activation trampoline unset for dialog=0x{dialog:x} -- fail-closed return 0"
+        ));
+        return 0;
+    }
+    let original: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    let base = game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let vt = unsafe { safe_read_usize(dialog) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let expected_vt = if base != TITLE_OWNER_SCAN_START_ADDRESS {
+        base + PROFILE_LOAD_DIALOG_VTABLE_RVA
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    let hidden = SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0;
+    let profile_window = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+    let system_quit_profile_active = hidden && profile_window != 0 && vt == expected_vt;
+    if !system_quit_profile_active {
+        return unsafe { original(dialog, b, c, d) };
+    }
+
+    let cursor = unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }.unwrap_or(-1);
+    let bound = unsafe { safe_read_i32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET) }.unwrap_or(-1);
+    SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG.store(dialog, Ordering::SeqCst);
+    SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR.store(cursor as usize, Ordering::SeqCst);
+    SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_BOUND.store(bound as usize, Ordering::SeqCst);
+
+    if system_quit_profile_load_activation_allowed() {
+        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-dup: ProfileSelect slot activation ALLOWED dialog=0x{dialog:x} cursor={cursor} bound={bound} profile_window=0x{profile_window:x}; forwarding native load path (known crash risk: CSGaitemImp::Deserialize rva 0x67141a)"
+        ));
+        return unsafe { original(dialog, b, c, d) };
+    }
+
+    SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-dup: ProfileSelect slot activation BLOCKED save-safe dialog=0x{dialog:x} cursor={cursor} bound={bound} profile_window=0x{profile_window:x}; set ER_EFFECTS_SYSTEM_QUIT_ALLOW_PROFILE_LOAD=1 only for a staged crash-risk load probe"
+    ));
+    0
+}
+
+fn install_system_quit_profile_load_activate_hook() {
+    if SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: MH_Initialize for ProfileLoadDialog activation hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: failed to resolve ProfileLoadDialog activation rva 0x{SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_profile_load_activate_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: queue_enable ProfileLoadDialog activation hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED.store(
+                        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED_YES,
+                        Ordering::SeqCst,
+                    );
+                    append_autoload_debug(format_args!(
+                        "system-quit-dup: hooked ProfileLoadDialog activation 0x{addr:x}; injected in-world ProfileSelect slot loads are blocked by default"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-dup: MH_ApplyQueued ProfileLoadDialog activation hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-dup: MhHook::new ProfileLoadDialog activation hook failed: {status:?}"
+        )),
+    }
+}
+
 fn apply_system_quit_multislot_layout_patch() {
     let Ok(base) = game_module_base() else {
         append_autoload_debug(format_args!(
@@ -7129,6 +7237,7 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     install_system_quit_menu_window_job_run_hook();
     install_system_quit_window_list_push_hook();
     install_system_quit_noop_action_hook();
+    install_system_quit_profile_load_activate_hook();
     if SYSTEM_QUIT_DUPLICATE_INSTALLED.load(Ordering::SeqCst) != SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED
     {
         return;
