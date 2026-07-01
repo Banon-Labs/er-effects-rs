@@ -300,6 +300,22 @@ pub(crate) unsafe fn readback_offscreen_rgba8(gpu_child: usize) -> Option<(u32, 
     .flatten()
 }
 
+/// Per-frame DISPLAY readback: re-resolve the offscreen nest's largest TEXTURE2D (the live content RT) FRESH
+/// each frame via `find_d3d12_resource(start)` -- exactly what the working in-process RT sample does -- but
+/// copy it with the CACHED `RB_FAST_*` objects so it succeeds every frame (vs the per-call object creation
+/// that only published ~4x). This replaces `readback_cached_content_rgba8` for the display feed: that one
+/// cached the *resource* once and went stale (read black ~98% while the fresh-resolved RT held the head
+/// ~63%) -- the offscreen RT is recreated (e.g. the 1024 resize) so a once-cached handle dangles. Fault-
+/// guarded; caller must gate on a live renderer/model so the scan can't race a teardown free.
+pub(crate) unsafe fn readback_offscreen_fast(gpu_child: usize) -> Option<(u32, u32, Vec<u8>)> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let resource = find_d3d12_resource(gpu_child)?;
+        readback_resource_cached_fast(resource)
+    }))
+    .ok()
+    .flatten()
+}
+
 /// Readback the largest TEXTURE2D in `start`'s nest EXCLUDING whichever texture is found from
 /// `exclude_start` (e.g. read the content RT while excluding the SRV). For visual diagnosis of which
 /// texture holds the portrait when several same-/different-size textures share the offscreen nest.

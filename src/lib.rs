@@ -1018,7 +1018,9 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
         ];
         for (i, phase) in lookat_phases.into_iter().enumerate() {
             cs_task.run_recurring(
-                move |_task_data: &FD4TaskData| unsafe { profile_lookat_phase_draw_tick(i) },
+                move |task_data: &FD4TaskData| unsafe {
+                    profile_lookat_phase_draw_tick(i, task_data)
+                },
                 phase,
             );
         }

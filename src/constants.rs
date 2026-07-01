@@ -1222,6 +1222,14 @@ pub(crate) static PROFILE_LOOKAT_TRACK_BUCKETS: AtomicUsize = AtomicUsize::new(0
 /// `oracle_profile_readback_checker`; `_some - _checker` == the publish count.
 pub(crate) static PROFILE_READBACK_SOME: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_READBACK_CHECKER: AtomicUsize = AtomicUsize::new(0);
+/// DEFERRED-READBACK DIAGNOSTIC (H2 vs H3): a readback of the content RT taken at the START of the draw
+/// tick, BEFORE this frame's `drive(r)` queues a new rasterize -- so it captures the texture state left by
+/// the PREVIOUS frame's GX work. If `_deferred_nonblack` is high while the post-drive immediate
+/// `_some - _checker` is ~4, the blackness is a cross-queue TIMING artifact (the rasterize lands but our
+/// same-tick readback races ahead of the game's GX queue) -> fix by syncing/reading at a settled point.
+/// If `_deferred_nonblack` is ALSO ~4, the rasterize genuinely is not landing in this texture (H3).
+pub(crate) static PROFILE_READBACK_DEFERRED_SOME: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_READBACK_DEFERRED_NONBLACK: AtomicUsize = AtomicUsize::new(0);
 /// One-shot latch: dump a single checker frame (slot 103) to see what the non-published frames hold.
 pub(crate) static PROFILE_CHECKER_DUMPED: AtomicBool = AtomicBool::new(false);
 /// `updateBoneModelSpace` (dump 0x141653370) -> deobf 0x141653350 (shift -0x20, content-unique). The
@@ -1243,6 +1251,30 @@ pub(crate) const PROFILE_PER_FRAME_PUSH_RVA: usize = 0xbba6e0;
 pub(crate) static PROFILE_PERFRAME_HOOK_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static PROFILE_PERFRAME_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_PERFRAME_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Profile-renderer UPDATE task `FUN_140bba820` (dump) -> deobf RVA 0x140bba730 (content-unique, shift
+/// -0xf0). `fn(renderer, FD4TaskData*)`: runs the FD4 state-machine stepper (vtable+0xc0) then refreshes the
+/// model transform/animation (anim step with `*(td+8)` delta-time, model matrix, FaceData) for the tick.
+/// Paired with the DRAW task (== `PROFILE_PER_FRAME_PUSH_RVA`). RE-confirmed: both are `CSEzUpdateTask`s
+/// the renderer self-registers; post-Continue their ResMan driver under-schedules them (~4-19x/loading
+/// screen) so the model rasterizes sparsely. We drive both ourselves per render-thread frame to make the
+/// portrait re-rasterize the live look-at pose EVERY frame. See keepalive-POOL-REFUTED-readback-crossqueue.
+pub(crate) const PROFILE_MODEL_UPDATE_TASK_RVA: usize = 0xbba730;
+/// The live `FD4TaskData*` (`param_2`/`frame` arg) the ENGINE passes to the profile DRAW task on its own
+/// (sparse) calls -- captured in `per_frame_push_hook`. The GX enqueue routes the model into the correct
+/// OFFSCREEN render pass via this context, so driving the draw with OUR draw-phase task_data renders to the
+/// wrong pass (nothing lands in the portrait RT). We reuse the most-recently-captured engine context for our
+/// per-frame drive instead. RE note: prior agents found this `frame` arg cannot be synthesized.
+pub(crate) static PROFILE_DRAW_TASK_CTX: AtomicUsize = AtomicUsize::new(0);
+/// Guard so `per_frame_push_hook` does NOT re-capture the context while WE are driving it (only the engine's
+/// own natural calls should seed `PROFILE_DRAW_TASK_CTX`).
+pub(crate) static PROFILE_IN_OUR_DRIVE: AtomicBool = AtomicBool::new(false);
+/// Diagnostic: the captured engine ctx pointer + its `+8` delta-time bits, logged once, to learn whether the
+/// context is a stable persistent structure (safe to reuse across frames) or a transient per-call one.
+pub(crate) static PROFILE_DRAW_TASK_CTX_LOGGED: AtomicUsize = AtomicUsize::new(0);
+/// Count of per-frame model DRAW-task drives we issue (the enqueue/rasterize). Pairs with
+/// `oracle_loading_bg_portrait_rgba_version`: once this is ~per-frame, the version should climb past the
+/// old stuck ~4 if the per-frame rasterize lands.
+pub(crate) static PROFILE_PERFRAME_MODEL_DRAWS: AtomicUsize = AtomicUsize::new(0);
 /// Count of direct draws of the POST-Continue SPARED renderer (via the offscreen thunk), and an oracle of
 /// whether it still has a live model post-Continue -- the persistent-model path the cycling menu can't give.
 pub(crate) static PROFILE_PERFRAME_SPARED_DRAWS: AtomicUsize = AtomicUsize::new(0);
@@ -1257,6 +1289,24 @@ pub(crate) const GX_DRAW_CONTEXT_QUEUE_HEAD_OFFSET: usize = 0xf8;
 pub(crate) const GX_DRAW_CONTEXT_QUEUE_TAIL_OFFSET: usize = 0x100;
 pub(crate) static PROFILE_GX_QUEUE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_GX_QUEUE_NONEMPTY: AtomicUsize = AtomicUsize::new(0);
+/// GX SUBCONTEXT POOL stat offsets (RE-confirmed via Ghidra Initilize@0x1419e7d10 + pop FUN_1419e5850):
+/// the `+0xf0` member is a `Vector<subctx*>` whose floor pointer is at `+0xf8` and movable stack-top at
+/// `+0x100` (the pop checks `*(ctx+0xf8) == *(ctx+0x100)` for EMPTY, else pops `*(top-8)`, `top -= 8`). So
+/// the number of FREE (poppable) subcontexts this frame == `(*(ctx+0x100) - *(ctx+0xf8)) / 8`. The
+/// `+0x110` field is a 32-bit lazy-init USED-MASK indexed by `subctx+0x2580 & 0x1f`; once the pool has been
+/// fully exercised its popcount == N (the allocated subcontext count = `min(config + clamp(threads,2,16),
+/// 32)`). DECISIVE OBSERVABLE: if free-depth stays > 0 across the loading screen, the pool is NOT the cause
+/// of the ~4x head refresh (pop never fails) -> the black readback is a cross-queue rasterize/sync issue.
+pub(crate) const GX_DRAW_CONTEXT_POOL_FLOOR_OFFSET: usize = 0xf8;
+pub(crate) const GX_DRAW_CONTEXT_POOL_TOP_OFFSET: usize = 0x100;
+pub(crate) const GX_DRAW_CONTEXT_POOL_USED_MASK_OFFSET: usize = 0x110;
+/// Min free-depth seen across the loading screen (init to usize::MAX; a value > 0 at run end proves the
+/// pool always had a poppable subcontext -> refutes the "pop fails 96%" pool-contention theory).
+pub(crate) static PROFILE_GX_POOL_FREE_MIN: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Most-recent free-depth sample (diagnostic).
+pub(crate) static PROFILE_GX_POOL_FREE_LAST: AtomicUsize = AtomicUsize::new(0);
+/// Raw `+0x110` used-mask (popcount == N, the allocated subcontext count). Tells us the headroom under 32.
+pub(crate) static PROFILE_GX_POOL_USED_MASK: AtomicUsize = AtomicUsize::new(0);
 /// Registry of the live profile PoseHolder pointers the game-task tick has resolved as "ours" (0 =
 /// empty). The hook only applies look-at to a holder in this set; the c0000 head/neck/spine2 indices
 /// are the shared `PROFILE_LOOKAT_*_IDX` globals above, and the angle is the shared yaw/pitch below.

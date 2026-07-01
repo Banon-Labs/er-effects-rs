@@ -2900,7 +2900,7 @@ unsafe fn lookat_apply_realtime(holder: usize, slot_idx: usize, yaw: f32, pitch:
 /// data-change, so without this they track the cursor only at the ~4s model-rebuild cadence; here they
 /// track every frame. The draw step fail-closes (the GX pool pop returns 0 -> no-op) if a phase ever
 /// lacks a live frame, so it can never crash from being driven off a recording frame.
-pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize) {
+pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4TaskData) {
     if !portrait_lookat_enabled() {
         return;
     }
@@ -2982,12 +2982,6 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize) {
                 // we OWN this renderer (force_profile_render built it) so its model+deps are alive (unlike the
                 // teardown-freed spared renderer this crashes on). Runs before the RT->SRV copy + readback so
                 // they capture the fresh pose. Gated by the existing render-drive lever; bumps the hits oracle.
-                if portrait_render_drive_enabled() {
-                    let drive: unsafe extern "system" fn(usize) =
-                        unsafe { core::mem::transmute(base + PROFILE_OFFSCREEN_DRIVE_RVA) };
-                    unsafe { drive(r) };
-                    PROFILE_RENDER_DRIVE_HITS.fetch_add(1, Ordering::SeqCst);
-                }
                 let trc = unsafe {
                     safe_read_usize(off + TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET)
                 }
@@ -3000,6 +2994,64 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize) {
                 } else {
                     0
                 };
+                // (The H2-vs-H3 deferred-readback diagnostic that lived here has been removed now that the
+                // cause is settled: the cached-resource readback went stale [~10% nonblack] while a
+                // fresh-resolved readback saw the head [~73%] -- see readback_offscreen_fast below. Keeping a
+                // second per-frame readback would just waste GPU bandwidth on the now-known-bad cached path.)
+                // DISABLED (2026-06-30): drive(r) = FUN_140bb8d90 -> FUN_140bb73a0 is ONLY a ClearRTV of the
+                // offscreen RT (RE-confirmed by decompile), NOT a re-rasterize as the original author believed.
+                // Running it every frame (render_drives~206) WIPES the offscreen RT to black every frame, so
+                // the engine's ~4x genuine head renders get cleared on the ~200 intervening frames -> the
+                // readback reads black ~97%. The engine's own offscreen pass does its own clear before its
+                // draw, so removing OUR standalone clear cannot starve the engine renders -- it only stops us
+                // erasing them. TEST: with this off the last engine-rendered head should PERSIST in the RT so
+                // the readback returns it every frame. Keep the no-op behind the gate for telemetry parity.
+                let _ = PROFILE_OFFSCREEN_DRIVE_RVA;
+                if portrait_render_drive_enabled() {
+                    PROFILE_RENDER_DRIVE_HITS.fetch_add(1, Ordering::SeqCst);
+                }
+                // PER-FRAME MODEL RASTERIZE (the actual fix). The ~4x head refresh is NOT pool contention
+                // (free_min=18) nor a readback race (deferred read was also 4x) -- it is that the engine's
+                // own profile UPDATE+DRAW CSEzUpdateTasks (FUN_140bba820 / FUN_140bba7d0) are under-scheduled
+                // post-Continue (~4-19x/loading screen) by their ResMan driver, so the model only re-skins +
+                // re-enqueues into the offscreen RT that few times. drive(r) above is ONLY a ClearRTV (RE-
+                // confirmed: FUN_140bb73a0). Here we drive the real per-frame render ourselves, on the render
+                // thread inside the live GX frame, passing OUR task's FD4TaskData as the `frame` arg (its +8
+                // delta-time is the only scalar consumed; the GX submit routes via the global frame/GX ctx):
+                //   1. UPDATE task FUN_140bba820(r, td): runs the FD4 stepper + refreshes model transform/anim.
+                //   2. DRAW task (== per_frame_push_hook's target FUN_140bba7d0): we call per_frame_push_hook
+                //      DIRECTLY so it applies the live look-at pose THEN calls the original body (skin submodels
+                //      + GX-enqueue = the rasterize). Guard on model_ins(+0x778) && X(+0x948) (the state machine
+                //      reached STEP_Wait_Play) so a half-built renderer can't fault the draw. catch_unwind so a
+                //      bad frame degrades to the old behaviour instead of crashing the render thread.
+                if portrait_render_drive_enabled() {
+                    let model_ins =
+                        unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
+                            .unwrap_or(0);
+                    let loc = unsafe { safe_read_usize(r + 0x948) }.unwrap_or(0);
+                    if model_ins != 0 && model_ins != null && loc != 0 && loc != null {
+                        // Prefer the ENGINE's last-captured render context (correct offscreen-pass routing);
+                        // fall back to our own task_data only until the engine has called the draw task once.
+                        let captured = PROFILE_DRAW_TASK_CTX.load(Ordering::SeqCst);
+                        let td = if captured != 0 && captured != null {
+                            captured
+                        } else {
+                            task_data as *const FD4TaskData as usize
+                        };
+                        PROFILE_IN_OUR_DRIVE.store(true, Ordering::SeqCst);
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            let update: unsafe extern "system" fn(usize, usize) = unsafe {
+                                core::mem::transmute(base + PROFILE_MODEL_UPDATE_TASK_RVA)
+                            };
+                            unsafe { update(r, td) };
+                            // The draw task is the function per_frame_push_hook detours; calling the hook fn
+                            // directly applies our look-at then invokes the original enqueue via its trampoline.
+                            unsafe { per_frame_push_hook(r, td) };
+                        }));
+                        PROFILE_IN_OUR_DRIVE.store(false, Ordering::SeqCst);
+                        PROFILE_PERFRAME_MODEL_DRAWS.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
                 // src_start = off (the offscreen nest, which contains BOTH the content RT and the SRV);
                 // the copy resolves the SRV from srv_gx and then the largest OTHER texture in off as the
                 // content source, so the RT/SRV ambiguity is handled inside the copy.
@@ -3018,16 +3070,16 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize) {
                             PROFILE_CONTENT_EXCL_DUMPED.store(0, Ordering::SeqCst);
                         }
                     }
-                    // LIVE TRACKING -- EVERY FRAME, now SCAN-FREE. readback_cached_content_rgba8 resolves the
-                    // content RT via the DETERMINISTIC GX wrapper chain ONCE (no memory scan/QI -> nothing to
-                    // race the teardown free), caches it AddRef'd, then re-copies it each frame. So the head
-                    // tracks the look-at smoothly without the prior scan-vs-teardown AV. Bumps the RGBA
-                    // version each frame -> maybe_reforge_loading_portrait re-uploads -> the displayed
-                    // loading-screen head updates per frame.
+                    // LIVE TRACKING -- EVERY FRAME. FIX (2026-06-30): use readback_offscreen_fast, which
+                    // RE-RESOLVES the live content RT fresh each frame (find_d3d12_resource(off)) -- the exact
+                    // path the in-process RT sample uses (proven nonblack ~63% with the clear disabled) -- but
+                    // copies via the cached RB_FAST_* objects so it still succeeds every frame. The previous
+                    // readback_cached_content_rgba8 cached the RESOURCE once and went stale: it read black ~98%
+                    // (the offscreen RT is recreated by the 1024 resize so the cached handle dangled), while
+                    // the freshly-resolved RT held the head. We are inside the model_ins/loc + vtable validated
+                    // block, so the per-frame resolve cannot race a teardown free.
                     if portrait_render_drive_enabled() {
-                        if let Some((cw, ch, cpx)) =
-                            unsafe { readback_cached_content_rgba8(off, srv_gx) }
-                        {
+                        if let Some((cw, ch, cpx)) = unsafe { readback_offscreen_fast(off) } {
                             // DIAGNOSTIC: count readbacks + checker-classified frames, and one-shot dump a
                             // "checker" frame (slot 103) so we can SEE what the ~216 non-published frames
                             // actually contain (forge magenta/yellow placeholder vs black vs partial head).
@@ -3153,6 +3205,34 @@ unsafe fn profile_gx_queue_sample(base: usize) {
     PROFILE_GX_QUEUE_SAMPLES.fetch_add(1, Ordering::SeqCst);
     if head != tail {
         PROFILE_GX_QUEUE_NONEMPTY.fetch_add(1, Ordering::SeqCst);
+    }
+    // LOOK-BEFORE-BUILD: directly measure the GX subcontext pool's FREE depth this frame to settle whether
+    // the ~4x head refresh is pool contention (pop fails 96%) or a readback/rasterize sync race. free =
+    // (top - floor)/8; >0 means a subcontext is poppable. A min-free > 0 across the whole loading screen
+    // refutes the contention theory (the pop never fails -> the black RT is a sync/rasterize problem).
+    let floor = unsafe { safe_read_usize(ctx + GX_DRAW_CONTEXT_POOL_FLOOR_OFFSET) }.unwrap_or(0);
+    let top = unsafe { safe_read_usize(ctx + GX_DRAW_CONTEXT_POOL_TOP_OFFSET) }.unwrap_or(0);
+    if floor != 0 && top >= floor {
+        let free = (top - floor) / 8;
+        PROFILE_GX_POOL_FREE_LAST.store(free, Ordering::SeqCst);
+        // monotonic min (CAS loop; only ever lowers)
+        let mut cur = PROFILE_GX_POOL_FREE_MIN.load(Ordering::SeqCst);
+        while free < cur {
+            match PROFILE_GX_POOL_FREE_MIN.compare_exchange(
+                cur,
+                free,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => break,
+                Err(observed) => cur = observed,
+            }
+        }
+    }
+    let mask = unsafe { safe_read_usize(ctx + GX_DRAW_CONTEXT_POOL_USED_MASK_OFFSET) }.unwrap_or(0)
+        & 0xffff_ffff;
+    if mask != 0 {
+        PROFILE_GX_POOL_USED_MASK.store(mask, Ordering::SeqCst);
     }
 }
 
@@ -3415,7 +3495,7 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
             })
             .collect();
         append_autoload_debug(format_args!(
-            "lookat-phase-sweep: frame_begin={n} selected={}({}) selftest={} nowload={} loadbuilds={} render_drives={} hook_hits={} gx[samples={} nonempty={}] rt[samples={} nonblack={} changed={}] spared[ptr=0x{:x} model_ok={} draws={} hits={}] stage0[{}] phase_ticks[{}]",
+            "lookat-phase-sweep: frame_begin={n} selected={}({}) selftest={} nowload={} loadbuilds={} render_drives={} hook_hits={} gx[samples={} nonempty={}] gxpool[free_min={} free_last={} N(maskpop)={}] rt[samples={} nonblack={} changed={}] readback[some={} checker={} defer_some={} defer_nonblack={}] modeldraws={} spared[ptr=0x{:x} model_ok={} draws={} hits={}] stage0[{}] phase_ticks[{}]",
             PROFILE_LOOKAT_SELECTED_PHASE.load(Ordering::SeqCst),
             LOOKAT_DRAW_PHASE_NAMES[PROFILE_LOOKAT_SELECTED_PHASE.load(Ordering::SeqCst)],
             PROFILE_LOOKAT_SELFTEST_ON.load(Ordering::SeqCst) as u8,
@@ -3427,9 +3507,20 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
             PROFILE_LOOKAT_HOOK_HITS.load(Ordering::SeqCst),
             PROFILE_GX_QUEUE_SAMPLES.load(Ordering::SeqCst),
             PROFILE_GX_QUEUE_NONEMPTY.load(Ordering::SeqCst),
+            {
+                let m = PROFILE_GX_POOL_FREE_MIN.load(Ordering::SeqCst);
+                if m == usize::MAX { -1i64 } else { m as i64 }
+            },
+            PROFILE_GX_POOL_FREE_LAST.load(Ordering::SeqCst),
+            (PROFILE_GX_POOL_USED_MASK.load(Ordering::SeqCst) as u32).count_ones(),
             PROFILE_LOOKAT_RT_SAMPLES.load(Ordering::SeqCst),
             PROFILE_LOOKAT_RT_NONBLACK.load(Ordering::SeqCst),
             PROFILE_LOOKAT_RT_CHANGED.load(Ordering::SeqCst),
+            PROFILE_READBACK_SOME.load(Ordering::SeqCst),
+            PROFILE_READBACK_CHECKER.load(Ordering::SeqCst),
+            PROFILE_READBACK_DEFERRED_SOME.load(Ordering::SeqCst),
+            PROFILE_READBACK_DEFERRED_NONBLACK.load(Ordering::SeqCst),
+            PROFILE_PERFRAME_MODEL_DRAWS.load(Ordering::SeqCst),
             LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst),
             PROFILE_SPARED_MODEL_OK.load(Ordering::SeqCst),
             PROFILE_PERFRAME_SPARED_DRAWS.load(Ordering::SeqCst),
@@ -3563,7 +3654,7 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
 /// One candidate draw-phase task tick (registered once per phase index). Always bumps that phase's
 /// per-frame tick counter (for the sweep), and drives the realtime look-at draw ONLY when this phase is
 /// the selected active one -- so exactly one phase rasterizes per frame regardless of how many are registered.
-pub(crate) unsafe fn profile_lookat_phase_draw_tick(phase_index: usize) {
+pub(crate) unsafe fn profile_lookat_phase_draw_tick(phase_index: usize, task_data: &FD4TaskData) {
     if phase_index < LOOKAT_DRAW_PHASE_COUNT {
         PROFILE_LOOKAT_PHASE_TICKS[phase_index].fetch_add(1, Ordering::SeqCst);
     }
@@ -3571,7 +3662,7 @@ pub(crate) unsafe fn profile_lookat_phase_draw_tick(phase_index: usize) {
         return;
     }
     if let Ok(base) = game_module_base() {
-        unsafe { profile_lookat_realtime_draw_tick(base) };
+        unsafe { profile_lookat_realtime_draw_tick(base, task_data) };
     }
 }
 
@@ -3584,6 +3675,18 @@ pub(crate) unsafe fn profile_lookat_phase_draw_tick(phase_index: usize) {
 /// live), so it naturally tracks the engine's model build/teardown cycling.
 pub(crate) unsafe extern "system" fn per_frame_push_hook(renderer: usize, frame: usize) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    // CAPTURE the engine's live render context (param_2/frame) on its OWN calls only (not our re-drives),
+    // so our per-frame draw can enqueue the model into the SAME offscreen pass the engine routes to. Our
+    // draw-phase task_data routes to the wrong pass -> nothing renders into the portrait RT.
+    if !PROFILE_IN_OUR_DRIVE.load(Ordering::SeqCst) && frame != 0 && frame != null {
+        PROFILE_DRAW_TASK_CTX.store(frame, Ordering::SeqCst);
+        if PROFILE_DRAW_TASK_CTX_LOGGED.fetch_add(1, Ordering::SeqCst) < 3 {
+            let dt = unsafe { safe_read_usize(frame + 8) }.unwrap_or(0);
+            append_autoload_debug(format_args!(
+                "draw-task-ctx: engine called draw task with frame=0x{frame:x} *(frame+8)=0x{dt:x} (delta-time bits) renderer=0x{renderer:x}"
+            ));
+        }
+    }
     if portrait_lookat_enabled() && renderer != 0 && renderer != null {
         if let Ok(base) = game_module_base() {
             let vt_ok = unsafe { safe_read_usize(renderer) }.unwrap_or(0)
