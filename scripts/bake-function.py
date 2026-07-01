@@ -38,6 +38,79 @@ from capstone import x86 as X
 
 BRANCH = {"jmp", "je", "jne", "jz", "jnz", "ja", "jae", "jb", "jbe", "jg", "jge",
           "jl", "jle", "js", "jns", "jo", "jno", "jp", "jnp", "loop", "loope", "loopne"}
+CALLEE_SAVED = {"rbx", "rbp", "rsi", "rdi", "r12", "r13", "r14", "r15"}
+JCC = {"je", "jne", "jz", "jnz", "ja", "jae", "jb", "jbe", "jg", "jge", "jl", "jle",
+       "js", "jns", "jo", "jno", "jp", "jnp"}
+
+
+def capture_frame(va, img):
+    """Emulate a function's Arxan entry+return trampolines to recover the REAL frame
+    that recovery drops (the prologue/epilogue live in Arxan .text, not game .text).
+    Returns {frame_size, saved (ordered callee-saved pushes), ok}. ok requires a clean
+    return AND prologue-saved == epilogue-restored (symmetry) -- otherwise the frame is
+    untrustworthy and the caller should flag rather than synthesize a wrong prologue."""
+    from unicorn import (Uc, UC_ARCH_X86, UC_MODE_64, UC_PROT_ALL, UC_HOOK_CODE, UcError,
+                         UC_HOOK_MEM_READ_UNMAPPED, UC_HOOK_MEM_WRITE_UNMAPPED, UC_HOOK_MEM_FETCH_UNMAPPED)
+    from unicorn.x86_const import (UC_X86_REG_RSP, UC_X86_REG_RIP, UC_X86_REG_RAX,
+                                   UC_X86_REG_RCX, UC_X86_REG_RDX, UC_X86_REG_R8, UC_X86_REG_R9)
+    S, ST, SS, SC, SE = DR.BASE, DR.STACK, DR.SSIZE, DR.SCRATCH, DR.SENT
+    md = Cs(CS_ARCH_X86, CS_MODE_64); md.detail = True
+    uc = Uc(UC_ARCH_X86, UC_MODE_64)
+    sz = (len(img) + 0xFFF) & ~0xFFF
+    uc.mem_map(S, sz, UC_PROT_ALL); uc.mem_write(S, img)
+    uc.mem_map(ST, SS); uc.mem_map(SC, 0x100000); uc.mem_map(SE & ~0xFFF, 0x1000)
+    rsp0 = ST + SS // 2
+    uc.mem_write(rsp0, SE.to_bytes(8, "little")); uc.reg_write(UC_X86_REG_RSP, rsp0)
+    for r in (UC_X86_REG_RCX, UC_X86_REG_RDX, UC_X86_REG_R8, UC_X86_REG_R9):
+        uc.reg_write(r, SC + 0x1000)
+    st = {"phase": "prologue", "rsp_body": None, "saves": [], "restores": [], "stop": None}
+
+    def hc(uc, address, size, _):
+        if address == SE:
+            st["stop"] = "ret"; uc.emu_stop(); return
+        if not (DR.in_game(address) or DR.in_arx(address)):
+            st["stop"] = "derail"; uc.emu_stop(); return
+        ins = next(md.disasm(bytes(uc.mem_read(address, size)), address), None)
+        if ins is None:
+            st["stop"] = "undecodable"; uc.emu_stop(); return
+        m, o = ins.mnemonic, ins.op_str
+        gm = DR.in_game(address)
+        if st["phase"] == "prologue" and gm and address != va:
+            st["phase"] = "body"; st["rsp_body"] = uc.reg_read(UC_X86_REG_RSP)
+        if st["phase"] == "prologue" and DR.in_arx(address) and m == "mov" and len(ins.operands) == 2:
+            dst, src = ins.operands
+            if (dst.type == X.X86_OP_MEM and src.type == X.X86_OP_REG
+                    and md.reg_name(src.reg) in CALLEE_SAVED):
+                st["saves"].append(md.reg_name(src.reg))
+        if gm:
+            st["restores"] = []                      # keep only the FINAL return trampoline's restores
+            if st["phase"] == "body":
+                st["phase"] = "epilogue"
+        if st["phase"] == "epilogue" and DR.in_arx(address) and m == "mov" and len(ins.operands) == 2:
+            dst, src = ins.operands
+            if (dst.type == X.X86_OP_REG and src.type == X.X86_OP_MEM
+                    and md.reg_name(dst.reg) in CALLEE_SAVED):
+                st["restores"].append(md.reg_name(dst.reg))
+        if m == "call" and o.startswith("0x") and DR.in_game(int(o, 16)):
+            uc.reg_write(UC_X86_REG_RAX, 0); uc.reg_write(UC_X86_REG_RIP, address + size); return
+        if gm and m in JCC and o.startswith("0x"):
+            uc.reg_write(UC_X86_REG_RIP, address + size); return
+
+    def hu(uc, acc, addr, size, val, _):
+        try: uc.mem_map(addr & ~0xFFF, 0x1000)
+        except UcError: pass
+        return True
+
+    uc.hook_add(UC_HOOK_CODE, hc)
+    uc.hook_add(UC_HOOK_MEM_READ_UNMAPPED | UC_HOOK_MEM_WRITE_UNMAPPED | UC_HOOK_MEM_FETCH_UNMAPPED, hu)
+    try:
+        uc.emu_start(va, SE + 0x1000, count=4000)
+    except UcError:
+        pass
+    frame = (rsp0 - st["rsp_body"]) if st["rsp_body"] is not None else None
+    ok = (st["stop"] == "ret" and frame is not None and frame >= 8
+          and st["saves"] == st["restores"] and frame >= 8 * len(st["saves"]))
+    return {"frame_size": frame, "saved": st["saves"], "ok": ok, "stop": st["stop"]}
 
 
 def reassemble(va, paths=200, budget=1500):
@@ -97,10 +170,27 @@ def reassemble(va, paths=200, budget=1500):
         if ins.mnemonic == "call" and ins.op_str.startswith("0x") and is_arx(int(ins.op_str, 16)):
             return None, f"flattened/thunk: call into Arxan section at {hex(addr)} (needs gadget-collapse phase)"
 
+    # If the function returns via an Arxan return-gadget, its real prologue/epilogue
+    # (frame allocation + callee-saved pushes) live in the dropped Arxan trampolines.
+    # Recover the frame by emulation and synthesize a faithful prologue/epilogue, else
+    # the reassembled body is frameless and ABI-broken (clobbers callee-saved regs,
+    # wrong stack offsets). Flag if the frame can't be trusted (asymmetric save/restore).
+    prologue, epilogue = [], []
+    if arxan_ret:
+        fr = capture_frame(va, img)
+        if not fr["ok"]:
+            return None, (f"return-gadget frame capture unreliable (stop={fr['stop']} "
+                          f"frame={fr['frame_size']} saved={fr['saved']}); needs manual frame")
+        saved, fsz = fr["saved"], fr["frame_size"]
+        local = fsz - 8 * len(saved)             # frame bytes after the callee-saved pushes
+        prologue = [f"    push {r}" for r in saved] + ([f"    sub rsp, {hex(local)}"] if local else [])
+        epilogue = (([f"    add rsp, {hex(local)}"] if local else [])
+                    + [f"    pop {r}" for r in reversed(saved)] + ["    ret"])
+
     data_syms = {}                          # target_va -> (symbol, nbytes)
     callees = set()
     gadgets = []
-    lines = [".intel_syntax noprefix", ".text", ".global recovered_func", "recovered_func:"]
+    lines = [".intel_syntax noprefix", ".text", ".global recovered_func", "recovered_func:"] + prologue
 
     def data_ref(target, nbytes):
         sym = f"data_{target:x}"
@@ -142,8 +232,9 @@ def reassemble(va, paths=200, budget=1500):
                 t = int(o, 16); callees.add(t); o = f"sub_{t:x}"
             elif m in BRANCH and o.startswith("0x"):
                 t = int(o, 16)
-                if addr in arxan_ret:        # Arxan return-gadget exit -> real ret
-                    m, o = "ret", ""
+                if addr in arxan_ret:        # Arxan return-gadget exit -> synthesized epilogue
+                    lines.extend(epilogue)
+                    continue
                 elif addr in arxan_jmp:      # collapsed Arxan gadget -> resolved successor
                     o = f"loc_{arxan_jmp[addr]:x}"
                 elif t in in_fn:
@@ -162,6 +253,7 @@ def reassemble(va, paths=200, budget=1500):
     meta = {"callees": sorted(callees), "data_syms": data_syms, "gadgets": gadgets,
             "collapsed_gadgets": {hex(k): hex(v) for k, v in arxan_jmp.items()},
             "collapsed_rets": sorted(hex(a) for a in arxan_ret),
+            "recon_frame": ({"size": hex(fr["frame_size"]), "saved": fr["saved"]} if arxan_ret else None),
             "nblocks": len(blocks), "ninsns": len(r.text)}
     return "\n".join(lines) + "\n", meta
 
