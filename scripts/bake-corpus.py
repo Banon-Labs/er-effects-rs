@@ -152,13 +152,22 @@ def main():
                "ok_vas": sorted(r["va"] for r in results if r["ok"]),
                "results": results}
 
-    regressions = []
+    # A "regression" must be DETERMINISTIC: was baked, now fails at a deterministic
+    # stage (reassemble/compile/assemble/lift/...). run-ref failures are NOT counted --
+    # they are flaky (the scalar harness feeds pointer-taking functions garbage, so the
+    # reference exe crashes/hangs non-deterministically and flaps across the 90s wine cap;
+    # observed: 140420240 took 110s->pass in baseline, 90s->timeout in the next run, same
+    # code path). Those are reported separately as `flaky` so the regression guard the
+    # /goal loop relies on stays trustworthy.
+    regressions, flaky = [], []
     if args.baseline and os.path.exists(args.baseline):
         base = json.load(open(args.baseline))
         base_ok = set(base.get("ok_vas", []))
-        now_vas = {r["va"] for r in results}
-        regressions = sorted(base_ok & now_vas - set(summary["ok_vas"]))
+        now = {r["va"]: r for r in results}
+        for va in sorted(base_ok & set(now) - set(summary["ok_vas"])):
+            (flaky if now[va]["bucket"] == "run-ref" else regressions).append(va)
         summary["regressions"] = regressions
+        summary["flaky"] = flaky
 
     json.dump(summary, open(args.out, "w"), indent=2)
 
@@ -170,7 +179,9 @@ def main():
     for b, c in buckets.most_common():
         print(f"  {c:>4}  {b}")
     if regressions:
-        print(f"\n!!! REGRESSIONS ({len(regressions)}): {regressions}")
+        print(f"\n!!! DETERMINISTIC REGRESSIONS ({len(regressions)}): {regressions}")
+    if flaky:
+        print(f"flaky run-ref flaps (not regressions): {len(flaky)}: {flaky}")
     print(f"\nwrote {args.out}")
 
 
