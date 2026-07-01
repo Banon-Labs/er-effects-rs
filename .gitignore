@@ -18,6 +18,8 @@ dump-exec.bin
 # Agent scratch / derived analysis artifacts (TSV dumps of function bytes, etc.)
 /scratchpad/
 
+# Local hidden git worktrees / sandboxes (for example Bevy shader tinkering).
+/.worktrees/
 
 ProDebug.dll
 offline-launcher.exe

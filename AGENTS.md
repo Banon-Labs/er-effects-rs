@@ -161,6 +161,12 @@ python3 -c "import re,glob; [print(f'{f}:{i}:',l.rstrip()) for f in glob.glob('s
 
 Note the cupcake/OPA PreToolUse guard still INTERCEPTS raw `grep`/`ls`/`find`/`cat` bash commands and forces them through `rtk` (denying them otherwise), so you cannot just run bare `grep`. Use the `Read` tool and `python3` (neither is intercepted by the guard) instead of bash `grep`/`rtk grep` for inspection.
 
+## Local Hidden Worktrees
+
+- `/.worktrees/` is intentionally gitignored and may contain local git worktrees/sandboxes (for example `.worktrees/bevy-shader-tinkering`, a Bevy WGSL shader lab). Do not treat these directories as repo dirt, and do not delete/reconcile them unless the user explicitly asks.
+- Work inside a `.worktrees/<name>` checkout only when that checkout is the intended active repo/branch. Do not merge sandbox contents into `main` just because they live under the repo root; persist shared policy in tracked root files instead.
+- The Bevy shader lab is local tinkering by default. Productizing it into the main workspace requires an explicit user request and normal review of the `Cargo.toml`/`Cargo.lock` impact.
+
 ## Session Completion
 
 **When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
