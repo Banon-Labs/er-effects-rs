@@ -6357,6 +6357,440 @@ pub(crate) fn install_title_native_menu_visual_render_suppression_hook() {
     }
 }
 
+#[repr(C, align(8))]
+struct SystemQuitMenuHelpLabelScratch {
+    bytes: [u8; MENU_HELP_LABEL_SIZE],
+}
+
+#[repr(C, align(8))]
+struct SystemQuitRootProxyScratch {
+    bytes: [u8; MENU_WINDOW_ROOT_PROXY_SCRATCH_SIZE],
+}
+
+fn system_quit_list_slot_addr(list: usize, slot: usize) -> usize {
+    list.wrapping_add((0usize.wrapping_sub(list)) & 7)
+        .wrapping_add(slot * std::mem::size_of::<usize>())
+}
+
+unsafe fn system_quit_menu_window_set_visible_and_flags(
+    base: usize,
+    window: usize,
+    visible: bool,
+    source: &str,
+) -> bool {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const HEAP_LO: usize = 0x10000;
+    if window < HEAP_LO {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: {source} top-window visibility skipped -- window=0x{window:x} not heap-like"
+        ));
+        return false;
+    }
+    let window_vt = unsafe { safe_read_usize(window) }.unwrap_or(NULL);
+    if window_vt < HEAP_LO {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: {source} top-window visibility skipped -- window=0x{window:x} vt=0x{window_vt:x} invalid"
+        ));
+        return false;
+    }
+    let mut scratch = SystemQuitRootProxyScratch {
+        bytes: [0; MENU_WINDOW_ROOT_PROXY_SCRATCH_SIZE],
+    };
+    let Ok(root_proxy_ctor_addr) = game_rva(MENU_WINDOW_ROOT_PROXY_CTOR_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: {source} top-window visibility skipped -- failed to resolve root proxy ctor rva 0x{MENU_WINDOW_ROOT_PROXY_CTOR_RVA:x}"
+        ));
+        return false;
+    };
+    let Ok(set_visible_addr) = game_rva(TITLE_PRESS_START_SET_VISIBLE_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: {source} top-window visibility skipped -- failed to resolve SetVisible rva 0x{TITLE_PRESS_START_SET_VISIBLE_RVA:x}"
+        ));
+        return false;
+    };
+    let Ok(dtor_addr) = game_rva(MENU_WINDOW_ROOT_PROXY_SCRATCH_DTOR_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: {source} top-window visibility skipped -- failed to resolve root proxy scratch dtor rva 0x{MENU_WINDOW_ROOT_PROXY_SCRATCH_DTOR_RVA:x}"
+        ));
+        return false;
+    };
+    let root_proxy_ctor: unsafe extern "system" fn(usize, usize) -> usize =
+        unsafe { std::mem::transmute(root_proxy_ctor_addr) };
+    let set_visible: unsafe extern "system" fn(usize, u8) =
+        unsafe { std::mem::transmute(set_visible_addr) };
+    let dtor: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(dtor_addr) };
+    let scratch_ptr = scratch.bytes.as_mut_ptr() as usize;
+    let root_proxy = unsafe { root_proxy_ctor(window, scratch_ptr) };
+    if root_proxy != scratch_ptr {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: {source} top-window root-proxy ctor returned unexpected 0x{root_proxy:x} scratch=0x{scratch_ptr:x}; still using returned proxy"
+        ));
+    }
+    unsafe { set_visible(root_proxy, u8::from(visible)) };
+    unsafe { dtor(scratch_ptr + 0x28) };
+
+    let menu_id = unsafe { safe_read_u16(window + 0x180) }.unwrap_or(u16::MAX);
+    let cs_menu_man = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(NULL);
+    let mut flags_before = NULL;
+    let mut flags_after = NULL;
+    if menu_id < 0x47 && cs_menu_man >= HEAP_LO {
+        let flags_addr = cs_menu_man + 0x90 + menu_id as usize;
+        if let Some(flags) = unsafe { safe_read_u8(flags_addr) } {
+            flags_before = flags as usize;
+            let new_flags = if visible {
+                flags | TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK
+            } else {
+                flags & 1
+            };
+            unsafe { (flags_addr as *mut u8).write_volatile(new_flags) };
+            flags_after = new_flags as usize;
+        }
+    }
+    append_autoload_debug(format_args!(
+        "system-quit-dup: {source} top-window visibility window=0x{window:x} vt=0x{window_vt:x} visible={visible} root_proxy=0x{root_proxy:x} menu_id=0x{menu_id:x} flags=0x{flags_before:x}->0x{flags_after:x}"
+    ));
+    true
+}
+
+fn system_quit_read_wide_resource_name(ptr: usize) -> String {
+    const MAX_UNITS: usize = 64;
+    if ptr < 0x10000 {
+        return String::new();
+    }
+    let mut units = Vec::new();
+    for idx in 0..MAX_UNITS {
+        let unit = unsafe { safe_read_u16(ptr + idx * 2) }.unwrap_or(0);
+        if unit == 0 {
+            break;
+        }
+        units.push(unit);
+    }
+    String::from_utf16_lossy(&units)
+}
+
+unsafe fn system_quit_hide_real_system_windows(base: usize, source: &str) {
+    let top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
+    let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
+    let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+    if profile == 0 || SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    let hid_top = if top != 0 && top != profile {
+        unsafe { system_quit_menu_window_set_visible_and_flags(base, top, false, source) }
+    } else {
+        false
+    };
+    let hid_option = if option != 0 && option != profile && option != top {
+        unsafe { system_quit_menu_window_set_visible_and_flags(base, option, false, source) }
+    } else {
+        false
+    };
+    if hid_top || hid_option {
+        SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.store(1, Ordering::SeqCst);
+        SYSTEM_QUIT_HIDE_REAL_WINDOWS_COUNT.fetch_add(1, Ordering::SeqCst);
+    }
+    append_autoload_debug(format_args!(
+        "system-quit-dup: real-system-window hide source={source} top=0x{top:x} option=0x{option:x} profile=0x{profile:x} hid_top={hid_top} hid_option={hid_option}"
+    ));
+}
+
+unsafe fn system_quit_reset_profile_select_state(source: &str) {
+    SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_TOP_HIDE_TOP_WINDOW.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_TOP_HIDE_PROFILE_WINDOW.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_TOP_HIDE_LIST.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_TOP_HIDE_TOP_MENU_ID.store(usize::MAX, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-dup: reset ProfileSelect hide state source={source}"
+    ));
+}
+
+unsafe fn system_quit_restore_real_system_windows(base: usize, source: &str) {
+    if SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) == 0 {
+        unsafe { system_quit_reset_profile_select_state(source) };
+        return;
+    }
+    let top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
+    let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
+    let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+    let restored_top = if top != 0 {
+        unsafe { system_quit_menu_window_set_visible_and_flags(base, top, true, source) }
+    } else {
+        false
+    };
+    let restored_option = if option != 0 && option != top {
+        unsafe { system_quit_menu_window_set_visible_and_flags(base, option, true, source) }
+    } else {
+        false
+    };
+    append_autoload_debug(format_args!(
+        "system-quit-dup: restore real windows source={source} profile=0x{profile:x} top=0x{top:x} option=0x{option:x} restored_top={restored_top} restored_option={restored_option}"
+    ));
+    unsafe { system_quit_reset_profile_select_state(source) };
+    if restored_top || restored_option {
+        SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+pub(crate) unsafe fn system_quit_profile_select_top_menu_tick() {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    let hidden = SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0;
+    let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+    if !hidden || profile == 0 {
+        return;
+    }
+    let list = SYSTEM_QUIT_TOP_HIDE_LIST.load(Ordering::SeqCst);
+    if list == 0 {
+        return;
+    }
+    let count = unsafe { safe_read_usize(list + 0x48) }.unwrap_or(0);
+    let still_present = (0..count.min(8)).any(|idx| {
+        unsafe { safe_read_usize(system_quit_list_slot_addr(list, idx)) }.unwrap_or(NULL) == profile
+    });
+    if still_present {
+        return;
+    }
+    if let Ok(base) = game_module_base() {
+        unsafe { system_quit_restore_real_system_windows(base, "restore-real-profile-left-list") };
+    } else {
+        unsafe { system_quit_reset_profile_select_state("restore-real-profile-left-list-no-base") };
+    }
+}
+
+pub(crate) unsafe extern "system" fn system_quit_menu_window_job_run_hook(
+    job: usize,
+    load_params: usize,
+    fd4_time: usize,
+    menu_man: usize,
+) -> usize {
+    let orig = SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return load_params;
+    }
+    let filename_ptr = unsafe { safe_read_usize(job + 0x60) }.unwrap_or(0);
+    let filename = system_quit_read_wide_resource_name(filename_ptr);
+    let original: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    let ret = unsafe { original(job, load_params, fd4_time, menu_man) };
+    if matches!(
+        filename.as_str(),
+        "02_000_IngameTop"
+            | "02_040_OptionSetting"
+            | "02_041_OptionSetting_Trial"
+            | "05_010_ProfileSelect"
+    ) {
+        let owner = unsafe { safe_read_usize(job + 0x130) }.unwrap_or(0);
+        let owner_vt = if owner != 0 {
+            unsafe { safe_read_usize(owner) }.unwrap_or(0)
+        } else {
+            0
+        };
+        let owner_id = if owner != 0 {
+            unsafe { safe_read_u16(owner + 0x180) }.unwrap_or(u16::MAX)
+        } else {
+            u16::MAX
+        };
+        let list = unsafe { safe_read_usize(job + 0x50) }.unwrap_or(0);
+        let prev = match filename.as_str() {
+            "02_000_IngameTop" => SYSTEM_QUIT_INGAME_TOP_WINDOW.swap(owner, Ordering::SeqCst),
+            "02_040_OptionSetting" | "02_041_OptionSetting_Trial" => {
+                SYSTEM_QUIT_OPTION_SETTING_WINDOW.swap(owner, Ordering::SeqCst)
+            }
+            "05_010_ProfileSelect" => {
+                SYSTEM_QUIT_PROFILE_SELECT_WINDOW.swap(owner, Ordering::SeqCst)
+            }
+            _ => 0,
+        };
+        let log_idx = SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_LOG_COUNT.fetch_add(1, Ordering::SeqCst);
+        if log_idx < 64 || filename == "05_010_ProfileSelect" {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: MenuWindowJob::Run resource='{filename}' job=0x{job:x} owner=0x{owner:x} owner_vt=0x{owner_vt:x} owner_id=0x{owner_id:x} prev=0x{prev:x} list_field=0x{list:x} ret=0x{ret:x}"
+            ));
+        }
+        if filename == "05_010_ProfileSelect" {
+            if let Ok(base) = game_module_base() {
+                if owner == 0 {
+                    unsafe {
+                        system_quit_restore_real_system_windows(
+                            base,
+                            "restore-real-profile-owner-cleared",
+                        )
+                    };
+                } else {
+                    unsafe {
+                        system_quit_hide_real_system_windows(
+                            base,
+                            "hide-real-after-profile-select-run",
+                        )
+                    };
+                }
+            }
+        }
+    }
+    ret
+}
+
+unsafe fn system_quit_open_profile_load_dialog(action_obj: usize) -> bool {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const HEAP_LO: usize = 0x10000;
+    let Ok(base) = game_module_base() else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: profile-load route abort -- module base unavailable"
+        ));
+        return false;
+    };
+    let system_dialog = unsafe { safe_read_usize(action_obj + 0x8) }.unwrap_or(NULL);
+    if system_dialog < HEAP_LO {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: profile-load route abort -- action=0x{action_obj:x} dialog=0x{system_dialog:x} is not heap-like"
+        ));
+        return false;
+    }
+    let scene_proxy = system_dialog + SYSTEM_QUIT_DIALOG_SCENE_PROXY_1200_OFFSET;
+    let scene_proxy_vt = unsafe { safe_read_usize(scene_proxy) }.unwrap_or(NULL);
+    let want_scene_proxy_vt = base + SCENE_OBJ_PROXY_VTABLE_RVA;
+    if scene_proxy_vt != want_scene_proxy_vt {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: profile-load route abort -- dialog=0x{system_dialog:x} scene_proxy=dialog+0x{SYSTEM_QUIT_DIALOG_SCENE_PROXY_1200_OFFSET:x}=0x{scene_proxy:x} vt=0x{scene_proxy_vt:x} want=0x{want_scene_proxy_vt:x}"
+        ));
+        return false;
+    }
+    // Native title/menu route callers pass `owner + 0x50` as the MenuWindowJob's
+    // field2_0x50 list argument. MenuWindowJob::Run later appends the loaded
+    // owning MenuWindow to this DLFixedVector via FUN_140733ff0. Passing the
+    // SceneObjProxy backref here is wrong: it lets the resource load start, then
+    // asserts in DLFixedVector.inl line 0x296 when Run appends to a full/wrong
+    // object.
+    let menu_window_list = system_dialog + 0x50;
+    let menu_window_list_count = unsafe { safe_read_usize(menu_window_list + 0x48) }.unwrap_or(!0);
+    if menu_window_list_count >= 8 {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: profile-load route abort -- candidate menu_window_list=dialog+0x50=0x{menu_window_list:x} count@+0x48={menu_window_list_count} would overflow DLFixedVector<8>"
+        ));
+        return false;
+    }
+    let Ok(wrapper_addr) = game_rva(PROFILE_SELECT_WRAPPER_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: profile-load route abort -- failed to resolve ProfileSelect wrapper rva 0x{PROFILE_SELECT_WRAPPER_RVA:x}"
+        ));
+        return false;
+    };
+    let Ok(submit_addr) = game_rva(MENU_JOB_SUBMIT_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: profile-load route abort -- failed to resolve menu-job submit rva 0x{MENU_JOB_SUBMIT_RVA:x}"
+        ));
+        return false;
+    };
+    let job_slot = &SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT as *const AtomicUsize as usize;
+    SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT.store(NULL, Ordering::SeqCst);
+    let wrapper: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(wrapper_addr) };
+    append_autoload_debug(format_args!(
+        "system-quit-dup: profile-load route FIRE 05_010_ProfileSelect wrapper 0x{wrapper_addr:x}(rcx=job_slot=0x{job_slot:x}, rdx=menu_window_list=dialog+0x50=0x{menu_window_list:x} count={menu_window_list_count}, r8=scene_proxy=0x{scene_proxy:x}) from system_dialog=0x{system_dialog:x}"
+    ));
+    let ret = unsafe { wrapper(job_slot, menu_window_list, scene_proxy) };
+    let job = SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT.load(Ordering::SeqCst);
+    let job_vt = if job >= HEAP_LO {
+        unsafe { safe_read_usize(job) }.unwrap_or(NULL)
+    } else {
+        NULL
+    };
+    if job < HEAP_LO {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: profile-load route 05_010 wrapper returned=0x{ret:x} job_slot=0x{job_slot:x} job=0x{job:x} job_vt=0x{job_vt:x}; no job to submit"
+        ));
+        return false;
+    }
+    let submit: unsafe extern "system" fn(usize, usize) =
+        unsafe { std::mem::transmute(submit_addr) };
+    let submit_queue = system_dialog + 0x10;
+    SYSTEM_QUIT_TOP_HIDE_ARMED_LIST.store(menu_window_list, Ordering::SeqCst);
+    SYSTEM_QUIT_TOP_HIDE_ARMED_DIALOG.store(system_dialog, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-dup: profile-load route SUBMIT job=0x{job:x} job_vt=0x{job_vt:x} via 0x{submit_addr:x}(queue=dialog+0x10=0x{submit_queue:x}, job_slot=0x{job_slot:x}); armed ProfileSelect list observer=0x{menu_window_list:x} -- no slot activation/no load"
+    ));
+    unsafe { submit(submit_queue, job_slot) };
+    let job_after_submit = SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT.load(Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-dup: profile-load route submitted 05_010 wrapper job; job_slot_after=0x{job_after_submit:x}"
+    ));
+    true
+}
+
+pub(crate) unsafe extern "system" fn system_quit_menu_window_list_push_hook(
+    list: usize,
+    window: usize,
+) -> u8 {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const HEAP_LO: usize = 0x10000;
+    let orig = SYSTEM_QUIT_WINDOW_LIST_PUSH_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: MenuWindow list push trampoline unset for list=0x{list:x} window=0x{window:x} -- fail-closed return 0"
+        ));
+        return 0;
+    }
+    let original: unsafe extern "system" fn(usize, usize) -> u8 =
+        unsafe { std::mem::transmute(orig) };
+    let ret = unsafe { original(list, window) };
+    let armed_list = SYSTEM_QUIT_TOP_HIDE_ARMED_LIST.load(Ordering::SeqCst);
+    let system_dialog = SYSTEM_QUIT_TOP_HIDE_ARMED_DIALOG.load(Ordering::SeqCst);
+    if armed_list == 0 || armed_list != list || system_dialog == 0 {
+        return ret;
+    }
+    SYSTEM_QUIT_TOP_HIDE_ARMED_LIST.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_TOP_HIDE_ARMED_DIALOG.store(0, Ordering::SeqCst);
+    let count = unsafe { safe_read_usize(list + 0x48) }.unwrap_or(0);
+    let slot0 = unsafe { safe_read_usize(system_quit_list_slot_addr(list, 0)) }.unwrap_or(NULL);
+    let slot1 = if count > 1 {
+        unsafe { safe_read_usize(system_quit_list_slot_addr(list, 1)) }.unwrap_or(NULL)
+    } else {
+        NULL
+    };
+    let top_window = slot0;
+    let top_vt = if top_window >= HEAP_LO {
+        unsafe { safe_read_usize(top_window) }.unwrap_or(NULL)
+    } else {
+        NULL
+    };
+    let top_id = if top_window >= HEAP_LO {
+        unsafe { safe_read_u16(top_window + 0x180) }.unwrap_or(u16::MAX)
+    } else {
+        u16::MAX
+    };
+    append_autoload_debug(format_args!(
+        "system-quit-dup: ProfileSelect append observed list=0x{list:x} dialog=0x{system_dialog:x} count={count} slot0/top=0x{slot0:x} top_vt=0x{top_vt:x} top_id=0x{top_id:x} slot1=0x{slot1:x} appended_window=0x{window:x} ret={ret}"
+    ));
+    SYSTEM_QUIT_TOP_HIDE_PROFILE_WINDOW.store(window, Ordering::SeqCst);
+    SYSTEM_QUIT_TOP_HIDE_LIST.store(list, Ordering::SeqCst);
+    SYSTEM_QUIT_TOP_HIDE_TOP_MENU_ID.store(top_id as usize, Ordering::SeqCst);
+    ret
+}
+
+pub(crate) unsafe extern "system" fn system_quit_noop_desktop_action_hook(
+    action_obj: usize,
+) -> usize {
+    let recorded_action = SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
+    if action_obj != 0 && action_obj == recorded_action {
+        SYSTEM_QUIT_NOOP_SELECTION_COUNT.fetch_add(1, Ordering::SeqCst);
+        let opened = unsafe { system_quit_open_profile_load_dialog(action_obj) };
+        append_autoload_debug(format_args!(
+            "system-quit-dup: third-row profile-load action selected action=0x{action_obj:x} opened={opened}; suppressing Return-to-Desktop"
+        ));
+        return 0;
+    }
+    let orig = SYSTEM_QUIT_NOOP_ACTION_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: Return-to-Desktop action trampoline is unset for action=0x{action_obj:x} -- fail-open return 0"
+        ));
+        return 0;
+    }
+    let original: unsafe extern "system" fn(usize) -> usize = unsafe { std::mem::transmute(orig) };
+    unsafe { original(action_obj) }
+}
+
 pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hook(
     dialog: usize,
     label: usize,
@@ -6387,16 +6821,72 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
             unsafe { safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET) }
                 .unwrap_or(0);
         if after_native < 0x10 {
-            let dup_ret = unsafe { original(dialog, label, action_fn, enabled_fn, keyguide_fn) };
+            if SYSTEM_QUIT_NOOP_ACTION_INSTALLED.load(Ordering::SeqCst)
+                != SYSTEM_QUIT_NOOP_ACTION_INSTALLED_YES
+            {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: matched Return-to-Desktop call but no-op action hook is not installed; skipping third row"
+                ));
+                return ret;
+            }
+            let Ok(linehelp_addr) = game_rva(GET_GR_LINEHELP_ENTRY_RVA) else {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: failed to resolve GetGR_LineHelp rva 0x{GET_GR_LINEHELP_ENTRY_RVA:x}; skipping third row"
+                ));
+                return ret;
+            };
+            let Ok(label_dtor_addr) = game_rva(MENU_HELP_LABEL_DTOR_RVA) else {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: failed to resolve MenuHelpLabelComponent dtor rva 0x{MENU_HELP_LABEL_DTOR_RVA:x}; skipping third row"
+                ));
+                return ret;
+            };
+            let get_linehelp: unsafe extern "system" fn(usize, u32) -> usize =
+                unsafe { std::mem::transmute(linehelp_addr) };
+            let label_dtor: unsafe extern "system" fn(usize) =
+                unsafe { std::mem::transmute(label_dtor_addr) };
+            let mut label_storage =
+                std::mem::MaybeUninit::<SystemQuitMenuHelpLabelScratch>::uninit();
+            let load_label = label_storage.as_mut_ptr() as usize;
+            unsafe {
+                get_linehelp(load_label, SYSTEM_QUIT_LOAD_LINEHELP_ID);
+                get_linehelp(
+                    load_label + MENU_HELP_LABEL_HELP_OFFSET,
+                    SYSTEM_QUIT_LOAD_LINEHELP_ID,
+                );
+            }
+            let dup_ret =
+                unsafe { original(dialog, load_label, action_fn, enabled_fn, keyguide_fn) };
+            unsafe { label_dtor(load_label) };
             let after_dup = unsafe {
                 safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET)
             }
             .unwrap_or(0);
+            let properties = dialog + PROPERTY_EDIT_DIALOG_PROPERTIES_1268_OFFSET;
+            let aligned_properties = (properties + 0x7) & !0x7;
+            let row_index = after_dup.saturating_sub(1);
+            let third_row = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(row_index);
+            let third_controller =
+                unsafe { safe_read_usize(third_row + EDIT_PROPERTY_CONTROLLER_OFFSET) }
+                    .unwrap_or(0);
+            let third_action = if third_controller != 0 {
+                unsafe {
+                    safe_read_usize(
+                        third_controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET,
+                    )
+                }
+                .unwrap_or(0)
+            } else {
+                0
+            };
+            if third_action != 0 {
+                SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.store(third_action, Ordering::SeqCst);
+            }
             SYSTEM_QUIT_DUPLICATE_COUNT.fetch_add(1, Ordering::SeqCst);
             SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE.store(before, Ordering::SeqCst);
             SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER.store(after_dup, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "system-quit-dup: duplicated Return-to-Desktop AddCancelButton dialog=0x{dialog:x} count {before}->{after_native}->{after_dup} ret=0x{ret:x} dup_ret=0x{dup_ret:x}"
+                "system-quit-dup: added third no-op AddCancelButton label=GR_LineHelp:{SYSTEM_QUIT_LOAD_LINEHELP_ID} dialog=0x{dialog:x} count {before}->{after_native}->{after_dup} ret=0x{ret:x} dup_ret=0x{dup_ret:x} row=0x{third_row:x} controller=0x{third_controller:x} action=0x{third_action:x}"
             ));
         } else {
             append_autoload_debug(format_args!(
@@ -6405,6 +6895,174 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
         }
     }
     ret
+}
+
+fn install_system_quit_menu_window_job_run_hook() {
+    if SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: MH_Initialize for MenuWindowJob::Run hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(MENU_WINDOW_JOB_RUN_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: failed to resolve MenuWindowJob::Run rva 0x{MENU_WINDOW_JOB_RUN_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_menu_window_job_run_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: queue_enable MenuWindowJob::Run hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED.store(
+                        SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED_YES,
+                        Ordering::SeqCst,
+                    );
+                    append_autoload_debug(format_args!(
+                        "system-quit-dup: hooked MenuWindowJob::Run 0x{addr:x}; will map System/ProfileSelect resources to real MenuWindow pointers"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-dup: MH_ApplyQueued MenuWindowJob::Run hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-dup: MhHook::new MenuWindowJob::Run hook failed: {status:?}"
+        )),
+    }
+}
+
+fn install_system_quit_window_list_push_hook() {
+    if SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_WINDOW_LIST_PUSH_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: MH_Initialize for MenuWindow list push hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(MENU_WINDOW_LIST_PUSH_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: failed to resolve MenuWindow list push rva 0x{MENU_WINDOW_LIST_PUSH_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_menu_window_list_push_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_WINDOW_LIST_PUSH_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: queue_enable MenuWindow list push hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED
+                        .store(SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED_YES, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-dup: hooked MenuWindow list push 0x{addr:x}; will record ProfileSelect append/list for Back/removal restore state"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-dup: MH_ApplyQueued MenuWindow list push hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-dup: MhHook::new MenuWindow list push hook failed: {status:?}"
+        )),
+    }
+}
+
+fn install_system_quit_noop_action_hook() {
+    if SYSTEM_QUIT_NOOP_ACTION_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_NOOP_ACTION_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: MH_Initialize for no-op action hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_DESKTOP_ACTION_DO_CALL_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: failed to resolve Return-to-Desktop action invoke rva 0x{SYSTEM_QUIT_DESKTOP_ACTION_DO_CALL_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_noop_desktop_action_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_NOOP_ACTION_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: queue_enable no-op action hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_NOOP_ACTION_INSTALLED
+                        .store(SYSTEM_QUIT_NOOP_ACTION_INSTALLED_YES, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-dup: hooked Return-to-Desktop action invoke 0x{addr:x}; recorded third-row action object will no-op"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-dup: MH_ApplyQueued no-op action hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-dup: MhHook::new no-op action hook failed: {status:?}"
+        )),
+    }
 }
 
 fn apply_system_quit_multislot_layout_patch() {
@@ -6468,6 +7126,9 @@ fn apply_system_quit_multislot_layout_patch() {
 /// builder, where it invokes the original trampoline a second time with the same native args.
 pub(crate) fn install_system_quit_duplicate_button_hook() {
     apply_system_quit_multislot_layout_patch();
+    install_system_quit_menu_window_job_run_hook();
+    install_system_quit_window_list_push_hook();
+    install_system_quit_noop_action_hook();
     if SYSTEM_QUIT_DUPLICATE_INSTALLED.load(Ordering::SeqCst) != SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED
     {
         return;
@@ -6507,7 +7168,7 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
                     SYSTEM_QUIT_DUPLICATE_INSTALLED
                         .store(SYSTEM_QUIT_DUPLICATE_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "system-quit-dup: hooked AddCancelButton 0x{addr:x}; will duplicate caller rva 0x{SYSTEM_QUIT_DUPLICATE_DESKTOP_RETURN_RVA:x} (Return to Desktop proof row)"
+                        "system-quit-dup: hooked AddCancelButton 0x{addr:x}; will add third no-op row from GR_LineHelp:{SYSTEM_QUIT_LOAD_LINEHELP_ID} at caller rva 0x{SYSTEM_QUIT_DUPLICATE_DESKTOP_RETURN_RVA:x}"
                     ));
                 }
                 status => append_autoload_debug(format_args!(

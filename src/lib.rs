@@ -779,6 +779,9 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     if lite_mode() {
                         return;
                     }
+                    if system_quit_duplicate_button_enabled() {
+                        unsafe { system_quit_profile_select_top_menu_tick() };
+                    }
                     // Product autoload: run the native title open-menu predicate + minimal
                     // native save-load core from the recurring game task, before the idx10
                     // MenuJobWait hook path is needed. This bypasses title-accept/input
