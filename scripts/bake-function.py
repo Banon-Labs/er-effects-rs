@@ -69,6 +69,7 @@ def reassemble(va, paths=200, budget=1500):
     # which), so those still flag for a later phase.
     branch_targets = set()
     arxan_jmp = {}                          # addr -> resolved successor (collapsed gadget)
+    arxan_ret = set()                       # addr -> Arxan return-gadget exit (emit `ret`)
     for addr in in_fn:
         ins = next(md.disasm(img[addr - BASE:addr - BASE + 16], addr), None)
         if ins is None:
@@ -81,9 +82,16 @@ def reassemble(va, paths=200, budget=1500):
                     arxan_jmp[addr] = outs[0]
                     branch_targets.add(outs[0])
                     continue
+                # terminal jmp into an Arxan return-gadget: recovery's emulator followed
+                # the trampoline to the caller's return address (sentinel) and marked this
+                # instruction terminal="ret". Collapse it to a real `ret`.
+                if ins.mnemonic == "jmp" and not outs and r.terminals.get(addr) == "ret":
+                    arxan_ret.add(addr)
+                    continue
                 kind = "branch" if ins.mnemonic == "jmp" else "conditional branch"
                 return None, (f"flattened/thunk: {kind} into Arxan section at {hex(addr)} -> {hex(t)} "
-                              f"(recovered succs={[hex(s) for s in succ.get(addr, [])]}; needs gadget-collapse phase)")
+                              f"(recovered succs={[hex(s) for s in succ.get(addr, [])]}; "
+                              f"terminal={r.terminals.get(addr)}; needs gadget-collapse phase)")
             if t in in_fn:
                 branch_targets.add(t)
         if ins.mnemonic == "call" and ins.op_str.startswith("0x") and is_arx(int(ins.op_str, 16)):
@@ -134,7 +142,9 @@ def reassemble(va, paths=200, budget=1500):
                 t = int(o, 16); callees.add(t); o = f"sub_{t:x}"
             elif m in BRANCH and o.startswith("0x"):
                 t = int(o, 16)
-                if addr in arxan_jmp:        # collapsed Arxan gadget -> resolved successor
+                if addr in arxan_ret:        # Arxan return-gadget exit -> real ret
+                    m, o = "ret", ""
+                elif addr in arxan_jmp:      # collapsed Arxan gadget -> resolved successor
                     o = f"loc_{arxan_jmp[addr]:x}"
                 elif t in in_fn:
                     o = f"loc_{t:x}"
@@ -151,6 +161,7 @@ def reassemble(va, paths=200, budget=1500):
 
     meta = {"callees": sorted(callees), "data_syms": data_syms, "gadgets": gadgets,
             "collapsed_gadgets": {hex(k): hex(v) for k, v in arxan_jmp.items()},
+            "collapsed_rets": sorted(hex(a) for a in arxan_ret),
             "nblocks": len(blocks), "ninsns": len(r.text)}
     return "\n".join(lines) + "\n", meta
 

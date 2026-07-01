@@ -135,7 +135,11 @@ class Recover:
         uc.hook_add(UC_HOOK_CODE, hc)
         uc.hook_add(UC_HOOK_MEM_READ_UNMAPPED | UC_HOOK_MEM_WRITE_UNMAPPED | UC_HOOK_MEM_FETCH_UNMAPPED, hu)
         try:
-            uc.emu_start(entry, SENT, count=budget)
+            # until must NOT be SENT: emu_start stops *before* executing `until`, so
+            # until=SENT pre-empted the `if address == SENT` code hook and the "ret"
+            # terminal was never recorded (returns went unmarked). Stop one page past
+            # the sentinel so the hook fires on RIP==SENT and records terminals[prev]="ret".
+            uc.emu_start(entry, SENT + 0x1000, count=budget)
         except UcError:
             if st["prev"] is not None and st["prev"] not in self.terminals:
                 self.terminals[st["prev"]] = "derail"
