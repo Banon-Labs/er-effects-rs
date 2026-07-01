@@ -108,9 +108,16 @@ def capture_frame(va, img):
     except UcError:
         pass
     frame = (rsp0 - st["rsp_body"]) if st["rsp_body"] is not None else None
+    # The prologue's saves are NOISY: the Arxan entry trampoline juggles callee-saved regs
+    # as scratch for its security-cookie/dispatch, so st["saves"] over-counts with dups.
+    # The RETURN trampoline's restores are clean (one pop per saved reg, LIFO), so derive
+    # the authoritative saved set from the epilogue -- push order = reverse of pop order.
+    restored = st["restores"]
+    saved = list(reversed(restored))
     ok = (st["stop"] == "ret" and frame is not None and frame >= 8
-          and st["saves"] == st["restores"] and frame >= 8 * len(st["saves"]))
-    return {"frame_size": frame, "saved": st["saves"], "ok": ok, "stop": st["stop"]}
+          and len(set(restored)) == len(restored)        # clean epilogue: no duplicate pops
+          and frame >= 8 * len(restored))
+    return {"frame_size": frame, "saved": saved, "ok": ok, "stop": st["stop"]}
 
 
 def reassemble(va, paths=200, budget=1500):
@@ -301,6 +308,29 @@ def wine_exit(exe):
         return None
 
 
+_WINE_QUIETED = False
+
+
+def ensure_quiet_wineprefix():
+    """Disable Wine's crash dialog (winedbg --auto) in the bake prefix, once per process.
+    A crashing bf_ref/bf_recomp otherwise launches an interactive winedbg that BLOCKS the
+    process until dismissed -> a GUI popup the user must clear AND a 90s wine_exit timeout
+    (the so-called "run-ref hangs"). With ShowCrashDialog=0 a crash returns a fast,
+    deterministic exit code instead. This is environment hygiene, not verification logic --
+    it does not touch wine_exit or the ref==recompiled comparison."""
+    global _WINE_QUIETED
+    if _WINE_QUIETED:
+        return
+    try:
+        subprocess.run(["wine", "reg", "add", r"HKCU\Software\Wine\WineDbg",
+                        "/v", "ShowCrashDialog", "/t", "REG_DWORD", "/d", "0", "/f"],
+                       capture_output=True, timeout=30,
+                       env={**os.environ, "WINEPREFIX": WINEPREFIX, "WINEDEBUG": "-all"})
+    except subprocess.SubprocessError:
+        pass
+    _WINE_QUIETED = True
+
+
 def bake(va, paths, budget, ninputs=200000):
     asm, meta = reassemble(va, paths, budget)
     if asm is None:
@@ -309,6 +339,7 @@ def bake(va, paths, budget, ninputs=200000):
         return {"ok": False, "stage": "reassemble",
                 "err": f"flattened function: Arxan stack gadgets at {meta['gadgets']} -- needs gadget-collapse (later phase)"}
     os.makedirs(WORK, exist_ok=True)
+    ensure_quiet_wineprefix()
     p = lambda n: os.path.join(WORK, n)
     open(p("bf_rf.s"), "w").write(asm)
 
