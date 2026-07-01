@@ -2973,6 +2973,68 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
             }
             .unwrap_or(0);
             if off != 0 && off != null {
+                // PER-SCENE ENVIRONMENT LEVER (goal 2026-06-30) -- PROOF PASS. The portrait scene's tonemap/
+                // color-grading block at `filter+0x30..+0x11c` (filter = *(GXSceneContext+0xbf50); ctx =
+                // *(scene+0x38); scene = *(off+0x48)) is the CPU-writable, PER-SCENE environment source: it is
+                // copied VERBATIM into the per-frame tonemap constant buffer by the RECORD fn FUN_141b8cc30,
+                // and set once at ctor (so writes persist). This is the block my earlier pokes MISSED -- they
+                // hit +0x760/+0xc94/+0xc98/+0xcbc which are OUTSIDE the copied range (scratch/unused). The
+                // exposure scale is `filter+0x8c` (default 1.0f; shader exposure = global_exp * filter[0x8c]).
+                // Env LIGHTS/IBL are global, but exposure/tone/color-grading is per-scene, so this changes
+                // ONLY the portrait. PROOF: overexpose to 8.0f -> the portrait should visibly blow out and the
+                // readback bg/head brighten hard vs baseline (23,20,14)/(160,137,109). Content-gated on the
+                // gamma field +0x60 reading ~2.2f (confirms this is the tonemap filter); floats only (safe --
+                // no int-typed field like the +0xc94 region); catch_unwind so a torn scene can't fault.
+                if portrait_render_drive_enabled() {
+                    static ENV_LOG_FRAMES: AtomicUsize = AtomicUsize::new(0);
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let scene = unsafe { safe_read_usize(off + 0x48) }.unwrap_or(0);
+                        if scene == 0 || scene == null {
+                            return;
+                        }
+                        let ctx = unsafe { safe_read_usize(scene + 0x38) }.unwrap_or(0);
+                        if ctx == 0 || ctx == null {
+                            return;
+                        }
+                        let filter = unsafe { safe_read_usize(ctx + 0xbf50) }.unwrap_or(0);
+                        if filter == 0 || filter == null {
+                            return;
+                        }
+                        let rd = |o: usize| {
+                            f32::from_bits(
+                                (unsafe { safe_read_usize(filter + o) }.unwrap_or(0) & 0xffff_ffff)
+                                    as u32,
+                            )
+                        };
+                        // Validate on the UNTOUCHED field +0x64 (~250.0f ctor default) so we can safely
+                        // overwrite the gamma at +0x60 too. Then write BOTH gamma (+0x60: 2.2 -> 1.0, a huge
+                        // unmistakable tone-curve change) and exposure (+0x8c -> 8.0). If NEITHER changes the
+                        // portrait, the per-scene tonemap block is inert for the offscreen render (it does not
+                        // run the composite/tonemap pass) -> the environment is global-only.
+                        let guard = rd(0x64);
+                        if !(guard > 100.0 && guard < 500.0) {
+                            return;
+                        }
+                        let gamma_before = rd(0x60);
+                        let exp_before = rd(0x8c);
+                        unsafe {
+                            core::ptr::write_volatile(
+                                (filter + 0x60) as *mut u32,
+                                1.0f32.to_bits(),
+                            );
+                            core::ptr::write_volatile(
+                                (filter + 0x8c) as *mut u32,
+                                8.0f32.to_bits(),
+                            );
+                        }
+                        let n = ENV_LOG_FRAMES.fetch_add(1, Ordering::SeqCst);
+                        if n < 4 {
+                            append_autoload_debug(format_args!(
+                                "env-lever[f{n}]: filter=0x{filter:x} guard(+0x64)={guard} gamma(+0x60) {gamma_before}->1.0 exposure(+0x8c) {exp_before}->8.0; if bg/head unchanged, the per-scene tonemap block is INERT for the portrait (env is global-only)"
+                            ));
+                        }
+                    }));
+                }
                 // RE-RASTERIZE the posed model into OUR built renderer's offscreen RT each render-thread
                 // frame. draw_step (the per-slot rasterize loop over the title table) does NOT include our
                 // own-built renderer, and the engine only redraws on profile data-change -- so without this
@@ -3079,7 +3141,7 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                     // the freshly-resolved RT held the head. We are inside the model_ins/loc + vtable validated
                     // block, so the per-frame resolve cannot race a teardown free.
                     if portrait_render_drive_enabled() {
-                        if let Some((cw, ch, cpx)) = unsafe { readback_offscreen_fast(off) } {
+                        if let Some((cw, ch, mut cpx)) = unsafe { readback_offscreen_fast(off) } {
                             // DIAGNOSTIC: count readbacks + checker-classified frames, and one-shot dump a
                             // "checker" frame (slot 103) so we can SEE what the ~216 non-published frames
                             // actually contain (forge magenta/yellow placeholder vs black vs partial head).
@@ -3096,6 +3158,66 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                 LOADING_BG_PORTRAIT_IS_CHECKER.store(0, Ordering::SeqCst);
                                 LOADING_BG_PORTRAIT_DIMS
                                     .store(((cw as usize) << 16) | (ch as usize), Ordering::SeqCst);
+                                // ALPHA DIAGNOSTIC (one-shot, for the "full-alpha background" goal): sample
+                                // the RT (R8G8B8A8) at a BACKGROUND corner vs the HEAD center, plus the
+                                // alpha min/max across the frame. This decides the alpha path: if corner
+                                // alpha==0 and center alpha==255 the RT already carries a clean per-pixel
+                                // cutout (honor alpha in the composite -> transparent bg is nearly free); if
+                                // alpha is 255 everywhere the bg is opaque (need a chroma-key or engine-side
+                                // IBL/env suppression). Fires only on a confirmed non-checker head frame.
+                                {
+                                    static ALPHA_DIAG_LOGGED: AtomicUsize = AtomicUsize::new(0);
+                                    let w = cw as usize;
+                                    let h = ch as usize;
+                                    if w > 16
+                                        && h > 16
+                                        && cpx.len() >= w * h * 4
+                                        && ALPHA_DIAG_LOGGED.swap(1, Ordering::SeqCst) == 0
+                                    {
+                                        let at = |x: usize, y: usize| {
+                                            let i = (y * w + x) * 4;
+                                            (cpx[i], cpx[i + 1], cpx[i + 2], cpx[i + 3])
+                                        };
+                                        let corner = at(8, 8);
+                                        let center = at(w / 2, h / 2);
+                                        let (mut amin, mut amax) = (255u8, 0u8);
+                                        let mut y = 0;
+                                        while y < h {
+                                            let mut x = 0;
+                                            while x < w {
+                                                let a = cpx[(y * w + x) * 4 + 3];
+                                                if a < amin {
+                                                    amin = a;
+                                                }
+                                                if a > amax {
+                                                    amax = a;
+                                                }
+                                                x += 37;
+                                            }
+                                            y += 37;
+                                        }
+                                        append_autoload_debug(format_args!(
+                                            "alpha-diag: {w}x{h} corner(bg) RGBA=({},{},{},{}) center(head) RGBA=({},{},{},{}) frame-alpha[min={amin} max={amax}]",
+                                            corner.0,
+                                            corner.1,
+                                            corner.2,
+                                            corner.3,
+                                            center.0,
+                                            center.1,
+                                            center.2,
+                                            center.3
+                                        ));
+                                    }
+                                }
+                                // DEPTH-KEYED TRANSPARENT BACKGROUND: cut the dark IBL background out of
+                                // the head portrait by setting alpha 0 wherever the offscreen DEPTH buffer
+                                // holds the (corner-calibrated) background/far value -- the character
+                                // geometry wrote a nearer depth so its silhouette stays opaque. Fail-open
+                                // (leaves alpha 255 on any uncertainty), so it can only ADD the cutout,
+                                // never regress the working head. The present-overlay honors this per-pixel
+                                // alpha via a CPU blend against the live backbuffer. Applied to `cpx` BEFORE
+                                // the selftest pose dump + the publish move below so both see the cutout.
+                                unsafe { apply_depth_alpha_key(off, cw, ch, &mut cpx) };
                                 // MOUSE-TRACK PROOF (selftest): one-shot dump the LIVE head at three
                                 // held yaw buckets so the look-left/center/look-right poses are
                                 // visually inspectable. The selftest sinusoid sweeps `yaw` across
@@ -4169,7 +4291,11 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     unsafe { refresh_loading_bg_live_gx(base) };
     // Once the real IBL-lit menu portrait has been baked into LOADING_BG_PORTRAIT_RGBA, re-forge the first
     // (displayed) now-loading rti so the loading screen swaps the checker for the real character portrait.
-    unsafe { maybe_reforge_loading_portrait(base) };
+    // SKIP on the portrait-lookat path: the live present-overlay owns the display there, so uploading into
+    // the native forged texture would paint a SECOND head. Overlay-only (user choice 2026-06-30).
+    if !portrait_lookat_enabled() {
+        unsafe { maybe_reforge_loading_portrait(base) };
+    }
     // HIGHER-RES (one-shot, EARLY -- runs before the table-ready guard below so it lands before
     // TitleTopDialog constructs the renderers). Patch each per-slot offscreen base-size entry that
     // still holds the init value (128x128, written by FUN_1400a7bb0) to 1024x1024 base AND zero the

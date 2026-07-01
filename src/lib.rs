@@ -364,11 +364,18 @@ pub unsafe extern "C" fn DllMain(_hmodule: HINSTANCE, reason: u32, _reserved: *m
     // produced. The hook self-gates on product_autoload_enabled() + the MENU_Load_ symbol and is
     // fail-open (any non-matching symbol or build/alloc failure tail-calls the original), so
     // installing it unconditionally is inert outside the product autoload path. Route-independent.
-    START_LOADING_BG_REPLACE_BIND.call_once(|| {
-        let _ = std::thread::Builder::new()
-            .name("er-effects-loading-bg-portrait".to_owned())
-            .spawn(install_loading_bg_replace_bind_hook);
-    });
+    // NOT on the portrait-lookat path: there the live present-overlay (below) owns the display, gated by the
+    // forge-independent PROFILE_LOADSCREEN_TABLE_BUILDS latch. The forged native background portrait would
+    // render a SECOND, FROZEN head (its per-frame live-rebind crashes vkd3d, so the forged bg can only be a
+    // static snapshot). Install the forge only for the pure product-autoload cover path, where it is the sole
+    // display surface. (Overlay-only, user choice 2026-06-30 -- see keepalive-DISPLAY-FIXED memory.)
+    if !portrait_lookat_enabled() {
+        START_LOADING_BG_REPLACE_BIND.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-loading-bg-portrait".to_owned())
+                .spawn(install_loading_bg_replace_bind_hook);
+        });
+    }
     // D3D12 PRESENT OVERLAY: the deterministic display path -- draw the captured portrait directly onto the
     // swapchain backbuffer when the now-loading screen is up (the in-pipeline forge/Scaleform routes cannot
     // drive the displayed image). Install only on the portrait path (diagnostic), via the dummy-swapchain

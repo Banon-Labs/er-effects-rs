@@ -18,6 +18,7 @@
 
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
@@ -71,8 +72,7 @@ const GX_COMMAND_QUEUE_RVA: usize = 0x8012a8;
 // and re-borrowed (`from_raw_borrowed`) each Present -- storing raw `usize` keeps them `Send` across the
 // `static` boundary (windows-rs COM types are `!Send`). State machine: 0=uninit, 1=ready, 2=failed/give-up.
 static OVERLAY_DRAW_STATE: AtomicUsize = AtomicUsize::new(0);
-static OVERLAY_PORTRAIT_VERSION: AtomicUsize = AtomicUsize::new(usize::MAX); // last LOADING_BG_PORTRAIT_RGBA_VERSION uploaded into OVERLAY_PORTRAIT_TEX
-static OVERLAY_PORTRAIT_TEX: AtomicUsize = AtomicUsize::new(0); // ID3D12Resource (DEFAULT heap, COPY_SOURCE)
+static OVERLAY_PORTRAIT_VERSION: AtomicUsize = AtomicUsize::new(usize::MAX); // last LOADING_BG_PORTRAIT_RGBA_VERSION composited to the backbuffer
 static OVERLAY_ALLOCATOR: AtomicUsize = AtomicUsize::new(0); // ID3D12CommandAllocator (DIRECT)
 static OVERLAY_LIST: AtomicUsize = AtomicUsize::new(0); // ID3D12GraphicsCommandList (DIRECT, kept closed)
 static OVERLAY_FENCE: AtomicUsize = AtomicUsize::new(0); // ID3D12Fence
@@ -160,7 +160,39 @@ unsafe fn try_texture2d(ptr: usize) -> Option<(ID3D12Resource, u64)> {
 /// `live-portrait-d3d12-resource-buried-in-gx-wrapper-nest-2026-06-29`). Returns the validated,
 /// QI-owned resource. Pure read-only pointer-walking until the QI on a confirmed-d3d12 candidate.
 unsafe fn find_d3d12_resource(start: usize) -> Option<ID3D12Resource> {
-    unsafe { find_d3d12_resource_ex(start, 0) }.map(|(r, _)| r)
+    unsafe { find_d3d12_resource_ex(start, 0, false) }.map(|(r, _)| r)
+}
+
+/// Find the offscreen scene's DEPTH-STENCIL sibling resource (the same-size depth buffer next to the
+/// color RT, observed format 19 = R32G8X24_TYPELESS). Used for the depth-key transparent background:
+/// background = pixels the character geometry never wrote (cleared/far depth). Same nest BFS as the
+/// color finder but accepts only depth formats.
+pub(crate) unsafe fn find_depth_resource(start: usize) -> Option<ID3D12Resource> {
+    unsafe { find_d3d12_resource_ex(start, 0, true) }.map(|(r, _)| r)
+}
+
+/// Depth-stencil TEXTURE2D acceptor (mirror of `try_texture2d` for depth formats): accept the common
+/// depth/typeless-depth formats so the nest scan can pick the depth buffer instead of the color RT.
+unsafe fn try_depth_texture2d(ptr: usize) -> Option<(ID3D12Resource, u64)> {
+    let raw = ptr as *mut c_void;
+    let unk = unsafe { IUnknown::from_raw_borrowed(&raw) }?;
+    let res: ID3D12Resource = unk.cast().ok()?;
+    let desc = unsafe { res.GetDesc() };
+    // Depth formats: R32G8X24_TYPELESS(19), D32_FLOAT_S8X24(20), R32_FLOAT_X8X24(21), R24G8_TYPELESS(44),
+    // D24_UNORM_S8(45), R32_TYPELESS(39), D32_FLOAT(40), R16_TYPELESS(53), D16_UNORM(55).
+    let f = desc.Format.0;
+    let is_depth = matches!(f, 19 | 20 | 21 | 44 | 45 | 39 | 40 | 53 | 55);
+    if is_depth
+        && desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D
+        && desc.Width >= 8
+        && desc.Width <= MAX_RT_DIM as u64
+        && desc.Height >= 8
+        && desc.Height <= MAX_RT_DIM
+    {
+        Some((res, desc.Width * desc.Height as u64))
+    } else {
+        None
+    }
 }
 
 /// Like `find_d3d12_resource` but (a) returns the candidate object pointer alongside the resource, and
@@ -170,6 +202,7 @@ unsafe fn find_d3d12_resource(start: usize) -> Option<ID3D12Resource> {
 unsafe fn find_d3d12_resource_ex(
     start: usize,
     exclude_v: usize,
+    want_depth: bool,
 ) -> Option<(ID3D12Resource, usize)> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if start == 0 || start == null {
@@ -233,7 +266,13 @@ unsafe fn find_d3d12_resource_ex(
                             d3d_hits += 1;
                             if v == exclude_v {
                                 // Caller-excluded texture (e.g. the SRV) -- skip so we pick a different one.
-                            } else if let Some((res, area)) = unsafe { try_texture2d(v) } {
+                            } else if let Some((res, area)) = unsafe {
+                                if want_depth {
+                                    try_depth_texture2d(v)
+                                } else {
+                                    try_texture2d(v)
+                                }
+                            } {
                                 if best.as_ref().is_none_or(|&(_, a, _)| area > a) {
                                     best = Some((res, area, v));
                                 }
@@ -324,10 +363,10 @@ pub(crate) unsafe fn readback_excluding_rgba8(
     exclude_start: usize,
 ) -> Option<(u32, u32, Vec<u8>)> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        let exclude_v = find_d3d12_resource_ex(exclude_start, 0)
+        let exclude_v = find_d3d12_resource_ex(exclude_start, 0, false)
             .map(|(_, v)| v)
             .unwrap_or(0);
-        let (resource, _) = find_d3d12_resource_ex(start, exclude_v)?;
+        let (resource, _) = find_d3d12_resource_ex(start, exclude_v, false)?;
         readback_resource_rgba8_inner(resource)
     }))
     .ok()
@@ -352,6 +391,47 @@ static RB_FAST_BUFSIZE: AtomicU64 = AtomicU64::new(0);
 static RB_FAST_FENCEVAL: AtomicU64 = AtomicU64::new(0);
 /// Counter so the deterministic-resolve diagnostic logs only the first few attempts.
 static PROFILE_DET_RESOLVE_DIAG: AtomicUsize = AtomicUsize::new(0);
+
+/// PER-FRAME DEPTH readback cache (separate from RB_FAST_* so the color and depth readbacks never share a
+/// command list / fence across the two calls in one draw tick). Same create-once + reset+copy+wait pattern.
+/// The depth sibling is `R32G8X24_TYPELESS` (fmt 19); we copy PLANE 0 (the R32 float depth) and reinterpret
+/// each 4-byte texel as `f32`. Raw COM pointers owned by these statics (released only on footprint change).
+static RB_DEPTH_QUEUE: AtomicUsize = AtomicUsize::new(0);
+static RB_DEPTH_ALLOC: AtomicUsize = AtomicUsize::new(0);
+static RB_DEPTH_LIST: AtomicUsize = AtomicUsize::new(0);
+static RB_DEPTH_FENCE: AtomicUsize = AtomicUsize::new(0);
+static RB_DEPTH_BUFFER: AtomicUsize = AtomicUsize::new(0);
+static RB_DEPTH_BUFSIZE: AtomicU64 = AtomicU64::new(0);
+static RB_DEPTH_FENCEVAL: AtomicU64 = AtomicU64::new(0);
+/// One-shot `depth-key` diagnostic latch (logs corner/center/min/max depth + masked fraction once).
+static DEPTH_KEY_DIAG_LOGGED: AtomicUsize = AtomicUsize::new(0);
+/// RAM oracle: number of published frames where the depth key ACTUALLY cut out a background (i.e. the depth
+/// buffer read back with clean bg/head separation and `>0` pixels were set to alpha 0). `oracle_depth_key_
+/// applied` -- a pixel/native semaphore that the transparent-background cutout is live (not a screenshot).
+pub(crate) static DEPTH_KEY_APPLIED: AtomicUsize = AtomicUsize::new(0);
+/// RAM oracle: last frame's background-masked fraction, in whole percent (0..=100). `oracle_depth_key_bg_pct`.
+/// A plausible portrait cutout is a large minority/majority of the frame (bg dominates a centered head).
+pub(crate) static DEPTH_KEY_BG_PCT: AtomicUsize = AtomicUsize::new(0);
+/// RAM oracle: number of frames the mask was RECALCULATED fresh from a valid depth buffer (vs reused from
+/// cache). `oracle_depth_key_fresh`; `applied - fresh` = cached reuses. Proves the recalc-and-cache loop.
+pub(crate) static DEPTH_KEY_FRESH: AtomicUsize = AtomicUsize::new(0);
+/// One-shot latch for the no-gap / dims-mismatch `depth-key` skip diagnostic (separate from the success
+/// latch so both a good frame and a skipped frame are each visible once in the log).
+static DEPTH_KEY_NOGAP_LOGGED: AtomicUsize = AtomicUsize::new(0);
+/// Last RECALCULATED depth-key mask (w, h, per-pixel: 1 = background/cut, 0 = keep). The offscreen depth
+/// buffer only carries real content on genuine re-render frames; on the many frames it reads back cleared,
+/// we re-apply this cached mask so the cutout stays stable. It is RECALCULATED whenever fresh depth is
+/// available (tracking a real re-render) and only cached for the dead frames in between -- never frozen.
+static LAST_DEPTH_MASK: Mutex<Option<(usize, usize, Vec<u8>)>> = Mutex::new(None);
+
+/// Cached backbuffer READBACK + UPLOAD buffers for the alpha-honoring CPU-blend composite (sized to the
+/// centered portrait region's copyable footprint in the backbuffer's format). The composite reads the live
+/// backbuffer region, blends the portrait over it honoring per-pixel alpha (bg alpha 0 => loading screen
+/// shows through), and writes the blended region back -- all with the existing COPY primitives, so NO new
+/// PSO/shader/RTV pipeline is needed. Owned raw COM pointers (released only on footprint change).
+static OVERLAY_BB_READBACK: AtomicUsize = AtomicUsize::new(0);
+static OVERLAY_BB_UPLOAD: AtomicUsize = AtomicUsize::new(0);
+static OVERLAY_BB_BUFSIZE: AtomicU64 = AtomicU64::new(0);
 
 /// DETERMINISTICALLY resolve the content RT's vkd3d `ID3D12Resource` from a CSGxTexture by following the
 /// FIXED wrapper chain (bd live-portrait-d3d12-resource-buried-in-gx-wrapper-nest, RE'd from a live dump),
@@ -898,6 +978,397 @@ unsafe fn readback_resource_cached_fast(resource: ID3D12Resource) -> Option<(u32
     Some((width, height, out))
 }
 
+/// Per-frame DEPTH readback of the offscreen scene's depth-stencil sibling (the `R32G8X24_TYPELESS`
+/// buffer next to the color RT in the same wrapper nest). Returns `(width, height, depth_f32)` where each
+/// element is the plane-0 R32 float depth. `None` on any failure (the caller then leaves the color buffer
+/// fully opaque -- fail-open, no cutout). Same catch_unwind + never-touch-the-game contract as the color
+/// readback. Used by `apply_depth_alpha_key` to derive the transparent-background alpha mask.
+pub(crate) unsafe fn readback_depth_fast(gpu_child: usize) -> Option<(u32, u32, Vec<f32>)> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let resource = find_depth_resource(gpu_child)?;
+        readback_depth_resource_cached(resource)
+    }))
+    .ok()
+    .flatten()
+}
+
+/// Depth twin of `readback_resource_cached_fast`: reset+copy+wait using the dedicated `RB_DEPTH_*` cached
+/// objects, but it copies PLANE 0 (subresource 0 = the R32 float depth of the `R32G8X24_TYPELESS` buffer)
+/// and reinterprets each 4-byte texel as `f32`. No RB swap / no LOADING_BG_PORTRAIT_FORMAT write (that is
+/// the color format telemetry). The `GetCopyableFootprints(&desc, 0, 1, ..)` call yields the plane-0
+/// footprint directly, so the copy is plane-correct without hand-computing plane sizes.
+unsafe fn readback_depth_resource_cached(resource: ID3D12Resource) -> Option<(u32, u32, Vec<f32>)> {
+    let mut device_opt: Option<ID3D12Device> = None;
+    unsafe { resource.GetDevice(&mut device_opt) }.ok()?;
+    let device = device_opt?;
+    let desc: D3D12_RESOURCE_DESC = unsafe { resource.GetDesc() };
+    let width = desc.Width as u32;
+    let height = desc.Height;
+    if width == 0 || height == 0 || width > MAX_RT_DIM || height > MAX_RT_DIM {
+        return None;
+    }
+    // Plane 0 (subresource 0) copyable footprint -- the R32 depth plane, 4 bytes/texel, 256-aligned rows.
+    let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+    let mut total_bytes: u64 = 0;
+    unsafe {
+        device.GetCopyableFootprints(
+            &desc,
+            0,
+            1,
+            0,
+            Some(&mut footprint),
+            None,
+            None,
+            Some(&mut total_bytes),
+        )
+    };
+    if total_bytes == 0 || footprint.Footprint.RowPitch == 0 {
+        return None;
+    }
+    if RB_DEPTH_QUEUE.load(Ordering::SeqCst) == 0 {
+        let queue_desc = D3D12_COMMAND_QUEUE_DESC {
+            Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+            Priority: 0,
+            Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
+            NodeMask: 0,
+        };
+        let queue: ID3D12CommandQueue = unsafe { device.CreateCommandQueue(&queue_desc) }.ok()?;
+        let allocator: ID3D12CommandAllocator =
+            unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT) }.ok()?;
+        let list: ID3D12GraphicsCommandList = unsafe {
+            device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)
+        }
+        .ok()?;
+        unsafe { list.Close() }.ok()?;
+        let fence: ID3D12Fence = unsafe { device.CreateFence(0, D3D12_FENCE_FLAG_NONE) }.ok()?;
+        RB_DEPTH_QUEUE.store(queue.into_raw() as usize, Ordering::SeqCst);
+        RB_DEPTH_ALLOC.store(allocator.into_raw() as usize, Ordering::SeqCst);
+        RB_DEPTH_LIST.store(list.into_raw() as usize, Ordering::SeqCst);
+        RB_DEPTH_FENCE.store(fence.into_raw() as usize, Ordering::SeqCst);
+    }
+    if RB_DEPTH_BUFSIZE.load(Ordering::SeqCst) != total_bytes {
+        let heap_props = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_READBACK,
+            CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+            MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+            CreationNodeMask: 1,
+            VisibleNodeMask: 1,
+        };
+        let buffer_desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+            Alignment: 0,
+            Width: total_bytes,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: DXGI_FORMAT_UNKNOWN,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            Flags: D3D12_RESOURCE_FLAG_NONE,
+        };
+        let mut readback_opt: Option<ID3D12Resource> = None;
+        unsafe {
+            device.CreateCommittedResource(
+                &heap_props,
+                D3D12_HEAP_FLAG_NONE,
+                &buffer_desc,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                None,
+                &mut readback_opt,
+            )
+        }
+        .ok()?;
+        let buf = readback_opt?;
+        let old = RB_DEPTH_BUFFER.swap(buf.into_raw() as usize, Ordering::SeqCst);
+        if old != 0 {
+            drop(unsafe { ID3D12Resource::from_raw(old as *mut c_void) });
+        }
+        RB_DEPTH_BUFSIZE.store(total_bytes, Ordering::SeqCst);
+    }
+    let q_raw = RB_DEPTH_QUEUE.load(Ordering::SeqCst) as *mut c_void;
+    let a_raw = RB_DEPTH_ALLOC.load(Ordering::SeqCst) as *mut c_void;
+    let l_raw = RB_DEPTH_LIST.load(Ordering::SeqCst) as *mut c_void;
+    let f_raw = RB_DEPTH_FENCE.load(Ordering::SeqCst) as *mut c_void;
+    let b_raw = RB_DEPTH_BUFFER.load(Ordering::SeqCst) as *mut c_void;
+    let (Some(queue), Some(allocator), Some(list), Some(fence), Some(readback)) = (unsafe {
+        (
+            ID3D12CommandQueue::from_raw_borrowed(&q_raw),
+            ID3D12CommandAllocator::from_raw_borrowed(&a_raw),
+            ID3D12GraphicsCommandList::from_raw_borrowed(&l_raw),
+            ID3D12Fence::from_raw_borrowed(&f_raw),
+            ID3D12Resource::from_raw_borrowed(&b_raw),
+        )
+    }) else {
+        return None;
+    };
+    if unsafe { allocator.Reset() }.is_err() {
+        return None;
+    }
+    if unsafe { list.Reset(allocator, None) }.is_err() {
+        return None;
+    }
+    unsafe {
+        record_transition(
+            list,
+            &resource,
+            D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+        )
+    };
+    let mut src_location = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(resource.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            SubresourceIndex: 0,
+        },
+    };
+    let mut dst_location = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(readback.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            PlacedFootprint: footprint,
+        },
+    };
+    unsafe { list.CopyTextureRegion(&dst_location, 0, 0, 0, &src_location, None) };
+    unsafe { ManuallyDrop::drop(&mut src_location.pResource) };
+    unsafe { ManuallyDrop::drop(&mut dst_location.pResource) };
+    unsafe {
+        record_transition(
+            list,
+            &resource,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_RESOURCE_STATE_COMMON,
+        )
+    };
+    if unsafe { list.Close() }.is_err() {
+        return None;
+    }
+    let base_list: ID3D12CommandList = list.cast().ok()?;
+    unsafe { queue.ExecuteCommandLists(&[Some(base_list)]) };
+    let val = RB_DEPTH_FENCEVAL.fetch_add(1, Ordering::SeqCst) + 1;
+    unsafe { queue.Signal(fence, val) }.ok()?;
+    if unsafe { fence.GetCompletedValue() } < val {
+        let event: HANDLE = unsafe { CreateEventW(None, false, false, None) }.ok()?;
+        unsafe { fence.SetEventOnCompletion(val, event) }.ok()?;
+        let wait = unsafe { WaitForSingleObject(event, READBACK_FENCE_WAIT_MS) };
+        let _ = unsafe { CloseHandle(event) };
+        if wait != WAIT_OBJECT_0 {
+            return None;
+        }
+    }
+    let read_range = D3D12_RANGE {
+        Begin: 0,
+        End: total_bytes as usize,
+    };
+    let mut mapped: *mut c_void = std::ptr::null_mut();
+    unsafe { readback.Map(0, Some(&read_range), Some(&mut mapped)) }.ok()?;
+    if mapped.is_null() {
+        return None;
+    }
+    let w = width as usize;
+    let h = height as usize;
+    let row_pitch = footprint.Footprint.RowPitch as usize;
+    let total = total_bytes as usize;
+    let src = mapped as *const u8;
+    let mut out = vec![0f32; w * h];
+    for y in 0..h {
+        let row_off = y * row_pitch;
+        if row_off + w * 4 > total {
+            break;
+        }
+        for x in 0..w {
+            let b = unsafe { std::slice::from_raw_parts(src.add(row_off + x * 4), 4) };
+            out[y * w + x] = f32::from_bits(u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+        }
+    }
+    let write_range = D3D12_RANGE { Begin: 0, End: 0 };
+    unsafe { readback.Unmap(0, Some(&write_range)) };
+    Some((width, height, out))
+}
+
+/// DEPTH-KEYED TRANSPARENT BACKGROUND: read back the offscreen scene's depth plane and set the color
+/// buffer's per-pixel alpha to 0 for every BACKGROUND pixel. The portrait depth is BIMODAL -- the model
+/// (head+shoulders) forms one cluster and the dark IBL surround another, separated by an empty depth GAP
+/// (the "air" between the model and the backdrop). We histogram the depth, put the threshold in the WIDEST
+/// empty gap, and KEEP whichever cluster the centered head sits in, cutting the other. Keying on the head's
+/// own cluster (not an assumed clear value) makes this robust to the engine's Z direction and to the fact
+/// that the corners are NOT all background (a portrait's shoulders fill the bottom corners). FAIL-OPEN on
+/// every uncertainty (no depth buffer, dims mismatch, no separable gap) -> the color buffer is left fully
+/// opaque, exactly the pre-existing display, so this can only ADD the cutout, never regress the head. Emits
+/// a one-shot `depth-key` diagnostic and drives the `oracle_depth_key_*` RAM semaphores. `cpx` is the
+/// tightly-packed RGBA8 the caller is about to publish (mutated in place).
+pub(crate) unsafe fn apply_depth_alpha_key(gpu_child: usize, w: u32, h: u32, cpx: &mut [u8]) {
+    let w = w as usize;
+    let h = h as usize;
+    if cpx.len() < w * h * 4 {
+        return;
+    }
+    // (1) RECALCULATE the mask from the CURRENT depth buffer whenever it carries real content.
+    let fresh = unsafe { compute_depth_mask(gpu_child, w, h) };
+    // (2) On a fresh mask, CACHE it; on a dead frame (depth read back cleared -> no gap), REUSE the last
+    //     cached mask so the cutout stays stable. Recalculated whenever fresh depth is available (tracks a
+    //     genuine re-render), cached only for the frames in between -- never a frozen one-shot.
+    let mask = if let Some(m) = fresh {
+        DEPTH_KEY_FRESH.fetch_add(1, Ordering::SeqCst);
+        if let Ok(mut g) = LAST_DEPTH_MASK.lock() {
+            *g = Some((w, h, m.clone()));
+        }
+        Some(m)
+    } else {
+        LAST_DEPTH_MASK.lock().ok().and_then(|g| match g.as_ref() {
+            Some((cw, ch, m)) if *cw == w && *ch == h => Some(m.clone()),
+            _ => None,
+        })
+    };
+    // No fresh gap and no cache yet -> fail open (opaque), no regression.
+    let Some(mask) = mask else {
+        return;
+    };
+    let mut masked = 0usize;
+    for i in 0..(w * h) {
+        if mask[i] != 0 {
+            cpx[i * 4 + 3] = 0;
+            masked += 1;
+        }
+    }
+    if masked > 0 {
+        DEPTH_KEY_APPLIED.fetch_add(1, Ordering::SeqCst);
+        DEPTH_KEY_BG_PCT.store(masked * 100 / (w * h), Ordering::SeqCst);
+    }
+}
+
+/// Read back the offscreen depth plane and compute the per-pixel background mask (1 = background/cut, 0 =
+/// keep) via the bimodal-gap threshold. Returns `None` when the depth buffer has no content this frame or
+/// no separable gap (the caller then reuses the cached mask). Emits the one-shot `depth-key` diagnostic
+/// (success) and a separate one-shot skip diagnostic (dims mismatch / no gap) so both are visible once.
+unsafe fn compute_depth_mask(gpu_child: usize, w: usize, h: usize) -> Option<Vec<u8>> {
+    let (dw, dh, depth) = unsafe { readback_depth_fast(gpu_child) }?;
+    if dw as usize != w || dh as usize != h || depth.len() < w * h {
+        // At higher-res (1024) the depth sibling MUST match the color RT or the mask can't align.
+        if DEPTH_KEY_NOGAP_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+            append_autoload_debug(format_args!(
+                "depth-key: SKIP dims-mismatch color={w}x{h} depth={dw}x{dh} depthlen={}",
+                depth.len()
+            ));
+        }
+        return None;
+    }
+    let idx = |x: usize, y: usize| y * w + x;
+    // Frame depth extent over finite values.
+    let mut dmin = f32::INFINITY;
+    let mut dmax = f32::NEG_INFINITY;
+    for &d in depth.iter().take(w * h) {
+        if d.is_finite() {
+            dmin = dmin.min(d);
+            dmax = dmax.max(d);
+        }
+    }
+    let range = dmax - dmin;
+
+    // FOREGROUND reference = the CENTERED head's depth: sample a small central patch and take its median.
+    // We KEEP the cluster this belongs to and CUT the other -- so the cut is robust to the engine's Z
+    // direction (we never assume near/far == 0). The portrait's head+shoulders are the high-count
+    // foreground cluster; the dark IBL surround is the other cluster, separated by an empty depth GAP
+    // (the "air" between the model and the backdrop).
+    let cr = (w.min(h) / 16).max(2);
+    let (cx, cy) = (w / 2, h / 2);
+    let mut cpatch: Vec<f32> = Vec::new();
+    let mut yy = cy.saturating_sub(cr);
+    while yy <= (cy + cr).min(h.saturating_sub(1)) {
+        let mut xx = cx.saturating_sub(cr);
+        while xx <= (cx + cr).min(w.saturating_sub(1)) {
+            let d = depth[idx(xx, yy)];
+            if d.is_finite() {
+                cpatch.push(d);
+            }
+            xx += 1;
+        }
+        yy += 1;
+    }
+    cpatch.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let center = if cpatch.is_empty() {
+        f32::NAN
+    } else {
+        cpatch[cpatch.len() / 2]
+    };
+
+    // Histogram over [dmin,dmax]; the threshold is the midpoint of the WIDEST run of near-empty bins --
+    // i.e. the gap between the background cluster and the foreground cluster.
+    const NB: usize = 128;
+    let mut hist = [0u32; NB];
+    if range > 0.0 {
+        for &d in depth.iter().take(w * h) {
+            if d.is_finite() {
+                let bi = ((((d - dmin) / range) * NB as f32) as isize).clamp(0, NB as isize - 1);
+                hist[bi as usize] += 1;
+            }
+        }
+    }
+    // A bin is "empty" if it holds < ~0.05% of the frame (tolerates a few depth-edge stragglers).
+    let empty_thresh = ((w * h) / 2000).max(1) as u32;
+    let (mut best_lo, mut best_len) = (0usize, 0usize);
+    let (mut cur_lo, mut cur_len) = (0usize, 0usize);
+    for b in 0..NB {
+        if hist[b] <= empty_thresh {
+            if cur_len == 0 {
+                cur_lo = b;
+            }
+            cur_len += 1;
+            if cur_len > best_len {
+                best_len = cur_len;
+                best_lo = cur_lo;
+            }
+        } else {
+            cur_len = 0;
+        }
+    }
+    let gap_mid_bin = best_lo as f32 + best_len as f32 * 0.5;
+    let threshold = dmin + (gap_mid_bin / NB as f32) * range;
+    // Require a REAL gap (>= ~4% of the range empty) and a valid center, else no separable background
+    // this frame -> return None (caller reuses the cached mask; a unimodal depth would slice the head).
+    let have_gap = range > 0.0 && (best_len as f32 / NB as f32) >= 0.04 && center.is_finite();
+    // Keep the side of the gap the centered head sits on; the other side is the background.
+    let keep_high = center > threshold;
+    let mut mask = vec![0u8; w * h];
+    let mut masked = 0usize;
+    if have_gap {
+        for i in 0..(w * h) {
+            let d = depth[i];
+            let is_bg = if keep_high {
+                d < threshold
+            } else {
+                d > threshold
+            };
+            if is_bg {
+                mask[i] = 1;
+                masked += 1;
+            }
+        }
+    }
+    if DEPTH_KEY_DIAG_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+        let inset = (w.min(h) / 32).max(2);
+        let (tl, tr, bl, br) = (
+            depth[idx(inset, inset)],
+            depth[idx(w - 1 - inset, inset)],
+            depth[idx(inset, h - 1 - inset)],
+            depth[idx(w - 1 - inset, h - 1 - inset)],
+        );
+        append_autoload_debug(format_args!(
+            "depth-key: {w}x{h} min={dmin} max={dmax} center(head)={center} corners[tl={tl} tr={tr} bl={bl} br={br}] gap[bins {best_lo}..+{best_len}/{NB}] thr={threshold} keep_high={keep_high} have_gap={have_gap} masked={masked}/{} ({}%)",
+            w * h,
+            masked * 100 / (w * h).max(1)
+        ));
+    }
+    if have_gap && masked > 0 {
+        Some(mask)
+    } else {
+        None
+    }
+}
+
 /// Force the offscreen RT->SRV resolve in D3D12: CopyResource the render-target texture behind
 /// `src_gpu_child` (the renderer's offscreen RT, which holds the rendered head) into the sampleable SRV
 /// texture behind `dst_gpu_child` (offscreen+0x10's CSGxTexture, what the loading-screen forge binds and
@@ -916,10 +1387,11 @@ unsafe fn copy_offscreen_rt_to_srv_inner(src_gpu_child: usize, dst_gpu_child: us
     // Resolve the SRV (dst) first from its OWN single-texture nest -> deterministic, plus its candidate
     // pointer. Then resolve the source as the largest texture in the offscreen nest EXCLUDING that SRV,
     // so we never pick the (black) SRV as the source and self-skip.
-    let Some((dst, dst_v)) = (unsafe { find_d3d12_resource_ex(dst_gpu_child, 0) }) else {
+    let Some((dst, dst_v)) = (unsafe { find_d3d12_resource_ex(dst_gpu_child, 0, false) }) else {
         return false;
     };
-    let Some((src, _src_v)) = (unsafe { find_d3d12_resource_ex(src_gpu_child, dst_v) }) else {
+    let Some((src, _src_v)) = (unsafe { find_d3d12_resource_ex(src_gpu_child, dst_v, false) })
+    else {
         return false;
     };
     // CopyResource requires identical dimensions + format.
@@ -1257,6 +1729,11 @@ unsafe fn upload_rgba_to_texture_inner(
 /// queue, and leave it in `COPY_SOURCE` so the per-frame composite can use it as a `CopyTextureRegion`
 /// source. Returns the texture (the temp queue/allocator/list/upload-buffer are released here). `None` on
 /// any failure -- never panics.
+///
+/// RETAINED FOR REFERENCE: the alpha-honoring composite now blends the portrait onto the backbuffer on the
+/// CPU (see `blend_portrait_over_backbuffer`), so this GPU upload path is currently unused. Kept as the
+/// proven RGBA->DEFAULT-heap upload for a future GPU-draw composite.
+#[allow(dead_code)]
 unsafe fn create_portrait_source_texture(
     device: &ID3D12Device,
     pw: u32,
@@ -1479,12 +1956,10 @@ unsafe fn init_overlay_draw_state(backbuffer: &ID3D12Resource) -> bool {
         pixels.len()
     ));
 
-    let Some(tex) = (unsafe { create_portrait_source_texture(&device, pw, ph, &pixels) }) else {
-        return false;
-    };
-    append_autoload_debug(format_args!(
-        "present-overlay: draw init step2 portrait source texture ready"
-    ));
+    // NOTE: no GPU source texture is created here anymore -- the composite blends the portrait onto the
+    // backbuffer on the CPU (readback region -> alpha-blend -> writeback), sourcing the pixels directly
+    // from `LOADING_BG_PORTRAIT_RGBA` each frame. That is what lets the transparent (alpha-0) background
+    // show the loading screen through; a raw CopyTextureRegion could not honor per-pixel alpha.
     let Ok(allocator) = (unsafe {
         device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)
     }) else {
@@ -1523,7 +1998,6 @@ unsafe fn init_overlay_draw_state(backbuffer: &ID3D12Resource) -> bool {
         "present-overlay: draw init step3 cmd objects + own queue ready"
     ));
 
-    OVERLAY_PORTRAIT_TEX.store(tex.into_raw() as usize, Ordering::SeqCst);
     OVERLAY_ALLOCATOR.store(allocator.into_raw() as usize, Ordering::SeqCst);
     OVERLAY_LIST.store(list.into_raw() as usize, Ordering::SeqCst);
     OVERLAY_FENCE.store(fence.into_raw() as usize, Ordering::SeqCst);
@@ -1563,7 +2037,14 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
     let world_ready =
         OVERLAY_NOW_LOADING_SEEN.load(Ordering::SeqCst) != 0 && !now_load && !fake_vis;
     let forge_committed = LOADING_BG_TEXTURE_REDIRECT_COMMITS.load(Ordering::SeqCst) > 0;
-    if world_ready || !(forge_committed || fake_vis || now_load) {
+    // Forge-INDEPENDENT loading-window latch: PROFILE_LOADSCREEN_TABLE_BUILDS goes >0 when we (re)build our
+    // profile renderers post-Continue -- i.e. we are on the loading cover, past the menu, before the world.
+    // The overlay used to lean solely on `forge_committed` as its "cover is up" signal (now_loading_active /
+    // fake_loading_screen_visible both read false in the direct-menu-load path), so disabling the native
+    // forge silently killed the overlay too. This latch keeps the overlay live when the forge is off
+    // (overlay-only mode) without depending on it. Same monotonic behaviour (never decrements) as forge.
+    let loadscreen_active = PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst) > 0;
+    if world_ready || !(forge_committed || loadscreen_active || fake_vis || now_load) {
         return false;
     }
     if OVERLAY_DRAW_STATE.load(Ordering::SeqCst) == 2 {
@@ -1600,50 +2081,24 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
         }
     }
 
-    // LIVE RE-UPLOAD: when the draw-phase task has published a newer portrait (version bumped from the
-    // throttled built-RT readback), rebuild the overlay source texture from the fresh RGBA so the displayed
-    // head UPDATES (look-at follows) instead of freezing on the first captured frame. Same-dims only; on any
-    // failure keep the previous texture (draw the last good frame). Our own queue/device, no game state.
+    // LIVE PORTRAIT SNAPSHOT: the draw-phase task republishes LOADING_BG_PORTRAIT_RGBA (version bump) each
+    // frame with the freshly rendered, DEPTH-ALPHA-KEYED head (background alpha 0), so we blend the CURRENT
+    // snapshot every frame -- the displayed head follows the cursor and its background stays transparent. On
+    // any snapshot failure we skip this frame (leave the last presented content).
     let cur_ver = LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst);
-    if cur_ver != OVERLAY_PORTRAIT_VERSION.load(Ordering::SeqCst) {
-        let snap = LOADING_BG_PORTRAIT_RGBA.lock().ok().and_then(|g| g.clone());
-        if let Some((nw, nh, npx)) = snap {
-            if nw as usize == OVERLAY_PORTRAIT_W.load(Ordering::SeqCst)
-                && nh as usize == OVERLAY_PORTRAIT_H.load(Ordering::SeqCst)
-                && npx.len() >= (nw as usize) * (nh as usize) * RGBA8_BPP
-            {
-                let mut device_opt: Option<ID3D12Device> = None;
-                if unsafe { backbuffer.GetDevice(&mut device_opt) }.is_ok() {
-                    if let Some(device) = device_opt {
-                        if let Some(newtex) =
-                            unsafe { create_portrait_source_texture(&device, nw, nh, &npx) }
-                        {
-                            let old = OVERLAY_PORTRAIT_TEX
-                                .swap(newtex.into_raw() as usize, Ordering::SeqCst);
-                            if old != 0 {
-                                // Release the previous source texture (reclaim its raw COM ref).
-                                drop(unsafe { ID3D12Resource::from_raw(old as *mut c_void) });
-                            }
-                            OVERLAY_PORTRAIT_VERSION.store(cur_ver, Ordering::SeqCst);
-                            OVERLAY_REUPLOADS.fetch_add(1, Ordering::SeqCst);
-                        }
-                    }
-                }
-            } else {
-                // Dims changed (shouldn't for a fixed RT) -- accept the version so we don't spin.
-                OVERLAY_PORTRAIT_VERSION.store(cur_ver, Ordering::SeqCst);
-            }
-        }
+    let Some((sw, sh, spx)) = LOADING_BG_PORTRAIT_RGBA.lock().ok().and_then(|g| g.clone()) else {
+        return false;
+    };
+    if sw == 0 || sh == 0 || spx.len() < (sw as usize) * (sh as usize) * RGBA8_BPP {
+        return false;
     }
 
-    let tex_raw = OVERLAY_PORTRAIT_TEX.load(Ordering::SeqCst) as *mut c_void;
     let alloc_raw = OVERLAY_ALLOCATOR.load(Ordering::SeqCst) as *mut c_void;
     let list_raw = OVERLAY_LIST.load(Ordering::SeqCst) as *mut c_void;
     let fence_raw = OVERLAY_FENCE.load(Ordering::SeqCst) as *mut c_void;
     let queue_raw = OVERLAY_QUEUE.load(Ordering::SeqCst) as *mut c_void;
-    let (Some(tex), Some(allocator), Some(list), Some(fence), Some(queue)) = (unsafe {
+    let (Some(allocator), Some(list), Some(fence), Some(queue)) = (unsafe {
         (
-            ID3D12Resource::from_raw_borrowed(&tex_raw),
             ID3D12CommandAllocator::from_raw_borrowed(&alloc_raw),
             ID3D12GraphicsCommandList::from_raw_borrowed(&list_raw),
             ID3D12Fence::from_raw_borrowed(&fence_raw),
@@ -1652,36 +2107,326 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
     }) else {
         return false;
     };
+    let mut device_opt: Option<ID3D12Device> = None;
+    if unsafe { backbuffer.GetDevice(&mut device_opt) }.is_err() {
+        return false;
+    }
+    let Some(device) = device_opt else {
+        return false;
+    };
 
     let bb_desc = unsafe { backbuffer.GetDesc() };
     let bw = bb_desc.Width as u32;
     let bh = bb_desc.Height;
-    let pw = OVERLAY_PORTRAIT_W.load(Ordering::SeqCst) as u32;
-    let ph = OVERLAY_PORTRAIT_H.load(Ordering::SeqCst) as u32;
-    if bw == 0 || bh == 0 || pw == 0 || ph == 0 {
+    if bw == 0 || bh == 0 {
         return false;
     }
-    // Clamp the copy to the backbuffer and center it (CopyTextureRegion does not scale).
-    let cw = pw.min(bw);
-    let ch = ph.min(bh);
+    // Center the portrait region on the backbuffer (no scaling; region = portrait size clamped to the bb).
+    let cw = sw.min(bw);
+    let ch = sh.min(bh);
     let dx = (bw - cw) / 2;
     let dy = (bh - ch) / 2;
 
-    if unsafe { allocator.Reset() }.is_err() {
+    // Alpha-honoring composite: read the live backbuffer region, blend the portrait OVER it (bg alpha 0 =>
+    // the loading screen shows through), write the blended region back. All via COPY primitives -- no PSO.
+    if !unsafe {
+        blend_portrait_over_backbuffer(
+            &device,
+            queue,
+            allocator,
+            list,
+            fence,
+            &backbuffer,
+            bb_desc.Format,
+            dx,
+            dy,
+            cw,
+            ch,
+            sw,
+            &spx,
+        )
+    } {
         return false;
     }
-    if unsafe { list.Reset(allocator, None) }.is_err() {
+
+    // Preserve the "displayed head updates per frame" oracle (oracle_overlay_reuploads): count a fresh
+    // published version reaching the screen.
+    if cur_ver != OVERLAY_PORTRAIT_VERSION.swap(cur_ver, Ordering::SeqCst) {
+        OVERLAY_REUPLOADS.fetch_add(1, Ordering::SeqCst);
+    }
+    let hits = OVERLAY_DRAW_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    if hits == 1 {
+        append_autoload_debug(format_args!(
+            "present-overlay: portrait CPU-blended onto backbuffer {bw}x{bh} (portrait {sw}x{sh} at {dx},{dy}, depth-alpha-keyed bg)"
+        ));
+    }
+    true
+}
+
+/// Alpha-honoring CPU composite: copy the live backbuffer region `[dx,dy .. dx+cw,dy+ch]` to a readback
+/// buffer, blend the portrait (`spx`, `sw` wide, RGBA8 with per-pixel alpha) OVER it (`src.a`/`1-src.a`; a
+/// background pixel with alpha 0 leaves the backbuffer untouched so the loading screen shows through), then
+/// write the blended region back. Two submits on our OWN queue with a CPU fence wait between them (the blend
+/// needs the readback mapped). Reuses the cached `OVERLAY_BB_*` buffers; leaves the backbuffer in PRESENT.
+/// `false` on any failure (frame skipped). Never touches the game's queue.
+#[allow(clippy::too_many_arguments)]
+unsafe fn blend_portrait_over_backbuffer(
+    device: &ID3D12Device,
+    queue: &ID3D12CommandQueue,
+    allocator: &ID3D12CommandAllocator,
+    list: &ID3D12GraphicsCommandList,
+    fence: &ID3D12Fence,
+    backbuffer: &ID3D12Resource,
+    bb_format: DXGI_FORMAT,
+    dx: u32,
+    dy: u32,
+    cw: u32,
+    ch: u32,
+    sw: u32,
+    spx: &[u8],
+) -> bool {
+    // Copyable footprint of a cw x ch region in the backbuffer's format (256-aligned rows).
+    let region_desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        Alignment: 0,
+        Width: cw as u64,
+        Height: ch,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: bb_format,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+        Flags: D3D12_RESOURCE_FLAG_NONE,
+    };
+    let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+    let mut total_bytes: u64 = 0;
+    unsafe {
+        device.GetCopyableFootprints(
+            &region_desc,
+            0,
+            1,
+            0,
+            Some(&mut footprint),
+            None,
+            None,
+            Some(&mut total_bytes),
+        )
+    };
+    if total_bytes == 0 || footprint.Footprint.RowPitch == 0 {
+        return false;
+    }
+    // (Re)create the cached readback + upload buffers on footprint change (fixed once for a fixed bb size).
+    if OVERLAY_BB_BUFSIZE.load(Ordering::SeqCst) != total_bytes {
+        let rb_heap = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_READBACK,
+            CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+            MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+            CreationNodeMask: 1,
+            VisibleNodeMask: 1,
+        };
+        let up_heap = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_UPLOAD,
+            CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+            MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+            CreationNodeMask: 1,
+            VisibleNodeMask: 1,
+        };
+        let buf_desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+            Alignment: 0,
+            Width: total_bytes,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: DXGI_FORMAT_UNKNOWN,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            Flags: D3D12_RESOURCE_FLAG_NONE,
+        };
+        let mut rb_opt: Option<ID3D12Resource> = None;
+        if unsafe {
+            device.CreateCommittedResource(
+                &rb_heap,
+                D3D12_HEAP_FLAG_NONE,
+                &buf_desc,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                None,
+                &mut rb_opt,
+            )
+        }
+        .is_err()
+        {
+            return false;
+        }
+        let mut up_opt: Option<ID3D12Resource> = None;
+        if unsafe {
+            device.CreateCommittedResource(
+                &up_heap,
+                D3D12_HEAP_FLAG_NONE,
+                &buf_desc,
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+                None,
+                &mut up_opt,
+            )
+        }
+        .is_err()
+        {
+            return false;
+        }
+        let (Some(rb), Some(up)) = (rb_opt, up_opt) else {
+            return false;
+        };
+        let old_rb = OVERLAY_BB_READBACK.swap(rb.into_raw() as usize, Ordering::SeqCst);
+        if old_rb != 0 {
+            drop(unsafe { ID3D12Resource::from_raw(old_rb as *mut c_void) });
+        }
+        let old_up = OVERLAY_BB_UPLOAD.swap(up.into_raw() as usize, Ordering::SeqCst);
+        if old_up != 0 {
+            drop(unsafe { ID3D12Resource::from_raw(old_up as *mut c_void) });
+        }
+        OVERLAY_BB_BUFSIZE.store(total_bytes, Ordering::SeqCst);
+    }
+    let rb_raw = OVERLAY_BB_READBACK.load(Ordering::SeqCst) as *mut c_void;
+    let up_raw = OVERLAY_BB_UPLOAD.load(Ordering::SeqCst) as *mut c_void;
+    let (Some(readback), Some(upload)) = (unsafe {
+        (
+            ID3D12Resource::from_raw_borrowed(&rb_raw),
+            ID3D12Resource::from_raw_borrowed(&up_raw),
+        )
+    }) else {
+        return false;
+    };
+
+    // ---- SUBMIT #1: backbuffer region -> readback buffer (leaves the backbuffer in COPY_SOURCE) ----
+    if unsafe { allocator.Reset() }.is_err() || unsafe { list.Reset(allocator, None) }.is_err() {
         return false;
     }
     unsafe {
         record_transition(
             list,
-            &backbuffer,
+            backbuffer,
             D3D12_RESOURCE_STATE_PRESENT,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+        )
+    };
+    let mut rb_dst = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(readback.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            PlacedFootprint: footprint,
+        },
+    };
+    let mut bb_src = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(backbuffer.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            SubresourceIndex: 0,
+        },
+    };
+    let read_box = D3D12_BOX {
+        left: dx,
+        top: dy,
+        front: 0,
+        right: dx + cw,
+        bottom: dy + ch,
+        back: 1,
+    };
+    unsafe { list.CopyTextureRegion(&rb_dst, 0, 0, 0, &bb_src, Some(&read_box)) };
+    unsafe { ManuallyDrop::drop(&mut rb_dst.pResource) };
+    unsafe { ManuallyDrop::drop(&mut bb_src.pResource) };
+    if !unsafe { execute_and_wait(queue, list, fence) } {
+        return false;
+    }
+
+    // ---- CPU BLEND: readback (backbuffer pixels) OVER-composited with the portrait, into the upload buffer.
+    let row_pitch = footprint.Footprint.RowPitch as usize;
+    let total = total_bytes as usize;
+    let swap = matches!(
+        bb_format,
+        DXGI_FORMAT_B8G8R8A8_UNORM | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
+    );
+    let read_range = D3D12_RANGE {
+        Begin: 0,
+        End: total,
+    };
+    let mut rmap: *mut c_void = std::ptr::null_mut();
+    if unsafe { readback.Map(0, Some(&read_range), Some(&mut rmap)) }.is_err() || rmap.is_null() {
+        return false;
+    }
+    let mut umap: *mut c_void = std::ptr::null_mut();
+    if unsafe { upload.Map(0, None, Some(&mut umap)) }.is_err() || umap.is_null() {
+        let empty = D3D12_RANGE { Begin: 0, End: 0 };
+        unsafe { readback.Unmap(0, Some(&empty)) };
+        return false;
+    }
+    {
+        let rb_bytes = unsafe { std::slice::from_raw_parts(rmap as *const u8, total) };
+        let up_bytes = unsafe { std::slice::from_raw_parts_mut(umap as *mut u8, total) };
+        let sw = sw as usize;
+        let cw = cw as usize;
+        let ch = ch as usize;
+        for y in 0..ch {
+            let ro = y * row_pitch;
+            for x in 0..cw {
+                let o = ro + x * 4;
+                let so = (y * sw + x) * 4;
+                if o + 4 > total || so + 4 > spx.len() {
+                    break;
+                }
+                let a = spx[so + 3] as u32;
+                let ia = 255 - a;
+                // Portrait is RGBA; place each portrait channel at the backbuffer's channel position.
+                let (p0, p2) = if swap {
+                    (spx[so + 2] as u32, spx[so] as u32) // bb pos0=B, pos2=R
+                } else {
+                    (spx[so] as u32, spx[so + 2] as u32) // bb pos0=R, pos2=B
+                };
+                let p1 = spx[so + 1] as u32;
+                let blend = |p: u32, d: u32| ((p * a + d * ia + 127) / 255) as u8;
+                up_bytes[o] = blend(p0, rb_bytes[o] as u32);
+                up_bytes[o + 1] = blend(p1, rb_bytes[o + 1] as u32);
+                up_bytes[o + 2] = blend(p2, rb_bytes[o + 2] as u32);
+                up_bytes[o + 3] = 255;
+            }
+        }
+    }
+    let empty = D3D12_RANGE { Begin: 0, End: 0 };
+    unsafe { readback.Unmap(0, Some(&empty)) };
+    unsafe { upload.Unmap(0, None) };
+
+    // ---- SUBMIT #2: upload buffer -> backbuffer region (COPY_SOURCE -> COPY_DEST -> PRESENT) ----
+    if unsafe { allocator.Reset() }.is_err() || unsafe { list.Reset(allocator, None) }.is_err() {
+        return false;
+    }
+    unsafe {
+        record_transition(
+            list,
+            backbuffer,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
             D3D12_RESOURCE_STATE_COPY_DEST,
         )
     };
-    let src_box = D3D12_BOX {
+    let mut up_src = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(upload.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            PlacedFootprint: footprint,
+        },
+    };
+    let mut bb_dst = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(backbuffer.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            SubresourceIndex: 0,
+        },
+    };
+    let up_box = D3D12_BOX {
         left: 0,
         top: 0,
         front: 0,
@@ -1689,31 +2434,27 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
         bottom: ch,
         back: 1,
     };
-    let mut src_loc = D3D12_TEXTURE_COPY_LOCATION {
-        pResource: ManuallyDrop::new(Some(tex.clone())),
-        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-            SubresourceIndex: 0,
-        },
-    };
-    let mut dst_loc = D3D12_TEXTURE_COPY_LOCATION {
-        pResource: ManuallyDrop::new(Some(backbuffer.clone())),
-        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-            SubresourceIndex: 0,
-        },
-    };
-    unsafe { list.CopyTextureRegion(&dst_loc, dx, dy, 0, &src_loc, Some(&src_box)) };
-    unsafe { ManuallyDrop::drop(&mut src_loc.pResource) };
-    unsafe { ManuallyDrop::drop(&mut dst_loc.pResource) };
+    unsafe { list.CopyTextureRegion(&bb_dst, dx, dy, 0, &up_src, Some(&up_box)) };
+    unsafe { ManuallyDrop::drop(&mut up_src.pResource) };
+    unsafe { ManuallyDrop::drop(&mut bb_dst.pResource) };
     unsafe {
         record_transition(
             list,
-            &backbuffer,
+            backbuffer,
             D3D12_RESOURCE_STATE_COPY_DEST,
             D3D12_RESOURCE_STATE_PRESENT,
         )
     };
+    unsafe { execute_and_wait(queue, list, fence) }
+}
+
+/// Close `list`, execute it on `queue`, signal `fence` with a fresh monotonic value, and CPU-wait (bounded)
+/// for GPU completion. `false` on any failure. Shared by the two-submit CPU-blend composite.
+unsafe fn execute_and_wait(
+    queue: &ID3D12CommandQueue,
+    list: &ID3D12GraphicsCommandList,
+    fence: &ID3D12Fence,
+) -> bool {
     if unsafe { list.Close() }.is_err() {
         return false;
     }
@@ -1738,12 +2479,6 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
         if wait != WAIT_OBJECT_0 {
             return false;
         }
-    }
-    let hits = OVERLAY_DRAW_HITS.fetch_add(1, Ordering::SeqCst) + 1;
-    if hits == 1 {
-        append_autoload_debug(format_args!(
-            "present-overlay: portrait COMPOSITED onto backbuffer {bw}x{bh} (portrait {pw}x{ph} at {dx},{dy})"
-        ));
     }
     true
 }

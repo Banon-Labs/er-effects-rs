@@ -2143,6 +2143,24 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_overlay_reuploads",
             OVERLAY_REUPLOADS.load(Ordering::SeqCst),
         );
+        // DEPTH-KEY transparent-background semaphores: frames where the depth key actually cut out a
+        // background (clean bg/head depth separation + >0 pixels alpha'd to 0), and the last frame's
+        // background-masked fraction in whole percent. A RAM/pixel oracle for the transparent bg cutout.
+        push_json_usize(
+            body,
+            "oracle_depth_key_applied",
+            DEPTH_KEY_APPLIED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_depth_key_bg_pct",
+            DEPTH_KEY_BG_PCT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_depth_key_fresh",
+            DEPTH_KEY_FRESH.load(Ordering::SeqCst),
+        );
         // The draw-tick readback's per-frame republish count (==RGBA version). If ~= render_drive_hits the
         // readback publishes per-frame (so a low overlay_reuploads means the composite upload is the
         // bottleneck); if this is itself ~4 the per-frame readback/publish is.

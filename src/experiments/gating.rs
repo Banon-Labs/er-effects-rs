@@ -101,37 +101,55 @@ pub(crate) fn native_profile_capture_enabled() -> bool {
         .join("er-effects-profile-capture-native.txt")
         .exists()
 }
-/// DEFAULT-OFF diagnostic: force the live profile-portrait 3D model render at the title/menu phase
-/// (where the GxDrawContext is valid), independent of the autoload Continue path. When on, the
-/// recurring task runs `force_profile_render_tick` each menu-phase frame: it marks the target slot
-/// used (`MarkProfileIndexAsUsed`) then calls the argless profile-render refresh to kick the async
-/// model build, and read-only-captures the rendered CSGxTexture once the model latches. Menu-phase
-/// only -- it does NOT commit Continue, so there is no teardown/world-load crash path. Used to prove
-/// P1 (the build) in isolation while the user holds the ProfileSelect/Load-Game screen.
+/// Force the live profile-portrait 3D model render at the title/menu phase (where the GxDrawContext is
+/// valid). The recurring task runs `force_profile_render_tick` each menu-phase frame: it marks the target
+/// slot used (`MarkProfileIndexAsUsed`) then calls the argless profile-render refresh to kick the async
+/// model build, and read-only-captures the rendered CSGxTexture once the model latches. Menu-phase only --
+/// it does NOT commit Continue, so there is no teardown/world-load crash path.
+///
+/// DE-GATED to DEFAULT-ON for real (non-telemetry) runs (user 2026-06-30 "just a feature without a gate";
+/// mirrors the native_continue/pab/splash de-gating precedent
+/// `user-pref-too-many-env-file-gates-default-on-product`): the loading-screen portrait is now product
+/// behavior, so it builds the model on every real autoload run without a staged flag. Master off:
+/// `autoload_disabled()`; telemetry-only/native-capture runs stay off; env/file remain force-on overrides.
 pub(crate) fn force_profile_render_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_FORCE_PROFILE_RENDER").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-force-profile-render.txt")
-        .exists()
+    if autoload_disabled() || native_profile_capture_enabled() {
+        return false;
+    }
+    !save_override_telemetry_only()
+        || matches!(
+            std::env::var("ER_EFFECTS_FORCE_PROFILE_RENDER").as_deref(),
+            Ok("1")
+        )
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-force-profile-render.txt")
+            .exists()
 }
 /// DEFAULT-OFF gate for the live-portrait D3D12 readback. When on, the moment
 /// `maybe_capture_portrait_gxtexture` pins the rendered offscreen `CSGxTexture`
 /// (`LOADING_BG_PORTRAIT_GX_KEPT`), the DLL reads back that render target into CPU RGBA8
 /// (`readback_offscreen_rgba8`) and stores it in `LOADING_BG_PORTRAIT_RGBA`, so the now-loading forge
 /// can build its TPF from the REAL rendered character head instead of the magenta/yellow checker
-/// placeholder. OFF by default -- with neither this nor `force_profile_render` set, the behavior is
-/// byte-identical to the proven checker path. Mirrors `force_profile_render_enabled` (env OR file).
+/// placeholder. It also drives the 1024x1024 higher-res offscreen upsize (the size-table patch is gated on
+/// this), so the portrait renders at full resolution instead of the 128x2 = 256 default.
+///
+/// DE-GATED to DEFAULT-ON for real (non-telemetry) runs (user 2026-06-30 "just a feature without a gate";
+/// mirrors the de-gating precedent `user-pref-too-many-env-file-gates-default-on-product`). Master off:
+/// `autoload_disabled()`; telemetry-only/native-capture runs stay off; env/file remain force-on overrides.
 pub(crate) fn portrait_real_pixels_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_PORTRAIT_REAL_PIXELS").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-portrait-real-pixels.txt")
-        .exists()
+    if autoload_disabled() || native_profile_capture_enabled() {
+        return false;
+    }
+    !save_override_telemetry_only()
+        || matches!(
+            std::env::var("ER_EFFECTS_PORTRAIT_REAL_PIXELS").as_deref(),
+            Ok("1")
+        )
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-portrait-real-pixels.txt")
+            .exists()
 }
 /// DEFAULT-OFF gate for the RENDER-THREAD offscreen drive (the keepalive keystone). When on, the
 /// Present hook (`present_hook`, render thread, every frame, fires during the loading screen) drives the
@@ -140,31 +158,53 @@ pub(crate) fn portrait_real_pixels_enabled() -> bool {
 /// RENDERED into the offscreen RT after the menu's own render driver dies post-Continue. Without this the
 /// model builds but is never drawn -> the RT holds a placeholder checker (oracle_loading_bg_portrait_is_
 /// checker=True). The game-task drive renders BLACK / crashes (wrong thread + frame phase); the render
-/// thread inside the Present hook is the surviving point. OFF by default (risky: GX pool/sub-ctx phase at
-/// Present time is unproven) -- enable explicitly to validate. Mirrors the env OR file pattern.
+/// thread inside the Present hook is the surviving point.
+///
+/// DE-GATED to DEFAULT-ON for real (non-telemetry) runs (user 2026-06-30 "just a feature without a gate";
+/// mirrors the de-gating precedent `user-pref-too-many-env-file-gates-default-on-product`). The earlier
+/// "risky/unproven" caveat is retired: runtime-proven safe across the 2026-06-30 smokes (145-168 per-frame
+/// Present-hook composites, no crash). This also runs the per-frame depth-alpha-key + CPU-blend composite.
+/// Master off: `autoload_disabled()`; telemetry-only/native-capture runs stay off; env/file remain
+/// force-on overrides.
 pub(crate) fn portrait_render_drive_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_PORTRAIT_RENDER_DRIVE").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-portrait-render-drive.txt")
-        .exists()
+    if autoload_disabled() || native_profile_capture_enabled() {
+        return false;
+    }
+    !save_override_telemetry_only()
+        || matches!(
+            std::env::var("ER_EFFECTS_PORTRAIT_RENDER_DRIVE").as_deref(),
+            Ok("1")
+        )
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-portrait-render-drive.txt")
+            .exists()
 }
 /// DEFAULT-OFF gate for the portrait LOOK-AT lever (head/eyes follow the mouse cursor). When on, the
 /// per-tick `force_profile_render_tick` reaches the loaded character's Havok pose holder and rotates the
 /// Head/Neck/Spine2 bone local quaternions toward the cursor (ER eyes are welded to the Head bone, so
-/// the eyes track as the head turns). Isolated from `portrait_real_pixels` so the riskier bone-write
-/// path can be toggled independently of the proven camera/dump path. Mirrors `force_profile_render`
-/// (env OR file). Requires `force_profile_render` (the render that builds the model + drives the pose).
+/// the eyes track as the head turns). Also selects OVERLAY-ONLY display (the live present-overlay owns the
+/// loading-screen surface; the native forge/re-forge is suppressed so there is only ONE head). Requires
+/// `force_profile_render` (the render that builds the model + drives the pose).
+///
+/// DE-GATED to DEFAULT-ON for real (non-telemetry) runs (user 2026-06-30 "just a feature without a gate";
+/// mirrors the de-gating precedent `user-pref-too-many-env-file-gates-default-on-product`). Runtime-proven
+/// safe across the 2026-06-30 smokes. Master off: `autoload_disabled()`; telemetry-only/native-capture
+/// runs stay off; env/file remain force-on overrides. (The zero-input test drivers -- lookat-selftest,
+/// cursor-sweep, force-rebuild -- stay OFF by default; product look-at tracks the real cursor.)
 pub(crate) fn portrait_lookat_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_PORTRAIT_LOOKAT").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-portrait-lookat.txt")
-        .exists()
+    if autoload_disabled() || native_profile_capture_enabled() {
+        return false;
+    }
+    !save_override_telemetry_only()
+        || matches!(
+            std::env::var("ER_EFFECTS_PORTRAIT_LOOKAT").as_deref(),
+            Ok("1")
+        )
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-portrait-lookat.txt")
+            .exists()
 }
 /// DEFAULT-OFF: when set, `force_profile_render_tick` does the DESTRUCTIVE periodic rebuild -- every ~240
 /// ticks it CLEARS each renderer's build latch (+0x754/+0x755) + resets the look-at slot cache, forcing a
