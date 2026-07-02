@@ -136,12 +136,14 @@ pub enum SaveLoadStep {
     Requested,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct GameManTelemetry {
     pub save_slot: i32,
     pub requested_save_slot_load_index: i32,
     pub save_state: u32,
     pub save_requested: bool,
+    pub new_game_plus_requested: bool,
+    pub warp_requested: bool,
 }
 
 pub trait GameManSaveAccess {
@@ -152,6 +154,18 @@ pub trait GameManSaveAccess {
     fn save_state(&self) -> u32;
     fn save_requested(&self) -> bool;
     fn set_save_requested(&mut self, requested: bool);
+    /// `GameMan::new_game_plus_requested` -- set when a New Game (+) is requested; drives the
+    /// new-game intro flow. Read-only snapshot field (a stale `true` after a load would explain a
+    /// post-load bounce into the new-game/title path).
+    fn new_game_plus_requested(&self) -> bool;
+    /// `GameMan::warp_requested` -- the map-move/warp trigger consumed by `MoveMapStep`.
+    fn warp_requested(&self) -> bool;
+    /// Clear/set `GameMan::warp_requested`. The native full deserialize (`0x67b290`) sets this true
+    /// as a "warp reload pending" flag; `MoveMapStep::CheckReturnToTitle` (dump `FUN_140afa7c0`)
+    /// reads it every frame as a return-to-title trigger. A fresh title->world stream (our reload's
+    /// SetState5) never consumes it, so it must be cleared or the freshly-loaded world bounces back
+    /// to the title. Mirrors `SetCallForWarp` (dump `0x14067af90`).
+    fn set_warp_requested(&mut self, requested: bool);
 }
 
 #[cfg(windows)]
@@ -182,6 +196,18 @@ impl GameManSaveAccess for eldenring::cs::GameMan {
 
     fn set_save_requested(&mut self, requested: bool) {
         self.save_requested = requested;
+    }
+
+    fn new_game_plus_requested(&self) -> bool {
+        self.new_game_plus_requested
+    }
+
+    fn warp_requested(&self) -> bool {
+        self.warp_requested
+    }
+
+    fn set_warp_requested(&mut self, requested: bool) {
+        self.warp_requested = requested;
     }
 }
 
@@ -728,6 +754,8 @@ impl GameManTelemetry {
             requested_save_slot_load_index: game_man.requested_save_slot_load_index(),
             save_state: game_man.save_state(),
             save_requested: game_man.save_requested(),
+            new_game_plus_requested: game_man.new_game_plus_requested(),
+            warp_requested: game_man.warp_requested(),
         }
     }
 }
@@ -1082,6 +1110,8 @@ mod tests {
         requested_save_slot_load_index: i32,
         save_state: u32,
         save_requested: bool,
+        new_game_plus_requested: bool,
+        warp_requested: bool,
     }
 
     impl GameManSaveAccess for FakeGameMan {
@@ -1111,6 +1141,18 @@ mod tests {
 
         fn set_save_requested(&mut self, requested: bool) {
             self.save_requested = requested;
+        }
+
+        fn new_game_plus_requested(&self) -> bool {
+            self.new_game_plus_requested
+        }
+
+        fn warp_requested(&self) -> bool {
+            self.warp_requested
+        }
+
+        fn set_warp_requested(&mut self, requested: bool) {
+            self.warp_requested = requested;
         }
     }
 

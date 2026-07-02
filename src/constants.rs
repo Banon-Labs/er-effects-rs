@@ -4441,6 +4441,7 @@ pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static START_SYSTEM_QUIT_CONTINUE_CONFIRM_HOOK: Once = Once::new();
+pub(crate) static START_SYSTEM_QUIT_CHILD_FINISH_TRACE_HOOK: Once = Once::new();
 /// One-shot per armed switch: 0 = the fresh picked-slot deserialize has not yet run for the active
 /// System->Quit switch (reset by `system_quit_arm_quickload_autoload`); 1 = it succeeded and the
 /// confirm may stream. While 0, any confirm during an active switch first drives the deserialize.
@@ -4466,6 +4467,58 @@ pub(crate) static SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT: AtomicUsize 
 /// Native return-title final functor (`FUN_1407a3990` dump -> live/deobf `0x1407a3900`).
 /// It sets `CSMenuMan->menuData+0x5d` and `DAT_143d6c5e8`, which request the real title/menu rebuild.
 pub(crate) const SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_RVA: u32 = 0x7a3900;
+// ---- Return-title "rebuild the title" request flags set by the final functor (0x7a3900) ----
+// The functor does `*(*([GLOBAL_CSMenuMan]+0x8)+0x5d)=1` and `*(0x143d6c5e8)=1`. These are LEVEL
+// flags (not edge-consumed); we set them to tear down the OLD char for the switch, but nothing
+// resets them, so once the reloaded character's world comes up the still-set +0x5d re-requests the
+// quit-to-title -> GameMan.save_requested flips true again (~3.6s post-load, proven by the gm-snap
+// trace) -> a second save + SetState(2) bounces the freshly-loaded world back to the title. We clear
+// both once the reload commits (continue_confirm), which is after the teardown they were needed for.
+/// (`CS_MENU_MAN_GLOBAL_RVA` = `[GLOBAL_CSMenuMan]` pointer global is already defined above.)
+/// `CSMenuManImp::menuData` pointer at CSMenuMan+0x8.
+pub(crate) const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
+/// The "return-to-title / menu-rebuild requested" byte at menuData+0x5d.
+pub(crate) const CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET: usize = 0x5d;
+/// `DAT_143d6c5e8` companion rebuild flag (data RVA). No readers found in the dump, but cleared for
+/// symmetry so we fully undo what the final functor set.
+pub(crate) const RETURN_TITLE_REBUILD_FLAG_DAT_RVA: usize = 0x3d6c5e8;
+// ---- In-game session liveness gate (the post-reload bounce decision, static RE 2026-07-02) ----
+// TitleStep state 6 (STEP_GameStepWait, dump 0x140b0ced0) exits to the quit-to-title transition
+// (SetState(2) -> BeginLogo -> BeginTitle -> MenuJobWait) the first tick it sees
+// `InGameStep->requestCode == 0`. The request-code register (InGameStep+0xd8, int) lifecycle:
+// ctor=0; RequestMoveMap (dump 0x140aebeb0, called by STEP_PlayGame for the initial world load with
+// the map from TitleStep+0xbc) =1; STEP_MoveMap_Update (dump 0x140aec810) =2 when the map move's
+// child MoveMapStep finishes; STEP_RequestWait (dump 0x140aecd00) at ==2 waits for the in-game menu
+// job qword at CSMenuMan+0x798 to be nonzero -- while it IS nonzero the session idles at code 2
+// (the stable in-world state); if that qword reads 0 it writes the request code to 0, which is what
+// STEP_GameStepWait converts into the return-to-title. So a reloaded world only STAYS up if
+// CSMenuMan+0x798 is (re)populated after the load.
+/// `TitleStep::InGameStep` pointer (TitleStep+0x2e8, read by STEP_GameStepWait at dump 0x140b0cee2).
+pub(crate) const TITLE_STEP_IN_GAME_STEP_2E8_OFFSET: usize = 0x2e8;
+/// `InGameStep` request-code register (+0xd8): 0=end session, 1=move-map pending, 2=move done /
+/// stable in-world idle (see block comment above).
+pub(crate) const IN_GAME_STEP_REQUEST_CODE_D8_OFFSET: usize = 0xd8;
+/// In-game menu job pointer at CSMenuMan+0x798 (unnamed in fromsoftware-rs `unk748`); nonzero while
+/// the in-game session's menu job lives. STEP_RequestWait ends the session when it reads 0 at
+/// request code 2.
+pub(crate) const CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET: usize = 0x798;
+/// `CS::EzChildStepBase::RequestFinish` (dump `0x140eb5590` -> live `0x140eb5570`, shift -0x20,
+/// content-unique). One-shot: calls the wrapper's CSSetFinishHelper virtual (which sets the child
+/// step's finish-requested byte at child+0xb4) then latches wrapper+0x10. The quit-to-title
+/// teardown ends the in-world MoveMapStep session through here; the post-switch reload bounce is
+/// this firing against the FRESH MoveMapStep child right after streaming completes. Read-only
+/// trace hook logs every call + caller RVA to identify the stale requester.
+pub(crate) const EZ_CHILD_STEP_REQUEST_FINISH_RVA: u32 = 0xeb5570;
+/// `EzChildStep<MoveMapStep>` wrapper offset inside `InGameStep` (ctor dump 0x140aeabf3).
+pub(crate) const IN_GAME_STEP_MOVE_MAP_WRAPPER_E0_OFFSET: usize = 0xe0;
+/// `EzChildStep<InGameStayStep>` wrapper offset inside `InGameStep` (ctor dump 0x140aeabc3).
+pub(crate) const IN_GAME_STEP_STAY_WRAPPER_B8_OFFSET: usize = 0xb8;
+/// `EzChildStepBase::stepper` (the owned child step object) at wrapper+0x8; the finish latch byte
+/// is wrapper+0x10 and the CSSetFinishHelper pointer wrapper+0x18 (dump 0x140eb5590 decompile).
+pub(crate) const EZ_CHILD_STEP_STEPPER_OFFSET: usize = 0x8;
+pub(crate) static SYSTEM_QUIT_CHILD_FINISH_TRACE_ORIG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_CHILD_FINISH_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_CHILD_FINISH_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Native builder for a MenuJob wrapping the final return-title functor (`FUN_14079f780` dump ->
 /// live/deobf `0x14079f690`). Submit this job through the native queue so the flag transition happens
 /// in menu-pump ownership, not from our game-task thread.
@@ -4741,7 +4794,29 @@ pub(crate) const SQ_REPRO_STATE_TO_PROFILE: usize = 3;
 pub(crate) const SQ_REPRO_STATE_TO_SLOT: usize = 4;
 pub(crate) const SQ_REPRO_STATE_CONFIRM: usize = 5;
 pub(crate) const SQ_REPRO_STATE_DONE: usize = 6;
+/// Between two back-to-back switches: after a switch's OK is confirmed, wait here for THAT switch's
+/// reload to commit (fresh-deser count reached) and the NEW world to be up + settled, then re-arm
+/// the state machine (clear the per-switch window/cursor/confirm signals) and drive the next switch.
+/// Distinct from DONE so `block_input_enabled`/`xinput_get_state_hook` keep the block engaged and the
+/// fabricated pad driving across the reload (they gate on `!= DONE`).
+pub(crate) const SQ_REPRO_STATE_WAIT_RELOAD: usize = 7;
 pub(crate) static SQ_REPRO_STATE: AtomicUsize = AtomicUsize::new(SQ_REPRO_STATE_WAIT_WORLD);
+/// Which back-to-back switch the autopilot is driving (0-based). Switch `i` loads
+/// `SQ_REPRO_TARGET_SLOTS[i]`. Proves the feature can load N different characters after one startup.
+pub(crate) static SQ_REPRO_SWITCH_INDEX: AtomicUsize = AtomicUsize::new(0);
+/// How many back-to-back harness-driven switches to drive (goal: two loads of DIFFERENT characters
+/// after a single startup). Bounded by `SQ_REPRO_TARGET_SLOTS.len()`.
+pub(crate) const SQ_REPRO_TARGET_SWITCHES: usize = 2;
+/// The explicit ProfileSelect slot each switch loads. These are the two REAL, distinct characters in
+/// the pinned gold save (25-Invades-patches): slot 4 = 'Speed Bean', slot 5 = 'Patches' (bd
+/// system-quit-switch-loads-original-not-picked-rootcause-2026-07-02). The autopilot drives the
+/// ProfileSelect cursor to the exact target (not "one off current"), so switch #2 lands on a real
+/// character regardless of which slot the reload made current.
+pub(crate) const SQ_REPRO_TARGET_SLOTS: [i32; 2] = [4, 5];
+/// Baseline of (confirmed_block + confirmed_allow) counts captured at each switch's start, so the
+/// CONFIRM state detects THIS switch's OK as an increase over the baseline rather than a cumulative
+/// `!= 0` (which switch #2 would trip immediately on switch #1's residual count).
+pub(crate) static SQ_REPRO_CONFIRM_BASELINE: AtomicUsize = AtomicUsize::new(0);
 /// Game-task tick counter within the current repro state (reset to 0 on each state transition). The
 /// per-phase edge index is `tick / INJECT_NAV_CYCLE`; the injected edge hold/gap timing REUSES the
 /// RE-grounded own_stepper nav constants (edge-triggered menu nav needs a multi-frame hold to
@@ -5176,6 +5251,10 @@ pub(crate) static TITLE_ANIM_SPEED_HOOK_INSTALLED: AtomicUsize = AtomicUsize::ne
 pub(crate) static TITLE_SETSTATE_TRACE_ORIG: AtomicUsize = AtomicUsize::new(0);
 /// One-shot guard for installing the title step-setter trace hook.
 pub(crate) static TITLE_SETSTATE_TRACE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Last owner (TitleStep) pointer seen by the SetState trace detour. The detour fires from the
+/// FIRST title transition (~+12s), long before the TITLE_OWNER_PTR scan caches it (~+31s), so the
+/// gm-snap session-liveness sampler falls back to this to cover the BOOT load window.
+pub(crate) static TITLE_SETSTATE_TRACE_LAST_OWNER: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SUBMIT_PLAY_GAME_PHASE: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(SUBMIT_PHASE_INIT);
 pub(crate) static FORCE_PLAY_GAME_LAST_STATE: std::sync::atomic::AtomicI32 =

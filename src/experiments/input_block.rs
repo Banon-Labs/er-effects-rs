@@ -80,13 +80,31 @@ pub(crate) fn stay_active_enabled() -> bool {
 /// mouse (move/click), or gamepad input may reach the game even if the user focuses the
 /// window. Auto-on whenever the own-stepper drives the front-end (the whole point of that
 /// probe is a zero-input load), plus an explicit env/file override for standalone use.
+/// The System->Quit repro autopilot is ACTIVELY DRIVING MENUS (issuing button edges): every state
+/// except the waits and DONE. During the between-switch reload (WAIT_RELOAD) the autopilot injects
+/// nothing (set_pad 0) and must NOT fabricate a live pad or hold the block past in-world, because a
+/// fabricated connected pad fed through the title->world advance bounces the reload back to the
+/// front-end/title (observed: switch #1's SetState5 loaded the char then the game jumped to 01_000_FE
+/// + SetState 2/3/10 = press-any-button softlock). Treating WAIT_RELOAD like DONE makes the reload
+/// byte-identical to the proven single-switch case (block falls through to the autoload_armed
+/// path, which blocks until in-world with no pad fabrication); the block re-engages at the next
+/// switch's OPEN_MENU. WAIT_WORLD (boot) keeps blocking so the first switch behaves as before.
+pub(crate) fn sq_repro_actively_driving() -> bool {
+    if !system_quit_repro_enabled() {
+        return false;
+    }
+    let state = SQ_REPRO_STATE.load(Ordering::SeqCst);
+    state != SQ_REPRO_STATE_DONE && state != SQ_REPRO_STATE_WAIT_RELOAD
+}
+
 pub(crate) fn block_input_enabled() -> bool {
     // SYSTEM-QUIT REPRO AUTOPILOT: keep the block engaged in-world (past the normal in-world
-    // release) while the self-driven repro is running, so the real keyboard/mouse/gamepad are
-    // zeroed and the ONLY input is the fabricated XInput pad (`xinput_get_state_hook` writes the
-    // autopilot's `SQ_REPRO_XINPUT_BUTTONS` each poll) -- no human press can contaminate the
-    // reproduction. Releases once the autopilot reaches DONE, handing control back.
-    if system_quit_repro_enabled() && SQ_REPRO_STATE.load(Ordering::SeqCst) != SQ_REPRO_STATE_DONE {
+    // release) while the self-driven repro is ACTIVELY driving menus, so the real
+    // keyboard/mouse/gamepad are zeroed and the ONLY input is the fabricated XInput pad
+    // (`xinput_get_state_hook` writes the autopilot's `SQ_REPRO_XINPUT_BUTTONS` each poll) -- no human
+    // press can contaminate the reproduction. Releases at DONE and during the between-switch reload
+    // (WAIT_RELOAD, see sq_repro_actively_driving) so the reload completes exactly like a single switch.
+    if sq_repro_actively_driving() {
         return true;
     }
     // FORCE-BLOCK override (env/file): block UNCONDITIONALLY, even past menu-open. Used to
@@ -190,8 +208,9 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
         // user's controller sequence, written to SQ_REPRO_XINPUT_BUTTONS every game-task frame) and
         // own_stepper title nav via inject_nav. Either replaces the (blocked) real pad so the game
         // reads our synthesized buttons.
-        let sq_repro = system_quit_repro_enabled()
-            && SQ_REPRO_STATE.load(Ordering::SeqCst) != SQ_REPRO_STATE_DONE;
+        // Only fabricate the pad while ACTIVELY driving menus; during WAIT_RELOAD/DONE the reload
+        // must not see a synthesized live pad (it bounces the title->world advance back to the FE).
+        let sq_repro = sq_repro_actively_driving();
         let inject_nav = inject_nav_enabled()
             && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO;
         if sq_repro || inject_nav {

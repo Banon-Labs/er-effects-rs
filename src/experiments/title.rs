@@ -1018,6 +1018,9 @@ pub(crate) unsafe fn install_title_anim_speed_hook(base: usize) {
 /// risking a forced SetState (which has NO double-build guard). bd menu-build-overlap-lever-2026-06-24.
 pub(crate) unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i32) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if owner > PAB_MIN_HEAP_PTR {
+            TITLE_SETSTATE_TRACE_LAST_OWNER.store(owner, Ordering::SeqCst);
+        }
         let dialog = if owner > PAB_MIN_HEAP_PTR {
             unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(0)
         } else {

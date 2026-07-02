@@ -7384,6 +7384,41 @@ fn sq_repro_waiting_once(msg: &str) {
     }
 }
 
+/// Cumulative ProfileSelect OK-confirm count (cancel-close BLOCK + ALLOW). The CONFIRM state watches
+/// for an INCREASE over the per-switch baseline so switch #2 does not trip on switch #1's residual.
+fn sq_repro_confirm_count() -> usize {
+    SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT.load(Ordering::SeqCst)
+        + SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.load(Ordering::SeqCst)
+}
+
+/// The ProfileSelect slot the current switch loads (clamped to the target table).
+fn sq_repro_target_slot() -> i32 {
+    let i = SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst);
+    SQ_REPRO_TARGET_SLOTS[i.min(SQ_REPRO_TARGET_SLOTS.len() - 1)]
+}
+
+/// How many back-to-back switches to drive. Defaults to `SQ_REPRO_TARGET_SWITCHES` (2); overridable
+/// via `ER_EFFECTS_SQ_REPRO_SWITCHES` (clamped to [1, target-table length]) so a 1-switch baseline
+/// can be run with the identical code path to isolate the two-switch regression.
+fn sq_repro_target_switches() -> usize {
+    let n = std::env::var("ER_EFFECTS_SQ_REPRO_SWITCHES")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(SQ_REPRO_TARGET_SWITCHES);
+    n.clamp(1, SQ_REPRO_TARGET_SLOTS.len())
+}
+
+/// Enter a switch: capture the confirm-count baseline and clear the per-switch menu-window/cursor
+/// signals so the state machine re-detects them fresh for this switch (they hold stale pointers from
+/// the prior switch otherwise). Called before OPEN_MENU for every switch.
+fn sq_repro_begin_switch() {
+    SQ_REPRO_CONFIRM_BASELINE.store(sq_repro_confirm_count(), Ordering::SeqCst);
+    SYSTEM_QUIT_INGAME_TOP_WINDOW.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_OPTION_SETTING_WINDOW.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
+    SQ_REPRO_INITIAL_CURSOR.store(usize::MAX, Ordering::SeqCst);
+}
+
 /// Fabricated gamepad wButtons for a phase that issues a FIXED list of button edges ONCE, in order,
 /// then holds. `tick` is phase-local; each edge occupies one `INJECT_NAV_CYCLE` (the RE-grounded
 /// edge hold+gap -- edge-triggered menu nav needs a multi-frame hold to register one step). Returns
@@ -7427,8 +7462,12 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             set_pad(0);
             let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
             if in_world && tick >= SQ_REPRO_WORLD_SETTLE_TICKS {
+                sq_repro_begin_switch();
                 append_autoload_debug(format_args!(
-                    "sq-repro: in-world settled ({SQ_REPRO_WORLD_SETTLE_TICKS} ticks) -> OPEN_MENU; START (XInput 0x{XINPUT_GAMEPAD_START:04x}) to open the escape/system menu"
+                    "sq-repro: in-world settled ({SQ_REPRO_WORLD_SETTLE_TICKS} ticks) -> OPEN_MENU switch #{}/{} target_slot={}; START (XInput 0x{XINPUT_GAMEPAD_START:04x}) to open the escape/system menu",
+                    SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst) + 1,
+                    sq_repro_target_switches(),
+                    sq_repro_target_slot()
                 ));
                 sq_repro_transition(SQ_REPRO_STATE_OPEN_MENU);
             } else if !in_world {
@@ -7495,46 +7534,49 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             set_pad(btn);
         }
         SQ_REPRO_STATE_TO_SLOT => {
+            // Drive the ProfileSelect cursor to THIS switch's EXPLICIT target slot (not "one off
+            // current"), so switch #2 lands on a real, distinct character regardless of which slot the
+            // prior reload made current. DOWN increments the cursor index, UP decrements (verified:
+            // switch #1 UP moved cursor 5->4). Recompute the direction each frame so an overshoot
+            // self-corrects. Stop + CONFIRM when the cursor equals the target.
             let dialog = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
             let cursor = if dialog != 0 && dialog != TITLE_OWNER_SCAN_START_ADDRESS {
                 unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }.unwrap_or(-1)
             } else {
                 -1
             };
-            let initial = SQ_REPRO_INITIAL_CURSOR.load(Ordering::SeqCst);
-            if initial == usize::MAX {
-                // Capture the current save's cursor (the slot ProfileSelect defaults to), then reset
-                // the phase clock so the single move edge issues cleanly from tick 0.
-                if cursor >= 0 {
-                    SQ_REPRO_INITIAL_CURSOR.store(cursor as usize, Ordering::SeqCst);
-                    SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
-                    append_autoload_debug(format_args!(
-                        "sq-repro: TO_SLOT initial ProfileSelect cursor={cursor} (current save) -- one move off it"
-                    ));
-                }
+            let target = sq_repro_target_slot();
+            if cursor < 0 {
+                // ProfileSelect not fully built yet; hold neutral.
                 set_pad(0);
                 return;
             }
-            if cursor >= 0 && cursor as usize != initial {
+            if cursor == target {
                 append_autoload_debug(format_args!(
-                    "sq-repro: ProfileSelect cursor={cursor} != current={initial} (NON-current save selected) -> CONFIRM (A, A)"
+                    "sq-repro: ProfileSelect cursor={cursor} == target_slot={target} (switch #{}) -> CONFIRM (A, A)",
+                    SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst) + 1
                 ));
                 set_pad(0);
                 sq_repro_transition(SQ_REPRO_STATE_CONFIRM);
                 return;
             }
-            // Exactly one deterministic edge: DOWN if the current save is the top slot (0), else UP.
-            // Either lands on a valid NON-current slot given the multi-slot save (>= 2 filled).
-            let dir = if initial == 0 {
+            let dir = if cursor < target {
                 XINPUT_GAMEPAD_DPAD_DOWN
             } else {
                 XINPUT_GAMEPAD_DPAD_UP
             };
-            let (btn, holding) = sq_repro_edges(tick, &[dir]);
-            if holding {
-                sq_repro_waiting_once(
-                    "TO_SLOT: move issued, waiting for the cursor to leave the current save",
-                );
+            // Step one clean edge per INJECT_NAV_CYCLE toward the target (tap then gap = one cursor
+            // step); keep stepping until cursor == target. No fixed edge budget -- advance on the
+            // observed cursor value, so a missed step just re-issues next cycle.
+            let btn = if (tick % INJECT_NAV_CYCLE) < INJECT_NAV_TAP_LEN {
+                dir
+            } else {
+                INJECT_NAV_NO_BUTTONS
+            };
+            if tick % (INJECT_NAV_CYCLE * 8) == 0 {
+                append_autoload_debug(format_args!(
+                    "sq-repro: TO_SLOT stepping cursor={cursor} -> target_slot={target} dir=0x{dir:04x}"
+                ));
             }
             set_pad(btn);
         }
@@ -7547,17 +7589,29 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             // before the OK press lands (the dialog then sits waiting). The natural tap+gap between
             // the two edges lets the OK dialog open before the second A. On confirm, release the
             // block; the native pump drives the cancel-close -> return-title -> autoload.
-            if SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT.load(Ordering::SeqCst) != 0
-                || SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.load(Ordering::SeqCst) != 0
-            {
+            if sq_repro_confirm_count() > SQ_REPRO_CONFIRM_BASELINE.load(Ordering::SeqCst) {
+                let switch_index = SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst);
+                let more = switch_index + 1 < sq_repro_target_switches();
                 append_autoload_debug(format_args!(
-                    "sq-repro: OK clicked -- load CONFIRMED (confirmed_block={} confirmed_allow={} activate={}). SELF-DRIVE COMPLETE; releasing block, native pump drives cancel-close + return-title + autoload.",
+                    "sq-repro: OK clicked -- switch #{}/{} load CONFIRMED (confirmed_block={} confirmed_allow={} activate={} baseline={}). {}",
+                    switch_index + 1,
+                    sq_repro_target_switches(),
                     SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT.load(Ordering::SeqCst),
                     SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.load(Ordering::SeqCst),
-                    SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst)
+                    SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst),
+                    SQ_REPRO_CONFIRM_BASELINE.load(Ordering::SeqCst),
+                    if more {
+                        "native pump drives cancel-close + return-title + reload; then WAIT_RELOAD -> next switch"
+                    } else {
+                        "SELF-DRIVE COMPLETE; releasing block, native pump drives cancel-close + return-title + autoload"
+                    }
                 ));
                 set_pad(0);
-                SQ_REPRO_STATE.store(SQ_REPRO_STATE_DONE, Ordering::SeqCst);
+                if more {
+                    sq_repro_transition(SQ_REPRO_STATE_WAIT_RELOAD);
+                } else {
+                    SQ_REPRO_STATE.store(SQ_REPRO_STATE_DONE, Ordering::SeqCst);
+                }
                 return;
             }
             let (btn, holding) = sq_repro_edges(tick, &[XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_A]);
@@ -7565,6 +7619,53 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 sq_repro_waiting_once("CONFIRM: A (pick), A (OK) issued, waiting for load-confirm");
             }
             set_pad(btn);
+        }
+        SQ_REPRO_STATE_WAIT_RELOAD => {
+            // Between two back-to-back switches. Hold neutral while THIS switch's reload runs
+            // (return-title tears down the old world, clean-title continue_confirm drives the fresh
+            // picked-slot deserialize, SetState5 streams the new world). Advance to the next switch
+            // only once the reload has COMMITTED (fresh-deser count reached this switch's number) AND
+            // the NEW world is up (local player present) AND it has settled. Settle is counted from
+            // the moment both hold (tick reset while the world is still down/loading), so it settles
+            // the NEW world, not the residual old one.
+            set_pad(0);
+            let switch_index = SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst);
+            let expected_deser = switch_index + 1;
+            let deser = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+            let player_up = unsafe { PlayerIns::local_player_mut() }.is_ok();
+            // PlayerIns-present alone is a LOADING-SCREEN/TITLE FALSE POSITIVE (PlayerIns exists during
+            // the reload before the world is interactive -- observed: driving switch #2 on that signal
+            // pressed START at the title's PRESS ANY BUTTON and stalled). Require the reload committed
+            // (fresh-deser), the player present, AND the engine NOT on a loading screen: the in-world
+            // NowLoading streaming latch is clear AND the menu->world transition cover is not visible.
+            // Only then is the game in the genuinely interactive world where START opens the escape menu.
+            let base = game_rva(0).unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+            let loading = base == TITLE_OWNER_SCAN_START_ADDRESS
+                || unsafe { now_loading_active(base) }
+                || unsafe { fake_loading_screen_visible(base) };
+            if deser < expected_deser || !player_up || loading {
+                // Still tearing down / at title / streaming: hold the settle clock at 0 so it starts
+                // only when the NEW world is up AND interactive (not a loading-screen false positive).
+                SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
+                sq_repro_waiting_once(
+                    "WAIT_RELOAD: waiting for reload commit (fresh-deser) + interactive world (player present, now_loading==0, no transition cover)",
+                );
+                return;
+            }
+            if tick >= SQ_REPRO_WORLD_SETTLE_TICKS {
+                let next = switch_index + 1;
+                SQ_REPRO_SWITCH_INDEX.store(next, Ordering::SeqCst);
+                sq_repro_begin_switch();
+                append_autoload_debug(format_args!(
+                    "sq-repro: switch #{}/{} reload committed (fresh_deser={deser}) + new world settled -> arming switch #{}/{} target_slot={}; OPEN_MENU",
+                    switch_index + 1,
+                    sq_repro_target_switches(),
+                    next + 1,
+                    sq_repro_target_switches(),
+                    sq_repro_target_slot()
+                ));
+                sq_repro_transition(SQ_REPRO_STATE_OPEN_MENU);
+            }
         }
         _ => {
             set_pad(0);
@@ -7673,6 +7774,18 @@ unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, source: &str) {
     // fresh deserialize of THIS switch's picked slot before it streams (the hook itself is installed
     // unconditionally at attach; see install_system_quit_continue_confirm_hook).
     SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(0, Ordering::SeqCst);
+    // Re-arm the return-title one-shots so EVERY switch (not just the first) tears the world down.
+    // Both are consumed by the first switch and never reset otherwise, so a second switch in the same
+    // session would skip the native return-title REQUEST (`== 0` gate, sets saveRequested+bc4=1) and
+    // the final-functor submit (compare_exchange 0->1 gate), leaving the second switch stuck in-world.
+    // Resetting them here (the per-switch arm point) is the durable fix for repeatable switching
+    // (er-effects-rs-qwj). SUBMIT_COUNT is intentionally NOT reset: title.rs uses it as a `> 0` enable
+    // and it re-increments before the final functor needs it.
+    // BISECT 2026-07-02: these two resets regressed even the SINGLE-switch reload (base f59b2af
+    // passes, adding them causes a SECOND title bounce after the load / new-game flash). Disabled
+    // while isolating; a switch-#2-safe re-arm will be reinstated once the mechanism is understood.
+    // SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.store(0, Ordering::SeqCst);
+    // SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.store(selected_slot as usize, Ordering::SeqCst);
     SYSTEM_QUIT_QUICKLOAD_PHASE.store(SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED, Ordering::SeqCst);
     OWN_STEPPER_SLOT.store(selected_slot, Ordering::SeqCst);
@@ -8017,8 +8130,74 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 let n = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
                     .fetch_add(1, Ordering::SeqCst)
                     + 1;
+                // LOAD COMMITTED -> get out of the way. The forwarded continue_confirm below fires
+                // SetState5, which streams the picked character. Return the switch machine to IDLE so
+                // the product-core autoload's switch branch STOPS (title.rs: it keeps arming
+                // GameMan+0xb78 = an in-world MoveMapStep load of the slot, and keeps re-driving the
+                // title, while phase >= RETURN_TITLE_REQUESTED). Left armed, that redundant b78 load
+                // competes with this SetState5 stream, stalls the title owner at state 6, and bounces
+                // the freshly-loaded world back to the title ~4s later (the post-load instability the
+                // earlier single-switch milestone missed -- it tore down before the bounce). IDLE also
+                // makes the in-world load guards inert (they gate on [CONFIRMED, AUTOLOAD_HANDOFF)), so
+                // the native world stream is unobstructed, and leaves the session clean for the next
+                // switch (also the durable fix for the post-switch hygiene issue er-effects-rs-qwj).
+                SYSTEM_QUIT_QUICKLOAD_PHASE
+                    .store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
+                // CLEAR the stale in-world load arm. product-core armed GameMan+0xb78 = slot MANY
+                // times before this confirm (title.rs, phase 3-4). Phase -> IDLE stops FURTHER arming
+                // but leaves b78 = slot RESIDENT; once our SetState5 world comes up, the in-world
+                // MoveMapStep loader reads that stale b78 and fires a REDUNDANT second load of the same
+                // slot -> a second CSGaitemImp::Deserialize with the free-queue already populated by
+                // our load -> the 0x67141a exhaustion crash (observed +41705ms). With phase IDLE the
+                // in-world guards are inert, so clear b78 to -1 (native "no requested slot") ourselves.
+                if gm != TITLE_OWNER_SCAN_START_ADDRESS {
+                    unsafe {
+                        *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) =
+                            OWN_STEPPER_SLOT_NONE;
+                    }
+                }
+                // CLEAR the return-title "rebuild the title" request flags the final functor set for
+                // this switch's teardown. They are LEVEL flags nothing resets, so once the reloaded
+                // world comes up the still-set menuData+0x5d re-requests the quit-to-title
+                // (GameMan.save_requested flips true again ~3.6s later, proven by gm-snap) and bounces
+                // the freshly-loaded world back to the title. The teardown they were needed for is done
+                // by now (we are at the clean-title Continue), so undo them.
+                let menu_man = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
+                    .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+                if menu_man != TITLE_OWNER_SCAN_START_ADDRESS
+                    && unsafe { is_heap_aligned_ptr(menu_man) }
+                {
+                    if let Some(menu_data) =
+                        unsafe { safe_read_usize(menu_man + CS_MENU_MAN_MENU_DATA_OFFSET) }
+                    {
+                        if menu_data != TITLE_OWNER_SCAN_START_ADDRESS
+                            && unsafe { is_heap_aligned_ptr(menu_data) }
+                        {
+                            unsafe {
+                                *((menu_data + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET)
+                                    as *mut u8) = 0;
+                            }
+                        }
+                    }
+                }
+                unsafe { *((base + RETURN_TITLE_REBUILD_FLAG_DAT_RVA) as *mut u8) = 0 };
+                // Also clear GameMan.save_requested defensively (typed): the return-title REQUEST set
+                // it for the teardown; a residual true would drive an immediate quit-save on the reload.
+                // AND clear GameMan.warp_requested: the fresh full deserialize we just ran (native
+                // parser 0x67b290 = dump FUN_14067b380) UNCONDITIONALLY sets warp_requested=true as a
+                // "warp reload pending" flag. On the normal in-world load the MoveMapStep warp machine
+                // consumes it, but our SetState5 forward is a fresh title->world stream that never does;
+                // MoveMapStep::CheckReturnToTitle (dump FUN_140afa7c0) then reads warp_requested==true
+                // every frame as a return-to-title trigger and bounces the freshly-loaded world back to
+                // the title ~4s later (proven: gm-snap shows warp_requested=true for the whole reloaded
+                // world vs false on the healthy boot load). warp_requested=false is the correct in-world
+                // steady state, so clearing it matches the boot load and does not affect which char loads.
+                if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
+                    er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
+                    er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
+                }
                 append_autoload_debug(format_args!(
-                    "system-quit-quickload: fresh picked-slot deserialize OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams the PICKED character"
+                    "system-quit-quickload: fresh picked-slot deserialize OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase -> IDLE + cleared GameMan+0xb78=-1 + cleared return-title rebuild flags (menuData+0x5d, DAT, save_requested, warp_requested) so the loaded world stays (no b78 redundant-load crash, no post-load quit-to-title bounce)"
                 ));
             } else {
                 let n = SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
@@ -8087,6 +8266,99 @@ pub(crate) fn install_system_quit_continue_confirm_hook() {
         }
         Err(status) => append_autoload_debug(format_args!(
             "system-quit-quickload: MhHook::new continue_confirm guard failed: {status:?}"
+        )),
+    }
+}
+
+/// READ-ONLY trace on `EzChildStepBase::RequestFinish` (`EZ_CHILD_STEP_REQUEST_FINISH_RVA`). The
+/// quit-to-title teardown ends the in-world MoveMapStep session through this one-shot; the
+/// post-switch reload bounce is the SAME call arriving against the freshly-created MoveMapStep
+/// child right after streaming completes. Logs which InGameStep child wrapper is being finished
+/// (stay/movemap) plus the first game-image caller RVA, so the stale requester can be identified.
+pub(crate) unsafe extern "system" fn system_quit_child_finish_request_hook(wrapper: usize) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let n = SYSTEM_QUIT_CHILD_FINISH_TRACE_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 64 {
+            let mut owner = TITLE_OWNER_PTR.load(Ordering::SeqCst);
+            if owner == TITLE_OWNER_SCAN_START_ADDRESS {
+                owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
+            }
+            let ig = if owner != TITLE_OWNER_SCAN_START_ADDRESS {
+                unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }.unwrap_or(0)
+            } else {
+                0
+            };
+            let kind = if ig != 0 && wrapper == ig + IN_GAME_STEP_MOVE_MAP_WRAPPER_E0_OFFSET {
+                "MOVEMAP-CHILD"
+            } else if ig != 0 && wrapper == ig + IN_GAME_STEP_STAY_WRAPPER_B8_OFFSET {
+                "stay-child"
+            } else {
+                "other"
+            };
+            let child =
+                unsafe { safe_read_usize(wrapper + EZ_CHILD_STEP_STEPPER_OFFSET) }.unwrap_or(0);
+            let caller_rva = crate::crashlog::trace_first_game_caller_rva();
+            append_autoload_debug(format_args!(
+                "child-finish-request #{n}: kind={kind} wrapper=0x{wrapper:x} child=0x{child:x} ig=0x{ig:x} caller_rva=0x{caller_rva:x}"
+            ));
+        }
+    }));
+    let orig = SYSTEM_QUIT_CHILD_FINISH_TRACE_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return;
+    }
+    let original: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(orig) };
+    unsafe { original(wrapper) }
+}
+
+pub(crate) fn install_system_quit_child_finish_trace_hook() {
+    if SYSTEM_QUIT_CHILD_FINISH_TRACE_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "child-finish-request: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(EZ_CHILD_STEP_REQUEST_FINISH_RVA) else {
+        append_autoload_debug(format_args!(
+            "child-finish-request: failed to resolve rva 0x{EZ_CHILD_STEP_REQUEST_FINISH_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_child_finish_request_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_CHILD_FINISH_TRACE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "child-finish-request: queue_enable failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_CHILD_FINISH_TRACE_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "child-finish-request: hooked EzChildStepBase::RequestFinish 0x{addr:x} -- read-only teardown-requester trace armed"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "child-finish-request: MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "child-finish-request: MhHook::new failed: {status:?}"
         )),
     }
 }

@@ -423,6 +423,15 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
             .spawn(install_system_quit_continue_confirm_hook);
     });
 
+    // READ-ONLY teardown-requester trace: EzChildStepBase::RequestFinish. Identifies WHO requests
+    // the in-world MoveMapStep child's finish -- the post-switch reload bounce is a stale finish
+    // request hitting the freshly-created map session (er-effects-rs-qwj investigation).
+    START_SYSTEM_QUIT_CHILD_FINISH_TRACE_HOOK.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("er-effects-system-quit-child-finish-trace".to_owned())
+            .spawn(install_system_quit_child_finish_trace_hook);
+    });
+
     // MenuWindow latch: install the SceneObjProxy ctor hook (0x14074a700) as early as the
     // splash-skip / online-disable patches, from a thread, so it lands BEFORE the title state
     // machine builds the title dialog during boot. On each VALID call it latches rdx (the engine-
@@ -562,6 +571,13 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     enforce_input_block_now();
                 } else {
                     release_input_block_now();
+                }
+                // GameMan field transition trace (change-detected): captures the STABLE boot-load
+                // trajectory and the BOUNCE switch-load trajectory in one run so they can be diffed to
+                // find which GameMan field re-triggers the title post-load. Runs every frame; the
+                // change-detection makes it a compact transition log. Product-autoload runs only.
+                if product_autoload_enabled() {
+                    snapshot_game_man_on_change();
                 }
                 // SELF-DRIVEN System->Quit->Load-Profile repro autopilot: stamps this frame's
                 // scripted DInput key (no-op unless system_quit_repro_enabled + in-world). Runs
