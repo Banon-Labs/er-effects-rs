@@ -89,6 +89,8 @@ pub(crate) static OVERLAY_REUPLOADS: AtomicUsize = AtomicUsize::new(0);
 /// Latches once the in-world NowLoading streaming screen has been seen, so we can detect world-ready
 /// (NowLoading seen, then both loading signals down) and stop compositing once the player is in the world.
 static OVERLAY_NOW_LOADING_SEEN: AtomicUsize = AtomicUsize::new(0);
+/// One-shot diagnostic when the in-world latch disables the loading portrait overlay.
+static OVERLAY_WORLD_STOP_LOGGED: AtomicUsize = AtomicUsize::new(0);
 
 /// PE image range `[base, base+SizeOfImage)` read from the in-memory PE headers at `base`.
 unsafe fn pe_image_range(base: usize) -> Option<(usize, usize)> {
@@ -2018,6 +2020,14 @@ pub(crate) unsafe fn composite_portrait_on_swapchain(base: usize, swapchain_raw:
 }
 
 unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
+    if IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES {
+        if OVERLAY_WORLD_STOP_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+            append_autoload_debug(format_args!(
+                "present-overlay: stopped compositing loading portrait because player reached world"
+            ));
+        }
+        return false;
+    }
     if PROFILE_BAKE_RGBA_CAPTURED.load(Ordering::SeqCst) == 0 {
         return false;
     }

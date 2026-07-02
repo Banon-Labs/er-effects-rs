@@ -6499,6 +6499,7 @@ unsafe fn system_quit_hide_real_system_windows(base: usize, source: &str) {
 unsafe fn system_quit_reset_profile_select_state(source: &str) {
     SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_TOP_HIDE_TOP_WINDOW.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_TOP_HIDE_PROFILE_WINDOW.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_TOP_HIDE_LIST.store(0, Ordering::SeqCst);
@@ -6550,6 +6551,32 @@ pub(crate) unsafe fn system_quit_submit_direct_return_title_chain(
             ));
         }
         return false;
+    }
+    // Fire the NATIVE return-title REQUEST (FUN_14067a490, live 0x67a3a0) -- the missing piece. It sets
+    // GameMan.saveRequested = true and GameMan+0xbc4 = 1 (== GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY).
+    // WITHOUT it, bc4 stays 0, so (a) the game never recognizes a return-to-title is pending and never
+    // saves+tears down the world, and (b) our final functor (title.rs, gated on bc4==READY) never fires,
+    // leaving the submitted chain job orphaned in a queue that stops being pumped once the menus close.
+    // Observed 2026-07-01: OK -> menus closed but still in-world, same char, functor_call_count=0,
+    // bc4=0, native_quit_action_count=0. The native Quit-Game does this request AND the build+submit
+    // below; we were doing only the build+submit. It is a plain GameMan field write (+ FUN_14080dd00),
+    // safe to call from this menu-pump-owned path. Fire once. See bd
+    // system-quit-loadjob-success-commits-phantom-load-2026-07-01.
+    if SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.load(Ordering::SeqCst) == 0 {
+        match game_rva(SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA) {
+            Ok(req_addr) => {
+                let request_fn: unsafe extern "system" fn() =
+                    unsafe { std::mem::transmute(req_addr) };
+                unsafe { request_fn() };
+                SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.fetch_add(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: native return-title REQUEST fired 0x{req_addr:x} source={source} -- set saveRequested + bc4=1 so the world saves+tears down and the final functor can fire"
+                ));
+            }
+            Err(_) => append_autoload_debug(format_args!(
+                "system-quit-quickload: return-title request rva 0x{SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA:x} unresolved source={source}"
+            )),
+        }
     }
     let Ok(builder_addr) = game_rva(SYSTEM_QUIT_RETURN_TITLE_CHAIN_BUILDER_RVA) else {
         append_autoload_debug(format_args!(
@@ -6635,21 +6662,12 @@ pub(crate) unsafe fn system_quit_profile_select_top_menu_tick() {
         return;
     }
     if profile == 0 {
-        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
-            && SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst) == 0
-        {
-            if let Ok(base) = game_module_base() {
-                let system_dialog =
-                    SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.load(Ordering::SeqCst);
-                let _ = unsafe {
-                    system_quit_submit_direct_return_title_chain(
-                        base,
-                        system_dialog,
-                        "retry-direct-chain-after-profile-cleared",
-                    )
-                };
-            }
-        }
+        // ProfileSelect has closed. Do NOT submit the return-title chain from this game-task tick:
+        // that runs concurrently with the game's own menu/Scaleform pump and corrupts it (observed:
+        // non-deterministic execute-fault jumping into Scaleform string data). The close is done in
+        // menu-pump ownership by the native confirm transition (dialog+0x1e8=Success pops the
+        // ProfileSelect window job) and the return-title submit is done in menu-pump ownership from
+        // the MenuWindowJob::Run hook. See bd system-quit-return-title-scaleform-race-2026-07-01.
         return;
     }
     let list = SYSTEM_QUIT_TOP_HIDE_LIST.load(Ordering::SeqCst);
@@ -6737,6 +6755,59 @@ pub(crate) unsafe extern "system" fn system_quit_menu_window_job_run_hook(
                         )
                     };
                 }
+            }
+        }
+    }
+    // ABORT the half-started in-world load transition. Pressing OK on ProfileSelect natively arms
+    // GameMan.saveState/b80=2 (in-world load via deserialize 0x67b290) BEFORE any hook we control; our
+    // load guard skips the deserialize so nothing loads, but the game still advances to saveState=3
+    // ("loading") and STICKS at a loading screen -- and that stuck load blocks the game/menu pump from
+    // running the queued return-title chain (observed: functor_call_count=0, player still present).
+    // While a System-Quit transition is active AND the old world is still up (local player present),
+    // force saveState back to idle (0) so the load machine stops and the return-title can run. Once the
+    // world tears down (player absent) this gate closes, so the clean-title autoload load is untouched.
+    // Plain field write (not a menu/Scaleform call) -> safe from the menu pump. See bd
+    // system-quit-load-profile-NOCRASH-milestone-2026-07-01.
+    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+        && unsafe { PlayerIns::local_player_mut() }.is_ok()
+    {
+        let gm = game_man_ptr_or_null();
+        if gm != 0 && gm != TITLE_OWNER_SCAN_START_ADDRESS {
+            let ss_ptr = (gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *mut i32;
+            if let Some(ss) = unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) } {
+                if ss == 2 || ss == 3 {
+                    unsafe { *ss_ptr = 0 };
+                    let n = SYSTEM_QUIT_INWORLD_LOAD_ABORT_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                    if n <= 8 || n % 120 == 0 {
+                        append_autoload_debug(format_args!(
+                            "system-quit-quickload: aborted stuck in-world load transition #{n} saveState={ss}->0 (old world still up) so return-title chain can run"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    // MENU-PUMP-OWNED return-title submit. This hook IS the game's menu pump executing a
+    // MenuWindowJob, so submitting the return-title chain from here (rather than from the concurrent
+    // game-task tick) runs it in the menu pump's own frame and eliminates the Scaleform race that
+    // produced the non-deterministic execute-fault crashes. Fire once ProfileSelect has closed (its
+    // window cleared) during a return-title transition; the submit self-gates on queue-ready and
+    // one-shots via the submit count. See bd system-quit-return-title-scaleform-race-2026-07-01.
+    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+        && SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) == 0
+        && SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst) == 0
+    {
+        if let Ok(base) = game_module_base() {
+            let system_dialog =
+                SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.load(Ordering::SeqCst);
+            if system_dialog != 0 && system_dialog != TITLE_OWNER_SCAN_START_ADDRESS {
+                let _ = unsafe {
+                    system_quit_submit_direct_return_title_chain(
+                        base,
+                        system_dialog,
+                        "menu-pump-run-hook",
+                    )
+                };
             }
         }
     }
@@ -7252,19 +7323,34 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_confirmed_hook(
     if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) >= SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED
         && SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT.load(Ordering::SeqCst) != 0
     {
+        // Close ProfileSelect via the NATIVE cancel/back close (FUN_1407ac980: SetResult(Failed) +
+        // window close vmethod) instead of arming the confirm-LOAD. Arming the load (writing
+        // load_job_ctx+0x14c=2, the coupled Success-close path) makes the game enter an IN-WORLD
+        // load/warp transition (GameMan.saveState/b80 -> 2 -> DoSaveStuff). Even with the actual
+        // deserialize skipped by the FUN_14067b290 guard, that half-started transition sticks the game
+        // at a loading screen and BLOCKS the return-title chain from ever running (observed 2026-07-01:
+        // stuck, return_title functor_call_count=0, save_state=3, player still present). The cancel-close
+        // pops the ProfileSelect window WITHOUT starting any load, so the menu-pump return-title chain
+        // tears the world down cleanly and the autoload loads the picked slot at a clean title. This
+        // runs in menu-pump ownership (this IS the native confirm callback) and one-shot -- not the racy
+        // game-task tick. See bd system-quit-load-profile-6runs-state-2026-07-01.
         let load_job_ctx = unsafe { safe_read_usize(dialog + 0x1cc8) }.unwrap_or(0);
-        if load_job_ctx != 0 && load_job_ctx != TITLE_OWNER_SCAN_START_ADDRESS {
-            unsafe { *((load_job_ctx + 0x14c) as *mut i32) = 2 };
-        }
         if dialog != 0 && dialog != TITLE_OWNER_SCAN_START_ADDRESS {
-            unsafe {
-                *((dialog + 0x1e8) as *mut i32) = MENU_JOB_STATE_SUCCESS;
-                *((dialog + 0x1ec) as *mut i32) = 0;
+            match game_rva(SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA) {
+                Ok(close_addr) => {
+                    let close_fn: unsafe extern "system" fn(usize) =
+                        unsafe { std::mem::transmute(close_addr) };
+                    unsafe { close_fn(dialog) };
+                    SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT.fetch_add(1, Ordering::SeqCst);
+                }
+                Err(_) => append_autoload_debug(format_args!(
+                    "system-quit-dup: confirm cancel-close ABORT -- failed to resolve close rva 0x{SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA:x}"
+                )),
             }
         }
         SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "system-quit-dup: ProfileSelect confirmed-load transition CONSUMED action=0x{action_obj:x} dialog=0x{dialog:x} load_job_ctx=0x{load_job_ctx:x}; wrote native success side effects only, skipped unsafe load/deser tail"
+            "system-quit-dup: ProfileSelect confirm CANCEL-CLOSED action=0x{action_obj:x} dialog=0x{dialog:x} load_job_ctx=0x{load_job_ctx:x}; NO load-mode armed -> no in-world load transition -> return-title tears down + autoload loads at clean title"
         ));
         return 0;
     }
@@ -7293,9 +7379,22 @@ unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, source: &str) {
         ));
         return;
     }
-    install_system_quit_gaitem_deserialize_hook();
-    install_system_quit_gaitem_lookup_hook();
-    install_system_quit_gaitem_finalize_hook();
+    // DISABLED (2026-07-01): the CSGaitemImp deserialize/lookup/finalize guards only ever CORRUPT
+    // the gaitem singleton -- emptying gaitemInsTable handles left a garbage non-canonical entry that
+    // crashed GetGaitemIns->GetGaitemHandle (live 0x6710c0). They were a doomed attempt to make the
+    // in-world load "safe"; we now BLOCK the in-world load-job entirely (see the robust gate in
+    // system_quit_profile_load_job_run_hook) and return to title + autoload instead, so no in-world
+    // gaitem deserialize should run. Leaving them installed would additionally corrupt the AUTOLOAD's
+    // own post-title load whenever it deserializes while phase is still 1..3. Not installing them lets
+    // every real deserialize run natively. (Install fns retained for reference / bisecting.)
+    // Install the load-ONLY guard so the picked slot is not deserialized into the still-live world
+    // when the native confirm arms the load; it forwards the real load at a clean title (autoload).
+    install_system_quit_inworld_load_guard();
+    // Install the in-world load REQUEST guard: neutralizes the native RequestLoadSlot (FUN_14067b2f0)
+    // so GameMan.saveState/b80 never reaches 2 during the switch. This is the TRUE source of the
+    // NowLoading transition that froze the menu pump; blocking it here (not reactively) lets the
+    // menu-pump-owned return-title chain run + tear the world down. Forwarded at a clean title.
+    install_system_quit_request_load_slot_guard();
     SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.store(selected_slot as usize, Ordering::SeqCst);
     SYSTEM_QUIT_QUICKLOAD_PHASE.store(SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED, Ordering::SeqCst);
     OWN_STEPPER_SLOT.store(selected_slot, Ordering::SeqCst);
@@ -7380,6 +7479,176 @@ pub(crate) unsafe extern "system" fn system_quit_gaitem_lookup_hook(
     let original: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig) };
     unsafe { original(gaitem, out_handle, in_handle) }
+}
+
+/// Guard on the load-only routine `FUN_14067b380(slot)`. While the in-world System->Quit->Load-Profile
+/// transition is active (phase in CONFIRMED..AUTOLOAD_HANDOFF) AND the old world is still up (local
+/// player present), skip the deserialize+warp and report success -- so `DoSaveStuff` completes (clears
+/// its pending slot) and ProfileSelect closes, but nothing loads into the live world. At a clean title
+/// (player absent, or phase past the transition) it forwards to the real load so the autoload works.
+pub(crate) unsafe extern "system" fn system_quit_inworld_load_skip_hook(slot: i32) -> usize {
+    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    let in_transition = (SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED
+        ..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
+        .contains(&phase);
+    let world_up = unsafe { PlayerIns::local_player_mut() }.is_ok();
+    if in_transition && world_up {
+        let n = SYSTEM_QUIT_INWORLD_LOAD_SKIP_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: in-world load SKIPPED #{n} slot={slot} phase={phase} (old world still up) -- ProfileSelect close proceeds; return-title tears down; autoload loads at clean title"
+        ));
+        // FUN_14067b380 returns 1 on success; report success without deserializing so DoSaveStuff's
+        // caller advances (it then clears MoveMapStep+0x12c) instead of retrying the in-world load.
+        return 1;
+    }
+    SYSTEM_QUIT_INWORLD_LOAD_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
+    let orig = SYSTEM_QUIT_INWORLD_LOAD_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return 0;
+    }
+    let original: unsafe extern "system" fn(i32) -> usize = unsafe { std::mem::transmute(orig) };
+    unsafe { original(slot) }
+}
+
+pub(crate) fn install_system_quit_inworld_load_guard() {
+    if SYSTEM_QUIT_INWORLD_LOAD_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_Initialize for in-world load guard failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_INWORLD_LOAD_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: failed to resolve in-world load rva 0x{SYSTEM_QUIT_INWORLD_LOAD_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_inworld_load_skip_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_INWORLD_LOAD_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue_enable in-world load guard failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_INWORLD_LOAD_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-quickload: hooked in-world load routine 0x{addr:x}; picked-slot deserialize skipped while old world up, forwarded at clean title"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: MH_ApplyQueued in-world load guard failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-quickload: MhHook::new in-world load guard failed: {status:?}"
+        )),
+    }
+}
+
+/// Guard on the native in-world load REQUEST `CS::GameMan::RequestLoadSlot(slot)` (FUN_14067b2f0, live
+/// 0x67b200). This is the TRUE source of GameMan.saveState/b80=2 for an explicit-slot in-world load:
+/// the per-frame MoveMapStep load steps call it once the confirmed ProfileSelect chain pushes the map
+/// machine into loading, and it sets saveState=2, which starts the 02_904_NowLoading transition that
+/// freezes the menu pump so the queued return-title chain can never run. During the in-world
+/// System->Quit->Load-Profile transition (phase active AND old world still up / local player present)
+/// we return "not armed" (0) WITHOUT calling the original, so saveState never reaches 2: no NowLoading,
+/// the pump keeps running, and the menu-pump-owned return-title chain tears the world down. Once the
+/// world is gone (player absent) or the switch is idle, we forward to the real request -- so the
+/// clean-title autoload and any normal load work. The boot/Continue autoload uses the distinct sentinel
+/// variants (FUN_14067b290 slot 10 / FUN_14067b570 slot 0xb), which this hook does not touch. See bd
+/// system-quit-loadjob-success-commits-phantom-load-2026-07-01.
+pub(crate) unsafe extern "system" fn system_quit_request_load_slot_hook(slot: u32) -> usize {
+    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    let switch_active = phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE;
+    let world_up = unsafe { PlayerIns::local_player_mut() }.is_ok();
+    if switch_active && world_up {
+        let n = SYSTEM_QUIT_REQUEST_LOAD_SLOT_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 8 || n % 120 == 0 {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: in-world load REQUEST neutralized #{n} slot={slot} phase={phase} (old world still up) -- saveState/b80 kept idle so no NowLoading; return-title tears down + autoload loads at clean title"
+            ));
+        }
+        // RequestLoadSlot returns 0 when it declines to arm (saveState!=0 or profile check fails). We
+        // return the same "not armed" result so the caller MoveMapStep treats it as no-load-yet instead
+        // of entering the in-world load transition.
+        return 0;
+    }
+    SYSTEM_QUIT_REQUEST_LOAD_SLOT_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
+    let orig = SYSTEM_QUIT_REQUEST_LOAD_SLOT_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return 0;
+    }
+    let original: unsafe extern "system" fn(u32) -> usize = unsafe { std::mem::transmute(orig) };
+    unsafe { original(slot) }
+}
+
+pub(crate) fn install_system_quit_request_load_slot_guard() {
+    if SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_Initialize for RequestLoadSlot guard failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_REQUEST_LOAD_SLOT_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: failed to resolve RequestLoadSlot rva 0x{SYSTEM_QUIT_REQUEST_LOAD_SLOT_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_request_load_slot_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_REQUEST_LOAD_SLOT_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue_enable RequestLoadSlot guard failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-quickload: hooked in-world load request RequestLoadSlot 0x{addr:x}; saveState/b80=2 arm neutralized while old world up, forwarded at clean title"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: MH_ApplyQueued RequestLoadSlot guard failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-quickload: MhHook::new RequestLoadSlot guard failed: {status:?}"
+        )),
+    }
 }
 
 pub(crate) unsafe extern "system" fn system_quit_gaitem_deserialize_hook(
@@ -7468,9 +7737,17 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
     SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_LIST.store(list, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_PROFILE_ID.store(profile_id as usize, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_CONTEXT_ARG.store(context_arg, Ordering::SeqCst);
-    let system_quit_profile_active = profile_window != 0
-        && list == profile_window + 0x50
-        && SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0;
+    // ROBUST block gate: block ANY ProfileLoad job while our injected in-world Load-Profile UI is up
+    // (real System windows hidden + our ProfileSelect window present). The prior `list ==
+    // profile_window + 0x50` match was fragile: when it failed (observed 2026-07-01), the in-world
+    // deserialize ran, our gaitem guards corrupted CSGaitemImp::gaitemInsTable, and it crashed in
+    // GetGaitemIns->GetGaitemHandle (live 0x6710c0) BEFORE the per-tick native close could pop
+    // ProfileSelect. The only load job that runs while our injected ProfileSelect is showing IS our
+    // flow's load, so hidden+profile-present is a sufficient and robust discriminator. `list` is
+    // still captured above for telemetry.
+    let _ = list;
+    let system_quit_profile_active =
+        profile_window != 0 && SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0;
     if !system_quit_profile_active {
         return unsafe { original(job, result, fd4_time, d) };
     }
@@ -7487,6 +7764,15 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
     unsafe { system_quit_arm_quickload_autoload(profile_id, "ProfileSelectLoadJobRun") };
     if result > TITLE_OWNER_SCAN_START_ADDRESS && unsafe { safe_read_usize(result) }.is_some() {
         unsafe {
+            // Success(2), terminal: the load-job is the SECOND link in the native chain the slot
+            // activation submits (msgbox -> loadjob -> confirm-lambda FUN_1409a4ee0). Returning Success
+            // lets the chain advance to the confirm-lambda, which our confirm hook cancel-closes
+            // (natively pops ProfileSelect) so the menu-pump return-title chain can submit. Returning
+            // Failed(3) instead ABORTS the chain -> the confirm-lambda never runs -> ProfileSelect never
+            // closes -> return-title never submits (verified live 2026-07-01). The in-world load is NOT
+            // committed here: the actual saveState/b80=2 arm is the native RequestLoadSlot FUN_14067b2f0,
+            // which system_quit_request_load_slot_hook neutralizes during the switch. See bd
+            // system-quit-loadjob-success-commits-phantom-load-2026-07-01.
             *(result as *mut i32) = MENU_JOB_STATE_SUCCESS;
             *((result + 4) as *mut i32) = 0;
         }
@@ -7499,7 +7785,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
         }
     }
     append_autoload_debug(format_args!(
-        "system-quit-dup: ProfileSelect load-job Run BLOCKED save-safe job=0x{job:x} result=0x{result:x} list=0x{list:x} profile_id={profile_id} context_arg=0x{context_arg:x}; returning Success to close ProfileSelect; no captured LoadJob is retained or replayed"
+        "system-quit-dup: ProfileSelect load-job Run BLOCKED save-safe job=0x{job:x} result=0x{result:x} list=0x{list:x} profile_id={profile_id} context_arg=0x{context_arg:x}; returning Success to advance the chain to the confirm cancel-close (in-world saveState=2 arm is blocked at RequestLoadSlot); no captured LoadJob is retained or replayed"
     ));
     result
 }

@@ -167,6 +167,85 @@ pub(crate) unsafe extern "system" fn assert_wrapper_hook(
     }
 }
 
+/// Upper bound on a plausible game-module `.text` RVA. The DLL's own anti-antidebug
+/// pass logs the scanned code range as `0x140001000..0x1429a2c00`, so a return address
+/// into game code has an RVA below ~0x29a2c00. Used to filter a raw stack scan down to
+/// game-side return addresses.
+const AV_GAME_TEXT_RVA_MAX: usize = 0x2a0_0000;
+const AV_GAME_TEXT_RVA_MIN: usize = 0x1000;
+/// Number of 8-byte stack slots scanned upward from RSP at an access violation.
+const AV_STACK_SCAN_SLOTS: usize = 256;
+/// Max game-side return addresses recorded from the stack scan.
+const AV_STACK_MAX_RETURNS: usize = 8;
+/// Raw stack qwords dumped from RSP regardless of value (a stack smash may leave no
+/// game `.text` return address at all — the raw window still shows the smashed frame).
+const AV_STACK_RAW_QWORDS: usize = 8;
+
+/// Scan the crashing thread's stack (from `rsp` upward) for values inside the game
+/// module's `.text` (return addresses of the game-side frames) AND dump the raw head of
+/// the frame. The recorded `callers=[...]` trail only holds our own instrumentation trail
+/// (under wine it surfaces ntdll addresses), so this is what actually names the game
+/// function at the fault. Reads are `ReadProcessMemory`-guarded so an unmapped slot yields
+/// `None` instead of re-faulting into this handler. `.text` hits are emitted as live/deobf
+/// RVAs (`addr - base`); map to the Ghidra dump with `scripts/dump-deobf-shift.py`.
+fn av_stack_game_returns(rsp: usize, base: usize) -> String {
+    if rsp < 0x10000 || base == NULL_MODULE_BASE {
+        return String::from("stk=[] raw=[]");
+    }
+    let mut ret = String::from("stk=[");
+    let mut found = 0usize;
+    let mut slot = 0usize;
+    while slot < AV_STACK_SCAN_SLOTS && found < AV_STACK_MAX_RETURNS {
+        let addr = rsp + slot * std::mem::size_of::<usize>();
+        if let Some(val) = unsafe { safe_read_usize(addr) } {
+            if let Some(rva) = val.checked_sub(base) {
+                if (AV_GAME_TEXT_RVA_MIN..AV_GAME_TEXT_RVA_MAX).contains(&rva) {
+                    if found != 0 {
+                        ret.push(',');
+                    }
+                    ret.push_str(&format!("0x{rva:x}"));
+                    found += 1;
+                }
+            }
+        }
+        slot += 1;
+    }
+    ret.push_str("] raw=[");
+    for i in 0..AV_STACK_RAW_QWORDS {
+        if i != 0 {
+            ret.push(',');
+        }
+        match unsafe { safe_read_usize(rsp + i * std::mem::size_of::<usize>()) } {
+            Some(v) => ret.push_str(&format!("0x{v:x}")),
+            None => ret.push_str("??"),
+        }
+    }
+    ret.push(']');
+    ret
+}
+
+/// Probe a candidate object pointer: read its first qword (a C++ vtable pointer for a
+/// polymorphic object) and, when that vtable lands in the game module, emit its RVA so the
+/// crashing object's class can be named from the Ghidra dump. Guarded reads; `??`/`-` on
+/// unmapped memory. Format: `obj@0x..=[vt=0x.. vtrva=0x..]`.
+fn av_object_probe(label: &str, ptr: usize, base: usize) -> String {
+    if ptr < 0x10000 {
+        return format!("{label}=0x{ptr:x}[unmapped]");
+    }
+    match unsafe { safe_read_usize(ptr) } {
+        Some(vt) => {
+            let vtrva = vt.checked_sub(base).filter(|r| {
+                base != NULL_MODULE_BASE && (AV_GAME_TEXT_RVA_MIN..0x4000000).contains(r)
+            });
+            match vtrva {
+                Some(r) => format!("{label}=0x{ptr:x}[vt=0x{vt:x} vtrva=0x{r:x}]"),
+                None => format!("{label}=0x{ptr:x}[vt=0x{vt:x}]"),
+            }
+        }
+        None => format!("{label}=0x{ptr:x}[unreadable]"),
+    }
+}
+
 /// Vectored handler: log access violations (faulting RVA + caller stack) so an
 /// in-process crash points straight at the instruction. Rate-limited; never
 /// changes behavior (returns EXCEPTION_CONTINUE_SEARCH).
@@ -325,16 +404,54 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
                 < MAX_AV_LOG_LINES
         {
             let address = unsafe { (*record).exception_address } as usize;
-            let rva = game_module_base()
-                .ok()
-                .and_then(|base| address.checked_sub(base));
+            // For an access violation ExceptionInformation[0] is the access kind
+            // (0=read, 1=write, 8=execute) and [1] is the faulting DATA address --
+            // the pointer that was actually dereferenced. That plus the accessor
+            // registers (RCX/RDX/R8) distinguishes a bad `this` pointer from a wild
+            // index without decompilation guesswork.
+            let (access_kind, fault_addr) = unsafe {
+                if (*record).number_parameters >= 2 {
+                    (
+                        (*record).exception_information[0],
+                        (*record).exception_information[1],
+                    )
+                } else {
+                    (usize::MAX, 0)
+                }
+            };
+            let (rcx, rdx, r8, rsp) = if !context.is_null() {
+                let cbase = context as *const u8;
+                unsafe {
+                    (
+                        *(cbase.add(CONTEXT_RCX_OFFSET) as *const u64) as usize,
+                        *(cbase.add(CONTEXT_RDX_OFFSET) as *const u64) as usize,
+                        *(cbase.add(CONTEXT_R8_OFFSET) as *const u64) as usize,
+                        *(cbase.add(CONTEXT_RSP_OFFSET) as *const u64) as usize,
+                    )
+                }
+            } else {
+                (0, 0, 0, 0)
+            };
+            let base = game_module_base().unwrap_or(NULL_MODULE_BASE);
+            let stack = av_stack_game_returns(rsp, base);
+            let rcx_probe = av_object_probe("rcx", rcx, base);
+            // For a hijacked control transfer (access=8, RIP jumped to non-code), the value
+            // at [rsp] is the smashed/popped return candidate; probe it as an object too.
+            let ret0 = unsafe { safe_read_usize(rsp) }.unwrap_or(0);
+            let ret0_probe = av_object_probe("ret0", ret0, base);
+            // Only treat the fault instruction as an in-module RVA when it actually lands in
+            // `.text`; an execute-fault RIP in the heap (access=8) is NOT a game RVA and a
+            // blind `addr - base` there prints a misleading value.
+            let rva = address.checked_sub(base).filter(|r| {
+                base != NULL_MODULE_BASE && (AV_GAME_TEXT_RVA_MIN..AV_GAME_TEXT_RVA_MAX).contains(r)
+            });
             match rva {
                 Some(rva) => append_crash_log(format_args!(
-                    "access-violation rva=0x{rva:x} addr=0x{address:x} {}",
+                    "access-violation rva=0x{rva:x} addr=0x{address:x} access={access_kind:x} fault_addr=0x{fault_addr:x} rcx=0x{rcx:x} rdx=0x{rdx:x} r8=0x{r8:x} rsp=0x{rsp:x} {rcx_probe} {ret0_probe} {stack} {}",
                     trace_callers_summary()
                 )),
                 None => append_crash_log(format_args!(
-                    "access-violation addr=0x{address:x} (outside game module) {}",
+                    "access-violation addr=0x{address:x} (RIP outside .text) access={access_kind:x} fault_addr=0x{fault_addr:x} rcx=0x{rcx:x} rdx=0x{rdx:x} r8=0x{r8:x} rsp=0x{rsp:x} {rcx_probe} {ret0_probe} {stack} {}",
                     trace_callers_summary()
                 )),
             }

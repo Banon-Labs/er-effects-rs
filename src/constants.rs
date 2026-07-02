@@ -4264,6 +4264,60 @@ pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA: u32 = 0x9a4d90;
 /// `0x140826d50`). This is the load job queued behind the native confirmation dialog; accepting
 /// confirmation reaches this job and then crashed at CSGaitemImp::Deserialize live/deobf `0x14067141a`.
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA: u32 = 0x826d50;
+/// Native MenuWindow close-finalize `FUN_1407ac980` (dump `0x1407ac980` -> live/deobf `0x7ac890`,
+/// content-unique). Takes `rcx = MenuWindow*`; does `MenuJobResult::SetResult(&r, Failed, 0)` then
+/// invokes the window's own close vmethod (`window->vtable+0x60`). Calling it on the ProfileSelect
+/// window sets `owningMenuWindow+0x1e8` terminal, so `CS::MenuWindowJob::Run` (0x7ad1c0) reads a
+/// terminal result and `ExecuteMenuJob` (0x7a96f0) pops the job from the menu-job queue head. That
+/// is the native cancel/back close (approach B): it clears `queue[0]` so the return-title chain's
+/// `queue[0]==0` ready-gate finally passes and the direct chain can submit. See bd
+/// `system-quit-profileselect-native-close-B-path` / `menu-job-queue-pump-dequeue-mechanism`.
+pub(crate) const SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA: u32 = 0x7ac890;
+/// One-shot latch: set when we have invoked the native ProfileSelect close during a return-title
+/// transition, so the per-tick handler closes it exactly once. Reset with the ProfileSelect state.
+pub(crate) static SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED: AtomicUsize = AtomicUsize::new(0);
+/// Telemetry: number of native ProfileSelect close-finalize calls issued (expected 1 per flow).
+pub(crate) static SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// The load-ONLY save routine `FUN_14067b380` (dump 0x14067b380 -> LIVE/deobf 0x67b290, shift -0xf0),
+/// called by `CS::MoveMapStep::DoSaveStuff` when `GameMan.saveState/b80 == 2`: it reads the slot's save
+/// file and runs `PlayerGameData::Deserialize -> CSGaitemImp::Deserialize` (the in-world deserialize
+/// that crashes at live 0x67141a), then `warpRequested=true`. Guarded during the in-world
+/// System->Quit->Load-Profile transition so the picked slot is NOT deserialized into the still-live
+/// world; forwarded normally at a clean title so the autoload loads the slot. Distinct from the SAVE
+/// path (DoSaveStuff `IsSaveState1` branch), so the return-title's save-on-quit is untouched. NOTE:
+/// the RVA is the LIVE 0x67b290 (game_rva uses the deobf base); the dump 0x67b380 is a DIFFERENT
+/// function -- hooking it silently no-ops (observed 2026-07-01: guard installed but never fired).
+pub(crate) const SYSTEM_QUIT_INWORLD_LOAD_RVA: u32 = 0x67b290;
+pub(crate) static SYSTEM_QUIT_INWORLD_LOAD_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SYSTEM_QUIT_INWORLD_LOAD_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_INWORLD_LOAD_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_INWORLD_LOAD_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Count of frames the menu-pump Run hook forced GameMan.saveState/b80 back to idle to abort a
+/// half-started in-world load transition so the queued return-title chain can run.
+pub(crate) static SYSTEM_QUIT_INWORLD_LOAD_ABORT_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// `CS::GameMan::RequestLoadSlot(slot)` -- the native setter that transitions GameMan.saveState/b80
+/// 0->2 to REQUEST an in-world load of an explicit slot 0-9 (dump `FUN_14067b2f0` -> LIVE/deobf
+/// `0x67b200`, shift -0xf0, content-unique). It validates the slot's ProfileSummary then calls the
+/// common arm worker `FUN_140e6ec30(mgr, slot, 0)` and, on success, writes `GLOBAL_GameMan->saveState
+/// = 2`. Called from the per-frame MoveMapStep load steps (`STEP_LoadSaveData`, `FUN_140afb970`) once
+/// the confirmed ProfileSelect chain pushes the map machine into loading -- INDEPENDENT of our load-job
+/// block, which is why blocking the load-job/confirm never stopped the arm. Setting saveState=2 both
+/// makes `DoSaveStuff` deserialize (guarded) AND starts the 02_904_NowLoading transition that freezes
+/// the menu pump so the queued return-title chain can never run (observed 2026-07-01: bc4=0,
+/// functor_call_count=0, player present; the reactive abort is TOO LATE because NowLoading commits in
+/// the same frame). During the in-world switch we neutralize this at the source so saveState never
+/// reaches 2. NOTE distinct from the Continue/boot variants FUN_14067b290 (sentinel slot 10) and
+/// FUN_14067b570 (sentinel slot 0xb): those arm the boot/clean-title autoload and must NOT be blocked.
+/// See bd system-quit-loadjob-success-commits-phantom-load-2026-07-01.
+pub(crate) const SYSTEM_QUIT_REQUEST_LOAD_SLOT_RVA: u32 = 0x67b200;
+pub(crate) static SYSTEM_QUIT_REQUEST_LOAD_SLOT_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Count of in-world load requests we neutralized (returned "not armed") during the switch so
+/// GameMan.saveState/b80 stayed 0 and no NowLoading transition started.
+pub(crate) static SYSTEM_QUIT_REQUEST_LOAD_SLOT_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_REQUEST_LOAD_SLOT_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ORIG: AtomicUsize =

@@ -1622,19 +1622,12 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 "system-quit-quickload: title owner appeared after internal return-title request owner=0x{owner:x}; handing off to product Continue autoload"
             ));
         }
-        if SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst) == 0 {
-            let system_dialog =
-                SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.load(Ordering::SeqCst);
-            if system_dialog != 0 && system_dialog != TITLE_OWNER_SCAN_START_ADDRESS {
-                let _ = unsafe {
-                    system_quit_submit_direct_return_title_chain(
-                        module_base,
-                        system_dialog,
-                        "product-core-retry-direct-chain",
-                    )
-                };
-            }
-        }
+        // NOTE: the return-title chain submit is intentionally NOT done here. This product-core
+        // tick runs on the game task, concurrently with the game's menu/Scaleform pump; submitting
+        // the return-title job from here races that pump and corrupts Scaleform state (observed:
+        // non-deterministic execute-fault into Scaleform string data). The submit is done in
+        // menu-pump ownership from the MenuWindowJob::Run hook instead. See bd
+        // system-quit-return-title-scaleform-race-2026-07-01.
     }
     PRODUCT_CORE_OWNER_TICKS.fetch_add(1, Ordering::SeqCst);
     PRODUCT_CORE_LAST_OWNER.store(owner, Ordering::SeqCst);
@@ -1653,12 +1646,24 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         && gm != null
         && slot >= OWN_STEPPER_SLOT_ZERO
     {
-        unsafe { *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = slot };
+        // GameMan+0xb78 is CS::GameMan::GetRequestedSaveSlotLoad: the per-frame MoveMapStep load
+        // orchestrator (FUN_140afb970, live) reads it and, when != -1, calls RequestLoadSlot(b78) to
+        // load that slot IN-WORLD. So while the OLD world is still up (local player present) b78 MUST
+        // stay -1 -- writing the picked slot here arms the very in-world load we are trying to avoid.
+        // (Observed 2026-07-01: writing b78=slot while in-world made FUN_140afb970 spin
+        // RequestLoadSlot(slot) 4600+ times; with that arm blocked the map machine stuck "loading" and
+        // the return-title final functor never fired, so the world never tore down -- the menu just
+        // closed leaving a stray cursor.) Only once the world has torn down (player absent) do we set
+        // b78=slot so the clean-title autoload loads the picked slot via that same b78 -> RequestLoadSlot
+        // path. See bd system-quit-loadjob-success-commits-phantom-load-2026-07-01.
+        let world_up = unsafe { PlayerIns::local_player_mut() }.is_ok();
+        let b78_val = if world_up { OWN_STEPPER_SLOT_NONE } else { slot };
+        unsafe { *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = b78_val };
         if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
             let requested_slot = unsafe { safe_read_i32(gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) }
                 .unwrap_or(OWN_STEPPER_SLOT_NONE);
             append_autoload_debug(format_args!(
-                "system-quit-quickload: refreshed requested save-slot load index selected_slot={slot} gm_b78={requested_slot} phase={} bc4=0x{return_title_job_predicate_bc4:x}",
+                "system-quit-quickload: requested save-slot load index world_up={world_up} wrote gm_b78={b78_val} (read_back={requested_slot}) selected_slot={slot} phase={} bc4=0x{return_title_job_predicate_bc4:x}",
                 SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             ));
         }
@@ -1973,6 +1978,26 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                     "system-quit-quickload: set requested save-slot load index before Continue selected_slot={slot} gm_b78={requested_slot}"
                 ));
             }
+        }
+        // SWITCH-SAFETY: for the in-world System->Quit->Load-Profile switch, do NOT drive ANY native
+        // Continue/menu-readiness probing or the autoload tick until the OLD world is actually torn
+        // down (local player absent). Those calls poke native menu/Scaleform functions from the game
+        // task; running them while the old world + menu pump are live races the pump and corrupts
+        // Scaleform (non-deterministic execute-fault). The menu-pump-owned chain (native confirm
+        // Success pops ProfileSelect -> Run-hook submits the return-title chain -> world teardown)
+        // must complete first; once the player goes absent this drives the load at a CLEAN title,
+        // exactly like the boot autoload. Boot has no System-Quit phase, and at a fresh title there is
+        // no local player, so this passes immediately there. See bd
+        // system-quit-return-title-scaleform-race-2026-07-01.
+        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+            && unsafe { PlayerIns::local_player_mut() }.is_ok()
+        {
+            if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
+                append_autoload_debug(format_args!(
+                    "product-core-autoload: SWITCH holding native Continue driving until old world torn down -- local player still present slot={slot} tick={tick}"
+                ));
+            }
+            return true;
         }
         if !unsafe { product_continue_action_ready(&ready, module_base, gm, slot) } {
             if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {

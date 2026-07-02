@@ -289,6 +289,24 @@ pub(crate) unsafe fn product_continue_autoload_tick(
     }
 
     if phase == FULLREAD_PHASE_SUBMIT {
+        // SWITCH-SAFETY (System->Quit->Load-Profile): for the in-world character switch (not a boot
+        // autoload), the return-title chain we submitted is still tearing down the OLD world. Firing
+        // the Continue-load now sets GameMan saveState/b80=2 and DoSaveStuff deserializes the picked
+        // slot INTO the still-live world -> crash in CSGaitemImp::Deserialize (live 0x67141a). Defer
+        // until the old world is actually gone (local player absent), so the load runs at a clean
+        // title exactly like the boot autoload does. The boot path has no System-Quit phase, and at a
+        // fresh title there is no local player, so this gate passes immediately there.
+        // See bd system-quit-load-profile-trigger-RESOLVED.
+        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+            && unsafe { PlayerIns::local_player_mut() }.is_ok()
+        {
+            if tick % PRODUCT_CONTINUE_WAIT_LOG_TICKS == null as u64 {
+                append_autoload_debug(format_args!(
+                    "product-core-autoload: SWITCH deferring Continue-load until old world torn down -- local player still present slot={slot} tick={tick}"
+                ));
+            }
+            return;
+        }
         if !unsafe { product_continue_action_ready(ready, base, gm, slot) } {
             if tick % PRODUCT_CONTINUE_WAIT_LOG_TICKS == null as u64 {
                 append_autoload_debug(format_args!(
