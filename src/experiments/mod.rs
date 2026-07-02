@@ -285,6 +285,8 @@ pub(crate) static PRODUCT_CORE_LAST_PRESS_START_VT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static PRODUCT_CORE_LAST_PRESS_START_CONTEXT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static PRODUCT_CORE_LAST_RETURN_TITLE_JOB_PREDICATE_BC4: AtomicUsize =
+    AtomicUsize::new(usize::MAX);
 pub(crate) static PRODUCT_CORE_LAST_PHASE: AtomicUsize = AtomicUsize::new(OWN_STEPPER_PHASE_MENU);
 pub(crate) static PRODUCT_CORE_LAST_BLOCKER: AtomicUsize =
     AtomicUsize::new(PRODUCT_CORE_BLOCKER_UNSEEN);

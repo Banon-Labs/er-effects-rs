@@ -1034,6 +1034,26 @@ pub(crate) unsafe extern "system" fn title_setstate_trace_detour(owner: usize, s
         } else {
             0
         };
+        if owner > PAB_MIN_HEAP_PTR
+            && SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+                >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN
+            && (state == 2 || state == 3 || state == TITLE_STEP_MENU_JOB_WAIT)
+        {
+            if let Ok(base) = game_module_base() {
+                let table = unsafe { safe_read_usize(owner + TITLE_OWNER_INSTANCE_TABLE_OFFSET) }
+                    .unwrap_or(0);
+                if table == base + INNER_TITLE_STATE_TABLE_RVA {
+                    let previous = TITLE_OWNER_PTR.swap(owner, Ordering::SeqCst);
+                    TITLE_OWNER_SCAN_COUNTDOWN
+                        .store(TITLE_OWNER_SCAN_CALL_INTERVAL, Ordering::SeqCst);
+                    if previous != owner {
+                        append_autoload_debug(format_args!(
+                            "system-quit-quickload: latched native SetState title owner=0x{owner:x} state={state} previous=0x{previous:x} table=0x{table:x}; overriding stale scan candidate"
+                        ));
+                    }
+                }
+            }
+        }
         append_autoload_debug(format_args!(
             "title-setstate-trace: SetState(owner=0x{owner:x}, state={state}) committed_was={committed} owner+0xe0(dialog)=0x{dialog:x} owner+0xb8(gate)=0x{b8:x}"
         ));
@@ -1584,9 +1604,126 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         return true;
     };
     let owner = owner_ptr as usize;
+    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+    {
+        SYSTEM_QUIT_QUICKLOAD_LAST_TITLE_OWNER.store(owner, Ordering::SeqCst);
+        if SYSTEM_QUIT_QUICKLOAD_PHASE
+            .compare_exchange(
+                SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED,
+                SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+        {
+            SYSTEM_QUIT_QUICKLOAD_TITLE_OWNER_SEEN_COUNT.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: title owner appeared after internal return-title request owner=0x{owner:x}; handing off to product Continue autoload"
+            ));
+        }
+        if SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst) == 0 {
+            let system_dialog =
+                SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.load(Ordering::SeqCst);
+            if system_dialog != 0 && system_dialog != TITLE_OWNER_SCAN_START_ADDRESS {
+                let _ = unsafe {
+                    system_quit_submit_direct_return_title_chain(
+                        module_base,
+                        system_dialog,
+                        "product-core-retry-direct-chain",
+                    )
+                };
+            }
+        }
+    }
     PRODUCT_CORE_OWNER_TICKS.fetch_add(1, Ordering::SeqCst);
     PRODUCT_CORE_LAST_OWNER.store(owner, Ordering::SeqCst);
     let gm = game_man_ptr_or_null();
+    let return_title_job_predicate_bc4 = if gm != null {
+        unsafe { safe_read_usize(gm + GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET) }
+            .map(|v| v as u32 as usize)
+            .unwrap_or(usize::MAX)
+    } else {
+        usize::MAX
+    };
+    PRODUCT_CORE_LAST_RETURN_TITLE_JOB_PREDICATE_BC4
+        .store(return_title_job_predicate_bc4, Ordering::SeqCst);
+    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+        && gm != null
+        && slot >= OWN_STEPPER_SLOT_ZERO
+    {
+        unsafe { *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = slot };
+        if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
+            let requested_slot = unsafe { safe_read_i32(gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) }
+                .unwrap_or(OWN_STEPPER_SLOT_NONE);
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: refreshed requested save-slot load index selected_slot={slot} gm_b78={requested_slot} phase={} bc4=0x{return_title_job_predicate_bc4:x}",
+                SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+            ));
+        }
+    }
+    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN
+        && SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst) > 0
+        && return_title_job_predicate_bc4 == GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY
+        && SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT
+            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    {
+        let system_dialog = SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.load(Ordering::SeqCst);
+        let queue = if system_dialog != 0 && system_dialog != TITLE_OWNER_SCAN_START_ADDRESS {
+            system_dialog + 0x10
+        } else {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        };
+        let queue_ready = if queue != TITLE_OWNER_SCAN_START_ADDRESS {
+            match game_rva(MENU_JOB_QUEUE_READY_RVA) {
+                Ok(ready_addr) => {
+                    let ready: unsafe extern "system" fn(usize) -> u8 =
+                        unsafe { std::mem::transmute(ready_addr) };
+                    unsafe { ready(queue) != 0 }
+                }
+                Err(_) => false,
+            }
+        } else {
+            false
+        };
+        match (
+            game_rva(SYSTEM_QUIT_RETURN_TITLE_FINAL_JOB_BUILDER_RVA),
+            game_rva(MENU_JOB_SUBMIT_RVA),
+            queue_ready,
+        ) {
+            (Ok(builder_addr), Ok(submit_addr), true) => {
+                let builder: unsafe extern "system" fn(usize) -> usize =
+                    unsafe { std::mem::transmute(builder_addr) };
+                let submit: unsafe extern "system" fn(usize, usize) =
+                    unsafe { std::mem::transmute(submit_addr) };
+                let mut job_slot: usize = 0;
+                let job_slot_ptr = (&raw mut job_slot) as usize;
+                unsafe { builder(job_slot_ptr) };
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: native return-title predicate terminal bc4=0x{return_title_job_predicate_bc4:x}; submitting queued final-functor job builder=0x{builder_addr:x} submit=0x{submit_addr:x} system_dialog=0x{system_dialog:x} queue=0x{queue:x} job=0x{job_slot:x} after suppressed Decision UI"
+                ));
+                if job_slot != 0 && job_slot != TITLE_OWNER_SCAN_START_ADDRESS {
+                    unsafe { submit(queue, job_slot_ptr) };
+                } else {
+                    SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.store(0, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-quickload: final-functor job builder produced no plausible job builder=0x{builder_addr:x} job=0x{job_slot:x}"
+                    ));
+                }
+            }
+            (builder_result, submit_result, ready) => {
+                SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.store(0, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: final-functor queued submit deferred at bc4=0x{return_title_job_predicate_bc4:x} builder_ok={} submit_ok={} queue_ready={ready} system_dialog=0x{system_dialog:x} queue=0x{queue:x}",
+                    builder_result.is_ok(),
+                    submit_result.is_ok()
+                ));
+            }
+        }
+    }
     if phase == OWN_STEPPER_PHASE_S2_INVOKE
         || phase == OWN_STEPPER_PHASE_S2_ACTIVATE
         || phase == OWN_STEPPER_PHASE_S2_MOUNT_POLL
@@ -1706,7 +1843,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         PRODUCT_CORE_LAST_BLOCKER.store(blocker, Ordering::SeqCst);
         if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
             append_autoload_debug(format_args!(
-                "product-core-autoload: waiting for core readiness owner=0x{owner:x} state={committed}/{requested} table=0x{table:x} session=0x{session:x} gm=0x{gm:x} gdm=0x{game_data_man:x} profile=0x{profile_summary:x} iodev=0x{iodev:x} heap=0x{heap_allocator:x} title_loop={title_loop} title_textfadeout={title_textfadeout} menu_latch={menu_opened_latch} press_start_proxy=0x{press_start_proxy:x} press_start_vt=0x{press_start_vt:x} press_start_ctx=0x{press_start_context:x} slot={slot} tick={tick}"
+                "product-core-autoload: waiting for core readiness owner=0x{owner:x} state={committed}/{requested} table=0x{table:x} session=0x{session:x} gm=0x{gm:x} return_title_bc4=0x{return_title_job_predicate_bc4:x} gdm=0x{game_data_man:x} profile=0x{profile_summary:x} iodev=0x{iodev:x} heap=0x{heap_allocator:x} title_loop={title_loop} title_textfadeout={title_textfadeout} menu_latch={menu_opened_latch} press_start_proxy=0x{press_start_proxy:x} press_start_vt=0x{press_start_vt:x} press_start_ctx=0x{press_start_context:x} slot={slot} tick={tick}"
             ));
         }
         return true;
@@ -1823,6 +1960,20 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 "portrait-window: release -> commit load (captured={captured} waited={waited})"
             ));
         }
+        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+            >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN
+            && gm != null
+            && slot >= OWN_STEPPER_SLOT_ZERO
+        {
+            unsafe { *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = slot };
+            let requested_slot = unsafe { safe_read_i32(gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) }
+                .unwrap_or(OWN_STEPPER_SLOT_NONE);
+            if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: set requested save-slot load index before Continue selected_slot={slot} gm_b78={requested_slot}"
+                ));
+            }
+        }
         if !unsafe { product_continue_action_ready(&ready, module_base, gm, slot) } {
             if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
                 append_autoload_debug(format_args!(
@@ -1835,6 +1986,18 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 ));
             }
             return true;
+        }
+        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+            >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN
+        {
+            SYSTEM_QUIT_QUICKLOAD_PHASE.store(
+                SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF,
+                Ordering::SeqCst,
+            );
+            SYSTEM_QUIT_QUICKLOAD_AUTOLOAD_HANDOFF_COUNT.fetch_add(1, Ordering::SeqCst);
+            disable_system_quit_gaitem_deserialize_hook("native-continue-handoff");
+            disable_system_quit_gaitem_lookup_hook("native-continue-handoff");
+            disable_system_quit_gaitem_finalize_hook("native-continue-handoff");
         }
         unsafe { product_continue_autoload_tick(owner, module_base, gm, slot, tick, &ready) };
     }

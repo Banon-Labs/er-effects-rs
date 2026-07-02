@@ -16,7 +16,9 @@ For task startup in this repo, read relevant `bd` memories (`/home/banon/.local/
 
 ## Elden Ring Runtime Probe Hygiene
 
-When using Frida or the injected DLL to scrape runtime Elden Ring data, tear down Elden Ring immediately before pivoting back to code writing or other non-runtime work. Do not leave `eldenring.exe` / `start_protected_game.exe` running while editing code after a probe.
+When using Frida or the injected DLL to scrape runtime Elden Ring data, tear down Elden Ring immediately before pivoting back to code writing or other non-runtime work. Do not leave `eldenring.exe` / `start_protected_game.exe` running while editing code after a probe. Even after an intentional no-auto-teardown probe, either keep the session in runtime-probing mode or tear Elden Ring down before making code changes; if more live probing is needed, state that explicitly instead of silently editing while the game remains live.
+
+When a runtime probe is explicitly meant to stay live for manual interaction / `read` follow-up, do **not** use a watcher path that owns process teardown (`.auto/runtime_probe.sh`, `er-readiness-watch.py`, or helpers that wait on them) unless the user explicitly asks for an auto-teardown run. A "no-auto-teardown" probe must be genuinely no-auto-teardown: launch the approved offline/direct `eldenring.exe` path, leave it running, and only tear it down on explicit instruction or before leaving runtime-probe mode for code/RE work.
 
 Do not launch Elden Ring through Steam from agent workflows. Forbidden launch forms include `steam -applaunch 1245620`, `steam://run/1245620`, `steam://rungameid/1245620`, and `xdg-open` or similar wrappers around those URLs. Do not launch `start_protected_game.exe` directly or through Proton/Wine/Steam; that is the protected/EAC launcher, not an approved agent runtime target. Process detection/teardown of stale `start_protected_game.exe` is allowed, but launching it is not. Runtime work must use only an approved, explicitly gated direct/offline `eldenring.exe` probe path.
 
@@ -53,6 +55,8 @@ For Pi `run_experiment` in this repo, the cap is the same single hard truth as e
 Steam MUST be running before every Elden Ring runtime probe. Verify with `pgrep -x steam` first; if it is absent, ask the user to start Steam (interactive login) before launching any probe. The offline `eldenring.exe` Proton launch reuses Steam's environment (wineprefix, CWD, account/save-dir id); with Steam down the game still boots but in a different environment, so the DLL debug log lands elsewhere and Steam-dependent state degrades into a non-representative run (observed 2026-06-21: a run came back `cold_char_mount_phase=5` yet appended zero debug lines and the default level-9 character). `scripts/run-product-continue-direct-probe.sh` now fails closed in `preflight()` when Steam is down.
 
 Standing runtime-validation order: after a successful build that materially increases confidence in a runtime-affecting Elden Ring change and the next proof requires live validation, launch the approved direct/offline no-auto-teardown Elden Ring probe immediately (after Steam/no-existing-ER preflight) instead of waiting for another prompt. Still use the loud launch banner and exact artifact/teardown reporting.
+
+User steering is not evidence. When the user proposes a concrete technical hypothesis or fallback during RE/runtime work, treat it as a lead to verify, not as ground truth and not as permission to skip research. Before implementing a user-steered objective claim, inspect the current static/runtime evidence that could confirm or falsify it, state the verified delta in the work artifacts/logs, and only then choose the next code change. If the evidence contradicts part of the steering, preserve the valid intent but correct the mechanism instead of reflexively agreeing.
 
 ## linux-x86-debug Sibling Toolkit (attach / trace / DLL inject)
 
@@ -214,6 +218,14 @@ other mods (see bd memory `autoload-dll-product-requirements`). "Architecturally
 hard" is not "impossible" -- keep reverse-engineering until the in-process,
 no-input mechanism is found. Surface trade-offs honestly, but the bar is the
 actual goal, never a fallback.
+
+When a native menu/load path appears to need a manually pumped `MenuJob`, treat that as a red flag
+that the integration boundary is wrong. Do **not** build a recurring private pump as the product fix.
+Instead, reverse the native ownership path: create/build the correct job, store/retain it in the same
+kind of native slot the game uses, enqueue/submit it through the proper MenuJob queue/owner, and trigger
+that queued job from the native OK/confirm transition when the verified semaphores say the press would
+hit the intended option. Manual per-frame pumping is only a bounded diagnostic to prove job behavior;
+the product path must be native enqueue + native pump ownership.
 
 ## Upstream (`fromsoftware-rs`)
 

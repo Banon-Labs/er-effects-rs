@@ -790,7 +790,16 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         if base_result.is_ok() {
                             PRODUCT_CORE_CALLSITE_BASE_OK_TICKS.fetch_add(1, Ordering::SeqCst);
                         }
-                        let slot_result = state.autoload.slot();
+                        let quickload_slot =
+                            SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
+                        let slot_result = if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+                            >= SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED
+                            && quickload_slot != usize::MAX
+                        {
+                            Some(quickload_slot as i32)
+                        } else {
+                            state.autoload.slot()
+                        };
                         if let Some(slot) = slot_result {
                             PRODUCT_CORE_CALLSITE_SLOT_OK_TICKS.fetch_add(1, Ordering::SeqCst);
                             PRODUCT_CORE_CALLSITE_LAST_SLOT.store(slot as usize, Ordering::SeqCst);
@@ -940,6 +949,27 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // choices), optionally clean stale title-dialog render resources, then run the
                 // one-shot correctness dump.
                 IN_WORLD_REACHED.store(IN_WORLD_REACHED_YES, Ordering::SeqCst);
+                if product_autoload_enabled()
+                    && SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+                        >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+                {
+                    PRODUCT_CORE_CALLSITE_TICKS.fetch_add(1, Ordering::SeqCst);
+                    let quickload_slot = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
+                    if let (Ok(base), true) = (game_module_base(), quickload_slot != usize::MAX) {
+                        PRODUCT_CORE_CALLSITE_BASE_OK_TICKS.fetch_add(1, Ordering::SeqCst);
+                        PRODUCT_CORE_CALLSITE_SLOT_OK_TICKS.fetch_add(1, Ordering::SeqCst);
+                        PRODUCT_CORE_CALLSITE_LAST_SLOT.store(quickload_slot, Ordering::SeqCst);
+                        unsafe {
+                            product_core_autoload_tick(
+                                base,
+                                quickload_slot as i32,
+                                state.game_task_ticks,
+                            )
+                        };
+                    }
+                    write_telemetry_throttled(&mut state, false);
+                    return;
+                }
                 if own_stepper_enabled()
                     || native_load_enabled()
                     || native_continue_enabled()

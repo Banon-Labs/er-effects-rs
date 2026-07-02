@@ -2482,6 +2482,13 @@ pub(crate) const GAME_MAN_SAVED_MAP_C30_OFFSET: usize =
     core::mem::offset_of!(GameMan, stay_in_multiplay_area_saved_rotation)
         + core::mem::size_of::<F32Vector4>()
         + core::mem::size_of::<F32Vector4>();
+/// Unnamed native Quit Game / return-title job-chain predicate field.
+/// Ghidra labels this `GameMan::field143_0xbc4`; known writes are 1 -> 2 -> 3, and
+/// the native wait predicate tests `== 3`. This is NOT a named enum until further RE proves one.
+pub(crate) const GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET: usize = 0xbc4;
+/// Terminal value for `GameMan::field143_0xbc4` observed after the native return-title job tail.
+/// Keep this value named as a predicate terminal, not a semantic enum state.
+pub(crate) const GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY: usize = 3;
 /// submit_play_game 3-phase states: build CSFeMan -> deserialize slot -> re-submit
 /// the real map. Driven one step per game-task tick.
 pub(crate) const SUBMIT_PHASE_INIT: i32 = 0;
@@ -2525,6 +2532,16 @@ pub(crate) const B80_LOAD_SAVE_DATA_INITIATOR_RVA: usize = 0x67b200;
 /// reveals WHICH deserializer set the saved map (vanilla 0x67b290/0x67e150 chain or,
 /// if it never fires under Seamless, ERSC writing c30 from its own module).
 pub(crate) const C30_WRITER_RVA: usize = 0x67bd70;
+/// GameMan save-load entry that reaches PlayerGameData::Deserialize -> CSGaitemImp::Deserialize.
+/// Guarded during System quickload return-title transition so ProfileSelect OK cannot deserialize
+/// into the live in-world player state before native title ownership is rebuilt.
+pub(crate) const SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_RVA: u32 = 0x67bd70;
+/// CSGaitemImp::Deserialize leaf that crashes during in-world ProfileSelect OK handoff.
+pub(crate) const SYSTEM_QUIT_GAITEM_DESERIALIZE_RVA: u32 = 0x671130;
+/// CSGaitemImp indexed-handle lookup used by ChrAsm::Deserialize after equipment stream reads.
+pub(crate) const SYSTEM_QUIT_GAITEM_LOOKUP_RVA: u32 = 0x671810;
+/// CSGaitemImp post-deserialize finalize/reindex path that panics while singleton state is reset.
+pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_RVA: u32 = 0x671670;
 /// The save-data subsystem gate the c30-writer 0x67bd70 checks before it writes
 /// GameMan+0xc30: `[0x143d68078]` (RVA 0x3d68078). It is a 0x270-byte heap object
 /// built by the save-load boot 0x6798d0..0x679904 and zeroed on teardown 0x6789bf.
@@ -2899,6 +2916,12 @@ pub(crate) const EXECUTE_MENU_JOB_RVA: usize = 0x7a9600;
 /// 0x14080d960 does `mov rax,[0x143d6b7b0]; mov rcx,0x80(rax)` (popupMenu) then reads +0xB0. (Same
 /// singleton whose +0x90 is the menu input bitmap.) bd menu-job-install-mechanism-2026-06-23.
 pub(crate) const GLOBAL_CSMENUMAN_RVA: usize = 0x3d6b7b0;
+/// CSMenuManImp -> menuData* at +0x8. Return-title final functor writes `menuData+0x5d = 1`.
+pub(crate) const CSMENUMAN_MENU_DATA_08_OFFSET: usize = 0x8;
+/// CSMenuMan menuData return-title request flag written by final functor `FUN_1407a3990`.
+pub(crate) const CSMENUMAN_MENU_DATA_RETURN_TITLE_FLAG_5D_OFFSET: usize = 0x5d;
+/// Companion global flag written by the same return-title final functor (`DAT_143d6c5e8 = 1`).
+pub(crate) const RETURN_TITLE_FINAL_FUNCTOR_GLOBAL_FLAG_RVA: usize = 0x3d6c5e8;
 /// CSMenuManImp -> CSPopupMenu* at +0x80.
 pub(crate) const CSMENUMAN_POPUP_80_OFFSET: usize = 0x80;
 /// CSPopupMenu -> `currentTopMenuJob` (MenuJob*) at +0xB0 -- the single top-job slot the per-frame
@@ -4126,15 +4149,16 @@ pub(crate) const MENU_WINDOW_LATCH_NOT_INSTALLED: usize = 0;
 pub(crate) const MENU_WINDOW_LATCH_INSTALLED_YES: usize = 1;
 pub(crate) static START_MENU_WINDOW_LATCH: Once = Once::new();
 /// Quick-loading button hook for the System -> Quit Game tab: duplicate the native
-/// Return-to-Desktop `AddCancelButton` call once, retitle that clone as `Select profile to load`,
-/// and route its action to native 05_010_ProfileSelect. The hook is always installed; slot-load
+/// Quit Game / return-to-title `AddCancelButton` call once, retitle that clone as
+/// `Select profile to load`, and route its action to native 05_010_ProfileSelect. The hook is always installed; slot-load
 /// activation from the injected in-world ProfileSelect is separately guarded below while the crash
 /// at CSGaitemImp::Deserialize is investigated. Address is deobf/live (dump AddCancelButton
 /// 0x140920d80 -> live 0x140920c90).
 pub(crate) const SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA: u32 = 0x920c90;
-/// Return address immediately after the second `AddCancelButton` in the Quit Game tab builder
-/// (dump `FUN_140958a00` -> live `0x140958910`). The second native row is Return to Desktop.
-pub(crate) const SYSTEM_QUIT_DUPLICATE_DESKTOP_RETURN_RVA: usize = 0x958b37;
+/// Return address immediately after the first `AddCancelButton` in the Quit Game tab builder
+/// (live/deobf `FUN_140958910`). The first native row is Quit Game / return-to-title; the second
+/// native row is Return to Desktop and must not be cloned for quick-load.
+pub(crate) const SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA: usize = 0x958a20;
 pub(crate) const SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES: usize = 0x20;
 /// Immediate byte in the Quit Game subdialog factory that selects the one-slot `GameEnd` GFX
 /// component (`movb $0xe, 0x20(%rsp)` in live/deobf `FUN_14093bba0`). For the duplicate-button
@@ -4144,7 +4168,7 @@ pub(crate) const SYSTEM_QUIT_COMPONENT_INDEX_PATCH_RVA: usize = 0x93bb41;
 pub(crate) const SYSTEM_QUIT_COMPONENT_INDEX_EXPECTED_GAME_END: u8 = 0x0e;
 pub(crate) const SYSTEM_QUIT_COMPONENT_INDEX_REPLACEMENT_MULTI_SLOT: u8 = 0x02;
 pub(crate) const SYSTEM_QUIT_COMPONENT_INDEX_PATCH_LEN: usize = 1;
-/// Existing native line-help text reused as the visible label/help for the proof-only third row.
+/// Existing native line-help text reused as the visible label/help for the cloned quick-load row.
 /// `GR_LineHelp[406000] == "Select profile to load"` in the local FMG dump.
 pub(crate) const SYSTEM_QUIT_LOAD_LINEHELP_ID: u32 = 406000;
 /// Live/deobf `GetGR_LineHelp(MenuString*, int)` (dump `0x140760880` -> live `0x140760790`).
@@ -4154,11 +4178,11 @@ pub(crate) const MENU_HELP_LABEL_HELP_OFFSET: usize = 0x38;
 pub(crate) const MENU_HELP_LABEL_SIZE: usize = 0x70;
 /// Live/deobf `MenuHelpLabelComponent::~MenuHelpLabelComponent` (dump `0x140742d90`).
 pub(crate) const MENU_HELP_LABEL_DTOR_RVA: u32 = 0x742c90;
-/// Return-to-Desktop action std::function-like vtable used by the native Quit Game builder.
-pub(crate) const SYSTEM_QUIT_DESKTOP_ACTION_VTABLE_RVA: usize = 0x2b12bb8;
-/// Vtable invoke target for the Return-to-Desktop action object (`add rcx, 8; jmp 0x14094d900`).
-pub(crate) const SYSTEM_QUIT_DESKTOP_ACTION_DO_CALL_RVA: u32 = 0x9610c0;
-/// Non-canonical marker copied into only the proof third-row action payload; the invoke hook eats it.
+/// Quit Game / return-to-title action std::function-like vtable used by the native Quit Game builder.
+pub(crate) const SYSTEM_QUIT_RETURN_TITLE_ACTION_VTABLE_RVA: usize = 0x2b12b48;
+/// Vtable invoke target for the Quit Game / return-to-title action object (`add rcx, 8; jmp native route`).
+pub(crate) const SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA: u32 = 0x961640;
+/// Non-canonical marker copied into only the cloned quick-load action payload; the invoke hook eats it.
 pub(crate) const SYSTEM_QUIT_NOOP_ACTION_SENTINEL: usize = 0x4552_5351_4e4f_4f50;
 /// `PropertyEditDialog.properties.items`: 0x1260 + BasicViewItemList.items(+8).
 pub(crate) const PROPERTY_EDIT_DIALOG_PROPERTIES_1268_OFFSET: usize = 0x1268;
@@ -4179,7 +4203,7 @@ pub(crate) const SYSTEM_QUIT_NOOP_ACTION_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_NOOP_ACTION_INSTALLED_YES: usize = 1;
 pub(crate) static SYSTEM_QUIT_DUPLICATE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_NOOP_SELECTION_COUNT: AtomicUsize = AtomicUsize::new(0);
-/// Recorded cloned action implementation object for the third proof row; only this action is routed.
+/// Recorded cloned action implementation object for the quick-load row; only this action is routed.
 pub(crate) static SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
 /// Stable qword slot passed to the native `05_010_ProfileSelect` wrapper. The wrapper writes the
 /// MenuWindowJob pointer here and captures this slot for its later ProfileLoadDialog factory call.
@@ -4188,6 +4212,17 @@ pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT: AtomicUsize = AtomicUsize::
 pub(crate) const PROFILE_SELECT_WRAPPER_RVA: u32 = 0x81f6f0;
 /// Live/deobf native menu-job submit helper (`FUN_1407a9340` dump -> live `0x1407a9250`).
 pub(crate) const MENU_JOB_SUBMIT_RVA: u32 = 0x7a9250;
+/// Live/deobf native menu-job queue idle predicate (`FUN_1407a9320` dump -> live `0x1407a9230`).
+pub(crate) const MENU_JOB_QUEUE_READY_RVA: u32 = 0x7a9230;
+/// Live/deobf native `CS::MenuJob::ChainMenuJobs` (`0x1407a7ca0` dump -> live `0x1407a7bb0`).
+/// ABI: `rcx=&first_job_slot, rdx=&out_job_slot, r8=&second_job_slot`; it builds a native
+/// FixOrderJobSequence so the existing menu/job pump owns both jobs rather than a private manual pump.
+pub(crate) const MENU_JOB_CHAIN_MENU_JOBS_RVA: u32 = 0x7a7bb0;
+/// Live/deobf native ProfileSelect LoadJob builder (`FUN_140826600` dump -> live `0x140826510`).
+/// ABI: `rcx=&out_job_slot, rdx=dialog+0x50/list, r8d=profile_id, r9=*(dialog+0x1cc8)`.
+pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_JOB_BUILDER_RVA: u32 = 0x826510;
+/// Live/deobf native Quit Game return-title chain builder (`FUN_14079d7f0` dump -> live `0x14079d700`).
+pub(crate) const SYSTEM_QUIT_RETURN_TITLE_CHAIN_BUILDER_RVA: u32 = 0x79d700;
 /// Live/deobf `FUN_140733ff0(list, window)`: appends a MenuWindow to a DLFixedVector-backed list.
 /// Hooked as a listener to identify the ProfileSelect append/list for Back/removal restore state.
 pub(crate) const MENU_WINDOW_LIST_PUSH_RVA: u32 = 0x733ef0;
@@ -4210,6 +4245,7 @@ pub(crate) static SYSTEM_QUIT_OPTION_SETTING_WINDOW: AtomicUsize = AtomicUsize::
 pub(crate) static SYSTEM_QUIT_PROFILE_SELECT_WINDOW: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_HIDE_REAL_WINDOWS_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_REAL_WINDOWS_HIDDEN: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_WINDOW_LIST_PUSH_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
@@ -4234,30 +4270,114 @@ pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SYSTEM_QUIT_GAITEM_DESERIALIZE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SYSTEM_QUIT_GAITEM_LOOKUP_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SYSTEM_QUIT_GAITEM_FINALIZE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ADDR: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_GAITEM_DESERIALIZE_ADDR: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_GAITEM_LOOKUP_ADDR: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_GAITEM_FINALIZE_ADDR: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED_YES: usize = 1;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED_YES: usize = 1;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED_YES: usize = 1;
+pub(crate) const SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_NOT_INSTALLED: usize = 0;
+pub(crate) const SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED_YES: usize = 1;
+pub(crate) const SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_DISABLED: usize = 2;
+pub(crate) const SYSTEM_QUIT_GAITEM_DESERIALIZE_NOT_INSTALLED: usize = 0;
+pub(crate) const SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED_YES: usize = 1;
+pub(crate) const SYSTEM_QUIT_GAITEM_DESERIALIZE_DISABLED: usize = 2;
+pub(crate) const SYSTEM_QUIT_GAITEM_LOOKUP_NOT_INSTALLED: usize = 0;
+pub(crate) const SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED_YES: usize = 1;
+pub(crate) const SYSTEM_QUIT_GAITEM_LOOKUP_DISABLED: usize = 2;
+pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_NOT_INSTALLED: usize = 0;
+pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED_YES: usize = 1;
+pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_DISABLED: usize = 2;
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_GAITEM_DESERIALIZE_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_GAITEM_DESERIALIZE_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_GAITEM_LOOKUP_EMPTY_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_GAITEM_LOOKUP_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_GAITEM_FINALIZE_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_GAITEM_FINALIZE_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_JOB: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_LIST: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_PROFILE_ID: AtomicUsize =
     AtomicUsize::new(usize::MAX);
+/// Captured fourth constructor argument for native ProfileSelect LoadJob builder, mirrored from the
+/// consumed LoadJobContext (`job+0x60`, originally `*(ProfileLoadDialog+0x1cc8)`).
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_CONTEXT_ARG: AtomicUsize =
+    AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_POST_RETURN_TITLE_FIRED: AtomicUsize =
+    AtomicUsize::new(0);
+/// Native return-title semantic request used after System->ProfileSelect confirmation. This is
+/// `FUN_14067a490` in the Ghidra dump and maps to live/deobf `0x14067a3a0`; it sets the same
+/// GameMan return-title/save flags used by the normal Quit Game confirmation callback without
+/// displaying another confirmation dialog.
+pub(crate) const SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA: u32 = 0x67a3a0;
+pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE: usize = 0;
+pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED: usize = 1;
+pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED: usize = 2;
+pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN: usize = 3;
+pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF: usize = 4;
+pub(crate) static SYSTEM_QUIT_QUICKLOAD_PHASE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT: AtomicUsize =
+    AtomicUsize::new(0);
+/// Native return-title final functor (`FUN_1407a3990` dump -> live/deobf `0x1407a3900`).
+/// It sets `CSMenuMan->menuData+0x5d` and `DAT_143d6c5e8`, which request the real title/menu rebuild.
+pub(crate) const SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_RVA: u32 = 0x7a3900;
+/// Native builder for a MenuJob wrapping the final return-title functor (`FUN_14079f780` dump ->
+/// live/deobf `0x14079f690`). Submit this job through the native queue so the flag transition happens
+/// in menu-pump ownership, not from our game-task thread.
+pub(crate) const SYSTEM_QUIT_RETURN_TITLE_FINAL_JOB_BUILDER_RVA: u32 = 0x79f690;
+pub(crate) static SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT: AtomicUsize =
+    AtomicUsize::new(0);
+/// Count of quick-load handoffs that invoked the original native Quit Game row action trampoline
+/// instead of the low-level accepted callback alone. This is an experiment to test whether the full
+/// native return-title menu-job chain is the missing teardown boundary.
+pub(crate) static SYSTEM_QUIT_QUICKLOAD_NATIVE_QUIT_ACTION_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT: AtomicUsize =
+    AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_READY_BLOCK_COUNT: AtomicUsize =
+    AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_LAST_DIALOG: AtomicUsize =
+    AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_LAST_QUEUE_READY: AtomicUsize =
+    AtomicUsize::new(usize::MAX);
+pub(crate) static SYSTEM_QUIT_QUICKLOAD_TITLE_OWNER_SEEN_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_QUICKLOAD_AUTOLOAD_HANDOFF_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_QUICKLOAD_LAST_TITLE_OWNER: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR: AtomicUsize =
     AtomicUsize::new(usize::MAX);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_BOUND: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_TOP_HIDE_ARMED_LIST: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_TOP_HIDE_ARMED_DIALOG: AtomicUsize = AtomicUsize::new(0);
+/// Original System dialog saved for the post-ProfileSelect quickload return-title chain.
+/// Unlike SYSTEM_QUIT_TOP_HIDE_ARMED_DIALOG, this must survive the ProfileSelect append observer reset.
+pub(crate) static SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG: AtomicUsize =
+    AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_TOP_HIDE_TOP_WINDOW: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_TOP_HIDE_PROFILE_WINDOW: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_TOP_HIDE_LIST: AtomicUsize = AtomicUsize::new(0);

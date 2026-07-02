@@ -17,7 +17,9 @@ use std::{
 use std::os::windows::ffi::OsStrExt as _;
 
 use crate::input_blocker::{InputBlocker, InputFlags};
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
+use crate::mh::{
+    MH_ApplyQueued, MH_Initialize, MH_QueueDisableHook, MH_QueueEnableHook, MH_STATUS, MhHook,
+};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
@@ -6506,6 +6508,83 @@ unsafe fn system_quit_reset_profile_select_state(source: &str) {
     ));
 }
 
+pub(crate) unsafe fn system_quit_submit_direct_return_title_chain(
+    base: usize,
+    system_dialog: usize,
+    source: &str,
+) -> bool {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const HEAP_LO: usize = 0x10000;
+    if SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst) != 0 {
+        return true;
+    }
+    if system_dialog < HEAP_LO {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: direct return-title chain abort source={source} -- system_dialog=0x{system_dialog:x} not heap-like"
+        ));
+        return false;
+    }
+    let queue = system_dialog + 0x10;
+    let list = system_dialog + 0x50;
+    SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_LAST_DIALOG.store(system_dialog, Ordering::SeqCst);
+    let Ok(ready_addr) = game_rva(MENU_JOB_QUEUE_READY_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: direct return-title chain abort source={source} -- queue-ready rva 0x{MENU_JOB_QUEUE_READY_RVA:x} unresolved"
+        ));
+        return false;
+    };
+    let ready_fn: unsafe extern "system" fn(usize) -> u8 =
+        unsafe { std::mem::transmute(ready_addr) };
+    let queue_ready = unsafe { ready_fn(queue) } != 0;
+    SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_LAST_QUEUE_READY
+        .store(queue_ready as usize, Ordering::SeqCst);
+    if !queue_ready {
+        let waits = SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_READY_BLOCK_COUNT
+            .fetch_add(1, Ordering::SeqCst)
+            + 1;
+        if waits <= 3 || waits % 60 == 0 {
+            let head = unsafe { safe_read_usize(queue) }.unwrap_or(NULL);
+            let pending6 = unsafe { safe_read_usize(queue + 0x30) }.unwrap_or(NULL);
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: direct return-title chain WAIT source={source} waits={waits} queue not ready dialog=0x{system_dialog:x} queue=0x{queue:x} head=0x{head:x} field6=0x{pending6:x}"
+            ));
+        }
+        return false;
+    }
+    let Ok(builder_addr) = game_rva(SYSTEM_QUIT_RETURN_TITLE_CHAIN_BUILDER_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: direct return-title chain abort source={source} -- builder rva 0x{SYSTEM_QUIT_RETURN_TITLE_CHAIN_BUILDER_RVA:x} unresolved"
+        ));
+        return false;
+    };
+    let Ok(submit_addr) = game_rva(MENU_JOB_SUBMIT_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: direct return-title chain abort source={source} -- submit rva 0x{MENU_JOB_SUBMIT_RVA:x} unresolved"
+        ));
+        return false;
+    };
+    let builder: unsafe extern "system" fn(usize, usize) -> usize =
+        unsafe { std::mem::transmute(builder_addr) };
+    let submit: unsafe extern "system" fn(usize, usize) =
+        unsafe { std::mem::transmute(submit_addr) };
+    let mut job_slot: usize = 0;
+    let job_slot_ptr = (&raw mut job_slot) as usize;
+    unsafe { builder(job_slot_ptr, list) };
+    let job = job_slot;
+    if job < HEAP_LO {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: direct return-title chain builder produced no plausible job source={source} dialog=0x{system_dialog:x} list=0x{list:x} job=0x{job:x}"
+        ));
+        return false;
+    }
+    SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.fetch_add(1, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-quickload: direct return-title chain SUBMIT source={source} builder=0x{builder_addr:x} submit=0x{submit_addr:x} dialog=0x{system_dialog:x} queue=0x{queue:x} list=0x{list:x} job=0x{job:x}; waiting for real title menu rebuild before Continue fallback"
+    ));
+    unsafe { submit(queue, job_slot_ptr) };
+    true
+}
+
 unsafe fn system_quit_restore_real_system_windows(base: usize, source: &str) {
     if SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) == 0 {
         unsafe { system_quit_reset_profile_select_state(source) };
@@ -6514,6 +6593,21 @@ unsafe fn system_quit_restore_real_system_windows(base: usize, source: &str) {
     let top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
     let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
     let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    if phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
+        let system_dialog = SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.load(Ordering::SeqCst);
+        let submitted =
+            unsafe { system_quit_submit_direct_return_title_chain(base, system_dialog, source) };
+        SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-dup: skip restore real windows after quickload handoff source={source} phase={phase} profile=0x{profile:x} top=0x{top:x} option=0x{option:x} direct_chain_submitted={submitted}; leaving old System UI hidden during native transition"
+        ));
+        if submitted {
+            SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.store(0, Ordering::SeqCst);
+            unsafe { system_quit_reset_profile_select_state(source) };
+        }
+        return;
+    }
     let restored_top = if top != 0 {
         unsafe { system_quit_menu_window_set_visible_and_flags(base, top, true, source) }
     } else {
@@ -6537,7 +6631,25 @@ pub(crate) unsafe fn system_quit_profile_select_top_menu_tick() {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     let hidden = SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0;
     let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
-    if !hidden || profile == 0 {
+    if !hidden {
+        return;
+    }
+    if profile == 0 {
+        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+            && SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst) == 0
+        {
+            if let Ok(base) = game_module_base() {
+                let system_dialog =
+                    SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.load(Ordering::SeqCst);
+                let _ = unsafe {
+                    system_quit_submit_direct_return_title_chain(
+                        base,
+                        system_dialog,
+                        "retry-direct-chain-after-profile-cleared",
+                    )
+                };
+            }
+        }
         return;
     }
     let list = SYSTEM_QUIT_TOP_HIDE_LIST.load(Ordering::SeqCst);
@@ -6707,6 +6819,7 @@ unsafe fn system_quit_open_profile_load_dialog(action_obj: usize) -> bool {
     let submit_queue = system_dialog + 0x10;
     SYSTEM_QUIT_TOP_HIDE_ARMED_LIST.store(menu_window_list, Ordering::SeqCst);
     SYSTEM_QUIT_TOP_HIDE_ARMED_DIALOG.store(system_dialog, Ordering::SeqCst);
+    SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.store(system_dialog, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "system-quit-dup: profile-load route SUBMIT job=0x{job:x} job_vt=0x{job_vt:x} via 0x{submit_addr:x}(queue=dialog+0x10=0x{submit_queue:x}, job_slot=0x{job_slot:x}); armed ProfileSelect list observer=0x{menu_window_list:x} -- no slot activation/no load"
     ));
@@ -6773,17 +6886,24 @@ pub(crate) unsafe extern "system" fn system_quit_noop_desktop_action_hook(
 ) -> usize {
     let recorded_action = SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
     if action_obj != 0 && action_obj == recorded_action {
+        let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+        if phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: cloned quick-load action re-entry ignored action=0x{action_obj:x} phase={phase}; native handoff already armed"
+            ));
+            return 0;
+        }
         SYSTEM_QUIT_NOOP_SELECTION_COUNT.fetch_add(1, Ordering::SeqCst);
         let opened = unsafe { system_quit_open_profile_load_dialog(action_obj) };
         append_autoload_debug(format_args!(
-            "system-quit-dup: third-row profile-load action selected action=0x{action_obj:x} opened={opened}; suppressing Return-to-Desktop"
+            "system-quit-dup: cloned quick-load action selected action=0x{action_obj:x} opened={opened}; suppressing native Quit Game row action until ProfileSelect confirms slot"
         ));
         return 0;
     }
     let orig = SYSTEM_QUIT_NOOP_ACTION_ORIG.load(Ordering::SeqCst);
     if orig == HOOK_ORIGINAL_UNSET {
         append_autoload_debug(format_args!(
-            "system-quit-dup: Return-to-Desktop action trampoline is unset for action=0x{action_obj:x} -- fail-open return 0"
+            "system-quit-dup: Quit Game action trampoline is unset for action=0x{action_obj:x} -- fail-open return 0"
         ));
         return 0;
     }
@@ -6808,9 +6928,9 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
     let original: unsafe extern "system" fn(usize, usize, usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig) };
     let caller_match = callstack_contains_game_rva(
-        SYSTEM_QUIT_DUPLICATE_DESKTOP_RETURN_RVA
+        SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA
             .saturating_sub(SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES),
-        SYSTEM_QUIT_DUPLICATE_DESKTOP_RETURN_RVA + SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES,
+        SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA + SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES,
     );
     let before =
         unsafe { safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET) }
@@ -6825,7 +6945,7 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
                 != SYSTEM_QUIT_NOOP_ACTION_INSTALLED_YES
             {
                 append_autoload_debug(format_args!(
-                    "system-quit-dup: matched Return-to-Desktop call but no-op action hook is not installed; skipping third row"
+                    "system-quit-dup: matched Quit Game call but quick-load action hook is not installed; skipping cloned Load Game row"
                 ));
                 return ret;
             }
@@ -6886,11 +7006,11 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
             SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE.store(before, Ordering::SeqCst);
             SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER.store(after_dup, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "system-quit-dup: added third no-op AddCancelButton label=GR_LineHelp:{SYSTEM_QUIT_LOAD_LINEHELP_ID} dialog=0x{dialog:x} count {before}->{after_native}->{after_dup} ret=0x{ret:x} dup_ret=0x{dup_ret:x} row=0x{third_row:x} controller=0x{third_controller:x} action=0x{third_action:x}"
+                "system-quit-dup: added cloned quick-load AddCancelButton label=GR_LineHelp:{SYSTEM_QUIT_LOAD_LINEHELP_ID} dialog=0x{dialog:x} count {before}->{after_native}->{after_dup} ret=0x{ret:x} dup_ret=0x{dup_ret:x} row=0x{third_row:x} controller=0x{third_controller:x} action=0x{third_action:x}"
             ));
         } else {
             append_autoload_debug(format_args!(
-                "system-quit-dup: matched Return-to-Desktop call but count after native is {after_native}, not duplicating"
+                "system-quit-dup: matched Quit Game call but count after native is {after_native}, not duplicating"
             ));
         }
     }
@@ -7025,9 +7145,9 @@ fn install_system_quit_noop_action_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva(SYSTEM_QUIT_DESKTOP_ACTION_DO_CALL_RVA) else {
+    let Ok(addr) = game_rva(SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA) else {
         append_autoload_debug(format_args!(
-            "system-quit-dup: failed to resolve Return-to-Desktop action invoke rva 0x{SYSTEM_QUIT_DESKTOP_ACTION_DO_CALL_RVA:x}"
+            "system-quit-dup: failed to resolve Quit Game action invoke rva 0x{SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA:x}"
         ));
         return;
     };
@@ -7051,7 +7171,7 @@ fn install_system_quit_noop_action_hook() {
                     SYSTEM_QUIT_NOOP_ACTION_INSTALLED
                         .store(SYSTEM_QUIT_NOOP_ACTION_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "system-quit-dup: hooked Return-to-Desktop action invoke 0x{addr:x}; recorded third-row action object will no-op"
+                        "system-quit-dup: hooked Quit Game action invoke 0x{addr:x}; recorded cloned quick-load action object will route to ProfileSelect"
                     ));
                 }
                 status => append_autoload_debug(format_args!(
@@ -7129,11 +7249,193 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_confirmed_hook(
         return unsafe { original(action_obj) };
     }
 
+    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) >= SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED
+        && SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT.load(Ordering::SeqCst) != 0
+    {
+        let load_job_ctx = unsafe { safe_read_usize(dialog + 0x1cc8) }.unwrap_or(0);
+        if load_job_ctx != 0 && load_job_ctx != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { *((load_job_ctx + 0x14c) as *mut i32) = 2 };
+        }
+        if dialog != 0 && dialog != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe {
+                *((dialog + 0x1e8) as *mut i32) = MENU_JOB_STATE_SUCCESS;
+                *((dialog + 0x1ec) as *mut i32) = 0;
+            }
+        }
+        SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-dup: ProfileSelect confirmed-load transition CONSUMED action=0x{action_obj:x} dialog=0x{dialog:x} load_job_ctx=0x{load_job_ctx:x}; wrote native success side effects only, skipped unsafe load/deser tail"
+        ));
+        return 0;
+    }
+
     SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "system-quit-dup: ProfileSelect confirmed-load transition ALLOWED action=0x{action_obj:x} dialog=0x{dialog:x}; actual load/deser is guarded at LoadJobContext::Run"
     ));
     unsafe { original(action_obj) }
+}
+
+unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, source: &str) {
+    const NO_SLOT: usize = usize::MAX;
+    if selected_slot < 0 {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: not arming autoload from {source} -- invalid selected_slot={selected_slot}"
+        ));
+        return;
+    }
+    let system_dialog = SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.load(Ordering::SeqCst);
+    if system_dialog == 0 || system_dialog == TITLE_OWNER_SCAN_START_ADDRESS {
+        SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.store(NO_SLOT, Ordering::SeqCst);
+        SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.store(0, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: not arming direct native chain from {source} -- missing preserved original System dialog selected_slot={selected_slot}"
+        ));
+        return;
+    }
+    install_system_quit_gaitem_deserialize_hook();
+    install_system_quit_gaitem_lookup_hook();
+    install_system_quit_gaitem_finalize_hook();
+    SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.store(selected_slot as usize, Ordering::SeqCst);
+    SYSTEM_QUIT_QUICKLOAD_PHASE.store(SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED, Ordering::SeqCst);
+    OWN_STEPPER_SLOT.store(selected_slot, Ordering::SeqCst);
+    PRODUCT_AUTOLOAD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_MENU, Ordering::SeqCst);
+    TFC_CONTINUE_FIRED.store(0, Ordering::SeqCst);
+    TFC_LOAD_VEC_WAIT_TICKS.store(0, Ordering::SeqCst);
+    OWN_STEPPER_MENU_OPENED.store(OWN_STEPPER_MENU_OPENED_NO, Ordering::SeqCst);
+    TITLE_ACCEPT_BYTE_GATE_FIRED.store(false, Ordering::SeqCst);
+    TITLE_OWNER_PTR.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+    TITLE_OWNER_SCAN_COUNTDOWN.store(TITLE_OWNER_SCAN_COUNTDOWN_READY, Ordering::SeqCst);
+    OWN_LOAD_CONTINUE_FIRED.store(false, Ordering::SeqCst);
+    SYSTEM_QUIT_QUICKLOAD_LAST_TITLE_OWNER.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_QUICKLOAD_AUTOLOAD_HANDOFF_COUNT.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_PROFILE_LOAD_JOB_POST_RETURN_TITLE_FIRED.store(0, Ordering::SeqCst);
+    PROFILE_REFRESH_KICKED.store(0, Ordering::SeqCst);
+    PORTRAIT_RENDER_WINDOW_DONE.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_QUICKLOAD_PHASE.store(
+        SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED,
+        Ordering::SeqCst,
+    );
+    append_autoload_debug(format_args!(
+        "system-quit-quickload: armed product Continue autoload selected_slot={selected_slot} source={source}; will direct-submit native return-title chain once ProfileSelect closes system_dialog=0x{system_dialog:x}"
+    ));
+}
+
+pub(crate) unsafe extern "system" fn system_quit_gaitem_finalize_hook(gaitem: usize) {
+    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    if (SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
+        .contains(&phase)
+    {
+        let skips = SYSTEM_QUIT_GAITEM_FINALIZE_SKIP_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: CSGaitemImp finalize SKIPPED during return-title transition #{skips} phase={phase} gaitem=0x{gaitem:x}; avoids post-deserialize singleton-state assert while native return-title job advances"
+        ));
+        return;
+    }
+    SYSTEM_QUIT_GAITEM_FINALIZE_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
+    let orig = SYSTEM_QUIT_GAITEM_FINALIZE_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: CSGaitemImp finalize trampoline unset phase={phase} gaitem=0x{gaitem:x}; fail-closed skip"
+        ));
+        return;
+    }
+    let original: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(orig) };
+    unsafe { original(gaitem) };
+}
+
+pub(crate) unsafe extern "system" fn system_quit_gaitem_lookup_hook(
+    gaitem: usize,
+    out_handle: usize,
+    in_handle: usize,
+) -> usize {
+    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    if (SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
+        .contains(&phase)
+    {
+        if out_handle != 0 && out_handle != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { *(out_handle as *mut u32) = 0 };
+        }
+        let empties = SYSTEM_QUIT_GAITEM_LOOKUP_EMPTY_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        if empties <= 16 || empties % 64 == 0 {
+            let input = unsafe { safe_read_i32(in_handle) }.unwrap_or(0) as u32;
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: CSGaitemImp lookup EMPTIED during return-title transition #{empties} phase={phase} gaitem=0x{gaitem:x} out=0x{out_handle:x} in=0x{in_handle:x} input=0x{input:x}; avoids ChrAsm equipment lookup assert while stream remains consumed"
+            ));
+        }
+        return out_handle;
+    }
+    SYSTEM_QUIT_GAITEM_LOOKUP_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
+    let orig = SYSTEM_QUIT_GAITEM_LOOKUP_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: CSGaitemImp lookup trampoline unset phase={phase} gaitem=0x{gaitem:x}; returning empty"
+        ));
+        if out_handle != 0 && out_handle != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { *(out_handle as *mut u32) = 0 };
+        }
+        return out_handle;
+    }
+    let original: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    unsafe { original(gaitem, out_handle, in_handle) }
+}
+
+pub(crate) unsafe extern "system" fn system_quit_gaitem_deserialize_hook(
+    gaitem: usize,
+    input_stream: usize,
+) {
+    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    if (SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
+        .contains(&phase)
+    {
+        let skips = SYSTEM_QUIT_GAITEM_DESERIALIZE_SKIP_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        if skips <= 8 || skips % 64 == 0 {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: CSGaitemImp::Deserialize SKIPPED during return-title transition #{skips} phase={phase} gaitem=0x{gaitem:x} input_stream=0x{input_stream:x}; lets native return-title load job advance without in-world inventory deserialize crash"
+            ));
+        }
+        return;
+    }
+    SYSTEM_QUIT_GAITEM_DESERIALIZE_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
+    let orig = SYSTEM_QUIT_GAITEM_DESERIALIZE_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: CSGaitemImp::Deserialize trampoline unset phase={phase} gaitem=0x{gaitem:x}; fail-closed skip"
+        ));
+        return;
+    }
+    let original: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(orig) };
+    unsafe { original(gaitem, input_stream) };
+}
+
+pub(crate) unsafe extern "system" fn system_quit_gameman_load_save_hook(
+    game_man: usize,
+    save_arg: usize,
+    load_kind: u32,
+) -> usize {
+    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    if (SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
+        .contains(&phase)
+    {
+        let blocks = SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: GameMan load-save BLOCKED during return-title transition #{blocks} phase={phase} game_man=0x{game_man:x} save_arg=0x{save_arg:x} load_kind=0x{load_kind:x}; prevents in-world CSGaitemImp::Deserialize crash before title rebuild"
+        ));
+        return 0;
+    }
+    SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
+    let orig = SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: GameMan load-save trampoline unset phase={phase} game_man=0x{game_man:x}; fail-closed return 0"
+        ));
+        return 0;
+    }
+    let original: unsafe extern "system" fn(usize, usize, u32) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    unsafe { original(game_man, save_arg, load_kind) }
 }
 
 pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
@@ -7160,9 +7462,12 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
     let profile_window = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
     let list = unsafe { safe_read_usize(job + 0x50) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
     let profile_id = unsafe { safe_read_i32(job + 0x58) }.unwrap_or(-1);
+    let context_arg =
+        unsafe { safe_read_usize(job + 0x60) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
     SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_JOB.store(job, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_LIST.store(list, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_PROFILE_ID.store(profile_id as usize, Ordering::SeqCst);
+    SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_CONTEXT_ARG.store(context_arg, Ordering::SeqCst);
     let system_quit_profile_active = profile_window != 0
         && list == profile_window + 0x50
         && SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0;
@@ -7179,6 +7484,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
     }
 
     SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst);
+    unsafe { system_quit_arm_quickload_autoload(profile_id, "ProfileSelectLoadJobRun") };
     if result > TITLE_OWNER_SCAN_START_ADDRESS && unsafe { safe_read_usize(result) }.is_some() {
         unsafe {
             *(result as *mut i32) = MENU_JOB_STATE_SUCCESS;
@@ -7193,9 +7499,441 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
         }
     }
     append_autoload_debug(format_args!(
-        "system-quit-dup: ProfileSelect load-job Run BLOCKED save-safe job=0x{job:x} result=0x{result:x} list=0x{list:x} profile_id={profile_id}; returning Success to consume native confirmation without entering load/deser"
+        "system-quit-dup: ProfileSelect load-job Run BLOCKED save-safe job=0x{job:x} result=0x{result:x} list=0x{list:x} profile_id={profile_id} context_arg=0x{context_arg:x}; returning Success to close ProfileSelect; no captured LoadJob is retained or replayed"
     ));
     result
+}
+
+pub(crate) fn install_system_quit_gaitem_finalize_hook() {
+    let installed = SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED.load(Ordering::SeqCst);
+    if installed == SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED_YES {
+        return;
+    }
+    if installed == SYSTEM_QUIT_GAITEM_FINALIZE_DISABLED {
+        let addr = SYSTEM_QUIT_GAITEM_FINALIZE_ADDR.load(Ordering::SeqCst);
+        if addr != 0 {
+            match unsafe { MH_QueueEnableHook(addr as *mut c_void) } {
+                MH_STATUS::MH_OK => match unsafe { MH_ApplyQueued() } {
+                    MH_STATUS::MH_OK => {
+                        SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED
+                            .store(SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED_YES, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "system-quit-quickload: re-enabled CSGaitemImp finalize hook 0x{addr:x}; transition finalize skipped until native title handoff"
+                        ));
+                    }
+                    status => append_autoload_debug(format_args!(
+                        "system-quit-quickload: MH_ApplyQueued re-enable CSGaitemImp finalize hook failed: {status:?}"
+                    )),
+                },
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue re-enable CSGaitemImp finalize hook failed: {status:?}"
+                )),
+            }
+        }
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_Initialize for CSGaitemImp finalize hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_GAITEM_FINALIZE_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: failed to resolve CSGaitemImp finalize rva 0x{SYSTEM_QUIT_GAITEM_FINALIZE_RVA:x}"
+        ));
+        return;
+    };
+    SYSTEM_QUIT_GAITEM_FINALIZE_ADDR.store(addr, Ordering::SeqCst);
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_gaitem_finalize_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_GAITEM_FINALIZE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue_enable CSGaitemImp finalize hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED
+                        .store(SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED_YES, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-quickload: hooked CSGaitemImp finalize 0x{addr:x}; transition finalize skipped until native title handoff"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: MH_ApplyQueued CSGaitemImp finalize hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-quickload: MhHook::new CSGaitemImp finalize hook failed: {status:?}"
+        )),
+    }
+}
+
+pub(crate) fn disable_system_quit_gaitem_finalize_hook(source: &str) {
+    if SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED_YES
+    {
+        return;
+    }
+    let addr = SYSTEM_QUIT_GAITEM_FINALIZE_ADDR.load(Ordering::SeqCst);
+    if addr == 0 {
+        return;
+    }
+    match unsafe { MH_QueueDisableHook(addr as *mut c_void) } {
+        MH_STATUS::MH_OK => match unsafe { MH_ApplyQueued() } {
+            MH_STATUS::MH_OK => {
+                SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED
+                    .store(SYSTEM_QUIT_GAITEM_FINALIZE_DISABLED, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: disabled CSGaitemImp finalize hook 0x{addr:x} before native Continue source={source}"
+                ));
+            }
+            status => append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_ApplyQueued disable CSGaitemImp finalize hook failed source={source}: {status:?}"
+            )),
+        },
+        status => append_autoload_debug(format_args!(
+            "system-quit-quickload: queue_disable CSGaitemImp finalize hook failed source={source}: {status:?}"
+        )),
+    }
+}
+
+pub(crate) fn install_system_quit_gaitem_lookup_hook() {
+    let installed = SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED.load(Ordering::SeqCst);
+    if installed == SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED_YES {
+        return;
+    }
+    if installed == SYSTEM_QUIT_GAITEM_LOOKUP_DISABLED {
+        let addr = SYSTEM_QUIT_GAITEM_LOOKUP_ADDR.load(Ordering::SeqCst);
+        if addr != 0 {
+            match unsafe { MH_QueueEnableHook(addr as *mut c_void) } {
+                MH_STATUS::MH_OK => match unsafe { MH_ApplyQueued() } {
+                    MH_STATUS::MH_OK => {
+                        SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED
+                            .store(SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED_YES, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "system-quit-quickload: re-enabled CSGaitemImp lookup hook 0x{addr:x}; transition equipment handle lookups empty until native title handoff"
+                        ));
+                    }
+                    status => append_autoload_debug(format_args!(
+                        "system-quit-quickload: MH_ApplyQueued re-enable CSGaitemImp lookup hook failed: {status:?}"
+                    )),
+                },
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue re-enable CSGaitemImp lookup hook failed: {status:?}"
+                )),
+            }
+        }
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_Initialize for CSGaitemImp lookup hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_GAITEM_LOOKUP_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: failed to resolve CSGaitemImp lookup rva 0x{SYSTEM_QUIT_GAITEM_LOOKUP_RVA:x}"
+        ));
+        return;
+    };
+    SYSTEM_QUIT_GAITEM_LOOKUP_ADDR.store(addr, Ordering::SeqCst);
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_gaitem_lookup_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_GAITEM_LOOKUP_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue_enable CSGaitemImp lookup hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED
+                        .store(SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED_YES, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-quickload: hooked CSGaitemImp lookup 0x{addr:x}; transition equipment handle lookups empty until native title handoff"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: MH_ApplyQueued CSGaitemImp lookup hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-quickload: MhHook::new CSGaitemImp lookup hook failed: {status:?}"
+        )),
+    }
+}
+
+pub(crate) fn disable_system_quit_gaitem_lookup_hook(source: &str) {
+    if SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED_YES
+    {
+        return;
+    }
+    let addr = SYSTEM_QUIT_GAITEM_LOOKUP_ADDR.load(Ordering::SeqCst);
+    if addr == 0 {
+        return;
+    }
+    match unsafe { MH_QueueDisableHook(addr as *mut c_void) } {
+        MH_STATUS::MH_OK => match unsafe { MH_ApplyQueued() } {
+            MH_STATUS::MH_OK => {
+                SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED
+                    .store(SYSTEM_QUIT_GAITEM_LOOKUP_DISABLED, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: disabled CSGaitemImp lookup hook 0x{addr:x} before native Continue source={source}"
+                ));
+            }
+            status => append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_ApplyQueued disable CSGaitemImp lookup hook failed source={source}: {status:?}"
+            )),
+        },
+        status => append_autoload_debug(format_args!(
+            "system-quit-quickload: queue_disable CSGaitemImp lookup hook failed source={source}: {status:?}"
+        )),
+    }
+}
+
+pub(crate) fn install_system_quit_gaitem_deserialize_hook() {
+    let installed = SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED.load(Ordering::SeqCst);
+    if installed == SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED_YES {
+        return;
+    }
+    if installed == SYSTEM_QUIT_GAITEM_DESERIALIZE_DISABLED {
+        let addr = SYSTEM_QUIT_GAITEM_DESERIALIZE_ADDR.load(Ordering::SeqCst);
+        if addr != 0 {
+            match unsafe { MH_QueueEnableHook(addr as *mut c_void) } {
+                MH_STATUS::MH_OK => match unsafe { MH_ApplyQueued() } {
+                    MH_STATUS::MH_OK => {
+                        SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED.store(
+                            SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED_YES,
+                            Ordering::SeqCst,
+                        );
+                        append_autoload_debug(format_args!(
+                            "system-quit-quickload: re-enabled CSGaitemImp::Deserialize hook 0x{addr:x}; transition inventory deserialize leaf skipped until native title handoff"
+                        ));
+                    }
+                    status => append_autoload_debug(format_args!(
+                        "system-quit-quickload: MH_ApplyQueued re-enable CSGaitemImp::Deserialize hook failed: {status:?}"
+                    )),
+                },
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue re-enable CSGaitemImp::Deserialize hook failed: {status:?}"
+                )),
+            }
+        }
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_Initialize for CSGaitemImp::Deserialize hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_GAITEM_DESERIALIZE_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: failed to resolve CSGaitemImp::Deserialize rva 0x{SYSTEM_QUIT_GAITEM_DESERIALIZE_RVA:x}"
+        ));
+        return;
+    };
+    SYSTEM_QUIT_GAITEM_DESERIALIZE_ADDR.store(addr, Ordering::SeqCst);
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_gaitem_deserialize_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_GAITEM_DESERIALIZE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue_enable CSGaitemImp::Deserialize hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED.store(
+                        SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED_YES,
+                        Ordering::SeqCst,
+                    );
+                    append_autoload_debug(format_args!(
+                        "system-quit-quickload: hooked CSGaitemImp::Deserialize 0x{addr:x}; transition inventory deserialize leaf skipped until native title handoff"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: MH_ApplyQueued CSGaitemImp::Deserialize hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-quickload: MhHook::new CSGaitemImp::Deserialize hook failed: {status:?}"
+        )),
+    }
+}
+
+pub(crate) fn disable_system_quit_gaitem_deserialize_hook(source: &str) {
+    if SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED_YES
+    {
+        return;
+    }
+    let addr = SYSTEM_QUIT_GAITEM_DESERIALIZE_ADDR.load(Ordering::SeqCst);
+    if addr == 0 {
+        return;
+    }
+    match unsafe { MH_QueueDisableHook(addr as *mut c_void) } {
+        MH_STATUS::MH_OK => match unsafe { MH_ApplyQueued() } {
+            MH_STATUS::MH_OK => {
+                SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED
+                    .store(SYSTEM_QUIT_GAITEM_DESERIALIZE_DISABLED, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: disabled CSGaitemImp::Deserialize hook 0x{addr:x} before native Continue source={source}"
+                ));
+            }
+            status => append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_ApplyQueued disable CSGaitemImp::Deserialize hook failed source={source}: {status:?}"
+            )),
+        },
+        status => append_autoload_debug(format_args!(
+            "system-quit-quickload: queue_disable CSGaitemImp::Deserialize hook failed source={source}: {status:?}"
+        )),
+    }
+}
+
+pub(crate) fn install_system_quit_gameman_load_save_hook() {
+    let installed = SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED.load(Ordering::SeqCst);
+    if installed == SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED_YES {
+        return;
+    }
+    if installed == SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_DISABLED {
+        let addr = SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ADDR.load(Ordering::SeqCst);
+        if addr != 0 {
+            match unsafe { MH_QueueEnableHook(addr as *mut c_void) } {
+                MH_STATUS::MH_OK => match unsafe { MH_ApplyQueued() } {
+                    MH_STATUS::MH_OK => {
+                        SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED.store(
+                            SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED_YES,
+                            Ordering::SeqCst,
+                        );
+                        append_autoload_debug(format_args!(
+                            "system-quit-quickload: re-enabled GameMan load-save hook 0x{addr:x}; transition loads blocked until native title handoff"
+                        ));
+                    }
+                    status => append_autoload_debug(format_args!(
+                        "system-quit-quickload: MH_ApplyQueued re-enable GameMan load-save hook failed: {status:?}"
+                    )),
+                },
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue re-enable GameMan load-save hook failed: {status:?}"
+                )),
+            }
+        }
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_Initialize for GameMan load-save hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: failed to resolve GameMan load-save rva 0x{SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_RVA:x}"
+        ));
+        return;
+    };
+    SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ADDR.store(addr, Ordering::SeqCst);
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_gameman_load_save_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue_enable GameMan load-save hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED.store(
+                        SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED_YES,
+                        Ordering::SeqCst,
+                    );
+                    append_autoload_debug(format_args!(
+                        "system-quit-quickload: hooked GameMan load-save 0x{addr:x}; transition loads blocked until native title handoff"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: MH_ApplyQueued GameMan load-save hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-quickload: MhHook::new GameMan load-save hook failed: {status:?}"
+        )),
+    }
+}
+
+pub(crate) fn disable_system_quit_gameman_load_save_hook(source: &str) {
+    if SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED_YES
+    {
+        return;
+    }
+    let addr = SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ADDR.load(Ordering::SeqCst);
+    if addr == 0 {
+        return;
+    }
+    match unsafe { MH_QueueDisableHook(addr as *mut c_void) } {
+        MH_STATUS::MH_OK => match unsafe { MH_ApplyQueued() } {
+            MH_STATUS::MH_OK => {
+                SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED
+                    .store(SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_DISABLED, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: disabled GameMan load-save hook 0x{addr:x} before native Continue source={source}"
+                ));
+            }
+            status => append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_ApplyQueued disable GameMan load-save hook failed source={source}: {status:?}"
+            )),
+        },
+        status => append_autoload_debug(format_args!(
+            "system-quit-quickload: queue_disable GameMan load-save hook failed source={source}: {status:?}"
+        )),
+    }
 }
 
 fn install_system_quit_profile_load_activate_hook() {
@@ -7478,7 +8216,7 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
                     SYSTEM_QUIT_DUPLICATE_INSTALLED
                         .store(SYSTEM_QUIT_DUPLICATE_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "system-quit-dup: hooked AddCancelButton 0x{addr:x}; will add third no-op row from GR_LineHelp:{SYSTEM_QUIT_LOAD_LINEHELP_ID} at caller rva 0x{SYSTEM_QUIT_DUPLICATE_DESKTOP_RETURN_RVA:x}"
+                        "system-quit-dup: hooked AddCancelButton 0x{addr:x}; will clone Quit Game row as quick-load from GR_LineHelp:{SYSTEM_QUIT_LOAD_LINEHELP_ID} at caller rva 0x{SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA:x}"
                     ));
                 }
                 status => append_autoload_debug(format_args!(
