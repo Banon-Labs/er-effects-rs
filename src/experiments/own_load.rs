@@ -938,6 +938,80 @@ pub(crate) unsafe fn own_load_stream_observe_recurring(
     }
 }
 
+/// Restore `GLOBAL_CSGaitem` to constructor-pristine (empty gaitemInsTable + full free-queue) at a
+/// clean title BEFORE the switch reload's fresh deserialize, so char#2's deserialize does not
+/// exhaust the free-queue on char#1's leaked items (the AV at live 0x67141a, bd
+/// system-quit-postswitch-crash-gaitem-freequeue-exhaustion-2026-07-02). Mechanism: sweep all
+/// 0x1400 gaitemInsTable slots; for each occupied slot call the NATIVE per-item release
+/// RemoveCSGaitemIns(gaitem, &entries[i].unindexedGaItemHandle) -- it destructs+deallocates the ins
+/// (no leak) and returns index i to freeTableIdxQueue. This is the exact primitive the native
+/// world/inventory teardown uses; we drive it because our lightweight return-title chain skips it.
+///
+/// SAVE-SAFETY / correctness preconditions (the CALLER must guarantee, and this fn re-checks what it
+/// can): the old world is torn down (local player absent) so nothing live holds POINTERS to these
+/// ins objects -- PlayerGameData/inventory hold only integer handles, which char#2's deserialize
+/// overwrites. Structural validation (heap-aligned singleton, head/end within [0,0x1400)) fails
+/// closed rather than sweeping a bogus pointer. Returns Some((released, slack_before, slack_after))
+/// on success (slack = 0x13ff - free_count; healthy = slack_after 0), None if it declined.
+pub(crate) unsafe fn own_load_reset_gaitem_singleton(base: usize) -> Option<(u32, u32, u32)> {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const RING_USABLE: u32 = (CSGAITEM_TABLE_CAPACITY as u32) - 1; // 0x13ff (one sentinel slot)
+    let gaitem = unsafe { safe_read_usize(base + GLOBAL_CSGAITEM_SINGLETON_RVA) }.unwrap_or(NULL);
+    if gaitem == NULL || !unsafe { is_heap_aligned_ptr(gaitem) } {
+        append_autoload_debug(format_args!(
+            "gaitem-reset: GLOBAL_CSGaitem not resident/aligned (0x{gaitem:x}) -- declining pristine-restore (no-op)"
+        ));
+        return None;
+    }
+    let free_count = |head: u32, end: u32| -> u32 {
+        // Ring distance head..end over capacity 0x1400 = number of poppable free indices.
+        end.wrapping_sub(head)
+            .wrapping_add(CSGAITEM_TABLE_CAPACITY as u32)
+            % (CSGAITEM_TABLE_CAPACITY as u32)
+    };
+    let head0 =
+        unsafe { safe_read_i32(gaitem + CSGAITEM_FREE_QUEUE_HEAD_OFFSET) }.unwrap_or(-1) as u32;
+    let end0 =
+        unsafe { safe_read_i32(gaitem + CSGAITEM_FREE_QUEUE_END_OFFSET) }.unwrap_or(-1) as u32;
+    if head0 as usize >= CSGAITEM_TABLE_CAPACITY || end0 as usize >= CSGAITEM_TABLE_CAPACITY {
+        append_autoload_debug(format_args!(
+            "gaitem-reset: free-queue head/end out of range (head=0x{head0:x} end=0x{end0:x} cap=0x{:x}) -- singleton not the expected CSGaitemImp; declining (no-op)",
+            CSGAITEM_TABLE_CAPACITY
+        ));
+        return None;
+    }
+    let slack_before = RING_USABLE.saturating_sub(free_count(head0, end0));
+    let remove_ins: unsafe extern "system" fn(usize, usize) =
+        unsafe { std::mem::transmute(base + CSGAITEM_REMOVE_INS_RVA) };
+    let mut released: u32 = 0;
+    for i in 0..CSGAITEM_TABLE_CAPACITY {
+        let slot = gaitem + CSGAITEM_INS_TABLE_OFFSET + i * core::mem::size_of::<usize>();
+        let ins = unsafe { safe_read_usize(slot) }.unwrap_or(NULL);
+        if ins == NULL {
+            continue;
+        }
+        // &entries[i].unindexedGaItemHandle -- its embedded index maps back to slot i (ctor seeds it,
+        // alloc preserves it), so RemoveCSGaitemIns frees gaitemInsTable[i] and returns index i.
+        let handle_ptr = gaitem + CSGAITEM_ENTRIES_OFFSET + i * CSGAITEM_ENTRY_STRIDE;
+        unsafe { remove_ins(gaitem, handle_ptr) };
+        released += 1;
+    }
+    let head1 =
+        unsafe { safe_read_i32(gaitem + CSGAITEM_FREE_QUEUE_HEAD_OFFSET) }.unwrap_or(-1) as u32;
+    let end1 =
+        unsafe { safe_read_i32(gaitem + CSGAITEM_FREE_QUEUE_END_OFFSET) }.unwrap_or(-1) as u32;
+    let slack_after = RING_USABLE.saturating_sub(free_count(head1, end1));
+    SYSTEM_QUIT_GAITEM_RESET_INVOCATIONS.fetch_add(1, Ordering::SeqCst);
+    SYSTEM_QUIT_GAITEM_RESET_RELEASED_COUNT.fetch_add(released as usize, Ordering::SeqCst);
+    SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_BEFORE.store(slack_before as usize, Ordering::SeqCst);
+    SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_AFTER.store(slack_after as usize, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "gaitem-reset: pristine-restore gaitem=0x{gaitem:x} released={released} free-queue head/end 0x{head0:x}/0x{end0:x} -> 0x{head1:x}/0x{end1:x} slack {slack_before}->{slack_after} (0=full); native RemoveCSGaitemIns 0x{:x} per occupied slot",
+        base + CSGAITEM_REMOVE_INS_RVA
+    ));
+    Some((released, slack_before, slack_after))
+}
+
 /// SYNCHRONOUS fresh picked-slot feed-deserialize for the System->Quit->Load-Profile switch (the
 /// continue_confirm hook calls this BEFORE forwarding, so the c30/PGD the confirm streams belong to
 /// the PICKED slot -- bd system-quit-cleantitle-load-is-stale-restream-not-slot-source-2026-07-02).

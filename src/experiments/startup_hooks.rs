@@ -8000,8 +8000,16 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
             let base = game_rva(0).unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
             let gm = game_man_ptr_or_null();
             append_autoload_debug(format_args!(
-                "system-quit-quickload: continue_confirm intercepted at clean title phase={phase} -> driving fresh feed-deserialize of PICKED slot {slot} before stream (shim=0x{shim:x})"
+                "system-quit-quickload: continue_confirm intercepted at clean title phase={phase} -> restore gaitem singleton + fresh feed-deserialize of PICKED slot {slot} before stream (shim=0x{shim:x})"
             ));
+            // Release char#1's leaked gaitems back to the free-queue at this clean title (player
+            // absent) BEFORE the reload deserialize, else char#2's deserialize exhausts the queue
+            // and OOB-dispatches gaitemInsTable[-1] (the AV at live 0x67141a). Native per-item
+            // release; declines fail-closed if the singleton looks wrong (then the deserialize may
+            // still crash, but we never sweep a bogus pointer).
+            if base != TITLE_OWNER_SCAN_START_ADDRESS {
+                unsafe { own_load_reset_gaitem_singleton(base) };
+            }
             if base != TITLE_OWNER_SCAN_START_ADDRESS
                 && unsafe { own_load_feed_deserialize(base, gm, slot) }
             {

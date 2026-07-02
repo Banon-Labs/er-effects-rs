@@ -567,6 +567,13 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst)
     ));
     body.push_str(&format!(
+        "  \"system_quit_gaitem_reset_invocations\": {},\n  \"system_quit_gaitem_reset_released_count\": {},\n  \"system_quit_gaitem_reset_last_slack_before\": {},\n  \"system_quit_gaitem_reset_last_slack_after\": {},\n",
+        SYSTEM_QUIT_GAITEM_RESET_INVOCATIONS.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GAITEM_RESET_RELEASED_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_BEFORE.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_AFTER.load(Ordering::SeqCst)
+    ));
+    body.push_str(&format!(
         "  \"autoload_last_status\": {},\n",
         state.autoload.last_status().map_or_else(
             || "null".to_owned(),

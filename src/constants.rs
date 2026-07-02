@@ -2542,6 +2542,44 @@ pub(crate) const SYSTEM_QUIT_GAITEM_DESERIALIZE_RVA: u32 = 0x671130;
 pub(crate) const SYSTEM_QUIT_GAITEM_LOOKUP_RVA: u32 = 0x671810;
 /// CSGaitemImp post-deserialize finalize/reindex path that panics while singleton state is reset.
 pub(crate) const SYSTEM_QUIT_GAITEM_FINALIZE_RVA: u32 = 0x671670;
+// ---- CSGaitemImp pristine-restore (post-switch reload gaitem free-queue exhaustion fix) ----
+// `GLOBAL_CSGaitem` is a PROCESS-LIFETIME FD4 singleton (constructed once at boot by the giant
+// repository-init FUN_140cd6d40 behind `if (GLOBAL_CSGaitem==0)`; NOT rebuilt per world-load). Its
+// pointer lives at dump 0x143d69890 (data RVA, stable across deobf; the unmodified
+// PlayerGameData::Deserialize reads this same global and boot loads work through it). On a normal
+// quit-to-title the world/inventory teardown releases the player's gaitems back to the free-queue
+// via RemoveCSGaitemIns; our lightweight return-title chain (0x67a3a0) skips that, so char#1's
+// items stay resident, char#2's reload deserialize exhausts freeTableIdxQueue (head==end ->
+// GetUnindexedGaItemHandle returns 0 -> gaitemInsTable[-1] OOB dispatch = the AV at live 0x67141a).
+// We restore pristine at clean title before the reload by sweeping occupied gaitemInsTable slots
+// and calling the native per-item release RemoveCSGaitemIns (which frees the ins AND returns its
+// index to the free-queue) -- the exact primitive the native teardown would use, no hand-rebuilt
+// queue. See bd system-quit-postswitch-crash-gaitem-freequeue-exhaustion-2026-07-02.
+pub(crate) const GLOBAL_CSGAITEM_SINGLETON_RVA: usize = 0x3d69890;
+/// `CS::GaItemImp::RemoveCSGaitemIns(CSGaitemImp*, uint* gaItemHandle)` -- dump 0x140672650 ->
+/// live/deobf 0x672560 (shift -0xf0, content-unique, ground-truthed via dump-deobf-shift.py). Given
+/// a handle it destructs+deallocates gaitemInsTable[index], resets the entry, and pushes index back
+/// to freeTableIdxQueue[++end].
+pub(crate) const CSGAITEM_REMOVE_INS_RVA: usize = 0x672560;
+/// CSGaitemImp field offsets (Ghidra struct, size 0x19038): gaitemInsTable = CSGaitemIns*[0x1400],
+/// entries = CSGaitemImpEntry[0x1400] (stride 8: {u32 unindexedGaItemHandle, u32 refCount}),
+/// freeTableIdxQueue = uint[0x1400], then head/end ids.
+pub(crate) const CSGAITEM_INS_TABLE_OFFSET: usize = 0x8;
+pub(crate) const CSGAITEM_ENTRIES_OFFSET: usize = 0xa008;
+pub(crate) const CSGAITEM_ENTRY_STRIDE: usize = 0x8;
+pub(crate) const CSGAITEM_FREE_QUEUE_HEAD_OFFSET: usize = 0x19008;
+pub(crate) const CSGAITEM_FREE_QUEUE_END_OFFSET: usize = 0x1900c;
+pub(crate) const CSGAITEM_TABLE_CAPACITY: usize = 0x1400;
+/// Count of gaitem ins objects released by the pristine-restore sweep (product proof: >0 exactly
+/// once per switch reload, and the free-queue returns to full afterward).
+pub(crate) static SYSTEM_QUIT_GAITEM_RESET_RELEASED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Count of pristine-restore invocations (should be 1 per switch).
+pub(crate) static SYSTEM_QUIT_GAITEM_RESET_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
+/// Free-queue slack (0x13ff - free_count) observed at the LAST reset, before/after the sweep. A
+/// healthy result is before>0 (char#1 items resident) and after==0 (queue full again).
+pub(crate) static SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_BEFORE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_AFTER: AtomicUsize =
+    AtomicUsize::new(usize::MAX);
 /// The save-data subsystem gate the c30-writer 0x67bd70 checks before it writes
 /// GameMan+0xc30: `[0x143d68078]` (RVA 0x3d68078). It is a 0x270-byte heap object
 /// built by the save-load boot 0x6798d0..0x679904 and zeroed on teardown 0x6789bf.
