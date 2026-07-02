@@ -4389,6 +4389,33 @@ pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_POST_RETURN_TITLE_FIRED: AtomicUs
 /// GameMan return-title/save flags used by the normal Quit Game confirmation callback without
 /// displaying another confirmation dialog.
 pub(crate) const SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA: u32 = 0x67a3a0;
+/// Guard on the native title Continue confirm `0x140b0e180` (`CONTINUE_CONFIRM_RVA`): it only reads
+/// GameMan+0xc30 -> owner+0xbc -> SetState(5) and picks NO slot, so after a System->Quit switch the
+/// clean-title reload would re-stream the PRE-SWITCH GameMan/PlayerGameData state (no fresh
+/// deserialize of the picked slot runs anywhere on that native path -- static RE 2026-07-02, bd
+/// system-quit-cleantitle-load-is-stale-restream-not-slot-source-2026-07-02). While a switch is
+/// active the hook drives ONE synchronous feed-deserialize of the PICKED slot
+/// (`own_load_feed_deserialize`) before forwarding, so ac0/c30/PGD all become the picked slot and
+/// the confirm streams the right character. Installed UNCONDITIONALLY at attach (single MinHook per
+/// address: this hook also carries the continue-trace `CAP continue_confirm` logging that used to be
+/// a separate trace-set hook -- same precedent as `install_c30_writer_hook`).
+pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static START_SYSTEM_QUIT_CONTINUE_CONFIRM_HOOK: Once = Once::new();
+/// One-shot per armed switch: 0 = the fresh picked-slot deserialize has not yet run for the active
+/// System->Quit switch (reset by `system_quit_arm_quickload_autoload`); 1 = it succeeded and the
+/// confirm may stream. While 0, any confirm during an active switch first drives the deserialize.
+pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE: AtomicUsize = AtomicUsize::new(0);
+/// Count of successful fresh picked-slot deserializes driven by the confirm hook (product proof
+/// expects exactly 1 per switch).
+pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Count of confirms BLOCKED fail-closed because the fresh deserialize could not be proven (no save
+/// bytes / parse failed / fingerprint not real). Streaming stale state would load the wrong
+/// character and the post-load autosave would then write it back to the picked slot.
+pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Count of confirms forwarded to the native original (boot autoload, normal play, or post-deser).
+pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE: usize = 0;
 pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED: usize = 1;
 pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED: usize = 2;
@@ -4617,6 +4644,20 @@ pub(crate) const INPUT_PROBE_LOG_INTERVAL: u64 = 20;
 pub(crate) static INJECT_NAV_FRAME: AtomicUsize = AtomicUsize::new(0);
 /// XINPUT_GAMEPAD.wButtons D-pad Down bit (the menu "move down" gamepad input).
 pub(crate) const XINPUT_GAMEPAD_DPAD_DOWN: u16 = 0x0002;
+/// XINPUT_GAMEPAD.wButtons bits for the System->Quit repro autopilot's controller sequence
+/// (D-pad Up, Start, Left-Shoulder/LB, A). D-pad Down is XINPUT_GAMEPAD_DPAD_DOWN above.
+pub(crate) const XINPUT_GAMEPAD_DPAD_UP: u16 = 0x0001;
+pub(crate) const XINPUT_GAMEPAD_START: u16 = 0x0010;
+pub(crate) const XINPUT_GAMEPAD_LEFT_SHOULDER: u16 = 0x0100;
+pub(crate) const XINPUT_GAMEPAD_A: u16 = 0x1000;
+/// Current game-task tick's synthesized gamepad wButtons for the System->Quit repro autopilot,
+/// written by `system_quit_repro_tick` and READ by the XInput poll hook (the stage the game reads a
+/// gamepad from). 0 = no button. Distinct from INJECT_NAV_CUR_BUTTONS (own_stepper title nav).
+pub(crate) static SQ_REPRO_XINPUT_BUTTONS: AtomicUsize = AtomicUsize::new(0);
+/// ProfileSelect cursor index captured on entry to TO_SLOT (the current/most-recent save the cursor
+/// defaults to). The autopilot moves the cursor until it differs, guaranteeing a NON-current save.
+/// usize::MAX = not yet captured (reset on entry to TO_SLOT).
+pub(crate) static SQ_REPRO_INITIAL_CURSOR: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Settle the freshly-opened menu before injecting (poll-frames).
 pub(crate) const INJECT_NAV_SETTLE_FRAMES: usize = 90;
 /// Down asserted for this many consecutive poll-frames = one clean edge (one cursor step).
@@ -4643,6 +4684,38 @@ pub(crate) static INJECT_NAV_CUR_BUTTONS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const DIK_DOWN: u8 = 0xd0;
 /// No key injected (clears the stamp on gap/settle frames).
 pub(crate) const DIK_NONE: u8 = 0;
+/// System->Quit->Load-Profile REPRO AUTOPILOT state machine. Reproduces the user's EXACT Xbox
+/// controller sequence (start, d-up, A, LB, d-down, A, d-down/up, A, A) by fabricating the XInput
+/// gamepad poll (see `system_quit_repro_tick`). Each phase issues its KNOWN edges once and advances
+/// ONLY on an observed transition (menu-window semaphore / ProfileSelect cursor move / load
+/// activate) -- never a timer, tap budget, or retry count:
+///   WAIT_WORLD -> OPEN_MENU (START -> 02_000_IngameTop)
+///   -> TO_SYSTEM (UP, A -> 02_040_OptionSetting, the quit submenu)
+///   -> TO_PROFILE (LB, DOWN, A -> 05_010_ProfileSelect, the cloned Load-Profile row)
+///   -> TO_SLOT (one DOWN or UP off the current save -> cursor moves)
+///   -> CONFIRM (A, A -> load activated) -> DONE.
+/// After a phase's edges are issued it HOLDS (injects nothing) until its transition is observed, so
+/// a genuinely missed edge self-reports (stuck waiting) instead of being papered over by a re-tap.
+pub(crate) const SQ_REPRO_STATE_WAIT_WORLD: usize = 0;
+pub(crate) const SQ_REPRO_STATE_OPEN_MENU: usize = 1;
+pub(crate) const SQ_REPRO_STATE_TO_SYSTEM: usize = 2;
+pub(crate) const SQ_REPRO_STATE_TO_PROFILE: usize = 3;
+pub(crate) const SQ_REPRO_STATE_TO_SLOT: usize = 4;
+pub(crate) const SQ_REPRO_STATE_CONFIRM: usize = 5;
+pub(crate) const SQ_REPRO_STATE_DONE: usize = 6;
+pub(crate) static SQ_REPRO_STATE: AtomicUsize = AtomicUsize::new(SQ_REPRO_STATE_WAIT_WORLD);
+/// Game-task tick counter within the current repro state (reset to 0 on each state transition). The
+/// per-phase edge index is `tick / INJECT_NAV_CYCLE`; the injected edge hold/gap timing REUSES the
+/// RE-grounded own_stepper nav constants (edge-triggered menu nav needs a multi-frame hold to
+/// register one step; a 1-frame tap is missed -- bd keyboard-dik-down-injection-works-cursor-moves-
+/// 2026). No sq-repro-specific timing value is invented.
+pub(crate) static SQ_REPRO_STATE_TICK: AtomicUsize = AtomicUsize::new(0);
+/// Latches "waiting-for-transition self-reported" for the current state so it logs exactly once
+/// (0 = not yet); reset on each state transition. Not a tap budget -- a boolean.
+pub(crate) static SQ_REPRO_STATE_TAPS: AtomicUsize = AtomicUsize::new(0);
+/// Frames to settle in-world (world stream + HUD) before the autopilot presses START. Pre-existing
+/// world-readiness settle; the run that first opened IngameTop used it.
+pub(crate) const SQ_REPRO_WORLD_SETTLE_TICKS: usize = 180;
 /// No gamepad buttons asserted this frame.
 pub(crate) const INJECT_NAV_NO_BUTTONS: u16 = 0;
 /// CURSOR-OFFSET PROBE: with exactly ONE deterministic Down (Continue idx0 -> Load Game idx1),
@@ -4878,7 +4951,6 @@ pub(crate) static SAVE_LOAD_STATE_INIT_ORIG: AtomicUsize = AtomicUsize::new(HOOK
 // the 4 interactions. SetState (state sequence), Continue confirm, ProfileLoadDialog activate
 // (slot-20 + variant), the enter-Load-Game builder, the selector-step tick, the menu mount.
 pub(crate) static CAP_SETSTATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static CAP_CONTINUE_CONFIRM_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static CAP_LOAD_ACTIVATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static CAP_LOAD_ACTIVATE2_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static CAP_BUILDER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
@@ -5105,6 +5177,16 @@ pub(crate) static RENDER_FRAME_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROCESS_EXIT_LOGGED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 pub(crate) static AV_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
+/// Base address (HINSTANCE) of THIS injected DLL, captured from `DllMain`'s hmodule at
+/// `DLL_PROCESS_ATTACH`. Under Wine/Proton the DLL is relocated far from the game module
+/// (observed ~0x6ffe_xxxx_xxxx), so a crash whose faulting RIP / return addresses land in
+/// our own code print as raw values the game-base resolver cannot decode. Recording our own
+/// base lets the AV handler annotate those frames as `self+0xRVA`, mappable via the DLL's
+/// symbols. `NULL_MODULE_BASE` until DllMain runs.
+pub(crate) static SELF_DLL_BASE: AtomicUsize = AtomicUsize::new(NULL_MODULE_BASE);
+/// `SizeOfImage` of this DLL (PE optional-header field read from `SELF_DLL_BASE`), so the AV
+/// handler can bound-check an address to `[base, base+size)` before treating it as `self+RVA`.
+pub(crate) static SELF_DLL_SIZE: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static CRASH_LOGGER_INSTALLED: std::sync::Once = std::sync::Once::new();
 pub(crate) static INGAMEINIT_DRIVE_DONE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);

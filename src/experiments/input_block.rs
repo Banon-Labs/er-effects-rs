@@ -81,6 +81,14 @@ pub(crate) fn stay_active_enabled() -> bool {
 /// window. Auto-on whenever the own-stepper drives the front-end (the whole point of that
 /// probe is a zero-input load), plus an explicit env/file override for standalone use.
 pub(crate) fn block_input_enabled() -> bool {
+    // SYSTEM-QUIT REPRO AUTOPILOT: keep the block engaged in-world (past the normal in-world
+    // release) while the self-driven repro is running, so the real keyboard/mouse/gamepad are
+    // zeroed and the ONLY input is the fabricated XInput pad (`xinput_get_state_hook` writes the
+    // autopilot's `SQ_REPRO_XINPUT_BUTTONS` each poll) -- no human press can contaminate the
+    // reproduction. Releases once the autopilot reaches DONE, handing control back.
+    if system_quit_repro_enabled() && SQ_REPRO_STATE.load(Ordering::SeqCst) != SQ_REPRO_STATE_DONE {
+        return true;
+    }
     // FORCE-BLOCK override (env/file): block UNCONDITIONALLY, even past menu-open. Used to
     // FALSIFY -- runtime-proven 2026-06-17 that blocking through menu-open lets the menu OPEN
     // (self-fire) but starves the post-open navigation, so the load never selects.
@@ -178,15 +186,29 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
     const XINPUT_PACKET_OFFSET: usize = 0;
     const WBUTTONS_OFFSET_IN_GAMEPAD: usize = 0;
     if !state.is_null() && BLOCK_INPUT_ACTIVE.load(Ordering::SeqCst) == BLOCK_INPUT_ON {
-        let inject = inject_nav_enabled()
+        // Two drivers fabricate the pad at the poll source: the System->Quit repro autopilot (the
+        // user's controller sequence, written to SQ_REPRO_XINPUT_BUTTONS every game-task frame) and
+        // own_stepper title nav via inject_nav. Either replaces the (blocked) real pad so the game
+        // reads our synthesized buttons.
+        let sq_repro = system_quit_repro_enabled()
+            && SQ_REPRO_STATE.load(Ordering::SeqCst) != SQ_REPRO_STATE_DONE;
+        let inject_nav = inject_nav_enabled()
             && OWN_STEPPER_MENU_OPENED.load(Ordering::SeqCst) != OWN_STEPPER_MENU_OPENED_NO;
-        if inject {
-            // Fabricate the gamepad state at the poll source from the schedule driven each frame
-            // by own_stepper idx10 (this hook may never be polled if no controller, so the
-            // schedule does NOT live here). Force SUCCESS + a fresh packet number so a live pad is
-            // simulated; write the scheduled D-pad Down. Harmless if the game ignores XInput.
-            let buttons = INJECT_NAV_CUR_BUTTONS.load(Ordering::SeqCst) as u16;
-            let pkt = INJECT_NAV_FRAME.load(Ordering::SeqCst) as u32;
+        if sq_repro || inject_nav {
+            // Force SUCCESS + a fresh packet number so a live pad is simulated; write the buttons
+            // the active driver scheduled this frame. Harmless if the game ignores XInput.
+            let buttons = if sq_repro {
+                SQ_REPRO_XINPUT_BUTTONS.load(Ordering::SeqCst) as u16
+            } else {
+                INJECT_NAV_CUR_BUTTONS.load(Ordering::SeqCst) as u16
+            };
+            // sq-repro has no separate poll-frame schedule, so bump the shared packet counter here
+            // to guarantee a fresh dwPacketNumber each poll; inject_nav keeps its own counter.
+            let pkt = if sq_repro {
+                INJECT_NAV_FRAME.fetch_add(1, Ordering::SeqCst) as u32
+            } else {
+                INJECT_NAV_FRAME.load(Ordering::SeqCst) as u32
+            };
             unsafe {
                 std::ptr::write_bytes(
                     state.add(XINPUT_GAMEPAD_OFFSET),

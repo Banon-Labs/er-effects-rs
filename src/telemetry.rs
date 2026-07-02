@@ -188,11 +188,26 @@ unsafe fn title_logo_gfx_current_frame(base: usize, title_logo_back_view_parts: 
     if vtable == 0 || vtable == TITLE_OWNER_SCAN_START_ADDRESS {
         return TITLE_LOGO_GFX_UNKNOWN_FRAME;
     }
+    // The `safe_read_*` guards only reject UNMAPPED pages -- they happily return a mapped-but-garbage
+    // qword. During a System-Quit -> return-title -> reload transition `PRODUCT_CORE_LAST_TITLE_DIALOG`
+    // (the source of `title_logo_back_view_parts`) points at a half-torn-down / reallocated dialog whose
+    // embedded BackViewParts holds a stale `handle` whose vtable lands in the Wine heap, NOT the game
+    // image. Transmuting `*(vtable+8)` from such a vtable and CALLING it dispatches through a data
+    // address -> access violation (observed: handle vt=0x7ffe96aa4238, call target 0x7ffe977c61b0, both
+    // outside [game_base, +SizeOfImage); crash self+0x317bd `call *rdx`). Reject any vtable / resolved
+    // call target that is not inside the game module image before the transmute+call. See bd
+    // er-effects-rs-3pc (post-switch reload crash).
+    if !crate::experiments::vtable_in_game_image(vtable, base) {
+        return TITLE_LOGO_GFX_UNKNOWN_FRAME;
+    }
     let Some(resolve_value_addr) = (unsafe { crate::experiments::safe_read_usize(vtable + 0x8) })
     else {
         return TITLE_LOGO_GFX_UNKNOWN_FRAME;
     };
     if resolve_value_addr == 0 || resolve_value_addr == TITLE_OWNER_SCAN_START_ADDRESS {
+        return TITLE_LOGO_GFX_UNKNOWN_FRAME;
+    }
+    if !crate::experiments::vtable_in_game_image(resolve_value_addr, base) {
         return TITLE_LOGO_GFX_UNKNOWN_FRAME;
     }
     // Mirrors native helpers at 0x140749980/0x1407499e0: load *(gfx_value) into rcx, call vtable+8,
@@ -543,6 +558,13 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SYSTEM_QUIT_REQUEST_LOAD_SLOT_BLOCK_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_REQUEST_LOAD_SLOT_ALLOW_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_INWORLD_LOAD_SKIP_COUNT.load(Ordering::SeqCst)
+    ));
+    body.push_str(&format!(
+        "  \"system_quit_continue_confirm_fresh_deser_done\": {},\n  \"system_quit_continue_confirm_fresh_deser_count\": {},\n  \"system_quit_continue_confirm_block_count\": {},\n  \"system_quit_continue_confirm_allow_count\": {},\n",
+        SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst),
+        SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst)
     ));
     body.push_str(&format!(
         "  \"autoload_last_status\": {},\n",

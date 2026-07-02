@@ -488,7 +488,6 @@ pub(crate) fn install_continue_trace_hooks() {
         // SetState (state machine), Continue confirm, ProfileLoadDialog activate (both
         // variants), the enter-Load-Game builder, the selector-step tick, and the mount.
         const CAP_SETSTATE_RVA: u32 = 0x00b0d960;
-        const CAP_CONTINUE_CONFIRM_RVA: u32 = 0x00b0e180;
         const CAP_LOAD_ACTIVATE_RVA: u32 = 0x009a4670;
         const CAP_LOAD_ACTIVATE2_RVA: u32 = 0x009ac760;
         const CAP_BUILDER_RVA: u32 = 0x00826510;
@@ -502,13 +501,12 @@ pub(crate) fn install_continue_trace_hooks() {
             cap_setstate_hook as *mut c_void,
             &CAP_SETSTATE_ORIG,
         );
-        create_continue_trace_hook(
-            &mut hooks,
-            "cap_continue_confirm_b0e180",
-            CAP_CONTINUE_CONFIRM_RVA,
-            cap_continue_confirm_hook as *mut c_void,
-            &CAP_CONTINUE_CONFIRM_ORIG,
-        );
+        // NOTE: the continue_confirm 0x140b0e180 hook is NOT installed here. It is installed
+        // UNCONDITIONALLY at process attach via install_system_quit_continue_confirm_hook
+        // (mirroring the c30_writer precedent): the System->Quit switch needs it in every product
+        // run, and installing a second MhHook on the same address would fail. That hook reproduces
+        // this trace set's "CAP continue_confirm" line + OWN_STEPPER_CONFIRMED latch when tracing
+        // is enabled, so trace runs see identical output.
         create_continue_trace_hook(
             &mut hooks,
             "cap_load_activate_9a4670",
@@ -1359,28 +1357,9 @@ pub(crate) unsafe extern "system" fn cap_setstate_hook(
     unsafe { call_cap_original(&CAP_SETSTATE_ORIG, this, state, c, d) }
 }
 
-/// Continue confirm 0x140b0e180(this): reads GameMan+0xc30 into owner+0xbc then SetState(5).
-pub(crate) unsafe extern "system" fn cap_continue_confirm_hook(
-    this: usize,
-    b: usize,
-    c: usize,
-    d: usize,
-) -> usize {
-    let owner = if this != TITLE_OWNER_SCAN_START_ADDRESS {
-        unsafe {
-            *((this + OWN_STEPPER_SHIM_OWNER_IDX * core::mem::size_of::<usize>()) as *const usize)
-        }
-    } else {
-        TITLE_OWNER_SCAN_START_ADDRESS
-    };
-    append_continue_trace(format_args!(
-        "CAP continue_confirm this=0x{this:x} owner=0x{owner:x} {} {}",
-        trace_callers_summary(),
-        b80_mount_trace_summary()
-    ));
-    OWN_STEPPER_CONFIRMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
-    unsafe { call_cap_original(&CAP_CONTINUE_CONFIRM_ORIG, this, b, c, d) }
-}
+// (cap_continue_confirm_hook was folded into system_quit_continue_confirm_hook in
+// startup_hooks.rs -- the 0x140b0e180 detour is now installed unconditionally at attach and
+// carries both the trace logging and the System->Quit fresh-deserialize guard.)
 
 /// Load activate 0x1409a4670 = CS::ProfileLoadDialog vtable slot 20 (this = the dialog).
 pub(crate) unsafe extern "system" fn cap_load_activate_hook(

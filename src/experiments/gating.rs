@@ -583,6 +583,23 @@ pub(crate) fn inject_nav_enabled() -> bool {
             .join("er-effects-inject-nav.txt")
             .exists()
 }
+/// SELF-DRIVEN SYSTEM->QUIT->LOAD-PROFILE REPRO AUTOPILOT (er-effects-system-quit-repro.txt /
+/// ER_EFFECTS_SYSTEM_QUIT_REPRO). OFF by default. When on, after the boot autoload reaches the
+/// world, the DLL keeps the input block engaged and injects a scripted DInput keyboard sequence --
+/// gated on OBSERVED menu-window transitions (IngameTop / OptionSetting / ProfileSelect), never on
+/// timers -- to open the escape/system menu, activate the cloned Load-Profile (Quit Game) row, move
+/// the ProfileSelect cursor to a non-current slot, and confirm. This drives the exact user flow with
+/// zero human input so the switch bug (return-title reload crash / wrong-slot) reproduces
+/// deterministically. Diagnostic repro harness, not a product lever.
+pub(crate) fn system_quit_repro_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_SYSTEM_QUIT_REPRO").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-system-quit-repro.txt")
+        .exists()
+}
 /// DISPROVEN/LEGACY menu-drive escape hatch -- deliberately OFF by default and HARD to trigger.
 ///
 /// The own_stepper "title-confirm" Load drive (fire_titletop_load_entry + the d180-locate walk) was

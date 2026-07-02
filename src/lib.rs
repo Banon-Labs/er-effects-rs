@@ -169,11 +169,16 @@ pub unsafe extern "system" fn DirectInput8Create(
 /// # Safety
 ///
 /// This is called by Windows when the DLL is loaded. Do not call it directly.
-pub unsafe extern "C" fn DllMain(_hmodule: HINSTANCE, reason: u32, _reserved: *mut c_void) -> i32 {
+pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mut c_void) -> i32 {
     if reason != DLL_PROCESS_ATTACH {
         return DLL_MAIN_SUCCESS;
     }
     write_bootstrap_event(BOOTSTRAP_EVENT_DLL_MAIN_ATTACH, BOOTSTRAP_DETAIL_START);
+
+    // Record our own DLL base (+ SizeOfImage) so the crash logger can annotate a fault whose
+    // RIP/return-addresses land in our relocated code as `self+0xRVA` instead of raw Wine
+    // addresses the game-base resolver cannot decode. Pure PE-header read, no API/loader lock.
+    record_self_dll_base(hmodule.0 as usize);
 
     // Boot profiler: spawn the independent CPU sampler FIRST so it captures the engine-init threads
     // during the pre-CSTaskImp-instance gap (the largest uninstrumented boot window). Read-only by
@@ -406,6 +411,18 @@ pub unsafe extern "C" fn DllMain(_hmodule: HINSTANCE, reason: u32, _reserved: *m
             .spawn(install_system_quit_duplicate_button_hook);
     });
 
+    // Title Continue confirm guard (0x140b0e180): while a System->Quit->Load-Profile switch is
+    // active, drive ONE fresh feed-deserialize of the PICKED slot before the confirm streams, so
+    // the clean-title reload loads the picked character instead of re-streaming the stale
+    // pre-switch state (bd system-quit-cleantitle-load-is-stale-restream-not-slot-source-2026-07-02).
+    // Installed unconditionally (single MinHook per address -- this detour also carries the
+    // continue-trace CAP logging); pure passthrough outside an active switch.
+    START_SYSTEM_QUIT_CONTINUE_CONFIRM_HOOK.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("er-effects-system-quit-continue-confirm".to_owned())
+            .spawn(install_system_quit_continue_confirm_hook);
+    });
+
     // MenuWindow latch: install the SceneObjProxy ctor hook (0x14074a700) as early as the
     // splash-skip / online-disable patches, from a thread, so it lands BEFORE the title state
     // machine builds the title dialog during boot. On each VALID call it latches rdx (the engine-
@@ -546,6 +563,11 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 } else {
                     release_input_block_now();
                 }
+                // SELF-DRIVEN System->Quit->Load-Profile repro autopilot: stamps this frame's
+                // scripted DInput key (no-op unless system_quit_repro_enabled + in-world). Runs
+                // every frame so the injected key is fresh for the game's keyboard poll, and only
+                // while the block above is engaged (which the autopilot itself keeps on in-world).
+                unsafe { system_quit_repro_tick() };
                 // D3D12 PRESENT OVERLAY: once the GX device is up, find the game's live swapchain and hook
                 // its REAL Present (the dummy-swapchain vtable differs under vkd3d-proton). Self-gated
                 // (portrait path only, one-shot on success, bounded retries) so it's cheap every frame.

@@ -1657,8 +1657,20 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // b78=slot so the clean-title autoload loads the picked slot via that same b78 -> RequestLoadSlot
         // path. See bd system-quit-loadjob-success-commits-phantom-load-2026-07-01.
         let world_up = unsafe { PlayerIns::local_player_mut() }.is_ok();
-        let b78_val = if world_up { OWN_STEPPER_SLOT_NONE } else { slot };
+        let b78_val = if world_up {
+            OWN_STEPPER_SLOT_NONE
+        } else {
+            slot
+        };
         unsafe { *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = b78_val };
+        // NOTE: an earlier attempt repointed GameMan+0xac0 (set_save_slot) here at the clean title.
+        // That was proven INSUFFICIENT and misleading: ac0 is a deserialize BYPRODUCT, never read as
+        // load input, and repointing it forges the `ac0==expected` deser-evidence the Continue GUARD
+        // relies on. The picked slot is now made authoritative by the continue_confirm guard
+        // (system_quit_continue_confirm_hook), which drives a fresh feed-deserialize of the picked
+        // slot (setting ac0/c30/PGD as its normal byproducts) before the confirm streams. See bd
+        // system-quit-ac0-fix-insufficient-cleantitle-load-is-native-mostrecent-2026-07-02 and
+        // system-quit-cleantitle-load-is-stale-restream-not-slot-source-2026-07-02.
         if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
             let requested_slot = unsafe { safe_read_i32(gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) }
                 .unwrap_or(OWN_STEPPER_SLOT_NONE);

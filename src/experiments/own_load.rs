@@ -938,6 +938,72 @@ pub(crate) unsafe fn own_load_stream_observe_recurring(
     }
 }
 
+/// SYNCHRONOUS fresh picked-slot feed-deserialize for the System->Quit->Load-Profile switch (the
+/// continue_confirm hook calls this BEFORE forwarding, so the c30/PGD the confirm streams belong to
+/// the PICKED slot -- bd system-quit-cleantitle-load-is-stale-restream-not-slot-source-2026-07-02).
+/// Same proven mechanism as `own_load_drive` steps 1-4: read the on-disk save (native SAVE-DIR
+/// builder path -- post-first-load the redirect has reverted, so this is the file the quit-save
+/// just wrote), slice slot `want_slot`'s plaintext body, arm the gated 0x67b100 read detour, call
+/// the native parser 0x67b290(slot) in-process. Returns true only when the parse produced a real
+/// c30 + a real PlayerGameData fingerprint. Save-safe: read-only on the .sl2 (no SetState5, no
+/// save write; the deserialize also repoints GameMan+0xac0 to `want_slot` as its normal byproduct).
+pub(crate) unsafe fn own_load_feed_deserialize(base: usize, gm: usize, want_slot: i32) -> bool {
+    const C30_ZERO: i32 = 0;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if gm == null || want_slot < OWN_STEPPER_SLOT_ZERO {
+        append_autoload_debug(format_args!(
+            "own-load-feed: rejected gm=0x{gm:x} slot={want_slot} -- need GameMan + explicit slot (no-write)"
+        ));
+        return false;
+    }
+    let Some(sl2_bytes) = (unsafe { own_load_read_sl2_bytes(base) }) else {
+        return false;
+    };
+    let body: &[u8] = match er_save_loader::bnd4::slot_body(&sl2_bytes, want_slot as usize) {
+        Ok(b) => b,
+        Err(e) => {
+            append_autoload_debug(format_args!(
+                "own-load-feed: slot_body(slot={want_slot}) failed: {e:?} -- ABORT (no-write)"
+            ));
+            return false;
+        }
+    };
+    // Leak the sliced body so it stays valid for the detour to memcpy (one bounded copy per switch).
+    let leaked: &'static [u8] = Box::leak(body.to_vec().into_boxed_slice());
+    OWN_LOAD_BODY_PTR.store(leaked.as_ptr() as usize, Ordering::SeqCst);
+    OWN_LOAD_BODY_LEN.store(leaked.len(), Ordering::SeqCst);
+    if !install_own_load_hook() {
+        append_autoload_debug(format_args!(
+            "own-load-feed: hook install failed -- ABORT (no-write)"
+        ));
+        return false;
+    }
+    let c30_before =
+        unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }.unwrap_or(GAME_MAN_C30_UNSET);
+    OWN_LOAD_GATE.store(true, Ordering::SeqCst);
+    let parser: unsafe extern "system" fn(i32) -> i32 =
+        unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
+    let pret = unsafe { parser(want_slot) };
+    OWN_LOAD_GATE.store(false, Ordering::SeqCst);
+    let fed = OWN_LOAD_FED_BYTES.load(Ordering::SeqCst);
+    let c30 =
+        unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }.unwrap_or(GAME_MAN_C30_UNSET);
+    let ac0 = unsafe { safe_read_i32(gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) }
+        .unwrap_or(OWN_STEPPER_SLOT_NONE);
+    let (fp_real, fp_level, fp_name_len) = unsafe { char_fingerprint(base) };
+    let c30_real = c30 != GAME_MAN_C30_UNSET && c30 != C30_ZERO && c30 != FULLREAD_C30_M10_DEFAULT;
+    let ok = c30_real && fp_real;
+    if ok {
+        OWN_STEPPER_MOUNT_C30.store(c30, Ordering::SeqCst);
+        OWN_STEPPER_DESER_FIRED.store(OWN_STEPPER_DESER_FIRED_OK, Ordering::SeqCst);
+    }
+    append_autoload_debug(format_args!(
+        "own-load-feed: parser 0x{:x}(slot={want_slot}) ret={pret} fed_bytes=0x{fed:x} c30 0x{c30_before:x}->0x{c30:x} c30_real={c30_real} ac0={ac0} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) ok={ok} (read-only deserialize; NO SetState5, NO save write)",
+        base + DESERIALIZE_SLOT_RVA
+    ));
+    ok
+}
+
 /// SAVE-SAFE verify-only OWN-LOAD buffer-feed drive (one-shot, phased). Reads the .sl2 from disk,
 /// slices slot `want_slot`'s plaintext body, installs+arms the gated 0x67b100 hook, calls the native
 /// parser 0x67b290(slot) in-process so it parses OUR body, then reads back GameMan+0xc30 + the
