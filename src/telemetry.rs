@@ -2451,6 +2451,23 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_portrait_foreign_models",
             PROFILE_FOREIGN_MODELS_MAX.load(Ordering::SeqCst),
         );
+        // Scaleform menu-handler lifecycle guard (repeated-switch ProfileSelect UAF). double_frees > 0
+        // proves the guard caught+skipped the crash; ctors/dtors give the churn context.
+        push_json_usize(
+            body,
+            "oracle_scaleform_handler_double_frees",
+            SCALEFORM_HANDLER_DOUBLE_FREES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_scaleform_handler_ctors",
+            SCALEFORM_HANDLER_CTORS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_scaleform_handler_dtors",
+            SCALEFORM_HANDLER_DTORS.load(Ordering::SeqCst),
+        );
         push_json_usize(
             body,
             "oracle_portrait_multi_model_publish_skips",

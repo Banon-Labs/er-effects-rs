@@ -4579,6 +4579,30 @@ pub(crate) const MENU_WINDOW_ROOT_PROXY_CTOR_RVA: u32 = 0x747980;
 /// Live/deobf `CSScaleformValue`/SceneObjProxy scratch destructor used by native MenuWindow fade helpers.
 pub(crate) const MENU_WINDOW_ROOT_PROXY_SCRATCH_DTOR_RVA: u32 = 0xd7f850;
 pub(crate) const MENU_WINDOW_ROOT_PROXY_SCRATCH_SIZE: usize = 0x80;
+/// SCALEFORM MENU-HANDLER LIFECYCLE GUARD (er-effects-rs crash, repeated-switch ProfileSelect UAF).
+/// The crash is the inner destructor `FUN_1411a8920` (deobf 0x1411a8900) walking a garbage intrusive
+/// list of a DOUBLE-FREED 0x58-byte Scaleform handler (vtable 0x142cc22c8), embedded at +0x40 of a
+/// 0x98 container cached at owner+0x28. ctor `FUN_1411a8890` (deobf 0x1411a8870). We hook both: track
+/// every live object (ctor inserts, normal dtor removes); a dtor of an address NOT live is the
+/// double-free -> log it + SKIP the original inner destructor so it can't dereference the freed list.
+/// A true double-inner-destruct of an already-freed object is safe to skip (it was already torn down).
+pub(crate) const SCALEFORM_HANDLER_CTOR_RVA: usize = 0x11a8870;
+pub(crate) const SCALEFORM_HANDLER_DTOR_RVA: usize = 0x11a8900;
+pub(crate) static SCALEFORM_HANDLER_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SCALEFORM_HANDLER_DTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SCALEFORM_HANDLER_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Live handler-object addresses (ctor'd, not yet dtor'd). Linear-scanned Vec -- volume is a few
+/// dozen menu handlers, not a hot per-frame path. Capped so a genuine leak can't grow it unbounded.
+pub(crate) static SCALEFORM_HANDLER_LIVE: std::sync::Mutex<Vec<usize>> =
+    std::sync::Mutex::new(Vec::new());
+pub(crate) const SCALEFORM_HANDLER_LIVE_CAP: usize = 8192;
+/// Oracles: total ctors/dtors seen, double-frees detected+skipped, and the last skipped object +
+/// its container/parent for correlation with the switch timeline.
+pub(crate) static SCALEFORM_HANDLER_CTORS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SCALEFORM_HANDLER_DTORS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SCALEFORM_HANDLER_DOUBLE_FREES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SCALEFORM_HANDLER_LAST_DOUBLE_FREE_OBJ: AtomicUsize = AtomicUsize::new(0);
+
 /// Gate-local `CS::MenuWindowJob::Run` hook state. `MENU_WINDOW_JOB_RUN_RVA` is defined with the
 /// title-cover constants above; System Quit reuses that same live/deobf target.
 pub(crate) static SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG: AtomicUsize =

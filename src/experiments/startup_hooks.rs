@@ -8221,6 +8221,151 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
     ret
 }
 
+/// Scaleform handler CONSTRUCTOR hook (`FUN_1411a8890`, deobf 0x1411a8870). rcx = the object being
+/// constructed (the 0x58 handler embedded at container+0x40), rdx = parent. Records the object as
+/// live, then forwards to the original ctor (which returns the object pointer). Read-only w.r.t.
+/// game state; only maintains our live-set. See SCALEFORM_HANDLER_LIVE.
+pub(crate) unsafe extern "system" fn scaleform_handler_ctor_hook(obj: usize, parent: usize) -> usize {
+    let orig = SCALEFORM_HANDLER_CTOR_ORIG.load(Ordering::SeqCst);
+    SCALEFORM_HANDLER_CTORS.fetch_add(1, Ordering::SeqCst);
+    if obj != 0 {
+        if let Ok(mut live) = SCALEFORM_HANDLER_LIVE.lock() {
+            // Cap guard: if a genuine leak fills the table, stop growing (drop tracking of the
+            // oldest) so the probe can't OOM -- the double-free detection still works for recent objs.
+            if live.len() >= SCALEFORM_HANDLER_LIVE_CAP {
+                live.remove(0);
+            }
+            live.push(obj);
+        }
+    }
+    let _ = parent;
+    if orig == HOOK_ORIGINAL_UNSET || orig == 0 {
+        return obj;
+    }
+    let f: unsafe extern "system" fn(usize, usize) -> usize = unsafe { std::mem::transmute(orig) };
+    unsafe { f(obj, parent) }
+}
+
+/// Scaleform handler inner DESTRUCTOR hook (`FUN_1411a8920`, deobf 0x1411a8900). rcx = the object.
+/// If the object is in our live-set -> a normal teardown: remove it and forward to the original.
+/// If it is NOT live -> a DOUBLE-FREE (the repeated-switch ProfileSelect UAF): the original would
+/// walk this object's now-garbage intrusive list and crash. Log it and RETURN WITHOUT forwarding,
+/// so the freed list is never dereferenced. Safe: an already-destructed object needs no second
+/// teardown. This both names the bug (counter + last-obj oracle + debug line) and stops the crash.
+pub(crate) unsafe extern "system" fn scaleform_handler_dtor_hook(obj: usize) {
+    let orig = SCALEFORM_HANDLER_DTOR_ORIG.load(Ordering::SeqCst);
+    SCALEFORM_HANDLER_DTORS.fetch_add(1, Ordering::SeqCst);
+    let live = if obj == 0 {
+        false
+    } else if let Ok(mut set) = SCALEFORM_HANDLER_LIVE.lock() {
+        if let Some(pos) = set.iter().rposition(|&a| a == obj) {
+            set.swap_remove(pos);
+            true
+        } else {
+            false
+        }
+    } else {
+        // Lock poisoned/unavailable: fail SAFE toward forwarding (treat as live) so we never skip a
+        // legitimate destructor on a lock hiccup -- the crash is rarer than the lock being fine.
+        true
+    };
+    if !live {
+        let n = SCALEFORM_HANDLER_DOUBLE_FREES.fetch_add(1, Ordering::SeqCst) + 1;
+        SCALEFORM_HANDLER_LAST_DOUBLE_FREE_OBJ.store(obj, Ordering::SeqCst);
+        if n <= 32 {
+            let parent = unsafe { safe_read_usize(obj + 0x18) }.unwrap_or(0);
+            let list_head = unsafe { safe_read_usize(obj + 0x28) }.unwrap_or(0);
+            let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+            append_crash_log(format_args!(
+                "scaleform-handler-guard: DOUBLE-FREE #{n} of handler obj=0x{obj:x} container=0x{:x} parent(+0x18)=0x{parent:x} list_head(+0x28)=0x{list_head:x} quickload_phase={phase} -- SKIPPED inner dtor (would have walked freed list) to prevent the ProfileSelect UAF crash",
+                obj.wrapping_sub(0x40)
+            ));
+        }
+        return;
+    }
+    if orig == HOOK_ORIGINAL_UNSET || orig == 0 {
+        return;
+    }
+    let f: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(orig) };
+    unsafe { f(obj) };
+}
+
+/// Install the Scaleform handler ctor/dtor lifecycle guard (repeated-switch ProfileSelect UAF).
+fn install_scaleform_handler_lifecycle_guard() {
+    if SCALEFORM_HANDLER_TRACE_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "scaleform-handler-guard: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let (Ok(ctor_addr), Ok(dtor_addr)) = (
+        game_rva(SCALEFORM_HANDLER_CTOR_RVA as u32),
+        game_rva(SCALEFORM_HANDLER_DTOR_RVA as u32),
+    ) else {
+        append_autoload_debug(format_args!(
+            "scaleform-handler-guard: failed to resolve ctor/dtor rvas 0x{SCALEFORM_HANDLER_CTOR_RVA:x}/0x{SCALEFORM_HANDLER_DTOR_RVA:x}"
+        ));
+        return;
+    };
+    let mut ok = true;
+    match unsafe {
+        MhHook::new(
+            ctor_addr as *mut c_void,
+            scaleform_handler_ctor_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SCALEFORM_HANDLER_CTOR_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            ok &= unsafe { hook.queue_enable() }.is_ok();
+            std::mem::forget(hook);
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "scaleform-handler-guard: MhHook::new(ctor) failed: {status:?}"
+            ));
+            ok = false;
+        }
+    }
+    match unsafe {
+        MhHook::new(
+            dtor_addr as *mut c_void,
+            scaleform_handler_dtor_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SCALEFORM_HANDLER_DTOR_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            ok &= unsafe { hook.queue_enable() }.is_ok();
+            std::mem::forget(hook);
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "scaleform-handler-guard: MhHook::new(dtor) failed: {status:?}"
+            ));
+            ok = false;
+        }
+    }
+    if !ok {
+        return;
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => {
+            SCALEFORM_HANDLER_TRACE_INSTALLED.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "scaleform-handler-guard: hooked ctor 0x{ctor_addr:x} + inner dtor 0x{dtor_addr:x}; live-set double-free guard armed (skips freed-object destructs)"
+            ));
+        }
+        status => append_autoload_debug(format_args!(
+            "scaleform-handler-guard: MH_ApplyQueued failed: {status:?}"
+        )),
+    }
+}
+
 fn install_system_quit_menu_window_job_run_hook() {
     if SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED.load(Ordering::SeqCst)
         != SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED
@@ -10328,6 +10473,7 @@ fn apply_system_quit_multislot_layout_patch() {
 /// builder, where it invokes the original trampoline a second time with the same native args.
 pub(crate) fn install_system_quit_duplicate_button_hook() {
     apply_system_quit_multislot_layout_patch();
+    install_scaleform_handler_lifecycle_guard();
     install_system_quit_menu_window_job_run_hook();
     install_system_quit_window_list_push_hook();
     install_system_quit_noop_action_hook();
