@@ -402,6 +402,17 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
             .spawn(install_profile_renderer_teardown_spare_hook);
     });
 
+    // Profile-renderer table guard (er-effects-rs-j3r): before the native per-slot thumbnail
+    // builder runs, log a degraded 10-slot table, REBUILD a fully-empty one via the engine's own
+    // table setup (only the TitleTopDialog ctor ever calls it natively, so nothing repopulates it
+    // across our in-world ProfileSelect reopens -- the 3rd open crashed on the empty table), and
+    // fail-soft skip the builder if a slot would still null-deref at [entry+0x754].
+    START_PROFILE_SELECT_TABLE_DIAG.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("er-effects-profileselect-table-diag".to_owned())
+            .spawn(install_profile_select_table_diag_hook);
+    });
+
     // System -> Quit Game quick-loading button: always-on multi-slot layout patch plus a third row
     // that opens native 05_010_ProfileSelect. Slot activation from that injected in-world route is
     // separately blocked by default until the crash-risk load semantics are pinned.

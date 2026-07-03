@@ -930,6 +930,34 @@ pub(crate) static PROFILE_SPARE_CANDIDATE_MODEL: AtomicUsize = AtomicUsize::new(
 pub(crate) static PROFILE_RENDERER_TEARDOWN_HOOK_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static PROFILE_RENDERER_TEARDOWN_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Diagnostic + REPAIR hook on the native profile-portrait builder (`PROFILE_RENDERER_REFRESH_RVA`
+/// = `FUN_1409aa7d0`). The builder walks all 10 `DAT_143d6d8d0` entries and derefs
+/// `table[slot]+0x754` with NO null check for every slot whose profile record exists -- the
+/// er-effects-rs-j3r AV. Its table setup (`PROFILE_TABLE_BUILDER_RVA`) is called from exactly ONE
+/// native site, the TitleTopDialog constructor (Ghidra xref), so our cloned in-world ProfileSelect
+/// reopens run the builder against whatever the last teardown left; by the 3rd in-session open the
+/// table is fully empty. The detour logs degraded tables, REBUILDS a fully-empty one via the native
+/// setup, and fail-soft SKIPS the builder when a slot would still null-deref. `LAST` is the
+/// per-episode latch (distinct valid/null mask + caller) so the degraded log does not fire per frame.
+pub(crate) static PROFILE_SELECT_TABLE_DIAG_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static PROFILE_SELECT_TABLE_DIAG_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_SELECT_TABLE_DIAG_LAST: AtomicUsize = AtomicUsize::new(0);
+/// All ten profile-renderer table slots (bit per slot 0..9): the fully-empty `null_mask` value that
+/// triggers the in-world table rebuild.
+pub(crate) const PROFILE_TABLE_ALL_SLOTS_MASK: u32 = (1 << TITLE_PROFILE_SLOT_COUNT) - 1;
+/// Count of in-world profile-renderer table REPAIRS: the builder detour found the 10-slot table
+/// fully empty (er-effects-rs-j3r: nothing repopulates it on our in-world ProfileSelect reopens) and
+/// re-ran the native table setup to satisfy the native invariant. Exposed as
+/// `oracle_profileselect_table_repairs`.
+pub(crate) static PROFILE_SELECT_TABLE_REPAIR_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Count of fail-soft SKIPS of the native profile-portrait builder: after the (possible) repair a
+/// slot still had a null/invalid renderer entry, so chaining the original would AV at
+/// `[entry+0x754]`; the detour dropped that one call instead (the per-frame builder retries).
+/// Exposed as `oracle_profileselect_table_guard_skips`.
+pub(crate) static PROFILE_SELECT_TABLE_GUARD_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Distinct-state latch for the guard-skip log line (same keying idea as the diag latch).
+pub(crate) static PROFILE_SELECT_TABLE_GUARD_SKIP_LAST: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_RENDERER_SPARE_HITS: AtomicUsize = AtomicUsize::new(0);
 /// Minimal-delay portrait hold: the autoload's load-commit (`maybe_fire_tfc_continue`) waits at the
 /// open main menu -- where the ProfileSelect render context is valid -- until the character portrait
@@ -943,6 +971,20 @@ pub(crate) const PORTRAIT_HOLD_MAX_TICKS: usize = 240;
 /// so we call it ourselves once the renderer table is populated to REQUEST the portrait model render.
 pub(crate) const PROFILE_RENDERER_REFRESH_RVA: usize = 0x9aa680;
 pub(crate) static PROFILE_REFRESH_KICKED: AtomicUsize = AtomicUsize::new(0);
+/// Loading-screen portrait FAIL-FAST SEMAPHORE (er-effects-rs-j3r; user directive 2026-07-02: "it
+/// should crash, with our harness so we know early if we introduce a regression"). Our portrait
+/// renderer must build the SAME slot the game actually loaded (`GameMan.save_slot`/ac0 -- the load
+/// itself is correct; only our custom renderer picks the wrong slot). Packed state on a violation:
+/// `(loaded_slot<<16) | (render_target_slot<<8) | cond`, `cond` bit0 = wrong-slot (render target !=
+/// loaded), bit1 = null loaded-slot renderer while the table is live (the 3rd-open null-deref class).
+/// 0 = healthy / never tripped. Exposed as `oracle_portrait_render_semaphore`.
+pub(crate) static PORTRAIT_RENDER_SEMAPHORE_STATE: AtomicUsize = AtomicUsize::new(0);
+/// One-shot log latch so the semaphore's crash-log/debug line prints exactly once before the fault.
+pub(crate) static PORTRAIT_RENDER_SEMAPHORE_LOGGED: AtomicUsize = AtomicUsize::new(0);
+/// Null-page address the semaphore deliberately writes to force a clean, VEH-captured fail-fast crash
+/// on diagnostic runs (guaranteed unmapped -> AV -> `crash_vectored_handler` logs -> CONTINUE_SEARCH
+/// -> terminate). Distinctive `fault_addr=0xdead` marks the crash log as OUR semaphore, not a native AV.
+pub(crate) const PORTRAIT_RENDER_SEMAPHORE_FAULT_ADDR: usize = 0xDEAD;
 /// Bitmask (bit per slot 0..9) of which profile-renderer slots have had their forced render dumped
 /// to `portrait-capture-slot{N}.bin` -- so the all-slot diagnostic dumps each slot exactly once.
 pub(crate) static PROFILE_SLOT_DUMP_MASK: AtomicUsize = AtomicUsize::new(0);
@@ -4804,15 +4846,25 @@ pub(crate) static SQ_REPRO_STATE: AtomicUsize = AtomicUsize::new(SQ_REPRO_STATE_
 /// Which back-to-back switch the autopilot is driving (0-based). Switch `i` loads
 /// `SQ_REPRO_TARGET_SLOTS[i]`. Proves the feature can load N different characters after one startup.
 pub(crate) static SQ_REPRO_SWITCH_INDEX: AtomicUsize = AtomicUsize::new(0);
-/// How many back-to-back harness-driven switches to drive (goal: two loads of DIFFERENT characters
-/// after a single startup). Bounded by `SQ_REPRO_TARGET_SLOTS.len()`.
-pub(crate) const SQ_REPRO_TARGET_SWITCHES: usize = 2;
-/// The explicit ProfileSelect slot each switch loads. These are the two REAL, distinct characters in
-/// the pinned gold save (25-Invades-patches): slot 4 = 'Speed Bean', slot 5 = 'Patches' (bd
-/// system-quit-switch-loads-original-not-picked-rootcause-2026-07-02). The autopilot drives the
-/// ProfileSelect cursor to the exact target (not "one off current"), so switch #2 lands on a real
-/// character regardless of which slot the reload made current.
-pub(crate) const SQ_REPRO_TARGET_SLOTS: [i32; 2] = [4, 5];
+/// How many back-to-back harness-driven switches to drive. Bounded by `SQ_REPRO_TARGET_SLOTS.len()`.
+///
+/// EXPLORE MODE (1): drive exactly ONE automatic switch, then the CONFIRM state advances straight to
+/// `SQ_REPRO_STATE_DONE` (not `WAIT_RELOAD`). At DONE `sq_repro_actively_driving()` is false, so the
+/// XInput autopilot fabrication STOPS, and `block_input_enabled()` releases the input block the moment
+/// the switched-to world is in-world -- keyboard/mouse/gamepad + cursor all go live. Combined with the
+/// runner's `RUNTIME_NO_TEARDOWN=1`, the game stays up on the switched character so the user can play
+/// and even re-trigger the cloned Load-Profile button manually. Set to 2+ to resume the back-to-back
+/// two-switch autopilot investigation (er-effects-rs-qwj).
+pub(crate) const SQ_REPRO_TARGET_SWITCHES: usize = 1;
+/// The explicit ProfileSelect slot each switch loads. Slots 4/5 are the two REAL, distinct
+/// characters in the pinned gold save (25-Invades-patches): slot 4 = 'Speed Bean', slot 5 =
+/// 'Patches' (bd system-quit-switch-loads-original-not-picked-rootcause-2026-07-02). The autopilot
+/// drives the ProfileSelect cursor to the exact target (not "one off current"), so each switch lands
+/// on a real character regardless of which slot the reload made current. The third entry returns to
+/// slot 4: driving `ER_EFFECTS_SQ_REPRO_SWITCHES=3` performs the 3rd in-session ProfileSelect open
+/// that crashed the native thumbnail builder on the empty renderer table (er-effects-rs-j3r), the
+/// deterministic repro/validation for the table-repair hook.
+pub(crate) const SQ_REPRO_TARGET_SLOTS: [i32; 3] = [4, 5, 4];
 /// Baseline of (confirmed_block + confirmed_allow) counts captured at each switch's start, so the
 /// CONFIRM state detects THIS switch's OK as an increase over the baseline rather than a cumulative
 /// `!= 0` (which switch #2 would trip immediately on switch #1's residual count).
@@ -4826,6 +4878,14 @@ pub(crate) static SQ_REPRO_STATE_TICK: AtomicUsize = AtomicUsize::new(0);
 /// Latches "waiting-for-transition self-reported" for the current state so it logs exactly once
 /// (0 = not yet); reset on each state transition. Not a tap budget -- a boolean.
 pub(crate) static SQ_REPRO_STATE_TAPS: AtomicUsize = AtomicUsize::new(0);
+/// Frames spent in WAIT_RELOAD with a failing gate (reset per switch via `sq_repro_begin_switch`).
+/// The observed er-effects-rs-qwj stall sat here with switch #1 stable and fresh-deser == expected,
+/// so one of the gates was lying; the periodic gate dump (every `SQ_REPRO_WAIT_RELOAD_LOG_EVERY`
+/// frames) names the culprit with data instead of a single opaque waiting line.
+pub(crate) static SQ_REPRO_WAIT_RELOAD_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// WAIT_RELOAD gate-dump period in frames (~8.5s at 60fps): frequent enough to bound a stall fast,
+/// sparse enough to never spam the debug log across a full reload (~10-15s).
+pub(crate) const SQ_REPRO_WAIT_RELOAD_LOG_EVERY: usize = 512;
 /// Frames to settle in-world (world stream + HUD) before the autopilot presses START. Pre-existing
 /// world-readiness settle; the run that first opened IngameTop used it.
 pub(crate) const SQ_REPRO_WORLD_SETTLE_TICKS: usize = 180;
@@ -5030,6 +5090,7 @@ pub(crate) static START_LOADING_BG_REPLACE_BIND: Once = Once::new();
 /// One-shot install latch for the D3D12 Present overlay (the deterministic loading-portrait display path).
 pub(crate) static START_PRESENT_OVERLAY: Once = Once::new();
 pub(crate) static START_PROFILE_RENDERER_TEARDOWN_SPARE: Once = Once::new();
+pub(crate) static START_PROFILE_SELECT_TABLE_DIAG: Once = Once::new();
 pub(crate) static START_TITLE_CUSTOM_COVER_RUN: Once = Once::new();
 pub(crate) static START_BOOT_PROFILER: Once = Once::new();
 /// One-shot latch for the "first game-task frame ran" boot-phase marker (0 = not yet logged).

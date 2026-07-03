@@ -273,6 +273,21 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     body.push_str(&format!("  \"player_seen\": {player_seen},\n"));
     body.push_str(&format!("  \"runtime_mode\": \"{runtime_mode}\",\n"));
     body.push_str(&format!("  \"seamless_coop_loaded\": {seamless_loaded},\n"));
+    // Loading-screen portrait fail-fast semaphore state (er-effects-rs-j3r): 0 = healthy / never
+    // tripped; nonzero packs (loaded_slot<<16)|(render_target_slot<<8)|cond (cond bit0=wrong-slot,
+    // bit1=null loaded renderer). On diagnostic runs a violation also crashes the run (crash log).
+    body.push_str(&format!(
+        "  \"oracle_portrait_render_semaphore\": {},\n",
+        PORTRAIT_RENDER_SEMAPHORE_STATE.load(Ordering::SeqCst)
+    ));
+    // In-world ProfileSelect table guard (er-effects-rs-j3r): repairs = native-setup rebuilds of a
+    // fully-empty renderer table at builder entry; guard_skips = native builder calls dropped
+    // because a slot would still null-deref at [entry+0x754].
+    body.push_str(&format!(
+        "  \"oracle_profileselect_table_repairs\": {},\n  \"oracle_profileselect_table_guard_skips\": {},\n",
+        PROFILE_SELECT_TABLE_REPAIR_COUNT.load(Ordering::SeqCst),
+        PROFILE_SELECT_TABLE_GUARD_SKIP_COUNT.load(Ordering::SeqCst)
+    ));
     body.push_str(&format!(
         "  \"seamless_coop_marker\": {},\n",
         if seamless_loaded {

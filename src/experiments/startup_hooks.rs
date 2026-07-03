@@ -761,7 +761,20 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
     d: usize,
 ) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    if product_autoload_enabled() {
+    // Scope the blanket product msgbox suppression to the SENSITIVE windows only (er-effects-rs-qwj):
+    // boot autoload (pre-world -- connection-error / EULA / warning popups) and an ACTIVE
+    // System->Quit->Load-Profile switch (any stray ProfileSelect load-confirm). Do NOT suppress during
+    // free in-world play: the user's own menu confirmations -- notably the Quit Game / Return-to-Desktop
+    // "are you sure?" dialog -- are legitimate product UI and MUST render, else those rows silently do
+    // nothing because the suppression ate their confirmation MessageBox (observed: Quit Game / Return to
+    // Desktop dead on the 2nd quit menu; a msgbox-skip fired ~18ms after the forwarded click). The
+    // character-load zero-MessageBox proof is unaffected: boot + switch still suppress, and the quit
+    // confirm is not on the character-load path.
+    let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
+    let switch_active = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+        || SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0;
+    if product_autoload_enabled() && (!in_world || switch_active) {
         MSGBOX_LAST_ARG_RCX.store(a, Ordering::SeqCst);
         MSGBOX_LAST_ARG_RDX.store(b, Ordering::SeqCst);
         MSGBOX_LAST_ARG_R8.store(c, Ordering::SeqCst);
@@ -2202,8 +2215,8 @@ unsafe fn refresh_loading_bg_live_gx(base: usize) {
     }
     // Resolve the LIVE SRV from our built target-slot renderer: table[slot] -> +0xa8 (offscreen) -> +0x10
     // (TexResCap) -> +GX = the sampleable CSGxTexture the engine re-renders each frame. Validate the vtable
-    // so a torn/rebuilding slot can't bind a bad pointer.
-    let slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+    // so a torn/rebuilding slot can't bind a bad pointer. Slot = the loaded character (er-effects-rs-j3r).
+    let slot = portrait_loaded_slot();
     let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, slot)) }.unwrap_or(0);
     if !valid(r)
         || unsafe { safe_read_usize(r) }.unwrap_or(0)
@@ -3023,7 +3036,7 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
     // (offscreen; find_d3d12_resource reaches the content RT), dst = offscreen+0x10's CSGxTexture (the SRV
     // GFx samples). Render-thread context (same as the readback), bounded + fail-closed.
     {
-        let slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+        let slot = portrait_loaded_slot();
         let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, slot)) }.unwrap_or(0);
         if r != 0
             && r != null
@@ -3760,7 +3773,7 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
         let (mut ch_r, mut ch_off, mut ch_trc, mut ch_gx, mut bound_gx) =
             (0usize, 0usize, 0usize, 0usize, 0usize);
         if let Ok(b) = game_module_base() {
-            let slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+            let slot = portrait_loaded_slot();
             let r = unsafe { safe_read_usize(portrait_renderer_table_entry(b, slot)) }.unwrap_or(0);
             if r != 0 && r != null {
                 ch_r = r;
@@ -3896,7 +3909,7 @@ pub(crate) unsafe extern "system" fn per_frame_push_hook(renderer: usize, frame:
                 if slot == usize::MAX
                     && renderer == LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst)
                 {
-                    let own = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+                    let own = portrait_loaded_slot();
                     if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&own) {
                         slot = own as usize;
                     }
@@ -4340,6 +4353,155 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     ));
 }
 
+/// The save slot whose portrait the loading-screen pipeline should build / capture / display / spare:
+/// the character the game ACTUALLY loaded (`GameMan.save_slot` = ac0), the single ground truth on a
+/// boot most-recent Continue AND on our switch deserialize. Falls back to the autoload hint
+/// `OWN_STEPPER_SLOT`, then 0, only pre-load when ac0 is not yet a valid slot. The raw
+/// `OWN_STEPPER_SLOT` is `-1` on a most-recent boot (title.rs:113 returns early without setting it) and
+/// collapsed to slot 0, so the pipeline built/captured slot 0's portrait for a non-slot-0 character
+/// (wrong on load 1) and captured nothing once its gate stopped matching (blank on load 2). Routing
+/// EVERY portrait site through this one loaded-character source is the er-effects-rs-j3r correlation fix.
+pub(crate) fn portrait_loaded_slot() -> i32 {
+    let ac0 = (unsafe { eldenring::cs::GameMan::instance() })
+        .map(|gm| er_save_loader::GameManSaveAccess::save_slot(gm))
+        .unwrap_or(OWN_STEPPER_SLOT_NONE);
+    if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&ac0) {
+        return ac0;
+    }
+    let own = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+    if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&own) {
+        return own;
+    }
+    0
+}
+
+/// Fail-fast CHARACTER-IDENTITY semaphore for the loading-screen portrait (er-effects-rs-j3r; user
+/// directive 2026-07-02: verify IN-GAME, from RAM identity -- NOT rendered pixels -- that the
+/// character our portrait code renders is the one the game actually loaded). Two INDEPENDENT sources:
+///   OUR side  = the ProfileSummary save RECORD of the slot our portrait targets (`render_target_slot`
+///               = `portrait_loaded_slot()`): its stored character NAME + saved MAP (record+0x30).
+///   GAME side = the LIVE loaded character: PlayerGameData NAME (`char_fingerprint`) + GameMan c30 map.
+/// The save-record table and the in-world character live in distinct memory, so a wrong-slot render (or
+/// a wrong-character load) makes them disagree -- NON-tautological even though our target derives from
+/// ac0 (a slot index): this compares the CHARACTER stored in that slot against who is actually resident.
+/// Determines "is it the expected slot" without any pixel readback (the user's constraint: pixels are
+/// too slow / the wrong tool). On a mismatch (a real character is loaded but its NAME/MAP != our target
+/// slot's record): record the oracle + a crash-log line and, on diagnostic runs, deliberately fault so
+/// the regression STOPS THE RUN EARLY. Gated on a real loaded character AND a real record, so pre-load
+/// transients and empty slots never fire.
+unsafe fn portrait_render_slot_semaphore(base: usize, render_target_slot: i32) {
+    // New-game / not-yet-resolved saved-map sentinel; excluded from the map check so a transient c30
+    // during the loading screen cannot false-fire.
+    const DEFAULT_MAP_C30: i32 = 0x0a01_0000;
+    // ProfileSummary record layout (bd native-full-save-read-slot-resolve-chain-observe-recipe-2026):
+    // records start at summary+0x18, stride 0x2a0; NAME at record+0, saved MAP at record+0x30.
+    const PROFILE_RECORD_BASE: usize = 0x18;
+    const PROFILE_RECORD_STRIDE: usize = 0x2a0;
+    const PROFILE_RECORD_MAP_OFFSET: usize = 0x30;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+
+    // GAME side: require a REAL loaded character before asserting anything.
+    if !unsafe { char_fingerprint(base).0 } {
+        return; // no real character loaded yet -- pre-load transient.
+    }
+    let gdm = game_data_man_ptr_or_null();
+    if gdm == null {
+        return;
+    }
+    let pgd =
+        unsafe { safe_read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(null);
+    if pgd == null {
+        return;
+    }
+    let (live_name, live_len) = unsafe { read_utf16_name_units(pgd + PGD_NAME_9C_OFFSET) };
+    let gm = game_man_ptr_or_null();
+    let live_map = if gm != null {
+        unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }.unwrap_or(-1)
+    } else {
+        -1
+    };
+
+    // OUR side: the save-RECORD identity of the slot our portrait code targets.
+    if !(0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&render_target_slot) {
+        return;
+    }
+    let profile_summary =
+        unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(null);
+    if profile_summary == null {
+        return;
+    }
+    let rec =
+        profile_summary + PROFILE_RECORD_BASE + render_target_slot as usize * PROFILE_RECORD_STRIDE;
+    let (our_name, our_len) = unsafe { read_utf16_name_units(rec) };
+    if utf16_name_empty_like(&our_name, our_len) {
+        return; // our target slot stores no real character -- nothing meaningful to compare.
+    }
+    let our_map = unsafe { safe_read_i32(rec + PROFILE_RECORD_MAP_OFFSET) }.unwrap_or(-1);
+
+    // Compare RAM identities. Name is the character identity; the saved map is a second discriminator,
+    // checked only when BOTH are real resolved maps (so a default/transient c30 can't false-fire).
+    let name_match = our_len == live_len && our_name[..our_len] == live_name[..live_len];
+    let both_real_map =
+        our_map > 0 && our_map != DEFAULT_MAP_C30 && live_map > 0 && live_map != DEFAULT_MAP_C30;
+    let map_mismatch = both_real_map && our_map != live_map;
+    if name_match && !map_mismatch {
+        return; // our portrait's character == the loaded character (RAM identity match).
+    }
+    let cond = ((!name_match) as usize) | ((map_mismatch as usize) << 1);
+    PORTRAIT_RENDER_SEMAPHORE_STATE.store(
+        ((render_target_slot as u32 as usize) << 16)
+            | ((our_map as u32 as usize & 0xff) << 8)
+            | cond,
+        Ordering::SeqCst,
+    );
+    if PORTRAIT_RENDER_SEMAPHORE_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+        append_crash_log(format_args!(
+            "PORTRAIT-IDENTITY-SEMAPHORE FAIL: our portrait targets slot={render_target_slot} (record name_len={our_len} map=0x{our_map:x}) but the LOADED character is name_len={live_len} map=0x{live_map:x} -- name_match={name_match} map_mismatch={map_mismatch}. Our portrait is not the loaded character (er-effects-rs-j3r); deliberate fail-fast fault follows"
+        ));
+        append_autoload_debug(format_args!(
+            "PORTRAIT-IDENTITY-SEMAPHORE FAIL: target_slot={render_target_slot} record(name_len={our_len} map=0x{our_map:x}) vs loaded(name_len={live_len} map=0x{live_map:x}) name_match={name_match} map_mismatch={map_mismatch}"
+        ));
+    }
+    if crate::crashlog::crash_logger_enabled() {
+        // Deliberate null-page fault: crash_vectored_handler logs full context, returns
+        // EXCEPTION_CONTINUE_SEARCH, and the run terminates -- the fail-fast the user asked for.
+        unsafe {
+            core::ptr::write_volatile(PORTRAIT_RENDER_SEMAPHORE_FAULT_ADDR as *mut u8, 0u8);
+        }
+    }
+}
+
+/// ProfileSummary save-record layout (bd native-full-save-read-slot-resolve-chain-observe-recipe):
+/// per-slot records start at `summary+0x18`, stride `0x2a0`; character NAME at record+0.
+const PROFILE_SUMMARY_RECORD_BASE: usize = 0x18;
+const PROFILE_SUMMARY_RECORD_STRIDE: usize = 0x2a0;
+
+/// True if ProfileSummary slot `slot` holds a real character (non-empty saved name). Used to gate the
+/// human-driven in-world Load-Profile pick so activating an EMPTY slot never arms a switch (which
+/// would tear the world down to a clean title and then fail the fresh deserialize, stranding the game
+/// at a blank title). Reads the same save-record table the identity semaphore uses -- fault-guarded,
+/// returns false on any unreadable pointer so an empty/unknown slot is treated as "no character".
+unsafe fn profile_slot_has_character(slot: i32) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if !(0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
+        return false;
+    }
+    let gdm = game_data_man_ptr_or_null();
+    if gdm == null {
+        return false;
+    }
+    let profile_summary =
+        unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(null);
+    if profile_summary == null {
+        return false;
+    }
+    let rec = profile_summary
+        + PROFILE_SUMMARY_RECORD_BASE
+        + slot as usize * PROFILE_SUMMARY_RECORD_STRIDE;
+    let (name, len) = unsafe { read_utf16_name_units(rec) };
+    !utf16_name_empty_like(&name, len)
+}
+
 pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     if IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES {
         return;
@@ -4429,14 +4591,14 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // save holds multiple characters (all 10 slots build models), and the slot-0 readback grabbed a
     // neighbouring slot's identical-size 1024 RT -> wrong face. Build + mark ONLY the autoload target slot
     // so the loaded character (Banon, slot 0) is the ONLY portrait model that exists -> no wrong-slot grab.
-    let target_slot = {
-        let s = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
-        if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&s) {
-            s
-        } else {
-            0
-        }
-    };
+    // CORRELATION FIX (er-effects-rs-j3r): render the slot the game ACTUALLY loaded (ac0), via the
+    // shared `portrait_loaded_slot()` source used by every portrait site (build/capture/spare).
+    let target_slot = portrait_loaded_slot();
+    // FAIL-FAST SEMAPHORE: assert the slot we're about to render IS the loaded character
+    // (er-effects-rs-j3r). With the correlation fix above, condition A (wrong-slot) is structurally
+    // satisfied and stands as a regression tripwire; condition B (null loaded-slot renderer) stays a
+    // live guard against the 3rd-open null-deref class.
+    unsafe { portrait_render_slot_semaphore(base, target_slot) };
     {
         let mark: unsafe extern "system" fn(usize, i32) -> u8 =
             unsafe { core::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
@@ -4597,14 +4759,7 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                 // a frame where its model is actually BUILT (+0x778 valid), so the teardown-spare hook can
                 // protect this exact renderer through Continue even though the menu cycles model_ins. The
                 // long menu dwell makes catching a built frame reliable.
-                let target = {
-                    let own = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
-                    if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&own) {
-                        own
-                    } else {
-                        0
-                    }
-                };
+                let target = portrait_loaded_slot();
                 if s == target
                     && PROFILE_SPARE_CANDIDATE.load(Ordering::SeqCst) == 0
                     && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
@@ -4670,7 +4825,7 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                 // made oracle_..._gx_nonblack a false success. Requiring !checker means we keep re-checking each
                 // dump cycle and latch only once a real shaded head has actually rendered into the offscreen
                 // (which needs the render-thread offscreen drive -- see portrait_render_drive). One-shot via swap.
-                if s == OWN_STEPPER_SLOT.load(Ordering::SeqCst)
+                if s == portrait_loaded_slot()
                     && nb
                     && !checker
                     && PROFILE_BAKE_RGBA_CAPTURED.swap(1, Ordering::SeqCst) == 0
@@ -4708,12 +4863,8 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
         && (product_autoload_enabled() || portrait_lookat_enabled())
     {
         if let Ok(base) = game_module_base() {
-            let slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
-            let slot = if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
-                slot
-            } else {
-                0
-            };
+            // The loaded character's slot (er-effects-rs-j3r) -- spare the renderer we actually render.
+            let slot = portrait_loaded_slot();
             // Prefer the PRE-RECORDED candidate (captured at the menu on a model-built frame -- robust to
             // the menu's model_ins cycling). Find its table slot and protect it. Fall back to reading
             // table[slot] + a model-built guard if no candidate was recorded.
@@ -4771,6 +4922,165 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
     if orig != null && orig != HOOK_ORIGINAL_UNSET {
         let f: unsafe extern "system" fn() = unsafe { std::mem::transmute(orig) };
         unsafe { f() };
+    }
+}
+
+/// Diagnostic + REPAIR detour on the native profile-portrait builder (`FUN_1409aa7d0` =
+/// `PROFILE_RENDERER_REFRESH_RVA`). The builder derefs `table[slot]+0x754` with NO null check for
+/// every slot whose profile record exists (Ghidra: `FUN_140261c30(summary,slot) != 0` gates the
+/// walk, the entry itself is never checked), and its 10-slot table setup is called from exactly ONE
+/// native site -- the TitleTopDialog constructor -- so our cloned in-world ProfileSelect reopens run
+/// it against whatever the last teardown left; the 3rd in-session open found the table fully empty
+/// and AV'd at `[null+0x754]` (er-effects-rs-j3r). Three layers, all fault-guarded + catch_unwind:
+///   1. DIAG: log the full table once per distinct degraded (mask, caller) pattern.
+///   2. REPAIR: a FULLY-empty table (the proven crash state) is rebuilt via the engine's own no-arg
+///      setup (`PROFILE_TABLE_BUILDER_RVA`; its internal teardown is a no-op on an all-null table),
+///      satisfying the native invariant exactly as the TitleTopDialog ctor would. Gated on
+///      `PROFILE_TABLE_WAS_POPULATED` (engine/ResMan up -- the setup AVs at boot title) and on
+///      fully-empty ONLY: a MIXED table is the intentional teardown-spare state during Continue
+///      loading and must not be rebuilt over.
+///   3. GUARD: if any slot is still null/invalid after the (possible) repair, SKIP chaining the
+///      original this call (fail-soft; the per-frame builder retries) instead of letting the native
+///      walk AV.
+pub(crate) unsafe extern "system" fn profile_select_table_diag_hook() {
+    let chain = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let Ok(base) = game_module_base() else {
+            return true;
+        };
+        let null = TITLE_OWNER_SCAN_START_ADDRESS;
+        let scan_table = |ptrs: &mut [usize; TITLE_PROFILE_SLOT_COUNT]| -> (u32, u32) {
+            let mut null_mask = 0u32;
+            let mut valid_mask = 0u32;
+            for s in 0..TITLE_PROFILE_SLOT_COUNT {
+                let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s as i32)) }
+                    .unwrap_or(0);
+                ptrs[s] = r;
+                let is_valid = r != 0
+                    && r != null
+                    && unsafe { safe_read_usize(r) }.unwrap_or(0)
+                        == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA;
+                if is_valid {
+                    valid_mask |= 1 << s;
+                } else {
+                    null_mask |= 1 << s;
+                }
+            }
+            (valid_mask, null_mask)
+        };
+        let mut ptrs = [0usize; TITLE_PROFILE_SLOT_COUNT];
+        let (valid_mask, mut null_mask) = scan_table(&mut ptrs);
+        // Degraded = ANY slot lost its renderer while the builder is about to run. A HEALTHY table
+        // is all 10 valid (native setup allocs all 10 unconditionally); any null is the crash-prone
+        // state, INCLUDING all-null (the fully-empty table that caused the 3rd-open crash -- the
+        // earlier "mixed only" check missed it). Log per distinct (mask, caller) so it never spams.
+        let degraded = null_mask != 0;
+        let caller_rva = crate::crashlog::trace_first_game_caller_rva();
+        let key =
+            ((caller_rva & 0xffffff) << 20) | ((valid_mask as usize) << 10) | null_mask as usize;
+        if degraded && PROFILE_SELECT_TABLE_DIAG_LAST.swap(key, Ordering::SeqCst) != key {
+            append_crash_log(format_args!(
+                "PROFILESELECT-TABLE-DIAG: degraded profile-renderer table before native builder (er-effects-rs-j3r) caller_rva=0x{caller_rva:x} valid_mask=0x{valid_mask:x} null_mask=0x{null_mask:x} entries=[0x{:x},0x{:x},0x{:x},0x{:x},0x{:x},0x{:x},0x{:x},0x{:x},0x{:x},0x{:x}]",
+                ptrs[0], ptrs[1], ptrs[2], ptrs[3], ptrs[4], ptrs[5], ptrs[6], ptrs[7], ptrs[8],
+                ptrs[9]
+            ));
+        } else if !degraded {
+            PROFILE_SELECT_TABLE_DIAG_LAST.store(0, Ordering::SeqCst);
+            // A fully-valid table at builder entry proves the engine built renderers successfully --
+            // the same "engine/ResMan up" evidence the loading-screen path latches; latching it here
+            // too arms the repair even when the loading-portrait feature is disabled.
+            PROFILE_TABLE_WAS_POPULATED.store(1, Ordering::SeqCst);
+        }
+        if null_mask == PROFILE_TABLE_ALL_SLOTS_MASK
+            && PROFILE_TABLE_WAS_POPULATED.load(Ordering::SeqCst) != 0
+        {
+            let build: unsafe extern "system" fn() =
+                unsafe { core::mem::transmute(base + PROFILE_TABLE_BUILDER_RVA) };
+            unsafe { build() };
+            let n = PROFILE_SELECT_TABLE_REPAIR_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+            let (revalid_mask, renull_mask) = scan_table(&mut ptrs);
+            null_mask = renull_mask;
+            append_crash_log(format_args!(
+                "PROFILESELECT-TABLE-REPAIR #{n}: fully-empty renderer table at native builder entry -> re-ran native table setup 0x{:x}; post-repair valid_mask=0x{revalid_mask:x} null_mask=0x{renull_mask:x} (er-effects-rs-j3r)",
+                base + PROFILE_TABLE_BUILDER_RVA
+            ));
+            append_autoload_debug(format_args!(
+                "profileselect-table-repair #{n}: rebuilt empty 10-slot renderer table via native setup before the native builder walked it; post-repair valid_mask=0x{revalid_mask:x} (er-effects-rs-j3r)"
+            ));
+        }
+        if null_mask != 0 {
+            let n = PROFILE_SELECT_TABLE_GUARD_SKIP_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+            let skip_key = ((caller_rva & 0xffffff) << 10) | null_mask as usize;
+            if PROFILE_SELECT_TABLE_GUARD_SKIP_LAST.swap(skip_key, Ordering::SeqCst) != skip_key {
+                append_crash_log(format_args!(
+                    "PROFILESELECT-TABLE-GUARD SKIP #{n}: null/invalid renderer slots remain (null_mask=0x{null_mask:x}) -- skipping the native builder this call so it cannot AV at [null+0x754] (er-effects-rs-j3r)"
+                ));
+            }
+            return false;
+        }
+        true
+    }))
+    // A panicked diagnostic keeps the pre-hook behavior: chain the original.
+    .unwrap_or(true);
+    if !chain {
+        return;
+    }
+    let orig = PROFILE_SELECT_TABLE_DIAG_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return;
+    }
+    let f: unsafe extern "system" fn() = unsafe { std::mem::transmute(orig) };
+    unsafe { f() };
+}
+
+pub(crate) fn install_profile_select_table_diag_hook() {
+    if PROFILE_SELECT_TABLE_DIAG_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "profileselect-table-diag: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(target) = game_rva(PROFILE_RENDERER_REFRESH_RVA as u32) else {
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            target as *mut c_void,
+            profile_select_table_diag_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            PROFILE_SELECT_TABLE_DIAG_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if unsafe { hook.queue_enable() }.is_err() {
+                append_autoload_debug(format_args!(
+                    "profileselect-table-diag: queue_enable failed for 0x{target:x}"
+                ));
+                return;
+            }
+            std::mem::forget(hook);
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "profileselect-table-diag: MhHook::new failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => {
+            PROFILE_SELECT_TABLE_DIAG_INSTALLED.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "profileselect-table-diag: hooked native profile builder 0x{target:x} (read-only table-state trace)"
+            ));
+        }
+        status => append_autoload_debug(format_args!(
+            "profileselect-table-diag: MH_ApplyQueued failed: {status:?}"
+        )),
     }
 }
 
@@ -7359,8 +7669,58 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_BOUND.store(bound as usize, Ordering::SeqCst);
 
     SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.fetch_add(1, Ordering::SeqCst);
+
+    // PRODUCT PATH (human-driven pick): the slot activation IS the load confirmation. A human's A on
+    // a slot must load that character; the old flow instead forwarded into the native confirm ->
+    // MessageBox -> OK -> load-job chain, but the product msgbox path SUPPRESSES that "load this
+    // profile?" MessageBox before it renders, so a human never gets an OK to press and every A just
+    // re-opens+re-suppresses the confirm -- the pick stalls, no load-job Run, no arm (observed
+    // 2026-07-02: 24 activations, zero loads). Arm the save-safe switch DIRECTLY here and natively
+    // cancel-close ProfileSelect, satisfying the confirm's only semantic side effect (user chose to
+    // load this profile) with ZERO MessageBox and zero extra input. Repeatable: the continue_confirm
+    // hook returns the phase to IDLE after each reload, so the next pick re-arms cleanly.
+    //
+    // Gated so the proven test bench and opt-ins are untouched: skip when the repro autopilot drives
+    // (it manages its own confirm chain via a scripted double-A), when the native-forward opt-in is
+    // set, when a switch is already in flight (phase != IDLE), for an out-of-range cursor, or for an
+    // EMPTY slot (arming an empty slot would tear down to a clean title then fail the deserialize).
+    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    if !system_quit_repro_enabled()
+        && !system_quit_profile_load_activation_allowed()
+        && phase == SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+        && (0..bound).contains(&cursor)
+    {
+        if !unsafe { profile_slot_has_character(cursor) } {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: ProfileSelect slot activation IGNORED dialog=0x{dialog:x} cursor={cursor} bound={bound} -- slot holds no character; not arming a switch (would strand the game at a blank title)"
+            ));
+            return unsafe { original(dialog, b, c, d) };
+        }
+        unsafe { system_quit_arm_quickload_autoload(cursor, "ProfileSelectSlotActivate") };
+        // The arm only takes when the preserved System dialog is present; on success it advances the
+        // phase past IDLE. If it took, cancel-close ProfileSelect ourselves (no confirm-lambda runs on
+        // this direct path) so the menu-pump return-title chain tears the world down + reloads the
+        // picked slot at a clean title. If it did NOT take, fall through to the native activation so
+        // the pick is not silently dropped.
+        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
+            if let Ok(close_addr) = game_rva(SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA) {
+                let close_fn: unsafe extern "system" fn(usize) =
+                    unsafe { std::mem::transmute(close_addr) };
+                unsafe { close_fn(dialog) };
+                SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+            append_autoload_debug(format_args!(
+                "system-quit-dup: ProfileSelect slot activation ARMED save-safe switch dialog=0x{dialog:x} cursor={cursor} bound={bound}; cancel-closed ProfileSelect -> return-title + clean-title fresh-deserialize of slot {cursor} (zero MessageBox)"
+            ));
+            return 0;
+        }
+        append_autoload_debug(format_args!(
+            "system-quit-dup: ProfileSelect slot activation direct-arm did NOT take (no preserved System dialog) dialog=0x{dialog:x} cursor={cursor}; forwarding native activation"
+        ));
+    }
+
     append_autoload_debug(format_args!(
-        "system-quit-dup: ProfileSelect slot activation dialog ALLOWED dialog=0x{dialog:x} cursor={cursor} bound={bound} profile_window=0x{profile_window:x}; load-job Run remains guarded"
+        "system-quit-dup: ProfileSelect slot activation dialog ALLOWED dialog=0x{dialog:x} cursor={cursor} bound={bound} profile_window=0x{profile_window:x} phase={phase}; forwarding native (load-job Run remains guarded)"
     ));
     unsafe { original(dialog, b, c, d) }
 }
@@ -7417,6 +7777,7 @@ fn sq_repro_begin_switch() {
     SYSTEM_QUIT_OPTION_SETTING_WINDOW.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
     SQ_REPRO_INITIAL_CURSOR.store(usize::MAX, Ordering::SeqCst);
+    SQ_REPRO_WAIT_RELOAD_FRAMES.store(0, Ordering::SeqCst);
 }
 
 /// Fabricated gamepad wButtons for a phase that issues a FIXED list of button edges ONCE, in order,
@@ -7640,16 +8001,25 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             // NowLoading streaming latch is clear AND the menu->world transition cover is not visible.
             // Only then is the game in the genuinely interactive world where START opens the escape menu.
             let base = game_rva(0).unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
-            let loading = base == TITLE_OWNER_SCAN_START_ADDRESS
-                || unsafe { now_loading_active(base) }
-                || unsafe { fake_loading_screen_visible(base) };
+            let base_ok = base != TITLE_OWNER_SCAN_START_ADDRESS;
+            let now_loading = base_ok && unsafe { now_loading_active(base) };
+            let fake_cover = base_ok && unsafe { fake_loading_screen_visible(base) };
+            let loading = !base_ok || now_loading || fake_cover;
             if deser < expected_deser || !player_up || loading {
                 // Still tearing down / at title / streaming: hold the settle clock at 0 so it starts
                 // only when the NEW world is up AND interactive (not a loading-screen false positive).
                 SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
-                sq_repro_waiting_once(
-                    "WAIT_RELOAD: waiting for reload commit (fresh-deser) + interactive world (player present, now_loading==0, no transition cover)",
-                );
+                // Periodic GATE dump (er-effects-rs-qwj): this state once stalled with switch #1
+                // stable and fresh-deser == expected, so one of these gates was lying. Name the
+                // culprit with data, not a single opaque waiting line.
+                let waited = SQ_REPRO_WAIT_RELOAD_FRAMES.fetch_add(1, Ordering::SeqCst);
+                if waited % SQ_REPRO_WAIT_RELOAD_LOG_EVERY == 0 {
+                    append_autoload_debug(format_args!(
+                        "sq-repro: WAIT_RELOAD gates (switch #{}/{} waited_frames={waited}): fresh_deser={deser}/{expected_deser} player_up={player_up} now_loading={now_loading} fake_cover={fake_cover}",
+                        switch_index + 1,
+                        sq_repro_target_switches()
+                    ));
+                }
                 return;
             }
             if tick >= SQ_REPRO_WORLD_SETTLE_TICKS {
@@ -8196,8 +8566,41 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                     er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
                     er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
                 }
+                // REPEATABLE-SWITCH STATE RESTORE (er-effects-rs-qwj). The switch-#1 works but
+                // switch-#2-stalls symptom is a pure precondition mismatch: these three return-title
+                // one-shots are CONSUMED by this switch's teardown and gate the NEXT switch --
+                // RETURN_TITLE_REQUEST_COUNT (native return-title REQUEST fires only when ==0,
+                // startup_hooks 6922), DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT (menu-pump submit only
+                // when ==0, 7162), FINAL_FUNCTOR_CALL_COUNT (final-functor compare_exchange 0->1,
+                // title.rs 1690). Left set, switch #2 skips its return-title REQUEST + submit and
+                // never tears the world down (observed: stuck at title state 10/10, bc4=0). Restoring
+                // them to boot-fresh here makes every switch byte-identical to the first. This is the
+                // SAFE edge (unlike the disabled arm-time reset above, which re-fires during teardown
+                // and double-submits -> the single-switch bounce that regressed it): it runs once per
+                // switch (fresh-deser latch), AFTER this switch's return-title machinery is fully
+                // consumed, and alongside phase -> IDLE, so no return-title path reads a 0 count until
+                // the next switch arms (all those gates require phase != IDLE).
+                SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.store(0, Ordering::SeqCst);
+                SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.store(0, Ordering::SeqCst);
+                SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.store(0, Ordering::SeqCst);
+                // Restore the per-switch MENU-WINDOW state to boot-fresh too -- the visual analogue of
+                // the one-shots above (er-effects-rs-qwj). These trackers hold this switch's now-destroyed
+                // IngameTop/OptionSetting/ProfileSelect windows; left stale, the NEXT switch's quit menu
+                // (a) does not hide behind ProfileSelect (the hide keys off a valid tracked window, but
+                // the stale pointer's vtable is zeroed on the torn-down window -> hid_top=false, so the
+                // quit menu renders on top) and (b) its Quit Game / Return-to-Desktop rows act dead
+                // because the menu is layered over a stale ProfileSelect. Resetting here -- the same
+                // trackers the autopilot's sq_repro_begin_switch clears before each switch -- makes the
+                // next quit-menu open repopulate them fresh via the MenuWindowJob::Run hook, so the hide
+                // + input behave identically to the first switch. (Manual B-to-back had the same effect
+                // by forcing a fresh window; this makes it automatic.)
+                unsafe {
+                    system_quit_reset_profile_select_state("post-switch-commit-menu-hygiene")
+                };
+                SYSTEM_QUIT_INGAME_TOP_WINDOW.store(0, Ordering::SeqCst);
+                SYSTEM_QUIT_OPTION_SETTING_WINDOW.store(0, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "system-quit-quickload: fresh picked-slot deserialize OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase -> IDLE + cleared GameMan+0xb78=-1 + cleared return-title rebuild flags (menuData+0x5d, DAT, save_requested, warp_requested) so the loaded world stays (no b78 redundant-load crash, no post-load quit-to-title bounce)"
+                    "system-quit-quickload: fresh picked-slot deserialize OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase -> IDLE + cleared GameMan+0xb78=-1 + cleared return-title rebuild flags (menuData+0x5d, DAT, save_requested, warp_requested) + RESET return-title one-shots (request/submit/final-functor) so the NEXT switch starts boot-fresh (er-effects-rs-qwj repeatable switching)"
                 ));
             } else {
                 let n = SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
