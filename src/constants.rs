@@ -4603,22 +4603,6 @@ pub(crate) static SCALEFORM_HANDLER_DTORS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SCALEFORM_HANDLER_DOUBLE_FREES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SCALEFORM_HANDLER_LAST_DOUBLE_FREE_OBJ: AtomicUsize = AtomicUsize::new(0);
 
-/// GX COMMAND-QUEUE OVERFLOW GUARD (er-effects-rs crash: GX exhaustion when the Load menu renders
-/// its 10 portraits on top of our accumulated renderers). `reserve_command_queue_slot` (deobf entry
-/// 0x141aeae60) appends a command-list slot to a fixed array: base at queue+0x28, count at +0x30,
-/// capacity at +0x34. It writes `*(base + count*0x10) = buf`; when count>=capacity the guarding `if`
-/// is skipped and the slot pointer stays NULL -> `*null = buf` crash at 0x141aeaf05 (observed rcx=0,
-/// fault_addr=0). Guard: on entry, if the slot would be null (count>=capacity, or a null/implausible
-/// base), hand back a large static scratch buffer so the caller writes its command bytes into safe
-/// memory (the command is simply not queued -- dropped for that frame) instead of crashing. The
-/// queue count resets when the frame's lists execute, so this only drops the overflowing commands.
-pub(crate) const GX_RESERVE_CMD_QUEUE_SLOT_RVA: usize = 0x1aeae60;
-pub(crate) static GX_RESERVE_CMD_QUEUE_SLOT_ORIG: AtomicUsize =
-    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static GX_RESERVE_CMD_QUEUE_SLOT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static GX_CMD_QUEUE_OVERFLOWS: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static GX_CMD_QUEUE_MAX_FILL: AtomicUsize = AtomicUsize::new(0);
-
 /// Gate-local `CS::MenuWindowJob::Run` hook state. `MENU_WINDOW_JOB_RUN_RVA` is defined with the
 /// title-cover constants above; System Quit reuses that same live/deobf target.
 pub(crate) static SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG: AtomicUsize =

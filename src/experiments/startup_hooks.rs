@@ -4720,6 +4720,12 @@ pub(crate) unsafe fn fake_loading_screen_visible(base: usize) -> bool {
 /// forever, so the head only ever rendered on the FIRST character load (the subsequent-load bug, run
 /// head-popfix-loaddone 2026-07-02: after the 2nd deserialize the whole pipeline was silent). Fault-guarded.
 pub(crate) unsafe fn portrait_pipeline_idle_in_gameplay(base: usize) -> bool {
+    // Also idle while the game's ProfileSelect (Load) menu is open: it renders its own portraits,
+    // and our drive/readback stacking on top overflows the GX command queue (see the build gate in
+    // maybe_build_profile_table_for_loading). Our pipeline is for the loading SCREEN, after the menu.
+    if SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0 {
+        return true;
+    }
     IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES
         && unsafe { now_loading_active(base) }
         && !unsafe { fake_loading_screen_visible(base) }
@@ -4788,6 +4794,16 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if base == 0 || base == null {
+        return;
+    }
+    // ROOT FIX (2026-07-03, run gxguard2): do NOT build our portrait table while the game's own
+    // ProfileSelect (Load Character) menu owns the portraits. That menu renders its own 10 profile
+    // models; our builder adds a second 10 that stack in the SAME frame and blow past the fixed
+    // 192-slot GX command queue -> reserve_command_queue_slot null-slot crash (0x1aeaf05) exactly
+    // when the load menu appears after a few switches. Our table is only for the loading SCREEN,
+    // which comes AFTER this menu closes -- so skip the build while it is open (owner != 0). The
+    // now-loading flag briefly overlaps the still-open menu, which is why we were building too early.
+    if SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0 {
         return;
     }
     // If the table is already populated (menu built it, or our own build already ran), leave it -- the
@@ -8311,111 +8327,6 @@ pub(crate) unsafe extern "system" fn scaleform_handler_dtor_hook(obj: usize) {
     unsafe { f(obj) };
 }
 
-/// 64 KiB, 4 KiB-aligned scratch the GX-queue guard hands back on overflow so the caller has a real
-/// writable buffer for its command bytes (discarded -- the slot is never queued).
-#[repr(align(4096))]
-struct GxOverflowScratch(std::cell::UnsafeCell<[u8; 0x10000]>);
-// SAFETY: only handed to the render thread as a throwaway command buffer; never read back by us.
-unsafe impl Sync for GxOverflowScratch {}
-static GX_OVERFLOW_SCRATCH: GxOverflowScratch =
-    GxOverflowScratch(std::cell::UnsafeCell::new([0; 0x10000]));
-
-/// `reserve_command_queue_slot` guard (deobf 0x141aeae60). If the slot the original would write to
-/// is null (count@+0x30 >= capacity@+0x34, or a null/implausible base@+0x28), return the static
-/// scratch so the caller writes its command into safe memory instead of the original writing a
-/// command-list pointer through NULL (the 0x141aeaf05 crash). Otherwise forward to the original.
-pub(crate) unsafe extern "system" fn gx_reserve_cmd_queue_slot_hook(
-    queue: usize,
-    param2: usize,
-    param3: i32,
-    param4: u32,
-    param5: u32,
-) -> usize {
-    let orig = GX_RESERVE_CMD_QUEUE_SLOT_ORIG.load(Ordering::SeqCst);
-    let count = unsafe { safe_read_i32(queue + 0x30) }.unwrap_or(-1);
-    let cap = unsafe { safe_read_i32(queue + 0x34) }.unwrap_or(-1);
-    let base = unsafe { safe_read_usize(queue + 0x28) }.unwrap_or(0);
-    if count >= 0 {
-        GX_CMD_QUEUE_MAX_FILL.fetch_max(count as usize, Ordering::SeqCst);
-    }
-    // The original writes *(base + count*0x10); NULL (-> 0x1aeaf05 crash) when the append branch is
-    // skipped (count>=cap) or the base is null/implausible. RACE: the original re-reads count AFTER
-    // taking the queue spinlock (0xa8) that we don't hold, so a concurrent GX submit can fill the
-    // last slot between our read and its write. Divert a small MARGIN before the true edge so a
-    // handful of concurrent adds can't push the original over -- the margin's cost is at most a few
-    // dropped command lists on the heaviest frames (transient flicker), never a crash. cap here is a
-    // fixed 192; the overflow is driven by our accumulated profile renderers stacking extra draws.
-    const GX_QUEUE_RACE_MARGIN: i32 = 16;
-    let near_full = cap > 0 && count >= cap.saturating_sub(GX_QUEUE_RACE_MARGIN);
-    let slot_would_be_null = near_full || base < 0x10000 || count < 0 || cap < 0;
-    if slot_would_be_null {
-        let n = GX_CMD_QUEUE_OVERFLOWS.fetch_add(1, Ordering::SeqCst) + 1;
-        if n <= 16 {
-            append_crash_log(format_args!(
-                "gx-cmd-queue-guard: OVERFLOW #{n} queue=0x{queue:x} count={count} cap={cap} base=0x{base:x} -- returned scratch to skip the null-slot write (reserve_command_queue_slot crash 0x141aeaf05 averted); this command dropped"
-            ));
-        }
-        return GX_OVERFLOW_SCRATCH.0.get() as usize;
-    }
-    if orig == HOOK_ORIGINAL_UNSET || orig == 0 {
-        return GX_OVERFLOW_SCRATCH.0.get() as usize;
-    }
-    let f: unsafe extern "system" fn(usize, usize, i32, u32, u32) -> usize =
-        unsafe { std::mem::transmute(orig) };
-    unsafe { f(queue, param2, param3, param4, param5) }
-}
-
-/// Install the GX command-queue overflow guard.
-fn install_gx_cmd_queue_overflow_guard() {
-    if GX_RESERVE_CMD_QUEUE_SLOT_INSTALLED.load(Ordering::SeqCst) != 0 {
-        return;
-    }
-    match unsafe { MH_Initialize() } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-        status => {
-            append_autoload_debug(format_args!(
-                "gx-cmd-queue-guard: MH_Initialize failed: {status:?}"
-            ));
-            return;
-        }
-    }
-    let Ok(addr) = game_rva(GX_RESERVE_CMD_QUEUE_SLOT_RVA as u32) else {
-        append_autoload_debug(format_args!(
-            "gx-cmd-queue-guard: failed to resolve rva 0x{GX_RESERVE_CMD_QUEUE_SLOT_RVA:x}"
-        ));
-        return;
-    };
-    match unsafe {
-        MhHook::new(
-            addr as *mut c_void,
-            gx_reserve_cmd_queue_slot_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => {
-            GX_RESERVE_CMD_QUEUE_SLOT_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if unsafe { hook.queue_enable() }.is_err() {
-                append_autoload_debug(format_args!("gx-cmd-queue-guard: queue_enable failed"));
-                return;
-            }
-            std::mem::forget(hook);
-            match unsafe { MH_ApplyQueued() } {
-                MH_STATUS::MH_OK => {
-                    GX_RESERVE_CMD_QUEUE_SLOT_INSTALLED.store(1, Ordering::SeqCst);
-                    append_autoload_debug(format_args!(
-                        "gx-cmd-queue-guard: hooked reserve_command_queue_slot 0x{addr:x}; null-slot overflow -> scratch (crash 0x141aeaf05 averted)"
-                    ));
-                }
-                status => append_autoload_debug(format_args!(
-                    "gx-cmd-queue-guard: MH_ApplyQueued failed: {status:?}"
-                )),
-            }
-        }
-        Err(status) => append_autoload_debug(format_args!(
-            "gx-cmd-queue-guard: MhHook::new failed: {status:?}"
-        )),
-    }
-}
-
 /// Install the Scaleform handler ctor/dtor lifecycle guard (repeated-switch ProfileSelect UAF).
 fn install_scaleform_handler_lifecycle_guard() {
     if SCALEFORM_HANDLER_TRACE_INSTALLED.load(Ordering::SeqCst) != 0 {
@@ -10600,7 +10511,9 @@ fn apply_system_quit_multislot_layout_patch() {
 pub(crate) fn install_system_quit_duplicate_button_hook() {
     apply_system_quit_multislot_layout_patch();
     install_scaleform_handler_lifecycle_guard();
-    install_gx_cmd_queue_overflow_guard();
+    // (GX command-queue overflow guard removed: dropping command lists on overflow corrupts the
+    // render / soft-locks -- a band-aid. The real cause is our per-load profile-table rebuild
+    // leaking renderers that stack draw load; that is the thing to fix, not the queue write.)
     install_system_quit_menu_window_job_run_hook();
     install_system_quit_window_list_push_hook();
     install_system_quit_noop_action_hook();

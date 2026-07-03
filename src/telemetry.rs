@@ -2483,16 +2483,6 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         );
         push_json_usize(
             body,
-            "oracle_gx_cmd_queue_overflows",
-            GX_CMD_QUEUE_OVERFLOWS.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gx_cmd_queue_max_fill",
-            GX_CMD_QUEUE_MAX_FILL.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
             "oracle_portrait_multi_model_publish_skips",
             PROFILE_MULTI_MODEL_PUBLISH_SKIPS.load(Ordering::SeqCst),
         );
