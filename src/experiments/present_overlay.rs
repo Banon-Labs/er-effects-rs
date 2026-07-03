@@ -100,10 +100,12 @@ unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32)
     if this_u == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
         let base = GAME_BASE.load(Ordering::SeqCst);
         if base != 0 {
-            // NOTE: the offscreen RASTERIZE is NOT driven here. Present is the WRONG GX phase -- the frame's
-            // GX recording is already closed, so the subcontext pool pop no-ops (black). The rasterize is
-            // driven from profile_lookat_realtime_draw_tick (a DRAW-phase CSTaskImp task, live recording
-            // frame). This hook only does the static composite of an already-captured RGBA.
+            // LIVE-DRIVE TICK, 60Hz host (er-effects-rs-o3n): pump + pose + readback + publish run
+            // here now -- every draw-phase CSTask sags to ~15-20Hz during loading while Present
+            // holds frame rate. The RASTERIZE is the engine's registered offscreen scene pass, so
+            // the old "Present is the wrong GX phase" concern (draw-phase enqueue no-op) does not
+            // gate this host. Runs BEFORE the composite so the freshest publish is what's drawn.
+            unsafe { profile_lookat_present_tick(base) };
             let _ = unsafe { composite_portrait_on_swapchain(base, this_u) };
         }
     }
@@ -137,6 +139,8 @@ unsafe extern "system" fn present1_hook(
     if this_u == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
         let base = GAME_BASE.load(Ordering::SeqCst);
         if base != 0 {
+            // Same 60Hz live-drive host as present_hook (see the note there).
+            unsafe { profile_lookat_present_tick(base) };
             let _ = unsafe { composite_portrait_on_swapchain(base, this_u) };
         }
     }

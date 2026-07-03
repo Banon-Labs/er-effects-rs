@@ -1463,6 +1463,32 @@ pub(crate) static PORTRAIT_KICK_SLOT_KEY: AtomicUsize = AtomicUsize::new(0);
 /// renderer identity changes; the 755-landmine fix makes a re-kick on the fresh modelless renderer
 /// safe (754-only).
 pub(crate) static PORTRAIT_KICK_RENDERER: AtomicUsize = AtomicUsize::new(0);
+/// Last confirmed loaded slot + 1 seen by the display tick (0 = none yet). User directive
+/// 2026-07-03: never show the previous character's head between selecting a character and the
+/// load-commit -- ac0 flips at deserialize, and pixels published before the flip belong to the OLD
+/// slot's model. On a flip the displayed snapshot is wiped instantly (hidden) and the corrective
+/// kick republished the right head when ready. Residual gap: the stale-slot pixels can still show
+/// for the ac0-flip latency (~1s) on a cross-character manual reload; the proper future source for
+/// "what was clicked" is the load dialog's selected row, not ac0.
+pub(crate) static PORTRAIT_LAST_CONFIRMED_SLOT: AtomicUsize = AtomicUsize::new(0);
+/// ac0 FLAPS transiently mid-load (run #16: 5->3->5->3 within 1.3s -- load-time code touches other
+/// slots), so a raw slot change must persist for `PORTRAIT_SLOT_FLIP_ACCEPT_TICKS` consecutive
+/// present ticks (~1s) before the pipeline believes it. Candidate = the differing value + 1;
+/// streak = consecutive ticks it has held.
+pub(crate) static PORTRAIT_SLOT_FLIP_CANDIDATE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_SLOT_FLIP_STREAK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const PORTRAIT_SLOT_FLIP_ACCEPT_TICKS: usize = 60;
+/// DEPTH-KEY branch attribution (the black-background-on-reload bug): every key call ends in
+/// exactly one of applied-fresh / applied-cached / NO-MASK (fail-open, the black frames); the
+/// readback-side counters split the no-mask cause (async in-flight skip vs depth resource find
+/// failure vs dims mismatch vs no-gap). The old one-shot logs burned in window 1 and hid all
+/// window-2+ behavior.
+pub(crate) static DEPTH_KEY_CACHED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static DEPTH_KEY_NOMASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static DEPTH_RB_INFLIGHT_SKIPS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static DEPTH_RB_FIND_FAILS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static DEPTH_RB_DIMS_MISMATCHES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static DEPTH_RB_NOGAP: AtomicUsize = AtomicUsize::new(0);
 /// PUMP-BLOCK REASON counters (run #7: modeldraws froze at 250 ~10s before the load-completed
 /// window reset, cause unattributed). One per gate in the pump's path: renderer table entry
 /// invalid, vtable mismatch (renderer freed/replaced), offscreen pointer invalid, multi-model
