@@ -5155,7 +5155,7 @@ pub(crate) const SQ_REPRO_TARGET_SWITCHES: usize = 1;
 /// slot 4: driving `ER_EFFECTS_SQ_REPRO_SWITCHES=3` performs the 3rd in-session ProfileSelect open
 /// that crashed the native thumbnail builder on the empty renderer table (er-effects-rs-j3r), the
 /// deterministic repro/validation for the table-repair hook.
-pub(crate) const SQ_REPRO_TARGET_SLOTS: [i32; 3] = [4, 5, 4];
+pub(crate) const SQ_REPRO_TARGET_SLOTS: [i32; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 /// Baseline of (confirmed_block + confirmed_allow) counts captured at each switch's start, so the
 /// CONFIRM state detects THIS switch's OK as an increase over the baseline rather than a cumulative
 /// `!= 0` (which switch #2 would trip immediately on switch #1's residual count).

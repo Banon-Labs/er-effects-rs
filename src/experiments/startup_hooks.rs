@@ -8933,16 +8933,24 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             let deser = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
             let player_up = unsafe { PlayerIns::local_player_mut() }.is_ok();
             // PlayerIns-present alone is a LOADING-SCREEN/TITLE FALSE POSITIVE (PlayerIns exists during
-            // the reload before the world is interactive -- observed: driving switch #2 on that signal
-            // pressed START at the title's PRESS ANY BUTTON and stalled). Require the reload committed
-            // (fresh-deser), the player present, AND the engine NOT on a loading screen: the in-world
-            // NowLoading streaming latch is clear AND the menu->world transition cover is not visible.
-            // Only then is the game in the genuinely interactive world where START opens the escape menu.
+            // the reload before the world is interactive). Require the reload committed (fresh-deser),
+            // the player present, AND the new load COMPLETE.
+            //
+            // STALL FIX (2026-07-03, autostep10 run: switch #1 hung here 21 min): `now_loading_active`
+            // was used with INVERTED polarity. Despite its name it is a load-COMPLETE latch (RE-corrected
+            // 2026-07-02): it reads FALSE while the map streams and flips TRUE when the load finishes,
+            // then LINGERS true in gameplay. The old gate treated now_loading==true as "still on a loading
+            // screen" and held -- so the instant switch #1's load completed (latch true) it hung forever.
+            // Correct polarity (matches composite_portrait_inner's `loading = !load_done`): the world is
+            // still loading while the latch is FALSE, done when it is TRUE. Advance only when the latch is
+            // TRUE (load done), the fresh-deser count reached this switch, the player is up, and the cover
+            // is gone. The lingering-true-from-the-previous-load risk is covered by fresh_deser (must
+            // reach THIS switch's count) plus the settle wait below.
             let base = game_rva(0).unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
             let base_ok = base != TITLE_OWNER_SCAN_START_ADDRESS;
-            let now_loading = base_ok && unsafe { now_loading_active(base) };
+            let load_done = base_ok && unsafe { now_loading_active(base) };
             let fake_cover = base_ok && unsafe { fake_loading_screen_visible(base) };
-            let loading = !base_ok || now_loading || fake_cover;
+            let loading = !base_ok || !load_done || fake_cover;
             if deser < expected_deser || !player_up || loading {
                 // Still tearing down / at title / streaming: hold the settle clock at 0 so it starts
                 // only when the NEW world is up AND interactive (not a loading-screen false positive).
@@ -8953,7 +8961,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 let waited = SQ_REPRO_WAIT_RELOAD_FRAMES.fetch_add(1, Ordering::SeqCst);
                 if waited % SQ_REPRO_WAIT_RELOAD_LOG_EVERY == 0 {
                     append_autoload_debug(format_args!(
-                        "sq-repro: WAIT_RELOAD gates (switch #{}/{} waited_frames={waited}): fresh_deser={deser}/{expected_deser} player_up={player_up} now_loading={now_loading} fake_cover={fake_cover}",
+                        "sq-repro: WAIT_RELOAD gates (switch #{}/{} waited_frames={waited}): fresh_deser={deser}/{expected_deser} player_up={player_up} load_done={load_done} fake_cover={fake_cover}",
                         switch_index + 1,
                         sq_repro_target_switches()
                     ));
