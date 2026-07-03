@@ -695,9 +695,66 @@ pub(crate) static RENDER_LOADING_LAYER_LAST_CSSCALEFORM: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static RENDER_LOADING_LAYER_LAST_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
-/// CSFakeLoadingScreen visibility flag offset: `*(u8*)(singleton + 0x8)` is 1 while the loading
-/// screen is up (singleton = base + RuntimeGlobalRva::FakeLoadingScreenSingleton).
-pub(crate) const FAKE_LOADING_SCREEN_VISIBLE_OFFSET: usize = 0x8;
+/// RAM oracle (`oracle_loading_cover_suppress_writes`): frames the loading-cover experiment actually
+/// cleared `CSFakeLoadingScreenImp.visible`. >0 means the clamp engaged during at least one map load; 0
+/// with the gate on means the cover object never resolved / was never raised (nothing was suppressed).
+pub(crate) static LOADING_COVER_SUPPRESS_WRITES: AtomicUsize = AtomicUsize::new(0);
+/// `CS::CSFakeLoadingScreenImp` -- the full-screen fade/cover PLATE the game draws during a map load to
+/// HIDE the world teardown/rebuild behind the now-loading UI. RE'd from its ctor (deobf 0x140bbeee0,
+/// vtable 0x142b803b8) which is called from `CSDrawStep`, so this object lives in the render pipeline, not
+/// the menu system. `visible` (+0x8) is the byte the draw step checks to decide whether to draw the cover;
+/// the ctor inits it to 0 and the map-load system raises it while a load is in flight. Clearing it exposes
+/// whatever the renderer is drawing underneath (the "disable the loading screen, watch the world pop in"
+/// experiment). Singleton = `*(base + RuntimeGlobalRva::FakeLoadingScreenSingleton)`.
+#[repr(C)]
+pub(crate) struct CSFakeLoadingScreenImp {
+    pub(crate) vftable: usize,
+    pub(crate) visible: u8,
+    pub(crate) unknown_009: [u8; 3],
+    pub(crate) field_0c: u32,
+    pub(crate) field_10: u64,
+}
+
+pub(crate) const FAKE_LOADING_SCREEN_VISIBLE_OFFSET: usize =
+    core::mem::offset_of!(CSFakeLoadingScreenImp, visible);
+
+/// `CS::CSNowLoadingHelperImp` -- the controller behind the now-loading UI (the tips + rotating artwork,
+/// distinct from the `CSFakeLoadingScreenImp` cover and from the Scaleform movie that draws them). RE'd
+/// from the Ghidra dump's named layout (ctor deobf 0x1402a20e0, `Update` 0x1402a2c40). Key fields:
+/// `menu_load_entries` is a Fisher-Yates-shuffled 1..=34 array (the 34 loading-screen artwork/tip
+/// variants) and `current_menu_load_index` picks the active one; `replace_tex_info` /
+/// `requested_replace_tex_info` are the Scaleform texture-replacement handoff that swaps that artwork into
+/// the movie; `countdown` is the minimum-display timer. IMPORTANT: `load_done` (+0xed) is a load-COMPLETE
+/// latch (`Update` copies it from `request_load_done`, which the map-load system raises) -- it reads true
+/// AFTER the load finishes and lingers into gameplay, so it is NOT a "loading screen is visible" signal.
+/// Singleton = `*(base + RuntimeGlobalRva::NowLoadingSingleton)`.
+#[repr(C)]
+pub(crate) struct CSNowLoadingHelperImp {
+    pub(crate) vftable: usize,
+    pub(crate) rand_xorshift: usize,
+    pub(crate) update_task: [u8; 0x28],
+    pub(crate) field_38: usize,
+    pub(crate) field_40: usize,
+    pub(crate) menu_load_entries: [i32; 34],
+    pub(crate) current_menu_load_index: i32,
+    pub(crate) unknown_d4: [u8; 4],
+    pub(crate) replace_tex_info: usize,
+    pub(crate) requested_replace_tex_info: usize,
+    pub(crate) countdown: f32,
+    pub(crate) request_load_done: u8,
+    pub(crate) load_done: u8,
+    pub(crate) unknown_ee: [u8; 2],
+    pub(crate) field_f0: i32,
+    pub(crate) unknown_f4: [u8; 4],
+}
+
+// Layout guards: the RE'd offsets/size must match the Ghidra dump so a struct edit can't silently drift
+// the pointers our reads/writes use.
+const _: () = assert!(core::mem::size_of::<CSNowLoadingHelperImp>() == 0xf8);
+const _: () = assert!(core::mem::offset_of!(CSNowLoadingHelperImp, menu_load_entries) == 0x48);
+const _: () = assert!(core::mem::offset_of!(CSNowLoadingHelperImp, replace_tex_info) == 0xd8);
+const _: () = assert!(core::mem::offset_of!(CSNowLoadingHelperImp, load_done) == 0xed);
+const _: () = assert!(core::mem::offset_of!(CSFakeLoadingScreenImp, visible) == 0x8);
 /// Now-loading background portrait forge. The pseudorandom loading-screen background is
 /// `helper->replaceTexInfo` (a CSScaleformReplaceTexInfo*), PRODUCED for symbol `MENU_Load_%05d` by
 /// `GetOrCreateReplaceTexInfo`, whose symbol-bind step is `FUN_140d69880` (dump 0x140d69880 -> deobf
@@ -897,6 +954,43 @@ pub(crate) const PROFILE_TABLE_BUILDER_RVA: usize = 0x9af3a0;
 pub(crate) static PROFILE_LOADSCREEN_REBUILT: AtomicUsize = AtomicUsize::new(0);
 /// Count of post-Continue profile-table (re)builds for the loading-screen portrait (telemetry/sweep).
 pub(crate) static PROFILE_LOADSCREEN_TABLE_BUILDS: AtomicUsize = AtomicUsize::new(0);
+// PER-SLOT PROFILE BUILD KICK (replaces the engine's GLOBAL refresh in OUR post-Continue feed). The
+// global refresh FUN_1409aa7d0 iterates all 10 slots and kicks every real+marked one -- on a multi-
+// character save that built ALL the save's characters mid-load, and the readback scan flipped onto a
+// foreign slot's RT (the cross-slot portrait swap, run strip-default-drive-20260702-194018). Writing the
+// +0x754/+0x755 latches on unconfigured renderers to suppress those kicks CRASHED (GX command-queue
+// overflow -> null slot write at deobf 0x141aeaf05, run portrait-swap-fix-noteardown-20260702-212024), so
+// instead we never call the global refresh post-Continue and replicate its per-slot body for ONLY the
+// loaded slot. All RVAs below are the refresh body's callees (dump FUN_1409aa7d0), dump->deobf mapped
+// content-unique via scripts/dump-deobf-shift.py on 2026-07-02.
+/// `FUN_140261c30(summary, slot) -> record*` (dump 0x140261c30): the slot's ProfileSummary record.
+pub(crate) const PROFILE_SUMMARY_RECORD_RVA: usize = 0x261b80;
+/// `CS::FaceData::GetFaceDataBuffer(record+0x38, true) -> FaceDataBuffer*` (dump 0x140252210).
+pub(crate) const PROFILE_FACEDATA_BUFFER_RVA: usize = 0x252160;
+/// `FUN_140bbe290(renderer, record+0x1a8)` (dump 0x140bbe290): model-source/ChrAsm equip config
+/// (weapons cleared, default protectors, the record's equip source installed).
+pub(crate) const PROFILE_RENDERER_SET_MODEL_SOURCE_RVA: usize = 0xbbe1a0;
+/// `FUN_140bb9950(renderer, facedata_buffer)` (dump): `FaceDataBuffer::Copy(renderer+0x630, buf)`.
+pub(crate) const PROFILE_RENDERER_SET_FACEDATA_RVA: usize = 0xbb9860;
+/// `FUN_140bb9960(renderer, 1)` (dump 0x140bb9960): byte setter the refresh always passes 1.
+pub(crate) const PROFILE_RENDERER_SET_FLAG_ONE_RVA: usize = 0xbb9870;
+/// `FUN_140bb9970(renderer, record->0x290)` (dump 0x140bb9970).
+pub(crate) const PROFILE_RENDERER_SET_BYTE290_RVA: usize = 0xbb9880;
+/// `FUN_140bb9980(renderer, record->0x294)` (dump 0x140bb9980).
+pub(crate) const PROFILE_RENDERER_SET_BYTE294_RVA: usize = 0xbb9890;
+/// `FUN_140bb8cf0(renderer, slot*2)` (dump): `*(renderer+0x9a8) = slot*2` (the stream/pair index).
+pub(crate) const PROFILE_RENDERER_SET_STREAM_INDEX_RVA: usize = 0xbb8c00;
+/// `FUN_140bb9900(renderer)` (dump): `renderer+0x754 = 1` (the "load requested" idempotency latch).
+pub(crate) const PROFILE_RENDERER_SET_REQ_754_RVA: usize = 0xbb9810;
+/// `FUN_140bb9920(renderer)` (dump): `renderer+0x755 = 1` (set together with +0x754 at kick time).
+pub(crate) const PROFILE_RENDERER_SET_REQ_755_RVA: usize = 0xbb9830;
+/// RAM oracle: target-slot build kicks fired via the per-slot replica (`oracle_portrait_target_kicks`).
+/// Expected >=1 per loading window; 0 means the loaded character's model was never requested.
+pub(crate) static PROFILE_TARGET_KICKS: AtomicUsize = AtomicUsize::new(0);
+/// RAM oracle tripwire: max count of NON-target renderers observed holding a live model (+0x778 != 0)
+/// during our feed window (`oracle_portrait_foreign_models`). >0 = another character was built on the
+/// loading screen -- the swap-bug precondition returned.
+pub(crate) static PROFILE_FOREIGN_MODELS_MAX: AtomicUsize = AtomicUsize::new(0);
 /// Consecutive ticks the profile-renderer title table has been observed EMPTY. The menu's own
 /// teardown+rebuild is synchronous (FUN_1409af3a0 tears down then re-ctors in one call), so the table is
 /// never seen empty across our async ticks during menu cycling -- only a real Continue (teardown with NO

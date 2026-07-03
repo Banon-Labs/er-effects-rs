@@ -3257,7 +3257,9 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                     // the freshly-resolved RT held the head. We are inside the model_ins/loc + vtable validated
                     // block, so the per-frame resolve cannot race a teardown free.
                     if portrait_render_drive_enabled() {
-                        if let Some((cw, ch, mut cpx)) = unsafe { readback_offscreen_fast(off) } {
+                        if let Some((cw, ch, mut cpx, rt_cand)) =
+                            unsafe { readback_offscreen_fast(off) }
+                        {
                             // DIAGNOSTIC: count readbacks + checker-classified frames, and one-shot dump a
                             // "checker" frame (slot 103) so we can SEE what the ~216 non-published frames
                             // actually contain (forge magenta/yellow placeholder vs black vs partial head).
@@ -3269,6 +3271,20 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                 }
                             }
                             if !portrait_looks_like_checker(cw, ch, &cpx) {
+                                // PIN the confirmed-head content RT candidate: subsequent scans prefer it
+                                // outright, so the publish source can never flip to another slot's
+                                // same-size RT mid-load (the cross-slot swap). A switch after first latch
+                                // means the RT was genuinely recreated -- counted as the swap tripwire.
+                                let prev = PROFILE_RT_PIN.swap(rt_cand, Ordering::SeqCst);
+                                if prev != 0 && prev != rt_cand {
+                                    let n = PROFILE_RT_PIN_SWITCHES.fetch_add(1, Ordering::SeqCst);
+                                    if n < 4 {
+                                        append_autoload_debug(format_args!(
+                                            "live-feed: content-RT pin MOVED 0x{prev:x} -> 0x{rt_cand:x} (recreation or scan drift; switch #{})",
+                                            n + 1
+                                        ));
+                                    }
+                                }
                                 let nb = portrait_center_nonblack(cw, ch, &cpx);
                                 LOADING_BG_PORTRAIT_NONBLACK.store(nb as usize, Ordering::SeqCst);
                                 LOADING_BG_PORTRAIT_IS_CHECKER.store(0, Ordering::SeqCst);
@@ -4290,8 +4306,11 @@ unsafe fn apply_profile_camera_override(base: usize, renderer: usize, slot: i32)
     true
 }
 
-/// True while the engine's now-loading screen is active (reads the NowLoading singleton the telemetry
-/// uses: helper = *(base+NowLoadingSingleton); flag = *(helper+loading_flag) & 0xff). Fault-guarded.
+/// Reads `CSNowLoadingHelperImp::load_done` off the NowLoading singleton. WARNING (RE-corrected
+/// 2026-07-02): despite the name this is a load-COMPLETE latch, not "loading screen visible" -- `Update`
+/// copies it from `request_load_done` (raised by the map-load system), so it reads true AFTER the load
+/// finishes and lingers into gameplay. Do NOT use it to decide the portrait overlay lifetime; kept for
+/// telemetry/parity. Fault-guarded.
 pub(crate) unsafe fn now_loading_active(base: usize) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let helper = unsafe { safe_read_usize(base + RuntimeGlobalRva::NowLoadingSingleton as usize) }
@@ -4299,27 +4318,64 @@ pub(crate) unsafe fn now_loading_active(base: usize) -> bool {
     if helper == 0 || helper == null {
         return false;
     }
-    let off = core::mem::offset_of!(NowLoadingHelperLayout, loading_flag);
+    let off = core::mem::offset_of!(CSNowLoadingHelperImp, load_done);
     unsafe { safe_read_usize(helper + off) }
         .map(|v| (v & 0xff) != 0)
         .unwrap_or(false)
 }
 
-/// True while the "fake" loading screen (the Continue->world transition cover) is VISIBLE: helper =
-/// *(base+FakeLoadingScreenSingleton); visible = *(helper+0x8) & 0xff. This is the continuous signal for
-/// the menu->world loading screen the portrait belongs on -- distinct from `now_loading_active`, which reads
-/// the in-world NowLoading streaming singleton and stays 0 during this menu-background phase. Fault-guarded.
-pub(crate) unsafe fn fake_loading_screen_visible(base: usize) -> bool {
+/// Resolve the live `CSFakeLoadingScreenImp` (the render-pipeline cover plate) or 0. Singleton =
+/// `*(base + FakeLoadingScreenSingleton)`. Fault-guarded.
+pub(crate) unsafe fn fake_loading_screen_ptr(base: usize) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let helper =
         unsafe { safe_read_usize(base + RuntimeGlobalRva::FakeLoadingScreenSingleton as usize) }
             .unwrap_or(0);
     if helper == 0 || helper == null {
+        0
+    } else {
+        helper
+    }
+}
+
+/// True while the `CSFakeLoadingScreenImp` cover plate is VISIBLE: `visible` (+0x8) & 0xff. This is the
+/// render-pipeline cover the game draws to HIDE the world teardown/rebuild during a map load. Fault-guarded.
+pub(crate) unsafe fn fake_loading_screen_visible(base: usize) -> bool {
+    let helper = unsafe { fake_loading_screen_ptr(base) };
+    if helper == 0 {
         return false;
     }
-    unsafe { safe_read_usize(helper + 0x8) }
+    unsafe { safe_read_usize(helper + FAKE_LOADING_SCREEN_VISIBLE_OFFSET) }
         .map(|v| (v & 0xff) != 0)
         .unwrap_or(false)
+}
+
+/// EXPERIMENT (gated by `disable_loading_cover_enabled`): clamp the `CSFakeLoadingScreenImp` cover plate's
+/// `visible` byte to 0 so the render pipeline skips drawing it -- exposing the world underneath during a
+/// map load. Called every game-task frame; the map-load system raises `visible` once at load start and it
+/// stays raised, so a per-frame write to 0 wins for the draw. Only writes when the byte is currently
+/// non-zero (no needless writes), and only when a valid cover object is resolved. Reversible: with the gate
+/// off this is never called and the game draws its cover normally. Counts writes into a RAM oracle so we
+/// can confirm the clamp actually engaged. Fault-guarded (validated pointer + catch_unwind at the caller).
+pub(crate) unsafe fn suppress_loading_cover_tick(base: usize) {
+    if !disable_loading_cover_enabled() {
+        return;
+    }
+    let helper = unsafe { fake_loading_screen_ptr(base) };
+    if helper == 0 {
+        return;
+    }
+    let vis_addr = helper + FAKE_LOADING_SCREEN_VISIBLE_OFFSET;
+    let cur = unsafe { safe_read_u8(vis_addr) }.unwrap_or(0);
+    if cur != 0 {
+        unsafe { core::ptr::write_volatile(vis_addr as *mut u8, 0) };
+        let n = LOADING_COVER_SUPPRESS_WRITES.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 4 {
+            append_autoload_debug(format_args!(
+                "loading-cover-experiment: cleared CSFakeLoadingScreenImp.visible (was {cur}) at 0x{vis_addr:x} (write #{n}) -- world drawn uncovered this frame"
+            ));
+        }
+    }
 }
 
 /// POST-CONTINUE PORTRAIT: when the now-loading screen is up but the profile-renderer title table has been
@@ -4373,6 +4429,11 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     let builder: unsafe extern "system" fn() =
         unsafe { core::mem::transmute(base + PROFILE_TABLE_BUILDER_RVA) };
     unsafe { builder() };
+    // The loading-cover observer (CSNowLoadingHelperImp ctor/update) is the overlay's PRIMARY end-of-cover
+    // signal (update pulses stop == the game dismissed the tips+bar screen). Install it here, at the start
+    // of every loading window, instead of relying on the accept-byte-gated product path (which never fired
+    // on the strip-default run -> hooks_installed=0 and the overlay had to lean on the in-world latch).
+    install_now_loading_helper_observer_hooks();
     // Kick the model build THIS tick: the mark+refresh feed that requests the async character-model build
     // only runs every 240 ticks (counter % 240 == 0). The post-Continue now-loading window is shorter than
     // 240 ticks, so without this the freshly-built renderers are never fed -> they stay model-less (m=0).
@@ -4392,6 +4453,80 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
         },
         base + PROFILE_TABLE_BUILDER_RVA
     ));
+}
+
+/// Kick the ASYNC character-model build for ONE profile slot -- a faithful per-slot replica of the body
+/// of the engine's global refresh (dump `FUN_1409aa7d0`), which we no longer call from the post-Continue
+/// feed: the global form iterates all 10 slots and kicks every real+marked one, building EVERY save
+/// character mid-load (the cross-slot portrait swap). Writing the +0x754/+0x755 latches on the other
+/// renderers to mute the global refresh CRASHED (GX command-queue overflow; the latches only mean
+/// "requested" on a CONFIGURED renderer). This replica performs the engine's exact per-slot sequence --
+/// record lookup, ChrAsm/model-source config, FaceData copy, stream index, then the two request latches --
+/// so the target slot builds exactly as the engine would build it, and the non-target renderers stay in
+/// the natural never-configured state (flags 0, stepper idle -- the same state empty slots hold forever).
+/// Returns true when the kick fired. Fault-guarded reads; skips when the slot was already requested.
+pub(crate) unsafe fn kick_target_profile_slot(
+    base: usize,
+    summary: usize,
+    renderer: usize,
+    slot: i32,
+) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let valid = |p: usize| p != 0 && p != null;
+    if !valid(summary) || !valid(renderer) || !(0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot)
+    {
+        return false;
+    }
+    // Engine parity: kick only when BOTH request latches read 0 (idempotent per slot).
+    if unsafe { safe_read_u8(renderer + 0x754) }.unwrap_or(1) != 0
+        || unsafe { safe_read_u8(renderer + 0x755) }.unwrap_or(1) != 0
+    {
+        return false;
+    }
+    let record_of: unsafe extern "system" fn(usize, i32) -> usize =
+        unsafe { core::mem::transmute(base + PROFILE_SUMMARY_RECORD_RVA) };
+    let record = unsafe { record_of(summary, slot) };
+    if !valid(record) {
+        return false;
+    }
+    let set_model_source: unsafe extern "system" fn(usize, usize) =
+        unsafe { core::mem::transmute(base + PROFILE_RENDERER_SET_MODEL_SOURCE_RVA) };
+    let facedata_buffer: unsafe extern "system" fn(usize, u8) -> usize =
+        unsafe { core::mem::transmute(base + PROFILE_FACEDATA_BUFFER_RVA) };
+    let set_facedata: unsafe extern "system" fn(usize, usize) =
+        unsafe { core::mem::transmute(base + PROFILE_RENDERER_SET_FACEDATA_RVA) };
+    let set_byte290: unsafe extern "system" fn(usize, u8) =
+        unsafe { core::mem::transmute(base + PROFILE_RENDERER_SET_BYTE290_RVA) };
+    let set_flag_one: unsafe extern "system" fn(usize, u8) =
+        unsafe { core::mem::transmute(base + PROFILE_RENDERER_SET_FLAG_ONE_RVA) };
+    let set_byte294: unsafe extern "system" fn(usize, u8) =
+        unsafe { core::mem::transmute(base + PROFILE_RENDERER_SET_BYTE294_RVA) };
+    let set_stream_index: unsafe extern "system" fn(usize, u32) =
+        unsafe { core::mem::transmute(base + PROFILE_RENDERER_SET_STREAM_INDEX_RVA) };
+    let set_req_754: unsafe extern "system" fn(usize) =
+        unsafe { core::mem::transmute(base + PROFILE_RENDERER_SET_REQ_754_RVA) };
+    let set_req_755: unsafe extern "system" fn(usize) =
+        unsafe { core::mem::transmute(base + PROFILE_RENDERER_SET_REQ_755_RVA) };
+    let b290 = unsafe { safe_read_u8(record + 0x290) }.unwrap_or(0);
+    let b294 = unsafe { safe_read_u8(record + 0x294) }.unwrap_or(0);
+    unsafe {
+        set_model_source(renderer, record + 0x1a8);
+        let fd = facedata_buffer(record + 0x38, 1);
+        set_facedata(renderer, fd);
+        set_byte290(renderer, b290);
+        set_flag_one(renderer, 1);
+        set_byte294(renderer, b294);
+        set_stream_index(renderer, (slot as u32) * 2);
+        set_req_754(renderer);
+        set_req_755(renderer);
+    }
+    let kicks = PROFILE_TARGET_KICKS.fetch_add(1, Ordering::SeqCst) + 1;
+    if kicks <= 4 {
+        append_autoload_debug(format_args!(
+            "loading-portrait: per-slot build kick #{kicks} for LOADED slot {slot} (renderer=0x{renderer:x} record=0x{record:x}) -- global refresh not called, other slots stay unbuilt"
+        ));
+    }
+    true
 }
 
 /// The save slot whose portrait the loading-screen pipeline should build / capture / display / spare:
@@ -4665,19 +4800,20 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                 continue;
             }
             let _ = unsafe { mark(summary, s) };
-            kicked += 1;
-            kicked_mask |= 1 << s;
+            // PER-SLOT kick replica (not the engine's GLOBAL refresh, which would kick EVERY marked
+            // slot and build all the save's characters mid-load -> the cross-slot portrait swap).
+            if unsafe { kick_target_profile_slot(base, summary, r, s) } {
+                kicked += 1;
+                kicked_mask |= 1 << s;
+            }
         }
         if kicked > 0 {
-            let refresh: unsafe extern "system" fn() =
-                unsafe { core::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
-            unsafe { refresh() };
             // Drive the freshly-requested build to completion + keep it latched through the loading screen.
             PROFILE_LOADSCREEN_FEED_TICKS
                 .store(PROFILE_LOADSCREEN_FEED_WINDOW_TICKS, Ordering::SeqCst);
             if PROFILE_REAL_SLOT_KICK_LOGGED.swap(1, Ordering::SeqCst) == 0 {
                 append_autoload_debug(format_args!(
-                    "force-profile-render: IMMEDIATE build kick -- {kicked} real slot(s) (mask=0x{kicked_mask:x}) became available with req754=0; marked + refreshed off-cadence + opened feed window (summary=0x{summary:x})"
+                    "force-profile-render: IMMEDIATE build kick -- {kicked} real slot(s) (mask=0x{kicked_mask:x}) became available with req754=0; marked + per-slot kicked off-cadence + opened feed window (summary=0x{summary:x})"
                 ));
             }
         }
@@ -4718,25 +4854,46 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                 continue;
             }
             let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
-            if force_rebuild
-                && valid(r)
+            let r_valid = valid(r)
                 && unsafe { safe_read_usize(r) }.unwrap_or(0)
-                    == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
-            {
+                    == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA;
+            if force_rebuild && r_valid {
                 unsafe {
                     core::ptr::write_volatile((r + 0x754) as *mut u8, 0);
                     core::ptr::write_volatile((r + 0x755) as *mut u8, 0);
                 }
             }
             let _ = unsafe { mark(summary, s) };
+            // PER-SLOT kick replica in place of the engine's GLOBAL refresh: the global form kicked
+            // every marked slot (all the save's characters) -- the cross-slot portrait swap source.
+            // Idempotent via the +0x754/+0x755 gate inside, so the feed cadence just re-tries until
+            // the record is real and then no-ops.
+            if r_valid {
+                let _ = unsafe { kick_target_profile_slot(base, summary, r, s) };
+            }
             marked += 1;
         }
-        let refresh: unsafe extern "system" fn() =
-            unsafe { core::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
-        unsafe { refresh() };
+        // TRIPWIRE oracle: count non-target renderers holding a live model during our feed window.
+        // Expected 0 -- any foreign model on the loading screen is the swap-bug precondition.
+        let mut foreign = 0usize;
+        for s in 0..TITLE_PROFILE_SLOT_COUNT as i32 {
+            if s == target_slot {
+                continue;
+            }
+            let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
+            if valid(r)
+                && unsafe { safe_read_usize(r) }.unwrap_or(0)
+                    == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+                && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }.unwrap_or(0)
+                    != 0
+            {
+                foreign += 1;
+            }
+        }
+        PROFILE_FOREIGN_MODELS_MAX.fetch_max(foreign, Ordering::SeqCst);
         if log_this {
             append_autoload_debug(format_args!(
-                "force-profile-render: build cycle (counter={counter}) force_rebuild={force_rebuild} feed_window={feed_window} -- marked {marked} real slot(s) + refreshed (summary=0x{summary:x})"
+                "force-profile-render: build cycle (counter={counter}) force_rebuild={force_rebuild} feed_window={feed_window} -- marked {marked} real slot(s) + per-slot kicked (summary=0x{summary:x} foreign_models={foreign})"
             ));
         }
         // Only when we forced a fresh build: drop the cached look-at indices/base so they re-resolve and
@@ -5195,7 +5352,30 @@ fn build_portrait_test_tpf(symbol: &str) -> Option<Vec<u8>> {
 /// rebuilds a correct SRV from these bytes at `CreateTpfResCap` time -- the same mechanism that makes
 /// the checker display correctly. Otherwise (default, or no capture yet) fall back to the proven
 /// magenta/yellow checker, byte-for-byte unchanged.
+/// THE SWAPPABLE LOADING-BACKGROUND LEVER. The texture served here replaces the game's `MENU_Load_*`
+/// now-loading background artwork on the overlay-head path. It is currently a fully TRANSPARENT (RGBA
+/// 0,0,0,0) 64x64 texture (stretched to fill): PROVEN 2026-07-02 that the 3D world is NOT rendered during a
+/// map load (it only renders once loading finishes), so "passthrough" reads BLACK -- i.e. this gives a
+/// clean black background behind the head instead of the stock rotating artwork. To change the loading
+/// background later, swap the pixels/dims built here (e.g. a solid color, a gradient, or a baked image).
+fn build_loading_bg_replacement_tpf(symbol: &str) -> Option<Vec<u8>> {
+    let dds = er_tpf::DdsImage {
+        width: 64,
+        height: 64,
+        pixels: vec![0u8; 64 * 64 * 4],
+    }
+    .to_dds_bytes_with(er_tpf::DdsHeaderMode::LegacyRgba8);
+    er_tpf::Tpf::single_pc(symbol, dds, 1).build().ok()
+}
+
 fn build_portrait_tpf(symbol: &str) -> Option<Vec<u8>> {
+    // OVERLAY-HEAD PATH (portrait_lookat): the present-overlay draws the single head; the forged now-loading
+    // BACKGROUND is our controllable texture, currently transparent->black (build_loading_bg_replacement_tpf,
+    // the swappable lever). Tied to the head-feature state (no standalone flag) so it is on whenever the
+    // product head is shown. A transparent texture is not a head, so this creates no second head.
+    if portrait_lookat_enabled() {
+        return build_loading_bg_replacement_tpf(symbol);
+    }
     // ONE-HEAD CONSOLIDATION: when the live build-own path is active, the present-overlay composite is the
     // SOLE deterministic display. Baking the real head into the forge TPF here produces a SECOND head (it
     // displays when the forge wins the bind race -- user-observed). So in render-drive mode the forge stays

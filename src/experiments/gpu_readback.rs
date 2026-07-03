@@ -86,11 +86,40 @@ pub(crate) static OVERLAY_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
 /// (version-bumped) `LOADING_BG_PORTRAIT_RGBA` -> proves the DISPLAYED head updated per-frame (followed
 /// the cursor), not froze on the first captured frame. `oracle_overlay_reuploads`.
 pub(crate) static OVERLAY_REUPLOADS: AtomicUsize = AtomicUsize::new(0);
-/// Latches once the in-world NowLoading streaming screen has been seen, so we can detect world-ready
-/// (NowLoading seen, then both loading signals down) and stop compositing once the player is in the world.
+/// Latches once the `now_loading` streaming screen (the tips+bar loading screen the portrait belongs on)
+/// has been seen this window. The correct STOP is this-seen-then-gone: the bar appeared, filled, and the
+/// game transitioned to gameplay. Reset per window on re-arm.
 static OVERLAY_NOW_LOADING_SEEN: AtomicUsize = AtomicUsize::new(0);
-/// One-shot diagnostic when the in-world latch disables the loading portrait overlay.
+/// One-shot diagnostic when the anti-runaway backstop disables the loading portrait overlay.
 static OVERLAY_WORLD_STOP_LOGGED: AtomicUsize = AtomicUsize::new(0);
+
+// LOADING-SCREEN WINDOW state machine. DECISIVE timeline (run portrait-swap-fix2-noteardown-20260702-213407):
+// the tips+bar loading screen the loaded character sits on is the `now_loading` streaming flag, TRUE from
+// +27.6s to +78s. IN_WORLD_REACHED (player becomes controllable) fires at +25.9s -- 1.7s BEFORE that screen
+// even appears -- because PlayerIns is live throughout the loading screen (the documented false positive).
+// So IN_WORLD is NOT a valid stop; using it (directly, or via the CSNowLoadingHelperImp update hook which
+// read 0 hits) popped the portrait ~2s before the bar was even up. The overlay now composites from the
+// moment we have a captured head, BRIDGES the pre-now_loading gap, then rides the now_loading window and
+// stops only when it has been seen and then drops (the game's own transition). A generous present-counted
+// backstop guards the (non-product) case where now_loading never appears, so we can't composite forever.
+/// 1 = stopped (window over); stays stopped until a NEW loading window re-arms it.
+static OVERLAY_STOPPED: AtomicUsize = AtomicUsize::new(0);
+/// `PROFILE_LOADSCREEN_TABLE_BUILDS` at the moment of the stop -- a later build = a new window (re-arm).
+static OVERLAY_STOP_TABLE_BUILDS: AtomicUsize = AtomicUsize::new(0);
+/// Presents counted while IN_WORLD but now_loading NOT yet seen -- the pre-loading-screen bridge gap. Reset
+/// to 0 the instant now_loading latches (then the seen-then-gone stop takes over) and on re-arm.
+static OVERLAY_BRIDGE_PRESENTS: AtomicUsize = AtomicUsize::new(0);
+/// Anti-runaway backstop: max bridge presents before we stop even though now_loading was never seen. The
+/// real gap is ~1.7s; this is set FAR above any real present rate over that gap so it NEVER pre-empts a
+/// genuine load (which always shows now_loading) -- it only bounds a deeply-wrong state. Biased huge so the
+/// overlay errs toward holding the portrait (the product requirement) over popping early (the bug).
+const OVERLAY_NOWLOAD_BRIDGE_MAX_PRESENTS: usize = 60000;
+/// RAM oracle: number of overlay window stops (`oracle_overlay_window_stops`).
+pub(crate) static OVERLAY_WINDOW_STOPS: AtomicUsize = AtomicUsize::new(0);
+/// RAM oracle: last stop reason (`oracle_overlay_stop_reason`): 0=none yet, 1=now_loading seen-then-gone
+/// (primary, the game's real loading screen finished -- the spec-correct pop), 3=anti-runaway backstop
+/// (now_loading never appeared; a signal the assumption broke, not a normal stop).
+pub(crate) static OVERLAY_STOP_REASON: AtomicUsize = AtomicUsize::new(0);
 
 /// PE image range `[base, base+SizeOfImage)` read from the in-memory PE headers at `base`.
 unsafe fn pe_image_range(base: usize) -> Option<(usize, usize)> {
@@ -162,15 +191,33 @@ unsafe fn try_texture2d(ptr: usize) -> Option<(ID3D12Resource, u64)> {
 /// `live-portrait-d3d12-resource-buried-in-gx-wrapper-nest-2026-06-29`). Returns the validated,
 /// QI-owned resource. Pure read-only pointer-walking until the QI on a confirmed-d3d12 candidate.
 unsafe fn find_d3d12_resource(start: usize) -> Option<ID3D12Resource> {
-    unsafe { find_d3d12_resource_ex(start, 0, false) }.map(|(r, _)| r)
+    unsafe { find_d3d12_resource_ex(start, 0, false, 0) }.map(|(r, _)| r)
 }
+
+// CANDIDATE PINS (fix for the cross-slot portrait swap, run strip-default-drive-20260702-194018): the
+// offscreen nest BFS reaches EVERY profile slot's same-size 1024x1024 RT through shared GX structures, so
+// "largest texture, first found" flips to a FOREIGN slot's RT the moment a late slot's model finishes
+// building mid-load -> the displayed portrait swapped to another save character between two frames. Once a
+// readback of candidate `v` publishes a confirmed non-checker head, `v` is PINNED and preferred by every
+// subsequent scan while it remains reachable; only its disappearance (RT recreation/teardown) falls back to
+// the largest-candidate heuristic. Pinning the CANDIDATE POINTER (re-QI'd each frame) -- not the resource
+// handle -- avoids the stale-cache dangling-handle bug that killed `readback_cached_content_rgba8`.
+/// Pinned content-RT candidate object pointer (0 = unpinned). `oracle_portrait_rt_pin`.
+pub(crate) static PROFILE_RT_PIN: AtomicUsize = AtomicUsize::new(0);
+/// Times the pin moved to a DIFFERENT candidate after first latch (`oracle_portrait_rt_pin_switches`).
+/// >0 on a single load window means the content source was unstable -- the swap-bug tripwire.
+pub(crate) static PROFILE_RT_PIN_SWITCHES: AtomicUsize = AtomicUsize::new(0);
+/// Pinned depth-sibling candidate pointer (0 = unpinned); latched when a depth readback yields a mask
+/// with clean bg/head separation, so the alpha cutout can't sample a foreign slot's depth buffer.
+pub(crate) static PROFILE_DEPTH_PIN: AtomicUsize = AtomicUsize::new(0);
 
 /// Find the offscreen scene's DEPTH-STENCIL sibling resource (the same-size depth buffer next to the
 /// color RT, observed format 19 = R32G8X24_TYPELESS). Used for the depth-key transparent background:
 /// background = pixels the character geometry never wrote (cleared/far depth). Same nest BFS as the
 /// color finder but accepts only depth formats.
-pub(crate) unsafe fn find_depth_resource(start: usize) -> Option<ID3D12Resource> {
-    unsafe { find_d3d12_resource_ex(start, 0, true) }.map(|(r, _)| r)
+pub(crate) unsafe fn find_depth_resource(start: usize) -> Option<(ID3D12Resource, usize)> {
+    let prefer = PROFILE_DEPTH_PIN.load(Ordering::SeqCst);
+    unsafe { find_d3d12_resource_ex(start, 0, true, prefer) }
 }
 
 /// Depth-stencil TEXTURE2D acceptor (mirror of `try_texture2d` for depth formats): accept the common
@@ -201,10 +248,14 @@ unsafe fn try_depth_texture2d(ptr: usize) -> Option<(ID3D12Resource, u64)> {
 /// (b) skips any candidate whose pointer == `exclude_v`. Lets the RT->SRV copy pick the SRV from its own
 /// single-texture nest, then the LARGEST OTHER texture in the offscreen nest as the content source --
 /// deterministic where plain "largest texture" is ambiguous between two same-size textures.
+/// `prefer_v` (0 = none): a previously PINNED candidate -- if the scan reaches it and it still QIs as a
+/// valid texture, it wins immediately over the largest-candidate heuristic, so the resolved content source
+/// cannot flip between same-size RTs frame-to-frame (the cross-slot portrait-swap bug).
 unsafe fn find_d3d12_resource_ex(
     start: usize,
     exclude_v: usize,
     want_depth: bool,
+    prefer_v: usize,
 ) -> Option<(ID3D12Resource, usize)> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if start == 0 || start == null {
@@ -275,6 +326,10 @@ unsafe fn find_d3d12_resource_ex(
                                     try_texture2d(v)
                                 }
                             } {
+                                if prefer_v != 0 && v == prefer_v {
+                                    // Pinned candidate still reachable + valid: it wins outright.
+                                    return Some((res, v));
+                                }
                                 if best.as_ref().is_none_or(|&(_, a, _)| area > a) {
                                     best = Some((res, area, v));
                                 }
@@ -341,17 +396,21 @@ pub(crate) unsafe fn readback_offscreen_rgba8(gpu_child: usize) -> Option<(u32, 
     .flatten()
 }
 
-/// Per-frame DISPLAY readback: re-resolve the offscreen nest's largest TEXTURE2D (the live content RT) FRESH
-/// each frame via `find_d3d12_resource(start)` -- exactly what the working in-process RT sample does -- but
-/// copy it with the CACHED `RB_FAST_*` objects so it succeeds every frame (vs the per-call object creation
-/// that only published ~4x). This replaces `readback_cached_content_rgba8` for the display feed: that one
-/// cached the *resource* once and went stale (read black ~98% while the fresh-resolved RT held the head
-/// ~63%) -- the offscreen RT is recreated (e.g. the 1024 resize) so a once-cached handle dangles. Fault-
-/// guarded; caller must gate on a live renderer/model so the scan can't race a teardown free.
-pub(crate) unsafe fn readback_offscreen_fast(gpu_child: usize) -> Option<(u32, u32, Vec<u8>)> {
+/// Per-frame DISPLAY readback: re-resolve the offscreen nest's content RT FRESH each frame -- but PREFER
+/// the pinned candidate (`PROFILE_RT_PIN`) when it is still reachable, so the resolved source cannot flip
+/// to another profile slot's same-size RT mid-load (the cross-slot swap bug). Falls back to the largest-
+/// texture heuristic only while unpinned or after the pinned RT was recreated/torn down. Copies with the
+/// CACHED `RB_FAST_*` objects so it succeeds every frame (vs the per-call object creation that only
+/// published ~4x). Returns the candidate pointer alongside the pixels; the caller pins it once the frame
+/// is confirmed to be a real (non-checker) head. Fault-guarded; caller must gate on a live renderer/model
+/// so the scan can't race a teardown free.
+pub(crate) unsafe fn readback_offscreen_fast(
+    gpu_child: usize,
+) -> Option<(u32, u32, Vec<u8>, usize)> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        let resource = find_d3d12_resource(gpu_child)?;
-        readback_resource_cached_fast(resource)
+        let prefer = PROFILE_RT_PIN.load(Ordering::SeqCst);
+        let (resource, cand) = find_d3d12_resource_ex(gpu_child, 0, false, prefer)?;
+        readback_resource_cached_fast(resource).map(|(w, h, px)| (w, h, px, cand))
     }))
     .ok()
     .flatten()
@@ -365,10 +424,10 @@ pub(crate) unsafe fn readback_excluding_rgba8(
     exclude_start: usize,
 ) -> Option<(u32, u32, Vec<u8>)> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        let exclude_v = find_d3d12_resource_ex(exclude_start, 0, false)
+        let exclude_v = find_d3d12_resource_ex(exclude_start, 0, false, 0)
             .map(|(_, v)| v)
             .unwrap_or(0);
-        let (resource, _) = find_d3d12_resource_ex(start, exclude_v, false)?;
+        let (resource, _) = find_d3d12_resource_ex(start, exclude_v, false, 0)?;
         readback_resource_rgba8_inner(resource)
     }))
     .ok()
@@ -985,10 +1044,10 @@ unsafe fn readback_resource_cached_fast(resource: ID3D12Resource) -> Option<(u32
 /// element is the plane-0 R32 float depth. `None` on any failure (the caller then leaves the color buffer
 /// fully opaque -- fail-open, no cutout). Same catch_unwind + never-touch-the-game contract as the color
 /// readback. Used by `apply_depth_alpha_key` to derive the transparent-background alpha mask.
-pub(crate) unsafe fn readback_depth_fast(gpu_child: usize) -> Option<(u32, u32, Vec<f32>)> {
+pub(crate) unsafe fn readback_depth_fast(gpu_child: usize) -> Option<(u32, u32, Vec<f32>, usize)> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        let resource = find_depth_resource(gpu_child)?;
-        readback_depth_resource_cached(resource)
+        let (resource, cand) = find_depth_resource(gpu_child)?;
+        readback_depth_resource_cached(resource).map(|(w, h, d)| (w, h, d, cand))
     }))
     .ok()
     .flatten()
@@ -1247,7 +1306,7 @@ pub(crate) unsafe fn apply_depth_alpha_key(gpu_child: usize, w: u32, h: u32, cpx
 /// no separable gap (the caller then reuses the cached mask). Emits the one-shot `depth-key` diagnostic
 /// (success) and a separate one-shot skip diagnostic (dims mismatch / no gap) so both are visible once.
 unsafe fn compute_depth_mask(gpu_child: usize, w: usize, h: usize) -> Option<Vec<u8>> {
-    let (dw, dh, depth) = unsafe { readback_depth_fast(gpu_child) }?;
+    let (dw, dh, depth, depth_cand) = unsafe { readback_depth_fast(gpu_child) }?;
     if dw as usize != w || dh as usize != h || depth.len() < w * h {
         // At higher-res (1024) the depth sibling MUST match the color RT or the mask can't align.
         if DEPTH_KEY_NOGAP_LOGGED.swap(1, Ordering::SeqCst) == 0 {
@@ -1365,6 +1424,9 @@ unsafe fn compute_depth_mask(gpu_child: usize, w: usize, h: usize) -> Option<Vec
         ));
     }
     if have_gap && masked > 0 {
+        // A clean bimodal bg/head separation confirms this depth buffer belongs to OUR portrait scene --
+        // pin its candidate so later scans can't drift to another slot's same-size depth sibling.
+        PROFILE_DEPTH_PIN.store(depth_cand, Ordering::SeqCst);
         Some(mask)
     } else {
         None
@@ -1389,10 +1451,14 @@ unsafe fn copy_offscreen_rt_to_srv_inner(src_gpu_child: usize, dst_gpu_child: us
     // Resolve the SRV (dst) first from its OWN single-texture nest -> deterministic, plus its candidate
     // pointer. Then resolve the source as the largest texture in the offscreen nest EXCLUDING that SRV,
     // so we never pick the (black) SRV as the source and self-skip.
-    let Some((dst, dst_v)) = (unsafe { find_d3d12_resource_ex(dst_gpu_child, 0, false) }) else {
+    let Some((dst, dst_v)) = (unsafe { find_d3d12_resource_ex(dst_gpu_child, 0, false, 0) }) else {
         return false;
     };
-    let Some((src, _src_v)) = (unsafe { find_d3d12_resource_ex(src_gpu_child, dst_v, false) })
+    // Prefer the pinned content RT for the source too, so the SRV the native forge samples is fed from
+    // the same confirmed-ours texture the display publishes (never a foreign slot's RT).
+    let rt_pin = PROFILE_RT_PIN.load(Ordering::SeqCst);
+    let Some((src, _src_v)) =
+        (unsafe { find_d3d12_resource_ex(src_gpu_child, dst_v, false, rt_pin) })
     else {
         return false;
     };
@@ -2019,14 +2085,105 @@ pub(crate) unsafe fn composite_portrait_on_swapchain(base: usize, swapchain_raw:
     .unwrap_or(false)
 }
 
+/// Close the loading-portrait window: clear the published snapshot + the "have a head" gate so a later
+/// window cannot flash the PREVIOUS character, and drop the RT/depth candidate pins (the next window's
+/// renderers are new objects). Called from the overlay stop; idempotent.
+pub(crate) fn loading_portrait_window_reset(reason: &str) {
+    if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
+        *g = None;
+    }
+    PROFILE_BAKE_RGBA_CAPTURED.store(0, Ordering::SeqCst);
+    PROFILE_RT_PIN.store(0, Ordering::SeqCst);
+    PROFILE_DEPTH_PIN.store(0, Ordering::SeqCst);
+    OVERLAY_NOW_LOADING_SEEN.store(0, Ordering::SeqCst);
+    if let Ok(mut g) = LAST_DEPTH_MASK.lock() {
+        *g = None;
+    }
+    append_autoload_debug(format_args!(
+        "present-overlay: loading-portrait window reset ({reason}) -- snapshot/pins cleared for the next load"
+    ));
+}
+
 unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
-    if IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES {
-        if OVERLAY_WORLD_STOP_LOGGED.swap(1, Ordering::SeqCst) == 0 {
-            append_autoload_debug(format_args!(
-                "present-overlay: stopped compositing loading portrait because player reached world"
-            ));
+    // LOADING-SCREEN WINDOW gate. The head composites while the map is LOADING (`!load_done`, the corrected
+    // signal) and pops the instant the load COMPLETES (`load_done` false->true). IN_WORLD_REACHED is never a
+    // stop -- it latches while the loading screen is still up (PlayerIns lives through it), the premature-pop
+    // bug. The captured-head snapshot (PROFILE_BAKE_RGBA_CAPTURED, cleared only at the stop) persists even
+    // after the profile renderers tear down, so the head stays on screen (frozen if the renderers are gone,
+    // tracking while alive) for the whole load -- never blanks mid-load, never lingers into gameplay.
+    // CORRECTED SIGNAL (RE 2026-07-02, CSNowLoadingHelperImp::Update decompile): `now_loading_active`
+    // reads `load_done` -- a load-COMPLETE latch that is FALSE while the map loads and TRUE once it finishes
+    // (and lingers into gameplay). So "still on the loading screen" is `!load_done`. The head must show
+    // while loading and pop the instant the load COMPLETES (load_done false->true), NOT when load_done later
+    // drops (that only happens on the NEXT load -> the head-persists-into-gameplay bug). `fake_vis` (the
+    // CSFakeLoadingScreenImp black plate) is a secondary "still covered" signal that also means loading.
+    let fake_vis = unsafe { fake_loading_screen_visible(base) };
+    let load_done = unsafe { now_loading_active(base) };
+    let loading = !load_done || fake_vis;
+    let loading_seen = if loading {
+        OVERLAY_BRIDGE_PRESENTS.store(0, Ordering::SeqCst);
+        OVERLAY_NOW_LOADING_SEEN.store(1, Ordering::SeqCst);
+        true
+    } else {
+        OVERLAY_NOW_LOADING_SEEN.load(Ordering::SeqCst) != 0
+    };
+    if OVERLAY_STOPPED.load(Ordering::SeqCst) != 0 {
+        // Stopped: re-arm ONLY on evidence of a NEW loading window -- loading reasserting, or a fresh
+        // post-Continue table build (the System Quit character-switch reload path). Reset the seen latch so
+        // the previous window can't instant-stop this one.
+        let rebuilt = PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst)
+            > OVERLAY_STOP_TABLE_BUILDS.load(Ordering::SeqCst);
+        if !(loading || rebuilt) {
+            return false;
         }
+        OVERLAY_STOPPED.store(0, Ordering::SeqCst);
+        OVERLAY_NOW_LOADING_SEEN.store(if loading { 1 } else { 0 }, Ordering::SeqCst);
+        OVERLAY_BRIDGE_PRESENTS.store(0, Ordering::SeqCst);
+        OVERLAY_WORLD_STOP_LOGGED.store(0, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "present-overlay: re-armed for a new loading window (loading={loading} rebuilt={rebuilt})"
+        ));
+    }
+    // PRIMARY STOP: we were on the loading screen and the load has now COMPLETED (load_done true AND the
+    // black plate gone). This is the game's own transition to gameplay -- the spec-correct pop moment (the
+    // instant the bar fills). IN_WORLD_REACHED is deliberately never consulted: it latches while the loading
+    // screen is still up (PlayerIns lives through it), which was the premature-pop bug.
+    if loading_seen && !loading {
+        OVERLAY_STOPPED.store(1, Ordering::SeqCst);
+        OVERLAY_STOP_TABLE_BUILDS.store(
+            PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst),
+            Ordering::SeqCst,
+        );
+        OVERLAY_WINDOW_STOPS.fetch_add(1, Ordering::SeqCst);
+        OVERLAY_STOP_REASON.store(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "present-overlay: load completed (load_done latched, cover plate gone) -> stopped compositing at the game's transition to gameplay"
+        ));
+        loading_portrait_window_reset("load completed");
         return false;
+    }
+    // ANTI-RUNAWAY BACKSTOP: pathological case where the load reports done AND we're in-world but the
+    // primary stop can't fire (e.g. the black plate's `visible` stuck at 1). Count in-world+load_done
+    // frames; force a stop past a huge budget so the head can't composite over gameplay forever. Never
+    // fires on a normal load (load_done + !fake_vis stops immediately). reason=3 flags the assumption broke.
+    if load_done && IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES {
+        let n = OVERLAY_BRIDGE_PRESENTS.fetch_add(1, Ordering::SeqCst) + 1;
+        if n >= OVERLAY_NOWLOAD_BRIDGE_MAX_PRESENTS {
+            OVERLAY_STOPPED.store(1, Ordering::SeqCst);
+            OVERLAY_STOP_TABLE_BUILDS.store(
+                PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst),
+                Ordering::SeqCst,
+            );
+            OVERLAY_WINDOW_STOPS.fetch_add(1, Ordering::SeqCst);
+            OVERLAY_STOP_REASON.store(3, Ordering::SeqCst);
+            if OVERLAY_WORLD_STOP_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+                append_autoload_debug(format_args!(
+                    "present-overlay: BACKSTOP stop -- load_done + in-world for {n} presents but primary stop never fired (cover plate stuck?); forcing stop"
+                ));
+            }
+            loading_portrait_window_reset("load-done backstop");
+            return false;
+        }
     }
     if PROFILE_BAKE_RGBA_CAPTURED.load(Ordering::SeqCst) == 0 {
         return false;
@@ -2039,13 +2196,6 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
     // the whole loading screen (the forge redirect only commits ~twice -> a frozen displayed head). The
     // live-re-upload block below rebuilds the overlay texture on each version bump, so the displayed head
     // follows the cursor until loading completes.
-    let fake_vis = unsafe { fake_loading_screen_visible(base) };
-    let now_load = unsafe { now_loading_active(base) };
-    if now_load {
-        OVERLAY_NOW_LOADING_SEEN.store(1, Ordering::SeqCst);
-    }
-    let world_ready =
-        OVERLAY_NOW_LOADING_SEEN.load(Ordering::SeqCst) != 0 && !now_load && !fake_vis;
     let forge_committed = LOADING_BG_TEXTURE_REDIRECT_COMMITS.load(Ordering::SeqCst) > 0;
     // Forge-INDEPENDENT loading-window latch: PROFILE_LOADSCREEN_TABLE_BUILDS goes >0 when we (re)build our
     // profile renderers post-Continue -- i.e. we are on the loading cover, past the menu, before the world.
@@ -2054,7 +2204,7 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
     // forge silently killed the overlay too. This latch keeps the overlay live when the forge is off
     // (overlay-only mode) without depending on it. Same monotonic behaviour (never decrements) as forge.
     let loadscreen_active = PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst) > 0;
-    if world_ready || !(forge_committed || loadscreen_active || fake_vis || now_load) {
+    if !(forge_committed || loadscreen_active || loading) {
         return false;
     }
     if OVERLAY_DRAW_STATE.load(Ordering::SeqCst) == 2 {

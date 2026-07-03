@@ -369,18 +369,17 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // produced. The hook self-gates on product_autoload_enabled() + the MENU_Load_ symbol and is
     // fail-open (any non-matching symbol or build/alloc failure tail-calls the original), so
     // installing it unconditionally is inert outside the product autoload path. Route-independent.
-    // NOT on the portrait-lookat path: there the live present-overlay (below) owns the display, gated by the
-    // forge-independent PROFILE_LOADSCREEN_TABLE_BUILDS latch. The forged native background portrait would
-    // render a SECOND, FROZEN head (its per-frame live-rebind crashes vkd3d, so the forged bg can only be a
-    // static snapshot). Install the forge only for the pure product-autoload cover path, where it is the sole
-    // display surface. (Overlay-only, user choice 2026-06-30 -- see keepalive-DISPLAY-FIXED memory.)
-    if !portrait_lookat_enabled() {
-        START_LOADING_BG_REPLACE_BIND.call_once(|| {
-            let _ = std::thread::Builder::new()
-                .name("er-effects-loading-bg-portrait".to_owned())
-                .spawn(install_loading_bg_replace_bind_hook);
-        });
-    }
+    // Install the forge on BOTH paths now. On the overlay-head path (portrait_lookat) it serves the
+    // transparent->black background (build_loading_bg_replacement_tpf, the swappable lever) -- NOT a head, so
+    // there is no second-head problem and no live per-frame rebind (a static one-shot bind; the crash-prone
+    // maybe_reforge_loading_portrait / refresh_loading_bg_live_gx stay skipped/disabled on this path). On the
+    // pure product-cover path it serves the portrait/checker as before. The hook self-gates on the MENU_Load_
+    // symbol + pae, so an unconditional install is inert everywhere else.
+    START_LOADING_BG_REPLACE_BIND.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("er-effects-loading-bg-portrait".to_owned())
+            .spawn(install_loading_bg_replace_bind_hook);
+    });
     // D3D12 PRESENT OVERLAY: the deterministic display path -- draw the captured portrait directly onto the
     // swapchain backbuffer when the now-loading screen is up (the in-pipeline forge/Scaleform routes cannot
     // drive the displayed image). Install only on the portrait path (diagnostic), via the dummy-swapchain
@@ -600,6 +599,15 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // (portrait path only, one-shot on success, bounded retries) so it's cheap every frame.
                 if let Ok(base) = game_module_base() {
                     unsafe { try_install_game_present_hook(base) };
+                }
+                // LOADING-COVER EXPERIMENT: clear CSFakeLoadingScreenImp.visible each frame so the world
+                // draws uncovered during map loads. Self-gates (disable_loading_cover_enabled); runs before
+                // the player check so it acts during the loading screen (player absent). catch_unwind so a
+                // torn cover pointer can never fault the game thread.
+                if let Ok(base) = game_module_base() {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                        suppress_loading_cover_tick(base)
+                    }));
                 }
                 // before the player check so it arms at the title (pre-load), independent
                 // of the active observe/own-stepper mode.

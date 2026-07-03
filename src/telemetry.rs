@@ -45,12 +45,6 @@ use crate::*;
 use crate::{crashlog::*, experiments::*, ffi::*, hooks::*};
 
 #[repr(C)]
-pub(crate) struct NowLoadingHelperLayout {
-    pub(crate) unknown_000: [u8; 0xed],
-    pub(crate) loading_flag: u8,
-}
-
-#[repr(C)]
 pub(crate) struct GameManSaveSnapshotLayout {
     pub(crate) unknown_000: [u8; 0xdf0],
     pub(crate) deserialize_ready: usize,
@@ -1135,12 +1129,13 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             json_escape(&face_data_magic)
         ));
         // WORLD-LIVE oracle: CSNowLoadingHelper "now loading" latch = *(u8*)([base+0x3d60ec8]+0xED).
-        // 1 = loading screen ACTIVE; 0 = cleared / playable (latches when the MoveMapStep world-load
-        // steps stop requesting the loading screen). This replaces the grounded check, which fires
-        // DURING loading (player physics exist before the world renders).
+        // NOTE (RE-corrected 2026-07-02): this reads `CSNowLoadingHelperImp::load_done` -- a load-COMPLETE
+        // latch, NOT "loading screen visible." `Update` copies it from `request_load_done` (raised by the
+        // map-load system), so it reads true AFTER the load finishes and lingers into gameplay. Kept as a
+        // telemetry field, but do not treat it as a screen-visibility signal (see CSNowLoadingHelperImp).
         const NOW_LOADING_SINGLETON_RVA: usize = RuntimeGlobalRva::NowLoadingSingleton as usize;
         const NOW_LOADING_FLAG_OFFSET: usize =
-            core::mem::offset_of!(NowLoadingHelperLayout, loading_flag);
+            core::mem::offset_of!(CSNowLoadingHelperImp, load_done);
         const NOW_LOADING_BYTE_MASK: usize = u8::MAX as usize;
         let now_loading = {
             let helper =
@@ -2423,6 +2418,51 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             body,
             "oracle_loading_bg_portrait_rgba_version",
             LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst),
+        );
+        // CROSS-SLOT SWAP tripwires: the pinned content-RT candidate (0 = never latched a confirmed head),
+        // how many times the pin MOVED after first latch (>0 in one load window = unstable content source,
+        // the swap bug's signature), how many per-slot target build kicks fired (0 = the loaded character
+        // was never requested), and the max count of NON-target renderers seen holding a live model during
+        // the feed window (>0 = a foreign character built on the loading screen -- the swap precondition).
+        // LOADING-COVER EXPERIMENT: frames the cover-suppress clamp actually cleared visible (0 with the
+        // gate on = the cover object never resolved / was never raised).
+        push_json_usize(
+            body,
+            "oracle_loading_cover_suppress_writes",
+            LOADING_COVER_SUPPRESS_WRITES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_rt_pin",
+            PROFILE_RT_PIN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_rt_pin_switches",
+            PROFILE_RT_PIN_SWITCHES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_target_kicks",
+            PROFILE_TARGET_KICKS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_foreign_models",
+            PROFILE_FOREIGN_MODELS_MAX.load(Ordering::SeqCst),
+        );
+        // LOADING-SCREEN WINDOW semaphores: overlay stop count + last stop reason (1 = now_loading seen
+        // then dropped, the game's real loading screen finished -- the spec-correct pop; 3 = anti-runaway
+        // backstop because now_loading never appeared, a signal the assumption broke).
+        push_json_usize(
+            body,
+            "oracle_overlay_window_stops",
+            OVERLAY_WINDOW_STOPS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_overlay_stop_reason",
+            OVERLAY_STOP_REASON.load(Ordering::SeqCst),
         );
         body.push_str(&format!(
             "  \"oracle_native_profile_capture_enabled\": {},\n  \"oracle_native_load_game_fired\": {},\n  \"oracle_native_load_game_last_node\": {},\n  \"oracle_native_load_game_last_node_vtable\": {},\n  \"oracle_native_load_game_last_member_dialog\": {},\n  \"oracle_native_load_game_last_member_fn\": {},\n  \"oracle_native_load_game_last_member_adjust\": {},\n  \"oracle_native_profile_source_ready\": {},\n  \"oracle_native_profile_source_name\": \"{}\",\n  \"oracle_native_profile_renderer_class\": \"{}\",\n",

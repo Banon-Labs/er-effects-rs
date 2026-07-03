@@ -206,6 +206,22 @@ pub(crate) fn portrait_lookat_enabled() -> bool {
             .join("er-effects-portrait-lookat.txt")
             .exists()
 }
+/// DEFAULT-OFF experiment: suppress the game's `CSFakeLoadingScreenImp` cover plate during map loads so the
+/// world renders uncovered ("no loading screen -- watch it pop in"). While set, the game task clamps the
+/// cover's `visible` byte to 0 each frame. This is ORTHOGONAL to the portrait overlay -- the overlay keeps
+/// its own gates, so the two can be toggled independently. Fully reversible: unset the file/env and the
+/// game draws its cover normally. Exploratory visual experiment, not a product feature -- if we keep it,
+/// tie it to autoload state instead of a standalone gate. Env `ER_EFFECTS_DISABLE_LOADING_COVER=1` OR
+/// GAME_DIR file `er-effects-disable-loading-cover.txt`.
+pub(crate) fn disable_loading_cover_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_DISABLE_LOADING_COVER").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-disable-loading-cover.txt")
+        .exists()
+}
 /// DEFAULT-OFF: when set, `force_profile_render_tick` does the DESTRUCTIVE periodic rebuild -- every ~240
 /// ticks it CLEARS each renderer's build latch (+0x754/+0x755) + resets the look-at slot cache, forcing a
 /// FRESH async model build. That churn leaves the models in a not-live (rebuilding) state most of the time,
