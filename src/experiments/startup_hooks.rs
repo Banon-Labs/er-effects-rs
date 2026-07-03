@@ -8262,7 +8262,10 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
 /// constructed (the 0x58 handler embedded at container+0x40), rdx = parent. Records the object as
 /// live, then forwards to the original ctor (which returns the object pointer). Read-only w.r.t.
 /// game state; only maintains our live-set. See SCALEFORM_HANDLER_LIVE.
-pub(crate) unsafe extern "system" fn scaleform_handler_ctor_hook(obj: usize, parent: usize) -> usize {
+pub(crate) unsafe extern "system" fn scaleform_handler_ctor_hook(
+    obj: usize,
+    parent: usize,
+) -> usize {
     let orig = SCALEFORM_HANDLER_CTOR_ORIG.load(Ordering::SeqCst);
     SCALEFORM_HANDLER_CTORS.fetch_add(1, Ordering::SeqCst);
     if obj != 0 {
@@ -8618,13 +8621,17 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     // load this profile) with ZERO MessageBox and zero extra input. Repeatable: the continue_confirm
     // hook returns the phase to IDLE after each reload, so the next pick re-arms cleanly.
     //
-    // Gated so the proven test bench and opt-ins are untouched: skip when the repro autopilot drives
-    // (it manages its own confirm chain via a scripted double-A), when the native-forward opt-in is
-    // set, when a switch is already in flight (phase != IDLE), for an out-of-range cursor, or for an
-    // EMPTY slot (arming an empty slot would tear down to a clean title then fail the deserialize).
+    // The repro autopilot takes this SAME direct-arm path as a human pick. Its old scripted
+    // double-A confirm chain (A pick -> confirm MessageBox -> A OK -> load-job Run -> arm) is
+    // unreachable after the FIRST completed switch: that switch's arm latches PRODUCT_AUTOLOAD_ARMED,
+    // whose msgbox suppression then eats the confirm box the second A needs, so every later pick
+    // stalled (observed autostep10b 2026-07-03: switch #1 confirmed via the OK chain, switch #2
+    // suppressed msgbox-skip #2/#3 and held 20 min). It also no longer matched the human flow this
+    // autopilot exists to reproduce. Remaining gates: skip on the native-forward opt-in, when a
+    // switch is already in flight (phase != IDLE), for an out-of-range cursor, or for an EMPTY slot
+    // (arming an empty slot would tear down to a clean title then fail the deserialize).
     let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
-    if !system_quit_repro_enabled()
-        && !system_quit_profile_load_activation_allowed()
+    if !system_quit_profile_load_activation_allowed()
         && phase == SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
         && (0..bound).contains(&cursor)
     {
@@ -8682,8 +8689,10 @@ fn sq_repro_waiting_once(msg: &str) {
     }
 }
 
-/// Cumulative ProfileSelect OK-confirm count (cancel-close BLOCK + ALLOW). The CONFIRM state watches
-/// for an INCREASE over the per-switch baseline so switch #2 does not trip on switch #1's residual.
+/// Cumulative ProfileSelect OK-confirm count (cancel-close BLOCK + ALLOW). Legacy fallback signal:
+/// the CONFIRM state's primary advance is the direct-arm phase observation; this count (an INCREASE
+/// over the per-switch baseline, so switch #2 does not trip on switch #1's residual) only fires if
+/// the pick fell through to the native confirm-box -> OK -> load-job chain.
 fn sq_repro_confirm_count() -> usize {
     SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT.load(Ordering::SeqCst)
         + SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.load(Ordering::SeqCst)
@@ -8852,7 +8861,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             }
             if cursor == target {
                 append_autoload_debug(format_args!(
-                    "sq-repro: ProfileSelect cursor={cursor} == target_slot={target} (switch #{}) -> CONFIRM (A, A)",
+                    "sq-repro: ProfileSelect cursor={cursor} == target_slot={target} (switch #{}) -> CONFIRM (A)",
                     SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst) + 1
                 ));
                 set_pad(0);
@@ -8880,29 +8889,38 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             set_pad(btn);
         }
         SQ_REPRO_STATE_CONFIRM => {
-            // The user's "a -> a": the FIRST A picks the highlighted non-current slot -- the activate
-            // hook opens the "Starting with selected profile" OK dialog -- and the SECOND A clicks OK
-            // on that dialog. DONE is gated on the load being CONFIRMED (the confirmed hook fires on
-            // the OK press, taking the save-safe cancel-close -> return-title path), NOT on the slot
-            // activation: activation fires on the FIRST A and releasing there would drop the block
-            // before the OK press lands (the dialog then sits waiting). The natural tap+gap between
-            // the two edges lets the OK dialog open before the second A. On confirm, release the
-            // block; the native pump drives the cancel-close -> return-title -> autoload.
-            if sq_repro_confirm_count() > SQ_REPRO_CONFIRM_BASELINE.load(Ordering::SeqCst) {
+            // The user's pick: ONE A on the highlighted slot. The activate hook direct-arms the
+            // save-safe switch and native cancel-closes ProfileSelect (the product path -- no confirm
+            // MessageBox exists; the suppression eats it before UI allocation). DONE is gated on the
+            // arm being OBSERVED: the arm advances SYSTEM_QUIT_QUICKLOAD_PHASE past IDLE (phase is
+            // reliably IDLE on CONFIRM entry -- continue_confirm resets it at each reload's commit,
+            // long before WAIT_RELOAD's load_done+settle gates admit the next switch). The legacy
+            // confirm-count predicate is kept as a fallback for the direct-arm-did-not-take native
+            // forward (confirm box -> OK -> load-job chain). On either signal, release the pad; the
+            // native pump drives the return-title -> autoload.
+            let armed = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+                != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE;
+            if armed || sq_repro_confirm_count() > SQ_REPRO_CONFIRM_BASELINE.load(Ordering::SeqCst)
+            {
                 let switch_index = SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst);
                 let more = switch_index + 1 < sq_repro_target_switches();
                 append_autoload_debug(format_args!(
-                    "sq-repro: OK clicked -- switch #{}/{} load CONFIRMED (confirmed_block={} confirmed_allow={} activate={} baseline={}). {}",
+                    "sq-repro: switch #{}/{} load CONFIRMED via {} (confirmed_block={} confirmed_allow={} activate={} baseline={}). {}",
                     switch_index + 1,
                     sq_repro_target_switches(),
+                    if armed {
+                        "direct-arm"
+                    } else {
+                        "OK-confirm chain"
+                    },
                     SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT.load(Ordering::SeqCst),
                     SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.load(Ordering::SeqCst),
                     SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst),
                     SQ_REPRO_CONFIRM_BASELINE.load(Ordering::SeqCst),
                     if more {
-                        "native pump drives cancel-close + return-title + reload; then WAIT_RELOAD -> next switch"
+                        "native pump drives return-title + reload; then WAIT_RELOAD -> next switch"
                     } else {
-                        "SELF-DRIVE COMPLETE; releasing block, native pump drives cancel-close + return-title + autoload"
+                        "SELF-DRIVE COMPLETE; releasing block, native pump drives return-title + autoload"
                     }
                 ));
                 set_pad(0);
@@ -8913,9 +8931,11 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 }
                 return;
             }
-            let (btn, holding) = sq_repro_edges(tick, &[XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_A]);
+            let (btn, holding) = sq_repro_edges(tick, &[XINPUT_GAMEPAD_A]);
             if holding {
-                sq_repro_waiting_once("CONFIRM: A (pick), A (OK) issued, waiting for load-confirm");
+                sq_repro_waiting_once(
+                    "CONFIRM: A (pick) issued, waiting for direct-arm/load-confirm",
+                );
             }
             set_pad(btn);
         }
