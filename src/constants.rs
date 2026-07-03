@@ -991,6 +991,10 @@ pub(crate) static PROFILE_TARGET_KICKS: AtomicUsize = AtomicUsize::new(0);
 /// during our feed window (`oracle_portrait_foreign_models`). >0 = another character was built on the
 /// loading screen -- the swap-bug precondition returned.
 pub(crate) static PROFILE_FOREIGN_MODELS_MAX: AtomicUsize = AtomicUsize::new(0);
+/// RAM oracle (`oracle_portrait_multi_model_publish_skips`): draw-tick publishes suppressed because more
+/// than one profile model was live (the game's Load Profile 10-thumbnail window). >0 confirms the
+/// only-target-live gate engaged and kept the cascade of other characters off the loading screen.
+pub(crate) static PROFILE_MULTI_MODEL_PUBLISH_SKIPS: AtomicUsize = AtomicUsize::new(0);
 /// Consecutive ticks the profile-renderer title table has been observed EMPTY. The menu's own
 /// teardown+rebuild is synchronous (FUN_1409af3a0 tears down then re-ctors in one call), so the table is
 /// never seen empty across our async ticks during menu cycling -- only a real Continue (teardown with NO
@@ -1395,6 +1399,119 @@ pub(crate) static PROFILE_PERFRAME_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 /// screen) so the model rasterizes sparsely. We drive both ourselves per render-thread frame to make the
 /// portrait re-rasterize the live look-at pose EVERY frame. See keepalive-POOL-REFUTED-readback-crossqueue.
 pub(crate) const PROFILE_MODEL_UPDATE_TASK_RVA: usize = 0xbba730;
+/// Menu-model ANIM BIND `FUN_140bba300` (dump) -> deobf RVA 0xbba210 (content-unique, shift -0xf0,
+/// verified via dump-deobf-shift 2026-07-03). `fn(renderer, &anim_id_i32, force, mode)`: stops the
+/// current anim entry (via the handle at +0x96c), resolves + plays `anim_id` on the model's anim
+/// holder X(+0x948), and caches id/handle at +0x968/+0x96c; id -1 unbinds (handle := the null
+/// sentinel). Early-returns on an unchanged id unless `force != 0`. The update task steps the bound
+/// anim by frame-dt each call ONLY while `+0x96c != sentinel` -- see bd
+/// `portrait-anim-bind-RE-corrects-6hz-gate-2026-07-03` (corrects the earlier "~6Hz gparam gate"
+/// reading). The native profile pipeline binds id 0 (FUN_140bbe290 <- refresh FUN_1409aa7d0), which
+/// is the STATIC menu pose -- that, not cadence, is why the loading portrait never moved.
+pub(crate) const PROFILE_ANIM_BIND_RVA: usize = 0xbba210;
+/// Null anim-handle sentinel global `DAT_143b39470` (data RVA; data addresses do not shift between
+/// the dump and the live binary -- same convention as `GX_DRAW_CONTEXT_RVA`). The CSMenuAsmModelRend
+/// ctor inits renderer+0x96c to this global's value.
+pub(crate) const PROFILE_ANIM_NULL_HANDLE_RVA: usize = 0x3b39470;
+/// The bound-anim handle cache on the renderer (low16 = anim-entry index, high16 = generation).
+pub(crate) const PROFILE_ANIM_HANDLE_OFFSET: usize = 0x96c;
+/// Idle anim ids to bind on the loading portrait, in order. The menu model's anim holder is built
+/// from the FULL c0000 ANIBND (`FUN_140bbb4a0`: `AnibndRepositoryImp::GetResCap(L"c0000")` ->
+/// `FUN_1401ac2f0` -> renderer+0x948), so base c0000 anim ids resolve -- not just menu poses.
+/// 3000000 = the in-world standing idle (grounded: our own in-world telemetry reports
+/// `current_animation_id = 3000000`; visibly more movement than the menu idles, per user request
+/// 2026-07-03). 0x18696=100022 / 0x1863c=99900 are the CSMenuPlayerModelRend ctor's equip-menu
+/// idles. The first id whose bind leaves a real handle (!= sentinel and != 0xffffffff
+/// resolve-failure) wins; a failed candidate leaves no active entry, so falling through is
+/// side-effect-free beyond having stopped the static pose anim.
+pub(crate) const PORTRAIT_IDLE_ANIM_IDS: [i32; 3] = [3000000, 100022, 99900];
+/// The (renderer, anim-holder X) pair the idle anim was last bound on. The loading window's model
+/// is rebuilt several times (content-RT pin moves) and a rebuild either ctor's a NEW renderer
+/// (+0x968 = -1 -> static pose) or recreates X under the same renderer -- a one-shot bind latch
+/// left the DISPLAYED model static after churn (run anim-bind-noteardown-20260703-074216). Rebind
+/// whenever either pointer changes. (The engine helps once +0x968 survives: the model build fn
+/// re-binds `*(+0x968)` force=1 itself -- but a fresh renderer starts at -1, so we must track.)
+pub(crate) static PORTRAIT_ANIM_BOUND_RENDERER: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_ANIM_BOUND_LOC: AtomicUsize = AtomicUsize::new(0);
+/// REBUILD-DRIVER tripwire (2026-07-03): the portrait model is torn down + rebuilt ~1/s even with
+/// the kick live-model guard (runs #2/#3: 85-94 rebinds, native anim-0 rebound each time), which is
+/// why nothing ever visibly animated. Per drive frame we sample the renderer's request/teardown
+/// latches (+0x754/+0x755/+0x756) and re-run `STEP_Wait_Play`'s own FaceData compare
+/// (`GetFaceDataBuffer(renderer_FaceData@+0x788, true)` vs the staged buffer at +0x218, 0x120
+/// bytes): a mismatch makes the step invalidate the model (`FUN_1409ecb40`) EVERY tick -- and we
+/// drive that step at 60Hz. `NEQ_TICKS`/`DRIVE_TICKS` ~= 1.0 convicts the FaceData loop; latch
+/// bytes != 0 at rebind time convict a latch raiser instead.
+pub(crate) static PORTRAIT_FACEDATA_NEQ_TICKS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_DRIVE_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// SLOT-KEYED KICK LATCH (rebuild-storm root fix, run #4 tripwire `latches=0/1/0`; slot-keyed per
+/// user eyewitness 2026-07-03 "wrong character rendered the whole load, no swap"). The engine's
+/// global refresh (dump FUN_1409aa7d0) raises the +0x754/+0x755 request latches once per PROFILE
+/// DATA CHANGE, gated on both reading 0. Our cadence re-kick hit the mid-pipeline phase where the
+/// model is dead AND the latches are already consumed, re-raising them -- so `STEP_Wait_Play` saw
+/// +0x755 != 0 on every pass and re-entered the rebuild state (7) forever: ~1 rebuild/second, anim
+/// reset to pose 0 each time, lighting reset = the user-visible shadow flicker, portrait never
+/// animated. A blanket one-shot is wrong the other way: ac0 (`portrait_loaded_slot`) can still be
+/// the previous session's slot at first-kick time, and the storm's re-kick was what accidentally
+/// swapped in the correct character once ac0 flipped. Latch = kicked slot + 1 (0 = none): each slot
+/// value kicks exactly once per window, so the ac0 flip produces one deterministic corrective
+/// rebuild. Reset by `loading_portrait_window_reset`.
+pub(crate) static PORTRAIT_KICK_SLOT_KEY: AtomicUsize = AtomicUsize::new(0);
+/// The renderer the kick was issued on. Run #10 measured the async build at 94ms (kick +16.19s ->
+/// model-LIVE +16.28s), refuting the streaming-contention theory -- the model dies at ~+17s because
+/// the CONTINUE TEARDOWN frees the menu-era renderer we kicked, and our post-teardown table rebuild
+/// creates NEW renderer objects the slot-only latch refused to re-kick. Re-kick when the table's
+/// renderer identity changes; the 755-landmine fix makes a re-kick on the fresh modelless renderer
+/// safe (754-only).
+pub(crate) static PORTRAIT_KICK_RENDERER: AtomicUsize = AtomicUsize::new(0);
+/// PUMP-BLOCK REASON counters (run #7: modeldraws froze at 250 ~10s before the load-completed
+/// window reset, cause unattributed). One per gate in the pump's path: renderer table entry
+/// invalid, vtable mismatch (renderer freed/replaced), offscreen pointer invalid, multi-model
+/// (menu churn). Exported as oracles + printed in the sweep line so a stall names its gate.
+pub(crate) static PORTRAIT_PUMP_BLOCK_R: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_PUMP_BLOCK_VTABLE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_PUMP_BLOCK_OFF: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_PUMP_BLOCK_MULTI: AtomicUsize = AtomicUsize::new(0);
+/// The renderer's staged FaceData compare buffer (`param_1 + 0x43` longlongs) and embedded FaceData
+/// object (`param_1 + 0xf1`), from the `STEP_Wait_Play` decompile; compare length 0x120.
+pub(crate) const PROFILE_RENDERER_FACEDATA_CMP_OFFSET: usize = 0x218;
+pub(crate) const PROFILE_RENDERER_FACEDATA_OBJ_OFFSET: usize = 0x788;
+pub(crate) const PROFILE_FACEDATA_CMP_LEN: usize = 0x120;
+/// Idle-anim bind state: 0 = not attempted this load window, 1 = bound (real handle), 2 = every
+/// candidate failed to resolve. Reset by `loading_portrait_window_reset` so the next load rebinds.
+pub(crate) static PORTRAIT_ANIM_BIND_STATE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_ANIM_BIND_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+/// The idle anim id that actually bound (0 until success). `oracle_portrait_anim_bound_id`.
+pub(crate) static PORTRAIT_ANIM_BOUND_ID: AtomicUsize = AtomicUsize::new(0);
+/// renderer+0x96c read just before the first bind attempt; a value != sentinel proves the native
+/// anim-0 (static pose) bind resolved on this model, i.e. anim resources ARE loaded for it.
+pub(crate) static PORTRAIT_ANIM_HANDLE_BEFORE: AtomicUsize = AtomicUsize::new(0);
+/// renderer+0x96c after the last bind attempt. `oracle_portrait_anim_handle`.
+pub(crate) static PORTRAIT_ANIM_HANDLE: AtomicUsize = AtomicUsize::new(0);
+/// Runtime value of the null-handle sentinel global (validates the sentinel RE at runtime; also
+/// settles whether it ever changes mid-run -- the old "~6Hz gparam word" theory predicts changes,
+/// the corrected sentinel reading predicts a constant).
+pub(crate) static PORTRAIT_ANIM_SENTINEL: AtomicUsize = AtomicUsize::new(0);
+/// PIXEL-MOTION oracle (the AGENTS.md rendered-output proof gate for "the portrait animates"),
+/// LIGHTING-IMMUNE by construction: the scene's lighting visibly changes every frame (user report
+/// 2026-07-03), so raw luma diffs cannot be the motion oracle. Instead this diffs the depth-keyed
+/// ALPHA SILHOUETTE (mean abs alpha delta x1000 between successive published frames on a 32x32
+/// downsample): alpha comes from the depth buffer via `apply_depth_alpha_key` (applied to the pixels
+/// BEFORE publish), and depth does not respond to lighting -- only actual body/silhouette motion
+/// moves it. Updated ONLY when both the current and previous frame carry a real cutout (some
+/// transparent cells), so fail-open unkeyed frames cannot fake a spike. `_last` per publish, `_max`
+/// per run: an idle anim must push `_max` clearly above ~0 while lighting flicker alone cannot.
+pub(crate) static PORTRAIT_MOTION_METRIC_LAST: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_MOTION_METRIC_MAX: AtomicUsize = AtomicUsize::new(0);
+/// Companion LUMA-delta gauge on the same downsample grid (same units): measures the per-frame
+/// LIGHTING FLICKER (plus any luma-visible motion). Comparing luma vs alpha metrics separates "the
+/// lighting changed" from "the body moved"; this also finally quantifies the reported flicker.
+pub(crate) static PORTRAIT_LUMA_FLICKER_LAST: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_LUMA_FLICKER_MAX: AtomicUsize = AtomicUsize::new(0);
+/// Previous published frame's 32x32 downsample planes for the motion/flicker metrics:
+/// (alpha, luma, keyed) where `keyed` = the frame had transparent cells (depth cutout live).
+/// Render thread only.
+pub(crate) static PORTRAIT_MOTION_PREV_PLANES: std::sync::Mutex<Option<(Vec<u8>, Vec<u8>, bool)>> =
+    std::sync::Mutex::new(None);
 /// The live `FD4TaskData*` (`param_2`/`frame` arg) the ENGINE passes to the profile DRAW task on its own
 /// (sparse) calls -- captured in `per_frame_push_hook`. The GX enqueue routes the model into the correct
 /// OFFSCREEN render pass via this context, so driving the draw with OUR draw-phase task_data renders to the

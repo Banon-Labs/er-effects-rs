@@ -2086,8 +2086,11 @@ pub(crate) unsafe fn composite_portrait_on_swapchain(base: usize, swapchain_raw:
 }
 
 /// Close the loading-portrait window: clear the published snapshot + the "have a head" gate so a later
-/// window cannot flash the PREVIOUS character, and drop the RT/depth candidate pins (the next window's
-/// renderers are new objects). Called from the overlay stop; idempotent.
+/// window cannot flash the PREVIOUS character, drop the RT/depth candidate pins (the next window's
+/// renderers are new objects), and clear the teardown-spared renderer so the NEXT load's teardown re-spares
+/// the new character (LOADING_BG_PORTRAIT_SPARED_RENDERER is gated `== 0` and was otherwise never reset --
+/// it stayed pinned to the first character's now-stale renderer, and driving that leaked renderer risks a
+/// use-after-free). Called from the overlay stop at load completion; idempotent.
 pub(crate) fn loading_portrait_window_reset(reason: &str) {
     if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
         *g = None;
@@ -2096,12 +2099,36 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
     PROFILE_RT_PIN.store(0, Ordering::SeqCst);
     PROFILE_DEPTH_PIN.store(0, Ordering::SeqCst);
     OVERLAY_NOW_LOADING_SEEN.store(0, Ordering::SeqCst);
+    LOADING_BG_PORTRAIT_SPARED_RENDERER.store(0, Ordering::SeqCst);
+    PROFILE_SPARE_CANDIDATE.store(0, Ordering::SeqCst);
+    // Re-arm the idle-anim bind + drop the motion-metric history so the NEXT load window binds its
+    // own renderer and starts a fresh inter-frame diff (cumulative attempt/max oracles are kept).
+    PORTRAIT_ANIM_BIND_STATE.store(0, Ordering::SeqCst);
+    PORTRAIT_ANIM_BOUND_RENDERER.store(0, Ordering::SeqCst);
+    PORTRAIT_ANIM_BOUND_LOC.store(0, Ordering::SeqCst);
+    PORTRAIT_KICK_SLOT_KEY.store(0, Ordering::SeqCst);
+    PORTRAIT_KICK_RENDERER.store(0, Ordering::SeqCst);
+    if let Ok(mut g) = PORTRAIT_MOTION_PREV_PLANES.lock() {
+        *g = None;
+    }
     if let Ok(mut g) = LAST_DEPTH_MASK.lock() {
         *g = None;
     }
     append_autoload_debug(format_args!(
-        "present-overlay: loading-portrait window reset ({reason}) -- snapshot/pins cleared for the next load"
+        "present-overlay: loading-portrait window reset ({reason}) -- snapshot/pins/spare cleared for the next load"
     ));
+}
+
+/// Invalidate the depth-key MASKING PLANE for a NEW model: drop the cached mask and the pinned depth
+/// candidate so the next `apply_depth_alpha_key` RECOMPUTES the silhouette from the new model's own depth
+/// buffer instead of reusing the previous character's cached mask. Without this, a System Quit -> Load
+/// Profile character switch would cut the OLD character's silhouette out of the NEW head until fresh depth
+/// happened to land. Fail-open in the gap (leaves the head opaque) -- never a stale wrong-shape cutout.
+pub(crate) fn invalidate_portrait_depth_mask() {
+    PROFILE_DEPTH_PIN.store(0, Ordering::SeqCst);
+    if let Ok(mut g) = LAST_DEPTH_MASK.lock() {
+        *g = None;
+    }
 }
 
 unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {

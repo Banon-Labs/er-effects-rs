@@ -2451,6 +2451,104 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_portrait_foreign_models",
             PROFILE_FOREIGN_MODELS_MAX.load(Ordering::SeqCst),
         );
+        push_json_usize(
+            body,
+            "oracle_portrait_multi_model_publish_skips",
+            PROFILE_MULTI_MODEL_PUBLISH_SKIPS.load(Ordering::SeqCst),
+        );
+        // IDLE-ANIM BIND semaphores (bd portrait-anim-bind-RE-corrects-6hz-gate-2026-07-03):
+        // bind_state 1 = an engine-grounded idle anim bound (handle real), 2 = no candidate resolved;
+        // handle_before != sentinel proves the native static-pose anim-0 bind had resolved (anim
+        // resources ARE loaded); sentinel is the DAT_143b39470 null-handle global (constant if the
+        // corrected RE is right). MOTION vs FLICKER: motion_metric diffs the depth-keyed ALPHA
+        // silhouette (lighting-immune), luma_flicker diffs luma on the same grid (quantifies the
+        // per-frame lighting change). Product proof of "portrait animates" = bind_state 1 AND
+        // motion_metric_max clearly above 0 with luma_flicker as the lighting control.
+        push_json_usize(
+            body,
+            "oracle_portrait_anim_bind_state",
+            PORTRAIT_ANIM_BIND_STATE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_facedata_neq_ticks",
+            PORTRAIT_FACEDATA_NEQ_TICKS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_pump_draws",
+            PROFILE_PERFRAME_MODEL_DRAWS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_pump_block_r",
+            PORTRAIT_PUMP_BLOCK_R.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_pump_block_vtable",
+            PORTRAIT_PUMP_BLOCK_VTABLE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_pump_block_off",
+            PORTRAIT_PUMP_BLOCK_OFF.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_pump_block_multi",
+            PORTRAIT_PUMP_BLOCK_MULTI.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_drive_ticks",
+            PORTRAIT_DRIVE_TICKS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_anim_bind_attempts",
+            PORTRAIT_ANIM_BIND_ATTEMPTS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_anim_bound_id",
+            PORTRAIT_ANIM_BOUND_ID.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_anim_handle_before",
+            PORTRAIT_ANIM_HANDLE_BEFORE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_anim_handle",
+            PORTRAIT_ANIM_HANDLE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_anim_sentinel",
+            PORTRAIT_ANIM_SENTINEL.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_motion_metric_last",
+            PORTRAIT_MOTION_METRIC_LAST.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_motion_metric_max",
+            PORTRAIT_MOTION_METRIC_MAX.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_luma_flicker_last",
+            PORTRAIT_LUMA_FLICKER_LAST.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_luma_flicker_max",
+            PORTRAIT_LUMA_FLICKER_MAX.load(Ordering::SeqCst),
+        );
         // LOADING-SCREEN WINDOW semaphores: overlay stop count + last stop reason (1 = now_loading seen
         // then dropped, the game's real loading screen finished -- the spec-correct pop; 3 = anti-runaway
         // backstop because now_loading never appeared, a signal the assumption broke).

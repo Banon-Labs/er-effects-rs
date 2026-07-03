@@ -369,17 +369,18 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // produced. The hook self-gates on product_autoload_enabled() + the MENU_Load_ symbol and is
     // fail-open (any non-matching symbol or build/alloc failure tail-calls the original), so
     // installing it unconditionally is inert outside the product autoload path. Route-independent.
-    // Install the forge on BOTH paths now. On the overlay-head path (portrait_lookat) it serves the
-    // transparent->black background (build_loading_bg_replacement_tpf, the swappable lever) -- NOT a head, so
-    // there is no second-head problem and no live per-frame rebind (a static one-shot bind; the crash-prone
-    // maybe_reforge_loading_portrait / refresh_loading_bg_live_gx stay skipped/disabled on this path). On the
-    // pure product-cover path it serves the portrait/checker as before. The hook self-gates on the MENU_Load_
-    // symbol + pae, so an unconditional install is inert everywhere else.
-    START_LOADING_BG_REPLACE_BIND.call_once(|| {
-        let _ = std::thread::Builder::new()
-            .name("er-effects-loading-bg-portrait".to_owned())
-            .spawn(install_loading_bg_replace_bind_hook);
-    });
+    // NOT on the portrait-lookat path: there the live present-overlay (below) owns the head display and the
+    // game's own now-loading ARTWORK stays visible behind it (user choice -- keep the artwork). The forge is
+    // only for the pure product-cover path where it IS the display surface. The swappable
+    // build_loading_bg_replacement_tpf lever is retained for when we deliberately want to replace the
+    // background texture on the head path; it is not wired in by default so the stock artwork renders.
+    if !portrait_lookat_enabled() {
+        START_LOADING_BG_REPLACE_BIND.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-loading-bg-portrait".to_owned())
+                .spawn(install_loading_bg_replace_bind_hook);
+        });
+    }
     // D3D12 PRESENT OVERLAY: the deterministic display path -- draw the captured portrait directly onto the
     // swapchain backbuffer when the now-loading screen is up (the in-pipeline forge/Scaleform routes cannot
     // drive the displayed image). Install only on the portrait path (diagnostic), via the dummy-swapchain
