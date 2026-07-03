@@ -1421,8 +1421,21 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         // embedded object at TitleTopDialog+0xaa8, separate from the preserved `05_000_Title`
         // MenuWindowJob. A real portrait cover depends on post-SL2 profile_summary readiness and the
         // SYSTEX_Menu_Profile render pipeline, so expose both in RAM telemetry before any mutation.
+        // STALE-DIALOG UAF GUARD (er-effects-rs-3pc, ROOT fix 2026-07-03). `title_logo_gfx_current_frame`
+        // CALLS a virtual on the title dialog's BackViewParts GFX handle. The title logo only exists at
+        // the title screen; once we have loaded into a world that stored dialog is FREED (and, on every
+        // character switch, freed+rebuilt). A freed object keeps its vtable, and worse, its reused
+        // vtable+8 slot can point at a VALID-BUT-WRONG game function (observed: the factory FUN_1411d10f0),
+        // so the earlier `vtable_in_game_image` check passes and the call still derefs freed memory ->
+        // access violation deep in the game (crash write_oracle_telemetry -> game+0x11d10f3). You cannot
+        // safely virtual-call a maybe-freed object. So skip this GFX walk entirely once in-world: the
+        // oracle is a boot-title diagnostic and is meaningless (and unsafe) after the first load. This is
+        // what actually surfaced as the "crash on opening escape after N switches" -- the telemetry tick,
+        // not the menu, dereferencing the stale title dialog.
+        let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
         let title_logo_dialog = PRODUCT_CORE_LAST_TITLE_DIALOG.load(Ordering::SeqCst);
-        let title_logo_back_view_parts = if title_logo_dialog != NULL_PTR
+        let title_logo_back_view_parts = if !in_world
+            && title_logo_dialog != NULL_PTR
             && title_logo_dialog != TITLE_OWNER_SCAN_START_ADDRESS
         {
             title_logo_dialog + TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET
@@ -2467,6 +2480,16 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             body,
             "oracle_scaleform_handler_dtors",
             SCALEFORM_HANDLER_DTORS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gx_cmd_queue_overflows",
+            GX_CMD_QUEUE_OVERFLOWS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gx_cmd_queue_max_fill",
+            GX_CMD_QUEUE_MAX_FILL.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
