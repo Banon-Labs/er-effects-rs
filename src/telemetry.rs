@@ -1496,6 +1496,8 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             TITLE_SCALEFORM_MEMORY_GFX_BYTES.load(Ordering::SeqCst);
         let title_scaleform_memory_gfx_replacements =
             TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS.load(Ordering::SeqCst);
+        let title_scaleform_05_000_memory_gfx_replacements =
+            TITLE_SCALEFORM_05_000_MEMORY_GFX_REPLACEMENTS.load(Ordering::SeqCst);
         let title_scaleform_memory_gfx_failures =
             TITLE_SCALEFORM_MEMORY_GFX_FAILURES.load(Ordering::SeqCst);
         let title_scaleform_memory_gfx_last_file =
@@ -2136,6 +2138,16 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             body,
             "oracle_title_scaleform_memory_gfx_replaced",
             title_scaleform_memory_gfx_replacements != 0,
+        );
+        push_json_usize(
+            body,
+            "oracle_title_scaleform_05_000_memory_gfx_replacements",
+            title_scaleform_05_000_memory_gfx_replacements,
+        );
+        push_json_bool(
+            body,
+            "oracle_title_scaleform_05_000_memory_gfx_replaced",
+            title_scaleform_05_000_memory_gfx_replacements != 0,
         );
         push_json_usize(
             body,
