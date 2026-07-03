@@ -4,31 +4,32 @@
 //! round-trip corpus): ground truth is the recorded fingerprint of the
 //! validated v2 asset (`STRIPPED_LEN` + `STRIPPED_FNV1A64`, the exact bytes
 //! that were runtime-validated and formerly embedded in the DLL as
-//! `TITLE_05_000_TEXT_SUPPRESSED_GFX`). The derivation tests read the real
-//! vanilla movie from the extraction corpus and SKIP (like `roundtrip.rs`)
-//! when it is absent; when the FFDEC-era lab copy of the validated asset is
-//! also present on disk, the output is additionally byte-compared against it
-//! for first-diff diagnostics. The failure-path garbage test always runs.
+//! `TITLE_05_000_TEXT_SUPPRESSED_GFX`; the same fingerprint is what the
+//! in-game `oracle_title_05_000_runtime_strip_output_validated` telemetry
+//! checks). The derivation tests read the real vanilla movie from the
+//! extraction corpus (see [`common::corpus_root`]) and SKIP, like
+//! `roundtrip.rs`, when it is absent; the failure-path garbage test always
+//! runs. For byte-level debugging of a fingerprint mismatch, regenerate the
+//! expected asset with `scripts/gfx_tag_diff.py --emit-rust` and compare
+//! offline.
+
+mod common;
 
 use er_gfx::title_05_000::{
     STRIPPED_FNV1A64, STRIPPED_LEN, StripError, VANILLA_FNV1A64, VANILLA_LEN, fnv1a64,
     is_known_vanilla, strip,
 };
-use std::path::Path;
-
-const VANILLA_PATH: &str = "/home/banon/er-extract/nuxe-menu-20260619-170932/menu/05_000_title.gfx";
-/// Unversioned local copy of the validated asset (volatile lab dir); byte-level
-/// diagnostics only -- the required gate is the fingerprint constants.
-const VALIDATED_ASSET_PATH: &str =
-    "target/custom-gfx-lab/title-text-suppressed/05_000_title.native-ui-stripped-v2.gfx";
 
 fn read_vanilla_or_skip() -> Option<Vec<u8>> {
-    let path = Path::new(VANILLA_PATH);
+    let path = common::corpus_root().join("05_000_title.gfx");
     if !path.exists() {
-        eprintln!("SKIP: vanilla movie {VANILLA_PATH} not present; derivation test skipped");
+        eprintln!(
+            "SKIP: vanilla movie {} not present; derivation test skipped",
+            path.display()
+        );
         return None;
     }
-    let vanilla = std::fs::read(path).expect("read vanilla movie");
+    let vanilla = std::fs::read(&path).expect("read vanilla movie");
     assert_eq!(vanilla.len(), VANILLA_LEN, "vanilla corpus file drifted");
     assert_eq!(
         fnv1a64(&vanilla),
@@ -50,28 +51,6 @@ fn strip_of_vanilla_matches_validated_fingerprint() {
     // not silently depend on that internal check.
     assert_eq!(out.len(), STRIPPED_LEN);
     assert_eq!(fnv1a64(&out), STRIPPED_FNV1A64);
-
-    // Optional byte-level diagnostics against the unversioned lab copy.
-    let lab = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(VALIDATED_ASSET_PATH);
-    if let Ok(expected) = std::fs::read(&lab) {
-        if out != expected {
-            let off = out
-                .iter()
-                .zip(expected.iter())
-                .position(|(a, b)| a != b)
-                .unwrap_or_else(|| out.len().min(expected.len()));
-            panic!(
-                "strip(vanilla) != validated lab asset {}: out_len={} expected_len={} first_diff_offset={off}",
-                lab.display(),
-                out.len(),
-                expected.len(),
-            );
-        }
-    } else {
-        eprintln!("note: lab asset {VALIDATED_ASSET_PATH} absent; fingerprint gate only");
-    }
 }
 
 /// The edit set must NOT apply to a movie it wasn't derived for: stripping an
