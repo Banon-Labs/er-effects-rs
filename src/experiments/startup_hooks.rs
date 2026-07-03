@@ -8330,6 +8330,15 @@ pub(crate) unsafe extern "system" fn scaleform_handler_dtor_hook(obj: usize) {
     unsafe { f(obj) };
 }
 
+/// Format an `AtomicUsize` low-water value: `usize::MAX` is the never-sampled sentinel.
+fn fmt_lowwater(v: usize) -> String {
+    if v == usize::MAX {
+        "unsampled".to_string()
+    } else {
+        v.to_string()
+    }
+}
+
 /// Bump the GX command-queue producer histogram for `key` (lock-free open addressing; a full table
 /// counts drops instead of evicting so the hot producers stay attributed).
 fn gx_cmd_queue_hist_bump(key: usize) {
@@ -8393,6 +8402,69 @@ pub(crate) fn gx_cmd_queue_hist_top(n: usize) -> String {
         .join(", ")
 }
 
+/// Thin entry hook on the GX drain pump `FUN_141b3bdc0` (deobf 0x1b3bda0): latch its context
+/// (param_1, the object holding the 109-bucket per-frame slot-range table) and forward. The bucket
+/// table is what `gx_cmd_queue_bucket_summary` reads; the pump itself is untouched.
+pub(crate) unsafe extern "system" fn gx_cmd_pump_hook(
+    ctx: usize,
+    param2: usize,
+    param3: i32,
+    param4: u32,
+) {
+    GX_CMD_PUMP_CTX.store(ctx, Ordering::Relaxed);
+    let orig = GX_CMD_PUMP_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET || orig == 0 {
+        return;
+    }
+    let f: unsafe extern "system" fn(usize, usize, i32, u32) = unsafe { std::mem::transmute(orig) };
+    unsafe { f(ctx, param2, param3, param4) }
+}
+
+/// Nonzero per-bucket widths from the pump context's 109-bucket slot-range table as
+/// `idx:width, ...` (begin at ctx+0x30+idx*0x18, end at +0x34). The bucket whose width GROWS
+/// across switches is the retained-producer class behind the 0x1aeaf05 overflow. Empty string
+/// until the pump context has been latched.
+pub(crate) fn gx_cmd_queue_bucket_summary() -> String {
+    let ctx = GX_CMD_PUMP_CTX.load(Ordering::Relaxed);
+    if ctx == 0 {
+        return String::new();
+    }
+    let mut parts = Vec::new();
+    for idx in 0..GX_CMD_QUEUE_BUCKET_COUNT {
+        let begin = unsafe {
+            safe_read_i32(ctx + GX_CMD_QUEUE_BUCKET_BEGIN_OFFSET + idx * GX_CMD_QUEUE_BUCKET_STRIDE)
+        }
+        .unwrap_or(0);
+        let end = unsafe {
+            safe_read_i32(ctx + GX_CMD_QUEUE_BUCKET_END_OFFSET + idx * GX_CMD_QUEUE_BUCKET_STRIDE)
+        }
+        .unwrap_or(0);
+        let width = end.saturating_sub(begin);
+        // Widths above the slot capacity are torn/stale reads (this walker races the render
+        // thread; run 10e's post-crash telemetry read showed multi-million "widths") -- skip them.
+        if width > 0 && width <= GX_CMD_QUEUE_BUCKET_WIDTH_SANE_MAX {
+            parts.push(format!("{idx}:{width}"));
+        }
+    }
+    parts.join(", ")
+}
+
+/// Sample the command-byte arena's remaining space (arena at queue+0x40; remaining =
+/// limit@+0x20 - align4(cursor_lo@+0x28), per the FUN_141c48e80 decompile) and fold it into the
+/// cumulative + per-switch low-water. Returns the sampled remaining for the caller's own logging,
+/// or None on unreadable fields.
+unsafe fn gx_cmd_arena_sample_remaining(queue: usize) -> Option<i64> {
+    let arena = queue + GX_CMD_QUEUE_ARENA_OFFSET;
+    let limit = unsafe { safe_read_i32(arena + GX_CMD_ARENA_LIMIT_OFFSET) }?;
+    let cursor_lo = unsafe { safe_read_i32(arena + GX_CMD_ARENA_CURSOR_OFFSET) }?;
+    let aligned = (cursor_lo.wrapping_add(3)) & !3;
+    let remaining = i64::from(limit) - i64::from(aligned);
+    let clamped = remaining.max(0) as usize;
+    GX_CMD_ARENA_MIN_REMAINING.fetch_min(clamped, Ordering::Relaxed);
+    GX_CMD_ARENA_SWITCH_MIN_REMAINING.fetch_min(clamped, Ordering::Relaxed);
+    Some(remaining)
+}
+
 /// Telemetry-only wrapper for `reserve_command_queue_slot` (deobf 0x141aeae60): the fixed 192-slot
 /// GX command queue whose full-queue null-slot write is the repeated-switch crash at rva 0x1aeaf05
 /// (reproduced at switch #4, run autostep10c-directarm-20260703-145348). Tracks occupancy
@@ -8426,12 +8498,32 @@ pub(crate) unsafe extern "system" fn gx_reserve_cmd_queue_slot_hook(
         producer
     };
     gx_cmd_queue_hist_bump(key);
+    let arena_remaining = unsafe { gx_cmd_arena_sample_remaining(queue) };
+    // Peak-frame bucket snapshot: the growth only materializes in teardown/reload frames (run 10e),
+    // so capture the bucket composition as the per-switch high-water climbs, not just near cap.
+    if count >= 0 {
+        let count_us = count as usize;
+        let last = GX_CMD_QUEUE_PEAK_LAST_LOGGED.load(Ordering::Relaxed);
+        if count_us >= GX_CMD_QUEUE_PEAK_LOG_MIN
+            && count_us >= last + GX_CMD_QUEUE_PEAK_LOG_STEP
+            && GX_CMD_QUEUE_PEAK_LAST_LOGGED
+                .compare_exchange(last, count_us, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+        {
+            append_autoload_debug(format_args!(
+                "gx-cmdqueue: PEAK count={count}/{cap} arena_remaining={} buckets: {}",
+                arena_remaining.unwrap_or(-1),
+                gx_cmd_queue_bucket_summary()
+            ));
+        }
+    }
     if cap > 0 && count >= 0 && count as usize >= (cap as usize) - GX_CMD_QUEUE_NEARFULL_MARGIN {
         let hits = GX_CMD_QUEUE_NEARFULL_HITS.fetch_add(1, Ordering::Relaxed);
         if hits % GX_CMD_QUEUE_NEARFULL_LOG_EVERY == 0 {
             append_autoload_debug(format_args!(
-                "gx-cmdqueue: NEAR-FULL count={count}/{cap} (hit #{hits}) queue=0x{queue:x} top producers: {}",
-                gx_cmd_queue_hist_top(8)
+                "gx-cmdqueue: NEAR-FULL count={count}/{cap} (hit #{hits}) queue=0x{queue:x} top producers: {} | buckets: {}",
+                gx_cmd_queue_hist_top(8),
+                gx_cmd_queue_bucket_summary()
             ));
         }
     }
@@ -8450,7 +8542,8 @@ pub(crate) unsafe extern "system" fn gx_reserve_cmd_queue_slot_hook(
     unsafe { f(queue, param2, param3, param4, param5) }
 }
 
-/// Install the GX command-queue producer telemetry hook (never alters queue behavior).
+/// Install the GX command-queue producer telemetry hooks (never alter queue behavior): the
+/// reserve-slot occupancy/histogram wrapper plus the thin pump-context latch for the bucket table.
 fn install_gx_cmd_queue_telemetry() {
     if GX_RESERVE_CMD_QUEUE_SLOT_INSTALLED.load(Ordering::SeqCst) != 0 {
         return;
@@ -8464,12 +8557,16 @@ fn install_gx_cmd_queue_telemetry() {
             return;
         }
     }
-    let Ok(addr) = game_rva(GX_RESERVE_CMD_QUEUE_SLOT_RVA as u32) else {
+    let (Ok(addr), Ok(pump_addr)) = (
+        game_rva(GX_RESERVE_CMD_QUEUE_SLOT_RVA as u32),
+        game_rva(GX_CMD_PUMP_RVA as u32),
+    ) else {
         append_autoload_debug(format_args!(
-            "gx-cmdqueue: failed to resolve reserve_command_queue_slot rva 0x{GX_RESERVE_CMD_QUEUE_SLOT_RVA:x}"
+            "gx-cmdqueue: failed to resolve rvas 0x{GX_RESERVE_CMD_QUEUE_SLOT_RVA:x}/0x{GX_CMD_PUMP_RVA:x}"
         ));
         return;
     };
+    let mut ok = true;
     match unsafe {
         MhHook::new(
             addr as *mut c_void,
@@ -8478,23 +8575,39 @@ fn install_gx_cmd_queue_telemetry() {
     } {
         Ok(hook) => {
             GX_RESERVE_CMD_QUEUE_SLOT_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if unsafe { hook.queue_enable() }.is_ok()
-                && matches!(unsafe { MH_ApplyQueued() }, MH_STATUS::MH_OK)
-            {
-                GX_RESERVE_CMD_QUEUE_SLOT_INSTALLED.store(1, Ordering::SeqCst);
-                append_autoload_debug(format_args!(
-                    "gx-cmdqueue: producer telemetry hooked reserve_command_queue_slot 0x{addr:x} (occupancy high-water + caller histogram; forwards always)"
-                ));
-            } else {
-                append_autoload_debug(format_args!(
-                    "gx-cmdqueue: queue_enable/MH_ApplyQueued failed for 0x{addr:x}"
-                ));
-            }
+            ok &= unsafe { hook.queue_enable() }.is_ok();
             std::mem::forget(hook);
         }
         Err(status) => {
-            append_autoload_debug(format_args!("gx-cmdqueue: MhHook::new failed: {status:?}"));
+            append_autoload_debug(format_args!(
+                "gx-cmdqueue: MhHook::new(reserve) failed: {status:?}"
+            ));
+            ok = false;
         }
+    }
+    match unsafe { MhHook::new(pump_addr as *mut c_void, gx_cmd_pump_hook as *mut c_void) } {
+        Ok(hook) => {
+            GX_CMD_PUMP_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            ok &= unsafe { hook.queue_enable() }.is_ok();
+            std::mem::forget(hook);
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "gx-cmdqueue: MhHook::new(pump) failed: {status:?}"
+            ));
+            ok = false;
+        }
+    }
+    if ok && matches!(unsafe { MH_ApplyQueued() }, MH_STATUS::MH_OK) {
+        GX_RESERVE_CMD_QUEUE_SLOT_INSTALLED.store(1, Ordering::SeqCst);
+        GX_CMD_PUMP_INSTALLED.store(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "gx-cmdqueue: producer telemetry hooked reserve_command_queue_slot 0x{addr:x} + pump 0x{pump_addr:x} (occupancy high-water + caller histogram + bucket table; forwards always)"
+        ));
+    } else {
+        append_autoload_debug(format_args!(
+            "gx-cmdqueue: queue_enable/MH_ApplyQueued failed (reserve 0x{addr:x}, pump 0x{pump_addr:x})"
+        ));
     }
 }
 
@@ -8897,12 +9010,17 @@ fn sq_repro_begin_switch() {
     // producers, then reset the per-switch high-water so each switch reports its own peak (the
     // 0x1aeaf05 overflow shows as this peak climbing toward cap across switches).
     let switch_peak = GX_CMD_QUEUE_SWITCH_MAX_FILL.swap(0, Ordering::SeqCst);
+    let switch_arena_min = GX_CMD_ARENA_SWITCH_MIN_REMAINING.swap(usize::MAX, Ordering::SeqCst);
+    GX_CMD_QUEUE_PEAK_LAST_LOGGED.store(0, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "gx-cmdqueue: switch boundary -- prev-switch peak {switch_peak}/{} (cumulative max {}, reserves {}) top producers: {}",
+        "gx-cmdqueue: switch boundary -- prev-switch peak {switch_peak}/{} arena_min_remaining={} (cumulative max {}, arena min {}, reserves {}) top producers: {} | buckets: {}",
         GX_CMD_QUEUE_CAP_SEEN.load(Ordering::SeqCst),
+        fmt_lowwater(switch_arena_min),
         GX_CMD_QUEUE_MAX_FILL.load(Ordering::SeqCst),
+        fmt_lowwater(GX_CMD_ARENA_MIN_REMAINING.load(Ordering::SeqCst)),
         GX_CMD_QUEUE_SUBMITS.load(Ordering::SeqCst),
-        gx_cmd_queue_hist_top(8)
+        gx_cmd_queue_hist_top(8),
+        gx_cmd_queue_bucket_summary()
     ));
 }
 

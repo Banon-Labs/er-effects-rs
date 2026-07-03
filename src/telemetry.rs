@@ -2514,6 +2514,21 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_gx_cmdqueue_top_producers",
             &crate::experiments::gx_cmd_queue_hist_top(8),
         );
+        push_json_str(
+            body,
+            "oracle_gx_cmdqueue_buckets",
+            &crate::experiments::gx_cmd_queue_bucket_summary(),
+        );
+        push_json_usize(
+            body,
+            "oracle_gx_cmdarena_min_remaining",
+            GX_CMD_ARENA_MIN_REMAINING.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gx_cmdarena_switch_min_remaining",
+            GX_CMD_ARENA_SWITCH_MIN_REMAINING.load(Ordering::SeqCst),
+        );
         push_json_usize(
             body,
             "oracle_portrait_multi_model_publish_skips",

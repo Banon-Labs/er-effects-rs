@@ -4644,6 +4644,46 @@ pub(crate) static GX_CMD_QUEUE_HIST_DROPPED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const GX_CMD_QUEUE_NEARFULL_MARGIN: usize = 24;
 pub(crate) const GX_CMD_QUEUE_NEARFULL_LOG_EVERY: usize = 64;
 pub(crate) static GX_CMD_QUEUE_NEARFULL_HITS: AtomicUsize = AtomicUsize::new(0);
+/// BUCKET-TABLE instrument (names the RETAINER class the producer histogram cannot: run 10d proved
+/// the drain pump FUN_141b3bdc0 dominates reserves by RESUBMITTING its context list each frame, so
+/// the leak is list membership). The pump's context (its param_1; latched by a thin entry hook at
+/// deobf 0x1b3bda0, dump 0x141b3bdc0, shift-verified) holds a 109-bucket table of per-frame queue
+/// slot ranges: begin i32 at ctx+0x30+idx*0x18, end i32 at ctx+0x34+idx*0x18 (from the pump's
+/// bucket-locate loop, bound 0x6d). Nonzero widths per bucket, diffed across switches, name which
+/// bucket's submissions grow toward the 192 cap.
+pub(crate) const GX_CMD_PUMP_RVA: usize = 0x1b3bda0;
+pub(crate) static GX_CMD_PUMP_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static GX_CMD_PUMP_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static GX_CMD_PUMP_CTX: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const GX_CMD_QUEUE_BUCKET_COUNT: usize = 0x6d;
+pub(crate) const GX_CMD_QUEUE_BUCKET_BEGIN_OFFSET: usize = 0x30;
+pub(crate) const GX_CMD_QUEUE_BUCKET_END_OFFSET: usize = 0x34;
+pub(crate) const GX_CMD_QUEUE_BUCKET_STRIDE: usize = 0x18;
+/// A bucket width above the slot capacity is a torn/stale read (observed in run 10e's final
+/// telemetry read racing the crashing render thread) -- skip it rather than report garbage.
+pub(crate) const GX_CMD_QUEUE_BUCKET_WIDTH_SANE_MAX: i32 = 192;
+/// PEAK-frame bucket snapshots: run 10e proved calm-frame (switch-boundary) bucket tables stay flat
+/// (~30 total) while the per-switch occupancy PEAK grows 93 -> 121 -> 161 -> 183 -- the growth only
+/// materializes in the teardown/reload frames, and NEAR-FULL (cap-24) fires too late to see
+/// switches #1-#3. Log the bucket table whenever the switch high-water rises to >= MIN and has
+/// grown by >= STEP since the last snapshot, so every switch's peak-frame composition is diffable.
+pub(crate) const GX_CMD_QUEUE_PEAK_LOG_MIN: usize = 80;
+pub(crate) const GX_CMD_QUEUE_PEAK_LOG_STEP: usize = 8;
+pub(crate) static GX_CMD_QUEUE_PEAK_LAST_LOGGED: AtomicUsize = AtomicUsize::new(0);
+/// COMMAND-BYTE ARENA fill (user-reported render corruption during switch #3's return-title window,
+/// 2026-07-03): `reserve_command_queue_slot` allocates command BYTES from a bump arena at
+/// queue+0x40 (FUN_141c48e80: alloc counter at arena+0x14, limit at +0x20, cursor at +0x28;
+/// remaining = limit - align_up(cursor_lo); on remaining < request it takes a refill/wrap path
+/// FUN_141c48f50). If that wraps while earlier commands are unconsumed, live command bytes are
+/// overwritten -> garbled draws WITHOUT a crash -- the sub-critical sibling of the 0x1aeaf05
+/// slot-table overflow. Track remaining low-water (cumulative + per-switch) to correlate.
+pub(crate) const GX_CMD_QUEUE_ARENA_OFFSET: usize = 0x40;
+pub(crate) const GX_CMD_ARENA_ALLOC_COUNT_OFFSET: usize = 0x14;
+pub(crate) const GX_CMD_ARENA_LIMIT_OFFSET: usize = 0x20;
+pub(crate) const GX_CMD_ARENA_CURSOR_OFFSET: usize = 0x28;
+/// Low-water sentinel: usize::MAX until the first sample lands.
+pub(crate) static GX_CMD_ARENA_MIN_REMAINING: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static GX_CMD_ARENA_SWITCH_MIN_REMAINING: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 /// Gate-local `CS::MenuWindowJob::Run` hook state. `MENU_WINDOW_JOB_RUN_RVA` is defined with the
 /// title-cover constants above; System Quit reuses that same live/deobf target.
