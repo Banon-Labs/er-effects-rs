@@ -521,6 +521,19 @@ pub(crate) fn menu_window_latch_enabled() -> bool {
         .join("er-effects-menu-window-latch.txt")
         .exists()
 }
+/// Explicit opt-in to let the injected in-world System -> Quit Game -> ProfileSelect route perform
+/// the native slot-load activation. Default OFF because the prior live attempt crashed inside
+/// CSGaitemImp::Deserialize at live/deobf 0x14067141a; default behavior logs the selected cursor and
+/// suppresses the activation so profile-selection investigation stays save-safe.
+pub(crate) fn system_quit_profile_load_activation_allowed() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_SYSTEM_QUIT_ALLOW_PROFILE_LOAD").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-system-quit-allow-profile-load.txt")
+        .exists()
+}
 /// OPT-IN gate for the c30-writer diagnostic hook (hot deserialize-internal 0x67bd70).
 /// OFF by default: a clean run installs NO MinHook / NO detour for this. Enable only when
 /// the diagnostic is needed, via env `ER_EFFECTS_C30_DIAG=1` OR a GAME_DIR file
@@ -569,6 +582,23 @@ pub(crate) fn inject_nav_enabled() -> bool {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("er-effects-inject-nav.txt")
             .exists()
+}
+/// SELF-DRIVEN SYSTEM->QUIT->LOAD-PROFILE REPRO AUTOPILOT (er-effects-system-quit-repro.txt /
+/// ER_EFFECTS_SYSTEM_QUIT_REPRO). OFF by default. When on, after the boot autoload reaches the
+/// world, the DLL keeps the input block engaged and injects a scripted DInput keyboard sequence --
+/// gated on OBSERVED menu-window transitions (IngameTop / OptionSetting / ProfileSelect), never on
+/// timers -- to open the escape/system menu, activate the cloned Load-Profile (Quit Game) row, move
+/// the ProfileSelect cursor to a non-current slot, and confirm. This drives the exact user flow with
+/// zero human input so the switch bug (return-title reload crash / wrong-slot) reproduces
+/// deterministically. Diagnostic repro harness, not a product lever.
+pub(crate) fn system_quit_repro_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_SYSTEM_QUIT_REPRO").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-system-quit-repro.txt")
+        .exists()
 }
 /// DISPROVEN/LEGACY menu-drive escape hatch -- deliberately OFF by default and HARD to trigger.
 ///

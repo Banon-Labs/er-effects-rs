@@ -188,11 +188,26 @@ unsafe fn title_logo_gfx_current_frame(base: usize, title_logo_back_view_parts: 
     if vtable == 0 || vtable == TITLE_OWNER_SCAN_START_ADDRESS {
         return TITLE_LOGO_GFX_UNKNOWN_FRAME;
     }
+    // The `safe_read_*` guards only reject UNMAPPED pages -- they happily return a mapped-but-garbage
+    // qword. During a System-Quit -> return-title -> reload transition `PRODUCT_CORE_LAST_TITLE_DIALOG`
+    // (the source of `title_logo_back_view_parts`) points at a half-torn-down / reallocated dialog whose
+    // embedded BackViewParts holds a stale `handle` whose vtable lands in the Wine heap, NOT the game
+    // image. Transmuting `*(vtable+8)` from such a vtable and CALLING it dispatches through a data
+    // address -> access violation (observed: handle vt=0x7ffe96aa4238, call target 0x7ffe977c61b0, both
+    // outside [game_base, +SizeOfImage); crash self+0x317bd `call *rdx`). Reject any vtable / resolved
+    // call target that is not inside the game module image before the transmute+call. See bd
+    // er-effects-rs-3pc (post-switch reload crash).
+    if !crate::experiments::vtable_in_game_image(vtable, base) {
+        return TITLE_LOGO_GFX_UNKNOWN_FRAME;
+    }
     let Some(resolve_value_addr) = (unsafe { crate::experiments::safe_read_usize(vtable + 0x8) })
     else {
         return TITLE_LOGO_GFX_UNKNOWN_FRAME;
     };
     if resolve_value_addr == 0 || resolve_value_addr == TITLE_OWNER_SCAN_START_ADDRESS {
+        return TITLE_LOGO_GFX_UNKNOWN_FRAME;
+    }
+    if !crate::experiments::vtable_in_game_image(resolve_value_addr, base) {
         return TITLE_LOGO_GFX_UNKNOWN_FRAME;
     }
     // Mirrors native helpers at 0x140749980/0x1407499e0: load *(gfx_value) into rcx, call vtable+8,
@@ -258,6 +273,21 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     body.push_str(&format!("  \"player_seen\": {player_seen},\n"));
     body.push_str(&format!("  \"runtime_mode\": \"{runtime_mode}\",\n"));
     body.push_str(&format!("  \"seamless_coop_loaded\": {seamless_loaded},\n"));
+    // Loading-screen portrait fail-fast semaphore state (er-effects-rs-j3r): 0 = healthy / never
+    // tripped; nonzero packs (loaded_slot<<16)|(render_target_slot<<8)|cond (cond bit0=wrong-slot,
+    // bit1=null loaded renderer). On diagnostic runs a violation also crashes the run (crash log).
+    body.push_str(&format!(
+        "  \"oracle_portrait_render_semaphore\": {},\n",
+        PORTRAIT_RENDER_SEMAPHORE_STATE.load(Ordering::SeqCst)
+    ));
+    // In-world ProfileSelect table guard (er-effects-rs-j3r): repairs = native-setup rebuilds of a
+    // fully-empty renderer table at builder entry; guard_skips = native builder calls dropped
+    // because a slot would still null-deref at [entry+0x754].
+    body.push_str(&format!(
+        "  \"oracle_profileselect_table_repairs\": {},\n  \"oracle_profileselect_table_guard_skips\": {},\n",
+        PROFILE_SELECT_TABLE_REPAIR_COUNT.load(Ordering::SeqCst),
+        PROFILE_SELECT_TABLE_GUARD_SKIP_COUNT.load(Ordering::SeqCst)
+    ));
     body.push_str(&format!(
         "  \"seamless_coop_marker\": {},\n",
         if seamless_loaded {
@@ -411,8 +441,37 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         }
     };
     let title_owner_state_bits = TITLE_OWNER_SCAN_LAST_STATE_BITS.load(Ordering::SeqCst);
+    let (return_title_global_flag, csmenuman, csmenuman_menu_data, csmenuman_menu_data_flag_5d) =
+        if let Ok(base) = game_module_base() {
+            let global_flag =
+                unsafe { safe_read_u8(base + RETURN_TITLE_FINAL_FUNCTOR_GLOBAL_FLAG_RVA) };
+            let menu_man = unsafe { safe_read_usize(base + GLOBAL_CSMENUMAN_RVA) }
+                .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+            let menu_data = if menu_man != TITLE_OWNER_SCAN_START_ADDRESS && menu_man != 0 {
+                unsafe { safe_read_usize(menu_man + CSMENUMAN_MENU_DATA_08_OFFSET) }
+                    .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+            } else {
+                TITLE_OWNER_SCAN_START_ADDRESS
+            };
+            let menu_data_flag = if menu_data != TITLE_OWNER_SCAN_START_ADDRESS && menu_data != 0 {
+                unsafe { safe_read_u8(menu_data + CSMENUMAN_MENU_DATA_RETURN_TITLE_FLAG_5D_OFFSET) }
+            } else {
+                None
+            };
+            (global_flag, menu_man, menu_data, menu_data_flag)
+        } else {
+            (
+                None,
+                TITLE_OWNER_SCAN_START_ADDRESS,
+                TITLE_OWNER_SCAN_START_ADDRESS,
+                None,
+            )
+        };
+    let format_optional_u8 = |value: Option<u8>| -> String {
+        value.map_or_else(|| "null".to_owned(), |v| v.to_string())
+    };
     body.push_str(&format!(
-        "  \"product_autoload_armed\": {},\n  \"product_core_callsite_ticks\": {},\n  \"product_core_callsite_base_ok_ticks\": {},\n  \"product_core_callsite_slot_ok_ticks\": {},\n  \"product_core_callsite_last_slot\": {},\n  \"product_core_autoload_ticks\": {},\n  \"product_core_ready_blocks\": {},\n  \"product_core_ready_successes\": {},\n  \"product_core_owner_ticks\": {},\n  \"product_core_last_owner\": {},\n  \"product_core_last_title_dialog\": {},\n  \"product_core_last_title_dialog_vt\": {},\n  \"product_core_last_title_in_loop\": {},\n  \"product_core_last_title_in_textfadeout\": {},\n  \"product_core_last_menu_opened_latch\": {},\n  \"product_core_last_press_start_proxy\": {},\n  \"product_core_last_press_start_vt\": {},\n  \"product_core_last_press_start_context\": {},\n  \"product_core_last_phase\": {},\n  \"product_core_ready_blocker\": \"{}\",\n  \"title_owner_scan_attempts\": {},\n  \"title_owner_scan_vtable_hits\": {},\n  \"title_owner_scan_table_rejects\": {},\n  \"title_owner_scan_state_rejects\": {},\n  \"title_owner_scan_cached_owner\": {},\n  \"title_owner_scan_last_candidate\": {},\n  \"title_owner_scan_last_table\": {},\n  \"title_owner_scan_last_state\": {},\n",
+        "  \"product_autoload_armed\": {},\n  \"product_core_callsite_ticks\": {},\n  \"product_core_callsite_base_ok_ticks\": {},\n  \"product_core_callsite_slot_ok_ticks\": {},\n  \"product_core_callsite_last_slot\": {},\n  \"product_core_autoload_ticks\": {},\n  \"product_core_ready_blocks\": {},\n  \"product_core_ready_successes\": {},\n  \"product_core_owner_ticks\": {},\n  \"product_core_last_owner\": {},\n  \"product_core_last_title_dialog\": {},\n  \"product_core_last_title_dialog_vt\": {},\n  \"product_core_last_title_in_loop\": {},\n  \"product_core_last_title_in_textfadeout\": {},\n  \"product_core_last_menu_opened_latch\": {},\n  \"product_core_last_press_start_proxy\": {},\n  \"product_core_last_press_start_vt\": {},\n  \"product_core_last_press_start_context\": {},\n  \"product_core_last_return_title_job_predicate_bc4\": {},\n  \"product_core_return_title_final_global_flag\": {},\n  \"product_core_csmenuman\": {},\n  \"product_core_csmenuman_menu_data\": {},\n  \"product_core_csmenuman_menu_data_return_title_flag_5d\": {},\n  \"product_core_last_phase\": {},\n  \"product_core_ready_blocker\": \"{}\",\n  \"title_owner_scan_attempts\": {},\n  \"title_owner_scan_vtable_hits\": {},\n  \"title_owner_scan_table_rejects\": {},\n  \"title_owner_scan_state_rejects\": {},\n  \"title_owner_scan_cached_owner\": {},\n  \"title_owner_scan_last_candidate\": {},\n  \"title_owner_scan_last_table\": {},\n  \"title_owner_scan_last_state\": {},\n",
         product_autoload_enabled(),
         PRODUCT_CORE_CALLSITE_TICKS.load(Ordering::SeqCst),
         PRODUCT_CORE_CALLSITE_BASE_OK_TICKS.load(Ordering::SeqCst),
@@ -431,6 +490,11 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         format_scan_ptr(PRODUCT_CORE_LAST_PRESS_START_PROXY.load(Ordering::SeqCst)),
         format_scan_ptr(PRODUCT_CORE_LAST_PRESS_START_VT.load(Ordering::SeqCst)),
         format_scan_ptr(PRODUCT_CORE_LAST_PRESS_START_CONTEXT.load(Ordering::SeqCst)),
+        PRODUCT_CORE_LAST_RETURN_TITLE_JOB_PREDICATE_BC4.load(Ordering::SeqCst),
+        format_optional_u8(return_title_global_flag),
+        format_scan_ptr(csmenuman),
+        format_scan_ptr(csmenuman_menu_data),
+        format_optional_u8(csmenuman_menu_data_flag_5d),
         PRODUCT_CORE_LAST_PHASE.load(Ordering::SeqCst),
         json_escape(product_core_ready_blocker_label(product_core_blocker)),
         TITLE_OWNER_SCAN_ATTEMPTS.load(Ordering::SeqCst),
@@ -479,6 +543,52 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         )
     ));
     body.push_str(&format!(
+        "  \"system_quit_profile_load_activate_count\": {},\n  \"system_quit_profile_load_confirmed_block_count\": {},\n  \"system_quit_profile_load_confirmed_allow_count\": {},\n  \"system_quit_profile_load_job_run_block_count\": {},\n  \"system_quit_profile_load_job_run_allow_count\": {},\n  \"system_quit_profile_load_job_run_last_job\": {},\n  \"system_quit_profile_load_job_run_last_list\": {},\n  \"system_quit_profile_load_job_run_last_profile_id\": {},\n  \"system_quit_profile_load_job_post_return_title_fired\": {},\n  \"system_quit_quickload_phase\": {},\n  \"system_quit_quickload_selected_slot\": {},\n  \"system_quit_quickload_return_title_request_count\": {},\n  \"system_quit_return_title_final_functor_call_count\": {},\n  \"system_quit_quickload_native_quit_action_count\": {},\n  \"system_quit_direct_return_title_chain_submit_count\": {},\n  \"system_quit_direct_return_title_chain_ready_block_count\": {},\n  \"system_quit_direct_return_title_chain_last_dialog\": {},\n  \"system_quit_direct_return_title_chain_last_queue_ready\": {},\n  \"system_quit_skip_restore_after_quickload_count\": {},\n  \"system_quit_quickload_title_owner_seen_count\": {},\n  \"system_quit_quickload_autoload_handoff_count\": {},\n  \"system_quit_quickload_last_title_owner\": {},\n  \"system_quit_profile_load_activate_last_dialog\": {},\n  \"system_quit_profile_load_activate_last_cursor\": {},\n  \"system_quit_profile_load_activate_last_bound\": {},\n  \"system_quit_profileselect_native_close_count\": {},\n  \"system_quit_request_load_slot_block_count\": {},\n  \"system_quit_request_load_slot_allow_count\": {},\n  \"system_quit_inworld_load_skip_count\": {},\n",
+        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ALLOW_COUNT.load(Ordering::SeqCst),
+        format_scan_ptr(SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_JOB.load(Ordering::SeqCst)),
+        format_scan_ptr(SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_LIST.load(Ordering::SeqCst)),
+        SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_PROFILE_ID.load(Ordering::SeqCst),
+        SYSTEM_QUIT_PROFILE_LOAD_JOB_POST_RETURN_TITLE_FIRED.load(Ordering::SeqCst),
+        SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst),
+        SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_QUICKLOAD_NATIVE_QUIT_ACTION_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_READY_BLOCK_COUNT.load(Ordering::SeqCst),
+        format_scan_ptr(SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_LAST_DIALOG.load(Ordering::SeqCst)),
+        SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_LAST_QUEUE_READY.load(Ordering::SeqCst),
+        SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_QUICKLOAD_TITLE_OWNER_SEEN_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_QUICKLOAD_AUTOLOAD_HANDOFF_COUNT.load(Ordering::SeqCst),
+        format_scan_ptr(SYSTEM_QUIT_QUICKLOAD_LAST_TITLE_OWNER.load(Ordering::SeqCst)),
+        format_scan_ptr(SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG.load(Ordering::SeqCst)),
+        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR.load(Ordering::SeqCst),
+        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_BOUND.load(Ordering::SeqCst),
+        SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_REQUEST_LOAD_SLOT_BLOCK_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_REQUEST_LOAD_SLOT_ALLOW_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_INWORLD_LOAD_SKIP_COUNT.load(Ordering::SeqCst)
+    ));
+    body.push_str(&format!(
+        "  \"system_quit_continue_confirm_fresh_deser_done\": {},\n  \"system_quit_continue_confirm_fresh_deser_count\": {},\n  \"system_quit_continue_confirm_block_count\": {},\n  \"system_quit_continue_confirm_allow_count\": {},\n",
+        SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst),
+        SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst)
+    ));
+    body.push_str(&format!(
+        "  \"system_quit_gaitem_reset_invocations\": {},\n  \"system_quit_gaitem_reset_released_count\": {},\n  \"system_quit_gaitem_reset_last_slack_before\": {},\n  \"system_quit_gaitem_reset_last_slack_after\": {},\n",
+        SYSTEM_QUIT_GAITEM_RESET_INVOCATIONS.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GAITEM_RESET_RELEASED_COUNT.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_BEFORE.load(Ordering::SeqCst),
+        SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_AFTER.load(Ordering::SeqCst)
+    ));
+    body.push_str(&format!(
         "  \"autoload_last_status\": {},\n",
         state.autoload.last_status().map_or_else(
             || "null".to_owned(),
@@ -515,6 +625,104 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     let tmp_path = path.with_extension("json.tmp");
     if fs::write(&tmp_path, body).is_ok() {
         let _ = fs::rename(tmp_path, path);
+    }
+}
+
+/// Last-seen GameMan snapshot (for change-detection). Packed: save_slot, req_slot, save_state, and a
+/// flags byte (save_requested|new_game_plus_requested|warp_requested), plus saved-map c30.
+static GM_SNAP_LAST_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
+static GM_SNAP_LAST_REQ: AtomicUsize = AtomicUsize::new(usize::MAX);
+static GM_SNAP_LAST_STATE: AtomicUsize = AtomicUsize::new(usize::MAX);
+static GM_SNAP_LAST_FLAGS: AtomicUsize = AtomicUsize::new(usize::MAX);
+static GM_SNAP_LAST_C30: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Packed TitleStep-side session-liveness words: InGameStep request code (+0xd8) in the low half,
+/// TitleStep committed state in the high half.
+static GM_SNAP_LAST_SESSION: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// The in-game menu job qword at CSMenuMan+0x798 (the STEP_RequestWait liveness gate).
+static GM_SNAP_LAST_MENU_JOB: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// Diagnostic: log GameMan's key save/load fields (typed, via `GameManTelemetry` -- NO hardcoded
+/// offsets) whenever ANY of them CHANGES. Called each game-task frame; change-detection turns it into
+/// a compact transition trace so the STABLE boot-load trajectory (Patches) and the BOUNCE switch-load
+/// trajectory (Speed Bean) can be diffed side by side to find which GameMan field re-triggers the
+/// title. `save_requested`/`new_game_plus_requested`/`warp_requested` are the prime suspects for a
+/// post-load revert. c30 (saved map) uses our own RE offset const (not a fromsoftware field).
+pub(crate) fn snapshot_game_man_on_change() {
+    // GameMan resolves only once the boot is far along; the session-liveness words below matter
+    // EARLIER (the boot load), so sample with a default GameMan view instead of returning.
+    let t = unsafe { GameMan::instance() }
+        .map(|game_man| GameManTelemetry::from_game_man(game_man))
+        .unwrap_or_default();
+    let gm = game_man_ptr_or_null();
+    let (c30, bc4, b73) = if gm != TITLE_OWNER_SCAN_START_ADDRESS {
+        (
+            unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }.unwrap_or(-1),
+            unsafe { safe_read_i32(gm + GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET) }
+                .unwrap_or(-1),
+            // field_0xb73 (unnamed in fromsoftware-rs); set to 1 by the return-title REQUEST.
+            unsafe { safe_read_i32(gm + 0xb73) }.unwrap_or(-1) & 0xff,
+        )
+    } else {
+        (-1, -1, -1)
+    };
+    let flags = (t.save_requested as usize)
+        | ((t.new_game_plus_requested as usize) << 1)
+        | ((t.warp_requested as usize) << 2)
+        | ((bc4 as u32 as usize) << 8)
+        | ((b73 as u32 as usize) << 16);
+    let slot = t.save_slot as u32 as usize;
+    let req = t.requested_save_slot_load_index as u32 as usize;
+    let state = t.save_state as usize;
+    let c30u = c30 as u32 as usize;
+    // Session-liveness words (the post-reload bounce gate, see constants.rs IN_GAME_STEP_* block):
+    // TitleStep committed state, InGameStep request code (+0xd8), and the in-game menu job qword at
+    // CSMenuMan+0x798 that STEP_RequestWait polls at code 2.
+    let mut owner = TITLE_OWNER_PTR.load(Ordering::SeqCst);
+    if owner == TITLE_OWNER_SCAN_START_ADDRESS {
+        // The scan caches the owner late (~+31s); the SetState trace detour sees it from the first
+        // title transition (~+12s), covering the boot-load window.
+        owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
+    }
+    let (committed, ig_d8) = if owner != TITLE_OWNER_SCAN_START_ADDRESS {
+        (
+            unsafe { safe_read_i32(owner + TITLE_OWNER_STATE_COMMITTED_OFFSET) }.unwrap_or(-1),
+            unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }
+                .filter(|ig| *ig != TITLE_OWNER_SCAN_START_ADDRESS)
+                .and_then(|ig| unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) })
+                .unwrap_or(-1),
+        )
+    } else {
+        (-1, -1)
+    };
+    let base = crate::experiments::game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let menu_job = if base != TITLE_OWNER_SCAN_START_ADDRESS {
+        unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
+            .filter(|mm| *mm != TITLE_OWNER_SCAN_START_ADDRESS)
+            .and_then(|mm| unsafe { safe_read_usize(mm + CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET) })
+            .unwrap_or(usize::MAX)
+    } else {
+        usize::MAX
+    };
+    let session = (ig_d8 as u32 as usize) | ((committed as u32 as usize) << 32);
+    // Swap every field's stored last-value unconditionally (so none is missed), OR the per-field
+    // change flags. `|` (not `||`) so all swaps always run.
+    let changed = (GM_SNAP_LAST_SLOT.swap(slot, Ordering::SeqCst) != slot)
+        | (GM_SNAP_LAST_REQ.swap(req, Ordering::SeqCst) != req)
+        | (GM_SNAP_LAST_STATE.swap(state, Ordering::SeqCst) != state)
+        | (GM_SNAP_LAST_FLAGS.swap(flags, Ordering::SeqCst) != flags)
+        | (GM_SNAP_LAST_C30.swap(c30u, Ordering::SeqCst) != c30u)
+        | (GM_SNAP_LAST_SESSION.swap(session, Ordering::SeqCst) != session)
+        | (GM_SNAP_LAST_MENU_JOB.swap(menu_job, Ordering::SeqCst) != menu_job);
+    if changed {
+        append_autoload_debug(format_args!(
+            "gm-snap: save_slot={} req_slot={} save_state={} save_requested={} ngp_requested={} warp_requested={} bc4={bc4} b73={b73} c30=0x{c30:x} committed={committed} ig_d8={ig_d8} menu_job=0x{menu_job:x}",
+            t.save_slot,
+            t.requested_save_slot_load_index,
+            t.save_state,
+            t.save_requested,
+            t.new_game_plus_requested,
+            t.warp_requested
+        ));
     }
 }
 

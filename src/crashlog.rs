@@ -167,6 +167,167 @@ pub(crate) unsafe extern "system" fn assert_wrapper_hook(
     }
 }
 
+/// Upper bound on a plausible game-module `.text` RVA. The DLL's own anti-antidebug
+/// pass logs the scanned code range as `0x140001000..0x1429a2c00`, so a return address
+/// into game code has an RVA below ~0x29a2c00. Used to filter a raw stack scan down to
+/// game-side return addresses.
+const AV_GAME_TEXT_RVA_MAX: usize = 0x2a0_0000;
+const AV_GAME_TEXT_RVA_MIN: usize = 0x1000;
+/// Number of 8-byte stack slots scanned upward from RSP at an access violation.
+const AV_STACK_SCAN_SLOTS: usize = 256;
+/// Max game-side return addresses recorded from the stack scan.
+const AV_STACK_MAX_RETURNS: usize = 8;
+/// Raw stack qwords dumped from RSP regardless of value (a stack smash may leave no
+/// game `.text` return address at all — the raw window still shows the smashed frame).
+const AV_STACK_RAW_QWORDS: usize = 8;
+
+/// Scan the crashing thread's stack (from `rsp` upward) for values inside the game
+/// module's `.text` (return addresses of the game-side frames) AND dump the raw head of
+/// the frame. The recorded `callers=[...]` trail only holds our own instrumentation trail
+/// (under wine it surfaces ntdll addresses), so this is what actually names the game
+/// function at the fault. Reads are `ReadProcessMemory`-guarded so an unmapped slot yields
+/// `None` instead of re-faulting into this handler. `.text` hits are emitted as live/deobf
+/// RVAs (`addr - base`); map to the Ghidra dump with `scripts/dump-deobf-shift.py`.
+fn av_stack_game_returns(rsp: usize, base: usize) -> String {
+    if rsp < 0x10000 {
+        return String::from("stk=[] self_stk=[] raw=[]");
+    }
+    let self_base = SELF_DLL_BASE.load(Ordering::SeqCst);
+    let self_size = SELF_DLL_SIZE.load(Ordering::SeqCst);
+    let mut game = String::from("stk=[");
+    let mut selfret = String::from("self_stk=[");
+    let mut game_found = 0usize;
+    let mut self_found = 0usize;
+    let mut slot = 0usize;
+    while slot < AV_STACK_SCAN_SLOTS
+        && (game_found < AV_STACK_MAX_RETURNS || self_found < AV_STACK_MAX_RETURNS)
+    {
+        let addr = rsp + slot * std::mem::size_of::<usize>();
+        if let Some(val) = unsafe { safe_read_usize(addr) } {
+            if base != NULL_MODULE_BASE {
+                if let Some(rva) = val.checked_sub(base) {
+                    if (AV_GAME_TEXT_RVA_MIN..AV_GAME_TEXT_RVA_MAX).contains(&rva)
+                        && game_found < AV_STACK_MAX_RETURNS
+                    {
+                        if game_found != 0 {
+                            game.push(',');
+                        }
+                        game.push_str(&format!("0x{rva:x}"));
+                        game_found += 1;
+                    }
+                }
+            }
+            if self_base != NULL_MODULE_BASE {
+                if let Some(rva) = val.checked_sub(self_base) {
+                    if rva < self_size && self_found < AV_STACK_MAX_RETURNS {
+                        if self_found != 0 {
+                            selfret.push(',');
+                        }
+                        selfret.push_str(&format!("0x{rva:x}"));
+                        self_found += 1;
+                    }
+                }
+            }
+        }
+        slot += 1;
+    }
+    game.push_str("] ");
+    game.push_str(&selfret);
+    game.push_str("] raw=[");
+    for i in 0..AV_STACK_RAW_QWORDS {
+        if i != 0 {
+            game.push(',');
+        }
+        match unsafe { safe_read_usize(rsp + i * std::mem::size_of::<usize>()) } {
+            Some(v) => {
+                let tag = annotate_addr(v, base);
+                game.push_str(&format!("0x{v:x}{tag}"));
+            }
+            None => game.push_str("??"),
+        }
+    }
+    game.push(']');
+    game
+}
+
+/// Probe a candidate object pointer: read its first qword (a C++ vtable pointer for a
+/// polymorphic object) and, when that vtable lands in the game module, emit its RVA so the
+/// crashing object's class can be named from the Ghidra dump. Guarded reads; `??`/`-` on
+/// unmapped memory. Format: `obj@0x..=[vt=0x.. vtrva=0x..]`.
+fn av_object_probe(label: &str, ptr: usize, base: usize) -> String {
+    if ptr < 0x10000 {
+        return format!("{label}=0x{ptr:x}[unmapped]");
+    }
+    match unsafe { safe_read_usize(ptr) } {
+        Some(vt) => {
+            let vtrva = vt.checked_sub(base).filter(|r| {
+                base != NULL_MODULE_BASE && (AV_GAME_TEXT_RVA_MIN..0x4000000).contains(r)
+            });
+            match vtrva {
+                Some(r) => format!("{label}=0x{ptr:x}[vt=0x{vt:x} vtrva=0x{r:x}]"),
+                None => format!("{label}=0x{ptr:x}[vt=0x{vt:x}]"),
+            }
+        }
+        None => format!("{label}=0x{ptr:x}[unreadable]"),
+    }
+}
+
+/// PE optional-header offsets (PE32+). `e_lfanew` (DOS header) points at the NT headers;
+/// the optional header starts 24 bytes past that (4-byte signature + 20-byte file header),
+/// and `SizeOfImage` sits at optional-header +0x38.
+const PE_E_LFANEW_OFFSET: usize = 0x3c;
+const PE_OPTIONAL_HEADER_FROM_NT: usize = 24;
+const PE_SIZE_OF_IMAGE_IN_OPTIONAL: usize = 0x38;
+/// Fallback extent used when the DLL's `SizeOfImage` cannot be read (generous upper bound for
+/// this cdylib; only used to bound-check self-frame attribution, never for anything semantic).
+const SELF_DLL_SIZE_FALLBACK: usize = 0x0400_0000;
+
+/// Record this DLL's load base + image size (called once from `DllMain`). Pure guarded PE-header
+/// reads — no APIs, no loader lock — safe to run at `DLL_PROCESS_ATTACH`. Enables `self+0xRVA`
+/// annotation of faults in our relocated code (see [`SELF_DLL_BASE`]).
+pub(crate) fn record_self_dll_base(base: usize) {
+    if base < 0x10000 {
+        return;
+    }
+    SELF_DLL_BASE.store(base, Ordering::SeqCst);
+    let size = unsafe { safe_read_usize(base + PE_E_LFANEW_OFFSET) }
+        .map(|v| v & 0xffff_ffff)
+        .and_then(|e_lfanew| {
+            unsafe {
+                safe_read_usize(
+                    base + e_lfanew + PE_OPTIONAL_HEADER_FROM_NT + PE_SIZE_OF_IMAGE_IN_OPTIONAL,
+                )
+            }
+            .map(|v| v & 0xffff_ffff)
+        })
+        .filter(|&s| s != 0)
+        .unwrap_or(SELF_DLL_SIZE_FALLBACK);
+    SELF_DLL_SIZE.store(size, Ordering::SeqCst);
+}
+
+/// Annotate a code address with the module + RVA it lands in, for a crash line. Resolves against
+/// the game module (`.text`) and this injected DLL (relocated far away under Wine). Returns a
+/// compact `{game+0x..}` / `{self+0x..}` tag, or an empty string when the address is in neither
+/// (a Wine system DLL, the heap, or a smashed value) — the raw hex is already printed alongside.
+fn annotate_addr(addr: usize, game_base: usize) -> String {
+    if game_base != NULL_MODULE_BASE {
+        if let Some(rva) = addr.checked_sub(game_base) {
+            if (AV_GAME_TEXT_RVA_MIN..AV_GAME_TEXT_RVA_MAX).contains(&rva) {
+                return format!("{{game+0x{rva:x}}}");
+            }
+        }
+    }
+    let self_base = SELF_DLL_BASE.load(Ordering::SeqCst);
+    if self_base != NULL_MODULE_BASE {
+        if let Some(rva) = addr.checked_sub(self_base) {
+            if rva < SELF_DLL_SIZE.load(Ordering::SeqCst) {
+                return format!("{{self+0x{rva:x}}}");
+            }
+        }
+    }
+    String::new()
+}
+
 /// Vectored handler: log access violations (faulting RVA + caller stack) so an
 /// in-process crash points straight at the instruction. Rate-limited; never
 /// changes behavior (returns EXCEPTION_CONTINUE_SEARCH).
@@ -325,16 +486,61 @@ pub(crate) unsafe extern "system" fn crash_vectored_handler(
                 < MAX_AV_LOG_LINES
         {
             let address = unsafe { (*record).exception_address } as usize;
-            let rva = game_module_base()
-                .ok()
-                .and_then(|base| address.checked_sub(base));
+            // For an access violation ExceptionInformation[0] is the access kind
+            // (0=read, 1=write, 8=execute) and [1] is the faulting DATA address --
+            // the pointer that was actually dereferenced. That plus the accessor
+            // registers (RCX/RDX/R8) distinguishes a bad `this` pointer from a wild
+            // index without decompilation guesswork.
+            let (access_kind, fault_addr) = unsafe {
+                if (*record).number_parameters >= 2 {
+                    (
+                        (*record).exception_information[0],
+                        (*record).exception_information[1],
+                    )
+                } else {
+                    (usize::MAX, 0)
+                }
+            };
+            let (rcx, rdx, r8, rsp) = if !context.is_null() {
+                let cbase = context as *const u8;
+                unsafe {
+                    (
+                        *(cbase.add(CONTEXT_RCX_OFFSET) as *const u64) as usize,
+                        *(cbase.add(CONTEXT_RDX_OFFSET) as *const u64) as usize,
+                        *(cbase.add(CONTEXT_R8_OFFSET) as *const u64) as usize,
+                        *(cbase.add(CONTEXT_RSP_OFFSET) as *const u64) as usize,
+                    )
+                }
+            } else {
+                (0, 0, 0, 0)
+            };
+            let base = game_module_base().unwrap_or(NULL_MODULE_BASE);
+            let stack = av_stack_game_returns(rsp, base);
+            let rcx_probe = av_object_probe("rcx", rcx, base);
+            // For a hijacked control transfer (access=8, RIP jumped to non-code), the value
+            // at [rsp] is the smashed/popped return candidate; probe it as an object too.
+            let ret0 = unsafe { safe_read_usize(rsp) }.unwrap_or(0);
+            let ret0_probe = av_object_probe("ret0", ret0, base);
+            // Code-address annotations: name the faulting RIP and the return-at-[rsp] as
+            // game/self module + RVA when they land in known code (a heap-executing RIP under
+            // Wine otherwise prints as an undecodable raw value). self_base is emitted so any
+            // remaining raw frame can be resolved by hand against the DLL's symbols.
+            let rip_tag = annotate_addr(address, base);
+            let ret0_tag = annotate_addr(ret0, base);
+            let self_base = SELF_DLL_BASE.load(Ordering::SeqCst);
+            // Only treat the fault instruction as an in-module RVA when it actually lands in
+            // `.text`; an execute-fault RIP in the heap (access=8) is NOT a game RVA and a
+            // blind `addr - base` there prints a misleading value.
+            let rva = address.checked_sub(base).filter(|r| {
+                base != NULL_MODULE_BASE && (AV_GAME_TEXT_RVA_MIN..AV_GAME_TEXT_RVA_MAX).contains(r)
+            });
             match rva {
                 Some(rva) => append_crash_log(format_args!(
-                    "access-violation rva=0x{rva:x} addr=0x{address:x} {}",
+                    "access-violation rva=0x{rva:x} addr=0x{address:x}{rip_tag} access={access_kind:x} fault_addr=0x{fault_addr:x} rcx=0x{rcx:x} rdx=0x{rdx:x} r8=0x{r8:x} rsp=0x{rsp:x} self_base=0x{self_base:x} {rcx_probe} {ret0_probe} ret0_code=0x{ret0:x}{ret0_tag} {stack} {}",
                     trace_callers_summary()
                 )),
                 None => append_crash_log(format_args!(
-                    "access-violation addr=0x{address:x} (outside game module) {}",
+                    "access-violation addr=0x{address:x}{rip_tag} (RIP outside .text) access={access_kind:x} fault_addr=0x{fault_addr:x} rcx=0x{rcx:x} rdx=0x{rdx:x} r8=0x{r8:x} rsp=0x{rsp:x} self_base=0x{self_base:x} {rcx_probe} {ret0_probe} ret0_code=0x{ret0:x}{ret0_tag} {stack} {}",
                     trace_callers_summary()
                 )),
             }
@@ -732,22 +938,17 @@ pub(crate) fn trace_callers_summary() -> String {
             std::ptr::null_mut(),
         )
     } as usize;
-    let module_base = unsafe { GetModuleHandleA(PCSTR::null()) }
-        .ok()
-        .map(|module| module.0 as usize)
-        .unwrap_or(NULL_MODULE_BASE);
-
+    // Resolve against the real game module base (not GetModuleHandleA(NULL), which under Wine can
+    // return the EXE or fail) and annotate frames that fall in our relocated DLL as `self+RVA`.
+    let game_base = game_module_base().unwrap_or(NULL_MODULE_BASE);
     let callers = frames
         .iter()
         .take(captured)
         .enumerate()
         .map(|(index, frame)| {
             let address = *frame as usize;
-            if module_base != NULL_MODULE_BASE && address >= module_base {
-                format!("#{index}=0x{:x}", address - module_base)
-            } else {
-                format!("#{index}=0x{address:x}")
-            }
+            let tag = annotate_addr(address, game_base);
+            format!("#{index}=0x{address:x}{tag}")
         })
         .collect::<Vec<_>>()
         .join(",");

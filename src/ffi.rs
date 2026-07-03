@@ -96,13 +96,19 @@ unsafe extern "system" {
     ) -> i32;
 }
 
-/// Minimal prefix of EXCEPTION_RECORD: only the fields the crash logger reads.
+/// EXCEPTION_RECORD (Win64) through `ExceptionInformation`. The access-violation logger
+/// reads `exception_information[0]` (0=read/1=write/8=execute) and `[1]` (the faulting
+/// virtual address) so a crash line records the exact bad address, not just the RIP.
+/// `EXCEPTION_MAXIMUM_PARAMETERS` is 15; repr(C) inserts the 4-byte pad after
+/// `number_parameters` so `exception_information` lands at the ABI offset 0x20.
 #[repr(C)]
 pub(crate) struct ExceptionRecordMin {
     pub(crate) exception_code: u32,
     pub(crate) exception_flags: u32,
     pub(crate) next_record: *mut ExceptionRecordMin,
     pub(crate) exception_address: *mut c_void,
+    pub(crate) number_parameters: u32,
+    pub(crate) exception_information: [usize; 15],
 }
 
 /// Minimal EXCEPTION_POINTERS: the record pointer + the CONTEXT pointer (the

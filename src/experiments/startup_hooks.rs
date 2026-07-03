@@ -17,7 +17,9 @@ use std::{
 use std::os::windows::ffi::OsStrExt as _;
 
 use crate::input_blocker::{InputBlocker, InputFlags};
-use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
+use crate::mh::{
+    MH_ApplyQueued, MH_Initialize, MH_QueueDisableHook, MH_QueueEnableHook, MH_STATUS, MhHook,
+};
 use eldenring::{
     cs::{CSTaskGroupIndex, CSTaskImp, ChrInsExt, GameMan, PlayerIns},
     fd4::FD4TaskData,
@@ -759,7 +761,20 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
     d: usize,
 ) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    if product_autoload_enabled() {
+    // Scope the blanket product msgbox suppression to the SENSITIVE windows only (er-effects-rs-qwj):
+    // boot autoload (pre-world -- connection-error / EULA / warning popups) and an ACTIVE
+    // System->Quit->Load-Profile switch (any stray ProfileSelect load-confirm). Do NOT suppress during
+    // free in-world play: the user's own menu confirmations -- notably the Quit Game / Return-to-Desktop
+    // "are you sure?" dialog -- are legitimate product UI and MUST render, else those rows silently do
+    // nothing because the suppression ate their confirmation MessageBox (observed: Quit Game / Return to
+    // Desktop dead on the 2nd quit menu; a msgbox-skip fired ~18ms after the forwarded click). The
+    // character-load zero-MessageBox proof is unaffected: boot + switch still suppress, and the quit
+    // confirm is not on the character-load path.
+    let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
+    let switch_active = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+        || SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0;
+    if product_autoload_enabled() && (!in_world || switch_active) {
         MSGBOX_LAST_ARG_RCX.store(a, Ordering::SeqCst);
         MSGBOX_LAST_ARG_RDX.store(b, Ordering::SeqCst);
         MSGBOX_LAST_ARG_R8.store(c, Ordering::SeqCst);
@@ -1255,6 +1270,60 @@ static SHOW_PROGRESS_TYPE_LOGGED: AtomicUsize = AtomicUsize::new(0);
 /// SetResult(Success) clean leaf yields) + the FD4Time vtable, skipping the delegate -> the job
 /// completes successfully, the flow advances, and ZERO modals are enqueued. One hook covers all the
 /// check steps. Offline-gated (no effect on an online Seamless Co-op check). bd er-effects-rs-0ye.
+/// Deterministic clean-title active-save-slot override for the System-Quit->Load-Profile switch.
+///
+/// The clean-title reload is the game's NATIVE most-recent Continue: the ShowProgressJob save-data
+/// delegate (the boot ProfileSummary read) derives+selects the MOST-RECENT save slot and writes it to
+/// the active-slot field GameMan+0xac0, and the reload deserializes 0xac0 immediately afterward. On a
+/// switch that makes it re-load the ORIGINAL character (proven 2026-07-02: picked slot 4 'Speed Bean'
+/// but ac0 re-derived to 5 -> loaded 'Patches'). Repointing ac0 to the picked slot on a per-tick poll
+/// LOSES the race -- the derivation and the load happen inside one game-task tick, so the tick-set
+/// landed after the load committed. Calling this RIGHT AFTER the delegate (before the load) wins it
+/// deterministically. Gated on a torn-down world (local player absent) so it only ever fires at the
+/// clean-title reload, never while the old world is live -- where it would misdirect the return-title
+/// quit-save to the picked slot. Save-safe: a pure active-slot write, no save-file mutation. See bd
+/// system-quit-ac0-fix-insufficient-cleantitle-load-is-native-mostrecent-2026-07-02.
+unsafe fn system_quit_repoint_active_slot_at_clean_title(source: &str) {
+    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        < SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+    {
+        return;
+    }
+    let picked = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
+    if picked == usize::MAX {
+        return;
+    }
+    let picked = picked as i32;
+    if picked < 0 {
+        return;
+    }
+    // CLEAN-title only: an OLD world still up means the return-title quit-save has not run yet, and
+    // ac0 selects the slot it writes -- repointing now would corrupt (overwrite) the picked slot.
+    if unsafe { PlayerIns::local_player_mut() }.is_ok() {
+        return;
+    }
+    let Ok(base) = game_module_base() else {
+        return;
+    };
+    let gm = game_man_ptr_or_null();
+    if gm == TITLE_OWNER_SCAN_START_ADDRESS {
+        return;
+    }
+    let ac0_before = unsafe { safe_read_i32(gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) }
+        .unwrap_or(OWN_STEPPER_SLOT_NONE);
+    if ac0_before == picked {
+        return;
+    }
+    let set_save_slot: unsafe extern "system" fn(i32) =
+        unsafe { std::mem::transmute(base + FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA) };
+    unsafe { set_save_slot(picked) };
+    let ac0_after = unsafe { safe_read_i32(gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET) }
+        .unwrap_or(OWN_STEPPER_SLOT_NONE);
+    append_autoload_debug(format_args!(
+        "system-quit-quickload: [{source}] DETERMINISTIC clean-title active-slot override ac0 {ac0_before}->{ac0_after} via set_save_slot({picked}) -- applied after the native most-recent derivation, before the reload deserialize, so the reload loads the PICKED slot"
+    ));
+}
+
 pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
     rcx: usize,
     rdx: usize,
@@ -1299,7 +1368,13 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
                     unsafe extern "system" fn(usize, usize, usize, usize) -> usize,
                 >(orig)
             };
-            return unsafe { call(rcx, rdx, r8, r9) };
+            let ret = unsafe { call(rcx, rdx, r8, r9) };
+            // The delegate above just selected the MOST-RECENT save slot into GameMan+0xac0. On a
+            // System-Quit->Load-Profile switch the reload deserializes 0xac0 next, so override it to
+            // the PICKED slot here -- after the native derivation, before the load. Deterministic, no
+            // tick-race. No-ops off the switch path / while the old world is up (see the helper).
+            unsafe { system_quit_repoint_active_slot_at_clean_title("show-progress-delegate") };
+            return ret;
         }
     }
     if result > null && unsafe { safe_read_usize(result) }.is_some() {
@@ -2140,8 +2215,8 @@ unsafe fn refresh_loading_bg_live_gx(base: usize) {
     }
     // Resolve the LIVE SRV from our built target-slot renderer: table[slot] -> +0xa8 (offscreen) -> +0x10
     // (TexResCap) -> +GX = the sampleable CSGxTexture the engine re-renders each frame. Validate the vtable
-    // so a torn/rebuilding slot can't bind a bad pointer.
-    let slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+    // so a torn/rebuilding slot can't bind a bad pointer. Slot = the loaded character (er-effects-rs-j3r).
+    let slot = portrait_loaded_slot();
     let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, slot)) }.unwrap_or(0);
     if !valid(r)
         || unsafe { safe_read_usize(r) }.unwrap_or(0)
@@ -2961,7 +3036,7 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
     // (offscreen; find_d3d12_resource reaches the content RT), dst = offscreen+0x10's CSGxTexture (the SRV
     // GFx samples). Render-thread context (same as the readback), bounded + fail-closed.
     {
-        let slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+        let slot = portrait_loaded_slot();
         let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, slot)) }.unwrap_or(0);
         if r != 0
             && r != null
@@ -3698,7 +3773,7 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
         let (mut ch_r, mut ch_off, mut ch_trc, mut ch_gx, mut bound_gx) =
             (0usize, 0usize, 0usize, 0usize, 0usize);
         if let Ok(b) = game_module_base() {
-            let slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+            let slot = portrait_loaded_slot();
             let r = unsafe { safe_read_usize(portrait_renderer_table_entry(b, slot)) }.unwrap_or(0);
             if r != 0 && r != null {
                 ch_r = r;
@@ -3783,6 +3858,9 @@ pub(crate) unsafe fn profile_lookat_phase_draw_tick(phase_index: usize, task_dat
     if PROFILE_LOOKAT_SELECTED_PHASE.load(Ordering::SeqCst) != phase_index {
         return;
     }
+    if IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES {
+        return;
+    }
     if let Ok(base) = game_module_base() {
         unsafe { profile_lookat_realtime_draw_tick(base, task_data) };
     }
@@ -3831,7 +3909,7 @@ pub(crate) unsafe extern "system" fn per_frame_push_hook(renderer: usize, frame:
                 if slot == usize::MAX
                     && renderer == LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst)
                 {
-                    let own = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+                    let own = portrait_loaded_slot();
                     if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&own) {
                         slot = own as usize;
                     }
@@ -4275,7 +4353,159 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     ));
 }
 
+/// The save slot whose portrait the loading-screen pipeline should build / capture / display / spare:
+/// the character the game ACTUALLY loaded (`GameMan.save_slot` = ac0), the single ground truth on a
+/// boot most-recent Continue AND on our switch deserialize. Falls back to the autoload hint
+/// `OWN_STEPPER_SLOT`, then 0, only pre-load when ac0 is not yet a valid slot. The raw
+/// `OWN_STEPPER_SLOT` is `-1` on a most-recent boot (title.rs:113 returns early without setting it) and
+/// collapsed to slot 0, so the pipeline built/captured slot 0's portrait for a non-slot-0 character
+/// (wrong on load 1) and captured nothing once its gate stopped matching (blank on load 2). Routing
+/// EVERY portrait site through this one loaded-character source is the er-effects-rs-j3r correlation fix.
+pub(crate) fn portrait_loaded_slot() -> i32 {
+    let ac0 = (unsafe { eldenring::cs::GameMan::instance() })
+        .map(|gm| er_save_loader::GameManSaveAccess::save_slot(gm))
+        .unwrap_or(OWN_STEPPER_SLOT_NONE);
+    if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&ac0) {
+        return ac0;
+    }
+    let own = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+    if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&own) {
+        return own;
+    }
+    0
+}
+
+/// Fail-fast CHARACTER-IDENTITY semaphore for the loading-screen portrait (er-effects-rs-j3r; user
+/// directive 2026-07-02: verify IN-GAME, from RAM identity -- NOT rendered pixels -- that the
+/// character our portrait code renders is the one the game actually loaded). Two INDEPENDENT sources:
+///   OUR side  = the ProfileSummary save RECORD of the slot our portrait targets (`render_target_slot`
+///               = `portrait_loaded_slot()`): its stored character NAME + saved MAP (record+0x30).
+///   GAME side = the LIVE loaded character: PlayerGameData NAME (`char_fingerprint`) + GameMan c30 map.
+/// The save-record table and the in-world character live in distinct memory, so a wrong-slot render (or
+/// a wrong-character load) makes them disagree -- NON-tautological even though our target derives from
+/// ac0 (a slot index): this compares the CHARACTER stored in that slot against who is actually resident.
+/// Determines "is it the expected slot" without any pixel readback (the user's constraint: pixels are
+/// too slow / the wrong tool). On a mismatch (a real character is loaded but its NAME/MAP != our target
+/// slot's record): record the oracle + a crash-log line and, on diagnostic runs, deliberately fault so
+/// the regression STOPS THE RUN EARLY. Gated on a real loaded character AND a real record, so pre-load
+/// transients and empty slots never fire.
+unsafe fn portrait_render_slot_semaphore(base: usize, render_target_slot: i32) {
+    // New-game / not-yet-resolved saved-map sentinel; excluded from the map check so a transient c30
+    // during the loading screen cannot false-fire.
+    const DEFAULT_MAP_C30: i32 = 0x0a01_0000;
+    // ProfileSummary record layout (bd native-full-save-read-slot-resolve-chain-observe-recipe-2026):
+    // records start at summary+0x18, stride 0x2a0; NAME at record+0, saved MAP at record+0x30.
+    const PROFILE_RECORD_BASE: usize = 0x18;
+    const PROFILE_RECORD_STRIDE: usize = 0x2a0;
+    const PROFILE_RECORD_MAP_OFFSET: usize = 0x30;
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+
+    // GAME side: require a REAL loaded character before asserting anything.
+    if !unsafe { char_fingerprint(base).0 } {
+        return; // no real character loaded yet -- pre-load transient.
+    }
+    let gdm = game_data_man_ptr_or_null();
+    if gdm == null {
+        return;
+    }
+    let pgd =
+        unsafe { safe_read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(null);
+    if pgd == null {
+        return;
+    }
+    let (live_name, live_len) = unsafe { read_utf16_name_units(pgd + PGD_NAME_9C_OFFSET) };
+    let gm = game_man_ptr_or_null();
+    let live_map = if gm != null {
+        unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }.unwrap_or(-1)
+    } else {
+        -1
+    };
+
+    // OUR side: the save-RECORD identity of the slot our portrait code targets.
+    if !(0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&render_target_slot) {
+        return;
+    }
+    let profile_summary =
+        unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(null);
+    if profile_summary == null {
+        return;
+    }
+    let rec =
+        profile_summary + PROFILE_RECORD_BASE + render_target_slot as usize * PROFILE_RECORD_STRIDE;
+    let (our_name, our_len) = unsafe { read_utf16_name_units(rec) };
+    if utf16_name_empty_like(&our_name, our_len) {
+        return; // our target slot stores no real character -- nothing meaningful to compare.
+    }
+    let our_map = unsafe { safe_read_i32(rec + PROFILE_RECORD_MAP_OFFSET) }.unwrap_or(-1);
+
+    // Compare RAM identities. Name is the character identity; the saved map is a second discriminator,
+    // checked only when BOTH are real resolved maps (so a default/transient c30 can't false-fire).
+    let name_match = our_len == live_len && our_name[..our_len] == live_name[..live_len];
+    let both_real_map =
+        our_map > 0 && our_map != DEFAULT_MAP_C30 && live_map > 0 && live_map != DEFAULT_MAP_C30;
+    let map_mismatch = both_real_map && our_map != live_map;
+    if name_match && !map_mismatch {
+        return; // our portrait's character == the loaded character (RAM identity match).
+    }
+    let cond = ((!name_match) as usize) | ((map_mismatch as usize) << 1);
+    PORTRAIT_RENDER_SEMAPHORE_STATE.store(
+        ((render_target_slot as u32 as usize) << 16)
+            | ((our_map as u32 as usize & 0xff) << 8)
+            | cond,
+        Ordering::SeqCst,
+    );
+    if PORTRAIT_RENDER_SEMAPHORE_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+        append_crash_log(format_args!(
+            "PORTRAIT-IDENTITY-SEMAPHORE FAIL: our portrait targets slot={render_target_slot} (record name_len={our_len} map=0x{our_map:x}) but the LOADED character is name_len={live_len} map=0x{live_map:x} -- name_match={name_match} map_mismatch={map_mismatch}. Our portrait is not the loaded character (er-effects-rs-j3r); deliberate fail-fast fault follows"
+        ));
+        append_autoload_debug(format_args!(
+            "PORTRAIT-IDENTITY-SEMAPHORE FAIL: target_slot={render_target_slot} record(name_len={our_len} map=0x{our_map:x}) vs loaded(name_len={live_len} map=0x{live_map:x}) name_match={name_match} map_mismatch={map_mismatch}"
+        ));
+    }
+    if crate::crashlog::crash_logger_enabled() {
+        // Deliberate null-page fault: crash_vectored_handler logs full context, returns
+        // EXCEPTION_CONTINUE_SEARCH, and the run terminates -- the fail-fast the user asked for.
+        unsafe {
+            core::ptr::write_volatile(PORTRAIT_RENDER_SEMAPHORE_FAULT_ADDR as *mut u8, 0u8);
+        }
+    }
+}
+
+/// ProfileSummary save-record layout (bd native-full-save-read-slot-resolve-chain-observe-recipe):
+/// per-slot records start at `summary+0x18`, stride `0x2a0`; character NAME at record+0.
+const PROFILE_SUMMARY_RECORD_BASE: usize = 0x18;
+const PROFILE_SUMMARY_RECORD_STRIDE: usize = 0x2a0;
+
+/// True if ProfileSummary slot `slot` holds a real character (non-empty saved name). Used to gate the
+/// human-driven in-world Load-Profile pick so activating an EMPTY slot never arms a switch (which
+/// would tear the world down to a clean title and then fail the fresh deserialize, stranding the game
+/// at a blank title). Reads the same save-record table the identity semaphore uses -- fault-guarded,
+/// returns false on any unreadable pointer so an empty/unknown slot is treated as "no character".
+unsafe fn profile_slot_has_character(slot: i32) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if !(0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
+        return false;
+    }
+    let gdm = game_data_man_ptr_or_null();
+    if gdm == null {
+        return false;
+    }
+    let profile_summary =
+        unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(null);
+    if profile_summary == null {
+        return false;
+    }
+    let rec = profile_summary
+        + PROFILE_SUMMARY_RECORD_BASE
+        + slot as usize * PROFILE_SUMMARY_RECORD_STRIDE;
+    let (name, len) = unsafe { read_utf16_name_units(rec) };
+    !utf16_name_empty_like(&name, len)
+}
+
 pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
+    if IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES {
+        return;
+    }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if base == 0 || base == null {
         return;
@@ -4361,14 +4591,14 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // save holds multiple characters (all 10 slots build models), and the slot-0 readback grabbed a
     // neighbouring slot's identical-size 1024 RT -> wrong face. Build + mark ONLY the autoload target slot
     // so the loaded character (Banon, slot 0) is the ONLY portrait model that exists -> no wrong-slot grab.
-    let target_slot = {
-        let s = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
-        if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&s) {
-            s
-        } else {
-            0
-        }
-    };
+    // CORRELATION FIX (er-effects-rs-j3r): render the slot the game ACTUALLY loaded (ac0), via the
+    // shared `portrait_loaded_slot()` source used by every portrait site (build/capture/spare).
+    let target_slot = portrait_loaded_slot();
+    // FAIL-FAST SEMAPHORE: assert the slot we're about to render IS the loaded character
+    // (er-effects-rs-j3r). With the correlation fix above, condition A (wrong-slot) is structurally
+    // satisfied and stands as a regression tripwire; condition B (null loaded-slot renderer) stays a
+    // live guard against the 3rd-open null-deref class.
+    unsafe { portrait_render_slot_semaphore(base, target_slot) };
     {
         let mark: unsafe extern "system" fn(usize, i32) -> u8 =
             unsafe { core::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
@@ -4529,14 +4759,7 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                 // a frame where its model is actually BUILT (+0x778 valid), so the teardown-spare hook can
                 // protect this exact renderer through Continue even though the menu cycles model_ins. The
                 // long menu dwell makes catching a built frame reliable.
-                let target = {
-                    let own = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
-                    if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&own) {
-                        own
-                    } else {
-                        0
-                    }
-                };
+                let target = portrait_loaded_slot();
                 if s == target
                     && PROFILE_SPARE_CANDIDATE.load(Ordering::SeqCst) == 0
                     && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
@@ -4602,7 +4825,7 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                 // made oracle_..._gx_nonblack a false success. Requiring !checker means we keep re-checking each
                 // dump cycle and latch only once a real shaded head has actually rendered into the offscreen
                 // (which needs the render-thread offscreen drive -- see portrait_render_drive). One-shot via swap.
-                if s == OWN_STEPPER_SLOT.load(Ordering::SeqCst)
+                if s == portrait_loaded_slot()
                     && nb
                     && !checker
                     && PROFILE_BAKE_RGBA_CAPTURED.swap(1, Ordering::SeqCst) == 0
@@ -4640,12 +4863,8 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
         && (product_autoload_enabled() || portrait_lookat_enabled())
     {
         if let Ok(base) = game_module_base() {
-            let slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
-            let slot = if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
-                slot
-            } else {
-                0
-            };
+            // The loaded character's slot (er-effects-rs-j3r) -- spare the renderer we actually render.
+            let slot = portrait_loaded_slot();
             // Prefer the PRE-RECORDED candidate (captured at the menu on a model-built frame -- robust to
             // the menu's model_ins cycling). Find its table slot and protect it. Fall back to reading
             // table[slot] + a model-built guard if no candidate was recorded.
@@ -4703,6 +4922,165 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
     if orig != null && orig != HOOK_ORIGINAL_UNSET {
         let f: unsafe extern "system" fn() = unsafe { std::mem::transmute(orig) };
         unsafe { f() };
+    }
+}
+
+/// Diagnostic + REPAIR detour on the native profile-portrait builder (`FUN_1409aa7d0` =
+/// `PROFILE_RENDERER_REFRESH_RVA`). The builder derefs `table[slot]+0x754` with NO null check for
+/// every slot whose profile record exists (Ghidra: `FUN_140261c30(summary,slot) != 0` gates the
+/// walk, the entry itself is never checked), and its 10-slot table setup is called from exactly ONE
+/// native site -- the TitleTopDialog constructor -- so our cloned in-world ProfileSelect reopens run
+/// it against whatever the last teardown left; the 3rd in-session open found the table fully empty
+/// and AV'd at `[null+0x754]` (er-effects-rs-j3r). Three layers, all fault-guarded + catch_unwind:
+///   1. DIAG: log the full table once per distinct degraded (mask, caller) pattern.
+///   2. REPAIR: a FULLY-empty table (the proven crash state) is rebuilt via the engine's own no-arg
+///      setup (`PROFILE_TABLE_BUILDER_RVA`; its internal teardown is a no-op on an all-null table),
+///      satisfying the native invariant exactly as the TitleTopDialog ctor would. Gated on
+///      `PROFILE_TABLE_WAS_POPULATED` (engine/ResMan up -- the setup AVs at boot title) and on
+///      fully-empty ONLY: a MIXED table is the intentional teardown-spare state during Continue
+///      loading and must not be rebuilt over.
+///   3. GUARD: if any slot is still null/invalid after the (possible) repair, SKIP chaining the
+///      original this call (fail-soft; the per-frame builder retries) instead of letting the native
+///      walk AV.
+pub(crate) unsafe extern "system" fn profile_select_table_diag_hook() {
+    let chain = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let Ok(base) = game_module_base() else {
+            return true;
+        };
+        let null = TITLE_OWNER_SCAN_START_ADDRESS;
+        let scan_table = |ptrs: &mut [usize; TITLE_PROFILE_SLOT_COUNT]| -> (u32, u32) {
+            let mut null_mask = 0u32;
+            let mut valid_mask = 0u32;
+            for s in 0..TITLE_PROFILE_SLOT_COUNT {
+                let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s as i32)) }
+                    .unwrap_or(0);
+                ptrs[s] = r;
+                let is_valid = r != 0
+                    && r != null
+                    && unsafe { safe_read_usize(r) }.unwrap_or(0)
+                        == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA;
+                if is_valid {
+                    valid_mask |= 1 << s;
+                } else {
+                    null_mask |= 1 << s;
+                }
+            }
+            (valid_mask, null_mask)
+        };
+        let mut ptrs = [0usize; TITLE_PROFILE_SLOT_COUNT];
+        let (valid_mask, mut null_mask) = scan_table(&mut ptrs);
+        // Degraded = ANY slot lost its renderer while the builder is about to run. A HEALTHY table
+        // is all 10 valid (native setup allocs all 10 unconditionally); any null is the crash-prone
+        // state, INCLUDING all-null (the fully-empty table that caused the 3rd-open crash -- the
+        // earlier "mixed only" check missed it). Log per distinct (mask, caller) so it never spams.
+        let degraded = null_mask != 0;
+        let caller_rva = crate::crashlog::trace_first_game_caller_rva();
+        let key =
+            ((caller_rva & 0xffffff) << 20) | ((valid_mask as usize) << 10) | null_mask as usize;
+        if degraded && PROFILE_SELECT_TABLE_DIAG_LAST.swap(key, Ordering::SeqCst) != key {
+            append_crash_log(format_args!(
+                "PROFILESELECT-TABLE-DIAG: degraded profile-renderer table before native builder (er-effects-rs-j3r) caller_rva=0x{caller_rva:x} valid_mask=0x{valid_mask:x} null_mask=0x{null_mask:x} entries=[0x{:x},0x{:x},0x{:x},0x{:x},0x{:x},0x{:x},0x{:x},0x{:x},0x{:x},0x{:x}]",
+                ptrs[0], ptrs[1], ptrs[2], ptrs[3], ptrs[4], ptrs[5], ptrs[6], ptrs[7], ptrs[8],
+                ptrs[9]
+            ));
+        } else if !degraded {
+            PROFILE_SELECT_TABLE_DIAG_LAST.store(0, Ordering::SeqCst);
+            // A fully-valid table at builder entry proves the engine built renderers successfully --
+            // the same "engine/ResMan up" evidence the loading-screen path latches; latching it here
+            // too arms the repair even when the loading-portrait feature is disabled.
+            PROFILE_TABLE_WAS_POPULATED.store(1, Ordering::SeqCst);
+        }
+        if null_mask == PROFILE_TABLE_ALL_SLOTS_MASK
+            && PROFILE_TABLE_WAS_POPULATED.load(Ordering::SeqCst) != 0
+        {
+            let build: unsafe extern "system" fn() =
+                unsafe { core::mem::transmute(base + PROFILE_TABLE_BUILDER_RVA) };
+            unsafe { build() };
+            let n = PROFILE_SELECT_TABLE_REPAIR_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+            let (revalid_mask, renull_mask) = scan_table(&mut ptrs);
+            null_mask = renull_mask;
+            append_crash_log(format_args!(
+                "PROFILESELECT-TABLE-REPAIR #{n}: fully-empty renderer table at native builder entry -> re-ran native table setup 0x{:x}; post-repair valid_mask=0x{revalid_mask:x} null_mask=0x{renull_mask:x} (er-effects-rs-j3r)",
+                base + PROFILE_TABLE_BUILDER_RVA
+            ));
+            append_autoload_debug(format_args!(
+                "profileselect-table-repair #{n}: rebuilt empty 10-slot renderer table via native setup before the native builder walked it; post-repair valid_mask=0x{revalid_mask:x} (er-effects-rs-j3r)"
+            ));
+        }
+        if null_mask != 0 {
+            let n = PROFILE_SELECT_TABLE_GUARD_SKIP_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+            let skip_key = ((caller_rva & 0xffffff) << 10) | null_mask as usize;
+            if PROFILE_SELECT_TABLE_GUARD_SKIP_LAST.swap(skip_key, Ordering::SeqCst) != skip_key {
+                append_crash_log(format_args!(
+                    "PROFILESELECT-TABLE-GUARD SKIP #{n}: null/invalid renderer slots remain (null_mask=0x{null_mask:x}) -- skipping the native builder this call so it cannot AV at [null+0x754] (er-effects-rs-j3r)"
+                ));
+            }
+            return false;
+        }
+        true
+    }))
+    // A panicked diagnostic keeps the pre-hook behavior: chain the original.
+    .unwrap_or(true);
+    if !chain {
+        return;
+    }
+    let orig = PROFILE_SELECT_TABLE_DIAG_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return;
+    }
+    let f: unsafe extern "system" fn() = unsafe { std::mem::transmute(orig) };
+    unsafe { f() };
+}
+
+pub(crate) fn install_profile_select_table_diag_hook() {
+    if PROFILE_SELECT_TABLE_DIAG_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "profileselect-table-diag: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(target) = game_rva(PROFILE_RENDERER_REFRESH_RVA as u32) else {
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            target as *mut c_void,
+            profile_select_table_diag_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            PROFILE_SELECT_TABLE_DIAG_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if unsafe { hook.queue_enable() }.is_err() {
+                append_autoload_debug(format_args!(
+                    "profileselect-table-diag: queue_enable failed for 0x{target:x}"
+                ));
+                return;
+            }
+            std::mem::forget(hook);
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "profileselect-table-diag: MhHook::new failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => {
+            PROFILE_SELECT_TABLE_DIAG_INSTALLED.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "profileselect-table-diag: hooked native profile builder 0x{target:x} (read-only table-state trace)"
+            ));
+        }
+        status => append_autoload_debug(format_args!(
+            "profileselect-table-diag: MH_ApplyQueued failed: {status:?}"
+        )),
     }
 }
 
@@ -6347,6 +6725,2908 @@ pub(crate) fn install_title_native_menu_visual_render_suppression_hook() {
         }
         Err(status) => append_autoload_debug(format_args!(
             "title-cover-part-a: MhHook::new FadeIn helper failed: {status:?}"
+        )),
+    }
+}
+
+#[repr(C, align(8))]
+struct SystemQuitMenuHelpLabelScratch {
+    bytes: [u8; MENU_HELP_LABEL_SIZE],
+}
+
+#[repr(C, align(8))]
+struct SystemQuitRootProxyScratch {
+    bytes: [u8; MENU_WINDOW_ROOT_PROXY_SCRATCH_SIZE],
+}
+
+fn system_quit_list_slot_addr(list: usize, slot: usize) -> usize {
+    list.wrapping_add((0usize.wrapping_sub(list)) & 7)
+        .wrapping_add(slot * std::mem::size_of::<usize>())
+}
+
+unsafe fn system_quit_menu_window_set_visible_and_flags(
+    base: usize,
+    window: usize,
+    visible: bool,
+    source: &str,
+) -> bool {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const HEAP_LO: usize = 0x10000;
+    if window < HEAP_LO {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: {source} top-window visibility skipped -- window=0x{window:x} not heap-like"
+        ));
+        return false;
+    }
+    let window_vt = unsafe { safe_read_usize(window) }.unwrap_or(NULL);
+    if window_vt < HEAP_LO {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: {source} top-window visibility skipped -- window=0x{window:x} vt=0x{window_vt:x} invalid"
+        ));
+        return false;
+    }
+    let mut scratch = SystemQuitRootProxyScratch {
+        bytes: [0; MENU_WINDOW_ROOT_PROXY_SCRATCH_SIZE],
+    };
+    let Ok(root_proxy_ctor_addr) = game_rva(MENU_WINDOW_ROOT_PROXY_CTOR_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: {source} top-window visibility skipped -- failed to resolve root proxy ctor rva 0x{MENU_WINDOW_ROOT_PROXY_CTOR_RVA:x}"
+        ));
+        return false;
+    };
+    let Ok(set_visible_addr) = game_rva(TITLE_PRESS_START_SET_VISIBLE_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: {source} top-window visibility skipped -- failed to resolve SetVisible rva 0x{TITLE_PRESS_START_SET_VISIBLE_RVA:x}"
+        ));
+        return false;
+    };
+    let Ok(dtor_addr) = game_rva(MENU_WINDOW_ROOT_PROXY_SCRATCH_DTOR_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: {source} top-window visibility skipped -- failed to resolve root proxy scratch dtor rva 0x{MENU_WINDOW_ROOT_PROXY_SCRATCH_DTOR_RVA:x}"
+        ));
+        return false;
+    };
+    let root_proxy_ctor: unsafe extern "system" fn(usize, usize) -> usize =
+        unsafe { std::mem::transmute(root_proxy_ctor_addr) };
+    let set_visible: unsafe extern "system" fn(usize, u8) =
+        unsafe { std::mem::transmute(set_visible_addr) };
+    let dtor: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(dtor_addr) };
+    let scratch_ptr = scratch.bytes.as_mut_ptr() as usize;
+    let root_proxy = unsafe { root_proxy_ctor(window, scratch_ptr) };
+    if root_proxy != scratch_ptr {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: {source} top-window root-proxy ctor returned unexpected 0x{root_proxy:x} scratch=0x{scratch_ptr:x}; still using returned proxy"
+        ));
+    }
+    unsafe { set_visible(root_proxy, u8::from(visible)) };
+    unsafe { dtor(scratch_ptr + 0x28) };
+
+    let menu_id = unsafe { safe_read_u16(window + 0x180) }.unwrap_or(u16::MAX);
+    let cs_menu_man = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(NULL);
+    let mut flags_before = NULL;
+    let mut flags_after = NULL;
+    if menu_id < 0x47 && cs_menu_man >= HEAP_LO {
+        let flags_addr = cs_menu_man + 0x90 + menu_id as usize;
+        if let Some(flags) = unsafe { safe_read_u8(flags_addr) } {
+            flags_before = flags as usize;
+            let new_flags = if visible {
+                flags | TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK
+            } else {
+                flags & 1
+            };
+            unsafe { (flags_addr as *mut u8).write_volatile(new_flags) };
+            flags_after = new_flags as usize;
+        }
+    }
+    append_autoload_debug(format_args!(
+        "system-quit-dup: {source} top-window visibility window=0x{window:x} vt=0x{window_vt:x} visible={visible} root_proxy=0x{root_proxy:x} menu_id=0x{menu_id:x} flags=0x{flags_before:x}->0x{flags_after:x}"
+    ));
+    true
+}
+
+fn system_quit_read_wide_resource_name(ptr: usize) -> String {
+    const MAX_UNITS: usize = 64;
+    if ptr < 0x10000 {
+        return String::new();
+    }
+    let mut units = Vec::new();
+    for idx in 0..MAX_UNITS {
+        let unit = unsafe { safe_read_u16(ptr + idx * 2) }.unwrap_or(0);
+        if unit == 0 {
+            break;
+        }
+        units.push(unit);
+    }
+    String::from_utf16_lossy(&units)
+}
+
+unsafe fn system_quit_hide_real_system_windows(base: usize, source: &str) {
+    let top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
+    let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
+    let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+    if profile == 0 || SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    let hid_top = if top != 0 && top != profile {
+        unsafe { system_quit_menu_window_set_visible_and_flags(base, top, false, source) }
+    } else {
+        false
+    };
+    let hid_option = if option != 0 && option != profile && option != top {
+        unsafe { system_quit_menu_window_set_visible_and_flags(base, option, false, source) }
+    } else {
+        false
+    };
+    if hid_top || hid_option {
+        SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.store(1, Ordering::SeqCst);
+        SYSTEM_QUIT_HIDE_REAL_WINDOWS_COUNT.fetch_add(1, Ordering::SeqCst);
+    }
+    append_autoload_debug(format_args!(
+        "system-quit-dup: real-system-window hide source={source} top=0x{top:x} option=0x{option:x} profile=0x{profile:x} hid_top={hid_top} hid_option={hid_option}"
+    ));
+}
+
+unsafe fn system_quit_reset_profile_select_state(source: &str) {
+    SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_TOP_HIDE_TOP_WINDOW.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_TOP_HIDE_PROFILE_WINDOW.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_TOP_HIDE_LIST.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_TOP_HIDE_TOP_MENU_ID.store(usize::MAX, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-dup: reset ProfileSelect hide state source={source}"
+    ));
+}
+
+pub(crate) unsafe fn system_quit_submit_direct_return_title_chain(
+    base: usize,
+    system_dialog: usize,
+    source: &str,
+) -> bool {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const HEAP_LO: usize = 0x10000;
+    if SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst) != 0 {
+        return true;
+    }
+    if system_dialog < HEAP_LO {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: direct return-title chain abort source={source} -- system_dialog=0x{system_dialog:x} not heap-like"
+        ));
+        return false;
+    }
+    let queue = system_dialog + 0x10;
+    let list = system_dialog + 0x50;
+    SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_LAST_DIALOG.store(system_dialog, Ordering::SeqCst);
+    let Ok(ready_addr) = game_rva(MENU_JOB_QUEUE_READY_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: direct return-title chain abort source={source} -- queue-ready rva 0x{MENU_JOB_QUEUE_READY_RVA:x} unresolved"
+        ));
+        return false;
+    };
+    let ready_fn: unsafe extern "system" fn(usize) -> u8 =
+        unsafe { std::mem::transmute(ready_addr) };
+    let queue_ready = unsafe { ready_fn(queue) } != 0;
+    SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_LAST_QUEUE_READY
+        .store(queue_ready as usize, Ordering::SeqCst);
+    if !queue_ready {
+        let waits = SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_READY_BLOCK_COUNT
+            .fetch_add(1, Ordering::SeqCst)
+            + 1;
+        if waits <= 3 || waits % 60 == 0 {
+            let head = unsafe { safe_read_usize(queue) }.unwrap_or(NULL);
+            let pending6 = unsafe { safe_read_usize(queue + 0x30) }.unwrap_or(NULL);
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: direct return-title chain WAIT source={source} waits={waits} queue not ready dialog=0x{system_dialog:x} queue=0x{queue:x} head=0x{head:x} field6=0x{pending6:x}"
+            ));
+        }
+        return false;
+    }
+    // Fire the NATIVE return-title REQUEST (FUN_14067a490, live 0x67a3a0) -- the missing piece. It sets
+    // GameMan.saveRequested = true and GameMan+0xbc4 = 1 (== GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY).
+    // WITHOUT it, bc4 stays 0, so (a) the game never recognizes a return-to-title is pending and never
+    // saves+tears down the world, and (b) our final functor (title.rs, gated on bc4==READY) never fires,
+    // leaving the submitted chain job orphaned in a queue that stops being pumped once the menus close.
+    // Observed 2026-07-01: OK -> menus closed but still in-world, same char, functor_call_count=0,
+    // bc4=0, native_quit_action_count=0. The native Quit-Game does this request AND the build+submit
+    // below; we were doing only the build+submit. It is a plain GameMan field write (+ FUN_14080dd00),
+    // safe to call from this menu-pump-owned path. Fire once. See bd
+    // system-quit-loadjob-success-commits-phantom-load-2026-07-01.
+    if SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.load(Ordering::SeqCst) == 0 {
+        match game_rva(SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA) {
+            Ok(req_addr) => {
+                let request_fn: unsafe extern "system" fn() =
+                    unsafe { std::mem::transmute(req_addr) };
+                unsafe { request_fn() };
+                SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.fetch_add(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: native return-title REQUEST fired 0x{req_addr:x} source={source} -- set saveRequested + bc4=1 so the world saves+tears down and the final functor can fire"
+                ));
+            }
+            Err(_) => append_autoload_debug(format_args!(
+                "system-quit-quickload: return-title request rva 0x{SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA:x} unresolved source={source}"
+            )),
+        }
+    }
+    let Ok(builder_addr) = game_rva(SYSTEM_QUIT_RETURN_TITLE_CHAIN_BUILDER_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: direct return-title chain abort source={source} -- builder rva 0x{SYSTEM_QUIT_RETURN_TITLE_CHAIN_BUILDER_RVA:x} unresolved"
+        ));
+        return false;
+    };
+    let Ok(submit_addr) = game_rva(MENU_JOB_SUBMIT_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: direct return-title chain abort source={source} -- submit rva 0x{MENU_JOB_SUBMIT_RVA:x} unresolved"
+        ));
+        return false;
+    };
+    let builder: unsafe extern "system" fn(usize, usize) -> usize =
+        unsafe { std::mem::transmute(builder_addr) };
+    let submit: unsafe extern "system" fn(usize, usize) =
+        unsafe { std::mem::transmute(submit_addr) };
+    let mut job_slot: usize = 0;
+    let job_slot_ptr = (&raw mut job_slot) as usize;
+    unsafe { builder(job_slot_ptr, list) };
+    let job = job_slot;
+    if job < HEAP_LO {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: direct return-title chain builder produced no plausible job source={source} dialog=0x{system_dialog:x} list=0x{list:x} job=0x{job:x}"
+        ));
+        return false;
+    }
+    SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.fetch_add(1, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-quickload: direct return-title chain SUBMIT source={source} builder=0x{builder_addr:x} submit=0x{submit_addr:x} dialog=0x{system_dialog:x} queue=0x{queue:x} list=0x{list:x} job=0x{job:x}; waiting for real title menu rebuild before Continue fallback"
+    ));
+    unsafe { submit(queue, job_slot_ptr) };
+    true
+}
+
+unsafe fn system_quit_restore_real_system_windows(base: usize, source: &str) {
+    if SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) == 0 {
+        unsafe { system_quit_reset_profile_select_state(source) };
+        return;
+    }
+    let top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
+    let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
+    let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    if phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
+        let system_dialog = SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.load(Ordering::SeqCst);
+        let submitted =
+            unsafe { system_quit_submit_direct_return_title_chain(base, system_dialog, source) };
+        SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-dup: skip restore real windows after quickload handoff source={source} phase={phase} profile=0x{profile:x} top=0x{top:x} option=0x{option:x} direct_chain_submitted={submitted}; leaving old System UI hidden during native transition"
+        ));
+        if submitted {
+            SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.store(0, Ordering::SeqCst);
+            unsafe { system_quit_reset_profile_select_state(source) };
+        }
+        return;
+    }
+    let restored_top = if top != 0 {
+        unsafe { system_quit_menu_window_set_visible_and_flags(base, top, true, source) }
+    } else {
+        false
+    };
+    let restored_option = if option != 0 && option != top {
+        unsafe { system_quit_menu_window_set_visible_and_flags(base, option, true, source) }
+    } else {
+        false
+    };
+    append_autoload_debug(format_args!(
+        "system-quit-dup: restore real windows source={source} profile=0x{profile:x} top=0x{top:x} option=0x{option:x} restored_top={restored_top} restored_option={restored_option}"
+    ));
+    unsafe { system_quit_reset_profile_select_state(source) };
+    if restored_top || restored_option {
+        SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+pub(crate) unsafe fn system_quit_profile_select_top_menu_tick() {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    let hidden = SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0;
+    let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+    if !hidden {
+        return;
+    }
+    if profile == 0 {
+        // ProfileSelect has closed. Do NOT submit the return-title chain from this game-task tick:
+        // that runs concurrently with the game's own menu/Scaleform pump and corrupts it (observed:
+        // non-deterministic execute-fault jumping into Scaleform string data). The close is done in
+        // menu-pump ownership by the native confirm transition (dialog+0x1e8=Success pops the
+        // ProfileSelect window job) and the return-title submit is done in menu-pump ownership from
+        // the MenuWindowJob::Run hook. See bd system-quit-return-title-scaleform-race-2026-07-01.
+        return;
+    }
+    let list = SYSTEM_QUIT_TOP_HIDE_LIST.load(Ordering::SeqCst);
+    if list == 0 {
+        return;
+    }
+    let count = unsafe { safe_read_usize(list + 0x48) }.unwrap_or(0);
+    let still_present = (0..count.min(8)).any(|idx| {
+        unsafe { safe_read_usize(system_quit_list_slot_addr(list, idx)) }.unwrap_or(NULL) == profile
+    });
+    if still_present {
+        return;
+    }
+    if let Ok(base) = game_module_base() {
+        unsafe { system_quit_restore_real_system_windows(base, "restore-real-profile-left-list") };
+    } else {
+        unsafe { system_quit_reset_profile_select_state("restore-real-profile-left-list-no-base") };
+    }
+}
+
+pub(crate) unsafe extern "system" fn system_quit_menu_window_job_run_hook(
+    job: usize,
+    load_params: usize,
+    fd4_time: usize,
+    menu_man: usize,
+) -> usize {
+    let orig = SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return load_params;
+    }
+    let filename_ptr = unsafe { safe_read_usize(job + 0x60) }.unwrap_or(0);
+    let filename = system_quit_read_wide_resource_name(filename_ptr);
+    let original: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    let ret = unsafe { original(job, load_params, fd4_time, menu_man) };
+    if matches!(
+        filename.as_str(),
+        "02_000_IngameTop"
+            | "02_040_OptionSetting"
+            | "02_041_OptionSetting_Trial"
+            | "05_010_ProfileSelect"
+    ) {
+        let owner = unsafe { safe_read_usize(job + 0x130) }.unwrap_or(0);
+        let owner_vt = if owner != 0 {
+            unsafe { safe_read_usize(owner) }.unwrap_or(0)
+        } else {
+            0
+        };
+        let owner_id = if owner != 0 {
+            unsafe { safe_read_u16(owner + 0x180) }.unwrap_or(u16::MAX)
+        } else {
+            u16::MAX
+        };
+        let list = unsafe { safe_read_usize(job + 0x50) }.unwrap_or(0);
+        let prev = match filename.as_str() {
+            "02_000_IngameTop" => SYSTEM_QUIT_INGAME_TOP_WINDOW.swap(owner, Ordering::SeqCst),
+            "02_040_OptionSetting" | "02_041_OptionSetting_Trial" => {
+                SYSTEM_QUIT_OPTION_SETTING_WINDOW.swap(owner, Ordering::SeqCst)
+            }
+            "05_010_ProfileSelect" => {
+                SYSTEM_QUIT_PROFILE_SELECT_WINDOW.swap(owner, Ordering::SeqCst)
+            }
+            _ => 0,
+        };
+        let log_idx = SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_LOG_COUNT.fetch_add(1, Ordering::SeqCst);
+        if log_idx < 64 || filename == "05_010_ProfileSelect" {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: MenuWindowJob::Run resource='{filename}' job=0x{job:x} owner=0x{owner:x} owner_vt=0x{owner_vt:x} owner_id=0x{owner_id:x} prev=0x{prev:x} list_field=0x{list:x} ret=0x{ret:x}"
+            ));
+        }
+        if filename == "05_010_ProfileSelect" {
+            if let Ok(base) = game_module_base() {
+                if owner == 0 {
+                    unsafe {
+                        system_quit_restore_real_system_windows(
+                            base,
+                            "restore-real-profile-owner-cleared",
+                        )
+                    };
+                } else {
+                    unsafe {
+                        system_quit_hide_real_system_windows(
+                            base,
+                            "hide-real-after-profile-select-run",
+                        )
+                    };
+                }
+            }
+        }
+    }
+    // ABORT the half-started in-world load transition. Pressing OK on ProfileSelect natively arms
+    // GameMan.saveState/b80=2 (in-world load via deserialize 0x67b290) BEFORE any hook we control; our
+    // load guard skips the deserialize so nothing loads, but the game still advances to saveState=3
+    // ("loading") and STICKS at a loading screen -- and that stuck load blocks the game/menu pump from
+    // running the queued return-title chain (observed: functor_call_count=0, player still present).
+    // While the FIRST-world System-Quit transition is active AND the old world is still up (local
+    // player present), force saveState back to idle (0) so the load machine stops and the return-title
+    // can run. RANGE-gated on [CONFIRMED, AUTOLOAD_HANDOFF) -- NOT `!= IDLE`: the clean-title reload runs
+    // at AUTOLOAD_HANDOFF, and its OWN deserialize allocates a NEW PlayerIns so `local_player_mut()`
+    // flips back to Ok (world_up=true). A `!= IDLE` gate would REOPEN here and zero the RELOAD's own
+    // saveState=2/3 mid-deserialize, yanking the load out from under a half-built FE/player -> the native
+    // GFx text setter then dispatches the uninitialized object (the +39672ms garbage-vtable AV on the
+    // 2nd in-process load). Excluding AUTOLOAD_HANDOFF leaves the reload's load untouched, exactly like a
+    // boot autoload (phase IDLE, this branch never fires). Plain field write (not a menu/Scaleform call)
+    // -> safe from the menu pump. See bd system-quit-load-profile-NOCRASH-milestone-2026-07-01.
+    let sq_abort_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    if (SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
+        .contains(&sq_abort_phase)
+        && unsafe { PlayerIns::local_player_mut() }.is_ok()
+    {
+        let gm = game_man_ptr_or_null();
+        if gm != 0 && gm != TITLE_OWNER_SCAN_START_ADDRESS {
+            let ss_ptr = (gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *mut i32;
+            if let Some(ss) = unsafe { safe_read_i32(gm + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) } {
+                if ss == 2 || ss == 3 {
+                    unsafe { *ss_ptr = 0 };
+                    let n = SYSTEM_QUIT_INWORLD_LOAD_ABORT_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                    if n <= 8 || n % 120 == 0 {
+                        append_autoload_debug(format_args!(
+                            "system-quit-quickload: aborted stuck in-world load transition #{n} saveState={ss}->0 (old world still up) so return-title chain can run"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    // MENU-PUMP-OWNED return-title submit. This hook IS the game's menu pump executing a
+    // MenuWindowJob, so submitting the return-title chain from here (rather than from the concurrent
+    // game-task tick) runs it in the menu pump's own frame and eliminates the Scaleform race that
+    // produced the non-deterministic execute-fault crashes. Fire once ProfileSelect has closed (its
+    // window cleared) during a return-title transition; the submit self-gates on queue-ready and
+    // one-shots via the submit count. See bd system-quit-return-title-scaleform-race-2026-07-01.
+    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+        && SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) == 0
+        && SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst) == 0
+    {
+        if let Ok(base) = game_module_base() {
+            let system_dialog =
+                SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.load(Ordering::SeqCst);
+            if system_dialog != 0 && system_dialog != TITLE_OWNER_SCAN_START_ADDRESS {
+                let _ = unsafe {
+                    system_quit_submit_direct_return_title_chain(
+                        base,
+                        system_dialog,
+                        "menu-pump-run-hook",
+                    )
+                };
+            }
+        }
+    }
+    ret
+}
+
+unsafe fn system_quit_open_profile_load_dialog(action_obj: usize) -> bool {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const HEAP_LO: usize = 0x10000;
+    let Ok(base) = game_module_base() else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: profile-load route abort -- module base unavailable"
+        ));
+        return false;
+    };
+    let system_dialog = unsafe { safe_read_usize(action_obj + 0x8) }.unwrap_or(NULL);
+    if system_dialog < HEAP_LO {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: profile-load route abort -- action=0x{action_obj:x} dialog=0x{system_dialog:x} is not heap-like"
+        ));
+        return false;
+    }
+    let scene_proxy = system_dialog + SYSTEM_QUIT_DIALOG_SCENE_PROXY_1200_OFFSET;
+    let scene_proxy_vt = unsafe { safe_read_usize(scene_proxy) }.unwrap_or(NULL);
+    let want_scene_proxy_vt = base + SCENE_OBJ_PROXY_VTABLE_RVA;
+    if scene_proxy_vt != want_scene_proxy_vt {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: profile-load route abort -- dialog=0x{system_dialog:x} scene_proxy=dialog+0x{SYSTEM_QUIT_DIALOG_SCENE_PROXY_1200_OFFSET:x}=0x{scene_proxy:x} vt=0x{scene_proxy_vt:x} want=0x{want_scene_proxy_vt:x}"
+        ));
+        return false;
+    }
+    // Native title/menu route callers pass `owner + 0x50` as the MenuWindowJob's
+    // field2_0x50 list argument. MenuWindowJob::Run later appends the loaded
+    // owning MenuWindow to this DLFixedVector via FUN_140733ff0. Passing the
+    // SceneObjProxy backref here is wrong: it lets the resource load start, then
+    // asserts in DLFixedVector.inl line 0x296 when Run appends to a full/wrong
+    // object.
+    let menu_window_list = system_dialog + 0x50;
+    let menu_window_list_count = unsafe { safe_read_usize(menu_window_list + 0x48) }.unwrap_or(!0);
+    if menu_window_list_count >= 8 {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: profile-load route abort -- candidate menu_window_list=dialog+0x50=0x{menu_window_list:x} count@+0x48={menu_window_list_count} would overflow DLFixedVector<8>"
+        ));
+        return false;
+    }
+    let Ok(wrapper_addr) = game_rva(PROFILE_SELECT_WRAPPER_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: profile-load route abort -- failed to resolve ProfileSelect wrapper rva 0x{PROFILE_SELECT_WRAPPER_RVA:x}"
+        ));
+        return false;
+    };
+    let Ok(submit_addr) = game_rva(MENU_JOB_SUBMIT_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: profile-load route abort -- failed to resolve menu-job submit rva 0x{MENU_JOB_SUBMIT_RVA:x}"
+        ));
+        return false;
+    };
+    let job_slot = &SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT as *const AtomicUsize as usize;
+    SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT.store(NULL, Ordering::SeqCst);
+    let wrapper: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(wrapper_addr) };
+    append_autoload_debug(format_args!(
+        "system-quit-dup: profile-load route FIRE 05_010_ProfileSelect wrapper 0x{wrapper_addr:x}(rcx=job_slot=0x{job_slot:x}, rdx=menu_window_list=dialog+0x50=0x{menu_window_list:x} count={menu_window_list_count}, r8=scene_proxy=0x{scene_proxy:x}) from system_dialog=0x{system_dialog:x}"
+    ));
+    let ret = unsafe { wrapper(job_slot, menu_window_list, scene_proxy) };
+    let job = SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT.load(Ordering::SeqCst);
+    let job_vt = if job >= HEAP_LO {
+        unsafe { safe_read_usize(job) }.unwrap_or(NULL)
+    } else {
+        NULL
+    };
+    if job < HEAP_LO {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: profile-load route 05_010 wrapper returned=0x{ret:x} job_slot=0x{job_slot:x} job=0x{job:x} job_vt=0x{job_vt:x}; no job to submit"
+        ));
+        return false;
+    }
+    let submit: unsafe extern "system" fn(usize, usize) =
+        unsafe { std::mem::transmute(submit_addr) };
+    let submit_queue = system_dialog + 0x10;
+    SYSTEM_QUIT_TOP_HIDE_ARMED_LIST.store(menu_window_list, Ordering::SeqCst);
+    SYSTEM_QUIT_TOP_HIDE_ARMED_DIALOG.store(system_dialog, Ordering::SeqCst);
+    SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.store(system_dialog, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-dup: profile-load route SUBMIT job=0x{job:x} job_vt=0x{job_vt:x} via 0x{submit_addr:x}(queue=dialog+0x10=0x{submit_queue:x}, job_slot=0x{job_slot:x}); armed ProfileSelect list observer=0x{menu_window_list:x} -- no slot activation/no load"
+    ));
+    unsafe { submit(submit_queue, job_slot) };
+    let job_after_submit = SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT.load(Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-dup: profile-load route submitted 05_010 wrapper job; job_slot_after=0x{job_after_submit:x}"
+    ));
+    true
+}
+
+pub(crate) unsafe extern "system" fn system_quit_menu_window_list_push_hook(
+    list: usize,
+    window: usize,
+) -> u8 {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const HEAP_LO: usize = 0x10000;
+    let orig = SYSTEM_QUIT_WINDOW_LIST_PUSH_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: MenuWindow list push trampoline unset for list=0x{list:x} window=0x{window:x} -- fail-closed return 0"
+        ));
+        return 0;
+    }
+    let original: unsafe extern "system" fn(usize, usize) -> u8 =
+        unsafe { std::mem::transmute(orig) };
+    let ret = unsafe { original(list, window) };
+    let armed_list = SYSTEM_QUIT_TOP_HIDE_ARMED_LIST.load(Ordering::SeqCst);
+    let system_dialog = SYSTEM_QUIT_TOP_HIDE_ARMED_DIALOG.load(Ordering::SeqCst);
+    if armed_list == 0 || armed_list != list || system_dialog == 0 {
+        return ret;
+    }
+    SYSTEM_QUIT_TOP_HIDE_ARMED_LIST.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_TOP_HIDE_ARMED_DIALOG.store(0, Ordering::SeqCst);
+    let count = unsafe { safe_read_usize(list + 0x48) }.unwrap_or(0);
+    let slot0 = unsafe { safe_read_usize(system_quit_list_slot_addr(list, 0)) }.unwrap_or(NULL);
+    let slot1 = if count > 1 {
+        unsafe { safe_read_usize(system_quit_list_slot_addr(list, 1)) }.unwrap_or(NULL)
+    } else {
+        NULL
+    };
+    let top_window = slot0;
+    let top_vt = if top_window >= HEAP_LO {
+        unsafe { safe_read_usize(top_window) }.unwrap_or(NULL)
+    } else {
+        NULL
+    };
+    let top_id = if top_window >= HEAP_LO {
+        unsafe { safe_read_u16(top_window + 0x180) }.unwrap_or(u16::MAX)
+    } else {
+        u16::MAX
+    };
+    append_autoload_debug(format_args!(
+        "system-quit-dup: ProfileSelect append observed list=0x{list:x} dialog=0x{system_dialog:x} count={count} slot0/top=0x{slot0:x} top_vt=0x{top_vt:x} top_id=0x{top_id:x} slot1=0x{slot1:x} appended_window=0x{window:x} ret={ret}"
+    ));
+    SYSTEM_QUIT_TOP_HIDE_PROFILE_WINDOW.store(window, Ordering::SeqCst);
+    SYSTEM_QUIT_TOP_HIDE_LIST.store(list, Ordering::SeqCst);
+    SYSTEM_QUIT_TOP_HIDE_TOP_MENU_ID.store(top_id as usize, Ordering::SeqCst);
+    ret
+}
+
+pub(crate) unsafe extern "system" fn system_quit_noop_desktop_action_hook(
+    action_obj: usize,
+) -> usize {
+    let recorded_action = SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
+    if action_obj != 0 && action_obj == recorded_action {
+        let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+        if phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: cloned quick-load action re-entry ignored action=0x{action_obj:x} phase={phase}; native handoff already armed"
+            ));
+            return 0;
+        }
+        SYSTEM_QUIT_NOOP_SELECTION_COUNT.fetch_add(1, Ordering::SeqCst);
+        let opened = unsafe { system_quit_open_profile_load_dialog(action_obj) };
+        append_autoload_debug(format_args!(
+            "system-quit-dup: cloned quick-load action selected action=0x{action_obj:x} opened={opened}; suppressing native Quit Game row action until ProfileSelect confirms slot"
+        ));
+        return 0;
+    }
+    let orig = SYSTEM_QUIT_NOOP_ACTION_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: Quit Game action trampoline is unset for action=0x{action_obj:x} -- fail-open return 0"
+        ));
+        return 0;
+    }
+    let original: unsafe extern "system" fn(usize) -> usize = unsafe { std::mem::transmute(orig) };
+    unsafe { original(action_obj) }
+}
+
+pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hook(
+    dialog: usize,
+    label: usize,
+    action_fn: usize,
+    enabled_fn: usize,
+    keyguide_fn: usize,
+) -> usize {
+    let orig = SYSTEM_QUIT_DUPLICATE_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: original AddCancelButton trampoline is unset -- fail-open return 0"
+        ));
+        return 0;
+    }
+    let original: unsafe extern "system" fn(usize, usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    let caller_match = callstack_contains_game_rva(
+        SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA
+            .saturating_sub(SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES),
+        SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA + SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES,
+    );
+    let before =
+        unsafe { safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET) }
+            .unwrap_or(0);
+    let ret = unsafe { original(dialog, label, action_fn, enabled_fn, keyguide_fn) };
+    if caller_match {
+        let after_native =
+            unsafe { safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET) }
+                .unwrap_or(0);
+        if after_native < 0x10 {
+            if SYSTEM_QUIT_NOOP_ACTION_INSTALLED.load(Ordering::SeqCst)
+                != SYSTEM_QUIT_NOOP_ACTION_INSTALLED_YES
+            {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: matched Quit Game call but quick-load action hook is not installed; skipping cloned Load Game row"
+                ));
+                return ret;
+            }
+            let Ok(linehelp_addr) = game_rva(GET_GR_LINEHELP_ENTRY_RVA) else {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: failed to resolve GetGR_LineHelp rva 0x{GET_GR_LINEHELP_ENTRY_RVA:x}; skipping third row"
+                ));
+                return ret;
+            };
+            let Ok(label_dtor_addr) = game_rva(MENU_HELP_LABEL_DTOR_RVA) else {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: failed to resolve MenuHelpLabelComponent dtor rva 0x{MENU_HELP_LABEL_DTOR_RVA:x}; skipping third row"
+                ));
+                return ret;
+            };
+            let get_linehelp: unsafe extern "system" fn(usize, u32) -> usize =
+                unsafe { std::mem::transmute(linehelp_addr) };
+            let label_dtor: unsafe extern "system" fn(usize) =
+                unsafe { std::mem::transmute(label_dtor_addr) };
+            let mut label_storage =
+                std::mem::MaybeUninit::<SystemQuitMenuHelpLabelScratch>::uninit();
+            let load_label = label_storage.as_mut_ptr() as usize;
+            unsafe {
+                get_linehelp(load_label, SYSTEM_QUIT_LOAD_LINEHELP_ID);
+                get_linehelp(
+                    load_label + MENU_HELP_LABEL_HELP_OFFSET,
+                    SYSTEM_QUIT_LOAD_LINEHELP_ID,
+                );
+            }
+            let dup_ret =
+                unsafe { original(dialog, load_label, action_fn, enabled_fn, keyguide_fn) };
+            unsafe { label_dtor(load_label) };
+            let after_dup = unsafe {
+                safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET)
+            }
+            .unwrap_or(0);
+            let properties = dialog + PROPERTY_EDIT_DIALOG_PROPERTIES_1268_OFFSET;
+            let aligned_properties = (properties + 0x7) & !0x7;
+            let row_index = after_dup.saturating_sub(1);
+            let third_row = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(row_index);
+            let third_controller =
+                unsafe { safe_read_usize(third_row + EDIT_PROPERTY_CONTROLLER_OFFSET) }
+                    .unwrap_or(0);
+            let third_action = if third_controller != 0 {
+                unsafe {
+                    safe_read_usize(
+                        third_controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET,
+                    )
+                }
+                .unwrap_or(0)
+            } else {
+                0
+            };
+            if third_action != 0 {
+                SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.store(third_action, Ordering::SeqCst);
+            }
+            SYSTEM_QUIT_DUPLICATE_COUNT.fetch_add(1, Ordering::SeqCst);
+            SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE.store(before, Ordering::SeqCst);
+            SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER.store(after_dup, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "system-quit-dup: added cloned quick-load AddCancelButton label=GR_LineHelp:{SYSTEM_QUIT_LOAD_LINEHELP_ID} dialog=0x{dialog:x} count {before}->{after_native}->{after_dup} ret=0x{ret:x} dup_ret=0x{dup_ret:x} row=0x{third_row:x} controller=0x{third_controller:x} action=0x{third_action:x}"
+            ));
+        } else {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: matched Quit Game call but count after native is {after_native}, not duplicating"
+            ));
+        }
+    }
+    ret
+}
+
+fn install_system_quit_menu_window_job_run_hook() {
+    if SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: MH_Initialize for MenuWindowJob::Run hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(MENU_WINDOW_JOB_RUN_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: failed to resolve MenuWindowJob::Run rva 0x{MENU_WINDOW_JOB_RUN_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_menu_window_job_run_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: queue_enable MenuWindowJob::Run hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED.store(
+                        SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED_YES,
+                        Ordering::SeqCst,
+                    );
+                    append_autoload_debug(format_args!(
+                        "system-quit-dup: hooked MenuWindowJob::Run 0x{addr:x}; will map System/ProfileSelect resources to real MenuWindow pointers"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-dup: MH_ApplyQueued MenuWindowJob::Run hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-dup: MhHook::new MenuWindowJob::Run hook failed: {status:?}"
+        )),
+    }
+}
+
+fn install_system_quit_window_list_push_hook() {
+    if SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_WINDOW_LIST_PUSH_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: MH_Initialize for MenuWindow list push hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(MENU_WINDOW_LIST_PUSH_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: failed to resolve MenuWindow list push rva 0x{MENU_WINDOW_LIST_PUSH_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_menu_window_list_push_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_WINDOW_LIST_PUSH_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: queue_enable MenuWindow list push hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED
+                        .store(SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED_YES, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-dup: hooked MenuWindow list push 0x{addr:x}; will record ProfileSelect append/list for Back/removal restore state"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-dup: MH_ApplyQueued MenuWindow list push hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-dup: MhHook::new MenuWindow list push hook failed: {status:?}"
+        )),
+    }
+}
+
+fn install_system_quit_noop_action_hook() {
+    if SYSTEM_QUIT_NOOP_ACTION_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_NOOP_ACTION_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: MH_Initialize for no-op action hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: failed to resolve Quit Game action invoke rva 0x{SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_noop_desktop_action_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_NOOP_ACTION_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: queue_enable no-op action hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_NOOP_ACTION_INSTALLED
+                        .store(SYSTEM_QUIT_NOOP_ACTION_INSTALLED_YES, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-dup: hooked Quit Game action invoke 0x{addr:x}; recorded cloned quick-load action object will route to ProfileSelect"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-dup: MH_ApplyQueued no-op action hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-dup: MhHook::new no-op action hook failed: {status:?}"
+        )),
+    }
+}
+
+pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
+    dialog: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let orig = SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: ProfileLoadDialog activation trampoline unset for dialog=0x{dialog:x} -- fail-closed return 0"
+        ));
+        return 0;
+    }
+    let original: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    let base = game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let vt = unsafe { safe_read_usize(dialog) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let expected_vt = if base != TITLE_OWNER_SCAN_START_ADDRESS {
+        base + PROFILE_LOAD_DIALOG_VTABLE_RVA
+    } else {
+        TITLE_OWNER_SCAN_START_ADDRESS
+    };
+    let hidden = SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0;
+    let profile_window = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+    let system_quit_profile_active = hidden && profile_window != 0 && vt == expected_vt;
+    if !system_quit_profile_active {
+        return unsafe { original(dialog, b, c, d) };
+    }
+
+    let cursor = unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }.unwrap_or(-1);
+    let bound = unsafe { safe_read_i32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET) }.unwrap_or(-1);
+    SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG.store(dialog, Ordering::SeqCst);
+    SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR.store(cursor as usize, Ordering::SeqCst);
+    SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_BOUND.store(bound as usize, Ordering::SeqCst);
+
+    SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.fetch_add(1, Ordering::SeqCst);
+
+    // PRODUCT PATH (human-driven pick): the slot activation IS the load confirmation. A human's A on
+    // a slot must load that character; the old flow instead forwarded into the native confirm ->
+    // MessageBox -> OK -> load-job chain, but the product msgbox path SUPPRESSES that "load this
+    // profile?" MessageBox before it renders, so a human never gets an OK to press and every A just
+    // re-opens+re-suppresses the confirm -- the pick stalls, no load-job Run, no arm (observed
+    // 2026-07-02: 24 activations, zero loads). Arm the save-safe switch DIRECTLY here and natively
+    // cancel-close ProfileSelect, satisfying the confirm's only semantic side effect (user chose to
+    // load this profile) with ZERO MessageBox and zero extra input. Repeatable: the continue_confirm
+    // hook returns the phase to IDLE after each reload, so the next pick re-arms cleanly.
+    //
+    // Gated so the proven test bench and opt-ins are untouched: skip when the repro autopilot drives
+    // (it manages its own confirm chain via a scripted double-A), when the native-forward opt-in is
+    // set, when a switch is already in flight (phase != IDLE), for an out-of-range cursor, or for an
+    // EMPTY slot (arming an empty slot would tear down to a clean title then fail the deserialize).
+    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    if !system_quit_repro_enabled()
+        && !system_quit_profile_load_activation_allowed()
+        && phase == SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+        && (0..bound).contains(&cursor)
+    {
+        if !unsafe { profile_slot_has_character(cursor) } {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: ProfileSelect slot activation IGNORED dialog=0x{dialog:x} cursor={cursor} bound={bound} -- slot holds no character; not arming a switch (would strand the game at a blank title)"
+            ));
+            return unsafe { original(dialog, b, c, d) };
+        }
+        unsafe { system_quit_arm_quickload_autoload(cursor, "ProfileSelectSlotActivate") };
+        // The arm only takes when the preserved System dialog is present; on success it advances the
+        // phase past IDLE. If it took, cancel-close ProfileSelect ourselves (no confirm-lambda runs on
+        // this direct path) so the menu-pump return-title chain tears the world down + reloads the
+        // picked slot at a clean title. If it did NOT take, fall through to the native activation so
+        // the pick is not silently dropped.
+        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
+            if let Ok(close_addr) = game_rva(SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA) {
+                let close_fn: unsafe extern "system" fn(usize) =
+                    unsafe { std::mem::transmute(close_addr) };
+                unsafe { close_fn(dialog) };
+                SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+            append_autoload_debug(format_args!(
+                "system-quit-dup: ProfileSelect slot activation ARMED save-safe switch dialog=0x{dialog:x} cursor={cursor} bound={bound}; cancel-closed ProfileSelect -> return-title + clean-title fresh-deserialize of slot {cursor} (zero MessageBox)"
+            ));
+            return 0;
+        }
+        append_autoload_debug(format_args!(
+            "system-quit-dup: ProfileSelect slot activation direct-arm did NOT take (no preserved System dialog) dialog=0x{dialog:x} cursor={cursor}; forwarding native activation"
+        ));
+    }
+
+    append_autoload_debug(format_args!(
+        "system-quit-dup: ProfileSelect slot activation dialog ALLOWED dialog=0x{dialog:x} cursor={cursor} bound={bound} profile_window=0x{profile_window:x} phase={phase}; forwarding native (load-job Run remains guarded)"
+    ));
+    unsafe { original(dialog, b, c, d) }
+}
+
+/// Advance the System->Quit repro autopilot to `next`, resetting the phase-local tick and the
+/// waiting-log latch.
+fn sq_repro_transition(next: usize) {
+    SQ_REPRO_STATE.store(next, Ordering::SeqCst);
+    SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
+    SQ_REPRO_STATE_TAPS.store(0, Ordering::SeqCst);
+}
+
+/// Log `msg` exactly once for the current repro phase (`SQ_REPRO_STATE_TAPS` latches it), used when
+/// a phase has issued all its edges and is now HOLDING until its transition is observed. Not a retry
+/// budget -- a boolean latch so the "waiting" line is not spammed.
+fn sq_repro_waiting_once(msg: &str) {
+    if SQ_REPRO_STATE_TAPS.swap(1, Ordering::SeqCst) == 0 {
+        append_autoload_debug(format_args!(
+            "sq-repro: {msg} (holding until observed; no re-tap)"
+        ));
+    }
+}
+
+/// Cumulative ProfileSelect OK-confirm count (cancel-close BLOCK + ALLOW). The CONFIRM state watches
+/// for an INCREASE over the per-switch baseline so switch #2 does not trip on switch #1's residual.
+fn sq_repro_confirm_count() -> usize {
+    SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT.load(Ordering::SeqCst)
+        + SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.load(Ordering::SeqCst)
+}
+
+/// The ProfileSelect slot the current switch loads (clamped to the target table).
+fn sq_repro_target_slot() -> i32 {
+    let i = SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst);
+    SQ_REPRO_TARGET_SLOTS[i.min(SQ_REPRO_TARGET_SLOTS.len() - 1)]
+}
+
+/// How many back-to-back switches to drive. Defaults to `SQ_REPRO_TARGET_SWITCHES` (2); overridable
+/// via `ER_EFFECTS_SQ_REPRO_SWITCHES` (clamped to [1, target-table length]) so a 1-switch baseline
+/// can be run with the identical code path to isolate the two-switch regression.
+fn sq_repro_target_switches() -> usize {
+    let n = std::env::var("ER_EFFECTS_SQ_REPRO_SWITCHES")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(SQ_REPRO_TARGET_SWITCHES);
+    n.clamp(1, SQ_REPRO_TARGET_SLOTS.len())
+}
+
+/// Enter a switch: capture the confirm-count baseline and clear the per-switch menu-window/cursor
+/// signals so the state machine re-detects them fresh for this switch (they hold stale pointers from
+/// the prior switch otherwise). Called before OPEN_MENU for every switch.
+fn sq_repro_begin_switch() {
+    SQ_REPRO_CONFIRM_BASELINE.store(sq_repro_confirm_count(), Ordering::SeqCst);
+    SYSTEM_QUIT_INGAME_TOP_WINDOW.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_OPTION_SETTING_WINDOW.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
+    SQ_REPRO_INITIAL_CURSOR.store(usize::MAX, Ordering::SeqCst);
+    SQ_REPRO_WAIT_RELOAD_FRAMES.store(0, Ordering::SeqCst);
+}
+
+/// Fabricated gamepad wButtons for a phase that issues a FIXED list of button edges ONCE, in order,
+/// then holds. `tick` is phase-local; each edge occupies one `INJECT_NAV_CYCLE` (the RE-grounded
+/// edge hold+gap -- edge-triggered menu nav needs a multi-frame hold to register one step). Returns
+/// `(wButtons_this_frame, holding)`: `holding` is true once every edge has been issued, so the
+/// caller waits on an OBSERVED transition (never a timer or budget) to advance.
+fn sq_repro_edges(tick: usize, edges: &[u16]) -> (u16, bool) {
+    let edge_index = tick / INJECT_NAV_CYCLE;
+    if edge_index >= edges.len() {
+        return (0, true);
+    }
+    let asserted = (tick % INJECT_NAV_CYCLE) < INJECT_NAV_TAP_LEN;
+    (if asserted { edges[edge_index] } else { 0 }, false)
+}
+
+/// SELF-DRIVEN System->Quit->Load-Profile REPRO AUTOPILOT tick (gated by `system_quit_repro_enabled`).
+/// Runs every game-task frame. The input block stays engaged in-world (see `block_input_enabled`) so
+/// the fabricated gamepad is the ONLY input and no human press can contaminate the repro. Drives the
+/// user's EXACT Xbox controller sequence by writing `SQ_REPRO_XINPUT_BUTTONS` (read by the XInput
+/// poll hook -- the stage the game reads a gamepad from), advancing ONLY on observed menu-window /
+/// cursor / activate transitions (never timers or tap budgets):
+///   START -> IngameTop; UP,A -> OptionSetting; LB,DOWN,A -> ProfileSelect; one DOWN/UP off the
+///   current save; A,A -> load armed -> DONE (block released; native pump drives return-title +
+///   reload). Each phase issues its KNOWN edges once then HOLDS; a genuinely missed edge self-
+///   reports (stuck waiting) instead of being papered over by a re-tap.
+pub(crate) unsafe fn system_quit_repro_tick() {
+    if !system_quit_repro_enabled() {
+        return;
+    }
+    let state = SQ_REPRO_STATE.load(Ordering::SeqCst);
+    if state == SQ_REPRO_STATE_DONE {
+        return;
+    }
+    // Driven entirely via the XInput poll hook; keep the DInput keyboard stamp clear every frame so
+    // no stale key leaks while the block zeroes the real keyboard.
+    crate::input_blocker::InputBlocker::get_instance().set_injected_key(DIK_NONE);
+    let set_pad = |b: u16| SQ_REPRO_XINPUT_BUTTONS.store(b as usize, Ordering::SeqCst);
+    let tick = SQ_REPRO_STATE_TICK.fetch_add(1, Ordering::SeqCst);
+
+    match state {
+        SQ_REPRO_STATE_WAIT_WORLD => {
+            set_pad(0);
+            let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
+            if in_world && tick >= SQ_REPRO_WORLD_SETTLE_TICKS {
+                sq_repro_begin_switch();
+                append_autoload_debug(format_args!(
+                    "sq-repro: in-world settled ({SQ_REPRO_WORLD_SETTLE_TICKS} ticks) -> OPEN_MENU switch #{}/{} target_slot={}; START (XInput 0x{XINPUT_GAMEPAD_START:04x}) to open the escape/system menu",
+                    SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst) + 1,
+                    sq_repro_target_switches(),
+                    sq_repro_target_slot()
+                ));
+                sq_repro_transition(SQ_REPRO_STATE_OPEN_MENU);
+            } else if !in_world {
+                // Not in-world yet (boot autoload still loading): hold the settle counter at 0.
+                SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
+            }
+        }
+        SQ_REPRO_STATE_OPEN_MENU => {
+            let ingame_top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
+            if ingame_top != 0 {
+                append_autoload_debug(format_args!(
+                    "sq-repro: IngameTop opened window=0x{ingame_top:x} (escape/system menu) -> TO_SYSTEM (UP, A into the quit submenu)"
+                ));
+                set_pad(0);
+                sq_repro_transition(SQ_REPRO_STATE_TO_SYSTEM);
+                return;
+            }
+            let (btn, holding) = sq_repro_edges(tick, &[XINPUT_GAMEPAD_START]);
+            if holding {
+                sq_repro_waiting_once("OPEN_MENU: START issued, waiting for 02_000_IngameTop");
+            }
+            set_pad(btn);
+        }
+        SQ_REPRO_STATE_TO_SYSTEM => {
+            let option_setting = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
+            if option_setting != 0 {
+                append_autoload_debug(format_args!(
+                    "sq-repro: OptionSetting opened window=0x{option_setting:x} (quit submenu) -> TO_PROFILE (LB, DOWN, A to activate the cloned Load-Profile row)"
+                ));
+                set_pad(0);
+                sq_repro_transition(SQ_REPRO_STATE_TO_PROFILE);
+                return;
+            }
+            let (btn, holding) = sq_repro_edges(tick, &[XINPUT_GAMEPAD_DPAD_UP, XINPUT_GAMEPAD_A]);
+            if holding {
+                sq_repro_waiting_once("TO_SYSTEM: UP+A issued, waiting for 02_040_OptionSetting");
+            }
+            set_pad(btn);
+        }
+        SQ_REPRO_STATE_TO_PROFILE => {
+            let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+            if profile != 0 {
+                append_autoload_debug(format_args!(
+                    "sq-repro: ProfileSelect opened window=0x{profile:x} (cloned Load-Profile row activated) -> TO_SLOT (move cursor off the current save)"
+                ));
+                set_pad(0);
+                SQ_REPRO_INITIAL_CURSOR.store(usize::MAX, Ordering::SeqCst);
+                sq_repro_transition(SQ_REPRO_STATE_TO_SLOT);
+                return;
+            }
+            let (btn, holding) = sq_repro_edges(
+                tick,
+                &[
+                    XINPUT_GAMEPAD_LEFT_SHOULDER,
+                    XINPUT_GAMEPAD_DPAD_DOWN,
+                    XINPUT_GAMEPAD_A,
+                ],
+            );
+            if holding {
+                sq_repro_waiting_once(
+                    "TO_PROFILE: LB+DOWN+A issued, waiting for 05_010_ProfileSelect",
+                );
+            }
+            set_pad(btn);
+        }
+        SQ_REPRO_STATE_TO_SLOT => {
+            // Drive the ProfileSelect cursor to THIS switch's EXPLICIT target slot (not "one off
+            // current"), so switch #2 lands on a real, distinct character regardless of which slot the
+            // prior reload made current. DOWN increments the cursor index, UP decrements (verified:
+            // switch #1 UP moved cursor 5->4). Recompute the direction each frame so an overshoot
+            // self-corrects. Stop + CONFIRM when the cursor equals the target.
+            let dialog = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+            let cursor = if dialog != 0 && dialog != TITLE_OWNER_SCAN_START_ADDRESS {
+                unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }.unwrap_or(-1)
+            } else {
+                -1
+            };
+            let target = sq_repro_target_slot();
+            if cursor < 0 {
+                // ProfileSelect not fully built yet; hold neutral.
+                set_pad(0);
+                return;
+            }
+            if cursor == target {
+                append_autoload_debug(format_args!(
+                    "sq-repro: ProfileSelect cursor={cursor} == target_slot={target} (switch #{}) -> CONFIRM (A, A)",
+                    SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst) + 1
+                ));
+                set_pad(0);
+                sq_repro_transition(SQ_REPRO_STATE_CONFIRM);
+                return;
+            }
+            let dir = if cursor < target {
+                XINPUT_GAMEPAD_DPAD_DOWN
+            } else {
+                XINPUT_GAMEPAD_DPAD_UP
+            };
+            // Step one clean edge per INJECT_NAV_CYCLE toward the target (tap then gap = one cursor
+            // step); keep stepping until cursor == target. No fixed edge budget -- advance on the
+            // observed cursor value, so a missed step just re-issues next cycle.
+            let btn = if (tick % INJECT_NAV_CYCLE) < INJECT_NAV_TAP_LEN {
+                dir
+            } else {
+                INJECT_NAV_NO_BUTTONS
+            };
+            if tick % (INJECT_NAV_CYCLE * 8) == 0 {
+                append_autoload_debug(format_args!(
+                    "sq-repro: TO_SLOT stepping cursor={cursor} -> target_slot={target} dir=0x{dir:04x}"
+                ));
+            }
+            set_pad(btn);
+        }
+        SQ_REPRO_STATE_CONFIRM => {
+            // The user's "a -> a": the FIRST A picks the highlighted non-current slot -- the activate
+            // hook opens the "Starting with selected profile" OK dialog -- and the SECOND A clicks OK
+            // on that dialog. DONE is gated on the load being CONFIRMED (the confirmed hook fires on
+            // the OK press, taking the save-safe cancel-close -> return-title path), NOT on the slot
+            // activation: activation fires on the FIRST A and releasing there would drop the block
+            // before the OK press lands (the dialog then sits waiting). The natural tap+gap between
+            // the two edges lets the OK dialog open before the second A. On confirm, release the
+            // block; the native pump drives the cancel-close -> return-title -> autoload.
+            if sq_repro_confirm_count() > SQ_REPRO_CONFIRM_BASELINE.load(Ordering::SeqCst) {
+                let switch_index = SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst);
+                let more = switch_index + 1 < sq_repro_target_switches();
+                append_autoload_debug(format_args!(
+                    "sq-repro: OK clicked -- switch #{}/{} load CONFIRMED (confirmed_block={} confirmed_allow={} activate={} baseline={}). {}",
+                    switch_index + 1,
+                    sq_repro_target_switches(),
+                    SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT.load(Ordering::SeqCst),
+                    SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.load(Ordering::SeqCst),
+                    SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst),
+                    SQ_REPRO_CONFIRM_BASELINE.load(Ordering::SeqCst),
+                    if more {
+                        "native pump drives cancel-close + return-title + reload; then WAIT_RELOAD -> next switch"
+                    } else {
+                        "SELF-DRIVE COMPLETE; releasing block, native pump drives cancel-close + return-title + autoload"
+                    }
+                ));
+                set_pad(0);
+                if more {
+                    sq_repro_transition(SQ_REPRO_STATE_WAIT_RELOAD);
+                } else {
+                    SQ_REPRO_STATE.store(SQ_REPRO_STATE_DONE, Ordering::SeqCst);
+                }
+                return;
+            }
+            let (btn, holding) = sq_repro_edges(tick, &[XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_A]);
+            if holding {
+                sq_repro_waiting_once("CONFIRM: A (pick), A (OK) issued, waiting for load-confirm");
+            }
+            set_pad(btn);
+        }
+        SQ_REPRO_STATE_WAIT_RELOAD => {
+            // Between two back-to-back switches. Hold neutral while THIS switch's reload runs
+            // (return-title tears down the old world, clean-title continue_confirm drives the fresh
+            // picked-slot deserialize, SetState5 streams the new world). Advance to the next switch
+            // only once the reload has COMMITTED (fresh-deser count reached this switch's number) AND
+            // the NEW world is up (local player present) AND it has settled. Settle is counted from
+            // the moment both hold (tick reset while the world is still down/loading), so it settles
+            // the NEW world, not the residual old one.
+            set_pad(0);
+            let switch_index = SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst);
+            let expected_deser = switch_index + 1;
+            let deser = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+            let player_up = unsafe { PlayerIns::local_player_mut() }.is_ok();
+            // PlayerIns-present alone is a LOADING-SCREEN/TITLE FALSE POSITIVE (PlayerIns exists during
+            // the reload before the world is interactive -- observed: driving switch #2 on that signal
+            // pressed START at the title's PRESS ANY BUTTON and stalled). Require the reload committed
+            // (fresh-deser), the player present, AND the engine NOT on a loading screen: the in-world
+            // NowLoading streaming latch is clear AND the menu->world transition cover is not visible.
+            // Only then is the game in the genuinely interactive world where START opens the escape menu.
+            let base = game_rva(0).unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+            let base_ok = base != TITLE_OWNER_SCAN_START_ADDRESS;
+            let now_loading = base_ok && unsafe { now_loading_active(base) };
+            let fake_cover = base_ok && unsafe { fake_loading_screen_visible(base) };
+            let loading = !base_ok || now_loading || fake_cover;
+            if deser < expected_deser || !player_up || loading {
+                // Still tearing down / at title / streaming: hold the settle clock at 0 so it starts
+                // only when the NEW world is up AND interactive (not a loading-screen false positive).
+                SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
+                // Periodic GATE dump (er-effects-rs-qwj): this state once stalled with switch #1
+                // stable and fresh-deser == expected, so one of these gates was lying. Name the
+                // culprit with data, not a single opaque waiting line.
+                let waited = SQ_REPRO_WAIT_RELOAD_FRAMES.fetch_add(1, Ordering::SeqCst);
+                if waited % SQ_REPRO_WAIT_RELOAD_LOG_EVERY == 0 {
+                    append_autoload_debug(format_args!(
+                        "sq-repro: WAIT_RELOAD gates (switch #{}/{} waited_frames={waited}): fresh_deser={deser}/{expected_deser} player_up={player_up} now_loading={now_loading} fake_cover={fake_cover}",
+                        switch_index + 1,
+                        sq_repro_target_switches()
+                    ));
+                }
+                return;
+            }
+            if tick >= SQ_REPRO_WORLD_SETTLE_TICKS {
+                let next = switch_index + 1;
+                SQ_REPRO_SWITCH_INDEX.store(next, Ordering::SeqCst);
+                sq_repro_begin_switch();
+                append_autoload_debug(format_args!(
+                    "sq-repro: switch #{}/{} reload committed (fresh_deser={deser}) + new world settled -> arming switch #{}/{} target_slot={}; OPEN_MENU",
+                    switch_index + 1,
+                    sq_repro_target_switches(),
+                    next + 1,
+                    sq_repro_target_switches(),
+                    sq_repro_target_slot()
+                ));
+                sq_repro_transition(SQ_REPRO_STATE_OPEN_MENU);
+            }
+        }
+        _ => {
+            set_pad(0);
+        }
+    }
+}
+
+pub(crate) unsafe extern "system" fn system_quit_profile_load_confirmed_hook(
+    action_obj: usize,
+) -> usize {
+    let orig = SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: ProfileLoadDialog confirmed-load trampoline unset for action=0x{action_obj:x} -- fail-closed return 0"
+        ));
+        return 0;
+    }
+    let original: unsafe extern "system" fn(usize) -> usize = unsafe { std::mem::transmute(orig) };
+    let dialog =
+        unsafe { safe_read_usize(action_obj + 0x8) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let profile_window = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+    let system_quit_profile_active = dialog != TITLE_OWNER_SCAN_START_ADDRESS
+        && profile_window != 0
+        && dialog == profile_window
+        && SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0;
+    if !system_quit_profile_active {
+        return unsafe { original(action_obj) };
+    }
+
+    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) >= SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED
+        && SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT.load(Ordering::SeqCst) != 0
+    {
+        // Close ProfileSelect via the NATIVE cancel/back close (FUN_1407ac980: SetResult(Failed) +
+        // window close vmethod) instead of arming the confirm-LOAD. Arming the load (writing
+        // load_job_ctx+0x14c=2, the coupled Success-close path) makes the game enter an IN-WORLD
+        // load/warp transition (GameMan.saveState/b80 -> 2 -> DoSaveStuff). Even with the actual
+        // deserialize skipped by the FUN_14067b290 guard, that half-started transition sticks the game
+        // at a loading screen and BLOCKS the return-title chain from ever running (observed 2026-07-01:
+        // stuck, return_title functor_call_count=0, save_state=3, player still present). The cancel-close
+        // pops the ProfileSelect window WITHOUT starting any load, so the menu-pump return-title chain
+        // tears the world down cleanly and the autoload loads the picked slot at a clean title. This
+        // runs in menu-pump ownership (this IS the native confirm callback) and one-shot -- not the racy
+        // game-task tick. See bd system-quit-load-profile-6runs-state-2026-07-01.
+        let load_job_ctx = unsafe { safe_read_usize(dialog + 0x1cc8) }.unwrap_or(0);
+        if dialog != 0 && dialog != TITLE_OWNER_SCAN_START_ADDRESS {
+            match game_rva(SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA) {
+                Ok(close_addr) => {
+                    let close_fn: unsafe extern "system" fn(usize) =
+                        unsafe { std::mem::transmute(close_addr) };
+                    unsafe { close_fn(dialog) };
+                    SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT.fetch_add(1, Ordering::SeqCst);
+                }
+                Err(_) => append_autoload_debug(format_args!(
+                    "system-quit-dup: confirm cancel-close ABORT -- failed to resolve close rva 0x{SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA:x}"
+                )),
+            }
+        }
+        SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-dup: ProfileSelect confirm CANCEL-CLOSED action=0x{action_obj:x} dialog=0x{dialog:x} load_job_ctx=0x{load_job_ctx:x}; NO load-mode armed -> no in-world load transition -> return-title tears down + autoload loads at clean title"
+        ));
+        return 0;
+    }
+
+    SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-dup: ProfileSelect confirmed-load transition ALLOWED action=0x{action_obj:x} dialog=0x{dialog:x}; actual load/deser is guarded at LoadJobContext::Run"
+    ));
+    unsafe { original(action_obj) }
+}
+
+unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, source: &str) {
+    const NO_SLOT: usize = usize::MAX;
+    if selected_slot < 0 {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: not arming autoload from {source} -- invalid selected_slot={selected_slot}"
+        ));
+        return;
+    }
+    let system_dialog = SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.load(Ordering::SeqCst);
+    if system_dialog == 0 || system_dialog == TITLE_OWNER_SCAN_START_ADDRESS {
+        SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.store(NO_SLOT, Ordering::SeqCst);
+        SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.store(0, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: not arming direct native chain from {source} -- missing preserved original System dialog selected_slot={selected_slot}"
+        ));
+        return;
+    }
+    // DISABLED (2026-07-01): the CSGaitemImp deserialize/lookup/finalize guards only ever CORRUPT
+    // the gaitem singleton -- emptying gaitemInsTable handles left a garbage non-canonical entry that
+    // crashed GetGaitemIns->GetGaitemHandle (live 0x6710c0). They were a doomed attempt to make the
+    // in-world load "safe"; we now BLOCK the in-world load-job entirely (see the robust gate in
+    // system_quit_profile_load_job_run_hook) and return to title + autoload instead, so no in-world
+    // gaitem deserialize should run. Leaving them installed would additionally corrupt the AUTOLOAD's
+    // own post-title load whenever it deserializes while phase is still 1..3. Not installing them lets
+    // every real deserialize run natively. (Install fns retained for reference / bisecting.)
+    // Install the load-ONLY guard so the picked slot is not deserialized into the still-live world
+    // when the native confirm arms the load; it forwards the real load at a clean title (autoload).
+    install_system_quit_inworld_load_guard();
+    // Install the in-world load REQUEST guard: neutralizes the native RequestLoadSlot (FUN_14067b2f0)
+    // so GameMan.saveState/b80 never reaches 2 during the switch. This is the TRUE source of the
+    // NowLoading transition that froze the menu pump; blocking it here (not reactively) lets the
+    // menu-pump-owned return-title chain run + tear the world down. Forwarded at a clean title.
+    install_system_quit_request_load_slot_guard();
+    // Re-arm the continue_confirm guard's one-shot: the upcoming clean-title confirm must drive a
+    // fresh deserialize of THIS switch's picked slot before it streams (the hook itself is installed
+    // unconditionally at attach; see install_system_quit_continue_confirm_hook).
+    SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(0, Ordering::SeqCst);
+    // Re-arm the return-title one-shots so EVERY switch (not just the first) tears the world down.
+    // Both are consumed by the first switch and never reset otherwise, so a second switch in the same
+    // session would skip the native return-title REQUEST (`== 0` gate, sets saveRequested+bc4=1) and
+    // the final-functor submit (compare_exchange 0->1 gate), leaving the second switch stuck in-world.
+    // Resetting them here (the per-switch arm point) is the durable fix for repeatable switching
+    // (er-effects-rs-qwj). SUBMIT_COUNT is intentionally NOT reset: title.rs uses it as a `> 0` enable
+    // and it re-increments before the final functor needs it.
+    // BISECT 2026-07-02: these two resets regressed even the SINGLE-switch reload (base f59b2af
+    // passes, adding them causes a SECOND title bounce after the load / new-game flash). Disabled
+    // while isolating; a switch-#2-safe re-arm will be reinstated once the mechanism is understood.
+    // SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.store(0, Ordering::SeqCst);
+    // SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.store(selected_slot as usize, Ordering::SeqCst);
+    SYSTEM_QUIT_QUICKLOAD_PHASE.store(SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED, Ordering::SeqCst);
+    OWN_STEPPER_SLOT.store(selected_slot, Ordering::SeqCst);
+    PRODUCT_AUTOLOAD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_MENU, Ordering::SeqCst);
+    TFC_CONTINUE_FIRED.store(0, Ordering::SeqCst);
+    TFC_LOAD_VEC_WAIT_TICKS.store(0, Ordering::SeqCst);
+    OWN_STEPPER_MENU_OPENED.store(OWN_STEPPER_MENU_OPENED_NO, Ordering::SeqCst);
+    TITLE_ACCEPT_BYTE_GATE_FIRED.store(false, Ordering::SeqCst);
+    TITLE_OWNER_PTR.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+    TITLE_OWNER_SCAN_COUNTDOWN.store(TITLE_OWNER_SCAN_COUNTDOWN_READY, Ordering::SeqCst);
+    OWN_LOAD_CONTINUE_FIRED.store(false, Ordering::SeqCst);
+    SYSTEM_QUIT_QUICKLOAD_LAST_TITLE_OWNER.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_QUICKLOAD_AUTOLOAD_HANDOFF_COUNT.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_PROFILE_LOAD_JOB_POST_RETURN_TITLE_FIRED.store(0, Ordering::SeqCst);
+    PROFILE_REFRESH_KICKED.store(0, Ordering::SeqCst);
+    PORTRAIT_RENDER_WINDOW_DONE.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_QUICKLOAD_PHASE.store(
+        SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED,
+        Ordering::SeqCst,
+    );
+    append_autoload_debug(format_args!(
+        "system-quit-quickload: armed product Continue autoload selected_slot={selected_slot} source={source}; will direct-submit native return-title chain once ProfileSelect closes system_dialog=0x{system_dialog:x}"
+    ));
+}
+
+pub(crate) unsafe extern "system" fn system_quit_gaitem_finalize_hook(gaitem: usize) {
+    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    if (SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
+        .contains(&phase)
+    {
+        let skips = SYSTEM_QUIT_GAITEM_FINALIZE_SKIP_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: CSGaitemImp finalize SKIPPED during return-title transition #{skips} phase={phase} gaitem=0x{gaitem:x}; avoids post-deserialize singleton-state assert while native return-title job advances"
+        ));
+        return;
+    }
+    SYSTEM_QUIT_GAITEM_FINALIZE_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
+    let orig = SYSTEM_QUIT_GAITEM_FINALIZE_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: CSGaitemImp finalize trampoline unset phase={phase} gaitem=0x{gaitem:x}; fail-closed skip"
+        ));
+        return;
+    }
+    let original: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(orig) };
+    unsafe { original(gaitem) };
+}
+
+pub(crate) unsafe extern "system" fn system_quit_gaitem_lookup_hook(
+    gaitem: usize,
+    out_handle: usize,
+    in_handle: usize,
+) -> usize {
+    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    if (SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
+        .contains(&phase)
+    {
+        if out_handle != 0 && out_handle != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { *(out_handle as *mut u32) = 0 };
+        }
+        let empties = SYSTEM_QUIT_GAITEM_LOOKUP_EMPTY_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        if empties <= 16 || empties % 64 == 0 {
+            let input = unsafe { safe_read_i32(in_handle) }.unwrap_or(0) as u32;
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: CSGaitemImp lookup EMPTIED during return-title transition #{empties} phase={phase} gaitem=0x{gaitem:x} out=0x{out_handle:x} in=0x{in_handle:x} input=0x{input:x}; avoids ChrAsm equipment lookup assert while stream remains consumed"
+            ));
+        }
+        return out_handle;
+    }
+    SYSTEM_QUIT_GAITEM_LOOKUP_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
+    let orig = SYSTEM_QUIT_GAITEM_LOOKUP_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: CSGaitemImp lookup trampoline unset phase={phase} gaitem=0x{gaitem:x}; returning empty"
+        ));
+        if out_handle != 0 && out_handle != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe { *(out_handle as *mut u32) = 0 };
+        }
+        return out_handle;
+    }
+    let original: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    unsafe { original(gaitem, out_handle, in_handle) }
+}
+
+/// Guard on the load-only routine `FUN_14067b380(slot)`. While the in-world System->Quit->Load-Profile
+/// transition is active (phase in CONFIRMED..AUTOLOAD_HANDOFF) AND the old world is still up (local
+/// player present), skip the deserialize+warp and report success -- so `DoSaveStuff` completes (clears
+/// its pending slot) and ProfileSelect closes, but nothing loads into the live world. At a clean title
+/// (player absent, or phase past the transition) it forwards to the real load so the autoload works.
+pub(crate) unsafe extern "system" fn system_quit_inworld_load_skip_hook(slot: i32) -> usize {
+    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    let in_transition = (SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED
+        ..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
+        .contains(&phase);
+    let world_up = unsafe { PlayerIns::local_player_mut() }.is_ok();
+    if in_transition && world_up {
+        let n = SYSTEM_QUIT_INWORLD_LOAD_SKIP_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: in-world load SKIPPED #{n} slot={slot} phase={phase} (old world still up) -- ProfileSelect close proceeds; return-title tears down; autoload loads at clean title"
+        ));
+        // FUN_14067b380 returns 1 on success; report success without deserializing so DoSaveStuff's
+        // caller advances (it then clears MoveMapStep+0x12c) instead of retrying the in-world load.
+        return 1;
+    }
+    SYSTEM_QUIT_INWORLD_LOAD_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
+    let orig = SYSTEM_QUIT_INWORLD_LOAD_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return 0;
+    }
+    let original: unsafe extern "system" fn(i32) -> usize = unsafe { std::mem::transmute(orig) };
+    unsafe { original(slot) }
+}
+
+pub(crate) fn install_system_quit_inworld_load_guard() {
+    if SYSTEM_QUIT_INWORLD_LOAD_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_Initialize for in-world load guard failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_INWORLD_LOAD_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: failed to resolve in-world load rva 0x{SYSTEM_QUIT_INWORLD_LOAD_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_inworld_load_skip_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_INWORLD_LOAD_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue_enable in-world load guard failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_INWORLD_LOAD_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-quickload: hooked in-world load routine 0x{addr:x}; picked-slot deserialize skipped while old world up, forwarded at clean title"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: MH_ApplyQueued in-world load guard failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-quickload: MhHook::new in-world load guard failed: {status:?}"
+        )),
+    }
+}
+
+/// Guard on the native in-world load REQUEST `CS::GameMan::RequestLoadSlot(slot)` (FUN_14067b2f0, live
+/// 0x67b200). This is the TRUE source of GameMan.saveState/b80=2 for an explicit-slot in-world load:
+/// the per-frame MoveMapStep load steps call it once the confirmed ProfileSelect chain pushes the map
+/// machine into loading, and it sets saveState=2, which starts the 02_904_NowLoading transition that
+/// freezes the menu pump so the queued return-title chain can never run. During the in-world
+/// System->Quit->Load-Profile transition (phase active AND old world still up / local player present)
+/// we return "not armed" (0) WITHOUT calling the original, so saveState never reaches 2: no NowLoading,
+/// the pump keeps running, and the menu-pump-owned return-title chain tears the world down. Once the
+/// world is gone (player absent) or the switch is idle, we forward to the real request -- so the
+/// clean-title autoload and any normal load work. The boot/Continue autoload uses the distinct sentinel
+/// variants (FUN_14067b290 slot 10 / FUN_14067b570 slot 0xb), which this hook does not touch. See bd
+/// system-quit-loadjob-success-commits-phantom-load-2026-07-01.
+pub(crate) unsafe extern "system" fn system_quit_request_load_slot_hook(slot: u32) -> usize {
+    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    // Range-gate like the sibling system_quit_inworld_load_skip_hook (NOT `!= IDLE`): the clean-title
+    // reload runs at AUTOLOAD_HANDOFF and re-creates a present player, so a `!= IDLE` gate would
+    // neutralize the RELOAD's own RequestLoadSlot mid-load. Neutralize only during the first-world
+    // transition [CONFIRMED, AUTOLOAD_HANDOFF); forward natively at AUTOLOAD_HANDOFF so the reload loads.
+    let switch_active = (SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED
+        ..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
+        .contains(&phase);
+    let world_up = unsafe { PlayerIns::local_player_mut() }.is_ok();
+    if switch_active && world_up {
+        let n = SYSTEM_QUIT_REQUEST_LOAD_SLOT_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 8 || n % 120 == 0 {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: in-world load REQUEST neutralized #{n} slot={slot} phase={phase} (old world still up) -- saveState/b80 kept idle so no NowLoading; return-title tears down + autoload loads at clean title"
+            ));
+        }
+        // RequestLoadSlot returns 0 when it declines to arm (saveState!=0 or profile check fails). We
+        // return the same "not armed" result so the caller MoveMapStep treats it as no-load-yet instead
+        // of entering the in-world load transition.
+        return 0;
+    }
+    SYSTEM_QUIT_REQUEST_LOAD_SLOT_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
+    let orig = SYSTEM_QUIT_REQUEST_LOAD_SLOT_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return 0;
+    }
+    let original: unsafe extern "system" fn(u32) -> usize = unsafe { std::mem::transmute(orig) };
+    unsafe { original(slot) }
+}
+
+pub(crate) fn install_system_quit_request_load_slot_guard() {
+    if SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_Initialize for RequestLoadSlot guard failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_REQUEST_LOAD_SLOT_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: failed to resolve RequestLoadSlot rva 0x{SYSTEM_QUIT_REQUEST_LOAD_SLOT_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_request_load_slot_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_REQUEST_LOAD_SLOT_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue_enable RequestLoadSlot guard failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_REQUEST_LOAD_SLOT_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-quickload: hooked in-world load request RequestLoadSlot 0x{addr:x}; saveState/b80=2 arm neutralized while old world up, forwarded at clean title"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: MH_ApplyQueued RequestLoadSlot guard failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-quickload: MhHook::new RequestLoadSlot guard failed: {status:?}"
+        )),
+    }
+}
+
+/// Guard on the native title Continue confirm `0x140b0e180` (rcx = the {[+8]=owner} shim; reads
+/// GameMan+0xc30 -> owner+0xbc -> SetState(5); picks NO slot). Static RE 2026-07-02 proved the
+/// post-switch clean-title reload streams the PRE-SWITCH GameMan/PlayerGameData state: no fresh
+/// deserialize of the picked slot runs anywhere on that path, so the resident (original) character
+/// gets re-streamed -- the wrong-character bug. While a System->Quit->Load-Profile switch is active
+/// this hook drives ONE fresh synchronous feed-deserialize of the PICKED slot
+/// (`own_load_feed_deserialize`: on-disk read -> gated 0x67b100 feed -> native parser 0x67b290)
+/// BEFORE forwarding, so ac0/c30/PGD all become the picked slot and the confirm streams the right
+/// character. Fail-closed: if the fresh deserialize cannot be proven, the confirm is BLOCKED --
+/// streaming stale state would load the wrong character and the post-load autosave would then write
+/// it back into the picked slot. Boot autoloads and normal play (phase IDLE) pass through
+/// untouched. See bd system-quit-cleantitle-load-is-stale-restream-not-slot-source-2026-07-02.
+pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
+    shim: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    // Continue-trace compat: this unconditional hook replaced the trace-set `cap_continue_confirm`
+    // hook on the same address (two MinHooks on one target fail -- the install_c30_writer_hook
+    // precedent), so reproduce its logging + confirm latch exactly when tracing is on.
+    if trace_continue_enabled() && !continue_trace_disabled() {
+        let owner = if shim != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe {
+                safe_read_usize(shim + OWN_STEPPER_SHIM_OWNER_IDX * core::mem::size_of::<usize>())
+            }
+            .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
+        } else {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        };
+        append_continue_trace(format_args!(
+            "CAP continue_confirm this=0x{shim:x} owner=0x{owner:x} {} {}",
+            trace_callers_summary(),
+            b80_mount_trace_summary()
+        ));
+        OWN_STEPPER_CONFIRMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    }
+    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    // Inclusive of AUTOLOAD_HANDOFF (unlike the in-world guards' half-open range): the clean-title
+    // reload's confirm fires at TITLE_OWNER_SEEN or AUTOLOAD_HANDOFF and the fresh deserialize is
+    // exactly what phase 4 needs; the one-shot DONE latch prevents repeats after success.
+    let switch_active = (SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED
+        ..=SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
+        .contains(&phase);
+    if switch_active && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0 {
+        let selected = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
+        let world_up = unsafe { PlayerIns::local_player_mut() }.is_ok();
+        if world_up {
+            // A title-flow confirm while the old world is still up is not a state we ever drive;
+            // never deserialize into a live world (that is the crash the whole switch avoids).
+            // Forward and log loudly -- the in-world load guards protect the load paths.
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: continue_confirm called while OLD WORLD STILL UP phase={phase} selected={selected} shim=0x{shim:x} -- forwarding WITHOUT fresh deserialize (unexpected caller)"
+            ));
+        } else if selected >= TITLE_PROFILE_SLOT_COUNT {
+            let n = SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: continue_confirm BLOCKED #{n} -- switch active (phase={phase}) but no valid picked slot ({selected}); refusing to stream stale pre-switch state"
+            ));
+            return 0;
+        } else {
+            let slot = selected as i32;
+            let base = game_rva(0).unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+            let gm = game_man_ptr_or_null();
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: continue_confirm intercepted at clean title phase={phase} -> restore gaitem singleton + fresh feed-deserialize of PICKED slot {slot} before stream (shim=0x{shim:x})"
+            ));
+            // Release char#1's leaked gaitems back to the free-queue at this clean title (player
+            // absent) BEFORE the reload deserialize, else char#2's deserialize exhausts the queue
+            // and OOB-dispatches gaitemInsTable[-1] (the AV at live 0x67141a). Native per-item
+            // release; declines fail-closed if the singleton looks wrong (then the deserialize may
+            // still crash, but we never sweep a bogus pointer).
+            if base != TITLE_OWNER_SCAN_START_ADDRESS {
+                unsafe { own_load_reset_gaitem_singleton(base) };
+            }
+            if base != TITLE_OWNER_SCAN_START_ADDRESS
+                && unsafe { own_load_feed_deserialize(base, gm, slot) }
+            {
+                SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(1, Ordering::SeqCst);
+                let n = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
+                    .fetch_add(1, Ordering::SeqCst)
+                    + 1;
+                // LOAD COMMITTED -> get out of the way. The forwarded continue_confirm below fires
+                // SetState5, which streams the picked character. Return the switch machine to IDLE so
+                // the product-core autoload's switch branch STOPS (title.rs: it keeps arming
+                // GameMan+0xb78 = an in-world MoveMapStep load of the slot, and keeps re-driving the
+                // title, while phase >= RETURN_TITLE_REQUESTED). Left armed, that redundant b78 load
+                // competes with this SetState5 stream, stalls the title owner at state 6, and bounces
+                // the freshly-loaded world back to the title ~4s later (the post-load instability the
+                // earlier single-switch milestone missed -- it tore down before the bounce). IDLE also
+                // makes the in-world load guards inert (they gate on [CONFIRMED, AUTOLOAD_HANDOFF)), so
+                // the native world stream is unobstructed, and leaves the session clean for the next
+                // switch (also the durable fix for the post-switch hygiene issue er-effects-rs-qwj).
+                SYSTEM_QUIT_QUICKLOAD_PHASE
+                    .store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
+                // CLEAR the stale in-world load arm. product-core armed GameMan+0xb78 = slot MANY
+                // times before this confirm (title.rs, phase 3-4). Phase -> IDLE stops FURTHER arming
+                // but leaves b78 = slot RESIDENT; once our SetState5 world comes up, the in-world
+                // MoveMapStep loader reads that stale b78 and fires a REDUNDANT second load of the same
+                // slot -> a second CSGaitemImp::Deserialize with the free-queue already populated by
+                // our load -> the 0x67141a exhaustion crash (observed +41705ms). With phase IDLE the
+                // in-world guards are inert, so clear b78 to -1 (native "no requested slot") ourselves.
+                if gm != TITLE_OWNER_SCAN_START_ADDRESS {
+                    unsafe {
+                        *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) =
+                            OWN_STEPPER_SLOT_NONE;
+                    }
+                }
+                // CLEAR the return-title "rebuild the title" request flags the final functor set for
+                // this switch's teardown. They are LEVEL flags nothing resets, so once the reloaded
+                // world comes up the still-set menuData+0x5d re-requests the quit-to-title
+                // (GameMan.save_requested flips true again ~3.6s later, proven by gm-snap) and bounces
+                // the freshly-loaded world back to the title. The teardown they were needed for is done
+                // by now (we are at the clean-title Continue), so undo them.
+                let menu_man = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
+                    .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+                if menu_man != TITLE_OWNER_SCAN_START_ADDRESS
+                    && unsafe { is_heap_aligned_ptr(menu_man) }
+                {
+                    if let Some(menu_data) =
+                        unsafe { safe_read_usize(menu_man + CS_MENU_MAN_MENU_DATA_OFFSET) }
+                    {
+                        if menu_data != TITLE_OWNER_SCAN_START_ADDRESS
+                            && unsafe { is_heap_aligned_ptr(menu_data) }
+                        {
+                            unsafe {
+                                *((menu_data + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET)
+                                    as *mut u8) = 0;
+                            }
+                        }
+                    }
+                }
+                unsafe { *((base + RETURN_TITLE_REBUILD_FLAG_DAT_RVA) as *mut u8) = 0 };
+                // Also clear GameMan.save_requested defensively (typed): the return-title REQUEST set
+                // it for the teardown; a residual true would drive an immediate quit-save on the reload.
+                // AND clear GameMan.warp_requested: the fresh full deserialize we just ran (native
+                // parser 0x67b290 = dump FUN_14067b380) UNCONDITIONALLY sets warp_requested=true as a
+                // "warp reload pending" flag. On the normal in-world load the MoveMapStep warp machine
+                // consumes it, but our SetState5 forward is a fresh title->world stream that never does;
+                // MoveMapStep::CheckReturnToTitle (dump FUN_140afa7c0) then reads warp_requested==true
+                // every frame as a return-to-title trigger and bounces the freshly-loaded world back to
+                // the title ~4s later (proven: gm-snap shows warp_requested=true for the whole reloaded
+                // world vs false on the healthy boot load). warp_requested=false is the correct in-world
+                // steady state, so clearing it matches the boot load and does not affect which char loads.
+                if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
+                    er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
+                    er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
+                }
+                // REPEATABLE-SWITCH STATE RESTORE (er-effects-rs-qwj). The switch-#1 works but
+                // switch-#2-stalls symptom is a pure precondition mismatch: these three return-title
+                // one-shots are CONSUMED by this switch's teardown and gate the NEXT switch --
+                // RETURN_TITLE_REQUEST_COUNT (native return-title REQUEST fires only when ==0,
+                // startup_hooks 6922), DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT (menu-pump submit only
+                // when ==0, 7162), FINAL_FUNCTOR_CALL_COUNT (final-functor compare_exchange 0->1,
+                // title.rs 1690). Left set, switch #2 skips its return-title REQUEST + submit and
+                // never tears the world down (observed: stuck at title state 10/10, bc4=0). Restoring
+                // them to boot-fresh here makes every switch byte-identical to the first. This is the
+                // SAFE edge (unlike the disabled arm-time reset above, which re-fires during teardown
+                // and double-submits -> the single-switch bounce that regressed it): it runs once per
+                // switch (fresh-deser latch), AFTER this switch's return-title machinery is fully
+                // consumed, and alongside phase -> IDLE, so no return-title path reads a 0 count until
+                // the next switch arms (all those gates require phase != IDLE).
+                SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.store(0, Ordering::SeqCst);
+                SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.store(0, Ordering::SeqCst);
+                SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.store(0, Ordering::SeqCst);
+                // Restore the per-switch MENU-WINDOW state to boot-fresh too -- the visual analogue of
+                // the one-shots above (er-effects-rs-qwj). These trackers hold this switch's now-destroyed
+                // IngameTop/OptionSetting/ProfileSelect windows; left stale, the NEXT switch's quit menu
+                // (a) does not hide behind ProfileSelect (the hide keys off a valid tracked window, but
+                // the stale pointer's vtable is zeroed on the torn-down window -> hid_top=false, so the
+                // quit menu renders on top) and (b) its Quit Game / Return-to-Desktop rows act dead
+                // because the menu is layered over a stale ProfileSelect. Resetting here -- the same
+                // trackers the autopilot's sq_repro_begin_switch clears before each switch -- makes the
+                // next quit-menu open repopulate them fresh via the MenuWindowJob::Run hook, so the hide
+                // + input behave identically to the first switch. (Manual B-to-back had the same effect
+                // by forcing a fresh window; this makes it automatic.)
+                unsafe {
+                    system_quit_reset_profile_select_state("post-switch-commit-menu-hygiene")
+                };
+                SYSTEM_QUIT_INGAME_TOP_WINDOW.store(0, Ordering::SeqCst);
+                SYSTEM_QUIT_OPTION_SETTING_WINDOW.store(0, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: fresh picked-slot deserialize OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase -> IDLE + cleared GameMan+0xb78=-1 + cleared return-title rebuild flags (menuData+0x5d, DAT, save_requested, warp_requested) + RESET return-title one-shots (request/submit/final-functor) so the NEXT switch starts boot-fresh (er-effects-rs-qwj repeatable switching)"
+                ));
+            } else {
+                let n = SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: continue_confirm BLOCKED #{n} -- fresh deserialize of picked slot {slot} FAILED (see own-load-feed line); refusing to stream stale pre-switch state"
+                ));
+                return 0;
+            }
+        }
+    }
+    SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
+    let orig = SYSTEM_QUIT_CONTINUE_CONFIRM_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return 0;
+    }
+    let original: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    unsafe { original(shim, b, c, d) }
+}
+
+pub(crate) fn install_system_quit_continue_confirm_hook() {
+    if SYSTEM_QUIT_CONTINUE_CONFIRM_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_Initialize for continue_confirm guard failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(CONTINUE_CONFIRM_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: failed to resolve continue_confirm rva 0x{CONTINUE_CONFIRM_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_continue_confirm_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_CONTINUE_CONFIRM_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue_enable continue_confirm guard failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_CONTINUE_CONFIRM_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-quickload: hooked title Continue confirm 0x{addr:x}; active switch drives a fresh picked-slot deserialize before SetState5 (fail-closed)"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: MH_ApplyQueued continue_confirm guard failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-quickload: MhHook::new continue_confirm guard failed: {status:?}"
+        )),
+    }
+}
+
+/// READ-ONLY trace on `EzChildStepBase::RequestFinish` (`EZ_CHILD_STEP_REQUEST_FINISH_RVA`). The
+/// quit-to-title teardown ends the in-world MoveMapStep session through this one-shot; the
+/// post-switch reload bounce is the SAME call arriving against the freshly-created MoveMapStep
+/// child right after streaming completes. Logs which InGameStep child wrapper is being finished
+/// (stay/movemap) plus the first game-image caller RVA, so the stale requester can be identified.
+pub(crate) unsafe extern "system" fn system_quit_child_finish_request_hook(wrapper: usize) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let n = SYSTEM_QUIT_CHILD_FINISH_TRACE_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 64 {
+            let mut owner = TITLE_OWNER_PTR.load(Ordering::SeqCst);
+            if owner == TITLE_OWNER_SCAN_START_ADDRESS {
+                owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
+            }
+            let ig = if owner != TITLE_OWNER_SCAN_START_ADDRESS {
+                unsafe { safe_read_usize(owner + TITLE_STEP_IN_GAME_STEP_2E8_OFFSET) }.unwrap_or(0)
+            } else {
+                0
+            };
+            let kind = if ig != 0 && wrapper == ig + IN_GAME_STEP_MOVE_MAP_WRAPPER_E0_OFFSET {
+                "MOVEMAP-CHILD"
+            } else if ig != 0 && wrapper == ig + IN_GAME_STEP_STAY_WRAPPER_B8_OFFSET {
+                "stay-child"
+            } else {
+                "other"
+            };
+            let child =
+                unsafe { safe_read_usize(wrapper + EZ_CHILD_STEP_STEPPER_OFFSET) }.unwrap_or(0);
+            let caller_rva = crate::crashlog::trace_first_game_caller_rva();
+            append_autoload_debug(format_args!(
+                "child-finish-request #{n}: kind={kind} wrapper=0x{wrapper:x} child=0x{child:x} ig=0x{ig:x} caller_rva=0x{caller_rva:x}"
+            ));
+        }
+    }));
+    let orig = SYSTEM_QUIT_CHILD_FINISH_TRACE_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return;
+    }
+    let original: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(orig) };
+    unsafe { original(wrapper) }
+}
+
+pub(crate) fn install_system_quit_child_finish_trace_hook() {
+    if SYSTEM_QUIT_CHILD_FINISH_TRACE_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "child-finish-request: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(EZ_CHILD_STEP_REQUEST_FINISH_RVA) else {
+        append_autoload_debug(format_args!(
+            "child-finish-request: failed to resolve rva 0x{EZ_CHILD_STEP_REQUEST_FINISH_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_child_finish_request_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_CHILD_FINISH_TRACE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "child-finish-request: queue_enable failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_CHILD_FINISH_TRACE_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "child-finish-request: hooked EzChildStepBase::RequestFinish 0x{addr:x} -- read-only teardown-requester trace armed"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "child-finish-request: MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "child-finish-request: MhHook::new failed: {status:?}"
+        )),
+    }
+}
+
+pub(crate) unsafe extern "system" fn system_quit_gaitem_deserialize_hook(
+    gaitem: usize,
+    input_stream: usize,
+) {
+    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    if (SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
+        .contains(&phase)
+    {
+        let skips = SYSTEM_QUIT_GAITEM_DESERIALIZE_SKIP_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        if skips <= 8 || skips % 64 == 0 {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: CSGaitemImp::Deserialize SKIPPED during return-title transition #{skips} phase={phase} gaitem=0x{gaitem:x} input_stream=0x{input_stream:x}; lets native return-title load job advance without in-world inventory deserialize crash"
+            ));
+        }
+        return;
+    }
+    SYSTEM_QUIT_GAITEM_DESERIALIZE_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
+    let orig = SYSTEM_QUIT_GAITEM_DESERIALIZE_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: CSGaitemImp::Deserialize trampoline unset phase={phase} gaitem=0x{gaitem:x}; fail-closed skip"
+        ));
+        return;
+    }
+    let original: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(orig) };
+    unsafe { original(gaitem, input_stream) };
+}
+
+pub(crate) unsafe extern "system" fn system_quit_gameman_load_save_hook(
+    game_man: usize,
+    save_arg: usize,
+    load_kind: u32,
+) -> usize {
+    let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    if (SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED..SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
+        .contains(&phase)
+    {
+        let blocks = SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: GameMan load-save BLOCKED during return-title transition #{blocks} phase={phase} game_man=0x{game_man:x} save_arg=0x{save_arg:x} load_kind=0x{load_kind:x}; prevents in-world CSGaitemImp::Deserialize crash before title rebuild"
+        ));
+        return 0;
+    }
+    SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
+    let orig = SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: GameMan load-save trampoline unset phase={phase} game_man=0x{game_man:x}; fail-closed return 0"
+        ));
+        return 0;
+    }
+    let original: unsafe extern "system" fn(usize, usize, u32) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    unsafe { original(game_man, save_arg, load_kind) }
+}
+
+pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
+    job: usize,
+    result: usize,
+    fd4_time: usize,
+    d: usize,
+) -> usize {
+    let orig = SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: ProfileLoadDialog load-job trampoline unset for job=0x{job:x} -- fail-closed result=0x{result:x}"
+        ));
+        if result > TITLE_OWNER_SCAN_START_ADDRESS && unsafe { safe_read_usize(result) }.is_some() {
+            unsafe {
+                *(result as *mut i32) = MENU_JOB_STATE_SUCCESS;
+                *((result + 4) as *mut i32) = 0;
+            }
+        }
+        return result;
+    }
+    let original: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    let profile_window = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+    let list = unsafe { safe_read_usize(job + 0x50) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    let profile_id = unsafe { safe_read_i32(job + 0x58) }.unwrap_or(-1);
+    let context_arg =
+        unsafe { safe_read_usize(job + 0x60) }.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_JOB.store(job, Ordering::SeqCst);
+    SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_LIST.store(list, Ordering::SeqCst);
+    SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_PROFILE_ID.store(profile_id as usize, Ordering::SeqCst);
+    SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_CONTEXT_ARG.store(context_arg, Ordering::SeqCst);
+    // ROBUST block gate: block ANY ProfileLoad job while our injected in-world Load-Profile UI is up
+    // (real System windows hidden + our ProfileSelect window present). The prior `list ==
+    // profile_window + 0x50` match was fragile: when it failed (observed 2026-07-01), the in-world
+    // deserialize ran, our gaitem guards corrupted CSGaitemImp::gaitemInsTable, and it crashed in
+    // GetGaitemIns->GetGaitemHandle (live 0x6710c0) BEFORE the per-tick native close could pop
+    // ProfileSelect. The only load job that runs while our injected ProfileSelect is showing IS our
+    // flow's load, so hidden+profile-present is a sufficient and robust discriminator. `list` is
+    // still captured above for telemetry.
+    let _ = list;
+    let system_quit_profile_active =
+        profile_window != 0 && SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0;
+    if !system_quit_profile_active {
+        return unsafe { original(job, result, fd4_time, d) };
+    }
+
+    if system_quit_profile_load_activation_allowed() {
+        SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-dup: ProfileSelect load-job Run ALLOWED job=0x{job:x} list=0x{list:x} profile_id={profile_id}; forwarding native load path (known crash risk: CSGaitemImp::Deserialize rva 0x67141a)"
+        ));
+        return unsafe { original(job, result, fd4_time, d) };
+    }
+
+    SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst);
+    unsafe { system_quit_arm_quickload_autoload(profile_id, "ProfileSelectLoadJobRun") };
+    if result > TITLE_OWNER_SCAN_START_ADDRESS && unsafe { safe_read_usize(result) }.is_some() {
+        unsafe {
+            // Success(2), terminal: the load-job is the SECOND link in the native chain the slot
+            // activation submits (msgbox -> loadjob -> confirm-lambda FUN_1409a4ee0). Returning Success
+            // lets the chain advance to the confirm-lambda, which our confirm hook cancel-closes
+            // (natively pops ProfileSelect) so the menu-pump return-title chain can submit. Returning
+            // Failed(3) instead ABORTS the chain -> the confirm-lambda never runs -> ProfileSelect never
+            // closes -> return-title never submits (verified live 2026-07-01). The in-world load is NOT
+            // committed here: the actual saveState/b80=2 arm is the native RequestLoadSlot FUN_14067b2f0,
+            // which system_quit_request_load_slot_hook neutralizes during the switch. See bd
+            // system-quit-loadjob-success-commits-phantom-load-2026-07-01.
+            *(result as *mut i32) = MENU_JOB_STATE_SUCCESS;
+            *((result + 4) as *mut i32) = 0;
+        }
+    }
+    if let Ok(base) = game_module_base() {
+        if fd4_time > TITLE_OWNER_SCAN_START_ADDRESS
+            && unsafe { safe_read_usize(fd4_time) }.is_some()
+        {
+            unsafe { *(fd4_time as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
+        }
+    }
+    append_autoload_debug(format_args!(
+        "system-quit-dup: ProfileSelect load-job Run BLOCKED save-safe job=0x{job:x} result=0x{result:x} list=0x{list:x} profile_id={profile_id} context_arg=0x{context_arg:x}; returning Success to advance the chain to the confirm cancel-close (in-world saveState=2 arm is blocked at RequestLoadSlot); no captured LoadJob is retained or replayed"
+    ));
+    result
+}
+
+pub(crate) fn install_system_quit_gaitem_finalize_hook() {
+    let installed = SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED.load(Ordering::SeqCst);
+    if installed == SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED_YES {
+        return;
+    }
+    if installed == SYSTEM_QUIT_GAITEM_FINALIZE_DISABLED {
+        let addr = SYSTEM_QUIT_GAITEM_FINALIZE_ADDR.load(Ordering::SeqCst);
+        if addr != 0 {
+            match unsafe { MH_QueueEnableHook(addr as *mut c_void) } {
+                MH_STATUS::MH_OK => match unsafe { MH_ApplyQueued() } {
+                    MH_STATUS::MH_OK => {
+                        SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED
+                            .store(SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED_YES, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "system-quit-quickload: re-enabled CSGaitemImp finalize hook 0x{addr:x}; transition finalize skipped until native title handoff"
+                        ));
+                    }
+                    status => append_autoload_debug(format_args!(
+                        "system-quit-quickload: MH_ApplyQueued re-enable CSGaitemImp finalize hook failed: {status:?}"
+                    )),
+                },
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue re-enable CSGaitemImp finalize hook failed: {status:?}"
+                )),
+            }
+        }
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_Initialize for CSGaitemImp finalize hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_GAITEM_FINALIZE_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: failed to resolve CSGaitemImp finalize rva 0x{SYSTEM_QUIT_GAITEM_FINALIZE_RVA:x}"
+        ));
+        return;
+    };
+    SYSTEM_QUIT_GAITEM_FINALIZE_ADDR.store(addr, Ordering::SeqCst);
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_gaitem_finalize_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_GAITEM_FINALIZE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue_enable CSGaitemImp finalize hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED
+                        .store(SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED_YES, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-quickload: hooked CSGaitemImp finalize 0x{addr:x}; transition finalize skipped until native title handoff"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: MH_ApplyQueued CSGaitemImp finalize hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-quickload: MhHook::new CSGaitemImp finalize hook failed: {status:?}"
+        )),
+    }
+}
+
+pub(crate) fn disable_system_quit_gaitem_finalize_hook(source: &str) {
+    if SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED_YES
+    {
+        return;
+    }
+    let addr = SYSTEM_QUIT_GAITEM_FINALIZE_ADDR.load(Ordering::SeqCst);
+    if addr == 0 {
+        return;
+    }
+    match unsafe { MH_QueueDisableHook(addr as *mut c_void) } {
+        MH_STATUS::MH_OK => match unsafe { MH_ApplyQueued() } {
+            MH_STATUS::MH_OK => {
+                SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED
+                    .store(SYSTEM_QUIT_GAITEM_FINALIZE_DISABLED, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: disabled CSGaitemImp finalize hook 0x{addr:x} before native Continue source={source}"
+                ));
+            }
+            status => append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_ApplyQueued disable CSGaitemImp finalize hook failed source={source}: {status:?}"
+            )),
+        },
+        status => append_autoload_debug(format_args!(
+            "system-quit-quickload: queue_disable CSGaitemImp finalize hook failed source={source}: {status:?}"
+        )),
+    }
+}
+
+pub(crate) fn install_system_quit_gaitem_lookup_hook() {
+    let installed = SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED.load(Ordering::SeqCst);
+    if installed == SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED_YES {
+        return;
+    }
+    if installed == SYSTEM_QUIT_GAITEM_LOOKUP_DISABLED {
+        let addr = SYSTEM_QUIT_GAITEM_LOOKUP_ADDR.load(Ordering::SeqCst);
+        if addr != 0 {
+            match unsafe { MH_QueueEnableHook(addr as *mut c_void) } {
+                MH_STATUS::MH_OK => match unsafe { MH_ApplyQueued() } {
+                    MH_STATUS::MH_OK => {
+                        SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED
+                            .store(SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED_YES, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "system-quit-quickload: re-enabled CSGaitemImp lookup hook 0x{addr:x}; transition equipment handle lookups empty until native title handoff"
+                        ));
+                    }
+                    status => append_autoload_debug(format_args!(
+                        "system-quit-quickload: MH_ApplyQueued re-enable CSGaitemImp lookup hook failed: {status:?}"
+                    )),
+                },
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue re-enable CSGaitemImp lookup hook failed: {status:?}"
+                )),
+            }
+        }
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_Initialize for CSGaitemImp lookup hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_GAITEM_LOOKUP_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: failed to resolve CSGaitemImp lookup rva 0x{SYSTEM_QUIT_GAITEM_LOOKUP_RVA:x}"
+        ));
+        return;
+    };
+    SYSTEM_QUIT_GAITEM_LOOKUP_ADDR.store(addr, Ordering::SeqCst);
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_gaitem_lookup_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_GAITEM_LOOKUP_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue_enable CSGaitemImp lookup hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED
+                        .store(SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED_YES, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-quickload: hooked CSGaitemImp lookup 0x{addr:x}; transition equipment handle lookups empty until native title handoff"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: MH_ApplyQueued CSGaitemImp lookup hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-quickload: MhHook::new CSGaitemImp lookup hook failed: {status:?}"
+        )),
+    }
+}
+
+pub(crate) fn disable_system_quit_gaitem_lookup_hook(source: &str) {
+    if SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED_YES
+    {
+        return;
+    }
+    let addr = SYSTEM_QUIT_GAITEM_LOOKUP_ADDR.load(Ordering::SeqCst);
+    if addr == 0 {
+        return;
+    }
+    match unsafe { MH_QueueDisableHook(addr as *mut c_void) } {
+        MH_STATUS::MH_OK => match unsafe { MH_ApplyQueued() } {
+            MH_STATUS::MH_OK => {
+                SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED
+                    .store(SYSTEM_QUIT_GAITEM_LOOKUP_DISABLED, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: disabled CSGaitemImp lookup hook 0x{addr:x} before native Continue source={source}"
+                ));
+            }
+            status => append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_ApplyQueued disable CSGaitemImp lookup hook failed source={source}: {status:?}"
+            )),
+        },
+        status => append_autoload_debug(format_args!(
+            "system-quit-quickload: queue_disable CSGaitemImp lookup hook failed source={source}: {status:?}"
+        )),
+    }
+}
+
+pub(crate) fn install_system_quit_gaitem_deserialize_hook() {
+    let installed = SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED.load(Ordering::SeqCst);
+    if installed == SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED_YES {
+        return;
+    }
+    if installed == SYSTEM_QUIT_GAITEM_DESERIALIZE_DISABLED {
+        let addr = SYSTEM_QUIT_GAITEM_DESERIALIZE_ADDR.load(Ordering::SeqCst);
+        if addr != 0 {
+            match unsafe { MH_QueueEnableHook(addr as *mut c_void) } {
+                MH_STATUS::MH_OK => match unsafe { MH_ApplyQueued() } {
+                    MH_STATUS::MH_OK => {
+                        SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED.store(
+                            SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED_YES,
+                            Ordering::SeqCst,
+                        );
+                        append_autoload_debug(format_args!(
+                            "system-quit-quickload: re-enabled CSGaitemImp::Deserialize hook 0x{addr:x}; transition inventory deserialize leaf skipped until native title handoff"
+                        ));
+                    }
+                    status => append_autoload_debug(format_args!(
+                        "system-quit-quickload: MH_ApplyQueued re-enable CSGaitemImp::Deserialize hook failed: {status:?}"
+                    )),
+                },
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue re-enable CSGaitemImp::Deserialize hook failed: {status:?}"
+                )),
+            }
+        }
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_Initialize for CSGaitemImp::Deserialize hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_GAITEM_DESERIALIZE_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: failed to resolve CSGaitemImp::Deserialize rva 0x{SYSTEM_QUIT_GAITEM_DESERIALIZE_RVA:x}"
+        ));
+        return;
+    };
+    SYSTEM_QUIT_GAITEM_DESERIALIZE_ADDR.store(addr, Ordering::SeqCst);
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_gaitem_deserialize_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_GAITEM_DESERIALIZE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue_enable CSGaitemImp::Deserialize hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED.store(
+                        SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED_YES,
+                        Ordering::SeqCst,
+                    );
+                    append_autoload_debug(format_args!(
+                        "system-quit-quickload: hooked CSGaitemImp::Deserialize 0x{addr:x}; transition inventory deserialize leaf skipped until native title handoff"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: MH_ApplyQueued CSGaitemImp::Deserialize hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-quickload: MhHook::new CSGaitemImp::Deserialize hook failed: {status:?}"
+        )),
+    }
+}
+
+pub(crate) fn disable_system_quit_gaitem_deserialize_hook(source: &str) {
+    if SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED_YES
+    {
+        return;
+    }
+    let addr = SYSTEM_QUIT_GAITEM_DESERIALIZE_ADDR.load(Ordering::SeqCst);
+    if addr == 0 {
+        return;
+    }
+    match unsafe { MH_QueueDisableHook(addr as *mut c_void) } {
+        MH_STATUS::MH_OK => match unsafe { MH_ApplyQueued() } {
+            MH_STATUS::MH_OK => {
+                SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED
+                    .store(SYSTEM_QUIT_GAITEM_DESERIALIZE_DISABLED, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: disabled CSGaitemImp::Deserialize hook 0x{addr:x} before native Continue source={source}"
+                ));
+            }
+            status => append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_ApplyQueued disable CSGaitemImp::Deserialize hook failed source={source}: {status:?}"
+            )),
+        },
+        status => append_autoload_debug(format_args!(
+            "system-quit-quickload: queue_disable CSGaitemImp::Deserialize hook failed source={source}: {status:?}"
+        )),
+    }
+}
+
+pub(crate) fn install_system_quit_gameman_load_save_hook() {
+    let installed = SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED.load(Ordering::SeqCst);
+    if installed == SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED_YES {
+        return;
+    }
+    if installed == SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_DISABLED {
+        let addr = SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ADDR.load(Ordering::SeqCst);
+        if addr != 0 {
+            match unsafe { MH_QueueEnableHook(addr as *mut c_void) } {
+                MH_STATUS::MH_OK => match unsafe { MH_ApplyQueued() } {
+                    MH_STATUS::MH_OK => {
+                        SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED.store(
+                            SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED_YES,
+                            Ordering::SeqCst,
+                        );
+                        append_autoload_debug(format_args!(
+                            "system-quit-quickload: re-enabled GameMan load-save hook 0x{addr:x}; transition loads blocked until native title handoff"
+                        ));
+                    }
+                    status => append_autoload_debug(format_args!(
+                        "system-quit-quickload: MH_ApplyQueued re-enable GameMan load-save hook failed: {status:?}"
+                    )),
+                },
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue re-enable GameMan load-save hook failed: {status:?}"
+                )),
+            }
+        }
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_Initialize for GameMan load-save hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: failed to resolve GameMan load-save rva 0x{SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_RVA:x}"
+        ));
+        return;
+    };
+    SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ADDR.store(addr, Ordering::SeqCst);
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_gameman_load_save_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: queue_enable GameMan load-save hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED.store(
+                        SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED_YES,
+                        Ordering::SeqCst,
+                    );
+                    append_autoload_debug(format_args!(
+                        "system-quit-quickload: hooked GameMan load-save 0x{addr:x}; transition loads blocked until native title handoff"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-quickload: MH_ApplyQueued GameMan load-save hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-quickload: MhHook::new GameMan load-save hook failed: {status:?}"
+        )),
+    }
+}
+
+pub(crate) fn disable_system_quit_gameman_load_save_hook(source: &str) {
+    if SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED_YES
+    {
+        return;
+    }
+    let addr = SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ADDR.load(Ordering::SeqCst);
+    if addr == 0 {
+        return;
+    }
+    match unsafe { MH_QueueDisableHook(addr as *mut c_void) } {
+        MH_STATUS::MH_OK => match unsafe { MH_ApplyQueued() } {
+            MH_STATUS::MH_OK => {
+                SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED
+                    .store(SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_DISABLED, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: disabled GameMan load-save hook 0x{addr:x} before native Continue source={source}"
+                ));
+            }
+            status => append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_ApplyQueued disable GameMan load-save hook failed source={source}: {status:?}"
+            )),
+        },
+        status => append_autoload_debug(format_args!(
+            "system-quit-quickload: queue_disable GameMan load-save hook failed source={source}: {status:?}"
+        )),
+    }
+}
+
+fn install_system_quit_profile_load_activate_hook() {
+    if SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: MH_Initialize for ProfileLoadDialog activation hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: failed to resolve ProfileLoadDialog activation rva 0x{SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_profile_load_activate_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: queue_enable ProfileLoadDialog activation hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED.store(
+                        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED_YES,
+                        Ordering::SeqCst,
+                    );
+                    append_autoload_debug(format_args!(
+                        "system-quit-dup: hooked ProfileLoadDialog activation 0x{addr:x}; injected in-world ProfileSelect can build confirmation dialog"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-dup: MH_ApplyQueued ProfileLoadDialog activation hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-dup: MhHook::new ProfileLoadDialog activation hook failed: {status:?}"
+        )),
+    }
+}
+
+fn install_system_quit_profile_load_confirmed_hook() {
+    if SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: MH_Initialize for ProfileLoadDialog confirmed-load hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: failed to resolve ProfileLoadDialog confirmed-load rva 0x{SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_profile_load_confirmed_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: queue_enable ProfileLoadDialog confirmed-load hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED.store(
+                        SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED_YES,
+                        Ordering::SeqCst,
+                    );
+                    append_autoload_debug(format_args!(
+                        "system-quit-dup: hooked ProfileLoadDialog confirmed-load transition 0x{addr:x}; transition is allowed after load-job guard"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-dup: MH_ApplyQueued ProfileLoadDialog confirmed-load hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-dup: MhHook::new ProfileLoadDialog confirmed-load hook failed: {status:?}"
+        )),
+    }
+}
+
+fn install_system_quit_profile_load_job_run_hook() {
+    if SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: MH_Initialize for ProfileLoadDialog load-job Run hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: failed to resolve ProfileLoadDialog load-job Run rva 0x{SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_profile_load_job_run_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: queue_enable ProfileLoadDialog load-job Run hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED.store(
+                        SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED_YES,
+                        Ordering::SeqCst,
+                    );
+                    append_autoload_debug(format_args!(
+                        "system-quit-dup: hooked ProfileLoadDialog load-job Run 0x{addr:x}; actual in-world load/deser is blocked by default"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-dup: MH_ApplyQueued ProfileLoadDialog load-job Run hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-dup: MhHook::new ProfileLoadDialog load-job Run hook failed: {status:?}"
+        )),
+    }
+}
+
+fn apply_system_quit_multislot_layout_patch() {
+    let Ok(base) = game_module_base() else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: component-index patch skipped -- module base unavailable"
+        ));
+        return;
+    };
+    let target = (base + SYSTEM_QUIT_COMPONENT_INDEX_PATCH_RVA) as *mut u8;
+    let existing = unsafe { *target };
+    if existing == SYSTEM_QUIT_COMPONENT_INDEX_REPLACEMENT_MULTI_SLOT {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: component-index patch already applied at 0x{:x} value=0x{existing:x}",
+            base + SYSTEM_QUIT_COMPONENT_INDEX_PATCH_RVA
+        ));
+        return;
+    }
+    if existing != SYSTEM_QUIT_COMPONENT_INDEX_EXPECTED_GAME_END {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: component-index patch ABORT -- byte at 0x{:x} is 0x{existing:x}, expected 0x{SYSTEM_QUIT_COMPONENT_INDEX_EXPECTED_GAME_END:x}",
+            base + SYSTEM_QUIT_COMPONENT_INDEX_PATCH_RVA
+        ));
+        return;
+    }
+    let mut old_protect = PAGE_PROTECT_UNSET;
+    let protect_ok = unsafe {
+        VirtualProtect(
+            target as *mut c_void,
+            SYSTEM_QUIT_COMPONENT_INDEX_PATCH_LEN,
+            PAGE_EXECUTE_READWRITE,
+            &mut old_protect,
+        )
+    };
+    if protect_ok == HOOK_FALSE_RETURN as i32 {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: component-index patch VirtualProtect failed"
+        ));
+        return;
+    }
+    unsafe {
+        *target = SYSTEM_QUIT_COMPONENT_INDEX_REPLACEMENT_MULTI_SLOT;
+    }
+    let mut restored = PAGE_PROTECT_UNSET;
+    unsafe {
+        VirtualProtect(
+            target as *mut c_void,
+            SYSTEM_QUIT_COMPONENT_INDEX_PATCH_LEN,
+            old_protect,
+            &mut restored,
+        )
+    };
+    append_autoload_debug(format_args!(
+        "system-quit-dup: patched Quit Game component index 0x{:x} 0x{SYSTEM_QUIT_COMPONENT_INDEX_EXPECTED_GAME_END:x}->0x{SYSTEM_QUIT_COMPONENT_INDEX_REPLACEMENT_MULTI_SLOT:x} (multi-slot layout proof)",
+        base + SYSTEM_QUIT_COMPONENT_INDEX_PATCH_RVA
+    ));
+}
+
+/// Install the System -> Quit Game duplicate-button proof hook once. Opt-in only; the detour is a
+/// pass-through for every `AddCancelButton` call except the second call from the Quit Game tab
+/// builder, where it invokes the original trampoline a second time with the same native args.
+pub(crate) fn install_system_quit_duplicate_button_hook() {
+    apply_system_quit_multislot_layout_patch();
+    install_system_quit_menu_window_job_run_hook();
+    install_system_quit_window_list_push_hook();
+    install_system_quit_noop_action_hook();
+    install_system_quit_profile_load_activate_hook();
+    install_system_quit_profile_load_confirmed_hook();
+    install_system_quit_profile_load_job_run_hook();
+    if SYSTEM_QUIT_DUPLICATE_INSTALLED.load(Ordering::SeqCst) != SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: failed to resolve AddCancelButton rva 0x{SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_duplicate_add_cancel_button_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_DUPLICATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: queue_enable AddCancelButton failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_DUPLICATE_INSTALLED
+                        .store(SYSTEM_QUIT_DUPLICATE_INSTALLED_YES, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-dup: hooked AddCancelButton 0x{addr:x}; will clone Quit Game row as quick-load from GR_LineHelp:{SYSTEM_QUIT_LOAD_LINEHELP_ID} at caller rva 0x{SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA:x}"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-dup: MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-dup: MhHook::new AddCancelButton failed: {status:?}"
         )),
     }
 }

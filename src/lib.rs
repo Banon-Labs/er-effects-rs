@@ -169,11 +169,16 @@ pub unsafe extern "system" fn DirectInput8Create(
 /// # Safety
 ///
 /// This is called by Windows when the DLL is loaded. Do not call it directly.
-pub unsafe extern "C" fn DllMain(_hmodule: HINSTANCE, reason: u32, _reserved: *mut c_void) -> i32 {
+pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mut c_void) -> i32 {
     if reason != DLL_PROCESS_ATTACH {
         return DLL_MAIN_SUCCESS;
     }
     write_bootstrap_event(BOOTSTRAP_EVENT_DLL_MAIN_ATTACH, BOOTSTRAP_DETAIL_START);
+
+    // Record our own DLL base (+ SizeOfImage) so the crash logger can annotate a fault whose
+    // RIP/return-addresses land in our relocated code as `self+0xRVA` instead of raw Wine
+    // addresses the game-base resolver cannot decode. Pure PE-header read, no API/loader lock.
+    record_self_dll_base(hmodule.0 as usize);
 
     // Boot profiler: spawn the independent CPU sampler FIRST so it captures the engine-init threads
     // during the pre-CSTaskImp-instance gap (the largest uninstrumented boot window). Read-only by
@@ -397,6 +402,47 @@ pub unsafe extern "C" fn DllMain(_hmodule: HINSTANCE, reason: u32, _reserved: *m
             .spawn(install_profile_renderer_teardown_spare_hook);
     });
 
+    // Profile-renderer table guard (er-effects-rs-j3r): before the native per-slot thumbnail
+    // builder runs, log a degraded 10-slot table, REBUILD a fully-empty one via the engine's own
+    // table setup (only the TitleTopDialog ctor ever calls it natively, so nothing repopulates it
+    // across our in-world ProfileSelect reopens -- the 3rd open crashed on the empty table), and
+    // fail-soft skip the builder if a slot would still null-deref at [entry+0x754].
+    START_PROFILE_SELECT_TABLE_DIAG.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("er-effects-profileselect-table-diag".to_owned())
+            .spawn(install_profile_select_table_diag_hook);
+    });
+
+    // System -> Quit Game quick-loading button: always-on multi-slot layout patch plus a third row
+    // that opens native 05_010_ProfileSelect. Slot activation from that injected in-world route is
+    // separately blocked by default until the crash-risk load semantics are pinned.
+    START_SYSTEM_QUIT_DUPLICATE_BUTTON_HOOK.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("er-effects-system-quit-load".to_owned())
+            .spawn(install_system_quit_duplicate_button_hook);
+    });
+
+    // Title Continue confirm guard (0x140b0e180): while a System->Quit->Load-Profile switch is
+    // active, drive ONE fresh feed-deserialize of the PICKED slot before the confirm streams, so
+    // the clean-title reload loads the picked character instead of re-streaming the stale
+    // pre-switch state (bd system-quit-cleantitle-load-is-stale-restream-not-slot-source-2026-07-02).
+    // Installed unconditionally (single MinHook per address -- this detour also carries the
+    // continue-trace CAP logging); pure passthrough outside an active switch.
+    START_SYSTEM_QUIT_CONTINUE_CONFIRM_HOOK.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("er-effects-system-quit-continue-confirm".to_owned())
+            .spawn(install_system_quit_continue_confirm_hook);
+    });
+
+    // READ-ONLY teardown-requester trace: EzChildStepBase::RequestFinish. Identifies WHO requests
+    // the in-world MoveMapStep child's finish -- the post-switch reload bounce is a stale finish
+    // request hitting the freshly-created map session (er-effects-rs-qwj investigation).
+    START_SYSTEM_QUIT_CHILD_FINISH_TRACE_HOOK.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("er-effects-system-quit-child-finish-trace".to_owned())
+            .spawn(install_system_quit_child_finish_trace_hook);
+    });
+
     // MenuWindow latch: install the SceneObjProxy ctor hook (0x14074a700) as early as the
     // splash-skip / online-disable patches, from a thread, so it lands BEFORE the title state
     // machine builds the title dialog during boot. On each VALID call it latches rdx (the engine-
@@ -537,6 +583,18 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 } else {
                     release_input_block_now();
                 }
+                // GameMan field transition trace (change-detected): captures the STABLE boot-load
+                // trajectory and the BOUNCE switch-load trajectory in one run so they can be diffed to
+                // find which GameMan field re-triggers the title post-load. Runs every frame; the
+                // change-detection makes it a compact transition log. Product-autoload runs only.
+                if product_autoload_enabled() {
+                    snapshot_game_man_on_change();
+                }
+                // SELF-DRIVEN System->Quit->Load-Profile repro autopilot: stamps this frame's
+                // scripted DInput key (no-op unless system_quit_repro_enabled + in-world). Runs
+                // every frame so the injected key is fresh for the game's keyboard poll, and only
+                // while the block above is engaged (which the autopilot itself keeps on in-world).
+                unsafe { system_quit_repro_tick() };
                 // D3D12 PRESENT OVERLAY: once the GX device is up, find the game's live swapchain and hook
                 // its REAL Present (the dummy-swapchain vtable differs under vkd3d-proton). Self-gated
                 // (portrait path only, one-shot on success, bounded retries) so it's cheap every frame.
@@ -768,6 +826,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     if lite_mode() {
                         return;
                     }
+                    unsafe { system_quit_profile_select_top_menu_tick() };
                     // Product autoload: run the native title open-menu predicate + minimal
                     // native save-load core from the recurring game task, before the idx10
                     // MenuJobWait hook path is needed. This bypasses title-accept/input
@@ -780,7 +839,16 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         if base_result.is_ok() {
                             PRODUCT_CORE_CALLSITE_BASE_OK_TICKS.fetch_add(1, Ordering::SeqCst);
                         }
-                        let slot_result = state.autoload.slot();
+                        let quickload_slot =
+                            SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
+                        let slot_result = if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+                            >= SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED
+                            && quickload_slot != usize::MAX
+                        {
+                            Some(quickload_slot as i32)
+                        } else {
+                            state.autoload.slot()
+                        };
                         if let Some(slot) = slot_result {
                             PRODUCT_CORE_CALLSITE_SLOT_OK_TICKS.fetch_add(1, Ordering::SeqCst);
                             PRODUCT_CORE_CALLSITE_LAST_SLOT.store(slot as usize, Ordering::SeqCst);
@@ -930,6 +998,27 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // choices), optionally clean stale title-dialog render resources, then run the
                 // one-shot correctness dump.
                 IN_WORLD_REACHED.store(IN_WORLD_REACHED_YES, Ordering::SeqCst);
+                if product_autoload_enabled()
+                    && SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+                        >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+                {
+                    PRODUCT_CORE_CALLSITE_TICKS.fetch_add(1, Ordering::SeqCst);
+                    let quickload_slot = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
+                    if let (Ok(base), true) = (game_module_base(), quickload_slot != usize::MAX) {
+                        PRODUCT_CORE_CALLSITE_BASE_OK_TICKS.fetch_add(1, Ordering::SeqCst);
+                        PRODUCT_CORE_CALLSITE_SLOT_OK_TICKS.fetch_add(1, Ordering::SeqCst);
+                        PRODUCT_CORE_CALLSITE_LAST_SLOT.store(quickload_slot, Ordering::SeqCst);
+                        unsafe {
+                            product_core_autoload_tick(
+                                base,
+                                quickload_slot as i32,
+                                state.game_task_ticks,
+                            )
+                        };
+                    }
+                    write_telemetry_throttled(&mut state, false);
+                    return;
+                }
                 if own_stepper_enabled()
                     || native_load_enabled()
                     || native_continue_enabled()

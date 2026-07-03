@@ -1018,6 +1018,9 @@ pub(crate) unsafe fn install_title_anim_speed_hook(base: usize) {
 /// risking a forced SetState (which has NO double-build guard). bd menu-build-overlap-lever-2026-06-24.
 pub(crate) unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i32) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if owner > PAB_MIN_HEAP_PTR {
+            TITLE_SETSTATE_TRACE_LAST_OWNER.store(owner, Ordering::SeqCst);
+        }
         let dialog = if owner > PAB_MIN_HEAP_PTR {
             unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(0)
         } else {
@@ -1034,6 +1037,26 @@ pub(crate) unsafe extern "system" fn title_setstate_trace_detour(owner: usize, s
         } else {
             0
         };
+        if owner > PAB_MIN_HEAP_PTR
+            && SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+                >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN
+            && (state == 2 || state == 3 || state == TITLE_STEP_MENU_JOB_WAIT)
+        {
+            if let Ok(base) = game_module_base() {
+                let table = unsafe { safe_read_usize(owner + TITLE_OWNER_INSTANCE_TABLE_OFFSET) }
+                    .unwrap_or(0);
+                if table == base + INNER_TITLE_STATE_TABLE_RVA {
+                    let previous = TITLE_OWNER_PTR.swap(owner, Ordering::SeqCst);
+                    TITLE_OWNER_SCAN_COUNTDOWN
+                        .store(TITLE_OWNER_SCAN_CALL_INTERVAL, Ordering::SeqCst);
+                    if previous != owner {
+                        append_autoload_debug(format_args!(
+                            "system-quit-quickload: latched native SetState title owner=0x{owner:x} state={state} previous=0x{previous:x} table=0x{table:x}; overriding stale scan candidate"
+                        ));
+                    }
+                }
+            }
+        }
         append_autoload_debug(format_args!(
             "title-setstate-trace: SetState(owner=0x{owner:x}, state={state}) committed_was={committed} owner+0xe0(dialog)=0x{dialog:x} owner+0xb8(gate)=0x{b8:x}"
         ));
@@ -1584,9 +1607,143 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         return true;
     };
     let owner = owner_ptr as usize;
+    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+    {
+        SYSTEM_QUIT_QUICKLOAD_LAST_TITLE_OWNER.store(owner, Ordering::SeqCst);
+        if SYSTEM_QUIT_QUICKLOAD_PHASE
+            .compare_exchange(
+                SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED,
+                SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+        {
+            SYSTEM_QUIT_QUICKLOAD_TITLE_OWNER_SEEN_COUNT.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: title owner appeared after internal return-title request owner=0x{owner:x}; handing off to product Continue autoload"
+            ));
+        }
+        // NOTE: the return-title chain submit is intentionally NOT done here. This product-core
+        // tick runs on the game task, concurrently with the game's menu/Scaleform pump; submitting
+        // the return-title job from here races that pump and corrupts Scaleform state (observed:
+        // non-deterministic execute-fault into Scaleform string data). The submit is done in
+        // menu-pump ownership from the MenuWindowJob::Run hook instead. See bd
+        // system-quit-return-title-scaleform-race-2026-07-01.
+    }
     PRODUCT_CORE_OWNER_TICKS.fetch_add(1, Ordering::SeqCst);
     PRODUCT_CORE_LAST_OWNER.store(owner, Ordering::SeqCst);
     let gm = game_man_ptr_or_null();
+    let return_title_job_predicate_bc4 = if gm != null {
+        unsafe { safe_read_usize(gm + GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET) }
+            .map(|v| v as u32 as usize)
+            .unwrap_or(usize::MAX)
+    } else {
+        usize::MAX
+    };
+    PRODUCT_CORE_LAST_RETURN_TITLE_JOB_PREDICATE_BC4
+        .store(return_title_job_predicate_bc4, Ordering::SeqCst);
+    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+        && gm != null
+        && slot >= OWN_STEPPER_SLOT_ZERO
+    {
+        // GameMan+0xb78 is CS::GameMan::GetRequestedSaveSlotLoad: the per-frame MoveMapStep load
+        // orchestrator (FUN_140afb970, live) reads it and, when != -1, calls RequestLoadSlot(b78) to
+        // load that slot IN-WORLD. So while the OLD world is still up (local player present) b78 MUST
+        // stay -1 -- writing the picked slot here arms the very in-world load we are trying to avoid.
+        // (Observed 2026-07-01: writing b78=slot while in-world made FUN_140afb970 spin
+        // RequestLoadSlot(slot) 4600+ times; with that arm blocked the map machine stuck "loading" and
+        // the return-title final functor never fired, so the world never tore down -- the menu just
+        // closed leaving a stray cursor.) Only once the world has torn down (player absent) do we set
+        // b78=slot so the clean-title autoload loads the picked slot via that same b78 -> RequestLoadSlot
+        // path. See bd system-quit-loadjob-success-commits-phantom-load-2026-07-01.
+        let world_up = unsafe { PlayerIns::local_player_mut() }.is_ok();
+        let b78_val = if world_up {
+            OWN_STEPPER_SLOT_NONE
+        } else {
+            slot
+        };
+        unsafe { *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = b78_val };
+        // NOTE: an earlier attempt repointed GameMan+0xac0 (set_save_slot) here at the clean title.
+        // That was proven INSUFFICIENT and misleading: ac0 is a deserialize BYPRODUCT, never read as
+        // load input, and repointing it forges the `ac0==expected` deser-evidence the Continue GUARD
+        // relies on. The picked slot is now made authoritative by the continue_confirm guard
+        // (system_quit_continue_confirm_hook), which drives a fresh feed-deserialize of the picked
+        // slot (setting ac0/c30/PGD as its normal byproducts) before the confirm streams. See bd
+        // system-quit-ac0-fix-insufficient-cleantitle-load-is-native-mostrecent-2026-07-02 and
+        // system-quit-cleantitle-load-is-stale-restream-not-slot-source-2026-07-02.
+        if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
+            let requested_slot = unsafe { safe_read_i32(gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) }
+                .unwrap_or(OWN_STEPPER_SLOT_NONE);
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: requested save-slot load index world_up={world_up} wrote gm_b78={b78_val} (read_back={requested_slot}) selected_slot={slot} phase={} bc4=0x{return_title_job_predicate_bc4:x}",
+                SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+            ));
+        }
+    }
+    if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+        >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN
+        && SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT.load(Ordering::SeqCst) > 0
+        && return_title_job_predicate_bc4 == GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY
+        && SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT
+            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    {
+        let system_dialog = SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.load(Ordering::SeqCst);
+        let queue = if system_dialog != 0 && system_dialog != TITLE_OWNER_SCAN_START_ADDRESS {
+            system_dialog + 0x10
+        } else {
+            TITLE_OWNER_SCAN_START_ADDRESS
+        };
+        let queue_ready = if queue != TITLE_OWNER_SCAN_START_ADDRESS {
+            match game_rva(MENU_JOB_QUEUE_READY_RVA) {
+                Ok(ready_addr) => {
+                    let ready: unsafe extern "system" fn(usize) -> u8 =
+                        unsafe { std::mem::transmute(ready_addr) };
+                    unsafe { ready(queue) != 0 }
+                }
+                Err(_) => false,
+            }
+        } else {
+            false
+        };
+        match (
+            game_rva(SYSTEM_QUIT_RETURN_TITLE_FINAL_JOB_BUILDER_RVA),
+            game_rva(MENU_JOB_SUBMIT_RVA),
+            queue_ready,
+        ) {
+            (Ok(builder_addr), Ok(submit_addr), true) => {
+                let builder: unsafe extern "system" fn(usize) -> usize =
+                    unsafe { std::mem::transmute(builder_addr) };
+                let submit: unsafe extern "system" fn(usize, usize) =
+                    unsafe { std::mem::transmute(submit_addr) };
+                let mut job_slot: usize = 0;
+                let job_slot_ptr = (&raw mut job_slot) as usize;
+                unsafe { builder(job_slot_ptr) };
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: native return-title predicate terminal bc4=0x{return_title_job_predicate_bc4:x}; submitting queued final-functor job builder=0x{builder_addr:x} submit=0x{submit_addr:x} system_dialog=0x{system_dialog:x} queue=0x{queue:x} job=0x{job_slot:x} after suppressed Decision UI"
+                ));
+                if job_slot != 0 && job_slot != TITLE_OWNER_SCAN_START_ADDRESS {
+                    unsafe { submit(queue, job_slot_ptr) };
+                } else {
+                    SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.store(0, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-quickload: final-functor job builder produced no plausible job builder=0x{builder_addr:x} job=0x{job_slot:x}"
+                    ));
+                }
+            }
+            (builder_result, submit_result, ready) => {
+                SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.store(0, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: final-functor queued submit deferred at bc4=0x{return_title_job_predicate_bc4:x} builder_ok={} submit_ok={} queue_ready={ready} system_dialog=0x{system_dialog:x} queue=0x{queue:x}",
+                    builder_result.is_ok(),
+                    submit_result.is_ok()
+                ));
+            }
+        }
+    }
     if phase == OWN_STEPPER_PHASE_S2_INVOKE
         || phase == OWN_STEPPER_PHASE_S2_ACTIVATE
         || phase == OWN_STEPPER_PHASE_S2_MOUNT_POLL
@@ -1706,7 +1863,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         PRODUCT_CORE_LAST_BLOCKER.store(blocker, Ordering::SeqCst);
         if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
             append_autoload_debug(format_args!(
-                "product-core-autoload: waiting for core readiness owner=0x{owner:x} state={committed}/{requested} table=0x{table:x} session=0x{session:x} gm=0x{gm:x} gdm=0x{game_data_man:x} profile=0x{profile_summary:x} iodev=0x{iodev:x} heap=0x{heap_allocator:x} title_loop={title_loop} title_textfadeout={title_textfadeout} menu_latch={menu_opened_latch} press_start_proxy=0x{press_start_proxy:x} press_start_vt=0x{press_start_vt:x} press_start_ctx=0x{press_start_context:x} slot={slot} tick={tick}"
+                "product-core-autoload: waiting for core readiness owner=0x{owner:x} state={committed}/{requested} table=0x{table:x} session=0x{session:x} gm=0x{gm:x} return_title_bc4=0x{return_title_job_predicate_bc4:x} gdm=0x{game_data_man:x} profile=0x{profile_summary:x} iodev=0x{iodev:x} heap=0x{heap_allocator:x} title_loop={title_loop} title_textfadeout={title_textfadeout} menu_latch={menu_opened_latch} press_start_proxy=0x{press_start_proxy:x} press_start_vt=0x{press_start_vt:x} press_start_ctx=0x{press_start_context:x} slot={slot} tick={tick}"
             ));
         }
         return true;
@@ -1823,6 +1980,40 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 "portrait-window: release -> commit load (captured={captured} waited={waited})"
             ));
         }
+        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+            >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN
+            && gm != null
+            && slot >= OWN_STEPPER_SLOT_ZERO
+        {
+            unsafe { *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = slot };
+            let requested_slot = unsafe { safe_read_i32(gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) }
+                .unwrap_or(OWN_STEPPER_SLOT_NONE);
+            if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: set requested save-slot load index before Continue selected_slot={slot} gm_b78={requested_slot}"
+                ));
+            }
+        }
+        // SWITCH-SAFETY: for the in-world System->Quit->Load-Profile switch, do NOT drive ANY native
+        // Continue/menu-readiness probing or the autoload tick until the OLD world is actually torn
+        // down (local player absent). Those calls poke native menu/Scaleform functions from the game
+        // task; running them while the old world + menu pump are live races the pump and corrupts
+        // Scaleform (non-deterministic execute-fault). The menu-pump-owned chain (native confirm
+        // Success pops ProfileSelect -> Run-hook submits the return-title chain -> world teardown)
+        // must complete first; once the player goes absent this drives the load at a CLEAN title,
+        // exactly like the boot autoload. Boot has no System-Quit phase, and at a fresh title there is
+        // no local player, so this passes immediately there. See bd
+        // system-quit-return-title-scaleform-race-2026-07-01.
+        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+            && unsafe { PlayerIns::local_player_mut() }.is_ok()
+        {
+            if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
+                append_autoload_debug(format_args!(
+                    "product-core-autoload: SWITCH holding native Continue driving until old world torn down -- local player still present slot={slot} tick={tick}"
+                ));
+            }
+            return true;
+        }
         if !unsafe { product_continue_action_ready(&ready, module_base, gm, slot) } {
             if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
                 append_autoload_debug(format_args!(
@@ -1835,6 +2026,18 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 ));
             }
             return true;
+        }
+        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+            >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN
+        {
+            SYSTEM_QUIT_QUICKLOAD_PHASE.store(
+                SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF,
+                Ordering::SeqCst,
+            );
+            SYSTEM_QUIT_QUICKLOAD_AUTOLOAD_HANDOFF_COUNT.fetch_add(1, Ordering::SeqCst);
+            disable_system_quit_gaitem_deserialize_hook("native-continue-handoff");
+            disable_system_quit_gaitem_lookup_hook("native-continue-handoff");
+            disable_system_quit_gaitem_finalize_hook("native-continue-handoff");
         }
         unsafe { product_continue_autoload_tick(owner, module_base, gm, slot, tick, &ready) };
     }
