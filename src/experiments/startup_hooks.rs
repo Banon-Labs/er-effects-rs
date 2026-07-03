@@ -8330,6 +8330,174 @@ pub(crate) unsafe extern "system" fn scaleform_handler_dtor_hook(obj: usize) {
     unsafe { f(obj) };
 }
 
+/// Bump the GX command-queue producer histogram for `key` (lock-free open addressing; a full table
+/// counts drops instead of evicting so the hot producers stay attributed).
+fn gx_cmd_queue_hist_bump(key: usize) {
+    if key == 0 {
+        return;
+    }
+    let mut idx = (key >> 4) % GX_CMD_QUEUE_HIST_SLOTS;
+    for _ in 0..GX_CMD_QUEUE_HIST_SLOTS {
+        let cur = GX_CMD_QUEUE_HIST_KEYS[idx].load(Ordering::Relaxed);
+        if cur == key {
+            GX_CMD_QUEUE_HIST_COUNTS[idx].fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        if cur == 0 {
+            match GX_CMD_QUEUE_HIST_KEYS[idx].compare_exchange(
+                0,
+                key,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    GX_CMD_QUEUE_HIST_COUNTS[idx].fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+                Err(actual) if actual == key => {
+                    GX_CMD_QUEUE_HIST_COUNTS[idx].fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+                Err(_) => {}
+            }
+        }
+        idx = (idx + 1) % GX_CMD_QUEUE_HIST_SLOTS;
+    }
+    GX_CMD_QUEUE_HIST_DROPPED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Top-N GX producer histogram entries as `0x<rva>[+self] x<count>`, count-descending. `+self`
+/// marks submissions whose call chain passed through our DLL (our pipeline caused them).
+pub(crate) fn gx_cmd_queue_hist_top(n: usize) -> String {
+    let mut entries: Vec<(usize, usize)> = (0..GX_CMD_QUEUE_HIST_SLOTS)
+        .filter_map(|i| {
+            let key = GX_CMD_QUEUE_HIST_KEYS[i].load(Ordering::Relaxed);
+            let count = GX_CMD_QUEUE_HIST_COUNTS[i].load(Ordering::Relaxed);
+            (key != 0 && count != 0).then_some((key, count))
+        })
+        .collect();
+    entries.sort_by(|a, b| b.1.cmp(&a.1));
+    entries
+        .iter()
+        .take(n)
+        .map(|(key, count)| {
+            let rva = key & !GX_CMD_QUEUE_SELF_TAG;
+            let self_tag = if key & GX_CMD_QUEUE_SELF_TAG != 0 {
+                "+self"
+            } else {
+                ""
+            };
+            format!("0x{rva:x}{self_tag} x{count}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Telemetry-only wrapper for `reserve_command_queue_slot` (deobf 0x141aeae60): the fixed 192-slot
+/// GX command queue whose full-queue null-slot write is the repeated-switch crash at rva 0x1aeaf05
+/// (reproduced at switch #4, run autostep10c-directarm-20260703-145348). Tracks occupancy
+/// high-water (cumulative + per-switch), total reserves, and a producer histogram keyed by the
+/// first game-.text caller outside the enqueue-wrapper band (self-tagged when our DLL is in the
+/// chain), and dumps the top producers as the queue nears the edge -- so the overflow run NAMES the
+/// accumulating producer. ALWAYS forwards unchanged: the 5ae3965 drop-on-overflow guard corrupted
+/// the render (c2794d9) and must not return.
+pub(crate) unsafe extern "system" fn gx_reserve_cmd_queue_slot_hook(
+    queue: usize,
+    param2: usize,
+    param3: i32,
+    param4: u32,
+    param5: u32,
+) -> usize {
+    let count = unsafe { safe_read_i32(queue + GX_CMD_QUEUE_COUNT_OFFSET) }.unwrap_or(-1);
+    let cap = unsafe { safe_read_i32(queue + GX_CMD_QUEUE_CAP_OFFSET) }.unwrap_or(-1);
+    if count >= 0 {
+        GX_CMD_QUEUE_MAX_FILL.fetch_max(count as usize, Ordering::Relaxed);
+        GX_CMD_QUEUE_SWITCH_MAX_FILL.fetch_max(count as usize, Ordering::Relaxed);
+    }
+    if cap > 0 {
+        GX_CMD_QUEUE_CAP_SEEN.store(cap as usize, Ordering::Relaxed);
+    }
+    GX_CMD_QUEUE_SUBMITS.fetch_add(1, Ordering::Relaxed);
+    let (producer, self_in_stack) =
+        stack_producer_rva(GX_CMD_QUEUE_WRAPPER_RVA_MIN..GX_CMD_QUEUE_WRAPPER_RVA_MAX);
+    let key = if self_in_stack {
+        producer | GX_CMD_QUEUE_SELF_TAG
+    } else {
+        producer
+    };
+    gx_cmd_queue_hist_bump(key);
+    if cap > 0 && count >= 0 && count as usize >= (cap as usize) - GX_CMD_QUEUE_NEARFULL_MARGIN {
+        let hits = GX_CMD_QUEUE_NEARFULL_HITS.fetch_add(1, Ordering::Relaxed);
+        if hits % GX_CMD_QUEUE_NEARFULL_LOG_EVERY == 0 {
+            append_autoload_debug(format_args!(
+                "gx-cmdqueue: NEAR-FULL count={count}/{cap} (hit #{hits}) queue=0x{queue:x} top producers: {}",
+                gx_cmd_queue_hist_top(8)
+            ));
+        }
+    }
+    let orig = GX_RESERVE_CMD_QUEUE_SLOT_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET || orig == 0 {
+        // Fail-open is impossible here (the caller needs a real slot buffer); this branch can only
+        // be reached if MinHook called the detour before the trampoline store, which queue_enable
+        // ordering prevents. Keep a loud log so an impossible state is visible, not silent.
+        append_autoload_debug(format_args!(
+            "gx-cmdqueue: trampoline unset in detour (queue=0x{queue:x}) -- forwarding impossible"
+        ));
+        return 0;
+    }
+    let f: unsafe extern "system" fn(usize, usize, i32, u32, u32) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    unsafe { f(queue, param2, param3, param4, param5) }
+}
+
+/// Install the GX command-queue producer telemetry hook (never alters queue behavior).
+fn install_gx_cmd_queue_telemetry() {
+    if GX_RESERVE_CMD_QUEUE_SLOT_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "gx-cmdqueue: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(GX_RESERVE_CMD_QUEUE_SLOT_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "gx-cmdqueue: failed to resolve reserve_command_queue_slot rva 0x{GX_RESERVE_CMD_QUEUE_SLOT_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            gx_reserve_cmd_queue_slot_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            GX_RESERVE_CMD_QUEUE_SLOT_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if unsafe { hook.queue_enable() }.is_ok()
+                && matches!(unsafe { MH_ApplyQueued() }, MH_STATUS::MH_OK)
+            {
+                GX_RESERVE_CMD_QUEUE_SLOT_INSTALLED.store(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "gx-cmdqueue: producer telemetry hooked reserve_command_queue_slot 0x{addr:x} (occupancy high-water + caller histogram; forwards always)"
+                ));
+            } else {
+                append_autoload_debug(format_args!(
+                    "gx-cmdqueue: queue_enable/MH_ApplyQueued failed for 0x{addr:x}"
+                ));
+            }
+            std::mem::forget(hook);
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!("gx-cmdqueue: MhHook::new failed: {status:?}"));
+        }
+    }
+}
+
 /// Install the Scaleform handler ctor/dtor lifecycle guard (repeated-switch ProfileSelect UAF).
 fn install_scaleform_handler_lifecycle_guard() {
     if SCALEFORM_HANDLER_TRACE_INSTALLED.load(Ordering::SeqCst) != 0 {
@@ -8725,6 +8893,17 @@ fn sq_repro_begin_switch() {
     SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
     SQ_REPRO_INITIAL_CURSOR.store(usize::MAX, Ordering::SeqCst);
     SQ_REPRO_WAIT_RELOAD_FRAMES.store(0, Ordering::SeqCst);
+    // GX command-queue growth curve: log the finished switch's occupancy high-water + top
+    // producers, then reset the per-switch high-water so each switch reports its own peak (the
+    // 0x1aeaf05 overflow shows as this peak climbing toward cap across switches).
+    let switch_peak = GX_CMD_QUEUE_SWITCH_MAX_FILL.swap(0, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "gx-cmdqueue: switch boundary -- prev-switch peak {switch_peak}/{} (cumulative max {}, reserves {}) top producers: {}",
+        GX_CMD_QUEUE_CAP_SEEN.load(Ordering::SeqCst),
+        GX_CMD_QUEUE_MAX_FILL.load(Ordering::SeqCst),
+        GX_CMD_QUEUE_SUBMITS.load(Ordering::SeqCst),
+        gx_cmd_queue_hist_top(8)
+    ));
 }
 
 /// Fabricated gamepad wButtons for a phase that issues a FIXED list of button edges ONCE, in order,
@@ -10539,9 +10718,10 @@ fn apply_system_quit_multislot_layout_patch() {
 pub(crate) fn install_system_quit_duplicate_button_hook() {
     apply_system_quit_multislot_layout_patch();
     install_scaleform_handler_lifecycle_guard();
-    // (GX command-queue overflow guard removed: dropping command lists on overflow corrupts the
-    // render / soft-locks -- a band-aid. The real cause is our per-load profile-table rebuild
-    // leaking renderers that stack draw load; that is the thing to fix, not the queue write.)
+    // Telemetry-only successor to the removed 5ae3965 overflow guard (dropping command lists on
+    // overflow corrupts the render -- c2794d9): never alters queue behavior, only names which
+    // producer's submissions grow per switch so the 0x1aeaf05 overflow can be fixed at its source.
+    install_gx_cmd_queue_telemetry();
     install_system_quit_menu_window_job_run_hook();
     install_system_quit_window_list_push_hook();
     install_system_quit_noop_action_hook();

@@ -2481,6 +2481,39 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_scaleform_handler_dtors",
             SCALEFORM_HANDLER_DTORS.load(Ordering::SeqCst),
         );
+        // GX command-queue overflow forensics (repeated-switch crash 0x1aeaf05): max_fill climbing
+        // toward cap across switches = the accumulating-producer signature; top_producers names the
+        // caller RVAs (entries tagged +self passed through our DLL).
+        push_json_usize(
+            body,
+            "oracle_gx_cmdqueue_cap",
+            GX_CMD_QUEUE_CAP_SEEN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gx_cmdqueue_max_fill",
+            GX_CMD_QUEUE_MAX_FILL.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gx_cmdqueue_switch_max_fill",
+            GX_CMD_QUEUE_SWITCH_MAX_FILL.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gx_cmdqueue_reserves",
+            GX_CMD_QUEUE_SUBMITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gx_cmdqueue_nearfull_hits",
+            GX_CMD_QUEUE_NEARFULL_HITS.load(Ordering::SeqCst),
+        );
+        push_json_str(
+            body,
+            "oracle_gx_cmdqueue_top_producers",
+            &crate::experiments::gx_cmd_queue_hist_top(8),
+        );
         push_json_usize(
             body,
             "oracle_portrait_multi_model_publish_skips",

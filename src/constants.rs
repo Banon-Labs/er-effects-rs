@@ -4603,6 +4603,48 @@ pub(crate) static SCALEFORM_HANDLER_DTORS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SCALEFORM_HANDLER_DOUBLE_FREES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SCALEFORM_HANDLER_LAST_DOUBLE_FREE_OBJ: AtomicUsize = AtomicUsize::new(0);
 
+/// GX COMMAND-QUEUE PRODUCER TELEMETRY (switch-#4 overflow, run autostep10c-directarm 2026-07-03).
+/// `reserve_command_queue_slot` (deobf entry 0x141aeae60; shift-verified against dump 0x141aeae80)
+/// appends a command-list slot to a fixed array: base at queue+0x28, count at +0x30, capacity at
+/// +0x34 (fixed 192). When count >= capacity the append branch is skipped and the engine writes the
+/// slot through a NULL pointer -- the repeated-switch crash at rva 0x1aeaf05. Switches #1-#3 survive
+/// and #4 overflows, so some producer's per-frame submissions GROW per switch. This hook is
+/// telemetry-ONLY (always forwards -- the 5ae3965 drop-on-overflow guard corrupted rendering and was
+/// removed in c2794d9): it tracks occupancy high-water (cumulative + per-switch) and a caller
+/// histogram so the run that overflows NAMES the accumulating producer instead of just crashing.
+pub(crate) const GX_RESERVE_CMD_QUEUE_SLOT_RVA: usize = 0x1aeae60;
+/// Queue-struct field offsets (from the reserve_command_queue_slot decompile).
+pub(crate) const GX_CMD_QUEUE_COUNT_OFFSET: usize = 0x30;
+pub(crate) const GX_CMD_QUEUE_CAP_OFFSET: usize = 0x34;
+pub(crate) static GX_RESERVE_CMD_QUEUE_SLOT_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static GX_RESERVE_CMD_QUEUE_SLOT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Cumulative occupancy high-water, per-switch high-water (reset by `sq_repro_begin_switch`), the
+/// observed capacity, and total reserve calls.
+pub(crate) static GX_CMD_QUEUE_MAX_FILL: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static GX_CMD_QUEUE_SWITCH_MAX_FILL: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static GX_CMD_QUEUE_CAP_SEEN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static GX_CMD_QUEUE_SUBMITS: AtomicUsize = AtomicUsize::new(0);
+/// Producer histogram: open-addressed key -> count. Key = first game-.text return address (as RVA)
+/// above the reserve/add_command_list wrapper band, with `GX_CMD_QUEUE_SELF_TAG` ORed in when any
+/// stack frame lies inside our own DLL (attributes submissions our pipeline caused vs pure-native).
+pub(crate) const GX_CMD_QUEUE_HIST_SLOTS: usize = 32;
+pub(crate) const GX_CMD_QUEUE_SELF_TAG: usize = 1 << 63;
+/// Deobf RVA band holding reserve_command_queue_slot and its 4 thin enqueue wrappers (dump
+/// 0x141aea930..0x141aeab60, shift +0x20); return addresses inside it are transport, not producers.
+pub(crate) const GX_CMD_QUEUE_WRAPPER_RVA_MIN: usize = 0x1aea900;
+pub(crate) const GX_CMD_QUEUE_WRAPPER_RVA_MAX: usize = 0x1aeaf60;
+pub(crate) static GX_CMD_QUEUE_HIST_KEYS: [AtomicUsize; GX_CMD_QUEUE_HIST_SLOTS] =
+    [const { AtomicUsize::new(0) }; GX_CMD_QUEUE_HIST_SLOTS];
+pub(crate) static GX_CMD_QUEUE_HIST_COUNTS: [AtomicUsize; GX_CMD_QUEUE_HIST_SLOTS] =
+    [const { AtomicUsize::new(0) }; GX_CMD_QUEUE_HIST_SLOTS];
+pub(crate) static GX_CMD_QUEUE_HIST_DROPPED: AtomicUsize = AtomicUsize::new(0);
+/// Near-full evidence: hits with count >= cap - margin, and a log throttle so the dump lands BEFORE
+/// the crash frame without spamming (one line per 64 near-full reserves).
+pub(crate) const GX_CMD_QUEUE_NEARFULL_MARGIN: usize = 24;
+pub(crate) const GX_CMD_QUEUE_NEARFULL_LOG_EVERY: usize = 64;
+pub(crate) static GX_CMD_QUEUE_NEARFULL_HITS: AtomicUsize = AtomicUsize::new(0);
+
 /// Gate-local `CS::MenuWindowJob::Run` hook state. `MENU_WINDOW_JOB_RUN_RVA` is defined with the
 /// title-cover constants above; System Quit reuses that same live/deobf target.
 pub(crate) static SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG: AtomicUsize =
