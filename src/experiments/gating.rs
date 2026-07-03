@@ -884,6 +884,23 @@ pub(crate) fn title_resource_memory_gfx_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// DEFAULT-ON product 05_000_title asset strip (er-effects-rs-dl0): serve the embedded
+/// text/menu/footer-stripped `05_000_title.gfx` (`TITLE_05_000_TEXT_SUPPRESSED_GFX`) from memory at
+/// Scaleform file-open, so PRESS ANY BUTTON / the Continue menu text / the copyright footer never
+/// build or animate. The per-element hide hooks stay installed as defense-in-depth, but the movie
+/// itself carries no visual placements. End-to-end prior proof with the stripped movie live:
+/// runtime artifact `title-05-000-native-ui-stripped-recorded-latest` reached EVENT T_controllable
+/// (+21.9s) with the PressStart proxy still bindable (dialog+0xb78 readiness gate satisfied).
+/// Gated like `native_continue_enabled` (no new opt-in gate; splash-skip de-gating precedent):
+/// off for no-autoload / profile-capture / telemetry-only runs, so a pure observe run never
+/// mutates visual resources. `ER_EFFECTS_TITLE_05_000_MEMORY_GFX` remains the explicit override:
+/// a path or `embedded:` selector replaces the default asset; the literal `vanilla`/`off`/`0`
+/// forces the native on-disk movie while autoload stays on (handled in
+/// `load_title_scaleform_memory_gfx`).
+pub(crate) fn title_05_000_strip_default_enabled() -> bool {
+    !(autoload_disabled() || native_profile_capture_enabled() || save_override_telemetry_only())
+}
+
 /// DEFAULT-ON product masquerade cover Part A: suppress only the native `05_000_Title`
 /// MenuWindowJob visual wrapper while the zero-input autoload runs. If memory-GFX replacement is
 /// active, do not install the old TitleBack hide hooks: `05_001_Title_Logo` is the replacement

@@ -115,11 +115,39 @@ fn load_title_scaleform_memory_gfx() {
         &TITLE_SCALEFORM_MEMORY_GFX,
         "05_001_title_logo GFX",
     );
+    // `vanilla`/`off`/`0` force the native on-disk 05_000 movie (diagnostic escape while autoload
+    // stays on); checked before the env loader so the literal is never treated as a file path.
+    let force_vanilla_05_000 = std::env::var("ER_EFFECTS_TITLE_05_000_MEMORY_GFX")
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "vanilla" | "off" | "0"
+            )
+        })
+        .unwrap_or(false);
+    if force_vanilla_05_000 {
+        append_autoload_debug(format_args!(
+            "title-resource-observer: 05_000_title strip forced vanilla via ER_EFFECTS_TITLE_05_000_MEMORY_GFX"
+        ));
+        return;
+    }
     load_memory_gfx_from_env(
         "ER_EFFECTS_TITLE_05_000_MEMORY_GFX",
         &TITLE_SCALEFORM_05_000_MEMORY_GFX,
         "05_000_title GFX",
     );
+    // Product default (er-effects-rs-dl0): no env override -> serve the embedded stripped
+    // 05_000_title movie whenever the product autoload owns the title flow.
+    if TITLE_SCALEFORM_05_000_MEMORY_GFX.get().is_some() || !title_05_000_strip_default_enabled() {
+        return;
+    }
+    TITLE_SCALEFORM_MEMORY_GFX_BYTES
+        .fetch_add(TITLE_05_000_TEXT_SUPPRESSED_GFX.len(), Ordering::SeqCst);
+    let _ = TITLE_SCALEFORM_05_000_MEMORY_GFX.set(TITLE_05_000_TEXT_SUPPRESSED_GFX.to_vec());
+    append_autoload_debug(format_args!(
+        "title-resource-observer: product-default 05_000_title strip armed (embedded:title-05-000-suppressed bytes={})",
+        TITLE_05_000_TEXT_SUPPRESSED_GFX.len()
+    ));
 }
 
 /// DIAGNOSTIC detour for the dialog builder 0x1409275b0 (4 register args rcx/rdx/r8/r9 -> dialog
@@ -5609,6 +5637,10 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
                 Some(file) => {
                     memory_replacement = true;
                     TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS.fetch_add(1, Ordering::SeqCst);
+                    if is_title_05_000 {
+                        TITLE_SCALEFORM_05_000_MEMORY_GFX_REPLACEMENTS
+                            .fetch_add(1, Ordering::SeqCst);
+                    }
                     TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE.store(file, Ordering::SeqCst);
                     file
                 }
