@@ -3123,7 +3123,28 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
             // publish_skips=241). Pump every frame the renderer is vtable-valid and the table is
             // not in multi-model (menu) churn; the task bodies self-guard on model/X, so ticking
             // any state is engine-normal. Readback/publish/bind keep the stricter gates below.
-            if portrait_render_drive_enabled() && off != 0 && off != null && live_models <= 1 {
+            //
+            // FREEZE-AFTER-CAPTURE (crash root fix 2026-07-03): the per-frame drive (pump +
+            // per_frame_push_hook rasterize + readback) dereferences the profile renderer/model
+            // deep in the GX chain EVERY frame during the volatile loading/switch window. Under
+            // repeated rapid switching a renderer gets FREED between our vtable check and the deep
+            // deref (TOCTOU), so the drive calls through freed memory -> a use-after-free that
+            // surfaced as three different crashes (Scaleform dtor, GX-queue null, garbage-vtable
+            // RIP) as the corruption landed at different addresses each run. The stable head we
+            // publish is just PIXELS -- once we have ONE good keyed capture this window
+            // (PROFILE_BAKE_RGBA_CAPTURED, set only on a real non-checker publish, cleared at the
+            // window reset), STOP touching renderers: freeze the display to that static capture for
+            // the rest of the window. This removes ~all of the per-frame UAF exposure (the crashes
+            // hit hundreds of drive frames in, long after the first capture). Trade-off: the
+            // portrait animates only until the first good frame, then holds -- stability over the
+            // continuous look-at, which is the right call while loads must not crash.
+            let already_captured = PROFILE_BAKE_RGBA_CAPTURED.load(Ordering::SeqCst) != 0;
+            if portrait_render_drive_enabled()
+                && !already_captured
+                && off != 0
+                && off != null
+                && live_models <= 1
+            {
                 // BUILD-DURATION semaphore: one log line on the null->valid model transition. Run
                 // #9 implies the mid-load async build takes ~13s (kick +16.8s -> stable gate first
                 // passes ~+29.5s) from world-streaming contention -- vs the boot-era 133ms build on
@@ -10474,6 +10495,9 @@ fn apply_system_quit_multislot_layout_patch() {
 pub(crate) fn install_system_quit_duplicate_button_hook() {
     apply_system_quit_multislot_layout_patch();
     install_scaleform_handler_lifecycle_guard();
+    // (GX command-queue overflow guard removed: it never fired -- the real crash is a per-frame
+    // renderer use-after-free, now addressed by freeze-after-capture -- and it hooked the hot
+    // reserve_command_queue_slot render path unnecessarily.)
     install_system_quit_menu_window_job_run_hook();
     install_system_quit_window_list_push_hook();
     install_system_quit_noop_action_hook();
