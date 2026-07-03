@@ -39,6 +39,10 @@ er-safe-input = { path = "crates/er-safe-input" }
 # In-memory texture-payload builder: portrait pixels -> uncompressed R8G8B8A8 DDS -> TPF003 blob,
 # fed to the game's in-memory TPF factory to replace the now-loading background. Pure-Rust, std-only.
 er-tpf = { path = "crates/er-tpf" }
+# GFX (Scaleform SWF-variant) codec + content-addressed tag edits: derives the stripped
+# 05_000_title movie at runtime from the game's own in-memory vanilla bytes instead of embedding
+# the full asset (er-effects-rs-h7x). Pure-Rust, std-only.
+er-gfx = { path = "crates/er-gfx" }
 # ERPX portrait-dump container (encode side): single source of truth for the debug RGBA dump format
 # the look-at proof writes. Core-only (default-features off) so the DLL never pulls the host `png` dep.
 erpx-rs = { path = "crates/erpx-rs", default-features = false }

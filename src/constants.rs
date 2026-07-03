@@ -1966,7 +1966,33 @@ pub(crate) static TITLE_SCALEFORM_MEMORY_GFX_FAILURES: AtomicUsize = AtomicUsize
 pub(crate) static TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
-include!("title_05_000_text_suppressed_bytes.rs");
+/// Product-default 05_000_title strip is armed for RUNTIME derivation (er-effects-rs-h7x): no
+/// embedded stripped movie; the Scaleform file-open hook reads the game's own vanilla bytes out of
+/// the native MemoryFile the FileOpener returns (payload owned by GLOBAL_GfxRepository) and applies
+/// `er_gfx::title_05_000::strip` -- 18 content-addressed tag edits, all-or-nothing, byte-identical
+/// to the previously-embedded `TITLE_05_000_TEXT_SUPPRESSED_GFX` for the known vanilla input
+/// (fixture-gated proof in `crates/er-gfx/tests/title_strip.rs`). 0 = disarmed, 1 = armed.
+pub(crate) static TITLE_05_000_RUNTIME_STRIP_ARMED: AtomicUsize = AtomicUsize::new(0);
+/// Successful runtime-strip serves (native MemoryFile data/len swapped to the derived movie).
+pub(crate) static TITLE_05_000_RUNTIME_STRIP_SERVES: AtomicUsize = AtomicUsize::new(0);
+/// Runtime-strip failures (unexpected file vtable, unreadable payload, parse/edit/write error).
+/// Every failure falls closed to the untouched native file (vanilla title UI).
+pub(crate) static TITLE_05_000_RUNTIME_STRIP_FAILURES: AtomicUsize = AtomicUsize::new(0);
+/// Observed native 05_000 payload length at first successful read (0 until then).
+pub(crate) static TITLE_05_000_RUNTIME_STRIP_INPUT_LEN: AtomicUsize = AtomicUsize::new(0);
+/// Derived stripped movie length (0 until derived).
+pub(crate) static TITLE_05_000_RUNTIME_STRIP_OUTPUT_LEN: AtomicUsize = AtomicUsize::new(0);
+/// Input provenance: 0 = not yet classified, 1 = known vanilla (output proven byte-identical to
+/// the validated asset), 2 = unknown input (game update / other mod; edits applied all-or-nothing).
+/// NOTE (run 20260702-203258): the LIVE repository payload is 12,176 bytes vs the 12,174-byte
+/// extracted corpus file -- 2 trailing bytes after the root End tag -- so class 2 is the expected
+/// steady state on the current game build; the output still derived byte-identical.
+pub(crate) static TITLE_05_000_RUNTIME_STRIP_INPUT_CLASS: AtomicUsize = AtomicUsize::new(0);
+/// Whether the derived output matches the validated-asset fingerprint (len 11707 +
+/// FNV 0x17906a0e91ce5374): 0 = not derived yet, 1 = byte-identical to the validated v2 asset,
+/// 2 = clean all-or-nothing edit result with a DIFFERENT fingerprint (expected only after a game
+/// update changes untouched tags; not an error, but the proof of visual equivalence is then open).
+pub(crate) static TITLE_05_000_RUNTIME_STRIP_OUTPUT_VALIDATED: AtomicUsize = AtomicUsize::new(0);
 
 /// From-scratch minimal diagnostic GFX: one frame, magenta background + full-screen magenta shape.
 /// Generated via FFDEC XML (`target/custom-gfx-lab/title-logo-minimal/...`) and embedded so the

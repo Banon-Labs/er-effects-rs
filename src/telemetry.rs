@@ -2151,6 +2151,41 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         );
         push_json_usize(
             body,
+            "oracle_title_05_000_runtime_strip_armed",
+            TITLE_05_000_RUNTIME_STRIP_ARMED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_title_05_000_runtime_strip_serves",
+            TITLE_05_000_RUNTIME_STRIP_SERVES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_title_05_000_runtime_strip_failures",
+            TITLE_05_000_RUNTIME_STRIP_FAILURES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_title_05_000_runtime_strip_input_len",
+            TITLE_05_000_RUNTIME_STRIP_INPUT_LEN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_title_05_000_runtime_strip_output_len",
+            TITLE_05_000_RUNTIME_STRIP_OUTPUT_LEN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_title_05_000_runtime_strip_input_class",
+            TITLE_05_000_RUNTIME_STRIP_INPUT_CLASS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_title_05_000_runtime_strip_output_validated",
+            TITLE_05_000_RUNTIME_STRIP_OUTPUT_VALIDATED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
             "oracle_title_scaleform_memory_gfx_failures",
             title_scaleform_memory_gfx_failures,
         );

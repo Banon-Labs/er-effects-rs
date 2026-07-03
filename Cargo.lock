@@ -2740,6 +2740,7 @@ dependencies = [
  "cc",
  "eldenring",
  "er-effects-data",
+ "er-gfx",
  "er-safe-input",
  "er-save-loader",
  "er-tpf",
