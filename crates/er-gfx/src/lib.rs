@@ -47,6 +47,9 @@
 use bitflags::bitflags;
 use std::fmt;
 
+pub mod edit;
+pub mod title_05_000;
+
 /// Tag code for `DefineSprite`. Its body is `spriteId: u16`, `frameCount: u16`,
 /// then a NESTED tag stream parsed with the same parser and terminated by its
 /// own `End(0)`.

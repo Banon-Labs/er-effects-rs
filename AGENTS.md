@@ -24,6 +24,8 @@ Do not launch Elden Ring through Steam from agent workflows. Forbidden launch fo
 
 Do not bundle `ersc.dll`. Seamless Co-op is a compatibility target, but this repo must not copy, move, archive, release-package, or stage `SeamlessCoop/ersc.dll` into LazyLoader/product artifacts or repo `target/` bundles.
 
+Do not COMMIT game-derived binaries either (user directive 2026-07-02): no extracted or transformed game assets (`.gfx`, `.dcx`, `.bnd`, `.tpf`, `.sl2`, texture/font payloads) as repo files, including test fixtures. Version FINGERPRINTS (length + FNV/sha constants) and deterministic generators instead; tests that need real asset bytes read them from the local extraction corpus (env-overridable root, e.g. `ER_GFX_CORPUS_ROOT` in `crates/er-gfx/tests/common/mod.rs`) and SKIP when it is absent. Large embedded byte arrays in `.rs` sources are the same problem in different clothing -- prefer runtime derivation from the game's own in-memory data (see `er_gfx::title_05_000`) or structured edit tables over byte dumps.
+
 For custom title/loading cover surfaces, use a native D3D12/game-render-layer path or direct game UI/render primitive path only, with proof that the surface is above `PRESS ANY BUTTON` / `CONTINUE`.
 
 Hyprland `grim -g` captures a screen region, not a window backing store. Runtime OCR/screenshot checks must first validate an exact Elden Ring target window (`class == steam_app_1245620`) that is mapped, not hidden, focused/topmost (`focusHistoryID == 0`), and has sane geometry. If that validation fails, fail closed without taking or trusting a screenshot; do not crop an occluded region that may contain another app.

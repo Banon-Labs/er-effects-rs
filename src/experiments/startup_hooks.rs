@@ -53,6 +53,11 @@ use super::*;
 
 static TITLE_SCALEFORM_MEMORY_GFX: OnceLock<Vec<u8>> = OnceLock::new();
 static TITLE_SCALEFORM_05_000_MEMORY_GFX: OnceLock<Vec<u8>> = OnceLock::new();
+/// Runtime-derived stripped 05_000_title movie (er-effects-rs-h7x): computed once at first
+/// title file-open from the native MemoryFile's vanilla payload, then reused for every later
+/// title visit. Lives for the process lifetime so the swapped-in data pointer stays valid for
+/// as long as any native file object references it.
+static TITLE_05_000_RUNTIME_STRIPPED: OnceLock<Vec<u8>> = OnceLock::new();
 
 fn load_memory_gfx_from_env(var: &str, slot: &OnceLock<Vec<u8>>, label: &str) {
     let Ok(path) = std::env::var(var) else {
@@ -62,9 +67,7 @@ fn load_memory_gfx_from_env(var: &str, slot: &OnceLock<Vec<u8>>, label: &str) {
     if trimmed.is_empty() || slot.get().is_some() {
         return;
     }
-    let embedded_bytes = if trimmed.eq_ignore_ascii_case("embedded:title-05-000-suppressed") {
-        Some(TITLE_05_000_TEXT_SUPPRESSED_GFX)
-    } else if trimmed.eq_ignore_ascii_case("embedded:minimal-magenta") {
+    let embedded_bytes = if trimmed.eq_ignore_ascii_case("embedded:minimal-magenta") {
         Some(TITLE_MINIMAL_MAGENTA_GFX)
     } else if trimmed.eq_ignore_ascii_case("embedded:minimal-magenta-counter") {
         Some(TITLE_MINIMAL_MAGENTA_COUNTER_GFX)
@@ -117,36 +120,46 @@ fn load_title_scaleform_memory_gfx() {
     );
     // `vanilla`/`off`/`0` force the native on-disk 05_000 movie (diagnostic escape while autoload
     // stays on); checked before the env loader so the literal is never treated as a file path.
-    let force_vanilla_05_000 = std::env::var("ER_EFFECTS_TITLE_05_000_MEMORY_GFX")
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "vanilla" | "off" | "0"
-            )
-        })
-        .unwrap_or(false);
-    if force_vanilla_05_000 {
-        append_autoload_debug(format_args!(
-            "title-resource-observer: 05_000_title strip forced vanilla via ER_EFFECTS_TITLE_05_000_MEMORY_GFX"
-        ));
-        return;
+    // `embedded:title-05-000-suppressed` is the legacy selector for the product strip asset: it
+    // now arms the same runtime derivation as the product default (the asset is no longer
+    // embedded; it is derived from the game's own vanilla bytes at file-open).
+    let env_05_000 = std::env::var("ER_EFFECTS_TITLE_05_000_MEMORY_GFX")
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    match env_05_000.as_str() {
+        "vanilla" | "off" | "0" => {
+            append_autoload_debug(format_args!(
+                "title-resource-observer: 05_000_title strip forced vanilla via ER_EFFECTS_TITLE_05_000_MEMORY_GFX"
+            ));
+            return;
+        }
+        "embedded:title-05-000-suppressed" => {
+            TITLE_05_000_RUNTIME_STRIP_ARMED.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "title-resource-observer: 05_000_title runtime strip armed via legacy embedded selector (derived at file-open, {} edits)",
+                er_gfx::title_05_000::TITLE_05_000_STRIP_EDITS.len()
+            ));
+            return;
+        }
+        _ => {}
     }
     load_memory_gfx_from_env(
         "ER_EFFECTS_TITLE_05_000_MEMORY_GFX",
         &TITLE_SCALEFORM_05_000_MEMORY_GFX,
         "05_000_title GFX",
     );
-    // Product default (er-effects-rs-dl0): no env override -> serve the embedded stripped
-    // 05_000_title movie whenever the product autoload owns the title flow.
+    // Product default (er-effects-rs-dl0/h7x): no env override -> arm the RUNTIME strip whenever
+    // the product autoload owns the title flow. No embedded movie: the file-open hook derives the
+    // stripped 05_000_title from the native MemoryFile's own vanilla payload via er-gfx.
     if TITLE_SCALEFORM_05_000_MEMORY_GFX.get().is_some() || !title_05_000_strip_default_enabled() {
         return;
     }
-    TITLE_SCALEFORM_MEMORY_GFX_BYTES
-        .fetch_add(TITLE_05_000_TEXT_SUPPRESSED_GFX.len(), Ordering::SeqCst);
-    let _ = TITLE_SCALEFORM_05_000_MEMORY_GFX.set(TITLE_05_000_TEXT_SUPPRESSED_GFX.to_vec());
+    TITLE_05_000_RUNTIME_STRIP_ARMED.store(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "title-resource-observer: product-default 05_000_title strip armed (embedded:title-05-000-suppressed bytes={})",
-        TITLE_05_000_TEXT_SUPPRESSED_GFX.len()
+        "title-resource-observer: product-default 05_000_title runtime strip armed ({} content-addressed edits, expect {} -> {} bytes on known vanilla)",
+        er_gfx::title_05_000::TITLE_05_000_STRIP_EDITS.len(),
+        er_gfx::title_05_000::VANILLA_LEN,
+        er_gfx::title_05_000::STRIPPED_LEN
     ));
 }
 
@@ -5602,6 +5615,106 @@ unsafe fn construct_title_scaleform_memory_file(
     Some(file)
 }
 
+/// Product-default 05_000_title strip WITHOUT embedded bytes (er-effects-rs-h7x). `file` is what
+/// the native FileOpener just returned for `data0:/menu/05_000_title.gfx`; per the rescap static
+/// RE (`FUN_140ce8320`, bd `native-memoryfile-wrapper-expects-gfx-rescap-2026-06-28`) that is a
+/// Scaleform MemoryFile whose data/len fields point at the vanilla movie payload owned by
+/// `GLOBAL_GfxRepository` (the file object never frees the payload -- the proven synthetic
+/// construct path already relied on that). Derive the stripped movie from that payload with
+/// `er_gfx::title_05_000::strip` (all-or-nothing content-addressed edits, output verified against
+/// the validated-asset fingerprint for the known vanilla input), cache it for the process
+/// lifetime, and swap the native file's data/len/cursor onto the cached buffer. ANY failure
+/// leaves the native file untouched and returns it as-is: fail-closed to the vanilla title UI,
+/// never a crash, never a half-stripped movie.
+unsafe fn title_05_000_swap_to_stripped(base: usize, file: usize) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if file == 0 || file == null || file == HOOK_ORIGINAL_UNSET {
+        return false;
+    }
+    let fail = |reason: core::fmt::Arguments<'_>| {
+        TITLE_05_000_RUNTIME_STRIP_FAILURES.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "title-resource-observer: 05_000 runtime strip FAIL-CLOSED (serving native vanilla): {reason}"
+        ));
+        false
+    };
+    let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
+    if vtable != base + SCALEFORM_MEMORY_FILE_VTABLE_RVA {
+        return fail(format_args!(
+            "unexpected file vtable 0x{vtable:x} (want MemoryFile 0x{:x})",
+            base + SCALEFORM_MEMORY_FILE_VTABLE_RVA
+        ));
+    }
+    let stripped = match TITLE_05_000_RUNTIME_STRIPPED.get() {
+        Some(cached) => cached,
+        None => {
+            let data =
+                unsafe { safe_read_usize(file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) }.unwrap_or(0);
+            let len =
+                unsafe { safe_read_i32(file + SCALEFORM_MEMORY_FILE_LEN_OFFSET) }.unwrap_or(0);
+            if data == 0 || data == null || !(64..=0x0100_0000).contains(&len) {
+                return fail(format_args!(
+                    "implausible payload data=0x{data:x} len={len}"
+                ));
+            }
+            let len = len as usize;
+            // Probe both ends through the guarded reader before the bulk copy; the payload is one
+            // contiguous repository allocation, so readable ends imply a readable middle.
+            let magic_ok = unsafe { safe_read_u8(data) } == Some(b'G')
+                && unsafe { safe_read_u8(data + 1) } == Some(b'F')
+                && unsafe { safe_read_u8(data + 2) } == Some(b'X')
+                && unsafe { safe_read_u8(data + len - 1) }.is_some();
+            if !magic_ok {
+                return fail(format_args!(
+                    "payload at 0x{data:x} len={len} is unreadable or not GFX-magic"
+                ));
+            }
+            let vanilla = unsafe { core::slice::from_raw_parts(data as *const u8, len) };
+            TITLE_05_000_RUNTIME_STRIP_INPUT_LEN.store(len, Ordering::SeqCst);
+            let known = er_gfx::title_05_000::is_known_vanilla(vanilla);
+            TITLE_05_000_RUNTIME_STRIP_INPUT_CLASS
+                .store(if known { 1 } else { 2 }, Ordering::SeqCst);
+            match er_gfx::title_05_000::strip(vanilla) {
+                Ok(out) => {
+                    TITLE_05_000_RUNTIME_STRIP_OUTPUT_LEN.store(out.len(), Ordering::SeqCst);
+                    let validated = out.len() == er_gfx::title_05_000::STRIPPED_LEN
+                        && er_gfx::title_05_000::fnv1a64(&out)
+                            == er_gfx::title_05_000::STRIPPED_FNV1A64;
+                    TITLE_05_000_RUNTIME_STRIP_OUTPUT_VALIDATED
+                        .store(if validated { 1 } else { 2 }, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "title-resource-observer: 05_000 runtime strip derived in={len} out={} known_vanilla={known} out_fnv=0x{:016x}",
+                        out.len(),
+                        er_gfx::title_05_000::fnv1a64(&out)
+                    ));
+                    TITLE_05_000_RUNTIME_STRIPPED.get_or_init(|| out)
+                }
+                Err(err) => {
+                    return fail(format_args!("in={len} known_vanilla={known}: {err}"));
+                }
+            }
+        }
+    };
+    unsafe {
+        core::ptr::write(
+            (file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) as *mut usize,
+            stripped.as_ptr() as usize,
+        );
+        core::ptr::write(
+            (file + SCALEFORM_MEMORY_FILE_LEN_OFFSET) as *mut u32,
+            stripped.len() as u32,
+        );
+        core::ptr::write((file + SCALEFORM_MEMORY_FILE_CURSOR_OFFSET) as *mut u32, 0);
+    }
+    TITLE_05_000_RUNTIME_STRIP_SERVES.fetch_add(1, Ordering::SeqCst);
+    // Keep the established product-strip oracles counting regardless of mechanism (the
+    // construct-from-embedded path incremented both of these).
+    TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS.fetch_add(1, Ordering::SeqCst);
+    TITLE_SCALEFORM_05_000_MEMORY_GFX_REPLACEMENTS.fetch_add(1, Ordering::SeqCst);
+    TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE.store(file, Ordering::SeqCst);
+    true
+}
+
 pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
     loader: usize,
     url: usize,
@@ -5658,7 +5771,14 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
         } else if orig != null && orig != HOOK_ORIGINAL_UNSET {
             let f: unsafe extern "system" fn(usize, usize, u32) -> usize =
                 unsafe { std::mem::transmute(orig) };
-            unsafe { f(loader, url, flags) }
+            let native = unsafe { f(loader, url, flags) };
+            // Product-default runtime strip (er-effects-rs-h7x): derive the stripped title
+            // movie from the native file's own vanilla payload and swap it in place. On any
+            // failure the untouched native file is returned (vanilla title UI, fail-closed).
+            if is_title_05_000 && TITLE_05_000_RUNTIME_STRIP_ARMED.load(Ordering::SeqCst) != 0 {
+                memory_replacement = unsafe { title_05_000_swap_to_stripped(base, native) };
+            }
+            native
         } else {
             null
         }

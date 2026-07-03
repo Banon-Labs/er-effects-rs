@@ -8,11 +8,12 @@
 //! If the corpus root does not exist (CI without assets), the test SKIPS with an
 //! `eprintln!` rather than failing.
 
+mod common;
+
 use er_gfx::Movie;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const CORPUS_ROOT: &str = "/home/banon/er-extract/nuxe-menu-20260619-170932/menu";
 const MIN_EXPECTED_FILES: usize = 100;
 
 /// Recursively collect every `*.gfx` path under `dir`.
@@ -47,22 +48,24 @@ fn first_diff(a: &[u8], b: &[u8]) -> Option<usize> {
 
 #[test]
 fn corpus_round_trips_byte_identical() {
-    let root = Path::new(CORPUS_ROOT);
+    let root = common::corpus_root();
     if !root.exists() {
         eprintln!(
-            "SKIP: corpus root {CORPUS_ROOT} not present; round-trip test skipped (no assets)"
+            "SKIP: corpus root {} not present; round-trip test skipped (no assets)",
+            root.display()
         );
         return;
     }
 
     let mut files = Vec::new();
-    collect_gfx(root, &mut files);
+    collect_gfx(&root, &mut files);
     files.sort();
 
     assert!(
         files.len() >= MIN_EXPECTED_FILES,
-        "corpus shrank: found {} .gfx files under {CORPUS_ROOT}, expected at least {MIN_EXPECTED_FILES}",
-        files.len()
+        "corpus shrank: found {} .gfx files under {}, expected at least {MIN_EXPECTED_FILES}",
+        files.len(),
+        root.display()
     );
 
     let mut failures: Vec<String> = Vec::new();
