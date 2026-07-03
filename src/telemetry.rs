@@ -2509,6 +2509,18 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_gx_cmdqueue_nearfull_hits",
             GX_CMD_QUEUE_NEARFULL_HITS.load(Ordering::SeqCst),
         );
+        // Repeated-switch spared-renderer leak fix: renderers reclaimed via CSDelayDeleteMan (should
+        // rise ~1/switch) and the count currently spared -- proves the orphan accumulation is capped.
+        push_json_usize(
+            body,
+            "oracle_profile_spare_orphans_deleted",
+            PROFILE_SPARE_ORPHANS_DELETED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_renderer_spare_hits",
+            PROFILE_RENDERER_SPARE_HITS.load(Ordering::SeqCst),
+        );
         push_json_str(
             body,
             "oracle_gx_cmdqueue_top_producers",
@@ -2529,6 +2541,17 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_gx_cmdarena_switch_min_remaining",
             GX_CMD_ARENA_SWITCH_MIN_REMAINING.load(Ordering::SeqCst),
         );
+        {
+            let (dd_pending, dd_highwater) = unsafe { crate::experiments::delay_delete_pending() }
+                .map(|(p, h)| (p as i64, h as i64))
+                .unwrap_or((-1, -1));
+            body.push_str(&format!(
+                "  \"oracle_delaydelete_pending\": {dd_pending},\n"
+            ));
+            body.push_str(&format!(
+                "  \"oracle_delaydelete_highwater\": {dd_highwater},\n"
+            ));
+        }
         push_json_usize(
             body,
             "oracle_portrait_multi_model_publish_skips",

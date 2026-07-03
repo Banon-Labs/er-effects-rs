@@ -2165,7 +2165,15 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
     PROFILE_RT_PIN.store(0, Ordering::SeqCst);
     PROFILE_DEPTH_PIN.store(0, Ordering::SeqCst);
     OVERLAY_NOW_LOADING_SEEN.store(0, Ordering::SeqCst);
-    LOADING_BG_PORTRAIT_SPARED_RENDERER.store(0, Ordering::SeqCst);
+    // Do NOT drop the spared renderer -- that leaked one live CSMenuProfModelRend per switch (it was
+    // excluded from the native delete and its offscreen draw task kept filling the 192-slot GX
+    // command queue -> 0x1aeaf05 overflow ~switch #4). MOVE it to the orphan slot; the game-thread
+    // teardown-spare hook delete-enqueues it via CSDelayDeleteMan at the next teardown (this reset
+    // runs off the game thread, so it stashes rather than deleting in place).
+    let prev_spared = LOADING_BG_PORTRAIT_SPARED_RENDERER.swap(0, Ordering::SeqCst);
+    if prev_spared != 0 {
+        PROFILE_SPARE_ORPHAN.store(prev_spared, Ordering::SeqCst);
+    }
     PROFILE_SPARE_CANDIDATE.store(0, Ordering::SeqCst);
     // Re-arm the idle-anim bind + drop the motion-metric history so the NEXT load window binds its
     // own renderer and starts a fresh inter-frame diff (cumulative attempt/max oracles are kept).

@@ -4684,6 +4684,43 @@ pub(crate) const GX_CMD_ARENA_CURSOR_OFFSET: usize = 0x28;
 /// Low-water sentinel: usize::MAX until the first sample lands.
 pub(crate) static GX_CMD_ARENA_MIN_REMAINING: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub(crate) static GX_CMD_ARENA_SWITCH_MIN_REMAINING: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// CSDelayDeleteMan PENDING-COUNT read (repeated-switch GX overflow root-cause probe, 2026-07-03).
+/// The profile-renderer teardown (`FUN_1409b2f00`) does NOT destroy the 10 old CSMenuProfModelRend
+/// per switch -- it hands each to CSDelayDeleteMan (`FUN_140e77540`) and nulls the table slot. The
+/// pre-delete prep (`FUN_140bb9930`) only sets the object's +0x756 "marked" byte; it does NOT
+/// unregister the renderer's ResMan draw task, so a marked-but-unfreed renderer keeps submitting to
+/// the 192-slot GX command queue every frame. If the delay-delete pump does not drain them during
+/// our in-world return-title/reload, they pile up -> queue climbs ~+23/switch -> null-slot crash
+/// (0x1aeaf05) at switch #4-5 (A/B run 10g). CSDelayDeleteMan is a singleton whose pointer lives at
+/// dump global 0x1445896a8; its enqueue (`FUN_140e77f30`) increments a pending count at
+/// manager+0x40 (high-water at +0x44). Reading manager+0x40 per switch tests the pileup directly:
+/// climbing +~10/switch confirms the pump is not draining our enqueued renderers. Pure guarded read
+/// (validate the pointer + a sane count); RVA ground-truthed in the DEOBF binary (teardown 0x9b2db0
+/// disasm: `mov 0x3bd68d1(%rip),%rcx # 0x1445896a8` -> RVA 0x1445896a8 - 0x140000000 = 0x45896a8),
+/// same VA as the dump. The runtime read is self-validating so a bad RVA logs -1, not a crash.
+pub(crate) const DELAY_DELETE_MAN_SINGLETON_PTR_RVA: usize = 0x45896a8;
+pub(crate) const DELAY_DELETE_MAN_PENDING_COUNT_OFFSET: usize = 0x40;
+pub(crate) const DELAY_DELETE_MAN_PENDING_HIGHWATER_OFFSET: usize = 0x44;
+/// Sane upper bound for the pending count; a larger read means the singleton RVA/layout is wrong.
+pub(crate) const DELAY_DELETE_MAN_PENDING_SANE_MAX: usize = 100_000;
+/// CSDelayDeleteMan ENQUEUE `FUN_140e77540` (dump) -> deobf 0x140e77490, ground-truthed from the
+/// deobf profile-renderer teardown (0x9b2db0): it calls this at 0x9b2e0d as `call 0x140e77490` with
+/// rcx=manager (the singleton above), rdx=object. This is the safe delayed-destruction path the game
+/// uses for the OTHER 9 renderers every teardown -- marks the object's +0x756 byte, enqueues it, and
+/// the delete pump frees it when the GPU is done. We call it to destroy the previously-spared
+/// portrait renderer (see `PROFILE_SPARE_ORPHAN`) instead of leaking it.
+pub(crate) const DELAY_DELETE_ENQUEUE_RVA: usize = 0xe77490;
+/// The previously-spared portrait renderer awaiting safe destruction. The teardown-spare excludes
+/// one CSMenuProfModelRend from the native delete each load (nulls its table slot) to render the
+/// now-loading portrait; the load-complete reset then dropped the pointer WITHOUT freeing it, so one
+/// live renderer -- still running its ResMan offscreen draw task -- leaked per System->Quit->Load
+/// switch, each filling the 192-slot GX command queue every frame until it overflowed (0x1aeaf05,
+/// ~switch #4). The reset now MOVES the pointer here (render thread, a plain store); the game-thread
+/// teardown-spare hook delete-enqueues it via CSDelayDeleteMan at the next teardown (thread-correct,
+/// same thread the native teardown runs on).
+pub(crate) static PROFILE_SPARE_ORPHAN: AtomicUsize = AtomicUsize::new(0);
+/// Count of leaked spared renderers reclaimed via the native delete path (repeated-switch GX fix).
+pub(crate) static PROFILE_SPARE_ORPHANS_DELETED: AtomicUsize = AtomicUsize::new(0);
 
 /// Gate-local `CS::MenuWindowJob::Run` hook state. `MENU_WINDOW_JOB_RUN_RVA` is defined with the
 /// title-cover constants above; System Quit reuses that same live/deobf target.

@@ -5521,6 +5521,20 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
 pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
+    // REPEATED-SWITCH GX OVERFLOW FIX (0x1aeaf05, ~switch #4): destroy the PRIOR window's spared
+    // renderer now, on the game thread, before sparing this switch's renderer. The load-complete
+    // reset (render thread) moved it into PROFILE_SPARE_ORPHAN instead of dropping it; the spare
+    // excluded it from the native delete (nulled its table slot), so without this it stayed alive
+    // with its ResMan offscreen draw task filling the 192-slot GX command queue every frame,
+    // accumulating +1 leaked renderer per switch. delay_delete_enqueue_renderer is the exact native
+    // delete path (vtable-guarded), run here on the correct thread.
+    let orphan = PROFILE_SPARE_ORPHAN.swap(0, Ordering::SeqCst);
+    if orphan != 0 {
+        let deleted = unsafe { delay_delete_enqueue_renderer(orphan) };
+        append_autoload_debug(format_args!(
+            "loading-portrait: reclaimed prior spared renderer 0x{orphan:x} via CSDelayDeleteMan enqueued={deleted} (repeated-switch GX command-queue leak fix)"
+        ));
+    }
     // Gate on the look-at/portrait feature OR product autoload -- the native-continue path does NOT set
     // PRODUCT_AUTOLOAD_ARMED, so gating on product_autoload alone never spared anything there.
     if LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) == 0
@@ -8330,6 +8344,59 @@ pub(crate) unsafe extern "system" fn scaleform_handler_dtor_hook(obj: usize) {
     unsafe { f(obj) };
 }
 
+/// Read CSDelayDeleteMan's pending count (+0x40) and high-water (+0x44) via the singleton pointer
+/// at DELAY_DELETE_MAN_SINGLETON_PTR_RVA. Returns `(pending, highwater)` or None if the singleton is
+/// null/unresolved or the read is implausible (a wrong RVA/layout -> the count fails the sane bound).
+/// This is the repeated-switch overflow oracle: pending climbing ~+10/switch means the delay-delete
+/// pump is not draining the torn-down profile renderers, whose still-registered draw tasks then keep
+/// filling the GX command queue.
+pub(crate) unsafe fn delay_delete_pending() -> Option<(usize, usize)> {
+    let base = game_rva(0).ok()?;
+    let man = unsafe { safe_read_usize(base + DELAY_DELETE_MAN_SINGLETON_PTR_RVA) }?;
+    if man < 0x10000 {
+        return None;
+    }
+    let pending = unsafe { safe_read_i32(man + DELAY_DELETE_MAN_PENDING_COUNT_OFFSET) }?;
+    let highwater = unsafe { safe_read_i32(man + DELAY_DELETE_MAN_PENDING_HIGHWATER_OFFSET) }?;
+    if !(0..=DELAY_DELETE_MAN_PENDING_SANE_MAX as i32).contains(&pending) {
+        return None;
+    }
+    Some((pending as usize, highwater.max(0) as usize))
+}
+
+/// Destroy a previously-spared portrait renderer via CSDelayDeleteMan -- the exact native path the
+/// profile-renderer teardown (`FUN_1409b2f00`) uses for the other 9 renderers each teardown (marks
+/// the object's +0x756 byte, enqueues it, freed on the delete pump when the GPU is done). Vtable-
+/// guarded so a stale/freed/garbage pointer is never enqueued. MUST run on the game/menu thread (the
+/// same thread the native teardown runs on -- the manager's list is mutated without locks). Returns
+/// true if the object was enqueued for deletion.
+pub(crate) unsafe fn delay_delete_enqueue_renderer(renderer: usize) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if renderer == 0 || renderer == null {
+        return false;
+    }
+    let Ok(base) = game_module_base() else {
+        return false;
+    };
+    // Only a LIVE profile renderer (correct vtable) -- never a freed/garbage pointer.
+    if unsafe { safe_read_usize(renderer) }.unwrap_or(0)
+        != base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+    {
+        return false;
+    }
+    let man = unsafe { safe_read_usize(base + DELAY_DELETE_MAN_SINGLETON_PTR_RVA) }.unwrap_or(0);
+    if man < 0x10000 {
+        return false;
+    }
+    let Ok(enqueue) = game_rva(DELAY_DELETE_ENQUEUE_RVA as u32) else {
+        return false;
+    };
+    let f: unsafe extern "system" fn(usize, usize) -> u8 = unsafe { std::mem::transmute(enqueue) };
+    unsafe { f(man, renderer) };
+    PROFILE_SPARE_ORPHANS_DELETED.fetch_add(1, Ordering::SeqCst);
+    true
+}
+
 /// Format an `AtomicUsize` low-water value: `usize::MAX` is the never-sampled sentinel.
 fn fmt_lowwater(v: usize) -> String {
     if v == usize::MAX {
@@ -9012,8 +9079,11 @@ fn sq_repro_begin_switch() {
     let switch_peak = GX_CMD_QUEUE_SWITCH_MAX_FILL.swap(0, Ordering::SeqCst);
     let switch_arena_min = GX_CMD_ARENA_SWITCH_MIN_REMAINING.swap(usize::MAX, Ordering::SeqCst);
     GX_CMD_QUEUE_PEAK_LAST_LOGGED.store(0, Ordering::SeqCst);
+    let (dd_pending, dd_highwater) = unsafe { delay_delete_pending() }
+        .map(|(p, h)| (p as i64, h as i64))
+        .unwrap_or((-1, -1));
     append_autoload_debug(format_args!(
-        "gx-cmdqueue: switch boundary -- prev-switch peak {switch_peak}/{} arena_min_remaining={} (cumulative max {}, arena min {}, reserves {}) top producers: {} | buckets: {}",
+        "gx-cmdqueue: switch boundary -- prev-switch peak {switch_peak}/{} arena_min_remaining={} delaydelete_pending={dd_pending} (highwater {dd_highwater}) (cumulative max {}, arena min {}, reserves {}) top producers: {} | buckets: {}",
         GX_CMD_QUEUE_CAP_SEEN.load(Ordering::SeqCst),
         fmt_lowwater(switch_arena_min),
         GX_CMD_QUEUE_MAX_FILL.load(Ordering::SeqCst),
