@@ -516,16 +516,6 @@ static RB_FAST_FENCE: AtomicUsize = AtomicUsize::new(0);
 static RB_FAST_BUFFER: AtomicUsize = AtomicUsize::new(0);
 static RB_FAST_BUFSIZE: AtomicU64 = AtomicU64::new(0);
 static RB_FAST_FENCEVAL: AtomicU64 = AtomicU64::new(0);
-/// ASYNC readback pipeline state (er-effects-rs-o3n): the fence value of the IN-FLIGHT copy
-/// (0 = none) plus the submit-time metadata needed to harvest it on a later call. The old
-/// submit-then-WAIT form stalled the game's render thread every Present once the live-drive tick
-/// moved there (run #15: the game collapsed to ~12fps, dt_own 0.08-0.10, a 96s load).
-static RB_FAST_PENDING_VAL: AtomicU64 = AtomicU64::new(0);
-static RB_FAST_PENDING_W: AtomicUsize = AtomicUsize::new(0);
-static RB_FAST_PENDING_H: AtomicUsize = AtomicUsize::new(0);
-static RB_FAST_PENDING_PITCH: AtomicUsize = AtomicUsize::new(0);
-static RB_FAST_PENDING_TOTAL: AtomicUsize = AtomicUsize::new(0);
-static RB_FAST_PENDING_FMT: AtomicUsize = AtomicUsize::new(0);
 /// Counter so the deterministic-resolve diagnostic logs only the first few attempts.
 static PROFILE_DET_RESOLVE_DIAG: AtomicUsize = AtomicUsize::new(0);
 
@@ -540,21 +530,6 @@ static RB_DEPTH_FENCE: AtomicUsize = AtomicUsize::new(0);
 static RB_DEPTH_BUFFER: AtomicUsize = AtomicUsize::new(0);
 static RB_DEPTH_BUFSIZE: AtomicU64 = AtomicU64::new(0);
 static RB_DEPTH_FENCEVAL: AtomicU64 = AtomicU64::new(0);
-/// Cached objects + async pending for the RT->SRV `CopyResource` (mirrors RB_FAST_*): the old
-/// per-call queue+fence+WAIT both stalled the render thread per Present (run #16: ~11fps
-/// mid-window even with async readbacks) and failed under load (per-call queue creation).
-static RB_COPY_QUEUE: AtomicUsize = AtomicUsize::new(0);
-static RB_COPY_ALLOC: AtomicUsize = AtomicUsize::new(0);
-static RB_COPY_LIST: AtomicUsize = AtomicUsize::new(0);
-static RB_COPY_FENCE: AtomicUsize = AtomicUsize::new(0);
-static RB_COPY_FENCEVAL: AtomicU64 = AtomicU64::new(0);
-static RB_COPY_PENDING_VAL: AtomicU64 = AtomicU64::new(0);
-/// Depth twin of the RB_FAST_PENDING_* async pipeline state.
-static RB_DEPTH_PENDING_VAL: AtomicU64 = AtomicU64::new(0);
-static RB_DEPTH_PENDING_W: AtomicUsize = AtomicUsize::new(0);
-static RB_DEPTH_PENDING_H: AtomicUsize = AtomicUsize::new(0);
-static RB_DEPTH_PENDING_PITCH: AtomicUsize = AtomicUsize::new(0);
-static RB_DEPTH_PENDING_TOTAL: AtomicUsize = AtomicUsize::new(0);
 /// One-shot `depth-key` diagnostic latch (logs corner/center/min/max depth + masked fraction once).
 static DEPTH_KEY_DIAG_LOGGED: AtomicUsize = AtomicUsize::new(0);
 /// RAM oracle: number of published frames where the depth key ACTUALLY cut out a background (i.e. the depth
@@ -972,43 +947,6 @@ unsafe fn readback_resource_cached_fast(resource: ID3D12Resource) -> Option<(u32
         RB_FAST_LIST.store(list.into_raw() as usize, Ordering::SeqCst);
         RB_FAST_FENCE.store(fence.into_raw() as usize, Ordering::SeqCst);
     }
-    // Borrow the cached COM objects (no refcount change; the statics own them).
-    let q_raw = RB_FAST_QUEUE.load(Ordering::SeqCst) as *mut c_void;
-    let a_raw = RB_FAST_ALLOC.load(Ordering::SeqCst) as *mut c_void;
-    let l_raw = RB_FAST_LIST.load(Ordering::SeqCst) as *mut c_void;
-    let f_raw = RB_FAST_FENCE.load(Ordering::SeqCst) as *mut c_void;
-    let (Some(queue), Some(allocator), Some(list), Some(fence)) = (unsafe {
-        (
-            ID3D12CommandQueue::from_raw_borrowed(&q_raw),
-            ID3D12CommandAllocator::from_raw_borrowed(&a_raw),
-            ID3D12GraphicsCommandList::from_raw_borrowed(&l_raw),
-            ID3D12Fence::from_raw_borrowed(&f_raw),
-        )
-    }) else {
-        return None;
-    };
-    // ASYNC harvest-then-submit (er-effects-rs-o3n): never block the render thread. If the
-    // PREVIOUS copy is still in flight, skip this frame entirely (the allocator/list belong to
-    // it); if it completed, map + de-swizzle it using its submit-time metadata, then record and
-    // submit the NEXT copy below. One frame of latency; zero waits.
-    let pending = RB_FAST_PENDING_VAL.load(Ordering::SeqCst);
-    let mut harvested: Option<(u32, u32, Vec<u8>)> = None;
-    if pending != 0 {
-        if unsafe { fence.GetCompletedValue() } < pending {
-            return None;
-        }
-        let pw = RB_FAST_PENDING_W.load(Ordering::SeqCst) as u32;
-        let ph = RB_FAST_PENDING_H.load(Ordering::SeqCst) as u32;
-        let ppitch = RB_FAST_PENDING_PITCH.load(Ordering::SeqCst);
-        let ptotal = RB_FAST_PENDING_TOTAL.load(Ordering::SeqCst);
-        let pfmt = DXGI_FORMAT(RB_FAST_PENDING_FMT.load(Ordering::SeqCst) as i32);
-        // Borrow the buffer the pending copy targeted (the pre-recreate one).
-        let b_old = RB_FAST_BUFFER.load(Ordering::SeqCst) as *mut c_void;
-        if let Some(readback_old) = (unsafe { ID3D12Resource::from_raw_borrowed(&b_old) }) {
-            harvested = unsafe { map_deswizzle_rgba8(readback_old, pw, ph, ppitch, ptotal, pfmt) };
-        }
-        RB_FAST_PENDING_VAL.store(0, Ordering::SeqCst);
-    }
     // (Re)create the cached readback buffer if the footprint size changed (it won't for a fixed RT).
     if RB_FAST_BUFSIZE.load(Ordering::SeqCst) != total_bytes {
         let heap_props = D3D12_HEAP_PROPERTIES {
@@ -1052,18 +990,29 @@ unsafe fn readback_resource_cached_fast(resource: ID3D12Resource) -> Option<(u32
         }
         RB_FAST_BUFSIZE.store(total_bytes, Ordering::SeqCst);
     }
-    // Re-borrow the (possibly recreated) readback buffer for the NEXT submit -- the harvest
-    // above used the pre-recreate borrow, which is the buffer the pending copy targeted.
+    // Borrow the cached COM objects (no refcount change; the statics own them).
+    let q_raw = RB_FAST_QUEUE.load(Ordering::SeqCst) as *mut c_void;
+    let a_raw = RB_FAST_ALLOC.load(Ordering::SeqCst) as *mut c_void;
+    let l_raw = RB_FAST_LIST.load(Ordering::SeqCst) as *mut c_void;
+    let f_raw = RB_FAST_FENCE.load(Ordering::SeqCst) as *mut c_void;
     let b_raw = RB_FAST_BUFFER.load(Ordering::SeqCst) as *mut c_void;
-    let Some(readback) = (unsafe { ID3D12Resource::from_raw_borrowed(&b_raw) }) else {
-        return harvested;
+    let (Some(queue), Some(allocator), Some(list), Some(fence), Some(readback)) = (unsafe {
+        (
+            ID3D12CommandQueue::from_raw_borrowed(&q_raw),
+            ID3D12CommandAllocator::from_raw_borrowed(&a_raw),
+            ID3D12GraphicsCommandList::from_raw_borrowed(&l_raw),
+            ID3D12Fence::from_raw_borrowed(&f_raw),
+            ID3D12Resource::from_raw_borrowed(&b_raw),
+        )
+    }) else {
+        return None;
     };
-    // The harvested (or skipped-in-flight) fence guarantees the GPU is done with the allocator.
+    // The previous frame's fence wait guarantees the GPU is done, so resetting the allocator is safe.
     if unsafe { allocator.Reset() }.is_err() {
-        return harvested;
+        return None;
     }
     if unsafe { list.Reset(allocator, None) }.is_err() {
-        return harvested;
+        return None;
     }
     unsafe {
         record_transition(
@@ -1099,42 +1048,24 @@ unsafe fn readback_resource_cached_fast(resource: ID3D12Resource) -> Option<(u32
         )
     };
     if unsafe { list.Close() }.is_err() {
-        return harvested;
+        return None;
     }
-    let Ok(base_list) = list.cast::<ID3D12CommandList>() else {
-        return harvested;
-    };
+    let base_list: ID3D12CommandList = list.cast().ok()?;
     unsafe { queue.ExecuteCommandLists(&[Some(base_list)]) };
     let val = RB_FAST_FENCEVAL.fetch_add(1, Ordering::SeqCst) + 1;
-    if unsafe { queue.Signal(fence, val) }.is_err() {
-        return harvested;
-    }
-    // Record the submit-time metadata for a future harvest; do NOT wait.
-    RB_FAST_PENDING_W.store(width as usize, Ordering::SeqCst);
-    RB_FAST_PENDING_H.store(height as usize, Ordering::SeqCst);
-    RB_FAST_PENDING_PITCH.store(footprint.Footprint.RowPitch as usize, Ordering::SeqCst);
-    RB_FAST_PENDING_TOTAL.store(total_bytes as usize, Ordering::SeqCst);
-    RB_FAST_PENDING_FMT.store(format.0 as usize, Ordering::SeqCst);
-    RB_FAST_PENDING_VAL.store(val, Ordering::SeqCst);
-    harvested
-}
-
-/// Map the (completed) readback buffer and de-swizzle the 256-aligned rows into tightly packed
-/// RGBA8, swapping R/B for BGRA formats. Shared by the async harvest path.
-unsafe fn map_deswizzle_rgba8(
-    readback: &ID3D12Resource,
-    width: u32,
-    height: u32,
-    row_pitch: usize,
-    total: usize,
-    format: DXGI_FORMAT,
-) -> Option<(u32, u32, Vec<u8>)> {
-    if width == 0 || height == 0 || row_pitch == 0 || total == 0 {
-        return None;
+    unsafe { queue.Signal(fence, val) }.ok()?;
+    if unsafe { fence.GetCompletedValue() } < val {
+        let event: HANDLE = unsafe { CreateEventW(None, false, false, None) }.ok()?;
+        unsafe { fence.SetEventOnCompletion(val, event) }.ok()?;
+        let wait = unsafe { WaitForSingleObject(event, READBACK_FENCE_WAIT_MS) };
+        let _ = unsafe { CloseHandle(event) };
+        if wait != WAIT_OBJECT_0 {
+            return None;
+        }
     }
     let read_range = D3D12_RANGE {
         Begin: 0,
-        End: total,
+        End: total_bytes as usize,
     };
     let mut mapped: *mut c_void = std::ptr::null_mut();
     unsafe { readback.Map(0, Some(&read_range), Some(&mut mapped)) }.ok()?;
@@ -1143,8 +1074,10 @@ unsafe fn map_deswizzle_rgba8(
     }
     let w = width as usize;
     let h = height as usize;
+    let row_pitch = footprint.Footprint.RowPitch as usize;
     let out_row = w * RGBA8_BPP;
     let mut out = vec![0u8; w * h * RGBA8_BPP];
+    let total = total_bytes as usize;
     let src = mapped as *const u8;
     let swap_rb = matches!(
         format,
@@ -1179,10 +1112,7 @@ unsafe fn map_deswizzle_rgba8(
 /// readback. Used by `apply_depth_alpha_key` to derive the transparent-background alpha mask.
 pub(crate) unsafe fn readback_depth_fast(gpu_child: usize) -> Option<(u32, u32, Vec<f32>, usize)> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        let Some((resource, cand)) = find_depth_resource(gpu_child) else {
-            DEPTH_RB_FIND_FAILS.fetch_add(1, Ordering::SeqCst);
-            return None;
-        };
+        let (resource, cand) = find_depth_resource(gpu_child)?;
         readback_depth_resource_cached(resource).map(|(w, h, d)| (w, h, d, cand))
     }))
     .ok()
@@ -1243,39 +1173,6 @@ unsafe fn readback_depth_resource_cached(resource: ID3D12Resource) -> Option<(u3
         RB_DEPTH_LIST.store(list.into_raw() as usize, Ordering::SeqCst);
         RB_DEPTH_FENCE.store(fence.into_raw() as usize, Ordering::SeqCst);
     }
-    let q_raw = RB_DEPTH_QUEUE.load(Ordering::SeqCst) as *mut c_void;
-    let a_raw = RB_DEPTH_ALLOC.load(Ordering::SeqCst) as *mut c_void;
-    let l_raw = RB_DEPTH_LIST.load(Ordering::SeqCst) as *mut c_void;
-    let f_raw = RB_DEPTH_FENCE.load(Ordering::SeqCst) as *mut c_void;
-    let (Some(queue), Some(allocator), Some(list), Some(fence)) = (unsafe {
-        (
-            ID3D12CommandQueue::from_raw_borrowed(&q_raw),
-            ID3D12CommandAllocator::from_raw_borrowed(&a_raw),
-            ID3D12GraphicsCommandList::from_raw_borrowed(&l_raw),
-            ID3D12Fence::from_raw_borrowed(&f_raw),
-        )
-    }) else {
-        return None;
-    };
-    // ASYNC harvest-then-submit -- depth twin of the color path above; never block.
-    let pending = RB_DEPTH_PENDING_VAL.load(Ordering::SeqCst);
-    let mut harvested: Option<(u32, u32, Vec<f32>)> = None;
-    if pending != 0 {
-        if unsafe { fence.GetCompletedValue() } < pending {
-            DEPTH_RB_INFLIGHT_SKIPS.fetch_add(1, Ordering::SeqCst);
-            return None;
-        }
-        let pw = RB_DEPTH_PENDING_W.load(Ordering::SeqCst);
-        let ph = RB_DEPTH_PENDING_H.load(Ordering::SeqCst);
-        let ppitch = RB_DEPTH_PENDING_PITCH.load(Ordering::SeqCst);
-        let ptotal = RB_DEPTH_PENDING_TOTAL.load(Ordering::SeqCst);
-        let b_old = RB_DEPTH_BUFFER.load(Ordering::SeqCst) as *mut c_void;
-        if let Some(readback_old) = (unsafe { ID3D12Resource::from_raw_borrowed(&b_old) }) {
-            harvested =
-                unsafe { map_depth_f32(readback_old, pw as u32, ph as u32, ppitch, ptotal) };
-        }
-        RB_DEPTH_PENDING_VAL.store(0, Ordering::SeqCst);
-    }
     if RB_DEPTH_BUFSIZE.load(Ordering::SeqCst) != total_bytes {
         let heap_props = D3D12_HEAP_PROPERTIES {
             Type: D3D12_HEAP_TYPE_READBACK,
@@ -1318,17 +1215,27 @@ unsafe fn readback_depth_resource_cached(resource: ID3D12Resource) -> Option<(u3
         }
         RB_DEPTH_BUFSIZE.store(total_bytes, Ordering::SeqCst);
     }
-    // Re-borrow the (possibly recreated) readback buffer for the NEXT submit -- the harvest
-    // above used the pre-recreate borrow, which is the buffer the pending copy targeted.
+    let q_raw = RB_DEPTH_QUEUE.load(Ordering::SeqCst) as *mut c_void;
+    let a_raw = RB_DEPTH_ALLOC.load(Ordering::SeqCst) as *mut c_void;
+    let l_raw = RB_DEPTH_LIST.load(Ordering::SeqCst) as *mut c_void;
+    let f_raw = RB_DEPTH_FENCE.load(Ordering::SeqCst) as *mut c_void;
     let b_raw = RB_DEPTH_BUFFER.load(Ordering::SeqCst) as *mut c_void;
-    let Some(readback) = (unsafe { ID3D12Resource::from_raw_borrowed(&b_raw) }) else {
-        return harvested;
+    let (Some(queue), Some(allocator), Some(list), Some(fence), Some(readback)) = (unsafe {
+        (
+            ID3D12CommandQueue::from_raw_borrowed(&q_raw),
+            ID3D12CommandAllocator::from_raw_borrowed(&a_raw),
+            ID3D12GraphicsCommandList::from_raw_borrowed(&l_raw),
+            ID3D12Fence::from_raw_borrowed(&f_raw),
+            ID3D12Resource::from_raw_borrowed(&b_raw),
+        )
+    }) else {
+        return None;
     };
     if unsafe { allocator.Reset() }.is_err() {
-        return harvested;
+        return None;
     }
     if unsafe { list.Reset(allocator, None) }.is_err() {
-        return harvested;
+        return None;
     }
     unsafe {
         record_transition(
@@ -1364,38 +1271,24 @@ unsafe fn readback_depth_resource_cached(resource: ID3D12Resource) -> Option<(u3
         )
     };
     if unsafe { list.Close() }.is_err() {
-        return harvested;
+        return None;
     }
-    let Ok(base_list) = list.cast::<ID3D12CommandList>() else {
-        return harvested;
-    };
+    let base_list: ID3D12CommandList = list.cast().ok()?;
     unsafe { queue.ExecuteCommandLists(&[Some(base_list)]) };
     let val = RB_DEPTH_FENCEVAL.fetch_add(1, Ordering::SeqCst) + 1;
-    if unsafe { queue.Signal(fence, val) }.is_err() {
-        return harvested;
-    }
-    RB_DEPTH_PENDING_W.store(width as usize, Ordering::SeqCst);
-    RB_DEPTH_PENDING_H.store(height as usize, Ordering::SeqCst);
-    RB_DEPTH_PENDING_PITCH.store(footprint.Footprint.RowPitch as usize, Ordering::SeqCst);
-    RB_DEPTH_PENDING_TOTAL.store(total_bytes as usize, Ordering::SeqCst);
-    RB_DEPTH_PENDING_VAL.store(val, Ordering::SeqCst);
-    harvested
-}
-
-/// Map the (completed) depth readback buffer and reinterpret each plane-0 texel as `f32`.
-unsafe fn map_depth_f32(
-    readback: &ID3D12Resource,
-    width: u32,
-    height: u32,
-    row_pitch: usize,
-    total: usize,
-) -> Option<(u32, u32, Vec<f32>)> {
-    if width == 0 || height == 0 || row_pitch == 0 || total == 0 {
-        return None;
+    unsafe { queue.Signal(fence, val) }.ok()?;
+    if unsafe { fence.GetCompletedValue() } < val {
+        let event: HANDLE = unsafe { CreateEventW(None, false, false, None) }.ok()?;
+        unsafe { fence.SetEventOnCompletion(val, event) }.ok()?;
+        let wait = unsafe { WaitForSingleObject(event, READBACK_FENCE_WAIT_MS) };
+        let _ = unsafe { CloseHandle(event) };
+        if wait != WAIT_OBJECT_0 {
+            return None;
+        }
     }
     let read_range = D3D12_RANGE {
         Begin: 0,
-        End: total,
+        End: total_bytes as usize,
     };
     let mut mapped: *mut c_void = std::ptr::null_mut();
     unsafe { readback.Map(0, Some(&read_range), Some(&mut mapped)) }.ok()?;
@@ -1404,6 +1297,8 @@ unsafe fn map_depth_f32(
     }
     let w = width as usize;
     let h = height as usize;
+    let row_pitch = footprint.Footprint.RowPitch as usize;
+    let total = total_bytes as usize;
     let src = mapped as *const u8;
     let mut out = vec![0f32; w * h];
     for y in 0..h {
@@ -1450,18 +1345,13 @@ pub(crate) unsafe fn apply_depth_alpha_key(gpu_child: usize, w: u32, h: u32, cpx
         }
         Some(m)
     } else {
-        let cached = LAST_DEPTH_MASK.lock().ok().and_then(|g| match g.as_ref() {
+        LAST_DEPTH_MASK.lock().ok().and_then(|g| match g.as_ref() {
             Some((cw, ch, m)) if *cw == w && *ch == h => Some(m.clone()),
             _ => None,
-        });
-        if cached.is_some() {
-            DEPTH_KEY_CACHED.fetch_add(1, Ordering::SeqCst);
-        }
-        cached
+        })
     };
     // No fresh gap and no cache yet -> fail open (opaque), no regression.
     let Some(mask) = mask else {
-        DEPTH_KEY_NOMASK.fetch_add(1, Ordering::SeqCst);
         return;
     };
     let mut masked = 0usize;
@@ -1484,7 +1374,6 @@ pub(crate) unsafe fn apply_depth_alpha_key(gpu_child: usize, w: u32, h: u32, cpx
 unsafe fn compute_depth_mask(gpu_child: usize, w: usize, h: usize) -> Option<Vec<u8>> {
     let (dw, dh, depth, depth_cand) = unsafe { readback_depth_fast(gpu_child) }?;
     if dw as usize != w || dh as usize != h || depth.len() < w * h {
-        DEPTH_RB_DIMS_MISMATCHES.fetch_add(1, Ordering::SeqCst);
         // At higher-res (1024) the depth sibling MUST match the color RT or the mask can't align.
         if DEPTH_KEY_NOGAP_LOGGED.swap(1, Ordering::SeqCst) == 0 {
             append_autoload_debug(format_args!(
@@ -1606,7 +1495,6 @@ unsafe fn compute_depth_mask(gpu_child: usize, w: usize, h: usize) -> Option<Vec
         PROFILE_DEPTH_PIN.store(depth_cand, Ordering::SeqCst);
         Some(mask)
     } else {
-        DEPTH_RB_NOGAP.fetch_add(1, Ordering::SeqCst);
         None
     }
 }
@@ -1674,75 +1562,31 @@ unsafe fn copy_offscreen_rt_to_srv_inner(src_gpu_child: usize, dst_gpu_child: us
     let Some(device) = device_opt else {
         return false;
     };
-    // Cached objects, created once (per-call queue creation failed under load historically).
-    if RB_COPY_QUEUE.load(Ordering::SeqCst) == 0 {
-        let queue_desc = D3D12_COMMAND_QUEUE_DESC {
-            Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
-            Priority: 0,
-            Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
-            NodeMask: 0,
-        };
-        let Ok(queue) = (unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue_desc) })
-        else {
-            return false;
-        };
-        let Ok(allocator) = (unsafe {
-            device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)
-        }) else {
-            return false;
-        };
-        let Ok(list) = (unsafe {
-            device.CreateCommandList::<_, _, ID3D12GraphicsCommandList>(
-                0,
-                D3D12_COMMAND_LIST_TYPE_DIRECT,
-                &allocator,
-                None,
-            )
-        }) else {
-            return false;
-        };
-        if unsafe { list.Close() }.is_err() {
-            return false;
-        }
-        let Ok(fence) = (unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) })
-        else {
-            return false;
-        };
-        RB_COPY_QUEUE.store(queue.into_raw() as usize, Ordering::SeqCst);
-        RB_COPY_ALLOC.store(allocator.into_raw() as usize, Ordering::SeqCst);
-        RB_COPY_LIST.store(list.into_raw() as usize, Ordering::SeqCst);
-        RB_COPY_FENCE.store(fence.into_raw() as usize, Ordering::SeqCst);
-    }
-    let q_raw = RB_COPY_QUEUE.load(Ordering::SeqCst) as *mut c_void;
-    let a_raw = RB_COPY_ALLOC.load(Ordering::SeqCst) as *mut c_void;
-    let l_raw = RB_COPY_LIST.load(Ordering::SeqCst) as *mut c_void;
-    let f_raw = RB_COPY_FENCE.load(Ordering::SeqCst) as *mut c_void;
-    let (Some(queue), Some(allocator), Some(list), Some(fence)) = (unsafe {
-        (
-            ID3D12CommandQueue::from_raw_borrowed(&q_raw),
-            ID3D12CommandAllocator::from_raw_borrowed(&a_raw),
-            ID3D12GraphicsCommandList::from_raw_borrowed(&l_raw),
-            ID3D12Fence::from_raw_borrowed(&f_raw),
+    let queue_desc = D3D12_COMMAND_QUEUE_DESC {
+        Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+        Priority: 0,
+        Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
+        NodeMask: 0,
+    };
+    let Ok(queue) = (unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue_desc) })
+    else {
+        return false;
+    };
+    let Ok(allocator) = (unsafe {
+        device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)
+    }) else {
+        return false;
+    };
+    let Ok(list) = (unsafe {
+        device.CreateCommandList::<_, _, ID3D12GraphicsCommandList>(
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            &allocator,
+            None,
         )
     }) else {
         return false;
     };
-    // ASYNC fire-and-forget: a GPU->GPU copy needs no CPU wait -- the consumer is the GPU next
-    // frame. Skip this frame if the previous copy is still in flight (allocator busy); never block.
-    let pending = RB_COPY_PENDING_VAL.load(Ordering::SeqCst);
-    if pending != 0 {
-        if unsafe { fence.GetCompletedValue() } < pending {
-            return false;
-        }
-        RB_COPY_PENDING_VAL.store(0, Ordering::SeqCst);
-    }
-    if unsafe { allocator.Reset() }.is_err() {
-        return false;
-    }
-    if unsafe { list.Reset(allocator, None) }.is_err() {
-        return false;
-    }
-    let list = list.clone();
     // src (RT): COMMON -> COPY_SOURCE; dst (SRV): COMMON -> COPY_DEST; copy; both back to COMMON.
     unsafe {
         record_transition(
@@ -1784,12 +1628,26 @@ unsafe fn copy_offscreen_rt_to_srv_inner(src_gpu_child: usize, dst_gpu_child: us
         return false;
     };
     unsafe { queue.ExecuteCommandLists(&[Some(base_list)]) };
-    let val = RB_COPY_FENCEVAL.fetch_add(1, Ordering::SeqCst) + 1;
-    if unsafe { queue.Signal(fence, val) }.is_err() {
+    let Ok(fence) = (unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }) else {
+        return false;
+    };
+    if unsafe { queue.Signal(&fence, READBACK_FENCE_TARGET) }.is_err() {
         return false;
     }
-    // No wait: record the in-flight value; the next call skips until it completes.
-    RB_COPY_PENDING_VAL.store(val, Ordering::SeqCst);
+    if unsafe { fence.GetCompletedValue() } < READBACK_FENCE_TARGET {
+        let Ok(event) = (unsafe { CreateEventW(None, false, false, None) }) else {
+            return false;
+        };
+        if unsafe { fence.SetEventOnCompletion(READBACK_FENCE_TARGET, event) }.is_err() {
+            let _ = unsafe { CloseHandle(event) };
+            return false;
+        }
+        let wait = unsafe { WaitForSingleObject(event, READBACK_FENCE_WAIT_MS) };
+        let _ = unsafe { CloseHandle(event) };
+        if wait != WAIT_OBJECT_0 {
+            return false;
+        }
+    }
     true
 }
 
@@ -2316,9 +2174,6 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
     PORTRAIT_ANIM_BOUND_LOC.store(0, Ordering::SeqCst);
     PORTRAIT_KICK_SLOT_KEY.store(0, Ordering::SeqCst);
     PORTRAIT_KICK_RENDERER.store(0, Ordering::SeqCst);
-    PORTRAIT_LAST_CONFIRMED_SLOT.store(0, Ordering::SeqCst);
-    PORTRAIT_SLOT_FLIP_CANDIDATE.store(0, Ordering::SeqCst);
-    PORTRAIT_SLOT_FLIP_STREAK.store(0, Ordering::SeqCst);
     if let Ok(mut g) = PORTRAIT_MOTION_PREV_PLANES.lock() {
         *g = None;
     }
@@ -2424,21 +2279,6 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
         }
     }
     if PROFILE_BAKE_RGBA_CAPTURED.load(Ordering::SeqCst) == 0 {
-        return false;
-    }
-    // NATIVE-FLOW GATE (user directive 2026-07-03: the head must not display between clicking
-    // load and the game entering the native continue flow -- no early popout over the title/menu
-    // transition). `!load_done` alone is TRUE at the title screen too, which is exactly the
-    // popout. The reliable "we have LEFT the menu into the load" signal is our own loadscreen
-    // table rebuild: it fires only after the Continue teardown empties the menu's profile table
-    // (~+17.5s every run). REBUILT itself is a one-tick edge flag, so the window form is the
-    // build COUNTER exceeding its value at the last overlay stop -- the same comparison the
-    // re-arm logic uses. (A first attempt gated on the black plate / tips-screen pulses instead;
-    // both are DEAD on fast loads with no tips screen, which hid the head everywhere,
-    // user-confirmed.) Hidden outside the window; the load-completed stop above ends it.
-    if PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst)
-        <= OVERLAY_STOP_TABLE_BUILDS.load(Ordering::SeqCst)
-    {
         return false;
     }
     // NOTE: this used to bail when render-drive was on, back when "render-drive" meant the Present hook

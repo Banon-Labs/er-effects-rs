@@ -3077,51 +3077,6 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
     // (offscreen; find_d3d12_resource reaches the content RT), dst = offscreen+0x10's CSGxTexture (the SRV
     // GFx samples). Render-thread context (same as the readback), bounded + fail-closed.
     {
-        // SLOT LATCH + HIDE ON REAL FLIP (user directive 2026-07-03): never show the previous
-        // character's head between selecting a character and the load-commit -- hide rather than
-        // fight the renderer. ac0 flips at deserialize BUT ALSO FLAPS transiently mid-load (run
-        // #16: 5->3->5->3 in 1.3s), so a change is accepted only after it holds for
-        // PORTRAIT_SLOT_FLIP_ACCEPT_TICKS consecutive ticks; the whole pipeline (display + kick)
-        // consumes the LATCHED slot, so a flap can neither hide-thrash nor kick a foreign model.
-        {
-            let confirmed = portrait_loaded_slot_confirmed()
-                .map(|s| (s + 1) as usize)
-                .unwrap_or(0);
-            if confirmed != 0 {
-                let cur = PORTRAIT_LAST_CONFIRMED_SLOT.load(Ordering::SeqCst);
-                if cur == 0 {
-                    PORTRAIT_LAST_CONFIRMED_SLOT.store(confirmed, Ordering::SeqCst);
-                } else if confirmed == cur {
-                    PORTRAIT_SLOT_FLIP_CANDIDATE.store(0, Ordering::SeqCst);
-                    PORTRAIT_SLOT_FLIP_STREAK.store(0, Ordering::SeqCst);
-                } else {
-                    let cand = PORTRAIT_SLOT_FLIP_CANDIDATE.swap(confirmed, Ordering::SeqCst);
-                    let streak = if cand == confirmed {
-                        PORTRAIT_SLOT_FLIP_STREAK.fetch_add(1, Ordering::SeqCst) + 1
-                    } else {
-                        PORTRAIT_SLOT_FLIP_STREAK.store(1, Ordering::SeqCst);
-                        1
-                    };
-                    if streak >= PORTRAIT_SLOT_FLIP_ACCEPT_TICKS {
-                        PORTRAIT_LAST_CONFIRMED_SLOT.store(confirmed, Ordering::SeqCst);
-                        PORTRAIT_SLOT_FLIP_CANDIDATE.store(0, Ordering::SeqCst);
-                        PORTRAIT_SLOT_FLIP_STREAK.store(0, Ordering::SeqCst);
-                        if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
-                            *g = None;
-                        }
-                        PROFILE_BAKE_RGBA_CAPTURED.store(0, Ordering::SeqCst);
-                        if let Ok(mut g) = PORTRAIT_MOTION_PREV_PLANES.lock() {
-                            *g = None;
-                        }
-                        append_autoload_debug(format_args!(
-                            "portrait-display: confirmed slot flipped {}->{} (stable {streak} ticks) -- snapshot HIDDEN until the new slot's model publishes",
-                            cur - 1,
-                            confirmed - 1
-                        ));
-                    }
-                }
-            }
-        }
         let slot = portrait_loaded_slot();
         let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, slot)) }.unwrap_or(0);
         // Pump-block attribution (run #7 stall): name the failing gate, don't skip silently.
@@ -3747,19 +3702,11 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                                     as u32,
                                             );
                                             append_autoload_debug(format_args!(
-                                                "portrait-motion[t{n}]: alpha_motion last={} max={} luma_flicker last={} max={} keyed={keyed} anim_t={anim_t:.3} dt_cap={dt:.4} dt_own={dt_own:.4} scene_reg={scene_reg} dk[a={} f={} c={} n={} skip={} find={} dims={} nogap={}]",
+                                                "portrait-motion[t{n}]: alpha_motion last={} max={} luma_flicker last={} max={} keyed={keyed} anim_t={anim_t:.3} dt_cap={dt:.4} dt_own={dt_own:.4} scene_reg={scene_reg}",
                                                 PORTRAIT_MOTION_METRIC_LAST.load(Ordering::SeqCst),
                                                 PORTRAIT_MOTION_METRIC_MAX.load(Ordering::SeqCst),
                                                 PORTRAIT_LUMA_FLICKER_LAST.load(Ordering::SeqCst),
                                                 PORTRAIT_LUMA_FLICKER_MAX.load(Ordering::SeqCst),
-                                                DEPTH_KEY_APPLIED.load(Ordering::SeqCst),
-                                                DEPTH_KEY_FRESH.load(Ordering::SeqCst),
-                                                DEPTH_KEY_CACHED.load(Ordering::SeqCst),
-                                                DEPTH_KEY_NOMASK.load(Ordering::SeqCst),
-                                                DEPTH_RB_INFLIGHT_SKIPS.load(Ordering::SeqCst),
-                                                DEPTH_RB_FIND_FAILS.load(Ordering::SeqCst),
-                                                DEPTH_RB_DIMS_MISMATCHES.load(Ordering::SeqCst),
-                                                DEPTH_RB_NOGAP.load(Ordering::SeqCst),
                                             ));
                                         }
                                     }
@@ -4297,65 +4244,23 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
     }
 }
 
-/// One candidate draw-phase task tick (registered once per phase index). Bumps that phase's per-frame
-/// tick counter -- kept ONLY as the phase-cadence diagnostic (the run #7 sweep measured every draw
-/// phase dropping from 60Hz to ~15-20Hz during loading, which is why the live-drive tick moved out).
-pub(crate) unsafe fn profile_lookat_phase_draw_tick(phase_index: usize, _task_data: &FD4TaskData) {
+/// One candidate draw-phase task tick (registered once per phase index). Always bumps that phase's
+/// per-frame tick counter (for the sweep), and drives the realtime look-at draw ONLY when this phase is
+/// the selected active one -- so exactly one phase rasterizes per frame regardless of how many are registered.
+pub(crate) unsafe fn profile_lookat_phase_draw_tick(phase_index: usize, task_data: &FD4TaskData) {
     if phase_index < LOOKAT_DRAW_PHASE_COUNT {
         PROFILE_LOOKAT_PHASE_TICKS[phase_index].fetch_add(1, Ordering::SeqCst);
     }
-    // The live-drive tick is hosted in the PRESENT hook now (er-effects-rs-o3n,
-    // `profile_lookat_present_tick`): Present stays at 60Hz through loading while every draw phase
-    // sags, and the rasterize is the engine's REGISTERED offscreen scene pass (off+0x58, run #14
-    // scene_reg=1) -- not our draw-phase GX enqueue -- so nothing here is load-bearing anymore.
-}
-
-/// 64-byte synthesized `FD4TaskData` backing store for the Present-hook host (render thread only).
-#[repr(align(16))]
-struct PresentTdBuf(std::cell::UnsafeCell<[u8; 0x40]>);
-// SAFETY: written and read only on the game's render thread inside the Present detour.
-unsafe impl Sync for PresentTdBuf {}
-static PRESENT_TD_BUF: PresentTdBuf = PresentTdBuf(std::cell::UnsafeCell::new([0; 0x40]));
-
-/// PRESENT-HOOK HOST for the live-drive tick (er-effects-rs-o3n). The draw-phase CSTask host drops
-/// to ~15-20Hz during loading (run #7 sweep: all 8 candidate phases) while Present holds 60Hz, so
-/// the displayed portrait updated ~10Hz even though the RT re-rendered per frame. Everything the
-/// tick does is phase-agnostic: the pump (state machine + anim step + pose push) is CPU work, the
-/// readback runs on our own cached D3D12 queue (June-30 precedent ran it from Present crash-free),
-/// and the RASTERIZE is the engine's registered offscreen scene pass -- the old "Present is the
-/// wrong GX phase" note only ever applied to the draw-phase enqueue, which is not load-bearing.
-/// The `FD4TaskData` arg is synthesized: a copy of the engine's last-captured ctx with `+8`
-/// overwritten by the measured inter-present delta (the update task consumes only `+8`; the copy
-/// keeps the unknown tail fields realistic for the pose-push path).
-pub(crate) unsafe fn profile_lookat_present_tick(base: usize) {
-    // Re-engage on every loading screen: pause ONLY during active gameplay (same gate the phase
-    // host used), not permanently after the first world.
-    if unsafe { portrait_pipeline_idle_in_gameplay(base) } {
+    if PROFILE_LOOKAT_SELECTED_PHASE.load(Ordering::SeqCst) != phase_index {
         return;
     }
-    static EPOCH: OnceLock<Instant> = OnceLock::new();
-    static LAST_NS: AtomicU64 = AtomicU64::new(0);
-    let epoch = *EPOCH.get_or_init(Instant::now);
-    let now = epoch.elapsed().as_nanos() as u64;
-    let prev = LAST_NS.swap(now, Ordering::SeqCst);
-    let mut dt = if prev == 0 {
-        1.0 / 60.0
-    } else {
-        (now.saturating_sub(prev)) as f32 / 1e9
-    };
-    // Clamp pauses/hitches to a sane frame delta so the anim can't teleport.
-    if !(dt > 0.0 && dt < 0.1) {
-        dt = 1.0 / 60.0;
-    }
-    let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let buf = PRESENT_TD_BUF.0.get() as *mut u8;
-    let captured = PROFILE_DRAW_TASK_CTX.load(Ordering::SeqCst);
-    unsafe {
-        if captured != 0 && captured != null {
-            core::ptr::copy_nonoverlapping(captured as *const u8, buf, 0x40);
+    if let Ok(base) = game_module_base() {
+        // Re-engage on every loading screen (subsequent-character-load fix): pause the draw/publish tick
+        // ONLY during active gameplay, not permanently after the first world.
+        if unsafe { portrait_pipeline_idle_in_gameplay(base) } {
+            return;
         }
-        core::ptr::write_unaligned(buf.add(8) as *mut f32, dt);
-        profile_lookat_realtime_draw_tick(base, &*(buf as *const FD4TaskData));
+        unsafe { profile_lookat_realtime_draw_tick(base, task_data) };
     }
 }
 
@@ -4917,17 +4822,6 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     PROFILE_LOADSCREEN_FEED_TICKS.store(PROFILE_LOADSCREEN_FEED_WINDOW_TICKS, Ordering::SeqCst);
     PROFILE_LOADSCREEN_REBUILT.store(1, Ordering::SeqCst);
     PROFILE_LOADSCREEN_TABLE_BUILDS.fetch_add(1, Ordering::SeqCst);
-    // WINDOW-OPEN HIDE (user directive 2026-07-03): a fresh loading window must never display a
-    // snapshot carried over from before (the wrong/previous head) -- start hidden; the window's own
-    // kicked model republishes when ready. (The load-completion reset usually already cleared it;
-    // this covers every other path into a rebuild.)
-    if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
-        *g = None;
-    }
-    PROFILE_BAKE_RGBA_CAPTURED.store(0, Ordering::SeqCst);
-    if let Ok(mut g) = PORTRAIT_MOTION_PREV_PLANES.lock() {
-        *g = None;
-    }
     append_autoload_debug(format_args!(
         "loading-portrait: empty profile table (trigger={} streak={streak}) -> called builder 0x{:x} to build our own renderers for the post-Continue portrait",
         if nowload {
@@ -5053,11 +4947,6 @@ pub(crate) unsafe fn kick_target_profile_slot(
 /// (wrong on load 1) and captured nothing once its gate stopped matching (blank on load 2). Routing
 /// EVERY portrait site through this one loaded-character source is the er-effects-rs-j3r correlation fix.
 pub(crate) fn portrait_loaded_slot() -> i32 {
-    // Prefer the flap-filtered latch (set by the present tick); raw ac0 only before first latch.
-    let latched = PORTRAIT_LAST_CONFIRMED_SLOT.load(Ordering::SeqCst);
-    if latched != 0 {
-        return (latched - 1) as i32;
-    }
     portrait_loaded_slot_confirmed().unwrap_or(0)
 }
 
@@ -5307,11 +5196,6 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // the old fallback-to-0 kicked a foreign slot-0 build ~340ms early; storm-free that model
     // persisted and the single-model stability gate starved the drive/publish/anim pipeline for the
     // whole load. The lever loops below are no-ops with no model built, so skipping the tick is safe.
-    // GROUND TRUTH ONLY -- never the display latch (run anim-bind21, +828950ms): the flap-filtered
-    // PORTRAIT_LAST_CONFIRMED_SLOT lags a cross-slot reload by >=60 present ticks (and never
-    // converges while ac0 flaps), so a latch-fed kick builds the OLD slot's model and the identity
-    // semaphore below then deliberately faults a legitimate reload. The latch exists to HIDE stale
-    // pixels, not to aim the kick.
     let Some(target_slot) = portrait_loaded_slot_confirmed() else {
         return;
     };
