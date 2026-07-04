@@ -1,0 +1,250 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CheatTable CheatEngineTableVersion="45">
+  <CheatEntries>
+    <CheatEntry>
+      <ID>0</ID>
+      <Description>"ER locked-target weapon level match - DIAGNOSTIC ONLY"</Description>
+      <Color>0080FF</Color>
+      <VariableType>Auto Assembler Script</VariableType>
+      <AssemblerScript><![CDATA[[ENABLE]
+{$lua}
+if syntaxcheck then return end
+
+-- Elden Ring 1.16.1 locked-target weapon-level diagnostic.
+-- This record is deliberately READ-ONLY: it computes the intended all-weapon-slot
+-- level match and prints veto/planned-change information, but does not write memory.
+-- Reason: raw ChrAsm.equipment_param_ids writes can desync GaItem handles; mutation
+-- should use/prove a native equip/update path or a row-validating writer first.
+
+local O = {
+  GLOBAL_WORLD_CHR_MAN = 0x3d65f88,  -- *(eldenring.exe+RVA) -> WorldChrManImp*
+  PLAYER_INS_VMT       = 0x2a7cb40,
+  WORLD_MAIN_PLAYER    = 0x1e508,
+  PLAYER_GAME_DATA     = 0x580,
+  PLAYER_CHRASM        = 0x638,
+  PLAYER_LOCKED_HANDLE = 0x6b0,
+  CHRASM_ARMSTYLE      = 0x08,
+  CHRASM_SEL_LEFT      = 0x0c,
+  CHRASM_SEL_RIGHT     = 0x10,
+  CHRASM_PARAM_IDS     = 0x7c,
+  GET_CHR_FROM_HANDLE  = 0x507c80, -- live/deobf VA 0x140507c80
+}
+
+local SLOT_NAMES = {
+  [0]='WeaponLeft1', [1]='WeaponRight1', [2]='WeaponLeft2', [3]='WeaponRight2',
+  [4]='WeaponLeft3', [5]='WeaponRight3'
+}
+
+local function hx(x)
+  if x == nil then return 'nil' end
+  return string.format('0x%X', x)
+end
+
+local function s32(v)
+  if v == nil then return nil end
+  if v >= 0x80000000 then return v - 0x100000000 end
+  return v
+end
+
+local function safe(name, f)
+  local ok, v = pcall(f)
+  if ok then return v end
+  error(name .. ': ' .. tostring(v))
+end
+
+local function rp(a)
+  if a == nil or a == 0 then return nil end
+  return safe('readPointer('..hx(a)..')', function() return readPointer(a) end)
+end
+
+local function ri(a)
+  if a == nil or a == 0 then return nil end
+  return s32(safe('readInteger('..hx(a)..')', function() return readInteger(a) end))
+end
+
+local function ru(a)
+  if a == nil or a == 0 then return nil end
+  return safe('readInteger('..hx(a)..')', function() return readInteger(a) end)
+end
+
+local function module_base()
+  local b = getAddressSafe('eldenring.exe')
+  if not b or b == 0 then error('eldenring.exe module not found; attach CE to Elden Ring first') end
+  return b
+end
+
+local function read_weapon_slots(chrAsm)
+  local out = {}
+  for i=0,5 do
+    local pid = ri(chrAsm + O.CHRASM_PARAM_IDS + i*4)
+    local level = nil
+    local base = nil
+    local validWeaponPid = false
+    if pid and pid >= 0 then
+      level = pid % 100
+      base = pid - level
+      validWeaponPid = (level >= 0 and level <= 25)
+    end
+    out[i] = {slot=i, name=SLOT_NAMES[i], paramId=pid, level=level, base=base, valid=validWeaponPid}
+  end
+  return out
+end
+
+local function highest_level(slots)
+  local best = nil
+  for _,s in pairs(slots) do
+    if s.valid then
+      if best == nil or s.level > best then best = s.level end
+    end
+  end
+  return best
+end
+
+local function selected_hand_params(chrAsm)
+  local leftSel = ri(chrAsm + O.CHRASM_SEL_LEFT)
+  local rightSel = ri(chrAsm + O.CHRASM_SEL_RIGHT)
+  local leftIndex, rightIndex = nil, nil
+  if leftSel and leftSel >= 0 and leftSel <= 2 then leftIndex = leftSel * 2 end
+  if rightSel and rightSel >= 0 and rightSel <= 2 then rightIndex = rightSel * 2 + 1 end
+  local leftPid = leftIndex and ri(chrAsm + O.CHRASM_PARAM_IDS + leftIndex*4) or nil
+  local rightPid = rightIndex and ri(chrAsm + O.CHRASM_PARAM_IDS + rightIndex*4) or nil
+  return leftSel, rightSel, leftIndex, rightIndex, leftPid, rightPid
+end
+
+local function is_empty_handle(player)
+  local selector = ru(player + O.PLAYER_LOCKED_HANDLE)
+  return selector == nil or selector == 0xffffffff
+end
+
+local function resolve_locked_target(base, world, player)
+  -- Uses the game's own resolver rather than hand-walking block/area ChrSets.
+  -- executeCodeEx signatures differ across CE builds; try common forms read-only.
+  local buf = allocateMemory(8)
+  if not buf or buf == 0 then error('allocateMemory(8) failed') end
+  writeInteger(buf, ru(player + O.PLAYER_LOCKED_HANDLE) or 0xffffffff)
+  writeInteger(buf+4, ru(player + O.PLAYER_LOCKED_HANDLE + 4) or 0xffffffff)
+
+  local fn = base + O.GET_CHR_FROM_HANDLE
+  local ok, ret = pcall(executeCodeEx, 0, 1000, fn, world, buf)
+  if not ok then
+    ok, ret = pcall(executeCodeEx, 0, 1000, fn, {type=0,value=world}, {type=0,value=buf})
+  end
+  deAlloc(buf)
+  if not ok then error('GetChrInsFromHandle executeCodeEx failed: '..tostring(ret)) end
+  if ret == nil or ret == 0 then return nil end
+  return ret
+end
+
+local function add_veto(v, msg)
+  table.insert(v, msg)
+end
+
+local function main()
+  local base = module_base()
+  local world = rp(base + O.GLOBAL_WORLD_CHR_MAN)
+  local veto = {}
+  local lines = {}
+
+  table.insert(lines, 'ER locked-target weapon level match diagnostic (READ-ONLY)')
+  table.insert(lines, 'base='..hx(base)..' world='..hx(world))
+
+  if not world or world == 0 then add_veto(veto, 'WorldChrMan is null (not in a stable world / loading/title)') end
+  if #veto > 0 then return lines, veto end
+
+  local localPlayer = rp(world + O.WORLD_MAIN_PLAYER)
+  table.insert(lines, 'localPlayer='..hx(localPlayer))
+  if not localPlayer or localPlayer == 0 then add_veto(veto, 'WorldChrMan.mainPlayerIns is null') end
+  if #veto > 0 then return lines, veto end
+
+  local localVmt = rp(localPlayer)
+  if localVmt ~= base + O.PLAYER_INS_VMT then
+    add_veto(veto, 'local player vtable mismatch: '..hx(localVmt)..' expected '..hx(base + O.PLAYER_INS_VMT))
+  end
+
+  if is_empty_handle(localPlayer) then add_veto(veto, 'local player has no locked-on target handle') end
+
+  local localChrAsm = rp(localPlayer + O.PLAYER_CHRASM)
+  table.insert(lines, 'localChrAsm='..hx(localChrAsm))
+  if not localChrAsm or localChrAsm == 0 then add_veto(veto, 'local PlayerIns+0x638 ChrAsm is null') end
+
+  if #veto > 0 then return lines, veto end
+
+  local armStyle = ri(localChrAsm + O.CHRASM_ARMSTYLE)
+  local lsel, rsel, lidx, ridx, lpid, rpid = selected_hand_params(localChrAsm)
+  table.insert(lines, string.format('local selected: armStyle=%s leftSlot=%s(index=%s pid=%s) rightSlot=%s(index=%s pid=%s)',
+    tostring(armStyle), tostring(lsel), tostring(lidx), tostring(lpid), tostring(rsel), tostring(ridx), tostring(rpid)))
+  if not lidx or not ridx then add_veto(veto, 'local selected left/right weapon slot index is out of range') end
+  if not lpid or lpid < 0 then add_veto(veto, 'local selected left-hand weapon is empty/invalid') end
+  if not rpid or rpid < 0 then add_veto(veto, 'local selected right-hand weapon is empty/invalid') end
+
+  local target = resolve_locked_target(base, world, localPlayer)
+  table.insert(lines, 'lockedTargetChr='..hx(target))
+  if not target or target == 0 then add_veto(veto, 'GetChrInsFromHandle returned null for locked target') end
+  if #veto > 0 then return lines, veto end
+
+  local targetVmt = rp(target)
+  if targetVmt ~= base + O.PLAYER_INS_VMT then
+    add_veto(veto, 'locked target is not a PlayerIns by exact vtable: '..hx(targetVmt)..' expected '..hx(base + O.PLAYER_INS_VMT))
+  end
+
+  local targetChrAsm = rp(target + O.PLAYER_CHRASM)
+  table.insert(lines, 'targetChrAsm='..hx(targetChrAsm))
+  if not targetChrAsm or targetChrAsm == 0 then add_veto(veto, 'target PlayerIns+0x638 ChrAsm is null') end
+  if #veto > 0 then return lines, veto end
+
+  local targetSlots = read_weapon_slots(targetChrAsm)
+  local localSlots = read_weapon_slots(localChrAsm)
+  local targetLevel = highest_level(targetSlots)
+  table.insert(lines, '')
+  table.insert(lines, 'Target weapon slots:')
+  for i=0,5 do
+    local s = targetSlots[i]
+    table.insert(lines, string.format('  %-12s pid=%s level=%s valid=%s', s.name, tostring(s.paramId), tostring(s.level), tostring(s.valid)))
+  end
+  if targetLevel == nil then add_veto(veto, 'target has no valid equipped weapon param IDs in weapon slots 0..5') end
+
+  table.insert(lines, '')
+  table.insert(lines, 'Local planned all-weapon-slot changes:')
+  if targetLevel ~= nil then
+    table.insert(lines, '  target highest weapon level = +'..tostring(targetLevel))
+    for i=0,5 do
+      local s = localSlots[i]
+      if s.valid then
+        local newPid = s.base + targetLevel
+        local why = ''
+        if s.level == targetLevel then why = 'already matches' else why = 'would change' end
+        table.insert(lines, string.format('  %-12s %s -> %s (%s)', s.name, tostring(s.paramId), tostring(newPid), why))
+      else
+        table.insert(lines, string.format('  %-12s pid=%s skipped (empty/invalid)', s.name, tostring(s.paramId)))
+      end
+    end
+  end
+
+  add_veto(veto, 'mutation disabled in this draft: needs row-existence validation and native GaItem/EquipItem-safe write path')
+  return lines, veto
+end
+
+local ok, lines, veto = pcall(main)
+if not ok then
+  print('[ER weapon-level match diagnostic] ERROR: '..tostring(lines))
+  showMessage('ER weapon-level diagnostic error:\n'..tostring(lines))
+  error(lines)
+end
+
+for _,l in ipairs(lines) do print('[ER weapon-level match] '..l) end
+if #veto > 0 then
+  print('[ER weapon-level match] VETO:')
+  for _,v in ipairs(veto) do print('[ER weapon-level match]   - '..v) end
+  showMessage('ER locked-target weapon-level match: VETO\n\n'..table.concat(lines, '\n')..'\n\nVETO:\n'..table.concat(veto, '\n'))
+else
+  showMessage('ER locked-target weapon-level match diagnostic passed all current read-only gates.\n\n'..table.concat(lines, '\n'))
+end
+
+return ''
+{$asm}
+[DISABLE]
+]]></AssemblerScript>
+    </CheatEntry>
+  </CheatEntries>
+  <UserdefinedSymbols/>
+</CheatTable>
