@@ -3422,21 +3422,37 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                         if let Some((cw, ch, mut cpx, rt_cand)) =
                             unsafe { readback_offscreen_fast_coherent(off) }
                         {
+                            // COLOR PROVENANCE (green-face wrong-buffer fix): the nest holds same-size
+                            // same-format NON-final targets (material/G-buffer -- flat-green face,
+                            // saturated-orange emissive), and keyed+tear cannot tell buffers apart. Only
+                            // a color resolved from the scene bundle's own RTV is identity-proven; a
+                            // scan-resolved frame must neither latch the pin nor display (bridge holds).
+                            let color_from_bundle =
+                                crate::experiments::gpu_readback::PROFILE_COLOR_SRC_BUNDLE_LAST
+                                    .load(Ordering::SeqCst)
+                                    != 0;
                             // DIAGNOSTIC: count readbacks + checker-classified frames, and one-shot dump a
                             // "checker" frame (slot 103) so we can SEE what the ~216 non-published frames
                             // actually contain (forge magenta/yellow placeholder vs black vs partial head).
                             PROFILE_READBACK_SOME.fetch_add(1, Ordering::SeqCst);
-                            if portrait_looks_like_checker(cw, ch, &cpx) {
+                            let is_checker = portrait_looks_like_checker(cw, ch, &cpx);
+                            if is_checker {
                                 PROFILE_READBACK_CHECKER.fetch_add(1, Ordering::SeqCst);
                                 if PROFILE_CHECKER_DUMPED.swap(true, Ordering::SeqCst) != true {
                                     dump_portrait_rgba(103, cw, ch, &cpx);
                                 }
+                            } else if !color_from_bundle {
+                                // Real (non-checker) content but scan-resolved: never pin, never
+                                // display -- the bridge holds the last identity-proven frame.
+                                PROFILE_PUBLISH_SKIPPED_UNPAIRED.fetch_add(1, Ordering::SeqCst);
                             }
-                            if !portrait_looks_like_checker(cw, ch, &cpx) {
+                            if !is_checker && color_from_bundle {
                                 // PIN the confirmed-head content RT candidate: subsequent scans prefer it
                                 // outright, so the publish source can never flip to another slot's
                                 // same-size RT mid-load (the cross-slot swap). A switch after first latch
                                 // means the RT was genuinely recreated -- counted as the swap tripwire.
+                                // (Bundle-provenance frames only: a scan-resolved candidate could latch
+                                // the pin onto the material buffer and keep re-picking it all window.)
                                 let prev = PROFILE_RT_PIN.swap(rt_cand, Ordering::SeqCst);
                                 if prev != 0 && prev != rt_cand {
                                     let n = PROFILE_RT_PIN_SWITCHES.fetch_add(1, Ordering::SeqCst);

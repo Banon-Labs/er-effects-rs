@@ -2653,6 +2653,34 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_portrait_teardown_fence_timeouts",
             PROFILE_TEARDOWN_FENCE_TIMEOUTS.load(Ordering::SeqCst),
         );
+        // Color/depth source provenance (green-face wrong-buffer fix): only bundle-provenance color
+        // may display; unpaired counts real frames held back for lacking it.
+        push_json_usize(
+            body,
+            "oracle_portrait_color_from_bundle",
+            crate::experiments::gpu_readback::PROFILE_COLOR_FROM_BUNDLE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_color_from_scan",
+            crate::experiments::gpu_readback::PROFILE_COLOR_FROM_SCAN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_depth_from_chain",
+            crate::experiments::gpu_readback::PROFILE_DEPTH_FROM_CHAIN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_depth_from_bfs",
+            crate::experiments::gpu_readback::PROFILE_DEPTH_FROM_BFS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_publish_skipped_unpaired",
+            crate::experiments::gpu_readback::PROFILE_PUBLISH_SKIPPED_UNPAIRED
+                .load(Ordering::SeqCst),
+        );
         push_json_str(
             body,
             "oracle_gx_cmdqueue_top_producers",

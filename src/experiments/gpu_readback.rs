@@ -210,6 +210,23 @@ pub(crate) static PROFILE_RT_PIN_SWITCHES: AtomicUsize = AtomicUsize::new(0);
 /// Pinned depth-sibling candidate pointer (0 = unpinned); latched when a depth readback yields a mask
 /// with clean bg/head separation, so the alpha cutout can't sample a foreign slot's depth buffer.
 pub(crate) static PROFILE_DEPTH_PIN: AtomicUsize = AtomicUsize::new(0);
+// COLOR/DEPTH SOURCE PROVENANCE (green-face wrong-buffer fix, 2026-07-03). The offscreen nest holds
+// same-size same-format non-final render targets (material/G-buffer: flat-green face, saturated
+// orange emissive -- user screenshot), and the whole-nest "largest texture" scan can pick one when
+// the deterministic scene-bundle chain misses; keyed+tear gates cannot tell buffers apart. Track
+// where each tick's color/depth came from; the strict publish gate displays ONLY bundle-provenance
+// color (identity-proven by construction), and scan-resolved frames hold the bridge instead.
+/// Per-tick color provenance: 1 = scene-bundle RTV (identity-proven), 0 = whole-nest scan fallback.
+/// Written by the readback, consumed immediately by the same-thread draw tick.
+pub(crate) static PROFILE_COLOR_SRC_BUNDLE_LAST: AtomicUsize = AtomicUsize::new(0);
+/// Cumulative ticks whose color resolved from the scene bundle vs the scan fallback.
+pub(crate) static PROFILE_COLOR_FROM_BUNDLE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_COLOR_FROM_SCAN: AtomicUsize = AtomicUsize::new(0);
+/// Cumulative depth resolutions via the deterministic bundle chain vs the heuristic BFS fallback.
+pub(crate) static PROFILE_DEPTH_FROM_CHAIN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_DEPTH_FROM_BFS: AtomicUsize = AtomicUsize::new(0);
+/// Keyed+clean frames NOT displayed because their color was scan-resolved (no bundle provenance).
+pub(crate) static PROFILE_PUBLISH_SKIPPED_UNPAIRED: AtomicUsize = AtomicUsize::new(0);
 
 // Static-RE'd offscreen scene-target member chain (Ghidra dump decompiles, 2026-07-03 -- the
 // black-background-on-reload root fix). The CSEzOffscreenRend stores its GXSgCompositeScene facade
@@ -252,6 +269,7 @@ pub(crate) unsafe fn find_depth_resource(start: usize) -> Option<(ID3D12Resource
     // null/redirected.
     if let Some(dsv_view) = unsafe { offscreen_depth_view(start) } {
         if let Some(found) = unsafe { find_d3d12_resource_ex(dsv_view, 0, true, 0) } {
+            PROFILE_DEPTH_FROM_CHAIN.fetch_add(1, Ordering::SeqCst);
             if DEPTH_CHAIN_DIAG.fetch_or(1, Ordering::SeqCst) & 1 == 0 {
                 append_autoload_debug(format_args!(
                     "depth-chain: resolved DSV view 0x{dsv_view:x} from off=0x{start:x} -> depth resource cand 0x{:x}",
@@ -267,7 +285,11 @@ pub(crate) unsafe fn find_depth_resource(start: usize) -> Option<(ID3D12Resource
             "depth-chain: MISS (facade/ctx/dsv null, redirected, or view nest yielded no depth texture) off=0x{start:x} -- falling back to heuristic nest BFS"
         ));
     }
-    unsafe { find_d3d12_resource_ex(start, 0, true, prefer) }
+    let r = unsafe { find_d3d12_resource_ex(start, 0, true, prefer) };
+    if r.is_some() {
+        PROFILE_DEPTH_FROM_BFS.fetch_add(1, Ordering::SeqCst);
+    }
+    r
 }
 
 /// Resolve the offscreen scene's DSV view object via the static-RE'd member chain above. All reads
@@ -550,7 +572,13 @@ pub(crate) unsafe fn readback_offscreen_fast_coherent(
     if let Ok(mut g) = COHERENT_DEPTH.lock() {
         *g = None;
     }
-    unsafe { readback_offscreen_fast(gpu_child) }
+    let r = unsafe { readback_offscreen_fast(gpu_child) };
+    if r.is_some() {
+        // Separate-path color is scan-resolved: no bundle provenance this tick.
+        PROFILE_COLOR_SRC_BUNDLE_LAST.store(0, Ordering::SeqCst);
+        PROFILE_COLOR_FROM_SCAN.fetch_add(1, Ordering::SeqCst);
+    }
+    r
 }
 
 /// COHERENT single-fence readback of the offscreen COLOR RT and its DEPTH sibling: both copies are
@@ -572,11 +600,12 @@ pub(crate) unsafe fn readback_offscreen_color_depth_coherent(
         // unavailable (mid-load renderers whose scene chain is null/redirected).
         let bundle_color = offscreen_color_view(gpu_child)
             .and_then(|rtv| unsafe { find_d3d12_resource_ex(rtv, 0, false, 0) });
-        let (color_res, color_cand) = match bundle_color {
-            Some(c) => c,
+        let (color_res, color_cand, color_from_bundle) = match bundle_color {
+            Some((r, c)) => (r, c, true),
             None => {
                 let prefer_c = PROFILE_RT_PIN.load(Ordering::SeqCst);
-                find_d3d12_resource_ex(gpu_child, 0, false, prefer_c)?
+                let (r, c) = find_d3d12_resource_ex(gpu_child, 0, false, prefer_c)?;
+                (r, c, false)
             }
         };
 
@@ -904,6 +933,14 @@ pub(crate) unsafe fn readback_offscreen_color_depth_coherent(
             out
         };
 
+        // Success is certain here -- record this tick's color provenance for the strict publish
+        // gate (a later-failing attempt never reaches this store; the fallback path stores 0).
+        PROFILE_COLOR_SRC_BUNDLE_LAST.store(color_from_bundle as usize, Ordering::SeqCst);
+        if color_from_bundle {
+            PROFILE_COLOR_FROM_BUNDLE.fetch_add(1, Ordering::SeqCst);
+        } else {
+            PROFILE_COLOR_FROM_SCAN.fetch_add(1, Ordering::SeqCst);
+        }
         Some((cw, ch, color, color_cand, dw, dh, depth, depth_cand))
     }))
     .ok()
@@ -2826,8 +2863,29 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
         &PROFILE_DRIVE_FENCE_SKIPS,
         &PROFILE_DRIVE_FENCE_SKIPS_WINDOW_MARK,
     );
+    // Source provenance per window: cb/cs = color ticks resolved from the scene bundle vs the scan;
+    // dc/db = depth via the deterministic chain vs the BFS; unpaired = real frames held back for
+    // lacking bundle provenance (the green-face wrong-buffer class). A starved window (clean=0)
+    // with cs/db dominant convicts a chain miss for that window's renderer.
+    let cb = winof(
+        &PROFILE_COLOR_FROM_BUNDLE,
+        &PROFILE_COLOR_FROM_BUNDLE_WINDOW_MARK,
+    );
+    let cs = winof(
+        &PROFILE_COLOR_FROM_SCAN,
+        &PROFILE_COLOR_FROM_SCAN_WINDOW_MARK,
+    );
+    let dc = winof(
+        &PROFILE_DEPTH_FROM_CHAIN,
+        &PROFILE_DEPTH_FROM_CHAIN_WINDOW_MARK,
+    );
+    let db = winof(&PROFILE_DEPTH_FROM_BFS, &PROFILE_DEPTH_FROM_BFS_WINDOW_MARK);
+    let unpaired = winof(
+        &PROFILE_PUBLISH_SKIPPED_UNPAIRED,
+        &PROFILE_PUBLISH_SKIPPED_UNPAIRED_WINDOW_MARK,
+    );
     append_autoload_debug(format_args!(
-        "present-overlay: loading-portrait window reset ({reason}) -- animated {drive} / displayed {display} frames (drive<<display == froze early); publish[clean={published} torn={torn} unkeyed={unkeyed} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips}] (clean=0 == frozen on prior character; the dominant skip class is the cause); pins/spare cleared for the next load"
+        "present-overlay: loading-portrait window reset ({reason}) -- animated {drive} / displayed {display} frames (drive<<display == froze early); publish[clean={published} torn={torn} unkeyed={unkeyed} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips} unpaired={unpaired}] src[color bundle={cb}/scan={cs} depth chain={dc}/bfs={db}] (clean=0 == frozen on prior character; the dominant skip class is the cause); pins/spare cleared for the next load"
     ));
 }
 
