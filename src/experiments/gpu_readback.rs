@@ -2158,9 +2158,13 @@ pub(crate) unsafe fn composite_portrait_on_swapchain(base: usize, swapchain_raw:
 /// it stayed pinned to the first character's now-stale renderer, and driving that leaked renderer risks a
 /// use-after-free). Called from the overlay stop at load completion; idempotent.
 pub(crate) fn loading_portrait_window_reset(reason: &str) {
-    if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
-        *g = None;
-    }
+    // Make-before-break bridge (user 2026-07-03): KEEP the last published keyed frame + its
+    // display-available flag so the just-loaded character stays on screen as the bridge when the NEXT
+    // load window opens -- it is replaced the instant that window's newly-selected character produces
+    // its own keyed frame (the drive re-engages because the freeze latch below is cleared). Previously
+    // this nulled the snapshot to avoid flashing the previous character; that flash IS now the desired
+    // behavior (old head held until the new masked head is ready), bounded by the keyed-publish gate.
+    // Only the per-window drive-freeze latch is cleared here so the next window re-renders.
     PROFILE_BAKE_RGBA_CAPTURED.store(0, Ordering::SeqCst);
     PROFILE_RT_PIN.store(0, Ordering::SeqCst);
     PROFILE_DEPTH_PIN.store(0, Ordering::SeqCst);
@@ -2188,8 +2192,15 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
     if let Ok(mut g) = LAST_DEPTH_MASK.lock() {
         *g = None;
     }
+    // Animation-stall semaphore: snapshot this window's animated-vs-displayed frame counts, then zero
+    // for the next window. drive << display == the head froze early (freeze-after-capture); the
+    // user's "stopped animating / frozen the whole loading screen" symptom shows here as a low ratio.
+    let drive = PROFILE_DRIVE_FRAMES_WINDOW.swap(0, Ordering::SeqCst);
+    let display = PROFILE_DISPLAY_FRAMES_WINDOW.swap(0, Ordering::SeqCst);
+    PROFILE_DRIVE_FRAMES_WINDOW_LAST.store(drive, Ordering::SeqCst);
+    PROFILE_DISPLAY_FRAMES_WINDOW_LAST.store(display, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "present-overlay: loading-portrait window reset ({reason}) -- snapshot/pins/spare cleared for the next load"
+        "present-overlay: loading-portrait window reset ({reason}) -- animated {drive} / displayed {display} frames (drive<<display == froze early); pins/spare cleared for the next load"
     ));
 }
 
@@ -2286,7 +2297,15 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
             return false;
         }
     }
-    if PROFILE_BAKE_RGBA_CAPTURED.load(Ordering::SeqCst) == 0 {
+    // DISPLAY-AVAILABILITY gate, decoupled from the drive-freeze latch (make-before-break): show
+    // whenever we have EVER published a keyed (masked) frame (PROFILE_HAVE_KEYED_FRAME, persistent) or
+    // the diagnostic bake path latched one. This is what lets the prior masked head keep displaying
+    // after a confirm clears the drive-freeze (PROFILE_BAKE_RGBA_CAPTURED) to re-render the new
+    // character -- the composite keeps showing LOADING_BG_PORTRAIT_RGBA until the new model's first
+    // keyed frame replaces it. Before ANY keyed frame exists, bail (no opaque/blank flash).
+    if PROFILE_HAVE_KEYED_FRAME.load(Ordering::SeqCst) == 0
+        && PROFILE_BAKE_RGBA_CAPTURED.load(Ordering::SeqCst) == 0
+    {
         return false;
     }
     // NOTE: this used to bail when render-drive was on, back when "render-drive" meant the Present hook
@@ -2353,6 +2372,9 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
     if sw == 0 || sh == 0 || spx.len() < (sw as usize) * (sh as usize) * RGBA8_BPP {
         return false;
     }
+    // Animation-stall semaphore: a portrait frame is being displayed this present. Paired with the
+    // per-drive-frame counter, a low drive/display ratio means the head froze early in the window.
+    PROFILE_DISPLAY_FRAMES_WINDOW.fetch_add(1, Ordering::SeqCst);
 
     let alloc_raw = OVERLAY_ALLOCATOR.load(Ordering::SeqCst) as *mut c_void;
     let list_raw = OVERLAY_LIST.load(Ordering::SeqCst) as *mut c_void;

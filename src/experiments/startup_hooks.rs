@@ -3197,6 +3197,10 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                 }));
                 PROFILE_IN_OUR_DRIVE.store(false, Ordering::SeqCst);
                 PROFILE_PERFRAME_MODEL_DRAWS.fetch_add(1, Ordering::SeqCst);
+                // Animation-stall semaphore: this frame the drive actually rendered (animated). Once
+                // freeze-after-capture latches, this stops incrementing while display frames keep
+                // counting -> the drive/display ratio quantifies how early the head froze.
+                PROFILE_DRIVE_FRAMES_WINDOW.fetch_add(1, Ordering::SeqCst);
             }
             if stable_target_only {
                 // PER-SCENE ENVIRONMENT LEVER (goal 2026-06-30) -- PROOF PASS. The portrait scene's tonemap/
@@ -3733,17 +3737,59 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                     }
                                 }
                                 // The whole live-drive block is gated on the stable target-only state above,
-                                // so this readback is the loaded character only -- publish it.
-                                if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
-                                    *g = Some((cw, ch, cpx));
-                                }
-                                LOADING_BG_PORTRAIT_RGBA_VERSION.fetch_add(1, Ordering::SeqCst);
-                                // Gate the present-overlay on (now there is a real live head to show).
-                                PROFILE_BAKE_RGBA_CAPTURED.store(1, Ordering::SeqCst);
-                                if PROFILE_LIVE_FEED_LOGGED.swap(1, Ordering::SeqCst) == 0 {
-                                    append_autoload_debug(format_args!(
-                                        "live-feed: published built RT content {cw}x{ch} (real head, !checker, target-only) -> overlay (version bump)"
-                                    ));
+                                // so this readback is the loaded character only. KEYED-GATE (never render
+                                // an unmasked model, user 2026-07-03): only publish/freeze when the depth
+                                // mask actually cut out background (a transparent pixel exists). An unmasked
+                                // fail-open frame (all alpha 255, mask not ready yet) is skipped, so the
+                                // display never freezes on an opaque IBL box -- and the make-before-break
+                                // bridge keeps the PRIOR masked head (PROFILE_HAVE_KEYED_FRAME) on screen
+                                // until THIS model produces its own masked frame, which then replaces it.
+                                let keyed = cpx.chunks_exact(4).any(|px| px[3] < 128);
+                                // TORN-READBACK gate (user 2026-07-03): the offscreen readback has no
+                                // cross-queue sync vs the game's render of the RT, so a per-frame capture
+                                // can be torn (scanline garbage) even though it is keyed. Score the
+                                // vertical luma tearing over the masked head; publish only a CLEAN frame,
+                                // else hold the prior clean head via the bridge (never flash garbage).
+                                let tear = portrait_tear_score(&cpx, cw as usize, ch as usize);
+                                PROFILE_TEAR_SCORE_LAST.store(tear, Ordering::SeqCst);
+                                PROFILE_TEAR_SCORE_MAX.fetch_max(tear, Ordering::SeqCst);
+                                let clean = tear <= PROFILE_TEAR_SCORE_THRESHOLD;
+                                if keyed && clean {
+                                    PROFILE_TEAR_SCORE_CLEAN_MIN.fetch_min(tear, Ordering::SeqCst);
+                                    PROFILE_PUBLISH_CLEAN.fetch_add(1, Ordering::SeqCst);
+                                    if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
+                                        *g = Some((cw, ch, cpx));
+                                    }
+                                    LOADING_BG_PORTRAIT_RGBA_VERSION.fetch_add(1, Ordering::SeqCst);
+                                    // Freeze the per-frame drive for this window (UAF fix) ...
+                                    PROFILE_BAKE_RGBA_CAPTURED.store(1, Ordering::SeqCst);
+                                    // ... and mark a keyed frame available for display (persists across the
+                                    // window reset/retarget so the bridge holds until the next keyed frame).
+                                    PROFILE_HAVE_KEYED_FRAME.store(1, Ordering::SeqCst);
+                                    if PROFILE_LIVE_FEED_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+                                        append_autoload_debug(format_args!(
+                                            "live-feed: published built RT content {cw}x{ch} (real head, !checker, keyed, clean tear={tear}, target-only) -> overlay (version bump)"
+                                        ));
+                                    }
+                                } else if keyed {
+                                    // Keyed but TORN (offscreen RT read mid-GPU-write -- no cross-queue
+                                    // sync): SKIP so the garbage never displays; the make-before-break
+                                    // bridge holds the last CLEAN head. Validated safe as the product fix
+                                    // (run autostep10m): clean frames score 1-7 and land constantly
+                                    // (1957 published), torn frames are rare (one at tear=80) -- so the
+                                    // skip catches them without ever starving the display. Regressions
+                                    // surface as oracle_portrait_publish_skipped_torn climbing.
+                                    let n =
+                                        PROFILE_PUBLISH_SKIPPED_TORN.fetch_add(1, Ordering::SeqCst);
+                                    if n % 64 == 0 {
+                                        append_autoload_debug(format_args!(
+                                            "portrait-tear: skipped torn keyed frame tear={tear} > {PROFILE_TEAR_SCORE_THRESHOLD} (max={}, #torn={})",
+                                            PROFILE_TEAR_SCORE_MAX.load(Ordering::SeqCst),
+                                            n + 1
+                                        ));
+                                    }
+                                } else {
+                                    PROFILE_PUBLISH_SKIPPED_UNKEYED.fetch_add(1, Ordering::SeqCst);
                                 }
                             }
                         }
@@ -5008,6 +5054,59 @@ pub(crate) fn portrait_loaded_slot_confirmed() -> Option<i32> {
     None
 }
 
+/// TORN-READBACK score: average absolute VERTICAL luma step across the masked (alpha != 0, i.e. head)
+/// region of a readback RGBA frame. A clean face render varies smoothly row-to-row (small steps); a
+/// torn readback (rows captured mid-GPU-write, no cross-queue sync) has random per-row discontinuities
+/// (large steps -> the scanline garbage the user saw). Returns 0..255. Columns are subsampled by 2 for
+/// cost; every row is compared so single-row tears still register. 0 when there is no masked content.
+pub(crate) fn portrait_tear_score(cpx: &[u8], w: usize, h: usize) -> usize {
+    if w < 2 || h < 2 || cpx.len() < w * h * 4 {
+        return 0;
+    }
+    let luma = |i: usize| -> i32 {
+        let p = i * 4;
+        (cpx[p] as i32 * 30 + cpx[p + 1] as i32 * 59 + cpx[p + 2] as i32 * 11) / 100
+    };
+    let mut sum = 0u64;
+    let mut n = 0u64;
+    let mut y = 1;
+    while y < h {
+        let mut x = 0;
+        while x < w {
+            let i = y * w + x;
+            // Only score head pixels (alpha != 0). The mask sets background alpha to 0, so a torn
+            // frame's head region is where the scanline garbage shows.
+            if cpx[i * 4 + 3] != 0 {
+                let d = (luma(i) - luma((y - 1) * w + x)).unsigned_abs() as u64;
+                sum += d;
+                n += 1;
+            }
+            x += 2;
+        }
+        y += 1;
+    }
+    if n == 0 { 0 } else { (sum / n) as usize }
+}
+
+/// The slot whose portrait the loading-screen pipeline should TARGET (spare + render + display): the
+/// character the user just SELECTED for a System->Quit->Load switch
+/// (`SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT`, set at the confirm press -- known BEFORE the deserialize
+/// flips ac0), falling back to `portrait_loaded_slot()` (ac0 / the boot autoload hint) when no switch
+/// selection is pending. This is what lets the loading portrait show the NEWLY-selected character
+/// during the pre-continue window instead of the still-resident old one: at the confirm the new slot's
+/// renderer is already built + live in the ProfileSelect table, so we can spare/render IT, while ac0
+/// still names the old character until the reload deserializes.
+pub(crate) fn portrait_target_slot() -> i32 {
+    let sel = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
+    if sel <= i32::MAX as usize {
+        let sel = sel as i32;
+        if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&sel) {
+            return sel;
+        }
+    }
+    portrait_loaded_slot()
+}
+
 /// Fail-fast CHARACTER-IDENTITY semaphore for the loading-screen portrait (er-effects-rs-j3r; user
 /// directive 2026-07-02: verify IN-GAME, from RAM identity -- NOT rendered pixels -- that the
 /// character our portrait code renders is the one the game actually loaded). Two INDEPENDENT sources:
@@ -5419,11 +5518,12 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                 // old per-tick game-task offscreen drive rendered black (FrameBegin = before the GX frame
                 // records); the draw-phase task is the fix.
                 unsafe { apply_profile_lookat(r, s) };
-                // SPARE PRE-RECORD: capture the autoload target slot's renderer as the spare candidate on
-                // a frame where its model is actually BUILT (+0x778 valid), so the teardown-spare hook can
-                // protect this exact renderer through Continue even though the menu cycles model_ins. The
-                // long menu dwell makes catching a built frame reliable.
-                let target = portrait_loaded_slot();
+                // SPARE PRE-RECORD: capture the target slot's renderer as the spare candidate on a frame
+                // where its model is actually BUILT (+0x778 valid), so the teardown-spare hook can protect
+                // this exact renderer through Continue even though the menu cycles model_ins. Uses
+                // portrait_target_slot() so that once the user confirms a switch (SELECTED_SLOT set), the
+                // candidate re-records for the NEWLY-selected character, not the still-resident old ac0.
+                let target = portrait_target_slot();
                 if s == target
                     && PROFILE_SPARE_CANDIDATE.load(Ordering::SeqCst) == 0
                     && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
@@ -5531,6 +5631,10 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
     let orphan = PROFILE_SPARE_ORPHAN.swap(0, Ordering::SeqCst);
     if orphan != 0 {
         let deleted = unsafe { delay_delete_enqueue_renderer(orphan) };
+        // Ownership ledger: discharge our responsibility for the spared renderer (paired with the
+        // ownership_take at the spare site). Released whether or not the enqueue took -- either we
+        // handed it to delay-delete or it was already stale/gone; either way it is no longer ours.
+        ownership_release(OwnedClass::SparedRenderer);
         append_autoload_debug(format_args!(
             "loading-portrait: reclaimed prior spared renderer 0x{orphan:x} via CSDelayDeleteMan enqueued={deleted} (repeated-switch GX command-queue leak fix)"
         ));
@@ -5541,31 +5645,30 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
         && (product_autoload_enabled() || portrait_lookat_enabled())
     {
         if let Ok(base) = game_module_base() {
-            // The loaded character's slot (er-effects-rs-j3r) -- spare the renderer we actually render.
-            let slot = portrait_loaded_slot();
+            // The slot we render (er-effects-rs-j3r): the newly-selected character on a switch
+            // (SELECTED_SLOT), else the loaded slot (ac0). portrait_target_slot() is what makes the
+            // loading portrait show the character just picked, not the one still resident.
+            let slot = portrait_target_slot();
             // Prefer the PRE-RECORDED candidate (captured at the menu on a model-built frame -- robust to
             // the menu's model_ins cycling). Find its table slot and protect it. Fall back to reading
             // table[slot] + a model-built guard if no candidate was recorded.
             let candidate = PROFILE_SPARE_CANDIDATE.load(Ordering::SeqCst);
-            let (renderer, table, spared_slot) = if valid(candidate) {
-                // locate the candidate's table entry so we can null it
-                let mut found = (candidate, 0usize, slot);
-                for s in 0..TITLE_PROFILE_SLOT_COUNT as i32 {
-                    let te = portrait_renderer_table_entry(base, s);
-                    if unsafe { safe_read_usize(te) }.unwrap_or(0) == candidate {
-                        found = (candidate, te, s);
-                        break;
-                    }
-                }
-                found
+            let target_te = portrait_renderer_table_entry(base, slot);
+            // Honor the pre-recorded candidate ONLY if it still sits in the TARGET slot. A candidate
+            // captured for the old character before a switch confirm must not be spared over the
+            // newly-selected one -- in that case fall back to table[target] (its model is built, the
+            // menu rendered all 10 slots). Prevents the loading portrait showing the prior character.
+            let candidate_in_target =
+                valid(candidate) && unsafe { safe_read_usize(target_te) }.unwrap_or(0) == candidate;
+            let (renderer, table, spared_slot) = if candidate_in_target {
+                (candidate, target_te, slot)
             } else {
-                let te = portrait_renderer_table_entry(base, slot);
-                let r = unsafe { safe_read_usize(te) }.unwrap_or(0);
+                let r = unsafe { safe_read_usize(target_te) }.unwrap_or(0);
                 let model_built = valid(r)
                     && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
                         .map(|m| valid(m))
                         .unwrap_or(false);
-                (if model_built { r } else { 0 }, te, slot)
+                (if model_built { r } else { 0 }, target_te, slot)
             };
             if valid(renderer)
                 && unsafe { safe_read_usize(renderer) }.unwrap_or(0)
@@ -5573,6 +5676,9 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
             {
                 LOADING_BG_PORTRAIT_SPARED_RENDERER.store(renderer, Ordering::SeqCst);
                 PROFILE_RENDERER_SPARE_HITS.fetch_add(1, Ordering::SeqCst);
+                // Ownership ledger: we just excluded this renderer from the native delete, so WE own
+                // its destruction now. Paired with the ownership_release on the drain path below.
+                ownership_take(OwnedClass::SparedRenderer);
                 // Null the table entry so the original's null-guarded delete-enqueue skips it.
                 if table != 0 {
                     unsafe { (table as *mut usize).write_volatile(0) };
@@ -8364,6 +8470,55 @@ pub(crate) unsafe fn delay_delete_pending() -> Option<(usize, usize)> {
     Some((pending as usize, highwater.max(0) as usize))
 }
 
+/// OWNERSHIP LEDGER -- record that we took manual ownership of a native object (we are now
+/// responsible for releasing it). Pair EVERY `ownership_take` with exactly one `ownership_release`
+/// on the discharge path; a bare `store(0)`/overwrite that drops the pointer without a release is
+/// the leak this ledger exists to catch.
+pub(crate) fn ownership_take(class: OwnedClass) {
+    let i = class as usize;
+    let taken = OWNED_TAKEN[i].fetch_add(1, Ordering::SeqCst) + 1;
+    let released = OWNED_RELEASED[i].load(Ordering::SeqCst);
+    OWNED_MAX_OUTSTANDING[i].fetch_max(taken.saturating_sub(released), Ordering::SeqCst);
+}
+
+/// OWNERSHIP LEDGER -- record that we handed a native-owned object back to its native lifecycle
+/// (e.g. delete-enqueued it). Only call on the REAL discharge path, never on an incidental pointer
+/// clear, so the ledger stays an honest leak detector.
+pub(crate) fn ownership_release(class: OwnedClass) {
+    OWNED_RELEASED[class as usize].fetch_add(1, Ordering::SeqCst);
+}
+
+/// Current taken-but-not-released count for a class.
+pub(crate) fn ownership_outstanding(class: OwnedClass) -> usize {
+    let i = class as usize;
+    OWNED_TAKEN[i]
+        .load(Ordering::SeqCst)
+        .saturating_sub(OWNED_RELEASED[i].load(Ordering::SeqCst))
+}
+
+/// OWNERSHIP LEDGER -- assert every class stays within its bound; on breach, latch the violation
+/// oracle and log loudly. Called at each switch boundary (cheap enough to call per-frame). Returns
+/// true iff all classes are within bound. A breach means a native-owned object was taken without a
+/// paired release (the spared-renderer leak class) -- caught at the FIRST offending switch, not at a
+/// downstream crash.
+pub(crate) fn ownership_ledger_check(context: &str) -> bool {
+    let mut ok = true;
+    for i in 0..OWNED_CLASS_COUNT {
+        let taken = OWNED_TAKEN[i].load(Ordering::SeqCst);
+        let released = OWNED_RELEASED[i].load(Ordering::SeqCst);
+        let outstanding = taken.saturating_sub(released);
+        if outstanding > OWNED_CLASS_BOUND[i] {
+            ok = false;
+            OWNED_LEDGER_VIOLATIONS.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "OWNERSHIP-LEDGER VIOLATION ({context}): class '{}' outstanding={outstanding} > bound={} (taken={taken} released={released}) -- a native-owned object was taken without a paired release (the spared-renderer leak class)",
+                OWNED_CLASS_NAMES[i], OWNED_CLASS_BOUND[i]
+            ));
+        }
+    }
+    ok
+}
+
 /// Destroy a previously-spared portrait renderer via CSDelayDeleteMan -- the exact native path the
 /// profile-renderer teardown (`FUN_1409b2f00`) uses for the other 9 renderers each teardown (marks
 /// the object's +0x756 byte, enqueues it, freed on the delete pump when the GPU is done). Vtable-
@@ -9082,10 +9237,15 @@ fn sq_repro_begin_switch() {
     let (dd_pending, dd_highwater) = unsafe { delay_delete_pending() }
         .map(|(p, h)| (p as i64, h as i64))
         .unwrap_or((-1, -1));
+    // Ownership-conservation check: if any native-owned class is over its bound, this is where the
+    // spared-renderer leak would have surfaced (switch #2), long before the GX queue overflow crash.
+    ownership_ledger_check("switch-boundary");
     append_autoload_debug(format_args!(
-        "gx-cmdqueue: switch boundary -- prev-switch peak {switch_peak}/{} arena_min_remaining={} delaydelete_pending={dd_pending} (highwater {dd_highwater}) (cumulative max {}, arena min {}, reserves {}) top producers: {} | buckets: {}",
+        "gx-cmdqueue: switch boundary -- prev-switch peak {switch_peak}/{} arena_min_remaining={} delaydelete_pending={dd_pending} (highwater {dd_highwater}) spared_outstanding={} ledger_violations={} (cumulative max {}, arena min {}, reserves {}) top producers: {} | buckets: {}",
         GX_CMD_QUEUE_CAP_SEEN.load(Ordering::SeqCst),
         fmt_lowwater(switch_arena_min),
+        ownership_outstanding(OwnedClass::SparedRenderer),
+        OWNED_LEDGER_VIOLATIONS.load(Ordering::SeqCst),
         GX_CMD_QUEUE_MAX_FILL.load(Ordering::SeqCst),
         fmt_lowwater(GX_CMD_ARENA_MIN_REMAINING.load(Ordering::SeqCst)),
         GX_CMD_QUEUE_SUBMITS.load(Ordering::SeqCst),
@@ -9490,6 +9650,23 @@ unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, source: &str) {
     // SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.store(0, Ordering::SeqCst);
     // SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.store(selected_slot as usize, Ordering::SeqCst);
+    // PORTRAIT RETARGET (user 2026-07-03): the user just confirmed a NEW character for load, so the
+    // loading-screen portrait should render THAT character, not the one still resident (ac0). Make it
+    // before-break: retarget the spare/render to the selected slot (portrait_target_slot now returns
+    // it) and RE-ENGAGE the drive (clear the per-window freeze) so the new model renders + gets its
+    // depth mask -- but do NOT touch LOADING_BG_PORTRAIT_RGBA / PROFILE_HAVE_KEYED_FRAME, so the prior
+    // masked head keeps displaying until the new model's first KEYED frame replaces it (no opaque
+    // flash, no blank). Clear the stale spare candidate (captured for the old character before this
+    // confirm) so the teardown-spare re-targets the new slot, and drop the depth-mask cache so the new
+    // silhouette is computed fresh rather than bridged from the old head.
+    PROFILE_SPARE_CANDIDATE.store(0, Ordering::SeqCst);
+    PROFILE_SPARE_CANDIDATE_MODEL.store(0, Ordering::SeqCst);
+    PROFILE_BAKE_RGBA_CAPTURED.store(0, Ordering::SeqCst);
+    invalidate_portrait_depth_mask();
+    PROFILE_PORTRAIT_RETARGETS.fetch_add(1, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "loading-portrait: RETARGET to selected slot {selected_slot} at confirm (make-before-break: drive re-engaged, prior masked head holds until the new keyed frame; source={source})"
+    ));
     SYSTEM_QUIT_QUICKLOAD_PHASE.store(SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED, Ordering::SeqCst);
     OWN_STEPPER_SLOT.store(selected_slot, Ordering::SeqCst);
     PRODUCT_AUTOLOAD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);

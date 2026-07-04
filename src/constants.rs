@@ -1678,9 +1678,57 @@ pub(crate) static PROFILE_RT_SRV_COPIES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_RT_SRV_COPY_DIAGGED: AtomicUsize = AtomicUsize::new(0);
 /// One-shot guard for dumping the excluding-SRV content texture (slot 102) for visual inspection.
 pub(crate) static PROFILE_CONTENT_EXCL_DUMPED: AtomicUsize = AtomicUsize::new(0);
-/// One-shot guard: set once the target slot's real IBL-lit menu portrait has been captured into
-/// LOADING_BG_PORTRAIT_RGBA for the now-loading forge to bake.
+/// DRIVE-FREEZE latch: set once a good capture publishes THIS load window, gating off the per-frame
+/// renderer drive (the freeze-after-capture UAF fix). Cleared at the window reset AND at a confirm
+/// retarget, so the drive re-engages to render the newly-selected character. Distinct from
+/// `PROFILE_HAVE_KEYED_FRAME` below: this is per-window (freeze), that one is persistent (display).
 pub(crate) static PROFILE_BAKE_RGBA_CAPTURED: AtomicUsize = AtomicUsize::new(0);
+/// DISPLAY-AVAILABILITY signal: set the FIRST time a real depth-KEYED (masked) portrait is published
+/// and NOT cleared at the window reset/retarget, so the last good masked head keeps displaying while
+/// the drive re-renders the next character. This is the make-before-break bridge: the composite shows
+/// this persisted frame until the new model produces its own keyed frame, which replaces it. Split
+/// from the drive-freeze latch so "re-engage the drive" and "keep showing the old head" are
+/// independent -- otherwise clearing the freeze to render the new model also blanked the display.
+pub(crate) static PROFILE_HAVE_KEYED_FRAME: AtomicUsize = AtomicUsize::new(0);
+/// Diagnostics for the keyed-publish gate + confirm retarget (never render an unmasked model; swap to
+/// the newly-selected character at the button press). Exposed as oracles.
+pub(crate) static PROFILE_PUBLISH_SKIPPED_UNKEYED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_PORTRAIT_RETARGETS: AtomicUsize = AtomicUsize::new(0);
+/// TORN-READBACK detector (pixel semaphore for the scanline-corruption the user saw 2026-07-03). The
+/// offscreen RT readback has no cross-queue sync against the game's render of that RT, so when the
+/// per-frame drive is active our copy reads rows mid-write -> horizontal scanline tearing. The score
+/// is the average absolute VERTICAL luma step across the masked (head) region: a clean face render is
+/// smooth vertically (low), a torn readback has random per-row jumps (high). Publishing gates on
+/// score <= threshold so a torn frame is never displayed -- the make-before-break bridge keeps the
+/// last CLEAN masked head instead. Score range 0..255; the threshold is deliberately sensitive
+/// (better to hold the prior clean head than flash garbage). `_last`/`_max` are oracles; the skip
+/// counter proves the gate fires; a bimodal last-distribution in the log says clean frames DO land
+/// (gate suffices) vs unimodal-high (all torn -> the readback needs real GPU sync).
+// Clean face frames score 1-7 (runs 10m/10n); torn frames 16 (mild, run 10n) to 80 (severe, run
+// 10m). 34 let the mild-16 tear through and -- because the freeze-after-capture latches the first
+// published frame -- it froze on that garbage for the whole window. Tightened to 10: just above the
+// clean band, below even mild tearing. Rejection is SAFE (the bridge holds the prior clean head and
+// the drive keeps animating until a clean frame lands), so err tight.
+pub(crate) const PROFILE_TEAR_SCORE_THRESHOLD: usize = 10;
+pub(crate) static PROFILE_TEAR_SCORE_LAST: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_TEAR_SCORE_MAX: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_TEAR_SCORE_CLEAN_MIN: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static PROFILE_PUBLISH_SKIPPED_TORN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_PUBLISH_CLEAN: AtomicUsize = AtomicUsize::new(0);
+// (Removed the testing tear fail-fast: run autostep10m confirmed the detector separates cleanly
+// -- clean frames score 1-7, the torn frame scored 80 -- and torn frames are rare, so the skip gate
+// above is the product fix. Regressions surface via oracle_portrait_publish_skipped_torn.)
+
+/// ANIMATION-STALL semaphore (user 2026-07-03: the portrait "stops animating" and stays frozen the
+/// whole post-continue loading screen on some loads). freeze-after-capture stops the per-frame drive
+/// once the first keyed frame is captured, so the head goes static early. These count, PER loading
+/// window: drive frames actually rendered (animated) vs present frames the head was displayed. A low
+/// drive/display ratio == froze early (the user's complaint); ~1.0 == animated throughout. Snapshotted
+/// to `_LAST` at the window reset for the oracle, then zeroed for the next window.
+pub(crate) static PROFILE_DRIVE_FRAMES_WINDOW: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_DISPLAY_FRAMES_WINDOW: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_DRIVE_FRAMES_WINDOW_LAST: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_DISPLAY_FRAMES_WINDOW_LAST: AtomicUsize = AtomicUsize::new(0);
 /// The FIRST (displayed) now-loading rti the forge bound, plus its bare texture name + encoding. The
 /// sprite commits to the first bind, which happens BEFORE the real portrait is captured -- so once the
 /// portrait is baked we RE-FORGE this exact rti to swap the checker for the portrait on the live screen.
@@ -4721,6 +4769,43 @@ pub(crate) const DELAY_DELETE_ENQUEUE_RVA: usize = 0xe77490;
 pub(crate) static PROFILE_SPARE_ORPHAN: AtomicUsize = AtomicUsize::new(0);
 /// Count of leaked spared renderers reclaimed via the native delete path (repeated-switch GX fix).
 pub(crate) static PROFILE_SPARE_ORPHANS_DELETED: AtomicUsize = AtomicUsize::new(0);
+
+// ============================================================================================
+// OWNERSHIP LEDGER -- conservation oracle for the "took a native object, released it one-sidedly"
+// bug class (the repeated-switch spared-renderer leak: we excluded a CSMenuProfModelRend from the
+// engine's delete to render the portrait, then a bare `store(0)` dropped our responsibility for it
+// without discharging it, leaking one live renderer per switch). A raw `usize` in an AtomicUsize
+// carries no ownership semantics, so `store(0)` reads as innocuous. This ledger makes ownership
+// CONSERVATION observable: every "take" (we become responsible for freeing a native object) and
+// "release" (we hand it back to the native lifecycle) is counted per class, and a per-switch check
+// asserts outstanding <= bound. The old leak would have tripped this at switch #2 (outstanding
+// climbing 1->2->3->4) instead of crashing the GX queue at #4. It is also the acceptance test for a
+// future RAII `EngineOwned` wrapper: build the invariant first, then make it structurally unbreakable.
+// ============================================================================================
+/// Classes of native object we take manual ownership of. Extend as the RAII wrapper subsumes more of
+/// the spare/pin family; only classes with a TRUE release obligation belong here (borrowed engine
+/// pointers -- the RT/depth pins, the anim-bound renderer -- are observation, not ownership).
+#[derive(Clone, Copy)]
+pub(crate) enum OwnedClass {
+    /// The teardown-spared portrait renderer (excluded from the native delete; we must delete it).
+    SparedRenderer = 0,
+}
+pub(crate) const OWNED_CLASS_COUNT: usize = 1;
+pub(crate) const OWNED_CLASS_NAMES: [&str; OWNED_CLASS_COUNT] = ["spared_renderer"];
+/// Max simultaneously outstanding (taken-but-not-released) per class. The spare holds exactly one
+/// renderer per load window; the game-thread drain releases the prior before taking the next, so
+/// outstanding never legitimately exceeds 1.
+pub(crate) const OWNED_CLASS_BOUND: [usize; OWNED_CLASS_COUNT] = [1];
+pub(crate) static OWNED_TAKEN: [AtomicUsize; OWNED_CLASS_COUNT] =
+    [const { AtomicUsize::new(0) }; OWNED_CLASS_COUNT];
+pub(crate) static OWNED_RELEASED: [AtomicUsize; OWNED_CLASS_COUNT] =
+    [const { AtomicUsize::new(0) }; OWNED_CLASS_COUNT];
+/// Per-class high-water of outstanding (should equal the bound in a healthy run, exceed it on a leak).
+pub(crate) static OWNED_MAX_OUTSTANDING: [AtomicUsize; OWNED_CLASS_COUNT] =
+    [const { AtomicUsize::new(0) }; OWNED_CLASS_COUNT];
+/// Total ledger-check violations observed (outstanding > bound). Nonzero == a taken-without-release
+/// leak of a native-owned object -- the run-stopping oracle for this bug class.
+pub(crate) static OWNED_LEDGER_VIOLATIONS: AtomicUsize = AtomicUsize::new(0);
 
 /// Gate-local `CS::MenuWindowJob::Run` hook state. `MENU_WINDOW_JOB_RUN_RVA` is defined with the
 /// title-cover constants above; System Quit reuses that same live/deobf target.

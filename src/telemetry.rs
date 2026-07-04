@@ -2521,6 +2521,84 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_profile_renderer_spare_hits",
             PROFILE_RENDERER_SPARE_HITS.load(Ordering::SeqCst),
         );
+        // Ownership-ledger conservation oracle: violations MUST stay 0 (nonzero == a native-owned
+        // object taken without a paired release -- the spared-renderer leak class). spared_outstanding
+        // and its high-water should track the bound (1); a climbing value is the early leak signal.
+        push_json_usize(
+            body,
+            "oracle_ownership_ledger_violations",
+            OWNED_LEDGER_VIOLATIONS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_ownership_spared_outstanding",
+            crate::experiments::ownership_outstanding(crate::constants::OwnedClass::SparedRenderer),
+        );
+        push_json_usize(
+            body,
+            "oracle_ownership_spared_max_outstanding",
+            OWNED_MAX_OUTSTANDING[crate::constants::OwnedClass::SparedRenderer as usize]
+                .load(Ordering::SeqCst),
+        );
+        // Loading-portrait select-then-show: retargets = confirm-time swaps to the newly-selected
+        // character; skipped_unkeyed = frames NOT published because the depth mask was not applied yet
+        // (never render an unmasked model); have_keyed = a masked frame is available to display.
+        push_json_usize(
+            body,
+            "oracle_portrait_retargets",
+            PROFILE_PORTRAIT_RETARGETS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_publish_skipped_unkeyed",
+            PROFILE_PUBLISH_SKIPPED_UNKEYED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_have_keyed_frame",
+            PROFILE_HAVE_KEYED_FRAME.load(Ordering::SeqCst),
+        );
+        // Torn-readback semaphore: tear score of the last publish attempt + the run max, plus how many
+        // keyed frames were skipped as torn vs published clean. A high max with clean>0 means clean
+        // frames DO land (gate suffices); clean==0 with high max means every driven frame tears (the
+        // readback needs real GPU sync). clean_min is the lowest clean score seen (baseline).
+        push_json_usize(
+            body,
+            "oracle_portrait_tear_last",
+            PROFILE_TEAR_SCORE_LAST.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_tear_max",
+            PROFILE_TEAR_SCORE_MAX.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_tear_clean_min",
+            PROFILE_TEAR_SCORE_CLEAN_MIN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_publish_clean",
+            PROFILE_PUBLISH_CLEAN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_publish_skipped_torn",
+            PROFILE_PUBLISH_SKIPPED_TORN.load(Ordering::SeqCst),
+        );
+        // Animation-stall: last loading window's animated (drive) vs displayed frames. drive<<display
+        // means the head froze early (freeze-after-capture) -- the user's "stopped animating" symptom.
+        push_json_usize(
+            body,
+            "oracle_portrait_drive_frames_last_window",
+            PROFILE_DRIVE_FRAMES_WINDOW_LAST.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_display_frames_last_window",
+            PROFILE_DISPLAY_FRAMES_WINDOW_LAST.load(Ordering::SeqCst),
+        );
         push_json_str(
             body,
             "oracle_gx_cmdqueue_top_producers",
