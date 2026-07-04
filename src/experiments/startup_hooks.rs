@@ -3078,6 +3078,13 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
     // GFx samples). Render-thread context (same as the readback), bounded + fail-closed.
     {
         let slot = portrait_loaded_slot();
+        // Tag the live portrait CHARACTER incarnation (slot + 1; 0 = unset) for the mask stale-reuse
+        // desync semaphore: apply_depth_alpha_key records this on a fresh mask and trips
+        // PROFILE_MASK_STALE_REUSE if a later frame reuses a mask computed for a different incarnation.
+        crate::experiments::gpu_readback::PROFILE_PORTRAIT_INCARNATION.store(
+            if slot >= 0 { slot as usize + 1 } else { 0 },
+            Ordering::SeqCst,
+        );
         let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, slot)) }.unwrap_or(0);
         // Pump-block attribution (run #7 stall): name the failing gate, don't skip silently.
         if r == 0 || r == null {

@@ -932,6 +932,30 @@ static DEPTH_KEY_NOGAP_LOGGED: AtomicUsize = AtomicUsize::new(0);
 /// we re-apply this cached mask so the cutout stays stable. It is RECALCULATED whenever fresh depth is
 /// available (tracking a real re-render) and only cached for the dead frames in between -- never frozen.
 static LAST_DEPTH_MASK: Mutex<Option<(usize, usize, Vec<u8>)>> = Mutex::new(None);
+/// Current portrait character incarnation (drive slot + 1; 0 = unset), set by the per-frame drive so the
+/// mask cache can be tagged with the character it was computed for. A depth mask REUSED across a change
+/// of this value means the PREVIOUS character's silhouette is being applied to the NEW character's head
+/// -- the 2nd-character depth-mask desync (user 2026-07-03). See `PROFILE_MASK_STALE_REUSE`.
+pub(crate) static PROFILE_PORTRAIT_INCARNATION: AtomicUsize = AtomicUsize::new(0);
+/// Incarnation the currently-cached `LAST_DEPTH_MASK` was computed for (0 = none / cleared).
+static LAST_DEPTH_MASK_INCARNATION: AtomicUsize = AtomicUsize::new(0);
+/// FAIL-FAST desync semaphore: count of frames that REUSED the cached depth mask while the live portrait
+/// incarnation differs from the one the cache was computed for -- a prior character's mask on the new
+/// head. It trips early + deterministically (the 2nd character of a switch chain), so a run can stop in
+/// ~40s instead of six minutes. Exposed as `oracle_portrait_mask_stale_reuse`.
+pub(crate) static PROFILE_MASK_STALE_REUSE: AtomicUsize = AtomicUsize::new(0);
+static PROFILE_MASK_STALE_REUSE_LOGGED: AtomicUsize = AtomicUsize::new(0);
+/// FAIL-FAST mask/head coherence semaphore (the 2nd-character desync is a FRESH-but-WRONG mask: masks are
+/// recomputed every frame, so it is not a cache reuse). Per published frame, IoU of the KEPT cutout region
+/// (mask==0) vs the colour's OWN head (pixels far from the background colour). A correct mask keeps the
+/// head -> high IoU; a fresh mask of a WRONG depth silhouette (stale depth content on the new character)
+/// keeps a region that does not match this head -> low IoU. `_last` is an oracle; `_total` counts gross
+/// mismatches; a SUSTAINED gross mismatch (STREAK) abort()s during the repro so the run stops fast.
+pub(crate) const MASK_HEAD_IOU_MIN: usize = 25;
+const MASK_HEAD_ABORT_STREAK: usize = 20;
+pub(crate) static PROFILE_MASK_HEAD_IOU_LAST: AtomicUsize = AtomicUsize::new(100);
+static PROFILE_MASK_HEAD_MISMATCH_STREAK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_MASK_HEAD_MISMATCH_TOTAL: AtomicUsize = AtomicUsize::new(0);
 
 /// COHERENT color+depth readback cache (bug #3 fix). ONE queue/allocator/list/fence records BOTH the
 /// color and depth copies, so they are captured at the SAME GPU submission -- unlike the separate
@@ -1748,15 +1772,50 @@ pub(crate) unsafe fn apply_depth_alpha_key(gpu_child: usize, w: u32, h: u32, cpx
     //     genuine re-render), cached only for the frames in between -- never a frozen one-shot.
     let mask = if let Some(m) = fresh {
         DEPTH_KEY_FRESH.fetch_add(1, Ordering::SeqCst);
+        // Tag the cache with the character it was computed for, so a later cross-character reuse is
+        // detectable (the stale-reuse desync semaphore below).
+        LAST_DEPTH_MASK_INCARNATION.store(
+            PROFILE_PORTRAIT_INCARNATION.load(Ordering::SeqCst),
+            Ordering::SeqCst,
+        );
         if let Ok(mut g) = LAST_DEPTH_MASK.lock() {
             *g = Some((w, h, m.clone()));
         }
         Some(m)
     } else {
-        LAST_DEPTH_MASK.lock().ok().and_then(|g| match g.as_ref() {
+        let reused = LAST_DEPTH_MASK.lock().ok().and_then(|g| match g.as_ref() {
             Some((cw, ch, m)) if *cw == w && *ch == h => Some(m.clone()),
             _ => None,
-        })
+        });
+        if reused.is_some() {
+            // FAIL-FAST desync semaphore: this depth was dead (no fresh gap) so we are reusing the cached
+            // mask -- but if it was computed for a DIFFERENT character incarnation than the one rendering
+            // now, its silhouette will not match this head (the 2nd-character depth-mask desync). Detect
+            // it as a run-stopping RAM oracle rather than only seeing it on screen.
+            let cur = PROFILE_PORTRAIT_INCARNATION.load(Ordering::SeqCst);
+            let cached = LAST_DEPTH_MASK_INCARNATION.load(Ordering::SeqCst);
+            if cur != 0 && cached != 0 && cur != cached {
+                let n = PROFILE_MASK_STALE_REUSE.fetch_add(1, Ordering::SeqCst);
+                if PROFILE_MASK_STALE_REUSE_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+                    append_autoload_debug(format_args!(
+                        "MASK-STALE-REUSE-DESYNC: reusing depth mask from portrait incarnation {cached} on incarnation {cur} (prior character's silhouette on the new head) -- #{}",
+                        n + 1
+                    ));
+                    // HARD FAIL-FAST during the diagnostic repro ONLY: abort the process the instant the
+                    // desync is detected so the run stops in ~40s instead of six minutes. A fast crash ==
+                    // the semaphore caught the stale-reuse; no crash == the desync is NOT stale-reuse (a
+                    // different mechanism) and the hypothesis is refuted. Never fires in product (gated on
+                    // the System-Quit repro being active), so it cannot crash a real player session.
+                    if system_quit_repro_enabled() {
+                        append_autoload_debug(format_args!(
+                            "MASK-STALE-REUSE-DESYNC: FAIL-FAST abort() (repro diagnostic stop)"
+                        ));
+                        std::process::abort();
+                    }
+                }
+            }
+        }
+        reused
     };
     // No fresh gap and no cache yet -> fail open (opaque), no regression.
     let Some(mask) = mask else {
@@ -1772,6 +1831,83 @@ pub(crate) unsafe fn apply_depth_alpha_key(gpu_child: usize, w: u32, h: u32, cpx
     if masked > 0 {
         DEPTH_KEY_APPLIED.fetch_add(1, Ordering::SeqCst);
         DEPTH_KEY_BG_PCT.store(masked * 100 / (w * h), Ordering::SeqCst);
+        // FAIL-FAST mask/head coherence (2nd-character desync): does the KEPT cutout match THIS head?
+        let iou = mask_head_iou(&mask, cpx, w, h);
+        PROFILE_MASK_HEAD_IOU_LAST.store(iou, Ordering::SeqCst);
+        if iou < MASK_HEAD_IOU_MIN {
+            let streak = PROFILE_MASK_HEAD_MISMATCH_STREAK.fetch_add(1, Ordering::SeqCst) + 1;
+            PROFILE_MASK_HEAD_MISMATCH_TOTAL.fetch_add(1, Ordering::SeqCst);
+            if streak == 1 || streak % 16 == 0 {
+                append_autoload_debug(format_args!(
+                    "MASK-HEAD-MISMATCH: IoU={iou}% < {MASK_HEAD_IOU_MIN}% (kept cutout vs colour head) streak={streak} -- fresh-but-wrong depth silhouette on this head"
+                ));
+            }
+            // Abort only on a SUSTAINED gross mismatch (a whole loading screen desyncs; a transient
+            // build glitch is a few frames), and only during the repro (never a real player session).
+            if streak >= MASK_HEAD_ABORT_STREAK && system_quit_repro_enabled() {
+                append_autoload_debug(format_args!(
+                    "MASK-HEAD-MISMATCH: FAIL-FAST abort() after {streak} sustained mismatch frames (IoU={iou}%) -- repro diagnostic stop"
+                ));
+                std::process::abort();
+            }
+        } else {
+            PROFILE_MASK_HEAD_MISMATCH_STREAK.store(0, Ordering::SeqCst);
+        }
+    }
+}
+
+/// IoU (0..100) of the depth cutout's KEPT region (mask==0) vs the colour's OWN head (pixels whose colour
+/// is clearly far from the corner background). ~high when the mask matches the head; low when a fresh mask
+/// of the WRONG depth silhouette is applied to this head (the 2nd-character desync). Subsampled by 2 for
+/// cost; 100 (perfect) on any degenerate input so it never false-trips.
+fn mask_head_iou(mask: &[u8], cpx: &[u8], w: usize, h: usize) -> usize {
+    if w < 16 || h < 16 || cpx.len() < w * h * 4 || mask.len() < w * h {
+        return 100;
+    }
+    let (mut br, mut bgc, mut bb, mut bn) = (0u64, 0u64, 0u64, 0u64);
+    for &(ox, oy) in &[(0usize, 0usize), (w - 8, 0), (0, h - 8), (w - 8, h - 8)] {
+        for yy in oy..oy + 8 {
+            for xx in ox..ox + 8 {
+                let p = (yy * w + xx) * 4;
+                br += cpx[p] as u64;
+                bgc += cpx[p + 1] as u64;
+                bb += cpx[p + 2] as u64;
+                bn += 1;
+            }
+        }
+    }
+    if bn == 0 {
+        return 100;
+    }
+    let (br, bgc, bb) = ((br / bn) as i32, (bgc / bn) as i32, (bb / bn) as i32);
+    // Foreground = clearly far from the background colour (sum-abs channel distance, 0..765).
+    const FG_DIST: i32 = 90;
+    let (mut inter, mut union) = (0u64, 0u64);
+    let mut y = 0;
+    while y < h {
+        let mut x = 0;
+        while x < w {
+            let i = y * w + x;
+            let p = i * 4;
+            let kept = mask[i] == 0; // mask==1 => background/cut; ==0 => keep (the cutout foreground)
+            let dist = (cpx[p] as i32 - br).abs()
+                + (cpx[p + 1] as i32 - bgc).abs()
+                + (cpx[p + 2] as i32 - bb).abs();
+            let head = dist > FG_DIST;
+            if kept || head {
+                union += 1;
+                if kept && head {
+                    inter += 1;
+                }
+            }
+            x += 2;
+        }
+        y += 1;
+    }
+    if union == 0 {
+        100
+    } else {
+        (inter * 100 / union) as usize
     }
 }
 
@@ -2605,6 +2741,8 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
     if let Ok(mut g) = LAST_DEPTH_MASK.lock() {
         *g = None;
     }
+    // Cache cleared -> forget which character it was for (a fresh compute re-tags it).
+    LAST_DEPTH_MASK_INCARNATION.store(0, Ordering::SeqCst);
     // Animation-stall semaphore: snapshot this window's animated-vs-displayed frame counts, then zero
     // for the next window. drive << display == the head froze early (freeze-after-capture); the
     // user's "stopped animating / frozen the whole loading screen" symptom shows here as a low ratio.
@@ -2627,6 +2765,8 @@ pub(crate) fn invalidate_portrait_depth_mask() {
     if let Ok(mut g) = LAST_DEPTH_MASK.lock() {
         *g = None;
     }
+    // Cache cleared -> forget which character it was for (a fresh compute re-tags it).
+    LAST_DEPTH_MASK_INCARNATION.store(0, Ordering::SeqCst);
 }
 
 unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {

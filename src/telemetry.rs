@@ -2428,6 +2428,28 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_portrait_coherent_read_fallback",
             COHERENT_READ_FALLBACK.load(Ordering::SeqCst),
         );
+        // FAIL-FAST 2nd-character desync semaphore: >0 means a frame reused a depth mask computed for a
+        // DIFFERENT character incarnation (prior character's silhouette on the new head). During the
+        // System-Quit repro this also abort()s the process on first trip, so the run stops in ~40s.
+        push_json_usize(
+            body,
+            "oracle_portrait_mask_stale_reuse",
+            PROFILE_MASK_STALE_REUSE.load(Ordering::SeqCst),
+        );
+        // FAIL-FAST mask/head coherence (2nd-character desync): _iou_last = last frame's IoU of the kept
+        // cutout vs the colour head (100=perfect match, low=the cutout doesn't match this head);
+        // _mismatch_total = frames below the gross threshold. Lets the 1st-char (correct) vs 2nd-char
+        // (desync) IoU be compared and the abort threshold calibrated.
+        push_json_usize(
+            body,
+            "oracle_portrait_mask_head_iou_last",
+            PROFILE_MASK_HEAD_IOU_LAST.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_mask_head_mismatch_total",
+            PROFILE_MASK_HEAD_MISMATCH_TOTAL.load(Ordering::SeqCst),
+        );
         push_json_usize(
             body,
             "oracle_depth_key_bg_pct",
