@@ -116,20 +116,15 @@ pub(crate) fn force_profile_render_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
-    // MENU-PHASE PROFILE RENDER OUT (user 2026-07-03). This gate drives ONLY the menu-phase
-    // force_profile_render_tick (title.rs:1946 boot autoload path, lib.rs:884) that marks the
-    // boot/loaded slot + kicks the native profile refresh at the MAIN MENU, building that
-    // character's 3D model into its ProfileSelect slot -- the "first character in the slot" the user
-    // wants out. Default OFF now. The LOADING-SCREEN drive is a SEPARATE gate
-    // (`portrait_render_drive_enabled`, lib.rs:1148) and stays on, so switch loading-screen
-    // portraits are unaffected. env/file force-on kept for RE.
-    matches!(
-        std::env::var("ER_EFFECTS_FORCE_PROFILE_RENDER").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-force-profile-render.txt")
-        .exists()
+    !save_override_telemetry_only()
+        || matches!(
+            std::env::var("ER_EFFECTS_FORCE_PROFILE_RENDER").as_deref(),
+            Ok("1")
+        )
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-force-profile-render.txt")
+            .exists()
 }
 /// DEFAULT-OFF gate for the live-portrait D3D12 readback. When on, the moment
 /// `maybe_capture_portrait_gxtexture` pins the rendered offscreen `CSGxTexture`
