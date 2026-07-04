@@ -502,18 +502,74 @@ fn rewrite_entry_md5(data: &mut [u8], entry: &Entry) -> Result<(), Bnd4Error> {
     Ok(())
 }
 
+fn read_u64_le(data: &[u8], offset: usize) -> Result<u64, Bnd4Error> {
+    Ok(u64::from_le_bytes(
+        data.get(offset..offset + STEAM_ID64_LEN)
+            .ok_or(Bnd4Error::Truncated)?
+            .try_into()
+            .map_err(|_| Bnd4Error::Truncated)?,
+    ))
+}
+
 fn patch_u64_le(data: &mut [u8], offset: usize, value: u64) -> Result<bool, Bnd4Error> {
-    let dst = data
-        .get_mut(offset..offset + STEAM_ID64_LEN)
-        .ok_or(Bnd4Error::Truncated)?;
-    let current = u64::from_le_bytes([
-        dst[0], dst[1], dst[2], dst[3], dst[4], dst[5], dst[6], dst[7],
-    ]);
+    let current = read_u64_le(data, offset)?;
     if current == value {
         return Ok(false);
     }
-    dst.copy_from_slice(&value.to_le_bytes());
+    data.get_mut(offset..offset + STEAM_ID64_LEN)
+        .ok_or(Bnd4Error::Truncated)?
+        .copy_from_slice(&value.to_le_bytes());
     Ok(true)
+}
+
+fn push_unique_steam_id(ids: &mut Vec<u64>, value: u64, target: u64) {
+    if value != 0 && value != target && !ids.contains(&value) {
+        ids.push(value);
+    }
+}
+
+fn source_steam_ids(data: &[u8], entries: &[Entry], target: u64) -> Result<Vec<u64>, Bnd4Error> {
+    let mut ids = Vec::new();
+    for entry in entries {
+        if entry.name == "USER_DATA010" {
+            let (body_start, body_end) = entry_body_bounds(entry, data.len())?;
+            let file_offset = body_start + USER_DATA10_STEAM_ID_BODY_OFFSET;
+            if file_offset + STEAM_ID64_LEN <= body_end {
+                push_unique_steam_id(&mut ids, read_u64_le(data, file_offset)?, target);
+            }
+            continue;
+        }
+        if let Some(slot_digits) = entry.name.strip_prefix("USER_DATA")
+            && let Ok(slot) = slot_digits.parse::<usize>()
+            && slot < 10
+        {
+            let (body_start, body_end) = entry_body_bounds(entry, data.len())?;
+            if let Some(body_offset) = slot_steam_id_offset(&data[body_start..body_end]) {
+                let file_offset = body_start + body_offset;
+                if file_offset + STEAM_ID64_LEN <= body_end {
+                    push_unique_steam_id(&mut ids, read_u64_le(data, file_offset)?, target);
+                }
+            }
+        }
+    }
+    Ok(ids)
+}
+
+fn replace_steam_id_occurrences(body: &mut [u8], old_id: u64, target: u64) -> usize {
+    let old = old_id.to_le_bytes();
+    let new = target.to_le_bytes();
+    let mut count = 0;
+    let mut offset = 0;
+    while offset + STEAM_ID64_LEN <= body.len() {
+        if body[offset..offset + STEAM_ID64_LEN] == old {
+            body[offset..offset + STEAM_ID64_LEN].copy_from_slice(&new);
+            count += 1;
+            offset += STEAM_ID64_LEN;
+        } else {
+            offset += 1;
+        }
+    }
+    count
 }
 
 pub fn steam_id_locations(data: &[u8]) -> Result<Vec<SteamIdLocation>, Bnd4Error> {
@@ -579,18 +635,32 @@ pub fn normalize_steam_id_in_place(
     steam_id: u64,
 ) -> Result<SteamIdNormalizeReport, Bnd4Error> {
     let entries = parse_entries(data)?;
+    let source_ids = source_steam_ids(data, &entries, steam_id)?;
     let mut report = SteamIdNormalizeReport::default();
     for entry in &entries {
         if let Some(slot_digits) = entry.name.strip_prefix("USER_DATA") {
             if let Ok(slot) = slot_digits.parse::<usize>() {
                 if slot < 10 {
                     let (body_start, body_end) = entry_body_bounds(entry, data.len())?;
-                    let Some(slot_offset) = slot_steam_id_offset(&data[body_start..body_end])
-                    else {
-                        continue;
-                    };
-                    report.character_slots_seen += 1;
-                    if patch_u64_le(data, body_start + slot_offset, steam_id)? {
+                    if slot_steam_id_offset(&data[body_start..body_end]).is_some() {
+                        report.character_slots_seen += 1;
+                    }
+                    let mut replacements = 0;
+                    for old_id in &source_ids {
+                        replacements += replace_steam_id_occurrences(
+                            &mut data[body_start..body_end],
+                            *old_id,
+                            steam_id,
+                        );
+                    }
+                    if replacements != 0 {
+                        report.character_slots_patched += 1;
+                        rewrite_entry_md5(data, entry)?;
+                        report.md5_rewritten += 1;
+                    } else if source_ids.is_empty()
+                        && let Some(slot_offset) = slot_steam_id_offset(&data[body_start..body_end])
+                        && patch_u64_le(data, body_start + slot_offset, steam_id)?
+                    {
                         report.character_slots_patched += 1;
                         rewrite_entry_md5(data, entry)?;
                         report.md5_rewritten += 1;
@@ -603,11 +673,25 @@ pub fn normalize_steam_id_in_place(
             let (body_start, body_end) = entry_body_bounds(entry, data.len())?;
             if body_start + USER_DATA10_STEAM_ID_BODY_OFFSET + STEAM_ID64_LEN <= body_end {
                 report.user_data10_seen = true;
-                if patch_u64_le(
-                    data,
-                    body_start + USER_DATA10_STEAM_ID_BODY_OFFSET,
-                    steam_id,
-                )? {
+                let mut replacements = 0;
+                for old_id in &source_ids {
+                    replacements += replace_steam_id_occurrences(
+                        &mut data[body_start..body_end],
+                        *old_id,
+                        steam_id,
+                    );
+                }
+                if replacements != 0 {
+                    report.user_data10_patched = true;
+                    rewrite_entry_md5(data, entry)?;
+                    report.md5_rewritten += 1;
+                } else if source_ids.is_empty()
+                    && patch_u64_le(
+                        data,
+                        body_start + USER_DATA10_STEAM_ID_BODY_OFFSET,
+                        steam_id,
+                    )?
+                {
                     report.user_data10_patched = true;
                     rewrite_entry_md5(data, entry)?;
                     report.md5_rewritten += 1;
@@ -716,6 +800,13 @@ mod tests {
         std::fs::read(p).ok()
     }
 
+    fn count_bytes(haystack: &[u8], needle: &[u8]) -> usize {
+        haystack
+            .windows(needle.len())
+            .filter(|w| *w == needle)
+            .count()
+    }
+
     #[test]
     fn parses_bnd4_entries() {
         let Some(data) = load_fixture() else {
@@ -801,6 +892,36 @@ mod tests {
             data, before,
             "same SteamID normalization must be byte-stable"
         );
+    }
+
+    #[test]
+    fn normalizes_every_source_steam_id_occurrence_in_downloads_save_when_present() {
+        let Some(mut data) = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .map(|home| home.join("Downloads/ER0000.sl2"))
+            .and_then(|path| std::fs::read(path).ok())
+        else {
+            eprintln!("~/Downloads/ER0000.sl2 missing; skipping");
+            return;
+        };
+        let source = 76_561_198_055_502_948u64;
+        let target = 76_561_197_986_456_766u64;
+        assert_eq!(count_bytes(&data, &source.to_le_bytes()), 12);
+        let report = normalize_steam_id_in_place(&mut data, target).expect("normalize");
+        assert_eq!(report.character_slots_patched, 10);
+        assert!(report.user_data10_patched);
+        assert_eq!(report.md5_rewritten, 11);
+        assert_eq!(count_bytes(&data, &source.to_le_bytes()), 0);
+        assert_eq!(count_bytes(&data, &target.to_le_bytes()), 12);
+        for entry in parse_entries(&data).expect("entries") {
+            let (body_start, body_end) = entry_body_bounds(&entry, data.len()).expect("body");
+            assert_eq!(
+                &data[entry.data_offset..entry.data_offset + ENTRY_MD5_LEN],
+                &md5_digest(&data[body_start..body_end]),
+                "{} md5",
+                entry.name
+            );
+        }
     }
 
     #[test]
