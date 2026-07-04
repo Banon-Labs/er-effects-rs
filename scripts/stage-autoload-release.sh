@@ -9,16 +9,21 @@ usage() {
   cat <<'EOF'
 Usage: scripts/stage-autoload-release.sh [--output DIR] [--no-build]
 
-Stages the supported zero-input autoload release payload:
-  dinput8.dll                  LazyLoader proxy
-  lazyLoad.ini                 CHAINLOAD er_effects_rs.dll as the properly-loaded mod
-  er_effects_rs.dll            repo DLL loaded through LazyLoader [CHAINLOAD]
-  dllMods/                     available for other LazyLoader mods
+Stages the supported zero-input autoload release payload (me3 delivery; the
+LazyLoader dinput8 proxy/chainload was removed 2026-07-04):
+  er_effects_rs.dll            the repo DLL, loaded by me3's mod host
+  er-effects.me3               me3 ModProfile loading the DLL as a native
   er-effects-autoload.txt.example
+  er-effects-native-continue.txt.example
+  er-effects-pab-advance.txt.example
   er-effects-splash-skip.txt.example  optional built-in splash-skip toggle
 
+Install: keep the folder together anywhere (the profile references the DLL
+relative to itself), copy the wanted er-effects-*.txt files next to
+eldenring.exe, then launch:
+  me3 launch -g eldenring -p /path/to/er-effects.me3
+
 Environment:
-  LAZYLOADER_DIR  directory containing LazyLoader dinput8.dll
   ER_EFFECTS_DLL  prebuilt er_effects_rs.dll path (defaults to target release DLL)
 EOF
 }
@@ -45,18 +50,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-lazyloader_dir="${LAZYLOADER_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game/dllMods.disabled/lazyloader-20260611-234916}"
-lazyloader_proxy="$lazyloader_dir/dinput8.dll"
 er_effects_dll="${ER_EFFECTS_DLL:-$repo_root/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll}"
 
 if [[ "$build" == "1" ]]; then
   cargo xwin build --manifest-path "$repo_root/Cargo.toml" --target x86_64-pc-windows-msvc --release
 fi
 
-if [[ ! -f "$lazyloader_proxy" ]]; then
-  echo "missing LazyLoader dinput8.dll: $lazyloader_proxy" >&2
-  exit 1
-fi
 if [[ ! -f "$er_effects_dll" ]]; then
   echo "missing er_effects_rs.dll: $er_effects_dll" >&2
   exit 1
@@ -65,22 +64,20 @@ fi
 out_dir=$(realpath -m "$out_dir")
 tmp_dir="$out_dir.tmp"
 rm -rf "$tmp_dir"
-mkdir -p "$tmp_dir/dllMods"
+mkdir -p "$tmp_dir"
 
-cp -f "$lazyloader_proxy" "$tmp_dir/dinput8.dll"
 cp -f "$er_effects_dll" "$tmp_dir/er_effects_rs.dll"
-cat > "$tmp_dir/lazyLoad.ini" <<'EOF'
-; LazyLoader by Church Guard
-; er-effects-rs must be properly loaded, not lazy-loaded, so it is the CHAINLOAD DLL.
-; Put additional LazyLoader mods in dllMods and list them under [LOADORDER].
+# me3 ModProfile: the DLL path is relative to the profile file, so the staged folder
+# is relocatable as one unit. me3 launches Game/eldenring.exe directly through the
+# Steam compat tool; it never uses the EAC launcher.
+cat > "$tmp_dir/er-effects.me3" <<'EOF'
+profileVersion = "v1"
 
-[LAZYLOAD]
-dllModFolderName=dllMods
+[[supports]]
+game = "eldenring"
 
-[LOADORDER]
-
-[CHAINLOAD]
-dll=er_effects_rs.dll
+[[natives]]
+path = 'er_effects_rs.dll'
 EOF
 cat > "$tmp_dir/er-effects-autoload.txt.example" <<'EOF'
 # Product/default zero-input gold-load request.
@@ -103,7 +100,7 @@ cat > "$tmp_dir/er-effects-splash-skip.txt.example" <<'EOF'
 EOF
 (
   cd "$tmp_dir"
-  sha256sum dinput8.dll lazyLoad.ini er_effects_rs.dll er-effects-autoload.txt.example er-effects-native-continue.txt.example er-effects-pab-advance.txt.example er-effects-splash-skip.txt.example > SHA256SUMS.txt
+  sha256sum er_effects_rs.dll er-effects.me3 er-effects-autoload.txt.example er-effects-native-continue.txt.example er-effects-pab-advance.txt.example er-effects-splash-skip.txt.example > SHA256SUMS.txt
 )
 
 rm -rf "$out_dir"

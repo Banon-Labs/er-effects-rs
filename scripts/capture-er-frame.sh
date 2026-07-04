@@ -26,9 +26,10 @@ set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
-PROTON="${PROTON:-$HOME/.local/share/Steam/steamapps/common/Proton - Experimental/proton}"
+# me3 delivers the DLL as a native (LazyLoader removed 2026-07-04).
+# shellcheck source=scripts/me3-launch-lib.sh
+source "$REPO_ROOT/scripts/me3-launch-lib.sh"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
-STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/capture-$(date +%Y%m%d-%H%M%S)}"
 BUILT_DLL="${BUILT_DLL:-$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll}"
 GOLD_SAVE="${ER_EFFECTS_GOLD_SAVE:-}"
@@ -45,7 +46,8 @@ require_exec() { [[ -x "$1" ]] || fatal "missing executable: $1"; }
 
 preflight() {
   pgrep -x steam >/dev/null 2>&1 || fatal "Steam is not running; start Steam first (the offline launch reuses Steam's environment)"
-  require_exec "$PROTON"
+  me3_preflight || fatal "me3 preflight failed"
+  me3_require_no_lazyloader "$GAME_DIR" || fatal "leftover LazyLoader proxy in $GAME_DIR"
   require_file "$GAME_DIR/eldenring.exe"
   require_file "$BUILT_DLL" \
     || fatal "built DLL not found: $BUILT_DLL (run: cargo xwin build --release --target x86_64-pc-windows-msvc)"
@@ -62,13 +64,11 @@ preflight() {
   fi
 }
 
-clean_stale_mod_dlls() { [[ -d "$GAME_DIR/dllMods" ]] && rm -f "$GAME_DIR/dllMods/"*.dll 2>/dev/null || true; }
-
 preflight
 mkdir -p "$ARTIFACT_DIR"
-clean_stale_mod_dlls
-cp -f "$BUILT_DLL" "$GAME_DIR/er_effects_rs.dll"
-echo "deploy: fresh chainload DLL -> $GAME_DIR/er_effects_rs.dll"
+cp -f "$BUILT_DLL" "$ARTIFACT_DIR/er_effects_rs.dll"
+me3_write_profile "$ARTIFACT_DIR/er-effects-capture.me3" "$ARTIFACT_DIR/er_effects_rs.dll"
+echo "deploy: staged fresh DLL + me3 profile -> $ARTIFACT_DIR/er-effects-capture.me3"
 
 # --- save source (read+write, per directive) --------------------------------------------
 if [[ "$SAVE_DIRECT" == "1" ]]; then
@@ -107,15 +107,13 @@ cat <<EOF
 EOF
 
 cd "$GAME_DIR"
-# exec -> this shell BECOMES the foreground Proton process and holds the game until you quit
-# (Proton `run` tears the wine tree down if its parent dies). RenderDoc capture is enabled via
-# the implicit Vulkan layer's enable var; VKD3D_CONFIG=force_host_cached stabilises capture.
+# exec -> this shell BECOMES the foreground me3 CLI, which owns the compat-tool/wine tree and holds
+# the game until you quit. RenderDoc capture is enabled via the implicit Vulkan layer's enable var;
+# VKD3D_CONFIG=force_host_cached stabilises capture.
 exec env \
-  STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_COMPAT_CLIENT_INSTALL_PATH" \
-  STEAM_COMPAT_DATA_PATH="$STEAM_COMPAT_DATA_PATH" \
   ENABLE_VULKAN_RENDERDOC_CAPTURE=1 \
   RENDERDOC_CAPFILE="$RENDERDOC_CAPFILE" \
   VKD3D_CONFIG="${VKD3D_CONFIG:-force_host_cached}" \
   ER_EFFECTS_TELEMETRY_PATH="$ARTIFACT_DIR/er-effects-telemetry.json" \
   ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$ARTIFACT_DIR/er-effects-autoload-debug.log" \
-  "$PROTON" run "$GAME_DIR/eldenring.exe" > "$ARTIFACT_DIR/proton-run.out" 2>&1
+  "$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" launch -g eldenring -p "$ARTIFACT_DIR/er-effects-capture.me3" > "$ARTIFACT_DIR/me3-launch.out" 2>&1

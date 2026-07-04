@@ -24,7 +24,7 @@ For no-auto-teardown runs intended for the user to inspect or control manually, 
 
 Do not launch Elden Ring through Steam from agent workflows. Forbidden launch forms include `steam -applaunch 1245620`, `steam://run/1245620`, `steam://rungameid/1245620`, and `xdg-open` or similar wrappers around those URLs. Do not launch `start_protected_game.exe` directly or through Proton/Wine/Steam; that is the protected/EAC launcher, not an approved agent runtime target. Process detection/teardown of stale `start_protected_game.exe` is allowed, but launching it is not. Runtime work must use only an approved, explicitly gated direct/offline `eldenring.exe` probe path.
 
-Do not bundle `ersc.dll`. Seamless Co-op is a compatibility target, but this repo must not copy, move, archive, release-package, or stage `SeamlessCoop/ersc.dll` into LazyLoader/product artifacts or repo `target/` bundles.
+Do not bundle `ersc.dll`. Seamless Co-op is a compatibility target, but this repo must not copy, move, archive, release-package, or stage `SeamlessCoop/ersc.dll` into me3/product release artifacts or repo `target/` bundles.
 
 Do not COMMIT game-derived binaries either (user directive 2026-07-02): no extracted or transformed game assets (`.gfx`, `.dcx`, `.bnd`, `.tpf`, `.sl2`, texture/font payloads) as repo files, including test fixtures. Version FINGERPRINTS (length + FNV/sha constants) and deterministic generators instead; tests that need real asset bytes read them from the local extraction corpus (env-overridable root, e.g. `ER_GFX_CORPUS_ROOT` in `crates/er-gfx/tests/common/mod.rs`) and SKIP when it is absent. Large embedded byte arrays in `.rs` sources are the same problem in different clothing -- prefer runtime derivation from the game's own in-memory data (see `er_gfx::title_05_000`) or structured edit tables over byte dumps.
 
@@ -67,7 +67,7 @@ User steering is not evidence. When the user proposes a concrete technical hypot
 `linux-x86-debug` main landed runtime DLL injection support on 2026-06-27. Use it as a sibling toolkit for Wine/Proton Elden Ring runtime inspection when an attach-based path is safer than baking a probe into the chainloader:
 
 - Capabilities: `inject_library`, `remove_library`, and `list_modules` load/unload/list DLLs in an already-running Wine/Proton process by calling `LoadLibraryA` through the existing `winedbg --gdb` attach path. It detaches and leaves the target running; no native ptrace addon is required.
-- er-effects-rs use case: attach to approved offline/direct `eldenring.exe`, inject `er_effects_rs.dll` without the LazyLoader/chainloader path, and use `list_modules` for live PE module bases that help telemetry/oracle work. This rides the same Wine attach mechanism already used for tracebreakpoint evidence.
+- er-effects-rs use case: attach to approved offline/direct `eldenring.exe`, inject `er_effects_rs.dll` without the me3 loader path, and use `list_modules` for live PE module bases that help telemetry/oracle work. This rides the same Wine attach mechanism already used for tracebreakpoint evidence.
 - Access paths: MCP server `linux-x86-debug-attach`, or import `#library-injection` / `#pe-export-table` from the linux-x86-debug package.
 - Hard safety boundary: x86-64 only. Do **not** attach to or inject into `start_protected_game.exe` / EAC launcher processes. Only use the approved offline/direct `eldenring.exe` target.
 - Hang caveat: the inferior `LoadLibraryA` call runs while target threads are frozen; a blocking `DllMain` or a thread holding the loader lock can hang the attach/inject operation. Keep injected DLL attach paths bounded and non-blocking.
@@ -217,8 +217,9 @@ When a path looks blocked, that is a signal to find the *real* solution at a
 deeper layer -- not to lower the bar. Specifically for the autoload goal: the
 deliverable must achieve genuine **zero simulated input** (`simulated_button_presses_total = 0`,
 no host pointer, no synthesized DirectInput/keystate/event) AND be a single
-LazyLoader/chainload DLL compatible with offline-vanilla, Seamless Co-op, and
-other mods (see bd memory `autoload-dll-product-requirements`). "Architecturally
+DLL loaded through me3 as a `[[natives]]` profile entry (LazyLoader removed
+2026-07-04), compatible with offline-vanilla, Seamless Co-op, and other mods
+(see bd memory `autoload-dll-product-requirements`). "Architecturally
 hard" is not "impossible" -- keep reverse-engineering until the in-process,
 no-input mechanism is found. Surface trade-offs honestly, but the bar is the
 actual goal, never a fallback.

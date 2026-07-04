@@ -49,12 +49,14 @@ Stage the supported release payload with:
 scripts/stage-autoload-release.sh --output target/autoload-release
 ```
 
-The staged LazyLoader config intentionally uses `[CHAINLOAD] dll=er_effects_rs.dll`
-so er-effects-rs is properly loaded as the dinput8-style mod. Put other
-LazyLoader mods in `dllMods/` and list them under `[LOADORDER]`; do not lazy-load
-er-effects-rs itself through `[LOADORDER]`. Configure the requested slot by
-copying `er-effects-autoload.txt.example` to `er-effects-autoload.txt` next to
-`eldenring.exe` and editing `slot=N`.
+The payload is delivered through [me3](https://github.com/garyttierney/me3); the
+LazyLoader dinput8 proxy/chainload was removed 2026-07-04. `er-effects.me3` is a
+ModProfile that loads `er_effects_rs.dll` as a native, with the DLL path relative
+to the profile so the folder is relocatable as one unit. Launch with
+`me3 launch -g eldenring -p /path/to/er-effects.me3`; add other mods as
+additional `[[natives]]`/`[[packages]]` entries in the profile. Configure the
+requested slot by copying `er-effects-autoload.txt.example` to
+`er-effects-autoload.txt` next to `eldenring.exe` and editing `slot=N`.
 
 Product autoload enables er-effects-rs' built-in current-version splash skip
 patch automatically. For non-autoload launches, copy

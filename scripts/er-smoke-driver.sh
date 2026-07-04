@@ -9,11 +9,10 @@ fi
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
-LAZYLOADER_DIR="${LAZYLOADER_DIR:-$GAME_DIR/dllMods.disabled/lazyloader-20260611-234916}"
 SCREENSHOT_HELPER="${SCREENSHOT_HELPER:-/home/banon/projects/scripts/hypr-window-screenshot.sh}"
-PROTON="${PROTON:-$HOME/.local/share/Steam/steamapps/common/Proton - Experimental/proton}"
-STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
-STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}"
+# me3 delivers the DLL as a native (LazyLoader removed 2026-07-04).
+# shellcheck source=scripts/me3-launch-lib.sh
+source "$REPO_ROOT/scripts/me3-launch-lib.sh"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/smoke/driver-$(date +%Y%m%d-%H%M%S)}"
 TELEMETRY_PATH="${TELEMETRY_PATH:-$GAME_DIR/er-effects-telemetry.json}"
 COMMAND_PATH="${COMMAND_PATH:-$GAME_DIR/er-effects-command.txt}"
@@ -53,7 +52,7 @@ Options:
   --call-index N        Overlay named-call index to toggle for proof (default: 0)
   --screenshot-ext EXT  Screenshot extension: jpg (default) or png
   --no-build            Skip cargo xwin build
-  --no-install          Skip copying LazyLoader and er_effects_rs.dll
+  --no-install          Skip staging er_effects_rs.dll into the me3 profile
   --launch-mode MODE    direct (default) only; Steam/protected launcher modes are policy-blocked
   --no-launch           Skip launch and drive existing game process/window
 EOF
@@ -106,7 +105,8 @@ preflight() {
     echo "unsupported launch mode: $LAUNCH_MODE (only direct offline eldenring.exe is allowed)" >&2
     exit 2
   fi
-  [[ -x "$PROTON" ]] || { echo "missing Proton runner: $PROTON" >&2; exit 127; }
+  me3_preflight || { echo "me3 preflight failed" >&2; exit 127; }
+  me3_require_no_lazyloader "$GAME_DIR" || { echo "leftover LazyLoader proxy in $GAME_DIR" >&2; exit 127; }
   require ydotool
   require hyprctl
   [[ -x "$SCREENSHOT_HELPER" ]] || { echo "missing screenshot helper: $SCREENSHOT_HELPER" >&2; exit 127; }
@@ -318,11 +318,9 @@ drive() {
   fi
 
   if (( INSTALL )); then
-    log "installing DLL and LazyLoader"
-    cp -f "$LAZYLOADER_DIR/dinput8.dll" "$GAME_DIR/dinput8.dll"
-    cp -f "$LAZYLOADER_DIR/lazyLoad.ini" "$GAME_DIR/lazyLoad.ini"
-    mkdir -p "$GAME_DIR/dllMods"
-    cp -f "$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll" "$GAME_DIR/dllMods/er_effects_rs.dll"
+    log "staging DLL as an me3 native (LazyLoader removed 2026-07-04)"
+    cp -f "$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll" "$ARTIFACT_DIR/er_effects_rs.dll"
+    me3_write_profile "$ARTIFACT_DIR/er-effects-driver.me3" "$ARTIFACT_DIR/er_effects_rs.dll"
   fi
 
   if (( LAUNCH )); then
@@ -330,8 +328,8 @@ drive() {
       echo "unsupported launch mode: $LAUNCH_MODE (only direct offline eldenring.exe is allowed)" >&2
       exit 2
     fi
-    log "launching Elden Ring executable directly through Proton"
-    (cd "$GAME_DIR" && STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_COMPAT_CLIENT_INSTALL_PATH" STEAM_COMPAT_DATA_PATH="$STEAM_COMPAT_DATA_PATH" ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" ER_EFFECTS_COMMAND_PATH="$COMMAND_PATH" ER_EFFECTS_AUTOLOAD_PATH="$AUTOLOAD_PATH" ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" "$PROTON" run "$GAME_DIR/eldenring.exe" > "$ARTIFACT_DIR/proton-run.out" 2>&1 & echo $! > "$ARTIFACT_DIR/proton-run.pid")
+    log "launching Elden Ring through me3 (DLL as me3 native)"
+    (cd "$GAME_DIR" && ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" ER_EFFECTS_COMMAND_PATH="$COMMAND_PATH" ER_EFFECTS_AUTOLOAD_PATH="$AUTOLOAD_PATH" ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" "$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" launch -g eldenring -p "$ARTIFACT_DIR/er-effects-driver.me3" > "$ARTIFACT_DIR/me3-launch.out" 2>&1 & echo $! > "$ARTIFACT_DIR/me3-launch.pid")
   fi
 
   wait_window
