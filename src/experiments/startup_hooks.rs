@@ -3762,8 +3762,38 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                 let tear = portrait_tear_score(&cpx, cw as usize, ch as usize);
                                 PROFILE_TEAR_SCORE_LAST.store(tear, Ordering::SeqCst);
                                 PROFILE_TEAR_SCORE_MAX.fetch_max(tear, Ordering::SeqCst);
-                                let clean = tear <= PROFILE_TEAR_SCORE_THRESHOLD;
-                                if keyed && clean {
+                                // ADAPTIVE TEAR BASELINE (runs 6-7: speckled/stone-textured
+                                // characters score a CONSTANT ~39-40 on every honest frame -- the
+                                // vertical-luma metric reads their legitimate texture, and the
+                                // absolute threshold starved whole windows, e.g. slot8 torn=149
+                                // with 76%-share masks). Baseline = EMA of ACCEPTED frames only (a
+                                // real tear never feeds it, so smooth characters keep the strict
+                                // absolute gate); a window's first frame is capped at 5x the
+                                // absolute threshold. Reset per window.
+                                let ema = PROFILE_TEAR_EMA.load(Ordering::SeqCst);
+                                let clean = if ema == 0 {
+                                    tear <= PROFILE_TEAR_SCORE_THRESHOLD * 5
+                                } else {
+                                    tear <= PROFILE_TEAR_SCORE_THRESHOLD.max(ema * 2)
+                                };
+                                if clean {
+                                    let next = if ema == 0 {
+                                        tear.max(1)
+                                    } else {
+                                        (ema * 7 + tear.max(1)).div_ceil(8)
+                                    };
+                                    PROFILE_TEAR_EMA.store(next, Ordering::SeqCst);
+                                }
+                                // MASK-CORRECTNESS gate (user 2026-07-03: frames displayed whose
+                                // backdrop was not keyed out right -- the share floor checks how
+                                // MUCH the mask cut, this checks WHERE): the mask/head IoU of THIS
+                                // frame (apply_depth_alpha_key ran just above) must clear the
+                                // gross-mismatch bar or the frame holds on the bridge.
+                                let iou_ok =
+                                    crate::experiments::gpu_readback::PROFILE_MASK_HEAD_IOU_LAST
+                                        .load(Ordering::SeqCst)
+                                        >= crate::experiments::gpu_readback::MASK_HEAD_IOU_MIN;
+                                if keyed && clean && iou_ok {
                                     PROFILE_TEAR_SCORE_CLEAN_MIN.fetch_min(tear, Ordering::SeqCst);
                                     PROFILE_PUBLISH_CLEAN.fetch_add(1, Ordering::SeqCst);
                                     // First-keyed latency (er-effects-rs-hi2): stamp the display-frame
@@ -3789,6 +3819,11 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                             "live-feed: published built RT content {cw}x{ch} (real head, !checker, keyed, clean tear={tear}, target-only) -> overlay (version bump)"
                                         ));
                                     }
+                                } else if keyed && clean {
+                                    // Mask cut ENOUGH but in the WRONG PLACE (IoU below the gross-
+                                    // mismatch bar): the stale-silhouette / wrong-side masks the
+                                    // user saw displayed as un-keyed backdrops. Held on the bridge.
+                                    PROFILE_PUBLISH_SKIPPED_BADIOU.fetch_add(1, Ordering::SeqCst);
                                 } else if keyed {
                                     // Keyed but TORN (offscreen RT read mid-GPU-write -- no cross-queue
                                     // sync): SKIP so the garbage never displays; the make-before-break

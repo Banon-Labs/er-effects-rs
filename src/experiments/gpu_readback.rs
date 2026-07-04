@@ -1017,6 +1017,13 @@ pub(crate) static DEPTH_KEY_DEGENERATE: AtomicUsize = AtomicUsize::new(0);
 /// Degenerate frames RECOVERED by the second-pass histogram (clear-plane extremes excluded) --
 /// the backdrop-geometry windows' masks. `oracle_depth_key_second_pass`.
 pub(crate) static DEPTH_KEY_SECOND_PASS: AtomicUsize = AtomicUsize::new(0);
+/// Keyed+clean frames HELD because their mask/head coherence (IoU) was below MASK_HEAD_IOU_MIN --
+/// the "cut the wrong 34%" frames (user 2026-07-03: displayed heads whose backdrop was not keyed
+/// out right; the share floor checks how MUCH is cut, IoU checks WHERE). Plus its window mark.
+pub(crate) static PROFILE_PUBLISH_SKIPPED_BADIOU: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_PUBLISH_SKIPPED_BADIOU_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+/// One-shot latch for the interior-histogram ground-truth dump when even the valley pass fails.
+static DEPTH_KEY_HIST_DUMPED: AtomicUsize = AtomicUsize::new(0);
 /// Per-window MIN transparent share (percent) among PUBLISHED frames (usize::MAX = none published) and
 /// MAX share among lowmask-held frames -- the two sides of the floor, for setting it from evidence.
 pub(crate) static PROFILE_PUBLISH_SHARE_MIN: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -2184,10 +2191,16 @@ unsafe fn compute_depth_mask(gpu_child: usize, w: usize, h: usize) -> Option<Vec
                     hist2[bi as usize] += 1;
                 }
             }
+            // VALLEY, not empty run (run 7: the model's own body fills intermediate depths, so no
+            // EMPTY bins exist between the backdrop and head clusters at any binning -- the empty-
+            // run second pass never fired). A LOW-DENSITY run (<= 0.5% of the frame per bin, vs the
+            // first pass's 0.05%) between the two dominant clusters is the real separator; min run
+            // 2% of bins so single noisy bins can't split a cluster.
+            let low_thresh = ((w * h) / 200).max(1) as u32;
             let (mut b_lo, mut b_len) = (0usize, 0usize);
             let (mut c_lo, mut c_len) = (0usize, 0usize);
             for b in 0..NB {
-                if hist2[b] <= empty_thresh {
+                if hist2[b] <= low_thresh {
                     if c_len == 0 {
                         c_lo = b;
                     }
@@ -2201,7 +2214,7 @@ unsafe fn compute_depth_mask(gpu_child: usize, w: usize, h: usize) -> Option<Vec
                 }
             }
             let thr2 = imin + ((b_lo as f32 + b_len as f32 * 0.5) / NB as f32) * irange;
-            if (b_len as f32 / NB as f32) >= 0.04 {
+            if (b_len as f32 / NB as f32) >= 0.02 {
                 let keep_high2 = center > thr2;
                 let mut mask2 = vec![0u8; w * h];
                 let mut masked2 = 0usize;
@@ -2224,6 +2237,28 @@ unsafe fn compute_depth_mask(gpu_child: usize, w: usize, h: usize) -> Option<Vec
                     PROFILE_DEPTH_PIN.store(depth_cand, Ordering::SeqCst);
                     return Some(mask2);
                 }
+            }
+            // Ground-truth dump, once per run, when even the valley pass fails: the compact
+            // interior histogram (nonzero-bin runs) is the evidence for the NEXT split design.
+            if DEPTH_KEY_HIST_DUMPED.swap(1, Ordering::SeqCst) == 0 {
+                let mut runs = String::new();
+                let mut b = 0usize;
+                while b < NB {
+                    if hist2[b] > 0 {
+                        let lo = b;
+                        let mut px = 0u64;
+                        while b < NB && hist2[b] > 0 {
+                            px += hist2[b] as u64;
+                            b += 1;
+                        }
+                        runs.push_str(&format!(" [{lo}..{}]={px}", b - 1));
+                    } else {
+                        b += 1;
+                    }
+                }
+                append_autoload_debug(format_args!(
+                    "depth-key: VALLEY-FAIL interior[{imin},{imax}] low_thresh={low_thresh} nonzero-runs:{runs}"
+                ));
             }
         }
     }
@@ -2899,6 +2934,9 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
     PROFILE_BAKE_RGBA_CAPTURED.store(0, Ordering::SeqCst);
     PROFILE_RT_PIN.store(0, Ordering::SeqCst);
     PROFILE_DEPTH_PIN.store(0, Ordering::SeqCst);
+    // Fresh adaptive tear baseline for the next window's character (honest content scores differ
+    // per character: speckled textures sit ~40, smooth skin ~3).
+    PROFILE_TEAR_EMA.store(0, Ordering::SeqCst);
     OVERLAY_NOW_LOADING_SEEN.store(0, Ordering::SeqCst);
     // Do NOT drop the spared renderer -- that leaked one live CSMenuProfModelRend per switch (it was
     // excluded from the native delete and its offscreen draw task kept filling the 192-slot GX
@@ -3016,8 +3054,12 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
         &PROFILE_READBACK_CHECKER,
         &PROFILE_READBACK_CHECKER_WINDOW_MARK,
     );
+    let badiou = winof(
+        &PROFILE_PUBLISH_SKIPPED_BADIOU,
+        &PROFILE_PUBLISH_SKIPPED_BADIOU_WINDOW_MARK,
+    );
     append_autoload_debug(format_args!(
-        "present-overlay: loading-portrait window reset ({reason}) -- animated {drive} / displayed {display} frames (drive<<display == froze early); publish[clean={published} torn={torn} unkeyed={unkeyed} lowmask={lowmask} checker={checker} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips} unpaired={unpaired} first_keyed={first_keyed_s}] share[pass_min={share_min_s} held_max={held_max}] src[color bundle={cb}/scan={cs} depth chain={dc}/bfs={db}] (clean=0 == frozen on prior character; the dominant skip class is the cause); pins/spare cleared for the next load"
+        "present-overlay: loading-portrait window reset ({reason}) -- animated {drive} / displayed {display} frames (drive<<display == froze early); publish[clean={published} torn={torn} unkeyed={unkeyed} lowmask={lowmask} badiou={badiou} checker={checker} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips} unpaired={unpaired} first_keyed={first_keyed_s}] share[pass_min={share_min_s} held_max={held_max}] src[color bundle={cb}/scan={cs} depth chain={dc}/bfs={db}] (clean=0 == frozen on prior character; the dominant skip class is the cause); pins/spare cleared for the next load"
     ));
 }
 

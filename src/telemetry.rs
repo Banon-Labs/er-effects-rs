@@ -2702,6 +2702,11 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_depth_key_second_pass",
             crate::experiments::DEPTH_KEY_SECOND_PASS.load(Ordering::SeqCst),
         );
+        push_json_usize(
+            body,
+            "oracle_portrait_publish_skipped_badiou",
+            crate::experiments::PROFILE_PUBLISH_SKIPPED_BADIOU.load(Ordering::SeqCst),
+        );
         push_json_str(
             body,
             "oracle_gx_cmdqueue_top_producers",
