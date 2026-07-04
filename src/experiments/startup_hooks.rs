@@ -4939,6 +4939,15 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     if base == 0 || base == null {
         return;
     }
+    // The renderer ctor snapshots the per-slot offscreen-size table. If we build the post-Continue
+    // profile table before the loaded slot's row is patched, the target RT is permanently native-size
+    // (128 base * x2 supersample = observed 256) for this window. Wait until the loaded slot is named
+    // and patched, then call the builder.
+    if portrait_real_pixels_enabled()
+        && !unsafe { patch_profile_offscreen_size_for_loaded_slot(base) }
+    {
+        return;
+    }
     // ROOT FIX (2026-07-03, run gxguard2): do NOT build our portrait table while the game's own
     // ProfileSelect (Load Character) menu owns the portraits. That menu renders its own 10 profile
     // models; our builder adds a second 10 that stack in the SAME frame and blow past the fixed
@@ -5331,6 +5340,51 @@ unsafe fn profile_slot_has_character(slot: i32) -> bool {
     !utf16_name_empty_like(&name, len)
 }
 
+/// Patch the loaded slot's profile offscreen RT size BEFORE any post-Continue profile renderer is
+/// constructed. The constructor snapshots this table; patching after `PROFILE_TABLE_BUILDER_RVA` runs is
+/// too late and produces the 256x256 loading-screen portrait (Bug A). Returns true only when the loaded
+/// slot is known and its row is confirmed at the 1024x1024 target.
+unsafe fn patch_profile_offscreen_size_for_loaded_slot(base: usize) -> bool {
+    if !portrait_real_pixels_enabled() {
+        return true;
+    }
+    let Some(target) = portrait_loaded_slot_confirmed() else {
+        return false;
+    };
+    if !(0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&target) {
+        return false;
+    }
+    let bit = 1usize << (target as usize);
+    if PROFILE_SIZE_PATCHED.load(Ordering::SeqCst) & bit != 0 {
+        return true;
+    }
+    let table = base + PROFILE_OFFSCREEN_SIZE_TABLE_RVA;
+    let row = table + target as usize * PROFILE_OFFSCREEN_SIZE_TABLE_STRIDE;
+    let cur = unsafe { safe_read_usize(row) }.unwrap_or(0);
+    let patched = if cur == PROFILE_OFFSCREEN_SIZE_TARGET {
+        true
+    } else if cur == PROFILE_OFFSCREEN_SIZE_INIT {
+        unsafe {
+            core::ptr::write_volatile(row as *mut u64, PROFILE_OFFSCREEN_SIZE_TARGET as u64);
+            core::ptr::write_volatile(
+                (row + PROFILE_OFFSCREEN_SIZE_SUPERSAMPLE_FLAG_OFFSET) as *mut u8,
+                0,
+            );
+        }
+        true
+    } else {
+        false
+    };
+    if patched {
+        PROFILE_SIZE_PATCHED.fetch_or(bit, Ordering::SeqCst);
+    }
+    append_autoload_debug(format_args!(
+        "higher-res: pre-builder target slot {target} row=0x{cur:x} patched={} -> 1024x1024, supersample off; other slots left native 128",
+        if patched { 1 } else { 0 }
+    ));
+    patched
+}
+
 pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if base == 0 || base == null {
@@ -5357,46 +5411,6 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // the native forged texture would paint a SECOND head. Overlay-only (user choice 2026-06-30).
     if !portrait_lookat_enabled() {
         unsafe { maybe_reforge_loading_portrait(base) };
-    }
-    // HIGHER-RES (one-shot, EARLY -- runs before the table-ready guard below so it lands before
-    // TitleTopDialog constructs the renderers). Patch each per-slot offscreen base-size entry that
-    // still holds the init value (128x128, written by FUN_1400a7bb0) to 1024x1024 base AND zero the
-    // per-slot supersample-enable byte (+0x8) so the env-dependent x2 is off -> a predictable
-    // 1024x1024 RT. The .data table is writable (the game's own init writes it), so a direct volatile
-    // write suffices. Self-validating: only entries still holding the exact init value are touched.
-    // TARGET-SLOT ONLY (GX-overflow fix, user 2026-07-03). Upsizing ALL 10 slots to 1024x1024 while
-    // rendering every saved slot (render-all-slots) overran the 192-slot GX command queue -> the
-    // 0x1aeaf05 null-slot-write crash the instant the game loaded into a slot. Only the TARGET slot
-    // (the loading-screen portrait source) needs the higher-res RT; the other 9 stay at the native
-    // 128x128 init so 10 concurrent renders fit the queue -- vanilla-scale for the menu thumbnails.
-    // Gated on portrait_loaded_slot_confirmed() so the one-shot fires only once the real target is
-    // named (not the fallback slot 0) and patches exactly that row.
-    if portrait_real_pixels_enabled() {
-        if let Some(target) = portrait_loaded_slot_confirmed() {
-            if PROFILE_SIZE_PATCHED.swap(1, Ordering::SeqCst) == 0 {
-                let table = base + PROFILE_OFFSCREEN_SIZE_TABLE_RVA;
-                let row = table + target as usize * PROFILE_OFFSCREEN_SIZE_TABLE_STRIDE;
-                let patched =
-                    if unsafe { safe_read_usize(row) } == Some(PROFILE_OFFSCREEN_SIZE_INIT) {
-                        unsafe {
-                            core::ptr::write_volatile(
-                                row as *mut u64,
-                                PROFILE_OFFSCREEN_SIZE_TARGET as u64,
-                            );
-                            core::ptr::write_volatile(
-                                (row + PROFILE_OFFSCREEN_SIZE_SUPERSAMPLE_FLAG_OFFSET) as *mut u8,
-                                0,
-                            );
-                        }
-                        1
-                    } else {
-                        0
-                    };
-                append_autoload_debug(format_args!(
-                    "higher-res: patched target slot {target} ({patched}/1) -> 1024x1024, supersample off; other 9 slots left native 128 (GX-overflow avoidance for all-slots render)"
-                ));
-            }
-        }
     }
     // ProfileSummary = GameDataMan -> slot-manager container.
     let gdm = game_data_man_ptr_or_null();
@@ -7361,6 +7375,18 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook
     ));
 }
 
+/// Exact ASCII compare of a NUL-terminated C-string pointer against `want` (fault-safe, non-UTF-8 or
+/// null pointer -> false).
+unsafe fn name_ptr_equals_ascii(name_ptr: usize, want: &str) -> bool {
+    if name_ptr == 0 || name_ptr == TITLE_OWNER_SCAN_START_ADDRESS {
+        return false;
+    }
+    match unsafe { CStr::from_ptr(name_ptr as *const i8).to_str() } {
+        Ok(s) => s == want,
+        Err(_) => false,
+    }
+}
+
 unsafe fn title_child_name_matches(name_ptr: usize) -> bool {
     if name_ptr == 0 || name_ptr == TITLE_OWNER_SCAN_START_ADDRESS {
         return false;
@@ -7429,6 +7455,17 @@ pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook
     let f: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig) };
     let ret = unsafe { f(parent, out_proxy, name_ptr) };
+    // STATS-PANEL NATIVE TEXT (2026-07-04): capture the CSScaleformValue pointer of the ProfileSelect
+    // row target field so the SetText hook can substitute our attribute line there. The value is
+    // embedded at out_proxy + SCENE_OBJ_PROXY_SCALEFORM_VALUE_OFFSET (mirrors the native row-populate
+    // template FUN_1408758d0). Compare-only downstream, so a later-freed proxy is harmless.
+    if stats_panel_enabled()
+        && out_proxy != 0
+        && out_proxy != null
+        && unsafe { name_ptr_equals_ascii(name_ptr, PROFILE_STATS_TARGET_FIELD) }
+    {
+        record_stats_target_field(out_proxy + SCENE_OBJ_PROXY_SCALEFORM_VALUE_OFFSET);
+    }
     if unsafe { title_profile_list_container_matches(name_ptr) } {
         TITLE_PROFILE_FACE_BIND_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
         TITLE_PROFILE_FACE_LAST_PROXY.store(out_proxy, Ordering::SeqCst);
@@ -7516,6 +7553,142 @@ pub(crate) fn install_title_scene_obj_proxy_named_child_bind_hook() {
         }
         Err(status) => append_autoload_debug(format_args!(
             "title-cover-part-a: MhHook::new named-child bind failed: {status:?}"
+        )),
+    }
+}
+
+/// Build the character's attribute line as a NUL-terminated UTF-16 string for native SetText, read live
+/// from `GameDataMan -> PlayerGameData` (the same source the LOAD-CORRECTNESS oracle reads). Plain text
+/// (no HTML) -- the SetText wrapper wraps it and the field's own `MenuFont_01` renders it. Labels are the
+/// eight attributes in struct order: Vigor, Mind, Endurance, Strength, Dexterity, Intelligence, Faith,
+/// Arcane. Returns an empty vec (just the NUL) if the player data is not readable, so the caller falls
+/// back to the native text.
+fn build_stats_text_utf16() -> Vec<u16> {
+    const LABELS: [&str; 8] = ["VIG", "MND", "END", "STR", "DEX", "INT", "FAI", "ARC"];
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let gdm = game_data_man_ptr_or_null();
+    let pgd = if gdm != 0 && gdm != null {
+        unsafe { safe_read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(0)
+    } else {
+        0
+    };
+    if pgd == 0 || pgd == null {
+        return vec![0u16];
+    }
+    let n = PGD_STAT_COUNT.min(LABELS.len());
+    let mut s = String::new();
+    for i in 0..n {
+        let v = unsafe { safe_read_i32(pgd + PGD_STAT_BASE_3C_OFFSET + i * 4) }.unwrap_or(0);
+        if i > 0 {
+            s.push_str("  ");
+        }
+        s.push_str(LABELS[i]);
+        s.push(' ');
+        s.push_str(&v.to_string());
+    }
+    s.encode_utf16().chain(core::iter::once(0)).collect()
+}
+
+/// Record a target-field CSScaleformValue pointer into the ring so the SetText hook substitutes our
+/// stats text on it. Deduplicates against the current ring contents.
+fn record_stats_target_field(value: usize) {
+    if value == 0 || value == TITLE_OWNER_SCAN_START_ADDRESS {
+        return;
+    }
+    for slot in PROFILE_STATS_FIELD_VALUES.iter() {
+        if slot.load(Ordering::SeqCst) == value {
+            return; // already tracked
+        }
+    }
+    let idx = PROFILE_STATS_FIELD_CURSOR.fetch_add(1, Ordering::SeqCst) % PROFILE_STATS_FIELD_SLOTS;
+    PROFILE_STATS_FIELD_VALUES[idx].store(value, Ordering::SeqCst);
+    PROFILE_STATS_FIELD_CAPTURES.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Whether `field` (a CSScaleformValue pointer) is a captured stats-target field. Compare-only; never
+/// dereferences the pointer (so a stale ring entry is harmless).
+fn is_stats_target_field(field: usize) -> bool {
+    PROFILE_STATS_FIELD_VALUES
+        .iter()
+        .any(|slot| slot.load(Ordering::SeqCst) == field)
+}
+
+/// Hook on the SetText wrapper `FUN_14074a0f0(CSScaleformValue* field, const wchar_t* text)`. When the
+/// game sets text on a captured ProfileSelect target field (and stats-panel mode is on), substitute the
+/// live attribute line so the engine renders OUR stats in the field's native `MenuFont_01`; every other
+/// text set (and any read failure) passes through unchanged.
+pub(crate) unsafe extern "system" fn profile_settext_hook(field: usize, text: usize) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = PROFILE_SETTEXT_ORIG.load(Ordering::SeqCst);
+    let call_orig = |t: usize| -> usize {
+        if orig != null && orig != HOOK_ORIGINAL_UNSET {
+            let f: unsafe extern "system" fn(usize, usize) -> usize =
+                unsafe { std::mem::transmute(orig) };
+            unsafe { f(field, t) }
+        } else {
+            0
+        }
+    };
+    if field != 0 && field != null && stats_panel_enabled() && is_stats_target_field(field) {
+        let utf16 = build_stats_text_utf16();
+        if utf16.len() > 1 {
+            let n = PROFILE_STATS_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst) + 1;
+            if n <= 4 {
+                append_autoload_debug(format_args!(
+                    "stats-text: substituted SetText on field=0x{field:x} with {} attribute(s) (subs={n})",
+                    utf16.len() - 1
+                ));
+            }
+            // `utf16` outlives the call (the wrapper copies it into a DLString synchronously).
+            return call_orig(utf16.as_ptr() as usize);
+        }
+    }
+    call_orig(text)
+}
+
+pub(crate) fn install_profile_settext_hook() {
+    if PROFILE_SETTEXT_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "stats-text: SetText MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(PROFILE_SETTEXT_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "stats-text: failed to resolve SetText rva 0x{PROFILE_SETTEXT_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe { MhHook::new(addr as *mut c_void, profile_settext_hook as *mut c_void) } {
+        Ok(hook) => {
+            PROFILE_SETTEXT_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "stats-text: queue_enable SetText failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    PROFILE_SETTEXT_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "stats-text: hooked SetText 0x{addr:x}; ProfileSelect '{PROFILE_STATS_TARGET_FIELD}' field will show the attribute line"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "stats-text: SetText MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "stats-text: MhHook::new SetText failed: {status:?}"
         )),
     }
 }

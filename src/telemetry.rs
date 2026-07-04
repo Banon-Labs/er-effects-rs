@@ -2325,6 +2325,24 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_stats_panel_last_error",
             STATS_PANEL_LAST_ERROR.load(Ordering::SeqCst),
         );
+        // Stats-panel NATIVE TEXT oracles: target-field value pointers captured in the named-child hook,
+        // and SetText substitutions actually performed. subs>0 == the attribute line reached a native
+        // ProfileSelect text field (rendered in MenuFont_01) without an image.
+        push_json_usize(
+            body,
+            "oracle_stats_text_installed",
+            PROFILE_SETTEXT_INSTALLED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_text_field_captures",
+            PROFILE_STATS_FIELD_CAPTURES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_text_settext_subs",
+            PROFILE_STATS_SETTEXT_SUBS.load(Ordering::SeqCst),
+        );
         // Camera-lever (custom profile-portrait viewport) RAM semaphores: a runtime watcher can confirm
         // the override path ran and produced a sane matrix without an image. See bd
         // `camera-lever-RE-VERIFIED-offsets-and-call-addrs-2026-06-29`.

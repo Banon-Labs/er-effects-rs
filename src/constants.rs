@@ -1152,7 +1152,7 @@ pub(crate) const PROFILE_OFFSCREEN_SIZE_TARGET: usize = 0x0000_0400_0000_0400;
 /// Byte offset within a size-table row of the per-slot supersample-enable flag (read as
 /// `size_struct[+0x8]` by `FUN_140bbeee0`); zero it to force x1.
 pub(crate) const PROFILE_OFFSCREEN_SIZE_SUPERSAMPLE_FLAG_OFFSET: usize = 0x8;
-/// One-shot latch for the higher-res offscreen-size patch.
+/// Bitmask of save slots whose profile offscreen base-size table row has been patched to 1024x1024.
 pub(crate) static PROFILE_SIZE_PATCHED: AtomicUsize = AtomicUsize::new(0);
 /// LIGHTING. Renderer field holding the IBL env-map-region object (`param_1[0xec]`, allocated by
 /// FUN_140b399e0, filled by the IBL build FUN_140b39a30). The IBL build stores the registered
@@ -2274,6 +2274,56 @@ pub(crate) static TITLE_PROFILE_FACE_TRANSFORM_APPLIED: AtomicUsize = AtomicUsiz
 pub(crate) static TITLE_PROFILE_FACE_OTHER_HIDDEN: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_PROFILE_FACE_LAST_PROXY: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_PROFILE_FACE_LAST_VALUE: AtomicUsize = AtomicUsize::new(0);
+
+// === Stats-panel NATIVE TEXT (2026-07-04) =========================================================
+// Render the character's attributes as text on the ProfileSelect rows using the GAME'S OWN font. The
+// menu populates a named text field by resolving it (assignComponentWithName, already hooked) then
+// calling the SetText wrapper `FUN_14074a0f0(CSScaleformValue* field, const wchar_t* text)` -- the
+// engine wraps the string in HTML and renders it through the field's own `MenuFont_01`. We hook that
+// SetText wrapper: when it targets a ProfileSelect row field whose CSScaleformValue pointer we captured
+// (in the named-child hook, for the target field name), we substitute our stats string. No font work,
+// no new Scaleform surface, native rendering. (See bd profileselect-native-settext-RE-2026-07-04.)
+/// SetText wrapper `FUN_14074a0f0` (deobf/live 0x74a000). fastcall(rcx=CSScaleformValue*, rdx=wchar_t*).
+pub(crate) const PROFILE_SETTEXT_RVA: usize = 0x74a000;
+pub(crate) static PROFILE_SETTEXT_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static PROFILE_SETTEXT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// The SceneObjProxy embeds its CSScaleformValue at proxy+0x8 (RE'd from the row-populate template
+/// `FUN_1408758d0`, which calls `FUN_14074a0f0(&sceneObjProxy.scaleformValue, ...)`). So the value
+/// pointer the SetText hook sees == the resolved child proxy + this offset.
+pub(crate) const SCENE_OBJ_PROXY_SCALEFORM_VALUE_OFFSET: usize = 0x8;
+/// The ProfileSelect row field we repurpose to show the attribute line. `Location` (the map name,
+/// 412px, right-aligned) is the widest single field after PlayerName -- a first-increment home for the
+/// stats text before a dedicated widened field is added via a 05_010 GFX edit.
+pub(crate) const PROFILE_STATS_TARGET_FIELD: &str = "Location";
+/// Recently-resolved CSScaleformValue pointers of the target field across the (recycled) rows. The
+/// SetText hook substitutes our stats text when its `field` arg matches one of these. Ring-overwritten;
+/// stale entries simply never match (the game never calls SetText with a freed field pointer), so this
+/// is compare-only -- never dereferenced -- and carries no use-after-free risk.
+pub(crate) const PROFILE_STATS_FIELD_SLOTS: usize = 16;
+pub(crate) static PROFILE_STATS_FIELD_VALUES: [AtomicUsize; PROFILE_STATS_FIELD_SLOTS] = [
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+];
+/// Ring write cursor for `PROFILE_STATS_FIELD_VALUES`.
+pub(crate) static PROFILE_STATS_FIELD_CURSOR: AtomicUsize = AtomicUsize::new(0);
+/// Count of SetText calls whose text we substituted with the stats string (oracle).
+pub(crate) static PROFILE_STATS_SETTEXT_SUBS: AtomicUsize = AtomicUsize::new(0);
+/// Count of target-field value pointers captured in the named-child hook (oracle).
+pub(crate) static PROFILE_STATS_FIELD_CAPTURES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_PRESS_START_BIND_HITS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_PRESS_START_BIND_LAST_PARENT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -5739,6 +5789,8 @@ pub(crate) static START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND: Once = Once::new
 pub(crate) static START_TITLE_SCALEFORM_BIND_OBSERVER: Once = Once::new();
 pub(crate) static START_TITLE_MENU_RESOURCE_ACQUIRE_OBSERVER: Once = Once::new();
 pub(crate) static START_TITLE_FLOW_CONTEXT_RECORD_REGULATION: Once = Once::new();
+/// One-shot install guard for the stats-panel native-text hooks (named-child capture + SetText).
+pub(crate) static START_PROFILE_STATS_TEXT: Once = Once::new();
 pub(crate) static START_NOW_LOADING_HELPER_OBSERVER: Once = Once::new();
 pub(crate) static START_LOADING_BG_REPLACE_BIND: Once = Once::new();
 /// One-shot install latch for the D3D12 Present overlay (the deterministic loading-portrait display path).

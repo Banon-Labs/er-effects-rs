@@ -269,6 +269,20 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         });
     }
 
+    // Stats-panel native text: install the ProfileSelect SetText hook + the named-child binder hook
+    // (idempotent) so the character's attribute line renders in the game's own MenuFont_01 on the
+    // Load-Game rows. Independent of the title-cover conditions below -- it must run on every
+    // stats-panel product path, so it is gated on `stats_panel_enabled()` directly.
+    if stats_panel_enabled() {
+        START_PROFILE_STATS_TEXT.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-profile-stats-text".to_owned())
+                .spawn(|| {
+                    install_title_scene_obj_proxy_named_child_bind_hook();
+                    install_profile_settext_hook();
+                });
+        });
+    }
     // Title-cover masquerade Part A: install the BeginTitle `05_000_Title` hook as early as
     // splash/foreground patches, before STEP_BeginTitle can build the native title Scaleform. This
     // does NOT touch STEP_Wait or CSMenuMan+0x21; it preserves the native MenuWindowJob and hides
