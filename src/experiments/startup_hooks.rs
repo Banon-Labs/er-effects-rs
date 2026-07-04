@@ -5471,8 +5471,10 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
         let mut kicked = 0u32;
         let mut kicked_mask = 0u32;
         for s in 0..10i32 {
-            // RENDER ALL AVAILABLE SLOTS (user 2026-07-03): immediate-kick every saved slot, not just the
-            // autoload target (see the cadence loop below). profile_slot_fingerprint gates to real slots.
+            // ONE SLOT (GX-overflow revert): immediate-kick only the target (see cadence loop).
+            if s != target_slot {
+                continue;
+            }
             if !unsafe { profile_slot_fingerprint(s).0 } {
                 continue;
             }
@@ -5532,12 +5534,14 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             unsafe { core::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
         let mut marked = 0u32;
         for s in 0..10i32 {
-            // RENDER ALL AVAILABLE SLOTS (user 2026-07-03): mark + kick every slot that has a real save,
-            // like vanilla (the native refresh builds all saved slots). We previously restricted to the
-            // autoload target slot because the loading-screen readback grabbed a neighbouring same-size RT
-            // (wrong face); that concern is deprecated -- portrait visibility will be controlled at the
-            // GFX/surface layer, not by starving the render. `profile_slot_fingerprint` below still gates
-            // to real (saved) slots so empty slots never build.
+            // ONE SLOT (GX-overflow revert, user 2026-07-03): build ONLY the autoload target. Rendering
+            // every saved slot overran the 192-slot GX command queue (0x1aeaf05 null-slot-write crash) --
+            // 10 concurrent live renderers' draw tasks, independent of RT size (target-only 1024 didn't
+            // help). All-slots menu portraits will be handled at the GFX/surface layer (remove the
+            // DummyProfileFace surface) instead of driving all 10 renderers.
+            if s != target_slot {
+                continue;
+            }
             // Real-character gate (per the native boot ProfileSummary read: level>=1 + non-empty name).
             // Never mark before the read populates the slot (can't pre-empt it / contaminate saveSlotsStates).
             if !unsafe { profile_slot_fingerprint(s).0 } {
@@ -5563,9 +5567,8 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             }
             marked += 1;
         }
-        // Oracle: count non-target renderers holding a live model. With all-saved-slots render (above)
-        // this is now EXPECTED non-zero -- every saved slot builds, like vanilla -- so it is just a count,
-        // no longer a swap-bug tripwire (the swap concern is handled at the GFX/surface layer now).
+        // TRIPWIRE oracle: count non-target renderers holding a live model during our feed window.
+        // Expected 0 with one-slot render -- any foreign live model is the swap-bug precondition.
         let mut foreign = 0usize;
         for s in 0..TITLE_PROFILE_SLOT_COUNT as i32 {
             if s == target_slot {
