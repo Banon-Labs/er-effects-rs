@@ -237,6 +237,49 @@ def main() -> int:
             "echo 'do not run steam -applaunch 1245620'",
             True,
         ),
+        # bd only records text; forbidden-form MENTIONS in quoted issue text
+        # must not deny even when generic executable marker words ("bash",
+        # "python", ...) appear in the prose (2026-07-04 false positive).
+        PolicyCase(
+            "allow-bd-create-mentioning-eac-launcher",
+            '/home/banon/.local/bin/bd create "me3 launch path" -d "me3 Linux'
+            " launch via bash scripts must not use forbidden forms (steam"
+            ' -applaunch / steam:// URLs / start_protected_game.exe)." -t task -p 1',
+            True,
+        ),
+        PolicyCase(
+            "allow-bd-remember-mentioning-eac-launcher",
+            "/home/banon/.local/bin/bd remember --key k 'never launch"
+            " start_protected_game.exe from bash or python wrappers'",
+            True,
+        ),
+        PolicyCase(
+            "allow-bd-create-mentioning-steam-applaunch-appid",
+            '/home/banon/.local/bin/bd create "launch policy" -d "steam'
+            ' -applaunch 1245620 is a forbidden form; drive it from bash probes" -t task',
+            True,
+        ),
+        # The bd exemption must not leak to chained or indirected launches.
+        PolicyCase(
+            "deny-bd-chained-proton-start-protected",
+            '/home/banon/.local/bin/bd create "note" -d "text" && proton run'
+            " /tmp/start_protected_game.exe",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
+        PolicyCase(
+            "deny-bd-chained-python-c-start-protected",
+            '/home/banon/.local/bin/bd create "note" -d "text"; python3 -c'
+            " 'import subprocess; subprocess.run([\"proton\",\"run\",\"start_protected_game.exe\"])'",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
+        PolicyCase(
+            "deny-bash-c-start-protected-game",
+            "bash -c '/opt/er/start_protected_game.exe'",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
         PolicyCase(
             "deny-ctx-execute-python-steam-applaunch",
             "",
