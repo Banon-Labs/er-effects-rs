@@ -19,6 +19,12 @@ time -- edit that file to change the list, no Rust changes needed):
 
 The code uses `../fromsoftware-rs` path dependencies, so keep this project as a sibling of `fromsoftware-rs` unless you update `Cargo.toml`.
 
+## Cheat Engine tables
+
+Cheat Engine tables and helpers live in `scripts/cheat-engine/`. Current tables:
+
+- `scripts/cheat-engine/bundled_cjk_font_override.CT` -- redirects the game's Scaleform menu font registration to bundled Simplified or Traditional Chinese font assets for Seamless/offline users.
+
 ## Build
 
 From a Rust environment with the Windows target installed:
