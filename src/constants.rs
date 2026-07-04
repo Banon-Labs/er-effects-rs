@@ -1619,6 +1619,8 @@ pub(crate) const GX_FRAME_CTX_RELEASE_RVA: usize = 0x19eaa20;
 pub(crate) const GX_FRAME_SUBCTX_OFFSET: usize = 0x25c8;
 /// Per-frame alpha-0 clears issued by the pump (`oracle_portrait_alpha0_clears`).
 pub(crate) static PROFILE_ALPHA0_CLEARS: AtomicUsize = AtomicUsize::new(0);
+/// One-shot latch for the model node-array enumerator (backdrop-part identification).
+pub(crate) static PROFILE_MODEL_PARTS_DUMPED: AtomicUsize = AtomicUsize::new(0);
 /// Diagnostic: the captured engine ctx pointer + its `+8` delta-time bits, logged once, to learn whether the
 /// context is a stable persistent structure (safe to reuse across frames) or a transient per-call one.
 pub(crate) static PROFILE_DRAW_TASK_CTX_LOGGED: AtomicUsize = AtomicUsize::new(0);

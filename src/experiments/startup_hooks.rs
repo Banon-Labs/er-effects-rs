@@ -3208,16 +3208,13 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                     PROFILE_DRIVE_FENCE_SKIPS.fetch_add(1, Ordering::SeqCst);
                 } else {
                     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        // NATIVE SCENE-ALPHA KEYING: clear the offscreen RT to {0,0,0,0} before
-                        // this frame's model draw. The draw below redraws ONLY the model, so the
-                        // RT leaves this frame subject-only with alpha == model coverage -- the
-                        // backdrop box (stale pixels the old skip-the-clear preserved) is gone
-                        // and the publish keys on native alpha instead of depth masks.
-                        if unsafe {
-                            crate::experiments::gpu_readback::portrait_alpha0_clear(base, off)
-                        } {
-                            PROFILE_ALPHA0_CLEARS.fetch_add(1, Ordering::SeqCst);
-                        }
+                        // (Scene-alpha clear DISABLED pending the backdrop-node hide: run 7eefdbd
+                        // proved the clear executes crash-free (556/556) but the backdrop is live
+                        // scene content redrawn each frame, so the clear alone keys nothing and
+                        // starves the overlay. portrait_alpha0_clear + the GX RVAs stay for the
+                        // next phase.)
+                        let _ = crate::experiments::gpu_readback::portrait_alpha0_clear;
+                        let _ = &PROFILE_ALPHA0_CLEARS;
                         let update: unsafe extern "system" fn(usize, usize) =
                             unsafe { core::mem::transmute(base + PROFILE_MODEL_UPDATE_TASK_RVA) };
                         unsafe { update(r, td) };
@@ -3298,6 +3295,30 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                             .unwrap_or(0);
                     let loc = unsafe { safe_read_usize(r + 0x948) }.unwrap_or(0);
                     if model_ins != 0 && model_ins != null && loc != 0 && loc != null {
+                        // MODEL-PARTS ENUMERATOR (scene-alpha phase 2, one-shot per run): the
+                        // model submit (dump FUN_1409e9ac0) draws every non-null slot of the
+                        // model's node array (+0x28..+0x100, 27 slots). One of those parts IS the
+                        // per-frame-redrawn backdrop box (run 7eefdbd: alpha-0 clear + full-scene
+                        // redraw left every frame opaque). Log each slot's pointer + vtable RVA so
+                        // the backdrop part class is identifiable in the dump; the hide lever is
+                        // nulling that slot on OUR built model.
+                        if PROFILE_MODEL_PARTS_DUMPED.swap(1, Ordering::SeqCst) == 0 {
+                            let mut parts = String::new();
+                            for s in 0..27usize {
+                                let p = unsafe { safe_read_usize(model_ins + 0x28 + s * 8) }
+                                    .unwrap_or(0);
+                                if p != 0 && p != null {
+                                    let vt = unsafe { safe_read_usize(p) }.unwrap_or(0);
+                                    parts.push_str(&format!(
+                                        " [{s}]=0x{p:x}(vt_rva=0x{:x})",
+                                        vt.wrapping_sub(base)
+                                    ));
+                                }
+                            }
+                            append_autoload_debug(format_args!(
+                                "model-parts: model_ins=0x{model_ins:x} nodes(+0x28..+0x100):{parts}"
+                            ));
+                        }
                         // REBUILD-DRIVER TRIPWIRE (see PORTRAIT_FACEDATA_NEQ_TICKS): sample the
                         // step-machine latches and re-run STEP_Wait_Play's own FaceData compare
                         // each drive frame. A ~100% mismatch rate convicts the FaceData loop (the
@@ -3540,16 +3561,15 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                         ));
                                     }
                                 }
-                                // NATIVE SCENE-ALPHA KEYING (strategy pivot 2026-07-03, replaces the
-                                // depth-histogram mask): the pump now clears the offscreen RT with
-                                // alpha 0 each frame (portrait_alpha0_clear) and redraws ONLY the
-                                // model, so the RT's own alpha channel IS the mask -- backdrop
-                                // geometry is never redrawn (it was stale pixels preserved by the
-                                // old skip-the-clear behavior), and every depth-classification
-                                // failure mode (wrong gap, continuous depth, wrong-place cutouts)
-                                // is structurally gone. apply_depth_alpha_key is retired from this
-                                // path; the keyed/share gate below now reads the native alpha.
-                                let _ = apply_depth_alpha_key; // retained for reference, not called
+                                // DEPTH-KEYED TRANSPARENT BACKGROUND (restored 2026-07-03 after the
+                                // scene-alpha probe): the alpha-0 clear alone cannot key the RT
+                                // because the backdrop is LIVE scene content redrawn every frame by
+                                // the model submit (FUN_1409e9ac0 walks the model's 27-slot node
+                                // array +0x28..+0x100; run 7eefdbd: alpha0_clears=556, every frame
+                                // still opaque, clean=0 -- overlay starved, no animation). Scene-
+                                // alpha keying resumes once the backdrop NODE is identified (see
+                                // the one-shot model-parts enumerator) and nulled on OUR model.
+                                unsafe { apply_depth_alpha_key(off, cw, ch, &mut cpx) };
                                 // MOUSE-TRACK PROOF (selftest): one-shot dump the LIVE head at three
                                 // held yaw buckets so the look-left/center/look-right poses are
                                 // visually inspectable. The selftest sinusoid sweeps `yaw` across
