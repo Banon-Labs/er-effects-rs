@@ -866,11 +866,16 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                             unsafe {
                                 product_core_autoload_tick(base, slot, state.game_task_ticks)
                             };
-                            // Per-frame: capture the live character portrait CSGxTexture while the
-                            // ProfileSelect renderer still exists (it is torn down at Continue), so
-                            // the now-loading background forge can display the real portrait. One-shot.
-                            // Read the autoload's TARGET slot's renderer table entry, not a hardcoded 0.
-                            maybe_capture_portrait_gxtexture(base, slot);
+                            // FIRST-CHARACTER PORTRAIT BAKE YOINKED (user 2026-07-03). This one-shot
+                            // (LOADING_BG_PORTRAIT_GX_KEPT, set once) captured the BOOT autoload
+                            // target's portrait CSGxTexture and baked it into the now-loading forge --
+                            // the reason the FIRST character (and only the first) had its portrait
+                            // baked into the loading screen, distinct from the per-frame overlay path
+                            // the System->Quit switch characters use. Suppressing just this leaves the
+                            // switch portraits untouched. (The forge/checker + loading-art coupling is
+                            // a separate decouple, tracked for later.) The capture fn + its title.rs
+                            // (default-off flow) caller remain for reference.
+                            let _ = maybe_capture_portrait_gxtexture;
                         }
                         write_telemetry_throttled(&mut state, false);
                         return;
