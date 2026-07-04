@@ -116,16 +116,15 @@ pub(crate) fn force_profile_render_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
-    // PORTRAITS RETIRED (2026-07-03, user: stop rendering portraits, moving to a stats panel).
-    // Default OFF now (was `!save_override_telemetry_only()` = default-on); the env/file force-on
-    // overrides stay so the 3D path can be revived for RE/reference.
-    matches!(
-        std::env::var("ER_EFFECTS_FORCE_PROFILE_RENDER").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-force-profile-render.txt")
-        .exists()
+    !save_override_telemetry_only()
+        || matches!(
+            std::env::var("ER_EFFECTS_FORCE_PROFILE_RENDER").as_deref(),
+            Ok("1")
+        )
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-force-profile-render.txt")
+            .exists()
 }
 /// DEFAULT-OFF gate for the live-portrait D3D12 readback. When on, the moment
 /// `maybe_capture_portrait_gxtexture` pins the rendered offscreen `CSGxTexture`
@@ -142,14 +141,15 @@ pub(crate) fn portrait_real_pixels_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
-    // PORTRAITS RETIRED (2026-07-03): default OFF, moving to a stats panel; env/file force-on kept.
-    matches!(
-        std::env::var("ER_EFFECTS_PORTRAIT_REAL_PIXELS").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-portrait-real-pixels.txt")
-        .exists()
+    !save_override_telemetry_only()
+        || matches!(
+            std::env::var("ER_EFFECTS_PORTRAIT_REAL_PIXELS").as_deref(),
+            Ok("1")
+        )
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-portrait-real-pixels.txt")
+            .exists()
 }
 /// DEFAULT-OFF gate for the RENDER-THREAD offscreen drive (the keepalive keystone). When on, the
 /// Present hook (`present_hook`, render thread, every frame, fires during the loading screen) drives the
@@ -170,14 +170,15 @@ pub(crate) fn portrait_render_drive_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
-    // PORTRAITS RETIRED (2026-07-03): default OFF, moving to a stats panel; env/file force-on kept.
-    matches!(
-        std::env::var("ER_EFFECTS_PORTRAIT_RENDER_DRIVE").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-portrait-render-drive.txt")
-        .exists()
+    !save_override_telemetry_only()
+        || matches!(
+            std::env::var("ER_EFFECTS_PORTRAIT_RENDER_DRIVE").as_deref(),
+            Ok("1")
+        )
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-portrait-render-drive.txt")
+            .exists()
 }
 /// DEFAULT-OFF gate for the portrait LOOK-AT lever (head/eyes follow the mouse cursor). When on, the
 /// per-tick `force_profile_render_tick` reaches the loaded character's Havok pose holder and rotates the
@@ -195,14 +196,15 @@ pub(crate) fn portrait_lookat_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
-    // PORTRAITS RETIRED (2026-07-03): default OFF, moving to a stats panel; env/file force-on kept.
-    matches!(
-        std::env::var("ER_EFFECTS_PORTRAIT_LOOKAT").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-portrait-lookat.txt")
-        .exists()
+    !save_override_telemetry_only()
+        || matches!(
+            std::env::var("ER_EFFECTS_PORTRAIT_LOOKAT").as_deref(),
+            Ok("1")
+        )
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-portrait-lookat.txt")
+            .exists()
 }
 /// DEFAULT-OFF experiment: suppress the game's `CSFakeLoadingScreenImp` cover plate during map loads so the
 /// world renders uncovered ("no loading screen -- watch it pop in"). While set, the game task clamps the
