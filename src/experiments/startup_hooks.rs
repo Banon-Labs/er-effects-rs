@@ -6,7 +6,7 @@ use std::{
     ffi::{CStr, c_void},
     fmt::Write as _,
     fs,
-    path::PathBuf,
+    path::Path,
     sync::{
         Arc, Mutex, Once, OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -37,10 +37,13 @@ use windows::{
             Threading::GetCurrentProcessId,
         },
         UI::{
-            Shell::ShellExecuteW,
+            Controls::Dialogs::{
+                GetOpenFileNameW, OFN_DONTADDTORECENT, OFN_EXPLORER, OFN_FILEMUSTEXIST,
+                OFN_HIDEREADONLY, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+            },
             WindowsAndMessaging::{
                 ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-                SW_SHOWNORMAL, WM_KEYDOWN, WM_KEYUP,
+                WM_KEYDOWN, WM_KEYUP,
             },
         },
     },
@@ -5323,21 +5326,73 @@ const PROFILE_SUMMARY_RECORD_STRIDE: usize = 0x2a0;
 const PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET: usize = 0x8;
 const PROFILE_SUMMARY_TOTAL_BYTES: usize =
     PROFILE_SUMMARY_RECORD_BASE + PROFILE_SUMMARY_RECORD_STRIDE * TITLE_PROFILE_SLOT_COUNT;
-const SAVE_BODY_PLAYER_GAME_DATA_OFFSET: usize = 0xebae;
 const PROFILE_SUMMARY_NAME_BYTES: usize = 0x22;
 const PROFILE_SUMMARY_LEVEL_OFFSET: usize = 0x24;
 const PROFILE_SUMMARY_PLAYTIME_OFFSET: usize = 0x28;
 const PROFILE_SUMMARY_RUNE_MEMORY_OFFSET: usize = 0x2c;
+const PROFILE_SUMMARY_MAP_OFFSET: usize = 0x30;
 const PROFILE_SUMMARY_FACE_DATA_OFFSET: usize = 0x38;
 const PROFILE_SUMMARY_CHR_ASM_OFFSET: usize = 0x1a8;
 const PROFILE_SUMMARY_GENDER_OFFSET: usize = 0x290;
 const PROFILE_SUMMARY_ARCHETYPE_OFFSET: usize = 0x291;
 const PROFILE_SUMMARY_STARTING_GIFT_OFFSET: usize = 0x292;
 const PROFILE_SUMMARY_FIELD_C4_OFFSET: usize = 0x293;
-const FACE_DATA_COPY_FROM_BUFFER_RVA: usize = 0x00252f70;
-const CHR_ASM_COPY_RVA: usize = 0x00245c00;
+const SAVE_SLOT_MAP_OFFSET: usize = 0x14;
+const SAVE_FACE_MAGIC: &[u8; 4] = b"FACE";
+const SAVE_FACE_DATA_BUFFER_SIZE: usize = 0x120;
+const SAVE_PGD_SCAN_LEADING_FACE_COUNT: usize = 4;
+const SAVE_PGD_FACE_DELTA_WINDOW_LOW: usize = 0xa000;
+const SAVE_PGD_FACE_DELTA_WINDOW_HIGH: usize = 0xa600;
+const SAVE_PLAYER_GAME_DATA_MIN_SIZE: usize = 0x1b0;
+const SAVE_PGD_HEALTH_OFFSET: usize = 0x08;
+const SAVE_PGD_MAX_HEALTH_OFFSET: usize = 0x0c;
+const SAVE_PGD_BASE_MAX_HEALTH_OFFSET: usize = 0x10;
+const SAVE_PGD_STAT_BASE_OFFSET: usize = 0x34;
+const SAVE_PGD_STAT_COUNT: usize = 8;
+const SAVE_PGD_LEVEL_OFFSET: usize = 0x60;
+const SAVE_PGD_RUNE_MEMORY_OFFSET: usize = 0x68;
+const SAVE_PGD_CHARACTER_NAME_OFFSET: usize = 0x94;
+const SAVE_PGD_CHARACTER_NAME_UNITS: usize = 0x10;
+const SAVE_PGD_CHARACTER_NAME_BYTES: usize = SAVE_PGD_CHARACTER_NAME_UNITS * 2;
+const SAVE_PGD_GENDER_OFFSET: usize = 0xb6;
+const SAVE_PGD_MAX_CRIMSON_FLASK_OFFSET: usize = 0xf9;
+const SAVE_PGD_MAX_CERULEAN_FLASK_OFFSET: usize = 0xfa;
+const SAVE_SPEFFECT_COUNT: usize = 0x0d;
+const SAVE_SPEFFECT_SIZE: usize = 0x10;
+const SAVE_CHR_ASM_EQUIPMENT_SIZE: usize = 0x58;
+const SAVE_ARM_STYLE_ACTIVE_WEAPON_SLOTS_SIZE: usize = 0x1c;
+const SAVE_INVENTORY_HELD_SIZE: usize = 0x9010;
+const SAVE_EQUIP_MAGIC_SIZE: usize = 0x74;
+const SAVE_EQUIP_ITEM_SIZE: usize = 0x8c;
+const SAVE_GESTURE_EQUIP_SIZE: usize = 0x18;
+const SAVE_PROJECTILE_ENTRY_SIZE: usize = 0x08;
+const SAVE_PROJECTILE_COUNT_MAX: u32 = 0x400;
+const SAVE_EQUIPPED_ARMAMENTS_AND_ITEMS_SIZE: usize = 0x9c;
+const SAVE_PHYSIC_EQUIP_SIZE: usize = 0x0c;
+const SAVE_FACE_DATA_FULL_SIZE: usize = 0x12f;
+const SAVE_INVENTORY_STORAGE_SIZE: usize = 0x6010;
+const SAVE_GESTURE_GAME_DATA_SIZE: usize = 0x100;
+const SAVE_REGION_COUNT_MAX: u32 = 0x400;
+const SAVE_REGION_ID_SIZE: usize = 0x04;
+const SAVE_RIDE_GAME_DATA_SIZE: usize = 0x28;
+const SAVE_CONTROL_BYTE_SIZE: usize = 0x01;
+const SAVE_BLOODSTAIN_DATA_SIZE: usize = 0x44;
+const SAVE_MENU_PROFILE_SAVE_LOAD_SIZE: usize = 0x1008;
+const SAVE_TROPHY_EQUIP_DATA_SIZE: usize = 0x34;
+const SAVE_GAITEM_GAME_DATA_SIZE: usize = 0x1b588;
+const SAVE_TUTORIAL_DATA_SIZE: usize = 0x408;
+const SAVE_GLOBAL_GAME_MAN_FLAGS_SIZE: usize = 0x03;
+const SAVE_TOTAL_DEATHS_SIZE: usize = 0x04;
+const SAVE_CHARACTER_TYPE_SIZE: usize = 0x04;
+const SAVE_ONLINE_SESSION_FLAG_SIZE: usize = 0x01;
+const SAVE_ONLINE_CHARACTER_TYPE_FLAG_SIZE: usize = 0x04;
+const SAVE_LAST_RESTED_GRACE_SIZE: usize = 0x04;
+const SAVE_NOT_ALONE_FLAG_SIZE: usize = 0x01;
+const SAVE_INGAME_TIMER_PADDING_AFTER_NOT_ALONE: usize = 0x04;
+const SAVE_INGAME_TIMER_TICKS_MAX: u32 = 999 * 60 * 60 / 10 + 59 * 60 / 10 + 59 / 10 + 1;
 const SYSTEM_QUIT_SAVE_SWAP_POLL_INTERVAL_TICKS: usize = 30;
 static SYSTEM_QUIT_SAVE_SWAP_POLL_TICK: AtomicUsize = AtomicUsize::new(0);
+static PROFILE_STATS_PREVIEW_ROW_CURSOR: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Default)]
 struct SystemQuitSaveSwapState {
@@ -5350,6 +5405,7 @@ struct SystemQuitSaveSwapState {
     candidate_bytes: Vec<u8>,
     candidate_hash: u64,
     candidate_slot_mask: usize,
+    candidate_stats_utf16: Vec<Vec<u16>>,
     preview_applied: bool,
     committed: bool,
     summary_ptr: usize,
@@ -5453,77 +5509,294 @@ unsafe fn system_quit_profile_summary_ptr() -> usize {
     unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(null)
 }
 
-fn system_quit_body_has_name(body: &[u8]) -> bool {
-    let name = SAVE_BODY_PLAYER_GAME_DATA_OFFSET + PGD_NAME_9C_OFFSET;
-    let end = name + PROFILE_SUMMARY_NAME_BYTES;
-    if body.len() < end {
-        return false;
-    }
-    body[name..end].chunks_exact(2).any(|u| u != [0, 0])
+#[derive(Clone, Copy)]
+struct SerializedSaveSlot<'a> {
+    body: &'a [u8],
 }
 
-unsafe fn system_quit_write_profile_summary_slot_from_body(
-    base: usize,
-    profile_summary: usize,
-    slot: usize,
-    body: &[u8],
-) -> bool {
-    let min_name_len =
-        SAVE_BODY_PLAYER_GAME_DATA_OFFSET + PGD_NAME_9C_OFFSET + PROFILE_SUMMARY_NAME_BYTES;
-    let min_face_len = SAVE_BODY_PLAYER_GAME_DATA_OFFSET
-        + PGD_FACE_DATA_OFFSET
-        + FACE_DATA_BUFFER_OFFSET
-        + FACE_DATA_BUFFER_TOTAL_SIZE;
-    let min_chr_asm_len = SAVE_BODY_PLAYER_GAME_DATA_OFFSET
-        + PGD_EQUIP_GAME_DATA_OFFSET
-        + EQUIP_GAME_DATA_CHR_ASM_OFFSET
-        + CHR_ASM_SIZE;
-    if body.len() < min_name_len || body.len() < min_face_len || body.len() < min_chr_asm_len {
-        return false;
+#[derive(Clone, Copy)]
+struct SerializedPlayerGameData<'a> {
+    body: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> SerializedSaveSlot<'a> {
+    fn new(body: &'a [u8]) -> Self {
+        Self { body }
     }
-    if !system_quit_body_has_name(body) {
-        return false;
+
+    fn saved_map(self) -> Option<i32> {
+        self.read_i32(SAVE_SLOT_MAP_OFFSET)
     }
-    let pgd = body
-        .as_ptr()
-        .wrapping_add(SAVE_BODY_PLAYER_GAME_DATA_OFFSET) as usize;
-    let slot_data =
-        profile_summary + PROFILE_SUMMARY_RECORD_BASE + slot * PROFILE_SUMMARY_RECORD_STRIDE;
-    unsafe {
-        core::ptr::write_bytes(slot_data as *mut u8, 0, PROFILE_SUMMARY_RECORD_STRIDE);
-        core::ptr::copy_nonoverlapping(
-            (pgd + PGD_NAME_9C_OFFSET) as *const u8,
-            slot_data as *mut u8,
-            PROFILE_SUMMARY_NAME_BYTES,
-        );
-        *(slot_data.wrapping_add(PROFILE_SUMMARY_LEVEL_OFFSET) as *mut i32) =
-            *((pgd + PGD_LEVEL_68_OFFSET) as *const i32);
-        *(slot_data.wrapping_add(PROFILE_SUMMARY_PLAYTIME_OFFSET) as *mut u32) = 0;
-        *(slot_data.wrapping_add(PROFILE_SUMMARY_RUNE_MEMORY_OFFSET) as *mut i32) =
-            *((pgd + PGD_RUNE_MEMORY_70_OFFSET) as *const i32);
-        let copy_face_data_from_buffer: unsafe extern "system" fn(usize, usize) =
-            std::mem::transmute(base + FACE_DATA_COPY_FROM_BUFFER_RVA);
-        let copy_chr_asm: unsafe extern "system" fn(usize, usize) -> usize =
-            std::mem::transmute(base + CHR_ASM_COPY_RVA);
-        copy_face_data_from_buffer(
-            slot_data.wrapping_add(PROFILE_SUMMARY_FACE_DATA_OFFSET),
-            pgd + PGD_FACE_DATA_OFFSET + FACE_DATA_BUFFER_OFFSET,
-        );
-        copy_chr_asm(
-            slot_data.wrapping_add(PROFILE_SUMMARY_CHR_ASM_OFFSET),
-            pgd + PGD_EQUIP_GAME_DATA_OFFSET + EQUIP_GAME_DATA_CHR_ASM_OFFSET,
-        );
-        *(slot_data.wrapping_add(PROFILE_SUMMARY_GENDER_OFFSET) as *mut u8) =
-            *((pgd + PGD_GENDER_BE_OFFSET) as *const u8);
-        *(slot_data.wrapping_add(PROFILE_SUMMARY_ARCHETYPE_OFFSET) as *mut u8) =
-            *((pgd + PGD_ARCHETYPE_BF_OFFSET) as *const u8);
-        *(slot_data.wrapping_add(PROFILE_SUMMARY_STARTING_GIFT_OFFSET) as *mut u8) =
-            *((pgd + PGD_STARTING_GIFT_C3_OFFSET) as *const u8);
-        *(slot_data.wrapping_add(PROFILE_SUMMARY_FIELD_C4_OFFSET) as *mut u8) =
-            *((pgd + 0xc4) as *const u8);
-        *(profile_summary.wrapping_add(PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot) as *mut u8) = 1;
+
+    fn read_u32(self, offset: usize) -> Option<u32> {
+        self.body
+            .get(offset..offset + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
-    true
+
+    fn read_i32(self, offset: usize) -> Option<i32> {
+        self.body
+            .get(offset..offset + 4)
+            .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    fn add_offset(offset: &mut usize, len: usize) -> Option<()> {
+        *offset = offset.checked_add(len)?;
+        Some(())
+    }
+
+    fn add_counted_region(
+        &self,
+        offset: &mut usize,
+        entry_size: usize,
+        max_count: u32,
+    ) -> Option<()> {
+        let count = self.read_u32(*offset)?;
+        if count > max_count {
+            return None;
+        }
+        let bytes = (count as usize).checked_mul(entry_size)?.checked_add(4)?;
+        Self::add_offset(offset, bytes)
+    }
+
+    fn in_game_timer_ticks(self, player_game_data: SerializedPlayerGameData<'a>) -> Option<u32> {
+        let mut offset = player_game_data.offset;
+        Self::add_offset(&mut offset, SAVE_PLAYER_GAME_DATA_MIN_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_SPEFFECT_COUNT * SAVE_SPEFFECT_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_CHR_ASM_EQUIPMENT_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_ARM_STYLE_ACTIVE_WEAPON_SLOTS_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_CHR_ASM_EQUIPMENT_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_CHR_ASM_EQUIPMENT_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_INVENTORY_HELD_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_EQUIP_MAGIC_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_EQUIP_ITEM_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_GESTURE_EQUIP_SIZE)?;
+        self.add_counted_region(
+            &mut offset,
+            SAVE_PROJECTILE_ENTRY_SIZE,
+            SAVE_PROJECTILE_COUNT_MAX,
+        )?;
+        Self::add_offset(&mut offset, SAVE_EQUIPPED_ARMAMENTS_AND_ITEMS_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_PHYSIC_EQUIP_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_FACE_DATA_FULL_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_INVENTORY_STORAGE_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_GESTURE_GAME_DATA_SIZE)?;
+        self.add_counted_region(&mut offset, SAVE_REGION_ID_SIZE, SAVE_REGION_COUNT_MAX)?;
+        Self::add_offset(&mut offset, SAVE_RIDE_GAME_DATA_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_CONTROL_BYTE_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_BLOODSTAIN_DATA_SIZE)?;
+        Self::add_offset(&mut offset, 4)?;
+        Self::add_offset(&mut offset, 4)?;
+        Self::add_offset(&mut offset, SAVE_MENU_PROFILE_SAVE_LOAD_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_TROPHY_EQUIP_DATA_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_GAITEM_GAME_DATA_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_TUTORIAL_DATA_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_GLOBAL_GAME_MAN_FLAGS_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_TOTAL_DEATHS_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_CHARACTER_TYPE_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_ONLINE_SESSION_FLAG_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_ONLINE_CHARACTER_TYPE_FLAG_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_LAST_RESTED_GRACE_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_NOT_ALONE_FLAG_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_INGAME_TIMER_PADDING_AFTER_NOT_ALONE)?;
+        let timer = self.read_u32(offset)?;
+        (timer <= SAVE_INGAME_TIMER_TICKS_MAX).then_some(timer)
+    }
+
+    fn face_magic_offsets(self) -> impl Iterator<Item = usize> + 'a {
+        self.body
+            .windows(SAVE_FACE_MAGIC.len())
+            .enumerate()
+            .filter_map(|(offset, window)| (window == SAVE_FACE_MAGIC).then_some(offset))
+            .take(SAVE_PGD_SCAN_LEADING_FACE_COUNT)
+    }
+
+    fn player_game_data(self) -> Option<SerializedPlayerGameData<'a>> {
+        let mut best: Option<SerializedPlayerGameData<'a>> = None;
+        let mut best_score = 0usize;
+        for face_offset in self.face_magic_offsets() {
+            let start = face_offset.saturating_sub(SAVE_PGD_FACE_DELTA_WINDOW_HIGH);
+            let stop = face_offset.saturating_sub(SAVE_PGD_FACE_DELTA_WINDOW_LOW);
+            for offset in start..=stop {
+                let candidate = SerializedPlayerGameData {
+                    body: self.body,
+                    offset,
+                };
+                if !candidate.is_plausible_core() {
+                    continue;
+                }
+                let score = candidate.score();
+                if score > best_score {
+                    best_score = score;
+                    best = Some(candidate);
+                }
+            }
+        }
+        best
+    }
+}
+
+impl<'a> SerializedPlayerGameData<'a> {
+    fn field(&self, offset: usize, len: usize) -> Option<&'a [u8]> {
+        self.body
+            .get(self.offset + offset..self.offset + offset + len)
+    }
+
+    fn read_u32(&self, offset: usize) -> Option<u32> {
+        self.field(offset, 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    fn read_i32(&self, offset: usize) -> Option<i32> {
+        self.field(offset, 4)
+            .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    fn read_u8(&self, offset: usize) -> Option<u8> {
+        self.field(offset, 1).map(|b| b[0])
+    }
+
+    fn name_bytes(&self) -> Option<&'a [u8]> {
+        self.field(
+            SAVE_PGD_CHARACTER_NAME_OFFSET,
+            SAVE_PGD_CHARACTER_NAME_BYTES,
+        )
+    }
+
+    fn name_units(&self) -> Option<Vec<u16>> {
+        let bytes = self.name_bytes()?;
+        Some(
+            bytes
+                .chunks_exact(2)
+                .map(|u| u16::from_le_bytes([u[0], u[1]]))
+                .take_while(|u| *u != 0)
+                .collect(),
+        )
+    }
+
+    fn has_real_name(&self) -> bool {
+        self.name_units().is_some_and(|units| {
+            !units.is_empty()
+                && units.iter().any(|u| *u != b'_' as u16)
+                && String::from_utf16(&units)
+                    .ok()
+                    .is_some_and(|s| s.chars().all(|c| !c.is_control()))
+        })
+    }
+
+    fn stats(&self) -> Option<[u32; SAVE_PGD_STAT_COUNT]> {
+        let mut stats = [0u32; SAVE_PGD_STAT_COUNT];
+        for (index, stat) in stats.iter_mut().enumerate() {
+            *stat = self.read_u32(SAVE_PGD_STAT_BASE_OFFSET + index * 4)?;
+        }
+        Some(stats)
+    }
+
+    fn is_plausible_core(&self) -> bool {
+        if self.offset + SAVE_PLAYER_GAME_DATA_MIN_SIZE > self.body.len() || !self.has_real_name() {
+            return false;
+        }
+        let Some(level) = self.read_u32(SAVE_PGD_LEVEL_OFFSET) else {
+            return false;
+        };
+        let Some(health) = self.read_u32(SAVE_PGD_HEALTH_OFFSET) else {
+            return false;
+        };
+        let Some(max_health) = self.read_u32(SAVE_PGD_MAX_HEALTH_OFFSET) else {
+            return false;
+        };
+        let Some(base_max_health) = self.read_u32(SAVE_PGD_BASE_MAX_HEALTH_OFFSET) else {
+            return false;
+        };
+        let Some(gender) = self.read_u8(SAVE_PGD_GENDER_OFFSET) else {
+            return false;
+        };
+        let Some(max_crimson) = self.read_u8(SAVE_PGD_MAX_CRIMSON_FLASK_OFFSET) else {
+            return false;
+        };
+        let Some(max_cerulean) = self.read_u8(SAVE_PGD_MAX_CERULEAN_FLASK_OFFSET) else {
+            return false;
+        };
+        let Some(stats) = self.stats() else {
+            return false;
+        };
+        (1..=713).contains(&level)
+            && (1..=100_000).contains(&health)
+            && (1..=100_000).contains(&max_health)
+            && (1..=100_000).contains(&base_max_health)
+            && health <= max_health
+            && base_max_health <= max_health
+            && gender <= 1
+            && max_crimson <= 14
+            && max_cerulean <= 14
+            && stats.iter().all(|stat| (1..=99).contains(stat))
+    }
+
+    fn score(&self) -> usize {
+        self.name_units().map_or(0, |units| units.len())
+            + self
+                .stats()
+                .map_or(0, |stats| stats.iter().filter(|stat| **stat > 0).count())
+            + usize::from(self.read_u32(SAVE_PGD_LEVEL_OFFSET).unwrap_or(0) > 0)
+    }
+
+    fn stats_text_utf16(&self) -> Option<Vec<u16>> {
+        const LABELS: [&str; SAVE_PGD_STAT_COUNT] =
+            ["VIG", "MND", "END", "STR", "DEX", "INT", "FAI", "ARC"];
+        let stats = self.stats()?;
+        let mut s = String::new();
+        for (i, label) in LABELS.iter().enumerate() {
+            if i > 0 {
+                s.push(' ');
+            }
+            s.push_str(label);
+            s.push(' ');
+            s.push_str(&stats[i].to_string());
+        }
+        Some(s.encode_utf16().chain(core::iter::once(0)).collect())
+    }
+
+    unsafe fn write_profile_summary_record(
+        &self,
+        profile_summary: usize,
+        slot: usize,
+        saved_map: i32,
+        playtime_ticks: u32,
+        fallback_record: Option<&[u8]>,
+    ) -> bool {
+        let Some(name_bytes) = self.name_bytes() else {
+            return false;
+        };
+        let slot_data =
+            profile_summary + PROFILE_SUMMARY_RECORD_BASE + slot * PROFILE_SUMMARY_RECORD_STRIDE;
+        unsafe {
+            if let Some(record) = fallback_record {
+                core::ptr::copy_nonoverlapping(
+                    record.as_ptr(),
+                    slot_data as *mut u8,
+                    PROFILE_SUMMARY_RECORD_STRIDE,
+                );
+            } else {
+                core::ptr::write_bytes(slot_data as *mut u8, 0, PROFILE_SUMMARY_RECORD_STRIDE);
+            }
+            core::ptr::write_bytes(slot_data as *mut u8, 0, PROFILE_SUMMARY_NAME_BYTES);
+            core::ptr::copy_nonoverlapping(
+                name_bytes.as_ptr(),
+                slot_data as *mut u8,
+                name_bytes.len().min(PROFILE_SUMMARY_NAME_BYTES),
+            );
+            *(slot_data.wrapping_add(PROFILE_SUMMARY_LEVEL_OFFSET) as *mut i32) =
+                self.read_i32(SAVE_PGD_LEVEL_OFFSET).unwrap_or(0);
+            *(slot_data.wrapping_add(PROFILE_SUMMARY_PLAYTIME_OFFSET) as *mut u32) = playtime_ticks;
+            *(slot_data.wrapping_add(PROFILE_SUMMARY_RUNE_MEMORY_OFFSET) as *mut i32) =
+                self.read_i32(SAVE_PGD_RUNE_MEMORY_OFFSET).unwrap_or(0);
+            *(slot_data.wrapping_add(PROFILE_SUMMARY_MAP_OFFSET) as *mut i32) = saved_map;
+            *(profile_summary.wrapping_add(PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot)
+                as *mut u8) = 1;
+        }
+        true
+    }
 }
 
 unsafe fn system_quit_apply_foreign_profile_summary_preview(base: usize, bytes: &[u8]) -> usize {
@@ -5542,6 +5815,14 @@ unsafe fn system_quit_apply_foreign_profile_summary_preview(base: usize, bytes: 
             core::slice::from_raw_parts(summary as *const u8, PROFILE_SUMMARY_TOTAL_BYTES).to_vec()
         };
     }
+    let summary_snapshot = st.summary_snapshot.clone();
+    let fallback_slot = (0..TITLE_PROFILE_SLOT_COUNT).find(|slot| {
+        summary_snapshot
+            .get(PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + *slot)
+            .copied()
+            .unwrap_or(0)
+            != 0
+    });
     unsafe {
         for slot in 0..TITLE_PROFILE_SLOT_COUNT {
             core::ptr::write_bytes(
@@ -5556,16 +5837,52 @@ unsafe fn system_quit_apply_foreign_profile_summary_preview(base: usize, bytes: 
     drop(st);
 
     let mut mask = 0usize;
+    let mut preview_stats = vec![Vec::new(); TITLE_PROFILE_SLOT_COUNT];
     for slot in 0..TITLE_PROFILE_SLOT_COUNT {
         if let Ok(body) = er_save_loader::bnd4::slot_body(bytes, slot) {
+            let slot_body = SerializedSaveSlot::new(body);
+            let Some(pgd) = slot_body.player_game_data() else {
+                continue;
+            };
+            let Some(saved_map) = slot_body.saved_map() else {
+                continue;
+            };
+            let fallback_src_slot = if summary_snapshot
+                .get(PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot)
+                .copied()
+                .unwrap_or(0)
+                != 0
+            {
+                Some(slot)
+            } else {
+                fallback_slot
+            };
+            let fallback = fallback_src_slot.and_then(|src_slot| {
+                let start = PROFILE_SUMMARY_RECORD_BASE + src_slot * PROFILE_SUMMARY_RECORD_STRIDE;
+                summary_snapshot.get(start..start + PROFILE_SUMMARY_RECORD_STRIDE)
+            });
+            let playtime_ticks = slot_body.in_game_timer_ticks(pgd).unwrap_or(0);
             if unsafe {
-                system_quit_write_profile_summary_slot_from_body(base, summary, slot, body)
+                pgd.write_profile_summary_record(summary, slot, saved_map, playtime_ticks, fallback)
             } {
+                append_autoload_debug(format_args!(
+                    "system-quit-load-save-profiles: preview slot {slot} playtime_ticks={playtime_ticks}"
+                ));
+                if let Some(stats) = pgd.stats_text_utf16() {
+                    preview_stats[slot] = stats;
+                }
                 mask |= 1usize << slot;
             }
         }
     }
     if mask != 0 {
+        {
+            let mut st = system_quit_save_swap_lock();
+            st.candidate_slot_mask = mask;
+            st.candidate_stats_utf16 = preview_stats;
+            st.preview_applied = true;
+        }
+        PROFILE_STATS_PREVIEW_ROW_CURSOR.store(0, Ordering::SeqCst);
         let refresh: unsafe extern "system" fn() =
             unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
         unsafe { refresh() };
@@ -9490,7 +9807,7 @@ fn system_quit_env_save_dir() -> Result<String, &'static str> {
     Ok(dir.to_owned())
 }
 
-fn system_quit_path_for_shell(path: &str) -> Vec<u16> {
+fn system_quit_path_for_windows(path: &str) -> Vec<u16> {
     let mut win = if path.starts_with('/') {
         format!("Z:{}", path.replace('/', "\\"))
     } else {
@@ -9502,13 +9819,32 @@ fn system_quit_path_for_shell(path: &str) -> Vec<u16> {
     wide_z(&win)
 }
 
+fn system_quit_path_from_windows_picker(path: &[u16]) -> Option<String> {
+    let end = path.iter().position(|c| *c == 0).unwrap_or(path.len());
+    if end == 0 {
+        return None;
+    }
+    String::from_utf16(&path[..end]).ok()
+}
+
+fn system_quit_windows_path_for_log(path: &str) -> String {
+    if let Some(rest) = path
+        .strip_prefix("Z:\\")
+        .or_else(|| path.strip_prefix("z:\\"))
+    {
+        format!("/{}", rest.replace('\\', "/"))
+    } else {
+        path.to_owned()
+    }
+}
+
 unsafe fn system_quit_open_env_save_dir() -> bool {
     let save_path = match system_quit_env_save_path() {
         Ok(path) => path,
         Err(reason) => {
             SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "system-quit-open-save-dir: refused to open save directory -- {reason}"
+                "system-quit-load-save-profiles: refused to open picker -- {reason}"
             ));
             return false;
         }
@@ -9518,87 +9854,272 @@ unsafe fn system_quit_open_env_save_dir() -> bool {
         Err(reason) => {
             SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "system-quit-open-save-dir: refused to open save directory -- {reason}"
+                "system-quit-load-save-profiles: refused to open picker -- {reason}"
             ));
             return false;
         }
     };
-    if !std::path::Path::new(&dir).is_dir() {
+    if !Path::new(&dir).is_dir() {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "system-quit-open-save-dir: refused to open missing/non-directory save dir '{dir}'"
+            "system-quit-load-save-profiles: refused to open picker for missing/non-directory save dir '{dir}'"
         ));
         return false;
     }
+    unsafe { system_quit_save_swap_restore_profile_summary("load-save-profiles-reopen") };
     if !system_quit_save_swap_arm_original(&save_path) {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
         return false;
     }
-    let operation = wide_z("open");
-    let dir_w = system_quit_path_for_shell(&dir);
-    let result = unsafe {
-        ShellExecuteW(
-            None,
-            PCWSTR::from_raw(operation.as_ptr()),
-            PCWSTR::from_raw(dir_w.as_ptr()),
-            PCWSTR::null(),
-            PCWSTR::null(),
-            SW_SHOWNORMAL,
-        )
+
+    let initial_dir_w = system_quit_path_for_windows(&dir);
+    let title_w = wide_z("Load Save Profiles");
+    let filter_w = wide_z("Elden Ring save (*.sl2)\0*.sl2\0All files (*.*)\0*.*\0");
+    let mut file_buf = [0u16; 1024];
+    let mut ofn = OPENFILENAMEW {
+        lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
+        lpstrFilter: PCWSTR::from_raw(filter_w.as_ptr()),
+        lpstrFile: windows::core::PWSTR::from_raw(file_buf.as_mut_ptr()),
+        nMaxFile: file_buf.len() as u32,
+        lpstrInitialDir: PCWSTR::from_raw(initial_dir_w.as_ptr()),
+        lpstrTitle: PCWSTR::from_raw(title_w.as_ptr()),
+        Flags: OFN_EXPLORER
+            | OFN_FILEMUSTEXIST
+            | OFN_PATHMUSTEXIST
+            | OFN_HIDEREADONLY
+            | OFN_NOCHANGEDIR
+            | OFN_DONTADDTORECENT,
+        ..Default::default()
     };
-    let code = result.0 as isize;
-    if code > 32 {
-        SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT.fetch_add(1, Ordering::SeqCst);
+    let picked = unsafe { GetOpenFileNameW(&mut ofn).as_bool() };
+    if !picked {
         append_autoload_debug(format_args!(
-            "system-quit-open-save-dir: ShellExecuteW(open) dir='{dir}' returned {code}"
+            "system-quit-load-save-profiles: picker cancelled/no selection dir='{dir}'"
         ));
-        true
-    } else {
+        return false;
+    }
+    let Some(selected_path) = system_quit_path_from_windows_picker(&file_buf) else {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "system-quit-open-save-dir: ShellExecuteW(open) FAILED code={code} dir='{dir}'"
-        ));
-        false
-    }
-}
-
-unsafe fn system_quit_format_literal_menu_string(out: usize, text: &str, text_id: u32) -> bool {
-    let Ok(format_addr) = game_rva(MSG_REPOSITORY_FORMAT_RVA) else {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: failed to resolve MsgRepository::Format rva 0x{MSG_REPOSITORY_FORMAT_RVA:x}; cannot build literal label '{text}'"
+            "system-quit-load-save-profiles: picker returned an empty path"
         ));
         return false;
     };
-    let format_fn: unsafe extern "system" fn(usize, usize, u32, usize, usize) -> usize =
-        unsafe { std::mem::transmute(format_addr) };
-    let text_w = wide_z(text);
-    let fmg_name_w = wide_z("ER_Effects");
-    let abbrev_w = wide_z("ERFX");
-    unsafe {
-        format_fn(
-            out,
-            text_w.as_ptr() as usize,
-            text_id,
-            fmg_name_w.as_ptr() as usize,
-            abbrev_w.as_ptr() as usize,
-        )
+    let selected_log = system_quit_windows_path_for_log(&selected_path);
+    if !Path::new(&selected_path).is_file() {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-load-save-profiles: selected path is not a file '{}'",
+            selected_log
+        ));
+        return false;
+    }
+    let Ok(bytes) = fs::read(&selected_path) else {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-load-save-profiles: failed to read selected save '{}'",
+            selected_log
+        ));
+        return false;
     };
+    let len = bytes.len() as u64;
+    let hash = system_quit_hash_bytes(&bytes);
+    if er_save_loader::bnd4::parse_entries(&bytes).is_err() {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-load-save-profiles: selected save is not a valid BND4 '{}' len={len} hash=0x{hash:016x}",
+            selected_log
+        ));
+        return false;
+    }
+    let Ok(base) = game_module_base() else {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-load-save-profiles: selected save '{}' is valid but game module base is unavailable",
+            selected_log
+        ));
+        return false;
+    };
+    let mask = unsafe { system_quit_apply_foreign_profile_summary_preview(base, &bytes) };
+    if mask == 0 {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-load-save-profiles: selected save had no readable character slots '{}' len={len} hash=0x{hash:016x}",
+            selected_log
+        ));
+        return false;
+    }
+    {
+        let mut st = system_quit_save_swap_lock();
+        st.candidate_bytes = bytes;
+        st.candidate_hash = hash;
+        st.candidate_slot_mask = mask;
+        st.preview_applied = true;
+    }
+    SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT.fetch_add(1, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-load-save-profiles: applied selected save preview '{}' len={len} hash=0x{hash:016x} slot_mask=0x{mask:x}; staged active save remains '{}' until a foreign slot is selected",
+        selected_log, save_path
+    ));
     true
 }
 
-unsafe fn system_quit_build_literal_label_component(
+unsafe fn system_quit_init_menu_string_from_static_wide(out: usize, text: &'static [u16]) -> bool {
+    let Ok(ctor_addr) = game_rva(MENU_STRING_FROM_WIDE_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: failed to resolve MenuString ctor rva 0x{MENU_STRING_FROM_WIDE_RVA:x}; cannot build static label"
+        ));
+        return false;
+    };
+    let ctor: unsafe extern "system" fn(usize, usize) -> usize =
+        unsafe { std::mem::transmute(ctor_addr) };
+    unsafe { ctor(out, text.as_ptr() as usize) };
+    true
+}
+
+unsafe fn system_quit_build_static_label_component(
     out: usize,
-    label: &str,
-    help: &str,
-    text_id: u32,
+    label: &'static [u16],
+    help: &'static [u16],
 ) -> bool {
     unsafe { std::ptr::write_bytes(out as *mut u8, 0, MENU_HELP_LABEL_SIZE) };
-    let label_ok = unsafe { system_quit_format_literal_menu_string(out, label, text_id) };
+    let label_ok = unsafe { system_quit_init_menu_string_from_static_wide(out, label) };
     let help_ok = unsafe {
-        system_quit_format_literal_menu_string(out + MENU_HELP_LABEL_HELP_OFFSET, help, text_id + 1)
+        system_quit_init_menu_string_from_static_wide(out + MENU_HELP_LABEL_HELP_OFFSET, help)
     };
     label_ok && help_ok
 }
+
+const SYSTEM_QUIT_LOAD_PROFILE_LABEL_W: [u16; 13] = [
+    b'L' as u16,
+    b'o' as u16,
+    b'a' as u16,
+    b'd' as u16,
+    b' ' as u16,
+    b'P' as u16,
+    b'r' as u16,
+    b'o' as u16,
+    b'f' as u16,
+    b'i' as u16,
+    b'l' as u16,
+    b'e' as u16,
+    0,
+];
+
+const SYSTEM_QUIT_LOAD_PROFILE_HELP_W: [u16; 37] = [
+    b'S' as u16,
+    b'e' as u16,
+    b'l' as u16,
+    b'e' as u16,
+    b'c' as u16,
+    b't' as u16,
+    b' ' as u16,
+    b'a' as u16,
+    b' ' as u16,
+    b's' as u16,
+    b't' as u16,
+    b'a' as u16,
+    b'g' as u16,
+    b'e' as u16,
+    b'd' as u16,
+    b' ' as u16,
+    b's' as u16,
+    b'a' as u16,
+    b'v' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b'p' as u16,
+    b'r' as u16,
+    b'o' as u16,
+    b'f' as u16,
+    b'i' as u16,
+    b'l' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b't' as u16,
+    b'o' as u16,
+    b' ' as u16,
+    b'l' as u16,
+    b'o' as u16,
+    b'a' as u16,
+    b'd' as u16,
+    0,
+];
+
+const SYSTEM_QUIT_LOAD_SAVE_PROFILES_LABEL_W: [u16; 19] = [
+    b'L' as u16,
+    b'o' as u16,
+    b'a' as u16,
+    b'd' as u16,
+    b' ' as u16,
+    b'S' as u16,
+    b'a' as u16,
+    b'v' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b'P' as u16,
+    b'r' as u16,
+    b'o' as u16,
+    b'f' as u16,
+    b'i' as u16,
+    b'l' as u16,
+    b'e' as u16,
+    b's' as u16,
+    0,
+];
+
+const SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_W: [u16; 50] = [
+    b'O' as u16,
+    b'p' as u16,
+    b'e' as u16,
+    b'n' as u16,
+    b' ' as u16,
+    b't' as u16,
+    b'h' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b's' as u16,
+    b't' as u16,
+    b'a' as u16,
+    b'g' as u16,
+    b'e' as u16,
+    b'd' as u16,
+    b' ' as u16,
+    b's' as u16,
+    b'a' as u16,
+    b'v' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b'f' as u16,
+    b'o' as u16,
+    b'l' as u16,
+    b'd' as u16,
+    b'e' as u16,
+    b'r' as u16,
+    b' ' as u16,
+    b't' as u16,
+    b'o' as u16,
+    b' ' as u16,
+    b'r' as u16,
+    b'e' as u16,
+    b'p' as u16,
+    b'l' as u16,
+    b'a' as u16,
+    b'c' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b'E' as u16,
+    b'R' as u16,
+    b'0' as u16,
+    b'0' as u16,
+    b'0' as u16,
+    b'0' as u16,
+    b'.' as u16,
+    b's' as u16,
+    b'l' as u16,
+    b'2' as u16,
+    0,
+];
 
 const SYSTEM_QUIT_SAVE_GAME_LABEL_W: [u16; 10] = [
     b'S' as u16,
@@ -9871,39 +10392,35 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
                 != SYSTEM_QUIT_NOOP_ACTION_INSTALLED_YES
             {
                 append_autoload_debug(format_args!(
-                    "system-quit-dup: matched Quit Game call but cloned action hook is not installed; skipping Load Profile/Open Save Folder rows"
+                    "system-quit-dup: matched Quit Game call but cloned action hook is not installed; skipping Load Profile/Load Save Profiles rows"
                 ));
                 return ret;
             }
-            let Ok(linehelp_addr) = game_rva(GET_GR_LINEHELP_ENTRY_RVA) else {
-                append_autoload_debug(format_args!(
-                    "system-quit-dup: failed to resolve GetGR_LineHelp rva 0x{GET_GR_LINEHELP_ENTRY_RVA:x}; skipping cloned rows"
-                ));
-                return ret;
-            };
             let Ok(label_dtor_addr) = game_rva(MENU_HELP_LABEL_DTOR_RVA) else {
                 append_autoload_debug(format_args!(
                     "system-quit-dup: failed to resolve MenuHelpLabelComponent dtor rva 0x{MENU_HELP_LABEL_DTOR_RVA:x}; skipping cloned rows"
                 ));
                 return ret;
             };
-            let get_linehelp: unsafe extern "system" fn(usize, u32) -> usize =
-                unsafe { std::mem::transmute(linehelp_addr) };
             let label_dtor: unsafe extern "system" fn(usize) =
                 unsafe { std::mem::transmute(label_dtor_addr) };
             let mut load_label_storage =
                 std::mem::MaybeUninit::<SystemQuitMenuHelpLabelScratch>::uninit();
             let load_label = load_label_storage.as_mut_ptr() as usize;
-            unsafe {
-                get_linehelp(load_label, SYSTEM_QUIT_LOAD_LINEHELP_ID);
-                get_linehelp(
-                    load_label + MENU_HELP_LABEL_HELP_OFFSET,
-                    SYSTEM_QUIT_LOAD_LINEHELP_ID,
-                );
-            }
-            let load_ret =
-                unsafe { original(dialog, load_label, action_fn, enabled_fn, keyguide_fn) };
-            unsafe { label_dtor(load_label) };
+            let load_label_ok = unsafe {
+                system_quit_build_static_label_component(
+                    load_label,
+                    &SYSTEM_QUIT_LOAD_PROFILE_LABEL_W,
+                    &SYSTEM_QUIT_LOAD_PROFILE_HELP_W,
+                )
+            };
+            let load_ret = if load_label_ok {
+                let r = unsafe { original(dialog, load_label, action_fn, enabled_fn, keyguide_fn) };
+                unsafe { label_dtor(load_label) };
+                r
+            } else {
+                0
+            };
             let after_load = unsafe {
                 safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET)
             }
@@ -9912,11 +10429,10 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
                 std::mem::MaybeUninit::<SystemQuitMenuHelpLabelScratch>::uninit();
             let open_label = open_label_storage.as_mut_ptr() as usize;
             let open_label_ok = unsafe {
-                system_quit_build_literal_label_component(
+                system_quit_build_static_label_component(
                     open_label,
-                    "Open Save Folder",
-                    "Open the staged save folder to replace ER0000.sl2",
-                    0x4552_5300,
+                    &SYSTEM_QUIT_LOAD_SAVE_PROFILES_LABEL_W,
+                    &SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_W,
                 )
             };
             let open_ret = if open_label_ok {
@@ -9970,7 +10486,7 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
             SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE.store(before, Ordering::SeqCst);
             SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER.store(after_open, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "system-quit-dup: added cloned Load Profile + Open Save Folder rows dialog=0x{dialog:x} count {before}->{after_native}->{after_load}->{after_open} ret=0x{ret:x} load_ret=0x{load_ret:x} open_label_ok={open_label_ok} open_ret=0x{open_ret:x} load_row=0x{load_row:x} load_controller=0x{load_controller:x} load_action=0x{load_action:x} open_row=0x{open_row:x} open_controller=0x{open_controller:x} open_action=0x{open_action:x}"
+                "system-quit-dup: added cloned Load Profile + Load Save Profiles rows dialog=0x{dialog:x} count {before}->{after_native}->{after_load}->{after_open} ret=0x{ret:x} load_ret=0x{load_ret:x} open_label_ok={open_label_ok} open_ret=0x{open_ret:x} load_row=0x{load_row:x} load_controller=0x{load_controller:x} load_action=0x{load_action:x} open_row=0x{open_row:x} open_controller=0x{open_controller:x} open_action=0x{open_action:x}"
             ));
         } else {
             append_autoload_debug(format_args!(
@@ -12885,7 +13401,7 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
                     SYSTEM_QUIT_DUPLICATE_INSTALLED
                         .store(SYSTEM_QUIT_DUPLICATE_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "system-quit-dup: hooked AddCancelButton 0x{addr:x}; will clone Quit Game row as Load Profile (GR_LineHelp:{SYSTEM_QUIT_LOAD_LINEHELP_ID}) and Open Save Folder at caller rva 0x{SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA:x}"
+                        "system-quit-dup: hooked AddCancelButton 0x{addr:x}; will clone Quit Game row as Load Profile and Load Save Profiles at caller rva 0x{SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA:x}"
                     ));
                 }
                 status => append_autoload_debug(format_args!(

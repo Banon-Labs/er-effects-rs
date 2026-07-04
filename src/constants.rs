@@ -4841,6 +4841,9 @@ pub(crate) const MSG_REPOSITORY_GET_AND_FORMAT_RVA: u32 = 0x7633d0;
 /// (dump `0x1407639a0` -> live `0x1407638b0`). The GetAndFormat detour delegates here with
 /// process-lifetime UTF-16 literals for the Save Game replacement strings.
 pub(crate) const MSG_REPOSITORY_FORMAT_RVA: u32 = 0x7638b0;
+/// Live/deobf `CS::MenuString::MenuString(MenuString*, wchar_t*)` (dump `0x140675990` ->
+/// live `0x1406758a0`). Stores the raw UTF-16 pointer, so callers must pass process-lifetime data.
+pub(crate) const MENU_STRING_FROM_WIDE_RVA: u32 = 0x6758a0;
 /// FMG IDs for the first System -> Quit Game row and its confirmation dialog.
 pub(crate) const SYSTEM_QUIT_SAVE_GAME_MENU_TEXT_ID: i32 = 110510;
 pub(crate) const SYSTEM_QUIT_SAVE_GAME_LINEHELP_ID: i32 = 110500;

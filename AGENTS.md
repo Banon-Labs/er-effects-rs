@@ -22,6 +22,8 @@ When a runtime probe is explicitly meant to stay live for manual interaction / `
 
 For no-auto-teardown runs intended for the user to inspect or control manually, do **not** enable autopilot/repro drivers, fabricated input, or input-blocking modes unless the user explicitly asks for self-driving. If a probe must drive menus automatically, treat it as an agent-owned runtime experiment with bounded telemetry and do not claim the user is in control. Before saying the user can take over, verify via telemetry that the input block/repro driver has released and that the game process is still alive.
 
+Standing user order (2026-07-04): whenever a new DLL build is ready for runtime validation, tear down any existing `eldenring.exe` first, then relaunch with the fresh DLL. Do not try to validate a newly built DLL in an already-running process.
+
 Do not launch Elden Ring through Steam from agent workflows. Forbidden launch forms include `steam -applaunch 1245620`, `steam://run/1245620`, `steam://rungameid/1245620`, and `xdg-open` or similar wrappers around those URLs. Do not launch `start_protected_game.exe` directly or through Proton/Wine/Steam; that is the protected/EAC launcher, not an approved agent runtime target. Process detection/teardown of stale `start_protected_game.exe` is allowed, but launching it is not. Runtime work must use only an approved, explicitly gated direct/offline `eldenring.exe` probe path.
 
 Do not bundle `ersc.dll`. Seamless Co-op is a compatibility target, but this repo must not copy, move, archive, release-package, or stage `SeamlessCoop/ersc.dll` into me3/product release artifacts or repo `target/` bundles.
