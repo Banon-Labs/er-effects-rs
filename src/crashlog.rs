@@ -2,5 +2,5 @@
 
 #![allow(unused_imports)]
 
-include!("crashlog/chunk_01.rs");
-include!("crashlog/chunk_02.rs");
+include!("crashlog/veh_exit_hooks.rs");
+include!("crashlog/module_resolution.rs");

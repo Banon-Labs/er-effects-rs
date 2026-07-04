@@ -20,6 +20,7 @@ command -v cupcake >/dev/null 2>&1 || { echo "missing required command: cupcake"
 cupcake validate --log-level error
 python3 "$repo_root/scripts/test-cupcake-policies.py"
 python3 "$repo_root/scripts/check-no-lossy-utf8.py"
+python3 "$repo_root/scripts/check-rust-file-sizes.py"
 cargo fmt --manifest-path "$repo_root/Cargo.toml" -- --check
 shellcheck "$repo_root/scripts/stage-autoload-release.sh"
 shellcheck "$repo_root/scripts/run-product-continue-direct-probe.sh"

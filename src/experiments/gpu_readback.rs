@@ -16,7 +16,7 @@
 
 #![allow(unused_imports)]
 
-include!("gpu_readback/chunk_01.rs");
-include!("gpu_readback/chunk_02.rs");
-include!("gpu_readback/chunk_03.rs");
-include!("gpu_readback/chunk_04.rs");
+include!("gpu_readback/resource_readback.rs");
+include!("gpu_readback/cached_depth_readback.rs");
+include!("gpu_readback/depth_mask_upload.rs");
+include!("gpu_readback/overlay_composite.rs");

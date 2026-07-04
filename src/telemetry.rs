@@ -63,5 +63,5 @@ const SEAMLESS_COOP_MARKER: &str = "ersc.dll";
 const RUNTIME_MODE_SEAMLESS: &str = "seamless";
 const RUNTIME_MODE_VANILLA_OR_UNKNOWN: &str = "vanilla_or_unknown";
 
-include!("telemetry/chunk_01.rs");
-include!("telemetry/chunk_02.rs");
+include!("telemetry/runtime_oracles.rs");
+include!("telemetry/save_policy_logs.rs");

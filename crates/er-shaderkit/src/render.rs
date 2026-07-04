@@ -6,5 +6,5 @@
 //! colour. Construction returns an error (rather than panicking) when no adapter
 //! is available, so callers can skip cleanly off-GPU hosts.
 
-include!("render/chunk_01.rs");
-include!("render/chunk_02.rs");
+include!("render/core_pipeline.rs");
+include!("render/wgsl_fill.rs");

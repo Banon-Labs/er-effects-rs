@@ -41,5 +41,5 @@ use std::fmt;
 
 mod draw;
 
-include!("lib_parts/chunk_01.rs");
-include!("lib_parts/chunk_02.rs");
+include!("lib_parts/parser.rs");
+include!("lib_parts/writer.rs");

@@ -2,5 +2,5 @@
 
 #![allow(unused_imports)]
 
-include!("continue_load/chunk_01.rs");
-include!("continue_load/chunk_02.rs");
+include!("continue_load/product_continue.rs");
+include!("continue_load/slot_resolution.rs");

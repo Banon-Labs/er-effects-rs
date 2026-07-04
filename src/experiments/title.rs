@@ -2,7 +2,7 @@
 
 #![allow(unused_imports)]
 
-include!("title/chunk_01.rs");
-include!("title/chunk_02.rs");
-include!("title/chunk_03.rs");
-include!("title/chunk_04.rs");
+include!("title/product_autoload_gates.rs");
+include!("title/title_tick_cover.rs");
+include!("title/profile_select_flow.rs");
+include!("title/native_title_job.rs");

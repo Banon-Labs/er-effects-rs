@@ -52,5 +52,5 @@ mod input_blocker;
 mod mh;
 mod telemetry;
 
-include!("lib_parts/chunk_01.rs");
-include!("lib_parts/chunk_02.rs");
+include!("lib_parts/dll_entry.rs");
+include!("lib_parts/runtime_helpers.rs");

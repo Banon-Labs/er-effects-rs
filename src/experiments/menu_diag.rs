@@ -2,5 +2,5 @@
 
 #![allow(unused_imports)]
 
-include!("menu_diag/chunk_01.rs");
-include!("menu_diag/chunk_02.rs");
+include!("menu_diag/menu_observation.rs");
+include!("menu_diag/live_loadgame_node.rs");

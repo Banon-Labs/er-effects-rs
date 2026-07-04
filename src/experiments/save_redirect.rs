@@ -2,5 +2,5 @@
 
 #![allow(unused_imports)]
 
-include!("save_redirect/chunk_01.rs");
-include!("save_redirect/chunk_02.rs");
+include!("save_redirect/path_hooks.rs");
+include!("save_redirect/file_ops.rs");

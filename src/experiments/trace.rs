@@ -2,6 +2,6 @@
 
 #![allow(unused_imports)]
 
-include!("trace/chunk_01.rs");
-include!("trace/chunk_02.rs");
-include!("trace/chunk_03.rs");
+include!("trace/menu_trace_hooks.rs");
+include!("trace/menu_constructor_capture.rs");
+include!("trace/native_result_map_hooks.rs");
