@@ -116,6 +116,10 @@ pub(crate) fn force_profile_render_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
+    // Stats-panel product mode BLANKS the character render (see `stats_panel_enabled`).
+    if stats_panel_enabled() {
+        return false;
+    }
     !save_override_telemetry_only()
         || matches!(
             std::env::var("ER_EFFECTS_FORCE_PROFILE_RENDER").as_deref(),
@@ -139,6 +143,10 @@ pub(crate) fn force_profile_render_enabled() -> bool {
 /// `autoload_disabled()`; telemetry-only/native-capture runs stay off; env/file remain force-on overrides.
 pub(crate) fn portrait_real_pixels_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
+        return false;
+    }
+    // Stats-panel product mode BLANKS the character render (see `stats_panel_enabled`).
+    if stats_panel_enabled() {
         return false;
     }
     !save_override_telemetry_only()
@@ -170,6 +178,10 @@ pub(crate) fn portrait_render_drive_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
+    // Stats-panel product mode BLANKS the character render (see `stats_panel_enabled`).
+    if stats_panel_enabled() {
+        return false;
+    }
     !save_override_telemetry_only()
         || matches!(
             std::env::var("ER_EFFECTS_PORTRAIT_RENDER_DRIVE").as_deref(),
@@ -194,6 +206,10 @@ pub(crate) fn portrait_render_drive_enabled() -> bool {
 /// cursor-sweep, force-rebuild -- stay OFF by default; product look-at tracks the real cursor.)
 pub(crate) fn portrait_lookat_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
+        return false;
+    }
+    // Stats-panel product mode BLANKS the character render (see `stats_panel_enabled`).
+    if stats_panel_enabled() {
         return false;
     }
     !save_override_telemetry_only()
@@ -453,6 +469,32 @@ pub(crate) fn autoload_disabled() -> bool {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("er-effects-no-autoload.txt")
             .exists()
+}
+/// PRODUCT DIRECTION (2026-07-04): the ProfileSelect / Load-Game menu shows a **stats panel** instead
+/// of the rendered character portrait. When this is on (the product default) the portrait model-drive
+/// gates below (`force_profile_render_enabled`, `portrait_real_pixels_enabled`,
+/// `portrait_render_drive_enabled`, `portrait_lookat_enabled`) are all forced OFF -- the character
+/// render is BLANKED (no CSMenuProfModelRend draw, so no GX-queue cost and no wrong-slot readback) --
+/// and the stats-panel pipeline runs instead: a neutral background texture is injected into each
+/// `SYSTEX_Menu_ProfileNN` slot and the character's attributes are drawn as text (see bd
+/// `profile-select-stats-panel-goal-plan-2026-07-03` and `profile-select-05010-layout-fonts-RE-2026-07-04`).
+///
+/// This is a PRODUCT-LEVEL lever tied to autoload state (not a per-feature knob): default-ON for any
+/// real product autoload run, OFF for telemetry-only/observe and native-capture runs. A single DISABLE
+/// override restores the native portrait render for A/B, mirroring `autoload_disabled()`'s
+/// `ER_EFFECTS_NO_AUTOLOAD` shape: env `ER_EFFECTS_NO_STATS_PANEL=1` OR the GAME_DIR file
+/// `er-effects-no-stats-panel.txt`.
+pub(crate) fn stats_panel_enabled() -> bool {
+    if autoload_disabled() || native_profile_capture_enabled() || save_override_telemetry_only() {
+        return false;
+    }
+    !(matches!(
+        std::env::var("ER_EFFECTS_NO_STATS_PANEL").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-no-stats-panel.txt")
+        .exists())
 }
 pub(crate) fn native_continue_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {

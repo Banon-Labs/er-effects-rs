@@ -1592,6 +1592,10 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     // graphics is up (self-gating one-shot; runs on this CSTaskImp game-task thread, post-gfx-init).
     // The visible-surface redirect happens in the Scaleform bind observer once this succeeds.
     unsafe { maybe_register_er_tpf_cover_texture(module_base) };
+    // NOTE: the stats-panel neutral-bg register is NOT called here -- this product-core tick only runs
+    // on the `direct_menu_load` path (product_autoload_armed), whereas the product `save_requested`
+    // autoload never enters it. The register lives on the always-running FrameBegin game task in
+    // `spawn_recurring_effects_task` (src/lib.rs) so it fires on every autoload path.
     if phase == OWN_STEPPER_PHASE_DONE {
         return true;
     }

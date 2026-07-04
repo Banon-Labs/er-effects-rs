@@ -1150,8 +1150,14 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
         // Gated by portrait_render_drive_enabled so it can be A/B'd against the safe checker baseline.
         cs_task.run_recurring(
             move |_task_data: &FD4TaskData| {
-                if portrait_render_drive_enabled() {
-                    if let Ok(base) = game_module_base() {
+                if let Ok(base) = game_module_base() {
+                    // Stats-panel neutral-bg register: runs on EVERY frame regardless of the autoload
+                    // path (the `save_requested` product path never enters product_core_autoload_tick,
+                    // so the register cannot live there). Self-gating (stats_panel_enabled + repos-ready
+                    // + idempotent per slot via the registered mask), so an every-frame call is cheap
+                    // and stops attempting once all 10 slots are registered.
+                    unsafe { maybe_register_stats_panel_textures(base) };
+                    if portrait_render_drive_enabled() {
                         unsafe {
                             force_profile_render_tick(base, FORCE_PROFILE_RENDER_MANUAL_SLOT)
                         };

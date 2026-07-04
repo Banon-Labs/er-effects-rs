@@ -2290,6 +2290,41 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_tpf_texture_last_error",
             ER_TPF_COVER_LAST_ERROR.load(Ordering::SeqCst),
         );
+        // Stats-panel neutral-background wire-up oracles (memory-read telemetry, NOT screenshot). A
+        // runtime watcher confirms the character render is blanked, each per-slot neutral bg registered
+        // into the repos, and each visible face bind redirected to our key -- all without an image.
+        // `stats_panel_enabled` == the render-blank / stats-panel product mode is active.
+        push_json_bool(body, "oracle_stats_panel_enabled", stats_panel_enabled());
+        push_json_usize(
+            body,
+            "oracle_stats_panel_registered_mask",
+            STATS_PANEL_TEX_REGISTERED_MASK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_panel_register_attempts",
+            STATS_PANEL_TEX_REGISTER_ATTEMPTS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_panel_register_failures",
+            STATS_PANEL_TEX_REGISTER_FAILURES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_panel_redirect_mask",
+            STATS_PANEL_BIND_REDIRECT_MASK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_panel_redirects",
+            STATS_PANEL_BIND_REDIRECTS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_panel_last_error",
+            STATS_PANEL_LAST_ERROR.load(Ordering::SeqCst),
+        );
         // Camera-lever (custom profile-portrait viewport) RAM semaphores: a runtime watcher can confirm
         // the override path ran and produced a sane matrix without an image. See bd
         // `camera-lever-RE-VERIFIED-offsets-and-call-addrs-2026-06-29`.

@@ -6298,6 +6298,151 @@ unsafe fn forge_into_rti(
     Some(cap)
 }
 
+/// Build (once, cached for the process lifetime) the neutral-background TPF003 blob for a stats-panel
+/// slot: a solid `STATS_PANEL_BG_RGBA` `STATS_PANEL_TEX_DIM` square, uncompressed legacy-RGBA8 DDS,
+/// wrapped in a one-entry TPF whose ENTRY NAME == the slot's `STATS_PANEL_SYSTEX_KEYS` (which becomes
+/// the GLOBAL_TexRepository GPU key). Held alive forever so the engine's DEFERRED GPU upload can never
+/// read freed bytes (same lifetime discipline the er-tpf cover used). Pure CPU; no native call, no disk.
+fn stats_panel_tpf_blob(slot: usize) -> Option<&'static [u8]> {
+    static BLOBS: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
+    let blobs = BLOBS.get_or_init(|| {
+        (0..STATS_PANEL_SLOT_COUNT)
+            .map(|s| {
+                let img = er_tpf::DdsImage::solid(
+                    STATS_PANEL_TEX_DIM,
+                    STATS_PANEL_TEX_DIM,
+                    STATS_PANEL_BG_RGBA,
+                );
+                let dds = img.to_dds_bytes_with(er_tpf::DdsHeaderMode::LegacyRgba8);
+                er_tpf::Tpf::single_pc(STATS_PANEL_SYSTEX_KEYS[s], dds, 1)
+                    .build()
+                    .unwrap_or_default()
+            })
+            .collect()
+    });
+    match blobs.get(slot) {
+        Some(b) if !b.is_empty() => Some(b.as_slice()),
+        _ => None,
+    }
+}
+
+/// Stats-panel product mode: register the neutral-background texture for each ProfileSelect save slot
+/// under its unique `STATS_PANEL_SYSTEX_KEYS` via the engine's own in-memory `CS::CreateTpfResCap`
+/// factory -- the SAME proven raw-(ptr,len) TPF->GPU path the er-tpf cover and the now-loading forge
+/// use. Self-gating + fail-closed: runs on the CSTaskImp game task (post-gfx-init), validates every
+/// precondition before the first native call, wraps each call in `catch_unwind`, and only latches a
+/// slot's registered bit on a non-null TpfResCap -- so a not-yet-initialized repo (null during boot)
+/// simply retries next tick and never crashes. Idempotent per slot via `STATS_PANEL_TEX_REGISTERED_MASK`.
+/// The visible-surface redirect is a separate step in the Scaleform bind observer, gated on each slot's
+/// registered bit. A texture upload is cheap (no per-frame render), so all 10 slots register with no
+/// GX-queue cost -- unlike driving 10 concurrent CSMenuProfModelRend renderers (the 0x1aeaf05 crash).
+pub(crate) unsafe fn maybe_register_stats_panel_textures(base: usize) {
+    if !stats_panel_enabled() {
+        return;
+    }
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if base == 0 || base == null {
+        STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_BASE_UNRESOLVED, Ordering::SeqCst);
+        return;
+    }
+    let all: usize = (1 << STATS_PANEL_SLOT_COUNT) - 1;
+    if STATS_PANEL_TEX_REGISTERED_MASK.load(Ordering::SeqCst) & all == all {
+        return; // every slot already registered
+    }
+    // Both repos non-null == graphics/repos initialized. Bail (retry next tick) if not ready yet; do
+    // NOT consume any register attempt, so boot-time nulls never burn a slot.
+    let tpf_repo = unsafe { safe_read_usize(base + GLOBAL_TPF_REPOSITORY_RVA) }.unwrap_or(0);
+    if tpf_repo == 0 || tpf_repo == null {
+        STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_TPF_REPO_NULL, Ordering::SeqCst);
+        return;
+    }
+    let tex_repo = unsafe { safe_read_usize(base + GLOBAL_TEX_REPOSITORY_RVA) }.unwrap_or(0);
+    if tex_repo == 0 || tex_repo == null {
+        STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_TEX_REPO_NULL, Ordering::SeqCst);
+        return;
+    }
+    let create_rescap: unsafe extern "system" fn(
+        usize,
+        *const u16,
+        *const u8,
+        u64,
+        u8,
+        u32,
+    ) -> usize = unsafe { std::mem::transmute(base + CREATE_TPF_RESCAP_RVA) };
+    for slot in 0..STATS_PANEL_SLOT_COUNT {
+        if STATS_PANEL_TEX_REGISTERED_MASK.load(Ordering::SeqCst) & (1 << slot) != 0 {
+            continue;
+        }
+        let Some(tpf_bytes) = stats_panel_tpf_blob(slot) else {
+            STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_BLOB_EMPTY, Ordering::SeqCst);
+            continue;
+        };
+        let name_z: Vec<u16> = STATS_PANEL_SYSTEX_KEYS[slot]
+            .encode_utf16()
+            .chain(core::iter::once(0))
+            .collect();
+        STATS_PANEL_TEX_REGISTER_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
+        let ptr = tpf_bytes.as_ptr();
+        let len = tpf_bytes.len() as u64;
+        let container = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            create_rescap(tpf_repo, name_z.as_ptr(), ptr, len, 0, 0)
+        }));
+        match container {
+            Ok(c) if c != 0 && c != null => {
+                STATS_PANEL_TEX_REGISTERED_MASK.fetch_or(1 << slot, Ordering::SeqCst);
+                // Clear the stale boot-time retry marker (repos were null before gfx came up, which set
+                // TPF_REPO_NULL); a real register succeeded, so the oracle should read NONE.
+                STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_NONE, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "stats-panel: registered neutral bg for slot {slot} key='{}' rescap=0x{c:x} (mask=0x{:x})",
+                    STATS_PANEL_SYSTEX_KEYS[slot],
+                    STATS_PANEL_TEX_REGISTERED_MASK.load(Ordering::SeqCst)
+                ));
+            }
+            Ok(_) => {
+                STATS_PANEL_TEX_REGISTER_FAILURES.fetch_add(1, Ordering::SeqCst);
+                STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_RESCAP_NULL, Ordering::SeqCst);
+            }
+            Err(_) => {
+                STATS_PANEL_TEX_REGISTER_FAILURES.fetch_add(1, Ordering::SeqCst);
+                STATS_PANEL_LAST_ERROR.store(STATS_PANEL_ERR_PANIC, Ordering::SeqCst);
+            }
+        }
+    }
+}
+
+/// Parse the trailing 2-digit slot index (`00`..`09`) from a `systex_menu_profileNN` target DLString.
+/// Returns `Some(0..=9)` only for a target that actually looks like the profile SYSTEX key, else `None`
+/// (so we never redirect the status-face / kick-face / decorative binds).
+unsafe fn systex_profile_target_slot(target_ptr: usize) -> Option<usize> {
+    let mut buf = [0u8; 96];
+    let n = unsafe { copy_ascii_preview(target_ptr, &mut buf) };
+    if n < 2 {
+        return None;
+    }
+    let s = &buf[..n];
+    // Lowercase compare against the known prefix so casing never matters.
+    let mut lower = [0u8; 96];
+    for (i, b) in s.iter().enumerate() {
+        lower[i] = b.to_ascii_lowercase();
+    }
+    let lower = &lower[..n];
+    if !lower.windows(b"systex_menu_profile".len()).any(|w| w == b"systex_menu_profile") {
+        return None;
+    }
+    let d1 = s[n - 2];
+    let d0 = s[n - 1];
+    if !d1.is_ascii_digit() || !d0.is_ascii_digit() {
+        return None;
+    }
+    let slot = ((d1 - b'0') as usize) * 10 + (d0 - b'0') as usize;
+    if slot < STATS_PANEL_SLOT_COUNT {
+        Some(slot)
+    } else {
+        None
+    }
+}
+
 /// Once the real portrait is baked into LOADING_BG_PORTRAIT_RGBA, OVERWRITE the displayed now-loading
 /// background texture's PIXELS in place via D3D12 upload. Re-forging a new cap doesn't work -- the
 /// Scaleform pump registers the texture by NAME only on the first bind and won't re-read a swapped cap --
@@ -6929,19 +7074,39 @@ pub(crate) unsafe extern "system" fn title_scaleform_bind_observer_hook(owner: u
     if unsafe { bounded_ascii_contains(target_ptr, b"systex") } {
         TITLE_SCALEFORM_BIND_OBSERVER_SYSTEX_HITS.fetch_add(1, Ordering::SeqCst);
     }
-    // SLOT-0 VISIBLE-SURFACE REWRITE YOINKED (user 2026-07-03). This block rewrote slot 0's native
-    // `menu_dummyprofileface_01` -> `systex_menu_profile00` Scaleform bind to the visible
-    // `MENU_FL_40135_Profile` surface (and, with the er-tpf cover registered, repointed the target to
-    // our in-memory cover key) -- which is what put the faint background fill on the 0th Load-Game
-    // slot (Bonky Bean) while every other slot stayed black. Leaving slot 0's bind NATIVE removes that
-    // slot-0-only fill so slot 0 matches the rest. The observer's read-only tracking below and the
-    // original-hook chaining are unchanged; the rewrite helper + er-tpf-cover machinery stay defined
-    // for reference (env/RE), just no longer applied on this bind.
-    let rewritten_visible_profile_surface = false;
-    let _ = (
-        TITLE_PROFILE_VISIBLE_SURFACE_SYMBOL,
-        ER_TPF_COVER_SYSTEX_KEY,
-    );
+    // STATS-PANEL NEUTRAL-BG REDIRECT (2026-07-04). In stats-panel product mode, redirect each visible
+    // per-slot face bind `menu_dummyprofileface_NN -> systex_menu_profileMM` TARGET to our registered
+    // neutral-bg key `STATS_PANEL_SYSTEX_KEYS[MM]`. The dummy-face shapes ARE the visible per-row boxes
+    // (05_010 RE 2026-07-04), so the Scaleform-repo miss on our unique key bridges to our GPU texture
+    // and paints the neutral background in the box -- with the character render blanked, there is no
+    // portrait to draw. Fires on EVERY matching bind (the list re-binds as it scrolls/recycles); the
+    // in-place DLString rewrite is idempotent. Gated per slot on the registered bit so we never point at
+    // an unregistered key. This SUPERSEDES the yoinked slot-0 FL_40135 rewrite (which was based on the
+    // now-corrected belief that the dummy faces were not visible).
+    let mut rewritten_visible_profile_surface = false;
+    let _ = (TITLE_PROFILE_VISIBLE_SURFACE_SYMBOL, ER_TPF_COVER_SYSTEX_KEY);
+    if stats_panel_enabled()
+        && unsafe { bounded_ascii_contains(symbol_ptr, b"dummyprofileface") }
+    {
+        if let Some(slot) = unsafe { systex_profile_target_slot(target_ptr) } {
+            if STATS_PANEL_TEX_REGISTERED_MASK.load(Ordering::SeqCst) & (1 << slot) != 0 {
+                let key = STATS_PANEL_SYSTEX_KEYS[slot];
+                if unsafe { rewrite_native_dlstring_ascii(pair + 0x30, key) }.is_some() {
+                    rewritten_visible_profile_surface = true;
+                    let prev = STATS_PANEL_BIND_REDIRECT_MASK.fetch_or(1 << slot, Ordering::SeqCst);
+                    let n = STATS_PANEL_BIND_REDIRECTS.fetch_add(1, Ordering::SeqCst) + 1;
+                    // Log the FIRST redirect of each slot (prev bit was clear) so we get exactly 10
+                    // lines, not one per bind.
+                    if prev & (1 << slot) == 0 {
+                        append_autoload_debug(format_args!(
+                            "stats-panel: redirected slot {slot} face bind target -> '{key}' (redirects={n} mask=0x{:x})",
+                            STATS_PANEL_BIND_REDIRECT_MASK.load(Ordering::SeqCst)
+                        ));
+                    }
+                }
+            }
+        }
+    }
     if interesting && hit <= 128 {
         let mut sym = [0u8; 96];
         let mut tgt = [0u8; 96];

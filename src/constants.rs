@@ -1970,6 +1970,61 @@ pub(crate) static ER_TPF_COVER_LAST_ERROR: AtomicUsize = AtomicUsize::new(ER_TPF
 /// One-shot latch for the bind-observer target rewrite (fires once after registration).
 pub(crate) static ER_TPF_COVER_TARGET_REWRITE_FIRED: AtomicUsize = AtomicUsize::new(0);
 
+// === Stats-panel per-slot neutral-background textures (2026-07-04) ==================================
+// The stats-panel product mode blanks the character render (see `stats_panel_enabled`) and gives each
+// ProfileSelect save-slot face box a neutral BACKGROUND instead. Mechanism = the SAME proven in-memory
+// TPF -> CS::CreateTpfResCap register the er-tpf cover used, but per slot: register one texture under a
+// unique key, then redirect that slot's native `menu_dummyprofileface_NN -> systex_menu_profileMM`
+// Scaleform bind TARGET to our key (a Scaleform-repo miss bridges to GLOBAL_TexRepository by name and
+// resolves our texture). The dummy-face shapes ARE the visible per-row boxes (05_010 RE 2026-07-04), so
+// redirecting their texture paints our background on-screen -- no symbol rewrite needed. A texture
+// upload is cheap (no per-frame render), so all 10 slots get a background with NO GX-queue overflow.
+pub(crate) const STATS_PANEL_SLOT_COUNT: usize = 10;
+/// Unique in-RAM SYSTEX keys, one per slot 00..09. Each is the TPF003 entry name (== the
+/// GLOBAL_TexRepository GPU key the Scaleform bridge derives) AND the rewritten bind TARGET. Kept to 18
+/// ASCII chars -- comfortably under the native `SYSTEX_Menu_Profile0N` target's 21-char DLString
+/// capacity so the in-place `rewrite_native_dlstring_ascii` never overflows -- and deliberately distinct
+/// from any native key so a first-resolve Scaleform-repo miss bridges to our GPU texture.
+pub(crate) const STATS_PANEL_SYSTEX_KEYS: [&str; STATS_PANEL_SLOT_COUNT] = [
+    "SYSTEX_ErTpf_Prf00",
+    "SYSTEX_ErTpf_Prf01",
+    "SYSTEX_ErTpf_Prf02",
+    "SYSTEX_ErTpf_Prf03",
+    "SYSTEX_ErTpf_Prf04",
+    "SYSTEX_ErTpf_Prf05",
+    "SYSTEX_ErTpf_Prf06",
+    "SYSTEX_ErTpf_Prf07",
+    "SYSTEX_ErTpf_Prf08",
+    "SYSTEX_ErTpf_Prf09",
+];
+/// Neutral-background texture side length (square, RGBA8, uncompressed legacy-RGBA8 DDS). The native
+/// face box is 128x128 on-screen; 256 gives a little headroom for baked stats text later without being
+/// a large upload.
+pub(crate) const STATS_PANEL_TEX_DIM: u32 = 256;
+/// Neutral dark panel color (opaque). Distinct from pure black so a registered-but-unredirected slot is
+/// visually diagnosable, and dark enough that light native text reads on top later.
+pub(crate) const STATS_PANEL_BG_RGBA: [u8; 4] = [30, 28, 26, 255];
+/// Last-error codes for `STATS_PANEL_LAST_ERROR` (a memory-read oracle).
+pub(crate) const STATS_PANEL_ERR_NONE: usize = 0;
+pub(crate) const STATS_PANEL_ERR_TPF_REPO_NULL: usize = 1;
+pub(crate) const STATS_PANEL_ERR_TEX_REPO_NULL: usize = 2;
+pub(crate) const STATS_PANEL_ERR_BLOB_EMPTY: usize = 3;
+pub(crate) const STATS_PANEL_ERR_PANIC: usize = 4;
+pub(crate) const STATS_PANEL_ERR_RESCAP_NULL: usize = 5;
+pub(crate) const STATS_PANEL_ERR_BASE_UNRESOLVED: usize = 6;
+/// Bitmask (bit N = slot N) of slots whose neutral-bg texture is registered in the repos.
+pub(crate) static STATS_PANEL_TEX_REGISTERED_MASK: AtomicUsize = AtomicUsize::new(0);
+/// Count of native `CreateTpfResCap` register attempts across all slots.
+pub(crate) static STATS_PANEL_TEX_REGISTER_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+/// Count of failed/abandoned register attempts (precondition miss or caught panic).
+pub(crate) static STATS_PANEL_TEX_REGISTER_FAILURES: AtomicUsize = AtomicUsize::new(0);
+/// Count of bind-observer target rewrites that pointed a dummy-face bind at our key.
+pub(crate) static STATS_PANEL_BIND_REDIRECTS: AtomicUsize = AtomicUsize::new(0);
+/// Bitmask (bit N = slot N) of slots whose native bind target we have redirected at least once.
+pub(crate) static STATS_PANEL_BIND_REDIRECT_MASK: AtomicUsize = AtomicUsize::new(0);
+/// Last error code (see `STATS_PANEL_ERR_*`).
+pub(crate) static STATS_PANEL_LAST_ERROR: AtomicUsize = AtomicUsize::new(STATS_PANEL_ERR_NONE);
+
 // (Removed: TITLE INIT-READINESS OVERRIDE lever -- it forced CSMenuMan+0x21, which RE later showed is
 // the WHOLE-game resident-UI-ready flag, not title-only; asserting it early risked later in-game menus
 // finding chrome not resident, for an illusory ~1s (the real floor is the Scaleform resident load).
