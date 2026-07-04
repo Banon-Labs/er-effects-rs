@@ -41,6 +41,7 @@ use windows::{
     core::{BOOL, PCSTR},
 };
 
+mod config;
 mod constants;
 mod crashlog;
 mod effects;
@@ -53,7 +54,8 @@ mod telemetry;
 
 #[allow(unused_imports)]
 use crate::{
-    constants::*, crashlog::*, effects::*, experiments::*, ffi::*, hooks::*, telemetry::*,
+    config::*, constants::*, crashlog::*, effects::*, experiments::*, ffi::*, hooks::*,
+    telemetry::*,
 };
 
 // Constants/statics live in constants.rs; keep lib.rs focused on DLL entrypoints and task wiring.
@@ -123,7 +125,7 @@ impl Default for EffectsState {
             custom_call_id: CUSTOM_CALL_DEFAULT_ID,
             last_telemetry_write: None,
             last_driver_command: None,
-            autoload: SaveLoader::from_env(),
+            autoload: SaveLoader::new(configured_save_load_request()),
             game_task_ticks: INITIAL_GAME_TASK_TICKS,
             safe_input: SafeInputRuntime::default(),
         }
@@ -174,6 +176,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         return DLL_MAIN_SUCCESS;
     }
     write_bootstrap_event(BOOTSTRAP_EVENT_DLL_MAIN_ATTACH, BOOTSTRAP_DETAIL_START);
+    init_runtime_config(hmodule);
 
     // Record our own DLL base (+ SizeOfImage) so the crash logger can annotate a fault whose
     // RIP/return-addresses land in our relocated code as `self+0xRVA` instead of raw Wine

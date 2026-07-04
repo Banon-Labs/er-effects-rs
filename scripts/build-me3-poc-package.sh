@@ -14,14 +14,15 @@ Usage: scripts/build-me3-poc-package.sh [--build] [--dll PATH] [--out-dir DIR] [
 
 Build a minimal ME3 POC zip containing:
   er_effects_rs.dll
+  er-effects.toml
   er-effects-poc.me3
   run-er-effects-poc.ps1
   run-er-effects-poc.sh
-  autoload-request.txt
 
-The launchers set ER_EFFECTS_* env vars, generate an absolute-path ME3 profile next
-to themselves, then call ME3 with that profile. They require the user to pass a save
-file path at launch time; the save file is intentionally not bundled.
+The launchers write the required DLL-adjacent er-effects.toml, set telemetry/log
+env vars, generate an absolute-path ME3 profile next to themselves, then call ME3
+with that profile. They require the user to pass a save file path at launch time;
+the save file is intentionally not bundled.
 USAGE
 }
 
@@ -66,9 +67,12 @@ game = "eldenring"
 path = 'er_effects_rs.dll'
 EOF_PROFILE
 
-cat > "$STAGE_DIR/autoload-request.txt" <<'EOF_AUTOLOAD'
-slot=0
-EOF_AUTOLOAD
+cat > "$STAGE_DIR/er-effects.toml" <<'EOF_CONFIG'
+# Required: this file must live next to er_effects_rs.dll.
+# The launch scripts overwrite save_file/slot before launching.
+save_file = "CHANGE_ME_TO_A_COPY_OF_ER0000.sl2"
+slot = 0
+EOF_CONFIG
 
 cat > "$STAGE_DIR/run-er-effects-poc.ps1" <<'EOF_PS'
 param(
@@ -89,11 +93,13 @@ $LogDir = Join-Path $Root "logs"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 function Convert-ToTomlBasicString([string]$Value) {
-    return ($Value -replace '\\', '\\' -replace '"', '\"')
+    return '"' + (($Value -replace '\\', '\\\\') -replace '"', '\"') + '"'
 }
 
 $ProfilePath = Join-Path $Root "er-effects-poc.generated.me3"
+$ConfigPath = Join-Path $Root "er-effects.toml"
 $DllToml = Convert-ToTomlBasicString $DllPath
+$SaveToml = Convert-ToTomlBasicString $SavePath
 @"
 profileVersion = "v1"
 
@@ -101,15 +107,15 @@ profileVersion = "v1"
 game = "$Game"
 
 [[natives]]
-path = "$DllToml"
+path = $DllToml
 "@ | Set-Content -Encoding UTF8 -Path $ProfilePath
+@"
+# Required: this file must live next to er_effects_rs.dll.
+# ER_EFFECTS_SAVE_FILE / ER_EFFECTS_AUTOLOAD_SLOT may override these values.
+save_file = $SaveToml
+slot = $Slot
+"@ | Set-Content -Encoding UTF8 -Path $ConfigPath
 
-$AutoloadPath = Join-Path $Root "autoload-request.txt"
-"slot=$Slot" | Set-Content -Encoding ASCII -Path $AutoloadPath
-
-$env:ER_EFFECTS_SAVE_FILE = $SavePath
-$env:ER_EFFECTS_AUTOLOAD_PATH = $AutoloadPath
-$env:ER_EFFECTS_AUTOLOAD_SLOT = [string]$Slot
 $env:ER_EFFECTS_TELEMETRY_PATH = Join-Path $LogDir "er-effects-telemetry.json"
 $env:ER_EFFECTS_BOOTSTRAP_PATH = Join-Path $LogDir "bootstrap.jsonl"
 $env:ER_EFFECTS_BOOTSTRAP_STATE_PATH = Join-Path $LogDir "bootstrap-state.json"
@@ -147,7 +153,7 @@ Optional env:
   ME3_PATH=/path/to/me3
   ME3_STEAM_DIR=/path/to/Steam
   GAME=eldenring
-  ER_EFFECTS_AUTOLOAD_SLOT=0
+  ER_EFFECTS_AUTOLOAD_SLOT=0  # optional env override; script also writes slot to er-effects.toml
 USAGE
 }
 
@@ -155,19 +161,22 @@ USAGE
 SAVE_FILE="$(realpath "$1")"
 DLL_PATH="$ROOT/er_effects_rs.dll"
 PROFILE_PATH="$ROOT/er-effects-poc.generated.me3"
-AUTOLOAD_PATH="$ROOT/autoload-request.txt"
+CONFIG_PATH="$ROOT/er-effects.toml"
 LOG_DIR="$ROOT/logs"
 mkdir -p "$LOG_DIR"
 [[ -f "$DLL_PATH" ]] || { echo "missing DLL: $DLL_PATH" >&2; exit 2; }
 [[ -f "$SAVE_FILE" ]] || { echo "missing save file: $SAVE_FILE" >&2; exit 2; }
 
-python3 - "$PROFILE_PATH" "$DLL_PATH" "$GAME" <<'PY'
+python3 - "$PROFILE_PATH" "$CONFIG_PATH" "$DLL_PATH" "$SAVE_FILE" "$GAME" "$SLOT" <<'PY'
 from pathlib import Path
 import json
 import sys
 profile = Path(sys.argv[1])
-dll = sys.argv[2]
-game = sys.argv[3]
+config = Path(sys.argv[2])
+dll = sys.argv[3]
+save = sys.argv[4]
+game = sys.argv[5]
+slot = int(sys.argv[6])
 profile.write_text(
     'profileVersion = "v1"\n\n'
     '[[supports]]\n'
@@ -176,12 +185,15 @@ profile.write_text(
     f'path = {json.dumps(dll)}\n',
     encoding='utf-8',
 )
+config.write_text(
+    '# Required: this file must live next to er_effects_rs.dll.\n'
+    '# ER_EFFECTS_SAVE_FILE / ER_EFFECTS_AUTOLOAD_SLOT may override these values.\n'
+    f'save_file = {json.dumps(save)}\n'
+    f'slot = {slot}\n',
+    encoding='utf-8',
+)
 PY
-printf 'slot=%s\n' "$SLOT" > "$AUTOLOAD_PATH"
 
-export ER_EFFECTS_SAVE_FILE="$SAVE_FILE"
-export ER_EFFECTS_AUTOLOAD_PATH="$AUTOLOAD_PATH"
-export ER_EFFECTS_AUTOLOAD_SLOT="$SLOT"
 export ER_EFFECTS_TELEMETRY_PATH="$LOG_DIR/er-effects-telemetry.json"
 export ER_EFFECTS_BOOTSTRAP_PATH="$LOG_DIR/bootstrap.jsonl"
 export ER_EFFECTS_BOOTSTRAP_STATE_PATH="$LOG_DIR/bootstrap-state.json"
@@ -197,6 +209,7 @@ args+=(launch -g "$GAME" -p "$PROFILE_PATH")
 
 echo "ME3 profile: $PROFILE_PATH"
 echo "DLL: $DLL_PATH"
+echo "Config: $CONFIG_PATH"
 echo "Save: $SAVE_FILE"
 echo "Logs: $LOG_DIR"
 exec "$ME3_PATH" "${args[@]}"
@@ -212,8 +225,10 @@ Windows PowerShell:
 Linux:
   ME3_PATH=/path/to/me3 ME3_STEAM_DIR="$HOME/.local/share/Steam" ./run-er-effects-poc.sh /path/to/ER0000.sl2
 
-The launchers set ER_EFFECTS_SAVE_FILE plus telemetry/log env vars, generate an
-absolute-path ME3 profile, then run ME3 with er_effects_rs.dll as a native.
+The launchers write er-effects.toml next to er_effects_rs.dll, set telemetry/log
+env vars, generate an absolute-path ME3 profile, then run ME3 with er_effects_rs.dll
+as a native. ER_EFFECTS_SAVE_FILE and ER_EFFECTS_AUTOLOAD_SLOT remain optional
+overrides for the TOML values.
 EOF_README
 
 python3 - "$STAGE_DIR" "$ZIP_PATH" <<'PY'

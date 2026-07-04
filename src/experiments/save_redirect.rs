@@ -223,22 +223,16 @@ pub(crate) fn normalize_env_save_file_to_active_steam_id_once(base: usize, reaso
     {
         return;
     }
-    let Ok(path) = std::env::var("ER_EFFECTS_SAVE_FILE") else {
+    let Some(path) = configured_save_file() else {
         append_autoload_debug(format_args!(
-            "save-steamid-normalize: no env file for one-shot disk normalize reason={reason}"
+            "save-steamid-normalize: no configured save file for one-shot disk normalize reason={reason}"
         ));
         return;
     };
-    let path = path.trim();
-    if path.is_empty() {
+    let Ok(mut bytes) = fs::read(&path) else {
         append_autoload_debug(format_args!(
-            "save-steamid-normalize: blank env file for one-shot disk normalize reason={reason}"
-        ));
-        return;
-    }
-    let Ok(mut bytes) = fs::read(path) else {
-        append_autoload_debug(format_args!(
-            "save-steamid-normalize: failed to read env file for one-shot disk normalize reason={reason} path='{path}'"
+            "save-steamid-normalize: failed to read configured save file for one-shot disk normalize reason={reason} path='{}'",
+            path.display()
         ));
         return;
     };
@@ -250,18 +244,20 @@ pub(crate) fn normalize_env_save_file_to_active_steam_id_once(base: usize, reaso
         SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
         return;
     }
-    match fs::write(path, &bytes) {
+    match fs::write(&path, &bytes) {
         Ok(()) => {
             let after = save_normalize_hash_bytes(&bytes);
             SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "save-steamid-normalize: wrote normalized env save path='{path}' reason={reason} before=0x{before:016x} after=0x{after:016x}"
+                "save-steamid-normalize: wrote normalized env save path='{}' reason={reason} before=0x{before:016x} after=0x{after:016x}",
+                path.display()
             ));
         }
         Err(err) => {
             SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "save-steamid-normalize: FAILED to write normalized env save path='{path}' reason={reason}: {err}"
+                "save-steamid-normalize: FAILED to write normalized env save path='{}' reason={reason}: {err}",
+                path.display()
             ));
         }
     }
@@ -346,10 +342,10 @@ const SAVE_CREATEFILEW_DIAG_ALL_BELOW: usize = 120;
 pub(crate) static SAVE_WATCHDOG_ZERO_FRAMES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const SAVE_WATCHDOG_ZERO_BUDGET: usize = 900;
 
-/// Convert a Unix absolute path (e.g. `/home/banon/.../save`) to the Wine drive form the in-process
-/// `CreateFileW` accepts -- `Z:` maps to `/` under Proton/Wine (confirmed: the game opens our log as
-/// `\\?\Z:\home\...`). Backslash separators, no trailing separator. Returns a wide string.
-fn unix_path_to_wine_wide(root: &std::path::Path) -> Vec<u16> {
+/// Convert a configured path root to the Wine drive form the in-process `CreateFileW` accepts.
+/// Unix absolute paths become `Z:\...`; already-Windows/Wine paths like `Z:\...` or `C:\...` are
+/// preserved. Backslash separators, no trailing separator. Returns a wide string.
+fn path_root_to_wine_wide(root: &std::path::Path) -> Vec<u16> {
     // to_string_lossy: building a path string, not decoding game memory (the from_utf8_lossy ban
     // targets in-process telemetry; OsStr->String here is fine).
     let win: String = root
@@ -357,22 +353,25 @@ fn unix_path_to_wine_wide(root: &std::path::Path) -> Vec<u16> {
         .chars()
         .map(|c| if c == '/' { '\\' } else { c })
         .collect();
-    let mut out: Vec<u16> = "Z:".encode_utf16().chain(win.encode_utf16()).collect();
+    let has_drive_prefix = win.as_bytes().get(1).copied() == Some(b':');
+    let mut out: Vec<u16> = if has_drive_prefix {
+        win.encode_utf16().collect()
+    } else {
+        "Z:".encode_utf16().chain(win.encode_utf16()).collect()
+    };
     while matches!(out.last(), Some(&c) if c == b'\\' as u16) {
         out.pop();
     }
     out
 }
 
-/// Resolve `ER_EFFECTS_SAVE_FILE` -> the staged save ROOT (the ancestor directory that CONTAINS the
-/// `EldenRing` folder) in Wine `Z:\...` wide form, or None if the env is unset/blank/not a readable
+/// Resolve configured save file -> the staged save ROOT (the ancestor directory that CONTAINS the
+/// `EldenRing` folder) in Wine `Z:\...` wide form, or None if config/env is unset/blank/not a readable
 /// plausibly-sized save / not staged under an `EldenRing` directory component. The redirect rewrites
 /// the game's `...\Roaming\EldenRing\<rest>` to `<root>\EldenRing\<rest>`, so the staged save MUST
 /// live at `<root>/EldenRing/<steamid>/ER0000.sl2`.
 fn env_save_file_path() -> Option<PathBuf> {
-    let raw = std::env::var("ER_EFFECTS_SAVE_FILE").ok()?;
-    let trimmed = raw.trim();
-    (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
+    configured_save_file()
 }
 
 fn steam_id64_from_env_save_file_path(path: &Path) -> Option<u64> {
@@ -460,7 +459,7 @@ fn save_override_redirect_root_w() -> Option<Vec<u16>> {
     if !found {
         return None;
     }
-    Some(unix_path_to_wine_wide(&root))
+    Some(path_root_to_wine_wide(&root))
 }
 
 /// Outcome of `enforce_save_override_or_abort`. The abort path does not return.
@@ -472,8 +471,9 @@ pub(crate) enum SaveOverrideMode {
 }
 
 /// Called EARLY in `DllMain` (before any save IO). Enforces the no-default-fallback rule:
-/// unless telemetry-only, a valid `ER_EFFECTS_SAVE_FILE` MUST be present, else the process is
-/// aborted immediately. On success it stashes the redirect directory for the CreateFileW hook.
+/// unless telemetry-only, a valid DLL-adjacent `er-effects.toml` save source (optionally overridden
+/// by `ER_EFFECTS_SAVE_FILE`) MUST be present, else the process is aborted immediately. On success it
+/// stashes the redirect directory for the CreateFileW hook.
 /// NEVER returns on the fail-closed path.
 pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
     if save_override_telemetry_only() {
@@ -510,11 +510,12 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
         None => {
             // FAIL CLOSED. The DLL must never assume the default user save directory.
             append_autoload_debug(format_args!(
-                "save-override: FATAL -- ER_EFFECTS_SAVE_FILE is unset/blank/not a readable save (>= {} bytes) staged under an EldenRing dir, and ER_EFFECTS_TELEMETRY_ONLY is not set. Refusing to assume the default user save directory. ABORTING.",
-                SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES
+                "save-override: FATAL -- configured save file is unset/blank/not a readable save (>= {} bytes) staged under an EldenRing dir, and ER_EFFECTS_TELEMETRY_ONLY is not set. config_error={}. Refusing to assume the default user save directory. ABORTING.",
+                SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES,
+                runtime_config_error().unwrap_or_else(|| "none".to_owned())
             ));
             eprintln!(
-                "er-effects: FATAL -- no env-provided save source (ER_EFFECTS_SAVE_FILE) and not telemetry-only; refusing to assume the default user save directory. Aborting."
+                "er-effects: FATAL -- no valid save source from DLL-adjacent er-effects.toml (or ER_EFFECTS_SAVE_FILE override) and not telemetry-only; refusing to assume the default user save directory. Aborting."
             );
             std::process::abort();
         }

@@ -275,6 +275,7 @@ mkdir -p "$ARTIFACT_DIR"
 # (and the inert GAME_DIR/er_effects_rs.dll chainload copy is never touched or loaded).
 SMOKE_DLL="$ARTIFACT_DIR/er_effects_rs.dll"
 PROFILE_FILE="$ARTIFACT_DIR/er-effects-me3-smoke.me3"
+RUNTIME_CONFIG_FILE="$ARTIFACT_DIR/er-effects.toml"
 
 if (( DRY_RUN )); then
   cat > "$ARTIFACT_DIR/dry-run-summary.json" <<EOF
@@ -310,11 +311,25 @@ else
   mkdir -p "$STAGED_SAVE_DIR"
   cp -f "$GOLD_SAVE" "$STAGED_SAVE"
   chmod u+w "$STAGED_SAVE"
-  export ER_EFFECTS_SAVE_FILE="$STAGED_SAVE"
-  if [[ -n "${ER_EFFECTS_GOLD_SLOT:-}" && "${ER_EFFECTS_GOLD_SLOT}" != "-1" ]]; then
-    export ER_EFFECTS_AUTOLOAD_SLOT="$ER_EFFECTS_GOLD_SLOT"
+  CONFIG_SLOT="${ER_EFFECTS_GOLD_SLOT:-0}"
+  if [[ "$CONFIG_SLOT" == "-1" ]]; then
+    CONFIG_SLOT=0
   fi
-  echo "save-source: staged gold save -> $STAGED_SAVE (ER_EFFECTS_SAVE_FILE); slot=${ER_EFFECTS_GOLD_SLOT:-most-recent}; autosaves isolated from $GOLD_SAVE"
+  python3 - "$RUNTIME_CONFIG_FILE" "$STAGED_SAVE" "$CONFIG_SLOT" <<'PY'
+from pathlib import Path
+import json
+import sys
+config = Path(sys.argv[1])
+save = sys.argv[2]
+slot = int(sys.argv[3])
+config.write_text(
+    '# Required DLL-adjacent er-effects config. Env vars may override these values.\n'
+    f'save_file = {json.dumps(save)}\n'
+    f'slot = {slot}\n',
+    encoding='utf-8',
+)
+PY
+  echo "save-source: staged gold save -> $STAGED_SAVE (er-effects.toml next to DLL); slot=$CONFIG_SLOT; autosaves isolated from $GOLD_SAVE"
 
   DEFAULT_GRAPHICS_CONFIG="$APPDATA_ER_ROOT/GraphicsConfig.xml"
   GRAPHICS_CONFIG_SOURCE="${ER_EFFECTS_GRAPHICS_CONFIG_SOURCE:-${ER_EFFECTS_GOLD_GRAPHICS_CONFIG:-$DEFAULT_GRAPHICS_CONFIG}}"

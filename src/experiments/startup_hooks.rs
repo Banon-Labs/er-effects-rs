@@ -9807,10 +9807,12 @@ fn wide_z(text: &str) -> Vec<u16> {
 }
 
 fn system_quit_env_save_path() -> Result<String, &'static str> {
-    let raw = std::env::var("ER_EFFECTS_SAVE_FILE").map_err(|_| "ER_EFFECTS_SAVE_FILE unset")?;
-    let trimmed = raw.trim();
+    let Some(path) = configured_save_file_string() else {
+        return Err("configured save_file unset");
+    };
+    let trimmed = path.trim();
     if trimmed.is_empty() {
-        return Err("ER_EFFECTS_SAVE_FILE blank");
+        return Err("configured save_file blank");
     }
     Ok(trimmed.trim_end_matches(['/', '\\']).to_owned())
 }
@@ -9818,11 +9820,11 @@ fn system_quit_env_save_path() -> Result<String, &'static str> {
 fn system_quit_env_save_dir() -> Result<String, &'static str> {
     let trimmed = system_quit_env_save_path()?;
     let Some(sep) = trimmed.rfind(['/', '\\']) else {
-        return Err("ER_EFFECTS_SAVE_FILE has no parent directory");
+        return Err("configured save_file has no parent directory");
     };
     let dir = &trimmed[..sep];
     if dir.is_empty() {
-        return Err("ER_EFFECTS_SAVE_FILE parent directory is empty");
+        return Err("configured save_file parent directory is empty");
     }
     Ok(dir.to_owned())
 }
