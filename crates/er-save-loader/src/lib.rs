@@ -3,6 +3,7 @@ use std::{fs, path::PathBuf};
 use er_safe_input::{SafeButton, SafeInputAction, SafeInputConfig, SafeInputError};
 
 pub mod bnd4;
+pub mod stats;
 
 const INITIAL_ATTEMPTS: u64 = 0;
 const ATTEMPT_INCREMENT: u64 = 1;

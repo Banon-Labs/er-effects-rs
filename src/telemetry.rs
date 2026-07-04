@@ -2363,6 +2363,36 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_stats_text_push_failures",
             PROFILE_STATS_PUSH_FAILURES.load(Ordering::SeqCst),
         );
+        // 7e7 fail-closed guard: pushes skipped because the resolved component was stale (crash
+        // avoided), plus the last stale component/vtable pointers for root-causing the bad link.
+        push_json_usize(
+            body,
+            "oracle_stats_text_push_stale_skips",
+            PROFILE_STATS_PUSH_STALE_SKIPS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_text_push_stale_last_comp",
+            PROFILE_STATS_PUSH_STALE_LAST_COMP.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_text_push_stale_last_vt",
+            PROFILE_STATS_PUSH_STALE_LAST_VT.load(Ordering::SeqCst),
+        );
+        // Per-slot save-stats cache (bd er-effects-rs-l90): cache_state 1 == the live `.sl2` was read
+        // and parsed (each row shows ITS OWN character's attributes); 2 == read failed (fell back to
+        // the loaded character). decoded == how many of the 10 save slots held a real character.
+        push_json_usize(
+            body,
+            "oracle_stats_text_slot_cache_state",
+            PROFILE_SLOT_STATS_CACHE_STATE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_text_slot_decoded",
+            PROFILE_SLOT_STATS_DECODED.load(Ordering::SeqCst),
+        );
         // Stats-panel 05_010 runtime GFX edit oracles (mirror the 05_000 runtime-strip set).
         push_json_usize(
             body,

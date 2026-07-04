@@ -149,8 +149,22 @@ def emit_rust(a_fn: str, b_fn: str, const_name: str):
     # streams are covered by the parent edit's old_tag bytes, so they must be
     # skipped as containers (in A), and a replacement that introduces a sprite
     # would appear as a new container in B.
+    # Each edit is (sprite, code, old_bytes, new_bytes_or_None, op) where op is
+    # one of "Replace" / "Remove" / "InsertAfter".
     edits = []
     parent_edited_a, parent_edited_b = set(), set()
+
+    def anchor_at(sa, sf, idx, sprite):
+        """Bytes+code of the vanilla anchor tag at position `idx`; it must be
+        UNIQUE in the container so `apply_edits` resolves it unambiguously."""
+        code, elem = sa[idx]
+        ab = elem_bytes(sf, code, elem)
+        n = sum(1 for (c, e) in sa if elem_bytes(sf, c, e) == ab)
+        assert n == 1, (
+            f"insert anchor at container {sprite} idx {idx} is not unique ({n} matches)"
+        )
+        return code, ab
+
     for sprite in ca:
         if sprite is not None and sprite not in cb:
             continue  # covered by a parent-level edit collected below
@@ -163,35 +177,51 @@ def emit_rust(a_fn: str, b_fn: str, const_name: str):
                 for code, elem in sa[i1:i2]:
                     if code == 39:
                         parent_edited_a.add(elem[1])
-                    edits.append((sprite, code, elem_bytes(sf_a, code, elem), None))
+                    edits.append((sprite, code, elem_bytes(sf_a, code, elem), None, "Remove"))
+            elif op == "insert":
+                # New tags with no vanilla counterpart: anchor each after the
+                # preceding vanilla tag (i1-1) via InsertAfter. Insert-at-front
+                # (i1==0) has no anchor tag and is unsupported.
+                assert i1 > 0, f"insert at container {sprite} front has no anchor tag"
+                acode, abytes = anchor_at(sa, sf_a, i1 - 1, sprite)
+                for nc, ne in sb[j1:j2]:
+                    if nc == 39:
+                        parent_edited_b.add(ne[1])
+                    edits.append(
+                        (sprite, acode, abytes, elem_bytes(sf_b, nc, ne), "InsertAfter")
+                    )
             elif op == "replace":
                 olds, news = sa[i1:i2], sb[j1:j2]
-                # An uneven block with MORE olds is a mixed replace+delete run:
-                # pair head-to-head and delete the excess olds. Any
-                # order-preserving pairing yields the same output stream, and
-                # the module-level known-input fingerprint check verifies the
-                # applied result byte-for-byte. More news than olds would be an
-                # insert, which the edit model rejects.
-                assert len(olds) >= len(news), (
-                    f"insert inside replace in container {sprite}: {len(olds)} old vs {len(news)} new"
-                )
-                for code, elem in olds[len(news):]:
+                pair = min(len(olds), len(news))
+                # Excess olds (a mixed replace+delete run): delete the tail.
+                for code, elem in olds[pair:]:
                     if code == 39:
                         parent_edited_a.add(elem[1])
-                    edits.append((sprite, code, elem_bytes(sf_a, code, elem), None))
-                for (oc, oe), (nc, ne) in zip(olds, news):
-                    # TagEdit.code documents the TARGETED (old) tag; the
-                    # replacement may be a different tag kind (e.g. a
-                    # DefineSprite repurposed as a DefineEditText).
+                    edits.append((sprite, code, elem_bytes(sf_a, code, elem), None, "Remove"))
+                # Head-to-head replacements. TagEdit.code documents the TARGETED
+                # (old) tag; the replacement may be a different tag kind (e.g. a
+                # DefineSprite repurposed as a DefineEditText).
+                for (oc, oe), (nc, ne) in zip(olds[:pair], news[:pair]):
                     if oc == 39:
                         parent_edited_a.add(oe[1])
                     if nc == 39:
                         parent_edited_b.add(ne[1])
                     edits.append(
-                        (sprite, oc, elem_bytes(sf_a, oc, oe), elem_bytes(sf_b, nc, ne))
+                        (sprite, oc, elem_bytes(sf_a, oc, oe), elem_bytes(sf_b, nc, ne), "Replace")
                     )
+                # Excess news (a mixed replace+insert run): insert after the last
+                # paired vanilla anchor.
+                if len(news) > len(olds):
+                    assert olds, f"insert-only replace block in container {sprite} has no anchor"
+                    acode, abytes = anchor_at(sa, sf_a, i1 + pair - 1, sprite)
+                    for nc, ne in news[pair:]:
+                        if nc == 39:
+                            parent_edited_b.add(ne[1])
+                        edits.append(
+                            (sprite, acode, abytes, elem_bytes(sf_b, nc, ne), "InsertAfter")
+                        )
             else:
-                raise AssertionError(f"unsupported opcode {op!r} in container {sprite} (insert?)")
+                raise AssertionError(f"unsupported opcode {op!r} in container {sprite}")
     dangling_a = {s for s in ca if s is not None and s not in cb} - parent_edited_a
     assert not dangling_a, f"containers vanished without a parent-level edit: {dangling_a}"
     dangling_b = {s for s in cb if s is not None and s not in ca} - parent_edited_b
@@ -207,7 +237,7 @@ def emit_rust(a_fn: str, b_fn: str, const_name: str):
     print(hdr_line("A (vanilla)", raw_a))
     print(hdr_line("B (edited) ", raw_b))
     print(f"pub const {const_name}: &[TagEdit] = &[")
-    for sprite, code, old, new in edits:
+    for sprite, code, old, new, op in edits:
         sp = "None" if sprite is None else f"Some({sprite})"
         nt = "None" if new is None else f"Some({rust_bytes(new)})"
         print("    TagEdit {")
@@ -215,11 +245,14 @@ def emit_rust(a_fn: str, b_fn: str, const_name: str):
         print(f"        code: {code},")
         print(f"        old_tag: {rust_bytes(old)},")
         print(f"        new_tag: {nt},")
+        print(f"        op: EditOp::{op},")
         print("    },")
     print("];")
-    n_rm = sum(1 for e in edits if e[3] is None)
+    n_rm = sum(1 for e in edits if e[4] == "Remove")
+    n_ins = sum(1 for e in edits if e[4] == "InsertAfter")
+    n_rep = sum(1 for e in edits if e[4] == "Replace")
     print(
-        f"// {len(edits)} edits: {n_rm} removals, {len(edits) - n_rm} replacements.",
+        f"// {len(edits)} edits: {n_rm} removals, {n_rep} replacements, {n_ins} insertions.",
     )
 
 

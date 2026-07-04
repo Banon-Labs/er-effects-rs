@@ -7864,18 +7864,6 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook
     ));
 }
 
-/// Exact ASCII compare of a NUL-terminated C-string pointer against `want` (fault-safe, non-UTF-8 or
-/// null pointer -> false).
-unsafe fn name_ptr_equals_ascii(name_ptr: usize, want: &str) -> bool {
-    if name_ptr == 0 || name_ptr == TITLE_OWNER_SCAN_START_ADDRESS {
-        return false;
-    }
-    match unsafe { CStr::from_ptr(name_ptr as *const i8).to_str() } {
-        Ok(s) => s == want,
-        Err(_) => false,
-    }
-}
-
 unsafe fn title_child_name_matches(name_ptr: usize) -> bool {
     if name_ptr == 0 || name_ptr == TITLE_OWNER_SCAN_START_ADDRESS {
         return false;
@@ -7944,45 +7932,10 @@ pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook
     let f: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig) };
     let ret = unsafe { f(parent, out_proxy, name_ptr) };
-    // STATS-PANEL NATIVE TEXT (row-field-driven push): the ProfileSelect row-populate template
-    // (`FUN_1408758d0`) resolves the row's fields through this binder in order -- PlayerName first,
-    // with `parent` == the row's SceneObjProxy. When we see that first resolve for a real character
-    // row, synchronously resolve the GFX-edit `ErStats` field on the SAME row and push the attribute
-    // line through the native SetText wrapper (the exact mechanism the row-populate uses). This
-    // fires whenever the native populate runs (the only reliably-instrumentable trigger; the populate
-    // itself is timing-raced against the autoload -- bd er-effects-rs-7q7/bcy). Re-entrancy is
-    // guarded: our own `ErStats` resolve re-enters this hook but is skipped while the flag is set.
-    if stats_panel_enabled()
-        && parent != 0
-        && parent != null
-        && PROFILE_STATS_PUSH_IN_PROGRESS.load(Ordering::SeqCst) == 0
-        && unsafe { name_ptr_equals_ascii(name_ptr, PROFILE_STATS_TRIGGER_FIELD) }
-    {
-        let seen = PROFILE_STATS_ROW_POPULATES.fetch_add(1, Ordering::SeqCst) + 1;
-        let base = game_module_base().unwrap_or(null);
-        let utf16 = build_stats_text_utf16();
-        if base != null && utf16.len() > 1 {
-            PROFILE_STATS_PUSH_IN_PROGRESS.store(1, Ordering::SeqCst);
-            let pushed = unsafe { push_stats_text_on_row(base, parent, &utf16) };
-            PROFILE_STATS_PUSH_IN_PROGRESS.store(0, Ordering::SeqCst);
-            if pushed {
-                let subs = PROFILE_STATS_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst) + 1;
-                if subs <= 4 {
-                    append_autoload_debug(format_args!(
-                        "stats-text: pushed ErStats on row=0x{parent:x} ({} attr chars, row_triggers={seen} subs={subs})",
-                        utf16.len() - 1
-                    ));
-                }
-            } else {
-                let fails = PROFILE_STATS_PUSH_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
-                if fails <= 4 {
-                    append_autoload_debug(format_args!(
-                        "stats-text: ErStats push REJECTED on row=0x{parent:x} (field missing/not editable -- 05_010 GFX edit not live?) (row_triggers={seen} fails={fails})"
-                    ));
-                }
-            }
-        }
-    }
+    // NOTE: the per-slot stats push is NOT done here. This binder is called per FIELD (PlayerName,
+    // Level, ...) and does not know which save slot the row belongs to, so it cannot pick per-slot
+    // attributes. The push is driven from `profile_row_populate_hook` (hooks the row-populate template
+    // `FUN_1408758d0`, which carries the slot index in its row model) -- see bd er-effects-rs-l90.
     if unsafe { title_profile_list_container_matches(name_ptr) } {
         TITLE_PROFILE_FACE_BIND_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
         TITLE_PROFILE_FACE_LAST_PROXY.store(out_proxy, Ordering::SeqCst);
@@ -8074,38 +8027,140 @@ pub(crate) fn install_title_scene_obj_proxy_named_child_bind_hook() {
     }
 }
 
-/// Build the character's attribute line as a NUL-terminated UTF-16 string for native SetText, read live
-/// from `GameDataMan -> PlayerGameData` (the same source the LOAD-CORRECTNESS oracle reads). Plain text
-/// (no HTML) -- the SetText wrapper wraps it and the field's own `MenuFont_01` renders it. Labels are the
-/// eight attributes in struct order: Vigor, Mind, Endurance, Strength, Dexterity, Intelligence, Faith,
-/// Arcane. Returns an empty vec (just the NUL) if the player data is not readable, so the caller falls
-/// back to the native text.
-fn build_stats_text_utf16() -> Vec<u16> {
-    const LABELS: [&str; 8] = ["VIG", "MND", "END", "STR", "DEX", "INT", "FAI", "ARC"];
+/// The eight attributes of the character in save `slot`, or `None` when the slot is empty or the save
+/// is unreadable. This is the PER-SLOT source (bd er-effects-rs-l90): the attributes exist in no live
+/// struct at ProfileSelect time, so they are read straight from the on-disk `.sl2` (see
+/// [`ensure_profile_slot_stats_cached`]).
+fn profile_slot_attributes(slot: i32) -> Option<[i32; STATS_ATTR_COUNT]> {
+    if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
+        return None;
+    }
+    let guard = PROFILE_SLOT_STATS_CACHE.lock().ok()?;
+    guard.as_ref()?.get(slot as usize).copied().flatten()
+}
+
+/// Fallback attributes read live from `GameDataMan -> PlayerGameData` -- the CURRENTLY-LOADED
+/// character. Used only when the per-slot `.sl2` read fails entirely, so the row still shows real
+/// (if not per-slot) values rather than nothing. Returns `None` when no character is loaded.
+fn build_loaded_char_attributes() -> Option<[i32; STATS_ATTR_COUNT]> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let gdm = game_data_man_ptr_or_null();
-    let pgd = if gdm != 0 && gdm != null {
-        unsafe { safe_read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(0)
-    } else {
-        0
-    };
+    if gdm == 0 || gdm == null {
+        return None;
+    }
+    let pgd = unsafe { safe_read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }?;
     if pgd == 0 || pgd == null {
-        return vec![0u16];
+        return None;
     }
-    let n = PGD_STAT_COUNT.min(LABELS.len());
-    let mut s = String::new();
-    for i in 0..n {
-        let v = unsafe { safe_read_i32(pgd + PGD_STAT_BASE_3C_OFFSET + i * 4) }.unwrap_or(0);
-        if i > 0 {
-            // Single-space separators: 8 attribute groups at 22px must fit the
-            // 630px `ErStats` field with margin for 2-digit values.
-            s.push(' ');
+    let mut attrs = [0i32; STATS_ATTR_COUNT];
+    for (i, a) in attrs.iter_mut().enumerate() {
+        *a = unsafe { safe_read_i32(pgd + PGD_STAT_BASE_3C_OFFSET + i * 4) }.unwrap_or(0);
+    }
+    Some(attrs)
+}
+
+/// Build the attribute line for `attributes[start..end]` as a NUL-terminated UTF-16 string for native
+/// SetText. The attributes are in struct order (Vigor, Mind, Endurance, Strength, Dexterity,
+/// Intelligence, Faith, Arcane); labels/colors are indexed globally so a sub-range renders with the same
+/// per-attribute colors as the full line. Emitted as **Scaleform HTML**: the SetText core `FUN_140d84350`
+/// dispatches with `bHTML=1` (static RE 2026-07-04), so per-span `<font color>`/`<b>` tags are parsed and
+/// rendered by the field's own `MenuFont_01`. Each label is dimmed and each value gets a distinct color.
+/// The panel splits the eight attributes across two row lines (0..4 top, 4..8 bottom) via two calls.
+fn build_stats_html_utf16(
+    attributes: &[i32; STATS_ATTR_COUNT],
+    start: usize,
+    end: usize,
+) -> Vec<u16> {
+    const LABELS: [&str; STATS_ATTR_COUNT] =
+        ["VIG", "MND", "END", "STR", "DEX", "INT", "FAI", "ARC"];
+    // One distinct, dark-row-legible color per attribute value.
+    const VALUE_COLORS: [&str; STATS_ATTR_COUNT] = [
+        "#e0736b", // VIG - red
+        "#6fb4e0", // MND - blue
+        "#7fc27a", // END - green
+        "#e0973f", // STR - orange
+        "#d7d06a", // DEX - yellow
+        "#79cfe0", // INT - cyan
+        "#e0c766", // FAI - gold
+        "#c489c0", // ARC - violet
+    ];
+    // Labels dimmer than the native #cccccc so they read as secondary.
+    const LABEL_COLOR: &str = "#8f887a";
+    const SIZE: &str = "19";
+    let end = end.min(LABELS.len());
+    let mut s = String::from("<p align=\"left\">");
+    for i in start..end {
+        let v = attributes[i];
+        if i > start {
+            // A wider gap between pairs (vs the single space inside a pair) groups the attributes.
+            s.push_str("  ");
         }
+        // Dim label, then the distinct-colored, bold value.
+        s.push_str("<font size=\"");
+        s.push_str(SIZE);
+        s.push_str("\" color=\"");
+        s.push_str(LABEL_COLOR);
+        s.push_str("\">");
         s.push_str(LABELS[i]);
-        s.push(' ');
+        s.push_str("</font> <font size=\"");
+        s.push_str(SIZE);
+        s.push_str("\" color=\"");
+        s.push_str(VALUE_COLORS[i]);
+        s.push_str("\"><b>");
         s.push_str(&v.to_string());
+        s.push_str("</b></font>");
     }
+    s.push_str("</p>");
     s.encode_utf16().chain(core::iter::once(0)).collect()
+}
+
+/// Number of character attributes (Vig..Arc).
+const STATS_ATTR_COUNT: usize = 8;
+/// Profile/save slot count on the ProfileSelect screen.
+const PROFILE_SLOT_COUNT: i32 = 10;
+
+/// Per-slot attribute cache, parsed once from the live `.sl2`, indexed by save slot (0-9). A per-slot
+/// `None` means an empty slot; the outer `Option` is the "have we tried to load it yet?" latch.
+static PROFILE_SLOT_STATS_CACHE: std::sync::Mutex<Option<[Option<[i32; STATS_ATTR_COUNT]>; 10]>> =
+    std::sync::Mutex::new(None);
+
+/// Populate the per-slot stats cache from the live save file if not already loaded. Reads the on-disk
+/// `.sl2` (the exact file the game loads) via the native save-dir builder path (`own_load_read_sl2_bytes`),
+/// then parses each `USER_DATA` slot's `PlayerGameData` attributes with `er_save_loader::stats`. Heavy
+/// work (a ~26 MB read + parse) happens at most once per session; subsequent rows hit the cache.
+/// Returns whether the cache is loaded (true even if some/all slots are empty).
+unsafe fn ensure_profile_slot_stats_cached(base: usize) -> bool {
+    let mut guard = match PROFILE_SLOT_STATS_CACHE.lock() {
+        Ok(g) => g,
+        Err(poison) => poison.into_inner(),
+    };
+    if guard.is_some() {
+        return true;
+    }
+    let Some(sl2) = (unsafe { crate::experiments::own_load_read_sl2_bytes(base) }) else {
+        PROFILE_SLOT_STATS_CACHE_STATE.store(2, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "stats-text: per-slot cache load FAILED (.sl2 unreadable) -- falling back to loaded character"
+        ));
+        return false;
+    };
+    let all = er_save_loader::stats::all_slot_stats(&sl2);
+    let mut cache: [Option<[i32; STATS_ATTR_COUNT]>; 10] = [None; 10];
+    let mut decoded = 0usize;
+    for (i, slot) in all.iter().enumerate() {
+        if let Some(stats) = slot {
+            cache[i] = Some(stats.attributes);
+            decoded += 1;
+        }
+    }
+    *guard = Some(cache);
+    PROFILE_SLOT_STATS_DECODED.store(decoded, Ordering::SeqCst);
+    PROFILE_SLOT_STATS_CACHE_STATE.store(1, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "stats-text: per-slot cache loaded from .sl2 ({decoded}/10 slots decoded, {} bytes)",
+        sl2.len()
+    ));
+    true
 }
 
 /// Push `utf16` onto the row's `ErStats` field with the game's own machinery, exactly as the native
@@ -8113,8 +8168,18 @@ fn build_stats_text_utf16() -> Vec<u16> {
 /// hook's trampoline when available so the resolve is not double-instrumented), SetText through the
 /// null-guarded wrapper `FUN_14074a0f0` (checks the field dataType; returns 0 when the child did not
 /// resolve to an editable text field, e.g. when the 05_010 GFX edit was not served), then release the
-/// resolved value with `CSScaleformValue::~CSScaleformValue`. Returns whether SetText accepted.
-unsafe fn push_stats_text_on_row(base: usize, row_proxy: usize, utf16: &[u16]) -> bool {
+/// resolved value with `CSScaleformValue::~CSScaleformValue` on the proxy's EMBEDDED value (+0x28),
+/// mirroring the native `~CSScaleformValue(&SStack_70.scaleformValue)`. Returns whether SetText
+/// accepted.
+///
+/// er-effects-rs-7e7 hardening: the SetText wrapper's first act is `rcx = *(proxy+0x8); call
+/// *0x8(*rcx)` -- an UNVALIDATED virtual dispatch on the linked component object. On the first
+/// in-world ProfileSelect open the component linked for our injected `ErStats` field was a stale
+/// menu-arena object with a garbage heap vtable, and that dispatch jumped into `.rdata` (hard
+/// crash). Validate component -> vtable -> slot target are all game-image-plausible before letting
+/// the wrapper dispatch; otherwise skip fail-closed with full diagnostics.
+unsafe fn push_stats_text_on_row(base: usize, row_proxy: usize, name: &str, utf16: &[u16]) -> bool {
+    debug_assert!(name.ends_with('\0'), "field name must be NUL-terminated");
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let assign = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
         orig if orig != null && orig != HOOK_ORIGINAL_UNSET => orig,
@@ -8131,11 +8196,6 @@ unsafe fn push_stats_text_on_row(base: usize, row_proxy: usize, utf16: &[u16]) -
     // uninitialized 0x70-byte stack slot with headroom. The name is a plain string (the binder
     // treats it as a printf format; `ErStats` carries no '%').
     let mut proxy_buf = [0u8; SCENE_OBJ_PROXY_STACK_BYTES];
-    let name = "ErStats\0";
-    debug_assert_eq!(
-        &name[..name.len() - 1],
-        er_gfx::title_05_010::STATS_FIELD_NAME
-    );
     let out = unsafe {
         assign(
             row_proxy,
@@ -8146,11 +8206,172 @@ unsafe fn push_stats_text_on_row(base: usize, row_proxy: usize, utf16: &[u16]) -
     if out == 0 || out == null {
         return false;
     }
-    let field = out + SCENE_OBJ_PROXY_SCALEFORM_VALUE_OFFSET;
-    // `utf16` outlives the call (the wrapper copies it into a DLString synchronously).
-    let accepted = unsafe { settext(field, utf16.as_ptr() as usize) } != 0;
-    unsafe { dtor(field) };
+    let component_slot = out + SCENE_OBJ_PROXY_COMPONENT_SLOT_OFFSET;
+    let comp = unsafe { safe_read_usize(component_slot) }.unwrap_or(0);
+    let comp_vt = if comp != 0 && comp != null {
+        unsafe { safe_read_usize(comp) }.unwrap_or(0)
+    } else {
+        0
+    };
+    let slot_fn = if comp_vt != 0 {
+        unsafe { safe_read_usize(comp_vt + COMPONENT_GET_VALUE_VTABLE_SLOT_OFFSET) }.unwrap_or(0)
+    } else {
+        0
+    };
+    let component_live =
+        comp_vt != 0 && vtable_in_game_image(comp_vt, base) && vtable_in_game_image(slot_fn, base);
+    let accepted = if component_live {
+        // `utf16` outlives the call (the wrapper copies it into a DLString synchronously).
+        (unsafe { settext(component_slot, utf16.as_ptr() as usize) }) != 0
+    } else {
+        let skips = PROFILE_STATS_PUSH_STALE_SKIPS.fetch_add(1, Ordering::SeqCst) + 1;
+        PROFILE_STATS_PUSH_STALE_LAST_COMP.store(comp, Ordering::SeqCst);
+        PROFILE_STATS_PUSH_STALE_LAST_VT.store(comp_vt, Ordering::SeqCst);
+        if skips <= 8 {
+            append_autoload_debug(format_args!(
+                "stats-text: ErStats push SKIPPED fail-closed (er-effects-rs-7e7 guard): resolved component NOT live -- comp=0x{comp:x} vt=0x{comp_vt:x} slot_fn=0x{slot_fn:x} row=0x{row_proxy:x} (skips={skips})"
+            ));
+        }
+        false
+    };
+    // Destroy the proxy's EMBEDDED CSScaleformValue exactly like the native populate. The old code
+    // ran the dtor on +0x8 (the component slot) -- corrupting the link node and mis-releasing
+    // proxy+0x20 -- a second latent 7e7-class UAF even when SetText succeeded.
+    unsafe { dtor(out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET) };
     accepted
+}
+
+/// Hook of the ProfileSelect row-populate template `FUN_1408758d0(rowModel, rowProxy, ...)`. Runs once
+/// per visible list row with a PER-SLOT row model, so it can push the CORRECT slot's attributes (unlike
+/// the per-field named-child binder, which has no slot). The push happens BEFORE the original runs: the
+/// original resolves the native fields and then destroys the row proxy's embedded `CSScaleformValue` at
+/// its end, so a post-call resolve of `ErStats` would operate on a released value. Our push resolves a
+/// SEPARATE child proxy (`ErStats`) and releases only that child's value, leaving the native fields and
+/// the row proxy untouched for the original. bd er-effects-rs-l90.
+pub(crate) unsafe extern "system" fn profile_row_populate_hook(
+    row_model: usize,
+    row_proxy: usize,
+    arg3: usize,
+    arg4: usize,
+) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = PROFILE_ROW_POPULATE_ORIG.load(Ordering::SeqCst);
+    if orig == null || orig == HOOK_ORIGINAL_UNSET {
+        // Can't call through; mirror the native return (the row model pointer) rather than crash.
+        return row_model;
+    }
+    let f: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    if stats_panel_enabled()
+        && row_model != 0
+        && row_model != null
+        && row_proxy != 0
+        && row_proxy != null
+        && PROFILE_STATS_PUSH_IN_PROGRESS.swap(1, Ordering::SeqCst) == 0
+    {
+        let base = game_module_base().unwrap_or(null);
+        if base != null {
+            let slot = unsafe { safe_read_i32(row_model + PROFILE_ROW_MODEL_SLOT_08_OFFSET) }
+                .unwrap_or(-1);
+            let cache_loaded = unsafe { ensure_profile_slot_stats_cached(base) };
+            // Per-slot attributes from the save; if the whole cache failed to load, degrade to the
+            // loaded character so a row still shows real values (rather than nothing).
+            let attrs = profile_slot_attributes(slot).or_else(|| {
+                if cache_loaded {
+                    None
+                } else {
+                    build_loaded_char_attributes()
+                }
+            });
+            if let Some(attrs) = attrs {
+                let seen = PROFILE_STATS_ROW_POPULATES.fetch_add(1, Ordering::SeqCst) + 1;
+                // Split the eight attributes across the row's two text lines: the first four on the
+                // top line (`ErStatsTop`), the last four on the bottom line (`ErStatsBottom`), using
+                // the vertical space each row already has. Names are NUL-terminated for the C binder.
+                let top = build_stats_html_utf16(&attrs, 0, STATS_ATTR_COUNT / 2);
+                let bottom = build_stats_html_utf16(&attrs, STATS_ATTR_COUNT / 2, STATS_ATTR_COUNT);
+                let pushed_top =
+                    unsafe { push_stats_text_on_row(base, row_proxy, "ErStatsTop\0", &top) };
+                let pushed_bottom =
+                    unsafe { push_stats_text_on_row(base, row_proxy, "ErStatsBottom\0", &bottom) };
+                debug_assert_eq!("ErStatsTop", er_gfx::title_05_010::STATS_FIELD_NAME_TOP);
+                debug_assert_eq!(
+                    "ErStatsBottom",
+                    er_gfx::title_05_010::STATS_FIELD_NAME_BOTTOM
+                );
+                if pushed_top && pushed_bottom {
+                    let subs = PROFILE_STATS_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst) + 1;
+                    if subs <= 4 {
+                        append_autoload_debug(format_args!(
+                            "stats-text: pushed ErStatsTop+Bottom slot={slot} on row=0x{row_proxy:x} (row_triggers={seen} subs={subs})"
+                        ));
+                    }
+                } else {
+                    let fails = PROFILE_STATS_PUSH_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
+                    if fails <= 4 {
+                        append_autoload_debug(format_args!(
+                            "stats-text: ErStats push REJECTED slot={slot} on row=0x{row_proxy:x} top={pushed_top} bottom={pushed_bottom} (05_010 GFX edit not live?) (fails={fails})"
+                        ));
+                    }
+                }
+            }
+        }
+        PROFILE_STATS_PUSH_IN_PROGRESS.store(0, Ordering::SeqCst);
+    }
+    unsafe { f(row_model, row_proxy, arg3, arg4) }
+}
+
+/// Install the row-populate hook (`FUN_1408758d0`). Idempotent; mirrors the named-child binder install.
+pub(crate) fn install_profile_row_populate_hook() {
+    if PROFILE_ROW_POPULATE_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "stats-text: row-populate MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(PROFILE_ROW_POPULATE_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "stats-text: failed to resolve row-populate rva 0x{PROFILE_ROW_POPULATE_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            profile_row_populate_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            PROFILE_ROW_POPULATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "stats-text: queue_enable row-populate failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    PROFILE_ROW_POPULATE_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "stats-text: hooked ProfileSelect row-populate FUN_1408758d0 0x{addr:x}; per-slot attributes push before each row's native populate"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "stats-text: row-populate MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "stats-text: MhHook::new row-populate failed: {status:?}"
+        )),
+    }
 }
 
 pub(crate) unsafe extern "system" fn title_gfx_value_set_visible_hook(

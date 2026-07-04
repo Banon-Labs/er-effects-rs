@@ -68,9 +68,14 @@ while (( SECONDS - start < DEADLINE_S )); do
   fi
 
   if [[ "$paused" == "1" && "$state" == "6" && "$alive" == "1" ]]; then
-    echo "===== PASS (+${t}s): autopilot PAUSED at the open ProfileSelect (state=DONE, zero picks/arms/loads). Game left RUNNING -- no teardown. Tear down manually: pkill -x eldenring.exe ====="
-    verdict_rc=0
-    break
+    if [[ -z "${pause_seen_at:-}" ]]; then
+      pause_seen_at=$t
+      echo "[pause-watch +${t}s] pause latched -- holding ${STABLE_S:=3}s stability window (goal: >=2s alive post-pause, no crash)"
+    elif (( t - pause_seen_at >= ${STABLE_S:-3} )); then
+      echo "===== PASS (+${t}s): autopilot PAUSED at the open ProfileSelect (state=DONE, zero picks/arms/loads) and stayed alive $((t - pause_seen_at))s post-pause. Game left RUNNING -- no teardown. Tear down manually: pkill -x eldenring.exe ====="
+      verdict_rc=0
+      break
+    fi
   fi
   sleep "$POLL_S"
 done

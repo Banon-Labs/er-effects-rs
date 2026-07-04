@@ -12,8 +12,8 @@ mod common;
 
 use er_gfx::title_05_000::fnv1a64;
 use er_gfx::title_05_010::{
-    EDITED_FNV1A64, EDITED_LEN, STATS_FIELD_NAME, StatsPanelError, VANILLA_FNV1A64, VANILLA_LEN,
-    is_known_vanilla, stats_panel,
+    EDITED_FNV1A64, EDITED_LEN, STATS_FIELD_NAME_BOTTOM, STATS_FIELD_NAME_TOP, StatsPanelError,
+    VANILLA_FNV1A64, VANILLA_LEN, is_known_vanilla, stats_panel,
 };
 use er_gfx::{Movie, Tag};
 
@@ -47,11 +47,13 @@ fn stats_panel_of_vanilla_matches_generated_fingerprint() {
     assert_eq!(fnv1a64(&out), EDITED_FNV1A64);
 }
 
-/// Structural gates on the edited movie: the face box placement is gone, and
-/// the row template places a `DefineEditText` char as [`STATS_FIELD_NAME`]
-/// (the exact child the DLL resolves for its native SetText push).
+/// Structural gates on the edited movie: the face box stays PLACED (so the
+/// native row-populate can resolve/release it -- unplacing it crashes,
+/// er-effects-rs-7e7) but is hidden by an alpha-0 color transform, and the row
+/// template places a `DefineEditText` char as [`STATS_FIELD_NAME`] (the exact
+/// child the DLL resolves for its native SetText push).
 #[test]
-fn stats_panel_output_places_stats_field_and_drops_face_box() {
+fn stats_panel_output_places_stats_field_and_hides_face_box() {
     let Some(vanilla) = read_vanilla_or_skip() else {
         return;
     };
@@ -72,33 +74,53 @@ fn stats_panel_output_places_stats_field_and_drops_face_box() {
             _ => None,
         })
         .collect();
-    assert!(
-        !names.contains(&"Icon_0"),
-        "face box placement must be removed: {names:?}"
-    );
-    assert!(
-        names.contains(&STATS_FIELD_NAME),
-        "stats field placement missing: {names:?}"
-    );
-    let stats_char = row
+    // Icon_0 must stay PLACED (native resolve/release depends on it) but be
+    // rendered invisible via an alpha-0 CXFORMWITHALPHA multiply term.
+    let icon = row
         .iter()
         .find_map(|t| match t {
             Tag::PlaceObject2 {
                 name: Some(n),
-                character_id,
+                color_transform,
                 ..
-            } if n == STATS_FIELD_NAME => *character_id,
+            } if n == "Icon_0" => Some(color_transform),
             _ => None,
         })
-        .expect("stats placement carries a character id");
-    let is_edit_text = movie.tags.iter().any(|t| {
-        matches!(t, Tag::DefineEditText { character_id, font_class: Some(fc), .. }
-            if *character_id == stats_char && fc == "MenuFont_01")
-    });
-    assert!(
-        is_edit_text,
-        "char {stats_char} must be a MenuFont_01 DefineEditText"
+        .expect("face box placement must stay placed (unplacing it crashes the native populate)");
+    let cx = icon
+        .as_ref()
+        .expect("hidden Icon_0 carries a color transform");
+    assert_eq!(
+        cx.mult.map(|m| m[3]),
+        Some(0),
+        "Icon_0 alpha multiply must be 0 (fully transparent): {cx:?}"
     );
+    // Both stat fields (top + bottom line) must be placed.
+    for stats_name in [STATS_FIELD_NAME_TOP, STATS_FIELD_NAME_BOTTOM] {
+        assert!(
+            names.contains(&stats_name),
+            "stats field {stats_name} placement missing: {names:?}"
+        );
+        let stats_char = row
+            .iter()
+            .find_map(|t| match t {
+                Tag::PlaceObject2 {
+                    name: Some(n),
+                    character_id,
+                    ..
+                } if n == stats_name => *character_id,
+                _ => None,
+            })
+            .expect("stats placement carries a character id");
+        let is_edit_text = movie.tags.iter().any(|t| {
+            matches!(t, Tag::DefineEditText { character_id, font_class: Some(fc), .. }
+                if *character_id == stats_char && fc == "MenuFont_01")
+        });
+        assert!(
+            is_edit_text,
+            "char {stats_char} ({stats_name}) must be a MenuFont_01 DefineEditText"
+        );
+    }
     // Native fields the engine populates must all survive the transform.
     for native in [
         "PlayerName",
