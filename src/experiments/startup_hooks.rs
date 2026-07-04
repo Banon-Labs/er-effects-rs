@@ -3077,7 +3077,20 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
     // (offscreen; find_d3d12_resource reaches the content RT), dst = offscreen+0x10's CSGxTexture (the SRV
     // GFx samples). Render-thread context (same as the readback), bounded + fail-closed.
     {
-        let slot = portrait_loaded_slot();
+        // TARGET-SLOT BINDING (frozen-on-prior-character fix, attribution soak 2026-07-03). This
+        // draw tick (pump + rasterize + RT->SRV + readback + publish) used portrait_loaded_slot()
+        // = ac0, which still names the OLD character until the switch deserialize flips it. In
+        // windows where the flip came late, the whole tick bound the old slot's rebuilt (model-
+        // less) renderer and published its STALE RT ~92 frames -- a static prior-character head,
+        // exactly the user-observed freeze (publish[clean=92, no dominant skip class]); the
+        // window-4 tear=39-40 storm was the two producers competing during the flip. Bind to
+        // portrait_target_slot() -- the make-before-break source every other portrait site
+        // (spare/retarget/display) already uses: selected slot from the confirm press (known
+        // BEFORE ac0 flips), falling back to loaded/ac0 when no switch is pending (boot window
+        // unchanged). Early-window table[target] is legitimately null (the spare nulled it), so
+        // the tick idles on the bridge until the target build lands instead of driving the wrong
+        // character.
+        let slot = portrait_target_slot();
         // Tag the live portrait CHARACTER incarnation (slot + 1; 0 = unset) for the mask stale-reuse
         // desync semaphore: apply_depth_alpha_key records this on a fresh mask and trips
         // PROFILE_MASK_STALE_REUSE if a later frame reuses a mask computed for a different incarnation.
