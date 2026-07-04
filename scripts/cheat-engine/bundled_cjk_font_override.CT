@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CheatTable CheatEngineTableVersion="45">
+  <CheatEntries>
+    <CheatEntry>
+      <ID>0</ID>
+      <Description>"Elden Ring bundled CJK font override"</Description>
+      <Options moHideChildren="1"/>
+      <GroupHeader>1</GroupHeader>
+      <CheatEntries>
+        <CheatEntry>
+          <ID>1</ID>
+          <Description>"Use bundled Simplified Chinese menu font"</Description>
+          <VariableType>Auto Assembler Script</VariableType>
+          <AssemblerScript><![CDATA[// Elden Ring 1.16.1 / Seamless-friendly font redirect
+// Redirects the two Scaleform menu font-name getters so English UI sessions
+// use the game's bundled /font/simplifiedchinese/font.gfx asset.
+// Enable before the menu font setup runs. Disable before switching variants.
+
+[ENABLE]
+aobscanmodule(er_font_main_getter,eldenring.exe,40 53 48 83 EC 20 8B D9 83 F9 0F 72 18 4C 8D 05 ?? ?? ?? ?? BA DE 00 00 00)
+aobscanmodule(er_font_sub_getter,eldenring.exe,40 53 48 83 EC 20 8B D9 83 F9 0F 72 18 4C 8D 05 ?? ?? ?? ?? BA FD 00 00 00)
+aobscanmodule(er_font_simplified_chinese,eldenring.exe,53 00 69 00 6D 00 70 00 6C 00 69 00 66 00 69 00 65 00 64 00 43 00 68 00 69 00 6E 00 65 00 73 00 65 00 00 00)
+
+assert(er_font_main_getter,40 53 48 83 EC 20 8B D9 83 F9 0F 72)
+assert(er_font_sub_getter,40 53 48 83 EC 20 8B D9 83 F9 0F 72)
+
+registersymbol(er_font_main_getter)
+registersymbol(er_font_sub_getter)
+registersymbol(er_font_simplified_chinese)
+
+er_font_main_getter:
+  mov rax,er_font_simplified_chinese
+  ret
+  nop
+
+er_font_sub_getter:
+  mov rax,er_font_simplified_chinese
+  ret
+  nop
+
+[DISABLE]
+er_font_main_getter:
+  db 40 53 48 83 EC 20 8B D9 83 F9 0F 72
+
+er_font_sub_getter:
+  db 40 53 48 83 EC 20 8B D9 83 F9 0F 72
+
+unregistersymbol(er_font_main_getter)
+unregistersymbol(er_font_sub_getter)
+unregistersymbol(er_font_simplified_chinese)
+]]></AssemblerScript>
+        </CheatEntry>
+        <CheatEntry>
+          <ID>2</ID>
+          <Description>"Use bundled Traditional Chinese menu font"</Description>
+          <VariableType>Auto Assembler Script</VariableType>
+          <AssemblerScript><![CDATA[// Elden Ring 1.16.1 / Seamless-friendly font redirect
+// Redirects the two Scaleform menu font-name getters so English UI sessions
+// use the game's bundled /font/traditionalchinese/font.gfx asset.
+// Enable before the menu font setup runs. Disable before switching variants.
+
+[ENABLE]
+aobscanmodule(er_font_main_getter,eldenring.exe,40 53 48 83 EC 20 8B D9 83 F9 0F 72 18 4C 8D 05 ?? ?? ?? ?? BA DE 00 00 00)
+aobscanmodule(er_font_sub_getter,eldenring.exe,40 53 48 83 EC 20 8B D9 83 F9 0F 72 18 4C 8D 05 ?? ?? ?? ?? BA FD 00 00 00)
+aobscanmodule(er_font_traditional_chinese,eldenring.exe,54 00 72 00 61 00 64 00 69 00 74 00 69 00 6F 00 6E 00 61 00 6C 00 43 00 68 00 69 00 6E 00 65 00 73 00 65 00 00 00)
+
+assert(er_font_main_getter,40 53 48 83 EC 20 8B D9 83 F9 0F 72)
+assert(er_font_sub_getter,40 53 48 83 EC 20 8B D9 83 F9 0F 72)
+
+registersymbol(er_font_main_getter)
+registersymbol(er_font_sub_getter)
+registersymbol(er_font_traditional_chinese)
+
+er_font_main_getter:
+  mov rax,er_font_traditional_chinese
+  ret
+  nop
+
+er_font_sub_getter:
+  mov rax,er_font_traditional_chinese
+  ret
+  nop
+
+[DISABLE]
+er_font_main_getter:
+  db 40 53 48 83 EC 20 8B D9 83 F9 0F 72
+
+er_font_sub_getter:
+  db 40 53 48 83 EC 20 8B D9 83 F9 0F 72
+
+unregistersymbol(er_font_main_getter)
+unregistersymbol(er_font_sub_getter)
+unregistersymbol(er_font_traditional_chinese)
+]]></AssemblerScript>
+        </CheatEntry>
+      </CheatEntries>
+    </CheatEntry>
+  </CheatEntries>
+  <UserdefinedSymbols/>
+</CheatTable>
