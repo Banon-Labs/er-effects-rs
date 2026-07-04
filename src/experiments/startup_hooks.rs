@@ -6,12 +6,12 @@ use std::{
     ffi::{CStr, c_void},
     fmt::Write as _,
     fs,
-    path::PathBuf,
+    path::Path,
     sync::{
         Arc, Mutex, Once, OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 
 use std::os::windows::ffi::OsStrExt as _;
@@ -36,12 +36,18 @@ use windows::{
             SystemServices::DLL_PROCESS_ATTACH,
             Threading::GetCurrentProcessId,
         },
-        UI::WindowsAndMessaging::{
-            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-            WM_KEYDOWN, WM_KEYUP,
+        UI::{
+            Controls::Dialogs::{
+                GetOpenFileNameW, OFN_DONTADDTORECENT, OFN_EXPLORER, OFN_FILEMUSTEXIST,
+                OFN_HIDEREADONLY, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+            },
+            WindowsAndMessaging::{
+                ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+                WM_KEYDOWN, WM_KEYUP,
+            },
         },
     },
-    core::{BOOL, PCSTR},
+    core::{BOOL, PCSTR, PCWSTR},
 };
 
 #[allow(unused_imports)]
@@ -5317,6 +5323,96 @@ unsafe fn portrait_render_slot_semaphore(base: usize, render_target_slot: i32) {
 /// per-slot records start at `summary+0x18`, stride `0x2a0`; character NAME at record+0.
 const PROFILE_SUMMARY_RECORD_BASE: usize = 0x18;
 const PROFILE_SUMMARY_RECORD_STRIDE: usize = 0x2a0;
+const PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET: usize = 0x8;
+const PROFILE_SUMMARY_TOTAL_BYTES: usize =
+    PROFILE_SUMMARY_RECORD_BASE + PROFILE_SUMMARY_RECORD_STRIDE * TITLE_PROFILE_SLOT_COUNT;
+const PROFILE_SUMMARY_NAME_BYTES: usize = 0x22;
+const PROFILE_SUMMARY_LEVEL_OFFSET: usize = 0x24;
+const PROFILE_SUMMARY_PLAYTIME_OFFSET: usize = 0x28;
+const PROFILE_SUMMARY_RUNE_MEMORY_OFFSET: usize = 0x2c;
+const PROFILE_SUMMARY_MAP_OFFSET: usize = 0x30;
+const PROFILE_SUMMARY_FACE_DATA_OFFSET: usize = 0x38;
+const PROFILE_SUMMARY_CHR_ASM_OFFSET: usize = 0x1a8;
+const PROFILE_SUMMARY_GENDER_OFFSET: usize = 0x290;
+const PROFILE_SUMMARY_ARCHETYPE_OFFSET: usize = 0x291;
+const PROFILE_SUMMARY_STARTING_GIFT_OFFSET: usize = 0x292;
+const PROFILE_SUMMARY_FIELD_C4_OFFSET: usize = 0x293;
+const SAVE_SLOT_MAP_OFFSET: usize = 0x14;
+const SAVE_FACE_MAGIC: &[u8; 4] = b"FACE";
+const SAVE_FACE_DATA_BUFFER_SIZE: usize = 0x120;
+const SAVE_PGD_SCAN_LEADING_FACE_COUNT: usize = 4;
+const SAVE_PGD_FACE_DELTA_WINDOW_LOW: usize = 0xa000;
+const SAVE_PGD_FACE_DELTA_WINDOW_HIGH: usize = 0xa600;
+const SAVE_PLAYER_GAME_DATA_MIN_SIZE: usize = 0x1b0;
+const SAVE_PGD_HEALTH_OFFSET: usize = 0x08;
+const SAVE_PGD_MAX_HEALTH_OFFSET: usize = 0x0c;
+const SAVE_PGD_BASE_MAX_HEALTH_OFFSET: usize = 0x10;
+const SAVE_PGD_STAT_BASE_OFFSET: usize = 0x34;
+const SAVE_PGD_STAT_COUNT: usize = 8;
+const SAVE_PGD_LEVEL_OFFSET: usize = 0x60;
+const SAVE_PGD_RUNE_MEMORY_OFFSET: usize = 0x68;
+const SAVE_PGD_CHARACTER_NAME_OFFSET: usize = 0x94;
+const SAVE_PGD_CHARACTER_NAME_UNITS: usize = 0x10;
+const SAVE_PGD_CHARACTER_NAME_BYTES: usize = SAVE_PGD_CHARACTER_NAME_UNITS * 2;
+const SAVE_PGD_GENDER_OFFSET: usize = 0xb6;
+const SAVE_PGD_MAX_CRIMSON_FLASK_OFFSET: usize = 0xf9;
+const SAVE_PGD_MAX_CERULEAN_FLASK_OFFSET: usize = 0xfa;
+const SAVE_SPEFFECT_COUNT: usize = 0x0d;
+const SAVE_SPEFFECT_SIZE: usize = 0x10;
+const SAVE_CHR_ASM_EQUIPMENT_SIZE: usize = 0x58;
+const SAVE_ARM_STYLE_ACTIVE_WEAPON_SLOTS_SIZE: usize = 0x1c;
+const SAVE_INVENTORY_HELD_SIZE: usize = 0x9010;
+const SAVE_EQUIP_MAGIC_SIZE: usize = 0x74;
+const SAVE_EQUIP_ITEM_SIZE: usize = 0x8c;
+const SAVE_GESTURE_EQUIP_SIZE: usize = 0x18;
+const SAVE_PROJECTILE_ENTRY_SIZE: usize = 0x08;
+const SAVE_PROJECTILE_COUNT_MAX: u32 = 0x400;
+const SAVE_EQUIPPED_ARMAMENTS_AND_ITEMS_SIZE: usize = 0x9c;
+const SAVE_PHYSIC_EQUIP_SIZE: usize = 0x0c;
+const SAVE_FACE_DATA_FULL_SIZE: usize = 0x12f;
+const SAVE_INVENTORY_STORAGE_SIZE: usize = 0x6010;
+const SAVE_GESTURE_GAME_DATA_SIZE: usize = 0x100;
+const SAVE_REGION_COUNT_MAX: u32 = 0x400;
+const SAVE_REGION_ID_SIZE: usize = 0x04;
+const SAVE_RIDE_GAME_DATA_SIZE: usize = 0x28;
+const SAVE_CONTROL_BYTE_SIZE: usize = 0x01;
+const SAVE_BLOODSTAIN_DATA_SIZE: usize = 0x44;
+const SAVE_MENU_PROFILE_SAVE_LOAD_SIZE: usize = 0x1008;
+const SAVE_TROPHY_EQUIP_DATA_SIZE: usize = 0x34;
+const SAVE_GAITEM_GAME_DATA_SIZE: usize = 0x1b588;
+const SAVE_TUTORIAL_DATA_SIZE: usize = 0x408;
+const SAVE_GLOBAL_GAME_MAN_FLAGS_SIZE: usize = 0x03;
+const SAVE_TOTAL_DEATHS_SIZE: usize = 0x04;
+const SAVE_CHARACTER_TYPE_SIZE: usize = 0x04;
+const SAVE_ONLINE_SESSION_FLAG_SIZE: usize = 0x01;
+const SAVE_ONLINE_CHARACTER_TYPE_FLAG_SIZE: usize = 0x04;
+const SAVE_LAST_RESTED_GRACE_SIZE: usize = 0x04;
+const SAVE_NOT_ALONE_FLAG_SIZE: usize = 0x01;
+const SAVE_INGAME_TIMER_PADDING_AFTER_NOT_ALONE: usize = 0x04;
+const SAVE_INGAME_TIMER_TICKS_MAX: u32 = 999 * 60 * 60 / 10 + 59 * 60 / 10 + 59 / 10 + 1;
+const SYSTEM_QUIT_SAVE_SWAP_POLL_INTERVAL_TICKS: usize = 30;
+static SYSTEM_QUIT_SAVE_SWAP_POLL_TICK: AtomicUsize = AtomicUsize::new(0);
+static PROFILE_STATS_PREVIEW_ROW_CURSOR: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Default)]
+struct SystemQuitSaveSwapState {
+    armed: bool,
+    path: String,
+    original_bytes: Vec<u8>,
+    original_hash: u64,
+    original_len: u64,
+    original_modified_ns: u128,
+    candidate_bytes: Vec<u8>,
+    candidate_hash: u64,
+    candidate_slot_mask: usize,
+    candidate_stats_utf16: Vec<Vec<u16>>,
+    preview_applied: bool,
+    committed: bool,
+    summary_ptr: usize,
+    summary_snapshot: Vec<u8>,
+}
+
+static SYSTEM_QUIT_SAVE_SWAP_STATE: OnceLock<Mutex<SystemQuitSaveSwapState>> = OnceLock::new();
 
 /// True if ProfileSummary slot `slot` holds a real character (non-empty saved name). Used to gate the
 /// human-driven in-world Load-Profile pick so activating an EMPTY slot never arms a switch (which
@@ -5342,6 +5438,614 @@ unsafe fn profile_slot_has_character(slot: i32) -> bool {
         + slot as usize * PROFILE_SUMMARY_RECORD_STRIDE;
     let (name, len) = unsafe { read_utf16_name_units(rec) };
     !utf16_name_empty_like(&name, len)
+}
+
+fn system_quit_save_swap_state() -> &'static Mutex<SystemQuitSaveSwapState> {
+    SYSTEM_QUIT_SAVE_SWAP_STATE.get_or_init(|| Mutex::new(SystemQuitSaveSwapState::default()))
+}
+
+fn system_quit_save_swap_lock() -> std::sync::MutexGuard<'static, SystemQuitSaveSwapState> {
+    system_quit_save_swap_state()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn system_quit_hash_bytes(bytes: &[u8]) -> u64 {
+    let mut h = 0xcbf29ce484222325u64;
+    for b in bytes.iter().copied() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+fn system_quit_file_stamp(path: &str) -> Option<(u64, u128)> {
+    let meta = fs::metadata(path).ok()?;
+    let modified_ns = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    Some((meta.len(), modified_ns))
+}
+
+fn system_quit_save_swap_arm_original(path: &str) -> bool {
+    let Ok(bytes) = fs::read(path) else {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: failed to snapshot active save '{path}' before opening replacement folder"
+        ));
+        return false;
+    };
+    let Some((len, modified_ns)) = system_quit_file_stamp(path) else {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: failed to stat active save '{path}' before opening replacement folder"
+        ));
+        return false;
+    };
+    let hash = system_quit_hash_bytes(&bytes);
+    let mut st = system_quit_save_swap_lock();
+    *st = SystemQuitSaveSwapState {
+        armed: true,
+        path: path.to_owned(),
+        original_bytes: bytes,
+        original_hash: hash,
+        original_len: len,
+        original_modified_ns: modified_ns,
+        ..SystemQuitSaveSwapState::default()
+    };
+    append_autoload_debug(format_args!(
+        "system-quit-save-swap: armed active-save snapshot path='{path}' len={len} hash=0x{hash:016x}; replacement preview will restore this file unless a foreign slot is selected"
+    ));
+    true
+}
+
+unsafe fn system_quit_profile_summary_ptr() -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let gdm = game_data_man_ptr_or_null();
+    if gdm == null {
+        return null;
+    }
+    unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(null)
+}
+
+#[derive(Clone, Copy)]
+struct SerializedSaveSlot<'a> {
+    body: &'a [u8],
+}
+
+#[derive(Clone, Copy)]
+struct SerializedPlayerGameData<'a> {
+    body: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> SerializedSaveSlot<'a> {
+    fn new(body: &'a [u8]) -> Self {
+        Self { body }
+    }
+
+    fn saved_map(self) -> Option<i32> {
+        self.read_i32(SAVE_SLOT_MAP_OFFSET)
+    }
+
+    fn read_u32(self, offset: usize) -> Option<u32> {
+        self.body
+            .get(offset..offset + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    fn read_i32(self, offset: usize) -> Option<i32> {
+        self.body
+            .get(offset..offset + 4)
+            .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    fn add_offset(offset: &mut usize, len: usize) -> Option<()> {
+        *offset = offset.checked_add(len)?;
+        Some(())
+    }
+
+    fn add_counted_region(
+        &self,
+        offset: &mut usize,
+        entry_size: usize,
+        max_count: u32,
+    ) -> Option<()> {
+        let count = self.read_u32(*offset)?;
+        if count > max_count {
+            return None;
+        }
+        let bytes = (count as usize).checked_mul(entry_size)?.checked_add(4)?;
+        Self::add_offset(offset, bytes)
+    }
+
+    fn in_game_timer_ticks(self, player_game_data: SerializedPlayerGameData<'a>) -> Option<u32> {
+        let mut offset = player_game_data.offset;
+        Self::add_offset(&mut offset, SAVE_PLAYER_GAME_DATA_MIN_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_SPEFFECT_COUNT * SAVE_SPEFFECT_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_CHR_ASM_EQUIPMENT_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_ARM_STYLE_ACTIVE_WEAPON_SLOTS_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_CHR_ASM_EQUIPMENT_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_CHR_ASM_EQUIPMENT_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_INVENTORY_HELD_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_EQUIP_MAGIC_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_EQUIP_ITEM_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_GESTURE_EQUIP_SIZE)?;
+        self.add_counted_region(
+            &mut offset,
+            SAVE_PROJECTILE_ENTRY_SIZE,
+            SAVE_PROJECTILE_COUNT_MAX,
+        )?;
+        Self::add_offset(&mut offset, SAVE_EQUIPPED_ARMAMENTS_AND_ITEMS_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_PHYSIC_EQUIP_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_FACE_DATA_FULL_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_INVENTORY_STORAGE_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_GESTURE_GAME_DATA_SIZE)?;
+        self.add_counted_region(&mut offset, SAVE_REGION_ID_SIZE, SAVE_REGION_COUNT_MAX)?;
+        Self::add_offset(&mut offset, SAVE_RIDE_GAME_DATA_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_CONTROL_BYTE_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_BLOODSTAIN_DATA_SIZE)?;
+        Self::add_offset(&mut offset, 4)?;
+        Self::add_offset(&mut offset, 4)?;
+        Self::add_offset(&mut offset, SAVE_MENU_PROFILE_SAVE_LOAD_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_TROPHY_EQUIP_DATA_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_GAITEM_GAME_DATA_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_TUTORIAL_DATA_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_GLOBAL_GAME_MAN_FLAGS_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_TOTAL_DEATHS_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_CHARACTER_TYPE_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_ONLINE_SESSION_FLAG_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_ONLINE_CHARACTER_TYPE_FLAG_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_LAST_RESTED_GRACE_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_NOT_ALONE_FLAG_SIZE)?;
+        Self::add_offset(&mut offset, SAVE_INGAME_TIMER_PADDING_AFTER_NOT_ALONE)?;
+        let timer = self.read_u32(offset)?;
+        (timer <= SAVE_INGAME_TIMER_TICKS_MAX).then_some(timer)
+    }
+
+    fn face_magic_offsets(self) -> impl Iterator<Item = usize> + 'a {
+        self.body
+            .windows(SAVE_FACE_MAGIC.len())
+            .enumerate()
+            .filter_map(|(offset, window)| (window == SAVE_FACE_MAGIC).then_some(offset))
+            .take(SAVE_PGD_SCAN_LEADING_FACE_COUNT)
+    }
+
+    fn player_game_data(self) -> Option<SerializedPlayerGameData<'a>> {
+        let mut best: Option<SerializedPlayerGameData<'a>> = None;
+        let mut best_score = 0usize;
+        for face_offset in self.face_magic_offsets() {
+            let start = face_offset.saturating_sub(SAVE_PGD_FACE_DELTA_WINDOW_HIGH);
+            let stop = face_offset.saturating_sub(SAVE_PGD_FACE_DELTA_WINDOW_LOW);
+            for offset in start..=stop {
+                let candidate = SerializedPlayerGameData {
+                    body: self.body,
+                    offset,
+                };
+                if !candidate.is_plausible_core() {
+                    continue;
+                }
+                let score = candidate.score();
+                if score > best_score {
+                    best_score = score;
+                    best = Some(candidate);
+                }
+            }
+        }
+        best
+    }
+}
+
+impl<'a> SerializedPlayerGameData<'a> {
+    fn field(&self, offset: usize, len: usize) -> Option<&'a [u8]> {
+        self.body
+            .get(self.offset + offset..self.offset + offset + len)
+    }
+
+    fn read_u32(&self, offset: usize) -> Option<u32> {
+        self.field(offset, 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    fn read_i32(&self, offset: usize) -> Option<i32> {
+        self.field(offset, 4)
+            .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    fn read_u8(&self, offset: usize) -> Option<u8> {
+        self.field(offset, 1).map(|b| b[0])
+    }
+
+    fn name_bytes(&self) -> Option<&'a [u8]> {
+        self.field(
+            SAVE_PGD_CHARACTER_NAME_OFFSET,
+            SAVE_PGD_CHARACTER_NAME_BYTES,
+        )
+    }
+
+    fn name_units(&self) -> Option<Vec<u16>> {
+        let bytes = self.name_bytes()?;
+        Some(
+            bytes
+                .chunks_exact(2)
+                .map(|u| u16::from_le_bytes([u[0], u[1]]))
+                .take_while(|u| *u != 0)
+                .collect(),
+        )
+    }
+
+    fn has_real_name(&self) -> bool {
+        self.name_units().is_some_and(|units| {
+            !units.is_empty()
+                && units.iter().any(|u| *u != b'_' as u16)
+                && String::from_utf16(&units)
+                    .ok()
+                    .is_some_and(|s| s.chars().all(|c| !c.is_control()))
+        })
+    }
+
+    fn stats(&self) -> Option<[u32; SAVE_PGD_STAT_COUNT]> {
+        let mut stats = [0u32; SAVE_PGD_STAT_COUNT];
+        for (index, stat) in stats.iter_mut().enumerate() {
+            *stat = self.read_u32(SAVE_PGD_STAT_BASE_OFFSET + index * 4)?;
+        }
+        Some(stats)
+    }
+
+    fn is_plausible_core(&self) -> bool {
+        if self.offset + SAVE_PLAYER_GAME_DATA_MIN_SIZE > self.body.len() || !self.has_real_name() {
+            return false;
+        }
+        let Some(level) = self.read_u32(SAVE_PGD_LEVEL_OFFSET) else {
+            return false;
+        };
+        let Some(health) = self.read_u32(SAVE_PGD_HEALTH_OFFSET) else {
+            return false;
+        };
+        let Some(max_health) = self.read_u32(SAVE_PGD_MAX_HEALTH_OFFSET) else {
+            return false;
+        };
+        let Some(base_max_health) = self.read_u32(SAVE_PGD_BASE_MAX_HEALTH_OFFSET) else {
+            return false;
+        };
+        let Some(gender) = self.read_u8(SAVE_PGD_GENDER_OFFSET) else {
+            return false;
+        };
+        let Some(max_crimson) = self.read_u8(SAVE_PGD_MAX_CRIMSON_FLASK_OFFSET) else {
+            return false;
+        };
+        let Some(max_cerulean) = self.read_u8(SAVE_PGD_MAX_CERULEAN_FLASK_OFFSET) else {
+            return false;
+        };
+        let Some(stats) = self.stats() else {
+            return false;
+        };
+        (1..=713).contains(&level)
+            && (1..=100_000).contains(&health)
+            && (1..=100_000).contains(&max_health)
+            && (1..=100_000).contains(&base_max_health)
+            && health <= max_health
+            && base_max_health <= max_health
+            && gender <= 1
+            && max_crimson <= 14
+            && max_cerulean <= 14
+            && stats.iter().all(|stat| (1..=99).contains(stat))
+    }
+
+    fn score(&self) -> usize {
+        self.name_units().map_or(0, |units| units.len())
+            + self
+                .stats()
+                .map_or(0, |stats| stats.iter().filter(|stat| **stat > 0).count())
+            + usize::from(self.read_u32(SAVE_PGD_LEVEL_OFFSET).unwrap_or(0) > 0)
+    }
+
+    fn stats_text_utf16(&self) -> Option<Vec<u16>> {
+        const LABELS: [&str; SAVE_PGD_STAT_COUNT] =
+            ["VIG", "MND", "END", "STR", "DEX", "INT", "FAI", "ARC"];
+        let stats = self.stats()?;
+        let mut s = String::new();
+        for (i, label) in LABELS.iter().enumerate() {
+            if i > 0 {
+                s.push(' ');
+            }
+            s.push_str(label);
+            s.push(' ');
+            s.push_str(&stats[i].to_string());
+        }
+        Some(s.encode_utf16().chain(core::iter::once(0)).collect())
+    }
+
+    unsafe fn write_profile_summary_record(
+        &self,
+        profile_summary: usize,
+        slot: usize,
+        saved_map: i32,
+        playtime_ticks: u32,
+        fallback_record: Option<&[u8]>,
+    ) -> bool {
+        let Some(name_bytes) = self.name_bytes() else {
+            return false;
+        };
+        let slot_data =
+            profile_summary + PROFILE_SUMMARY_RECORD_BASE + slot * PROFILE_SUMMARY_RECORD_STRIDE;
+        unsafe {
+            if let Some(record) = fallback_record {
+                core::ptr::copy_nonoverlapping(
+                    record.as_ptr(),
+                    slot_data as *mut u8,
+                    PROFILE_SUMMARY_RECORD_STRIDE,
+                );
+            } else {
+                core::ptr::write_bytes(slot_data as *mut u8, 0, PROFILE_SUMMARY_RECORD_STRIDE);
+            }
+            core::ptr::write_bytes(slot_data as *mut u8, 0, PROFILE_SUMMARY_NAME_BYTES);
+            core::ptr::copy_nonoverlapping(
+                name_bytes.as_ptr(),
+                slot_data as *mut u8,
+                name_bytes.len().min(PROFILE_SUMMARY_NAME_BYTES),
+            );
+            *(slot_data.wrapping_add(PROFILE_SUMMARY_LEVEL_OFFSET) as *mut i32) =
+                self.read_i32(SAVE_PGD_LEVEL_OFFSET).unwrap_or(0);
+            *(slot_data.wrapping_add(PROFILE_SUMMARY_PLAYTIME_OFFSET) as *mut u32) = playtime_ticks;
+            *(slot_data.wrapping_add(PROFILE_SUMMARY_RUNE_MEMORY_OFFSET) as *mut i32) =
+                self.read_i32(SAVE_PGD_RUNE_MEMORY_OFFSET).unwrap_or(0);
+            *(slot_data.wrapping_add(PROFILE_SUMMARY_MAP_OFFSET) as *mut i32) = saved_map;
+            *(profile_summary.wrapping_add(PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot)
+                as *mut u8) = 1;
+        }
+        true
+    }
+}
+
+unsafe fn system_quit_apply_foreign_profile_summary_preview(base: usize, bytes: &[u8]) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let summary = unsafe { system_quit_profile_summary_ptr() };
+    if summary == null {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: cannot preview replacement save -- live ProfileSummary unavailable"
+        ));
+        return 0;
+    }
+    let mut st = system_quit_save_swap_lock();
+    if st.summary_snapshot.is_empty() || st.summary_ptr != summary {
+        st.summary_ptr = summary;
+        st.summary_snapshot = unsafe {
+            core::slice::from_raw_parts(summary as *const u8, PROFILE_SUMMARY_TOTAL_BYTES).to_vec()
+        };
+    }
+    let summary_snapshot = st.summary_snapshot.clone();
+    let fallback_slot = (0..TITLE_PROFILE_SLOT_COUNT).find(|slot| {
+        summary_snapshot
+            .get(PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + *slot)
+            .copied()
+            .unwrap_or(0)
+            != 0
+    });
+    unsafe {
+        for slot in 0..TITLE_PROFILE_SLOT_COUNT {
+            core::ptr::write_bytes(
+                (summary + PROFILE_SUMMARY_RECORD_BASE + slot * PROFILE_SUMMARY_RECORD_STRIDE)
+                    as *mut u8,
+                0,
+                PROFILE_SUMMARY_RECORD_STRIDE,
+            );
+            *((summary + PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot) as *mut u8) = 0;
+        }
+    }
+    drop(st);
+
+    let mut mask = 0usize;
+    let mut preview_stats = vec![Vec::new(); TITLE_PROFILE_SLOT_COUNT];
+    for slot in 0..TITLE_PROFILE_SLOT_COUNT {
+        if let Ok(body) = er_save_loader::bnd4::slot_body(bytes, slot) {
+            let slot_body = SerializedSaveSlot::new(body);
+            let Some(pgd) = slot_body.player_game_data() else {
+                continue;
+            };
+            let Some(saved_map) = slot_body.saved_map() else {
+                continue;
+            };
+            let fallback_src_slot = if summary_snapshot
+                .get(PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot)
+                .copied()
+                .unwrap_or(0)
+                != 0
+            {
+                Some(slot)
+            } else {
+                fallback_slot
+            };
+            let fallback = fallback_src_slot.and_then(|src_slot| {
+                let start = PROFILE_SUMMARY_RECORD_BASE + src_slot * PROFILE_SUMMARY_RECORD_STRIDE;
+                summary_snapshot.get(start..start + PROFILE_SUMMARY_RECORD_STRIDE)
+            });
+            let playtime_ticks = slot_body.in_game_timer_ticks(pgd).unwrap_or(0);
+            if unsafe {
+                pgd.write_profile_summary_record(summary, slot, saved_map, playtime_ticks, fallback)
+            } {
+                append_autoload_debug(format_args!(
+                    "system-quit-load-save-profiles: preview slot {slot} playtime_ticks={playtime_ticks}"
+                ));
+                if let Some(stats) = pgd.stats_text_utf16() {
+                    preview_stats[slot] = stats;
+                }
+                mask |= 1usize << slot;
+            }
+        }
+    }
+    if mask != 0 {
+        {
+            let mut st = system_quit_save_swap_lock();
+            st.candidate_slot_mask = mask;
+            st.candidate_stats_utf16 = preview_stats;
+            st.preview_applied = true;
+        }
+        PROFILE_STATS_PREVIEW_ROW_CURSOR.store(0, Ordering::SeqCst);
+        let refresh: unsafe extern "system" fn() =
+            unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
+        unsafe { refresh() };
+    }
+    mask
+}
+
+fn system_quit_save_swap_restore_original_file(st: &SystemQuitSaveSwapState, reason: &str) -> bool {
+    if st.path.is_empty() || st.original_bytes.is_empty() {
+        return false;
+    }
+    match fs::write(&st.path, &st.original_bytes) {
+        Ok(()) => {
+            append_autoload_debug(format_args!(
+                "system-quit-save-swap: restored active save file for {reason} path='{}' len={} hash=0x{:016x}",
+                st.path,
+                st.original_bytes.len(),
+                st.original_hash
+            ));
+            true
+        }
+        Err(err) => {
+            append_autoload_debug(format_args!(
+                "system-quit-save-swap: FAILED to restore active save file for {reason} path='{}': {err}",
+                st.path
+            ));
+            false
+        }
+    }
+}
+
+unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str) {
+    let mut st = system_quit_save_swap_lock();
+    if !st.preview_applied || st.committed {
+        return;
+    }
+    if st.summary_ptr >= 0x10000 && !st.summary_snapshot.is_empty() {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                st.summary_snapshot.as_ptr(),
+                st.summary_ptr as *mut u8,
+                st.summary_snapshot.len(),
+            );
+        }
+        if let Ok(base) = game_module_base() {
+            let refresh: unsafe extern "system" fn() =
+                unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
+            unsafe { refresh() };
+        }
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: restored live ProfileSummary snapshot for {reason} summary=0x{:x} bytes={}",
+            st.summary_ptr,
+            st.summary_snapshot.len()
+        ));
+    }
+    let _ = system_quit_save_swap_restore_original_file(&st, reason);
+    *st = SystemQuitSaveSwapState::default();
+}
+
+unsafe fn system_quit_save_swap_poll_preview(base: usize) {
+    let tick = SYSTEM_QUIT_SAVE_SWAP_POLL_TICK.fetch_add(1, Ordering::SeqCst);
+    if tick % SYSTEM_QUIT_SAVE_SWAP_POLL_INTERVAL_TICKS != 0 {
+        return;
+    }
+    let (path, original_hash, original_len, original_modified_ns, preview_applied) = {
+        let st = system_quit_save_swap_lock();
+        if !st.armed || st.committed || st.path.is_empty() {
+            return;
+        }
+        (
+            st.path.clone(),
+            st.original_hash,
+            st.original_len,
+            st.original_modified_ns,
+            st.preview_applied,
+        )
+    };
+    if preview_applied {
+        return;
+    }
+    let Some((len, modified_ns)) = system_quit_file_stamp(&path) else {
+        return;
+    };
+    if len == original_len && modified_ns == original_modified_ns {
+        return;
+    }
+    let Ok(bytes) = fs::read(&path) else {
+        return;
+    };
+    let hash = system_quit_hash_bytes(&bytes);
+    if hash == original_hash {
+        return;
+    }
+    // Validate before restoring the active redirected save. A partial copy must not be captured as a
+    // foreign preview, and the old in-world save must remain the write target until the user commits.
+    if er_save_loader::bnd4::parse_entries(&bytes).is_err() {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: replacement candidate changed but is not a valid BND4 yet path='{path}' len={len} hash=0x{hash:016x}; waiting"
+        ));
+        return;
+    }
+    {
+        let st = system_quit_save_swap_lock();
+        if !system_quit_save_swap_restore_original_file(&st, "candidate-captured") {
+            return;
+        }
+    }
+    let mask = unsafe { system_quit_apply_foreign_profile_summary_preview(base, &bytes) };
+    if mask == 0 {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: valid replacement candidate had no readable character slots path='{path}' len={len} hash=0x{hash:016x}; active file restored, preview not applied"
+        ));
+        return;
+    }
+    let mut st = system_quit_save_swap_lock();
+    st.candidate_bytes = bytes;
+    st.candidate_hash = hash;
+    st.candidate_slot_mask = mask;
+    st.preview_applied = true;
+    append_autoload_debug(format_args!(
+        "system-quit-save-swap: applied FOREIGN ProfileSummary preview from replacement path='{path}' len={len} hash=0x{hash:016x} slot_mask=0x{mask:x}; active save file restored until the user selects a foreign slot"
+    ));
+}
+
+unsafe fn system_quit_save_swap_prepare_selected_slot(slot: i32) -> Result<bool, ()> {
+    if !(0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
+        return Ok(false);
+    }
+    let mut st = system_quit_save_swap_lock();
+    if !st.preview_applied || st.committed {
+        return Ok(false);
+    }
+    let bit = 1usize << slot as usize;
+    if st.candidate_slot_mask & bit == 0 {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: refusing ProfileSelect activation for slot {slot}; foreign preview active but slot bit is absent mask=0x{:x}",
+            st.candidate_slot_mask
+        ));
+        return Err(());
+    }
+    if st.path.is_empty() || st.candidate_bytes.is_empty() {
+        return Err(());
+    }
+    match fs::write(&st.path, &st.candidate_bytes) {
+        Ok(()) => {
+            st.committed = true;
+            st.armed = false;
+            append_autoload_debug(format_args!(
+                "system-quit-save-swap: committed foreign save before slot activation path='{}' slot={slot} len={} hash=0x{:016x}; fresh deserialize will read this file",
+                st.path,
+                st.candidate_bytes.len(),
+                st.candidate_hash
+            ));
+            Ok(true)
+        }
+        Err(err) => {
+            append_autoload_debug(format_args!(
+                "system-quit-save-swap: FAILED to commit foreign save for slot {slot} path='{}': {err}; blocking activation to avoid loading stale/original bytes",
+                st.path
+            ));
+            Err(())
+        }
+    }
 }
 
 /// Patch the loaded slot's profile offscreen RT size BEFORE any post-Continue profile renderer is
@@ -8707,6 +9411,7 @@ unsafe fn system_quit_restore_real_system_windows(base: usize, source: &str) {
     append_autoload_debug(format_args!(
         "system-quit-dup: restore real windows source={source} profile=0x{profile:x} top=0x{top:x} option=0x{option:x} restored_top={restored_top} restored_option={restored_option}"
     ));
+    unsafe { system_quit_save_swap_restore_profile_summary(source) };
     unsafe { system_quit_reset_profile_select_state(source) };
     if restored_top || restored_option {
         SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -8727,7 +9432,15 @@ pub(crate) unsafe fn system_quit_profile_select_top_menu_tick() {
         // menu-pump ownership by the native confirm transition (dialog+0x1e8=Success pops the
         // ProfileSelect window job) and the return-title submit is done in menu-pump ownership from
         // the MenuWindowJob::Run hook. See bd system-quit-return-title-scaleform-race-2026-07-01.
+        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) == SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
+            unsafe {
+                system_quit_save_swap_restore_profile_summary("profile-select-closed-without-load")
+            };
+        }
         return;
+    }
+    if let Ok(base) = game_module_base() {
+        unsafe { system_quit_save_swap_poll_preview(base) };
     }
     let list = SYSTEM_QUIT_TOP_HIDE_LIST.load(Ordering::SeqCst);
     if list == 0 {
@@ -9021,6 +9734,15 @@ pub(crate) unsafe extern "system" fn system_quit_menu_window_list_push_hook(
 pub(crate) unsafe extern "system" fn system_quit_noop_desktop_action_hook(
     action_obj: usize,
 ) -> usize {
+    let open_save_dir_action = SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
+    if action_obj != 0 && action_obj == open_save_dir_action {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
+        let opened = unsafe { system_quit_open_env_save_dir() };
+        append_autoload_debug(format_args!(
+            "system-quit-open-save-dir: cloned action selected action=0x{action_obj:x} opened={opened}; suppressing native Quit Game row action"
+        ));
+        return 0;
+    }
     let recorded_action = SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
     if action_obj != 0 && action_obj == recorded_action {
         let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
@@ -9040,12 +9762,600 @@ pub(crate) unsafe extern "system" fn system_quit_noop_desktop_action_hook(
     let orig = SYSTEM_QUIT_NOOP_ACTION_ORIG.load(Ordering::SeqCst);
     if orig == HOOK_ORIGINAL_UNSET {
         append_autoload_debug(format_args!(
-            "system-quit-dup: Quit Game action trampoline is unset for action=0x{action_obj:x} -- fail-open return 0"
+            "system-quit-save: Quit Game/Save Game action trampoline is unset for action=0x{action_obj:x} -- fail-open return 0"
         ));
         return 0;
     }
+    let dialog = unsafe { safe_read_usize(action_obj + 0x8) }.unwrap_or(0);
+    if dialog >= 0x10000 {
+        SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.store(dialog, Ordering::SeqCst);
+        SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-save: original Quit Game row selected action=0x{action_obj:x} dialog=0x{dialog:x}; forwarding native confirmation, accept will save-only and close menus"
+        ));
+    } else {
+        append_autoload_debug(format_args!(
+            "system-quit-save: original Quit Game row selected action=0x{action_obj:x} but dialog=0x{dialog:x} is not heap-like; forwarding native action without save-only latch"
+        ));
+    }
     let original: unsafe extern "system" fn(usize) -> usize = unsafe { std::mem::transmute(orig) };
     unsafe { original(action_obj) }
+}
+
+fn wide_z(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(core::iter::once(0)).collect()
+}
+
+fn system_quit_env_save_path() -> Result<String, &'static str> {
+    let raw = std::env::var("ER_EFFECTS_SAVE_FILE").map_err(|_| "ER_EFFECTS_SAVE_FILE unset")?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("ER_EFFECTS_SAVE_FILE blank");
+    }
+    Ok(trimmed.trim_end_matches(['/', '\\']).to_owned())
+}
+
+fn system_quit_env_save_dir() -> Result<String, &'static str> {
+    let trimmed = system_quit_env_save_path()?;
+    let Some(sep) = trimmed.rfind(['/', '\\']) else {
+        return Err("ER_EFFECTS_SAVE_FILE has no parent directory");
+    };
+    let dir = &trimmed[..sep];
+    if dir.is_empty() {
+        return Err("ER_EFFECTS_SAVE_FILE parent directory is empty");
+    }
+    Ok(dir.to_owned())
+}
+
+fn system_quit_path_for_windows(path: &str) -> Vec<u16> {
+    let mut win = if path.starts_with('/') {
+        format!("Z:{}", path.replace('/', "\\"))
+    } else {
+        path.replace('/', "\\")
+    };
+    while win.ends_with('\\') && win.len() > 3 {
+        win.pop();
+    }
+    wide_z(&win)
+}
+
+fn system_quit_path_from_windows_picker(path: &[u16]) -> Option<String> {
+    let end = path.iter().position(|c| *c == 0).unwrap_or(path.len());
+    if end == 0 {
+        return None;
+    }
+    String::from_utf16(&path[..end]).ok()
+}
+
+fn system_quit_windows_path_for_log(path: &str) -> String {
+    if let Some(rest) = path
+        .strip_prefix("Z:\\")
+        .or_else(|| path.strip_prefix("z:\\"))
+    {
+        format!("/{}", rest.replace('\\', "/"))
+    } else {
+        path.to_owned()
+    }
+}
+
+unsafe fn system_quit_open_env_save_dir() -> bool {
+    let save_path = match system_quit_env_save_path() {
+        Ok(path) => path,
+        Err(reason) => {
+            SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "system-quit-load-save-profiles: refused to open picker -- {reason}"
+            ));
+            return false;
+        }
+    };
+    let dir = match system_quit_env_save_dir() {
+        Ok(dir) => dir,
+        Err(reason) => {
+            SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "system-quit-load-save-profiles: refused to open picker -- {reason}"
+            ));
+            return false;
+        }
+    };
+    if !Path::new(&dir).is_dir() {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-load-save-profiles: refused to open picker for missing/non-directory save dir '{dir}'"
+        ));
+        return false;
+    }
+    unsafe { system_quit_save_swap_restore_profile_summary("load-save-profiles-reopen") };
+    if !system_quit_save_swap_arm_original(&save_path) {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        return false;
+    }
+
+    let initial_dir_w = system_quit_path_for_windows(&dir);
+    let title_w = wide_z("Load Save Profiles");
+    let filter_w = wide_z("Elden Ring save (*.sl2)\0*.sl2\0All files (*.*)\0*.*\0");
+    let mut file_buf = [0u16; 1024];
+    let mut ofn = OPENFILENAMEW {
+        lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
+        lpstrFilter: PCWSTR::from_raw(filter_w.as_ptr()),
+        lpstrFile: windows::core::PWSTR::from_raw(file_buf.as_mut_ptr()),
+        nMaxFile: file_buf.len() as u32,
+        lpstrInitialDir: PCWSTR::from_raw(initial_dir_w.as_ptr()),
+        lpstrTitle: PCWSTR::from_raw(title_w.as_ptr()),
+        Flags: OFN_EXPLORER
+            | OFN_FILEMUSTEXIST
+            | OFN_PATHMUSTEXIST
+            | OFN_HIDEREADONLY
+            | OFN_NOCHANGEDIR
+            | OFN_DONTADDTORECENT,
+        ..Default::default()
+    };
+    let picked = unsafe { GetOpenFileNameW(&mut ofn).as_bool() };
+    if !picked {
+        append_autoload_debug(format_args!(
+            "system-quit-load-save-profiles: picker cancelled/no selection dir='{dir}'"
+        ));
+        return false;
+    }
+    let Some(selected_path) = system_quit_path_from_windows_picker(&file_buf) else {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-load-save-profiles: picker returned an empty path"
+        ));
+        return false;
+    };
+    let selected_log = system_quit_windows_path_for_log(&selected_path);
+    if !Path::new(&selected_path).is_file() {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-load-save-profiles: selected path is not a file '{}'",
+            selected_log
+        ));
+        return false;
+    }
+    let Ok(bytes) = fs::read(&selected_path) else {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-load-save-profiles: failed to read selected save '{}'",
+            selected_log
+        ));
+        return false;
+    };
+    let len = bytes.len() as u64;
+    let hash = system_quit_hash_bytes(&bytes);
+    if er_save_loader::bnd4::parse_entries(&bytes).is_err() {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-load-save-profiles: selected save is not a valid BND4 '{}' len={len} hash=0x{hash:016x}",
+            selected_log
+        ));
+        return false;
+    }
+    let Ok(base) = game_module_base() else {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-load-save-profiles: selected save '{}' is valid but game module base is unavailable",
+            selected_log
+        ));
+        return false;
+    };
+    let mask = unsafe { system_quit_apply_foreign_profile_summary_preview(base, &bytes) };
+    if mask == 0 {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-load-save-profiles: selected save had no readable character slots '{}' len={len} hash=0x{hash:016x}",
+            selected_log
+        ));
+        return false;
+    }
+    {
+        let mut st = system_quit_save_swap_lock();
+        st.candidate_bytes = bytes;
+        st.candidate_hash = hash;
+        st.candidate_slot_mask = mask;
+        st.preview_applied = true;
+    }
+    SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT.fetch_add(1, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-load-save-profiles: applied selected save preview '{}' len={len} hash=0x{hash:016x} slot_mask=0x{mask:x}; staged active save remains '{}' until a foreign slot is selected",
+        selected_log, save_path
+    ));
+    true
+}
+
+unsafe fn system_quit_init_menu_string_from_static_wide(out: usize, text: &'static [u16]) -> bool {
+    let Ok(ctor_addr) = game_rva(MENU_STRING_FROM_WIDE_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: failed to resolve MenuString ctor rva 0x{MENU_STRING_FROM_WIDE_RVA:x}; cannot build static label"
+        ));
+        return false;
+    };
+    let ctor: unsafe extern "system" fn(usize, usize) -> usize =
+        unsafe { std::mem::transmute(ctor_addr) };
+    unsafe { ctor(out, text.as_ptr() as usize) };
+    true
+}
+
+unsafe fn system_quit_build_static_label_component(
+    out: usize,
+    label: &'static [u16],
+    help: &'static [u16],
+) -> bool {
+    unsafe { std::ptr::write_bytes(out as *mut u8, 0, MENU_HELP_LABEL_SIZE) };
+    let label_ok = unsafe { system_quit_init_menu_string_from_static_wide(out, label) };
+    let help_ok = unsafe {
+        system_quit_init_menu_string_from_static_wide(out + MENU_HELP_LABEL_HELP_OFFSET, help)
+    };
+    label_ok && help_ok
+}
+
+const SYSTEM_QUIT_LOAD_PROFILE_LABEL_W: [u16; 13] = [
+    b'L' as u16,
+    b'o' as u16,
+    b'a' as u16,
+    b'd' as u16,
+    b' ' as u16,
+    b'P' as u16,
+    b'r' as u16,
+    b'o' as u16,
+    b'f' as u16,
+    b'i' as u16,
+    b'l' as u16,
+    b'e' as u16,
+    0,
+];
+
+const SYSTEM_QUIT_LOAD_PROFILE_HELP_W: [u16; 37] = [
+    b'S' as u16,
+    b'e' as u16,
+    b'l' as u16,
+    b'e' as u16,
+    b'c' as u16,
+    b't' as u16,
+    b' ' as u16,
+    b'a' as u16,
+    b' ' as u16,
+    b's' as u16,
+    b't' as u16,
+    b'a' as u16,
+    b'g' as u16,
+    b'e' as u16,
+    b'd' as u16,
+    b' ' as u16,
+    b's' as u16,
+    b'a' as u16,
+    b'v' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b'p' as u16,
+    b'r' as u16,
+    b'o' as u16,
+    b'f' as u16,
+    b'i' as u16,
+    b'l' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b't' as u16,
+    b'o' as u16,
+    b' ' as u16,
+    b'l' as u16,
+    b'o' as u16,
+    b'a' as u16,
+    b'd' as u16,
+    0,
+];
+
+const SYSTEM_QUIT_LOAD_SAVE_PROFILES_LABEL_W: [u16; 19] = [
+    b'L' as u16,
+    b'o' as u16,
+    b'a' as u16,
+    b'd' as u16,
+    b' ' as u16,
+    b'S' as u16,
+    b'a' as u16,
+    b'v' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b'P' as u16,
+    b'r' as u16,
+    b'o' as u16,
+    b'f' as u16,
+    b'i' as u16,
+    b'l' as u16,
+    b'e' as u16,
+    b's' as u16,
+    0,
+];
+
+const SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_W: [u16; 50] = [
+    b'O' as u16,
+    b'p' as u16,
+    b'e' as u16,
+    b'n' as u16,
+    b' ' as u16,
+    b't' as u16,
+    b'h' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b's' as u16,
+    b't' as u16,
+    b'a' as u16,
+    b'g' as u16,
+    b'e' as u16,
+    b'd' as u16,
+    b' ' as u16,
+    b's' as u16,
+    b'a' as u16,
+    b'v' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b'f' as u16,
+    b'o' as u16,
+    b'l' as u16,
+    b'd' as u16,
+    b'e' as u16,
+    b'r' as u16,
+    b' ' as u16,
+    b't' as u16,
+    b'o' as u16,
+    b' ' as u16,
+    b'r' as u16,
+    b'e' as u16,
+    b'p' as u16,
+    b'l' as u16,
+    b'a' as u16,
+    b'c' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b'E' as u16,
+    b'R' as u16,
+    b'0' as u16,
+    b'0' as u16,
+    b'0' as u16,
+    b'0' as u16,
+    b'.' as u16,
+    b's' as u16,
+    b'l' as u16,
+    b'2' as u16,
+    0,
+];
+
+const SYSTEM_QUIT_SAVE_GAME_LABEL_W: [u16; 10] = [
+    b'S' as u16,
+    b'a' as u16,
+    b'v' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b'G' as u16,
+    b'a' as u16,
+    b'm' as u16,
+    b'e' as u16,
+    0,
+];
+const SYSTEM_QUIT_SAVE_GAME_HELP_W: [u16; 36] = [
+    b'S' as u16,
+    b'a' as u16,
+    b'v' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b'a' as u16,
+    b'n' as u16,
+    b'd' as u16,
+    b' ' as u16,
+    b'r' as u16,
+    b'e' as u16,
+    b't' as u16,
+    b'u' as u16,
+    b'r' as u16,
+    b'n' as u16,
+    b' ' as u16,
+    b't' as u16,
+    b'o' as u16,
+    b' ' as u16,
+    b'p' as u16,
+    b'l' as u16,
+    b'a' as u16,
+    b'y' as u16,
+    b'i' as u16,
+    b'n' as u16,
+    b'g' as u16,
+    b' ' as u16,
+    b't' as u16,
+    b'h' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b'g' as u16,
+    b'a' as u16,
+    b'm' as u16,
+    b'e' as u16,
+    0,
+];
+const SYSTEM_QUIT_SAVE_GAME_DIALOG_W: [u16; 37] = [
+    b'S' as u16,
+    b'a' as u16,
+    b'v' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b'a' as u16,
+    b'n' as u16,
+    b'd' as u16,
+    b' ' as u16,
+    b'r' as u16,
+    b'e' as u16,
+    b't' as u16,
+    b'u' as u16,
+    b'r' as u16,
+    b'n' as u16,
+    b' ' as u16,
+    b't' as u16,
+    b'o' as u16,
+    b' ' as u16,
+    b'p' as u16,
+    b'l' as u16,
+    b'a' as u16,
+    b'y' as u16,
+    b'i' as u16,
+    b'n' as u16,
+    b'g' as u16,
+    b' ' as u16,
+    b't' as u16,
+    b'h' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b'g' as u16,
+    b'a' as u16,
+    b'm' as u16,
+    b'e' as u16,
+    b'?' as u16,
+    0,
+];
+
+unsafe fn wide_equals_ascii(ptr: usize, ascii: &[u8]) -> bool {
+    if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS || ascii.is_empty() {
+        return false;
+    }
+    for (idx, want) in ascii.iter().copied().enumerate() {
+        let Some(unit) = (unsafe { safe_read_u16(ptr + idx * core::mem::size_of::<u16>()) }) else {
+            return false;
+        };
+        if unit != want as u16 {
+            return false;
+        }
+    }
+    matches!(
+        unsafe { safe_read_u16(ptr + ascii.len() * core::mem::size_of::<u16>()) },
+        Some(0)
+    )
+}
+
+pub(crate) unsafe extern "system" fn system_quit_save_game_get_and_format_hook(
+    out: usize,
+    getter: usize,
+    text_id: i32,
+    fmg_name: usize,
+    abbrev: usize,
+) -> usize {
+    let replacement = if text_id == SYSTEM_QUIT_SAVE_GAME_MENU_TEXT_ID
+        && unsafe { wide_equals_ascii(abbrev, b"GRMT") }
+    {
+        Some(SYSTEM_QUIT_SAVE_GAME_LABEL_W.as_ptr() as usize)
+    } else if text_id == SYSTEM_QUIT_SAVE_GAME_LINEHELP_ID
+        && unsafe { wide_equals_ascii(abbrev, b"GRHK") }
+    {
+        Some(SYSTEM_QUIT_SAVE_GAME_HELP_W.as_ptr() as usize)
+    } else if text_id == SYSTEM_QUIT_SAVE_GAME_DIALOG_ID
+        && unsafe { wide_equals_ascii(abbrev, b"GRD") }
+    {
+        Some(SYSTEM_QUIT_SAVE_GAME_DIALOG_W.as_ptr() as usize)
+    } else {
+        None
+    };
+    if let Some(text_ptr) = replacement {
+        match game_rva(MSG_REPOSITORY_FORMAT_RVA) {
+            Ok(format_addr) => {
+                let format_fn: unsafe extern "system" fn(usize, usize, u32, usize, usize) -> usize =
+                    unsafe { std::mem::transmute(format_addr) };
+                SYSTEM_QUIT_SAVE_GAME_TEXT_SUBSTITUTION_COUNT.fetch_add(1, Ordering::SeqCst);
+                return unsafe { format_fn(out, text_ptr, text_id as u32, fmg_name, abbrev) };
+            }
+            Err(_) => append_autoload_debug(format_args!(
+                "system-quit-save: failed to resolve MsgRepository::Format rva 0x{MSG_REPOSITORY_FORMAT_RVA:x}; forwarding id={text_id}"
+            )),
+        }
+    }
+    let orig = SYSTEM_QUIT_SAVE_GAME_GET_AND_FORMAT_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return out;
+    }
+    let original: unsafe extern "system" fn(usize, usize, i32, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    unsafe { original(out, getter, text_id, fmg_name, abbrev) }
+}
+
+unsafe fn system_quit_save_game_close_window(window: usize, label: &str) -> bool {
+    if window < 0x10000 || window == TITLE_OWNER_SCAN_START_ADDRESS {
+        return false;
+    }
+    let vt = unsafe { safe_read_usize(window) }.unwrap_or(0);
+    if vt < 0x10000 {
+        append_autoload_debug(format_args!(
+            "system-quit-save: skip close {label}=0x{window:x}; invalid vt=0x{vt:x}"
+        ));
+        return false;
+    }
+    let Ok(close_addr) = game_rva(SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-save: failed to resolve native close rva 0x{SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA:x}; cannot close {label}=0x{window:x}"
+        ));
+        return false;
+    };
+    let close_fn: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(close_addr) };
+    unsafe { close_fn(window) };
+    SYSTEM_QUIT_SAVE_GAME_CLOSE_COUNT.fetch_add(1, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-save: native cancel-close {label}=0x{window:x} vt=0x{vt:x}"
+    ));
+    true
+}
+
+unsafe fn system_quit_save_game_request_save_only() {
+    let Ok(request_save_addr) = game_rva(SYSTEM_QUIT_REQUEST_SAVE_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-save: failed to resolve RequestSave rva 0x{SYSTEM_QUIT_REQUEST_SAVE_RVA:x}"
+        ));
+        return;
+    };
+    let request_save: unsafe extern "system" fn(u8) =
+        unsafe { std::mem::transmute(request_save_addr) };
+    unsafe { request_save(true as u8) };
+    match game_rva(SYSTEM_QUIT_SAVE_REQUEST_PROFILE_RVA) {
+        Ok(profile_addr) => {
+            let save_request_profile: unsafe extern "system" fn(u8) =
+                unsafe { std::mem::transmute(profile_addr) };
+            unsafe { save_request_profile(true as u8) };
+        }
+        Err(_) => append_autoload_debug(format_args!(
+            "system-quit-save: failed to resolve SaveRequest_Profile rva 0x{SYSTEM_QUIT_SAVE_REQUEST_PROFILE_RVA:x}; RequestSave already issued"
+        )),
+    }
+}
+
+pub(crate) unsafe extern "system" fn system_quit_save_game_return_title_request_hook() {
+    let dialog = SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.swap(0, Ordering::SeqCst);
+    if dialog >= 0x10000 && callstack_contains_game_rva(0x7a3000, 0x7a4000) {
+        unsafe { system_quit_save_game_request_save_only() };
+        SYSTEM_QUIT_SAVE_GAME_CONFIRM_COUNT.fetch_add(1, Ordering::SeqCst);
+        let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
+        let top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
+        let closed_dialog = unsafe { system_quit_save_game_close_window(dialog, "system_dialog") };
+        let closed_option = if option != 0 && option != dialog {
+            unsafe { system_quit_save_game_close_window(option, "option_window") }
+        } else {
+            false
+        };
+        let closed_top = if top != 0 && top != dialog && top != option {
+            unsafe { system_quit_save_game_close_window(top, "ingame_top_window") }
+        } else {
+            false
+        };
+        append_autoload_debug(format_args!(
+            "system-quit-save: confirmation accepted -> save-only; suppressed native return-title request dialog=0x{dialog:x} option=0x{option:x} top=0x{top:x} closed_dialog={closed_dialog} closed_option={closed_option} closed_top={closed_top}"
+        ));
+        return;
+    }
+    if dialog != 0 {
+        SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.store(dialog, Ordering::SeqCst);
+    }
+    let orig = SYSTEM_QUIT_SAVE_GAME_RETURN_TITLE_REQUEST_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-save: return-title request trampoline unset and no active Save Game dialog; return"
+        ));
+        return;
+    }
+    let original: unsafe extern "system" fn() = unsafe { std::mem::transmute(orig) };
+    unsafe { original() };
 }
 
 pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hook(
@@ -9082,68 +10392,101 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
                 != SYSTEM_QUIT_NOOP_ACTION_INSTALLED_YES
             {
                 append_autoload_debug(format_args!(
-                    "system-quit-dup: matched Quit Game call but quick-load action hook is not installed; skipping cloned Load Game row"
+                    "system-quit-dup: matched Quit Game call but cloned action hook is not installed; skipping Load Profile/Load Save Profiles rows"
                 ));
                 return ret;
             }
-            let Ok(linehelp_addr) = game_rva(GET_GR_LINEHELP_ENTRY_RVA) else {
-                append_autoload_debug(format_args!(
-                    "system-quit-dup: failed to resolve GetGR_LineHelp rva 0x{GET_GR_LINEHELP_ENTRY_RVA:x}; skipping third row"
-                ));
-                return ret;
-            };
             let Ok(label_dtor_addr) = game_rva(MENU_HELP_LABEL_DTOR_RVA) else {
                 append_autoload_debug(format_args!(
-                    "system-quit-dup: failed to resolve MenuHelpLabelComponent dtor rva 0x{MENU_HELP_LABEL_DTOR_RVA:x}; skipping third row"
+                    "system-quit-dup: failed to resolve MenuHelpLabelComponent dtor rva 0x{MENU_HELP_LABEL_DTOR_RVA:x}; skipping cloned rows"
                 ));
                 return ret;
             };
-            let get_linehelp: unsafe extern "system" fn(usize, u32) -> usize =
-                unsafe { std::mem::transmute(linehelp_addr) };
             let label_dtor: unsafe extern "system" fn(usize) =
                 unsafe { std::mem::transmute(label_dtor_addr) };
-            let mut label_storage =
+            let mut load_label_storage =
                 std::mem::MaybeUninit::<SystemQuitMenuHelpLabelScratch>::uninit();
-            let load_label = label_storage.as_mut_ptr() as usize;
-            unsafe {
-                get_linehelp(load_label, SYSTEM_QUIT_LOAD_LINEHELP_ID);
-                get_linehelp(
-                    load_label + MENU_HELP_LABEL_HELP_OFFSET,
-                    SYSTEM_QUIT_LOAD_LINEHELP_ID,
-                );
+            let load_label = load_label_storage.as_mut_ptr() as usize;
+            let load_label_ok = unsafe {
+                system_quit_build_static_label_component(
+                    load_label,
+                    &SYSTEM_QUIT_LOAD_PROFILE_LABEL_W,
+                    &SYSTEM_QUIT_LOAD_PROFILE_HELP_W,
+                )
+            };
+            let load_ret = if load_label_ok {
+                let r = unsafe { original(dialog, load_label, action_fn, enabled_fn, keyguide_fn) };
+                unsafe { label_dtor(load_label) };
+                r
+            } else {
+                0
+            };
+            let after_load = unsafe {
+                safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET)
             }
-            let dup_ret =
-                unsafe { original(dialog, load_label, action_fn, enabled_fn, keyguide_fn) };
-            unsafe { label_dtor(load_label) };
-            let after_dup = unsafe {
+            .unwrap_or(0);
+            let mut open_label_storage =
+                std::mem::MaybeUninit::<SystemQuitMenuHelpLabelScratch>::uninit();
+            let open_label = open_label_storage.as_mut_ptr() as usize;
+            let open_label_ok = unsafe {
+                system_quit_build_static_label_component(
+                    open_label,
+                    &SYSTEM_QUIT_LOAD_SAVE_PROFILES_LABEL_W,
+                    &SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_W,
+                )
+            };
+            let open_ret = if open_label_ok {
+                let r = unsafe { original(dialog, open_label, action_fn, enabled_fn, keyguide_fn) };
+                unsafe { label_dtor(open_label) };
+                r
+            } else {
+                0
+            };
+            let after_open = unsafe {
                 safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET)
             }
             .unwrap_or(0);
             let properties = dialog + PROPERTY_EDIT_DIALOG_PROPERTIES_1268_OFFSET;
             let aligned_properties = (properties + 0x7) & !0x7;
-            let row_index = after_dup.saturating_sub(1);
-            let third_row = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(row_index);
-            let third_controller =
-                unsafe { safe_read_usize(third_row + EDIT_PROPERTY_CONTROLLER_OFFSET) }
-                    .unwrap_or(0);
-            let third_action = if third_controller != 0 {
+            let load_row_index = after_load.saturating_sub(1);
+            let load_row = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(load_row_index);
+            let open_row_index = after_open.saturating_sub(1);
+            let open_row = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(open_row_index);
+            let load_controller =
+                unsafe { safe_read_usize(load_row + EDIT_PROPERTY_CONTROLLER_OFFSET) }.unwrap_or(0);
+            let open_controller =
+                unsafe { safe_read_usize(open_row + EDIT_PROPERTY_CONTROLLER_OFFSET) }.unwrap_or(0);
+            let load_action = if load_controller != 0 {
                 unsafe {
                     safe_read_usize(
-                        third_controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET,
+                        load_controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET,
                     )
                 }
                 .unwrap_or(0)
             } else {
                 0
             };
-            if third_action != 0 {
-                SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.store(third_action, Ordering::SeqCst);
+            let open_action = if open_label_ok && open_controller != 0 {
+                unsafe {
+                    safe_read_usize(
+                        open_controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET,
+                    )
+                }
+                .unwrap_or(0)
+            } else {
+                0
+            };
+            if load_action != 0 {
+                SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.store(load_action, Ordering::SeqCst);
+            }
+            if open_action != 0 {
+                SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT.store(open_action, Ordering::SeqCst);
             }
             SYSTEM_QUIT_DUPLICATE_COUNT.fetch_add(1, Ordering::SeqCst);
             SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE.store(before, Ordering::SeqCst);
-            SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER.store(after_dup, Ordering::SeqCst);
+            SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER.store(after_open, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "system-quit-dup: added cloned quick-load AddCancelButton label=GR_LineHelp:{SYSTEM_QUIT_LOAD_LINEHELP_ID} dialog=0x{dialog:x} count {before}->{after_native}->{after_dup} ret=0x{ret:x} dup_ret=0x{dup_ret:x} row=0x{third_row:x} controller=0x{third_controller:x} action=0x{third_action:x}"
+                "system-quit-dup: added cloned Load Profile + Load Save Profiles rows dialog=0x{dialog:x} count {before}->{after_native}->{after_load}->{after_open} ret=0x{ret:x} load_ret=0x{load_ret:x} open_label_ok={open_label_ok} open_ret=0x{open_ret:x} load_row=0x{load_row:x} load_controller=0x{load_controller:x} load_action=0x{load_action:x} open_row=0x{open_row:x} open_controller=0x{open_controller:x} open_action=0x{open_action:x}"
             ));
         } else {
             append_autoload_debug(format_args!(
@@ -9839,7 +11182,7 @@ fn install_system_quit_noop_action_hook() {
                     SYSTEM_QUIT_NOOP_ACTION_INSTALLED
                         .store(SYSTEM_QUIT_NOOP_ACTION_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "system-quit-dup: hooked Quit Game action invoke 0x{addr:x}; recorded cloned quick-load action object will route to ProfileSelect"
+                        "system-quit-dup: hooked Quit Game action invoke 0x{addr:x}; cloned quick-load actions route to ProfileSelect; original row arms Save Game confirmation"
                     ));
                 }
                 status => append_autoload_debug(format_args!(
@@ -9849,6 +11192,120 @@ fn install_system_quit_noop_action_hook() {
         }
         Err(status) => append_autoload_debug(format_args!(
             "system-quit-dup: MhHook::new no-op action hook failed: {status:?}"
+        )),
+    }
+}
+
+fn install_system_quit_save_game_text_hook() {
+    if SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_SAVE_GAME_TEXT_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-save: MH_Initialize for text hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(MSG_REPOSITORY_GET_AND_FORMAT_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-save: failed to resolve MsgRepository::GetAndFormat rva 0x{MSG_REPOSITORY_GET_AND_FORMAT_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_save_game_get_and_format_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_SAVE_GAME_GET_AND_FORMAT_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-save: queue_enable text hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED
+                        .store(SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED_YES, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-save: hooked MsgRepository::GetAndFormat 0x{addr:x}; replacing GRMT:{SYSTEM_QUIT_SAVE_GAME_MENU_TEXT_ID}, GRHK:{SYSTEM_QUIT_SAVE_GAME_LINEHELP_ID}, GRD:{SYSTEM_QUIT_SAVE_GAME_DIALOG_ID}"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-save: MH_ApplyQueued text hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-save: MhHook::new text hook failed: {status:?}"
+        )),
+    }
+}
+
+fn install_system_quit_save_game_confirm_hook() {
+    if SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_SAVE_GAME_CONFIRM_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-save: MH_Initialize for confirm hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-save: failed to resolve return-title request rva 0x{SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_save_game_return_title_request_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_SAVE_GAME_RETURN_TITLE_REQUEST_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-save: queue_enable confirm hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED.store(
+                        SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED_YES,
+                        Ordering::SeqCst,
+                    );
+                    append_autoload_debug(format_args!(
+                        "system-quit-save: hooked native return-title request 0x{addr:x}; armed System Save Game confirmations become save-only + menu close"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-save: MH_ApplyQueued confirm hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-save: MhHook::new confirm hook failed: {status:?}"
         )),
     }
 }
@@ -9920,6 +11377,11 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
             ));
             return unsafe { original(dialog, b, c, d) };
         }
+        let foreign_save_committed =
+            match unsafe { system_quit_save_swap_prepare_selected_slot(cursor) } {
+                Ok(committed) => committed,
+                Err(()) => return 0,
+            };
         unsafe { system_quit_arm_quickload_autoload(cursor, "ProfileSelectSlotActivate") };
         // The arm only takes when the preserved System dialog is present; on success it advances the
         // phase past IDLE. If it took, cancel-close ProfileSelect ourselves (no confirm-lambda runs on
@@ -9934,7 +11396,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
                 SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT.fetch_add(1, Ordering::SeqCst);
             }
             append_autoload_debug(format_args!(
-                "system-quit-dup: ProfileSelect slot activation ARMED save-safe switch dialog=0x{dialog:x} cursor={cursor} bound={bound}; cancel-closed ProfileSelect -> return-title + clean-title fresh-deserialize of slot {cursor} (zero MessageBox)"
+                "system-quit-dup: ProfileSelect slot activation ARMED save-safe switch dialog=0x{dialog:x} cursor={cursor} bound={bound} foreign_save_committed={foreign_save_committed}; cancel-closed ProfileSelect -> return-title + clean-title fresh-deserialize of slot {cursor} (zero MessageBox)"
             ));
             return 0;
         }
@@ -11882,9 +13344,9 @@ fn apply_system_quit_multislot_layout_patch() {
     ));
 }
 
-/// Install the System -> Quit Game duplicate-button proof hook once. Opt-in only; the detour is a
-/// pass-through for every `AddCancelButton` call except the second call from the Quit Game tab
-/// builder, where it invokes the original trampoline a second time with the same native args.
+/// Install the System -> Quit Game duplicate-button proof hook once. The detour is a pass-through
+/// for every `AddCancelButton` call except the first Quit Game tab row, where it invokes the
+/// original trampoline again with native args for Load Profile and Open Save Folder rows.
 pub(crate) fn install_system_quit_duplicate_button_hook() {
     apply_system_quit_multislot_layout_patch();
     install_scaleform_handler_lifecycle_guard();
@@ -11894,7 +13356,9 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     install_gx_cmd_queue_telemetry();
     install_system_quit_menu_window_job_run_hook();
     install_system_quit_window_list_push_hook();
+    install_system_quit_save_game_text_hook();
     install_system_quit_noop_action_hook();
+    install_system_quit_save_game_confirm_hook();
     install_system_quit_profile_load_activate_hook();
     install_system_quit_profile_load_confirmed_hook();
     install_system_quit_profile_load_job_run_hook();
@@ -11937,7 +13401,7 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
                     SYSTEM_QUIT_DUPLICATE_INSTALLED
                         .store(SYSTEM_QUIT_DUPLICATE_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "system-quit-dup: hooked AddCancelButton 0x{addr:x}; will clone Quit Game row as quick-load from GR_LineHelp:{SYSTEM_QUIT_LOAD_LINEHELP_ID} at caller rva 0x{SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA:x}"
+                        "system-quit-dup: hooked AddCancelButton 0x{addr:x}; will clone Quit Game row as Load Profile and Load Save Profiles at caller rva 0x{SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA:x}"
                     ));
                 }
                 status => append_autoload_debug(format_args!(

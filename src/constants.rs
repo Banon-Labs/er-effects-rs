@@ -4808,11 +4808,11 @@ pub(crate) static MENU_WINDOW_LATCH_INSTALLED: AtomicUsize = AtomicUsize::new(0)
 pub(crate) const MENU_WINDOW_LATCH_NOT_INSTALLED: usize = 0;
 pub(crate) const MENU_WINDOW_LATCH_INSTALLED_YES: usize = 1;
 pub(crate) static START_MENU_WINDOW_LATCH: Once = Once::new();
-/// Quick-loading button hook for the System -> Quit Game tab: duplicate the native
-/// Quit Game / return-to-title `AddCancelButton` call once, retitle that clone as
-/// `Select profile to load`, and route its action to native 05_010_ProfileSelect. The hook is always installed; slot-load
-/// activation from the injected in-world ProfileSelect is separately guarded below while the crash
-/// at CSGaitemImp::Deserialize is investigated. Address is deobf/live (dump AddCancelButton
+/// System -> Quit Game tab hook: duplicate the native Quit Game / return-to-title
+/// `AddCancelButton` call into Load Profile and Open Save Folder rows. Load Profile routes to
+/// native 05_010_ProfileSelect; Open Save Folder opens the env-provided save directory. The hook is
+/// always installed; slot-load activation from the injected in-world ProfileSelect is separately
+/// guarded below. Address is deobf/live (dump AddCancelButton
 /// 0x140920d80 -> live 0x140920c90).
 pub(crate) const SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA: u32 = 0x920c90;
 /// Return address immediately after the first `AddCancelButton` in the Quit Game tab builder
@@ -4833,6 +4833,25 @@ pub(crate) const SYSTEM_QUIT_COMPONENT_INDEX_PATCH_LEN: usize = 1;
 pub(crate) const SYSTEM_QUIT_LOAD_LINEHELP_ID: u32 = 406000;
 /// Live/deobf `GetGR_LineHelp(MenuString*, int)` (dump `0x140760880` -> live `0x140760790`).
 pub(crate) const GET_GR_LINEHELP_ENTRY_RVA: u32 = 0x760790;
+/// Live/deobf `CS::MsgRepository::GetAndFormat(MenuString*, getter, id, fmg_name, abbrev)`
+/// (dump `0x1407634c0` -> live `0x1407633d0`). Hooked narrowly for System -> Quit Game
+/// relabeling to Save Game without editing bundled FMGs.
+pub(crate) const MSG_REPOSITORY_GET_AND_FORMAT_RVA: u32 = 0x7633d0;
+/// Live/deobf `CS::MsgRepository::Format(MenuString*, wchar_t*, id, fmg_name, abbrev)`
+/// (dump `0x1407639a0` -> live `0x1407638b0`). The GetAndFormat detour delegates here with
+/// process-lifetime UTF-16 literals for the Save Game replacement strings.
+pub(crate) const MSG_REPOSITORY_FORMAT_RVA: u32 = 0x7638b0;
+/// Live/deobf `CS::MenuString::MenuString(MenuString*, wchar_t*)` (dump `0x140675990` ->
+/// live `0x1406758a0`). Stores the raw UTF-16 pointer, so callers must pass process-lifetime data.
+pub(crate) const MENU_STRING_FROM_WIDE_RVA: u32 = 0x6758a0;
+/// FMG IDs for the first System -> Quit Game row and its confirmation dialog.
+pub(crate) const SYSTEM_QUIT_SAVE_GAME_MENU_TEXT_ID: i32 = 110510;
+pub(crate) const SYSTEM_QUIT_SAVE_GAME_LINEHELP_ID: i32 = 110500;
+pub(crate) const SYSTEM_QUIT_SAVE_GAME_DIALOG_ID: i32 = 110000;
+/// Native save-only routines: `SaveRequest_Profile(true)` and `RequestSave(true)`. Distinct from
+/// `FUN_14067a490`, which requests save AND sets return-title teardown state.
+pub(crate) const SYSTEM_QUIT_SAVE_REQUEST_PROFILE_RVA: u32 = 0x67a420;
+pub(crate) const SYSTEM_QUIT_REQUEST_SAVE_RVA: u32 = 0x67a520;
 /// `MenuHelpLabelComponent` contains two `MenuString` objects: visible label at +0, help at +0x38.
 pub(crate) const MENU_HELP_LABEL_HELP_OFFSET: usize = 0x38;
 pub(crate) const MENU_HELP_LABEL_SIZE: usize = 0x70;
@@ -4855,16 +4874,40 @@ pub(crate) const EDIT_PROPERTY_CONTROLLER_OFFSET: usize = 0x78;
 pub(crate) const PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET: usize = 0xa8;
 pub(crate) static SYSTEM_QUIT_DUPLICATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_NOOP_ACTION_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SYSTEM_QUIT_SAVE_GAME_GET_AND_FORMAT_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SYSTEM_QUIT_SAVE_GAME_RETURN_TITLE_REQUEST_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_DUPLICATE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_NOOP_ACTION_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_DUPLICATE_INSTALLED_YES: usize = 1;
 pub(crate) const SYSTEM_QUIT_NOOP_ACTION_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_NOOP_ACTION_INSTALLED_YES: usize = 1;
+pub(crate) const SYSTEM_QUIT_SAVE_GAME_TEXT_NOT_INSTALLED: usize = 0;
+pub(crate) const SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED_YES: usize = 1;
+pub(crate) const SYSTEM_QUIT_SAVE_GAME_CONFIRM_NOT_INSTALLED: usize = 0;
+pub(crate) const SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED_YES: usize = 1;
 pub(crate) static SYSTEM_QUIT_DUPLICATE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_NOOP_SELECTION_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_SAVE_GAME_TEXT_SUBSTITUTION_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_SAVE_GAME_CONFIRM_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_SAVE_GAME_CLOSE_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Recorded cloned action implementation object for the quick-load row; only this action is routed.
 pub(crate) static SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
+/// Recorded cloned action implementation object for the save-folder row; only this action opens the
+/// env-provided save directory.
+pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// The original Quit Game row's action captures its owning System dialog here before forwarding to
+/// the native confirmation job. The return-title request hook consumes this latch on confirmation
+/// and performs save-only + native menu close instead of title teardown.
+pub(crate) static SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG: AtomicUsize = AtomicUsize::new(0);
 /// Stable qword slot passed to the native `05_010_ProfileSelect` wrapper. The wrapper writes the
 /// MenuWindowJob pointer here and captures this slot for its later ProfileLoadDialog factory call.
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT: AtomicUsize = AtomicUsize::new(0);

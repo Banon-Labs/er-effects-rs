@@ -432,9 +432,9 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
             .spawn(install_profile_select_table_diag_hook);
     });
 
-    // System -> Quit Game quick-loading button: always-on multi-slot layout patch plus a third row
-    // that opens native 05_010_ProfileSelect. Slot activation from that injected in-world route is
-    // separately blocked by default until the crash-risk load semantics are pinned.
+    // System -> Quit Game buttons: always-on multi-slot layout patch plus cloned rows for native
+    // 05_010_ProfileSelect and opening the env-provided save folder. Slot activation from that
+    // injected in-world route is separately guarded by the System-Quit load flow.
     START_SYSTEM_QUIT_DUPLICATE_BUTTON_HOOK.call_once(|| {
         let _ = std::thread::Builder::new()
             .name("er-effects-system-quit-load".to_owned())

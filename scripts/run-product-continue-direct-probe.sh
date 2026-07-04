@@ -149,6 +149,15 @@ preflight() {
       fatal "RUNTIME_TELEMETRY_ONLY=1 cannot be combined with mutating visual resource env(s): ${conflicting_visual_envs[*]}; use a non-telemetry visual probe mode instead"
     fi
   fi
+  if [[ "${RUNTIME_NO_TEARDOWN:-0}" == "1" && "${ER_EFFECTS_ALLOW_NO_TEARDOWN_AUTOPILOT:-0}" != "1" ]]; then
+    local repro_env="${ER_EFFECTS_SYSTEM_QUIT_REPRO:-}"
+    if [[ -n "${repro_env//[[:space:]]/}" && "$repro_env" != "0" ]]; then
+      fatal "RUNTIME_NO_TEARDOWN=1 is for user-controlled/manual inspection; refusing ER_EFFECTS_SYSTEM_QUIT_REPRO=$repro_env unless ER_EFFECTS_ALLOW_NO_TEARDOWN_AUTOPILOT=1 is also set"
+    fi
+    if [[ -f "$GAME_DIR/er-effects-system-quit-repro.txt" ]]; then
+      fatal "RUNTIME_NO_TEARDOWN=1 is for user-controlled/manual inspection; refusing game-dir er-effects-system-quit-repro.txt unless ER_EFFECTS_ALLOW_NO_TEARDOWN_AUTOPILOT=1 is also set"
+    fi
+  fi
 
   # Steam MUST be running: the offline eldenring.exe Proton launch reuses Steam's environment
   # (wineprefix, CWD, Steam account/save-dir id). With Steam down the game still boots but in a
