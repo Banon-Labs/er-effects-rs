@@ -11,7 +11,7 @@ use std::{
         Arc, Mutex, Once, OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 
 use std::os::windows::ffi::OsStrExt as _;
@@ -5320,6 +5320,43 @@ unsafe fn portrait_render_slot_semaphore(base: usize, render_target_slot: i32) {
 /// per-slot records start at `summary+0x18`, stride `0x2a0`; character NAME at record+0.
 const PROFILE_SUMMARY_RECORD_BASE: usize = 0x18;
 const PROFILE_SUMMARY_RECORD_STRIDE: usize = 0x2a0;
+const PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET: usize = 0x8;
+const PROFILE_SUMMARY_TOTAL_BYTES: usize =
+    PROFILE_SUMMARY_RECORD_BASE + PROFILE_SUMMARY_RECORD_STRIDE * TITLE_PROFILE_SLOT_COUNT;
+const SAVE_BODY_PLAYER_GAME_DATA_OFFSET: usize = 0xebae;
+const PROFILE_SUMMARY_NAME_BYTES: usize = 0x22;
+const PROFILE_SUMMARY_LEVEL_OFFSET: usize = 0x24;
+const PROFILE_SUMMARY_PLAYTIME_OFFSET: usize = 0x28;
+const PROFILE_SUMMARY_RUNE_MEMORY_OFFSET: usize = 0x2c;
+const PROFILE_SUMMARY_FACE_DATA_OFFSET: usize = 0x38;
+const PROFILE_SUMMARY_CHR_ASM_OFFSET: usize = 0x1a8;
+const PROFILE_SUMMARY_GENDER_OFFSET: usize = 0x290;
+const PROFILE_SUMMARY_ARCHETYPE_OFFSET: usize = 0x291;
+const PROFILE_SUMMARY_STARTING_GIFT_OFFSET: usize = 0x292;
+const PROFILE_SUMMARY_FIELD_C4_OFFSET: usize = 0x293;
+const FACE_DATA_COPY_FROM_BUFFER_RVA: usize = 0x00252f70;
+const CHR_ASM_COPY_RVA: usize = 0x00245c00;
+const SYSTEM_QUIT_SAVE_SWAP_POLL_INTERVAL_TICKS: usize = 30;
+static SYSTEM_QUIT_SAVE_SWAP_POLL_TICK: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Default)]
+struct SystemQuitSaveSwapState {
+    armed: bool,
+    path: String,
+    original_bytes: Vec<u8>,
+    original_hash: u64,
+    original_len: u64,
+    original_modified_ns: u128,
+    candidate_bytes: Vec<u8>,
+    candidate_hash: u64,
+    candidate_slot_mask: usize,
+    preview_applied: bool,
+    committed: bool,
+    summary_ptr: usize,
+    summary_snapshot: Vec<u8>,
+}
+
+static SYSTEM_QUIT_SAVE_SWAP_STATE: OnceLock<Mutex<SystemQuitSaveSwapState>> = OnceLock::new();
 
 /// True if ProfileSummary slot `slot` holds a real character (non-empty saved name). Used to gate the
 /// human-driven in-world Load-Profile pick so activating an EMPTY slot never arms a switch (which
@@ -5345,6 +5382,353 @@ unsafe fn profile_slot_has_character(slot: i32) -> bool {
         + slot as usize * PROFILE_SUMMARY_RECORD_STRIDE;
     let (name, len) = unsafe { read_utf16_name_units(rec) };
     !utf16_name_empty_like(&name, len)
+}
+
+fn system_quit_save_swap_state() -> &'static Mutex<SystemQuitSaveSwapState> {
+    SYSTEM_QUIT_SAVE_SWAP_STATE.get_or_init(|| Mutex::new(SystemQuitSaveSwapState::default()))
+}
+
+fn system_quit_save_swap_lock() -> std::sync::MutexGuard<'static, SystemQuitSaveSwapState> {
+    system_quit_save_swap_state()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn system_quit_hash_bytes(bytes: &[u8]) -> u64 {
+    let mut h = 0xcbf29ce484222325u64;
+    for b in bytes.iter().copied() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+fn system_quit_file_stamp(path: &str) -> Option<(u64, u128)> {
+    let meta = fs::metadata(path).ok()?;
+    let modified_ns = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    Some((meta.len(), modified_ns))
+}
+
+fn system_quit_save_swap_arm_original(path: &str) -> bool {
+    let Ok(bytes) = fs::read(path) else {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: failed to snapshot active save '{path}' before opening replacement folder"
+        ));
+        return false;
+    };
+    let Some((len, modified_ns)) = system_quit_file_stamp(path) else {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: failed to stat active save '{path}' before opening replacement folder"
+        ));
+        return false;
+    };
+    let hash = system_quit_hash_bytes(&bytes);
+    let mut st = system_quit_save_swap_lock();
+    *st = SystemQuitSaveSwapState {
+        armed: true,
+        path: path.to_owned(),
+        original_bytes: bytes,
+        original_hash: hash,
+        original_len: len,
+        original_modified_ns: modified_ns,
+        ..SystemQuitSaveSwapState::default()
+    };
+    append_autoload_debug(format_args!(
+        "system-quit-save-swap: armed active-save snapshot path='{path}' len={len} hash=0x{hash:016x}; replacement preview will restore this file unless a foreign slot is selected"
+    ));
+    true
+}
+
+unsafe fn system_quit_profile_summary_ptr() -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let gdm = game_data_man_ptr_or_null();
+    if gdm == null {
+        return null;
+    }
+    unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(null)
+}
+
+fn system_quit_body_has_name(body: &[u8]) -> bool {
+    let name = SAVE_BODY_PLAYER_GAME_DATA_OFFSET + PGD_NAME_9C_OFFSET;
+    let end = name + PROFILE_SUMMARY_NAME_BYTES;
+    if body.len() < end {
+        return false;
+    }
+    body[name..end].chunks_exact(2).any(|u| u != [0, 0])
+}
+
+unsafe fn system_quit_write_profile_summary_slot_from_body(
+    base: usize,
+    profile_summary: usize,
+    slot: usize,
+    body: &[u8],
+) -> bool {
+    let min_name_len =
+        SAVE_BODY_PLAYER_GAME_DATA_OFFSET + PGD_NAME_9C_OFFSET + PROFILE_SUMMARY_NAME_BYTES;
+    let min_face_len = SAVE_BODY_PLAYER_GAME_DATA_OFFSET
+        + PGD_FACE_DATA_OFFSET
+        + FACE_DATA_BUFFER_OFFSET
+        + FACE_DATA_BUFFER_TOTAL_SIZE;
+    let min_chr_asm_len = SAVE_BODY_PLAYER_GAME_DATA_OFFSET
+        + PGD_EQUIP_GAME_DATA_OFFSET
+        + EQUIP_GAME_DATA_CHR_ASM_OFFSET
+        + CHR_ASM_SIZE;
+    if body.len() < min_name_len || body.len() < min_face_len || body.len() < min_chr_asm_len {
+        return false;
+    }
+    if !system_quit_body_has_name(body) {
+        return false;
+    }
+    let pgd = body
+        .as_ptr()
+        .wrapping_add(SAVE_BODY_PLAYER_GAME_DATA_OFFSET) as usize;
+    let slot_data =
+        profile_summary + PROFILE_SUMMARY_RECORD_BASE + slot * PROFILE_SUMMARY_RECORD_STRIDE;
+    unsafe {
+        core::ptr::write_bytes(slot_data as *mut u8, 0, PROFILE_SUMMARY_RECORD_STRIDE);
+        core::ptr::copy_nonoverlapping(
+            (pgd + PGD_NAME_9C_OFFSET) as *const u8,
+            slot_data as *mut u8,
+            PROFILE_SUMMARY_NAME_BYTES,
+        );
+        *(slot_data.wrapping_add(PROFILE_SUMMARY_LEVEL_OFFSET) as *mut i32) =
+            *((pgd + PGD_LEVEL_68_OFFSET) as *const i32);
+        *(slot_data.wrapping_add(PROFILE_SUMMARY_PLAYTIME_OFFSET) as *mut u32) = 0;
+        *(slot_data.wrapping_add(PROFILE_SUMMARY_RUNE_MEMORY_OFFSET) as *mut i32) =
+            *((pgd + PGD_RUNE_MEMORY_70_OFFSET) as *const i32);
+        let copy_face_data_from_buffer: unsafe extern "system" fn(usize, usize) =
+            std::mem::transmute(base + FACE_DATA_COPY_FROM_BUFFER_RVA);
+        let copy_chr_asm: unsafe extern "system" fn(usize, usize) -> usize =
+            std::mem::transmute(base + CHR_ASM_COPY_RVA);
+        copy_face_data_from_buffer(
+            slot_data.wrapping_add(PROFILE_SUMMARY_FACE_DATA_OFFSET),
+            pgd + PGD_FACE_DATA_OFFSET + FACE_DATA_BUFFER_OFFSET,
+        );
+        copy_chr_asm(
+            slot_data.wrapping_add(PROFILE_SUMMARY_CHR_ASM_OFFSET),
+            pgd + PGD_EQUIP_GAME_DATA_OFFSET + EQUIP_GAME_DATA_CHR_ASM_OFFSET,
+        );
+        *(slot_data.wrapping_add(PROFILE_SUMMARY_GENDER_OFFSET) as *mut u8) =
+            *((pgd + PGD_GENDER_BE_OFFSET) as *const u8);
+        *(slot_data.wrapping_add(PROFILE_SUMMARY_ARCHETYPE_OFFSET) as *mut u8) =
+            *((pgd + PGD_ARCHETYPE_BF_OFFSET) as *const u8);
+        *(slot_data.wrapping_add(PROFILE_SUMMARY_STARTING_GIFT_OFFSET) as *mut u8) =
+            *((pgd + PGD_STARTING_GIFT_C3_OFFSET) as *const u8);
+        *(slot_data.wrapping_add(PROFILE_SUMMARY_FIELD_C4_OFFSET) as *mut u8) =
+            *((pgd + 0xc4) as *const u8);
+        *(profile_summary.wrapping_add(PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot) as *mut u8) = 1;
+    }
+    true
+}
+
+unsafe fn system_quit_apply_foreign_profile_summary_preview(base: usize, bytes: &[u8]) -> usize {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let summary = unsafe { system_quit_profile_summary_ptr() };
+    if summary == null {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: cannot preview replacement save -- live ProfileSummary unavailable"
+        ));
+        return 0;
+    }
+    let mut st = system_quit_save_swap_lock();
+    if st.summary_snapshot.is_empty() || st.summary_ptr != summary {
+        st.summary_ptr = summary;
+        st.summary_snapshot = unsafe {
+            core::slice::from_raw_parts(summary as *const u8, PROFILE_SUMMARY_TOTAL_BYTES).to_vec()
+        };
+    }
+    unsafe {
+        for slot in 0..TITLE_PROFILE_SLOT_COUNT {
+            core::ptr::write_bytes(
+                (summary + PROFILE_SUMMARY_RECORD_BASE + slot * PROFILE_SUMMARY_RECORD_STRIDE)
+                    as *mut u8,
+                0,
+                PROFILE_SUMMARY_RECORD_STRIDE,
+            );
+            *((summary + PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot) as *mut u8) = 0;
+        }
+    }
+    drop(st);
+
+    let mut mask = 0usize;
+    for slot in 0..TITLE_PROFILE_SLOT_COUNT {
+        if let Ok(body) = er_save_loader::bnd4::slot_body(bytes, slot) {
+            if unsafe {
+                system_quit_write_profile_summary_slot_from_body(base, summary, slot, body)
+            } {
+                mask |= 1usize << slot;
+            }
+        }
+    }
+    if mask != 0 {
+        let refresh: unsafe extern "system" fn() =
+            unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
+        unsafe { refresh() };
+    }
+    mask
+}
+
+fn system_quit_save_swap_restore_original_file(st: &SystemQuitSaveSwapState, reason: &str) -> bool {
+    if st.path.is_empty() || st.original_bytes.is_empty() {
+        return false;
+    }
+    match fs::write(&st.path, &st.original_bytes) {
+        Ok(()) => {
+            append_autoload_debug(format_args!(
+                "system-quit-save-swap: restored active save file for {reason} path='{}' len={} hash=0x{:016x}",
+                st.path,
+                st.original_bytes.len(),
+                st.original_hash
+            ));
+            true
+        }
+        Err(err) => {
+            append_autoload_debug(format_args!(
+                "system-quit-save-swap: FAILED to restore active save file for {reason} path='{}': {err}",
+                st.path
+            ));
+            false
+        }
+    }
+}
+
+unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str) {
+    let mut st = system_quit_save_swap_lock();
+    if !st.preview_applied || st.committed {
+        return;
+    }
+    if st.summary_ptr >= 0x10000 && !st.summary_snapshot.is_empty() {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                st.summary_snapshot.as_ptr(),
+                st.summary_ptr as *mut u8,
+                st.summary_snapshot.len(),
+            );
+        }
+        if let Ok(base) = game_module_base() {
+            let refresh: unsafe extern "system" fn() =
+                unsafe { std::mem::transmute(base + PROFILE_RENDERER_REFRESH_RVA) };
+            unsafe { refresh() };
+        }
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: restored live ProfileSummary snapshot for {reason} summary=0x{:x} bytes={}",
+            st.summary_ptr,
+            st.summary_snapshot.len()
+        ));
+    }
+    let _ = system_quit_save_swap_restore_original_file(&st, reason);
+    *st = SystemQuitSaveSwapState::default();
+}
+
+unsafe fn system_quit_save_swap_poll_preview(base: usize) {
+    let tick = SYSTEM_QUIT_SAVE_SWAP_POLL_TICK.fetch_add(1, Ordering::SeqCst);
+    if tick % SYSTEM_QUIT_SAVE_SWAP_POLL_INTERVAL_TICKS != 0 {
+        return;
+    }
+    let (path, original_hash, original_len, original_modified_ns, preview_applied) = {
+        let st = system_quit_save_swap_lock();
+        if !st.armed || st.committed || st.path.is_empty() {
+            return;
+        }
+        (
+            st.path.clone(),
+            st.original_hash,
+            st.original_len,
+            st.original_modified_ns,
+            st.preview_applied,
+        )
+    };
+    if preview_applied {
+        return;
+    }
+    let Some((len, modified_ns)) = system_quit_file_stamp(&path) else {
+        return;
+    };
+    if len == original_len && modified_ns == original_modified_ns {
+        return;
+    }
+    let Ok(bytes) = fs::read(&path) else {
+        return;
+    };
+    let hash = system_quit_hash_bytes(&bytes);
+    if hash == original_hash {
+        return;
+    }
+    // Validate before restoring the active redirected save. A partial copy must not be captured as a
+    // foreign preview, and the old in-world save must remain the write target until the user commits.
+    if er_save_loader::bnd4::parse_entries(&bytes).is_err() {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: replacement candidate changed but is not a valid BND4 yet path='{path}' len={len} hash=0x{hash:016x}; waiting"
+        ));
+        return;
+    }
+    {
+        let st = system_quit_save_swap_lock();
+        if !system_quit_save_swap_restore_original_file(&st, "candidate-captured") {
+            return;
+        }
+    }
+    let mask = unsafe { system_quit_apply_foreign_profile_summary_preview(base, &bytes) };
+    if mask == 0 {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: valid replacement candidate had no readable character slots path='{path}' len={len} hash=0x{hash:016x}; active file restored, preview not applied"
+        ));
+        return;
+    }
+    let mut st = system_quit_save_swap_lock();
+    st.candidate_bytes = bytes;
+    st.candidate_hash = hash;
+    st.candidate_slot_mask = mask;
+    st.preview_applied = true;
+    append_autoload_debug(format_args!(
+        "system-quit-save-swap: applied FOREIGN ProfileSummary preview from replacement path='{path}' len={len} hash=0x{hash:016x} slot_mask=0x{mask:x}; active save file restored until the user selects a foreign slot"
+    ));
+}
+
+unsafe fn system_quit_save_swap_prepare_selected_slot(slot: i32) -> Result<bool, ()> {
+    if !(0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
+        return Ok(false);
+    }
+    let mut st = system_quit_save_swap_lock();
+    if !st.preview_applied || st.committed {
+        return Ok(false);
+    }
+    let bit = 1usize << slot as usize;
+    if st.candidate_slot_mask & bit == 0 {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: refusing ProfileSelect activation for slot {slot}; foreign preview active but slot bit is absent mask=0x{:x}",
+            st.candidate_slot_mask
+        ));
+        return Err(());
+    }
+    if st.path.is_empty() || st.candidate_bytes.is_empty() {
+        return Err(());
+    }
+    match fs::write(&st.path, &st.candidate_bytes) {
+        Ok(()) => {
+            st.committed = true;
+            st.armed = false;
+            append_autoload_debug(format_args!(
+                "system-quit-save-swap: committed foreign save before slot activation path='{}' slot={slot} len={} hash=0x{:016x}; fresh deserialize will read this file",
+                st.path,
+                st.candidate_bytes.len(),
+                st.candidate_hash
+            ));
+            Ok(true)
+        }
+        Err(err) => {
+            append_autoload_debug(format_args!(
+                "system-quit-save-swap: FAILED to commit foreign save for slot {slot} path='{}': {err}; blocking activation to avoid loading stale/original bytes",
+                st.path
+            ));
+            Err(())
+        }
+    }
 }
 
 /// Patch the loaded slot's profile offscreen RT size BEFORE any post-Continue profile renderer is
@@ -8489,6 +8873,7 @@ unsafe fn system_quit_restore_real_system_windows(base: usize, source: &str) {
     append_autoload_debug(format_args!(
         "system-quit-dup: restore real windows source={source} profile=0x{profile:x} top=0x{top:x} option=0x{option:x} restored_top={restored_top} restored_option={restored_option}"
     ));
+    unsafe { system_quit_save_swap_restore_profile_summary(source) };
     unsafe { system_quit_reset_profile_select_state(source) };
     if restored_top || restored_option {
         SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -8509,7 +8894,15 @@ pub(crate) unsafe fn system_quit_profile_select_top_menu_tick() {
         // menu-pump ownership by the native confirm transition (dialog+0x1e8=Success pops the
         // ProfileSelect window job) and the return-title submit is done in menu-pump ownership from
         // the MenuWindowJob::Run hook. See bd system-quit-return-title-scaleform-race-2026-07-01.
+        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) == SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
+            unsafe {
+                system_quit_save_swap_restore_profile_summary("profile-select-closed-without-load")
+            };
+        }
         return;
+    }
+    if let Ok(base) = game_module_base() {
+        unsafe { system_quit_save_swap_poll_preview(base) };
     }
     let list = SYSTEM_QUIT_TOP_HIDE_LIST.load(Ordering::SeqCst);
     if list == 0 {
@@ -8855,13 +9248,17 @@ fn wide_z(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(core::iter::once(0)).collect()
 }
 
-fn system_quit_env_save_dir() -> Result<String, &'static str> {
+fn system_quit_env_save_path() -> Result<String, &'static str> {
     let raw = std::env::var("ER_EFFECTS_SAVE_FILE").map_err(|_| "ER_EFFECTS_SAVE_FILE unset")?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err("ER_EFFECTS_SAVE_FILE blank");
     }
-    let trimmed = trimmed.trim_end_matches(['/', '\\']);
+    Ok(trimmed.trim_end_matches(['/', '\\']).to_owned())
+}
+
+fn system_quit_env_save_dir() -> Result<String, &'static str> {
+    let trimmed = system_quit_env_save_path()?;
     let Some(sep) = trimmed.rfind(['/', '\\']) else {
         return Err("ER_EFFECTS_SAVE_FILE has no parent directory");
     };
@@ -8885,6 +9282,16 @@ fn system_quit_path_for_shell(path: &str) -> Vec<u16> {
 }
 
 unsafe fn system_quit_open_env_save_dir() -> bool {
+    let save_path = match system_quit_env_save_path() {
+        Ok(path) => path,
+        Err(reason) => {
+            SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "system-quit-open-save-dir: refused to open save directory -- {reason}"
+            ));
+            return false;
+        }
+    };
     let dir = match system_quit_env_save_dir() {
         Ok(dir) => dir,
         Err(reason) => {
@@ -8900,6 +9307,10 @@ unsafe fn system_quit_open_env_save_dir() -> bool {
         append_autoload_debug(format_args!(
             "system-quit-open-save-dir: refused to open missing/non-directory save dir '{dir}'"
         ));
+        return false;
+    }
+    if !system_quit_save_swap_arm_original(&save_path) {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
         return false;
     }
     let operation = wide_z("open");
@@ -10229,6 +10640,11 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
             ));
             return unsafe { original(dialog, b, c, d) };
         }
+        let foreign_save_committed =
+            match unsafe { system_quit_save_swap_prepare_selected_slot(cursor) } {
+                Ok(committed) => committed,
+                Err(()) => return 0,
+            };
         unsafe { system_quit_arm_quickload_autoload(cursor, "ProfileSelectSlotActivate") };
         // The arm only takes when the preserved System dialog is present; on success it advances the
         // phase past IDLE. If it took, cancel-close ProfileSelect ourselves (no confirm-lambda runs on
@@ -10243,7 +10659,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
                 SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT.fetch_add(1, Ordering::SeqCst);
             }
             append_autoload_debug(format_args!(
-                "system-quit-dup: ProfileSelect slot activation ARMED save-safe switch dialog=0x{dialog:x} cursor={cursor} bound={bound}; cancel-closed ProfileSelect -> return-title + clean-title fresh-deserialize of slot {cursor} (zero MessageBox)"
+                "system-quit-dup: ProfileSelect slot activation ARMED save-safe switch dialog=0x{dialog:x} cursor={cursor} bound={bound} foreign_save_committed={foreign_save_committed}; cancel-closed ProfileSelect -> return-title + clean-title fresh-deserialize of slot {cursor} (zero MessageBox)"
             ));
             return 0;
         }
