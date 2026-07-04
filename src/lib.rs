@@ -280,7 +280,12 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
             PROFILE_05_010_RUNTIME_EDIT_ARMED.store(1, Ordering::SeqCst);
             let _ = std::thread::Builder::new()
                 .name("er-effects-profile-stats-text".to_owned())
-                .spawn(install_title_scene_obj_proxy_named_child_bind_hook);
+                .spawn(|| {
+                    // The row-populate hook drives the per-slot attribute push; the named-child binder
+                    // hook still runs the title-cover duties. Both are idempotent.
+                    install_profile_row_populate_hook();
+                    install_title_scene_obj_proxy_named_child_bind_hook();
+                });
         });
     }
     // Title-cover masquerade Part A: install the BeginTitle `05_000_Title` hook as early as

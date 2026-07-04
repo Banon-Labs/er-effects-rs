@@ -363,7 +363,7 @@ pub(crate) fn install_wbr_update_hook() -> bool {
 /// path the engine uses -- so we never hardcode the user-data/steamid prefix. Inside that directory
 /// we pick the save file by extension (`.sl2`/`.co2`) rather than assuming an exact filename, so the
 /// probe works for vanilla and Seamless without a hardcoded name (bd dont-hardcode-savefile-tied).
-unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
+pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     const REQ_DIR_SANE_MAX_CU: usize = 320;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     // STAGED-SAVE DIRECT READ (feed-deserialize softlock fix, er-effects-rs, 2026-07-03). When a

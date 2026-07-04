@@ -2295,18 +2295,31 @@ pub(crate) const PROFILE_SETTEXT_RVA: usize = 0x74a000;
 /// GFx::Value handle a resolved child proxy holds; the stats push calls it exactly like the native
 /// row-populate does after each field.
 pub(crate) const CSSCALEFORMVALUE_DTOR_RVA: usize = 0xd7f850;
-/// The SceneObjProxy embeds its CSScaleformValue at proxy+0x8 (RE'd from the row-populate template
-/// `FUN_1408758d0`, which calls `FUN_14074a0f0(&sceneObjProxy.scaleformValue, ...)`).
-pub(crate) const SCENE_OBJ_PROXY_SCALEFORM_VALUE_OFFSET: usize = 0x8;
+/// SceneObjProxy layout, corrected 2026-07-04 from the Ghidra dump structures + `ComponentProxy::
+/// ComponentProxy` (dump 0x1407331b0) after the er-effects-rs-7e7 crash: +0x00 vfptr, +0x08/+0x10/
+/// +0x18 an intrusive component-link node (ctor initializes all three to `self`; the resolve links
+/// the live component object in), +0x20 context, +0x28 the EMBEDDED `CSScaleformValue` (0x38 bytes:
+/// vfptr + GFx::Value). The old claim that the CSScaleformValue sits at +0x8 was WRONG -- +0x8 is
+/// the component slot whose OBJECT POINTER the SetText wrapper reads (`rcx = *(proxy+0x8)`) and
+/// virtual-calls (`vt+0x8` GetValue). Native row-populate `FUN_1408758d0` passes `&proxy->field_0x8`
+/// to `FUN_14074a0f0` and destroys `&proxy.scaleformValue` (+0x28) afterward.
+pub(crate) const SCENE_OBJ_PROXY_COMPONENT_SLOT_OFFSET: usize = 0x8;
+/// Vtable slot the SetText wrapper dispatches on the linked component (`call *0x8(vt)` at
+/// deobf 0x74a00f) -- the GetValue accessor returning the GFx::Value*. The 7e7 guard validates the
+/// function pointer in this slot before allowing the wrapper's unvalidated dispatch to run.
+pub(crate) const COMPONENT_GET_VALUE_VTABLE_SLOT_OFFSET: usize = 0x8;
+/// Offset of the embedded `CSScaleformValue` inside a SceneObjProxy -- the correct
+/// `CSSCALEFORMVALUE_DTOR_RVA` target after an `assignComponentWithName` resolve (the ctor
+/// constructs it unconditionally on both the empty-name and named paths). Destroying +0x8 instead
+/// (the pre-7e7 bug) stamps a vtable over the component-link node and "releases" whatever
+/// `proxy+0x20` holds -- a UAF corrupter.
+pub(crate) const SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET: usize = 0x28;
 /// Stack size for an out SceneObjProxy passed to `assignComponentWithName`. The native row-populate
 /// reserves 0x70 bytes; the binder fully constructs the out proxy without reading it, so a zeroed
 /// buffer with headroom is safe.
 pub(crate) const SCENE_OBJ_PROXY_STACK_BYTES: usize = 0x80;
-/// The row field whose native resolve (first, in `FUN_1408758d0`'s populate order) triggers our
-/// synchronous `ErStats` push on the same row `parent`. Matching PlayerName means the push fires
-/// once per row populate, before the native fields are written (they keep their native text).
-pub(crate) const PROFILE_STATS_TRIGGER_FIELD: &str = "PlayerName";
-/// Re-entrancy guard: our `ErStats` resolve re-enters the named-child hook; skip the trigger while set.
+/// Re-entrancy guard for the row-populate hook's `ErStats` push (its resolve re-enters the named-child
+/// binder hook): skip the push block while set.
 pub(crate) static PROFILE_STATS_PUSH_IN_PROGRESS: AtomicUsize = AtomicUsize::new(0);
 /// Count of row populates observed (PlayerName trigger fired) while the stats panel is on (oracle).
 pub(crate) static PROFILE_STATS_ROW_POPULATES: AtomicUsize = AtomicUsize::new(0);
@@ -2315,6 +2328,33 @@ pub(crate) static PROFILE_STATS_SETTEXT_SUBS: AtomicUsize = AtomicUsize::new(0);
 /// Count of push attempts that failed (field missing -- e.g. GFX edit not served -- or SetText
 /// rejected the value) (oracle).
 pub(crate) static PROFILE_STATS_PUSH_FAILURES: AtomicUsize = AtomicUsize::new(0);
+/// Count of pushes SKIPPED fail-closed because the resolved component at proxy+0x8 was not a live
+/// image-vtabled object (er-effects-rs-7e7: a stale/garbage-vt component here crashed the native
+/// SetText wrapper's unvalidated `call *0x8(vt)` dispatch). Distinct from PUSH_FAILURES so telemetry
+/// separates "field missing / SetText rejected" from "component stale -- crash avoided" (oracle).
+pub(crate) static PROFILE_STATS_PUSH_STALE_SKIPS: AtomicUsize = AtomicUsize::new(0);
+/// Last stale component pointer observed by the fail-closed guard (diagnostic for 7e7 root-cause).
+pub(crate) static PROFILE_STATS_PUSH_STALE_LAST_COMP: AtomicUsize = AtomicUsize::new(0);
+/// Last stale component's vtable pointer observed by the fail-closed guard.
+pub(crate) static PROFILE_STATS_PUSH_STALE_LAST_VT: AtomicUsize = AtomicUsize::new(0);
+/// Row-populate template `FUN_1408758d0` (deobf/live 0x8757e0; dump 0x1408758d0 -> shift -0xf0,
+/// content-unique). `longlong(rowModel* rcx, SceneObjProxy* rdx, undefined8 r8, undefined8 r9)`. The
+/// only writer of the per-row PlayerName/Level/Location/PlayTime fields, invoked once per visible
+/// ProfileSelect list row with a PER-SLOT row model. We hook its ENTRY so we can push the correct
+/// slot's attributes BEFORE the original runs (the original destroys the row proxy's embedded
+/// `CSScaleformValue` at its end, so a post-call resolve would operate on a released value).
+pub(crate) const PROFILE_ROW_POPULATE_RVA: usize = 0x8757e0;
+/// Row-model field holding the profile/save slot index (0-9). The native populate reads
+/// `*(int*)(rowModel + 0x8) + 1` as the `Icon_0` face-sprite frame, i.e. the slot; we read the same
+/// field to index the per-slot stats cache so each row shows ITS OWN character's attributes.
+pub(crate) const PROFILE_ROW_MODEL_SLOT_08_OFFSET: usize = 0x8;
+pub(crate) static PROFILE_ROW_POPULATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static PROFILE_ROW_POPULATE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Per-slot stats cache state (oracle): 0 = not attempted, 1 = loaded (`.sl2` read + parsed), 2 =
+/// load failed (save unreadable/too small) -- the hook then falls back to the loaded character.
+pub(crate) static PROFILE_SLOT_STATS_CACHE_STATE: AtomicUsize = AtomicUsize::new(0);
+/// Count of save slots that decoded to a real character in the per-slot stats cache (oracle).
+pub(crate) static PROFILE_SLOT_STATS_DECODED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_PRESS_START_BIND_HITS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_PRESS_START_BIND_LAST_PARENT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -2498,9 +2538,10 @@ pub(crate) static PROFILE_05_010_RUNTIME_EDIT_OUTPUT_LEN: AtomicUsize = AtomicUs
 /// Input provenance: 0 = unclassified, 1 = known vanilla, 2 = unknown input (the live repository
 /// payload may carry trailing bytes after the root End tag, as observed for 05_000).
 pub(crate) static PROFILE_05_010_RUNTIME_EDIT_INPUT_CLASS: AtomicUsize = AtomicUsize::new(0);
-/// Whether the derived output matches the generated-asset fingerprint (len 14389 +
-/// FNV 0xf6aee75a54e0eccf): 0 = not derived yet, 1 = byte-identical, 2 = clean all-or-nothing edit
-/// with a different fingerprint (expected after a game update changes untouched tags).
+/// Whether the derived output matches the generated-asset fingerprint
+/// (`er_gfx::title_05_010::EDITED_LEN` + `EDITED_FNV1A64`, the single source of truth): 0 = not derived
+/// yet, 1 = byte-identical, 2 = clean all-or-nothing edit with a different fingerprint (expected after a
+/// game update changes untouched tags).
 pub(crate) static PROFILE_05_010_RUNTIME_EDIT_OUTPUT_VALIDATED: AtomicUsize = AtomicUsize::new(0);
 
 /// From-scratch minimal diagnostic GFX: one frame, magenta background + full-screen magenta shape.
