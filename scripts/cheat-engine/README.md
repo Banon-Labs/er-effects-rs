@@ -1,6 +1,14 @@
-# Cheat Engine diagnostics
+# Cheat Engine tables and diagnostics
 
-This directory contains local Cheat Engine helpers for readonly Elden Ring diagnostics.
+This directory contains Cheat Engine tables and helpers for Elden Ring Seamless/offline workflows.
+
+## Bundled CJK font override
+
+Files:
+
+- `bundled_cjk_font_override.CT` -- redirects Elden Ring's Scaleform menu font registration to bundled Simplified or Traditional Chinese `font.gfx` assets. It does not require loose-file unpacking, external fonts, or bundled game assets in this repo.
+
+Use exactly one override entry at a time. Disable the current override before switching between Simplified and Traditional Chinese. This is intended for Seamless/offline setups where Cheat Engine use is allowed; do not use it with official EAC matchmaking.
 
 ## Locked-target weapon-level diagnostic
 
