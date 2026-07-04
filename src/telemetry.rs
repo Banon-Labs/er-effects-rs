@@ -2678,8 +2678,19 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         push_json_usize(
             body,
             "oracle_portrait_publish_skipped_unpaired",
-            crate::experiments::PROFILE_PUBLISH_SKIPPED_UNPAIRED
-                .load(Ordering::SeqCst),
+            crate::experiments::PROFILE_PUBLISH_SKIPPED_UNPAIRED.load(Ordering::SeqCst),
+        );
+        // hi2: partial-mask band (mask cut something but under the floor) + how long the bridge
+        // held before the window's first publish.
+        push_json_usize(
+            body,
+            "oracle_portrait_publish_skipped_lowmask",
+            PROFILE_PUBLISH_SKIPPED_LOWMASK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_first_keyed_display_last_window",
+            PROFILE_WINDOW_FIRST_KEYED_DISPLAY_LAST.load(Ordering::SeqCst),
         );
         push_json_str(
             body,

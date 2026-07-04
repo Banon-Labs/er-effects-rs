@@ -3731,7 +3731,19 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                 // display never freezes on an opaque IBL box -- and the make-before-break
                                 // bridge keeps the PRIOR masked head (PROFILE_HAVE_KEYED_FRAME) on screen
                                 // until THIS model produces its own masked frame, which then replaces it.
-                                let keyed = cpx.chunks_exact(4).any(|px| px[3] < 128);
+                                // MASK-FRACTION FLOOR (er-effects-rs-hi2, user saw a displayed head
+                                // with NO mask): "any transparent pixel" let a PARTIAL mask through
+                                // -- a frame that is 99% opaque IBL box with a few cut pixels passed
+                                // keyed and displayed as unmasked. A real portrait mask cuts a
+                                // substantial background fraction, so require a minimum transparent
+                                // share; the 0 < share < floor band is counted separately (lowmask)
+                                // to attribute partial-mask frames vs fully-unkeyed ones.
+                                let total_px = (cpx.len() / 4).max(1);
+                                let transparent_px =
+                                    cpx.chunks_exact(4).filter(|px| px[3] < 128).count();
+                                let keyed =
+                                    transparent_px * 100 >= total_px * PORTRAIT_MIN_TRANSPARENT_PCT;
+                                let partial_mask = !keyed && transparent_px > 0;
                                 // TORN-READBACK gate (user 2026-07-03): the offscreen readback has no
                                 // cross-queue sync vs the game's render of the RT, so a per-frame capture
                                 // can be torn (scanline garbage) even though it is keyed. Score the
@@ -3744,6 +3756,15 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                 if keyed && clean {
                                     PROFILE_TEAR_SCORE_CLEAN_MIN.fetch_min(tear, Ordering::SeqCst);
                                     PROFILE_PUBLISH_CLEAN.fetch_add(1, Ordering::SeqCst);
+                                    // First-keyed latency (er-effects-rs-hi2): stamp the display-frame
+                                    // index of this window's FIRST published frame -- how long the
+                                    // bridge held the prior head before the new one took over.
+                                    let _ = PROFILE_WINDOW_FIRST_KEYED_DISPLAY.compare_exchange(
+                                        usize::MAX,
+                                        PROFILE_DISPLAY_FRAMES_WINDOW.load(Ordering::SeqCst),
+                                        Ordering::SeqCst,
+                                        Ordering::SeqCst,
+                                    );
                                     if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
                                         *g = Some((cw, ch, cpx));
                                     }
@@ -3775,6 +3796,10 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                             n + 1
                                         ));
                                     }
+                                } else if partial_mask {
+                                    // Mask exists but cuts almost nothing (< floor): the frame the
+                                    // user previously SAW as an unmasked head. Held on the bridge.
+                                    PROFILE_PUBLISH_SKIPPED_LOWMASK.fetch_add(1, Ordering::SeqCst);
                                 } else {
                                     PROFILE_PUBLISH_SKIPPED_UNKEYED.fetch_add(1, Ordering::SeqCst);
                                 }
@@ -5285,6 +5310,24 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     let summary = unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(0);
     if !valid(summary) {
         return;
+    }
+    // SLOT->NAME dump, once per run (er-effects-rs-hi2 attribution): the anomaly hypothesis is
+    // character-specific (Patches' boot/menu-path lifecycle differs on reload), so per-window
+    // anomalies must be joinable to WHICH character each retarget slot holds -- readable here from
+    // the ProfileSummary records the pipeline already uses.
+    if PROFILE_SLOT_NAMES_DUMPED.swap(1, Ordering::SeqCst) == 0 {
+        let mut names: Vec<String> = Vec::with_capacity(TITLE_PROFILE_SLOT_COUNT);
+        for s in 0..TITLE_PROFILE_SLOT_COUNT {
+            let rec = summary + PROFILE_SUMMARY_RECORD_BASE + s * PROFILE_SUMMARY_RECORD_STRIDE;
+            let (units, len) = unsafe { read_utf16_name_units(rec) };
+            let name = if utf16_name_empty_like(&units, len) {
+                "(empty)".to_owned()
+            } else {
+                String::from_utf16_lossy(&units[..len])
+            };
+            names.push(format!("{s}={name}"));
+        }
+        append_autoload_debug(format_args!("profile-slot-names: {}", names.join(" ")));
     }
     // GUARD (crash fix): only call refresh once the renderer table is LIVE -- it is populated at
     // TitleTopDialog ctor (main menu), NOT at early title. Calling refresh before the table exists

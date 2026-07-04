@@ -2884,8 +2884,28 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
         &PROFILE_PUBLISH_SKIPPED_UNPAIRED,
         &PROFILE_PUBLISH_SKIPPED_UNPAIRED_WINDOW_MARK,
     );
+    let lowmask = winof(
+        &PROFILE_PUBLISH_SKIPPED_LOWMASK,
+        &PROFILE_PUBLISH_SKIPPED_LOWMASK_WINDOW_MARK,
+    );
+    // First-keyed latency: display-frame index of this window's first publish ('-' = never
+    // published; the whole window rode the bridge). Snapshot + re-arm for the next window.
+    let first_keyed = PROFILE_WINDOW_FIRST_KEYED_DISPLAY.swap(usize::MAX, Ordering::SeqCst);
+    PROFILE_WINDOW_FIRST_KEYED_DISPLAY_LAST.store(
+        if first_keyed == usize::MAX {
+            0
+        } else {
+            first_keyed
+        },
+        Ordering::SeqCst,
+    );
+    let first_keyed_s = if first_keyed == usize::MAX {
+        "-".to_owned()
+    } else {
+        first_keyed.to_string()
+    };
     append_autoload_debug(format_args!(
-        "present-overlay: loading-portrait window reset ({reason}) -- animated {drive} / displayed {display} frames (drive<<display == froze early); publish[clean={published} torn={torn} unkeyed={unkeyed} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips} unpaired={unpaired}] src[color bundle={cb}/scan={cs} depth chain={dc}/bfs={db}] (clean=0 == frozen on prior character; the dominant skip class is the cause); pins/spare cleared for the next load"
+        "present-overlay: loading-portrait window reset ({reason}) -- animated {drive} / displayed {display} frames (drive<<display == froze early); publish[clean={published} torn={torn} unkeyed={unkeyed} lowmask={lowmask} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips} unpaired={unpaired} first_keyed={first_keyed_s}] src[color bundle={cb}/scan={cs} depth chain={dc}/bfs={db}] (clean=0 == frozen on prior character; the dominant skip class is the cause); pins/spare cleared for the next load"
     ));
 }
 

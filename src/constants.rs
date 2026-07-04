@@ -1580,6 +1580,20 @@ pub(crate) static PROFILE_COLOR_FROM_SCAN_WINDOW_MARK: AtomicUsize = AtomicUsize
 pub(crate) static PROFILE_DEPTH_FROM_CHAIN_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_DEPTH_FROM_BFS_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_PUBLISH_SKIPPED_UNPAIRED_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+/// Minimum percent of transparent pixels a frame's mask must cut for the frame to count as keyed
+/// (er-effects-rs-hi2): a real portrait mask removes a large background share; a partial mask
+/// (few cut pixels on an opaque IBL box) previously passed "any transparent pixel" and displayed
+/// as an unmasked head. 5% is far below any real mask's share and far above the partial band.
+pub(crate) const PORTRAIT_MIN_TRANSPARENT_PCT: usize = 5;
+/// Frames whose mask cut SOMETHING but under the floor (the partial-mask band) -- held, counted.
+pub(crate) static PROFILE_PUBLISH_SKIPPED_LOWMASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_PUBLISH_SKIPPED_LOWMASK_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+/// Display-frame index of the window's FIRST clean publish (usize::MAX = none yet this window):
+/// how long the make-before-break bridge held the prior head. Snapshot + reset per window.
+pub(crate) static PROFILE_WINDOW_FIRST_KEYED_DISPLAY: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static PROFILE_WINDOW_FIRST_KEYED_DISPLAY_LAST: AtomicUsize = AtomicUsize::new(0);
+/// One-shot latch for the per-run ProfileSummary slot->character-name dump (hi2 attribution).
+pub(crate) static PROFILE_SLOT_NAMES_DUMPED: AtomicUsize = AtomicUsize::new(0);
 /// Diagnostic: the captured engine ctx pointer + its `+8` delta-time bits, logged once, to learn whether the
 /// context is a stable persistent structure (safe to reuse across frames) or a transient per-call one.
 pub(crate) static PROFILE_DRAW_TASK_CTX_LOGGED: AtomicUsize = AtomicUsize::new(0);
