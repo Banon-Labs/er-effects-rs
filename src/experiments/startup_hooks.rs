@@ -5355,28 +5355,39 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // per-slot supersample-enable byte (+0x8) so the env-dependent x2 is off -> a predictable
     // 1024x1024 RT. The .data table is writable (the game's own init writes it), so a direct volatile
     // write suffices. Self-validating: only entries still holding the exact init value are touched.
-    if portrait_real_pixels_enabled() && PROFILE_SIZE_PATCHED.swap(1, Ordering::SeqCst) == 0 {
-        let table = base + PROFILE_OFFSCREEN_SIZE_TABLE_RVA;
-        let mut patched = 0u32;
-        for s in 0..10usize {
-            let row = table + s * PROFILE_OFFSCREEN_SIZE_TABLE_STRIDE;
-            if unsafe { safe_read_usize(row) } == Some(PROFILE_OFFSCREEN_SIZE_INIT) {
-                unsafe {
-                    core::ptr::write_volatile(
-                        row as *mut u64,
-                        PROFILE_OFFSCREEN_SIZE_TARGET as u64,
-                    );
-                    core::ptr::write_volatile(
-                        (row + PROFILE_OFFSCREEN_SIZE_SUPERSAMPLE_FLAG_OFFSET) as *mut u8,
-                        0,
-                    );
-                }
-                patched += 1;
+    // TARGET-SLOT ONLY (GX-overflow fix, user 2026-07-03). Upsizing ALL 10 slots to 1024x1024 while
+    // rendering every saved slot (render-all-slots) overran the 192-slot GX command queue -> the
+    // 0x1aeaf05 null-slot-write crash the instant the game loaded into a slot. Only the TARGET slot
+    // (the loading-screen portrait source) needs the higher-res RT; the other 9 stay at the native
+    // 128x128 init so 10 concurrent renders fit the queue -- vanilla-scale for the menu thumbnails.
+    // Gated on portrait_loaded_slot_confirmed() so the one-shot fires only once the real target is
+    // named (not the fallback slot 0) and patches exactly that row.
+    if portrait_real_pixels_enabled() {
+        if let Some(target) = portrait_loaded_slot_confirmed() {
+            if PROFILE_SIZE_PATCHED.swap(1, Ordering::SeqCst) == 0 {
+                let table = base + PROFILE_OFFSCREEN_SIZE_TABLE_RVA;
+                let row = table + target as usize * PROFILE_OFFSCREEN_SIZE_TABLE_STRIDE;
+                let patched =
+                    if unsafe { safe_read_usize(row) } == Some(PROFILE_OFFSCREEN_SIZE_INIT) {
+                        unsafe {
+                            core::ptr::write_volatile(
+                                row as *mut u64,
+                                PROFILE_OFFSCREEN_SIZE_TARGET as u64,
+                            );
+                            core::ptr::write_volatile(
+                                (row + PROFILE_OFFSCREEN_SIZE_SUPERSAMPLE_FLAG_OFFSET) as *mut u8,
+                                0,
+                            );
+                        }
+                        1
+                    } else {
+                        0
+                    };
+                append_autoload_debug(format_args!(
+                    "higher-res: patched target slot {target} ({patched}/1) -> 1024x1024, supersample off; other 9 slots left native 128 (GX-overflow avoidance for all-slots render)"
+                ));
             }
         }
-        append_autoload_debug(format_args!(
-            "higher-res: patched {patched}/10 offscreen-size entries -> 1024x1024 base, supersample off"
-        ));
     }
     // ProfileSummary = GameDataMan -> slot-manager container.
     let gdm = game_data_man_ptr_or_null();
