@@ -6914,46 +6914,19 @@ pub(crate) unsafe extern "system" fn title_scaleform_bind_observer_hook(owner: u
     if unsafe { bounded_ascii_contains(target_ptr, b"systex") } {
         TITLE_SCALEFORM_BIND_OBSERVER_SYSTEX_HITS.fetch_add(1, Ordering::SeqCst);
     }
-    let mut rewritten_visible_profile_surface = false;
-    if unsafe { bounded_ascii_contains(symbol_ptr, b"menu_dummyprofileface_01") }
-        && unsafe { bounded_ascii_contains(target_ptr, b"systex_menu_profile00") }
-    {
-        if let Some(new_symbol_ptr) =
-            unsafe { rewrite_native_dlstring_ascii(pair, TITLE_PROFILE_VISIBLE_SURFACE_SYMBOL) }
-        {
-            rewritten_visible_profile_surface = true;
-            TITLE_PROFILE_VISIBLE_SURFACE_BIND_REWRITES.fetch_add(1, Ordering::SeqCst);
-            TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_OWNER.store(owner, Ordering::SeqCst);
-            TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_PAIR.store(pair, Ordering::SeqCst);
-            TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_SYMBOL_PTR
-                .store(new_symbol_ptr, Ordering::SeqCst);
-        }
-        // er-tpf Tier-4 DRAW redirect (ONE-SHOT, fail-closed): once our in-memory cover texture is
-        // registered in GLOBAL_TexRepository (ER_TPF_COVER_REGISTERED), repoint THIS visible profile
-        // bind's TARGET DLString (pair+0x30) from `systex_menu_profile00` to our unique key. The native
-        // bind then resolves our key; the Scaleform repo misses and bridges to GLOBAL_TexRepository by
-        // name (FUN_140d66220 -> CS::TexRepositoryImp::GetResCap) -> our magenta cover wraps + binds to
-        // the visible surface above PRESS ANY BUTTON. Until registered, the target is left native (the
-        // real portrait draws) -- no harm; the one-shot is only consumed on a committed rewrite.
-        if ER_TPF_COVER_REGISTERED.load(Ordering::SeqCst) != 0
-            && ER_TPF_COVER_TARGET_REWRITE_FIRED.swap(1, Ordering::SeqCst) == 0
-        {
-            let rewrote =
-                unsafe { rewrite_native_dlstring_ascii(pair + 0x30, ER_TPF_COVER_SYSTEX_KEY) }
-                    .is_some();
-            if rewrote {
-                ER_TPF_COVER_BOUND.fetch_add(1, Ordering::SeqCst);
-                append_autoload_debug(format_args!(
-                    "er-tpf-cover: REDIRECTED visible profile bind target -> '{ER_TPF_COVER_SYSTEX_KEY}' owner=0x{owner:x} pair=0x{pair:x} -- in-memory cover now resolves on the visible surface (rescap=0x{:x})",
-                    ER_TPF_COVER_LAST_RESCAP.load(Ordering::SeqCst)
-                ));
-            } else {
-                // capacity too small / unreadable -> un-consume the one-shot so a later bind can retry.
-                ER_TPF_COVER_TARGET_REWRITE_FIRED.store(0, Ordering::SeqCst);
-                ER_TPF_COVER_FAILURES.fetch_add(1, Ordering::SeqCst);
-            }
-        }
-    }
+    // SLOT-0 VISIBLE-SURFACE REWRITE YOINKED (user 2026-07-03). This block rewrote slot 0's native
+    // `menu_dummyprofileface_01` -> `systex_menu_profile00` Scaleform bind to the visible
+    // `MENU_FL_40135_Profile` surface (and, with the er-tpf cover registered, repointed the target to
+    // our in-memory cover key) -- which is what put the faint background fill on the 0th Load-Game
+    // slot (Bonky Bean) while every other slot stayed black. Leaving slot 0's bind NATIVE removes that
+    // slot-0-only fill so slot 0 matches the rest. The observer's read-only tracking below and the
+    // original-hook chaining are unchanged; the rewrite helper + er-tpf-cover machinery stay defined
+    // for reference (env/RE), just no longer applied on this bind.
+    let rewritten_visible_profile_surface = false;
+    let _ = (
+        TITLE_PROFILE_VISIBLE_SURFACE_SYMBOL,
+        ER_TPF_COVER_SYSTEX_KEY,
+    );
     if interesting && hit <= 128 {
         let mut sym = [0u8; 96];
         let mut tgt = [0u8; 96];
