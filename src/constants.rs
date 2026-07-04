@@ -1600,6 +1600,25 @@ pub(crate) static PROFILE_READBACK_CHECKER_WINDOW_MARK: AtomicUsize = AtomicUsiz
 /// Per-window EMA of ACCEPTED tear scores (adaptive baseline for textured characters whose honest
 /// frames score high on the vertical-luma metric). 0 = window fresh; reset at each window reset.
 pub(crate) static PROFILE_TEAR_EMA: AtomicUsize = AtomicUsize::new(0);
+// NATIVE SCENE-ALPHA KEYING (strategy pivot 2026-07-03). Deobf RVAs read directly from the deobf
+// disassembly of the engine's own offscreen clear (dump FUN_140bb73a0 -> deobf 0x140bb72b0,
+// shift -0xf0, scripts/dump-deobf-shift.py content-unique): pop a GX frame context from
+// g_GxDrawContext (pointer global at GX_DRAW_CONTEXT_RVA), clear the scene bundle's RTV
+// (bundle+0x30) through the frame's subcontext (+0x25c8), release the frame context. We replicate
+// that body with clear color {0,0,0,0} (the engine uses the SHARED opaque-black FloatVector4 at
+// dump 0x14329e9b0 -- 136 xrefs, not patchable), so the RT's alpha channel becomes the native
+// subject mask once the pump redraws only the model each frame.
+/// Deobf RVA of the GX frame-context pop (deobf 0x1419e5830; dump FUN_1419e5850).
+pub(crate) const GX_FRAME_CTX_POP_RVA: usize = 0x19e5830;
+/// Deobf RVA of the ClearRTV wrapper (deobf 0x1419e0e10; dump FUN_1419e0e30).
+/// Args: rcx = *(frame_ctx + GX_FRAME_SUBCTX_OFFSET), rdx = *(bundle+0x30) RTV view, r8 = &f32x4.
+pub(crate) const GX_CLEAR_RTV_WRAPPER_RVA: usize = 0x19e0e10;
+/// Deobf RVA of the GX frame-context release (deobf 0x1419eaa20; dump FUN_1419eaa40).
+pub(crate) const GX_FRAME_CTX_RELEASE_RVA: usize = 0x19eaa20;
+/// Offset of the clear-target subcontext pointer inside a popped GX frame context.
+pub(crate) const GX_FRAME_SUBCTX_OFFSET: usize = 0x25c8;
+/// Per-frame alpha-0 clears issued by the pump (`oracle_portrait_alpha0_clears`).
+pub(crate) static PROFILE_ALPHA0_CLEARS: AtomicUsize = AtomicUsize::new(0);
 /// Diagnostic: the captured engine ctx pointer + its `+8` delta-time bits, logged once, to learn whether the
 /// context is a stable persistent structure (safe to reuse across frames) or a transient per-call one.
 pub(crate) static PROFILE_DRAW_TASK_CTX_LOGGED: AtomicUsize = AtomicUsize::new(0);

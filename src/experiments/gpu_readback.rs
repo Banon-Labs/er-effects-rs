@@ -292,6 +292,54 @@ pub(crate) unsafe fn find_depth_resource(start: usize) -> Option<(ID3D12Resource
     r
 }
 
+/// NATIVE ALPHA-0 CLEAR of the offscreen scene's color RT (scene-alpha keying, strategy pivot
+/// 2026-07-03). Replicates the engine's own per-slot offscreen clear (dump FUN_140bb73a0) with
+/// clear color {0,0,0,0} instead of the shared opaque-black constant: pop a GX frame context,
+/// ClearRTV the scene bundle's own RTV through the frame's subcontext, release the frame context.
+/// Called by the pump on the render thread immediately before the model update+draw, so each
+/// frame's RT is subject-only with alpha == model coverage (the backdrop box was never redrawn --
+/// it was stale pixels the old skip-the-clear behavior preserved). Fail-closed on every link
+/// (missing bundle/RTV/frame -> no clear, the frame simply keeps its previous content); the
+/// redirect-to-global-target case fails closed inside `offscreen_target_bundle` so the swapchain
+/// can never be cleared by mistake.
+pub(crate) unsafe fn portrait_alpha0_clear(base: usize, off: usize) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let valid = |p: usize| p != 0 && p != null;
+    let Some(bundle) = (unsafe { offscreen_target_bundle(off) }) else {
+        return false;
+    };
+    let rtv = unsafe { safe_read_usize(bundle + TARGET_BUNDLE_RTV_VIEW_OFFSET) }.unwrap_or(0);
+    if !valid(rtv) {
+        return false;
+    }
+    let gx = unsafe { safe_read_usize(base + GX_DRAW_CONTEXT_RVA) }.unwrap_or(0);
+    if !valid(gx) {
+        return false;
+    }
+    let pop: unsafe extern "system" fn(usize) -> usize =
+        unsafe { core::mem::transmute(base + GX_FRAME_CTX_POP_RVA) };
+    let frame = unsafe { pop(gx) };
+    if !valid(frame) {
+        return false;
+    }
+    let sub = unsafe { safe_read_usize(frame + GX_FRAME_SUBCTX_OFFSET) }.unwrap_or(0);
+    let ok = if valid(sub) {
+        let color: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
+        let clear: unsafe extern "system" fn(usize, usize, *const f32) =
+            unsafe { core::mem::transmute(base + GX_CLEAR_RTV_WRAPPER_RVA) };
+        unsafe { clear(sub, rtv, color.as_ptr()) };
+        true
+    } else {
+        false
+    };
+    // Release the popped frame context even when the subcontext was missing -- the pop/release
+    // pair must balance exactly like the engine's own body.
+    let release: unsafe extern "system" fn(usize, usize) =
+        unsafe { core::mem::transmute(base + GX_FRAME_CTX_RELEASE_RVA) };
+    unsafe { release(gx, frame) };
+    ok
+}
+
 /// Resolve the offscreen scene's DSV view object via the static-RE'd member chain above. All reads
 /// fault-guarded; `None` when any link is null/implausible or the bundle is redirected to the
 /// global target (fail closed -- the local view would not be what the scene renders into).

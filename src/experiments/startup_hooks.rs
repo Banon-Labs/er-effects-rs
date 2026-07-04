@@ -3208,6 +3208,16 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                     PROFILE_DRIVE_FENCE_SKIPS.fetch_add(1, Ordering::SeqCst);
                 } else {
                     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        // NATIVE SCENE-ALPHA KEYING: clear the offscreen RT to {0,0,0,0} before
+                        // this frame's model draw. The draw below redraws ONLY the model, so the
+                        // RT leaves this frame subject-only with alpha == model coverage -- the
+                        // backdrop box (stale pixels the old skip-the-clear preserved) is gone
+                        // and the publish keys on native alpha instead of depth masks.
+                        if unsafe {
+                            crate::experiments::gpu_readback::portrait_alpha0_clear(base, off)
+                        } {
+                            PROFILE_ALPHA0_CLEARS.fetch_add(1, Ordering::SeqCst);
+                        }
                         let update: unsafe extern "system" fn(usize, usize) =
                             unsafe { core::mem::transmute(base + PROFILE_MODEL_UPDATE_TASK_RVA) };
                         unsafe { update(r, td) };
@@ -3530,15 +3540,16 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                         ));
                                     }
                                 }
-                                // DEPTH-KEYED TRANSPARENT BACKGROUND: cut the dark IBL background out of
-                                // the head portrait by setting alpha 0 wherever the offscreen DEPTH buffer
-                                // holds the (corner-calibrated) background/far value -- the character
-                                // geometry wrote a nearer depth so its silhouette stays opaque. Fail-open
-                                // (leaves alpha 255 on any uncertainty), so it can only ADD the cutout,
-                                // never regress the working head. The present-overlay honors this per-pixel
-                                // alpha via a CPU blend against the live backbuffer. Applied to `cpx` BEFORE
-                                // the selftest pose dump + the publish move below so both see the cutout.
-                                unsafe { apply_depth_alpha_key(off, cw, ch, &mut cpx) };
+                                // NATIVE SCENE-ALPHA KEYING (strategy pivot 2026-07-03, replaces the
+                                // depth-histogram mask): the pump now clears the offscreen RT with
+                                // alpha 0 each frame (portrait_alpha0_clear) and redraws ONLY the
+                                // model, so the RT's own alpha channel IS the mask -- backdrop
+                                // geometry is never redrawn (it was stale pixels preserved by the
+                                // old skip-the-clear behavior), and every depth-classification
+                                // failure mode (wrong gap, continuous depth, wrong-place cutouts)
+                                // is structurally gone. apply_depth_alpha_key is retired from this
+                                // path; the keyed/share gate below now reads the native alpha.
+                                let _ = apply_depth_alpha_key; // retained for reference, not called
                                 // MOUSE-TRACK PROOF (selftest): one-shot dump the LIVE head at three
                                 // held yaw buckets so the look-left/center/look-right poses are
                                 // visually inspectable. The selftest sinusoid sweeps `yaw` across

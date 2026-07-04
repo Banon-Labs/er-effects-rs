@@ -2707,6 +2707,11 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_portrait_publish_skipped_badiou",
             crate::experiments::PROFILE_PUBLISH_SKIPPED_BADIOU.load(Ordering::SeqCst),
         );
+        push_json_usize(
+            body,
+            "oracle_portrait_alpha0_clears",
+            PROFILE_ALPHA0_CLEARS.load(Ordering::SeqCst),
+        );
         push_json_str(
             body,
             "oracle_gx_cmdqueue_top_producers",
