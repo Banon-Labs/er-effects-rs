@@ -366,6 +366,51 @@ pub(crate) fn install_wbr_update_hook() -> bool {
 unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     const REQ_DIR_SANE_MAX_CU: usize = 320;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    // STAGED-SAVE DIRECT READ (feed-deserialize softlock fix, er-effects-rs, 2026-07-03). When a
+    // save is staged/redirected via `ER_EFFECTS_SAVE_FILE`, read THAT file directly instead of the
+    // native-builder + `fs::read_dir` path below. Reasons this is the correct + robust source:
+    //   * It is the EXACT file the CreateFileW redirect rewrites the game's save I/O onto (root +
+    //     `EldenRing/<steamid>/ER0000.sl2`), so its bytes are what the game itself reads/writes.
+    //   * It is PRE-POPULATED before launch, so the read never depends on the game's save-dir being
+    //     written yet -- the timing coupling that softlocked the switch when the portrait pipeline's
+    //     per-frame slack was removed (the feed-deserialize fired before any save existed and the
+    //     native builder's real AppData dir was empty because the redirect bypasses `read_dir`).
+    //   * The native builder returns the real `AppData\Roaming\EldenRing\<steamid>` dir, which the
+    //     redirect does NOT cover for directory enumeration -> `read_dir` saw an empty dir and the
+    //     confirm blocked (lib.rs:198: the DLL must never read the default user save dir).
+    // Same std::fs access the redirect enforcer already uses successfully from this DLL under Proton
+    // (save_redirect::save_override_redirect_root_w). Real product runs (env unset) fall through to
+    // the native builder path unchanged. The full multi-slot save is returned; the caller slices the
+    // picked slot exactly as it does for the native-builder bytes.
+    if let Ok(raw) = std::env::var("ER_EFFECTS_SAVE_FILE") {
+        let raw = raw.trim();
+        if !raw.is_empty() {
+            match std::fs::read(raw) {
+                Ok(bytes)
+                    if bytes.len() as u64
+                        >= crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES =>
+                {
+                    append_autoload_debug(format_args!(
+                        "own-load: read STAGED save \"{raw}\" ({} bytes) for slicing (ER_EFFECTS_SAVE_FILE direct -- redirect-consistent, timing-independent)",
+                        bytes.len()
+                    ));
+                    return Some(bytes);
+                }
+                Ok(bytes) => {
+                    append_autoload_debug(format_args!(
+                        "own-load: staged ER_EFFECTS_SAVE_FILE \"{raw}\" too small ({} bytes < {}) -- falling back to native save-dir builder",
+                        bytes.len(),
+                        crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES
+                    ));
+                }
+                Err(e) => {
+                    append_autoload_debug(format_args!(
+                        "own-load: staged ER_EFFECTS_SAVE_FILE \"{raw}\" read failed ({e}) -- falling back to native save-dir builder"
+                    ));
+                }
+            }
+        }
+    }
     // Build the canonical save directory into a stack-resident MSVC stateful-allocator u16string
     // wrapper (allocator@+0, data@+0x08, size@+0x18, cap@+0x20) -- identical to the cold-char-mount
     // SAVE-DIR BUILD step, reusing the native builder so the path matches the engine's.
