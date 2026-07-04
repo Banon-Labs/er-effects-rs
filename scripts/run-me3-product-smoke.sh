@@ -14,19 +14,18 @@ set -euo pipefail
 # it never touches the protected/EAC launcher and uses no Steam AppID/URL launch form, so it is
 # in the same approved direct/offline launch class as run-product-continue-direct-probe.sh.
 #
-# The LazyLoader proxy (dinput8.dll + lazyLoad.ini) in GAME_DIR is staged away for the run and
-# restored on teardown: leaving it active would DOUBLE-LOAD the DLL (me3 native + chainload =
-# two modules, two DllMains, double hooks). This also makes DLL-attach attribution exact: with
-# the proxy gone, a bootstrap event can only come from the me3 native load.
+# LazyLoader was removed as a delivery mechanism (2026-07-04); the staging below is a DEFENSIVE
+# transition guard: if a leftover proxy (dinput8.dll + lazyLoad.ini) is still in GAME_DIR it is
+# staged away for the run and restored on teardown, because an active proxy would DOUBLE-LOAD the
+# DLL (me3 native + chainload = two modules, two DllMains, double hooks). This also makes
+# DLL-attach attribution exact: with no proxy, a bootstrap event can only come from me3.
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
-ME3_BIN="${ME3_BIN:-$HOME/.local/bin/me3}"
-# me3 auto-detects the FLATPAK Steam on this machine, but Elden Ring lives in the host library --
-# pin the host Steam dir explicitly so me3 resolves the same install/prefix as the direct probe.
-ME3_STEAM_DIR="${ME3_STEAM_DIR:-$HOME/.local/share/Steam}"
-ME3_WINDOWS_BIN_DIR="${ME3_WINDOWS_BIN_DIR:-$HOME/.local/share/me3/windows-bin}"
-ME3_LOG_DIR="${ME3_LOG_DIR:-$HOME/.local/share/me3/logs}"
+# Shared me3 launch helpers (ME3_BIN/ME3_STEAM_DIR/ME3_WINDOWS_BIN_DIR/ME3_LOG_DIR defaults,
+# compat-tool preflight, profile writer).
+# shellcheck source=scripts/me3-launch-lib.sh
+source "$REPO_ROOT/scripts/me3-launch-lib.sh"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/me3-product-smoke-$(date +%Y%m%d-%H%M%S)}"
 PID_FILE="${PID_FILE:-$ARTIFACT_DIR/me3-launch.pid}"
@@ -62,7 +61,7 @@ usage() {
 Usage: $0 [--dry-run] [--autoload-request PATH]
 
 Launches Elden Ring through me3 with er_effects_rs.dll as an me3 native (no LazyLoader) and runs
-.auto/runtime_probe.sh (RUNTIME_LOADER=me3) as the bounded readiness watcher. Writes a
+.auto/runtime_probe.sh as the bounded readiness watcher. Writes a
 settings-stick verdict to ARTIFACT_DIR/me3-smoke-verdict.json. This intentionally has no
 Steam/AppID launch path and no protected launcher path (me3 itself launches eldenring.exe
 directly through the Steam compat tool).
@@ -228,9 +227,7 @@ preflight() {
   pgrep -x steam >/dev/null 2>&1 || fatal "Steam is not running; start Steam first (me3 reuses Steam's environment/prefix, else the run is degraded)"
   [[ "$RUNTIME_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || fatal "RUNTIME_TIMEOUT_SECONDS must be an integer"
   (( RUNTIME_TIMEOUT_SECONDS > 0 && RUNTIME_TIMEOUT_SECONDS <= RUNTIME_TIMEOUT_CAP_SECONDS )) || fatal "RUNTIME_TIMEOUT_SECONDS must be 1..$RUNTIME_TIMEOUT_CAP_SECONDS"
-  require_executable "$ME3_BIN"
-  require_file "$ME3_WINDOWS_BIN_DIR/me3-launcher.exe"
-  require_file "$ME3_WINDOWS_BIN_DIR/me3_mod_host.dll"
+  me3_preflight || fatal "me3 preflight failed (see guidance above)"
   require_file "$GAME_DIR/eldenring.exe"
   require_file "$REPO_ROOT/.auto/runtime_probe.sh"
   if [[ -f "$REPO_ROOT/scripts/preflight-runtime-watcher.py" ]]; then
@@ -238,41 +235,6 @@ preflight() {
       || fatal "runtime-harness preflight failed; refusing to launch (fix the watcher/probe scripts first)"
   fi
   [[ -d "$STEAM_COMPAT_DATA_PATH" ]] || fatal "missing compatdata path: $STEAM_COMPAT_DATA_PATH"
-  # me3 resolves the Proton compat tool strictly as: per-app CompatToolMapping (config.vdf) ->
-  # global ("0") mapping -> its hardcoded per-game default, which for Elden Ring is proton_8
-  # (me3 0.11.0 crates/mod-protocol/src/game.rs verified_on_deck_runtime). There is NO me3-side
-  # override. With no Steam mapping and no Proton 8 installed, the launch dies AFTER staging
-  # ("unable to find installation of Proton runtime proton_8" -- observed run
-  # me3-product-smoke-20260704-105546). Fail closed here, before a launch is burned.
-  python3 - "$ME3_STEAM_DIR" <<'PY' || fatal "me3 cannot resolve a Proton compat tool for Elden Ring. Fix (one-time, in the running Steam client): ELDEN RING -> Properties -> Compatibility -> 'Force the use of a specific Steam Play compatibility tool' -> Proton Experimental (the prefix already runs on it). Then rerun this smoke."
-import os
-import re
-import sys
-
-steam = sys.argv[1]
-cfg_path = os.path.join(steam, "config/config.vdf")
-try:
-    cfg = open(cfg_path, encoding="utf-8", errors="replace").read()
-except OSError:
-    print(f"compat-tool: cannot read {cfg_path}", file=sys.stderr)
-    sys.exit(1)
-i = cfg.find('"CompatToolMapping"')
-seg = cfg[i:i + 20000] if i >= 0 else ""
-tools = dict(re.findall(r'"(\d+)"\s*\{[^{}]*?"name"\s*"([^"]*)"', seg))
-name = tools.get("1245620") or tools.get("0")
-if name:
-    print(f"compat-tool: Steam CompatToolMapping resolves -> {name}")
-    sys.exit(0)
-if os.path.exists(os.path.join(steam, "steamapps/appmanifest_2348590.acf")):
-    print("compat-tool: no Steam mapping; me3's hardcoded proton_8 fallback is installed")
-    sys.exit(0)
-print(
-    "compat-tool: no CompatToolMapping for app 1245620 (nor a global '0' default) in config.vdf, "
-    "and Proton 8 (me3's hardcoded Elden Ring fallback, app 2348590) is not installed",
-    file=sys.stderr,
-)
-sys.exit(1)
-PY
   local existing
   existing="$(runtime_pids)"
   if [[ -n "$existing" ]]; then
@@ -318,15 +280,7 @@ rm -f "$TELEMETRY_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH" "$CRASH_LOG_PA
 rm -f "$ARTIFACT_DIR/loading-screen-portrait-screenshot.jpg" "$ARTIFACT_DIR/loading-screen-portrait-screenshot.png" "$ARTIFACT_DIR/loading-screen-portrait-screenshot.txt"
 
 cp -f "$BUILT_DLL" "$SMOKE_DLL"
-cat > "$PROFILE_FILE" <<EOF
-profileVersion = "v1"
-
-[[supports]]
-game = "eldenring"
-
-[[natives]]
-path = '$SMOKE_DLL'
-EOF
+me3_write_profile "$PROFILE_FILE" "$SMOKE_DLL"
 echo "me3-profile: wrote $PROFILE_FILE (native: $SMOKE_DLL)"
 
 stage_lazyloader_away
@@ -395,7 +349,6 @@ watcher_status=0
   BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
   RUNTIME_TIMEOUT_SECONDS="$RUNTIME_TIMEOUT_SECONDS" \
   RUNTIME_EXPECTED_MODE="$RUNTIME_EXPECTED_MODE" \
-  RUNTIME_LOADER=me3 \
   ER_PROBE_LAUNCH_EPOCH="$LAUNCH_EPOCH" \
   RUNTIME_SKIP_VISUAL_CAPTURE=1 \
   RUNTIME_EXTRA_WATCH_ARGS="${RUNTIME_EXTRA_WATCH_ARGS:-$DEFAULT_RUNTIME_EXTRA_WATCH_ARGS}" \

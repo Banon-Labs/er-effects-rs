@@ -3,11 +3,14 @@ set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
-PROTON="${PROTON:-$HOME/.local/share/Steam/steamapps/common/Proton - Experimental/proton}"
+# me3 is the ONLY loader (LazyLoader dinput8 proxy/chainload removed 2026-07-04): the DLL is
+# delivered as an me3 [[natives]] profile entry; me3 launches Game/eldenring.exe directly through
+# the Steam compat tool (waitforexitandrun verb), never a Steam AppID/URL form or the EAC launcher.
+# shellcheck source=scripts/me3-launch-lib.sh
+source "$REPO_ROOT/scripts/me3-launch-lib.sh"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
-STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/product-continue-direct-$(date +%Y%m%d-%H%M%S)}"
-PID_FILE="${PID_FILE:-$ARTIFACT_DIR/proton-run.pid}"
+PID_FILE="${PID_FILE:-$ARTIFACT_DIR/me3-launch.pid}"
 TELEMETRY_PATH="${TELEMETRY_PATH:-$ARTIFACT_DIR/er-effects-telemetry.json}"
 BOOTSTRAP_PATH="${BOOTSTRAP_PATH:-$ARTIFACT_DIR/bootstrap.jsonl}"
 BOOTSTRAP_STATE_PATH="${BOOTSTRAP_STATE_PATH:-$ARTIFACT_DIR/bootstrap-state.json}"
@@ -58,36 +61,26 @@ wipe_appdata_saves() {
     \( -name '*.sl2' -o -name '*.co2' -o -name '*.bak' \) -delete 2>/dev/null || true
 }
 
-# Path to the freshly-built chainload DLL the LazyLoader [CHAINLOAD] loads from GAME_DIR root.
+# Path to the freshly-built DLL that the me3 mod host loads as the run's sole native.
 BUILT_DLL="${BUILT_DLL:-$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll}"
 
-# Remove EVERY stale mod DLL from the LazyLoader LOADORDER folder so a leftover DLL can never be
-# loaded as a mod and contaminate the run. SURGICAL: only *.dll under dllMods/ -- never the chainload
-# DLL at GAME_DIR root, dinput8.dll, lazyLoad.ini, or game files. Idempotent; missing dir is fine.
-clean_stale_mod_dlls() {
-  [[ -d "$GAME_DIR/dllMods" ]] || return 0
-  rm -f "$GAME_DIR/dllMods/"*.dll 2>/dev/null || true
-}
-
-# DEPLOY HYGIENE (setup): both the onscreen RUNTIME_NO_TEARDOWN path and the gated watcher path funnel
-# through THIS script, but the onscreen path exec()s the game BEFORE ever reaching .auto/runtime_probe.sh's
-# setup_runtime_payload() -- so without this, an onscreen run silently uses whatever stale
-# $GAME_DIR/er_effects_rs.dll was last deployed and ignores a fresh `cargo xwin build` (observed: a run
-# used a ~28-min-old DLL with none of the new debug lines). Mirror the proven .auto/runtime_probe.sh
-# pattern: clean stale mod DLLs, then deploy the freshly-built chainload DLL beside LazyLoader.
-deploy_chainload_dll() {
-  clean_stale_mod_dlls
-  # Fail closed if the build is missing -- never silently run an old DLL.
-  [[ -f "$BUILT_DLL" ]] || fatal "built DLL not found: $BUILT_DLL -- run 'cargo xwin build --release --target x86_64-pc-windows-msvc' first (refusing to run a stale chainload DLL)"
-  cp -f "$BUILT_DLL" "$GAME_DIR/er_effects_rs.dll"
-  echo "deploy: cleaned $GAME_DIR/dllMods/*.dll; deployed fresh chainload DLL -> $GAME_DIR/er_effects_rs.dll"
+# DEPLOY HYGIENE (setup): copy the freshly-built DLL into the per-run artifact dir and write the
+# me3 profile referencing it, so EVERY launch through this script runs the just-built DLL from an
+# immutable per-run payload (a stale-DLL run silently missing new debug lines was observed under
+# the old game-dir deploy). Fails closed if the build is missing.
+stage_me3_payload() {
+  [[ -f "$BUILT_DLL" ]] || fatal "built DLL not found: $BUILT_DLL -- run 'cargo xwin build --release --target x86_64-pc-windows-msvc' first (refusing to run a stale DLL)"
+  cp -f "$BUILT_DLL" "$ARTIFACT_DIR/er_effects_rs.dll"
+  me3_write_profile "$ME3_PROFILE" "$ARTIFACT_DIR/er_effects_rs.dll"
+  echo "deploy: staged fresh DLL + me3 profile -> $ME3_PROFILE"
 }
 
 usage() {
   cat <<EOF
 Usage: $0 [--dry-run] [--autoload-request PATH]
 
-Launches the approved direct/offline eldenring.exe runtime path and runs
+Launches the approved direct/offline eldenring.exe runtime path (through me3, which
+drives the Steam compat tool directly with er_effects_rs.dll as an me3 native) and runs
 .auto/runtime_probe.sh as the bounded readiness watcher. This intentionally has
 no Steam/AppID launch path and no protected launcher path.
 EOF
@@ -128,6 +121,12 @@ runtime_pids() {
     fi
     if [[ "$cmdline" == *"ELDEN RING\\Game\\eldenring.exe"* ]]; then
       printf '%s\n' "$pid"
+      continue
+    fi
+    # me3's own Windows-side launcher: part of this run's tree, torn down with it. Path-anchored
+    # match only, never prose mentions of the name in an agent shell wrapper's cmdline.
+    if [[ "$cmdline" == *"windows-bin/me3-launcher.exe"* || "$cmdline" == *"windows-bin\\me3-launcher.exe"* ]]; then
+      printf '%s\n' "$pid"
     fi
   done
 }
@@ -158,7 +157,8 @@ preflight() {
   pgrep -x steam >/dev/null 2>&1 || fatal "Steam is not running; start Steam first (the offline eldenring.exe launch needs Steam's environment, else the run is degraded)"
   [[ "$RUNTIME_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || fatal "RUNTIME_TIMEOUT_SECONDS must be an integer"
   (( RUNTIME_TIMEOUT_SECONDS > 0 && RUNTIME_TIMEOUT_SECONDS <= RUNTIME_TIMEOUT_CAP_SECONDS )) || fatal "RUNTIME_TIMEOUT_SECONDS must be 1..$RUNTIME_TIMEOUT_CAP_SECONDS"
-  require_executable "$PROTON"
+  me3_preflight || fatal "me3 preflight failed (see guidance above)"
+  me3_require_no_lazyloader "$GAME_DIR" || fatal "leftover LazyLoader proxy in $GAME_DIR"
   require_file "$GAME_DIR/eldenring.exe"
   require_file "$REPO_ROOT/.auto/runtime_probe.sh"
   # Validate the probe harness OFFLINE before spending a launch: py_compile + bash -n the probe
@@ -236,14 +236,12 @@ cleanup() {
   terminate_runtime_pids
   # Teardown wipe: leave the default appdata save dirs with NO save files, every time.
   wipe_appdata_saves
-  # Teardown DLL hygiene: clear any stale mod DLLs from the LazyLoader LOADORDER folder so the next
-  # run (or a manual launch) cannot pick up a leftover mod DLL. Surgical: only dllMods/*.dll.
-  clean_stale_mod_dlls
 }
 trap cleanup EXIT INT TERM HUP
 
 preflight
 ARTIFACT_DIR=$(realpath -m "$ARTIFACT_DIR")
+ME3_PROFILE="$ARTIFACT_DIR/er-effects-me3.me3"
 PID_FILE=$(realpath -m "$PID_FILE")
 TELEMETRY_PATH=$(realpath -m "$TELEMETRY_PATH")
 BOOTSTRAP_PATH=$(realpath -m "$BOOTSTRAP_PATH")
@@ -257,9 +255,9 @@ mkdir -p "$ARTIFACT_DIR"
 if (( DRY_RUN )); then
   write_autoload_request
   cat > "$ARTIFACT_DIR/dry-run-summary.json" <<EOF
-{"artifact_dir":"$ARTIFACT_DIR","launch":"direct-proton-eldenring-exe","watcher":".auto/runtime_probe.sh","timeout_seconds":$RUNTIME_TIMEOUT_SECONDS,"runtime_expected_mode":"$RUNTIME_EXPECTED_MODE"}
+{"artifact_dir":"$ARTIFACT_DIR","launch":"me3-native-eldenring-exe","watcher":".auto/runtime_probe.sh","timeout_seconds":$RUNTIME_TIMEOUT_SECONDS,"runtime_expected_mode":"$RUNTIME_EXPECTED_MODE"}
 EOF
-  echo "dry-run ok: would start .auto/runtime_probe.sh, launch direct eldenring.exe through Proton, wait <=${RUNTIME_TIMEOUT_SECONDS}s, then tear down owned launcher pid and exact eldenring.exe runtime pids"
+  echo "dry-run ok: would start .auto/runtime_probe.sh, launch eldenring.exe through me3 (DLL as me3 native), wait <=${RUNTIME_TIMEOUT_SECONDS}s, then tear down owned launcher pid and exact eldenring.exe runtime pids"
   exit 0
 fi
 
@@ -276,11 +274,10 @@ rm -f "$TELEMETRY_PATH" "$BOOTSTRAP_PATH" "$BOOTSTRAP_STATE_PATH" "$CRASH_LOG_PA
 rm -f "$ARTIFACT_DIR/loading-screen-portrait-screenshot.jpg" "$ARTIFACT_DIR/loading-screen-portrait-screenshot.png" "$ARTIFACT_DIR/loading-screen-portrait-screenshot.txt"
 write_autoload_request
 
-# DEPLOY THE FRESH CHAINLOAD DLL + clean stale mod DLLs BEFORE any launch branch. Placed here (after
-# the auth gates so --dry-run/-h never touch the game dir, before both the RUNTIME_NO_TEARDOWN exec
-# path and the gamescope/watcher path) so EVERY real launch through this script runs the just-built
-# DLL. Fails closed if the build is missing rather than silently running a stale DLL.
-deploy_chainload_dll
+# STAGE THE FRESH me3 PAYLOAD BEFORE any launch branch (after the auth gates so --dry-run/-h stay
+# read-only, before both the RUNTIME_NO_TEARDOWN exec path and the gamescope/watcher path) so EVERY
+# real launch through this script runs the just-built DLL. Fails closed if the build is missing.
+stage_me3_payload
 
 # SAVE SOURCE: the DLL never assumes the default user save dir. Either declare telemetry-only
 # (loads nothing) or stage an isolated copy of the gold save and point the DLL at it. Staging a
@@ -378,8 +375,9 @@ start_hypr_window_placer() {
 start_hypr_window_placer
 
 # RUNTIME_NO_TEARDOWN=1: run the game in the FOREGROUND of this launcher (which a human runs detached,
-# e.g. via the agent's background mode) and do NOT run the readiness watcher. Proton's `run` tears the
-# wine tree down if its parent dies, so we must stay as the game's parent for its whole lifetime --
+# e.g. via the agent's background mode) and do NOT run the readiness watcher. The me3 CLI owns the
+# compat-tool/wine tree, which dies with its parent, so we must stay as the launch parent for the
+# game's whole lifetime --
 # backgrounding and exiting kills it (observed). The zero-input autoload then runs on the user's
 # monitor; the DLL input block releases in-world so the user takes over. Tear down with
 # `pkill -x eldenring.exe` (or quit the game). Save-safe: the gold is only read; writes go to the
@@ -397,10 +395,9 @@ if [[ "${RUNTIME_NO_TEARDOWN:-0}" == "1" ]]; then
   echo " TEAR DOWN when done:  pkill -x eldenring.exe"
   echo "============================================================================"
   cd "$GAME_DIR"
-  # exec -> this launcher BECOMES the foreground Proton process; it holds the game until quit.
+  # exec -> this launcher BECOMES the foreground me3 CLI, which owns the compat-tool/wine tree;
+  # it holds the game until quit. me3 sets its own STEAM_COMPAT_* env internally.
   exec env \
-    STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_COMPAT_CLIENT_INSTALL_PATH" \
-    STEAM_COMPAT_DATA_PATH="$STEAM_COMPAT_DATA_PATH" \
     ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" \
     ER_EFFECTS_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" \
     ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
@@ -412,13 +409,11 @@ if [[ "${RUNTIME_NO_TEARDOWN:-0}" == "1" ]]; then
     ER_EFFECTS_PROFILE_INTERVAL_MS="${ER_EFFECTS_PROFILE_INTERVAL_MS:-}" \
     ER_EFFECTS_PROFILE_RIP_EVERY="${ER_EFFECTS_PROFILE_RIP_EVERY:-}" \
     VKD3D_SHADER_CACHE_PATH="${VKD3D_SHADER_CACHE_PATH:-}" \
-    "$PROTON" run "$GAME_DIR/eldenring.exe" > "$ARTIFACT_DIR/proton-run.out" 2>&1
+    "$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" launch -g eldenring -p "$ME3_PROFILE" > "$ARTIFACT_DIR/me3-launch.out" 2>&1
 fi
 
 (
   cd "$GAME_DIR"
-  STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_COMPAT_CLIENT_INSTALL_PATH" \
-  STEAM_COMPAT_DATA_PATH="$STEAM_COMPAT_DATA_PATH" \
   ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" \
   ER_EFFECTS_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" \
   ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
@@ -430,7 +425,7 @@ fi
   ER_EFFECTS_PROFILE_INTERVAL_MS="${ER_EFFECTS_PROFILE_INTERVAL_MS:-}" \
   ER_EFFECTS_PROFILE_RIP_EVERY="${ER_EFFECTS_PROFILE_RIP_EVERY:-}" \
   VKD3D_SHADER_CACHE_PATH="${VKD3D_SHADER_CACHE_PATH:-}" \
-  "${gamescope_prefix[@]}" "$PROTON" run "$GAME_DIR/eldenring.exe" > "$ARTIFACT_DIR/proton-run.out" 2>&1 & echo $! > "$PID_FILE"
+  "${gamescope_prefix[@]}" "$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" launch -g eldenring -p "$ME3_PROFILE" > "$ARTIFACT_DIR/me3-launch.out" 2>&1 & echo $! > "$PID_FILE"
 )
 
 # The watcher remains oracle-first even for on-screen runs; screenshots are diagnostic only and the
