@@ -5574,7 +5574,19 @@ pub(crate) static SQ_REPRO_SWITCH_INDEX: AtomicUsize = AtomicUsize::new(0);
 /// runner's `RUNTIME_NO_TEARDOWN=1`, the game stays up on the switched character so the user can play
 /// and even re-trigger the cloned Load-Profile button manually. Set to 2+ to resume the back-to-back
 /// two-switch autopilot investigation (er-effects-rs-qwj).
+///
+/// PAUSE-AT-MENU MODE (`ER_EFFECTS_SQ_REPRO_SWITCHES=0`): drive ZERO switches -- the autopilot runs
+/// the identical observed-transition sequence only up to 05_010_ProfileSelect opening
+/// (WAIT_WORLD -> OPEN_MENU -> TO_SYSTEM -> TO_PROFILE), then latches
+/// `SQ_REPRO_PAUSED_AT_PROFILE_SELECT` and goes straight to DONE: no cursor move, no slot pick, no
+/// load. The input block releases at DONE, so with `RUNTIME_NO_TEARDOWN=1` the game is left running,
+/// paused at the character-load menu, with keyboard/mouse/gamepad live for the user.
 pub(crate) const SQ_REPRO_TARGET_SWITCHES: usize = 1;
+/// RAM oracle latch (0 -> 1, never reset): the pause-at-menu autopilot observed 05_010_ProfileSelect
+/// open and STOPPED there (transitioned to DONE without TO_SLOT/CONFIRM). Exported as telemetry
+/// `sq_repro_paused_at_profile_select`; the pause-probe watcher's PASS gate is this latch == 1 while
+/// the no-load semaphores (activate count, quickload phase, fresh-deser count) all still read idle.
+pub(crate) static SQ_REPRO_PAUSED_AT_PROFILE_SELECT: AtomicUsize = AtomicUsize::new(0);
 /// The explicit ProfileSelect slot each switch loads. Slots 4/5 are the two REAL, distinct
 /// characters in the pinned gold save (25-Invades-patches): slot 4 = 'Speed Bean', slot 5 =
 /// 'Patches' (bd system-quit-switch-loads-original-not-picked-rootcause-2026-07-02). The autopilot

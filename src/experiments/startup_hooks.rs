@@ -9762,15 +9762,25 @@ fn sq_repro_target_slot() -> i32 {
     SQ_REPRO_TARGET_SLOTS[i.min(SQ_REPRO_TARGET_SLOTS.len() - 1)]
 }
 
-/// How many back-to-back switches to drive. Defaults to `SQ_REPRO_TARGET_SWITCHES` (2); overridable
-/// via `ER_EFFECTS_SQ_REPRO_SWITCHES` (clamped to [1, target-table length]) so a 1-switch baseline
-/// can be run with the identical code path to isolate the two-switch regression.
+/// How many back-to-back switches to drive. Defaults to `SQ_REPRO_TARGET_SWITCHES`; overridable
+/// via `ER_EFFECTS_SQ_REPRO_SWITCHES` (clamped to [0, target-table length]) so a 1-switch baseline
+/// can be run with the identical code path to isolate the two-switch regression. 0 = PAUSE-AT-MENU
+/// mode: drive to 05_010_ProfileSelect and stop there without picking/loading any slot (see
+/// `SQ_REPRO_PAUSED_AT_PROFILE_SELECT`). Not a new env gate -- an added value of the existing
+/// harness switch-count knob.
 fn sq_repro_target_switches() -> usize {
     let n = std::env::var("ER_EFFECTS_SQ_REPRO_SWITCHES")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
         .unwrap_or(SQ_REPRO_TARGET_SWITCHES);
-    n.clamp(1, SQ_REPRO_TARGET_SLOTS.len())
+    n.clamp(0, SQ_REPRO_TARGET_SLOTS.len())
+}
+
+/// PAUSE-AT-MENU mode: `ER_EFFECTS_SQ_REPRO_SWITCHES=0` -- drive the identical autopilot sequence up
+/// to ProfileSelect opening, then DONE (no cursor move, no pick, no load). The character-load menu is
+/// left open; with the runner's `RUNTIME_NO_TEARDOWN=1` the game stays up for the user.
+fn sq_repro_pause_at_menu() -> bool {
+    sq_repro_target_switches() == 0
 }
 
 /// Enter a switch: capture the confirm-count baseline and clear the per-switch menu-window/cursor
@@ -9853,12 +9863,18 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
             if in_world && tick >= SQ_REPRO_WORLD_SETTLE_TICKS {
                 sq_repro_begin_switch();
-                append_autoload_debug(format_args!(
-                    "sq-repro: in-world settled ({SQ_REPRO_WORLD_SETTLE_TICKS} ticks) -> OPEN_MENU switch #{}/{} target_slot={}; START (XInput 0x{XINPUT_GAMEPAD_START:04x}) to open the escape/system menu",
-                    SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst) + 1,
-                    sq_repro_target_switches(),
-                    sq_repro_target_slot()
-                ));
+                if sq_repro_pause_at_menu() {
+                    append_autoload_debug(format_args!(
+                        "sq-repro: in-world settled ({SQ_REPRO_WORLD_SETTLE_TICKS} ticks) -> OPEN_MENU PAUSE-AT-MENU mode (0 switches: stop at ProfileSelect, no load); START (XInput 0x{XINPUT_GAMEPAD_START:04x}) to open the escape/system menu"
+                    ));
+                } else {
+                    append_autoload_debug(format_args!(
+                        "sq-repro: in-world settled ({SQ_REPRO_WORLD_SETTLE_TICKS} ticks) -> OPEN_MENU switch #{}/{} target_slot={}; START (XInput 0x{XINPUT_GAMEPAD_START:04x}) to open the escape/system menu",
+                        SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst) + 1,
+                        sq_repro_target_switches(),
+                        sq_repro_target_slot()
+                    ));
+                }
                 sq_repro_transition(SQ_REPRO_STATE_OPEN_MENU);
             } else if !in_world {
                 // Not in-world yet (boot autoload still loading): hold the settle counter at 0.
@@ -9900,6 +9916,19 @@ pub(crate) unsafe fn system_quit_repro_tick() {
         SQ_REPRO_STATE_TO_PROFILE => {
             let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
             if profile != 0 {
+                if sq_repro_pause_at_menu() {
+                    // PAUSE-AT-MENU: the character-load menu is open -- stop HERE. No cursor move,
+                    // no slot pick, no load. DONE stops the pad fabrication and releases the input
+                    // block (sq_repro_actively_driving -> false), so the user's real input goes
+                    // live on the open ProfileSelect. The latch is the run's PASS oracle.
+                    SQ_REPRO_PAUSED_AT_PROFILE_SELECT.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "sq-repro: ProfileSelect opened window=0x{profile:x} -- PAUSE-AT-MENU: autopilot DONE at the character-load menu (no pick, no load); input block releases, game left running"
+                    ));
+                    set_pad(0);
+                    SQ_REPRO_STATE.store(SQ_REPRO_STATE_DONE, Ordering::SeqCst);
+                    return;
+                }
                 append_autoload_debug(format_args!(
                     "sq-repro: ProfileSelect opened window=0x{profile:x} (cloned Load-Profile row activated) -> TO_SLOT (move cursor off the current save)"
                 ));

@@ -576,6 +576,12 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst)
     ));
     body.push_str(&format!(
+        "  \"sq_repro_state\": {},\n  \"sq_repro_switch_index\": {},\n  \"sq_repro_paused_at_profile_select\": {},\n",
+        SQ_REPRO_STATE.load(Ordering::SeqCst),
+        SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst),
+        SQ_REPRO_PAUSED_AT_PROFILE_SELECT.load(Ordering::SeqCst)
+    ));
+    body.push_str(&format!(
         "  \"system_quit_gaitem_reset_invocations\": {},\n  \"system_quit_gaitem_reset_released_count\": {},\n  \"system_quit_gaitem_reset_last_slack_before\": {},\n  \"system_quit_gaitem_reset_last_slack_after\": {},\n",
         SYSTEM_QUIT_GAITEM_RESET_INVOCATIONS.load(Ordering::SeqCst),
         SYSTEM_QUIT_GAITEM_RESET_RELEASED_COUNT.load(Ordering::SeqCst),
