@@ -8819,12 +8819,193 @@ pub(crate) unsafe extern "system" fn system_quit_noop_desktop_action_hook(
     let orig = SYSTEM_QUIT_NOOP_ACTION_ORIG.load(Ordering::SeqCst);
     if orig == HOOK_ORIGINAL_UNSET {
         append_autoload_debug(format_args!(
-            "system-quit-dup: Quit Game action trampoline is unset for action=0x{action_obj:x} -- fail-open return 0"
+            "system-quit-save: Quit Game/Save Game action trampoline is unset for action=0x{action_obj:x} -- fail-open return 0"
         ));
         return 0;
     }
+    let dialog = unsafe { safe_read_usize(action_obj + 0x8) }.unwrap_or(0);
+    if dialog >= 0x10000 {
+        SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.store(dialog, Ordering::SeqCst);
+        SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-save: original Quit Game row selected action=0x{action_obj:x} dialog=0x{dialog:x}; forwarding native confirmation, accept will save-only and close menus"
+        ));
+    } else {
+        append_autoload_debug(format_args!(
+            "system-quit-save: original Quit Game row selected action=0x{action_obj:x} but dialog=0x{dialog:x} is not heap-like; forwarding native action without save-only latch"
+        ));
+    }
     let original: unsafe extern "system" fn(usize) -> usize = unsafe { std::mem::transmute(orig) };
     unsafe { original(action_obj) }
+}
+
+const SYSTEM_QUIT_SAVE_GAME_LABEL_W: [u16; 10] = [
+    b'S' as u16, b'a' as u16, b'v' as u16, b'e' as u16, b' ' as u16, b'G' as u16,
+    b'a' as u16, b'm' as u16, b'e' as u16, 0,
+];
+const SYSTEM_QUIT_SAVE_GAME_HELP_W: [u16; 36] = [
+    b'S' as u16, b'a' as u16, b'v' as u16, b'e' as u16, b' ' as u16, b'a' as u16,
+    b'n' as u16, b'd' as u16, b' ' as u16, b'r' as u16, b'e' as u16, b't' as u16,
+    b'u' as u16, b'r' as u16, b'n' as u16, b' ' as u16, b't' as u16, b'o' as u16,
+    b' ' as u16, b'p' as u16, b'l' as u16, b'a' as u16, b'y' as u16, b'i' as u16,
+    b'n' as u16, b'g' as u16, b' ' as u16, b't' as u16, b'h' as u16, b'e' as u16,
+    b' ' as u16, b'g' as u16, b'a' as u16, b'm' as u16, b'e' as u16, 0,
+];
+const SYSTEM_QUIT_SAVE_GAME_DIALOG_W: [u16; 37] = [
+    b'S' as u16, b'a' as u16, b'v' as u16, b'e' as u16, b' ' as u16, b'a' as u16,
+    b'n' as u16, b'd' as u16, b' ' as u16, b'r' as u16, b'e' as u16, b't' as u16,
+    b'u' as u16, b'r' as u16, b'n' as u16, b' ' as u16, b't' as u16, b'o' as u16,
+    b' ' as u16, b'p' as u16, b'l' as u16, b'a' as u16, b'y' as u16, b'i' as u16,
+    b'n' as u16, b'g' as u16, b' ' as u16, b't' as u16, b'h' as u16, b'e' as u16,
+    b' ' as u16, b'g' as u16, b'a' as u16, b'm' as u16, b'e' as u16, b'?' as u16, 0,
+];
+
+unsafe fn wide_equals_ascii(ptr: usize, ascii: &[u8]) -> bool {
+    if ptr == 0 || ptr == TITLE_OWNER_SCAN_START_ADDRESS || ascii.is_empty() {
+        return false;
+    }
+    for (idx, want) in ascii.iter().copied().enumerate() {
+        let Some(unit) = (unsafe { safe_read_u16(ptr + idx * core::mem::size_of::<u16>()) }) else {
+            return false;
+        };
+        if unit != want as u16 {
+            return false;
+        }
+    }
+    matches!(
+        unsafe { safe_read_u16(ptr + ascii.len() * core::mem::size_of::<u16>()) },
+        Some(0)
+    )
+}
+
+pub(crate) unsafe extern "system" fn system_quit_save_game_get_and_format_hook(
+    out: usize,
+    getter: usize,
+    text_id: i32,
+    fmg_name: usize,
+    abbrev: usize,
+) -> usize {
+    let replacement = if text_id == SYSTEM_QUIT_SAVE_GAME_MENU_TEXT_ID
+        && unsafe { wide_equals_ascii(abbrev, b"GRMT") }
+    {
+        Some(SYSTEM_QUIT_SAVE_GAME_LABEL_W.as_ptr() as usize)
+    } else if text_id == SYSTEM_QUIT_SAVE_GAME_LINEHELP_ID
+        && unsafe { wide_equals_ascii(abbrev, b"GRHK") }
+    {
+        Some(SYSTEM_QUIT_SAVE_GAME_HELP_W.as_ptr() as usize)
+    } else if text_id == SYSTEM_QUIT_SAVE_GAME_DIALOG_ID
+        && unsafe { wide_equals_ascii(abbrev, b"GRD") }
+    {
+        Some(SYSTEM_QUIT_SAVE_GAME_DIALOG_W.as_ptr() as usize)
+    } else {
+        None
+    };
+    if let Some(text_ptr) = replacement {
+        match game_rva(MSG_REPOSITORY_FORMAT_RVA) {
+            Ok(format_addr) => {
+                let format_fn: unsafe extern "system" fn(usize, usize, u32, usize, usize) -> usize =
+                    unsafe { std::mem::transmute(format_addr) };
+                SYSTEM_QUIT_SAVE_GAME_TEXT_SUBSTITUTION_COUNT.fetch_add(1, Ordering::SeqCst);
+                return unsafe { format_fn(out, text_ptr, text_id as u32, fmg_name, abbrev) };
+            }
+            Err(_) => append_autoload_debug(format_args!(
+                "system-quit-save: failed to resolve MsgRepository::Format rva 0x{MSG_REPOSITORY_FORMAT_RVA:x}; forwarding id={text_id}"
+            )),
+        }
+    }
+    let orig = SYSTEM_QUIT_SAVE_GAME_GET_AND_FORMAT_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return out;
+    }
+    let original: unsafe extern "system" fn(usize, usize, i32, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    unsafe { original(out, getter, text_id, fmg_name, abbrev) }
+}
+
+unsafe fn system_quit_save_game_close_window(window: usize, label: &str) -> bool {
+    if window < 0x10000 || window == TITLE_OWNER_SCAN_START_ADDRESS {
+        return false;
+    }
+    let vt = unsafe { safe_read_usize(window) }.unwrap_or(0);
+    if vt < 0x10000 {
+        append_autoload_debug(format_args!(
+            "system-quit-save: skip close {label}=0x{window:x}; invalid vt=0x{vt:x}"
+        ));
+        return false;
+    }
+    let Ok(close_addr) = game_rva(SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-save: failed to resolve native close rva 0x{SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA:x}; cannot close {label}=0x{window:x}"
+        ));
+        return false;
+    };
+    let close_fn: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(close_addr) };
+    unsafe { close_fn(window) };
+    SYSTEM_QUIT_SAVE_GAME_CLOSE_COUNT.fetch_add(1, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-save: native cancel-close {label}=0x{window:x} vt=0x{vt:x}"
+    ));
+    true
+}
+
+unsafe fn system_quit_save_game_request_save_only() {
+    let Ok(request_save_addr) = game_rva(SYSTEM_QUIT_REQUEST_SAVE_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-save: failed to resolve RequestSave rva 0x{SYSTEM_QUIT_REQUEST_SAVE_RVA:x}"
+        ));
+        return;
+    };
+    let request_save: unsafe extern "system" fn(u8) = unsafe { std::mem::transmute(request_save_addr) };
+    unsafe { request_save(true as u8) };
+    match game_rva(SYSTEM_QUIT_SAVE_REQUEST_PROFILE_RVA) {
+        Ok(profile_addr) => {
+            let save_request_profile: unsafe extern "system" fn(u8) =
+                unsafe { std::mem::transmute(profile_addr) };
+            unsafe { save_request_profile(true as u8) };
+        }
+        Err(_) => append_autoload_debug(format_args!(
+            "system-quit-save: failed to resolve SaveRequest_Profile rva 0x{SYSTEM_QUIT_SAVE_REQUEST_PROFILE_RVA:x}; RequestSave already issued"
+        )),
+    }
+}
+
+pub(crate) unsafe extern "system" fn system_quit_save_game_return_title_request_hook() {
+    let dialog = SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.swap(0, Ordering::SeqCst);
+    if dialog >= 0x10000
+        && callstack_contains_game_rva(0x7a3000, 0x7a4000)
+    {
+        unsafe { system_quit_save_game_request_save_only() };
+        SYSTEM_QUIT_SAVE_GAME_CONFIRM_COUNT.fetch_add(1, Ordering::SeqCst);
+        let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
+        let top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
+        let closed_dialog = unsafe { system_quit_save_game_close_window(dialog, "system_dialog") };
+        let closed_option = if option != 0 && option != dialog {
+            unsafe { system_quit_save_game_close_window(option, "option_window") }
+        } else {
+            false
+        };
+        let closed_top = if top != 0 && top != dialog && top != option {
+            unsafe { system_quit_save_game_close_window(top, "ingame_top_window") }
+        } else {
+            false
+        };
+        append_autoload_debug(format_args!(
+            "system-quit-save: confirmation accepted -> save-only; suppressed native return-title request dialog=0x{dialog:x} option=0x{option:x} top=0x{top:x} closed_dialog={closed_dialog} closed_option={closed_option} closed_top={closed_top}"
+        ));
+        return;
+    }
+    if dialog != 0 {
+        SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.store(dialog, Ordering::SeqCst);
+    }
+    let orig = SYSTEM_QUIT_SAVE_GAME_RETURN_TITLE_REQUEST_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-save: return-title request trampoline unset and no active Save Game dialog; return"
+        ));
+        return;
+    }
+    let original: unsafe extern "system" fn() = unsafe { std::mem::transmute(orig) };
+    unsafe { original() };
 }
 
 pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hook(
@@ -9618,7 +9799,7 @@ fn install_system_quit_noop_action_hook() {
                     SYSTEM_QUIT_NOOP_ACTION_INSTALLED
                         .store(SYSTEM_QUIT_NOOP_ACTION_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "system-quit-dup: hooked Quit Game action invoke 0x{addr:x}; recorded cloned quick-load action object will route to ProfileSelect"
+                        "system-quit-dup: hooked Quit Game action invoke 0x{addr:x}; cloned quick-load actions route to ProfileSelect; original row arms Save Game confirmation"
                     ));
                 }
                 status => append_autoload_debug(format_args!(
@@ -9628,6 +9809,118 @@ fn install_system_quit_noop_action_hook() {
         }
         Err(status) => append_autoload_debug(format_args!(
             "system-quit-dup: MhHook::new no-op action hook failed: {status:?}"
+        )),
+    }
+}
+
+fn install_system_quit_save_game_text_hook() {
+    if SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_SAVE_GAME_TEXT_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-save: MH_Initialize for text hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(MSG_REPOSITORY_GET_AND_FORMAT_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-save: failed to resolve MsgRepository::GetAndFormat rva 0x{MSG_REPOSITORY_GET_AND_FORMAT_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_save_game_get_and_format_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_SAVE_GAME_GET_AND_FORMAT_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-save: queue_enable text hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED
+                        .store(SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED_YES, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-save: hooked MsgRepository::GetAndFormat 0x{addr:x}; replacing GRMT:{SYSTEM_QUIT_SAVE_GAME_MENU_TEXT_ID}, GRHK:{SYSTEM_QUIT_SAVE_GAME_LINEHELP_ID}, GRD:{SYSTEM_QUIT_SAVE_GAME_DIALOG_ID}"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-save: MH_ApplyQueued text hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-save: MhHook::new text hook failed: {status:?}"
+        )),
+    }
+}
+
+fn install_system_quit_save_game_confirm_hook() {
+    if SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED.load(Ordering::SeqCst)
+        != SYSTEM_QUIT_SAVE_GAME_CONFIRM_NOT_INSTALLED
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-save: MH_Initialize for confirm hook failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-save: failed to resolve return-title request rva 0x{SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            system_quit_save_game_return_title_request_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SYSTEM_QUIT_SAVE_GAME_RETURN_TITLE_REQUEST_ORIG
+                .store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "system-quit-save: queue_enable confirm hook failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED
+                        .store(SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED_YES, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "system-quit-save: hooked native return-title request 0x{addr:x}; armed System Save Game confirmations become save-only + menu close"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "system-quit-save: MH_ApplyQueued confirm hook failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "system-quit-save: MhHook::new confirm hook failed: {status:?}"
         )),
     }
 }
@@ -11673,7 +11966,9 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     install_gx_cmd_queue_telemetry();
     install_system_quit_menu_window_job_run_hook();
     install_system_quit_window_list_push_hook();
+    install_system_quit_save_game_text_hook();
     install_system_quit_noop_action_hook();
+    install_system_quit_save_game_confirm_hook();
     install_system_quit_profile_load_activate_hook();
     install_system_quit_profile_load_confirmed_hook();
     install_system_quit_profile_load_job_run_hook();
