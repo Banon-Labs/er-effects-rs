@@ -2447,8 +2447,11 @@ pub(crate) fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
             LOADING_BG_PORTRAIT_DIMS.store(((w as usize) << 16) | (h as usize), Ordering::SeqCst);
             let bytes = px.len();
             dump_portrait_rgba(slot, w, h, &px);
-            if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
-                *g = Some((w, h, px));
+            // Readiness gate: hold back neutral/too-small transient captures (Bug A/B).
+            if note_ls_portrait_capture(w, h, &px) {
+                if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
+                    *g = Some((w, h, px));
+                }
             }
             append_autoload_debug(format_args!(
                 "portrait-readback: dims={w}x{h} format={} nonblack={} is_checker={} (real-face proof = nonblack && !is_checker) bytes={bytes}",
@@ -3836,20 +3839,26 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                         Ordering::SeqCst,
                                         Ordering::SeqCst,
                                     );
-                                    if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
-                                        *g = Some((cw, ch, cpx));
-                                    }
-                                    LOADING_BG_PORTRAIT_RGBA_VERSION.fetch_add(1, Ordering::SeqCst);
-                                    // Freeze the per-frame drive for this window (UAF fix) ...
-                                    PROFILE_BAKE_RGBA_CAPTURED.store(1, Ordering::SeqCst);
-                                    // ... and mark a keyed frame available for display (persists across the
-                                    // window reset/retarget so the bridge holds until the next keyed frame).
-                                    PROFILE_HAVE_KEYED_FRAME.store(1, Ordering::SeqCst);
-                                    if PROFILE_LIVE_FEED_LOGGED.swap(1, Ordering::SeqCst) == 0 {
-                                        append_autoload_debug(format_args!(
-                                            "live-feed: published built RT content {cw}x{ch} (real head, !checker, keyed, clean tear={tear}, target-only) -> overlay (version bump)"
-                                        ));
-                                    }
+                                    // Readiness gate: only publish the real full-size head; hold back
+                                    // the transient neutral/too-small frames (Bug A/B) so they never
+                                    // reach the loading screen.
+                                    if note_ls_portrait_capture(cw, ch, &cpx) {
+                                        if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
+                                            *g = Some((cw, ch, cpx));
+                                        }
+                                        LOADING_BG_PORTRAIT_RGBA_VERSION
+                                            .fetch_add(1, Ordering::SeqCst);
+                                        // Freeze the per-frame drive for this window (UAF fix) ...
+                                        PROFILE_BAKE_RGBA_CAPTURED.store(1, Ordering::SeqCst);
+                                        // ... and mark a keyed frame available for display (persists across the
+                                        // window reset/retarget so the bridge holds until the next keyed frame).
+                                        PROFILE_HAVE_KEYED_FRAME.store(1, Ordering::SeqCst);
+                                        if PROFILE_LIVE_FEED_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+                                            append_autoload_debug(format_args!(
+                                                "live-feed: published built RT content {cw}x{ch} (real head, !checker, keyed, clean tear={tear}, target-only) -> overlay (version bump)"
+                                            ));
+                                        }
+                                    } // end readiness gate (reject neutral/too-small transients)
                                 } else if keyed && clean {
                                     // Mask cut ENOUGH but in the WRONG PLACE (IoU below the gross-
                                     // mismatch bar): the stale-silhouette / wrong-side masks the
@@ -5725,12 +5734,19 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                 {
                     let _ = ibl_region;
                     dump_portrait_rgba(110, w, h, &px);
-                    if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
-                        *g = Some((w, h, px.clone()));
+                    // Readiness gate: hold back neutral/too-small transient captures (Bug A/B). On
+                    // rejection, un-consume the one-shot (the swap fired in the condition above) so a
+                    // later full-size head still bake-captures.
+                    if note_ls_portrait_capture(w, h, &px) {
+                        if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
+                            *g = Some((w, h, px.clone()));
+                        }
+                        append_autoload_debug(format_args!(
+                            "loading-portrait: BAKE-CAPTURED real menu portrait slot={s} dims={w}x{h} ibl_region=0x{ibl_region:x} -> LOADING_BG_PORTRAIT_RGBA (forge will bake it)"
+                        ));
+                    } else {
+                        PROFILE_BAKE_RGBA_CAPTURED.store(0, Ordering::SeqCst);
                     }
-                    append_autoload_debug(format_args!(
-                        "loading-portrait: BAKE-CAPTURED real menu portrait slot={s} dims={w}x{h} ibl_region=0x{ibl_region:x} -> LOADING_BG_PORTRAIT_RGBA (forge will bake it)"
-                    ));
                 }
                 dump_portrait_rgba(s, w, h, &px);
                 PROFILE_SLOT_DUMP_MASK.fetch_or(bit, Ordering::SeqCst);
@@ -6427,7 +6443,10 @@ unsafe fn systex_profile_target_slot(target_ptr: usize) -> Option<usize> {
         lower[i] = b.to_ascii_lowercase();
     }
     let lower = &lower[..n];
-    if !lower.windows(b"systex_menu_profile".len()).any(|w| w == b"systex_menu_profile") {
+    if !lower
+        .windows(b"systex_menu_profile".len())
+        .any(|w| w == b"systex_menu_profile")
+    {
         return None;
     }
     let d1 = s[n - 2];
@@ -7084,10 +7103,11 @@ pub(crate) unsafe extern "system" fn title_scaleform_bind_observer_hook(owner: u
     // an unregistered key. This SUPERSEDES the yoinked slot-0 FL_40135 rewrite (which was based on the
     // now-corrected belief that the dummy faces were not visible).
     let mut rewritten_visible_profile_surface = false;
-    let _ = (TITLE_PROFILE_VISIBLE_SURFACE_SYMBOL, ER_TPF_COVER_SYSTEX_KEY);
-    if stats_panel_enabled()
-        && unsafe { bounded_ascii_contains(symbol_ptr, b"dummyprofileface") }
-    {
+    let _ = (
+        TITLE_PROFILE_VISIBLE_SURFACE_SYMBOL,
+        ER_TPF_COVER_SYSTEX_KEY,
+    );
+    if stats_panel_enabled() && unsafe { bounded_ascii_contains(symbol_ptr, b"dummyprofileface") } {
         if let Some(slot) = unsafe { systex_profile_target_slot(target_ptr) } {
             if STATS_PANEL_TEX_REGISTERED_MASK.load(Ordering::SeqCst) & (1 << slot) != 0 {
                 let key = STATS_PANEL_SYSTEX_KEYS[slot];

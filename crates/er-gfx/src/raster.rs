@@ -290,7 +290,12 @@ fn glyph_contours(glyph: &GlyphShape) -> Vec<Vec<(f32, f32)>> {
 /// Append points approximating the quadratic Bézier `p0 -> ctrl -> anchor` to
 /// `out` (excluding `p0`, which is already the pen position). Subdivision count
 /// scales with the control-polygon length so large curves stay smooth.
-fn flatten_quadratic(p0: (f32, f32), ctrl: (f32, f32), anchor: (f32, f32), out: &mut Vec<(f32, f32)>) {
+fn flatten_quadratic(
+    p0: (f32, f32),
+    ctrl: (f32, f32),
+    anchor: (f32, f32),
+    out: &mut Vec<(f32, f32)>,
+) {
     let len = dist(p0, ctrl) + dist(ctrl, anchor);
     // One segment per ~40 font units of control-polygon length, clamped.
     let n = ((len / 40.0).ceil() as u32).clamp(2, 32);
@@ -381,7 +386,13 @@ fn rasterize_shape(glyph: &GlyphShape, scale: f32, advance: f32) -> Option<Glyph
                 continue;
             }
             let dir = if y1 > y0 { 1 } else { -1 };
-            edges.push(Edge { x0, y0, x1, y1, dir });
+            edges.push(Edge {
+                x0,
+                y0,
+                x1,
+                y1,
+                dir,
+            });
         }
     }
     if edges.is_empty() {
@@ -483,18 +494,35 @@ mod tests {
         let records = vec![
             ShapeRecord::StyleChange {
                 flags: 0,
-                move_to: Some(MoveTo { num_bits: 0, dx: 0, dy: 0 }),
+                move_to: Some(MoveTo {
+                    num_bits: 0,
+                    dx: 0,
+                    dy: 0,
+                }),
                 fill_style0: None,
                 fill_style1: Some(1),
                 line_style: None,
                 new_styles: None,
             },
-            ShapeRecord::StraightEdge { num_bits: 0, edge: StraightEdge::Vertical { dy: h } },
-            ShapeRecord::StraightEdge { num_bits: 0, edge: StraightEdge::Horizontal { dx: w } },
-            ShapeRecord::StraightEdge { num_bits: 0, edge: StraightEdge::Vertical { dy: -h } },
+            ShapeRecord::StraightEdge {
+                num_bits: 0,
+                edge: StraightEdge::Vertical { dy: h },
+            },
+            ShapeRecord::StraightEdge {
+                num_bits: 0,
+                edge: StraightEdge::Horizontal { dx: w },
+            },
+            ShapeRecord::StraightEdge {
+                num_bits: 0,
+                edge: StraightEdge::Vertical { dy: -h },
+            },
             ShapeRecord::End,
         ];
-        let glyph = GlyphShape { num_fill_bits: 1, num_line_bits: 0, records };
+        let glyph = GlyphShape {
+            num_fill_bits: 1,
+            num_line_bits: 0,
+            records,
+        };
         Tag::DefineFont3 {
             font_id: 7,
             flags: 0,
@@ -508,7 +536,13 @@ mod tests {
                 descent: 0,
                 leading: 0,
                 advance: vec![(w as f32 * 1.2) as i16],
-                bounds: vec![Rect { nbits: 16, x_min: 0, x_max: w, y_min: 0, y_max: h }],
+                bounds: vec![Rect {
+                    nbits: 16,
+                    x_min: 0,
+                    x_max: w,
+                    y_min: 0,
+                    y_max: h,
+                }],
                 kernings: Vec::new(),
             }),
             force_long: false,
@@ -537,7 +571,12 @@ mod tests {
         // Scale the 800-unit em to ~20px.
         let scale = font.scale_for_em_px(20.0);
         let g = font.rasterize('A', scale).unwrap();
-        assert!(g.width >= 8 && g.height >= 16, "size {}x{}", g.width, g.height);
+        assert!(
+            g.width >= 8 && g.height >= 16,
+            "size {}x{}",
+            g.width,
+            g.height
+        );
         // Interior texel is fully covered.
         let cx = g.width / 2;
         let cy = g.height / 2;
@@ -559,18 +598,35 @@ mod tests {
         let records = vec![
             ShapeRecord::StyleChange {
                 flags: 0,
-                move_to: Some(MoveTo { num_bits: 0, dx: 0, dy: -700 }),
+                move_to: Some(MoveTo {
+                    num_bits: 0,
+                    dx: 0,
+                    dy: -700,
+                }),
                 fill_style0: None,
                 fill_style1: Some(1),
                 line_style: None,
                 new_styles: None,
             },
-            ShapeRecord::StraightEdge { num_bits: 0, edge: StraightEdge::Vertical { dy: 700 } },
-            ShapeRecord::StraightEdge { num_bits: 0, edge: StraightEdge::Horizontal { dx: 400 } },
-            ShapeRecord::StraightEdge { num_bits: 0, edge: StraightEdge::Vertical { dy: -700 } },
+            ShapeRecord::StraightEdge {
+                num_bits: 0,
+                edge: StraightEdge::Vertical { dy: 700 },
+            },
+            ShapeRecord::StraightEdge {
+                num_bits: 0,
+                edge: StraightEdge::Horizontal { dx: 400 },
+            },
+            ShapeRecord::StraightEdge {
+                num_bits: 0,
+                edge: StraightEdge::Vertical { dy: -700 },
+            },
             ShapeRecord::End,
         ];
-        let glyph = GlyphShape { num_fill_bits: 1, num_line_bits: 0, records };
+        let glyph = GlyphShape {
+            num_fill_bits: 1,
+            num_line_bits: 0,
+            records,
+        };
         let tag = Tag::DefineFont3 {
             font_id: 7,
             flags: 0,
@@ -584,7 +640,13 @@ mod tests {
                 descent: 0,
                 leading: 0,
                 advance: vec![480],
-                bounds: vec![Rect { nbits: 16, x_min: 0, x_max: 400, y_min: -700, y_max: 0 }],
+                bounds: vec![Rect {
+                    nbits: 16,
+                    x_min: 0,
+                    x_max: 400,
+                    y_min: -700,
+                    y_max: 0,
+                }],
                 kernings: Vec::new(),
             }),
             force_long: false,

@@ -2503,6 +2503,41 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_loading_bg_portrait_rgba_version",
             LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst),
         );
+        // LOADING-SCREEN PORTRAIT BUG SEMAPHORES (2026-07-04). Detection runs at CAPTURE time
+        // (`note_ls_portrait_capture`, called wherever a portrait RGBA is stored) so a transient
+        // wrong-source frame -- our neutral texture (RGB 30,28,26) flashing in right after Continue (Bug
+        // B), or a too-small 256px head (Bug A) -- cannot slip between telemetry writes. Here we just
+        // publish the latched values.
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_w",
+            LS_PORTRAIT_LAST_W.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_h",
+            LS_PORTRAIT_LAST_H.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_neutral_pct",
+            LS_PORTRAIT_LAST_NEUTRAL_PCT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_too_small_seen_version",
+            LS_PORTRAIT_TOO_SMALL_SEEN_VERSION.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_neutral_leak_seen_version",
+            LS_PORTRAIT_NEUTRAL_LEAK_SEEN_VERSION.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_rejected_publishes",
+            LS_PORTRAIT_REJECTED_PUBLISHES.load(Ordering::SeqCst),
+        );
         // CROSS-SLOT SWAP tripwires: the pinned content-RT candidate (0 = never latched a confirmed head),
         // how many times the pin MOVED after first latch (>0 in one load window = unstable content source,
         // the swap bug's signature), how many per-slot target build kicks fired (0 = the loaded character
@@ -3243,6 +3278,84 @@ pub(crate) fn append_crash_log(args: std::fmt::Arguments<'_>) {
     {
         let _ = writeln!(file, "[+{ms}ms] {args}");
     }
+}
+
+/// Loading-screen portrait capture check, run at CAPTURE time (every time a portrait RGBA is about to
+/// be stored), so a transient wrong-source frame -- our neutral texture flashing in right after Continue
+/// (Bug B), or a too-small early head before the upsize (Bug A) -- cannot slip between the coarse
+/// telemetry writes. Records the capture dims + neutral-color fraction, latches the two once-seen bug
+/// versions (semaphores), and RETURNS whether this capture is fit to PUBLISH.
+///
+/// Returns `false` (do NOT publish; hold the previous frame / the loading background) when the capture
+/// is our neutral texture OR smaller than [`LS_PORTRAIT_SMALL_MAX_SIDE`]. The real head reliably builds
+/// to full size within the sub-second window (runtime-observed: it reaches 1024x1024, scan area
+/// 1048576), so gating on readiness shows ONLY the correct full-size head and never the transient
+/// wrong-source frames. If the head never reaches full size (upsize failed), the loading screen simply
+/// keeps its background -- a clean fallback, not a wrong-content bug. Cheap: a strided sample.
+pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
+    let texels = (w as usize) * (h as usize);
+    if texels == 0 || px.len() < texels * 4 {
+        return false;
+    }
+    let [nr, ng, nb, _] = STATS_PANEL_BG_RGBA;
+    let tol: i32 = 8;
+    let stride = (texels / 2000).max(1);
+    let (mut sampled, mut neutral) = (0usize, 0usize);
+    let mut i = 0usize;
+    while i < texels {
+        let b = i * 4;
+        let (r, g, bl) = (px[b] as i32, px[b + 1] as i32, px[b + 2] as i32);
+        if (r - nr as i32).abs() <= tol
+            && (g - ng as i32).abs() <= tol
+            && (bl - nb as i32).abs() <= tol
+        {
+            neutral += 1;
+        }
+        sampled += 1;
+        i += stride;
+    }
+    let neutral_pct = if sampled > 0 {
+        neutral * 100 / sampled
+    } else {
+        0
+    };
+    LS_PORTRAIT_LAST_W.store(w as usize, Ordering::SeqCst);
+    LS_PORTRAIT_LAST_H.store(h as usize, Ordering::SeqCst);
+    LS_PORTRAIT_LAST_NEUTRAL_PCT.store(neutral_pct, Ordering::SeqCst);
+    // Use the version this capture will carry (bumped by the caller right after the store); reading it
+    // here is close enough for a first-seen stamp.
+    let version = LOADING_BG_PORTRAIT_RGBA_VERSION
+        .load(Ordering::SeqCst)
+        .max(1);
+    let is_neutral = neutral_pct >= 90;
+    let is_small = w.max(h) <= LS_PORTRAIT_SMALL_MAX_SIDE;
+    if is_neutral {
+        let _ = LS_PORTRAIT_NEUTRAL_LEAK_SEEN_VERSION.compare_exchange(
+            0,
+            version,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    } else if is_small {
+        let _ = LS_PORTRAIT_TOO_SMALL_SEEN_VERSION.compare_exchange(
+            0,
+            version,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+    // Publishable unless it is our NEUTRAL texture (Bug B) -- that must never reach the loading screen.
+    // We deliberately do NOT reject the too-small case (Bug A): the head sometimes stalls at 256 (the
+    // upsize to 1024 has not fired yet), and a small portrait is strictly better than a BLANK one
+    // (rejecting all 256 frames published nothing -- runtime-observed rgba_version=0). Bug A is fixed at
+    // the source instead (force the offscreen upsize); `is_small` still latches its semaphore for
+    // monitoring. Rejected frames are counted so a monitor can see the gate working.
+    let _ = is_small;
+    let publishable = !is_neutral;
+    if !publishable {
+        LS_PORTRAIT_REJECTED_PUBLISHES.fetch_add(1, Ordering::SeqCst);
+    }
+    publishable
 }
 
 pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {

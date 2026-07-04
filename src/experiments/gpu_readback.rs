@@ -1145,7 +1145,9 @@ static OVERLAY_BB_BUFSIZE: AtomicU64 = AtomicU64::new(0);
 /// FIXED wrapper chain (bd live-portrait-d3d12-resource-buried-in-gx-wrapper-nest, RE'd from a live dump),
 /// validating each hop's vtable so a layout change fails closed instead of dereferencing garbage. NO
 /// memory scan / QI of arbitrary objects -> nothing to race the teardown free. Returns an AddRef'd ref.
-unsafe fn resolve_content_resource_deterministic(srv_gx: usize) -> Option<ID3D12Resource> {
+pub(crate) unsafe fn resolve_content_resource_deterministic(
+    srv_gx: usize,
+) -> Option<ID3D12Resource> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null && p > 0x10000;
     let base = game_module_base().ok()?;

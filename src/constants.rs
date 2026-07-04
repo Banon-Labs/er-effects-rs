@@ -850,6 +850,36 @@ pub(crate) static LOADING_BG_PORTRAIT_NONBLACK: AtomicUsize = AtomicUsize::new(0
 pub(crate) static LOADING_BG_PORTRAIT_RGBA_VERSION: AtomicUsize = AtomicUsize::new(0);
 /// One-shot log latch for the live-display-feed (built RT content -> overlay).
 pub(crate) static PROFILE_LIVE_FEED_LOGGED: AtomicUsize = AtomicUsize::new(0);
+
+// === Loading-screen portrait bug SEMAPHORES (2026-07-04) ==========================================
+// Two user-reported bugs on the loading transition, resolved to RAM/pixel oracles derived from the
+// captured `LOADING_BG_PORTRAIT_RGBA` (the content that feeds the loading-screen portrait display):
+//   Bug A -- the portrait renders TOO SMALL (correct content, ~256px square). Root suspect: the
+//            `find_d3d12_resource_ex` "largest TEXTURE2D" scan picked a small RT instead of the
+//            upsized head RT (deterministic-pointer fix pending).
+//   Bug B -- our NEUTRAL stats-panel texture (RGB 30,28,26) leaked onto the loading screen. Root
+//            suspect: the same scan grabbed one of our 256x256 neutral CreateTpfResCap textures.
+// These oracles let a monitor detect each condition live without reading the screenshot: they carry the
+// captured dims, the neutral-color fraction, and once-seen latches stamped with the capture version.
+/// Threshold (px): a captured portrait whose larger side is <= this is "too small" (the upsized head RT
+/// target is 1024; native menu thumbnails are 128; the buggy square measured ~256).
+pub(crate) const LS_PORTRAIT_SMALL_MAX_SIDE: u32 = 512;
+/// Latched capture width/height of the most recent loading-screen portrait capture (px, 0 if none).
+pub(crate) static LS_PORTRAIT_LAST_W: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LS_PORTRAIT_LAST_H: AtomicUsize = AtomicUsize::new(0);
+/// Percent (0..100) of sampled texels within tolerance of the neutral bg color in the most recent
+/// capture. High == our neutral texture is the portrait source (Bug B).
+pub(crate) static LS_PORTRAIT_LAST_NEUTRAL_PCT: AtomicUsize = AtomicUsize::new(0);
+/// Once-seen latch: a capture with correct (non-neutral) content but too-small dims (Bug A). Stores the
+/// `LOADING_BG_PORTRAIT_RGBA_VERSION` at first detection (0 == never seen).
+pub(crate) static LS_PORTRAIT_TOO_SMALL_SEEN_VERSION: AtomicUsize = AtomicUsize::new(0);
+/// Once-seen latch: a capture that is our neutral texture (Bug B). Stores the capture version at first
+/// detection (0 == never seen).
+pub(crate) static LS_PORTRAIT_NEUTRAL_LEAK_SEEN_VERSION: AtomicUsize = AtomicUsize::new(0);
+/// Count of portrait captures REJECTED by the readiness gate (neutral or too-small) -- i.e. transient
+/// wrong-source frames that were kept OFF the loading screen. >0 with both seen-versions set means the
+/// gate is actively suppressing the two bugs.
+pub(crate) static LS_PORTRAIT_REJECTED_PUBLISHES: AtomicUsize = AtomicUsize::new(0);
 /// The LOADING_BG_PORTRAIT_RGBA_VERSION last uploaded into the displayed now-loading texture by
 /// maybe_reforge_loading_portrait. usize::MAX = never. Re-upload only when the version advances (new live
 /// frame) so the displayed loading-screen head TRACKS the look-at, while never per-frame-hammering a
