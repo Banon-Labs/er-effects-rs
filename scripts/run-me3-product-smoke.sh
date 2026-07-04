@@ -209,6 +209,17 @@ collect_me3_logs() {
 
 cleanup() {
   local pid
+  collect_me3_logs
+  if [[ "${RUNTIME_NO_TEARDOWN:-0}" == "1" ]]; then
+    {
+      echo "RUNTIME_NO_TEARDOWN=1"
+      echo "leaving launcher/game processes alive and preserving staged save/autoload/lazyloader state"
+      echo "pid_file=$(cat "$PID_FILE" 2>/dev/null || true)"
+      echo "runtime_pids=$(runtime_pids | tr '\n' ' ')"
+    } > "$ARTIFACT_DIR/no-teardown.txt"
+    echo "cleanup: RUNTIME_NO_TEARDOWN=1; left runtime processes and staged state untouched" >&2
+    return 0
+  fi
   if [[ -s "$PID_FILE" ]]; then
     IFS= read -r pid < "$PID_FILE" || pid=""
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
@@ -216,7 +227,6 @@ cleanup() {
     fi
   fi
   terminate_runtime_pids
-  collect_me3_logs
   wipe_appdata_saves
   restore_autoload_request
   restore_lazyloader
