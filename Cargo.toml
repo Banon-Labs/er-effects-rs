@@ -71,6 +71,8 @@ windows = { version = "0.62", features = [
     # in WNDCLASSW's GDI handle types.
     "Win32_Graphics_Gdi",
     "Win32_UI_WindowsAndMessaging",
+    # ShellExecuteW opens the staged save directory from the in-game System -> Quit Game menu.
+    "Win32_UI_Shell",
     # CreateEventW (fence-completion event for the D3D12 readback wait) is gated behind Win32_Security.
     "Win32_Security",
     # D3D12 readback of the live profile-portrait offscreen render target, so the now-loading

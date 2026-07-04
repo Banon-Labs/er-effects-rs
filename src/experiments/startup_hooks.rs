@@ -36,12 +36,15 @@ use windows::{
             SystemServices::DLL_PROCESS_ATTACH,
             Threading::GetCurrentProcessId,
         },
-        UI::WindowsAndMessaging::{
-            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-            WM_KEYDOWN, WM_KEYUP,
+        UI::{
+            Shell::ShellExecuteW,
+            WindowsAndMessaging::{
+                ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+                SW_SHOWNORMAL, WM_KEYDOWN, WM_KEYUP,
+            },
         },
     },
-    core::{BOOL, PCSTR},
+    core::{BOOL, PCSTR, PCWSTR},
 };
 
 #[allow(unused_imports)]
@@ -8800,6 +8803,15 @@ pub(crate) unsafe extern "system" fn system_quit_menu_window_list_push_hook(
 pub(crate) unsafe extern "system" fn system_quit_noop_desktop_action_hook(
     action_obj: usize,
 ) -> usize {
+    let open_save_dir_action = SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
+    if action_obj != 0 && action_obj == open_save_dir_action {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
+        let opened = unsafe { system_quit_open_env_save_dir() };
+        append_autoload_debug(format_args!(
+            "system-quit-open-save-dir: cloned action selected action=0x{action_obj:x} opened={opened}; suppressing native Quit Game row action"
+        ));
+        return 0;
+    }
     let recorded_action = SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
     if action_obj != 0 && action_obj == recorded_action {
         let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
@@ -8839,25 +8851,211 @@ pub(crate) unsafe extern "system" fn system_quit_noop_desktop_action_hook(
     unsafe { original(action_obj) }
 }
 
+fn wide_z(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(core::iter::once(0)).collect()
+}
+
+fn system_quit_env_save_dir() -> Result<String, &'static str> {
+    let raw = std::env::var("ER_EFFECTS_SAVE_FILE").map_err(|_| "ER_EFFECTS_SAVE_FILE unset")?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("ER_EFFECTS_SAVE_FILE blank");
+    }
+    let trimmed = trimmed.trim_end_matches(['/', '\\']);
+    let Some(sep) = trimmed.rfind(['/', '\\']) else {
+        return Err("ER_EFFECTS_SAVE_FILE has no parent directory");
+    };
+    let dir = &trimmed[..sep];
+    if dir.is_empty() {
+        return Err("ER_EFFECTS_SAVE_FILE parent directory is empty");
+    }
+    Ok(dir.to_owned())
+}
+
+fn system_quit_path_for_shell(path: &str) -> Vec<u16> {
+    let mut win = if path.starts_with('/') {
+        format!("Z:{}", path.replace('/', "\\"))
+    } else {
+        path.replace('/', "\\")
+    };
+    while win.ends_with('\\') && win.len() > 3 {
+        win.pop();
+    }
+    wide_z(&win)
+}
+
+unsafe fn system_quit_open_env_save_dir() -> bool {
+    let dir = match system_quit_env_save_dir() {
+        Ok(dir) => dir,
+        Err(reason) => {
+            SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "system-quit-open-save-dir: refused to open save directory -- {reason}"
+            ));
+            return false;
+        }
+    };
+    if !std::path::Path::new(&dir).is_dir() {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-open-save-dir: refused to open missing/non-directory save dir '{dir}'"
+        ));
+        return false;
+    }
+    let operation = wide_z("open");
+    let dir_w = system_quit_path_for_shell(&dir);
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            PCWSTR::from_raw(operation.as_ptr()),
+            PCWSTR::from_raw(dir_w.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    let code = result.0 as isize;
+    if code > 32 {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-open-save-dir: ShellExecuteW(open) dir='{dir}' returned {code}"
+        ));
+        true
+    } else {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-open-save-dir: ShellExecuteW(open) FAILED code={code} dir='{dir}'"
+        ));
+        false
+    }
+}
+
+unsafe fn system_quit_format_literal_menu_string(out: usize, text: &str, text_id: u32) -> bool {
+    let Ok(format_addr) = game_rva(MSG_REPOSITORY_FORMAT_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: failed to resolve MsgRepository::Format rva 0x{MSG_REPOSITORY_FORMAT_RVA:x}; cannot build literal label '{text}'"
+        ));
+        return false;
+    };
+    let format_fn: unsafe extern "system" fn(usize, usize, u32, usize, usize) -> usize =
+        unsafe { std::mem::transmute(format_addr) };
+    let text_w = wide_z(text);
+    let fmg_name_w = wide_z("ER_Effects");
+    let abbrev_w = wide_z("ERFX");
+    unsafe {
+        format_fn(
+            out,
+            text_w.as_ptr() as usize,
+            text_id,
+            fmg_name_w.as_ptr() as usize,
+            abbrev_w.as_ptr() as usize,
+        )
+    };
+    true
+}
+
+unsafe fn system_quit_build_literal_label_component(
+    out: usize,
+    label: &str,
+    help: &str,
+    text_id: u32,
+) -> bool {
+    unsafe { std::ptr::write_bytes(out as *mut u8, 0, MENU_HELP_LABEL_SIZE) };
+    let label_ok = unsafe { system_quit_format_literal_menu_string(out, label, text_id) };
+    let help_ok = unsafe {
+        system_quit_format_literal_menu_string(out + MENU_HELP_LABEL_HELP_OFFSET, help, text_id + 1)
+    };
+    label_ok && help_ok
+}
+
 const SYSTEM_QUIT_SAVE_GAME_LABEL_W: [u16; 10] = [
-    b'S' as u16, b'a' as u16, b'v' as u16, b'e' as u16, b' ' as u16, b'G' as u16,
-    b'a' as u16, b'm' as u16, b'e' as u16, 0,
+    b'S' as u16,
+    b'a' as u16,
+    b'v' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b'G' as u16,
+    b'a' as u16,
+    b'm' as u16,
+    b'e' as u16,
+    0,
 ];
 const SYSTEM_QUIT_SAVE_GAME_HELP_W: [u16; 36] = [
-    b'S' as u16, b'a' as u16, b'v' as u16, b'e' as u16, b' ' as u16, b'a' as u16,
-    b'n' as u16, b'd' as u16, b' ' as u16, b'r' as u16, b'e' as u16, b't' as u16,
-    b'u' as u16, b'r' as u16, b'n' as u16, b' ' as u16, b't' as u16, b'o' as u16,
-    b' ' as u16, b'p' as u16, b'l' as u16, b'a' as u16, b'y' as u16, b'i' as u16,
-    b'n' as u16, b'g' as u16, b' ' as u16, b't' as u16, b'h' as u16, b'e' as u16,
-    b' ' as u16, b'g' as u16, b'a' as u16, b'm' as u16, b'e' as u16, 0,
+    b'S' as u16,
+    b'a' as u16,
+    b'v' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b'a' as u16,
+    b'n' as u16,
+    b'd' as u16,
+    b' ' as u16,
+    b'r' as u16,
+    b'e' as u16,
+    b't' as u16,
+    b'u' as u16,
+    b'r' as u16,
+    b'n' as u16,
+    b' ' as u16,
+    b't' as u16,
+    b'o' as u16,
+    b' ' as u16,
+    b'p' as u16,
+    b'l' as u16,
+    b'a' as u16,
+    b'y' as u16,
+    b'i' as u16,
+    b'n' as u16,
+    b'g' as u16,
+    b' ' as u16,
+    b't' as u16,
+    b'h' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b'g' as u16,
+    b'a' as u16,
+    b'm' as u16,
+    b'e' as u16,
+    0,
 ];
 const SYSTEM_QUIT_SAVE_GAME_DIALOG_W: [u16; 37] = [
-    b'S' as u16, b'a' as u16, b'v' as u16, b'e' as u16, b' ' as u16, b'a' as u16,
-    b'n' as u16, b'd' as u16, b' ' as u16, b'r' as u16, b'e' as u16, b't' as u16,
-    b'u' as u16, b'r' as u16, b'n' as u16, b' ' as u16, b't' as u16, b'o' as u16,
-    b' ' as u16, b'p' as u16, b'l' as u16, b'a' as u16, b'y' as u16, b'i' as u16,
-    b'n' as u16, b'g' as u16, b' ' as u16, b't' as u16, b'h' as u16, b'e' as u16,
-    b' ' as u16, b'g' as u16, b'a' as u16, b'm' as u16, b'e' as u16, b'?' as u16, 0,
+    b'S' as u16,
+    b'a' as u16,
+    b'v' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b'a' as u16,
+    b'n' as u16,
+    b'd' as u16,
+    b' ' as u16,
+    b'r' as u16,
+    b'e' as u16,
+    b't' as u16,
+    b'u' as u16,
+    b'r' as u16,
+    b'n' as u16,
+    b' ' as u16,
+    b't' as u16,
+    b'o' as u16,
+    b' ' as u16,
+    b'p' as u16,
+    b'l' as u16,
+    b'a' as u16,
+    b'y' as u16,
+    b'i' as u16,
+    b'n' as u16,
+    b'g' as u16,
+    b' ' as u16,
+    b't' as u16,
+    b'h' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b'g' as u16,
+    b'a' as u16,
+    b'm' as u16,
+    b'e' as u16,
+    b'?' as u16,
+    0,
 ];
 
 unsafe fn wide_equals_ascii(ptr: usize, ascii: &[u8]) -> bool {
@@ -8955,7 +9153,8 @@ unsafe fn system_quit_save_game_request_save_only() {
         ));
         return;
     };
-    let request_save: unsafe extern "system" fn(u8) = unsafe { std::mem::transmute(request_save_addr) };
+    let request_save: unsafe extern "system" fn(u8) =
+        unsafe { std::mem::transmute(request_save_addr) };
     unsafe { request_save(true as u8) };
     match game_rva(SYSTEM_QUIT_SAVE_REQUEST_PROFILE_RVA) {
         Ok(profile_addr) => {
@@ -8971,9 +9170,7 @@ unsafe fn system_quit_save_game_request_save_only() {
 
 pub(crate) unsafe extern "system" fn system_quit_save_game_return_title_request_hook() {
     let dialog = SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.swap(0, Ordering::SeqCst);
-    if dialog >= 0x10000
-        && callstack_contains_game_rva(0x7a3000, 0x7a4000)
-    {
+    if dialog >= 0x10000 && callstack_contains_game_rva(0x7a3000, 0x7a4000) {
         unsafe { system_quit_save_game_request_save_only() };
         SYSTEM_QUIT_SAVE_GAME_CONFIRM_COUNT.fetch_add(1, Ordering::SeqCst);
         let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
@@ -9042,19 +9239,19 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
                 != SYSTEM_QUIT_NOOP_ACTION_INSTALLED_YES
             {
                 append_autoload_debug(format_args!(
-                    "system-quit-dup: matched Quit Game call but quick-load action hook is not installed; skipping cloned Load Game row"
+                    "system-quit-dup: matched Quit Game call but cloned action hook is not installed; skipping Load Profile/Open Save Folder rows"
                 ));
                 return ret;
             }
             let Ok(linehelp_addr) = game_rva(GET_GR_LINEHELP_ENTRY_RVA) else {
                 append_autoload_debug(format_args!(
-                    "system-quit-dup: failed to resolve GetGR_LineHelp rva 0x{GET_GR_LINEHELP_ENTRY_RVA:x}; skipping third row"
+                    "system-quit-dup: failed to resolve GetGR_LineHelp rva 0x{GET_GR_LINEHELP_ENTRY_RVA:x}; skipping cloned rows"
                 ));
                 return ret;
             };
             let Ok(label_dtor_addr) = game_rva(MENU_HELP_LABEL_DTOR_RVA) else {
                 append_autoload_debug(format_args!(
-                    "system-quit-dup: failed to resolve MenuHelpLabelComponent dtor rva 0x{MENU_HELP_LABEL_DTOR_RVA:x}; skipping third row"
+                    "system-quit-dup: failed to resolve MenuHelpLabelComponent dtor rva 0x{MENU_HELP_LABEL_DTOR_RVA:x}; skipping cloned rows"
                 ));
                 return ret;
             };
@@ -9062,9 +9259,9 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
                 unsafe { std::mem::transmute(linehelp_addr) };
             let label_dtor: unsafe extern "system" fn(usize) =
                 unsafe { std::mem::transmute(label_dtor_addr) };
-            let mut label_storage =
+            let mut load_label_storage =
                 std::mem::MaybeUninit::<SystemQuitMenuHelpLabelScratch>::uninit();
-            let load_label = label_storage.as_mut_ptr() as usize;
+            let load_label = load_label_storage.as_mut_ptr() as usize;
             unsafe {
                 get_linehelp(load_label, SYSTEM_QUIT_LOAD_LINEHELP_ID);
                 get_linehelp(
@@ -9072,38 +9269,76 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
                     SYSTEM_QUIT_LOAD_LINEHELP_ID,
                 );
             }
-            let dup_ret =
+            let load_ret =
                 unsafe { original(dialog, load_label, action_fn, enabled_fn, keyguide_fn) };
             unsafe { label_dtor(load_label) };
-            let after_dup = unsafe {
+            let after_load = unsafe {
+                safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET)
+            }
+            .unwrap_or(0);
+            let mut open_label_storage =
+                std::mem::MaybeUninit::<SystemQuitMenuHelpLabelScratch>::uninit();
+            let open_label = open_label_storage.as_mut_ptr() as usize;
+            let open_label_ok = unsafe {
+                system_quit_build_literal_label_component(
+                    open_label,
+                    "Open Save Folder",
+                    "Open the staged save folder to replace ER0000.sl2",
+                    0x4552_5300,
+                )
+            };
+            let open_ret = if open_label_ok {
+                let r = unsafe { original(dialog, open_label, action_fn, enabled_fn, keyguide_fn) };
+                unsafe { label_dtor(open_label) };
+                r
+            } else {
+                0
+            };
+            let after_open = unsafe {
                 safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET)
             }
             .unwrap_or(0);
             let properties = dialog + PROPERTY_EDIT_DIALOG_PROPERTIES_1268_OFFSET;
             let aligned_properties = (properties + 0x7) & !0x7;
-            let row_index = after_dup.saturating_sub(1);
-            let third_row = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(row_index);
-            let third_controller =
-                unsafe { safe_read_usize(third_row + EDIT_PROPERTY_CONTROLLER_OFFSET) }
-                    .unwrap_or(0);
-            let third_action = if third_controller != 0 {
+            let load_row_index = after_load.saturating_sub(1);
+            let load_row = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(load_row_index);
+            let open_row_index = after_open.saturating_sub(1);
+            let open_row = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(open_row_index);
+            let load_controller =
+                unsafe { safe_read_usize(load_row + EDIT_PROPERTY_CONTROLLER_OFFSET) }.unwrap_or(0);
+            let open_controller =
+                unsafe { safe_read_usize(open_row + EDIT_PROPERTY_CONTROLLER_OFFSET) }.unwrap_or(0);
+            let load_action = if load_controller != 0 {
                 unsafe {
                     safe_read_usize(
-                        third_controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET,
+                        load_controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET,
                     )
                 }
                 .unwrap_or(0)
             } else {
                 0
             };
-            if third_action != 0 {
-                SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.store(third_action, Ordering::SeqCst);
+            let open_action = if open_label_ok && open_controller != 0 {
+                unsafe {
+                    safe_read_usize(
+                        open_controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET,
+                    )
+                }
+                .unwrap_or(0)
+            } else {
+                0
+            };
+            if load_action != 0 {
+                SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.store(load_action, Ordering::SeqCst);
+            }
+            if open_action != 0 {
+                SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT.store(open_action, Ordering::SeqCst);
             }
             SYSTEM_QUIT_DUPLICATE_COUNT.fetch_add(1, Ordering::SeqCst);
             SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE.store(before, Ordering::SeqCst);
-            SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER.store(after_dup, Ordering::SeqCst);
+            SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER.store(after_open, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "system-quit-dup: added cloned quick-load AddCancelButton label=GR_LineHelp:{SYSTEM_QUIT_LOAD_LINEHELP_ID} dialog=0x{dialog:x} count {before}->{after_native}->{after_dup} ret=0x{ret:x} dup_ret=0x{dup_ret:x} row=0x{third_row:x} controller=0x{third_controller:x} action=0x{third_action:x}"
+                "system-quit-dup: added cloned Load Profile + Open Save Folder rows dialog=0x{dialog:x} count {before}->{after_native}->{after_load}->{after_open} ret=0x{ret:x} load_ret=0x{load_ret:x} open_label_ok={open_label_ok} open_ret=0x{open_ret:x} load_row=0x{load_row:x} load_controller=0x{load_controller:x} load_action=0x{load_action:x} open_row=0x{open_row:x} open_controller=0x{open_controller:x} open_action=0x{open_action:x}"
             ));
         } else {
             append_autoload_debug(format_args!(
@@ -9908,8 +10143,10 @@ fn install_system_quit_save_game_confirm_hook() {
             match unsafe { MH_ApplyQueued() } {
                 MH_STATUS::MH_OK => {
                     std::mem::forget(hook);
-                    SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED
-                        .store(SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED_YES, Ordering::SeqCst);
+                    SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED.store(
+                        SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED_YES,
+                        Ordering::SeqCst,
+                    );
                     append_autoload_debug(format_args!(
                         "system-quit-save: hooked native return-title request 0x{addr:x}; armed System Save Game confirmations become save-only + menu close"
                     ));
@@ -11954,9 +12191,9 @@ fn apply_system_quit_multislot_layout_patch() {
     ));
 }
 
-/// Install the System -> Quit Game duplicate-button proof hook once. Opt-in only; the detour is a
-/// pass-through for every `AddCancelButton` call except the second call from the Quit Game tab
-/// builder, where it invokes the original trampoline a second time with the same native args.
+/// Install the System -> Quit Game duplicate-button proof hook once. The detour is a pass-through
+/// for every `AddCancelButton` call except the first Quit Game tab row, where it invokes the
+/// original trampoline again with native args for Load Profile and Open Save Folder rows.
 pub(crate) fn install_system_quit_duplicate_button_hook() {
     apply_system_quit_multislot_layout_patch();
     install_scaleform_handler_lifecycle_guard();
@@ -12011,7 +12248,7 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
                     SYSTEM_QUIT_DUPLICATE_INSTALLED
                         .store(SYSTEM_QUIT_DUPLICATE_INSTALLED_YES, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "system-quit-dup: hooked AddCancelButton 0x{addr:x}; will clone Quit Game row as quick-load from GR_LineHelp:{SYSTEM_QUIT_LOAD_LINEHELP_ID} at caller rva 0x{SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA:x}"
+                        "system-quit-dup: hooked AddCancelButton 0x{addr:x}; will clone Quit Game row as Load Profile (GR_LineHelp:{SYSTEM_QUIT_LOAD_LINEHELP_ID}) and Open Save Folder at caller rva 0x{SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA:x}"
                     ));
                 }
                 status => append_autoload_debug(format_args!(

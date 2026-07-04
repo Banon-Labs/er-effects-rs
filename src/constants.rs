@@ -4767,11 +4767,11 @@ pub(crate) static MENU_WINDOW_LATCH_INSTALLED: AtomicUsize = AtomicUsize::new(0)
 pub(crate) const MENU_WINDOW_LATCH_NOT_INSTALLED: usize = 0;
 pub(crate) const MENU_WINDOW_LATCH_INSTALLED_YES: usize = 1;
 pub(crate) static START_MENU_WINDOW_LATCH: Once = Once::new();
-/// Quick-loading button hook for the System -> Quit Game tab: duplicate the native
-/// Quit Game / return-to-title `AddCancelButton` call once, retitle that clone as
-/// `Select profile to load`, and route its action to native 05_010_ProfileSelect. The hook is always installed; slot-load
-/// activation from the injected in-world ProfileSelect is separately guarded below while the crash
-/// at CSGaitemImp::Deserialize is investigated. Address is deobf/live (dump AddCancelButton
+/// System -> Quit Game tab hook: duplicate the native Quit Game / return-to-title
+/// `AddCancelButton` call into Load Profile and Open Save Folder rows. Load Profile routes to
+/// native 05_010_ProfileSelect; Open Save Folder opens the env-provided save directory. The hook is
+/// always installed; slot-load activation from the injected in-world ProfileSelect is separately
+/// guarded below. Address is deobf/live (dump AddCancelButton
 /// 0x140920d80 -> live 0x140920c90).
 pub(crate) const SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA: u32 = 0x920c90;
 /// Return address immediately after the first `AddCancelButton` in the Quit Game tab builder
@@ -4854,6 +4854,12 @@ pub(crate) static SYSTEM_QUIT_SAVE_GAME_CONFIRM_COUNT: AtomicUsize = AtomicUsize
 pub(crate) static SYSTEM_QUIT_SAVE_GAME_CLOSE_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Recorded cloned action implementation object for the quick-load row; only this action is routed.
 pub(crate) static SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
+/// Recorded cloned action implementation object for the save-folder row; only this action opens the
+/// env-provided save directory.
+pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// The original Quit Game row's action captures its owning System dialog here before forwarding to
 /// the native confirmation job. The return-title request hook consumes this latch on confirmation
 /// and performs save-only + native menu close instead of title teardown.
