@@ -226,6 +226,9 @@ const SCENE_FACADE_CONTEXT_OFFSET: usize = 0x38;
 const SCENE_CONTEXT_TARGET_BUNDLE_OFFSET: usize = 0x248;
 const TARGET_BUNDLE_REDIRECT_FLAG_OFFSET: usize = 0x548;
 const TARGET_BUNDLE_DSV_VIEW_OFFSET: usize = 0x40;
+/// The COLOR RTV view sits at bundle+0x30 (paired with the depth DSV at bundle+0x40 in the SAME bundle) --
+/// resolving BOTH from one bundle guarantees the color and depth are the same render pass's siblings.
+const TARGET_BUNDLE_RTV_VIEW_OFFSET: usize = 0x30;
 /// One-shot diagnostic latch for the deterministic depth-view chain (first resolve + first miss).
 static DEPTH_CHAIN_DIAG: AtomicUsize = AtomicUsize::new(0);
 
@@ -271,6 +274,17 @@ pub(crate) unsafe fn find_depth_resource(start: usize) -> Option<(ID3D12Resource
 /// fault-guarded; `None` when any link is null/implausible or the bundle is redirected to the
 /// global target (fail closed -- the local view would not be what the scene renders into).
 unsafe fn offscreen_depth_view(off: usize) -> Option<usize> {
+    let bundle = unsafe { offscreen_target_bundle(off) }?;
+    let dsv = unsafe { safe_read_usize(bundle + TARGET_BUNDLE_DSV_VIEW_OFFSET) }?;
+    (dsv > 0x10000 && dsv < 0x8000_0000_0000).then_some(dsv)
+}
+
+/// Resolve the offscreen scene's render-target BUNDLE via the static-RE'd member chain (facade -> ctx ->
+/// bundle), redirect-checked so a bundle pointing at the global target fails closed. The color RTV view is
+/// at `bundle+0x30` and the depth DSV at `bundle+0x40` -- resolving BOTH from this one bundle is what makes
+/// the coherent readback's color and depth the SAME render pass's paired siblings (no cross-bundle drift,
+/// the 2nd-character desync). All reads fault-guarded.
+unsafe fn offscreen_target_bundle(off: usize) -> Option<usize> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let plausible = |v: usize| v > 0x10000 && v < 0x8000_0000_0000 && v != null;
     if !plausible(off) {
@@ -288,8 +302,16 @@ unsafe fn offscreen_depth_view(off: usize) -> Option<usize> {
     if unsafe { safe_read_usize(bundle + TARGET_BUNDLE_REDIRECT_FLAG_OFFSET) }? & 0xff != 0 {
         return None;
     }
-    let dsv = unsafe { safe_read_usize(bundle + TARGET_BUNDLE_DSV_VIEW_OFFSET) }?;
-    plausible(dsv).then_some(dsv)
+    Some(bundle)
+}
+
+/// The offscreen scene's COLOR RTV view object (`bundle+0x30`) -- the paired sibling of
+/// `offscreen_depth_view`'s DSV. Resolving the coherent readback's color from THIS (same bundle as the
+/// depth) guarantees they are the same render pass, so the depth-derived mask matches the color head.
+unsafe fn offscreen_color_view(off: usize) -> Option<usize> {
+    let bundle = unsafe { offscreen_target_bundle(off) }?;
+    let rtv = unsafe { safe_read_usize(bundle + TARGET_BUNDLE_RTV_VIEW_OFFSET) }?;
+    (rtv > 0x10000 && rtv < 0x8000_0000_0000).then_some(rtv)
 }
 
 /// Depth-stencil TEXTURE2D acceptor (mirror of `try_texture2d` for depth formats): accept the common
@@ -531,8 +553,20 @@ pub(crate) unsafe fn readback_offscreen_color_depth_coherent(
     gpu_child: usize,
 ) -> Option<(u32, u32, Vec<u8>, usize, u32, u32, Vec<f32>, usize)> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        let prefer_c = PROFILE_RT_PIN.load(Ordering::SeqCst);
-        let (color_res, color_cand) = find_d3d12_resource_ex(gpu_child, 0, false, prefer_c)?;
+        // Resolve the COLOR from the SAME render-target bundle as the depth (bundle+0x30 RTV), so the two
+        // are the same render pass's paired siblings -- the fix for the 2nd-character desync, where the
+        // pinned color and the bundle depth came from DIFFERENT bundles (temporally coherent via the one
+        // fence, but not IDENTITY-coherent). Fall back to the RT-pin scan only if the bundle RTV view is
+        // unavailable (mid-load renderers whose scene chain is null/redirected).
+        let bundle_color = offscreen_color_view(gpu_child)
+            .and_then(|rtv| unsafe { find_d3d12_resource_ex(rtv, 0, false, 0) });
+        let (color_res, color_cand) = match bundle_color {
+            Some(c) => c,
+            None => {
+                let prefer_c = PROFILE_RT_PIN.load(Ordering::SeqCst);
+                find_d3d12_resource_ex(gpu_child, 0, false, prefer_c)?
+            }
+        };
 
         let mut device_opt: Option<ID3D12Device> = None;
         color_res.GetDevice(&mut device_opt).ok()?;

@@ -3210,68 +3210,12 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                 PROFILE_DRIVE_FRAMES_WINDOW.fetch_add(1, Ordering::SeqCst);
             }
             if stable_target_only {
-                // PER-SCENE ENVIRONMENT LEVER (goal 2026-06-30) -- PROOF PASS. The portrait scene's tonemap/
-                // color-grading block at `filter+0x30..+0x11c` (filter = *(GXSceneContext+0xbf50); ctx =
-                // *(scene+0x38); scene = *(off+0x48)) is the CPU-writable, PER-SCENE environment source: it is
-                // copied VERBATIM into the per-frame tonemap constant buffer by the RECORD fn FUN_141b8cc30,
-                // and set once at ctor (so writes persist). This is the block my earlier pokes MISSED -- they
-                // hit +0x760/+0xc94/+0xc98/+0xcbc which are OUTSIDE the copied range (scratch/unused). The
-                // exposure scale is `filter+0x8c` (default 1.0f; shader exposure = global_exp * filter[0x8c]).
-                // Env LIGHTS/IBL are global, but exposure/tone/color-grading is per-scene, so this changes
-                // ONLY the portrait. PROOF: overexpose to 8.0f -> the portrait should visibly blow out and the
-                // readback bg/head brighten hard vs baseline (23,20,14)/(160,137,109). Content-gated on the
-                // gamma field +0x60 reading ~2.2f (confirms this is the tonemap filter); floats only (safe --
-                // no int-typed field like the +0xc94 region); catch_unwind so a torn scene can't fault.
-                if portrait_render_drive_enabled() {
-                    static ENV_LOG_FRAMES: AtomicUsize = AtomicUsize::new(0);
-                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        let scene = unsafe { safe_read_usize(off + 0x48) }.unwrap_or(0);
-                        if scene == 0 || scene == null {
-                            return;
-                        }
-                        let ctx = unsafe { safe_read_usize(scene + 0x38) }.unwrap_or(0);
-                        if ctx == 0 || ctx == null {
-                            return;
-                        }
-                        let filter = unsafe { safe_read_usize(ctx + 0xbf50) }.unwrap_or(0);
-                        if filter == 0 || filter == null {
-                            return;
-                        }
-                        let rd = |o: usize| {
-                            f32::from_bits(
-                                (unsafe { safe_read_usize(filter + o) }.unwrap_or(0) & 0xffff_ffff)
-                                    as u32,
-                            )
-                        };
-                        // Validate on the UNTOUCHED field +0x64 (~250.0f ctor default) so we can safely
-                        // overwrite the gamma at +0x60 too. Then write BOTH gamma (+0x60: 2.2 -> 1.0, a huge
-                        // unmistakable tone-curve change) and exposure (+0x8c -> 8.0). If NEITHER changes the
-                        // portrait, the per-scene tonemap block is inert for the offscreen render (it does not
-                        // run the composite/tonemap pass) -> the environment is global-only.
-                        let guard = rd(0x64);
-                        if !(guard > 100.0 && guard < 500.0) {
-                            return;
-                        }
-                        let gamma_before = rd(0x60);
-                        let exp_before = rd(0x8c);
-                        unsafe {
-                            core::ptr::write_volatile(
-                                (filter + 0x60) as *mut u32,
-                                1.0f32.to_bits(),
-                            );
-                            core::ptr::write_volatile(
-                                (filter + 0x8c) as *mut u32,
-                                8.0f32.to_bits(),
-                            );
-                        }
-                        let n = ENV_LOG_FRAMES.fetch_add(1, Ordering::SeqCst);
-                        if n < 4 {
-                            append_autoload_debug(format_args!(
-                                "env-lever[f{n}]: filter=0x{filter:x} guard(+0x64)={guard} gamma(+0x60) {gamma_before}->1.0 exposure(+0x8c) {exp_before}->8.0; if bg/head unchanged, the per-scene tonemap block is INERT for the portrait (env is global-only)"
-                            ));
-                        }
-                    }));
-                }
+                // (Removed 2026-07-03: the PER-SCENE ENVIRONMENT LEVER "proof pass" that wrote gamma(+0x60)=1.0
+                // and exposure(filter+0x8c)=8.0 into the portrait tonemap filter every drive frame. That 8x
+                // overexposure blew out the portrait for the few drive frames per window -- the user-observed
+                // luminosity spike "a few frames pre/post transition" -- and its blown-out colours also broke
+                // the mask/head IoU classification. The RE finding (filter = *(*( *(off+0x48) +0x38) +0xbf50),
+                // exposure at +0x8c) is preserved in bd; the portrait now renders with the game's own tonemap.)
                 // RE-RASTERIZE the posed model into OUR built renderer's offscreen RT each render-thread
                 // frame. draw_step (the per-slot rasterize loop over the title table) does NOT include our
                 // own-built renderer, and the engine only redraws on profile data-change -- so without this
