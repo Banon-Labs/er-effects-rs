@@ -385,6 +385,18 @@ unsafe fn find_d3d12_resource_ex(
         return None;
     }
     let in_ranges = |v: usize, r: &[(usize, usize)]| r.iter().any(|&(lo, hi)| lo <= v && v < hi);
+    // VTABLE HARDENING (crash root fix 2026-07-03, runs +154662ms/+170480ms, previously
+    // misattributed to er-effects-rs-az9). A real COM vtable lies PAST the PE header page of its
+    // module (.rdata), and its slot 0 (QueryInterface) points back into a d3d module's code. The
+    // plain `in_ranges(vt, &d3d)` check also accepted vt == module BASE: a freed heap chunk reused
+    // to store a d3d module HANDLE (a base address) passed it, and the QI vcall then executed the
+    // PE header as code -- the crash RIP 0x300905a4d is literally the 'MZ\x90' signature bytes.
+    // Require both the vtable and its QI slot to sit >= 0x1000 into a d3d module before any vcall.
+    let d3d_vtable_ok = |vt: usize, r: &[(usize, usize)]| {
+        r.iter().any(|&(lo, hi)| lo + 0x1000 <= vt && vt < hi)
+            && unsafe { safe_read_usize(vt) }
+                .is_some_and(|qi| r.iter().any(|&(lo, hi)| lo + 0x1000 <= qi && qi < hi))
+    };
 
     let mut visited: Vec<usize> = Vec::new();
     let mut queue: Vec<(usize, u32)> = vec![(start, 0)];
@@ -408,7 +420,7 @@ unsafe fn find_d3d12_resource_ex(
             if let Some(v) = unsafe { safe_read_usize(obj + off) } {
                 if v > 0x10000 && v < 0x8000_0000_0000 {
                     if let Some(vt) = unsafe { safe_read_usize(v) } {
-                        if in_ranges(vt, &d3d) {
+                        if d3d_vtable_ok(vt, &d3d) {
                             // Confirmed d3d12-module vtable -> safe to QI for ID3D12Resource.
                             d3d_hits += 1;
                             if v == exclude_v {
