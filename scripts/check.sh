@@ -23,6 +23,7 @@ python3 "$repo_root/scripts/check-no-lossy-utf8.py"
 cargo fmt --manifest-path "$repo_root/Cargo.toml" -- --check
 shellcheck "$repo_root/scripts/stage-autoload-release.sh"
 shellcheck "$repo_root/scripts/run-product-continue-direct-probe.sh"
+shellcheck "$repo_root/scripts/run-me3-product-smoke.sh"
 
 # Windows-target check, cross-compiled from Linux via cargo-xwin (preferred). Falls back to
 # a plain cargo check only if cargo-xwin is unavailable (which needs an MSVC toolchain on
