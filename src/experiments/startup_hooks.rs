@@ -5460,9 +5460,8 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
         let mut kicked = 0u32;
         let mut kicked_mask = 0u32;
         for s in 0..10i32 {
-            if s != target_slot {
-                continue;
-            }
+            // RENDER ALL AVAILABLE SLOTS (user 2026-07-03): immediate-kick every saved slot, not just the
+            // autoload target (see the cadence loop below). profile_slot_fingerprint gates to real slots.
             if !unsafe { profile_slot_fingerprint(s).0 } {
                 continue;
             }
@@ -5522,11 +5521,12 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             unsafe { core::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
         let mut marked = 0u32;
         for s in 0..10i32 {
-            // ONLY the autoload target slot (the loaded character). Building every real slot rendered all
-            // the save's other characters, and the slot-0 readback grabbed a wrong one -> wrong face shown.
-            if s != target_slot {
-                continue;
-            }
+            // RENDER ALL AVAILABLE SLOTS (user 2026-07-03): mark + kick every slot that has a real save,
+            // like vanilla (the native refresh builds all saved slots). We previously restricted to the
+            // autoload target slot because the loading-screen readback grabbed a neighbouring same-size RT
+            // (wrong face); that concern is deprecated -- portrait visibility will be controlled at the
+            // GFX/surface layer, not by starving the render. `profile_slot_fingerprint` below still gates
+            // to real (saved) slots so empty slots never build.
             // Real-character gate (per the native boot ProfileSummary read: level>=1 + non-empty name).
             // Never mark before the read populates the slot (can't pre-empt it / contaminate saveSlotsStates).
             if !unsafe { profile_slot_fingerprint(s).0 } {
@@ -5552,8 +5552,9 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             }
             marked += 1;
         }
-        // TRIPWIRE oracle: count non-target renderers holding a live model during our feed window.
-        // Expected 0 -- any foreign model on the loading screen is the swap-bug precondition.
+        // Oracle: count non-target renderers holding a live model. With all-saved-slots render (above)
+        // this is now EXPECTED non-zero -- every saved slot builds, like vanilla -- so it is just a count,
+        // no longer a swap-bug tripwire (the swap concern is handled at the GFX/surface layer now).
         let mut foreign = 0usize;
         for s in 0..TITLE_PROFILE_SLOT_COUNT as i32 {
             if s == target_slot {
