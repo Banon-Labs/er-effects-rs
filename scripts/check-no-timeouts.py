@@ -18,6 +18,9 @@ IGNORED_DIRECTORIES = {
     ".auto",
     "target",
     "docs",
+    # Gitignored local worktrees/sandboxes (AGENTS.md "Local Hidden Worktrees"): they are not part
+    # of the committed tree, so their sleep/timeout state must not gate a commit of tracked files.
+    ".worktrees",
 }
 IGNORED_FILES = {
     Path("scripts/check-no-timeouts.py"),

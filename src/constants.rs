@@ -695,9 +695,66 @@ pub(crate) static RENDER_LOADING_LAYER_LAST_CSSCALEFORM: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static RENDER_LOADING_LAYER_LAST_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
-/// CSFakeLoadingScreen visibility flag offset: `*(u8*)(singleton + 0x8)` is 1 while the loading
-/// screen is up (singleton = base + RuntimeGlobalRva::FakeLoadingScreenSingleton).
-pub(crate) const FAKE_LOADING_SCREEN_VISIBLE_OFFSET: usize = 0x8;
+/// RAM oracle (`oracle_loading_cover_suppress_writes`): frames the loading-cover experiment actually
+/// cleared `CSFakeLoadingScreenImp.visible`. >0 means the clamp engaged during at least one map load; 0
+/// with the gate on means the cover object never resolved / was never raised (nothing was suppressed).
+pub(crate) static LOADING_COVER_SUPPRESS_WRITES: AtomicUsize = AtomicUsize::new(0);
+/// `CS::CSFakeLoadingScreenImp` -- the full-screen fade/cover PLATE the game draws during a map load to
+/// HIDE the world teardown/rebuild behind the now-loading UI. RE'd from its ctor (deobf 0x140bbeee0,
+/// vtable 0x142b803b8) which is called from `CSDrawStep`, so this object lives in the render pipeline, not
+/// the menu system. `visible` (+0x8) is the byte the draw step checks to decide whether to draw the cover;
+/// the ctor inits it to 0 and the map-load system raises it while a load is in flight. Clearing it exposes
+/// whatever the renderer is drawing underneath (the "disable the loading screen, watch the world pop in"
+/// experiment). Singleton = `*(base + RuntimeGlobalRva::FakeLoadingScreenSingleton)`.
+#[repr(C)]
+pub(crate) struct CSFakeLoadingScreenImp {
+    pub(crate) vftable: usize,
+    pub(crate) visible: u8,
+    pub(crate) unknown_009: [u8; 3],
+    pub(crate) field_0c: u32,
+    pub(crate) field_10: u64,
+}
+
+pub(crate) const FAKE_LOADING_SCREEN_VISIBLE_OFFSET: usize =
+    core::mem::offset_of!(CSFakeLoadingScreenImp, visible);
+
+/// `CS::CSNowLoadingHelperImp` -- the controller behind the now-loading UI (the tips + rotating artwork,
+/// distinct from the `CSFakeLoadingScreenImp` cover and from the Scaleform movie that draws them). RE'd
+/// from the Ghidra dump's named layout (ctor deobf 0x1402a20e0, `Update` 0x1402a2c40). Key fields:
+/// `menu_load_entries` is a Fisher-Yates-shuffled 1..=34 array (the 34 loading-screen artwork/tip
+/// variants) and `current_menu_load_index` picks the active one; `replace_tex_info` /
+/// `requested_replace_tex_info` are the Scaleform texture-replacement handoff that swaps that artwork into
+/// the movie; `countdown` is the minimum-display timer. IMPORTANT: `load_done` (+0xed) is a load-COMPLETE
+/// latch (`Update` copies it from `request_load_done`, which the map-load system raises) -- it reads true
+/// AFTER the load finishes and lingers into gameplay, so it is NOT a "loading screen is visible" signal.
+/// Singleton = `*(base + RuntimeGlobalRva::NowLoadingSingleton)`.
+#[repr(C)]
+pub(crate) struct CSNowLoadingHelperImp {
+    pub(crate) vftable: usize,
+    pub(crate) rand_xorshift: usize,
+    pub(crate) update_task: [u8; 0x28],
+    pub(crate) field_38: usize,
+    pub(crate) field_40: usize,
+    pub(crate) menu_load_entries: [i32; 34],
+    pub(crate) current_menu_load_index: i32,
+    pub(crate) unknown_d4: [u8; 4],
+    pub(crate) replace_tex_info: usize,
+    pub(crate) requested_replace_tex_info: usize,
+    pub(crate) countdown: f32,
+    pub(crate) request_load_done: u8,
+    pub(crate) load_done: u8,
+    pub(crate) unknown_ee: [u8; 2],
+    pub(crate) field_f0: i32,
+    pub(crate) unknown_f4: [u8; 4],
+}
+
+// Layout guards: the RE'd offsets/size must match the Ghidra dump so a struct edit can't silently drift
+// the pointers our reads/writes use.
+const _: () = assert!(core::mem::size_of::<CSNowLoadingHelperImp>() == 0xf8);
+const _: () = assert!(core::mem::offset_of!(CSNowLoadingHelperImp, menu_load_entries) == 0x48);
+const _: () = assert!(core::mem::offset_of!(CSNowLoadingHelperImp, replace_tex_info) == 0xd8);
+const _: () = assert!(core::mem::offset_of!(CSNowLoadingHelperImp, load_done) == 0xed);
+const _: () = assert!(core::mem::offset_of!(CSFakeLoadingScreenImp, visible) == 0x8);
 /// Now-loading background portrait forge. The pseudorandom loading-screen background is
 /// `helper->replaceTexInfo` (a CSScaleformReplaceTexInfo*), PRODUCED for symbol `MENU_Load_%05d` by
 /// `GetOrCreateReplaceTexInfo`, whose symbol-bind step is `FUN_140d69880` (dump 0x140d69880 -> deobf
@@ -793,6 +850,36 @@ pub(crate) static LOADING_BG_PORTRAIT_NONBLACK: AtomicUsize = AtomicUsize::new(0
 pub(crate) static LOADING_BG_PORTRAIT_RGBA_VERSION: AtomicUsize = AtomicUsize::new(0);
 /// One-shot log latch for the live-display-feed (built RT content -> overlay).
 pub(crate) static PROFILE_LIVE_FEED_LOGGED: AtomicUsize = AtomicUsize::new(0);
+
+// === Loading-screen portrait bug SEMAPHORES (2026-07-04) ==========================================
+// Two user-reported bugs on the loading transition, resolved to RAM/pixel oracles derived from the
+// captured `LOADING_BG_PORTRAIT_RGBA` (the content that feeds the loading-screen portrait display):
+//   Bug A -- the portrait renders TOO SMALL (correct content, ~256px square). Root suspect: the
+//            `find_d3d12_resource_ex` "largest TEXTURE2D" scan picked a small RT instead of the
+//            upsized head RT (deterministic-pointer fix pending).
+//   Bug B -- our NEUTRAL stats-panel texture (RGB 30,28,26) leaked onto the loading screen. Root
+//            suspect: the same scan grabbed one of our 256x256 neutral CreateTpfResCap textures.
+// These oracles let a monitor detect each condition live without reading the screenshot: they carry the
+// captured dims, the neutral-color fraction, and once-seen latches stamped with the capture version.
+/// Threshold (px): a captured portrait whose larger side is <= this is "too small" (the upsized head RT
+/// target is 1024; native menu thumbnails are 128; the buggy square measured ~256).
+pub(crate) const LS_PORTRAIT_SMALL_MAX_SIDE: u32 = 512;
+/// Latched capture width/height of the most recent loading-screen portrait capture (px, 0 if none).
+pub(crate) static LS_PORTRAIT_LAST_W: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LS_PORTRAIT_LAST_H: AtomicUsize = AtomicUsize::new(0);
+/// Percent (0..100) of sampled texels within tolerance of the neutral bg color in the most recent
+/// capture. High == our neutral texture is the portrait source (Bug B).
+pub(crate) static LS_PORTRAIT_LAST_NEUTRAL_PCT: AtomicUsize = AtomicUsize::new(0);
+/// Once-seen latch: a capture with correct (non-neutral) content but too-small dims (Bug A). Stores the
+/// `LOADING_BG_PORTRAIT_RGBA_VERSION` at first detection (0 == never seen).
+pub(crate) static LS_PORTRAIT_TOO_SMALL_SEEN_VERSION: AtomicUsize = AtomicUsize::new(0);
+/// Once-seen latch: a capture that is our neutral texture (Bug B). Stores the capture version at first
+/// detection (0 == never seen).
+pub(crate) static LS_PORTRAIT_NEUTRAL_LEAK_SEEN_VERSION: AtomicUsize = AtomicUsize::new(0);
+/// Count of portrait captures REJECTED by the readiness gate (neutral or too-small) -- i.e. transient
+/// wrong-source frames that were kept OFF the loading screen. >0 with both seen-versions set means the
+/// gate is actively suppressing the two bugs.
+pub(crate) static LS_PORTRAIT_REJECTED_PUBLISHES: AtomicUsize = AtomicUsize::new(0);
 /// The LOADING_BG_PORTRAIT_RGBA_VERSION last uploaded into the displayed now-loading texture by
 /// maybe_reforge_loading_portrait. usize::MAX = never. Re-upload only when the version advances (new live
 /// frame) so the displayed loading-screen head TRACKS the look-at, while never per-frame-hammering a
@@ -897,6 +984,47 @@ pub(crate) const PROFILE_TABLE_BUILDER_RVA: usize = 0x9af3a0;
 pub(crate) static PROFILE_LOADSCREEN_REBUILT: AtomicUsize = AtomicUsize::new(0);
 /// Count of post-Continue profile-table (re)builds for the loading-screen portrait (telemetry/sweep).
 pub(crate) static PROFILE_LOADSCREEN_TABLE_BUILDS: AtomicUsize = AtomicUsize::new(0);
+// PER-SLOT PROFILE BUILD KICK (replaces the engine's GLOBAL refresh in OUR post-Continue feed). The
+// global refresh FUN_1409aa7d0 iterates all 10 slots and kicks every real+marked one -- on a multi-
+// character save that built ALL the save's characters mid-load, and the readback scan flipped onto a
+// foreign slot's RT (the cross-slot portrait swap, run strip-default-drive-20260702-194018). Writing the
+// +0x754/+0x755 latches on unconfigured renderers to suppress those kicks CRASHED (GX command-queue
+// overflow -> null slot write at deobf 0x141aeaf05, run portrait-swap-fix-noteardown-20260702-212024), so
+// instead we never call the global refresh post-Continue and replicate its per-slot body for ONLY the
+// loaded slot. All RVAs below are the refresh body's callees (dump FUN_1409aa7d0), dump->deobf mapped
+// content-unique via scripts/dump-deobf-shift.py on 2026-07-02.
+/// `FUN_140261c30(summary, slot) -> record*` (dump 0x140261c30): the slot's ProfileSummary record.
+pub(crate) const PROFILE_SUMMARY_RECORD_RVA: usize = 0x261b80;
+/// `CS::FaceData::GetFaceDataBuffer(record+0x38, true) -> FaceDataBuffer*` (dump 0x140252210).
+pub(crate) const PROFILE_FACEDATA_BUFFER_RVA: usize = 0x252160;
+/// `FUN_140bbe290(renderer, record+0x1a8)` (dump 0x140bbe290): model-source/ChrAsm equip config
+/// (weapons cleared, default protectors, the record's equip source installed).
+pub(crate) const PROFILE_RENDERER_SET_MODEL_SOURCE_RVA: usize = 0xbbe1a0;
+/// `FUN_140bb9950(renderer, facedata_buffer)` (dump): `FaceDataBuffer::Copy(renderer+0x630, buf)`.
+pub(crate) const PROFILE_RENDERER_SET_FACEDATA_RVA: usize = 0xbb9860;
+/// `FUN_140bb9960(renderer, 1)` (dump 0x140bb9960): byte setter the refresh always passes 1.
+pub(crate) const PROFILE_RENDERER_SET_FLAG_ONE_RVA: usize = 0xbb9870;
+/// `FUN_140bb9970(renderer, record->0x290)` (dump 0x140bb9970).
+pub(crate) const PROFILE_RENDERER_SET_BYTE290_RVA: usize = 0xbb9880;
+/// `FUN_140bb9980(renderer, record->0x294)` (dump 0x140bb9980).
+pub(crate) const PROFILE_RENDERER_SET_BYTE294_RVA: usize = 0xbb9890;
+/// `FUN_140bb8cf0(renderer, slot*2)` (dump): `*(renderer+0x9a8) = slot*2` (the stream/pair index).
+pub(crate) const PROFILE_RENDERER_SET_STREAM_INDEX_RVA: usize = 0xbb8c00;
+/// `FUN_140bb9900(renderer)` (dump): `renderer+0x754 = 1` (the "load requested" idempotency latch).
+pub(crate) const PROFILE_RENDERER_SET_REQ_754_RVA: usize = 0xbb9810;
+/// `FUN_140bb9920(renderer)` (dump): `renderer+0x755 = 1` (set together with +0x754 at kick time).
+pub(crate) const PROFILE_RENDERER_SET_REQ_755_RVA: usize = 0xbb9830;
+/// RAM oracle: target-slot build kicks fired via the per-slot replica (`oracle_portrait_target_kicks`).
+/// Expected >=1 per loading window; 0 means the loaded character's model was never requested.
+pub(crate) static PROFILE_TARGET_KICKS: AtomicUsize = AtomicUsize::new(0);
+/// RAM oracle tripwire: max count of NON-target renderers observed holding a live model (+0x778 != 0)
+/// during our feed window (`oracle_portrait_foreign_models`). >0 = another character was built on the
+/// loading screen -- the swap-bug precondition returned.
+pub(crate) static PROFILE_FOREIGN_MODELS_MAX: AtomicUsize = AtomicUsize::new(0);
+/// RAM oracle (`oracle_portrait_multi_model_publish_skips`): draw-tick publishes suppressed because more
+/// than one profile model was live (the game's Load Profile 10-thumbnail window). >0 confirms the
+/// only-target-live gate engaged and kept the cascade of other characters off the loading screen.
+pub(crate) static PROFILE_MULTI_MODEL_PUBLISH_SKIPS: AtomicUsize = AtomicUsize::new(0);
 /// Consecutive ticks the profile-renderer title table has been observed EMPTY. The menu's own
 /// teardown+rebuild is synchronous (FUN_1409af3a0 tears down then re-ctors in one call), so the table is
 /// never seen empty across our async ticks during menu cycling -- only a real Continue (teardown with NO
@@ -1024,7 +1152,7 @@ pub(crate) const PROFILE_OFFSCREEN_SIZE_TARGET: usize = 0x0000_0400_0000_0400;
 /// Byte offset within a size-table row of the per-slot supersample-enable flag (read as
 /// `size_struct[+0x8]` by `FUN_140bbeee0`); zero it to force x1.
 pub(crate) const PROFILE_OFFSCREEN_SIZE_SUPERSAMPLE_FLAG_OFFSET: usize = 0x8;
-/// One-shot latch for the higher-res offscreen-size patch.
+/// Bitmask of save slots whose profile offscreen base-size table row has been patched to 1024x1024.
 pub(crate) static PROFILE_SIZE_PATCHED: AtomicUsize = AtomicUsize::new(0);
 /// LIGHTING. Renderer field holding the IBL env-map-region object (`param_1[0xec]`, allocated by
 /// FUN_140b399e0, filled by the IBL build FUN_140b39a30). The IBL build stores the registered
@@ -1301,6 +1429,145 @@ pub(crate) static PROFILE_PERFRAME_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 /// screen) so the model rasterizes sparsely. We drive both ourselves per render-thread frame to make the
 /// portrait re-rasterize the live look-at pose EVERY frame. See keepalive-POOL-REFUTED-readback-crossqueue.
 pub(crate) const PROFILE_MODEL_UPDATE_TASK_RVA: usize = 0xbba730;
+/// Menu-model ANIM BIND `FUN_140bba300` (dump) -> deobf RVA 0xbba210 (content-unique, shift -0xf0,
+/// verified via dump-deobf-shift 2026-07-03). `fn(renderer, &anim_id_i32, force, mode)`: stops the
+/// current anim entry (via the handle at +0x96c), resolves + plays `anim_id` on the model's anim
+/// holder X(+0x948), and caches id/handle at +0x968/+0x96c; id -1 unbinds (handle := the null
+/// sentinel). Early-returns on an unchanged id unless `force != 0`. The update task steps the bound
+/// anim by frame-dt each call ONLY while `+0x96c != sentinel` -- see bd
+/// `portrait-anim-bind-RE-corrects-6hz-gate-2026-07-03` (corrects the earlier "~6Hz gparam gate"
+/// reading). The native profile pipeline binds id 0 (FUN_140bbe290 <- refresh FUN_1409aa7d0), which
+/// is the STATIC menu pose -- that, not cadence, is why the loading portrait never moved.
+pub(crate) const PROFILE_ANIM_BIND_RVA: usize = 0xbba210;
+/// Null anim-handle sentinel global `DAT_143b39470` (data RVA; data addresses do not shift between
+/// the dump and the live binary -- same convention as `GX_DRAW_CONTEXT_RVA`). The CSMenuAsmModelRend
+/// ctor inits renderer+0x96c to this global's value.
+pub(crate) const PROFILE_ANIM_NULL_HANDLE_RVA: usize = 0x3b39470;
+/// The bound-anim handle cache on the renderer (low16 = anim-entry index, high16 = generation).
+pub(crate) const PROFILE_ANIM_HANDLE_OFFSET: usize = 0x96c;
+/// Idle anim ids to bind on the loading portrait, in order. The menu model's anim holder is built
+/// from the FULL c0000 ANIBND (`FUN_140bbb4a0`: `AnibndRepositoryImp::GetResCap(L"c0000")` ->
+/// `FUN_1401ac2f0` -> renderer+0x948), so base c0000 anim ids resolve -- not just menu poses.
+/// 3000000 = the in-world standing idle (grounded: our own in-world telemetry reports
+/// `current_animation_id = 3000000`; visibly more movement than the menu idles, per user request
+/// 2026-07-03). 0x18696=100022 / 0x1863c=99900 are the CSMenuPlayerModelRend ctor's equip-menu
+/// idles. The first id whose bind leaves a real handle (!= sentinel and != 0xffffffff
+/// resolve-failure) wins; a failed candidate leaves no active entry, so falling through is
+/// side-effect-free beyond having stopped the static pose anim.
+pub(crate) const PORTRAIT_IDLE_ANIM_IDS: [i32; 3] = [3000000, 100022, 99900];
+/// The (renderer, anim-holder X) pair the idle anim was last bound on. The loading window's model
+/// is rebuilt several times (content-RT pin moves) and a rebuild either ctor's a NEW renderer
+/// (+0x968 = -1 -> static pose) or recreates X under the same renderer -- a one-shot bind latch
+/// left the DISPLAYED model static after churn (run anim-bind-noteardown-20260703-074216). Rebind
+/// whenever either pointer changes. (The engine helps once +0x968 survives: the model build fn
+/// re-binds `*(+0x968)` force=1 itself -- but a fresh renderer starts at -1, so we must track.)
+pub(crate) static PORTRAIT_ANIM_BOUND_RENDERER: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_ANIM_BOUND_LOC: AtomicUsize = AtomicUsize::new(0);
+/// REBUILD-DRIVER tripwire (2026-07-03): the portrait model is torn down + rebuilt ~1/s even with
+/// the kick live-model guard (runs #2/#3: 85-94 rebinds, native anim-0 rebound each time), which is
+/// why nothing ever visibly animated. Per drive frame we sample the renderer's request/teardown
+/// latches (+0x754/+0x755/+0x756) and re-run `STEP_Wait_Play`'s own FaceData compare
+/// (`GetFaceDataBuffer(renderer_FaceData@+0x788, true)` vs the staged buffer at +0x218, 0x120
+/// bytes): a mismatch makes the step invalidate the model (`FUN_1409ecb40`) EVERY tick -- and we
+/// drive that step at 60Hz. `NEQ_TICKS`/`DRIVE_TICKS` ~= 1.0 convicts the FaceData loop; latch
+/// bytes != 0 at rebind time convict a latch raiser instead.
+pub(crate) static PORTRAIT_FACEDATA_NEQ_TICKS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_DRIVE_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// SLOT-KEYED KICK LATCH (rebuild-storm root fix, run #4 tripwire `latches=0/1/0`; slot-keyed per
+/// user eyewitness 2026-07-03 "wrong character rendered the whole load, no swap"). The engine's
+/// global refresh (dump FUN_1409aa7d0) raises the +0x754/+0x755 request latches once per PROFILE
+/// DATA CHANGE, gated on both reading 0. Our cadence re-kick hit the mid-pipeline phase where the
+/// model is dead AND the latches are already consumed, re-raising them -- so `STEP_Wait_Play` saw
+/// +0x755 != 0 on every pass and re-entered the rebuild state (7) forever: ~1 rebuild/second, anim
+/// reset to pose 0 each time, lighting reset = the user-visible shadow flicker, portrait never
+/// animated. A blanket one-shot is wrong the other way: ac0 (`portrait_loaded_slot`) can still be
+/// the previous session's slot at first-kick time, and the storm's re-kick was what accidentally
+/// swapped in the correct character once ac0 flipped. Latch = kicked slot + 1 (0 = none): each slot
+/// value kicks exactly once per window, so the ac0 flip produces one deterministic corrective
+/// rebuild. Reset by `loading_portrait_window_reset`.
+pub(crate) static PORTRAIT_KICK_SLOT_KEY: AtomicUsize = AtomicUsize::new(0);
+/// The renderer the kick was issued on. Run #10 measured the async build at 94ms (kick +16.19s ->
+/// model-LIVE +16.28s), refuting the streaming-contention theory -- the model dies at ~+17s because
+/// the CONTINUE TEARDOWN frees the menu-era renderer we kicked, and our post-teardown table rebuild
+/// creates NEW renderer objects the slot-only latch refused to re-kick. Re-kick when the table's
+/// renderer identity changes; the 755-landmine fix makes a re-kick on the fresh modelless renderer
+/// safe (754-only).
+pub(crate) static PORTRAIT_KICK_RENDERER: AtomicUsize = AtomicUsize::new(0);
+/// Last confirmed loaded slot + 1 seen by the display tick (0 = none yet). User directive
+/// 2026-07-03: never show the previous character's head between selecting a character and the
+/// load-commit -- ac0 flips at deserialize, and pixels published before the flip belong to the OLD
+/// slot's model. On a flip the displayed snapshot is wiped instantly (hidden) and the corrective
+/// kick republished the right head when ready. Residual gap: the stale-slot pixels can still show
+/// for the ac0-flip latency (~1s) on a cross-character manual reload; the proper future source for
+/// "what was clicked" is the load dialog's selected row, not ac0.
+pub(crate) static PORTRAIT_LAST_CONFIRMED_SLOT: AtomicUsize = AtomicUsize::new(0);
+/// ac0 FLAPS transiently mid-load (run #16: 5->3->5->3 within 1.3s -- load-time code touches other
+/// slots), so a raw slot change must persist for `PORTRAIT_SLOT_FLIP_ACCEPT_TICKS` consecutive
+/// present ticks (~1s) before the pipeline believes it. Candidate = the differing value + 1;
+/// streak = consecutive ticks it has held.
+pub(crate) static PORTRAIT_SLOT_FLIP_CANDIDATE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_SLOT_FLIP_STREAK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const PORTRAIT_SLOT_FLIP_ACCEPT_TICKS: usize = 60;
+/// DEPTH-KEY branch attribution (the black-background-on-reload bug): every key call ends in
+/// exactly one of applied-fresh / applied-cached / NO-MASK (fail-open, the black frames); the
+/// readback-side counters split the no-mask cause (async in-flight skip vs depth resource find
+/// failure vs dims mismatch vs no-gap). The old one-shot logs burned in window 1 and hid all
+/// window-2+ behavior.
+pub(crate) static DEPTH_KEY_CACHED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static DEPTH_KEY_NOMASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static DEPTH_RB_INFLIGHT_SKIPS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static DEPTH_RB_FIND_FAILS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static DEPTH_RB_DIMS_MISMATCHES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static DEPTH_RB_NOGAP: AtomicUsize = AtomicUsize::new(0);
+/// PUMP-BLOCK REASON counters (run #7: modeldraws froze at 250 ~10s before the load-completed
+/// window reset, cause unattributed). One per gate in the pump's path: renderer table entry
+/// invalid, vtable mismatch (renderer freed/replaced), offscreen pointer invalid, multi-model
+/// (menu churn). Exported as oracles + printed in the sweep line so a stall names its gate.
+pub(crate) static PORTRAIT_PUMP_BLOCK_R: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_PUMP_BLOCK_VTABLE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_PUMP_BLOCK_OFF: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_PUMP_BLOCK_MULTI: AtomicUsize = AtomicUsize::new(0);
+/// The renderer's staged FaceData compare buffer (`param_1 + 0x43` longlongs) and embedded FaceData
+/// object (`param_1 + 0xf1`), from the `STEP_Wait_Play` decompile; compare length 0x120.
+pub(crate) const PROFILE_RENDERER_FACEDATA_CMP_OFFSET: usize = 0x218;
+pub(crate) const PROFILE_RENDERER_FACEDATA_OBJ_OFFSET: usize = 0x788;
+pub(crate) const PROFILE_FACEDATA_CMP_LEN: usize = 0x120;
+/// Idle-anim bind state: 0 = not attempted this load window, 1 = bound (real handle), 2 = every
+/// candidate failed to resolve. Reset by `loading_portrait_window_reset` so the next load rebinds.
+pub(crate) static PORTRAIT_ANIM_BIND_STATE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_ANIM_BIND_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+/// The idle anim id that actually bound (0 until success). `oracle_portrait_anim_bound_id`.
+pub(crate) static PORTRAIT_ANIM_BOUND_ID: AtomicUsize = AtomicUsize::new(0);
+/// renderer+0x96c read just before the first bind attempt; a value != sentinel proves the native
+/// anim-0 (static pose) bind resolved on this model, i.e. anim resources ARE loaded for it.
+pub(crate) static PORTRAIT_ANIM_HANDLE_BEFORE: AtomicUsize = AtomicUsize::new(0);
+/// renderer+0x96c after the last bind attempt. `oracle_portrait_anim_handle`.
+pub(crate) static PORTRAIT_ANIM_HANDLE: AtomicUsize = AtomicUsize::new(0);
+/// Runtime value of the null-handle sentinel global (validates the sentinel RE at runtime; also
+/// settles whether it ever changes mid-run -- the old "~6Hz gparam word" theory predicts changes,
+/// the corrected sentinel reading predicts a constant).
+pub(crate) static PORTRAIT_ANIM_SENTINEL: AtomicUsize = AtomicUsize::new(0);
+/// PIXEL-MOTION oracle (the AGENTS.md rendered-output proof gate for "the portrait animates"),
+/// LIGHTING-IMMUNE by construction: the scene's lighting visibly changes every frame (user report
+/// 2026-07-03), so raw luma diffs cannot be the motion oracle. Instead this diffs the depth-keyed
+/// ALPHA SILHOUETTE (mean abs alpha delta x1000 between successive published frames on a 32x32
+/// downsample): alpha comes from the depth buffer via `apply_depth_alpha_key` (applied to the pixels
+/// BEFORE publish), and depth does not respond to lighting -- only actual body/silhouette motion
+/// moves it. Updated ONLY when both the current and previous frame carry a real cutout (some
+/// transparent cells), so fail-open unkeyed frames cannot fake a spike. `_last` per publish, `_max`
+/// per run: an idle anim must push `_max` clearly above ~0 while lighting flicker alone cannot.
+pub(crate) static PORTRAIT_MOTION_METRIC_LAST: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_MOTION_METRIC_MAX: AtomicUsize = AtomicUsize::new(0);
+/// Companion LUMA-delta gauge on the same downsample grid (same units): measures the per-frame
+/// LIGHTING FLICKER (plus any luma-visible motion). Comparing luma vs alpha metrics separates "the
+/// lighting changed" from "the body moved"; this also finally quantifies the reported flicker.
+pub(crate) static PORTRAIT_LUMA_FLICKER_LAST: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_LUMA_FLICKER_MAX: AtomicUsize = AtomicUsize::new(0);
+/// Previous published frame's 32x32 downsample planes for the motion/flicker metrics:
+/// (alpha, luma, keyed) where `keyed` = the frame had transparent cells (depth cutout live).
+/// Render thread only.
+pub(crate) static PORTRAIT_MOTION_PREV_PLANES: std::sync::Mutex<Option<(Vec<u8>, Vec<u8>, bool)>> =
+    std::sync::Mutex::new(None);
 /// The live `FD4TaskData*` (`param_2`/`frame` arg) the ENGINE passes to the profile DRAW task on its own
 /// (sparse) calls -- captured in `per_frame_push_hook`. The GX enqueue routes the model into the correct
 /// OFFSCREEN render pass via this context, so driving the draw with OUR draw-phase task_data renders to the
@@ -1308,8 +1575,82 @@ pub(crate) const PROFILE_MODEL_UPDATE_TASK_RVA: usize = 0xbba730;
 /// per-frame drive instead. RE note: prior agents found this `frame` arg cannot be synthesized.
 pub(crate) static PROFILE_DRAW_TASK_CTX: AtomicUsize = AtomicUsize::new(0);
 /// Guard so `per_frame_push_hook` does NOT re-capture the context while WE are driving it (only the engine's
-/// own natural calls should seed `PROFILE_DRAW_TASK_CTX`).
+/// own natural calls should seed `PROFILE_DRAW_TASK_CTX`). Doubles as the render-thread BUSY flag of the
+/// teardown fence protocol (see `PROFILE_RENDERER_TEARDOWN_FENCE`): it is set BEFORE the fence check on the
+/// pump side, so the game-thread teardown can wait it out instead of freeing a renderer mid-drive.
 pub(crate) static PROFILE_IN_OUR_DRIVE: AtomicBool = AtomicBool::new(false);
+/// Cross-thread teardown fence (freeze-after-capture relaxation, er-effects-rs-l1x 2026-07-03). The
+/// game-thread profile-renderer teardown (`profile_renderer_teardown_spare_hook`) raises this BEFORE any
+/// delete-enqueue runs (orphan reclaim + native table teardown) and lowers it after the native original
+/// returns; the render-thread pump sets `PROFILE_IN_OUR_DRIVE` first and then skips its drive while the
+/// fence is up. Both sides are SeqCst, so either the pump sees the fence and skips, or the teardown sees
+/// the pump busy and waits -- closing the drive-vs-teardown TOCTOU UAF (three crash flavors: Scaleform
+/// dtor, GX-queue null, garbage-vtable RIP) structurally instead of by freezing the drive after the first
+/// captured frame.
+pub(crate) static PROFILE_RENDERER_TEARDOWN_FENCE: AtomicUsize = AtomicUsize::new(0);
+/// Render-thread pump invocations skipped because the teardown fence was up (expect a handful per switch).
+pub(crate) static PROFILE_DRIVE_FENCE_SKIPS: AtomicUsize = AtomicUsize::new(0);
+/// Teardowns that found the pump mid-drive and waited for it to exit (any value is fine; proves the fence
+/// engaged rather than racing).
+pub(crate) static PROFILE_TEARDOWN_FENCE_WAITS: AtomicUsize = AtomicUsize::new(0);
+/// Teardown fence waits that hit the bounded 10ms cap and proceeded anyway. MUST stay 0 -- nonzero means
+/// one frame of the old TOCTOU exposure leaked through (still strictly better than every frame).
+pub(crate) static PROFILE_TEARDOWN_FENCE_TIMEOUTS: AtomicUsize = AtomicUsize::new(0);
+/// Per-window publish-attribution marks: previous window-reset snapshot of each cumulative publish/skip
+/// counter, so `loading_portrait_window_reset` can log per-window deltas (a frozen-on-prior-character
+/// window shows clean=0 plus its dominant skip class). Written only from the reset.
+pub(crate) static PROFILE_PUBLISH_CLEAN_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_PUBLISH_SKIPPED_TORN_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_PUBLISH_SKIPPED_UNKEYED_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_MULTI_MODEL_PUBLISH_SKIPS_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_RT_PIN_SWITCHES_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_DRIVE_FENCE_SKIPS_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_COLOR_FROM_BUNDLE_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_COLOR_FROM_SCAN_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_DEPTH_FROM_CHAIN_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_DEPTH_FROM_BFS_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_PUBLISH_SKIPPED_UNPAIRED_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+/// Minimum percent of transparent pixels a frame's mask must cut for the frame to count as keyed
+/// (er-effects-rs-hi2): a real portrait mask removes a large background share; a partial mask
+/// (few cut pixels on an opaque IBL box) previously passed "any transparent pixel" and displayed
+/// as an unmasked head. 5% is far below any real mask's share and far above the partial band.
+pub(crate) const PORTRAIT_MIN_TRANSPARENT_PCT: usize = 5;
+/// Frames whose mask cut SOMETHING but under the floor (the partial-mask band) -- held, counted.
+pub(crate) static PROFILE_PUBLISH_SKIPPED_LOWMASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_PUBLISH_SKIPPED_LOWMASK_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+/// Display-frame index of the window's FIRST clean publish (usize::MAX = none yet this window):
+/// how long the make-before-break bridge held the prior head. Snapshot + reset per window.
+pub(crate) static PROFILE_WINDOW_FIRST_KEYED_DISPLAY: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static PROFILE_WINDOW_FIRST_KEYED_DISPLAY_LAST: AtomicUsize = AtomicUsize::new(0);
+/// One-shot latch for the per-run ProfileSummary slot->character-name dump (hi2 attribution).
+pub(crate) static PROFILE_SLOT_NAMES_DUMPED: AtomicUsize = AtomicUsize::new(0);
+/// Window mark for checker-classified readback frames (run 6 window 9: 266 frames vanished from the
+/// publish[] accounting because checker frames were counted in no window class).
+pub(crate) static PROFILE_READBACK_CHECKER_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+/// Per-window EMA of ACCEPTED tear scores (adaptive baseline for textured characters whose honest
+/// frames score high on the vertical-luma metric). 0 = window fresh; reset at each window reset.
+pub(crate) static PROFILE_TEAR_EMA: AtomicUsize = AtomicUsize::new(0);
+// NATIVE SCENE-ALPHA KEYING (strategy pivot 2026-07-03). Deobf RVAs read directly from the deobf
+// disassembly of the engine's own offscreen clear (dump FUN_140bb73a0 -> deobf 0x140bb72b0,
+// shift -0xf0, scripts/dump-deobf-shift.py content-unique): pop a GX frame context from
+// g_GxDrawContext (pointer global at GX_DRAW_CONTEXT_RVA), clear the scene bundle's RTV
+// (bundle+0x30) through the frame's subcontext (+0x25c8), release the frame context. We replicate
+// that body with clear color {0,0,0,0} (the engine uses the SHARED opaque-black FloatVector4 at
+// dump 0x14329e9b0 -- 136 xrefs, not patchable), so the RT's alpha channel becomes the native
+// subject mask once the pump redraws only the model each frame.
+/// Deobf RVA of the GX frame-context pop (deobf 0x1419e5830; dump FUN_1419e5850).
+pub(crate) const GX_FRAME_CTX_POP_RVA: usize = 0x19e5830;
+/// Deobf RVA of the ClearRTV wrapper (deobf 0x1419e0e10; dump FUN_1419e0e30).
+/// Args: rcx = *(frame_ctx + GX_FRAME_SUBCTX_OFFSET), rdx = *(bundle+0x30) RTV view, r8 = &f32x4.
+pub(crate) const GX_CLEAR_RTV_WRAPPER_RVA: usize = 0x19e0e10;
+/// Deobf RVA of the GX frame-context release (deobf 0x1419eaa20; dump FUN_1419eaa40).
+pub(crate) const GX_FRAME_CTX_RELEASE_RVA: usize = 0x19eaa20;
+/// Offset of the clear-target subcontext pointer inside a popped GX frame context.
+pub(crate) const GX_FRAME_SUBCTX_OFFSET: usize = 0x25c8;
+/// Per-frame alpha-0 clears issued by the pump (`oracle_portrait_alpha0_clears`).
+pub(crate) static PROFILE_ALPHA0_CLEARS: AtomicUsize = AtomicUsize::new(0);
+/// One-shot latch for the model node-array enumerator (backdrop-part identification).
+pub(crate) static PROFILE_MODEL_PARTS_DUMPED: AtomicUsize = AtomicUsize::new(0);
 /// Diagnostic: the captured engine ctx pointer + its `+8` delta-time bits, logged once, to learn whether the
 /// context is a stable persistent structure (safe to reuse across frames) or a transient per-call one.
 pub(crate) static PROFILE_DRAW_TASK_CTX_LOGGED: AtomicUsize = AtomicUsize::new(0);
@@ -1441,9 +1782,57 @@ pub(crate) static PROFILE_RT_SRV_COPIES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_RT_SRV_COPY_DIAGGED: AtomicUsize = AtomicUsize::new(0);
 /// One-shot guard for dumping the excluding-SRV content texture (slot 102) for visual inspection.
 pub(crate) static PROFILE_CONTENT_EXCL_DUMPED: AtomicUsize = AtomicUsize::new(0);
-/// One-shot guard: set once the target slot's real IBL-lit menu portrait has been captured into
-/// LOADING_BG_PORTRAIT_RGBA for the now-loading forge to bake.
+/// DRIVE-FREEZE latch: set once a good capture publishes THIS load window, gating off the per-frame
+/// renderer drive (the freeze-after-capture UAF fix). Cleared at the window reset AND at a confirm
+/// retarget, so the drive re-engages to render the newly-selected character. Distinct from
+/// `PROFILE_HAVE_KEYED_FRAME` below: this is per-window (freeze), that one is persistent (display).
 pub(crate) static PROFILE_BAKE_RGBA_CAPTURED: AtomicUsize = AtomicUsize::new(0);
+/// DISPLAY-AVAILABILITY signal: set the FIRST time a real depth-KEYED (masked) portrait is published
+/// and NOT cleared at the window reset/retarget, so the last good masked head keeps displaying while
+/// the drive re-renders the next character. This is the make-before-break bridge: the composite shows
+/// this persisted frame until the new model produces its own keyed frame, which replaces it. Split
+/// from the drive-freeze latch so "re-engage the drive" and "keep showing the old head" are
+/// independent -- otherwise clearing the freeze to render the new model also blanked the display.
+pub(crate) static PROFILE_HAVE_KEYED_FRAME: AtomicUsize = AtomicUsize::new(0);
+/// Diagnostics for the keyed-publish gate + confirm retarget (never render an unmasked model; swap to
+/// the newly-selected character at the button press). Exposed as oracles.
+pub(crate) static PROFILE_PUBLISH_SKIPPED_UNKEYED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_PORTRAIT_RETARGETS: AtomicUsize = AtomicUsize::new(0);
+/// TORN-READBACK detector (pixel semaphore for the scanline-corruption the user saw 2026-07-03). The
+/// offscreen RT readback has no cross-queue sync against the game's render of that RT, so when the
+/// per-frame drive is active our copy reads rows mid-write -> horizontal scanline tearing. The score
+/// is the average absolute VERTICAL luma step across the masked (head) region: a clean face render is
+/// smooth vertically (low), a torn readback has random per-row jumps (high). Publishing gates on
+/// score <= threshold so a torn frame is never displayed -- the make-before-break bridge keeps the
+/// last CLEAN masked head instead. Score range 0..255; the threshold is deliberately sensitive
+/// (better to hold the prior clean head than flash garbage). `_last`/`_max` are oracles; the skip
+/// counter proves the gate fires; a bimodal last-distribution in the log says clean frames DO land
+/// (gate suffices) vs unimodal-high (all torn -> the readback needs real GPU sync).
+// Clean face frames score 1-7 (runs 10m/10n); torn frames 16 (mild, run 10n) to 80 (severe, run
+// 10m). 34 let the mild-16 tear through and -- because the freeze-after-capture latches the first
+// published frame -- it froze on that garbage for the whole window. Tightened to 10: just above the
+// clean band, below even mild tearing. Rejection is SAFE (the bridge holds the prior clean head and
+// the drive keeps animating until a clean frame lands), so err tight.
+pub(crate) const PROFILE_TEAR_SCORE_THRESHOLD: usize = 10;
+pub(crate) static PROFILE_TEAR_SCORE_LAST: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_TEAR_SCORE_MAX: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_TEAR_SCORE_CLEAN_MIN: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static PROFILE_PUBLISH_SKIPPED_TORN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_PUBLISH_CLEAN: AtomicUsize = AtomicUsize::new(0);
+// (Removed the testing tear fail-fast: run autostep10m confirmed the detector separates cleanly
+// -- clean frames score 1-7, the torn frame scored 80 -- and torn frames are rare, so the skip gate
+// above is the product fix. Regressions surface via oracle_portrait_publish_skipped_torn.)
+
+/// ANIMATION-STALL semaphore (user 2026-07-03: the portrait "stops animating" and stays frozen the
+/// whole post-continue loading screen on some loads). freeze-after-capture stops the per-frame drive
+/// once the first keyed frame is captured, so the head goes static early. These count, PER loading
+/// window: drive frames actually rendered (animated) vs present frames the head was displayed. A low
+/// drive/display ratio == froze early (the user's complaint); ~1.0 == animated throughout. Snapshotted
+/// to `_LAST` at the window reset for the oracle, then zeroed for the next window.
+pub(crate) static PROFILE_DRIVE_FRAMES_WINDOW: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_DISPLAY_FRAMES_WINDOW: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_DRIVE_FRAMES_WINDOW_LAST: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_DISPLAY_FRAMES_WINDOW_LAST: AtomicUsize = AtomicUsize::new(0);
 /// The FIRST (displayed) now-loading rti the forge bound, plus its bare texture name + encoding. The
 /// sprite commits to the first bind, which happens BEFORE the real portrait is captured -- so once the
 /// portrait is baked we RE-FORGE this exact rti to swap the checker for the portrait on the live screen.
@@ -1610,6 +1999,61 @@ pub(crate) static ER_TPF_COVER_FAILURES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static ER_TPF_COVER_LAST_ERROR: AtomicUsize = AtomicUsize::new(ER_TPF_COVER_ERR_NONE);
 /// One-shot latch for the bind-observer target rewrite (fires once after registration).
 pub(crate) static ER_TPF_COVER_TARGET_REWRITE_FIRED: AtomicUsize = AtomicUsize::new(0);
+
+// === Stats-panel per-slot neutral-background textures (2026-07-04) ==================================
+// The stats-panel product mode blanks the character render (see `stats_panel_enabled`) and gives each
+// ProfileSelect save-slot face box a neutral BACKGROUND instead. Mechanism = the SAME proven in-memory
+// TPF -> CS::CreateTpfResCap register the er-tpf cover used, but per slot: register one texture under a
+// unique key, then redirect that slot's native `menu_dummyprofileface_NN -> systex_menu_profileMM`
+// Scaleform bind TARGET to our key (a Scaleform-repo miss bridges to GLOBAL_TexRepository by name and
+// resolves our texture). The dummy-face shapes ARE the visible per-row boxes (05_010 RE 2026-07-04), so
+// redirecting their texture paints our background on-screen -- no symbol rewrite needed. A texture
+// upload is cheap (no per-frame render), so all 10 slots get a background with NO GX-queue overflow.
+pub(crate) const STATS_PANEL_SLOT_COUNT: usize = 10;
+/// Unique in-RAM SYSTEX keys, one per slot 00..09. Each is the TPF003 entry name (== the
+/// GLOBAL_TexRepository GPU key the Scaleform bridge derives) AND the rewritten bind TARGET. Kept to 18
+/// ASCII chars -- comfortably under the native `SYSTEX_Menu_Profile0N` target's 21-char DLString
+/// capacity so the in-place `rewrite_native_dlstring_ascii` never overflows -- and deliberately distinct
+/// from any native key so a first-resolve Scaleform-repo miss bridges to our GPU texture.
+pub(crate) const STATS_PANEL_SYSTEX_KEYS: [&str; STATS_PANEL_SLOT_COUNT] = [
+    "SYSTEX_ErTpf_Prf00",
+    "SYSTEX_ErTpf_Prf01",
+    "SYSTEX_ErTpf_Prf02",
+    "SYSTEX_ErTpf_Prf03",
+    "SYSTEX_ErTpf_Prf04",
+    "SYSTEX_ErTpf_Prf05",
+    "SYSTEX_ErTpf_Prf06",
+    "SYSTEX_ErTpf_Prf07",
+    "SYSTEX_ErTpf_Prf08",
+    "SYSTEX_ErTpf_Prf09",
+];
+/// Neutral-background texture side length (square, RGBA8, uncompressed legacy-RGBA8 DDS). The native
+/// face box is 128x128 on-screen; 256 gives a little headroom for baked stats text later without being
+/// a large upload.
+pub(crate) const STATS_PANEL_TEX_DIM: u32 = 256;
+/// Neutral dark panel color (opaque). Distinct from pure black so a registered-but-unredirected slot is
+/// visually diagnosable, and dark enough that light native text reads on top later.
+pub(crate) const STATS_PANEL_BG_RGBA: [u8; 4] = [30, 28, 26, 255];
+/// Last-error codes for `STATS_PANEL_LAST_ERROR` (a memory-read oracle).
+pub(crate) const STATS_PANEL_ERR_NONE: usize = 0;
+pub(crate) const STATS_PANEL_ERR_TPF_REPO_NULL: usize = 1;
+pub(crate) const STATS_PANEL_ERR_TEX_REPO_NULL: usize = 2;
+pub(crate) const STATS_PANEL_ERR_BLOB_EMPTY: usize = 3;
+pub(crate) const STATS_PANEL_ERR_PANIC: usize = 4;
+pub(crate) const STATS_PANEL_ERR_RESCAP_NULL: usize = 5;
+pub(crate) const STATS_PANEL_ERR_BASE_UNRESOLVED: usize = 6;
+/// Bitmask (bit N = slot N) of slots whose neutral-bg texture is registered in the repos.
+pub(crate) static STATS_PANEL_TEX_REGISTERED_MASK: AtomicUsize = AtomicUsize::new(0);
+/// Count of native `CreateTpfResCap` register attempts across all slots.
+pub(crate) static STATS_PANEL_TEX_REGISTER_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+/// Count of failed/abandoned register attempts (precondition miss or caught panic).
+pub(crate) static STATS_PANEL_TEX_REGISTER_FAILURES: AtomicUsize = AtomicUsize::new(0);
+/// Count of bind-observer target rewrites that pointed a dummy-face bind at our key.
+pub(crate) static STATS_PANEL_BIND_REDIRECTS: AtomicUsize = AtomicUsize::new(0);
+/// Bitmask (bit N = slot N) of slots whose native bind target we have redirected at least once.
+pub(crate) static STATS_PANEL_BIND_REDIRECT_MASK: AtomicUsize = AtomicUsize::new(0);
+/// Last error code (see `STATS_PANEL_ERR_*`).
+pub(crate) static STATS_PANEL_LAST_ERROR: AtomicUsize = AtomicUsize::new(STATS_PANEL_ERR_NONE);
 
 // (Removed: TITLE INIT-READINESS OVERRIDE lever -- it forced CSMenuMan+0x21, which RE later showed is
 // the WHOLE-game resident-UI-ready flag, not title-only; asserting it early risked later in-game menus
@@ -1830,6 +2274,87 @@ pub(crate) static TITLE_PROFILE_FACE_TRANSFORM_APPLIED: AtomicUsize = AtomicUsiz
 pub(crate) static TITLE_PROFILE_FACE_OTHER_HIDDEN: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_PROFILE_FACE_LAST_PROXY: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_PROFILE_FACE_LAST_VALUE: AtomicUsize = AtomicUsize::new(0);
+
+// === Stats-panel NATIVE TEXT (2026-07-04) =========================================================
+// Render the character's attributes as text on the ProfileSelect rows using the GAME'S OWN font, each
+// value in its own field. The 05_010 GFX edit (`er_gfx::title_05_010`) removes the 128px face box and
+// adds a dedicated `ErStats` DefineEditText to the row template; the DLL hooks the native row-populate
+// template `FUN_1408758d0` (the only writer of PlayerName/Level/Location/PlayTime) and, BEFORE calling
+// the original (which destroys the row proxy at its end -- callee-dtor convention), resolves the
+// row's `ErStats` child natively (assignComponentWithName) and pushes the attribute line through the
+// native SetText wrapper -- the engine wraps the string in HTML and renders it through the field's own
+// `MenuFont_01`. No font work, no new Scaleform surface, no substitution of native fields' text.
+// (RE: bd profileselect-native-settext-RE-2026-07-04 + Ghidra dump FUN_1408758d0/FUN_14074c630;
+// ARM/CONSUME SetText substitution was rejected because the FMG-static populate pass calls the SetText
+// CORE directly, so no wrapper-level routing can target a field the row-populate never writes.)
+/// SetText wrapper `FUN_14074a0f0` (deobf/live 0x74a000). fastcall(rcx=CSScaleformValue*, rdx=wchar_t*).
+/// Not hooked -- called directly for the stats push (null-guards text and checks the field dataType).
+pub(crate) const PROFILE_SETTEXT_RVA: usize = 0x74a000;
+/// `CS::CSScaleformValue::~CSScaleformValue` (dump 0x140d7f900) = deobf/live 0xd7f850
+/// (`scripts/dump-deobf-shift.py` -> content-unique). fastcall(rcx=CSScaleformValue*). Releases the
+/// GFx::Value handle a resolved child proxy holds; the stats push calls it exactly like the native
+/// row-populate does after each field.
+pub(crate) const CSSCALEFORMVALUE_DTOR_RVA: usize = 0xd7f850;
+/// SceneObjProxy layout, corrected 2026-07-04 from the Ghidra dump structures + `ComponentProxy::
+/// ComponentProxy` (dump 0x1407331b0) after the er-effects-rs-7e7 crash: +0x00 vfptr, +0x08/+0x10/
+/// +0x18 an intrusive component-link node (ctor initializes all three to `self`; the resolve links
+/// the live component object in), +0x20 context, +0x28 the EMBEDDED `CSScaleformValue` (0x38 bytes:
+/// vfptr + GFx::Value). The old claim that the CSScaleformValue sits at +0x8 was WRONG -- +0x8 is
+/// the component slot whose OBJECT POINTER the SetText wrapper reads (`rcx = *(proxy+0x8)`) and
+/// virtual-calls (`vt+0x8` GetValue). Native row-populate `FUN_1408758d0` passes `&proxy->field_0x8`
+/// to `FUN_14074a0f0` and destroys `&proxy.scaleformValue` (+0x28) afterward.
+pub(crate) const SCENE_OBJ_PROXY_COMPONENT_SLOT_OFFSET: usize = 0x8;
+/// Vtable slot the SetText wrapper dispatches on the linked component (`call *0x8(vt)` at
+/// deobf 0x74a00f) -- the GetValue accessor returning the GFx::Value*. The 7e7 guard validates the
+/// function pointer in this slot before allowing the wrapper's unvalidated dispatch to run.
+pub(crate) const COMPONENT_GET_VALUE_VTABLE_SLOT_OFFSET: usize = 0x8;
+/// Offset of the embedded `CSScaleformValue` inside a SceneObjProxy -- the correct
+/// `CSSCALEFORMVALUE_DTOR_RVA` target after an `assignComponentWithName` resolve (the ctor
+/// constructs it unconditionally on both the empty-name and named paths). Destroying +0x8 instead
+/// (the pre-7e7 bug) stamps a vtable over the component-link node and "releases" whatever
+/// `proxy+0x20` holds -- a UAF corrupter.
+pub(crate) const SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET: usize = 0x28;
+/// Stack size for an out SceneObjProxy passed to `assignComponentWithName`. The native row-populate
+/// reserves 0x70 bytes; the binder fully constructs the out proxy without reading it, so a zeroed
+/// buffer with headroom is safe.
+pub(crate) const SCENE_OBJ_PROXY_STACK_BYTES: usize = 0x80;
+/// Re-entrancy guard for the row-populate hook's `ErStats` push (its resolve re-enters the named-child
+/// binder hook): skip the push block while set.
+pub(crate) static PROFILE_STATS_PUSH_IN_PROGRESS: AtomicUsize = AtomicUsize::new(0);
+/// Count of row populates observed (PlayerName trigger fired) while the stats panel is on (oracle).
+pub(crate) static PROFILE_STATS_ROW_POPULATES: AtomicUsize = AtomicUsize::new(0);
+/// Count of successful ErStats pushes (assign resolved an editable field and SetText accepted) (oracle).
+pub(crate) static PROFILE_STATS_SETTEXT_SUBS: AtomicUsize = AtomicUsize::new(0);
+/// Count of push attempts that failed (field missing -- e.g. GFX edit not served -- or SetText
+/// rejected the value) (oracle).
+pub(crate) static PROFILE_STATS_PUSH_FAILURES: AtomicUsize = AtomicUsize::new(0);
+/// Count of pushes SKIPPED fail-closed because the resolved component at proxy+0x8 was not a live
+/// image-vtabled object (er-effects-rs-7e7: a stale/garbage-vt component here crashed the native
+/// SetText wrapper's unvalidated `call *0x8(vt)` dispatch). Distinct from PUSH_FAILURES so telemetry
+/// separates "field missing / SetText rejected" from "component stale -- crash avoided" (oracle).
+pub(crate) static PROFILE_STATS_PUSH_STALE_SKIPS: AtomicUsize = AtomicUsize::new(0);
+/// Last stale component pointer observed by the fail-closed guard (diagnostic for 7e7 root-cause).
+pub(crate) static PROFILE_STATS_PUSH_STALE_LAST_COMP: AtomicUsize = AtomicUsize::new(0);
+/// Last stale component's vtable pointer observed by the fail-closed guard.
+pub(crate) static PROFILE_STATS_PUSH_STALE_LAST_VT: AtomicUsize = AtomicUsize::new(0);
+/// Row-populate template `FUN_1408758d0` (deobf/live 0x8757e0; dump 0x1408758d0 -> shift -0xf0,
+/// content-unique). `longlong(rowModel* rcx, SceneObjProxy* rdx, undefined8 r8, undefined8 r9)`. The
+/// only writer of the per-row PlayerName/Level/Location/PlayTime fields, invoked once per visible
+/// ProfileSelect list row with a PER-SLOT row model. We hook its ENTRY so we can push the correct
+/// slot's attributes BEFORE the original runs (the original destroys the row proxy's embedded
+/// `CSScaleformValue` at its end, so a post-call resolve would operate on a released value).
+pub(crate) const PROFILE_ROW_POPULATE_RVA: usize = 0x8757e0;
+/// Row-model field holding the profile/save slot index (0-9). The native populate reads
+/// `*(int*)(rowModel + 0x8) + 1` as the `Icon_0` face-sprite frame, i.e. the slot; we read the same
+/// field to index the per-slot stats cache so each row shows ITS OWN character's attributes.
+pub(crate) const PROFILE_ROW_MODEL_SLOT_08_OFFSET: usize = 0x8;
+pub(crate) static PROFILE_ROW_POPULATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static PROFILE_ROW_POPULATE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Per-slot stats cache state (oracle): 0 = not attempted, 1 = loaded (`.sl2` read + parsed), 2 =
+/// load failed (save unreadable/too small) -- the hook then falls back to the loaded character.
+pub(crate) static PROFILE_SLOT_STATS_CACHE_STATE: AtomicUsize = AtomicUsize::new(0);
+/// Count of save slots that decoded to a real character in the per-slot stats cache (oracle).
+pub(crate) static PROFILE_SLOT_STATS_DECODED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_PRESS_START_BIND_HITS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_PRESS_START_BIND_LAST_PARENT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -1993,6 +2518,31 @@ pub(crate) static TITLE_05_000_RUNTIME_STRIP_INPUT_CLASS: AtomicUsize = AtomicUs
 /// 2 = clean all-or-nothing edit result with a DIFFERENT fingerprint (expected only after a game
 /// update changes untouched tags; not an error, but the proof of visual equivalence is then open).
 pub(crate) static TITLE_05_000_RUNTIME_STRIP_OUTPUT_VALIDATED: AtomicUsize = AtomicUsize::new(0);
+
+/// Stats-panel 05_010_ProfileSelect runtime edit armed (mirrors the 05_000 runtime strip): the
+/// Scaleform file-open hook reads the game's own vanilla `05_010_profileselect.gfx` payload out of
+/// the native MemoryFile and applies `er_gfx::title_05_010::stats_panel` -- 6 content-addressed tag
+/// edits (face box removed, `ErStats` field added, left column reflowed), all-or-nothing, output
+/// fingerprint-verified for the known vanilla input (`crates/er-gfx/tests/profile_stats.rs`).
+/// 0 = disarmed, 1 = armed. Armed with the stats panel itself (product lever, no new env gates).
+pub(crate) static PROFILE_05_010_RUNTIME_EDIT_ARMED: AtomicUsize = AtomicUsize::new(0);
+/// Successful 05_010 runtime-edit serves (native MemoryFile data/len swapped to the derived movie).
+pub(crate) static PROFILE_05_010_RUNTIME_EDIT_SERVES: AtomicUsize = AtomicUsize::new(0);
+/// 05_010 runtime-edit failures (unexpected vtable, unreadable payload, parse/edit/write error).
+/// Every failure falls closed to the untouched native file (vanilla ProfileSelect rows).
+pub(crate) static PROFILE_05_010_RUNTIME_EDIT_FAILURES: AtomicUsize = AtomicUsize::new(0);
+/// Observed native 05_010 payload length at first successful read (0 until then).
+pub(crate) static PROFILE_05_010_RUNTIME_EDIT_INPUT_LEN: AtomicUsize = AtomicUsize::new(0);
+/// Derived edited movie length (0 until derived).
+pub(crate) static PROFILE_05_010_RUNTIME_EDIT_OUTPUT_LEN: AtomicUsize = AtomicUsize::new(0);
+/// Input provenance: 0 = unclassified, 1 = known vanilla, 2 = unknown input (the live repository
+/// payload may carry trailing bytes after the root End tag, as observed for 05_000).
+pub(crate) static PROFILE_05_010_RUNTIME_EDIT_INPUT_CLASS: AtomicUsize = AtomicUsize::new(0);
+/// Whether the derived output matches the generated-asset fingerprint
+/// (`er_gfx::title_05_010::EDITED_LEN` + `EDITED_FNV1A64`, the single source of truth): 0 = not derived
+/// yet, 1 = byte-identical, 2 = clean all-or-nothing edit with a different fingerprint (expected after a
+/// game update changes untouched tags).
+pub(crate) static PROFILE_05_010_RUNTIME_EDIT_OUTPUT_VALIDATED: AtomicUsize = AtomicUsize::new(0);
 
 /// From-scratch minimal diagnostic GFX: one frame, magenta background + full-screen magenta shape.
 /// Generated via FFDEC XML (`target/custom-gfx-lab/title-logo-minimal/...`) and embedded so the
@@ -4342,6 +4892,186 @@ pub(crate) const MENU_WINDOW_ROOT_PROXY_CTOR_RVA: u32 = 0x747980;
 /// Live/deobf `CSScaleformValue`/SceneObjProxy scratch destructor used by native MenuWindow fade helpers.
 pub(crate) const MENU_WINDOW_ROOT_PROXY_SCRATCH_DTOR_RVA: u32 = 0xd7f850;
 pub(crate) const MENU_WINDOW_ROOT_PROXY_SCRATCH_SIZE: usize = 0x80;
+/// SCALEFORM MENU-HANDLER LIFECYCLE GUARD (er-effects-rs crash, repeated-switch ProfileSelect UAF).
+/// The crash is the inner destructor `FUN_1411a8920` (deobf 0x1411a8900) walking a garbage intrusive
+/// list of a DOUBLE-FREED 0x58-byte Scaleform handler (vtable 0x142cc22c8), embedded at +0x40 of a
+/// 0x98 container cached at owner+0x28. ctor `FUN_1411a8890` (deobf 0x1411a8870). We hook both: track
+/// every live object (ctor inserts, normal dtor removes); a dtor of an address NOT live is the
+/// double-free -> log it + SKIP the original inner destructor so it can't dereference the freed list.
+/// A true double-inner-destruct of an already-freed object is safe to skip (it was already torn down).
+pub(crate) const SCALEFORM_HANDLER_CTOR_RVA: usize = 0x11a8870;
+pub(crate) const SCALEFORM_HANDLER_DTOR_RVA: usize = 0x11a8900;
+pub(crate) static SCALEFORM_HANDLER_CTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SCALEFORM_HANDLER_DTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SCALEFORM_HANDLER_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Live handler-object addresses (ctor'd, not yet dtor'd). Linear-scanned Vec -- volume is a few
+/// dozen menu handlers, not a hot per-frame path. Capped so a genuine leak can't grow it unbounded.
+pub(crate) static SCALEFORM_HANDLER_LIVE: std::sync::Mutex<Vec<usize>> =
+    std::sync::Mutex::new(Vec::new());
+pub(crate) const SCALEFORM_HANDLER_LIVE_CAP: usize = 8192;
+/// Oracles: total ctors/dtors seen, double-frees detected+skipped, and the last skipped object +
+/// its container/parent for correlation with the switch timeline.
+pub(crate) static SCALEFORM_HANDLER_CTORS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SCALEFORM_HANDLER_DTORS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SCALEFORM_HANDLER_DOUBLE_FREES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SCALEFORM_HANDLER_LAST_DOUBLE_FREE_OBJ: AtomicUsize = AtomicUsize::new(0);
+
+/// GX COMMAND-QUEUE PRODUCER TELEMETRY (switch-#4 overflow, run autostep10c-directarm 2026-07-03).
+/// `reserve_command_queue_slot` (deobf entry 0x141aeae60; shift-verified against dump 0x141aeae80)
+/// appends a command-list slot to a fixed array: base at queue+0x28, count at +0x30, capacity at
+/// +0x34 (fixed 192). When count >= capacity the append branch is skipped and the engine writes the
+/// slot through a NULL pointer -- the repeated-switch crash at rva 0x1aeaf05. Switches #1-#3 survive
+/// and #4 overflows, so some producer's per-frame submissions GROW per switch. This hook is
+/// telemetry-ONLY (always forwards -- the 5ae3965 drop-on-overflow guard corrupted rendering and was
+/// removed in c2794d9): it tracks occupancy high-water (cumulative + per-switch) and a caller
+/// histogram so the run that overflows NAMES the accumulating producer instead of just crashing.
+pub(crate) const GX_RESERVE_CMD_QUEUE_SLOT_RVA: usize = 0x1aeae60;
+/// Queue-struct field offsets (from the reserve_command_queue_slot decompile).
+pub(crate) const GX_CMD_QUEUE_COUNT_OFFSET: usize = 0x30;
+pub(crate) const GX_CMD_QUEUE_CAP_OFFSET: usize = 0x34;
+pub(crate) static GX_RESERVE_CMD_QUEUE_SLOT_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static GX_RESERVE_CMD_QUEUE_SLOT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// Cumulative occupancy high-water, per-switch high-water (reset by `sq_repro_begin_switch`), the
+/// observed capacity, and total reserve calls.
+pub(crate) static GX_CMD_QUEUE_MAX_FILL: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static GX_CMD_QUEUE_SWITCH_MAX_FILL: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static GX_CMD_QUEUE_CAP_SEEN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static GX_CMD_QUEUE_SUBMITS: AtomicUsize = AtomicUsize::new(0);
+/// Producer histogram: open-addressed key -> count. Key = first game-.text return address (as RVA)
+/// above the reserve/add_command_list wrapper band, with `GX_CMD_QUEUE_SELF_TAG` ORed in when any
+/// stack frame lies inside our own DLL (attributes submissions our pipeline caused vs pure-native).
+pub(crate) const GX_CMD_QUEUE_HIST_SLOTS: usize = 32;
+pub(crate) const GX_CMD_QUEUE_SELF_TAG: usize = 1 << 63;
+/// Deobf RVA band holding reserve_command_queue_slot and its 4 thin enqueue wrappers (dump
+/// 0x141aea930..0x141aeab60, shift +0x20); return addresses inside it are transport, not producers.
+pub(crate) const GX_CMD_QUEUE_WRAPPER_RVA_MIN: usize = 0x1aea900;
+pub(crate) const GX_CMD_QUEUE_WRAPPER_RVA_MAX: usize = 0x1aeaf60;
+pub(crate) static GX_CMD_QUEUE_HIST_KEYS: [AtomicUsize; GX_CMD_QUEUE_HIST_SLOTS] =
+    [const { AtomicUsize::new(0) }; GX_CMD_QUEUE_HIST_SLOTS];
+pub(crate) static GX_CMD_QUEUE_HIST_COUNTS: [AtomicUsize; GX_CMD_QUEUE_HIST_SLOTS] =
+    [const { AtomicUsize::new(0) }; GX_CMD_QUEUE_HIST_SLOTS];
+pub(crate) static GX_CMD_QUEUE_HIST_DROPPED: AtomicUsize = AtomicUsize::new(0);
+/// Near-full evidence: hits with count >= cap - margin, and a log throttle so the dump lands BEFORE
+/// the crash frame without spamming (one line per 64 near-full reserves).
+pub(crate) const GX_CMD_QUEUE_NEARFULL_MARGIN: usize = 24;
+pub(crate) const GX_CMD_QUEUE_NEARFULL_LOG_EVERY: usize = 64;
+pub(crate) static GX_CMD_QUEUE_NEARFULL_HITS: AtomicUsize = AtomicUsize::new(0);
+/// BUCKET-TABLE instrument (names the RETAINER class the producer histogram cannot: run 10d proved
+/// the drain pump FUN_141b3bdc0 dominates reserves by RESUBMITTING its context list each frame, so
+/// the leak is list membership). The pump's context (its param_1; latched by a thin entry hook at
+/// deobf 0x1b3bda0, dump 0x141b3bdc0, shift-verified) holds a 109-bucket table of per-frame queue
+/// slot ranges: begin i32 at ctx+0x30+idx*0x18, end i32 at ctx+0x34+idx*0x18 (from the pump's
+/// bucket-locate loop, bound 0x6d). Nonzero widths per bucket, diffed across switches, name which
+/// bucket's submissions grow toward the 192 cap.
+pub(crate) const GX_CMD_PUMP_RVA: usize = 0x1b3bda0;
+pub(crate) static GX_CMD_PUMP_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static GX_CMD_PUMP_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static GX_CMD_PUMP_CTX: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const GX_CMD_QUEUE_BUCKET_COUNT: usize = 0x6d;
+pub(crate) const GX_CMD_QUEUE_BUCKET_BEGIN_OFFSET: usize = 0x30;
+pub(crate) const GX_CMD_QUEUE_BUCKET_END_OFFSET: usize = 0x34;
+pub(crate) const GX_CMD_QUEUE_BUCKET_STRIDE: usize = 0x18;
+/// A bucket width above the slot capacity is a torn/stale read (observed in run 10e's final
+/// telemetry read racing the crashing render thread) -- skip it rather than report garbage.
+pub(crate) const GX_CMD_QUEUE_BUCKET_WIDTH_SANE_MAX: i32 = 192;
+/// PEAK-frame bucket snapshots: run 10e proved calm-frame (switch-boundary) bucket tables stay flat
+/// (~30 total) while the per-switch occupancy PEAK grows 93 -> 121 -> 161 -> 183 -- the growth only
+/// materializes in the teardown/reload frames, and NEAR-FULL (cap-24) fires too late to see
+/// switches #1-#3. Log the bucket table whenever the switch high-water rises to >= MIN and has
+/// grown by >= STEP since the last snapshot, so every switch's peak-frame composition is diffable.
+pub(crate) const GX_CMD_QUEUE_PEAK_LOG_MIN: usize = 80;
+pub(crate) const GX_CMD_QUEUE_PEAK_LOG_STEP: usize = 8;
+pub(crate) static GX_CMD_QUEUE_PEAK_LAST_LOGGED: AtomicUsize = AtomicUsize::new(0);
+/// COMMAND-BYTE ARENA fill (user-reported render corruption during switch #3's return-title window,
+/// 2026-07-03): `reserve_command_queue_slot` allocates command BYTES from a bump arena at
+/// queue+0x40 (FUN_141c48e80: alloc counter at arena+0x14, limit at +0x20, cursor at +0x28;
+/// remaining = limit - align_up(cursor_lo); on remaining < request it takes a refill/wrap path
+/// FUN_141c48f50). If that wraps while earlier commands are unconsumed, live command bytes are
+/// overwritten -> garbled draws WITHOUT a crash -- the sub-critical sibling of the 0x1aeaf05
+/// slot-table overflow. Track remaining low-water (cumulative + per-switch) to correlate.
+pub(crate) const GX_CMD_QUEUE_ARENA_OFFSET: usize = 0x40;
+pub(crate) const GX_CMD_ARENA_ALLOC_COUNT_OFFSET: usize = 0x14;
+pub(crate) const GX_CMD_ARENA_LIMIT_OFFSET: usize = 0x20;
+pub(crate) const GX_CMD_ARENA_CURSOR_OFFSET: usize = 0x28;
+/// Low-water sentinel: usize::MAX until the first sample lands.
+pub(crate) static GX_CMD_ARENA_MIN_REMAINING: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static GX_CMD_ARENA_SWITCH_MIN_REMAINING: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// CSDelayDeleteMan PENDING-COUNT read (repeated-switch GX overflow root-cause probe, 2026-07-03).
+/// The profile-renderer teardown (`FUN_1409b2f00`) does NOT destroy the 10 old CSMenuProfModelRend
+/// per switch -- it hands each to CSDelayDeleteMan (`FUN_140e77540`) and nulls the table slot. The
+/// pre-delete prep (`FUN_140bb9930`) only sets the object's +0x756 "marked" byte; it does NOT
+/// unregister the renderer's ResMan draw task, so a marked-but-unfreed renderer keeps submitting to
+/// the 192-slot GX command queue every frame. If the delay-delete pump does not drain them during
+/// our in-world return-title/reload, they pile up -> queue climbs ~+23/switch -> null-slot crash
+/// (0x1aeaf05) at switch #4-5 (A/B run 10g). CSDelayDeleteMan is a singleton whose pointer lives at
+/// dump global 0x1445896a8; its enqueue (`FUN_140e77f30`) increments a pending count at
+/// manager+0x40 (high-water at +0x44). Reading manager+0x40 per switch tests the pileup directly:
+/// climbing +~10/switch confirms the pump is not draining our enqueued renderers. Pure guarded read
+/// (validate the pointer + a sane count); RVA ground-truthed in the DEOBF binary (teardown 0x9b2db0
+/// disasm: `mov 0x3bd68d1(%rip),%rcx # 0x1445896a8` -> RVA 0x1445896a8 - 0x140000000 = 0x45896a8),
+/// same VA as the dump. The runtime read is self-validating so a bad RVA logs -1, not a crash.
+pub(crate) const DELAY_DELETE_MAN_SINGLETON_PTR_RVA: usize = 0x45896a8;
+pub(crate) const DELAY_DELETE_MAN_PENDING_COUNT_OFFSET: usize = 0x40;
+pub(crate) const DELAY_DELETE_MAN_PENDING_HIGHWATER_OFFSET: usize = 0x44;
+/// Sane upper bound for the pending count; a larger read means the singleton RVA/layout is wrong.
+pub(crate) const DELAY_DELETE_MAN_PENDING_SANE_MAX: usize = 100_000;
+/// CSDelayDeleteMan ENQUEUE `FUN_140e77540` (dump) -> deobf 0x140e77490, ground-truthed from the
+/// deobf profile-renderer teardown (0x9b2db0): it calls this at 0x9b2e0d as `call 0x140e77490` with
+/// rcx=manager (the singleton above), rdx=object. This is the safe delayed-destruction path the game
+/// uses for the OTHER 9 renderers every teardown -- marks the object's +0x756 byte, enqueues it, and
+/// the delete pump frees it when the GPU is done. We call it to destroy the previously-spared
+/// portrait renderer (see `PROFILE_SPARE_ORPHAN`) instead of leaking it.
+pub(crate) const DELAY_DELETE_ENQUEUE_RVA: usize = 0xe77490;
+/// The previously-spared portrait renderer awaiting safe destruction. The teardown-spare excludes
+/// one CSMenuProfModelRend from the native delete each load (nulls its table slot) to render the
+/// now-loading portrait; the load-complete reset then dropped the pointer WITHOUT freeing it, so one
+/// live renderer -- still running its ResMan offscreen draw task -- leaked per System->Quit->Load
+/// switch, each filling the 192-slot GX command queue every frame until it overflowed (0x1aeaf05,
+/// ~switch #4). The reset now MOVES the pointer here (render thread, a plain store); the game-thread
+/// teardown-spare hook delete-enqueues it via CSDelayDeleteMan at the next teardown (thread-correct,
+/// same thread the native teardown runs on).
+pub(crate) static PROFILE_SPARE_ORPHAN: AtomicUsize = AtomicUsize::new(0);
+/// Count of leaked spared renderers reclaimed via the native delete path (repeated-switch GX fix).
+pub(crate) static PROFILE_SPARE_ORPHANS_DELETED: AtomicUsize = AtomicUsize::new(0);
+
+// ============================================================================================
+// OWNERSHIP LEDGER -- conservation oracle for the "took a native object, released it one-sidedly"
+// bug class (the repeated-switch spared-renderer leak: we excluded a CSMenuProfModelRend from the
+// engine's delete to render the portrait, then a bare `store(0)` dropped our responsibility for it
+// without discharging it, leaking one live renderer per switch). A raw `usize` in an AtomicUsize
+// carries no ownership semantics, so `store(0)` reads as innocuous. This ledger makes ownership
+// CONSERVATION observable: every "take" (we become responsible for freeing a native object) and
+// "release" (we hand it back to the native lifecycle) is counted per class, and a per-switch check
+// asserts outstanding <= bound. The old leak would have tripped this at switch #2 (outstanding
+// climbing 1->2->3->4) instead of crashing the GX queue at #4. It is also the acceptance test for a
+// future RAII `EngineOwned` wrapper: build the invariant first, then make it structurally unbreakable.
+// ============================================================================================
+/// Classes of native object we take manual ownership of. Extend as the RAII wrapper subsumes more of
+/// the spare/pin family; only classes with a TRUE release obligation belong here (borrowed engine
+/// pointers -- the RT/depth pins, the anim-bound renderer -- are observation, not ownership).
+#[derive(Clone, Copy)]
+pub(crate) enum OwnedClass {
+    /// The teardown-spared portrait renderer (excluded from the native delete; we must delete it).
+    SparedRenderer = 0,
+}
+pub(crate) const OWNED_CLASS_COUNT: usize = 1;
+pub(crate) const OWNED_CLASS_NAMES: [&str; OWNED_CLASS_COUNT] = ["spared_renderer"];
+/// Max simultaneously outstanding (taken-but-not-released) per class. The spare holds exactly one
+/// renderer per load window; the game-thread drain releases the prior before taking the next, so
+/// outstanding never legitimately exceeds 1.
+pub(crate) const OWNED_CLASS_BOUND: [usize; OWNED_CLASS_COUNT] = [1];
+pub(crate) static OWNED_TAKEN: [AtomicUsize; OWNED_CLASS_COUNT] =
+    [const { AtomicUsize::new(0) }; OWNED_CLASS_COUNT];
+pub(crate) static OWNED_RELEASED: [AtomicUsize; OWNED_CLASS_COUNT] =
+    [const { AtomicUsize::new(0) }; OWNED_CLASS_COUNT];
+/// Per-class high-water of outstanding (should equal the bound in a healthy run, exceed it on a leak).
+pub(crate) static OWNED_MAX_OUTSTANDING: [AtomicUsize; OWNED_CLASS_COUNT] =
+    [const { AtomicUsize::new(0) }; OWNED_CLASS_COUNT];
+/// Total ledger-check violations observed (outstanding > bound). Nonzero == a taken-without-release
+/// leak of a native-owned object -- the run-stopping oracle for this bug class.
+pub(crate) static OWNED_LEDGER_VIOLATIONS: AtomicUsize = AtomicUsize::new(0);
+
 /// Gate-local `CS::MenuWindowJob::Run` hook state. `MENU_WINDOW_JOB_RUN_RVA` is defined with the
 /// title-cover constants above; System Quit reuses that same live/deobf target.
 pub(crate) static SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG: AtomicUsize =
@@ -4885,7 +5615,19 @@ pub(crate) static SQ_REPRO_SWITCH_INDEX: AtomicUsize = AtomicUsize::new(0);
 /// runner's `RUNTIME_NO_TEARDOWN=1`, the game stays up on the switched character so the user can play
 /// and even re-trigger the cloned Load-Profile button manually. Set to 2+ to resume the back-to-back
 /// two-switch autopilot investigation (er-effects-rs-qwj).
+///
+/// PAUSE-AT-MENU MODE (`ER_EFFECTS_SQ_REPRO_SWITCHES=0`): drive ZERO switches -- the autopilot runs
+/// the identical observed-transition sequence only up to 05_010_ProfileSelect opening
+/// (WAIT_WORLD -> OPEN_MENU -> TO_SYSTEM -> TO_PROFILE), then latches
+/// `SQ_REPRO_PAUSED_AT_PROFILE_SELECT` and goes straight to DONE: no cursor move, no slot pick, no
+/// load. The input block releases at DONE, so with `RUNTIME_NO_TEARDOWN=1` the game is left running,
+/// paused at the character-load menu, with keyboard/mouse/gamepad live for the user.
 pub(crate) const SQ_REPRO_TARGET_SWITCHES: usize = 1;
+/// RAM oracle latch (0 -> 1, never reset): the pause-at-menu autopilot observed 05_010_ProfileSelect
+/// open and STOPPED there (transitioned to DONE without TO_SLOT/CONFIRM). Exported as telemetry
+/// `sq_repro_paused_at_profile_select`; the pause-probe watcher's PASS gate is this latch == 1 while
+/// the no-load semaphores (activate count, quickload phase, fresh-deser count) all still read idle.
+pub(crate) static SQ_REPRO_PAUSED_AT_PROFILE_SELECT: AtomicUsize = AtomicUsize::new(0);
 /// The explicit ProfileSelect slot each switch loads. Slots 4/5 are the two REAL, distinct
 /// characters in the pinned gold save (25-Invades-patches): slot 4 = 'Speed Bean', slot 5 =
 /// 'Patches' (bd system-quit-switch-loads-original-not-picked-rootcause-2026-07-02). The autopilot
@@ -4894,7 +5636,7 @@ pub(crate) const SQ_REPRO_TARGET_SWITCHES: usize = 1;
 /// slot 4: driving `ER_EFFECTS_SQ_REPRO_SWITCHES=3` performs the 3rd in-session ProfileSelect open
 /// that crashed the native thumbnail builder on the empty renderer table (er-effects-rs-j3r), the
 /// deterministic repro/validation for the table-repair hook.
-pub(crate) const SQ_REPRO_TARGET_SLOTS: [i32; 3] = [4, 5, 4];
+pub(crate) const SQ_REPRO_TARGET_SLOTS: [i32; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 /// Baseline of (confirmed_block + confirmed_allow) counts captured at each switch's start, so the
 /// CONFIRM state detects THIS switch's OK as an increase over the baseline rather than a cumulative
 /// `!= 0` (which switch #2 would trip immediately on switch #1's residual count).
@@ -5115,6 +5857,8 @@ pub(crate) static START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND: Once = Once::new
 pub(crate) static START_TITLE_SCALEFORM_BIND_OBSERVER: Once = Once::new();
 pub(crate) static START_TITLE_MENU_RESOURCE_ACQUIRE_OBSERVER: Once = Once::new();
 pub(crate) static START_TITLE_FLOW_CONTEXT_RECORD_REGULATION: Once = Once::new();
+/// One-shot install guard for the stats-panel native-text hooks (named-child capture + SetText).
+pub(crate) static START_PROFILE_STATS_TEXT: Once = Once::new();
 pub(crate) static START_NOW_LOADING_HELPER_OBSERVER: Once = Once::new();
 pub(crate) static START_LOADING_BG_REPLACE_BIND: Once = Once::new();
 /// One-shot install latch for the D3D12 Present overlay (the deterministic loading-portrait display path).

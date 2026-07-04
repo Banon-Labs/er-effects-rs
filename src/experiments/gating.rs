@@ -206,6 +206,22 @@ pub(crate) fn portrait_lookat_enabled() -> bool {
             .join("er-effects-portrait-lookat.txt")
             .exists()
 }
+/// DEFAULT-OFF experiment: suppress the game's `CSFakeLoadingScreenImp` cover plate during map loads so the
+/// world renders uncovered ("no loading screen -- watch it pop in"). While set, the game task clamps the
+/// cover's `visible` byte to 0 each frame. This is ORTHOGONAL to the portrait overlay -- the overlay keeps
+/// its own gates, so the two can be toggled independently. Fully reversible: unset the file/env and the
+/// game draws its cover normally. Exploratory visual experiment, not a product feature -- if we keep it,
+/// tie it to autoload state instead of a standalone gate. Env `ER_EFFECTS_DISABLE_LOADING_COVER=1` OR
+/// GAME_DIR file `er-effects-disable-loading-cover.txt`.
+pub(crate) fn disable_loading_cover_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_DISABLE_LOADING_COVER").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-disable-loading-cover.txt")
+        .exists()
+}
 /// DEFAULT-OFF: when set, `force_profile_render_tick` does the DESTRUCTIVE periodic rebuild -- every ~240
 /// ticks it CLEARS each renderer's build latch (+0x754/+0x755) + resets the look-at slot cache, forcing a
 /// FRESH async model build. That churn leaves the models in a not-live (rebuilding) state most of the time,
@@ -437,6 +453,38 @@ pub(crate) fn autoload_disabled() -> bool {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("er-effects-no-autoload.txt")
             .exists()
+}
+/// PRODUCT DIRECTION (2026-07-04): the ProfileSelect / Load-Game menu shows a **stats panel** instead
+/// of the character portrait in each 128x128 save-slot face box. When this is on (the product default)
+/// the stats-panel pipeline runs: a neutral background texture is injected into each
+/// `SYSTEX_Menu_ProfileNN` slot and each visible `menu_dummyprofileface_NN` bind is redirected to it, so
+/// the box shows our background; the character's attributes are then drawn as native `MenuFont_01` text
+/// (see bd `profile-select-stats-panel-goal-plan-2026-07-03`,
+/// `profile-select-05010-layout-fonts-RE-2026-07-04`, `profileselect-native-settext-RE-2026-07-04`).
+///
+/// IMPORTANT -- this does NOT blank the character render. The portrait render pipeline
+/// (`force_profile_render_enabled` etc.) ALSO produces the LOADING-SCREEN portrait of the loaded
+/// character (via the offscreen readback -> now-loading forge, a DIFFERENT consumer than the
+/// ProfileSelect box DISPLAY bind). Blanking the render to hide the ProfileSelect portraits also killed
+/// the loading-screen portrait (user-reported 2026-07-04). Since the ProfileSelect boxes are hidden by
+/// the DISPLAY-bind redirect regardless of whether the render ran, the render stays ON (the crash-free
+/// one-slot render feeds the loading-screen portrait) and only the box display is redirected.
+///
+/// This is a PRODUCT-LEVEL lever tied to autoload state (not a per-feature knob): default-ON for any
+/// real product autoload run, OFF for telemetry-only/observe and native-capture runs. A single DISABLE
+/// override turns the stats panel off for A/B, mirroring `autoload_disabled()`'s `ER_EFFECTS_NO_AUTOLOAD`
+/// shape: env `ER_EFFECTS_NO_STATS_PANEL=1` OR the GAME_DIR file `er-effects-no-stats-panel.txt`.
+pub(crate) fn stats_panel_enabled() -> bool {
+    if autoload_disabled() || native_profile_capture_enabled() || save_override_telemetry_only() {
+        return false;
+    }
+    !(matches!(
+        std::env::var("ER_EFFECTS_NO_STATS_PANEL").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-no-stats-panel.txt")
+        .exists())
 }
 pub(crate) fn native_continue_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {

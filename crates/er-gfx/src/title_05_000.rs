@@ -14,7 +14,7 @@
 //! The edit table is generated -- never hand-edited -- by:
 //! `python3 scripts/gfx_tag_diff.py <vanilla> <stripped-v2> --emit-rust TITLE_05_000_STRIP_EDITS`
 
-use crate::edit::{EditError, TagEdit, apply_edits};
+use crate::edit::{EditError, EditOp, TagEdit, apply_edits};
 use crate::{GfxError, Movie};
 
 include!("title_05_000_edits.rs");

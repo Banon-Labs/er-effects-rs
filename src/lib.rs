@@ -269,6 +269,25 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         });
     }
 
+    // Stats-panel native text: arm the 05_010 GFX runtime edit (face box removed + `ErStats` field
+    // added; served in-place by the Scaleform file-open observer) and install the row-populate hook
+    // + the named-child binder hook (idempotent) so the character's attribute line renders in the
+    // game's own MenuFont_01 in its own row field. Independent of the title-cover conditions below
+    // -- it must run on every stats-panel product path, so it is gated on `stats_panel_enabled()`
+    // directly (product lever; no per-feature env gate).
+    if stats_panel_enabled() {
+        START_PROFILE_STATS_TEXT.call_once(|| {
+            PROFILE_05_010_RUNTIME_EDIT_ARMED.store(1, Ordering::SeqCst);
+            let _ = std::thread::Builder::new()
+                .name("er-effects-profile-stats-text".to_owned())
+                .spawn(|| {
+                    // The row-populate hook drives the per-slot attribute push; the named-child binder
+                    // hook still runs the title-cover duties. Both are idempotent.
+                    install_profile_row_populate_hook();
+                    install_title_scene_obj_proxy_named_child_bind_hook();
+                });
+        });
+    }
     // Title-cover masquerade Part A: install the BeginTitle `05_000_Title` hook as early as
     // splash/foreground patches, before STEP_BeginTitle can build the native title Scaleform. This
     // does NOT touch STEP_Wait or CSMenuMan+0x21; it preserves the native MenuWindowJob and hides
@@ -369,11 +388,11 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // produced. The hook self-gates on product_autoload_enabled() + the MENU_Load_ symbol and is
     // fail-open (any non-matching symbol or build/alloc failure tail-calls the original), so
     // installing it unconditionally is inert outside the product autoload path. Route-independent.
-    // NOT on the portrait-lookat path: there the live present-overlay (below) owns the display, gated by the
-    // forge-independent PROFILE_LOADSCREEN_TABLE_BUILDS latch. The forged native background portrait would
-    // render a SECOND, FROZEN head (its per-frame live-rebind crashes vkd3d, so the forged bg can only be a
-    // static snapshot). Install the forge only for the pure product-autoload cover path, where it is the sole
-    // display surface. (Overlay-only, user choice 2026-06-30 -- see keepalive-DISPLAY-FIXED memory.)
+    // NOT on the portrait-lookat path: there the live present-overlay (below) owns the head display and the
+    // game's own now-loading ARTWORK stays visible behind it (user choice -- keep the artwork). The forge is
+    // only for the pure product-cover path where it IS the display surface. The swappable
+    // build_loading_bg_replacement_tpf lever is retained for when we deliberately want to replace the
+    // background texture on the head path; it is not wired in by default so the stock artwork renders.
     if !portrait_lookat_enabled() {
         START_LOADING_BG_REPLACE_BIND.call_once(|| {
             let _ = std::thread::Builder::new()
@@ -600,6 +619,15 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // (portrait path only, one-shot on success, bounded retries) so it's cheap every frame.
                 if let Ok(base) = game_module_base() {
                     unsafe { try_install_game_present_hook(base) };
+                }
+                // LOADING-COVER EXPERIMENT: clear CSFakeLoadingScreenImp.visible each frame so the world
+                // draws uncovered during map loads. Self-gates (disable_loading_cover_enabled); runs before
+                // the player check so it acts during the loading screen (player absent). catch_unwind so a
+                // torn cover pointer can never fault the game thread.
+                if let Ok(base) = game_module_base() {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                        suppress_loading_cover_tick(base)
+                    }));
                 }
                 // before the player check so it arms at the title (pre-load), independent
                 // of the active observe/own-stepper mode.
@@ -857,11 +885,16 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                             unsafe {
                                 product_core_autoload_tick(base, slot, state.game_task_ticks)
                             };
-                            // Per-frame: capture the live character portrait CSGxTexture while the
-                            // ProfileSelect renderer still exists (it is torn down at Continue), so
-                            // the now-loading background forge can display the real portrait. One-shot.
-                            // Read the autoload's TARGET slot's renderer table entry, not a hardcoded 0.
-                            maybe_capture_portrait_gxtexture(base, slot);
+                            // FIRST-CHARACTER PORTRAIT BAKE YOINKED (user 2026-07-03). This one-shot
+                            // (LOADING_BG_PORTRAIT_GX_KEPT, set once) captured the BOOT autoload
+                            // target's portrait CSGxTexture and baked it into the now-loading forge --
+                            // the reason the FIRST character (and only the first) had its portrait
+                            // baked into the loading screen, distinct from the per-frame overlay path
+                            // the System->Quit switch characters use. Suppressing just this leaves the
+                            // switch portraits untouched. (The forge/checker + loading-art coupling is
+                            // a separate decouple, tracked for later.) The capture fn + its title.rs
+                            // (default-off flow) caller remain for reference.
+                            let _ = maybe_capture_portrait_gxtexture;
                         }
                         write_telemetry_throttled(&mut state, false);
                         return;
@@ -1136,8 +1169,14 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
         // Gated by portrait_render_drive_enabled so it can be A/B'd against the safe checker baseline.
         cs_task.run_recurring(
             move |_task_data: &FD4TaskData| {
-                if portrait_render_drive_enabled() {
-                    if let Ok(base) = game_module_base() {
+                if let Ok(base) = game_module_base() {
+                    // Stats-panel neutral-bg register: runs on EVERY frame regardless of the autoload
+                    // path (the `save_requested` product path never enters product_core_autoload_tick,
+                    // so the register cannot live there). Self-gating (stats_panel_enabled + repos-ready
+                    // + idempotent per slot via the registered mask), so an every-frame call is cheap
+                    // and stops attempting once all 10 slots are registered.
+                    unsafe { maybe_register_stats_panel_textures(base) };
+                    if portrait_render_drive_enabled() {
                         unsafe {
                             force_profile_render_tick(base, FORCE_PROFILE_RENDER_MANUAL_SLOT)
                         };

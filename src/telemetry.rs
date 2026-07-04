@@ -45,12 +45,6 @@ use crate::*;
 use crate::{crashlog::*, experiments::*, ffi::*, hooks::*};
 
 #[repr(C)]
-pub(crate) struct NowLoadingHelperLayout {
-    pub(crate) unknown_000: [u8; 0xed],
-    pub(crate) loading_flag: u8,
-}
-
-#[repr(C)]
 pub(crate) struct GameManSaveSnapshotLayout {
     pub(crate) unknown_000: [u8; 0xdf0],
     pub(crate) deserialize_ready: usize,
@@ -580,6 +574,12 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst)
+    ));
+    body.push_str(&format!(
+        "  \"sq_repro_state\": {},\n  \"sq_repro_switch_index\": {},\n  \"sq_repro_paused_at_profile_select\": {},\n",
+        SQ_REPRO_STATE.load(Ordering::SeqCst),
+        SQ_REPRO_SWITCH_INDEX.load(Ordering::SeqCst),
+        SQ_REPRO_PAUSED_AT_PROFILE_SELECT.load(Ordering::SeqCst)
     ));
     body.push_str(&format!(
         "  \"system_quit_gaitem_reset_invocations\": {},\n  \"system_quit_gaitem_reset_released_count\": {},\n  \"system_quit_gaitem_reset_last_slack_before\": {},\n  \"system_quit_gaitem_reset_last_slack_after\": {},\n",
@@ -1135,12 +1135,13 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             json_escape(&face_data_magic)
         ));
         // WORLD-LIVE oracle: CSNowLoadingHelper "now loading" latch = *(u8*)([base+0x3d60ec8]+0xED).
-        // 1 = loading screen ACTIVE; 0 = cleared / playable (latches when the MoveMapStep world-load
-        // steps stop requesting the loading screen). This replaces the grounded check, which fires
-        // DURING loading (player physics exist before the world renders).
+        // NOTE (RE-corrected 2026-07-02): this reads `CSNowLoadingHelperImp::load_done` -- a load-COMPLETE
+        // latch, NOT "loading screen visible." `Update` copies it from `request_load_done` (raised by the
+        // map-load system), so it reads true AFTER the load finishes and lingers into gameplay. Kept as a
+        // telemetry field, but do not treat it as a screen-visibility signal (see CSNowLoadingHelperImp).
         const NOW_LOADING_SINGLETON_RVA: usize = RuntimeGlobalRva::NowLoadingSingleton as usize;
         const NOW_LOADING_FLAG_OFFSET: usize =
-            core::mem::offset_of!(NowLoadingHelperLayout, loading_flag);
+            core::mem::offset_of!(CSNowLoadingHelperImp, load_done);
         const NOW_LOADING_BYTE_MASK: usize = u8::MAX as usize;
         let now_loading = {
             let helper =
@@ -1426,8 +1427,21 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
         // embedded object at TitleTopDialog+0xaa8, separate from the preserved `05_000_Title`
         // MenuWindowJob. A real portrait cover depends on post-SL2 profile_summary readiness and the
         // SYSTEX_Menu_Profile render pipeline, so expose both in RAM telemetry before any mutation.
+        // STALE-DIALOG UAF GUARD (er-effects-rs-3pc, ROOT fix 2026-07-03). `title_logo_gfx_current_frame`
+        // CALLS a virtual on the title dialog's BackViewParts GFX handle. The title logo only exists at
+        // the title screen; once we have loaded into a world that stored dialog is FREED (and, on every
+        // character switch, freed+rebuilt). A freed object keeps its vtable, and worse, its reused
+        // vtable+8 slot can point at a VALID-BUT-WRONG game function (observed: the factory FUN_1411d10f0),
+        // so the earlier `vtable_in_game_image` check passes and the call still derefs freed memory ->
+        // access violation deep in the game (crash write_oracle_telemetry -> game+0x11d10f3). You cannot
+        // safely virtual-call a maybe-freed object. So skip this GFX walk entirely once in-world: the
+        // oracle is a boot-title diagnostic and is meaningless (and unsafe) after the first load. This is
+        // what actually surfaced as the "crash on opening escape after N switches" -- the telemetry tick,
+        // not the menu, dereferencing the stale title dialog.
+        let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
         let title_logo_dialog = PRODUCT_CORE_LAST_TITLE_DIALOG.load(Ordering::SeqCst);
-        let title_logo_back_view_parts = if title_logo_dialog != NULL_PTR
+        let title_logo_back_view_parts = if !in_world
+            && title_logo_dialog != NULL_PTR
             && title_logo_dialog != TITLE_OWNER_SCAN_START_ADDRESS
         {
             title_logo_dialog + TITLE_LOGO_BACK_VIEW_PARTS_AA8_OFFSET
@@ -2282,6 +2296,131 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_tpf_texture_last_error",
             ER_TPF_COVER_LAST_ERROR.load(Ordering::SeqCst),
         );
+        // Stats-panel neutral-background wire-up oracles (memory-read telemetry, NOT screenshot). A
+        // runtime watcher confirms the character render is blanked, each per-slot neutral bg registered
+        // into the repos, and each visible face bind redirected to our key -- all without an image.
+        // `stats_panel_enabled` == the render-blank / stats-panel product mode is active.
+        push_json_bool(body, "oracle_stats_panel_enabled", stats_panel_enabled());
+        push_json_usize(
+            body,
+            "oracle_stats_panel_registered_mask",
+            STATS_PANEL_TEX_REGISTERED_MASK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_panel_register_attempts",
+            STATS_PANEL_TEX_REGISTER_ATTEMPTS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_panel_register_failures",
+            STATS_PANEL_TEX_REGISTER_FAILURES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_panel_redirect_mask",
+            STATS_PANEL_BIND_REDIRECT_MASK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_panel_redirects",
+            STATS_PANEL_BIND_REDIRECTS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_panel_last_error",
+            STATS_PANEL_LAST_ERROR.load(Ordering::SeqCst),
+        );
+        // Stats-panel NATIVE TEXT oracles (row-populate push design): native row fills observed,
+        // successful ErStats pushes, and rejected pushes. subs>0 == the attribute line reached the
+        // GFX-edit `ErStats` field (rendered in MenuFont_01) in its OWN field; failures>0 with
+        // subs==0 == the 05_010 edit was not live (field missing) or SetText rejected the value.
+        push_json_usize(
+            body,
+            "oracle_stats_text_installed",
+            TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_INSTALLED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_text_row_populates",
+            PROFILE_STATS_ROW_POPULATES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_text_settext_subs",
+            PROFILE_STATS_SETTEXT_SUBS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_text_push_failures",
+            PROFILE_STATS_PUSH_FAILURES.load(Ordering::SeqCst),
+        );
+        // 7e7 fail-closed guard: pushes skipped because the resolved component was stale (crash
+        // avoided), plus the last stale component/vtable pointers for root-causing the bad link.
+        push_json_usize(
+            body,
+            "oracle_stats_text_push_stale_skips",
+            PROFILE_STATS_PUSH_STALE_SKIPS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_text_push_stale_last_comp",
+            PROFILE_STATS_PUSH_STALE_LAST_COMP.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_text_push_stale_last_vt",
+            PROFILE_STATS_PUSH_STALE_LAST_VT.load(Ordering::SeqCst),
+        );
+        // Per-slot save-stats cache (bd er-effects-rs-l90): cache_state 1 == the live `.sl2` was read
+        // and parsed (each row shows ITS OWN character's attributes); 2 == read failed (fell back to
+        // the loaded character). decoded == how many of the 10 save slots held a real character.
+        push_json_usize(
+            body,
+            "oracle_stats_text_slot_cache_state",
+            PROFILE_SLOT_STATS_CACHE_STATE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_text_slot_decoded",
+            PROFILE_SLOT_STATS_DECODED.load(Ordering::SeqCst),
+        );
+        // Stats-panel 05_010 runtime GFX edit oracles (mirror the 05_000 runtime-strip set).
+        push_json_usize(
+            body,
+            "oracle_profile_05_010_runtime_edit_armed",
+            PROFILE_05_010_RUNTIME_EDIT_ARMED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_05_010_runtime_edit_serves",
+            PROFILE_05_010_RUNTIME_EDIT_SERVES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_05_010_runtime_edit_failures",
+            PROFILE_05_010_RUNTIME_EDIT_FAILURES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_05_010_runtime_edit_input_len",
+            PROFILE_05_010_RUNTIME_EDIT_INPUT_LEN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_05_010_runtime_edit_output_len",
+            PROFILE_05_010_RUNTIME_EDIT_OUTPUT_LEN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_05_010_runtime_edit_input_class",
+            PROFILE_05_010_RUNTIME_EDIT_INPUT_CLASS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_05_010_runtime_edit_output_validated",
+            PROFILE_05_010_RUNTIME_EDIT_OUTPUT_VALIDATED.load(Ordering::SeqCst),
+        );
         // Camera-lever (custom profile-portrait viewport) RAM semaphores: a runtime watcher can confirm
         // the override path ran and produced a sane matrix without an image. See bd
         // `camera-lever-RE-VERIFIED-offsets-and-call-addrs-2026-06-29`.
@@ -2406,6 +2545,42 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_depth_key_applied",
             DEPTH_KEY_APPLIED.load(Ordering::SeqCst),
         );
+        // Coherent color+depth readback engagement (bug #3): _ok = draw ticks the single-fence path
+        // captured color+depth together (from the deterministic bundle-paired depth); _fallback = ticks
+        // it degraded to the separate color/depth reads. A high _ok:_fallback ratio proves the coherent
+        // path is actually running (the first pass had no way to tell).
+        push_json_usize(
+            body,
+            "oracle_portrait_coherent_read_ok",
+            COHERENT_READ_OK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_coherent_read_fallback",
+            COHERENT_READ_FALLBACK.load(Ordering::SeqCst),
+        );
+        // FAIL-FAST 2nd-character desync semaphore: >0 means a frame reused a depth mask computed for a
+        // DIFFERENT character incarnation (prior character's silhouette on the new head). During the
+        // System-Quit repro this also abort()s the process on first trip, so the run stops in ~40s.
+        push_json_usize(
+            body,
+            "oracle_portrait_mask_stale_reuse",
+            PROFILE_MASK_STALE_REUSE.load(Ordering::SeqCst),
+        );
+        // FAIL-FAST mask/head coherence (2nd-character desync): _iou_last = last frame's IoU of the kept
+        // cutout vs the colour head (100=perfect match, low=the cutout doesn't match this head);
+        // _mismatch_total = frames below the gross threshold. Lets the 1st-char (correct) vs 2nd-char
+        // (desync) IoU be compared and the abort threshold calibrated.
+        push_json_usize(
+            body,
+            "oracle_portrait_mask_head_iou_last",
+            PROFILE_MASK_HEAD_IOU_LAST.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_mask_head_mismatch_total",
+            PROFILE_MASK_HEAD_MISMATCH_TOTAL.load(Ordering::SeqCst),
+        );
         push_json_usize(
             body,
             "oracle_depth_key_bg_pct",
@@ -2423,6 +2598,427 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             body,
             "oracle_loading_bg_portrait_rgba_version",
             LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst),
+        );
+        // LOADING-SCREEN PORTRAIT BUG SEMAPHORES (2026-07-04). Detection runs at CAPTURE time
+        // (`note_ls_portrait_capture`, called wherever a portrait RGBA is stored) so a transient
+        // wrong-source frame -- our neutral texture (RGB 30,28,26) flashing in right after Continue (Bug
+        // B), or a too-small 256px head (Bug A) -- cannot slip between telemetry writes. Here we just
+        // publish the latched values.
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_w",
+            LS_PORTRAIT_LAST_W.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_h",
+            LS_PORTRAIT_LAST_H.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_neutral_pct",
+            LS_PORTRAIT_LAST_NEUTRAL_PCT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_too_small_seen_version",
+            LS_PORTRAIT_TOO_SMALL_SEEN_VERSION.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_neutral_leak_seen_version",
+            LS_PORTRAIT_NEUTRAL_LEAK_SEEN_VERSION.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_ls_portrait_rejected_publishes",
+            LS_PORTRAIT_REJECTED_PUBLISHES.load(Ordering::SeqCst),
+        );
+        // CROSS-SLOT SWAP tripwires: the pinned content-RT candidate (0 = never latched a confirmed head),
+        // how many times the pin MOVED after first latch (>0 in one load window = unstable content source,
+        // the swap bug's signature), how many per-slot target build kicks fired (0 = the loaded character
+        // was never requested), and the max count of NON-target renderers seen holding a live model during
+        // the feed window (>0 = a foreign character built on the loading screen -- the swap precondition).
+        // LOADING-COVER EXPERIMENT: frames the cover-suppress clamp actually cleared visible (0 with the
+        // gate on = the cover object never resolved / was never raised).
+        push_json_usize(
+            body,
+            "oracle_loading_cover_suppress_writes",
+            LOADING_COVER_SUPPRESS_WRITES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_rt_pin",
+            PROFILE_RT_PIN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_rt_pin_switches",
+            PROFILE_RT_PIN_SWITCHES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_target_kicks",
+            PROFILE_TARGET_KICKS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_foreign_models",
+            PROFILE_FOREIGN_MODELS_MAX.load(Ordering::SeqCst),
+        );
+        // Scaleform menu-handler lifecycle guard (repeated-switch ProfileSelect UAF). double_frees > 0
+        // proves the guard caught+skipped the crash; ctors/dtors give the churn context.
+        push_json_usize(
+            body,
+            "oracle_scaleform_handler_double_frees",
+            SCALEFORM_HANDLER_DOUBLE_FREES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_scaleform_handler_ctors",
+            SCALEFORM_HANDLER_CTORS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_scaleform_handler_dtors",
+            SCALEFORM_HANDLER_DTORS.load(Ordering::SeqCst),
+        );
+        // GX command-queue overflow forensics (repeated-switch crash 0x1aeaf05): max_fill climbing
+        // toward cap across switches = the accumulating-producer signature; top_producers names the
+        // caller RVAs (entries tagged +self passed through our DLL).
+        push_json_usize(
+            body,
+            "oracle_gx_cmdqueue_cap",
+            GX_CMD_QUEUE_CAP_SEEN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gx_cmdqueue_max_fill",
+            GX_CMD_QUEUE_MAX_FILL.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gx_cmdqueue_switch_max_fill",
+            GX_CMD_QUEUE_SWITCH_MAX_FILL.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gx_cmdqueue_reserves",
+            GX_CMD_QUEUE_SUBMITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gx_cmdqueue_nearfull_hits",
+            GX_CMD_QUEUE_NEARFULL_HITS.load(Ordering::SeqCst),
+        );
+        // Repeated-switch spared-renderer leak fix: renderers reclaimed via CSDelayDeleteMan (should
+        // rise ~1/switch) and the count currently spared -- proves the orphan accumulation is capped.
+        push_json_usize(
+            body,
+            "oracle_profile_spare_orphans_deleted",
+            PROFILE_SPARE_ORPHANS_DELETED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_renderer_spare_hits",
+            PROFILE_RENDERER_SPARE_HITS.load(Ordering::SeqCst),
+        );
+        // Ownership-ledger conservation oracle: violations MUST stay 0 (nonzero == a native-owned
+        // object taken without a paired release -- the spared-renderer leak class). spared_outstanding
+        // and its high-water should track the bound (1); a climbing value is the early leak signal.
+        push_json_usize(
+            body,
+            "oracle_ownership_ledger_violations",
+            OWNED_LEDGER_VIOLATIONS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_ownership_spared_outstanding",
+            crate::experiments::ownership_outstanding(crate::constants::OwnedClass::SparedRenderer),
+        );
+        push_json_usize(
+            body,
+            "oracle_ownership_spared_max_outstanding",
+            OWNED_MAX_OUTSTANDING[crate::constants::OwnedClass::SparedRenderer as usize]
+                .load(Ordering::SeqCst),
+        );
+        // Loading-portrait select-then-show: retargets = confirm-time swaps to the newly-selected
+        // character; skipped_unkeyed = frames NOT published because the depth mask was not applied yet
+        // (never render an unmasked model); have_keyed = a masked frame is available to display.
+        push_json_usize(
+            body,
+            "oracle_portrait_retargets",
+            PROFILE_PORTRAIT_RETARGETS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_publish_skipped_unkeyed",
+            PROFILE_PUBLISH_SKIPPED_UNKEYED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_have_keyed_frame",
+            PROFILE_HAVE_KEYED_FRAME.load(Ordering::SeqCst),
+        );
+        // Torn-readback semaphore: tear score of the last publish attempt + the run max, plus how many
+        // keyed frames were skipped as torn vs published clean. A high max with clean>0 means clean
+        // frames DO land (gate suffices); clean==0 with high max means every driven frame tears (the
+        // readback needs real GPU sync). clean_min is the lowest clean score seen (baseline).
+        push_json_usize(
+            body,
+            "oracle_portrait_tear_last",
+            PROFILE_TEAR_SCORE_LAST.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_tear_max",
+            PROFILE_TEAR_SCORE_MAX.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_tear_clean_min",
+            PROFILE_TEAR_SCORE_CLEAN_MIN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_publish_clean",
+            PROFILE_PUBLISH_CLEAN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_publish_skipped_torn",
+            PROFILE_PUBLISH_SKIPPED_TORN.load(Ordering::SeqCst),
+        );
+        // Animation-stall: last loading window's animated (drive) vs displayed frames. drive<<display
+        // means the head froze early (freeze-after-capture) -- the user's "stopped animating" symptom.
+        push_json_usize(
+            body,
+            "oracle_portrait_drive_frames_last_window",
+            PROFILE_DRIVE_FRAMES_WINDOW_LAST.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_display_frames_last_window",
+            PROFILE_DISPLAY_FRAMES_WINDOW_LAST.load(Ordering::SeqCst),
+        );
+        // Teardown-fence protocol (freeze relaxation): skips = pump frames yielded to a live
+        // teardown; waits = teardowns that paused for a mid-drive pump; timeouts MUST stay 0
+        // (nonzero == one frame of the old TOCTOU exposure leaked past the 10ms cap).
+        push_json_usize(
+            body,
+            "oracle_portrait_drive_fence_skips",
+            PROFILE_DRIVE_FENCE_SKIPS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_teardown_fence_waits",
+            PROFILE_TEARDOWN_FENCE_WAITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_teardown_fence_timeouts",
+            PROFILE_TEARDOWN_FENCE_TIMEOUTS.load(Ordering::SeqCst),
+        );
+        // Color/depth source provenance (green-face wrong-buffer fix): only bundle-provenance color
+        // may display; unpaired counts real frames held back for lacking it.
+        push_json_usize(
+            body,
+            "oracle_portrait_color_from_bundle",
+            crate::experiments::PROFILE_COLOR_FROM_BUNDLE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_color_from_scan",
+            crate::experiments::PROFILE_COLOR_FROM_SCAN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_depth_from_chain",
+            crate::experiments::PROFILE_DEPTH_FROM_CHAIN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_depth_from_bfs",
+            crate::experiments::PROFILE_DEPTH_FROM_BFS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_publish_skipped_unpaired",
+            crate::experiments::PROFILE_PUBLISH_SKIPPED_UNPAIRED.load(Ordering::SeqCst),
+        );
+        // hi2: partial-mask band (mask cut something but under the floor) + how long the bridge
+        // held before the window's first publish.
+        push_json_usize(
+            body,
+            "oracle_portrait_publish_skipped_lowmask",
+            PROFILE_PUBLISH_SKIPPED_LOWMASK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_first_keyed_display_last_window",
+            PROFILE_WINDOW_FIRST_KEYED_DISPLAY_LAST.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_depth_key_degenerate",
+            crate::experiments::DEPTH_KEY_DEGENERATE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_depth_key_second_pass",
+            crate::experiments::DEPTH_KEY_SECOND_PASS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_publish_skipped_badiou",
+            crate::experiments::PROFILE_PUBLISH_SKIPPED_BADIOU.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_alpha0_clears",
+            PROFILE_ALPHA0_CLEARS.load(Ordering::SeqCst),
+        );
+        push_json_str(
+            body,
+            "oracle_gx_cmdqueue_top_producers",
+            &crate::experiments::gx_cmd_queue_hist_top(8),
+        );
+        push_json_str(
+            body,
+            "oracle_gx_cmdqueue_buckets",
+            &crate::experiments::gx_cmd_queue_bucket_summary(),
+        );
+        push_json_usize(
+            body,
+            "oracle_gx_cmdarena_min_remaining",
+            GX_CMD_ARENA_MIN_REMAINING.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gx_cmdarena_switch_min_remaining",
+            GX_CMD_ARENA_SWITCH_MIN_REMAINING.load(Ordering::SeqCst),
+        );
+        {
+            let (dd_pending, dd_highwater) = unsafe { crate::experiments::delay_delete_pending() }
+                .map(|(p, h)| (p as i64, h as i64))
+                .unwrap_or((-1, -1));
+            body.push_str(&format!(
+                "  \"oracle_delaydelete_pending\": {dd_pending},\n"
+            ));
+            body.push_str(&format!(
+                "  \"oracle_delaydelete_highwater\": {dd_highwater},\n"
+            ));
+        }
+        push_json_usize(
+            body,
+            "oracle_portrait_multi_model_publish_skips",
+            PROFILE_MULTI_MODEL_PUBLISH_SKIPS.load(Ordering::SeqCst),
+        );
+        // IDLE-ANIM BIND semaphores (bd portrait-anim-bind-RE-corrects-6hz-gate-2026-07-03):
+        // bind_state 1 = an engine-grounded idle anim bound (handle real), 2 = no candidate resolved;
+        // handle_before != sentinel proves the native static-pose anim-0 bind had resolved (anim
+        // resources ARE loaded); sentinel is the DAT_143b39470 null-handle global (constant if the
+        // corrected RE is right). MOTION vs FLICKER: motion_metric diffs the depth-keyed ALPHA
+        // silhouette (lighting-immune), luma_flicker diffs luma on the same grid (quantifies the
+        // per-frame lighting change). Product proof of "portrait animates" = bind_state 1 AND
+        // motion_metric_max clearly above 0 with luma_flicker as the lighting control.
+        push_json_usize(
+            body,
+            "oracle_portrait_anim_bind_state",
+            PORTRAIT_ANIM_BIND_STATE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_facedata_neq_ticks",
+            PORTRAIT_FACEDATA_NEQ_TICKS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_pump_draws",
+            PROFILE_PERFRAME_MODEL_DRAWS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_pump_block_r",
+            PORTRAIT_PUMP_BLOCK_R.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_pump_block_vtable",
+            PORTRAIT_PUMP_BLOCK_VTABLE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_pump_block_off",
+            PORTRAIT_PUMP_BLOCK_OFF.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_pump_block_multi",
+            PORTRAIT_PUMP_BLOCK_MULTI.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_drive_ticks",
+            PORTRAIT_DRIVE_TICKS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_anim_bind_attempts",
+            PORTRAIT_ANIM_BIND_ATTEMPTS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_anim_bound_id",
+            PORTRAIT_ANIM_BOUND_ID.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_anim_handle_before",
+            PORTRAIT_ANIM_HANDLE_BEFORE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_anim_handle",
+            PORTRAIT_ANIM_HANDLE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_anim_sentinel",
+            PORTRAIT_ANIM_SENTINEL.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_motion_metric_last",
+            PORTRAIT_MOTION_METRIC_LAST.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_motion_metric_max",
+            PORTRAIT_MOTION_METRIC_MAX.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_luma_flicker_last",
+            PORTRAIT_LUMA_FLICKER_LAST.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_luma_flicker_max",
+            PORTRAIT_LUMA_FLICKER_MAX.load(Ordering::SeqCst),
+        );
+        // LOADING-SCREEN WINDOW semaphores: overlay stop count + last stop reason (1 = now_loading seen
+        // then dropped, the game's real loading screen finished -- the spec-correct pop; 3 = anti-runaway
+        // backstop because now_loading never appeared, a signal the assumption broke).
+        push_json_usize(
+            body,
+            "oracle_overlay_window_stops",
+            OVERLAY_WINDOW_STOPS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_overlay_stop_reason",
+            OVERLAY_STOP_REASON.load(Ordering::SeqCst),
         );
         body.push_str(&format!(
             "  \"oracle_native_profile_capture_enabled\": {},\n  \"oracle_native_load_game_fired\": {},\n  \"oracle_native_load_game_last_node\": {},\n  \"oracle_native_load_game_last_node_vtable\": {},\n  \"oracle_native_load_game_last_member_dialog\": {},\n  \"oracle_native_load_game_last_member_fn\": {},\n  \"oracle_native_load_game_last_member_adjust\": {},\n  \"oracle_native_profile_source_ready\": {},\n  \"oracle_native_profile_source_name\": \"{}\",\n  \"oracle_native_profile_renderer_class\": \"{}\",\n",
@@ -2778,6 +3374,84 @@ pub(crate) fn append_crash_log(args: std::fmt::Arguments<'_>) {
     {
         let _ = writeln!(file, "[+{ms}ms] {args}");
     }
+}
+
+/// Loading-screen portrait capture check, run at CAPTURE time (every time a portrait RGBA is about to
+/// be stored), so a transient wrong-source frame -- our neutral texture flashing in right after Continue
+/// (Bug B), or a too-small early head before the upsize (Bug A) -- cannot slip between the coarse
+/// telemetry writes. Records the capture dims + neutral-color fraction, latches the two once-seen bug
+/// versions (semaphores), and RETURNS whether this capture is fit to PUBLISH.
+///
+/// Returns `false` (do NOT publish; hold the previous frame / the loading background) when the capture
+/// is our neutral texture OR smaller than [`LS_PORTRAIT_SMALL_MAX_SIDE`]. The real head reliably builds
+/// to full size within the sub-second window (runtime-observed: it reaches 1024x1024, scan area
+/// 1048576), so gating on readiness shows ONLY the correct full-size head and never the transient
+/// wrong-source frames. If the head never reaches full size (upsize failed), the loading screen simply
+/// keeps its background -- a clean fallback, not a wrong-content bug. Cheap: a strided sample.
+pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
+    let texels = (w as usize) * (h as usize);
+    if texels == 0 || px.len() < texels * 4 {
+        return false;
+    }
+    let [nr, ng, nb, _] = STATS_PANEL_BG_RGBA;
+    let tol: i32 = 8;
+    let stride = (texels / 2000).max(1);
+    let (mut sampled, mut neutral) = (0usize, 0usize);
+    let mut i = 0usize;
+    while i < texels {
+        let b = i * 4;
+        let (r, g, bl) = (px[b] as i32, px[b + 1] as i32, px[b + 2] as i32);
+        if (r - nr as i32).abs() <= tol
+            && (g - ng as i32).abs() <= tol
+            && (bl - nb as i32).abs() <= tol
+        {
+            neutral += 1;
+        }
+        sampled += 1;
+        i += stride;
+    }
+    let neutral_pct = if sampled > 0 {
+        neutral * 100 / sampled
+    } else {
+        0
+    };
+    LS_PORTRAIT_LAST_W.store(w as usize, Ordering::SeqCst);
+    LS_PORTRAIT_LAST_H.store(h as usize, Ordering::SeqCst);
+    LS_PORTRAIT_LAST_NEUTRAL_PCT.store(neutral_pct, Ordering::SeqCst);
+    // Use the version this capture will carry (bumped by the caller right after the store); reading it
+    // here is close enough for a first-seen stamp.
+    let version = LOADING_BG_PORTRAIT_RGBA_VERSION
+        .load(Ordering::SeqCst)
+        .max(1);
+    let is_neutral = neutral_pct >= 90;
+    let is_small = w.max(h) <= LS_PORTRAIT_SMALL_MAX_SIDE;
+    if is_neutral {
+        let _ = LS_PORTRAIT_NEUTRAL_LEAK_SEEN_VERSION.compare_exchange(
+            0,
+            version,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    } else if is_small {
+        let _ = LS_PORTRAIT_TOO_SMALL_SEEN_VERSION.compare_exchange(
+            0,
+            version,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+    // Publishable unless it is our NEUTRAL texture (Bug B) -- that must never reach the loading screen.
+    // We deliberately do NOT reject the too-small case (Bug A): the head sometimes stalls at 256 (the
+    // upsize to 1024 has not fired yet), and a small portrait is strictly better than a BLANK one
+    // (rejecting all 256 frames published nothing -- runtime-observed rgba_version=0). Bug A is fixed at
+    // the source instead (force the offscreen upsize); `is_small` still latches its semaphore for
+    // monitoring. Rejected frames are counted so a monitor can see the gate working.
+    let _ = is_small;
+    let publishable = !is_neutral;
+    if !publishable {
+        LS_PORTRAIT_REJECTED_PUBLISHES.fetch_add(1, Ordering::SeqCst);
+    }
+    publishable
 }
 
 pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {

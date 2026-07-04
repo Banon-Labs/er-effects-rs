@@ -39,6 +39,8 @@
 
 use std::fmt;
 
+mod draw;
+
 // ===========================================================================
 // DDS constants (Microsoft "DDS Programming Guide" / DXGI). Named so the test
 // byte assertions read as spec citations.

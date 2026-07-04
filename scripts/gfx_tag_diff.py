@@ -86,8 +86,12 @@ def lines(fn: str):
     return res
 
 
-def walk_full(b: bytes, off: int, sprite: int, out: list):
-    """Like walk_tags but collects (sprite_id_or_None, code, full_tag_bytes)."""
+def walk_full(b: bytes, off: int, sprite: int, out: list, sprite_full: dict):
+    """Like walk_tags but collects (sprite_id_or_None, code, element). For a
+    DefineSprite the element is the placeholder ("SPRITE", id) -- compared by
+    id during alignment so nested-only changes stay nested -- and the sprite's
+    full serialized tag bytes are recorded in sprite_full[id] for parent-level
+    remove/replace edits."""
     while off < len(b):
         word = int.from_bytes(b[off : off + 2], "little")
         code = word >> 6
@@ -101,7 +105,9 @@ def walk_full(b: bytes, off: int, sprite: int, out: list):
         full = b[off : off + hdr + body_len]
         if code == 39:
             sprite_id = int.from_bytes(b[off + hdr : off + hdr + 2], "little")
-            walk_full(b[: off + hdr + body_len], off + hdr + 4, sprite_id, out)
+            sprite_full[sprite_id] = full
+            out.append((sprite, code, ("SPRITE", sprite_id)))
+            walk_full(b[: off + hdr + body_len], off + hdr + 4, sprite_id, out, sprite_full)
         else:
             out.append((sprite, code, full))
         off += hdr + body_len
@@ -110,15 +116,18 @@ def walk_full(b: bytes, off: int, sprite: int, out: list):
 
 
 def containers(fn: str):
-    """Ordered dict container -> [(code, full_tag_bytes)]. Container is None for
-    the root stream or the sprite id for a DefineSprite body."""
+    """(raw_bytes, ordered dict container -> [(code, element)], sprite_full).
+    Container is None for the root stream or the sprite id for a DefineSprite
+    body; elements are full tag bytes, except DefineSprite placeholders (see
+    walk_full)."""
     b = open(fn, "rb").read()
     flat = []
-    walk_full(b, parse_header(b), None, flat)
+    sprite_full = {}
+    walk_full(b, parse_header(b), None, flat, sprite_full)
     by = {}
-    for sprite, code, full in flat:
-        by.setdefault(sprite, []).append((code, full))
-    return b, by
+    for sprite, code, elem in flat:
+        by.setdefault(sprite, []).append((code, elem))
+    return b, by, sprite_full
 
 
 def rust_bytes(b: bytes) -> str:
@@ -126,30 +135,97 @@ def rust_bytes(b: bytes) -> str:
 
 
 def emit_rust(a_fn: str, b_fn: str, const_name: str):
-    raw_a, ca = containers(a_fn)
-    raw_b, cb = containers(b_fn)
-    assert set(ca) == set(cb), f"container sets differ: {set(ca) ^ set(cb)}"
+    raw_a, ca, sf_a = containers(a_fn)
+    raw_b, cb, sf_b = containers(b_fn)
 
+    def elem_bytes(sf: dict, code: int, elem) -> bytes:
+        # Resolve a DefineSprite placeholder to the sprite's full tag bytes so a
+        # parent-level remove/replace of a whole sprite is expressible.
+        if code == 39:
+            return sf[elem[1]]
+        return elem
+
+    # Sprites removed or wholly replaced at the parent level: their nested
+    # streams are covered by the parent edit's old_tag bytes, so they must be
+    # skipped as containers (in A), and a replacement that introduces a sprite
+    # would appear as a new container in B.
+    # Each edit is (sprite, code, old_bytes, new_bytes_or_None, op) where op is
+    # one of "Replace" / "Remove" / "InsertAfter".
     edits = []
+    parent_edited_a, parent_edited_b = set(), set()
+
+    def anchor_at(sa, sf, idx, sprite):
+        """Bytes+code of the vanilla anchor tag at position `idx`; it must be
+        UNIQUE in the container so `apply_edits` resolves it unambiguously."""
+        code, elem = sa[idx]
+        ab = elem_bytes(sf, code, elem)
+        n = sum(1 for (c, e) in sa if elem_bytes(sf, c, e) == ab)
+        assert n == 1, (
+            f"insert anchor at container {sprite} idx {idx} is not unique ({n} matches)"
+        )
+        return code, ab
+
     for sprite in ca:
-        sa, sb = ca[sprite], cb[sprite]
+        if sprite is not None and sprite not in cb:
+            continue  # covered by a parent-level edit collected below
+        sa, sb = ca[sprite], cb.get(sprite, [])
         sm = difflib.SequenceMatcher(a=sa, b=sb, autojunk=False)
         for op, i1, i2, j1, j2 in sm.get_opcodes():
             if op == "equal":
                 continue
             if op == "delete":
-                for code, full in sa[i1:i2]:
-                    edits.append((sprite, code, full, None))
+                for code, elem in sa[i1:i2]:
+                    if code == 39:
+                        parent_edited_a.add(elem[1])
+                    edits.append((sprite, code, elem_bytes(sf_a, code, elem), None, "Remove"))
+            elif op == "insert":
+                # New tags with no vanilla counterpart: anchor each after the
+                # preceding vanilla tag (i1-1) via InsertAfter. Insert-at-front
+                # (i1==0) has no anchor tag and is unsupported.
+                assert i1 > 0, f"insert at container {sprite} front has no anchor tag"
+                acode, abytes = anchor_at(sa, sf_a, i1 - 1, sprite)
+                for nc, ne in sb[j1:j2]:
+                    if nc == 39:
+                        parent_edited_b.add(ne[1])
+                    edits.append(
+                        (sprite, acode, abytes, elem_bytes(sf_b, nc, ne), "InsertAfter")
+                    )
             elif op == "replace":
                 olds, news = sa[i1:i2], sb[j1:j2]
-                assert len(olds) == len(news), (
-                    f"unpaired replace in container {sprite}: {len(olds)} old vs {len(news)} new"
-                )
-                for (oc, of), (nc, nf) in zip(olds, news):
-                    assert oc == nc, f"replace changes tag code {oc}->{nc} in container {sprite}"
-                    edits.append((sprite, oc, of, nf))
+                pair = min(len(olds), len(news))
+                # Excess olds (a mixed replace+delete run): delete the tail.
+                for code, elem in olds[pair:]:
+                    if code == 39:
+                        parent_edited_a.add(elem[1])
+                    edits.append((sprite, code, elem_bytes(sf_a, code, elem), None, "Remove"))
+                # Head-to-head replacements. TagEdit.code documents the TARGETED
+                # (old) tag; the replacement may be a different tag kind (e.g. a
+                # DefineSprite repurposed as a DefineEditText).
+                for (oc, oe), (nc, ne) in zip(olds[:pair], news[:pair]):
+                    if oc == 39:
+                        parent_edited_a.add(oe[1])
+                    if nc == 39:
+                        parent_edited_b.add(ne[1])
+                    edits.append(
+                        (sprite, oc, elem_bytes(sf_a, oc, oe), elem_bytes(sf_b, nc, ne), "Replace")
+                    )
+                # Excess news (a mixed replace+insert run): insert after the last
+                # paired vanilla anchor.
+                if len(news) > len(olds):
+                    assert olds, f"insert-only replace block in container {sprite} has no anchor"
+                    acode, abytes = anchor_at(sa, sf_a, i1 + pair - 1, sprite)
+                    for nc, ne in news[pair:]:
+                        if nc == 39:
+                            parent_edited_b.add(ne[1])
+                        edits.append(
+                            (sprite, acode, abytes, elem_bytes(sf_b, nc, ne), "InsertAfter")
+                        )
             else:
-                raise AssertionError(f"unsupported opcode {op!r} in container {sprite} (insert?)")
+                raise AssertionError(f"unsupported opcode {op!r} in container {sprite}")
+    dangling_a = {s for s in ca if s is not None and s not in cb} - parent_edited_a
+    assert not dangling_a, f"containers vanished without a parent-level edit: {dangling_a}"
+    dangling_b = {s for s in cb if s is not None and s not in ca} - parent_edited_b
+    assert not dangling_b, f"containers appeared without a parent-level edit: {dangling_b}"
 
     def hdr_line(name, raw):
         return (
@@ -161,7 +237,7 @@ def emit_rust(a_fn: str, b_fn: str, const_name: str):
     print(hdr_line("A (vanilla)", raw_a))
     print(hdr_line("B (edited) ", raw_b))
     print(f"pub const {const_name}: &[TagEdit] = &[")
-    for sprite, code, old, new in edits:
+    for sprite, code, old, new, op in edits:
         sp = "None" if sprite is None else f"Some({sprite})"
         nt = "None" if new is None else f"Some({rust_bytes(new)})"
         print("    TagEdit {")
@@ -169,11 +245,14 @@ def emit_rust(a_fn: str, b_fn: str, const_name: str):
         print(f"        code: {code},")
         print(f"        old_tag: {rust_bytes(old)},")
         print(f"        new_tag: {nt},")
+        print(f"        op: EditOp::{op},")
         print("    },")
     print("];")
-    n_rm = sum(1 for e in edits if e[3] is None)
+    n_rm = sum(1 for e in edits if e[4] == "Remove")
+    n_ins = sum(1 for e in edits if e[4] == "InsertAfter")
+    n_rep = sum(1 for e in edits if e[4] == "Replace")
     print(
-        f"// {len(edits)} edits: {n_rm} removals, {len(edits) - n_rm} replacements.",
+        f"// {len(edits)} edits: {n_rm} removals, {n_rep} replacements, {n_ins} insertions.",
     )
 
 

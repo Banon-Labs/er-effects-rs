@@ -981,6 +981,58 @@ pub(crate) fn callstack_contains_game_rva(start_rva: usize, end_rva: usize) -> b
     })
 }
 
+/// GX command-queue producer attribution (`gx_reserve_cmd_queue_slot_hook`): walk the captured
+/// stack and return `(producer_rva, self_in_stack)` -- the first game-.text return address (as an
+/// RVA) that falls OUTSIDE `wrapper_rvas` (the reserve/enqueue transport band), plus whether any
+/// frame BELOW the game code lies inside our own DLL image (submissions our pipeline caused vs
+/// pure-native ones). The stack's leading frames are our own instrumentation (this helper + the
+/// MinHook detour), so self frames only count AFTER a non-self frame has appeared -- counting the
+/// prefix tagged every reserve as +self (observed run autostep10d: 8/8 producers false-tagged).
+/// `producer_rva` is 0 when no qualifying game frame was captured.
+#[cfg(windows)]
+pub(crate) fn stack_producer_rva(wrapper_rvas: std::ops::Range<usize>) -> (usize, bool) {
+    let mut frames = [std::ptr::null_mut::<c_void>(); STACK_TRACE_FRAME_COUNT];
+    let captured = unsafe {
+        RtlCaptureStackBackTrace(
+            STACK_TRACE_FRAMES_TO_SKIP,
+            frames.len() as u32,
+            frames.as_mut_ptr(),
+            std::ptr::null_mut(),
+        )
+    } as usize;
+    let game_base = game_module_base().unwrap_or(NULL_MODULE_BASE);
+    let self_base = SELF_DLL_BASE.load(Ordering::SeqCst);
+    let self_size = SELF_DLL_SIZE.load(Ordering::SeqCst);
+    let mut producer = 0usize;
+    let mut self_in_stack = false;
+    let mut past_own_prefix = false;
+    for frame in frames.iter().take(captured) {
+        let address = *frame as usize;
+        if self_base != NULL_MODULE_BASE && address.wrapping_sub(self_base) < self_size {
+            if past_own_prefix {
+                self_in_stack = true;
+            }
+            continue;
+        }
+        past_own_prefix = true;
+        if game_base == NULL_MODULE_BASE {
+            continue;
+        }
+        let Some(rva) = address.checked_sub(game_base) else {
+            continue;
+        };
+        if !(AV_GAME_TEXT_RVA_MIN..AV_GAME_TEXT_RVA_MAX).contains(&rva)
+            || wrapper_rvas.contains(&rva)
+        {
+            continue;
+        }
+        if producer == 0 {
+            producer = rva;
+        }
+    }
+    (producer, self_in_stack)
+}
+
 #[cfg(windows)]
 pub(crate) fn trace_first_game_caller_rva() -> usize {
     const GAME_TEXT_RVA_LIMIT: usize = 0x0400_0000;
