@@ -386,10 +386,15 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
         let raw = raw.trim();
         if !raw.is_empty() {
             match std::fs::read(raw) {
-                Ok(bytes)
+                Ok(mut bytes)
                     if bytes.len() as u64
                         >= crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES =>
                 {
+                    normalize_save_bytes_to_active_steam_id(
+                        base,
+                        &mut bytes,
+                        "own-load-staged-env",
+                    );
                     append_autoload_debug(format_args!(
                         "own-load: read STAGED save \"{raw}\" ({} bytes) for slicing (ER_EFFECTS_SAVE_FILE direct -- redirect-consistent, timing-independent)",
                         bytes.len()
@@ -490,7 +495,8 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
         return None;
     };
     match std::fs::read(&path) {
-        Ok(bytes) => {
+        Ok(mut bytes) => {
+            normalize_save_bytes_to_active_steam_id(base, &mut bytes, "own-load-native-dir");
             append_autoload_debug(format_args!(
                 "own-load: read save file \"{}\" ({} bytes) for slicing",
                 path.display(),

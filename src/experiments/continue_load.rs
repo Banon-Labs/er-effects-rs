@@ -685,12 +685,13 @@ unsafe fn seed_profile_summary_slot_from_staged_save(
         ));
         return false;
     };
-    let Ok(save_bytes) = fs::read(&save_path) else {
+    let Ok(mut save_bytes) = fs::read(&save_path) else {
         append_autoload_debug(format_args!(
             "native-profile-capture: staged ProfileSummary seed failed to read '{save_path}'"
         ));
         return false;
     };
+    normalize_save_bytes_to_active_steam_id(base, &mut save_bytes, "native-profile-capture-seed");
     let Ok(body) = er_save_loader::bnd4::slot_body(&save_bytes, slot as usize) else {
         append_autoload_debug(format_args!(
             "native-profile-capture: staged ProfileSummary seed failed to locate USER_DATA{slot:03} in '{save_path}'"

@@ -258,6 +258,14 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
             .spawn(apply_foreground_force);
     });
 
+    // Audio-side startup/title-logo semaphore: log actual Wwise PostEvent IDs because this regression
+    // can be heard without a reliable visual artifact. Read-only; forwards the event unchanged.
+    START_SOUND_POST_EVENT_OBSERVER.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("er-effects-sound-post-event".to_owned())
+            .spawn(install_sound_post_event_observer_hook);
+    });
+
     // Passive title-resource observer is deliberately independent of the cover/hide bundle: recent
     // branches have kept the stock logo invisible, so resource-path proof must not depend on any
     // visual/logo-hide state.

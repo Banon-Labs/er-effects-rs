@@ -133,9 +133,11 @@ LEGAL_POPUP_DETECTED = "visual_legal_popup_detected"
 NATIVE_LEGAL_POPUP_DETECTED = "native_legal_popup_detected"
 SAVE_DATA_POPUP_DETECTED = "visual_save_data_popup_detected"
 NATIVE_CORRUPTED_SAVE_DETECTED = "native_corrupted_save_detected"
+NATIVE_LOAD_SAVE_DATA_CORRUPTED_DETECTED = "native_load_save_data_corrupted_detected"
 MESSAGEBOX_DIALOG_DETECTED = "native_messagebox_dialog_detected"
 SERVER_STATUS_SEMAPHORE_DETECTED = "native_server_status_semaphore_detected"
 TITLE_NATIVE_VISUAL_UNSUPPRESSED = "native_title_visual_render_unsuppressed"
+STARTUP_SOUND_EVENT_DETECTED = "startup_sound_event_detected"
 TITLE_PROFILE_RENDER_REFRESH_MISSING = "title_profile_render_refresh_missing"
 PLACEHOLDER_CHARACTER_DETECTED = "placeholder_character_detected"
 TARGET_WINDOW_CAPTURE_UNSAFE = "target_window_capture_unsafe"
@@ -1213,10 +1215,29 @@ def telemetry_messagebox_dialog_detected(telemetry: dict[str, Any] | None) -> bo
     )
 
 
+def telemetry_native_load_save_data_corrupted_detected(telemetry: dict[str, Any] | None) -> bool:
+    if not isinstance(telemetry, dict):
+        return False
+    return as_int(telemetry.get("oracle_corrupted_save_load_failed_seen_id"), 0) == 401721
+
+
 def telemetry_native_corrupted_save_detected(telemetry: dict[str, Any] | None) -> bool:
     if not isinstance(telemetry, dict):
         return False
     return as_int(telemetry.get("oracle_corrupted_save_seen_id"), 0) > 0
+
+
+def telemetry_startup_sound_event_detected(telemetry: dict[str, Any] | None) -> bool:
+    if not isinstance(telemetry, dict):
+        return False
+    # The DLL is allowed to *see* startup/title Wwise events now, but they must be muted at the hook.
+    # Fail only if a pre-world event was forwarded to Wwise and could be heard.
+    if as_int(telemetry.get("oracle_sound_post_event_forwarded_hits"), 0) <= 0:
+        return False
+    return not (
+        telemetry.get("oracle_player_present") is True
+        or telemetry.get("player_available") is True
+    )
 
 
 def native_legal_text_id(value: Any) -> int | None:
@@ -2353,6 +2374,23 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
                     expected_animation_id=args.expected_animation_id,
                 )
             )
+        if telemetry_native_load_save_data_corrupted_detected(telemetry) and not (
+            telemetry is not None and telemetry.get("oracle_native_profile_capture_enabled") is True
+        ):
+            return with_runtime_module_info(
+                ReadinessResult(
+                    False,
+                    NATIVE_LOAD_SAVE_DATA_CORRUPTED_DETECTED,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
         if telemetry_native_corrupted_save_detected(telemetry) and not (
             telemetry is not None and telemetry.get("oracle_native_profile_capture_enabled") is True
         ):
@@ -2375,6 +2413,21 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
                 ReadinessResult(
                     False,
                     MESSAGEBOX_DIALOG_DETECTED,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
+        if telemetry_startup_sound_event_detected(telemetry):
+            return with_runtime_module_info(
+                ReadinessResult(
+                    False,
+                    STARTUP_SOUND_EVENT_DETECTED,
                     pid,
                     bootstrap,
                     telemetry,

@@ -3207,8 +3207,11 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
     // is corrupted" dialog -- our RAM-read detector for that popup (the gold save was read but rejected
     // on validate/write). See CORRUPTED_SAVE_MSG_IDS.
     body.push_str(&format!(
-        "  \"oracle_corrupted_save_seen_id\": {},\n",
-        crate::experiments::CORRUPTED_SAVE_SEEN_ID.load(Ordering::SeqCst)
+        "  \"oracle_corrupted_save_seen_id\": {},\n  \"oracle_corrupted_save_load_failed_seen_id\": {},\n  \"oracle_corrupted_save_seen_count\": {},\n  \"oracle_corrupted_save_seen_caller_rva\": \"{:#x}\",\n",
+        crate::experiments::CORRUPTED_SAVE_SEEN_ID.load(Ordering::SeqCst),
+        crate::experiments::CORRUPTED_SAVE_LOAD_FAILED_SEEN_ID.load(Ordering::SeqCst),
+        crate::experiments::CORRUPTED_SAVE_SEEN_COUNT.load(Ordering::SeqCst),
+        crate::experiments::CORRUPTED_SAVE_SEEN_CALLER_RVA.load(Ordering::SeqCst)
     ));
     // PRIVACY-POLICY SEMAPHORE (privacy-policy-gated-on-character-presence-CONFIRMED-2026-06-23):
     // this is a pre-render character/profile-summary gate, not evidence that a ToS/policy renderer was
@@ -3244,6 +3247,24 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
             splash_byte
         ));
     }
+    // AUDIO SEMAPHORE: actual Wwise PostEvent submissions. This catches audible-only regressions
+    // (for example startup/title-logo music) that can block the later title/load flow without a useful
+    // screenshot oracle. The hook is observe-only and forwards every event unchanged.
+    body.push_str(&format!(
+        "  \"oracle_sound_post_event_hook_installed\": {},\n  \"oracle_sound_post_event_hits\": {},\n  \"oracle_sound_post_event_muted_hits\": {},\n  \"oracle_sound_post_event_forwarded_hits\": {},\n  \"oracle_sound_post_event_first_id\": {},\n  \"oracle_sound_post_event_last_id\": {},\n  \"oracle_sound_post_event_first_muted_id\": {},\n  \"oracle_sound_post_event_last_muted_id\": {},\n  \"oracle_sound_post_event_last_playing_id\": {},\n  \"oracle_sound_post_event_last_game_object\": \"{:#x}\",\n  \"oracle_sound_post_event_last_flags\": \"{:#x}\",\n  \"oracle_sound_post_event_last_caller_rva\": \"{:#x}\",\n",
+        crate::SOUND_POST_EVENT_CORE_INSTALLED.load(Ordering::SeqCst) != 0,
+        crate::SOUND_POST_EVENT_HITS.load(Ordering::SeqCst),
+        crate::SOUND_POST_EVENT_MUTED_HITS.load(Ordering::SeqCst),
+        crate::SOUND_POST_EVENT_FORWARDED_HITS.load(Ordering::SeqCst),
+        crate::SOUND_POST_EVENT_FIRST_ID.load(Ordering::SeqCst),
+        crate::SOUND_POST_EVENT_LAST_ID.load(Ordering::SeqCst),
+        crate::SOUND_POST_EVENT_FIRST_MUTED_ID.load(Ordering::SeqCst),
+        crate::SOUND_POST_EVENT_LAST_MUTED_ID.load(Ordering::SeqCst),
+        crate::SOUND_POST_EVENT_LAST_PLAYING_ID.load(Ordering::SeqCst),
+        crate::SOUND_POST_EVENT_LAST_GAME_OBJECT.load(Ordering::SeqCst),
+        crate::SOUND_POST_EVENT_LAST_FLAGS.load(Ordering::SeqCst),
+        crate::SOUND_POST_EVENT_LAST_CALLER_RVA.load(Ordering::SeqCst)
+    ));
     // oracle_continue_ready_stage / _scan_node_hits / _dialog_vt REMOVED 2026-06-24: they were the
     // diagnostic for the native_continue Continue-node scan (CONTINUE_READY_STAGE/SCAN_NODE_HITS/
     // DIALOG_VT_SEEN), which was ripped out as dead code -- the scan never found the node and the

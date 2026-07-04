@@ -2498,6 +2498,28 @@ pub(crate) static TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE: AtomicUsize =
 /// to the previously-embedded `TITLE_05_000_TEXT_SUPPRESSED_GFX` for the known vanilla input
 /// (fixture-gated proof in `crates/er-gfx/tests/title_strip.rs`). 0 = disarmed, 1 = armed.
 pub(crate) static TITLE_05_000_RUNTIME_STRIP_ARMED: AtomicUsize = AtomicUsize::new(0);
+
+/// Wwise post-event core (`AK::SoundEngine::PostEvent` shared numeric-id backend):
+/// Ghidra dump `FUN_14223a120`, deobf/live `0x14223a130` (`dump-deobf-shift.py`, content-unique).
+/// This is an audio-side semaphore generator: it records actual sound events the engine submits,
+/// including the audible startup/title-logo music that has no visible-only oracle.
+pub(crate) const SOUND_POST_EVENT_CORE_RVA: usize = 0x223a130;
+pub(crate) static SOUND_POST_EVENT_CORE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SOUND_POST_EVENT_CORE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SOUND_POST_EVENT_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SOUND_POST_EVENT_MUTED_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SOUND_POST_EVENT_FORWARDED_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SOUND_POST_EVENT_FIRST_ID: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SOUND_POST_EVENT_LAST_ID: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SOUND_POST_EVENT_FIRST_MUTED_ID: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SOUND_POST_EVENT_LAST_MUTED_ID: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SOUND_POST_EVENT_LAST_PLAYING_ID: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SOUND_POST_EVENT_LAST_GAME_OBJECT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static SOUND_POST_EVENT_LAST_FLAGS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SOUND_POST_EVENT_LAST_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+
 /// Successful runtime-strip serves (native MemoryFile data/len swapped to the derived movie).
 pub(crate) static TITLE_05_000_RUNTIME_STRIP_SERVES: AtomicUsize = AtomicUsize::new(0);
 /// Runtime-strip failures (unexpected file vtable, unreadable payload, parse/edit/write error).
@@ -4387,6 +4409,10 @@ pub(crate) const SAVE_DIR_SLOT_LOOKUP_RVA: usize = 0x240c270;
 /// Steam-interface guard pointer (abs 0x143b48ff0): SAVE_DIR_BUILDER derefs the Steam
 /// interface to read the account id; if this is null the builder must be skipped.
 pub(crate) const STEAM_INTERFACE_GUARD_RVA: usize = 0x3b48ff0;
+/// Active SteamID64 getter (0x140e8d590): returns the current signed-in Steam account's full
+/// SteamID64 as a `u64`. Static-grounded from the SAVE_DIR_BUILDER chain; used to normalize staged
+/// foreign save bytes before native deserialize stores them in GameDataMan/ProfileSummary.
+pub(crate) const STEAM_ID64_GETTER_RVA: usize = 0xe8d590;
 /// SAVE_DIR_BUILDER's output is a MSVC `basic_string<char16_t, ..., StatefulAllocator>`
 /// (the stateful allocator occupies the first member): allocator ptr at +0x00, the _Bx
 /// SSO/heap union at +0x08 (8 char16 SSO when cap<8, else `char16_t*`), _Mysize (code units)
@@ -5890,6 +5916,7 @@ pub(crate) static START_SAFE_INPUT_HOOKS: Once = Once::new();
 pub(crate) static START_SPLASH_SKIP: Once = Once::new();
 pub(crate) static START_ONLINE_DISABLE: Once = Once::new();
 pub(crate) static START_FOREGROUND_FORCE: Once = Once::new();
+pub(crate) static START_SOUND_POST_EVENT_OBSERVER: Once = Once::new();
 pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS: Once = Once::new();
 pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS: Once = Once::new();
 pub(crate) static START_TITLE_LOGO_START_LOGIN_HIDE: Once = Once::new();

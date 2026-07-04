@@ -6,7 +6,7 @@ use std::{
     ffi::c_void,
     fmt::Write as _,
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex, Once, OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -101,6 +101,172 @@ pub(crate) fn save_trace_enabled() -> bool {
             .exists()
 }
 
+static OBSERVED_ACTIVE_STEAM_ID64: AtomicU64 = AtomicU64::new(0);
+
+fn observe_steam_id64_from_save_path(path: &[u16]) {
+    const ELDENRING: &[u16] = &[
+        b'e' as u16,
+        b'l' as u16,
+        b'd' as u16,
+        b'e' as u16,
+        b'n' as u16,
+        b'r' as u16,
+        b'i' as u16,
+        b'n' as u16,
+        b'g' as u16,
+    ];
+    let Some(idx) = wide_find_ci_ascii(path, ELDENRING) else {
+        return;
+    };
+    let mut pos = idx + ELDENRING.len();
+    while matches!(path.get(pos), Some(c) if *c == b'\\' as u16 || *c == b'/' as u16) {
+        pos += 1;
+    }
+    let start = pos;
+    let mut steam_id = 0u64;
+    while let Some(&c) = path.get(pos) {
+        if !(b'0' as u16..=b'9' as u16).contains(&c) {
+            break;
+        }
+        steam_id = steam_id
+            .saturating_mul(10)
+            .saturating_add((c - b'0' as u16) as u64);
+        pos += 1;
+    }
+    let digits = pos.saturating_sub(start);
+    if (16..=20).contains(&digits) && steam_id != 0 {
+        OBSERVED_ACTIVE_STEAM_ID64.store(steam_id, Ordering::SeqCst);
+    }
+}
+
+/// Read the active signed-in account SteamID64 as observed from the native save path builder's output.
+/// The direct native getter exists, but calling it too early can terminate under Arxan/me3; the path
+/// builder has already done the native call safely by the time a save path is visible to our hooks.
+pub(crate) unsafe fn active_steam_id64(_base: usize) -> Option<u64> {
+    let observed = OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst);
+    (observed != 0).then_some(observed)
+}
+
+fn save_normalize_hash_bytes(bytes: &[u8]) -> u64 {
+    let mut h = 0xcbf29ce484222325u64;
+    for b in bytes.iter().copied() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+fn log_save_steam_id_locations(bytes: &[u8], target: u64, source: &str) {
+    match er_save_loader::bnd4::steam_id_locations(bytes) {
+        Ok(locations) => {
+            let mismatch_count = locations
+                .iter()
+                .filter(|location| location.value != target)
+                .count();
+            append_autoload_debug(format_args!(
+                "save-steamid-normalize: prewrite source={source} target={target} locations={} mismatches={mismatch_count}",
+                locations.len()
+            ));
+            for location in locations
+                .iter()
+                .filter(|location| location.value != target)
+                .take(16)
+            {
+                append_autoload_debug(format_args!(
+                    "save-steamid-normalize: mismatch source={source} entry={} body_off=0x{:x} file_off=0x{:x} current={} target={target}",
+                    location.entry_name, location.body_offset, location.file_offset, location.value
+                ));
+            }
+        }
+        Err(err) => append_autoload_debug(format_args!(
+            "save-steamid-normalize: prewrite inspect failed source={source}: {err:?}"
+        )),
+    }
+}
+
+pub(crate) fn normalize_save_bytes_to_active_steam_id(
+    base: usize,
+    bytes: &mut [u8],
+    source: &str,
+) -> Option<er_save_loader::bnd4::SteamIdNormalizeReport> {
+    let Some(steam_id) = (unsafe { active_steam_id64(base) }) else {
+        append_autoload_debug(format_args!(
+            "save-steamid-normalize: skipped source={source} -- active SteamID64 unavailable"
+        ));
+        return None;
+    };
+    log_save_steam_id_locations(bytes, steam_id, source);
+    match er_save_loader::bnd4::normalize_steam_id_in_place(bytes, steam_id) {
+        Ok(report) => {
+            append_autoload_debug(format_args!(
+                "save-steamid-normalize: source={source} steam_id={steam_id} char_seen={} char_patched={} user_data10_seen={} user_data10_patched={} md5_rewritten={}",
+                report.character_slots_seen,
+                report.character_slots_patched,
+                report.user_data10_seen,
+                report.user_data10_patched,
+                report.md5_rewritten
+            ));
+            Some(report)
+        }
+        Err(err) => {
+            append_autoload_debug(format_args!(
+                "save-steamid-normalize: failed source={source}: {err:?}"
+            ));
+            None
+        }
+    }
+}
+
+pub(crate) fn normalize_env_save_file_to_active_steam_id_once(base: usize, reason: &str) {
+    if SAVE_STEAM_ID_ENV_NORMALIZE_DONE.load(Ordering::SeqCst) != 0
+        || OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst) == 0
+    {
+        return;
+    }
+    let Ok(path) = std::env::var("ER_EFFECTS_SAVE_FILE") else {
+        append_autoload_debug(format_args!(
+            "save-steamid-normalize: no env file for one-shot disk normalize reason={reason}"
+        ));
+        return;
+    };
+    let path = path.trim();
+    if path.is_empty() {
+        append_autoload_debug(format_args!(
+            "save-steamid-normalize: blank env file for one-shot disk normalize reason={reason}"
+        ));
+        return;
+    }
+    let Ok(mut bytes) = fs::read(path) else {
+        append_autoload_debug(format_args!(
+            "save-steamid-normalize: failed to read env file for one-shot disk normalize reason={reason} path='{path}'"
+        ));
+        return;
+    };
+    let before = save_normalize_hash_bytes(&bytes);
+    let Some(report) = normalize_save_bytes_to_active_steam_id(base, &mut bytes, reason) else {
+        return;
+    };
+    if !report.changed() {
+        SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
+        return;
+    }
+    match fs::write(path, &bytes) {
+        Ok(()) => {
+            let after = save_normalize_hash_bytes(&bytes);
+            SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-steamid-normalize: wrote normalized env save path='{path}' reason={reason} before=0x{before:016x} after=0x{after:016x}"
+            ));
+        }
+        Err(err) => {
+            SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-steamid-normalize: FAILED to write normalized env save path='{path}' reason={reason}: {err}"
+            ));
+        }
+    }
+}
+
 /// Redirect directory (UTF-16, NUL-free, no trailing separator) computed from the parent of
 /// `ER_EFFECTS_SAVE_FILE`. Set once at init, BEFORE the CreateFileW hook is armed.
 static SAVE_REDIRECT_DIR_W: OnceLock<Vec<u16>> = OnceLock::new();
@@ -145,6 +311,7 @@ static SAVE_DISKFREE_LOGGED: AtomicUsize = AtomicUsize::new(0);
 static SAVE_REDIRECT_ORIG_NTQUERYVOLINFO: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static SAVE_VOLINFO_LOGGED: AtomicUsize = AtomicUsize::new(0);
 static SAVE_REDIRECT_INSTALL_ONCE: Once = Once::new();
+static SAVE_STEAM_ID_ENV_NORMALIZE_DONE: AtomicUsize = AtomicUsize::new(0);
 /// Count of save-path opens we have redirected, logged for the first few so a probe can CONFIRM the
 /// game actually opened our staged save through the redirect (not the default dir). Capped so a
 /// busy IO loop cannot spam the debug log.
@@ -202,13 +369,77 @@ fn unix_path_to_wine_wide(root: &std::path::Path) -> Vec<u16> {
 /// plausibly-sized save / not staged under an `EldenRing` directory component. The redirect rewrites
 /// the game's `...\Roaming\EldenRing\<rest>` to `<root>\EldenRing\<rest>`, so the staged save MUST
 /// live at `<root>/EldenRing/<steamid>/ER0000.sl2`.
-fn save_override_redirect_root_w() -> Option<Vec<u16>> {
+fn env_save_file_path() -> Option<PathBuf> {
     let raw = std::env::var("ER_EFFECTS_SAVE_FILE").ok()?;
     let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
+    (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
+}
+
+fn steam_id64_from_env_save_file_path(path: &Path) -> Option<u64> {
+    let mut after_elden_ring = false;
+    for comp in path.components() {
+        let text = comp.as_os_str().to_string_lossy();
+        if after_elden_ring {
+            if text.len() >= 16
+                && text.len() <= 20
+                && text.as_bytes().iter().all(u8::is_ascii_digit)
+            {
+                return text.parse::<u64>().ok().filter(|value| *value != 0);
+            }
+            after_elden_ring = false;
+        }
+        if text.eq_ignore_ascii_case("EldenRing") {
+            after_elden_ring = true;
+        }
     }
-    let path = PathBuf::from(trimmed);
+    None
+}
+
+fn normalize_env_save_file_to_known_steam_id(path: &Path, steam_id: u64, reason: &str) {
+    let Ok(mut bytes) = fs::read(path) else {
+        append_autoload_debug(format_args!(
+            "save-steamid-normalize: failed to read env file for early normalize reason={reason} path='{}'",
+            path.display()
+        ));
+        return;
+    };
+    let before = save_normalize_hash_bytes(&bytes);
+    log_save_steam_id_locations(&bytes, steam_id, reason);
+    match er_save_loader::bnd4::normalize_steam_id_in_place(&mut bytes, steam_id) {
+        Ok(report) => {
+            append_autoload_debug(format_args!(
+                "save-steamid-normalize: source={reason} steam_id={steam_id} char_seen={} char_patched={} user_data10_seen={} user_data10_patched={} md5_rewritten={}",
+                report.character_slots_seen,
+                report.character_slots_patched,
+                report.user_data10_seen,
+                report.user_data10_patched,
+                report.md5_rewritten
+            ));
+            if !report.changed() {
+                return;
+            }
+            match fs::write(path, &bytes) {
+                Ok(()) => {
+                    let after = save_normalize_hash_bytes(&bytes);
+                    append_autoload_debug(format_args!(
+                        "save-steamid-normalize: wrote normalized env save path='{}' reason={reason} before=0x{before:016x} after=0x{after:016x}",
+                        path.display()
+                    ));
+                }
+                Err(err) => append_autoload_debug(format_args!(
+                    "save-steamid-normalize: FAILED to write normalized env save path='{}' reason={reason}: {err}",
+                    path.display()
+                )),
+            }
+        }
+        Err(err) => append_autoload_debug(format_args!(
+            "save-steamid-normalize: failed source={reason}: {err:?}"
+        )),
+    }
+}
+
+fn save_override_redirect_root_w() -> Option<Vec<u16>> {
+    let path = env_save_file_path()?;
     let meta = std::fs::metadata(&path).ok()?;
     if !meta.is_file() || meta.len() < SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES {
         return None;
@@ -253,6 +484,21 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
     }
     match save_override_redirect_root_w() {
         Some(root_w) => {
+            if let Some(path) = env_save_file_path() {
+                if let Some(steam_id) = steam_id64_from_env_save_file_path(&path) {
+                    OBSERVED_ACTIVE_STEAM_ID64.store(steam_id, Ordering::SeqCst);
+                    normalize_env_save_file_to_known_steam_id(
+                        &path,
+                        steam_id,
+                        "early-enforced-env-save",
+                    );
+                    SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
+                } else {
+                    append_autoload_debug(format_args!(
+                        "save-steamid-normalize: early env path has no EldenRing/<steamid> segment"
+                    ));
+                }
+            }
             // UTF-8 Lossy: log-only decode of the staged root for probe confirmation.
             let shown = String::from_utf16_lossy(&root_w);
             let _ = SAVE_REDIRECT_DIR_W.set(root_w);
@@ -387,6 +633,10 @@ fn save_redirect_path(path: &[u16]) -> Option<Vec<u16>> {
         b'n' as u16,
         b'g' as u16,
     ];
+    // Always learn the native/staged `<steamid>` segment from save-like paths; this is the safest
+    // current-account oracle because the native save-dir builder already called Steam before the path
+    // reached our hook. The redirect decision below is still anchored on `Roaming` to avoid loops.
+    observe_steam_id64_from_save_path(path);
     // Anchor on `Roaming` + `EldenRing` so a coincidental "eldenring" elsewhere -- and our already-
     // redirected target (`Z:\...\save\EldenRing\...`, no "Roaming") -- never re-redirects.
     if !wide_contains_ci_ascii(path, ROAMING) {
@@ -463,7 +713,15 @@ unsafe extern "system" fn save_redirect_createfilew_hook(
                 ));
             }
         }
-        if let Some(redirected) = save_redirect_path(path) {
+        let is_save_file =
+            wide_ends_with_ci_ascii(path, SL2D) || wide_ends_with_ci_ascii(path, CO2D);
+        let redirected_path = save_redirect_path(path);
+        if is_save_file {
+            if let Ok(base) = game_module_base() {
+                normalize_env_save_file_to_active_steam_id_once(base, "createfile-save-open");
+            }
+        }
+        if let Some(redirected) = redirected_path {
             let ret = unsafe {
                 call(
                     redirected.as_ptr(),
@@ -755,6 +1013,18 @@ unsafe extern "system" fn save_ntcreatefile_diag_hook(
                 // before the boot save READ/WRITE we care about. The .sl2 opens ARE the save commit.
                 let _ = ELDENRING_SEG;
                 let is_sl2 = wide_ends_with_ci_ascii(path, SL2D);
+                if is_sl2 {
+                    observe_steam_id64_from_save_path(path);
+                    let is_write = access & 0x4000_0000 != 0 || access & 0x2 != 0;
+                    if !is_write {
+                        if let Ok(base) = game_module_base() {
+                            normalize_env_save_file_to_active_steam_id_once(
+                                base,
+                                "ntcreatefile-save-open",
+                            );
+                        }
+                    }
+                }
                 if is_sl2
                     && SAVE_NTCREATE_DIAG_LOGGED.load(Ordering::SeqCst) < SAVE_NTCREATE_DIAG_MAX
                 {
