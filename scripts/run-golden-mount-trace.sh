@@ -21,11 +21,12 @@ set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
-PROTON="${PROTON:-$HOME/.local/share/Steam/steamapps/common/Proton - Experimental/proton}"
+# me3 delivers the DLL as a native (LazyLoader removed 2026-07-04).
+# shellcheck source=scripts/me3-launch-lib.sh
+source "$REPO_ROOT/scripts/me3-launch-lib.sh"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
-STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-$HOME/.local/share/Steam}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/golden-mount-trace-$(date +%Y%m%d-%H%M%S)}"
-PID_FILE="${PID_FILE:-$ARTIFACT_DIR/proton-run.pid}"
+PID_FILE="${PID_FILE:-$ARTIFACT_DIR/me3-launch.pid}"
 TELEMETRY_PATH="${TELEMETRY_PATH:-$ARTIFACT_DIR/er-effects-telemetry.json}"
 BOOTSTRAP_PATH="${BOOTSTRAP_PATH:-$ARTIFACT_DIR/bootstrap.jsonl}"
 BOOTSTRAP_STATE_PATH="${BOOTSTRAP_STATE_PATH:-$ARTIFACT_DIR/bootstrap-state.json}"
@@ -55,7 +56,7 @@ usage() {
   cat <<EOF
 Usage: $0 [--dry-run]
 
-Prepares and launches the GOLDEN mount-trace scout: a direct/offline eldenring.exe Proton launch with
+Prepares and launches the GOLDEN mount-trace scout: a direct/offline eldenring.exe me3 launch with
 NO autoload, an INT3 breakpoint at MountEblArchive (RVA 0x$MOUNT_EBL_ARCHIVE_RVA), so the USER can drive
 one native menu load and the DLL logs the m28 EBL-mount caller chain to the game-dir er-effects-crash.log.
 
@@ -105,7 +106,8 @@ preflight() {
   pgrep -x steam >/dev/null 2>&1 || fatal "Steam is not running; start Steam first (the offline eldenring.exe launch needs Steam's environment, else the run is degraded)"
   [[ "$RUNTIME_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || fatal "RUNTIME_TIMEOUT_SECONDS must be an integer"
   (( RUNTIME_TIMEOUT_SECONDS > 0 && RUNTIME_TIMEOUT_SECONDS <= RUNTIME_TIMEOUT_CAP_SECONDS )) || fatal "RUNTIME_TIMEOUT_SECONDS must be 1..$RUNTIME_TIMEOUT_CAP_SECONDS"
-  require_executable "$PROTON"
+  me3_preflight || fatal "me3 preflight failed"
+  me3_require_no_lazyloader "$GAME_DIR" || fatal "leftover LazyLoader proxy in $GAME_DIR"
   require_file "$GAME_DIR/eldenring.exe"
   require_file "$DEPLOYED_DLL"
   [[ -d "$STEAM_COMPAT_DATA_PATH" ]] || fatal "missing compatdata path: $STEAM_COMPAT_DATA_PATH"
@@ -191,28 +193,19 @@ mkdir -p "$ARTIFACT_DIR"
 
 if (( DRY_RUN )); then
   cat > "$ARTIFACT_DIR/dry-run-summary.json" <<EOF
-{"artifact_dir":"$ARTIFACT_DIR","launch":"direct-proton-eldenring-exe-no-autoload","autoload":"none-user-drives-menu","breakpoint_rva":"0x$MOUNT_EBL_ARCHIVE_RVA","timeout_seconds":$RUNTIME_TIMEOUT_SECONDS,"crash_log":"$CRASH_LOG"}
+{"artifact_dir":"$ARTIFACT_DIR","launch":"me3-native-eldenring-exe-no-autoload","autoload":"none-user-drives-menu","breakpoint_rva":"0x$MOUNT_EBL_ARCHIVE_RVA","timeout_seconds":$RUNTIME_TIMEOUT_SECONDS,"crash_log":"$CRASH_LOG"}
 EOF
-  echo "dry-run ok: would arm INT3 at RVA 0x$MOUNT_EBL_ARCHIVE_RVA (MountEblArchive), move aside er-effects-autoload.txt, deploy the DLL + LazyLoader chainload, launch direct eldenring.exe through Proton with NO autoload, wait <=${RUNTIME_TIMEOUT_SECONDS}s for the user to drive a native load, then tear down the owned launcher pid + exact eldenring.exe runtime pids and restore the user's autoload.txt"
+  echo "dry-run ok: would arm INT3 at RVA 0x$MOUNT_EBL_ARCHIVE_RVA (MountEblArchive), move aside er-effects-autoload.txt, stage the DLL as an me3 native, launch eldenring.exe through me3 with NO autoload, wait <=${RUNTIME_TIMEOUT_SECONDS}s for the user to drive a native load, then tear down the owned launcher pid + exact eldenring.exe runtime pids and restore the user's autoload.txt"
   exit 0
 fi
 
 [[ "${ER_EFFECTS_AUTHORIZED_DIRECT_RUNTIME:-0}" == "1" ]] || fatal "set ER_EFFECTS_AUTHORIZED_DIRECT_RUNTIME=1 for the exact runtime invocation (source .envs/golden-mount-trace.env)"
 [[ "${AUTO_ALLOW_MANUAL_RUNTIME_PROBE:-0}" == "1" ]] || fatal "set AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 for the manual runtime probe (source .envs/golden-mount-trace.env)"
 
-# Deploy the current DLL + LazyLoader chainload config (mirrors .auto/runtime_probe.sh setup, minus the
-# readiness watcher). The deployed DLL already carries the sw-bp + anti-anti-debug facility.
-mkdir -p "$GAME_DIR/dllMods"
-cp -f "$DEPLOYED_DLL" "$GAME_DIR/er_effects_rs.dll"
-rm -f "$GAME_DIR/dllMods/er_effects_rs.dll"
-cat > "$GAME_DIR/lazyLoad.ini" <<'EOF'
-; LazyLoader by Church Guard
-[LAZYLOAD]
-dllModFolderName=dllMods
-[LOADORDER]
-[CHAINLOAD]
-dll=er_effects_rs.dll
-EOF
+# Stage the current DLL as an me3 native (LazyLoader removed 2026-07-04). The staged DLL already
+# carries the sw-bp + anti-anti-debug facility.
+cp -f "$DEPLOYED_DLL" "$ARTIFACT_DIR/er_effects_rs.dll"
+me3_write_profile "$ARTIFACT_DIR/er-effects-trace.me3" "$ARTIFACT_DIR/er_effects_rs.dll"
 
 arm_scout_files
 
@@ -230,16 +223,14 @@ LAUNCH_EPOCH="$(date +%s.%N)"
 printf '%s\n' "$LAUNCH_EPOCH" > "$ARTIFACT_DIR/launch-epoch.txt"
 export ER_PROBE_LAUNCH_EPOCH="$LAUNCH_EPOCH"
 
-# Direct/offline Proton launch, no autoload request. Bounded by RUNTIME_TIMEOUT_SECONDS so the run can
+# Direct/offline me3 launch, no autoload request. Bounded by RUNTIME_TIMEOUT_SECONDS so the run can
 # never overrun the cap even if the user walks away; the EXIT trap tears the game + restores state.
 (
   cd "$GAME_DIR"
-  STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_COMPAT_CLIENT_INSTALL_PATH" \
-  STEAM_COMPAT_DATA_PATH="$STEAM_COMPAT_DATA_PATH" \
   ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" \
   ER_EFFECTS_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" \
   ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
-  "$PROTON" run "$GAME_DIR/eldenring.exe" > "$ARTIFACT_DIR/proton-run.out" 2>&1 & echo $! > "$PID_FILE"
+  "$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" launch -g eldenring -p "$ARTIFACT_DIR/er-effects-trace.me3" > "$ARTIFACT_DIR/me3-launch.out" 2>&1 & echo $! > "$PID_FILE"
 )
 
 launcher_pid="$(cat "$PID_FILE" 2>/dev/null || echo)"

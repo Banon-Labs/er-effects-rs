@@ -6,7 +6,6 @@ GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}
 # Single source of truth for the runtime-probe wall-clock cap (seconds); fail safe to the 45s hard truth.
 RUNTIME_TIMEOUT_CAP_SECONDS="$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 45)"
 RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-$RUNTIME_TIMEOUT_CAP_SECONDS}"
-RUNTIME_LAZYLOAD_CHAINLOAD_DLL="${RUNTIME_LAZYLOAD_CHAINLOAD_DLL:-er_effects_rs.dll}"
 RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-vanilla}"
 POLICY_PATH="$REPO_ROOT/.auto/runtime_experiment_policy.rego"
 SEAMLESS_DLL_PATH="$GAME_DIR/SeamlessCoop/ersc.dll"
@@ -211,36 +210,23 @@ PY
 }
 
 setup_runtime_payload() {
-  mkdir -p "$GAME_DIR/dllMods"
-  cp -f "$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll" "$GAME_DIR/er_effects_rs.dll"
-  rm -f "$GAME_DIR/dllMods/er_effects_rs.dll"
-  # Crash logging ON BY DEFAULT for every probe (file channel -- reliable through Proton, unlike env
-  # vars). Installs the vectored AV handler (logs the faulting RVA + caller stack of an access
-  # violation, e.g. a wrong-arg native call) + the process-exit hooks, into er-effects-crash.log.
-  # Opt out by exporting RUNTIME_DISABLE_CRASH_LOG=1. The product DLL stays opt-in; this is probe-only.
+  # Crash logging ON BY DEFAULT for every probe (file channel -- reliable through Proton, unlike
+  # env vars; the DLL reads the flag from the exe dir). Installs the vectored AV handler (logs the
+  # faulting RVA + caller stack of an access violation, e.g. a wrong-arg native call) + the
+  # process-exit hooks, into er-effects-crash.log. Opt out by exporting
+  # RUNTIME_DISABLE_CRASH_LOG=1. The product DLL stays opt-in; this is probe-only.
   if [[ "${RUNTIME_DISABLE_CRASH_LOG:-0}" == "1" ]]; then
     rm -f "$GAME_DIR/er-effects-crash-log.txt"
   else
     : > "$GAME_DIR/er-effects-crash-log.txt"
   fi
-  if [[ "$RUNTIME_LAZYLOAD_CHAINLOAD_DLL" == "er_effects_rs.dll" ]]; then
-    cat > "$GAME_DIR/lazyLoad.ini" <<'EOF'
-; LazyLoader by Church Guard
-[LAZYLOAD]
-dllModFolderName=dllMods
-[LOADORDER]
-[CHAINLOAD]
-dll=er_effects_rs.dll
-EOF
-  else
-    cat > "$GAME_DIR/lazyLoad.ini" <<EOF
-; LazyLoader by Church Guard
-[LAZYLOAD]
-dllModFolderName=dllMods
-[LOADORDER]
-[CHAINLOAD]
-dll=$RUNTIME_LAZYLOAD_CHAINLOAD_DLL
-EOF
+  # me3 is the ONLY loader (LazyLoader removed 2026-07-04): the me3 mod host loads the DLL from a
+  # [[natives]] profile entry written by the launcher script. A leftover dinput8 proxy would
+  # DOUBLE-LOAD the DLL (two modules, two DllMains, double hooks); fail closed so such a run can
+  # never be scored.
+  if [[ -f "$GAME_DIR/dinput8.dll" ]]; then
+    echo "$GAME_DIR/dinput8.dll is present (removed LazyLoader proxy) -- refusing the double-load run; delete or stage away the proxy" >&2
+    exit 2
   fi
 }
 

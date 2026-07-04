@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke-test the clean LazyLoader autoload release staging path."""
+"""Smoke-test the clean me3 autoload release staging path."""
 
 from __future__ import annotations
 
@@ -12,17 +12,13 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STAGE_SCRIPT = REPO_ROOT / "scripts" / "stage-autoload-release.sh"
 
-EXPECTED_LAZYLOAD = """; LazyLoader by Church Guard
-; er-effects-rs must be properly loaded, not lazy-loaded, so it is the CHAINLOAD DLL.
-; Put additional LazyLoader mods in dllMods and list them under [LOADORDER].
+EXPECTED_PROFILE = """profileVersion = "v1"
 
-[LAZYLOAD]
-dllModFolderName=dllMods
+[[supports]]
+game = "eldenring"
 
-[LOADORDER]
-
-[CHAINLOAD]
-dll=er_effects_rs.dll
+[[natives]]
+path = 'er_effects_rs.dll'
 """
 
 EXPECTED_AUTOLOAD = """# Product/default zero-input gold-load request.
@@ -48,15 +44,11 @@ EXPECTED_SPLASH_SKIP = """# Copy this file to er-effects-splash-skip.txt next to
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="er-effects-autoload-stage-") as tmp:
         tmp_path = Path(tmp)
-        lazyloader = tmp_path / "lazyloader"
-        lazyloader.mkdir()
-        (lazyloader / "dinput8.dll").write_bytes(b"fake lazyloader proxy\n")
         er_dll = tmp_path / "er_effects_rs.dll"
         er_dll.write_bytes(b"fake er effects dll\n")
         out = tmp_path / "release"
 
         env = os.environ.copy()
-        env["LAZYLOADER_DIR"] = str(lazyloader)
         env["ER_EFFECTS_DLL"] = str(er_dll)
         result = subprocess.run(
             [str(STAGE_SCRIPT), "--no-build", "--output", str(out)],
@@ -73,9 +65,8 @@ def main() -> int:
             )
 
         expected_files = {
-            "dinput8.dll",
-            "lazyLoad.ini",
             "er_effects_rs.dll",
+            "er-effects.me3",
             "er-effects-autoload.txt.example",
             "er-effects-native-continue.txt.example",
             "er-effects-pab-advance.txt.example",
@@ -85,8 +76,11 @@ def main() -> int:
         actual_files = {str(path.relative_to(out)) for path in out.rglob("*") if path.is_file()}
         if actual_files != expected_files:
             raise SystemExit(f"unexpected staged files: {sorted(actual_files)}")
-        if (out / "lazyLoad.ini").read_text(encoding="utf-8") != EXPECTED_LAZYLOAD:
-            raise SystemExit("lazyLoad.ini is not the clean single-DLL config")
+        for name in ("dinput8.dll", "lazyLoad.ini"):
+            if (out / name).exists():
+                raise SystemExit(f"LazyLoader artifact {name} must not be staged (removed 2026-07-04)")
+        if (out / "er-effects.me3").read_text(encoding="utf-8") != EXPECTED_PROFILE:
+            raise SystemExit("er-effects.me3 is not the clean single-native profile (relative DLL path)")
         if (out / "er-effects-autoload.txt.example").read_text(encoding="utf-8") != EXPECTED_AUTOLOAD:
             raise SystemExit("autoload example must keep direct_menu_load/product_core off by default")
         if (out / "er-effects-native-continue.txt.example").read_text(encoding="utf-8") != EXPECTED_NATIVE_CONTINUE:
@@ -95,8 +89,6 @@ def main() -> int:
             raise SystemExit("pab-advance example does not document the supported zero-input path")
         if (out / "er-effects-splash-skip.txt.example").read_text(encoding="utf-8") != EXPECTED_SPLASH_SKIP:
             raise SystemExit("splash-skip example does not document the built-in current-version patch")
-        if list((out / "dllMods").glob("*.dll")):
-            raise SystemExit("dllMods should be empty in the clean er-effects-rs chainload package")
         if shutil.which("sha256sum") is None:
             raise SystemExit("sha256sum unexpectedly unavailable after staging")
 

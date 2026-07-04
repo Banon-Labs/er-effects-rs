@@ -625,9 +625,14 @@ def main() -> int:
     require("own_stepper_enabled()" in online_body, "product autoload must inherit offline mode via own_stepper_enabled()", failures)
     require("own_stepper_enabled()" in input_body, "product autoload must inherit input blocking via own_stepper_enabled()", failures)
 
-    require("dll=er_effects_rs.dll" in stage, "release staging must CHAINLOAD er_effects_rs.dll as the properly-loaded mod", failures)
-    require("0=er_effects_rs.dll" not in stage, "release staging must not lazy-load er_effects_rs.dll through LOADORDER", failures)
-    require("dllModFolderName=dllMods" in stage, "release staging must use dllMods as LazyLoader folder", failures)
+    # me3 is the ONLY supported loader (LazyLoader dinput8 proxy/chainload removed 2026-07-04
+    # after the me3 production smoke passed: run me3-product-smoke-20260704-110507).
+    require('profileVersion = "v1"' in stage, "release staging must write a v1 me3 ModProfile", failures)
+    require("[[natives]]" in stage, "release staging profile must load the DLL as an me3 native", failures)
+    require("path = 'er_effects_rs.dll'" in stage, "release staging profile must reference the DLL relative to the profile (relocatable payload)", failures)
+    require("dinput8" not in stage, "release staging must not ship the removed LazyLoader proxy", failures)
+    require("lazyLoad.ini" not in stage, "release staging must not ship the removed LazyLoader config", failures)
+    require("dllModFolderName" not in stage, "release staging must not recreate the LazyLoader dllMods layout", failures)
     require("er_skip_splash_screens.dll" not in stage, "release staging must not include stale skip-splash DLLs", failures)
     require("er-effects-autoload.txt.example" in stage, "release staging must include an autoload request example", failures)
     require(
@@ -644,23 +649,13 @@ def main() -> int:
 
     if runtime_probe:
         require(
-            "RUNTIME_LAZYLOAD_CHAINLOAD_DLL" in runtime_probe,
-            "runtime probe must honor the LazyLoader CHAINLOAD payload mode used by the proven baseline",
+            "lazyLoad.ini" not in runtime_probe and "RUNTIME_LAZYLOAD_CHAINLOAD_DLL" not in runtime_probe,
+            "runtime probe must not deploy the removed LazyLoader chainload payload",
             failures,
         )
         require(
-            "dll=er_effects_rs.dll" in runtime_probe,
-            "runtime probe CHAINLOAD mode must write lazyLoad.ini with er_effects_rs.dll as the chainload DLL",
-            failures,
-        )
-        require(
-            '"$GAME_DIR/er_effects_rs.dll"' in runtime_probe,
-            "runtime probe CHAINLOAD mode must copy er_effects_rs.dll beside LazyLoader, not only into dllMods",
-            failures,
-        )
-        require(
-            'rm -f "$GAME_DIR/dllMods/er_effects_rs.dll"' in runtime_probe,
-            "runtime probe CHAINLOAD mode must remove the stale LOADORDER er_effects_rs.dll payload",
+            "dinput8.dll" in runtime_probe and "double-load" in runtime_probe,
+            "runtime probe must fail closed if a leftover LazyLoader proxy would double-load the me3-native DLL",
             failures,
         )
     require(

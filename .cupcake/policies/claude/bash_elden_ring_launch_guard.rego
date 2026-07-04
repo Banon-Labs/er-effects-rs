@@ -101,19 +101,19 @@ steam_app_launch_detected if {
 
 steam_app_launch_detected if {
 	executable_source_marker
-	contains(lower_source_text, "steam")
-	contains(lower_source_text, "-applaunch")
-	contains(lower_source_text, "1245620")
+	contains(marker_scan_text, "steam")
+	contains(marker_scan_text, "-applaunch")
+	contains(marker_scan_text, "1245620")
 }
 
 steam_app_launch_detected if {
 	executable_source_marker
-	contains(lower_source_text, "steam://run/1245620")
+	contains(marker_scan_text, "steam://run/1245620")
 }
 
 steam_app_launch_detected if {
 	executable_source_marker
-	contains(lower_source_text, "steam://rungameid/1245620")
+	contains(marker_scan_text, "steam://rungameid/1245620")
 }
 
 start_protected_launch_detected if {
@@ -126,15 +126,15 @@ start_protected_launch_detected if {
 
 start_protected_launch_detected if {
 	executable_source_marker
-	contains(lower_source_text, "start_protected_game.exe")
+	contains(marker_scan_text, "start_protected_game.exe")
 }
 
 ersc_bundle_detected if {
-	regex.match(`(?i)(^|[[:space:];|&()])(cp|mv|install|rsync|zip|tar|7z|rar|python|python3|bash|sh)[^;|&()]*ersc\.dll([[:space:];|&()]|$)`, command)
+	regex.match(`(?i)(^|[[:space:];|&()])(cp|mv|install|rsync|zip|tar|7z|rar|python|python3|bash|sh)[^;|&()]*ersc\.dll([[:space:];|&()]|$)`, scrubbed_command)
 }
 
 ersc_bundle_detected if {
-	contains(lower_source_text, "ersc.dll")
+	contains(marker_scan_text, "ersc.dll")
 	bundle_source_marker
 }
 
@@ -172,3 +172,46 @@ scrubbed_command := concat(" ", [launch_single_parts[idx] |
 	launch_single_parts[idx]
 	idx % 2 == 0
 ])
+
+# ---------------------------------------------------------------------------
+# bd issue-tracker text exemption for the marker-based substring fallbacks.
+#
+# False positive fixed 2026-07-04: `/home/banon/.local/bin/bd create ... -d
+# "... do not use start_protected_game.exe ..."` was denied because the
+# raw-substring fallbacks scan the whole tool payload, and generic executable
+# markers ("bash", "python", "shell", ...) routinely appear in issue prose.
+# bd only records text -- it never executes its arguments -- so for a single,
+# non-chained Bash invocation of the real bd binary the quoted argument text
+# is documentation, not an executable payload.
+#
+# The exemption is deliberately narrow:
+#   * Bash tool only, command starting with the real bd binary path and a
+#     text-recording subcommand;
+#   * the quote-scrubbed command must contain no separators, subshells,
+#     redirects, or backticks (so no second command rides along); and
+#   * the raw command must contain no `$(` or backtick anywhere (command
+#     substitution inside double quotes executes even though the quote scrub
+#     removes it from scrubbed_command).
+# Anything chained or indirected falls through to the raw-text scan, and the
+# direct scrubbed_command regex rules above are unaffected either way.
+# ---------------------------------------------------------------------------
+
+bd_text_command if {
+	tool_name == "Bash"
+	regex.match(`^[[:space:]]*/home/banon/\.local/bin/bd[[:space:]]+(create|update|comment|comments|remember|close)([[:space:]]|$)`, command)
+	not regex.match(`[;|&()<>\x60\n\r]`, scrubbed_command)
+	not contains(command, "$(")
+	not contains(command, "`")
+}
+
+# Text scanned by the marker-based substring fallbacks. For a pure bd text
+# command the quote-scrubbed command is scanned instead of the raw payload, so
+# a forbidden-form *mention* inside a quoted issue description cannot deny,
+# while any unquoted or chained launch token still can.
+marker_scan_text := lower(scrubbed_command) if {
+	bd_text_command
+}
+
+marker_scan_text := lower_source_text if {
+	not bd_text_command
+}

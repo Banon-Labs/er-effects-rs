@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # USER-INTERACTIVE vanilla offline boot for the privacy-policy persistence experiment. Launches the
-# approved direct/offline eldenring.exe via Proton (NOT Steam applaunch, NOT the protected launcher),
-# with our LazyLoader DLL DISABLED by default (so it is genuinely vanilla: no fail-closed abort,
-# no input block, no agent teardown). The USER drives it (accept the privacy policy, quit).
-# Set KEEP_LAZYLOADER=1 for anti-debug/debugging runs that must keep dinput8.dll enabled while
-# preserving this script's known-good Proton/offline launch path. Modes:
-#   launch   -- disable DLL by default, launch detached, print pid
+# approved direct/offline eldenring.exe via Proton (NOT Steam applaunch, NOT the protected launcher,
+# NOT me3 -- a vanilla boot must not inject the me3 mod host). Genuinely vanilla: no DLL, no
+# fail-closed abort, no input block, no agent teardown. The USER drives it (accept the privacy
+# policy, quit). LazyLoader was removed 2026-07-04 (me3 is the product loader); the dinput8
+# disable/restore below is a DEFENSIVE guard against a leftover proxy so the boot stays vanilla.
+# Modes:
+#   launch   -- stage away any leftover dinput8 proxy, launch detached, print pid
 #   teardown -- kill any eldenring.exe (if the user wants the agent to close it)
-#   restore  -- re-enable our LazyLoader DLL
+#   restore  -- put back a staged-away leftover proxy
 set -uo pipefail
 MODE="${1:?usage: launch-vanilla-offline.sh launch|teardown|restore}"
 GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
@@ -35,14 +36,11 @@ case "$MODE" in
     done
     dll_state="OFF"
     if [[ "$KEEP_LAZYLOADER" == "1" ]]; then
-      [[ -f "$DINPUT_OFF" && ! -f "$DINPUT" ]] && mv -f "$DINPUT_OFF" "$DINPUT" && echo "kept LazyLoader enabled ($DINPUT_OFF -> $DINPUT)"
-      [[ -f "$DINPUT" ]] || { echo "KEEP_LAZYLOADER=1 requested but missing LazyLoader dinput8.dll" >&2; exit 2; }
-      dll_state="ON"
-      echo "KEEP_LAZYLOADER=1: not disabling LazyLoader"
-    else
-      # Disable our LazyLoader so the boot is genuinely vanilla (no DLL).
-      [[ -f "$DINPUT" ]] && mv -f "$DINPUT" "$DINPUT_OFF" && echo "disabled LazyLoader ($DINPUT -> $DINPUT_OFF)"
+      echo "KEEP_LAZYLOADER=1 is obsolete: LazyLoader was removed 2026-07-04; for a DLL run use scripts/run-me3-product-smoke.sh or scripts/run-product-continue-direct-probe.sh (me3 native)" >&2
+      exit 2
     fi
+    # Stage away any LEFTOVER proxy so the boot is genuinely vanilla (no DLL).
+    [[ -f "$DINPUT" ]] && mv -f "$DINPUT" "$DINPUT_OFF" && echo "staged away leftover dinput8 proxy ($DINPUT -> $DINPUT_OFF)"
     (
       cd "$GAME_DIR"
       STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_COMPAT_CLIENT_INSTALL_PATH" \
@@ -58,7 +56,7 @@ case "$MODE" in
     echo "sent kill to eldenring.exe (if running)"
     ;;
   restore)
-    [[ -f "$DINPUT_OFF" ]] && mv -f "$DINPUT_OFF" "$DINPUT" && echo "re-enabled LazyLoader ($DINPUT_OFF -> $DINPUT)"
+    [[ -f "$DINPUT_OFF" ]] && mv -f "$DINPUT_OFF" "$DINPUT" && echo "restored staged-away dinput8 proxy ($DINPUT_OFF -> $DINPUT)"
     ;;
   *) echo "unknown mode: $MODE" >&2; exit 2 ;;
 esac
