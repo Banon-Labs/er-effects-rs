@@ -3448,8 +3448,13 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                     // the freshly-resolved RT held the head. We are inside the model_ins/loc + vtable validated
                     // block, so the per-frame resolve cannot race a teardown free.
                     if portrait_render_drive_enabled() {
+                        // COHERENT color+depth (bug #3 fix): reads the color RT and its depth sibling on
+                        // ONE fence and stashes the matching depth for apply_depth_alpha_key below, so the
+                        // cutout is derived from the SAME frame as the head. Same return shape as
+                        // readback_offscreen_fast; falls back to it (separate depth) if the coherent read
+                        // fails -- so this can only add coherence, never regress.
                         if let Some((cw, ch, mut cpx, rt_cand)) =
-                            unsafe { readback_offscreen_fast(off) }
+                            unsafe { readback_offscreen_fast_coherent(off) }
                         {
                             // DIAGNOSTIC: count readbacks + checker-classified frames, and one-shot dump a
                             // "checker" frame (slot 103) so we can SEE what the ~216 non-published frames

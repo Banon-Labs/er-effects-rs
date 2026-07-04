@@ -241,9 +241,14 @@ static DEPTH_CHAIN_DIAG: AtomicUsize = AtomicUsize::new(0);
 /// and QI the resource out of that tiny nest (deterministic, slot-local by construction); only if
 /// a chain link is null/redirected fall back to the historical BFS from the offscreen object.
 pub(crate) unsafe fn find_depth_resource(start: usize) -> Option<(ID3D12Resource, usize)> {
-    let prefer = PROFILE_DEPTH_PIN.load(Ordering::SeqCst);
+    // Deterministic bundle-paired DSV FIRST, walked with NO pin (prefer=0): the color RTV (bundle+0x30)
+    // and depth DSV (bundle+0x40) are the SAME render-target bundle, so this view already points at the
+    // scene's OWN depth sibling -- letting the drifting DEPTH_PIN win here would override that correct
+    // pointer with a foreign larger buffer (user 2026-07-03: share the paired pointer, don't heuristically
+    // re-pin). The pin is kept ONLY in the BFS fallback below, for mid-load renderers whose DSV chain is
+    // null/redirected.
     if let Some(dsv_view) = unsafe { offscreen_depth_view(start) } {
-        if let Some(found) = unsafe { find_d3d12_resource_ex(dsv_view, 0, true, prefer) } {
+        if let Some(found) = unsafe { find_d3d12_resource_ex(dsv_view, 0, true, 0) } {
             if DEPTH_CHAIN_DIAG.fetch_or(1, Ordering::SeqCst) & 1 == 0 {
                 append_autoload_debug(format_args!(
                     "depth-chain: resolved DSV view 0x{dsv_view:x} from off=0x{start:x} -> depth resource cand 0x{:x}",
@@ -253,6 +258,7 @@ pub(crate) unsafe fn find_depth_resource(start: usize) -> Option<(ID3D12Resource
             return Some(found);
         }
     }
+    let prefer = PROFILE_DEPTH_PIN.load(Ordering::SeqCst);
     if DEPTH_CHAIN_DIAG.fetch_or(2, Ordering::SeqCst) & 2 == 0 {
         append_autoload_debug(format_args!(
             "depth-chain: MISS (facade/ctx/dsv null, redirected, or view nest yielded no depth texture) off=0x{start:x} -- falling back to heuristic nest BFS"
@@ -482,6 +488,382 @@ pub(crate) unsafe fn readback_offscreen_fast(
     .flatten()
 }
 
+/// Consume the coherently-captured depth for this tick (clears it so it is used exactly once and never
+/// carried to a later frame). `None` -> the caller reads depth fresh (the legacy separate path).
+fn take_coherent_depth() -> Option<(u32, u32, Vec<f32>, usize)> {
+    COHERENT_DEPTH.lock().ok().and_then(|mut g| g.take())
+}
+
+/// Color+depth read COHERENTLY (bug #3 fix). Same `(w, h, rgba, cand)` shape as `readback_offscreen_fast`
+/// so the drive is unchanged, but it ALSO stashes the depth captured on the same fence into
+/// `COHERENT_DEPTH` for this tick's `apply_depth_alpha_key` to consume -- so the mask is derived from the
+/// SAME frame as the color. On ANY failure the stash is CLEARED and we fall back to the separate color
+/// path (the mask then reads depth fresh); never a stale depth, never a crash.
+pub(crate) unsafe fn readback_offscreen_fast_coherent(
+    gpu_child: usize,
+) -> Option<(u32, u32, Vec<u8>, usize)> {
+    if let Some((cw, ch, color, ccand, dw, dh, depth, dcand)) =
+        unsafe { readback_offscreen_color_depth_coherent(gpu_child) }
+    {
+        COHERENT_READ_OK.fetch_add(1, Ordering::SeqCst);
+        if let Ok(mut g) = COHERENT_DEPTH.lock() {
+            *g = Some((dw, dh, depth, dcand));
+        }
+        return Some((cw, ch, color, ccand));
+    }
+    // Coherent read failed -> clear the stash so no stale depth leaks into this frame's mask.
+    COHERENT_READ_FALLBACK.fetch_add(1, Ordering::SeqCst);
+    if let Ok(mut g) = COHERENT_DEPTH.lock() {
+        *g = None;
+    }
+    unsafe { readback_offscreen_fast(gpu_child) }
+}
+
+/// COHERENT single-fence readback of the offscreen COLOR RT and its DEPTH sibling: both copies are
+/// recorded into ONE command list and gated by ONE fence, so they capture the SAME GPU state. This is the
+/// root fix for the wrong-shaped mask (bug #3): the separate RB_FAST_*/RB_DEPTH_* paths each fence their
+/// own copy, and the game's async render can advance the RT between them (color=frameN, depth=frameN+1),
+/// so the depth-derived cutout no longer matches the head. Resolves color via the RT pin and depth via
+/// `find_depth_resource` (same sources as the twins). Returns
+/// `(cw, ch, rgba, color_cand, dw, dh, depth_f32, depth_cand)`. `None` on any failure (caller falls back
+/// to the separate path). Never touches the game's queues; catch_unwind; fault-guarded like the twins.
+pub(crate) unsafe fn readback_offscreen_color_depth_coherent(
+    gpu_child: usize,
+) -> Option<(u32, u32, Vec<u8>, usize, u32, u32, Vec<f32>, usize)> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let prefer_c = PROFILE_RT_PIN.load(Ordering::SeqCst);
+        let (color_res, color_cand) = find_d3d12_resource_ex(gpu_child, 0, false, prefer_c)?;
+
+        let mut device_opt: Option<ID3D12Device> = None;
+        color_res.GetDevice(&mut device_opt).ok()?;
+        let device = device_opt?;
+
+        // Color footprint (subresource 0).
+        let cdesc: D3D12_RESOURCE_DESC = color_res.GetDesc();
+        let cw = cdesc.Width as u32;
+        let ch = cdesc.Height;
+        let cformat = cdesc.Format;
+        if cw == 0 || ch == 0 || cw > MAX_RT_DIM || ch > MAX_RT_DIM {
+            return None;
+        }
+        LOADING_BG_PORTRAIT_FORMAT.store(cformat.0 as usize, Ordering::SeqCst);
+
+        // DEPTH sibling via the deterministic bundle-paired chain (find_depth_resource now walks the
+        // scene's own DSV with no pin), so it is THIS scene's depth, not a drifted foreign buffer.
+        let (depth_res, depth_cand) = find_depth_resource(gpu_child)?;
+        let mut cfoot = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+        let mut ctotal: u64 = 0;
+        device.GetCopyableFootprints(
+            &cdesc,
+            0,
+            1,
+            0,
+            Some(&mut cfoot),
+            None,
+            None,
+            Some(&mut ctotal),
+        );
+        if ctotal == 0 || cfoot.Footprint.RowPitch == 0 {
+            return None;
+        }
+
+        // Depth footprint (plane 0 = R32 float).
+        let ddesc: D3D12_RESOURCE_DESC = depth_res.GetDesc();
+        let dw = ddesc.Width as u32;
+        let dh = ddesc.Height;
+        if dw == 0 || dh == 0 || dw > MAX_RT_DIM || dh > MAX_RT_DIM {
+            return None;
+        }
+        // COHERENCE GUARD: color and its depth sibling must share dimensions -- a mismatch means the
+        // depth is NOT this color's pair (the drift bug), so reject the frame rather than copy a bad pair
+        // (the caller falls back). This is a sanity check on the deterministic pointer, not a size-based
+        // resolution heuristic.
+        if dw != cw || dh != ch {
+            return None;
+        }
+        let mut dfoot = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+        let mut dtotal: u64 = 0;
+        device.GetCopyableFootprints(
+            &ddesc,
+            0,
+            1,
+            0,
+            Some(&mut dfoot),
+            None,
+            None,
+            Some(&mut dtotal),
+        );
+        if dtotal == 0 || dfoot.Footprint.RowPitch == 0 {
+            return None;
+        }
+
+        // Create the shared queue/allocator/list/fence ONCE (list left Closed so the first Reset works).
+        if RB_COH_QUEUE.load(Ordering::SeqCst) == 0 {
+            let queue_desc = D3D12_COMMAND_QUEUE_DESC {
+                Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+                Priority: 0,
+                Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
+                NodeMask: 0,
+            };
+            let queue: ID3D12CommandQueue = device.CreateCommandQueue(&queue_desc).ok()?;
+            let allocator: ID3D12CommandAllocator = device
+                .CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)
+                .ok()?;
+            let list: ID3D12GraphicsCommandList = device
+                .CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)
+                .ok()?;
+            list.Close().ok()?;
+            let fence: ID3D12Fence = device.CreateFence(0, D3D12_FENCE_FLAG_NONE).ok()?;
+            RB_COH_QUEUE.store(queue.into_raw() as usize, Ordering::SeqCst);
+            RB_COH_ALLOC.store(allocator.into_raw() as usize, Ordering::SeqCst);
+            RB_COH_LIST.store(list.into_raw() as usize, Ordering::SeqCst);
+            RB_COH_FENCE.store(fence.into_raw() as usize, Ordering::SeqCst);
+        }
+        // (Re)create the readback buffers on footprint-size change (won't change for a fixed RT/depth).
+        let heap_props = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_READBACK,
+            CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+            MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+            CreationNodeMask: 1,
+            VisibleNodeMask: 1,
+        };
+        let buffer_desc = |bytes: u64| D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+            Alignment: 0,
+            Width: bytes,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: DXGI_FORMAT_UNKNOWN,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            Flags: D3D12_RESOURCE_FLAG_NONE,
+        };
+        if RB_COH_CBUFSIZE.load(Ordering::SeqCst) != ctotal {
+            let bd = buffer_desc(ctotal);
+            let mut b: Option<ID3D12Resource> = None;
+            device
+                .CreateCommittedResource(
+                    &heap_props,
+                    D3D12_HEAP_FLAG_NONE,
+                    &bd,
+                    D3D12_RESOURCE_STATE_COPY_DEST,
+                    None,
+                    &mut b,
+                )
+                .ok()?;
+            let old = RB_COH_CBUF.swap(b?.into_raw() as usize, Ordering::SeqCst);
+            if old != 0 {
+                drop(ID3D12Resource::from_raw(old as *mut c_void));
+            }
+            RB_COH_CBUFSIZE.store(ctotal, Ordering::SeqCst);
+        }
+        if RB_COH_DBUFSIZE.load(Ordering::SeqCst) != dtotal {
+            let bd = buffer_desc(dtotal);
+            let mut b: Option<ID3D12Resource> = None;
+            device
+                .CreateCommittedResource(
+                    &heap_props,
+                    D3D12_HEAP_FLAG_NONE,
+                    &bd,
+                    D3D12_RESOURCE_STATE_COPY_DEST,
+                    None,
+                    &mut b,
+                )
+                .ok()?;
+            let old = RB_COH_DBUF.swap(b?.into_raw() as usize, Ordering::SeqCst);
+            if old != 0 {
+                drop(ID3D12Resource::from_raw(old as *mut c_void));
+            }
+            RB_COH_DBUFSIZE.store(dtotal, Ordering::SeqCst);
+        }
+
+        // Borrow the cached COM objects (no refcount change; the statics own them).
+        let q_raw = RB_COH_QUEUE.load(Ordering::SeqCst) as *mut c_void;
+        let a_raw = RB_COH_ALLOC.load(Ordering::SeqCst) as *mut c_void;
+        let l_raw = RB_COH_LIST.load(Ordering::SeqCst) as *mut c_void;
+        let f_raw = RB_COH_FENCE.load(Ordering::SeqCst) as *mut c_void;
+        let cb_raw = RB_COH_CBUF.load(Ordering::SeqCst) as *mut c_void;
+        let db_raw = RB_COH_DBUF.load(Ordering::SeqCst) as *mut c_void;
+        let (Some(queue), Some(allocator), Some(list), Some(fence), Some(cbuf), Some(dbuf)) = (
+            ID3D12CommandQueue::from_raw_borrowed(&q_raw),
+            ID3D12CommandAllocator::from_raw_borrowed(&a_raw),
+            ID3D12GraphicsCommandList::from_raw_borrowed(&l_raw),
+            ID3D12Fence::from_raw_borrowed(&f_raw),
+            ID3D12Resource::from_raw_borrowed(&cb_raw),
+            ID3D12Resource::from_raw_borrowed(&db_raw),
+        ) else {
+            return None;
+        };
+        // Previous frame's fence wait guarantees the GPU is idle, so resetting the allocator is safe.
+        if allocator.Reset().is_err() || list.Reset(allocator, None).is_err() {
+            return None;
+        }
+
+        // COLOR copy: COMMON -> COPY_SOURCE, copy subresource 0, back to COMMON.
+        record_transition(
+            list,
+            &color_res,
+            D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+        );
+        let mut csrc = D3D12_TEXTURE_COPY_LOCATION {
+            pResource: ManuallyDrop::new(Some(color_res.clone())),
+            Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                SubresourceIndex: 0,
+            },
+        };
+        let mut cdst = D3D12_TEXTURE_COPY_LOCATION {
+            pResource: ManuallyDrop::new(Some(cbuf.clone())),
+            Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                PlacedFootprint: cfoot,
+            },
+        };
+        list.CopyTextureRegion(&cdst, 0, 0, 0, &csrc, None);
+        ManuallyDrop::drop(&mut csrc.pResource);
+        ManuallyDrop::drop(&mut cdst.pResource);
+        record_transition(
+            list,
+            &color_res,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_RESOURCE_STATE_COMMON,
+        );
+
+        // DEPTH copy: plane 0, same list -> same fence -> same GPU moment as the color copy.
+        record_transition(
+            list,
+            &depth_res,
+            D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+        );
+        let mut dsrc = D3D12_TEXTURE_COPY_LOCATION {
+            pResource: ManuallyDrop::new(Some(depth_res.clone())),
+            Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                SubresourceIndex: 0,
+            },
+        };
+        let mut ddst = D3D12_TEXTURE_COPY_LOCATION {
+            pResource: ManuallyDrop::new(Some(dbuf.clone())),
+            Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                PlacedFootprint: dfoot,
+            },
+        };
+        list.CopyTextureRegion(&ddst, 0, 0, 0, &dsrc, None);
+        ManuallyDrop::drop(&mut dsrc.pResource);
+        ManuallyDrop::drop(&mut ddst.pResource);
+        record_transition(
+            list,
+            &depth_res,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_RESOURCE_STATE_COMMON,
+        );
+
+        if list.Close().is_err() {
+            return None;
+        }
+        let base_list: ID3D12CommandList = list.cast().ok()?;
+        queue.ExecuteCommandLists(&[Some(base_list)]);
+        let val = RB_COH_FENCEVAL.fetch_add(1, Ordering::SeqCst) + 1;
+        queue.Signal(fence, val).ok()?;
+        if fence.GetCompletedValue() < val {
+            let event: HANDLE = CreateEventW(None, false, false, None).ok()?;
+            fence.SetEventOnCompletion(val, event).ok()?;
+            let wait = WaitForSingleObject(event, READBACK_FENCE_WAIT_MS);
+            let _ = CloseHandle(event);
+            if wait != WAIT_OBJECT_0 {
+                return None;
+            }
+        }
+
+        // Map + de-swizzle COLOR (RGBA8, swap R/B for BGRA formats).
+        let color = {
+            let read_range = D3D12_RANGE {
+                Begin: 0,
+                End: ctotal as usize,
+            };
+            let mut mapped: *mut c_void = std::ptr::null_mut();
+            cbuf.Map(0, Some(&read_range), Some(&mut mapped)).ok()?;
+            if mapped.is_null() {
+                return None;
+            }
+            let w = cw as usize;
+            let h = ch as usize;
+            let row_pitch = cfoot.Footprint.RowPitch as usize;
+            let out_row = w * RGBA8_BPP;
+            let total = ctotal as usize;
+            let src = mapped as *const u8;
+            let swap_rb = matches!(
+                cformat,
+                DXGI_FORMAT_B8G8R8A8_UNORM | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
+            );
+            let mut out = vec![0u8; w * h * RGBA8_BPP];
+            for y in 0..h {
+                let row_off = y * row_pitch;
+                if row_off >= total {
+                    break;
+                }
+                let avail = total - row_off;
+                let copy_bytes = out_row.min(row_pitch).min(avail);
+                let src_row = src.add(row_off);
+                let dst_row = &mut out[y * out_row..y * out_row + copy_bytes];
+                std::ptr::copy_nonoverlapping(src_row, dst_row.as_mut_ptr(), copy_bytes);
+                if swap_rb {
+                    let texels = copy_bytes / RGBA8_BPP;
+                    for t in 0..texels {
+                        dst_row.swap(t * RGBA8_BPP, t * RGBA8_BPP + 2);
+                    }
+                }
+            }
+            let write_range = D3D12_RANGE { Begin: 0, End: 0 };
+            cbuf.Unmap(0, Some(&write_range));
+            out
+        };
+
+        // Map + reinterpret DEPTH (plane 0, each 4-byte texel as f32).
+        let depth = {
+            let read_range = D3D12_RANGE {
+                Begin: 0,
+                End: dtotal as usize,
+            };
+            let mut mapped: *mut c_void = std::ptr::null_mut();
+            dbuf.Map(0, Some(&read_range), Some(&mut mapped)).ok()?;
+            if mapped.is_null() {
+                return None;
+            }
+            let w = dw as usize;
+            let h = dh as usize;
+            let row_pitch = dfoot.Footprint.RowPitch as usize;
+            let total = dtotal as usize;
+            let src = mapped as *const u8;
+            let mut out = vec![0f32; w * h];
+            for y in 0..h {
+                let row_off = y * row_pitch;
+                if row_off + w * 4 > total {
+                    break;
+                }
+                for x in 0..w {
+                    let b = std::slice::from_raw_parts(src.add(row_off + x * 4), 4);
+                    out[y * w + x] = f32::from_bits(u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+                }
+            }
+            let write_range = D3D12_RANGE { Begin: 0, End: 0 };
+            dbuf.Unmap(0, Some(&write_range));
+            out
+        };
+
+        Some((cw, ch, color, color_cand, dw, dh, depth, depth_cand))
+    }))
+    .ok()
+    .flatten()
+}
+
 /// Readback the largest TEXTURE2D in `start`'s nest EXCLUDING whichever texture is found from
 /// `exclude_start` (e.g. read the content RT while excluding the SRV). For visual diagnosis of which
 /// texture holds the portrait when several same-/different-size textures share the offscreen nest.
@@ -550,6 +932,32 @@ static DEPTH_KEY_NOGAP_LOGGED: AtomicUsize = AtomicUsize::new(0);
 /// we re-apply this cached mask so the cutout stays stable. It is RECALCULATED whenever fresh depth is
 /// available (tracking a real re-render) and only cached for the dead frames in between -- never frozen.
 static LAST_DEPTH_MASK: Mutex<Option<(usize, usize, Vec<u8>)>> = Mutex::new(None);
+
+/// COHERENT color+depth readback cache (bug #3 fix). ONE queue/allocator/list/fence records BOTH the
+/// color and depth copies, so they are captured at the SAME GPU submission -- unlike the separate
+/// RB_FAST_* (color) and RB_DEPTH_* (depth) paths, between whose independent fences the game's async
+/// render can advance the RT (color=frameN, depth=frameN+1 -> the mask shape mismatches the head).
+/// Separate readback buffers for color and depth (resized on footprint change). Raw COM owned here.
+static RB_COH_QUEUE: AtomicUsize = AtomicUsize::new(0);
+static RB_COH_ALLOC: AtomicUsize = AtomicUsize::new(0);
+static RB_COH_LIST: AtomicUsize = AtomicUsize::new(0);
+static RB_COH_FENCE: AtomicUsize = AtomicUsize::new(0);
+static RB_COH_CBUF: AtomicUsize = AtomicUsize::new(0);
+static RB_COH_CBUFSIZE: AtomicU64 = AtomicU64::new(0);
+static RB_COH_DBUF: AtomicUsize = AtomicUsize::new(0);
+static RB_COH_DBUFSIZE: AtomicU64 = AtomicU64::new(0);
+static RB_COH_FENCEVAL: AtomicU64 = AtomicU64::new(0);
+/// Depth captured COHERENTLY with the current color frame `(dw, dh, depth, depth_cand)`, stashed by
+/// `readback_offscreen_fast_coherent` for the SAME draw tick's `apply_depth_alpha_key` to consume via
+/// `take_coherent_depth`. Single render-thread producer/consumer within one tick; the producer always
+/// sets it (coherent success) or clears it (fallback) each frame, so a later frame never reads a stale
+/// depth. `None` -> the mask path reads depth fresh (the legacy separate read).
+static COHERENT_DEPTH: Mutex<Option<(u32, u32, Vec<f32>, usize)>> = Mutex::new(None);
+/// Instrumentation the first coherent pass lacked: how many draw ticks the COHERENT color+depth readback
+/// SUCCEEDED (`_OK`) vs fell back to the separate color+depth path (`_FALLBACK`). Exposed as oracles so a
+/// run PROVES whether the single-fence path is actually engaging (not silently degrading).
+pub(crate) static COHERENT_READ_OK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static COHERENT_READ_FALLBACK: AtomicUsize = AtomicUsize::new(0);
 
 /// Cached backbuffer READBACK + UPLOAD buffers for the alpha-honoring CPU-blend composite (sized to the
 /// centered portrait region's copyable footprint in the backbuffer's format). The composite reads the live
@@ -1372,7 +1780,12 @@ pub(crate) unsafe fn apply_depth_alpha_key(gpu_child: usize, w: u32, h: u32, cpx
 /// no separable gap (the caller then reuses the cached mask). Emits the one-shot `depth-key` diagnostic
 /// (success) and a separate one-shot skip diagnostic (dims mismatch / no gap) so both are visible once.
 unsafe fn compute_depth_mask(gpu_child: usize, w: usize, h: usize) -> Option<Vec<u8>> {
-    let (dw, dh, depth, depth_cand) = unsafe { readback_depth_fast(gpu_child) }?;
+    // Prefer the depth captured COHERENTLY with this tick's color (same single fence -- bug #3 fix);
+    // fall back to a fresh, separately-fenced depth read when the coherent path was unavailable.
+    let (dw, dh, depth, depth_cand) = match take_coherent_depth() {
+        Some(d) => d,
+        None => unsafe { readback_depth_fast(gpu_child) }?,
+    };
     if dw as usize != w || dh as usize != h || depth.len() < w * h {
         // At higher-res (1024) the depth sibling MUST match the color RT or the mask can't align.
         if DEPTH_KEY_NOGAP_LOGGED.swap(1, Ordering::SeqCst) == 0 {

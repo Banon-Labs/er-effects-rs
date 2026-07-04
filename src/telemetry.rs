@@ -2414,6 +2414,20 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_depth_key_applied",
             DEPTH_KEY_APPLIED.load(Ordering::SeqCst),
         );
+        // Coherent color+depth readback engagement (bug #3): _ok = draw ticks the single-fence path
+        // captured color+depth together (from the deterministic bundle-paired depth); _fallback = ticks
+        // it degraded to the separate color/depth reads. A high _ok:_fallback ratio proves the coherent
+        // path is actually running (the first pass had no way to tell).
+        push_json_usize(
+            body,
+            "oracle_portrait_coherent_read_ok",
+            COHERENT_READ_OK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_coherent_read_fallback",
+            COHERENT_READ_FALLBACK.load(Ordering::SeqCst),
+        );
         push_json_usize(
             body,
             "oracle_depth_key_bg_pct",
