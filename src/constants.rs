@@ -1594,6 +1594,9 @@ pub(crate) static PROFILE_WINDOW_FIRST_KEYED_DISPLAY: AtomicUsize = AtomicUsize:
 pub(crate) static PROFILE_WINDOW_FIRST_KEYED_DISPLAY_LAST: AtomicUsize = AtomicUsize::new(0);
 /// One-shot latch for the per-run ProfileSummary slot->character-name dump (hi2 attribution).
 pub(crate) static PROFILE_SLOT_NAMES_DUMPED: AtomicUsize = AtomicUsize::new(0);
+/// Window mark for checker-classified readback frames (run 6 window 9: 266 frames vanished from the
+/// publish[] accounting because checker frames were counted in no window class).
+pub(crate) static PROFILE_READBACK_CHECKER_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
 /// Diagnostic: the captured engine ctx pointer + its `+8` delta-time bits, logged once, to learn whether the
 /// context is a stable persistent structure (safe to reuse across frames) or a transient per-call one.
 pub(crate) static PROFILE_DRAW_TASK_CTX_LOGGED: AtomicUsize = AtomicUsize::new(0);

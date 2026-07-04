@@ -2692,6 +2692,16 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_portrait_first_keyed_display_last_window",
             PROFILE_WINDOW_FIRST_KEYED_DISPLAY_LAST.load(Ordering::SeqCst),
         );
+        push_json_usize(
+            body,
+            "oracle_depth_key_degenerate",
+            crate::experiments::DEPTH_KEY_DEGENERATE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_depth_key_second_pass",
+            crate::experiments::DEPTH_KEY_SECOND_PASS.load(Ordering::SeqCst),
+        );
         push_json_str(
             body,
             "oracle_gx_cmdqueue_top_producers",

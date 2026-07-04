@@ -1014,6 +1014,9 @@ static DEPTH_KEY_NOGAP_LOGGED: AtomicUsize = AtomicUsize::new(0);
 /// publish floor). Throttles the recurring depth diagnostic (er-effects-rs-hi2: a whole window sat in
 /// the lowmask band and the one-shot diag from boot left it invisible). `oracle_depth_key_degenerate`.
 pub(crate) static DEPTH_KEY_DEGENERATE: AtomicUsize = AtomicUsize::new(0);
+/// Degenerate frames RECOVERED by the second-pass histogram (clear-plane extremes excluded) --
+/// the backdrop-geometry windows' masks. `oracle_depth_key_second_pass`.
+pub(crate) static DEPTH_KEY_SECOND_PASS: AtomicUsize = AtomicUsize::new(0);
 /// Per-window MIN transparent share (percent) among PUBLISHED frames (usize::MAX = none published) and
 /// MAX share among lowmask-held frames -- the two sides of the floor, for setting it from evidence.
 pub(crate) static PROFILE_PUBLISH_SHARE_MIN: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -2147,10 +2150,84 @@ unsafe fn compute_depth_mask(gpu_child: usize, w: usize, h: usize) -> Option<Vec
         // A clean bimodal bg/head separation confirms this depth buffer belongs to OUR portrait scene --
         // pin its candidate so later scans can't drift to another slot's same-size depth sibling.
         PROFILE_DEPTH_PIN.store(depth_cand, Ordering::SeqCst);
-        Some(mask)
-    } else {
-        None
+        return Some(mask);
     }
+    // SECOND PASS (backdrop-geometry recovery -- er-effects-rs-hi2 root fix, runs 2026-07-03).
+    // Some characters' portrait scenes render backdrop GEOMETRY at a depth just behind the head
+    // (observed: box ~0.0199 vs head ~0.0210) plus a sliver of true cleared depth (exact dmin=0).
+    // The widest histogram gap is then the WRONG gap (cleared..geometry, bins 1..112), so the "bg"
+    // cut is only the cleared sliver (~0%) and the whole window starves (slot4 Speed Bean
+    // unkeyed=204, slot9 Moonsent Bean unkeyed=260). Excluding the BIT-EXACT extreme values (the
+    // clear planes) and re-running the same histogram over the interior geometry makes the real
+    // head/backdrop air gap dominant; excluded extremes are then classified by the same threshold
+    // (cleared lands on the bg side). Only runs when the validated first pass failed.
+    if range > 0.0 && center.is_finite() {
+        let dmin_bits = dmin.to_bits();
+        let dmax_bits = dmax.to_bits();
+        let interior =
+            |d: f32| d.is_finite() && d.to_bits() != dmin_bits && d.to_bits() != dmax_bits;
+        let mut imin = f32::INFINITY;
+        let mut imax = f32::NEG_INFINITY;
+        for &d in depth.iter().take(w * h) {
+            if interior(d) {
+                imin = imin.min(d);
+                imax = imax.max(d);
+            }
+        }
+        let irange = imax - imin;
+        if irange > 0.0 {
+            let mut hist2 = [0u32; NB];
+            for &d in depth.iter().take(w * h) {
+                if interior(d) {
+                    let bi =
+                        ((((d - imin) / irange) * NB as f32) as isize).clamp(0, NB as isize - 1);
+                    hist2[bi as usize] += 1;
+                }
+            }
+            let (mut b_lo, mut b_len) = (0usize, 0usize);
+            let (mut c_lo, mut c_len) = (0usize, 0usize);
+            for b in 0..NB {
+                if hist2[b] <= empty_thresh {
+                    if c_len == 0 {
+                        c_lo = b;
+                    }
+                    c_len += 1;
+                    if c_len > b_len {
+                        b_len = c_len;
+                        b_lo = c_lo;
+                    }
+                } else {
+                    c_len = 0;
+                }
+            }
+            let thr2 = imin + ((b_lo as f32 + b_len as f32 * 0.5) / NB as f32) * irange;
+            if (b_len as f32 / NB as f32) >= 0.04 {
+                let keep_high2 = center > thr2;
+                let mut mask2 = vec![0u8; w * h];
+                let mut masked2 = 0usize;
+                for i in 0..(w * h) {
+                    let d = depth[i];
+                    let is_bg = if keep_high2 { d < thr2 } else { d > thr2 };
+                    if is_bg {
+                        mask2[i] = 1;
+                        masked2 += 1;
+                    }
+                }
+                let share2 = masked2 * 100 / (w * h).max(1);
+                if share2 >= PORTRAIT_MIN_TRANSPARENT_PCT {
+                    let n = DEPTH_KEY_SECOND_PASS.fetch_add(1, Ordering::SeqCst);
+                    if n % 64 == 0 {
+                        append_autoload_debug(format_args!(
+                            "depth-key: SECOND-PASS recovered mask -- interior[{imin},{imax}] gap[bins {b_lo}..+{b_len}/{NB}] thr={thr2} keep_high={keep_high2} masked={share2}% (first pass degenerate: clear-plane extremes excluded)"
+                        ));
+                    }
+                    PROFILE_DEPTH_PIN.store(depth_cand, Ordering::SeqCst);
+                    return Some(mask2);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Force the offscreen RT->SRV resolve in D3D12: CopyResource the render-target texture behind
@@ -2935,8 +3012,12 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
         share_min.to_string()
     };
     let held_max = PROFILE_LOWMASK_SHARE_MAX.swap(0, Ordering::SeqCst);
+    let checker = winof(
+        &PROFILE_READBACK_CHECKER,
+        &PROFILE_READBACK_CHECKER_WINDOW_MARK,
+    );
     append_autoload_debug(format_args!(
-        "present-overlay: loading-portrait window reset ({reason}) -- animated {drive} / displayed {display} frames (drive<<display == froze early); publish[clean={published} torn={torn} unkeyed={unkeyed} lowmask={lowmask} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips} unpaired={unpaired} first_keyed={first_keyed_s}] share[pass_min={share_min_s} held_max={held_max}] src[color bundle={cb}/scan={cs} depth chain={dc}/bfs={db}] (clean=0 == frozen on prior character; the dominant skip class is the cause); pins/spare cleared for the next load"
+        "present-overlay: loading-portrait window reset ({reason}) -- animated {drive} / displayed {display} frames (drive<<display == froze early); publish[clean={published} torn={torn} unkeyed={unkeyed} lowmask={lowmask} checker={checker} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips} unpaired={unpaired} first_keyed={first_keyed_s}] share[pass_min={share_min_s} held_max={held_max}] src[color bundle={cb}/scan={cs} depth chain={dc}/bfs={db}] (clean=0 == frozen on prior character; the dominant skip class is the cause); pins/spare cleared for the next load"
     ));
 }
 
