@@ -269,18 +269,18 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         });
     }
 
-    // Stats-panel native text: install the ProfileSelect SetText hook + the named-child binder hook
-    // (idempotent) so the character's attribute line renders in the game's own MenuFont_01 on the
-    // Load-Game rows. Independent of the title-cover conditions below -- it must run on every
-    // stats-panel product path, so it is gated on `stats_panel_enabled()` directly.
+    // Stats-panel native text: arm the 05_010 GFX runtime edit (face box removed + `ErStats` field
+    // added; served in-place by the Scaleform file-open observer) and install the row-populate hook
+    // + the named-child binder hook (idempotent) so the character's attribute line renders in the
+    // game's own MenuFont_01 in its own row field. Independent of the title-cover conditions below
+    // -- it must run on every stats-panel product path, so it is gated on `stats_panel_enabled()`
+    // directly (product lever; no per-feature env gate).
     if stats_panel_enabled() {
         START_PROFILE_STATS_TEXT.call_once(|| {
+            PROFILE_05_010_RUNTIME_EDIT_ARMED.store(1, Ordering::SeqCst);
             let _ = std::thread::Builder::new()
                 .name("er-effects-profile-stats-text".to_owned())
-                .spawn(|| {
-                    install_title_scene_obj_proxy_named_child_bind_hook();
-                    install_profile_settext_hook();
-                });
+                .spawn(install_title_scene_obj_proxy_named_child_bind_hook);
         });
     }
     // Title-cover masquerade Part A: install the BeginTitle `05_000_Title` hook as early as

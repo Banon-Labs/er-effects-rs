@@ -86,8 +86,12 @@ def lines(fn: str):
     return res
 
 
-def walk_full(b: bytes, off: int, sprite: int, out: list):
-    """Like walk_tags but collects (sprite_id_or_None, code, full_tag_bytes)."""
+def walk_full(b: bytes, off: int, sprite: int, out: list, sprite_full: dict):
+    """Like walk_tags but collects (sprite_id_or_None, code, element). For a
+    DefineSprite the element is the placeholder ("SPRITE", id) -- compared by
+    id during alignment so nested-only changes stay nested -- and the sprite's
+    full serialized tag bytes are recorded in sprite_full[id] for parent-level
+    remove/replace edits."""
     while off < len(b):
         word = int.from_bytes(b[off : off + 2], "little")
         code = word >> 6
@@ -101,7 +105,9 @@ def walk_full(b: bytes, off: int, sprite: int, out: list):
         full = b[off : off + hdr + body_len]
         if code == 39:
             sprite_id = int.from_bytes(b[off + hdr : off + hdr + 2], "little")
-            walk_full(b[: off + hdr + body_len], off + hdr + 4, sprite_id, out)
+            sprite_full[sprite_id] = full
+            out.append((sprite, code, ("SPRITE", sprite_id)))
+            walk_full(b[: off + hdr + body_len], off + hdr + 4, sprite_id, out, sprite_full)
         else:
             out.append((sprite, code, full))
         off += hdr + body_len
@@ -110,15 +116,18 @@ def walk_full(b: bytes, off: int, sprite: int, out: list):
 
 
 def containers(fn: str):
-    """Ordered dict container -> [(code, full_tag_bytes)]. Container is None for
-    the root stream or the sprite id for a DefineSprite body."""
+    """(raw_bytes, ordered dict container -> [(code, element)], sprite_full).
+    Container is None for the root stream or the sprite id for a DefineSprite
+    body; elements are full tag bytes, except DefineSprite placeholders (see
+    walk_full)."""
     b = open(fn, "rb").read()
     flat = []
-    walk_full(b, parse_header(b), None, flat)
+    sprite_full = {}
+    walk_full(b, parse_header(b), None, flat, sprite_full)
     by = {}
-    for sprite, code, full in flat:
-        by.setdefault(sprite, []).append((code, full))
-    return b, by
+    for sprite, code, elem in flat:
+        by.setdefault(sprite, []).append((code, elem))
+    return b, by, sprite_full
 
 
 def rust_bytes(b: bytes) -> str:
@@ -126,30 +135,67 @@ def rust_bytes(b: bytes) -> str:
 
 
 def emit_rust(a_fn: str, b_fn: str, const_name: str):
-    raw_a, ca = containers(a_fn)
-    raw_b, cb = containers(b_fn)
-    assert set(ca) == set(cb), f"container sets differ: {set(ca) ^ set(cb)}"
+    raw_a, ca, sf_a = containers(a_fn)
+    raw_b, cb, sf_b = containers(b_fn)
 
+    def elem_bytes(sf: dict, code: int, elem) -> bytes:
+        # Resolve a DefineSprite placeholder to the sprite's full tag bytes so a
+        # parent-level remove/replace of a whole sprite is expressible.
+        if code == 39:
+            return sf[elem[1]]
+        return elem
+
+    # Sprites removed or wholly replaced at the parent level: their nested
+    # streams are covered by the parent edit's old_tag bytes, so they must be
+    # skipped as containers (in A), and a replacement that introduces a sprite
+    # would appear as a new container in B.
     edits = []
+    parent_edited_a, parent_edited_b = set(), set()
     for sprite in ca:
-        sa, sb = ca[sprite], cb[sprite]
+        if sprite is not None and sprite not in cb:
+            continue  # covered by a parent-level edit collected below
+        sa, sb = ca[sprite], cb.get(sprite, [])
         sm = difflib.SequenceMatcher(a=sa, b=sb, autojunk=False)
         for op, i1, i2, j1, j2 in sm.get_opcodes():
             if op == "equal":
                 continue
             if op == "delete":
-                for code, full in sa[i1:i2]:
-                    edits.append((sprite, code, full, None))
+                for code, elem in sa[i1:i2]:
+                    if code == 39:
+                        parent_edited_a.add(elem[1])
+                    edits.append((sprite, code, elem_bytes(sf_a, code, elem), None))
             elif op == "replace":
                 olds, news = sa[i1:i2], sb[j1:j2]
-                assert len(olds) == len(news), (
-                    f"unpaired replace in container {sprite}: {len(olds)} old vs {len(news)} new"
+                # An uneven block with MORE olds is a mixed replace+delete run:
+                # pair head-to-head and delete the excess olds. Any
+                # order-preserving pairing yields the same output stream, and
+                # the module-level known-input fingerprint check verifies the
+                # applied result byte-for-byte. More news than olds would be an
+                # insert, which the edit model rejects.
+                assert len(olds) >= len(news), (
+                    f"insert inside replace in container {sprite}: {len(olds)} old vs {len(news)} new"
                 )
-                for (oc, of), (nc, nf) in zip(olds, news):
-                    assert oc == nc, f"replace changes tag code {oc}->{nc} in container {sprite}"
-                    edits.append((sprite, oc, of, nf))
+                for code, elem in olds[len(news):]:
+                    if code == 39:
+                        parent_edited_a.add(elem[1])
+                    edits.append((sprite, code, elem_bytes(sf_a, code, elem), None))
+                for (oc, oe), (nc, ne) in zip(olds, news):
+                    # TagEdit.code documents the TARGETED (old) tag; the
+                    # replacement may be a different tag kind (e.g. a
+                    # DefineSprite repurposed as a DefineEditText).
+                    if oc == 39:
+                        parent_edited_a.add(oe[1])
+                    if nc == 39:
+                        parent_edited_b.add(ne[1])
+                    edits.append(
+                        (sprite, oc, elem_bytes(sf_a, oc, oe), elem_bytes(sf_b, nc, ne))
+                    )
             else:
                 raise AssertionError(f"unsupported opcode {op!r} in container {sprite} (insert?)")
+    dangling_a = {s for s in ca if s is not None and s not in cb} - parent_edited_a
+    assert not dangling_a, f"containers vanished without a parent-level edit: {dangling_a}"
+    dangling_b = {s for s in cb if s is not None and s not in ca} - parent_edited_b
+    assert not dangling_b, f"containers appeared without a parent-level edit: {dangling_b}"
 
     def hdr_line(name, raw):
         return (

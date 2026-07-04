@@ -2325,23 +2325,65 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_stats_panel_last_error",
             STATS_PANEL_LAST_ERROR.load(Ordering::SeqCst),
         );
-        // Stats-panel NATIVE TEXT oracles: target-field value pointers captured in the named-child hook,
-        // and SetText substitutions actually performed. subs>0 == the attribute line reached a native
-        // ProfileSelect text field (rendered in MenuFont_01) without an image.
+        // Stats-panel NATIVE TEXT oracles (row-populate push design): native row fills observed,
+        // successful ErStats pushes, and rejected pushes. subs>0 == the attribute line reached the
+        // GFX-edit `ErStats` field (rendered in MenuFont_01) in its OWN field; failures>0 with
+        // subs==0 == the 05_010 edit was not live (field missing) or SetText rejected the value.
         push_json_usize(
             body,
             "oracle_stats_text_installed",
-            PROFILE_SETTEXT_INSTALLED.load(Ordering::SeqCst),
+            TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_INSTALLED.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
-            "oracle_stats_text_field_captures",
-            PROFILE_STATS_FIELD_CAPTURES.load(Ordering::SeqCst),
+            "oracle_stats_text_row_populates",
+            PROFILE_STATS_ROW_POPULATES.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,
             "oracle_stats_text_settext_subs",
             PROFILE_STATS_SETTEXT_SUBS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_stats_text_push_failures",
+            PROFILE_STATS_PUSH_FAILURES.load(Ordering::SeqCst),
+        );
+        // Stats-panel 05_010 runtime GFX edit oracles (mirror the 05_000 runtime-strip set).
+        push_json_usize(
+            body,
+            "oracle_profile_05_010_runtime_edit_armed",
+            PROFILE_05_010_RUNTIME_EDIT_ARMED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_05_010_runtime_edit_serves",
+            PROFILE_05_010_RUNTIME_EDIT_SERVES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_05_010_runtime_edit_failures",
+            PROFILE_05_010_RUNTIME_EDIT_FAILURES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_05_010_runtime_edit_input_len",
+            PROFILE_05_010_RUNTIME_EDIT_INPUT_LEN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_05_010_runtime_edit_output_len",
+            PROFILE_05_010_RUNTIME_EDIT_OUTPUT_LEN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_05_010_runtime_edit_input_class",
+            PROFILE_05_010_RUNTIME_EDIT_INPUT_CLASS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_profile_05_010_runtime_edit_output_validated",
+            PROFILE_05_010_RUNTIME_EDIT_OUTPUT_VALIDATED.load(Ordering::SeqCst),
         );
         // Camera-lever (custom profile-portrait viewport) RAM semaphores: a runtime watcher can confirm
         // the override path ran and produced a sane matrix without an image. See bd

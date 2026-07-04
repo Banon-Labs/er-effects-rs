@@ -2276,54 +2276,45 @@ pub(crate) static TITLE_PROFILE_FACE_LAST_PROXY: AtomicUsize = AtomicUsize::new(
 pub(crate) static TITLE_PROFILE_FACE_LAST_VALUE: AtomicUsize = AtomicUsize::new(0);
 
 // === Stats-panel NATIVE TEXT (2026-07-04) =========================================================
-// Render the character's attributes as text on the ProfileSelect rows using the GAME'S OWN font. The
-// menu populates a named text field by resolving it (assignComponentWithName, already hooked) then
-// calling the SetText wrapper `FUN_14074a0f0(CSScaleformValue* field, const wchar_t* text)` -- the
-// engine wraps the string in HTML and renders it through the field's own `MenuFont_01`. We hook that
-// SetText wrapper: when it targets a ProfileSelect row field whose CSScaleformValue pointer we captured
-// (in the named-child hook, for the target field name), we substitute our stats string. No font work,
-// no new Scaleform surface, native rendering. (See bd profileselect-native-settext-RE-2026-07-04.)
+// Render the character's attributes as text on the ProfileSelect rows using the GAME'S OWN font, each
+// value in its own field. The 05_010 GFX edit (`er_gfx::title_05_010`) removes the 128px face box and
+// adds a dedicated `ErStats` DefineEditText to the row template; the DLL hooks the native row-populate
+// template `FUN_1408758d0` (the only writer of PlayerName/Level/Location/PlayTime) and, BEFORE calling
+// the original (which destroys the row proxy at its end -- callee-dtor convention), resolves the
+// row's `ErStats` child natively (assignComponentWithName) and pushes the attribute line through the
+// native SetText wrapper -- the engine wraps the string in HTML and renders it through the field's own
+// `MenuFont_01`. No font work, no new Scaleform surface, no substitution of native fields' text.
+// (RE: bd profileselect-native-settext-RE-2026-07-04 + Ghidra dump FUN_1408758d0/FUN_14074c630;
+// ARM/CONSUME SetText substitution was rejected because the FMG-static populate pass calls the SetText
+// CORE directly, so no wrapper-level routing can target a field the row-populate never writes.)
 /// SetText wrapper `FUN_14074a0f0` (deobf/live 0x74a000). fastcall(rcx=CSScaleformValue*, rdx=wchar_t*).
+/// Not hooked -- called directly for the stats push (null-guards text and checks the field dataType).
 pub(crate) const PROFILE_SETTEXT_RVA: usize = 0x74a000;
-pub(crate) static PROFILE_SETTEXT_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static PROFILE_SETTEXT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+/// `CS::CSScaleformValue::~CSScaleformValue` (dump 0x140d7f900) = deobf/live 0xd7f850
+/// (`scripts/dump-deobf-shift.py` -> content-unique). fastcall(rcx=CSScaleformValue*). Releases the
+/// GFx::Value handle a resolved child proxy holds; the stats push calls it exactly like the native
+/// row-populate does after each field.
+pub(crate) const CSSCALEFORMVALUE_DTOR_RVA: usize = 0xd7f850;
 /// The SceneObjProxy embeds its CSScaleformValue at proxy+0x8 (RE'd from the row-populate template
-/// `FUN_1408758d0`, which calls `FUN_14074a0f0(&sceneObjProxy.scaleformValue, ...)`). So the value
-/// pointer the SetText hook sees == the resolved child proxy + this offset.
+/// `FUN_1408758d0`, which calls `FUN_14074a0f0(&sceneObjProxy.scaleformValue, ...)`).
 pub(crate) const SCENE_OBJ_PROXY_SCALEFORM_VALUE_OFFSET: usize = 0x8;
-/// The ProfileSelect row field we repurpose to show the attribute line. `Location` (the map name,
-/// 412px, right-aligned) is the widest single field after PlayerName -- a first-increment home for the
-/// stats text before a dedicated widened field is added via a 05_010 GFX edit.
-pub(crate) const PROFILE_STATS_TARGET_FIELD: &str = "Location";
-/// Recently-resolved CSScaleformValue pointers of the target field across the (recycled) rows. The
-/// SetText hook substitutes our stats text when its `field` arg matches one of these. Ring-overwritten;
-/// stale entries simply never match (the game never calls SetText with a freed field pointer), so this
-/// is compare-only -- never dereferenced -- and carries no use-after-free risk.
-pub(crate) const PROFILE_STATS_FIELD_SLOTS: usize = 16;
-pub(crate) static PROFILE_STATS_FIELD_VALUES: [AtomicUsize; PROFILE_STATS_FIELD_SLOTS] = [
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-    AtomicUsize::new(0),
-];
-/// Ring write cursor for `PROFILE_STATS_FIELD_VALUES`.
-pub(crate) static PROFILE_STATS_FIELD_CURSOR: AtomicUsize = AtomicUsize::new(0);
-/// Count of SetText calls whose text we substituted with the stats string (oracle).
+/// Stack size for an out SceneObjProxy passed to `assignComponentWithName`. The native row-populate
+/// reserves 0x70 bytes; the binder fully constructs the out proxy without reading it, so a zeroed
+/// buffer with headroom is safe.
+pub(crate) const SCENE_OBJ_PROXY_STACK_BYTES: usize = 0x80;
+/// The row field whose native resolve (first, in `FUN_1408758d0`'s populate order) triggers our
+/// synchronous `ErStats` push on the same row `parent`. Matching PlayerName means the push fires
+/// once per row populate, before the native fields are written (they keep their native text).
+pub(crate) const PROFILE_STATS_TRIGGER_FIELD: &str = "PlayerName";
+/// Re-entrancy guard: our `ErStats` resolve re-enters the named-child hook; skip the trigger while set.
+pub(crate) static PROFILE_STATS_PUSH_IN_PROGRESS: AtomicUsize = AtomicUsize::new(0);
+/// Count of row populates observed (PlayerName trigger fired) while the stats panel is on (oracle).
+pub(crate) static PROFILE_STATS_ROW_POPULATES: AtomicUsize = AtomicUsize::new(0);
+/// Count of successful ErStats pushes (assign resolved an editable field and SetText accepted) (oracle).
 pub(crate) static PROFILE_STATS_SETTEXT_SUBS: AtomicUsize = AtomicUsize::new(0);
-/// Count of target-field value pointers captured in the named-child hook (oracle).
-pub(crate) static PROFILE_STATS_FIELD_CAPTURES: AtomicUsize = AtomicUsize::new(0);
+/// Count of push attempts that failed (field missing -- e.g. GFX edit not served -- or SetText
+/// rejected the value) (oracle).
+pub(crate) static PROFILE_STATS_PUSH_FAILURES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_PRESS_START_BIND_HITS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_PRESS_START_BIND_LAST_PARENT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -2487,6 +2478,30 @@ pub(crate) static TITLE_05_000_RUNTIME_STRIP_INPUT_CLASS: AtomicUsize = AtomicUs
 /// 2 = clean all-or-nothing edit result with a DIFFERENT fingerprint (expected only after a game
 /// update changes untouched tags; not an error, but the proof of visual equivalence is then open).
 pub(crate) static TITLE_05_000_RUNTIME_STRIP_OUTPUT_VALIDATED: AtomicUsize = AtomicUsize::new(0);
+
+/// Stats-panel 05_010_ProfileSelect runtime edit armed (mirrors the 05_000 runtime strip): the
+/// Scaleform file-open hook reads the game's own vanilla `05_010_profileselect.gfx` payload out of
+/// the native MemoryFile and applies `er_gfx::title_05_010::stats_panel` -- 6 content-addressed tag
+/// edits (face box removed, `ErStats` field added, left column reflowed), all-or-nothing, output
+/// fingerprint-verified for the known vanilla input (`crates/er-gfx/tests/profile_stats.rs`).
+/// 0 = disarmed, 1 = armed. Armed with the stats panel itself (product lever, no new env gates).
+pub(crate) static PROFILE_05_010_RUNTIME_EDIT_ARMED: AtomicUsize = AtomicUsize::new(0);
+/// Successful 05_010 runtime-edit serves (native MemoryFile data/len swapped to the derived movie).
+pub(crate) static PROFILE_05_010_RUNTIME_EDIT_SERVES: AtomicUsize = AtomicUsize::new(0);
+/// 05_010 runtime-edit failures (unexpected vtable, unreadable payload, parse/edit/write error).
+/// Every failure falls closed to the untouched native file (vanilla ProfileSelect rows).
+pub(crate) static PROFILE_05_010_RUNTIME_EDIT_FAILURES: AtomicUsize = AtomicUsize::new(0);
+/// Observed native 05_010 payload length at first successful read (0 until then).
+pub(crate) static PROFILE_05_010_RUNTIME_EDIT_INPUT_LEN: AtomicUsize = AtomicUsize::new(0);
+/// Derived edited movie length (0 until derived).
+pub(crate) static PROFILE_05_010_RUNTIME_EDIT_OUTPUT_LEN: AtomicUsize = AtomicUsize::new(0);
+/// Input provenance: 0 = unclassified, 1 = known vanilla, 2 = unknown input (the live repository
+/// payload may carry trailing bytes after the root End tag, as observed for 05_000).
+pub(crate) static PROFILE_05_010_RUNTIME_EDIT_INPUT_CLASS: AtomicUsize = AtomicUsize::new(0);
+/// Whether the derived output matches the generated-asset fingerprint (len 14389 +
+/// FNV 0xf6aee75a54e0eccf): 0 = not derived yet, 1 = byte-identical, 2 = clean all-or-nothing edit
+/// with a different fingerprint (expected after a game update changes untouched tags).
+pub(crate) static PROFILE_05_010_RUNTIME_EDIT_OUTPUT_VALIDATED: AtomicUsize = AtomicUsize::new(0);
 
 /// From-scratch minimal diagnostic GFX: one frame, magenta background + full-screen magenta shape.
 /// Generated via FFDEC XML (`target/custom-gfx-lab/title-logo-minimal/...`) and embedded so the

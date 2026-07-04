@@ -58,6 +58,10 @@ static TITLE_SCALEFORM_05_000_MEMORY_GFX: OnceLock<Vec<u8>> = OnceLock::new();
 /// title visit. Lives for the process lifetime so the swapped-in data pointer stays valid for
 /// as long as any native file object references it.
 static TITLE_05_000_RUNTIME_STRIPPED: OnceLock<Vec<u8>> = OnceLock::new();
+/// Runtime-derived stats-panel 05_010_profileselect movie: computed once at first ProfileSelect
+/// file-open from the native MemoryFile's vanilla payload, then reused for every later open.
+/// Process-lifetime for the same data-pointer-validity reason as the 05_000 buffer above.
+static PROFILE_05_010_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
 
 fn load_memory_gfx_from_env(var: &str, slot: &OnceLock<Vec<u8>>, label: &str) {
     let Ok(path) = std::env::var(var) else {
@@ -6805,6 +6809,95 @@ unsafe fn title_05_000_swap_to_stripped(base: usize, file: usize) -> bool {
     true
 }
 
+/// Stats-panel 05_010_ProfileSelect runtime edit (mirrors `title_05_000_swap_to_stripped`): derive
+/// the stats-panel movie (face box removed, `ErStats` field added, left column reflowed -- see
+/// `er_gfx::title_05_010`) from the native MemoryFile's own vanilla payload, cache it for the
+/// process lifetime, and swap the native file's data/len/cursor onto the cached buffer. ANY failure
+/// leaves the native file untouched and returns it as-is: fail-closed to the vanilla ProfileSelect
+/// rows (the row-populate hook's push then fails cleanly on the missing field), never a crash,
+/// never a half-edited movie.
+unsafe fn profile_05_010_swap_to_edited(base: usize, file: usize) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if file == 0 || file == null || file == HOOK_ORIGINAL_UNSET {
+        return false;
+    }
+    let fail = |reason: core::fmt::Arguments<'_>| {
+        PROFILE_05_010_RUNTIME_EDIT_FAILURES.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "stats-panel: 05_010 runtime edit FAIL-CLOSED (serving native vanilla): {reason}"
+        ));
+        false
+    };
+    let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
+    if vtable != base + SCALEFORM_MEMORY_FILE_VTABLE_RVA {
+        return fail(format_args!(
+            "unexpected file vtable 0x{vtable:x} (want MemoryFile 0x{:x})",
+            base + SCALEFORM_MEMORY_FILE_VTABLE_RVA
+        ));
+    }
+    let edited = match PROFILE_05_010_RUNTIME_EDITED.get() {
+        Some(cached) => cached,
+        None => {
+            let data =
+                unsafe { safe_read_usize(file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) }.unwrap_or(0);
+            let len =
+                unsafe { safe_read_i32(file + SCALEFORM_MEMORY_FILE_LEN_OFFSET) }.unwrap_or(0);
+            if data == 0 || data == null || !(64..=0x0100_0000).contains(&len) {
+                return fail(format_args!(
+                    "implausible payload data=0x{data:x} len={len}"
+                ));
+            }
+            let len = len as usize;
+            let magic_ok = unsafe { safe_read_u8(data) } == Some(b'G')
+                && unsafe { safe_read_u8(data + 1) } == Some(b'F')
+                && unsafe { safe_read_u8(data + 2) } == Some(b'X')
+                && unsafe { safe_read_u8(data + len - 1) }.is_some();
+            if !magic_ok {
+                return fail(format_args!(
+                    "payload at 0x{data:x} len={len} is unreadable or not GFX-magic"
+                ));
+            }
+            let vanilla = unsafe { core::slice::from_raw_parts(data as *const u8, len) };
+            PROFILE_05_010_RUNTIME_EDIT_INPUT_LEN.store(len, Ordering::SeqCst);
+            let known = er_gfx::title_05_010::is_known_vanilla(vanilla);
+            PROFILE_05_010_RUNTIME_EDIT_INPUT_CLASS
+                .store(if known { 1 } else { 2 }, Ordering::SeqCst);
+            match er_gfx::title_05_010::stats_panel(vanilla) {
+                Ok(out) => {
+                    PROFILE_05_010_RUNTIME_EDIT_OUTPUT_LEN.store(out.len(), Ordering::SeqCst);
+                    let validated = out.len() == er_gfx::title_05_010::EDITED_LEN
+                        && er_gfx::title_05_000::fnv1a64(&out)
+                            == er_gfx::title_05_010::EDITED_FNV1A64;
+                    PROFILE_05_010_RUNTIME_EDIT_OUTPUT_VALIDATED
+                        .store(if validated { 1 } else { 2 }, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "stats-panel: 05_010 runtime edit derived in={len} out={} known_vanilla={known} out_fnv=0x{:016x}",
+                        out.len(),
+                        er_gfx::title_05_000::fnv1a64(&out)
+                    ));
+                    PROFILE_05_010_RUNTIME_EDITED.get_or_init(|| out)
+                }
+                Err(err) => {
+                    return fail(format_args!("in={len} known_vanilla={known}: {err}"));
+                }
+            }
+        }
+    };
+    unsafe {
+        core::ptr::write(
+            (file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) as *mut usize,
+            edited.as_ptr() as usize,
+        );
+        core::ptr::write(
+            (file + SCALEFORM_MEMORY_FILE_LEN_OFFSET) as *mut u32,
+            edited.len() as u32,
+        );
+        core::ptr::write((file + SCALEFORM_MEMORY_FILE_CURSOR_OFFSET) as *mut u32, 0);
+    }
+    PROFILE_05_010_RUNTIME_EDIT_SERVES.fetch_add(1, Ordering::SeqCst);
+    true
+}
+
 pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
     loader: usize,
     url: usize,
@@ -6820,6 +6913,7 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
     let is_title_logo = unsafe { bounded_ascii_contains(url, b"05_001_title_logo") }
         || unsafe { bounded_ascii_contains(url, b"05_001_title") };
     let is_title_05_000 = unsafe { bounded_ascii_contains(url, b"05_000_title") };
+    let is_profile_05_010 = unsafe { bounded_ascii_contains(url, b"05_010_profileselect") };
 
     let base = game_module_base().unwrap_or(null);
     let mut memory_replacement = false;
@@ -6830,6 +6924,10 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
     } else if is_title_05_000 {
         memory_label = "05_000_title";
         TITLE_SCALEFORM_05_000_MEMORY_GFX.get().map(Vec::as_slice)
+    } else if is_profile_05_010 {
+        // No embedded/env-loaded movie for 05_010: only the in-place runtime edit above.
+        memory_label = "05_010_profileselect";
+        None
     } else {
         None
     };
@@ -6868,6 +6966,10 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
             if is_title_05_000 && TITLE_05_000_RUNTIME_STRIP_ARMED.load(Ordering::SeqCst) != 0 {
                 memory_replacement = unsafe { title_05_000_swap_to_stripped(base, native) };
             }
+            // Stats-panel 05_010 edit: same in-place derive-and-swap, same fail-closed shape.
+            if is_profile_05_010 && PROFILE_05_010_RUNTIME_EDIT_ARMED.load(Ordering::SeqCst) != 0 {
+                memory_replacement = unsafe { profile_05_010_swap_to_edited(base, native) };
+            }
             native
         } else {
             null
@@ -6887,7 +6989,7 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
     TITLE_SCALEFORM_FILE_OPEN_LAST_RET.store(ret, Ordering::SeqCst);
     TITLE_SCALEFORM_FILE_OPEN_LAST_RET_VTABLE.store(ret_vtable, Ordering::SeqCst);
 
-    if is_title_logo || is_title_05_000 {
+    if is_title_logo || is_title_05_000 || is_profile_05_010 {
         let logo_hit = if is_title_logo {
             TITLE_SCALEFORM_FILE_OPEN_LOGO_HITS.fetch_add(1, Ordering::SeqCst) + 1
         } else {
@@ -7455,16 +7557,44 @@ pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook
     let f: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig) };
     let ret = unsafe { f(parent, out_proxy, name_ptr) };
-    // STATS-PANEL NATIVE TEXT (2026-07-04): capture the CSScaleformValue pointer of the ProfileSelect
-    // row target field so the SetText hook can substitute our attribute line there. The value is
-    // embedded at out_proxy + SCENE_OBJ_PROXY_SCALEFORM_VALUE_OFFSET (mirrors the native row-populate
-    // template FUN_1408758d0). Compare-only downstream, so a later-freed proxy is harmless.
+    // STATS-PANEL NATIVE TEXT (row-field-driven push): the ProfileSelect row-populate template
+    // (`FUN_1408758d0`) resolves the row's fields through this binder in order -- PlayerName first,
+    // with `parent` == the row's SceneObjProxy. When we see that first resolve for a real character
+    // row, synchronously resolve the GFX-edit `ErStats` field on the SAME row and push the attribute
+    // line through the native SetText wrapper (the exact mechanism the row-populate uses). This
+    // fires whenever the native populate runs (the only reliably-instrumentable trigger; the populate
+    // itself is timing-raced against the autoload -- bd er-effects-rs-7q7/bcy). Re-entrancy is
+    // guarded: our own `ErStats` resolve re-enters this hook but is skipped while the flag is set.
     if stats_panel_enabled()
-        && out_proxy != 0
-        && out_proxy != null
-        && unsafe { name_ptr_equals_ascii(name_ptr, PROFILE_STATS_TARGET_FIELD) }
+        && parent != 0
+        && parent != null
+        && PROFILE_STATS_PUSH_IN_PROGRESS.load(Ordering::SeqCst) == 0
+        && unsafe { name_ptr_equals_ascii(name_ptr, PROFILE_STATS_TRIGGER_FIELD) }
     {
-        record_stats_target_field(out_proxy + SCENE_OBJ_PROXY_SCALEFORM_VALUE_OFFSET);
+        let seen = PROFILE_STATS_ROW_POPULATES.fetch_add(1, Ordering::SeqCst) + 1;
+        let base = game_module_base().unwrap_or(null);
+        let utf16 = build_stats_text_utf16();
+        if base != null && utf16.len() > 1 {
+            PROFILE_STATS_PUSH_IN_PROGRESS.store(1, Ordering::SeqCst);
+            let pushed = unsafe { push_stats_text_on_row(base, parent, &utf16) };
+            PROFILE_STATS_PUSH_IN_PROGRESS.store(0, Ordering::SeqCst);
+            if pushed {
+                let subs = PROFILE_STATS_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst) + 1;
+                if subs <= 4 {
+                    append_autoload_debug(format_args!(
+                        "stats-text: pushed ErStats on row=0x{parent:x} ({} attr chars, row_triggers={seen} subs={subs})",
+                        utf16.len() - 1
+                    ));
+                }
+            } else {
+                let fails = PROFILE_STATS_PUSH_FAILURES.fetch_add(1, Ordering::SeqCst) + 1;
+                if fails <= 4 {
+                    append_autoload_debug(format_args!(
+                        "stats-text: ErStats push REJECTED on row=0x{parent:x} (field missing/not editable -- 05_010 GFX edit not live?) (row_triggers={seen} fails={fails})"
+                    ));
+                }
+            }
+        }
     }
     if unsafe { title_profile_list_container_matches(name_ptr) } {
         TITLE_PROFILE_FACE_BIND_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
@@ -7580,7 +7710,9 @@ fn build_stats_text_utf16() -> Vec<u16> {
     for i in 0..n {
         let v = unsafe { safe_read_i32(pgd + PGD_STAT_BASE_3C_OFFSET + i * 4) }.unwrap_or(0);
         if i > 0 {
-            s.push_str("  ");
+            // Single-space separators: 8 attribute groups at 22px must fit the
+            // 630px `ErStats` field with margin for 2-digit values.
+            s.push(' ');
         }
         s.push_str(LABELS[i]);
         s.push(' ');
@@ -7589,108 +7721,49 @@ fn build_stats_text_utf16() -> Vec<u16> {
     s.encode_utf16().chain(core::iter::once(0)).collect()
 }
 
-/// Record a target-field CSScaleformValue pointer into the ring so the SetText hook substitutes our
-/// stats text on it. Deduplicates against the current ring contents.
-fn record_stats_target_field(value: usize) {
-    if value == 0 || value == TITLE_OWNER_SCAN_START_ADDRESS {
-        return;
-    }
-    for slot in PROFILE_STATS_FIELD_VALUES.iter() {
-        if slot.load(Ordering::SeqCst) == value {
-            return; // already tracked
-        }
-    }
-    let idx = PROFILE_STATS_FIELD_CURSOR.fetch_add(1, Ordering::SeqCst) % PROFILE_STATS_FIELD_SLOTS;
-    PROFILE_STATS_FIELD_VALUES[idx].store(value, Ordering::SeqCst);
-    PROFILE_STATS_FIELD_CAPTURES.fetch_add(1, Ordering::SeqCst);
-}
-
-/// Whether `field` (a CSScaleformValue pointer) is a captured stats-target field. Compare-only; never
-/// dereferences the pointer (so a stale ring entry is harmless).
-fn is_stats_target_field(field: usize) -> bool {
-    PROFILE_STATS_FIELD_VALUES
-        .iter()
-        .any(|slot| slot.load(Ordering::SeqCst) == field)
-}
-
-/// Hook on the SetText wrapper `FUN_14074a0f0(CSScaleformValue* field, const wchar_t* text)`. When the
-/// game sets text on a captured ProfileSelect target field (and stats-panel mode is on), substitute the
-/// live attribute line so the engine renders OUR stats in the field's native `MenuFont_01`; every other
-/// text set (and any read failure) passes through unchanged.
-pub(crate) unsafe extern "system" fn profile_settext_hook(field: usize, text: usize) -> usize {
+/// Push `utf16` onto the row's `ErStats` field with the game's own machinery, exactly as the native
+/// row-populate does per field: resolve the named child (`assignComponentWithName` -- via the installed
+/// hook's trampoline when available so the resolve is not double-instrumented), SetText through the
+/// null-guarded wrapper `FUN_14074a0f0` (checks the field dataType; returns 0 when the child did not
+/// resolve to an editable text field, e.g. when the 05_010 GFX edit was not served), then release the
+/// resolved value with `CSScaleformValue::~CSScaleformValue`. Returns whether SetText accepted.
+unsafe fn push_stats_text_on_row(base: usize, row_proxy: usize, utf16: &[u16]) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let orig = PROFILE_SETTEXT_ORIG.load(Ordering::SeqCst);
-    let call_orig = |t: usize| -> usize {
-        if orig != null && orig != HOOK_ORIGINAL_UNSET {
-            let f: unsafe extern "system" fn(usize, usize) -> usize =
-                unsafe { std::mem::transmute(orig) };
-            unsafe { f(field, t) }
-        } else {
-            0
-        }
+    let assign = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
+        orig if orig != null && orig != HOOK_ORIGINAL_UNSET => orig,
+        _ => base + TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
     };
-    if field != 0 && field != null && stats_panel_enabled() && is_stats_target_field(field) {
-        let utf16 = build_stats_text_utf16();
-        if utf16.len() > 1 {
-            let n = PROFILE_STATS_SETTEXT_SUBS.fetch_add(1, Ordering::SeqCst) + 1;
-            if n <= 4 {
-                append_autoload_debug(format_args!(
-                    "stats-text: substituted SetText on field=0x{field:x} with {} attribute(s) (subs={n})",
-                    utf16.len() - 1
-                ));
-            }
-            // `utf16` outlives the call (the wrapper copies it into a DLString synchronously).
-            return call_orig(utf16.as_ptr() as usize);
-        }
-    }
-    call_orig(text)
-}
-
-pub(crate) fn install_profile_settext_hook() {
-    if PROFILE_SETTEXT_INSTALLED.load(Ordering::SeqCst) != 0 {
-        return;
-    }
-    match unsafe { MH_Initialize() } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-        status => {
-            append_autoload_debug(format_args!(
-                "stats-text: SetText MH_Initialize failed: {status:?}"
-            ));
-            return;
-        }
-    }
-    let Ok(addr) = game_rva(PROFILE_SETTEXT_RVA as u32) else {
-        append_autoload_debug(format_args!(
-            "stats-text: failed to resolve SetText rva 0x{PROFILE_SETTEXT_RVA:x}"
-        ));
-        return;
+    let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(assign) };
+    let settext: unsafe extern "system" fn(usize, usize) -> usize =
+        unsafe { std::mem::transmute(base + PROFILE_SETTEXT_RVA) };
+    let dtor: unsafe extern "system" fn(usize) =
+        unsafe { std::mem::transmute(base + CSSCALEFORMVALUE_DTOR_RVA) };
+    // The binder fully constructs the out proxy without reading it (RE: assignComponentWithName
+    // ctor-or-resolve paths both initialize before use); a zeroed buffer mirrors the native
+    // uninitialized 0x70-byte stack slot with headroom. The name is a plain string (the binder
+    // treats it as a printf format; `ErStats` carries no '%').
+    let mut proxy_buf = [0u8; SCENE_OBJ_PROXY_STACK_BYTES];
+    let name = "ErStats\0";
+    debug_assert_eq!(
+        &name[..name.len() - 1],
+        er_gfx::title_05_010::STATS_FIELD_NAME
+    );
+    let out = unsafe {
+        assign(
+            row_proxy,
+            proxy_buf.as_mut_ptr() as usize,
+            name.as_ptr() as usize,
+        )
     };
-    match unsafe { MhHook::new(addr as *mut c_void, profile_settext_hook as *mut c_void) } {
-        Ok(hook) => {
-            PROFILE_SETTEXT_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
-                append_autoload_debug(format_args!(
-                    "stats-text: queue_enable SetText failed: {status:?}"
-                ));
-                return;
-            }
-            match unsafe { MH_ApplyQueued() } {
-                MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
-                    PROFILE_SETTEXT_INSTALLED.store(1, Ordering::SeqCst);
-                    append_autoload_debug(format_args!(
-                        "stats-text: hooked SetText 0x{addr:x}; ProfileSelect '{PROFILE_STATS_TARGET_FIELD}' field will show the attribute line"
-                    ));
-                }
-                status => append_autoload_debug(format_args!(
-                    "stats-text: SetText MH_ApplyQueued failed: {status:?}"
-                )),
-            }
-        }
-        Err(status) => append_autoload_debug(format_args!(
-            "stats-text: MhHook::new SetText failed: {status:?}"
-        )),
+    if out == 0 || out == null {
+        return false;
     }
+    let field = out + SCENE_OBJ_PROXY_SCALEFORM_VALUE_OFFSET;
+    // `utf16` outlives the call (the wrapper copies it into a DLString synchronously).
+    let accepted = unsafe { settext(field, utf16.as_ptr() as usize) } != 0;
+    unsafe { dtor(field) };
+    accepted
 }
 
 pub(crate) unsafe extern "system" fn title_gfx_value_set_visible_hook(
