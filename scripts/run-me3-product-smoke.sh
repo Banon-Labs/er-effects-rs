@@ -209,6 +209,17 @@ collect_me3_logs() {
 
 cleanup() {
   local pid
+  collect_me3_logs
+  if [[ "${RUNTIME_NO_TEARDOWN:-0}" == "1" ]]; then
+    {
+      echo "RUNTIME_NO_TEARDOWN=1"
+      echo "leaving launcher/game processes alive and preserving staged save/autoload/lazyloader state"
+      echo "pid_file=$(cat "$PID_FILE" 2>/dev/null || true)"
+      echo "runtime_pids=$(runtime_pids | tr '\n' ' ')"
+    } > "$ARTIFACT_DIR/no-teardown.txt"
+    echo "cleanup: RUNTIME_NO_TEARDOWN=1; left runtime processes and staged state untouched" >&2
+    return 0
+  fi
   if [[ -s "$PID_FILE" ]]; then
     IFS= read -r pid < "$PID_FILE" || pid=""
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
@@ -216,7 +227,6 @@ cleanup() {
     fi
   fi
   terminate_runtime_pids
-  collect_me3_logs
   wipe_appdata_saves
   restore_autoload_request
   restore_lazyloader
@@ -265,6 +275,7 @@ mkdir -p "$ARTIFACT_DIR"
 # (and the inert GAME_DIR/er_effects_rs.dll chainload copy is never touched or loaded).
 SMOKE_DLL="$ARTIFACT_DIR/er_effects_rs.dll"
 PROFILE_FILE="$ARTIFACT_DIR/er-effects-me3-smoke.me3"
+RUNTIME_CONFIG_FILE="$ARTIFACT_DIR/er-effects.toml"
 
 if (( DRY_RUN )); then
   cat > "$ARTIFACT_DIR/dry-run-summary.json" <<EOF
@@ -300,11 +311,25 @@ else
   mkdir -p "$STAGED_SAVE_DIR"
   cp -f "$GOLD_SAVE" "$STAGED_SAVE"
   chmod u+w "$STAGED_SAVE"
-  export ER_EFFECTS_SAVE_FILE="$STAGED_SAVE"
-  if [[ -n "${ER_EFFECTS_GOLD_SLOT:-}" && "${ER_EFFECTS_GOLD_SLOT}" != "-1" ]]; then
-    export ER_EFFECTS_AUTOLOAD_SLOT="$ER_EFFECTS_GOLD_SLOT"
+  CONFIG_SLOT="${ER_EFFECTS_GOLD_SLOT:-0}"
+  if [[ "$CONFIG_SLOT" == "-1" ]]; then
+    CONFIG_SLOT=0
   fi
-  echo "save-source: staged gold save -> $STAGED_SAVE (ER_EFFECTS_SAVE_FILE); slot=${ER_EFFECTS_GOLD_SLOT:-most-recent}; autosaves isolated from $GOLD_SAVE"
+  python3 - "$RUNTIME_CONFIG_FILE" "$STAGED_SAVE" "$CONFIG_SLOT" <<'PY'
+from pathlib import Path
+import json
+import sys
+config = Path(sys.argv[1])
+save = sys.argv[2]
+slot = int(sys.argv[3])
+config.write_text(
+    '# Required DLL-adjacent er-effects config. Env vars may override these values.\n'
+    f'save_file = {json.dumps(save)}\n'
+    f'slot = {slot}\n',
+    encoding='utf-8',
+)
+PY
+  echo "save-source: staged gold save -> $STAGED_SAVE (er-effects.toml next to DLL); slot=$CONFIG_SLOT; autosaves isolated from $GOLD_SAVE"
 
   DEFAULT_GRAPHICS_CONFIG="$APPDATA_ER_ROOT/GraphicsConfig.xml"
   GRAPHICS_CONFIG_SOURCE="${ER_EFFECTS_GRAPHICS_CONFIG_SOURCE:-${ER_EFFECTS_GOLD_GRAPHICS_CONFIG:-$DEFAULT_GRAPHICS_CONFIG}}"

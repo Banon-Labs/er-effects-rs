@@ -679,21 +679,24 @@ unsafe fn seed_profile_summary_slot_from_staged_save(
     {
         return false;
     }
-    let Ok(save_path) = std::env::var("ER_EFFECTS_SAVE_FILE") else {
+    let Some(save_path) = configured_save_file() else {
         append_autoload_debug(format_args!(
-            "native-profile-capture: staged ProfileSummary seed unavailable -- ER_EFFECTS_SAVE_FILE unset"
+            "native-profile-capture: staged ProfileSummary seed unavailable -- no configured save_file"
         ));
         return false;
     };
-    let Ok(save_bytes) = fs::read(&save_path) else {
+    let Ok(mut save_bytes) = fs::read(&save_path) else {
         append_autoload_debug(format_args!(
-            "native-profile-capture: staged ProfileSummary seed failed to read '{save_path}'"
+            "native-profile-capture: staged ProfileSummary seed failed to read '{}'",
+            save_path.display()
         ));
         return false;
     };
+    normalize_save_bytes_to_active_steam_id(base, &mut save_bytes, "native-profile-capture-seed");
     let Ok(body) = er_save_loader::bnd4::slot_body(&save_bytes, slot as usize) else {
         append_autoload_debug(format_args!(
-            "native-profile-capture: staged ProfileSummary seed failed to locate USER_DATA{slot:03} in '{save_path}'"
+            "native-profile-capture: staged ProfileSummary seed failed to locate USER_DATA{slot:03} in '{}'",
+            save_path.display()
         ));
         return false;
     };
@@ -757,7 +760,8 @@ unsafe fn seed_profile_summary_slot_from_staged_save(
     }
     let level = unsafe { *((slot_data + PROFILE_SUMMARY_LEVEL_OFFSET) as *const i32) };
     append_autoload_debug(format_args!(
-        "native-profile-capture: staged ProfileSummary seed wrote slot={slot} from '{save_path}' pgd_off=0x{SAVE_BODY_PLAYER_GAME_DATA_OFFSET:x} slot_data=0x{slot_data:x} level={level} (scalar + native FaceData::CopyFromBuffer + native ChrAsm copy)"
+        "native-profile-capture: staged ProfileSummary seed wrote slot={slot} from '{}' pgd_off=0x{SAVE_BODY_PLAYER_GAME_DATA_OFFSET:x} slot_data=0x{slot_data:x} level={level} (scalar + native FaceData::CopyFromBuffer + native ChrAsm copy)",
+        save_path.display()
     ));
     true
 }
@@ -1043,18 +1047,16 @@ pub(crate) unsafe fn save_load_watchdog() {
     }
 }
 /// Resolve the full-read target slot: a configured OWN_STEPPER_SLOT (>=0, from the trigger-file
-/// "slot=N"), else ER_EFFECTS_AUTOLOAD_SLOT (>=0), else FULLREAD_DEFAULT_SLOT (Banon = 0).
+/// "slot=N"), else DLL config/env autoload slot (>=0), else FULLREAD_DEFAULT_SLOT (Banon = 0).
 pub(crate) fn native_fullread_slot() -> i32 {
     let configured = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
     if configured >= OWN_STEPPER_SLOT_ZERO {
         return configured;
     }
-    if let Ok(v) = std::env::var("ER_EFFECTS_AUTOLOAD_SLOT") {
-        if let Ok(slot) = v.trim().parse::<i32>() {
-            if slot >= OWN_STEPPER_SLOT_ZERO {
-                return slot;
-            }
-        }
+    if let Some(slot) = configured_autoload_slot()
+        && slot >= OWN_STEPPER_SLOT_ZERO
+    {
+        return slot;
     }
     FULLREAD_DEFAULT_SLOT
 }

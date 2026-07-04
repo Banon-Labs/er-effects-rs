@@ -1080,9 +1080,16 @@ const GR_SYSMSG_LOG_MAX: usize = 64;
 /// corrupted data and create a new save?". Detecting any of these in GetGR_System_Message IS the
 /// memory-read semaphore for the corrupted-save popup (privacy-policy/char-presence-CONFIRMED loop).
 pub(crate) const CORRUPTED_SAVE_MSG_IDS: &[i32] = &[4191, 4192, 4193, 401106, 401107, 401721];
+pub(crate) const CORRUPTED_SAVE_LOAD_FAILED_MSG_IDS: &[i32] = &[401721];
 /// The corrupted-save message id last seen (0 = none). Exposed as `oracle_corrupted_save_seen_id`.
 pub(crate) static CORRUPTED_SAVE_SEEN_ID: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(0);
+/// More specific load-failure corrupted-save id last seen (currently 401721 only).
+pub(crate) static CORRUPTED_SAVE_LOAD_FAILED_SEEN_ID: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(0);
+pub(crate) static CORRUPTED_SAVE_SEEN_CALLER_RVA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static CORRUPTED_SAVE_SEEN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) unsafe extern "system" fn gr_sysmsg_log_hook(
     rcx: usize,
@@ -1093,12 +1100,23 @@ pub(crate) unsafe extern "system" fn gr_sysmsg_log_hook(
     // Corrupted-save SEMAPHORE: always check (independent of the menu-open-gated logging below) so a
     // load probe records the corrupted-save popup as RAM-read telemetry, not just an on-screen image.
     let msg_id_now = (rdx & 0xffff_ffff) as i32;
-    if CORRUPTED_SAVE_MSG_IDS.contains(&msg_id_now)
-        && CORRUPTED_SAVE_SEEN_ID.swap(msg_id_now, Ordering::SeqCst) != msg_id_now
-    {
-        append_autoload_debug(format_args!(
-            "save-override: CORRUPTED-SAVE SEMAPHORE -- GetGR_System_Message id={msg_id_now} (save data is corrupted dialog); the gold save was read but rejected on validate/write"
-        ));
+    if CORRUPTED_SAVE_MSG_IDS.contains(&msg_id_now) {
+        let caller_rva = trace_first_game_caller_rva();
+        CORRUPTED_SAVE_SEEN_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+        CORRUPTED_SAVE_SEEN_COUNT.fetch_add(1, Ordering::SeqCst);
+        if CORRUPTED_SAVE_LOAD_FAILED_MSG_IDS.contains(&msg_id_now) {
+            CORRUPTED_SAVE_LOAD_FAILED_SEEN_ID.store(msg_id_now, Ordering::SeqCst);
+        }
+        if CORRUPTED_SAVE_SEEN_ID.swap(msg_id_now, Ordering::SeqCst) != msg_id_now {
+            let kind = if CORRUPTED_SAVE_LOAD_FAILED_MSG_IDS.contains(&msg_id_now) {
+                "load-failed-corrupted"
+            } else {
+                "save/write-corrupted"
+            };
+            append_autoload_debug(format_args!(
+                "save-override: CORRUPTED-SAVE SEMAPHORE -- kind={kind} GetGR_System_Message id={msg_id_now} caller_rva=0x{caller_rva:x}; native text id says save data is corrupted"
+            ));
+        }
     }
     if TFC_AUTO_MENU_OPENED.load(Ordering::SeqCst) != 0 {
         let n = GR_SYSMSG_LOG_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -5969,21 +5987,23 @@ unsafe fn system_quit_save_swap_poll_preview(base: usize) {
     if len == original_len && modified_ns == original_modified_ns {
         return;
     }
-    let Ok(bytes) = fs::read(&path) else {
+    let Ok(mut bytes) = fs::read(&path) else {
         return;
     };
-    let hash = system_quit_hash_bytes(&bytes);
-    if hash == original_hash {
+    let raw_hash = system_quit_hash_bytes(&bytes);
+    if raw_hash == original_hash {
         return;
     }
     // Validate before restoring the active redirected save. A partial copy must not be captured as a
     // foreign preview, and the old in-world save must remain the write target until the user commits.
     if er_save_loader::bnd4::parse_entries(&bytes).is_err() {
         append_autoload_debug(format_args!(
-            "system-quit-save-swap: replacement candidate changed but is not a valid BND4 yet path='{path}' len={len} hash=0x{hash:016x}; waiting"
+            "system-quit-save-swap: replacement candidate changed but is not a valid BND4 yet path='{path}' len={len} hash=0x{raw_hash:016x}; waiting"
         ));
         return;
     }
+    normalize_save_bytes_to_active_steam_id(base, &mut bytes, "system-quit-polled-candidate");
+    let hash = system_quit_hash_bytes(&bytes);
     {
         let st = system_quit_save_swap_lock();
         if !system_quit_save_swap_restore_original_file(&st, "candidate-captured") {
@@ -9787,10 +9807,12 @@ fn wide_z(text: &str) -> Vec<u16> {
 }
 
 fn system_quit_env_save_path() -> Result<String, &'static str> {
-    let raw = std::env::var("ER_EFFECTS_SAVE_FILE").map_err(|_| "ER_EFFECTS_SAVE_FILE unset")?;
-    let trimmed = raw.trim();
+    let Some(path) = configured_save_file_string() else {
+        return Err("configured save_file unset");
+    };
+    let trimmed = path.trim();
     if trimmed.is_empty() {
-        return Err("ER_EFFECTS_SAVE_FILE blank");
+        return Err("configured save_file blank");
     }
     Ok(trimmed.trim_end_matches(['/', '\\']).to_owned())
 }
@@ -9798,11 +9820,11 @@ fn system_quit_env_save_path() -> Result<String, &'static str> {
 fn system_quit_env_save_dir() -> Result<String, &'static str> {
     let trimmed = system_quit_env_save_path()?;
     let Some(sep) = trimmed.rfind(['/', '\\']) else {
-        return Err("ER_EFFECTS_SAVE_FILE has no parent directory");
+        return Err("configured save_file has no parent directory");
     };
     let dir = &trimmed[..sep];
     if dir.is_empty() {
-        return Err("ER_EFFECTS_SAVE_FILE parent directory is empty");
+        return Err("configured save_file parent directory is empty");
     }
     Ok(dir.to_owned())
 }
@@ -9914,7 +9936,7 @@ unsafe fn system_quit_open_env_save_dir() -> bool {
         ));
         return false;
     }
-    let Ok(bytes) = fs::read(&selected_path) else {
+    let Ok(mut bytes) = fs::read(&selected_path) else {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
             "system-quit-load-save-profiles: failed to read selected save '{}'",
@@ -9923,11 +9945,11 @@ unsafe fn system_quit_open_env_save_dir() -> bool {
         return false;
     };
     let len = bytes.len() as u64;
-    let hash = system_quit_hash_bytes(&bytes);
+    let raw_hash = system_quit_hash_bytes(&bytes);
     if er_save_loader::bnd4::parse_entries(&bytes).is_err() {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "system-quit-load-save-profiles: selected save is not a valid BND4 '{}' len={len} hash=0x{hash:016x}",
+            "system-quit-load-save-profiles: selected save is not a valid BND4 '{}' len={len} hash=0x{raw_hash:016x}",
             selected_log
         ));
         return false;
@@ -9940,6 +9962,8 @@ unsafe fn system_quit_open_env_save_dir() -> bool {
         ));
         return false;
     };
+    normalize_save_bytes_to_active_steam_id(base, &mut bytes, "system-quit-picker-selection");
+    let hash = system_quit_hash_bytes(&bytes);
     let mask = unsafe { system_quit_apply_foreign_profile_summary_preview(base, &bytes) };
     if mask == 0 {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -13566,4 +13590,112 @@ pub(crate) fn apply_splash_skip() {
         "splash-skip: patched 0x{:x} 0x{SPLASH_SKIP_EXPECTED_JE:x}->0x{SPLASH_SKIP_REPLACEMENT_JG:x}",
         base + SPLASH_SKIP_RVA
     ));
+}
+
+type SoundPostEventCoreFn =
+    unsafe extern "system" fn(u32, u64, u32, usize, usize, *const c_void, u32) -> u32;
+
+unsafe extern "system" fn sound_post_event_core_hook(
+    event_id: u32,
+    game_object: u64,
+    flags: u32,
+    callback: usize,
+    cookie: usize,
+    external_sources: *const c_void,
+    event_type: u32,
+) -> u32 {
+    let muted = IN_WORLD_REACHED.load(Ordering::SeqCst) != IN_WORLD_REACHED_YES;
+    let ret = if muted {
+        0
+    } else {
+        let orig = SOUND_POST_EVENT_CORE_ORIG.load(Ordering::SeqCst);
+        let call: SoundPostEventCoreFn = unsafe { std::mem::transmute(orig) };
+        SOUND_POST_EVENT_FORWARDED_HITS.fetch_add(1, Ordering::SeqCst);
+        unsafe {
+            call(
+                event_id,
+                game_object,
+                flags,
+                callback,
+                cookie,
+                external_sources,
+                event_type,
+            )
+        }
+    };
+    let hit = SOUND_POST_EVENT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    SOUND_POST_EVENT_FIRST_ID
+        .compare_exchange(0, event_id as usize, Ordering::SeqCst, Ordering::SeqCst)
+        .ok();
+    SOUND_POST_EVENT_LAST_ID.store(event_id as usize, Ordering::SeqCst);
+    if muted {
+        SOUND_POST_EVENT_MUTED_HITS.fetch_add(1, Ordering::SeqCst);
+        SOUND_POST_EVENT_FIRST_MUTED_ID
+            .compare_exchange(0, event_id as usize, Ordering::SeqCst, Ordering::SeqCst)
+            .ok();
+        SOUND_POST_EVENT_LAST_MUTED_ID.store(event_id as usize, Ordering::SeqCst);
+    }
+    SOUND_POST_EVENT_LAST_PLAYING_ID.store(ret as usize, Ordering::SeqCst);
+    SOUND_POST_EVENT_LAST_GAME_OBJECT.store(game_object as usize, Ordering::SeqCst);
+    SOUND_POST_EVENT_LAST_FLAGS.store(flags as usize, Ordering::SeqCst);
+    let caller_rva = trace_first_game_caller_rva();
+    SOUND_POST_EVENT_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
+    if hit <= 64 || hit.is_power_of_two() {
+        append_autoload_debug(format_args!(
+            "sound-post-event: hit={hit} muted={muted} event_id={event_id} playing_id={ret} game_obj=0x{game_object:x} flags=0x{flags:x} event_type={event_type} caller_rva=0x{caller_rva:x}"
+        ));
+    }
+    ret
+}
+
+pub(crate) fn install_sound_post_event_observer_hook() {
+    if SOUND_POST_EVENT_CORE_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "sound-post-event: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(addr) = game_rva(SOUND_POST_EVENT_CORE_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "sound-post-event: failed to resolve rva 0x{SOUND_POST_EVENT_CORE_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            sound_post_event_core_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            SOUND_POST_EVENT_CORE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "sound-post-event: queue_enable failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    SOUND_POST_EVENT_CORE_INSTALLED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "sound-post-event: hooked AK::SoundEngine::PostEvent core 0x{addr:x}; pre-world startup/title-logo Wwise events will be muted and counted"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "sound-post-event: MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "sound-post-event: MhHook::new failed at 0x{addr:x}: {status:?}"
+        )),
+    }
 }
