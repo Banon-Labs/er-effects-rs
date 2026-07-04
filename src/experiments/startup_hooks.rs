@@ -3131,27 +3131,20 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
             // not in multi-model (menu) churn; the task bodies self-guard on model/X, so ticking
             // any state is engine-normal. Readback/publish/bind keep the stricter gates below.
             //
-            // FREEZE-AFTER-CAPTURE (crash root fix 2026-07-03): the per-frame drive (pump +
-            // per_frame_push_hook rasterize + readback) dereferences the profile renderer/model
-            // deep in the GX chain EVERY frame during the volatile loading/switch window. Under
-            // repeated rapid switching a renderer gets FREED between our vtable check and the deep
-            // deref (TOCTOU), so the drive calls through freed memory -> a use-after-free that
-            // surfaced as three different crashes (Scaleform dtor, GX-queue null, garbage-vtable
-            // RIP) as the corruption landed at different addresses each run. The stable head we
-            // publish is just PIXELS -- once we have ONE good keyed capture this window
-            // (PROFILE_BAKE_RGBA_CAPTURED, set only on a real non-checker publish, cleared at the
-            // window reset), STOP touching renderers: freeze the display to that static capture for
-            // the rest of the window. This removes ~all of the per-frame UAF exposure (the crashes
-            // hit hundreds of drive frames in, long after the first capture). Trade-off: the
-            // portrait animates only until the first good frame, then holds -- stability over the
-            // continuous look-at, which is the right call while loads must not crash.
-            let already_captured = PROFILE_BAKE_RGBA_CAPTURED.load(Ordering::SeqCst) != 0;
-            if portrait_render_drive_enabled()
-                && !already_captured
-                && off != 0
-                && off != null
-                && live_models <= 1
-            {
+            // FREEZE-AFTER-CAPTURE RELAXED (bug #1 fix, er-effects-rs-l1x 2026-07-03). The old
+            // per-window latch stopped this drive after the first keyed+clean publish because the
+            // per-frame deep GX deref could race a game-thread renderer teardown: a renderer freed
+            // between our vtable check and the deep deref (TOCTOU) surfaced as three crash flavors
+            // (Scaleform dtor, GX-queue null, garbage-vtable RIP). That trade froze the portrait
+            // ~6-13 frames into a ~400-frame window -- the user-visible bug #1. The race is now
+            // closed structurally by the TEARDOWN FENCE instead of by not driving: the pump sets
+            // its busy flag (PROFILE_IN_OUR_DRIVE) FIRST and only drives if
+            // PROFILE_RENDERER_TEARDOWN_FENCE is down, while the game-thread teardown raises the
+            // fence and waits for the busy flag to drop before any delete-enqueue runs (both
+            // SeqCst -- one side always yields; see profile_renderer_teardown_spare_hook). The
+            // PROFILE_BAKE_RGBA_CAPTURED latch itself is unchanged: publish/overlay/readback
+            // consumers still key on "first capture landed"; it just no longer stops the drive.
+            if portrait_render_drive_enabled() && off != 0 && off != null && live_models <= 1 {
                 // BUILD-DURATION semaphore: one log line on the null->valid model transition. Run
                 // #9 implies the mid-load async build takes ~13s (kick +16.8s -> stable gate first
                 // passes ~+29.5s) from world-streaming contention -- vs the boot-era 133ms build on
@@ -3194,20 +3187,29 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                 // sustained alpha_motion ~1000 is the idle's real (subtle) breathing amplitude,
                 // and the early ~3237 spike is the one-off menu-pose -> idle transition.
                 PROFILE_IN_OUR_DRIVE.store(true, Ordering::SeqCst);
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let update: unsafe extern "system" fn(usize, usize) =
-                        unsafe { core::mem::transmute(base + PROFILE_MODEL_UPDATE_TASK_RVA) };
-                    unsafe { update(r, td) };
-                    // The draw task is the fn per_frame_push_hook detours; calling the hook
-                    // directly applies the look-at then runs the original body via its trampoline.
-                    unsafe { per_frame_push_hook(r, td) };
-                }));
-                PROFILE_IN_OUR_DRIVE.store(false, Ordering::SeqCst);
-                PROFILE_PERFRAME_MODEL_DRAWS.fetch_add(1, Ordering::SeqCst);
-                // Animation-stall semaphore: this frame the drive actually rendered (animated). Once
-                // freeze-after-capture latches, this stops incrementing while display frames keep
-                // counting -> the drive/display ratio quantifies how early the head froze.
-                PROFILE_DRIVE_FRAMES_WINDOW.fetch_add(1, Ordering::SeqCst);
+                // Fence check MUST come after the busy-flag store (Dekker order): the teardown
+                // either already sees us busy and is waiting (we bail out immediately), or it
+                // raised the fence first and we never touch the renderer this frame.
+                if PROFILE_RENDERER_TEARDOWN_FENCE.load(Ordering::SeqCst) != 0 {
+                    PROFILE_IN_OUR_DRIVE.store(false, Ordering::SeqCst);
+                    PROFILE_DRIVE_FENCE_SKIPS.fetch_add(1, Ordering::SeqCst);
+                } else {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let update: unsafe extern "system" fn(usize, usize) =
+                            unsafe { core::mem::transmute(base + PROFILE_MODEL_UPDATE_TASK_RVA) };
+                        unsafe { update(r, td) };
+                        // The draw task is the fn per_frame_push_hook detours; calling the hook
+                        // directly applies the look-at then runs the original body via its
+                        // trampoline.
+                        unsafe { per_frame_push_hook(r, td) };
+                    }));
+                    PROFILE_IN_OUR_DRIVE.store(false, Ordering::SeqCst);
+                    PROFILE_PERFRAME_MODEL_DRAWS.fetch_add(1, Ordering::SeqCst);
+                    // Animation-stall semaphore: this frame the drive actually rendered
+                    // (animated). With the freeze relaxed this should track display frames ~1:1;
+                    // drive << display in the window-reset snapshot means the head froze early.
+                    PROFILE_DRIVE_FRAMES_WINDOW.fetch_add(1, Ordering::SeqCst);
+                }
             }
             if stable_target_only {
                 // (Removed 2026-07-03: the PER-SCENE ENVIRONMENT LEVER "proof pass" that wrote gamma(+0x60)=1.0
@@ -5577,6 +5579,24 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
 pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let valid = |p: usize| p != 0 && p != null;
+    // TEARDOWN FENCE (freeze relaxation, er-effects-rs-l1x): raise the fence BEFORE any
+    // delete-enqueue below (both the orphan reclaim and the native table teardown in original()),
+    // then wait out a render-thread pump caught mid-drive. The pump is one model update+draw
+    // (sub-ms), so the 10ms cap is generous; a timeout is counted, not fatal -- worst case equals
+    // the OLD per-frame TOCTOU exposure for exactly one frame instead of every frame. The fence is
+    // lowered at the end of this hook, after the native teardown returns.
+    PROFILE_RENDERER_TEARDOWN_FENCE.store(1, Ordering::SeqCst);
+    if PROFILE_IN_OUR_DRIVE.load(Ordering::SeqCst) {
+        PROFILE_TEARDOWN_FENCE_WAITS.fetch_add(1, Ordering::SeqCst);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(10);
+        while PROFILE_IN_OUR_DRIVE.load(Ordering::SeqCst) {
+            if std::time::Instant::now() > deadline {
+                PROFILE_TEARDOWN_FENCE_TIMEOUTS.fetch_add(1, Ordering::SeqCst);
+                break;
+            }
+            std::thread::yield_now();
+        }
+    }
     // REPEATED-SWITCH GX OVERFLOW FIX (0x1aeaf05, ~switch #4): destroy the PRIOR window's spared
     // renderer now, on the game thread, before sparing this switch's renderer. The load-complete
     // reset (render thread) moved it into PROFILE_SPARE_ORPHAN instead of dropping it; the spare
@@ -5663,6 +5683,10 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
         let f: unsafe extern "system" fn() = unsafe { std::mem::transmute(orig) };
         unsafe { f() };
     }
+    // Native teardown done -- the table entries are delete-enqueued/nulled, so the next pump
+    // invocation's per-frame table re-read + vtable probe fails closed until the new window's
+    // rebuild. Safe to let the drive back in.
+    PROFILE_RENDERER_TEARDOWN_FENCE.store(0, Ordering::SeqCst);
 }
 
 /// Diagnostic + REPAIR detour on the native profile-portrait builder (`FUN_1409aa7d0` =

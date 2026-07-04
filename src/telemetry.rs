@@ -2635,6 +2635,24 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_portrait_display_frames_last_window",
             PROFILE_DISPLAY_FRAMES_WINDOW_LAST.load(Ordering::SeqCst),
         );
+        // Teardown-fence protocol (freeze relaxation): skips = pump frames yielded to a live
+        // teardown; waits = teardowns that paused for a mid-drive pump; timeouts MUST stay 0
+        // (nonzero == one frame of the old TOCTOU exposure leaked past the 10ms cap).
+        push_json_usize(
+            body,
+            "oracle_portrait_drive_fence_skips",
+            PROFILE_DRIVE_FENCE_SKIPS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_teardown_fence_waits",
+            PROFILE_TEARDOWN_FENCE_WAITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_portrait_teardown_fence_timeouts",
+            PROFILE_TEARDOWN_FENCE_TIMEOUTS.load(Ordering::SeqCst),
+        );
         push_json_str(
             body,
             "oracle_gx_cmdqueue_top_producers",

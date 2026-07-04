@@ -1545,8 +1545,27 @@ pub(crate) static PORTRAIT_MOTION_PREV_PLANES: std::sync::Mutex<Option<(Vec<u8>,
 /// per-frame drive instead. RE note: prior agents found this `frame` arg cannot be synthesized.
 pub(crate) static PROFILE_DRAW_TASK_CTX: AtomicUsize = AtomicUsize::new(0);
 /// Guard so `per_frame_push_hook` does NOT re-capture the context while WE are driving it (only the engine's
-/// own natural calls should seed `PROFILE_DRAW_TASK_CTX`).
+/// own natural calls should seed `PROFILE_DRAW_TASK_CTX`). Doubles as the render-thread BUSY flag of the
+/// teardown fence protocol (see `PROFILE_RENDERER_TEARDOWN_FENCE`): it is set BEFORE the fence check on the
+/// pump side, so the game-thread teardown can wait it out instead of freeing a renderer mid-drive.
 pub(crate) static PROFILE_IN_OUR_DRIVE: AtomicBool = AtomicBool::new(false);
+/// Cross-thread teardown fence (freeze-after-capture relaxation, er-effects-rs-l1x 2026-07-03). The
+/// game-thread profile-renderer teardown (`profile_renderer_teardown_spare_hook`) raises this BEFORE any
+/// delete-enqueue runs (orphan reclaim + native table teardown) and lowers it after the native original
+/// returns; the render-thread pump sets `PROFILE_IN_OUR_DRIVE` first and then skips its drive while the
+/// fence is up. Both sides are SeqCst, so either the pump sees the fence and skips, or the teardown sees
+/// the pump busy and waits -- closing the drive-vs-teardown TOCTOU UAF (three crash flavors: Scaleform
+/// dtor, GX-queue null, garbage-vtable RIP) structurally instead of by freezing the drive after the first
+/// captured frame.
+pub(crate) static PROFILE_RENDERER_TEARDOWN_FENCE: AtomicUsize = AtomicUsize::new(0);
+/// Render-thread pump invocations skipped because the teardown fence was up (expect a handful per switch).
+pub(crate) static PROFILE_DRIVE_FENCE_SKIPS: AtomicUsize = AtomicUsize::new(0);
+/// Teardowns that found the pump mid-drive and waited for it to exit (any value is fine; proves the fence
+/// engaged rather than racing).
+pub(crate) static PROFILE_TEARDOWN_FENCE_WAITS: AtomicUsize = AtomicUsize::new(0);
+/// Teardown fence waits that hit the bounded 10ms cap and proceeded anyway. MUST stay 0 -- nonzero means
+/// one frame of the old TOCTOU exposure leaked through (still strictly better than every frame).
+pub(crate) static PROFILE_TEARDOWN_FENCE_TIMEOUTS: AtomicUsize = AtomicUsize::new(0);
 /// Diagnostic: the captured engine ctx pointer + its `+8` delta-time bits, logged once, to learn whether the
 /// context is a stable persistent structure (safe to reuse across frames) or a transient per-call one.
 pub(crate) static PROFILE_DRAW_TASK_CTX_LOGGED: AtomicUsize = AtomicUsize::new(0);
