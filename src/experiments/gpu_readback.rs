@@ -2784,8 +2784,38 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
     let display = PROFILE_DISPLAY_FRAMES_WINDOW.swap(0, Ordering::SeqCst);
     PROFILE_DRIVE_FRAMES_WINDOW_LAST.store(drive, Ordering::SeqCst);
     PROFILE_DISPLAY_FRAMES_WINDOW_LAST.store(display, Ordering::SeqCst);
+    // PUBLISH-STARVATION ATTRIBUTION (2026-07-03 soak: windows froze on the PRIOR character with the
+    // drive running ~1:1, so the starving class is publish-side and the cumulative oracles cannot say
+    // WHICH window starved or WHY). Snapshot each publish/skip class per window (delta vs the previous
+    // reset) so a frozen window names its own cause: published==0 with a dominant torn/unkeyed/multi
+    // count is the starvation signature; pin_moves counts content-RT recreations inside the window.
+    let winof = |cum: &AtomicUsize, last: &AtomicUsize| -> usize {
+        let c = cum.load(Ordering::SeqCst);
+        c.saturating_sub(last.swap(c, Ordering::SeqCst))
+    };
+    let published = winof(&PROFILE_PUBLISH_CLEAN, &PROFILE_PUBLISH_CLEAN_WINDOW_MARK);
+    let torn = winof(
+        &PROFILE_PUBLISH_SKIPPED_TORN,
+        &PROFILE_PUBLISH_SKIPPED_TORN_WINDOW_MARK,
+    );
+    let unkeyed = winof(
+        &PROFILE_PUBLISH_SKIPPED_UNKEYED,
+        &PROFILE_PUBLISH_SKIPPED_UNKEYED_WINDOW_MARK,
+    );
+    let multi = winof(
+        &PROFILE_MULTI_MODEL_PUBLISH_SKIPS,
+        &PROFILE_MULTI_MODEL_PUBLISH_SKIPS_WINDOW_MARK,
+    );
+    let pin_moves = winof(
+        &PROFILE_RT_PIN_SWITCHES,
+        &PROFILE_RT_PIN_SWITCHES_WINDOW_MARK,
+    );
+    let fence_skips = winof(
+        &PROFILE_DRIVE_FENCE_SKIPS,
+        &PROFILE_DRIVE_FENCE_SKIPS_WINDOW_MARK,
+    );
     append_autoload_debug(format_args!(
-        "present-overlay: loading-portrait window reset ({reason}) -- animated {drive} / displayed {display} frames (drive<<display == froze early); pins/spare cleared for the next load"
+        "present-overlay: loading-portrait window reset ({reason}) -- animated {drive} / displayed {display} frames (drive<<display == froze early); publish[clean={published} torn={torn} unkeyed={unkeyed} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips}] (clean=0 == frozen on prior character; the dominant skip class is the cause); pins/spare cleared for the next load"
     ));
 }
 

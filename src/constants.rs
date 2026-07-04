@@ -1566,6 +1566,15 @@ pub(crate) static PROFILE_TEARDOWN_FENCE_WAITS: AtomicUsize = AtomicUsize::new(0
 /// Teardown fence waits that hit the bounded 10ms cap and proceeded anyway. MUST stay 0 -- nonzero means
 /// one frame of the old TOCTOU exposure leaked through (still strictly better than every frame).
 pub(crate) static PROFILE_TEARDOWN_FENCE_TIMEOUTS: AtomicUsize = AtomicUsize::new(0);
+/// Per-window publish-attribution marks: previous window-reset snapshot of each cumulative publish/skip
+/// counter, so `loading_portrait_window_reset` can log per-window deltas (a frozen-on-prior-character
+/// window shows clean=0 plus its dominant skip class). Written only from the reset.
+pub(crate) static PROFILE_PUBLISH_CLEAN_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_PUBLISH_SKIPPED_TORN_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_PUBLISH_SKIPPED_UNKEYED_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_MULTI_MODEL_PUBLISH_SKIPS_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_RT_PIN_SWITCHES_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROFILE_DRIVE_FENCE_SKIPS_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
 /// Diagnostic: the captured engine ctx pointer + its `+8` delta-time bits, logged once, to learn whether the
 /// context is a stable persistent structure (safe to reuse across frames) or a transient per-call one.
 pub(crate) static PROFILE_DRAW_TASK_CTX_LOGGED: AtomicUsize = AtomicUsize::new(0);
