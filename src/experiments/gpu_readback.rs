@@ -1010,6 +1010,14 @@ pub(crate) static DEPTH_KEY_FRESH: AtomicUsize = AtomicUsize::new(0);
 /// One-shot latch for the no-gap / dims-mismatch `depth-key` skip diagnostic (separate from the success
 /// latch so both a good frame and a skipped frame are each visible once in the log).
 static DEPTH_KEY_NOGAP_LOGGED: AtomicUsize = AtomicUsize::new(0);
+/// Frames whose fresh depth was DEGENERATE for masking (no histogram gap, or a mask cutting under the
+/// publish floor). Throttles the recurring depth diagnostic (er-effects-rs-hi2: a whole window sat in
+/// the lowmask band and the one-shot diag from boot left it invisible). `oracle_depth_key_degenerate`.
+pub(crate) static DEPTH_KEY_DEGENERATE: AtomicUsize = AtomicUsize::new(0);
+/// Per-window MIN transparent share (percent) among PUBLISHED frames (usize::MAX = none published) and
+/// MAX share among lowmask-held frames -- the two sides of the floor, for setting it from evidence.
+pub(crate) static PROFILE_PUBLISH_SHARE_MIN: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static PROFILE_LOWMASK_SHARE_MAX: AtomicUsize = AtomicUsize::new(0);
 /// Last RECALCULATED depth-key mask (w, h, per-pixel: 1 = background/cut, 0 = keep). The offscreen depth
 /// buffer only carries real content on genuine re-render frames; on the many frames it reads back cleared,
 /// we re-apply this cached mask so the cutout stays stable. It is RECALCULATED whenever fresh depth is
@@ -2107,7 +2115,22 @@ unsafe fn compute_depth_mask(gpu_child: usize, w: usize, h: usize) -> Option<Vec
             }
         }
     }
-    if DEPTH_KEY_DIAG_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+    // DEGENERATE-MASK REJECTION (er-effects-rs-hi2): a fresh mask cutting under the publish floor is
+    // not a real bg/head separation -- accepting it used to CACHE it, and every later gapless frame
+    // reused the poisoned cache, so a whole window sat in the lowmask band (run 2026-07-03 ~21:17,
+    // window slot4: lowmask=203 clean=0, prior head stuck on screen ~30s). Reject it (None) so the
+    // cache keeps the last REAL mask and later frames retry fresh.
+    let share_pct = masked * 100 / (w * h).max(1);
+    let degenerate = !have_gap || share_pct < PORTRAIT_MIN_TRANSPARENT_PCT;
+    let first_diag = DEPTH_KEY_DIAG_LOGGED.swap(1, Ordering::SeqCst) == 0;
+    let deg_n = if degenerate {
+        DEPTH_KEY_DEGENERATE.fetch_add(1, Ordering::SeqCst)
+    } else {
+        0
+    };
+    // Diagnostic: once at first-ever mask, then throttled on every degenerate frame -- the depth
+    // picture of a collapsing window is the evidence the one-shot boot diag never captured.
+    if first_diag || (degenerate && deg_n % 64 == 0) {
         let inset = (w.min(h) / 32).max(2);
         let (tl, tr, bl, br) = (
             depth[idx(inset, inset)],
@@ -2116,12 +2139,11 @@ unsafe fn compute_depth_mask(gpu_child: usize, w: usize, h: usize) -> Option<Vec
             depth[idx(w - 1 - inset, h - 1 - inset)],
         );
         append_autoload_debug(format_args!(
-            "depth-key: {w}x{h} min={dmin} max={dmax} center(head)={center} corners[tl={tl} tr={tr} bl={bl} br={br}] gap[bins {best_lo}..+{best_len}/{NB}] thr={threshold} keep_high={keep_high} have_gap={have_gap} masked={masked}/{} ({}%)",
+            "depth-key: {w}x{h} min={dmin} max={dmax} center(head)={center} corners[tl={tl} tr={tr} bl={bl} br={br}] gap[bins {best_lo}..+{best_len}/{NB}] thr={threshold} keep_high={keep_high} have_gap={have_gap} masked={masked}/{} ({share_pct}%) degenerate={degenerate} deg_n={deg_n}",
             w * h,
-            masked * 100 / (w * h).max(1)
         ));
     }
-    if have_gap && masked > 0 {
+    if !degenerate {
         // A clean bimodal bg/head separation confirms this depth buffer belongs to OUR portrait scene --
         // pin its candidate so later scans can't drift to another slot's same-size depth sibling.
         PROFILE_DEPTH_PIN.store(depth_cand, Ordering::SeqCst);
@@ -2904,8 +2926,17 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
     } else {
         first_keyed.to_string()
     };
+    // Floor-evidence: min transparent share among floor-passing frames vs max among lowmask-held
+    // frames this window ('-' = no frame in that class). Sets PORTRAIT_MIN_TRANSPARENT_PCT from data.
+    let share_min = PROFILE_PUBLISH_SHARE_MIN.swap(usize::MAX, Ordering::SeqCst);
+    let share_min_s = if share_min == usize::MAX {
+        "-".to_owned()
+    } else {
+        share_min.to_string()
+    };
+    let held_max = PROFILE_LOWMASK_SHARE_MAX.swap(0, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "present-overlay: loading-portrait window reset ({reason}) -- animated {drive} / displayed {display} frames (drive<<display == froze early); publish[clean={published} torn={torn} unkeyed={unkeyed} lowmask={lowmask} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips} unpaired={unpaired} first_keyed={first_keyed_s}] src[color bundle={cb}/scan={cs} depth chain={dc}/bfs={db}] (clean=0 == frozen on prior character; the dominant skip class is the cause); pins/spare cleared for the next load"
+        "present-overlay: loading-portrait window reset ({reason}) -- animated {drive} / displayed {display} frames (drive<<display == froze early); publish[clean={published} torn={torn} unkeyed={unkeyed} lowmask={lowmask} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips} unpaired={unpaired} first_keyed={first_keyed_s}] share[pass_min={share_min_s} held_max={held_max}] src[color bundle={cb}/scan={cs} depth chain={dc}/bfs={db}] (clean=0 == frozen on prior character; the dominant skip class is the cause); pins/spare cleared for the next load"
     ));
 }
 

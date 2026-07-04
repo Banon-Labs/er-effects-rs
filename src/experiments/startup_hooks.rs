@@ -3741,9 +3741,19 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                 let total_px = (cpx.len() / 4).max(1);
                                 let transparent_px =
                                     cpx.chunks_exact(4).filter(|px| px[3] < 128).count();
-                                let keyed =
-                                    transparent_px * 100 >= total_px * PORTRAIT_MIN_TRANSPARENT_PCT;
+                                let share_pct = transparent_px * 100 / total_px;
+                                let keyed = share_pct >= PORTRAIT_MIN_TRANSPARENT_PCT;
                                 let partial_mask = !keyed && transparent_px > 0;
+                                // Floor-evidence stats: the two sides of the floor per window --
+                                // published minimum share (was the boundary frame barely passing?)
+                                // and lowmask maximum (how close held frames came).
+                                if keyed {
+                                    PROFILE_PUBLISH_SHARE_MIN
+                                        .fetch_min(share_pct, Ordering::SeqCst);
+                                } else if partial_mask {
+                                    PROFILE_LOWMASK_SHARE_MAX
+                                        .fetch_max(share_pct, Ordering::SeqCst);
+                                }
                                 // TORN-READBACK gate (user 2026-07-03): the offscreen readback has no
                                 // cross-queue sync vs the game's render of the RT, so a per-frame capture
                                 // can be torn (scanline garbage) even though it is keyed. Score the
@@ -5315,19 +5325,27 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // character-specific (Patches' boot/menu-path lifecycle differs on reload), so per-window
     // anomalies must be joinable to WHICH character each retarget slot holds -- readable here from
     // the ProfileSummary records the pipeline already uses.
-    if PROFILE_SLOT_NAMES_DUMPED.swap(1, Ordering::SeqCst) == 0 {
+    if PROFILE_SLOT_NAMES_DUMPED.load(Ordering::SeqCst) == 0 {
+        // Only consume the one-shot once at least one REAL name is readable: this runs before the
+        // boot ProfileSummary save read (~+16s), and latching on the pre-read table logged ten
+        // "(empty)" slots (run 2026-07-03 ~21:14). Keep retrying until the records are populated.
         let mut names: Vec<String> = Vec::with_capacity(TITLE_PROFILE_SLOT_COUNT);
+        let mut any_real = false;
         for s in 0..TITLE_PROFILE_SLOT_COUNT {
             let rec = summary + PROFILE_SUMMARY_RECORD_BASE + s * PROFILE_SUMMARY_RECORD_STRIDE;
             let (units, len) = unsafe { read_utf16_name_units(rec) };
             let name = if utf16_name_empty_like(&units, len) {
                 "(empty)".to_owned()
             } else {
+                any_real = true;
                 String::from_utf16_lossy(&units[..len])
             };
             names.push(format!("{s}={name}"));
         }
-        append_autoload_debug(format_args!("profile-slot-names: {}", names.join(" ")));
+        if any_real {
+            PROFILE_SLOT_NAMES_DUMPED.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!("profile-slot-names: {}", names.join(" ")));
+        }
     }
     // GUARD (crash fix): only call refresh once the renderer table is LIVE -- it is populated at
     // TitleTopDialog ctor (main menu), NOT at early title. Calling refresh before the table exists
