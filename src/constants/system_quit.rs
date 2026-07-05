@@ -44,16 +44,15 @@ pub(crate) static INJECT_NAV_CUR_BUTTONS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const DIK_DOWN: u8 = 0xd0;
 /// No key injected (clears the stamp on gap/settle frames).
 pub(crate) const DIK_NONE: u8 = 0;
-/// System->Quit->Load-Profile REPRO AUTOPILOT state machine. Reproduces the user's EXACT Xbox
-/// controller sequence (start, d-up, A, LB, d-down, A, d-down/up, A, A) by fabricating the XInput
-/// gamepad poll (see `system_quit_repro_tick`). Each phase issues its KNOWN edges once and advances
-/// ONLY on an observed transition (menu-window semaphore / ProfileSelect cursor move / load
-/// activate) -- never a timer, tap budget, or retry count:
+/// System->Quit Save Game REPRO AUTOPILOT state machine. Reproduces the controller path to the
+/// in-world System menu and always activates the Save Game row by fabricating the XInput gamepad poll
+/// (see `system_quit_repro_tick`). Each phase issues its KNOWN edges once and advances ONLY on an
+/// observed transition (menu-window semaphore / save-request telemetry / close telemetry) -- never a
+/// timer, tap budget, or retry count:
 ///   WAIT_WORLD -> OPEN_MENU (START -> 02_000_IngameTop)
 ///   -> TO_SYSTEM (UP, A -> 02_040_OptionSetting, the quit submenu)
-///   -> TO_PROFILE (LB, DOWN, A -> 05_010_ProfileSelect, the cloned Load-Profile row)
-///   -> TO_SLOT (one DOWN or UP off the current save -> cursor moves)
-///   -> CONFIRM (A, A -> load activated) -> DONE.
+///   -> TO_PROFILE/TO_SAVE_GAME (LB, A -> Save Game row)
+///   -> DONE.
 /// After a phase's edges are issued it HOLDS (injects nothing) until its transition is observed, so
 /// a genuinely missed edge self-reports (stuck waiting) instead of being papered over by a re-tap.
 pub(crate) const SQ_REPRO_STATE_WAIT_WORLD: usize = 0;
@@ -75,20 +74,10 @@ pub(crate) static SQ_REPRO_STATE: AtomicUsize = AtomicUsize::new(SQ_REPRO_STATE_
 pub(crate) static SQ_REPRO_SWITCH_INDEX: AtomicUsize = AtomicUsize::new(0);
 /// How many back-to-back harness-driven switches to drive. Bounded by `SQ_REPRO_TARGET_SLOTS.len()`.
 ///
-/// EXPLORE MODE (1): drive exactly ONE automatic switch, then the CONFIRM state advances straight to
-/// `SQ_REPRO_STATE_DONE` (not `WAIT_RELOAD`). At DONE `sq_repro_actively_driving()` is false, so the
-/// XInput autopilot fabrication STOPS, and `block_input_enabled()` releases the input block the moment
-/// the switched-to world is in-world -- keyboard/mouse/gamepad + cursor all go live. Combined with the
-/// runner's `RUNTIME_NO_TEARDOWN=1`, the game stays up on the switched character so the user can play
-/// and even re-trigger the cloned Load-Profile button manually. Set to 2+ to resume the back-to-back
-/// two-switch autopilot investigation (er-effects-rs-qwj).
-///
-/// PAUSE-AT-MENU MODE (`ER_EFFECTS_SQ_REPRO_SWITCHES=0`): drive ZERO switches -- the autopilot runs
-/// the identical observed-transition sequence only up to 05_010_ProfileSelect opening
-/// (WAIT_WORLD -> OPEN_MENU -> TO_SYSTEM -> TO_PROFILE), then latches
-/// `SQ_REPRO_PAUSED_AT_PROFILE_SELECT` and goes straight to DONE: no cursor move, no slot pick, no
-/// load. The input block releases at DONE, so with `RUNTIME_NO_TEARDOWN=1` the game is left running,
-/// paused at the character-load menu, with keyboard/mouse/gamepad live for the user.
+/// The Save Game row repro is always-on when the repro harness itself is enabled; it no longer needs
+/// an env selector. The legacy switch-count constants below are retained for older ProfileSelect
+/// harness code paths, but the active Save Game validation path stops once save-request + menu-close
+/// telemetry fires.
 pub(crate) const SQ_REPRO_TARGET_SWITCHES: usize = 1;
 /// RAM oracle latch (0 -> 1, never reset): the pause-at-menu autopilot observed 05_010_ProfileSelect
 /// open and STOPPED there (transitioned to DONE without TO_SLOT/CONFIRM). Exported as telemetry
@@ -100,9 +89,9 @@ pub(crate) static SQ_REPRO_PAUSED_AT_PROFILE_SELECT: AtomicUsize = AtomicUsize::
 /// 'Patches' (bd system-quit-switch-loads-original-not-picked-rootcause-2026-07-02). The autopilot
 /// drives the ProfileSelect cursor to the exact target (not "one off current"), so each switch lands
 /// on a real character regardless of which slot the reload made current. The third entry returns to
-/// slot 4: driving `ER_EFFECTS_SQ_REPRO_SWITCHES=3` performs the 3rd in-session ProfileSelect open
-/// that crashed the native thumbnail builder on the empty renderer table (er-effects-rs-j3r), the
-/// deterministic repro/validation for the table-repair hook.
+/// slot 4, matching the 3rd in-session ProfileSelect open that crashed the native thumbnail builder
+/// on the empty renderer table (er-effects-rs-j3r), the deterministic repro/validation for the
+/// table-repair hook.
 pub(crate) const SQ_REPRO_TARGET_SLOTS: [i32; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 /// Baseline of (confirmed_block + confirmed_allow) counts captured at each switch's start, so the
 /// CONFIRM state detects THIS switch's OK as an increase over the baseline rather than a cumulative

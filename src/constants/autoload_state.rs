@@ -680,6 +680,8 @@ pub(crate) static SYSTEM_QUIT_SAVE_GAME_TEXT_SUBSTITUTION_COUNT: AtomicUsize = A
 pub(crate) static SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_SAVE_GAME_CONFIRM_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_SAVE_GAME_CLOSE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_WINDOW: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_FRAMES: AtomicUsize = AtomicUsize::new(0);
 /// Recorded cloned action implementation object for the quick-load row; only this action is routed.
 pub(crate) static SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
 /// Recorded cloned action implementation object for the save-folder row; only this action opens the
@@ -688,9 +690,9 @@ pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT: AtomicUsize = At
 pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT: AtomicUsize = AtomicUsize::new(0);
-/// The original Quit Game row's action captures its owning System dialog here before forwarding to
-/// the native confirmation job. The return-title request hook consumes this latch on confirmation
-/// and performs save-only + native menu close instead of title teardown.
+/// Legacy fallback latch for older confirmation-based Save Game routing. The product Save Game row
+/// now requests save + closes menus directly and clears this latch so it never reaches the native
+/// Quit Game / return-title action.
 pub(crate) static SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG: AtomicUsize = AtomicUsize::new(0);
 /// Stable qword slot passed to the native `05_010_ProfileSelect` wrapper. The wrapper writes the
 /// MenuWindowJob pointer here and captures this slot for its later ProfileLoadDialog factory call.
