@@ -32,8 +32,8 @@ use windows::{
         },
         UI::{
             Controls::Dialogs::{
-                GetOpenFileNameW, OFN_DONTADDTORECENT, OFN_EXPLORER, OFN_FILEMUSTEXIST,
-                OFN_HIDEREADONLY, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+                GetOpenFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_HIDEREADONLY,
+                OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW,
             },
             WindowsAndMessaging::{
                 ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, MessageBoxW,
@@ -60,8 +60,9 @@ use super::*;
 // `er-effects.toml` (`save_file = "..."`). If neither is provided, the product path
 // now intentionally falls back to the active Steam user's default save file at
 // `%APPDATA%/EldenRing/<SteamID64>/ER0000.sl2`; if that default save does not exist,
-// the DLL shows a fatal popup and exits instead of drifting into a no-character menu.
-// Pure telemetry/observe-only mode remains the only no-load exemption.
+// the DLL prompts with the missing-save picker (OK -> choose a save, Cancel -> exit)
+// instead of drifting into a no-character menu. Pure telemetry/observe-only mode
+// remains the only no-load exemption.
 //
 // Explicit-source mechanism: a scoped MinHook on the Win32 `CreateFileW` (and `CopyFileW`) chokepoint
 // through which the game opens EVERY save artifact (verified RE: vanilla `.sl2`,
@@ -1106,11 +1107,24 @@ fn path_from_windows_picker(path: &[u16]) -> Option<PathBuf> {
 fn open_missing_save_file_picker() -> Option<PathBuf> {
     let title_w = wide_nul("Select Elden Ring save file");
     let filter_w = wide_nul("Elden Ring save (*.sl2;*.co2)\0*.sl2;*.co2\0All files (*.*)\0*.*\0");
-    let initial_dir_w = default_save_root().map(|root| wine_path_wide_nul(&root));
+    let initial_dir = configured_preferred_save_picker_dir()
+        .filter(|dir| dir.is_dir())
+        .map(|dir| (dir, "preferred_save_picker_dir"))
+        .or_else(|| default_save_root().map(|dir| (dir, "default-save-root")));
+    let initial_dir_w = initial_dir
+        .as_ref()
+        .map(|(root, _)| wine_path_wide_nul(root));
     let mut file_buf = [0u16; 1024];
     append_autoload_debug(format_args!(
-        "save-override: missing-save picker opening unowned (game title flow is gated separately)"
+        "save-override: missing-save picker opening unowned (initial dir source={}; game title flow is gated separately)",
+        initial_dir
+            .as_ref()
+            .map(|(_, source)| *source)
+            .unwrap_or("none")
     ));
+    // No OFN_DONTADDTORECENT: picks feed the shell's recent/MRU history on purpose, and the
+    // picked folder is persisted to er-effects.toml (preferred_save_picker_dir) so future
+    // sessions reopen there. OFN_NOCHANGEDIR still pins the game's working directory.
     let mut ofn = OPENFILENAMEW {
         lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
         lpstrFilter: PCWSTR::from_raw(filter_w.as_ptr()),
@@ -1121,8 +1135,7 @@ fn open_missing_save_file_picker() -> Option<PathBuf> {
             | OFN_FILEMUSTEXIST
             | OFN_PATHMUSTEXIST
             | OFN_HIDEREADONLY
-            | OFN_NOCHANGEDIR
-            | OFN_DONTADDTORECENT,
+            | OFN_NOCHANGEDIR,
         ..Default::default()
     };
     if let Some(initial_dir_w) = initial_dir_w.as_ref() {
@@ -1169,6 +1182,11 @@ fn prompt_missing_save_file_source() -> Option<SaveRedirectSource> {
             return None;
         };
         if let Some(validated) = validated_save_file_path(path.clone()) {
+            if autoupdate_preferred_picker_dir_enabled()
+                && let Some(dir) = validated.parent().filter(|dir| !dir.as_os_str().is_empty())
+            {
+                remember_preferred_save_picker_dir(dir);
+            }
             append_autoload_debug(format_args!(
                 "save-override: missing-save dialog selected save '{}'",
                 path.display()

@@ -45,6 +45,8 @@ pub(crate) struct RuntimeConfig {
     pub menu_sort_armaments: Option<MenuSortDefault>,
     pub menu_sort_armor: Option<MenuSortDefault>,
     pub menu_sort_talismans: Option<MenuSortDefault>,
+    pub preferred_save_picker_dir: Option<PathBuf>,
+    pub autoupdate_preferred_picker_dir: Option<bool>,
 }
 
 static RUNTIME_CONFIG: OnceLock<Result<RuntimeConfig, String>> = OnceLock::new();
@@ -53,7 +55,7 @@ pub(crate) fn init_runtime_config(hmodule: HINSTANCE) {
     let _ = RUNTIME_CONFIG.set(load_runtime_config(hmodule));
     match RUNTIME_CONFIG.get() {
         Some(Ok(config)) => append_autoload_debug(format_args!(
-            "runtime-config: loaded '{}' save_file={} slot={} method={} menu_sort.armaments={} menu_sort.armor={} menu_sort.talismans={}",
+            "runtime-config: loaded '{}' save_file={} slot={} method={} menu_sort.armaments={} menu_sort.armor={} menu_sort.talismans={} preferred_save_picker_dir={} autoupdate_preferred_picker_dir={}",
             config.path.display(),
             config
                 .save_file
@@ -76,7 +78,16 @@ pub(crate) fn init_runtime_config(hmodule: HINSTANCE) {
             config
                 .menu_sort_talismans
                 .map(MenuSortDefault::label)
-                .unwrap_or("<default>")
+                .unwrap_or("<default>"),
+            config
+                .preferred_save_picker_dir
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<unset>".to_owned()),
+            config
+                .autoupdate_preferred_picker_dir
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "<default:true>".to_owned())
         )),
         Some(Err(err)) => append_autoload_debug(format_args!("runtime-config: {err}")),
         None => {}
@@ -107,6 +118,121 @@ pub(crate) fn configured_explicit_save_file() -> Option<PathBuf> {
 
 pub(crate) fn configured_save_file_string() -> Option<String> {
     configured_save_file().map(|path| path.to_string_lossy().into_owned())
+}
+
+/// Folder the missing-save picker opens in, from `er-effects.toml` only (no env form on purpose:
+/// this is persisted UI state, not a probe gate).
+pub(crate) fn configured_preferred_save_picker_dir() -> Option<PathBuf> {
+    runtime_config().and_then(|config| config.preferred_save_picker_dir.clone())
+}
+
+/// Whether a validated missing-save pick rewrites `preferred_save_picker_dir` in the user's
+/// `er-effects.toml`. Defaults to true when the key is absent.
+pub(crate) fn autoupdate_preferred_picker_dir_enabled() -> bool {
+    runtime_config()
+        .and_then(|config| config.autoupdate_preferred_picker_dir)
+        .unwrap_or(true)
+}
+
+const PREFERRED_PICKER_DIR_KEY: &str = "preferred_save_picker_dir";
+const AUTOUPDATE_PICKER_DIR_KEY: &str = "autoupdate_preferred_picker_dir";
+
+/// Persist the folder of the last validated missing-save pick into the DLL-adjacent
+/// `er-effects.toml`: update the existing assignment in place, or create the file with commented
+/// boilerplate when it does not exist. Skips (with a debug line) when the config failed to load at
+/// attach, so a file the user must fix by hand is never clobbered. The in-memory `RuntimeConfig`
+/// is intentionally left as loaded -- the new value matters on the NEXT attach.
+pub(crate) fn remember_preferred_save_picker_dir(dir: &std::path::Path) {
+    let Some(dir_str) = dir.to_str().filter(|dir| !dir.is_empty()) else {
+        return;
+    };
+    let Some(config) = runtime_config() else {
+        append_autoload_debug(format_args!(
+            "runtime-config: not persisting {PREFERRED_PICKER_DIR_KEY} -- config was unreadable/invalid at attach; fix er-effects.toml first"
+        ));
+        return;
+    };
+    let path = config.path.clone();
+    let assignment = format!(
+        "{PREFERRED_PICKER_DIR_KEY} = {}",
+        toml_path_literal(dir_str)
+    );
+    let new_contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => upsert_top_level_key(&contents, PREFERRED_PICKER_DIR_KEY, &assignment),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => boilerplate_config(&assignment),
+        Err(err) => {
+            append_autoload_debug(format_args!(
+                "runtime-config: not persisting {PREFERRED_PICKER_DIR_KEY} -- '{}' unreadable: {err}",
+                path.display()
+            ));
+            return;
+        }
+    };
+    match std::fs::write(&path, new_contents) {
+        Ok(()) => append_autoload_debug(format_args!(
+            "runtime-config: persisted {PREFERRED_PICKER_DIR_KEY}='{dir_str}' to '{}'",
+            path.display()
+        )),
+        Err(err) => append_autoload_debug(format_args!(
+            "runtime-config: failed to persist {PREFERRED_PICKER_DIR_KEY} to '{}': {err}",
+            path.display()
+        )),
+    }
+}
+
+/// Replace the top-level `key = ...` line, or insert `assignment` before the first `[section]`
+/// header (end of file when none) so the key stays top-level in real TOML.
+fn upsert_top_level_key(contents: &str, key: &str, assignment: &str) -> String {
+    let mut lines: Vec<String> = contents.lines().map(str::to_owned).collect();
+    let existing = lines.iter().position(|line| {
+        strip_comment(line)
+            .split_once('=')
+            .is_some_and(|(k, _)| k.trim() == key)
+    });
+    match existing {
+        Some(idx) => lines[idx] = assignment.to_owned(),
+        None => {
+            let insert_at = lines
+                .iter()
+                .position(|line| strip_comment(line).trim().starts_with('['))
+                .unwrap_or(lines.len());
+            lines.insert(insert_at, assignment.to_owned());
+        }
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
+
+fn boilerplate_config(picker_assignment: &str) -> String {
+    format!(
+        "\
+# er-effects-rs runtime config (auto-created by the missing-save picker).
+# All keys are optional; uncomment and edit as needed.
+#
+# save_file = 'C:\\path\\to\\ER0000.sl2'  # explicit save to load (skips default-save detection and the picker)
+# slot = 0                               # character slot the autoload selects
+# method = \"...\"                         # autoload method override
+# menu_sort.armaments = \"order_of_acquisition\"  # or \"item_type\" / \"preserve\"
+# menu_sort.armor = \"order_of_acquisition\"
+# menu_sort.talismans = \"order_of_acquisition\"
+
+# Folder the missing-save picker opens in. While {AUTOUPDATE_PICKER_DIR_KEY} is true,
+# it is rewritten to the folder of each successfully picked save.
+{picker_assignment}
+{AUTOUPDATE_PICKER_DIR_KEY} = true
+"
+    )
+}
+
+/// Quote a path for the TOML subset we parse: single-quoted literal when possible (keeps Windows
+/// backslashes readable), else a basic string with escaped backslashes/quotes.
+fn toml_path_literal(path: &str) -> String {
+    if !path.contains('\'') {
+        format!("'{path}'")
+    } else {
+        format!("\"{}\"", path.replace('\\', "\\\\").replace('"', "\\\""))
+    }
 }
 
 pub(crate) fn configured_autoload_slot() -> Option<i32> {
@@ -274,10 +400,41 @@ fn parse_runtime_config(path: PathBuf, contents: &str) -> Result<RuntimeConfig, 
                         format!("invalid menu_sort.talismans on line {}: {err}", line_no + 1)
                     })?);
             }
+            "preferred_save_picker_dir" => {
+                let parsed = PathBuf::from(parse_toml_string(value).map_err(|err| {
+                    format!(
+                        "invalid preferred_save_picker_dir on line {}: {err}",
+                        line_no + 1
+                    )
+                })?);
+                config.preferred_save_picker_dir = Some(if parsed.is_absolute() {
+                    parsed
+                } else {
+                    config_dir.join(parsed)
+                });
+            }
+            "autoupdate_preferred_picker_dir" => {
+                config.autoupdate_preferred_picker_dir =
+                    Some(parse_toml_bool(value).map_err(|err| {
+                        format!(
+                            "invalid autoupdate_preferred_picker_dir on line {}: {err}",
+                            line_no + 1
+                        )
+                    })?);
+            }
             _ => {}
         }
     }
     Ok(config)
+}
+
+/// Accepts `true`/`false` case-insensitively (so a hand-written `True` still parses) plus `1`/`0`.
+fn parse_toml_bool(value: &str) -> Result<bool, &'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" => Ok(true),
+        "false" | "0" => Ok(false),
+        _ => Err("expected true or false"),
+    }
 }
 
 fn parse_menu_sort_default_value(value: &str) -> Result<MenuSortDefault, &'static str> {
