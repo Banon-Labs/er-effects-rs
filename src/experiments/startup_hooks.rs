@@ -17,3 +17,4 @@ include!("startup_hooks/system_quit_ownership_repro.rs");
 include!("startup_hooks/system_quit_repro_guards.rs");
 include!("startup_hooks/system_quit_hooks.rs");
 include!("startup_hooks/layout_global_hooks.rs");
+include!("startup_hooks/menu_sort_defaults.rs");

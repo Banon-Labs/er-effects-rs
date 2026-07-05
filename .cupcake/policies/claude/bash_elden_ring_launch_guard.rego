@@ -127,6 +127,7 @@ start_protected_launch_detected if {
 start_protected_launch_detected if {
 	executable_source_marker
 	contains(marker_scan_text, "start_protected_game.exe")
+	not start_protected_process_detection_only
 }
 
 ersc_bundle_detected if {
@@ -212,6 +213,36 @@ marker_scan_text := lower(scrubbed_command) if {
 	bd_text_command
 }
 
+# GitHub issue/PR bodies are text payloads, not executable payloads. Keep direct
+# shell-command matching on scrubbed_command, but do not let marker-based raw
+# fallback checks deny a `gh ... --body-file` command merely because the PR body
+# mentions a forbidden executable by name while documenting policy behavior.
+gh_text_body_command if {
+	tool_name == "Bash"
+	regex.match(`(?is)(^|[[:space:];|&()])gh[[:space:]]+(pr[[:space:]]+(create|comment)|issue[[:space:]]+comment)([[:space:]]|.|\n)*--body-file([[:space:]]|=)`, command)
+}
+
+marker_scan_text := lower(scrubbed_command) if {
+	gh_text_body_command
+}
+
 marker_scan_text := lower_source_text if {
 	not bd_text_command
+	not gh_text_body_command
+}
+
+# Allow exact process-detection checks for the stale protected launcher while
+# keeping every launch/execution form blocked. Project policy permits detecting
+# stale `start_protected_game.exe` processes before an approved direct/offline
+# run; the raw marker fallback used to deny any Bash payload that merely
+# contained both a generic executable marker and that process name.
+#
+# This exemption is intentionally narrow: the full marker scan must contain
+# exactly one `start_protected_game.exe` occurrence, and that occurrence must be
+# an exact `pgrep -x start_protected_game.exe` token sequence. If a command both
+# checks with pgrep and later launches the protected executable, the occurrence
+# count is greater than one and the fallback still denies.
+start_protected_process_detection_only if {
+	count(split(marker_scan_text, "start_protected_game.exe")) == 2
+	regex.match(`(?i)(^|[[:space:];|&()])(/usr/bin/)?pgrep[[:space:]]+-x[[:space:]]+(--[[:space:]]+)?start_protected_game\.exe([[:space:];|&()]|$)`, marker_scan_text)
 }
