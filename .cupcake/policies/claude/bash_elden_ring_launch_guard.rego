@@ -274,6 +274,10 @@ start_protected_process_detection_only if {
 	proc_scan_readonly_command
 }
 
+start_protected_process_detection_only if {
+	pgrep_subprocess_detection_command
+}
+
 proc_scan_readonly_command if {
 	tool_name == "Bash"
 	proc_scan_python_shape
@@ -373,4 +377,42 @@ proc_scan_exec_marker if {
 		"steam -applaunch", "steam://", "xdg-open",
 	}
 	contains(lower(proc_scan_norm_command), marker)
+}
+
+# Read-only process checks that shell out to exact `pgrep -x` from Python are
+# allowed. This covers the repo runtime preflight form that checks Steam, the
+# approved direct game process, and stale `start_protected_game.exe` presence
+# before an offline/direct probe. It is narrower than the /proc reader above:
+# exactly one direct subprocess.run call must be the pgrep call, and any other
+# process-execution or launch-shaped marker keeps the exemption off.
+pgrep_subprocess_detection_command if {
+	tool_name == "Bash"
+	proc_scan_python_shape
+	not contains(command, "$(")
+	not contains(command, "`")
+	not contains(lower(other_text), "start_protected_game.exe")
+	not contains(detection_unquoted_command, "start_protected_game.exe")
+	count(split(lower(proc_scan_norm_command), "start_protected_game.exe")) == 2
+	count(split(lower(proc_scan_norm_command), "subprocess.run")) == 2
+	regex.match(`(?i)subprocess\.run[[:space:]]*\([[:space:]]*\[[^\]]*['"]pgrep['"][^\]]*['"]-x['"][^\]]*\]`, proc_scan_norm_command)
+	not pgrep_subprocess_forbidden_marker
+}
+
+pgrep_subprocess_forbidden_marker if {
+	some marker in {
+		"os.system", "system(", "popen", "spawn", "exec(", "execv",
+		"execl", "eval(", "__import__", "importlib", "ctypes", "pexpect",
+		"shell=", "shell =", "startfile", "runpy", "multiprocessing",
+		" sh -c", "bash -c", "wine", "proton", "steam -applaunch",
+		"steam://", "xdg-open", "/start_protected_game.exe",
+	}
+	contains(lower(proc_scan_norm_command), marker)
+}
+
+pgrep_subprocess_forbidden_marker if {
+	contains(lower(proc_scan_norm_command), "= subprocess.run")
+}
+
+pgrep_subprocess_forbidden_marker if {
+	contains(lower(proc_scan_norm_command), "=subprocess.run")
 }

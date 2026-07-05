@@ -86,6 +86,49 @@ test_deny_pgrep_then_proton_start_protected_launch if {
 	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
 }
 
+# Regression for the 2026-07-05 false positive in the runtime-probe preflight:
+# Python may shell out to exact `pgrep -x <name>` checks for process status,
+# including stale EAC launcher detection, without launching the named process.
+test_allow_python_subprocess_pgrep_start_protected_detection if {
+	cmd := concat("\n", [
+		"python3 - <<'PY'",
+		"import subprocess",
+		"for name in ['steam', 'eldenring.exe', 'start_protected_game.exe']:",
+		"    subprocess.run(['pgrep', '-x', name])",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# The Python pgrep allowance must stay limited to the single pgrep call; a
+# later launch-shaped subprocess call keeps the protected-launch guard active.
+test_deny_python_subprocess_pgrep_then_proton_launch if {
+	cmd := concat("\n", [
+		"python3 - <<'PY'",
+		"import subprocess",
+		"for name in ['steam', 'eldenring.exe', 'start_protected_game.exe']:",
+		"    subprocess.run(['pgrep', '-x', name])",
+		"subprocess.run(['proton', 'run', 'start_protected_game.exe'])",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# A quoted executable path in subprocess args is a launch form, not a process
+# status check, even though it is inside a single-python heredoc.
+test_deny_python_subprocess_direct_quoted_launcher if {
+	cmd := concat("\n", [
+		"python3 - <<'PY'",
+		"import subprocess",
+		"subprocess.run(['/opt/er/start_protected_game.exe'])",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
 # --- (b') Read-only /proc comm scans naming the launcher are ALLOWED --------
 
 # The 2026-07-05 false positive: a python heredoc scanning /proc/<pid>/comm

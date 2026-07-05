@@ -89,6 +89,10 @@ pub(crate) static SQ_REPRO_SWITCH_INDEX: AtomicUsize = AtomicUsize::new(0);
 /// `SQ_REPRO_PAUSED_AT_PROFILE_SELECT` and goes straight to DONE: no cursor move, no slot pick, no
 /// load. The input block releases at DONE, so with `RUNTIME_NO_TEARDOWN=1` the game is left running,
 /// paused at the character-load menu, with keyboard/mouse/gamepad live for the user.
+///
+/// SAVE-GAME ROW MODE (`ER_EFFECTS_SQ_REPRO_SWITCHES=save-game`): reuse the same sanctioned
+/// diagnostic knob to drive only WAIT_WORLD -> OPEN_MENU -> TO_SYSTEM -> Save Game row activation,
+/// then stop once save-request + menu-close telemetry fires.
 pub(crate) const SQ_REPRO_TARGET_SWITCHES: usize = 1;
 /// RAM oracle latch (0 -> 1, never reset): the pause-at-menu autopilot observed 05_010_ProfileSelect
 /// open and STOPPED there (transitioned to DONE without TO_SLOT/CONFIRM). Exported as telemetry

@@ -46,6 +46,16 @@ fn sq_repro_pause_at_menu() -> bool {
     sq_repro_target_switches() == 0
 }
 
+/// SAVE-GAME ROW submode for the System->Quit repro autopilot: reuse the existing sanctioned
+/// `ER_EFFECTS_SQ_REPRO_SWITCHES` diagnostic knob instead of adding another env gate. The main
+/// `ER_EFFECTS_SYSTEM_QUIT_REPRO=1` gate must still be on.
+fn sq_repro_save_game_only() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_SQ_REPRO_SWITCHES").as_deref(),
+        Ok("save-game") | Ok("save")
+    )
+}
+
 /// Enter a switch: capture the confirm-count baseline and clear the per-switch menu-window/cursor
 /// signals so the state machine re-detects them fresh for this switch (they hold stale pointers from
 /// the prior switch otherwise). Called before OPEN_MENU for every switch.
@@ -163,9 +173,15 @@ pub(crate) unsafe fn system_quit_repro_tick() {
         SQ_REPRO_STATE_TO_SYSTEM => {
             let option_setting = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
             if option_setting != 0 {
-                append_autoload_debug(format_args!(
-                    "sq-repro: OptionSetting opened window=0x{option_setting:x} (quit submenu) -> TO_PROFILE (LB, DOWN, A to activate the cloned Load-Profile row)"
-                ));
+                if sq_repro_save_game_only() {
+                    append_autoload_debug(format_args!(
+                        "sq-repro: OptionSetting opened window=0x{option_setting:x} -> TO_SAVE_GAME (LB, A to enter the Quit Game tab and activate the direct Save Game row)"
+                    ));
+                } else {
+                    append_autoload_debug(format_args!(
+                        "sq-repro: OptionSetting opened window=0x{option_setting:x} (quit submenu) -> TO_PROFILE (LB, DOWN, A to activate the cloned Load-Profile row)"
+                    ));
+                }
                 set_pad(0);
                 sq_repro_transition(SQ_REPRO_STATE_TO_PROFILE);
                 return;
@@ -177,6 +193,28 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             set_pad(btn);
         }
         SQ_REPRO_STATE_TO_PROFILE => {
+            if sq_repro_save_game_only() {
+                let action_count = SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT.load(Ordering::SeqCst);
+                let save_count = SYSTEM_QUIT_SAVE_GAME_CONFIRM_COUNT.load(Ordering::SeqCst);
+                let close_count = SYSTEM_QUIT_SAVE_GAME_CLOSE_COUNT.load(Ordering::SeqCst);
+                if action_count != 0 && save_count != 0 && close_count >= 2 {
+                    append_autoload_debug(format_args!(
+                        "sq-repro: Save Game row completed action_count={action_count} save_count={save_count} close_count={close_count}; SELF-DRIVE COMPLETE; releasing block"
+                    ));
+                    set_pad(0);
+                    SQ_REPRO_STATE.store(SQ_REPRO_STATE_DONE, Ordering::SeqCst);
+                    return;
+                }
+                let (btn, holding) =
+                    sq_repro_edges(tick, &[XINPUT_GAMEPAD_LEFT_SHOULDER, XINPUT_GAMEPAD_A]);
+                if holding {
+                    sq_repro_waiting_once(
+                        "TO_SAVE_GAME: LB+A issued, waiting for Save Game action/save/close telemetry",
+                    );
+                }
+                set_pad(btn);
+                return;
+            }
             let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
             if profile != 0 {
                 if sq_repro_pause_at_menu() {
