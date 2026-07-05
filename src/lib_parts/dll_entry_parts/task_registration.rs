@@ -55,6 +55,9 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 if product_autoload_enabled() {
                     snapshot_game_man_on_change();
                 }
+                // Save Game row close-all: finishes the root menu close on a later game-task tick,
+                // after the active System submenu has consumed its native close result.
+                unsafe { system_quit_save_game_deferred_close_tick() };
                 // SELF-DRIVEN System->Quit->Load-Profile repro autopilot: stamps this frame's
                 // scripted DInput key (no-op unless system_quit_repro_enabled + in-world). Runs
                 // every frame so the injected key is fresh for the game's keyboard poll, and only

@@ -25,25 +25,22 @@ fn sq_repro_target_slot() -> i32 {
     SQ_REPRO_TARGET_SLOTS[i.min(SQ_REPRO_TARGET_SLOTS.len() - 1)]
 }
 
-/// How many back-to-back switches to drive. Defaults to `SQ_REPRO_TARGET_SWITCHES`; overridable
-/// via `ER_EFFECTS_SQ_REPRO_SWITCHES` (clamped to [0, target-table length]) so a 1-switch baseline
-/// can be run with the identical code path to isolate the two-switch regression. 0 = PAUSE-AT-MENU
-/// mode: drive to 05_010_ProfileSelect and stop there without picking/loading any slot (see
-/// `SQ_REPRO_PAUSED_AT_PROFILE_SELECT`). Not a new env gate -- an added value of the existing
-/// harness switch-count knob.
+/// How many back-to-back switches to drive in the legacy ProfileSelect harness path. The active Save
+/// Game row validation path below is always-on and no longer reads an env selector.
 fn sq_repro_target_switches() -> usize {
-    let n = std::env::var("ER_EFFECTS_SQ_REPRO_SWITCHES")
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .unwrap_or(SQ_REPRO_TARGET_SWITCHES);
-    n.clamp(0, SQ_REPRO_TARGET_SLOTS.len())
+    SQ_REPRO_TARGET_SWITCHES.clamp(0, SQ_REPRO_TARGET_SLOTS.len())
 }
 
-/// PAUSE-AT-MENU mode: `ER_EFFECTS_SQ_REPRO_SWITCHES=0` -- drive the identical autopilot sequence up
-/// to ProfileSelect opening, then DONE (no cursor move, no pick, no load). The character-load menu is
-/// left open; with the runner's `RUNTIME_NO_TEARDOWN=1` the game stays up for the user.
+/// Legacy pause-at-menu mode is disabled while the always-on Save Game row repro is active.
 fn sq_repro_pause_at_menu() -> bool {
-    sq_repro_target_switches() == 0
+    false
+}
+
+/// SAVE-GAME ROW mode for the System->Quit repro autopilot. This validation path is always the
+/// Save Game row now; no env string selects the feature. The main `ER_EFFECTS_SYSTEM_QUIT_REPRO=1`
+/// gate still controls whether the repro harness runs at all.
+fn sq_repro_save_game_only() -> bool {
+    true
 }
 
 /// Enter a switch: capture the confirm-count baseline and clear the per-switch menu-window/cursor
@@ -126,7 +123,11 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
             if in_world && tick >= SQ_REPRO_WORLD_SETTLE_TICKS {
                 sq_repro_begin_switch();
-                if sq_repro_pause_at_menu() {
+                if sq_repro_save_game_only() {
+                    append_autoload_debug(format_args!(
+                        "sq-repro: in-world settled ({SQ_REPRO_WORLD_SETTLE_TICKS} ticks) -> OPEN_MENU Save Game row mode; START (XInput 0x{XINPUT_GAMEPAD_START:04x}) to open the escape/system menu"
+                    ));
+                } else if sq_repro_pause_at_menu() {
                     append_autoload_debug(format_args!(
                         "sq-repro: in-world settled ({SQ_REPRO_WORLD_SETTLE_TICKS} ticks) -> OPEN_MENU PAUSE-AT-MENU mode (0 switches: stop at ProfileSelect, no load); START (XInput 0x{XINPUT_GAMEPAD_START:04x}) to open the escape/system menu"
                     ));
@@ -163,9 +164,15 @@ pub(crate) unsafe fn system_quit_repro_tick() {
         SQ_REPRO_STATE_TO_SYSTEM => {
             let option_setting = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
             if option_setting != 0 {
-                append_autoload_debug(format_args!(
-                    "sq-repro: OptionSetting opened window=0x{option_setting:x} (quit submenu) -> TO_PROFILE (LB, DOWN, A to activate the cloned Load-Profile row)"
-                ));
+                if sq_repro_save_game_only() {
+                    append_autoload_debug(format_args!(
+                        "sq-repro: OptionSetting opened window=0x{option_setting:x} -> TO_SAVE_GAME (LB, A to enter the Quit Game tab and activate the direct Save Game row)"
+                    ));
+                } else {
+                    append_autoload_debug(format_args!(
+                        "sq-repro: OptionSetting opened window=0x{option_setting:x} (quit submenu) -> TO_PROFILE (LB, DOWN, A to activate the cloned Load-Profile row)"
+                    ));
+                }
                 set_pad(0);
                 sq_repro_transition(SQ_REPRO_STATE_TO_PROFILE);
                 return;
@@ -177,6 +184,28 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             set_pad(btn);
         }
         SQ_REPRO_STATE_TO_PROFILE => {
+            if sq_repro_save_game_only() {
+                let action_count = SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT.load(Ordering::SeqCst);
+                let save_count = SYSTEM_QUIT_SAVE_GAME_CONFIRM_COUNT.load(Ordering::SeqCst);
+                let close_count = SYSTEM_QUIT_SAVE_GAME_CLOSE_COUNT.load(Ordering::SeqCst);
+                if action_count != 0 && save_count != 0 && close_count >= 2 {
+                    append_autoload_debug(format_args!(
+                        "sq-repro: Save Game row completed action_count={action_count} save_count={save_count} close_count={close_count}; SELF-DRIVE COMPLETE; releasing block"
+                    ));
+                    set_pad(0);
+                    SQ_REPRO_STATE.store(SQ_REPRO_STATE_DONE, Ordering::SeqCst);
+                    return;
+                }
+                let (btn, holding) =
+                    sq_repro_edges(tick, &[XINPUT_GAMEPAD_LEFT_SHOULDER, XINPUT_GAMEPAD_A]);
+                if holding {
+                    sq_repro_waiting_once(
+                        "TO_SAVE_GAME: LB+A issued, waiting for Save Game action/save/close telemetry",
+                    );
+                }
+                set_pad(btn);
+                return;
+            }
             let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
             if profile != 0 {
                 if sq_repro_pause_at_menu() {

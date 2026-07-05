@@ -165,25 +165,26 @@ pub(crate) unsafe extern "system" fn system_quit_noop_desktop_action_hook(
         ));
         return 0;
     }
-    let orig = SYSTEM_QUIT_NOOP_ACTION_ORIG.load(Ordering::SeqCst);
-    if orig == HOOK_ORIGINAL_UNSET {
+    let dialog = unsafe { safe_read_usize(action_obj + 0x8) }.unwrap_or(0);
+    if dialog >= 0x10000 {
+        SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.store(0, Ordering::SeqCst);
+        SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
+        let closed = unsafe { system_quit_save_game_fire_save_and_close(dialog, "row_action") };
         append_autoload_debug(format_args!(
-            "system-quit-save: Quit Game/Save Game action trampoline is unset for action=0x{action_obj:x} -- fail-open return 0"
+            "system-quit-save: Save Game row selected action=0x{action_obj:x} dialog=0x{dialog:x}; requested save + close-all closed={closed}; suppressed native Quit Game/return-title action"
         ));
         return 0;
     }
-    let dialog = unsafe { safe_read_usize(action_obj + 0x8) }.unwrap_or(0);
-    if dialog >= 0x10000 {
-        SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.store(dialog, Ordering::SeqCst);
-        SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
+    let orig = SYSTEM_QUIT_NOOP_ACTION_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
         append_autoload_debug(format_args!(
-            "system-quit-save: original Quit Game row selected action=0x{action_obj:x} dialog=0x{dialog:x}; forwarding native confirmation, accept will save-only and close menus"
+            "system-quit-save: Quit Game/Save Game action trampoline is unset for action=0x{action_obj:x} dialog=0x{dialog:x}; fail-open return 0"
         ));
-    } else {
-        append_autoload_debug(format_args!(
-            "system-quit-save: original Quit Game row selected action=0x{action_obj:x} but dialog=0x{dialog:x} is not heap-like; forwarding native action without save-only latch"
-        ));
+        return 0;
     }
+    append_autoload_debug(format_args!(
+        "system-quit-save: original Quit Game row selected action=0x{action_obj:x} but dialog=0x{dialog:x} is not heap-like; forwarding native action without save-only latch"
+    ));
     let original: unsafe extern "system" fn(usize) -> usize = unsafe { std::mem::transmute(orig) };
     unsafe { original(action_obj) }
 }
@@ -731,26 +732,67 @@ unsafe fn system_quit_save_game_request_save_only() {
     }
 }
 
+unsafe fn system_quit_save_game_fire_save_and_close(dialog: usize, source: &str) -> bool {
+    if dialog < 0x10000 || dialog == TITLE_OWNER_SCAN_START_ADDRESS {
+        append_autoload_debug(format_args!(
+            "system-quit-save: {source} abort -- dialog=0x{dialog:x} is not heap-like"
+        ));
+        return false;
+    }
+    unsafe { system_quit_save_game_request_save_only() };
+    SYSTEM_QUIT_SAVE_GAME_CONFIRM_COUNT.fetch_add(1, Ordering::SeqCst);
+    let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
+    let top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
+    // `dialog` is the System/Quit tab's PropertyEditDialog, not a `MenuWindow`; calling the
+    // MenuWindow cancel-close primitive on it dispatches the wrong vfunc. Close the owning menu
+    // windows only, matching the Escape/back stack semantics instead of treating the row dialog as a
+    // window.
+    let closed_dialog = false;
+    let closed_option = if option != 0 {
+        unsafe { system_quit_save_game_close_window(option, "option_window") }
+    } else {
+        false
+    };
+    // Do not close the root IngameTop in the same call stack: runtime proof showed that closing the
+    // full root stack immediately after the row action terminates the process. The native Escape
+    // flow unwinds from the active submenu first, so close OptionSetting now and schedule IngameTop
+    // for a later game-task tick.
+    let closed_top = false;
+    if top != 0 && top != option {
+        SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_WINDOW.store(top, Ordering::SeqCst);
+        SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_FRAMES.store(2, Ordering::SeqCst);
+    }
+    append_autoload_debug(format_args!(
+        "system-quit-save: {source} -> save-only + native menu-window close-all dialog=0x{dialog:x} option=0x{option:x} top=0x{top:x} closed_dialog={closed_dialog} closed_option={closed_option} closed_top={closed_top}"
+    ));
+    closed_option || closed_top
+}
+
+pub(crate) unsafe fn system_quit_save_game_deferred_close_tick() {
+    let frames = SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_FRAMES.load(Ordering::SeqCst);
+    if frames == 0 {
+        return;
+    }
+    if frames > 1 {
+        SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_FRAMES.fetch_sub(1, Ordering::SeqCst);
+        return;
+    }
+    SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_FRAMES.store(0, Ordering::SeqCst);
+    let top = SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_WINDOW.swap(0, Ordering::SeqCst);
+    if top != 0 {
+        let closed = unsafe { system_quit_save_game_close_window(top, "deferred_ingame_top_window") };
+        append_autoload_debug(format_args!(
+            "system-quit-save: deferred IngameTop close top=0x{top:x} closed={closed}"
+        ));
+    }
+}
+
 pub(crate) unsafe extern "system" fn system_quit_save_game_return_title_request_hook() {
     let dialog = SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.swap(0, Ordering::SeqCst);
     if dialog >= 0x10000 && callstack_contains_game_rva(0x7a3000, 0x7a4000) {
-        unsafe { system_quit_save_game_request_save_only() };
-        SYSTEM_QUIT_SAVE_GAME_CONFIRM_COUNT.fetch_add(1, Ordering::SeqCst);
-        let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
-        let top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
-        let closed_dialog = unsafe { system_quit_save_game_close_window(dialog, "system_dialog") };
-        let closed_option = if option != 0 && option != dialog {
-            unsafe { system_quit_save_game_close_window(option, "option_window") }
-        } else {
-            false
-        };
-        let closed_top = if top != 0 && top != dialog && top != option {
-            unsafe { system_quit_save_game_close_window(top, "ingame_top_window") }
-        } else {
-            false
-        };
+        unsafe { system_quit_save_game_fire_save_and_close(dialog, "legacy_confirm") };
         append_autoload_debug(format_args!(
-            "system-quit-save: confirmation accepted -> save-only; suppressed native return-title request dialog=0x{dialog:x} option=0x{option:x} top=0x{top:x} closed_dialog={closed_dialog} closed_option={closed_option} closed_top={closed_top}"
+            "system-quit-save: legacy confirmation path suppressed native return-title request dialog=0x{dialog:x}"
         ));
         return;
     }
