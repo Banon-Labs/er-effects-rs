@@ -20,6 +20,7 @@ unsafe extern "system" fn save_redirect_shgetfolderpathw_hook(
     if (csidl & CSIDL_FOLDER_MASK) == CSIDL_APPDATA
         && !path.is_null()
         && !SAVE_FIRST_LOAD_DONE.load(Ordering::SeqCst)
+        && SAVE_DIRECT_FILE_W.get().is_none()
     {
         if let Some(root) = SAVE_REDIRECT_DIR_W.get() {
             let n = root.len().min(MAX_PATH_W);
