@@ -127,8 +127,8 @@ pub(crate) fn force_profile_render_enabled() -> bool {
 /// (`LOADING_BG_PORTRAIT_GX_KEPT`), the DLL reads back that render target into CPU RGBA8
 /// (`readback_offscreen_rgba8`) and stores it in `LOADING_BG_PORTRAIT_RGBA`, so the now-loading forge
 /// can build its TPF from the REAL rendered character head instead of the magenta/yellow checker
-/// placeholder. It also drives the profile offscreen size-table patch (currently 56x56 native for the
-/// FPS/choppiness experiment), so the portrait renders at the configured source resolution.
+/// placeholder. It also drives the profile offscreen size-table patch (currently base 512x512 with
+/// native x2 supersample, expected 1024x1024 RT), so the portrait renders at the configured source resolution.
 ///
 /// DE-GATED to DEFAULT-ON for real (non-telemetry) runs (user 2026-06-30 "just a feature without a gate";
 /// mirrors the de-gating precedent `user-pref-too-many-env-file-gates-default-on-product`). Master off:

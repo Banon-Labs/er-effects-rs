@@ -2573,6 +2573,7 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             body,
             "oracle_overlay_upload_wait_max_ms",
             OVERLAY_STAGE_UPLOAD_WAIT_MS_MAX.load(Ordering::SeqCst),
+        );
 
         // BOOT-PROGRESS VIEW semaphores: draw_hits = strip composites actually reaching the backbuffer
         // (the pre-Continue black frames are covered); last_permille = displayed progress; milestone_mask/
@@ -2615,7 +2616,6 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             body,
             "oracle_boot_view_pump_stop_reason",
             BOOT_VIEW_PUMP_STOP_REASON.load(Ordering::SeqCst),
-
         );
         // DEPTH-KEY transparent-background semaphores: frames where the depth key actually cut out a
         // background (clean bg/head depth separation + >0 pixels alpha'd to 0), and the last frame's

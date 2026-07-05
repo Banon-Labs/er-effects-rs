@@ -10,7 +10,8 @@
 // These oracles let a monitor detect each condition live without reading the screenshot: they carry the
 // captured dims, the neutral-color fraction, and once-seen latches stamped with the capture version.
 /// Threshold (px): a captured portrait whose larger side is <= this is "too small" for monitoring.
-/// Current 56x56 low-res experiments intentionally trip this latch but still publish if non-neutral.
+/// The high-quality loading portrait target should be 1024x1024 after native supersampling, so anything
+/// at or below the old 256/512 class remains a regression tripwire.
 pub(crate) const LS_PORTRAIT_SMALL_MAX_SIDE: u32 = 512;
 /// Latched capture width/height of the most recent loading-screen portrait capture (px, 0 if none).
 pub(crate) static LS_PORTRAIT_LAST_W: AtomicUsize = AtomicUsize::new(0);
@@ -296,11 +297,10 @@ pub(crate) const PROFILE_OFFSCREEN_SIZE_TABLE_RVA: usize = 0x3b39848;
 pub(crate) const PROFILE_OFFSCREEN_SIZE_TABLE_STRIDE: usize = 0x20;
 /// The value `FUN_1400a7bb0` writes (base 128x128 = `(128<<32)|128`); self-validate before patching.
 pub(crate) const PROFILE_OFFSCREEN_SIZE_INIT: usize = 0x8000000080;
-/// Target base 56x56 = `(56<<32)|56`. We ALSO zero the per-slot supersample-enable byte at
-/// `row+0x8` so the engine's env-dependent x2 (`FUN_140bbeee0`: `base*2` iff global flag &&
-/// `size_struct[+0x8]`) is disabled -- giving a PREDICTABLE tiny native RT for the FPS/choppiness
-/// experiment instead of spending time on a high-quality source that is scaled up anyway.
-pub(crate) const PROFILE_OFFSCREEN_SIZE_TARGET: usize = 0x0000_0038_0000_0038;
+/// Target base 512x512 = `(512<<32)|512`, with the native per-slot supersample flag kept ON. The engine's
+/// env-dependent x2 path (`FUN_140bbeee0`: `base*2` iff global flag && `size_struct[+0x8]`) then produces a
+/// 1024x1024 portrait RT: a high-quality source before the full-backbuffer GPU composite scales it.
+pub(crate) const PROFILE_OFFSCREEN_SIZE_TARGET: usize = 0x0000_0200_0000_0200;
 /// Byte offset within a size-table row of the per-slot supersample-enable flag (read as
 /// `size_struct[+0x8]` by `FUN_140bbeee0`); zero it to force x1.
 pub(crate) const PROFILE_OFFSCREEN_SIZE_SUPERSAMPLE_FLAG_OFFSET: usize = 0x8;

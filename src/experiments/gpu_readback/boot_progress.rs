@@ -25,11 +25,6 @@
 // wait) -- no backbuffer readback: the pre-Continue frames are the content-free black this view
 // exists to replace, and the strip rect is entirely ours.
 
-use windows::Win32::Graphics::Direct3D12::{
-    D3D12_DESCRIPTOR_HEAP_DESC, D3D12_DESCRIPTOR_HEAP_FLAG_NONE, D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-    D3D12_RESOURCE_STATE_RENDER_TARGET, ID3D12DescriptorHeap,
-};
-
 /// Draw-state machine: 0 = uninit, 1 = ready, 2 = failed (give up; never retry).
 static BOOT_VIEW_DRAW_STATE: AtomicUsize = AtomicUsize::new(0);
 /// One-shot stop latch: the loading window / world took over; the boot view never draws again.
