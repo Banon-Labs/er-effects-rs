@@ -111,10 +111,20 @@ fn boot_milestone_reached(idx: usize) -> bool {
         1 => game_man_ptr_or_null() != 0,
         2 => FORCE_OFFLINE_BYTES_CLEARED.load(Ordering::SeqCst) != 0,
         3 => TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS,
-        4 => PRODUCT_CORE_LAST_MENU_OPENED_LATCH.load(Ordering::SeqCst) != 0,
+        // Menu-open era: the own-stepper latch when that task runs, OR'd with the network-check
+        // shortcircuit which fires ~10ms after the title-accept-byte natural menu-open on the
+        // product path (runtime-proven 2026-07-05: latch stayed 0, shortcircuit fired at +12.8s).
+        4 => {
+            PRODUCT_CORE_LAST_MENU_OPENED_LATCH.load(Ordering::SeqCst) != 0
+                || NETWORK_CHECK_SHORTCIRCUIT_COUNT.load(Ordering::SeqCst) != 0
+        }
+        // Continue committed: the confirm/TFC counters on their paths, OR'd with the portrait
+        // teardown-SPARE which lands in the same millisecond as the Continue SetState5 on the
+        // portrait-lookat product path (runtime-proven 2026-07-05: counters stayed 0, spare fired).
         5 => {
             SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
                 || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0
+                || LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0
         }
         6 => PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst) != 0,
         _ => false,
