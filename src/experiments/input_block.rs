@@ -338,6 +338,7 @@ unsafe fn install_xinput_block() {
 
 /// Tracks whether the DInput keyboard+mouse `install_hooks` has succeeded.
 static DINPUT_BLOCK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+static MISSING_SAVE_INPUT_RELEASE_LOGGED: AtomicUsize = AtomicUsize::new(0);
 
 /// Enforce the comprehensive input block for this frame. Self-contained (no args) so it can
 /// run from EITHER the game task OR the render loop -- critical because under the offline
@@ -350,6 +351,18 @@ static DINPUT_BLOCK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 ///      clear) and install/retry the XInput gamepad hook until the xinput DLL is present.
 /// Genuinely zero-input: it only SUPPRESSES device reads -- it never synthesizes any input.
 pub(crate) fn enforce_input_block_now() {
+    let blocker = InputBlocker::get_instance();
+    if missing_save_selection_pending() {
+        BLOCK_INPUT_ACTIVE.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+        blocker.block_only(InputFlags::empty());
+        let _ = unsafe { ClipCursor(None) };
+        if MISSING_SAVE_INPUT_RELEASE_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+            append_autoload_debug(format_args!(
+                "input-block: BYPASSED/RELEASED while missing-save picker is pending -- user must be able to click OK and choose a file"
+            ));
+        }
+        return;
+    }
     let blocker = InputBlocker::get_instance();
     if DINPUT_BLOCK_INSTALLED.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS {
         let res = std::panic::catch_unwind(|| unsafe { blocker.install_hooks() });

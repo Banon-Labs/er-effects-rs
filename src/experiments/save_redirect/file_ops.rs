@@ -326,13 +326,13 @@ unsafe fn queue_save_redirect_hook(
 }
 
 pub(crate) fn install_save_redirect_hooks() {
+    if SAVE_REDIRECT_DIR_W.get().is_none() && !save_trace_enabled() {
+        append_autoload_debug(format_args!(
+            "save-override: install deferred -- redirect dir not set yet (waiting for missing-save picker/configured source)"
+        ));
+        return;
+    }
     SAVE_REDIRECT_INSTALL_ONCE.call_once(|| {
-        if SAVE_REDIRECT_DIR_W.get().is_none() && !save_trace_enabled() {
-            append_autoload_debug(format_args!(
-                "save-override: install skipped -- redirect dir not set (enforce did not run / telemetry-only)"
-            ));
-            return;
-        }
         match unsafe { MH_Initialize() } {
             MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
             status => {

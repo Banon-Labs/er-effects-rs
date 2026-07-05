@@ -202,7 +202,13 @@ if root.is_dir():
 print(count)
 PY
 )
-    (( default_count > 0 )) || fatal "RUNTIME_USE_DEFAULT_SAVE=1 but no plausible default ER0000.sl2 exists under $APPDATA_ER_ROOT"
+    if (( default_count == 0 )); then
+      if [[ "${RUNTIME_ALLOW_MISSING_DEFAULT_SAVE:-0}" == "1" ]]; then
+        echo "save-source: RUNTIME_ALLOW_MISSING_DEFAULT_SAVE=1 -- launching without a default ER0000.sl2 so the DLL can show its missing-save popup"
+      else
+        fatal "RUNTIME_USE_DEFAULT_SAVE=1 but no plausible default ER0000.sl2 exists under $APPDATA_ER_ROOT"
+      fi
+    fi
   elif [[ "$RUNTIME_TELEMETRY_ONLY" != "1" ]]; then
     [[ -n "$GOLD_SAVE" ]] || fatal "ER_EFFECTS_GOLD_SAVE is unset -- supply an absolute save path, set RUNTIME_USE_DEFAULT_SAVE=1, or set RUNTIME_TELEMETRY_ONLY=1"
     [[ -f "$GOLD_SAVE" ]] || fatal "gold save not found: $GOLD_SAVE"

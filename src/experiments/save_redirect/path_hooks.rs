@@ -4,7 +4,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex, Once, OnceLock,
+        Arc, Condvar, Mutex, Once, OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
@@ -30,12 +30,19 @@ use windows::{
             SystemServices::DLL_PROCESS_ATTACH,
             Threading::{ExitProcess, GetCurrentProcessId},
         },
-        UI::WindowsAndMessaging::{
-            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, MessageBoxW,
-            PostMessageW, MB_ICONERROR, MB_OK, WM_KEYDOWN, WM_KEYUP,
+        UI::{
+            Controls::Dialogs::{
+                GetOpenFileNameW, OFN_DONTADDTORECENT, OFN_EXPLORER, OFN_FILEMUSTEXIST,
+                OFN_HIDEREADONLY, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+            },
+            WindowsAndMessaging::{
+                ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, MessageBoxW,
+                PostMessageW, IDCANCEL, IDOK, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_OKCANCEL,
+                WM_KEYDOWN, WM_KEYUP,
+            },
         },
     },
-    core::{BOOL, PCSTR, PCWSTR},
+    core::{BOOL, PCSTR, PCWSTR, PWSTR},
 };
 
 #[allow(unused_imports)]
@@ -629,7 +636,82 @@ static SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND: AtomicUsize = AtomicUsize::new(SAVE
 static SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS: AtomicUsize = AtomicUsize::new(0);
 static SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS: AtomicUsize = AtomicUsize::new(0);
 static SAVE_CREATEFILEW_CONFIGURED_FILE_HITS: AtomicUsize = AtomicUsize::new(0);
+const MISSING_SAVE_DIALOG_IDLE: usize = 0;
+const MISSING_SAVE_DIALOG_PENDING: usize = 1;
+const MISSING_SAVE_DIALOG_READY: usize = 2;
+const MISSING_SAVE_DIALOG_CANCELLED: usize = 3;
+static MISSING_SAVE_DIALOG_STATE: AtomicUsize = AtomicUsize::new(MISSING_SAVE_DIALOG_IDLE);
+static MISSING_SAVE_PROMPT_BOOTSTRAP_READY: AtomicUsize = AtomicUsize::new(0);
+static MISSING_SAVE_BLOCKED_IO_LOGGED: AtomicUsize = AtomicUsize::new(0);
+static MISSING_SAVE_BOOTSTRAP_READY_LOGGED: AtomicUsize = AtomicUsize::new(0);
 static SAVE_QUERY_LAST_SAVE_LIKE_KIND: AtomicUsize = AtomicUsize::new(SAVE_PATH_KIND_NONE);
+static MISSING_SAVE_GATE: OnceLock<(Mutex<()>, Condvar)> = OnceLock::new();
+
+fn missing_save_gate() -> &'static (Mutex<()>, Condvar) {
+    MISSING_SAVE_GATE.get_or_init(|| (Mutex::new(()), Condvar::new()))
+}
+
+fn notify_missing_save_gate() {
+    let (_, cvar) = missing_save_gate();
+    cvar.notify_all();
+}
+
+fn set_missing_save_dialog_state(state: usize) {
+    MISSING_SAVE_DIALOG_STATE.store(state, Ordering::SeqCst);
+    notify_missing_save_gate();
+}
+
+pub(crate) fn missing_save_selection_pending() -> bool {
+    MISSING_SAVE_DIALOG_STATE.load(Ordering::SeqCst) == MISSING_SAVE_DIALOG_PENDING
+}
+
+pub(crate) fn signal_missing_save_prompt_bootstrap_ready() {
+    if missing_save_selection_pending() {
+        MISSING_SAVE_PROMPT_BOOTSTRAP_READY.store(1, Ordering::SeqCst);
+        if MISSING_SAVE_BOOTSTRAP_READY_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+            append_autoload_debug(format_args!(
+                "save-override: missing-save prompt bootstrap gate released; picker thread may show UI"
+            ));
+        }
+        notify_missing_save_gate();
+    }
+}
+
+fn wait_until_missing_save_prompt_bootstrap_ready() {
+    if MISSING_SAVE_PROMPT_BOOTSTRAP_READY.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    let (mutex, cvar) = missing_save_gate();
+    let mut guard = mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    while MISSING_SAVE_PROMPT_BOOTSTRAP_READY.load(Ordering::SeqCst) == 0
+        && missing_save_selection_pending()
+    {
+        guard = cvar.wait(guard).unwrap_or_else(|poisoned| poisoned.into_inner());
+    }
+}
+
+pub(crate) fn wait_for_missing_save_selection_if_pending(reason: &str) {
+    if !missing_save_selection_pending() {
+        return;
+    }
+    append_autoload_debug(format_args!(
+        "save-override: blocking {reason} until missing-save picker resolves"
+    ));
+    let (mutex, cvar) = missing_save_gate();
+    let mut guard = mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    while MISSING_SAVE_DIALOG_STATE.load(Ordering::SeqCst) == MISSING_SAVE_DIALOG_PENDING {
+        guard = cvar.wait(guard).unwrap_or_else(|poisoned| poisoned.into_inner());
+    }
+    if MISSING_SAVE_DIALOG_STATE.load(Ordering::SeqCst) == MISSING_SAVE_DIALOG_CANCELLED {
+        append_autoload_debug(format_args!(
+            "save-override: blocked {reason} observed missing-save cancellation; exiting."
+        ));
+        unsafe { ExitProcess(1) };
+    }
+    append_autoload_debug(format_args!(
+        "save-override: resuming {reason} after missing-save picker resolved"
+    ));
+}
 static SAVE_QUERY_STAGE_STEAMID_DIR_HITS: AtomicUsize = AtomicUsize::new(0);
 static SAVE_QUERY_STAGE_SAVE_FILE_HITS: AtomicUsize = AtomicUsize::new(0);
 static SAVE_QUERY_CONFIGURED_FILE_HITS: AtomicUsize = AtomicUsize::new(0);
@@ -872,14 +954,13 @@ fn staged_save_root_for_configured_file(path: &Path) -> Option<(PathBuf, u64)> {
     None
 }
 
-fn save_override_redirect_source() -> Option<SaveRedirectSource> {
-    let path = validated_configured_save_file()?;
+fn save_redirect_source_for_validated_file(path: PathBuf) -> SaveRedirectSource {
     if let Some((staged_root, steam_id)) = staged_save_root_for_configured_file(&path) {
-        return Some(SaveRedirectSource::StagedRoot {
+        return SaveRedirectSource::StagedRoot {
             file: path,
             steam_id,
             root_w: path_root_to_wine_wide(&staged_root),
-        });
+        };
     }
     let mut bak_path = path.clone();
     let bak_name = format!(
@@ -893,13 +974,17 @@ fn save_override_redirect_source() -> Option<SaveRedirectSource> {
         .parent()
         .map(|parent| parent.join("er-effects-save-redirect-stage"))
         .unwrap_or_else(|| PathBuf::from("er-effects-save-redirect-stage"));
-    Some(SaveRedirectSource::DirectFile {
+    SaveRedirectSource::DirectFile {
         file: path.clone(),
         root_w: path_root_to_wine_wide(&stage_root),
         stage_root,
         file_w: path_root_to_wine_wide(&path),
         bak_w: path_root_to_wine_wide(&bak_path),
-    })
+    }
+}
+
+fn save_override_redirect_source() -> Option<SaveRedirectSource> {
+    validated_configured_save_file().map(save_redirect_source_for_validated_file)
 }
 
 /// Outcome of `enforce_save_override_or_abort`. The abort path does not return.
@@ -912,52 +997,32 @@ pub(crate) enum SaveOverrideMode {
     DefaultUserSave,
 }
 
-/// Called EARLY in `DllMain` (before any save IO). Explicit save sources still install the
-/// redirect hook. With no explicit source, a plausible active Steam-user default save is accepted and
-/// the game reads it normally. If neither source exists, the process exits after a clear popup.
-pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
-    if save_override_telemetry_only() {
-        append_autoload_debug(format_args!(
-            "save-override: TELEMETRY-ONLY mode -- save source not enforced (loads nothing; no default-dir read for a character)"
-        ));
-        return SaveOverrideMode::TelemetryOnly;
-    }
-    if configured_save_file().is_none()
-        && let Some((file, steam_id, reason)) = active_default_save_file()
-    {
-        OBSERVED_ACTIVE_STEAM_ID64.store(steam_id, Ordering::SeqCst);
-        SAVE_REDIRECT_MODE.store(SAVE_REDIRECT_MODE_DEFAULT_USER, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "save-override: DEFAULT-USER-SAVE -- no ER_EFFECTS_SAVE_FILE/save_file configured; using active SteamID64 {steam_id} ({reason}) default save '{}' with no redirect",
-            file.display()
-        ));
-        return SaveOverrideMode::DefaultUserSave;
-    }
-    match save_override_redirect_source() {
-        Some(SaveRedirectSource::StagedRoot {
+fn activate_save_redirect_source(source: SaveRedirectSource, source_label: &'static str) -> SaveOverrideMode {
+    match source {
+        SaveRedirectSource::StagedRoot {
             file,
             steam_id,
             root_w,
-        }) => {
+        } => {
             OBSERVED_ACTIVE_STEAM_ID64.store(steam_id, Ordering::SeqCst);
-            normalize_env_save_file_to_known_steam_id(&file, steam_id, "early-enforced-env-save");
+            normalize_env_save_file_to_known_steam_id(&file, steam_id, source_label);
             SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
             // UTF-8 Lossy: log-only decode of configured Windows wide path for probe confirmation.
             let shown = String::from_utf16_lossy(&root_w);
             let _ = SAVE_REDIRECT_DIR_W.set(root_w);
             SAVE_REDIRECT_MODE.store(SAVE_REDIRECT_MODE_STAGED_ROOT, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "save-override: ENFORCED -- redirecting native save root to staged root '{shown}'"
+                "save-override: ENFORCED -- redirecting native save root to staged root '{shown}' source={source_label}"
             ));
             SaveOverrideMode::Redirect
         }
-        Some(SaveRedirectSource::DirectFile {
+        SaveRedirectSource::DirectFile {
             file,
             stage_root,
             root_w,
             file_w,
             bak_w,
-        }) => {
+        } => {
             let _ = std::fs::create_dir_all(stage_root.join("eldenring"));
             let _ = std::fs::create_dir_all(stage_root.join("EldenRing"));
             // UTF-8 Lossy: log-only decode of configured Windows wide paths for probe confirmation.
@@ -978,37 +1043,190 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
                 ensure_direct_stage_for_steam_id(steam_id);
             }
             append_autoload_debug(format_args!(
-                "save-override: ENFORCED -- redirecting arbitrary save-file opens to configured save '{shown}' via private stage root '{stage_shown}' active_steamid={}",
+                "save-override: ENFORCED -- redirecting arbitrary save-file opens to supplied save '{shown}' via private stage root '{stage_shown}' source={source_label} active_steamid={}",
                 explicit_steam_id.map(|(steam_id, _)| steam_id).unwrap_or(0)
             ));
             SaveOverrideMode::Redirect
         }
-        None => {
+    }
+}
+
+/// Called EARLY in `DllMain` (before any save IO). Explicit save sources still install the
+/// redirect hook. With no explicit source, a plausible active Steam-user default save is accepted and
+/// the game reads it normally. If neither source exists, the user can choose a save file or quit.
+pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
+    if save_override_telemetry_only() {
+        append_autoload_debug(format_args!(
+            "save-override: TELEMETRY-ONLY mode -- save source not enforced (loads nothing; no default-dir read for a character)"
+        ));
+        return SaveOverrideMode::TelemetryOnly;
+    }
+    if configured_save_file().is_none()
+        && let Some((file, steam_id, reason)) = active_default_save_file()
+    {
+        OBSERVED_ACTIVE_STEAM_ID64.store(steam_id, Ordering::SeqCst);
+        SAVE_REDIRECT_MODE.store(SAVE_REDIRECT_MODE_DEFAULT_USER, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-override: DEFAULT-USER-SAVE -- no ER_EFFECTS_SAVE_FILE/save_file configured; using active SteamID64 {steam_id} ({reason}) default save '{}' with no redirect",
+            file.display()
+        ));
+        return SaveOverrideMode::DefaultUserSave;
+    }
+    if let Some(source) = save_override_redirect_source() {
+        return activate_save_redirect_source(source, "early-enforced-configured-save");
+    }
+    append_autoload_debug(format_args!(
+        "save-override: no explicit save_file/ER_EFFECTS_SAVE_FILE and no readable active default ER0000.sl2 (>= {} bytes). config_error={}. Prompting user for a save file on a post-DllMain helper thread.",
+        SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES,
+        runtime_config_error().unwrap_or_else(|| "none".to_owned())
+    ));
+    set_missing_save_dialog_state(MISSING_SAVE_DIALOG_PENDING);
+    start_missing_save_prompt_thread();
+    SaveOverrideMode::Redirect
+}
+
+fn wide_nul(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+fn wine_path_wide_nul(path: &Path) -> Vec<u16> {
+    let mut wide = path_root_to_wine_wide(path);
+    wide.push(0);
+    wide
+}
+
+fn path_from_windows_picker(path: &[u16]) -> Option<PathBuf> {
+    let end = path.iter().position(|c| *c == 0).unwrap_or(path.len());
+    if end == 0 {
+        return None;
+    }
+    String::from_utf16(&path[..end]).ok().map(PathBuf::from)
+}
+
+fn open_missing_save_file_picker() -> Option<PathBuf> {
+    let title_w = wide_nul("Select Elden Ring save file");
+    let filter_w = wide_nul("Elden Ring save (*.sl2;*.co2)\0*.sl2;*.co2\0All files (*.*)\0*.*\0");
+    let initial_dir_w = default_save_root().map(|root| wine_path_wide_nul(&root));
+    let mut file_buf = [0u16; 1024];
+    append_autoload_debug(format_args!(
+        "save-override: missing-save picker opening unowned (game title flow is gated separately)"
+    ));
+    let mut ofn = OPENFILENAMEW {
+        lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
+        lpstrFilter: PCWSTR::from_raw(filter_w.as_ptr()),
+        lpstrFile: PWSTR::from_raw(file_buf.as_mut_ptr()),
+        nMaxFile: file_buf.len() as u32,
+        lpstrTitle: PCWSTR::from_raw(title_w.as_ptr()),
+        Flags: OFN_EXPLORER
+            | OFN_FILEMUSTEXIST
+            | OFN_PATHMUSTEXIST
+            | OFN_HIDEREADONLY
+            | OFN_NOCHANGEDIR
+            | OFN_DONTADDTORECENT,
+        ..Default::default()
+    };
+    if let Some(initial_dir_w) = initial_dir_w.as_ref() {
+        ofn.lpstrInitialDir = PCWSTR::from_raw(initial_dir_w.as_ptr());
+    }
+    let picked = unsafe { GetOpenFileNameW(&mut ofn).as_bool() };
+    append_autoload_debug(format_args!(
+        "save-override: missing-save picker returned picked={picked}"
+    ));
+    if !picked {
+        return None;
+    }
+    path_from_windows_picker(&file_buf)
+}
+
+fn prompt_missing_save_file_source() -> Option<SaveRedirectSource> {
+    let title = wide_nul("er-effects-rs");
+    let prompt = wide_nul(
+        "Couldn't find a save, press OK to find one and supply it or press cancel to quit",
+    );
+    let invalid = wide_nul(
+        "The selected file is not a readable Elden Ring save. Please choose an ER0000.sl2 or ER0000.co2 file.",
+    );
+    loop {
+        append_autoload_debug(format_args!(
+            "save-override: missing-save dialog showing OK/picker Cancel/quit prompt"
+        ));
+        let response = unsafe {
+            MessageBoxW(
+                None,
+                PCWSTR::from_raw(prompt.as_ptr()),
+                PCWSTR::from_raw(title.as_ptr()),
+                MB_OKCANCEL | MB_ICONWARNING,
+            )
+        };
+        append_autoload_debug(format_args!(
+            "save-override: missing-save dialog response={}",
+            response.0
+        ));
+        if response == IDCANCEL || response != IDOK {
+            return None;
+        }
+        let Some(path) = open_missing_save_file_picker() else {
+            return None;
+        };
+        if let Some(validated) = validated_save_file_path(path.clone()) {
             append_autoload_debug(format_args!(
-                "save-override: FATAL -- no explicit save_file/ER_EFFECTS_SAVE_FILE and no readable active default ER0000.sl2 (>= {} bytes). config_error={}. Showing popup and exiting.",
-                SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES,
-                runtime_config_error().unwrap_or_else(|| "none".to_owned())
+                "save-override: missing-save dialog selected save '{}'",
+                path.display()
             ));
-            show_missing_save_popup_and_exit();
+            return Some(save_redirect_source_for_validated_file(validated));
+        }
+        append_autoload_debug(format_args!(
+            "save-override: missing-save dialog rejected invalid/non-plausible save '{}'",
+            path.display()
+        ));
+        unsafe {
+            let _ = MessageBoxW(
+                None,
+                PCWSTR::from_raw(invalid.as_ptr()),
+                PCWSTR::from_raw(title.as_ptr()),
+                MB_OK | MB_ICONERROR,
+            );
         }
     }
 }
 
-fn show_missing_save_popup_and_exit() -> ! {
-    fn wide_nul(text: &str) -> Vec<u16> {
-        text.encode_utf16().chain(std::iter::once(0)).collect()
+fn start_missing_save_prompt_thread() {
+    let _ = std::thread::Builder::new()
+        .name("er-effects-missing-save-prompt".to_owned())
+        .spawn(|| {
+            // Do not open the common file dialog from DllMain/loader-lock context. Wait until the
+            // DllMain bootstrap arms the minimal title/save gates and explicitly releases this thread.
+            wait_until_missing_save_prompt_bootstrap_ready();
+            match prompt_missing_save_file_source() {
+                Some(source) => {
+                    let _ = activate_save_redirect_source(source, "missing-save-dialog-selection");
+                    install_save_redirect_hooks();
+                    set_missing_save_dialog_state(MISSING_SAVE_DIALOG_READY);
+                }
+                None => {
+                    append_autoload_debug(format_args!(
+                        "save-override: missing-save dialog cancelled/no valid selection; exiting."
+                    ));
+                    set_missing_save_dialog_state(MISSING_SAVE_DIALOG_CANCELLED);
+                    unsafe { ExitProcess(1) };
+                }
+            }
+        });
+}
+
+fn wait_for_missing_save_dialog_if_pending(path: &[u16]) {
+    if MISSING_SAVE_DIALOG_STATE.load(Ordering::SeqCst) != MISSING_SAVE_DIALOG_PENDING {
+        return;
     }
-    let message = wide_nul("This mod can't run without a save present. Exiting");
-    let title = wide_nul("er-effects-rs");
-    unsafe {
-        let _ = MessageBoxW(
-            None,
-            PCWSTR::from_raw(message.as_ptr()),
-            PCWSTR::from_raw(title.as_ptr()),
-            MB_OK | MB_ICONERROR,
-        );
-        ExitProcess(1);
+    let hit = MISSING_SAVE_BLOCKED_IO_LOGGED.fetch_add(1, Ordering::SeqCst);
+    if hit < 8 {
+        // UTF-8 Lossy: log-only decode of a Windows wide path for probe diagnosis.
+        let p = String::from_utf16_lossy(path);
+        append_autoload_debug(format_args!(
+            "save-override: blocking native save IO until missing-save dialog resolves path='{p}'"
+        ));
     }
+    wait_for_missing_save_selection_if_pending("native save IO");
 }
 
 /// Length of a NUL-terminated UTF-16 string at `ptr` (excludes the NUL). 0 on null pointer.
@@ -1256,6 +1474,7 @@ fn save_redirect_path(path: &[u16]) -> Option<Vec<u16>> {
         return None;
     }
     let idx = wide_find_ci_ascii(path, ELDENRING)?;
+    wait_for_missing_save_dialog_if_pending(path);
     if let Some(file_w) = SAVE_DIRECT_FILE_W.get()
         && (wide_ends_with_ci_ascii(path, SL2D) || wide_ends_with_ci_ascii(path, CO2D))
     {
