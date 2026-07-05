@@ -215,6 +215,22 @@ def main() -> int:
             "blocked this Elden Ring launch command",
         ),
         PolicyCase(
+            "allow-pgrep-start-protected-detection",
+            "pgrep -x start_protected_game.exe",
+            True,
+        ),
+        PolicyCase(
+            "allow-runtime-preflight-pgrep-start-protected-detection",
+            "if pgrep -x eldenring.exe >/dev/null || pgrep -x start_protected_game.exe >/dev/null; then echo 'already running'; exit 2; fi",
+            True,
+        ),
+        PolicyCase(
+            "deny-pgrep-then-proton-start-protected-launch",
+            "pgrep -x start_protected_game.exe >/dev/null; proton run /tmp/start_protected_game.exe",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
+        PolicyCase(
             "deny-proton-start-protected-game",
             "proton run /tmp/start_protected_game.exe",
             False,

@@ -41,13 +41,52 @@ test_allow_bd_create_mentioning_steam_applaunch_appid if {
 	count(denials) == 0
 }
 
+# GitHub PR body text may document the forbidden launcher while using a real
+# body-file payload. The text is not an execution path.
+test_allow_gh_pr_create_body_file_mentioning_eac_launcher if {
+	cmd := concat("\n", [
+		"tmp_body=$(mktemp)",
+		"cat > \"$tmp_body\" <<'EOF'",
+		"Policy note: start_protected_game.exe remains forbidden; python tests passed.",
+		"EOF",
+		"gh pr create --base main --head branch --title t --body-file \"$tmp_body\"",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
 test_allow_bd_remember_mentioning_ersc_bundle_words if {
 	cmd := `/home/banon/.local/bin/bd remember --key k 'do not bundle or stage ersc.dll into release artifacts'`
 	denials := guard.deny with input as bash_event(cmd)
 	count(denials) == 0
 }
 
-# --- (b) Real launch/execution forms stay DENIED ----------------------------
+# --- (b) Exact stale-process detection is ALLOWED ---------------------------
+
+# Process detection is explicitly allowed by repo policy; only launching the
+# EAC/protected executable is forbidden.
+test_allow_pgrep_start_protected_detection if {
+	denials := guard.deny with input as bash_event("pgrep -x start_protected_game.exe")
+	count(denials) == 0
+}
+
+# Regression for the 2026-07-04 manual me3 smoke false positive: a preflight
+# guard may check both the approved direct runtime and the stale protected
+# launcher before refusing to mix process ownership.
+test_allow_runtime_preflight_pgrep_start_protected_detection if {
+	cmd := `if pgrep -x eldenring.exe >/dev/null || pgrep -x start_protected_game.exe >/dev/null; then echo 'already running'; exit 2; fi`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# The pgrep allowance must not hide a later real protected-launch token.
+test_deny_pgrep_then_proton_start_protected_launch if {
+	cmd := `pgrep -x start_protected_game.exe >/dev/null; proton run /tmp/start_protected_game.exe`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# --- (c) Real launch/execution forms stay DENIED ----------------------------
 
 test_deny_proton_run_launcher if {
 	denials := guard.deny with input as bash_event("proton run /tmp/start_protected_game.exe")
