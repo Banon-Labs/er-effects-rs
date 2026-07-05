@@ -693,7 +693,27 @@ pub(crate) unsafe fn write_code_byte(addr: usize, byte: u8) -> bool {
     }
 }
 
+/// Normalize a breakpoint entry to an RVA. The file format is RVA, but accepting pasted VAs keeps
+/// ASLR-safe diagnostics from accidentally doing `module_base + 0x140...` and patching nonsense.
+fn normalize_sw_breakpoint_rva(raw: usize, module_base: usize) -> (usize, &'static str) {
+    if raw >= SW_BP_PREFERRED_IMAGE_BASE {
+        let rva = raw - SW_BP_PREFERRED_IMAGE_BASE;
+        if rva < SW_BP_RVA_LIMIT {
+            return (rva, "preferred_va");
+        }
+    }
+    if raw >= module_base {
+        let rva = raw - module_base;
+        if rva < SW_BP_RVA_LIMIT {
+            return (rva, "live_va");
+        }
+    }
+    (raw, "rva")
+}
+
 /// Install the INT3 breakpoints listed (as hex RVAs) in er-effects-breakpoints.txt, once.
+/// Fixed-base VAs (`0x140...`) and live VAs are normalized to RVAs before the live module base is
+/// added, so the diagnostic path remains valid when the exe is ASLR-randomized.
 /// Each is patched with 0xCC; the VEH (crash_vectored_handler) logs every hit's full
 /// register/stack context and re-arms it (persistent breakpoint).
 pub(crate) unsafe fn install_sw_breakpoints_once(module_base: usize) {
@@ -716,9 +736,16 @@ pub(crate) unsafe fn install_sw_breakpoints_once(module_base: usize) {
         if trimmed.is_empty() || line.trim_start().starts_with('#') {
             continue;
         }
-        let Ok(rva) = usize::from_str_radix(trimmed, RVA_HEX_RADIX) else {
+        let Ok(raw) = usize::from_str_radix(trimmed, RVA_HEX_RADIX) else {
             continue;
         };
+        let (rva, source_kind) = normalize_sw_breakpoint_rva(raw, module_base);
+        if rva >= SW_BP_RVA_LIMIT {
+            append_crash_log(format_args!(
+                "sw-bp: skipped out-of-range entry raw=0x{raw:x} normalized_rva=0x{rva:x}"
+            ));
+            continue;
+        }
         if slot >= SW_BP_MAX {
             append_crash_log(format_args!("sw-bp: table full, skipped rva=0x{rva:x}"));
             break;
@@ -729,7 +756,7 @@ pub(crate) unsafe fn install_sw_breakpoints_once(module_base: usize) {
         SW_BP_ORIG[slot].store(orig as usize, Ordering::SeqCst);
         let armed = unsafe { write_code_byte(addr, INT3_OPCODE) };
         append_crash_log(format_args!(
-            "sw-bp #{slot} armed rva=0x{rva:x} addr=0x{addr:x} orig=0x{orig:x} ok={armed}"
+            "sw-bp #{slot} armed raw=0x{raw:x} source={source_kind} rva=0x{rva:x} addr=0x{addr:x} orig=0x{orig:x} ok={armed}"
         ));
         slot += SW_BP_SLOT_STEP;
     }
