@@ -323,6 +323,28 @@ def main() -> int:
             "git branch -d merged-topic",
             True,
         ),
+        # Global GitHub attribution guard: a --body "$(cat <<'EOF'...)" command
+        # substitution cannot be expanded by the gh_context signal, which falls
+        # back to matching the raw command text (2026-07-05 false positive:
+        # footer present in the heredoc was denied). Footer present -> allow.
+        PolicyCase(
+            "allow-gh-pr-edit-heredoc-substitution-body-with-footer",
+            'gh pr edit 19 --repo Banon-Labs/er-effects-rs --body "$(cat <<\'EOF\'\n'
+            "Body text describing the change.\n\n"
+            "\U0001f916 Written by Claude Fable 5, authorized by @chozandrias76\n"
+            'EOF\n)"',
+            True,
+        ),
+        # ... and the same form WITHOUT the footer must still deny (the raw
+        # command fallback must not weaken the guard).
+        PolicyCase(
+            "deny-gh-pr-edit-heredoc-substitution-body-without-footer",
+            'gh pr edit 19 --repo Banon-Labs/er-effects-rs --body "$(cat <<\'EOF\'\n'
+            "Body text without attribution.\n"
+            'EOF\n)"',
+            False,
+            "attribution footer",
+        ),
         # A real rtk invocation with a native word in a quoted arg stays allowed.
         PolicyCase(
             "allow-rtk-grep-quoted-find",
