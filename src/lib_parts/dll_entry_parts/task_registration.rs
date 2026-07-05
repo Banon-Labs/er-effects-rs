@@ -498,6 +498,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                             )
                         };
                     }
+                    PLAYER_CURRENT_ANIMATION_ID.store(0, Ordering::SeqCst);
                     write_telemetry_throttled(&mut state, false);
                     return;
                 }
@@ -536,6 +537,10 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 }
                 let observation = observe_animation(player, state.last_write_idx);
                 state.current_animation_id = observation.current_animation_id;
+                PLAYER_CURRENT_ANIMATION_ID.store(
+                    observation.current_animation_id.unwrap_or(0),
+                    Ordering::SeqCst,
+                );
                 if observation.current_animation_id == Some(APPEAR_ANIMATION_ID)
                     || observation.appear_newly_queued
                 {

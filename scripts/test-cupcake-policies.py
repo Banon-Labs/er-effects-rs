@@ -279,6 +279,30 @@ def main() -> int:
             ' "start_protected_game.exe" for p in glob.glob("/proc/[0-9]*/comm")))\'',
             True,
         ),
+        # Exact /proc cleanup/teardown for stale Elden Ring/EAC launcher
+        # processes is allowed: it names the protected launcher only as data,
+        # reads /proc, and sends signals to exact matching pids without
+        # launching the named executable (er-effects-rs-9iz).
+        PolicyCase(
+            "allow-proc-comm-scan-sigterm-sigkill-cleanup-naming-eac-launcher",
+            "python3 - <<'PY'\n"
+            "import glob, os, signal\n"
+            "names = {'eldenring.exe', 'start_protected_game.exe'}\n"
+            "for path in glob.glob('/proc/[0-9]*/comm'):\n"
+            "    try:\n"
+            "        pid = int(path.split('/')[2])\n"
+            "        comm = open(path).read().strip()\n"
+            "    except (OSError, ValueError):\n"
+            "        continue\n"
+            "    if comm in names:\n"
+            "        for sig in (signal.SIGTERM, signal.SIGKILL):\n"
+            "            try:\n"
+            "                os.kill(pid, sig)\n"
+            "            except OSError:\n"
+            "                pass\n"
+            "PY",
+            True,
+        ),
         # ... but the /proc mention must never become a launch bypass.
         PolicyCase(
             "deny-proc-scan-heredoc-with-subprocess-launch",

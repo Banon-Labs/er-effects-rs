@@ -488,6 +488,34 @@ pub(crate) static NOW_LOADING_HELPER_LAST_REQUESTED_REPLACE_TEX_INFO: AtomicUsiz
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static NOW_LOADING_HELPER_LAST_FLAGS: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+/// Native `CS::LoadingScreen` update path that drives the now-loading Gauge/Gauge_3 movieclip frame.
+/// Static RE (2026-07-05): dump `FUN_14090a7a0` -> deobf `0x14090a6b0`; it computes
+/// `frame = progress01 * max_frame + 1`, clamps to max at progress >= 1.0, then calls
+/// `CSMenuFrameComponent::SetFrame(&this->gauge, frame)`. This is the product semaphore for the
+/// visible loading bar reaching 100%, later and more exact than TimeAct/world-ready.
+pub(crate) const LOADING_SCREEN_UPDATE_RVA: usize = 0x90a6b0;
+pub(crate) static LOADING_SCREEN_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static LOADING_SCREEN_UPDATE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LOADING_SCREEN_UPDATE_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LOADING_SCREEN_LAST_THIS: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static LOADING_SCREEN_LAST_DATA: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static LOADING_SCREEN_BAR_ENABLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LOADING_SCREEN_BAR_CURRENT_FRAME: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LOADING_SCREEN_BAR_MAX_FRAME: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LOADING_SCREEN_BAR_PROGRESS_PERMILLE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LOADING_SCREEN_BAR_FINAL_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const LOADING_SCREEN_DATA_OFFSET: usize = 0xa38;
+pub(crate) const LOADING_SCREEN_GAUGE_COMPONENT_OFFSET: usize = 0xa48;
+pub(crate) const LOADING_SCREEN_GAUGE_ENABLED_OFFSET: usize = 0xab0;
+pub(crate) const MENU_FRAME_COMPONENT_CURRENT_FRAME_OFFSET: usize = 0x70;
+pub(crate) const MENU_FRAME_COMPONENT_MAX_FRAME_OFFSET: usize = 0x74;
+pub(crate) const LOADING_SCREEN_DATA_ACTIVE_INDEX_OFFSET: usize = 0x14;
+pub(crate) const LOADING_SCREEN_DATA_START_PROGRESS_OFFSET: usize = 0x18;
+pub(crate) const LOADING_SCREEN_DATA_TARGET_PROGRESS_OFFSET: usize = 0x1c;
+pub(crate) const LOADING_SCREEN_DATA_INTERP_DURATION_OFFSET: usize = 0x20;
+pub(crate) const LOADING_SCREEN_DATA_INTERP_ELAPSED_OFFSET: usize = 0x24;
 /// Read-only latch of the native CSFakeLoadingScreen singleton visible during the black/progress
 /// loading UI. Sampled from telemetry writes; no hooks or native calls.
 pub(crate) static FAKE_LOADING_SCREEN_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);

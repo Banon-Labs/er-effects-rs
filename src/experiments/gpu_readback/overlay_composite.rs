@@ -52,6 +52,9 @@ pub(crate) static OVERLAY_GPU_FAIL_VERSION: AtomicUsize = AtomicUsize::new(0);
 /// a later live publish bumps `LOADING_BG_PORTRAIT_RGBA_VERSION` for this build.
 static OVERLAY_LOADSCREEN_BUILD_SEEN: AtomicUsize = AtomicUsize::new(0);
 static OVERLAY_LOADSCREEN_BASELINE_VERSION: AtomicUsize = AtomicUsize::new(0);
+/// Native loading-bar final hits already consumed by this overlay window. Reset on re-arm so a prior
+/// load's terminal-frame latch cannot instantly stop the next loading portrait window.
+static OVERLAY_NATIVE_BAR_FINAL_HITS_SEEN: AtomicUsize = AtomicUsize::new(0);
 
 const OVERLAY_SHADER_HLSL: &[u8] = br#"
 Texture2D portrait_tex : register(t0);
@@ -585,26 +588,55 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
         OVERLAY_NOW_LOADING_SEEN.load(Ordering::SeqCst) != 0
     };
     if OVERLAY_STOPPED.load(Ordering::SeqCst) != 0 {
-        // Stopped: re-arm ONLY on evidence of a NEW loading window -- loading reasserting, or a fresh
-        // post-Continue table build (the System Quit character-switch reload path). Reset the seen latch so
-        // the previous window can't instant-stop this one.
+        // Stopped: re-arm ONLY on evidence of a NEW loading window. For native-bar-complete stops
+        // (reason=4), do NOT re-arm just because `loading` still reads true: the same native loading
+        // window can linger after Gauge_3 hit frame 500/500, and re-arming there creates a pointless
+        // immediate double-stop. A fresh post-Continue table build is the reliable new-window proof.
         let rebuilt = PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst)
             > OVERLAY_STOP_TABLE_BUILDS.load(Ordering::SeqCst);
-        if !(loading || rebuilt) {
+        let stopped_on_native_bar = OVERLAY_STOP_REASON.load(Ordering::SeqCst) == 4;
+        if !rebuilt && (stopped_on_native_bar || !loading) {
             return false;
         }
         OVERLAY_STOPPED.store(0, Ordering::SeqCst);
         OVERLAY_NOW_LOADING_SEEN.store(if loading { 1 } else { 0 }, Ordering::SeqCst);
         OVERLAY_BRIDGE_PRESENTS.store(0, Ordering::SeqCst);
         OVERLAY_WORLD_STOP_LOGGED.store(0, Ordering::SeqCst);
+        OVERLAY_NATIVE_BAR_FINAL_HITS_SEEN.store(
+            LOADING_SCREEN_BAR_FINAL_HITS.load(Ordering::SeqCst),
+            Ordering::SeqCst,
+        );
         append_autoload_debug(format_args!(
             "present-overlay: re-armed for a new loading window (loading={loading} rebuilt={rebuilt})"
         ));
     }
-    // PRIMARY STOP: `load_done && !fake_vis` currently fires before the user-visible loading surface has
-    // fully handed off (runtime + user report 2026-07-05: the portrait popped off while the loading view was
-    // still visible). Treat that predicate as a candidate transition and bridge for a bounded number of
-    // presents before clearing the portrait window.
+    // PRODUCT STOP: the native now-loading Gauge_3 reached its terminal frame. Static RE (2026-07-05):
+    // CS::LoadingScreen::Update drives the visible loading bar with `progress01 -> frame 1..max`; the
+    // final frame is the exact in-process semaphore for "the visible loading bar reached 100%". This is
+    // later and more faithful than TimeAct/world-ready, and lets our portrait/custom-view hand off at the
+    // same moment the game's own loading bar says the load is complete.
+    let native_bar_final_hits = LOADING_SCREEN_BAR_FINAL_HITS.load(Ordering::SeqCst);
+    let native_bar_final_seen = OVERLAY_NATIVE_BAR_FINAL_HITS_SEEN.load(Ordering::SeqCst);
+    if native_bar_final_hits > native_bar_final_seen {
+        OVERLAY_STOPPED.store(1, Ordering::SeqCst);
+        OVERLAY_STOP_TABLE_BUILDS.store(
+            PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst),
+            Ordering::SeqCst,
+        );
+        OVERLAY_WINDOW_STOPS.fetch_add(1, Ordering::SeqCst);
+        OVERLAY_STOP_REASON.store(4, Ordering::SeqCst);
+        OVERLAY_NATIVE_BAR_FINAL_HITS_SEEN.store(native_bar_final_hits, Ordering::SeqCst);
+        let frame = LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst);
+        let max = LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst);
+        let progress = LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "present-overlay: native loading Gauge_3 reached terminal frame ({frame}/{max}, progress={progress}permille) -> stopped compositing loading portrait"
+        ));
+        loading_portrait_window_reset("native loading bar complete");
+        return false;
+    }
+    // FALLBACK STOP: `load_done && !fake_vis` fires before the user-visible loading surface has fully
+    // handed off on some runs, so bridge it; the TimeAct stop above is preferred when it appears first.
     let post_load_bridge = loading_seen && !loading;
     if post_load_bridge {
         let n = OVERLAY_BRIDGE_PRESENTS.fetch_add(1, Ordering::SeqCst) + 1;

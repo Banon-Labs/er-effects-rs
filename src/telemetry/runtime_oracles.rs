@@ -3087,9 +3087,9 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_portrait_luma_flicker_max",
             PORTRAIT_LUMA_FLICKER_MAX.load(Ordering::SeqCst),
         );
-        // LOADING-SCREEN WINDOW semaphores: overlay stop count + last stop reason (1 = now_loading seen
-        // then dropped, the game's real loading screen finished -- the spec-correct pop; 3 = anti-runaway
-        // backstop because now_loading never appeared, a signal the assumption broke).
+        // LOADING-SCREEN WINDOW semaphores: overlay stop count + last stop reason (1 = load-done bridge
+        // elapsed; 3 = anti-runaway backstop; 4 = native now-loading Gauge_3 terminal frame / visible
+        // loading bar reached 100%).
         push_json_usize(
             body,
             "oracle_overlay_window_stops",
@@ -3099,6 +3099,41 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             body,
             "oracle_overlay_stop_reason",
             OVERLAY_STOP_REASON.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_loading_bar_hook_installed",
+            LOADING_SCREEN_UPDATE_HOOK_INSTALLED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_loading_bar_update_hits",
+            LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_loading_bar_enabled",
+            LOADING_SCREEN_BAR_ENABLED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_loading_bar_current_frame",
+            LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_loading_bar_max_frame",
+            LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_loading_bar_progress_permille",
+            LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_loading_bar_final_hits",
+            LOADING_SCREEN_BAR_FINAL_HITS.load(Ordering::SeqCst),
         );
         push_json_usize(
             body,

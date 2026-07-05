@@ -117,7 +117,8 @@ static OVERLAY_STOP_TABLE_BUILDS: AtomicUsize = AtomicUsize::new(0);
 static OVERLAY_BRIDGE_PRESENTS: AtomicUsize = AtomicUsize::new(0);
 /// `load_done && !fake_vis` can assert before the visible loading surface finishes its fade/hand-off. Keep
 /// compositing for a bounded bridge after that predicate so the portrait does not pop off while the user
-/// still sees the loading screen.
+/// still sees the loading screen. The product stop is now the native Gauge_3 terminal-frame semaphore;
+/// this bridge is only a fallback if the native bar hook is absent or never reaches final.
 const OVERLAY_LOAD_DONE_VISIBLE_BRIDGE_PRESENTS: usize = 360;
 /// Anti-runaway backstop: max bridge presents before we stop even though now_loading was never seen. The
 /// real gap is ~1.7s; this is set FAR above any real present rate over that gap so it NEVER pre-empts a
@@ -126,9 +127,9 @@ const OVERLAY_LOAD_DONE_VISIBLE_BRIDGE_PRESENTS: usize = 360;
 const OVERLAY_NOWLOAD_BRIDGE_MAX_PRESENTS: usize = 60000;
 /// RAM oracle: number of overlay window stops (`oracle_overlay_window_stops`).
 pub(crate) static OVERLAY_WINDOW_STOPS: AtomicUsize = AtomicUsize::new(0);
-/// RAM oracle: last stop reason (`oracle_overlay_stop_reason`): 0=none yet, 1=now_loading seen-then-gone
-/// (primary, the game's real loading screen finished -- the spec-correct pop), 3=anti-runaway backstop
-/// (now_loading never appeared; a signal the assumption broke, not a normal stop).
+/// RAM oracle: last stop reason (`oracle_overlay_stop_reason`): 0=none yet, 1=load-done bridge elapsed,
+/// 3=anti-runaway backstop (loading never stopped cleanly), 4=native now-loading Gauge_3 reached its
+/// terminal frame (preferred product stop: visible loading bar reached 100%).
 pub(crate) static OVERLAY_STOP_REASON: AtomicUsize = AtomicUsize::new(0);
 
 /// PE image range `[base, base+SizeOfImage)` read from the in-memory PE headers at `base`.

@@ -151,6 +151,92 @@ pub(crate) unsafe extern "system" fn now_loading_helper_update_hook(this: usize,
     }
 }
 
+unsafe fn loading_screen_progress_permille(data: usize) -> usize {
+    if data == 0 || data == TITLE_OWNER_SCAN_START_ADDRESS {
+        return 0;
+    }
+    let active_idx = unsafe { safe_read_i32(data + LOADING_SCREEN_DATA_ACTIVE_INDEX_OFFSET) }
+        .unwrap_or(-1);
+    if active_idx < 0 {
+        return 0;
+    }
+    let start = unsafe { safe_read_f32(data + LOADING_SCREEN_DATA_START_PROGRESS_OFFSET) }
+        .unwrap_or(0.0);
+    let target = unsafe { safe_read_f32(data + LOADING_SCREEN_DATA_TARGET_PROGRESS_OFFSET) }
+        .unwrap_or(0.0);
+    let duration = unsafe { safe_read_f32(data + LOADING_SCREEN_DATA_INTERP_DURATION_OFFSET) }
+        .unwrap_or(0.0);
+    let elapsed = unsafe { safe_read_f32(data + LOADING_SCREEN_DATA_INTERP_ELAPSED_OFFSET) }
+        .unwrap_or(0.0);
+    let progress = if duration <= 0.0 {
+        start
+    } else if duration < elapsed {
+        target
+    } else {
+        (target - start) * (elapsed / duration) + start
+    };
+    (progress.clamp(0.0, 1.0) * 1000.0).round() as usize
+}
+
+unsafe fn sample_loading_screen_bar(this: usize) {
+    if this == 0 || this == TITLE_OWNER_SCAN_START_ADDRESS {
+        return;
+    }
+    LOADING_SCREEN_LAST_THIS.store(this, Ordering::SeqCst);
+    let data = unsafe { safe_read_usize(this + LOADING_SCREEN_DATA_OFFSET) }
+        .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    LOADING_SCREEN_LAST_DATA.store(data, Ordering::SeqCst);
+    let enabled = unsafe { safe_read_u8(this + LOADING_SCREEN_GAUGE_ENABLED_OFFSET) }
+        .unwrap_or(0) as usize;
+    LOADING_SCREEN_BAR_ENABLED.store(enabled, Ordering::SeqCst);
+    let component = this + LOADING_SCREEN_GAUGE_COMPONENT_OFFSET;
+    let current = unsafe { safe_read_i32(component + MENU_FRAME_COMPONENT_CURRENT_FRAME_OFFSET) }
+        .unwrap_or(0)
+        .max(0) as usize;
+    let max = unsafe { safe_read_i32(component + MENU_FRAME_COMPONENT_MAX_FRAME_OFFSET) }
+        .unwrap_or(0)
+        .max(0) as usize;
+    LOADING_SCREEN_BAR_CURRENT_FRAME.store(current, Ordering::SeqCst);
+    LOADING_SCREEN_BAR_MAX_FRAME.store(max, Ordering::SeqCst);
+    let progress_pm = unsafe { loading_screen_progress_permille(data) };
+    LOADING_SCREEN_BAR_PROGRESS_PERMILLE.store(progress_pm, Ordering::SeqCst);
+    if enabled != 0 && max != 0 && current >= max {
+        let hits = LOADING_SCREEN_BAR_FINAL_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+        if hits <= 4 || hits.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "loading-bar: native Gauge_3 reached terminal frame {current}/{max} (progress={} permille, this=0x{this:x})",
+                progress_pm
+            ));
+        }
+    }
+}
+
+pub(crate) unsafe extern "system" fn loading_screen_update_hook(
+    this: usize,
+    dt: f32,
+    param3: usize,
+) {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    let orig = LOADING_SCREEN_UPDATE_ORIG.load(Ordering::SeqCst);
+    if orig != null && orig != HOOK_ORIGINAL_UNSET {
+        let original: unsafe extern "system" fn(usize, f32, usize) =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { original(this, dt, param3) };
+    }
+    let hits = LOADING_SCREEN_UPDATE_HITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        + OWN_STEPPER_CALL_INC;
+    unsafe { sample_loading_screen_bar(this) };
+    if hits <= 8 || hits.is_power_of_two() {
+        append_autoload_debug(format_args!(
+            "loading-bar: observed CS::LoadingScreen update this=0x{this:x} hits={hits} enabled={} frame={}/{} progress={}permille",
+            LOADING_SCREEN_BAR_ENABLED.load(Ordering::SeqCst),
+            LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst),
+            LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst),
+            LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst),
+        ));
+    }
+}
+
 pub(crate) fn install_now_loading_helper_observer_hooks() {
     if NOW_LOADING_HELPER_HOOKS_INSTALLED.load(Ordering::SeqCst) != 0 {
         return;
@@ -169,6 +255,15 @@ pub(crate) fn install_now_loading_helper_observer_hooks() {
     };
     let Ok(update) = game_rva(NOW_LOADING_HELPER_UPDATE_RVA as u32) else {
         return;
+    };
+    let loading_update = match game_rva(LOADING_SCREEN_UPDATE_RVA as u32) {
+        Ok(addr) => Some(addr),
+        Err(_) => {
+            append_autoload_debug(format_args!(
+                "loading-bar: failed to resolve CS::LoadingScreen update rva 0x{LOADING_SCREEN_UPDATE_RVA:x}"
+            ));
+            None
+        }
     };
     let mut ok = true;
     match unsafe {
@@ -207,14 +302,38 @@ pub(crate) fn install_now_loading_helper_observer_hooks() {
             ok = false;
         }
     }
+    if let Some(addr) = loading_update {
+        match unsafe {
+            MhHook::new(
+                addr as *mut c_void,
+                loading_screen_update_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                LOADING_SCREEN_UPDATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+                ok &= unsafe { hook.queue_enable() }.is_ok();
+                std::mem::forget(hook);
+            }
+            Err(status) => {
+                append_autoload_debug(format_args!(
+                    "loading-bar: CS::LoadingScreen update hook failed: {status:?}"
+                ));
+                ok = false;
+            }
+        }
+    }
     if !ok {
         return;
     }
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => {
             NOW_LOADING_HELPER_HOOKS_INSTALLED.store(1, Ordering::SeqCst);
+            if loading_update.is_some() {
+                LOADING_SCREEN_UPDATE_HOOK_INSTALLED.store(1, Ordering::SeqCst);
+            }
             append_autoload_debug(format_args!(
-                "title-cover-part-b: hooked CSNowLoadingHelperImp observer ctor=0x{ctor:x} update=0x{update:x}; observe-only"
+                "title-cover-part-b: hooked CSNowLoadingHelperImp observer ctor=0x{ctor:x} update=0x{update:x}; loading-bar-update={}; observe-only",
+                loading_update.unwrap_or(0)
             ));
         }
         status => append_autoload_debug(format_args!(
