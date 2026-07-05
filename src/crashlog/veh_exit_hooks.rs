@@ -17,7 +17,8 @@ use eldenring::{
 };
 use er_effects_data::{EffectCallSpec, EffectKindSpec, embedded_effects};
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoadMethod, SaveLoader};
-use fromsoftware_shared::{FromStatic, InstanceError, SharedTaskImpExt};
+use fromsoftware_shared::{FromStatic, InstanceError, Program, SharedTaskImpExt};
+use pelite::pe64::Pe;
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
@@ -693,11 +694,27 @@ pub(crate) unsafe fn write_code_byte(addr: usize, byte: u8) -> bool {
     }
 }
 
+/// Resolve the executable's preferred image base through fromsoftware-rs' current-program PE view.
+/// This keeps breakpoint normalization tied to the loaded PE metadata instead of a hard-coded
+/// Elden Ring base, while still allowing ASLR to move the live module base independently.
+fn sw_breakpoint_preferred_image_base() -> Option<usize> {
+    std::panic::catch_unwind(|| Program::current().optional_header().ImageBase)
+        .ok()
+        .and_then(|image_base| usize::try_from(image_base).ok())
+        .filter(|&image_base| image_base != NULL_MODULE_BASE)
+}
+
 /// Normalize a breakpoint entry to an RVA. The file format is RVA, but accepting pasted VAs keeps
-/// ASLR-safe diagnostics from accidentally doing `module_base + 0x140...` and patching nonsense.
-fn normalize_sw_breakpoint_rva(raw: usize, module_base: usize) -> (usize, &'static str) {
-    if raw >= SW_BP_PREFERRED_IMAGE_BASE {
-        let rva = raw - SW_BP_PREFERRED_IMAGE_BASE;
+/// ASLR-safe diagnostics from accidentally doing `module_base + VA` and patching nonsense.
+fn normalize_sw_breakpoint_rva(
+    raw: usize,
+    module_base: usize,
+    preferred_image_base: Option<usize>,
+) -> (usize, &'static str) {
+    if let Some(image_base) = preferred_image_base
+        && raw >= image_base
+    {
+        let rva = raw - image_base;
         if rva < SW_BP_RVA_LIMIT {
             return (rva, "preferred_va");
         }
@@ -712,7 +729,7 @@ fn normalize_sw_breakpoint_rva(raw: usize, module_base: usize) -> (usize, &'stat
 }
 
 /// Install the INT3 breakpoints listed (as hex RVAs) in er-effects-breakpoints.txt, once.
-/// Fixed-base VAs (`0x140...`) and live VAs are normalized to RVAs before the live module base is
+/// Fixed/preferred-base VAs and live VAs are normalized to RVAs before the live module base is
 /// added, so the diagnostic path remains valid when the exe is ASLR-randomized.
 /// Each is patched with 0xCC; the VEH (crash_vectored_handler) logs every hit's full
 /// register/stack context and re-arms it (persistent breakpoint).
@@ -727,6 +744,7 @@ pub(crate) unsafe fn install_sw_breakpoints_once(module_base: usize) {
     let Ok(contents) = fs::read_to_string(&path) else {
         return;
     };
+    let preferred_image_base = sw_breakpoint_preferred_image_base();
     let mut slot = SW_BP_EMPTY;
     for line in contents.lines() {
         let trimmed = line
@@ -739,7 +757,7 @@ pub(crate) unsafe fn install_sw_breakpoints_once(module_base: usize) {
         let Ok(raw) = usize::from_str_radix(trimmed, RVA_HEX_RADIX) else {
             continue;
         };
-        let (rva, source_kind) = normalize_sw_breakpoint_rva(raw, module_base);
+        let (rva, source_kind) = normalize_sw_breakpoint_rva(raw, module_base, preferred_image_base);
         if rva >= SW_BP_RVA_LIMIT {
             append_crash_log(format_args!(
                 "sw-bp: skipped out-of-range entry raw=0x{raw:x} normalized_rva=0x{rva:x}"

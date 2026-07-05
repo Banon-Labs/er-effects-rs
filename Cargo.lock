@@ -2747,6 +2747,7 @@ dependencies = [
  "erpx-rs",
  "fromsoftware-shared",
  "iced-x86",
+ "pelite",
  "windows 0.62.2",
 ]
 
