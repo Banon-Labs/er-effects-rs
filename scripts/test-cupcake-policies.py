@@ -237,6 +237,68 @@ def main() -> int:
             "blocked this Elden Ring EAC launcher command",
         ),
         PolicyCase(
+            "deny-wine-start-protected-game",
+            "wine /opt/er/start_protected_game.exe",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
+        PolicyCase(
+            "deny-dot-slash-start-protected-game",
+            "./start_protected_game.exe",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
+        # Read-only /proc comm scans may NAME the EAC launcher inside quoted
+        # string literals (2026-07-05 false positive: the sanctioned no-pgrep
+        # process-detection heredoc was denied by the raw marker fallback).
+        PolicyCase(
+            "allow-proc-comm-scan-heredoc-naming-eac-launcher",
+            "python3 - <<'PY'\n"
+            "import glob\n"
+            "names = ('steam', 'eldenring.exe', 'start_protected_game.exe')\n"
+            "found = {n: False for n in names}\n"
+            "for path in glob.glob('/proc/[0-9]*/comm'):\n"
+            "    try:\n"
+            "        comm = open(path).read().strip()\n"
+            "    except OSError:\n"
+            "        continue\n"
+            "    if comm in names:\n"
+            "        found[comm] = True\n"
+            "for n in names:\n"
+            "    print(n, 'up' if found[n] else 'down')\n"
+            "PY",
+            True,
+            extra_tool_input={
+                "description": "Report Steam/eldenring/EAC launcher process state from /proc"
+            },
+        ),
+        PolicyCase(
+            "allow-proc-comm-scan-python-c-naming-eac-launcher",
+            "python3 -c 'import glob; print(any(open(p).read().strip() =="
+            ' "start_protected_game.exe" for p in glob.glob("/proc/[0-9]*/comm")))\'',
+            True,
+        ),
+        # ... but the /proc mention must never become a launch bypass.
+        PolicyCase(
+            "deny-proc-scan-heredoc-with-subprocess-launch",
+            "python3 - <<'PY'\n"
+            "import subprocess\n"
+            "print(open('/proc/1/comm').read())\n"
+            "subprocess.run(['wine', 'start_protected_game.exe'])\n"
+            "PY",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
+        PolicyCase(
+            "deny-proc-scan-heredoc-trailing-quoted-launch",
+            "python3 - <<'PY'\n"
+            "print(open('/proc/1/comm').read())\n"
+            "PY\n"
+            "setsid '/opt/er/start_protected_game.exe'",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
+        PolicyCase(
             "deny-direct-start-protected-game",
             "/tmp/start_protected_game.exe",
             False,

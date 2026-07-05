@@ -86,6 +86,92 @@ test_deny_pgrep_then_proton_start_protected_launch if {
 	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
 }
 
+# --- (b') Read-only /proc comm scans naming the launcher are ALLOWED --------
+
+# The 2026-07-05 false positive: a python heredoc scanning /proc/<pid>/comm
+# and comparing each comm against a tuple of process names, with the EAC
+# launcher named only inside quoted string literals. pgrep is banned for
+# process checks (it self-matches its own command line), so this is the
+# sanctioned detection form and must not be denied.
+test_allow_proc_comm_scan_heredoc_naming_eac_launcher if {
+	cmd := concat("\n", [
+		"python3 - <<'PY'",
+		"import glob",
+		"names = ('steam', 'eldenring.exe', 'start_protected_game.exe')",
+		"found = {n: False for n in names}",
+		"for path in glob.glob('/proc/[0-9]*/comm'):",
+		"    try:",
+		"        comm = open(path).read().strip()",
+		"    except OSError:",
+		"        continue",
+		"    if comm in names:",
+		"        found[comm] = True",
+		"for n in names:",
+		"    print(n, 'up' if found[n] else 'down')",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# Same detection intent as a `python3 -c` one-liner with the whole program
+# quoted (the RTK-caveat-sanctioned inspection form).
+test_allow_proc_comm_scan_python_c_naming_eac_launcher if {
+	cmd := `python3 -c 'import glob; print(any(open(p).read().strip() == "start_protected_game.exe" for p in glob.glob("/proc/[0-9]*/comm")))'`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# --- (b') ... but the /proc mention must never become a launch bypass -------
+
+# A /proc-scanning heredoc that ALSO launches stays denied (exec mechanism
+# present in the payload keeps the exemption off).
+test_deny_proc_scan_heredoc_with_subprocess_launch if {
+	cmd := concat("\n", [
+		"python3 - <<'PY'",
+		"import subprocess",
+		"print(open('/proc/1/comm').read())",
+		"subprocess.run(['wine', 'start_protected_game.exe'])",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# Trailing shell after the heredoc terminator keeps the exemption OFF even
+# when the launcher path is quoted and the wrapper is not a listed launcher.
+test_deny_proc_scan_heredoc_with_trailing_quoted_launch if {
+	cmd := concat("\n", [
+		"python3 - <<'PY'",
+		"print(open('/proc/1/comm').read())",
+		"PY",
+		"setsid '/opt/er/start_protected_game.exe'",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# A chained command after a python -c /proc reader breaks the inline shape.
+test_deny_python_c_proc_read_chained_quoted_launch if {
+	cmd := `python3 -c 'print(open("/proc/1/comm").read())'; env '/opt/er/start_protected_game.exe'`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# An unquoted (execution-position) launcher name inside an otherwise
+# /proc-flavored heredoc keeps the exemption off.
+test_deny_proc_scan_heredoc_unquoted_launcher_name if {
+	cmd := concat("\n", [
+		"python3 - <<'PY'",
+		"# stale check for start_protected_game.exe via /proc/",
+		"import os",
+		"os.system('/opt/er/' + 'start_protected_game' + '.exe')",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
 # --- (c) Real launch/execution forms stay DENIED ----------------------------
 
 test_deny_proton_run_launcher if {
@@ -101,6 +187,16 @@ test_deny_wine_run_launcher if {
 test_deny_direct_path_launcher if {
 	denials := guard.deny with input as bash_event("/tmp/start_protected_game.exe")
 	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+test_deny_relative_dot_slash_launcher if {
+	denials := guard.deny with input as bash_event("./start_protected_game.exe")
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+test_deny_steam_rungameid_url if {
+	denials := guard.deny with input as bash_event("steam steam://rungameid/1245620")
+	"ER-EFFECTS-ELDEN-RING-LAUNCH-GUARD" in rule_ids(denials)
 }
 
 # --- (c) bash -c indirection stays DENIED ------------------------------------

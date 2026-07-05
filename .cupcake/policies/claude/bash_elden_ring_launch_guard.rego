@@ -246,3 +246,131 @@ start_protected_process_detection_only if {
 	count(split(marker_scan_text, "start_protected_game.exe")) == 2
 	regex.match(`(?i)(^|[[:space:];|&()])(/usr/bin/)?pgrep[[:space:]]+-x[[:space:]]+(--[[:space:]]+)?start_protected_game\.exe([[:space:];|&()]|$)`, marker_scan_text)
 }
+
+# Read-only /proc process-detection python payloads may NAME the protected
+# launcher inside quoted string literals. The sanctioned no-pgrep process
+# check (pgrep self-matches its own command line) scans /proc/<pid>/comm from
+# a python heredoc or `python3 -c` one-liner and compares each comm against a
+# tuple of names; that payload cannot execute anything, but the raw marker
+# fallback used to deny it because it contains both a generic executable
+# marker ("python") and the process name (false positive 2026-07-05).
+#
+# The exemption is deliberately narrow and fail-closed. It requires ALL of:
+#   * Bash tool, and the whole shell command is a single python invocation
+#     reading inline code: either `python3 - <<'TAG'` with a quoted heredoc
+#     tag, nothing else on the first line, and nothing after the terminator
+#     line; or `python3 -c` whose quote-scrubbed remainder is empty (the
+#     entire program is quoted, nothing chained);
+#   * the payload mentions `/proc/` (it is a process-state reader);
+#   * no `$(` and no backtick anywhere (no command substitution rides along);
+#   * every `start_protected_game.exe` occurrence sits inside a quoted string
+#     literal, never in shell/python execution position, and the name does
+#     not appear in non-command tool fields; and
+#   * the payload contains no process-execution mechanism (subprocess,
+#     os.system, exec*/spawn/eval, `sh -c`, wine/proton/steam-launch tokens).
+# Any failed condition falls through to the raw marker fallback, and the
+# direct scrubbed_command regex rules are unaffected either way.
+start_protected_process_detection_only if {
+	proc_scan_readonly_command
+}
+
+proc_scan_readonly_command if {
+	tool_name == "Bash"
+	proc_scan_python_shape
+	contains(lower(command), "/proc/")
+	not contains(command, "$(")
+	not contains(command, "`")
+	not contains(detection_unquoted_command, "start_protected_game.exe")
+	not proc_scan_exec_marker
+	not contains(lower(other_text), "start_protected_game.exe")
+}
+
+# The live cupcake engine collapses whitespace in the command before policy
+# evaluation (heredoc newlines arrive as single spaces), while `opa test`
+# sees the raw multiline text. Normalize explicitly so the shape checks
+# behave identically in both environments. NOTE: the engine evaluates
+# policies as `opa build -t wasm` modules and its host does NOT provide
+# `regex.replace`, `regex.find_all_string_submatch_n`, or `sprintf` (calls
+# silently evaluate to undefined), so everything below sticks to builtins the
+# rest of this policy already proves work in-engine: split, replace, concat,
+# lower, contains, count, regex.match, and comprehensions.
+proc_scan_norm_command := concat(" ", [word |
+	some word in split(replace(replace(replace(command, "\t", " "), "\r", " "), "\n", " "), " ")
+	word != ""
+])
+
+proc_scan_heredoc_parts := split(proc_scan_norm_command, "<<")
+
+# Heredoc form: the command starts with `python3 - <<'TAG'` (or "TAG") and the
+# tag word appears exactly once more, as the final token. The quoted-tag
+# requirement keeps the heredoc body fully literal (no $-expansion), and the
+# single-terminal-occurrence requirement rejects any trailing shell after the
+# terminator (e.g. `PY\nsetsid '/opt/er/start_protected_game.exe'`) as well
+# as a second stray terminator line.
+proc_scan_heredoc_tag := tag if {
+	quote_parts := split(proc_scan_heredoc_parts[1], "'")
+	count(quote_parts) >= 3
+	regex.match(`^-? ?$`, quote_parts[0])
+	tag := quote_parts[1]
+	regex.match(`^[A-Za-z_][A-Za-z0-9_]*$`, tag)
+}
+
+proc_scan_heredoc_tag := tag if {
+	quote_parts := split(proc_scan_heredoc_parts[1], `"`)
+	count(quote_parts) >= 3
+	regex.match(`^-? ?$`, quote_parts[0])
+	tag := quote_parts[1]
+	regex.match(`^[A-Za-z_][A-Za-z0-9_]*$`, tag)
+}
+
+proc_scan_python_shape if {
+	count(proc_scan_heredoc_parts) == 2
+	regex.match(`^(/usr/bin/)?python3? - ?$`, proc_scan_heredoc_parts[0])
+	terminator_parts := split(proc_scan_norm_command, concat("", [" ", proc_scan_heredoc_tag]))
+	count(terminator_parts) == 2
+	terminator_parts[1] == ""
+}
+
+# Inline form: `python3 -c '<program>'` with nothing outside the quotes; the
+# quote-scrubbed command must reduce to exactly the python invocation, so any
+# chained `; wrapper '/path/start_protected_game.exe'` breaks the shape.
+proc_scan_python_shape if {
+	not contains(command, "<<")
+	regex.match(`^[[:space:]]*(?:/usr/bin/)?python3?[[:space:]]+-c[[:space:]]`, command)
+	regex.match(`^[[:space:]]*(?:/usr/bin/)?python3?[[:space:]]+-c[[:space:]]*$`, scrubbed_command)
+}
+
+# Quote-scrub of the FULL raw command (no heredoc trimming), for asserting
+# that the launcher name only ever appears inside quoted string literals.
+detection_escapes_stripped := replace(replace(command, `\"`, ""), `\'`, "")
+
+detection_double_parts := split(detection_escapes_stripped, `"`)
+
+detection_outside_double := concat(" ", [detection_double_parts[idx] |
+	some idx
+	detection_double_parts[idx]
+	idx % 2 == 0
+])
+
+detection_single_parts := split(detection_outside_double, "'")
+
+detection_unquoted_command := lower(concat(" ", [detection_single_parts[idx] |
+	some idx
+	detection_single_parts[idx]
+	idx % 2 == 0
+]))
+
+# Process-execution mechanisms scanned against the RAW lowercased command, so
+# quoting cannot hide them. Without one of these, a pure-python /proc reader
+# has no way to launch the named executable; with one, the exemption stays
+# off and the raw marker fallback denies as before.
+proc_scan_exec_marker if {
+	some marker in {
+		"subprocess", "os.system", "system(", "popen", "spawn",
+		"exec(", "execv", "execl", "eval(", "__import__", "importlib",
+		"ctypes", "pexpect", "shell=", "startfile", "runpy",
+		"multiprocessing", "sh -c", "wine", "proton",
+		"steam -applaunch", "steam://", "xdg-open",
+	}
+	contains(lower(proc_scan_norm_command), marker)
+}
