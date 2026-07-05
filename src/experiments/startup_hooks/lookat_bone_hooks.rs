@@ -341,6 +341,12 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
         unsafe { draw_step() };
         PROFILE_LOOKAT_RENDER_DRIVES.fetch_add(1, Ordering::SeqCst);
     }
+    // The ProfileSelect/menu renderer is not the product source. Until our loading-screen-owned table is
+    // built, do not RT->SRV copy/readback/publish it; otherwise a pre-Continue 256x256 static renderer can
+    // become the visible source before the animated loading renderer exists.
+    if PROFILE_LOADSCREEN_TABLE_OWNED.load(Ordering::SeqCst) == 0 {
+        return;
+    }
     // FORCE THE RT->SRV RESOLVE: the engine's per-frame resolve almost never fires post-Continue (the
     // offscreen RENDER TARGET holds the rendered head but the sampleable SRV the forge binds stays black),
     // so D3D12-copy the target slot's RT into its SRV every render-thread frame. src = renderer+0xa8
@@ -1068,15 +1074,19 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                 // vertical-luma metric reads their legitimate texture, and the
                                 // absolute threshold starved whole windows, e.g. slot8 torn=149
                                 // with 76%-share masks). Baseline = EMA of ACCEPTED frames only (a
-                                // real tear never feeds it, so smooth characters keep the strict
-                                // absolute gate); a window's first frame is capped at 5x the
-                                // absolute threshold. Reset per window.
+                                // real tear never feeds it; a window's first frame is capped at 5x the
+                                // absolute threshold. The steady-state limit intentionally allows small
+                                // score steps above the smooth-character EMA (observed valid animated
+                                // frames at tear~20 after an EMA~9 baseline) while still rejecting the
+                                // known real-tear class around 80 when an honest textured baseline sits
+                                // at ~39 (2*39+1 == 79). Reset per window.
                                 let ema = PROFILE_TEAR_EMA.load(Ordering::SeqCst);
-                                let clean = if ema == 0 {
-                                    tear <= PROFILE_TEAR_SCORE_THRESHOLD * 5
+                                let tear_limit = if ema == 0 {
+                                    PROFILE_TEAR_SCORE_THRESHOLD * 5
                                 } else {
-                                    tear <= PROFILE_TEAR_SCORE_THRESHOLD.max(ema * 2)
+                                    (PROFILE_TEAR_SCORE_THRESHOLD * 2).max(ema * 2 + 1)
                                 };
+                                let clean = tear <= tear_limit;
                                 if clean {
                                     let next = if ema == 0 {
                                         tear.max(1)
@@ -1143,7 +1153,7 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                         PROFILE_PUBLISH_SKIPPED_TORN.fetch_add(1, Ordering::SeqCst);
                                     if n % 64 == 0 {
                                         append_autoload_debug(format_args!(
-                                            "portrait-tear: skipped torn keyed frame tear={tear} > {PROFILE_TEAR_SCORE_THRESHOLD} (max={}, #torn={})",
+                                            "portrait-tear: skipped torn keyed frame tear={tear} > limit={tear_limit} (ema={ema}, max={}, #torn={})",
                                             PROFILE_TEAR_SCORE_MAX.load(Ordering::SeqCst),
                                             n + 1
                                         ));

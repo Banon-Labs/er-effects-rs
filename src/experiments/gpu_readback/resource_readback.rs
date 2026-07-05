@@ -64,10 +64,34 @@ static OVERLAY_PORTRAIT_W: AtomicUsize = AtomicUsize::new(0);
 static OVERLAY_PORTRAIT_H: AtomicUsize = AtomicUsize::new(0);
 /// Successful backbuffer composites submitted (RAM semaphore that the portrait is actually being drawn).
 pub(crate) static OVERLAY_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
+/// Timing window for successful overlay composites. These prove whether the portrait overlay itself is
+/// presenting below refresh rate (draw FPS), independent of whether the source portrait changed.
+pub(crate) static OVERLAY_DRAW_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OVERLAY_DRAW_LAST_MS: AtomicUsize = AtomicUsize::new(0);
 /// Count of LIVE RE-UPLOADS: each time the overlay source texture was rebuilt from a fresh
 /// (version-bumped) `LOADING_BG_PORTRAIT_RGBA` -> proves the DISPLAYED head updated per-frame (followed
 /// the cursor), not froze on the first captured frame. `oracle_overlay_reuploads`.
 pub(crate) static OVERLAY_REUPLOADS: AtomicUsize = AtomicUsize::new(0);
+/// Timing window for distinct source-frame updates that reached the overlay. These prove source playback
+/// FPS, and distinguish a slow source from a slow compositor.
+pub(crate) static OVERLAY_REUPLOAD_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OVERLAY_REUPLOAD_LAST_MS: AtomicUsize = AtomicUsize::new(0);
+/// Consecutive successful overlay presents that reused the same source version. High max == visible held
+/// frames/choppiness even if the overlay presents every frame.
+pub(crate) static OVERLAY_STALE_PRESENT_RUN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OVERLAY_STALE_PRESENT_MAX: AtomicUsize = AtomicUsize::new(0);
+/// Per-stage timing for the CPU full-backbuffer composite. These answer whether the bottleneck is GPU
+/// readback synchronization, CPU per-pixel blending, or GPU upload synchronization.
+pub(crate) static OVERLAY_STAGE_READBACK_WAIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OVERLAY_STAGE_READBACK_WAIT_MS_SUM: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OVERLAY_STAGE_READBACK_WAIT_MS_MAX: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OVERLAY_STAGE_BLEND_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OVERLAY_STAGE_BLEND_MS_SUM: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OVERLAY_STAGE_BLEND_MS_MAX: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OVERLAY_STAGE_UPLOAD_WAIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OVERLAY_STAGE_UPLOAD_WAIT_MS_SUM: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OVERLAY_STAGE_UPLOAD_WAIT_MS_MAX: AtomicUsize = AtomicUsize::new(0);
+static OVERLAY_TIMING_EPOCH: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 /// Latches once the `now_loading` streaming screen (the tips+bar loading screen the portrait belongs on)
 /// has been seen this window. The correct STOP is this-seen-then-gone: the bar appeared, filled, and the
 /// game transitioned to gameplay. Reset per window on re-arm.
@@ -91,6 +115,10 @@ static OVERLAY_STOP_TABLE_BUILDS: AtomicUsize = AtomicUsize::new(0);
 /// Presents counted while IN_WORLD but now_loading NOT yet seen -- the pre-loading-screen bridge gap. Reset
 /// to 0 the instant now_loading latches (then the seen-then-gone stop takes over) and on re-arm.
 static OVERLAY_BRIDGE_PRESENTS: AtomicUsize = AtomicUsize::new(0);
+/// `load_done && !fake_vis` can assert before the visible loading surface finishes its fade/hand-off. Keep
+/// compositing for a bounded bridge after that predicate so the portrait does not pop off while the user
+/// still sees the loading screen.
+const OVERLAY_LOAD_DONE_VISIBLE_BRIDGE_PRESENTS: usize = 360;
 /// Anti-runaway backstop: max bridge presents before we stop even though now_loading was never seen. The
 /// real gap is ~1.7s; this is set FAR above any real present rate over that gap so it NEVER pre-empts a
 /// genuine load (which always shows now_loading) -- it only bounds a deeply-wrong state. Biased huge so the
@@ -630,12 +658,17 @@ pub(crate) unsafe fn readback_offscreen_color_depth_coherent(
         // unavailable (mid-load renderers whose scene chain is null/redirected).
         let bundle_color = offscreen_color_view(gpu_child)
             .and_then(|rtv| unsafe { find_d3d12_resource_ex(rtv, 0, false, 0) });
-        let (color_res, color_cand, color_from_bundle) = match bundle_color {
+        let (color_res, color_cand, color_identity_proven) = match bundle_color {
             Some((r, c)) => (r, c, true),
             None => {
                 let prefer_c = PROFILE_RT_PIN.load(Ordering::SeqCst);
                 let (r, c) = find_d3d12_resource_ex(gpu_child, 0, false, prefer_c)?;
-                (r, c, false)
+                // The strict green/wrong-buffer gate must reject arbitrary scan fallback frames, but a
+                // scan fallback that returns the previously bundle-proven pin is still identity-proven:
+                // the candidate pointer was latched only after a non-checker bundle frame published.
+                // This covers mid-load windows where the bundle chain temporarily misses even though the
+                // same RT remains reachable through the wrapper nest.
+                (r, c, prefer_c != 0 && c == prefer_c)
             }
         };
 
@@ -965,8 +998,8 @@ pub(crate) unsafe fn readback_offscreen_color_depth_coherent(
 
         // Success is certain here -- record this tick's color provenance for the strict publish
         // gate (a later-failing attempt never reaches this store; the fallback path stores 0).
-        PROFILE_COLOR_SRC_BUNDLE_LAST.store(color_from_bundle as usize, Ordering::SeqCst);
-        if color_from_bundle {
+        PROFILE_COLOR_SRC_BUNDLE_LAST.store(color_identity_proven as usize, Ordering::SeqCst);
+        if color_identity_proven {
             PROFILE_COLOR_FROM_BUNDLE.fetch_add(1, Ordering::SeqCst);
         } else {
             PROFILE_COLOR_FROM_SCAN.fetch_add(1, Ordering::SeqCst);

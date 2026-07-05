@@ -325,16 +325,14 @@ pub(crate) fn append_crash_log(args: std::fmt::Arguments<'_>) {
 
 /// Loading-screen portrait capture check, run at CAPTURE time (every time a portrait RGBA is about to
 /// be stored), so a transient wrong-source frame -- our neutral texture flashing in right after Continue
-/// (Bug B), or a too-small early head before the upsize (Bug A) -- cannot slip between the coarse
-/// telemetry writes. Records the capture dims + neutral-color fraction, latches the two once-seen bug
-/// versions (semaphores), and RETURNS whether this capture is fit to PUBLISH.
+/// (Bug B), or a small head from the current deliberate low-resolution experiment -- cannot slip between
+/// the coarse telemetry writes. Records the capture dims + neutral-color fraction, latches the two
+/// once-seen bug versions (semaphores), and RETURNS whether this capture is fit to PUBLISH.
 ///
-/// Returns `false` (do NOT publish; hold the previous frame / the loading background) when the capture
-/// is our neutral texture OR smaller than [`LS_PORTRAIT_SMALL_MAX_SIDE`]. The real head reliably builds
-/// to full size within the sub-second window (runtime-observed: it reaches 1024x1024, scan area
-/// 1048576), so gating on readiness shows ONLY the correct full-size head and never the transient
-/// wrong-source frames. If the head never reaches full size (upsize failed), the loading screen simply
-/// keeps its background -- a clean fallback, not a wrong-content bug. Cheap: a strided sample.
+/// Returns `false` (do NOT publish; hold the previous frame / the loading background) only when the
+/// capture is our neutral texture. Small captures are still published: the current 56x56 native-source
+/// experiment intentionally relies on scaling a tiny real head up to the full backbuffer. Cheap: a
+/// strided sample.
 pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
     let texels = (w as usize) * (h as usize);
     if texels == 0 || px.len() < texels * 4 {
@@ -388,11 +386,10 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
         );
     }
     // Publishable unless it is our NEUTRAL texture (Bug B) -- that must never reach the loading screen.
-    // We deliberately do NOT reject the too-small case (Bug A): the head sometimes stalls at 256 (the
-    // upsize to 1024 has not fired yet), and a small portrait is strictly better than a BLANK one
-    // (rejecting all 256 frames published nothing -- runtime-observed rgba_version=0). Bug A is fixed at
-    // the source instead (force the offscreen upsize); `is_small` still latches its semaphore for
-    // monitoring. Rejected frames are counted so a monitor can see the gate working.
+    // We deliberately do NOT reject the too-small case: the current experiment intentionally renders a
+    // tiny 56x56 native portrait and scales it up to test whether quality is related to choppiness.
+    // `is_small` still latches its semaphore for monitoring. Rejected frames are counted so a monitor can
+    // see the neutral-texture gate working.
     let _ = is_small;
     let publishable = !is_neutral;
     if !publishable {

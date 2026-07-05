@@ -1,15 +1,16 @@
 // === Loading-screen portrait bug SEMAPHORES (2026-07-04) ==========================================
 // Two user-reported bugs on the loading transition, resolved to RAM/pixel oracles derived from the
 // captured `LOADING_BG_PORTRAIT_RGBA` (the content that feeds the loading-screen portrait display):
-//   Bug A -- the portrait renders TOO SMALL (correct content, ~256px square). Root suspect: the
-//            `find_d3d12_resource_ex` "largest TEXTURE2D" scan picked a small RT instead of the
-//            upsized head RT (deterministic-pointer fix pending).
+//   Bug A -- historically, the portrait rendered TOO SMALL unintentionally (correct content, ~256px
+//            square). Root suspect: the `find_d3d12_resource_ex` "largest TEXTURE2D" scan picked a
+//            small RT instead of the intended target RT (deterministic-pointer fix pending). Current
+//            low-res experiments may intentionally trip the same size semaphore.
 //   Bug B -- our NEUTRAL stats-panel texture (RGB 30,28,26) leaked onto the loading screen. Root
 //            suspect: the same scan grabbed one of our 256x256 neutral CreateTpfResCap textures.
 // These oracles let a monitor detect each condition live without reading the screenshot: they carry the
 // captured dims, the neutral-color fraction, and once-seen latches stamped with the capture version.
-/// Threshold (px): a captured portrait whose larger side is <= this is "too small" (the upsized head RT
-/// target is 1024; native menu thumbnails are 128; the buggy square measured ~256).
+/// Threshold (px): a captured portrait whose larger side is <= this is "too small" for monitoring.
+/// Current 56x56 low-res experiments intentionally trip this latch but still publish if non-neutral.
 pub(crate) const LS_PORTRAIT_SMALL_MAX_SIDE: u32 = 512;
 /// Latched capture width/height of the most recent loading-screen portrait capture (px, 0 if none).
 pub(crate) static LS_PORTRAIT_LAST_W: AtomicUsize = AtomicUsize::new(0);
@@ -131,6 +132,10 @@ pub(crate) const PROFILE_TABLE_BUILDER_RVA: usize = 0x9af3a0;
 pub(crate) static PROFILE_LOADSCREEN_REBUILT: AtomicUsize = AtomicUsize::new(0);
 /// Count of post-Continue profile-table (re)builds for the loading-screen portrait (telemetry/sweep).
 pub(crate) static PROFILE_LOADSCREEN_TABLE_BUILDS: AtomicUsize = AtomicUsize::new(0);
+/// 1 while the currently populated profile-renderer table is the loading-screen-owned table we built,
+/// not the ProfileSelect/menu table. Product portrait consumers must key on this ownership bit so the
+/// early/menu static renderer is ignored instead of becoming a visible or source dependency.
+pub(crate) static PROFILE_LOADSCREEN_TABLE_OWNED: AtomicUsize = AtomicUsize::new(0);
 // PER-SLOT PROFILE BUILD KICK (replaces the engine's GLOBAL refresh in OUR post-Continue feed). The
 // global refresh FUN_1409aa7d0 iterates all 10 slots and kicks every real+marked one -- on a multi-
 // character save that built ALL the save's characters mid-load, and the readback scan flipped onto a
@@ -291,15 +296,15 @@ pub(crate) const PROFILE_OFFSCREEN_SIZE_TABLE_RVA: usize = 0x3b39848;
 pub(crate) const PROFILE_OFFSCREEN_SIZE_TABLE_STRIDE: usize = 0x20;
 /// The value `FUN_1400a7bb0` writes (base 128x128 = `(128<<32)|128`); self-validate before patching.
 pub(crate) const PROFILE_OFFSCREEN_SIZE_INIT: usize = 0x8000000080;
-/// Target base 1024x1024 = `(1024<<32)|1024`. We ALSO zero the per-slot supersample-enable byte at
+/// Target base 56x56 = `(56<<32)|56`. We ALSO zero the per-slot supersample-enable byte at
 /// `row+0x8` so the engine's env-dependent x2 (`FUN_140bbeee0`: `base*2` iff global flag &&
-/// `size_struct[+0x8]`) is disabled -- giving a PREDICTABLE 1024x1024 RT instead of a settings-
-/// dependent 1024-or-2048. (We capture the RT directly, so the x2 is just a costlier render, not AA.)
-pub(crate) const PROFILE_OFFSCREEN_SIZE_TARGET: usize = 0x0000_0400_0000_0400;
+/// `size_struct[+0x8]`) is disabled -- giving a PREDICTABLE tiny native RT for the FPS/choppiness
+/// experiment instead of spending time on a high-quality source that is scaled up anyway.
+pub(crate) const PROFILE_OFFSCREEN_SIZE_TARGET: usize = 0x0000_0038_0000_0038;
 /// Byte offset within a size-table row of the per-slot supersample-enable flag (read as
 /// `size_struct[+0x8]` by `FUN_140bbeee0`); zero it to force x1.
 pub(crate) const PROFILE_OFFSCREEN_SIZE_SUPERSAMPLE_FLAG_OFFSET: usize = 0x8;
-/// Bitmask of save slots whose profile offscreen base-size table row has been patched to 1024x1024.
+/// Bitmask of save slots whose profile offscreen base-size table row has been patched to the target size.
 pub(crate) static PROFILE_SIZE_PATCHED: AtomicUsize = AtomicUsize::new(0);
 /// LIGHTING. Renderer field holding the IBL env-map-region object (`param_1[0xec]`, allocated by
 /// FUN_140b399e0, filled by the IBL build FUN_140b39a30). The IBL build stores the registered
