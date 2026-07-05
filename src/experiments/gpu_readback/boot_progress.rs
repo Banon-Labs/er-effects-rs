@@ -25,6 +25,11 @@
 // wait) -- no backbuffer readback: the pre-Continue frames are the content-free black this view
 // exists to replace, and the strip rect is entirely ours.
 
+use windows::Win32::Graphics::Direct3D12::{
+    D3D12_DESCRIPTOR_HEAP_DESC, D3D12_DESCRIPTOR_HEAP_FLAG_NONE, D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+    D3D12_RESOURCE_STATE_RENDER_TARGET, ID3D12DescriptorHeap,
+};
+
 /// Draw-state machine: 0 = uninit, 1 = ready, 2 = failed (give up; never retry).
 static BOOT_VIEW_DRAW_STATE: AtomicUsize = AtomicUsize::new(0);
 /// One-shot stop latch: the loading window / world took over; the boot view never draws again.
@@ -48,6 +53,19 @@ static BOOT_VIEW_QUEUE: AtomicUsize = AtomicUsize::new(0);
 /// Persistent UPLOAD buffer holding the rasterized strip (recreated when the footprint changes).
 static BOOT_VIEW_UPLOAD: AtomicUsize = AtomicUsize::new(0);
 static BOOT_VIEW_UPLOAD_SIZE: AtomicU64 = AtomicU64::new(0);
+/// 1-descriptor RTV heap for the self-present full-clear (the engine has never rendered the
+/// backbuffer before its first own present, so un-cleared regions would show garbage).
+static BOOT_VIEW_RTV_HEAP: AtomicUsize = AtomicUsize::new(0);
+/// Draw mutual-exclusion latch: the self-present pump thread and the game's render thread (Present
+/// detour) share the command allocator/list; whoever loses the swap skips its frame.
+static BOOT_VIEW_DRAW_BUSY: AtomicUsize = AtomicUsize::new(0);
+/// Frames WE presented on the game's swapchain before its render loop produced its first frame.
+pub(crate) static BOOT_VIEW_SELF_PRESENTS: AtomicUsize = AtomicUsize::new(0);
+/// Pump-relative ms at which the game swapchain was found + hooked (0 = never; pump path only).
+pub(crate) static BOOT_VIEW_SWAPCHAIN_FOUND_MS: AtomicUsize = AtomicUsize::new(0);
+/// Why the self-present pump stopped: 0 = still running/never ran, 1 = game started presenting
+/// (the goal), 2 = timeout budget, 3 = Present returned a failure HRESULT.
+pub(crate) static BOOT_VIEW_PUMP_STOP_REASON: AtomicUsize = AtomicUsize::new(0);
 /// (w, h) the current upload buffer was rasterized for (strip geometry follows the backbuffer).
 static BOOT_VIEW_STRIP_W: AtomicUsize = AtomicUsize::new(0);
 static BOOT_VIEW_STRIP_H: AtomicUsize = AtomicUsize::new(0);
@@ -325,6 +343,18 @@ unsafe fn boot_view_init(backbuffer: &ID3D12Resource) -> bool {
     else {
         return false;
     };
+    let rtv_heap_desc = D3D12_DESCRIPTOR_HEAP_DESC {
+        Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+        NumDescriptors: 1,
+        Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
+        NodeMask: 0,
+    };
+    let Ok(rtv_heap) =
+        (unsafe { device.CreateDescriptorHeap::<ID3D12DescriptorHeap>(&rtv_heap_desc) })
+    else {
+        return false;
+    };
+    BOOT_VIEW_RTV_HEAP.store(rtv_heap.into_raw() as usize, Ordering::SeqCst);
     BOOT_VIEW_ALLOCATOR.store(allocator.into_raw() as usize, Ordering::SeqCst);
     BOOT_VIEW_LIST.store(list.into_raw() as usize, Ordering::SeqCst);
     BOOT_VIEW_FENCE.store(fence.into_raw() as usize, Ordering::SeqCst);
@@ -340,12 +370,30 @@ pub(crate) unsafe fn composite_boot_progress_on_swapchain(
     swapchain_raw: usize,
 ) -> bool {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        composite_boot_progress_inner(swapchain_raw)
+        composite_boot_progress_inner(swapchain_raw, false)
     }))
     .unwrap_or(false)
 }
 
-unsafe fn composite_boot_progress_inner(swapchain_raw: usize) -> bool {
+/// Self-present-pump frame (pre-first-game-present): same draw, but the engine has NEVER rendered
+/// this backbuffer, so its contents are undefined -- clear the whole RT to black before the strip
+/// copy so no init-garbage flashes on screen.
+pub(crate) unsafe fn composite_boot_progress_self_frame(swapchain_raw: usize) -> bool {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        composite_boot_progress_inner(swapchain_raw, true)
+    }))
+    .unwrap_or(false)
+}
+
+/// RAII release of [`BOOT_VIEW_DRAW_BUSY`] on every exit path of the draw section.
+struct BootViewBusyGuard;
+impl Drop for BootViewBusyGuard {
+    fn drop(&mut self) {
+        BOOT_VIEW_DRAW_BUSY.store(0, Ordering::SeqCst);
+    }
+}
+
+unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool) -> bool {
     if BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0 {
         return false;
     }
@@ -370,6 +418,12 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize) -> bool {
     if BOOT_VIEW_DRAW_STATE.load(Ordering::SeqCst) == 2 {
         return false;
     }
+    // Mutual exclusion between the self-present pump thread and the game render thread (Present
+    // detour): both use the same allocator/list/upload; the loser skips its frame.
+    if BOOT_VIEW_DRAW_BUSY.swap(1, Ordering::SeqCst) != 0 {
+        return false;
+    }
+    let _busy = BootViewBusyGuard;
 
     let sc_raw = swapchain_raw as *mut c_void;
     let Some(sc) = (unsafe { IDXGISwapChain3::from_raw_borrowed(&sc_raw) }) else {
@@ -570,17 +624,52 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize) -> bool {
     }) else {
         return false;
     };
+    // Resolve the RTV heap + descriptor BEFORE opening the list: everything recorded between
+    // Reset and Close below is infallible, so the list can never be left dangling open (an open
+    // list would fail every subsequent Reset and silently kill the view).
+    let rtv_heap_raw = BOOT_VIEW_RTV_HEAP.load(Ordering::SeqCst) as *mut c_void;
+    let rtv_handle = if clear_first {
+        let Some(heap) = (unsafe { ID3D12DescriptorHeap::from_raw_borrowed(&rtv_heap_raw) })
+        else {
+            return false;
+        };
+        let handle = unsafe { heap.GetCPUDescriptorHandleForHeapStart() };
+        unsafe { device.CreateRenderTargetView(&backbuffer, None, handle) };
+        Some(handle)
+    } else {
+        None
+    };
     if unsafe { allocator.Reset() }.is_err() || unsafe { list.Reset(allocator, None) }.is_err() {
         return false;
     }
-    unsafe {
-        record_transition(
-            list,
-            &backbuffer,
-            D3D12_RESOURCE_STATE_PRESENT,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-        )
-    };
+    if let Some(handle) = rtv_handle {
+        unsafe {
+            record_transition(
+                list,
+                &backbuffer,
+                D3D12_RESOURCE_STATE_PRESENT,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+            )
+        };
+        unsafe { list.ClearRenderTargetView(handle, &[0.0, 0.0, 0.0, 1.0], None) };
+        unsafe {
+            record_transition(
+                list,
+                &backbuffer,
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+            )
+        };
+    } else {
+        unsafe {
+            record_transition(
+                list,
+                &backbuffer,
+                D3D12_RESOURCE_STATE_PRESENT,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+            )
+        };
+    }
     let mut up_src = D3D12_TEXTURE_COPY_LOCATION {
         pResource: ManuallyDrop::new(Some(upload.clone())),
         Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,

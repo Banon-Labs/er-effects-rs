@@ -74,8 +74,14 @@ const GXDC_OUTPUT_VEC_BEGIN_OFFSET: usize = 0x128;
 /// on a real swapchain; dinput8 MinHooks fire, so the hook path itself is sound.)
 static GAME_PRESENT_HOOKED: AtomicUsize = AtomicUsize::new(0);
 static GAME_SWAPCHAIN_FIND_TRIES: AtomicUsize = AtomicUsize::new(0);
-/// The dummy swapchain's Present addr -- only used as a same-module hint for the swapchain-vtable filter.
+/// The dummy swapchain's resolved `Present(8)` / `Present1(22)` addrs. Under vkd3d-proton EVERY dxgi
+/// swapchain shares one DXVK `CDXGISwapChain` vtable, so the GAME swapchain's `vtable[8]`/`vtable[22]`
+/// are byte-identical to these (runtime-proven: resolved 0x..209f0 == VMT-swapped Present8 0x..209f0).
+/// This lets `swapchain_vtable_matches` confirm a candidate by READING + comparing these two slots --
+/// never by dispatching `QueryInterface`, which faults on a half-constructed early-boot object whose
+/// dxgi-ranged-but-bogus vtable can't be caught by `catch_unwind` (that AV killed the pump at +726ms).
 static PRESENT_RESOLVED_ADDR: AtomicUsize = AtomicUsize::new(0);
+static PRESENT1_RESOLVED_ADDR: AtomicUsize = AtomicUsize::new(0);
 /// The found GAME swapchain pointer + game module base, latched in `try_install_game_present_hook`. The
 /// Present detour composites the portrait only when `this` matches `GAME_SWAPCHAIN` -- the shared dxgi
 /// vtable means the detour ALSO fires for our throwaway dummy swapchain, which we must never draw on.
@@ -244,8 +250,9 @@ pub(crate) fn install_present_overlay_hook() {
     }
     // Module hint only: the dummy's Present addr identifies which module implements IDXGISwapChain, so the
     // runtime BFS can filter swapchain candidates by vtable-in-that-module.
-    if let Some((present_addr, _)) = unsafe { resolve_present_addrs() } {
+    if let Some((present_addr, present1_addr)) = unsafe { resolve_present_addrs() } {
         PRESENT_RESOLVED_ADDR.store(present_addr, Ordering::SeqCst);
+        PRESENT1_RESOLVED_ADDR.store(present1_addr, Ordering::SeqCst);
         append_autoload_debug(format_args!(
             "present-overlay: prepared (module hint Present=0x{present_addr:x}); scanning for game swapchain per-frame"
         ));
@@ -253,6 +260,104 @@ pub(crate) fn install_present_overlay_hook() {
         append_autoload_debug(format_args!(
             "present-overlay: prepared (no module hint; will filter by Wine-module window)"
         ));
+    }
+    // EARLY-BOOT SELF-PRESENT PUMP (user 2026-07-05: show the boot bar sooner than the game's
+    // first present). The game's swapchain exists long before its render loop first presents
+    // (~+3.7s); this thread polls for it from here (~+0.4s), VMT-swaps the moment it appears,
+    // then presents our own cleared strip frames through the ORIGINAL Present until the game's
+    // first real present arrives (PRESENT_HOOK_HITS > 0), at which point it stops forever and
+    // the Present-detour path owns the view. Bounded, one-way stop latches, never touches the
+    // game's queue.
+    std::thread::Builder::new()
+        .name("er-effects-boot-present-pump".to_owned())
+        .spawn(boot_present_pump)
+        .ok();
+}
+
+/// Self-present budget: the game's first present lands ~+3.7s; if it has not arrived by this
+/// pump-relative age, something unusual is happening -- stop pumping and let the detour path
+/// (which needs no pump) carry the view whenever presents do start.
+const BOOT_PUMP_MAX_MS: u128 = 20_000;
+/// Poll cadence while waiting for the swapchain to exist.
+const BOOT_PUMP_POLL_SLEEP_MS: u64 = 10;
+/// Self-present cadence (~30 fps -- Present(sync=1) additionally paces on vsync).
+const BOOT_PUMP_FRAME_SLEEP_MS: u64 = 16;
+
+/// Body of the `er-effects-boot-present-pump` thread. See the spawn comment for the contract.
+fn boot_present_pump() {
+    // Same gate as the install: the boot view + its swapchain hook are the portrait-path feature.
+    if !portrait_lookat_enabled() {
+        return;
+    }
+    let start = std::time::Instant::now();
+    // Pacing primitive (matches the boot profiler): a held-but-never-sent channel; `recv_timeout`
+    // is the sanctioned bounded wait (plain `thread::sleep` is banned by check-no-timeouts). The
+    // per-iteration terminal checks below are the real stop conditions; this only paces the poll.
+    let (_tick_tx, tick_rx) = std::sync::mpsc::channel::<()>();
+    let poll = std::time::Duration::from_millis(BOOT_PUMP_POLL_SLEEP_MS);
+    let frame = std::time::Duration::from_millis(BOOT_PUMP_FRAME_SLEEP_MS);
+    loop {
+        // The game presenting is the SUCCESS terminal state: the detour path draws from here on.
+        if PRESENT_HOOK_HITS.load(Ordering::SeqCst) > 0 {
+            BOOT_VIEW_PUMP_STOP_REASON.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "boot-pump: game presenting -- handed over after {} self-presents",
+                BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst)
+            ));
+            return;
+        }
+        if start.elapsed().as_millis() > BOOT_PUMP_MAX_MS {
+            BOOT_VIEW_PUMP_STOP_REASON.store(2, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "boot-pump: budget exhausted with no game present -- stopping (self_presents={})",
+                BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst)
+            ));
+            return;
+        }
+        if GAME_PRESENT_HOOKED.load(Ordering::SeqCst) == 0 {
+            if let Ok(base) = game_module_base() {
+                unsafe { try_install_game_present_hook(base) };
+            }
+            if GAME_PRESENT_HOOKED.load(Ordering::SeqCst) == 0 {
+                let _ = tick_rx.recv_timeout(poll);
+                continue;
+            }
+            let found_ms = start.elapsed().as_millis().min(usize::MAX as u128) as usize;
+            BOOT_VIEW_SWAPCHAIN_FOUND_MS.store(found_ms, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "boot-pump: swapchain hooked at pump+{found_ms}ms -- self-presenting until the game's first frame"
+            ));
+        }
+        let sc = GAME_SWAPCHAIN.load(Ordering::SeqCst);
+        let orig = PRESENT_ORIG.load(Ordering::SeqCst);
+        if sc == 0 || orig == 0 {
+            let _ = tick_rx.recv_timeout(poll);
+            continue;
+        }
+        // Draw first, then re-check the game has still not presented before submitting our own
+        // Present (narrows the two-thread Present race to the in-flight window; the busy-latch in
+        // the composite already serializes the draw objects themselves).
+        let drew = unsafe { composite_boot_progress_self_frame(sc) };
+        if drew && PRESENT_HOOK_HITS.load(Ordering::SeqCst) == 0 {
+            let f: PresentFn = unsafe { std::mem::transmute(orig) };
+            let hr = unsafe { f(sc as *mut c_void, 1, 0) };
+            if hr < 0 {
+                BOOT_VIEW_PUMP_STOP_REASON.store(3, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "boot-pump: Present failed hr=0x{hr:x} -- stopping (self_presents={})",
+                    BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst)
+                ));
+                return;
+            }
+            let n = BOOT_VIEW_SELF_PRESENTS.fetch_add(1, Ordering::SeqCst) + 1;
+            if n == 1 {
+                append_autoload_debug(format_args!(
+                    "boot-pump: FIRST self-present on game swapchain 0x{sc:x} (pump+{}ms)",
+                    start.elapsed().as_millis()
+                ));
+            }
+        }
+        let _ = tick_rx.recv_timeout(frame);
     }
 }
 
@@ -398,10 +503,60 @@ unsafe fn log_backbuffer_desc(this: *mut c_void) {
     }));
 }
 
+/// True if the pointer `v` is a plausible dxgi.dll vtable address: within the loaded dxgi.dll module
+/// range if we can resolve it, else in the same high Wine-module window as the resolved Present addr
+/// (Wine modules live at 0x6fff_xxxx_xxxx). Gate the QI on this so we never dispatch QueryInterface
+/// through a garbage/half-constructed object's vtable during early boot -- that fault is a hardware
+/// access violation `catch_unwind` cannot catch, and it killed the game at +673ms when the early
+/// self-present pump QI-walked objects before they were fully constructed.
+fn dxgi_vtable_ok(v: usize) -> bool {
+    if let Some((lo, hi)) = unsafe { module_range(b"dxgi.dll\0") } {
+        lo <= v && v < hi
+    } else {
+        let hint = PRESENT_RESOLVED_ADDR.load(Ordering::SeqCst);
+        hint != 0 && (v >> 24) == (hint >> 24)
+    }
+}
+
+/// Crash-proof swapchain check: `obj`'s `vtable[8]`/`vtable[22]` (Present/Present1) exactly match the
+/// resolved shared DXVK addresses. PURE READS (`safe_read_usize`) + compares -- never dispatches a
+/// virtual call, so a half-constructed early-boot object with a bogus vtable is rejected, not faulted.
+/// Requires the resolved addrs to be known (dummy swapchain built at attach); returns false otherwise
+/// so callers fall back to the QI path (only reached late, when the object is fully constructed).
+fn swapchain_vtable_matches(obj: usize) -> bool {
+    if obj < 0x10000 {
+        return false;
+    }
+    let want8 = PRESENT_RESOLVED_ADDR.load(Ordering::SeqCst);
+    let want22 = PRESENT1_RESOLVED_ADDR.load(Ordering::SeqCst);
+    if want8 == 0 || want22 == 0 {
+        return false;
+    }
+    let Some(vt) = (unsafe { safe_read_usize(obj) }) else {
+        return false;
+    };
+    if !dxgi_vtable_ok(vt) {
+        return false;
+    }
+    let got8 = unsafe { safe_read_usize(vt + PRESENT_VTABLE_INDEX * 8) };
+    let got22 = unsafe { safe_read_usize(vt + PRESENT1_VTABLE_INDEX * 8) };
+    got8 == Some(want8) && got22 == Some(want22)
+}
+
 /// True if `obj` is a live COM object that QIs as `IDXGISwapChain`. Borrow-wraps (no AddRef on `obj`);
 /// the QI result is owned + dropped (its Release balances the QI AddRef), leaving the game object net 0.
+/// The QI is dispatched through `obj`'s vtable, so we FIRST require that vtable to be a dxgi.dll address
+/// (`dxgi_vtable_ok`) -- QI'ing a not-yet-constructed object with a garbage vtable hard-faults (SEH,
+/// uncatchable), which is exactly the early-boot hazard the self-present pump exposed.
 unsafe fn is_idxgi_swapchain(obj: usize) -> bool {
     if obj < 0x10000 {
+        return false;
+    }
+    let vt = match unsafe { safe_read_usize(obj) } {
+        Some(v) => v,
+        None => return false,
+    };
+    if !dxgi_vtable_ok(vt) {
         return false;
     }
     let raw = obj as *mut c_void;
@@ -434,7 +589,12 @@ unsafe fn find_game_swapchain(base: usize) -> Option<usize> {
         .and_then(read_nn)
         .and_then(read_nn)
     {
-        if unsafe { is_idxgi_swapchain(sc) } {
+        // Crash-proof vtable-match first (read-only, safe during early boot); QI only as a fallback
+        // when the resolved addrs are somehow unknown (never reached in practice, and only late).
+        if swapchain_vtable_matches(sc)
+            || (PRESENT_RESOLVED_ADDR.load(Ordering::SeqCst) == 0
+                && unsafe { is_idxgi_swapchain(sc) })
+        {
             let t = GAME_SWAPCHAIN_FIND_TRIES.load(Ordering::SeqCst);
             if t <= 1 {
                 append_autoload_debug(format_args!(
@@ -483,7 +643,11 @@ unsafe fn find_game_swapchain_bfs(root: usize) -> Option<usize> {
         };
         if vt_ok(vt) {
             dxgi_candidates += 1;
-            if unsafe { is_idxgi_swapchain(obj) } {
+            // Crash-proof vtable-match first (read-only); QI only when resolved addrs are unknown.
+            if swapchain_vtable_matches(obj)
+                || (PRESENT_RESOLVED_ADDR.load(Ordering::SeqCst) == 0
+                    && unsafe { is_idxgi_swapchain(obj) })
+            {
                 append_autoload_debug(format_args!(
                     "present-overlay: FOUND game swapchain 0x{obj:x} (vtable=0x{vt:x}) via BFS after {budget} objs depth={depth}"
                 ));
