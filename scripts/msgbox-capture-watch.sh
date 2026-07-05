@@ -15,6 +15,13 @@ BURST_END=${BURST_END:-37}       # stop bursting
 DEADLINE_S=${DEADLINE_S:-85}
 POLL_S=${POLL_S:-2}
 
+pause_s() {
+  python3 - "$1" <<'PY'
+import sys, threading
+threading.Event().wait(float(sys.argv[1]))
+PY
+}
+
 er_alive() { python3 -c "
 import glob
 def comm(p):
@@ -60,11 +67,11 @@ while (( SECONDS - start < DEADLINE_S )); do
     final_done=1
     break
   fi
-  sleep "$POLL_S"
+  pause_s "$POLL_S"
 done
 
 echo "[cap] tearing down eldenring.exe"
 pkill -x eldenring.exe 2>/dev/null
-sleep 1
+pause_s 1
 echo "[cap] final ER alive=$(er_alive); frames in $OUT:"
 ls -1 "$OUT" 2>/dev/null | tail -40

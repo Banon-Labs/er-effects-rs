@@ -118,6 +118,7 @@ fn load_memory_gfx_from_env(var: &str, slot: &OnceLock<Vec<u8>>, label: &str) {
     }
 }
 
+// ENV-GATE RATIONALE: ER_EFFECTS_TITLE_05_000_MEMORY_GFX is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 fn load_title_scaleform_memory_gfx() {
     load_memory_gfx_from_env(
         "ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX",

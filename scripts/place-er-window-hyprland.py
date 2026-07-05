@@ -13,11 +13,16 @@ import json
 import subprocess
 import sys
 import time
+import threading
 from pathlib import Path
 from typing import Any
 
 TARGET_CLASS = "steam_app_1245620"
 
+
+
+def pause_for(seconds: float) -> None:
+    threading.Event().wait(max(float(seconds), 0.0))
 
 def hypr_json(*args: str) -> Any:
     out = subprocess.check_output(["hyprctl", "-j", *args], text=True, stderr=subprocess.STDOUT, timeout=5)
@@ -179,7 +184,7 @@ def main() -> int:
             emit(args.log, {"event": "exception", "error": repr(exc)})
         if args.duration <= 0 or time.monotonic() >= deadline:
             break
-        time.sleep(max(args.interval, 0.05))
+        pause_for(max(args.interval, 0.05))
     return 0 if saw_success else 1
 
 

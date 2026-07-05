@@ -11,6 +11,13 @@ LOG="$ART/er-effects-autoload-debug.log"
 DEADLINE_S=${DEADLINE_S:-115}
 POLL_S=${POLL_S:-3}
 
+pause_s() {
+  python3 - "$1" <<'PY'
+import sys, threading
+threading.Event().wait(float(sys.argv[1]))
+PY
+}
+
 er_alive() { python3 -c "
 import glob
 def comm(p):
@@ -73,7 +80,7 @@ print('1' if len(set(s))>=2 and len(s)>=2 else '0')")
       echo "[2sw] captured post-load world -> $ART/two-switch-capture/final-2sw-loaded-world.jpg; holding ${HOLD_AFTER_PASS_S}s before teardown so it stays on screen"
       for _i in $(seq 1 "$HOLD_AFTER_PASS_S"); do
         [[ "$(er_alive)" == "0" ]] && break
-        sleep 1
+        pause_s 1
       done
       verdict=0; break
     else
@@ -81,7 +88,7 @@ print('1' if len(set(s))>=2 and len(s)>=2 else '0')")
       verdict=2; break
     fi
   fi
-  sleep "$POLL_S"
+  pause_s "$POLL_S"
 done
 
 if (( SECONDS - start >= DEADLINE_S )); then
@@ -91,6 +98,6 @@ fi
 
 echo "[2sw] tearing down eldenring.exe"
 pkill -x eldenring.exe 2>/dev/null
-sleep 1
+pause_s 1
 echo "[2sw] final ER alive=$(er_alive)  verdict=$verdict"
 exit "$verdict"

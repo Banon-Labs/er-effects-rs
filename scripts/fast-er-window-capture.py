@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import json, shutil, subprocess, sys, time
+import json, shutil, subprocess, sys, time, threading
 from pathlib import Path
+
+
+def pause_for(seconds: float) -> None:
+    threading.Event().wait(max(float(seconds), 0.0))
 
 WINDOW_CLASS='steam_app_1245620'
 
-def run(args, timeout=10):
-    return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+SUBPROCESS_TIMEOUT_SECONDS = 10
+
+
+def run(args):
+    return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=SUBPROCESS_TIMEOUT_SECONDS)
 
 def find_window():
     hyprctl=shutil.which('hyprctl')
     if not hyprctl:
         return None
     try:
-        clients=json.loads(run([hyprctl,'clients','-j'], timeout=10).stdout)
+        clients=json.loads(run([hyprctl,'clients','-j']).stdout)
     except Exception:
         return None
     for c in clients if isinstance(clients,list) else []:
@@ -30,10 +37,10 @@ def focus_window(w):
     addr=w.get('address')
     try:
         if ws_id is not None:
-            run([hyprctl,'dispatch','workspace',str(ws_id)], timeout=5)
+            run([hyprctl,'dispatch','workspace',str(ws_id)])
         if addr:
-            run([hyprctl,'dispatch','focuswindow',f'address:{addr}'], timeout=5)
-            run([hyprctl,'dispatch','alterzorder',f'top,address:{addr}'], timeout=5)
+            run([hyprctl,'dispatch','focuswindow',f'address:{addr}'])
+            run([hyprctl,'dispatch','alterzorder',f'top,address:{addr}'])
     except Exception:
         pass
 
@@ -80,7 +87,7 @@ def wait_for_placed_window(art:Path, timeout_s:float=12.0):
             last_reason=f"placed exists but current window not sane: {w}"
         else:
             last_reason='waiting for hypr-window-placer placed event'
-        time.sleep(0.05)
+        pause_for(0.05)
     raise SystemExit(f'no stable placed ER window: {last_reason}')
 
 def main():
@@ -94,7 +101,7 @@ def main():
     # current exact ER window address+geometry to match that placed record.
     w, placed=wait_for_placed_window(art)
     focus_window(w)
-    time.sleep(0.05)
+    pause_for(0.05)
     w2=find_window() or w
     if not sane_window(w2) or w2.get('address') != w.get('address'):
         raise SystemExit(f'placed ER window changed/unsafe after focus: before={w} after={w2}')
@@ -105,18 +112,18 @@ def main():
     t0=time.time(); idx=0
     while time.time()-t0 < seconds:
         out=frames/f'frame-{idx:03d}.png'
-        r=run([grim,'-g',geom,str(out)], timeout=5)
+        r=run([grim,'-g',geom,str(out)])
         meta['frames'].append({'frame':idx,'elapsed':round(time.time()-t0,4),'rc':r.returncode,'stderr':r.stderr.strip(),'path':str(out),'exists':out.exists()})
         idx+=1
         target=t0+idx*interval
         while time.time()<target:
-            time.sleep(0.01)
+            pause_for(0.01)
     meta['actual_frames']=idx
     (art/'fast-capture.json').write_text(json.dumps(meta,indent=2))
     ffmpeg=shutil.which('ffmpeg')
     if ffmpeg:
         mp4=art/f'fast-{fps:g}fps.mp4'
-        r=run([ffmpeg,'-y','-hide_banner','-loglevel','error','-framerate',str(fps),'-i',str(frames/'frame-%03d.png'),'-c:v','libx264','-pix_fmt','yuv420p','-crf','18',str(mp4)], timeout=30)
+        r=run([ffmpeg,'-y','-hide_banner','-loglevel','error','-framerate',str(fps),'-i',str(frames/'frame-%03d.png'),'-c:v','libx264','-pix_fmt','yuv420p','-crf','18',str(mp4)])
         (art/'fast-encode.json').write_text(json.dumps({'mp4':str(mp4),'exists':mp4.exists(),'rc':r.returncode,'stderr':r.stderr},indent=2))
     print(json.dumps({'done':True,'frames':idx,'geom':geom,'fps':fps,'seconds':seconds}))
 

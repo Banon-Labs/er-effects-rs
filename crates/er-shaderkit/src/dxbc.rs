@@ -34,8 +34,8 @@ fn cstr_at(b: &[u8], off: usize) -> String {
         .iter()
         .position(|&c| c == 0)
         .map_or(b.len(), |p| off + p);
-    // UTF-8 Lossy: DX container semantic/resource names are spec'd ASCII; a malformed
-    // byte must not panic reflection (names are diagnostic/role hints).
+    // DX container semantic/resource names are spec'd ASCII; malformed bytes are diagnostic hints.
+    // UTF-8 Lossy: a malformed byte must not panic reflection.
     String::from_utf8_lossy(&b[off.min(b.len())..end]).into_owned()
 }
 

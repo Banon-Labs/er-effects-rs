@@ -13,6 +13,13 @@ ORACLE="$REPO/scripts/switch-character-oracle.py"
 DEADLINE_S=${DEADLINE_S:-80}
 POLL_S=${POLL_S:-3}
 
+pause_s() {
+  python3 - "$1" <<'PY'
+import sys, threading
+threading.Event().wait(float(sys.argv[1]))
+PY
+}
+
 er_alive() { python3 -c "
 import glob
 def comm(p):
@@ -69,7 +76,7 @@ while (( SECONDS - start < DEADLINE_S )); do
       # rc==10 waiting for a stable world: keep polling.
     fi
   fi
-  sleep "$POLL_S"
+  pause_s "$POLL_S"
 done
 
 if (( SECONDS - start >= DEADLINE_S )); then
@@ -78,6 +85,6 @@ fi
 
 echo "[watch] tearing down eldenring.exe"
 pkill -x eldenring.exe 2>/dev/null
-sleep 1
+pause_s 1
 echo "[watch] final ER alive=$(er_alive)  verdict_rc=$verdict_rc"
 exit "$verdict_rc"

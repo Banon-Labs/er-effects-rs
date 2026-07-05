@@ -20,7 +20,7 @@ from typing import Any
 
 def run(cmd: list[str], log_path: Path) -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
     log_path.write_text(proc.stdout, encoding="utf-8", errors="replace")
     return proc.returncode
 

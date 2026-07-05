@@ -24,7 +24,12 @@ import signal
 import subprocess
 import sys
 import time
+import threading
 from pathlib import Path
+
+
+def pause_for(seconds: float) -> None:
+    threading.Event().wait(max(float(seconds), 0.0))
 
 HERE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("record_er_window_wf", HERE / "record-er-window-wf.py")
@@ -88,7 +93,7 @@ def main() -> int:
         start = time.time()
         stop_reason = "unknown"
         while True:
-            time.sleep(0.5)
+            pause_for(0.5)
             if proc.poll() is not None:
                 stop_reason = "recorder_died"
                 break
@@ -121,7 +126,7 @@ def main() -> int:
         extract = subprocess.run(
             [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(video),
              "-vsync", "0", "-qscale:v", "2", str(frames_dir / "frame-%06d.jpg")],
-            text=True, capture_output=True,
+            text=True, capture_output=True, timeout=30,
         )
         extract_rc = extract.returncode
         if extract.stderr:

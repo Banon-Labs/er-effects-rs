@@ -288,6 +288,7 @@ pub(crate) fn lite_mode() -> bool {
             .join("er-effects-lite.txt")
             .exists()
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_NO_CONTINUE_TRACE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn continue_trace_disabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_NO_CONTINUE_TRACE").as_deref(),
@@ -297,6 +298,7 @@ pub(crate) fn continue_trace_disabled() -> bool {
         .join("er-effects-no-continue-trace.txt")
         .exists()
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_TRACE_CONTINUE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn trace_continue_enabled() -> bool {
     product_autoload_enabled()
         || matches!(
@@ -306,6 +308,7 @@ pub(crate) fn trace_continue_enabled() -> bool {
         || trace_continue_default_path().exists()
         || PathBuf::from("er-effects-trace-continue.txt").exists()
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_TRACE_MENU_TASK_UPDATE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn trace_menu_task_update_enabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_TRACE_MENU_TASK_UPDATE").as_deref(),
@@ -315,6 +318,7 @@ pub(crate) fn trace_menu_task_update_enabled() -> bool {
         .join("er-effects-trace-menu-task-update.txt")
         .exists()
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_AUTOLOAD_NATIVE_TITLE_JOB is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn native_title_job_enabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_AUTOLOAD_NATIVE_TITLE_JOB").as_deref(),
@@ -324,6 +328,7 @@ pub(crate) fn native_title_job_enabled() -> bool {
         .join("er-effects-native-title-job.txt")
         .exists()
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_AUTOLOAD_FORCE_PLAY_GAME is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn force_play_game_enabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_AUTOLOAD_FORCE_PLAY_GAME").as_deref(),
@@ -333,6 +338,7 @@ pub(crate) fn force_play_game_enabled() -> bool {
         .join("er-effects-force-play-game.txt")
         .exists()
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_SELECTBOT_PROBE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn selectbot_probe_enabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_SELECTBOT_PROBE").as_deref(),
@@ -343,6 +349,7 @@ pub(crate) fn selectbot_probe_enabled() -> bool {
         .exists()
 }
 /// Operator gate for the zero-input global-accept-byte title-advance lever (option c). Default OFF.
+// ENV-GATE RATIONALE: ER_EFFECTS_TITLE_ACCEPT_BYTE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn title_accept_byte_gate_enabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_TITLE_ACCEPT_BYTE").as_deref(),
@@ -365,6 +372,7 @@ pub(crate) fn title_registrar_advance_gate_enabled() -> bool {
         .join("er-effects-title-registrar-advance.txt")
         .exists()
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_TITLE_PROCEED_GATE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn title_proceed_gate_enabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_TITLE_PROCEED_GATE").as_deref(),
@@ -374,6 +382,7 @@ pub(crate) fn title_proceed_gate_enabled() -> bool {
         .join("er-effects-title-proceed-gate.txt")
         .exists()
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_INGAMESTEP_PUMP is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn ingamestep_pump_enabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_INGAMESTEP_PUMP").as_deref(),
@@ -383,6 +392,7 @@ pub(crate) fn ingamestep_pump_enabled() -> bool {
         .join("er-effects-ingamestep-pump.txt")
         .exists()
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_NATIVE_AUTOLOAD is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn native_autoload_enabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_NATIVE_AUTOLOAD").as_deref(),
@@ -392,6 +402,7 @@ pub(crate) fn native_autoload_enabled() -> bool {
         .join("er-effects-native-autoload.txt")
         .exists()
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_OBSERVE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn observe_enabled() -> bool {
     matches!(std::env::var("ER_EFFECTS_OBSERVE").as_deref(), Ok("1"))
         || game_directory_path()
@@ -399,6 +410,7 @@ pub(crate) fn observe_enabled() -> bool {
             .join("er-effects-observe.txt")
             .exists()
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_OWN_STEPPER is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn own_stepper_enabled() -> bool {
     product_autoload_enabled()
         || OWN_STEPPER_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
@@ -482,6 +494,7 @@ pub(crate) fn stats_panel_enabled() -> bool {
         .join("er-effects-no-stats-panel.txt")
         .exists())
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_NATIVE_CONTINUE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn native_continue_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
         return false;

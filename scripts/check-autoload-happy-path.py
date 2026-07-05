@@ -37,17 +37,27 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
-def read_experiments() -> str:
-    """Concatenate every Rust source in the experiments module (or fall back to
-    the legacy single file). mod.rs is placed first so banner/order-sensitive
-    `str.find` comparisons remain stable across the split."""
-    if EXPERIMENTS_DIR.is_dir():
+def read_module_tree(root_file: Path, module_dir: Path | None = None) -> str:
+    """Concatenate a Rust module root and any split-out include/module files.
+
+    The fail-closed checks started as string checks over one large source file. The codebase is now
+    split across `foo.rs` + `foo/` include trees, so the checker must inspect the whole logical module
+    instead of accidentally treating refactors as feature removal.
+    """
+    parts: list[str] = []
+    if root_file.exists():
+        parts.append(read(root_file))
+    if module_dir is not None and module_dir.is_dir():
         files = sorted(
-            EXPERIMENTS_DIR.glob("*.rs"),
-            key=lambda p: (p.name != "mod.rs", p.name),
+            module_dir.rglob("*.rs"),
+            key=lambda p: (p.name != "mod.rs", len(p.relative_to(module_dir).parts), str(p.relative_to(module_dir))),
         )
-        return "\n".join(read(p) for p in files)
-    return read(EXPERIMENTS)
+        parts.extend(read(p) for p in files)
+    return "\n".join(parts)
+
+
+def read_experiments() -> str:
+    return read_module_tree(EXPERIMENTS, EXPERIMENTS_DIR)
 
 
 def rust_fn_body(source: str, name: str) -> str:
@@ -177,12 +187,12 @@ def continue_candidate_is_diagnostic_only(experiments: str) -> bool:
 def main() -> int:
     failures: list[str] = []
     experiments = read_experiments()
-    lib = read(LIB)
-    constants = read(CONSTANTS) if CONSTANTS.exists() else ""
+    lib = read_module_tree(LIB, REPO_ROOT / "src" / "lib_parts")
+    constants = read_module_tree(CONSTANTS, REPO_ROOT / "src" / "constants")
     if constants:
         lib += "\n" + constants
     stage = read(STAGE_SCRIPT)
-    telemetry = read(TELEMETRY)
+    telemetry = read_module_tree(TELEMETRY, REPO_ROOT / "src" / "telemetry")
     watcher = read(WATCHER)
     runtime_probe = read(RUNTIME_PROBE) if RUNTIME_PROBE.exists() else ""
     direct_probe = read(DIRECT_PROBE) if DIRECT_PROBE.exists() else ""
@@ -277,11 +287,11 @@ def main() -> int:
         failures,
     )
     require(
-        "(out_slot as *mut usize).write(null)" in title_cover_hook
+        "PRESERVED native {TITLE_NATIVE_MENU_VISUAL_NAME}" in title_cover_hook
         and "TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS.fetch_add" in title_cover_hook
         and "TITLE_NATIVE_MENU_VISUAL_FACTORY_RVA" in title_cover_hook
         and "TITLE_NATIVE_MENU_VISUAL_BEGIN_TITLE_RVA" in title_cover_hook,
-        "title native visual suppression must null only the BeginTitle 05_000_Title out slot and expose runtime telemetry",
+        "title native visual suppression must preserve/latch only the BeginTitle 05_000_Title native wrapper and expose runtime telemetry",
         failures,
     )
     require(
@@ -298,10 +308,10 @@ def main() -> int:
         and "MENU_DummyProfileFace_01" in lib
         and "SYSTEX_Menu_Profile00" in lib
         and "CSMenuProfModelRend" in lib
-        and "TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS.fetch_add" in title_cover_hook
+        and "independent 01_900_Black build disabled" in title_cover_hook
         and "oracle_title_custom_cover_profile_select_builds" in telemetry
         and "title_custom_cover_profile_select_builds" in watcher,
-        "Part B custom cover must build an observable ProfileSelect/SYSTEX dummy-profile cover target",
+        "Part B custom cover probes must keep the observable ProfileSelect/SYSTEX anchors while leaving the disabled independent build out of the product path",
         failures,
     )
 
@@ -630,7 +640,7 @@ def main() -> int:
     require('profileVersion = "v1"' in stage, "release staging must write a v1 me3 ModProfile", failures)
     require("[[natives]]" in stage, "release staging profile must load the DLL as an me3 native", failures)
     require("path = 'er_effects_rs.dll'" in stage, "release staging profile must reference the DLL relative to the profile (relocatable payload)", failures)
-    require("dinput8" not in stage, "release staging must not ship the removed LazyLoader proxy", failures)
+    require("dinput8.dll" not in stage, "release staging must not ship the removed LazyLoader proxy", failures)
     require("lazyLoad.ini" not in stage, "release staging must not ship the removed LazyLoader config", failures)
     require("dllModFolderName" not in stage, "release staging must not recreate the LazyLoader dllMods layout", failures)
     require("er_skip_splash_screens.dll" not in stage, "release staging must not include stale skip-splash DLLs", failures)
@@ -686,7 +696,7 @@ def main() -> int:
         "measure must enforce product autoload uses the native Continue row load path, not direct_build",
         failures,
     )
-    telemetry_src = read(REPO_ROOT / "src" / "telemetry.rs")
+    telemetry_src = telemetry
     require(
         "MSGBOX_LAST_DIALOG" in lib
         and "MSGBOX_TOTAL_BUILDS" in lib

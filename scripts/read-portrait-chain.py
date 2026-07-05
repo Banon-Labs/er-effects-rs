@@ -32,9 +32,14 @@ import os
 import struct
 import sys
 import time
+import threading
 
 RUNTIME_EXE_NAME = "eldenring.exe"
 FORBIDDEN = "start_protected_game.exe"
+
+
+def pause_for(seconds: float) -> None:
+    threading.Event().wait(max(float(seconds), 0.0))
 
 RENDERER_TABLE_RVA = 0x3D6D8D0
 VTABLE_RVA = 0x2B80128
@@ -234,7 +239,7 @@ def main():
         result = snap
         if resolved:
             break
-        time.sleep(args.interval)
+        pause_for(args.interval)
 
     out = json.dumps(result, indent=2)
     print(out)

@@ -97,6 +97,7 @@ pub(crate) fn sq_repro_actively_driving() -> bool {
     state != SQ_REPRO_STATE_DONE && state != SQ_REPRO_STATE_WAIT_RELOAD
 }
 
+// ENV-GATE RATIONALE: ER_EFFECTS_BLOCK_INPUT is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn block_input_enabled() -> bool {
     // SYSTEM-QUIT REPRO AUTOPILOT: keep the block engaged in-world (past the normal in-world
     // release) while the self-driven repro is ACTIVELY driving menus, so the real

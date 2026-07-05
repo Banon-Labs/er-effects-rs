@@ -20,14 +20,22 @@ import shutil
 import subprocess
 import sys
 import time
+import threading
 from pathlib import Path
 from typing import Any
+
+
+def pause_for(seconds: float) -> None:
+    threading.Event().wait(max(float(seconds), 0.0))
 
 WINDOW_CLASS = "steam_app_1245620"
 
 
-def run(args: list[str], timeout: float | None = 10) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+SUBPROCESS_TIMEOUT_SECONDS = 10
+
+
+def run(args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=SUBPROCESS_TIMEOUT_SECONDS)
 
 
 def hyprctl_path() -> str | None:
@@ -39,7 +47,7 @@ def find_windows() -> list[dict[str, Any]]:
     if not hyprctl:
         return []
     try:
-        clients = json.loads(run([hyprctl, "-j", "clients"], timeout=10).stdout)
+        clients = json.loads(run([hyprctl, "-j", "clients"]).stdout)
     except Exception:
         return []
     return [c for c in clients if isinstance(c, dict) and c.get("class") == WINDOW_CLASS]
@@ -92,7 +100,7 @@ def wait_for_stable_window(timeout_s: float, samples: int, interval_s: float, re
         if not target:
             last_reason = "no sane mapped target window"
             attempts.append({"event": "no_sane_target"})
-            time.sleep(interval_s)
+            pause_for(interval_s)
             continue
 
         address = str(target.get("address"))
@@ -103,7 +111,7 @@ def wait_for_stable_window(timeout_s: float, samples: int, interval_s: float, re
             attempts.append({"event": "unsafe_target", "window": summarize(target)})
             stable_count = 0
             last_key = None
-            time.sleep(interval_s)
+            pause_for(interval_s)
             continue
 
         if require_focus and target.get("focusHistoryID") != 0:
@@ -111,7 +119,7 @@ def wait_for_stable_window(timeout_s: float, samples: int, interval_s: float, re
             attempts.append({"event": "not_focused", "window": summarize(target)})
             stable_count = 0
             last_key = None
-            time.sleep(interval_s)
+            pause_for(interval_s)
             continue
 
         key = (target.get("address"), tuple(map(int, target.get("at") or [])), tuple(map(int, target.get("size") or [])))
@@ -123,7 +131,7 @@ def wait_for_stable_window(timeout_s: float, samples: int, interval_s: float, re
         attempts.append({"event": "sample", "stable_count": stable_count, "window": summarize(target)})
         if stable_count >= samples:
             return target, {"attempts_tail": attempts[-32:], "stable_samples": stable_count}
-        time.sleep(interval_s)
+        pause_for(interval_s)
 
     raise SystemExit(f"no stable focused ER window before recording: {last_reason}")
 
@@ -196,7 +204,7 @@ def main() -> int:
                 stop_reason = "player_present_hold"
             if player_present_at is not None and time.time() - player_present_at >= args.post_confirm_seconds:
                 break
-        time.sleep(0.2)
+        pause_for(0.2)
     proc.terminate()
     try:
         stdout, stderr = proc.communicate(timeout=5)

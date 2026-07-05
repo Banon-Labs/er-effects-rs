@@ -29,6 +29,7 @@ fn translate(container: &[u8], flags: &[&str]) -> Option<Vec<u8>> {
     if !out.status.success() {
         eprintln!(
             "dxil-spirv failed for flags {flags:?}: {}",
+            // UTF-8 Lossy: external tool stderr is human diagnostics; preserve printable context even if it is not valid UTF-8.
             String::from_utf8_lossy(&out.stderr)
         );
         return None;
@@ -111,6 +112,7 @@ fn dump(label: &str, spv: &[u8]) {
                     .flat_map(|k| w(spv, k).to_le_bytes())
                     .take_while(|&b| b != 0)
                     .collect();
+                // UTF-8 Lossy: SPIR-V OpName strings are diagnostic labels; malformed bytes should not abort inspection.
                 names.insert(id, String::from_utf8_lossy(&bytes).into_owned());
             }
             71 => {
