@@ -94,7 +94,7 @@ def main() -> int:
             if any(token in line for token in ("graphics-config:", "hypr-place:", "render:", "fatal", "error")):
                 print("launcher: " + line)
 
-    result = subprocess.run(["pgrep", "-x", "eldenring.exe"], text=True, capture_output=True)
+    result = subprocess.run(["pgrep", "-x", "eldenring.exe"], text=True, capture_output=True, timeout=10)
     print(f"eldenring.exe: rc={result.returncode} pids={result.stdout.strip()}")
     return 0
 

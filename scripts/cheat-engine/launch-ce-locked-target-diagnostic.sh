@@ -9,7 +9,7 @@ WINE_BIN=${WINE_BIN:-}
 PROTON_BIN=${PROTON_BIN:-}
 ELDEN_RING_PID=${ELDEN_RING_PID:-}
 WAIT=0
-TIMEOUT_SECONDS=120
+TIMEOUT_SECONDS=30
 DRY_RUN=0
 
 usage() {
@@ -26,7 +26,7 @@ Manual final steps remain:
 
 Options:
   --wait                 Wait for eldenring.exe instead of failing immediately.
-  --timeout SECONDS      Wait timeout for --wait (default: 120).
+  --timeout SECONDS      Wait cap for --wait (default: 30 seconds).
   --ct PATH              CT file to open (default: sibling diagnostic CT file).
   --ce-exe PATH          Cheat Engine Windows .exe path. Overrides auto-detection.
   --proton PATH          Proton script/binary to use. Overrides auto-detection.
@@ -113,6 +113,13 @@ select_er_pid_once() {
   esac
 }
 
+pause_s() {
+  python3 - "$1" <<'PY'
+import sys, threading
+threading.Event().wait(float(sys.argv[1]))
+PY
+}
+
 select_er_pid() {
   local deadline pid
   if ((WAIT == 0)); then
@@ -128,7 +135,7 @@ select_er_pid() {
       printf '%s\n' "$pid"
       return 0
     fi
-    sleep 1
+    pause_s 1
   done
   fail "timed out waiting ${TIMEOUT_SECONDS}s for exact eldenring.exe process"
 }

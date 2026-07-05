@@ -20,6 +20,13 @@ TELEM="$ART/er-effects-telemetry.json"
 DEADLINE_S=${DEADLINE_S:-110}
 POLL_S=${POLL_S:-3}
 
+pause_s() {
+  python3 - "$1" <<'PY'
+import sys, threading
+threading.Event().wait(float(sys.argv[1]))
+PY
+}
+
 er_alive() { python3 -c "
 import glob
 def comm(p):
@@ -77,7 +84,7 @@ while (( SECONDS - start < DEADLINE_S )); do
       break
     fi
   fi
-  sleep "$POLL_S"
+  pause_s "$POLL_S"
 done
 
 if (( verdict_rc == 4 )); then

@@ -156,6 +156,7 @@ pub(crate) fn own_stepper_selffire_enabled() -> bool {
             .join("er-effects-selffire.txt")
             .exists()
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_SUBMIT_PLAY_GAME is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn submit_play_game_enabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_SUBMIT_PLAY_GAME").as_deref(),
@@ -165,6 +166,7 @@ pub(crate) fn submit_play_game_enabled() -> bool {
         .join("er-effects-submit-play-game.txt")
         .exists()
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_INGAMEINIT_DRIVE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn ingameinit_drive_enabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_INGAMEINIT_DRIVE").as_deref(),
@@ -174,6 +176,7 @@ pub(crate) fn ingameinit_drive_enabled() -> bool {
         .join("er-effects-ingameinit-drive.txt")
         .exists()
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_CONTINUE_DRIVE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn continue_drive_enabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_CONTINUE_DRIVE").as_deref(),
@@ -183,6 +186,7 @@ pub(crate) fn continue_drive_enabled() -> bool {
         .join("er-effects-continue-drive.txt")
         .exists()
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_ARM_PROBE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn arm_probe_enabled() -> bool {
     matches!(std::env::var("ER_EFFECTS_ARM_PROBE").as_deref(), Ok("1"))
         || game_directory_path()
@@ -190,6 +194,7 @@ pub(crate) fn arm_probe_enabled() -> bool {
             .join("er-effects-arm-probe.txt")
             .exists()
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_NATIVE_ARM_LOOP is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn native_arm_loop_enabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_NATIVE_ARM_LOOP").as_deref(),
@@ -199,6 +204,7 @@ pub(crate) fn native_arm_loop_enabled() -> bool {
         .join("er-effects-native-arm-loop.txt")
         .exists()
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_TITLE_ACCEPT is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn title_accept_enabled() -> bool {
     matches!(std::env::var("ER_EFFECTS_TITLE_ACCEPT").as_deref(), Ok("1"))
         || game_directory_path()
@@ -206,6 +212,7 @@ pub(crate) fn title_accept_enabled() -> bool {
             .join("er-effects-title-accept.txt")
             .exists()
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_TITLE_ACCEPT_INJECT is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn title_accept_inject_enabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_TITLE_ACCEPT_INJECT").as_deref(),
@@ -215,6 +222,7 @@ pub(crate) fn title_accept_inject_enabled() -> bool {
         .join("er-effects-title-accept-inject.txt")
         .exists()
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_SPLASH_SKIP is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn splash_skip_enabled() -> bool {
     // Splash-skip is a MAIN PRODUCT FEATURE (faster boot to the title), on for every load path, not a
     // manual toggle. It is safe because the "jumped too far" failure mode -- the BeginLogo branch-flip
@@ -266,6 +274,7 @@ pub(crate) fn online_disable_enabled() -> bool {
             .join("er-effects-offline.txt")
             .exists()
 }
+// ENV-GATE RATIONALE: ER_EFFECTS_INGAMESTEP_UNPIN is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn ingamestep_unpin_enabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_INGAMESTEP_UNPIN").as_deref(),

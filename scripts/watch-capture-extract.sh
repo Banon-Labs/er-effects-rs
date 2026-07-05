@@ -4,6 +4,13 @@
 # files written so far. Ctrl-C to stop watching (does not affect the extraction).
 LOG="${EXTRACT_LOG:-/tmp/er-extract.log}"
 OUT_ROOT="/home/banon/projects/er-effects-rs/target/capture"
+pause_s() {
+  python3 - "$1" <<'PY'
+import sys, threading
+threading.Event().wait(float(sys.argv[1]))
+PY
+}
+
 while true; do
   clear
   echo "===== RenderDoc extract — live ($(date +%H:%M:%S)) ====="
@@ -22,5 +29,5 @@ while true; do
   echo "--- extracted files (target/capture/) ---"
   find "$OUT_ROOT" -type f 2>/dev/null | sed "s#$OUT_ROOT/##" | head -40
   [ -d "$OUT_ROOT" ] || echo "  (none yet)"
-  sleep 2
+  pause_s 2
 done

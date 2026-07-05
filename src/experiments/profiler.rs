@@ -28,7 +28,7 @@ use std::{
     fs,
     io::Write as _,
     path::PathBuf,
-    sync::atomic::Ordering,
+    sync::{atomic::Ordering, mpsc},
     time::{Duration, Instant},
 };
 
@@ -246,8 +246,13 @@ fn profiler_main() {
     let mut names: HashMap<u32, String> = HashMap::new();
     let epoch = Instant::now();
     let mut iter: u64 = 0;
+    let sample_period = interval.as_nanos().max(1);
+    let max_samples = ((max.as_nanos().saturating_add(sample_period - 1)) / sample_period)
+        .max(1)
+        .min(u128::from(u64::MAX)) as u64;
+    let (_tick_tx, tick_rx) = mpsc::channel::<()>();
 
-    while epoch.elapsed() < max {
+    while iter < max_samples {
         let ms = epoch.elapsed().as_millis();
         let do_rip = rip_on && (iter % rip_n == 0);
         // The game module may not have been loaded when the profiler started; resolve the base
@@ -346,7 +351,7 @@ fn profiler_main() {
         let _ = writeln!(file, "{line}");
 
         iter = iter.wrapping_add(1);
-        std::thread::sleep(interval);
+        let _ = tick_rx.recv_timeout(interval);
     }
 
     let _ = file.flush();

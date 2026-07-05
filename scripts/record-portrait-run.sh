@@ -13,6 +13,13 @@ echo "launching smoke (deploys fresh DLL, kills stale ER, on-screen)..."
 bash /home/banon/projects/er-effects-rs/scripts/run-postcontinue-lookat-smoke.sh > "$OUT/smoke.log" 2>&1 &
 SMOKE_PID=$!
 
+pause_s() {
+  python3 - "$1" <<'PY'
+import sys, threading
+threading.Event().wait(float(sys.argv[1]))
+PY
+}
+
 geom_of_er() {
   hyprctl clients -j 2>/dev/null | python3 -c "
 import json,sys
@@ -31,29 +38,29 @@ for i in $(seq 1 80); do
   GEOM=$(geom_of_er)
   [ -n "$GEOM" ] && break
   kill -0 "$SMOKE_PID" 2>/dev/null || { echo "smoke ended before window"; break; }
-  sleep 0.5
+  pause_s 0.5
 done
 if [ -z "$GEOM" ]; then echo "ERROR: ER window never mapped"; exit 1; fi
 
-echo "ER window: $GEOM -- recording (hard 55s cap via timeout)"
+echo "ER window: $GEOM -- recording (hard 30s cap via timeout)"
 # timeout guarantees wf-recorder exits even if SIGINT is missed; -r 60 = constant 60fps.
-timeout --signal=INT 55 wf-recorder -g "$GEOM" -r 60 -f "$VIDEO" >> "$OUT/wf-recorder.log" 2>&1 &
+timeout --signal=INT 30 wf-recorder -g "$GEOM" -r 60 -f "$VIDEO" >> "$OUT/wf-recorder.log" 2>&1 &
 REC_PID=$!
 
 # Record until the smoke run ends OR a 55s hard cap -- never an unbounded wait.
-for i in $(seq 1 55); do
+for i in $(seq 1 30); do
   kill -0 "$SMOKE_PID" 2>/dev/null || break
-  sleep 1
+  pause_s 1
 done
 # Stop the recorder regardless of how we got here.
 kill -INT "$REC_PID" 2>/dev/null
-for i in $(seq 1 6); do kill -0 "$REC_PID" 2>/dev/null || break; sleep 0.5; done
+for i in $(seq 1 6); do kill -0 "$REC_PID" 2>/dev/null || break; pause_s 0.5; done
 kill -9 "$REC_PID" 2>/dev/null
-sleep 1
+pause_s 1
 
 if [ ! -s "$VIDEO" ]; then echo "ERROR: no video captured"; exit 1; fi
-echo "video: $(du -h "$VIDEO" | cut -f1) -- extracting first 60s at 60fps"
-ffmpeg -y -t 60 -i "$VIDEO" -vf fps=60 -q:v 9 "$OUT/frames/frame_%05d.jpg" >> "$OUT/ffmpeg.log" 2>&1
+echo "video: $(du -h "$VIDEO" | cut -f1) -- extracting first 30s at 60fps"
+ffmpeg -y -t 30 -i "$VIDEO" -vf fps=60 -q:v 9 "$OUT/frames/frame_%05d.jpg" >> "$OUT/ffmpeg.log" 2>&1
 NFRAMES=$(ls "$OUT/frames"/*.jpg 2>/dev/null | wc -l)
 echo "extracted $NFRAMES frames -> $OUT/frames"
 setsid dolphin "$OUT" >/dev/null 2>&1 < /dev/null & disown

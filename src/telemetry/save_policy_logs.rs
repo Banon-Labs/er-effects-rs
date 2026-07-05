@@ -277,6 +277,7 @@ pub(crate) fn json_escape(value: &str) -> String {
         .collect()
 }
 
+// ENV-GATE RATIONALE: ER_EFFECTS_CRASH_LOG_PATH is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn crash_log_path() -> PathBuf {
     std::env::var("ER_EFFECTS_CRASH_LOG_PATH")
         .map(PathBuf::from)
@@ -400,6 +401,7 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
     publishable
 }
 
+// ENV-GATE RATIONALE: ER_EFFECTS_AUTOLOAD_DEBUG_PATH is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     use std::io::Write;
 
@@ -441,6 +443,7 @@ pub(crate) fn trace_continue_default_path() -> PathBuf {
         .join("er-effects-trace-continue.txt")
 }
 
+// ENV-GATE RATIONALE: ER_EFFECTS_TRACE_CONTINUE_PATH is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn continue_trace_log_path() -> PathBuf {
     std::env::var("ER_EFFECTS_TRACE_CONTINUE_PATH")
         .map(PathBuf::from)

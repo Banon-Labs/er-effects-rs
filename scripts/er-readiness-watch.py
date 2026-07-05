@@ -748,7 +748,7 @@ def maybe_capture_loading_screen_portrait(artifact_dir: Path, telemetry: dict[st
                 [sys.executable, str(analyzer), str(out), str(analysis_path)],
                 text=True,
                 capture_output=True,
-                timeout=35,
+                timeout=30,
             )
         except Exception as exc:
             analysis_path.write_text(

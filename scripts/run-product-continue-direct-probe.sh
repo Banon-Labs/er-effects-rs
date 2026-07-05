@@ -7,6 +7,7 @@ GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}
 # delivered as an me3 [[natives]] profile entry; me3 launches Game/eldenring.exe directly through
 # the Steam compat tool (waitforexitandrun verb), never a Steam AppID/URL form or the EAC launcher.
 # shellcheck source=scripts/me3-launch-lib.sh
+# shellcheck disable=SC1091
 source "$REPO_ROOT/scripts/me3-launch-lib.sh"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/product-continue-direct-$(date +%Y%m%d-%H%M%S)}"

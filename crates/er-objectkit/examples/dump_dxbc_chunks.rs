@@ -39,6 +39,7 @@ fn main() {
             total_containers += 1;
             let mut has_rdef = false;
             for p in parts(&s.container) {
+                // UTF-8 Lossy: DXBC FourCC tags are diagnostic ASCII identifiers; malformed bytes should still be countable.
                 let tag = String::from_utf8_lossy(&p.fourcc).into_owned();
                 if tag == "RDEF" {
                     has_rdef = true;
