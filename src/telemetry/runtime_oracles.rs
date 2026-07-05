@@ -2481,6 +2481,48 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_overlay_reuploads",
             OVERLAY_REUPLOADS.load(Ordering::SeqCst),
         );
+        // BOOT-PROGRESS VIEW semaphores: draw_hits = strip composites actually reaching the backbuffer
+        // (the pre-Continue black frames are covered); last_permille = displayed progress; milestone_mask/
+        // idx = which boot semaphores latched (bit order: BOOT, GAME, OFFLINE, TITLE, MENU, CONTINUE,
+        // LOADING); stopped = the handoff to the loading-portrait window fired.
+        push_json_usize(
+            body,
+            "oracle_boot_view_draw_hits",
+            BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_last_permille",
+            BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_milestone_mask",
+            BOOT_VIEW_REACHED_MASK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_milestone_idx",
+            BOOT_VIEW_MILESTONE_IDX.load(Ordering::SeqCst),
+        );
+        // Early self-present pump: frames WE presented before the game's first own present, the
+        // pump-relative ms the swapchain was found, and why the pump stopped (1 = game took over,
+        // the success terminal state; 2 = budget; 3 = Present HRESULT failure).
+        push_json_usize(
+            body,
+            "oracle_boot_view_self_presents",
+            BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_swapchain_found_ms",
+            BOOT_VIEW_SWAPCHAIN_FOUND_MS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_pump_stop_reason",
+            BOOT_VIEW_PUMP_STOP_REASON.load(Ordering::SeqCst),
+        );
         // DEPTH-KEY transparent-background semaphores: frames where the depth key actually cut out a
         // background (clean bg/head depth separation + >0 pixels alpha'd to 0), and the last frame's
         // background-masked fraction in whole percent. A RAM/pixel oracle for the transparent bg cutout.
