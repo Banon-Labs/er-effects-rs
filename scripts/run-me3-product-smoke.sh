@@ -25,6 +25,7 @@ GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}
 # Shared me3 launch helpers (ME3_BIN/ME3_STEAM_DIR/ME3_WINDOWS_BIN_DIR/ME3_LOG_DIR defaults,
 # compat-tool preflight, profile writer).
 # shellcheck source=scripts/me3-launch-lib.sh
+# shellcheck disable=SC1091
 source "$REPO_ROOT/scripts/me3-launch-lib.sh"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/me3-product-smoke-$(date +%Y%m%d-%H%M%S)}"
@@ -305,17 +306,28 @@ if [[ "$RUNTIME_TELEMETRY_ONLY" == "1" ]]; then
   echo "save-source: TELEMETRY-ONLY (no character load; default save dir not read)"
 else
   ACTIVE_STEAMID="${ER_EFFECTS_ACTIVE_STEAMID:-76561197986456766}"
-  STAGED_ROOT="$ARTIFACT_DIR/save"
-  STAGED_SAVE_DIR="$STAGED_ROOT/EldenRing/$ACTIVE_STEAMID"
-  STAGED_SAVE="$STAGED_SAVE_DIR/ER0000.sl2"
-  mkdir -p "$STAGED_SAVE_DIR"
-  cp -f "$GOLD_SAVE" "$STAGED_SAVE"
-  chmod u+w "$STAGED_SAVE"
   CONFIG_SLOT="${ER_EFFECTS_GOLD_SLOT:-0}"
   if [[ "$CONFIG_SLOT" == "-1" ]]; then
     CONFIG_SLOT=0
   fi
-  python3 - "$RUNTIME_CONFIG_FILE" "$STAGED_SAVE" "$CONFIG_SLOT" <<'PY'
+  if [[ "${RUNTIME_USE_LOOSE_SAVE_CONFIG:-0}" == "1" ]]; then
+    LOOSE_SAVE_DIR="$ARTIFACT_DIR/loose-save"
+    STAGED_ROOT="$LOOSE_SAVE_DIR/er-effects-save-redirect-stage"
+    CONFIG_SAVE="$LOOSE_SAVE_DIR/ER0000.sl2"
+    mkdir -p "$LOOSE_SAVE_DIR"
+    cp -f "$GOLD_SAVE" "$CONFIG_SAVE"
+    chmod u+w "$CONFIG_SAVE"
+    echo "save-source: loose configured save -> $CONFIG_SAVE (no EldenRing/SteamID path; no pre-copied discovery tree); slot=$CONFIG_SLOT; source=$GOLD_SAVE"
+  else
+    STAGED_ROOT="$ARTIFACT_DIR/save"
+    STAGED_SAVE_DIR="$STAGED_ROOT/EldenRing/$ACTIVE_STEAMID"
+    CONFIG_SAVE="$STAGED_SAVE_DIR/ER0000.sl2"
+    mkdir -p "$STAGED_SAVE_DIR"
+    cp -f "$GOLD_SAVE" "$CONFIG_SAVE"
+    chmod u+w "$CONFIG_SAVE"
+    echo "save-source: staged gold save -> $CONFIG_SAVE (er-effects.toml next to DLL); slot=$CONFIG_SLOT; autosaves isolated from $GOLD_SAVE"
+  fi
+  python3 - "$RUNTIME_CONFIG_FILE" "$CONFIG_SAVE" "$CONFIG_SLOT" <<'PY'
 from pathlib import Path
 import json
 import sys
@@ -329,13 +341,12 @@ config.write_text(
     encoding='utf-8',
 )
 PY
-  echo "save-source: staged gold save -> $STAGED_SAVE (er-effects.toml next to DLL); slot=$CONFIG_SLOT; autosaves isolated from $GOLD_SAVE"
 
   DEFAULT_GRAPHICS_CONFIG="$APPDATA_ER_ROOT/GraphicsConfig.xml"
   GRAPHICS_CONFIG_SOURCE="${ER_EFFECTS_GRAPHICS_CONFIG_SOURCE:-${ER_EFFECTS_GOLD_GRAPHICS_CONFIG:-$DEFAULT_GRAPHICS_CONFIG}}"
   if [[ -f "$GRAPHICS_CONFIG_SOURCE" ]]; then
-    STAGED_GRAPHICS_CONFIG="$STAGED_ROOT/EldenRing/graphicsconfig.xml"
-    mkdir -p "$STAGED_ROOT/EldenRing"
+    STAGED_GRAPHICS_CONFIG="$STAGED_ROOT/eldenring/graphicsconfig.xml"
+    mkdir -p "$STAGED_ROOT/eldenring"
     cp -f "$GRAPHICS_CONFIG_SOURCE" "$STAGED_GRAPHICS_CONFIG"
     chmod u+w "$STAGED_GRAPHICS_CONFIG"
     echo "graphics-config: staged -> $STAGED_GRAPHICS_CONFIG (source $GRAPHICS_CONFIG_SOURCE)"
@@ -348,6 +359,10 @@ wipe_appdata_saves
 
 LAUNCH_EPOCH="$(date +%s.%N)"
 printf '%s\n' "$LAUNCH_EPOCH" > "$ARTIFACT_DIR/launch-epoch.txt"
+ACTIVE_STEAMID_ENV="${ACTIVE_STEAMID:-}"
+if [[ "${RUNTIME_EXPORT_ACTIVE_STEAMID:-1}" != "1" ]]; then
+  ACTIVE_STEAMID_ENV=""
+fi
 
 # Launch through me3. The CLI stays alive as the launch owner (analog of the direct probe's Proton
 # parent); killing it + the exact eldenring.exe/me3-launcher.exe pids is the teardown. All
@@ -359,6 +374,7 @@ printf '%s\n' "$LAUNCH_EPOCH" > "$ARTIFACT_DIR/launch-epoch.txt"
   ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
   ER_EFFECTS_CRASH_LOG_PATH="$CRASH_LOG_PATH" \
   ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" \
+  ER_EFFECTS_ACTIVE_STEAMID="$ACTIVE_STEAMID_ENV" \
   "$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" launch -g eldenring -p "$PROFILE_FILE" \
     > "$ARTIFACT_DIR/me3-launch.out" 2>&1 & echo $! > "$PID_FILE"
 )
@@ -390,7 +406,8 @@ collect_me3_logs
 #   game_task         the recurring game task registered -> DLL is live on CSTask, not just attached
 #   watcher_pass      .auto/runtime_probe.sh readiness watcher exit (world-stable target)
 #   crash_free        the crash log recorded no fault
-python3 - "$ARTIFACT_DIR" "$BOOTSTRAP_PATH" "$AUTOLOAD_DEBUG_PATH" "$TELEMETRY_PATH" "$CRASH_LOG_PATH" "$watcher_status" <<'PY'
+verdict_status=0
+if python3 - "$ARTIFACT_DIR" "$BOOTSTRAP_PATH" "$AUTOLOAD_DEBUG_PATH" "$TELEMETRY_PATH" "$CRASH_LOG_PATH" "$watcher_status" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -426,7 +443,11 @@ Path(artifact_dir, "me3-smoke-verdict.json").write_text(json.dumps(verdict, inde
 print("me3-smoke-verdict:", json.dumps(verdict, sort_keys=True))
 sys.exit(0 if core_ok and verdict["watcher_pass"] else 3)
 PY
-verdict_status=$?
+then
+  verdict_status=0
+else
+  verdict_status=$?
+fi
 
 echo "artifacts: $ARTIFACT_DIR"
 exit "$verdict_status"
