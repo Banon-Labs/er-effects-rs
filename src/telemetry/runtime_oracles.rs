@@ -2481,6 +2481,100 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_overlay_reuploads",
             OVERLAY_REUPLOADS.load(Ordering::SeqCst),
         );
+
+        let overlay_draw_hits = OVERLAY_DRAW_HITS.load(Ordering::SeqCst);
+        let overlay_draw_first_ms = OVERLAY_DRAW_FIRST_MS.load(Ordering::SeqCst);
+        let overlay_draw_last_ms = OVERLAY_DRAW_LAST_MS.load(Ordering::SeqCst);
+        let overlay_reuploads = OVERLAY_REUPLOADS.load(Ordering::SeqCst);
+        let overlay_reupload_first_ms = OVERLAY_REUPLOAD_FIRST_MS.load(Ordering::SeqCst);
+        let overlay_reupload_last_ms = OVERLAY_REUPLOAD_LAST_MS.load(Ordering::SeqCst);
+        let fps_x1000 = |frames: usize, first_ms: usize, last_ms: usize| -> usize {
+            let dt = last_ms.saturating_sub(first_ms);
+            if frames < 2 || dt == 0 {
+                0
+            } else {
+                (frames - 1).saturating_mul(1_000_000) / dt
+            }
+        };
+        push_json_usize(body, "oracle_overlay_draw_first_ms", overlay_draw_first_ms);
+        push_json_usize(body, "oracle_overlay_draw_last_ms", overlay_draw_last_ms);
+        push_json_usize(
+            body,
+            "oracle_overlay_draw_fps_x1000",
+            fps_x1000(overlay_draw_hits, overlay_draw_first_ms, overlay_draw_last_ms),
+        );
+        push_json_usize(
+            body,
+            "oracle_overlay_reupload_first_ms",
+            overlay_reupload_first_ms,
+        );
+        push_json_usize(
+            body,
+            "oracle_overlay_reupload_last_ms",
+            overlay_reupload_last_ms,
+        );
+        push_json_usize(
+            body,
+            "oracle_overlay_reupload_fps_x1000",
+            fps_x1000(overlay_reuploads, overlay_reupload_first_ms, overlay_reupload_last_ms),
+        );
+        push_json_usize(
+            body,
+            "oracle_overlay_stale_present_current",
+            OVERLAY_STALE_PRESENT_RUN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_overlay_stale_present_max",
+            OVERLAY_STALE_PRESENT_MAX.load(Ordering::SeqCst),
+        );
+        let avg_x1000 = |sum_ms: usize, count: usize| -> usize {
+            if count == 0 {
+                0
+            } else {
+                sum_ms.saturating_mul(1000) / count
+            }
+        };
+        let rb_count = OVERLAY_STAGE_READBACK_WAIT_COUNT.load(Ordering::SeqCst);
+        let rb_sum = OVERLAY_STAGE_READBACK_WAIT_MS_SUM.load(Ordering::SeqCst);
+        push_json_usize(body, "oracle_overlay_readback_wait_count", rb_count);
+        push_json_usize(
+            body,
+            "oracle_overlay_readback_wait_avg_ms_x1000",
+            avg_x1000(rb_sum, rb_count),
+        );
+        push_json_usize(
+            body,
+            "oracle_overlay_readback_wait_max_ms",
+            OVERLAY_STAGE_READBACK_WAIT_MS_MAX.load(Ordering::SeqCst),
+        );
+        let blend_count = OVERLAY_STAGE_BLEND_COUNT.load(Ordering::SeqCst);
+        let blend_sum = OVERLAY_STAGE_BLEND_MS_SUM.load(Ordering::SeqCst);
+        push_json_usize(body, "oracle_overlay_blend_count", blend_count);
+        push_json_usize(
+            body,
+            "oracle_overlay_blend_avg_ms_x1000",
+            avg_x1000(blend_sum, blend_count),
+        );
+        push_json_usize(
+            body,
+            "oracle_overlay_blend_max_ms",
+            OVERLAY_STAGE_BLEND_MS_MAX.load(Ordering::SeqCst),
+        );
+        let up_count = OVERLAY_STAGE_UPLOAD_WAIT_COUNT.load(Ordering::SeqCst);
+        let up_sum = OVERLAY_STAGE_UPLOAD_WAIT_MS_SUM.load(Ordering::SeqCst);
+        push_json_usize(body, "oracle_overlay_upload_wait_count", up_count);
+        push_json_usize(
+            body,
+            "oracle_overlay_upload_wait_avg_ms_x1000",
+            avg_x1000(up_sum, up_count),
+        );
+        push_json_usize(
+            body,
+            "oracle_overlay_upload_wait_max_ms",
+            OVERLAY_STAGE_UPLOAD_WAIT_MS_MAX.load(Ordering::SeqCst),
+        );
+
         // BOOT-PROGRESS VIEW semaphores: draw_hits = strip composites actually reaching the backbuffer
         // (the pre-Continue black frames are covered); last_permille = displayed progress; milestone_mask/
         // idx = which boot semaphores latched (bit order: BOOT, GAME, OFFLINE, TITLE, MENU, CONTINUE,
@@ -2993,9 +3087,9 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             "oracle_portrait_luma_flicker_max",
             PORTRAIT_LUMA_FLICKER_MAX.load(Ordering::SeqCst),
         );
-        // LOADING-SCREEN WINDOW semaphores: overlay stop count + last stop reason (1 = now_loading seen
-        // then dropped, the game's real loading screen finished -- the spec-correct pop; 3 = anti-runaway
-        // backstop because now_loading never appeared, a signal the assumption broke).
+        // LOADING-SCREEN WINDOW semaphores: overlay stop count + last stop reason (1 = load-done bridge
+        // elapsed; 3 = anti-runaway backstop; 4 = native now-loading Gauge_3 terminal frame / visible
+        // loading bar reached 100%).
         push_json_usize(
             body,
             "oracle_overlay_window_stops",
@@ -3005,6 +3099,56 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
             body,
             "oracle_overlay_stop_reason",
             OVERLAY_STOP_REASON.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_loading_bar_hook_installed",
+            LOADING_SCREEN_UPDATE_HOOK_INSTALLED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_loading_bar_update_hits",
+            LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_loading_bar_enabled",
+            LOADING_SCREEN_BAR_ENABLED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_loading_bar_current_frame",
+            LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_loading_bar_max_frame",
+            LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_loading_bar_progress_permille",
+            LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_loading_bar_final_hits",
+            LOADING_SCREEN_BAR_FINAL_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_overlay_gpu_fail_count",
+            OVERLAY_GPU_FAIL_COUNT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_overlay_gpu_fail_code",
+            OVERLAY_GPU_FAIL_CODE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_overlay_gpu_fail_version",
+            OVERLAY_GPU_FAIL_VERSION.load(Ordering::SeqCst),
         );
         body.push_str(&format!(
             "  \"oracle_native_profile_capture_enabled\": {},\n  \"oracle_native_load_game_fired\": {},\n  \"oracle_native_load_game_last_node\": {},\n  \"oracle_native_load_game_last_node_vtable\": {},\n  \"oracle_native_load_game_last_member_dialog\": {},\n  \"oracle_native_load_game_last_member_fn\": {},\n  \"oracle_native_load_game_last_member_adjust\": {},\n  \"oracle_native_profile_source_ready\": {},\n  \"oracle_native_profile_source_name\": \"{}\",\n  \"oracle_native_profile_renderer_class\": \"{}\",\n",

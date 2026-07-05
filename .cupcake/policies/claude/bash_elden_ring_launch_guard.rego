@@ -247,13 +247,14 @@ start_protected_process_detection_only if {
 	regex.match(`(?i)(^|[[:space:];|&()])(/usr/bin/)?pgrep[[:space:]]+-x[[:space:]]+(--[[:space:]]+)?start_protected_game\.exe([[:space:];|&()]|$)`, marker_scan_text)
 }
 
-# Read-only /proc process-detection python payloads may NAME the protected
+# /proc process-detection/teardown python payloads may NAME the protected
 # launcher inside quoted string literals. The sanctioned no-pgrep process
 # check (pgrep self-matches its own command line) scans /proc/<pid>/comm from
 # a python heredoc or `python3 -c` one-liner and compares each comm against a
-# tuple of names; that payload cannot execute anything, but the raw marker
-# fallback used to deny it because it contains both a generic executable
-# marker ("python") and the process name (false positive 2026-07-05).
+# tuple of names; it may also send SIGTERM/SIGKILL to exact matching stale
+# process ids. That detection/cleanup payload does not launch anything, but
+# the raw marker fallback used to deny it because it contains both a generic
+# executable marker ("python") and the process name (false positive 2026-07-05).
 #
 # The exemption is deliberately narrow and fail-closed. It requires ALL of:
 #   * Bash tool, and the whole shell command is a single python invocation
@@ -261,24 +262,25 @@ start_protected_process_detection_only if {
 #     tag, nothing else on the first line, and nothing after the terminator
 #     line; or `python3 -c` whose quote-scrubbed remainder is empty (the
 #     entire program is quoted, nothing chained);
-#   * the payload mentions `/proc/` (it is a process-state reader);
+#   * the payload mentions `/proc/` (it is a process-state reader/teardown
+#     loop);
 #   * no `$(` and no backtick anywhere (no command substitution rides along);
 #   * every `start_protected_game.exe` occurrence sits inside a quoted string
 #     literal, never in shell/python execution position, and the name does
 #     not appear in non-command tool fields; and
-#   * the payload contains no process-execution mechanism (subprocess,
+#   * the payload contains no process-launch mechanism (subprocess,
 #     os.system, exec*/spawn/eval, `sh -c`, wine/proton/steam-launch tokens).
 # Any failed condition falls through to the raw marker fallback, and the
 # direct scrubbed_command regex rules are unaffected either way.
 start_protected_process_detection_only if {
-	proc_scan_readonly_command
+	proc_scan_detection_or_teardown_command
 }
 
 start_protected_process_detection_only if {
 	pgrep_subprocess_detection_command
 }
 
-proc_scan_readonly_command if {
+proc_scan_detection_or_teardown_command if {
 	tool_name == "Bash"
 	proc_scan_python_shape
 	contains(lower(command), "/proc/")

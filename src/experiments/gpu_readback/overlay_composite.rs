@@ -1,10 +1,95 @@
 
-/// One-time setup for the per-frame composite: derive the device from the backbuffer, read the captured
-/// portrait, build the persistent source texture + command allocator/list/fence + our OWN private DIRECT
-/// queue. We do NOT submit on the game's command queue -- doing so from the Present hook caused a vkd3d
-/// access violation; instead we CPU-fence-wait our copy to completion before the original Present runs.
-/// Stores every object as a leaked raw pointer. `false` on any failure. The step logs localize a hardware
-/// fault (catch_unwind cannot catch an access violation inside a D3D12 call).
+use windows::Win32::Foundation::RECT;
+use windows::Win32::Graphics::Direct3D::{
+    D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST, ID3DBlob, ID3DInclude,
+};
+use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
+use windows::Win32::Graphics::Direct3D12::{
+    D3D_ROOT_SIGNATURE_VERSION_1, D3D12_BLEND_DESC, D3D12_BLEND_INV_SRC_ALPHA,
+    D3D12_BLEND_ONE, D3D12_BLEND_OP_ADD, D3D12_BLEND_SRC_ALPHA,
+    D3D12_COLOR_WRITE_ENABLE_ALL, D3D12_COMPARISON_FUNC_ALWAYS,
+    D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF, D3D12_CULL_MODE_NONE,
+    D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, D3D12_DEPTH_STENCIL_DESC,
+    D3D12_DESCRIPTOR_HEAP_DESC, D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
+    D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+    D3D12_DESCRIPTOR_HEAP_TYPE_RTV, D3D12_DESCRIPTOR_RANGE, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
+    D3D12_DESCRIPTOR_RANGE_TYPE_SRV, D3D12_FILL_MODE_SOLID,
+    D3D12_FILTER_MIN_MAG_MIP_LINEAR, D3D12_GRAPHICS_PIPELINE_STATE_DESC,
+    D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED, D3D12_INPUT_LAYOUT_DESC,
+    D3D12_PIPELINE_STATE_FLAG_NONE, D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+    D3D12_RASTERIZER_DESC, D3D12_RENDER_TARGET_BLEND_DESC, D3D12_RENDER_TARGET_VIEW_DESC,
+    D3D12_RENDER_TARGET_VIEW_DESC_0, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+    D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_ROOT_CONSTANTS, D3D12_ROOT_DESCRIPTOR_TABLE,
+    D3D12_ROOT_PARAMETER, D3D12_ROOT_PARAMETER_0, D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
+    D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE, D3D12_ROOT_SIGNATURE_DESC,
+    D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
+    D3D12_RTV_DIMENSION_TEXTURE2D, D3D12_SAMPLER_DESC, D3D12_SHADER_BYTECODE,
+    D3D12_SHADER_RESOURCE_VIEW_DESC, D3D12_SHADER_RESOURCE_VIEW_DESC_0,
+    D3D12_SHADER_VISIBILITY_PIXEL, D3D12_SRV_DIMENSION_TEXTURE2D,
+    D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK, D3D12_STATIC_SAMPLER_DESC,
+    D3D12_TEXTURE_ADDRESS_MODE_CLAMP, D3D12_TEX2D_RTV, D3D12_TEX2D_SRV, D3D12_VIEWPORT,
+    D3D12SerializeRootSignature, ID3D12DescriptorHeap, ID3D12PipelineState, ID3D12RootSignature,
+};
+use windows::core::BOOL;
+
+static OVERLAY_ROOT_SIGNATURE: AtomicUsize = AtomicUsize::new(0);
+static OVERLAY_PSO: AtomicUsize = AtomicUsize::new(0);
+static OVERLAY_SRV_HEAP: AtomicUsize = AtomicUsize::new(0);
+static OVERLAY_RTV_HEAP: AtomicUsize = AtomicUsize::new(0);
+static OVERLAY_GPU_TEXTURE: AtomicUsize = AtomicUsize::new(0);
+static OVERLAY_GPU_UPLOAD: AtomicUsize = AtomicUsize::new(0);
+static OVERLAY_GPU_UPLOAD_SIZE: AtomicU64 = AtomicU64::new(0);
+static OVERLAY_GPU_TEX_W: AtomicUsize = AtomicUsize::new(0);
+static OVERLAY_GPU_TEX_H: AtomicUsize = AtomicUsize::new(0);
+static OVERLAY_GPU_TEX_STATE: AtomicUsize = AtomicUsize::new(0); // 0=COPY_DEST/unknown, 1=PIXEL_SHADER_RESOURCE
+static OVERLAY_GPU_TEX_VERSION: AtomicUsize = AtomicUsize::new(usize::MAX);
+static OVERLAY_PSO_FORMAT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OVERLAY_GPU_FAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OVERLAY_GPU_FAIL_CODE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OVERLAY_GPU_FAIL_VERSION: AtomicUsize = AtomicUsize::new(0);
+/// Loading-screen build currently accepted by Present. When this changes, any already-published portrait
+/// snapshot is stale/previous-window content (often a different source resolution), so Present holds until
+/// a later live publish bumps `LOADING_BG_PORTRAIT_RGBA_VERSION` for this build.
+static OVERLAY_LOADSCREEN_BUILD_SEEN: AtomicUsize = AtomicUsize::new(0);
+static OVERLAY_LOADSCREEN_BASELINE_VERSION: AtomicUsize = AtomicUsize::new(0);
+/// Native loading-bar final hits already consumed by this overlay window. Reset on re-arm so a prior
+/// load's terminal-frame latch cannot instantly stop the next loading portrait window.
+static OVERLAY_NATIVE_BAR_FINAL_HITS_SEEN: AtomicUsize = AtomicUsize::new(0);
+
+const OVERLAY_SHADER_HLSL: &[u8] = br#"
+Texture2D portrait_tex : register(t0);
+SamplerState portrait_sampler : register(s0);
+cbuffer OverlayConstants : register(b0) {
+    float4 uv_scale_bias;
+};
+struct VsOut {
+    float4 pos : SV_Position;
+    float2 uv : TEXCOORD0;
+};
+VsOut vs_main(uint id : SV_VertexID) {
+    float2 pos;
+    if (id == 0) {
+        pos = float2(-1.0, -1.0);
+    } else if (id == 1) {
+        pos = float2(-1.0, 3.0);
+    } else {
+        pos = float2(3.0, -1.0);
+    }
+    VsOut o;
+    o.pos = float4(pos, 0.0, 1.0);
+    o.uv = float2(pos.x * 0.5 + 0.5, 0.5 - pos.y * 0.5);
+    return o;
+}
+float4 ps_main(VsOut input) : SV_Target {
+    float2 uv = input.uv * uv_scale_bias.xy + uv_scale_bias.zw;
+    return portrait_tex.Sample(portrait_sampler, uv);
+}
+"#;
+
+/// One-time setup for the per-frame composite: derive the device from the backbuffer, create the
+/// persistent command objects, and build a tiny GPU alpha-composite pipeline. We do NOT submit on the
+/// game's command queue -- doing so from the Present hook caused a vkd3d access violation; instead we
+/// CPU-fence-wait our private queue before the original Present runs.
 unsafe fn init_overlay_draw_state(backbuffer: &ID3D12Resource) -> bool {
     let mut device_opt: Option<ID3D12Device> = None;
     if unsafe { backbuffer.GetDevice(&mut device_opt) }.is_err() {
@@ -13,31 +98,59 @@ unsafe fn init_overlay_draw_state(backbuffer: &ID3D12Resource) -> bool {
     let Some(device) = device_opt else {
         return false;
     };
+    let bb_desc = unsafe { backbuffer.GetDesc() };
 
-    let (pw, ph, pixels) = {
+    let (pw, ph, pixels_len) = {
         let Ok(g) = LOADING_BG_PORTRAIT_RGBA.lock() else {
             return false;
         };
         match g.as_ref() {
-            Some((w, h, px)) => (*w, *h, px.clone()),
+            Some((w, h, px)) => (*w, *h, px.len()),
             None => return false,
         }
     };
     if pw == 0 || ph == 0 || pw > MAX_RT_DIM || ph > MAX_RT_DIM {
         return false;
     }
-    if pixels.len() < (pw as usize) * (ph as usize) * RGBA8_BPP {
+    if pixels_len < (pw as usize) * (ph as usize) * RGBA8_BPP {
         return false;
     }
     append_autoload_debug(format_args!(
-        "present-overlay: draw init step1 device + portrait ok ({pw}x{ph}, {} bytes)",
-        pixels.len()
+        "present-overlay: GPU init step1 device + portrait ok ({pw}x{ph}, {pixels_len} bytes, bb_format={})",
+        bb_desc.Format.0
     ));
 
-    // NOTE: no GPU source texture is created here anymore -- the composite blends the portrait onto the
-    // backbuffer on the CPU (readback region -> alpha-blend -> writeback), sourcing the pixels directly
-    // from `LOADING_BG_PORTRAIT_RGBA` each frame. That is what lets the transparent (alpha-0) background
-    // show the loading screen through; a raw CopyTextureRegion could not honor per-pixel alpha.
+    let Some(root_sig) = (unsafe { create_overlay_root_signature(&device) }) else {
+        append_autoload_debug(format_args!("present-overlay: GPU init root signature failed"));
+        return false;
+    };
+    let Some(pso) = (unsafe { create_overlay_pso(&device, &root_sig, bb_desc.Format) }) else {
+        append_autoload_debug(format_args!("present-overlay: GPU init PSO failed"));
+        return false;
+    };
+    let srv_heap_desc = D3D12_DESCRIPTOR_HEAP_DESC {
+        Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+        NumDescriptors: 1,
+        Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
+        NodeMask: 0,
+    };
+    let Ok(srv_heap) = (unsafe {
+        device.CreateDescriptorHeap::<ID3D12DescriptorHeap>(&srv_heap_desc)
+    }) else {
+        return false;
+    };
+    let rtv_heap_desc = D3D12_DESCRIPTOR_HEAP_DESC {
+        Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+        NumDescriptors: 1,
+        Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
+        NodeMask: 0,
+    };
+    let Ok(rtv_heap) = (unsafe {
+        device.CreateDescriptorHeap::<ID3D12DescriptorHeap>(&rtv_heap_desc)
+    }) else {
+        return false;
+    };
+
     let Ok(allocator) = (unsafe {
         device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)
     }) else {
@@ -48,12 +161,11 @@ unsafe fn init_overlay_draw_state(backbuffer: &ID3D12Resource) -> bool {
             0,
             D3D12_COMMAND_LIST_TYPE_DIRECT,
             &allocator,
-            None,
+            Some(&pso),
         )
     }) else {
         return false;
     };
-    // CreateCommandList returns the list OPEN; close it so the first per-frame `Reset` is valid.
     if unsafe { list.Close() }.is_err() {
         return false;
     }
@@ -61,7 +173,6 @@ unsafe fn init_overlay_draw_state(backbuffer: &ID3D12Resource) -> bool {
         return false;
     };
 
-    // Our OWN persistent DIRECT queue (the proven readback/upload pattern). We never touch the game's queue.
     let queue_desc = D3D12_COMMAND_QUEUE_DESC {
         Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
         Priority: 0,
@@ -73,16 +184,213 @@ unsafe fn init_overlay_draw_state(backbuffer: &ID3D12Resource) -> bool {
         return false;
     };
     append_autoload_debug(format_args!(
-        "present-overlay: draw init step3 cmd objects + own queue ready"
+        "present-overlay: GPU init step3 root/pso/descriptors/cmd objects + own queue ready"
     ));
 
+    OVERLAY_ROOT_SIGNATURE.store(root_sig.into_raw() as usize, Ordering::SeqCst);
+    OVERLAY_PSO.store(pso.into_raw() as usize, Ordering::SeqCst);
+    OVERLAY_SRV_HEAP.store(srv_heap.into_raw() as usize, Ordering::SeqCst);
+    OVERLAY_RTV_HEAP.store(rtv_heap.into_raw() as usize, Ordering::SeqCst);
     OVERLAY_ALLOCATOR.store(allocator.into_raw() as usize, Ordering::SeqCst);
     OVERLAY_LIST.store(list.into_raw() as usize, Ordering::SeqCst);
     OVERLAY_FENCE.store(fence.into_raw() as usize, Ordering::SeqCst);
     OVERLAY_QUEUE.store(queue.into_raw() as usize, Ordering::SeqCst);
     OVERLAY_PORTRAIT_W.store(pw as usize, Ordering::SeqCst);
     OVERLAY_PORTRAIT_H.store(ph as usize, Ordering::SeqCst);
+    OVERLAY_PSO_FORMAT.store(bb_desc.Format.0 as usize, Ordering::SeqCst);
     true
+}
+
+unsafe fn create_overlay_root_signature(device: &ID3D12Device) -> Option<ID3D12RootSignature> {
+    let range = D3D12_DESCRIPTOR_RANGE {
+        RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+        NumDescriptors: 1,
+        BaseShaderRegister: 0,
+        RegisterSpace: 0,
+        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
+    };
+    let table = D3D12_ROOT_DESCRIPTOR_TABLE {
+        NumDescriptorRanges: 1,
+        pDescriptorRanges: &range,
+    };
+    let params = [
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                DescriptorTable: table,
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+        D3D12_ROOT_PARAMETER {
+            ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
+            Anonymous: D3D12_ROOT_PARAMETER_0 {
+                Constants: D3D12_ROOT_CONSTANTS {
+                    ShaderRegister: 0,
+                    RegisterSpace: 0,
+                    Num32BitValues: 4,
+                },
+            },
+            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+        },
+    ];
+    let sampler = D3D12_STATIC_SAMPLER_DESC {
+        Filter: D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+        AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+        AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+        AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+        MipLODBias: 0.0,
+        MaxAnisotropy: 1,
+        ComparisonFunc: D3D12_COMPARISON_FUNC_ALWAYS,
+        BorderColor: D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK,
+        MinLOD: 0.0,
+        MaxLOD: f32::MAX,
+        ShaderRegister: 0,
+        RegisterSpace: 0,
+        ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
+    };
+    let desc = D3D12_ROOT_SIGNATURE_DESC {
+        NumParameters: params.len() as u32,
+        pParameters: params.as_ptr(),
+        NumStaticSamplers: 1,
+        pStaticSamplers: &sampler,
+        Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
+    };
+    let mut blob: Option<ID3DBlob> = None;
+    let mut err: Option<ID3DBlob> = None;
+    if unsafe {
+        D3D12SerializeRootSignature(
+            &desc,
+            D3D_ROOT_SIGNATURE_VERSION_1,
+            &mut blob,
+            Some(&mut err),
+        )
+    }
+    .is_err()
+    {
+        log_shader_error("root-signature", err.as_ref());
+        return None;
+    }
+    let blob = blob?;
+    let bytes = unsafe {
+        std::slice::from_raw_parts(blob.GetBufferPointer() as *const u8, blob.GetBufferSize())
+    };
+    unsafe { device.CreateRootSignature::<ID3D12RootSignature>(0, bytes).ok() }
+}
+
+unsafe fn create_overlay_pso(
+    device: &ID3D12Device,
+    root_sig: &ID3D12RootSignature,
+    bb_format: DXGI_FORMAT,
+) -> Option<ID3D12PipelineState> {
+    let vs = unsafe { compile_overlay_shader(b"vs_main\0", b"vs_5_0\0") }?;
+    let ps = unsafe { compile_overlay_shader(b"ps_main\0", b"ps_5_0\0") }?;
+    let mut blend = D3D12_BLEND_DESC::default();
+    blend.RenderTarget[0] = D3D12_RENDER_TARGET_BLEND_DESC {
+        BlendEnable: BOOL(1),
+        LogicOpEnable: BOOL(0),
+        SrcBlend: D3D12_BLEND_SRC_ALPHA,
+        DestBlend: D3D12_BLEND_INV_SRC_ALPHA,
+        BlendOp: D3D12_BLEND_OP_ADD,
+        SrcBlendAlpha: D3D12_BLEND_ONE,
+        DestBlendAlpha: D3D12_BLEND_INV_SRC_ALPHA,
+        BlendOpAlpha: D3D12_BLEND_OP_ADD,
+        LogicOp: Default::default(),
+        RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL.0 as u8,
+    };
+    let mut rtv_formats = [DXGI_FORMAT_UNKNOWN; 8];
+    rtv_formats[0] = bb_format;
+    let desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
+        pRootSignature: ManuallyDrop::new(Some(root_sig.clone())),
+        VS: D3D12_SHADER_BYTECODE {
+            pShaderBytecode: unsafe { vs.GetBufferPointer() },
+            BytecodeLength: unsafe { vs.GetBufferSize() },
+        },
+        PS: D3D12_SHADER_BYTECODE {
+            pShaderBytecode: unsafe { ps.GetBufferPointer() },
+            BytecodeLength: unsafe { ps.GetBufferSize() },
+        },
+        BlendState: blend,
+        SampleMask: u32::MAX,
+        RasterizerState: D3D12_RASTERIZER_DESC {
+            FillMode: D3D12_FILL_MODE_SOLID,
+            CullMode: D3D12_CULL_MODE_NONE,
+            FrontCounterClockwise: BOOL(0),
+            DepthBias: 0,
+            DepthBiasClamp: 0.0,
+            SlopeScaledDepthBias: 0.0,
+            DepthClipEnable: BOOL(0),
+            MultisampleEnable: BOOL(0),
+            AntialiasedLineEnable: BOOL(0),
+            ForcedSampleCount: 0,
+            ConservativeRaster: D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF,
+        },
+        DepthStencilState: D3D12_DEPTH_STENCIL_DESC::default(),
+        InputLayout: D3D12_INPUT_LAYOUT_DESC::default(),
+        IBStripCutValue: D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED,
+        PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,
+        NumRenderTargets: 1,
+        RTVFormats: rtv_formats,
+        DSVFormat: DXGI_FORMAT_UNKNOWN,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Flags: D3D12_PIPELINE_STATE_FLAG_NONE,
+        ..Default::default()
+    };
+    unsafe { device.CreateGraphicsPipelineState::<ID3D12PipelineState>(&desc).ok() }
+}
+
+unsafe fn compile_overlay_shader(entry: &'static [u8], target: &'static [u8]) -> Option<ID3DBlob> {
+    let mut code: Option<ID3DBlob> = None;
+    let mut err: Option<ID3DBlob> = None;
+    if unsafe {
+        D3DCompile(
+            OVERLAY_SHADER_HLSL.as_ptr() as *const c_void,
+            OVERLAY_SHADER_HLSL.len(),
+            PCSTR::from_raw(b"er-effects-present-overlay\0".as_ptr()),
+            None,
+            None::<&ID3DInclude>,
+            PCSTR::from_raw(entry.as_ptr()),
+            PCSTR::from_raw(target.as_ptr()),
+            0,
+            0,
+            &mut code,
+            Some(&mut err),
+        )
+    }
+    .is_err()
+    {
+        log_shader_error(core::str::from_utf8(entry).unwrap_or("shader"), err.as_ref());
+        return None;
+    }
+    code
+}
+
+fn overlay_gpu_fail(code: usize, msg: &str, cur_ver: usize) -> bool {
+    OVERLAY_GPU_FAIL_CODE.store(code, Ordering::SeqCst);
+    OVERLAY_GPU_FAIL_VERSION.store(cur_ver, Ordering::SeqCst);
+    let n = OVERLAY_GPU_FAIL_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+    if n <= 16 || n % 128 == 0 {
+        append_autoload_debug(format_args!(
+            "present-overlay: GPU composite failed code={code} count={n} version={cur_ver} msg={msg}"
+        ));
+    }
+    false
+}
+
+fn log_shader_error(stage: &str, err: Option<&ID3DBlob>) {
+    if let Some(err) = err {
+        let ptr = unsafe { err.GetBufferPointer() } as *const u8;
+        let len = unsafe { err.GetBufferSize() };
+        if !ptr.is_null() && len > 0 {
+            let bytes = unsafe { std::slice::from_raw_parts(ptr, len.min(512)) };
+            let msg = core::str::from_utf8(bytes).unwrap_or("<non-utf8 shader error>");
+            append_autoload_debug(format_args!("present-overlay: {stage} compile error: {msg}"));
+            return;
+        }
+    }
+    append_autoload_debug(format_args!("present-overlay: {stage} compile/serialize failed"));
 }
 
 /// Composite the captured portrait onto the swapchain backbuffer. Called from the Present detour every
@@ -110,6 +418,7 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
     // behavior (old head held until the new masked head is ready), bounded by the keyed-publish gate.
     // Only the per-window drive-freeze latch is cleared here so the next window re-renders.
     PROFILE_BAKE_RGBA_CAPTURED.store(0, Ordering::SeqCst);
+    PROFILE_LOADSCREEN_TABLE_OWNED.store(0, Ordering::SeqCst);
     PROFILE_RT_PIN.store(0, Ordering::SeqCst);
     PROFILE_DEPTH_PIN.store(0, Ordering::SeqCst);
     // Fresh adaptive tear baseline for the next window's character (honest content scores differ
@@ -279,45 +588,83 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
         OVERLAY_NOW_LOADING_SEEN.load(Ordering::SeqCst) != 0
     };
     if OVERLAY_STOPPED.load(Ordering::SeqCst) != 0 {
-        // Stopped: re-arm ONLY on evidence of a NEW loading window -- loading reasserting, or a fresh
-        // post-Continue table build (the System Quit character-switch reload path). Reset the seen latch so
-        // the previous window can't instant-stop this one.
+        // Stopped: re-arm ONLY on evidence of a NEW loading window. For native-bar-complete stops
+        // (reason=4), do NOT re-arm just because `loading` still reads true: the same native loading
+        // window can linger after Gauge_3 hit frame 500/500, and re-arming there creates a pointless
+        // immediate double-stop. A fresh post-Continue table build is the reliable new-window proof.
         let rebuilt = PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst)
             > OVERLAY_STOP_TABLE_BUILDS.load(Ordering::SeqCst);
-        if !(loading || rebuilt) {
+        let stopped_on_native_bar = OVERLAY_STOP_REASON.load(Ordering::SeqCst) == 4;
+        if !rebuilt && (stopped_on_native_bar || !loading) {
             return false;
         }
         OVERLAY_STOPPED.store(0, Ordering::SeqCst);
         OVERLAY_NOW_LOADING_SEEN.store(if loading { 1 } else { 0 }, Ordering::SeqCst);
         OVERLAY_BRIDGE_PRESENTS.store(0, Ordering::SeqCst);
         OVERLAY_WORLD_STOP_LOGGED.store(0, Ordering::SeqCst);
+        OVERLAY_NATIVE_BAR_FINAL_HITS_SEEN.store(
+            LOADING_SCREEN_BAR_FINAL_HITS.load(Ordering::SeqCst),
+            Ordering::SeqCst,
+        );
         append_autoload_debug(format_args!(
             "present-overlay: re-armed for a new loading window (loading={loading} rebuilt={rebuilt})"
         ));
     }
-    // PRIMARY STOP: we were on the loading screen and the load has now COMPLETED (load_done true AND the
-    // black plate gone). This is the game's own transition to gameplay -- the spec-correct pop moment (the
-    // instant the bar fills). IN_WORLD_REACHED is deliberately never consulted: it latches while the loading
-    // screen is still up (PlayerIns lives through it), which was the premature-pop bug.
-    if loading_seen && !loading {
+    // PRODUCT STOP: the native now-loading Gauge_3 reached its terminal frame. Static RE (2026-07-05):
+    // CS::LoadingScreen::Update drives the visible loading bar with `progress01 -> frame 1..max`; the
+    // final frame is the exact in-process semaphore for "the visible loading bar reached 100%". This is
+    // later and more faithful than TimeAct/world-ready, and lets our portrait/custom-view hand off at the
+    // same moment the game's own loading bar says the load is complete.
+    let native_bar_final_hits = LOADING_SCREEN_BAR_FINAL_HITS.load(Ordering::SeqCst);
+    let native_bar_final_seen = OVERLAY_NATIVE_BAR_FINAL_HITS_SEEN.load(Ordering::SeqCst);
+    if native_bar_final_hits > native_bar_final_seen {
         OVERLAY_STOPPED.store(1, Ordering::SeqCst);
         OVERLAY_STOP_TABLE_BUILDS.store(
             PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst),
             Ordering::SeqCst,
         );
         OVERLAY_WINDOW_STOPS.fetch_add(1, Ordering::SeqCst);
-        OVERLAY_STOP_REASON.store(1, Ordering::SeqCst);
+        OVERLAY_STOP_REASON.store(4, Ordering::SeqCst);
+        OVERLAY_NATIVE_BAR_FINAL_HITS_SEEN.store(native_bar_final_hits, Ordering::SeqCst);
+        let frame = LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst);
+        let max = LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst);
+        let progress = LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "present-overlay: load completed (load_done latched, cover plate gone) -> stopped compositing at the game's transition to gameplay"
+            "present-overlay: native loading Gauge_3 reached terminal frame ({frame}/{max}, progress={progress}permille) -> stopped compositing loading portrait"
         ));
-        loading_portrait_window_reset("load completed");
+        loading_portrait_window_reset("native loading bar complete");
         return false;
     }
+    // FALLBACK STOP: `load_done && !fake_vis` fires before the user-visible loading surface has fully
+    // handed off on some runs, so bridge it; the TimeAct stop above is preferred when it appears first.
+    let post_load_bridge = loading_seen && !loading;
+    if post_load_bridge {
+        let n = OVERLAY_BRIDGE_PRESENTS.fetch_add(1, Ordering::SeqCst) + 1;
+        if n < OVERLAY_LOAD_DONE_VISIBLE_BRIDGE_PRESENTS {
+            if n == 1 {
+                append_autoload_debug(format_args!(
+                    "present-overlay: load_done+!fake_vis observed; bridging visible loading hand-off for up to {OVERLAY_LOAD_DONE_VISIBLE_BRIDGE_PRESENTS} presents"
+                ));
+            }
+        } else {
+            OVERLAY_STOPPED.store(1, Ordering::SeqCst);
+            OVERLAY_STOP_TABLE_BUILDS.store(
+                PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst),
+                Ordering::SeqCst,
+            );
+            OVERLAY_WINDOW_STOPS.fetch_add(1, Ordering::SeqCst);
+            OVERLAY_STOP_REASON.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "present-overlay: load completed bridge elapsed ({n} presents after load_done+!fake_vis) -> stopped compositing"
+            ));
+            loading_portrait_window_reset("load completed bridge elapsed");
+            return false;
+        }
+    }
     // ANTI-RUNAWAY BACKSTOP: pathological case where the load reports done AND we're in-world but the
-    // primary stop can't fire (e.g. the black plate's `visible` stuck at 1). Count in-world+load_done
-    // frames; force a stop past a huge budget so the head can't composite over gameplay forever. Never
-    // fires on a normal load (load_done + !fake_vis stops immediately). reason=3 flags the assumption broke.
-    if load_done && IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES {
+    // primary bridge/stop never engaged. Count in-world+load_done frames; force a stop past a huge budget
+    // so the head can't composite forever. reason=3 flags the assumption broke.
+    if !post_load_bridge && load_done && IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES {
         let n = OVERLAY_BRIDGE_PRESENTS.fetch_add(1, Ordering::SeqCst) + 1;
         if n >= OVERLAY_NOWLOAD_BRIDGE_MAX_PRESENTS {
             OVERLAY_STOPPED.store(1, Ordering::SeqCst);
@@ -355,16 +702,30 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
     // the whole loading screen (the forge redirect only commits ~twice -> a frozen displayed head). The
     // live-re-upload block below rebuilds the overlay texture on each version bump, so the displayed head
     // follows the cursor until loading completes.
-    let forge_committed = LOADING_BG_TEXTURE_REDIRECT_COMMITS.load(Ordering::SeqCst) > 0;
-    // Forge-INDEPENDENT loading-window latch: PROFILE_LOADSCREEN_TABLE_BUILDS goes >0 when we (re)build our
-    // profile renderers post-Continue -- i.e. we are on the loading cover, past the menu, before the world.
-    // The overlay used to lean solely on `forge_committed` as its "cover is up" signal (now_loading_active /
-    // fake_loading_screen_visible both read false in the direct-menu-load path), so disabling the native
-    // forge silently killed the overlay too. This latch keeps the overlay live when the forge is off
-    // (overlay-only mode) without depending on it. Same monotonic behaviour (never decrements) as forge.
-    let loadscreen_active = PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst) > 0;
-    if !(forge_committed || loadscreen_active || loading) {
+    let _forge_committed = LOADING_BG_TEXTURE_REDIRECT_COMMITS.load(Ordering::SeqCst) > 0;
+    // Current-source gate: do NOT composite during the loose pre-build `loading` interval. That interval can
+    // still hold a previous/profile-select 256x256 snapshot while the current loading-cover renderer has not
+    // been built yet; drawing it caused a visible resolution swap before the live 56x56 source took over.
+    // The loading portrait belongs to the loadscreen renderer window, so require that window's table build.
+    let load_builds = PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst);
+    let loadscreen_active = PROFILE_LOADSCREEN_TABLE_OWNED.load(Ordering::SeqCst) != 0;
+    if !loadscreen_active {
         return false;
+    }
+    let cur_ver = LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst);
+    if loadscreen_active {
+        let seen = OVERLAY_LOADSCREEN_BUILD_SEEN.load(Ordering::SeqCst);
+        if seen != load_builds {
+            OVERLAY_LOADSCREEN_BUILD_SEEN.store(load_builds, Ordering::SeqCst);
+            OVERLAY_LOADSCREEN_BASELINE_VERSION.store(cur_ver, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "present-overlay: loadscreen build {load_builds} started; holding prior portrait until source version advances past {cur_ver}"
+            ));
+            return false;
+        }
+        if cur_ver <= OVERLAY_LOADSCREEN_BASELINE_VERSION.load(Ordering::SeqCst) {
+            return false;
+        }
     }
     if OVERLAY_DRAW_STATE.load(Ordering::SeqCst) == 2 {
         return false;
@@ -404,7 +765,6 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
     // frame with the freshly rendered, DEPTH-ALPHA-KEYED head (background alpha 0), so we blend the CURRENT
     // snapshot every frame -- the displayed head follows the cursor and its background stays transparent. On
     // any snapshot failure we skip this frame (leave the last presented content).
-    let cur_ver = LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst);
     let Some((sw, sh, spx)) = LOADING_BG_PORTRAIT_RGBA.lock().ok().and_then(|g| g.clone()) else {
         return false;
     };
@@ -443,16 +803,20 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
     if bw == 0 || bh == 0 {
         return false;
     }
-    // Center the portrait region on the backbuffer (no scaling; region = portrait size clamped to the bb).
-    let cw = sw.min(bw);
-    let ch = sh.min(bh);
-    let dx = (bw - cw) / 2;
-    let dy = (bh - ch) / 2;
+    // Fill the whole viewable backbuffer. The portrait alpha/mask is scaled to the same full-screen
+    // bounds, so the clip region is the entire visible loading-screen surface instead of a centered
+    // source-sized rectangle that can leave uncovered borders at non-portrait resolutions.
+    let cw = bw;
+    let ch = bh;
+    let dx = 0;
+    let dy = 0;
 
-    // Alpha-honoring composite: read the live backbuffer region, blend the portrait OVER it (bg alpha 0 =>
-    // the loading screen shows through), write the blended region back. All via COPY primitives -- no PSO.
+    // Alpha-honoring GPU composite: upload the latest CPU-published portrait RGBA into a tiny GPU texture
+    // on version changes, then draw one full-screen triangle over the live loading-screen backbuffer with
+    // standard src-alpha blending. This preserves transparency without reading/blending the 4K backbuffer
+    // on the CPU.
     if !unsafe {
-        blend_portrait_over_backbuffer(
+        gpu_composite_portrait_over_backbuffer(
             &device,
             queue,
             allocator,
@@ -465,28 +829,453 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
             cw,
             ch,
             sw,
+            sh,
             &spx,
+            cur_ver,
         )
     } {
         return false;
     }
 
+    // Playback-rate semaphores: draw timing proves how often the overlay reached the swapchain; reupload
+    // timing proves how often a distinct source portrait frame reached that overlay; stale-run proves visible
+    // held frames when the same portrait source is reused across consecutive presents.
+    let now_ms = overlay_timing_ms();
+    let _ = OVERLAY_DRAW_FIRST_MS.compare_exchange(0, now_ms, Ordering::SeqCst, Ordering::SeqCst);
+    OVERLAY_DRAW_LAST_MS.store(now_ms, Ordering::SeqCst);
     // Preserve the "displayed head updates per frame" oracle (oracle_overlay_reuploads): count a fresh
     // published version reaching the screen.
-    if cur_ver != OVERLAY_PORTRAIT_VERSION.swap(cur_ver, Ordering::SeqCst) {
+    let prev_ver = OVERLAY_PORTRAIT_VERSION.swap(cur_ver, Ordering::SeqCst);
+    if cur_ver != prev_ver {
         OVERLAY_REUPLOADS.fetch_add(1, Ordering::SeqCst);
+        let _ = OVERLAY_REUPLOAD_FIRST_MS.compare_exchange(0, now_ms, Ordering::SeqCst, Ordering::SeqCst);
+        OVERLAY_REUPLOAD_LAST_MS.store(now_ms, Ordering::SeqCst);
+        OVERLAY_STALE_PRESENT_RUN.store(0, Ordering::SeqCst);
+    } else {
+        let stale = OVERLAY_STALE_PRESENT_RUN.fetch_add(1, Ordering::SeqCst) + 1;
+        update_atomic_max(&OVERLAY_STALE_PRESENT_MAX, stale);
     }
     let hits = OVERLAY_DRAW_HITS.fetch_add(1, Ordering::SeqCst) + 1;
     if hits == 1 {
         append_autoload_debug(format_args!(
-            "present-overlay: portrait CPU-blended onto backbuffer {bw}x{bh} (portrait {sw}x{sh} at {dx},{dy}, depth-alpha-keyed bg)"
+            "present-overlay: portrait GPU alpha-composited onto full backbuffer {bw}x{bh} (source {sw}x{sh}, aspect-cover scale/crop, depth-alpha-keyed bg)"
         ));
     }
     true
 }
 
+fn overlay_timing_ms() -> usize {
+    let mut guard = match OVERLAY_TIMING_EPOCH.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    let epoch = guard.get_or_insert_with(std::time::Instant::now);
+    epoch.elapsed().as_millis() as usize + 1
+}
+
+fn update_atomic_max(slot: &AtomicUsize, value: usize) {
+    let mut cur = slot.load(Ordering::SeqCst);
+    while value > cur {
+        match slot.compare_exchange(cur, value, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => break,
+            Err(next) => cur = next,
+        }
+    }
+}
+
+fn sample_portrait_rgba_cover(
+    spx: &[u8],
+    sw: usize,
+    sh: usize,
+    x: usize,
+    y: usize,
+    out_w: usize,
+    out_h: usize,
+) -> (u32, u32, u32, u32) {
+    if sw == 0 || sh == 0 || out_w == 0 || out_h == 0 {
+        return (0, 0, 0, 0);
+    }
+    // Aspect-cover, single-sample mapping: preserve the portrait aspect ratio, scale until the entire
+    // destination is covered, and crop the excess in source space. This is deliberately NOT stretch and
+    // deliberately NOT supersampling; the user wants the FPS/fit experiment without the 4x cost.
+    let scale = (out_w as f32 / sw as f32).max(out_h as f32 / sh as f32);
+    let visible_w = out_w as f32 / scale;
+    let visible_h = out_h as f32 / scale;
+    let src_x = ((x as f32 + 0.5) / out_w as f32) * visible_w + (sw as f32 - visible_w) * 0.5;
+    let src_y = ((y as f32 + 0.5) / out_h as f32) * visible_h + (sh as f32 - visible_h) * 0.5;
+    let sx = (src_x.floor() as usize).min(sw - 1);
+    let sy = (src_y.floor() as usize).min(sh - 1);
+    let so = (sy * sw + sx) * RGBA8_BPP;
+    if so + 4 > spx.len() {
+        return (0, 0, 0, 0);
+    }
+    (
+        spx[so] as u32,
+        spx[so + 1] as u32,
+        spx[so + 2] as u32,
+        spx[so + 3] as u32,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn gpu_composite_portrait_over_backbuffer(
+    device: &ID3D12Device,
+    queue: &ID3D12CommandQueue,
+    allocator: &ID3D12CommandAllocator,
+    list: &ID3D12GraphicsCommandList,
+    fence: &ID3D12Fence,
+    backbuffer: &ID3D12Resource,
+    bb_format: DXGI_FORMAT,
+    _dx: u32,
+    _dy: u32,
+    cw: u32,
+    ch: u32,
+    sw: u32,
+    sh: u32,
+    spx: &[u8],
+    cur_ver: usize,
+) -> bool {
+    if bb_format.0 as usize != OVERLAY_PSO_FORMAT.load(Ordering::SeqCst) {
+        return overlay_gpu_fail(10, "backbuffer format changed", cur_ver);
+    }
+    let root_raw = OVERLAY_ROOT_SIGNATURE.load(Ordering::SeqCst) as *mut c_void;
+    let pso_raw = OVERLAY_PSO.load(Ordering::SeqCst) as *mut c_void;
+    let srv_heap_raw = OVERLAY_SRV_HEAP.load(Ordering::SeqCst) as *mut c_void;
+    let rtv_heap_raw = OVERLAY_RTV_HEAP.load(Ordering::SeqCst) as *mut c_void;
+    let (Some(root_sig), Some(pso), Some(srv_heap), Some(rtv_heap)) = (unsafe {
+        (
+            ID3D12RootSignature::from_raw_borrowed(&root_raw),
+            ID3D12PipelineState::from_raw_borrowed(&pso_raw),
+            ID3D12DescriptorHeap::from_raw_borrowed(&srv_heap_raw),
+            ID3D12DescriptorHeap::from_raw_borrowed(&rtv_heap_raw),
+        )
+    }) else {
+        return overlay_gpu_fail(11, "missing root/pso/descriptor heap", cur_ver);
+    };
+
+    let upload_needed = OVERLAY_GPU_TEX_VERSION.load(Ordering::SeqCst) != cur_ver
+        || OVERLAY_GPU_TEX_W.load(Ordering::SeqCst) != sw as usize
+        || OVERLAY_GPU_TEX_H.load(Ordering::SeqCst) != sh as usize;
+    if upload_needed && !unsafe { ensure_overlay_gpu_texture(device, srv_heap, sw, sh) } {
+        return overlay_gpu_fail(12, "ensure texture/upload failed", cur_ver);
+    }
+    let tex_raw = OVERLAY_GPU_TEXTURE.load(Ordering::SeqCst) as *mut c_void;
+    let upload_raw = OVERLAY_GPU_UPLOAD.load(Ordering::SeqCst) as *mut c_void;
+    let (Some(texture), Some(upload)) = (unsafe {
+        (
+            ID3D12Resource::from_raw_borrowed(&tex_raw),
+            ID3D12Resource::from_raw_borrowed(&upload_raw),
+        )
+    }) else {
+        return overlay_gpu_fail(13, "missing texture/upload resource", cur_ver);
+    };
+
+    if upload_needed && !unsafe { fill_overlay_upload_buffer(upload, sw, sh, spx) } {
+        // Fill is pure CPU/map work; keep it BEFORE command-list Reset so a transient map/size failure
+        // cannot leave the list open and poison every later frame's Reset.
+        return overlay_gpu_fail(15, "fill upload buffer failed", cur_ver);
+    }
+
+    if unsafe { allocator.Reset() }.is_err() || unsafe { list.Reset(allocator, Some(pso)) }.is_err() {
+        return overlay_gpu_fail(14, "allocator/list reset failed", cur_ver);
+    }
+
+    let submit_start = std::time::Instant::now();
+    if upload_needed {
+        if OVERLAY_GPU_TEX_STATE.load(Ordering::SeqCst) == 1 {
+            unsafe {
+                record_transition(
+                    list,
+                    texture,
+                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                    D3D12_RESOURCE_STATE_COPY_DEST,
+                )
+            };
+        }
+        let desc = unsafe { texture.GetDesc() };
+        let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+        unsafe {
+            device.GetCopyableFootprints(
+                &desc,
+                0,
+                1,
+                0,
+                Some(&mut footprint),
+                None,
+                None,
+                None,
+            )
+        };
+        let mut src = D3D12_TEXTURE_COPY_LOCATION {
+            pResource: ManuallyDrop::new(Some(upload.clone())),
+            Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                PlacedFootprint: footprint,
+            },
+        };
+        let mut dst = D3D12_TEXTURE_COPY_LOCATION {
+            pResource: ManuallyDrop::new(Some(texture.clone())),
+            Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
+        };
+        unsafe { list.CopyTextureRegion(&dst, 0, 0, 0, &src, None) };
+        unsafe { ManuallyDrop::drop(&mut src.pResource) };
+        unsafe { ManuallyDrop::drop(&mut dst.pResource) };
+        unsafe {
+            record_transition(
+                list,
+                texture,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            )
+        };
+        OVERLAY_GPU_TEX_STATE.store(1, Ordering::SeqCst);
+    }
+
+    let rtv_cpu = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
+    let rtv_desc = D3D12_RENDER_TARGET_VIEW_DESC {
+        Format: bb_format,
+        ViewDimension: D3D12_RTV_DIMENSION_TEXTURE2D,
+        Anonymous: D3D12_RENDER_TARGET_VIEW_DESC_0 {
+            Texture2D: D3D12_TEX2D_RTV {
+                MipSlice: 0,
+                PlaneSlice: 0,
+            },
+        },
+    };
+    unsafe { device.CreateRenderTargetView(backbuffer, Some(&rtv_desc), rtv_cpu) };
+    unsafe { record_transition(list, backbuffer, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET) };
+
+    let viewport = D3D12_VIEWPORT {
+        TopLeftX: 0.0,
+        TopLeftY: 0.0,
+        Width: cw as f32,
+        Height: ch as f32,
+        MinDepth: 0.0,
+        MaxDepth: 1.0,
+    };
+    let scissor = RECT {
+        left: 0,
+        top: 0,
+        right: cw as i32,
+        bottom: ch as i32,
+    };
+    let scale = (cw as f32 / sw as f32).max(ch as f32 / sh as f32);
+    let uv_scale_x = cw as f32 / (scale * sw as f32);
+    let uv_scale_y = ch as f32 / (scale * sh as f32);
+    let constants = [
+        uv_scale_x.to_bits(),
+        uv_scale_y.to_bits(),
+        ((1.0 - uv_scale_x) * 0.5).to_bits(),
+        ((1.0 - uv_scale_y) * 0.5).to_bits(),
+    ];
+
+    unsafe {
+        list.SetGraphicsRootSignature(root_sig);
+        list.SetPipelineState(pso);
+        list.SetDescriptorHeaps(&[Some(srv_heap.clone())]);
+        list.SetGraphicsRootDescriptorTable(0, srv_heap.GetGPUDescriptorHandleForHeapStart());
+        list.SetGraphicsRoot32BitConstants(1, constants.len() as u32, constants.as_ptr() as *const c_void, 0);
+        list.RSSetViewports(std::slice::from_ref(&viewport));
+        list.RSSetScissorRects(std::slice::from_ref(&scissor));
+        list.OMSetRenderTargets(1, Some(&rtv_cpu), true, None);
+        list.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        list.DrawInstanced(3, 1, 0, 0);
+        record_transition(list, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+    }
+
+    let ok = unsafe { execute_and_wait(queue, list, fence) };
+    if !ok {
+        return overlay_gpu_fail(16, "execute/wait failed", cur_ver);
+    }
+    if upload_needed {
+        OVERLAY_GPU_TEX_VERSION.store(cur_ver, Ordering::SeqCst);
+    }
+    record_overlay_stage_ms(
+        &OVERLAY_STAGE_BLEND_COUNT,
+        &OVERLAY_STAGE_BLEND_MS_SUM,
+        &OVERLAY_STAGE_BLEND_MS_MAX,
+        submit_start.elapsed().as_millis() as usize,
+    );
+    true
+}
+
+unsafe fn ensure_overlay_gpu_texture(
+    device: &ID3D12Device,
+    srv_heap: &ID3D12DescriptorHeap,
+    sw: u32,
+    sh: u32,
+) -> bool {
+    if sw == 0 || sh == 0 || sw > MAX_RT_DIM || sh > MAX_RT_DIM {
+        return false;
+    }
+    if OVERLAY_GPU_TEXTURE.load(Ordering::SeqCst) != 0
+        && OVERLAY_GPU_UPLOAD.load(Ordering::SeqCst) != 0
+        && OVERLAY_GPU_TEX_W.load(Ordering::SeqCst) == sw as usize
+        && OVERLAY_GPU_TEX_H.load(Ordering::SeqCst) == sh as usize
+    {
+        return true;
+    }
+    let desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        Alignment: 0,
+        Width: sw as u64,
+        Height: sh,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+        Flags: D3D12_RESOURCE_FLAG_NONE,
+    };
+    let heap = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_DEFAULT,
+        CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+        CreationNodeMask: 1,
+        VisibleNodeMask: 1,
+    };
+    let mut tex_opt: Option<ID3D12Resource> = None;
+    if unsafe {
+        device.CreateCommittedResource(
+            &heap,
+            D3D12_HEAP_FLAG_NONE,
+            &desc,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            None,
+            &mut tex_opt,
+        )
+    }
+    .is_err()
+    {
+        return false;
+    }
+    let Some(texture) = tex_opt else { return false };
+
+    let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+    let mut total_bytes = 0u64;
+    unsafe {
+        device.GetCopyableFootprints(
+            &desc,
+            0,
+            1,
+            0,
+            Some(&mut footprint),
+            None,
+            None,
+            Some(&mut total_bytes),
+        )
+    };
+    if total_bytes == 0 || footprint.Footprint.RowPitch == 0 {
+        return false;
+    }
+    let upload_desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+        Alignment: 0,
+        Width: total_bytes,
+        Height: 1,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: DXGI_FORMAT_UNKNOWN,
+        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+        Flags: D3D12_RESOURCE_FLAG_NONE,
+    };
+    let upload_heap = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_UPLOAD,
+        CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+        CreationNodeMask: 1,
+        VisibleNodeMask: 1,
+    };
+    let mut up_opt: Option<ID3D12Resource> = None;
+    if unsafe {
+        device.CreateCommittedResource(
+            &upload_heap,
+            D3D12_HEAP_FLAG_NONE,
+            &upload_desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            None,
+            &mut up_opt,
+        )
+    }
+    .is_err()
+    {
+        return false;
+    }
+    let Some(upload) = up_opt else { return false };
+
+    let srv_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
+        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+        ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
+        Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
+        Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+            Texture2D: D3D12_TEX2D_SRV {
+                MostDetailedMip: 0,
+                MipLevels: 1,
+                PlaneSlice: 0,
+                ResourceMinLODClamp: 0.0,
+            },
+        },
+    };
+    unsafe { device.CreateShaderResourceView(&texture, Some(&srv_desc), srv_heap.GetCPUDescriptorHandleForHeapStart()) };
+    OVERLAY_GPU_TEXTURE.store(texture.into_raw() as usize, Ordering::SeqCst);
+    OVERLAY_GPU_UPLOAD.store(upload.into_raw() as usize, Ordering::SeqCst);
+    OVERLAY_GPU_UPLOAD_SIZE.store(total_bytes, Ordering::SeqCst);
+    OVERLAY_GPU_TEX_W.store(sw as usize, Ordering::SeqCst);
+    OVERLAY_GPU_TEX_H.store(sh as usize, Ordering::SeqCst);
+    OVERLAY_GPU_TEX_STATE.store(0, Ordering::SeqCst);
+    OVERLAY_GPU_TEX_VERSION.store(usize::MAX, Ordering::SeqCst);
+    true
+}
+
+unsafe fn fill_overlay_upload_buffer(upload: &ID3D12Resource, sw: u32, sh: u32, spx: &[u8]) -> bool {
+    let expected = sw as usize * sh as usize * RGBA8_BPP;
+    if spx.len() < expected {
+        append_autoload_debug(format_args!(
+            "present-overlay: upload fill rejected short source len={} expected={} dims={}x{}",
+            spx.len(), expected, sw, sh
+        ));
+        return false;
+    }
+    let row_size = sw as usize * RGBA8_BPP;
+    let row_pitch = ((row_size + 255) & !255).max(row_size);
+    let total = OVERLAY_GPU_UPLOAD_SIZE.load(Ordering::SeqCst) as usize;
+    // D3D12 GetCopyableFootprints total size does not require padding after the final row:
+    // total == row_pitch * (height - 1) + row_size. Do not reject valid small textures like 56x56
+    // where row_pitch=256, row_size=224, total=14304 (not 14336).
+    let needed = row_pitch * (sh as usize).saturating_sub(1) + row_size;
+    if total < needed {
+        append_autoload_debug(format_args!(
+            "present-overlay: upload fill rejected short upload total={total} need={needed} row_pitch={row_pitch} row_size={row_size} dims={}x{}",
+            sw,
+            sh
+        ));
+        return false;
+    }
+    let mut map: *mut c_void = std::ptr::null_mut();
+    if unsafe { upload.Map(0, None, Some(&mut map)) }.is_err() || map.is_null() {
+        append_autoload_debug(format_args!(
+            "present-overlay: upload fill Map failed dims={}x{} total={total}",
+            sw, sh
+        ));
+        return false;
+    }
+    {
+        let dst = unsafe { std::slice::from_raw_parts_mut(map as *mut u8, total) };
+        let src_row = row_size;
+        for y in 0..sh as usize {
+            let src = &spx[y * src_row..y * src_row + src_row];
+            let dst_off = y * row_pitch;
+            dst[dst_off..dst_off + src_row].copy_from_slice(src);
+        }
+    }
+    unsafe { upload.Unmap(0, None) };
+    true
+}
+
 /// Alpha-honoring CPU composite: copy the live backbuffer region `[dx,dy .. dx+cw,dy+ch]` to a readback
-/// buffer, blend the portrait (`spx`, `sw` wide, RGBA8 with per-pixel alpha) OVER it (`src.a`/`1-src.a`; a
+/// buffer, blend the portrait (`spx`, `sw` x `sh`, RGBA8 with per-pixel alpha) OVER it (`src.a`/`1-src.a`; a
 /// background pixel with alpha 0 leaves the backbuffer untouched so the loading screen shows through), then
 /// write the blended region back. Two submits on our OWN queue with a CPU fence wait between them (the blend
 /// needs the readback mapped). Reuses the cached `OVERLAY_BB_*` buffers; leaves the backbuffer in PRESENT.
@@ -505,6 +1294,7 @@ unsafe fn blend_portrait_over_backbuffer(
     cw: u32,
     ch: u32,
     sw: u32,
+    sh: u32,
     spx: &[u8],
 ) -> bool {
     // Copyable footprint of a cw x ch region in the backbuffer's format (256-aligned rows).
@@ -662,11 +1452,19 @@ unsafe fn blend_portrait_over_backbuffer(
     unsafe { list.CopyTextureRegion(&rb_dst, 0, 0, 0, &bb_src, Some(&read_box)) };
     unsafe { ManuallyDrop::drop(&mut rb_dst.pResource) };
     unsafe { ManuallyDrop::drop(&mut bb_src.pResource) };
+    let readback_wait_start = std::time::Instant::now();
     if !unsafe { execute_and_wait(queue, list, fence) } {
         return false;
     }
+    record_overlay_stage_ms(
+        &OVERLAY_STAGE_READBACK_WAIT_COUNT,
+        &OVERLAY_STAGE_READBACK_WAIT_MS_SUM,
+        &OVERLAY_STAGE_READBACK_WAIT_MS_MAX,
+        readback_wait_start.elapsed().as_millis() as usize,
+    );
 
     // ---- CPU BLEND: readback (backbuffer pixels) OVER-composited with the portrait, into the upload buffer.
+    let blend_start = std::time::Instant::now();
     let row_pitch = footprint.Footprint.RowPitch as usize;
     let total = total_bytes as usize;
     let swap = matches!(
@@ -691,28 +1489,23 @@ unsafe fn blend_portrait_over_backbuffer(
         let rb_bytes = unsafe { std::slice::from_raw_parts(rmap as *const u8, total) };
         let up_bytes = unsafe { std::slice::from_raw_parts_mut(umap as *mut u8, total) };
         let sw = sw as usize;
+        let sh = sh as usize;
         let cw = cw as usize;
         let ch = ch as usize;
         for y in 0..ch {
             let ro = y * row_pitch;
             for x in 0..cw {
                 let o = ro + x * 4;
-                let so = (y * sw + x) * 4;
-                if o + 4 > total || so + 4 > spx.len() {
+                if o + 4 > total {
                     break;
                 }
-                let a = spx[so + 3] as u32;
+                let (pr, pg, pb, a) = sample_portrait_rgba_cover(spx, sw, sh, x, y, cw, ch);
                 let ia = 255 - a;
                 // Portrait is RGBA; place each portrait channel at the backbuffer's channel position.
-                let (p0, p2) = if swap {
-                    (spx[so + 2] as u32, spx[so] as u32) // bb pos0=B, pos2=R
-                } else {
-                    (spx[so] as u32, spx[so + 2] as u32) // bb pos0=R, pos2=B
-                };
-                let p1 = spx[so + 1] as u32;
+                let (p0, p2) = if swap { (pb, pr) } else { (pr, pb) };
                 let blend = |p: u32, d: u32| ((p * a + d * ia + 127) / 255) as u8;
                 up_bytes[o] = blend(p0, rb_bytes[o] as u32);
-                up_bytes[o + 1] = blend(p1, rb_bytes[o + 1] as u32);
+                up_bytes[o + 1] = blend(pg, rb_bytes[o + 1] as u32);
                 up_bytes[o + 2] = blend(p2, rb_bytes[o + 2] as u32);
                 up_bytes[o + 3] = 255;
             }
@@ -721,6 +1514,12 @@ unsafe fn blend_portrait_over_backbuffer(
     let empty = D3D12_RANGE { Begin: 0, End: 0 };
     unsafe { readback.Unmap(0, Some(&empty)) };
     unsafe { upload.Unmap(0, None) };
+    record_overlay_stage_ms(
+        &OVERLAY_STAGE_BLEND_COUNT,
+        &OVERLAY_STAGE_BLEND_MS_SUM,
+        &OVERLAY_STAGE_BLEND_MS_MAX,
+        blend_start.elapsed().as_millis() as usize,
+    );
 
     // ---- SUBMIT #2: upload buffer -> backbuffer region (COPY_SOURCE -> COPY_DEST -> PRESENT) ----
     if unsafe { allocator.Reset() }.is_err() || unsafe { list.Reset(allocator, None) }.is_err() {
@@ -767,7 +1566,23 @@ unsafe fn blend_portrait_over_backbuffer(
             D3D12_RESOURCE_STATE_PRESENT,
         )
     };
-    unsafe { execute_and_wait(queue, list, fence) }
+    let upload_wait_start = std::time::Instant::now();
+    let ok = unsafe { execute_and_wait(queue, list, fence) };
+    if ok {
+        record_overlay_stage_ms(
+            &OVERLAY_STAGE_UPLOAD_WAIT_COUNT,
+            &OVERLAY_STAGE_UPLOAD_WAIT_MS_SUM,
+            &OVERLAY_STAGE_UPLOAD_WAIT_MS_MAX,
+            upload_wait_start.elapsed().as_millis() as usize,
+        );
+    }
+    ok
+}
+
+fn record_overlay_stage_ms(count: &AtomicUsize, sum: &AtomicUsize, max: &AtomicUsize, elapsed_ms: usize) {
+    count.fetch_add(1, Ordering::SeqCst);
+    sum.fetch_add(elapsed_ms, Ordering::SeqCst);
+    update_atomic_max(max, elapsed_ms);
 }
 
 /// Close `list`, execute it on `queue`, signal `fence` with a fresh monotonic value, and CPU-wait (bounded)

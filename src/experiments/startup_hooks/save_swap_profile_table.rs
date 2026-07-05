@@ -253,7 +253,7 @@ unsafe fn system_quit_save_swap_prepare_selected_slot(slot: i32) -> Result<bool,
 /// Patch the loaded slot's profile offscreen RT size BEFORE any post-Continue profile renderer is
 /// constructed. The constructor snapshots this table; patching after `PROFILE_TABLE_BUILDER_RVA` runs is
 /// too late and produces the 256x256 loading-screen portrait (Bug A). Returns true only when the loaded
-/// slot is known and its row is confirmed at the 1024x1024 target.
+/// slot is known and its row is confirmed at the configured target size.
 unsafe fn patch_profile_offscreen_size_for_loaded_slot(base: usize) -> bool {
     if !portrait_real_pixels_enabled() {
         return true;
@@ -278,7 +278,7 @@ unsafe fn patch_profile_offscreen_size_for_loaded_slot(base: usize) -> bool {
             core::ptr::write_volatile(row as *mut u64, PROFILE_OFFSCREEN_SIZE_TARGET as u64);
             core::ptr::write_volatile(
                 (row + PROFILE_OFFSCREEN_SIZE_SUPERSAMPLE_FLAG_OFFSET) as *mut u8,
-                0,
+                1,
             );
         }
         true
@@ -289,7 +289,7 @@ unsafe fn patch_profile_offscreen_size_for_loaded_slot(base: usize) -> bool {
         PROFILE_SIZE_PATCHED.fetch_or(bit, Ordering::SeqCst);
     }
     append_autoload_debug(format_args!(
-        "higher-res: pre-builder target slot {target} row=0x{cur:x} patched={} -> 1024x1024, supersample off; other slots left native 128",
+        "portrait-res: pre-builder target slot {target} row=0x{cur:x} patched={} -> base 512x512, native supersample on (expected RT 1024x1024); other slots left native 128",
         if patched { 1 } else { 0 }
     ));
     patched
@@ -321,6 +321,12 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // the native forged texture would paint a SECOND head. Overlay-only (user choice 2026-06-30).
     if !portrait_lookat_enabled() {
         unsafe { maybe_reforge_loading_portrait(base) };
+    }
+    // Product source ownership: the pre-Continue/ProfileSelect renderer is not our loading portrait
+    // source. Ignore it completely (no kick, no spare candidate, no bake-capture/dump) until the
+    // loading-screen-owned table has been built by maybe_build_profile_table_for_loading above.
+    if PROFILE_LOADSCREEN_TABLE_OWNED.load(Ordering::SeqCst) == 0 {
+        return;
     }
     // ProfileSummary = GameDataMan -> slot-manager container.
     let gdm = game_data_man_ptr_or_null();
@@ -597,7 +603,7 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                         .unwrap_or(0);
                     PROFILE_SPARE_CANDIDATE_MODEL.store(model, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "loading-portrait: pre-recorded spare candidate renderer=0x{r:x} slot={s} model_ins=0x{model:x} (model built at menu)"
+                        "loading-portrait: pre-recorded spare candidate renderer=0x{r:x} slot={s} model_ins=0x{model:x} (loading-screen-owned renderer)"
                     ));
                 }
             }

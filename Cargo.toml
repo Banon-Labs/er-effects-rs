@@ -79,6 +79,7 @@ windows = { version = "0.62", features = [
     # D3D12 readback of the live profile-portrait offscreen render target, so the now-loading
     # forge can display the real rendered character head instead of the placeholder checker.
     "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Direct3D_Fxc",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Direct3D",

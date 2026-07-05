@@ -41,7 +41,10 @@ VISUAL_RESOURCE_MUTATION_ENVS=(
 # RUNTIME_USE_DEFAULT_SAVE=1 deliberately supplies no ER_EFFECTS_SAVE_FILE and lets the DLL use the
 # active Steam user's real/default %APPDATA%/EldenRing/<SteamID>/ER0000.sl2. Pure observe/menu-reach
 # probes set RUNTIME_TELEMETRY_ONLY=1 instead.
-GOLD_SAVE="${ER_EFFECTS_GOLD_SAVE:-}"
+DEFAULT_PROBE_GOLD_SAVE="$REPO_ROOT/save-files/150-Banon/ER0000.sl2"
+# Runtime probes must not require the operator/user to supply a save path. Prefer an explicit
+# ER_EFFECTS_GOLD_SAVE when provided; otherwise fall back to the repo-local established probe save.
+GOLD_SAVE="${ER_EFFECTS_GOLD_SAVE:-$DEFAULT_PROBE_GOLD_SAVE}"
 RUNTIME_TELEMETRY_ONLY="${RUNTIME_TELEMETRY_ONLY:-0}"
 RUNTIME_USE_DEFAULT_SAVE="${RUNTIME_USE_DEFAULT_SAVE:-0}"
 # A real fixed-slot ER0000.sl2 BND4 is ~28MB even with empty slots; reject anything implausibly small.
@@ -210,8 +213,8 @@ PY
       echo "save-source: no plausible default ER0000.sl2 under $APPDATA_ER_ROOT -- launching so the DLL shows its missing-save picker"
     fi
   elif [[ "$RUNTIME_TELEMETRY_ONLY" != "1" ]]; then
-    [[ -n "$GOLD_SAVE" ]] || fatal "ER_EFFECTS_GOLD_SAVE is unset -- supply an absolute save path, set RUNTIME_USE_DEFAULT_SAVE=1, or set RUNTIME_TELEMETRY_ONLY=1"
-    [[ -f "$GOLD_SAVE" ]] || fatal "gold save not found: $GOLD_SAVE"
+    [[ -n "$GOLD_SAVE" ]] || fatal "no probe save configured and default probe save path is empty (expected $DEFAULT_PROBE_GOLD_SAVE)"
+    [[ -f "$GOLD_SAVE" ]] || fatal "probe save not found: $GOLD_SAVE (default expected at $DEFAULT_PROBE_GOLD_SAVE; set ER_EFFECTS_GOLD_SAVE only to override)"
     local gold_bytes
     gold_bytes=$(stat -c '%s' "$GOLD_SAVE" 2>/dev/null || echo 0)
     (( gold_bytes >= GOLD_SAVE_MIN_BYTES )) || fatal "gold save too small ($gold_bytes bytes < $GOLD_SAVE_MIN_BYTES): $GOLD_SAVE -- not a real save"

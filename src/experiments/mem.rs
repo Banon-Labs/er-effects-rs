@@ -251,6 +251,25 @@ pub(crate) unsafe fn safe_read_i32(addr: usize) -> Option<i32> {
         None
     }
 }
+/// Fault-tolerant f32 read via ReadProcessMemory (None on unmapped memory).
+pub(crate) unsafe fn safe_read_f32(addr: usize) -> Option<f32> {
+    let mut value: f32 = 0.0;
+    let mut read: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    let ok = unsafe {
+        ReadProcessMemory(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            addr as *const c_void,
+            &mut value as *mut f32 as *mut c_void,
+            std::mem::size_of::<f32>(),
+            &mut read,
+        )
+    };
+    if ok != HOOK_FALSE_RETURN as i32 && read == std::mem::size_of::<f32>() {
+        Some(value)
+    } else {
+        None
+    }
+}
 /// Fault-tolerant single-byte read via ReadProcessMemory (None on unmapped memory). Used by the
 /// WorldBlockRes::Update diagnostic detour to sample the phase ([+0x35]) and gate ([+0x2f]) bytes
 /// without ever dereferencing a raw pointer into possibly-unmapped block memory.

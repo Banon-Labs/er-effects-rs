@@ -137,15 +137,11 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
         return;
     }
     // ROOT FIX (2026-07-03, run gxguard2): do NOT build our portrait table while the game's own
-    // ProfileSelect (Load Character) menu owns the portraits. That menu renders its own 10 profile
-    // models; our builder adds a second 10 that stack in the SAME frame and blow past the fixed
-    // 192-slot GX command queue -> reserve_command_queue_slot null-slot crash (0x1aeaf05) exactly
-    // when the load menu appears after a few switches. Our table is only for the loading SCREEN,
-    // which comes AFTER this menu closes -- so skip the build while it is open (owner != 0). The
-    // now-loading flag briefly overlaps the still-open menu, which is why we were building too early.
-    if SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0 {
-        return;
-    }
+    // ProfileSelect (Load Character) menu still owns a populated portrait table. Once Continue teardown
+    // has emptied that table, the lingering window-owner flag is stale for our purpose; build immediately
+    // instead of waiting for that flag to clear, so the loading-owned renderer is ready when the loading
+    // screen appears.
+    let profile_select_window_open = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0;
     // If the table is already populated (menu built it, or our own build already ran), leave it -- the
     // existing mark+refresh feed + look-at + draw + oracle drive it. A live table also RE-ARMS the latch:
     // a subsequent Continue teardown empties it again and we rebuild our own for that load window.
@@ -157,8 +153,15 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     if populated {
         PROFILE_TABLE_EMPTY_STREAK.store(0, Ordering::SeqCst);
         PROFILE_TABLE_WAS_POPULATED.store(1, Ordering::SeqCst);
-        PROFILE_LOADSCREEN_REBUILT.store(0, Ordering::SeqCst);
+        if PROFILE_LOADSCREEN_TABLE_OWNED.load(Ordering::SeqCst) == 0 {
+            PROFILE_LOADSCREEN_REBUILT.store(0, Ordering::SeqCst);
+        }
         return;
+    }
+    if profile_select_window_open {
+        append_autoload_debug(format_args!(
+            "loading-portrait: ProfileSelect owner flag still set, but renderer table is empty -- treating as Continue teardown and building loading-owned renderer now"
+        ));
     }
     // Table is EMPTY this tick -- count the streak. The menu's own teardown+rebuild is synchronous, so a
     // sustained-empty table across ticks means the Continue teardown ran with no menu rebuild (we've left
@@ -174,7 +177,7 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
         return;
     }
     let nowload = unsafe { now_loading_active(base) };
-    if !(nowload || streak >= PROFILE_TABLE_EMPTY_STREAK_BUILD_THRESHOLD) {
+    if !(nowload || profile_select_window_open || streak >= PROFILE_TABLE_EMPTY_STREAK_BUILD_THRESHOLD) {
         return;
     }
     // Build it via the engine's own 10-slot builder (teardown is a no-op on a null table). Each fresh
@@ -198,11 +201,14 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     // drives the async ResMan model build to completion + keeps it latched through the loading screen.
     PROFILE_LOADSCREEN_FEED_TICKS.store(PROFILE_LOADSCREEN_FEED_WINDOW_TICKS, Ordering::SeqCst);
     PROFILE_LOADSCREEN_REBUILT.store(1, Ordering::SeqCst);
+    PROFILE_LOADSCREEN_TABLE_OWNED.store(1, Ordering::SeqCst);
     PROFILE_LOADSCREEN_TABLE_BUILDS.fetch_add(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "loading-portrait: empty profile table (trigger={} streak={streak}) -> called builder 0x{:x} to build our own renderers for the post-Continue portrait",
         if nowload {
             "now-loading"
+        } else if profile_select_window_open {
+            "profile-window-empty"
         } else {
             "empty-streak"
         },

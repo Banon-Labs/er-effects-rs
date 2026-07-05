@@ -30,6 +30,9 @@ pub(crate) const OVERLAY_INITIAL_SIZE: [f32; 2] = [420.0, 420.0];
 /// TimeAct animation IDs at or below this value mark unused/cleared queue
 /// slots rather than a real animation.
 pub(crate) const INVALID_ANIMATION_ID_FLOOR: i32 = 0;
+/// Current local-player TimeAct animation id, or 0 when none/player unavailable. This is the product
+/// semaphore for "player animations are going" and is later than bare world/player-present readiness.
+pub(crate) static PLAYER_CURRENT_ANIMATION_ID: AtomicI32 = AtomicI32::new(0);
 pub(crate) const ANIM_QUEUE_SLOT_STEP: u32 = 1;
 pub(crate) const ANIM_QUEUE_SCAN_FLOOR: u32 = 0;
 pub(crate) const CUSTOM_CALL_DEFAULT_ID: i32 = 0;

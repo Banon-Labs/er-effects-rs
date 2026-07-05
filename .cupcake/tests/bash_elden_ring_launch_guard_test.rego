@@ -165,6 +165,33 @@ test_allow_proc_comm_scan_python_c_naming_eac_launcher if {
 	count(denials) == 0
 }
 
+# Regression for er-effects-rs-9iz: exact /proc process teardown for stale
+# Elden Ring/EAC launcher processes is allowed. It reads /proc, matches only
+# exact comm names, and sends SIGTERM/SIGKILL to those pids; it never launches
+# the named executable.
+test_allow_proc_comm_scan_sigterm_sigkill_cleanup_naming_eac_launcher if {
+	cmd := concat("\n", [
+		"python3 - <<'PY'",
+		"import glob, os, signal",
+		"names = {'eldenring.exe', 'start_protected_game.exe'}",
+		"for path in glob.glob('/proc/[0-9]*/comm'):",
+		"    try:",
+		"        pid = int(path.split('/')[2])",
+		"        comm = open(path).read().strip()",
+		"    except (OSError, ValueError):",
+		"        continue",
+		"    if comm in names:",
+		"        for sig in (signal.SIGTERM, signal.SIGKILL):",
+		"            try:",
+		"                os.kill(pid, sig)",
+		"            except OSError:",
+		"                pass",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
 # --- (b') ... but the /proc mention must never become a launch bypass -------
 
 # A /proc-scanning heredoc that ALSO launches stays denied (exec mechanism

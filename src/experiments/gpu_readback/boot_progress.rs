@@ -16,7 +16,7 @@
 //   MENU     -- `PRODUCT_CORE_LAST_MENU_OPENED_LATCH` (title menu natural-open latch)
 //   CONTINUE -- `SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT` / `TFC_CONTINUE_FIRED`
 //   LOADING  -- `PROFILE_LOADSCREEN_TABLE_BUILDS > 0` -> HANDOFF (stop; the loading-portrait
-//               overlay window owns the screen from here)
+//               overlay/native Gauge_3 window owns the remaining progress from here)
 //
 // Reached milestones are latched into a monotonic bitmask (a latch that later reads 0 cannot walk
 // the bar backwards), and the displayed value creeps part-way toward the next milestone over time so
@@ -24,11 +24,6 @@
 // PRESENT->COPY_DEST, CopyTextureRegion upload->backbuffer strip rect, transition back, CPU fence
 // wait) -- no backbuffer readback: the pre-Continue frames are the content-free black this view
 // exists to replace, and the strip rect is entirely ours.
-
-use windows::Win32::Graphics::Direct3D12::{
-    D3D12_DESCRIPTOR_HEAP_DESC, D3D12_DESCRIPTOR_HEAP_FLAG_NONE, D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
-    D3D12_RESOURCE_STATE_RENDER_TARGET, ID3D12DescriptorHeap,
-};
 
 /// Draw-state machine: 0 = uninit, 1 = ready, 2 = failed (give up; never retry).
 static BOOT_VIEW_DRAW_STATE: AtomicUsize = AtomicUsize::new(0);
@@ -82,8 +77,23 @@ const BOOT_VIEW_MILESTONE_LABELS: [&str; 7] = [
 ];
 /// Progress targets per milestone, in permille. Spacing follows the measured product-run timeline
 /// (first present +3.5s, offline +8.5s, title/menu ~+10s, continue ~+15s, table builds ~+15.5s) so
-/// the bar's pace roughly matches wall-clock without ever depending on it.
-const BOOT_VIEW_MILESTONE_PERMILLE: [usize; 7] = [60, 200, 350, 550, 700, 880, 1000];
+/// the bar's pace roughly matches wall-clock without ever depending on it. The final pre-loading-view
+/// milestone deliberately stops at the native-handoff marker instead of 100%: the remaining gap is owned
+/// by the game's real now-loading Gauge_3 bar, whose terminal frame is the true all-loading-complete
+/// semaphore.
+const BOOT_VIEW_NATIVE_HANDOFF_PERMILLE: usize = 700;
+const BOOT_VIEW_NATIVE_HANDOFF_LABEL: &str = "NATIVE";
+const BOOT_VIEW_HANDOFF_MARKER_W: usize = 3;
+const BOOT_VIEW_HANDOFF_GAP_W: usize = 9;
+const BOOT_VIEW_MILESTONE_PERMILLE: [usize; 7] = [
+    45,
+    140,
+    245,
+    385,
+    490,
+    615,
+    BOOT_VIEW_NATIVE_HANDOFF_PERMILLE,
+];
 /// Inter-milestone creep: over this window the bar moves up to 7/10 of the gap to the next target.
 const BOOT_VIEW_CREEP_FULL_MS: u64 = 6000;
 const BOOT_VIEW_CREEP_NUM: usize = 7;
@@ -105,8 +115,8 @@ const BOOT_VIEW_GLYPH_ADV: usize = 6;
 const BOOT_VIEW_BAR_H: usize = 3;
 /// Gap between the text row and the bar track.
 const BOOT_VIEW_TEXT_BAR_GAP: usize = 5;
-/// Bottom padding row so the bar never touches the strip edge.
-const BOOT_VIEW_PAD_BOTTOM: usize = 2;
+/// Bottom padding row so the handoff marker never touches the strip edge.
+const BOOT_VIEW_PAD_BOTTOM: usize = 3;
 /// Total strip height: text row, gap, bar, bottom pad.
 const BOOT_VIEW_STRIP_HEIGHT: usize = BOOT_VIEW_GLYPH_H * BOOT_VIEW_TEXT_SCALE
     + BOOT_VIEW_TEXT_BAR_GAP
@@ -182,7 +192,7 @@ fn boot_view_progress() -> (usize, usize) {
     let next = if idx + 1 < BOOT_VIEW_MILESTONE_PERMILLE.len() {
         BOOT_VIEW_MILESTONE_PERMILLE[idx + 1]
     } else {
-        1000
+        base
     };
     let since = now_ms.saturating_sub(BOOT_VIEW_IDX_CHANGED_MS.load(Ordering::SeqCst));
     let creep = (next.saturating_sub(base) * (since.min(BOOT_VIEW_CREEP_FULL_MS) as usize)
@@ -213,6 +223,7 @@ fn boot_glyph_5x7(c: char) -> [u8; 7] {
         'O' => [0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
         'T' => [0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
         'U' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
+        'V' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x0a, 0x04],
         '0' => [0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e],
         '1' => [0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e],
         '2' => [0x0e, 0x11, 0x01, 0x06, 0x08, 0x10, 0x1f],
@@ -226,6 +237,10 @@ fn boot_glyph_5x7(c: char) -> [u8; 7] {
         '%' => [0x19, 0x19, 0x02, 0x04, 0x08, 0x13, 0x13],
         _ => [0; 7],
     }
+}
+
+fn boot_text_width(text: &str) -> usize {
+    text.chars().count() * BOOT_VIEW_GLYPH_ADV * BOOT_VIEW_TEXT_SCALE
 }
 
 /// Blit `text` into the tight RGBA buffer at (x, y), scaled by `BOOT_VIEW_TEXT_SCALE`.
@@ -287,6 +302,19 @@ fn boot_view_rasterize(w: usize, h: usize, idx: usize, permille: usize) -> Vec<u
     boot_fill_rect(&mut buf, w, h, 0, 0, w, h, BOOT_VIEW_RGB_BLACK);
     let label = BOOT_VIEW_MILESTONE_LABELS[idx.min(BOOT_VIEW_MILESTONE_LABELS.len() - 1)];
     boot_draw_text(&mut buf, w, h, 0, 0, label);
+    let marker_x = (w * BOOT_VIEW_NATIVE_HANDOFF_PERMILLE / 1000).min(w.saturating_sub(1));
+    let handoff_label_w = boot_text_width(BOOT_VIEW_NATIVE_HANDOFF_LABEL);
+    let handoff_label_x = marker_x
+        .saturating_sub(handoff_label_w / 2)
+        .min(w.saturating_sub(handoff_label_w));
+    boot_draw_text(
+        &mut buf,
+        w,
+        h,
+        handoff_label_x,
+        0,
+        BOOT_VIEW_NATIVE_HANDOFF_LABEL,
+    );
     let bar_y = BOOT_VIEW_GLYPH_H * BOOT_VIEW_TEXT_SCALE + BOOT_VIEW_TEXT_BAR_GAP;
     boot_fill_rect(&mut buf, w, h, 0, bar_y, w, BOOT_VIEW_BAR_H, BOOT_VIEW_RGB_TRACK);
     boot_fill_rect(
@@ -297,6 +325,31 @@ fn boot_view_rasterize(w: usize, h: usize, idx: usize, permille: usize) -> Vec<u
         bar_y,
         w * permille.min(1000) / 1000,
         BOOT_VIEW_BAR_H,
+        BOOT_VIEW_RGB_FILL,
+    );
+    // Handoff marker/gap: this pre-loading bar is only phase 1. Leave the remaining track empty for the
+    // native now-loading Gauge_3 phase; the native loading-bar hook supplies the true terminal-frame
+    // semaphore for 100%. Make the split visible: a small black break in the track, a brighter 3px marker,
+    // and the NATIVE label centered above it.
+    let gap_x = marker_x.saturating_sub(BOOT_VIEW_HANDOFF_GAP_W / 2);
+    boot_fill_rect(
+        &mut buf,
+        w,
+        h,
+        gap_x,
+        bar_y.saturating_sub(2),
+        BOOT_VIEW_HANDOFF_GAP_W,
+        BOOT_VIEW_BAR_H + 4,
+        BOOT_VIEW_RGB_BLACK,
+    );
+    boot_fill_rect(
+        &mut buf,
+        w,
+        h,
+        marker_x.saturating_sub(BOOT_VIEW_HANDOFF_MARKER_W / 2),
+        bar_y.saturating_sub(2),
+        BOOT_VIEW_HANDOFF_MARKER_W,
+        BOOT_VIEW_BAR_H + 4,
         BOOT_VIEW_RGB_FILL,
     );
     buf
