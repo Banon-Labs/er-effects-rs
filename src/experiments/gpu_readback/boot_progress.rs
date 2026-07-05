@@ -4,9 +4,10 @@
 // `Present` (~+3.5s after attach) and the post-Continue loading window (~+15.5s) is pure black. The
 // Present-hook VMT swap is already installed BEFORE the first present (task tick ~+3.0s), so the
 // black gap is a draw-gating matter, not a hook-timing one: this module opens the gate at Present
-// hit #1 with content that needs NOTHING from the game -- a procedurally rasterized strip (panel +
-// milestone label + progress bar, 5x7 embedded font, no game-derived assets) whose progress is
-// driven purely by our own already-latched RAM semaphores:
+// hit #1 with content that needs NOTHING from the game -- a hairline loading bar in the game's own
+// understated presentation plus a small milestone label (5x7 embedded font, procedurally
+// rasterized, no game-derived assets), progress driven purely by our own already-latched RAM
+// semaphores:
 //
 //   BOOT     -- drawing at all (present hook + swapchain live)
 //   GAME     -- `game_man_ptr_or_null() != 0` (GameMan constructed)
@@ -70,36 +71,43 @@ const BOOT_VIEW_CREEP_FULL_MS: u64 = 6000;
 const BOOT_VIEW_CREEP_NUM: usize = 7;
 const BOOT_VIEW_CREEP_DEN: usize = 10;
 
-// Strip geometry (pixels; text is the 5x7 font at 2x = 10x14).
-const BOOT_VIEW_BORDER: usize = 1;
-const BOOT_VIEW_PAD: usize = 6;
+// Strip geometry (pixels; text is the 5x7 font at 2x = 10x14). ER-idiomatic minimal presentation
+// (user 2026-07-05: the panel/border/percent styling clashed with the game): a hairline bar on a
+// dark track near the bottom of the screen -- the game's own now-loading bar language -- with a
+// small dim label above it. Everything else in the copied strip rect is pure black, which is
+// indistinguishable from the black boot frames underneath, so only the bar + label are visible.
+// (The game's REAL loading-bar widget/asset cannot be reused here: its menu resources are not in
+// game memory until ~+12.7s and the DLL must not unpack assets from disk itself.)
 const BOOT_VIEW_TEXT_SCALE: usize = 2;
 const BOOT_VIEW_GLYPH_W: usize = 5;
 const BOOT_VIEW_GLYPH_H: usize = 7;
 /// Advance per character (5px glyph + 1px gap, pre-scale).
 const BOOT_VIEW_GLYPH_ADV: usize = 6;
-const BOOT_VIEW_BAR_H: usize = 8;
+/// Hairline bar, like the game's own loading bar.
+const BOOT_VIEW_BAR_H: usize = 3;
 /// Gap between the text row and the bar track.
-const BOOT_VIEW_TEXT_BAR_GAP: usize = 4;
-/// Total strip height: border+pad, text row, gap, bar, pad+border.
-const BOOT_VIEW_STRIP_HEIGHT: usize = 2 * (BOOT_VIEW_BORDER + BOOT_VIEW_PAD)
-    + BOOT_VIEW_GLYPH_H * BOOT_VIEW_TEXT_SCALE
+const BOOT_VIEW_TEXT_BAR_GAP: usize = 5;
+/// Bottom padding row so the bar never touches the strip edge.
+const BOOT_VIEW_PAD_BOTTOM: usize = 2;
+/// Total strip height: text row, gap, bar, bottom pad.
+const BOOT_VIEW_STRIP_HEIGHT: usize = BOOT_VIEW_GLYPH_H * BOOT_VIEW_TEXT_SCALE
     + BOOT_VIEW_TEXT_BAR_GAP
-    + BOOT_VIEW_BAR_H;
+    + BOOT_VIEW_BAR_H
+    + BOOT_VIEW_PAD_BOTTOM;
 /// Strip width = backbuffer width * NUM/DEN (clamped to a sane minimum).
-const BOOT_VIEW_STRIP_W_NUM: u32 = 11;
-const BOOT_VIEW_STRIP_W_DEN: u32 = 20;
+const BOOT_VIEW_STRIP_W_NUM: u32 = 19;
+const BOOT_VIEW_STRIP_W_DEN: u32 = 25;
 const BOOT_VIEW_STRIP_MIN_W: u32 = 220;
-/// Strip top edge = backbuffer height * NUM/DEN (lower third, where the game's own bar lives).
-const BOOT_VIEW_STRIP_Y_NUM: u32 = 78;
+/// Strip top edge = backbuffer height * NUM/DEN (near the bottom, where the game's own bar lives).
+const BOOT_VIEW_STRIP_Y_NUM: u32 = 91;
 const BOOT_VIEW_STRIP_Y_DEN: u32 = 100;
 
-// Palette (R, G, B) -- muted panel + the gold accent family of the game's own UI.
-const BOOT_VIEW_RGB_PANEL: [u8; 3] = [16, 15, 13];
-const BOOT_VIEW_RGB_BORDER: [u8; 3] = [96, 82, 46];
-const BOOT_VIEW_RGB_TRACK: [u8; 3] = [30, 28, 24];
-const BOOT_VIEW_RGB_FILL: [u8; 3] = [198, 161, 74];
-const BOOT_VIEW_RGB_TEXT: [u8; 3] = [214, 198, 152];
+// Palette (R, G, B) -- the game's understated loading-bar language: off-white hairline fill over a
+// near-black track, dim warm-grey caption text. Black elsewhere (invisible over the boot frames).
+const BOOT_VIEW_RGB_BLACK: [u8; 3] = [0, 0, 0];
+const BOOT_VIEW_RGB_TRACK: [u8; 3] = [26, 26, 26];
+const BOOT_VIEW_RGB_FILL: [u8; 3] = [226, 223, 214];
+const BOOT_VIEW_RGB_TEXT: [u8; 3] = [150, 147, 138];
 
 /// True once milestone `idx`'s semaphore has asserted. Every predicate is a pure atomic/pointer read
 /// that is safe from the render thread; ordering mistakes degrade to a stalled bar, never a lie about
@@ -253,80 +261,26 @@ fn boot_fill_rect(
     }
 }
 
-/// Rasterize the full strip: panel + border, milestone label (left), percent (right), bar track with
-/// milestone tick marks and the gold fill up to `permille`.
+/// Rasterize the strip: black background (invisible over the black boot frames), the milestone
+/// label in dim caption grey above a hairline track/fill bar -- the game's own loading-bar
+/// presentation, nothing more.
 fn boot_view_rasterize(w: usize, h: usize, idx: usize, permille: usize) -> Vec<u8> {
     let mut buf = vec![0u8; w * h * RGBA8_BPP];
-    boot_fill_rect(&mut buf, w, h, 0, 0, w, h, BOOT_VIEW_RGB_PANEL);
-    // 1px border.
-    boot_fill_rect(&mut buf, w, h, 0, 0, w, BOOT_VIEW_BORDER, BOOT_VIEW_RGB_BORDER);
-    boot_fill_rect(
-        &mut buf,
-        w,
-        h,
-        0,
-        h - BOOT_VIEW_BORDER,
-        w,
-        BOOT_VIEW_BORDER,
-        BOOT_VIEW_RGB_BORDER,
-    );
-    boot_fill_rect(&mut buf, w, h, 0, 0, BOOT_VIEW_BORDER, h, BOOT_VIEW_RGB_BORDER);
-    boot_fill_rect(
-        &mut buf,
-        w,
-        h,
-        w - BOOT_VIEW_BORDER,
-        0,
-        BOOT_VIEW_BORDER,
-        h,
-        BOOT_VIEW_RGB_BORDER,
-    );
-    let inset = BOOT_VIEW_BORDER + BOOT_VIEW_PAD;
-    // Label (left) + percent (right) on the text row.
+    boot_fill_rect(&mut buf, w, h, 0, 0, w, h, BOOT_VIEW_RGB_BLACK);
     let label = BOOT_VIEW_MILESTONE_LABELS[idx.min(BOOT_VIEW_MILESTONE_LABELS.len() - 1)];
-    boot_draw_text(&mut buf, w, h, inset, inset, label);
-    let pct = format!("{}%", permille / 10);
-    let pct_w = pct.chars().count() * BOOT_VIEW_GLYPH_ADV * BOOT_VIEW_TEXT_SCALE;
-    boot_draw_text(&mut buf, w, h, w.saturating_sub(inset + pct_w), inset, &pct);
-    // Bar track + fill + milestone ticks.
-    let bar_y = inset + BOOT_VIEW_GLYPH_H * BOOT_VIEW_TEXT_SCALE + BOOT_VIEW_TEXT_BAR_GAP;
-    let track_x = inset;
-    let track_w = w.saturating_sub(2 * inset);
+    boot_draw_text(&mut buf, w, h, 0, 0, label);
+    let bar_y = BOOT_VIEW_GLYPH_H * BOOT_VIEW_TEXT_SCALE + BOOT_VIEW_TEXT_BAR_GAP;
+    boot_fill_rect(&mut buf, w, h, 0, bar_y, w, BOOT_VIEW_BAR_H, BOOT_VIEW_RGB_TRACK);
     boot_fill_rect(
         &mut buf,
         w,
         h,
-        track_x,
+        0,
         bar_y,
-        track_w,
-        BOOT_VIEW_BAR_H,
-        BOOT_VIEW_RGB_TRACK,
-    );
-    boot_fill_rect(
-        &mut buf,
-        w,
-        h,
-        track_x,
-        bar_y,
-        track_w * permille.min(1000) / 1000,
+        w * permille.min(1000) / 1000,
         BOOT_VIEW_BAR_H,
         BOOT_VIEW_RGB_FILL,
     );
-    for &p in &BOOT_VIEW_MILESTONE_PERMILLE {
-        if p == 0 || p >= 1000 {
-            continue;
-        }
-        boot_fill_rect(
-            &mut buf,
-            w,
-            h,
-            track_x + track_w * p / 1000,
-            bar_y,
-            1,
-            BOOT_VIEW_BAR_H,
-            BOOT_VIEW_RGB_BORDER,
-        );
-    }
     buf
 }
 
