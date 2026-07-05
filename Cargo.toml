@@ -47,6 +47,7 @@ er-gfx = { path = "crates/er-gfx" }
 # the look-at proof writes. Core-only (default-features off) so the DLL never pulls the host `png` dep.
 erpx-rs = { path = "crates/erpx-rs", default-features = false }
 fromsoftware-shared = { path = "../fromsoftware-rs/crates/shared" }
+pelite = "0.10"
 bitflags = "2"
 # In-process x86-64 decoding (instruction lengths, prologue/pattern validation).
 # Pure-Rust decoder used directly so the hand-rolled single-step/prologue logic in lib.rs

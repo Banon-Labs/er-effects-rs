@@ -25,6 +25,8 @@ pub(crate) const INT3_PATCH_SIZE: usize = 1;
 pub(crate) const PROTECT_OLD_INIT: u32 = 0;
 /// Radix for parsing hex RVAs from er-effects-breakpoints.txt.
 pub(crate) const RVA_HEX_RADIX: u32 = 16;
+/// Conservative bound for code/data RVAs accepted by the breakpoint config normalizer.
+pub(crate) const SW_BP_RVA_LIMIT: usize = 0x5000000;
 /// INT3 is one byte; on #BP the trap RIP points just past it, so the breakpoint
 /// address = RIP - 1.
 pub(crate) const INT3_RIP_BACKUP: usize = 1;
