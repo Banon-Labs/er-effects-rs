@@ -198,6 +198,7 @@ pub(crate) unsafe extern "system" fn title_setstate_trace_detour(owner: usize, s
     if orig == TITLE_OWNER_SCAN_START_ADDRESS || orig == 0 {
         return;
     }
+    wait_for_missing_save_selection_if_pending("title SetState");
     let f: unsafe extern "system" fn(usize, i32) = unsafe { std::mem::transmute(orig) };
     unsafe { f(owner, state) };
 }

@@ -150,7 +150,9 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // %APPDATA%/EldenRing/<SteamID>/ER0000.sl2 is accepted and read normally. If neither exists,
     // enforce_save_override_or_abort shows a clear popup and exits before the title flow drifts into
     // a no-character state.
-    match enforce_save_override_or_abort() {
+    let save_override_mode = enforce_save_override_or_abort();
+    let missing_save_gate_pending = missing_save_selection_pending();
+    match save_override_mode {
         // Telemetry-only: install the hooks ONLY when the save-trace gate is on (diagnostics only --
         // no redirect dir, so the detours just log and pass through). Lets us trace the working
         // vanilla save-read (char-present save in the real appdata, no redirect).
@@ -179,6 +181,16 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
                 });
             }
         }
+    }
+    if missing_save_gate_pending {
+        if let Ok(base) = game_module_base() {
+            unsafe { install_title_setstate_trace_hook(base) };
+        }
+        std::thread::Builder::new()
+            .name("er-effects-missing-save-progress-gate".to_owned())
+            .spawn(install_show_progress_shortcircuit_hook)
+            .ok();
+        signal_missing_save_prompt_bootstrap_ready();
     }
 
     let initial_state = EffectsState::default();

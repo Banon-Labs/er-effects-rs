@@ -182,8 +182,9 @@ preflight() {
   if [[ -n "$(runtime_pids)" ]]; then
     fatal "eldenring.exe is already running; refusing to mix probe ownership"
   fi
-  # SAVE-PRESENCE GUARD (fail-closed): telemetry-only needs no save; default-save mode needs at
-  # least one plausible real default save; staged mode needs a real configured gold save.
+  # SAVE-PRESENCE CHECK: telemetry-only needs no save; default-save mode reports (but tolerates)
+  # a missing default save because the DLL's missing-save picker covers it; staged mode still
+  # fails closed on a missing/implausible configured gold save.
   if [[ "$RUNTIME_TELEMETRY_ONLY" != "1" && "$RUNTIME_USE_DEFAULT_SAVE" == "1" ]]; then
     local default_count
     default_count=$(python3 - "$APPDATA_ER_ROOT" "$GOLD_SAVE_MIN_BYTES" <<'PY'
@@ -202,7 +203,12 @@ if root.is_dir():
 print(count)
 PY
 )
-    (( default_count > 0 )) || fatal "RUNTIME_USE_DEFAULT_SAVE=1 but no plausible default ER0000.sl2 exists under $APPDATA_ER_ROOT"
+    if (( default_count == 0 )); then
+      # Not fatal by design: the DLL's missing-save picker is the product's last-resort save
+      # source, so the probe launches exactly like the product would and lets the user pick a
+      # save (or quit) when no plausible default ER0000.sl2 exists.
+      echo "save-source: no plausible default ER0000.sl2 under $APPDATA_ER_ROOT -- launching so the DLL shows its missing-save picker"
+    fi
   elif [[ "$RUNTIME_TELEMETRY_ONLY" != "1" ]]; then
     [[ -n "$GOLD_SAVE" ]] || fatal "ER_EFFECTS_GOLD_SAVE is unset -- supply an absolute save path, set RUNTIME_USE_DEFAULT_SAVE=1, or set RUNTIME_TELEMETRY_ONLY=1"
     [[ -f "$GOLD_SAVE" ]] || fatal "gold save not found: $GOLD_SAVE"

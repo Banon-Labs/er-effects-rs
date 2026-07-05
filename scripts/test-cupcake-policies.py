@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -237,6 +238,68 @@ def main() -> int:
             "blocked this Elden Ring EAC launcher command",
         ),
         PolicyCase(
+            "deny-wine-start-protected-game",
+            "wine /opt/er/start_protected_game.exe",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
+        PolicyCase(
+            "deny-dot-slash-start-protected-game",
+            "./start_protected_game.exe",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
+        # Read-only /proc comm scans may NAME the EAC launcher inside quoted
+        # string literals (2026-07-05 false positive: the sanctioned no-pgrep
+        # process-detection heredoc was denied by the raw marker fallback).
+        PolicyCase(
+            "allow-proc-comm-scan-heredoc-naming-eac-launcher",
+            "python3 - <<'PY'\n"
+            "import glob\n"
+            "names = ('steam', 'eldenring.exe', 'start_protected_game.exe')\n"
+            "found = {n: False for n in names}\n"
+            "for path in glob.glob('/proc/[0-9]*/comm'):\n"
+            "    try:\n"
+            "        comm = open(path).read().strip()\n"
+            "    except OSError:\n"
+            "        continue\n"
+            "    if comm in names:\n"
+            "        found[comm] = True\n"
+            "for n in names:\n"
+            "    print(n, 'up' if found[n] else 'down')\n"
+            "PY",
+            True,
+            extra_tool_input={
+                "description": "Report Steam/eldenring/EAC launcher process state from /proc"
+            },
+        ),
+        PolicyCase(
+            "allow-proc-comm-scan-python-c-naming-eac-launcher",
+            "python3 -c 'import glob; print(any(open(p).read().strip() =="
+            ' "start_protected_game.exe" for p in glob.glob("/proc/[0-9]*/comm")))\'',
+            True,
+        ),
+        # ... but the /proc mention must never become a launch bypass.
+        PolicyCase(
+            "deny-proc-scan-heredoc-with-subprocess-launch",
+            "python3 - <<'PY'\n"
+            "import subprocess\n"
+            "print(open('/proc/1/comm').read())\n"
+            "subprocess.run(['wine', 'start_protected_game.exe'])\n"
+            "PY",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
+        PolicyCase(
+            "deny-proc-scan-heredoc-trailing-quoted-launch",
+            "python3 - <<'PY'\n"
+            "print(open('/proc/1/comm').read())\n"
+            "PY\n"
+            "setsid '/opt/er/start_protected_game.exe'",
+            False,
+            "blocked this Elden Ring EAC launcher command",
+        ),
+        PolicyCase(
             "deny-direct-start-protected-game",
             "/tmp/start_protected_game.exe",
             False,
@@ -376,6 +439,45 @@ def main() -> int:
             tool_name="Write",
         ),
     ]
+    # The GitHub attribution guard is MACHINE-GLOBAL (XDG config, Banon-Labs/cupcake-config), not
+    # repo-local, so CI checkouts do not have it and a footerless gh body is (correctly) allowed
+    # there. Exercise its heredoc-substitution fallback only where that policy is installed.
+    attribution_policy = (
+        Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+        / "cupcake"
+        / "policies"
+        / "claude"
+        / "github_attribution_guard.rego"
+    )
+    if attribution_policy.is_file():
+        cases.extend(
+            [
+                # A --body "$(cat <<'EOF'...)" command substitution cannot be expanded by the
+                # gh_context signal, which falls back to matching the raw command text
+                # (2026-07-05 false positive: footer present in the heredoc was denied).
+                # Footer present -> allow.
+                PolicyCase(
+                    "allow-gh-pr-edit-heredoc-substitution-body-with-footer",
+                    'gh pr edit 19 --repo Banon-Labs/er-effects-rs --body "$(cat <<\'EOF\'\n'
+                    "Body text describing the change.\n\n"
+                    "\U0001f916 Written by Claude Fable 5, authorized by @chozandrias76\n"
+                    'EOF\n)"',
+                    True,
+                ),
+                # ... and the same form WITHOUT the footer must still deny (the raw
+                # command fallback must not weaken the guard).
+                PolicyCase(
+                    "deny-gh-pr-edit-heredoc-substitution-body-without-footer",
+                    'gh pr edit 19 --repo Banon-Labs/er-effects-rs --body "$(cat <<\'EOF\'\n'
+                    "Body text without attribution.\n"
+                    'EOF\n)"',
+                    False,
+                    "attribution footer",
+                ),
+            ]
+        )
+    else:
+        print(f"skip: gh-attribution guard cases (no global policy at {attribution_policy})")
     for case in cases:
         run_case(case)
     print("cupcake policy regression tests passed")
