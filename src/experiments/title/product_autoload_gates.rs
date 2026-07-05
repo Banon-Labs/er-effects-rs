@@ -102,21 +102,22 @@ pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
         OWN_LOAD_FILE_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
         OWN_STEPPER_FILE_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     }
-    let Some(slot) = request.slot() else {
-        return;
-    };
+    if let Some(slot) = request.slot() {
+        if slot < OWN_STEPPER_SLOT_ZERO {
+            return;
+        }
 
-    if slot < OWN_STEPPER_SLOT_ZERO {
-        return;
+        // OWN_STEPPER_SLOT is the shared target slot for the menu-free own_stepper /
+        // native_fullread / cold_char_mount / native-continue paths AND the experimental menu-driven
+        // product_core path. Set it whenever a valid slot is configured, regardless of method, so the
+        // known-good zero-input smoke path does not depend on a fragile env-method side effect.
+        OWN_STEPPER_SLOT.store(slot, Ordering::SeqCst);
     }
-
-    // OWN_STEPPER_SLOT is the shared target slot for the menu-free own_stepper /
-    // native_fullread / cold_char_mount / native-continue paths AND the experimental menu-driven
-    // product_core path. Set it whenever a valid slot is configured, regardless of method, so the
-    // known-good zero-input smoke path does not depend on a fragile env-method side effect.
-    OWN_STEPPER_SLOT.store(slot, Ordering::SeqCst);
     if request.method() == SaveLoadMethod::DirectMenuLoad && experimental_direct_menu_load_enabled()
     {
+        // No configured slot means "load the best active/default save slot". Leave
+        // OWN_STEPPER_SLOT at its sentinel so resolve_active_load_slot() falls back to the active
+        // profile records once the default save has been read.
         PRODUCT_AUTOLOAD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     }
 }

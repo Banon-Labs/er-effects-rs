@@ -28,14 +28,14 @@ use windows::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
             Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
             SystemServices::DLL_PROCESS_ATTACH,
-            Threading::GetCurrentProcessId,
+            Threading::{ExitProcess, GetCurrentProcessId},
         },
         UI::WindowsAndMessaging::{
-            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-            WM_KEYDOWN, WM_KEYUP,
+            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, MessageBoxW,
+            PostMessageW, MB_ICONERROR, MB_OK, WM_KEYDOWN, WM_KEYUP,
         },
     },
-    core::{BOOL, PCSTR},
+    core::{BOOL, PCSTR, PCWSTR},
 };
 
 #[allow(unused_imports)]
@@ -46,19 +46,17 @@ use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 use super::*;
 
 // ===========================================================================
-// SAVE-SOURCE OVERRIDE (no-default-fallback, env-mandated)
+// SAVE-SOURCE OVERRIDE / DEFAULT-SAVE FALLBACK
 // ===========================================================================
 //
-// USER HARD CONSTRAINT (save-override-no-default-fallback-mandatory-env-2026-06-23):
-// while the DLL is loaded it MUST NOT assume / read the default user save directory
-// (%APPDATA%/EldenRing/<SteamID64>/ER0000.sl2). There is NO escape hatch back to the
-// default dir. The ONLY exemption is a pure telemetry/observe-only mode that loads
-// nothing. In every other case the save source is MANDATORY and supplied via env
-// `ER_EFFECTS_SAVE_FILE` (an absolute path to the save file the game should open);
-// if it is unset/blank/not a readable real save the process ABORTS early at DLL init,
-// before the game opens any save -- never a silent fallback.
+// Explicit save sources still come from `ER_EFFECTS_SAVE_FILE` or DLL-adjacent
+// `er-effects.toml` (`save_file = "..."`). If neither is provided, the product path
+// now intentionally falls back to the active Steam user's default save file at
+// `%APPDATA%/EldenRing/<SteamID64>/ER0000.sl2`; if that default save does not exist,
+// the DLL shows a fatal popup and exits instead of drifting into a no-character menu.
+// Pure telemetry/observe-only mode remains the only no-load exemption.
 //
-// Mechanism: a scoped MinHook on the Win32 `CreateFileW` (and `CopyFileW`) chokepoint
+// Explicit-source mechanism: a scoped MinHook on the Win32 `CreateFileW` (and `CopyFileW`) chokepoint
 // through which the game opens EVERY save artifact (verified RE: vanilla `.sl2`,
 // Seamless `.co2`, `.bak`, all funnel `MicrosoftDiskFileOperator::OpenFile` ->
 // `CreateFileW`; reads/writes reuse the returned HANDLE so redirecting the open covers
@@ -343,11 +341,13 @@ static SAVE_REDIRECT_MODE: AtomicUsize = AtomicUsize::new(SAVE_REDIRECT_MODE_UNS
 const SAVE_REDIRECT_MODE_UNSET: usize = 0;
 const SAVE_REDIRECT_MODE_STAGED_ROOT: usize = 1;
 const SAVE_REDIRECT_MODE_DIRECT_FILE: usize = 2;
+const SAVE_REDIRECT_MODE_DEFAULT_USER: usize = 3;
 
 pub(crate) fn write_save_redirect_telemetry(body: &mut String) {
     let mode = match SAVE_REDIRECT_MODE.load(Ordering::SeqCst) {
         SAVE_REDIRECT_MODE_STAGED_ROOT => "staged_root",
         SAVE_REDIRECT_MODE_DIRECT_FILE => "direct_file",
+        SAVE_REDIRECT_MODE_DEFAULT_USER => "default_user_save",
         _ => "unset",
     };
     let observed_steam_id = OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst);
@@ -709,13 +709,16 @@ enum SaveRedirectSource {
     },
 }
 
-fn validated_configured_save_file() -> Option<PathBuf> {
-    let path = env_save_file_path()?;
+fn validated_save_file_path(path: PathBuf) -> Option<PathBuf> {
     let meta = std::fs::metadata(&path).ok()?;
     if !meta.is_file() || meta.len() < SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES {
         return None;
     }
     Some(path)
+}
+
+fn validated_configured_save_file() -> Option<PathBuf> {
+    validated_save_file_path(env_save_file_path()?)
 }
 
 fn plausible_steam_id64(value: u64) -> Option<u64> {
@@ -773,6 +776,74 @@ fn configured_active_steam_id64() -> Option<(u64, &'static str)> {
             steam_api_active_steam_id64()
                 .map(|steam_id| (steam_id, "early-steamapi-active-steamid"))
         })
+}
+
+fn default_save_root() -> Option<PathBuf> {
+    std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .map(|profile| PathBuf::from(profile).join("AppData").join("Roaming"))
+        })
+        .map(|appdata| appdata.join("EldenRing"))
+}
+
+fn default_save_file_for_steam_id64(steam_id: u64) -> Option<PathBuf> {
+    let path = default_save_root()?
+        .join(steam_id.to_string())
+        .join("ER0000.sl2");
+    validated_save_file_path(path)
+}
+
+fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
+    let Some(root) = default_save_root() else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let steam_id = entry
+                .file_name()
+                .to_str()
+                .filter(|name| (16..=20).contains(&name.len()))
+                .filter(|name| name.as_bytes().iter().all(u8::is_ascii_digit))
+                .and_then(|name| name.parse::<u64>().ok())
+                .and_then(plausible_steam_id64)?;
+            let path = entry.path().join("ER0000.sl2");
+            validated_save_file_path(path).map(|path| (path, steam_id))
+        })
+        .collect()
+}
+
+fn active_default_save_file() -> Option<(PathBuf, u64, &'static str)> {
+    if let Some((steam_id, reason)) = configured_active_steam_id64() {
+        return match default_save_file_for_steam_id64(steam_id) {
+            Some(path) => Some((path, steam_id, reason)),
+            None => {
+                append_autoload_debug(format_args!(
+                    "save-override: no plausible default save for active SteamID64 {steam_id} ({reason})"
+                ));
+                None
+            }
+        };
+    }
+    let mut candidates = default_save_file_candidates();
+    if candidates.len() == 1 {
+        let (path, steam_id) = candidates.remove(0);
+        return Some((path, steam_id, "single-default-save-dir"));
+    }
+    append_autoload_debug(format_args!(
+        "save-override: active default save unresolved -- active SteamID64 unavailable and plausible default save candidate count={}",
+        candidates.len()
+    ));
+    None
+}
+
+pub(crate) fn configured_or_default_save_file() -> Option<PathBuf> {
+    configured_save_file().or_else(|| active_default_save_file().map(|(path, _, _)| path))
 }
 
 fn staged_save_root_for_configured_file(path: &Path) -> Option<(PathBuf, u64)> {
@@ -835,21 +906,32 @@ fn save_override_redirect_source() -> Option<SaveRedirectSource> {
 pub(crate) enum SaveOverrideMode {
     /// Pure telemetry/observe-only: no save source required, no redirect installed.
     TelemetryOnly,
-    /// A valid env save source was resolved; the redirect hook should be installed.
+    /// A valid explicit save source was resolved; the redirect hook should be installed.
     Redirect,
+    /// No explicit source was supplied; the active Steam user's default save exists and is used in place.
+    DefaultUserSave,
 }
 
-/// Called EARLY in `DllMain` (before any save IO). Enforces the no-default-fallback rule:
-/// unless telemetry-only, a valid DLL-adjacent `er-effects.toml` save source (optionally overridden
-/// by `ER_EFFECTS_SAVE_FILE`) MUST be present, else the process is aborted immediately. On success it
-/// stashes the redirect directory for the CreateFileW hook.
-/// NEVER returns on the fail-closed path.
+/// Called EARLY in `DllMain` (before any save IO). Explicit save sources still install the
+/// redirect hook. With no explicit source, a plausible active Steam-user default save is accepted and
+/// the game reads it normally. If neither source exists, the process exits after a clear popup.
 pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
     if save_override_telemetry_only() {
         append_autoload_debug(format_args!(
             "save-override: TELEMETRY-ONLY mode -- save source not enforced (loads nothing; no default-dir read for a character)"
         ));
         return SaveOverrideMode::TelemetryOnly;
+    }
+    if configured_save_file().is_none()
+        && let Some((file, steam_id, reason)) = active_default_save_file()
+    {
+        OBSERVED_ACTIVE_STEAM_ID64.store(steam_id, Ordering::SeqCst);
+        SAVE_REDIRECT_MODE.store(SAVE_REDIRECT_MODE_DEFAULT_USER, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-override: DEFAULT-USER-SAVE -- no ER_EFFECTS_SAVE_FILE/save_file configured; using active SteamID64 {steam_id} ({reason}) default save '{}' with no redirect",
+            file.display()
+        ));
+        return SaveOverrideMode::DefaultUserSave;
     }
     match save_override_redirect_source() {
         Some(SaveRedirectSource::StagedRoot {
@@ -902,17 +984,30 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
             SaveOverrideMode::Redirect
         }
         None => {
-            // FAIL CLOSED. The DLL must never assume the default user save directory.
             append_autoload_debug(format_args!(
-                "save-override: FATAL -- configured save file is unset/blank/not a readable .sl2/.co2 save (>= {} bytes), and ER_EFFECTS_TELEMETRY_ONLY is not set. config_error={}. Refusing to assume the default user save directory. ABORTING.",
+                "save-override: FATAL -- no explicit save_file/ER_EFFECTS_SAVE_FILE and no readable active default ER0000.sl2 (>= {} bytes). config_error={}. Showing popup and exiting.",
                 SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES,
                 runtime_config_error().unwrap_or_else(|| "none".to_owned())
             ));
-            eprintln!(
-                "er-effects: FATAL -- no valid save source from DLL-adjacent er-effects.toml (or ER_EFFECTS_SAVE_FILE override) and not telemetry-only; refusing to assume the default user save directory. Aborting."
-            );
-            std::process::abort();
+            show_missing_save_popup_and_exit();
         }
+    }
+}
+
+fn show_missing_save_popup_and_exit() -> ! {
+    fn wide_nul(text: &str) -> Vec<u16> {
+        text.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+    let message = wide_nul("This mod can't run without a save present. Exiting");
+    let title = wide_nul("er-effects-rs");
+    unsafe {
+        let _ = MessageBoxW(
+            None,
+            PCWSTR::from_raw(message.as_ptr()),
+            PCWSTR::from_raw(title.as_ptr()),
+            MB_OK | MB_ICONERROR,
+        );
+        ExitProcess(1);
     }
 }
 

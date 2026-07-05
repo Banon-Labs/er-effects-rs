@@ -675,9 +675,9 @@ unsafe fn seed_profile_summary_slot_from_staged_save(
     {
         return false;
     }
-    let Some(save_path) = configured_save_file() else {
+    let Some(save_path) = configured_or_default_save_file() else {
         append_autoload_debug(format_args!(
-            "native-profile-capture: staged ProfileSummary seed unavailable -- no configured save_file"
+            "native-profile-capture: ProfileSummary seed unavailable -- no configured save_file and no active default save"
         ));
         return false;
     };

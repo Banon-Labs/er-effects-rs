@@ -144,12 +144,12 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         install_crash_logger();
     }
 
-    // SAVE-SOURCE ENFORCEMENT (save-override-no-default-fallback-mandatory-env-2026-06-23).
-    // The DLL must NEVER assume / read the default user save directory. Unless this is a pure
-    // telemetry/observe-only run (loads nothing), a valid `ER_EFFECTS_SAVE_FILE` MUST be present or
-    // the process ABORTS here -- before the title flow or any save IO runs. On success, install the
-    // CreateFileW/CopyFileW save-path redirect (scoped Win32 hook) so every save artifact (.sl2/.co2/
-    // .bak, read AND write) is served from the env-provided directory instead of the default dir.
+    // SAVE-SOURCE ENFORCEMENT / DEFAULT FALLBACK.
+    // Explicit ER_EFFECTS_SAVE_FILE / er-effects.toml save_file sources install the scoped Win32
+    // save-path redirect. If no explicit source is supplied, the active Steam user's default
+    // %APPDATA%/EldenRing/<SteamID>/ER0000.sl2 is accepted and read normally. If neither exists,
+    // enforce_save_override_or_abort shows a clear popup and exits before the title flow drifts into
+    // a no-character state.
     match enforce_save_override_or_abort() {
         // Telemetry-only: install the hooks ONLY when the save-trace gate is on (diagnostics only --
         // no redirect dir, so the detours just log and pass through). Lets us trace the working
@@ -169,6 +169,15 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
                     .name("er-effects-save-redirect".to_owned())
                     .spawn(install_save_redirect_hooks);
             });
+        }
+        SaveOverrideMode::DefaultUserSave => {
+            if save_trace_enabled() {
+                START_SAVE_REDIRECT.call_once(|| {
+                    let _ = std::thread::Builder::new()
+                        .name("er-effects-save-trace".to_owned())
+                        .spawn(install_save_redirect_hooks);
+                });
+            }
         }
     }
 

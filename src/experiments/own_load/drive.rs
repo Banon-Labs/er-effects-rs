@@ -377,7 +377,7 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     // Same std::fs access the redirect enforcer already uses successfully from this DLL under Proton
     // (save_redirect::save_override_redirect_root_w). The full multi-slot save is returned; the
     // caller slices the picked slot exactly as it does for the native-builder bytes.
-    if let Some(path) = configured_save_file() {
+    if let Some(path) = configured_or_default_save_file() {
         match std::fs::read(&path) {
             Ok(mut bytes)
                 if bytes.len() as u64 >= crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES =>

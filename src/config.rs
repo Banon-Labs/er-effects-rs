@@ -92,6 +92,10 @@ pub(crate) fn runtime_config_error() -> Option<String> {
 }
 
 pub(crate) fn configured_save_file() -> Option<PathBuf> {
+    configured_explicit_save_file()
+}
+
+pub(crate) fn configured_explicit_save_file() -> Option<PathBuf> {
     if let Ok(value) = std::env::var(SAVE_FILE_ENV) {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
@@ -187,12 +191,18 @@ fn load_runtime_config(hmodule: HINSTANCE) -> Result<RuntimeConfig, String> {
         return Err(format!("DLL path has no parent: '{}'", dll_path.display()));
     };
     let path = dir.join(CONFIG_FILE_NAME);
-    let contents = std::fs::read_to_string(&path).map_err(|err| {
-        format!(
-            "required config '{}' is missing or unreadable: {err}",
-            path.display()
-        )
-    })?;
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(RuntimeConfig {
+                path,
+                ..RuntimeConfig::default()
+            });
+        }
+        Err(err) => {
+            return Err(format!("config '{}' is unreadable: {err}", path.display()));
+        }
+    };
     parse_runtime_config(path, &contents)
 }
 
@@ -266,12 +276,6 @@ fn parse_runtime_config(path: PathBuf, contents: &str) -> Result<RuntimeConfig, 
             }
             _ => {}
         }
-    }
-    if config.save_file.is_none() {
-        return Err(format!(
-            "required config '{}' must contain save_file = \"...\"",
-            config.path.display()
-        ));
     }
     Ok(config)
 }

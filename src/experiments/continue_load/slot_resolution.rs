@@ -1,9 +1,10 @@
 /// Crash-on-not-loaded watchdog (privacy-policy-gated-on-character-presence-CONFIRMED-2026-06-23):
 /// the Bandai-Namco privacy policy / new-game state shows ONLY when the active profile has no
 /// character (profile_slot_active == 0). When a load is expected (not telemetry-only) and the profile
-/// summary has been present but reports ZERO active slots for a settle window, the gold save did NOT
-/// load -> abort instantly so the failure is loud + fast (no stall on the policy). profile_slot_active
-/// != 0 is the single "save loaded" semaphore (redirect fired AND char present AND policy never builds).
+/// summary has been present but reports ZERO active slots for a settle window, the selected save did
+/// NOT load -> abort instantly so the failure is loud + fast (no stall on the policy).
+/// profile_slot_active != 0 is the single "save loaded" semaphore (explicit redirect/default save read
+/// AND char present AND policy never builds).
 pub(crate) unsafe fn save_load_watchdog() {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     if save_override_telemetry_only() {
@@ -39,10 +40,10 @@ pub(crate) unsafe fn save_load_watchdog() {
     }
     if n >= SAVE_WATCHDOG_ZERO_BUDGET {
         append_autoload_debug(format_args!(
-            "save-override: WATCHDOG ABORT -- profile summary reports ZERO active slots after {n} frames; the gold save did NOT load (no character -> privacy policy / new-game). Aborting."
+            "save-override: WATCHDOG ABORT -- profile summary reports ZERO active slots after {n} frames; the selected save did NOT load (no character -> privacy policy / new-game). Aborting."
         ));
         eprintln!(
-            "er-effects: WATCHDOG ABORT -- gold save not loaded (no character in active profile); aborting."
+            "er-effects: WATCHDOG ABORT -- selected save not loaded (no character in active profile); aborting."
         );
         std::process::abort();
     }
