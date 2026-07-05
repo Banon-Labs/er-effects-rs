@@ -301,7 +301,9 @@ const FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA: usize = 0x29c8e48;
 const MENU_JOB_STATE_CONTINUE: i32 = 1;
 
 static NETWORK_CHECK_SHORTCIRCUIT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-static NETWORK_CHECK_SHORTCIRCUIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// pub(crate): the boot-progress view reads this as its menu-open-era milestone (the shortcircuit
+/// fires within ~10ms of the title-accept-byte natural menu-open on the product path).
+pub(crate) static NETWORK_CHECK_SHORTCIRCUIT_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// THE MILESTONE-3 FIX (zero-input, save-safe). `CS::NetworkCheckJob::Run` is a title-flow MenuJob the
 /// TitleTopDialog registrar chains UNCONDITIONALLY at menu-open. Offline, its Steam-holder check
