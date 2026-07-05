@@ -56,6 +56,17 @@ pub(crate) fn crash_logger_enabled() -> bool {
             .exists()
 }
 
+/// Separate, explicit opt-in for deliberate proof-gate faults. Crash logging is diagnostic telemetry;
+/// it must not turn semantic semaphore mismatches into crashes unless a run explicitly asks for
+/// release/fail-fast behavior.
+pub(crate) fn deliberate_fail_fast_enabled() -> bool {
+    matches!(std::env::var("ER_EFFECTS_FAIL_FAST").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-fail-fast.txt")
+            .exists()
+}
+
 pub(crate) fn log_process_exit(api: &str, code: u32, handle: usize) {
     // Log only the first terminator -- the one that actually quits the game.
     if PROCESS_EXIT_LOGGED.swap(true, Ordering::SeqCst) {

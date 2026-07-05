@@ -62,6 +62,8 @@ Steam MUST be running before every Elden Ring runtime probe. Verify with `pgrep 
 
 Standing runtime-validation order: after a successful build that materially increases confidence in a runtime-affecting Elden Ring change and the next proof requires live validation, launch the approved direct/offline no-auto-teardown Elden Ring probe immediately (after Steam/no-existing-ER preflight) instead of waiting for another prompt. Still use the loud launch banner and exact artifact/teardown reporting.
 
+Default runtime research mode is telemetry-only/non-fatal diagnostics. Treat deliberate fail-fast faults on semaphore mismatch as "release-mode" proof gates, not the default research/debug posture. Unless the user explicitly asks for fail-fast/release behavior, runtime probes should collect/report semaphores and leave diagnosable evidence without intentionally crashing the game. Do not confuse this workflow rule with the existing `ER_EFFECTS_TELEMETRY_ONLY=1` save-source exemption, which currently means no character load; if needed, add/enable a separate non-fatal semaphore mode rather than abusing no-load telemetry-only.
+
 User steering is not evidence. When the user proposes a concrete technical hypothesis or fallback during RE/runtime work, treat it as a lead to verify, not as ground truth and not as permission to skip research. Before implementing a user-steered objective claim, inspect the current static/runtime evidence that could confirm or falsify it, state the verified delta in the work artifacts/logs, and only then choose the next code change. If the evidence contradicts part of the steering, preserve the valid intent but correct the mechanism instead of reflexively agreeing.
 
 ## linux-x86-debug Sibling Toolkit (attach / trace / DLL inject)

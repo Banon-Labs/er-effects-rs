@@ -412,9 +412,10 @@ pub(crate) fn portrait_target_slot() -> i32 {
 /// ac0 (a slot index): this compares the CHARACTER stored in that slot against who is actually resident.
 /// Determines "is it the expected slot" without any pixel readback (the user's constraint: pixels are
 /// too slow / the wrong tool). On a mismatch (a real character is loaded but its NAME/MAP != our target
-/// slot's record): record the oracle + a crash-log line and, on diagnostic runs, deliberately fault so
-/// the regression STOPS THE RUN EARLY. Gated on a real loaded character AND a real record, so pre-load
-/// transients and empty slots never fire.
+/// slot's record), record the oracle + a crash-log line. Deliberate faulting is release/fail-fast-only;
+/// normal runtime research must leave the game alive so the underlying game/DLL behavior can continue
+/// producing evidence. Gated on a real loaded character AND a real record, so pre-load transients and
+/// empty slots never fire.
 unsafe fn portrait_render_slot_semaphore(base: usize, render_target_slot: i32) {
     // New-game / not-yet-resolved saved-map sentinel; excluded from the map check so a transient c30
     // during the loading screen cannot false-fire.
@@ -482,15 +483,15 @@ unsafe fn portrait_render_slot_semaphore(base: usize, render_target_slot: i32) {
     );
     if PORTRAIT_RENDER_SEMAPHORE_LOGGED.swap(1, Ordering::SeqCst) == 0 {
         append_crash_log(format_args!(
-            "PORTRAIT-IDENTITY-SEMAPHORE FAIL: our portrait targets slot={render_target_slot} (record name_len={our_len} map=0x{our_map:x}) but the LOADED character is name_len={live_len} map=0x{live_map:x} -- name_match={name_match} map_mismatch={map_mismatch}. Our portrait is not the loaded character (er-effects-rs-j3r); deliberate fail-fast fault follows"
+            "PORTRAIT-IDENTITY-SEMAPHORE FAIL: our portrait targets slot={render_target_slot} (record name_len={our_len} map=0x{our_map:x}) but the LOADED character is name_len={live_len} map=0x{live_map:x} -- name_match={name_match} map_mismatch={map_mismatch}. Our portrait is not the loaded character (er-effects-rs-j3r); deliberate fault only if ER_EFFECTS_FAIL_FAST=1"
         ));
         append_autoload_debug(format_args!(
             "PORTRAIT-IDENTITY-SEMAPHORE FAIL: target_slot={render_target_slot} record(name_len={our_len} map=0x{our_map:x}) vs loaded(name_len={live_len} map=0x{live_map:x}) name_match={name_match} map_mismatch={map_mismatch}"
         ));
     }
-    if crate::crashlog::crash_logger_enabled() {
+    if crate::crashlog::deliberate_fail_fast_enabled() {
         // Deliberate null-page fault: crash_vectored_handler logs full context, returns
-        // EXCEPTION_CONTINUE_SEARCH, and the run terminates -- the fail-fast the user asked for.
+        // EXCEPTION_CONTINUE_SEARCH, and the run terminates -- release/fail-fast proof mode only.
         unsafe {
             core::ptr::write_volatile(PORTRAIT_RENDER_SEMAPHORE_FAULT_ADDR as *mut u8, 0u8);
         }
