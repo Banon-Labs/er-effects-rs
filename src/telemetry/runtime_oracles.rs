@@ -539,6 +539,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         )
     ));
     write_game_man_telemetry(&mut body);
+    write_save_redirect_telemetry(&mut body);
     write_save_data_snapshot_telemetry(&mut body);
     body.push_str(&format!(
         "  \"last_driver_command\": {},\n",

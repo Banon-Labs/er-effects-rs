@@ -111,29 +111,43 @@ fn steam_id64_from_wide_save_path(path: &[u16]) -> Option<u64> {
         b'n' as u16,
         b'g' as u16,
     ];
-    let idx = wide_find_ci_ascii(path, ELDENRING)?;
-    let mut pos = idx + ELDENRING.len();
-    while matches!(path.get(pos), Some(c) if *c == b'\\' as u16 || *c == b'/' as u16) {
-        pos += 1;
-    }
-    let start = pos;
-    let mut steam_id = 0u64;
-    while let Some(&c) = path.get(pos) {
-        if !(b'0' as u16..=b'9' as u16).contains(&c) {
+    let mut search_from = 0usize;
+    while search_from < path.len() {
+        let Some(rel_idx) = wide_find_ci_ascii(&path[search_from..], ELDENRING) else {
             break;
+        };
+        let idx = search_from + rel_idx;
+        let mut pos = idx + ELDENRING.len();
+        while matches!(path.get(pos), Some(c) if *c == b'\\' as u16 || *c == b'/' as u16) {
+            pos += 1;
         }
-        steam_id = steam_id
-            .saturating_mul(10)
-            .saturating_add((c - b'0' as u16) as u64);
-        pos += 1;
+        let start = pos;
+        let mut steam_id = 0u64;
+        while let Some(&c) = path.get(pos) {
+            if !(b'0' as u16..=b'9' as u16).contains(&c) {
+                break;
+            }
+            steam_id = steam_id
+                .saturating_mul(10)
+                .saturating_add((c - b'0' as u16) as u64);
+            pos += 1;
+        }
+        let digits = pos.saturating_sub(start);
+        if (16..=20).contains(&digits) && steam_id != 0 {
+            return Some(steam_id);
+        }
+        search_from = idx + 1;
     }
-    let digits = pos.saturating_sub(start);
-    ((16..=20).contains(&digits) && steam_id != 0).then_some(steam_id)
+    None
 }
 
 fn observe_steam_id64_from_save_path(path: &[u16]) {
     if let Some(steam_id) = steam_id64_from_wide_save_path(path) {
         OBSERVED_ACTIVE_STEAM_ID64.store(steam_id, Ordering::SeqCst);
+        if let Ok(base) = game_module_base() {
+            normalize_env_save_file_to_active_steam_id_once(base, "observed-steamid-before-stage");
+        }
+        ensure_direct_stage_for_steam_id(steam_id);
     }
 }
 
@@ -215,6 +229,49 @@ pub(crate) fn normalize_save_bytes_to_active_steam_id(
     }
 }
 
+fn normalize_env_save_file_to_known_steam_id(path: &Path, steam_id: u64, reason: &str) {
+    let Ok(mut bytes) = fs::read(path) else {
+        append_autoload_debug(format_args!(
+            "save-steamid-normalize: failed to read env file for early normalize reason={reason} path='{}'",
+            path.display()
+        ));
+        return;
+    };
+    let before = save_normalize_hash_bytes(&bytes);
+    log_save_steam_id_locations(&bytes, steam_id, reason);
+    match er_save_loader::bnd4::normalize_steam_id_in_place(&mut bytes, steam_id) {
+        Ok(report) => {
+            append_autoload_debug(format_args!(
+                "save-steamid-normalize: source={reason} steam_id={steam_id} char_seen={} char_patched={} user_data10_seen={} user_data10_patched={} md5_rewritten={}",
+                report.character_slots_seen,
+                report.character_slots_patched,
+                report.user_data10_seen,
+                report.user_data10_patched,
+                report.md5_rewritten
+            ));
+            if !report.changed() {
+                return;
+            }
+            match fs::write(path, &bytes) {
+                Ok(()) => {
+                    let after = save_normalize_hash_bytes(&bytes);
+                    append_autoload_debug(format_args!(
+                        "save-steamid-normalize: wrote normalized env save path='{}' reason={reason} before=0x{before:016x} after=0x{after:016x}",
+                        path.display()
+                    ));
+                }
+                Err(err) => append_autoload_debug(format_args!(
+                    "save-steamid-normalize: FAILED to write normalized env save path='{}' reason={reason}: {err}",
+                    path.display()
+                )),
+            }
+        }
+        Err(err) => append_autoload_debug(format_args!(
+            "save-steamid-normalize: failed source={reason}: {err:?}"
+        )),
+    }
+}
+
 pub(crate) fn normalize_env_save_file_to_active_steam_id_once(base: usize, reason: &str) {
     if SAVE_STEAM_ID_ENV_NORMALIZE_DONE.load(Ordering::SeqCst) != 0
         || OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst) == 0
@@ -273,6 +330,238 @@ static SAVE_DIRECT_BAK_FILE_W: OnceLock<Vec<u16>> = OnceLock::new();
 static SAVE_DIRECT_SOURCE_FILE: OnceLock<PathBuf> = OnceLock::new();
 static SAVE_DIRECT_STAGE_ROOT: OnceLock<PathBuf> = OnceLock::new();
 static SAVE_DIRECT_STAGE_DONE_STEAM_ID: AtomicU64 = AtomicU64::new(0);
+static SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID: AtomicU64 = AtomicU64::new(0);
+static SAVE_DIRECT_STAGE_DIAG_HITS: AtomicU64 = AtomicU64::new(0);
+static SAVE_DIRECT_STAGE_NO_STEAMID_HITS: AtomicU64 = AtomicU64::new(0);
+static SAVE_DIRECT_STAGE_LAST_NO_STEAMID_KIND: AtomicUsize = AtomicUsize::new(DIRECT_STAGE_NO_STEAMID_KIND_NONE);
+const DIRECT_STAGE_NO_STEAMID_KIND_NONE: usize = 0;
+const DIRECT_STAGE_NO_STEAMID_KIND_ROOT: usize = 1;
+const DIRECT_STAGE_NO_STEAMID_KIND_GRAPHICS: usize = 2;
+const DIRECT_STAGE_NO_STEAMID_KIND_CONFIGURED_SAVE: usize = 3;
+const DIRECT_STAGE_NO_STEAMID_KIND_OTHER: usize = 4;
+static SAVE_REDIRECT_MODE: AtomicUsize = AtomicUsize::new(SAVE_REDIRECT_MODE_UNSET);
+const SAVE_REDIRECT_MODE_UNSET: usize = 0;
+const SAVE_REDIRECT_MODE_STAGED_ROOT: usize = 1;
+const SAVE_REDIRECT_MODE_DIRECT_FILE: usize = 2;
+
+pub(crate) fn write_save_redirect_telemetry(body: &mut String) {
+    let mode = match SAVE_REDIRECT_MODE.load(Ordering::SeqCst) {
+        SAVE_REDIRECT_MODE_STAGED_ROOT => "staged_root",
+        SAVE_REDIRECT_MODE_DIRECT_FILE => "direct_file",
+        _ => "unset",
+    };
+    let observed_steam_id = OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst);
+    let done_steam_id = SAVE_DIRECT_STAGE_DONE_STEAM_ID.load(Ordering::SeqCst);
+    let in_progress_steam_id = SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID.load(Ordering::SeqCst);
+    let direct_source_set = SAVE_DIRECT_SOURCE_FILE.get().is_some();
+    let direct_stage_root_set = SAVE_DIRECT_STAGE_ROOT.get().is_some();
+    let (direct_stage_file_exists, direct_stage_file_bytes) = direct_stage_file_status(observed_steam_id);
+    let shgfp_requests = SAVE_REDIRECT_SHGFP_APPDATA_REQUESTS.load(Ordering::SeqCst);
+    let shgfp_hits = SAVE_REDIRECT_SHGFP_LOGGED.load(Ordering::SeqCst);
+    let shgfp_direct_blocks = SAVE_REDIRECT_SHGFP_DIRECT_FILE_BLOCKS.load(Ordering::SeqCst);
+    let shgfp_first_load_blocks = SAVE_REDIRECT_SHGFP_FIRST_LOAD_DONE_BLOCKS.load(Ordering::SeqCst);
+    let shgfp_no_root_blocks = SAVE_REDIRECT_SHGFP_NO_ROOT_BLOCKS.load(Ordering::SeqCst);
+    let shgfp_decision = if shgfp_hits != 0 {
+        "redirected"
+    } else if shgfp_direct_blocks != 0 {
+        "blocked_direct_file_mode"
+    } else if shgfp_first_load_blocks != 0 {
+        "blocked_first_load_done"
+    } else if shgfp_no_root_blocks != 0 {
+        "blocked_no_redirect_root"
+    } else if shgfp_requests != 0 {
+        "requested_but_no_decision"
+    } else {
+        "not_requested"
+    };
+    let no_steamid_kind = direct_stage_no_steamid_kind_label(
+        SAVE_DIRECT_STAGE_LAST_NO_STEAMID_KIND.load(Ordering::SeqCst),
+    );
+    let last_save_like_kind = save_path_kind_label(
+        SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND.load(Ordering::SeqCst),
+    );
+    body.push_str(&format!(
+        "  \"oracle_save_redirect_mode\": \"{mode}\",\n  \"oracle_save_redirect_observed_steam_id64\": {observed_steam_id},\n  \"oracle_save_redirect_env_normalize_done\": {},\n  \"oracle_save_redirect_first_load_done\": {},\n  \"oracle_save_redirect_shgetfolderpath_decision\": \"{shgfp_decision}\",\n  \"oracle_save_redirect_shgetfolderpath_appdata_requests\": {shgfp_requests},\n  \"oracle_save_redirect_shgetfolderpath_hits\": {shgfp_hits},\n  \"oracle_save_redirect_shgetfolderpath_direct_file_blocks\": {shgfp_direct_blocks},\n  \"oracle_save_redirect_shgetfolderpath_first_load_done_blocks\": {shgfp_first_load_blocks},\n  \"oracle_save_redirect_shgetfolderpath_no_root_blocks\": {shgfp_no_root_blocks},\n  \"oracle_save_redirect_createfilew_calls\": {},\n  \"oracle_save_redirect_createfilew_diag_hits\": {},\n  \"oracle_save_redirect_createfilew_last_save_like_kind\": \"{last_save_like_kind}\",\n  \"oracle_save_redirect_createfilew_stage_steamid_dir_hits\": {},\n  \"oracle_save_redirect_createfilew_stage_save_file_hits\": {},\n  \"oracle_save_redirect_createfilew_configured_file_hits\": {},\n  \"oracle_save_redirect_query_last_save_like_kind\": \"{}\",\n  \"oracle_save_redirect_query_stage_steamid_dir_hits\": {},\n  \"oracle_save_redirect_query_stage_save_file_hits\": {},\n  \"oracle_save_redirect_query_configured_file_hits\": {},\n  \"oracle_save_redirect_redir_hits\": {},\n  \"oracle_save_redirect_sl2_query_hits\": {},\n  \"oracle_save_redirect_ntcreate_diag_hits\": {},\n  \"oracle_save_redirect_direct_source_set\": {direct_source_set},\n  \"oracle_save_redirect_direct_stage_root_set\": {direct_stage_root_set},\n  \"oracle_save_redirect_direct_stage_done_steam_id64\": {done_steam_id},\n  \"oracle_save_redirect_direct_stage_in_progress_steam_id64\": {in_progress_steam_id},\n  \"oracle_save_redirect_direct_stage_diag_hits\": {},\n  \"oracle_save_redirect_direct_stage_no_steamid_hits\": {},\n  \"oracle_save_redirect_direct_stage_last_no_steamid_kind\": \"{no_steamid_kind}\",\n  \"oracle_save_redirect_direct_stage_file_exists\": {direct_stage_file_exists},\n  \"oracle_save_redirect_direct_stage_file_bytes\": {},\n",
+        SAVE_STEAM_ID_ENV_NORMALIZE_DONE.load(Ordering::SeqCst),
+        SAVE_FIRST_LOAD_DONE.load(Ordering::SeqCst),
+        SAVE_CREATEFILEW_CALLS.load(Ordering::SeqCst),
+        SAVE_CREATEFILEW_DIAG_HITS.load(Ordering::SeqCst),
+        SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS.load(Ordering::SeqCst),
+        SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS.load(Ordering::SeqCst),
+        SAVE_CREATEFILEW_CONFIGURED_FILE_HITS.load(Ordering::SeqCst),
+        save_path_kind_label(SAVE_QUERY_LAST_SAVE_LIKE_KIND.load(Ordering::SeqCst)),
+        SAVE_QUERY_STAGE_STEAMID_DIR_HITS.load(Ordering::SeqCst),
+        SAVE_QUERY_STAGE_SAVE_FILE_HITS.load(Ordering::SeqCst),
+        SAVE_QUERY_CONFIGURED_FILE_HITS.load(Ordering::SeqCst),
+        SAVE_REDIRECT_HITS.load(Ordering::SeqCst),
+        SAVE_SL2_QUERY_LOGGED.load(Ordering::SeqCst),
+        SAVE_NTCREATE_DIAG_LOGGED.load(Ordering::SeqCst),
+        SAVE_DIRECT_STAGE_DIAG_HITS.load(Ordering::SeqCst),
+        SAVE_DIRECT_STAGE_NO_STEAMID_HITS.load(Ordering::SeqCst),
+        direct_stage_file_bytes.map_or_else(|| "null".to_owned(), |bytes| bytes.to_string())
+    ));
+}
+
+fn save_path_kind_label(kind: usize) -> &'static str {
+    match kind {
+        SAVE_PATH_KIND_ELDENRING_ROOT => "eldenring_root",
+        SAVE_PATH_KIND_GRAPHICS_CONFIG => "graphics_config",
+        SAVE_PATH_KIND_STAGE_STEAMID_DIR => "stage_steamid_dir",
+        SAVE_PATH_KIND_STAGE_SAVE_FILE => "stage_save_file",
+        SAVE_PATH_KIND_CONFIGURED_SAVE_FILE => "configured_save_file",
+        SAVE_PATH_KIND_OTHER_SAVE_LIKE => "other_save_like",
+        _ => "none",
+    }
+}
+
+fn classify_save_like_createfile_path(path: &[u16]) -> usize {
+    let no_steamid_kind = direct_stage_no_steamid_kind(path);
+    if steam_id64_from_wide_save_path(path).is_some() {
+        const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
+        const CO2D: &[u16] = &[b'.' as u16, b'c' as u16, b'o' as u16, b'2' as u16];
+        if wide_ends_with_ci_ascii(path, SL2D) || wide_ends_with_ci_ascii(path, CO2D) {
+            SAVE_PATH_KIND_STAGE_SAVE_FILE
+        } else {
+            SAVE_PATH_KIND_STAGE_STEAMID_DIR
+        }
+    } else if no_steamid_kind == DIRECT_STAGE_NO_STEAMID_KIND_CONFIGURED_SAVE {
+        SAVE_PATH_KIND_CONFIGURED_SAVE_FILE
+    } else if no_steamid_kind == DIRECT_STAGE_NO_STEAMID_KIND_GRAPHICS {
+        SAVE_PATH_KIND_GRAPHICS_CONFIG
+    } else if no_steamid_kind == DIRECT_STAGE_NO_STEAMID_KIND_ROOT {
+        SAVE_PATH_KIND_ELDENRING_ROOT
+    } else {
+        SAVE_PATH_KIND_OTHER_SAVE_LIKE
+    }
+}
+
+fn record_save_like_createfile_path_kind(path: &[u16]) {
+    let kind = classify_save_like_createfile_path(path);
+    SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND.store(kind, Ordering::SeqCst);
+    match kind {
+        SAVE_PATH_KIND_STAGE_STEAMID_DIR => {
+            SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS.fetch_add(1, Ordering::SeqCst);
+        }
+        SAVE_PATH_KIND_STAGE_SAVE_FILE => {
+            SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS.fetch_add(1, Ordering::SeqCst);
+        }
+        SAVE_PATH_KIND_CONFIGURED_SAVE_FILE => {
+            SAVE_CREATEFILEW_CONFIGURED_FILE_HITS.fetch_add(1, Ordering::SeqCst);
+        }
+        _ => {}
+    }
+}
+
+fn record_save_like_query_path_kind(path: &[u16]) {
+    let kind = classify_save_like_createfile_path(path);
+    SAVE_QUERY_LAST_SAVE_LIKE_KIND.store(kind, Ordering::SeqCst);
+    match kind {
+        SAVE_PATH_KIND_STAGE_STEAMID_DIR => {
+            SAVE_QUERY_STAGE_STEAMID_DIR_HITS.fetch_add(1, Ordering::SeqCst);
+        }
+        SAVE_PATH_KIND_STAGE_SAVE_FILE => {
+            SAVE_QUERY_STAGE_SAVE_FILE_HITS.fetch_add(1, Ordering::SeqCst);
+        }
+        SAVE_PATH_KIND_CONFIGURED_SAVE_FILE => {
+            SAVE_QUERY_CONFIGURED_FILE_HITS.fetch_add(1, Ordering::SeqCst);
+        }
+        _ => {}
+    }
+}
+
+fn direct_stage_no_steamid_kind_label(kind: usize) -> &'static str {
+    match kind {
+        DIRECT_STAGE_NO_STEAMID_KIND_ROOT => "eldenring_root",
+        DIRECT_STAGE_NO_STEAMID_KIND_GRAPHICS => "graphics_config",
+        DIRECT_STAGE_NO_STEAMID_KIND_CONFIGURED_SAVE => "configured_save_without_steamid",
+        DIRECT_STAGE_NO_STEAMID_KIND_OTHER => "other",
+        _ => "none",
+    }
+}
+
+fn direct_stage_no_steamid_kind(path: &[u16]) -> usize {
+    const GRAPHICS_XML: &[u16] = &[
+        b'g' as u16,
+        b'r' as u16,
+        b'a' as u16,
+        b'p' as u16,
+        b'h' as u16,
+        b'i' as u16,
+        b'c' as u16,
+        b's' as u16,
+        b'c' as u16,
+        b'o' as u16,
+        b'n' as u16,
+        b'f' as u16,
+        b'i' as u16,
+        b'g' as u16,
+        b'.' as u16,
+        b'x' as u16,
+        b'm' as u16,
+        b'l' as u16,
+    ];
+    const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
+    const CO2D: &[u16] = &[b'.' as u16, b'c' as u16, b'o' as u16, b'2' as u16];
+    if wide_ends_with_ci_ascii(path, GRAPHICS_XML) {
+        DIRECT_STAGE_NO_STEAMID_KIND_GRAPHICS
+    } else if wide_ends_with_ci_ascii(path, SL2D) || wide_ends_with_ci_ascii(path, CO2D) {
+        DIRECT_STAGE_NO_STEAMID_KIND_CONFIGURED_SAVE
+    } else if wide_ends_with_separator_or_eldenring(path) {
+        DIRECT_STAGE_NO_STEAMID_KIND_ROOT
+    } else {
+        DIRECT_STAGE_NO_STEAMID_KIND_OTHER
+    }
+}
+
+fn wide_ends_with_separator_or_eldenring(path: &[u16]) -> bool {
+    const ELDENRING: &[u16] = &[
+        b'e' as u16,
+        b'l' as u16,
+        b'd' as u16,
+        b'e' as u16,
+        b'n' as u16,
+        b'r' as u16,
+        b'i' as u16,
+        b'n' as u16,
+        b'g' as u16,
+    ];
+    let trimmed_len = path
+        .iter()
+        .rposition(|&c| c != b'\\' as u16 && c != b'/' as u16)
+        .map_or(0, |idx| idx + 1);
+    wide_ends_with_ci_ascii(&path[..trimmed_len], ELDENRING)
+}
+
+fn direct_stage_file_status(steam_id: u64) -> (bool, Option<u64>) {
+    if steam_id == 0 {
+        return (false, None);
+    }
+    let Some(root) = SAVE_DIRECT_STAGE_ROOT.get() else {
+        return (false, None);
+    };
+    let staged_is_co2 = SAVE_DIRECT_SOURCE_FILE
+        .get()
+        .and_then(|source| source.extension())
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("co2"));
+    let candidates = if staged_is_co2 {
+        [("eldenring", "er0000.co2"), ("EldenRing", "ER0000.co2")]
+    } else {
+        [("eldenring", "er0000.sl2"), ("EldenRing", "ER0000.sl2")]
+    };
+    for (dir_name, file_name) in candidates {
+        let path = root
+            .join(dir_name)
+            .join(steam_id.to_string())
+            .join(file_name);
+        if let Ok(meta) = std::fs::metadata(path)
+            && meta.is_file()
+        {
+            return (true, Some(meta.len()));
+        }
+    }
+    (false, None)
+}
 /// Original CreateFileW / CopyFileW (MinHook trampolines). 0 = not hooked.
 static SAVE_REDIRECT_ORIG_CREATEFILEW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static SAVE_REDIRECT_ORIG_COPYFILEW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
@@ -287,6 +576,10 @@ static SAVE_REDIRECT_ORIG_FINDFIRSTW: AtomicUsize = AtomicUsize::new(HOOK_ORIGIN
 /// resolution), so the character is read without depending on intercepting each handle-relative open.
 static SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 static SAVE_REDIRECT_SHGFP_LOGGED: AtomicUsize = AtomicUsize::new(0);
+static SAVE_REDIRECT_SHGFP_APPDATA_REQUESTS: AtomicUsize = AtomicUsize::new(0);
+static SAVE_REDIRECT_SHGFP_DIRECT_FILE_BLOCKS: AtomicUsize = AtomicUsize::new(0);
+static SAVE_REDIRECT_SHGFP_FIRST_LOAD_DONE_BLOCKS: AtomicUsize = AtomicUsize::new(0);
+static SAVE_REDIRECT_SHGFP_NO_ROOT_BLOCKS: AtomicUsize = AtomicUsize::new(0);
 /// One-shot redirect latch (user design 2026-06-23): the gold is provided via the Z: staged dir for
 /// the FIRST load (reading from Z: works), but writing to Z: fails (Wine free-space) AND would mutate
 /// the user's save. So once the gold profile is loaded (profile_slot_active != 0), we STOP redirecting
@@ -315,6 +608,7 @@ static SAVE_REDIRECT_ORIG_NTQUERYVOLINFO: AtomicUsize = AtomicUsize::new(HOOK_OR
 static SAVE_VOLINFO_LOGGED: AtomicUsize = AtomicUsize::new(0);
 static SAVE_REDIRECT_INSTALL_ONCE: Once = Once::new();
 static SAVE_STEAM_ID_ENV_NORMALIZE_DONE: AtomicUsize = AtomicUsize::new(0);
+static SAVE_STEAM_API_STEAM_ID_LOGGED: AtomicUsize = AtomicUsize::new(0);
 /// Count of save-path opens we have redirected, logged for the first few so a probe can CONFIRM the
 /// game actually opened our staged save through the redirect (not the default dir). Capped so a
 /// busy IO loop cannot spam the debug log.
@@ -331,6 +625,21 @@ const SAVE_CREATEFILEW_DIAG_MAX: usize = 200;
 /// (16/32/64/...) -- same rate-limit pattern as `now_loading_helper_update_hook` -- so the diagnostic
 /// keeps its early window and a sparse tail without flooding the debug log.
 static SAVE_CREATEFILEW_DIAG_HITS: AtomicUsize = AtomicUsize::new(0);
+static SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND: AtomicUsize = AtomicUsize::new(SAVE_PATH_KIND_NONE);
+static SAVE_CREATEFILEW_STAGE_STEAMID_DIR_HITS: AtomicUsize = AtomicUsize::new(0);
+static SAVE_CREATEFILEW_STAGE_SAVE_FILE_HITS: AtomicUsize = AtomicUsize::new(0);
+static SAVE_CREATEFILEW_CONFIGURED_FILE_HITS: AtomicUsize = AtomicUsize::new(0);
+static SAVE_QUERY_LAST_SAVE_LIKE_KIND: AtomicUsize = AtomicUsize::new(SAVE_PATH_KIND_NONE);
+static SAVE_QUERY_STAGE_STEAMID_DIR_HITS: AtomicUsize = AtomicUsize::new(0);
+static SAVE_QUERY_STAGE_SAVE_FILE_HITS: AtomicUsize = AtomicUsize::new(0);
+static SAVE_QUERY_CONFIGURED_FILE_HITS: AtomicUsize = AtomicUsize::new(0);
+const SAVE_PATH_KIND_NONE: usize = 0;
+const SAVE_PATH_KIND_ELDENRING_ROOT: usize = 1;
+const SAVE_PATH_KIND_GRAPHICS_CONFIG: usize = 2;
+const SAVE_PATH_KIND_STAGE_STEAMID_DIR: usize = 3;
+const SAVE_PATH_KIND_STAGE_SAVE_FILE: usize = 4;
+const SAVE_PATH_KIND_CONFIGURED_SAVE_FILE: usize = 5;
+const SAVE_PATH_KIND_OTHER_SAVE_LIKE: usize = 6;
 /// DEDICATED budget for save-FILE queries (paths ending .sl2 / .co2 or containing ER0000): the shared
 /// CreateFileW/existence-check diag cap above is exhausted by early-boot `eldenring\` dir churn
 /// (GraphicsConfig.xml etc.) BEFORE the actual save read, hiding whether/with-what-steamid the game
@@ -382,6 +691,13 @@ fn env_save_file_path() -> Option<PathBuf> {
 }
 
 enum SaveRedirectSource {
+    /// Configured save is already staged under `<root>/EldenRing/<steamid>/ER0000.sl2`; preserve
+    /// native directory/profile discovery by redirecting the whole save root.
+    StagedRoot {
+        file: PathBuf,
+        steam_id: u64,
+        root_w: Vec<u16>,
+    },
     /// User supplied an arbitrary `.sl2`/`.co2` save file path. Redirect save-file opens
     /// to the exact file; do not require an `EldenRing` path component or SteamID folder.
     DirectFile {
@@ -402,8 +718,98 @@ fn validated_configured_save_file() -> Option<PathBuf> {
     Some(path)
 }
 
+fn plausible_steam_id64(value: u64) -> Option<u64> {
+    (value >= 10_000_000_000_000_000 && value <= 99_999_999_999_999_999).then_some(value)
+}
+
+fn configured_active_steam_id64_env() -> Option<u64> {
+    ["ER_EFFECTS_ACTIVE_STEAMID", "ER_EFFECTS_ACTIVE_STEAM_ID64"]
+        .into_iter()
+        .find_map(|name| {
+            let raw = std::env::var(name).ok()?;
+            let trimmed = raw.trim();
+            let is_steam_id = (16..=20).contains(&trimmed.len())
+                && trimmed.as_bytes().iter().all(u8::is_ascii_digit);
+            is_steam_id
+                .then(|| trimmed.parse::<u64>().ok())
+                .flatten()
+                .and_then(plausible_steam_id64)
+        })
+}
+
+type SteamApiSteamUserV021Fn = unsafe extern "system" fn() -> *mut c_void;
+type SteamApiISteamUserGetSteamIdFn = unsafe extern "system" fn(*mut c_void) -> u64;
+
+fn steam_api_active_steam_id64() -> Option<u64> {
+    let steam_user_addr = unsafe { module_proc(b"steam_api64.dll\0", b"SteamAPI_SteamUser_v021\0") };
+    let get_steam_id_addr = unsafe {
+        module_proc(
+            b"steam_api64.dll\0",
+            b"SteamAPI_ISteamUser_GetSteamID\0",
+        )
+    };
+    if steam_user_addr == HOOK_ORIGINAL_UNSET || get_steam_id_addr == HOOK_ORIGINAL_UNSET {
+        return None;
+    }
+    let steam_user: SteamApiSteamUserV021Fn = unsafe { std::mem::transmute(steam_user_addr) };
+    let get_steam_id: SteamApiISteamUserGetSteamIdFn = unsafe { std::mem::transmute(get_steam_id_addr) };
+    let iface = unsafe { steam_user() };
+    if iface.is_null() {
+        return None;
+    }
+    let steam_id = plausible_steam_id64(unsafe { get_steam_id(iface) })?;
+    if SAVE_STEAM_API_STEAM_ID_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+        append_autoload_debug(format_args!(
+            "save-override: SteamAPI active SteamID64 resolved: {steam_id}"
+        ));
+    }
+    Some(steam_id)
+}
+
+fn configured_active_steam_id64() -> Option<(u64, &'static str)> {
+    configured_active_steam_id64_env()
+        .map(|steam_id| (steam_id, "early-env-active-steamid"))
+        .or_else(|| {
+            steam_api_active_steam_id64()
+                .map(|steam_id| (steam_id, "early-steamapi-active-steamid"))
+        })
+}
+
+fn staged_save_root_for_configured_file(path: &Path) -> Option<(PathBuf, u64)> {
+    let mut root = PathBuf::new();
+    let mut comps = path.components().peekable();
+    while let Some(comp) = comps.next() {
+        let text = comp.as_os_str().to_string_lossy();
+        if text.eq_ignore_ascii_case("EldenRing") {
+            let Some(steam_id_comp) = comps.peek() else {
+                return None;
+            };
+            let steam_id = steam_id_comp.as_os_str().to_string_lossy();
+            let is_steam_id = (16..=20).contains(&steam_id.len())
+                && steam_id.as_bytes().iter().all(u8::is_ascii_digit);
+            if is_steam_id {
+                return steam_id
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|value| *value != 0)
+                    .map(|value| (root, value));
+            }
+            return None;
+        }
+        root.push(comp);
+    }
+    None
+}
+
 fn save_override_redirect_source() -> Option<SaveRedirectSource> {
     let path = validated_configured_save_file()?;
+    if let Some((staged_root, steam_id)) = staged_save_root_for_configured_file(&path) {
+        return Some(SaveRedirectSource::StagedRoot {
+            file: path,
+            steam_id,
+            root_w: path_root_to_wine_wide(&staged_root),
+        });
+    }
     let mut bak_path = path.clone();
     let bak_name = format!(
         "{}.bak",
@@ -446,6 +852,23 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
         return SaveOverrideMode::TelemetryOnly;
     }
     match save_override_redirect_source() {
+        Some(SaveRedirectSource::StagedRoot {
+            file,
+            steam_id,
+            root_w,
+        }) => {
+            OBSERVED_ACTIVE_STEAM_ID64.store(steam_id, Ordering::SeqCst);
+            normalize_env_save_file_to_known_steam_id(&file, steam_id, "early-enforced-env-save");
+            SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
+            // UTF-8 Lossy: log-only decode of configured Windows wide path for probe confirmation.
+            let shown = String::from_utf16_lossy(&root_w);
+            let _ = SAVE_REDIRECT_DIR_W.set(root_w);
+            SAVE_REDIRECT_MODE.store(SAVE_REDIRECT_MODE_STAGED_ROOT, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-override: ENFORCED -- redirecting native save root to staged root '{shown}'"
+            ));
+            SaveOverrideMode::Redirect
+        }
         Some(SaveRedirectSource::DirectFile {
             file,
             stage_root,
@@ -454,16 +877,27 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
             bak_w,
         }) => {
             let _ = std::fs::create_dir_all(stage_root.join("eldenring"));
+            let _ = std::fs::create_dir_all(stage_root.join("EldenRing"));
             // UTF-8 Lossy: log-only decode of configured Windows wide paths for probe confirmation.
             let shown = String::from_utf16_lossy(&file_w);
             let stage_shown = String::from_utf16_lossy(&root_w);
+            let configured_file = file.clone();
+            let explicit_steam_id = configured_active_steam_id64();
             let _ = SAVE_DIRECT_SOURCE_FILE.set(file);
             let _ = SAVE_DIRECT_STAGE_ROOT.set(stage_root);
             let _ = SAVE_DIRECT_FILE_W.set(file_w);
             let _ = SAVE_DIRECT_BAK_FILE_W.set(bak_w);
             let _ = SAVE_REDIRECT_DIR_W.set(root_w);
+            SAVE_REDIRECT_MODE.store(SAVE_REDIRECT_MODE_DIRECT_FILE, Ordering::SeqCst);
+            if let Some((steam_id, reason)) = explicit_steam_id {
+                OBSERVED_ACTIVE_STEAM_ID64.store(steam_id, Ordering::SeqCst);
+                normalize_env_save_file_to_known_steam_id(&configured_file, steam_id, reason);
+                SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
+                ensure_direct_stage_for_steam_id(steam_id);
+            }
             append_autoload_debug(format_args!(
-                "save-override: ENFORCED -- redirecting arbitrary save-file opens to configured save '{shown}' via private stage root '{stage_shown}'"
+                "save-override: ENFORCED -- redirecting arbitrary save-file opens to configured save '{shown}' via private stage root '{stage_shown}' active_steamid={}",
+                explicit_steam_id.map(|(steam_id, _)| steam_id).unwrap_or(0)
             ));
             SaveOverrideMode::Redirect
         }
@@ -551,55 +985,132 @@ fn wide_ends_with_ci_ascii(hay: &[u16], suffix: &[u16]) -> bool {
 
 /// Index just after the last path separator in `path` (0 if none) -- the basename start.
 fn ensure_direct_stage_for_requested_path(path: &[u16]) {
-    let Some(source) = SAVE_DIRECT_SOURCE_FILE.get() else {
-        return;
-    };
     let Some(root) = SAVE_DIRECT_STAGE_ROOT.get() else {
         return;
     };
     let Some(steam_id) = steam_id64_from_wide_save_path(path) else {
+        let kind = direct_stage_no_steamid_kind(path);
+        SAVE_DIRECT_STAGE_NO_STEAMID_HITS.fetch_add(1, Ordering::SeqCst);
+        SAVE_DIRECT_STAGE_LAST_NO_STEAMID_KIND.store(kind, Ordering::SeqCst);
+        let hit = SAVE_DIRECT_STAGE_DIAG_HITS.fetch_add(1, Ordering::SeqCst);
+        if hit < 8 {
+            // UTF-8 Lossy: log-only decode of a Windows wide path for probe diagnosis.
+            let shown = String::from_utf16_lossy(path);
+            let kind_label = direct_stage_no_steamid_kind_label(kind);
+            append_autoload_debug(format_args!(
+                "save-override: direct-file stage pending -- no SteamID64 in {kind_label} requested path '{shown}'"
+            ));
+        }
         let _ = std::fs::create_dir_all(root.join("eldenring"));
+        let _ = std::fs::create_dir_all(root.join("EldenRing"));
+        return;
+    };
+    ensure_direct_stage_for_steam_id(steam_id);
+}
+
+fn ensure_direct_stage_for_steam_id(steam_id: u64) {
+    let Some(source) = SAVE_DIRECT_SOURCE_FILE.get() else {
+        let hit = SAVE_DIRECT_STAGE_DIAG_HITS.fetch_add(1, Ordering::SeqCst);
+        if hit < 8 {
+            append_autoload_debug(format_args!(
+                "save-override: direct-file stage pending -- no configured source yet for SteamID64 {steam_id}"
+            ));
+        }
+        return;
+    };
+    let Some(root) = SAVE_DIRECT_STAGE_ROOT.get() else {
+        let hit = SAVE_DIRECT_STAGE_DIAG_HITS.fetch_add(1, Ordering::SeqCst);
+        if hit < 8 {
+            append_autoload_debug(format_args!(
+                "save-override: direct-file stage pending -- no stage root yet for SteamID64 {steam_id}"
+            ));
+        }
         return;
     };
     let prior = SAVE_DIRECT_STAGE_DONE_STEAM_ID.load(Ordering::SeqCst);
     if prior == steam_id {
         return;
     }
-    let mut dir = root.join("eldenring");
-    dir.push(steam_id.to_string());
-    if let Err(err) = std::fs::create_dir_all(&dir) {
-        append_autoload_debug(format_args!(
-            "save-override: direct-file stage failed creating '{}': {err}",
-            dir.display()
-        ));
-        return;
+    match SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID.compare_exchange(
+        0,
+        steam_id,
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    ) {
+        Ok(_) => {}
+        Err(in_progress) if in_progress == steam_id => return,
+        Err(in_progress) => {
+            let hit = SAVE_DIRECT_STAGE_DIAG_HITS.fetch_add(1, Ordering::SeqCst);
+            if hit < 16 {
+                append_autoload_debug(format_args!(
+                    "save-override: direct-file stage deferred for SteamID64 {steam_id}; SteamID64 {in_progress} already staging"
+                ));
+            }
+            return;
+        }
     }
-    let staged_basename = if source
+    let hit = SAVE_DIRECT_STAGE_DIAG_HITS.fetch_add(1, Ordering::SeqCst);
+    if hit < 16 {
+        append_autoload_debug(format_args!(
+            "save-override: direct-file staging begin for SteamID64 {steam_id}: '{}' -> root '{}'",
+            source.display(),
+            root.display()
+        ));
+    }
+    let staged_is_co2 = source
         .extension()
         .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("co2"))
-    {
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("co2"));
+    let staged_basename_lower = if staged_is_co2 {
         "er0000.co2"
     } else {
         "er0000.sl2"
     };
-    let target = dir.join(staged_basename);
-    match std::fs::copy(source, &target) {
-        Ok(bytes) => {
-            SAVE_DIRECT_STAGE_DONE_STEAM_ID.store(steam_id, Ordering::SeqCst);
+    let staged_basename_native = if staged_is_co2 {
+        "ER0000.co2"
+    } else {
+        "ER0000.sl2"
+    };
+    let lower_dir = root.join("eldenring").join(steam_id.to_string());
+    let native_dir = root.join("EldenRing").join(steam_id.to_string());
+    for dir in [&lower_dir, &native_dir] {
+        if let Err(err) = std::fs::create_dir_all(dir) {
             append_autoload_debug(format_args!(
-                "save-override: direct-file staged {} bytes for SteamID64 {steam_id}: '{}' -> '{}'",
-                bytes,
-                source.display(),
-                target.display()
+                "save-override: direct-file stage failed creating '{}': {err}",
+                dir.display()
             ));
+            SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID.store(0, Ordering::SeqCst);
+            return;
         }
+    }
+    let lower_target = lower_dir.join(staged_basename_lower);
+    let native_target = native_dir.join(staged_basename_native);
+    match std::fs::copy(source, &lower_target) {
+        Ok(lower_bytes) => match std::fs::copy(source, &native_target) {
+            Ok(native_bytes) => {
+                SAVE_DIRECT_STAGE_DONE_STEAM_ID.store(steam_id, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "save-override: direct-file staged lower={} native={} bytes for SteamID64 {steam_id}: '{}' -> '{}' + '{}'",
+                    lower_bytes,
+                    native_bytes,
+                    source.display(),
+                    lower_target.display(),
+                    native_target.display()
+                ));
+            }
+            Err(err) => append_autoload_debug(format_args!(
+                "save-override: direct-file native stage copy failed for SteamID64 {steam_id}: '{}' -> '{}': {err}",
+                source.display(),
+                native_target.display()
+            )),
+        },
         Err(err) => append_autoload_debug(format_args!(
             "save-override: direct-file stage copy failed for SteamID64 {steam_id}: '{}' -> '{}': {err}",
             source.display(),
-            target.display()
+            lower_target.display()
         )),
     }
+    SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID.store(0, Ordering::SeqCst);
 }
 
 fn wide_with_nul(path: &[u16]) -> Vec<u16> {
@@ -702,6 +1213,10 @@ unsafe extern "system" fn save_redirect_createfilew_hook(
     let calls = SAVE_CREATEFILEW_CALLS.fetch_add(1, Ordering::SeqCst);
     if len != 0 {
         let path = unsafe { std::slice::from_raw_parts(lp_file_name, len) };
+        // Observe/stage before any redirect decision. Direct-file mode needs the native path builder's
+        // `<steamid>` component to populate the private discovery tree, and some paths are diagnostic
+        // only (not redirected) but still carry the account id.
+        observe_steam_id64_from_save_path(path);
         // Diagnostic: confirm the hook is live (log the very first call), then log save-LIKE paths
         // (contain "eldenring" or end .sl2/.co2/.bak) so we can see the exact save path form even when
         // the redirect filter does NOT match -- distinguishes "hook never fires" from "filter misses".
@@ -723,6 +1238,9 @@ unsafe extern "system" fn save_redirect_createfilew_hook(
             || wide_ends_with_ci_ascii(path, SL2D)
             || wide_ends_with_ci_ascii(path, CO2D)
             || wide_ends_with_ci_ascii(path, BAKD);
+        if save_like {
+            record_save_like_createfile_path_kind(path);
+        }
         if calls == 0 || save_like {
             // Rate-limit: log the first 8 save-LIKE opens, then only at power-of-two hit counts.
             let hits = SAVE_CREATEFILEW_DIAG_HITS.fetch_add(1, Ordering::SeqCst) + 1;
@@ -840,6 +1358,9 @@ fn save_path_api_redirect(api: &str, path: &[u16]) -> Option<Vec<u16>> {
         b'0' as u16,
         b'0' as u16,
     ];
+    if wide_contains_ci_ascii(path, ELDENRING_SEG) || wide_contains_ci_ascii(path, ER0000) {
+        record_save_like_query_path_kind(path);
+    }
     if wide_contains_ci_ascii(path, ER0000) {
         let d = SAVE_SL2_QUERY_LOGGED.fetch_add(1, Ordering::SeqCst);
         if d < SAVE_SL2_QUERY_MAX {

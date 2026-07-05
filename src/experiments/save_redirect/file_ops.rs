@@ -17,12 +17,11 @@ unsafe extern "system" fn save_redirect_shgetfolderpathw_hook(
     const MAX_PATH_W: usize = 259;
     // One-shot: after the first gold load, revert to the real %APPDATA% so writes + subsequent loads
     // use the proper default C: dir (the Z: redirect only serves the first read of the gold).
-    if (csidl & CSIDL_FOLDER_MASK) == CSIDL_APPDATA
-        && !path.is_null()
-        && !SAVE_FIRST_LOAD_DONE.load(Ordering::SeqCst)
-        && SAVE_DIRECT_FILE_W.get().is_none()
-    {
-        if let Some(root) = SAVE_REDIRECT_DIR_W.get() {
+    if (csidl & CSIDL_FOLDER_MASK) == CSIDL_APPDATA && !path.is_null() {
+        SAVE_REDIRECT_SHGFP_APPDATA_REQUESTS.fetch_add(1, Ordering::SeqCst);
+        if SAVE_FIRST_LOAD_DONE.load(Ordering::SeqCst) {
+            SAVE_REDIRECT_SHGFP_FIRST_LOAD_DONE_BLOCKS.fetch_add(1, Ordering::SeqCst);
+        } else if let Some(root) = SAVE_REDIRECT_DIR_W.get() {
             let n = root.len().min(MAX_PATH_W);
             for i in 0..n {
                 unsafe { *path.add(i) = root[i] };
@@ -37,6 +36,8 @@ unsafe extern "system" fn save_redirect_shgetfolderpathw_hook(
                 ));
             }
             return S_OK;
+        } else {
+            SAVE_REDIRECT_SHGFP_NO_ROOT_BLOCKS.fetch_add(1, Ordering::SeqCst);
         }
     }
     let orig = SAVE_REDIRECT_ORIG_SHGETFOLDERPATHW.load(Ordering::SeqCst);
