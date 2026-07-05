@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -385,28 +386,6 @@ def main() -> int:
             "git branch -d merged-topic",
             True,
         ),
-        # Global GitHub attribution guard: a --body "$(cat <<'EOF'...)" command
-        # substitution cannot be expanded by the gh_context signal, which falls
-        # back to matching the raw command text (2026-07-05 false positive:
-        # footer present in the heredoc was denied). Footer present -> allow.
-        PolicyCase(
-            "allow-gh-pr-edit-heredoc-substitution-body-with-footer",
-            'gh pr edit 19 --repo Banon-Labs/er-effects-rs --body "$(cat <<\'EOF\'\n'
-            "Body text describing the change.\n\n"
-            "\U0001f916 Written by Claude Fable 5, authorized by @chozandrias76\n"
-            'EOF\n)"',
-            True,
-        ),
-        # ... and the same form WITHOUT the footer must still deny (the raw
-        # command fallback must not weaken the guard).
-        PolicyCase(
-            "deny-gh-pr-edit-heredoc-substitution-body-without-footer",
-            'gh pr edit 19 --repo Banon-Labs/er-effects-rs --body "$(cat <<\'EOF\'\n'
-            "Body text without attribution.\n"
-            'EOF\n)"',
-            False,
-            "attribution footer",
-        ),
         # A real rtk invocation with a native word in a quoted arg stays allowed.
         PolicyCase(
             "allow-rtk-grep-quoted-find",
@@ -460,6 +439,45 @@ def main() -> int:
             tool_name="Write",
         ),
     ]
+    # The GitHub attribution guard is MACHINE-GLOBAL (XDG config, Banon-Labs/cupcake-config), not
+    # repo-local, so CI checkouts do not have it and a footerless gh body is (correctly) allowed
+    # there. Exercise its heredoc-substitution fallback only where that policy is installed.
+    attribution_policy = (
+        Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+        / "cupcake"
+        / "policies"
+        / "claude"
+        / "github_attribution_guard.rego"
+    )
+    if attribution_policy.is_file():
+        cases.extend(
+            [
+                # A --body "$(cat <<'EOF'...)" command substitution cannot be expanded by the
+                # gh_context signal, which falls back to matching the raw command text
+                # (2026-07-05 false positive: footer present in the heredoc was denied).
+                # Footer present -> allow.
+                PolicyCase(
+                    "allow-gh-pr-edit-heredoc-substitution-body-with-footer",
+                    'gh pr edit 19 --repo Banon-Labs/er-effects-rs --body "$(cat <<\'EOF\'\n'
+                    "Body text describing the change.\n\n"
+                    "\U0001f916 Written by Claude Fable 5, authorized by @chozandrias76\n"
+                    'EOF\n)"',
+                    True,
+                ),
+                # ... and the same form WITHOUT the footer must still deny (the raw
+                # command fallback must not weaken the guard).
+                PolicyCase(
+                    "deny-gh-pr-edit-heredoc-substitution-body-without-footer",
+                    'gh pr edit 19 --repo Banon-Labs/er-effects-rs --body "$(cat <<\'EOF\'\n'
+                    "Body text without attribution.\n"
+                    'EOF\n)"',
+                    False,
+                    "attribution footer",
+                ),
+            ]
+        )
+    else:
+        print(f"skip: gh-attribution guard cases (no global policy at {attribution_policy})")
     for case in cases:
         run_case(case)
     print("cupcake policy regression tests passed")
