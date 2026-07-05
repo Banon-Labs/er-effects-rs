@@ -2091,7 +2091,12 @@ def classify_snapshot(
             return ReadinessResult(True, READY_REASON, pid, bootstrap, telemetry, windows, polls)
         if target == TARGET_WORLD_STABLE:
             return None
-        if telemetry.get("autoload_slot") is None:
+        slotless_default_save_player_load = (
+            target == TARGET_PLAYER_LOAD
+            and telemetry.get("oracle_save_redirect_mode") == "default_user_save"
+            and telemetry.get("autoload_method") == "direct_menu_load"
+        )
+        if telemetry.get("autoload_slot") is None and not slotless_default_save_player_load:
             return ReadinessResult(False, AUTOLOAD_SLOT_MISSING, pid, bootstrap, telemetry, windows, polls)
         player_seen = telemetry.get("player_available") is True or telemetry.get("player_seen") is True
         player_playable = player_seen and (

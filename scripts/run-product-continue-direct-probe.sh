@@ -37,14 +37,13 @@ VISUAL_RESOURCE_MUTATION_ENVS=(
   ER_EFFECTS_TITLE_05_000_MEMORY_GFX
 )
 
-# SAVE-SOURCE STAGING (save-override-no-default-fallback-mandatory-env-2026-06-23).
-# The DLL refuses to assume the default user save dir: it requires ER_EFFECTS_SAVE_FILE (or an
-# explicit telemetry-only run). The GOLD SAVE does NOT live in appdata -- the user holds it and
-# supplies it via ER_EFFECTS_GOLD_SAVE. Every load probe stages a COPY of that gold save and points
-# the DLL at it (autosaves then land in the copy, never anywhere user-owned). Pure observe/menu-reach
+# SAVE-SOURCE SELECTION. Default mode still stages a configured gold save for older probes.
+# RUNTIME_USE_DEFAULT_SAVE=1 deliberately supplies no ER_EFFECTS_SAVE_FILE and lets the DLL use the
+# active Steam user's real/default %APPDATA%/EldenRing/<SteamID>/ER0000.sl2. Pure observe/menu-reach
 # probes set RUNTIME_TELEMETRY_ONLY=1 instead.
 GOLD_SAVE="${ER_EFFECTS_GOLD_SAVE:-}"
 RUNTIME_TELEMETRY_ONLY="${RUNTIME_TELEMETRY_ONLY:-0}"
+RUNTIME_USE_DEFAULT_SAVE="${RUNTIME_USE_DEFAULT_SAVE:-0}"
 # A real fixed-slot ER0000.sl2 BND4 is ~28MB even with empty slots; reject anything implausibly small.
 GOLD_SAVE_MIN_BYTES="${GOLD_SAVE_MIN_BYTES:-1048576}"
 # Root of the per-account default save dirs. Their SAVE FILES are wiped before launch AND on teardown
@@ -57,6 +56,7 @@ APPDATA_ER_ROOT="${APPDATA_ER_ROOT:-$HOME/.local/share/Steam/steamapps/compatdat
 # survive in the real appdata so we can observe how the working case opens ER0000.sl2).
 wipe_appdata_saves() {
   [[ "${RUNTIME_SKIP_APPDATA_WIPE:-0}" == "1" ]] && return 0
+  [[ "$RUNTIME_USE_DEFAULT_SAVE" == "1" ]] && return 0
   [[ -d "$APPDATA_ER_ROOT" ]] || return 0
   find "$APPDATA_ER_ROOT" -maxdepth 2 -type f \
     \( -name '*.sl2' -o -name '*.co2' -o -name '*.bak' \) -delete 2>/dev/null || true
@@ -182,12 +182,29 @@ preflight() {
   if [[ -n "$(runtime_pids)" ]]; then
     fatal "eldenring.exe is already running; refusing to mix probe ownership"
   fi
-  # SAVE-PRESENCE GUARD (fail-closed): unless this is an explicit telemetry-only run, a real gold
-  # save MUST exist to stage -- otherwise the DLL would abort at init anyway, and historically a
-  # missing/empty save silently degraded the run to the level-9 default with NO signal. Catch it
-  # here, before burning a launch.
-  if [[ "$RUNTIME_TELEMETRY_ONLY" != "1" ]]; then
-    [[ -n "$GOLD_SAVE" ]] || fatal "ER_EFFECTS_GOLD_SAVE is unset -- the gold save is NOT in appdata; supply its absolute path (or set RUNTIME_TELEMETRY_ONLY=1 for an observe-only run)"
+  # SAVE-PRESENCE GUARD (fail-closed): telemetry-only needs no save; default-save mode needs at
+  # least one plausible real default save; staged mode needs a real configured gold save.
+  if [[ "$RUNTIME_TELEMETRY_ONLY" != "1" && "$RUNTIME_USE_DEFAULT_SAVE" == "1" ]]; then
+    local default_count
+    default_count=$(python3 - "$APPDATA_ER_ROOT" "$GOLD_SAVE_MIN_BYTES" <<'PY'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+min_bytes = int(sys.argv[2])
+count = 0
+if root.is_dir():
+    for save in root.glob('*/ER0000.sl2'):
+        try:
+            if save.is_file() and save.stat().st_size >= min_bytes:
+                count += 1
+        except OSError:
+            pass
+print(count)
+PY
+)
+    (( default_count > 0 )) || fatal "RUNTIME_USE_DEFAULT_SAVE=1 but no plausible default ER0000.sl2 exists under $APPDATA_ER_ROOT"
+  elif [[ "$RUNTIME_TELEMETRY_ONLY" != "1" ]]; then
+    [[ -n "$GOLD_SAVE" ]] || fatal "ER_EFFECTS_GOLD_SAVE is unset -- supply an absolute save path, set RUNTIME_USE_DEFAULT_SAVE=1, or set RUNTIME_TELEMETRY_ONLY=1"
     [[ -f "$GOLD_SAVE" ]] || fatal "gold save not found: $GOLD_SAVE"
     local gold_bytes
     gold_bytes=$(stat -c '%s' "$GOLD_SAVE" 2>/dev/null || echo 0)
@@ -289,13 +306,14 @@ write_autoload_request
 # real launch through this script runs the just-built DLL. Fails closed if the build is missing.
 stage_me3_payload
 
-# SAVE SOURCE: the DLL never assumes the default user save dir. Either declare telemetry-only
-# (loads nothing) or stage an isolated copy of the gold save and point the DLL at it. Staging a
-# COPY (named ER0000.sl2 so the DLL's basename-preserving redirect lands on it) means the game's
-# autosaves write to the copy, never the user's real save -- save-safe by construction.
+# SAVE SOURCE: telemetry-only loads nothing; default-save mode intentionally uses the real/default
+# Steam-user save; otherwise stage an isolated configured save copy and point the DLL at it.
 if [[ "$RUNTIME_TELEMETRY_ONLY" == "1" ]]; then
   export ER_EFFECTS_TELEMETRY_ONLY=1
   echo "save-source: TELEMETRY-ONLY (no character load; default save dir not read)"
+elif [[ "$RUNTIME_USE_DEFAULT_SAVE" == "1" ]]; then
+  unset ER_EFFECTS_SAVE_FILE ER_EFFECTS_AUTOLOAD_SLOT ER_EFFECTS_TELEMETRY_ONLY
+  echo "save-source: DEFAULT USER SAVE (no ER_EFFECTS_SAVE_FILE, no configured slot; DLL will use active Steam default ER0000.sl2 and best active profile slot)"
 else
   # Stage into an EldenRing/<steamid>/ subtree: the DLL redirects the whole
   # %APPDATA%\Roaming\EldenRing directory handle (the game decides "save present?" by enumerating it,
@@ -344,8 +362,8 @@ else
   fi
 fi
 
-# Pre-launch wipe: the default appdata save dirs must start empty so the game cannot read a default
-# character -- any character that loads can ONLY have come from our redirect. (Also wiped on teardown.)
+# Pre-launch wipe for staged-save probes only. Default-save mode deliberately preserves and uses the
+# user's real/default save tree.
 wipe_appdata_saves
 
 # TRUE T0 = the closest bash timestamp to eldenring.exe process start. Captured here, immediately
