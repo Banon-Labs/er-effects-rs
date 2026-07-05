@@ -104,7 +104,12 @@ unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32)
             // GX recording is already closed, so the subcontext pool pop no-ops (black). The rasterize is
             // driven from profile_lookat_realtime_draw_tick (a DRAW-phase CSTaskImp task, live recording
             // frame). This hook only does the static composite of an already-captured RGBA.
-            let _ = unsafe { composite_portrait_on_swapchain(base, this_u) };
+            // The boot-progress view owns the pre-Continue black gap; once the portrait composite starts
+            // drawing (loading window) it wins, and the boot view self-stops on the same signals.
+            let drew_portrait = unsafe { composite_portrait_on_swapchain(base, this_u) };
+            if !drew_portrait {
+                let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
+            }
         }
     }
     let orig = PRESENT_ORIG.load(Ordering::SeqCst);
@@ -137,7 +142,10 @@ unsafe extern "system" fn present1_hook(
     if this_u == GAME_SWAPCHAIN.load(Ordering::SeqCst) {
         let base = GAME_BASE.load(Ordering::SeqCst);
         if base != 0 {
-            let _ = unsafe { composite_portrait_on_swapchain(base, this_u) };
+            let drew_portrait = unsafe { composite_portrait_on_swapchain(base, this_u) };
+            if !drew_portrait {
+                let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
+            }
         }
     }
     let orig = PRESENT1_ORIG.load(Ordering::SeqCst);
