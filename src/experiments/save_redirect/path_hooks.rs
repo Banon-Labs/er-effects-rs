@@ -878,27 +878,36 @@ fn default_save_root() -> Option<PathBuf> {
         .map(|appdata| appdata.join("EldenRing"))
 }
 
-/// Base file name of the active default save container. Seamless Co-op (ERSC) keeps co-op progress
-/// in `ER0000.co2` -- a separate container from the vanilla `ER0000.sl2` -- so when the Seamless
-/// module is resident the DEFAULT-USER-SAVE autoload must target `.co2`, the save the co-op session
-/// actually reads and autosaves. Detected via `seamless_coop_loaded()` (ERSC loads before this DLL
-/// under the me3 `[[natives]]` order, so the module is resolvable at `DllMain` and the choice is
-/// stable for the DLL's lifetime). Vanilla/offline -> `ER0000.sl2`. An explicit `save_file` config
-/// still overrides this (it wins in `configured_or_default_save_file`), so any loose `.sl2`/`.co2`
-/// path remains selectable.
-pub(crate) fn active_default_save_file_name() -> &'static str {
+/// Default save file names to try, in priority order. Seamless Co-op (ERSC) keeps co-op progress in
+/// `ER0000.co2` -- a separate container from the vanilla `ER0000.sl2` -- so when the Seamless module
+/// is resident the DEFAULT-USER-SAVE autoload targets `.co2` first (the save the co-op session reads
+/// and autosaves), else `.sl2`. The OTHER extension follows as a fallback: at `DllMain` the Seamless
+/// sticky latch may not be set yet (me3 defers native loading past Arxan / the me2 shim, so `ersc.dll`
+/// is not PEB-registered at +1ms), so a co2-only profile would otherwise fail the default-save
+/// existence gate and get the missing-save picker. The fallback lets it enter DEFAULT-USER-SAVE mode
+/// instead; the read path re-resolves the correct container via the latch once ERSC is resident. Since
+/// the world-load rides native Continue (the game reads its own save, ERSC-redirected), the fallback
+/// can at worst make an early menu-display read the other container -- never a save write.
+fn default_save_file_names() -> [&'static str; 2] {
     if crate::telemetry::seamless_coop_loaded() {
-        "ER0000.co2"
+        ["ER0000.co2", "ER0000.sl2"]
     } else {
-        "ER0000.sl2"
+        ["ER0000.sl2", "ER0000.co2"]
     }
 }
 
+/// Active-extension default save base name (`ER0000.co2` under Seamless, else `ER0000.sl2`).
+/// An explicit `save_file` config still overrides it (it wins in `configured_or_default_save_file`),
+/// so any loose `.sl2`/`.co2` path remains selectable.
+pub(crate) fn active_default_save_file_name() -> &'static str {
+    default_save_file_names()[0]
+}
+
 fn default_save_file_for_steam_id64(steam_id: u64) -> Option<PathBuf> {
-    let path = default_save_root()?
-        .join(steam_id.to_string())
-        .join(active_default_save_file_name());
-    validated_save_file_path(path)
+    let dir = default_save_root()?.join(steam_id.to_string());
+    default_save_file_names()
+        .into_iter()
+        .find_map(|name| validated_save_file_path(dir.join(name)))
 }
 
 fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
@@ -918,8 +927,11 @@ fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
                 .filter(|name| name.as_bytes().iter().all(u8::is_ascii_digit))
                 .and_then(|name| name.parse::<u64>().ok())
                 .and_then(plausible_steam_id64)?;
-            let path = entry.path().join(active_default_save_file_name());
-            validated_save_file_path(path).map(|path| (path, steam_id))
+            let dir = entry.path();
+            default_save_file_names()
+                .into_iter()
+                .find_map(|name| validated_save_file_path(dir.join(name)))
+                .map(|path| (path, steam_id))
         })
         .collect()
 }
