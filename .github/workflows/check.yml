@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual trigger to re-warm the main-scoped tool caches (cupcake, xwin
+  # CRT/SDK, rust-cache) if GitHub evicts them after an idle week, without
+  # having to push a commit.
+  workflow_dispatch:
 
 # One live run per ref: superseded runs on the same PR/branch are cancelled
 # instead of running to completion. Runs on main are never cancelled.
@@ -19,6 +23,10 @@ env:
   # Commit of eqtylab/cupcake the policy checker is built from. Also keys the
   # cache of the built binary -- bumping the rev invalidates the cache.
   CUPCAKE_REV: 27b94b8
+  # cargo-xwin release to install. Pinned because it also keys the cache of the
+  # Windows CRT/SDK that cargo-xwin downloads (defaults such as the bundled
+  # xwin manifest version only move when this version moves).
+  CARGO_XWIN_VERSION: 0.23.0
 
 jobs:
   check:
@@ -36,8 +44,10 @@ jobs:
 
       - name: Install Rust (stable + windows target)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang lld llvm
+          # Runner apt lists are usually fresh enough to install without an
+          # `apt-get update` (~20-60 s); fall back to updating only on a miss.
+          sudo apt-get install -y --no-install-recommends clang lld llvm \
+            || { sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm; }
           rustup toolchain install stable --profile minimal --component rustfmt
           rustup target add x86_64-pc-windows-msvc
 
@@ -45,7 +55,20 @@ jobs:
       - name: Install cargo-xwin
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-xwin
+          tool: cargo-xwin@${{ env.CARGO_XWIN_VERSION }}
+
+      # On first use cargo-xwin downloads + unpacks the MSVC CRT and Windows
+      # SDK into ~/.cache/cargo-xwin. That download comes from Microsoft's CDN
+      # and its duration is wildly variable -- observed 40 s on a good run and
+      # 12 m 44 s on a throttled one (run 28757404582) -- so restore it from
+      # the Actions cache instead of re-downloading every run. The content is
+      # fully determined by the pinned cargo-xwin version, so an exact-key hit
+      # is expected every run and the ~1 GB dir is only uploaded once per bump.
+      - name: Cache xwin Windows CRT/SDK
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/cargo-xwin
+          key: xwin-sdk-${{ runner.os }}-cargo-xwin-${{ env.CARGO_XWIN_VERSION }}
 
       - name: Install OPA policy engine
         run: |
