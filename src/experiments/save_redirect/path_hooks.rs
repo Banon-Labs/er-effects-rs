@@ -871,10 +871,26 @@ fn default_save_root() -> Option<PathBuf> {
         .map(|appdata| appdata.join("EldenRing"))
 }
 
+/// Base file name of the active default save container. Seamless Co-op (ERSC) keeps co-op progress
+/// in `ER0000.co2` -- a separate container from the vanilla `ER0000.sl2` -- so when the Seamless
+/// module is resident the DEFAULT-USER-SAVE autoload must target `.co2`, the save the co-op session
+/// actually reads and autosaves. Detected via `seamless_coop_loaded()` (ERSC loads before this DLL
+/// under the me3 `[[natives]]` order, so the module is resolvable at `DllMain` and the choice is
+/// stable for the DLL's lifetime). Vanilla/offline -> `ER0000.sl2`. An explicit `save_file` config
+/// still overrides this (it wins in `configured_or_default_save_file`), so any loose `.sl2`/`.co2`
+/// path remains selectable.
+pub(crate) fn active_default_save_file_name() -> &'static str {
+    if crate::telemetry::seamless_coop_loaded() {
+        "ER0000.co2"
+    } else {
+        "ER0000.sl2"
+    }
+}
+
 fn default_save_file_for_steam_id64(steam_id: u64) -> Option<PathBuf> {
     let path = default_save_root()?
         .join(steam_id.to_string())
-        .join("ER0000.sl2");
+        .join(active_default_save_file_name());
     validated_save_file_path(path)
 }
 
@@ -895,7 +911,7 @@ fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
                 .filter(|name| name.as_bytes().iter().all(u8::is_ascii_digit))
                 .and_then(|name| name.parse::<u64>().ok())
                 .and_then(plausible_steam_id64)?;
-            let path = entry.path().join("ER0000.sl2");
+            let path = entry.path().join(active_default_save_file_name());
             validated_save_file_path(path).map(|path| (path, steam_id))
         })
         .collect()
@@ -1077,7 +1093,8 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
         return activate_save_redirect_source(source, "early-enforced-configured-save");
     }
     append_autoload_debug(format_args!(
-        "save-override: no explicit save_file/ER_EFFECTS_SAVE_FILE and no readable active default ER0000.sl2 (>= {} bytes). config_error={}. Prompting user for a save file on a post-DllMain helper thread.",
+        "save-override: no explicit save_file/ER_EFFECTS_SAVE_FILE and no readable active default {} (>= {} bytes). config_error={}. Prompting user for a save file on a post-DllMain helper thread.",
+        active_default_save_file_name(),
         SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES,
         runtime_config_error().unwrap_or_else(|| "none".to_owned())
     ));
