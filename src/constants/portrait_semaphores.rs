@@ -297,10 +297,11 @@ pub(crate) const PROFILE_OFFSCREEN_SIZE_TABLE_RVA: usize = 0x3b39848;
 pub(crate) const PROFILE_OFFSCREEN_SIZE_TABLE_STRIDE: usize = 0x20;
 /// The value `FUN_1400a7bb0` writes (base 128x128 = `(128<<32)|128`); self-validate before patching.
 pub(crate) const PROFILE_OFFSCREEN_SIZE_INIT: usize = 0x8000000080;
-/// Target base 512x512 = `(512<<32)|512`, with the native per-slot supersample flag kept ON. The engine's
-/// env-dependent x2 path (`FUN_140bbeee0`: `base*2` iff global flag && `size_struct[+0x8]`) then produces a
-/// 1024x1024 portrait RT: a high-quality source before the full-backbuffer GPU composite scales it.
-pub(crate) const PROFILE_OFFSCREEN_SIZE_TARGET: usize = 0x0000_0200_0000_0200;
+/// Diagnostic target base 2056x2056 = `(2056<<32)|2056`, with the native per-slot supersample flag OFF.
+/// This forces the engine's env-dependent path (`FUN_140bbeee0`: `base*2` iff global flag &&
+/// `size_struct[+0x8]`) to stay x1, producing a 2056x2056 portrait RT before the full-backbuffer GPU
+/// composite scales it down/crops it.
+pub(crate) const PROFILE_OFFSCREEN_SIZE_TARGET: usize = 0x0000_0808_0000_0808;
 /// Byte offset within a size-table row of the per-slot supersample-enable flag (read as
 /// `size_struct[+0x8]` by `FUN_140bbeee0`); zero it to force x1.
 pub(crate) const PROFILE_OFFSCREEN_SIZE_SUPERSAMPLE_FLAG_OFFSET: usize = 0x8;

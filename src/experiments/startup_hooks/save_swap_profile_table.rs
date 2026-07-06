@@ -278,7 +278,7 @@ unsafe fn patch_profile_offscreen_size_for_loaded_slot(base: usize) -> bool {
             core::ptr::write_volatile(row as *mut u64, PROFILE_OFFSCREEN_SIZE_TARGET as u64);
             core::ptr::write_volatile(
                 (row + PROFILE_OFFSCREEN_SIZE_SUPERSAMPLE_FLAG_OFFSET) as *mut u8,
-                1,
+                0,
             );
         }
         true
@@ -289,7 +289,7 @@ unsafe fn patch_profile_offscreen_size_for_loaded_slot(base: usize) -> bool {
         PROFILE_SIZE_PATCHED.fetch_or(bit, Ordering::SeqCst);
     }
     append_autoload_debug(format_args!(
-        "portrait-res: pre-builder target slot {target} row=0x{cur:x} patched={} -> base 512x512, native supersample on (expected RT 1024x1024); other slots left native 128",
+        "portrait-res: pre-builder target slot {target} row=0x{cur:x} patched={} -> base 2056x2056, native supersample off (expected RT 2056x2056); other slots left native 128",
         if patched { 1 } else { 0 }
     ));
     patched
