@@ -109,6 +109,7 @@ halt contains decision if {
 
 	# Check if any protected path is a CHILD of an affected directory
 	some affected_dir in affected_dirs
+	not safe_mktemp_file_parent_overapprox(command, affected_dir)
 	some protected_path in get_protected_paths
 	protected_is_child_of_affected(protected_path, affected_dir)
 
@@ -331,6 +332,30 @@ parent_destructive_command_detected(cmd) if {
 parent_destructive_command_detected(cmd) if {
 	commands.has_verb(cmd, "find")
 	regex.match(`(^|[[:space:]])-(delete|exec|execdir)([[:space:]]|$)`, cmd)
+}
+
+# The shell preprocessor can over-approximate variable cleanup paths as `/`.
+# Allow the narrow, common pattern used for comment/body-file workflows: create a
+# temp file with mktemp, pass that same conventional temp variable to a tool, and
+# remove only that variable with `rm -f`.  Do not suppress parent protection when
+# any destructive command names a literal absolute path or uses recursive rm.
+safe_mktemp_file_parent_overapprox(cmd, affected_dir) if {
+	affected_dir == "/"
+	safe_mktemp_file_cleanup(cmd)
+	not destructive_command_mentions_absolute_path(cmd)
+	not regex.match(`(^|[[:space:];|&])rm[[:space:]]+-[[:alnum:]]*r`, cmd)
+}
+
+safe_mktemp_file_cleanup(cmd) if {
+	some var in {"tmp", "tmp_body", "tmp_file"}
+	contains(cmd, concat("", [var, "=$(mktemp)"]))
+	contains(cmd, concat("", ["rm -f \"$", var, "\""]))
+}
+
+destructive_command_mentions_absolute_path(cmd) if {
+	destructive_parent_verbs := {"rm", "rmdir", "mv", "cp", "chmod", "chown", "chgrp", "rsync", "install", "truncate", "shred"}
+	some verb in destructive_parent_verbs
+	regex.match(concat("", [`(^|[[:space:];|&])`, verb, `[[:space:]][^\n;|&]*[[:space:]]/`]), cmd)
 }
 
 # Check if command references a protected path
