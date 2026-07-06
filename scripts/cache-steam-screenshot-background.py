@@ -22,7 +22,6 @@ import urllib.request
 
 MAGIC = b"ERBGRA01"
 APPID_ELDEN_RING = "1245620"
-STEAMID64_BASE = 76561197960265728
 DEFAULT_GAME_DIR_CANDIDATES = [
     Path.home() / ".steam/steam/steamapps/common/ELDEN RING/Game",
     Path.home() / ".local/share/Steam/steamapps/common/ELDEN RING/Game",
@@ -211,10 +210,7 @@ def main() -> int:
     elif args.allow_remote:
         steamid64 = args.steamid64
         if steamid64 is None:
-            ids = account_ids(roots)
-            if not ids:
-                raise SystemExit("no local Steam userdata account id found; pass --steamid64")
-            steamid64 = STEAMID64_BASE + ids[0]
+            raise SystemExit("remote scrape requires --steamid64; local userdata account IDs are not SteamID64 values")
         url = latest_remote_screenshot_url(args.appid, steamid64, args.timeout, args.max_download_bytes)
         if not url:
             raise SystemExit("no public remote screenshot media found")

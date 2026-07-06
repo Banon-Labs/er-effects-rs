@@ -28,11 +28,11 @@ Quick load currently aims to:
 - provide RAM/telemetry oracles for proof instead of relying on screenshots;
 - draw boot progress before the game's native loading screen appears.
 
-Validated product proof in this branch includes a runtime smoke where the cached
-screenshot boot background loaded, the boot view drew hundreds of frames, the
-handoff reached the native loading/portrait path, the run exited on
-`world_stable`, `oracle_msgbox_total_builds=0`, and
-`simulated_button_presses_total=0`.
+Validated product proof in this branch includes quick-load/runtime smokes where
+the boot view drew hundreds of frames, handed off to the native loading/portrait
+path, exited on `world_stable`, produced `oracle_msgbox_total_builds=0`, and kept
+`simulated_button_presses_total=0`. The local Steam-screenshot background path is
+optional and falls back cleanly when no real local Elden Ring screenshot exists.
 
 ## Feature map
 
@@ -40,7 +40,7 @@ handoff reached the native loading/portrait path, the run exited on
 | --- | --- | --- |
 | Quick load / zero-input autoload | Primary focus | me3-native DLL, native title/menu gates, no host button simulation. |
 | Boot progress view | Product path | Present-hook D3D12 overlay draws a small milestone loading bar from RAM semaphores before native loading UI exists. |
-| Cached Steam screenshot boot background | Optional branch feature | Helper prefetches/converts a screenshot to a local cache; DLL only reads disk and never downloads on launch. |
+| Steam screenshot boot background | Optional branch feature | DLL-only local Steam screenshot discovery/decoding; optional predecoded override for dev/power users. No launch-time network. |
 | Native loading-screen portrait | Experimental/product-adjacent | Character portrait rendering/composite exists; continuous per-frame refresh still has known GX subcontext contention. |
 | SpEffect trigger calls | Existing base feature | Named SpEffect calls from `data/effects.json`, default local-only networking semantics. |
 | Save-source redirect/default-save fallback | Product support | Can load explicit `.sl2`/`.co2` sources or fall back to active Steam user's default save path. |
@@ -84,41 +84,37 @@ work. The release profile is designed for the direct/offline me3 native-DLL path
 
 ## Optional: Steam screenshot boot background
 
-The DLL can draw a cached personal screenshot behind the pre-native boot loading
-bar. This is intentionally cache-only:
+The DLL can draw a personal Steam screenshot behind the pre-native boot loading
+bar. The production path is DLL-only:
 
-- the DLL never scrapes Steam;
+- the DLL enumerates local Steam `userdata/*/760/remote/1245620/screenshots`
+  directories and chooses the newest `.jpg`/`.png` it can decode;
+- no Steam account ID is hard-coded;
+- the DLL never scrapes Steam Community;
 - the DLL never downloads during launch;
-- missing/bad cache falls back to the normal black boot progress view;
-- the helper enforces request timeouts, download size caps, and decode resizing.
+- missing/bad screenshots fall back to the normal black boot progress view.
 
-Populate the cache before launch:
+The boot view aspect-covers the screenshot, dims it, and draws a soft faded
+shadow behind the progress bar so the bar remains readable without a hard panel.
 
-```bash
-scripts/cache-steam-screenshot-background.py --allow-remote
-```
-
-By default, the helper first checks local Steam screenshot cache directories for
-Elden Ring (`appid 1245620`). With `--allow-remote`, it may scrape the public
-Steam Community screenshot page for the latest screenshot if local cache misses.
-It writes:
+An explicit predecoded override is still supported for development/power users:
 
 ```text
 <game-dir>/er-effects-boot-background.rgba
 ```
 
 That file uses a tiny `ERBGRA01` header plus width/height and RGBA8 pixels. The
-boot view aspect-covers the screenshot, dims it, and draws a soft faded shadow
-behind the progress bar so the bar remains readable without a hard panel.
-
-Useful helper options:
+helper script can write it, but it is not required for the shipped DLL path:
 
 ```bash
 scripts/cache-steam-screenshot-background.py --dry-run
 scripts/cache-steam-screenshot-background.py --game-dir /path/to/ELDEN\ RING/Game
-scripts/cache-steam-screenshot-background.py --allow-remote --timeout 4 --max-download-bytes 2000000
+scripts/cache-steam-screenshot-background.py --allow-remote --steamid64 <id> --timeout 4
 scripts/cache-steam-screenshot-background.py --output /tmp/er-effects-boot-background.rgba
 ```
+
+Remote helper mode requires an explicit `--steamid64`; it does not derive one
+from local userdata account directory names.
 
 ## Runtime configuration files
 
@@ -134,7 +130,7 @@ Common quick-load files:
 | `er-effects-native-continue.txt` | Enables the supported native Continue path. |
 | `er-effects-pab-advance.txt` | Enables zero-input press-any-button/menu-open advance. |
 | `er-effects-splash-skip.txt` | Enables built-in splash skip when not already implied by quick load. |
-| `er-effects-boot-background.rgba` | Optional predecoded screenshot boot background cache. |
+| `er-effects-boot-background.rgba` | Optional predecoded screenshot override; not required for local Steam screenshot discovery. |
 | `er-effects.toml` | Optional config file; can provide a `save_file = "..."` source. |
 
 Important experimental/probe files exist too (`er-effects-force-profile-render.txt`,

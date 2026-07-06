@@ -85,6 +85,7 @@ static BOOT_BG_IMAGE: std::sync::OnceLock<Option<BootBgImage>> = std::sync::Once
 
 const BOOT_BG_CACHE_FILE: &str = "er-effects-boot-background.rgba";
 const BOOT_BG_MAGIC: &[u8; 8] = b"ERBGRA01";
+const BOOT_BG_STEAM_APPID: &str = "1245620";
 const BOOT_BG_MAX_DIM: usize = 4096;
 const BOOT_BG_MAX_PIXELS: usize = BOOT_BG_MAX_DIM * BOOT_BG_MAX_DIM;
 
@@ -339,32 +340,44 @@ fn boot_fill_rect(
 fn boot_bg_image() -> Option<&'static BootBgImage> {
     BOOT_BG_IMAGE
         .get_or_init(|| {
-            let Some(path) = game_directory_path().map(|dir| dir.join(BOOT_BG_CACHE_FILE)) else {
-                return None;
-            };
-            let Ok(bytes) = std::fs::read(&path) else {
-                return None;
-            };
-            match parse_boot_bg_cache(&bytes) {
-                Some(img) => {
-                    append_autoload_debug(format_args!(
-                        "boot-view: cached screenshot background loaded '{}' {}x{}",
-                        path.display(),
-                        img.width,
-                        img.height
-                    ));
-                    Some(img)
-                }
-                None => {
-                    append_autoload_debug(format_args!(
-                        "boot-view: cached screenshot background ignored '{}' (bad ERBGRA01 cache)",
-                        path.display()
-                    ));
-                    None
-                }
+            if let Some(img) = boot_bg_cache_override() {
+                return Some(img);
             }
+            if let Some((path, img)) = boot_bg_latest_local_steam_screenshot() {
+                append_autoload_debug(format_args!(
+                    "boot-view: local Steam screenshot background loaded '{}' {}x{}",
+                    path.display(),
+                    img.width,
+                    img.height
+                ));
+                return Some(img);
+            }
+            None
         })
         .as_ref()
+}
+
+fn boot_bg_cache_override() -> Option<BootBgImage> {
+    let path = game_directory_path()?.join(BOOT_BG_CACHE_FILE);
+    let bytes = std::fs::read(&path).ok()?;
+    match parse_boot_bg_cache(&bytes) {
+        Some(img) => {
+            append_autoload_debug(format_args!(
+                "boot-view: cached screenshot background loaded '{}' {}x{}",
+                path.display(),
+                img.width,
+                img.height
+            ));
+            Some(img)
+        }
+        None => {
+            append_autoload_debug(format_args!(
+                "boot-view: cached screenshot background ignored '{}' (bad ERBGRA01 cache)",
+                path.display()
+            ));
+            None
+        }
+    }
 }
 
 fn parse_boot_bg_cache(bytes: &[u8]) -> Option<BootBgImage> {
@@ -373,6 +386,10 @@ fn parse_boot_bg_cache(bytes: &[u8]) -> Option<BootBgImage> {
     }
     let width = u32::from_le_bytes(bytes[8..12].try_into().ok()?) as usize;
     let height = u32::from_le_bytes(bytes[12..16].try_into().ok()?) as usize;
+    boot_bg_image_from_rgba(width, height, bytes[16..].to_vec())
+}
+
+fn boot_bg_image_from_rgba(width: usize, height: usize, rgba: Vec<u8>) -> Option<BootBgImage> {
     if width == 0 || height == 0 || width > BOOT_BG_MAX_DIM || height > BOOT_BG_MAX_DIM {
         return None;
     }
@@ -381,14 +398,137 @@ fn parse_boot_bg_cache(bytes: &[u8]) -> Option<BootBgImage> {
         return None;
     }
     let len = pixels.checked_mul(RGBA8_BPP)?;
-    if bytes.len() != 16 + len {
+    if rgba.len() != len {
         return None;
     }
     Some(BootBgImage {
         width,
         height,
-        rgba: bytes[16..].to_vec(),
+        rgba,
     })
+}
+
+fn boot_bg_latest_local_steam_screenshot() -> Option<(std::path::PathBuf, BootBgImage)> {
+    let path = boot_bg_find_latest_local_steam_screenshot()?;
+    let img = unsafe { boot_bg_decode_wic_rgba(&path) }?;
+    Some((path, img))
+}
+
+fn boot_bg_find_latest_local_steam_screenshot() -> Option<std::path::PathBuf> {
+    let mut best: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    for root in boot_bg_steam_userdata_roots() {
+        let Ok(accounts) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for account in accounts.flatten() {
+            let account_path = account.path();
+            if !account_path.is_dir() {
+                continue;
+            }
+            let shots = account_path
+                .join("760")
+                .join("remote")
+                .join(BOOT_BG_STEAM_APPID)
+                .join("screenshots");
+            let Ok(entries) = std::fs::read_dir(&shots) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !boot_bg_is_supported_image_path(&path) {
+                    continue;
+                }
+                let Ok(meta) = entry.metadata() else {
+                    continue;
+                };
+                let modified = meta.modified().or_else(|_| meta.created()).unwrap_or(std::time::UNIX_EPOCH);
+                if best.as_ref().map_or(true, |(t, _)| modified > *t) {
+                    best = Some((modified, path));
+                }
+            }
+        }
+    }
+    best.map(|(_, path)| path)
+}
+
+fn boot_bg_steam_userdata_roots() -> Vec<std::path::PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(game_dir) = game_directory_path() {
+        for ancestor in game_dir.ancestors() {
+            boot_bg_push_unique_root(&mut roots, ancestor.join("userdata"));
+        }
+    }
+    for var in ["STEAM_COMPAT_CLIENT_INSTALL_PATH", "STEAM_HOME", "STEAM_ROOT"] {
+        if let Ok(value) = std::env::var(var) {
+            if !value.is_empty() {
+                boot_bg_push_unique_root(&mut roots, std::path::PathBuf::from(value).join("userdata"));
+            }
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.is_empty() {
+            let home = std::path::PathBuf::from(home);
+            boot_bg_push_unique_root(&mut roots, home.join(".steam").join("steam").join("userdata"));
+            boot_bg_push_unique_root(
+                &mut roots,
+                home.join(".local").join("share").join("Steam").join("userdata"),
+            );
+        }
+    }
+    roots
+}
+
+fn boot_bg_push_unique_root(roots: &mut Vec<std::path::PathBuf>, path: std::path::PathBuf) {
+    if roots.iter().any(|existing| existing == &path) {
+        return;
+    }
+    roots.push(path);
+}
+
+fn boot_bg_is_supported_image_path(path: &std::path::Path) -> bool {
+    path.is_file()
+        && path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "jpg" | "jpeg" | "png"))
+            .unwrap_or(false)
+}
+
+unsafe fn boot_bg_decode_wic_rgba(path: &std::path::Path) -> Option<BootBgImage> {
+    // COM may already be initialized on this thread; ignore the HRESULT and let CoCreateInstance be
+    // the real gate. WIC is local file decode only -- no network and no helper process.
+    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    let factory: IWICImagingFactory = unsafe {
+        CoCreateInstance(&CLSID_WICImagingFactory, None::<&IUnknown>, CLSCTX_INPROC_SERVER).ok()?
+    };
+    let wide = boot_bg_wide_null(path);
+    let decoder = unsafe {
+        factory
+            .CreateDecoderFromFilename(
+                PCWSTR(wide.as_ptr()),
+                None,
+                GENERIC_READ,
+                WICDecodeMetadataCacheOnDemand,
+            )
+            .ok()?
+    };
+    let frame = unsafe { decoder.GetFrame(0).ok()? };
+    let source: IWICBitmapSource = frame.cast().ok()?;
+    let converted = unsafe { WICConvertBitmapSource(&GUID_WICPixelFormat32bppRGBA, &source).ok()? };
+    let mut width = 0u32;
+    let mut height = 0u32;
+    unsafe { converted.GetSize(&mut width, &mut height).ok()? };
+    let width_usize = width as usize;
+    let height_usize = height as usize;
+    let len = width_usize.checked_mul(height_usize)?.checked_mul(RGBA8_BPP)?;
+    let mut rgba = vec![0u8; len];
+    unsafe { converted.CopyPixels(std::ptr::null(), width * RGBA8_BPP as u32, &mut rgba).ok()? };
+    boot_bg_image_from_rgba(width_usize, height_usize, rgba)
+}
+
+fn boot_bg_wide_null(path: &std::path::Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
 }
 
 fn boot_fill_aspect_cover_background(buf: &mut [u8], w: usize, h: usize, bg: &BootBgImage) {
