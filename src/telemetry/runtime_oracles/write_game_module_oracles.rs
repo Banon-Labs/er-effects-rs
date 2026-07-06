@@ -2117,20 +2117,6 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_portrait_facedata_neq_ticks",
             PORTRAIT_FACEDATA_NEQ_TICKS.load(Ordering::SeqCst),
         );
-        // FACE-IDENTITY semaphore (user directive 2026-07-06): at each build kick for a slot owned by a
-        // foreign-save preview, the record's inner FaceDataBuffer is re-hashed against the fingerprint
-        // stored when the preview wrote it. `mismatches > 0` == the portrait was about to render a
-        // DIFFERENT character's face than the one the user picked -- fail-fast signal for probe watchers.
-        push_json_usize(
-            body,
-            "oracle_portrait_face_identity_checks",
-            PORTRAIT_FACE_IDENTITY_CHECKS.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_portrait_face_identity_mismatches",
-            PORTRAIT_FACE_IDENTITY_MISMATCHES.load(Ordering::SeqCst),
-        );
         push_json_usize(
             body,
             "oracle_portrait_pump_draws",
@@ -2332,9 +2318,8 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_gfx_portrait_head_ever",
             GFX_PORTRAIT_HEAD_EVER.load(Ordering::SeqCst),
         );
-        // PIVOT (er-effects-rs-jsm): player-stats loading text. `stats_text_built` = cumulative count of
-        // stats bitmaps rendered from the game font (content-keyed rebuilds: a character switch or the
-        // record->live upgrade bumps it); `tip_suppressed_hits` = native tip-refresh calls we no-op'd.
+        // PIVOT (er-effects-rs-jsm): player-stats loading text. `stats_text_built` = the stats bitmap was
+        // rendered from the game font; `tip_suppressed_hits` = native tip-refresh calls we no-op'd.
         push_json_usize(
             body,
             "oracle_stats_text_built",

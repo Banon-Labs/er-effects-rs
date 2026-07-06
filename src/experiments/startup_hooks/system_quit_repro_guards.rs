@@ -539,24 +539,6 @@ unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, source: &str) {
     PROFILE_SPARE_CANDIDATE_MODEL.store(0, Ordering::SeqCst);
     PROFILE_BAKE_RGBA_CAPTURED.store(0, Ordering::SeqCst);
     invalidate_portrait_depth_mask();
-    // ORPHAN RECLAIM AT SWITCH ARM (second-load foreign-head fix, pixel-proven 2026-07-06 run
-    // jsm-slotstats2-switchqa). The prior window's spared renderer parks in PROFILE_SPARE_ORPHAN at the
-    // load-complete reset and was only delete-enqueued inside profile_renderer_teardown_spare_hook --
-    // but the System-Quit switch path never fires that native teardown-all (spare_hits stayed 1,
-    // orphans_deleted 0 across the whole run), so the orphan lived through the NEXT loading window with
-    // its model + offscreen scene still registered, rendering the PREVIOUS character's head every frame.
-    // The new window's readback then published that head under the correctly-kicked new renderer
-    // (window-2 RT dump structure-correlated 0.92 with the window-1 character). Reclaim it HERE, on the
-    // game thread at the confirm press (same delay-delete path as the spare hook), so the new window's
-    // offscreen render belongs to the new character alone.
-    let orphan = PROFILE_SPARE_ORPHAN.swap(0, Ordering::SeqCst);
-    if orphan != 0 {
-        let deleted = unsafe { delay_delete_enqueue_renderer(orphan) };
-        ownership_release(OwnedClass::SparedRenderer);
-        append_autoload_debug(format_args!(
-            "loading-portrait: reclaimed prior spared renderer 0x{orphan:x} at switch confirm via CSDelayDeleteMan enqueued={deleted} (second-load foreign-head fix)"
-        ));
-    }
     PROFILE_PORTRAIT_RETARGETS.fetch_add(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
         "loading-portrait: RETARGET to selected slot {selected_slot} at confirm (make-before-break: drive re-engaged, prior masked head holds until the new keyed frame; source={source})"

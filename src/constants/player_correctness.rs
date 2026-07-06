@@ -41,14 +41,6 @@ pub(crate) const PGD_EQUIP_GAME_DATA_OFFSET: usize =
 pub(crate) const EQUIP_GAME_DATA_CHR_ASM_OFFSET: usize =
     core::mem::offset_of!(EquipGameData, chr_asm);
 pub(crate) const CHR_ASM_SIZE: usize = core::mem::size_of::<ChrAsm>();
-/// Runtime `ChrAsm` member offsets, for assembling a runtime-layout image from the SERIALIZED save
-/// sections (which store the same blocks in a different order; see
-/// `SerializedSaveSlot::runtime_chr_asm_image`).
-pub(crate) const CHR_ASM_EQUIPMENT_OFFSET: usize = core::mem::offset_of!(ChrAsm, equipment);
-pub(crate) const CHR_ASM_GAITEM_HANDLES_OFFSET: usize =
-    core::mem::offset_of!(ChrAsm, gaitem_handles);
-pub(crate) const CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET: usize =
-    core::mem::offset_of!(ChrAsm, equipment_param_ids);
 pub(crate) const PGD_GENDER_BE_OFFSET: usize = core::mem::offset_of!(PlayerGameData, gender);
 pub(crate) const PGD_ARCHETYPE_BF_OFFSET: usize = core::mem::offset_of!(PlayerGameData, archetype);
 pub(crate) const PGD_VOICE_TYPE_C2_OFFSET: usize =
@@ -77,14 +69,6 @@ pub(crate) const FACE_DATA_BUFFER_PAYLOAD_SIZE: usize =
     core::mem::size_of::<FaceDataBuffer>() - FACE_DATA_BUFFER_PAYLOAD_OFFSET;
 pub(crate) const FACE_DATA_BUFFER_TOTAL_SIZE: usize =
     FACE_DATA_BUFFER_PAYLOAD_OFFSET + FACE_DATA_BUFFER_PAYLOAD_SIZE;
-/// Native `FaceData::CopyFromBuffer` (mirrored from the native row builder `FUN_14025f9b0`): copies an
-/// inner `FaceDataBuffer` (`FACE` magic) into a live `FaceData` wrapper (e.g. a ProfileSummary record's
-/// +0x38 block). The SAVED wrapper header does NOT match the live one (2026-06-27 native row dumps), so
-/// records must be filled through this helper, never by memcpy'ing the saved wrapper.
-pub(crate) const FACE_DATA_COPY_FROM_BUFFER_RVA: usize = 0x00252f70;
-/// Native `ChrAsm` copy the row builder uses for a ProfileSummary record's equipment block (+0x1a8) --
-/// the source the profile renderer reads to dress the portrait model.
-pub(crate) const CHR_ASM_COPY_RVA: usize = 0x00245c00;
 /// Face-body values are the face payload that begins at FaceDataBuffer::buffer.
 pub(crate) const FACE_BODY_FIELD_FACE_MODEL_OFFSET: usize = FACE_DATA_BUFFER_PAYLOAD_OFFSET;
 pub(crate) const FACE_BODY_FIELD_HAIR_MODEL_OFFSET: usize =

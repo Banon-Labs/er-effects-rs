@@ -222,20 +222,7 @@ pub(crate) unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
     if !valid(gdm) {
         return None;
     }
-    // Slot source = the make-before-break portrait target (second-character fix, user-reported
-    // 2026-07-06): during a System-Quit switch the user-picked slot (SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT,
-    // set at the confirm press) names the character being LOADED, while ac0 still names the resident OLD
-    // character until the deserialize flips it -- so the ac0-first read rendered character 1's record
-    // (which the still-resident char-1 PGD then "validated" as live) under character 2's loading screen.
-    // Same priority as portrait_target_slot(), keeping the boot-time best_active_slot fallback.
-    let sel = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
-    let slot = if sel <= i32::MAX as usize
-        && (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&(sel as i32))
-    {
-        sel as i32
-    } else {
-        portrait_loaded_slot_confirmed().unwrap_or_else(|| unsafe { best_active_slot() })
-    };
+    let slot = portrait_loaded_slot_confirmed().unwrap_or_else(|| unsafe { best_active_slot() });
     let slot_u = if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
         slot as usize
     } else {
@@ -355,78 +342,51 @@ pub(crate) fn format_stats_lines(st: &LoadingScreenStats) -> Vec<String> {
     lines
 }
 
-/// The rendered loading-screen stats text, keyed by the exact display `lines` it renders. The game
-/// thread rebuilds it whenever the loading slot's lines differ (character switch, record->live upgrade,
-/// playtime tick); the render thread composites it. ONE mutex guards bitmap + key together so a window
-/// reset racing a build can never strand a key without its bitmap (which would suppress rebuilds and
-/// blank the text for the whole window).
-pub(crate) struct StatsTextCache {
-    pub w: u32,
-    pub h: u32,
-    pub rgba: Vec<u8>,
-    /// The exact lines the bitmap renders -- the rebuild key.
-    pub lines: Vec<String>,
-}
-pub(crate) static STATS_TEXT_CACHE: std::sync::Mutex<Option<StatsTextCache>> =
+/// Cached rendered stats text `(w, h, rgba)` for the overlay to composite, and the version it was built
+/// for (rebuilt when the stats first become readable). `Mutex` so the game thread builds and the render
+/// thread reads.
+pub(crate) static STATS_TEXT_RGBA: std::sync::Mutex<Option<(u32, u32, Vec<u8>)>> =
     std::sync::Mutex::new(None);
-/// Cumulative stats-bitmap build count (telemetry oracle `oracle_stats_text_built`; never reset).
 pub(crate) static STATS_TEXT_BUILT: AtomicUsize = AtomicUsize::new(0);
-/// `(name, level, live)` of the last logged build -- gates the debug log so per-second playtime rebuilds
-/// don't spam it, while identity changes (new character, record->live upgrade) still log.
-static STATS_TEXT_LOGGED: std::sync::Mutex<Option<(String, i32, bool)>> =
-    std::sync::Mutex::new(None);
+/// Set once the built bitmap came from a validated live PlayerGameData (adds HP/FP/Stamina).
+pub(crate) static STATS_TEXT_LIVE: AtomicUsize = AtomicUsize::new(0);
+static STATS_TEXT_LOG: AtomicUsize = AtomicUsize::new(0);
 
-/// Build the stats-text bitmap from the slot's stats + game menu font, into `STATS_TEXT_CACHE`.
-/// CONTENT-KEYED (second-character fix, user-reported 2026-07-06): rebuild exactly when the loading
-/// slot's formatted lines differ from what is currently rendered, never a per-window one-shot latch.
-/// The old `STATS_TEXT_LIVE` latch re-armed AFTER the window reset (this tick keeps running until
-/// load_done + cover-down go idle) with the PREVIOUS character's still-resident PlayerGameData, so a
-/// System-Quit switch showed character 1's stats through character 2's entire loading screen. With
-/// content keying a stale bitmap self-heals the moment the new slot's record reads differently, and
-/// identical ticks stay cheap no-ops. Called on the loading screen from the game thread; silently waits
-/// until both the captured font and readable stats exist.
+/// Build the stats-text bitmap from the slot's stats + game menu font, into `STATS_TEXT_RGBA`. The first
+/// build renders slot-record + .sl2 data (correct from the first frame); ONE upgrade rebuild follows when
+/// the deserialized save validates PlayerGameData as the loading slot (adds live HP/FP/Stamina). Cheap
+/// no-op after the live build. Called on the loading screen from the game thread. Needs both the font
+/// (captured/env) and readable stats; silently waits if either is not ready.
 pub(crate) unsafe fn maybe_build_stats_text() {
+    if STATS_TEXT_LIVE.load(Ordering::SeqCst) != 0 {
+        return;
+    }
     let Some(font) = menu_font() else {
         return;
     };
     let Some(stats) = (unsafe { read_loading_screen_stats() }) else {
         return;
     };
-    // Wait for real content (a non-empty name or a real level) before rendering anything.
+    if STATS_TEXT_BUILT.load(Ordering::SeqCst) != 0 && !stats.attr_source_live {
+        return;
+    }
+    // Wait for real content (a non-empty name or a real level) before committing the one-shot build.
     if stats.level <= 0 && stats.name.trim().is_empty() {
         return;
     }
     let lines = format_stats_lines(&stats);
-    let unchanged = STATS_TEXT_CACHE
-        .lock()
-        .ok()
-        .is_some_and(|g| g.as_ref().is_some_and(|c| c.lines == lines));
-    if unchanged {
-        return;
-    }
     let (w, h, rgba) = render_lines_to_rgba(font, &lines, 48.0, [238, 228, 202, 255]);
     if w == 0 || h == 0 {
         return;
     }
-    if let Ok(mut g) = STATS_TEXT_CACHE.lock() {
-        *g = Some(StatsTextCache {
-            w,
-            h,
-            rgba,
-            lines: lines.clone(),
-        });
+    if let Ok(mut g) = STATS_TEXT_RGBA.lock() {
+        *g = Some((w, h, rgba));
     }
-    STATS_TEXT_BUILT.fetch_add(1, Ordering::SeqCst);
-    let ident = (stats.name.clone(), stats.level, stats.attr_source_live);
-    let fresh_ident = STATS_TEXT_LOGGED.lock().ok().is_none_or(|mut g| {
-        if g.as_ref() == Some(&ident) {
-            false
-        } else {
-            *g = Some(ident);
-            true
-        }
-    });
-    if fresh_ident {
+    STATS_TEXT_BUILT.store(1, Ordering::SeqCst);
+    if stats.attr_source_live {
+        STATS_TEXT_LIVE.store(1, Ordering::SeqCst);
+    }
+    if STATS_TEXT_LOG.swap(1, Ordering::SeqCst) == 0 || stats.attr_source_live {
         append_autoload_debug(format_args!(
             "stats-text: built loading-screen stats bitmap {w}x{h} (live={}) lines={:?}",
             stats.attr_source_live, lines
@@ -440,11 +400,7 @@ pub(crate) unsafe fn maybe_build_stats_text() {
 /// movie; the head silhouette (upper) is untouched. Reuses the whole existing overlay draw (no new GPU
 /// pipeline). Called from the overlay fill each frame (the head under the static text updates per frame).
 pub(crate) fn composite_stats_into_head(spx: &mut [u8], sw: u32, sh: u32) {
-    let Some((tw, th, tpx)) = STATS_TEXT_CACHE
-        .lock()
-        .ok()
-        .and_then(|g| g.as_ref().map(|c| (c.w, c.h, c.rgba.clone())))
-    else {
+    let Some((tw, th, tpx)) = STATS_TEXT_RGBA.lock().ok().and_then(|g| g.clone()) else {
         return;
     };
     if tw == 0 || th == 0 || sw == 0 || sh == 0 {
@@ -457,15 +413,12 @@ pub(crate) fn composite_stats_into_head(spx: &mut [u8], sw: u32, sh: u32) {
     blend_rgba_over(spx, sw, sh, &tpx, tw, th, x0, y0);
 }
 
-/// Reset the per-load stats-text cache so the next load starts from a clean (no-text) frame and its
-/// first build logs. Correctness does NOT depend on this reset: the content key in
-/// `maybe_build_stats_text` rebuilds on any line change even if a post-reset tick re-caches the old
-/// character. `STATS_TEXT_BUILT` is a cumulative oracle and is deliberately not reset.
+/// Reset the per-load stats-text cache so the next load rebuilds for the (possibly different) character.
 pub(crate) fn stats_text_window_reset() {
-    if let Ok(mut g) = STATS_TEXT_CACHE.lock() {
-        *g = None;
-    }
-    if let Ok(mut g) = STATS_TEXT_LOGGED.lock() {
+    STATS_TEXT_BUILT.store(0, Ordering::SeqCst);
+    STATS_TEXT_LIVE.store(0, Ordering::SeqCst);
+    STATS_TEXT_LOG.store(0, Ordering::SeqCst);
+    if let Ok(mut g) = STATS_TEXT_RGBA.lock() {
         *g = None;
     }
 }
