@@ -1,8 +1,26 @@
+/// Sticky-latch for [`seamless_coop_loaded`]: 0 = not-yet-seen, 1 = ERSC observed resident.
+/// Once latched it never clears -- ERSC is not unloaded mid-session.
+static SEAMLESS_COOP_LATCHED: AtomicUsize = AtomicUsize::new(0);
+
+/// True if Seamless Co-op (ERSC) is resident. MONOTONIC LATCH: me3 defers native loading until
+/// after Arxan init and loads ERSC through its me2 compatibility shim, so `ersc.dll` is NOT yet
+/// registered in the PEB when our own DllMain runs (+1ms) -- a raw `GetModuleHandle` returns false
+/// that early and would wrongly gate every Seamless decision to "vanilla". So we re-poll on each
+/// call until the module first resolves, then latch true forever and never re-sample. This makes the
+/// detection correct at the moment each call site needs it (title ToS build ~+16.9s, save read on the
+/// first game-task tick), regardless of the early false-negative, and never flaps back to false.
 pub(crate) fn seamless_coop_loaded() -> bool {
-    matches!(
+    if SEAMLESS_COOP_LATCHED.load(Ordering::Relaxed) != 0 {
+        return true;
+    }
+    let present = matches!(
         unsafe { GetModuleHandleA(PCSTR(SEAMLESS_COOP_MODULE_NAME.as_ptr())) },
         Ok(module) if module.0 as usize != 0
-    )
+    );
+    if present {
+        SEAMLESS_COOP_LATCHED.store(1, Ordering::Relaxed);
+    }
+    present
 }
 
 pub(crate) fn bootstrap_path() -> PathBuf {
@@ -151,4 +169,3 @@ unsafe fn title_logo_gfx_current_frame(base: usize, title_logo_back_view_parts: 
         unsafe { std::mem::transmute(base + TITLE_LOGO_GFX_CURRENT_FRAME_RVA) };
     unsafe { current_frame(value) }
 }
-

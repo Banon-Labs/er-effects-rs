@@ -194,14 +194,26 @@ unsafe fn policy_tos_record_fields(record: usize) -> (usize, usize, usize) {
 /// Terms of Service is already accepted), `policy_tos_title_ctor_wrapper_hook` skips the
 /// build and returns null, so the unnecessary startup ToS modal is never constructed -- no
 /// input, no auto-accept of an un-accepted policy, no MessageBox.
+///
+/// SEAMLESS CO-OP (2026-07-06): auto-enabled under Seamless when the product autoload is armed.
+/// ERSC re-establishes the game's online service after our offline patches, so ~1.4s after the
+/// forced Continue the base game builds the online-service ToS (`06_000_TermOfService_BNE`,
+/// TosTitle ctor 0x1409b5970) -- gated by a "ToS-accepted" flag our offline forcing never touches
+/// (GameMan+0xBC8 only gates connection-loss popups). With no path past it the zero-input autoload
+/// stalls forever at the title. Suppressing the redundant re-prompt (the user's profile has already
+/// accepted the ToS) lets the autoload reach Continue and load the .co2 save. Evaluated PER-CALL at
+/// build time (~+16.9s), so it does not depend on the early-DllMain Seamless false-negative. This is
+/// tied to existing autoload state (no new env/file gate); the env/file switch remains for diagnostics.
 pub(crate) fn policy_tos_suppress_enabled() -> bool {
-    matches!(
-        std::env::var("ER_EFFECTS_POLICY_TOS_SUPPRESS").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-policy-tos-suppress.txt")
-        .exists()
+    (product_autoload_enabled() && crate::telemetry::seamless_coop_loaded())
+        || matches!(
+            std::env::var("ER_EFFECTS_POLICY_TOS_SUPPRESS").as_deref(),
+            Ok("1")
+        )
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-policy-tos-suppress.txt")
+            .exists()
 }
 
 pub(crate) unsafe extern "system" fn policy_tos_title_ctor_wrapper_hook(
@@ -837,6 +849,17 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
                 "msgbox-skip #{n}: product autoload suppressed MessageBoxDialog builder before UI allocation but counted it as oracle failure args(rcx=0x{a:x} rdx=0x{b:x} r8=0x{c:x} r9=0x{d:x}) {}",
                 trace_callers_summary()
             ));
+        }
+        // SEAMLESS post-PAB popup: the box is nulled (never shown), but the MenuWindowJob whose Run is
+        // building it would then sit on MenuJobResult(Continue) forever (ERSC's post-PAB MessageBox
+        // stall). Latch that job (recorded at MenuWindowJob::Run entry) so its next Run is advanced to
+        // Success -- the FixOrderJobSequence steps past the never-shown popup. Seamless-only; vanilla
+        // pre-world boxes (connection-error/EULA) do not fire offline and keep the plain null-suppress.
+        if crate::telemetry::seamless_coop_loaded() {
+            let cur = CURRENT_MENU_WINDOW_JOB_RUN_JOB.load(Ordering::SeqCst);
+            if cur != null {
+                MSGBOX_STALL_JOB.store(cur, Ordering::SeqCst);
+            }
         }
         return null;
     }
