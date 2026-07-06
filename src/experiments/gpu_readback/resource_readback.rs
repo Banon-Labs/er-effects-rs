@@ -202,6 +202,86 @@ unsafe fn try_texture2d(ptr: usize) -> Option<(ID3D12Resource, u64)> {
     }
 }
 
+/// Deterministically resolve the `ID3D12Resource` that GFx SAMPLES for a Scaleform HAL texture
+/// (candidate A, er-effects-rs-jsm). The generic `find_d3d12_resource` BFS cannot reach it: the HAL
+/// texture stores the resource past that BFS's 0x60 field window (runtime dump 2026-07-05: at hal+0x70)
+/// and behind a wrapper whose vtable is not in the EXE (hal+0x18 -> +0x40), which the BFS never enqueues.
+/// We scan the HAL texture's OWN fields first (direct d3d12 object = the bound texture), then one hop
+/// through each pointer field, and accept only a color TEXTURE2D whose dims EXACTLY match the forged
+/// texture (`want_w` x `want_h`) -- an unambiguous filter that also skips 1x1 dummies and the depth
+/// sibling. Read-only pointer walking; a QI runs only on a pointer whose vtable is confirmed to live in a
+/// d3d12 module (never a QI on a non-COM pointer). Returns the AddRef'd (owned) resource.
+pub(crate) unsafe fn resolve_gfx_hal_resource(
+    hal: usize,
+    want_w: u32,
+    want_h: u32,
+) -> Option<ID3D12Resource> {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if hal == 0 || hal == null {
+        return None;
+    }
+    let d3d: Vec<(usize, usize)> = [
+        b"d3d12core.dll\0".as_slice(),
+        b"d3d12.dll\0".as_slice(),
+        b"dxgi.dll\0".as_slice(),
+    ]
+    .iter()
+    .filter_map(|n| unsafe { module_range(n) })
+    .collect();
+    if d3d.is_empty() {
+        return None;
+    }
+    // A real COM vtable sits >= 0x1000 into a d3d module and its QI slot points back into a d3d module
+    // (same hardening find_d3d12_resource_ex uses so a stray heap word can't be QI'd as a live object).
+    let d3d_vtable_ok = |vt: usize| {
+        d3d.iter().any(|&(lo, hi)| lo + 0x1000 <= vt && vt < hi)
+            && unsafe { safe_read_usize(vt) }
+                .is_some_and(|qi| d3d.iter().any(|&(lo, hi)| lo + 0x1000 <= qi && qi < hi))
+    };
+    let valid = |p: usize| p > 0x10000 && p < 0x8000_0000_0000;
+    let try_at = |cand: usize| -> Option<ID3D12Resource> {
+        if !valid(cand) {
+            return None;
+        }
+        let vt = unsafe { safe_read_usize(cand) }?;
+        if !d3d_vtable_ok(vt) {
+            return None;
+        }
+        let (res, _area) = unsafe { try_texture2d(cand) }?;
+        let desc = unsafe { res.GetDesc() };
+        if desc.Width as u32 == want_w && desc.Height == want_h {
+            Some(res)
+        } else {
+            None
+        }
+    };
+    // Pass 1: the HAL texture's OWN fields (the bound resource pointer, e.g. hal+0x70). Preferred -- the
+    // direct member is the sampled texture; a wrapper-reached one may be a staging/upload sibling.
+    let mut off = 0usize;
+    while off <= 0xb0 {
+        if let Some(r) = try_at(unsafe { safe_read_usize(hal + off) }.unwrap_or(0)) {
+            return Some(r);
+        }
+        off += 8;
+    }
+    // Pass 2: one hop through each pointer field (reaches resources behind a non-EXE-vtable wrapper).
+    let mut off = 0usize;
+    while off <= 0xb0 {
+        let p = unsafe { safe_read_usize(hal + off) }.unwrap_or(0);
+        if valid(p) {
+            let mut o2 = 0usize;
+            while o2 <= 0x48 {
+                if let Some(r) = try_at(unsafe { safe_read_usize(p + o2) }.unwrap_or(0)) {
+                    return Some(r);
+                }
+                o2 += 8;
+            }
+        }
+        off += 8;
+    }
+    None
+}
+
 /// Find the VKD3D `ID3D12Resource` (a TEXTURE2D whose vtable lives in d3d12core/d3d12/dxgi) by a
 /// bounded BFS over the eldenring-wrapper object nest reachable from `start` (the CSGxTexture's GPU
 /// child). The real resource is several wrappers deep and at run-varying offsets, so we scan by

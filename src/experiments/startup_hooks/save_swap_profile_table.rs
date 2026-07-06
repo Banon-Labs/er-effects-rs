@@ -315,11 +315,19 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // container the forge already injected (the background binds BEFORE our renderer exists and never
     // re-binds, so the live RT must be pushed into the displayed container after the fact).
     unsafe { refresh_loading_bg_live_gx(base) };
-    // Once the real IBL-lit menu portrait has been baked into LOADING_BG_PORTRAIT_RGBA, re-forge the first
-    // (displayed) now-loading rti so the loading screen swaps the checker for the real character portrait.
-    // SKIP on the portrait-lookat path: the live present-overlay owns the display there, so uploading into
-    // the native forged texture would paint a SECOND head. Overlay-only (user choice 2026-06-30).
-    if !portrait_lookat_enabled() {
+    // Once the real IBL-lit menu portrait has been baked into LOADING_BG_PORTRAIT_RGBA, drive the loading
+    // screen to show it. Two paths, mutually exclusive:
+    //  * lookat path (product default): CANDIDATE A (er-effects-rs-jsm) -- copy the live head INTO the
+    //    DISPLAYED now-loading GFx texture so the movie's own tips + Gauge_3 bar render ABOVE it. This
+    //    demotes the Present-overlay while it succeeds; on any miss the overlay keeps showing the head.
+    //  * non-lookat path: the legacy in-place re-forge of the CS-side texture (single static head, no
+    //    live tracking; the overlay is not running there).
+    if portrait_lookat_enabled() {
+        unsafe { maybe_update_gfx_loading_portrait(base) };
+        // PIVOT (er-effects-rs-jsm): build the player-stats text bitmap (game menu font) once the stats +
+        // font are readable, for the overlay to composite on top of the head in place of the native tips.
+        unsafe { maybe_build_stats_text() };
+    } else {
         unsafe { maybe_reforge_loading_portrait(base) };
     }
     // Product source ownership: the pre-Continue/ProfileSelect renderer is not our loading portrait

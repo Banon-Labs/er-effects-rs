@@ -379,6 +379,16 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
                 .spawn(install_loading_bg_replace_bind_hook);
         });
     }
+    // er-effects-rs-jsm PIVOT: suppress the native loading tips (our overlay renders player-stats text
+    // instead). Install at ATTACH -- BEFORE the KnowledgeLoadingScreen ctor's one-shot initial tip (~15s),
+    // else the first tip is already set and only later cycles are suppressed. Lookat (feature) path only.
+    if portrait_lookat_enabled() {
+        START_TIP_SUPPRESSION.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-effects-tip-suppress".to_owned())
+                .spawn(install_tip_suppression_hook);
+        });
+    }
     // D3D12 PRESENT OVERLAY: the deterministic display path -- draw the captured portrait directly onto the
     // swapchain backbuffer when the now-loading screen is up (the in-pipeline forge/Scaleform routes cannot
     // drive the displayed image). Install only on the portrait path (diagnostic), via the dummy-swapchain
