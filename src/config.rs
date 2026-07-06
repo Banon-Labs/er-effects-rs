@@ -6,7 +6,7 @@ use windows::Win32::{
     System::LibraryLoader::GetModuleFileNameW,
 };
 
-use crate::telemetry::append_autoload_debug;
+use crate::telemetry::{append_autoload_debug, game_directory_path};
 
 const CONFIG_FILE_NAME: &str = "er-effects.toml";
 const SAVE_FILE_ENV: &str = "ER_EFFECTS_SAVE_FILE";
@@ -162,7 +162,7 @@ pub(crate) fn autoupdate_preferred_picker_dir_enabled() -> bool {
 const PREFERRED_PICKER_DIR_KEY: &str = "preferred_save_picker_dir";
 const AUTOUPDATE_PICKER_DIR_KEY: &str = "autoupdate_preferred_picker_dir";
 
-/// Persist the folder of the last validated missing-save pick into the DLL-adjacent
+/// Persist the folder of the last validated missing-save pick into the game-directory
 /// `er-effects.toml`: update the existing assignment in place, or create the file with commented
 /// boilerplate when it does not exist. Skips (with a debug line) when the config failed to load at
 /// attach, so a file the user must fix by hand is never clobbered. The in-memory `RuntimeConfig`
@@ -243,7 +243,7 @@ fn boilerplate_config(picker_assignment: Option<&str>) -> String {
     };
     format!(
         "\
-# er-effects-rs runtime config (auto-created next to the loaded DLL).
+# er-effects-rs runtime config (auto-created next to the game executable).
 # All keys are optional; uncomment and edit as needed.
 #
 # save_file = 'C:\\path\\to\\ER0000.sl2'  # explicit save to load (skips default-save detection and the picker)
@@ -348,31 +348,75 @@ fn runtime_config() -> Option<&'static RuntimeConfig> {
 
 fn load_runtime_config(hmodule: HINSTANCE) -> Result<RuntimeConfig, String> {
     let dll_path = dll_path(hmodule).map_err(|err| format!("failed to locate DLL path: {err}"))?;
-    let Some(dir) = dll_path.parent() else {
+    let Some(dll_dir) = dll_path.parent() else {
         return Err(format!("DLL path has no parent: '{}'", dll_path.display()));
     };
-    let path = dir.join(CONFIG_FILE_NAME);
+    let path = game_directory_path()
+        .unwrap_or_else(|| dll_dir.to_path_buf())
+        .join(CONFIG_FILE_NAME);
+    let legacy_dll_path = dll_dir.join(CONFIG_FILE_NAME);
     let contents = match std::fs::read_to_string(&path) {
         Ok(contents) => contents,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            let contents = boilerplate_config(None);
-            match std::fs::write(&path, &contents) {
-                Ok(()) => append_autoload_debug(format_args!(
-                    "runtime-config: auto-created default '{}' next to the loaded DLL",
-                    path.display()
-                )),
-                Err(write_err) => {
+            match std::fs::read_to_string(&legacy_dll_path) {
+                Ok(contents) if legacy_dll_path != path => {
+                    match std::fs::write(&path, &contents) {
+                        Ok(()) => append_autoload_debug(format_args!(
+                            "runtime-config: migrated legacy DLL-adjacent config '{}' to game-directory config '{}'",
+                            legacy_dll_path.display(),
+                            path.display()
+                        )),
+                        Err(write_err) => append_autoload_debug(format_args!(
+                            "runtime-config: loaded legacy DLL-adjacent config '{}' because game-directory config '{}' could not be created: {write_err}",
+                            legacy_dll_path.display(),
+                            path.display()
+                        )),
+                    }
+                    contents
+                }
+                Ok(contents) => contents,
+                Err(legacy_err) if legacy_err.kind() == std::io::ErrorKind::NotFound => {
+                    let contents = boilerplate_config(None);
+                    match std::fs::write(&path, &contents) {
+                        Ok(()) => append_autoload_debug(format_args!(
+                            "runtime-config: auto-created default '{}' next to the game executable",
+                            path.display()
+                        )),
+                        Err(write_err) => {
+                            append_autoload_debug(format_args!(
+                                "runtime-config: default config '{}' was missing and could not be auto-created: {write_err}; using defaults for this run",
+                                path.display()
+                            ));
+                            return Ok(RuntimeConfig {
+                                path,
+                                ..RuntimeConfig::default()
+                            });
+                        }
+                    }
+                    contents
+                }
+                Err(legacy_err) => {
                     append_autoload_debug(format_args!(
-                        "runtime-config: default config '{}' was missing and could not be auto-created: {write_err}; using defaults for this run",
+                        "runtime-config: legacy DLL-adjacent config '{}' was unreadable: {legacy_err}; using game-directory default path '{}'",
+                        legacy_dll_path.display(),
                         path.display()
                     ));
-                    return Ok(RuntimeConfig {
-                        path,
-                        ..RuntimeConfig::default()
-                    });
+                    let contents = boilerplate_config(None);
+                    match std::fs::write(&path, &contents) {
+                        Ok(()) => contents,
+                        Err(write_err) => {
+                            append_autoload_debug(format_args!(
+                                "runtime-config: default config '{}' was missing and could not be auto-created: {write_err}; using defaults for this run",
+                                path.display()
+                            ));
+                            return Ok(RuntimeConfig {
+                                path,
+                                ..RuntimeConfig::default()
+                            });
+                        }
+                    }
                 }
             }
-            contents
         }
         Err(err) => {
             return Err(format!("config '{}' is unreadable: {err}", path.display()));
@@ -408,15 +452,9 @@ fn parse_runtime_config(path: PathBuf, contents: &str) -> Result<RuntimeConfig, 
         let value = value.trim();
         match key {
             "save_file" | "save.path" | "save_file_path" => {
-                let parsed =
-                    PathBuf::from(parse_toml_string(value).map_err(|err| {
-                        format!("invalid save_file on line {}: {err}", line_no + 1)
-                    })?);
-                config.save_file = Some(if parsed.is_absolute() {
-                    parsed
-                } else {
-                    config_dir.join(parsed)
-                });
+                let raw = parse_toml_string(value)
+                    .map_err(|err| format!("invalid save_file on line {}: {err}", line_no + 1))?;
+                config.save_file = Some(configured_path_from_toml(&raw, &config_dir));
             }
             "slot" | "autoload.slot" => {
                 config.slot = Some(
@@ -436,17 +474,13 @@ fn parse_runtime_config(path: PathBuf, contents: &str) -> Result<RuntimeConfig, 
             | "boot.background_image"
             | "boot.background"
             | "background.image" => {
-                let parsed = PathBuf::from(parse_toml_string(value).map_err(|err| {
+                let raw = parse_toml_string(value).map_err(|err| {
                     format!(
                         "invalid boot_background_image on line {}: {err}",
                         line_no + 1
                     )
-                })?);
-                config.boot_background_image = Some(if parsed.is_absolute() {
-                    parsed
-                } else {
-                    config_dir.join(parsed)
-                });
+                })?;
+                config.boot_background_image = Some(configured_path_from_toml(&raw, &config_dir));
             }
             "persist_boot_background_to_loading_screen"
             | "boot.persist_background_to_loading_screen"
@@ -520,6 +554,27 @@ fn parse_menu_sort_default_value(value: &str) -> Result<MenuSortDefault, &'stati
     parse_menu_sort_default_label(&label)
 }
 
+fn configured_path_from_toml(raw: &str, config_dir: &std::path::Path) -> PathBuf {
+    if let Some(wine_path) = wine_z_path_from_linux_absolute(raw) {
+        return wine_path;
+    }
+    let parsed = PathBuf::from(raw);
+    if parsed.is_absolute() {
+        parsed
+    } else {
+        config_dir.join(parsed)
+    }
+}
+
+fn wine_z_path_from_linux_absolute(raw: &str) -> Option<PathBuf> {
+    if !raw.starts_with('/') || raw.starts_with("//") {
+        return None;
+    }
+    let mut path = String::from("Z:");
+    path.push_str(&raw.replace('/', "\\"));
+    Some(PathBuf::from(path))
+}
+
 fn parse_menu_sort_default_label(value: &str) -> Result<MenuSortDefault, &'static str> {
     let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
     match normalized.as_str() {
@@ -581,4 +636,33 @@ fn parse_toml_string(value: &str) -> Result<String, &'static str> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn linux_absolute_toml_paths_map_to_wine_z_drive() {
+        let path = configured_path_from_toml(
+            "/home/banon/Pictures/loading screen.png",
+            std::path::Path::new("C:\\ignored"),
+        );
+        assert_eq!(
+            path.to_string_lossy(),
+            "Z:\\home\\banon\\Pictures\\loading screen.png"
+        );
+    }
+
+    #[test]
+    fn relative_toml_paths_resolve_against_config_dir() {
+        let path = configured_path_from_toml(
+            "backgrounds/load.png",
+            std::path::Path::new("C:\\Games\\ELDEN RING\\Game"),
+        );
+        assert_eq!(
+            path.to_string_lossy(),
+            "C:\\Games\\ELDEN RING\\Game/backgrounds/load.png"
+        );
+    }
 }
