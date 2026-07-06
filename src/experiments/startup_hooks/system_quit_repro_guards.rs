@@ -543,6 +543,7 @@ unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, source: &str) {
     append_autoload_debug(format_args!(
         "loading-portrait: RETARGET to selected slot {selected_slot} at confirm (make-before-break: drive re-engaged, prior masked head holds until the new keyed frame; source={source})"
     ));
+    rearm_boot_progress_for_own_menu_load(selected_slot, source);
     SYSTEM_QUIT_QUICKLOAD_PHASE.store(SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED, Ordering::SeqCst);
     OWN_STEPPER_SLOT.store(selected_slot, Ordering::SeqCst);
     PRODUCT_AUTOLOAD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
