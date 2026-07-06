@@ -412,13 +412,20 @@ pub(crate) unsafe fn composite_portrait_on_swapchain(base: usize, swapchain_raw:
 /// it stayed pinned to the first character's now-stale renderer, and driving that leaked renderer risks a
 /// use-after-free). Called from the overlay stop at load completion; idempotent.
 pub(crate) fn loading_portrait_window_reset(reason: &str) {
-    // Make-before-break bridge (user 2026-07-03): KEEP the last published keyed frame + its
-    // display-available flag so the just-loaded character stays on screen as the bridge when the NEXT
-    // load window opens -- it is replaced the instant that window's newly-selected character produces
-    // its own keyed frame (the drive re-engages because the freeze latch below is cleared). Previously
-    // this nulled the snapshot to avoid flashing the previous character; that flash IS now the desired
-    // behavior (old head held until the new masked head is ready), bounded by the keyed-publish gate.
-    // Only the per-window drive-freeze latch is cleared here so the next window re-renders.
+    // CLEAR-ON-COMPLETE (user 2026-07-06, REVERSING the 2026-07-03 make-before-break KEEP): drop the
+    // published head snapshot the moment the load completes (character in-world, native bar terminal).
+    // The kept bridge was the stale-content reservoir behind the second-load wrong-head bug: the next
+    // window's forge baked the PREVIOUS character's held frame into the now-loading background at decode
+    // time (the bake is decode-once; maybe_update_gfx_loading_portrait is a no-op), so the old head
+    // stayed on screen for the whole next load even while the readback/publish pipeline was proven
+    // (pixel-diff vs same-character baseline, runs 2026-07-06) to produce the NEW character. With the
+    // snapshot cleared here there is nothing stale to bake or bridge: the next window starts head-less
+    // and shows the new character's first keyed frame. Costs a brief head-less loading screen
+    // (~0.5s after the window's table build in both measured runs) -- preferred over a wrong head.
+    if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
+        *g = None;
+    }
+    PROFILE_HAVE_KEYED_FRAME.store(0, Ordering::SeqCst);
     PROFILE_BAKE_RGBA_CAPTURED.store(0, Ordering::SeqCst);
     PROFILE_LOADSCREEN_TABLE_OWNED.store(0, Ordering::SeqCst);
     // Candidate A (er-effects-rs-jsm): drop the demote credit + stash the cached CSTextureImage ref for
@@ -878,6 +885,19 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
         return false;
     }
 
+    // OVERLAY-LANDING PIXEL SEMAPHORE (user QA 2026-07-06: window 2 published the NEW character's
+    // frames with 352 fresh uploads and zero GPU failures, yet the user saw the OLD character -- no
+    // oracle ever proved OUR draw reaches the visible frame). Probe the backbuffer AFTER our composite
+    // (throttled): the head-match here includes the overlay's own draw, so a high match proves the
+    // overlay head lands on the presented frame; a low match alongside fresh uploads proves it does
+    // not. Mutually exclusive with the candidate-A pre-draw probe (GFX_PORTRAIT_BAKED > 0), which owns
+    // the demote decision and must not see post-draw frames.
+    if GFX_PORTRAIT_BAKED.load(Ordering::SeqCst) == 0 {
+        let tick = OVERLAY_HEAD_PROBE_TICK.fetch_add(1, Ordering::SeqCst);
+        if tick % 30 == 0 {
+            unsafe { probe_head_on_screen(&backbuffer, bb_desc.Format) };
+        }
+    }
     // Playback-rate semaphores: draw timing proves how often the overlay reached the swapchain; reupload
     // timing proves how often a distinct source portrait frame reached that overlay; stale-run proves visible
     // held frames when the same portrait source is reused across consecutive presents.
