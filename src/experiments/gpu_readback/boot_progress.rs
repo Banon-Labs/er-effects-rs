@@ -67,9 +67,26 @@ static BOOT_VIEW_STRIP_H: AtomicUsize = AtomicUsize::new(0);
 /// Last (permille, idx) actually rasterized into the upload buffer (skip the map/write when unchanged).
 static BOOT_VIEW_DRAWN_PERMILLE: AtomicUsize = AtomicUsize::new(usize::MAX);
 static BOOT_VIEW_DRAWN_IDX: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// 1 when the last rasterized upload included the optional cached screenshot background.
+static BOOT_VIEW_DRAWN_BG_ACTIVE: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Creep timing epoch + the epoch-ms when the milestone index last advanced.
 static BOOT_VIEW_EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 static BOOT_VIEW_IDX_CHANGED_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Optional, pre-decoded local screenshot background. This is intentionally disk-only: the DLL never
+/// touches the network on the launch path. A helper script may populate this cache before launch.
+struct BootBgImage {
+    width: usize,
+    height: usize,
+    rgba: Vec<u8>,
+}
+
+static BOOT_BG_IMAGE: std::sync::OnceLock<Option<BootBgImage>> = std::sync::OnceLock::new();
+
+const BOOT_BG_CACHE_FILE: &str = "er-effects-boot-background.rgba";
+const BOOT_BG_MAGIC: &[u8; 8] = b"ERBGRA01";
+const BOOT_BG_MAX_DIM: usize = 4096;
+const BOOT_BG_MAX_PIXELS: usize = BOOT_BG_MAX_DIM * BOOT_BG_MAX_DIM;
 
 /// Milestone labels (5x7 font glyph coverage: A-Z subset + digits + '%'; see `boot_glyph_5x7`).
 const BOOT_VIEW_MILESTONE_LABELS: [&str; 7] = [
@@ -244,7 +261,15 @@ fn boot_text_width(text: &str) -> usize {
 }
 
 /// Blit `text` into the tight RGBA buffer at (x, y), scaled by `BOOT_VIEW_TEXT_SCALE`.
-fn boot_draw_text(buf: &mut [u8], w: usize, h: usize, x: usize, y: usize, text: &str) {
+fn boot_draw_text_rgb(
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+    x: usize,
+    y: usize,
+    text: &str,
+    rgb: [u8; 3],
+) {
     let mut cx = x;
     for c in text.chars() {
         let rows = boot_glyph_5x7(c);
@@ -259,9 +284,9 @@ fn boot_draw_text(buf: &mut [u8], w: usize, h: usize, x: usize, y: usize, text: 
                         let py = y + gy * BOOT_VIEW_TEXT_SCALE + sy;
                         if px < w && py < h {
                             let o = (py * w + px) * RGBA8_BPP;
-                            buf[o] = BOOT_VIEW_RGB_TEXT[0];
-                            buf[o + 1] = BOOT_VIEW_RGB_TEXT[1];
-                            buf[o + 2] = BOOT_VIEW_RGB_TEXT[2];
+                            buf[o] = rgb[0];
+                            buf[o + 1] = rgb[1];
+                            buf[o + 2] = rgb[2];
                             buf[o + 3] = 255;
                         }
                     }
@@ -270,6 +295,23 @@ fn boot_draw_text(buf: &mut [u8], w: usize, h: usize, x: usize, y: usize, text: 
         }
         cx += BOOT_VIEW_GLYPH_ADV * BOOT_VIEW_TEXT_SCALE;
     }
+}
+
+fn boot_draw_text(buf: &mut [u8], w: usize, h: usize, x: usize, y: usize, text: &str) {
+    boot_draw_text_rgb(buf, w, h, x, y, text, BOOT_VIEW_RGB_TEXT);
+}
+
+fn boot_draw_text_shadowed(buf: &mut [u8], w: usize, h: usize, x: usize, y: usize, text: &str) {
+    boot_draw_text_rgb(
+        buf,
+        w,
+        h,
+        x.saturating_add(2),
+        y.saturating_add(2),
+        text,
+        BOOT_VIEW_RGB_BLACK,
+    );
+    boot_draw_text(buf, w, h, x, y, text);
 }
 
 /// Axis-aligned opaque fill into the tight RGBA buffer (clamped).
@@ -294,36 +336,201 @@ fn boot_fill_rect(
     }
 }
 
-/// Rasterize the strip: black background (invisible over the black boot frames), the milestone
-/// label in dim caption grey above a hairline track/fill bar -- the game's own loading-bar
-/// presentation, nothing more.
-fn boot_view_rasterize(w: usize, h: usize, idx: usize, permille: usize) -> Vec<u8> {
+fn boot_bg_image() -> Option<&'static BootBgImage> {
+    BOOT_BG_IMAGE
+        .get_or_init(|| {
+            let Some(path) = game_directory_path().map(|dir| dir.join(BOOT_BG_CACHE_FILE)) else {
+                return None;
+            };
+            let Ok(bytes) = std::fs::read(&path) else {
+                return None;
+            };
+            match parse_boot_bg_cache(&bytes) {
+                Some(img) => {
+                    append_autoload_debug(format_args!(
+                        "boot-view: cached screenshot background loaded '{}' {}x{}",
+                        path.display(),
+                        img.width,
+                        img.height
+                    ));
+                    Some(img)
+                }
+                None => {
+                    append_autoload_debug(format_args!(
+                        "boot-view: cached screenshot background ignored '{}' (bad ERBGRA01 cache)",
+                        path.display()
+                    ));
+                    None
+                }
+            }
+        })
+        .as_ref()
+}
+
+fn parse_boot_bg_cache(bytes: &[u8]) -> Option<BootBgImage> {
+    if bytes.len() < 16 || &bytes[..8] != BOOT_BG_MAGIC {
+        return None;
+    }
+    let width = u32::from_le_bytes(bytes[8..12].try_into().ok()?) as usize;
+    let height = u32::from_le_bytes(bytes[12..16].try_into().ok()?) as usize;
+    if width == 0 || height == 0 || width > BOOT_BG_MAX_DIM || height > BOOT_BG_MAX_DIM {
+        return None;
+    }
+    let pixels = width.checked_mul(height)?;
+    if pixels > BOOT_BG_MAX_PIXELS {
+        return None;
+    }
+    let len = pixels.checked_mul(RGBA8_BPP)?;
+    if bytes.len() != 16 + len {
+        return None;
+    }
+    Some(BootBgImage {
+        width,
+        height,
+        rgba: bytes[16..].to_vec(),
+    })
+}
+
+fn boot_fill_aspect_cover_background(buf: &mut [u8], w: usize, h: usize, bg: &BootBgImage) {
+    // Integer aspect-cover mapping. The screenshot is deliberately dimmed so the loading bar remains
+    // legible without adding a game-clashing panel. Keep this cheap: no launch-path blur/filter pass.
+    let scale_by_width = w * bg.height >= h * bg.width;
+    let (num, den) = if scale_by_width {
+        (w, bg.width)
+    } else {
+        (h, bg.height)
+    };
+    let scaled_w = bg.width * num / den;
+    let scaled_h = bg.height * num / den;
+    let crop_x = scaled_w.saturating_sub(w) / 2;
+    let crop_y = scaled_h.saturating_sub(h) / 2;
+    for y in 0..h {
+        let sy = ((y + crop_y) * den / num).min(bg.height - 1);
+        for x in 0..w {
+            let sx = ((x + crop_x) * den / num).min(bg.width - 1);
+            let so = (sy * bg.width + sx) * RGBA8_BPP;
+            let dofs = (y * w + x) * RGBA8_BPP;
+            buf[dofs] = ((bg.rgba[so] as u16 * 6) / 16) as u8;
+            buf[dofs + 1] = ((bg.rgba[so + 1] as u16 * 6) / 16) as u8;
+            buf[dofs + 2] = ((bg.rgba[so + 2] as u16 * 6) / 16) as u8;
+            buf[dofs + 3] = 255;
+        }
+    }
+}
+
+fn boot_darken_bar_shadow(
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+    content_x: usize,
+    content_y: usize,
+    content_w: usize,
+) {
+    // Soft vignette behind the progress UI: strongest at the bar center, fading to no darkening at
+    // the edges. This keeps the hairline readable over bright screenshots without a hard rectangular
+    // panel or a full-screen blur pass on the launch path.
+    let x0 = content_x.saturating_sub(32);
+    let y0 = content_y.saturating_sub(10);
+    let rw = (content_w + 64).min(w.saturating_sub(x0));
+    let rh = (BOOT_VIEW_STRIP_HEIGHT + 20).min(h.saturating_sub(y0));
+    if rw == 0 || rh == 0 {
+        return;
+    }
+    let cx2 = (content_x * 2).saturating_add(content_w);
+    let cy2 = (content_y * 2).saturating_add(BOOT_VIEW_STRIP_HEIGHT);
+    let rx = (rw.max(1) as u32).max(1);
+    let ry = (rh.max(1) as u32).max(1);
+    for y in y0..(y0 + rh).min(h) {
+        let dy = ((y * 2).abs_diff(cy2) as u32).saturating_mul(255) / ry;
+        for x in x0..(x0 + rw).min(w) {
+            let dx = ((x * 2).abs_diff(cx2) as u32).saturating_mul(255) / rx;
+            // Diamond-ish falloff: center -> strong shadow; edges -> original screenshot.
+            let dist = ((dx + dy) / 2).min(255);
+            let strength = 255u32.saturating_sub(dist);
+            // Factor ranges roughly 3/8 at the center to 1.0 at the edge.
+            let factor = 255u32.saturating_sub((strength * 5) / 8);
+            let o = (y * w + x) * RGBA8_BPP;
+            buf[o] = ((buf[o] as u32 * factor) / 255) as u8;
+            buf[o + 1] = ((buf[o + 1] as u32 * factor) / 255) as u8;
+            buf[o + 2] = ((buf[o + 2] as u32 * factor) / 255) as u8;
+            buf[o + 3] = 255;
+        }
+    }
+}
+
+/// Rasterize either the original tight black progress strip, or a full-screen cached screenshot
+/// background with the same understated bar/label geometry overlaid near the bottom.
+fn boot_view_rasterize(
+    w: usize,
+    h: usize,
+    idx: usize,
+    permille: usize,
+    content_x: usize,
+    content_y: usize,
+    content_w: usize,
+    bg: Option<&BootBgImage>,
+) -> Vec<u8> {
     let mut buf = vec![0u8; w * h * RGBA8_BPP];
-    boot_fill_rect(&mut buf, w, h, 0, 0, w, h, BOOT_VIEW_RGB_BLACK);
+    let has_bg = bg.is_some();
+    if let Some(bg) = bg {
+        boot_fill_aspect_cover_background(&mut buf, w, h, bg);
+    } else {
+        boot_fill_rect(&mut buf, w, h, 0, 0, w, h, BOOT_VIEW_RGB_BLACK);
+    }
     let label = BOOT_VIEW_MILESTONE_LABELS[idx.min(BOOT_VIEW_MILESTONE_LABELS.len() - 1)];
-    boot_draw_text(&mut buf, w, h, 0, 0, label);
-    let marker_x = (w * BOOT_VIEW_NATIVE_HANDOFF_PERMILLE / 1000).min(w.saturating_sub(1));
+    let bar_y = content_y + BOOT_VIEW_GLYPH_H * BOOT_VIEW_TEXT_SCALE + BOOT_VIEW_TEXT_BAR_GAP;
+    if has_bg {
+        // Local shadow band only around the UI, plus globally dimmed screenshot: keeps the hairline bar
+        // readable on bright screenshots without turning the boot screen back into a heavy panel.
+        boot_darken_bar_shadow(&mut buf, w, h, content_x, content_y, content_w);
+    }
+    if has_bg {
+        boot_draw_text_shadowed(&mut buf, w, h, content_x, content_y, label);
+    } else {
+        boot_draw_text(&mut buf, w, h, content_x, content_y, label);
+    }
+    let marker_x = content_x
+        + (content_w * BOOT_VIEW_NATIVE_HANDOFF_PERMILLE / 1000).min(content_w.saturating_sub(1));
     let handoff_label_w = boot_text_width(BOOT_VIEW_NATIVE_HANDOFF_LABEL);
     let handoff_label_x = marker_x
         .saturating_sub(handoff_label_w / 2)
         .min(w.saturating_sub(handoff_label_w));
-    boot_draw_text(
-        &mut buf,
-        w,
-        h,
-        handoff_label_x,
-        0,
-        BOOT_VIEW_NATIVE_HANDOFF_LABEL,
-    );
-    let bar_y = BOOT_VIEW_GLYPH_H * BOOT_VIEW_TEXT_SCALE + BOOT_VIEW_TEXT_BAR_GAP;
-    boot_fill_rect(&mut buf, w, h, 0, bar_y, w, BOOT_VIEW_BAR_H, BOOT_VIEW_RGB_TRACK);
+    if has_bg {
+        boot_draw_text_shadowed(
+            &mut buf,
+            w,
+            h,
+            handoff_label_x,
+            content_y,
+            BOOT_VIEW_NATIVE_HANDOFF_LABEL,
+        );
+    } else {
+        boot_draw_text(
+            &mut buf,
+            w,
+            h,
+            handoff_label_x,
+            content_y,
+            BOOT_VIEW_NATIVE_HANDOFF_LABEL,
+        );
+    }
     boot_fill_rect(
         &mut buf,
         w,
         h,
-        0,
+        content_x,
         bar_y,
-        w * permille.min(1000) / 1000,
+        content_w,
+        BOOT_VIEW_BAR_H,
+        BOOT_VIEW_RGB_TRACK,
+    );
+    boot_fill_rect(
+        &mut buf,
+        w,
+        h,
+        content_x,
+        bar_y,
+        content_w * permille.min(1000) / 1000,
         BOOT_VIEW_BAR_H,
         BOOT_VIEW_RGB_FILL,
     );
@@ -518,17 +725,33 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
         return false;
     }
 
-    // Strip geometry follows the backbuffer.
+    // Progress-bar geometry follows the backbuffer. When a cached screenshot background exists, copy a
+    // full-screen region; otherwise preserve the original tiny strip copy over black boot frames.
     let strip_w = (bw * BOOT_VIEW_STRIP_W_NUM / BOOT_VIEW_STRIP_W_DEN)
         .max(BOOT_VIEW_STRIP_MIN_W)
         .min(bw);
     let strip_h = (BOOT_VIEW_STRIP_HEIGHT as u32).min(bh);
-    let dx = (bw - strip_w) / 2;
-    let dy = (bh * BOOT_VIEW_STRIP_Y_NUM / BOOT_VIEW_STRIP_Y_DEN).min(bh - strip_h);
+    let strip_dx = (bw - strip_w) / 2;
+    let strip_dy = (bh * BOOT_VIEW_STRIP_Y_NUM / BOOT_VIEW_STRIP_Y_DEN).min(bh - strip_h);
+    let bg = boot_bg_image();
+    let bg_active = bg.is_some();
+    let (region_w, region_h, dx, dy, content_x, content_y, content_w) = if bg_active {
+        (
+            bw,
+            bh,
+            0,
+            0,
+            strip_dx as usize,
+            strip_dy as usize,
+            strip_w as usize,
+        )
+    } else {
+        (strip_w, strip_h, strip_dx, strip_dy, 0, 0, strip_w as usize)
+    };
 
     let (ms_idx, permille) = boot_view_progress();
 
-    // Copyable footprint for a strip_w x strip_h region in the backbuffer's format.
+    // Copyable footprint for the selected region in the backbuffer's format.
     let mut device_opt: Option<ID3D12Device> = None;
     if unsafe { backbuffer.GetDevice(&mut device_opt) }.is_err() {
         return false;
@@ -539,8 +762,8 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     let region_desc = D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
         Alignment: 0,
-        Width: strip_w as u64,
-        Height: strip_h,
+        Width: region_w as u64,
+        Height: region_h,
         DepthOrArraySize: 1,
         MipLevels: 1,
         Format: bb_desc.Format,
@@ -626,13 +849,23 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     // Re-rasterize + rewrite the upload only when the visible content changed (or a fresh buffer).
     let geom_changed = BOOT_VIEW_STRIP_W.swap(strip_w as usize, Ordering::SeqCst)
         != strip_w as usize
-        || BOOT_VIEW_STRIP_H.swap(strip_h as usize, Ordering::SeqCst) != strip_h as usize;
+        || BOOT_VIEW_STRIP_H.swap(region_h as usize, Ordering::SeqCst) != region_h as usize;
     if upload_fresh
         || geom_changed
         || BOOT_VIEW_DRAWN_PERMILLE.load(Ordering::SeqCst) != permille
         || BOOT_VIEW_DRAWN_IDX.load(Ordering::SeqCst) != ms_idx
+        || BOOT_VIEW_DRAWN_BG_ACTIVE.load(Ordering::SeqCst) != bg_active as usize
     {
-        let tight = boot_view_rasterize(strip_w as usize, strip_h as usize, ms_idx, permille);
+        let tight = boot_view_rasterize(
+            region_w as usize,
+            region_h as usize,
+            ms_idx,
+            permille,
+            content_x,
+            content_y,
+            content_w,
+            bg,
+        );
         let row_pitch = footprint.Footprint.RowPitch as usize;
         let total = total_bytes as usize;
         let mut umap: *mut c_void = std::ptr::null_mut();
@@ -641,8 +874,8 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
         }
         {
             let dst = unsafe { std::slice::from_raw_parts_mut(umap as *mut u8, total) };
-            let src_row = strip_w as usize * RGBA8_BPP;
-            for y in 0..strip_h as usize {
+            let src_row = region_w as usize * RGBA8_BPP;
+            for y in 0..region_h as usize {
                 let so = y * src_row;
                 let dofs = y * row_pitch;
                 if dofs + src_row > total || so + src_row > tight.len() {
@@ -651,7 +884,7 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
                 let drow = &mut dst[dofs..dofs + src_row];
                 drow.copy_from_slice(&tight[so..so + src_row]);
                 if swap_rb {
-                    for t in 0..strip_w as usize {
+                    for t in 0..region_w as usize {
                         drow.swap(t * RGBA8_BPP, t * RGBA8_BPP + 2);
                     }
                 }
@@ -660,6 +893,7 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
         unsafe { upload.Unmap(0, None) };
         BOOT_VIEW_DRAWN_PERMILLE.store(permille, Ordering::SeqCst);
         BOOT_VIEW_DRAWN_IDX.store(ms_idx, Ordering::SeqCst);
+        BOOT_VIEW_DRAWN_BG_ACTIVE.store(bg_active as usize, Ordering::SeqCst);
     }
 
     // Single submit on our OWN queue: PRESENT -> COPY_DEST, strip copy, COPY_DEST -> PRESENT.
@@ -741,8 +975,8 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
         left: 0,
         top: 0,
         front: 0,
-        right: strip_w,
-        bottom: strip_h,
+        right: region_w,
+        bottom: region_h,
         back: 1,
     };
     unsafe { list.CopyTextureRegion(&bb_dst, dx, dy, 0, &up_src, Some(&up_box)) };
@@ -763,7 +997,8 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     let hits = BOOT_VIEW_DRAW_HITS.fetch_add(1, Ordering::SeqCst) + 1;
     if hits == 1 {
         append_autoload_debug(format_args!(
-            "boot-view: first draw onto backbuffer {bw}x{bh} (strip {strip_w}x{strip_h} at {dx},{dy}, permille={permille})"
+            "boot-view: first draw onto backbuffer {bw}x{bh} (region {region_w}x{region_h} at {dx},{dy}, bg={}, permille={permille})",
+            bg_active as usize
         ));
     }
     true
