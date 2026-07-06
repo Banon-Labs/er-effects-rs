@@ -1,13 +1,14 @@
+use super::*;
 
 #[derive(Clone, Copy)]
-struct RequestedSlotIdentity {
-    matches: bool,
-    profile_summary: usize,
-    profile_map: i32,
-    profile_level: u32,
-    profile_name_len: usize,
-    pgd_level: u32,
-    pgd_name_len: usize,
+pub(crate) struct RequestedSlotIdentity {
+    pub(crate) matches: bool,
+    pub(crate) profile_summary: usize,
+    pub(crate) profile_map: i32,
+    pub(crate) profile_level: u32,
+    pub(crate) profile_name_len: usize,
+    pub(crate) pgd_level: u32,
+    pub(crate) pgd_name_len: usize,
 }
 
 /// OWN-THE-STEPPER idx6 (STEP_GameStepWait) handler: runs IN-CONTEXT after idx10's
