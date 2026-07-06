@@ -36,8 +36,8 @@ use windows::{
                 OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW,
             },
             WindowsAndMessaging::{
-                ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, MessageBoxW,
-                PostMessageW, IDCANCEL, IDOK, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_OKCANCEL,
+                ClipCursor, EnumWindows, GetWindowThreadProcessId, IDCANCEL, IDOK, IsWindowVisible,
+                MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MessageBoxW, PostMessageW,
                 WM_KEYDOWN, WM_KEYUP,
             },
         },
@@ -339,7 +339,8 @@ static SAVE_DIRECT_STAGE_DONE_STEAM_ID: AtomicU64 = AtomicU64::new(0);
 static SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID: AtomicU64 = AtomicU64::new(0);
 static SAVE_DIRECT_STAGE_DIAG_HITS: AtomicU64 = AtomicU64::new(0);
 static SAVE_DIRECT_STAGE_NO_STEAMID_HITS: AtomicU64 = AtomicU64::new(0);
-static SAVE_DIRECT_STAGE_LAST_NO_STEAMID_KIND: AtomicUsize = AtomicUsize::new(DIRECT_STAGE_NO_STEAMID_KIND_NONE);
+static SAVE_DIRECT_STAGE_LAST_NO_STEAMID_KIND: AtomicUsize =
+    AtomicUsize::new(DIRECT_STAGE_NO_STEAMID_KIND_NONE);
 const DIRECT_STAGE_NO_STEAMID_KIND_NONE: usize = 0;
 const DIRECT_STAGE_NO_STEAMID_KIND_ROOT: usize = 1;
 const DIRECT_STAGE_NO_STEAMID_KIND_GRAPHICS: usize = 2;
@@ -363,7 +364,8 @@ pub(crate) fn write_save_redirect_telemetry(body: &mut String) {
     let in_progress_steam_id = SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID.load(Ordering::SeqCst);
     let direct_source_set = SAVE_DIRECT_SOURCE_FILE.get().is_some();
     let direct_stage_root_set = SAVE_DIRECT_STAGE_ROOT.get().is_some();
-    let (direct_stage_file_exists, direct_stage_file_bytes) = direct_stage_file_status(observed_steam_id);
+    let (direct_stage_file_exists, direct_stage_file_bytes) =
+        direct_stage_file_status(observed_steam_id);
     let shgfp_requests = SAVE_REDIRECT_SHGFP_APPDATA_REQUESTS.load(Ordering::SeqCst);
     let shgfp_hits = SAVE_REDIRECT_SHGFP_LOGGED.load(Ordering::SeqCst);
     let shgfp_direct_blocks = SAVE_REDIRECT_SHGFP_DIRECT_FILE_BLOCKS.load(Ordering::SeqCst);
@@ -385,9 +387,8 @@ pub(crate) fn write_save_redirect_telemetry(body: &mut String) {
     let no_steamid_kind = direct_stage_no_steamid_kind_label(
         SAVE_DIRECT_STAGE_LAST_NO_STEAMID_KIND.load(Ordering::SeqCst),
     );
-    let last_save_like_kind = save_path_kind_label(
-        SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND.load(Ordering::SeqCst),
-    );
+    let last_save_like_kind =
+        save_path_kind_label(SAVE_CREATEFILEW_LAST_SAVE_LIKE_KIND.load(Ordering::SeqCst));
     body.push_str(&format!(
         "  \"oracle_save_redirect_mode\": \"{mode}\",\n  \"oracle_save_redirect_observed_steam_id64\": {observed_steam_id},\n  \"oracle_save_redirect_env_normalize_done\": {},\n  \"oracle_save_redirect_first_load_done\": {},\n  \"oracle_save_redirect_shgetfolderpath_decision\": \"{shgfp_decision}\",\n  \"oracle_save_redirect_shgetfolderpath_appdata_requests\": {shgfp_requests},\n  \"oracle_save_redirect_shgetfolderpath_hits\": {shgfp_hits},\n  \"oracle_save_redirect_shgetfolderpath_direct_file_blocks\": {shgfp_direct_blocks},\n  \"oracle_save_redirect_shgetfolderpath_first_load_done_blocks\": {shgfp_first_load_blocks},\n  \"oracle_save_redirect_shgetfolderpath_no_root_blocks\": {shgfp_no_root_blocks},\n  \"oracle_save_redirect_createfilew_calls\": {},\n  \"oracle_save_redirect_createfilew_diag_hits\": {},\n  \"oracle_save_redirect_createfilew_last_save_like_kind\": \"{last_save_like_kind}\",\n  \"oracle_save_redirect_createfilew_stage_steamid_dir_hits\": {},\n  \"oracle_save_redirect_createfilew_stage_save_file_hits\": {},\n  \"oracle_save_redirect_createfilew_configured_file_hits\": {},\n  \"oracle_save_redirect_query_last_save_like_kind\": \"{}\",\n  \"oracle_save_redirect_query_stage_steamid_dir_hits\": {},\n  \"oracle_save_redirect_query_stage_save_file_hits\": {},\n  \"oracle_save_redirect_query_configured_file_hits\": {},\n  \"oracle_save_redirect_redir_hits\": {},\n  \"oracle_save_redirect_sl2_query_hits\": {},\n  \"oracle_save_redirect_ntcreate_diag_hits\": {},\n  \"oracle_save_redirect_direct_source_set\": {direct_source_set},\n  \"oracle_save_redirect_direct_stage_root_set\": {direct_stage_root_set},\n  \"oracle_save_redirect_direct_stage_done_steam_id64\": {done_steam_id},\n  \"oracle_save_redirect_direct_stage_in_progress_steam_id64\": {in_progress_steam_id},\n  \"oracle_save_redirect_direct_stage_diag_hits\": {},\n  \"oracle_save_redirect_direct_stage_no_steamid_hits\": {},\n  \"oracle_save_redirect_direct_stage_last_no_steamid_kind\": \"{no_steamid_kind}\",\n  \"oracle_save_redirect_direct_stage_file_exists\": {direct_stage_file_exists},\n  \"oracle_save_redirect_direct_stage_file_bytes\": {},\n",
         SAVE_STEAM_ID_ENV_NORMALIZE_DONE.load(Ordering::SeqCst),
@@ -683,11 +684,15 @@ fn wait_until_missing_save_prompt_bootstrap_ready() {
         return;
     }
     let (mutex, cvar) = missing_save_gate();
-    let mut guard = mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard = mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     while MISSING_SAVE_PROMPT_BOOTSTRAP_READY.load(Ordering::SeqCst) == 0
         && missing_save_selection_pending()
     {
-        guard = cvar.wait(guard).unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard = cvar
+            .wait(guard)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
     }
 }
 
@@ -699,9 +704,13 @@ pub(crate) fn wait_for_missing_save_selection_if_pending(reason: &str) {
         "save-override: blocking {reason} until missing-save picker resolves"
     ));
     let (mutex, cvar) = missing_save_gate();
-    let mut guard = mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard = mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     while MISSING_SAVE_DIALOG_STATE.load(Ordering::SeqCst) == MISSING_SAVE_DIALOG_PENDING {
-        guard = cvar.wait(guard).unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard = cvar
+            .wait(guard)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
     }
     if MISSING_SAVE_DIALOG_STATE.load(Ordering::SeqCst) == MISSING_SAVE_DIALOG_CANCELLED {
         append_autoload_debug(format_args!(
@@ -827,18 +836,16 @@ type SteamApiSteamUserV021Fn = unsafe extern "system" fn() -> *mut c_void;
 type SteamApiISteamUserGetSteamIdFn = unsafe extern "system" fn(*mut c_void) -> u64;
 
 fn steam_api_active_steam_id64() -> Option<u64> {
-    let steam_user_addr = unsafe { module_proc(b"steam_api64.dll\0", b"SteamAPI_SteamUser_v021\0") };
-    let get_steam_id_addr = unsafe {
-        module_proc(
-            b"steam_api64.dll\0",
-            b"SteamAPI_ISteamUser_GetSteamID\0",
-        )
-    };
+    let steam_user_addr =
+        unsafe { module_proc(b"steam_api64.dll\0", b"SteamAPI_SteamUser_v021\0") };
+    let get_steam_id_addr =
+        unsafe { module_proc(b"steam_api64.dll\0", b"SteamAPI_ISteamUser_GetSteamID\0") };
     if steam_user_addr == HOOK_ORIGINAL_UNSET || get_steam_id_addr == HOOK_ORIGINAL_UNSET {
         return None;
     }
     let steam_user: SteamApiSteamUserV021Fn = unsafe { std::mem::transmute(steam_user_addr) };
-    let get_steam_id: SteamApiISteamUserGetSteamIdFn = unsafe { std::mem::transmute(get_steam_id_addr) };
+    let get_steam_id: SteamApiISteamUserGetSteamIdFn =
+        unsafe { std::mem::transmute(get_steam_id_addr) };
     let iface = unsafe { steam_user() };
     if iface.is_null() {
         return None;
@@ -1014,7 +1021,10 @@ pub(crate) enum SaveOverrideMode {
     DefaultUserSave,
 }
 
-fn activate_save_redirect_source(source: SaveRedirectSource, source_label: &'static str) -> SaveOverrideMode {
+fn activate_save_redirect_source(
+    source: SaveRedirectSource,
+    source_label: &'static str,
+) -> SaveOverrideMode {
     match source {
         SaveRedirectSource::StagedRoot {
             file,
