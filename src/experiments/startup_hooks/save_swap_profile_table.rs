@@ -32,6 +32,7 @@ unsafe fn system_quit_apply_foreign_profile_summary_preview(base: usize, bytes: 
                 PROFILE_SUMMARY_RECORD_STRIDE,
             );
             *((summary + PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot) as *mut u8) = 0;
+            PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
         }
     }
     drop(st);
@@ -62,8 +63,19 @@ unsafe fn system_quit_apply_foreign_profile_summary_preview(base: usize, bytes: 
                 summary_snapshot.get(start..start + PROFILE_SUMMARY_RECORD_STRIDE)
             });
             let playtime_ticks = slot_body.in_game_timer_ticks(pgd).unwrap_or(0);
+            let face_bytes = slot_body.face_data_buffer_bytes(pgd);
+            let chr_asm_image = slot_body.runtime_chr_asm_image(pgd);
             if unsafe {
-                pgd.write_profile_summary_record(summary, slot, saved_map, playtime_ticks, fallback)
+                pgd.write_profile_summary_record(
+                    base,
+                    summary,
+                    slot,
+                    saved_map,
+                    playtime_ticks,
+                    fallback,
+                    face_bytes,
+                    chr_asm_image.as_ref(),
+                )
             } {
                 append_autoload_debug(format_args!(
                     "system-quit-load-save-profiles: preview slot {slot} playtime_ticks={playtime_ticks}"
@@ -137,6 +149,11 @@ unsafe fn system_quit_save_swap_restore_profile_summary(reason: &str) {
             st.summary_ptr,
             st.summary_snapshot.len()
         ));
+    }
+    // The restored snapshot's records are the ORIGINAL save's characters -- the foreign preview face
+    // fingerprints no longer describe any slot.
+    for slot in 0..TITLE_PROFILE_SLOT_COUNT {
+        PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
     }
     let _ = system_quit_save_swap_restore_original_file(&st, reason);
     *st = SystemQuitSaveSwapState::default();
