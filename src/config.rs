@@ -42,6 +42,8 @@ pub(crate) struct RuntimeConfig {
     pub save_file: Option<PathBuf>,
     pub slot: Option<i32>,
     pub method: Option<String>,
+    pub boot_background_image: Option<PathBuf>,
+    pub persist_boot_background_to_loading_screen: Option<bool>,
     pub menu_sort_armaments: Option<MenuSortDefault>,
     pub menu_sort_armor: Option<MenuSortDefault>,
     pub menu_sort_talismans: Option<MenuSortDefault>,
@@ -55,7 +57,7 @@ pub(crate) fn init_runtime_config(hmodule: HINSTANCE) {
     let _ = RUNTIME_CONFIG.set(load_runtime_config(hmodule));
     match RUNTIME_CONFIG.get() {
         Some(Ok(config)) => append_autoload_debug(format_args!(
-            "runtime-config: loaded '{}' save_file={} slot={} method={} menu_sort.armaments={} menu_sort.armor={} menu_sort.talismans={} preferred_save_picker_dir={} autoupdate_preferred_picker_dir={}",
+            "runtime-config: loaded '{}' save_file={} slot={} method={} boot_background_image={} persist_boot_background_to_loading_screen={} menu_sort.armaments={} menu_sort.armor={} menu_sort.talismans={} preferred_save_picker_dir={} autoupdate_preferred_picker_dir={}",
             config.path.display(),
             config
                 .save_file
@@ -67,6 +69,15 @@ pub(crate) fn init_runtime_config(hmodule: HINSTANCE) {
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "<unset>".to_owned()),
             config.method.as_deref().unwrap_or("<unset>"),
+            config
+                .boot_background_image
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<unset>".to_owned()),
+            config
+                .persist_boot_background_to_loading_screen
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "<default:true>".to_owned()),
             config
                 .menu_sort_armaments
                 .map(MenuSortDefault::label)
@@ -118,6 +129,20 @@ pub(crate) fn configured_explicit_save_file() -> Option<PathBuf> {
 
 pub(crate) fn configured_save_file_string() -> Option<String> {
     configured_save_file().map(|path| path.to_string_lossy().into_owned())
+}
+
+/// Optional boot background image override from `er-effects.toml`. This is intentionally TOML-only:
+/// the production DLL can be configured without shipping a helper script or hard-coding Steam account IDs.
+pub(crate) fn configured_boot_background_image() -> Option<PathBuf> {
+    runtime_config().and_then(|config| config.boot_background_image.clone())
+}
+
+/// Whether the chosen boot background should persist into the game's native loading-screen GFX
+/// background. Default-on; users can opt out in `er-effects.toml`.
+pub(crate) fn persist_boot_background_to_loading_screen_enabled() -> bool {
+    runtime_config()
+        .and_then(|config| config.persist_boot_background_to_loading_screen)
+        .unwrap_or(true)
 }
 
 /// Folder the missing-save picker opens in, from `er-effects.toml` only (no env form on purpose:
@@ -381,6 +406,35 @@ fn parse_runtime_config(path: PathBuf, contents: &str) -> Result<RuntimeConfig, 
                     parse_toml_string(value)
                         .map_err(|err| format!("invalid method on line {}: {err}", line_no + 1))?,
                 );
+            }
+            "boot_background_image"
+            | "background_image"
+            | "boot.background_image"
+            | "boot.background"
+            | "background.image" => {
+                let parsed = PathBuf::from(parse_toml_string(value).map_err(|err| {
+                    format!(
+                        "invalid boot_background_image on line {}: {err}",
+                        line_no + 1
+                    )
+                })?);
+                config.boot_background_image = Some(if parsed.is_absolute() {
+                    parsed
+                } else {
+                    config_dir.join(parsed)
+                });
+            }
+            "persist_boot_background_to_loading_screen"
+            | "boot.persist_background_to_loading_screen"
+            | "loading_screen.persist_boot_background"
+            | "loading_background.persist_boot_background" => {
+                config.persist_boot_background_to_loading_screen =
+                    Some(parse_toml_bool(value).map_err(|err| {
+                        format!(
+                            "invalid persist_boot_background_to_loading_screen on line {}: {err}",
+                            line_no + 1
+                        )
+                    })?);
             }
             "menu_sort.armaments" | "sort.armaments" | "armaments_sort" => {
                 config.menu_sort_armaments =

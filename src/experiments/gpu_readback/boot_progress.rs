@@ -337,9 +337,22 @@ fn boot_fill_rect(
     }
 }
 
+pub(crate) fn boot_bg_image_rgba_clone() -> Option<(usize, usize, Vec<u8>)> {
+    boot_bg_image().map(|img| (img.width, img.height, img.rgba.clone()))
+}
+
 fn boot_bg_image() -> Option<&'static BootBgImage> {
     BOOT_BG_IMAGE
         .get_or_init(|| {
+            if let Some((path, img)) = boot_bg_toml_image_override() {
+                append_autoload_debug(format_args!(
+                    "boot-view: TOML background image loaded '{}' {}x{}",
+                    path.display(),
+                    img.width,
+                    img.height
+                ));
+                return Some(img);
+            }
             if let Some(img) = boot_bg_cache_override() {
                 return Some(img);
             }
@@ -355,6 +368,19 @@ fn boot_bg_image() -> Option<&'static BootBgImage> {
             None
         })
         .as_ref()
+}
+
+fn boot_bg_toml_image_override() -> Option<(std::path::PathBuf, BootBgImage)> {
+    let path = crate::config::configured_boot_background_image()?;
+    if !boot_bg_is_supported_image_path(&path) {
+        append_autoload_debug(format_args!(
+            "boot-view: TOML background image ignored '{}' (expected .jpg/.jpeg/.png file)",
+            path.display()
+        ));
+        return None;
+    }
+    let img = unsafe { boot_bg_decode_wic_rgba(&path) }?;
+    Some((path, img))
 }
 
 fn boot_bg_cache_override() -> Option<BootBgImage> {

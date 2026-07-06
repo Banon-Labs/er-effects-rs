@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Populate the local boot-background cache from the latest Steam screenshot.
+"""Developer-only helper for writing an explicit boot-background override cache.
 
-The game DLL reads only the local ERBGRA01 cache written by this helper; it never
-scrapes Steam or downloads anything on the launch path.
+This script is NOT part of the production pipeline. The shipped product path is
+DLL-only: the DLL can read `er-effects.toml` for a local image override, or scan
+local Steam screenshot cache directories itself. This helper exists only for
+manual/dev generation of the optional ERBGRA01 override file.
 """
 
 from __future__ import annotations
@@ -187,7 +189,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, help=f"default: <game-dir>/{DEFAULT_CACHE_NAME}")
     parser.add_argument("--steam-userdata", type=Path, action="append", default=[])
     parser.add_argument("--allow-remote", action="store_true", help="scrape public Steam Community pages if local cache misses")
-    parser.add_argument("--steamid64", type=int, help="SteamID64 for remote scrape; default derives from local userdata account id")
+    parser.add_argument("--steamid64", type=int, help="SteamID64 for optional dev-only remote scrape")
     parser.add_argument("--timeout", type=float, default=4.0, help="per-request network timeout in seconds")
     parser.add_argument("--max-download-bytes", type=int, default=DEFAULT_MAX_BYTES)
     parser.add_argument("--max-dim", type=int, default=DEFAULT_MAX_DIM, help="max cached width/height after decode")
@@ -220,7 +222,7 @@ def main() -> int:
         source_desc = f"remote:{len(data)}B:{elapsed_ms}ms:{url[:96]}"
         image_source = data
     else:
-        raise SystemExit("no local screenshot found; rerun with --allow-remote to use public Steam Community screenshots")
+        raise SystemExit("no local screenshot found; dev-only remote scrape requires --allow-remote --steamid64 <id>")
 
     width, height, rgba = decode_rgba(image_source, args.max_dim)
     if args.dry_run:

@@ -52,6 +52,7 @@ optional and falls back cleanly when no real local Elden Ring screenshot exists.
 
 Build and stage the release payload:
 
+<!-- md-test: bash-n -->
 ```bash
 scripts/stage-autoload-release.sh --output target/autoload-release
 ```
@@ -75,6 +76,7 @@ Install/use:
 3. Edit `er-effects-autoload.txt` if you need a slot other than `slot=0`.
 4. Launch with me3:
 
+<!-- md-test: bash-run -->
 ```bash
 me3 launch -g eldenring -p /path/to/er-effects.me3
 ```
@@ -97,32 +99,46 @@ bar. The production path is DLL-only:
 The boot view aspect-covers the screenshot, dims it, and draws a soft faded
 shadow behind the progress bar so the bar remains readable without a hard panel.
 
-An explicit predecoded override is still supported for development/power users:
+Users can override the automatic local-Steam screenshot selection in
+`er-effects.toml`:
+
+<!-- md-test: parse-toml -->
+```toml
+boot_background_image = "C:/path/to/background.jpg"
+# or relative to er-effects.toml:
+# boot_background_image = "backgrounds/my-load-screen.png"
+
+# Default: true. Set false to use the custom image only during the pre-native
+# boot gap, then let the game's normal MENU_Load_* artwork own the native
+# loading screen.
+persist_boot_background_to_loading_screen = true
+```
+
+Accepted image aliases are `background_image`, `boot.background_image`,
+`boot.background`, and `background.image`. The image must be a local `.jpg`,
+`.jpeg`, or `.png`; it is decoded in-process by the DLL via Windows Imaging
+Component. By default, the selected boot background also replaces the game's
+native `MENU_Load_*` GFX background during the loading screen; opt out with
+`persist_boot_background_to_loading_screen = false`.
+
+A lower-level predecoded override remains available for development/power users:
 
 ```text
 <game-dir>/er-effects-boot-background.rgba
 ```
 
-That file uses a tiny `ERBGRA01` header plus width/height and RGBA8 pixels. The
-helper script can write it, but it is not required for the shipped DLL path:
-
-```bash
-scripts/cache-steam-screenshot-background.py --dry-run
-scripts/cache-steam-screenshot-background.py --game-dir /path/to/ELDEN\ RING/Game
-scripts/cache-steam-screenshot-background.py --allow-remote --steamid64 <id> --timeout 4
-scripts/cache-steam-screenshot-background.py --output /tmp/er-effects-boot-background.rgba
-```
-
-Remote helper mode requires an explicit `--steamid64`; it does not derive one
-from local userdata account directory names.
+That file uses a tiny `ERBGRA01` header plus width/height and RGBA8 pixels.
+`scripts/cache-steam-screenshot-background.py` can write it, but that script is
+**developer-only tooling** and is not part of the shipped production pipeline.
 
 ## Runtime configuration files
 
-Most runtime product toggles are simple files placed next to `eldenring.exe`.
-Environment variables with matching names are also used by probes and smoke
-scripts.
+Most quick-load toggles are simple `.txt` files placed next to `eldenring.exe`.
+`er-effects.toml` is different: it is loaded from the same folder as the DLL
+(the staged me3 profile folder in the release layout). Environment variables
+with matching names are also used by probes and smoke scripts.
 
-Common quick-load files:
+Common quick-load files/config:
 
 | File | Purpose |
 | --- | --- |
@@ -130,8 +146,8 @@ Common quick-load files:
 | `er-effects-native-continue.txt` | Enables the supported native Continue path. |
 | `er-effects-pab-advance.txt` | Enables zero-input press-any-button/menu-open advance. |
 | `er-effects-splash-skip.txt` | Enables built-in splash skip when not already implied by quick load. |
-| `er-effects-boot-background.rgba` | Optional predecoded screenshot override; not required for local Steam screenshot discovery. |
-| `er-effects.toml` | Optional config file; can provide a `save_file = "..."` source. |
+| `er-effects.toml` | DLL-adjacent config file; can provide `save_file`, `boot_background_image`, and `persist_boot_background_to_loading_screen`. |
+| `er-effects-boot-background.rgba` | DLL-adjacent developer/power-user predecoded screenshot override; not required for production local Steam screenshot discovery. |
 
 Important experimental/probe files exist too (`er-effects-force-profile-render.txt`,
 `er-effects-portrait-lookat.txt`, `er-effects-portrait-render-drive.txt`, etc.).
@@ -145,6 +161,7 @@ normal save:
 
 1. Explicit source via `ER_EFFECTS_SAVE_FILE` or `er-effects.toml`:
 
+<!-- md-test: parse-toml -->
 ```toml
 save_file = "/path/to/ER0000.sl2"
 ```
@@ -167,6 +184,7 @@ crate uses path dependencies from `../fromsoftware-rs`.
 
 Build the Windows DLL from Linux:
 
+<!-- md-test: bash-n -->
 ```bash
 cargo xwin build --release --target x86_64-pc-windows-msvc
 ```
@@ -179,6 +197,7 @@ target/x86_64-pc-windows-msvc/release/er_effects_rs.dll
 
 Fast checks:
 
+<!-- md-test: bash-n -->
 ```bash
 cargo fmt --check
 cargo xwin check --target x86_64-pc-windows-msvc
@@ -186,12 +205,14 @@ cargo xwin check --target x86_64-pc-windows-msvc
 
 Full repo gate:
 
+<!-- md-test: bash-n -->
 ```bash
 bash scripts/check.sh
 ```
 
 Host-buildable tooling crates can be checked without the game DLL:
 
+<!-- md-test: bash-n -->
 ```bash
 cargo test -p er-soulsformats -p er-param-inspect
 cargo check -p er-soulsformats -p er-param-inspect
@@ -202,6 +223,7 @@ cargo check -p er-soulsformats -p er-param-inspect
 Runtime-affecting changes need a live smoke. The common quick-load/portrait smoke
 entrypoint is:
 
+<!-- md-test: bash-n -->
 ```bash
 bash scripts/run-postcontinue-lookat-smoke.sh
 ```
@@ -235,14 +257,16 @@ Seeded calls:
 
 Validate the list against a regulation file:
 
+<!-- md-test: bash-n -->
 ```bash
-cargo run -p er-param-inspect -- validate <path-to-regulation.bin>
+cargo run -p er-param-inspect -- validate "$REGULATION_BIN"
 ```
 
 Inspect rows:
 
+<!-- md-test: bash-n -->
 ```bash
-cargo run -p er-param-inspect -- rows <path-to-regulation.bin> SpEffectParam 4330 20018100 20018101
+cargo run -p er-param-inspect -- rows "$REGULATION_BIN" SpEffectParam 4330 20018100 20018101
 ```
 
 ## Network sync semantics
