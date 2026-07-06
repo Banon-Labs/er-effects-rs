@@ -1,4 +1,3 @@
-
 /// Install the row-populate hook (`FUN_1408758d0`). Idempotent; mirrors the named-child binder install.
 pub(crate) fn install_profile_row_populate_hook() {
     if PROFILE_ROW_POPULATE_INSTALLED.load(Ordering::SeqCst) != 0 {
@@ -833,6 +832,61 @@ pub(crate) unsafe extern "system" fn system_quit_menu_window_job_run_hook(
     }
     let filename_ptr = unsafe { safe_read_usize(job + 0x60) }.unwrap_or(0);
     let filename = system_quit_read_wide_resource_name(filename_ptr);
+
+    // SEAMLESS ToS SKIP (2026-07-06): the online-service ToS (`06_000_TermOfService_BNE`) is a job in
+    // the title `CS::FixOrderJobSequence`, which steps to the next job ONLY when a job's Run returns a
+    // Success result. While the ToS window is up this job returns Continue (and the ctor-null makes it
+    // Failed), so the zero-input autoload stalls on it forever (observed +17s..+108s idle). The
+    // ToS/Privacy policy is an OFFICIAL-servers-only gate the DLL never needs -- ERSC uses its own
+    // private relay and does not respect the official policy, so skipping it is safe for co-op. Force
+    // this one job's MenuJobResult to Success BEFORE running the original (so the ToS never builds --
+    // no window, no MessageBox, zero input) and return; `FixOrderJobSequence::Run` then advances past
+    // it. Same proven pattern as `show_progress_job_run_hook` advancing the network/login jobs. The
+    // MenuJobResult is at `load_params+0` (Run returns `load_params`, read as `MenuJobResult*` by the
+    // sequence). Gated by `policy_tos_suppress_enabled()` (product autoload + Seamless, or the diag
+    // override), so vanilla-offline is untouched (the ToS never fires there anyway).
+    // Record which job's Run is executing so the nested MessageBox builder hook can attribute a
+    // (suppressed) ERSC popup to this job and latch it into MSGBOX_STALL_JOB for next-frame advance.
+    CURRENT_MENU_WINDOW_JOB_RUN_JOB.store(job, Ordering::SeqCst);
+
+    // Advance-skip a title job to Success so `FixOrderJobSequence::Run` steps past it (never showing
+    // its modal). Two Seamless cases: (1) the official-servers ToS job (`06_000_TermOfService_BNE`);
+    // (2) the ERSC post-PAB MessageBox job -- its dialog build was already nulled by
+    // `msgbox_builder_hook`, which latched THIS job into `MSGBOX_STALL_JOB`, so its next Run advances.
+    static SEAMLESS_TOS_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
+    let is_tos = filename.contains("TermOfService");
+    let is_stalled_msgbox = job != 0 && MSGBOX_STALL_JOB.load(Ordering::SeqCst) == job;
+    if policy_tos_suppress_enabled() && (is_tos || is_stalled_msgbox) {
+        if is_stalled_msgbox {
+            MSGBOX_STALL_JOB.store(0, Ordering::SeqCst);
+        }
+        const MENU_JOB_STATE_SUCCESS: i32 = 2;
+        const FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA: usize = 0x29c8e48;
+        if load_params != 0 {
+            unsafe {
+                *(load_params as *mut i32) = MENU_JOB_STATE_SUCCESS;
+                *((load_params + 4) as *mut i32) = 0;
+            }
+        }
+        if let Ok(base) = game_module_base() {
+            if fd4_time != 0 {
+                unsafe { *(fd4_time as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
+            }
+        }
+        let skip_n = SEAMLESS_TOS_SKIP_COUNT.fetch_add(1, Ordering::SeqCst);
+        if skip_n < 12 {
+            let kind = if is_tos {
+                "official-ToS"
+            } else {
+                "ersc-post-pab-msgbox"
+            };
+            append_autoload_debug(format_args!(
+                "seamless-tos-skip #{skip_n} ({kind}): forced MenuWindowJob::Run('{filename}') -> MenuJobResult(Success) job=0x{job:x} -- FixOrderJobSequence advances past the never-shown modal"
+            ));
+        }
+        return load_params;
+    }
+
     let original: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig) };
     let ret = unsafe { original(job, load_params, fd4_time, menu_man) };

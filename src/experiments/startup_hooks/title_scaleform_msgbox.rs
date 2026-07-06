@@ -850,6 +850,17 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
                 trace_callers_summary()
             ));
         }
+        // SEAMLESS post-PAB popup: the box is nulled (never shown), but the MenuWindowJob whose Run is
+        // building it would then sit on MenuJobResult(Continue) forever (ERSC's post-PAB MessageBox
+        // stall). Latch that job (recorded at MenuWindowJob::Run entry) so its next Run is advanced to
+        // Success -- the FixOrderJobSequence steps past the never-shown popup. Seamless-only; vanilla
+        // pre-world boxes (connection-error/EULA) do not fire offline and keep the plain null-suppress.
+        if crate::telemetry::seamless_coop_loaded() {
+            let cur = CURRENT_MENU_WINDOW_JOB_RUN_JOB.load(Ordering::SeqCst);
+            if cur != null {
+                MSGBOX_STALL_JOB.store(cur, Ordering::SeqCst);
+            }
+        }
         return null;
     }
     let orig = MSGBOX_BUILDER_ORIG.load(Ordering::SeqCst);
