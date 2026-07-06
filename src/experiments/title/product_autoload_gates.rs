@@ -47,7 +47,16 @@ use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 use super::*;
 
 pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
-    // Arm the menu-free path flags from the reliable autoload-file channel, independent of slot
+    // Product autoload is the release/default behavior. Do not make it depend on smoke-only env
+    // variables, `er-effects-autoload.txt`, or the experimental DirectMenuLoad method: the title/menu
+    // visual suppression is also default-on for real runs, so leaving the load driver unarmed creates
+    // a release soft lock (hidden native menu with no product-core load tick). Explicit no-autoload,
+    // telemetry-only, and native-profile-capture runs remain opt-out/diagnostic paths.
+    if !autoload_disabled() && !save_override_telemetry_only() && !native_profile_capture_enabled() {
+        PRODUCT_AUTOLOAD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
+    }
+
+    // Arm additional menu-free path flags from the reliable autoload-file channel, independent of slot
     // and method, so own_stepper_enabled()/cold_char_mount_enabled() do not depend on env-var
     // propagation through Proton or game_directory_path() trigger-file resolution.
     if request.own_stepper() {
@@ -115,9 +124,8 @@ pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
     }
     if request.method() == SaveLoadMethod::DirectMenuLoad && experimental_direct_menu_load_enabled()
     {
-        // No configured slot means "load the best active/default save slot". Leave
-        // OWN_STEPPER_SLOT at its sentinel so resolve_active_load_slot() falls back to the active
-        // profile records once the default save has been read.
+        // Kept as an explicit diagnostic/direct-menu compatibility path. The release/default arm above
+        // is what makes a plain ME3-loaded DLL work without hidden env vars.
         PRODUCT_AUTOLOAD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     }
 }

@@ -1694,6 +1694,16 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_boot_view_milestone_idx",
             BOOT_VIEW_MILESTONE_IDX.load(Ordering::SeqCst),
         );
+        push_json_usize(
+            body,
+            "oracle_boot_view_own_menu_load_active",
+            BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_loadscreen_table_baseline",
+            BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.load(Ordering::SeqCst),
+        );
         // Early self-present pump: frames WE presented before the game's first own present, the
         // pump-relative ms the swapchain was found, and why the pump stopped (1 = game took over,
         // the success terminal state; 2 = budget; 3 = Present HRESULT failure).

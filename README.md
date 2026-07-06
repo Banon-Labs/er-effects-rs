@@ -84,6 +84,22 @@ me3 launch -g eldenring -p /path/to/er-effects.me3
 Do not launch Elden Ring through the protected/EAC launcher for agent/runtime
 work. The release profile is designed for the direct/offline me3 native-DLL path.
 
+## User-friendly helper package without DLLs or saves
+
+To create a redistributable helper package that contains only docs/templates and a
+launcher wrapper -- **not** `er_effects_rs.dll`, `.sl2`/`.co2` saves, or other DLLs
+-- run:
+
+<!-- md-test: bash-n -->
+```bash
+scripts/build-user-release-package.py --clean
+```
+
+The generated zip under `target/deliverables/` includes `run-er-effects-release.sh`,
+`quicksave.me3.template`, `er-effects.toml.example`, and audit manifests. The
+helper requires the user to pass their locally-built DLL path at launch time and
+never copies a save file into the package.
+
 ## Optional: Steam screenshot boot background
 
 The DLL can draw a personal Steam screenshot behind the pre-native boot loading
@@ -99,13 +115,15 @@ bar. The production path is DLL-only:
 The boot view aspect-covers the screenshot, dims it, and draws a soft faded
 shadow behind the progress bar so the bar remains readable without a hard panel.
 
-Users can override the automatic local-Steam screenshot selection in
-`er-effects.toml`:
+Users can override the automatic local-Steam screenshot selection in the
+game-directory `er-effects.toml`:
 
 <!-- md-test: parse-toml -->
 ```toml
 boot_background_image = "C:/path/to/background.jpg"
-# or relative to er-effects.toml:
+# Linux absolute paths are accepted under Proton/Wine and are translated to Z:\\...
+# boot_background_image = "/home/you/Pictures/my-load-screen.png"
+# Relative paths resolve next to er-effects.toml in the game directory:
 # boot_background_image = "backgrounds/my-load-screen.png"
 
 # Default: true. Set false to use the custom image only during the pre-native
@@ -134,9 +152,9 @@ That file uses a tiny `ERBGRA01` header plus width/height and RGBA8 pixels.
 ## Runtime configuration files
 
 Most quick-load toggles are simple `.txt` files placed next to `eldenring.exe`.
-`er-effects.toml` is different: it is loaded from the same folder as the DLL
-(the staged me3 profile folder in the release layout). Environment variables
-with matching names are also used by probes and smoke scripts.
+`er-effects.toml` is different: it is loaded from the game directory, next to
+`eldenring.exe`. Environment variables with matching names are also used by
+probes and smoke scripts.
 
 Common quick-load files/config:
 
@@ -146,8 +164,8 @@ Common quick-load files/config:
 | `er-effects-native-continue.txt` | Enables the supported native Continue path. |
 | `er-effects-pab-advance.txt` | Enables zero-input press-any-button/menu-open advance. |
 | `er-effects-splash-skip.txt` | Enables built-in splash skip when not already implied by quick load. |
-| `er-effects.toml` | DLL-adjacent config file; can provide `save_file`, `boot_background_image`, and `persist_boot_background_to_loading_screen`. |
-| `er-effects-boot-background.rgba` | DLL-adjacent developer/power-user predecoded screenshot override; not required for production local Steam screenshot discovery. |
+| `er-effects.toml` | Game-directory config file; can provide `save_file`, `boot_background_image`, and `persist_boot_background_to_loading_screen`. |
+| `er-effects-boot-background.rgba` | Game-directory developer/power-user predecoded screenshot override; not required for production local Steam screenshot discovery. |
 
 Important experimental/probe files exist too (`er-effects-force-profile-render.txt`,
 `er-effects-portrait-lookat.txt`, `er-effects-portrait-render-drive.txt`, etc.).

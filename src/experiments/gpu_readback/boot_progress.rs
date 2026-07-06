@@ -27,8 +27,15 @@
 
 /// Draw-state machine: 0 = uninit, 1 = ready, 2 = failed (give up; never retry).
 static BOOT_VIEW_DRAW_STATE: AtomicUsize = AtomicUsize::new(0);
-/// One-shot stop latch: the loading window / world took over; the boot view never draws again.
+/// One-shot stop latch: the loading window / world took over; reset only for a deliberate own-menu
+/// character switch so the same custom progress bar can cover the return-title/autoload black gap.
 static BOOT_VIEW_STOPPED: AtomicUsize = AtomicUsize::new(0);
+/// Nonzero while the System->Quit custom ProfileSelect flow is switching to a picked slot. Value is
+/// selected_slot + 1 so slot 0 is representable. This reopens the boot bar after the first world load.
+pub(crate) static BOOT_VIEW_OWN_MENU_LOAD_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+/// Baseline `PROFILE_LOADSCREEN_TABLE_BUILDS` when the own-menu switch rearmed the boot view; a later
+/// increment is this switch's loading-window handoff. Default 0 preserves first-start behavior.
+pub(crate) static BOOT_VIEW_LOADSCREEN_TABLE_BASELINE: AtomicUsize = AtomicUsize::new(0);
 /// Per-frame composite counter (RAM semaphore: the boot view is actually reaching the backbuffer).
 pub(crate) static BOOT_VIEW_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
 /// Last DISPLAYED progress in permille (monotonic; includes the inter-milestone creep).
@@ -159,6 +166,27 @@ const BOOT_VIEW_RGB_TEXT: [u8; 3] = [150, 147, 138];
 /// that is safe from the render thread; ordering mistakes degrade to a stalled bar, never a lie about
 /// sequence (the reached MASK is latched monotonic by the caller).
 fn boot_milestone_reached(idx: usize) -> bool {
+    if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {
+        let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+        return match idx {
+            // Drawing at all proves the present hook + game swapchain are live.
+            0 => true,
+            1 => game_man_ptr_or_null() != 0,
+            // Offline bytes are already cleared by the first boot in the same process.
+            2 => FORCE_OFFLINE_BYTES_CLEARED.load(Ordering::SeqCst) != 0,
+            // Own-menu switch phases replace stale first-boot title/menu latches.
+            3 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED,
+            4 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN,
+            5 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
+                || SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
+                || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0,
+            6 => {
+                PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst)
+                    > BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.load(Ordering::SeqCst)
+            }
+            _ => false,
+        };
+    }
     match idx {
         // Drawing at all proves the present hook + game swapchain are live.
         0 => true,
@@ -180,13 +208,43 @@ fn boot_milestone_reached(idx: usize) -> bool {
                 || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0
                 || LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0
         }
-        6 => PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst) != 0,
+        6 => {
+            PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst)
+                > BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.load(Ordering::SeqCst)
+        }
         _ => false,
     }
 }
 
 /// Compute the current (milestone idx, displayed permille). Latches newly reached milestones into the
 /// monotonic mask, stamps idx-change time for the creep, and never lets the displayed value decrease.
+fn boot_view_epoch_ms() -> u64 {
+    let epoch = *BOOT_VIEW_EPOCH.get_or_init(std::time::Instant::now);
+    epoch.elapsed().as_millis().min(u64::MAX as u128) as u64
+}
+
+/// Reopen the first-start custom loading bar for an own-menu character switch. The original boot view
+/// deliberately stops forever once the first loading window/world takes over; the custom System->Quit
+/// ProfileSelect path reuses the title/autoload pipeline later in the same process, so it needs a
+/// per-switch rearm with baselines for persistent portrait semaphores.
+pub(crate) fn rearm_boot_progress_for_own_menu_load(selected_slot: i32, source: &str) {
+    let slot_key = selected_slot.saturating_add(1).max(0) as usize;
+    let table_baseline = PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst);
+    BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.store(slot_key, Ordering::SeqCst);
+    BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.store(table_baseline, Ordering::SeqCst);
+    BOOT_VIEW_STOPPED.store(0, Ordering::SeqCst);
+    BOOT_VIEW_REACHED_MASK.store(1, Ordering::SeqCst);
+    BOOT_VIEW_MILESTONE_IDX.store(0, Ordering::SeqCst);
+    BOOT_VIEW_LAST_PERMILLE.store(0, Ordering::SeqCst);
+    BOOT_VIEW_DRAWN_PERMILLE.store(usize::MAX, Ordering::SeqCst);
+    BOOT_VIEW_DRAWN_IDX.store(usize::MAX, Ordering::SeqCst);
+    BOOT_VIEW_DRAWN_BG_ACTIVE.store(usize::MAX, Ordering::SeqCst);
+    BOOT_VIEW_IDX_CHANGED_MS.store(boot_view_epoch_ms(), Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "boot-view: rearmed for own-menu character load selected_slot={selected_slot} source={source} table_baseline={table_baseline}"
+    ));
+}
+
 fn boot_view_progress() -> (usize, usize) {
     let mut mask = BOOT_VIEW_REACHED_MASK.load(Ordering::SeqCst);
     for i in 0..BOOT_VIEW_MILESTONE_LABELS.len() {
@@ -196,8 +254,7 @@ fn boot_view_progress() -> (usize, usize) {
     }
     BOOT_VIEW_REACHED_MASK.store(mask, Ordering::SeqCst);
     let idx = (usize::BITS - 1 - mask.max(1).leading_zeros()) as usize;
-    let epoch = *BOOT_VIEW_EPOCH.get_or_init(std::time::Instant::now);
-    let now_ms = epoch.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    let now_ms = boot_view_epoch_ms();
     let prev_idx = BOOT_VIEW_MILESTONE_IDX.swap(idx, Ordering::SeqCst);
     if prev_idx != idx {
         BOOT_VIEW_IDX_CHANGED_MS.store(now_ms, Ordering::SeqCst);
@@ -823,22 +880,33 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     if BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0 {
         return false;
     }
-    // HANDOFF: the post-Continue loading window (table builds / a published keyed head) or the world
-    // itself owns the screen now. Permanent stop -- the boot view exists only for the pre-Continue
-    // black gap. NOTE: `now_loading_active` is deliberately NOT consulted: its `load_done` latch is
-    // false during boot too, so it cannot distinguish "booting" from "loading".
-    if PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst) != 0
-        || PROFILE_HAVE_KEYED_FRAME.load(Ordering::SeqCst) != 0
-        || IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES
-    {
+    // HANDOFF: first start stops when the loading window / published keyed head / world takes over.
+    // During an own-menu switch, the old-world and prior-keyed-frame latches are intentionally still
+    // set, so stop only when THIS switch builds a fresh loading-screen table (baseline comparison).
+    // NOTE: `now_loading_active` is deliberately NOT consulted: its `load_done` latch is false during
+    // boot too, so it cannot distinguish "booting" from "loading".
+    let own_menu_active = BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0;
+    let loadscreen_builds = PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst);
+    let table_baseline = BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.load(Ordering::SeqCst);
+    let loading_handoff = if own_menu_active {
+        loadscreen_builds > table_baseline
+    } else {
+        loadscreen_builds != 0 || PROFILE_HAVE_KEYED_FRAME.load(Ordering::SeqCst) != 0
+    };
+    let world_handoff = !own_menu_active && IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
+    if loading_handoff || world_handoff {
         if BOOT_VIEW_STOPPED.swap(1, Ordering::SeqCst) == 0 {
             append_autoload_debug(format_args!(
-                "boot-view: handoff -> loading window (draws={} permille={} mask=0x{:x})",
+                "boot-view: handoff -> loading window (draws={} permille={} mask=0x{:x} own_menu={} table_builds={} table_baseline={})",
                 BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst),
                 BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst),
                 BOOT_VIEW_REACHED_MASK.load(Ordering::SeqCst),
+                own_menu_active,
+                loadscreen_builds,
+                table_baseline,
             ));
         }
+        BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.store(0, Ordering::SeqCst);
         return false;
     }
     if BOOT_VIEW_DRAW_STATE.load(Ordering::SeqCst) == 2 {
