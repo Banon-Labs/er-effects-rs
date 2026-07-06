@@ -21,23 +21,13 @@ use er_gfx::title_05_000::{
 };
 
 fn read_vanilla_or_skip() -> Option<Vec<u8>> {
-    let path = common::corpus_root().join("05_000_title.gfx");
-    if !path.exists() {
-        eprintln!(
-            "SKIP: vanilla movie {} not present; derivation test skipped",
-            path.display()
-        );
-        return None;
-    }
-    let vanilla = std::fs::read(&path).expect("read vanilla movie");
-    assert_eq!(vanilla.len(), VANILLA_LEN, "vanilla corpus file drifted");
-    assert_eq!(
-        fnv1a64(&vanilla),
+    common::read_vanilla_or_skip(
+        "05_000_title.gfx",
+        VANILLA_LEN,
         VANILLA_FNV1A64,
-        "vanilla corpus file drifted"
-    );
-    assert!(is_known_vanilla(&vanilla));
-    Some(vanilla)
+        fnv1a64,
+        is_known_vanilla,
+    )
 }
 
 #[test]

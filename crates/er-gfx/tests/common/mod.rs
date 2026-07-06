@@ -20,3 +20,31 @@ pub fn corpus_root() -> PathBuf {
         _ => PathBuf::from(DEFAULT_CORPUS_ROOT),
     }
 }
+
+/// Read a known vanilla movie from the local corpus, or skip the caller's test
+/// when the corpus file is absent.
+pub fn read_vanilla_or_skip(
+    file_name: &str,
+    expected_len: usize,
+    expected_fnv1a64: u64,
+    fnv1a64: impl Fn(&[u8]) -> u64,
+    is_known_vanilla: impl Fn(&[u8]) -> bool,
+) -> Option<Vec<u8>> {
+    let path = corpus_root().join(file_name);
+    if !path.exists() {
+        eprintln!(
+            "SKIP: vanilla movie {} not present; derivation test skipped",
+            path.display()
+        );
+        return None;
+    }
+    let vanilla = std::fs::read(&path).expect("read vanilla movie");
+    assert_eq!(vanilla.len(), expected_len, "vanilla corpus file drifted");
+    assert_eq!(
+        fnv1a64(&vanilla),
+        expected_fnv1a64,
+        "vanilla corpus file drifted"
+    );
+    assert!(is_known_vanilla(&vanilla), "vanilla corpus file drifted");
+    Some(vanilla)
+}
