@@ -140,25 +140,12 @@ fn build_loading_bg_replacement_tpf(symbol: &str) -> Option<Vec<u8>> {
 }
 
 fn build_portrait_tpf(symbol: &str) -> Option<Vec<u8>> {
-    // Candidate A (er-effects-rs-jsm): when the in-movie live-head path is active, build the forged
-    // MENU_Load_ texture at a BOUNDED FORGE_HEAD_TEX_DIM so the per-frame head copy resamples the (larger)
-    // live portrait into a small destination cheaply. Content is the boot background (cover-scaled to that
-    // dim -> visually continuous placeholder until the first live head lands) or the checker fallback. The
-    // displayed artwork is then swapped to the live head every frame by maybe_update_gfx_loading_portrait.
+    // Candidate A (er-effects-rs-jsm): on the live-head path, BAKE the head into the forged now-loading
+    // background image (the proven display path), built at the artwork's true 2:1 aspect with the
+    // background + head aspect-cover CENTRE-CROPPED into the visible sub-rect -- never stretched. GFx shows
+    // it in-movie under the native tips; the overlay demotes once a baked artwork is displayed.
     if gfx_loading_portrait_enabled() {
-        let dim = FORGE_HEAD_TEX_DIM;
-        let pixels = boot_bg_image_rgba_clone()
-            .map(|(w, h, px)| cover_resample_rgba8(&px, w as u32, h as u32, dim, dim))
-            .unwrap_or_else(|| {
-                er_tpf::DdsImage::checker(dim, dim, 64, [255, 0, 255, 255], [255, 255, 0, 255]).pixels
-            });
-        let dds = er_tpf::DdsImage {
-            width: dim,
-            height: dim,
-            pixels,
-        }
-        .to_dds_bytes_with(er_tpf::DdsHeaderMode::LegacyRgba8);
-        return er_tpf::Tpf::single_pc(symbol, dds, 1).build().ok();
+        return build_baked_loading_bg(symbol);
     }
     // Default product behavior: persist the chosen boot background (TOML override, explicit ERBGRA01
     // override, or latest local Steam screenshot) through the native MENU_Load_* GFX background too. This
@@ -1021,6 +1008,15 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
     };
     TITLE_SCALEFORM_FILE_OPEN_LAST_RET.store(ret, Ordering::SeqCst);
     TITLE_SCALEFORM_FILE_OPEN_LAST_RET_VTABLE.store(ret_vtable, Ordering::SeqCst);
+
+    // Capture the game's menu font (font:/<locale>/font.gfx) for our loading-screen stats text (read-only
+    // copy of the file's own GFX payload; er-effects-rs-jsm). Observe-only, one-shot.
+    if base != null
+        && (unsafe { bounded_ascii_contains(url, b"font.gfx") }
+            || unsafe { bounded_ascii_contains(url, b"font.swf") })
+    {
+        unsafe { capture_menu_font_gfx(base, ret) };
+    }
 
     if is_title_logo || is_title_05_000 || is_profile_05_010 {
         let logo_hit = if is_title_logo {

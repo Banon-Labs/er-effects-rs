@@ -55,6 +55,8 @@ static OVERLAY_LOADSCREEN_BASELINE_VERSION: AtomicUsize = AtomicUsize::new(0);
 /// Native loading-bar final hits already consumed by this overlay window. Reset on re-arm so a prior
 /// load's terminal-frame latch cannot instantly stop the next loading portrait window.
 static OVERLAY_NATIVE_BAR_FINAL_HITS_SEEN: AtomicUsize = AtomicUsize::new(0);
+/// Present counter for throttling the head pixel-oracle while the overlay is demoted.
+static OVERLAY_HEAD_PROBE_TICK: AtomicUsize = AtomicUsize::new(0);
 
 const OVERLAY_SHADER_HLSL: &[u8] = br#"
 Texture2D portrait_tex : register(t0);
@@ -422,6 +424,8 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
     // Candidate A (er-effects-rs-jsm): drop the demote credit + stash the cached CSTextureImage ref for
     // the game-thread updater to Release (this reset runs off the game thread; Scaleform frees must not).
     gfx_loading_portrait_window_reset();
+    // Rebuild the stats text for the next load (a System-Quit character switch may load a different char).
+    stats_text_window_reset();
     PROFILE_RT_PIN.store(0, Ordering::SeqCst);
     PROFILE_DEPTH_PIN.store(0, Ordering::SeqCst);
     // Fresh adaptive tear baseline for the next window's character (honest content scores differ
@@ -736,11 +740,29 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
     // each successful in-movie copy; we consume one credit per present and yield. Return `true` so the
     // Present hook treats the frame as handled (skips the boot-progress fallback). Fail-open: if the
     // in-movie path stalls, the credit drains to 0 and the overlay resumes drawing the head next present.
-    let demote = GFX_PORTRAIT_DEMOTE_CREDIT.load(Ordering::SeqCst);
-    if demote > 0 {
-        GFX_PORTRAIT_DEMOTE_CREDIT.store(demote - 1, Ordering::SeqCst);
-        GFX_PORTRAIT_OVERLAY_YIELDS.fetch_add(1, Ordering::SeqCst);
-        return true;
+    // PIXEL-ORACLE-DRIVEN overlay hand-off (er-effects-rs-jsm). Once the head has been baked into a
+    // now-loading artwork, probe the game's OWN composited backbuffer (throttled; at the top of the
+    // Present hook it is the movie's render BEFORE the overlay draws this frame) to check whether the head
+    // actually reached the screen. Demote the overlay -- yield its head draw so the native tips render
+    // above the in-movie head -- ONLY while the oracle confirms the head is on screen; otherwise fall
+    // through and let the overlay draw the head as a BRIDGE (head over tips), so a bg-only movie (short
+    // load, no post-capture rotation) is never left with a missing head. Self-correcting, no regression.
+    if GFX_PORTRAIT_BAKED.load(Ordering::SeqCst) > 0 {
+        let tick = OVERLAY_HEAD_PROBE_TICK.fetch_add(1, Ordering::SeqCst);
+        if tick % 30 == 0 {
+            let sc_raw = swapchain_raw as *mut c_void;
+            if let Some(sc) = unsafe { IDXGISwapChain3::from_raw_borrowed(&sc_raw) } {
+                let idx = unsafe { sc.GetCurrentBackBufferIndex() };
+                if let Ok(bb) = unsafe { sc.GetBuffer::<ID3D12Resource>(idx) } {
+                    let d = unsafe { bb.GetDesc() };
+                    unsafe { probe_head_on_screen(&bb, d.Format) };
+                }
+            }
+        }
+        if GFX_PORTRAIT_HEAD_ON_SCREEN.load(Ordering::SeqCst) == 1 {
+            GFX_PORTRAIT_OVERLAY_YIELDS.fetch_add(1, Ordering::SeqCst);
+            return true;
+        }
     }
     if OVERLAY_DRAW_STATE.load(Ordering::SeqCst) == 2 {
         return false;
@@ -780,12 +802,16 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
     // frame with the freshly rendered, DEPTH-ALPHA-KEYED head (background alpha 0), so we blend the CURRENT
     // snapshot every frame -- the displayed head follows the cursor and its background stays transparent. On
     // any snapshot failure we skip this frame (leave the last presented content).
-    let Some((sw, sh, spx)) = LOADING_BG_PORTRAIT_RGBA.lock().ok().and_then(|g| g.clone()) else {
+    let Some((sw, sh, mut spx)) = LOADING_BG_PORTRAIT_RGBA.lock().ok().and_then(|g| g.clone()) else {
         return false;
     };
     if sw == 0 || sh == 0 || spx.len() < (sw as usize) * (sh as usize) * RGBA8_BPP {
         return false;
     }
+    // PIVOT (er-effects-rs-jsm): composite the player-stats text (game menu font) into the head's lower
+    // region before it is drawn -- opaque text pixels show, the transparent surround still shows the movie,
+    // and the native tips are suppressed separately. Reuses the whole existing head draw.
+    composite_stats_into_head(&mut spx, sw, sh);
     // Animation-stall semaphore: a portrait frame is being displayed this present. Paired with the
     // per-drive-frame counter, a low drive/display ratio means the head froze early in the window.
     PROFILE_DISPLAY_FRAMES_WINDOW.fetch_add(1, Ordering::SeqCst);
@@ -930,6 +956,233 @@ fn sample_portrait_rgba_cover(
         spx[so + 2] as u32,
         spx[so + 3] as u32,
     )
+}
+
+/// Normalized (0..1 of the 1920x1080 stage == the 16:9 backbuffer) tip-text + loading-bar rectangles,
+/// from the VERIFIED asset geometry (er-effects-rs-jsm). The head probe EXCLUDES these so the native tips
+/// (drawn over the head) can't be mistaken for "head absent".
+fn in_tip_or_bar_rect(u: f32, v: f32) -> bool {
+    let r = |u0: f32, u1: f32, v0: f32, v1: f32| u >= u0 && u <= u1 && v >= v0 && v <= v1;
+    r(0.0583, 0.6365, 0.6444, 0.6889) // tip title  (112..1222, 696..744)
+        || r(0.0583, 0.6365, 0.6935, 1.0) // tip body   (112..1222, 749..1159 clamped)
+        || r(0.0583, 0.6573, 0.9324, 0.9685) // key guide  (112..1262, 1007..1046)
+        || r(0.7339, 0.9401, 0.9269, 0.9648) // gauge bar  (1409..1805, 1001..1042)
+}
+
+/// PIXEL ORACLE (er-effects-rs-jsm): read back the game's composited backbuffer and vote, over the head's
+/// opaque pixels outside the tip/bar rects, whether each sampled pixel is closer to the captured head or
+/// to the loading background. Sets `GFX_PORTRAIT_HEAD_MATCH_PCT` / `GFX_PORTRAIT_HEAD_ON_SCREEN`. This
+/// checks the pixels the user actually sees, so it is a resource-agnostic regression guard: it can't be
+/// fooled by a "the re-forge ran" counter. Throttled by the caller; never panics.
+unsafe fn probe_head_on_screen(backbuffer: &ID3D12Resource, bb_format: DXGI_FORMAT) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let Some((hw, hh, hpx)) = LOADING_BG_PORTRAIT_RGBA.lock().ok().and_then(|g| g.clone()) else {
+            return;
+        };
+        if hw == 0 || hh == 0 {
+            return;
+        }
+        let bg = boot_bg_image_rgba_clone(); // Option<(usize,usize,Vec<u8>)>
+        let desc = backbuffer.GetDesc();
+        let bw = desc.Width as u32;
+        let bh = desc.Height;
+        if bw == 0 || bh == 0 {
+            return;
+        }
+        let mut dev: Option<ID3D12Device> = None;
+        if backbuffer.GetDevice(&mut dev).is_err() {
+            return;
+        }
+        let Some(device) = dev else {
+            return;
+        };
+        let mut fp = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+        let mut total: u64 = 0;
+        device.GetCopyableFootprints(&desc, 0, 1, 0, Some(&mut fp), None, None, Some(&mut total));
+        if total == 0 || fp.Footprint.RowPitch == 0 {
+            return;
+        }
+        // (Re)create the cached readback buffer on size change.
+        if SEM_BB_BUFSIZE.load(Ordering::SeqCst) != total {
+            let heap = D3D12_HEAP_PROPERTIES {
+                Type: D3D12_HEAP_TYPE_READBACK,
+                CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+                MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+                CreationNodeMask: 1,
+                VisibleNodeMask: 1,
+            };
+            let buf = D3D12_RESOURCE_DESC {
+                Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+                Alignment: 0,
+                Width: total,
+                Height: 1,
+                DepthOrArraySize: 1,
+                MipLevels: 1,
+                Format: DXGI_FORMAT_UNKNOWN,
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+                Flags: D3D12_RESOURCE_FLAG_NONE,
+            };
+            let mut rb: Option<ID3D12Resource> = None;
+            if device
+                .CreateCommittedResource(
+                    &heap,
+                    D3D12_HEAP_FLAG_NONE,
+                    &buf,
+                    D3D12_RESOURCE_STATE_COPY_DEST,
+                    None,
+                    &mut rb,
+                )
+                .is_err()
+            {
+                return;
+            }
+            let Some(rb) = rb else { return };
+            let old = SEM_BB_READBACK.swap(rb.into_raw() as usize, Ordering::SeqCst);
+            if old != 0 {
+                drop(ID3D12Resource::from_raw(old as *mut c_void));
+            }
+            SEM_BB_BUFSIZE.store(total, Ordering::SeqCst);
+        }
+        let rb_raw = SEM_BB_READBACK.load(Ordering::SeqCst) as *mut c_void;
+        let Some(readback) = ID3D12Resource::from_raw_borrowed(&rb_raw) else {
+            return;
+        };
+        // One-shot command objects (throttled caller -> infrequent).
+        let qd = D3D12_COMMAND_QUEUE_DESC {
+            Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+            Priority: 0,
+            Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
+            NodeMask: 0,
+        };
+        let Ok(queue) = device.CreateCommandQueue::<ID3D12CommandQueue>(&qd) else {
+            return;
+        };
+        let Ok(alloc) =
+            device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)
+        else {
+            return;
+        };
+        let Ok(list) = device.CreateCommandList::<_, _, ID3D12GraphicsCommandList>(
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            &alloc,
+            None,
+        ) else {
+            return;
+        };
+        record_transition(
+            &list,
+            backbuffer,
+            D3D12_RESOURCE_STATE_PRESENT,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+        );
+        let mut rb_dst = D3D12_TEXTURE_COPY_LOCATION {
+            pResource: ManuallyDrop::new(Some(readback.clone())),
+            Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { PlacedFootprint: fp },
+        };
+        let mut bb_src = D3D12_TEXTURE_COPY_LOCATION {
+            pResource: ManuallyDrop::new(Some(backbuffer.clone())),
+            Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
+        };
+        list.CopyTextureRegion(&rb_dst, 0, 0, 0, &bb_src, None);
+        ManuallyDrop::drop(&mut rb_dst.pResource);
+        ManuallyDrop::drop(&mut bb_src.pResource);
+        record_transition(
+            &list,
+            backbuffer,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_RESOURCE_STATE_PRESENT,
+        );
+        let Ok(fence) = device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) else {
+            return;
+        };
+        if !execute_and_wait(&queue, &list, &fence) {
+            return;
+        }
+        let row_pitch = fp.Footprint.RowPitch as usize;
+        let total_us = total as usize;
+        let swap = matches!(
+            bb_format,
+            DXGI_FORMAT_B8G8R8A8_UNORM | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
+        );
+        let range = D3D12_RANGE {
+            Begin: 0,
+            End: total_us,
+        };
+        let mut rmap: *mut c_void = std::ptr::null_mut();
+        if readback.Map(0, Some(&range), Some(&mut rmap)).is_err() || rmap.is_null() {
+            return;
+        }
+        let rb_bytes = std::slice::from_raw_parts(rmap as *const u8, total_us);
+        let (gw, gh) = (48u32, 27u32); // sample grid (16:9)
+        let mut head_votes = 0usize;
+        let mut votes = 0usize;
+        for gy in 0..gh {
+            for gx in 0..gw {
+                let x = (gx * bw / gw).min(bw - 1);
+                let y = (gy * bh / gh).min(bh - 1);
+                let (u, v) = (x as f32 / bw as f32, y as f32 / bh as f32);
+                if in_tip_or_bar_rect(u, v) {
+                    continue;
+                }
+                let (hr, hg, hb, a) = sample_portrait_rgba_cover(
+                    &hpx, hw as usize, hh as usize, x as usize, y as usize, bw as usize, bh as usize,
+                );
+                if a < 200 {
+                    continue; // only where the head is opaque
+                }
+                let (br, bgc, bbc) = match &bg {
+                    Some((bgw, bgh, bpx)) => {
+                        let (r, g, b, _) = sample_portrait_rgba_cover(
+                            bpx, *bgw, *bgh, x as usize, y as usize, bw as usize, bh as usize,
+                        );
+                        (r, g, b)
+                    }
+                    None => (0, 0, 0),
+                };
+                let o = y as usize * row_pitch + x as usize * 4;
+                if o + 4 > total_us {
+                    continue;
+                }
+                let (d0, d1, d2) = (rb_bytes[o] as u32, rb_bytes[o + 1] as u32, rb_bytes[o + 2] as u32);
+                let (dr, db) = if swap { (d2, d0) } else { (d0, d2) };
+                let dg = d1;
+                let diff = |a: u32, b: u32| a.abs_diff(b);
+                let diff_head = diff(hr, dr) + diff(hg, dg) + diff(hb, db);
+                let diff_bg = diff(br, dr) + diff(bgc, dg) + diff(bbc, db);
+                if diff_head < diff_bg {
+                    head_votes += 1;
+                }
+                votes += 1;
+            }
+        }
+        let empty = D3D12_RANGE { Begin: 0, End: 0 };
+        readback.Unmap(0, Some(&empty));
+        if votes == 0 {
+            return;
+        }
+        let pct = head_votes * 100 / votes;
+        GFX_PORTRAIT_HEAD_MATCH_PCT.store(pct, Ordering::SeqCst);
+        let n = GFX_PORTRAIT_HEAD_PROBE_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        // Track the CURRENT state (not a latch): the overlay demotes only while the movie actually shows
+        // the head, and resumes bridging if a bg-only artwork rotates in.
+        GFX_PORTRAIT_HEAD_ON_SCREEN.store(
+            (pct >= GFX_PORTRAIT_HEAD_MATCH_THRESHOLD) as usize,
+            Ordering::SeqCst,
+        );
+        if pct >= GFX_PORTRAIT_HEAD_MATCH_THRESHOLD {
+            GFX_PORTRAIT_HEAD_EVER.store(1, Ordering::SeqCst);
+        }
+        if n <= 3 || n % 32 == 0 {
+            append_autoload_debug(format_args!(
+                "gfx-head-probe #{n}: backbuffer head-match={pct}% (votes={votes}, threshold={GFX_PORTRAIT_HEAD_MATCH_THRESHOLD}) -> head_on_screen={}",
+                GFX_PORTRAIT_HEAD_ON_SCREEN.load(Ordering::SeqCst)
+            ));
+        }
+    }));
 }
 
 #[allow(clippy::too_many_arguments)]

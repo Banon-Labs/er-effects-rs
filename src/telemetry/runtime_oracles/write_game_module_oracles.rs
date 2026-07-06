@@ -2284,6 +2284,69 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_gfx_portrait_last_error",
             GFX_PORTRAIT_LAST_ERROR.load(Ordering::SeqCst),
         );
+        // BAKE path: head baked into the forged now-loading background (proven display), and whether a
+        // baked artwork was actually DISPLAYED (overlay demoted -> tips render above the in-movie head).
+        push_json_usize(
+            body,
+            "oracle_gfx_portrait_baked",
+            GFX_PORTRAIT_BAKED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gfx_portrait_baked_displayed",
+            GFX_PORTRAIT_BAKED_DISPLAYED.load(Ordering::SeqCst),
+        );
+        // PIXEL ORACLE: did the head actually reach the loading screen (backbuffer readback vs the
+        // captured head, excluding the tip/bar rects)? Resource-agnostic regression guard.
+        push_json_usize(
+            body,
+            "oracle_gfx_portrait_head_on_screen",
+            GFX_PORTRAIT_HEAD_ON_SCREEN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gfx_portrait_head_match_pct",
+            GFX_PORTRAIT_HEAD_MATCH_PCT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gfx_portrait_head_probe_count",
+            GFX_PORTRAIT_HEAD_PROBE_COUNT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gfx_portrait_head_ever",
+            GFX_PORTRAIT_HEAD_EVER.load(Ordering::SeqCst),
+        );
+        // PIVOT (er-effects-rs-jsm): player-stats loading text. `stats_text_built` = the stats bitmap was
+        // rendered from the game font; `tip_suppressed_hits` = native tip-refresh calls we no-op'd.
+        push_json_usize(
+            body,
+            "oracle_stats_text_built",
+            STATS_TEXT_BUILT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_tip_suppressed_hits",
+            KNOWLEDGE_TIP_SUPPRESSED_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_tip_suppress_installed",
+            KNOWLEDGE_TIP_REFRESH_INSTALLED.load(Ordering::SeqCst),
+        );
+        // `tip_advance_disable_installed` = the advance enabled-predicate detour is live;
+        // `tip_advance_suppressed_hits` = predicate calls we forced false (keyguide hidden + press inert).
+        push_json_usize(
+            body,
+            "oracle_tip_advance_disable_installed",
+            KNOWLEDGE_TIP_ADVANCE_ENABLED_INSTALLED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_tip_advance_suppressed_hits",
+            KNOWLEDGE_TIP_ADVANCE_SUPPRESSED_HITS.load(Ordering::SeqCst),
+        );
         push_json_usize(
             body,
             "oracle_overlay_gpu_fail_count",

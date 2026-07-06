@@ -358,3 +358,36 @@ pub(crate) static GFX_PORTRAIT_OVERLAY_YIELDS: AtomicUsize = AtomicUsize::new(0)
 pub(crate) const GFX_PORTRAIT_DEMOTE_REFILL: usize = 30;
 /// One-shot log latch for the first confirmed in-movie head upload.
 pub(crate) static GFX_PORTRAIT_FIRST_LOGGED: AtomicUsize = AtomicUsize::new(0);
+/// Count of forge builds that BAKED the live head into the now-loading background image. The forge is the
+/// PROVEN display path (it is exactly what GFx decodes + shows -- the "checker" we saw was our own forged
+/// placeholder), so baking the head into that image puts it in-movie under the native tips with no
+/// GPU-resource guessing. `oracle_gfx_portrait_baked`.
+pub(crate) static GFX_PORTRAIT_BAKED: AtomicUsize = AtomicUsize::new(0);
+/// 1 once a DISPLAYED artwork name is confirmed to carry the baked head (so the overlay demoted and the
+/// head renders UNDER the native tips in-movie). `oracle_gfx_portrait_baked_displayed`.
+pub(crate) static GFX_PORTRAIT_BAKED_DISPLAYED: AtomicUsize = AtomicUsize::new(0);
+/// One-shot log latch for the first post-capture RE-FORGE of the displayed rti with the baked head.
+pub(crate) static GFX_PORTRAIT_REFORGE_LOGGED: AtomicUsize = AtomicUsize::new(0);
+// === PIXEL ORACLE: is the head actually on the loading screen? ====================================
+// Resource-agnostic regression guard (er-effects-rs-jsm): during the loading window (overlay demoted),
+// read back the game's own composited BACKBUFFER and, over the head's opaque pixels EXCLUDING the tip/bar
+// rects, vote whether each sampled pixel is closer to the captured head or to the loading background.
+// This checks the pixels the USER sees, so it cannot be fooled by a "the re-forge ran" counter: if any
+// future change stops the head reaching the screen, the match % collapses. Calibrated against the user's
+// visual ground truth.
+/// Head-vs-background match percentage of the last backbuffer probe (0..100); high == the rendered head
+/// region matches the captured head (head is on screen), low == it matches the background (no head).
+pub(crate) static GFX_PORTRAIT_HEAD_MATCH_PCT: AtomicUsize = AtomicUsize::new(0);
+/// 1 once a probe crossed the head-present threshold (head confirmed on the loading screen), else 0.
+pub(crate) static GFX_PORTRAIT_HEAD_ON_SCREEN: AtomicUsize = AtomicUsize::new(0);
+/// Count of backbuffer head-probes performed (proves the oracle actually ran).
+pub(crate) static GFX_PORTRAIT_HEAD_PROBE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Run-level latch: 1 once ANY probe confirmed the head on screen (survives later bg-only frames /
+/// window reset within the run). This is the product-proof oracle for "the head rendered in-movie".
+pub(crate) static GFX_PORTRAIT_HEAD_EVER: AtomicUsize = AtomicUsize::new(0);
+/// Head-present threshold: a probe with `>=` this match percentage sets HEAD_ON_SCREEN. Tuned against the
+/// user's visual ground truth.
+pub(crate) const GFX_PORTRAIT_HEAD_MATCH_THRESHOLD: usize = 55;
+/// Cached readback buffer + its size for the head probe (dedicated; independent of the overlay's own).
+pub(crate) static SEM_BB_READBACK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SEM_BB_BUFSIZE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

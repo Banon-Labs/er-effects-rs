@@ -497,6 +497,35 @@ pub(crate) const LOADING_SCREEN_UPDATE_RVA: usize = 0x90a6b0;
 pub(crate) static LOADING_SCREEN_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static LOADING_SCREEN_UPDATE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static LOADING_SCREEN_UPDATE_HITS: AtomicUsize = AtomicUsize::new(0);
+/// `CS::KnowledgeLoadingScreen` tip-refresh (dump `FUN_14090a3f0` -> deobf/live `0x14090a300`, RVA
+/// 0x90a300). `fn(this)` -- picks the next tip msg id and SetTexts the title (`this+0xb28`) + body
+/// (`this+0xb88`). er-effects-rs-jsm PIVOT: we NO-OP it (skip the original) so the native tip title/body
+/// are never set -- our own player-stats text (overlay) shows in the tip region instead. Installed before
+/// the widget ctor so even the ctor's one-shot initial tip is suppressed.
+pub(crate) const KNOWLEDGE_TIP_REFRESH_RVA: usize = 0x90a300;
+pub(crate) static KNOWLEDGE_TIP_REFRESH_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static KNOWLEDGE_TIP_REFRESH_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static KNOWLEDGE_TIP_SUPPRESSED_HITS: AtomicUsize = AtomicUsize::new(0);
+/// `CS::KnowledgeLoadingScreen` tip-text SetText handles (CSScaleformValue): title `this+0xb28`
+/// ('Main/Knowledge/IetmName/Text_0'), body `this+0xb88` ('Main/Knowledge/ItemInfo/Text_0'). The
+/// suppression detour SetTexts both to empty after the original runs. (bd loading-tip-text-pipeline-RE.)
+pub(crate) const KNOWLEDGE_TIP_TITLE_HANDLE_OFFSET: usize = 0xb28;
+pub(crate) const KNOWLEDGE_TIP_BODY_HANDLE_OFFSET: usize = 0xb88;
+/// `CS::KnowledgeLoadingScreen` tip-advance "enabled" predicate lambda (dump `FUN_14090a1b0` ->
+/// deobf/live `0x14090a0c0`, content-matched shift -0xf0). `fn(functor) -> bool`; true only while the
+/// Main clip label == "Normal". The ctor registers ONE native menu action (input id 0x186be -- the
+/// keyguide's "press to advance the tip"): the base `MenuWindow::Update` trigger loop fires the action
+/// only when this predicate returns true, AND the per-update keyguide composer (vtable slot 7 -> slot 4)
+/// lists an action in the keyguide only while its enabled predicate is true. Forcing false therefore
+/// BOTH no-ops the advance press and durably hides the keyguide prompt (a one-shot SetText blank on the
+/// keyguide handle `this+0x380` would be overwritten by the per-update re-composition). The lambda is
+/// reached only through this screen's `_Func_impl` vftable, so no other menu is affected.
+/// (bd loading-keyguide-and-tip-advance-RE-2026-07-06.)
+pub(crate) const KNOWLEDGE_TIP_ADVANCE_ENABLED_RVA: usize = 0x90a0c0;
+pub(crate) static KNOWLEDGE_TIP_ADVANCE_ENABLED_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static KNOWLEDGE_TIP_ADVANCE_ENABLED_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static KNOWLEDGE_TIP_ADVANCE_SUPPRESSED_HITS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static LOADING_SCREEN_LAST_THIS: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static LOADING_SCREEN_LAST_DATA: AtomicUsize =
@@ -725,9 +754,23 @@ pub(crate) const SCALEFORM_REFCOUNT_RELEASE_RVA: usize = 0x112b7d0;
 /// `CS::CSTextureImage` -> its GFx-sampled HAL texture (the object whose ID3D12Resource GFx samples).
 /// Layout (FUN_140d68600): +0x00 vtable, +0x08 refcount, +0x10 pHALTexture, +0x2c/0x30 width/height.
 pub(crate) const CS_TEXTURE_IMAGE_HAL_TEX_OFFSET: usize = 0x10;
-/// Forged now-loading TPF dimension when the in-movie head path is active. The per-frame head copy
-/// resamples the (larger) live portrait down to the forged texture's own dims, so bounding the forged
-/// texture here keeps that per-frame CPU resample cheap (1024^2 ~= 1M samples) instead of resampling
-/// into a full-res boot-background texture (3840x2160 ~= 8M samples/frame -> loading-screen stutter).
-pub(crate) const FORGE_HEAD_TEX_DIM: u32 = 1024;
+// === Now-loading BackImage geometry -- SINGLE SOURCE OF TRUTH (er-effects-rs-jsm) =================
+// VERIFIED from the packed asset display list (scripts/gfx_display_list.py over menu/02_903_nowloading2
+// .gfx): stage 1920x1080 (16:9); the BackImage sprite places MENU_DummyLoad (char 36) 4096x2048 (2:1)
+// at IDENTITY, and that sprite is placed at root at scale 0.530365, tx=ty=0. So the artwork quad covers
+// stage (0,0)..(2172.4,1086.2) -- WIDER than the 16:9 stage -- and the VISIBLE region is the TOP-LEFT
+// (u<=1920/2172.4=0.8838, v<=1080/1086.2=0.9943) of the 2:1 texture, NOT its centre. The forge must
+// therefore build the replacement texture at the artwork's 2:1 aspect (so GFx maps texture->quad with no
+// horizontal stretch -- the earlier 1024x1024 square was stretched onto the 2:1 quad) and aspect-cover
+// (centre-crop, never stretch) the background + head into the visible top-left sub-rect. Every derived
+// value (forge dims, visible sub-rect, head placement) is computed from these five constants.
+pub(crate) const NOWLOADING_STAGE_W: f32 = 1920.0;
+pub(crate) const NOWLOADING_STAGE_H: f32 = 1080.0;
+pub(crate) const NOWLOADING_BACKIMAGE_TEX_W: u32 = 4096;
+pub(crate) const NOWLOADING_BACKIMAGE_TEX_H: u32 = 2048;
+pub(crate) const NOWLOADING_BACKIMAGE_SPRITE_SCALE: f32 = 0.530_364_99;
+/// The forge builds the replacement TPF at the artwork's native aspect but 1/`NOWLOADING_FORGE_DOWNSCALE`
+/// the resolution (4096x2048 -> 2048x1024): same 2:1 aspect (no stretch), 1/4 the memory, still wider
+/// than the visible 1920-px stage so texture->stage upscaling is negligible.
+pub(crate) const NOWLOADING_FORGE_DOWNSCALE: u32 = 2;
 

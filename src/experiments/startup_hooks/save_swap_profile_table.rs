@@ -324,6 +324,9 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     //    live tracking; the overlay is not running there).
     if portrait_lookat_enabled() {
         unsafe { maybe_update_gfx_loading_portrait(base) };
+        // PIVOT (er-effects-rs-jsm): build the player-stats text bitmap (game menu font) once the stats +
+        // font are readable, for the overlay to composite on top of the head in place of the native tips.
+        unsafe { maybe_build_stats_text() };
     } else {
         unsafe { maybe_reforge_loading_portrait(base) };
     }
