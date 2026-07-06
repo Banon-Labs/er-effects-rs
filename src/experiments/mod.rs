@@ -92,5 +92,10 @@ pub(crate) use submit::*;
 mod profiler;
 pub(crate) use profiler::*;
 
-include!("mod/product_core_own_stepper.rs");
-include!("mod/own_stepper_idx6_memory.rs");
+#[path = "mod/product_core_own_stepper.rs"]
+mod product_core_own_stepper;
+pub(crate) use product_core_own_stepper::*;
+
+#[path = "mod/own_stepper_idx6_memory.rs"]
+mod own_stepper_idx6_memory;
+pub(crate) use own_stepper_idx6_memory::*;

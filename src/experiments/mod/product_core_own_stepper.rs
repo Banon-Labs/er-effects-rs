@@ -1,3 +1,5 @@
+use super::*;
+
 pub(crate) const PRODUCT_CORE_BLOCKER_UNSEEN: usize = 0;
 pub(crate) const PRODUCT_CORE_BLOCKER_READY: usize = 1;
 pub(crate) const PRODUCT_CORE_BLOCKER_NO_TITLE_OWNER: usize = 2;
@@ -13,34 +15,34 @@ pub(crate) const PRODUCT_CORE_BLOCKER_PRESS_START: usize = 11;
 pub(crate) const PRODUCT_CORE_BLOCKER_TITLE_STATE: usize = 12;
 pub(crate) const PRODUCT_CORE_BLOCKER_UNKNOWN: usize = 13;
 
-static PRODUCT_AUTOLOAD_ARMED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PRODUCT_AUTOLOAD_ARMED: AtomicUsize = AtomicUsize::new(0);
 /// Armed from the reliable autoload-file channel (`own_stepper=1` / `cold_char_mount=1` in
 /// er-effects-autoload.txt) so the menu-free own-stepper + cold-char-mount paths can be enabled
 /// without depending on env-var propagation through Proton or game_directory_path() trigger files.
-static OWN_STEPPER_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
-static COLD_CHAR_MOUNT_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OWN_STEPPER_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static COLD_CHAR_MOUNT_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
 /// Armed from the reliable autoload-file channel (`own_load=1` in er-effects-autoload.txt) so the
 /// SAVE-SAFE verify-only OWN-LOAD buffer-feed probe (`own_load_drive`) runs without depending on
 /// env-var propagation through Proton.
-static OWN_LOAD_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OWN_LOAD_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
 /// Armed from the reliable autoload-file channel (`own_load_continue=1` in er-effects-autoload.txt)
 /// so the FINAL guarded `continue_confirm`/`SetState5` world-stream step (after the verify-only
 /// `own_load_drive` parse) runs without depending on env-var propagation through Proton.
 /// SAVE-WRITING when it fires -- gated hard on a REAL c30 + char fingerprint inside `own_load_drive`.
-static OWN_LOAD_CONTINUE_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OWN_LOAD_CONTINUE_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
 /// Armed from the reliable autoload-file channel (`own_dispatch=1` in er-effects-autoload.txt) so the
 /// OWN-LOAD m28 direct-enqueue lever (`AddDefaultFileLoadProcess`) runs without depending on env-var
 /// propagation through Proton. Defaults OFF; the lever ALSO requires `OWN_LOAD_CONTINUE_FIRED` at fire
 /// time, so arming this alone cannot dispatch on a vanilla native menu load. Touches only world-asset
 /// file-load streaming -- no save IO, cannot autosave.
-static OWN_DISPATCH_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OWN_DISPATCH_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
 /// Armed from the reliable autoload-file channel (`own_load_install_job=1` in er-effects-autoload.txt)
 /// so the menu-free LoadGame-JOB INSTALL lever runs without depending on env-var propagation through
 /// Proton. Defaults OFF. When armed (and `own_load` is armed so `own_load_drive` runs), the verify-only
 /// parse is followed by BUILD (`FUN_140826510`) + INSTALL (`FUN_1407a9560`) of the LoadGame
 /// MenuJobWithContext into `owner+0x130` -- INSTEAD of the guarded continue_confirm/SetState5. SAVE-SAFE
 /// (build + first-tick deser only READ the save; no SetState5, no autosave, no save write).
-static OWN_LOAD_INSTALL_JOB_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OWN_LOAD_INSTALL_JOB_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
 /// Monotonic count of LoadGame-JOB install-lever fires (build + install into owner+0x130). Exposed in
 /// telemetry as `oracle_own_load_install_job_fired` so a probe can confirm the lever actually ran.
 pub(crate) static OWN_LOAD_INSTALL_JOB_FIRED: AtomicU64 = AtomicU64::new(0);
@@ -149,7 +151,7 @@ pub(crate) static OWN_LOAD_STREAM_RECUR_FRAMES: AtomicU64 = AtomicU64::new(0);
 /// CSMenuMan dialog stack. After the pumped job reaches `state==Success`, the guarded SetState5
 /// transition fires ONCE to drive title->ingame. Takes precedence over own_load_install_job /
 /// own_load_continue. (autoload-world-load-coupled-to-csmenuman-dialog-verdict-2026-06-22)
-static OWN_LOAD_PUMP_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OWN_LOAD_PUMP_FILE_ARMED: AtomicUsize = AtomicUsize::new(0);
 /// The built LoadGame job pointer the recurring task pumps each frame. 0 == not built / not armed.
 /// Set once by `own_load_pump_fire`; read+ticked by the recurring observer's sibling pump.
 pub(crate) static OWN_LOAD_PUMP_JOB: AtomicUsize = AtomicUsize::new(0);
@@ -206,8 +208,10 @@ pub(crate) static TITLE_OWNER_SCAN_LAST_CANDIDATE: AtomicUsize =
 pub(crate) static TITLE_OWNER_SCAN_LAST_TABLE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_OWNER_SCAN_LAST_STATE_BITS: AtomicUsize = AtomicUsize::new(usize::MAX);
-static MENU_CONTINUE_ENTRY: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-static MENU_CONTINUE_ITEM: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_CONTINUE_ENTRY: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_CONTINUE_ITEM: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static MENU_WINDOW_JOB_CTOR_HITS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static MENU_WINDOW_JOB_CTOR_SEMANTIC_HITS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static MENU_WINDOW_JOB_CTOR_LAST_ITEM: AtomicUsize =
@@ -342,26 +346,34 @@ pub(crate) static TITLE_NATIVE_READY_PREDICATE_LAST_OBJECT: AtomicUsize =
 pub(crate) static TITLE_NATIVE_READY_PREDICATE_LAST_FLAGS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_NATIVE_READY_PREDICATE_LAST_MASKED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_NATIVE_READY_PREDICATE_LAST_RET: AtomicUsize = AtomicUsize::new(0);
-static B80_NATIVE_DISPATCHER_OWNER: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-static MENU_CONTINUE_ITEM_FIELD_LOG_COUNT: AtomicUsize =
+pub(crate) static B80_NATIVE_DISPATCHER_OWNER: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-static B80_DISPATCHER2_OBSERVE_COUNT: AtomicUsize =
+pub(crate) static MENU_CONTINUE_ITEM_FIELD_LOG_COUNT: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-static B80_DISPATCHER2_OBSERVE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-static MENU_CONTINUE_FUNCTOR: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-static MENU_CONTINUE_DOCALL: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-static MENU_CONTINUE_ROUTER: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-static MENU_CONTINUE_INDEX: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-static AUTOLOAD_PHASE_EPOCH: OnceLock<Instant> = OnceLock::new();
-static OWN_STEPPER_MENU_BUILD_STARTED_MS: AtomicU64 = AtomicU64::new(PHASE_TIMER_UNSET_MS);
-static OWN_STEPPER_S2_PHASE_STARTED_MS: AtomicU64 = AtomicU64::new(PHASE_TIMER_UNSET_MS);
+pub(crate) static B80_DISPATCHER2_OBSERVE_COUNT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static B80_DISPATCHER2_OBSERVE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static MENU_CONTINUE_FUNCTOR: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_CONTINUE_DOCALL: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_CONTINUE_ROUTER: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static MENU_CONTINUE_INDEX: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static AUTOLOAD_PHASE_EPOCH: OnceLock<Instant> = OnceLock::new();
+pub(crate) static OWN_STEPPER_MENU_BUILD_STARTED_MS: AtomicU64 =
+    AtomicU64::new(PHASE_TIMER_UNSET_MS);
+pub(crate) static OWN_STEPPER_S2_PHASE_STARTED_MS: AtomicU64 = AtomicU64::new(PHASE_TIMER_UNSET_MS);
 
-const PHASE_TIMER_UNSET_MS: u64 = u64::MAX;
-const PHASE_TIMER_ZERO_MS: u64 = 0;
-const U64_MAX_AS_U128: u128 = u64::MAX as u128;
+pub(crate) const PHASE_TIMER_UNSET_MS: u64 = u64::MAX;
+pub(crate) const PHASE_TIMER_ZERO_MS: u64 = 0;
+pub(crate) const U64_MAX_AS_U128: u128 = u64::MAX as u128;
 
-const PROFILE_SLOT_ACTIVATE_RVA: usize = ProfileLoadMenuRva::ProfileSlotActivate as usize;
-const PROFILE_LOAD_SELECTOR_TICK_RVA: usize = ProfileLoadMenuRva::ProfileLoadSelectorTick as usize;
+pub(crate) const PROFILE_SLOT_ACTIVATE_RVA: usize =
+    ProfileLoadMenuRva::ProfileSlotActivate as usize;
+pub(crate) const PROFILE_LOAD_SELECTOR_TICK_RVA: usize =
+    ProfileLoadMenuRva::ProfileLoadSelectorTick as usize;
 
 /// One-shot guard for `maybe_fire_tfc_continue` (0 = not yet fired).
 pub(crate) static TFC_CONTINUE_FIRED: AtomicUsize = AtomicUsize::new(0);
@@ -426,19 +438,19 @@ pub(crate) unsafe extern "system" fn title_update_detour(dialog: usize, delta: f
 /// region, which is otherwise flagged unreliable). `__fastcall(rcx=step, rdx, r8[, r9])`.
 pub(crate) const PAB_NODE_UPDATE_RVA: u32 = 0x7ad1c0;
 /// The built press-any-button job within the node-update receiver: `[step+0x130]`.
-const PAB_JOB_SLOT_130_OFFSET: usize = 0x130;
+pub(crate) const PAB_JOB_SLOT_130_OFFSET: usize = 0x130;
 /// The job's completion press-count the predicate 0x1407a9200 reads (>=2 == complete).
-const PAB_JOB_PRESS_COUNT_1E8_OFFSET: usize = 0x1e8;
+pub(crate) const PAB_JOB_PRESS_COUNT_1E8_OFFSET: usize = 0x1e8;
 /// The job's bound keycode (logged for identity validation + the documented fallback input bit).
-const PAB_JOB_KEYCODE_180_OFFSET: usize = 0x180;
+pub(crate) const PAB_JOB_KEYCODE_180_OFFSET: usize = 0x180;
 /// The "pressed" value the predicate treats as complete.
-const PAB_PRESS_COUNT_SATISFIED: u32 = 2;
+pub(crate) const PAB_PRESS_COUNT_SATISFIED: u32 = 2;
 /// Upper sanity bound for a plausible press-count (reject garbage/unreadable reads -> keep waiting).
-const PAB_COUNT_SANITY_MAX: u32 = 8;
+pub(crate) const PAB_COUNT_SANITY_MAX: u32 = 8;
 /// Frames the press-any-button job must be built+valid before we advance (screen settle).
-const PAB_ADVANCE_SETTLE_FRAMES: usize = 10;
+pub(crate) const PAB_ADVANCE_SETTLE_FRAMES: usize = 10;
 /// Minimum plausible heap pointer (reject not-yet-built / garbage job slots).
-const PAB_MIN_HEAP_PTR: usize = 0x10000;
+pub(crate) const PAB_MIN_HEAP_PTR: usize = 0x10000;
 
 /// Trampoline to the original PAB node-update. 0 = not hooked.
 pub(crate) static PAB_ADVANCE_ORIG: AtomicUsize = AtomicUsize::new(0);
@@ -472,64 +484,64 @@ pub(crate) unsafe extern "system" fn pab_node_update_detour(
 }
 
 #[derive(Clone, Copy)]
-struct MenuActionNode {
-    node: usize,
-    node_vt: usize,
-    registry: usize,
-    member_dialog: usize,
-    member_fn: usize,
-    member_adjust: usize,
-    window_item: usize,
+pub(crate) struct MenuActionNode {
+    pub(crate) node: usize,
+    pub(crate) node_vt: usize,
+    pub(crate) registry: usize,
+    pub(crate) member_dialog: usize,
+    pub(crate) member_fn: usize,
+    pub(crate) member_adjust: usize,
+    pub(crate) window_item: usize,
 }
 
 #[derive(Clone, Copy)]
-struct NativeContinueEntry {
-    entry: usize,
-    functor: usize,
-    do_call: usize,
-    router: usize,
-    index: usize,
-    cursor: i32,
+pub(crate) struct NativeContinueEntry {
+    pub(crate) entry: usize,
+    pub(crate) functor: usize,
+    pub(crate) do_call: usize,
+    pub(crate) router: usize,
+    pub(crate) index: usize,
+    pub(crate) cursor: i32,
 }
 
 #[derive(Clone, Copy)]
-struct NativeContinueItemAction {
-    item: usize,
-    result: usize,
-    result_vt: usize,
-    functor: usize,
-    do_call: usize,
+pub(crate) struct NativeContinueItemAction {
+    pub(crate) item: usize,
+    pub(crate) result: usize,
+    pub(crate) result_vt: usize,
+    pub(crate) functor: usize,
+    pub(crate) do_call: usize,
 }
 
 #[derive(Clone, Copy)]
-struct LiveDialogFireReady {
-    title_dialog: usize,
-    title_dialog_vt: usize,
-    capture_slot: usize,
-    capture: usize,
-    capture_vt: usize,
-    registry_vt: usize,
-    menu_opened_latch: usize,
-    menu_window: usize,
-    menu_window_vt: usize,
+pub(crate) struct LiveDialogFireReady {
+    pub(crate) title_dialog: usize,
+    pub(crate) title_dialog_vt: usize,
+    pub(crate) capture_slot: usize,
+    pub(crate) capture: usize,
+    pub(crate) capture_vt: usize,
+    pub(crate) registry_vt: usize,
+    pub(crate) menu_opened_latch: usize,
+    pub(crate) menu_window: usize,
+    pub(crate) menu_window_vt: usize,
 }
 
 #[derive(Clone, Copy)]
-struct ProfileLoadDialogReady {
-    dialog: usize,
-    dvt: usize,
-    bound: i32,
-    cursor_now: i32,
-    cursor_target: i32,
-    expected_slot: i32,
-    load_activate: usize,
-    load_job_ctx: usize,
-    load_job_ctx_vt: usize,
-    player_game_data: usize,
+pub(crate) struct ProfileLoadDialogReady {
+    pub(crate) dialog: usize,
+    pub(crate) dvt: usize,
+    pub(crate) bound: i32,
+    pub(crate) cursor_now: i32,
+    pub(crate) cursor_target: i32,
+    pub(crate) expected_slot: i32,
+    pub(crate) load_activate: usize,
+    pub(crate) load_job_ctx: usize,
+    pub(crate) load_job_ctx_vt: usize,
+    pub(crate) player_game_data: usize,
 }
 
 #[derive(Clone, Copy)]
-enum StartupModalBlockingState {
+pub(crate) enum StartupModalBlockingState {
     Clear,
     Blocking {
         dialog: usize,
@@ -539,31 +551,31 @@ enum StartupModalBlockingState {
 }
 
 pub(crate) struct ProductCoreAutoloadReady {
-    committed: i32,
-    requested: i32,
-    table: usize,
-    session: usize,
-    game_data_man: usize,
-    profile_summary: usize,
-    iodev: usize,
-    heap_allocator: usize,
-    title_dialog: usize,
-    title_in_loop: bool,
-    title_in_textfadeout: bool,
-    menu_opened_latch: usize,
-    press_start_proxy: usize,
-    press_start_context: usize,
+    pub(crate) committed: i32,
+    pub(crate) requested: i32,
+    pub(crate) table: usize,
+    pub(crate) session: usize,
+    pub(crate) game_data_man: usize,
+    pub(crate) profile_summary: usize,
+    pub(crate) iodev: usize,
+    pub(crate) heap_allocator: usize,
+    pub(crate) title_dialog: usize,
+    pub(crate) title_in_loop: bool,
+    pub(crate) title_in_textfadeout: bool,
+    pub(crate) menu_opened_latch: usize,
+    pub(crate) press_start_proxy: usize,
+    pub(crate) press_start_context: usize,
 }
 
-struct TitlePressButtonComponent {
-    proxy: usize,
-    context: usize,
+pub(crate) struct TitlePressButtonComponent {
+    pub(crate) proxy: usize,
+    pub(crate) context: usize,
 }
 
-struct TitleDialogState {
-    in_loop: bool,
-    in_textfadeout: bool,
-    menu_opened_latch: usize,
+pub(crate) struct TitleDialogState {
+    pub(crate) in_loop: bool,
+    pub(crate) in_textfadeout: bool,
+    pub(crate) menu_opened_latch: usize,
 }
 
 /// OWN-THE-STEPPER step 2 (the load driver): runs IN-CONTEXT at idx10 (STEP_MenuJobWait,
