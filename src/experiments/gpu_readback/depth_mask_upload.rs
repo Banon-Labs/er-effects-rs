@@ -596,9 +596,85 @@ unsafe fn upload_rgba_to_texture_inner(
     let Some(dst) = (unsafe { find_d3d12_resource(dst_gpu_child) }) else {
         return false;
     };
+    unsafe { copy_rgba_into_resource(&dst, w, h, pixels) }
+}
+
+/// Candidate A (er-effects-rs-jsm) per-frame in-movie copy: resolve the GFx-sampled `ID3D12Resource` for
+/// the Scaleform HAL texture `hal` (deterministic, dim-matched to the forged `want_dim`), aspect-cover
+/// resample the live head `spx` (`sw`x`sh`) down to that resource's dims, and CopyTextureRegion it in.
+/// Returns the destination dims on success. Fail-open (`None`) leaves the Present-overlay in charge.
+pub(crate) unsafe fn upload_head_into_gfx_texture(
+    hal: usize,
+    want_dim: u32,
+    sw: u32,
+    sh: u32,
+    spx: &[u8],
+) -> Option<(u32, u32)> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        if sw == 0 || sh == 0 || spx.len() < (sw as usize) * (sh as usize) * RGBA8_BPP {
+            return None;
+        }
+        let dst = resolve_gfx_hal_resource(hal, want_dim, want_dim)?;
+        let desc: D3D12_RESOURCE_DESC = dst.GetDesc();
+        let dw = desc.Width as u32;
+        let dh = desc.Height;
+        if dw == 0 || dh == 0 || dw > MAX_RT_DIM || dh > MAX_RT_DIM {
+            return None;
+        }
+        let resampled = cover_resample_rgba8(spx, sw, sh, dw, dh);
+        if copy_rgba_into_resource(&dst, dw, dh, &resampled) {
+            Some((dw, dh))
+        } else {
+            None
+        }
+    }))
+    .ok()
+    .flatten()
+}
+
+/// Single-sample aspect-cover resample of tightly-packed RGBA8 `spx` (`sw`x`sh`) into a fresh `dw`x`dh`
+/// RGBA8 buffer: preserve aspect, scale until the destination is covered, crop the excess in source
+/// space (the same mapping `sample_portrait_rgba_cover` uses for the Present composite). No supersample.
+pub(crate) fn cover_resample_rgba8(spx: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) -> Vec<u8> {
+    let (sw, sh, dw, dh) = (sw as usize, sh as usize, dw as usize, dh as usize);
+    let mut out = vec![0u8; dw * dh * RGBA8_BPP];
+    if sw == 0 || sh == 0 {
+        return out;
+    }
+    let scale = (dw as f32 / sw as f32).max(dh as f32 / sh as f32);
+    let visible_w = dw as f32 / scale;
+    let visible_h = dh as f32 / scale;
+    let off_x = (sw as f32 - visible_w) * 0.5;
+    let off_y = (sh as f32 - visible_h) * 0.5;
+    for y in 0..dh {
+        let src_y = ((y as f32 + 0.5) / dh as f32) * visible_h + off_y;
+        let sy = (src_y.floor().max(0.0) as usize).min(sh - 1);
+        let src_row = sy * sw;
+        let dst_row = y * dw;
+        for x in 0..dw {
+            let src_x = ((x as f32 + 0.5) / dw as f32) * visible_w + off_x;
+            let sx = (src_x.floor().max(0.0) as usize).min(sw - 1);
+            let so = (src_row + sx) * RGBA8_BPP;
+            let d_o = (dst_row + x) * RGBA8_BPP;
+            if so + RGBA8_BPP <= spx.len() {
+                out[d_o..d_o + RGBA8_BPP].copy_from_slice(&spx[so..so + RGBA8_BPP]);
+            }
+        }
+    }
+    out
+}
+
+/// Record + submit a CopyTextureRegion of a tightly-packed RGBA8 buffer (`w`x`h`, must match `dst`'s
+/// dims) into subresource 0 of an already-resolved game texture `dst`, on our OWN queue with a CPU fence
+/// wait. `dst` is borrowed (never Released). `false` on any COM failure or dim mismatch. Never Releases
+/// the game resource; the barrier clone is balanced by `record_transition`.
+unsafe fn copy_rgba_into_resource(dst: &ID3D12Resource, w: u32, h: u32, pixels: &[u8]) -> bool {
+    if pixels.len() < (w as usize) * (h as usize) * RGBA8_BPP {
+        return false;
+    }
     let desc: D3D12_RESOURCE_DESC = unsafe { dst.GetDesc() };
     if desc.Width as u32 != w || desc.Height != h {
-        return false; // dim mismatch -- caller must match (e.g. 1024x1024 checker <- 1024 portrait)
+        return false; // dim mismatch -- caller must match the destination texture's own size
     }
     let mut device_opt: Option<ID3D12Device> = None;
     if unsafe { dst.GetDevice(&mut device_opt) }.is_err() {
@@ -715,7 +791,7 @@ unsafe fn upload_rgba_to_texture_inner(
     unsafe {
         record_transition(
             &list,
-            &dst,
+            dst,
             D3D12_RESOURCE_STATE_COMMON,
             D3D12_RESOURCE_STATE_COPY_DEST,
         )
@@ -740,7 +816,7 @@ unsafe fn upload_rgba_to_texture_inner(
     unsafe {
         record_transition(
             &list,
-            &dst,
+            dst,
             D3D12_RESOURCE_STATE_COPY_DEST,
             D3D12_RESOURCE_STATE_COMMON,
         )

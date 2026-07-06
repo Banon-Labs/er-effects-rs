@@ -313,3 +313,81 @@ pub(crate) static PROFILE_SIZE_PATCHED: AtomicUsize = AtomicUsize::new(0);
 /// (GILM not resident at construction) `*envObj` stays 0 -> head is unlit/dark. So
 /// `*(renderer+0x760)` then deref again = the residency oracle (non-zero = IBL built).
 pub(crate) const PROFILE_RENDERER_ENV_REGION_OFFSET: usize = 0x760;
+
+// === Candidate A (in-movie GFx head) runtime semaphores (er-effects-rs-jsm) =======================
+// All read-only oracles for the `maybe_update_gfx_loading_portrait` path except the demote credit,
+// which the Present-overlay decrements to yield the head draw to the movie when the in-movie head is
+// live (so the native tips/bar render above it). Emitted into er-effects-telemetry.json.
+/// Cumulative successful per-frame copies of the live head INTO the displayed GFx movie texture (the
+/// `oracle_gfx_portrait_uploads` proof: >0 == the head is inside the movie, under the native tips).
+pub(crate) static GFX_PORTRAIT_UPLOADS: AtomicUsize = AtomicUsize::new(0);
+/// Cumulative resolves of the displayed `CSTextureImage` by name (name-change re-resolves; cached in
+/// between). `oracle_gfx_portrait_resolves`.
+pub(crate) static GFX_PORTRAIT_RESOLVES: AtomicUsize = AtomicUsize::new(0);
+/// Cumulative resolve failures (repo singleton null, resolver returned 0, or bad HAL pointer) --
+/// each leaves the Present-overlay fallback in charge. `oracle_gfx_portrait_resolve_fails`.
+pub(crate) static GFX_PORTRAIT_RESOLVE_FAILS: AtomicUsize = AtomicUsize::new(0);
+/// Last resolved `CSTextureImage*` (AddRef'd, held) and its GFx-sampled HAL texture pointer; 0 = none.
+/// The image ref is dropped (Release) when the displayed name changes or the window resets.
+pub(crate) static GFX_PORTRAIT_CACHED_IMG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static GFX_PORTRAIT_CACHED_HAL: AtomicUsize = AtomicUsize::new(0);
+/// A previously-cached image ref stranded by an OFF-game-thread window reset; the game-thread updater
+/// Releases it on its next tick (Scaleform refcount frees must run on the game thread).
+pub(crate) static GFX_PORTRAIT_ORPHAN_IMG: AtomicUsize = AtomicUsize::new(0);
+/// Displayed-texture dims last written (`(w<<16)|h`), for the size/format oracle. `oracle_gfx_portrait_hal_dims`.
+pub(crate) static GFX_PORTRAIT_HAL_DIMS: AtomicUsize = AtomicUsize::new(0);
+/// Last error code from the updater (0=ok/none, 1=repo-null, 2=no-name, 3=resolve-0, 4=bad-hal,
+/// 5=upload-failed). `oracle_gfx_portrait_last_error`.
+pub(crate) static GFX_PORTRAIT_LAST_ERROR: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const GFX_PORTRAIT_ERR_NONE: usize = 0;
+pub(crate) const GFX_PORTRAIT_ERR_REPO_NULL: usize = 1;
+pub(crate) const GFX_PORTRAIT_ERR_NO_NAME: usize = 2;
+pub(crate) const GFX_PORTRAIT_ERR_RESOLVE_ZERO: usize = 3;
+pub(crate) const GFX_PORTRAIT_ERR_BAD_HAL: usize = 4;
+pub(crate) const GFX_PORTRAIT_ERR_UPLOAD_FAILED: usize = 5;
+/// Present-overlay demotion credit: the game-thread updater refills this to `GFX_PORTRAIT_DEMOTE_REFILL`
+/// on every successful in-movie upload; the Present-overlay decrements it each frame and, while > 0,
+/// SKIPS drawing the head (the movie owns the display, tips render on top). If the updater stalls for
+/// more than the refill window the credit drains to 0 and the overlay resumes -- fail-open, so the
+/// working overlay is never regressed even if the in-movie path degrades. `oracle_gfx_portrait_demote_credit`.
+pub(crate) static GFX_PORTRAIT_DEMOTE_CREDIT: AtomicUsize = AtomicUsize::new(0);
+/// Presents of overlay-head draw SKIPPED because the in-movie head was live (proof the handoff engaged).
+pub(crate) static GFX_PORTRAIT_OVERLAY_YIELDS: AtomicUsize = AtomicUsize::new(0);
+/// Refill count (in Present frames) granted per successful in-movie upload. The head updates ~15/s and
+/// Present runs faster, so this must comfortably span the gap between two uploads.
+pub(crate) const GFX_PORTRAIT_DEMOTE_REFILL: usize = 30;
+/// One-shot log latch for the first confirmed in-movie head upload.
+pub(crate) static GFX_PORTRAIT_FIRST_LOGGED: AtomicUsize = AtomicUsize::new(0);
+/// Count of forge builds that BAKED the live head into the now-loading background image. The forge is the
+/// PROVEN display path (it is exactly what GFx decodes + shows -- the "checker" we saw was our own forged
+/// placeholder), so baking the head into that image puts it in-movie under the native tips with no
+/// GPU-resource guessing. `oracle_gfx_portrait_baked`.
+pub(crate) static GFX_PORTRAIT_BAKED: AtomicUsize = AtomicUsize::new(0);
+/// 1 once a DISPLAYED artwork name is confirmed to carry the baked head (so the overlay demoted and the
+/// head renders UNDER the native tips in-movie). `oracle_gfx_portrait_baked_displayed`.
+pub(crate) static GFX_PORTRAIT_BAKED_DISPLAYED: AtomicUsize = AtomicUsize::new(0);
+/// One-shot log latch for the first post-capture RE-FORGE of the displayed rti with the baked head.
+pub(crate) static GFX_PORTRAIT_REFORGE_LOGGED: AtomicUsize = AtomicUsize::new(0);
+// === PIXEL ORACLE: is the head actually on the loading screen? ====================================
+// Resource-agnostic regression guard (er-effects-rs-jsm): during the loading window (overlay demoted),
+// read back the game's own composited BACKBUFFER and, over the head's opaque pixels EXCLUDING the tip/bar
+// rects, vote whether each sampled pixel is closer to the captured head or to the loading background.
+// This checks the pixels the USER sees, so it cannot be fooled by a "the re-forge ran" counter: if any
+// future change stops the head reaching the screen, the match % collapses. Calibrated against the user's
+// visual ground truth.
+/// Head-vs-background match percentage of the last backbuffer probe (0..100); high == the rendered head
+/// region matches the captured head (head is on screen), low == it matches the background (no head).
+pub(crate) static GFX_PORTRAIT_HEAD_MATCH_PCT: AtomicUsize = AtomicUsize::new(0);
+/// 1 once a probe crossed the head-present threshold (head confirmed on the loading screen), else 0.
+pub(crate) static GFX_PORTRAIT_HEAD_ON_SCREEN: AtomicUsize = AtomicUsize::new(0);
+/// Count of backbuffer head-probes performed (proves the oracle actually ran).
+pub(crate) static GFX_PORTRAIT_HEAD_PROBE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Run-level latch: 1 once ANY probe confirmed the head on screen (survives later bg-only frames /
+/// window reset within the run). This is the product-proof oracle for "the head rendered in-movie".
+pub(crate) static GFX_PORTRAIT_HEAD_EVER: AtomicUsize = AtomicUsize::new(0);
+/// Head-present threshold: a probe with `>=` this match percentage sets HEAD_ON_SCREEN. Tuned against the
+/// user's visual ground truth.
+pub(crate) const GFX_PORTRAIT_HEAD_MATCH_THRESHOLD: usize = 55;
+/// Cached readback buffer + its size for the head probe (dedicated; independent of the overlay's own).
+pub(crate) static SEM_BB_READBACK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SEM_BB_BUFSIZE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

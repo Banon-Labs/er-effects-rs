@@ -318,6 +318,9 @@ pub(crate) static START_TITLE_FLOW_CONTEXT_RECORD_REGULATION: Once = Once::new()
 pub(crate) static START_PROFILE_STATS_TEXT: Once = Once::new();
 pub(crate) static START_NOW_LOADING_HELPER_OBSERVER: Once = Once::new();
 pub(crate) static START_LOADING_BG_REPLACE_BIND: Once = Once::new();
+/// One-shot install of the loading-tip suppression detour (er-effects-rs-jsm). Installed at DLL attach,
+/// BEFORE the KnowledgeLoadingScreen ctor sets the first tip (~15s), so no native tip is ever set.
+pub(crate) static START_TIP_SUPPRESSION: Once = Once::new();
 /// One-shot install latch for the D3D12 Present overlay (the deterministic loading-portrait display path).
 pub(crate) static START_PRESENT_OVERLAY: Once = Once::new();
 pub(crate) static START_PROFILE_RENDERER_TEARDOWN_SPARE: Once = Once::new();

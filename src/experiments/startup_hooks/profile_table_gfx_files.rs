@@ -140,6 +140,13 @@ fn build_loading_bg_replacement_tpf(symbol: &str) -> Option<Vec<u8>> {
 }
 
 fn build_portrait_tpf(symbol: &str) -> Option<Vec<u8>> {
+    // Candidate A (er-effects-rs-jsm): on the live-head path, BAKE the head into the forged now-loading
+    // background image (the proven display path), built at the artwork's true 2:1 aspect with the
+    // background + head aspect-cover CENTRE-CROPPED into the visible sub-rect -- never stretched. GFx shows
+    // it in-movie under the native tips; the overlay demotes once a baked artwork is displayed.
+    if gfx_loading_portrait_enabled() {
+        return build_baked_loading_bg(symbol);
+    }
     // Default product behavior: persist the chosen boot background (TOML override, explicit ERBGRA01
     // override, or latest local Steam screenshot) through the native MENU_Load_* GFX background too. This
     // keeps the pre-native boot screen and the game's loading screen visually continuous. Users can opt out
@@ -1001,6 +1008,15 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
     };
     TITLE_SCALEFORM_FILE_OPEN_LAST_RET.store(ret, Ordering::SeqCst);
     TITLE_SCALEFORM_FILE_OPEN_LAST_RET_VTABLE.store(ret_vtable, Ordering::SeqCst);
+
+    // Capture the game's menu font (font:/<locale>/font.gfx) for our loading-screen stats text (read-only
+    // copy of the file's own GFX payload; er-effects-rs-jsm). Observe-only, one-shot.
+    if base != null
+        && (unsafe { bounded_ascii_contains(url, b"font.gfx") }
+            || unsafe { bounded_ascii_contains(url, b"font.swf") })
+    {
+        unsafe { capture_menu_font_gfx(base, ret) };
+    }
 
     if is_title_logo || is_title_05_000 || is_profile_05_010 {
         let logo_hit = if is_title_logo {
