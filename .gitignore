@@ -30,3 +30,6 @@ offline-launcher.exe
 # Third-party reference binaries for RE/compat analysis (copyrighted; NEVER commit,
 # NEVER bundle into product/release/target). Seamless Co-op (ersc.dll) lives here.
 /vendor/
+
+# scratch analysis dumps (game-derived; never commit)
+.auto/scratch-jsm/
