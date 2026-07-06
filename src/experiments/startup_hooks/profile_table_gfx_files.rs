@@ -140,6 +140,26 @@ fn build_loading_bg_replacement_tpf(symbol: &str) -> Option<Vec<u8>> {
 }
 
 fn build_portrait_tpf(symbol: &str) -> Option<Vec<u8>> {
+    // Candidate A (er-effects-rs-jsm): when the in-movie live-head path is active, build the forged
+    // MENU_Load_ texture at a BOUNDED FORGE_HEAD_TEX_DIM so the per-frame head copy resamples the (larger)
+    // live portrait into a small destination cheaply. Content is the boot background (cover-scaled to that
+    // dim -> visually continuous placeholder until the first live head lands) or the checker fallback. The
+    // displayed artwork is then swapped to the live head every frame by maybe_update_gfx_loading_portrait.
+    if gfx_loading_portrait_enabled() {
+        let dim = FORGE_HEAD_TEX_DIM;
+        let pixels = boot_bg_image_rgba_clone()
+            .map(|(w, h, px)| cover_resample_rgba8(&px, w as u32, h as u32, dim, dim))
+            .unwrap_or_else(|| {
+                er_tpf::DdsImage::checker(dim, dim, 64, [255, 0, 255, 255], [255, 255, 0, 255]).pixels
+            });
+        let dds = er_tpf::DdsImage {
+            width: dim,
+            height: dim,
+            pixels,
+        }
+        .to_dds_bytes_with(er_tpf::DdsHeaderMode::LegacyRgba8);
+        return er_tpf::Tpf::single_pc(symbol, dds, 1).build().ok();
+    }
     // Default product behavior: persist the chosen boot background (TOML override, explicit ERBGRA01
     // override, or latest local Steam screenshot) through the native MENU_Load_* GFX background too. This
     // keeps the pre-native boot screen and the game's loading screen visually continuous. Users can opt out

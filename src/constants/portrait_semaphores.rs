@@ -313,3 +313,48 @@ pub(crate) static PROFILE_SIZE_PATCHED: AtomicUsize = AtomicUsize::new(0);
 /// (GILM not resident at construction) `*envObj` stays 0 -> head is unlit/dark. So
 /// `*(renderer+0x760)` then deref again = the residency oracle (non-zero = IBL built).
 pub(crate) const PROFILE_RENDERER_ENV_REGION_OFFSET: usize = 0x760;
+
+// === Candidate A (in-movie GFx head) runtime semaphores (er-effects-rs-jsm) =======================
+// All read-only oracles for the `maybe_update_gfx_loading_portrait` path except the demote credit,
+// which the Present-overlay decrements to yield the head draw to the movie when the in-movie head is
+// live (so the native tips/bar render above it). Emitted into er-effects-telemetry.json.
+/// Cumulative successful per-frame copies of the live head INTO the displayed GFx movie texture (the
+/// `oracle_gfx_portrait_uploads` proof: >0 == the head is inside the movie, under the native tips).
+pub(crate) static GFX_PORTRAIT_UPLOADS: AtomicUsize = AtomicUsize::new(0);
+/// Cumulative resolves of the displayed `CSTextureImage` by name (name-change re-resolves; cached in
+/// between). `oracle_gfx_portrait_resolves`.
+pub(crate) static GFX_PORTRAIT_RESOLVES: AtomicUsize = AtomicUsize::new(0);
+/// Cumulative resolve failures (repo singleton null, resolver returned 0, or bad HAL pointer) --
+/// each leaves the Present-overlay fallback in charge. `oracle_gfx_portrait_resolve_fails`.
+pub(crate) static GFX_PORTRAIT_RESOLVE_FAILS: AtomicUsize = AtomicUsize::new(0);
+/// Last resolved `CSTextureImage*` (AddRef'd, held) and its GFx-sampled HAL texture pointer; 0 = none.
+/// The image ref is dropped (Release) when the displayed name changes or the window resets.
+pub(crate) static GFX_PORTRAIT_CACHED_IMG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static GFX_PORTRAIT_CACHED_HAL: AtomicUsize = AtomicUsize::new(0);
+/// A previously-cached image ref stranded by an OFF-game-thread window reset; the game-thread updater
+/// Releases it on its next tick (Scaleform refcount frees must run on the game thread).
+pub(crate) static GFX_PORTRAIT_ORPHAN_IMG: AtomicUsize = AtomicUsize::new(0);
+/// Displayed-texture dims last written (`(w<<16)|h`), for the size/format oracle. `oracle_gfx_portrait_hal_dims`.
+pub(crate) static GFX_PORTRAIT_HAL_DIMS: AtomicUsize = AtomicUsize::new(0);
+/// Last error code from the updater (0=ok/none, 1=repo-null, 2=no-name, 3=resolve-0, 4=bad-hal,
+/// 5=upload-failed). `oracle_gfx_portrait_last_error`.
+pub(crate) static GFX_PORTRAIT_LAST_ERROR: AtomicUsize = AtomicUsize::new(0);
+pub(crate) const GFX_PORTRAIT_ERR_NONE: usize = 0;
+pub(crate) const GFX_PORTRAIT_ERR_REPO_NULL: usize = 1;
+pub(crate) const GFX_PORTRAIT_ERR_NO_NAME: usize = 2;
+pub(crate) const GFX_PORTRAIT_ERR_RESOLVE_ZERO: usize = 3;
+pub(crate) const GFX_PORTRAIT_ERR_BAD_HAL: usize = 4;
+pub(crate) const GFX_PORTRAIT_ERR_UPLOAD_FAILED: usize = 5;
+/// Present-overlay demotion credit: the game-thread updater refills this to `GFX_PORTRAIT_DEMOTE_REFILL`
+/// on every successful in-movie upload; the Present-overlay decrements it each frame and, while > 0,
+/// SKIPS drawing the head (the movie owns the display, tips render on top). If the updater stalls for
+/// more than the refill window the credit drains to 0 and the overlay resumes -- fail-open, so the
+/// working overlay is never regressed even if the in-movie path degrades. `oracle_gfx_portrait_demote_credit`.
+pub(crate) static GFX_PORTRAIT_DEMOTE_CREDIT: AtomicUsize = AtomicUsize::new(0);
+/// Presents of overlay-head draw SKIPPED because the in-movie head was live (proof the handoff engaged).
+pub(crate) static GFX_PORTRAIT_OVERLAY_YIELDS: AtomicUsize = AtomicUsize::new(0);
+/// Refill count (in Present frames) granted per successful in-movie upload. The head updates ~15/s and
+/// Present runs faster, so this must comfortably span the gap between two uploads.
+pub(crate) const GFX_PORTRAIT_DEMOTE_REFILL: usize = 30;
+/// One-shot log latch for the first confirmed in-movie head upload.
+pub(crate) static GFX_PORTRAIT_FIRST_LOGGED: AtomicUsize = AtomicUsize::new(0);

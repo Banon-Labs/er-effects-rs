@@ -694,3 +694,40 @@ pub(crate) static LOADING_BG_PORTRAIT_RGBA_VERSION: AtomicUsize = AtomicUsize::n
 /// One-shot log latch for the live-display-feed (built RT content -> overlay).
 pub(crate) static PROFILE_LIVE_FEED_LOGGED: AtomicUsize = AtomicUsize::new(0);
 
+// === Candidate A: live head INSIDE the now-loading GFx movie (er-effects-rs-jsm) ==================
+// STATIC-RE PROVEN 2026-07-05 (bd tooltip-above-portrait-VERDICT-2026-07-05, gfx-decoded-tex-
+// deterministic-resolve-2026-07-05): the texture GFx actually DISPLAYS for a MENU_Load_NNNNN
+// background is a `CS::CSTextureImage` held in the Scaleform tex repository name-map at
+// `*(GLOBAL_SCALEFORM_TEX_REPOSITORY)+0x80`, resolvable BY NAME (the forge's bare symbol) via the
+// resolver below. Its GFx-SAMPLED HAL texture is `CSTextureImage+0x10`; a per-frame CopyTextureRegion
+// into that resource puts the head inside the movie, so the movie's own Gauge_3 bar (depth 5) and
+// tip/keyguide text (depth 11) render ABOVE it natively (BackImage artwork is depth 3). This is the
+// only path that layers native tips above the portrait -- the Present-overlay draws after the whole
+// GFx pass and structurally cannot. Reconciles the "mechanism A failed" history: those uploads hit the
+// CS-side GetResCap CSGxTexture (TexResCap+0x78), which Scaleform does NOT sample; the CSTextureImage
+// HAL texture is a different object the history never tested.
+/// `GLOBAL_ScaleformTexRepository` singleton pointer (absolute 0x143d82510 in BOTH the dump and the
+/// deobf/live binary -> data RVA 0x3d82510). The resolver PANICS (non-returning) if this is null, so it
+/// MUST be null-checked (graphics up) before the call. Ground-truthed: the live resolver at RVA
+/// 0xd7c940 loads exactly this RIP-relative address.
+pub(crate) const GLOBAL_SCALEFORM_TEX_REPOSITORY_RVA: usize = 0x3d82510;
+/// GFx-displayed-texture resolver `FUN_140d7c9f0` (dump 0x140d7c9f0 -> deobf 0x140d7c940, shift -0xb0,
+/// content-unique). `fn(param1_IGNORED /rcx/, out: *mut *mut CSTextureImage /rdx/, name: *const u16
+/// /r8/)`. Ignores rcx (loads the repo singleton itself), tail-calls FUN_140d63ce0(repo, out, name, 0):
+/// searches the name map at repo+0x80; HIT stores entry+0x50, MISS builds+inserts a CSTextureImage via
+/// the GetResCap bridge. `*out` becomes an AddRef'd (owned) `CSTextureImage*`, or 0. Caller must Release.
+pub(crate) const SCALEFORM_TEX_RESOLVE_RVA: usize = 0xd7c940;
+/// Scaleform `RefCountImpl` Release `thunk_FUN_14112b7f0` (dump 0x14112b7f0 -> deobf 0x14112b7d0, shift
+/// -0x20, content-unique). `fn(obj /rcx/)`; decrements the refcount at obj+0x08 and frees at 0. Used to
+/// drop the resolver's owned ref on the CSTextureImage when the displayed name changes / the window ends.
+/// RVA = deobf 0x14112b7d0 - base 0x140000000 = 0x112b7d0 (game_rva adds base back).
+pub(crate) const SCALEFORM_REFCOUNT_RELEASE_RVA: usize = 0x112b7d0;
+/// `CS::CSTextureImage` -> its GFx-sampled HAL texture (the object whose ID3D12Resource GFx samples).
+/// Layout (FUN_140d68600): +0x00 vtable, +0x08 refcount, +0x10 pHALTexture, +0x2c/0x30 width/height.
+pub(crate) const CS_TEXTURE_IMAGE_HAL_TEX_OFFSET: usize = 0x10;
+/// Forged now-loading TPF dimension when the in-movie head path is active. The per-frame head copy
+/// resamples the (larger) live portrait down to the forged texture's own dims, so bounding the forged
+/// texture here keeps that per-frame CPU resample cheap (1024^2 ~= 1M samples) instead of resampling
+/// into a full-res boot-background texture (3840x2160 ~= 8M samples/frame -> loading-screen stutter).
+pub(crate) const FORGE_HEAD_TEX_DIM: u32 = 1024;
+

@@ -2240,6 +2240,50 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_loading_bar_final_hits",
             LOADING_SCREEN_BAR_FINAL_HITS.load(Ordering::SeqCst),
         );
+        // CANDIDATE A (er-effects-rs-jsm): live head copied INTO the displayed now-loading GFx texture so
+        // the native tips/bar render above it. `uploads > 0` == the head is in the movie; `overlay_yields`
+        // proves the Present-overlay demoted (stopped drawing over the tips); `demote_credit` is the live
+        // handoff level; `last_error` names the current fail-open reason (0 = ok).
+        push_json_usize(
+            body,
+            "oracle_gfx_portrait_uploads",
+            GFX_PORTRAIT_UPLOADS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gfx_portrait_resolves",
+            GFX_PORTRAIT_RESOLVES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gfx_portrait_resolve_fails",
+            GFX_PORTRAIT_RESOLVE_FAILS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gfx_portrait_overlay_yields",
+            GFX_PORTRAIT_OVERLAY_YIELDS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gfx_portrait_demote_credit",
+            GFX_PORTRAIT_DEMOTE_CREDIT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gfx_portrait_hal_dims",
+            GFX_PORTRAIT_HAL_DIMS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gfx_portrait_cached_hal",
+            GFX_PORTRAIT_CACHED_HAL.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_gfx_portrait_last_error",
+            GFX_PORTRAIT_LAST_ERROR.load(Ordering::SeqCst),
+        );
         push_json_usize(
             body,
             "oracle_overlay_gpu_fail_count",

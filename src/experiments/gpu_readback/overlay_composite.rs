@@ -419,6 +419,9 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
     // Only the per-window drive-freeze latch is cleared here so the next window re-renders.
     PROFILE_BAKE_RGBA_CAPTURED.store(0, Ordering::SeqCst);
     PROFILE_LOADSCREEN_TABLE_OWNED.store(0, Ordering::SeqCst);
+    // Candidate A (er-effects-rs-jsm): drop the demote credit + stash the cached CSTextureImage ref for
+    // the game-thread updater to Release (this reset runs off the game thread; Scaleform frees must not).
+    gfx_loading_portrait_window_reset();
     PROFILE_RT_PIN.store(0, Ordering::SeqCst);
     PROFILE_DEPTH_PIN.store(0, Ordering::SeqCst);
     // Fresh adaptive tear baseline for the next window's character (honest content scores differ
@@ -726,6 +729,18 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
         if cur_ver <= OVERLAY_LOADSCREEN_BASELINE_VERSION.load(Ordering::SeqCst) {
             return false;
         }
+    }
+    // CANDIDATE A HANDOFF (er-effects-rs-jsm): if the live head is currently being copied INTO the
+    // displayed now-loading GFx texture, the movie shows the head UNDER its own native tips/bar -- so the
+    // overlay must NOT draw its head over the top. The game-thread updater refills the demote credit on
+    // each successful in-movie copy; we consume one credit per present and yield. Return `true` so the
+    // Present hook treats the frame as handled (skips the boot-progress fallback). Fail-open: if the
+    // in-movie path stalls, the credit drains to 0 and the overlay resumes drawing the head next present.
+    let demote = GFX_PORTRAIT_DEMOTE_CREDIT.load(Ordering::SeqCst);
+    if demote > 0 {
+        GFX_PORTRAIT_DEMOTE_CREDIT.store(demote - 1, Ordering::SeqCst);
+        GFX_PORTRAIT_OVERLAY_YIELDS.fetch_add(1, Ordering::SeqCst);
+        return true;
     }
     if OVERLAY_DRAW_STATE.load(Ordering::SeqCst) == 2 {
         return false;

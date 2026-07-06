@@ -10,6 +10,7 @@ include!("startup_hooks/lookat_stage_camera.rs");
 include!("startup_hooks/loading_cover_save_slot.rs");
 include!("startup_hooks/save_swap_profile_table.rs");
 include!("startup_hooks/profile_table_gfx_files.rs");
+include!("startup_hooks/gfx_loading_portrait.rs");
 include!("startup_hooks/title_resources_stats_text.rs");
 include!("startup_hooks/profile_rows_system_quit_menu.rs");
 include!("startup_hooks/system_quit_dialog_handlers.rs");
