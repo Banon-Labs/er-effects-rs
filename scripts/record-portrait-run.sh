@@ -9,8 +9,8 @@ mkdir -p "$OUT/frames"
 rm -f "$OUT"/frames/*.jpg "$OUT"/run-60fps-native.mkv "$OUT"/*.log 2>/dev/null || true
 VIDEO="$OUT/run-60fps-native.mkv"
 
-echo "launching smoke (deploys fresh DLL, kills stale ER, on-screen)..."
-bash /home/banon/projects/er-effects-rs/scripts/run-postcontinue-lookat-smoke.sh > "$OUT/smoke.log" 2>&1 &
+echo "launching product smoke (deploys fresh DLL, kills stale ER, on-screen)..."
+bash /home/banon/projects/er-effects-rs/scripts/run-product-continue-direct-probe.sh > "$OUT/smoke.log" 2>&1 &
 SMOKE_PID=$!
 
 pause_s() {

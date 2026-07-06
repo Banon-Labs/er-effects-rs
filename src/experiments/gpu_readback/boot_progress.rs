@@ -202,7 +202,7 @@ fn boot_milestone_reached(idx: usize) -> bool {
         }
         // Continue committed: the confirm/TFC counters on their paths, OR'd with the portrait
         // teardown-SPARE which lands in the same millisecond as the Continue SetState5 on the
-        // portrait-lookat product path (runtime-proven 2026-07-05: counters stayed 0, spare fired).
+        // live-portrait product path (runtime-proven 2026-07-05: counters stayed 0, spare fired).
         5 => {
             SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
                 || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0

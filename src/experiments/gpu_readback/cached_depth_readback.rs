@@ -226,7 +226,7 @@ pub(crate) unsafe fn resolve_content_resource_deterministic(
 /// per-frame tracking was the old `find_d3d12_resource_ex` SCAN QI'ing the D3D12 object list every readback
 /// -- during the menu->world teardown it QIs a freed object -> uncatchable AV. With the deterministic chain
 /// there is no scan, and the cached resource is our built renderer's RT (our lifetime), so per-frame
-/// re-copy is safe through the whole loading screen -> the head tracks the look-at without crashing.
+/// re-copy is safe through the whole loading screen -> the live portrait can refresh without crashing.
 /// `srv_gx` is the renderer offscreen's CSGxTexture; `start` is the offscreen nest (`renderer+0xa8`)
 /// that `readback_offscreen_rgba8` reads the real head from.
 pub(crate) unsafe fn readback_cached_content_rgba8(

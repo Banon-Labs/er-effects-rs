@@ -696,7 +696,7 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
     }
     // NOTE: this used to bail when render-drive was on, back when "render-drive" meant the Present hook
     // itself drove the offscreen rasterize (so compositing here would have fought it). The rasterize now
-    // runs in the draw-phase task (profile_lookat_realtime_draw_tick -> drive(r)), which re-renders the
+    // runs in the draw-phase task (the live loading-portrait render driver), which re-renders the
     // posed model and the readback republishes LOADING_BG_PORTRAIT_RGBA (version bump) EVERY frame. So the
     // Present hook is free to composite -- and MUST, to push that per-frame tracking head to the screen for
     // the whole loading screen (the forge redirect only commits ~twice -> a frozen displayed head). The
@@ -1656,7 +1656,7 @@ pub(crate) fn portrait_center_nonblack(width: u32, height: u32, pixels: &[u8]) -
 ///
 /// WHY: `portrait_center_nonblack` only proves "not all black" -- a bright magenta checker (255,0,255)
 /// trivially passes it, so `oracle_loading_bg_portrait_gx_nonblack` was a FALSE POSITIVE for the autoload
-/// path (run postcontinue-lookat-smoke 2026-06-30: nonblack=True but the captured bytes were a magenta/
+/// path (runtime probe 2026-06-30: nonblack=True but the captured bytes were a magenta/
 /// white checker, because the model builds but is never rendered into the offscreen RT once the menu's
 /// render driver dies post-Continue). A real character render has many shaded colors and few fully-
 /// saturated "pure" texels; a checker is ~2 colors, each with channels pinned to 0/255. Heuristic over the

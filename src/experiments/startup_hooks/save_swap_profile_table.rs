@@ -309,7 +309,7 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     let valid = |p: usize| p != 0 && p != null;
     // POST-CONTINUE PORTRAIT: before the table-ready guard below (which would early-return on the
     // torn-down post-Continue table), repopulate the table during now-loading so the rest of this tick
-    // (mark+refresh feed) and the look-at/draw/oracle run on the loading screen.
+    // (mark+refresh feed) and the draw/oracle run on the loading screen.
     unsafe { maybe_build_profile_table_for_loading(base) };
     // VISIBILITY: once our built renderer's offscreen RT is live, swap it into the now-loading background
     // container the forge already injected (the background binds BEFORE our renderer exists and never
@@ -317,9 +317,9 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     unsafe { refresh_loading_bg_live_gx(base) };
     // Once the real IBL-lit menu portrait has been baked into LOADING_BG_PORTRAIT_RGBA, re-forge the first
     // (displayed) now-loading rti so the loading screen swaps the checker for the real character portrait.
-    // SKIP on the portrait-lookat path: the live present-overlay owns the display there, so uploading into
+    // SKIP on the live-portrait overlay path: the live present-overlay owns the display there, so uploading into
     // the native forged texture would paint a SECOND head. Overlay-only (user choice 2026-06-30).
-    if !portrait_lookat_enabled() {
+    if !portrait_overlay_enabled() {
         unsafe { maybe_reforge_loading_portrait(base) };
     }
     // Product source ownership: the pre-Continue/ProfileSelect renderer is not our loading portrait
@@ -451,13 +451,13 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // MODEL BUILD: every ~240 ticks, mark all 10 profile slots used + call the refresh that kicks the
     // async character-model build. refresh is IDEMPOTENT per slot via the +0x754 "load-requested" latch,
     // so by default this builds each model ONCE and then leaves it -- the model stays LIVE every frame,
-    // which is what the realtime look-at draw needs (an invalid/rebuilding pose-holder fails the draw).
+    // which is what the portrait render drive needs (an invalid/rebuilding pose-holder fails the draw).
     //
     // DESTRUCTIVE REBUILD (default OFF, `portrait_force_rebuild_enabled`): clear each build latch
-    // (+0x754/+0x755) + reset the look-at slot cache to force a FRESH build. The churn leaves models
+    // (+0x754/+0x755) + reset renderer state to force a FRESH build. The churn leaves models
     // not-live most of the time (~88% draw failures -> flicker), so it is opt-in: flip it on briefly to
     // re-capture the post-FaceData face (an early build before LOAD GAME loads FaceData = default head),
-    // then off. See `portrait_force_rebuild_enabled` and bd portrait-lookat-realtime-drawphase-design.
+    // then off. See `portrait_force_rebuild_enabled`.
     let counter = PROFILE_FORCE_TICK_COUNTER.fetch_add(1, Ordering::SeqCst);
     // Post-Continue feed window: while it is open, run the (idempotent) mark+refresh every 8 ticks so the
     // freshly-built renderers' async model build is driven to completion and stays latched -- the once-per-
@@ -529,25 +529,14 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                 "force-profile-render: build cycle (counter={counter}) force_rebuild={force_rebuild} feed_window={feed_window} -- marked {marked} real slot(s) + per-slot kicked (summary=0x{summary:x} foreign_models={foreign})"
             ));
         }
-        // Only when we forced a fresh build: drop the cached look-at indices/base so they re-resolve and
-        // re-latch the idle base from the fresh skeleton. Without a forced rebuild the model (and its
-        // skeleton) persist, so KEEP the cache -> the look-at keeps driving every frame with no re-resolve gap.
+        // Only when we forced a fresh build: drop the cached camera-facing yaw so it re-resolves
+        // against the fresh skeleton/model instance.
         if force_rebuild {
-            match PROFILE_LOOKAT_SLOTS.lock() {
-                Ok(mut g) => *g = [None; 10],
-                Err(p) => *p.into_inner() = [None; 10],
-            }
             match PROFILE_CAM_FACE_YAW.lock() {
                 Ok(mut g) => *g = [None; 10],
                 Err(p) => *p.into_inner() = [None; 10],
             }
             PROFILE_CAM_FACE_YAW_LATCHED_MASK.store(0, Ordering::SeqCst);
-            // The models are being rebuilt -> the cached PoseHolder pointers are about to go stale. Drop
-            // them so they re-resolve against the fresh skeletons (and re-latch a clean base) before the
-            // sticky-keep path above starts driving them again.
-            for h in PROFILE_LOOKAT_HOLDERS.iter() {
-                h.store(0, Ordering::SeqCst);
-            }
         }
     }
     // ~80 ticks AFTER each rebuild kick, reset the dump mask so the freshly-rebuilt models (not the
@@ -569,43 +558,29 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             }
         }
     }
-    // LOOK-AT LEVER: every tick, rotate each live renderer's Head/Neck/Spine2 bones toward the mouse
-    // cursor so the portrait's gaze follows it (eyes are welded to the Head bone). Separate gate from
-    // the camera/dump so the riskier bone-write path can be toggled on its own.
-    if portrait_lookat_enabled() {
-        for s in 0..TITLE_PROFILE_SLOT_COUNT as i32 {
-            let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
-            if valid(r)
-                && unsafe { safe_read_usize(r) }.unwrap_or(0)
-                    == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+    // Cursor/head tracking is intentionally retired. Keep the loading portrait renderer alive and
+    // refreshed, but do not rotate character bones toward the mouse. Still pre-record the target
+    // renderer as the teardown spare once its model is built so the loading portrait survives Continue.
+    for s in 0..TITLE_PROFILE_SLOT_COUNT as i32 {
+        let r = unsafe { safe_read_usize(portrait_renderer_table_entry(base, s)) }.unwrap_or(0);
+        if valid(r)
+            && unsafe { safe_read_usize(r) }.unwrap_or(0)
+                == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA
+        {
+            let target = portrait_target_slot();
+            if s == target
+                && PROFILE_SPARE_CANDIDATE.load(Ordering::SeqCst) == 0
+                && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
+                    .map(|m| valid(m))
+                    .unwrap_or(false)
             {
-                // FrameBegin role (this task): REGISTER the holder + resolve Head/Neck/Spine2 indices +
-                // publish the cursor. The per-frame write+recompute+DRAW that makes the head track the
-                // cursor in realtime now happens in `profile_lookat_realtime_draw_tick`, a separate
-                // recurring task in the GameSceneDraw phase (render thread, inside a live GX frame). The
-                // old per-tick game-task offscreen drive rendered black (FrameBegin = before the GX frame
-                // records); the draw-phase task is the fix.
-                unsafe { apply_profile_lookat(r, s) };
-                // SPARE PRE-RECORD: capture the target slot's renderer as the spare candidate on a frame
-                // where its model is actually BUILT (+0x778 valid), so the teardown-spare hook can protect
-                // this exact renderer through Continue even though the menu cycles model_ins. Uses
-                // portrait_target_slot() so that once the user confirms a switch (SELECTED_SLOT set), the
-                // candidate re-records for the NEWLY-selected character, not the still-resident old ac0.
-                let target = portrait_target_slot();
-                if s == target
-                    && PROFILE_SPARE_CANDIDATE.load(Ordering::SeqCst) == 0
-                    && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
-                        .map(|m| valid(m))
-                        .unwrap_or(false)
-                {
-                    PROFILE_SPARE_CANDIDATE.store(r, Ordering::SeqCst);
-                    let model = unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
-                        .unwrap_or(0);
-                    PROFILE_SPARE_CANDIDATE_MODEL.store(model, Ordering::SeqCst);
-                    append_autoload_debug(format_args!(
-                        "loading-portrait: pre-recorded spare candidate renderer=0x{r:x} slot={s} model_ins=0x{model:x} (loading-screen-owned renderer)"
-                    ));
-                }
+                PROFILE_SPARE_CANDIDATE.store(r, Ordering::SeqCst);
+                let model = unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
+                    .unwrap_or(0);
+                PROFILE_SPARE_CANDIDATE_MODEL.store(model, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "loading-portrait: pre-recorded spare candidate renderer=0x{r:x} slot={s} model_ins=0x{model:x} (loading-screen-owned renderer)"
+                ));
             }
         }
     }
@@ -732,10 +707,10 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
             "loading-portrait: reclaimed prior spared renderer 0x{orphan:x} via CSDelayDeleteMan enqueued={deleted} (repeated-switch GX command-queue leak fix)"
         ));
     }
-    // Gate on the look-at/portrait feature OR product autoload -- the native-continue path does NOT set
+    // Gate on the live portrait feature OR product autoload -- the native-continue path does NOT set
     // PRODUCT_AUTOLOAD_ARMED, so gating on product_autoload alone never spared anything there.
     if LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) == 0
-        && (product_autoload_enabled() || portrait_lookat_enabled())
+        && (product_autoload_enabled() || portrait_overlay_enabled())
     {
         if let Ok(base) = game_module_base() {
             // The slot we render (er-effects-rs-j3r): the newly-selected character on a switch
@@ -776,21 +751,11 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
                 if table != 0 {
                     unsafe { (table as *mut usize).write_volatile(0) };
                 }
-                // Re-latch the look-at base from the post-Continue model (a different model instance).
-                if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&spared_slot) {
-                    let mut guard = match PROFILE_LOOKAT_SLOTS.lock() {
-                        Ok(g) => g,
-                        Err(p) => p.into_inner(),
-                    };
-                    if let Some(s) = guard[spared_slot as usize].as_mut() {
-                        s.base_latched = false;
-                    }
-                }
                 let model_at_spare =
                     unsafe { safe_read_usize(renderer + PROFILE_RENDERER_MODEL_INS_OFFSET) }
                         .unwrap_or(0);
                 append_autoload_debug(format_args!(
-                    "loading-portrait: SPARED slot{spared_slot} renderer=0x{renderer:x} (candidate=0x{candidate:x}) model_ins=0x{model_at_spare:x} from teardown -- drive look-at + render it post-Continue"
+                    "loading-portrait: SPARED slot{spared_slot} renderer=0x{renderer:x} (candidate=0x{candidate:x}) model_ins=0x{model_at_spare:x} from teardown -- render it post-Continue"
                 ));
             }
         }

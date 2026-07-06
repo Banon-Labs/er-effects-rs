@@ -334,7 +334,7 @@ pub(crate) unsafe extern "system" fn network_check_job_run_hook(
     // blocking completed. Runtime-confirmed: with the hold gone, the boot read fires (showprog PASS),
     // the real character loads, and the world reaches `player_present`. The portrait-capture timing is
     // owned DOWNSTREAM by `portrait_render_window` instead, which holds the load COMMIT after menu-open
-    // (i.e. AFTER the boot read has populated the slot). bd autoload-regression-lookat-breaks-bootread-2026-06-30.
+    // (i.e. AFTER the boot read has populated the slot). bd autoload-regression-bootread-2026-06-30.
     let state = MENU_JOB_STATE_CONTINUE;
     // MenuJobResult::SetResult(result, state, 0): state @ +0 (i32), field1 @ +4 (i32). The native
     // SetResult 0x1407a91e0 only writes these two fields, so replicate inline. Readability-guarded.

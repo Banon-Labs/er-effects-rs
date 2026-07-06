@@ -31,7 +31,7 @@ pub(crate) static LS_PORTRAIT_NEUTRAL_LEAK_SEEN_VERSION: AtomicUsize = AtomicUsi
 pub(crate) static LS_PORTRAIT_REJECTED_PUBLISHES: AtomicUsize = AtomicUsize::new(0);
 /// The LOADING_BG_PORTRAIT_RGBA_VERSION last uploaded into the displayed now-loading texture by
 /// maybe_reforge_loading_portrait. usize::MAX = never. Re-upload only when the version advances (new live
-/// frame) so the displayed loading-screen head TRACKS the look-at, while never per-frame-hammering a
+/// frame) so the displayed loading-screen portrait refreshes, while never per-frame-hammering a
 /// dim-mismatched/freed texture (the old crash). One log latch for the first successful upload.
 pub(crate) static LOADING_BG_REFORGE_VERSION: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub(crate) static LOADING_BG_REFORGE_LOGGED: AtomicUsize = AtomicUsize::new(0);
@@ -125,7 +125,7 @@ pub(crate) const PROFILE_DRAW_STEP_RVA: usize = 0x9aa290;
 /// HeapAllocs (0xa30, align 0x10, GLOBAL_GfxHeapAllocator) + ctor's a fresh CSMenuProfModelRend into each
 /// of the 10 title-table slots (base+0x3d6d8d0), each self-registering its build/draw tasks with ResMan.
 /// We call it ONCE post-Continue (now-loading, table torn down) to repopulate the table so the existing
-/// mark+refresh feed + per-frame look-at + draw + oracle re-engage on the loading screen. RE-confirmed the
+/// mark+refresh feed + per-frame draw + oracle re-engage on the loading screen. RE-confirmed the
 /// ctor is self-contained off process-lifetime singletons (no TitleTopDialog dependency).
 pub(crate) const PROFILE_TABLE_BUILDER_RVA: usize = 0x9af3a0;
 /// One-shot latch: set when we've rebuilt the profile table for the current load window; cleared when

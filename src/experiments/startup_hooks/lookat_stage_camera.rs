@@ -272,7 +272,7 @@ unsafe fn profile_lookat_stage_probe(base: usize) {
 }
 
 pub(crate) fn profile_lookat_phase_diag_tick() {
-    if !portrait_lookat_enabled() {
+    if !portrait_overlay_enabled() {
         return;
     }
     if let Ok(base) = game_module_base() {
@@ -292,8 +292,8 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
             }
         }
         // Refresh the cached selftest flag here (throttled) so the draw task never does a per-frame stat.
-        PROFILE_LOOKAT_SELFTEST_ON.store(portrait_lookat_selftest_enabled(), Ordering::SeqCst);
-        PROFILE_CURSOR_SWEEP_ON.store(portrait_cursor_sweep_enabled(), Ordering::SeqCst);
+        PROFILE_LOOKAT_SELFTEST_ON.store(false, Ordering::SeqCst);
+        PROFILE_CURSOR_SWEEP_ON.store(false, Ordering::SeqCst);
     }
     if n % 240 == 0 {
         let ticks: Vec<String> = (0..LOOKAT_DRAW_PHASE_COUNT)
@@ -520,7 +520,7 @@ pub(crate) unsafe extern "system" fn per_frame_push_hook(renderer: usize, frame:
             ));
         }
     }
-    if portrait_lookat_enabled() && renderer != 0 && renderer != null {
+    if portrait_overlay_enabled() && renderer != 0 && renderer != null {
         if let Ok(base) = game_module_base() {
             let vt_ok = unsafe { safe_read_usize(renderer) }.unwrap_or(0)
                 == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA;

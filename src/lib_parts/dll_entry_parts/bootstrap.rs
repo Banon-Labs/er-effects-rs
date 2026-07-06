@@ -367,10 +367,10 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     // It is fail-open (non-matching symbols/build failures tail-call original). Default behavior now keeps
     // the selected boot background continuous through the native loading GFX background; users can opt out
     // with `persist_boot_background_to_loading_screen = false` in DLL-adjacent er-effects.toml. On the
-    // portrait-lookat path, only install when a real background source exists, so a no-image run does not
+    // live-portrait overlay path, only install when a real background source exists, so a no-image run does not
     // accidentally forge the diagnostic checker behind the live portrait overlay.
     let persist_loading_bg = crate::config::persist_boot_background_to_loading_screen_enabled();
-    if !portrait_lookat_enabled()
+    if !portrait_overlay_enabled()
         || (persist_loading_bg && boot_bg_image_rgba_clone().is_some())
     {
         START_LOADING_BG_REPLACE_BIND.call_once(|| {
@@ -381,9 +381,9 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
     }
     // D3D12 PRESENT OVERLAY: the deterministic display path -- draw the captured portrait directly onto the
     // swapchain backbuffer when the now-loading screen is up (the in-pipeline forge/Scaleform routes cannot
-    // drive the displayed image). Install only on the portrait path (diagnostic), via the dummy-swapchain
+    // drive the displayed image). Install only on the live-portrait overlay path, via the dummy-swapchain
     // vtable technique. Phase 1 is log-only (proves the hook fires) before any backbuffer write.
-    if portrait_lookat_enabled() {
+    if portrait_overlay_enabled() {
         START_PRESENT_OVERLAY.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-effects-present-overlay".to_owned())
@@ -391,7 +391,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         });
     }
     // Portrait-renderer teardown SPARE hook: keep the loaded character's portrait renderer alive past the
-    // Continue teardown so we can drive realtime look-at + render it post-Continue (the persistent-model
+    // Continue teardown so we can render it post-Continue (the persistent-model
     // path -- the cycling menu can't show a stable portrait). The hook self-gates on product_autoload and
     // only spares a renderer whose model is BUILT (the blank-renderer misfire is guarded in the hook).
     START_PROFILE_RENDERER_TEARDOWN_SPARE.call_once(|| {

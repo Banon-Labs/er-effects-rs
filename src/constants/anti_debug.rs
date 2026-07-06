@@ -689,7 +689,7 @@ pub(crate) static LOADING_BG_PORTRAIT_NONBLACK: AtomicUsize = AtomicUsize::new(0
 /// Bumped every time LOADING_BG_PORTRAIT_RGBA is REPLACED with a fresh capture. The present-overlay
 /// composite watches this: when it changes, the overlay re-uploads its source texture from the new RGBA,
 /// so a LIVE per-frame (throttled) readback of the built renderer's offscreen makes the displayed head
-/// UPDATE (look-at follows) instead of freezing on the first captured frame.
+/// UPDATE (portrait refreshes) instead of freezing on the first captured frame.
 pub(crate) static LOADING_BG_PORTRAIT_RGBA_VERSION: AtomicUsize = AtomicUsize::new(0);
 /// One-shot log latch for the live-display-feed (built RT content -> overlay).
 pub(crate) static PROFILE_LIVE_FEED_LOGGED: AtomicUsize = AtomicUsize::new(0);

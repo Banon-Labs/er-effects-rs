@@ -108,7 +108,7 @@ unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32)
         if base != 0 {
             // NOTE: the offscreen RASTERIZE is NOT driven here. Present is the WRONG GX phase -- the frame's
             // GX recording is already closed, so the subcontext pool pop no-ops (black). The rasterize is
-            // driven from profile_lookat_realtime_draw_tick (a DRAW-phase CSTaskImp task, live recording
+            // driven from the live loading-portrait render driver
             // frame). This hook only does the static composite of an already-captured RGBA.
             // The boot-progress view owns the pre-Continue black gap; once the portrait composite starts
             // drawing (loading window) it wins, and the boot view self-stops on the same signals.
@@ -286,7 +286,7 @@ const BOOT_PUMP_FRAME_SLEEP_MS: u64 = 16;
 /// Body of the `er-effects-boot-present-pump` thread. See the spawn comment for the contract.
 fn boot_present_pump() {
     // Same gate as the install: the boot view + its swapchain hook are the portrait-path feature.
-    if !portrait_lookat_enabled() {
+    if !portrait_overlay_enabled() {
         return;
     }
     let start = std::time::Instant::now();
@@ -718,7 +718,7 @@ unsafe fn vtable_swap_slot(slot_addr: usize, new_fn: usize) -> Option<usize> {
 /// its REAL Present(8)/Present1(22) via a vtable-slot swap (NOT a MinHook code patch -- that reports MH_OK
 /// but never fires on Wine's dxgi.dll). One-shot (latched on success); bounded retries.
 pub(crate) unsafe fn try_install_game_present_hook(base: usize) {
-    if !portrait_lookat_enabled()
+    if !portrait_overlay_enabled()
         || PRESENT_HOOK_INSTALLED.load(Ordering::SeqCst) == 0
         || GAME_PRESENT_HOOKED.load(Ordering::SeqCst) != 0
     {

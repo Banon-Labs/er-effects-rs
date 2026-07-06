@@ -196,10 +196,10 @@ pub(crate) unsafe extern "system" fn loading_bg_replace_bind_hook(rti: usize, sy
         }
     };
     let total = LOADING_BG_REPLACE_BIND_TOTAL_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
-    // Fire on the portrait-lookat path too, not just product autoload: the native-continue smoke arms the
-    // portrait via portrait_lookat_enabled() and does NOT set product_autoload_enabled() (observed pae=false
+    // Fire on the live-portrait overlay path too, not just product autoload: the native-continue smoke arms the
+    // portrait via portrait_overlay_enabled() and does NOT set product_autoload_enabled() (observed pae=false
     // on the MENU_Load binds), so gating on pae alone never forged. Mirrors the teardown-spare gating fix.
-    let pae = product_autoload_enabled() || portrait_lookat_enabled();
+    let pae = product_autoload_enabled() || portrait_overlay_enabled();
     let sym = unsafe { read_dlstring_u16(symbol) };
     // Diagnostic: log the first calls' symbols (ungated) so we can confirm whether the now-loading
     // MENU_Load_ background symbols actually reach this bind function and how they decode.
@@ -506,7 +506,7 @@ pub(crate) unsafe fn maybe_reforge_loading_portrait(base: usize) {
         return;
     }
     // LIVE RE-UPLOAD (version-gated): re-upload the displayed now-loading texture whenever the live feed
-    // publishes a new frame (version advanced) so the loading-screen head TRACKS the look-at. The earlier
+    // publishes a new frame (version advanced) so the loading-screen portrait refreshes from the live renderer. The earlier
     // re-upload crash was the READBACK's D3D12 object SCAN racing teardown (now fixed: cached resource, no
     // re-scan); the upload writes into the already-bound, stable now-loading texture (the one-shot upload
     // persisted crash-free through the whole loading screen), so per-version re-upload is safe.

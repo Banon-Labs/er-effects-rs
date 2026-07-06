@@ -117,10 +117,10 @@ pub(crate) unsafe fn suppress_loading_cover_tick(base: usize) {
 /// POST-CONTINUE PORTRAIT: when the now-loading screen is up but the profile-renderer title table has been
 /// torn down (native-continue is menu-free, so the menu never built it, or Continue tore it down), call
 /// the engine's own builder ONCE to repopulate the 10-slot table. The existing mark+refresh feed +
-/// per-frame look-at hook + draw + pixel oracle then re-engage on the loading screen automatically (they
+/// per-frame render drive + pixel oracle then re-engage on the loading screen automatically (they
 /// all key off this table). Latched per load (reset when now-loading drops) so there's no per-frame churn.
 pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
-    if !portrait_lookat_enabled() {
+    if !portrait_overlay_enabled() {
         return;
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -143,7 +143,7 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     // screen appears.
     let profile_select_window_open = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0;
     // If the table is already populated (menu built it, or our own build already ran), leave it -- the
-    // existing mark+refresh feed + look-at + draw + oracle drive it. A live table also RE-ARMS the latch:
+    // existing mark+refresh feed + draw + oracle drive it. A live table also RE-ARMS the latch:
     // a subsequent Continue teardown empties it again and we rebuild our own for that load window.
     let t0 = unsafe { safe_read_usize(portrait_renderer_table_entry(base, 0)) }.unwrap_or(0);
     let populated = t0 != 0

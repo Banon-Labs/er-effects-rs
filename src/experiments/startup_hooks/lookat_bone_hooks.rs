@@ -287,7 +287,7 @@ unsafe fn lookat_apply_realtime(holder: usize, slot_idx: usize, yaw: f32, pitch:
 /// track every frame. The draw step fail-closes (the GX pool pop returns 0 -> no-op) if a phase ever
 /// lacks a live frame, so it can never crash from being driven off a recording frame.
 pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &FD4TaskData) {
-    if !portrait_lookat_enabled() {
+    if !portrait_overlay_enabled() {
         return;
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
@@ -300,31 +300,10 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
     // engine propagate it to the GPU-skinned submodels each frame (the actual head movement).
     install_per_frame_push_hook();
     let frame = PROFILE_LOOKAT_DRAW_FRAME.fetch_add(1, Ordering::SeqCst);
-    // PUBLISH the drive angle for the per-frame push hook to consume: a deterministic SINUSOID in selftest
-    // (zero-input, reproducible -> the pixel oracle proves the head moves with the driven angle), else the
-    // live cursor (the product input). The pose WRITE happens in the push hook; here we only publish + draw.
-    let (yaw, pitch) = if PROFILE_CURSOR_SWEEP_ON.load(Ordering::SeqCst) {
-        // CURSOR-TRACKING PROOF: deterministically warp the OS cursor to a held L/C/R position over the ER
-        // window, THEN read it back through the SAME GetCursorPos path the product uses, and drive the head
-        // from that read cursor (no sinusoid). Zero foreign input: the DLL self-drives the cursor at the
-        // exact stage the look-at polls it. The yaw lands in a left/center/right bucket -> the bucket dump
-        // below captures the head at each real cursor position.
-        let hold = (frame / CURSOR_SWEEP_HOLD_FRAMES) % CURSOR_SWEEP_TARGETS_X.len();
-        drive_cursor_to_window_fraction(CURSOR_SWEEP_TARGETS_X[hold], 0.5);
-        let (cx, cy) = read_cursor_normalized().unwrap_or((0.0, 0.0));
-        PROFILE_LOOKAT_LAST_CURSOR.store(pack_cursor(cx, cy), Ordering::SeqCst);
-        (cx * LOOKAT_YAW_SIGN, cy * LOOKAT_PITCH_SIGN)
-    } else if PROFILE_LOOKAT_SELFTEST_ON.load(Ordering::SeqCst) {
-        let t = frame as f32 * LOOKAT_SELFTEST_W;
-        (
-            t.sin() * LOOKAT_SELFTEST_YAW_AMP * LOOKAT_YAW_SIGN,
-            (t * 0.7).sin() * LOOKAT_SELFTEST_PITCH_AMP * LOOKAT_PITCH_SIGN,
-        )
-    } else {
-        let (cx, cy) = read_cursor_normalized().unwrap_or((0.0, 0.0));
-        PROFILE_LOOKAT_LAST_CURSOR.store(pack_cursor(cx, cy), Ordering::SeqCst);
-        (cx * LOOKAT_YAW_SIGN, cy * LOOKAT_PITCH_SIGN)
-    };
+    // Cursor/head tracking is retired. Keep the portrait render/readback/publish pump alive, but publish
+    // a neutral pose drive and never read or warp the OS cursor. The per-frame push hook also gates its
+    // bone-write path on the retired `portrait_lookat_enabled()` gate, so this value is inert for product.
+    let (yaw, pitch) = (0.0f32, 0.0f32);
     PROFILE_LOOKAT_YAW_BITS.store(yaw.to_bits() as usize, Ordering::SeqCst);
     PROFILE_LOOKAT_PITCH_BITS.store(pitch.to_bits() as usize, Ordering::SeqCst);
     // Rasterize all profile offscreen RTs on the render thread inside the live GX frame, so the pose the
@@ -712,7 +691,7 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                             PROFILE_CONTENT_EXCL_DUMPED.store(0, Ordering::SeqCst);
                         }
                     }
-                    // LIVE TRACKING -- EVERY FRAME. FIX (2026-06-30): use readback_offscreen_fast, which
+                    // LIVE PORTRAIT PUBLISH -- EVERY FRAME. FIX (2026-06-30): use readback_offscreen_fast, which
                     // RE-RESOLVES the live content RT fresh each frame (find_d3d12_resource(off)) -- the exact
                     // path the in-process RT sample uses (proven nonblack ~63% with the clear disabled) -- but
                     // copies via the cached RB_FAST_* objects so it still succeeds every frame. The previous
@@ -846,13 +825,7 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                                 // alpha keying resumes once the backdrop NODE is identified (see
                                 // the one-shot model-parts enumerator) and nulled on OUR model.
                                 unsafe { apply_depth_alpha_key(off, cw, ch, &mut cpx) };
-                                // MOUSE-TRACK PROOF (selftest): one-shot dump the LIVE head at three
-                                // held yaw buckets so the look-left/center/look-right poses are
-                                // visually inspectable. The selftest sinusoid sweeps `yaw` across
-                                // [-1,1] each period, so all three buckets fill within one loading
-                                // window. In product the same PROFILE_LOOKAT_YAW_BITS atomic is set
-                                // from the normalized cursor, so distinct poses here = the head pose
-                                // tracks the drive signal. Dump from `&cpx` BEFORE it moves into the
+                                // Retired cursor/head-tracking proof removed. Dump from `&cpx` BEFORE it moves into the
                                 // overlay lock below.
                                 if PROFILE_LOOKAT_SELFTEST_ON.load(Ordering::SeqCst)
                                     || PROFILE_CURSOR_SWEEP_ON.load(Ordering::SeqCst)
