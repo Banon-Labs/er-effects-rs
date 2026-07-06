@@ -362,17 +362,17 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         });
     }
 
-    // Now-loading background portrait forge: install the replace-bind hook early (well before the
-    // ~17s now-loading-screen lifecycle) so it is resident when the first MENU_Load_ background is
-    // produced. The hook self-gates on product_autoload_enabled() + the MENU_Load_ symbol and is
-    // fail-open (any non-matching symbol or build/alloc failure tail-calls the original), so
-    // installing it unconditionally is inert outside the product autoload path. Route-independent.
-    // NOT on the portrait-lookat path: there the live present-overlay (below) owns the head display and the
-    // game's own now-loading ARTWORK stays visible behind it (user choice -- keep the artwork). The forge is
-    // only for the pure product-cover path where it IS the display surface. The swappable
-    // build_loading_bg_replacement_tpf lever is retained for when we deliberately want to replace the
-    // background texture on the head path; it is not wired in by default so the stock artwork renders.
-    if !portrait_lookat_enabled() {
+    // Now-loading background forge: install the replace-bind hook early (well before the ~17s
+    // now-loading-screen lifecycle) so it is resident when the first MENU_Load_ background is produced.
+    // It is fail-open (non-matching symbols/build failures tail-call original). Default behavior now keeps
+    // the selected boot background continuous through the native loading GFX background; users can opt out
+    // with `persist_boot_background_to_loading_screen = false` in DLL-adjacent er-effects.toml. On the
+    // portrait-lookat path, only install when a real background source exists, so a no-image run does not
+    // accidentally forge the diagnostic checker behind the live portrait overlay.
+    let persist_loading_bg = crate::config::persist_boot_background_to_loading_screen_enabled();
+    if !portrait_lookat_enabled()
+        || (persist_loading_bg && boot_bg_image_rgba_clone().is_some())
+    {
         START_LOADING_BG_REPLACE_BIND.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-effects-loading-bg-portrait".to_owned())

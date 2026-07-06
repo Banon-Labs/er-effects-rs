@@ -157,6 +157,30 @@ test_allow_proc_comm_scan_heredoc_naming_eac_launcher if {
 	count(denials) == 0
 }
 
+# Exact blocked command from the 2026-07-05 cupcake false positive: a worktree
+# `cd` prefix before the same read-only /proc/<pid>/comm scan is still process
+# detection, not a protected-game launch.
+test_allow_cd_prefixed_proc_comm_scan_exact_false_positive if {
+	cmd := concat("\n", [
+		"cd .worktrees/steam-screenshot-boot-bg && python3 - <<'PY'",
+		"import glob",
+		"names={'steam','eldenring.exe','start_protected_game.exe'}",
+		"found={n:[] for n in names}",
+		"for path in glob.glob('/proc/[0-9]*/comm'):",
+		"    try:",
+		"        pid=int(path.split('/')[2]); comm=open(path).read().strip()",
+		"    except (OSError,ValueError):",
+		"        continue",
+		"    if comm in names:",
+		"        found[comm].append(pid)",
+		"for n in sorted(names):",
+		"    print(n, found[n])",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
 # Same detection intent as a `python3 -c` one-liner with the whole program
 # quoted (the RTK-caveat-sanctioned inspection form).
 test_allow_proc_comm_scan_python_c_naming_eac_launcher if {

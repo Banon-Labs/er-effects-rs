@@ -76,6 +76,11 @@ stage_me3_payload() {
   [[ -f "$BUILT_DLL" ]] || fatal "built DLL not found: $BUILT_DLL -- run 'cargo xwin build --release --target x86_64-pc-windows-msvc' first (refusing to run a stale DLL)"
   cp -f "$BUILT_DLL" "$ARTIFACT_DIR/er_effects_rs.dll"
   me3_write_profile "$ME3_PROFILE" "$ARTIFACT_DIR/er_effects_rs.dll"
+  if [[ -n "${ER_EFFECTS_TOML_SOURCE:-}" ]]; then
+    require_file "$ER_EFFECTS_TOML_SOURCE"
+    cp -f "$ER_EFFECTS_TOML_SOURCE" "$ARTIFACT_DIR/er-effects.toml"
+    echo "deploy: staged DLL-adjacent runtime config -> $ARTIFACT_DIR/er-effects.toml"
+  fi
   echo "deploy: staged fresh DLL + me3 profile -> $ME3_PROFILE"
 }
 

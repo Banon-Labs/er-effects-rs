@@ -140,6 +140,21 @@ fn build_loading_bg_replacement_tpf(symbol: &str) -> Option<Vec<u8>> {
 }
 
 fn build_portrait_tpf(symbol: &str) -> Option<Vec<u8>> {
+    // Default product behavior: persist the chosen boot background (TOML override, explicit ERBGRA01
+    // override, or latest local Steam screenshot) through the native MENU_Load_* GFX background too. This
+    // keeps the pre-native boot screen and the game's loading screen visually continuous. Users can opt out
+    // with `persist_boot_background_to_loading_screen = false` in DLL-adjacent er-effects.toml.
+    if crate::config::persist_boot_background_to_loading_screen_enabled() {
+        if let Some((w, h, px)) = boot_bg_image_rgba_clone() {
+            let dds = er_tpf::DdsImage {
+                width: w as u32,
+                height: h as u32,
+                pixels: px,
+            }
+            .to_dds_bytes_with(er_tpf::DdsHeaderMode::LegacyRgba8);
+            return er_tpf::Tpf::single_pc(symbol, dds, 1).build().ok();
+        }
+    }
     // ONE-HEAD CONSOLIDATION: when the live build-own path is active, the present-overlay composite is the
     // SOLE deterministic display. Baking the real head into the forge TPF here produces a SECOND head (it
     // displays when the forge wins the bind race -- user-observed). So in render-drive mode the forge stays

@@ -258,10 +258,11 @@ start_protected_process_detection_only if {
 #
 # The exemption is deliberately narrow and fail-closed. It requires ALL of:
 #   * Bash tool, and the whole shell command is a single python invocation
-#     reading inline code: either `python3 - <<'TAG'` with a quoted heredoc
-#     tag, nothing else on the first line, and nothing after the terminator
-#     line; or `python3 -c` whose quote-scrubbed remainder is empty (the
-#     entire program is quoted, nothing chained);
+#     reading inline code, optionally preceded only by `cd <dir> &&`: either
+#     `python3 - <<'TAG'` with a quoted heredoc tag, nothing else on the
+#     first line, and nothing after the terminator line; or `python3 -c`
+#     whose quote-scrubbed remainder is empty (the entire program is quoted,
+#     nothing chained);
 #   * the payload mentions `/proc/` (it is a process-state reader/teardown
 #     loop);
 #   * no `$(` and no backtick anywhere (no command substitution rides along);
@@ -331,7 +332,7 @@ proc_scan_heredoc_tag := tag if {
 
 proc_scan_python_shape if {
 	count(proc_scan_heredoc_parts) == 2
-	regex.match(`^(/usr/bin/)?python3? - ?$`, proc_scan_heredoc_parts[0])
+	regex.match(`^(cd [^;|&()<>]+ && )?(/usr/bin/)?python3? - ?$`, proc_scan_heredoc_parts[0])
 	terminator_parts := split(proc_scan_norm_command, concat("", [" ", proc_scan_heredoc_tag]))
 	count(terminator_parts) == 2
 	terminator_parts[1] == ""
@@ -342,8 +343,8 @@ proc_scan_python_shape if {
 # chained `; wrapper '/path/start_protected_game.exe'` breaks the shape.
 proc_scan_python_shape if {
 	not contains(command, "<<")
-	regex.match(`^[[:space:]]*(?:/usr/bin/)?python3?[[:space:]]+-c[[:space:]]`, command)
-	regex.match(`^[[:space:]]*(?:/usr/bin/)?python3?[[:space:]]+-c[[:space:]]*$`, scrubbed_command)
+	regex.match(`^[[:space:]]*(cd[[:space:]]+[^;|&()<>]+[[:space:]]+&&[[:space:]]+)?(?:/usr/bin/)?python3?[[:space:]]+-c[[:space:]]`, command)
+	regex.match(`^[[:space:]]*(cd[[:space:]]+[^;|&()<>]+[[:space:]]+&&[[:space:]]+)?(?:/usr/bin/)?python3?[[:space:]]+-c[[:space:]]*$`, scrubbed_command)
 }
 
 # Quote-scrub of the FULL raw command (no heredoc trimming), for asserting
