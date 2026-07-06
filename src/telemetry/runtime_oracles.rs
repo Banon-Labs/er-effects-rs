@@ -7,3 +7,4 @@ include!("runtime_oracles/bootstrap.rs");
 include!("runtime_oracles/write_telemetry.rs");
 include!("runtime_oracles/game_man_snapshot.rs");
 include!("runtime_oracles/write_oracle.rs");
+include!("runtime_oracles/write_game_module_oracles.rs");
