@@ -238,41 +238,59 @@ pub(crate) unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
         let (units, len) = unsafe { read_utf16_name_units(rec) };
         name = String::from_utf16_lossy(&units[..len]);
         level = unsafe { safe_read_i32(rec + PROFILE_SUMMARY_LEVEL_OFFSET) }.unwrap_or(0);
-        record_play_ms =
-            unsafe { safe_read_i32(rec + PROFILE_SUMMARY_PLAYTIME_OFFSET) }.unwrap_or(0) as u32;
+        // The summary record stores playtime in SECONDS (runtime-observed 2026-07-06: record 390000
+        // == 108:20:00 vs live GDM 108:22:13 ms counter), so scale to the struct's ms unit.
+        record_play_ms = (unsafe { safe_read_i32(rec + PROFILE_SUMMARY_PLAYTIME_OFFSET) }
+            .unwrap_or(0) as u32)
+            .saturating_mul(1000);
     }
-    // Live PlayerGameData if present: attributes + HP/FP/Stamina, and refresh name/level.
+    // Live PlayerGameData ONLY if it provably holds the LOADING slot's character. Before the save
+    // deserializes, PGD is the game's default level-9 template (name empty, stats
+    // [15,10,11,14,13,9,9,7]) -- NOT the slot being loaded -- so trusting it renders another
+    // character's stats under the right name (user-reported 2026-07-06). Prove ownership by matching
+    // the slot-scoped ProfileSummary record: identical non-empty name AND identical level.
     let pgd = unsafe { safe_read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }
         .filter(|&p| valid(p));
-    let (attributes, max_hp, max_fp, max_stamina, attr_source_live) = if let Some(pgd) = pgd {
+    let pgd_validated = pgd.filter(|&pgd| {
         let (ln, ll) = unsafe { read_utf16_name_units(pgd + PGD_NAME_9C_OFFSET) };
-        if ll > 0 {
-            name = String::from_utf16_lossy(&ln[..ll]);
-        }
-        level = unsafe { safe_read_i32(pgd + PGD_LEVEL_68_OFFSET) }.unwrap_or(level);
-        let mut a = [0i32; 8];
-        for (i, v) in a.iter_mut().enumerate() {
-            *v = unsafe { safe_read_i32(pgd + PGD_STAT_BASE_3C_OFFSET + i * 4) }.unwrap_or(0);
-        }
-        (
-            a,
-            unsafe { safe_read_i32(pgd + PGD_CURRENT_MAX_HP_14_OFFSET) }.unwrap_or(0) as u32,
-            unsafe { safe_read_i32(pgd + PGD_CURRENT_MAX_FP_20_OFFSET) }.unwrap_or(0) as u32,
-            unsafe { safe_read_i32(pgd + PGD_CURRENT_MAX_STAMINA_30_OFFSET) }.unwrap_or(0) as u32,
-            true,
-        )
+        let pgd_level = unsafe { safe_read_i32(pgd + PGD_LEVEL_68_OFFSET) }.unwrap_or(0);
+        ll > 0
+            && pgd_level > 0
+            && pgd_level == level
+            && String::from_utf16_lossy(&ln[..ll]) == name
+    });
+    let (attributes, max_hp, max_fp, max_stamina, attr_source_live) =
+        if let Some(pgd) = pgd_validated {
+            let mut a = [0i32; 8];
+            for (i, v) in a.iter_mut().enumerate() {
+                *v = unsafe { safe_read_i32(pgd + PGD_STAT_BASE_3C_OFFSET + i * 4) }.unwrap_or(0);
+            }
+            (
+                a,
+                unsafe { safe_read_i32(pgd + PGD_CURRENT_MAX_HP_14_OFFSET) }.unwrap_or(0) as u32,
+                unsafe { safe_read_i32(pgd + PGD_CURRENT_MAX_FP_20_OFFSET) }.unwrap_or(0) as u32,
+                unsafe { safe_read_i32(pgd + PGD_CURRENT_MAX_STAMINA_30_OFFSET) }.unwrap_or(0)
+                    as u32,
+                true,
+            )
+        } else {
+            let base = game_module_base().unwrap_or(null);
+            if valid(base) {
+                let _ = ensure_profile_slot_stats_cached(base);
+            }
+            let attrs = profile_slot_attributes(slot).unwrap_or([0; 8]);
+            (attrs, 0, 0, 0, false)
+        };
+    // Playtime is slot-scoped from the record; the global GDM counter only reflects the loaded
+    // character after deserialize, so it is trusted only alongside a validated PGD.
+    let play_time_ms = if attr_source_live {
+        unsafe { safe_read_i32(gdm + GDM_PLAY_TIME_A0_OFFSET) }
+            .map(|v| v as u32)
+            .filter(|&v| v != 0)
+            .unwrap_or(record_play_ms)
     } else {
-        let base = game_module_base().unwrap_or(null);
-        if valid(base) {
-            let _ = ensure_profile_slot_stats_cached(base);
-        }
-        let attrs = profile_slot_attributes(slot).unwrap_or([0; 8]);
-        (attrs, 0, 0, 0, false)
+        record_play_ms
     };
-    let play_time_ms = unsafe { safe_read_i32(gdm + GDM_PLAY_TIME_A0_OFFSET) }
-        .map(|v| v as u32)
-        .filter(|&v| v != 0)
-        .unwrap_or(record_play_ms);
     Some(LoadingScreenStats {
         name,
         level,
@@ -330,13 +348,17 @@ pub(crate) fn format_stats_lines(st: &LoadingScreenStats) -> Vec<String> {
 pub(crate) static STATS_TEXT_RGBA: std::sync::Mutex<Option<(u32, u32, Vec<u8>)>> =
     std::sync::Mutex::new(None);
 pub(crate) static STATS_TEXT_BUILT: AtomicUsize = AtomicUsize::new(0);
+/// Set once the built bitmap came from a validated live PlayerGameData (adds HP/FP/Stamina).
+pub(crate) static STATS_TEXT_LIVE: AtomicUsize = AtomicUsize::new(0);
 static STATS_TEXT_LOG: AtomicUsize = AtomicUsize::new(0);
 
-/// Build (once) the stats-text bitmap from the live stats + game menu font, into `STATS_TEXT_RGBA`. Cheap
-/// no-op after the first successful build. Called on the loading screen from the game thread. Needs both
-/// the font (captured/env) and readable stats; silently waits if either is not ready.
+/// Build the stats-text bitmap from the slot's stats + game menu font, into `STATS_TEXT_RGBA`. The first
+/// build renders slot-record + .sl2 data (correct from the first frame); ONE upgrade rebuild follows when
+/// the deserialized save validates PlayerGameData as the loading slot (adds live HP/FP/Stamina). Cheap
+/// no-op after the live build. Called on the loading screen from the game thread. Needs both the font
+/// (captured/env) and readable stats; silently waits if either is not ready.
 pub(crate) unsafe fn maybe_build_stats_text() {
-    if STATS_TEXT_BUILT.load(Ordering::SeqCst) != 0 {
+    if STATS_TEXT_LIVE.load(Ordering::SeqCst) != 0 {
         return;
     }
     let Some(font) = menu_font() else {
@@ -345,6 +367,9 @@ pub(crate) unsafe fn maybe_build_stats_text() {
     let Some(stats) = (unsafe { read_loading_screen_stats() }) else {
         return;
     };
+    if STATS_TEXT_BUILT.load(Ordering::SeqCst) != 0 && !stats.attr_source_live {
+        return;
+    }
     // Wait for real content (a non-empty name or a real level) before committing the one-shot build.
     if stats.level <= 0 && stats.name.trim().is_empty() {
         return;
@@ -358,7 +383,10 @@ pub(crate) unsafe fn maybe_build_stats_text() {
         *g = Some((w, h, rgba));
     }
     STATS_TEXT_BUILT.store(1, Ordering::SeqCst);
-    if STATS_TEXT_LOG.swap(1, Ordering::SeqCst) == 0 {
+    if stats.attr_source_live {
+        STATS_TEXT_LIVE.store(1, Ordering::SeqCst);
+    }
+    if STATS_TEXT_LOG.swap(1, Ordering::SeqCst) == 0 || stats.attr_source_live {
         append_autoload_debug(format_args!(
             "stats-text: built loading-screen stats bitmap {w}x{h} (live={}) lines={:?}",
             stats.attr_source_live, lines
@@ -388,6 +416,7 @@ pub(crate) fn composite_stats_into_head(spx: &mut [u8], sw: u32, sh: u32) {
 /// Reset the per-load stats-text cache so the next load rebuilds for the (possibly different) character.
 pub(crate) fn stats_text_window_reset() {
     STATS_TEXT_BUILT.store(0, Ordering::SeqCst);
+    STATS_TEXT_LIVE.store(0, Ordering::SeqCst);
     STATS_TEXT_LOG.store(0, Ordering::SeqCst);
     if let Ok(mut g) = STATS_TEXT_RGBA.lock() {
         *g = None;
