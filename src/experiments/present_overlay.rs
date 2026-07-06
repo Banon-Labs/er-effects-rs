@@ -571,8 +571,18 @@ unsafe fn is_idxgi_swapchain(obj: usize) -> bool {
 
 /// Find the GAME's live `IDXGISwapChain3*` via the RE-confirmed deref chain rooted at `g_GxDrawContext`:
 /// `*(base+RVA)` (GxDrawContext) -> `+0x128` (output-vector begin) -> `*entry[0]` (per-window output) ->
-/// `*output` (the swapchain). A confirming QI (`is_idxgi_swapchain`) self-validates, so a wrong/drifted
-/// offset degrades to `None` (then the BFS fallback) -- never a crash or a wrong hook. Read-only walking.
+/// `*output` (the swapchain). This is the ONLY accepted source: it reads the game's own live pointer to
+/// its active render output, so a non-null vtable-matching hit IS the real swapchain. When the chain is
+/// not yet populated (early boot) or a hit fails the vtable match, we return `None` and the caller simply
+/// retries next frame -- never a crash, never a wrong hook.
+///
+/// SEAMLESS COMPAT (2026-07-05): the previous BFS fallback (scan any reachable dxgi-vtable'd object) was
+/// REMOVED. `swapchain_vtable_matches` only compares the vtable pointer, which a RELEASED/dummy DXVK
+/// swapchain retains -- so BFS could latch a swapchain-shaped-but-dead object. Under Seamless Co-op (ERSC
+/// does its own DXGI work) such an object was reachable from the GxDrawContext root before the real
+/// swapchain existed; BFS latched it (`FOUND ... via BFS after 12897 objs`), the self-present pump called
+/// a COM method on it, and DXVK faulted with a null internal `this` (rcx=0). The precise chain never has
+/// this failure mode because it walks to the game's single live output slot, not arbitrary heap pointers.
 unsafe fn find_game_swapchain(base: usize) -> Option<usize> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let read_nn = |a: usize| -> Option<usize> {
@@ -604,76 +614,13 @@ unsafe fn find_game_swapchain(base: usize) -> Option<usize> {
             return Some(sc);
         }
     }
-    // Chain not yet populated (early frame) or layout drift: fall back to a bounded BFS rooted at the
-    // GxDrawContext (a far closer root than the old CSGraphics), gated by the same confirming QI.
-    unsafe { find_game_swapchain_bfs(ctx) }
-}
-
-/// Fallback for [`find_game_swapchain`]: bounded BFS from `root` (the `g_GxDrawContext`) for any reachable
-/// object whose vtable is in dxgi.dll AND QIs as `IDXGISwapChain`. Insurance for the case where the precise
-/// chain offset drifts; self-validating via the same QI. Read-only pointer-walking.
-unsafe fn find_game_swapchain_bfs(root: usize) -> Option<usize> {
-    let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let dxgi = unsafe { module_range(b"dxgi.dll\0") };
-    let hint = PRESENT_RESOLVED_ADDR.load(Ordering::SeqCst);
-    let vt_ok = |v: usize| -> bool {
-        if let Some((lo, hi)) = dxgi {
-            lo <= v && v < hi
-        } else {
-            // same high-module window as the resolved Present (Wine modules at 0x6fff_xxxx_xxxx).
-            hint != 0 && (v >> 24) == (hint >> 24)
-        }
-    };
-    let mut visited: Vec<usize> = Vec::with_capacity(2048);
-    let mut queue: Vec<(usize, u32)> = vec![(root, 0)];
-    let mut budget = 0u32;
-    let mut dxgi_candidates = 0u32;
-    while let Some((obj, depth)) = queue.pop() {
-        if budget >= 24000 {
-            break;
-        }
-        budget += 1;
-        if obj < 0x10000 || obj == null || visited.contains(&obj) {
-            continue;
-        }
-        visited.push(obj);
-        let vt = match unsafe { safe_read_usize(obj) } {
-            Some(v) => v,
-            None => continue,
-        };
-        if vt_ok(vt) {
-            dxgi_candidates += 1;
-            // Crash-proof vtable-match first (read-only); QI only when resolved addrs are unknown.
-            if swapchain_vtable_matches(obj)
-                || (PRESENT_RESOLVED_ADDR.load(Ordering::SeqCst) == 0
-                    && unsafe { is_idxgi_swapchain(obj) })
-            {
-                append_autoload_debug(format_args!(
-                    "present-overlay: FOUND game swapchain 0x{obj:x} (vtable=0x{vt:x}) via BFS after {budget} objs depth={depth}"
-                ));
-                return Some(obj);
-            }
-        }
-        if depth < 12 {
-            let mut off = 0usize;
-            while off < 0x300 {
-                if let Some(v) = unsafe { safe_read_usize(obj + off) } {
-                    if v >= 0x10000 && v < 0x8000_0000_0000 && (v & 7) == 0 {
-                        queue.push((v, depth + 1));
-                    }
-                }
-                off += 8;
-            }
-        }
-    }
-    // Throttled diagnostic (the scan runs every frame): why no swapchain found.
+    // Chain not yet populated (early frame) or a candidate failed the vtable match. Do NOT scan the heap
+    // for a fallback -- a vtable-matching object may be a dead swapchain (see SEAMLESS COMPAT above).
+    // Return None so the caller retries next frame; throttle a diagnostic so a persistent miss is visible.
     let t = GAME_SWAPCHAIN_FIND_TRIES.load(Ordering::SeqCst);
     if t == 1 || t == 300 || t == 1200 {
         append_autoload_debug(format_args!(
-            "present-overlay: scan miss try={t} root=0x{root:x} dxgi_module={} objs={budget} dxgi_vtable_candidates={dxgi_candidates} visited={}",
-            dxgi.map(|(l, h)| format!("[0x{l:x},0x{h:x})"))
-                .unwrap_or_else(|| "NONE".to_string()),
-            visited.len()
+            "present-overlay: chain miss try={t} ctx=0x{ctx:x} (real swapchain not yet in g_GxDrawContext output vector)"
         ));
     }
     None
