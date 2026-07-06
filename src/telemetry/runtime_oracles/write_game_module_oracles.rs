@@ -2318,8 +2318,9 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_gfx_portrait_head_ever",
             GFX_PORTRAIT_HEAD_EVER.load(Ordering::SeqCst),
         );
-        // PIVOT (er-effects-rs-jsm): player-stats loading text. `stats_text_built` = the stats bitmap was
-        // rendered from the game font; `tip_suppressed_hits` = native tip-refresh calls we no-op'd.
+        // PIVOT (er-effects-rs-jsm): player-stats loading text. `stats_text_built` = cumulative count of
+        // stats bitmaps rendered from the game font (content-keyed rebuilds: a character switch or the
+        // record->live upgrade bumps it); `tip_suppressed_hits` = native tip-refresh calls we no-op'd.
         push_json_usize(
             body,
             "oracle_stats_text_built",
