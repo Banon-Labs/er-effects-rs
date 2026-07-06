@@ -184,7 +184,9 @@ pub(crate) fn remember_preferred_save_picker_dir(dir: &std::path::Path) {
     );
     let new_contents = match std::fs::read_to_string(&path) {
         Ok(contents) => upsert_top_level_key(&contents, PREFERRED_PICKER_DIR_KEY, &assignment),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => boilerplate_config(&assignment),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            boilerplate_config(Some(&assignment))
+        }
         Err(err) => {
             append_autoload_debug(format_args!(
                 "runtime-config: not persisting {PREFERRED_PICKER_DIR_KEY} -- '{}' unreadable: {err}",
@@ -229,23 +231,31 @@ fn upsert_top_level_key(contents: &str, key: &str, assignment: &str) -> String {
     out
 }
 
-fn boilerplate_config(picker_assignment: &str) -> String {
+fn boilerplate_config(picker_assignment: Option<&str>) -> String {
+    let picker_block = if let Some(assignment) = picker_assignment {
+        format!(
+            "# Folder the missing-save picker opens in. While {AUTOUPDATE_PICKER_DIR_KEY} is true,\n# it is rewritten to the folder of each successfully picked save.\n{assignment}\n{AUTOUPDATE_PICKER_DIR_KEY} = true"
+        )
+    } else {
+        format!(
+            "# Folder the missing-save picker opens in. While {AUTOUPDATE_PICKER_DIR_KEY} is true,\n# it is rewritten to the folder of each successfully picked save.\n# {PREFERRED_PICKER_DIR_KEY} = 'C:\\path\\to\\saves'\n{AUTOUPDATE_PICKER_DIR_KEY} = true"
+        )
+    };
     format!(
         "\
-# er-effects-rs runtime config (auto-created by the missing-save picker).
+# er-effects-rs runtime config (auto-created next to the loaded DLL).
 # All keys are optional; uncomment and edit as needed.
 #
 # save_file = 'C:\\path\\to\\ER0000.sl2'  # explicit save to load (skips default-save detection and the picker)
 # slot = 0                               # character slot the autoload selects
 # method = \"...\"                         # autoload method override
+# boot_background_image = 'C:\\path\\to\\background.png'
+# persist_boot_background_to_loading_screen = true
 # menu_sort.armaments = \"order_of_acquisition\"  # or \"item_type\" / \"preserve\"
 # menu_sort.armor = \"order_of_acquisition\"
 # menu_sort.talismans = \"order_of_acquisition\"
 
-# Folder the missing-save picker opens in. While {AUTOUPDATE_PICKER_DIR_KEY} is true,
-# it is rewritten to the folder of each successfully picked save.
-{picker_assignment}
-{AUTOUPDATE_PICKER_DIR_KEY} = true
+{picker_block}
 "
     )
 }
@@ -345,10 +355,24 @@ fn load_runtime_config(hmodule: HINSTANCE) -> Result<RuntimeConfig, String> {
     let contents = match std::fs::read_to_string(&path) {
         Ok(contents) => contents,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(RuntimeConfig {
-                path,
-                ..RuntimeConfig::default()
-            });
+            let contents = boilerplate_config(None);
+            match std::fs::write(&path, &contents) {
+                Ok(()) => append_autoload_debug(format_args!(
+                    "runtime-config: auto-created default '{}' next to the loaded DLL",
+                    path.display()
+                )),
+                Err(write_err) => {
+                    append_autoload_debug(format_args!(
+                        "runtime-config: default config '{}' was missing and could not be auto-created: {write_err}; using defaults for this run",
+                        path.display()
+                    ));
+                    return Ok(RuntimeConfig {
+                        path,
+                        ..RuntimeConfig::default()
+                    });
+                }
+            }
+            contents
         }
         Err(err) => {
             return Err(format!("config '{}' is unreadable: {err}", path.display()));
