@@ -25,6 +25,7 @@ import tomllib
 
 TEXT_LANGS = {"", "text", "plain", "plaintext"}
 SHELL_LANGS = {"bash", "sh", "shell", "console"}
+SUBPROCESS_TIMEOUT_SECONDS = 30
 
 
 def parse_args() -> argparse.Namespace:
@@ -58,7 +59,12 @@ def check_bash_n(path: Path, line_no: int, code: str) -> list[str]:
         f.write(code)
         tmp = Path(f.name)
     try:
-        proc = subprocess.run(["bash", "-n", str(tmp)], text=True, capture_output=True)
+        proc = subprocess.run(
+            ["bash", "-n", str(tmp)],
+            text=True,
+            capture_output=True,
+            timeout=SUBPROCESS_TIMEOUT_SECONDS,
+        )
     finally:
         tmp.unlink(missing_ok=True)
     if proc.returncode != 0:
@@ -83,7 +89,13 @@ def check_bash_run(path: Path, line_no: int, code: str) -> list[str]:
         env = os.environ.copy()
         env["PATH"] = f"{stub_dir}{os.pathsep}" + env.get("PATH", "")
         env.setdefault("REGULATION_BIN", str(stub_dir / "regulation.bin"))
-        proc = subprocess.run(["bash", str(script)], text=True, capture_output=True, env=env)
+        proc = subprocess.run(
+            ["bash", str(script)],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=SUBPROCESS_TIMEOUT_SECONDS,
+        )
     if proc.returncode != 0:
         return [
             f"{path}:{line_no}: bash-run failed ({proc.returncode})\n"
@@ -103,7 +115,13 @@ def check_toml(path: Path, line_no: int, code: str) -> list[str]:
 def check_run(path: Path, line_no: int, command: str) -> list[str]:
     if not command:
         return [f"{path}:{line_no}: md-test run requires a command"]
-    proc = subprocess.run(command, shell=True, text=True, capture_output=True)
+    proc = subprocess.run(
+        command,
+        shell=True,
+        text=True,
+        capture_output=True,
+        timeout=SUBPROCESS_TIMEOUT_SECONDS,
+    )
     if proc.returncode != 0:
         return [
             f"{path}:{line_no}: md-test run failed ({proc.returncode}): {command}\n"

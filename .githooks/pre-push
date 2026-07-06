@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+printf 'pre-push: running scripts/ci-local-check.sh\n' >&2
+exec bash scripts/ci-local-check.sh
