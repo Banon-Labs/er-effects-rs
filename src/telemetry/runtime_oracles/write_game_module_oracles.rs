@@ -1940,6 +1940,44 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_portrait_publish_skipped_unkeyed",
             PROFILE_PUBLISH_SKIPPED_UNKEYED.load(Ordering::SeqCst),
         );
+        // HARNESS-FAILURE semaphore (user directive 2026-07-06): windows that drove the model but
+        // published no portrait. The readiness watcher fails the run when this is non-zero -- the
+        // publish gates must never silently degrade the product; drive this to 0 by fixing the root
+        // render (per-cause in `..._fail_cause`: 1=torn 2=unkeyed 3=badiou 4=lowmask).
+        push_json_usize(
+            body,
+            "oracle_portrait_window_publish_failures",
+            PORTRAIT_WINDOW_PUBLISH_FAILURES.load(Ordering::SeqCst),
+        );
+        // READBACK STALL SPLIT (diagnostic): average microseconds per coherent readback for the GPU-WAIT
+        // (removable by an async ring buffer) vs the CPU de-swizzle + mask/key (stay on the render
+        // thread). Decides how close to the ~7.5s floor an async readback can get before the CPU pass
+        // becomes the residual bottleneck.
+        {
+            let n = PORTRAIT_RB_COUNT.load(Ordering::SeqCst).max(1);
+            let mn = PORTRAIT_RB_MASK_COUNT.load(Ordering::SeqCst).max(1);
+            push_json_usize(body, "oracle_portrait_rb_count", PORTRAIT_RB_COUNT.load(Ordering::SeqCst));
+            push_json_usize(
+                body,
+                "oracle_portrait_rb_wait_avg_us",
+                PORTRAIT_RB_WAIT_US_SUM.load(Ordering::SeqCst) / n,
+            );
+            push_json_usize(
+                body,
+                "oracle_portrait_rb_deswizzle_avg_us",
+                PORTRAIT_RB_DESWIZZLE_US_SUM.load(Ordering::SeqCst) / n,
+            );
+            push_json_usize(
+                body,
+                "oracle_portrait_rb_mask_avg_us",
+                PORTRAIT_RB_MASK_US_SUM.load(Ordering::SeqCst) / mn,
+            );
+        }
+        push_json_usize(
+            body,
+            "oracle_portrait_window_publish_fail_cause",
+            PORTRAIT_WINDOW_PUBLISH_FAIL_CAUSE.load(Ordering::SeqCst),
+        );
         push_json_usize(
             body,
             "oracle_portrait_have_keyed_frame",

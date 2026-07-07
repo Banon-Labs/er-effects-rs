@@ -591,7 +591,7 @@ unsafe fn refresh_loading_bg_live_gx(base: usize) {
 /// (header: b"ERPX", u32 LE width, u32 LE height, then width*height*4 RGBA8) so the agent can
 /// convert it to a PNG offline and visually confirm it is the loaded character's head (not the
 /// depth buffer / garbage). Best-effort; gated by the same default-OFF readback path.
-fn dump_portrait_rgba(slot: i32, width: u32, height: u32, px: &[u8]) {
+pub(crate) fn dump_portrait_rgba(slot: i32, width: u32, height: u32, px: &[u8]) {
     let dir = std::env::var("ER_EFFECTS_AUTOLOAD_DEBUG_PATH")
         .ok()
         .and_then(|p| PathBuf::from(p).parent().map(|d| d.to_path_buf()))

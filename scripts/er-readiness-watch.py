@@ -135,6 +135,7 @@ SAVE_DATA_POPUP_DETECTED = "visual_save_data_popup_detected"
 NATIVE_CORRUPTED_SAVE_DETECTED = "native_corrupted_save_detected"
 NATIVE_LOAD_SAVE_DATA_CORRUPTED_DETECTED = "native_load_save_data_corrupted_detected"
 MESSAGEBOX_DIALOG_DETECTED = "native_messagebox_dialog_detected"
+PORTRAIT_PUBLISH_FAILURE = "portrait_window_publish_failure"
 SERVER_STATUS_SEMAPHORE_DETECTED = "native_server_status_semaphore_detected"
 TITLE_NATIVE_VISUAL_UNSUPPRESSED = "native_title_visual_render_unsuppressed"
 STARTUP_SOUND_EVENT_DETECTED = "startup_sound_event_detected"
@@ -1213,6 +1214,17 @@ def telemetry_messagebox_dialog_detected(telemetry: dict[str, Any] | None) -> bo
         or telemetry.get("oracle_postload_modal_seen") is True
         or as_int(telemetry.get("oracle_msgbox_postload_builds"), 0) > 0
     )
+
+
+def telemetry_portrait_publish_failure_detected(telemetry: dict[str, Any] | None) -> bool:
+    """User directive 2026-07-06: the loading-portrait publish gates (torn/unkeyed/badiou/lowmask)
+    must not silently degrade the product. A window that drove the model but published no portrait
+    trips `oracle_portrait_window_publish_failures`; treat any occurrence as a hard run failure so the
+    root render gets fixed rather than papered over. `oracle_portrait_window_publish_fail_cause` names
+    the dominant cause (1=torn 2=unkeyed 3=badiou 4=lowmask)."""
+    if not isinstance(telemetry, dict):
+        return False
+    return as_int(telemetry.get("oracle_portrait_window_publish_failures"), 0) > 0
 
 
 def telemetry_native_load_save_data_corrupted_detected(telemetry: dict[str, Any] | None) -> bool:
@@ -2443,6 +2455,23 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
                     expected_animation_id=args.expected_animation_id,
                 )
             )
+        if args.fail_on_portrait_publish_failure and telemetry_portrait_publish_failure_detected(
+            telemetry
+        ):
+            return with_runtime_module_info(
+                ReadinessResult(
+                    False,
+                    PORTRAIT_PUBLISH_FAILURE,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
         if args.fail_on_server_status_semaphore and telemetry_server_status_semaphore_detected(telemetry):
             return with_runtime_module_info(
                 ReadinessResult(
@@ -2881,6 +2910,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=True,
         help="Fail immediately if in-process telemetry sees a MessageBoxDialog builder arg matching packed ToS_win64.fmg EULA/privacy text IDs.",
+    )
+    parser.add_argument(
+        "--fail-on-portrait-publish-failure",
+        action="store_true",
+        default=True,
+        help="Fail when a loading window drove the portrait model but published no head (oracle_portrait_window_publish_failures>0). The publish gates (torn/unkeyed) must not silently degrade the product; drive the failures to 0 by fixing the root render (user directive 2026-07-06).",
     )
     parser.add_argument(
         "--fail-on-server-status-semaphore",

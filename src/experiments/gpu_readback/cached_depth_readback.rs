@@ -115,20 +115,45 @@ pub(crate) static PROFILE_MASK_HEAD_MISMATCH_TOTAL: AtomicUsize = AtomicUsize::n
 /// RB_FAST_* (color) and RB_DEPTH_* (depth) paths, between whose independent fences the game's async
 /// render can advance the RT (color=frameN, depth=frameN+1 -> the mask shape mismatches the head).
 /// Separate readback buffers for color and depth (resized on footprint change). Raw COM owned here.
+// The queue/allocator/list/fence stay SINGLE and shared: the render thread WAITS on the fence each frame,
+// so the GPU is idle before the next reuse and `allocator.Reset()` remains safe with one allocator. Only
+// the readback STAGING BUFFERS ring (Step 2 worker offload), because the worker maps + de-swizzles a slot
+// AFTER the wait while the render thread copies the NEXT frame into a DIFFERENT slot's buffers.
 static RB_COH_QUEUE: AtomicUsize = AtomicUsize::new(0);
 static RB_COH_ALLOC: AtomicUsize = AtomicUsize::new(0);
 static RB_COH_LIST: AtomicUsize = AtomicUsize::new(0);
 static RB_COH_FENCE: AtomicUsize = AtomicUsize::new(0);
-static RB_COH_CBUF: AtomicUsize = AtomicUsize::new(0);
-static RB_COH_CBUFSIZE: AtomicU64 = AtomicU64::new(0);
-static RB_COH_DBUF: AtomicUsize = AtomicUsize::new(0);
-static RB_COH_DBUFSIZE: AtomicU64 = AtomicU64::new(0);
 static RB_COH_FENCEVAL: AtomicU64 = AtomicU64::new(0);
+/// STAGING-BUFFER RING size (Step 2). 3 slots: one being copied-into by the render thread, one (or more)
+/// being de-swizzled/consumed by the worker, and headroom so the render thread rarely has to drop.
+pub(crate) const RB_COH_RING: usize = 3;
+/// Ring slot lifecycle state. FREE = available for the render thread to claim; BUSY = the render thread
+/// copied into it (or the worker is consuming it). The render thread claims FREE->BUSY with a CAS; the
+/// worker sets it back to FREE after it has finished de-swizzling + publishing (even on panic).
+pub(crate) const RB_SLOT_FREE: usize = 0;
+pub(crate) const RB_SLOT_BUSY: usize = 1;
+pub(crate) static RB_COH_SLOT_STATE: [AtomicUsize; RB_COH_RING] =
+    [const { AtomicUsize::new(RB_SLOT_FREE) }; RB_COH_RING];
+/// Per-slot color/depth readback staging buffers + their footprint sizes (resized once per slot on the
+/// first frame; the RT size is fixed per run). Raw COM owned here (process-lifetime statics).
+pub(crate) static RB_COH_CBUF: [AtomicUsize; RB_COH_RING] =
+    [const { AtomicUsize::new(0) }; RB_COH_RING];
+static RB_COH_CBUFSIZE: [AtomicU64; RB_COH_RING] = [const { AtomicU64::new(0) }; RB_COH_RING];
+pub(crate) static RB_COH_DBUF: [AtomicUsize; RB_COH_RING] =
+    [const { AtomicUsize::new(0) }; RB_COH_RING];
+static RB_COH_DBUFSIZE: [AtomicU64; RB_COH_RING] = [const { AtomicU64::new(0) }; RB_COH_RING];
+/// Round-robin frame counter for choosing the next ring slot.
+static RB_COH_FRAME: AtomicUsize = AtomicUsize::new(0);
+/// Frames whose readback was DROPPED because the chosen ring slot was still BUSY (the worker had not
+/// finished consuming it). Intended backpressure -- the render thread never blocks. Telemetry.
+pub(crate) static RB_COH_SLOT_BUSY_DROPS: AtomicUsize = AtomicUsize::new(0);
 /// Depth captured COHERENTLY with the current color frame `(dw, dh, depth, depth_cand)`, stashed by
 /// `readback_offscreen_fast_coherent` for the SAME draw tick's `apply_depth_alpha_key` to consume via
 /// `take_coherent_depth`. Single render-thread producer/consumer within one tick; the producer always
 /// sets it (coherent success) or clears it (fallback) each frame, so a later frame never reads a stale
 /// depth. `None` -> the mask path reads depth fresh (the legacy separate read).
+/// (Step 2: bypassed -- the worker reads depth from the staging slot; left per the design note.)
+#[allow(dead_code)]
 static COHERENT_DEPTH: Mutex<Option<(u32, u32, Vec<f32>, usize)>> = Mutex::new(None);
 /// Instrumentation the first coherent pass lacked: how many draw ticks the COHERENT color+depth readback
 /// SUCCEEDED (`_OK`) vs fell back to the separate color+depth path (`_FALLBACK`). Exposed as oracles so a
@@ -697,6 +722,11 @@ unsafe fn readback_resource_cached_fast(resource: ID3D12Resource) -> Option<(u32
 /// element is the plane-0 R32 float depth. `None` on any failure (the caller then leaves the color buffer
 /// fully opaque -- fail-open, no cutout). Same catch_unwind + never-touch-the-game contract as the color
 /// readback. Used by `apply_depth_alpha_key` to derive the transparent-background alpha mask.
+///
+/// NOTE (worker offload, 2026-07-06): no longer on the live path -- the coherent readback captures depth
+/// with the color on one fence and the render thread hands it to the consume worker, so the separate-fence
+/// depth read is unused. Retained as the proven standalone depth-readback for reference.
+#[allow(dead_code)]
 pub(crate) unsafe fn readback_depth_fast(gpu_child: usize) -> Option<(u32, u32, Vec<f32>, usize)> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         let (resource, cand) = find_depth_resource(gpu_child)?;

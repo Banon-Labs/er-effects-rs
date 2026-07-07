@@ -678,6 +678,9 @@ pub(crate) unsafe fn readback_offscreen_rgba8(gpu_child: usize) -> Option<(u32, 
 /// published ~4x). Returns the candidate pointer alongside the pixels; the caller pins it once the frame
 /// is confirmed to be a real (non-checker) head. Fault-guarded; caller must gate on a live renderer/model
 /// so the scan can't race a teardown free.
+/// (Step 2: no longer called -- it was the coherent read's scan fallback, dropped with the staged split.
+/// Kept as the proven standalone color readback for reference.)
+#[allow(dead_code)]
 pub(crate) unsafe fn readback_offscreen_fast(
     gpu_child: usize,
 ) -> Option<(u32, u32, Vec<u8>, usize)> {
@@ -692,53 +695,107 @@ pub(crate) unsafe fn readback_offscreen_fast(
 
 /// Consume the coherently-captured depth for this tick (clears it so it is used exactly once and never
 /// carried to a later frame). `None` -> the caller reads depth fresh (the legacy separate path).
-fn take_coherent_depth() -> Option<(u32, u32, Vec<f32>, usize)> {
+/// (Step 2: no longer on the live path -- the worker reads depth from the staging slot directly. Left per
+/// the design note; the writer was removed with `readback_offscreen_fast_coherent`.)
+#[allow(dead_code)]
+pub(crate) fn take_coherent_depth() -> Option<(u32, u32, Vec<f32>, usize)> {
     COHERENT_DEPTH.lock().ok().and_then(|mut g| g.take())
 }
 
-/// Color+depth read COHERENTLY (bug #3 fix). Same `(w, h, rgba, cand)` shape as `readback_offscreen_fast`
-/// so the drive is unchanged, but it ALSO stashes the depth captured on the same fence into
-/// `COHERENT_DEPTH` for this tick's `apply_depth_alpha_key` to consume -- so the mask is derived from the
-/// SAME frame as the color. On ANY failure the stash is CLEARED and we fall back to the separate color
-/// path (the mask then reads depth fresh); never a stale depth, never a crash.
-pub(crate) unsafe fn readback_offscreen_fast_coherent(
-    gpu_child: usize,
-) -> Option<(u32, u32, Vec<u8>, usize)> {
-    if let Some((cw, ch, color, ccand, dw, dh, depth, dcand)) =
-        unsafe { readback_offscreen_color_depth_coherent(gpu_child) }
-    {
-        COHERENT_READ_OK.fetch_add(1, Ordering::SeqCst);
-        if let Ok(mut g) = COHERENT_DEPTH.lock() {
-            *g = Some((dw, dh, depth, dcand));
-        }
-        return Some((cw, ch, color, ccand));
-    }
-    // Coherent read failed -> clear the stash so no stale depth leaks into this frame's mask.
-    COHERENT_READ_FALLBACK.fetch_add(1, Ordering::SeqCst);
-    if let Ok(mut g) = COHERENT_DEPTH.lock() {
-        *g = None;
-    }
-    let r = unsafe { readback_offscreen_fast(gpu_child) };
-    if r.is_some() {
-        // Separate-path color is scan-resolved: no bundle provenance this tick.
-        PROFILE_COLOR_SRC_BUNDLE_LAST.store(0, Ordering::SeqCst);
-        PROFILE_COLOR_FROM_SCAN.fetch_add(1, Ordering::SeqCst);
-    }
-    r
+// (The old Vec-returning `readback_offscreen_fast_coherent` wrapper + its COHERENT_DEPTH stash were
+// removed in Step 2: the render thread no longer de-swizzles into Vecs, so there is nothing to stash --
+// it hands the worker a staging-buffer slot instead. See `readback_offscreen_color_depth_staged` below.
+// `take_coherent_depth`/`COHERENT_DEPTH` are left as dead code per the Step-2 design note.)
+
+/// A STAGED readback (Step 2 worker offload): the render thread resolved the offscreen COLOR RT + its
+/// DEPTH sibling, recorded BOTH copies into one command list, executed + WAITED on one fence (so the game
+/// RT is released synchronously and the staging buffers hold the data), but did NOT map or de-swizzle. The
+/// worker maps `slot`'s staging buffers and de-swizzles from the footprint metadata below. Carries NO game
+/// pointer and NO D3D12 object -- only the ring `slot` index + plain scalars.
+pub(crate) struct StagedReadback {
+    pub(crate) slot: usize,
+    pub(crate) cw: u32,
+    pub(crate) ch: u32,
+    /// `DXGI_FORMAT.0` of the color RT (the worker reconstructs the B/R-swap decision from it).
+    pub(crate) cformat: u32,
+    pub(crate) c_rowpitch: u32,
+    pub(crate) c_total: u64,
+    pub(crate) dw: u32,
+    pub(crate) dh: u32,
+    pub(crate) d_rowpitch: u32,
+    pub(crate) d_total: u64,
+    /// The color RT candidate pointer (the job's `rt_cand`, used for the content-RT pin).
+    pub(crate) color_cand: usize,
+    pub(crate) color_from_bundle: bool,
 }
 
-/// COHERENT single-fence readback of the offscreen COLOR RT and its DEPTH sibling: both copies are
-/// recorded into ONE command list and gated by ONE fence, so they capture the SAME GPU state. This is the
-/// root fix for the wrong-shaped mask (bug #3): the separate RB_FAST_*/RB_DEPTH_* paths each fence their
-/// own copy, and the game's async render can advance the RT between them (color=frameN, depth=frameN+1),
-/// so the depth-derived cutout no longer matches the head. Resolves color via the RT pin and depth via
-/// `find_depth_resource` (same sources as the twins). Returns
-/// `(cw, ch, rgba, color_cand, dw, dh, depth_f32, depth_cand)`. `None` on any failure (caller falls back
-/// to the separate path). Never touches the game's queues; catch_unwind; fault-guarded like the twins.
-pub(crate) unsafe fn readback_offscreen_color_depth_coherent(
+/// RAII guard for a claimed ring slot: on drop it frees the slot (state -> FREE) UNLESS committed. On the
+/// render thread a claimed slot must be released on ANY failure (`?` early-return or panic); on success the
+/// guard is committed and the WORKER frees the slot after it finishes de-swizzling + publishing.
+struct SlotGuard {
+    slot: usize,
+    committed: bool,
+}
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        if !self.committed {
+            RB_COH_SLOT_STATE[self.slot].store(RB_SLOT_FREE, Ordering::SeqCst);
+        }
+    }
+}
+
+/// COHERENT STAGED readback of the offscreen COLOR RT and its DEPTH sibling (Step 2). Picks the next ring
+/// slot; if it is still BUSY (worker behind) DROPS the frame (bumps `RB_COH_SLOT_BUSY_DROPS`, returns
+/// `None` -- mirror the existing skip path; `copy_offscreen_rt_to_srv` and the rest of the draw tick still
+/// run). Otherwise claims it, does resolve + record-copy + execute + WAIT on the SINGLE shared queue/fence
+/// (KEEPING the wait on the render thread so the game RT is released here), and returns the slot + footprint
+/// metadata. Does NOT map or de-swizzle -- the worker does that from the staging buffers. `None` on any
+/// resolve/copy failure (caller skips). Never touches the game's queues; catch_unwind; fault-guarded.
+pub(crate) unsafe fn readback_offscreen_color_depth_staged(
     gpu_child: usize,
-) -> Option<(u32, u32, Vec<u8>, usize, u32, u32, Vec<f32>, usize)> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+) -> Option<StagedReadback> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Pick + CLAIM the next ring slot (round-robin). If it is still BUSY the worker has not finished
+        // consuming it, so DROP this frame's readback (the render thread never blocks -- intended
+        // backpressure).
+        let slot = RB_COH_FRAME.fetch_add(1, Ordering::SeqCst) % RB_COH_RING;
+        if RB_COH_SLOT_STATE[slot]
+            .compare_exchange(RB_SLOT_FREE, RB_SLOT_BUSY, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            RB_COH_SLOT_BUSY_DROPS.fetch_add(1, Ordering::SeqCst);
+            return None;
+        }
+        // The slot is now BUSY (claimed). The guard frees it on any `?`-failure or panic below; on success
+        // it is committed and the worker frees it after de-swizzle + publish.
+        let mut guard = SlotGuard {
+            slot,
+            committed: false,
+        };
+        match unsafe { readback_resolve_copy_wait(gpu_child, slot) } {
+            Some(staged) => {
+                COHERENT_READ_OK.fetch_add(1, Ordering::SeqCst);
+                guard.committed = true;
+                Some(staged)
+            }
+            None => {
+                COHERENT_READ_FALLBACK.fetch_add(1, Ordering::SeqCst);
+                None
+            }
+        }
+    }))
+    .ok()
+    .flatten()
+}
+
+/// Render-thread half of the staged readback: resolve color + its depth sibling, record BOTH
+/// CopyTextureRegion into ring `slot`'s staging buffers on the SINGLE shared queue/list, execute + Signal +
+/// WAIT (one fence), and return the slot + footprint metadata. NO map, NO de-swizzle (the worker does
+/// those). The game RT owned refs (`color_res`/`depth_res`) drop at end of scope -- safe: the wait
+/// guarantees the GPU copy finished, so the staging buffers hold the data and the game RT is no longer
+/// needed. `None` on any COM/resolve failure (the caller frees the slot via the guard).
+unsafe fn readback_resolve_copy_wait(gpu_child: usize, slot: usize) -> Option<StagedReadback> {
+    unsafe {
         // Resolve the COLOR from the SAME render-target bundle as the depth (bundle+0x30 RTV), so the two
         // are the same render pass's paired siblings -- the fix for the 2nd-character desync, where the
         // pinned color and the bundle depth came from DIFFERENT bundles (temporally coherent via the one
@@ -776,7 +833,7 @@ pub(crate) unsafe fn readback_offscreen_color_depth_coherent(
 
         // DEPTH sibling via the deterministic bundle-paired chain (find_depth_resource now walks the
         // scene's own DSV with no pin), so it is THIS scene's depth, not a drifted foreign buffer.
-        let (depth_res, depth_cand) = find_depth_resource(gpu_child)?;
+        let (depth_res, _depth_cand) = find_depth_resource(gpu_child)?;
         let mut cfoot = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
         let mut ctotal: u64 = 0;
         device.GetCopyableFootprints(
@@ -868,7 +925,7 @@ pub(crate) unsafe fn readback_offscreen_color_depth_coherent(
             Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
             Flags: D3D12_RESOURCE_FLAG_NONE,
         };
-        if RB_COH_CBUFSIZE.load(Ordering::SeqCst) != ctotal {
+        if RB_COH_CBUFSIZE[slot].load(Ordering::SeqCst) != ctotal {
             let bd = buffer_desc(ctotal);
             let mut b: Option<ID3D12Resource> = None;
             device
@@ -881,13 +938,13 @@ pub(crate) unsafe fn readback_offscreen_color_depth_coherent(
                     &mut b,
                 )
                 .ok()?;
-            let old = RB_COH_CBUF.swap(b?.into_raw() as usize, Ordering::SeqCst);
+            let old = RB_COH_CBUF[slot].swap(b?.into_raw() as usize, Ordering::SeqCst);
             if old != 0 {
                 drop(ID3D12Resource::from_raw(old as *mut c_void));
             }
-            RB_COH_CBUFSIZE.store(ctotal, Ordering::SeqCst);
+            RB_COH_CBUFSIZE[slot].store(ctotal, Ordering::SeqCst);
         }
-        if RB_COH_DBUFSIZE.load(Ordering::SeqCst) != dtotal {
+        if RB_COH_DBUFSIZE[slot].load(Ordering::SeqCst) != dtotal {
             let bd = buffer_desc(dtotal);
             let mut b: Option<ID3D12Resource> = None;
             device
@@ -900,11 +957,11 @@ pub(crate) unsafe fn readback_offscreen_color_depth_coherent(
                     &mut b,
                 )
                 .ok()?;
-            let old = RB_COH_DBUF.swap(b?.into_raw() as usize, Ordering::SeqCst);
+            let old = RB_COH_DBUF[slot].swap(b?.into_raw() as usize, Ordering::SeqCst);
             if old != 0 {
                 drop(ID3D12Resource::from_raw(old as *mut c_void));
             }
-            RB_COH_DBUFSIZE.store(dtotal, Ordering::SeqCst);
+            RB_COH_DBUFSIZE[slot].store(dtotal, Ordering::SeqCst);
         }
 
         // Borrow the cached COM objects (no refcount change; the statics own them).
@@ -912,8 +969,8 @@ pub(crate) unsafe fn readback_offscreen_color_depth_coherent(
         let a_raw = RB_COH_ALLOC.load(Ordering::SeqCst) as *mut c_void;
         let l_raw = RB_COH_LIST.load(Ordering::SeqCst) as *mut c_void;
         let f_raw = RB_COH_FENCE.load(Ordering::SeqCst) as *mut c_void;
-        let cb_raw = RB_COH_CBUF.load(Ordering::SeqCst) as *mut c_void;
-        let db_raw = RB_COH_DBUF.load(Ordering::SeqCst) as *mut c_void;
+        let cb_raw = RB_COH_CBUF[slot].load(Ordering::SeqCst) as *mut c_void;
+        let db_raw = RB_COH_DBUF[slot].load(Ordering::SeqCst) as *mut c_void;
         let (Some(queue), Some(allocator), Some(list), Some(fence), Some(cbuf), Some(dbuf)) = (
             ID3D12CommandQueue::from_raw_borrowed(&q_raw),
             ID3D12CommandAllocator::from_raw_borrowed(&a_raw),
@@ -995,6 +1052,9 @@ pub(crate) unsafe fn readback_offscreen_color_depth_coherent(
             return None;
         }
         let base_list: ID3D12CommandList = list.cast().ok()?;
+        // STALL-SPLIT diagnostic: time the GPU-WAIT (removable by an async ring buffer) separately from
+        // the CPU de-swizzle below (which stays on the render thread even async).
+        let rb_wait_t0 = std::time::Instant::now();
         queue.ExecuteCommandLists(&[Some(base_list)]);
         let val = RB_COH_FENCEVAL.fetch_add(1, Ordering::SeqCst) + 1;
         queue.Signal(fence, val).ok()?;
@@ -1007,93 +1067,31 @@ pub(crate) unsafe fn readback_offscreen_color_depth_coherent(
                 return None;
             }
         }
+        PORTRAIT_RB_WAIT_US_SUM
+            .fetch_add(rb_wait_t0.elapsed().as_micros() as usize, Ordering::SeqCst);
+        PORTRAIT_RB_COUNT.fetch_add(1, Ordering::SeqCst);
 
-        // Map + de-swizzle COLOR (RGBA8, swap R/B for BGRA formats).
-        let color = {
-            let read_range = D3D12_RANGE {
-                Begin: 0,
-                End: ctotal as usize,
-            };
-            let mut mapped: *mut c_void = std::ptr::null_mut();
-            cbuf.Map(0, Some(&read_range), Some(&mut mapped)).ok()?;
-            if mapped.is_null() {
-                return None;
-            }
-            let w = cw as usize;
-            let h = ch as usize;
-            let row_pitch = cfoot.Footprint.RowPitch as usize;
-            let out_row = w * RGBA8_BPP;
-            let total = ctotal as usize;
-            let src = mapped as *const u8;
-            let swap_rb = matches!(
-                cformat,
-                DXGI_FORMAT_B8G8R8A8_UNORM | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
-            );
-            let mut out = vec![0u8; w * h * RGBA8_BPP];
-            for y in 0..h {
-                let row_off = y * row_pitch;
-                if row_off >= total {
-                    break;
-                }
-                let avail = total - row_off;
-                let copy_bytes = out_row.min(row_pitch).min(avail);
-                let src_row = src.add(row_off);
-                let dst_row = &mut out[y * out_row..y * out_row + copy_bytes];
-                std::ptr::copy_nonoverlapping(src_row, dst_row.as_mut_ptr(), copy_bytes);
-                if swap_rb {
-                    let texels = copy_bytes / RGBA8_BPP;
-                    for t in 0..texels {
-                        dst_row.swap(t * RGBA8_BPP, t * RGBA8_BPP + 2);
-                    }
-                }
-            }
-            let write_range = D3D12_RANGE { Begin: 0, End: 0 };
-            cbuf.Unmap(0, Some(&write_range));
-            out
-        };
-
-        // Map + reinterpret DEPTH (plane 0, each 4-byte texel as f32).
-        let depth = {
-            let read_range = D3D12_RANGE {
-                Begin: 0,
-                End: dtotal as usize,
-            };
-            let mut mapped: *mut c_void = std::ptr::null_mut();
-            dbuf.Map(0, Some(&read_range), Some(&mut mapped)).ok()?;
-            if mapped.is_null() {
-                return None;
-            }
-            let w = dw as usize;
-            let h = dh as usize;
-            let row_pitch = dfoot.Footprint.RowPitch as usize;
-            let total = dtotal as usize;
-            let src = mapped as *const u8;
-            let mut out = vec![0f32; w * h];
-            for y in 0..h {
-                let row_off = y * row_pitch;
-                if row_off + w * 4 > total {
-                    break;
-                }
-                for x in 0..w {
-                    let b = std::slice::from_raw_parts(src.add(row_off + x * 4), 4);
-                    out[y * w + x] = f32::from_bits(u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
-                }
-            }
-            let write_range = D3D12_RANGE { Begin: 0, End: 0 };
-            dbuf.Unmap(0, Some(&write_range));
-            out
-        };
-
-        // Success is certain here -- record this tick's color provenance for the strict publish
-        // gate (a later-failing attempt never reaches this store; the fallback path stores 0).
+        // Success: record this frame's color provenance for the strict publish gate (a de-swizzle failure
+        // later in the worker just skips the publish; it does not un-prove the color source here).
         PROFILE_COLOR_SRC_BUNDLE_LAST.store(color_identity_proven as usize, Ordering::SeqCst);
         if color_identity_proven {
             PROFILE_COLOR_FROM_BUNDLE.fetch_add(1, Ordering::SeqCst);
         } else {
             PROFILE_COLOR_FROM_SCAN.fetch_add(1, Ordering::SeqCst);
         }
-        Some((cw, ch, color, color_cand, dw, dh, depth, depth_cand))
-    }))
-    .ok()
-    .flatten()
+        Some(StagedReadback {
+            slot,
+            cw,
+            ch,
+            cformat: cformat.0 as u32,
+            c_rowpitch: cfoot.Footprint.RowPitch,
+            c_total: ctotal,
+            dw,
+            dh,
+            d_rowpitch: dfoot.Footprint.RowPitch,
+            d_total: dtotal,
+            color_cand,
+            color_from_bundle: color_identity_proven,
+        })
+    }
 }

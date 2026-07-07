@@ -10,25 +10,35 @@
 /// opaque, exactly the pre-existing display, so this can only ADD the cutout, never regress the head. Emits
 /// a one-shot `depth-key` diagnostic and drives the `oracle_depth_key_*` RAM semaphores. `cpx` is the
 /// tightly-packed RGBA8 the caller is about to publish (mutated in place).
-pub(crate) unsafe fn apply_depth_alpha_key(gpu_child: usize, w: u32, h: u32, cpx: &mut [u8]) {
+pub(crate) fn apply_depth_alpha_key(
+    depth: &[f32],
+    dw: usize,
+    dh: usize,
+    incarnation: usize,
+    w: u32,
+    h: u32,
+    cpx: &mut [u8],
+) {
     let w = w as usize;
     let h = h as usize;
     if cpx.len() < w * h * 4 {
         return;
     }
-    // (1) RECALCULATE the mask from the CURRENT depth buffer whenever it carries real content.
-    let fresh = unsafe { compute_depth_mask(gpu_child, w, h) };
+    // (1) RECALCULATE the mask from the CURRENT depth buffer (captured coherently on the render thread
+    //     and passed in as a plain Vec<f32>, so this whole pass runs on the worker thread with no game
+    //     pointer or D3D12 object).
+    let fresh = compute_depth_mask(depth, dw, dh, w, h);
     // (2) On a fresh mask, CACHE it; on a dead frame (depth read back cleared -> no gap), REUSE the last
     //     cached mask so the cutout stays stable. Recalculated whenever fresh depth is available (tracks a
     //     genuine re-render), cached only for the frames in between -- never a frozen one-shot.
     let mask = if let Some(m) = fresh {
         DEPTH_KEY_FRESH.fetch_add(1, Ordering::SeqCst);
         // Tag the cache with the character it was computed for, so a later cross-character reuse is
-        // detectable (the stale-reuse desync semaphore below).
-        LAST_DEPTH_MASK_INCARNATION.store(
-            PROFILE_PORTRAIT_INCARNATION.load(Ordering::SeqCst),
-            Ordering::SeqCst,
-        );
+        // detectable (the stale-reuse desync semaphore below). This uses the FRAME's incarnation (snapshot
+        // on the render thread and passed in), NOT a live read -- so the mask cache is tagged/compared
+        // against the character this frame belongs to, not whatever is rendering now (the 2nd-character
+        // desync safety fix under the worker offload).
+        LAST_DEPTH_MASK_INCARNATION.store(incarnation, Ordering::SeqCst);
         if let Ok(mut g) = LAST_DEPTH_MASK.lock() {
             *g = Some((w, h, m.clone()));
         }
@@ -43,7 +53,7 @@ pub(crate) unsafe fn apply_depth_alpha_key(gpu_child: usize, w: u32, h: u32, cpx
             // mask -- but if it was computed for a DIFFERENT character incarnation than the one rendering
             // now, its silhouette will not match this head (the 2nd-character depth-mask desync). Detect
             // it as a run-stopping RAM oracle rather than only seeing it on screen.
-            let cur = PROFILE_PORTRAIT_INCARNATION.load(Ordering::SeqCst);
+            let cur = incarnation;
             let cached = LAST_DEPTH_MASK_INCARNATION.load(Ordering::SeqCst);
             if cur != 0 && cached != 0 && cur != cached {
                 let n = PROFILE_MASK_STALE_REUSE.fetch_add(1, Ordering::SeqCst);
@@ -162,18 +172,14 @@ fn mask_head_iou(mask: &[u8], cpx: &[u8], w: usize, h: usize) -> usize {
     }
 }
 
-/// Read back the offscreen depth plane and compute the per-pixel background mask (1 = background/cut, 0 =
-/// keep) via the bimodal-gap threshold. Returns `None` when the depth buffer has no content this frame or
-/// no separable gap (the caller then reuses the cached mask). Emits the one-shot `depth-key` diagnostic
+/// Compute the per-pixel background mask (1 = background/cut, 0 = keep) via the bimodal-gap threshold from
+/// the depth plane passed in. The depth was captured COHERENTLY with this frame's color (single fence, bug
+/// #3 fix) and taken on the render thread, so this fn is now pure CPU over a `&[f32]` and runs on the
+/// consume worker -- no game pointer, no D3D12 object. Returns `None` when the depth has no content / no
+/// separable gap (the caller then reuses the cached mask). Emits the one-shot `depth-key` diagnostic
 /// (success) and a separate one-shot skip diagnostic (dims mismatch / no gap) so both are visible once.
-unsafe fn compute_depth_mask(gpu_child: usize, w: usize, h: usize) -> Option<Vec<u8>> {
-    // Prefer the depth captured COHERENTLY with this tick's color (same single fence -- bug #3 fix);
-    // fall back to a fresh, separately-fenced depth read when the coherent path was unavailable.
-    let (dw, dh, depth, depth_cand) = match take_coherent_depth() {
-        Some(d) => d,
-        None => unsafe { readback_depth_fast(gpu_child) }?,
-    };
-    if dw as usize != w || dh as usize != h || depth.len() < w * h {
+fn compute_depth_mask(depth: &[f32], dw: usize, dh: usize, w: usize, h: usize) -> Option<Vec<u8>> {
+    if dw != w || dh != h || depth.len() < w * h {
         // At higher-res (1024) the depth sibling MUST match the color RT or the mask can't align.
         if DEPTH_KEY_NOGAP_LOGGED.swap(1, Ordering::SeqCst) == 0 {
             append_autoload_debug(format_args!(
@@ -304,9 +310,9 @@ unsafe fn compute_depth_mask(gpu_child: usize, w: usize, h: usize) -> Option<Vec
         ));
     }
     if !degenerate {
-        // A clean bimodal bg/head separation confirms this depth buffer belongs to OUR portrait scene --
-        // pin its candidate so later scans can't drift to another slot's same-size depth sibling.
-        PROFILE_DEPTH_PIN.store(depth_cand, Ordering::SeqCst);
+        // A clean bimodal bg/head separation confirms this depth buffer belongs to OUR portrait scene.
+        // (The depth candidate is now resolved + pinned on the render-thread coherent readback; the worker
+        // no longer sees the candidate pointer, so PROFILE_DEPTH_PIN is not written here anymore.)
         return Some(mask);
     }
     // SECOND PASS (backdrop-geometry recovery -- er-effects-rs-hi2 root fix, runs 2026-07-03).
@@ -384,7 +390,7 @@ unsafe fn compute_depth_mask(gpu_child: usize, w: usize, h: usize) -> Option<Vec
                             "depth-key: SECOND-PASS recovered mask -- interior[{imin},{imax}] gap[bins {b_lo}..+{b_len}/{NB}] thr={thr2} keep_high={keep_high2} masked={share2}% (first pass degenerate: clear-plane extremes excluded)"
                         ));
                     }
-                    PROFILE_DEPTH_PIN.store(depth_cand, Ordering::SeqCst);
+                    // (Depth candidate pinning moved to the render-thread coherent readback; not here.)
                     return Some(mask2);
                 }
             }

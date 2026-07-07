@@ -404,7 +404,17 @@ pub(crate) unsafe fn maybe_build_stats_text() {
     if unchanged {
         return;
     }
-    let (w, h, rgba) = render_lines_to_rgba(font, &lines, 48.0, [238, 228, 202, 255]);
+    // PROPORTIONAL FONT SIZE (user 2026-07-06): the stats text is composited INTO the head render target,
+    // which is then aspect-cover UPSCALED to the backbuffer -- so a FIXED-pixel em_px changes its on-screen
+    // size whenever the render resolution changes (halving the RT 2056->1028 doubled the on-screen text).
+    // Size the font as a constant FRACTION of the RT height instead: 48px was tuned at the 2056 RT, so
+    // em_px = rt_dim * 48/2056 keeps the text the same on-screen size at ANY render resolution. rt_dim is
+    // the offscreen size we patch the portrait RT to (confirmed == oracle_ls_portrait_h).
+    const STATS_TEXT_EM_PX_AT_REF_RT: f32 = 48.0;
+    const STATS_TEXT_REF_RT_DIM: f32 = 2056.0;
+    let rt_dim = (PROFILE_OFFSCREEN_SIZE_TARGET & 0xffff_ffff) as f32;
+    let em_px = rt_dim * (STATS_TEXT_EM_PX_AT_REF_RT / STATS_TEXT_REF_RT_DIM);
+    let (w, h, rgba) = render_lines_to_rgba(font, &lines, em_px, [238, 228, 202, 255]);
     if w == 0 || h == 0 {
         return;
     }

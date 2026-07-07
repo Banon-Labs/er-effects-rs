@@ -50,7 +50,12 @@ pub(crate) const PROFILE_CAM_PUSH_RVA: usize = 0xbba460;
 // ZOOM-OUT (2026-06-30, user: loading-screen face was way too zoomed -- only forehead/eyes visible).
 // Pull the camera BACK past the engine baseline (>1.0) to a head-and-shoulders product shot, and drop the
 // strong upward pitch that framed the forehead. Free knobs -- retune from the user's image.
-pub(crate) const PROFILE_CAM_DISTANCE_SCALE: f32 = 1.7;
+// ZOOM-OUT AGAIN (2026-07-06, user): a character with a massive-head helmet FILLED the entire frame at
+// 1.7, leaving NO background -- so the depth mask cut nothing (unkeyed) and every frame was rejected, i.e.
+// the render was fine but the framing starved the keyer. Pull back generously so even the biggest head
+// leaves background margin for the depth key. The overlay aspect-covers the keyed RT, so a smaller head
+// in the RT still composites; a head with no surrounding background does not.
+pub(crate) const PROFILE_CAM_DISTANCE_SCALE: f32 = 6.0;
 /// Slight vertical tilt only (was 0.40 = a forehead close-up).
 pub(crate) const PROFILE_CAM_PITCH_DELTA_RAD: f32 = 0.05;
 /// Head-on by default (2026-06-30, user): zero horizontal turn so the camera faces the character
