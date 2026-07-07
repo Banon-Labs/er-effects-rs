@@ -280,6 +280,13 @@ pub(crate) fn install_present_overlay_hook() {
 const BOOT_PUMP_MAX_MS: u128 = 20_000;
 /// Poll cadence while waiting for the swapchain to exist.
 const BOOT_PUMP_POLL_SLEEP_MS: u64 = 10;
+/// Hold the FIRST self-present at most this long waiting for the winreconfig early final-geometry
+/// apply to declare a result. The apply's MoveWindow/SetWindowPos BLOCK until the game's window
+/// thread starts pumping messages (~+4s, measured run 200757: issued +795ms, flushed +4010ms), so
+/// the result latch fires exactly when the geometry is truly final -- present before it and the
+/// XWayland remap flashes 2 black frames over the already-visible cover (the run-200757 residual).
+/// The cap must sit past that ~4s flush; the fallback still beats an invisible boot on any hang.
+const BOOT_PUMP_EARLY_APPLY_WAIT_MAX_MS: u128 = 8_000;
 /// Self-present cadence (~30 fps -- Present(sync=1) additionally paces on vsync).
 const BOOT_PUMP_FRAME_SLEEP_MS: u64 = 16;
 
@@ -331,6 +338,18 @@ fn boot_present_pump() {
         let sc = GAME_SWAPCHAIN.load(Ordering::SeqCst);
         let orig = PRESENT_ORIG.load(Ordering::SeqCst);
         if sc == 0 || orig == 0 {
+            let _ = tick_rx.recv_timeout(poll);
+            continue;
+        }
+        // Hold the FIRST pixel off the screen until the startup window geometry is final (the
+        // winreconfig early-apply latched a result): presenting before the early MoveWindow lands
+        // would re-introduce a visible black flash when XWayland services the resize
+        // (bd er-effects-rs-rzow). Bounded: after BOOT_PUMP_EARLY_APPLY_WAIT_MAX_MS the pump
+        // presents anyway (a late flash beats an invisible boot).
+        if BOOT_VIEW_SELF_PRESENTS.load(Ordering::SeqCst) == 0
+            && WINRECONFIG_EARLY_APPLY_RESULT.load(Ordering::SeqCst) == 0
+            && start.elapsed().as_millis() <= BOOT_PUMP_EARLY_APPLY_WAIT_MAX_MS
+        {
             let _ = tick_rx.recv_timeout(poll);
             continue;
         }

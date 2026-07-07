@@ -207,6 +207,11 @@ def main() -> int:
         "--post-trigger-grace", type=float, default=0.0,
         help="keep recording this many seconds after the trigger before teardown "
              "(e.g. 1.5 to capture the boot-cover fade-out past the handoff)")
+    ap.add_argument(
+        "--no-teardown", action="store_true",
+        help="RUNTIME_NO_TEARDOWN probe (no watcher): record through trigger+grace, then stop "
+             "ONLY the recorder and leave the game running for the user (pkill -x eldenring.exe "
+             "to end it)")
     args = ap.parse_args()
 
     if args.selftest:
@@ -227,6 +232,8 @@ def main() -> int:
 
     cap = runtime_cap_seconds()
     env = dict(os.environ, ARTIFACT_DIR=str(artifact_dir))
+    if args.no_teardown:
+        env["RUNTIME_NO_TEARDOWN"] = "1"
 
     if args.dry_run:
         rc = subprocess.run(
@@ -318,13 +325,21 @@ def main() -> int:
                         stop_reason = "loading_screen_trigger"
                         if args.post_trigger_grace > 0:
                             grace_until = now + args.post_trigger_grace
-                            log(f"TRIGGER {trigger_state} -> recording {args.post_trigger_grace}s grace before teardown")
+                            log(f"TRIGGER {trigger_state} -> recording {args.post_trigger_grace}s grace")
+                        elif args.no_teardown:
+                            log(f"TRIGGER {trigger_state} -> stop recording; game LEFT RUNNING")
+                            recorder_sigint_epoch = stop_recorder(recorder)
+                            break
                         else:
                             log(f"TRIGGER {trigger_state} -> teardown + stop recording")
                             teardown_epoch = teardown_game()
                             recorder_sigint_epoch = stop_recorder(recorder)
                             break
                 elif now >= grace_until:
+                    if args.no_teardown:
+                        log("post-trigger grace elapsed -> stop recording; game LEFT RUNNING")
+                        recorder_sigint_epoch = stop_recorder(recorder)
+                        break
                     log("post-trigger grace elapsed -> teardown + stop recording")
                     teardown_epoch = teardown_game()
                     recorder_sigint_epoch = stop_recorder(recorder)
@@ -339,7 +354,8 @@ def main() -> int:
                     break
                 if now > deadline:
                     stop_reason = "wrapper_deadline_before_trigger"
-                    teardown_epoch = teardown_game()
+                    if not args.no_teardown:
+                        teardown_epoch = teardown_game()
                     recorder_sigint_epoch = stop_recorder(recorder)
                     break
                 # Re-validate ONLY the target window every iteration: timestamp every state
@@ -367,7 +383,7 @@ def main() -> int:
                 stop_reason = "er_window_never_stable"
     finally:
         recorder_sigint_epoch = recorder_sigint_epoch or stop_recorder(recorder)
-        if not trigger_epoch:
+        if not trigger_epoch and not args.no_teardown:
             teardown_epoch = teardown_epoch or teardown_game()
 
     # Refine launch epoch to the probe's own T0 (bash timestamp at the launch fire).
@@ -376,11 +392,16 @@ def main() -> int:
     except Exception:
         caveats.append("launch-epoch.txt unavailable; launch_epoch is the probe spawn time")
 
-    log(f"stop_reason={stop_reason}; waiting for probe cleanup")
-    try:
-        probe_proc.wait(timeout=60)
-    except subprocess.TimeoutExpired:
-        caveats.append("probe did not exit within 60s after teardown; left to its own watcher")
+    if args.no_teardown:
+        log(f"stop_reason={stop_reason}; NO-TEARDOWN -- game and probe left running "
+            f"(tear down with: pkill -x eldenring.exe)")
+        caveats.append("no-teardown run: game left running for the user")
+    else:
+        log(f"stop_reason={stop_reason}; waiting for probe cleanup")
+        try:
+            probe_proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            caveats.append("probe did not exit within 60s after teardown; left to its own watcher")
     probe_out.close()
 
     # Frame extraction: fps=60 re-times to exact CFR so frame N <-> N/60s even if the recorder
