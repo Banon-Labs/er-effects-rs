@@ -557,6 +557,8 @@ pub(crate) static POLICY_TOS_FLAG_SETTER_LAST_AFTER: AtomicUsize =
 pub(crate) static POLICY_TOS_FLAG_SETTER_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static START_POLICY_TOS_TITLE_HOOK: Once = Once::new();
+/// Observe-only user32 window-reconfiguration hooks (bd er-effects-rs-rzow).
+pub(crate) static START_WINDOW_RECONFIG_OBSERVER: Once = Once::new();
 /// Native server/login status-text formatter. Static asset/native scan (see
 /// `target/autoresearch/server-semaphore-assets/server-semaphore-static-summary.json`) maps
 /// `GR_System_Message_win64.fmg` status IDs 401120/401150/401160/401165 to state records at

@@ -76,6 +76,15 @@ static BOOT_VIEW_DRAWN_PERMILLE: AtomicUsize = AtomicUsize::new(usize::MAX);
 static BOOT_VIEW_DRAWN_IDX: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// 1 when the last rasterized upload included the optional cached screenshot background.
 static BOOT_VIEW_DRAWN_BG_ACTIVE: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Epoch-ms (never 0 once set) when the loading/world handoff was first detected; the hold clock
+/// for the seamless cut. Reset by an own-menu rearm.
+pub(crate) static BOOT_VIEW_HANDOFF_SEEN_MS: AtomicUsize = AtomicUsize::new(0);
+/// CS::LoadingScreen update hits at the moment the cover stopped (telemetry: proves the cut
+/// happened on a lit loading screen, not into the black gap).
+pub(crate) static BOOT_VIEW_STOP_NATIVE_HITS: AtomicUsize = AtomicUsize::new(0);
+/// LOADING_SCREEN_UPDATE_HITS baseline latched at handoff detection: the counter is cumulative
+/// across loads, so an own-menu second load must measure only ITS loading screen's ticks.
+pub(crate) static BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE: AtomicUsize = AtomicUsize::new(0);
 /// Creep timing epoch + the epoch-ms when the milestone index last advanced.
 static BOOT_VIEW_EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 static BOOT_VIEW_IDX_CHANGED_MS: AtomicU64 = AtomicU64::new(0);
@@ -123,6 +132,16 @@ const BOOT_VIEW_MILESTONE_PERMILLE: [usize; 7] = [
 const BOOT_VIEW_CREEP_FULL_MS: u64 = 6000;
 const BOOT_VIEW_CREEP_NUM: usize = 7;
 const BOOT_VIEW_CREEP_DEN: usize = 10;
+/// Seamless handoff (user 2026-07-06, replacing the earlier fade-out design): at the loading
+/// handoff the cover HOLDS fully lit over the game's black gap and the loading screen's own
+/// fade-in-from-black, then stops in a single cut once the native loading screen is fully lit --
+/// a lit-to-lit scene cut with no black and no fade. Measured (run 194254 pixel telemetry): the
+/// native fade-in luminance plateaus around CS::LoadingScreen update hit ~12, ~1.8s after the
+/// loading-table build.
+const BOOT_VIEW_NATIVE_LIT_UPDATE_HITS: usize = 12;
+/// If the CS::LoadingScreen update semaphore never advances (hook missing/regressed), stop this
+/// long after the handoff anyway so the cover can never mask the live loading screen indefinitely.
+const BOOT_VIEW_HANDOFF_HOLD_BAIL_MS: u64 = 5_000;
 
 // Strip geometry (pixels; text is the 5x7 font at 2x = 10x14). ER-idiomatic minimal presentation
 // (user 2026-07-05: the panel/border/percent styling clashed with the game): a hairline bar on a
@@ -233,6 +252,8 @@ pub(crate) fn rearm_boot_progress_for_own_menu_load(selected_slot: i32, source: 
     BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.store(slot_key, Ordering::SeqCst);
     BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.store(table_baseline, Ordering::SeqCst);
     BOOT_VIEW_STOPPED.store(0, Ordering::SeqCst);
+    BOOT_VIEW_HANDOFF_SEEN_MS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_STOP_NATIVE_HITS.store(0, Ordering::SeqCst);
     BOOT_VIEW_REACHED_MASK.store(1, Ordering::SeqCst);
     BOOT_VIEW_MILESTONE_IDX.store(0, Ordering::SeqCst);
     BOOT_VIEW_LAST_PERMILLE.store(0, Ordering::SeqCst);
@@ -895,19 +916,57 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     };
     let world_handoff = !own_menu_active && IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
     if loading_handoff || world_handoff {
-        if BOOT_VIEW_STOPPED.swap(1, Ordering::SeqCst) == 0 {
-            append_autoload_debug(format_args!(
-                "boot-view: handoff -> loading window (draws={} permille={} mask=0x{:x} own_menu={} table_builds={} table_baseline={})",
-                BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst),
-                BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst),
-                BOOT_VIEW_REACHED_MASK.load(Ordering::SeqCst),
-                own_menu_active,
-                loadscreen_builds,
-                table_baseline,
-            ));
+        // SEAMLESS CUT (user 2026-07-06): the handoff (loading table build) starts the game's
+        // black gap + the loading screen's own fade-in-from-black, so stopping here would cut a
+        // lit cover into black. Instead HOLD the cover fully lit and stop in one frame only once
+        // the native loading screen is itself fully lit (CS::LoadingScreen update hits reach the
+        // measured luminance plateau), or immediately on world takeover, or on the bail clock if
+        // the update semaphore regressed. Lit-to-lit; never a black frame between the scenes.
+        let now_ms = boot_view_epoch_ms().max(1) as usize;
+        let mut seen_ms = BOOT_VIEW_HANDOFF_SEEN_MS.load(Ordering::SeqCst);
+        if seen_ms == 0 {
+            match BOOT_VIEW_HANDOFF_SEEN_MS.compare_exchange(
+                0,
+                now_ms,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => {
+                    seen_ms = now_ms;
+                    BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE
+                        .store(LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst), Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "boot-view: handoff detected -> holding cover until native loading screen is lit (draws={} permille={} mask=0x{:x} own_menu={} table_builds={} table_baseline={})",
+                        BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst),
+                        BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst),
+                        BOOT_VIEW_REACHED_MASK.load(Ordering::SeqCst),
+                        own_menu_active,
+                        loadscreen_builds,
+                        table_baseline,
+                    ));
+                }
+                Err(current) => seen_ms = current,
+            }
         }
-        BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.store(0, Ordering::SeqCst);
-        return false;
+        let native_hits = LOADING_SCREEN_UPDATE_HITS
+            .load(Ordering::SeqCst)
+            .saturating_sub(BOOT_VIEW_HANDOFF_NATIVE_HITS_BASELINE.load(Ordering::SeqCst));
+        let held_ms = (now_ms as u64).saturating_sub(seen_ms as u64);
+        let native_lit = native_hits >= BOOT_VIEW_NATIVE_LIT_UPDATE_HITS;
+        let hold_bail = held_ms >= BOOT_VIEW_HANDOFF_HOLD_BAIL_MS;
+        if native_lit || world_handoff || hold_bail {
+            if BOOT_VIEW_STOPPED.swap(1, Ordering::SeqCst) == 0 {
+                BOOT_VIEW_STOP_NATIVE_HITS.store(native_hits, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "boot-view: handoff -> loading window (seamless cut; native_hits={native_hits} held_ms={held_ms} world={world_handoff} bail={hold_bail} draws={} permille={})",
+                    BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst),
+                    BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst),
+                ));
+            }
+            BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.store(0, Ordering::SeqCst);
+            return false;
+        }
+        // else: fall through and keep compositing the fully-lit cover over the native fade-in.
     }
     if BOOT_VIEW_DRAW_STATE.load(Ordering::SeqCst) == 2 {
         return false;

@@ -1704,6 +1704,63 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_boot_view_loadscreen_table_baseline",
             BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.load(Ordering::SeqCst),
         );
+        // Seamless-handoff semaphores: handoff_seen_ms = boot-view epoch ms when the loading/world
+        // handoff was first detected (0 = not yet; the cover holds fully lit from here);
+        // stop_native_hits = CS::LoadingScreen update ticks (baselined per load) when the cover
+        // cut -- >= the lit threshold proves the cut landed on a lit loading screen.
+        push_json_usize(
+            body,
+            "oracle_boot_view_handoff_seen_ms",
+            BOOT_VIEW_HANDOFF_SEEN_MS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_stop_native_hits",
+            BOOT_VIEW_STOP_NATIVE_HITS.load(Ordering::SeqCst),
+        );
+        // Window-reconfiguration timeline semaphores (bd er-effects-rs-rzow): user32 call counts
+        // from the observe-only hooks, plus the early final-geometry apply result (1 = applied,
+        // 2 = skipped WINDOWED, 3 = no window, 4 = no monitor, 5 = no config, 6 = already final).
+        push_json_usize(
+            body,
+            "oracle_winreconfig_create_window_calls",
+            WINRECONFIG_CREATE_WINDOW_CALLS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_winreconfig_set_window_pos_calls",
+            WINRECONFIG_SET_WINDOW_POS_CALLS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_winreconfig_set_window_long_calls",
+            WINRECONFIG_SET_WINDOW_LONG_CALLS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_winreconfig_move_window_calls",
+            WINRECONFIG_MOVE_WINDOW_CALLS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_winreconfig_change_display_calls",
+            WINRECONFIG_CHANGE_DISPLAY_CALLS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_winreconfig_early_apply_result",
+            WINRECONFIG_EARLY_APPLY_RESULT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_winreconfig_early_apply_ms",
+            WINRECONFIG_EARLY_APPLY_MS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_winreconfig_early_apply_rect",
+            WINRECONFIG_EARLY_APPLY_RECT.load(Ordering::SeqCst),
+        );
         // Early self-present pump: frames WE presented before the game's first own present, the
         // pump-relative ms the swapchain was found, and why the pump stopped (1 = game took over,
         // the success terminal state; 2 = budget; 3 = Present HRESULT failure).
