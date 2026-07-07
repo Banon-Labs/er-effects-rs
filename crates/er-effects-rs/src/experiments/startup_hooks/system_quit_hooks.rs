@@ -270,6 +270,23 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
             *((result + 4) as *mut i32) = 0;
         }
     }
+    if SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED.load(Ordering::SeqCst) == 0 {
+        match game_rva(SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA) {
+            Ok(close_addr) => {
+                let close_fn: unsafe extern "system" fn(usize) =
+                    unsafe { std::mem::transmute(close_addr) };
+                unsafe { close_fn(profile_window) };
+                SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED.store(1, Ordering::SeqCst);
+                SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT.fetch_add(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "system-quit-dup: ProfileSelect load-job Run native-closed ProfileSelect directly after save-safe block window=0x{profile_window:x} close=0x{close_addr:x}; does not depend on a later confirm-lambda callback"
+                ));
+            }
+            Err(_) => append_autoload_debug(format_args!(
+                "system-quit-dup: ProfileSelect load-job Run close skipped -- failed to resolve close rva 0x{SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA:x}"
+            )),
+        }
+    }
     if let Ok(base) = game_module_base() {
         if fd4_time > TITLE_OWNER_SCAN_START_ADDRESS
             && unsafe { safe_read_usize(fd4_time) }.is_some()
@@ -278,7 +295,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
         }
     }
     append_autoload_debug(format_args!(
-        "system-quit-dup: ProfileSelect load-job Run BLOCKED save-safe job=0x{job:x} result=0x{result:x} list=0x{list:x} profile_id={profile_id} context_arg=0x{context_arg:x}; returning Success to advance the chain to the confirm cancel-close (in-world saveState=2 arm is blocked at RequestLoadSlot); no captured LoadJob is retained or replayed"
+        "system-quit-dup: ProfileSelect load-job Run BLOCKED save-safe job=0x{job:x} result=0x{result:x} list=0x{list:x} profile_id={profile_id} context_arg=0x{context_arg:x}; returning Success after direct native-close (in-world saveState=2 arm is blocked at RequestLoadSlot); no captured LoadJob is retained or replayed"
     ));
     result
 }

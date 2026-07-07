@@ -228,10 +228,22 @@ unsafe fn system_quit_save_swap_poll_preview(base: usize) {
 
 unsafe fn system_quit_save_swap_prepare_selected_slot(slot: i32) -> Result<bool, ()> {
     if !(0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: prepare selected slot skipped -- out-of-range slot={slot}"
+        ));
         return Ok(false);
     }
     let mut st = system_quit_save_swap_lock();
     if !st.preview_applied || st.committed {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: prepare selected slot skipped slot={slot} preview_applied={} committed={} armed={} path_set={} candidate_len={} mask=0x{:x}",
+            st.preview_applied,
+            st.committed,
+            st.armed,
+            !st.path.is_empty(),
+            st.candidate_bytes.len(),
+            st.candidate_slot_mask
+        ));
         return Ok(false);
     }
     let bit = 1usize << slot as usize;
@@ -243,6 +255,12 @@ unsafe fn system_quit_save_swap_prepare_selected_slot(slot: i32) -> Result<bool,
         return Err(());
     }
     if st.path.is_empty() || st.candidate_bytes.is_empty() {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: refusing ProfileSelect activation for slot {slot}; foreign preview state incomplete path_set={} candidate_len={} mask=0x{:x}",
+            !st.path.is_empty(),
+            st.candidate_bytes.len(),
+            st.candidate_slot_mask
+        ));
         return Err(());
     }
     match fs::write(&st.path, &st.candidate_bytes) {

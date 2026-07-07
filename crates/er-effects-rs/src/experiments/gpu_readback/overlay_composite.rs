@@ -485,6 +485,10 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
     // user's "stopped animating / frozen the whole loading screen" symptom shows here as a low ratio.
     let drive = PROFILE_DRIVE_FRAMES_WINDOW.swap(0, Ordering::SeqCst);
     let display = PROFILE_DISPLAY_FRAMES_WINDOW.swap(0, Ordering::SeqCst);
+    // `PROFILE_RT_SRV_COPIES_WINDOW` is a true per-window counter used by the fast-fail gate. Reset it
+    // here with the other per-window counters; leaving stale copies from an earlier window makes a later
+    // no-copy failure report as cause=0/unknown instead of the actionable no-copy class.
+    let copies = PROFILE_RT_SRV_COPIES_WINDOW.swap(0, Ordering::SeqCst);
     PROFILE_DRIVE_FRAMES_WINDOW_LAST.store(drive, Ordering::SeqCst);
     PROFILE_DISPLAY_FRAMES_WINDOW_LAST.store(display, Ordering::SeqCst);
     // PUBLISH-STARVATION ATTRIBUTION (2026-07-03 soak: windows froze on the PRIOR character with the
@@ -591,6 +595,16 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
             3
         } else if lowmask > 0 {
             4
+        } else if checker > 0 {
+            5
+        } else if multi > 0 {
+            6
+        } else if unpaired > 0 {
+            7
+        } else if copies == 0 {
+            8
+        } else if cb + cs + dc + db == 0 {
+            9
         } else {
             0
         };
@@ -602,9 +616,9 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
             PORTRAIT_WINDOW_PUBLISH_FAILURES.fetch_add(1, Ordering::SeqCst) + 1
         };
         append_autoload_debug(format_args!(
-            "present-overlay: PORTRAIT PUBLISH FAILURE #{n}{} -- window drove {drive} frames but published 0 (dominant cause={} torn={torn} unkeyed={unkeyed} badiou={badiou} lowmask={lowmask}); HARNESS MUST FAIL until the root render is fixed",
+            "present-overlay: PORTRAIT PUBLISH FAILURE #{n}{} -- window drove {drive} frames but published 0 (dominant cause={} torn={torn} unkeyed={unkeyed} badiou={badiou} lowmask={lowmask} checker={checker} multi={multi} unpaired={unpaired} copies={copies} cb={cb} cs={cs} dc={dc} db={db}); HARNESS MUST FAIL until the root render is fixed",
             if already { " (already fast-failed)" } else { "" },
-            match cause { 1 => "torn", 2 => "unkeyed", 3 => "badiou", 4 => "lowmask", _ => "unknown" }
+            match cause { 1 => "torn", 2 => "unkeyed", 3 => "badiou", 4 => "lowmask", 5 => "checker", 6 => "multi", 7 => "unpaired", 8 => "no-copy", 9 => "no-provenance", _ => "unknown" }
         ));
     }
     // Re-arm the per-window fast-fail state for the next window.
@@ -612,7 +626,7 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
     PORTRAIT_WINDOW_PUBLISH_FAIL_LATCHED.store(0, Ordering::SeqCst);
     PORTRAIT_LAST_SKIP_CLASS.store(0, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "present-overlay: loading-portrait window reset ({reason}) -- animated {drive} / displayed {display} frames (drive<<display == froze early); publish[clean={published} torn={torn} unkeyed={unkeyed} lowmask={lowmask} badiou={badiou} checker={checker} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips} unpaired={unpaired} first_keyed={first_keyed_s}] share[pass_min={share_min_s} held_max={held_max}] src[color bundle={cb}/scan={cs} depth chain={dc}/bfs={db}] (clean=0 with drive>0 == PUBLISH FAILURE, see the failure line above; the dominant skip class is the cause); pins/spare cleared for the next load"
+        "present-overlay: loading-portrait window reset ({reason}) -- animated {drive} / displayed {display} frames (drive<<display == froze early); publish[clean={published} torn={torn} unkeyed={unkeyed} lowmask={lowmask} badiou={badiou} checker={checker} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips} unpaired={unpaired} copies={copies} first_keyed={first_keyed_s}] share[pass_min={share_min_s} held_max={held_max}] src[color bundle={cb}/scan={cs} depth chain={dc}/bfs={db}] (clean=0 with drive>0 == PUBLISH FAILURE, see the failure line above; the dominant skip class is the cause); pins/spare cleared for the next load"
     ));
 }
 

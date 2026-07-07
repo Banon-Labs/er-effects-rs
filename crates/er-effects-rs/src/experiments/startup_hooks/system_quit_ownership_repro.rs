@@ -823,6 +823,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
                 let close_fn: unsafe extern "system" fn(usize) =
                     unsafe { std::mem::transmute(close_addr) };
                 unsafe { close_fn(dialog) };
+                SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED.store(1, Ordering::SeqCst);
                 SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT.fetch_add(1, Ordering::SeqCst);
             }
             append_autoload_debug(format_args!(
