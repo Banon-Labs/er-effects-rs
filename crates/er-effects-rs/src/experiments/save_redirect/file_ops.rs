@@ -107,6 +107,9 @@ unsafe extern "system" fn save_ntcreatefile_diag_hook(
                 // before the boot save READ/WRITE we care about. The .sl2 opens ARE the save commit.
                 let _ = ELDENRING_SEG;
                 let is_sl2 = wide_ends_with_ci_ascii(path, SL2D);
+                if is_save_file_or_backup_path(path) {
+                    wait_for_missing_save_dialog_if_pending(path);
+                }
                 if is_sl2 {
                     observe_steam_id64_from_save_path(path);
                     let is_write = access & 0x4000_0000 != 0 || access & 0x2 != 0;
@@ -326,7 +329,8 @@ unsafe fn queue_save_redirect_hook(
 }
 
 pub(crate) fn install_save_redirect_hooks() {
-    if SAVE_REDIRECT_DIR_W.get().is_none() && !save_trace_enabled() {
+    let missing_save_pending = MISSING_SAVE_DIALOG_STATE.load(Ordering::SeqCst) == MISSING_SAVE_DIALOG_PENDING;
+    if SAVE_REDIRECT_DIR_W.get().is_none() && !save_trace_enabled() && !missing_save_pending {
         append_autoload_debug(format_args!(
             "save-override: install deferred -- redirect dir not set yet (waiting for missing-save picker/configured source)"
         ));

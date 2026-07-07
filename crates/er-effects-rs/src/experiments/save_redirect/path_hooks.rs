@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     ffi::c_void,
     fmt::Write as _,
     fs,
@@ -666,8 +667,15 @@ const MISSING_SAVE_DIALOG_CANCELLED: usize = 3;
 static MISSING_SAVE_DIALOG_STATE: AtomicUsize = AtomicUsize::new(MISSING_SAVE_DIALOG_IDLE);
 static MISSING_SAVE_PROMPT_BOOTSTRAP_READY: AtomicUsize = AtomicUsize::new(0);
 static MISSING_SAVE_BLOCKED_IO_LOGGED: AtomicUsize = AtomicUsize::new(0);
+static MISSING_SAVE_PICKER_THREAD_IO_SKIP_LOGGED: AtomicUsize = AtomicUsize::new(0);
 static MISSING_SAVE_BOOTSTRAP_READY_LOGGED: AtomicUsize = AtomicUsize::new(0);
 static SAVE_QUERY_LAST_SAVE_LIKE_KIND: AtomicUsize = AtomicUsize::new(SAVE_PATH_KIND_NONE);
+thread_local! {
+    /// True only on the missing-save picker helper thread while it is validating/staging the user's
+    /// selected source file. Those reads/copies are prerequisite work needed to resolve the picker;
+    /// blocking them on the picker state deadlocks that same thread before it can publish READY.
+    static MISSING_SAVE_PICKER_THREAD_IO: Cell<bool> = const { Cell::new(false) };
+}
 static MISSING_SAVE_GATE: OnceLock<(Mutex<()>, Condvar)> = OnceLock::new();
 
 fn missing_save_gate() -> &'static (Mutex<()>, Condvar) {
@@ -898,36 +906,23 @@ fn default_save_root() -> Option<PathBuf> {
         .map(|appdata| appdata.join("EldenRing"))
 }
 
-/// Default save file names to try, in priority order. Seamless Co-op (ERSC) keeps co-op progress in
-/// `ER0000.co2` -- a separate container from the vanilla `ER0000.sl2` -- so when the Seamless module
-/// is resident the DEFAULT-USER-SAVE autoload targets `.co2` first (the save the co-op session reads
-/// and autosaves), else `.sl2`. The OTHER extension follows as a fallback: at `DllMain` the Seamless
-/// sticky latch may not be set yet (me3 defers native loading past Arxan / the me2 shim, so `ersc.dll`
-/// is not PEB-registered at +1ms), so a co2-only profile would otherwise fail the default-save
-/// existence gate and get the missing-save picker. The fallback lets it enter DEFAULT-USER-SAVE mode
-/// instead; the read path re-resolves the correct container via the latch once ERSC is resident. Since
-/// the world-load rides native Continue (the game reads its own save, ERSC-redirected), the fallback
-/// can at worst make an early menu-display read the other container -- never a save write.
-fn default_save_file_names() -> [&'static str; 2] {
-    if save_picker_seamless_mode_after_settle("default-save-file-names") {
-        ["ER0000.co2", "ER0000.sl2"]
-    } else {
-        ["ER0000.sl2", "ER0000.co2"]
-    }
-}
-
-/// Active-extension default save base name (`ER0000.co2` under Seamless, else `ER0000.sl2`).
-/// An explicit `save_file` config still overrides it (it wins in `configured_or_default_save_file`),
-/// so any loose `.sl2`/`.co2` path remains selectable.
+/// Default save file name for the active runtime mode. Seamless Co-op (ERSC) keeps co-op progress in
+/// `ER0000.co2` -- a separate container from the vanilla `ER0000.sl2`. This is deliberately
+/// mode-locked: a Seamless launch must not silently load a vanilla `.sl2` just because it is the only
+/// appdata save present, and a vanilla launch must not silently load a Seamless `.co2`. If the active
+/// mode's file is absent, default-save discovery returns "no save" and the normal missing-save picker
+/// asks the user for the correct save flavor.
 pub(crate) fn active_default_save_file_name() -> &'static str {
-    default_save_file_names()[0]
+    if save_picker_seamless_mode_after_settle("active-default-save-file-name") {
+        "ER0000.co2"
+    } else {
+        "ER0000.sl2"
+    }
 }
 
 fn default_save_file_for_steam_id64(steam_id: u64) -> Option<PathBuf> {
     let dir = default_save_root()?.join(steam_id.to_string());
-    default_save_file_names()
-        .into_iter()
-        .find_map(|name| validated_save_file_path(dir.join(name)))
+    validated_save_file_path(dir.join(active_default_save_file_name()))
 }
 
 fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
@@ -948,9 +943,7 @@ fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
                 .and_then(|name| name.parse::<u64>().ok())
                 .and_then(plausible_steam_id64)?;
             let dir = entry.path();
-            default_save_file_names()
-                .into_iter()
-                .find_map(|name| validated_save_file_path(dir.join(name)))
+            validated_save_file_path(dir.join(active_default_save_file_name()))
                 .map(|path| (path, steam_id))
         })
         .collect()
@@ -1344,14 +1337,27 @@ fn start_missing_save_prompt_thread() {
     let _ = std::thread::Builder::new()
         .name("er-effects-missing-save-prompt".to_owned())
         .spawn(|| {
+            // This helper thread owns the user-facing picker and selected-source staging. Its own
+            // source-file metadata/read/copy calls must not be blocked by the pending-save gate; only
+            // the game's native save IO should wait for this thread to publish READY/CANCELLED.
+            MISSING_SAVE_PICKER_THREAD_IO.with(|flag| flag.set(true));
             // Do not open the common file dialog from DllMain/loader-lock context. Wait until the
             // DllMain bootstrap arms the minimal title/save gates and explicitly releases this thread.
             wait_until_missing_save_prompt_bootstrap_ready();
             match prompt_missing_save_file_source() {
                 Some(source) => {
                     let _ = activate_save_redirect_source(source, "missing-save-dialog-selection");
-                    install_save_redirect_hooks();
+                    // Release the game/save threads as soon as the selected source is staged and the
+                    // redirect root is published. Do NOT wait for `install_save_redirect_hooks()` from
+                    // this picker thread: the bootstrap-owned save-redirect installer is already
+                    // started while the dialog is pending, and `Once::call_once` would block here if
+                    // that installer is still patching/suspended inside MinHook. Blocking here keeps
+                    // `MISSING_SAVE_DIALOG_STATE` at PENDING, so the save-data job never resumes after
+                    // the user picks a file.
                     set_missing_save_dialog_state(MISSING_SAVE_DIALOG_READY);
+                    append_autoload_debug(format_args!(
+                        "save-override: missing-save dialog resolved; released blocked save IO after staging selected source"
+                    ));
                 }
                 None => {
                     append_autoload_debug(format_args!(
@@ -1368,15 +1374,35 @@ fn wait_for_missing_save_dialog_if_pending(path: &[u16]) {
     if MISSING_SAVE_DIALOG_STATE.load(Ordering::SeqCst) != MISSING_SAVE_DIALOG_PENDING {
         return;
     }
+    if MISSING_SAVE_PICKER_THREAD_IO.with(Cell::get) {
+        let hit = MISSING_SAVE_PICKER_THREAD_IO_SKIP_LOGGED.fetch_add(1, Ordering::SeqCst);
+        if hit < 8 {
+            // UTF-8 Lossy: log-only decode of a Windows wide path for probe diagnosis.
+            let p = String::from_utf16_lossy(path);
+            append_autoload_debug(format_args!(
+                "save-override: NOT blocking picker-thread source IO while missing-save dialog resolves path='{p}'"
+            ));
+        }
+        return;
+    }
     let hit = MISSING_SAVE_BLOCKED_IO_LOGGED.fetch_add(1, Ordering::SeqCst);
     if hit < 8 {
         // UTF-8 Lossy: log-only decode of a Windows wide path for probe diagnosis.
         let p = String::from_utf16_lossy(path);
         append_autoload_debug(format_args!(
-            "save-override: blocking native save IO until missing-save dialog resolves path='{p}'"
+            "save-override: blocking native save-file IO until missing-save dialog resolves path='{p}'"
         ));
     }
     wait_for_missing_save_selection_if_pending("native save IO");
+}
+
+fn is_save_file_or_backup_path(path: &[u16]) -> bool {
+    const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
+    const CO2D: &[u16] = &[b'.' as u16, b'c' as u16, b'o' as u16, b'2' as u16];
+    const BAKD: &[u16] = &[b'.' as u16, b'b' as u16, b'a' as u16, b'k' as u16];
+    wide_ends_with_ci_ascii(path, SL2D)
+        || wide_ends_with_ci_ascii(path, CO2D)
+        || wide_ends_with_ci_ascii(path, BAKD)
 }
 
 /// Length of a NUL-terminated UTF-16 string at `ptr` (excludes the NUL). 0 on null pointer.
@@ -1664,7 +1690,6 @@ fn save_redirect_path(path: &[u16]) -> Option<Vec<u16>> {
         return None;
     }
     let idx = wide_find_ci_ascii(path, ELDENRING)?;
-    wait_for_missing_save_dialog_if_pending(path);
     // Direct-file mode stages the selected source into the private native save tree. Do NOT redirect
     // save-file or .bak opens to `SAVE_DIRECT_SOURCE_FILE`; reads and writes must hit the staged copy
     // so readonly/user-provided source saves are never modified by gameplay or profile switching.
@@ -1749,6 +1774,9 @@ unsafe extern "system" fn save_redirect_createfilew_hook(
         }
         let is_save_file =
             wide_ends_with_ci_ascii(path, SL2D) || wide_ends_with_ci_ascii(path, CO2D);
+        if is_save_file || wide_ends_with_ci_ascii(path, BAKD) {
+            wait_for_missing_save_dialog_if_pending(path);
+        }
         let redirected_path = save_redirect_path(path);
         if is_save_file {
             if let Ok(base) = game_module_base() {
@@ -1814,12 +1842,24 @@ unsafe extern "system" fn save_redirect_copyfilew_hook(
         let len = unsafe { wide_len(existing) };
         (len != 0)
             .then(|| unsafe { std::slice::from_raw_parts(existing, len) })
+            .map(|path| {
+                if is_save_file_or_backup_path(path) {
+                    wait_for_missing_save_dialog_if_pending(path);
+                }
+                path
+            })
             .and_then(save_redirect_path)
     };
     let new_red = {
         let len = unsafe { wide_len(new_file) };
         (len != 0)
             .then(|| unsafe { std::slice::from_raw_parts(new_file, len) })
+            .map(|path| {
+                if is_save_file_or_backup_path(path) {
+                    wait_for_missing_save_dialog_if_pending(path);
+                }
+                path
+            })
             .and_then(save_redirect_path)
     };
     let existing_ptr = existing_red.as_ref().map_or(existing, |v| v.as_ptr());

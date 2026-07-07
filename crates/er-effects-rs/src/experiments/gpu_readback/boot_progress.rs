@@ -15,6 +15,7 @@
 //   TITLE    -- `TITLE_FADEIN_SKIP_FIRED` (zero-input FadeIn->Loop transition)
 //   MENU     -- `PRODUCT_CORE_LAST_MENU_OPENED_LATCH` (title menu natural-open latch)
 //   CONTINUE -- `SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT` / `TFC_CONTINUE_FIRED`
+//               (the visible SAVE LOAD tick marks the save-data pause immediately after this)
 //   LOADING  -- `PROFILE_LOADSCREEN_TABLE_BUILDS > 0` -> HANDOFF (stop; the loading-portrait
 //               overlay/native Gauge_3 window owns the remaining progress from here)
 //
@@ -115,6 +116,8 @@ const BOOT_VIEW_MILESTONE_LABELS: [&str; 7] = [
 /// milestone deliberately stops at the native-handoff marker instead of 100%: the remaining gap is owned
 /// by the game's real now-loading Gauge_3 bar, whose terminal frame is the true all-loading-complete
 /// semaphore.
+const BOOT_VIEW_SAVE_LOAD_PERMILLE: usize = 615;
+const BOOT_VIEW_SAVE_LOAD_LABEL: &str = "SAVE LOAD";
 const BOOT_VIEW_NATIVE_HANDOFF_PERMILLE: usize = 700;
 const BOOT_VIEW_NATIVE_HANDOFF_LABEL: &str = "NATIVE";
 const BOOT_VIEW_HANDOFF_MARKER_W: usize = 3;
@@ -317,6 +320,7 @@ fn boot_glyph_5x7(c: char) -> [u8; 7] {
         'M' => [0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11],
         'N' => [0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11],
         'O' => [0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
+        'S' => [0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e],
         'T' => [0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
         'U' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
         'V' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x0a, 0x04],
@@ -702,6 +706,30 @@ fn boot_darken_bar_shadow(
     }
 }
 
+fn boot_draw_marker_label(
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+    content_x: usize,
+    content_y: usize,
+    content_w: usize,
+    permille: usize,
+    label: &str,
+    has_bg: bool,
+) -> usize {
+    let marker_x = content_x + (content_w * permille / 1000).min(content_w.saturating_sub(1));
+    let label_w = boot_text_width(label);
+    let label_x = marker_x
+        .saturating_sub(label_w / 2)
+        .min(w.saturating_sub(label_w));
+    if has_bg {
+        boot_draw_text_shadowed(buf, w, h, label_x, content_y, label);
+    } else {
+        boot_draw_text(buf, w, h, label_x, content_y, label);
+    }
+    marker_x
+}
+
 /// Rasterize either the original tight black progress strip, or a full-screen cached screenshot
 /// background with the same understated bar/label geometry overlaid near the bottom.
 fn boot_view_rasterize(
@@ -733,31 +761,28 @@ fn boot_view_rasterize(
     } else {
         boot_draw_text(&mut buf, w, h, content_x, content_y, label);
     }
-    let marker_x = content_x
-        + (content_w * BOOT_VIEW_NATIVE_HANDOFF_PERMILLE / 1000).min(content_w.saturating_sub(1));
-    let handoff_label_w = boot_text_width(BOOT_VIEW_NATIVE_HANDOFF_LABEL);
-    let handoff_label_x = marker_x
-        .saturating_sub(handoff_label_w / 2)
-        .min(w.saturating_sub(handoff_label_w));
-    if has_bg {
-        boot_draw_text_shadowed(
-            &mut buf,
-            w,
-            h,
-            handoff_label_x,
-            content_y,
-            BOOT_VIEW_NATIVE_HANDOFF_LABEL,
-        );
-    } else {
-        boot_draw_text(
-            &mut buf,
-            w,
-            h,
-            handoff_label_x,
-            content_y,
-            BOOT_VIEW_NATIVE_HANDOFF_LABEL,
-        );
-    }
+    let save_load_marker_x = boot_draw_marker_label(
+        &mut buf,
+        w,
+        h,
+        content_x,
+        content_y,
+        content_w,
+        BOOT_VIEW_SAVE_LOAD_PERMILLE,
+        BOOT_VIEW_SAVE_LOAD_LABEL,
+        has_bg,
+    );
+    let marker_x = boot_draw_marker_label(
+        &mut buf,
+        w,
+        h,
+        content_x,
+        content_y,
+        content_w,
+        BOOT_VIEW_NATIVE_HANDOFF_PERMILLE,
+        BOOT_VIEW_NATIVE_HANDOFF_LABEL,
+        has_bg,
+    );
     boot_fill_rect(
         &mut buf,
         w,
@@ -776,6 +801,18 @@ fn boot_view_rasterize(
         bar_y,
         content_w * permille.min(1000) / 1000,
         BOOT_VIEW_BAR_H,
+        BOOT_VIEW_RGB_FILL,
+    );
+    // Save-load tick: marks the ShowProgressJob save-data pause/resume point so a picker-gated boot
+    // visibly shows where execution waits for a save before the native loading handoff.
+    boot_fill_rect(
+        &mut buf,
+        w,
+        h,
+        save_load_marker_x.saturating_sub(BOOT_VIEW_HANDOFF_MARKER_W / 2),
+        bar_y.saturating_sub(2),
+        BOOT_VIEW_HANDOFF_MARKER_W,
+        BOOT_VIEW_BAR_H + 4,
         BOOT_VIEW_RGB_FILL,
     );
     // Handoff marker/gap: this pre-loading bar is only phase 1. Leave the remaining track empty for the
