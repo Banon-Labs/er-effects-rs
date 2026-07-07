@@ -1704,6 +1704,24 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_boot_view_loadscreen_table_baseline",
             BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.load(Ordering::SeqCst),
         );
+        // Handoff fade-out semaphores: fade_start_ms = boot-view epoch ms when the fade began
+        // (0 = handoff not reached), fade_level = last rasterized quantized darkening step
+        // (usize::MAX serialized as-is until the first raster; 0 = full brightness).
+        push_json_usize(
+            body,
+            "oracle_boot_view_fade_start_ms",
+            BOOT_VIEW_FADE_START_MS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_fade_level",
+            BOOT_VIEW_DRAWN_FADE_LEVEL.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_boot_view_fade_presents",
+            BOOT_VIEW_FADE_PRESENTS.load(Ordering::SeqCst),
+        );
         // Early self-present pump: frames WE presented before the game's first own present, the
         // pump-relative ms the swapchain was found, and why the pump stopped (1 = game took over,
         // the success terminal state; 2 = budget; 3 = Present HRESULT failure).

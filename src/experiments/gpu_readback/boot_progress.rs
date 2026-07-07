@@ -76,6 +76,14 @@ static BOOT_VIEW_DRAWN_PERMILLE: AtomicUsize = AtomicUsize::new(usize::MAX);
 static BOOT_VIEW_DRAWN_IDX: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// 1 when the last rasterized upload included the optional cached screenshot background.
 static BOOT_VIEW_DRAWN_BG_ACTIVE: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Epoch-ms (never 0 once set) when the fade-out began (CONTINUE latch, or the handoff as a
+/// fallback); 0 = not fading. Reset by an own-menu rearm.
+pub(crate) static BOOT_VIEW_FADE_START_MS: AtomicUsize = AtomicUsize::new(0);
+/// Fade level of the last rasterized upload (0 = full brightness; part of the redraw-skip key).
+pub(crate) static BOOT_VIEW_DRAWN_FADE_LEVEL: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Composites since the fade began: the level advances per PRESENT (capped by the time curve) so
+/// every step is actually seen even when the game stalls presenting around the Continue commit.
+pub(crate) static BOOT_VIEW_FADE_PRESENTS: AtomicUsize = AtomicUsize::new(0);
 /// Creep timing epoch + the epoch-ms when the milestone index last advanced.
 static BOOT_VIEW_EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 static BOOT_VIEW_IDX_CHANGED_MS: AtomicU64 = AtomicU64::new(0);
@@ -123,6 +131,20 @@ const BOOT_VIEW_MILESTONE_PERMILLE: [usize; 7] = [
 const BOOT_VIEW_CREEP_FULL_MS: u64 = 6000;
 const BOOT_VIEW_CREEP_NUM: usize = 7;
 const BOOT_VIEW_CREEP_DEN: usize = 10;
+/// Handoff fade-out: instead of a one-frame cut, the cover STARTS fading on the exact handoff frame
+/// (loading-screen table build / world takeover) and darkens to black over this window, landing
+/// inside the game's own near-black loading fade-in (measured ~1s of sub-20/255 luma after the
+/// table build, so this window ends while the screen behind is still black). Quantized to a few
+/// levels so the extra full-region re-rasters stay rare (same cost class as one permille tick).
+const BOOT_VIEW_FADE_OUT_MS: u64 = 400;
+const BOOT_VIEW_FADE_STEPS: u64 = 6;
+/// Presents stall almost completely between the Continue commit and the loading screen's own
+/// fade-in (measured run 193832: ~4 presents over 530ms), so the fade level advances per PRESENT
+/// capped by the time curve -- every level reaches the screen exactly once even across the stall,
+/// and the dark tail rides the resumed presents straight into the loading fade-in. If presents
+/// stay away this long past the nominal fade window, the first resumed present stops immediately
+/// instead of replaying the remaining levels over live loading-screen content.
+const BOOT_VIEW_FADE_BAIL_EXTRA_MS: u64 = 3000;
 
 // Strip geometry (pixels; text is the 5x7 font at 2x = 10x14). ER-idiomatic minimal presentation
 // (user 2026-07-05: the panel/border/percent styling clashed with the game): a hairline bar on a
@@ -233,6 +255,9 @@ pub(crate) fn rearm_boot_progress_for_own_menu_load(selected_slot: i32, source: 
     BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.store(slot_key, Ordering::SeqCst);
     BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.store(table_baseline, Ordering::SeqCst);
     BOOT_VIEW_STOPPED.store(0, Ordering::SeqCst);
+    BOOT_VIEW_FADE_START_MS.store(0, Ordering::SeqCst);
+    BOOT_VIEW_DRAWN_FADE_LEVEL.store(usize::MAX, Ordering::SeqCst);
+    BOOT_VIEW_FADE_PRESENTS.store(0, Ordering::SeqCst);
     BOOT_VIEW_REACHED_MASK.store(1, Ordering::SeqCst);
     BOOT_VIEW_MILESTONE_IDX.store(0, Ordering::SeqCst);
     BOOT_VIEW_LAST_PERMILLE.store(0, Ordering::SeqCst);
@@ -682,7 +707,8 @@ fn boot_darken_bar_shadow(
 }
 
 /// Rasterize either the original tight black progress strip, or a full-screen cached screenshot
-/// background with the same understated bar/label geometry overlaid near the bottom.
+/// background with the same understated bar/label geometry overlaid near the bottom. `fade_alpha`
+/// scales the whole raster toward black (255 = unfaded) for the handoff fade-out.
 fn boot_view_rasterize(
     w: usize,
     h: usize,
@@ -692,6 +718,7 @@ fn boot_view_rasterize(
     content_y: usize,
     content_w: usize,
     bg: Option<&BootBgImage>,
+    fade_alpha: u8,
 ) -> Vec<u8> {
     let mut buf = vec![0u8; w * h * RGBA8_BPP];
     let has_bg = bg.is_some();
@@ -782,6 +809,14 @@ fn boot_view_rasterize(
         BOOT_VIEW_BAR_H + 4,
         BOOT_VIEW_RGB_FILL,
     );
+    if fade_alpha < 255 {
+        let a = fade_alpha as u16;
+        for px in buf.chunks_exact_mut(RGBA8_BPP) {
+            px[0] = ((px[0] as u16 * a) / 255) as u8;
+            px[1] = ((px[1] as u16 * a) / 255) as u8;
+            px[2] = ((px[2] as u16 * a) / 255) as u8;
+        }
+    }
     buf
 }
 
@@ -894,10 +929,28 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
         loadscreen_builds != 0 || PROFILE_HAVE_KEYED_FRAME.load(Ordering::SeqCst) != 0
     };
     let world_handoff = !own_menu_active && IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
-    if loading_handoff || world_handoff {
-        if BOOT_VIEW_STOPPED.swap(1, Ordering::SeqCst) == 0 {
+    // Fade-out ARMS at the CONTINUE milestone, ~200ms BEFORE the loading-screen handoff (measured
+    // runs 190907/193203: continue-latch -> table build = 199/197ms). Starting at the handoff
+    // itself does not work on screen: the render loop stalls presenting while the loading screen
+    // is constructed, so a post-handoff fade only ever shows its last levels (run 193203: full
+    // brightness through the stall, then 2-3 dim frames). The CONTINUE-anchored start puts the
+    // smooth half of the fade in the still-60fps era and completes into the game's own black gap.
+    // The STOP below still requires the handoff, so the cover can never vanish early and expose
+    // the suppressed menu, even if a run has a longer continue->table-build delay.
+    let continue_latched = BOOT_VIEW_REACHED_MASK.load(Ordering::SeqCst) & (1 << 5) != 0;
+    if (continue_latched || loading_handoff || world_handoff)
+        && BOOT_VIEW_FADE_START_MS.load(Ordering::SeqCst) == 0
+    {
+        let now_ms = boot_view_epoch_ms().max(1) as usize;
+        if BOOT_VIEW_FADE_START_MS
+            .compare_exchange(0, now_ms, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
             append_autoload_debug(format_args!(
-                "boot-view: handoff -> loading window (draws={} permille={} mask=0x{:x} own_menu={} table_builds={} table_baseline={})",
+                "boot-view: fade-out begin ({}; {}ms/{} steps; draws={} permille={} mask=0x{:x} own_menu={} table_builds={} table_baseline={})",
+                if continue_latched { "continue-latch" } else { "handoff-fallback" },
+                BOOT_VIEW_FADE_OUT_MS,
+                BOOT_VIEW_FADE_STEPS,
                 BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst),
                 BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst),
                 BOOT_VIEW_REACHED_MASK.load(Ordering::SeqCst),
@@ -906,8 +959,34 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
                 table_baseline,
             ));
         }
-        BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.store(0, Ordering::SeqCst);
-        return false;
+    }
+    if loading_handoff || world_handoff {
+        let fade_start = BOOT_VIEW_FADE_START_MS.load(Ordering::SeqCst);
+        let elapsed = boot_view_epoch_ms().saturating_sub(fade_start as u64);
+        // Stop only once the fully-black level was actually PRESENTED (fade_presents counts the
+        // composites since fade start; level = min(presents, time), so > STEPS means the final
+        // level already reached the screen), or when presents stayed away so long that replaying
+        // the dark tail would sit on top of live loading-screen content.
+        let black_presented =
+            BOOT_VIEW_FADE_PRESENTS.load(Ordering::SeqCst) as u64 > BOOT_VIEW_FADE_STEPS;
+        let stall_bail = elapsed >= BOOT_VIEW_FADE_OUT_MS + BOOT_VIEW_FADE_BAIL_EXTRA_MS;
+        if fade_start != 0
+            && ((elapsed >= BOOT_VIEW_FADE_OUT_MS && black_presented) || stall_bail)
+        {
+            if BOOT_VIEW_STOPPED.swap(1, Ordering::SeqCst) == 0 {
+                append_autoload_debug(format_args!(
+                    "boot-view: handoff -> loading window (fade-out complete; draws={} permille={} table_builds={} fade_presents={} stall_bail={})",
+                    BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst),
+                    BOOT_VIEW_LAST_PERMILLE.load(Ordering::SeqCst),
+                    loadscreen_builds,
+                    BOOT_VIEW_FADE_PRESENTS.load(Ordering::SeqCst),
+                    stall_bail,
+                ));
+            }
+            BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.store(0, Ordering::SeqCst);
+            return false;
+        }
+        // else: keep compositing the descending fade levels until the black level has been shown.
     }
     if BOOT_VIEW_DRAW_STATE.load(Ordering::SeqCst) == 2 {
         return false;
@@ -984,6 +1063,24 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     };
 
     let (ms_idx, permille) = boot_view_progress();
+
+    // Quantized fade level: 0 (full brightness) .. BOOT_VIEW_FADE_STEPS (black). Advances per
+    // PRESENT capped by the time curve -- min(presents, time) -- so a present stall around the
+    // Continue commit can never skip levels off the screen; each present shows the next step.
+    let fade_level: usize = {
+        let fade_start = BOOT_VIEW_FADE_START_MS.load(Ordering::SeqCst);
+        if fade_start == 0 {
+            0
+        } else {
+            let since = boot_view_epoch_ms().saturating_sub(fade_start as u64);
+            let time_level =
+                ((since * BOOT_VIEW_FADE_STEPS) / BOOT_VIEW_FADE_OUT_MS).min(BOOT_VIEW_FADE_STEPS);
+            let presents = BOOT_VIEW_FADE_PRESENTS.fetch_add(1, Ordering::SeqCst) as u64;
+            presents.min(time_level) as usize
+        }
+    };
+    let fade_alpha: u8 =
+        ((BOOT_VIEW_FADE_STEPS as usize - fade_level) * 255 / BOOT_VIEW_FADE_STEPS as usize) as u8;
 
     // Copyable footprint for the selected region in the backbuffer's format.
     let mut device_opt: Option<ID3D12Device> = None;
@@ -1089,6 +1186,7 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
         || BOOT_VIEW_DRAWN_PERMILLE.load(Ordering::SeqCst) != permille
         || BOOT_VIEW_DRAWN_IDX.load(Ordering::SeqCst) != ms_idx
         || BOOT_VIEW_DRAWN_BG_ACTIVE.load(Ordering::SeqCst) != bg_active as usize
+        || BOOT_VIEW_DRAWN_FADE_LEVEL.load(Ordering::SeqCst) != fade_level
     {
         let tight = boot_view_rasterize(
             region_w as usize,
@@ -1099,6 +1197,7 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
             content_y,
             content_w,
             bg,
+            fade_alpha,
         );
         let row_pitch = footprint.Footprint.RowPitch as usize;
         let total = total_bytes as usize;
@@ -1128,6 +1227,7 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
         BOOT_VIEW_DRAWN_PERMILLE.store(permille, Ordering::SeqCst);
         BOOT_VIEW_DRAWN_IDX.store(ms_idx, Ordering::SeqCst);
         BOOT_VIEW_DRAWN_BG_ACTIVE.store(bg_active as usize, Ordering::SeqCst);
+        BOOT_VIEW_DRAWN_FADE_LEVEL.store(fade_level, Ordering::SeqCst);
     }
 
     // Single submit on our OWN queue: PRESENT -> COPY_DEST, strip copy, COPY_DEST -> PRESENT.
