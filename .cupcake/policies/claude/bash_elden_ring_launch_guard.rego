@@ -226,9 +226,76 @@ marker_scan_text := lower(scrubbed_command) if {
 	gh_text_body_command
 }
 
+# git commit messages are text payloads, not executable payloads. A commit
+# whose quoted -m body (or `-m "$(cat <<'TAG' ...)"` heredoc message) merely
+# MENTIONS ersc.dll or a forbidden launcher is documentation, not bundling.
+# False positive fixed 2026-07-07: `git add -A && git commit -m "... a
+# resident ersc.dll wins over an env hint ..."` was denied because the raw
+# marker fallback scans quoted prose, and bundle_source_marker substrings
+# ("stage", "bundle", even "tar" inside "target"/"start" and "rar" inside
+# "library") routinely appear in commit prose. Keep direct shell-command
+# matching on scrubbed_command; only the marker-based raw fallbacks scan the
+# quote-scrubbed command instead.
+#
+# The exemption is deliberately narrow and fail-closed. Both forms require a
+# Bash tool command consisting ONLY of git add/commit invocations:
+#   * plain form: no heredoc, no `$(`, no backtick anywhere; the quote-
+#     scrubbed command must be `git add|commit ...` segments joined by `&&`
+#     with no separators, redirects, or unquoted newlines; and no unquoted
+#     token may be a copy/archive/interpreter/launcher word (so a smuggled
+#     `cp`/`wine` that survives engine whitespace collapsing still keeps the
+#     exemption off);
+#   * heredoc form: the canonical `git commit ... -m "$(cat <<'TAG'` message
+#     substitution -- exactly one `$(`, immediately a `cat` reading a single
+#     quoted-tag heredoc, and the whitespace-normalized command must end at
+#     the terminator followed by exactly `)"` (nothing rides after the
+#     message text, which cat only prints and git only records).
+# Anything chained or indirected falls through to the raw-text scan, and the
+# direct scrubbed_command regex rules above are unaffected either way.
+git_commit_text_command if {
+	tool_name == "Bash"
+	not contains(command, "$(")
+	not contains(command, "`")
+	not contains(command, "<<")
+	regex.match(`^[[:space:]]*git[[:space:]]+(add|commit)[^;|&()<>\n\r]*(&&[[:space:]]*git[[:space:]]+(add|commit)[^;|&()<>\n\r]*)*$`, scrubbed_command)
+	not git_commit_smuggled_word
+}
+
+git_commit_text_command if {
+	tool_name == "Bash"
+	not contains(command, "`")
+	count(split(command, "$(")) == 2
+	count(proc_scan_heredoc_parts) == 2
+	regex.match(`^(git add [^;|&()<>]*&& )?git commit [^;|&()<>]*"\$\(cat $`, proc_scan_heredoc_parts[0])
+	terminator_parts := split(proc_scan_norm_command, concat("", [" ", proc_scan_heredoc_tag]))
+	count(terminator_parts) == 2
+	terminator_parts[1] == ` )"`
+}
+
+# Unquoted command words that could copy/stage/launch if a second command is
+# smuggled into the git-only shape (e.g. a newline-chained payload after the
+# engine collapses whitespace). Scanned as whole tokens of the quote-scrubbed
+# command, so commit-message prose (quoted, already scrubbed) never matches.
+git_commit_smuggled_word if {
+	dangerous := {
+		"cp", "mv", "install", "rsync", "zip", "unzip", "tar", "7z", "rar",
+		"python", "python3", "bash", "sh", "dash", "zsh", "fish", "env",
+		"xargs", "eval", "exec", "nohup", "setsid", "dd", "ln", "curl",
+		"wget", "wine", "wine64", "proton", "steam", "xdg-open", "gio", "gh",
+	}
+	normalized := replace(replace(replace(scrubbed_command, "\t", " "), "\r", " "), "\n", " ")
+	some token in split(lower(normalized), " ")
+	token in dangerous
+}
+
+marker_scan_text := lower(scrubbed_command) if {
+	git_commit_text_command
+}
+
 marker_scan_text := lower_source_text if {
 	not bd_text_command
 	not gh_text_body_command
+	not git_commit_text_command
 }
 
 # Allow exact process-detection checks for the stale protected launcher while
