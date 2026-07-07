@@ -92,6 +92,9 @@ pub(crate) use submit::*;
 mod profiler;
 pub(crate) use profiler::*;
 
+mod lifecycle;
+pub(crate) use lifecycle::*;
+
 #[path = "mod/product_core_own_stepper.rs"]
 mod product_core_own_stepper;
 pub(crate) use product_core_own_stepper::*;
