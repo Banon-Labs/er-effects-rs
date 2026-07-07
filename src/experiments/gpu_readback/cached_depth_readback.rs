@@ -102,7 +102,9 @@ static PROFILE_MASK_STALE_REUSE_LOGGED: AtomicUsize = AtomicUsize::new(0);
 /// recomputed every frame, so it is not a cache reuse). Per published frame, IoU of the KEPT cutout region
 /// (mask==0) vs the colour's OWN head (pixels far from the background colour). A correct mask keeps the
 /// head -> high IoU; a fresh mask of a WRONG depth silhouette (stale depth content on the new character)
-/// keeps a region that does not match this head -> low IoU. `_last` is an oracle; `_total` counts gross
+/// keeps a region that does not match this head -> low IoU. For DARK characters whose colour-head is a
+/// sliver (Sacred Bean, er-effects-rs-y134) the score is head-COVERAGE instead of symmetric IoU -- see
+/// `mask_head_iou`. `_last` is an oracle; `_total` counts gross
 /// mismatches; a SUSTAINED gross mismatch (STREAK) abort()s during the repro so the run stops fast.
 pub(crate) const MASK_HEAD_IOU_MIN: usize = 25;
 const MASK_HEAD_ABORT_STREAK: usize = 20;
