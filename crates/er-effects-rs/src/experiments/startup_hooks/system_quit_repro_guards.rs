@@ -10,6 +10,13 @@ fn sq_repro_waiting_once(msg: &str) {
     }
 }
 
+/// Fail-closed bit outside the tab range. The current ProfileBack row fingerprint oracle reads the
+/// native `PropertyEditDialog` backing table, not the rendered/menu-facing GFx row/list state the
+/// user-visible bug corrupts. Until the visible row-content semaphore exists, a run that reaches
+/// ProfileSelect->Back must be classified as harness-incomplete/failed, not pass.
+const SQ_REPRO_PROFILE_BACK_VISIBLE_ORACLE_MISSING_MASK: usize =
+    1usize << OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT;
+
 /// Cumulative ProfileSelect OK-confirm count (cancel-close BLOCK + ALLOW). Legacy fallback signal:
 /// the CONFIRM state's primary advance is the direct-arm phase observation; this count (an INCREASE
 /// over the per-switch baseline, so switch #2 does not trip on switch #1's residual) only fires if
@@ -520,8 +527,12 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_REAPPLY_COUNT.load(Ordering::SeqCst);
             if profile == 0 && restore_count > baseline && direct_visible != 0 {
                 SQ_REPRO_PROFILE_BACK_RESTORE_COUNT.store(restore_count, Ordering::SeqCst);
+                SQ_REPRO_PROFILE_BACK_MISMATCH_MASK.fetch_or(
+                    SQ_REPRO_PROFILE_BACK_VISIBLE_ORACLE_MISSING_MASK,
+                    Ordering::SeqCst,
+                );
                 append_autoload_debug(format_args!(
-                    "sq-repro: PROFILE_BACK observed ProfileSelect closed + restore_count {baseline}->{restore_count} + direct-visible reapply count={direct_visible}; drive LB back to Game Options for final validation dwell"
+                    "sq-repro: PROFILE_BACK observed ProfileSelect closed + restore_count {baseline}->{restore_count} + direct-visible reapply count={direct_visible}; FAIL-CLOSED visible row-content oracle missing (native backing-table hashes are insufficient)"
                 ));
                 set_pad(0);
                 sq_repro_transition(SQ_REPRO_STATE_PROFILE_BACK_TO_GAME_TAB);
