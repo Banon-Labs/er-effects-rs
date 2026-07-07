@@ -3,9 +3,11 @@
 /// buffer's per-pixel alpha to 0 for every BACKGROUND pixel. The portrait depth is BIMODAL -- the model
 /// (head+shoulders) forms one cluster and the dark IBL surround another, separated by an empty depth GAP
 /// (the "air" between the model and the backdrop). We histogram the depth, put the threshold in the WIDEST
-/// empty gap, and KEEP whichever cluster the centered head sits in, cutting the other. Keying on the head's
-/// own cluster (not an assumed clear value) makes this robust to the engine's Z direction and to the fact
-/// that the corners are NOT all background (a portrait's shoulders fill the bottom corners). FAIL-OPEN on
+/// empty gap, and KEEP whichever cluster the COLOUR-classified head sits in, cutting the other. Keying on
+/// the head's own cluster (not an assumed clear value) makes this robust to the engine's Z direction and to
+/// the fact that the corners are NOT all background (a portrait's shoulders fill the bottom corners), and
+/// deriving the head reference from the colour buffer (not the geometric centre) makes it robust to where
+/// the head sits in the frame (er-effects-rs-y134). FAIL-OPEN on
 /// every uncertainty (no depth buffer, dims mismatch, no separable gap) -> the color buffer is left fully
 /// opaque, exactly the pre-existing display, so this can only ADD the cutout, never regress the head. Emits
 /// a one-shot `depth-key` diagnostic and drives the `oracle_depth_key_*` RAM semaphores. `cpx` is the
@@ -27,7 +29,7 @@ pub(crate) fn apply_depth_alpha_key(
     // (1) RECALCULATE the mask from the CURRENT depth buffer (captured coherently on the render thread
     //     and passed in as a plain Vec<f32>, so this whole pass runs on the worker thread with no game
     //     pointer or D3D12 object).
-    let fresh = compute_depth_mask(depth, dw, dh, w, h);
+    let fresh = compute_depth_mask(depth, dw, dh, w, h, cpx);
     // (2) On a fresh mask, CACHE it; on a dead frame (depth read back cleared -> no gap), REUSE the last
     //     cached mask so the cutout stays stable. Recalculated whenever fresh depth is available (tracks a
     //     genuine re-render), cached only for the frames in between -- never a frozen one-shot.
@@ -117,13 +119,17 @@ pub(crate) fn apply_depth_alpha_key(
     }
 }
 
-/// IoU (0..100) of the depth cutout's KEPT region (mask==0) vs the colour's OWN head (pixels whose colour
-/// is clearly far from the corner background). ~high when the mask matches the head; low when a fresh mask
-/// of the WRONG depth silhouette is applied to this head (the 2nd-character desync). Subsampled by 2 for
-/// cost; 100 (perfect) on any degenerate input so it never false-trips.
-fn mask_head_iou(mask: &[u8], cpx: &[u8], w: usize, h: usize) -> usize {
-    if w < 16 || h < 16 || cpx.len() < w * h * 4 || mask.len() < w * h {
-        return 100;
+/// Foreground colour classification bar: a pixel is "head" when its sum-abs channel distance (0..765)
+/// from the corner-background colour exceeds this. Shared by the IoU oracle (`mask_head_iou`) and the
+/// head-cluster foreground reference (`color_head_median_depth`) so the mask is SELECTED by the same
+/// criterion it is later SCORED against.
+const FG_DIST: i32 = 90;
+
+/// Mean RGB of the four 8x8 corner patches -- the portrait backdrop colour reference shared by the IoU
+/// oracle and the head-cluster foreground reference. `None` on degenerate dims.
+fn corner_bg_rgb(cpx: &[u8], w: usize, h: usize) -> Option<(i32, i32, i32)> {
+    if w < 16 || h < 16 || cpx.len() < w * h * 4 {
+        return None;
     }
     let (mut br, mut bgc, mut bb, mut bn) = (0u64, 0u64, 0u64, 0u64);
     for &(ox, oy) in &[(0usize, 0usize), (w - 8, 0), (0, h - 8), (w - 8, h - 8)] {
@@ -138,12 +144,79 @@ fn mask_head_iou(mask: &[u8], cpx: &[u8], w: usize, h: usize) -> usize {
         }
     }
     if bn == 0 {
+        return None;
+    }
+    Some(((br / bn) as i32, (bgc / bn) as i32, (bb / bn) as i32))
+}
+
+/// Median depth of the COLOUR-head pixels -- the pixels the IoU oracle classifies as head (far from the
+/// corner-background colour), subsampled by 2 on both axes. Used as `compute_depth_mask`'s foreground
+/// reference: comparing this median against a threshold is a majority vote of the head's own pixels, so
+/// the kept cluster is the one that actually overlaps the head, wherever the head sits in the frame
+/// (er-effects-rs-y134: Sacred Bean's pose at the 6.0x framing put the geometric centre off the head,
+/// the central patch sampled the wrong cluster, and the fresh silhouette missed the head -- IoU=14%).
+/// `None` when the colour head is degenerate (under ~1% of the frame) -- caller falls back to the
+/// central-patch reference.
+fn color_head_median_depth(depth: &[f32], cpx: &[u8], w: usize, h: usize) -> Option<f32> {
+    if depth.len() < w * h {
+        return None;
+    }
+    let (br, bgc, bb) = corner_bg_rgb(cpx, w, h)?;
+    let mut head_depths: Vec<f32> = Vec::new();
+    let mut y = 0;
+    while y < h {
+        let mut x = 0;
+        while x < w {
+            let i = y * w + x;
+            let p = i * 4;
+            let dist = (cpx[p] as i32 - br).abs()
+                + (cpx[p + 1] as i32 - bgc).abs()
+                + (cpx[p + 2] as i32 - bb).abs();
+            if dist > FG_DIST {
+                let d = depth[i];
+                if d.is_finite() {
+                    head_depths.push(d);
+                }
+            }
+            x += 2;
+        }
+        y += 2;
+    }
+    // Samples cover 1/4 of the frame, so w*h/400 samples ~= a head filling 1% of the frame; anything
+    // smaller is too little colour evidence to trust for cluster selection.
+    if head_depths.len() < ((w * h) / 400).max(1) {
+        return None;
+    }
+    let mid = head_depths.len() / 2;
+    let (_, med, _) = head_depths
+        .select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    Some(*med)
+}
+
+/// Mask/head coherence score (0..100) of the depth cutout's KEPT region (mask==0) vs the colour's OWN
+/// head (pixels whose colour is clearly far from the corner background). ~high when the mask matches the
+/// head; low when a fresh mask of the WRONG depth silhouette is applied to this head (the 2nd-character
+/// desync). Subsampled by 2 for cost; 100 (perfect) on any degenerate input so it never false-trips.
+///
+/// Two regimes (er-effects-rs-y134): symmetric IoU assumes the colour-head and the kept region have
+/// comparable sizes, but a DARK character on the dark IBL backdrop clears FG_DIST on only a sliver of
+/// its pixels (Sacred Bean: 2.6% of the frame vs a 19% kept cluster), so even a PERFECT mask is capped
+/// at |head|/|kept| ~= 14% and the gate held every frame (clean=0, no portrait/stats). When that
+/// best-possible IoU (min/max of the two class sizes) cannot clear the bar with headroom even for a
+/// perfect mask, IoU is meaningless -- score COVERAGE instead (kept ∩ head / head: are the provably-
+/// character bright pixels kept?). Coverage >= IoU always, so bright characters (whose ceiling is high)
+/// keep the stricter symmetric IoU and no previously-clean character can regress. Wrong-side and
+/// missing-head masks still score ~0 in both regimes; near-empty colour-heads fall through to the
+/// symmetric IoU (~0 -> held), preserving the old all-dark-frame behaviour.
+fn mask_head_iou(mask: &[u8], cpx: &[u8], w: usize, h: usize) -> usize {
+    if mask.len() < w * h {
         return 100;
     }
-    let (br, bgc, bb) = ((br / bn) as i32, (bgc / bn) as i32, (bb / bn) as i32);
-    // Foreground = clearly far from the background colour (sum-abs channel distance, 0..765).
-    const FG_DIST: i32 = 90;
+    let Some((br, bgc, bb)) = corner_bg_rgb(cpx, w, h) else {
+        return 100;
+    };
     let (mut inter, mut union) = (0u64, 0u64);
+    let (mut head_n, mut kept_n, mut samples) = (0u64, 0u64, 0u64);
     let mut y = 0;
     while y < h {
         let mut x = 0;
@@ -155,6 +228,13 @@ fn mask_head_iou(mask: &[u8], cpx: &[u8], w: usize, h: usize) -> usize {
                 + (cpx[p + 1] as i32 - bgc).abs()
                 + (cpx[p + 2] as i32 - bb).abs();
             let head = dist > FG_DIST;
+            samples += 1;
+            if head {
+                head_n += 1;
+            }
+            if kept {
+                kept_n += 1;
+            }
             if kept || head {
                 union += 1;
                 if kept && head {
@@ -166,19 +246,38 @@ fn mask_head_iou(mask: &[u8], cpx: &[u8], w: usize, h: usize) -> usize {
         y += 1;
     }
     if union == 0 {
-        100
+        return 100;
+    }
+    let iou = (inter * 100 / union) as usize;
+    // Best-possible IoU for these class sizes (perfectly nested classes). Below 2x the gate bar the
+    // symmetric IoU cannot pass with headroom even when the mask is perfect -> coverage regime. The
+    // colour-head must still be a non-trivial share of the frame (>= ~0.05%, the same spirit as the
+    // histogram's empty_thresh) or an all-dark frame would score 100 and publish garbage.
+    let ceiling = (head_n.min(kept_n) * 100 / head_n.max(kept_n).max(1)) as usize;
+    let head_floor = (samples / 2000).max(1);
+    if ceiling < MASK_HEAD_IOU_MIN * 2 && head_n >= head_floor {
+        (inter * 100 / head_n) as usize
     } else {
-        (inter * 100 / union) as usize
+        iou
     }
 }
 
 /// Compute the per-pixel background mask (1 = background/cut, 0 = keep) via the bimodal-gap threshold from
 /// the depth plane passed in. The depth was captured COHERENTLY with this frame's color (single fence, bug
-/// #3 fix) and taken on the render thread, so this fn is now pure CPU over a `&[f32]` and runs on the
-/// consume worker -- no game pointer, no D3D12 object. Returns `None` when the depth has no content / no
+/// #3 fix) and taken on the render thread, so this fn is now pure CPU over plain slices and runs on the
+/// consume worker -- no game pointer, no D3D12 object. `cpx` is that same frame's tightly-packed RGBA8
+/// colour, used to derive the head's foreground depth reference (colour and depth are the same GPU
+/// submission, so the classification aligns). Returns `None` when the depth has no content / no
 /// separable gap (the caller then reuses the cached mask). Emits the one-shot `depth-key` diagnostic
 /// (success) and a separate one-shot skip diagnostic (dims mismatch / no gap) so both are visible once.
-fn compute_depth_mask(depth: &[f32], dw: usize, dh: usize, w: usize, h: usize) -> Option<Vec<u8>> {
+fn compute_depth_mask(
+    depth: &[f32],
+    dw: usize,
+    dh: usize,
+    w: usize,
+    h: usize,
+    cpx: &[u8],
+) -> Option<Vec<u8>> {
     if dw != w || dh != h || depth.len() < w * h {
         // At higher-res (1024) the depth sibling MUST match the color RT or the mask can't align.
         if DEPTH_KEY_NOGAP_LOGGED.swap(1, Ordering::SeqCst) == 0 {
@@ -201,31 +300,40 @@ fn compute_depth_mask(depth: &[f32], dw: usize, dh: usize, w: usize, h: usize) -
     }
     let range = dmax - dmin;
 
-    // FOREGROUND reference = the CENTERED head's depth: sample a small central patch and take its median.
-    // We KEEP the cluster this belongs to and CUT the other -- so the cut is robust to the engine's Z
-    // direction (we never assume near/far == 0). The portrait's head+shoulders are the high-count
-    // foreground cluster; the dark IBL surround is the other cluster, separated by an empty depth GAP
-    // (the "air" between the model and the backdrop).
-    let cr = (w.min(h) / 16).max(2);
-    let (cx, cy) = (w / 2, h / 2);
-    let mut cpatch: Vec<f32> = Vec::new();
-    let mut yy = cy.saturating_sub(cr);
-    while yy <= (cy + cr).min(h.saturating_sub(1)) {
-        let mut xx = cx.saturating_sub(cr);
-        while xx <= (cx + cr).min(w.saturating_sub(1)) {
-            let d = depth[idx(xx, yy)];
-            if d.is_finite() {
-                cpatch.push(d);
+    // FOREGROUND reference = the COLOUR head's depth: the median depth of the pixels the IoU oracle
+    // classifies as head (far from the corner-background colour). We KEEP the cluster this belongs to
+    // and CUT the other -- so the cut is robust to the engine's Z direction (we never assume near/far
+    // == 0) AND to where the head sits in the frame. The old CENTRAL-PATCH median broke on Sacred Bean
+    // (er-effects-rs-y134): at the 6.0x head-and-torso framing this model's pose put the geometric
+    // centre off the head, the patch sampled the wrong cluster, and every fresh silhouette missed the
+    // head (IoU=14% < 25% -> zero clean publishes, no portrait/stats). The central patch survives only
+    // as the fallback when the colour head is degenerate.
+    let (fg_ref, fg_src) = match color_head_median_depth(depth, cpx, w, h) {
+        Some(d) => (d, "colorhead"),
+        None => {
+            let cr = (w.min(h) / 16).max(2);
+            let (cx, cy) = (w / 2, h / 2);
+            let mut cpatch: Vec<f32> = Vec::new();
+            let mut yy = cy.saturating_sub(cr);
+            while yy <= (cy + cr).min(h.saturating_sub(1)) {
+                let mut xx = cx.saturating_sub(cr);
+                while xx <= (cx + cr).min(w.saturating_sub(1)) {
+                    let d = depth[idx(xx, yy)];
+                    if d.is_finite() {
+                        cpatch.push(d);
+                    }
+                    xx += 1;
+                }
+                yy += 1;
             }
-            xx += 1;
+            cpatch.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let center = if cpatch.is_empty() {
+                f32::NAN
+            } else {
+                cpatch[cpatch.len() / 2]
+            };
+            (center, "centerpatch")
         }
-        yy += 1;
-    }
-    cpatch.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let center = if cpatch.is_empty() {
-        f32::NAN
-    } else {
-        cpatch[cpatch.len() / 2]
     };
 
     // Histogram over [dmin,dmax]; the threshold is the midpoint of the WIDEST run of near-empty bins --
@@ -260,11 +368,12 @@ fn compute_depth_mask(depth: &[f32], dw: usize, dh: usize, w: usize, h: usize) -
     }
     let gap_mid_bin = best_lo as f32 + best_len as f32 * 0.5;
     let threshold = dmin + (gap_mid_bin / NB as f32) * range;
-    // Require a REAL gap (>= ~4% of the range empty) and a valid center, else no separable background
-    // this frame -> return None (caller reuses the cached mask; a unimodal depth would slice the head).
-    let have_gap = range > 0.0 && (best_len as f32 / NB as f32) >= 0.04 && center.is_finite();
-    // Keep the side of the gap the centered head sits on; the other side is the background.
-    let keep_high = center > threshold;
+    // Require a REAL gap (>= ~4% of the range empty) and a valid foreground reference, else no separable
+    // background this frame -> return None (caller reuses the cached mask; a unimodal depth would slice
+    // the head).
+    let have_gap = range > 0.0 && (best_len as f32 / NB as f32) >= 0.04 && fg_ref.is_finite();
+    // Keep the side of the gap the head's reference depth sits on; the other side is the background.
+    let keep_high = fg_ref > threshold;
     let mut mask = vec![0u8; w * h];
     let mut masked = 0usize;
     if have_gap {
@@ -305,7 +414,7 @@ fn compute_depth_mask(depth: &[f32], dw: usize, dh: usize, w: usize, h: usize) -
             depth[idx(w - 1 - inset, h - 1 - inset)],
         );
         append_autoload_debug(format_args!(
-            "depth-key: {w}x{h} min={dmin} max={dmax} center(head)={center} corners[tl={tl} tr={tr} bl={bl} br={br}] gap[bins {best_lo}..+{best_len}/{NB}] thr={threshold} keep_high={keep_high} have_gap={have_gap} masked={masked}/{} ({share_pct}%) degenerate={degenerate} deg_n={deg_n}",
+            "depth-key: {w}x{h} min={dmin} max={dmax} fgref={fg_ref} fgsrc={fg_src} corners[tl={tl} tr={tr} bl={bl} br={br}] gap[bins {best_lo}..+{best_len}/{NB}] thr={threshold} keep_high={keep_high} have_gap={have_gap} masked={masked}/{} ({share_pct}%) degenerate={degenerate} deg_n={deg_n}",
             w * h,
         ));
     }
@@ -324,7 +433,7 @@ fn compute_depth_mask(depth: &[f32], dw: usize, dh: usize, w: usize, h: usize) -
     // clear planes) and re-running the same histogram over the interior geometry makes the real
     // head/backdrop air gap dominant; excluded extremes are then classified by the same threshold
     // (cleared lands on the bg side). Only runs when the validated first pass failed.
-    if range > 0.0 && center.is_finite() {
+    if range > 0.0 && fg_ref.is_finite() {
         let dmin_bits = dmin.to_bits();
         let dmax_bits = dmax.to_bits();
         let interior =
@@ -371,7 +480,7 @@ fn compute_depth_mask(depth: &[f32], dw: usize, dh: usize, w: usize, h: usize) -
             }
             let thr2 = imin + ((b_lo as f32 + b_len as f32 * 0.5) / NB as f32) * irange;
             if (b_len as f32 / NB as f32) >= 0.02 {
-                let keep_high2 = center > thr2;
+                let keep_high2 = fg_ref > thr2;
                 let mut mask2 = vec![0u8; w * h];
                 let mut masked2 = 0usize;
                 for i in 0..(w * h) {
