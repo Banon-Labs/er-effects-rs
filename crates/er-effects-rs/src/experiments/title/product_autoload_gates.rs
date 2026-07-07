@@ -53,18 +53,14 @@ pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
     // a release soft lock (hidden native menu with no product-core load tick). Explicit no-autoload,
     // telemetry-only, and native-profile-capture runs remain opt-out/diagnostic paths.
     //
-    // MISSING-SAVE PICKER STAND-DOWN: with no save selected there is nothing to autoload, and the
-    // autoload-armed title cover (PressStart hide, native menu visual suppression, own-stepper
-    // drive) masks the native no-save title menu the in-game 05_010 file browser rides -- observed
-    // 2026-07-07: cover armed on a no-save boot left the user at a blank masked title and the
-    // picker's menu-open gate never passed. The picker's completion fires a native title reload;
-    // that reload boots with the redirect active, so this session simply proceeds via the real
-    // native menu (autoload re-arms on the next launch).
-    if !autoload_disabled()
-        && !save_override_telemetry_only()
-        && !native_profile_capture_enabled()
-        && !missing_save_selection_pending()
-    {
+    // Product autoload stays ARMED even during a missing-save boot: this arm runs ONCE at DllMain,
+    // and gating it on the (then-pending) missing-save latch would leave it unarmed forever, so the
+    // load never resumes after the pick (observed 2026-07-07: the redirect activated but the boot
+    // never advanced to a world load). The world-LOAD drive is instead gated DYNAMICALLY in
+    // `own_stepper_enabled()` on `missing_save_selection_pending()`, which re-enables the frame the
+    // pick clears the latch. The loading bar advances normally and sticks at the save-check (the
+    // ShowProgressJob CONTINUE-loop) with the overlay picker on top; the pick resumes it.
+    if !autoload_disabled() && !save_override_telemetry_only() && !native_profile_capture_enabled() {
         PRODUCT_AUTOLOAD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     }
 
@@ -134,9 +130,7 @@ pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
         // known-good zero-input smoke path does not depend on a fragile env-method side effect.
         OWN_STEPPER_SLOT.store(slot, Ordering::SeqCst);
     }
-    if request.method() == SaveLoadMethod::DirectMenuLoad
-        && experimental_direct_menu_load_enabled()
-        && !missing_save_selection_pending()
+    if request.method() == SaveLoadMethod::DirectMenuLoad && experimental_direct_menu_load_enabled()
     {
         // Kept as an explicit diagnostic/direct-menu compatibility path. The release/default arm above
         // is what makes a plain ME3-loaded DLL work without hidden env vars.

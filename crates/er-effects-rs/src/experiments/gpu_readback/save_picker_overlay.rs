@@ -298,7 +298,7 @@ pub(crate) fn save_picker_overlay_input_tick() {
 // ---- Rendering ----
 
 // Overlay palette (reuses the boot bar's understated language; dark panel, off-white highlight).
-const PICKER_RGB_BG: [u8; 3] = [8, 8, 9];
+const PICKER_RGB_PANEL: [u8; 3] = [12, 12, 14];
 const PICKER_RGB_TITLE: [u8; 3] = [214, 208, 190];
 const PICKER_RGB_DIM: [u8; 3] = [120, 117, 108];
 const PICKER_RGB_ROW: [u8; 3] = [176, 172, 160];
@@ -320,31 +320,40 @@ fn picker_fit_text(text: &str, max_px: usize) -> String {
     out
 }
 
-/// Rasterize the full-frame file browser into `buf` (w*h RGBA8). Reads the live model; safe to
-/// call from the render thread (pure read + CPU raster). Returns false if there is no model.
-pub(crate) fn rasterize_save_picker_overlay(buf: &mut [u8], w: usize, h: usize) -> bool {
+/// Draw the file browser onto an EXISTING full-frame buffer (`w*h` RGBA8) that already holds the
+/// boot loading bar at the bottom. The picker occupies a bounded panel in the upper region so the
+/// game's own loading-bar language (bottom strip) stays visible underneath -- the picker is
+/// composited WITH the bar, not in place of it. Reads the live model; render-thread safe (pure
+/// read + CPU raster). Returns false if there is no model.
+pub(crate) fn overlay_save_picker_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
     let guard = crate::experiments::save_picker::active_save_picker_lock();
     let Some(model) = guard.as_ref() else {
         return false;
     };
 
-    boot_fill_rect(buf, w, h, 0, 0, w, h, PICKER_RGB_BG);
-
     let scale = BOOT_VIEW_TEXT_SCALE;
     let line_h = BOOT_VIEW_GLYPH_H * scale;
     let row_step = line_h + line_h / 2; // 1.5 line spacing between rows
-    let margin_x = (w / 12).max(24);
+    let margin_x = (w / 10).max(24);
     let content_w = w.saturating_sub(margin_x * 2);
-    let mut y = (h / 8).max(40);
+
+    // Bounded panel: leave the bottom ~18% for the boot bar (drawn by the caller). A subtly
+    // lifted-from-black fill reads as a panel over the suppressed black title.
+    let panel_top = (h / 12).max(24);
+    let panel_bottom = h * 82 / 100;
+    let panel_h = panel_bottom.saturating_sub(panel_top);
+    boot_fill_rect(buf, w, h, margin_x, panel_top, content_w, panel_h, PICKER_RGB_PANEL);
+
+    let mut y = panel_top + line_h;
 
     // Title.
-    boot_draw_text_rgb(buf, w, h, margin_x, y, "SELECT SAVE FILE", PICKER_RGB_TITLE);
+    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, "SELECT SAVE FILE", PICKER_RGB_TITLE);
     y += line_h + line_h / 2;
 
-    // Current directory (dimmed, fit to width) + extension hint.
+    // Current directory (dimmed, fit to width) + extension/page hint.
     let dir_str = model.current_dir().display().to_string();
-    let dir_line = picker_fit_text(&dir_str, content_w);
-    boot_draw_text_rgb(buf, w, h, margin_x, y, &dir_line, PICKER_RGB_DIM);
+    let dir_line = picker_fit_text(&dir_str, content_w.saturating_sub(scale * 8));
+    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, &dir_line, PICKER_RGB_DIM);
     y += line_h;
     let mode_line = format!(
         "SHOWING *.{}   PAGE {}/{}",
@@ -352,18 +361,22 @@ pub(crate) fn rasterize_save_picker_overlay(buf: &mut [u8], w: usize, h: usize) 
         model.page() + 1,
         model.page_count()
     );
-    boot_draw_text_rgb(buf, w, h, margin_x, y, &mode_line, PICKER_RGB_DIM);
+    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, &mode_line, PICKER_RGB_DIM);
     y += line_h;
     // Divider rule.
-    boot_fill_rect(buf, w, h, margin_x, y, content_w, scale.max(1), PICKER_RGB_RULE);
+    boot_fill_rect(buf, w, h, margin_x + scale * 4, y, content_w.saturating_sub(scale * 8), scale.max(1), PICKER_RGB_RULE);
     y += line_h;
 
     // Rows.
+    let rows_bottom = panel_bottom.saturating_sub(line_h * 2);
     let cursor = model.cursor();
     for row in 0..crate::experiments::save_picker::PICKER_ROW_COUNT {
         let label = model.row_label_ascii(row);
         if label.is_empty() {
             continue;
+        }
+        if y + line_h >= rows_bottom {
+            break;
         }
         let selected = row == cursor;
         if selected {
@@ -371,9 +384,9 @@ pub(crate) fn rasterize_save_picker_overlay(buf: &mut [u8], w: usize, h: usize) 
                 buf,
                 w,
                 h,
-                margin_x.saturating_sub(scale * 4),
+                margin_x + scale * 2,
                 y.saturating_sub(scale * 2),
-                content_w + scale * 8,
+                content_w.saturating_sub(scale * 4),
                 line_h + scale * 4,
                 PICKER_RGB_SEL_BAR,
             );
@@ -383,24 +396,20 @@ pub(crate) fn rasterize_save_picker_overlay(buf: &mut [u8], w: usize, h: usize) 
         } else {
             (PICKER_RGB_ROW, "  ")
         };
-        let text = picker_fit_text(&format!("{prefix}{label}"), content_w);
-        boot_draw_text_rgb(buf, w, h, margin_x, y, &text, color);
+        let text = picker_fit_text(&format!("{prefix}{label}"), content_w.saturating_sub(scale * 8));
+        boot_draw_text_rgb(buf, w, h, margin_x + scale * 6, y, &text, color);
         y += row_step;
-        if y + line_h >= h.saturating_sub(margin_x) {
-            break;
-        }
     }
 
-    // Footer hint.
-    let footer_y = h.saturating_sub((h / 10).max(40));
-    boot_fill_rect(buf, w, h, margin_x, footer_y.saturating_sub(line_h), content_w, scale.max(1), PICKER_RGB_RULE);
+    // Footer hint inside the panel (above the bottom bar).
+    let footer_y = panel_bottom.saturating_sub(line_h);
     boot_draw_text_rgb(
         buf,
         w,
         h,
-        margin_x,
+        margin_x + scale * 4,
         footer_y,
-        "ARROWS/DPAD MOVE   ENTER/A SELECT   BKSP/B UP   L/R PAGE",
+        "ARROWS/DPAD MOVE  ENTER/A SELECT  BKSP/B UP  L/R PAGE",
         PICKER_RGB_DIM,
     );
     true

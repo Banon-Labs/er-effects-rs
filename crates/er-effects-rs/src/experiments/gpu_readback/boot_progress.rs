@@ -1241,29 +1241,26 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
         || BOOT_VIEW_DRAWN_IDX.load(Ordering::SeqCst) != ms_idx
         || BOOT_VIEW_DRAWN_BG_ACTIVE.load(Ordering::SeqCst) != bg_active as usize
     {
-        let mut picker_buf = Vec::new();
-        if picker_active {
-            picker_buf = vec![0u8; region_w as usize * region_h as usize * RGBA8_BPP];
-            if rasterize_save_picker_overlay(&mut picker_buf, region_w as usize, region_h as usize) {
-                SAVE_PICKER_OVERLAY_DRAW_HITS.fetch_add(1, Ordering::SeqCst);
-            } else {
-                picker_buf.clear(); // model vanished -> fall through to the bar
-            }
+        // Base frame is always the boot loading bar (full-frame black + the bottom strip bar). When
+        // the startup picker is active it composites its browser panel ON TOP, in the upper region,
+        // leaving the bar visible below -- so the bar keeps showing the boot held at SAVE_CHECK while
+        // the user browses. When the picker disarms (pick resolved), the bar frame remains and the
+        // boot resumes past SAVE_CHECK.
+        let mut tight = boot_view_rasterize(
+            region_w as usize,
+            region_h as usize,
+            ms_idx,
+            permille,
+            content_x,
+            content_y,
+            content_w,
+            bg,
+        );
+        if picker_active
+            && overlay_save_picker_onto(&mut tight, region_w as usize, region_h as usize)
+        {
+            SAVE_PICKER_OVERLAY_DRAW_HITS.fetch_add(1, Ordering::SeqCst);
         }
-        let tight = if !picker_buf.is_empty() {
-            picker_buf
-        } else {
-            boot_view_rasterize(
-                region_w as usize,
-                region_h as usize,
-                ms_idx,
-                permille,
-                content_x,
-                content_y,
-                content_w,
-                bg,
-            )
-        };
         let row_pitch = footprint.Footprint.RowPitch as usize;
         let total = total_bytes as usize;
         let mut umap: *mut c_void = std::ptr::null_mut();
