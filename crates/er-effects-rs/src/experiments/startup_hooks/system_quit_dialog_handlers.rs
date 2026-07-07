@@ -297,7 +297,7 @@ unsafe fn system_quit_open_env_save_dir() -> bool {
     // loads (mixing save flavors across modes corrupts expectations; user directive 2026-07-06).
     // No "All files" escape hatch, for the same reason: the picker must offer ONLY the active
     // mode's container.
-    let seamless = crate::telemetry::seamless_coop_loaded();
+    let seamless = save_picker_seamless_mode_after_settle("system-quit-load-save-profiles");
     let (filter_w, picker_ext) = if seamless {
         (wide_z("Seamless save (*.co2)\0*.co2\0"), "co2")
     } else {

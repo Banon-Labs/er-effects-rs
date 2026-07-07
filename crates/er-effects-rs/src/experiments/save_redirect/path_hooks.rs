@@ -1143,9 +1143,52 @@ fn path_from_windows_picker(path: &[u16]) -> Option<PathBuf> {
     String::from_utf16(&path[..end]).ok().map(PathBuf::from)
 }
 
-fn open_missing_save_file_picker() -> Option<PathBuf> {
+/// Picker-mode helper for user-facing save selection. ERSC can register after our DllMain, so picker
+/// mode first honors an explicit launcher/profile hint for known Seamless launches, then falls back to
+/// the sticky runtime module latch. No sleep/polling: picker mode must come from a concrete signal.
+// ENV-GATE RATIONALE: ER_EFFECTS_SAVE_MODE_HINT is set by the user-facing launcher/profile wrapper
+// to disambiguate Seamless `.co2` vs vanilla `.sl2` before `ersc.dll` is guaranteed to be
+// PEB-registered; without that concrete launch-mode signal, the pre-save missing-save picker can
+// expose the wrong save flavor and stage a file the active runtime will never own.
+pub(crate) fn save_picker_seamless_mode_after_settle(reason: &str) -> bool {
+    if let Ok(raw) = std::env::var("ER_EFFECTS_SAVE_MODE_HINT") {
+        let hint = raw.trim().to_ascii_lowercase();
+        if matches!(hint.as_str(), "seamless" | "co2" | "ersc") {
+            append_autoload_debug(format_args!(
+                "save-override: save-picker mode forced to Seamless .co2 by ER_EFFECTS_SAVE_MODE_HINT='{raw}' reason={reason}"
+            ));
+            return true;
+        }
+        if matches!(hint.as_str(), "vanilla" | "sl2") {
+            append_autoload_debug(format_args!(
+                "save-override: save-picker mode forced to vanilla .sl2 by ER_EFFECTS_SAVE_MODE_HINT='{raw}' reason={reason}"
+            ));
+            return false;
+        }
+        append_autoload_debug(format_args!(
+            "save-override: ignoring unknown ER_EFFECTS_SAVE_MODE_HINT='{raw}' reason={reason}"
+        ));
+    }
+    let seamless = crate::telemetry::seamless_coop_loaded();
+    append_autoload_debug(format_args!(
+        "save-override: save-picker mode from ERSC module latch seamless={seamless} reason={reason}"
+    ));
+    seamless
+}
+
+fn picker_ext_ok(path: &Path, expected_ext: &str) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case(expected_ext))
+}
+
+fn open_missing_save_file_picker(expected_ext: &str) -> Option<PathBuf> {
     let title_w = wide_nul("Select Elden Ring save file");
-    let filter_w = wide_nul("Elden Ring save (*.sl2;*.co2)\0*.sl2;*.co2\0All files (*.*)\0*.*\0");
+    let filter_w = if expected_ext.eq_ignore_ascii_case("co2") {
+        wide_nul("Seamless save (*.co2)\0*.co2\0")
+    } else {
+        wide_nul("Elden Ring save (*.sl2)\0*.sl2\0")
+    };
     let initial_dir = configured_preferred_save_picker_dir()
         .filter(|dir| dir.is_dir())
         .map(|dir| (dir, "preferred_save_picker_dir"))
@@ -1155,7 +1198,7 @@ fn open_missing_save_file_picker() -> Option<PathBuf> {
         .map(|(root, _)| wine_path_wide_nul(root));
     let mut file_buf = [0u16; 1024];
     append_autoload_debug(format_args!(
-        "save-override: missing-save picker opening unowned (initial dir source={}; game title flow is gated separately)",
+        "save-override: missing-save picker opening unowned mode-locked to .{expected_ext} (initial dir source={}; game title flow is gated separately)",
         initial_dir
             .as_ref()
             .map(|(_, source)| *source)
@@ -1217,9 +1260,26 @@ fn prompt_missing_save_file_source() -> Option<SaveRedirectSource> {
         if response == IDCANCEL || response != IDOK {
             return None;
         }
-        let Some(path) = open_missing_save_file_picker() else {
+        let seamless = save_picker_seamless_mode_after_settle("missing-save-dialog");
+        let expected_ext = if seamless { "co2" } else { "sl2" };
+        let Some(path) = open_missing_save_file_picker(expected_ext) else {
             return None;
         };
+        if !picker_ext_ok(&path, expected_ext) {
+            append_autoload_debug(format_args!(
+                "save-override: missing-save dialog rejected '{}' -- picker is mode-locked to .{expected_ext} (seamless={seamless})",
+                path.display()
+            ));
+            unsafe {
+                let _ = MessageBoxW(
+                    None,
+                    PCWSTR::from_raw(invalid.as_ptr()),
+                    PCWSTR::from_raw(title.as_ptr()),
+                    MB_OK | MB_ICONERROR,
+                );
+            }
+            continue;
+        }
         if let Some(validated) = validated_save_file_path(path.clone()) {
             if autoupdate_preferred_picker_dir_enabled()
                 && let Some(dir) = validated.parent().filter(|dir| !dir.as_os_str().is_empty())
@@ -1378,6 +1438,32 @@ fn ensure_direct_stage_for_requested_path(path: &[u16]) {
     ensure_direct_stage_for_steam_id(steam_id);
 }
 
+fn make_file_writable(path: &Path) {
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mut perms = meta.permissions();
+        if perms.readonly() {
+            perms.set_readonly(false);
+            let _ = std::fs::set_permissions(path, perms);
+        }
+    }
+}
+
+fn remove_file_for_overwrite(path: &Path) -> std::io::Result<()> {
+    make_file_writable(path);
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+fn copy_save_for_overwrite(source: &Path, target: &Path) -> std::io::Result<u64> {
+    remove_file_for_overwrite(target)?;
+    let bytes = std::fs::copy(source, target)?;
+    make_file_writable(target);
+    Ok(bytes)
+}
+
 fn ensure_direct_stage_for_steam_id(steam_id: u64) {
     let Some(source) = SAVE_DIRECT_SOURCE_FILE.get() else {
         let hit = SAVE_DIRECT_STAGE_DIAG_HITS.fetch_add(1, Ordering::SeqCst);
@@ -1455,8 +1541,8 @@ fn ensure_direct_stage_for_steam_id(steam_id: u64) {
     }
     let lower_target = lower_dir.join(staged_basename_lower);
     let native_target = native_dir.join(staged_basename_native);
-    match std::fs::copy(source, &lower_target) {
-        Ok(lower_bytes) => match std::fs::copy(source, &native_target) {
+    match copy_save_for_overwrite(source, &lower_target) {
+        Ok(lower_bytes) => match copy_save_for_overwrite(source, &native_target) {
             Ok(native_bytes) => {
                 SAVE_DIRECT_STAGE_DONE_STEAM_ID.store(steam_id, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
