@@ -619,18 +619,20 @@ unsafe fn system_quit_hide_real_system_windows(base: usize, source: &str) {
     ));
 }
 
-/// Re-apply the OptionSetting active-pane visibility via the game's OWN tab-select visibility pass
-/// (`FUN_14093b850`, deobf 0x93b760). Our hide/restore of the OptionSetting window leaves every option
-/// pane with `DisplayInfo.Visible=0` (proven by oracle_optionsetting_pane_visible: WindowList visible,
-/// visible_mask=0 -> the blank Game Options pane). Driving the window's show state does NOT re-show the
-/// panes -- pane visibility is applied only by this per-tab pass, which our restore never re-triggers.
-/// We derive the current tab index by matching the composite's current pane dialog (`composite+0xb8`)
-/// against the 10-entry cache at `composite+0x68`, then call the pass so it re-runs
-/// `SetVisible(paneDialog+0x1200, current==dialog)` for every cached pane -- re-showing exactly the
-/// active pane. Runs on the menu thread (the restore path is menu-pump owned). Read-guarded; no-ops if
-/// the composite / current pane / tab index can't be resolved.
+/// Re-apply OptionSetting active-pane visibility WITHOUT calling the native tab-select helper.
+///
+/// Important: `FUN_14093b850` is NOT visibility-only. Static RE shows it first copies state from the
+/// old `composite+0xb8` pane into the newly selected pane (`FUN_14093b1b0(lVar2+0x1b38,
+/// lVar1+0x1b38)`) and then toggles pane visibility. After our System->Quit ProfileSelect overlay,
+/// `composite+0xb8` can be stale; calling the native helper there can copy Quit/Profile/Display row
+/// table state into the wrong tab. That exactly matches the cross-populated Game Options/Quit tabs.
+///
+/// This restore path is therefore intentionally narrower: derive the user's selected tab from the tab
+/// view, correct `composite+0xb8` to that cached pane, and call only the native GFx `SetVisible` on
+/// each cached pane's embedded proxy. No row/table copy, no rebuild, no upsert into a shared table.
+/// Runs on the menu thread (the restore path is menu-pump owned). Read-guarded; no-ops if the
+/// composite / selected tab / cached pane can't be resolved.
 unsafe fn system_quit_reapply_optionsetting_pane_visibility(base: usize, option_window: usize) {
-    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const HEAP_LO: usize = 0x10000;
     if option_window < HEAP_LO {
         return;
@@ -677,23 +679,69 @@ unsafe fn system_quit_reapply_optionsetting_pane_visibility(base: usize, option_
             break;
         }
     }
-    let Some(tab_index) = real_tab.or(cache_tab) else {
+    let Some(tab_index) = real_tab else {
         append_autoload_debug(format_args!(
-            "system-quit-dup: optionsetting pane-reapply skipped -- no tab index (tab_view=0x{tab_view:x} current=0x{current:x} composite=0x{composite:x})"
+            "system-quit-dup: optionsetting pane-reapply skipped -- no real tab index (tab_view=0x{tab_view:x} current=0x{current:x} cache_tab={cache_tab:?} composite=0x{composite:x})"
         ));
         return;
     };
-    let Ok(select_addr) = game_rva(OPTIONSETTING_TAB_SELECT_VISIBILITY_RVA as u32) else {
+    let Ok(set_visible_addr) = game_rva(TITLE_PRESS_START_SET_VISIBLE_RVA as u32) else {
         append_autoload_debug(format_args!(
-            "system-quit-dup: optionsetting pane-reapply skipped -- select rva 0x{OPTIONSETTING_TAB_SELECT_VISIBILITY_RVA:x} unresolved"
+            "system-quit-dup: optionsetting pane-reapply skipped -- SetVisible rva 0x{TITLE_PRESS_START_SET_VISIBLE_RVA:x} unresolved"
         ));
         return;
     };
-    let select: unsafe extern "system" fn(usize, i32, usize, usize) =
-        unsafe { std::mem::transmute(select_addr) };
-    unsafe { select(composite, tab_index as i32, NULL, NULL) };
+    let selected = unsafe {
+        safe_read_usize(composite + OPTIONSETTING_COMPOSITE_PANE_CACHE_OFFSET + tab_index * 8)
+    }
+    .unwrap_or(0);
+    if selected < HEAP_LO {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: optionsetting pane-reapply skipped -- selected cached pane missing tab_index={tab_index} composite=0x{composite:x}"
+        ));
+        return;
+    }
+    unsafe {
+        *((composite + OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET) as *mut usize) = selected;
+    }
+    let mut refreshed = false;
+    if let Ok(refresh_addr) = game_rva(OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA) {
+        let select_tab: unsafe extern "system" fn(usize, i32) = unsafe { std::mem::transmute(refresh_addr) };
+        // Native tab-select copies old current pane state into the new pane before refreshing. Because
+        // we pre-set current=selected above, the copy is selected->selected (safe), but the helper still
+        // runs the internal Scaleform/row refresh that manual SetVisible did not reproduce.
+        unsafe { select_tab(composite, tab_index as i32) };
+        SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_COUNT.fetch_add(1, Ordering::SeqCst);
+        SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_LAST_SELECTED.store(selected, Ordering::SeqCst);
+        refreshed = true;
+    } else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: optionsetting pane-reapply native select skipped -- refresh rva 0x{OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA:x} unresolved"
+        ));
+    }
+    SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_REAPPLY_COUNT.fetch_add(1, Ordering::SeqCst);
+    SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_TAB.store(tab_index, Ordering::SeqCst);
+    SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_OLD_CURRENT.store(current, Ordering::SeqCst);
+    SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_SELECTED.store(selected, Ordering::SeqCst);
+    let set_visible: unsafe extern "system" fn(usize, u8) =
+        unsafe { std::mem::transmute(set_visible_addr) };
+    let mut visible_mask: usize = 0;
+    for i in 0..OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT {
+        let cached = unsafe {
+            safe_read_usize(composite + OPTIONSETTING_COMPOSITE_PANE_CACHE_OFFSET + i * 8)
+        }
+        .unwrap_or(0);
+        if cached >= HEAP_LO {
+            let visible = (i == tab_index) as u8;
+            unsafe { set_visible(cached + OPTIONSETTING_DIALOG_PANE_PROXY_OFFSET, visible) };
+            if visible != 0 {
+                visible_mask |= 1usize << i;
+            }
+        }
+    }
     append_autoload_debug(format_args!(
-        "system-quit-dup: optionsetting pane-reapply composite=0x{composite:x} current=0x{current:x} tab_index={tab_index} real_tab={real_tab:?} cache_tab={cache_tab:?} via 0x{select_addr:x}"
+        "system-quit-dup: optionsetting pane-reapply native-select composite=0x{composite:x} old_current=0x{current:x} selected=0x{selected:x} tab_index={tab_index} real_tab={real_tab:?} cache_tab={cache_tab:?} visible_mask=0x{visible_mask:x} refreshed={refreshed} select_addr=0x{:x} set_visible=0x{set_visible_addr:x} (pre-repaired self-copy)"
+        , game_rva(OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA).unwrap_or(0)
     ));
 }
 
@@ -841,16 +889,16 @@ unsafe fn system_quit_restore_real_system_windows(base: usize, source: &str) {
     } else {
         false
     };
-    let restored_option = if option != 0 && option != top {
-        unsafe { system_quit_menu_window_set_visible_and_flags(base, option, true, source) }
-    } else {
-        false
-    };
-    if restored_option {
-        // Showing the OptionSetting window root does NOT re-show its option panes -- pane visibility is
-        // applied only by the game's per-tab pass, which our hide/restore never re-triggers, leaving the
-        // Game Options tab blank. Re-run that pass for the active tab so the current pane re-shows.
-        unsafe { system_quit_reapply_optionsetting_pane_visibility(base, option) };
+    let restored_option = false;
+    if option != 0 && option != top {
+        // Do not restore the existing OptionSetting window after ProfileSelect Back. User/runtime
+        // evidence shows the live OptionSetting/GFx pane is poisoned: rows/actions are native-clean,
+        // but the visible list can remain stale/blank. The known-good native recovery is Back to the
+        // parent menu, then OK into System again, which rebuilds/reopens OptionSetting cleanly. So we
+        // restore only the parent/top menu here and leave OptionSetting hidden.
+        append_autoload_debug(format_args!(
+            "system-quit-dup: leaving OptionSetting hidden after ProfileSelect Back source={source} option=0x{option:x}; parent System menu will reopen it natively"
+        ));
     }
     append_autoload_debug(format_args!(
         "system-quit-dup: restore real windows source={source} profile=0x{profile:x} top=0x{top:x} option=0x{option:x} restored_top={restored_top} restored_option={restored_option}"
@@ -877,9 +925,21 @@ pub(crate) unsafe fn system_quit_profile_select_top_menu_tick() {
         // ProfileSelect window job) and the return-title submit is done in menu-pump ownership from
         // the MenuWindowJob::Run hook. See bd system-quit-return-title-scaleform-race-2026-07-01.
         if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) == SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
-            unsafe {
-                system_quit_save_swap_restore_profile_summary("profile-select-closed-without-load")
-            };
+            if let Ok(base) = game_module_base() {
+                unsafe {
+                    system_quit_restore_real_system_windows(
+                        base,
+                        "restore-real-profile-closed-without-load",
+                    )
+                };
+            } else {
+                unsafe {
+                    system_quit_save_swap_restore_profile_summary(
+                        "profile-select-closed-without-load-no-base",
+                    )
+                };
+                unsafe { system_quit_reset_profile_select_state("profile-select-closed-without-load-no-base") };
+            }
         }
         return;
     }
@@ -998,11 +1058,140 @@ unsafe fn read_scaleform_pane_visible(base: usize, cs_value: usize) -> (bool, bo
     )
 }
 
+fn wide_ptr_starts_with_ascii(ptr: usize, ascii: &[u8]) -> bool {
+    if ptr < TITLE_OWNER_SCAN_START_ADDRESS || ascii.is_empty() {
+        return false;
+    }
+    for (idx, &want) in ascii.iter().enumerate() {
+        let Some(unit) = (unsafe { safe_read_u16(ptr + idx * 2) }) else {
+            return false;
+        };
+        if unit != want as u16 {
+            return false;
+        }
+    }
+    true
+}
+
+fn optionsetting_quit_label_kind(label_ptr: usize) -> usize {
+    if wide_ptr_starts_with_ascii(label_ptr, b"Save Game") {
+        1
+    } else if wide_ptr_starts_with_ascii(label_ptr, b"Load Profile") {
+        2
+    } else if wide_ptr_starts_with_ascii(label_ptr, b"Load Save Profiles") {
+        3
+    } else if wide_ptr_starts_with_ascii(label_ptr, b"Return to Desktop") {
+        4
+    } else {
+        0
+    }
+}
+
+fn hash_wide_label_ptr(label_ptr: usize) -> usize {
+    let mut hash = 0xcbf2_9ce4_8422_2325usize;
+    if label_ptr < TITLE_OWNER_SCAN_START_ADDRESS {
+        return hash;
+    }
+    for idx in 0..48usize {
+        let Some(unit) = (unsafe { safe_read_u16(label_ptr + idx * 2) }) else {
+            break;
+        };
+        hash ^= unit as usize;
+        hash = hash.wrapping_mul(0x1000_0000_01b3usize);
+        if unit == 0 {
+            break;
+        }
+    }
+    hash
+}
+
+unsafe fn sample_optionsetting_active_row_table(current_dialog: usize, current_tab: usize, actively_shown: bool) {
+    const HEAP_LO: usize = 0x10000;
+    const MAX_ROWS: usize = 16;
+    static OPTIONSETTING_ROW_LAST_LOG_KEY: AtomicUsize = AtomicUsize::new(usize::MAX);
+    if !actively_shown || current_dialog < HEAP_LO {
+        return;
+    }
+    let count = unsafe {
+        safe_read_usize(current_dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET)
+    }
+    .unwrap_or(0)
+    .min(MAX_ROWS);
+    let properties = current_dialog + PROPERTY_EDIT_DIALOG_PROPERTIES_1268_OFFSET;
+    let aligned_properties = (properties + 0x7) & !0x7;
+    let quickload_action = SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
+    let open_profiles_action = SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
+    let native_save_action = SYSTEM_QUIT_NATIVE_SAVE_GAME_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
+    let mut cloned_mask = 0usize;
+    let mut native_save_mask = 0usize;
+    let mut quit_label_mask = 0usize;
+    let mut action_hash = 0xcbf2_9ce4_8422_2325usize;
+    let mut label_hash = 0xcbf2_9ce4_8422_2325usize;
+    for row_idx in 0..count {
+        let row = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(row_idx);
+        let controller = unsafe { safe_read_usize(row + EDIT_PROPERTY_CONTROLLER_OFFSET) }.unwrap_or(0);
+        let action = if controller != 0 {
+            unsafe {
+                safe_read_usize(
+                    controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET,
+                )
+            }
+            .unwrap_or(0)
+        } else {
+            0
+        };
+        action_hash = action_hash.rotate_left(5) ^ action.wrapping_mul(0x9e37_79b9_7f4a_7c15usize);
+        let label_ptr = unsafe { safe_read_usize(row + 0x8) }.unwrap_or(0);
+        let row_label_hash = hash_wide_label_ptr(label_ptr);
+        label_hash = label_hash.rotate_left(7) ^ row_label_hash;
+        if optionsetting_quit_label_kind(label_ptr) != 0 {
+            quit_label_mask |= 1usize << row_idx;
+        }
+        if action != 0 && (action == quickload_action || action == open_profiles_action) {
+            cloned_mask |= 1usize << row_idx;
+        }
+        if action != 0 && action == native_save_action {
+            native_save_mask |= 1usize << row_idx;
+        }
+    }
+    OPTIONSETTING_ACTIVE_ROW_SAMPLE_COUNT.fetch_add(1, Ordering::SeqCst);
+    OPTIONSETTING_ACTIVE_ROW_DIALOG.store(current_dialog, Ordering::SeqCst);
+    OPTIONSETTING_ACTIVE_ROW_TAB.store(current_tab, Ordering::SeqCst);
+    OPTIONSETTING_ACTIVE_ROW_COUNT.store(count, Ordering::SeqCst);
+    OPTIONSETTING_ACTIVE_ROW_CLONED_MASK.store(cloned_mask, Ordering::SeqCst);
+    OPTIONSETTING_ACTIVE_ROW_NATIVE_SAVE_MASK.store(native_save_mask, Ordering::SeqCst);
+    OPTIONSETTING_ACTIVE_ROW_ACTION_HASH.store(action_hash, Ordering::SeqCst);
+    OPTIONSETTING_ACTIVE_ROW_LABEL_HASH.store(label_hash, Ordering::SeqCst);
+    OPTIONSETTING_ACTIVE_ROW_QUIT_LABEL_MASK.store(quit_label_mask, Ordering::SeqCst);
+    if current_tab == 0 && cloned_mask != 0 {
+        OPTIONSETTING_GAME_OPTIONS_CLONED_ROW_HITS.fetch_add(1, Ordering::SeqCst);
+    }
+    if current_tab == 0 && quit_label_mask != 0 {
+        OPTIONSETTING_GAME_OPTIONS_QUIT_LABEL_HITS.fetch_add(1, Ordering::SeqCst);
+    }
+    let log_key = ((current_tab & 0xff) << 56)
+        ^ ((count & 0xff) << 48)
+        ^ ((cloned_mask & 0xff) << 32)
+        ^ ((native_save_mask & 0xff) << 24)
+        ^ ((quit_label_mask & 0xff) << 16)
+        ^ (action_hash & 0xffff);
+    if OPTIONSETTING_ROW_LAST_LOG_KEY.swap(log_key, Ordering::SeqCst) != log_key
+        || (current_tab == 0 && (cloned_mask != 0 || quit_label_mask != 0))
+    {
+        append_autoload_debug(format_args!(
+            "optionsetting-rows: active tab={current_tab} dialog=0x{current_dialog:x} count={count} cloned_mask=0x{cloned_mask:x} native_save_mask=0x{native_save_mask:x} quit_label_mask=0x{quit_label_mask:x} action_hash=0x{action_hash:x} label_hash=0x{label_hash:x} quickload_action=0x{quickload_action:x} open_profiles_action=0x{open_profiles_action:x} native_save_action=0x{native_save_action:x}"
+        ));
+    }
+}
+
 /// READ-ONLY oracle: on OptionSetting menu re-entry, read whether the option-row pane display
 /// objects are actually VISIBLE. Detects the "blank Game Options pane" bug (tab strip + footer
-/// render, row list is black) with no screenshot -- every access is a read; no game state changes.
+/// render, row list is black) with no screenshot. This also owns the active Game Options tab-entry
+/// repair: when the visible selected tab is 0, re-assert the cached/native Game Options pane once on
+/// entry so stale Quit-tab rows cannot remain cross-populated under the vanilla Game Options tab.
 /// Runs on the menu/game thread (the `MenuWindowJob::Run` hook) as required for GFx vcalls.
 unsafe fn sample_optionsetting_pane_visibility(base: usize, option_window: usize) {
+    static OPTIONSETTING_LAST_ACTIVE_TAB: AtomicUsize = AtomicUsize::new(usize::MAX);
     if option_window == 0 || option_window < OPTIONSETTING_WINDOW_MIN_PTR {
         return;
     }
@@ -1089,26 +1278,32 @@ unsafe fn sample_optionsetting_pane_visibility(base: usize, option_window: usize
         usize::MAX
     };
     OPTIONSETTING_CURRENT_TAB.store(current_tab, Ordering::SeqCst);
+    if actively_shown {
+        OPTIONSETTING_LAST_ACTIVE_TAB.store(current_tab, Ordering::SeqCst);
+    } else {
+        OPTIONSETTING_LAST_ACTIVE_TAB.store(usize::MAX, Ordering::SeqCst);
+    }
+    unsafe { sample_optionsetting_active_row_table(current_dialog, current_tab, actively_shown) };
 
     // OLD (mislabeled) signature -- kept only as a secondary diagnostic; it is a constant, not the bug.
     let named_blank = wl.visible && visible_mask == 0;
     // REAL blank: a healthy pane was seen earlier, and now the actively-shown current pane is hidden.
     let real_blank = ever_visible && actively_shown && current_dialog != 0 && cur_is_display && !cur_visible;
 
-    // FIX: the active tab's pane MUST be visible when the OptionSetting is shown. On return to a tab the
-    // game's tab-select sometimes fails to re-show it (the blank Game Options pane -- proven: same dialog
-    // 0x..564080 goes Visible=1 -> 0 and never comes back). Re-assert the invariant with the game's OWN
-    // SetVisible on the current tab dialog's proxy at dialog+0x1200 -- the exact proxy/call FUN_14093b850
-    // uses. Only when actively shown + the pane is a real DisplayObject + currently hidden, so it never
-    // forces a pane that should legitimately be hidden (ProfileSelect clears flag 0x4 -> actively_shown=false).
-    if actively_shown && cur_is_display && !cur_visible && current_dialog >= OPTIONSETTING_WINDOW_MIN_PTR
-    {
-        if let Ok(sv_addr) = game_rva(TITLE_PRESS_START_SET_VISIBLE_RVA as u32) {
-            let set_visible: unsafe extern "system" fn(usize, u8) =
-                unsafe { std::mem::transmute(sv_addr) };
+    // FIX: when the currently-selected tab's real pane is blank, run the native tab-select refresh for
+    // THAT current tab, not just SetVisible. Manual SetVisible was disproven: it increments the fix
+    // counter while DisplayInfo.Visible remains false and the stale Quit visual list can stay over Game
+    // Options. Before calling native select, repair composite+0xb8 to current_dialog so its state-copy
+    // step is self-copy instead of stale Quit->Game.
+    if real_blank && current_tab < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT {
+        if let Ok(select_addr) = game_rva(OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA) {
             unsafe {
-                set_visible(current_dialog + OPTIONSETTING_DIALOG_PANE_PROXY_OFFSET, 1);
+                *((composite + OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET) as *mut usize) =
+                    current_dialog;
             }
+            let select_tab: unsafe extern "system" fn(usize, i32) =
+                unsafe { std::mem::transmute(select_addr) };
+            unsafe { select_tab(composite, current_tab as i32) };
             OPTIONSETTING_PANE_FIX_APPLIED.fetch_add(1, Ordering::SeqCst);
         }
     }

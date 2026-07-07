@@ -226,6 +226,17 @@ def main() -> int:
             True,
         ),
         PolicyCase(
+            "allow-python-subprocess-pgrep-assignment-start-protected-detection",
+            "python3 - <<'PY'\n"
+            "import subprocess, os\n"
+            "names=['eldenring.exe','start_protected_game.exe']\n"
+            "for name in names:\n"
+            "    p=subprocess.run(['pgrep','-x',name], text=True, capture_output=True)\n"
+            "    print(name, p.returncode)\n"
+            "PY",
+            True,
+        ),
+        PolicyCase(
             "deny-pgrep-then-proton-start-protected-launch",
             "pgrep -x start_protected_game.exe >/dev/null; proton run /tmp/start_protected_game.exe",
             False,

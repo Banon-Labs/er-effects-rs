@@ -192,6 +192,7 @@ def main() -> int:
     constants = read_module_tree(CONSTANTS, RUNTIME_SRC / "constants")
     if constants:
         lib += "\n" + constants
+    runtime_source = lib + "\n" + experiments
     stage = read(STAGE_SCRIPT)
     telemetry = read_module_tree(TELEMETRY, RUNTIME_SRC / "telemetry")
     watcher = read(WATCHER)
@@ -274,9 +275,9 @@ def main() -> int:
         failures,
     )
     require(
-        "START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once" in lib
-        and "install_title_native_menu_visual_suppression_hook" in lib
-        and lib.find("START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once") < lib.find("START_MENU_WINDOW_LATCH.call_once"),
+        "START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once" in runtime_source
+        and "install_title_native_menu_visual_suppression_hook" in runtime_source
+        and runtime_source.find("START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS.call_once") < runtime_source.find("START_MENU_WINDOW_LATCH.call_once"),
         "title native visual suppression hook must install at process attach before MenuWindow/title visual construction",
         failures,
     )

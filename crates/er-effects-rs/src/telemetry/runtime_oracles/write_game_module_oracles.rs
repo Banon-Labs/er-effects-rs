@@ -2036,6 +2036,65 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_optionsetting_pane_fix_applied",
             OPTIONSETTING_PANE_FIX_APPLIED.load(Ordering::SeqCst),
         );
+        // Active OptionSetting row-table oracle: classifies the currently visible tab dialog's rows by
+        // action pointers. tab 0 with cloned_mask!=0 is the Game Options contamination bug; Quit tab
+        // with missing cloned_mask is the "feature not injected" bug. This is read-only and independent
+        // of screenshot/OCR.
+        push_json_usize(
+            body,
+            "oracle_optionsetting_active_row_sample_count",
+            OPTIONSETTING_ACTIVE_ROW_SAMPLE_COUNT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_active_row_dialog",
+            OPTIONSETTING_ACTIVE_ROW_DIALOG.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_active_row_tab",
+            OPTIONSETTING_ACTIVE_ROW_TAB.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_active_row_count",
+            OPTIONSETTING_ACTIVE_ROW_COUNT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_active_row_cloned_mask",
+            OPTIONSETTING_ACTIVE_ROW_CLONED_MASK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_active_row_native_save_mask",
+            OPTIONSETTING_ACTIVE_ROW_NATIVE_SAVE_MASK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_active_row_action_hash",
+            OPTIONSETTING_ACTIVE_ROW_ACTION_HASH.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_active_row_label_hash",
+            OPTIONSETTING_ACTIVE_ROW_LABEL_HASH.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_active_row_quit_label_mask",
+            OPTIONSETTING_ACTIVE_ROW_QUIT_LABEL_MASK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_game_options_cloned_row_hits",
+            OPTIONSETTING_GAME_OPTIONS_CLONED_ROW_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_game_options_quit_label_hits",
+            OPTIONSETTING_GAME_OPTIONS_QUIT_LABEL_HITS.load(Ordering::SeqCst),
+        );
         // GX command-queue overflow forensics (repeated-switch crash 0x1aeaf05): max_fill climbing
         // toward cap across switches = the accumulating-producer signature; top_producers names the
         // caller RVAs (entries tagged +self passed through our DLL).

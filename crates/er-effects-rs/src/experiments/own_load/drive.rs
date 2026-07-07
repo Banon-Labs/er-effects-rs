@@ -462,35 +462,22 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     }
     // The native dir uses backslashes (Windows under Proton); normalise for std::fs lookup.
     let dir_path = PathBuf::from(dir.replace('\\', "/"));
-    // Pick the save file by extension, not a hardcoded name. Prefer whichever container the active
-    // runtime actually wrote: under Seamless Co-op (ERSC resident) the co-op save is `.co2`, so try
-    // it first; vanilla/offline tries `.sl2` first. Mirrors the DEFAULT-USER-SAVE target selection in
-    // `active_default_save_file_name` so this native-dir fallback stays consistent with it.
-    let paths: Vec<PathBuf> = std::fs::read_dir(&dir_path)
-        .map(|rd| rd.flatten().map(|e| e.path()).collect())
-        .unwrap_or_default();
-    let ext_order = if crate::telemetry::seamless_coop_loaded() {
-        ["co2", "sl2"]
-    } else {
-        ["sl2", "co2"]
-    };
-    let mut chosen: Option<PathBuf> = None;
-    for ext in ext_order {
-        if let Some(p) = paths
-            .iter()
-            .find(|p| p.extension().and_then(|e| e.to_str()) == Some(ext))
-        {
-            chosen = Some(p.clone());
-            break;
-        }
-    }
-    let Some(path) = chosen else {
+    // Pick only the active runtime's container extension. Do NOT fall back to the other flavor:
+    // Seamless must not silently load a vanilla `.sl2`, and vanilla must not silently load a
+    // Seamless `.co2`. If the active extension is absent, behave as "no save" so the normal
+    // configured-save / missing-save picker path can ask the user for the right file.
+    let expected_name = active_default_save_file_name();
+    let path = dir_path.join(expected_name);
+    let valid = std::fs::metadata(&path)
+        .map(|meta| meta.is_file() && meta.len() >= crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES)
+        .unwrap_or(false);
+    if !valid {
         append_autoload_debug(format_args!(
-            "own-load: no .sl2/.co2 file under dir=\"{}\" -- cannot read save",
+            "own-load: active-mode save '{expected_name}' missing/invalid under dir=\"{}\" -- not falling back across .sl2/.co2",
             dir_path.display()
         ));
         return None;
-    };
+    }
     match std::fs::read(&path) {
         Ok(mut bytes) => {
             normalize_save_bytes_to_active_steam_id(base, &mut bytes, "own-load-native-dir");

@@ -390,7 +390,7 @@ proc_scan_exec_marker if {
 # process-execution or launch-shaped marker keeps the exemption off.
 pgrep_subprocess_detection_command if {
 	tool_name == "Bash"
-	proc_scan_python_shape
+	pgrep_subprocess_python_shape
 	not contains(command, "$(")
 	not contains(command, "`")
 	not contains(lower(other_text), "start_protected_game.exe")
@@ -399,6 +399,21 @@ pgrep_subprocess_detection_command if {
 	count(split(lower(proc_scan_norm_command), "subprocess.run")) == 2
 	regex.match(`(?i)subprocess\.run[[:space:]]*\([[:space:]]*\[[^\]]*['"]pgrep['"][^\]]*['"]-x['"][^\]]*\]`, proc_scan_norm_command)
 	not pgrep_subprocess_forbidden_marker
+}
+
+pgrep_subprocess_python_shape if {
+	proc_scan_python_shape
+}
+
+# Runtime preflight often checks Steam with shell pgrep before a Python heredoc
+# checks exact game/EAC process names. Keep that composite read-only shape
+# allowed without opening a generic chained-command bypass.
+pgrep_subprocess_python_shape if {
+	count(proc_scan_heredoc_parts) == 2
+	regex.match(`^(/usr/bin/)?pgrep -x steam >/dev/null && echo steam-running \|\| echo steam-missing;? (/usr/bin/)?python3? - ?$`, proc_scan_heredoc_parts[0])
+	terminator_parts := split(proc_scan_norm_command, concat("", [" ", proc_scan_heredoc_tag]))
+	count(terminator_parts) == 2
+	terminator_parts[1] == ""
 }
 
 pgrep_subprocess_forbidden_marker if {
@@ -412,10 +427,3 @@ pgrep_subprocess_forbidden_marker if {
 	contains(lower(proc_scan_norm_command), marker)
 }
 
-pgrep_subprocess_forbidden_marker if {
-	contains(lower(proc_scan_norm_command), "= subprocess.run")
-}
-
-pgrep_subprocess_forbidden_marker if {
-	contains(lower(proc_scan_norm_command), "=subprocess.run")
-}

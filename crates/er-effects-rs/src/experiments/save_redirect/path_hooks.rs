@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     ffi::c_void,
     fmt::Write as _,
     fs,
@@ -235,6 +236,26 @@ pub(crate) fn normalize_save_bytes_to_active_steam_id(
     }
 }
 
+fn path_eq_ignore_ascii_case(a: &Path, b: &Path) -> bool {
+    a.to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .eq_ignore_ascii_case(
+            b.to_string_lossy()
+                .replace('/', "\\")
+                .trim_end_matches('\\'),
+        )
+}
+
+fn save_file_writeback_allowed(path: &Path) -> bool {
+    let Some(default_root) = default_save_root() else {
+        return false;
+    };
+    path.parent()
+        .and_then(|steam_dir| steam_dir.parent())
+        .is_some_and(|root| path_eq_ignore_ascii_case(root, &default_root))
+}
+
 fn normalize_env_save_file_to_known_steam_id(path: &Path, steam_id: u64, reason: &str) {
     let Ok(mut bytes) = fs::read(path) else {
         append_autoload_debug(format_args!(
@@ -248,26 +269,28 @@ fn normalize_env_save_file_to_known_steam_id(path: &Path, steam_id: u64, reason:
     match er_save_loader::bnd4::normalize_steam_id_in_place(&mut bytes, steam_id) {
         Ok(report) => {
             append_autoload_debug(format_args!(
-                "save-steamid-normalize: source={reason} steam_id={steam_id} char_seen={} char_patched={} user_data10_seen={} user_data10_patched={} md5_rewritten={}",
+                "save-steamid-normalize: source={reason} steam_id={steam_id} char_seen={} char_patched={} user_data10_seen={} user_data10_patched={} md5_rewritten={} changed={} writeback_allowed={}",
                 report.character_slots_seen,
                 report.character_slots_patched,
                 report.user_data10_seen,
                 report.user_data10_patched,
-                report.md5_rewritten
+                report.md5_rewritten,
+                report.changed(),
+                save_file_writeback_allowed(path)
             ));
-            if !report.changed() {
+            if !report.changed() || !save_file_writeback_allowed(path) {
                 return;
             }
             match fs::write(path, &bytes) {
                 Ok(()) => {
                     let after = save_normalize_hash_bytes(&bytes);
                     append_autoload_debug(format_args!(
-                        "save-steamid-normalize: wrote normalized env save path='{}' reason={reason} before=0x{before:016x} after=0x{after:016x}",
+                        "save-steamid-normalize: wrote normalized GAME save path='{}' reason={reason} before=0x{before:016x} after=0x{after:016x}",
                         path.display()
                     ));
                 }
                 Err(err) => append_autoload_debug(format_args!(
-                    "save-steamid-normalize: FAILED to write normalized env save path='{}' reason={reason}: {err}",
+                    "save-steamid-normalize: FAILED to write normalized GAME save path='{}' reason={reason}: {err}",
                     path.display()
                 )),
             }
@@ -301,38 +324,37 @@ pub(crate) fn normalize_env_save_file_to_active_steam_id_once(base: usize, reaso
     let Some(report) = normalize_save_bytes_to_active_steam_id(base, &mut bytes, reason) else {
         return;
     };
-    if !report.changed() {
-        SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
+    SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
+    if !report.changed() || !save_file_writeback_allowed(&path) {
+        append_autoload_debug(format_args!(
+            "save-steamid-normalize: one-shot source normalize reason={reason} path='{}' changed={} writeback_allowed={}",
+            path.display(),
+            report.changed(),
+            save_file_writeback_allowed(&path)
+        ));
         return;
     }
     match fs::write(&path, &bytes) {
         Ok(()) => {
             let after = save_normalize_hash_bytes(&bytes);
-            SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "save-steamid-normalize: wrote normalized env save path='{}' reason={reason} before=0x{before:016x} after=0x{after:016x}",
+                "save-steamid-normalize: wrote normalized GAME save path='{}' reason={reason} before=0x{before:016x} after=0x{after:016x}",
                 path.display()
             ));
         }
-        Err(err) => {
-            SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
-            append_autoload_debug(format_args!(
-                "save-steamid-normalize: FAILED to write normalized env save path='{}' reason={reason}: {err}",
-                path.display()
-            ));
-        }
+        Err(err) => append_autoload_debug(format_args!(
+            "save-steamid-normalize: FAILED to write normalized GAME save path='{}' reason={reason}: {err}",
+            path.display()
+        )),
     }
 }
 
 /// Redirect directory (UTF-16, NUL-free, no trailing separator) computed from the parent of
 /// `ER_EFFECTS_SAVE_FILE`. Set once at init, BEFORE the CreateFileW hook is armed.
 static SAVE_REDIRECT_DIR_W: OnceLock<Vec<u16>> = OnceLock::new();
-/// Configured save file may be an arbitrary loose `.sl2`/`.co2` file, not staged
-/// under `EldenRing/<steamid>`. In this mode save-file opens are redirected to
-/// this exact file instead of requiring the user path to mirror Elden Ring's
-/// save-directory layout.
-static SAVE_DIRECT_FILE_W: OnceLock<Vec<u16>> = OnceLock::new();
-static SAVE_DIRECT_BAK_FILE_W: OnceLock<Vec<u16>> = OnceLock::new();
+/// Configured save file may be an arbitrary loose `.sl2`/`.co2` file, not staged under
+/// `EldenRing/<steamid>`. It is a read-only source copied into the private native save tree; save opens
+/// are redirected to that staged tree, never back to this source path.
 static SAVE_DIRECT_SOURCE_FILE: OnceLock<PathBuf> = OnceLock::new();
 static SAVE_DIRECT_STAGE_ROOT: OnceLock<PathBuf> = OnceLock::new();
 static SAVE_DIRECT_STAGE_DONE_STEAM_ID: AtomicU64 = AtomicU64::new(0);
@@ -645,8 +667,15 @@ const MISSING_SAVE_DIALOG_CANCELLED: usize = 3;
 static MISSING_SAVE_DIALOG_STATE: AtomicUsize = AtomicUsize::new(MISSING_SAVE_DIALOG_IDLE);
 static MISSING_SAVE_PROMPT_BOOTSTRAP_READY: AtomicUsize = AtomicUsize::new(0);
 static MISSING_SAVE_BLOCKED_IO_LOGGED: AtomicUsize = AtomicUsize::new(0);
+static MISSING_SAVE_PICKER_THREAD_IO_SKIP_LOGGED: AtomicUsize = AtomicUsize::new(0);
 static MISSING_SAVE_BOOTSTRAP_READY_LOGGED: AtomicUsize = AtomicUsize::new(0);
 static SAVE_QUERY_LAST_SAVE_LIKE_KIND: AtomicUsize = AtomicUsize::new(SAVE_PATH_KIND_NONE);
+thread_local! {
+    /// True only on the missing-save picker helper thread while it is validating/staging the user's
+    /// selected source file. Those reads/copies are prerequisite work needed to resolve the picker;
+    /// blocking them on the picker state deadlocks that same thread before it can publish READY.
+    static MISSING_SAVE_PICKER_THREAD_IO: Cell<bool> = const { Cell::new(false) };
+}
 static MISSING_SAVE_GATE: OnceLock<(Mutex<()>, Condvar)> = OnceLock::new();
 
 fn missing_save_gate() -> &'static (Mutex<()>, Condvar) {
@@ -790,14 +819,13 @@ enum SaveRedirectSource {
         steam_id: u64,
         root_w: Vec<u16>,
     },
-    /// User supplied an arbitrary `.sl2`/`.co2` save file path. Redirect save-file opens
-    /// to the exact file; do not require an `EldenRing` path component or SteamID folder.
+    /// User supplied an arbitrary `.sl2`/`.co2` save file path. Copy it into a private staged native
+    /// save tree; do not require the user path to mirror Elden Ring's SteamID folder layout, and never
+    /// redirect gameplay writes back to the source file.
     DirectFile {
         file: PathBuf,
         stage_root: PathBuf,
         root_w: Vec<u16>,
-        file_w: Vec<u16>,
-        bak_w: Vec<u16>,
     },
 }
 
@@ -878,36 +906,23 @@ fn default_save_root() -> Option<PathBuf> {
         .map(|appdata| appdata.join("EldenRing"))
 }
 
-/// Default save file names to try, in priority order. Seamless Co-op (ERSC) keeps co-op progress in
-/// `ER0000.co2` -- a separate container from the vanilla `ER0000.sl2` -- so when the Seamless module
-/// is resident the DEFAULT-USER-SAVE autoload targets `.co2` first (the save the co-op session reads
-/// and autosaves), else `.sl2`. The OTHER extension follows as a fallback: at `DllMain` the Seamless
-/// sticky latch may not be set yet (me3 defers native loading past Arxan / the me2 shim, so `ersc.dll`
-/// is not PEB-registered at +1ms), so a co2-only profile would otherwise fail the default-save
-/// existence gate and get the missing-save picker. The fallback lets it enter DEFAULT-USER-SAVE mode
-/// instead; the read path re-resolves the correct container via the latch once ERSC is resident. Since
-/// the world-load rides native Continue (the game reads its own save, ERSC-redirected), the fallback
-/// can at worst make an early menu-display read the other container -- never a save write.
-fn default_save_file_names() -> [&'static str; 2] {
-    if crate::telemetry::seamless_coop_loaded() {
-        ["ER0000.co2", "ER0000.sl2"]
-    } else {
-        ["ER0000.sl2", "ER0000.co2"]
-    }
-}
-
-/// Active-extension default save base name (`ER0000.co2` under Seamless, else `ER0000.sl2`).
-/// An explicit `save_file` config still overrides it (it wins in `configured_or_default_save_file`),
-/// so any loose `.sl2`/`.co2` path remains selectable.
+/// Default save file name for the active runtime mode. Seamless Co-op (ERSC) keeps co-op progress in
+/// `ER0000.co2` -- a separate container from the vanilla `ER0000.sl2`. This is deliberately
+/// mode-locked: a Seamless launch must not silently load a vanilla `.sl2` just because it is the only
+/// appdata save present, and a vanilla launch must not silently load a Seamless `.co2`. If the active
+/// mode's file is absent, default-save discovery returns "no save" and the normal missing-save picker
+/// asks the user for the correct save flavor.
 pub(crate) fn active_default_save_file_name() -> &'static str {
-    default_save_file_names()[0]
+    if save_picker_seamless_mode_after_settle("active-default-save-file-name") {
+        "ER0000.co2"
+    } else {
+        "ER0000.sl2"
+    }
 }
 
 fn default_save_file_for_steam_id64(steam_id: u64) -> Option<PathBuf> {
     let dir = default_save_root()?.join(steam_id.to_string());
-    default_save_file_names()
-        .into_iter()
-        .find_map(|name| validated_save_file_path(dir.join(name)))
+    validated_save_file_path(dir.join(active_default_save_file_name()))
 }
 
 fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
@@ -928,9 +943,7 @@ fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
                 .and_then(|name| name.parse::<u64>().ok())
                 .and_then(plausible_steam_id64)?;
             let dir = entry.path();
-            default_save_file_names()
-                .into_iter()
-                .find_map(|name| validated_save_file_path(dir.join(name)))
+            validated_save_file_path(dir.join(active_default_save_file_name()))
                 .map(|path| (path, steam_id))
         })
         .collect()
@@ -964,6 +977,29 @@ pub(crate) fn configured_or_default_save_file() -> Option<PathBuf> {
     configured_save_file().or_else(|| active_default_save_file().map(|(path, _, _)| path))
 }
 
+fn direct_mode_native_active_save_file() -> Option<PathBuf> {
+    SAVE_DIRECT_SOURCE_FILE.get()?;
+    let steam_id = OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst);
+    plausible_steam_id64(steam_id)?;
+    ensure_direct_stage_for_steam_id(steam_id);
+    Some(
+        default_save_root()?
+            .join(steam_id.to_string())
+            .join(active_default_save_file_name()),
+    )
+}
+
+/// Runtime-active save file for System->Quit character switching. A direct/picked save is a READ-ONLY
+/// source: it is copied into the private redirected native save tree, and all writes must target the
+/// native `%APPDATA%/EldenRing/<steamid>/ER0000.{co2|sl2}` path (which our hook redirects to that staged
+/// copy). Never return `SAVE_DIRECT_SOURCE_FILE` here; that would overwrite user-provided saves.
+pub(crate) fn active_save_file_for_system_quit() -> Option<PathBuf> {
+    if SAVE_DIRECT_SOURCE_FILE.get().is_some() {
+        return direct_mode_native_active_save_file();
+    }
+    configured_or_default_save_file()
+}
+
 fn staged_save_root_for_configured_file(path: &Path) -> Option<(PathBuf, u64)> {
     let mut root = PathBuf::new();
     let mut comps = path.components().peekable();
@@ -991,21 +1027,17 @@ fn staged_save_root_for_configured_file(path: &Path) -> Option<(PathBuf, u64)> {
 }
 
 fn save_redirect_source_for_validated_file(path: PathBuf) -> SaveRedirectSource {
-    if let Some((staged_root, steam_id)) = staged_save_root_for_configured_file(&path) {
+    if let Some((staged_root, steam_id)) = staged_save_root_for_configured_file(&path)
+        && save_file_writeback_allowed(&path)
+    {
         return SaveRedirectSource::StagedRoot {
             file: path,
             steam_id,
             root_w: path_root_to_wine_wide(&staged_root),
         };
     }
-    let mut bak_path = path.clone();
-    let bak_name = format!(
-        "{}.bak",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("ER0000.sl2")
-    );
-    bak_path.set_file_name(bak_name);
+    // Explicit/user-picked non-default saves are read-only sources, even if they already live under an
+    // `EldenRing/<steamid>/ER0000.*` layout. The game writes only to our private staged copy.
     let stage_root = path
         .parent()
         .map(|parent| parent.join("er-effects-save-redirect-stage"))
@@ -1014,8 +1046,6 @@ fn save_redirect_source_for_validated_file(path: PathBuf) -> SaveRedirectSource 
         file: path.clone(),
         root_w: path_root_to_wine_wide(&stage_root),
         stage_root,
-        file_w: path_root_to_wine_wide(&path),
-        bak_w: path_root_to_wine_wide(&bak_path),
     }
 }
 
@@ -1059,20 +1089,16 @@ fn activate_save_redirect_source(
             file,
             stage_root,
             root_w,
-            file_w,
-            bak_w,
         } => {
             let _ = std::fs::create_dir_all(stage_root.join("eldenring"));
             let _ = std::fs::create_dir_all(stage_root.join("EldenRing"));
-            // UTF-8 Lossy: log-only decode of configured Windows wide paths for probe confirmation.
-            let shown = String::from_utf16_lossy(&file_w);
+            // UTF-8 Lossy: log-only decode of configured source/stage paths for probe confirmation.
+            let shown = file.display().to_string();
             let stage_shown = String::from_utf16_lossy(&root_w);
             let configured_file = file.clone();
             let explicit_steam_id = configured_active_steam_id64();
             let _ = SAVE_DIRECT_SOURCE_FILE.set(file);
             let _ = SAVE_DIRECT_STAGE_ROOT.set(stage_root);
-            let _ = SAVE_DIRECT_FILE_W.set(file_w);
-            let _ = SAVE_DIRECT_BAK_FILE_W.set(bak_w);
             let _ = SAVE_REDIRECT_DIR_W.set(root_w);
             SAVE_REDIRECT_MODE.store(SAVE_REDIRECT_MODE_DIRECT_FILE, Ordering::SeqCst);
             if let Some((steam_id, reason)) = explicit_steam_id {
@@ -1082,7 +1108,7 @@ fn activate_save_redirect_source(
                 ensure_direct_stage_for_steam_id(steam_id);
             }
             append_autoload_debug(format_args!(
-                "save-override: ENFORCED -- redirecting arbitrary save-file opens to supplied save '{shown}' via private stage root '{stage_shown}' source={source_label} active_steamid={}",
+                "save-override: ENFORCED -- staging supplied save source '{shown}' into private native save root '{stage_shown}' source={source_label} active_steamid={} (source is never a write target)",
                 explicit_steam_id.map(|(steam_id, _)| steam_id).unwrap_or(0)
             ));
             SaveOverrideMode::Redirect
@@ -1143,9 +1169,52 @@ fn path_from_windows_picker(path: &[u16]) -> Option<PathBuf> {
     String::from_utf16(&path[..end]).ok().map(PathBuf::from)
 }
 
-fn open_missing_save_file_picker() -> Option<PathBuf> {
+/// Picker-mode helper for user-facing save selection. ERSC can register after our DllMain, so picker
+/// mode first honors an explicit launcher/profile hint for known Seamless launches, then falls back to
+/// the sticky runtime module latch. No sleep/polling: picker mode must come from a concrete signal.
+// ENV-GATE RATIONALE: ER_EFFECTS_SAVE_MODE_HINT is set by the user-facing launcher/profile wrapper
+// to disambiguate Seamless `.co2` vs vanilla `.sl2` before `ersc.dll` is guaranteed to be
+// PEB-registered; without that concrete launch-mode signal, the pre-save missing-save picker can
+// expose the wrong save flavor and stage a file the active runtime will never own.
+pub(crate) fn save_picker_seamless_mode_after_settle(reason: &str) -> bool {
+    if let Ok(raw) = std::env::var("ER_EFFECTS_SAVE_MODE_HINT") {
+        let hint = raw.trim().to_ascii_lowercase();
+        if matches!(hint.as_str(), "seamless" | "co2" | "ersc") {
+            append_autoload_debug(format_args!(
+                "save-override: save-picker mode forced to Seamless .co2 by ER_EFFECTS_SAVE_MODE_HINT='{raw}' reason={reason}"
+            ));
+            return true;
+        }
+        if matches!(hint.as_str(), "vanilla" | "sl2") {
+            append_autoload_debug(format_args!(
+                "save-override: save-picker mode forced to vanilla .sl2 by ER_EFFECTS_SAVE_MODE_HINT='{raw}' reason={reason}"
+            ));
+            return false;
+        }
+        append_autoload_debug(format_args!(
+            "save-override: ignoring unknown ER_EFFECTS_SAVE_MODE_HINT='{raw}' reason={reason}"
+        ));
+    }
+    let seamless = crate::telemetry::seamless_coop_loaded();
+    append_autoload_debug(format_args!(
+        "save-override: save-picker mode from ERSC module latch seamless={seamless} reason={reason}"
+    ));
+    seamless
+}
+
+fn picker_ext_ok(path: &Path, expected_ext: &str) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case(expected_ext))
+}
+
+fn open_missing_save_file_picker(expected_ext: &str) -> Option<PathBuf> {
     let title_w = wide_nul("Select Elden Ring save file");
-    let filter_w = wide_nul("Elden Ring save (*.sl2;*.co2)\0*.sl2;*.co2\0All files (*.*)\0*.*\0");
+    let filter_w = if expected_ext.eq_ignore_ascii_case("co2") {
+        wide_nul("Seamless save (*.co2)\0*.co2\0")
+    } else {
+        wide_nul("Elden Ring save (*.sl2)\0*.sl2\0")
+    };
     let initial_dir = configured_preferred_save_picker_dir()
         .filter(|dir| dir.is_dir())
         .map(|dir| (dir, "preferred_save_picker_dir"))
@@ -1155,7 +1224,7 @@ fn open_missing_save_file_picker() -> Option<PathBuf> {
         .map(|(root, _)| wine_path_wide_nul(root));
     let mut file_buf = [0u16; 1024];
     append_autoload_debug(format_args!(
-        "save-override: missing-save picker opening unowned (initial dir source={}; game title flow is gated separately)",
+        "save-override: missing-save picker opening unowned mode-locked to .{expected_ext} (initial dir source={}; game title flow is gated separately)",
         initial_dir
             .as_ref()
             .map(|(_, source)| *source)
@@ -1217,9 +1286,26 @@ fn prompt_missing_save_file_source() -> Option<SaveRedirectSource> {
         if response == IDCANCEL || response != IDOK {
             return None;
         }
-        let Some(path) = open_missing_save_file_picker() else {
+        let seamless = save_picker_seamless_mode_after_settle("missing-save-dialog");
+        let expected_ext = if seamless { "co2" } else { "sl2" };
+        let Some(path) = open_missing_save_file_picker(expected_ext) else {
             return None;
         };
+        if !picker_ext_ok(&path, expected_ext) {
+            append_autoload_debug(format_args!(
+                "save-override: missing-save dialog rejected '{}' -- picker is mode-locked to .{expected_ext} (seamless={seamless})",
+                path.display()
+            ));
+            unsafe {
+                let _ = MessageBoxW(
+                    None,
+                    PCWSTR::from_raw(invalid.as_ptr()),
+                    PCWSTR::from_raw(title.as_ptr()),
+                    MB_OK | MB_ICONERROR,
+                );
+            }
+            continue;
+        }
         if let Some(validated) = validated_save_file_path(path.clone()) {
             if autoupdate_preferred_picker_dir_enabled()
                 && let Some(dir) = validated.parent().filter(|dir| !dir.as_os_str().is_empty())
@@ -1251,14 +1337,27 @@ fn start_missing_save_prompt_thread() {
     let _ = std::thread::Builder::new()
         .name("er-effects-missing-save-prompt".to_owned())
         .spawn(|| {
+            // This helper thread owns the user-facing picker and selected-source staging. Its own
+            // source-file metadata/read/copy calls must not be blocked by the pending-save gate; only
+            // the game's native save IO should wait for this thread to publish READY/CANCELLED.
+            MISSING_SAVE_PICKER_THREAD_IO.with(|flag| flag.set(true));
             // Do not open the common file dialog from DllMain/loader-lock context. Wait until the
             // DllMain bootstrap arms the minimal title/save gates and explicitly releases this thread.
             wait_until_missing_save_prompt_bootstrap_ready();
             match prompt_missing_save_file_source() {
                 Some(source) => {
                     let _ = activate_save_redirect_source(source, "missing-save-dialog-selection");
-                    install_save_redirect_hooks();
+                    // Release the game/save threads as soon as the selected source is staged and the
+                    // redirect root is published. Do NOT wait for `install_save_redirect_hooks()` from
+                    // this picker thread: the bootstrap-owned save-redirect installer is already
+                    // started while the dialog is pending, and `Once::call_once` would block here if
+                    // that installer is still patching/suspended inside MinHook. Blocking here keeps
+                    // `MISSING_SAVE_DIALOG_STATE` at PENDING, so the save-data job never resumes after
+                    // the user picks a file.
                     set_missing_save_dialog_state(MISSING_SAVE_DIALOG_READY);
+                    append_autoload_debug(format_args!(
+                        "save-override: missing-save dialog resolved; released blocked save IO after staging selected source"
+                    ));
                 }
                 None => {
                     append_autoload_debug(format_args!(
@@ -1275,15 +1374,35 @@ fn wait_for_missing_save_dialog_if_pending(path: &[u16]) {
     if MISSING_SAVE_DIALOG_STATE.load(Ordering::SeqCst) != MISSING_SAVE_DIALOG_PENDING {
         return;
     }
+    if MISSING_SAVE_PICKER_THREAD_IO.with(Cell::get) {
+        let hit = MISSING_SAVE_PICKER_THREAD_IO_SKIP_LOGGED.fetch_add(1, Ordering::SeqCst);
+        if hit < 8 {
+            // UTF-8 Lossy: log-only decode of a Windows wide path for probe diagnosis.
+            let p = String::from_utf16_lossy(path);
+            append_autoload_debug(format_args!(
+                "save-override: NOT blocking picker-thread source IO while missing-save dialog resolves path='{p}'"
+            ));
+        }
+        return;
+    }
     let hit = MISSING_SAVE_BLOCKED_IO_LOGGED.fetch_add(1, Ordering::SeqCst);
     if hit < 8 {
         // UTF-8 Lossy: log-only decode of a Windows wide path for probe diagnosis.
         let p = String::from_utf16_lossy(path);
         append_autoload_debug(format_args!(
-            "save-override: blocking native save IO until missing-save dialog resolves path='{p}'"
+            "save-override: blocking native save-file IO until missing-save dialog resolves path='{p}'"
         ));
     }
     wait_for_missing_save_selection_if_pending("native save IO");
+}
+
+fn is_save_file_or_backup_path(path: &[u16]) -> bool {
+    const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
+    const CO2D: &[u16] = &[b'.' as u16, b'c' as u16, b'o' as u16, b'2' as u16];
+    const BAKD: &[u16] = &[b'.' as u16, b'b' as u16, b'a' as u16, b'k' as u16];
+    wide_ends_with_ci_ascii(path, SL2D)
+        || wide_ends_with_ci_ascii(path, CO2D)
+        || wide_ends_with_ci_ascii(path, BAKD)
 }
 
 /// Length of a NUL-terminated UTF-16 string at `ptr` (excludes the NUL). 0 on null pointer.
@@ -1378,6 +1497,49 @@ fn ensure_direct_stage_for_requested_path(path: &[u16]) {
     ensure_direct_stage_for_steam_id(steam_id);
 }
 
+fn make_file_writable(path: &Path) {
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mut perms = meta.permissions();
+        if perms.readonly() {
+            perms.set_readonly(false);
+            let _ = std::fs::set_permissions(path, perms);
+        }
+    }
+}
+
+fn remove_file_for_overwrite(path: &Path) -> std::io::Result<()> {
+    make_file_writable(path);
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+fn copy_save_for_overwrite(source: &Path, target: &Path, steam_id: u64) -> std::io::Result<u64> {
+    let mut bytes = std::fs::read(source)?;
+    match er_save_loader::bnd4::normalize_steam_id_in_place(&mut bytes, steam_id) {
+        Ok(report) if report.changed() => append_autoload_debug(format_args!(
+            "save-override: direct-file staging normalized private copy source='{}' target='{}' steam_id={steam_id} char_patched={} user_data10_patched={} md5_rewritten={}",
+            source.display(),
+            target.display(),
+            report.character_slots_patched,
+            report.user_data10_patched,
+            report.md5_rewritten
+        )),
+        Ok(_) => {}
+        Err(err) => append_autoload_debug(format_args!(
+            "save-override: direct-file staging normalization skipped source='{}' target='{}' steam_id={steam_id}: {err:?}",
+            source.display(),
+            target.display()
+        )),
+    }
+    remove_file_for_overwrite(target)?;
+    std::fs::write(target, &bytes)?;
+    make_file_writable(target);
+    Ok(bytes.len() as u64)
+}
+
 fn ensure_direct_stage_for_steam_id(steam_id: u64) {
     let Some(source) = SAVE_DIRECT_SOURCE_FILE.get() else {
         let hit = SAVE_DIRECT_STAGE_DIAG_HITS.fetch_add(1, Ordering::SeqCst);
@@ -1455,8 +1617,8 @@ fn ensure_direct_stage_for_steam_id(steam_id: u64) {
     }
     let lower_target = lower_dir.join(staged_basename_lower);
     let native_target = native_dir.join(staged_basename_native);
-    match std::fs::copy(source, &lower_target) {
-        Ok(lower_bytes) => match std::fs::copy(source, &native_target) {
+    match copy_save_for_overwrite(source, &lower_target, steam_id) {
+        Ok(lower_bytes) => match copy_save_for_overwrite(source, &native_target, steam_id) {
             Ok(native_bytes) => {
                 SAVE_DIRECT_STAGE_DONE_STEAM_ID.store(steam_id, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
@@ -1518,9 +1680,6 @@ fn save_redirect_path(path: &[u16]) -> Option<Vec<u16>> {
         b'n' as u16,
         b'g' as u16,
     ];
-    const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
-    const CO2D: &[u16] = &[b'.' as u16, b'c' as u16, b'o' as u16, b'2' as u16];
-    const BAKD: &[u16] = &[b'.' as u16, b'b' as u16, b'a' as u16, b'k' as u16];
     // Always learn the native `<steamid>` segment from save-like paths; this is the safest
     // current-account oracle because the native save-dir builder already called Steam before the path
     // reached our hook. The redirect decision below is still anchored on `Roaming` to avoid loops.
@@ -1531,19 +1690,9 @@ fn save_redirect_path(path: &[u16]) -> Option<Vec<u16>> {
         return None;
     }
     let idx = wide_find_ci_ascii(path, ELDENRING)?;
-    wait_for_missing_save_dialog_if_pending(path);
-    if let Some(file_w) = SAVE_DIRECT_FILE_W.get()
-        && (wide_ends_with_ci_ascii(path, SL2D) || wide_ends_with_ci_ascii(path, CO2D))
-    {
-        ensure_direct_stage_for_requested_path(path);
-        return Some(wide_with_nul(file_w));
-    }
-    if let Some(bak_w) = SAVE_DIRECT_BAK_FILE_W.get()
-        && wide_ends_with_ci_ascii(path, BAKD)
-    {
-        ensure_direct_stage_for_requested_path(path);
-        return Some(wide_with_nul(bak_w));
-    }
+    // Direct-file mode stages the selected source into the private native save tree. Do NOT redirect
+    // save-file or .bak opens to `SAVE_DIRECT_SOURCE_FILE`; reads and writes must hit the staged copy
+    // so readonly/user-provided source saves are never modified by gameplay or profile switching.
     let root = SAVE_REDIRECT_DIR_W.get()?;
     let suffix = &path[idx..]; // "EldenRing\<id>\ER0000.sl2" (or "EldenRing\" for the dir open)
     ensure_direct_stage_for_requested_path(path);
@@ -1625,6 +1774,9 @@ unsafe extern "system" fn save_redirect_createfilew_hook(
         }
         let is_save_file =
             wide_ends_with_ci_ascii(path, SL2D) || wide_ends_with_ci_ascii(path, CO2D);
+        if is_save_file || wide_ends_with_ci_ascii(path, BAKD) {
+            wait_for_missing_save_dialog_if_pending(path);
+        }
         let redirected_path = save_redirect_path(path);
         if is_save_file {
             if let Ok(base) = game_module_base() {
@@ -1690,12 +1842,24 @@ unsafe extern "system" fn save_redirect_copyfilew_hook(
         let len = unsafe { wide_len(existing) };
         (len != 0)
             .then(|| unsafe { std::slice::from_raw_parts(existing, len) })
+            .map(|path| {
+                if is_save_file_or_backup_path(path) {
+                    wait_for_missing_save_dialog_if_pending(path);
+                }
+                path
+            })
             .and_then(save_redirect_path)
     };
     let new_red = {
         let len = unsafe { wide_len(new_file) };
         (len != 0)
             .then(|| unsafe { std::slice::from_raw_parts(new_file, len) })
+            .map(|path| {
+                if is_save_file_or_backup_path(path) {
+                    wait_for_missing_save_dialog_if_pending(path);
+                }
+                path
+            })
             .and_then(save_redirect_path)
     };
     let existing_ptr = existing_red.as_ref().map_or(existing, |v| v.as_ptr());

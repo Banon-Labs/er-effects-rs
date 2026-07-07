@@ -1274,6 +1274,12 @@ def telemetry_native_legal_popup_detected(telemetry: dict[str, Any] | None) -> b
     return msgbox_legal or policy_window
 
 
+def telemetry_sq_repro_complete(telemetry: dict[str, Any] | None) -> bool:
+    if not isinstance(telemetry, dict):
+        return False
+    return as_int(telemetry.get("sq_repro_state"), -1) == 6
+
+
 def telemetry_cold_char_mount_complete(telemetry: dict[str, Any] | None) -> bool:
     """True once cold_char_mount_drive reaches its terminal phase (success or timeout). Used for
     evidence-driven teardown of a no-write cold-mount probe, which never reaches world-stable.
@@ -2710,6 +2716,9 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
                         world_stable_since = None
                         os.sched_yield()
                         continue
+                    if args.wait_for_sq_repro_complete and not telemetry_sq_repro_complete(telemetry):
+                        os.sched_yield()
+                        continue
                     return with_runtime_module_info(
                         ReadinessResult(
                             True,
@@ -2813,6 +2822,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--autoload-attempt-budget", type=int, default=DEFAULT_AUTOLOAD_ATTEMPT_BUDGET)
     parser.add_argument("--post-request-tick-budget", type=int, default=DEFAULT_POST_REQUEST_TICK_BUDGET)
     parser.add_argument("--world-stable-samples", type=int, default=1)
+    parser.add_argument(
+        "--wait-for-sq-repro-complete",
+        action="store_true",
+        help="For System->Quit self-drive probes, do not accept world-stable until sq_repro_state == DONE (6).",
+    )
     parser.add_argument("--world-stable-dwell-seconds", type=float, default=DEFAULT_WORLD_STABLE_DWELL_SECONDS)
     parser.add_argument(
         "--world-stream-stall-seconds",

@@ -562,7 +562,9 @@ pub(crate) static PROFILE_PUBLISH_CLEAN: AtomicUsize = AtomicUsize::new(0);
 /// this is non-zero. Drive it to 0 (portrait renders for every character) to "get the feature right".
 pub(crate) static PORTRAIT_WINDOW_PUBLISH_FAILURES: AtomicUsize = AtomicUsize::new(0);
 /// The dominant skip-cause of the most recent publish-failure window (for the oracle/log): 1=torn,
-/// 2=unkeyed, 3=badiou, 4=lowmask, 0=none/other. Lets the harness report WHY without parsing the log.
+/// 2=unkeyed, 3=badiou, 4=lowmask, 5=checker, 6=multi-model, 7=unpaired provenance,
+/// 8=no RT->SRV copy, 9=no color/depth provenance, 0=none/other. Lets the harness report WHY
+/// without parsing the log.
 pub(crate) static PORTRAIT_WINDOW_PUBLISH_FAIL_CAUSE: AtomicUsize = AtomicUsize::new(0);
 /// Clean portraits published in the CURRENT window (reset each window). Read by the FAST-FAIL check so
 /// the failure trips mid-window instead of at window close (user 2026-07-06: a broken window must fail
