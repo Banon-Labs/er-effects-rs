@@ -194,16 +194,14 @@ fn wide_z(text: &str) -> Vec<u16> {
 }
 
 /// The ACTIVE save file the character-switch feature snapshots + restores + writes to. Resolved from
-/// runtime GROUND TRUTH via `configured_or_default_save_file()`: an explicit `save_file`
-/// (env/er-effects.toml) still wins for probes, but a real user with NO config falls back to the actual
-/// `%APPDATA%/EldenRing/<steamid>/ER0000.{co2|sl2}` -- and the default name is Seamless-aware
-/// (`.co2` first when `ersc.dll` is resident). This is the de-env-gating fix (user directive 2026-07-06:
-/// a fix that only works with a probe env var set is not a fix): the swap previously used the
-/// env/toml-only `configured_save_file`, so a real Seamless user with no save_file configured either
-/// got "save_file unset" or armed the wrong flavor (.sl2 while the game reads .co2).
+/// runtime GROUND TRUTH via `active_save_file_for_system_quit()`: a direct-file save selected in the
+/// missing-save picker wins first, then an explicit `save_file` (env/er-effects.toml), then the actual
+/// `%APPDATA%/EldenRing/<steamid>/ER0000.{co2|sl2}` with mode-locked default naming. The direct-file
+/// case matters for Seamless: otherwise a user who booted from a picked `.co2` would later commit the
+/// switch target into a stale appdata `.sl2`, making ProfileSelect confirm appear to no-op.
 fn system_quit_env_save_path() -> Result<String, &'static str> {
-    let Some(path) = configured_or_default_save_file() else {
-        return Err("no active save file (configured save_file unset and no default ER0000 save resolved)");
+    let Some(path) = active_save_file_for_system_quit() else {
+        return Err("no active save file (direct/configured save unset and no default ER0000 save resolved)");
     };
     let path = path.to_string_lossy();
     let trimmed = path.trim();

@@ -889,7 +889,7 @@ fn default_save_root() -> Option<PathBuf> {
 /// the world-load rides native Continue (the game reads its own save, ERSC-redirected), the fallback
 /// can at worst make an early menu-display read the other container -- never a save write.
 fn default_save_file_names() -> [&'static str; 2] {
-    if crate::telemetry::seamless_coop_loaded() {
+    if save_picker_seamless_mode_after_settle("default-save-file-names") {
         ["ER0000.co2", "ER0000.sl2"]
     } else {
         ["ER0000.sl2", "ER0000.co2"]
@@ -962,6 +962,17 @@ fn active_default_save_file() -> Option<(PathBuf, u64, &'static str)> {
 
 pub(crate) fn configured_or_default_save_file() -> Option<PathBuf> {
     configured_save_file().or_else(|| active_default_save_file().map(|(path, _, _)| path))
+}
+
+/// Runtime-active save file for System->Quit character switching. If the boot/missing-save flow chose
+/// an arbitrary direct file, that file is the active source even though it is not persisted in
+/// `er-effects.toml`; falling back to `%APPDATA%` would write the switch target into a stale default
+/// `.sl2` under Seamless and make confirm appear to no-op.
+pub(crate) fn active_save_file_for_system_quit() -> Option<PathBuf> {
+    SAVE_DIRECT_SOURCE_FILE
+        .get()
+        .cloned()
+        .or_else(configured_or_default_save_file)
 }
 
 fn staged_save_root_for_configured_file(path: &Path) -> Option<(PathBuf, u64)> {
