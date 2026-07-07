@@ -248,6 +248,7 @@ unsafe fn system_quit_save_swap_prepare_selected_slot(slot: i32) -> Result<bool,
     match fs::write(&st.path, &st.candidate_bytes) {
         Ok(()) => {
             st.committed = true;
+            st.recommitted = false;
             st.armed = false;
             append_autoload_debug(format_args!(
                 "system-quit-save-swap: committed foreign save before slot activation path='{}' slot={slot} len={} hash=0x{:016x}; fresh deserialize will read this file",
@@ -263,6 +264,44 @@ unsafe fn system_quit_save_swap_prepare_selected_slot(slot: i32) -> Result<bool,
                 st.path
             ));
             Err(())
+        }
+    }
+}
+
+/// Re-commit the foreign candidate bytes AFTER the game's return-title save completes (bc4 terminal).
+/// The activation-time commit is CLOBBERED by that save whenever the picked slot shares the ACTIVE
+/// character's slot index: the return-title chain sets saveRequested and the game re-writes the active
+/// slot (+ profile summary) into the active file ~400ms after our write (gm-snap: bc4 1 -> save_state=1
+/// -> bc4 terminal), so a same-slot switch fresh-deserialized the ORIGINAL character (user-reported
+/// 2026-07-06, run seamless-save-smoke-20260706-144801: two same-slot-0 picks both reloaded the
+/// resident character; FACE-IDENTITY MISMATCH #1 confirmed it at RAM level before the pixels did).
+/// Different-slot switches always survived because the clobber only rewrites the active slot's
+/// USER_DATA entry. By bc4-terminal the save write has finished, and the fresh deserialize is still
+/// seconds away at the clean title, so a second write of the pristine candidate bytes wins. Nothing
+/// meaningful is lost: System-Quit already saved the old character into their own file before
+/// ProfileSelect opened; the return-title re-save was landing in the WRONG (foreign) file anyway.
+/// Idempotent per switch via the `recommitted` latch (the terminal block can re-enter when the final
+/// functor submit defers).
+pub(crate) fn system_quit_save_swap_recommit_after_return_title_save() {
+    let mut st = system_quit_save_swap_lock();
+    if !st.committed || st.recommitted || st.path.is_empty() || st.candidate_bytes.is_empty() {
+        return;
+    }
+    match fs::write(&st.path, &st.candidate_bytes) {
+        Ok(()) => {
+            st.recommitted = true;
+            append_autoload_debug(format_args!(
+                "system-quit-save-swap: RE-committed foreign save after return-title save (bc4 terminal) path='{}' len={} hash=0x{:016x}; the game's return-title save had re-written the ACTIVE slot over the activation-time commit",
+                st.path,
+                st.candidate_bytes.len(),
+                st.candidate_hash
+            ));
+        }
+        Err(err) => {
+            append_autoload_debug(format_args!(
+                "system-quit-save-swap: FAILED to re-commit foreign save after return-title save path='{}': {err}; a same-slot switch will fresh-deserialize the clobbered ACTIVE slot",
+                st.path
+            ));
         }
     }
 }

@@ -829,6 +829,11 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
     {
+        // The return-title save has finished writing the ACTIVE slot into the active file (bc4 is
+        // terminal only after save_state returned to 0). Re-commit the foreign candidate now so a
+        // SAME-SLOT switch's fresh deserialize reads the picked character instead of the clobbered
+        // active one (see system_quit_save_swap_recommit_after_return_title_save).
+        system_quit_save_swap_recommit_after_return_title_save();
         let system_dialog = SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG.load(Ordering::SeqCst);
         let queue = if system_dialog != 0 && system_dialog != TITLE_OWNER_SCAN_START_ADDRESS {
             system_dialog + 0x10

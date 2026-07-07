@@ -644,6 +644,9 @@ struct SystemQuitSaveSwapState {
     candidate_stats_utf16: Vec<Vec<u16>>,
     preview_applied: bool,
     committed: bool,
+    /// The candidate bytes were written a SECOND time, after the game's return-title save finished
+    /// (same-slot clobber fix; see `system_quit_save_swap_recommit_after_return_title_save`).
+    recommitted: bool,
     summary_ptr: usize,
     summary_snapshot: Vec<u8>,
 }

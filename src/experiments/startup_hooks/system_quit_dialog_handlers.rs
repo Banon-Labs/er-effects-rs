@@ -193,13 +193,22 @@ fn wide_z(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(core::iter::once(0)).collect()
 }
 
+/// The ACTIVE save file the character-switch feature snapshots + restores + writes to. Resolved from
+/// runtime GROUND TRUTH via `configured_or_default_save_file()`: an explicit `save_file`
+/// (env/er-effects.toml) still wins for probes, but a real user with NO config falls back to the actual
+/// `%APPDATA%/EldenRing/<steamid>/ER0000.{co2|sl2}` -- and the default name is Seamless-aware
+/// (`.co2` first when `ersc.dll` is resident). This is the de-env-gating fix (user directive 2026-07-06:
+/// a fix that only works with a probe env var set is not a fix): the swap previously used the
+/// env/toml-only `configured_save_file`, so a real Seamless user with no save_file configured either
+/// got "save_file unset" or armed the wrong flavor (.sl2 while the game reads .co2).
 fn system_quit_env_save_path() -> Result<String, &'static str> {
-    let Some(path) = configured_save_file_string() else {
-        return Err("configured save_file unset");
+    let Some(path) = configured_or_default_save_file() else {
+        return Err("no active save file (configured save_file unset and no default ER0000 save resolved)");
     };
+    let path = path.to_string_lossy();
     let trimmed = path.trim();
     if trimmed.is_empty() {
-        return Err("configured save_file blank");
+        return Err("resolved active save file is blank");
     }
     Ok(trimmed.trim_end_matches(['/', '\\']).to_owned())
 }
@@ -283,7 +292,17 @@ unsafe fn system_quit_open_env_save_dir() -> bool {
 
     let initial_dir_w = system_quit_path_for_windows(&dir);
     let title_w = wide_z("Load Save Profiles");
-    let filter_w = wide_z("Elden Ring save (*.sl2)\0*.sl2\0All files (*.*)\0*.*\0");
+    // Mode-locked filter: Seamless Co-op (ERSC resident) reads/writes `ER0000.co2`, vanilla reads
+    // `ER0000.sl2` -- offering the other flavor here would stage a save the active runtime never
+    // loads (mixing save flavors across modes corrupts expectations; user directive 2026-07-06).
+    // No "All files" escape hatch, for the same reason: the picker must offer ONLY the active
+    // mode's container.
+    let seamless = crate::telemetry::seamless_coop_loaded();
+    let (filter_w, picker_ext) = if seamless {
+        (wide_z("Seamless save (*.co2)\0*.co2\0"), "co2")
+    } else {
+        (wide_z("Elden Ring save (*.sl2)\0*.sl2\0"), "sl2")
+    };
     let mut file_buf = [0u16; 1024];
     let mut ofn = OPENFILENAMEW {
         lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
@@ -319,6 +338,22 @@ unsafe fn system_quit_open_env_save_dir() -> bool {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
             "system-quit-load-save-profiles: selected path is not a file '{}'",
+            selected_log
+        ));
+        return false;
+    }
+    // The filter above is display-only -- GetOpenFileNameW still returns whatever path the user
+    // types -- so enforce the same mode lock on the picked file. A cross-flavor save (`.sl2` while
+    // Seamless owns the session, `.co2` in vanilla) would preview character slots the active runtime
+    // never actually loads (mixing save flavors across modes corrupts expectations; user directive
+    // 2026-07-06).
+    let ext_ok = Path::new(&selected_path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case(picker_ext));
+    if !ext_ok {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-load-save-profiles: rejected '{}' -- picker is mode-locked to .{picker_ext} (seamless={seamless})",
             selected_log
         ));
         return false;
@@ -528,6 +563,63 @@ const SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_W: [u16; 50] = [
     b'.' as u16,
     b's' as u16,
     b'l' as u16,
+    b'2' as u16,
+    0,
+];
+
+// Seamless Co-op variant of the row help above: same text but naming `ER0000.co2`, the container
+// ERSC actually reads/writes. Selected at row-build time so the row never advertises the save
+// flavor the active mode ignores (matches the picker's mode-locked filter; user directive
+// 2026-07-06).
+const SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_CO2_W: [u16; 50] = [
+    b'O' as u16,
+    b'p' as u16,
+    b'e' as u16,
+    b'n' as u16,
+    b' ' as u16,
+    b't' as u16,
+    b'h' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b's' as u16,
+    b't' as u16,
+    b'a' as u16,
+    b'g' as u16,
+    b'e' as u16,
+    b'd' as u16,
+    b' ' as u16,
+    b's' as u16,
+    b'a' as u16,
+    b'v' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b'f' as u16,
+    b'o' as u16,
+    b'l' as u16,
+    b'd' as u16,
+    b'e' as u16,
+    b'r' as u16,
+    b' ' as u16,
+    b't' as u16,
+    b'o' as u16,
+    b' ' as u16,
+    b'r' as u16,
+    b'e' as u16,
+    b'p' as u16,
+    b'l' as u16,
+    b'a' as u16,
+    b'c' as u16,
+    b'e' as u16,
+    b' ' as u16,
+    b'E' as u16,
+    b'R' as u16,
+    b'0' as u16,
+    b'0' as u16,
+    b'0' as u16,
+    b'0' as u16,
+    b'.' as u16,
+    b'c' as u16,
+    b'o' as u16,
     b'2' as u16,
     0,
 ];
@@ -884,7 +976,14 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
                 system_quit_build_static_label_component(
                     open_label,
                     &SYSTEM_QUIT_LOAD_SAVE_PROFILES_LABEL_W,
-                    &SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_W,
+                    // Name the container the active mode actually replaces: ERSC sessions use
+                    // ER0000.co2, vanilla ER0000.sl2 (keeps the row help consistent with the
+                    // picker's mode-locked filter).
+                    if crate::telemetry::seamless_coop_loaded() {
+                        &SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_CO2_W
+                    } else {
+                        &SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_W
+                    },
                 )
             };
             let open_ret = if open_label_ok {
