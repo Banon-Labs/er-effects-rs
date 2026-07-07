@@ -171,15 +171,22 @@ impl SavePickerModel {
                 });
             }
         }
-        dirs.sort_by(|a, b| a.name().to_ascii_lowercase().cmp(&b.name().to_ascii_lowercase()));
+        dirs.sort_by(|a, b| {
+            a.name()
+                .to_ascii_lowercase()
+                .cmp(&b.name().to_ascii_lowercase())
+        });
         files.sort_by(|a, b| {
             let (PickerEntry::File { modified: ma, .. }, PickerEntry::File { modified: mb, .. }) =
                 (a, b)
             else {
                 return std::cmp::Ordering::Equal;
             };
-            mb.cmp(ma)
-                .then_with(|| a.name().to_ascii_lowercase().cmp(&b.name().to_ascii_lowercase()))
+            mb.cmp(ma).then_with(|| {
+                a.name()
+                    .to_ascii_lowercase()
+                    .cmp(&b.name().to_ascii_lowercase())
+            })
         });
         self.entries = dirs;
         self.entries.append(&mut files);
@@ -286,8 +293,7 @@ pub(crate) fn truncate_utf16(text: &str, max: usize) -> Vec<u16> {
 pub(crate) static ACTIVE_SAVE_PICKER: Mutex<Option<SavePickerModel>> = Mutex::new(None);
 
 /// Lock helper that recovers from poisoning (same pattern as `state_or_return`).
-pub(crate) fn active_save_picker_lock()
--> std::sync::MutexGuard<'static, Option<SavePickerModel>> {
+pub(crate) fn active_save_picker_lock() -> std::sync::MutexGuard<'static, Option<SavePickerModel>> {
     ACTIVE_SAVE_PICKER
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())

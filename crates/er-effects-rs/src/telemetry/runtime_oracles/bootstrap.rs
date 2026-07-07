@@ -23,22 +23,39 @@ pub(crate) fn seamless_coop_loaded() -> bool {
     present
 }
 
+/// Launcher-declared save-mode hint (`ER_EFFECTS_SAVE_MODE_HINT=seamless|vanilla`, set by
+/// `~/Elden/launch.sh` per profile). NOT a feature gate: only a tie-breaker for the early window
+/// where the [`seamless_coop_loaded`] latch can still be false because me3 defers native loading
+/// -- a resident `ersc.dll` always wins over the hint.
+fn save_mode_hint_seamless() -> bool {
+    std::env::var_os("ER_EFFECTS_SAVE_MODE_HINT")
+        .is_some_and(|hint| hint.eq_ignore_ascii_case("seamless"))
+}
+
+/// True when the active runtime flavor is Seamless: the module-residency latch, or (before the
+/// latch resolves) the launcher's declared mode hint.
+pub(crate) fn seamless_save_flavor_active() -> bool {
+    seamless_coop_loaded() || save_mode_hint_seamless()
+}
+
 /// Save-container extension of the ACTIVE runtime flavor: Seamless Co-op sessions read/write
 /// `ER0000.co2`, vanilla reads `ER0000.sl2`. Mixing flavors across modes stages a save the active
 /// runtime never loads (user directive 2026-07-06), so pickers/filters must offer ONLY this
-/// extension. Rides the [`seamless_coop_loaded`] sticky latch, so it is reliable at the moments UI
-/// call sites need it (menu-open and later) but can report `sl2` during the early DllMain
-/// false-negative window -- extension decisions made that early should use
-/// [`save_extension_order`] and tolerate both.
+/// extension. Rides the [`seamless_coop_loaded`] sticky latch (reliable at menu-open and later),
+/// with the launcher's `ER_EFFECTS_SAVE_MODE_HINT` covering the early false-negative window.
 pub(crate) fn expected_save_extension() -> &'static str {
-    if seamless_coop_loaded() { "co2" } else { "sl2" }
+    if seamless_save_flavor_active() {
+        "co2"
+    } else {
+        "sl2"
+    }
 }
 
 /// Both save extensions, active-flavor first. For existence probes that must tolerate the early
 /// Seamless false-negative window (see [`expected_save_extension`]): try the active flavor, fall
 /// back to the other so a co2-only profile still resolves before the latch is set.
 pub(crate) fn save_extension_order() -> [&'static str; 2] {
-    if seamless_coop_loaded() {
+    if seamless_save_flavor_active() {
         ["co2", "sl2"]
     } else {
         ["sl2", "co2"]

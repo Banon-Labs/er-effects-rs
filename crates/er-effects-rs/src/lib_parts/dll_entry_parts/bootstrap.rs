@@ -183,6 +183,11 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         }
     }
     if missing_save_gate_pending {
+        // The in-game missing-save picker (save_picker_menu.rs) rides the native no-save title:
+        // the SetState detour denies only the world-entry states (4/5) while the selection is
+        // pending, and the show-progress hook lets the save-data job complete naturally so the
+        // title menu becomes interactive. Both hooks also serve normal boots; install them here
+        // so the earliest title states are already covered.
         if let Ok(base) = game_module_base() {
             unsafe { install_title_setstate_trace_hook(base) };
         }
@@ -190,7 +195,6 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
             .name("er-effects-missing-save-progress-gate".to_owned())
             .spawn(install_show_progress_shortcircuit_hook)
             .ok();
-        signal_missing_save_prompt_bootstrap_ready();
     }
 
     let initial_state = EffectsState::default();

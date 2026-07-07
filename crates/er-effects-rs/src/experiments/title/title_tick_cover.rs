@@ -198,7 +198,21 @@ pub(crate) unsafe extern "system" fn title_setstate_trace_detour(owner: usize, s
     if orig == TITLE_OWNER_SCAN_START_ADDRESS || orig == 0 {
         return;
     }
-    wait_for_missing_save_selection_if_pending("title SetState");
+    // Missing-save in-game picker guard: while no save has been selected, DENY only the two
+    // world-load entry states (RE-verified 2026-07-07: every path into the world -- Continue,
+    // Load-slot confirm, New Game, NG+ -- funnels through SetState(4=BeginNewGame) or
+    // SetState(5=PlayGame); menu states 0..3/10/11 must flow or the title never becomes
+    // interactive). The old behavior condvar-BLOCKED every SetState here, which froze the title
+    // thread; now the title boots to its native no-save menu and the picker rides it. Skipping
+    // the call (not waiting) keeps the title thread alive; the request is simply dropped.
+    if missing_save_selection_pending()
+        && (state == TITLE_STEP_BEGIN_NEW_GAME || state == TITLE_STEP_PLAY_GAME)
+    {
+        append_autoload_debug(format_args!(
+            "title-setstate-trace: DENIED SetState(owner=0x{owner:x}, state={state}) -- world entry blocked until the missing-save picker resolves"
+        ));
+        return;
+    }
     let f: unsafe extern "system" fn(usize, i32) = unsafe { std::mem::transmute(orig) };
     unsafe { f(owner, state) };
 }

@@ -76,6 +76,16 @@ pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA: u32 = 0x826d50;
 /// `queue[0]==0` ready-gate finally passes and the direct chain can submit. See bd
 /// `system-quit-profileselect-native-close-B-path` / `menu-job-queue-pump-dequeue-mechanism`.
 pub(crate) const SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA: u32 = 0x7ac890;
+/// Native ProfileLoadDialog in-place list rebuild `FUN_1409a5020` (dump `0x1409a5020` -> live/deobf
+/// `0x9a4ed0`, content-unique via dump-deobf-shift). `fn(rcx = dialog)`. The game's own
+/// records-changed refresh, used by the delete-save flow: re-runs the item-list builder
+/// `FUN_140875680` (fresh `GetProfileSummary()` re-read of the live records), copies the new list
+/// into `dialog+0x1260`, and rebinds via `FUN_1409a2e40` -- which rewrites the row count at
+/// `+0xb08`, re-selects a valid cursor, and unconditionally re-decorates every visible row. This
+/// is the sanctioned way to change row text while the 05_010 window stays open (the decorate pass
+/// reads per-row SNAPSHOTS, so bare record writes are invisible without this rebuild). RE 2026-07-07,
+/// adversarially verified (see bd save-picker RE notes).
+pub(crate) const PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA: u32 = 0x9a4ed0;
 /// One-shot latch: set when we have invoked the native ProfileSelect close during a return-title
 /// transition, so the per-tick handler closes it exactly once. Reset with the ProfileSelect state.
 pub(crate) static SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED: AtomicUsize = AtomicUsize::new(0);

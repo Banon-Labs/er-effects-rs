@@ -1331,10 +1331,18 @@ pub(crate) unsafe extern "system" fn system_quit_menu_window_job_run_hook(
             }
         }
     }
-    // MENU-PUMP-OWNED save-picker resubmit: reopen the 05_010 window after a picker
-    // navigation/pick close (same submit-context rule as the return-title chain below).
+    // MENU-PUMP-OWNED save-picker maintenance: in-place row rebuild after a navigation, and
+    // window resubmit after a navigation/pick close (same submit-context rule as the
+    // return-title chain below).
+    unsafe { save_picker_menu_pump_rebuild() };
     if save_picker_resubmit_pending() {
         let _ = unsafe { save_picker_menu_pump_resubmit() };
+    }
+    // STARTUP missing-save picker: auto-open once the native no-save title menu is interactive.
+    // This hook is the menu pump, so the stage + native Load Game node fire run in menu
+    // ownership. No-op unless the missing-save selection is pending.
+    if let Ok(base) = game_module_base() {
+        unsafe { save_picker_title_pump_tick(base) };
     }
     // MENU-PUMP-OWNED return-title submit. This hook IS the game's menu pump executing a
     // MenuWindowJob, so submitting the return-title chain from here (rather than from the concurrent

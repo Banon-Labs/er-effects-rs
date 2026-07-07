@@ -62,12 +62,16 @@ pub(crate) enum TitleStepState {
     Min = 0,
     BeginLogo = 2,
     BeginTitle = 3,
+    /// STEP_BeginNewGame (idx4): fresh-character world entry; `SetState(4)` fired by the New Game
+    /// confirm variants. RE 2026-07-07: one of the two world-load entry states.
+    BeginNewGame = 4,
     PlayGame = 5,
     MenuJobWait = 10,
     Finish = 11,
 }
 
 pub(crate) const TITLE_STEP_BEGIN_TITLE: i32 = TitleStepState::BeginTitle as i32;
+pub(crate) const TITLE_STEP_BEGIN_NEW_GAME: i32 = TitleStepState::BeginNewGame as i32;
 pub(crate) const TITLE_STEP_PLAY_GAME: i32 = TitleStepState::PlayGame as i32;
 pub(crate) const TITLE_STEP_MENU_JOB_WAIT: i32 = TitleStepState::MenuJobWait as i32;
 /// STEP_BeginLogo (idx2, handler 0x140b0c2a0): the native press-any-button advance target.

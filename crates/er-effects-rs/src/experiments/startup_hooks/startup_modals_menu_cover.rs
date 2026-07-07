@@ -531,26 +531,13 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
         ));
     }
     if ptype == Some(SHOW_PROGRESS_SAVE_TYPE) {
-        if missing_save_selection_pending() {
-            if result > null && unsafe { safe_read_usize(result) }.is_some() {
-                unsafe {
-                    *(result as *mut i32) = MENU_JOB_STATE_CONTINUE;
-                    *((result + 4) as *mut i32) = 0;
-                }
-            }
-            if let Ok(base) = game_module_base() {
-                if r8 > null && unsafe { safe_read_usize(r8) }.is_some() {
-                    unsafe { *(r8 as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
-                }
-            }
-            if d < 16 || d.is_power_of_two() {
-                append_autoload_debug(format_args!(
-                    "show-progress: LOOP save-data progressType {SHOW_PROGRESS_SAVE_TYPE} while missing-save picker is pending -- title/save flow paused without suspending Wine dialog threads"
-                ));
-            }
-            let _ = (rcx, r9);
-            return result;
-        }
+        // Missing-save case: the save-data job PASSES THROUGH like any boot. RE-verified
+        // (2026-07-07): looping this job with CONTINUE holds the title-flow FixOrderJobSequence
+        // open, and MenuWindow::Update dispatches row input only while the dialog job queue is
+        // empty -- i.e. the old "pause" made the title menu permanently input-dead, which is why
+        // the OS picker had to exist. With no save on disk the delegate completes with an empty
+        // ProfileSummary and the title reaches its native interactive no-save menu, where the
+        // in-game save picker (save_picker_menu.rs) presents itself.
         let orig = SHOW_PROGRESS_ORIG.load(Ordering::SeqCst);
         if orig != HOOK_ORIGINAL_UNSET {
             if d < 16 {

@@ -369,6 +369,13 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_PICKER_STAGED_ROW_COUNT.load(Ordering::SeqCst)
     ));
     body.push_str(&format!(
+        "  \"oracle_save_picker_title_auto_opened\": {},\n  \"oracle_save_picker_title_open_count\": {},\n  \"oracle_save_picker_title_pick_count\": {},\n  \"oracle_save_picker_title_reload_count\": {},\n",
+        SAVE_PICKER_TITLE_AUTO_OPENED.load(Ordering::SeqCst),
+        SAVE_PICKER_TITLE_OPEN_COUNT.load(Ordering::SeqCst),
+        SAVE_PICKER_TITLE_PICK_COUNT.load(Ordering::SeqCst),
+        SAVE_PICKER_TITLE_RELOAD_COUNT.load(Ordering::SeqCst)
+    ));
+    body.push_str(&format!(
         "  \"system_quit_continue_confirm_fresh_deser_done\": {},\n  \"system_quit_continue_confirm_fresh_deser_count\": {},\n  \"system_quit_continue_confirm_block_count\": {},\n  \"system_quit_continue_confirm_allow_count\": {},\n",
         SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst),
         SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst),

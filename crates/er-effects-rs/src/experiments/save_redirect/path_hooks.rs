@@ -30,19 +30,12 @@ use windows::{
             SystemServices::DLL_PROCESS_ATTACH,
             Threading::{ExitProcess, GetCurrentProcessId},
         },
-        UI::{
-            Controls::Dialogs::{
-                GetOpenFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_HIDEREADONLY,
-                OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW,
-            },
-            WindowsAndMessaging::{
-                ClipCursor, EnumWindows, GetWindowThreadProcessId, IDCANCEL, IDOK, IsWindowVisible,
-                MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MessageBoxW, PostMessageW,
-                WM_KEYDOWN, WM_KEYUP,
-            },
+        UI::WindowsAndMessaging::{
+            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
+            WM_KEYDOWN, WM_KEYUP,
         },
     },
-    core::{BOOL, PCSTR, PCWSTR, PWSTR},
+    core::{BOOL, PCSTR},
 };
 
 #[allow(unused_imports)]
@@ -643,9 +636,7 @@ const MISSING_SAVE_DIALOG_PENDING: usize = 1;
 const MISSING_SAVE_DIALOG_READY: usize = 2;
 const MISSING_SAVE_DIALOG_CANCELLED: usize = 3;
 static MISSING_SAVE_DIALOG_STATE: AtomicUsize = AtomicUsize::new(MISSING_SAVE_DIALOG_IDLE);
-static MISSING_SAVE_PROMPT_BOOTSTRAP_READY: AtomicUsize = AtomicUsize::new(0);
 static MISSING_SAVE_BLOCKED_IO_LOGGED: AtomicUsize = AtomicUsize::new(0);
-static MISSING_SAVE_BOOTSTRAP_READY_LOGGED: AtomicUsize = AtomicUsize::new(0);
 static SAVE_QUERY_LAST_SAVE_LIKE_KIND: AtomicUsize = AtomicUsize::new(SAVE_PATH_KIND_NONE);
 static MISSING_SAVE_GATE: OnceLock<(Mutex<()>, Condvar)> = OnceLock::new();
 
@@ -665,35 +656,6 @@ fn set_missing_save_dialog_state(state: usize) {
 
 pub(crate) fn missing_save_selection_pending() -> bool {
     MISSING_SAVE_DIALOG_STATE.load(Ordering::SeqCst) == MISSING_SAVE_DIALOG_PENDING
-}
-
-pub(crate) fn signal_missing_save_prompt_bootstrap_ready() {
-    if missing_save_selection_pending() {
-        MISSING_SAVE_PROMPT_BOOTSTRAP_READY.store(1, Ordering::SeqCst);
-        if MISSING_SAVE_BOOTSTRAP_READY_LOGGED.swap(1, Ordering::SeqCst) == 0 {
-            append_autoload_debug(format_args!(
-                "save-override: missing-save prompt bootstrap gate released; picker thread may show UI"
-            ));
-        }
-        notify_missing_save_gate();
-    }
-}
-
-fn wait_until_missing_save_prompt_bootstrap_ready() {
-    if MISSING_SAVE_PROMPT_BOOTSTRAP_READY.load(Ordering::SeqCst) != 0 {
-        return;
-    }
-    let (mutex, cvar) = missing_save_gate();
-    let mut guard = mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    while MISSING_SAVE_PROMPT_BOOTSTRAP_READY.load(Ordering::SeqCst) == 0
-        && missing_save_selection_pending()
-    {
-        guard = cvar
-            .wait(guard)
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-    }
 }
 
 pub(crate) fn wait_for_missing_save_selection_if_pending(reason: &str) {
@@ -868,7 +830,7 @@ fn configured_active_steam_id64() -> Option<(u64, &'static str)> {
         })
 }
 
-fn default_save_root() -> Option<PathBuf> {
+pub(crate) fn default_save_root() -> Option<PathBuf> {
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .or_else(|| {
@@ -1115,160 +1077,61 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
         return activate_save_redirect_source(source, "early-enforced-configured-save");
     }
     append_autoload_debug(format_args!(
-        "save-override: no explicit save_file/ER_EFFECTS_SAVE_FILE and no readable active default {} (>= {} bytes). config_error={}. Prompting user for a save file on a post-DllMain helper thread.",
+        "save-override: no explicit save_file/ER_EFFECTS_SAVE_FILE and no readable active default {} (>= {} bytes). config_error={}. Arming the IN-GAME missing-save picker: the title boots to its native no-save menu and the 05_010 file browser presents itself (save_picker_menu.rs); world entry stays denied until a save is picked.",
         active_default_save_file_name(),
         SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES,
         runtime_config_error().unwrap_or_else(|| "none".to_owned())
     ));
     set_missing_save_dialog_state(MISSING_SAVE_DIALOG_PENDING);
-    start_missing_save_prompt_thread();
     SaveOverrideMode::Redirect
 }
 
-fn wide_nul(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-fn wine_path_wide_nul(path: &Path) -> Vec<u16> {
-    let mut wide = path_root_to_wine_wide(path);
-    wide.push(0);
-    wide
-}
-
-fn path_from_windows_picker(path: &[u16]) -> Option<PathBuf> {
-    let end = path.iter().position(|c| *c == 0).unwrap_or(path.len());
-    if end == 0 {
-        return None;
-    }
-    String::from_utf16(&path[..end]).ok().map(PathBuf::from)
-}
-
-fn open_missing_save_file_picker() -> Option<PathBuf> {
-    let title_w = wide_nul("Select Elden Ring save file");
-    let filter_w = wide_nul("Elden Ring save (*.sl2;*.co2)\0*.sl2;*.co2\0All files (*.*)\0*.*\0");
-    let initial_dir = configured_preferred_save_picker_dir()
-        .filter(|dir| dir.is_dir())
-        .map(|dir| (dir, "preferred_save_picker_dir"))
-        .or_else(|| default_save_root().map(|dir| (dir, "default-save-root")));
-    let initial_dir_w = initial_dir
-        .as_ref()
-        .map(|(root, _)| wine_path_wide_nul(root));
-    let mut file_buf = [0u16; 1024];
-    append_autoload_debug(format_args!(
-        "save-override: missing-save picker opening unowned (initial dir source={}; game title flow is gated separately)",
-        initial_dir
-            .as_ref()
-            .map(|(_, source)| *source)
-            .unwrap_or("none")
-    ));
-    // No OFN_DONTADDTORECENT: picks feed the shell's recent/MRU history on purpose, and the
-    // picked folder is persisted to er-effects.toml (preferred_save_picker_dir) so future
-    // sessions reopen there. OFN_NOCHANGEDIR still pins the game's working directory.
-    let mut ofn = OPENFILENAMEW {
-        lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
-        lpstrFilter: PCWSTR::from_raw(filter_w.as_ptr()),
-        lpstrFile: PWSTR::from_raw(file_buf.as_mut_ptr()),
-        nMaxFile: file_buf.len() as u32,
-        lpstrTitle: PCWSTR::from_raw(title_w.as_ptr()),
-        Flags: OFN_EXPLORER
-            | OFN_FILEMUSTEXIST
-            | OFN_PATHMUSTEXIST
-            | OFN_HIDEREADONLY
-            | OFN_NOCHANGEDIR,
-        ..Default::default()
+/// Complete the missing-save selection from the IN-GAME title picker (menu thread). Validates the
+/// picked container (size floor + BND4 parse -- stronger than the old OS flow's size-only check),
+/// persists the picked directory, activates the save-redirect source, installs the Win32 redirect
+/// hooks synchronously (no loader-lock concern on the menu thread), and releases every waiter on
+/// the missing-save gate. Returns false (state unchanged, picker stays up) on an invalid pick.
+pub(crate) fn complete_missing_save_selection_from_picker(path: &Path) -> bool {
+    let Some(validated) = validated_save_file_path(path.to_path_buf()) else {
+        append_autoload_debug(format_args!(
+            "save-override: title picker rejected non-plausible save '{}' (missing or under {} bytes)",
+            path.display(),
+            SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES
+        ));
+        return false;
     };
-    if let Some(initial_dir_w) = initial_dir_w.as_ref() {
-        ofn.lpstrInitialDir = PCWSTR::from_raw(initial_dir_w.as_ptr());
-    }
-    let picked = unsafe { GetOpenFileNameW(&mut ofn).as_bool() };
-    append_autoload_debug(format_args!(
-        "save-override: missing-save picker returned picked={picked}"
-    ));
-    if !picked {
-        return None;
-    }
-    path_from_windows_picker(&file_buf)
-}
-
-fn prompt_missing_save_file_source() -> Option<SaveRedirectSource> {
-    let title = wide_nul("er-effects-rs");
-    let prompt = wide_nul(
-        "Couldn't find a save, press OK to find one and supply it or press cancel to quit",
-    );
-    let invalid = wide_nul(
-        "The selected file is not a readable Elden Ring save. Please choose an ER0000.sl2 or ER0000.co2 file.",
-    );
-    loop {
-        append_autoload_debug(format_args!(
-            "save-override: missing-save dialog showing OK/picker Cancel/quit prompt"
-        ));
-        let response = unsafe {
-            MessageBoxW(
-                None,
-                PCWSTR::from_raw(prompt.as_ptr()),
-                PCWSTR::from_raw(title.as_ptr()),
-                MB_OKCANCEL | MB_ICONWARNING,
-            )
-        };
-        append_autoload_debug(format_args!(
-            "save-override: missing-save dialog response={}",
-            response.0
-        ));
-        if response == IDCANCEL || response != IDOK {
-            return None;
-        }
-        let Some(path) = open_missing_save_file_picker() else {
-            return None;
-        };
-        if let Some(validated) = validated_save_file_path(path.clone()) {
-            if autoupdate_preferred_picker_dir_enabled()
-                && let Some(dir) = validated.parent().filter(|dir| !dir.as_os_str().is_empty())
-            {
-                remember_preferred_save_picker_dir(dir);
-            }
+    match fs::read(&validated) {
+        Ok(bytes) if er_save_loader::bnd4::parse_entries(&bytes).is_ok() => {}
+        Ok(bytes) => {
             append_autoload_debug(format_args!(
-                "save-override: missing-save dialog selected save '{}'",
-                path.display()
+                "save-override: title picker rejected non-BND4 file '{}' len={}",
+                validated.display(),
+                bytes.len()
             ));
-            return Some(save_redirect_source_for_validated_file(validated));
+            return false;
         }
-        append_autoload_debug(format_args!(
-            "save-override: missing-save dialog rejected invalid/non-plausible save '{}'",
-            path.display()
-        ));
-        unsafe {
-            let _ = MessageBoxW(
-                None,
-                PCWSTR::from_raw(invalid.as_ptr()),
-                PCWSTR::from_raw(title.as_ptr()),
-                MB_OK | MB_ICONERROR,
-            );
+        Err(err) => {
+            append_autoload_debug(format_args!(
+                "save-override: title picker could not read '{}': {err}",
+                validated.display()
+            ));
+            return false;
         }
     }
-}
-
-fn start_missing_save_prompt_thread() {
-    let _ = std::thread::Builder::new()
-        .name("er-effects-missing-save-prompt".to_owned())
-        .spawn(|| {
-            // Do not open the common file dialog from DllMain/loader-lock context. Wait until the
-            // DllMain bootstrap arms the minimal title/save gates and explicitly releases this thread.
-            wait_until_missing_save_prompt_bootstrap_ready();
-            match prompt_missing_save_file_source() {
-                Some(source) => {
-                    let _ = activate_save_redirect_source(source, "missing-save-dialog-selection");
-                    install_save_redirect_hooks();
-                    set_missing_save_dialog_state(MISSING_SAVE_DIALOG_READY);
-                }
-                None => {
-                    append_autoload_debug(format_args!(
-                        "save-override: missing-save dialog cancelled/no valid selection; exiting."
-                    ));
-                    set_missing_save_dialog_state(MISSING_SAVE_DIALOG_CANCELLED);
-                    unsafe { ExitProcess(1) };
-                }
-            }
-        });
+    if autoupdate_preferred_picker_dir_enabled()
+        && let Some(dir) = validated.parent().filter(|dir| !dir.as_os_str().is_empty())
+    {
+        remember_preferred_save_picker_dir(dir);
+    }
+    let source = save_redirect_source_for_validated_file(validated.clone());
+    let _ = activate_save_redirect_source(source, "title-picker-selection");
+    install_save_redirect_hooks();
+    set_missing_save_dialog_state(MISSING_SAVE_DIALOG_READY);
+    append_autoload_debug(format_args!(
+        "save-override: title picker selected save '{}'; redirect active, missing-save gate released",
+        validated.display()
+    ));
+    true
 }
 
 fn wait_for_missing_save_dialog_if_pending(path: &[u16]) {
