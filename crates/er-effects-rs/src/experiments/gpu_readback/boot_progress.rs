@@ -116,7 +116,12 @@ const BOOT_VIEW_MILESTONE_LABELS: [&str; 7] = [
 /// milestone deliberately stops at the native-handoff marker instead of 100%: the remaining gap is owned
 /// by the game's real now-loading Gauge_3 bar, whose terminal frame is the true all-loading-complete
 /// semaphore.
-const BOOT_VIEW_SAVE_CHECK_PERMILLE: usize = 300;
+// SAVE CHECK sits at the fill edge where the bar actually PAUSES while the missing-save overlay
+// picker is up: the boot holds the save-data ShowProgressJob at the MENU milestone (490), and the
+// inter-milestone creep tops out at 490 + 7/10*(615-490) = 577, just left of the SAVE LOAD (615)
+// resume point. Placing the marker there makes "paused at SAVE CHECK" line up with the visible
+// fill edge (was 300, far behind the real pause).
+const BOOT_VIEW_SAVE_CHECK_PERMILLE: usize = 570;
 const BOOT_VIEW_SAVE_CHECK_LABEL: &str = "SAVE CHECK";
 const BOOT_VIEW_SAVE_LOAD_PERMILLE: usize = 615;
 const BOOT_VIEW_SAVE_LOAD_LABEL: &str = "SAVE LOAD";
@@ -786,28 +791,41 @@ fn boot_view_rasterize(
     } else {
         boot_draw_text(&mut buf, w, h, content_x, content_y, label);
     }
-    let save_check_marker_x = boot_draw_marker_label(
-        &mut buf,
-        w,
-        h,
-        content_x,
-        content_y,
-        content_w,
-        BOOT_VIEW_SAVE_CHECK_PERMILLE,
-        BOOT_VIEW_SAVE_CHECK_LABEL,
-        has_bg,
-    );
-    let save_load_marker_x = boot_draw_marker_label(
-        &mut buf,
-        w,
-        h,
-        content_x,
-        content_y,
-        content_w,
-        BOOT_VIEW_SAVE_LOAD_PERMILLE,
-        BOOT_VIEW_SAVE_LOAD_LABEL,
-        has_bg,
-    );
+    // SAVE CHECK (the picker-hold pause, ~577) and SAVE LOAD (615) sit close together, so only one
+    // is shown at a time to keep their labels from overlapping: SAVE CHECK while the missing-save
+    // picker holds the boot (that is where the fill visibly pauses), SAVE LOAD otherwise (the normal
+    // continue/save-load checkpoint on every boot). `usize::MAX` = not shown (tick skipped below).
+    let save_picker_hold = missing_save_selection_pending();
+    let save_check_marker_x = if save_picker_hold {
+        boot_draw_marker_label(
+            &mut buf,
+            w,
+            h,
+            content_x,
+            content_y,
+            content_w,
+            BOOT_VIEW_SAVE_CHECK_PERMILLE,
+            BOOT_VIEW_SAVE_CHECK_LABEL,
+            has_bg,
+        )
+    } else {
+        usize::MAX
+    };
+    let save_load_marker_x = if save_picker_hold {
+        usize::MAX
+    } else {
+        boot_draw_marker_label(
+            &mut buf,
+            w,
+            h,
+            content_x,
+            content_y,
+            content_w,
+            BOOT_VIEW_SAVE_LOAD_PERMILLE,
+            BOOT_VIEW_SAVE_LOAD_LABEL,
+            has_bg,
+        )
+    };
     let marker_x = boot_draw_marker_label(
         &mut buf,
         w,
@@ -839,29 +857,33 @@ fn boot_view_rasterize(
         BOOT_VIEW_BAR_H,
         BOOT_VIEW_RGB_FILL,
     );
-    // Save-check tick: marks the missing-save picker wait point before a selected source exists.
-    boot_fill_rect(
-        &mut buf,
-        w,
-        h,
-        save_check_marker_x.saturating_sub(BOOT_VIEW_HANDOFF_MARKER_W / 2),
-        bar_y.saturating_sub(2),
-        BOOT_VIEW_HANDOFF_MARKER_W,
-        BOOT_VIEW_BAR_H + 4,
-        BOOT_VIEW_RGB_FILL,
-    );
-    // Save-load tick: marks the ShowProgressJob save-data pause/resume point so a picker-gated boot
-    // visibly shows the later native save-load checkpoint before the loading handoff.
-    boot_fill_rect(
-        &mut buf,
-        w,
-        h,
-        save_load_marker_x.saturating_sub(BOOT_VIEW_HANDOFF_MARKER_W / 2),
-        bar_y.saturating_sub(2),
-        BOOT_VIEW_HANDOFF_MARKER_W,
-        BOOT_VIEW_BAR_H + 4,
-        BOOT_VIEW_RGB_FILL,
-    );
+    // Save-check tick: the fill edge where the boot pauses while the overlay picker is up.
+    if save_check_marker_x != usize::MAX {
+        boot_fill_rect(
+            &mut buf,
+            w,
+            h,
+            save_check_marker_x.saturating_sub(BOOT_VIEW_HANDOFF_MARKER_W / 2),
+            bar_y.saturating_sub(2),
+            BOOT_VIEW_HANDOFF_MARKER_W,
+            BOOT_VIEW_BAR_H + 4,
+            BOOT_VIEW_RGB_FILL,
+        );
+    }
+    // Save-load tick: the ShowProgressJob save-data continue/load checkpoint (shown once a save is
+    // resolved, i.e. off the picker hold).
+    if save_load_marker_x != usize::MAX {
+        boot_fill_rect(
+            &mut buf,
+            w,
+            h,
+            save_load_marker_x.saturating_sub(BOOT_VIEW_HANDOFF_MARKER_W / 2),
+            bar_y.saturating_sub(2),
+            BOOT_VIEW_HANDOFF_MARKER_W,
+            BOOT_VIEW_BAR_H + 4,
+            BOOT_VIEW_RGB_FILL,
+        );
+    }
     // Handoff marker/gap: this pre-loading bar is only phase 1. Leave the remaining track empty for the
     // native now-loading Gauge_3 phase; the native loading-bar hook supplies the true terminal-frame
     // semaphore for 100%. Make the split visible: a small black break in the track, a brighter 3px marker,
