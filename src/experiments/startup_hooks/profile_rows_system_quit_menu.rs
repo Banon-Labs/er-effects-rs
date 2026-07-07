@@ -619,6 +619,84 @@ unsafe fn system_quit_hide_real_system_windows(base: usize, source: &str) {
     ));
 }
 
+/// Re-apply the OptionSetting active-pane visibility via the game's OWN tab-select visibility pass
+/// (`FUN_14093b850`, deobf 0x93b760). Our hide/restore of the OptionSetting window leaves every option
+/// pane with `DisplayInfo.Visible=0` (proven by oracle_optionsetting_pane_visible: WindowList visible,
+/// visible_mask=0 -> the blank Game Options pane). Driving the window's show state does NOT re-show the
+/// panes -- pane visibility is applied only by this per-tab pass, which our restore never re-triggers.
+/// We derive the current tab index by matching the composite's current pane dialog (`composite+0xb8`)
+/// against the 10-entry cache at `composite+0x68`, then call the pass so it re-runs
+/// `SetVisible(paneDialog+0x1200, current==dialog)` for every cached pane -- re-showing exactly the
+/// active pane. Runs on the menu thread (the restore path is menu-pump owned). Read-guarded; no-ops if
+/// the composite / current pane / tab index can't be resolved.
+unsafe fn system_quit_reapply_optionsetting_pane_visibility(base: usize, option_window: usize) {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    const HEAP_LO: usize = 0x10000;
+    if option_window < HEAP_LO {
+        return;
+    }
+    let menu_id = unsafe { safe_read_u16(option_window + 0x180) }.unwrap_or(u16::MAX);
+    if menu_id != OPTIONSETTING_MENU_ID {
+        // Not the OptionSetting window (e.g. the IngameTop top-menu, menu_id 0xffff) -- this composite
+        // layout is OptionSetting-specific; skip.
+        return;
+    }
+    let composite = option_window + OPTIONSETTING_COMPOSITE_OFFSET;
+    let current = unsafe {
+        safe_read_usize(composite + OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET)
+    }
+    .unwrap_or(0);
+    if current < HEAP_LO {
+        return;
+    }
+    // The REAL selected tab the user is viewing: SettingTabControl at window+0x1870, its tab view at
+    // +0x10, selected index at view+0xd4 (`FUN_140739f20` = `*(view+0xd4)`). Use THIS, not the composite's
+    // `current` pane pointer -- after our detour `current` (composite+0xb8) is stale (observed: it matched
+    // cache slot 9 while the user was on the Game tab), so re-applying its index re-shows the wrong pane.
+    const TAB_CONTROL_OFFSET: usize = 0x1870;
+    const TAB_VIEW_OFFSET: usize = 0x10;
+    const TAB_VIEW_SELECTED_INDEX_OFFSET: usize = 0xd4;
+    let tab_view =
+        unsafe { safe_read_usize(option_window + TAB_CONTROL_OFFSET + TAB_VIEW_OFFSET) }.unwrap_or(0);
+    let real_tab = if tab_view >= HEAP_LO {
+        unsafe { safe_read_i32(tab_view + TAB_VIEW_SELECTED_INDEX_OFFSET) }
+            .map(|v| v as usize)
+            .filter(|&t| t < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT)
+    } else {
+        None
+    };
+    // Diagnostic: which cache slot the (possibly stale) current pane pointer matches.
+    let mut cache_tab: Option<usize> = None;
+    for i in 0..OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT {
+        let cached = unsafe {
+            safe_read_usize(composite + OPTIONSETTING_COMPOSITE_PANE_CACHE_OFFSET + i * 8)
+        }
+        .unwrap_or(0);
+        if cached == current {
+            cache_tab = Some(i);
+            break;
+        }
+    }
+    let Some(tab_index) = real_tab.or(cache_tab) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: optionsetting pane-reapply skipped -- no tab index (tab_view=0x{tab_view:x} current=0x{current:x} composite=0x{composite:x})"
+        ));
+        return;
+    };
+    let Ok(select_addr) = game_rva(OPTIONSETTING_TAB_SELECT_VISIBILITY_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: optionsetting pane-reapply skipped -- select rva 0x{OPTIONSETTING_TAB_SELECT_VISIBILITY_RVA:x} unresolved"
+        ));
+        return;
+    };
+    let select: unsafe extern "system" fn(usize, i32, usize, usize) =
+        unsafe { std::mem::transmute(select_addr) };
+    unsafe { select(composite, tab_index as i32, NULL, NULL) };
+    append_autoload_debug(format_args!(
+        "system-quit-dup: optionsetting pane-reapply composite=0x{composite:x} current=0x{current:x} tab_index={tab_index} real_tab={real_tab:?} cache_tab={cache_tab:?} via 0x{select_addr:x}"
+    ));
+}
+
 unsafe fn system_quit_reset_profile_select_state(source: &str) {
     SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
@@ -768,6 +846,12 @@ unsafe fn system_quit_restore_real_system_windows(base: usize, source: &str) {
     } else {
         false
     };
+    if restored_option {
+        // Showing the OptionSetting window root does NOT re-show its option panes -- pane visibility is
+        // applied only by the game's per-tab pass, which our hide/restore never re-triggers, leaving the
+        // Game Options tab blank. Re-run that pass for the active tab so the current pane re-shows.
+        unsafe { system_quit_reapply_optionsetting_pane_visibility(base, option) };
+    }
     append_autoload_debug(format_args!(
         "system-quit-dup: restore real windows source={source} profile=0x{profile:x} top=0x{top:x} option=0x{option:x} restored_top={restored_top} restored_option={restored_option}"
     ));
@@ -817,6 +901,244 @@ pub(crate) unsafe fn system_quit_profile_select_top_menu_tick() {
         unsafe { system_quit_restore_real_system_windows(base, "restore-real-profile-left-list") };
     } else {
         unsafe { system_quit_reset_profile_select_state("restore-real-profile-left-list-no-base") };
+    }
+}
+
+/// Result of resolving one named OptionSetting child and reading its DisplayInfo.Visible.
+struct OptionSettingPaneSample {
+    /// `assignComponentWithName` returned a live out proxy (not 0 / not the null sentinel).
+    resolved: bool,
+    /// The resolved child's CSScaleformValue is a live DisplayObject (`(dataType & MASK) == VALUE`).
+    is_display: bool,
+    /// DisplayInfo.Visible byte was nonzero after the `GetDisplayInfo` vcall.
+    visible: bool,
+    /// Raw dataType (for gate diagnosis when `is_display` is false).
+    datatype: i32,
+}
+
+/// READ-ONLY: resolve one named child of the OptionSetting root proxy and read its
+/// DisplayInfo.Visible. Mirrors `push_stats_text_on_row`'s resolve/guard/release exactly -- native
+/// `assignComponentWithName` into a zeroed out proxy, the 7e7 game-image guard on the vptr chain
+/// before any virtual dispatch, and `~CSScaleformValue` on the out proxy's EMBEDDED value (+0x28).
+/// Nothing is mutated; the `GetDisplayInfo` vcall only fills the caller's stack buffer. dtor is run
+/// exactly once for every resolved out proxy (never for an unresolved name).
+unsafe fn resolve_optionsetting_pane(
+    base: usize,
+    assign: unsafe extern "system" fn(usize, usize, usize) -> usize,
+    dtor: unsafe extern "system" fn(usize),
+    root_proxy: usize,
+    name: &str,
+) -> OptionSettingPaneSample {
+    debug_assert!(name.ends_with('\0'), "pane name must be NUL-terminated");
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    // The binder fully constructs the out proxy before reading it; a zeroed 0x80-byte buffer mirrors
+    // the native uninitialized stack slot. Names carry no '%', safe as the binder's printf format.
+    let mut out_buf = [0u8; SCENE_OBJ_PROXY_STACK_BYTES];
+    let out = unsafe { assign(root_proxy, out_buf.as_mut_ptr() as usize, name.as_ptr() as usize) };
+    if out == 0 || out == null {
+        return OptionSettingPaneSample {
+            resolved: false,
+            is_display: false,
+            visible: false,
+            datatype: 0,
+        };
+    }
+    let cs_value = out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET;
+    let (is_display, visible, datatype) = unsafe { read_scaleform_pane_visible(base, cs_value) };
+    unsafe { dtor(cs_value) };
+    OptionSettingPaneSample {
+        resolved: true,
+        is_display,
+        visible,
+        datatype,
+    }
+}
+
+/// Read `DisplayInfo.Visible` from a `CSScaleformValue` at `cs_value`. Returns
+/// `(is_display, visible, datatype)`. READ-ONLY: the `GetDisplayInfo` vcall only fills a local buffer;
+/// this does NOT release the value (the caller owns lifetime -- an assign'd out proxy is dtor'd by the
+/// caller; an embedded proxy has nothing to release). 7e7 guard on the vptr chain before any dispatch:
+/// validate the vtable (`*objectInterface`) and the resolved fn are game-image-live (NOT the heap
+/// objectInterface instance itself). `safe_read` of `*objectInterface` fails closed if unmapped.
+unsafe fn read_scaleform_pane_visible(base: usize, cs_value: usize) -> (bool, bool, i32) {
+    let object_interface =
+        unsafe { safe_read_usize(cs_value + CSSCALEFORMVALUE_OBJECT_INTERFACE_OFFSET) }.unwrap_or(0);
+    let datatype =
+        unsafe { safe_read_i32(cs_value + CSSCALEFORMVALUE_DATATYPE_OFFSET) }.unwrap_or(0);
+    let value_handle =
+        unsafe { safe_read_usize(cs_value + CSSCALEFORMVALUE_HANDLE_OFFSET) }.unwrap_or(0);
+    let is_display =
+        (datatype & CSSCALEFORMVALUE_DISPLAY_TYPE_MASK) == CSSCALEFORMVALUE_DISPLAY_TYPE_VALUE;
+    if !is_display {
+        return (false, false, datatype);
+    }
+    let vfptr = unsafe { safe_read_usize(object_interface) }.unwrap_or(0);
+    let getfn = if vfptr != 0 {
+        unsafe { safe_read_usize(vfptr + CSSCALEFORMVALUE_GET_DISPLAY_INFO_VTABLE_SLOT) }.unwrap_or(0)
+    } else {
+        0
+    };
+    let guarded = object_interface != 0
+        && vfptr != 0
+        && vtable_in_game_image(vfptr, base)
+        && getfn != 0
+        && vtable_in_game_image(getfn, base);
+    if !guarded {
+        OPTIONSETTING_PANE_GUARD_SKIPS.fetch_add(1, Ordering::SeqCst);
+        return (true, false, datatype);
+    }
+    let getfn: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(getfn) };
+    let mut info = [0u8; OPTIONSETTING_DISPLAY_INFO_BYTES];
+    unsafe { getfn(object_interface, value_handle, info.as_mut_ptr() as usize) };
+    (
+        true,
+        info[OPTIONSETTING_DISPLAY_INFO_VISIBLE_OFFSET] != 0,
+        datatype,
+    )
+}
+
+/// READ-ONLY oracle: on OptionSetting menu re-entry, read whether the option-row pane display
+/// objects are actually VISIBLE. Detects the "blank Game Options pane" bug (tab strip + footer
+/// render, row list is black) with no screenshot -- every access is a read; no game state changes.
+/// Runs on the menu/game thread (the `MenuWindowJob::Run` hook) as required for GFx vcalls.
+unsafe fn sample_optionsetting_pane_visibility(base: usize, option_window: usize) {
+    if option_window == 0 || option_window < OPTIONSETTING_WINDOW_MIN_PTR {
+        return;
+    }
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    // Prefer the hooked ORIG trampoline so the resolve is not double-instrumented (as in
+    // push_stats_text_on_row); else the raw game RVA.
+    let assign_addr = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
+        orig if orig != null && orig != HOOK_ORIGINAL_UNSET => orig,
+        _ => base + TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+    };
+    let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(assign_addr) };
+    let dtor: unsafe extern "system" fn(usize) =
+        unsafe { std::mem::transmute(base + CSSCALEFORMVALUE_DTOR_RVA) };
+    let root_proxy = option_window + OPTION_SETTING_ROOT_PROXY_OFFSET;
+
+    // The pane CONTAINER: its resolved-but-not-visible state IS the direct blank-pane signature.
+    let wl = unsafe { resolve_optionsetting_pane(base, assign, dtor, root_proxy, OPTIONSETTING_WINDOWLIST_NAME) };
+
+    // Each option pane -> per-pane resolved/visible bitmasks (bit index = pane order).
+    let mut resolved_mask: usize = 0;
+    let mut visible_mask: usize = 0;
+    for (idx, &name) in OPTIONSETTING_PANE_NAMES.iter().enumerate() {
+        let sample = unsafe { resolve_optionsetting_pane(base, assign, dtor, root_proxy, name) };
+        if sample.resolved {
+            resolved_mask |= 1usize << idx;
+        }
+        if sample.visible {
+            visible_mask |= 1usize << idx;
+        }
+    }
+
+    let composite = option_window + OPTIONSETTING_COMPOSITE_OFFSET;
+    let composite_bound =
+        unsafe { safe_read_usize(composite + OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET) }
+            .map(|v| v != 0)
+            .unwrap_or(false);
+
+    // THE REAL SIGNAL: the game's tab-select (FUN_14093b850) toggles SetVisible on the CURRENT tab
+    // dialog's embedded proxy at dialog+0x1200 -- NOT the named WindowList children (which stay
+    // Visible=0 always). current dialog = *(composite+0xb8).
+    let current_dialog =
+        unsafe { safe_read_usize(composite + OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET) }
+            .unwrap_or(0);
+    let (cur_is_display, cur_visible, cur_dt) = if current_dialog >= OPTIONSETTING_WINDOW_MIN_PTR {
+        unsafe {
+            read_scaleform_pane_visible(
+                base,
+                current_dialog
+                    + OPTIONSETTING_DIALOG_PANE_PROXY_OFFSET
+                    + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET,
+            )
+        }
+    } else {
+        (false, false, 0)
+    };
+
+    // "Actively shown" gate: CSMenuMan flag byte bit 0x4 = the window is drawn this frame. The
+    // OptionSetting MenuWindowJob::Run also fires during preload/hidden states; without this gate the
+    // blank fired at +26s before the user could reproduce.
+    let menu_id = unsafe { safe_read_u16(option_window + 0x180) }.unwrap_or(u16::MAX);
+    let cs_menu_man = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(0);
+    let flag = if menu_id < 0x47 && cs_menu_man >= OPTIONSETTING_WINDOW_MIN_PTR {
+        unsafe { safe_read_u8(cs_menu_man + 0x90 + menu_id as usize) }.unwrap_or(0)
+    } else {
+        0
+    };
+    let actively_shown = (flag & OPTIONSETTING_FLAG_ACTIVELY_SHOWN_BIT) != 0;
+    if actively_shown && cur_is_display && cur_visible {
+        OPTIONSETTING_CURRENT_PANE_EVER_VISIBLE.store(1, Ordering::SeqCst);
+    }
+    let ever_visible = OPTIONSETTING_CURRENT_PANE_EVER_VISIBLE.load(Ordering::SeqCst) != 0;
+
+    // Which tab is the user on: SettingTabControl (window+0x1870) -> tab view (+0x10) -> index (+0xd4).
+    let tab_view = unsafe {
+        safe_read_usize(option_window + OPTIONSETTING_TAB_CONTROL_OFFSET + OPTIONSETTING_TAB_VIEW_OFFSET)
+    }
+    .unwrap_or(0);
+    let current_tab = if tab_view >= OPTIONSETTING_WINDOW_MIN_PTR {
+        unsafe { safe_read_i32(tab_view + OPTIONSETTING_TAB_VIEW_SELECTED_INDEX_OFFSET) }
+            .map(|v| v as usize)
+            .unwrap_or(usize::MAX)
+    } else {
+        usize::MAX
+    };
+    OPTIONSETTING_CURRENT_TAB.store(current_tab, Ordering::SeqCst);
+
+    // OLD (mislabeled) signature -- kept only as a secondary diagnostic; it is a constant, not the bug.
+    let named_blank = wl.visible && visible_mask == 0;
+    // REAL blank: a healthy pane was seen earlier, and now the actively-shown current pane is hidden.
+    let real_blank = ever_visible && actively_shown && current_dialog != 0 && cur_is_display && !cur_visible;
+
+    // FIX: the active tab's pane MUST be visible when the OptionSetting is shown. On return to a tab the
+    // game's tab-select sometimes fails to re-show it (the blank Game Options pane -- proven: same dialog
+    // 0x..564080 goes Visible=1 -> 0 and never comes back). Re-assert the invariant with the game's OWN
+    // SetVisible on the current tab dialog's proxy at dialog+0x1200 -- the exact proxy/call FUN_14093b850
+    // uses. Only when actively shown + the pane is a real DisplayObject + currently hidden, so it never
+    // forces a pane that should legitimately be hidden (ProfileSelect clears flag 0x4 -> actively_shown=false).
+    if actively_shown && cur_is_display && !cur_visible && current_dialog >= OPTIONSETTING_WINDOW_MIN_PTR
+    {
+        if let Ok(sv_addr) = game_rva(TITLE_PRESS_START_SET_VISIBLE_RVA as u32) {
+            let set_visible: unsafe extern "system" fn(usize, u8) =
+                unsafe { std::mem::transmute(sv_addr) };
+            unsafe {
+                set_visible(current_dialog + OPTIONSETTING_DIALOG_PANE_PROXY_OFFSET, 1);
+            }
+            OPTIONSETTING_PANE_FIX_APPLIED.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    OPTIONSETTING_PANE_LAST_WINDOWLIST_RESOLVED.store(wl.resolved as usize, Ordering::SeqCst);
+    OPTIONSETTING_PANE_LAST_WINDOWLIST_VISIBLE.store(wl.visible as usize, Ordering::SeqCst);
+    OPTIONSETTING_PANE_LAST_DATATYPE.store(wl.datatype as u32 as usize, Ordering::SeqCst);
+    OPTIONSETTING_PANE_LAST_RESOLVED_MASK.store(resolved_mask, Ordering::SeqCst);
+    OPTIONSETTING_PANE_LAST_VISIBLE_MASK.store(visible_mask, Ordering::SeqCst);
+    OPTIONSETTING_PANE_COMPOSITE_BOUND.store(composite_bound as usize, Ordering::SeqCst);
+    OPTIONSETTING_CURRENT_DIALOG.store(current_dialog, Ordering::SeqCst);
+    OPTIONSETTING_CURRENT_PANE_VISIBLE.store(cur_visible as usize, Ordering::SeqCst);
+    OPTIONSETTING_CURRENT_PANE_DATATYPE.store(cur_dt as u32 as usize, Ordering::SeqCst);
+    OPTIONSETTING_ACTIVELY_SHOWN.store(actively_shown as usize, Ordering::SeqCst);
+    OPTIONSETTING_LAST_FLAG.store(flag as usize, Ordering::SeqCst);
+    if named_blank {
+        OPTIONSETTING_PANE_BLANK_DETECTED_COUNT.fetch_add(1, Ordering::SeqCst);
+    }
+    if real_blank {
+        OPTIONSETTING_REAL_BLANK_DETECTED_COUNT.fetch_add(1, Ordering::SeqCst);
+        OPTIONSETTING_CURRENT_TAB_AT_BLANK.store(current_tab, Ordering::SeqCst);
+    }
+    let n = OPTIONSETTING_PANE_SAMPLE_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+    if n <= OPTIONSETTING_PANE_SAMPLE_LOG_CAP || real_blank {
+        append_autoload_debug(format_args!(
+            "optionsetting-pane: sample #{n} window=0x{option_window:x} tab={current_tab} flag=0x{flag:x} actively_shown={actively_shown} current_dialog=0x{current_dialog:x} current_pane(display={cur_is_display} visible={cur_visible} dt=0x{:x}) ever_visible={ever_visible} real_blank={real_blank} | named(wl_visible={} mask=0x{visible_mask:x} named_blank={named_blank}) guard_skips={}",
+            cur_dt as u32,
+            wl.visible,
+            OPTIONSETTING_PANE_GUARD_SKIPS.load(Ordering::SeqCst)
+        ));
     }
 }
 
@@ -924,6 +1246,18 @@ pub(crate) unsafe extern "system" fn system_quit_menu_window_job_run_hook(
             append_autoload_debug(format_args!(
                 "system-quit-dup: MenuWindowJob::Run resource='{filename}' job=0x{job:x} owner=0x{owner:x} owner_vt=0x{owner_vt:x} owner_id=0x{owner_id:x} prev=0x{prev:x} list_field=0x{list:x} ret=0x{ret:x}"
             ));
+        }
+        // READ-ONLY oracle: on Game-Options (re-)entry, sample whether the option-row pane display
+        // objects are actually VISIBLE (blank Game Options pane detector). Runs here because this hook
+        // IS the menu/game thread required for the GFx DisplayInfo vcalls. No game state is mutated.
+        if matches!(
+            filename.as_str(),
+            "02_040_OptionSetting" | "02_041_OptionSetting_Trial"
+        ) && owner != 0
+        {
+            if let Ok(base) = game_module_base() {
+                unsafe { sample_optionsetting_pane_visibility(base, owner) };
+            }
         }
         if filename == "05_010_ProfileSelect" {
             if let Ok(base) = game_module_base() {

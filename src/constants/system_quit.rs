@@ -9,6 +9,7 @@ pub(crate) const XINPUT_GAMEPAD_DPAD_DOWN: u16 = 0x0002;
 pub(crate) const XINPUT_GAMEPAD_DPAD_UP: u16 = 0x0001;
 pub(crate) const XINPUT_GAMEPAD_START: u16 = 0x0010;
 pub(crate) const XINPUT_GAMEPAD_LEFT_SHOULDER: u16 = 0x0100;
+pub(crate) const XINPUT_GAMEPAD_RIGHT_SHOULDER: u16 = 0x0200;
 pub(crate) const XINPUT_GAMEPAD_A: u16 = 0x1000;
 /// Current game-task tick's synthesized gamepad wButtons for the System->Quit repro autopilot,
 /// written by `system_quit_repro_tick` and READ by the XInput poll hook (the stage the game reads a
@@ -68,6 +69,20 @@ pub(crate) const SQ_REPRO_STATE_DONE: usize = 6;
 /// Distinct from DONE so `block_input_enabled`/`xinput_get_state_hook` keep the block engaged and the
 /// fabricated pad driving across the reload (they gate on `!= DONE`).
 pub(crate) const SQ_REPRO_STATE_WAIT_RELOAD: usize = 7;
+/// TAB-RETURN repro (gated by `er-effects-tab-return-repro.txt`): from the open OptionSetting, navigate
+/// RIGHT (RB) to the last tab (the Quit/Exit tab, where our injected rows build), then LEFT (LB) back to
+/// tab 0 (Game Options), then dwell -- reproducing the blank Game Options pane the user reported (a tab
+/// goes blank on RETURN after visiting the custom tab). Uses OPTIONSETTING_CURRENT_TAB feedback.
+pub(crate) const SQ_REPRO_STATE_TAB_RETURN: usize = 8;
+/// TAB_RETURN sub-phase: 0 = drive RIGHT to the last tab, 1 = drive LEFT back to tab 0, 2 = dwell.
+pub(crate) static SQ_REPRO_TAB_RETURN_PHASE: AtomicUsize = AtomicUsize::new(0);
+/// Highest tab index seen while driving right (end-of-strip detection) and the tick the dwell began.
+pub(crate) static SQ_REPRO_TAB_RETURN_MAX_TAB: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SQ_REPRO_TAB_RETURN_DWELL_START: AtomicUsize = AtomicUsize::new(0);
+/// Frames with no tab change before we treat the strip end as reached (phase 0 -> 1).
+pub(crate) const SQ_REPRO_TAB_RETURN_STALL_TICKS: usize = 40;
+/// Dwell on Game Options this many ticks so the pane-visibility oracle samples the (blank) tab 0.
+pub(crate) const SQ_REPRO_TAB_RETURN_DWELL_TICKS: usize = 180;
 pub(crate) static SQ_REPRO_STATE: AtomicUsize = AtomicUsize::new(SQ_REPRO_STATE_WAIT_WORLD);
 /// Which back-to-back switch the autopilot is driving (0-based). Switch `i` loads
 /// `SQ_REPRO_TARGET_SLOTS[i]`. Proves the feature can load N different characters after one startup.

@@ -347,6 +347,22 @@ pub(crate) static TITLE_PAB_INFORMATION_VISUAL_LAST_CALLER_RVA: AtomicUsize =
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA: usize = 0x744dd0;
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA: usize = 0x7ad530;
 pub(crate) const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
+/// OptionSetting tab-select VISIBILITY pass `FUN_14093b850` (deobf 0x93b760):
+/// `fn(CompositeOptionSettingDialog* composite, int tabIndex, u8* r8, u8* r9)`. It sets the current
+/// pane (`composite+0xb8 = cache[tabIndex]`, building via the switch dispatch only if the cache slot is
+/// null), then iterates the 10 cached pane dialogs at `composite+0x68` and calls `SetVisible(dialog+0x1200,
+/// current==dialog)` on each -- showing ONLY the active tab's pane, hiding the rest. This is the game's
+/// own per-tab visibility application. Re-invoking it on restore re-shows the active OptionSetting pane
+/// that our hide/restore left with DisplayInfo.Visible=0 (the blank Game Options pane).
+pub(crate) const OPTIONSETTING_TAB_SELECT_VISIBILITY_RVA: usize = 0x93b760;
+/// OptionSettingTopDialog (menu_id 0x25) -> embedded CS::CompositeOptionSettingDialog.
+pub(crate) const OPTIONSETTING_COMPOSITE_OFFSET: usize = 0x1768;
+/// Composite -> current pane dialog ptr (`+0xb8`) and the 10-entry per-tab pane-dialog cache (`+0x68`).
+pub(crate) const OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET: usize = 0xb8;
+pub(crate) const OPTIONSETTING_COMPOSITE_PANE_CACHE_OFFSET: usize = 0x68;
+pub(crate) const OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT: usize = 10;
+/// OptionSetting/OptionSetting_Trial window menu_id (indexes CSMenuMan flag byte; gates the pane-reapply).
+pub(crate) const OPTIONSETTING_MENU_ID: u16 = 0x25;
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK: u8 = 0x3;
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_NOT_INSTALLED: usize = 0;
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED_YES: usize = 1;

@@ -36,6 +36,21 @@ fn sq_repro_pause_at_menu() -> bool {
     false
 }
 
+/// TAB-RETURN repro mode (agent-owned blank-pane harness): gated by GAME_DIR file
+/// `er-effects-tab-return-repro.txt` or env `ER_EFFECTS_TAB_RETURN_REPRO=1`. When on, after the
+/// OptionSetting opens the autopilot drives RIGHT to the last tab then LEFT back to Game Options and
+/// dwells -- reproducing the blank the user reported (tab goes blank on return after the custom tab),
+/// with NO Save Game / no load (save-safe). Takes precedence over the Save Game row path.
+fn sq_repro_tab_return_mode() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_TAB_RETURN_REPRO").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-tab-return-repro.txt")
+        .exists()
+}
+
 /// SAVE-GAME ROW mode for the System->Quit repro autopilot. This validation path is always the
 /// Save Game row now; no env string selects the feature. The main `ER_EFFECTS_SYSTEM_QUIT_REPRO=1`
 /// gate still controls whether the repro harness runs at all.
@@ -164,6 +179,16 @@ pub(crate) unsafe fn system_quit_repro_tick() {
         SQ_REPRO_STATE_TO_SYSTEM => {
             let option_setting = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
             if option_setting != 0 {
+                if sq_repro_tab_return_mode() {
+                    append_autoload_debug(format_args!(
+                        "sq-repro: OptionSetting opened window=0x{option_setting:x} -> TAB_RETURN (RB to the last/Quit tab, then LB back to Game Options, then dwell -- blank-pane repro)"
+                    ));
+                    set_pad(0);
+                    SQ_REPRO_TAB_RETURN_PHASE.store(0, Ordering::SeqCst);
+                    SQ_REPRO_TAB_RETURN_MAX_TAB.store(0, Ordering::SeqCst);
+                    sq_repro_transition(SQ_REPRO_STATE_TAB_RETURN);
+                    return;
+                }
                 if sq_repro_save_game_only() {
                     append_autoload_debug(format_args!(
                         "sq-repro: OptionSetting opened window=0x{option_setting:x} -> TO_SAVE_GAME (LB, A to enter the Quit Game tab and activate the direct Save Game row)"
@@ -182,6 +207,62 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 sq_repro_waiting_once("TO_SYSTEM: UP+A issued, waiting for 02_040_OptionSetting");
             }
             set_pad(btn);
+        }
+        SQ_REPRO_STATE_TAB_RETURN => {
+            // Drive tabs off the OPTIONSETTING_CURRENT_TAB feedback. Phase 0: RB (right) until the tab
+            // stops increasing (last/Quit tab reached). Phase 1: LB (left) until tab 0 (Game Options).
+            // Phase 2: hold neutral and dwell so the pane-visibility oracle samples the (blank) tab 0,
+            // then DONE (releases the input block). One clean edge per INJECT_NAV_CYCLE.
+            let cur = OPTIONSETTING_CURRENT_TAB.load(Ordering::SeqCst);
+            let phase = SQ_REPRO_TAB_RETURN_PHASE.load(Ordering::SeqCst);
+            let pulse = |b: u16| {
+                if (tick % INJECT_NAV_CYCLE) < INJECT_NAV_TAP_LEN {
+                    b
+                } else {
+                    0
+                }
+            };
+            match phase {
+                0 => {
+                    let max = SQ_REPRO_TAB_RETURN_MAX_TAB.load(Ordering::SeqCst);
+                    if cur != usize::MAX && cur > max {
+                        SQ_REPRO_TAB_RETURN_MAX_TAB.store(cur, Ordering::SeqCst);
+                        SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst); // reset stall timer on progress
+                        set_pad(pulse(XINPUT_GAMEPAD_RIGHT_SHOULDER));
+                    } else if tick >= SQ_REPRO_TAB_RETURN_STALL_TICKS && max > 0 {
+                        append_autoload_debug(format_args!(
+                            "sq-repro: TAB_RETURN reached last tab={max} (stalled RIGHT) -> phase 1 (LB back to Game Options)"
+                        ));
+                        SQ_REPRO_TAB_RETURN_PHASE.store(1, Ordering::SeqCst);
+                        SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
+                        set_pad(0);
+                    } else {
+                        set_pad(pulse(XINPUT_GAMEPAD_RIGHT_SHOULDER));
+                    }
+                }
+                1 => {
+                    if cur == 0 {
+                        append_autoload_debug(format_args!(
+                            "sq-repro: TAB_RETURN back on Game Options (tab 0) -> phase 2 dwell {SQ_REPRO_TAB_RETURN_DWELL_TICKS} ticks (pane oracle samples the blank)"
+                        ));
+                        SQ_REPRO_TAB_RETURN_PHASE.store(2, Ordering::SeqCst);
+                        SQ_REPRO_TAB_RETURN_DWELL_START.store(tick, Ordering::SeqCst);
+                        set_pad(0);
+                    } else {
+                        set_pad(pulse(XINPUT_GAMEPAD_LEFT_SHOULDER));
+                    }
+                }
+                _ => {
+                    let start = SQ_REPRO_TAB_RETURN_DWELL_START.load(Ordering::SeqCst);
+                    set_pad(0);
+                    if tick.saturating_sub(start) >= SQ_REPRO_TAB_RETURN_DWELL_TICKS {
+                        append_autoload_debug(format_args!(
+                            "sq-repro: TAB_RETURN dwell complete on tab={cur}; SELF-DRIVE COMPLETE; releasing block (check oracle_optionsetting_real_blank_detected_count / _pane_fix_applied)"
+                        ));
+                        SQ_REPRO_STATE.store(SQ_REPRO_STATE_DONE, Ordering::SeqCst);
+                    }
+                }
+            }
         }
         SQ_REPRO_STATE_TO_PROFILE => {
             if sq_repro_save_game_only() {
