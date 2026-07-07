@@ -8,15 +8,16 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-# `experiments` is a directory module (src/experiments/{mod,save_redirect,trace,
+# `experiments` is a directory module (crates/er-effects-rs/src/experiments/{mod,save_redirect,trace,
 # startup_hooks,input_block,own_load,...}.rs). The autoload happy-path tokens and
 # function bodies may live in any submodule, so treat the whole module as one
 # concatenated source for these fail-closed string/fn-body checks.
-EXPERIMENTS_DIR = REPO_ROOT / "src" / "experiments"
-EXPERIMENTS = REPO_ROOT / "src" / "experiments.rs"  # legacy single-file fallback
-LIB = REPO_ROOT / "src" / "lib.rs"
-CONSTANTS = REPO_ROOT / "src" / "constants.rs"
-TELEMETRY = REPO_ROOT / "src" / "telemetry.rs"
+RUNTIME_SRC = REPO_ROOT / "crates" / "er-effects-rs" / "src"
+EXPERIMENTS_DIR = RUNTIME_SRC / "experiments"
+EXPERIMENTS = RUNTIME_SRC / "experiments.rs"  # legacy single-file fallback
+LIB = RUNTIME_SRC / "lib.rs"
+CONSTANTS = RUNTIME_SRC / "constants.rs"
+TELEMETRY = RUNTIME_SRC / "telemetry.rs"
 WATCHER = REPO_ROOT / "scripts" / "er-readiness-watch.py"
 STAGE_SCRIPT = REPO_ROOT / "scripts" / "stage-autoload-release.sh"
 NATIVE_STATIC_CHECK = REPO_ROOT / "scripts" / "check-native-continue-static.py"
@@ -187,12 +188,12 @@ def continue_candidate_is_diagnostic_only(experiments: str) -> bool:
 def main() -> int:
     failures: list[str] = []
     experiments = read_experiments()
-    lib = read_module_tree(LIB, REPO_ROOT / "src" / "lib_parts")
-    constants = read_module_tree(CONSTANTS, REPO_ROOT / "src" / "constants")
+    lib = read_module_tree(LIB, RUNTIME_SRC / "lib_parts")
+    constants = read_module_tree(CONSTANTS, RUNTIME_SRC / "constants")
     if constants:
         lib += "\n" + constants
     stage = read(STAGE_SCRIPT)
-    telemetry = read_module_tree(TELEMETRY, REPO_ROOT / "src" / "telemetry")
+    telemetry = read_module_tree(TELEMETRY, RUNTIME_SRC / "telemetry")
     watcher = read(WATCHER)
     runtime_probe = read(RUNTIME_PROBE) if RUNTIME_PROBE.exists() else ""
     direct_probe = read(DIRECT_PROBE) if DIRECT_PROBE.exists() else ""

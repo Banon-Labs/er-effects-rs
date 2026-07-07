@@ -3,7 +3,7 @@ package auto.env_gate_comment
 import rego.v1
 
 # Env-gated features must justify themselves. An "env-gated feature" is any read of
-# std::env::var("ER_EFFECTS_...") in src/**/*.rs. Reverse engineering breeds dozens of
+# std::env::var("ER_EFFECTS_...") in crates/er-effects-rs/src/**/*.rs. Reverse engineering breeds dozens of
 # such gates; an undocumented one is a landmine for the next agent (does enabling it
 # write a save? perturb the mount? is it a dead/disproven path?). Every NEW or
 # newly-moved gate must carry a justifying comment directly above its enclosing fn.

@@ -2,7 +2,7 @@
 """Require every env-gated feature in the Rust source to carry a justifying comment.
 
 An "env-gated feature" is any read of `std::env::var("ER_EFFECTS_...")` in
-`src/**/*.rs`. Reverse engineering breeds dozens of such gates; an undocumented
+`crates/er-effects-rs/src/**/*.rs`. Reverse engineering breeds dozens of such gates; an undocumented
 gate is a landmine for the next agent (does enabling it write a save? perturb the
 mount? is it a dead path?). This checker forces every NEW or NEWLY-MODIFIED gate
 to explain itself in a comment directly above its enclosing `fn`.
@@ -56,7 +56,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SRC_DIR = REPO_ROOT / "src"
+SRC_DIR = REPO_ROOT / "crates" / "er-effects-rs" / "src"
 AUTO_DIR = REPO_ROOT / ".auto"
 BASELINE_PATH = AUTO_DIR / "env_gate_comment_baseline.json"
 POLICY_PATH = AUTO_DIR / "env_gate_comment_policy.rego"

@@ -21,7 +21,7 @@ python3 scripts/check-no-timeouts.py
 python3 scripts/test-no-timeouts.py
 cupcake validate --log-level error
 python3 scripts/test-cupcake-policies.py
-cargo fmt -- --check
+cargo fmt --all -- --check
 cargo test -p er-soulsformats -p er-param-inspect
 
 if command -v cargo-xwin >/dev/null 2>&1; then
