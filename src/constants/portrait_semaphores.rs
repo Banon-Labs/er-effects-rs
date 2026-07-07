@@ -297,11 +297,13 @@ pub(crate) const PROFILE_OFFSCREEN_SIZE_TABLE_RVA: usize = 0x3b39848;
 pub(crate) const PROFILE_OFFSCREEN_SIZE_TABLE_STRIDE: usize = 0x20;
 /// The value `FUN_1400a7bb0` writes (base 128x128 = `(128<<32)|128`); self-validate before patching.
 pub(crate) const PROFILE_OFFSCREEN_SIZE_INIT: usize = 0x8000000080;
-/// Diagnostic target base 2056x2056 = `(2056<<32)|2056`, with the native per-slot supersample flag OFF.
-/// This forces the engine's env-dependent path (`FUN_140bbeee0`: `base*2` iff global flag &&
-/// `size_struct[+0x8]`) to stay x1, producing a 2056x2056 portrait RT before the full-backbuffer GPU
-/// composite scales it down/crops it.
-pub(crate) const PROFILE_OFFSCREEN_SIZE_TARGET: usize = 0x0000_0808_0000_0808;
+/// Target base 1542x1542 = `(1542<<32)|1542`, with the native per-slot supersample flag OFF (2026-07-06:
+/// 1028 -> 1542 = 150% per user, keeping the composite upscale but recovering quality vs the half-res
+/// 1028). `0x606` = 1542. This forces the engine's env-dependent path (`FUN_140bbeee0`: `base*2` iff
+/// global flag && `size_struct[+0x8]`) to stay x1, producing a 1542x1542 portrait RT that the
+/// full-backbuffer GPU composite then scales up. The stats font auto-tracks this (em_px = rt_dim*48/2056),
+/// so on-screen text size is unchanged.
+pub(crate) const PROFILE_OFFSCREEN_SIZE_TARGET: usize = 0x0000_0606_0000_0606;
 /// Byte offset within a size-table row of the per-slot supersample-enable flag (read as
 /// `size_struct[+0x8]` by `FUN_140bbeee0`); zero it to force x1.
 pub(crate) const PROFILE_OFFSCREEN_SIZE_SUPERSAMPLE_FLAG_OFFSET: usize = 0x8;

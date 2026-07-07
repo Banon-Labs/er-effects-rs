@@ -58,17 +58,30 @@ sys.exit(1)
 PY
 }
 
-# me3_write_profile PROFILE_PATH DLL_PATH
-# Writes a v1 ModProfile loading DLL_PATH as the sole native. DLL_PATH may be absolute
+# me3_write_profile PROFILE_PATH DLL_PATH [EXTRA_NATIVE_PATH]
+# Writes a v1 ModProfile loading DLL_PATH as a native. DLL_PATH may be absolute
 # (per-run artifact copies) or relative (resolved against the profile's directory --
-# used by the relocatable release payload).
+# used by the relocatable release payload). EXTRA_NATIVE_PATH (optional) is emitted as
+# an ADDITIONAL native BEFORE the DLL -- used by seamless-mode probes to load the
+# user's installed SeamlessCoop/ersc.dll IN PLACE by absolute path. The referenced
+# file is never copied, moved, or staged (Do-not-bundle-ersc rule): only this per-run
+# profile TOML mentions it.
 me3_write_profile() {
-  local profile_path="$1" dll_path="$2"
+  local profile_path="$1" dll_path="$2" extra_native="${3:-}"
   cat > "$profile_path" <<EOF
 profileVersion = "v1"
 
 [[supports]]
 game = "eldenring"
+EOF
+  if [[ -n "$extra_native" ]]; then
+    cat >> "$profile_path" <<EOF
+
+[[natives]]
+path = '$extra_native'
+EOF
+  fi
+  cat >> "$profile_path" <<EOF
 
 [[natives]]
 path = '$dll_path'

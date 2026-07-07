@@ -75,7 +75,17 @@ BUILT_DLL="${BUILT_DLL:-$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effe
 stage_me3_payload() {
   [[ -f "$BUILT_DLL" ]] || fatal "built DLL not found: $BUILT_DLL -- run 'cargo xwin build --release --target x86_64-pc-windows-msvc' first (refusing to run a stale DLL)"
   cp -f "$BUILT_DLL" "$ARTIFACT_DIR/er_effects_rs.dll"
-  me3_write_profile "$ME3_PROFILE" "$ARTIFACT_DIR/er_effects_rs.dll"
+  # SEAMLESS MODE: load the user's installed Seamless Co-op alongside our DLL, referenced IN PLACE by
+  # absolute path from the per-run profile (never copied/staged -- the Do-not-bundle rule). Fails
+  # closed when the install is missing so a "seamless" run can never silently be vanilla (the exact
+  # miss of run seamless-save-smoke-20260706-144801: Seamless-authored SAVE, vanilla RUNTIME).
+  local seamless_native=""
+  if [[ "$RUNTIME_EXPECTED_MODE" == "seamless" ]]; then
+    seamless_native="${SEAMLESS_ERSC_DLL:-$GAME_DIR/SeamlessCoop/ersc.dll}"
+    [[ -f "$seamless_native" ]] || fatal "RUNTIME_EXPECTED_MODE=seamless but Seamless Co-op is not installed at $seamless_native (set SEAMLESS_ERSC_DLL to the installed ersc.dll)"
+    echo "deploy: seamless mode -- profile references installed $seamless_native in place (not copied)"
+  fi
+  me3_write_profile "$ME3_PROFILE" "$ARTIFACT_DIR/er_effects_rs.dll" "$seamless_native"
   if [[ -n "${ER_EFFECTS_TOML_SOURCE:-}" ]]; then
     require_file "$ER_EFFECTS_TOML_SOURCE"
     cp -f "$ER_EFFECTS_TOML_SOURCE" "$ARTIFACT_DIR/er-effects.toml"
@@ -342,6 +352,14 @@ else
   STAGED_SAVE="$STAGED_SAVE_DIR/ER0000.sl2"
   mkdir -p "$STAGED_SAVE_DIR"
   cp -f "$GOLD_SAVE" "$STAGED_SAVE"
+  # SEAMLESS MODE: ersc redirects the game's save IO to ER0000.co2, so stage the same bytes under the
+  # co2 name too (identical BND4 container; only the extension differs). The .sl2 copy stays for the
+  # pre-redirect boot reads covered by the DllMain .sl2/.co2 fallback gate.
+  if [[ "$RUNTIME_EXPECTED_MODE" == "seamless" ]]; then
+    cp -f "$GOLD_SAVE" "$STAGED_SAVE_DIR/ER0000.co2"
+    chmod u+w "$STAGED_SAVE_DIR/ER0000.co2"
+    echo "save-source: seamless mode -- also staged $STAGED_SAVE_DIR/ER0000.co2"
+  fi
   # A real user's save is WRITABLE; our gold sources are deliberately read-only to protect them, and
   # `cp` inherits that bit. The title-flow "Updating save data" step writes the save (autosave/backup),
   # so a read-only staged copy makes it fail -> "Failed to save game. Save data is corrupted." popup
@@ -349,6 +367,17 @@ else
   # writable so that write lands on the copy (save-safe: the user's gold is never touched).
   chmod u+w "$STAGED_SAVE"
   export ER_EFFECTS_SAVE_FILE="$STAGED_SAVE"
+  # SEAMLESS MODE: ER_EFFECTS_SAVE_FILE must target the .co2 -- and this override must come AFTER the
+  # .sl2 export above or it gets clobbered (run seamless-co2unified-smoke-20260706-150810 armed on .sl2
+  # for exactly that ordering slip). The DLL arms its save-swap snapshot/commit and the own-load feed
+  # deserialize on this path, and under Seamless the game deserializes + autosaves + re-reads the
+  # ProfileSummary table from the .co2: a .sl2-armed run commits foreign bytes to a file the game's
+  # table re-read never sees, so mid-load stats/portrait show the PRIOR character even when the load
+  # itself lands (runs 150435/150810).
+  if [[ "$RUNTIME_EXPECTED_MODE" == "seamless" ]]; then
+    export ER_EFFECTS_SAVE_FILE="$STAGED_SAVE_DIR/ER0000.co2"
+    echo "save-source: seamless mode -- ER_EFFECTS_SAVE_FILE targets $ER_EFFECTS_SAVE_FILE"
+  fi
   # Steer the native Continue (most-recent) path to the gold character's slot: the DLL calls the
   # game's set_save_slot(GOLD_SLOT) before firing Continue so continue_load(-1) resolves to it. Unset
   # GOLD_SLOT (or -1) leaves the game's true most-recent selection.

@@ -180,6 +180,21 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     if !(nowload || profile_select_window_open || streak >= PROFILE_TABLE_EMPTY_STREAK_BUILD_THRESHOLD) {
         return;
     }
+    // ORPHAN RECLAIM BACKSTOP (second-load foreign-head fix; primary reclaim is at the switch confirm in
+    // system_quit_arm_quickload_autoload). If a prior window's spared renderer is still parked in
+    // PROFILE_SPARE_ORPHAN when a NEW loading window takes ownership, it is a live foreign producer: its
+    // model + offscreen scene are still registered and keep rendering the PREVIOUS character's head,
+    // which the new window's readback then publishes. Delete-enqueue it before constructing this
+    // window's renderers. Game thread (force_profile_render_tick task), same delay-delete path as the
+    // teardown-spare hook; swap(0) keeps the two reclaim sites mutually exclusive.
+    let orphan = PROFILE_SPARE_ORPHAN.swap(0, Ordering::SeqCst);
+    if orphan != 0 {
+        let deleted = unsafe { delay_delete_enqueue_renderer(orphan) };
+        ownership_release(OwnedClass::SparedRenderer);
+        append_autoload_debug(format_args!(
+            "loading-portrait: reclaimed prior spared renderer 0x{orphan:x} at loading-table build via CSDelayDeleteMan enqueued={deleted} (second-load foreign-head backstop)"
+        ));
+    }
     // Build it via the engine's own 10-slot builder (teardown is a no-op on a null table). Each fresh
     // CSMenuProfModelRend self-registers its ResMan model build/draw tasks, so it builds + OWNS its own
     // model with our lifetime -- not borrowed from the torn-down menu. Self-contained off process-lifetime
@@ -308,6 +323,26 @@ pub(crate) unsafe fn kick_target_profile_slot(
         set_req_754(renderer);
         if valid(model_live) {
             set_req_755(renderer);
+        }
+    }
+    // FACE-IDENTITY SEMAPHORE (user directive 2026-07-06): re-hash the record's inner FaceDataBuffer
+    // at kick time and compare against the fingerprint stored when the foreign-save preview wrote this
+    // slot. Drift means the portrait model is about to be built from a DIFFERENT character's face than
+    // the one the user picked -- the wrong-head class that previously only human eyes caught (Banon
+    // rendered under HopeAfterRainTTV's name across three QA runs). Telemetry-only per the default
+    // non-fatal research posture: counters + log line; probe watchers fail-fast on the oracle.
+    let expected_face = PROFILE_PREVIEW_FACE_HASH[slot as usize].load(Ordering::SeqCst);
+    if expected_face != 0 {
+        PORTRAIT_FACE_IDENTITY_CHECKS.fetch_add(1, Ordering::SeqCst);
+        let inner = record + PROFILE_SUMMARY_FACE_DATA_OFFSET + FACE_DATA_BUFFER_OFFSET;
+        let bytes =
+            unsafe { core::slice::from_raw_parts(inner as *const u8, FACE_DATA_BUFFER_TOTAL_SIZE) };
+        let got = er_gfx::title_05_000::fnv1a64(bytes) as usize;
+        if got != expected_face {
+            let n = PORTRAIT_FACE_IDENTITY_MISMATCHES.fetch_add(1, Ordering::SeqCst) + 1;
+            append_autoload_debug(format_args!(
+                "loading-portrait: FACE-IDENTITY MISMATCH #{n} at build kick slot={slot}: record face hash 0x{got:x} != preview 0x{expected_face:x} -- the portrait would render the WRONG character"
+            ));
         }
     }
     PORTRAIT_KICK_SLOT_KEY.store((slot + 1) as usize, Ordering::SeqCst);
@@ -525,6 +560,17 @@ const PROFILE_SUMMARY_FIELD_C4_OFFSET: usize = 0x293;
 const SAVE_SLOT_MAP_OFFSET: usize = 0x14;
 const SAVE_FACE_MAGIC: &[u8; 4] = b"FACE";
 const SAVE_FACE_DATA_BUFFER_SIZE: usize = 0x120;
+
+/// Per-slot FNV-1a64 (truncated to usize) of the FOREIGN character's inner `FaceDataBuffer` as written
+/// into the RAM ProfileSummary record by the save-swap preview -- the EXPECTED portrait identity for
+/// that slot. 0 = no foreign preview owns the slot. The build kick re-hashes the record at kick time
+/// and trips `PORTRAIT_FACE_IDENTITY_MISMATCHES` on drift, so a wrong-face portrait can never again
+/// pass a run silently (user directive 2026-07-06: the run must detect the wrong rendered character
+/// itself instead of relying on human review of RT dumps).
+pub(crate) static PROFILE_PREVIEW_FACE_HASH: [AtomicUsize; TITLE_PROFILE_SLOT_COUNT] =
+    [const { AtomicUsize::new(0) }; TITLE_PROFILE_SLOT_COUNT];
+pub(crate) static PORTRAIT_FACE_IDENTITY_CHECKS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_FACE_IDENTITY_MISMATCHES: AtomicUsize = AtomicUsize::new(0);
 const SAVE_PGD_SCAN_LEADING_FACE_COUNT: usize = 4;
 const SAVE_PGD_FACE_DELTA_WINDOW_LOW: usize = 0xa000;
 const SAVE_PGD_FACE_DELTA_WINDOW_HIGH: usize = 0xa600;
@@ -540,6 +586,11 @@ const SAVE_PGD_CHARACTER_NAME_OFFSET: usize = 0x94;
 const SAVE_PGD_CHARACTER_NAME_UNITS: usize = 0x10;
 const SAVE_PGD_CHARACTER_NAME_BYTES: usize = SAVE_PGD_CHARACTER_NAME_UNITS * 2;
 const SAVE_PGD_GENDER_OFFSET: usize = 0xb6;
+// The serialized PGD tracks the runtime struct at (runtime - 8) for these early scalars (level
+// 0x68->0x60, name 0x9c->0x94, gender 0xbe->0xb6): archetype/gift/c4 follow the same shift.
+const SAVE_PGD_ARCHETYPE_OFFSET: usize = 0xb7;
+const SAVE_PGD_STARTING_GIFT_OFFSET: usize = 0xbb;
+const SAVE_PGD_FIELD_C4_OFFSET: usize = 0xbc;
 const SAVE_PGD_MAX_CRIMSON_FLASK_OFFSET: usize = 0xf9;
 const SAVE_PGD_MAX_CERULEAN_FLASK_OFFSET: usize = 0xfa;
 const SAVE_SPEFFECT_COUNT: usize = 0x0d;
@@ -593,6 +644,9 @@ struct SystemQuitSaveSwapState {
     candidate_stats_utf16: Vec<Vec<u16>>,
     preview_applied: bool,
     committed: bool,
+    /// The candidate bytes were written a SECOND time, after the game's return-title save finished
+    /// (same-slot clobber fix; see `system_quit_save_swap_recommit_after_return_title_save`).
+    recommitted: bool,
     summary_ptr: usize,
     summary_snapshot: Vec<u8>,
 }
@@ -745,10 +799,21 @@ impl<'a> SerializedSaveSlot<'a> {
         Self::add_offset(offset, bytes)
     }
 
-    fn in_game_timer_ticks(self, player_game_data: SerializedPlayerGameData<'a>) -> Option<u32> {
-        let mut offset = player_game_data.offset;
+    /// Walk from the PGD start to the serialized ChrAsm sections. Section order (data-validated
+    /// offline against the gold save, 2026-07-06: param ids read as armor/weapon param ranges,
+    /// handles as 0x8xxxxxxx gaitem patterns):
+    /// `[gaitem slot indices 0x58][ChrAsmEquipment 0x1c][equipment param ids 0x58][gaitem handles 0x58]`.
+    fn walk_to_chr_asm_sections(self, pgd: SerializedPlayerGameData<'a>) -> Option<usize> {
+        let mut offset = pgd.offset;
         Self::add_offset(&mut offset, SAVE_PLAYER_GAME_DATA_MIN_SIZE)?;
         Self::add_offset(&mut offset, SAVE_SPEFFECT_COUNT * SAVE_SPEFFECT_SIZE)?;
+        Some(offset)
+    }
+
+    /// Continue past the ChrAsm + inventory/equip/gesture/projectile regions to the face section
+    /// (`SAVE_FACE_DATA_FULL_SIZE` bytes; the `FACE` FaceDataBuffer sits a few bytes in).
+    fn walk_to_face_section(self, pgd: SerializedPlayerGameData<'a>) -> Option<usize> {
+        let mut offset = self.walk_to_chr_asm_sections(pgd)?;
         Self::add_offset(&mut offset, SAVE_CHR_ASM_EQUIPMENT_SIZE)?;
         Self::add_offset(&mut offset, SAVE_ARM_STYLE_ACTIVE_WEAPON_SLOTS_SIZE)?;
         Self::add_offset(&mut offset, SAVE_CHR_ASM_EQUIPMENT_SIZE)?;
@@ -764,6 +829,54 @@ impl<'a> SerializedSaveSlot<'a> {
         )?;
         Self::add_offset(&mut offset, SAVE_EQUIPPED_ARMAMENTS_AND_ITEMS_SIZE)?;
         Self::add_offset(&mut offset, SAVE_PHYSIC_EQUIP_SIZE)?;
+        Some(offset)
+    }
+
+    /// The character's serialized `FaceDataBuffer` (starts at its `FACE` magic,
+    /// `FACE_DATA_BUFFER_TOTAL_SIZE` bytes) -- the exact source `FaceData::CopyFromBuffer` expects.
+    /// The face section has a small prefix before the magic (observed: 4 bytes of 0xff), so the magic
+    /// is scanned within the section rather than assumed at +0. `None` when the walk or magic fails
+    /// (caller keeps the fallback face and logs).
+    fn face_data_buffer_bytes(self, pgd: SerializedPlayerGameData<'a>) -> Option<&'a [u8]> {
+        let sect_off = self.walk_to_face_section(pgd)?;
+        let sect = self.body.get(sect_off..sect_off + SAVE_FACE_DATA_FULL_SIZE)?;
+        let rel = sect
+            .windows(SAVE_FACE_MAGIC.len())
+            .position(|w| w == SAVE_FACE_MAGIC)?;
+        self.body
+            .get(sect_off + rel..sect_off + rel + FACE_DATA_BUFFER_TOTAL_SIZE)
+    }
+
+    /// Assemble a RUNTIME `ChrAsm` image from the serialized sections, so the native ChrAsm copy
+    /// receives the layout it expects: runtime is `[hdr 8][ChrAsmEquipment][gaitem_handles]
+    /// [equipment_param_ids][tail]` while the save serializes `[slot indices][ChrAsmEquipment]
+    /// [param ids][handles]` -- a raw copy of the save bytes dresses the portrait from garbage.
+    fn runtime_chr_asm_image(
+        self,
+        pgd: SerializedPlayerGameData<'a>,
+    ) -> Option<[u8; CHR_ASM_SIZE]> {
+        let mut off = self.walk_to_chr_asm_sections(pgd)?;
+        off = off.checked_add(SAVE_CHR_ASM_EQUIPMENT_SIZE)?; // slot indices: no runtime home
+        let equipment = self
+            .body
+            .get(off..off + SAVE_ARM_STYLE_ACTIVE_WEAPON_SLOTS_SIZE)?;
+        off = off.checked_add(SAVE_ARM_STYLE_ACTIVE_WEAPON_SLOTS_SIZE)?;
+        let param_ids = self.body.get(off..off + SAVE_CHR_ASM_EQUIPMENT_SIZE)?;
+        off = off.checked_add(SAVE_CHR_ASM_EQUIPMENT_SIZE)?;
+        let handles = self.body.get(off..off + SAVE_CHR_ASM_EQUIPMENT_SIZE)?;
+        let mut image = [0u8; CHR_ASM_SIZE];
+        image[CHR_ASM_EQUIPMENT_OFFSET..CHR_ASM_EQUIPMENT_OFFSET + equipment.len()]
+            .copy_from_slice(equipment);
+        image[CHR_ASM_GAITEM_HANDLES_OFFSET..CHR_ASM_GAITEM_HANDLES_OFFSET + handles.len()]
+            .copy_from_slice(handles);
+        image[CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET
+            ..CHR_ASM_EQUIPMENT_PARAM_IDS_OFFSET + param_ids.len()]
+            .copy_from_slice(param_ids);
+        Some(image)
+    }
+
+    fn in_game_timer_ticks(self, player_game_data: SerializedPlayerGameData<'a>) -> Option<u32> {
+        let mut offset = self.walk_to_face_section(player_game_data)?;
         Self::add_offset(&mut offset, SAVE_FACE_DATA_FULL_SIZE)?;
         Self::add_offset(&mut offset, SAVE_INVENTORY_STORAGE_SIZE)?;
         Self::add_offset(&mut offset, SAVE_GESTURE_GAME_DATA_SIZE)?;
@@ -942,13 +1055,17 @@ impl<'a> SerializedPlayerGameData<'a> {
         Some(s.encode_utf16().chain(core::iter::once(0)).collect())
     }
 
+    #[allow(clippy::too_many_arguments)]
     unsafe fn write_profile_summary_record(
         &self,
+        base: usize,
         profile_summary: usize,
         slot: usize,
         saved_map: i32,
         playtime_ticks: u32,
         fallback_record: Option<&[u8]>,
+        face_bytes: Option<&[u8]>,
+        chr_asm_image: Option<&[u8; CHR_ASM_SIZE]>,
     ) -> bool {
         let Some(name_bytes) = self.name_bytes() else {
             return false;
@@ -977,6 +1094,53 @@ impl<'a> SerializedPlayerGameData<'a> {
             *(slot_data.wrapping_add(PROFILE_SUMMARY_RUNE_MEMORY_OFFSET) as *mut i32) =
                 self.read_i32(SAVE_PGD_RUNE_MEMORY_OFFSET).unwrap_or(0);
             *(slot_data.wrapping_add(PROFILE_SUMMARY_MAP_OFFSET) as *mut i32) = saved_map;
+            // VISUAL IDENTITY (second-load wrong-head ROOT fix, user-identified 2026-07-06: "Banon in
+            // all three windows"). The fallback record above is a STRUCTURAL template cloned from the
+            // ORIGINAL save's first active slot -- its FaceData (+0x38) and ChrAsm (+0x1a8) describe
+            // THAT character, so every foreign row's portrait rendered the original character while
+            // the overwritten name/level kept the stats text correct. Fill the real visual blocks from
+            // the FOREIGN character's save bytes through the game's own copy helpers: the section-walk
+            // locators handle the save's variable-length layout (fixed runtime offsets false-negatived
+            // on every slot, run portrait-faceid-switchqa-20260706-142552), and the saved FaceData
+            // wrapper header does not match the live one, so CopyFromBuffer -- never a raw memcpy.
+            if let (Some(face), Some(chr_asm_image)) = (face_bytes, chr_asm_image) {
+                let copy_face_data_from_buffer: unsafe extern "system" fn(usize, usize) =
+                    std::mem::transmute(base + FACE_DATA_COPY_FROM_BUFFER_RVA);
+                let copy_chr_asm: unsafe extern "system" fn(usize, usize) -> usize =
+                    std::mem::transmute(base + CHR_ASM_COPY_RVA);
+                copy_face_data_from_buffer(
+                    slot_data.wrapping_add(PROFILE_SUMMARY_FACE_DATA_OFFSET),
+                    face.as_ptr() as usize,
+                );
+                copy_chr_asm(
+                    slot_data.wrapping_add(PROFILE_SUMMARY_CHR_ASM_OFFSET),
+                    chr_asm_image.as_ptr() as usize,
+                );
+                for (record_off, save_pgd_off) in [
+                    (PROFILE_SUMMARY_GENDER_OFFSET, SAVE_PGD_GENDER_OFFSET),
+                    (PROFILE_SUMMARY_ARCHETYPE_OFFSET, SAVE_PGD_ARCHETYPE_OFFSET),
+                    (
+                        PROFILE_SUMMARY_STARTING_GIFT_OFFSET,
+                        SAVE_PGD_STARTING_GIFT_OFFSET,
+                    ),
+                    (PROFILE_SUMMARY_FIELD_C4_OFFSET, SAVE_PGD_FIELD_C4_OFFSET),
+                ] {
+                    if let Some(v) = self.read_u8(save_pgd_off) {
+                        *(slot_data.wrapping_add(record_off) as *mut u8) = v;
+                    }
+                }
+                PROFILE_PREVIEW_FACE_HASH[slot].store(
+                    er_gfx::title_05_000::fnv1a64(face) as usize,
+                    Ordering::SeqCst,
+                );
+            } else {
+                PROFILE_PREVIEW_FACE_HASH[slot].store(0, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "system-quit-load-save-profiles: slot {slot} FOREIGN visual data unavailable (face_located={} chr_asm_located={}); record keeps the fallback character's face/equipment",
+                    face_bytes.is_some(),
+                    chr_asm_image.is_some()
+                ));
+            }
             *(profile_summary.wrapping_add(PROFILE_SUMMARY_ACTIVE_FLAGS_OFFSET + slot)
                 as *mut u8) = 1;
         }

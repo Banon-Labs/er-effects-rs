@@ -412,13 +412,36 @@ pub(crate) unsafe fn composite_portrait_on_swapchain(base: usize, swapchain_raw:
 /// it stayed pinned to the first character's now-stale renderer, and driving that leaked renderer risks a
 /// use-after-free). Called from the overlay stop at load completion; idempotent.
 pub(crate) fn loading_portrait_window_reset(reason: &str) {
-    // Make-before-break bridge (user 2026-07-03): KEEP the last published keyed frame + its
-    // display-available flag so the just-loaded character stays on screen as the bridge when the NEXT
-    // load window opens -- it is replaced the instant that window's newly-selected character produces
-    // its own keyed frame (the drive re-engages because the freeze latch below is cleared). Previously
-    // this nulled the snapshot to avoid flashing the previous character; that flash IS now the desired
-    // behavior (old head held until the new masked head is ready), bounded by the keyed-publish gate.
-    // Only the per-window drive-freeze latch is cleared here so the next window re-renders.
+    // WORKER-OFFLOAD SWITCH SAFETY (2026-07-06). Bump the pipeline generation FIRST: any portrait consume
+    // job still in flight on the worker thread snapshotted the PREVIOUS gen, so when it re-reads this before
+    // it pins/publishes it will see the bump and DISCARD -- a head captured for the old window can never be
+    // pinned/published into the new one.
+    PORTRAIT_PIPELINE_GEN.fetch_add(1, Ordering::SeqCst);
+    // Then bounded-drain the in-flight consume jobs (up to ~15ms, yielding) so late telemetry lands in the
+    // right window and no worker is mid-publish while we clear the state below. This reset already runs off
+    // the render thread (see the note further down), so a short spin here is safe.
+    {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(15);
+        while PORTRAIT_JOB_INFLIGHT.load(Ordering::SeqCst) != 0
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::yield_now();
+        }
+    }
+    // CLEAR-ON-COMPLETE (user 2026-07-06, REVERSING the 2026-07-03 make-before-break KEEP): drop the
+    // published head snapshot the moment the load completes (character in-world, native bar terminal).
+    // The kept bridge was the stale-content reservoir behind the second-load wrong-head bug: the next
+    // window's forge baked the PREVIOUS character's held frame into the now-loading background at decode
+    // time (the bake is decode-once; maybe_update_gfx_loading_portrait is a no-op), so the old head
+    // stayed on screen for the whole next load even while the readback/publish pipeline was proven
+    // (pixel-diff vs same-character baseline, runs 2026-07-06) to produce the NEW character. With the
+    // snapshot cleared here there is nothing stale to bake or bridge: the next window starts head-less
+    // and shows the new character's first keyed frame. Costs a brief head-less loading screen
+    // (~0.5s after the window's table build in both measured runs) -- preferred over a wrong head.
+    if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
+        *g = None;
+    }
+    PROFILE_HAVE_KEYED_FRAME.store(0, Ordering::SeqCst);
     PROFILE_BAKE_RGBA_CAPTURED.store(0, Ordering::SeqCst);
     PROFILE_LOADSCREEN_TABLE_OWNED.store(0, Ordering::SeqCst);
     // Candidate A (er-effects-rs-jsm): drop the demote credit + stash the cached CSTextureImage ref for
@@ -552,8 +575,44 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
         &PROFILE_PUBLISH_SKIPPED_BADIOU,
         &PROFILE_PUBLISH_SKIPPED_BADIOU_WINDOW_MARK,
     );
+    // HARNESS-FAILURE semaphore (user directive 2026-07-06): a window that DROVE the model (produced
+    // readback frames) yet published ZERO clean portraits is a broken feature for that character, not an
+    // acceptable silent skip. The FAST-FAIL in the draw tick trips this mid-window (grace=0) so it fires
+    // the frame the render misses, not here at window close. This is the BACKSTOP: it records the
+    // precise per-window dominant cause for the log, and only increments the failure counter if the
+    // fast-fail latch did not already count this window (defensive; ~never with grace=0). Guarded on
+    // `drive > 0` -- a window that never got a model (build-side gap) is not a publish-gate fault.
+    if published == 0 && drive > 0 {
+        let cause = if torn >= unkeyed && torn >= badiou && torn >= lowmask && torn > 0 {
+            1 // torn: usable frames the tear metric rejected
+        } else if unkeyed >= badiou && unkeyed >= lowmask && unkeyed > 0 {
+            2 // unkeyed: depth mask never cut background (opaque/black RT)
+        } else if badiou >= lowmask && badiou > 0 {
+            3
+        } else if lowmask > 0 {
+            4
+        } else {
+            0
+        };
+        PORTRAIT_WINDOW_PUBLISH_FAIL_CAUSE.store(cause, Ordering::SeqCst);
+        let already = PORTRAIT_WINDOW_PUBLISH_FAIL_LATCHED.load(Ordering::SeqCst) != 0;
+        let n = if already {
+            PORTRAIT_WINDOW_PUBLISH_FAILURES.load(Ordering::SeqCst)
+        } else {
+            PORTRAIT_WINDOW_PUBLISH_FAILURES.fetch_add(1, Ordering::SeqCst) + 1
+        };
+        append_autoload_debug(format_args!(
+            "present-overlay: PORTRAIT PUBLISH FAILURE #{n}{} -- window drove {drive} frames but published 0 (dominant cause={} torn={torn} unkeyed={unkeyed} badiou={badiou} lowmask={lowmask}); HARNESS MUST FAIL until the root render is fixed",
+            if already { " (already fast-failed)" } else { "" },
+            match cause { 1 => "torn", 2 => "unkeyed", 3 => "badiou", 4 => "lowmask", _ => "unknown" }
+        ));
+    }
+    // Re-arm the per-window fast-fail state for the next window.
+    PROFILE_PUBLISH_CLEAN_WINDOW.store(0, Ordering::SeqCst);
+    PORTRAIT_WINDOW_PUBLISH_FAIL_LATCHED.store(0, Ordering::SeqCst);
+    PORTRAIT_LAST_SKIP_CLASS.store(0, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "present-overlay: loading-portrait window reset ({reason}) -- animated {drive} / displayed {display} frames (drive<<display == froze early); publish[clean={published} torn={torn} unkeyed={unkeyed} lowmask={lowmask} badiou={badiou} checker={checker} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips} unpaired={unpaired} first_keyed={first_keyed_s}] share[pass_min={share_min_s} held_max={held_max}] src[color bundle={cb}/scan={cs} depth chain={dc}/bfs={db}] (clean=0 == frozen on prior character; the dominant skip class is the cause); pins/spare cleared for the next load"
+        "present-overlay: loading-portrait window reset ({reason}) -- animated {drive} / displayed {display} frames (drive<<display == froze early); publish[clean={published} torn={torn} unkeyed={unkeyed} lowmask={lowmask} badiou={badiou} checker={checker} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips} unpaired={unpaired} first_keyed={first_keyed_s}] share[pass_min={share_min_s} held_max={held_max}] src[color bundle={cb}/scan={cs} depth chain={dc}/bfs={db}] (clean=0 with drive>0 == PUBLISH FAILURE, see the failure line above; the dominant skip class is the cause); pins/spare cleared for the next load"
     ));
 }
 
@@ -878,6 +937,19 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
         return false;
     }
 
+    // OVERLAY-LANDING PIXEL SEMAPHORE (user QA 2026-07-06: window 2 published the NEW character's
+    // frames with 352 fresh uploads and zero GPU failures, yet the user saw the OLD character -- no
+    // oracle ever proved OUR draw reaches the visible frame). Probe the backbuffer AFTER our composite
+    // (throttled): the head-match here includes the overlay's own draw, so a high match proves the
+    // overlay head lands on the presented frame; a low match alongside fresh uploads proves it does
+    // not. Mutually exclusive with the candidate-A pre-draw probe (GFX_PORTRAIT_BAKED > 0), which owns
+    // the demote decision and must not see post-draw frames.
+    if GFX_PORTRAIT_BAKED.load(Ordering::SeqCst) == 0 {
+        let tick = OVERLAY_HEAD_PROBE_TICK.fetch_add(1, Ordering::SeqCst);
+        if tick % 30 == 0 {
+            unsafe { probe_head_on_screen(&backbuffer, bb_desc.Format) };
+        }
+    }
     // Playback-rate semaphores: draw timing proves how often the overlay reached the swapchain; reupload
     // timing proves how often a distinct source portrait frame reached that overlay; stale-run proves visible
     // held frames when the same portrait source is reused across consecutive presents.

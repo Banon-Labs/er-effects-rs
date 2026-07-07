@@ -477,6 +477,31 @@ pub(crate) static PROFILE_SRV_DUMPED: AtomicUsize = AtomicUsize::new(0);
 /// Count of forced D3D12 RT->SRV CopyResource calls (so the sampleable SRV the forge binds gets the
 /// rendered head every frame instead of the engine's rarely-fired resolve). >0 = the copy path runs.
 pub(crate) static PROFILE_RT_SRV_COPIES: AtomicUsize = AtomicUsize::new(0);
+/// Per-window successful RT->SRV copies (reset each window). The FAST-FAIL anchors on this, not on
+/// driven frames: the copy runs synchronously in the drive tick, so a healthy window's copy succeeds
+/// the same frame it drives (copies_window > 0 immediately), while a never-renders window (the copy
+/// resolve fails / RT stays black -- Da BEAST) keeps copies_window == 0 forever. Anchoring here makes
+/// the fast-fail frame-exact WITHOUT a grace fudge and without false-tripping the boot window (which
+/// publishes one GPU-pipeline frame after its copy succeeds).
+pub(crate) static PROFILE_RT_SRV_COPIES_WINDOW: AtomicUsize = AtomicUsize::new(0);
+/// READBACK STALL SPLIT (diagnostic, 2026-07-06): microsecond accumulators for the three per-frame
+/// render-thread costs of the coherent portrait readback, so we can see how much of the load-time stall
+/// an ASYNC ring buffer could remove (it hides only the GPU-WAIT) vs what stays on the render thread
+/// (the CPU de-swizzle + the mask/key pass). `_COUNT` counts coherent readbacks; avg_us = sum/count.
+///   WAIT      = ExecuteCommandLists + Signal + WaitForSingleObject (removable by async).
+///   DESWIZZLE = Map + color un-swizzle + depth f32-reinterpret (stays on the render thread).
+///   MASK      = apply_depth_alpha_key histogram/IoU in the caller (stays on the render thread).
+pub(crate) static PORTRAIT_RB_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_RB_WAIT_US_SUM: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_RB_DESWIZZLE_US_SUM: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_RB_MASK_US_SUM: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PORTRAIT_RB_MASK_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// PORTRAIT PIPELINE GENERATION (worker-offload switch-safety primitive, 2026-07-06). Bumped at the top
+/// of `loading_portrait_window_reset` so any portrait consume job still in flight on the worker thread can
+/// detect that a window reset happened WHILE it was being processed: the consume re-reads this before it
+/// pins/publishes and DISCARDS if the value moved, so a stale head captured for the previous window can
+/// never be pinned/published into the next one. The render thread snapshots it into each job's `gen`.
+pub(crate) static PORTRAIT_PIPELINE_GEN: AtomicUsize = AtomicUsize::new(0);
 /// One-shot guard for the RT/SRV resource-identity diagnostic log.
 pub(crate) static PROFILE_RT_SRV_COPY_DIAGGED: AtomicUsize = AtomicUsize::new(0);
 /// One-shot guard for dumping the excluding-SRV content texture (slot 102) for visual inspection.
@@ -518,6 +543,34 @@ pub(crate) static PROFILE_TEAR_SCORE_MAX: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_TEAR_SCORE_CLEAN_MIN: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub(crate) static PROFILE_PUBLISH_SKIPPED_TORN: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static PROFILE_PUBLISH_CLEAN: AtomicUsize = AtomicUsize::new(0);
+/// HARNESS-FAILURE semaphore (user directive 2026-07-06): the publish gates (torn/unkeyed/badiou/
+/// lowmask) must NOT silently degrade the product by skip-and-continue -- when a real loading window
+/// renders frames but publishes ZERO clean portraits, the feature is broken for that character and the
+/// research harness must FAIL and tear down so the root render is fixed, rather than papering over it
+/// with a blank/held frame. Bumped once per such window at reset; a per-cause breakdown stays in the
+/// window-reset log + the cumulative torn/unkeyed oracles. The readiness watcher fails the run when
+/// this is non-zero. Drive it to 0 (portrait renders for every character) to "get the feature right".
+pub(crate) static PORTRAIT_WINDOW_PUBLISH_FAILURES: AtomicUsize = AtomicUsize::new(0);
+/// The dominant skip-cause of the most recent publish-failure window (for the oracle/log): 1=torn,
+/// 2=unkeyed, 3=badiou, 4=lowmask, 0=none/other. Lets the harness report WHY without parsing the log.
+pub(crate) static PORTRAIT_WINDOW_PUBLISH_FAIL_CAUSE: AtomicUsize = AtomicUsize::new(0);
+/// Clean portraits published in the CURRENT window (reset each window). Read by the FAST-FAIL check so
+/// the failure trips mid-window instead of at window close (user 2026-07-06: a broken window must fail
+/// immediately, not after driving the whole ~24s load).
+pub(crate) static PROFILE_PUBLISH_CLEAN_WINDOW: AtomicUsize = AtomicUsize::new(0);
+/// Per-window one-shot latch so the fast-fail trips PORTRAIT_WINDOW_PUBLISH_FAILURES exactly once.
+pub(crate) static PORTRAIT_WINDOW_PUBLISH_FAIL_LATCHED: AtomicUsize = AtomicUsize::new(0);
+/// The skip class of the MOST RECENT rejected frame (1=torn 2=unkeyed 3=badiou 4=lowmask, 0=none).
+/// Set in the publish block; read by the fast-fail so the immediate failure log names this exact
+/// frame's cause (the fast-fail runs the same tick, right after the publish attempt).
+pub(crate) static PORTRAIT_LAST_SKIP_CLASS: AtomicUsize = AtomicUsize::new(0);
+/// FAST-FAIL threshold: driven frames of a LIVE model with ZERO rendered frames before the window is
+/// declared broken. ZERO (user directive 2026-07-06): no margin. The semaphore is a BUG-FINDER, not a
+/// display-quality tolerance -- it exposed that our feature cannot render a VALID save (Da BEAST). Do
+/// not loosen it to stop it firing; fix the render so every valid save produces frames. If a save trips
+/// it, that save has a real, previously-hidden bug (the stale-bridge used to mask it with the prior
+/// character). Drive the failures to 0 by FIXING the render, never by widening this.
+pub(crate) const PORTRAIT_PUBLISH_FAIL_GRACE_DRIVES: usize = 0;
 // (Removed the testing tear fail-fast: run autostep10m confirmed the detector separates cleanly
 // -- clean frames score 1-7, the torn frame scored 80 -- and torn frames are rare, so the skip gate
 // above is the product fix. Regressions surface via oracle_portrait_publish_skipped_torn.)

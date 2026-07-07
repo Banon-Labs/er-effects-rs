@@ -657,14 +657,12 @@ unsafe fn seed_profile_summary_slot_from_staged_save(
     /// `FaceDataBuffer` (`FACE` magic) starts at slot+0x40. 2026-06-27 native row dumps showed
     /// the staged SL2 inner `FaceDataBuffer` bytes match the native row exactly, but the saved
     /// `FaceData` wrapper header does not. Mirror `FUN_14025f9b0`: call
-    /// `FaceData::CopyFromBuffer` instead of memcpy'ing the saved wrapper over the live slot.
+    /// `FaceData::CopyFromBuffer` (FACE_DATA_COPY_FROM_BUFFER_RVA, shared constant) instead of
+    /// memcpy'ing the saved wrapper over the live slot.
     const PROFILE_SUMMARY_FACE_DATA_OFFSET: usize = 0x38;
-    const FACE_DATA_COPY_FROM_BUFFER_RVA: usize = 0x00252f70;
-    /// Native row builder passes slot+0x1a8 to the equipment renderer. Mirror `FUN_14025f9b0`
-    /// by copying the saved `PlayerGameData.equipment.chr_asm` through the same native helper instead
-    /// of leaving a zero/default `ChrAsm` that only proves renderer plumbing.
+    /// Native row builder passes slot+0x1a8 to the equipment renderer (CHR_ASM_COPY_RVA, shared
+    /// constant) instead of leaving a zero/default `ChrAsm` that only proves renderer plumbing.
     const PROFILE_SUMMARY_CHR_ASM_OFFSET: usize = 0x1a8;
-    const CHR_ASM_COPY_RVA: usize = 0x00245c00;
     const PROFILE_SUMMARY_GENDER_OFFSET: usize = 0x290;
     const PROFILE_SUMMARY_ARCHETYPE_OFFSET: usize = 0x291;
     const PROFILE_SUMMARY_STARTING_GIFT_OFFSET: usize = 0x292;
