@@ -23,7 +23,7 @@ python3 "$repo_root/scripts/test-cupcake-policies.py"
 python3 "$repo_root/scripts/check-no-lossy-utf8.py"
 python3 "$repo_root/scripts/check-rust-file-sizes.py"
 python3 "$repo_root/scripts/check-markdown-code-blocks.py" "$repo_root/README.md"
-cargo fmt --manifest-path "$repo_root/Cargo.toml" -- --check
+cargo fmt --all --manifest-path "$repo_root/Cargo.toml" -- --check
 shellcheck "$repo_root/scripts/stage-autoload-release.sh"
 shellcheck "$repo_root/scripts/run-product-continue-direct-probe.sh"
 shellcheck "$repo_root/scripts/run-me3-product-smoke.sh"

@@ -11,7 +11,7 @@ fn main() {
         _ => panic!("Architecture '{arch}' not supported by bundled MinHook"),
     };
 
-    let mh_src_dir = Path::new(&root_dir).join("vendor/minhook/src");
+    let mh_src_dir = Path::new(&root_dir).join("../../vendor/minhook/src");
 
     cc::Build::new()
         .file(mh_src_dir.join("buffer.c"))
@@ -20,5 +20,5 @@ fn main() {
         .file(mh_src_dir.join(hde))
         .compile("minhook");
 
-    println!("cargo:rerun-if-changed=vendor/minhook/src");
+    println!("cargo:rerun-if-changed=../../vendor/minhook/src");
 }

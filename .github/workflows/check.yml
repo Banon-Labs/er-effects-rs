@@ -102,7 +102,7 @@ jobs:
           python3 scripts/test-cupcake-policies.py
 
       - name: rustfmt
-        run: cargo fmt -- --check
+        run: cargo fmt --all -- --check
 
       - name: Test host-buildable crates
         run: cargo test -p er-soulsformats -p er-param-inspect

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Carve a contiguous line range out of src/experiments/mod.rs into a sibling
+"""Carve a contiguous line range out of crates/er-effects-rs/src/experiments/mod.rs into a sibling
 submodule, preserving behavior (pure code motion).
 
     extract-experiments-module.py <module> <start_line> <end_line>
 
 Line numbers are 1-based inclusive, referring to the CURRENT mod.rs. The moved
-range is written to src/experiments/<module>.rs with a copy of mod.rs's import
+range is written to crates/er-effects-rs/src/experiments/<module>.rs with a copy of mod.rs's import
 preamble plus `use super::*;` (so it sees every pub(crate) sibling item), and a
 `mod <module>; pub(crate) use <module>::*;` declaration is inserted into mod.rs
 right after the preamble. Run one module per invocation, then rebuild.
@@ -22,7 +22,8 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-MOD = REPO_ROOT / "src" / "experiments" / "mod.rs"
+RUNTIME_SRC = REPO_ROOT / "crates" / "er-effects-rs" / "src"
+MOD = RUNTIME_SRC / "experiments" / "mod.rs"
 
 
 def detect_preamble_end(lines: list[str]) -> int:
@@ -74,7 +75,7 @@ def main() -> int:
     preamble = "".join(preamble_lines)
     moved = "".join(lines[start - 1:end])
 
-    out = REPO_ROOT / "src" / "experiments" / f"{module}.rs"
+    out = RUNTIME_SRC / "experiments" / f"{module}.rs"
     if out.exists():
         raise SystemExit(f"{out} already exists")
     out.write_text(preamble + "\nuse super::*;\n\n" + moved, encoding="utf-8")

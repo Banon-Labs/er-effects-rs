@@ -217,7 +217,7 @@ Fast checks:
 
 <!-- md-test: bash-n -->
 ```bash
-cargo fmt --check
+cargo fmt --all -- --check
 cargo xwin check --target x86_64-pc-windows-msvc
 ```
 
@@ -330,15 +330,15 @@ Current table:
 
 High-level runtime pieces:
 
-- `src/lib.rs` / `src/lib_parts/` -- DLL entry, bootstrapping, hooks, and runtime
+- `crates/er-effects-rs/src/lib.rs` / `crates/er-effects-rs/src/lib_parts/` -- DLL entry, bootstrapping, hooks, and runtime
   task registration.
-- `src/experiments/gpu_readback/boot_progress.rs` -- D3D12 boot progress view
+- `crates/er-effects-rs/src/experiments/gpu_readback/boot_progress.rs` -- D3D12 boot progress view
   and optional cached screenshot background.
-- `src/experiments/present_overlay.rs` -- swapchain Present hook and backbuffer
+- `crates/er-effects-rs/src/experiments/present_overlay.rs` -- swapchain Present hook and backbuffer
   overlay path.
-- `src/experiments/save_redirect/` -- save path/source redirection and active
+- `crates/er-effects-rs/src/experiments/save_redirect/` -- save path/source redirection and active
   SteamID/default-save support.
-- `src/experiments/own_stepper/` and `src/experiments/own_load/` -- native
+- `crates/er-effects-rs/src/experiments/own_stepper/` and `crates/er-effects-rs/src/experiments/own_load/` -- native
   quick-load/own-load research and product mechanisms.
 - `crates/erpx-rs` -- debug portrait dump container and host PNG decoder.
 - `crates/er-gfx`, `crates/er-tpf`, `crates/er-save-loader` -- host/DLL support

@@ -70,17 +70,17 @@ from pathlib import Path
 
 MAX_SCORE = 1600
 root = Path.cwd()
-lib = (root / 'src/lib.rs').read_text(encoding='utf-8', errors='replace')
-constants_src = (root / 'src/constants.rs').read_text(encoding='utf-8', errors='replace')
-_exp_dir = root / 'src/experiments'
+lib = (root / 'crates/er-effects-rs/src/lib.rs').read_text(encoding='utf-8', errors='replace')
+constants_src = (root / 'crates/er-effects-rs/src/constants.rs').read_text(encoding='utf-8', errors='replace')
+_exp_dir = root / 'crates/er-effects-rs/src/experiments'
 if _exp_dir.is_dir():
     _exp_files = sorted(_exp_dir.glob('*.rs'), key=lambda p: (p.name != 'mod.rs', p.name))
     exp = '\n'.join(p.read_text(encoding='utf-8', errors='replace') for p in _exp_files)
 else:
-    exp = (root / 'src/experiments.rs').read_text(encoding='utf-8', errors='replace')
+    exp = (root / 'crates/er-effects-rs/src/experiments.rs').read_text(encoding='utf-8', errors='replace')
 check = (root / 'scripts/check-autoload-happy-path.py').read_text(encoding='utf-8', errors='replace')
-telemetry_src = (root / 'src/telemetry.rs').read_text(encoding='utf-8', errors='replace')
-overlay_code = (root / 'src/overlay.rs').read_text(encoding='utf-8', errors='replace') if (root / 'src/overlay.rs').exists() else ''
+telemetry_src = (root / 'crates/er-effects-rs/src/telemetry.rs').read_text(encoding='utf-8', errors='replace')
+overlay_code = (root / 'crates/er-effects-rs/src/overlay.rs').read_text(encoding='utf-8', errors='replace') if (root / 'crates/er-effects-rs/src/overlay.rs').exists() else ''
 watcher = (root / 'scripts/er-readiness-watch.py').read_text(encoding='utf-8', errors='replace')
 native_static_check = (root / 'scripts/check-native-continue-static.py').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/check-native-continue-static.py').exists() else ''
 menu_ctor_static_check = (root / 'scripts/check-menu-constructor-static.py').read_text(encoding='utf-8', errors='replace') if (root / 'scripts/check-menu-constructor-static.py').exists() else ''

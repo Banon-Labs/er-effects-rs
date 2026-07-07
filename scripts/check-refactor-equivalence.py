@@ -166,8 +166,16 @@ def changed_rust_files() -> list[str]:
     return [path for path in files if path.endswith(".rs") and (REPO_ROOT / path).exists()]
 
 
+def base_ref_path(path: str) -> str:
+    """Map the relocated runtime crate back to its historical root-src path."""
+    prefix = "crates/er-effects-rs/src/"
+    if path.startswith(prefix):
+        return "src/" + path[len(prefix) :]
+    return path
+
+
 def changed_removed_const_names(path: str) -> set[str]:
-    diff = run_git(["diff", "--unified=0", f"{BASE_REF}...HEAD", "--", path])
+    diff = run_git(["diff", "--unified=0", f"{BASE_REF}...HEAD", "--", base_ref_path(path), path])
     return {match.group(1) for match in REMOVED_CONST_RE.finditer(diff)}
 
 
@@ -399,8 +407,8 @@ def read_repo_text(path: str) -> str:
 
 
 def deleted_const_is_proven(path: str, name: str, old_const: ConstantDef, new_source: str) -> bool:
-    lib = read_repo_text("src/lib.rs")
-    telemetry = read_repo_text("src/telemetry.rs")
+    lib = read_repo_text("crates/er-effects-rs/src/lib.rs")
+    telemetry = read_repo_text("crates/er-effects-rs/src/telemetry.rs")
     combined = new_source + "\n" + lib + "\n" + telemetry
     if name in combined:
         return False
@@ -422,7 +430,7 @@ def deleted_const_is_proven(path: str, name: str, old_const: ConstantDef, new_so
             "pub(crate) fn runtime_heap_allocator_ptr_or_null()" in lib
             and "DLAllocator::runtime_heap_allocator()" in lib
         )
-    if path == "src/telemetry.rs" and name == "NOW_LOADING_UNKNOWN":
+    if path in {"src/telemetry.rs", "crates/er-effects-rs/src/telemetry.rs"} and name == "NOW_LOADING_UNKNOWN":
         sentinel = re.search(r"const\s+READ_FAIL_SENTINEL:\s+i32\s*=\s*(-?\d+)\s*;", telemetry)
         return sentinel is not None and int(sentinel.group(1)) == old_const.value
     return False
@@ -433,7 +441,7 @@ def compare_file(
     old_global_symbols: dict[str, int],
     new_global_symbols: dict[str, int],
 ) -> dict[str, object]:
-    old_source = git_show(BASE_REF, path)
+    old_source = git_show(BASE_REF, base_ref_path(path))
     new_source = (REPO_ROOT / path).read_text(encoding="utf-8", errors="replace")
     old_consts = constant_defs(old_source, old_global_symbols)
     new_consts = constant_defs(new_source, new_global_symbols)
@@ -486,7 +494,7 @@ def compare_file(
 
 def build_report() -> dict[str, object]:
     files = changed_rust_files()
-    old_sources = [git_show(BASE_REF, path) for path in files]
+    old_sources = [git_show(BASE_REF, base_ref_path(path)) for path in files]
     new_sources = [(REPO_ROOT / path).read_text(encoding="utf-8", errors="replace") for path in files]
     old_global_symbols = collect_global_symbols(old_sources)
     new_global_symbols = collect_global_symbols(new_sources)

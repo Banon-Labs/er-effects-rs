@@ -252,7 +252,7 @@ reference we adopt from, never as a place we contribute back to.
 This repo must be a sibling of a `fromsoftware-rs` checkout (the root crate uses `../fromsoftware-rs` path dependencies).
 
 ```bash
-# Full quality gate: lossy-UTF8 lint, cargo fmt --check,
+# Full quality gate: lossy-UTF8 lint, cargo fmt --all -- --check,
 # and a windows-target cargo check (cross-compiled from Linux via cargo-xwin).
 bash scripts/check.sh
 
@@ -267,7 +267,7 @@ cargo xwin build --release --target x86_64-pc-windows-msvc
 
 ## Architecture Overview
 
-- `src/lib.rs` -- the injectable DLL. On `DLL_PROCESS_ATTACH` it spawns a recurring game task (via `CSTaskImp`) that watches the local player's TimeAct animation queue and applies the selected SpEffects, runtime probes, and native title/load instrumentation.
+- `crates/er-effects-rs/src/lib.rs` -- the injectable DLL. On `DLL_PROCESS_ATTACH` it spawns a recurring game task (via `CSTaskImp`) that watches the local player's TimeAct animation queue and applies the selected SpEffects, runtime probes, and native title/load instrumentation.
 - `data/effects.json` -- the named SpEffect call list, embedded into the DLL at compile time and validated offline against `SpEffectParam`.
 - `crates/soulsformats` (`er-soulsformats`) -- host-side library that drives a generated .NET "bridge" project against Smithbox's `Andre.Formats`/SoulsFormats to read `regulation.bin` params. Also contains the parser for FastSpEffectRecon Ghidra output (`recon` module).
 - `tools/er-param-inspect` -- CLI over `er-soulsformats`: inspect param rows and validate `data/effects.json` against a regulation file.
