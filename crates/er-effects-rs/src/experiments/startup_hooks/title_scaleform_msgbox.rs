@@ -64,6 +64,13 @@ static TITLE_05_000_RUNTIME_STRIPPED: OnceLock<Vec<u8>> = OnceLock::new();
 /// file-open from the native MemoryFile's vanilla payload, then reused for every later open.
 /// Process-lifetime for the same data-pointer-validity reason as the 05_000 buffer above.
 static PROFILE_05_010_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
+/// Runtime-derived 4-button System->Quit OptionSetting movie: computed once at first
+/// `02_040_optionsetting` file-open from the native MemoryFile's vanilla payload, then reused
+/// for later opens. This keeps the DLL self-contained: no shipped GFx, only in-memory edits
+/// against the game's own loaded bytes.
+static OPTIONS_02_040_QUIT4_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
+static OPTIONS_02_040_QUIT4_RUNTIME_SERVES: AtomicUsize = AtomicUsize::new(0);
+static OPTIONS_02_040_QUIT4_RUNTIME_FAILURES: AtomicUsize = AtomicUsize::new(0);
 
 fn load_memory_gfx_from_env(var: &str, slot: &OnceLock<Vec<u8>>, label: &str) {
     let Ok(path) = std::env::var(var) else {

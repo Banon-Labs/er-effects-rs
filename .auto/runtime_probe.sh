@@ -261,6 +261,12 @@ if [[ -n "${RUNTIME_EXTRA_WATCH_ARGS:-}" ]]; then
   # shellcheck disable=SC2206
   watch_extra_args+=(${RUNTIME_EXTRA_WATCH_ARGS})
 fi
+# Agent-owned System->Quit self-drive probes must not let the generic world-stable oracle tear the
+# process down before the scripted menu movement reaches its explicit DONE state. The runtime cap still
+# bounds failed/stuck probes, but success now means the harness movement completed exactly.
+if [[ "${ER_EFFECTS_SYSTEM_QUIT_REPRO:-0}" == "1" ]]; then
+  watch_extra_args+=(--wait-for-sq-repro-complete)
+fi
 
 start_host_process_sampler
 

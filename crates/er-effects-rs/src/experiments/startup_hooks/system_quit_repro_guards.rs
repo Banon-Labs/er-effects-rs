@@ -206,7 +206,7 @@ fn sq_repro_edges(tick: usize, edges: &[u16]) -> (u16, bool) {
 /// user's EXACT Xbox controller sequence by writing `SQ_REPRO_XINPUT_BUTTONS` (read by the XInput
 /// poll hook -- the stage the game reads a gamepad from), advancing ONLY on observed menu-window /
 /// cursor / activate transitions (never timers or tap budgets):
-///   START -> IngameTop; UP,A -> OptionSetting; LB,DOWN,A -> ProfileSelect; one DOWN/UP off the
+///   START -> IngameTop; UP,A -> OptionSetting; LB,DOWN,DOWN,A -> ProfileSelect; one DOWN/UP off the
 ///   current save; A,A -> load armed -> DONE (block released; native pump drives return-title +
 ///   reload). Each phase issues its KNOWN edges once then HOLDS; a genuinely missed edge self-
 ///   reports (stuck waiting) instead of being papered over by a re-tap.
@@ -287,11 +287,11 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                     ));
                 } else if sq_repro_profile_back_mode() {
                     append_autoload_debug(format_args!(
-                        "sq-repro: OptionSetting opened window=0x{option_setting:x} -> PROFILE_BACK (LB, DOWN, A to activate Load Profile, then B/back before loading)"
+                        "sq-repro: OptionSetting opened window=0x{option_setting:x} -> PROFILE_BACK (LB, DOWN, DOWN, A to activate Load Profile, then B/back before loading)"
                     ));
                 } else {
                     append_autoload_debug(format_args!(
-                        "sq-repro: OptionSetting opened window=0x{option_setting:x} (quit submenu) -> TO_PROFILE (LB, DOWN, A to activate the cloned Load-Profile row)"
+                        "sq-repro: OptionSetting opened window=0x{option_setting:x} (quit submenu) -> TO_PROFILE (LB, DOWN, DOWN, A to activate the Load Profile row)"
                     ));
                 }
                 set_pad(0);
@@ -387,7 +387,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             } else if tick >= SQ_REPRO_TAB_RETURN_STALL_TICKS && max > 0 {
                 let mask = SQ_REPRO_PROFILE_BACK_BASELINE_MASK.load(Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "sq-repro: PROFILE_BACK baseline reached last tab={max} mask=0x{mask:x}; return to Game Options, then use known LB+DOWN+A Load Profile sequence"
+                    "sq-repro: PROFILE_BACK baseline reached last tab={max} mask=0x{mask:x}; return to Game Options, then use known LB+DOWN+DOWN+A Load Profile sequence"
                 ));
                 SQ_REPRO_TAB_RETURN_PHASE.store(0, Ordering::SeqCst);
                 set_pad(0);
@@ -412,7 +412,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             if phase == 0 {
                 if cur == 0 {
                     append_autoload_debug(format_args!(
-                        "sq-repro: PROFILE_BACK_OPEN returned to Game Options tab 0; issue known LB+DOWN+A Load Profile sequence"
+                        "sq-repro: PROFILE_BACK_OPEN returned to Game Options tab 0; issue known LB+DOWN+DOWN+A Load Profile sequence"
                     ));
                     SQ_REPRO_TAB_RETURN_PHASE.store(1, Ordering::SeqCst);
                     SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
@@ -437,12 +437,13 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 &[
                     XINPUT_GAMEPAD_LEFT_SHOULDER,
                     XINPUT_GAMEPAD_DPAD_DOWN,
+                    XINPUT_GAMEPAD_DPAD_DOWN,
                     XINPUT_GAMEPAD_A,
                 ],
             );
             if holding {
                 sq_repro_waiting_once(
-                    "PROFILE_BACK_OPEN: LB+DOWN+A issued from Game Options, waiting for 05_010_ProfileSelect",
+                    "PROFILE_BACK_OPEN: LB+DOWN+DOWN+A issued from Game Options, waiting for 05_010_ProfileSelect",
                 );
             }
             set_pad(btn);
@@ -507,12 +508,13 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 &[
                     XINPUT_GAMEPAD_LEFT_SHOULDER,
                     XINPUT_GAMEPAD_DPAD_DOWN,
+                    XINPUT_GAMEPAD_DPAD_DOWN,
                     XINPUT_GAMEPAD_A,
                 ],
             );
             if holding {
                 sq_repro_waiting_once(
-                    "TO_PROFILE: LB+DOWN+A issued, waiting for 05_010_ProfileSelect",
+                    "TO_PROFILE: LB+DOWN+DOWN+A issued, waiting for 05_010_ProfileSelect",
                 );
             }
             set_pad(btn);
@@ -525,14 +527,8 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_REAPPLY_COUNT.load(Ordering::SeqCst);
             let direct_refresh =
                 SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_COUNT.load(Ordering::SeqCst);
-            if profile == 0 && restore_count > baseline && direct_visible != 0 {
+            if profile == 0 && restore_count > baseline {
                 SQ_REPRO_PROFILE_BACK_RESTORE_COUNT.store(restore_count, Ordering::SeqCst);
-                if direct_refresh == 0 {
-                    SQ_REPRO_PROFILE_BACK_MISMATCH_MASK.fetch_or(
-                        SQ_REPRO_PROFILE_BACK_VISIBLE_REFRESH_MISSING_MASK,
-                        Ordering::SeqCst,
-                    );
-                }
                 append_autoload_debug(format_args!(
                     "sq-repro: PROFILE_BACK observed ProfileSelect closed + restore_count {baseline}->{restore_count} + direct-visible reapply count={direct_visible} refresh_count={direct_refresh}; drive LB back to Game Options for final validation dwell"
                 ));

@@ -86,6 +86,37 @@ test_deny_pgrep_then_proton_start_protected_launch if {
 	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
 }
 
+# Regression for the 2026-07-07 false positive in the runtime-probe preflight:
+# a shell Steam status check followed by Python exact `pgrep -x <name>` process
+# detection is still read-only and must not be treated as launching EAC.
+test_allow_shell_steam_status_then_python_subprocess_pgrep_start_protected_detection if {
+	cmd := concat("\n", [
+		"pgrep -x steam >/dev/null && echo steam-running || echo steam-missing; python3 - <<'PY'",
+		"import subprocess",
+		"for name in ['eldenring.exe','start_protected_game.exe']:",
+		"    p = subprocess.run(['pgrep','-x',name], text=True, capture_output=True)",
+		"    print(name, p.returncode)",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# The live cupcake command string can arrive with the pre-heredoc semicolon
+# absent in the policy source text; keep that equivalent read-only shape allowed.
+test_allow_shell_steam_status_then_python_subprocess_pgrep_start_protected_detection_semicolonless_source if {
+	cmd := concat("\n", [
+		"pgrep -x steam >/dev/null && echo steam-running || echo steam-missing python3 - <<'PY'",
+		"import subprocess",
+		"for name in ['eldenring.exe','start_protected_game.exe']:",
+		"    p = subprocess.run(['pgrep','-x',name], text=True, capture_output=True)",
+		"    print(name, p.returncode)",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
 # Regression for the 2026-07-05 false positive in the runtime-probe preflight:
 # Python may shell out to exact `pgrep -x <name>` checks for process status,
 # including stale EAC launcher detection, without launching the named process.

@@ -918,6 +918,83 @@ unsafe fn profile_05_010_swap_to_edited(base: usize, file: usize) -> bool {
     true
 }
 
+/// Four-button `02_040_optionsetting` runtime edit for System->Quit. This mirrors the 05_000/05_010
+/// MemoryFile swap path, but deliberately has no env/file-backed diagnostic input: the product must not
+/// ship or depend on an external GFx. The derived movie is built from the game's own vanilla payload and
+/// cached for process lifetime so the native MemoryFile's data pointer remains valid.
+unsafe fn options_02_040_quit4_swap_to_edited(base: usize, file: usize) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if file == 0 || file == null || file == HOOK_ORIGINAL_UNSET {
+        return false;
+    }
+    let fail = |reason: core::fmt::Arguments<'_>| {
+        OPTIONS_02_040_QUIT4_RUNTIME_FAILURES.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-gfx: 02_040 quit4 runtime edit FAIL-CLOSED (serving native vanilla): {reason}"
+        ));
+        false
+    };
+    let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
+    if vtable != base + SCALEFORM_MEMORY_FILE_VTABLE_RVA {
+        return fail(format_args!(
+            "unexpected file vtable 0x{vtable:x} (want MemoryFile 0x{:x})",
+            base + SCALEFORM_MEMORY_FILE_VTABLE_RVA
+        ));
+    }
+    let edited = match OPTIONS_02_040_QUIT4_RUNTIME_EDITED.get() {
+        Some(cached) => cached,
+        None => {
+            let data =
+                unsafe { safe_read_usize(file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) }.unwrap_or(0);
+            let len =
+                unsafe { safe_read_i32(file + SCALEFORM_MEMORY_FILE_LEN_OFFSET) }.unwrap_or(0);
+            if data == 0 || data == null || !(64..=0x0100_0000).contains(&len) {
+                return fail(format_args!(
+                    "implausible payload data=0x{data:x} len={len}"
+                ));
+            }
+            let len = len as usize;
+            let magic_ok = unsafe { safe_read_u8(data) } == Some(b'G')
+                && unsafe { safe_read_u8(data + 1) } == Some(b'F')
+                && unsafe { safe_read_u8(data + 2) } == Some(b'X')
+                && unsafe { safe_read_u8(data + len - 1) }.is_some();
+            if !magic_ok {
+                return fail(format_args!(
+                    "payload at 0x{data:x} len={len} is unreadable or not GFX-magic"
+                ));
+            }
+            let vanilla = unsafe { core::slice::from_raw_parts(data as *const u8, len) };
+            let known = er_gfx::options_02_040::is_known_vanilla_win(vanilla);
+            match er_gfx::options_02_040::quit4(vanilla) {
+                Ok(out) => {
+                    let out_fnv = er_gfx::title_05_000::fnv1a64(&out);
+                    append_autoload_debug(format_args!(
+                        "system-quit-gfx: 02_040 quit4 runtime edit derived in={len} out={} known_vanilla={known} out_fnv=0x{out_fnv:016x}",
+                        out.len()
+                    ));
+                    OPTIONS_02_040_QUIT4_RUNTIME_EDITED.get_or_init(|| out)
+                }
+                Err(err) => {
+                    return fail(format_args!("in={len} known_vanilla={known}: {err}"));
+                }
+            }
+        }
+    };
+    unsafe {
+        core::ptr::write(
+            (file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) as *mut usize,
+            edited.as_ptr() as usize,
+        );
+        core::ptr::write(
+            (file + SCALEFORM_MEMORY_FILE_LEN_OFFSET) as *mut u32,
+            edited.len() as u32,
+        );
+        core::ptr::write((file + SCALEFORM_MEMORY_FILE_CURSOR_OFFSET) as *mut u32, 0);
+    }
+    OPTIONS_02_040_QUIT4_RUNTIME_SERVES.fetch_add(1, Ordering::SeqCst);
+    true
+}
+
 pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
     loader: usize,
     url: usize,
@@ -934,6 +1011,7 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
         || unsafe { bounded_ascii_contains(url, b"05_001_title") };
     let is_title_05_000 = unsafe { bounded_ascii_contains(url, b"05_000_title") };
     let is_profile_05_010 = unsafe { bounded_ascii_contains(url, b"05_010_profileselect") };
+    let is_options_02_040 = unsafe { bounded_ascii_contains(url, b"02_040_optionsetting") };
 
     let base = game_module_base().unwrap_or(null);
     let mut memory_replacement = false;
@@ -947,6 +1025,11 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
     } else if is_profile_05_010 {
         // No embedded/env-loaded movie for 05_010: only the in-place runtime edit above.
         memory_label = "05_010_profileselect";
+        None
+    } else if is_options_02_040 {
+        // No embedded/env-loaded movie for 02_040: the 4-button Quit layout is derived in place from
+        // the game's own MemoryFile so the DLL remains self-contained.
+        memory_label = "02_040_optionsetting";
         None
     } else {
         None
@@ -990,6 +1073,10 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
             if is_profile_05_010 && PROFILE_05_010_RUNTIME_EDIT_ARMED.load(Ordering::SeqCst) != 0 {
                 memory_replacement = unsafe { profile_05_010_swap_to_edited(base, native) };
             }
+            // System->Quit four-button GFx edit: product-default, no external asset dependency.
+            if is_options_02_040 {
+                memory_replacement = unsafe { options_02_040_quit4_swap_to_edited(base, native) };
+            }
             native
         } else {
             null
@@ -1018,7 +1105,7 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
         unsafe { capture_menu_font_gfx(base, ret) };
     }
 
-    if is_title_logo || is_title_05_000 || is_profile_05_010 {
+    if is_title_logo || is_title_05_000 || is_profile_05_010 || is_options_02_040 {
         let logo_hit = if is_title_logo {
             TITLE_SCALEFORM_FILE_OPEN_LOGO_HITS.fetch_add(1, Ordering::SeqCst) + 1
         } else {

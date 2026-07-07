@@ -116,6 +116,8 @@ const BOOT_VIEW_MILESTONE_LABELS: [&str; 7] = [
 /// milestone deliberately stops at the native-handoff marker instead of 100%: the remaining gap is owned
 /// by the game's real now-loading Gauge_3 bar, whose terminal frame is the true all-loading-complete
 /// semaphore.
+const BOOT_VIEW_SAVE_CHECK_PERMILLE: usize = 300;
+const BOOT_VIEW_SAVE_CHECK_LABEL: &str = "SAVE CHECK";
 const BOOT_VIEW_SAVE_LOAD_PERMILLE: usize = 615;
 const BOOT_VIEW_SAVE_LOAD_LABEL: &str = "SAVE LOAD";
 const BOOT_VIEW_NATIVE_HANDOFF_PERMILLE: usize = 700;
@@ -315,7 +317,9 @@ fn boot_glyph_5x7(c: char) -> [u8; 7] {
         'E' => [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f],
         'F' => [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x10],
         'G' => [0x0e, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0e],
+        'H' => [0x11, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
         'I' => [0x0e, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e],
+        'K' => [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
         'L' => [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1f],
         'M' => [0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11],
         'N' => [0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11],
@@ -761,6 +765,17 @@ fn boot_view_rasterize(
     } else {
         boot_draw_text(&mut buf, w, h, content_x, content_y, label);
     }
+    let save_check_marker_x = boot_draw_marker_label(
+        &mut buf,
+        w,
+        h,
+        content_x,
+        content_y,
+        content_w,
+        BOOT_VIEW_SAVE_CHECK_PERMILLE,
+        BOOT_VIEW_SAVE_CHECK_LABEL,
+        has_bg,
+    );
     let save_load_marker_x = boot_draw_marker_label(
         &mut buf,
         w,
@@ -803,8 +818,19 @@ fn boot_view_rasterize(
         BOOT_VIEW_BAR_H,
         BOOT_VIEW_RGB_FILL,
     );
+    // Save-check tick: marks the missing-save picker wait point before a selected source exists.
+    boot_fill_rect(
+        &mut buf,
+        w,
+        h,
+        save_check_marker_x.saturating_sub(BOOT_VIEW_HANDOFF_MARKER_W / 2),
+        bar_y.saturating_sub(2),
+        BOOT_VIEW_HANDOFF_MARKER_W,
+        BOOT_VIEW_BAR_H + 4,
+        BOOT_VIEW_RGB_FILL,
+    );
     // Save-load tick: marks the ShowProgressJob save-data pause/resume point so a picker-gated boot
-    // visibly shows where execution waits for a save before the native loading handoff.
+    // visibly shows the later native save-load checkpoint before the loading handoff.
     boot_fill_rect(
         &mut buf,
         w,

@@ -59,7 +59,13 @@ fn apply_system_quit_multislot_layout_patch() {
 /// for every `AddCancelButton` call except the first Quit Game tab row, where it invokes the
 /// original trampoline again with native args for Load Profile and Open Save Folder rows.
 pub(crate) fn install_system_quit_duplicate_button_hook() {
-    apply_system_quit_multislot_layout_patch();
+    // Do not patch the Quit Game tab's GFx component index. Runtime/user evidence shows switching
+    // the native one-slot GameEnd component to the multi-slot controls component strips the native
+    // character portrait/playtime/level and poisons the shared OptionSetting GFx list as soon as the
+    // Quit tab is visited, even with no cloned rows selected.
+    append_autoload_debug(format_args!(
+        "system-quit-dup: component-index patch disabled; preserving native Quit Game GFx component"
+    ));
     install_scaleform_handler_lifecycle_guard();
     // Telemetry-only successor to the removed 5ae3965 overflow guard (dropping command lists on
     // overflow corrupts the render -- c2794d9): never alters queue behavior, only names which
