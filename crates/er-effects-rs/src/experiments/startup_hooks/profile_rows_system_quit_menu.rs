@@ -877,9 +877,21 @@ pub(crate) unsafe fn system_quit_profile_select_top_menu_tick() {
         // ProfileSelect window job) and the return-title submit is done in menu-pump ownership from
         // the MenuWindowJob::Run hook. See bd system-quit-return-title-scaleform-race-2026-07-01.
         if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) == SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
-            unsafe {
-                system_quit_save_swap_restore_profile_summary("profile-select-closed-without-load")
-            };
+            if let Ok(base) = game_module_base() {
+                unsafe {
+                    system_quit_restore_real_system_windows(
+                        base,
+                        "restore-real-profile-closed-without-load",
+                    )
+                };
+            } else {
+                unsafe {
+                    system_quit_save_swap_restore_profile_summary(
+                        "profile-select-closed-without-load-no-base",
+                    )
+                };
+                unsafe { system_quit_reset_profile_select_state("profile-select-closed-without-load-no-base") };
+            }
         }
         return;
     }
