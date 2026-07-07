@@ -324,10 +324,31 @@ fn boot_glyph_5x7(c: char) -> [u8; 7] {
         'M' => [0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11],
         'N' => [0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11],
         'O' => [0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
+        'J' => [0x01, 0x01, 0x01, 0x01, 0x11, 0x11, 0x0e],
+        'P' => [0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10],
+        'Q' => [0x0e, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0d],
+        'R' => [0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11],
         'S' => [0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e],
         'T' => [0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
         'U' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
         'V' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x0a, 0x04],
+        'W' => [0x11, 0x11, 0x11, 0x15, 0x15, 0x1b, 0x11],
+        'X' => [0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11],
+        'Y' => [0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04],
+        'Z' => [0x1f, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f],
+        '.' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x0c],
+        '-' => [0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00],
+        '_' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1f],
+        '/' => [0x01, 0x02, 0x02, 0x04, 0x08, 0x08, 0x10],
+        '\\' => [0x10, 0x08, 0x08, 0x04, 0x02, 0x02, 0x01],
+        ':' => [0x00, 0x0c, 0x0c, 0x00, 0x0c, 0x0c, 0x00],
+        '[' => [0x0e, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0e],
+        ']' => [0x0e, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0e],
+        '(' => [0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02],
+        ')' => [0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08],
+        '>' => [0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08],
+        '?' => [0x0e, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04],
+        '!' => [0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04],
         '0' => [0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e],
         '1' => [0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e],
         '2' => [0x0e, 0x11, 0x01, 0x06, 0x08, 0x10, 0x1f],
@@ -1091,7 +1112,12 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     let strip_dy = (bh * BOOT_VIEW_STRIP_Y_NUM / BOOT_VIEW_STRIP_Y_DEN).min(bh - strip_h);
     let bg = boot_bg_image();
     let bg_active = bg.is_some();
-    let (region_w, region_h, dx, dy, content_x, content_y, content_w) = if bg_active {
+    // The DLL-drawn startup save picker owns the whole screen while the no-save boot is held: a
+    // full-frame copy of the browser, driven by the shared picker model (input handled on the game
+    // task thread). Falls back to the bar if the model vanished mid-frame.
+    let picker_active = save_picker_overlay_active();
+    let full_frame = bg_active || picker_active;
+    let (region_w, region_h, dx, dy, content_x, content_y, content_w) = if full_frame {
         (
             bw,
             bh,
@@ -1206,22 +1232,38 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     let geom_changed = BOOT_VIEW_STRIP_W.swap(strip_w as usize, Ordering::SeqCst)
         != strip_w as usize
         || BOOT_VIEW_STRIP_H.swap(region_h as usize, Ordering::SeqCst) != region_h as usize;
-    if upload_fresh
+    // The picker content changes with cursor/dir/page (not captured by permille/idx), so re-raster
+    // every frame while it owns the screen.
+    if picker_active
+        || upload_fresh
         || geom_changed
         || BOOT_VIEW_DRAWN_PERMILLE.load(Ordering::SeqCst) != permille
         || BOOT_VIEW_DRAWN_IDX.load(Ordering::SeqCst) != ms_idx
         || BOOT_VIEW_DRAWN_BG_ACTIVE.load(Ordering::SeqCst) != bg_active as usize
     {
-        let tight = boot_view_rasterize(
-            region_w as usize,
-            region_h as usize,
-            ms_idx,
-            permille,
-            content_x,
-            content_y,
-            content_w,
-            bg,
-        );
+        let mut picker_buf = Vec::new();
+        if picker_active {
+            picker_buf = vec![0u8; region_w as usize * region_h as usize * RGBA8_BPP];
+            if rasterize_save_picker_overlay(&mut picker_buf, region_w as usize, region_h as usize) {
+                SAVE_PICKER_OVERLAY_DRAW_HITS.fetch_add(1, Ordering::SeqCst);
+            } else {
+                picker_buf.clear(); // model vanished -> fall through to the bar
+            }
+        }
+        let tight = if !picker_buf.is_empty() {
+            picker_buf
+        } else {
+            boot_view_rasterize(
+                region_w as usize,
+                region_h as usize,
+                ms_idx,
+                permille,
+                content_x,
+                content_y,
+                content_w,
+                bg,
+            )
+        };
         let row_pitch = footprint.Footprint.RowPitch as usize;
         let total = total_bytes as usize;
         let mut umap: *mut c_void = std::ptr::null_mut();

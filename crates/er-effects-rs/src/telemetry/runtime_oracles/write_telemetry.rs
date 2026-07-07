@@ -369,11 +369,13 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_PICKER_STAGED_ROW_COUNT.load(Ordering::SeqCst)
     ));
     body.push_str(&format!(
-        "  \"oracle_save_picker_title_auto_opened\": {},\n  \"oracle_save_picker_title_open_count\": {},\n  \"oracle_save_picker_title_pick_count\": {},\n  \"oracle_save_picker_title_reload_count\": {},\n",
-        SAVE_PICKER_TITLE_AUTO_OPENED.load(Ordering::SeqCst),
-        SAVE_PICKER_TITLE_OPEN_COUNT.load(Ordering::SeqCst),
-        SAVE_PICKER_TITLE_PICK_COUNT.load(Ordering::SeqCst),
-        SAVE_PICKER_TITLE_RELOAD_COUNT.load(Ordering::SeqCst)
+        "  \"oracle_save_picker_overlay_armed\": {},\n  \"oracle_save_picker_overlay_open_count\": {},\n  \"oracle_save_picker_overlay_draw_hits\": {},\n  \"oracle_save_picker_overlay_input_hits\": {},\n  \"oracle_save_picker_overlay_pick_count\": {},\n  \"oracle_save_picker_overlay_pick_reject_count\": {},\n",
+        SAVE_PICKER_OVERLAY_ARMED.load(Ordering::SeqCst),
+        SAVE_PICKER_OVERLAY_OPEN_COUNT.load(Ordering::SeqCst),
+        SAVE_PICKER_OVERLAY_DRAW_HITS.load(Ordering::SeqCst),
+        SAVE_PICKER_OVERLAY_INPUT_HITS.load(Ordering::SeqCst),
+        SAVE_PICKER_OVERLAY_PICK_COUNT.load(Ordering::SeqCst),
+        SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT.load(Ordering::SeqCst)
     ));
     body.push_str(&format!(
         "  \"system_quit_continue_confirm_fresh_deser_done\": {},\n  \"system_quit_continue_confirm_fresh_deser_count\": {},\n  \"system_quit_continue_confirm_block_count\": {},\n  \"system_quit_continue_confirm_allow_count\": {},\n",

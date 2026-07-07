@@ -92,6 +92,9 @@ pub(crate) struct SavePickerModel {
     /// Dirs first (name order), then files (most recently modified first).
     entries: Vec<PickerEntry>,
     page: usize,
+    /// Highlighted row index (0..PICKER_ROW_COUNT) for the overlay picker. Clamped to a
+    /// selectable (non-Empty) row on every listing change.
+    cursor: usize,
 }
 
 impl SavePickerModel {
@@ -102,8 +105,10 @@ impl SavePickerModel {
             extension: extension.to_ascii_lowercase(),
             entries: Vec::new(),
             page: 0,
+            cursor: 0,
         };
         model.refresh();
+        model.cursor = model.first_selectable_row();
         model
     }
 
@@ -267,6 +272,105 @@ impl SavePickerModel {
             PickerRow::Empty => String::new(),
         };
         truncate_utf16(&label, PICKER_ROW_NAME_UTF16_MAX)
+    }
+
+    /// ASCII display label for `row` (uppercased for the 5x7 overlay font; dir rows keep a `/`
+    /// suffix, control rows are bracketed). Empty string for an out-of-range row.
+    pub(crate) fn row_label_ascii(&self, row: usize) -> String {
+        let label = match self.row_meaning(row) {
+            PickerRow::ParentDir => "[..] UP".to_owned(),
+            PickerRow::AtRoot => "[ROOT]".to_owned(),
+            PickerRow::Dir(path) => {
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("?");
+                format!("{name}/")
+            }
+            PickerRow::File(path) => path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("?")
+                .to_owned(),
+            PickerRow::NextPage => format!("[PAGE {}/{}]", self.page + 1, self.page_count()),
+            PickerRow::Empty => String::new(),
+        };
+        label.to_ascii_uppercase()
+    }
+
+    /// True if `row` can be highlighted/activated (not an empty filler; the drive skips these).
+    fn row_selectable(&self, row: usize) -> bool {
+        !matches!(self.row_meaning(row), PickerRow::Empty)
+    }
+
+    fn first_selectable_row(&self) -> usize {
+        // Prefer the first ENTRY row (1) over the parent nav row so a fresh listing lands on a
+        // file/dir; fall back to any selectable row, else 0.
+        (1..PICKER_ROW_COUNT)
+            .find(|&r| self.row_selectable(r))
+            .or_else(|| (0..PICKER_ROW_COUNT).find(|&r| self.row_selectable(r)))
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    /// Move the highlight one selectable row up (`down=false`) or down, wrapping. No-op when only
+    /// one row is selectable.
+    pub(crate) fn move_cursor(&mut self, down: bool) {
+        let selectable: Vec<usize> = (0..PICKER_ROW_COUNT)
+            .filter(|&r| self.row_selectable(r))
+            .collect();
+        if selectable.len() < 2 {
+            self.cursor = selectable.first().copied().unwrap_or(0);
+            return;
+        }
+        let pos = selectable
+            .iter()
+            .position(|&r| r == self.cursor)
+            .unwrap_or(0);
+        let next = if down {
+            (pos + 1) % selectable.len()
+        } else {
+            (pos + selectable.len() - 1) % selectable.len()
+        };
+        self.cursor = selectable[next];
+    }
+
+    /// Activate the highlighted row. On a listing change (dir/page) the cursor resets to the first
+    /// selectable row so the highlight never lands on a stale index.
+    pub(crate) fn activate_cursor(&mut self) -> PickerActivation {
+        let result = self.activate(self.cursor);
+        if matches!(result, PickerActivation::Repopulate) {
+            self.cursor = self.first_selectable_row();
+        }
+        result
+    }
+
+    /// Move to the previous/next page (wrapping), resetting the cursor. No-op when single-page.
+    pub(crate) fn cycle_page(&mut self, forward: bool) {
+        let count = self.page_count();
+        if count < 2 {
+            return;
+        }
+        self.page = if forward {
+            (self.page + 1) % count
+        } else {
+            (self.page + count - 1) % count
+        };
+        self.cursor = self.first_selectable_row();
+    }
+
+    /// Navigate to the parent directory (if any), resetting the cursor.
+    pub(crate) fn go_up(&mut self) {
+        if let Some(parent) = self.current_dir.parent().map(Path::to_path_buf)
+            && !parent.as_os_str().is_empty()
+        {
+            self.current_dir = parent;
+            self.refresh();
+            self.cursor = self.first_selectable_row();
+        }
     }
 
     /// Long-form status line for the auxiliary text fields (full current dir + page info).

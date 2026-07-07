@@ -32,6 +32,10 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     return;
                 }
                 tick_before_player_lookup(task_data);
+                // Startup no-save picker: read OS keyboard/gamepad and drive the DLL-drawn overlay
+                // browser (the boot stays held before the save-check via the SetState(4/5) deny
+                // until a file is picked). Runs before the player lookup so it ticks at the title.
+                save_picker_overlay_input_tick();
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
                     let mut state = state_or_return(&state);
                     state.game_task_ticks += GAME_TASK_TICK_INCREMENT;

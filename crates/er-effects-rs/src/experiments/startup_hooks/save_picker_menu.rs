@@ -240,17 +240,11 @@ pub(crate) unsafe fn save_picker_handle_activation(dialog: usize, cursor: i32) -
             0
         }
         PickerActivation::PickedFile(path) => {
-            // STARTUP (title) site: no active save to swap -- the pick installs the save
-            // redirect and reloads the title. IN-GAME site: the pick feeds the existing
-            // preview/candidate pipeline and reopens the window as the slot view.
-            if missing_save_selection_pending() {
-                if unsafe { save_picker_title_complete_pick(dialog, &path) } {
-                    SAVE_PICKER_PICK_COUNT.fetch_add(1, Ordering::SeqCst);
-                } else {
-                    SAVE_PICKER_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
-                }
-                return 0;
-            }
+            // IN-GAME (System>Quit) site only: the pick feeds the existing preview/candidate
+            // pipeline and reopens the window as the slot view. The STARTUP no-save site does NOT
+            // use this native-window path -- it uses the DLL-drawn overlay picker
+            // (`save_picker_overlay.rs`) because the game's menu assets are not ready at the
+            // held save-check stage.
             let Some(path_str) = path.to_str() else {
                 SAVE_PICKER_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
                 return 0;
@@ -399,21 +393,9 @@ pub(crate) fn save_picker_reset(source: &str) {
 // save redirect (complete_missing_save_selection_from_picker), restores the summary, and fires
 // the native return-to-title reload so the game re-reads the now-redirected save.
 
-/// One-shot: the title picker auto-opened once this session (cancel leaves the rows staged, so
-/// the native Load Game row is the reopen path -- no repeated auto-open fighting the user).
-pub(crate) static SAVE_PICKER_TITLE_AUTO_OPENED: AtomicUsize = AtomicUsize::new(0);
-/// Telemetry: title picker auto-open fired / pick completed / reload fired.
-pub(crate) static SAVE_PICKER_TITLE_OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SAVE_PICKER_TITLE_PICK_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static SAVE_PICKER_TITLE_RELOAD_COUNT: AtomicUsize = AtomicUsize::new(0);
-
-/// Session singleton STEP_BeginLogo hard-asserts at entry (abs 0x144588e98 = base+0x4588e98,
-/// checked at 0x140b0c2c3); only SetState(2) when it is non-null.
-const TITLE_SESSION_SINGLETON_RVA: usize = 0x4588e98;
-
-/// Start dir for the STARTUP picker: remembered dir when valid, else the default save root
-/// (`%APPDATA%\EldenRing`), else the Wine system drive root.
-fn save_picker_title_start_dir() -> PathBuf {
+/// Start dir for the STARTUP overlay picker: remembered dir when valid, else the default save
+/// root (`%APPDATA%\EldenRing`), else the Wine system drive root. Windows-form paths.
+pub(crate) fn save_picker_title_start_dir() -> PathBuf {
     if let Some(preferred) = crate::config::preferred_save_picker_dir_now() {
         if let Some(text) = preferred.to_str() {
             let windows = PathBuf::from(save_picker_windows_path_string(text));
@@ -431,113 +413,4 @@ fn save_picker_title_start_dir() -> PathBuf {
         }
     }
     PathBuf::from("Z:\\")
-}
-
-/// Menu-pump tick for the startup picker (called from the MenuWindowJob::Run hook, i.e. in menu
-/// ownership). Auto-opens the picker once the native no-save title menu is interactive.
-pub(crate) unsafe fn save_picker_title_pump_tick(base: usize) {
-    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-    const HEAP_LO: usize = 0x10000;
-    if !missing_save_selection_pending()
-        || SAVE_PICKER_TITLE_AUTO_OPENED.load(Ordering::SeqCst) != 0
-    {
-        return;
-    }
-    let owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
-    if owner < HEAP_LO || owner == NULL {
-        return;
-    }
-    let dialog =
-        unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(NULL);
-    if dialog < HEAP_LO || dialog == NULL {
-        return;
-    }
-    let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(NULL);
-    if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
-        return;
-    }
-    // Menu opened (press-any happened, registrar fired) and its flow-chain queue has drained
-    // (main-menu rows dispatch input only while dialog+0x10 holds no job -- RE 2026-07-07).
-    let menu_opened = unsafe { safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }
-        .map(|v| v & 0xff)
-        .unwrap_or(0);
-    if menu_opened == 0 {
-        return;
-    }
-    let Ok(ready_addr) = game_rva(MENU_JOB_QUEUE_READY_RVA) else {
-        return;
-    };
-    let ready: unsafe extern "system" fn(usize) -> u8 =
-        unsafe { std::mem::transmute(ready_addr) };
-    if unsafe { ready(dialog + 0x10) } == 0 {
-        return;
-    }
-    // Interactive no-save title menu reached: stage the browser rows and fire the native
-    // Load Game row exactly once.
-    let Some(action) = (unsafe { title_menu_action_ready(owner, base) }) else {
-        return;
-    };
-    let start_dir = save_picker_title_start_dir();
-    let extension = if save_picker_seamless_mode_after_settle("title-picker-open") {
-        "co2"
-    } else {
-        "sl2"
-    };
-    let model = crate::experiments::save_picker::SavePickerModel::open(&start_dir, extension);
-    if !unsafe { save_picker_stage_row_records(&model) } {
-        return;
-    }
-    *crate::experiments::save_picker::active_save_picker_lock() = Some(model);
-    SAVE_PICKER_MODE_ACTIVE.store(1, Ordering::SeqCst);
-    SAVE_PICKER_TITLE_AUTO_OPENED.store(1, Ordering::SeqCst);
-    SAVE_PICKER_TITLE_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
-    let run: unsafe extern "system" fn(usize) =
-        unsafe { std::mem::transmute(base + MENU_MEMBER_FUNC_JOB_RUN_RVA) };
-    append_autoload_debug(format_args!(
-        "save-picker: TITLE auto-open -- firing native Load Game node 0x{:x}(node=0x{:x}) dir='{}' ext=.{extension}",
-        base + MENU_MEMBER_FUNC_JOB_RUN_RVA,
-        action.node,
-        start_dir.display()
-    ));
-    unsafe { run(action.node) };
-}
-
-/// Title-picker pick completion (menu thread, from the activate hook): install the redirect,
-/// restore the real (empty) summary, close the dialog, and fire the native return-to-title
-/// reload so the game re-reads the save through the redirect.
-unsafe fn save_picker_title_complete_pick(dialog: usize, path: &Path) -> bool {
-    if !crate::experiments::complete_missing_save_selection_from_picker(path) {
-        return false;
-    }
-    SAVE_PICKER_TITLE_PICK_COUNT.fetch_add(1, Ordering::SeqCst);
-    // Restore the boot summary (all-empty snapshot) BEFORE the reload: the reload's save-data
-    // job repopulates it from the redirected save; leaving browse rows staged across the reload
-    // would race the native re-read.
-    unsafe { system_quit_save_swap_restore_profile_summary("title-picker-picked") };
-    *crate::experiments::save_picker::active_save_picker_lock() = None;
-    SAVE_PICKER_MODE_ACTIVE.store(0, Ordering::SeqCst);
-    unsafe { save_picker_native_close(dialog, "title-picked-file") };
-    let owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
-    let orig = TITLE_SETSTATE_TRACE_ORIG.load(Ordering::SeqCst);
-    let session = game_module_base()
-        .ok()
-        .and_then(|base| unsafe { safe_read_usize(base + TITLE_SESSION_SINGLETON_RVA) })
-        .unwrap_or(0);
-    if owner > 0x10000 && orig != 0 && orig != HOOK_ORIGINAL_UNSET && session != 0 {
-        // Native return-to-title: the game's own SetState(2) (STEP_BeginLogo; with splash-skip
-        // applied it falls through to BeginTitle) replays title build + menu-open + the
-        // save-data read -- now through the redirect, so Continue/Load Game come back real.
-        let set_state: unsafe extern "system" fn(usize, i32) =
-            unsafe { std::mem::transmute(orig) };
-        unsafe { set_state(owner, TITLE_STEP_BEGIN_LOGO) };
-        SAVE_PICKER_TITLE_RELOAD_COUNT.fetch_add(1, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "save-picker: TITLE pick complete -- fired native SetState(owner=0x{owner:x}, {TITLE_STEP_BEGIN_LOGO}) title reload; save re-read rides the redirect"
-        ));
-    } else {
-        append_autoload_debug(format_args!(
-            "save-picker: TITLE pick complete but reload NOT fired (owner=0x{owner:x} orig=0x{orig:x} session=0x{session:x}); redirect is active -- native menu still needs a manual title return"
-        ));
-    }
-    true
 }
