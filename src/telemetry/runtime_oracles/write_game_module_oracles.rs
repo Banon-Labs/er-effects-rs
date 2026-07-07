@@ -1540,6 +1540,14 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_profile_lookat_render_drives",
             PROFILE_LOOKAT_RENDER_DRIVES.load(Ordering::SeqCst),
         );
+        // CSCloth teardown guard: profile update/draw drives skipped because the world CSCloth singleton
+        // was null (shutdown). 0 during normal operation = no false-skip / no render regression; nonzero
+        // at teardown = the exit-time CSCloth DLPanic CTD was prevented.
+        push_json_usize(
+            body,
+            "oracle_profile_drive_cloth_skips",
+            PROFILE_DRIVE_CLOTH_SKIPS.load(Ordering::SeqCst),
+        );
         // Mouse-track proof: bitmask of look-left/center/look-right head dumps captured (0b111 = all
         // three distinct poses dumped to portrait-capture-slot{200,201,202}.bin during selftest).
         push_json_usize(

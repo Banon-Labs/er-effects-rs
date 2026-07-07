@@ -479,9 +479,26 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
                 // Fence check MUST come after the busy-flag store (Dekker order): the teardown
                 // either already sees us busy and is waiting (we bail out immediately), or it
                 // raised the fence first and we never touch the renderer this frame.
+                let cs_cloth = unsafe { safe_read_usize(base + CS_CLOTH_GLOBAL_RVA) }.unwrap_or(0);
                 if PROFILE_RENDERER_TEARDOWN_FENCE.load(Ordering::SeqCst) != 0 {
                     PROFILE_IN_OUR_DRIVE.store(false, Ordering::SeqCst);
                     PROFILE_DRIVE_FENCE_SKIPS.fetch_add(1, Ordering::SeqCst);
+                } else if cs_cloth == 0 || cs_cloth == null {
+                    // WORLD CSCloth SINGLETON GONE (shutdown / return-to-title tears it down before our
+                    // draw-phase task stops). Driving the profile model's update/draw here runs its cloth
+                    // RELEASE (FUN_1409f0250), which DLPanics "accessed an uninitialized singleton" on the
+                    // null manager -> hard CTD. DLPanic is a native abort, so the catch_unwind below can't
+                    // save us; the only fix is to not drive when the manager is absent. (The profile model
+                    // only reaches the cloth path when it actually has a cloth instance + the manager is
+                    // live, so this never skips a legitimate in-menu render -- CSCloth is up throughout the
+                    // title/ProfileSelect/in-world eras and only null during teardown.)
+                    PROFILE_IN_OUR_DRIVE.store(false, Ordering::SeqCst);
+                    let skips = PROFILE_DRIVE_CLOTH_SKIPS.fetch_add(1, Ordering::SeqCst) + 1;
+                    if skips <= 4 {
+                        append_autoload_debug(format_args!(
+                            "profile-drive-cloth-skip #{skips}: CSCloth singleton (base+0x{CS_CLOTH_GLOBAL_RVA:x}) is null -- world cloth manager torn down; SKIPPING profile model update/draw so the cloth release can't DLPanic (prevents the exit-time CTD). r=0x{r:x}"
+                        ));
+                    }
                 } else {
                     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         // (Scene-alpha clear DISABLED pending the backdrop-node hide: run 7eefdbd

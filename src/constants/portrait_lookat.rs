@@ -128,6 +128,12 @@ pub(crate) static PROFILE_PERFRAME_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 /// screen) so the model rasterizes sparsely. We drive both ourselves per render-thread frame to make the
 /// portrait re-rasterize the live look-at pose EVERY frame. See keepalive-POOL-REFUTED-readback-crossqueue.
 pub(crate) const PROFILE_MODEL_UPDATE_TASK_RVA: usize = 0xbba730;
+/// `FD4Singleton<CS::CSCloth>` instance pointer -- the world cloth manager. Live/dump addr 0x143d75f28
+/// (data, shift 0; disasm-verified: `FUN_1409f0250` loads `[0x143d75f28]`, `test rcx,rcx`, and DLPanics
+/// "accessed an uninitialized singleton" (FD4Singleton.h:0xb4) when null). Our profile-model update/draw
+/// drive triggers that model's cloth RELEASE; at shutdown CSCloth is freed first, so driving it then is a
+/// hard CTD (DLPanic is a native abort, not a catchable Rust panic). We must skip our drive when null.
+pub(crate) const CS_CLOTH_GLOBAL_RVA: usize = 0x3d75f28;
 /// Menu-model ANIM BIND `FUN_140bba300` (dump) -> deobf RVA 0xbba210 (content-unique, shift -0xf0,
 /// verified via dump-deobf-shift 2026-07-03). `fn(renderer, &anim_id_i32, force, mode)`: stops the
 /// current anim entry (via the handle at +0x96c), resolves + plays `anim_id` on the model's anim
@@ -289,6 +295,10 @@ pub(crate) static PROFILE_IN_OUR_DRIVE: AtomicBool = AtomicBool::new(false);
 pub(crate) static PROFILE_RENDERER_TEARDOWN_FENCE: AtomicUsize = AtomicUsize::new(0);
 /// Render-thread pump invocations skipped because the teardown fence was up (expect a handful per switch).
 pub(crate) static PROFILE_DRIVE_FENCE_SKIPS: AtomicUsize = AtomicUsize::new(0);
+/// Render-thread pump invocations skipped because the CSCloth singleton (`CS_CLOTH_GLOBAL_RVA`) was null
+/// -- i.e. the world cloth manager was already torn down (shutdown / return-to-title). Driving then would
+/// DLPanic on the profile model's cloth release; nonzero = the exit-time CTD was prevented.
+pub(crate) static PROFILE_DRIVE_CLOTH_SKIPS: AtomicUsize = AtomicUsize::new(0);
 /// Teardowns that found the pump mid-drive and waited for it to exit (any value is fine; proves the fence
 /// engaged rather than racing).
 pub(crate) static PROFILE_TEARDOWN_FENCE_WAITS: AtomicUsize = AtomicUsize::new(0);
