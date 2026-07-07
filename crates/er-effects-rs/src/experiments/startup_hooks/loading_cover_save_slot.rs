@@ -935,6 +935,21 @@ impl<'a> SerializedSaveSlot<'a> {
     }
 }
 
+/// True when any of the 10 save slots holds a readable character (a PlayerGameData block passing
+/// the plausibility core: level/health/stat sanity). A no-save boot natively CREATES a full-size
+/// EMPTY `ER0000.{sl2,co2}` container, which must not satisfy default-save discovery: observed
+/// 2026-07-07, the game rewrote ER0000.sl2 during a pending missing-save-picker run, and the next
+/// launch silently entered DEFAULT-USER-SAVE on that zero-character container instead of
+/// re-arming the picker.
+pub(crate) fn save_bytes_have_any_character(bytes: &[u8]) -> bool {
+    (0..TITLE_PROFILE_SLOT_COUNT).any(|slot| {
+        er_save_loader::bnd4::slot_body(bytes, slot)
+            .ok()
+            .and_then(|body| SerializedSaveSlot::new(body).player_game_data())
+            .is_some()
+    })
+}
+
 impl<'a> SerializedPlayerGameData<'a> {
     fn field(&self, offset: usize, len: usize) -> Option<&'a [u8]> {
         self.body

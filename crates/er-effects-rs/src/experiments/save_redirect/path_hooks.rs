@@ -835,9 +835,26 @@ pub(crate) fn active_default_save_file_name() -> &'static str {
     }
 }
 
+/// Accept a default-save candidate only when it holds at least one readable character. The game
+/// natively creates a full-size EMPTY container on a no-save boot (28 MB, passes the size floor),
+/// which must read as "no save" so the missing-save picker re-arms instead of silently entering
+/// DEFAULT-USER-SAVE on a characterless file.
+fn default_save_with_character(path: PathBuf) -> Option<PathBuf> {
+    let bytes = fs::read(&path).ok()?;
+    if save_bytes_have_any_character(&bytes) {
+        return Some(path);
+    }
+    append_autoload_debug(format_args!(
+        "save-override: default save '{}' has ZERO readable character slots (native empty container); treating as no save",
+        path.display()
+    ));
+    None
+}
+
 fn default_save_file_for_steam_id64(steam_id: u64) -> Option<PathBuf> {
     let dir = default_save_root()?.join(steam_id.to_string());
     validated_save_file_path(dir.join(active_default_save_file_name()))
+        .and_then(default_save_with_character)
 }
 
 fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
@@ -859,6 +876,7 @@ fn default_save_file_candidates() -> Vec<(PathBuf, u64)> {
                 .and_then(plausible_steam_id64)?;
             let dir = entry.path();
             validated_save_file_path(dir.join(active_default_save_file_name()))
+                .and_then(default_save_with_character)
                 .map(|path| (path, steam_id))
         })
         .collect()
