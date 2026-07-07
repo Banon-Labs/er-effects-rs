@@ -841,6 +841,14 @@ pub(crate) static OPTIONSETTING_REAL_BLANK_DETECTED_COUNT: AtomicUsize = AtomicU
 /// where our injected Load-Profile rows live vs the Game tab).
 pub(crate) static OPTIONSETTING_CURRENT_TAB: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub(crate) static OPTIONSETTING_CURRENT_TAB_AT_BLANK: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_REAPPLY_COUNT: AtomicUsize =
+    AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_TAB: AtomicUsize =
+    AtomicUsize::new(usize::MAX);
+pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_OLD_CURRENT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_SELECTED: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// Count of times the fix forced the actively-shown current tab's pane back visible (via SetVisible on
 /// dialog+0x1200 -- the same proxy/call the game's own tab-select uses). Nonzero = the blank was caught
 /// and corrected; the pane draws again.

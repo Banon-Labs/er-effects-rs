@@ -704,6 +704,10 @@ unsafe fn system_quit_reapply_optionsetting_pane_visibility(base: usize, option_
     unsafe {
         *((composite + OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET) as *mut usize) = selected;
     }
+    SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_REAPPLY_COUNT.fetch_add(1, Ordering::SeqCst);
+    SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_TAB.store(tab_index, Ordering::SeqCst);
+    SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_OLD_CURRENT.store(current, Ordering::SeqCst);
+    SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_SELECTED.store(selected, Ordering::SeqCst);
     let set_visible: unsafe extern "system" fn(usize, u8) =
         unsafe { std::mem::transmute(set_visible_addr) };
     let mut visible_mask: usize = 0;

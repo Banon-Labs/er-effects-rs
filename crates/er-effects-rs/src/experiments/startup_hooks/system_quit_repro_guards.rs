@@ -31,6 +31,61 @@ fn sq_repro_target_switches() -> usize {
     SQ_REPRO_TARGET_SWITCHES.clamp(0, SQ_REPRO_TARGET_SLOTS.len())
 }
 
+fn sq_repro_option_tab_row_fingerprint(option_window: usize, tab: usize) -> Option<(usize, usize)> {
+    const HEAP_LO: usize = 0x10000;
+    if option_window < HEAP_LO || tab >= OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT {
+        return None;
+    }
+    let composite = option_window + OPTIONSETTING_COMPOSITE_OFFSET;
+    let dialog = unsafe {
+        safe_read_usize(composite + OPTIONSETTING_COMPOSITE_PANE_CACHE_OFFSET + tab * 8)
+    }
+    .unwrap_or(0);
+    if dialog < HEAP_LO || dialog == TITLE_OWNER_SCAN_START_ADDRESS {
+        return None;
+    }
+    let count = unsafe { safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET) }?;
+    if count > 64 {
+        return None;
+    }
+    let properties = dialog + PROPERTY_EDIT_DIALOG_PROPERTIES_1268_OFFSET;
+    let aligned_properties = (properties + 0x7) & !0x7;
+    let mut hash = 0xcbf29ce484222325usize;
+    for byte in count.to_le_bytes() {
+        hash ^= byte as usize;
+        hash = hash.wrapping_mul(0x100000001b3usize);
+    }
+    for offset in 0..count.saturating_mul(EDIT_PROPERTY_SIZE) {
+        let b = unsafe { safe_read_u8(aligned_properties + offset) }?;
+        hash ^= b as usize;
+        hash = hash.wrapping_mul(0x100000001b3usize);
+    }
+    Some((count, hash))
+}
+
+fn sq_repro_profile_back_record_baseline(option_window: usize, tab: usize) {
+    let Some((count, hash)) = sq_repro_option_tab_row_fingerprint(option_window, tab) else {
+        return;
+    };
+    SQ_REPRO_PROFILE_BACK_BASELINE_COUNTS[tab].store(count, Ordering::SeqCst);
+    SQ_REPRO_PROFILE_BACK_BASELINE_HASHES[tab].store(hash, Ordering::SeqCst);
+    SQ_REPRO_PROFILE_BACK_BASELINE_MASK.fetch_or(1usize << tab, Ordering::SeqCst);
+}
+
+fn sq_repro_profile_back_verify_tab(option_window: usize, tab: usize) {
+    let Some((count, hash)) = sq_repro_option_tab_row_fingerprint(option_window, tab) else {
+        return;
+    };
+    SQ_REPRO_PROFILE_BACK_VERIFY_COUNTS[tab].store(count, Ordering::SeqCst);
+    SQ_REPRO_PROFILE_BACK_VERIFY_HASHES[tab].store(hash, Ordering::SeqCst);
+    SQ_REPRO_PROFILE_BACK_VERIFY_MASK.fetch_or(1usize << tab, Ordering::SeqCst);
+    let baseline_count = SQ_REPRO_PROFILE_BACK_BASELINE_COUNTS[tab].load(Ordering::SeqCst);
+    let baseline_hash = SQ_REPRO_PROFILE_BACK_BASELINE_HASHES[tab].load(Ordering::SeqCst);
+    if baseline_count != count || baseline_hash != hash {
+        SQ_REPRO_PROFILE_BACK_MISMATCH_MASK.fetch_or(1usize << tab, Ordering::SeqCst);
+    }
+}
+
 /// Legacy pause-at-menu mode is disabled while the always-on Save Game row repro is active.
 fn sq_repro_pause_at_menu() -> bool {
     false
@@ -51,11 +106,20 @@ fn sq_repro_tab_return_mode() -> bool {
         .exists()
 }
 
-/// SAVE-GAME ROW mode for the System->Quit repro autopilot. This validation path is always the
-/// Save Game row now; no env string selects the feature. The main `ER_EFFECTS_SYSTEM_QUIT_REPRO=1`
-/// gate still controls whether the repro harness runs at all.
+/// Exact USER repro: System menu -> Quit tab -> Load Profile -> Back before selecting a profile ->
+/// return to Game Options. This is the cross-populated-row bug path; it does not load a profile and
+/// does not use the file picker. Gated separately so the older Save Game harness stays default.
+fn sq_repro_profile_back_mode() -> bool {
+    game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-profile-back-repro.txt")
+        .exists()
+}
+
+/// SAVE-GAME ROW mode for the System->Quit repro autopilot. The main
+/// `ER_EFFECTS_SYSTEM_QUIT_REPRO=1` gate still controls whether the repro harness runs at all.
 fn sq_repro_save_game_only() -> bool {
-    true
+    !sq_repro_tab_return_mode() && !sq_repro_profile_back_mode()
 }
 
 /// Enter a switch: capture the confirm-count baseline and clear the per-switch menu-window/cursor
@@ -68,6 +132,29 @@ fn sq_repro_begin_switch() {
     SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
     SQ_REPRO_INITIAL_CURSOR.store(usize::MAX, Ordering::SeqCst);
     SQ_REPRO_WAIT_RELOAD_FRAMES.store(0, Ordering::SeqCst);
+    SQ_REPRO_PROFILE_BACK_OPENED.store(0, Ordering::SeqCst);
+    SQ_REPRO_PROFILE_BACK_DONE.store(0, Ordering::SeqCst);
+    SQ_REPRO_PROFILE_BACK_RESTORE_BASELINE.store(
+        SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
+    SQ_REPRO_PROFILE_BACK_RESTORE_COUNT.store(0, Ordering::SeqCst);
+    SQ_REPRO_PROFILE_BACK_FINAL_TAB.store(usize::MAX, Ordering::SeqCst);
+    SQ_REPRO_PROFILE_BACK_BASELINE_MASK.store(0, Ordering::SeqCst);
+    SQ_REPRO_PROFILE_BACK_VERIFY_MASK.store(0, Ordering::SeqCst);
+    SQ_REPRO_PROFILE_BACK_MISMATCH_MASK.store(0, Ordering::SeqCst);
+    for slot in &SQ_REPRO_PROFILE_BACK_BASELINE_HASHES {
+        slot.store(0, Ordering::SeqCst);
+    }
+    for slot in &SQ_REPRO_PROFILE_BACK_BASELINE_COUNTS {
+        slot.store(usize::MAX, Ordering::SeqCst);
+    }
+    for slot in &SQ_REPRO_PROFILE_BACK_VERIFY_HASHES {
+        slot.store(0, Ordering::SeqCst);
+    }
+    for slot in &SQ_REPRO_PROFILE_BACK_VERIFY_COUNTS {
+        slot.store(usize::MAX, Ordering::SeqCst);
+    }
     // GX command-queue growth curve: log the finished switch's occupancy high-water + top
     // producers, then reset the per-switch high-water so each switch reports its own peak (the
     // 0x1aeaf05 overflow shows as this peak climbing toward cap across switches).
@@ -193,13 +280,23 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                     append_autoload_debug(format_args!(
                         "sq-repro: OptionSetting opened window=0x{option_setting:x} -> TO_SAVE_GAME (LB, A to enter the Quit Game tab and activate the direct Save Game row)"
                     ));
+                } else if sq_repro_profile_back_mode() {
+                    append_autoload_debug(format_args!(
+                        "sq-repro: OptionSetting opened window=0x{option_setting:x} -> PROFILE_BACK (LB, DOWN, A to activate Load Profile, then B/back before loading)"
+                    ));
                 } else {
                     append_autoload_debug(format_args!(
                         "sq-repro: OptionSetting opened window=0x{option_setting:x} (quit submenu) -> TO_PROFILE (LB, DOWN, A to activate the cloned Load-Profile row)"
                     ));
                 }
                 set_pad(0);
-                sq_repro_transition(SQ_REPRO_STATE_TO_PROFILE);
+                if sq_repro_profile_back_mode() {
+                    SQ_REPRO_TAB_RETURN_PHASE.store(0, Ordering::SeqCst);
+                    SQ_REPRO_TAB_RETURN_MAX_TAB.store(0, Ordering::SeqCst);
+                    sq_repro_transition(SQ_REPRO_STATE_PROFILE_BACK_BASELINE);
+                } else {
+                    sq_repro_transition(SQ_REPRO_STATE_TO_PROFILE);
+                }
                 return;
             }
             let (btn, holding) = sq_repro_edges(tick, &[XINPUT_GAMEPAD_DPAD_UP, XINPUT_GAMEPAD_A]);
@@ -264,6 +361,87 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 }
             }
         }
+        SQ_REPRO_STATE_PROFILE_BACK_BASELINE => {
+            let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
+            let cur = OPTIONSETTING_CURRENT_TAB.load(Ordering::SeqCst);
+            if option != 0 && cur < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT {
+                sq_repro_profile_back_record_baseline(option, cur);
+            }
+            let max = SQ_REPRO_TAB_RETURN_MAX_TAB.load(Ordering::SeqCst);
+            let pulse = |b: u16| {
+                if (tick % INJECT_NAV_CYCLE) < INJECT_NAV_TAP_LEN {
+                    b
+                } else {
+                    0
+                }
+            };
+            if cur != usize::MAX && cur > max {
+                SQ_REPRO_TAB_RETURN_MAX_TAB.store(cur, Ordering::SeqCst);
+                SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
+                set_pad(pulse(XINPUT_GAMEPAD_RIGHT_SHOULDER));
+            } else if tick >= SQ_REPRO_TAB_RETURN_STALL_TICKS && max > 0 {
+                let mask = SQ_REPRO_PROFILE_BACK_BASELINE_MASK.load(Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "sq-repro: PROFILE_BACK baseline reached last tab={max} mask=0x{mask:x}; return to Game Options, then use known LB+DOWN+A Load Profile sequence"
+                ));
+                SQ_REPRO_TAB_RETURN_PHASE.store(0, Ordering::SeqCst);
+                set_pad(0);
+                sq_repro_transition(SQ_REPRO_STATE_PROFILE_BACK_OPEN);
+            } else {
+                set_pad(pulse(XINPUT_GAMEPAD_RIGHT_SHOULDER));
+            }
+        }
+        SQ_REPRO_STATE_PROFILE_BACK_OPEN => {
+            let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+            if profile != 0 {
+                SQ_REPRO_PROFILE_BACK_OPENED.store(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "sq-repro: ProfileSelect opened window=0x{profile:x} -- PROFILE_BACK: send B/back, no slot select, no load"
+                ));
+                set_pad(0);
+                sq_repro_transition(SQ_REPRO_STATE_PROFILE_BACK);
+                return;
+            }
+            let cur = OPTIONSETTING_CURRENT_TAB.load(Ordering::SeqCst);
+            let phase = SQ_REPRO_TAB_RETURN_PHASE.load(Ordering::SeqCst);
+            if phase == 0 {
+                if cur == 0 {
+                    append_autoload_debug(format_args!(
+                        "sq-repro: PROFILE_BACK_OPEN returned to Game Options tab 0; issue known LB+DOWN+A Load Profile sequence"
+                    ));
+                    SQ_REPRO_TAB_RETURN_PHASE.store(1, Ordering::SeqCst);
+                    SQ_REPRO_STATE_TICK.store(0, Ordering::SeqCst);
+                    set_pad(0);
+                } else {
+                    let btn = if (tick % INJECT_NAV_CYCLE) < INJECT_NAV_TAP_LEN {
+                        XINPUT_GAMEPAD_LEFT_SHOULDER
+                    } else {
+                        0
+                    };
+                    if tick % (INJECT_NAV_CYCLE * 8) == 0 {
+                        append_autoload_debug(format_args!(
+                            "sq-repro: PROFILE_BACK_OPEN returning from baseline tab={cur} to Game Options with LB pulses"
+                        ));
+                    }
+                    set_pad(btn);
+                }
+                return;
+            }
+            let (btn, holding) = sq_repro_edges(
+                tick,
+                &[
+                    XINPUT_GAMEPAD_LEFT_SHOULDER,
+                    XINPUT_GAMEPAD_DPAD_DOWN,
+                    XINPUT_GAMEPAD_A,
+                ],
+            );
+            if holding {
+                sq_repro_waiting_once(
+                    "PROFILE_BACK_OPEN: LB+DOWN+A issued from Game Options, waiting for 05_010_ProfileSelect",
+                );
+            }
+            set_pad(btn);
+        }
         SQ_REPRO_STATE_TO_PROFILE => {
             if sq_repro_save_game_only() {
                 let action_count = SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT.load(Ordering::SeqCst);
@@ -289,6 +467,15 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             }
             let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
             if profile != 0 {
+                if sq_repro_profile_back_mode() {
+                    SQ_REPRO_PROFILE_BACK_OPENED.store(1, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "sq-repro: ProfileSelect opened window=0x{profile:x} -- PROFILE_BACK: send B/back, no slot select, no load"
+                    ));
+                    set_pad(0);
+                    sq_repro_transition(SQ_REPRO_STATE_PROFILE_BACK);
+                    return;
+                }
                 if sq_repro_pause_at_menu() {
                     // PAUSE-AT-MENU: the character-load menu is open -- stop HERE. No cursor move,
                     // no slot pick, no load. DONE stops the pad fabrication and releases the input
@@ -322,6 +509,69 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 sq_repro_waiting_once(
                     "TO_PROFILE: LB+DOWN+A issued, waiting for 05_010_ProfileSelect",
                 );
+            }
+            set_pad(btn);
+        }
+        SQ_REPRO_STATE_PROFILE_BACK => {
+            let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+            let restore_count = SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT.load(Ordering::SeqCst);
+            let baseline = SQ_REPRO_PROFILE_BACK_RESTORE_BASELINE.load(Ordering::SeqCst);
+            let direct_visible =
+                SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_REAPPLY_COUNT.load(Ordering::SeqCst);
+            if profile == 0 && restore_count > baseline && direct_visible != 0 {
+                SQ_REPRO_PROFILE_BACK_RESTORE_COUNT.store(restore_count, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "sq-repro: PROFILE_BACK observed ProfileSelect closed + restore_count {baseline}->{restore_count} + direct-visible reapply count={direct_visible}; drive LB back to Game Options for final validation dwell"
+                ));
+                set_pad(0);
+                sq_repro_transition(SQ_REPRO_STATE_PROFILE_BACK_TO_GAME_TAB);
+                return;
+            }
+            let (btn, holding) = sq_repro_edges(tick, &[XINPUT_GAMEPAD_B]);
+            if holding {
+                sq_repro_waiting_once(
+                    "PROFILE_BACK: B/back issued, waiting for ProfileSelect close + restore",
+                );
+            }
+            set_pad(btn);
+        }
+        SQ_REPRO_STATE_PROFILE_BACK_TO_GAME_TAB => {
+            let cur = OPTIONSETTING_CURRENT_TAB.load(Ordering::SeqCst);
+            let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
+            if option != 0 && cur < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT {
+                sq_repro_profile_back_verify_tab(option, cur);
+            }
+            let load_armed = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+                != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+                || SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.load(Ordering::SeqCst) != 0
+                || SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT.load(Ordering::SeqCst) != 0
+                || SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT.load(Ordering::SeqCst) != 0;
+            let baseline_mask = SQ_REPRO_PROFILE_BACK_BASELINE_MASK.load(Ordering::SeqCst);
+            let verify_mask = SQ_REPRO_PROFILE_BACK_VERIFY_MASK.load(Ordering::SeqCst);
+            let mismatch_mask = SQ_REPRO_PROFILE_BACK_MISMATCH_MASK.load(Ordering::SeqCst);
+            let verified_all = baseline_mask != 0 && (verify_mask & baseline_mask) == baseline_mask;
+            if cur == 0 && verified_all && tick >= SQ_REPRO_TAB_RETURN_DWELL_TICKS {
+                SQ_REPRO_PROFILE_BACK_FINAL_TAB.store(cur, Ordering::SeqCst);
+                let pass = !load_armed && mismatch_mask == 0;
+                SQ_REPRO_PROFILE_BACK_DONE.store(pass as usize, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "sq-repro: PROFILE_BACK complete final_tab={cur} load_armed={load_armed} baseline_mask=0x{baseline_mask:x} verify_mask=0x{verify_mask:x} mismatch_mask=0x{mismatch_mask:x} pass={pass}; SELF-DRIVE COMPLETE; releasing block"
+                ));
+                set_pad(0);
+                SQ_REPRO_STATE.store(SQ_REPRO_STATE_DONE, Ordering::SeqCst);
+                return;
+            }
+            let btn = if cur == 0 {
+                0
+            } else if (tick % INJECT_NAV_CYCLE) < INJECT_NAV_TAP_LEN {
+                XINPUT_GAMEPAD_LEFT_SHOULDER
+            } else {
+                0
+            };
+            if tick % (INJECT_NAV_CYCLE * 8) == 0 {
+                append_autoload_debug(format_args!(
+                    "sq-repro: PROFILE_BACK_TO_GAME_TAB current_tab={cur}; pulsing LB until Game Options tab 0 then dwell baseline_mask=0x{baseline_mask:x} verify_mask=0x{verify_mask:x} mismatch_mask=0x{mismatch_mask:x}"
+                ));
             }
             set_pad(btn);
         }
