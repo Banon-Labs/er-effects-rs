@@ -228,10 +228,22 @@ unsafe fn system_quit_save_swap_poll_preview(base: usize) {
 
 unsafe fn system_quit_save_swap_prepare_selected_slot(slot: i32) -> Result<bool, ()> {
     if !(0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: prepare selected slot skipped -- out-of-range slot={slot}"
+        ));
         return Ok(false);
     }
     let mut st = system_quit_save_swap_lock();
     if !st.preview_applied || st.committed {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: prepare selected slot skipped slot={slot} preview_applied={} committed={} armed={} path_set={} candidate_len={} mask=0x{:x}",
+            st.preview_applied,
+            st.committed,
+            st.armed,
+            !st.path.is_empty(),
+            st.candidate_bytes.len(),
+            st.candidate_slot_mask
+        ));
         return Ok(false);
     }
     let bit = 1usize << slot as usize;
@@ -243,9 +255,15 @@ unsafe fn system_quit_save_swap_prepare_selected_slot(slot: i32) -> Result<bool,
         return Err(());
     }
     if st.path.is_empty() || st.candidate_bytes.is_empty() {
+        append_autoload_debug(format_args!(
+            "system-quit-save-swap: refusing ProfileSelect activation for slot {slot}; foreign preview state incomplete path_set={} candidate_len={} mask=0x{:x}",
+            !st.path.is_empty(),
+            st.candidate_bytes.len(),
+            st.candidate_slot_mask
+        ));
         return Err(());
     }
-    match fs::write(&st.path, &st.candidate_bytes) {
+    match write_save_bytes_for_overwrite(&st.path, &st.candidate_bytes) {
         Ok(()) => {
             st.committed = true;
             st.recommitted = false;
@@ -268,6 +286,21 @@ unsafe fn system_quit_save_swap_prepare_selected_slot(slot: i32) -> Result<bool,
     }
 }
 
+fn make_save_file_writable_for_overwrite(path: &str) {
+    if let Ok(meta) = fs::metadata(path) {
+        let mut perms = meta.permissions();
+        if perms.readonly() {
+            perms.set_readonly(false);
+            let _ = fs::set_permissions(path, perms);
+        }
+    }
+}
+
+fn write_save_bytes_for_overwrite(path: &str, bytes: &[u8]) -> std::io::Result<()> {
+    make_save_file_writable_for_overwrite(path);
+    fs::write(path, bytes)
+}
+
 /// Re-commit the foreign candidate bytes AFTER the game's return-title save completes (bc4 terminal).
 /// The activation-time commit is CLOBBERED by that save whenever the picked slot shares the ACTIVE
 /// character's slot index: the return-title chain sets saveRequested and the game re-writes the active
@@ -287,7 +320,7 @@ pub(crate) fn system_quit_save_swap_recommit_after_return_title_save() {
     if !st.committed || st.recommitted || st.path.is_empty() || st.candidate_bytes.is_empty() {
         return;
     }
-    match fs::write(&st.path, &st.candidate_bytes) {
+    match write_save_bytes_for_overwrite(&st.path, &st.candidate_bytes) {
         Ok(()) => {
             st.recommitted = true;
             append_autoload_debug(format_args!(

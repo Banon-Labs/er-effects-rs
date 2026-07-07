@@ -166,8 +166,12 @@ pub(crate) unsafe fn system_quit_open_save_picker_menu(action_obj: usize) -> boo
         return false;
     };
     // Mode-locked extension: only the container flavor the active runtime loads (user directive
-    // 2026-07-06). At this point (in-game menu) the Seamless latch is reliable.
-    let extension = crate::telemetry::expected_save_extension();
+    // 2026-07-06). Same mode source as the ingest pipeline (launcher hint, then module latch).
+    let extension = if save_picker_seamless_mode_after_settle("system-quit-picker-open") {
+        "co2"
+    } else {
+        "sl2"
+    };
     let model =
         crate::experiments::save_picker::SavePickerModel::open(&start_dir, extension);
     if !unsafe { save_picker_stage_row_records(&model) } {
@@ -474,7 +478,11 @@ pub(crate) unsafe fn save_picker_title_pump_tick(base: usize) {
         return;
     };
     let start_dir = save_picker_title_start_dir();
-    let extension = crate::telemetry::expected_save_extension();
+    let extension = if save_picker_seamless_mode_after_settle("title-picker-open") {
+        "co2"
+    } else {
+        "sl2"
+    };
     let model = crate::experiments::save_picker::SavePickerModel::open(&start_dir, extension);
     if !unsafe { save_picker_stage_row_records(&model) } {
         return;

@@ -614,6 +614,10 @@ pub(crate) const SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA: u32 = 0x920c90;
 /// (live/deobf `FUN_140958910`). The first native row is Quit Game / return-to-title; the second
 /// native row is Return to Desktop and must not be cloned for quick-load.
 pub(crate) const SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA: usize = 0x958a20;
+/// Return address immediately after the second native `AddCancelButton` in the Quit Game tab builder
+/// (deobf `FUN_140958910`). Used to append exactly one third in-place-style row while preserving the
+/// native GameEnd GFx component.
+pub(crate) const SYSTEM_QUIT_SECOND_ROW_TARGET_RETURN_RVA: usize = 0x958b37;
 pub(crate) const SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES: usize = 0x20;
 /// Immediate byte in the Quit Game subdialog factory that selects the one-slot `GameEnd` GFX
 /// component (`movb $0xe, 0x20(%rsp)` in live/deobf `FUN_14093bba0`). For the duplicate-button
@@ -639,9 +643,13 @@ pub(crate) const MSG_REPOSITORY_FORMAT_RVA: u32 = 0x7638b0;
 /// Live/deobf `CS::MenuString::MenuString(MenuString*, wchar_t*)` (dump `0x140675990` ->
 /// live `0x1406758a0`). Stores the raw UTF-16 pointer, so callers must pass process-lifetime data.
 pub(crate) const MENU_STRING_FROM_WIDE_RVA: u32 = 0x6758a0;
-/// FMG IDs for the first System -> Quit Game row and its confirmation dialog.
-pub(crate) const SYSTEM_QUIT_SAVE_GAME_MENU_TEXT_ID: i32 = 110510;
-pub(crate) const SYSTEM_QUIT_SAVE_GAME_LINEHELP_ID: i32 = 110500;
+/// FMG IDs for the two native System -> Quit Game rows. We keep the native GameEnd GFx component
+/// and replace these two button slots in-place; adding rows or swapping to the multi-slot component
+/// poisons the shared OptionSetting GFx list.
+pub(crate) const SYSTEM_QUIT_FIRST_ROW_MENU_TEXT_ID: i32 = 110510;
+pub(crate) const SYSTEM_QUIT_FIRST_ROW_LINEHELP_ID: i32 = 110500;
+pub(crate) const SYSTEM_QUIT_SECOND_ROW_MENU_TEXT_ID: i32 = 110511;
+pub(crate) const SYSTEM_QUIT_SECOND_ROW_LINEHELP_ID: i32 = 110501;
 pub(crate) const SYSTEM_QUIT_SAVE_GAME_DIALOG_ID: i32 = 110000;
 /// Native save-only routines: `SaveRequest_Profile(true)` and `RequestSave(true)`. Distinct from
 /// `FUN_14067a490`, which requests save AND sets return-title teardown state.
@@ -654,8 +662,22 @@ pub(crate) const MENU_HELP_LABEL_SIZE: usize = 0x70;
 pub(crate) const MENU_HELP_LABEL_DTOR_RVA: u32 = 0x742c90;
 /// Quit Game / return-to-title action std::function-like vtable used by the native Quit Game builder.
 pub(crate) const SYSTEM_QUIT_RETURN_TITLE_ACTION_VTABLE_RVA: usize = 0x2b12b48;
-/// Vtable invoke target for the Quit Game / return-to-title action object (`add rcx, 8; jmp native route`).
+/// Vtable invoke target for the first native Quit-tab action object (`add rcx, 8; jmp native route`).
+/// This is the row we relabel to Save Game; the hook suppresses the native quit behavior.
 pub(crate) const SYSTEM_QUIT_RETURN_TITLE_ACTION_DO_CALL_RVA: u32 = 0x961640;
+/// Vtable invoke target for the second native Quit-tab action object (`Return to Desktop`). Custom
+/// rows are cloned from the native second AddCancelButton call, so they use this thunk, not the first
+/// row thunk above. Keep this hooked separately so forwarding the real Return-to-Desktop row still
+/// calls its own original trampoline.
+pub(crate) const SYSTEM_QUIT_RETURN_DESKTOP_ACTION_DO_CALL_RVA: u32 = 0x9610d0;
+/// `PropertyNewButtonController` activation/update method. It is the row-click layer above the
+/// std::function fields; hook it for custom Quit rows because Scaleform can reach native confirmation
+/// without hitting the specific action-object thunk we first captured.
+pub(crate) const PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_RVA: u32 = 0x9749f0;
+/// Native predicate called by `PropertyNewButtonController::Activate` before invoking the action
+/// callback. It filters focus/update events from real click/confirm events; controller-level routing
+/// must call this first or merely focusing a custom row opens its action.
+pub(crate) const PROPERTY_NEW_BUTTON_CONTROLLER_SHOULD_INVOKE_RVA: u32 = 0x974b00;
 /// Non-canonical marker copied into only the cloned quick-load action payload; the invoke hook eats it.
 pub(crate) const SYSTEM_QUIT_NOOP_ACTION_SENTINEL: usize = 0x4552_5351_4e4f_4f50;
 /// `PropertyEditDialog.properties.items`: 0x1260 + BasicViewItemList.items(+8).
@@ -669,23 +691,42 @@ pub(crate) const EDIT_PROPERTY_CONTROLLER_OFFSET: usize = 0x78;
 pub(crate) const PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET: usize = 0xa8;
 pub(crate) static SYSTEM_QUIT_DUPLICATE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_NOOP_ACTION_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SYSTEM_QUIT_RETURN_DESKTOP_ACTION_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_SAVE_GAME_GET_AND_FORMAT_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_SAVE_GAME_RETURN_TITLE_REQUEST_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SYSTEM_QUIT_DUPLICATE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_NOOP_ACTION_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_DUPLICATE_INSTALLED_YES: usize = 1;
 pub(crate) const SYSTEM_QUIT_NOOP_ACTION_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_NOOP_ACTION_INSTALLED_YES: usize = 1;
+pub(crate) const SYSTEM_QUIT_RETURN_DESKTOP_ACTION_NOT_INSTALLED: usize = 0;
+pub(crate) const SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED_YES: usize = 1;
+pub(crate) const PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_NOT_INSTALLED: usize = 0;
+pub(crate) const PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED_YES: usize = 1;
 pub(crate) const SYSTEM_QUIT_SAVE_GAME_TEXT_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED_YES: usize = 1;
 pub(crate) const SYSTEM_QUIT_SAVE_GAME_CONFIRM_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_SAVE_GAME_CONFIRM_INSTALLED_YES: usize = 1;
 pub(crate) static SYSTEM_QUIT_DUPLICATE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Native first Quit-tab row action object (label is replaced to Save Game by our text hook). Captured
+/// from the row table immediately after the native first AddCancelButton call returns.
+pub(crate) static SYSTEM_QUIT_NATIVE_SAVE_GAME_ACTION_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
+/// Native second Quit-tab row action object (Return to Desktop). The patched 4-slot GameEnd GFx can
+/// still dispatch this native object for the lower visual buttons; the action hook disambiguates those
+/// by the live dialog cursor so row 2/3 become Load Profile / Load Save Profiles instead of showing
+/// the native desktop confirmation.
+pub(crate) static SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_ACTION_LAST_OBJECT: AtomicUsize =
+    AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_NOOP_SELECTION_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_SAVE_GAME_TEXT_SUBSTITUTION_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -695,9 +736,15 @@ pub(crate) static SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_WINDOW: AtomicUsize = AtomicUs
 pub(crate) static SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_FRAMES: AtomicUsize = AtomicUsize::new(0);
 /// Recorded cloned action implementation object for the quick-load row; only this action is routed.
 pub(crate) static SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
+/// Recorded `PropertyNewButtonController` for the quick-load row. This is the authoritative click
+/// dispatch identity when the GFx/native bridge bypasses the action-object thunk.
+pub(crate) static SYSTEM_QUIT_LOAD_PROFILE_CONTROLLER_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
 /// Recorded cloned action implementation object for the save-folder row; only this action opens the
 /// env-provided save directory.
 pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
+/// Recorded `PropertyNewButtonController` for the save-folder row. This is the authoritative click
+/// dispatch identity when the GFx/native bridge bypasses the action-object thunk.
+pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -841,16 +888,47 @@ pub(crate) static OPTIONSETTING_REAL_BLANK_DETECTED_COUNT: AtomicUsize = AtomicU
 /// where our injected Load-Profile rows live vs the Game tab).
 pub(crate) static OPTIONSETTING_CURRENT_TAB: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub(crate) static OPTIONSETTING_CURRENT_TAB_AT_BLANK: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_REAPPLY_COUNT: AtomicUsize =
+    AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_TAB: AtomicUsize =
+    AtomicUsize::new(usize::MAX);
+pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_OLD_CURRENT: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_SELECTED: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_LAST_SELECTED: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// Count of times the fix forced the actively-shown current tab's pane back visible (via SetVisible on
 /// dialog+0x1200 -- the same proxy/call the game's own tab-select uses). Nonzero = the blank was caught
 /// and corrected; the pane draws again.
 pub(crate) static OPTIONSETTING_PANE_FIX_APPLIED: AtomicUsize = AtomicUsize::new(0);
+/// Active OptionSetting row-table sampler: read-only row/action classification for the currently
+/// visible tab dialog. This is the product-proof oracle for the Game Options/Quit contamination class:
+/// tab 0 must not contain cloned quick-load/open-profile actions; Quit tab should contain them once the
+/// feature is injected.
+pub(crate) static OPTIONSETTING_ACTIVE_ROW_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OPTIONSETTING_ACTIVE_ROW_DIALOG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OPTIONSETTING_ACTIVE_ROW_TAB: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static OPTIONSETTING_ACTIVE_ROW_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OPTIONSETTING_ACTIVE_ROW_CLONED_MASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OPTIONSETTING_ACTIVE_ROW_NATIVE_SAVE_MASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OPTIONSETTING_ACTIVE_ROW_ACTION_HASH: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OPTIONSETTING_ACTIVE_ROW_LABEL_HASH: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OPTIONSETTING_ACTIVE_ROW_QUIT_LABEL_MASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OPTIONSETTING_GAME_OPTIONS_CLONED_ROW_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OPTIONSETTING_GAME_OPTIONS_QUIT_LABEL_HITS: AtomicUsize = AtomicUsize::new(0);
 /// window -> SettingTabControl (+0x1870), -> tab view (+0x10), -> selected index (view+0xd4).
 pub(crate) const OPTIONSETTING_TAB_CONTROL_OFFSET: usize = 0x1870;
 pub(crate) const OPTIONSETTING_TAB_VIEW_OFFSET: usize = 0x10;
 pub(crate) const OPTIONSETTING_TAB_VIEW_SELECTED_INDEX_OFFSET: usize = 0xd4;
 /// Composite current-dialog embedded pane proxy offset (`dialog+0x1200`; FUN_14093b850 SetVisibles it).
 pub(crate) const OPTIONSETTING_DIALOG_PANE_PROXY_OFFSET: usize = 0x1200;
+/// Deobf/runtime RVA for the native OptionSetting tab-select helper body. It sets composite+0xb8,
+/// copies pane state old->new, refreshes the selected row, then toggles all cached panes. Call only
+/// after first repairing composite+0xb8 to the target pane so its copy step is self-copy, not stale
+/// Quit->Game state copy.
+pub(crate) const OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA: u32 = 0x0093b760;
 /// CSMenuMan flag bit meaning "menu actively shown/drawn this frame" (per-frame updater sets `|=0x4`).
 pub(crate) const OPTIONSETTING_FLAG_ACTIVELY_SHOWN_BIT: u8 = 0x4;
 

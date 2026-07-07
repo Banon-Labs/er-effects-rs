@@ -8,9 +8,9 @@
 //! native staging (ProfileSummary preview records, window submit/close); this module owns what
 //! the rows MEAN.
 //!
-//! Extension filtering is mode-locked via [`crate::telemetry::expected_save_extension`]
-//! (`.co2` when Seamless Co-op is resident, else `.sl2`; user directive 2026-07-06 -- never
-//! offer the flavor the active runtime cannot load).
+//! Extension filtering is mode-locked via `save_picker_seamless_mode_after_settle` (launcher
+//! hint, then the ERSC module latch: `.co2` for Seamless, else `.sl2`; user directive
+//! 2026-07-06 -- never offer the flavor the active runtime cannot load).
 
 use std::{
     path::{Path, PathBuf},

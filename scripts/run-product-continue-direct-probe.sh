@@ -305,10 +305,17 @@ mkdir -p "$ARTIFACT_DIR"
 
 if (( DRY_RUN )); then
   write_autoload_request
-  cat > "$ARTIFACT_DIR/dry-run-summary.json" <<EOF
+  if [[ "${RUNTIME_NO_TEARDOWN:-0}" == "1" ]]; then
+    cat > "$ARTIFACT_DIR/dry-run-summary.json" <<EOF
+{"artifact_dir":"$ARTIFACT_DIR","launch":"me3-native-eldenring-exe","watcher":null,"no_teardown":true,"runtime_expected_mode":"$RUNTIME_EXPECTED_MODE"}
+EOF
+    echo "dry-run ok: would launch eldenring.exe through me3 (DLL as me3 native) with RUNTIME_NO_TEARDOWN=1; no readiness watcher and no agent-owned teardown"
+  else
+    cat > "$ARTIFACT_DIR/dry-run-summary.json" <<EOF
 {"artifact_dir":"$ARTIFACT_DIR","launch":"me3-native-eldenring-exe","watcher":".auto/runtime_probe.sh","timeout_seconds":$RUNTIME_TIMEOUT_SECONDS,"runtime_expected_mode":"$RUNTIME_EXPECTED_MODE"}
 EOF
-  echo "dry-run ok: would start .auto/runtime_probe.sh, launch eldenring.exe through me3 (DLL as me3 native), wait <=${RUNTIME_TIMEOUT_SECONDS}s, then tear down owned launcher pid and exact eldenring.exe runtime pids"
+    echo "dry-run ok: would start .auto/runtime_probe.sh, launch eldenring.exe through me3 (DLL as me3 native), wait <=${RUNTIME_TIMEOUT_SECONDS}s, then tear down owned launcher pid and exact eldenring.exe runtime pids"
+  fi
   exit 0
 fi
 

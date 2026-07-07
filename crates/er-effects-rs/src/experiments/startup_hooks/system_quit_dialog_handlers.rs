@@ -137,8 +137,28 @@ pub(crate) unsafe extern "system" fn system_quit_menu_window_list_push_hook(
     ret
 }
 
-pub(crate) unsafe extern "system" fn system_quit_noop_desktop_action_hook(
+fn system_quit_native_return_visual_fallback_row(cursor: i32) -> Option<i32> {
+    if cursor == 2 || cursor == 3 {
+        return Some(cursor);
+    }
+    // The patched native GameEnd movie has four visible buttons, but its original click dispatcher can
+    // still report the native Return-to-Desktop action/cursor for the lower cloned visuals. For mouse
+    // use, disambiguate by the same OS cursor position the game polls: bottom-left is Load Profile,
+    // bottom-right is Load Save Profiles. Top row and unknown cursor stay native Return to Desktop.
+    let Some((nx, ny)) = read_cursor_normalized() else {
+        return None;
+    };
+    if ny > 0.12 {
+        if nx < 0.0 { Some(2) } else { Some(3) }
+    } else {
+        None
+    }
+}
+
+unsafe fn system_quit_route_button_action_or_forward(
     action_obj: usize,
+    orig: usize,
+    hook_name: &str,
 ) -> usize {
     let open_save_dir_action = SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
     if action_obj != 0 && action_obj == open_save_dir_action {
@@ -150,7 +170,22 @@ pub(crate) unsafe extern "system" fn system_quit_noop_desktop_action_hook(
         return 0;
     }
     let recorded_action = SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
-    if action_obj != 0 && action_obj == recorded_action {
+    let native_return_desktop_action =
+        SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
+    let dialog = unsafe { safe_read_usize(action_obj + 0x8) }.unwrap_or(0);
+    let cursor = if dialog >= 0x10000 {
+        unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }.unwrap_or(-1)
+    } else {
+        -1
+    };
+    let native_return_visual_row = if action_obj != 0 && action_obj == native_return_desktop_action {
+        system_quit_native_return_visual_fallback_row(cursor)
+    } else {
+        None
+    };
+    if action_obj != 0
+        && (action_obj == recorded_action || native_return_visual_row == Some(2))
+    {
         let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
         if phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
             append_autoload_debug(format_args!(
@@ -160,33 +195,148 @@ pub(crate) unsafe extern "system" fn system_quit_noop_desktop_action_hook(
         }
         SYSTEM_QUIT_NOOP_SELECTION_COUNT.fetch_add(1, Ordering::SeqCst);
         let opened = unsafe { system_quit_open_profile_load_dialog(action_obj) };
+        let mouse = read_cursor_normalized();
         append_autoload_debug(format_args!(
-            "system-quit-dup: cloned quick-load action selected action=0x{action_obj:x} opened={opened}; suppressing native Quit Game row action until ProfileSelect confirms slot"
+            "system-quit-dup: Load Profile action selected action=0x{action_obj:x} cursor={cursor} native_visual_row={:?} mouse={:?} recorded_action=0x{recorded_action:x} native_return_action=0x{native_return_desktop_action:x} opened={opened}; suppressing native Quit Game row action until ProfileSelect confirms slot",
+            native_return_visual_row, mouse
         ));
         return 0;
     }
-    let dialog = unsafe { safe_read_usize(action_obj + 0x8) }.unwrap_or(0);
-    if dialog >= 0x10000 {
-        SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.store(0, Ordering::SeqCst);
-        SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
-        let closed = unsafe { system_quit_save_game_fire_save_and_close(dialog, "row_action") };
+    if action_obj != 0 && native_return_visual_row == Some(3) {
+        SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
+        let opened = unsafe { system_quit_open_save_picker_menu(action_obj) };
+        let mouse = read_cursor_normalized();
         append_autoload_debug(format_args!(
-            "system-quit-save: Save Game row selected action=0x{action_obj:x} dialog=0x{dialog:x}; requested save + close-all closed={closed}; suppressed native Quit Game/return-title action"
+            "system-quit-load-save-profiles: Load Save Profiles action selected via native-return action=0x{action_obj:x} cursor={cursor} native_visual_row={:?} mouse={:?} opened={opened} (in-game save picker); suppressing native Quit Game row action",
+            native_return_visual_row, mouse
         ));
         return 0;
     }
-    let orig = SYSTEM_QUIT_NOOP_ACTION_ORIG.load(Ordering::SeqCst);
+    let save_game_action = SYSTEM_QUIT_NATIVE_SAVE_GAME_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
+    if action_obj != 0 && action_obj == save_game_action {
+        let dialog = unsafe { safe_read_usize(action_obj + 0x8) }.unwrap_or(0);
+        if dialog >= 0x10000 {
+            SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.store(0, Ordering::SeqCst);
+            SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
+            let closed = unsafe { system_quit_save_game_fire_save_and_close(dialog, "row_action") };
+            append_autoload_debug(format_args!(
+                "system-quit-save: Save Game native row selected action=0x{action_obj:x} dialog=0x{dialog:x}; requested save + close-all closed={closed}; suppressed native Quit Game/return-title action"
+            ));
+            return 0;
+        }
+    }
     if orig == HOOK_ORIGINAL_UNSET {
         append_autoload_debug(format_args!(
-            "system-quit-save: Quit Game/Save Game action trampoline is unset for action=0x{action_obj:x} dialog=0x{dialog:x}; fail-open return 0"
+            "system-quit-save: {hook_name} action trampoline is unset for action=0x{action_obj:x} dialog=0x{dialog:x}; fail-open return 0"
         ));
         return 0;
     }
     append_autoload_debug(format_args!(
-        "system-quit-save: original Quit Game row selected action=0x{action_obj:x} but dialog=0x{dialog:x} is not heap-like; forwarding native action without save-only latch"
+        "system-quit-save: {hook_name} original native row selected action=0x{action_obj:x} dialog=0x{dialog:x}; forwarding native action"
     ));
     let original: unsafe extern "system" fn(usize) -> usize = unsafe { std::mem::transmute(orig) };
     unsafe { original(action_obj) }
+}
+
+pub(crate) unsafe extern "system" fn system_quit_noop_desktop_action_hook(
+    action_obj: usize,
+) -> usize {
+    let orig = SYSTEM_QUIT_NOOP_ACTION_ORIG.load(Ordering::SeqCst);
+    unsafe { system_quit_route_button_action_or_forward(action_obj, orig, "save-game/first-row") }
+}
+
+pub(crate) unsafe extern "system" fn system_quit_return_desktop_action_hook(
+    action_obj: usize,
+) -> usize {
+    let orig = SYSTEM_QUIT_RETURN_DESKTOP_ACTION_ORIG.load(Ordering::SeqCst);
+    unsafe { system_quit_route_button_action_or_forward(action_obj, orig, "return-desktop/second-row") }
+}
+
+unsafe fn system_quit_forward_button_controller_activation(
+    controller: usize,
+    event_kind: u32,
+    event_a: usize,
+    event_b: usize,
+) {
+    let orig = PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: PropertyNewButtonController activation trampoline unset for controller=0x{controller:x}; fail-closed return"
+        ));
+        return;
+    }
+    let original: unsafe extern "system" fn(usize, u32, usize, usize) = unsafe { std::mem::transmute(orig) };
+    unsafe { original(controller, event_kind, event_a, event_b) };
+}
+
+unsafe fn system_quit_controller_should_invoke_action(controller: usize, event_a: usize) -> bool {
+    let Ok(predicate_addr) = game_rva(PROPERTY_NEW_BUTTON_CONTROLLER_SHOULD_INVOKE_RVA) else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: failed to resolve PropertyNewButtonController action predicate rva 0x{PROPERTY_NEW_BUTTON_CONTROLLER_SHOULD_INVOKE_RVA:x}; forwarding native activation"
+        ));
+        return false;
+    };
+    let predicate: unsafe extern "system" fn(usize, usize) -> u8 = unsafe { std::mem::transmute(predicate_addr) };
+    unsafe { predicate(controller, event_a) != 0 }
+}
+
+pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hook(
+    controller: usize,
+    event_kind: u32,
+    event_a: usize,
+    event_b: usize,
+) {
+    let load_controller = SYSTEM_QUIT_LOAD_PROFILE_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst);
+    let open_controller = SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst);
+    let custom_controller = controller != 0 && (controller == load_controller || controller == open_controller);
+    if custom_controller
+        && !unsafe { system_quit_controller_should_invoke_action(controller, event_a) }
+    {
+        unsafe {
+            system_quit_forward_button_controller_activation(controller, event_kind, event_a, event_b)
+        };
+        return;
+    }
+    if controller != 0 && controller == load_controller {
+        let action = unsafe {
+            safe_read_usize(controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET)
+        }
+        .unwrap_or(0);
+        let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+        if phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: controller quick-load activation ignored controller=0x{controller:x} action=0x{action:x} phase={phase}; native handoff already armed"
+            ));
+            return;
+        }
+        SYSTEM_QUIT_NOOP_SELECTION_COUNT.fetch_add(1, Ordering::SeqCst);
+        let opened = if action != 0 {
+            unsafe { system_quit_open_profile_load_dialog(action) }
+        } else {
+            false
+        };
+        append_autoload_debug(format_args!(
+            "system-quit-dup: Load Profile controller selected controller=0x{controller:x} action=0x{action:x} event_kind={event_kind} event_a=0x{event_a:x} event_b=0x{event_b:x} opened={opened}; suppressing native button activation"
+        ));
+        return;
+    }
+    if controller != 0 && controller == open_controller {
+        let action = unsafe {
+            safe_read_usize(controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET)
+        }
+        .unwrap_or(0);
+        SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
+        let opened = if action != 0 {
+            unsafe { system_quit_open_save_picker_menu(action) }
+        } else {
+            false
+        };
+        append_autoload_debug(format_args!(
+            "system-quit-load-save-profiles: Load Save Profiles controller selected controller=0x{controller:x} action=0x{action:x} event_kind={event_kind} event_a=0x{event_a:x} event_b=0x{event_b:x} opened={opened} (in-game save picker); suppressing native button activation"
+        ));
+        return;
+    }
+    unsafe { system_quit_forward_button_controller_activation(controller, event_kind, event_a, event_b) };
 }
 
 fn wide_z(text: &str) -> Vec<u16> {
@@ -194,16 +344,14 @@ fn wide_z(text: &str) -> Vec<u16> {
 }
 
 /// The ACTIVE save file the character-switch feature snapshots + restores + writes to. Resolved from
-/// runtime GROUND TRUTH via `configured_or_default_save_file()`: an explicit `save_file`
-/// (env/er-effects.toml) still wins for probes, but a real user with NO config falls back to the actual
-/// `%APPDATA%/EldenRing/<steamid>/ER0000.{co2|sl2}` -- and the default name is Seamless-aware
-/// (`.co2` first when `ersc.dll` is resident). This is the de-env-gating fix (user directive 2026-07-06:
-/// a fix that only works with a probe env var set is not a fix): the swap previously used the
-/// env/toml-only `configured_save_file`, so a real Seamless user with no save_file configured either
-/// got "save_file unset" or armed the wrong flavor (.sl2 while the game reads .co2).
+/// runtime GROUND TRUTH via `active_save_file_for_system_quit()`: a direct-file save selected in the
+/// missing-save picker is a read-only source copied into the private redirected native save tree, so
+/// this returns the game's native `%APPDATA%/EldenRing/<steamid>/ER0000.{co2|sl2}` path for writes.
+/// Explicit/default saves keep using the normal configured/default resolver. Never write back to the
+/// direct source file under `save-files/` or a user-picked path.
 fn system_quit_env_save_path() -> Result<String, &'static str> {
-    let Some(path) = configured_or_default_save_file() else {
-        return Err("no active save file (configured save_file unset and no default ER0000 save resolved)");
+    let Some(path) = active_save_file_for_system_quit() else {
+        return Err("no active save file (direct/configured save unset and no default ER0000 save resolved)");
     };
     let path = path.to_string_lossy();
     let trimmed = path.trim();
@@ -266,8 +414,8 @@ unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool {
     // while Seamless owns the session, `.co2` in vanilla) would preview character slots the
     // active runtime never actually loads (mixing save flavors across modes corrupts
     // expectations; user directive 2026-07-06).
-    let picker_ext = crate::telemetry::expected_save_extension();
-    let seamless = picker_ext == "co2";
+    let seamless = save_picker_seamless_mode_after_settle("system-quit-ingest-picked-save");
+    let picker_ext = if seamless { "co2" } else { "sl2" };
     let selected_log = system_quit_windows_path_for_log(selected_path);
     if !Path::new(selected_path).is_file() {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -676,11 +824,11 @@ pub(crate) unsafe extern "system" fn system_quit_save_game_get_and_format_hook(
     fmg_name: usize,
     abbrev: usize,
 ) -> usize {
-    let replacement = if text_id == SYSTEM_QUIT_SAVE_GAME_MENU_TEXT_ID
+    let replacement = if text_id == SYSTEM_QUIT_FIRST_ROW_MENU_TEXT_ID
         && unsafe { wide_equals_ascii(abbrev, b"GRMT") }
     {
         Some(SYSTEM_QUIT_SAVE_GAME_LABEL_W.as_ptr() as usize)
-    } else if text_id == SYSTEM_QUIT_SAVE_GAME_LINEHELP_ID
+    } else if text_id == SYSTEM_QUIT_FIRST_ROW_LINEHELP_ID
         && unsafe { wide_equals_ascii(abbrev, b"GRHK") }
     {
         Some(SYSTEM_QUIT_SAVE_GAME_HELP_W.as_ptr() as usize)
@@ -855,133 +1003,179 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
     }
     let original: unsafe extern "system" fn(usize, usize, usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig) };
-    let caller_match = callstack_contains_game_rva(
+    let first_row_call = callstack_contains_game_rva(
         SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA
             .saturating_sub(SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES),
         SYSTEM_QUIT_DUPLICATE_TARGET_RETURN_RVA + SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES,
+    );
+    let second_row_call = callstack_contains_game_rva(
+        SYSTEM_QUIT_SECOND_ROW_TARGET_RETURN_RVA
+            .saturating_sub(SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES),
+        SYSTEM_QUIT_SECOND_ROW_TARGET_RETURN_RVA + SYSTEM_QUIT_DUPLICATE_CALLER_WINDOW_BYTES,
     );
     let before =
         unsafe { safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET) }
             .unwrap_or(0);
     let ret = unsafe { original(dialog, label, action_fn, enabled_fn, keyguide_fn) };
-    if caller_match {
-        let after_native =
-            unsafe { safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET) }
-                .unwrap_or(0);
-        if after_native < 0x10 {
-            if SYSTEM_QUIT_NOOP_ACTION_INSTALLED.load(Ordering::SeqCst)
-                != SYSTEM_QUIT_NOOP_ACTION_INSTALLED_YES
-            {
-                append_autoload_debug(format_args!(
-                    "system-quit-dup: matched Quit Game call but cloned action hook is not installed; skipping Load Profile/Load Save Profiles rows"
-                ));
-                return ret;
-            }
-            let Ok(label_dtor_addr) = game_rva(MENU_HELP_LABEL_DTOR_RVA) else {
-                append_autoload_debug(format_args!(
-                    "system-quit-dup: failed to resolve MenuHelpLabelComponent dtor rva 0x{MENU_HELP_LABEL_DTOR_RVA:x}; skipping cloned rows"
-                ));
-                return ret;
-            };
-            let label_dtor: unsafe extern "system" fn(usize) =
-                unsafe { std::mem::transmute(label_dtor_addr) };
-            let mut load_label_storage =
-                std::mem::MaybeUninit::<SystemQuitMenuHelpLabelScratch>::uninit();
-            let load_label = load_label_storage.as_mut_ptr() as usize;
-            let load_label_ok = unsafe {
-                system_quit_build_static_label_component(
-                    load_label,
-                    &SYSTEM_QUIT_LOAD_PROFILE_LABEL_W,
-                    &SYSTEM_QUIT_LOAD_PROFILE_HELP_W,
-                )
-            };
-            let load_ret = if load_label_ok {
-                let r = unsafe { original(dialog, load_label, action_fn, enabled_fn, keyguide_fn) };
-                unsafe { label_dtor(load_label) };
-                r
-            } else {
-                0
-            };
-            let after_load = unsafe {
-                safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET)
-            }
-            .unwrap_or(0);
-            let mut open_label_storage =
-                std::mem::MaybeUninit::<SystemQuitMenuHelpLabelScratch>::uninit();
-            let open_label = open_label_storage.as_mut_ptr() as usize;
-            let open_label_ok = unsafe {
-                system_quit_build_static_label_component(
-                    open_label,
-                    &SYSTEM_QUIT_LOAD_SAVE_PROFILES_LABEL_W,
-                    // Name the container the active mode actually replaces: ERSC sessions use
-                    // ER0000.co2, vanilla ER0000.sl2 (keeps the row help consistent with the
-                    // picker's mode-locked filter).
-                    if crate::telemetry::seamless_coop_loaded() {
-                        &SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_CO2_W
-                    } else {
-                        &SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_W
-                    },
-                )
-            };
-            let open_ret = if open_label_ok {
-                let r = unsafe { original(dialog, open_label, action_fn, enabled_fn, keyguide_fn) };
-                unsafe { label_dtor(open_label) };
-                r
-            } else {
-                0
-            };
-            let after_open = unsafe {
-                safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET)
-            }
-            .unwrap_or(0);
-            let properties = dialog + PROPERTY_EDIT_DIALOG_PROPERTIES_1268_OFFSET;
-            let aligned_properties = (properties + 0x7) & !0x7;
-            let load_row_index = after_load.saturating_sub(1);
-            let load_row = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(load_row_index);
-            let open_row_index = after_open.saturating_sub(1);
-            let open_row = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(open_row_index);
-            let load_controller =
-                unsafe { safe_read_usize(load_row + EDIT_PROPERTY_CONTROLLER_OFFSET) }.unwrap_or(0);
-            let open_controller =
-                unsafe { safe_read_usize(open_row + EDIT_PROPERTY_CONTROLLER_OFFSET) }.unwrap_or(0);
-            let load_action = if load_controller != 0 {
-                unsafe {
-                    safe_read_usize(
-                        load_controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET,
-                    )
-                }
-                .unwrap_or(0)
-            } else {
-                0
-            };
-            let open_action = if open_label_ok && open_controller != 0 {
-                unsafe {
-                    safe_read_usize(
-                        open_controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET,
-                    )
-                }
-                .unwrap_or(0)
-            } else {
-                0
-            };
-            if load_action != 0 {
-                SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.store(load_action, Ordering::SeqCst);
-            }
-            if open_action != 0 {
-                SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT.store(open_action, Ordering::SeqCst);
-            }
-            SYSTEM_QUIT_DUPLICATE_COUNT.fetch_add(1, Ordering::SeqCst);
-            SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE.store(before, Ordering::SeqCst);
-            SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER.store(after_open, Ordering::SeqCst);
+    if !(first_row_call || second_row_call) {
+        return ret;
+    }
+
+    // OptionSetting constructs/lazily rebuilds hidden tab panes while another tab is visible. Mutate
+    // only the Quit tab's own dialog; never write rows into the active non-Quit pane.
+    const OPTIONSETTING_QUIT_TAB_INDEX: usize = 8;
+    let active_tab = OPTIONSETTING_CURRENT_TAB.load(Ordering::SeqCst);
+    let active_dialog = OPTIONSETTING_CURRENT_DIALOG.load(Ordering::SeqCst);
+    let actively_shown = OPTIONSETTING_ACTIVELY_SHOWN.load(Ordering::SeqCst) != 0;
+    if actively_shown && active_tab != OPTIONSETTING_QUIT_TAB_INDEX && active_dialog == dialog {
+        let skip_n = SYSTEM_QUIT_DUPLICATE_COUNT.load(Ordering::SeqCst);
+        if skip_n < 16 {
             append_autoload_debug(format_args!(
-                "system-quit-dup: added cloned Load Profile + Load Save Profiles rows dialog=0x{dialog:x} count {before}->{after_native}->{after_load}->{after_open} ret=0x{ret:x} load_ret=0x{load_ret:x} open_label_ok={open_label_ok} open_ret=0x{open_ret:x} load_row=0x{load_row:x} load_controller=0x{load_controller:x} load_action=0x{load_action:x} open_row=0x{open_row:x} open_controller=0x{open_controller:x} open_action=0x{open_action:x}"
+                "system-quit-dup: matched Quit Game AddCancelButton but target is active non-Quit tab={active_tab} dialog=0x{dialog:x}; skipping row routing so active tab stays vanilla"
             ));
+        }
+        return ret;
+    }
+
+    let after_native =
+        unsafe { safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET) }
+            .unwrap_or(0);
+    let properties = dialog + PROPERTY_EDIT_DIALOG_PROPERTIES_1268_OFFSET;
+    let aligned_properties = (properties + 0x7) & !0x7;
+    let mut after_final = after_native;
+    if after_native > before {
+        let native_row_index = after_native.saturating_sub(1);
+        let native_row = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(native_row_index);
+        let native_controller =
+            unsafe { safe_read_usize(native_row + EDIT_PROPERTY_CONTROLLER_OFFSET) }.unwrap_or(0);
+        let native_action = if native_controller != 0 {
+            unsafe {
+                safe_read_usize(native_controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET)
+            }
+            .unwrap_or(0)
         } else {
+            0
+        };
+        if native_action != 0 && first_row_call {
+            SYSTEM_QUIT_NATIVE_SAVE_GAME_ACTION_LAST_OBJECT.store(native_action, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "system-quit-dup: matched Quit Game call but count after native is {after_native}, not duplicating"
+                "system-quit-dup: captured native first Quit row action=0x{native_action:x}; routing this in-place button to Save Game"
+            ));
+        } else if native_action != 0 && second_row_call {
+            SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_ACTION_LAST_OBJECT.store(native_action, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "system-quit-dup: captured native second Quit row action=0x{native_action:x}; leaving cursor=1 Return to Desktop native, cursor=2/3 route to custom rows if GameEnd dispatch collapses"
             ));
         }
     }
+
+    if second_row_call {
+        let Ok(label_dtor_addr) = game_rva(MENU_HELP_LABEL_DTOR_RVA) else {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: failed to resolve MenuHelpLabelComponent dtor rva 0x{MENU_HELP_LABEL_DTOR_RVA:x}; cannot add Load Profile/Load Save Profiles rows"
+            ));
+            SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE.store(before, Ordering::SeqCst);
+            SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER.store(after_native, Ordering::SeqCst);
+            return ret;
+        };
+        let label_dtor: unsafe extern "system" fn(usize) =
+            unsafe { std::mem::transmute(label_dtor_addr) };
+        let mut load_label_storage =
+            std::mem::MaybeUninit::<SystemQuitMenuHelpLabelScratch>::uninit();
+        let load_label = load_label_storage.as_mut_ptr() as usize;
+        let load_label_ok = unsafe {
+            system_quit_build_static_label_component(
+                load_label,
+                &SYSTEM_QUIT_LOAD_PROFILE_LABEL_W,
+                &SYSTEM_QUIT_LOAD_PROFILE_HELP_W,
+            )
+        };
+        let (load_ret, load_row, load_controller, load_action) = if load_label_ok {
+            let r = unsafe { original(dialog, load_label, action_fn, enabled_fn, keyguide_fn) };
+            unsafe { label_dtor(load_label) };
+            after_final = unsafe {
+                safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET)
+            }
+            .unwrap_or(after_native);
+            let row_index = after_final.saturating_sub(1);
+            let row = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(row_index);
+            let controller =
+                unsafe { safe_read_usize(row + EDIT_PROPERTY_CONTROLLER_OFFSET) }.unwrap_or(0);
+            let action = if controller != 0 {
+                unsafe {
+                    safe_read_usize(controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET)
+                }
+                .unwrap_or(0)
+            } else {
+                0
+            };
+            if action != 0 {
+                SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.store(action, Ordering::SeqCst);
+            }
+            if controller != 0 {
+                SYSTEM_QUIT_LOAD_PROFILE_CONTROLLER_LAST_OBJECT.store(controller, Ordering::SeqCst);
+            }
+            (r, row, controller, action)
+        } else {
+            (0, 0, 0, 0)
+        };
+
+        let mut open_label_storage =
+            std::mem::MaybeUninit::<SystemQuitMenuHelpLabelScratch>::uninit();
+        let open_label = open_label_storage.as_mut_ptr() as usize;
+        let open_label_ok = unsafe {
+            system_quit_build_static_label_component(
+                open_label,
+                &SYSTEM_QUIT_LOAD_SAVE_PROFILES_LABEL_W,
+                if crate::telemetry::seamless_coop_loaded() {
+                    &SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_CO2_W
+                } else {
+                    &SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_W
+                },
+            )
+        };
+        let (open_ret, open_row, open_controller, open_action) = if open_label_ok {
+            let r = unsafe { original(dialog, open_label, action_fn, enabled_fn, keyguide_fn) };
+            unsafe { label_dtor(open_label) };
+            after_final = unsafe {
+                safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET)
+            }
+            .unwrap_or(after_final);
+            let row_index = after_final.saturating_sub(1);
+            let row = aligned_properties + EDIT_PROPERTY_SIZE.saturating_mul(row_index);
+            let controller =
+                unsafe { safe_read_usize(row + EDIT_PROPERTY_CONTROLLER_OFFSET) }.unwrap_or(0);
+            let action = if controller != 0 {
+                unsafe {
+                    safe_read_usize(controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET)
+                }
+                .unwrap_or(0)
+            } else {
+                0
+            };
+            if action != 0 {
+                SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT.store(action, Ordering::SeqCst);
+            }
+            if controller != 0 {
+                SYSTEM_QUIT_OPEN_SAVE_DIR_CONTROLLER_LAST_OBJECT.store(controller, Ordering::SeqCst);
+            }
+            (r, row, controller, action)
+        } else {
+            (0, 0, 0, 0)
+        };
+        if load_label_ok || open_label_ok {
+            SYSTEM_QUIT_DUPLICATE_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
+        append_autoload_debug(format_args!(
+            "system-quit-dup: added native GameEnd rows Load Profile + Load Save Profiles dialog=0x{dialog:x} count {before}->{after_native}->{after_final} ret=0x{ret:x} load_ok={load_label_ok} load_ret=0x{load_ret:x} load_row=0x{load_row:x} load_controller=0x{load_controller:x} load_action=0x{load_action:x} open_ok={open_label_ok} open_ret=0x{open_ret:x} open_row=0x{open_row:x} open_controller=0x{open_controller:x} open_action=0x{open_action:x}"
+        ));
+    }
+
+    SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE.store(before, Ordering::SeqCst);
+    SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER.store(after_final, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "system-quit-dup: routed native Quit rows dialog=0x{dialog:x} first_row_call={first_row_call} second_row_call={second_row_call} count {before}->{after_native}->{after_final}; native GameEnd GFx component preserved"
+    ));
     ret
 }
 

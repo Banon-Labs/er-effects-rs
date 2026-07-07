@@ -107,6 +107,9 @@ unsafe extern "system" fn save_ntcreatefile_diag_hook(
                 // before the boot save READ/WRITE we care about. The .sl2 opens ARE the save commit.
                 let _ = ELDENRING_SEG;
                 let is_sl2 = wide_ends_with_ci_ascii(path, SL2D);
+                if is_save_file_or_backup_path(path) {
+                    wait_for_missing_save_dialog_if_pending(path);
+                }
                 if is_sl2 {
                     observe_steam_id64_from_save_path(path);
                     let is_write = access & 0x4000_0000 != 0 || access & 0x2 != 0;
@@ -326,6 +329,10 @@ unsafe fn queue_save_redirect_hook(
 }
 
 pub(crate) fn install_save_redirect_hooks() {
+    // While the in-game missing-save picker is pending the hooks stay UNINSTALLED on purpose:
+    // native save IO must flow so the title completes its no-save boot and the 05_010 file
+    // browser can present itself. `complete_missing_save_selection_from_picker` re-invokes this
+    // installer right after activating the picked source (the install body is Once-guarded).
     if SAVE_REDIRECT_DIR_W.get().is_none() && !save_trace_enabled() {
         append_autoload_debug(format_args!(
             "save-override: install deferred -- redirect dir not set yet (waiting for missing-save picker/configured source)"

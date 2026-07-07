@@ -11,6 +11,8 @@ pub(crate) const XINPUT_GAMEPAD_START: u16 = 0x0010;
 pub(crate) const XINPUT_GAMEPAD_LEFT_SHOULDER: u16 = 0x0100;
 pub(crate) const XINPUT_GAMEPAD_RIGHT_SHOULDER: u16 = 0x0200;
 pub(crate) const XINPUT_GAMEPAD_A: u16 = 0x1000;
+/// XINPUT_GAMEPAD.wButtons B bit (menu Back/Cancel).
+pub(crate) const XINPUT_GAMEPAD_B: u16 = 0x2000;
 /// Current game-task tick's synthesized gamepad wButtons for the System->Quit repro autopilot,
 /// written by `system_quit_repro_tick` and READ by the XInput poll hook (the stage the game reads a
 /// gamepad from). 0 = no button. Distinct from INJECT_NAV_CUR_BUTTONS (own_stepper title nav).
@@ -74,6 +76,12 @@ pub(crate) const SQ_REPRO_STATE_WAIT_RELOAD: usize = 7;
 /// tab 0 (Game Options), then dwell -- reproducing the blank Game Options pane the user reported (a tab
 /// goes blank on RETURN after visiting the custom tab). Uses OPTIONSETTING_CURRENT_TAB feedback.
 pub(crate) const SQ_REPRO_STATE_TAB_RETURN: usize = 8;
+/// PROFILE-BACK repro: capture per-tab row-table baselines, open the cloned Load Profile row, press
+/// B on ProfileSelect, wait for restore, then revisit tabs and compare exact row-table fingerprints.
+pub(crate) const SQ_REPRO_STATE_PROFILE_BACK_BASELINE: usize = 9;
+pub(crate) const SQ_REPRO_STATE_PROFILE_BACK_OPEN: usize = 10;
+pub(crate) const SQ_REPRO_STATE_PROFILE_BACK: usize = 11;
+pub(crate) const SQ_REPRO_STATE_PROFILE_BACK_TO_GAME_TAB: usize = 12;
 /// TAB_RETURN sub-phase: 0 = drive RIGHT to the last tab, 1 = drive LEFT back to tab 0, 2 = dwell.
 pub(crate) static SQ_REPRO_TAB_RETURN_PHASE: AtomicUsize = AtomicUsize::new(0);
 /// Highest tab index seen while driving right (end-of-strip detection) and the tick the dwell began.
@@ -99,6 +107,25 @@ pub(crate) const SQ_REPRO_TARGET_SWITCHES: usize = 1;
 /// `sq_repro_paused_at_profile_select`; the pause-probe watcher's PASS gate is this latch == 1 while
 /// the no-load semaphores (activate count, quickload phase, fresh-deser count) all still read idle.
 pub(crate) static SQ_REPRO_PAUSED_AT_PROFILE_SELECT: AtomicUsize = AtomicUsize::new(0);
+/// Exact ProfileSelect Back repro latches. `DONE` means the self-drive opened System->Quit's cloned
+/// Load Profile row, observed ProfileSelect, sent B/Back, observed restore, returned to Game Options,
+/// and did not arm a profile load.
+pub(crate) static SQ_REPRO_PROFILE_BACK_OPENED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SQ_REPRO_PROFILE_BACK_DONE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SQ_REPRO_PROFILE_BACK_RESTORE_BASELINE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SQ_REPRO_PROFILE_BACK_RESTORE_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SQ_REPRO_PROFILE_BACK_FINAL_TAB: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static SQ_REPRO_PROFILE_BACK_BASELINE_MASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SQ_REPRO_PROFILE_BACK_VERIFY_MASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SQ_REPRO_PROFILE_BACK_MISMATCH_MASK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SQ_REPRO_PROFILE_BACK_BASELINE_HASHES: [AtomicUsize; 10] =
+    [const { AtomicUsize::new(0) }; 10];
+pub(crate) static SQ_REPRO_PROFILE_BACK_BASELINE_COUNTS: [AtomicUsize; 10] =
+    [const { AtomicUsize::new(usize::MAX) }; 10];
+pub(crate) static SQ_REPRO_PROFILE_BACK_VERIFY_HASHES: [AtomicUsize; 10] =
+    [const { AtomicUsize::new(0) }; 10];
+pub(crate) static SQ_REPRO_PROFILE_BACK_VERIFY_COUNTS: [AtomicUsize; 10] =
+    [const { AtomicUsize::new(usize::MAX) }; 10];
 /// The explicit ProfileSelect slot each switch loads. Slots 4/5 are the two REAL, distinct
 /// characters in the pinned gold save (25-Invades-patches): slot 4 = 'Speed Bean', slot 5 =
 /// 'Patches' (bd system-quit-switch-loads-original-not-picked-rootcause-2026-07-02). The autopilot
