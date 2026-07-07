@@ -235,6 +235,26 @@ pub(crate) fn normalize_save_bytes_to_active_steam_id(
     }
 }
 
+fn path_eq_ignore_ascii_case(a: &Path, b: &Path) -> bool {
+    a.to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .eq_ignore_ascii_case(
+            b.to_string_lossy()
+                .replace('/', "\\")
+                .trim_end_matches('\\'),
+        )
+}
+
+fn save_file_writeback_allowed(path: &Path) -> bool {
+    let Some(default_root) = default_save_root() else {
+        return false;
+    };
+    path.parent()
+        .and_then(|steam_dir| steam_dir.parent())
+        .is_some_and(|root| path_eq_ignore_ascii_case(root, &default_root))
+}
+
 fn normalize_env_save_file_to_known_steam_id(path: &Path, steam_id: u64, reason: &str) {
     let Ok(mut bytes) = fs::read(path) else {
         append_autoload_debug(format_args!(
@@ -248,26 +268,28 @@ fn normalize_env_save_file_to_known_steam_id(path: &Path, steam_id: u64, reason:
     match er_save_loader::bnd4::normalize_steam_id_in_place(&mut bytes, steam_id) {
         Ok(report) => {
             append_autoload_debug(format_args!(
-                "save-steamid-normalize: source={reason} steam_id={steam_id} char_seen={} char_patched={} user_data10_seen={} user_data10_patched={} md5_rewritten={}",
+                "save-steamid-normalize: source={reason} steam_id={steam_id} char_seen={} char_patched={} user_data10_seen={} user_data10_patched={} md5_rewritten={} changed={} writeback_allowed={}",
                 report.character_slots_seen,
                 report.character_slots_patched,
                 report.user_data10_seen,
                 report.user_data10_patched,
-                report.md5_rewritten
+                report.md5_rewritten,
+                report.changed(),
+                save_file_writeback_allowed(path)
             ));
-            if !report.changed() {
+            if !report.changed() || !save_file_writeback_allowed(path) {
                 return;
             }
             match fs::write(path, &bytes) {
                 Ok(()) => {
                     let after = save_normalize_hash_bytes(&bytes);
                     append_autoload_debug(format_args!(
-                        "save-steamid-normalize: wrote normalized env save path='{}' reason={reason} before=0x{before:016x} after=0x{after:016x}",
+                        "save-steamid-normalize: wrote normalized GAME save path='{}' reason={reason} before=0x{before:016x} after=0x{after:016x}",
                         path.display()
                     ));
                 }
                 Err(err) => append_autoload_debug(format_args!(
-                    "save-steamid-normalize: FAILED to write normalized env save path='{}' reason={reason}: {err}",
+                    "save-steamid-normalize: FAILED to write normalized GAME save path='{}' reason={reason}: {err}",
                     path.display()
                 )),
             }
@@ -301,38 +323,37 @@ pub(crate) fn normalize_env_save_file_to_active_steam_id_once(base: usize, reaso
     let Some(report) = normalize_save_bytes_to_active_steam_id(base, &mut bytes, reason) else {
         return;
     };
-    if !report.changed() {
-        SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
+    SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
+    if !report.changed() || !save_file_writeback_allowed(&path) {
+        append_autoload_debug(format_args!(
+            "save-steamid-normalize: one-shot source normalize reason={reason} path='{}' changed={} writeback_allowed={}",
+            path.display(),
+            report.changed(),
+            save_file_writeback_allowed(&path)
+        ));
         return;
     }
     match fs::write(&path, &bytes) {
         Ok(()) => {
             let after = save_normalize_hash_bytes(&bytes);
-            SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
-                "save-steamid-normalize: wrote normalized env save path='{}' reason={reason} before=0x{before:016x} after=0x{after:016x}",
+                "save-steamid-normalize: wrote normalized GAME save path='{}' reason={reason} before=0x{before:016x} after=0x{after:016x}",
                 path.display()
             ));
         }
-        Err(err) => {
-            SAVE_STEAM_ID_ENV_NORMALIZE_DONE.store(1, Ordering::SeqCst);
-            append_autoload_debug(format_args!(
-                "save-steamid-normalize: FAILED to write normalized env save path='{}' reason={reason}: {err}",
-                path.display()
-            ));
-        }
+        Err(err) => append_autoload_debug(format_args!(
+            "save-steamid-normalize: FAILED to write normalized GAME save path='{}' reason={reason}: {err}",
+            path.display()
+        )),
     }
 }
 
 /// Redirect directory (UTF-16, NUL-free, no trailing separator) computed from the parent of
 /// `ER_EFFECTS_SAVE_FILE`. Set once at init, BEFORE the CreateFileW hook is armed.
 static SAVE_REDIRECT_DIR_W: OnceLock<Vec<u16>> = OnceLock::new();
-/// Configured save file may be an arbitrary loose `.sl2`/`.co2` file, not staged
-/// under `EldenRing/<steamid>`. In this mode save-file opens are redirected to
-/// this exact file instead of requiring the user path to mirror Elden Ring's
-/// save-directory layout.
-static SAVE_DIRECT_FILE_W: OnceLock<Vec<u16>> = OnceLock::new();
-static SAVE_DIRECT_BAK_FILE_W: OnceLock<Vec<u16>> = OnceLock::new();
+/// Configured save file may be an arbitrary loose `.sl2`/`.co2` file, not staged under
+/// `EldenRing/<steamid>`. It is a read-only source copied into the private native save tree; save opens
+/// are redirected to that staged tree, never back to this source path.
 static SAVE_DIRECT_SOURCE_FILE: OnceLock<PathBuf> = OnceLock::new();
 static SAVE_DIRECT_STAGE_ROOT: OnceLock<PathBuf> = OnceLock::new();
 static SAVE_DIRECT_STAGE_DONE_STEAM_ID: AtomicU64 = AtomicU64::new(0);
@@ -790,14 +811,13 @@ enum SaveRedirectSource {
         steam_id: u64,
         root_w: Vec<u16>,
     },
-    /// User supplied an arbitrary `.sl2`/`.co2` save file path. Redirect save-file opens
-    /// to the exact file; do not require an `EldenRing` path component or SteamID folder.
+    /// User supplied an arbitrary `.sl2`/`.co2` save file path. Copy it into a private staged native
+    /// save tree; do not require the user path to mirror Elden Ring's SteamID folder layout, and never
+    /// redirect gameplay writes back to the source file.
     DirectFile {
         file: PathBuf,
         stage_root: PathBuf,
         root_w: Vec<u16>,
-        file_w: Vec<u16>,
-        bak_w: Vec<u16>,
     },
 }
 
@@ -964,15 +984,27 @@ pub(crate) fn configured_or_default_save_file() -> Option<PathBuf> {
     configured_save_file().or_else(|| active_default_save_file().map(|(path, _, _)| path))
 }
 
-/// Runtime-active save file for System->Quit character switching. If the boot/missing-save flow chose
-/// an arbitrary direct file, that file is the active source even though it is not persisted in
-/// `er-effects.toml`; falling back to `%APPDATA%` would write the switch target into a stale default
-/// `.sl2` under Seamless and make confirm appear to no-op.
+fn direct_mode_native_active_save_file() -> Option<PathBuf> {
+    SAVE_DIRECT_SOURCE_FILE.get()?;
+    let steam_id = OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst);
+    plausible_steam_id64(steam_id)?;
+    ensure_direct_stage_for_steam_id(steam_id);
+    Some(
+        default_save_root()?
+            .join(steam_id.to_string())
+            .join(active_default_save_file_name()),
+    )
+}
+
+/// Runtime-active save file for System->Quit character switching. A direct/picked save is a READ-ONLY
+/// source: it is copied into the private redirected native save tree, and all writes must target the
+/// native `%APPDATA%/EldenRing/<steamid>/ER0000.{co2|sl2}` path (which our hook redirects to that staged
+/// copy). Never return `SAVE_DIRECT_SOURCE_FILE` here; that would overwrite user-provided saves.
 pub(crate) fn active_save_file_for_system_quit() -> Option<PathBuf> {
-    SAVE_DIRECT_SOURCE_FILE
-        .get()
-        .cloned()
-        .or_else(configured_or_default_save_file)
+    if SAVE_DIRECT_SOURCE_FILE.get().is_some() {
+        return direct_mode_native_active_save_file();
+    }
+    configured_or_default_save_file()
 }
 
 fn staged_save_root_for_configured_file(path: &Path) -> Option<(PathBuf, u64)> {
@@ -1002,21 +1034,17 @@ fn staged_save_root_for_configured_file(path: &Path) -> Option<(PathBuf, u64)> {
 }
 
 fn save_redirect_source_for_validated_file(path: PathBuf) -> SaveRedirectSource {
-    if let Some((staged_root, steam_id)) = staged_save_root_for_configured_file(&path) {
+    if let Some((staged_root, steam_id)) = staged_save_root_for_configured_file(&path)
+        && save_file_writeback_allowed(&path)
+    {
         return SaveRedirectSource::StagedRoot {
             file: path,
             steam_id,
             root_w: path_root_to_wine_wide(&staged_root),
         };
     }
-    let mut bak_path = path.clone();
-    let bak_name = format!(
-        "{}.bak",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("ER0000.sl2")
-    );
-    bak_path.set_file_name(bak_name);
+    // Explicit/user-picked non-default saves are read-only sources, even if they already live under an
+    // `EldenRing/<steamid>/ER0000.*` layout. The game writes only to our private staged copy.
     let stage_root = path
         .parent()
         .map(|parent| parent.join("er-effects-save-redirect-stage"))
@@ -1025,8 +1053,6 @@ fn save_redirect_source_for_validated_file(path: PathBuf) -> SaveRedirectSource 
         file: path.clone(),
         root_w: path_root_to_wine_wide(&stage_root),
         stage_root,
-        file_w: path_root_to_wine_wide(&path),
-        bak_w: path_root_to_wine_wide(&bak_path),
     }
 }
 
@@ -1070,20 +1096,16 @@ fn activate_save_redirect_source(
             file,
             stage_root,
             root_w,
-            file_w,
-            bak_w,
         } => {
             let _ = std::fs::create_dir_all(stage_root.join("eldenring"));
             let _ = std::fs::create_dir_all(stage_root.join("EldenRing"));
-            // UTF-8 Lossy: log-only decode of configured Windows wide paths for probe confirmation.
-            let shown = String::from_utf16_lossy(&file_w);
+            // UTF-8 Lossy: log-only decode of configured source/stage paths for probe confirmation.
+            let shown = file.display().to_string();
             let stage_shown = String::from_utf16_lossy(&root_w);
             let configured_file = file.clone();
             let explicit_steam_id = configured_active_steam_id64();
             let _ = SAVE_DIRECT_SOURCE_FILE.set(file);
             let _ = SAVE_DIRECT_STAGE_ROOT.set(stage_root);
-            let _ = SAVE_DIRECT_FILE_W.set(file_w);
-            let _ = SAVE_DIRECT_BAK_FILE_W.set(bak_w);
             let _ = SAVE_REDIRECT_DIR_W.set(root_w);
             SAVE_REDIRECT_MODE.store(SAVE_REDIRECT_MODE_DIRECT_FILE, Ordering::SeqCst);
             if let Some((steam_id, reason)) = explicit_steam_id {
@@ -1093,7 +1115,7 @@ fn activate_save_redirect_source(
                 ensure_direct_stage_for_steam_id(steam_id);
             }
             append_autoload_debug(format_args!(
-                "save-override: ENFORCED -- redirecting arbitrary save-file opens to supplied save '{shown}' via private stage root '{stage_shown}' source={source_label} active_steamid={}",
+                "save-override: ENFORCED -- staging supplied save source '{shown}' into private native save root '{stage_shown}' source={source_label} active_steamid={} (source is never a write target)",
                 explicit_steam_id.map(|(steam_id, _)| steam_id).unwrap_or(0)
             ));
             SaveOverrideMode::Redirect
@@ -1468,11 +1490,28 @@ fn remove_file_for_overwrite(path: &Path) -> std::io::Result<()> {
     }
 }
 
-fn copy_save_for_overwrite(source: &Path, target: &Path) -> std::io::Result<u64> {
+fn copy_save_for_overwrite(source: &Path, target: &Path, steam_id: u64) -> std::io::Result<u64> {
+    let mut bytes = std::fs::read(source)?;
+    match er_save_loader::bnd4::normalize_steam_id_in_place(&mut bytes, steam_id) {
+        Ok(report) if report.changed() => append_autoload_debug(format_args!(
+            "save-override: direct-file staging normalized private copy source='{}' target='{}' steam_id={steam_id} char_patched={} user_data10_patched={} md5_rewritten={}",
+            source.display(),
+            target.display(),
+            report.character_slots_patched,
+            report.user_data10_patched,
+            report.md5_rewritten
+        )),
+        Ok(_) => {}
+        Err(err) => append_autoload_debug(format_args!(
+            "save-override: direct-file staging normalization skipped source='{}' target='{}' steam_id={steam_id}: {err:?}",
+            source.display(),
+            target.display()
+        )),
+    }
     remove_file_for_overwrite(target)?;
-    let bytes = std::fs::copy(source, target)?;
+    std::fs::write(target, &bytes)?;
     make_file_writable(target);
-    Ok(bytes)
+    Ok(bytes.len() as u64)
 }
 
 fn ensure_direct_stage_for_steam_id(steam_id: u64) {
@@ -1552,8 +1591,8 @@ fn ensure_direct_stage_for_steam_id(steam_id: u64) {
     }
     let lower_target = lower_dir.join(staged_basename_lower);
     let native_target = native_dir.join(staged_basename_native);
-    match copy_save_for_overwrite(source, &lower_target) {
-        Ok(lower_bytes) => match copy_save_for_overwrite(source, &native_target) {
+    match copy_save_for_overwrite(source, &lower_target, steam_id) {
+        Ok(lower_bytes) => match copy_save_for_overwrite(source, &native_target, steam_id) {
             Ok(native_bytes) => {
                 SAVE_DIRECT_STAGE_DONE_STEAM_ID.store(steam_id, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
@@ -1615,9 +1654,6 @@ fn save_redirect_path(path: &[u16]) -> Option<Vec<u16>> {
         b'n' as u16,
         b'g' as u16,
     ];
-    const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
-    const CO2D: &[u16] = &[b'.' as u16, b'c' as u16, b'o' as u16, b'2' as u16];
-    const BAKD: &[u16] = &[b'.' as u16, b'b' as u16, b'a' as u16, b'k' as u16];
     // Always learn the native `<steamid>` segment from save-like paths; this is the safest
     // current-account oracle because the native save-dir builder already called Steam before the path
     // reached our hook. The redirect decision below is still anchored on `Roaming` to avoid loops.
@@ -1629,18 +1665,9 @@ fn save_redirect_path(path: &[u16]) -> Option<Vec<u16>> {
     }
     let idx = wide_find_ci_ascii(path, ELDENRING)?;
     wait_for_missing_save_dialog_if_pending(path);
-    if let Some(file_w) = SAVE_DIRECT_FILE_W.get()
-        && (wide_ends_with_ci_ascii(path, SL2D) || wide_ends_with_ci_ascii(path, CO2D))
-    {
-        ensure_direct_stage_for_requested_path(path);
-        return Some(wide_with_nul(file_w));
-    }
-    if let Some(bak_w) = SAVE_DIRECT_BAK_FILE_W.get()
-        && wide_ends_with_ci_ascii(path, BAKD)
-    {
-        ensure_direct_stage_for_requested_path(path);
-        return Some(wide_with_nul(bak_w));
-    }
+    // Direct-file mode stages the selected source into the private native save tree. Do NOT redirect
+    // save-file or .bak opens to `SAVE_DIRECT_SOURCE_FILE`; reads and writes must hit the staged copy
+    // so readonly/user-provided source saves are never modified by gameplay or profile switching.
     let root = SAVE_REDIRECT_DIR_W.get()?;
     let suffix = &path[idx..]; // "EldenRing\<id>\ER0000.sl2" (or "EldenRing\" for the dir open)
     ensure_direct_stage_for_requested_path(path);

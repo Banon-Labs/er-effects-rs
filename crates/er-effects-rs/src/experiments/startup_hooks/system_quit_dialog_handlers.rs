@@ -195,10 +195,10 @@ fn wide_z(text: &str) -> Vec<u16> {
 
 /// The ACTIVE save file the character-switch feature snapshots + restores + writes to. Resolved from
 /// runtime GROUND TRUTH via `active_save_file_for_system_quit()`: a direct-file save selected in the
-/// missing-save picker wins first, then an explicit `save_file` (env/er-effects.toml), then the actual
-/// `%APPDATA%/EldenRing/<steamid>/ER0000.{co2|sl2}` with mode-locked default naming. The direct-file
-/// case matters for Seamless: otherwise a user who booted from a picked `.co2` would later commit the
-/// switch target into a stale appdata `.sl2`, making ProfileSelect confirm appear to no-op.
+/// missing-save picker is a read-only source copied into the private redirected native save tree, so
+/// this returns the game's native `%APPDATA%/EldenRing/<steamid>/ER0000.{co2|sl2}` path for writes.
+/// Explicit/default saves keep using the normal configured/default resolver. Never write back to the
+/// direct source file under `save-files/` or a user-picked path.
 fn system_quit_env_save_path() -> Result<String, &'static str> {
     let Some(path) = active_save_file_for_system_quit() else {
         return Err("no active save file (direct/configured save unset and no default ER0000 save resolved)");
