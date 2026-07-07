@@ -305,6 +305,15 @@ fn boot_view_progress() -> (usize, usize) {
         * BOOT_VIEW_CREEP_NUM)
         / (BOOT_VIEW_CREEP_FULL_MS as usize * BOOT_VIEW_CREEP_DEN);
     let pm = (base + creep).min(1000);
+    // While the overlay picker holds the boot, clamp the fill so its edge stops EXACTLY at the
+    // SAVE CHECK tick (the MENU milestone + creep would otherwise creep ~7 permille past it, leaving
+    // the tick sitting behind the fill edge). The clamp lifts the frame the pick clears the latch,
+    // so the bar resumes past SAVE CHECK toward SAVE LOAD / NATIVE.
+    let pm = if missing_save_selection_pending() {
+        pm.min(BOOT_VIEW_SAVE_CHECK_PERMILLE)
+    } else {
+        pm
+    };
     // Monotonic display: an idx re-latch or timer wobble must never walk the bar backwards.
     let shown = BOOT_VIEW_LAST_PERMILLE.fetch_max(pm, Ordering::SeqCst).max(pm);
     (idx, shown)
