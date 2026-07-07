@@ -101,6 +101,23 @@ test_allow_python_subprocess_pgrep_start_protected_detection if {
 	count(denials) == 0
 }
 
+# Regression for the 2026-07-07 false positive: assigning the pgrep result
+# for later status inspection is still read-only process detection, not a
+# protected-game launch.
+test_allow_python_subprocess_pgrep_assignment_start_protected_detection if {
+	cmd := concat("\n", [
+		"python3 - <<'PY'",
+		"import subprocess, os",
+		"names=['eldenring.exe','start_protected_game.exe']",
+		"for name in names:",
+		"    p=subprocess.run(['pgrep','-x',name], text=True, capture_output=True)",
+		"    print(name, p.returncode)",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
 # The Python pgrep allowance must stay limited to the single pgrep call; a
 # later launch-shaped subprocess call keeps the protected-launch guard active.
 test_deny_python_subprocess_pgrep_then_proton_launch if {
@@ -110,6 +127,20 @@ test_deny_python_subprocess_pgrep_then_proton_launch if {
 		"for name in ['steam', 'eldenring.exe', 'start_protected_game.exe']:",
 		"    subprocess.run(['pgrep', '-x', name])",
 		"subprocess.run(['proton', 'run', 'start_protected_game.exe'])",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
+# Capturing a launch-shaped subprocess result remains a launch form, not a
+# process status check.
+test_deny_python_subprocess_assignment_proton_launch if {
+	cmd := concat("\n", [
+		"python3 - <<'PY'",
+		"import subprocess",
+		"p=subprocess.run(['proton', 'run', 'start_protected_game.exe'])",
+		"print(p.returncode)",
 		"PY",
 	])
 	denials := guard.deny with input as bash_event(cmd)

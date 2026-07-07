@@ -412,10 +412,3 @@ pgrep_subprocess_forbidden_marker if {
 	contains(lower(proc_scan_norm_command), marker)
 }
 
-pgrep_subprocess_forbidden_marker if {
-	contains(lower(proc_scan_norm_command), "= subprocess.run")
-}
-
-pgrep_subprocess_forbidden_marker if {
-	contains(lower(proc_scan_norm_command), "=subprocess.run")
-}
