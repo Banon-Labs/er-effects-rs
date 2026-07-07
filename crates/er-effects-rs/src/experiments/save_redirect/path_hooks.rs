@@ -889,10 +889,10 @@ fn default_save_root() -> Option<PathBuf> {
 /// the world-load rides native Continue (the game reads its own save, ERSC-redirected), the fallback
 /// can at worst make an early menu-display read the other container -- never a save write.
 fn default_save_file_names() -> [&'static str; 2] {
-    if crate::telemetry::seamless_coop_loaded() {
-        ["ER0000.co2", "ER0000.sl2"]
-    } else {
-        ["ER0000.sl2", "ER0000.co2"]
+    let [first, second] = crate::telemetry::save_extension_order();
+    match (first, second) {
+        ("co2", _) => ["ER0000.co2", "ER0000.sl2"],
+        _ => ["ER0000.sl2", "ER0000.co2"],
     }
 }
 

@@ -1,4 +1,7 @@
-use std::{path::PathBuf, sync::OnceLock};
+use std::{
+    path::PathBuf,
+    sync::{Mutex, OnceLock},
+};
 
 use er_save_loader::{SaveLoadMethod, SaveLoadRequest};
 use windows::Win32::{
@@ -151,6 +154,22 @@ pub(crate) fn configured_preferred_save_picker_dir() -> Option<PathBuf> {
     runtime_config().and_then(|config| config.preferred_save_picker_dir.clone())
 }
 
+/// Dir of the most recent validated pick THIS session. `RUNTIME_CONFIG` is parse-once, so
+/// same-session reopens would otherwise keep starting at the attach-time value even after
+/// `remember_preferred_save_picker_dir` rewrote the file.
+static SESSION_PREFERRED_PICKER_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Preferred picker dir as of NOW: the last dir picked this session when there is one, else the
+/// attach-time `preferred_save_picker_dir`. UI pickers open here so "remember last opened
+/// location" holds within a session, not only across launches.
+pub(crate) fn preferred_save_picker_dir_now() -> Option<PathBuf> {
+    let session = SESSION_PREFERRED_PICKER_DIR
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    session.or_else(configured_preferred_save_picker_dir)
+}
+
 /// Whether a validated missing-save pick rewrites `preferred_save_picker_dir` in the user's
 /// `er-effects.toml`. Defaults to true when the key is absent.
 pub(crate) fn autoupdate_preferred_picker_dir_enabled() -> bool {
@@ -171,6 +190,9 @@ pub(crate) fn remember_preferred_save_picker_dir(dir: &std::path::Path) {
     let Some(dir_str) = dir.to_str().filter(|dir| !dir.is_empty()) else {
         return;
     };
+    *SESSION_PREFERRED_PICKER_DIR
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PathBuf::from(dir));
     let Some(config) = runtime_config() else {
         append_autoload_debug(format_args!(
             "runtime-config: not persisting {PREFERRED_PICKER_DIR_KEY} -- config was unreadable/invalid at attach; fix er-effects.toml first"

@@ -698,6 +698,7 @@ unsafe fn system_quit_reapply_optionsetting_pane_visibility(base: usize, option_
 }
 
 unsafe fn system_quit_reset_profile_select_state(source: &str) {
+    save_picker_reset(source);
     SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED.store(0, Ordering::SeqCst);
@@ -876,7 +877,11 @@ pub(crate) unsafe fn system_quit_profile_select_top_menu_tick() {
         // menu-pump ownership by the native confirm transition (dialog+0x1e8=Success pops the
         // ProfileSelect window job) and the return-title submit is done in menu-pump ownership from
         // the MenuWindowJob::Run hook. See bd system-quit-return-title-scaleform-race-2026-07-01.
-        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) == SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE {
+        // Save-picker navigation closes have a resubmit queued (menu-pump owned): the staged
+        // rows / applied preview must survive until the window reopens -- do not restore here.
+        if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) == SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+            && !save_picker_resubmit_pending()
+        {
             unsafe {
                 system_quit_save_swap_restore_profile_summary("profile-select-closed-without-load")
             };
@@ -895,6 +900,11 @@ pub(crate) unsafe fn system_quit_profile_select_top_menu_tick() {
         unsafe { safe_read_usize(system_quit_list_slot_addr(list, idx)) }.unwrap_or(NULL) == profile
     });
     if still_present {
+        return;
+    }
+    if save_picker_resubmit_pending() {
+        // Mid picker navigation: the window left the list on its way to a menu-pump-owned
+        // resubmit; restoring from this game-task tick would clobber the staged rows.
         return;
     }
     if let Ok(base) = game_module_base() {
@@ -1262,12 +1272,18 @@ pub(crate) unsafe extern "system" fn system_quit_menu_window_job_run_hook(
         if filename == "05_010_ProfileSelect" {
             if let Ok(base) = game_module_base() {
                 if owner == 0 {
-                    unsafe {
-                        system_quit_restore_real_system_windows(
-                            base,
-                            "restore-real-profile-owner-cleared",
-                        )
-                    };
+                    // Picker navigation/pick closes the window with a queued resubmit; keep the
+                    // System UI hidden and let the resubmit block below reopen 05_010 instead of
+                    // restoring (a restore here would clobber the staged rows and flash the
+                    // System menu between pages).
+                    if !save_picker_resubmit_pending() {
+                        unsafe {
+                            system_quit_restore_real_system_windows(
+                                base,
+                                "restore-real-profile-owner-cleared",
+                            )
+                        };
+                    }
                 } else {
                     unsafe {
                         system_quit_hide_real_system_windows(
@@ -1314,6 +1330,11 @@ pub(crate) unsafe extern "system" fn system_quit_menu_window_job_run_hook(
                 }
             }
         }
+    }
+    // MENU-PUMP-OWNED save-picker resubmit: reopen the 05_010 window after a picker
+    // navigation/pick close (same submit-context rule as the return-title chain below).
+    if save_picker_resubmit_pending() {
+        let _ = unsafe { save_picker_menu_pump_resubmit() };
     }
     // MENU-PUMP-OWNED return-title submit. This hook IS the game's menu pump executing a
     // MenuWindowJob, so submitting the return-title chain from here (rather than from the concurrent

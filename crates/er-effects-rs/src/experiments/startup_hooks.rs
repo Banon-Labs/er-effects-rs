@@ -15,6 +15,7 @@ include!("startup_hooks/stats_loading_text.rs");
 include!("startup_hooks/title_resources_stats_text.rs");
 include!("startup_hooks/profile_rows_system_quit_menu.rs");
 include!("startup_hooks/system_quit_dialog_handlers.rs");
+include!("startup_hooks/save_picker_menu.rs");
 include!("startup_hooks/system_quit_ownership_repro.rs");
 include!("startup_hooks/system_quit_repro_guards.rs");
 include!("startup_hooks/system_quit_hooks.rs");

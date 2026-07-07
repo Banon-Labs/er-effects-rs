@@ -464,16 +464,12 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     let dir_path = PathBuf::from(dir.replace('\\', "/"));
     // Pick the save file by extension, not a hardcoded name. Prefer whichever container the active
     // runtime actually wrote: under Seamless Co-op (ERSC resident) the co-op save is `.co2`, so try
-    // it first; vanilla/offline tries `.sl2` first. Mirrors the DEFAULT-USER-SAVE target selection in
-    // `active_default_save_file_name` so this native-dir fallback stays consistent with it.
+    // it first; vanilla/offline tries `.sl2` first. Same order source as the DEFAULT-USER-SAVE
+    // target selection in `active_default_save_file_name`.
     let paths: Vec<PathBuf> = std::fs::read_dir(&dir_path)
         .map(|rd| rd.flatten().map(|e| e.path()).collect())
         .unwrap_or_default();
-    let ext_order = if crate::telemetry::seamless_coop_loaded() {
-        ["co2", "sl2"]
-    } else {
-        ["sl2", "co2"]
-    };
+    let ext_order = crate::telemetry::save_extension_order();
     let mut chosen: Option<PathBuf> = None;
     for ext in ext_order {
         if let Some(p) = paths

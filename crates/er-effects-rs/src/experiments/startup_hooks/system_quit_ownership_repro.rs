@@ -777,6 +777,13 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
 
     SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.fetch_add(1, Ordering::SeqCst);
 
+    // IN-GAME FILE PICKER: while the live 05_010 window is our directory browser, every slot
+    // activation is a browse action (up / enter dir / page / pick file) -- never a character
+    // switch. Routed before any switch logic; the picker never forwards the native activation.
+    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0 {
+        return unsafe { save_picker_handle_activation(dialog, cursor) };
+    }
+
     // PRODUCT PATH (human-driven pick): the slot activation IS the load confirmation. A human's A on
     // a slot must load that character; the old flow instead forwarded into the native confirm ->
     // MessageBox -> OK -> load-job chain, but the product msgbox path SUPPRESSES that "load this
