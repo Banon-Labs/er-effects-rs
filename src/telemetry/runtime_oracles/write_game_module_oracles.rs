@@ -1540,6 +1540,14 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_profile_lookat_render_drives",
             PROFILE_LOOKAT_RENDER_DRIVES.load(Ordering::SeqCst),
         );
+        // CSCloth teardown guard: profile update/draw drives skipped because the world CSCloth singleton
+        // was null (shutdown). 0 during normal operation = no false-skip / no render regression; nonzero
+        // at teardown = the exit-time CSCloth DLPanic CTD was prevented.
+        push_json_usize(
+            body,
+            "oracle_profile_drive_cloth_skips",
+            PROFILE_DRIVE_CLOTH_SKIPS.load(Ordering::SeqCst),
+        );
         // Mouse-track proof: bitmask of look-left/center/look-right head dumps captured (0b111 = all
         // three distinct poses dumped to portrait-capture-slot{200,201,202}.bin during selftest).
         push_json_usize(
@@ -1924,6 +1932,109 @@ fn write_game_module_oracles(body: &mut String) {
             body,
             "oracle_scaleform_handler_dtors",
             SCALEFORM_HANDLER_DTORS.load(Ordering::SeqCst),
+        );
+        // Game-Options pane VISIBILITY oracle (READ-ONLY, blank Game Options pane detector): on
+        // OptionSetting re-entry the DLL reads each option pane's DisplayInfo.Visible. blank_detected
+        // > 0 = the WindowList container resolved in the tree but its pane was not visible (tabs/footer
+        // render, row list black); resolved/visible masks + last_datatype + guard_skips give context.
+        push_json_usize(
+            body,
+            "oracle_optionsetting_pane_sample_count",
+            OPTIONSETTING_PANE_SAMPLE_COUNT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_pane_windowlist_resolved",
+            OPTIONSETTING_PANE_LAST_WINDOWLIST_RESOLVED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_pane_windowlist_visible",
+            OPTIONSETTING_PANE_LAST_WINDOWLIST_VISIBLE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_pane_resolved_mask",
+            OPTIONSETTING_PANE_LAST_RESOLVED_MASK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_pane_visible_mask",
+            OPTIONSETTING_PANE_LAST_VISIBLE_MASK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_pane_last_datatype",
+            OPTIONSETTING_PANE_LAST_DATATYPE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_pane_guard_skips",
+            OPTIONSETTING_PANE_GUARD_SKIPS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_pane_composite_bound",
+            OPTIONSETTING_PANE_COMPOSITE_BOUND.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_pane_blank_detected_count",
+            OPTIONSETTING_PANE_BLANK_DETECTED_COUNT.load(Ordering::SeqCst),
+        );
+        // REAL row-pane signal: current tab dialog (composite+0xb8) and its pane proxy (dialog+0x1200)
+        // DisplayInfo.Visible -- the object the game's tab-select actually toggles. real_blank_detected
+        // fires only after a healthy (visible) pane was seen and then the actively-shown pane went hidden,
+        // so it cannot false-fire on boot/preload (unlike the named-child mask above).
+        push_json_usize(
+            body,
+            "oracle_optionsetting_current_dialog",
+            OPTIONSETTING_CURRENT_DIALOG.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_current_pane_visible",
+            OPTIONSETTING_CURRENT_PANE_VISIBLE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_current_pane_datatype",
+            OPTIONSETTING_CURRENT_PANE_DATATYPE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_actively_shown",
+            OPTIONSETTING_ACTIVELY_SHOWN.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_last_flag",
+            OPTIONSETTING_LAST_FLAG.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_current_pane_ever_visible",
+            OPTIONSETTING_CURRENT_PANE_EVER_VISIBLE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_real_blank_detected_count",
+            OPTIONSETTING_REAL_BLANK_DETECTED_COUNT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_current_tab",
+            OPTIONSETTING_CURRENT_TAB.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_current_tab_at_blank",
+            OPTIONSETTING_CURRENT_TAB_AT_BLANK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_optionsetting_pane_fix_applied",
+            OPTIONSETTING_PANE_FIX_APPLIED.load(Ordering::SeqCst),
         );
         // GX command-queue overflow forensics (repeated-switch crash 0x1aeaf05): max_fill climbing
         // toward cap across switches = the accumulating-producer signature; top_producers names the

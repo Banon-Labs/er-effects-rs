@@ -756,6 +756,104 @@ pub(crate) static SCALEFORM_HANDLER_DTORS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SCALEFORM_HANDLER_DOUBLE_FREES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SCALEFORM_HANDLER_LAST_DOUBLE_FREE_OBJ: AtomicUsize = AtomicUsize::new(0);
 
+// === Game-Options pane VISIBILITY oracle (READ-ONLY, `oracle_optionsetting_pane_*`) ===============
+// Detects the "blank Game Options pane" bug on OptionSetting menu re-entry: the tab strip + footer
+// render but the option-row pane display objects are not VISIBLE (the row list draws black). The
+// `MenuWindowJob::Run` hook for `02_040_OptionSetting`/`_Trial` resolves the OptionSetting root
+// SceneObjProxy's `WindowList` container + each option pane by name (the game's own
+// `assignComponentWithName`), then reads each child DisplayObject's `DisplayInfo.Visible` byte via
+// the GFx `GetDisplayInfo` vcall -- all reads, no game state mutated. Offsets verified against the
+// game binary (Ghidra CSScaleformValue struct + MenuWindow layout); mirrors the 7e7 resolve/guard/
+// release pattern in `push_stats_text_on_row`.
+/// MenuWindow -> embedded root SceneObjProxy (the `assignComponentWithName` parent). Same +0x188
+/// slot the native MenuWindow fade helper reads (`MENU_WINDOW_ROOT_PROXY_CTOR_RVA` builds a scratch
+/// proxy from `MenuWindow+0x188`).
+pub(crate) const OPTION_SETTING_ROOT_PROXY_OFFSET: usize = 0x188;
+/// Within the embedded `CSScaleformValue` (out proxy + `SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET`):
+/// objectInterface ptr, dataType i32, GFx value handle ptr (Ghidra CSScaleformValue struct).
+pub(crate) const CSSCALEFORMVALUE_OBJECT_INTERFACE_OFFSET: usize = 0x18;
+pub(crate) const CSSCALEFORMVALUE_DATATYPE_OFFSET: usize = 0x20;
+pub(crate) const CSSCALEFORMVALUE_HANDLE_OFFSET: usize = 0x28;
+/// The child is a live DisplayObject iff `(dataType & MASK) == VALUE`.
+pub(crate) const CSSCALEFORMVALUE_DISPLAY_TYPE_MASK: i32 = 0x8f;
+pub(crate) const CSSCALEFORMVALUE_DISPLAY_TYPE_VALUE: i32 = 10;
+/// `GetDisplayInfo` is objectInterface vtable slot +0xd8: `fn(objectInterface, valueHandle, bufPtr)`.
+pub(crate) const CSSCALEFORMVALUE_GET_DISPLAY_INFO_VTABLE_SLOT: usize = 0xd8;
+/// DisplayInfo out buffer (>= 0xE0, zero-initialized). After the vcall the `Visible` byte is at +0xd6
+/// (nonzero == visible); the VarsSet flags ushort sits at +0xd4 (reference only).
+pub(crate) const OPTIONSETTING_DISPLAY_INFO_BYTES: usize = 0xE0;
+pub(crate) const OPTIONSETTING_DISPLAY_INFO_VISIBLE_OFFSET: usize = 0xd6;
+/// OptionSetting composite sub-dialog job slot (`MenuWindow+0x1768`, job ptr at +0xb8): nonzero when
+/// the composite sub-dialog job is bound (a corroborating signal, read-only).
+pub(crate) const OPTIONSETTING_COMPOSITE_SUBDIALOG_JOB_OFFSET: usize = 0x1768 + 0xb8;
+/// Reject obviously-invalid OptionSetting window pointers before any dereference.
+pub(crate) const OPTIONSETTING_WINDOW_MIN_PTR: usize = 0x10000;
+/// Cap on the per-sample debug lines (first N), like other bounded diagnostics.
+pub(crate) const OPTIONSETTING_PANE_SAMPLE_LOG_CAP: usize = 64;
+/// NUL-terminated container name (resolved separately -- the direct blank-pane signature source).
+pub(crate) const OPTIONSETTING_WINDOWLIST_NAME: &str = "WindowList\0";
+/// NUL-terminated option-pane child names; the bit index (pane order) is used in the pane masks.
+pub(crate) const OPTIONSETTING_PANE_NAMES: [&str; 8] = [
+    "CameraSetting\0",
+    "GameEnd\0",
+    "BrightnessSetting\0",
+    "ControllSetting\0",
+    "NetworkSetting\0",
+    "AudioSetting\0",
+    "EnvironmentSetting\0",
+    "PadSetting\0",
+];
+/// Total pane-visibility samples taken (one per OptionSetting `MenuWindowJob::Run` with a live owner).
+pub(crate) static OPTIONSETTING_PANE_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Last sample: whether the `WindowList` container resolved (0/1).
+pub(crate) static OPTIONSETTING_PANE_LAST_WINDOWLIST_RESOLVED: AtomicUsize = AtomicUsize::new(0);
+/// Last sample: whether the `WindowList` container's DisplayInfo.Visible was set (0/1).
+pub(crate) static OPTIONSETTING_PANE_LAST_WINDOWLIST_VISIBLE: AtomicUsize = AtomicUsize::new(0);
+/// Last sample: bitmask (bit N = pane N of `OPTIONSETTING_PANE_NAMES`) of panes that resolved.
+pub(crate) static OPTIONSETTING_PANE_LAST_RESOLVED_MASK: AtomicUsize = AtomicUsize::new(0);
+/// Last sample: bitmask of panes whose DisplayInfo.Visible was set.
+pub(crate) static OPTIONSETTING_PANE_LAST_VISIBLE_MASK: AtomicUsize = AtomicUsize::new(0);
+/// Last sample: the `WindowList` child's raw dataType (for gate diagnosis).
+pub(crate) static OPTIONSETTING_PANE_LAST_DATATYPE: AtomicUsize = AtomicUsize::new(0);
+/// Count of vcalls skipped fail-closed because objectInterface/vtable/getfn were not game-image-live.
+pub(crate) static OPTIONSETTING_PANE_GUARD_SKIPS: AtomicUsize = AtomicUsize::new(0);
+/// Last sample: whether the composite sub-dialog job slot was bound (0/1).
+pub(crate) static OPTIONSETTING_PANE_COMPOSITE_BOUND: AtomicUsize = AtomicUsize::new(0);
+/// Count of samples where the blank-pane signature fired (`WindowList` resolved but NOT visible).
+pub(crate) static OPTIONSETTING_PANE_BLANK_DETECTED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// The REAL row-pane signal: the current tab dialog (`*(composite+0xb8)`) and the DisplayInfo.Visible of
+/// its embedded pane proxy at `dialog+0x1200` -- the object the game's own tab-select SetVisibles. The 8
+/// named WindowList children are always Visible=0 and are NOT the signal (they made blank_detected fire
+/// before the user could even reproduce). `actively_shown` = CSMenuMan flag bit 0x4 (drawn this frame).
+pub(crate) static OPTIONSETTING_CURRENT_DIALOG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OPTIONSETTING_CURRENT_PANE_VISIBLE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OPTIONSETTING_CURRENT_PANE_DATATYPE: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OPTIONSETTING_ACTIVELY_SHOWN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static OPTIONSETTING_LAST_FLAG: AtomicUsize = AtomicUsize::new(0);
+/// Latch: the current pane was seen VISIBLE at least once (a healthy Game Options open). The teardown
+/// oracle `..._REAL_BLANK_DETECTED_COUNT` only fires AFTER this latch, so a boot/preload state (pane
+/// never yet shown) can never be mistaken for the bug -- the bug is healthy(visible)->blank(hidden).
+pub(crate) static OPTIONSETTING_CURRENT_PANE_EVER_VISIBLE: AtomicUsize = AtomicUsize::new(0);
+/// Run-stopping oracle: healthy pane was seen, THEN the actively-shown current pane went hidden.
+pub(crate) static OPTIONSETTING_REAL_BLANK_DETECTED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// The selected tab index the user is on (`*(*(window+0x1870+0x10)+0xd4)`) at the last sample, and the
+/// cache slot the current pane dialog matches -- to identify WHICH tab is blank (e.g. the Quit/Exit tab
+/// where our injected Load-Profile rows live vs the Game tab).
+pub(crate) static OPTIONSETTING_CURRENT_TAB: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static OPTIONSETTING_CURRENT_TAB_AT_BLANK: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Count of times the fix forced the actively-shown current tab's pane back visible (via SetVisible on
+/// dialog+0x1200 -- the same proxy/call the game's own tab-select uses). Nonzero = the blank was caught
+/// and corrected; the pane draws again.
+pub(crate) static OPTIONSETTING_PANE_FIX_APPLIED: AtomicUsize = AtomicUsize::new(0);
+/// window -> SettingTabControl (+0x1870), -> tab view (+0x10), -> selected index (view+0xd4).
+pub(crate) const OPTIONSETTING_TAB_CONTROL_OFFSET: usize = 0x1870;
+pub(crate) const OPTIONSETTING_TAB_VIEW_OFFSET: usize = 0x10;
+pub(crate) const OPTIONSETTING_TAB_VIEW_SELECTED_INDEX_OFFSET: usize = 0xd4;
+/// Composite current-dialog embedded pane proxy offset (`dialog+0x1200`; FUN_14093b850 SetVisibles it).
+pub(crate) const OPTIONSETTING_DIALOG_PANE_PROXY_OFFSET: usize = 0x1200;
+/// CSMenuMan flag bit meaning "menu actively shown/drawn this frame" (per-frame updater sets `|=0x4`).
+pub(crate) const OPTIONSETTING_FLAG_ACTIVELY_SHOWN_BIT: u8 = 0x4;
+
 /// GX COMMAND-QUEUE PRODUCER TELEMETRY (switch-#4 overflow, run autostep10c-directarm 2026-07-03).
 /// `reserve_command_queue_slot` (deobf entry 0x141aeae60; shift-verified against dump 0x141aeae80)
 /// appends a command-list slot to a fixed array: base at queue+0x28, count at +0x30, capacity at
