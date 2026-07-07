@@ -704,6 +704,19 @@ unsafe fn system_quit_reapply_optionsetting_pane_visibility(base: usize, option_
     unsafe {
         *((composite + OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET) as *mut usize) = selected;
     }
+    let mut refreshed = false;
+    if let Ok(refresh_addr) = game_rva(OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA) {
+        let refresh_selected_row: unsafe extern "system" fn(usize, u32) =
+            unsafe { std::mem::transmute(refresh_addr) };
+        unsafe { refresh_selected_row(selected, 0) };
+        SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_COUNT.fetch_add(1, Ordering::SeqCst);
+        SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_LAST_SELECTED.store(selected, Ordering::SeqCst);
+        refreshed = true;
+    } else {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: optionsetting pane-reapply row refresh skipped -- refresh rva 0x{OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA:x} unresolved"
+        ));
+    }
     SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_REAPPLY_COUNT.fetch_add(1, Ordering::SeqCst);
     SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_TAB.store(tab_index, Ordering::SeqCst);
     SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_OLD_CURRENT.store(current, Ordering::SeqCst);
@@ -725,7 +738,7 @@ unsafe fn system_quit_reapply_optionsetting_pane_visibility(base: usize, option_
         }
     }
     append_autoload_debug(format_args!(
-        "system-quit-dup: optionsetting pane-reapply direct-visible composite=0x{composite:x} old_current=0x{current:x} selected=0x{selected:x} tab_index={tab_index} real_tab={real_tab:?} cache_tab={cache_tab:?} visible_mask=0x{visible_mask:x} set_visible=0x{set_visible_addr:x} (no native row-table copy)"
+        "system-quit-dup: optionsetting pane-reapply direct-visible composite=0x{composite:x} old_current=0x{current:x} selected=0x{selected:x} tab_index={tab_index} real_tab={real_tab:?} cache_tab={cache_tab:?} visible_mask=0x{visible_mask:x} refreshed={refreshed} set_visible=0x{set_visible_addr:x} (no native cross-pane copy)"
     ));
 }
 

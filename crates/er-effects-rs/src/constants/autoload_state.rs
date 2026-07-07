@@ -849,6 +849,9 @@ pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_OLD_CURRENT: Ato
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_SELECTED: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_LAST_SELECTED: AtomicUsize =
+    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// Count of times the fix forced the actively-shown current tab's pane back visible (via SetVisible on
 /// dialog+0x1200 -- the same proxy/call the game's own tab-select uses). Nonzero = the blank was caught
 /// and corrected; the pane draws again.
@@ -859,6 +862,10 @@ pub(crate) const OPTIONSETTING_TAB_VIEW_OFFSET: usize = 0x10;
 pub(crate) const OPTIONSETTING_TAB_VIEW_SELECTED_INDEX_OFFSET: usize = 0xd4;
 /// Composite current-dialog embedded pane proxy offset (`dialog+0x1200`; FUN_14093b850 SetVisibles it).
 pub(crate) const OPTIONSETTING_DIALOG_PANE_PROXY_OFFSET: usize = 0x1200;
+/// Deobf/runtime RVA for `FUN_140975c20(OptionSettingDialog*, selected_row)`: native per-pane
+/// PropertyEditDialog selection + visible row/list refresh. This is the safe suffix of native tab
+/// select (`FUN_14093b850`) after its unsafe cross-pane settings copy is intentionally skipped.
+pub(crate) const OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA: u32 = 0x00975b30;
 /// CSMenuMan flag bit meaning "menu actively shown/drawn this frame" (per-frame updater sets `|=0x4`).
 pub(crate) const OPTIONSETTING_FLAG_ACTIVELY_SHOWN_BIT: u8 = 0x4;
 
