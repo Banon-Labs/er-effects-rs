@@ -223,7 +223,12 @@ fn resolve_xinput_get_state() -> Option<XInputGetStateFn> {
 fn save_picker_sample() -> (usize, usize) {
     let mut held = 0usize;
     let mut pressed = 0usize;
-    if let Some(gaks) = resolve_get_async_key_state() {
+    // Keyboard: only when the event-driven low-level hook is NOT active. The hook (when installed)
+    // owns keyboard so every press registers regardless of this poll's ~4fps boot rate; polling it
+    // here too would double-apply. This branch is the fallback if the hook failed to install.
+    if !SAVE_PICKER_KBD_HOOK_ACTIVE.load(Ordering::SeqCst)
+        && let Some(gaks) = resolve_get_async_key_state()
+    {
         let mut probe = |vk: i32, act: usize| {
             let state = unsafe { gaks(vk) } as u16;
             if state & 0x8000 != 0 {
@@ -335,12 +340,139 @@ pub(crate) fn save_picker_overlay_input_tick() {
     if pressed == 0 {
         return;
     }
-    SAVE_PICKER_OVERLAY_INPUT_HITS.fetch_add(1, Ordering::SeqCst);
+    save_picker_apply_pressed(pressed);
+}
 
+/// Apply one pressed-action bitmask to the active picker stage. Shared by the render-thread gamepad
+/// poll and the low-level keyboard hook so both funnel through the same dispatch.
+fn save_picker_apply_pressed(pressed: usize) {
+    if pressed == 0 {
+        return;
+    }
+    SAVE_PICKER_OVERLAY_INPUT_HITS.fetch_add(1, Ordering::SeqCst);
     if SAVE_PICKER_STAGE_CHARS.load(Ordering::SeqCst) != 0 {
         save_picker_character_stage_input(pressed);
     } else {
         save_picker_file_stage_input(pressed);
+    }
+}
+
+/// Map a Win32 virtual-key to a picker action, or 0 if it is not a nav key.
+fn picker_action_for_vk(vk: i32) -> usize {
+    match vk {
+        VK_UP => PICKER_ACT_UP,
+        VK_DOWN => PICKER_ACT_DOWN,
+        VK_LEFT => PICKER_ACT_LEFT,
+        VK_RIGHT => PICKER_ACT_RIGHT,
+        VK_RETURN => PICKER_ACT_SELECT,
+        VK_BACK => PICKER_ACT_BACK,
+        _ => 0,
+    }
+}
+
+/// True while the WH_KEYBOARD_LL hook is installed and pumping; the render-thread poll then skips
+/// keyboard (the hook owns it) and does gamepad only.
+static SAVE_PICKER_KBD_HOOK_ACTIVE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// One-shot spawn guard for the hook thread.
+static SAVE_PICKER_KBD_HOOK_STARTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// Nav keys currently held (per our hook), to collapse OS key auto-repeat to one action per press.
+static SAVE_PICKER_KBD_DOWN_MASK: AtomicUsize = AtomicUsize::new(0);
+/// Telemetry: distinct key-down edges the LL hook applied (proves event-driven capture fires under Wine).
+pub(crate) static SAVE_PICKER_KBD_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
+
+/// WH_KEYBOARD_LL callback: every keystroke arrives here as an OS event, independent of the game's
+/// ~4fps boot Present/task rate, so no press is lost or collapsed. Applies one action per physical
+/// press (auto-repeat suppressed via the down-mask). Never blocks the game's own input -- always
+/// chains via CallNextHookEx.
+unsafe extern "system" fn save_picker_ll_keyboard_proc(
+    ncode: i32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CallNextHookEx, HC_ACTION, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    };
+    if ncode == HC_ACTION as i32 && lparam.0 != 0 {
+        let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+        let act = picker_action_for_vk(kb.vkCode as i32);
+        if act != 0 {
+            let msg = wparam.0 as u32;
+            let prev = SAVE_PICKER_KBD_DOWN_MASK.load(Ordering::SeqCst);
+            if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
+                if prev & act == 0 {
+                    SAVE_PICKER_KBD_DOWN_MASK.store(prev | act, Ordering::SeqCst);
+                    SAVE_PICKER_KBD_HOOK_HITS.fetch_add(1, Ordering::SeqCst);
+                    if save_picker_overlay_active() {
+                        let _ = std::panic::catch_unwind(|| save_picker_apply_pressed(act));
+                    }
+                }
+            } else if msg == WM_KEYUP || msg == WM_SYSKEYUP {
+                SAVE_PICKER_KBD_DOWN_MASK.store(prev & !act, Ordering::SeqCst);
+            }
+        }
+    }
+    unsafe { CallNextHookEx(None, ncode, wparam, lparam) }
+}
+
+/// Spawn the picker's low-level keyboard hook + message pump ONCE while a missing-save pick is
+/// pending. Uninstalls and exits once the pick resolves. Falls back to the render-thread poll if the
+/// hook fails to install.
+pub(crate) fn ensure_save_picker_keyboard_hook() {
+    if !missing_save_selection_pending() {
+        return;
+    }
+    if SAVE_PICKER_KBD_HOOK_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("er-save-picker-kbd".into())
+        .spawn(|| {
+            use windows::Win32::Foundation::HWND;
+            use windows::Win32::UI::WindowsAndMessaging::{
+                DispatchMessageW, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE,
+                PeekMessageW, QS_ALLINPUT, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx,
+                WH_KEYBOARD_LL,
+            };
+            let Ok(hook) = (unsafe {
+                SetWindowsHookExW(WH_KEYBOARD_LL, Some(save_picker_ll_keyboard_proc), None, 0)
+            }) else {
+                SAVE_PICKER_KBD_HOOK_STARTED.store(false, Ordering::SeqCst);
+                return;
+            };
+            SAVE_PICKER_KBD_HOOK_ACTIVE.store(true, Ordering::SeqCst);
+            let mut msg = MSG::default();
+            const POLL_MS: u32 = 50;
+            loop {
+                if !missing_save_selection_pending() && !save_picker_overlay_active() {
+                    break;
+                }
+                // Bounded OS message wait (~50ms): the LL hook callback fires during it; then drain
+                // the queue so the pump stays alive. Not a sleep -- a message wait with a wake mask.
+                let _ = unsafe {
+                    MsgWaitForMultipleObjectsEx(None, POLL_MS, QS_ALLINPUT, MWMO_INPUTAVAILABLE)
+                };
+                while unsafe {
+                    PeekMessageW(&mut msg, Some(HWND(std::ptr::null_mut())), 0, 0, PM_REMOVE)
+                }
+                .as_bool()
+                {
+                    unsafe {
+                        let _ = TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
+                }
+            }
+            unsafe {
+                let _ = UnhookWindowsHookEx(hook);
+            }
+            SAVE_PICKER_KBD_HOOK_ACTIVE.store(false, Ordering::SeqCst);
+            SAVE_PICKER_KBD_DOWN_MASK.store(0, Ordering::SeqCst);
+            SAVE_PICKER_KBD_HOOK_STARTED.store(false, Ordering::SeqCst);
+        });
+    if spawned.is_err() {
+        SAVE_PICKER_KBD_HOOK_STARTED.store(false, Ordering::SeqCst);
     }
 }
 

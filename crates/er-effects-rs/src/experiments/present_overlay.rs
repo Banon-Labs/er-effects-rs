@@ -116,11 +116,10 @@ unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32)
             if !drew_portrait {
                 let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
             }
-            // Drive the startup save-picker input HERE, on the render thread. This is the only thread
-            // that can read GetAsyncKeyState under Wine/Proton (a background poll thread sees almost
-            // nothing). Present starves to ~4fps during boot loading, but save_picker_sample() uses
-            // the "pressed-since-last-call" key bit so presses between frames are not dropped.
-            // Navigation only; the pick completion is deferred to the game task.
+            // Keyboard input runs on an event-driven WH_KEYBOARD_LL hook (spawned once here) so every
+            // press registers regardless of the ~4fps boot Present rate; the render-thread poll below
+            // handles gamepad (and is the keyboard fallback if the hook fails to install).
+            let _ = std::panic::catch_unwind(ensure_save_picker_keyboard_hook);
             let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
         }
     }
@@ -158,8 +157,8 @@ unsafe extern "system" fn present1_hook(
             if !drew_portrait {
                 let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
             }
-            // Render-thread save-picker input (see present_hook: only this thread reads keys under
-            // Wine; the pressed-since-last-call bit covers the slow ~4fps boot Present rate).
+            // Event-driven keyboard hook (once) + render-thread gamepad/keyboard-fallback poll.
+            let _ = std::panic::catch_unwind(ensure_save_picker_keyboard_hook);
             let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
         }
     }
