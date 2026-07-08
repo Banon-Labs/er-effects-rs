@@ -126,14 +126,7 @@ unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32)
     let orig = PRESENT_ORIG.load(Ordering::SeqCst);
     if orig != 0 {
         let f: PresentFn = unsafe { std::mem::transmute(orig) };
-        // Serialize with the pump thread ONLY while it is alive (boot/picker window); a no-op
-        // afterwards, so the steady-state render path takes no lock.
-        if BOOT_PUMP_ALIVE.load(Ordering::SeqCst) {
-            let _present_guard = present_serialize_guard();
-            unsafe { f(this, sync, flags) }
-        } else {
-            unsafe { f(this, sync, flags) }
-        }
+        unsafe { f(this, sync, flags) }
     } else {
         0
     }
@@ -172,12 +165,7 @@ unsafe extern "system" fn present1_hook(
     let orig = PRESENT1_ORIG.load(Ordering::SeqCst);
     if orig != 0 {
         let f: Present1Fn = unsafe { std::mem::transmute(orig) };
-        if BOOT_PUMP_ALIVE.load(Ordering::SeqCst) {
-            let _present_guard = present_serialize_guard();
-            unsafe { f(this, sync, flags, params) }
-        } else {
-            unsafe { f(this, sync, flags, params) }
-        }
+        unsafe { f(this, sync, flags, params) }
     } else {
         0
     }
@@ -310,31 +298,8 @@ const BOOT_PUMP_EARLY_APPLY_WAIT_MAX_MS: u128 = 8_000;
 /// Self-present cadence (~30 fps -- Present(sync=1) additionally paces on vsync).
 const BOOT_PUMP_FRAME_SLEEP_MS: u64 = 16;
 
-/// True while the boot-present-pump thread is alive. When false (the normal post-boot state) the
-/// Present detour skips the serialization lock entirely -- zero hot-path overhead.
-pub(crate) static BOOT_PUMP_ALIVE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-/// Serializes IDXGISwapChain::Present between the game's render thread (the detour) and the pump
-/// thread while the pump keeps self-presenting for the save picker -- concurrent Present on one
-/// swapchain is undefined. Only contended during the boot/picker window; a no-op afterwards.
-static PRESENT_SERIALIZE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-pub(crate) fn present_serialize_guard() -> std::sync::MutexGuard<'static, ()> {
-    PRESENT_SERIALIZE.lock().unwrap_or_else(|p| p.into_inner())
-}
-
-/// RAII: clears `BOOT_PUMP_ALIVE` on every exit path of the pump thread (it has several returns).
-struct PumpAliveGuard;
-impl Drop for PumpAliveGuard {
-    fn drop(&mut self) {
-        BOOT_PUMP_ALIVE.store(false, Ordering::SeqCst);
-    }
-}
-
 /// Body of the `er-effects-boot-present-pump` thread. See the spawn comment for the contract.
 fn boot_present_pump() {
-    BOOT_PUMP_ALIVE.store(true, Ordering::SeqCst);
-    let _pump_alive_guard = PumpAliveGuard;
     // Same gate as the install: the boot view + its swapchain hook are the portrait-path feature.
     if !portrait_lookat_enabled() {
         return;
@@ -347,12 +312,8 @@ fn boot_present_pump() {
     let poll = std::time::Duration::from_millis(BOOT_PUMP_POLL_SLEEP_MS);
     let frame = std::time::Duration::from_millis(BOOT_PUMP_FRAME_SLEEP_MS);
     loop {
-        // The game presenting is normally the terminal state (the detour path draws from here on) --
-        // BUT while the DLL-drawn save picker is up we keep self-presenting so it redraws at ~30fps
-        // instead of the game's ~4fps boot rate (else the user can't see their input register). The
-        // pump's Present is serialized with the game's via PRESENT_SERIALIZE, so there is no
-        // concurrent-Present race. Hand over the moment the picker resolves.
-        if PRESENT_HOOK_HITS.load(Ordering::SeqCst) > 0 && !save_picker_overlay_active() {
+        // The game presenting is the SUCCESS terminal state: the detour path draws from here on.
+        if PRESENT_HOOK_HITS.load(Ordering::SeqCst) > 0 {
             BOOT_VIEW_PUMP_STOP_REASON.store(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
                 "boot-pump: game presenting -- handed over after {} self-presents",
@@ -360,7 +321,7 @@ fn boot_present_pump() {
             ));
             return;
         }
-        if start.elapsed().as_millis() > BOOT_PUMP_MAX_MS && !save_picker_overlay_active() {
+        if start.elapsed().as_millis() > BOOT_PUMP_MAX_MS {
             BOOT_VIEW_PUMP_STOP_REASON.store(2, Ordering::SeqCst);
             append_autoload_debug(format_args!(
                 "boot-pump: budget exhausted with no game present -- stopping (self_presents={})",
@@ -404,14 +365,9 @@ fn boot_present_pump() {
         // Present (narrows the two-thread Present race to the in-flight window; the busy-latch in
         // the composite already serializes the draw objects themselves).
         let drew = unsafe { composite_boot_progress_self_frame(sc) };
-        if drew && (PRESENT_HOOK_HITS.load(Ordering::SeqCst) == 0 || save_picker_overlay_active()) {
+        if drew && PRESENT_HOOK_HITS.load(Ordering::SeqCst) == 0 {
             let f: PresentFn = unsafe { std::mem::transmute(orig) };
-            // Serialize with the game's Present (the detour also takes this lock while the pump is
-            // alive) so the two threads never call Present on the same swapchain concurrently.
-            let hr = {
-                let _present_guard = present_serialize_guard();
-                unsafe { f(sc as *mut c_void, 1, 0) }
-            };
+            let hr = unsafe { f(sc as *mut c_void, 1, 0) };
             if hr < 0 {
                 BOOT_VIEW_PUMP_STOP_REASON.store(3, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
