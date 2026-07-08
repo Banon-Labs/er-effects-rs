@@ -632,7 +632,12 @@ unsafe fn system_quit_hide_real_system_windows(base: usize, source: &str) {
 /// each cached pane's embedded proxy. No row/table copy, no rebuild, no upsert into a shared table.
 /// Runs on the menu thread (the restore path is menu-pump owned). Read-guarded; no-ops if the
 /// composite / selected tab / cached pane can't be resolved.
-unsafe fn system_quit_reapply_optionsetting_pane_visibility(base: usize, option_window: usize) {
+unsafe fn system_quit_reapply_optionsetting_pane_visibility(
+    base: usize,
+    option_window: usize,
+    forced_tab: Option<usize>,
+    source: &str,
+) {
     const HEAP_LO: usize = 0x10000;
     if option_window < HEAP_LO {
         return;
@@ -655,18 +660,34 @@ unsafe fn system_quit_reapply_optionsetting_pane_visibility(base: usize, option_
     // +0x10, selected index at view+0xd4 (`FUN_140739f20` = `*(view+0xd4)`). Use THIS, not the composite's
     // `current` pane pointer -- after our detour `current` (composite+0xb8) is stale (observed: it matched
     // cache slot 9 while the user was on the Game tab), so re-applying its index re-shows the wrong pane.
-    const TAB_CONTROL_OFFSET: usize = 0x1870;
-    const TAB_VIEW_OFFSET: usize = 0x10;
-    const TAB_VIEW_SELECTED_INDEX_OFFSET: usize = 0xd4;
-    let tab_view =
-        unsafe { safe_read_usize(option_window + TAB_CONTROL_OFFSET + TAB_VIEW_OFFSET) }.unwrap_or(0);
-    let real_tab = if tab_view >= HEAP_LO {
-        unsafe { safe_read_i32(tab_view + TAB_VIEW_SELECTED_INDEX_OFFSET) }
+    // When restoring after Back from our child ProfileSelect, the previous menu is always the Quit tab:
+    // write the tab view's selected index to Quit before the self-copy native refresh so the tab strip,
+    // current-pane pointer, and visible pane all agree with the parent the user came from.
+    let tab_view = unsafe {
+        safe_read_usize(
+            option_window + OPTIONSETTING_TAB_CONTROL_OFFSET + OPTIONSETTING_TAB_VIEW_OFFSET,
+        )
+    }
+    .unwrap_or(0);
+    let live_tab = if tab_view >= HEAP_LO {
+        unsafe { safe_read_i32(tab_view + OPTIONSETTING_TAB_VIEW_SELECTED_INDEX_OFFSET) }
             .map(|v| v as usize)
             .filter(|&t| t < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT)
     } else {
         None
     };
+    let real_tab = forced_tab
+        .filter(|&t| t < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT)
+        .or(live_tab);
+    if let (Some(tab), true) = (
+        forced_tab.filter(|&t| t < OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT),
+        tab_view >= HEAP_LO,
+    ) {
+        unsafe {
+            *((tab_view + OPTIONSETTING_TAB_VIEW_SELECTED_INDEX_OFFSET) as *mut i32) = tab as i32;
+        }
+        OPTIONSETTING_CURRENT_TAB.store(tab, Ordering::SeqCst);
+    }
     // Diagnostic: which cache slot the (possibly stale) current pane pointer matches.
     let mut cache_tab: Option<usize> = None;
     for i in 0..OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT {
@@ -681,23 +702,28 @@ unsafe fn system_quit_reapply_optionsetting_pane_visibility(base: usize, option_
     }
     let Some(tab_index) = real_tab else {
         append_autoload_debug(format_args!(
-            "system-quit-dup: optionsetting pane-reapply skipped -- no real tab index (tab_view=0x{tab_view:x} current=0x{current:x} cache_tab={cache_tab:?} composite=0x{composite:x})"
+            "system-quit-dup: optionsetting pane-reapply skipped source={source} -- no real tab index (tab_view=0x{tab_view:x} current=0x{current:x} live_tab={live_tab:?} forced_tab={forced_tab:?} cache_tab={cache_tab:?} composite=0x{composite:x})"
         ));
         return;
     };
+    // OptionSetting has one extra cached pane before the visible tab panes: natural telemetry showed
+    // visual tab 8 (Quit) backed by cache slot 9, while cache slot 8 is the tab immediately to its
+    // left. Use the visual tab for the tab strip, but the +1 cache slot for the composite current pane
+    // and native SetVisible pass; otherwise Back returns to the Quit tab label with the left tab's rows.
+    let pane_index = (tab_index + 1).min(OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT - 1);
     let Ok(set_visible_addr) = game_rva(TITLE_PRESS_START_SET_VISIBLE_RVA as u32) else {
         append_autoload_debug(format_args!(
-            "system-quit-dup: optionsetting pane-reapply skipped -- SetVisible rva 0x{TITLE_PRESS_START_SET_VISIBLE_RVA:x} unresolved"
+            "system-quit-dup: optionsetting pane-reapply skipped source={source} -- SetVisible rva 0x{TITLE_PRESS_START_SET_VISIBLE_RVA:x} unresolved"
         ));
         return;
     };
     let selected = unsafe {
-        safe_read_usize(composite + OPTIONSETTING_COMPOSITE_PANE_CACHE_OFFSET + tab_index * 8)
+        safe_read_usize(composite + OPTIONSETTING_COMPOSITE_PANE_CACHE_OFFSET + pane_index * 8)
     }
     .unwrap_or(0);
     if selected < HEAP_LO {
         append_autoload_debug(format_args!(
-            "system-quit-dup: optionsetting pane-reapply skipped -- selected cached pane missing tab_index={tab_index} composite=0x{composite:x}"
+            "system-quit-dup: optionsetting pane-reapply skipped source={source} -- selected cached pane missing tab_index={tab_index} composite=0x{composite:x}"
         ));
         return;
     }
@@ -709,14 +735,15 @@ unsafe fn system_quit_reapply_optionsetting_pane_visibility(base: usize, option_
         let select_tab: unsafe extern "system" fn(usize, i32) = unsafe { std::mem::transmute(refresh_addr) };
         // Native tab-select copies old current pane state into the new pane before refreshing. Because
         // we pre-set current=selected above, the copy is selected->selected (safe), but the helper still
-        // runs the internal Scaleform/row refresh that manual SetVisible did not reproduce.
-        unsafe { select_tab(composite, tab_index as i32) };
+        // runs the internal Scaleform/row refresh that manual SetVisible did not reproduce. It indexes
+        // the composite pane cache, not the visual tab strip, so pass pane_index.
+        unsafe { select_tab(composite, pane_index as i32) };
         SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_COUNT.fetch_add(1, Ordering::SeqCst);
         SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_LAST_SELECTED.store(selected, Ordering::SeqCst);
         refreshed = true;
     } else {
         append_autoload_debug(format_args!(
-            "system-quit-dup: optionsetting pane-reapply native select skipped -- refresh rva 0x{OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA:x} unresolved"
+            "system-quit-dup: optionsetting pane-reapply native select skipped source={source} -- refresh rva 0x{OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA:x} unresolved"
         ));
     }
     SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_REAPPLY_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -732,7 +759,7 @@ unsafe fn system_quit_reapply_optionsetting_pane_visibility(base: usize, option_
         }
         .unwrap_or(0);
         if cached >= HEAP_LO {
-            let visible = (i == tab_index) as u8;
+            let visible = (i == pane_index) as u8;
             unsafe { set_visible(cached + OPTIONSETTING_DIALOG_PANE_PROXY_OFFSET, visible) };
             if visible != 0 {
                 visible_mask |= 1usize << i;
@@ -740,7 +767,7 @@ unsafe fn system_quit_reapply_optionsetting_pane_visibility(base: usize, option_
         }
     }
     append_autoload_debug(format_args!(
-        "system-quit-dup: optionsetting pane-reapply native-select composite=0x{composite:x} old_current=0x{current:x} selected=0x{selected:x} tab_index={tab_index} real_tab={real_tab:?} cache_tab={cache_tab:?} visible_mask=0x{visible_mask:x} refreshed={refreshed} select_addr=0x{:x} set_visible=0x{set_visible_addr:x} (pre-repaired self-copy)"
+        "system-quit-dup: optionsetting pane-reapply native-select source={source} composite=0x{composite:x} old_current=0x{current:x} selected=0x{selected:x} tab_index={tab_index} pane_index={pane_index} live_tab={live_tab:?} forced_tab={forced_tab:?} cache_tab={cache_tab:?} visible_mask=0x{visible_mask:x} refreshed={refreshed} select_addr=0x{:x} set_visible=0x{set_visible_addr:x} (pre-repaired self-copy)"
         , game_rva(OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA).unwrap_or(0)
     ));
 }
@@ -890,17 +917,20 @@ unsafe fn system_quit_restore_real_system_windows(base: usize, source: &str) {
     } else {
         false
     };
-    let restored_option = false;
-    if option != 0 && option != top {
-        // Do not restore the existing OptionSetting window after ProfileSelect Back. User/runtime
-        // evidence shows the live OptionSetting/GFx pane is poisoned: rows/actions are native-clean,
-        // but the visible list can remain stale/blank. The known-good native recovery is Back to the
-        // parent menu, then OK into System again, which rebuilds/reopens OptionSetting cleanly. So we
-        // restore only the parent/top menu here and leave OptionSetting hidden.
-        append_autoload_debug(format_args!(
-            "system-quit-dup: leaving OptionSetting hidden after ProfileSelect Back source={source} option=0x{option:x}; parent System menu will reopen it natively"
-        ));
-    }
+    let restored_option = if option != 0 && option != top {
+        let restored = unsafe { system_quit_menu_window_set_visible_and_flags(base, option, true, source) };
+        unsafe {
+            system_quit_reapply_optionsetting_pane_visibility(
+                base,
+                option,
+                Some(OPTIONSETTING_QUIT_TAB_INDEX),
+                source,
+            )
+        };
+        restored
+    } else {
+        false
+    };
     append_autoload_debug(format_args!(
         "system-quit-dup: restore real windows source={source} profile=0x{profile:x} top=0x{top:x} option=0x{option:x} restored_top={restored_top} restored_option={restored_option}"
     ));

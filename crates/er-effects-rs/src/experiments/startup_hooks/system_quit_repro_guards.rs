@@ -530,7 +530,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             if profile == 0 && restore_count > baseline {
                 SQ_REPRO_PROFILE_BACK_RESTORE_COUNT.store(restore_count, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "sq-repro: PROFILE_BACK observed ProfileSelect closed + restore_count {baseline}->{restore_count} + direct-visible reapply count={direct_visible} refresh_count={direct_refresh}; drive LB back to Game Options for final validation dwell"
+                    "sq-repro: PROFILE_BACK observed ProfileSelect closed + restore_count {baseline}->{restore_count} + direct-visible reapply count={direct_visible} refresh_count={direct_refresh}; expect parent restored directly to Quit tab for final validation dwell"
                 ));
                 set_pad(0);
                 sq_repro_transition(SQ_REPRO_STATE_PROFILE_BACK_TO_GAME_TAB);
@@ -558,31 +558,32 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             let baseline_mask = SQ_REPRO_PROFILE_BACK_BASELINE_MASK.load(Ordering::SeqCst);
             let verify_mask = SQ_REPRO_PROFILE_BACK_VERIFY_MASK.load(Ordering::SeqCst);
             let mismatch_mask = SQ_REPRO_PROFILE_BACK_MISMATCH_MASK.load(Ordering::SeqCst);
-            let verified_all = baseline_mask != 0 && (verify_mask & baseline_mask) == baseline_mask;
-            if cur == 0 && verified_all && tick >= SQ_REPRO_TAB_RETURN_DWELL_TICKS {
+            let required_mask = 1usize << OPTIONSETTING_QUIT_TAB_INDEX;
+            let verified_quit = (baseline_mask & required_mask) != 0
+                && (verify_mask & required_mask) != 0;
+            let quit_mismatch = mismatch_mask & required_mask;
+            if cur == OPTIONSETTING_QUIT_TAB_INDEX
+                && verified_quit
+                && tick >= SQ_REPRO_TAB_RETURN_DWELL_TICKS
+            {
                 SQ_REPRO_PROFILE_BACK_FINAL_TAB.store(cur, Ordering::SeqCst);
-                let pass = !load_armed && mismatch_mask == 0;
+                let pass = !load_armed && quit_mismatch == 0;
                 SQ_REPRO_PROFILE_BACK_DONE.store(pass as usize, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "sq-repro: PROFILE_BACK complete final_tab={cur} load_armed={load_armed} baseline_mask=0x{baseline_mask:x} verify_mask=0x{verify_mask:x} mismatch_mask=0x{mismatch_mask:x} pass={pass}; SELF-DRIVE COMPLETE; releasing block"
+                    "sq-repro: PROFILE_BACK complete final_tab={cur} required_quit_tab={} load_armed={load_armed} baseline_mask=0x{baseline_mask:x} verify_mask=0x{verify_mask:x} mismatch_mask=0x{mismatch_mask:x} pass={pass}; SELF-DRIVE COMPLETE; releasing block",
+                    OPTIONSETTING_QUIT_TAB_INDEX
                 ));
                 set_pad(0);
                 SQ_REPRO_STATE.store(SQ_REPRO_STATE_DONE, Ordering::SeqCst);
                 return;
             }
-            let btn = if cur == 0 {
-                0
-            } else if (tick % INJECT_NAV_CYCLE) < INJECT_NAV_TAP_LEN {
-                XINPUT_GAMEPAD_LEFT_SHOULDER
-            } else {
-                0
-            };
             if tick % (INJECT_NAV_CYCLE * 8) == 0 {
                 append_autoload_debug(format_args!(
-                    "sq-repro: PROFILE_BACK_TO_GAME_TAB current_tab={cur}; pulsing LB until Game Options tab 0 then dwell baseline_mask=0x{baseline_mask:x} verify_mask=0x{verify_mask:x} mismatch_mask=0x{mismatch_mask:x}"
+                    "sq-repro: PROFILE_BACK_TO_GAME_TAB holding current_tab={cur}; expected restored Quit tab {} without extra navigation baseline_mask=0x{baseline_mask:x} verify_mask=0x{verify_mask:x} mismatch_mask=0x{mismatch_mask:x}",
+                    OPTIONSETTING_QUIT_TAB_INDEX
                 ));
             }
-            set_pad(btn);
+            set_pad(0);
         }
         SQ_REPRO_STATE_TO_SLOT => {
             // Drive the ProfileSelect cursor to THIS switch's EXPLICIT target slot (not "one off
