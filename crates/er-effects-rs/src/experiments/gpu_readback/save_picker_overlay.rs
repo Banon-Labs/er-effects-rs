@@ -53,6 +53,44 @@ fn pending_save_lock() -> std::sync::MutexGuard<'static, Option<PendingSave>> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// A character pick awaiting completion `(save path, slot)`. Set by the Present-hook input on the
+/// render thread; consumed by [`save_picker_overlay_process_completion`] on the game-task thread so
+/// the redirect activation + MinHook install runs off the render thread.
+#[allow(clippy::type_complexity)]
+static SAVE_PICKER_COMPLETE_REQUEST: Mutex<Option<(std::path::PathBuf, usize)>> = Mutex::new(None);
+
+fn save_picker_complete_request_lock()
+-> std::sync::MutexGuard<'static, Option<(std::path::PathBuf, usize)>> {
+    SAVE_PICKER_COMPLETE_REQUEST
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Consume a pending character pick and complete it: activate the save redirect + install the
+/// redirect hooks + release the save-check hold, so the autoload loads the chosen character. Call
+/// from the game-task thread (safe for MinHook, and alive at pick time before loading starts).
+/// No-op when no pick is pending.
+pub(crate) fn save_picker_overlay_process_completion() {
+    let request = save_picker_complete_request_lock().take();
+    let Some((path, slot)) = request else {
+        return;
+    };
+    if crate::experiments::complete_missing_save_selection_from_picker(&path) {
+        SAVE_PICKER_OVERLAY_PICK_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-picker-overlay: completed pick '{}' slot {slot} -- redirect active, releasing the save-check hold to autoload that character",
+            path.display()
+        ));
+        save_picker_overlay_disarm("picked");
+    } else {
+        // Validation failed at commit -- back to the file browser.
+        MISSING_SAVE_PICKER_SELECTED_SLOT.store(usize::MAX, Ordering::SeqCst);
+        SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
+        *pending_save_lock() = None;
+        SAVE_PICKER_STAGE_CHARS.store(0, Ordering::SeqCst);
+    }
+}
+
 /// The character sub-picker's chosen autoload slot, if one has been picked this session.
 pub(crate) fn missing_save_picker_selected_slot() -> Option<i32> {
     let v = MISSING_SAVE_PICKER_SELECTED_SLOT.load(Ordering::SeqCst);
@@ -257,9 +295,13 @@ fn save_picker_overlay_disarm(reason: &str) {
     append_autoload_debug(format_args!("save-picker-overlay: disarmed ({reason})"));
 }
 
-/// Per-frame input drive for the startup overlay picker. Reads OS keyboard/gamepad directly
-/// (independent of the game's blocked input), edge-detects, and drives the model. Call from the
-/// game task tick. No-op unless the overlay is active.
+/// One input poll for the startup overlay picker. Reads OS keyboard/gamepad directly (independent
+/// of the game's blocked input) and edge-detects. Driven from the D3D12 Present hook (a per-
+/// presented-frame callback that keeps firing even while the boot streams/loads and the game's task
+/// scheduler starves -- that starvation was the "inputs eaten" symptom). Navigation is applied
+/// here on the render thread (pure Mutex state); the one-shot pick COMPLETION (redirect + MinHook
+/// install) is deferred to [`save_picker_overlay_process_completion`] on the game-task thread.
+/// No-op unless the overlay is active.
 pub(crate) fn save_picker_overlay_input_tick() {
     save_picker_overlay_arm_if_pending();
     if !save_picker_overlay_active() {
@@ -395,21 +437,15 @@ fn save_picker_character_stage_input(pressed: usize) {
             SAVE_PICKER_STAGE_CHARS.store(0, Ordering::SeqCst);
         }
         Act::Pick(path, slot) => {
+            // Defer the actual redirect activation + MinHook install to the game-task thread (via
+            // this request): it runs the risky install off the render thread, and the game task is
+            // alive at pick time (the boot is still HELD -- loading only starts once the pick
+            // releases the hold). Record the chosen slot now so the character list stays selected.
             MISSING_SAVE_PICKER_SELECTED_SLOT.store(slot, Ordering::SeqCst);
-            if crate::experiments::complete_missing_save_selection_from_picker(&path) {
-                SAVE_PICKER_OVERLAY_PICK_COUNT.fetch_add(1, Ordering::SeqCst);
-                append_autoload_debug(format_args!(
-                    "save-picker-overlay: picked save '{}' slot {slot} -- redirect active, releasing the save-check hold to autoload that character",
-                    path.display()
-                ));
-                save_picker_overlay_disarm("picked");
-            } else {
-                // Validation failed at commit -- back to the file browser.
-                MISSING_SAVE_PICKER_SELECTED_SLOT.store(usize::MAX, Ordering::SeqCst);
-                SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
-                *pending_save_lock() = None;
-                SAVE_PICKER_STAGE_CHARS.store(0, Ordering::SeqCst);
-            }
+            *save_picker_complete_request_lock() = Some((path, slot));
+            append_autoload_debug(format_args!(
+                "save-picker-overlay: character slot {slot} chosen; completion requested (game-task thread)"
+            ));
         }
     }
 }

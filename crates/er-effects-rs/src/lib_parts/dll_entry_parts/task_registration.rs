@@ -32,10 +32,11 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     return;
                 }
                 tick_before_player_lookup(task_data);
-                // Startup no-save picker: read OS keyboard/gamepad and drive the DLL-drawn overlay
-                // browser (the boot stays held before the save-check via the SetState(4/5) deny
-                // until a file is picked). Runs before the player lookup so it ticks at the title.
-                save_picker_overlay_input_tick();
+                // Startup save-picker: input/navigation runs on the Present hook (per-frame, does
+                // not starve during loading). Only the one-shot pick COMPLETION (redirect + MinHook
+                // install) runs here, off the render thread -- the game task is alive at pick time
+                // (loading starts only after the pick releases the hold).
+                save_picker_overlay_process_completion();
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
                     let mut state = state_or_return(&state);
                     state.game_task_ticks += GAME_TASK_TICK_INCREMENT;
