@@ -68,12 +68,13 @@ pub(crate) fn native_fullread_slot() -> i32 {
 }
 /// Terminal non-commit disarm for the full-read chain (bd er-effects-rs-ns4n). SUBMIT arms the
 /// native slot-request register (GameMan+0xb78, `requested_save_slot_load_index`) so the native
-/// chain resolves our slot. On every DONE exit that does NOT hand off to the native confirm chain
-/// (continue_confirm consumes the pending request as part of its own load), the register must be
+/// chain resolves our slot. On every DONE exit, including the commit handoff, the register must be
 /// returned to the no-request sentinel: the in-game save manager services any >=0 request on the
 /// first frames after world arrival, which runs a SECOND full deserialize into the already-live
 /// world and exhausts the CSGaitemImp free queue -- the gaitemInsTable[-1] AV at live 0x67141a
-/// (6/6 picker-boot crashes 2026-07-07, ~22s in, at world arrival).
+/// (6/6 picker-boot crashes 2026-07-07; explicit save_file repro 2026-07-08, ~25s in, immediately
+/// after save_state 1->2). Earlier code assumed continue_confirm consumed the pending request, but
+/// runtime gm-snap proved req_slot survived as 0 until the crash, so commit must disarm too.
 unsafe fn fullread_disarm_slot_request(gm: usize, reason: &str) {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     if gm == NULL {
@@ -350,8 +351,14 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             format_args!("c30=0x{c30:x} level={level}"),
         );
         unsafe { confirm(shim_ptr) };
+        // continue_confirm starts the native world stream but does not reliably consume GameMan+0xb78.
+        // If req_slot survives into the first post-world save state, DoSaveStuff runs a second
+        // full-deserialize into the already-live PlayerGameData and crashes in CSGaitemImp::Deserialize
+        // (live 0x14067141a, gaitemInsTable[-1]). Disarm immediately after the confirmed handoff;
+        // GameMan+0xac0 still carries the selected save slot for the normal loaded-world state.
+        unsafe { fullread_disarm_slot_request(gm, "commit-after-confirm") };
         append_autoload_debug(format_args!(
-            "native-fullread: continue_confirm returned -- native pump now streams the real world (#{n}) -> DONE"
+            "native-fullread: continue_confirm returned + req_slot disarmed -- native pump now streams the real world (#{n}) -> DONE"
         ));
         FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
         return;
