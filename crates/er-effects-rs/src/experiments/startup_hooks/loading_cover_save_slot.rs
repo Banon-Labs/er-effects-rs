@@ -704,6 +704,16 @@ pub(crate) fn parse_save_character_slots(bytes: &[u8]) -> Vec<SaveSlotInfo> {
                 return None;
             }
             let level = pgd.read_i32(SAVE_PGD_LEVEL_OFFSET).unwrap_or(0);
+            // Only offer slots the autoload will actually accept: `profile_slot_fingerprint`
+            // (slot_resolution.rs) gates a real character on `level >= MIN_REAL_LEVEL (1) &&
+            // non-empty name`. An empty/deleted slot can retain leftover name bytes but reads
+            // level 0, so a name-only filter would list it as a "LV 0" non-active row -- and picking
+            // it fails that same fingerprint at load time, fail-closing into a soft-lock ("Continue
+            // slot profile is empty-like"). Match the load's criterion so the character list shows
+            // exactly the loadable characters. Every real ER character is level >= 1.
+            if level < 1 {
+                return None;
+            }
             Some(SaveSlotInfo { slot, name, level })
         })
         .collect()
