@@ -522,6 +522,9 @@ pub(crate) unsafe fn dump_load_correctness(base: usize, frame: u64) {
     const U32_STRIDE: usize = 4;
     const IDX_START: usize = 0;
     const IDX_STEP: usize = 1;
+    // Peak-load latch gate: a genuinely loaded character has level>=1 and a non-empty name.
+    const MIN_REAL_LATCH_LEVEL: usize = 1;
+    const NAME_LEN_EMPTY: usize = 0;
     let gm = game_man_ptr_or_null();
     let ri32 = |addr: usize| -> i32 {
         unsafe { safe_read_usize(addr) }
@@ -584,6 +587,22 @@ pub(crate) unsafe fn dump_load_correctness(base: usize, frame: u64) {
     append_autoload_debug(format_args!(
         "LOAD-CORRECTNESS frame={frame} gm_c30=0x{c30:x} gm_ac0={ac0} name_empty={name_empty} pgd=0x{pgd:x} chr_type={chr_type} name={name:?} level={level} runes={runes} rune_mem={rune_mem} stats={stats:?}"
     ));
+    // LATCH the peak-load semaphore: a REAL character (present PlayerGameData, level>=1, non-empty
+    // name) confirmed in the world. Latched so a later quit-to-title -- which tears the char down and
+    // resets the live oracle_char_* fields -- cannot erase the proof that the load succeeded this run.
+    // Peak = highest level seen (keeps the identifying fields for that character).
+    if (level as usize) >= MIN_REAL_LATCH_LEVEL && nlen > NAME_LEN_EMPTY {
+        LOADED_PEAK_SEEN_COUNT.fetch_add(1, Ordering::SeqCst);
+        if (level as usize) >= LOADED_PEAK_LEVEL.load(Ordering::SeqCst) {
+            LOADED_PEAK_LEVEL.store(level as usize, Ordering::SeqCst);
+            LOADED_PEAK_C30.store(c30, Ordering::SeqCst);
+            LOADED_PEAK_NAME_LEN.store(nlen, Ordering::SeqCst);
+            if let Ok(mut latched) = LOADED_PEAK_NAME.lock() {
+                latched.clear();
+                latched.push_str(&name);
+            }
+        }
+    }
 }
 /// Recipe Option 1 (genuine offline continue, flagless): drive the MoveMapList
 /// dispatcher 0x140afb880 each frame with GameMan b73 set so it begins
