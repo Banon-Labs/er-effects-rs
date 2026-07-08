@@ -73,6 +73,10 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     // vfptr[3] call and, if the window is freed/reused or its event index is out of range, null
     // owningMenuWindow so the finalize skips the block entirely.
     install_menu_window_job_dtor_guard();
+    // Quit-to-desktop clean kill: on a quit the world teardown unloads the MenuOffscrRendParam param
+    // table and the rebuilt title's model renderer DLPanics on the missing table. Turn that exact
+    // condition into a fast clean ExitProcess(0) (save-then-kill) instead of the crash.
+    install_quit_to_desktop_clean_kill_hook();
     // Telemetry-only successor to the removed 5ae3965 overflow guard (dropping command lists on
     // overflow corrupts the render -- c2794d9): never alters queue behavior, only names which
     // producer's submissions grow per switch so the 0x1aeaf05 overflow can be fixed at its source.

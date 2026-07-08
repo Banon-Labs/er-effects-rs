@@ -880,6 +880,26 @@ pub(crate) static MENU_WINDOW_JOB_DTOR_LIST_REMOVALS: AtomicUsize = AtomicUsize:
 pub(crate) static MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX: AtomicUsize = AtomicUsize::new(0);
 
+/// QUIT-TO-DESKTOP CLEAN KILL (user directive 2026-07-08): the native quit saves the character then
+/// tears the world down and rebuilds the title -- slow, and with our flow the rebuilt title's
+/// `CSMenuProfModelRend` looks up the `MenuOffscrRendParam` param table, which the teardown has
+/// unloaded, so the game `DLPanic`s (`MenuOffscrRendParam.cpp:0x23`, `GetParamResCap(..., MenuOffscr-
+/// RendParam, 0) == NULL`). We turn that exact condition into a fast CLEAN exit: hook the offscreen-
+/// render param lookup (inner `LookupMenuOffscrRendParam`, deobf 0x140d3ed90), and when the param
+/// TABLE is absent -- which only happens on a quit teardown (it stays resident through loads, proven
+/// by the successful repeated loads) -- `ExitProcess(0)` instead of the DLPanic. The native quit has
+/// already issued the character save before the rebuild, so this is save-then-kill; the native
+/// confirm dialog is untouched (the teardown only runs after Yes). Grounded by the inner lookup's own
+/// disasm: repo ptr `0x143d81ee8`, `GetParamResCap` `0x140d4cc50`, `MenuOffscrRendParam` type `0x4e`.
+pub(crate) const MENU_OFFSCR_REND_PARAM_LOOKUP_RVA: usize = 0xd3ed90;
+pub(crate) const SOLO_PARAM_REPOSITORY_PTR_RVA: usize = 0x3d81ee8;
+pub(crate) const GET_PARAM_RESCAP_RVA: usize = 0xd4cc50;
+pub(crate) const MENU_OFFSCR_REND_PARAM_TYPE: u32 = 0x4e;
+pub(crate) static MENU_OFFSCR_REND_PARAM_LOOKUP_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static MENU_OFFSCR_REND_PARAM_LOOKUP_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static QUIT_TO_DESKTOP_CLEAN_KILLS: AtomicUsize = AtomicUsize::new(0);
+
 // === Game-Options pane VISIBILITY oracle (READ-ONLY, `oracle_optionsetting_pane_*`) ===============
 // Detects the "blank Game Options pane" bug on OptionSetting menu re-entry: the tab strip + footer
 // render but the option-row pane display objects are not VISIBLE (the row list draws black). The

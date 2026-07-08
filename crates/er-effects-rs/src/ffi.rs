@@ -154,6 +154,10 @@ pub(crate) struct SystemTimeMin {
 unsafe extern "system" {
     pub(crate) fn GetLocalTime(time: *mut SystemTimeMin);
     pub(crate) fn GetModuleFileNameW(module: isize, filename: *mut u16, size: u32) -> u32;
+    /// Clean process exit (flushes open file buffers on the way out, so a quit-save that has already
+    /// issued its write persists). Used to turn the quit-to-desktop teardown crash into a fast, clean
+    /// kill. Runs through our exit-path hook (logs the exit) before terminating.
+    pub(crate) fn ExitProcess(code: u32) -> !;
 }
 
 /// Thread + debug-register FFI for the GameMan+0xc30 hardware write-watchpoint:

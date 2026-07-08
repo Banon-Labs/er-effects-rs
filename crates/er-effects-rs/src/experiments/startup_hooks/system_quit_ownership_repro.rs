@@ -754,6 +754,100 @@ fn install_system_quit_window_list_push_hook() {
     }
 }
 
+/// Is the `MenuOffscrRendParam` param table absent from SoloParamRepository? True only during a quit
+/// teardown (the world unload drops it); it stays resident through loads. Reproduces the game's own
+/// check (`GetParamResCap(repo, MenuOffscrRendParam, 0) == NULL`) read-only.
+unsafe fn menu_offscr_rend_param_table_absent(base: usize) -> bool {
+    let repo = unsafe { safe_read_usize(base + SOLO_PARAM_REPOSITORY_PTR_RVA) }.unwrap_or(0);
+    if repo == 0 {
+        return false; // repo itself not up yet -> not the quit-teardown condition; forward.
+    }
+    let Ok(getcap_addr) = game_rva(GET_PARAM_RESCAP_RVA as u32) else {
+        return false;
+    };
+    let get_rescap: unsafe extern "system" fn(usize, u32, u32) -> usize =
+        unsafe { std::mem::transmute(getcap_addr) };
+    let rescap = unsafe { get_rescap(repo, MENU_OFFSCR_REND_PARAM_TYPE, 0) };
+    rescap == 0
+}
+
+/// `LookupMenuOffscrRendParam` (inner, deobf 0x140d3ed90; rcx = out descriptor, edx = row id). See
+/// `MENU_OFFSCR_REND_PARAM_LOOKUP_RVA` for the quit-to-desktop clean-kill rationale. When the param
+/// table is absent (quit teardown), `ExitProcess(0)` for a fast clean exit instead of the game's
+/// imminent DLPanic; otherwise forward unchanged.
+pub(crate) unsafe extern "system" fn menu_offscr_rend_param_lookup_hook(out: usize, row: u32) {
+    if let Some(base) = game_module_base().ok().filter(|&b| b != 0) {
+        if unsafe { menu_offscr_rend_param_table_absent(base) } {
+            let n = QUIT_TO_DESKTOP_CLEAN_KILLS.fetch_add(1, Ordering::SeqCst) + 1;
+            append_crash_log(format_args!(
+                "quit-to-desktop: MenuOffscrRendParam table absent (quit teardown) #{n} row={row} -- native save already issued; clean ExitProcess(0) instead of the MenuOffscrRendParam DLPanic crash"
+            ));
+            unsafe { ExitProcess(0) };
+        }
+    }
+    let orig = MENU_OFFSCR_REND_PARAM_LOOKUP_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET || orig == 0 {
+        return;
+    }
+    let f: unsafe extern "system" fn(usize, u32) = unsafe { std::mem::transmute(orig) };
+    unsafe { f(out, row) };
+}
+
+/// Install the quit-to-desktop clean-kill guard (er-effects-rs-j74t follow-up). Idempotent.
+fn install_quit_to_desktop_clean_kill_hook() {
+    if MENU_OFFSCR_REND_PARAM_LOOKUP_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "quit-to-desktop: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(lookup_addr) = game_rva(MENU_OFFSCR_REND_PARAM_LOOKUP_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "quit-to-desktop: failed to resolve MenuOffscrRendParam lookup rva 0x{MENU_OFFSCR_REND_PARAM_LOOKUP_RVA:x}"
+        ));
+        return;
+    };
+    let mut ok = true;
+    match unsafe {
+        MhHook::new(
+            lookup_addr as *mut c_void,
+            menu_offscr_rend_param_lookup_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            MENU_OFFSCR_REND_PARAM_LOOKUP_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            ok &= unsafe { hook.queue_enable() }.is_ok();
+            std::mem::forget(hook);
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "quit-to-desktop: MhHook::new(lookup) failed: {status:?}"
+            ));
+            ok = false;
+        }
+    }
+    if !ok {
+        return;
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => {
+            MENU_OFFSCR_REND_PARAM_LOOKUP_INSTALLED.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "quit-to-desktop: hooked MenuOffscrRendParam lookup 0x{lookup_addr:x}; on quit the world teardown's absent param table triggers a clean ExitProcess(0) (save-then-kill) instead of the DLPanic crash"
+            ));
+        }
+        status => append_autoload_debug(format_args!(
+            "quit-to-desktop: MH_ApplyQueued failed: {status:?}"
+        )),
+    }
+}
+
 fn install_system_quit_noop_action_hook() {
     let first_installed = SYSTEM_QUIT_NOOP_ACTION_INSTALLED.load(Ordering::SeqCst)
         != SYSTEM_QUIT_NOOP_ACTION_NOT_INSTALLED;
