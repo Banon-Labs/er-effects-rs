@@ -432,11 +432,21 @@ pub(crate) fn ensure_save_picker_keyboard_hook() {
         .name("er-save-picker-kbd".into())
         .spawn(|| {
             use windows::Win32::Foundation::HWND;
+            use windows::Win32::System::Threading::{
+                GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL,
+            };
             use windows::Win32::UI::WindowsAndMessaging::{
                 DispatchMessageW, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE,
                 PeekMessageW, QS_ALLINPUT, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx,
                 WH_KEYBOARD_LL,
             };
+            // Keep this thread scheduled through the heavy boot load. A low-level keyboard hook whose
+            // thread isn't serviced within ~300ms gets bypassed by the OS -- that dropped keypress is
+            // the "loading eats my inputs" symptom. The thread parks in the message wait, so top
+            // priority never costs CPU.
+            unsafe {
+                let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+            }
             let Ok(hook) = (unsafe {
                 SetWindowsHookExW(WH_KEYBOARD_LL, Some(save_picker_ll_keyboard_proc), None, 0)
             }) else {
