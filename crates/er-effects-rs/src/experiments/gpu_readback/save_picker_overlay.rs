@@ -350,17 +350,20 @@ pub(crate) fn overlay_save_picker_onto(buf: &mut [u8], w: usize, h: usize) -> bo
     boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, "SELECT SAVE FILE", PICKER_RGB_TITLE);
     y += line_h + line_h / 2;
 
-    // Current directory (dimmed, fit to width) + extension/page hint.
-    let dir_str = model.current_dir().display().to_string();
-    let dir_line = picker_fit_text(&dir_str, content_w.saturating_sub(scale * 8));
-    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, &dir_line, PICKER_RGB_DIM);
+    // Location line (dimmed, fit to width): the drive-select header or the current directory.
+    let loc_line = picker_fit_text(&model.location_label(), content_w.saturating_sub(scale * 8));
+    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, &loc_line, PICKER_RGB_DIM);
     y += line_h;
-    let mode_line = format!(
-        "SHOWING *.{}   PAGE {}/{}",
-        model.extension().to_ascii_uppercase(),
-        model.page() + 1,
-        model.page_count()
-    );
+    let mode_line = if model.at_drive_list() {
+        "PICK A DRIVE TO BROWSE".to_owned()
+    } else {
+        format!(
+            "SHOWING *.{}   PAGE {}/{}",
+            model.extension().to_ascii_uppercase(),
+            model.page() + 1,
+            model.page_count()
+        )
+    };
     boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, &mode_line, PICKER_RGB_DIM);
     y += line_h;
     // Divider rule.

@@ -71,6 +71,8 @@ pub(crate) enum PickerRow {
     File(PathBuf),
     /// Advance to the next page (wraps to the first page after the last).
     NextPage,
+    /// At a drive root: switch to the drive list (pick a different mounted drive).
+    DriveList,
     /// Row beyond the listing on this page; activation is a no-op.
     Empty,
 }
@@ -95,6 +97,21 @@ pub(crate) struct SavePickerModel {
     /// Highlighted row index (0..PICKER_ROW_COUNT) for the overlay picker. Clamped to a
     /// selectable (non-Empty) row on every listing change.
     cursor: usize,
+    /// When set, `entries` is the mounted-drive list (drive roots), not a directory listing --
+    /// the user is choosing which drive to browse.
+    at_drive_list: bool,
+}
+
+/// Mounted drives that browse as folders: probe `A:\`..`Z:\` and keep the ones that are real
+/// directories. Under Wine this yields e.g. `Z:\` (Linux `/`), `C:\` (wineprefix), `S:\` (Steam),
+/// and skips raw block-device drives (`D:`/`E:`/`F:` -> `/dev/sd*`) that are not directories.
+fn enumerate_drives() -> Vec<PathBuf> {
+    (b'A'..=b'Z')
+        .filter_map(|c| {
+            let root = PathBuf::from(format!("{}:\\", c as char));
+            root.is_dir().then_some(root)
+        })
+        .collect()
 }
 
 impl SavePickerModel {
@@ -106,10 +123,39 @@ impl SavePickerModel {
             entries: Vec::new(),
             page: 0,
             cursor: 0,
+            at_drive_list: false,
         };
         model.refresh();
         model.cursor = model.first_selectable_row();
         model
+    }
+
+    pub(crate) fn at_drive_list(&self) -> bool {
+        self.at_drive_list
+    }
+
+    /// Where the picker currently is, for the header line: "SELECT DRIVE" in the drive list, else
+    /// the current directory path.
+    pub(crate) fn location_label(&self) -> String {
+        if self.at_drive_list {
+            "SELECT DRIVE".to_owned()
+        } else {
+            self.current_dir.display().to_string()
+        }
+    }
+
+    /// Switch to the mounted-drive list (drive roots as entries). Selecting one enters that drive.
+    fn enter_drive_list(&mut self) {
+        self.entries = enumerate_drives()
+            .into_iter()
+            .map(|root| PickerEntry::Dir {
+                name: root.display().to_string(),
+                path: root,
+            })
+            .collect();
+        self.at_drive_list = true;
+        self.page = 0;
+        self.cursor = self.first_selectable_row();
     }
 
     pub(crate) fn current_dir(&self) -> &Path {
@@ -138,6 +184,7 @@ impl SavePickerModel {
     pub(crate) fn refresh(&mut self) {
         self.entries.clear();
         self.page = 0;
+        self.at_drive_list = false;
         let read = match std::fs::read_dir(&self.current_dir) {
             Ok(read) => read,
             Err(err) => {
@@ -206,10 +253,18 @@ impl SavePickerModel {
     /// Meaning of `row` (0..PICKER_ROW_COUNT) on the current page.
     pub(crate) fn row_meaning(&self, row: usize) -> PickerRow {
         match row {
-            PICKER_ROW_PARENT => match self.current_dir.parent() {
-                Some(parent) if !parent.as_os_str().is_empty() => PickerRow::ParentDir,
-                _ => PickerRow::AtRoot,
-            },
+            PICKER_ROW_PARENT => {
+                if self.at_drive_list {
+                    // Top of the drive list -- nowhere further up.
+                    PickerRow::AtRoot
+                } else {
+                    match self.current_dir.parent() {
+                        Some(parent) if !parent.as_os_str().is_empty() => PickerRow::ParentDir,
+                        // At a drive root: up leads to the drive selector, not a dead end.
+                        _ => PickerRow::DriveList,
+                    }
+                }
+            }
             PICKER_ROW_NEXT_PAGE if self.page_count() > 1 => PickerRow::NextPage,
             PICKER_ROW_NEXT_PAGE => PickerRow::Empty,
             row => match self.page_entries().get(row - 1) {
@@ -243,6 +298,10 @@ impl SavePickerModel {
                 self.page = (self.page + 1) % self.page_count();
                 PickerActivation::Repopulate
             }
+            PickerRow::DriveList => {
+                self.enter_drive_list();
+                PickerActivation::Repopulate
+            }
             PickerRow::AtRoot | PickerRow::Empty => PickerActivation::Ignored,
         }
     }
@@ -253,14 +312,9 @@ impl SavePickerModel {
     pub(crate) fn row_label_utf16(&self, row: usize) -> Vec<u16> {
         let label = match self.row_meaning(row) {
             PickerRow::ParentDir => "[ .. up ]".to_owned(),
-            PickerRow::AtRoot => "[ root ]".to_owned(),
-            PickerRow::Dir(path) => {
-                let name = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("?");
-                format!("{name}/")
-            }
+            PickerRow::AtRoot => "[ drives ]".to_owned(),
+            PickerRow::DriveList => "[ drives ]".to_owned(),
+            PickerRow::Dir(path) => self.dir_display_name(&path),
             PickerRow::File(path) => path
                 .file_name()
                 .and_then(|name| name.to_str())
@@ -274,19 +328,24 @@ impl SavePickerModel {
         truncate_utf16(&label, PICKER_ROW_NAME_UTF16_MAX)
     }
 
+    /// Display name for a directory row: the folder name with a `/`, or the full root path (e.g.
+    /// `Z:\`) for a drive root (which has no file name).
+    fn dir_display_name(&self, path: &Path) -> String {
+        match path.file_name().and_then(|name| name.to_str()) {
+            Some(name) => format!("{name}/"),
+            None => path.display().to_string(),
+        }
+    }
+
     /// ASCII display label for `row` (uppercased for the 5x7 overlay font; dir rows keep a `/`
     /// suffix, control rows are bracketed). Empty string for an out-of-range row.
     pub(crate) fn row_label_ascii(&self, row: usize) -> String {
         let label = match self.row_meaning(row) {
             PickerRow::ParentDir => "[..] UP".to_owned(),
-            PickerRow::AtRoot => "[ROOT]".to_owned(),
-            PickerRow::Dir(path) => {
-                let name = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("?");
-                format!("{name}/")
-            }
+            // Row 0 in the drive list is the (no-op) header; at a drive root it enters the list.
+            PickerRow::AtRoot => "[SELECT DRIVE]".to_owned(),
+            PickerRow::DriveList => "[..] DRIVES".to_owned(),
+            PickerRow::Dir(path) => self.dir_display_name(&path),
             PickerRow::File(path) => path
                 .file_name()
                 .and_then(|name| name.to_str())
@@ -362,14 +421,19 @@ impl SavePickerModel {
         self.cursor = self.first_selectable_row();
     }
 
-    /// Navigate to the parent directory (if any), resetting the cursor.
+    /// Navigate to the parent directory, or -- at a drive root -- to the drive selector. No-op at
+    /// the top of the drive list. Resets the cursor.
     pub(crate) fn go_up(&mut self) {
-        if let Some(parent) = self.current_dir.parent().map(Path::to_path_buf)
-            && !parent.as_os_str().is_empty()
-        {
-            self.current_dir = parent;
-            self.refresh();
-            self.cursor = self.first_selectable_row();
+        if self.at_drive_list {
+            return;
+        }
+        match self.current_dir.parent().map(Path::to_path_buf) {
+            Some(parent) if !parent.as_os_str().is_empty() => {
+                self.current_dir = parent;
+                self.refresh();
+                self.cursor = self.first_selectable_row();
+            }
+            _ => self.enter_drive_list(),
         }
     }
 
