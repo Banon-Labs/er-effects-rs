@@ -1166,8 +1166,14 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
         if load_label_ok || open_label_ok {
             SYSTEM_QUIT_DUPLICATE_COUNT.fetch_add(1, Ordering::SeqCst);
         }
+        let prior_bound = unsafe { safe_read_i32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET) }.unwrap_or(-1);
+        let new_bound = (after_final.min(i32::MAX as usize)) as i32;
+        if new_bound > prior_bound {
+            unsafe { *((dialog + DIALOG_SLOT_BOUND_B08_OFFSET) as *mut i32) = new_bound };
+        }
+        let bound_after = unsafe { safe_read_i32(dialog + DIALOG_SLOT_BOUND_B08_OFFSET) }.unwrap_or(-1);
         append_autoload_debug(format_args!(
-            "system-quit-dup: added native GameEnd rows Load Profile + Load Save Profiles dialog=0x{dialog:x} count {before}->{after_native}->{after_final} ret=0x{ret:x} load_ok={load_label_ok} load_ret=0x{load_ret:x} load_row=0x{load_row:x} load_controller=0x{load_controller:x} load_action=0x{load_action:x} open_ok={open_label_ok} open_ret=0x{open_ret:x} open_row=0x{open_row:x} open_controller=0x{open_controller:x} open_action=0x{open_action:x}"
+            "system-quit-dup: added native GameEnd rows Load Profile + Load Save Profiles dialog=0x{dialog:x} count {before}->{after_native}->{after_final} cursor_bound {prior_bound}->{bound_after} ret=0x{ret:x} load_ok={load_label_ok} load_ret=0x{load_ret:x} load_row=0x{load_row:x} load_controller=0x{load_controller:x} load_action=0x{load_action:x} open_ok={open_label_ok} open_ret=0x{open_ret:x} open_row=0x{open_row:x} open_controller=0x{open_controller:x} open_action=0x{open_action:x}"
         ));
     }
 

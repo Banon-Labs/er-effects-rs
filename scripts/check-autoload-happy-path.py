@@ -639,6 +639,13 @@ def main() -> int:
         "native fullread commit path must disarm GameMan+0xb78 after continue_confirm to prevent post-world second-deserialize CSGaitem crashes",
         failures,
     )
+    require(
+        "DIALOG_SLOT_BOUND_B08_OFFSET" in experiments
+        and "cursor_bound" in experiments
+        and "after_final.min(i32::MAX as usize)" in experiments,
+        "System->Quit cloned Load Profile rows must expand the dialog cursor bound so keyboard/controller navigation can reach rows 2/3",
+        failures,
+    )
 
     online_body = rust_fn_body(experiments, "online_disable_enabled")
     input_body = rust_fn_body(experiments, "block_input_enabled")
