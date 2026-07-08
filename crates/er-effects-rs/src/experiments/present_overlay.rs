@@ -116,10 +116,11 @@ unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32)
             if !drew_portrait {
                 let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
             }
-            // Drive the startup save-picker input here (per-presented-frame), NOT on the game task
-            // scheduler which starves during boot loading and dropped key presses. Navigation only;
-            // the pick completion is deferred to the game task.
-            let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
+            // Spawn the startup save-picker's dedicated OS-input thread (once). Present ALSO starves
+            // during boot loading, so it can't be the input driver -- the independent thread polls at
+            // a steady cadence regardless of the frozen render loop. Navigation runs on that thread;
+            // the pick completion is still deferred to the game task.
+            let _ = std::panic::catch_unwind(ensure_save_picker_input_thread);
         }
     }
     let orig = PRESENT_ORIG.load(Ordering::SeqCst);
@@ -156,8 +157,9 @@ unsafe extern "system" fn present1_hook(
             if !drew_portrait {
                 let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
             }
-            // Per-presented-frame save-picker input (see present_hook for why not the game task).
-            let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
+            // Spawn the save-picker's dedicated OS-input thread (see present_hook for why input can
+            // be driven neither by the game task nor by Present).
+            let _ = std::panic::catch_unwind(ensure_save_picker_input_thread);
         }
     }
     let orig = PRESENT1_ORIG.load(Ordering::SeqCst);

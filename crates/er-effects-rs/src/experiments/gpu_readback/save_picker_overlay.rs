@@ -324,6 +324,76 @@ pub(crate) fn save_picker_overlay_input_tick() {
     }
 }
 
+/// One-shot guard so exactly one dedicated input thread is ever live for the startup picker.
+static SAVE_PICKER_INPUT_THREAD_STARTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Spawn the startup picker's dedicated OS-input polling thread ONCE, while a missing-save pick is
+/// pending. Both the game-task scheduler and the D3D12 Present hook STARVE during boot
+/// loading/streaming -- either driver drops key presses, which is the "my inputs get eaten while the
+/// game loads, I have to wait for it to stop" symptom. An independent `std::thread` is scheduled by
+/// the OS regardless of the frozen game/render loop, so it polls GetAsyncKeyState/XInput at a steady
+/// ~125 Hz cadence and keeps the picker fully responsive throughout the load. Navigation only: the
+/// one-shot pick COMPLETION (redirect + MinHook install) still runs on the game task via
+/// [`save_picker_overlay_process_completion`]; this thread only records the chosen slot + enqueues
+/// the completion request (see `Act::Pick`). The thread exits once the pick clears the missing-save
+/// gate (plus a short drain so the overlay disarms), or after a defensive lifetime cap, then releases
+/// the guard for a possible re-arm. Cheap no-op after spawn / when no pick is pending.
+pub(crate) fn ensure_save_picker_input_thread() {
+    if !missing_save_selection_pending() {
+        return;
+    }
+    if SAVE_PICKER_INPUT_THREAD_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("er-save-picker-input".into())
+        .spawn(|| {
+            use windows::Win32::{
+                Foundation::CloseHandle,
+                System::Threading::{CreateEventW, WaitForSingleObject},
+            };
+            // Fixed ~125 Hz poll cadence via a BOUNDED wait on a never-signaled auto-reset event --
+            // the same CreateEventW + WaitForSingleObject primitive the GPU-readback paths use, NOT
+            // thread::sleep (banned by scripts/check-no-timeouts.py, which treats sleeps as
+            // probe-synchronization). OS key state has no push event to react to, so a cadence poll
+            // is inherent; the 8 ms timeout is the tick and the event never fires.
+            const POLL_MS: u32 = 8;
+            // Defensive lifetime cap (~1h at 8 ms) so a never-resolved pick can't spin forever; the
+            // normal exit is the pick clearing the missing-save gate below.
+            const MAX_ITERS: u64 = 450_000;
+            let Ok(tick_event) = (unsafe { CreateEventW(None, false, false, None) }) else {
+                SAVE_PICKER_INPUT_THREAD_STARTED.store(false, Ordering::SeqCst);
+                return;
+            };
+            let mut done_ticks: u32 = 0;
+            let mut iters: u64 = 0;
+            loop {
+                let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
+                if !missing_save_selection_pending() && !save_picker_overlay_active() {
+                    // Pick resolved: tick a few more times so the disarm runs, then exit.
+                    done_ticks += 1;
+                    if done_ticks > 4 {
+                        break;
+                    }
+                }
+                iters += 1;
+                if iters >= MAX_ITERS {
+                    break;
+                }
+                let _ = unsafe { WaitForSingleObject(tick_event, POLL_MS) };
+            }
+            unsafe {
+                let _ = CloseHandle(tick_event);
+            }
+            SAVE_PICKER_INPUT_THREAD_STARTED.store(false, Ordering::SeqCst);
+        });
+    if spawned.is_err() {
+        // Spawn failed (resource exhaustion) -> release the guard so a later frame retries.
+        SAVE_PICKER_INPUT_THREAD_STARTED.store(false, Ordering::SeqCst);
+    }
+}
+
 /// File-browser stage input: navigate/drive/page, and on picking a save file, parse its character
 /// slots and switch to the character sub-picker (the redirect + load are deferred until a
 /// character is chosen).

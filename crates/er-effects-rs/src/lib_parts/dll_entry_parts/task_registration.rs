@@ -32,10 +32,13 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     return;
                 }
                 tick_before_player_lookup(task_data);
-                // Startup save-picker: input/navigation runs on the Present hook (per-frame, does
-                // not starve during loading). Only the one-shot pick COMPLETION (redirect + MinHook
-                // install) runs here, off the render thread -- the game task is alive at pick time
-                // (loading starts only after the pick releases the hold).
+                // Startup save-picker: input/navigation runs on a dedicated OS thread (the game task
+                // AND the Present hook both starve during boot loading and drop key presses). Spawn
+                // that thread here too -- the game task ticks before loading starts, so it is a
+                // reliable early spawn point. Only the one-shot pick COMPLETION (redirect + MinHook
+                // install) runs here, off the render/input threads -- the game task is alive at pick
+                // time (loading starts only after the pick releases the hold).
+                ensure_save_picker_input_thread();
                 save_picker_overlay_process_completion();
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
                     let mut state = state_or_return(&state);
