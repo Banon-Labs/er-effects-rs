@@ -1023,7 +1023,6 @@ pub(crate) unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hoo
 
     // OptionSetting constructs/lazily rebuilds hidden tab panes while another tab is visible. Mutate
     // only the Quit tab's own dialog; never write rows into the active non-Quit pane.
-    const OPTIONSETTING_QUIT_TAB_INDEX: usize = 8;
     let active_tab = OPTIONSETTING_CURRENT_TAB.load(Ordering::SeqCst);
     let active_dialog = OPTIONSETTING_CURRENT_DIALOG.load(Ordering::SeqCst);
     let actively_shown = OPTIONSETTING_ACTIVELY_SHOWN.load(Ordering::SeqCst) != 0;

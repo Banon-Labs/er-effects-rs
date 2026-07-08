@@ -908,6 +908,9 @@ pub(crate) static OPTIONSETTING_REAL_BLANK_DETECTED_COUNT: AtomicUsize = AtomicU
 /// cache slot the current pane dialog matches -- to identify WHICH tab is blank (e.g. the Quit/Exit tab
 /// where our injected Load-Profile rows live vs the Game tab).
 pub(crate) static OPTIONSETTING_CURRENT_TAB: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// The System/OptionSetting Quit tab index. The custom Load Profile / Load Save Profiles rows are
+/// children of this tab, so Back from their ProfileSelect child must restore this tab as the parent.
+pub(crate) const OPTIONSETTING_QUIT_TAB_INDEX: usize = 8;
 pub(crate) static OPTIONSETTING_CURRENT_TAB_AT_BLANK: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub(crate) static SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_REAPPLY_COUNT: AtomicUsize =
     AtomicUsize::new(0);
