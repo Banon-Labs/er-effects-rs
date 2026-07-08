@@ -349,8 +349,16 @@ fn save_picker_apply_pressed(pressed: usize) {
     if pressed == 0 {
         return;
     }
-    SAVE_PICKER_OVERLAY_INPUT_HITS.fetch_add(1, Ordering::SeqCst);
-    if SAVE_PICKER_STAGE_CHARS.load(Ordering::SeqCst) != 0 {
+    let hits = SAVE_PICKER_OVERLAY_INPUT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    let chars_stage = SAVE_PICKER_STAGE_CHARS.load(Ordering::SeqCst) != 0;
+    // Log every applied action so the exact input sequence + timing is visible in the debug log
+    // (distinguishes genuine under-registering from a slow redraw that just hides the feedback).
+    append_autoload_debug(format_args!(
+        "save-picker-input: applied #{hits} action=0x{pressed:x} stage={} src_hook={}",
+        if chars_stage { "chars" } else { "files" },
+        SAVE_PICKER_KBD_HOOK_ACTIVE.load(Ordering::SeqCst)
+    ));
+    if chars_stage {
         save_picker_character_stage_input(pressed);
     } else {
         save_picker_file_stage_input(pressed);
@@ -377,9 +385,7 @@ static SAVE_PICKER_KBD_HOOK_ACTIVE: std::sync::atomic::AtomicBool =
 /// One-shot spawn guard for the hook thread.
 static SAVE_PICKER_KBD_HOOK_STARTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-/// Nav keys currently held (per our hook), to collapse OS key auto-repeat to one action per press.
-static SAVE_PICKER_KBD_DOWN_MASK: AtomicUsize = AtomicUsize::new(0);
-/// Telemetry: distinct key-down edges the LL hook applied (proves event-driven capture fires under Wine).
+/// Telemetry: key-down events the LL hook applied (proves event-driven capture fires under Wine).
 pub(crate) static SAVE_PICKER_KBD_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 
 /// WH_KEYBOARD_LL callback: every keystroke arrives here as an OS event, independent of the game's
@@ -392,24 +398,20 @@ unsafe extern "system" fn save_picker_ll_keyboard_proc(
     lparam: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, HC_ACTION, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+        CallNextHookEx, HC_ACTION, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_SYSKEYDOWN,
     };
     if ncode == HC_ACTION as i32 && lparam.0 != 0 {
         let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
         let act = picker_action_for_vk(kb.vkCode as i32);
-        if act != 0 {
-            let msg = wparam.0 as u32;
-            let prev = SAVE_PICKER_KBD_DOWN_MASK.load(Ordering::SeqCst);
-            if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
-                if prev & act == 0 {
-                    SAVE_PICKER_KBD_DOWN_MASK.store(prev | act, Ordering::SeqCst);
-                    SAVE_PICKER_KBD_HOOK_HITS.fetch_add(1, Ordering::SeqCst);
-                    if save_picker_overlay_active() {
-                        let _ = std::panic::catch_unwind(|| save_picker_apply_pressed(act));
-                    }
-                }
-            } else if msg == WM_KEYUP || msg == WM_SYSKEYUP {
-                SAVE_PICKER_KBD_DOWN_MASK.store(prev & !act, Ordering::SeqCst);
+        let msg = wparam.0 as u32;
+        // Apply on EVERY key-down (including OS auto-repeat). A held-key guard that cleared only on
+        // key-up swallowed the user's repeated taps whenever the up event was missed (measured: 10
+        // edges for many more presses). A distinct tap is a single KEYDOWN, so tapping stays 1:1; only
+        // holding a key repeats, which is acceptable for a picker.
+        if act != 0 && (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) {
+            SAVE_PICKER_KBD_HOOK_HITS.fetch_add(1, Ordering::SeqCst);
+            if save_picker_overlay_active() {
+                let _ = std::panic::catch_unwind(|| save_picker_apply_pressed(act));
             }
         }
     }
@@ -468,7 +470,6 @@ pub(crate) fn ensure_save_picker_keyboard_hook() {
                 let _ = UnhookWindowsHookEx(hook);
             }
             SAVE_PICKER_KBD_HOOK_ACTIVE.store(false, Ordering::SeqCst);
-            SAVE_PICKER_KBD_DOWN_MASK.store(0, Ordering::SeqCst);
             SAVE_PICKER_KBD_HOOK_STARTED.store(false, Ordering::SeqCst);
         });
     if spawned.is_err() {
