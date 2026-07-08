@@ -666,6 +666,15 @@ fn set_missing_save_dialog_state(state: usize) {
 pub(crate) fn missing_save_selection_pending() -> bool {
     MISSING_SAVE_DIALOG_STATE.load(Ordering::SeqCst) == MISSING_SAVE_DIALOG_PENDING
 }
+
+/// True after an explicit loose save source (`er-effects.toml save_file` / ER_EFFECTS_SAVE_FILE) or
+/// the in-game picker has activated direct-file staging. In this mode the user's original save is a
+/// read-only source and native reads/writes target our private staged `%APPDATA%` tree. The load path
+/// must use the full-read chain that reads the staged file directly instead of waiting on the native
+/// Continue row/profile-summary path, which can be stale/empty for loose saves.
+pub(crate) fn direct_save_file_source_active() -> bool {
+    SAVE_DIRECT_SOURCE_FILE.get().is_some()
+}
 static SAVE_QUERY_STAGE_STEAMID_DIR_HITS: AtomicUsize = AtomicUsize::new(0);
 static SAVE_QUERY_STAGE_SAVE_FILE_HITS: AtomicUsize = AtomicUsize::new(0);
 static SAVE_QUERY_CONFIGURED_FILE_HITS: AtomicUsize = AtomicUsize::new(0);

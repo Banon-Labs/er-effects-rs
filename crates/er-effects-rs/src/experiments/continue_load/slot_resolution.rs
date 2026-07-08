@@ -105,8 +105,9 @@ unsafe fn fullread_disarm_slot_request(gm: usize, reason: &str) {
 ///   DESER:  deserialize 0x14067b290(slot) ONCE at b80==3 (step 5 -> GameMan+0xc30 = real map).
 ///   GUARD:  c30 != 0xa010000 (m10 default) AND char fingerprint present (level>=10 + name) (step 6).
 ///   CONFIRM (step 7, the SOLE save write): ONLY if the guard passes AND native_fullread_commit_enabled():
-///           continue_confirm 0x140b0e180(rcx=shim{[OWNER]=owner}) where owner=*(base+0x3d5df38+8);
-///           it checks owner+0x284==0 -> sets owner+0xbc=c30 + SetState5 (AUTOSAVES). Without the
+///           continue_confirm 0x140b0e180(rcx=shim{[OWNER]=live_title_owner});
+///           it takes the non-NewGame branch when owner+0x284!=1, sets owner+0xbc=c30 + SetState5
+///           (AUTOSAVES). Without the
 ///           commit sub-gate, stops at GUARD (VERIFY-ONLY: log only, NO continue_confirm/NO SetState5).
 /// Reuses cold_char_mount_drive's submit/lane/poll/deser CALLS (exact RVAs) but builds/pumps NO
 /// selector step (probe-12 crash) and forces NO SetState for boot. Logs b80/c30/level each frame.
@@ -132,12 +133,13 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         return;
     }
     // The Load-Game action-node scan is a readiness GATE (and log provenance) only -- the load chain
-    // below uses slot/gm/base, never the node. For the missing-save picker the product tick has
-    // already confirmed the live menu is open and the IO pool is up, so skip the scan there: it can be
-    // over-strict and would otherwise stall on a menu with no separate Load-Game node.
-    let missing_save = missing_save_picker_selected_slot().is_some();
+    // below uses slot/gm/base, never the node. For direct-file save sources (missing-save picker OR
+    // explicit loose save_file) the product tick has already confirmed the live menu is open and the IO
+    // pool is up, so skip the scan there: it can be over-strict and would otherwise stall on a menu with
+    // no separate Load-Game node / stale profile summary.
+    let direct_file_source = direct_save_file_source_active();
     let action = unsafe { title_menu_action_ready(owner, base) };
-    if action.is_none() && !missing_save {
+    if action.is_none() && !direct_file_source {
         if n % NATIVE_LOAD_LOG_INTERVAL == NULL as u64 {
             append_autoload_debug(format_args!(
                 "native-fullread: waiting for semantic Load-Game action readiness (#{n}) gm=0x{gm:x} -- TitleTopDialog/registry/node/action not all validated yet"
@@ -255,6 +257,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             n,
             format_args!("c30=0x{c30:x} level={level}"),
         );
+        FULLREAD_DRAIN_WAITS.store(NULL, Ordering::SeqCst);
         FULLREAD_PHASE.store(FULLREAD_PHASE_GUARD, Ordering::SeqCst);
         return;
     }
@@ -265,11 +268,10 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
         let (fp_real, level, name_len) = unsafe { char_fingerprint(base) };
         let c30_real = c30 != FULLREAD_C30_M10_DEFAULT && c30 != GAME_MAN_C30_UNSET;
-        // Missing-save picker: the picker already validated the chosen character (non-empty name &&
-        // level>=1), so any real level is acceptable. The >=10 default is only a heuristic for the
-        // diagnostic path where nothing pre-validated the slot; c30_real + fp_real still block a
-        // new-game/null commit either way.
-        let min_level = if missing_save_picker_selected_slot().is_some() {
+        // Direct-file source: picker/config selected a concrete save file and the full-read guard has
+        // c30_real + fp_real as the hard new-game/null blockers, so any real level is acceptable. The
+        // >=10 default is only a heuristic for the diagnostic path where nothing preselected a source.
+        let min_level = if direct_save_file_source_active() {
             1
         } else {
             FULLREAD_MIN_REAL_LEVEL
@@ -277,10 +279,20 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         let level_real = level >= min_level;
         let guard_pass = c30_real && fp_real && level_real;
         let commit = native_fullread_commit_enabled();
+        let guard_waits = FULLREAD_DRAIN_WAITS.fetch_add(WAIT_INC, Ordering::SeqCst) as u64;
         append_autoload_debug(format_args!(
-            "native-fullread: GUARD c30=0x{c30:x} c30_real={c30_real} fp_real={fp_real} level={level} level_real={level_real} name_len={name_len} -> guard_pass={guard_pass} commit_gate={commit}"
+            "native-fullread: GUARD waits={guard_waits} c30=0x{c30:x} c30_real={c30_real} fp_real={fp_real} level={level} level_real={level_real} name_len={name_len} -> guard_pass={guard_pass} commit_gate={commit}"
         ));
         if !guard_pass {
+            const DIRECT_FILE_GUARD_SETTLE_TICKS: u64 = 120;
+            if direct_save_file_source_active() && guard_waits < DIRECT_FILE_GUARD_SETTLE_TICKS {
+                if guard_waits % FULLREAD_LOG_INTERVAL == NULL as u64 {
+                    append_autoload_debug(format_args!(
+                        "native-fullread: GUARD settling direct-file source waits={guard_waits}/{DIRECT_FILE_GUARD_SETTLE_TICKS} c30=0x{c30:x} level={level} name_len={name_len} -- native profile/c30 writers can lag DESER by several frames; holding req_slot and rechecking"
+                    ));
+                }
+                return;
+            }
             append_autoload_debug(format_args!(
                 "native-fullread: GUARD FAIL (c30=0x{c30:x} level={level}) -- NO continue_confirm, NO SetState5, NO save write -> DONE (save-safe)"
             ));
@@ -298,19 +310,15 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
             return;
         }
-        // COMMIT: continue_confirm 0x140b0e180(rcx=&shim{[OWNER]=owner}), owner=*(base+0x3d5df38+8).
-        // It checks owner+0x284==0 -> sets owner+0xbc=c30 + SetState5 (AUTOSAVES). Look before acting:
-        // resolve owner read-only + confirm owner+0x284==0 before the native call (fail-closed).
-        let game_data_man = game_data_man_ptr_or_null();
-        let owner_obj = if game_data_man == NULL {
-            NULL
-        } else {
-            unsafe { safe_read_usize(game_data_man + FULLREAD_OWNER_GDM_08_OFFSET) }.unwrap_or(NULL)
-        };
+        // COMMIT: continue_confirm 0x140b0e180(rcx=&shim{[OWNER]=title_owner}). Disasm shows it
+        // reads shim+8, only takes the NewGame branch when owner+0x284 == 1, otherwise writes
+        // owner+0xbc, calls SetState5, then touches owner+0x138/+0x300. The product Continue path uses
+        // this live title owner; using the stale GameDataMan+8 owner here can crash at owner+0x300
+        // after the direct-file fullread succeeds.
+        let owner_obj = owner;
         if owner_obj == NULL {
             append_autoload_debug(format_args!(
-                "native-fullread: COMMIT ABORT -- continue_confirm owner (GameDataMan=0x{game_data_man:x}, offset=0x{:x}) is null -> DONE (no write)",
-                FULLREAD_OWNER_GDM_08_OFFSET
+                "native-fullread: COMMIT ABORT -- title owner is null -> DONE (no write)"
             ));
             unsafe { fullread_disarm_slot_request(gm, "commit-abort-owner-null") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
@@ -318,9 +326,10 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         }
         let new_game_flag =
             unsafe { *((owner_obj + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) as *const u8) };
-        if new_game_flag != FULLREAD_OWNER_NEW_GAME_OK {
+        const CONTINUE_CONFIRM_NEW_GAME_BRANCH_FLAG: u8 = 1;
+        if new_game_flag == CONTINUE_CONFIRM_NEW_GAME_BRANCH_FLAG {
             append_autoload_debug(format_args!(
-                "native-fullread: COMMIT ABORT -- owner+0x284={new_game_flag} != 0 (continue_confirm requires the new-game flag clear) -> DONE (no write)"
+                "native-fullread: COMMIT ABORT -- owner+0x284={new_game_flag} would take continue_confirm NewGame branch -> DONE (no write)"
             ));
             unsafe { fullread_disarm_slot_request(gm, "commit-abort-new-game-flag") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
@@ -332,7 +341,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         let confirm: unsafe extern "system" fn(usize) =
             unsafe { std::mem::transmute(base + CONTINUE_CONFIRM_RVA) };
         append_autoload_debug(format_args!(
-            "native-fullread: *** COMMIT continue_confirm 0x{:x}(shim=0x{shim_ptr:x} owner=0x{owner_obj:x}) c30=0x{c30:x} level={level} owner+0x284=0 -- SetState5 (AUTOSAVES) ***",
+            "native-fullread: *** COMMIT continue_confirm 0x{:x}(shim=0x{shim_ptr:x} owner=0x{owner_obj:x}) c30=0x{c30:x} level={level} owner+0x284={new_game_flag} -- SetState5 (AUTOSAVES) ***",
             base + CONTINUE_CONFIRM_RVA
         ));
         timeline_event(
