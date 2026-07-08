@@ -43,18 +43,16 @@ use crate::{experiments::*, ffi::*, hooks::*, telemetry::*};
 
 pub(crate) const NO_PROCESS_HANDLE: usize = 0;
 
-/// Opt-in: install the crash/exit logger. Off by default so production and
-/// normal smoke runs are untouched; enabled for diagnostic runs.
+/// The crash/exit logger is now ALWAYS installed (user directive 2026-07-08). It is non-fatal
+/// diagnostic telemetry: the VEH logs the fault's register/stack context and then leaves the
+/// exception for the game's own handlers (`VECTORED_FIRST_HANDLER` + `EXCEPTION_CONTINUE_SEARCH`),
+/// so writing it unconditionally never changes game behavior -- it only guarantees an
+/// `er-effects-crash-log.txt` (or the `ER_EFFECTS_CRASH_LOG_PATH` redirect) exists for every run,
+/// instead of self-enabling only after a first crash had already created the sentinel file (which
+/// meant the very first crash of a clean install went unlogged). `deliberate_fail_fast_enabled()`
+/// stays a separate explicit opt-in, so this does NOT turn semaphore mismatches into crashes.
 pub(crate) fn crash_logger_enabled() -> bool {
-    matches!(std::env::var("ER_EFFECTS_CRASH_LOG").as_deref(), Ok("1"))
-        // Redirecting the crash log to a consolidated per-run path (e.g. the probe's artifact dir)
-        // implies the logger is wanted -- treat the redirect env as an enable so the sentinel file
-        // is not also required. bd log-output-paths-consolidation.
-        || std::env::var("ER_EFFECTS_CRASH_LOG_PATH").is_ok()
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-crash-log.txt")
-            .exists()
+    true
 }
 
 /// Separate, explicit opt-in for deliberate proof-gate faults. Crash logging is diagnostic telemetry;

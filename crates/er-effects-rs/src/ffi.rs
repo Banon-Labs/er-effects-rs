@@ -132,6 +132,30 @@ pub(crate) struct ThreadEntry32 {
     pub(crate) dw_flags: u32,
 }
 
+/// SYSTEMTIME (kernel32 `GetLocalTime`): all eight `WORD` fields, used to stamp every DLL log line
+/// with a wall-clock time so a run is unambiguous in the accumulated log (the `[+Nms]` epoch resets
+/// per process and cannot tell two runs apart).
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct SystemTimeMin {
+    pub(crate) w_year: u16,
+    pub(crate) w_month: u16,
+    pub(crate) w_day_of_week: u16,
+    pub(crate) w_day: u16,
+    pub(crate) w_hour: u16,
+    pub(crate) w_minute: u16,
+    pub(crate) w_second: u16,
+    pub(crate) w_milliseconds: u16,
+}
+
+/// Wall-clock + own-module-path FFI for the self-describing log header (local time per line + the
+/// DLL's on-disk path so its bytes can be md5'd to name the exact build in the log).
+#[cfg(windows)]
+unsafe extern "system" {
+    pub(crate) fn GetLocalTime(time: *mut SystemTimeMin);
+    pub(crate) fn GetModuleFileNameW(module: isize, filename: *mut u16, size: u32) -> u32;
+}
+
 /// Thread + debug-register FFI for the GameMan+0xc30 hardware write-watchpoint:
 /// enumerate the game's threads (ToolHelp) and set DR0/DR7 on each via
 /// Suspend/Get/SetThreadContext so the writing instruction traps into our VEH.

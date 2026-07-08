@@ -311,15 +311,120 @@ fn process_log_elapsed_ms() -> u128 {
     epoch.elapsed().as_millis()
 }
 
+/// Local wall-clock stamp `YYYY-MM-DD HH:MM:SS:cc` (cc = centiseconds, i.e. ms/10). Absolute time so
+/// a line is unambiguous across the accumulated log -- the `[+Nms]` epoch resets every process and
+/// cannot tell two runs apart.
+#[cfg(windows)]
+fn wall_clock_stamp() -> String {
+    let mut st = SystemTimeMin::default();
+    unsafe { GetLocalTime(&mut st) };
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}:{:02}",
+        st.w_year,
+        st.w_month,
+        st.w_day,
+        st.w_hour,
+        st.w_minute,
+        st.w_second,
+        st.w_milliseconds / 10
+    )
+}
+
+#[cfg(not(windows))]
+fn wall_clock_stamp() -> String {
+    "0000-00-00 00:00:00:00".to_owned()
+}
+
+/// md5 (hex) of the DLL's own on-disk image, so a log names the EXACT build that wrote it (matches
+/// the `md5sum` reported for the built DLL). Computed once from `GetModuleFileNameW(SELF_DLL_BASE)`;
+/// only a successful result is cached, so a call before the self-base is recorded transiently returns
+/// `"unknown"` and the next call retries.
+#[cfg(windows)]
+fn compute_dll_md5() -> Option<String> {
+    use std::os::windows::ffi::OsStringExt;
+    let base = SELF_DLL_BASE.load(Ordering::SeqCst);
+    if base == 0 || base == NULL_MODULE_BASE {
+        return None;
+    }
+    let mut buf = [0u16; 1024];
+    let len = unsafe { GetModuleFileNameW(base as isize, buf.as_mut_ptr(), buf.len() as u32) };
+    if len == 0 || len as usize >= buf.len() {
+        return None;
+    }
+    let path = PathBuf::from(std::ffi::OsString::from_wide(&buf[..len as usize]));
+    let bytes = std::fs::read(&path).ok()?;
+    let digest = er_save_loader::bnd4::md5_digest(&bytes);
+    let mut hex = String::with_capacity(32);
+    for b in digest {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{b:02x}");
+    }
+    Some(hex)
+}
+
+#[cfg(not(windows))]
+fn compute_dll_md5() -> Option<String> {
+    None
+}
+
+/// Full DLL md5 hex, cached on first success (`"unknown"` until the self-base is recorded).
+fn dll_md5_hex() -> &'static str {
+    static DLL_MD5: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    if let Some(cached) = DLL_MD5.get() {
+        return cached;
+    }
+    match compute_dll_md5() {
+        Some(hex) => {
+            let _ = DLL_MD5.set(hex);
+            DLL_MD5.get().map(String::as_str).unwrap_or("unknown")
+        }
+        None => "unknown",
+    }
+}
+
+/// Short per-line DLL tag (first 8 hex of the md5) so any single copied line is attributable to a
+/// build without carrying the full 32-char digest on every line (the header carries the full md5).
+fn dll_md5_short() -> &'static str {
+    let full = dll_md5_hex();
+    full.get(..8).unwrap_or(full)
+}
+
+/// Common line prefix: `[+<elapsed>ms] <wall-clock> dll:<short>`. `[+Nms]` stays first so existing
+/// `^\[\+(\d+)ms\]`-anchored readers keep working; the wall-clock + build tag follow.
+fn log_line_prefix() -> String {
+    format!(
+        "[+{}ms] {} dll:{}",
+        process_log_elapsed_ms(),
+        wall_clock_stamp(),
+        dll_md5_short()
+    )
+}
+
+/// One-time self-describing header written the first time a given log file is opened this run: the
+/// full DLL md5 + path + wall-clock, so the build and start time are unambiguous even when many runs
+/// accumulate in the same file.
+fn write_log_header(file: &mut std::fs::File) {
+    use std::io::Write;
+    let _ = writeln!(
+        file,
+        "===== er-effects log opened {} dll_md5={} (per-line tag `dll:{}`); [+Nms] = elapsed since this process's first log line =====",
+        wall_clock_stamp(),
+        dll_md5_hex(),
+        dll_md5_short()
+    );
+}
+
 pub(crate) fn append_crash_log(args: std::fmt::Arguments<'_>) {
     use std::io::Write;
-    let ms = process_log_elapsed_ms();
+    static HEADER: std::sync::Once = std::sync::Once::new();
+    let prefix = log_line_prefix();
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(crash_log_path())
     {
-        let _ = writeln!(file, "[+{ms}ms] {args}");
+        HEADER.call_once(|| write_log_header(&mut file));
+        let _ = writeln!(file, "{prefix} {args}");
     }
 }
 
@@ -401,13 +506,14 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
 // ENV-GATE RATIONALE: ER_EFFECTS_AUTOLOAD_DEBUG_PATH is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     use std::io::Write;
-
-    let ms = process_log_elapsed_ms();
+    static HEADER: std::sync::Once = std::sync::Once::new();
+    let prefix = log_line_prefix();
     let path = std::env::var("ER_EFFECTS_AUTOLOAD_DEBUG_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("er-effects-autoload-debug.log"));
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "[+{ms}ms] {args}");
+        HEADER.call_once(|| write_log_header(&mut file));
+        let _ = writeln!(file, "{prefix} {args}");
     }
 }
 
