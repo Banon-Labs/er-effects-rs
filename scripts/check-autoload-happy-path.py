@@ -632,6 +632,21 @@ def main() -> int:
     # own_stepper confirm-fire chain, not the load; misread as load-success). Real load semaphore
     # is world_loaded (player_present + world_stable + saved_map_c30).
 
+    require(
+        "commit-after-confirm" in experiments
+        and "continue_confirm starts the native world stream but does not reliably consume GameMan+0xb78" in experiments
+        and "native-fullread: continue_confirm returned + req_slot disarmed" in experiments,
+        "native fullread commit path must disarm GameMan+0xb78 after continue_confirm to prevent post-world second-deserialize CSGaitem crashes",
+        failures,
+    )
+    require(
+        "DIALOG_SLOT_BOUND_B08_OFFSET" in experiments
+        and "cursor_bound" in experiments
+        and "after_final.min(i32::MAX as usize)" in experiments,
+        "System->Quit cloned Load Profile rows must expand the dialog cursor bound so keyboard/controller navigation can reach rows 2/3",
+        failures,
+    )
+
     online_body = rust_fn_body(experiments, "online_disable_enabled")
     input_body = rust_fn_body(experiments, "block_input_enabled")
     require("own_stepper_enabled()" in online_body, "product autoload must inherit offline mode via own_stepper_enabled()", failures)
