@@ -458,6 +458,189 @@ fn install_scaleform_handler_lifecycle_guard() {
     }
 }
 
+/// `CS::MenuWindowJob::~MenuWindowJob` destructor hook (deobf 0x1407ac720). Prevents BOTH observed
+/// return-to-title crashes (rva 0x7ada87 and 0x7adb28) at their common root: the finalize's whole
+/// `if (owningMenuWindow != 0)` block runs on a DOOMED title window during return-to-title. See
+/// `MENU_WINDOW_JOB_DTOR_RVA` for the full analysis (er-effects-rs-j74t). rcx = the job; the native
+/// dtor passes rdx/r8/r9 to the finalize untouched, so we forward all four verbatim.
+///
+/// We reproduce the exact call the finalize makes -- `owningMenuWindow->vfptr[3](window, &scratch)` --
+/// and inspect the descriptor's first i32 (the event-table index). If the vtable is not in the game
+/// module (freed+reused), or the index is out of range (doomed unmapped window), we null
+/// `owningMenuWindow` so the finalize skips the block entirely (and correctly does NOT unref a dead
+/// window). Gated to `menu_id == 0xffff` (the unmapped state every crash was in and the precondition
+/// of the finalize's second getter) so healthy mapped windows are byte-identical -- no extra call.
+pub(crate) unsafe extern "system" fn menu_window_job_dtor_hook(
+    job: usize,
+    rdx: usize,
+    r8: usize,
+    r9: usize,
+) {
+    if job != 0 {
+        if let Some(base) = game_module_base().ok().filter(|&b| b != 0) {
+            let owning_addr = job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET;
+            if let Some(window) = unsafe { safe_read_usize(owning_addr) } {
+                if window != 0 {
+                    if let Some((doomed, index)) =
+                        unsafe { menu_window_doomed_event_index(window, base) }
+                    {
+                        if doomed {
+                            // The finalize would remove the window from its push-target vector, but
+                            // it crashes at the getter first, leaving the window dangling in the
+                            // title-step's active-window vector STEP_MenuJobWait walks (crash rva
+                            // 0x733f80). Do that removal ourselves so no stale entry survives.
+                            let removed =
+                                unsafe { menu_window_remove_from_push_target(job, window, base) };
+                            // Null owningMenuWindow so the finalize skips its own (now-crashing)
+                            // window block entirely.
+                            unsafe { (owning_addr as *mut usize).write_volatile(0) };
+                            let n =
+                                MENU_WINDOW_JOB_DTOR_DOOMED_GUARDS.fetch_add(1, Ordering::SeqCst) + 1;
+                            MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW.store(window, Ordering::SeqCst);
+                            MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX
+                                .store(index.map(|i| i as usize).unwrap_or(usize::MAX), Ordering::SeqCst);
+                            if n <= 32 {
+                                append_crash_log(format_args!(
+                                    "menu-window-job-guard: DOOMED owningMenuWindow #{n} on ~MenuWindowJob job=0x{job:x} window=0x{window:x} event_index={index:?} list_removed={removed} -- removed from push-target vector + nulled job+0x130 so the finalize skips its window block (prevents the return-to-title AV at rva 0x7ada87/0x7adb28/0x733f80)"
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let orig = MENU_WINDOW_JOB_DTOR_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET || orig == 0 {
+        return;
+    }
+    let f: unsafe extern "system" fn(usize, usize, usize, usize) =
+        unsafe { std::mem::transmute(orig) };
+    unsafe { f(job, rdx, r8, r9) };
+}
+
+/// Reproduce the finalize's `owningMenuWindow->vfptr[3](window, &scratch)` and return
+/// `(doomed, event_index)`, or `None` when the window is a healthy mapped window we must not touch
+/// (menu_id != 0xffff) so the caller leaves it untouched. `doomed` is true when the window is
+/// freed/reused (vtable or vfptr[3] not in the game module) or the descriptor's event index is out of
+/// range -- exactly the states that make the finalize dereference wild memory. Only ever calls the
+/// game's own getter method (which returned successfully in every observed run; the crash was always
+/// the caller's later deref), and only for unmapped (0xffff) windows.
+unsafe fn menu_window_doomed_event_index(window: usize, base: usize) -> Option<(bool, Option<i32>)> {
+    let in_module = |p: usize| p >= base && p.wrapping_sub(base) < GAME_MODULE_VTABLE_SPAN;
+    // Read the window's vtable. A freed+reused window's vtable is heap garbage (not in the module) ->
+    // doomed; the finalize's virtual call would fault. Do NOT call through a non-module vtable.
+    let Some(vtable) = (unsafe { safe_read_usize(window) }) else {
+        return Some((true, None));
+    };
+    if !in_module(vtable) {
+        return Some((true, None));
+    }
+    // Only unmapped windows reach the crashing states; leave healthy mapped windows byte-identical.
+    let menu_id = unsafe { safe_read_u16(window + MENU_WINDOW_MENU_ID_OFFSET) };
+    if menu_id != Some(MENU_WINDOW_MENU_ID_UNMAPPED_SENTINEL) {
+        return None;
+    }
+    let Some(vf3) = (unsafe { safe_read_usize(vtable + MENU_WINDOW_INPUT_DESC_VTABLE_SLOT) }) else {
+        return Some((true, None));
+    };
+    if !in_module(vf3) {
+        return Some((true, None));
+    }
+    // Reproduce the finalize's call: fn(window, &scratch) -> descriptor pointer. The descriptor's
+    // first i32 is the event-table index the getter would use.
+    let mut scratch = [0u8; MENU_WINDOW_INPUT_DESC_SCRATCH_LEN];
+    let get_desc: unsafe extern "system" fn(usize, usize) -> usize =
+        unsafe { std::mem::transmute(vf3) };
+    let descriptor = unsafe { get_desc(window, scratch.as_mut_ptr() as usize) };
+    let index = unsafe { safe_read_i32(descriptor) };
+    let doomed = !matches!(index, Some(i) if (0..MENU_WINDOW_EVENT_INDEX_SANE_MAX).contains(&i));
+    Some((doomed, index))
+}
+
+/// Remove `window` from the job's push-target `DLFixedVector` (`*(job+0x50)`) via the game's own
+/// `FUN_140733e70`, replicating the cleanup the finalize can no longer reach. Returns true iff the
+/// removal ran. Validated before calling: the push-target pointer must be readable and its count
+/// (`vector+0x48`) sane, because the native search loop is not SEH-guarded and a corrupt vector
+/// pointer would otherwise fault. The removal itself only touches vector slots -- never the window's
+/// vtable -- so it is safe on a doomed window.
+unsafe fn menu_window_remove_from_push_target(job: usize, window: usize, base: usize) -> bool {
+    let Some(vector) = (unsafe { safe_read_usize(job + MENU_WINDOW_JOB_PUSH_TARGET_50_OFFSET) })
+    else {
+        return false;
+    };
+    if vector == 0 {
+        return false;
+    }
+    let count = unsafe { safe_read_i32(vector + MENU_WINDOW_LIST_COUNT_48_OFFSET) };
+    if !matches!(count, Some(c) if (1..=MENU_WINDOW_LIST_SANE_MAX_COUNT).contains(&c)) {
+        return false;
+    }
+    let Ok(remove_addr) = game_rva(MENU_WINDOW_LIST_REMOVE_RVA as u32) else {
+        return false;
+    };
+    let _ = base;
+    let remove: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(remove_addr) };
+    unsafe { remove(vector, window) };
+    MENU_WINDOW_JOB_DTOR_LIST_REMOVALS.fetch_add(1, Ordering::SeqCst);
+    true
+}
+
+/// Install the ~MenuWindowJob doomed-window guard (er-effects-rs-j74t). Idempotent.
+fn install_menu_window_job_dtor_guard() {
+    if MENU_WINDOW_JOB_DTOR_TRACE_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "menu-window-job-guard: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(dtor_addr) = game_rva(MENU_WINDOW_JOB_DTOR_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "menu-window-job-guard: failed to resolve dtor rva 0x{MENU_WINDOW_JOB_DTOR_RVA:x}"
+        ));
+        return;
+    };
+    let mut ok = true;
+    match unsafe {
+        MhHook::new(
+            dtor_addr as *mut c_void,
+            menu_window_job_dtor_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            MENU_WINDOW_JOB_DTOR_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            ok &= unsafe { hook.queue_enable() }.is_ok();
+            std::mem::forget(hook);
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "menu-window-job-guard: MhHook::new(dtor) failed: {status:?}"
+            ));
+            ok = false;
+        }
+    }
+    if !ok {
+        return;
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => {
+            MENU_WINDOW_JOB_DTOR_TRACE_INSTALLED.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "menu-window-job-guard: hooked ~MenuWindowJob 0x{dtor_addr:x}; doomed-window guard armed (nulls a doomed owningMenuWindow so the finalize skips its block; prevents the return-to-title AV at rva 0x7ada87/0x7adb28)"
+            ));
+        }
+        status => append_autoload_debug(format_args!(
+            "menu-window-job-guard: MH_ApplyQueued failed: {status:?}"
+        )),
+    }
+}
+
 fn install_system_quit_menu_window_job_run_hook() {
     if SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED.load(Ordering::SeqCst)
         != SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED
