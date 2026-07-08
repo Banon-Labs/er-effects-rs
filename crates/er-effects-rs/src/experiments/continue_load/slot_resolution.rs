@@ -66,6 +66,32 @@ pub(crate) fn native_fullread_slot() -> i32 {
     }
     FULLREAD_DEFAULT_SLOT
 }
+/// Terminal non-commit disarm for the full-read chain (bd er-effects-rs-ns4n). SUBMIT arms the
+/// native slot-request register (GameMan+0xb78, `requested_save_slot_load_index`) so the native
+/// chain resolves our slot. On every DONE exit that does NOT hand off to the native confirm chain
+/// (continue_confirm consumes the pending request as part of its own load), the register must be
+/// returned to the no-request sentinel: the in-game save manager services any >=0 request on the
+/// first frames after world arrival, which runs a SECOND full deserialize into the already-live
+/// world and exhausts the CSGaitemImp free queue -- the gaitemInsTable[-1] AV at live 0x67141a
+/// (6/6 picker-boot crashes 2026-07-07, ~22s in, at world arrival).
+unsafe fn fullread_disarm_slot_request(gm: usize, reason: &str) {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    if gm == NULL {
+        return;
+    }
+    let prev = unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *const i32) };
+    if prev == OWN_STEPPER_SLOT_NONE {
+        return;
+    }
+    unsafe {
+        *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = OWN_STEPPER_SLOT_NONE;
+    }
+    FULLREAD_REQ_DISARM_COUNT.fetch_add(1, Ordering::SeqCst);
+    FULLREAD_REQ_DISARM_LAST_PREV_SLOT.store(prev as u32 as usize, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "native-fullread: DISARM req_slot {prev} -> {OWN_STEPPER_SLOT_NONE} ({reason}) -- no pending native load request may survive a non-commit exit"
+    ));
+}
 /// OBSERVE-ONLY NATIVE FULL-SAVE-READ tick (native_fullread_enabled(), gated OFF by default). Runs
 /// each frame INSTEAD of the own_stepper forcing logic (no SetState forcing for boot); the caller
 /// pass-throughs to OWN_STEPPER_ORIG_IDX10 so the NATIVE title machine advances untouched. Once the
@@ -207,6 +233,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             append_autoload_debug(format_args!(
                 "native-fullread: b80 STUCK at {b80} after {w} drain ticks (full read never resident) -- TIMEOUT (no write) -> DONE"
             ));
+            unsafe { fullread_disarm_slot_request(gm, "drain-timeout") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
         }
         return;
@@ -257,6 +284,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             append_autoload_debug(format_args!(
                 "native-fullread: GUARD FAIL (c30=0x{c30:x} level={level}) -- NO continue_confirm, NO SetState5, NO save write -> DONE (save-safe)"
             ));
+            unsafe { fullread_disarm_slot_request(gm, "guard-fail") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
             return;
         }
@@ -266,6 +294,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             append_autoload_debug(format_args!(
                 "native-fullread: GUARD PASS (c30=0x{c30:x} level={level}) but VERIFY-ONLY (commit sub-gate OFF) -- NO continue_confirm, NO SetState5 -> DONE (save-safe). Set ER_EFFECTS_FULLREAD_COMMIT=1 / er-effects-fullread-commit.txt to commit."
             ));
+            unsafe { fullread_disarm_slot_request(gm, "verify-only") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
             return;
         }
@@ -283,6 +312,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
                 "native-fullread: COMMIT ABORT -- continue_confirm owner (GameDataMan=0x{game_data_man:x}, offset=0x{:x}) is null -> DONE (no write)",
                 FULLREAD_OWNER_GDM_08_OFFSET
             ));
+            unsafe { fullread_disarm_slot_request(gm, "commit-abort-owner-null") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
             return;
         }
@@ -292,6 +322,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             append_autoload_debug(format_args!(
                 "native-fullread: COMMIT ABORT -- owner+0x284={new_game_flag} != 0 (continue_confirm requires the new-game flag clear) -> DONE (no write)"
             ));
+            unsafe { fullread_disarm_slot_request(gm, "commit-abort-new-game-flag") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
             return;
         }

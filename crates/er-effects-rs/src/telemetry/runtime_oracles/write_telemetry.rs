@@ -387,6 +387,16 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT.load(Ordering::SeqCst),
         SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst)
     ));
+    // Full-read chain terminal disarm (bd er-effects-rs-ns4n): count > 0 proves a non-commit exit
+    // cleared the pending native slot request, so the in-game save manager cannot service a stale
+    // request into the live world (the gaitem free-queue AV at 0x67141a). `_last_prev_slot` is the
+    // i32 slot value the last clear removed, u32-packed (0xffffffff == the no-request sentinel, i.e.
+    // nothing needed clearing on that exit).
+    body.push_str(&format!(
+        "  \"oracle_fullread_req_disarm_count\": {},\n  \"oracle_fullread_req_disarm_last_prev_slot\": {},\n",
+        FULLREAD_REQ_DISARM_COUNT.load(Ordering::SeqCst),
+        FULLREAD_REQ_DISARM_LAST_PREV_SLOT.load(Ordering::SeqCst) as u32 as i32
+    ));
     body.push_str(&format!(
         "  \"sq_repro_state\": {},\n  \"sq_repro_switch_index\": {},\n  \"sq_repro_paused_at_profile_select\": {},\n  \"sq_repro_profile_back_opened\": {},\n  \"sq_repro_profile_back_done\": {},\n  \"sq_repro_profile_back_restore_count\": {},\n  \"sq_repro_profile_back_final_tab\": {},\n  \"sq_repro_profile_back_baseline_mask\": {},\n  \"sq_repro_profile_back_verify_mask\": {},\n  \"sq_repro_profile_back_mismatch_mask\": {},\n  \"system_quit_optionsetting_direct_visible_reapply_count\": {},\n  \"system_quit_optionsetting_direct_visible_last_tab\": {},\n  \"system_quit_optionsetting_direct_visible_last_old_current\": {},\n  \"system_quit_optionsetting_direct_visible_last_selected\": {},\n  \"system_quit_optionsetting_direct_refresh_count\": {},\n  \"system_quit_optionsetting_direct_refresh_last_selected\": {},\n",
         SQ_REPRO_STATE.load(Ordering::SeqCst),
