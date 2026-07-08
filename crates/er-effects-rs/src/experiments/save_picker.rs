@@ -240,6 +240,17 @@ impl SavePickerModel {
                     .cmp(&b.name().to_ascii_lowercase())
             })
         });
+        // Diagnostic: log every listing outcome (not just failures) so a Wine drive-root
+        // enumeration quirk (e.g. `Z:\` = `/` returning fewer/other entries than a subpath) is
+        // visible in the debug log.
+        let sample: Vec<&str> = dirs.iter().take(6).map(PickerEntry::name).collect();
+        append_autoload_debug(format_args!(
+            "save-picker: listed '{}' -> {} dirs, {} files (first dirs: {:?})",
+            self.current_dir.display(),
+            dirs.len(),
+            files.len(),
+            sample
+        ));
         self.entries = dirs;
         self.entries.append(&mut files);
     }
