@@ -193,6 +193,12 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
             unsafe { force_offline_connection_bytes(base) };
         }
     }
+    // Missing-save picker: hold the native title menu-open until the pick, so its Continue/Load rows
+    // build against the picked save (enabled) instead of an empty ProfileSummary. Partners the
+    // ShowProgressJob save-check hold above; installed unconditionally because the hook self-gates on
+    // `missing_save_selection_pending()` (pass-through on an early pick / no picker). Must arm before
+    // the native auto-menu-open (~+38s). Fixes the late-pick softlock (bd er-effects-rs-ns4n follow-up).
+    install_title_open_menu_suppress_hook();
     // DIAGNOSTIC (gated by er-effects-grsysmsg-log.txt): log the GR_System_Message ids the
     // title flow fetches after menu-open, to DEFINITIVELY name the menu-open MessageBoxDialogs
     // (connection 4101/4102/4190 vs save 70000/4191) instead of guessing. Self-gates once.

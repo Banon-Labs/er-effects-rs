@@ -397,6 +397,13 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         FULLREAD_REQ_DISARM_COUNT.load(Ordering::SeqCst),
         FULLREAD_REQ_DISARM_LAST_PREV_SLOT.load(Ordering::SeqCst) as u32 as i32
     ));
+    // Missing-save picker menu-open hold (bd er-effects-rs-ns4n follow-up): count > 0 proves the native
+    // title auto-menu-open was suppressed while the pick was pending, so the menu rows build post-pick
+    // with the save present. On a fast/early pick this stays 0 (nothing to suppress).
+    body.push_str(&format!(
+        "  \"oracle_title_open_menu_suppressed_count\": {},\n",
+        TITLE_OPEN_MENU_SUPPRESSED_COUNT.load(Ordering::SeqCst)
+    ));
     body.push_str(&format!(
         "  \"sq_repro_state\": {},\n  \"sq_repro_switch_index\": {},\n  \"sq_repro_paused_at_profile_select\": {},\n  \"sq_repro_profile_back_opened\": {},\n  \"sq_repro_profile_back_done\": {},\n  \"sq_repro_profile_back_restore_count\": {},\n  \"sq_repro_profile_back_final_tab\": {},\n  \"sq_repro_profile_back_baseline_mask\": {},\n  \"sq_repro_profile_back_verify_mask\": {},\n  \"sq_repro_profile_back_mismatch_mask\": {},\n  \"system_quit_optionsetting_direct_visible_reapply_count\": {},\n  \"system_quit_optionsetting_direct_visible_last_tab\": {},\n  \"system_quit_optionsetting_direct_visible_last_old_current\": {},\n  \"system_quit_optionsetting_direct_visible_last_selected\": {},\n  \"system_quit_optionsetting_direct_refresh_count\": {},\n  \"system_quit_optionsetting_direct_refresh_last_selected\": {},\n",
         SQ_REPRO_STATE.load(Ordering::SeqCst),
