@@ -912,6 +912,12 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     if phase == OWN_STEPPER_PHASE_MENU
         && FULLREAD_PHASE.load(Ordering::SeqCst) == FULLREAD_PHASE_GUARD
     {
+        // Missing-save picker owns FULLREAD_PHASE via the native full-read chain (which reads the
+        // picked save itself); let it run its own GUARD/COMMIT, not the Continue-item guard below.
+        if missing_save_picker_selected_slot().is_some() {
+            unsafe { native_fullread_tick(owner, module_base, tick) };
+            return true;
+        }
         // Native Continue can reset title-menu visual latches while its modal-confirm branch waits.
         // The product intent is to disable that confirm wait after the native load has produced
         // loaded-slot evidence, so keep the post-submit guard running instead of re-gating on title
@@ -1195,6 +1201,16 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             disable_system_quit_gaitem_deserialize_hook("native-continue-handoff");
             disable_system_quit_gaitem_lookup_hook("native-continue-handoff");
             disable_system_quit_gaitem_finalize_hook("native-continue-handoff");
+        }
+        // Missing-save picker: the "native Continue row" product_continue waits for is a phantom --
+        // runtime + static RE (2026-07-07) showed the idle-ctor object it matched is the passive
+        // 01_900_Black backdrop, not a Continue row, so it never resolves. Drive the verified native
+        // full-read chain for the picked slot instead: it marks the slot occupied (so the save-load
+        // gate 0x14067b200 accepts it), reads the picked save itself (submit/drain/deserialize), and
+        // commits (continue_confirm -> SetState5) into the redirected staged save.
+        if missing_save_picker_selected_slot().is_some() {
+            unsafe { native_fullread_tick(owner, module_base, tick) };
+            return true;
         }
         unsafe { product_continue_autoload_tick(owner, module_base, gm, slot, tick, &ready) };
     }

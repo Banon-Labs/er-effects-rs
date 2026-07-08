@@ -51,6 +51,10 @@ pub(crate) unsafe fn save_load_watchdog() {
 /// Resolve the full-read target slot: a configured OWN_STEPPER_SLOT (>=0, from the trigger-file
 /// "slot=N"), else DLL config/env autoload slot (>=0), else FULLREAD_DEFAULT_SLOT (Banon = 0).
 pub(crate) fn native_fullread_slot() -> i32 {
+    // Missing-save picker: the user explicitly chose this slot; it wins over any configured default.
+    if let Some(slot) = missing_save_picker_selected_slot() {
+        return slot;
+    }
     let configured = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
     if configured >= OWN_STEPPER_SLOT_ZERO {
         return configured;
@@ -101,19 +105,25 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         }
         return;
     }
-    let Some(action) = (unsafe { title_menu_action_ready(owner, base) }) else {
+    // The Load-Game action-node scan is a readiness GATE (and log provenance) only -- the load chain
+    // below uses slot/gm/base, never the node. For the missing-save picker the product tick has
+    // already confirmed the live menu is open and the IO pool is up, so skip the scan there: it can be
+    // over-strict and would otherwise stall on a menu with no separate Load-Game node.
+    let missing_save = missing_save_picker_selected_slot().is_some();
+    let action = unsafe { title_menu_action_ready(owner, base) };
+    if action.is_none() && !missing_save {
         if n % NATIVE_LOAD_LOG_INTERVAL == NULL as u64 {
             append_autoload_debug(format_args!(
                 "native-fullread: waiting for semantic Load-Game action readiness (#{n}) gm=0x{gm:x} -- TitleTopDialog/registry/node/action not all validated yet"
             ));
         }
         return;
-    };
+    }
     if gm == NULL {
         if n % NATIVE_LOAD_LOG_INTERVAL == NULL as u64 {
+            let (node, registry) = action.as_ref().map_or((NULL, NULL), |a| (a.node, a.registry));
             append_autoload_debug(format_args!(
-                "native-fullread: waiting for GameMan after menu action ready node=0x{:x} registry=0x{:x} (#{n})",
-                action.node, action.registry
+                "native-fullread: waiting for GameMan after menu ready node=0x{node:x} registry=0x{registry:x} (#{n})"
             ));
         }
         return;
@@ -122,6 +132,23 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     let read_i32 = |off: usize| unsafe { *((gm + off) as *const i32) };
 
     if phase == FULLREAD_PHASE_SUBMIT {
+        // Step 0: mark the target slot occupied so the native save-load gate (0x14067b200, which reads
+        // ProfileSummary->saveSlotsStates[slot]) accepts it. At a missing-save boot the boot save-check
+        // has not populated ProfileSummary, so saveSlotsStates[slot]==0 and the load is refused. The
+        // full-read below reads the character data itself, but the gate still needs the occupancy flag.
+        // MarkProfileIndexAsUsed 0x262250(profileSummary, slot) sets it with no other side effect;
+        // idempotent. Skip if ProfileSummary is not resolvable yet.
+        let gdm_for_mark = game_data_man_ptr_or_null();
+        let summary = if gdm_for_mark != NULL {
+            unsafe { safe_read_usize(gdm_for_mark + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(NULL)
+        } else {
+            NULL
+        };
+        if summary != NULL {
+            let mark: unsafe extern "system" fn(usize, i32) -> u8 =
+                unsafe { std::mem::transmute(base + PROFILE_MARK_SLOT_USED_RVA) };
+            let _ = unsafe { mark(summary, slot) };
+        }
         // Step 1 (NEW): set the slot-resolve global GameMan+0xb78=slot (resolver 0x1406793c0 returns
         // *(u32*)(gm+0xb78)) so the native chain resolves OUR slot. Save-safe (an in-memory selector).
         unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = slot };
@@ -211,7 +238,16 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
         let (fp_real, level, name_len) = unsafe { char_fingerprint(base) };
         let c30_real = c30 != FULLREAD_C30_M10_DEFAULT && c30 != GAME_MAN_C30_UNSET;
-        let level_real = level >= FULLREAD_MIN_REAL_LEVEL;
+        // Missing-save picker: the picker already validated the chosen character (non-empty name &&
+        // level>=1), so any real level is acceptable. The >=10 default is only a heuristic for the
+        // diagnostic path where nothing pre-validated the slot; c30_real + fp_real still block a
+        // new-game/null commit either way.
+        let min_level = if missing_save_picker_selected_slot().is_some() {
+            1
+        } else {
+            FULLREAD_MIN_REAL_LEVEL
+        };
+        let level_real = level >= min_level;
         let guard_pass = c30_real && fp_real && level_real;
         let commit = native_fullread_commit_enabled();
         append_autoload_debug(format_args!(
