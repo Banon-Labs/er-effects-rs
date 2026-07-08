@@ -83,6 +83,27 @@ pub(crate) const FULLREAD_PHASE_DONE: usize = 4;
 /// Live phase + drain-wait counters for the full-read chain (one-shot per run).
 pub(crate) static FULLREAD_PHASE: AtomicUsize = AtomicUsize::new(FULLREAD_PHASE_SUBMIT);
 pub(crate) static FULLREAD_DRAIN_WAITS: AtomicUsize = AtomicUsize::new(0);
+/// Terminal non-commit disarm counters for the full-read chain (bd er-effects-rs-ns4n). SUBMIT arms
+/// the native slot-request register (GameMan+0xb78, `requested_save_slot_load_index`); the in-game
+/// save manager services any >=0 request on the first frames after world arrival, running a second
+/// full deserialize into the live world (CSGaitemImp free-queue exhaustion, AV at live 0x67141a).
+/// Every DONE exit that does not hand off to the native confirm chain must clear the register; these
+/// count the clears and record the slot value the last clear removed (u32-packed i32; !0 == none).
+pub(crate) static FULLREAD_REQ_DISARM_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static FULLREAD_REQ_DISARM_LAST_PREV_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// LATCHED peak-load semaphore (bd er-effects-rs-ns4n follow-up). The live `oracle_char_*` fields read
+/// PlayerGameData directly, so a quit-to-title tears the character down and a final telemetry snapshot
+/// reads them empty even on a fully-successful run -- the load proof lived only in the mid-run
+/// `LOAD-CORRECTNESS` log line. These latch the highest-level REAL character ever confirmed in-world
+/// this run (set once by `dump_load_correctness` when pgd is present with level>=1 and a non-empty
+/// name), so `oracle_load_correctness_seen > 0` proves a real char reached the world regardless of a
+/// later quit. Process-lifetime (never reset within a session): it attests "a real character loaded at
+/// some point this run", which a quit or a later System->Quit switch cannot falsify.
+pub(crate) static LOADED_PEAK_SEEN_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LOADED_PEAK_LEVEL: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LOADED_PEAK_C30: AtomicI32 = AtomicI32::new(0);
+pub(crate) static LOADED_PEAK_NAME_LEN: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LOADED_PEAK_NAME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 /// The native full-read chain shares the semantic `title_menu_action_ready` menu readiness gate;
 /// it no longer latches a first-seen frame before starting the save-read phase machine.
 /// `save_requested`: bound to the upstream typed layout (compiler-verified equal to our prior

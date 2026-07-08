@@ -661,6 +661,103 @@ pub(crate) fn install_show_progress_shortcircuit_hook() {
     }
 }
 
+// ---- Missing-save picker: hold the title at press-any-button until the pick ----
+// The native title auto-opens its menu ~25-38s into a parked press-any-button boot (the online->
+// offline sign-in flow timing out chains the menu-open check steps). If that happens BEFORE the user
+// picks a save, the Continue/Load rows build against an EMPTY ProfileSummary (no save yet) -> disabled
+// rows -> no character ever loads and the boot idles forever on a null pump (softlock on a LATE pick;
+// bd er-effects-rs-ns4n follow-up). The save-check ShowProgressJob hold is too late -- it holds the
+// bar AFTER menu-open. This detour suppresses `TitleTopDialog::open_menu` while the picker is pending,
+// so the menu is only ever built AFTER the pick installs the redirect (save present -> rows ENABLED),
+// where the normal post-pick accept-byte flow opens it fresh -- identical to the working early-pick
+// path, regardless of how long the user waits. Self-gates on `missing_save_selection_pending()`, so it
+// is a pure pass-through on an early pick and on any run without the missing-save picker armed.
+static TITLE_OPEN_MENU_SUPPRESS_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+static TITLE_OPEN_MENU_SUPPRESS_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static TITLE_OPEN_MENU_SUPPRESSED_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) unsafe extern "system" fn title_open_menu_suppress_hook(
+    rcx: usize,
+    rdx: usize,
+    r8: usize,
+    r9: usize,
+) -> usize {
+    if missing_save_selection_pending() {
+        let n = TITLE_OPEN_MENU_SUPPRESSED_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        // Log the first suppression and then sparsely (power-of-two) so a repro shows the hold firing
+        // without flooding the log across the whole pending window.
+        if n == 1 || n.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "title-open-menu: SUPPRESSED native open_menu #{n} while missing-save picker pending (dialog=0x{rcx:x}) -- menu must build post-pick with the save present"
+            ));
+        }
+        return 0;
+    }
+    let orig = TITLE_OPEN_MENU_SUPPRESS_ORIG.load(Ordering::SeqCst);
+    if orig == HOOK_ORIGINAL_UNSET {
+        return 0;
+    }
+    let call: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    unsafe { call(rcx, rdx, r8, r9) }
+}
+
+/// Install the `TitleTopDialog::open_menu` suppression detour ONCE (MinHook on 0x1409b24e0). Must arm
+/// before the native auto-menu-open (~+38s). Harmless when no picker is pending (pass-through).
+pub(crate) fn install_title_open_menu_suppress_hook() {
+    if TITLE_OPEN_MENU_SUPPRESS_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
+        != TITLE_OWNER_SCAN_START_ADDRESS
+    {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "title-open-menu-suppress: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(base) = game_module_base() else {
+        append_autoload_debug(format_args!(
+            "title-open-menu-suppress: failed to resolve module base"
+        ));
+        return;
+    };
+    let addr = base + TITLE_TOP_DIALOG_OPEN_MENU_RVA;
+    match unsafe {
+        MhHook::new(
+            addr as *mut c_void,
+            title_open_menu_suppress_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            TITLE_OPEN_MENU_SUPPRESS_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if let Err(status) = unsafe { hook.queue_enable() } {
+                append_autoload_debug(format_args!(
+                    "title-open-menu-suppress: queue_enable failed: {status:?}"
+                ));
+                return;
+            }
+            match unsafe { MH_ApplyQueued() } {
+                MH_STATUS::MH_OK => {
+                    std::mem::forget(hook);
+                    append_autoload_debug(format_args!(
+                        "title-open-menu-suppress: hooked CS::TitleTopDialog::open_menu 0x{addr:x} -- native menu-open held while missing-save picker pending (rows build post-pick with the save present)"
+                    ));
+                }
+                status => append_autoload_debug(format_args!(
+                    "title-open-menu-suppress: MH_ApplyQueued failed: {status:?}"
+                )),
+            }
+        }
+        Err(status) => append_autoload_debug(format_args!(
+            "title-open-menu-suppress: MhHook::new failed: {status:?}"
+        )),
+    }
+}
+
 /// LATCH detour for the CS::SceneObjProxy ctor 0x14074a700 (rcx=proxy[this], rdx=MenuWindow*,
 /// r8/r9 forwarded). Disasm-verified: the ctor does `mov %rdx,%rbx` (0x14074a720) then
 /// `mov %rbx,0x20(%rsi)` (0x14074a735) -- so the incoming RDX is the engine-verified MenuWindow it

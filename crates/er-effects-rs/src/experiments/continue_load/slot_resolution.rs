@@ -66,6 +66,32 @@ pub(crate) fn native_fullread_slot() -> i32 {
     }
     FULLREAD_DEFAULT_SLOT
 }
+/// Terminal non-commit disarm for the full-read chain (bd er-effects-rs-ns4n). SUBMIT arms the
+/// native slot-request register (GameMan+0xb78, `requested_save_slot_load_index`) so the native
+/// chain resolves our slot. On every DONE exit that does NOT hand off to the native confirm chain
+/// (continue_confirm consumes the pending request as part of its own load), the register must be
+/// returned to the no-request sentinel: the in-game save manager services any >=0 request on the
+/// first frames after world arrival, which runs a SECOND full deserialize into the already-live
+/// world and exhausts the CSGaitemImp free queue -- the gaitemInsTable[-1] AV at live 0x67141a
+/// (6/6 picker-boot crashes 2026-07-07, ~22s in, at world arrival).
+unsafe fn fullread_disarm_slot_request(gm: usize, reason: &str) {
+    const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
+    if gm == NULL {
+        return;
+    }
+    let prev = unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *const i32) };
+    if prev == OWN_STEPPER_SLOT_NONE {
+        return;
+    }
+    unsafe {
+        *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = OWN_STEPPER_SLOT_NONE;
+    }
+    FULLREAD_REQ_DISARM_COUNT.fetch_add(1, Ordering::SeqCst);
+    FULLREAD_REQ_DISARM_LAST_PREV_SLOT.store(prev as u32 as usize, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "native-fullread: DISARM req_slot {prev} -> {OWN_STEPPER_SLOT_NONE} ({reason}) -- no pending native load request may survive a non-commit exit"
+    ));
+}
 /// OBSERVE-ONLY NATIVE FULL-SAVE-READ tick (native_fullread_enabled(), gated OFF by default). Runs
 /// each frame INSTEAD of the own_stepper forcing logic (no SetState forcing for boot); the caller
 /// pass-throughs to OWN_STEPPER_ORIG_IDX10 so the NATIVE title machine advances untouched. Once the
@@ -207,6 +233,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             append_autoload_debug(format_args!(
                 "native-fullread: b80 STUCK at {b80} after {w} drain ticks (full read never resident) -- TIMEOUT (no write) -> DONE"
             ));
+            unsafe { fullread_disarm_slot_request(gm, "drain-timeout") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
         }
         return;
@@ -257,6 +284,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             append_autoload_debug(format_args!(
                 "native-fullread: GUARD FAIL (c30=0x{c30:x} level={level}) -- NO continue_confirm, NO SetState5, NO save write -> DONE (save-safe)"
             ));
+            unsafe { fullread_disarm_slot_request(gm, "guard-fail") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
             return;
         }
@@ -266,6 +294,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             append_autoload_debug(format_args!(
                 "native-fullread: GUARD PASS (c30=0x{c30:x} level={level}) but VERIFY-ONLY (commit sub-gate OFF) -- NO continue_confirm, NO SetState5 -> DONE (save-safe). Set ER_EFFECTS_FULLREAD_COMMIT=1 / er-effects-fullread-commit.txt to commit."
             ));
+            unsafe { fullread_disarm_slot_request(gm, "verify-only") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
             return;
         }
@@ -283,6 +312,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
                 "native-fullread: COMMIT ABORT -- continue_confirm owner (GameDataMan=0x{game_data_man:x}, offset=0x{:x}) is null -> DONE (no write)",
                 FULLREAD_OWNER_GDM_08_OFFSET
             ));
+            unsafe { fullread_disarm_slot_request(gm, "commit-abort-owner-null") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
             return;
         }
@@ -292,6 +322,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             append_autoload_debug(format_args!(
                 "native-fullread: COMMIT ABORT -- owner+0x284={new_game_flag} != 0 (continue_confirm requires the new-game flag clear) -> DONE (no write)"
             ));
+            unsafe { fullread_disarm_slot_request(gm, "commit-abort-new-game-flag") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
             return;
         }
@@ -491,6 +522,9 @@ pub(crate) unsafe fn dump_load_correctness(base: usize, frame: u64) {
     const U32_STRIDE: usize = 4;
     const IDX_START: usize = 0;
     const IDX_STEP: usize = 1;
+    // Peak-load latch gate: a genuinely loaded character has level>=1 and a non-empty name.
+    const MIN_REAL_LATCH_LEVEL: usize = 1;
+    const NAME_LEN_EMPTY: usize = 0;
     let gm = game_man_ptr_or_null();
     let ri32 = |addr: usize| -> i32 {
         unsafe { safe_read_usize(addr) }
@@ -553,6 +587,22 @@ pub(crate) unsafe fn dump_load_correctness(base: usize, frame: u64) {
     append_autoload_debug(format_args!(
         "LOAD-CORRECTNESS frame={frame} gm_c30=0x{c30:x} gm_ac0={ac0} name_empty={name_empty} pgd=0x{pgd:x} chr_type={chr_type} name={name:?} level={level} runes={runes} rune_mem={rune_mem} stats={stats:?}"
     ));
+    // LATCH the peak-load semaphore: a REAL character (present PlayerGameData, level>=1, non-empty
+    // name) confirmed in the world. Latched so a later quit-to-title -- which tears the char down and
+    // resets the live oracle_char_* fields -- cannot erase the proof that the load succeeded this run.
+    // Peak = highest level seen (keeps the identifying fields for that character).
+    if (level as usize) >= MIN_REAL_LATCH_LEVEL && nlen > NAME_LEN_EMPTY {
+        LOADED_PEAK_SEEN_COUNT.fetch_add(1, Ordering::SeqCst);
+        if (level as usize) >= LOADED_PEAK_LEVEL.load(Ordering::SeqCst) {
+            LOADED_PEAK_LEVEL.store(level as usize, Ordering::SeqCst);
+            LOADED_PEAK_C30.store(c30, Ordering::SeqCst);
+            LOADED_PEAK_NAME_LEN.store(nlen, Ordering::SeqCst);
+            if let Ok(mut latched) = LOADED_PEAK_NAME.lock() {
+                latched.clear();
+                latched.push_str(&name);
+            }
+        }
+    }
 }
 /// Recipe Option 1 (genuine offline continue, flagless): drive the MoveMapList
 /// dispatcher 0x140afb880 each frame with GameMan b73 set so it begins

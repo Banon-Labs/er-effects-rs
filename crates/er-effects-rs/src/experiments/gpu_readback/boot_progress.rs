@@ -117,11 +117,13 @@ const BOOT_VIEW_MILESTONE_LABELS: [&str; 7] = [
 /// by the game's real now-loading Gauge_3 bar, whose terminal frame is the true all-loading-complete
 /// semaphore.
 // SAVE CHECK sits at the fill edge where the bar actually PAUSES while the missing-save overlay
-// picker is up: the boot holds the save-data ShowProgressJob at the MENU milestone (490), and the
-// inter-milestone creep tops out at 490 + 7/10*(615-490) = 577, just left of the SAVE LOAD (615)
-// resume point. Placing the marker there makes "paused at SAVE CHECK" line up with the visible
-// fill edge (was 300, far behind the real pause).
-const BOOT_VIEW_SAVE_CHECK_PERMILLE: usize = 570;
+// picker is up. The native title menu-open is now HELD until the pick (title_open_menu_suppress_hook),
+// so the MENU milestone (490) cannot latch while the picker is pending -- the bar stalls at the TITLE
+// milestone (385) and its inter-milestone creep tops out at 385 + 7/10*(490-385) = 458. The clamp in
+// `boot_view_progress` pins the fill edge exactly here while the pick is pending; it lifts the frame the
+// pick clears the latch, so the bar resumes MENU -> CONTINUE -> SAVE LOAD / NATIVE. (Was 570, which
+// matched the OLD flow where the menu opened before the pick and the bar paused at the MENU milestone.)
+const BOOT_VIEW_SAVE_CHECK_PERMILLE: usize = 458;
 const BOOT_VIEW_SAVE_CHECK_LABEL: &str = "SAVE CHECK";
 const BOOT_VIEW_SAVE_LOAD_PERMILLE: usize = 615;
 const BOOT_VIEW_SAVE_LOAD_LABEL: &str = "SAVE LOAD";
