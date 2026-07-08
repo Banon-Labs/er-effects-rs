@@ -163,9 +163,9 @@ unsafe fn system_quit_route_button_action_or_forward(
     let open_save_dir_action = SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
     if action_obj != 0 && action_obj == open_save_dir_action {
         SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
-        let opened = unsafe { system_quit_open_env_save_dir() };
+        let opened = unsafe { system_quit_open_save_picker_menu(action_obj) };
         append_autoload_debug(format_args!(
-            "system-quit-open-save-dir: cloned action selected action=0x{action_obj:x} opened={opened}; suppressing native Quit Game row action"
+            "system-quit-open-save-dir: cloned action selected action=0x{action_obj:x} opened={opened} (in-game save picker); suppressing native Quit Game row action"
         ));
         return 0;
     }
@@ -204,10 +204,10 @@ unsafe fn system_quit_route_button_action_or_forward(
     }
     if action_obj != 0 && native_return_visual_row == Some(3) {
         SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
-        let opened = unsafe { system_quit_open_env_save_dir() };
+        let opened = unsafe { system_quit_open_save_picker_menu(action_obj) };
         let mouse = read_cursor_normalized();
         append_autoload_debug(format_args!(
-            "system-quit-load-save-profiles: Load Save Profiles action selected via native-return action=0x{action_obj:x} cursor={cursor} native_visual_row={:?} mouse={:?} opened={opened}; suppressing native Quit Game row action",
+            "system-quit-load-save-profiles: Load Save Profiles action selected via native-return action=0x{action_obj:x} cursor={cursor} native_visual_row={:?} mouse={:?} opened={opened} (in-game save picker); suppressing native Quit Game row action",
             native_return_visual_row, mouse
         ));
         return 0;
@@ -326,9 +326,13 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
         }
         .unwrap_or(0);
         SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
-        let opened = unsafe { system_quit_open_env_save_dir() };
+        let opened = if action != 0 {
+            unsafe { system_quit_open_save_picker_menu(action) }
+        } else {
+            false
+        };
         append_autoload_debug(format_args!(
-            "system-quit-load-save-profiles: Load Save Profiles controller selected controller=0x{controller:x} action=0x{action:x} event_kind={event_kind} event_a=0x{event_a:x} event_b=0x{event_b:x} opened={opened}; suppressing native button activation"
+            "system-quit-load-save-profiles: Load Save Profiles controller selected controller=0x{controller:x} action=0x{action:x} event_kind={event_kind} event_a=0x{event_a:x} event_b=0x{event_b:x} opened={opened} (in-game save picker); suppressing native button activation"
         ));
         return;
     }
@@ -400,85 +404,20 @@ fn system_quit_windows_path_for_log(path: &str) -> String {
     }
 }
 
-unsafe fn system_quit_open_env_save_dir() -> bool {
-    let save_path = match system_quit_env_save_path() {
-        Ok(path) => path,
-        Err(reason) => {
-            SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
-            append_autoload_debug(format_args!(
-                "system-quit-load-save-profiles: refused to open picker -- {reason}"
-            ));
-            return false;
-        }
-    };
-    let dir = match system_quit_env_save_dir() {
-        Ok(dir) => dir,
-        Err(reason) => {
-            SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
-            append_autoload_debug(format_args!(
-                "system-quit-load-save-profiles: refused to open picker -- {reason}"
-            ));
-            return false;
-        }
-    };
-    if !Path::new(&dir).is_dir() {
-        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "system-quit-load-save-profiles: refused to open picker for missing/non-directory save dir '{dir}'"
-        ));
-        return false;
-    }
-    unsafe { system_quit_save_swap_restore_profile_summary("load-save-profiles-reopen") };
-    if !system_quit_save_swap_arm_original(&save_path) {
-        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
-        return false;
-    }
-
-    let initial_dir_w = system_quit_path_for_windows(&dir);
-    let title_w = wide_z("Load Save Profiles");
-    // Mode-locked filter: Seamless Co-op (ERSC resident) reads/writes `ER0000.co2`, vanilla reads
-    // `ER0000.sl2` -- offering the other flavor here would stage a save the active runtime never
-    // loads (mixing save flavors across modes corrupts expectations; user directive 2026-07-06).
-    // No "All files" escape hatch, for the same reason: the picker must offer ONLY the active
-    // mode's container.
-    let seamless = save_picker_seamless_mode_after_settle("system-quit-load-save-profiles");
-    let (filter_w, picker_ext) = if seamless {
-        (wide_z("Seamless save (*.co2)\0*.co2\0"), "co2")
-    } else {
-        (wide_z("Elden Ring save (*.sl2)\0*.sl2\0"), "sl2")
-    };
-    let mut file_buf = [0u16; 1024];
-    let mut ofn = OPENFILENAMEW {
-        lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
-        lpstrFilter: PCWSTR::from_raw(filter_w.as_ptr()),
-        lpstrFile: windows::core::PWSTR::from_raw(file_buf.as_mut_ptr()),
-        nMaxFile: file_buf.len() as u32,
-        lpstrInitialDir: PCWSTR::from_raw(initial_dir_w.as_ptr()),
-        lpstrTitle: PCWSTR::from_raw(title_w.as_ptr()),
-        Flags: OFN_EXPLORER
-            | OFN_FILEMUSTEXIST
-            | OFN_PATHMUSTEXIST
-            | OFN_HIDEREADONLY
-            | OFN_NOCHANGEDIR
-            | OFN_DONTADDTORECENT,
-        ..Default::default()
-    };
-    let picked = unsafe { GetOpenFileNameW(&mut ofn).as_bool() };
-    if !picked {
-        append_autoload_debug(format_args!(
-            "system-quit-load-save-profiles: picker cancelled/no selection dir='{dir}'"
-        ));
-        return false;
-    }
-    let Some(selected_path) = system_quit_path_from_windows_picker(&file_buf) else {
-        SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "system-quit-load-save-profiles: picker returned an empty path"
-        ));
-        return false;
-    };
-    let selected_log = system_quit_windows_path_for_log(&selected_path);
-    if !Path::new(&selected_path).is_file() {
+/// Validate + ingest a picked save container path (any picker UI feeds this): mode-locked
+/// extension, BND4 parse, SteamID normalization, ProfileSummary slot preview, candidate staging,
+/// and last-picked-directory persistence. Menu-thread only (preview writes + renderer refresh).
+/// The caller is responsible for the pre-pick work (`system_quit_save_swap_restore_profile_summary`
+/// + `system_quit_save_swap_arm_original`), which happens at picker OPEN time.
+unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool {
+    // Mode lock: only the container flavor the active runtime loads. A cross-flavor save (`.sl2`
+    // while Seamless owns the session, `.co2` in vanilla) would preview character slots the
+    // active runtime never actually loads (mixing save flavors across modes corrupts
+    // expectations; user directive 2026-07-06).
+    let seamless = save_picker_seamless_mode_after_settle("system-quit-ingest-picked-save");
+    let picker_ext = if seamless { "co2" } else { "sl2" };
+    let selected_log = system_quit_windows_path_for_log(selected_path);
+    if !Path::new(selected_path).is_file() {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
             "system-quit-load-save-profiles: selected path is not a file '{}'",
@@ -486,12 +425,7 @@ unsafe fn system_quit_open_env_save_dir() -> bool {
         ));
         return false;
     }
-    // The filter above is display-only -- GetOpenFileNameW still returns whatever path the user
-    // types -- so enforce the same mode lock on the picked file. A cross-flavor save (`.sl2` while
-    // Seamless owns the session, `.co2` in vanilla) would preview character slots the active runtime
-    // never actually loads (mixing save flavors across modes corrupts expectations; user directive
-    // 2026-07-06).
-    let ext_ok = Path::new(&selected_path)
+    let ext_ok = Path::new(selected_path)
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case(picker_ext));
     if !ext_ok {
@@ -502,7 +436,7 @@ unsafe fn system_quit_open_env_save_dir() -> bool {
         ));
         return false;
     }
-    let Ok(mut bytes) = fs::read(&selected_path) else {
+    let Ok(mut bytes) = fs::read(selected_path) else {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
             "system-quit-load-save-profiles: failed to read selected save '{}'",
@@ -546,10 +480,17 @@ unsafe fn system_quit_open_env_save_dir() -> bool {
         st.candidate_slot_mask = mask;
         st.preview_applied = true;
     }
+    if crate::config::autoupdate_preferred_picker_dir_enabled()
+        && let Some(parent) = Path::new(selected_path)
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        crate::config::remember_preferred_save_picker_dir(parent);
+    }
     SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT.fetch_add(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "system-quit-load-save-profiles: applied selected save preview '{}' len={len} hash=0x{hash:016x} slot_mask=0x{mask:x}; staged active save remains '{}' until a foreign slot is selected",
-        selected_log, save_path
+        "system-quit-load-save-profiles: applied selected save preview '{}' len={len} hash=0x{hash:016x} slot_mask=0x{mask:x}; staged active save unchanged until a foreign slot is selected",
+        selected_log
     ));
     true
 }

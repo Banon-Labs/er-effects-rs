@@ -198,7 +198,21 @@ pub(crate) unsafe extern "system" fn title_setstate_trace_detour(owner: usize, s
     if orig == TITLE_OWNER_SCAN_START_ADDRESS || orig == 0 {
         return;
     }
-    wait_for_missing_save_selection_if_pending("title SetState");
+    // Missing-save in-game picker guard: while no save has been selected, DENY only the two
+    // world-load entry states (RE-verified 2026-07-07: every path into the world -- Continue,
+    // Load-slot confirm, New Game, NG+ -- funnels through SetState(4=BeginNewGame) or
+    // SetState(5=PlayGame); menu states 0..3/10/11 must flow or the title never becomes
+    // interactive). The old behavior condvar-BLOCKED every SetState here, which froze the title
+    // thread; now the title boots to its native no-save menu and the picker rides it. Skipping
+    // the call (not waiting) keeps the title thread alive; the request is simply dropped.
+    if missing_save_selection_pending()
+        && (state == TITLE_STEP_BEGIN_NEW_GAME || state == TITLE_STEP_PLAY_GAME)
+    {
+        append_autoload_debug(format_args!(
+            "title-setstate-trace: DENIED SetState(owner=0x{owner:x}, state={state}) -- world entry blocked until the missing-save picker resolves"
+        ));
+        return;
+    }
     let f: unsafe extern "system" fn(usize, i32) = unsafe { std::mem::transmute(orig) };
     unsafe { f(owner, state) };
 }
@@ -898,6 +912,12 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     if phase == OWN_STEPPER_PHASE_MENU
         && FULLREAD_PHASE.load(Ordering::SeqCst) == FULLREAD_PHASE_GUARD
     {
+        // Missing-save picker owns FULLREAD_PHASE via the native full-read chain (which reads the
+        // picked save itself); let it run its own GUARD/COMMIT, not the Continue-item guard below.
+        if missing_save_picker_selected_slot().is_some() {
+            unsafe { native_fullread_tick(owner, module_base, tick) };
+            return true;
+        }
         // Native Continue can reset title-menu visual latches while its modal-confirm branch waits.
         // The product intent is to disable that confirm wait after the native load has produced
         // loaded-slot evidence, so keep the post-submit guard running instead of re-gating on title
@@ -1181,6 +1201,16 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             disable_system_quit_gaitem_deserialize_hook("native-continue-handoff");
             disable_system_quit_gaitem_lookup_hook("native-continue-handoff");
             disable_system_quit_gaitem_finalize_hook("native-continue-handoff");
+        }
+        // Missing-save picker: the "native Continue row" product_continue waits for is a phantom --
+        // runtime + static RE (2026-07-07) showed the idle-ctor object it matched is the passive
+        // 01_900_Black backdrop, not a Continue row, so it never resolves. Drive the verified native
+        // full-read chain for the picked slot instead: it marks the slot occupied (so the save-load
+        // gate 0x14067b200 accepts it), reads the picked save itself (submit/drain/deserialize), and
+        // commits (continue_confirm -> SetState5) into the redirected staged save.
+        if missing_save_picker_selected_slot().is_some() {
+            unsafe { native_fullread_tick(owner, module_base, tick) };
+            return true;
         }
         unsafe { product_continue_autoload_tick(owner, module_base, gm, slot, tick, &ready) };
     }

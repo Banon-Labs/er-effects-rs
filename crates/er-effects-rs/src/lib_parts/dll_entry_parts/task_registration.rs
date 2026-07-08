@@ -32,6 +32,11 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     return;
                 }
                 tick_before_player_lookup(task_data);
+                // Startup save-picker: input/navigation runs on the render thread (the Present hook),
+                // the only thread that reads OS keys under Wine. Only the one-shot pick COMPLETION
+                // (redirect + MinHook install) runs here on the game task -- it is alive at pick time
+                // (loading starts only after the pick releases the hold).
+                save_picker_overlay_process_completion();
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
                     let mut state = state_or_return(&state);
                     state.game_task_ticks += GAME_TASK_TICK_INCREMENT;
@@ -77,7 +82,13 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         {
                             Some(quickload_slot as i32)
                         } else {
-                            state.autoload.slot()
+                            // The missing-save picker cannot set a config slot; instead its
+                            // character sub-picker records the chosen slot here. Configured slots
+                            // still win via `state.autoload.slot()`.
+                            state
+                                .autoload
+                                .slot()
+                                .or_else(missing_save_picker_selected_slot)
                         };
                         if let Some(slot) = slot_result {
                             PRODUCT_CORE_CALLSITE_SLOT_OK_TICKS.fetch_add(1, Ordering::SeqCst);

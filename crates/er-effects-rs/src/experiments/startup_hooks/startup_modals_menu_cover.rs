@@ -531,6 +531,16 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
         ));
     }
     if ptype == Some(SHOW_PROGRESS_SAVE_TYPE) {
+        // MISSING-SAVE HOLD: while no save has been selected, loop this save-data job with
+        // CONTINUE every frame. This holds the title-flow FixOrderJobSequence open at the
+        // save-check WITHOUT freezing any thread -- the boot loading bar sticks at its SAVE_CHECK
+        // marker, and the DLL-drawn overlay picker (`save_picker_overlay.rs`) composites on top.
+        // The game task keeps ticking (so the overlay reads input) and Present keeps firing (so
+        // the overlay + bar draw). Making the native title menu input-dead is irrelevant: the
+        // picker is a DLL-drawn overlay with its own OS-read input, not a native menu. The pick
+        // installs the save redirect and clears `missing_save_selection_pending()`, so the very
+        // next frame this job passes through to the delegate with the redirected save present and
+        // the boot resumes -- the bar advances past SAVE_CHECK and the overlay disarms.
         if missing_save_selection_pending() {
             if result > null && unsafe { safe_read_usize(result) }.is_some() {
                 unsafe {
@@ -538,14 +548,15 @@ pub(crate) unsafe extern "system" fn show_progress_job_run_hook(
                     *((result + 4) as *mut i32) = 0;
                 }
             }
-            if let Ok(base) = game_module_base() {
-                if r8 > null && unsafe { safe_read_usize(r8) }.is_some() {
-                    unsafe { *(r8 as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
-                }
+            if let Ok(base) = game_module_base()
+                && r8 > null
+                && unsafe { safe_read_usize(r8) }.is_some()
+            {
+                unsafe { *(r8 as *mut usize) = base + FD4_TIME_TEMPLATE_FLOAT_VFTABLE_RVA };
             }
             if d < 16 || d.is_power_of_two() {
                 append_autoload_debug(format_args!(
-                    "show-progress: LOOP save-data progressType {SHOW_PROGRESS_SAVE_TYPE} while missing-save picker is pending -- title/save flow paused without suspending Wine dialog threads"
+                    "show-progress: HOLD save-data progressType {SHOW_PROGRESS_SAVE_TYPE} (CONTINUE) -- overlay save picker pending; boot bar held at SAVE_CHECK"
                 ));
             }
             let _ = (rcx, r9);

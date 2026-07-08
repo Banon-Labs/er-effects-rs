@@ -679,6 +679,46 @@ unsafe fn profile_slot_has_character(slot: i32) -> bool {
     !utf16_name_empty_like(&name, len)
 }
 
+/// One active character slot parsed straight from a picked save's bytes (no dependency on the game
+/// having built its ProfileSummary yet): the slot index, character name, and level. Feeds the
+/// missing-save picker's character sub-picker.
+#[derive(Clone, Debug)]
+pub(crate) struct SaveSlotInfo {
+    pub(crate) slot: usize,
+    pub(crate) name: String,
+    pub(crate) level: i32,
+}
+
+/// Parse the ACTIVE character slots out of a save container's bytes (BND4 slot walk +
+/// PlayerGameData locate), returning slot index, name, and level for each occupied slot in order.
+/// Empty when the bytes are not a readable save.
+pub(crate) fn parse_save_character_slots(bytes: &[u8]) -> Vec<SaveSlotInfo> {
+    (0..TITLE_PROFILE_SLOT_COUNT)
+        .filter_map(|slot| {
+            let body = er_save_loader::bnd4::slot_body(bytes, slot).ok()?;
+            let pgd = SerializedSaveSlot::new(body).player_game_data()?;
+            let units = pgd.name_units()?;
+            let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
+            let name = String::from_utf16(&units[..end]).ok()?;
+            if name.trim().is_empty() {
+                return None;
+            }
+            let level = pgd.read_i32(SAVE_PGD_LEVEL_OFFSET).unwrap_or(0);
+            // Only offer slots the autoload will actually accept: `profile_slot_fingerprint`
+            // (slot_resolution.rs) gates a real character on `level >= MIN_REAL_LEVEL (1) &&
+            // non-empty name`. An empty/deleted slot can retain leftover name bytes but reads
+            // level 0, so a name-only filter would list it as a "LV 0" non-active row -- and picking
+            // it fails that same fingerprint at load time, fail-closing into a soft-lock ("Continue
+            // slot profile is empty-like"). Match the load's criterion so the character list shows
+            // exactly the loadable characters. Every real ER character is level >= 1.
+            if level < 1 {
+                return None;
+            }
+            Some(SaveSlotInfo { slot, name, level })
+        })
+        .collect()
+}
+
 fn system_quit_save_swap_state() -> &'static Mutex<SystemQuitSaveSwapState> {
     SYSTEM_QUIT_SAVE_SWAP_STATE.get_or_init(|| Mutex::new(SystemQuitSaveSwapState::default()))
 }
@@ -933,6 +973,21 @@ impl<'a> SerializedSaveSlot<'a> {
         }
         best
     }
+}
+
+/// True when any of the 10 save slots holds a readable character (a PlayerGameData block passing
+/// the plausibility core: level/health/stat sanity). A no-save boot natively CREATES a full-size
+/// EMPTY `ER0000.{sl2,co2}` container, which must not satisfy default-save discovery: observed
+/// 2026-07-07, the game rewrote ER0000.sl2 during a pending missing-save-picker run, and the next
+/// launch silently entered DEFAULT-USER-SAVE on that zero-character container instead of
+/// re-arming the picker.
+pub(crate) fn save_bytes_have_any_character(bytes: &[u8]) -> bool {
+    (0..TITLE_PROFILE_SLOT_COUNT).any(|slot| {
+        er_save_loader::bnd4::slot_body(bytes, slot)
+            .ok()
+            .and_then(|body| SerializedSaveSlot::new(body).player_game_data())
+            .is_some()
+    })
 }
 
 impl<'a> SerializedPlayerGameData<'a> {

@@ -346,6 +346,35 @@ def main() -> int:
             False,
             "blocked this Seamless Co-op DLL bundling command",
         ),
+        # git commit message text may MENTION ersc.dll (2026-07-07 false
+        # positive: a quoted -m body mentioning ersc.dll plus prose marker
+        # substrings like "stage"/"target" was denied by the raw fallback).
+        PolicyCase(
+            "allow-git-commit-message-mentioning-ersc-dll",
+            'git add -A && git commit -m "loader precedence: a resident'
+            ' ersc.dll wins over the env hint; never stage it into target/"',
+            True,
+        ),
+        PolicyCase(
+            "allow-git-commit-heredoc-message-mentioning-ersc-dll",
+            'git add -A && git commit -m "$(cat <<\'EOF\'\n'
+            "guard: document that a resident ersc.dll wins over the env hint\n\n"
+            "The bundling rule still blocks staging ersc.dll into release artifacts.\n"
+            'EOF\n)"',
+            True,
+        ),
+        PolicyCase(
+            "deny-cp-seamless-ersc-dll-to-dist",
+            "cp SeamlessCoop/ersc.dll dist/",
+            False,
+            "blocked this Seamless Co-op DLL bundling command",
+        ),
+        PolicyCase(
+            "deny-git-commit-chained-quoted-ersc-copy",
+            "git commit -m \"note\" && cp 'SeamlessCoop/ersc.dll' dist/",
+            False,
+            "blocked this Seamless Co-op DLL bundling command",
+        ),
         PolicyCase(
             "allow-quoted-forbidden-launch-note",
             "echo 'do not run steam -applaunch 1245620'",

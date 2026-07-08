@@ -116,7 +116,12 @@ const BOOT_VIEW_MILESTONE_LABELS: [&str; 7] = [
 /// milestone deliberately stops at the native-handoff marker instead of 100%: the remaining gap is owned
 /// by the game's real now-loading Gauge_3 bar, whose terminal frame is the true all-loading-complete
 /// semaphore.
-const BOOT_VIEW_SAVE_CHECK_PERMILLE: usize = 300;
+// SAVE CHECK sits at the fill edge where the bar actually PAUSES while the missing-save overlay
+// picker is up: the boot holds the save-data ShowProgressJob at the MENU milestone (490), and the
+// inter-milestone creep tops out at 490 + 7/10*(615-490) = 577, just left of the SAVE LOAD (615)
+// resume point. Placing the marker there makes "paused at SAVE CHECK" line up with the visible
+// fill edge (was 300, far behind the real pause).
+const BOOT_VIEW_SAVE_CHECK_PERMILLE: usize = 570;
 const BOOT_VIEW_SAVE_CHECK_LABEL: &str = "SAVE CHECK";
 const BOOT_VIEW_SAVE_LOAD_PERMILLE: usize = 615;
 const BOOT_VIEW_SAVE_LOAD_LABEL: &str = "SAVE LOAD";
@@ -300,6 +305,15 @@ fn boot_view_progress() -> (usize, usize) {
         * BOOT_VIEW_CREEP_NUM)
         / (BOOT_VIEW_CREEP_FULL_MS as usize * BOOT_VIEW_CREEP_DEN);
     let pm = (base + creep).min(1000);
+    // While the overlay picker holds the boot, clamp the fill so its edge stops EXACTLY at the
+    // SAVE CHECK tick (the MENU milestone + creep would otherwise creep ~7 permille past it, leaving
+    // the tick sitting behind the fill edge). The clamp lifts the frame the pick clears the latch,
+    // so the bar resumes past SAVE CHECK toward SAVE LOAD / NATIVE.
+    let pm = if missing_save_selection_pending() {
+        pm.min(BOOT_VIEW_SAVE_CHECK_PERMILLE)
+    } else {
+        pm
+    };
     // Monotonic display: an idx re-latch or timer wobble must never walk the bar backwards.
     let shown = BOOT_VIEW_LAST_PERMILLE.fetch_max(pm, Ordering::SeqCst).max(pm);
     (idx, shown)
@@ -324,10 +338,31 @@ fn boot_glyph_5x7(c: char) -> [u8; 7] {
         'M' => [0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11],
         'N' => [0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11],
         'O' => [0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
+        'J' => [0x01, 0x01, 0x01, 0x01, 0x11, 0x11, 0x0e],
+        'P' => [0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10],
+        'Q' => [0x0e, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0d],
+        'R' => [0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11],
         'S' => [0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e],
         'T' => [0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
         'U' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
         'V' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x0a, 0x04],
+        'W' => [0x11, 0x11, 0x11, 0x15, 0x15, 0x1b, 0x11],
+        'X' => [0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11],
+        'Y' => [0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04],
+        'Z' => [0x1f, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f],
+        '.' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x0c],
+        '-' => [0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00],
+        '_' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1f],
+        '/' => [0x01, 0x02, 0x02, 0x04, 0x08, 0x08, 0x10],
+        '\\' => [0x10, 0x08, 0x08, 0x04, 0x02, 0x02, 0x01],
+        ':' => [0x00, 0x0c, 0x0c, 0x00, 0x0c, 0x0c, 0x00],
+        '[' => [0x0e, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0e],
+        ']' => [0x0e, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0e],
+        '(' => [0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02],
+        ')' => [0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08],
+        '>' => [0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08],
+        '?' => [0x0e, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04],
+        '!' => [0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04],
         '0' => [0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e],
         '1' => [0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e],
         '2' => [0x0e, 0x11, 0x01, 0x06, 0x08, 0x10, 0x1f],
@@ -765,28 +800,41 @@ fn boot_view_rasterize(
     } else {
         boot_draw_text(&mut buf, w, h, content_x, content_y, label);
     }
-    let save_check_marker_x = boot_draw_marker_label(
-        &mut buf,
-        w,
-        h,
-        content_x,
-        content_y,
-        content_w,
-        BOOT_VIEW_SAVE_CHECK_PERMILLE,
-        BOOT_VIEW_SAVE_CHECK_LABEL,
-        has_bg,
-    );
-    let save_load_marker_x = boot_draw_marker_label(
-        &mut buf,
-        w,
-        h,
-        content_x,
-        content_y,
-        content_w,
-        BOOT_VIEW_SAVE_LOAD_PERMILLE,
-        BOOT_VIEW_SAVE_LOAD_LABEL,
-        has_bg,
-    );
+    // SAVE CHECK (the picker-hold pause, ~577) and SAVE LOAD (615) sit close together, so only one
+    // is shown at a time to keep their labels from overlapping: SAVE CHECK while the missing-save
+    // picker holds the boot (that is where the fill visibly pauses), SAVE LOAD otherwise (the normal
+    // continue/save-load checkpoint on every boot). `usize::MAX` = not shown (tick skipped below).
+    let save_picker_hold = missing_save_selection_pending();
+    let save_check_marker_x = if save_picker_hold {
+        boot_draw_marker_label(
+            &mut buf,
+            w,
+            h,
+            content_x,
+            content_y,
+            content_w,
+            BOOT_VIEW_SAVE_CHECK_PERMILLE,
+            BOOT_VIEW_SAVE_CHECK_LABEL,
+            has_bg,
+        )
+    } else {
+        usize::MAX
+    };
+    let save_load_marker_x = if save_picker_hold {
+        usize::MAX
+    } else {
+        boot_draw_marker_label(
+            &mut buf,
+            w,
+            h,
+            content_x,
+            content_y,
+            content_w,
+            BOOT_VIEW_SAVE_LOAD_PERMILLE,
+            BOOT_VIEW_SAVE_LOAD_LABEL,
+            has_bg,
+        )
+    };
     let marker_x = boot_draw_marker_label(
         &mut buf,
         w,
@@ -818,29 +866,33 @@ fn boot_view_rasterize(
         BOOT_VIEW_BAR_H,
         BOOT_VIEW_RGB_FILL,
     );
-    // Save-check tick: marks the missing-save picker wait point before a selected source exists.
-    boot_fill_rect(
-        &mut buf,
-        w,
-        h,
-        save_check_marker_x.saturating_sub(BOOT_VIEW_HANDOFF_MARKER_W / 2),
-        bar_y.saturating_sub(2),
-        BOOT_VIEW_HANDOFF_MARKER_W,
-        BOOT_VIEW_BAR_H + 4,
-        BOOT_VIEW_RGB_FILL,
-    );
-    // Save-load tick: marks the ShowProgressJob save-data pause/resume point so a picker-gated boot
-    // visibly shows the later native save-load checkpoint before the loading handoff.
-    boot_fill_rect(
-        &mut buf,
-        w,
-        h,
-        save_load_marker_x.saturating_sub(BOOT_VIEW_HANDOFF_MARKER_W / 2),
-        bar_y.saturating_sub(2),
-        BOOT_VIEW_HANDOFF_MARKER_W,
-        BOOT_VIEW_BAR_H + 4,
-        BOOT_VIEW_RGB_FILL,
-    );
+    // Save-check tick: the fill edge where the boot pauses while the overlay picker is up.
+    if save_check_marker_x != usize::MAX {
+        boot_fill_rect(
+            &mut buf,
+            w,
+            h,
+            save_check_marker_x.saturating_sub(BOOT_VIEW_HANDOFF_MARKER_W / 2),
+            bar_y.saturating_sub(2),
+            BOOT_VIEW_HANDOFF_MARKER_W,
+            BOOT_VIEW_BAR_H + 4,
+            BOOT_VIEW_RGB_FILL,
+        );
+    }
+    // Save-load tick: the ShowProgressJob save-data continue/load checkpoint (shown once a save is
+    // resolved, i.e. off the picker hold).
+    if save_load_marker_x != usize::MAX {
+        boot_fill_rect(
+            &mut buf,
+            w,
+            h,
+            save_load_marker_x.saturating_sub(BOOT_VIEW_HANDOFF_MARKER_W / 2),
+            bar_y.saturating_sub(2),
+            BOOT_VIEW_HANDOFF_MARKER_W,
+            BOOT_VIEW_BAR_H + 4,
+            BOOT_VIEW_RGB_FILL,
+        );
+    }
     // Handoff marker/gap: this pre-loading bar is only phase 1. Leave the remaining track empty for the
     // native now-loading Gauge_3 phase; the native loading-bar hook supplies the true terminal-frame
     // semaphore for 100%. Make the split visible: a small black break in the track, a brighter 3px marker,
@@ -1091,7 +1143,12 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     let strip_dy = (bh * BOOT_VIEW_STRIP_Y_NUM / BOOT_VIEW_STRIP_Y_DEN).min(bh - strip_h);
     let bg = boot_bg_image();
     let bg_active = bg.is_some();
-    let (region_w, region_h, dx, dy, content_x, content_y, content_w) = if bg_active {
+    // The DLL-drawn startup save picker owns the whole screen while the no-save boot is held: a
+    // full-frame copy of the browser, driven by the shared picker model (input handled on the game
+    // task thread). Falls back to the bar if the model vanished mid-frame.
+    let picker_active = save_picker_overlay_active();
+    let full_frame = bg_active || picker_active;
+    let (region_w, region_h, dx, dy, content_x, content_y, content_w) = if full_frame {
         (
             bw,
             bh,
@@ -1206,13 +1263,21 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     let geom_changed = BOOT_VIEW_STRIP_W.swap(strip_w as usize, Ordering::SeqCst)
         != strip_w as usize
         || BOOT_VIEW_STRIP_H.swap(region_h as usize, Ordering::SeqCst) != region_h as usize;
-    if upload_fresh
+    // The picker content changes with cursor/dir/page (not captured by permille/idx), so re-raster
+    // every frame while it owns the screen.
+    if picker_active
+        || upload_fresh
         || geom_changed
         || BOOT_VIEW_DRAWN_PERMILLE.load(Ordering::SeqCst) != permille
         || BOOT_VIEW_DRAWN_IDX.load(Ordering::SeqCst) != ms_idx
         || BOOT_VIEW_DRAWN_BG_ACTIVE.load(Ordering::SeqCst) != bg_active as usize
     {
-        let tight = boot_view_rasterize(
+        // Base frame is always the boot loading bar (full-frame black + the bottom strip bar). When
+        // the startup picker is active it composites its browser panel ON TOP, in the upper region,
+        // leaving the bar visible below -- so the bar keeps showing the boot held at SAVE_CHECK while
+        // the user browses. When the picker disarms (pick resolved), the bar frame remains and the
+        // boot resumes past SAVE_CHECK.
+        let mut tight = boot_view_rasterize(
             region_w as usize,
             region_h as usize,
             ms_idx,
@@ -1222,6 +1287,11 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
             content_w,
             bg,
         );
+        if picker_active
+            && overlay_save_picker_onto(&mut tight, region_w as usize, region_h as usize)
+        {
+            SAVE_PICKER_OVERLAY_DRAW_HITS.fetch_add(1, Ordering::SeqCst);
+        }
         let row_pitch = footprint.Footprint.RowPitch as usize;
         let total = total_bytes as usize;
         let mut umap: *mut c_void = std::ptr::null_mut();

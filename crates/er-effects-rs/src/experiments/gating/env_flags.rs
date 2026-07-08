@@ -412,6 +412,15 @@ pub(crate) fn observe_enabled() -> bool {
 }
 // ENV-GATE RATIONALE: ER_EFFECTS_OWN_STEPPER is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn own_stepper_enabled() -> bool {
+    // MISSING-SAVE HOLD: while no save is selected there is nothing to load, so the world-load
+    // drive stays OFF (re-evaluated per call, so it re-enables the frame the pick clears the
+    // pending latch). The title-cover/visual suppression stays armed independently
+    // (`title_native_menu_visual_suppression_enabled`), and the save-data ShowProgressJob
+    // CONTINUE-loop holds the boot at the save-check; this only prevents own_stepper from trying
+    // to load a nonexistent save during that hold.
+    if missing_save_selection_pending() {
+        return false;
+    }
     product_autoload_enabled()
         || OWN_STEPPER_FILE_ARMED.load(Ordering::SeqCst) == OWN_STEPPER_CALL_INC
         || matches!(std::env::var("ER_EFFECTS_OWN_STEPPER").as_deref(), Ok("1"))

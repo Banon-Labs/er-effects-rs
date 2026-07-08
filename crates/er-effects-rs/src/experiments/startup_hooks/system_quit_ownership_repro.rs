@@ -852,6 +852,21 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     };
     let hidden = SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0;
     let profile_window = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+
+    // SAVE-FILE PICKER: while the live 05_010 window is our directory browser (in-game System
+    // menu picker OR the startup title picker), every slot activation is a browse action (up /
+    // enter dir / page / pick file) -- never a character load. Routed before ALL other logic:
+    // at the title the in-game predicate below is false (nothing hidden), but the picker still
+    // owns the dialog. Never forwards the native activation (which would arm a world load).
+    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0 && vt == expected_vt {
+        let cursor =
+            unsafe { safe_read_i32(dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) }.unwrap_or(-1);
+        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_DIALOG.store(dialog, Ordering::SeqCst);
+        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_LAST_CURSOR.store(cursor as usize, Ordering::SeqCst);
+        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_COUNT.fetch_add(1, Ordering::SeqCst);
+        return unsafe { save_picker_handle_activation(dialog, cursor) };
+    }
+
     let system_quit_profile_active = hidden && profile_window != 0 && vt == expected_vt;
     if !system_quit_profile_active {
         return unsafe { original(dialog, b, c, d) };

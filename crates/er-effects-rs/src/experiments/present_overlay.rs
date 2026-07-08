@@ -116,6 +116,11 @@ unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32)
             if !drew_portrait {
                 let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
             }
+            // Keyboard input runs on an event-driven WH_KEYBOARD_LL hook (spawned once here) so every
+            // press registers regardless of the ~4fps boot Present rate; the render-thread poll below
+            // handles gamepad (and is the keyboard fallback if the hook fails to install).
+            let _ = std::panic::catch_unwind(ensure_save_picker_keyboard_hook);
+            let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
         }
     }
     let orig = PRESENT_ORIG.load(Ordering::SeqCst);
@@ -152,6 +157,9 @@ unsafe extern "system" fn present1_hook(
             if !drew_portrait {
                 let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
             }
+            // Event-driven keyboard hook (once) + render-thread gamepad/keyboard-fallback poll.
+            let _ = std::panic::catch_unwind(ensure_save_picker_keyboard_hook);
+            let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
         }
     }
     let orig = PRESENT1_ORIG.load(Ordering::SeqCst);

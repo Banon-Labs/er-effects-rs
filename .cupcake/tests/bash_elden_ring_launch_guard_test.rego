@@ -431,3 +431,64 @@ test_deny_unquoted_cp_ersc_dll_still_matches_scrubbed if {
 	denials := guard.deny with input as bash_event(`cp SeamlessCoop/ersc.dll target/release/ersc.dll`)
 	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
 }
+
+# --- git commit message text mentioning ersc.dll is ALLOWED ------------------
+
+# The 2026-07-07 false positive: a commit whose quoted -m prose mentions
+# ersc.dll alongside marker substrings ("stage", "tar" inside "target") was
+# denied by the raw marker fallback even though the command bundles nothing.
+test_allow_git_commit_message_mentioning_ersc_dll if {
+	cmd := `git add -A && git commit -m "loader precedence: a resident ersc.dll wins over the env hint; never stage it into target/"`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# Canonical Claude Code commit form: the -m "$(cat <<'EOF' ... EOF)" heredoc
+# message is commit prose piped through cat, not an executable payload.
+test_allow_git_commit_heredoc_message_mentioning_ersc_dll if {
+	cmd := concat("\n", [
+		`git add -A && git commit -m "$(cat <<'EOF'`,
+		"guard: document that a resident ersc.dll wins over the env hint",
+		"",
+		"The bundling rule still blocks staging ersc.dll into release artifacts.",
+		"EOF",
+		`)"`,
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# Real bundling stays denied: cp with an ersc.dll path operand.
+test_deny_cp_seamless_ersc_dll_to_dist if {
+	denials := guard.deny with input as bash_event(`cp SeamlessCoop/ersc.dll dist/`)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
+
+# The git-commit text exemption must not leak to a chained copy, even with the
+# ersc.dll operand fully quoted (the raw marker fallback keeps matching).
+test_deny_git_commit_chained_quoted_ersc_copy if {
+	cmd := `git commit -m "note" && cp 'SeamlessCoop/ersc.dll' dist/`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
+
+# A command substitution that is not the canonical `"$(cat <<'TAG'` message
+# shape keeps the exemption off (this one would really execute cp).
+test_deny_git_commit_substitution_cp_ersc if {
+	cmd := `git commit -m "$(cp SeamlessCoop/ersc.dll dist/)"`
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}
+
+# Trailing shell after the message-substitution terminator keeps the
+# exemption off.
+test_deny_git_commit_heredoc_then_quoted_ersc_copy if {
+	cmd := concat("\n", [
+		`git commit -m "$(cat <<'EOF'`,
+		"note mentioning ersc.dll",
+		"EOF",
+		`)" && cp 'SeamlessCoop/ersc.dll' dist/`,
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-ERSC-DLL-BUNDLE-GUARD" in rule_ids(denials)
+}

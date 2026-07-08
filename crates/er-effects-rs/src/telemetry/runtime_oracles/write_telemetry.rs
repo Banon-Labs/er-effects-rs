@@ -358,6 +358,29 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SYSTEM_QUIT_INWORLD_LOAD_SKIP_COUNT.load(Ordering::SeqCst)
     ));
     body.push_str(&format!(
+        "  \"oracle_save_picker_mode_active\": {},\n  \"oracle_save_picker_open_count\": {},\n  \"oracle_save_picker_repopulate_count\": {},\n  \"oracle_save_picker_pick_count\": {},\n  \"oracle_save_picker_pick_reject_count\": {},\n  \"oracle_save_picker_resubmit_count\": {},\n  \"oracle_save_picker_cancel_count\": {},\n  \"oracle_save_picker_staged_row_count\": {},\n",
+        SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst),
+        SAVE_PICKER_OPEN_COUNT.load(Ordering::SeqCst),
+        SAVE_PICKER_REPOPULATE_COUNT.load(Ordering::SeqCst),
+        SAVE_PICKER_PICK_COUNT.load(Ordering::SeqCst),
+        SAVE_PICKER_PICK_REJECT_COUNT.load(Ordering::SeqCst),
+        SAVE_PICKER_RESUBMIT_COUNT.load(Ordering::SeqCst),
+        SAVE_PICKER_CANCEL_COUNT.load(Ordering::SeqCst),
+        SAVE_PICKER_STAGED_ROW_COUNT.load(Ordering::SeqCst)
+    ));
+    body.push_str(&format!(
+        "  \"oracle_save_picker_overlay_armed\": {},\n  \"oracle_save_picker_overlay_open_count\": {},\n  \"oracle_save_picker_overlay_draw_hits\": {},\n  \"oracle_save_picker_overlay_input_hits\": {},\n  \"oracle_save_picker_overlay_poll_count\": {},\n  \"oracle_save_picker_overlay_held_polls\": {},\n  \"oracle_save_picker_kbd_hook_hits\": {},\n  \"oracle_save_picker_overlay_pick_count\": {},\n  \"oracle_save_picker_overlay_pick_reject_count\": {},\n",
+        SAVE_PICKER_OVERLAY_ARMED.load(Ordering::SeqCst),
+        SAVE_PICKER_OVERLAY_OPEN_COUNT.load(Ordering::SeqCst),
+        SAVE_PICKER_OVERLAY_DRAW_HITS.load(Ordering::SeqCst),
+        SAVE_PICKER_OVERLAY_INPUT_HITS.load(Ordering::SeqCst),
+        SAVE_PICKER_OVERLAY_POLL_COUNT.load(Ordering::SeqCst),
+        SAVE_PICKER_OVERLAY_HELD_POLLS.load(Ordering::SeqCst),
+        SAVE_PICKER_KBD_HOOK_HITS.load(Ordering::SeqCst),
+        SAVE_PICKER_OVERLAY_PICK_COUNT.load(Ordering::SeqCst),
+        SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT.load(Ordering::SeqCst)
+    ));
+    body.push_str(&format!(
         "  \"system_quit_continue_confirm_fresh_deser_done\": {},\n  \"system_quit_continue_confirm_fresh_deser_count\": {},\n  \"system_quit_continue_confirm_block_count\": {},\n  \"system_quit_continue_confirm_allow_count\": {},\n",
         SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst),
         SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst),

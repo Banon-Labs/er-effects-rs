@@ -52,6 +52,14 @@ pub(crate) fn arm_product_autoload_from_request(request: &SaveLoader) {
     // visual suppression is also default-on for real runs, so leaving the load driver unarmed creates
     // a release soft lock (hidden native menu with no product-core load tick). Explicit no-autoload,
     // telemetry-only, and native-profile-capture runs remain opt-out/diagnostic paths.
+    //
+    // Product autoload stays ARMED even during a missing-save boot: this arm runs ONCE at DllMain,
+    // and gating it on the (then-pending) missing-save latch would leave it unarmed forever, so the
+    // load never resumes after the pick (observed 2026-07-07: the redirect activated but the boot
+    // never advanced to a world load). The world-LOAD drive is instead gated DYNAMICALLY in
+    // `own_stepper_enabled()` on `missing_save_selection_pending()`, which re-enables the frame the
+    // pick clears the latch. The loading bar advances normally and sticks at the save-check (the
+    // ShowProgressJob CONTINUE-loop) with the overlay picker on top; the pick resumes it.
     if !autoload_disabled() && !save_override_telemetry_only() && !native_profile_capture_enabled() {
         PRODUCT_AUTOLOAD_ARMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     }
@@ -419,6 +427,30 @@ pub(crate) unsafe fn maybe_auto_open_menu(base: usize) {
 /// will catch any regression. One-shot via TITLE_ACCEPT_BYTE_GATE_FIRED, latched only after the gating
 /// passes so a not-yet-settled title does not consume the shot.
 pub(crate) unsafe fn maybe_set_title_accept_byte(base: usize) {
+    // Missing-save picker gate: do NOT arm the zero-input menu-open while the user still has not
+    // chosen a save. This accept byte makes the native registrar build the Continue/Load/NewGame
+    // rows in its own update frame; if that happens BEFORE the pick installs the save redirect, the
+    // game's save-check finds no loadable save and constructs the Continue row through the DISABLED
+    // MenuWindowJob ctor (idle accept predicate 0x1407add70) instead of the native-accept ctor
+    // (0x1407ad810). product_continue then refuses that idle Continue forever ("ignoring diagnostic
+    // Continue candidate ... waiting for semantic native-accept MENU_CONTINUE_ITEM") and the row is
+    // never rebuilt -> soft-lock at the title right after the pick. Deferring the arm until the pick
+    // clears `missing_save_selection_pending()` (redirect active, save-check hold released) makes the
+    // menu build once with the save present, so Continue comes up enabled and fires. This is the same
+    // dynamic missing-save gating the load-drive already documents in `arm_product_autoload_from_request`.
+    // Returns BEFORE the one-shot latch so the shot is preserved for the post-pick frame; the per-frame
+    // product tick re-calls this until the arm succeeds. See bd
+    // missing-save-picker-disabled-continue-soft-lock-2026-07-07.
+    if missing_save_selection_pending() {
+        return;
+    }
+    // NOTE: do NOT gate this on the picked slot appearing in ProfileSummary. That looks correct (the
+    // Continue row builds DISABLED because ProfileSummary is still empty ~1s after the pick), but it
+    // DEADLOCKS: runtime-proven 2026-07-07 that opening the menu here is itself what makes the game
+    // read the picked save into ProfileSummary. Blocking the open until ProfileSummary is populated
+    // means it is never populated -> the menu never opens (44s+ of "waiting to arm", latch=0). The
+    // Continue row must be built ENABLED some other way (rebuild after population, or populate
+    // ProfileSummary before the open), tracked separately -- never by waiting here.
     if TITLE_ACCEPT_BYTE_GATE_FIRED.load(Ordering::SeqCst) {
         return;
     }
