@@ -197,20 +197,24 @@ impl SavePickerModel {
         };
         let mut dirs: Vec<PickerEntry> = Vec::new();
         let mut files: Vec<PickerEntry> = Vec::new();
+        let mut raw = 0usize;
         for entry in read.flatten() {
+            raw += 1;
             let path = entry.path();
             let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
                 continue;
             };
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if file_type.is_dir() {
+            // Detect the kind by STAT'ing the target (`Path::is_dir`/`is_file`), not the dirent
+            // `file_type` (which does not follow symlinks and mis-reports reparse points): under
+            // Wine, symlinked or btrfs-subvolume directories at the `Z:\` (= `/`) root -- `/usr`,
+            // `/bin`, `/home`, ... -- come back as non-directory reparse points, so `file_type`
+            // dropped them and only plain dirs like `/etc`,`/run`,`/var` survived.
+            if path.is_dir() {
                 dirs.push(PickerEntry::Dir {
                     name: name.to_owned(),
                     path: path.clone(),
                 });
-            } else if file_type.is_file()
+            } else if path.is_file()
                 && path
                     .extension()
                     .and_then(|ext| ext.to_str())
@@ -245,8 +249,9 @@ impl SavePickerModel {
         // visible in the debug log.
         let sample: Vec<&str> = dirs.iter().take(6).map(PickerEntry::name).collect();
         append_autoload_debug(format_args!(
-            "save-picker: listed '{}' -> {} dirs, {} files (first dirs: {:?})",
+            "save-picker: listed '{}' -> {} raw entries, {} dirs, {} files (first dirs: {:?})",
             self.current_dir.display(),
+            raw,
             dirs.len(),
             files.len(),
             sample
