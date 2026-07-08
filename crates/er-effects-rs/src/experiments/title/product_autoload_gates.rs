@@ -444,20 +444,13 @@ pub(crate) unsafe fn maybe_set_title_accept_byte(base: usize) {
     if missing_save_selection_pending() {
         return;
     }
-    // AND, after a missing-save pick: the game's ProfileSummary is repopulated from the picked save
-    // only once the released save-check finishes reading it -- ~1s after the pick for a 29MB
-    // container (runtime-measured: ProfileSummary slot still unset at +15833ms, real by +16364ms,
-    // while the accept byte armed at +15400ms -> Continue still built through the DISABLED idle ctor).
-    // Deferring past the pick alone is not enough; wait until the picked slot is actually present in
-    // ProfileSummary so the native registrar builds an ENABLED Continue row. Only applies to the
-    // missing-save flow -- missing_save_picker_selected_slot() is None on a normal configured-save
-    // boot, so the known-good early menu-open there is unchanged. Returns before the one-shot latch so
-    // the shot is preserved for a later frame.
-    if let Some(picked_slot) = missing_save_picker_selected_slot() {
-        if !unsafe { profile_slot_fingerprint(picked_slot).0 } {
-            return;
-        }
-    }
+    // NOTE: do NOT gate this on the picked slot appearing in ProfileSummary. That looks correct (the
+    // Continue row builds DISABLED because ProfileSummary is still empty ~1s after the pick), but it
+    // DEADLOCKS: runtime-proven 2026-07-07 that opening the menu here is itself what makes the game
+    // read the picked save into ProfileSummary. Blocking the open until ProfileSummary is populated
+    // means it is never populated -> the menu never opens (44s+ of "waiting to arm", latch=0). The
+    // Continue row must be built ENABLED some other way (rebuild after population, or populate
+    // ProfileSummary before the open), tracked separately -- never by waiting here.
     if TITLE_ACCEPT_BYTE_GATE_FIRED.load(Ordering::SeqCst) {
         return;
     }
