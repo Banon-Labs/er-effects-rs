@@ -31,6 +31,34 @@ pub(crate) static SAVE_PICKER_OVERLAY_INPUT_HITS: AtomicUsize = AtomicUsize::new
 pub(crate) static SAVE_PICKER_OVERLAY_PICK_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT: AtomicUsize = AtomicUsize::new(0);
 
+/// Overlay stage: 0 = browsing files, 1 = choosing a character (save slot) from the picked file.
+static SAVE_PICKER_STAGE_CHARS: AtomicUsize = AtomicUsize::new(0);
+/// Highlighted row in the character sub-picker.
+static SAVE_PICKER_CHAR_CURSOR: AtomicUsize = AtomicUsize::new(0);
+/// The autoload slot the character sub-picker chose (`usize::MAX` = none yet). The product-core
+/// callsite reads this as the load target when no slot is configured.
+pub(crate) static MISSING_SAVE_PICKER_SELECTED_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// The picked save awaiting a character selection: its path and the active character slots parsed
+/// from its bytes.
+struct PendingSave {
+    path: std::path::PathBuf,
+    slots: Vec<crate::experiments::SaveSlotInfo>,
+}
+static SAVE_PICKER_PENDING_SAVE: Mutex<Option<PendingSave>> = Mutex::new(None);
+
+fn pending_save_lock() -> std::sync::MutexGuard<'static, Option<PendingSave>> {
+    SAVE_PICKER_PENDING_SAVE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The character sub-picker's chosen autoload slot, if one has been picked this session.
+pub(crate) fn missing_save_picker_selected_slot() -> Option<i32> {
+    let v = MISSING_SAVE_PICKER_SELECTED_SLOT.load(Ordering::SeqCst);
+    (v != usize::MAX).then_some(v as i32)
+}
+
 const PROC_ABSENT: usize = usize::MAX;
 
 // Edge-triggered logical actions (one step per press).
@@ -221,6 +249,11 @@ fn save_picker_overlay_disarm(reason: &str) {
     // resolves before the world is reachable), so the overlay owns the shared model slot.
     *crate::experiments::save_picker::active_save_picker_lock() = None;
     SAVE_PICKER_OVERLAY_PREV_ACTIONS.store(0, Ordering::SeqCst);
+    // Reset the character sub-picker stage (the chosen slot in MISSING_SAVE_PICKER_SELECTED_SLOT is
+    // intentionally left set -- the autoload callsite still needs it to load the picked character).
+    SAVE_PICKER_STAGE_CHARS.store(0, Ordering::SeqCst);
+    SAVE_PICKER_CHAR_CURSOR.store(0, Ordering::SeqCst);
+    *pending_save_lock() = None;
     append_autoload_debug(format_args!("save-picker-overlay: disarmed ({reason})"));
 }
 
@@ -242,13 +275,18 @@ pub(crate) fn save_picker_overlay_input_tick() {
     }
     SAVE_PICKER_OVERLAY_INPUT_HITS.fetch_add(1, Ordering::SeqCst);
 
-    // Resolve the activation (if any) under the lock, then act on it OUTSIDE the lock so the
-    // completion path (which re-locks) never deadlocks.
-    enum Act {
-        None,
-        Picked(std::path::PathBuf),
+    if SAVE_PICKER_STAGE_CHARS.load(Ordering::SeqCst) != 0 {
+        save_picker_character_stage_input(pressed);
+    } else {
+        save_picker_file_stage_input(pressed);
     }
-    let act = {
+}
+
+/// File-browser stage input: navigate/drive/page, and on picking a save file, parse its character
+/// slots and switch to the character sub-picker (the redirect + load are deferred until a
+/// character is chosen).
+fn save_picker_file_stage_input(pressed: usize) {
+    let picked = {
         let mut guard = crate::experiments::save_picker::active_save_picker_lock();
         let Some(model) = guard.as_mut() else {
             return;
@@ -280,27 +318,98 @@ pub(crate) fn save_picker_overlay_input_tick() {
         }
         if pressed & PICKER_ACT_SELECT != 0 {
             match model.activate_cursor() {
-                crate::experiments::save_picker::PickerActivation::PickedFile(path) => {
-                    Act::Picked(path)
-                }
-                _ => Act::None,
+                crate::experiments::save_picker::PickerActivation::PickedFile(path) => Some(path),
+                _ => None,
             }
+        } else {
+            None
+        }
+    };
+
+    let Some(path) = picked else {
+        return;
+    };
+    // Parse the picked save's active character slots (from its own bytes -- no dependency on the
+    // game having built its ProfileSummary yet).
+    let slots = std::fs::read(&path)
+        .ok()
+        .map(|bytes| crate::experiments::parse_save_character_slots(&bytes))
+        .unwrap_or_default();
+    if slots.is_empty() {
+        // Not a readable save / no characters -- stay in the file browser.
+        SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "save-picker-overlay: '{}' has no readable character slots; staying in file browser",
+            path.display()
+        ));
+        return;
+    }
+    append_autoload_debug(format_args!(
+        "save-picker-overlay: selected save '{}' -- {} character slots; opening character sub-picker",
+        path.display(),
+        slots.len()
+    ));
+    *pending_save_lock() = Some(PendingSave { path, slots });
+    SAVE_PICKER_CHAR_CURSOR.store(0, Ordering::SeqCst);
+    SAVE_PICKER_STAGE_CHARS.store(1, Ordering::SeqCst);
+}
+
+/// Character sub-picker input: up/down move, back returns to the file browser, select commits the
+/// chosen slot -- record it for the autoload, activate the redirect, and release the save-check
+/// hold.
+fn save_picker_character_stage_input(pressed: usize) {
+    // Resolve the chosen slot + path under the lock, act (redirect/complete) outside it.
+    enum Act {
+        None,
+        Back,
+        Pick(std::path::PathBuf, usize),
+    }
+    let act = {
+        let guard = pending_save_lock();
+        let Some(pending) = guard.as_ref() else {
+            // No pending save -> fall back to the file browser.
+            SAVE_PICKER_STAGE_CHARS.store(0, Ordering::SeqCst);
+            return;
+        };
+        let n = pending.slots.len().max(1);
+        let mut cursor = SAVE_PICKER_CHAR_CURSOR.load(Ordering::SeqCst).min(n - 1);
+        if pressed & PICKER_ACT_UP != 0 {
+            cursor = (cursor + n - 1) % n;
+        }
+        if pressed & PICKER_ACT_DOWN != 0 {
+            cursor = (cursor + 1) % n;
+        }
+        SAVE_PICKER_CHAR_CURSOR.store(cursor, Ordering::SeqCst);
+        if pressed & PICKER_ACT_BACK != 0 {
+            Act::Back
+        } else if pressed & PICKER_ACT_SELECT != 0 {
+            Act::Pick(pending.path.clone(), pending.slots[cursor].slot)
         } else {
             Act::None
         }
     };
-
-    if let Act::Picked(path) = act {
-        if crate::experiments::complete_missing_save_selection_from_picker(&path) {
-            SAVE_PICKER_OVERLAY_PICK_COUNT.fetch_add(1, Ordering::SeqCst);
-            append_autoload_debug(format_args!(
-                "save-picker-overlay: picked '{}' -- redirect active, releasing the save-check hold",
-                path.display()
-            ));
-            save_picker_overlay_disarm("picked");
-        } else {
-            // Invalid container: stay in the picker so the user can choose another file.
-            SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
+    match act {
+        Act::None => {}
+        Act::Back => {
+            *pending_save_lock() = None;
+            SAVE_PICKER_STAGE_CHARS.store(0, Ordering::SeqCst);
+        }
+        Act::Pick(path, slot) => {
+            MISSING_SAVE_PICKER_SELECTED_SLOT.store(slot, Ordering::SeqCst);
+            if crate::experiments::complete_missing_save_selection_from_picker(&path) {
+                SAVE_PICKER_OVERLAY_PICK_COUNT.fetch_add(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "save-picker-overlay: picked save '{}' slot {slot} -- redirect active, releasing the save-check hold to autoload that character",
+                    path.display()
+                ));
+                save_picker_overlay_disarm("picked");
+            } else {
+                // Validation failed at commit -- back to the file browser.
+                MISSING_SAVE_PICKER_SELECTED_SLOT.store(usize::MAX, Ordering::SeqCst);
+                SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT.fetch_add(1, Ordering::SeqCst);
+                *pending_save_lock() = None;
+                SAVE_PICKER_STAGE_CHARS.store(0, Ordering::SeqCst);
+            }
         }
     }
 }
@@ -336,11 +445,6 @@ fn picker_fit_text(text: &str, max_px: usize) -> String {
 /// composited WITH the bar, not in place of it. Reads the live model; render-thread safe (pure
 /// read + CPU raster). Returns false if there is no model.
 pub(crate) fn overlay_save_picker_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
-    let guard = crate::experiments::save_picker::active_save_picker_lock();
-    let Some(model) = guard.as_ref() else {
-        return false;
-    };
-
     let scale = BOOT_VIEW_TEXT_SCALE;
     let line_h = BOOT_VIEW_GLYPH_H * scale;
     let row_step = line_h + line_h / 2; // 1.5 line spacing between rows
@@ -353,6 +457,24 @@ pub(crate) fn overlay_save_picker_onto(buf: &mut [u8], w: usize, h: usize) -> bo
     let panel_bottom = h * 82 / 100;
     let panel_h = panel_bottom.saturating_sub(panel_top);
     boot_fill_rect(buf, w, h, margin_x, panel_top, content_w, panel_h, PICKER_RGB_PANEL);
+
+    // Stage two: choose which character (save slot) in the picked file to load.
+    if SAVE_PICKER_STAGE_CHARS.load(Ordering::SeqCst) != 0 {
+        return overlay_character_stage_onto(
+            buf,
+            w,
+            h,
+            margin_x,
+            content_w,
+            panel_top,
+            panel_bottom,
+        );
+    }
+
+    let guard = crate::experiments::save_picker::active_save_picker_lock();
+    let Some(model) = guard.as_ref() else {
+        return false;
+    };
 
     let mut y = panel_top + line_h;
 
@@ -419,6 +541,99 @@ pub(crate) fn overlay_save_picker_onto(buf: &mut [u8], w: usize, h: usize) -> bo
         margin_x + scale * 4,
         footer_y,
         "UP/DN MOVE  L/R DRIVE (TOP ROW) OR PAGE  ENTER/A OPEN  BKSP/B UP",
+        PICKER_RGB_DIM,
+    );
+    true
+}
+
+/// Draw the character sub-picker (stage two): the picked save's active characters, one per row.
+fn overlay_character_stage_onto(
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+    margin_x: usize,
+    content_w: usize,
+    panel_top: usize,
+    panel_bottom: usize,
+) -> bool {
+    let scale = BOOT_VIEW_TEXT_SCALE;
+    let line_h = BOOT_VIEW_GLYPH_H * scale;
+    let row_step = line_h + line_h / 2;
+    let guard = pending_save_lock();
+    let Some(pending) = guard.as_ref() else {
+        return false;
+    };
+
+    let mut y = panel_top + line_h;
+    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, "SELECT CHARACTER", PICKER_RGB_TITLE);
+    y += line_h + line_h / 2;
+
+    let name = pending
+        .path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("?")
+        .to_ascii_uppercase();
+    let file_line = picker_fit_text(&name, content_w.saturating_sub(scale * 8));
+    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, &file_line, PICKER_RGB_DIM);
+    y += line_h;
+    boot_fill_rect(
+        buf,
+        w,
+        h,
+        margin_x + scale * 4,
+        y,
+        content_w.saturating_sub(scale * 8),
+        scale.max(1),
+        PICKER_RGB_RULE,
+    );
+    y += line_h;
+
+    let cursor = SAVE_PICKER_CHAR_CURSOR
+        .load(Ordering::SeqCst)
+        .min(pending.slots.len().saturating_sub(1));
+    let rows_bottom = panel_bottom.saturating_sub(line_h * 2);
+    for (i, info) in pending.slots.iter().enumerate() {
+        if y + line_h >= rows_bottom {
+            break;
+        }
+        let selected = i == cursor;
+        if selected {
+            boot_fill_rect(
+                buf,
+                w,
+                h,
+                margin_x + scale * 2,
+                y.saturating_sub(scale * 2),
+                content_w.saturating_sub(scale * 4),
+                line_h + scale * 4,
+                PICKER_RGB_SEL_BAR,
+            );
+        }
+        let (color, prefix) = if selected {
+            (PICKER_RGB_SEL_TEXT, "> ")
+        } else {
+            (PICKER_RGB_ROW, "  ")
+        };
+        let label = format!(
+            "{prefix}SLOT {}   {}   LV {}",
+            info.slot,
+            info.name.to_ascii_uppercase(),
+            info.level
+        );
+        let text = picker_fit_text(&label, content_w.saturating_sub(scale * 8));
+        boot_draw_text_rgb(buf, w, h, margin_x + scale * 6, y, &text, color);
+        y += row_step;
+    }
+
+    let footer_y = panel_bottom.saturating_sub(line_h);
+    boot_draw_text_rgb(
+        buf,
+        w,
+        h,
+        margin_x + scale * 4,
+        footer_y,
+        "UP/DN MOVE  ENTER/A LOAD CHARACTER  BKSP/B BACK TO FILES",
         PICKER_RGB_DIM,
     );
     true

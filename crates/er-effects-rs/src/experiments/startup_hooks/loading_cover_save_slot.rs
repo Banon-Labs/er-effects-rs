@@ -679,6 +679,36 @@ unsafe fn profile_slot_has_character(slot: i32) -> bool {
     !utf16_name_empty_like(&name, len)
 }
 
+/// One active character slot parsed straight from a picked save's bytes (no dependency on the game
+/// having built its ProfileSummary yet): the slot index, character name, and level. Feeds the
+/// missing-save picker's character sub-picker.
+#[derive(Clone, Debug)]
+pub(crate) struct SaveSlotInfo {
+    pub(crate) slot: usize,
+    pub(crate) name: String,
+    pub(crate) level: i32,
+}
+
+/// Parse the ACTIVE character slots out of a save container's bytes (BND4 slot walk +
+/// PlayerGameData locate), returning slot index, name, and level for each occupied slot in order.
+/// Empty when the bytes are not a readable save.
+pub(crate) fn parse_save_character_slots(bytes: &[u8]) -> Vec<SaveSlotInfo> {
+    (0..TITLE_PROFILE_SLOT_COUNT)
+        .filter_map(|slot| {
+            let body = er_save_loader::bnd4::slot_body(bytes, slot).ok()?;
+            let pgd = SerializedSaveSlot::new(body).player_game_data()?;
+            let units = pgd.name_units()?;
+            let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
+            let name = String::from_utf16(&units[..end]).ok()?;
+            if name.trim().is_empty() {
+                return None;
+            }
+            let level = pgd.read_i32(SAVE_PGD_LEVEL_OFFSET).unwrap_or(0);
+            Some(SaveSlotInfo { slot, name, level })
+        })
+        .collect()
+}
+
 fn system_quit_save_swap_state() -> &'static Mutex<SystemQuitSaveSwapState> {
     SYSTEM_QUIT_SAVE_SWAP_STATE.get_or_init(|| Mutex::new(SystemQuitSaveSwapState::default()))
 }

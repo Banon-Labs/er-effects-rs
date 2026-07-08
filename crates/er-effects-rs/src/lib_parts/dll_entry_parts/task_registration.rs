@@ -81,7 +81,13 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         {
                             Some(quickload_slot as i32)
                         } else {
-                            state.autoload.slot()
+                            // The missing-save picker cannot set a config slot; instead its
+                            // character sub-picker records the chosen slot here. Configured slots
+                            // still win via `state.autoload.slot()`.
+                            state
+                                .autoload
+                                .slot()
+                                .or_else(missing_save_picker_selected_slot)
                         };
                         if let Some(slot) = slot_result {
                             PRODUCT_CORE_CALLSITE_SLOT_OK_TICKS.fetch_add(1, Ordering::SeqCst);

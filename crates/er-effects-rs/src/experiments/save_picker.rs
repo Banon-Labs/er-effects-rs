@@ -216,6 +216,10 @@ impl SavePickerModel {
             let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
                 continue;
             };
+            // Hide dot-prefixed (hidden) entries -- `.config`, `.snapshots`, `.local`, etc.
+            if name.starts_with('.') {
+                continue;
+            }
             // Detect the kind by STAT'ing the target (`Path::is_dir`/`is_file`), not the dirent
             // `file_type` (which does not follow symlinks and mis-reports reparse points): under
             // Wine, symlinked or btrfs-subvolume directories at the `Z:\` (= `/`) root -- `/usr`,
