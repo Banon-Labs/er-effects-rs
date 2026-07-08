@@ -259,11 +259,21 @@ pub(crate) fn save_picker_overlay_input_tick() {
         if pressed & PICKER_ACT_DOWN != 0 {
             model.move_cursor(true);
         }
+        // Left/right cycle the DRIVE when the highlight is on the top drive-selector row, else
+        // page through the current listing.
         if pressed & PICKER_ACT_LEFT != 0 {
-            model.cycle_page(false);
+            if model.cursor_on_drive_selector() {
+                model.cycle_drive(false);
+            } else {
+                model.cycle_page(false);
+            }
         }
         if pressed & PICKER_ACT_RIGHT != 0 {
-            model.cycle_page(true);
+            if model.cursor_on_drive_selector() {
+                model.cycle_drive(true);
+            } else {
+                model.cycle_page(true);
+            }
         }
         if pressed & PICKER_ACT_BACK != 0 {
             model.go_up();
@@ -350,20 +360,16 @@ pub(crate) fn overlay_save_picker_onto(buf: &mut [u8], w: usize, h: usize) -> bo
     boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, "SELECT SAVE FILE", PICKER_RGB_TITLE);
     y += line_h + line_h / 2;
 
-    // Location line (dimmed, fit to width): the drive-select header or the current directory.
+    // Location line (dimmed, fit to width): the current directory path.
     let loc_line = picker_fit_text(&model.location_label(), content_w.saturating_sub(scale * 8));
     boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, &loc_line, PICKER_RGB_DIM);
     y += line_h;
-    let mode_line = if model.at_drive_list() {
-        "PICK A DRIVE TO BROWSE".to_owned()
-    } else {
-        format!(
-            "SHOWING *.{}   PAGE {}/{}",
-            model.extension().to_ascii_uppercase(),
-            model.page() + 1,
-            model.page_count()
-        )
-    };
+    let mode_line = format!(
+        "SHOWING *.{}   PAGE {}/{}",
+        model.extension().to_ascii_uppercase(),
+        model.page() + 1,
+        model.page_count()
+    );
     boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, &mode_line, PICKER_RGB_DIM);
     y += line_h;
     // Divider rule.
@@ -412,7 +418,7 @@ pub(crate) fn overlay_save_picker_onto(buf: &mut [u8], w: usize, h: usize) -> bo
         h,
         margin_x + scale * 4,
         footer_y,
-        "ARROWS/DPAD MOVE  ENTER/A SELECT  BKSP/B UP  L/R PAGE",
+        "UP/DN MOVE  L/R DRIVE (TOP ROW) OR PAGE  ENTER/A OPEN  BKSP/B UP",
         PICKER_RGB_DIM,
     );
     true
