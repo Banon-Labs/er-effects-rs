@@ -824,6 +824,82 @@ pub(crate) static SCALEFORM_HANDLER_DTORS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SCALEFORM_HANDLER_DOUBLE_FREES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SCALEFORM_HANDLER_LAST_DOUBLE_FREE_OBJ: AtomicUsize = AtomicUsize::new(0);
 
+/// ~MenuWindowJob DOOMED-WINDOW GUARD (er-effects-rs-j74t, return-to-title crash rva 0x7ada87 AND
+/// 0x7adb28). Root of the whack-a-mole: `CS::MenuWindowJob::~MenuWindowJob` (deobf 0x1407ac720) calls
+/// the finalize (deobf 0x1407ada40), whose `if (owningMenuWindow != 0)` block virtual-CALLS the window
+/// (`vfptr[3]`) to fetch an input-event descriptor, indexes the event table by the descriptor's first
+/// i32, and CONSUMES the entry as a refcounted CSScaleformLoadResult. During return-to-title the title
+/// window is doomed: `vfptr[3]` leaves the descriptor index UNINITIALISED (stack garbage, e.g.
+/// 0x7FFF0000/0x51EBA95), so the table pointer is wildly OOB. Patching individual dereferences just
+/// moved the crash (getter deref 0x7ada87 -> second virtual call 0x7adb28 with a nulled vtable), and
+/// the entry is consumed as a GFx object so there is no safe sentinel entry. The only correct fix is to
+/// keep the finalize's whole window block from running. All observed crashes had `menu_id == 0xffff`
+/// (the unmapped state) and reproduce the descriptor index via `vfptr[3]`. At the destructor we
+/// reproduce that exact call: if owningMenuWindow's vtable is not in the game module (freed+reused), or
+/// its `vfptr[3]` yields an out-of-range index (doomed), we null `owningMenuWindow` so the finalize
+/// skips the block entirely (and correctly does NOT unref a dead window). Gated to `menu_id == 0xffff`
+/// so healthy mapped windows are untouched (byte-identical, no extra virtual call). The dtor forwards
+/// rdx/r8/r9 to the finalize untouched, so all four argument registers are forwarded verbatim.
+pub(crate) const MENU_WINDOW_JOB_DTOR_RVA: usize = 0x7ac720;
+pub(crate) const MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET: usize = 0x130;
+/// The window's cached menu id (`field246_0x180`). `0xffff` is the unmapped sentinel and the state
+/// every observed crash was in; the finalize's second getter is itself gated on it.
+pub(crate) const MENU_WINDOW_MENU_ID_OFFSET: usize = 0x180;
+pub(crate) const MENU_WINDOW_MENU_ID_UNMAPPED_SENTINEL: u16 = 0xffff;
+/// `vfptr[3]` slot (the finalize's `call *0x18(vtable)`): the window's get-input-descriptor method.
+pub(crate) const MENU_WINDOW_INPUT_DESC_VTABLE_SLOT: usize = 0x18;
+/// Plausible upper bound on a real menu event index. Real indices are tiny (the CSMenuMan flag array
+/// `field106_0x90` holds 0x47 entries); observed garbage indices were 0x7FFF0000 / ~85M. Anything
+/// `< 0` or `>=` this is unmistakably OOB, so this never rejects a valid index.
+pub(crate) const MENU_WINDOW_EVENT_INDEX_SANE_MAX: i32 = 0x1000;
+/// Scratch out-buffer size for the reproduced `vfptr[3]` call (descriptors are small; oversized).
+pub(crate) const MENU_WINDOW_INPUT_DESC_SCRATCH_LEN: usize = 0x200;
+/// Generous game-module span (>= the ~0x5e0_0000 image) bounding a plausible in-module vtable; heap
+/// vtables sit far below the game base, so this cleanly separates freed-reused from live.
+pub(crate) const GAME_MODULE_VTABLE_SPAN: usize = 0x0800_0000;
+/// The job's push-target `DLFixedVector*` (`field2_0x50`, a pointer at job+0x50 -- verified by the
+/// finalize's `mov rcx,[rbx+0x50]`). `MenuWindowJob::Run` pushes owningMenuWindow into this vector,
+/// and the finalize is supposed to REMOVE it via `FUN_140733e70(field2_0x50, window)` -- but that
+/// call sits AFTER the crashing getter, so on a doomed window the removal never runs and the window
+/// dangles in the title-step's active-window vector that `STEP_MenuJobWait` walks (the SECOND crash,
+/// rva 0x733f80). We perform this removal ourselves in the doomed branch.
+pub(crate) const MENU_WINDOW_JOB_PUSH_TARGET_50_OFFSET: usize = 0x50;
+/// `FUN_140733e70` (deobf/live 0x140733d70): DLFixedVector pointer-remove-and-compact. ABI
+/// `fn(rcx = vector, rdx = window)`; it only searches/removes the pointer and decrements the count at
+/// vector+0x48 -- it NEVER dereferences the window's vtable, so it is safe to call on a doomed window.
+pub(crate) const MENU_WINDOW_LIST_REMOVE_RVA: usize = 0x733d70;
+/// The DLFixedVector count field (`vector+0x48`) + a sane upper bound. We validate the count is
+/// readable and in `(0, MAX]` before calling the native removal so a corrupt push-target pointer
+/// cannot drive the (non-SEH) native search loop off into unmapped memory.
+pub(crate) const MENU_WINDOW_LIST_COUNT_48_OFFSET: usize = 0x48;
+pub(crate) const MENU_WINDOW_LIST_SANE_MAX_COUNT: i32 = 64;
+pub(crate) static MENU_WINDOW_JOB_DTOR_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static MENU_WINDOW_JOB_DTOR_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static MENU_WINDOW_JOB_DTOR_DOOMED_GUARDS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static MENU_WINDOW_JOB_DTOR_LIST_REMOVALS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static MENU_WINDOW_JOB_DTOR_LAST_GUARDED_WINDOW: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static MENU_WINDOW_JOB_DTOR_LAST_GUARDED_INDEX: AtomicUsize = AtomicUsize::new(0);
+
+/// QUIT-TO-DESKTOP CLEAN KILL (user directive 2026-07-08): the native quit saves the character then
+/// tears the world down and rebuilds the title -- slow, and with our flow the rebuilt title's
+/// `CSMenuProfModelRend` looks up the `MenuOffscrRendParam` param table, which the teardown has
+/// unloaded, so the game `DLPanic`s (`MenuOffscrRendParam.cpp:0x23`, `GetParamResCap(..., MenuOffscr-
+/// RendParam, 0) == NULL`). We turn that exact condition into a fast CLEAN exit: hook the offscreen-
+/// render param lookup (inner `LookupMenuOffscrRendParam`, deobf 0x140d3ed90), and when the param
+/// TABLE is absent -- which only happens on a quit teardown (it stays resident through loads, proven
+/// by the successful repeated loads) -- `ExitProcess(0)` instead of the DLPanic. The native quit has
+/// already issued the character save before the rebuild, so this is save-then-kill; the native
+/// confirm dialog is untouched (the teardown only runs after Yes). Grounded by the inner lookup's own
+/// disasm: repo ptr `0x143d81ee8`, `GetParamResCap` `0x140d4cc50`, `MenuOffscrRendParam` type `0x4e`.
+pub(crate) const MENU_OFFSCR_REND_PARAM_LOOKUP_RVA: usize = 0xd3ed90;
+pub(crate) const SOLO_PARAM_REPOSITORY_PTR_RVA: usize = 0x3d81ee8;
+pub(crate) const GET_PARAM_RESCAP_RVA: usize = 0xd4cc50;
+pub(crate) const MENU_OFFSCR_REND_PARAM_TYPE: u32 = 0x4e;
+pub(crate) static MENU_OFFSCR_REND_PARAM_LOOKUP_ORIG: AtomicUsize =
+    AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static MENU_OFFSCR_REND_PARAM_LOOKUP_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static QUIT_TO_DESKTOP_CLEAN_KILLS: AtomicUsize = AtomicUsize::new(0);
+
 // === Game-Options pane VISIBILITY oracle (READ-ONLY, `oracle_optionsetting_pane_*`) ===============
 // Detects the "blank Game Options pane" bug on OptionSetting menu re-entry: the tab strip + footer
 // render but the option-row pane display objects are not VISIBLE (the row list draws black). The

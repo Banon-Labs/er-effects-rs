@@ -702,7 +702,9 @@ pub fn normalize_steam_id_in_place(
     Ok(report)
 }
 
-fn md5_digest(input: &[u8]) -> [u8; 16] {
+/// MD5 of `input` (16-byte digest). Used for BND4 save-entry checksums, and re-exported for the DLL's
+/// self-identifying log header (hashing its own on-disk image so a log names the exact build).
+pub fn md5_digest(input: &[u8]) -> [u8; 16] {
     const S: [u32; 64] = [
         7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
         9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,

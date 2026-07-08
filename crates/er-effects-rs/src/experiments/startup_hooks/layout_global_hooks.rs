@@ -67,6 +67,16 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
         "system-quit-dup: component-index patch disabled; preserving native Quit Game GFx component"
     ));
     install_scaleform_handler_lifecycle_guard();
+    // Return-to-title crash fix (er-effects-rs-j74t): the ~MenuWindowJob finalize runs its whole
+    // owningMenuWindow block on a DOOMED title window during return-to-title, dereferencing wild
+    // memory (crashes rva 0x7ada87 and 0x7adb28). At the destructor we reproduce the finalize's
+    // vfptr[3] call and, if the window is freed/reused or its event index is out of range, null
+    // owningMenuWindow so the finalize skips the block entirely.
+    install_menu_window_job_dtor_guard();
+    // Quit-to-desktop clean kill: on a quit the world teardown unloads the MenuOffscrRendParam param
+    // table and the rebuilt title's model renderer DLPanics on the missing table. Turn that exact
+    // condition into a fast clean ExitProcess(0) (save-then-kill) instead of the crash.
+    install_quit_to_desktop_clean_kill_hook();
     // Telemetry-only successor to the removed 5ae3965 overflow guard (dropping command lists on
     // overflow corrupts the render -- c2794d9): never alters queue behavior, only names which
     // producer's submissions grow per switch so the 0x1aeaf05 overflow can be fixed at its source.
