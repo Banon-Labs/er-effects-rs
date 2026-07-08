@@ -30,6 +30,13 @@ pub(crate) static SAVE_PICKER_OVERLAY_DRAW_HITS: AtomicUsize = AtomicUsize::new(
 pub(crate) static SAVE_PICKER_OVERLAY_INPUT_HITS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SAVE_PICKER_OVERLAY_PICK_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Diagnostics for the "inputs eaten during load" report: total input polls the dedicated thread ran
+/// (proves the thread is alive and at cadence, independent of the ~4 fps Present redraw), and polls
+/// where ANY navigation key/button was down (proves the background thread can actually READ OS input
+/// under Wine/Proton -- if this stays ~0 while the user mashes, a background thread cannot see the
+/// keys and input must move back to a pumped thread).
+pub(crate) static SAVE_PICKER_OVERLAY_POLL_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SAVE_PICKER_OVERLAY_HELD_POLLS: AtomicUsize = AtomicUsize::new(0);
 
 /// Overlay stage: 0 = browsing files, 1 = choosing a character (save slot) from the picked file.
 static SAVE_PICKER_STAGE_CHARS: AtomicUsize = AtomicUsize::new(0);
@@ -309,7 +316,11 @@ pub(crate) fn save_picker_overlay_input_tick() {
         save_picker_overlay_disarm("not-pending");
         return;
     }
+    SAVE_PICKER_OVERLAY_POLL_COUNT.fetch_add(1, Ordering::SeqCst);
     let held = save_picker_sample_actions();
+    if held != 0 {
+        SAVE_PICKER_OVERLAY_HELD_POLLS.fetch_add(1, Ordering::SeqCst);
+    }
     let prev = SAVE_PICKER_OVERLAY_PREV_ACTIONS.swap(held, Ordering::SeqCst);
     let pressed = held & !prev; // rising edges only
     if pressed == 0 {

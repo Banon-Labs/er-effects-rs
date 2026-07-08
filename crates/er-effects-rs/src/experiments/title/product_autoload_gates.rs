@@ -444,6 +444,20 @@ pub(crate) unsafe fn maybe_set_title_accept_byte(base: usize) {
     if missing_save_selection_pending() {
         return;
     }
+    // AND, after a missing-save pick: the game's ProfileSummary is repopulated from the picked save
+    // only once the released save-check finishes reading it -- ~1s after the pick for a 29MB
+    // container (runtime-measured: ProfileSummary slot still unset at +15833ms, real by +16364ms,
+    // while the accept byte armed at +15400ms -> Continue still built through the DISABLED idle ctor).
+    // Deferring past the pick alone is not enough; wait until the picked slot is actually present in
+    // ProfileSummary so the native registrar builds an ENABLED Continue row. Only applies to the
+    // missing-save flow -- missing_save_picker_selected_slot() is None on a normal configured-save
+    // boot, so the known-good early menu-open there is unchanged. Returns before the one-shot latch so
+    // the shot is preserved for a later frame.
+    if let Some(picked_slot) = missing_save_picker_selected_slot() {
+        if !unsafe { profile_slot_fingerprint(picked_slot).0 } {
+            return;
+        }
+    }
     if TITLE_ACCEPT_BYTE_GATE_FIRED.load(Ordering::SeqCst) {
         return;
     }
