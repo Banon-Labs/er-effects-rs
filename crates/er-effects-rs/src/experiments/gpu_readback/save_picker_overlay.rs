@@ -210,57 +210,66 @@ fn resolve_xinput_get_state() -> Option<XInputGetStateFn> {
     None
 }
 
-/// Sample keyboard + gamepad into the logical-action bitmask (which actions are currently held).
-fn save_picker_sample_actions() -> usize {
+/// Sample keyboard + gamepad. Returns `(held_now, pressed_this_poll)`.
+///
+/// Keyboard "pressed" uses the LOW bit of `GetAsyncKeyState` ("pressed since our previous call"), so
+/// a press is caught even when it happened AND was released between two of the slow (~4 fps)
+/// boot-frame polls -- polling only the high bit drops those, which is why deliberate navigation felt
+/// eaten. Gamepad has no such bit, so it edge-detects the button state vs the previous poll.
+///
+/// MUST be called on the game's render thread (the Present hook). `GetAsyncKeyState` does not report
+/// the user's keys from a background thread under Wine/Proton -- measured: a dedicated poll thread ran
+/// 1089 polls yet saw only 5 key-downs while the user mashed, and completed 0 picks.
+fn save_picker_sample() -> (usize, usize) {
     let mut held = 0usize;
+    let mut pressed = 0usize;
     if let Some(gaks) = resolve_get_async_key_state() {
-        // High bit set => key is currently down.
-        let down = |vk: i32| (unsafe { gaks(vk) } as u16 & 0x8000) != 0;
-        if down(VK_UP) {
-            held |= PICKER_ACT_UP;
-        }
-        if down(VK_DOWN) {
-            held |= PICKER_ACT_DOWN;
-        }
-        if down(VK_LEFT) {
-            held |= PICKER_ACT_LEFT;
-        }
-        if down(VK_RIGHT) {
-            held |= PICKER_ACT_RIGHT;
-        }
-        if down(VK_RETURN) {
-            held |= PICKER_ACT_SELECT;
-        }
-        if down(VK_BACK) {
-            held |= PICKER_ACT_BACK;
-        }
+        let mut probe = |vk: i32, act: usize| {
+            let state = unsafe { gaks(vk) } as u16;
+            if state & 0x8000 != 0 {
+                held |= act; // currently down
+            }
+            if state & 0x0001 != 0 {
+                pressed |= act; // pressed since our previous poll
+            }
+        };
+        probe(VK_UP, PICKER_ACT_UP);
+        probe(VK_DOWN, PICKER_ACT_DOWN);
+        probe(VK_LEFT, PICKER_ACT_LEFT);
+        probe(VK_RIGHT, PICKER_ACT_RIGHT);
+        probe(VK_RETURN, PICKER_ACT_SELECT);
+        probe(VK_BACK, PICKER_ACT_BACK);
     }
     if let Some(xinput) = resolve_xinput_get_state() {
         let mut st = XInputStateRaw::default();
         // Only controller 0; ERROR_SUCCESS(0) == connected.
         if unsafe { xinput(0, &mut st) } == 0 {
             let b = st.gamepad.buttons;
+            let mut gamepad = 0usize;
             if b & XINPUT_DPAD_UP != 0 {
-                held |= PICKER_ACT_UP;
+                gamepad |= PICKER_ACT_UP;
             }
             if b & XINPUT_DPAD_DOWN != 0 {
-                held |= PICKER_ACT_DOWN;
+                gamepad |= PICKER_ACT_DOWN;
             }
             if b & XINPUT_DPAD_LEFT != 0 {
-                held |= PICKER_ACT_LEFT;
+                gamepad |= PICKER_ACT_LEFT;
             }
             if b & XINPUT_DPAD_RIGHT != 0 {
-                held |= PICKER_ACT_RIGHT;
+                gamepad |= PICKER_ACT_RIGHT;
             }
             if b & XINPUT_A != 0 {
-                held |= PICKER_ACT_SELECT;
+                gamepad |= PICKER_ACT_SELECT;
             }
             if b & XINPUT_B != 0 {
-                held |= PICKER_ACT_BACK;
+                gamepad |= PICKER_ACT_BACK;
             }
+            held |= gamepad;
+            let prev = SAVE_PICKER_OVERLAY_PREV_ACTIONS.swap(gamepad, Ordering::SeqCst);
+            pressed |= gamepad & !prev; // rising edges only
         }
     }
-    held
+    (held, pressed)
 }
 
 /// Open the picker model for the pending no-save boot if not already armed. Idempotent.
@@ -302,13 +311,15 @@ fn save_picker_overlay_disarm(reason: &str) {
     append_autoload_debug(format_args!("save-picker-overlay: disarmed ({reason})"));
 }
 
-/// One input poll for the startup overlay picker. Reads OS keyboard/gamepad directly (independent
-/// of the game's blocked input) and edge-detects. Driven from the D3D12 Present hook (a per-
-/// presented-frame callback that keeps firing even while the boot streams/loads and the game's task
-/// scheduler starves -- that starvation was the "inputs eaten" symptom). Navigation is applied
-/// here on the render thread (pure Mutex state); the one-shot pick COMPLETION (redirect + MinHook
-/// install) is deferred to [`save_picker_overlay_process_completion`] on the game-task thread.
-/// No-op unless the overlay is active.
+/// One input poll for the startup overlay picker. Reads OS keyboard/gamepad directly (independent of
+/// the game's blocked input) and captures presses. MUST run on the game's render thread -- it is
+/// driven from the D3D12 Present hook, which is the only thread that can read `GetAsyncKeyState`
+/// under Wine/Proton. Present starves to ~4 fps while the boot streams assets, so a press could fall
+/// between two polls; [`save_picker_sample`] uses the GetAsyncKeyState "pressed-since-last-call" bit
+/// so those presses are still caught (that dropping was the "inputs eaten" symptom). Navigation is
+/// applied here (pure Mutex state); the one-shot pick COMPLETION (redirect + MinHook install) is
+/// deferred to [`save_picker_overlay_process_completion`] on the game-task thread. No-op unless the
+/// overlay is active.
 pub(crate) fn save_picker_overlay_input_tick() {
     save_picker_overlay_arm_if_pending();
     if !save_picker_overlay_active() {
@@ -317,12 +328,10 @@ pub(crate) fn save_picker_overlay_input_tick() {
         return;
     }
     SAVE_PICKER_OVERLAY_POLL_COUNT.fetch_add(1, Ordering::SeqCst);
-    let held = save_picker_sample_actions();
+    let (held, pressed) = save_picker_sample();
     if held != 0 {
         SAVE_PICKER_OVERLAY_HELD_POLLS.fetch_add(1, Ordering::SeqCst);
     }
-    let prev = SAVE_PICKER_OVERLAY_PREV_ACTIONS.swap(held, Ordering::SeqCst);
-    let pressed = held & !prev; // rising edges only
     if pressed == 0 {
         return;
     }
@@ -335,75 +344,6 @@ pub(crate) fn save_picker_overlay_input_tick() {
     }
 }
 
-/// One-shot guard so exactly one dedicated input thread is ever live for the startup picker.
-static SAVE_PICKER_INPUT_THREAD_STARTED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-/// Spawn the startup picker's dedicated OS-input polling thread ONCE, while a missing-save pick is
-/// pending. Both the game-task scheduler and the D3D12 Present hook STARVE during boot
-/// loading/streaming -- either driver drops key presses, which is the "my inputs get eaten while the
-/// game loads, I have to wait for it to stop" symptom. An independent `std::thread` is scheduled by
-/// the OS regardless of the frozen game/render loop, so it polls GetAsyncKeyState/XInput at a steady
-/// ~125 Hz cadence and keeps the picker fully responsive throughout the load. Navigation only: the
-/// one-shot pick COMPLETION (redirect + MinHook install) still runs on the game task via
-/// [`save_picker_overlay_process_completion`]; this thread only records the chosen slot + enqueues
-/// the completion request (see `Act::Pick`). The thread exits once the pick clears the missing-save
-/// gate (plus a short drain so the overlay disarms), or after a defensive lifetime cap, then releases
-/// the guard for a possible re-arm. Cheap no-op after spawn / when no pick is pending.
-pub(crate) fn ensure_save_picker_input_thread() {
-    if !missing_save_selection_pending() {
-        return;
-    }
-    if SAVE_PICKER_INPUT_THREAD_STARTED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    let spawned = std::thread::Builder::new()
-        .name("er-save-picker-input".into())
-        .spawn(|| {
-            use windows::Win32::{
-                Foundation::CloseHandle,
-                System::Threading::{CreateEventW, WaitForSingleObject},
-            };
-            // Fixed ~125 Hz poll cadence via a BOUNDED wait on a never-signaled auto-reset event --
-            // the same CreateEventW + WaitForSingleObject primitive the GPU-readback paths use, NOT
-            // thread::sleep (banned by scripts/check-no-timeouts.py, which treats sleeps as
-            // probe-synchronization). OS key state has no push event to react to, so a cadence poll
-            // is inherent; the 8 ms timeout is the tick and the event never fires.
-            const POLL_MS: u32 = 8;
-            // Defensive lifetime cap (~1h at 8 ms) so a never-resolved pick can't spin forever; the
-            // normal exit is the pick clearing the missing-save gate below.
-            const MAX_ITERS: u64 = 450_000;
-            let Ok(tick_event) = (unsafe { CreateEventW(None, false, false, None) }) else {
-                SAVE_PICKER_INPUT_THREAD_STARTED.store(false, Ordering::SeqCst);
-                return;
-            };
-            let mut done_ticks: u32 = 0;
-            let mut iters: u64 = 0;
-            loop {
-                let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
-                if !missing_save_selection_pending() && !save_picker_overlay_active() {
-                    // Pick resolved: tick a few more times so the disarm runs, then exit.
-                    done_ticks += 1;
-                    if done_ticks > 4 {
-                        break;
-                    }
-                }
-                iters += 1;
-                if iters >= MAX_ITERS {
-                    break;
-                }
-                let _ = unsafe { WaitForSingleObject(tick_event, POLL_MS) };
-            }
-            unsafe {
-                let _ = CloseHandle(tick_event);
-            }
-            SAVE_PICKER_INPUT_THREAD_STARTED.store(false, Ordering::SeqCst);
-        });
-    if spawned.is_err() {
-        // Spawn failed (resource exhaustion) -> release the guard so a later frame retries.
-        SAVE_PICKER_INPUT_THREAD_STARTED.store(false, Ordering::SeqCst);
-    }
-}
 
 /// File-browser stage input: navigate/drive/page, and on picking a save file, parse its character
 /// slots and switch to the character sub-picker (the redirect + load are deferred until a

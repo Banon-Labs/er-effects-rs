@@ -116,11 +116,12 @@ unsafe extern "system" fn present_hook(this: *mut c_void, sync: u32, flags: u32)
             if !drew_portrait {
                 let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
             }
-            // Spawn the startup save-picker's dedicated OS-input thread (once). Present ALSO starves
-            // during boot loading, so it can't be the input driver -- the independent thread polls at
-            // a steady cadence regardless of the frozen render loop. Navigation runs on that thread;
-            // the pick completion is still deferred to the game task.
-            let _ = std::panic::catch_unwind(ensure_save_picker_input_thread);
+            // Drive the startup save-picker input HERE, on the render thread. This is the only thread
+            // that can read GetAsyncKeyState under Wine/Proton (a background poll thread sees almost
+            // nothing). Present starves to ~4fps during boot loading, but save_picker_sample() uses
+            // the "pressed-since-last-call" key bit so presses between frames are not dropped.
+            // Navigation only; the pick completion is deferred to the game task.
+            let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
         }
     }
     let orig = PRESENT_ORIG.load(Ordering::SeqCst);
@@ -157,9 +158,9 @@ unsafe extern "system" fn present1_hook(
             if !drew_portrait {
                 let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
             }
-            // Spawn the save-picker's dedicated OS-input thread (see present_hook for why input can
-            // be driven neither by the game task nor by Present).
-            let _ = std::panic::catch_unwind(ensure_save_picker_input_thread);
+            // Render-thread save-picker input (see present_hook: only this thread reads keys under
+            // Wine; the pressed-since-last-call bit covers the slow ~4fps boot Present rate).
+            let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
         }
     }
     let orig = PRESENT1_ORIG.load(Ordering::SeqCst);
