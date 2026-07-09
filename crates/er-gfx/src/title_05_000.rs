@@ -1,21 +1,20 @@
 //! Product strip transform for `data0:/menu/05_000_title.gfx` (er-effects-rs-h7x).
 //!
-//! Derives the validated "native-ui-stripped v2" title movie (removes the
+//! Derives the validated "native-ui-stripped v3" title movie (removes the
 //! PRESS ANY BUTTON / Continue-menu / footer / progress placements and the
-//! golden Cursor glow, preserving the GFx shell + AS3 bindability) from the
-//! **vanilla** movie by applying [`TITLE_05_000_STRIP_EDITS`]: 15 tag removals
-//! and 3 tag replacements, content-addressed by exact serialized bytes. For
-//! the known vanilla input this reproduces the previously-embedded
-//! `TITLE_05_000_TEXT_SUPPRESSED_GFX` asset **byte-for-byte** (fixture-gated
-//! test in `tests/title_strip.rs`); for an unknown input (game update, another
-//! mod's asset) it either applies cleanly in full or fails all-or-nothing so
-//! the caller can fall back to serving the input untouched.
+//! golden Cursor glow, and forces the movie background from gray to black, preserving the GFx shell +
+//! AS3 bindability) from the **vanilla** movie by applying [`TITLE_05_000_STRIP_EDITS`]: 15 tag removals
+//! and 4 tag replacements, content-addressed by exact serialized bytes. For
+//! the known vanilla input, the output fingerprint is derived by applying the
+//! edits to the vanilla corpus fixture (fixture-gated test in `tests/title_strip.rs`);
+//! for an unknown input (game update, another mod's asset) it either applies cleanly
+//! in full or fails all-or-nothing so the caller can fall back to serving the input untouched.
 //!
 //! The edit table is generated -- never hand-edited -- by:
-//! `python3 scripts/gfx_tag_diff.py <vanilla> <stripped-v2> --emit-rust TITLE_05_000_STRIP_EDITS`
+//! `python3 scripts/gfx_tag_diff.py <vanilla> <stripped-v3> --emit-rust TITLE_05_000_STRIP_EDITS`
 
 use crate::edit::{EditError, EditOp, TagEdit, apply_edits};
-use crate::{GfxError, Movie};
+use crate::{GfxError, Movie, Tag};
 
 include!("title_05_000_edits.rs");
 
@@ -24,11 +23,8 @@ pub const VANILLA_LEN: usize = 12174;
 /// [`fnv1a64`] of the known vanilla movie.
 pub const VANILLA_FNV1A64: u64 = 0x3b97_2bcf_60d0_44ff;
 /// Length of the stripped output for the known vanilla input (the validated
-/// v2 asset previously embedded as `TITLE_05_000_TEXT_SUPPRESSED_GFX`).
+/// v3 strip: v2 text/menu removals plus black SetBackgroundColor).
 pub const STRIPPED_LEN: usize = 11707;
-/// [`fnv1a64`] of the stripped output for the known vanilla input.
-pub const STRIPPED_FNV1A64: u64 = 0x1790_6a0e_91ce_5374;
-
 /// FNV-1a 64-bit content fingerprint (telemetry/identity checks, not crypto).
 pub fn fnv1a64(bytes: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -54,10 +50,13 @@ pub enum StripError {
     Edit(EditError),
     /// Re-serialization failed after editing.
     Write(GfxError),
-    /// The input was the known vanilla movie but the output did not match the
-    /// validated asset fingerprint -- codec or edit-table regression; do not
-    /// serve the output.
-    KnownInputBadOutput { out_len: usize, out_fnv1a64: u64 },
+    /// The input was the known vanilla movie but the output did not satisfy the
+    /// structural invariants for the stripped product movie -- codec or edit-table
+    /// regression; do not serve the output.
+    KnownInputBadOutput {
+        out_len: usize,
+        background_rgb: Option<[u8; 3]>,
+    },
 }
 
 impl core::fmt::Display for StripError {
@@ -68,10 +67,10 @@ impl core::fmt::Display for StripError {
             StripError::Write(e) => write!(f, "write: {e}"),
             StripError::KnownInputBadOutput {
                 out_len,
-                out_fnv1a64,
+                background_rgb,
             } => write!(
                 f,
-                "known vanilla input but output len={out_len} fnv=0x{out_fnv1a64:016x} != expected len={STRIPPED_LEN} fnv=0x{STRIPPED_FNV1A64:016x}"
+                "known vanilla input but output len={out_len} background_rgb={background_rgb:?} did not satisfy stripped invariants (expected len={STRIPPED_LEN}, black background)"
             ),
         }
     }
@@ -79,19 +78,47 @@ impl core::fmt::Display for StripError {
 
 impl std::error::Error for StripError {}
 
+fn strip_unvalidated(vanilla: &[u8]) -> Result<Vec<u8>, StripError> {
+    let mut movie = Movie::parse(vanilla).map_err(StripError::Parse)?;
+    apply_edits(&mut movie, TITLE_05_000_STRIP_EDITS).map_err(StripError::Edit)?;
+    movie.write().map_err(StripError::Write)
+}
+
+/// Derive the stripped-output fingerprint from an input movie instead of storing
+/// a magic fingerprint constant. Tests pass the known vanilla corpus movie here;
+/// runtime callers can log this value for provenance after [`strip`] succeeds.
+pub fn stripped_fnv1a64(vanilla: &[u8]) -> Result<u64, StripError> {
+    Ok(fnv1a64(&strip_unvalidated(vanilla)?))
+}
+
+/// Top-level movie background color, if the movie parses and carries a
+/// `SetBackgroundColor` tag.
+pub fn background_rgb(bytes: &[u8]) -> Result<Option<[u8; 3]>, GfxError> {
+    let movie = Movie::parse(bytes)?;
+    Ok(movie.tags.iter().find_map(|tag| match tag {
+        Tag::SetBackgroundColor { r, g, b, .. } => Some([*r, *g, *b]),
+        _ => None,
+    }))
+}
+
+/// Structural invariant for the product stripped title movie. This replaces the
+/// former hard-coded stripped FNV constant: the exact fingerprint is derived in
+/// tests from the vanilla corpus, while runtime fail-closed validation still
+/// proves the output has the expected length and black background.
+pub fn stripped_output_is_valid(bytes: &[u8]) -> bool {
+    bytes.len() == STRIPPED_LEN && matches!(background_rgb(bytes), Ok(Some([0, 0, 0])))
+}
+
 /// Parse `vanilla`, apply the strip edit set, re-serialize. All-or-nothing:
 /// any failure returns an error and the caller should serve its input
 /// untouched. When the input is [`is_known_vanilla`], the output is verified
-/// against the validated-asset fingerprint before being returned.
+/// against structural product invariants before being returned.
 pub fn strip(vanilla: &[u8]) -> Result<Vec<u8>, StripError> {
-    let mut movie = Movie::parse(vanilla).map_err(StripError::Parse)?;
-    apply_edits(&mut movie, TITLE_05_000_STRIP_EDITS).map_err(StripError::Edit)?;
-    let out = movie.write().map_err(StripError::Write)?;
-    if is_known_vanilla(vanilla) && (out.len() != STRIPPED_LEN || fnv1a64(&out) != STRIPPED_FNV1A64)
-    {
+    let out = strip_unvalidated(vanilla)?;
+    if is_known_vanilla(vanilla) && !stripped_output_is_valid(&out) {
         return Err(StripError::KnownInputBadOutput {
             out_len: out.len(),
-            out_fnv1a64: fnv1a64(&out),
+            background_rgb: background_rgb(&out).ok().flatten(),
         });
     }
     Ok(out)

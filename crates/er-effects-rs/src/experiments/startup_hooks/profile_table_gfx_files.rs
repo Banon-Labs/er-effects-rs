@@ -791,9 +791,7 @@ unsafe fn title_05_000_swap_to_stripped(base: usize, file: usize) -> bool {
             match er_gfx::title_05_000::strip(vanilla) {
                 Ok(out) => {
                     TITLE_05_000_RUNTIME_STRIP_OUTPUT_LEN.store(out.len(), Ordering::SeqCst);
-                    let validated = out.len() == er_gfx::title_05_000::STRIPPED_LEN
-                        && er_gfx::title_05_000::fnv1a64(&out)
-                            == er_gfx::title_05_000::STRIPPED_FNV1A64;
+                    let validated = er_gfx::title_05_000::stripped_output_is_valid(&out);
                     TITLE_05_000_RUNTIME_STRIP_OUTPUT_VALIDATED
                         .store(if validated { 1 } else { 2 }, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
@@ -825,6 +823,92 @@ unsafe fn title_05_000_swap_to_stripped(base: usize, file: usize) -> bool {
     // construct-from-embedded path incremented both of these).
     TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS.fetch_add(1, Ordering::SeqCst);
     TITLE_SCALEFORM_05_000_MEMORY_GFX_REPLACEMENTS.fetch_add(1, Ordering::SeqCst);
+    TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE.store(file, Ordering::SeqCst);
+    true
+}
+
+/// Product-default 05_001_title_logo effect suppression. The remaining title-transition flash is
+/// the animated top-level depth-3 title-logo/glare ramp in 05_001, not a background-color seam.
+/// Derive an edited movie from the native MemoryFile's own payload, cache it for the process
+/// lifetime, and swap the native file's data/len/cursor onto the cached buffer. Any failure leaves
+/// the native file untouched.
+unsafe fn title_05_001_swap_to_suppressed(base: usize, file: usize) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if file == 0 || file == null || file == HOOK_ORIGINAL_UNSET {
+        return false;
+    }
+    let fail = |reason: core::fmt::Arguments<'_>| {
+        TITLE_SCALEFORM_MEMORY_GFX_FAILURES.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "title-resource-observer: 05_001 title-logo effect suppress FAIL-CLOSED (serving native vanilla): {reason}"
+        ));
+        false
+    };
+    let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
+    if vtable != base + SCALEFORM_MEMORY_FILE_VTABLE_RVA {
+        return fail(format_args!(
+            "unexpected file vtable 0x{vtable:x} (want MemoryFile 0x{:x})",
+            base + SCALEFORM_MEMORY_FILE_VTABLE_RVA
+        ));
+    }
+    let suppressed = match TITLE_05_001_RUNTIME_SUPPRESSED.get() {
+        Some(cached) => cached,
+        None => {
+            let data =
+                unsafe { safe_read_usize(file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) }.unwrap_or(0);
+            let len =
+                unsafe { safe_read_i32(file + SCALEFORM_MEMORY_FILE_LEN_OFFSET) }.unwrap_or(0);
+            if data == 0 || data == null || !(64..=0x0100_0000).contains(&len) {
+                return fail(format_args!(
+                    "implausible payload data=0x{data:x} len={len}"
+                ));
+            }
+            let len = len as usize;
+            let magic_ok = unsafe { safe_read_u8(data) } == Some(b'G')
+                && unsafe { safe_read_u8(data + 1) } == Some(b'F')
+                && unsafe { safe_read_u8(data + 2) } == Some(b'X')
+                && unsafe { safe_read_u8(data + len - 1) }.is_some();
+            if !magic_ok {
+                return fail(format_args!(
+                    "payload at 0x{data:x} len={len} is unreadable or not GFX-magic"
+                ));
+            }
+            let vanilla = unsafe { core::slice::from_raw_parts(data as *const u8, len) };
+            let known = er_gfx::title_05_001::is_known_vanilla(vanilla);
+            match er_gfx::title_05_001::suppress_title_logo_effect(vanilla) {
+                Ok(out) => {
+                    let validated = er_gfx::title_05_001::title_logo_effect_is_suppressed(&out);
+                    append_autoload_debug(format_args!(
+                        "title-resource-observer: 05_001 title-logo effect suppressed in={len} out={} known_vanilla={known} validated={} out_fnv=0x{:016x}",
+                        out.len(),
+                        validated,
+                        er_gfx::title_05_000::fnv1a64(&out)
+                    ));
+                    if !validated {
+                        return fail(format_args!(
+                            "output still contains animated depth-3 title-logo effect"
+                        ));
+                    }
+                    TITLE_05_001_RUNTIME_SUPPRESSED.get_or_init(|| out)
+                }
+                Err(err) => {
+                    return fail(format_args!("in={len} known_vanilla={known}: {err}"));
+                }
+            }
+        }
+    };
+    unsafe {
+        core::ptr::write(
+            (file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) as *mut usize,
+            suppressed.as_ptr() as usize,
+        );
+        core::ptr::write(
+            (file + SCALEFORM_MEMORY_FILE_LEN_OFFSET) as *mut u32,
+            suppressed.len() as u32,
+        );
+        core::ptr::write((file + SCALEFORM_MEMORY_FILE_CURSOR_OFFSET) as *mut u32, 0);
+    }
+    TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS.fetch_add(1, Ordering::SeqCst);
     TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE.store(file, Ordering::SeqCst);
     true
 }
@@ -1068,6 +1152,11 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
             // failure the untouched native file is returned (vanilla title UI, fail-closed).
             if is_title_05_000 && TITLE_05_000_RUNTIME_STRIP_ARMED.load(Ordering::SeqCst) != 0 {
                 memory_replacement = unsafe { title_05_000_swap_to_stripped(base, native) };
+            }
+            // Product-default 05_001 edit: remove the animated title-logo/glare ramp that peaks
+            // during the offline-title transition. This is separate from the 05_000 menu strip.
+            if is_title_logo {
+                memory_replacement = unsafe { title_05_001_swap_to_suppressed(base, native) };
             }
             // Stats-panel 05_010 edit: same in-place derive-and-swap, same fail-closed shape.
             if is_profile_05_010 && PROFILE_05_010_RUNTIME_EDIT_ARMED.load(Ordering::SeqCst) != 0 {

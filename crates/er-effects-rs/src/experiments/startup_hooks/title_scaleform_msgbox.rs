@@ -60,6 +60,10 @@ static TITLE_SCALEFORM_05_000_MEMORY_GFX: OnceLock<Vec<u8>> = OnceLock::new();
 /// title visit. Lives for the process lifetime so the swapped-in data pointer stays valid for
 /// as long as any native file object references it.
 static TITLE_05_000_RUNTIME_STRIPPED: OnceLock<Vec<u8>> = OnceLock::new();
+/// Runtime-derived 05_001_title_logo movie with the animated title-logo/glare depth-3 ramp
+/// removed. Computed once at first title-logo file-open and held for process lifetime so the
+/// swapped-in data pointer remains valid.
+static TITLE_05_001_RUNTIME_SUPPRESSED: OnceLock<Vec<u8>> = OnceLock::new();
 /// Runtime-derived stats-panel 05_010_profileselect movie: computed once at first ProfileSelect
 /// file-open from the native MemoryFile's vanilla payload, then reused for every later open.
 /// Process-lifetime for the same data-pointer-validity reason as the 05_000 buffer above.
