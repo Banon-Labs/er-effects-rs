@@ -6,7 +6,7 @@ set -euo pipefail
 # me3 PRODUCTION SMOKETEST: launch Elden Ring through me3 (garyttierney's mod loader) with
 # er_effects_rs.dll delivered as an me3 [[natives]] profile entry -- NO LazyLoader involved --
 # and verify our settings stick:
-#   * env settings   (ER_EFFECTS_SAVE_FILE / *_PATH) must propagate me3 -> compat tool -> game
+#   * env settings   (*_PATH) must propagate me3 -> compat tool -> game
 #   * flag files     (er-effects-autoload.txt etc., resolved from the exe dir) must be honored
 #   * the DLL itself must attach + run its game task when loaded by the me3 mod host
 #
@@ -44,12 +44,14 @@ RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-$RUNTIME_TIMEOUT_CAP_SECONDS
 RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-vanilla}"
 DRY_RUN=0
 
-# SAVE-SOURCE STAGING (save-override-no-default-fallback-mandatory-env-2026-06-23): identical to the
-# direct probe. The DLL refuses to assume the default user save dir; stage an isolated COPY of the
-# gold save and point the DLL at it. The canonical repo gold is the default (same as .auto/measure.sh).
+# DEPRECATED SAVE-SOURCE STAGING: this script's historical non-telemetry mode writes an
+# er-effects.toml save_file and stages an isolated gold save. That is no longer release/autoload
+# validation; it is a save-redirect-internals probe only. Normal release validation must use the
+# user/product launcher path: ~/Elden/launch.sh.
 GOLD_SAVE="${ER_EFFECTS_GOLD_SAVE:-$REPO_ROOT/save-files/150-Banon/ER0000.sl2}"
 RUNTIME_TELEMETRY_ONLY="${RUNTIME_TELEMETRY_ONLY:-0}"
 GOLD_SAVE_MIN_BYTES="${GOLD_SAVE_MIN_BYTES:-1048576}"
+ALLOW_DEPRECATED_STAGED_SAVE_PROBE="${ER_EFFECTS_ALLOW_DEPRECATED_STAGED_SAVE_PROBE:-0}"
 APPDATA_ER_ROOT="${APPDATA_ER_ROOT:-$STEAM_COMPAT_DATA_PATH/pfx/drive_c/users/steamuser/AppData/Roaming/EldenRing}"
 
 # LazyLoader neutralization: stage the proxy + ini away for the me3 run, restore on teardown.
@@ -61,11 +63,10 @@ usage() {
   cat <<EOF
 Usage: $0 [--dry-run] [--autoload-request PATH]
 
-Launches Elden Ring through me3 with er_effects_rs.dll as an me3 native (no LazyLoader) and runs
-.auto/runtime_probe.sh as the bounded readiness watcher. Writes a
-settings-stick verdict to ARTIFACT_DIR/me3-smoke-verdict.json. This intentionally has no
-Steam/AppID launch path and no protected launcher path (me3 itself launches eldenring.exe
-directly through the Steam compat tool).
+Deprecated for release/autoload validation: this script's non-telemetry path stages a save_file
+and therefore does NOT match the user/product launcher. Use ~/Elden/launch.sh for release/autoload
+validation. This script remains only for telemetry or explicit save-redirect internals with
+ER_EFFECTS_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1.
 EOF
 }
 
@@ -253,6 +254,9 @@ preflight() {
     fatal "eldenring.exe (or an me3 launcher) is already running; refusing to mix probe ownership"
   fi
   [[ -f "$BUILT_DLL" ]] || fatal "built DLL not found: $BUILT_DLL -- run 'cargo xwin build --release --target x86_64-pc-windows-msvc' first"
+  if [[ "$RUNTIME_TELEMETRY_ONLY" != "1" && "$ALLOW_DEPRECATED_STAGED_SAVE_PROBE" != "1" ]]; then
+    fatal "deprecated staged-save/er-effects.toml save_file smoke is disabled for release/autoload validation; use ~/Elden/launch.sh. Set ER_EFFECTS_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1 only for save-redirect internals."
+  fi
   if [[ "$RUNTIME_TELEMETRY_ONLY" != "1" ]]; then
     [[ -f "$GOLD_SAVE" ]] || fatal "gold save not found: $GOLD_SAVE (set ER_EFFECTS_GOLD_SAVE or RUNTIME_TELEMETRY_ONLY=1)"
     local gold_bytes
@@ -298,9 +302,8 @@ echo "me3-profile: wrote $PROFILE_FILE (native: $SMOKE_DLL)"
 stage_lazyloader_away
 stage_autoload_request
 
-# SAVE SOURCE: identical staging to the direct probe -- isolated writable copy of the gold save,
-# pointed at via ER_EFFECTS_SAVE_FILE; default appdata saves wiped so any loaded character can only
-# come from our redirect.
+# SAVE SOURCE: DEPRECATED staged-save internals path -- isolated writable copy of the gold save,
+# pointed at via er-effects.toml save_file; not a release/autoload validation path.
 if [[ "$RUNTIME_TELEMETRY_ONLY" == "1" ]]; then
   export ER_EFFECTS_TELEMETRY_ONLY=1
   echo "save-source: TELEMETRY-ONLY (no character load; default save dir not read)"

@@ -38,15 +38,19 @@ VISUAL_RESOURCE_MUTATION_ENVS=(
 )
 
 # SAVE-SOURCE SELECTION. Default mode still stages a configured gold save for older probes.
-# RUNTIME_USE_DEFAULT_SAVE=1 deliberately supplies no ER_EFFECTS_SAVE_FILE and lets the DLL use the
-# active Steam user's real/default %APPDATA%/EldenRing/<SteamID>/ER0000.sl2. Pure observe/menu-reach
-# probes set RUNTIME_TELEMETRY_ONLY=1 instead.
+# Default to the same save source as the user/product launcher: no ER_EFFECTS_SAVE_FILE, no staged
+# gold save, and no appdata wipe. The older staged-save/explicit-save_file probe path is deprecated
+# for release/autoload validation because it exercises different DLL internals and has produced
+# softlocks that do not reproduce under ~/Elden/launch.sh. Use the staged path only for save-redirect
+# internals by explicitly setting ER_EFFECTS_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1 and
+# RUNTIME_USE_DEFAULT_SAVE=0.
 DEFAULT_PROBE_GOLD_SAVE="$REPO_ROOT/save-files/150-Banon/ER0000.sl2"
 # Runtime probes must not require the operator/user to supply a save path. Prefer an explicit
 # ER_EFFECTS_GOLD_SAVE when provided; otherwise fall back to the repo-local established probe save.
 GOLD_SAVE="${ER_EFFECTS_GOLD_SAVE:-$DEFAULT_PROBE_GOLD_SAVE}"
 RUNTIME_TELEMETRY_ONLY="${RUNTIME_TELEMETRY_ONLY:-0}"
-RUNTIME_USE_DEFAULT_SAVE="${RUNTIME_USE_DEFAULT_SAVE:-0}"
+RUNTIME_USE_DEFAULT_SAVE="${RUNTIME_USE_DEFAULT_SAVE:-1}"
+ALLOW_DEPRECATED_STAGED_SAVE_PROBE="${ER_EFFECTS_ALLOW_DEPRECATED_STAGED_SAVE_PROBE:-0}"
 # A real fixed-slot ER0000.sl2 BND4 is ~28MB even with empty slots; reject anything implausibly small.
 GOLD_SAVE_MIN_BYTES="${GOLD_SAVE_MIN_BYTES:-1048576}"
 # Root of the per-account default save dirs. Their SAVE FILES are wiped before launch AND on teardown
@@ -100,8 +104,9 @@ Usage: $0 [--dry-run] [--autoload-request PATH]
 
 Launches the approved direct/offline eldenring.exe runtime path (through me3, which
 drives the Steam compat tool directly with er_effects_rs.dll as an me3 native) and runs
-.auto/runtime_probe.sh as the bounded readiness watcher. This intentionally has
-no Steam/AppID launch path and no protected launcher path.
+.auto/runtime_probe.sh as the bounded readiness watcher. By default this uses the same
+real/default APPDATA save source as ~/Elden/launch.sh; the old staged-save/ER_EFFECTS_SAVE_FILE
+probe path is deprecated and requires ER_EFFECTS_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1.
 EOF
 }
 
@@ -185,6 +190,9 @@ preflight() {
   pgrep -x steam >/dev/null 2>&1 || fatal "Steam is not running; start Steam first (the offline eldenring.exe launch needs Steam's environment, else the run is degraded)"
   [[ "$RUNTIME_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || fatal "RUNTIME_TIMEOUT_SECONDS must be an integer"
   (( RUNTIME_TIMEOUT_SECONDS > 0 && RUNTIME_TIMEOUT_SECONDS <= RUNTIME_TIMEOUT_CAP_SECONDS )) || fatal "RUNTIME_TIMEOUT_SECONDS must be 1..$RUNTIME_TIMEOUT_CAP_SECONDS"
+  if [[ "$RUNTIME_TELEMETRY_ONLY" != "1" && "$RUNTIME_USE_DEFAULT_SAVE" != "1" && "$ALLOW_DEPRECATED_STAGED_SAVE_PROBE" != "1" ]]; then
+    fatal "deprecated staged-save/ER_EFFECTS_SAVE_FILE probe path is disabled for release/autoload validation; use ~/Elden/launch.sh or default-save mode (RUNTIME_USE_DEFAULT_SAVE=1). Set ER_EFFECTS_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1 only for save-redirect internals."
+  fi
   me3_preflight || fatal "me3 preflight failed (see guidance above)"
   me3_require_no_lazyloader "$GAME_DIR" || fatal "leftover LazyLoader proxy in $GAME_DIR"
   require_file "$GAME_DIR/eldenring.exe"
