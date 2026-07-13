@@ -307,7 +307,15 @@ unsafe extern "system" fn sound_post_event_core_hook(
     external_sources: *const c_void,
     event_type: u32,
 ) -> u32 {
-    let muted = IN_WORLD_REACHED.load(Ordering::SeqCst) != IN_WORLD_REACHED_YES;
+    let in_world_seen = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
+    let quickload_phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+    let quickload_active = quickload_phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE;
+    let player_present = if in_world_seen {
+        unsafe { PlayerIns::local_player_mut() }.is_ok()
+    } else {
+        false
+    };
+    let muted = !in_world_seen || quickload_active || !player_present;
     let ret = if muted {
         0
     } else {
@@ -345,7 +353,7 @@ unsafe extern "system" fn sound_post_event_core_hook(
     SOUND_POST_EVENT_LAST_CALLER_RVA.store(caller_rva, Ordering::SeqCst);
     if hit <= 64 || hit.is_power_of_two() {
         append_autoload_debug(format_args!(
-            "sound-post-event: hit={hit} muted={muted} event_id={event_id} playing_id={ret} game_obj=0x{game_object:x} flags=0x{flags:x} event_type={event_type} caller_rva=0x{caller_rva:x}"
+            "sound-post-event: hit={hit} muted={muted} event_id={event_id} playing_id={ret} game_obj=0x{game_object:x} flags=0x{flags:x} event_type={event_type} in_world_seen={in_world_seen} player_present={player_present} quickload_phase={quickload_phase} caller_rva=0x{caller_rva:x}"
         ));
     }
     ret
