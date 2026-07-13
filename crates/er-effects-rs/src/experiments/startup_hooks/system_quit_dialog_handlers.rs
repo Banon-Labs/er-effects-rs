@@ -404,18 +404,17 @@ fn system_quit_windows_path_for_log(path: &str) -> String {
     }
 }
 
-/// Validate + ingest a picked save container path (any picker UI feeds this): mode-locked
-/// extension, BND4 parse, SteamID normalization, ProfileSummary slot preview, candidate staging,
-/// and last-picked-directory persistence. Menu-thread only (preview writes + renderer refresh).
+/// Validate + ingest a picked save container path (any picker UI feeds this): runtime-flavor
+/// extension filter, BND4 parse, SteamID normalization, ProfileSummary slot preview, candidate
+/// staging, and last-picked-directory persistence. Menu-thread only (preview writes + renderer
+/// refresh).
 /// The caller is responsible for the pre-pick work (`system_quit_save_swap_restore_profile_summary`
 /// + `system_quit_save_swap_arm_original`), which happens at picker OPEN time.
 unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool {
-    // Mode lock: only the container flavor the active runtime loads. A cross-flavor save (`.sl2`
-    // while Seamless owns the session, `.co2` in vanilla) would preview character slots the
-    // active runtime never actually loads (mixing save flavors across modes corrupts
-    // expectations; user directive 2026-07-06).
+    // Extension policy: vanilla only accepts `.sl2`; Seamless accepts its native `.co2` plus
+    // vanilla `.sl2` sources so a vanilla save can be loaded/imported while ERSC owns the session.
     let seamless = save_picker_seamless_mode_after_settle("system-quit-ingest-picked-save");
-    let picker_ext = if seamless { "co2" } else { "sl2" };
+    let allowed_exts: &[&str] = if seamless { &["co2", "sl2"] } else { &["sl2"] };
     let selected_log = system_quit_windows_path_for_log(selected_path);
     if !Path::new(selected_path).is_file() {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
@@ -425,14 +424,17 @@ unsafe fn system_quit_ingest_picked_save(selected_path: &str) -> bool {
         ));
         return false;
     }
-    let ext_ok = Path::new(selected_path)
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case(picker_ext));
+    let ext_ok = Path::new(selected_path).extension().is_some_and(|ext| {
+        allowed_exts
+            .iter()
+            .any(|allowed| ext.eq_ignore_ascii_case(allowed))
+    });
     if !ext_ok {
         SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
-            "system-quit-load-save-profiles: rejected '{}' -- picker is mode-locked to .{picker_ext} (seamless={seamless})",
-            selected_log
+            "system-quit-load-save-profiles: rejected '{}' -- picker accepts only .{} (seamless={seamless})",
+            selected_log,
+            allowed_exts.join("/.")
         ));
         return false;
     }

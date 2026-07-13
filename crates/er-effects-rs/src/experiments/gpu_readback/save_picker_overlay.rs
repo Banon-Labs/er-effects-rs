@@ -282,20 +282,27 @@ fn save_picker_overlay_arm_if_pending() {
     if !missing_save_selection_pending() || SAVE_PICKER_OVERLAY_ARMED.load(Ordering::SeqCst) != 0 {
         return;
     }
-    let extension = if save_picker_seamless_mode_after_settle("startup-overlay-picker") {
-        "co2"
-    } else {
-        "sl2"
-    };
+    let seamless = save_picker_seamless_mode_after_settle("startup-overlay-picker");
     let start_dir = save_picker_title_start_dir();
-    let model = crate::experiments::save_picker::SavePickerModel::open(&start_dir, extension);
+    let model = if seamless {
+        crate::experiments::save_picker::SavePickerModel::open_with_extensions(
+            &start_dir,
+            &["co2", "sl2"],
+        )
+    } else {
+        crate::experiments::save_picker::SavePickerModel::open(&start_dir, "sl2")
+    };
     *crate::experiments::save_picker::active_save_picker_lock() = Some(model);
     SAVE_PICKER_OVERLAY_ARMED.store(1, Ordering::SeqCst);
     SAVE_PICKER_OVERLAY_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
     SAVE_PICKER_OVERLAY_PREV_ACTIONS.store(0, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "save-picker-overlay: opened DLL-drawn startup picker dir='{}' ext=.{extension}",
-        start_dir.display()
+        "save-picker-overlay: opened DLL-drawn startup picker dir='{}' ext=.{}",
+        start_dir.display(),
+        crate::experiments::save_picker::active_save_picker_lock()
+            .as_ref()
+            .map(|model| model.extension().to_owned())
+            .unwrap_or_else(|| "<unset>".to_owned())
     ));
 }
 

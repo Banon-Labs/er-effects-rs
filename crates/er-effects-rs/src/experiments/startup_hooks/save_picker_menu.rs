@@ -165,15 +165,18 @@ pub(crate) unsafe fn system_quit_open_save_picker_menu(action_obj: usize) -> boo
         ));
         return false;
     };
-    // Mode-locked extension: only the container flavor the active runtime loads (user directive
-    // 2026-07-06). Same mode source as the ingest pipeline (launcher hint, then module latch).
-    let extension = if save_picker_seamless_mode_after_settle("system-quit-picker-open") {
-        "co2"
+    // Runtime-flavor extension filter: vanilla offers `.sl2`; Seamless offers both `.co2` and
+    // `.sl2` so vanilla saves can be loaded/imported while ERSC owns the session. Same mode source
+    // as the ingest pipeline (launcher hint, then module latch).
+    let seamless = save_picker_seamless_mode_after_settle("system-quit-picker-open");
+    let model = if seamless {
+        crate::experiments::save_picker::SavePickerModel::open_with_extensions(
+            &start_dir,
+            &["co2", "sl2"],
+        )
     } else {
-        "sl2"
+        crate::experiments::save_picker::SavePickerModel::open(&start_dir, "sl2")
     };
-    let model =
-        crate::experiments::save_picker::SavePickerModel::open(&start_dir, extension);
     if !unsafe { save_picker_stage_row_records(&model) } {
         return false;
     }
@@ -194,8 +197,12 @@ pub(crate) unsafe fn system_quit_open_save_picker_menu(action_obj: usize) -> boo
     }
     SAVE_PICKER_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "save-picker: opened in-game picker action=0x{action_obj:x} dir='{}' ext=.{extension}",
-        start_dir.display()
+        "save-picker: opened in-game picker action=0x{action_obj:x} dir='{}' ext=.{}",
+        start_dir.display(),
+        crate::experiments::save_picker::active_save_picker_lock()
+            .as_ref()
+            .map(|model| model.extension().to_owned())
+            .unwrap_or_else(|| "<unset>".to_owned())
     ));
     true
 }
