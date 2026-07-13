@@ -112,6 +112,37 @@ fn enumerate_drives() -> Vec<PathBuf> {
         .collect()
 }
 
+/// Save-file rows are only useful if the selected container can offer at least one ACTIVE
+/// character slot. Deleted/inactive slots can leave stale `USER_DATA00N` character bodies behind;
+/// the authoritative occupancy source is `USER_DATA010.active_slot`, so filter by that before the
+/// file ever appears in either custom load menu.
+fn save_file_has_active_slots(path: &Path) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        append_autoload_debug(format_args!(
+            "save-picker: hiding '{}' -- failed to read save while checking active slots",
+            path.display()
+        ));
+        return false;
+    };
+    match er_save_loader::bnd4::has_active_slot(&bytes) {
+        Ok(true) => true,
+        Ok(false) => {
+            append_autoload_debug(format_args!(
+                "save-picker: hiding '{}' -- save has no active character slots",
+                path.display()
+            ));
+            false
+        }
+        Err(err) => {
+            append_autoload_debug(format_args!(
+                "save-picker: hiding '{}' -- active-slot bitmap unreadable ({err:?})",
+                path.display()
+            ));
+            false
+        }
+    }
+}
+
 impl SavePickerModel {
     /// Build a model rooted at `dir`, listing subdirectories plus `*.{extension}` files.
     pub(crate) fn open(dir: &Path, extension: &str) -> Self {
@@ -235,6 +266,7 @@ impl SavePickerModel {
                     .extension()
                     .and_then(|ext| ext.to_str())
                     .is_some_and(|ext| ext.eq_ignore_ascii_case(&self.extension))
+                && save_file_has_active_slots(&path)
             {
                 files.push(PickerEntry::File {
                     name: name.to_owned(),

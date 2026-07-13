@@ -690,11 +690,18 @@ pub(crate) struct SaveSlotInfo {
 }
 
 /// Parse the ACTIVE character slots out of a save container's bytes (BND4 slot walk +
-/// PlayerGameData locate), returning slot index, name, and level for each occupied slot in order.
-/// Empty when the bytes are not a readable save.
+/// `USER_DATA010.active_slot` occupancy + PlayerGameData locate), returning slot index, name, and
+/// level for each occupied slot in order. Empty when the bytes are not a readable save or when the
+/// save contains no active character slots.
 pub(crate) fn parse_save_character_slots(bytes: &[u8]) -> Vec<SaveSlotInfo> {
+    let Ok(active_slots) = er_save_loader::bnd4::active_slots(bytes) else {
+        return Vec::new();
+    };
     (0..TITLE_PROFILE_SLOT_COUNT)
         .filter_map(|slot| {
+            if !active_slots.get(slot).copied().unwrap_or(false) {
+                return None;
+            }
             let body = er_save_loader::bnd4::slot_body(bytes, slot).ok()?;
             let pgd = SerializedSaveSlot::new(body).player_game_data()?;
             let units = pgd.name_units()?;
