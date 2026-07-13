@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 
+bash "$repo_root/scripts/check-no-local-main-commits.sh"
 python3 "$repo_root/scripts/check-no-timeouts.py"
 python3 "$repo_root/scripts/test-no-timeouts.py"
 python3 "$repo_root/scripts/check-launch-guardrails.py" --audit
@@ -24,6 +25,7 @@ python3 "$repo_root/scripts/check-no-lossy-utf8.py"
 python3 "$repo_root/scripts/check-rust-file-sizes.py"
 python3 "$repo_root/scripts/check-markdown-code-blocks.py" "$repo_root/README.md"
 cargo fmt --all --manifest-path "$repo_root/Cargo.toml" -- --check
+shellcheck "$repo_root/scripts/check-no-local-main-commits.sh"
 shellcheck "$repo_root/scripts/stage-autoload-release.sh"
 shellcheck "$repo_root/scripts/run-product-continue-direct-probe.sh"
 shellcheck "$repo_root/scripts/run-me3-product-smoke.sh"
