@@ -10,10 +10,10 @@
 # for auto-discovery, or define explicitly here.
 
 signals:
-  # Example: Simple string signal
-  # current_branch:
-  #   command: "git branch --show-current"
-  #   timeout_seconds: 2
+  # Active branch signal used by policies that must fail closed on branch-specific operations.
+  current_branch:
+    command: "git branch --show-current"
+    timeout_seconds: 2
   
   # Example: Structured JSON signal
   # system_info:
