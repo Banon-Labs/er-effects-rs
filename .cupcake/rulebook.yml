@@ -12,7 +12,7 @@
 signals:
   # Active branch signal used by policies that must fail closed on branch-specific operations.
   current_branch:
-    command: "git branch --show-current"
+    command: 'printf "%s" "${CUPCAKE_CURRENT_BRANCH_OVERRIDE:-$(git branch --show-current)}"'
     timeout_seconds: 2
   
   # Example: Structured JSON signal

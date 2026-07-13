@@ -51,6 +51,13 @@ def run_case(case: PolicyCase) -> None:
         capture_output=True,
         check=False,
         timeout=30,
+        env={
+            **os.environ,
+            # CI checks out detached commits, making `git branch --show-current` empty.
+            # Policy-regression allow-cases should model a normal feature branch; direct
+            # OPA tests cover missing/empty branch signal fail-closed behavior.
+            "CUPCAKE_CURRENT_BRANCH_OVERRIDE": "feature/policy-regression",
+        },
     )
     output = result.stdout + result.stderr
     allowed = result.returncode == 0
