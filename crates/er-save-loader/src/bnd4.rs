@@ -138,16 +138,12 @@ pub fn parse_entries(data: &[u8]) -> Result<Vec<Entry>, Bnd4Error> {
     Ok(entries)
 }
 
-/// Locate a character slot's **plaintext body** (after the leading MD5).
-/// `slot` is 0..=9 (`USER_DATA000`..`USER_DATA009`). The body length is derived
-/// from the entry's own size field (`entry_size - MD5`), not assumed — for a
-/// char slot this is `SLOT_BODY_LEN` (0x280000), but the file is the source of
-/// truth.
-pub fn slot_body(data: &[u8], slot: usize) -> Result<&[u8], Bnd4Error> {
-    let want = format!("USER_DATA{:03}", slot);
+/// Locate an entry's **plaintext body** (after the leading MD5).
+/// The body length is derived from the entry's own size field (`entry_size - MD5`), not assumed.
+pub fn entry_body<'a>(data: &'a [u8], name: &str) -> Result<&'a [u8], Bnd4Error> {
     let entry = parse_entries(data)?
         .into_iter()
-        .find(|e| e.name == want)
+        .find(|e| e.name == name)
         .ok_or(Bnd4Error::SlotNotFound)?;
     let body_len = entry
         .entry_size
@@ -156,6 +152,52 @@ pub fn slot_body(data: &[u8], slot: usize) -> Result<&[u8], Bnd4Error> {
     let start = entry.data_offset + ENTRY_MD5_LEN;
     let end = start.checked_add(body_len).ok_or(Bnd4Error::Truncated)?;
     data.get(start..end).ok_or(Bnd4Error::Truncated)
+}
+
+/// Locate a character slot's **plaintext body** (after the leading MD5).
+/// `slot` is 0..=9 (`USER_DATA000`..`USER_DATA009`). The body length is derived
+/// from the entry's own size field (`entry_size - MD5`), not assumed — for a
+/// char slot this is `SLOT_BODY_LEN` (0x280000), but the file is the source of
+/// truth.
+pub fn slot_body(data: &[u8], slot: usize) -> Result<&[u8], Bnd4Error> {
+    entry_body(data, &format!("USER_DATA{:03}", slot))
+}
+
+const USER_DATA010_NAME: &str = "USER_DATA010";
+/// Offset in `USER_DATA010`'s plaintext body of `CSMenuSystemSaveLoad.length`.
+/// The active-slot bytes immediately follow that variable-length blob.
+const USER_DATA010_MENU_SAVE_LOAD_LEN_OFF: usize = 0x150;
+const USER_DATA010_MENU_SAVE_LOAD_DATA_AFTER_LEN_OFF: usize = 0x154;
+pub const SAVE_SLOT_COUNT: usize = 10;
+
+/// Read the authoritative per-slot occupancy bitmap from `USER_DATA010.active_slot`.
+/// This is the on-disk source the game/editor use to decide which character slots are active;
+/// deleted/inactive slots may still contain stale `USER_DATA00N` character bodies and must not be
+/// treated as loadable just because their body parses.
+pub fn active_slots(data: &[u8]) -> Result<[bool; SAVE_SLOT_COUNT], Bnd4Error> {
+    let body = entry_body(data, USER_DATA010_NAME)?;
+    let len =
+        rd_u32(body, USER_DATA010_MENU_SAVE_LOAD_LEN_OFF).ok_or(Bnd4Error::Truncated)? as usize;
+    let active_off = USER_DATA010_MENU_SAVE_LOAD_DATA_AFTER_LEN_OFF
+        .checked_add(len)
+        .ok_or(Bnd4Error::BadEntry)?;
+    let bytes = body
+        .get(active_off..active_off + SAVE_SLOT_COUNT)
+        .ok_or(Bnd4Error::Truncated)?;
+    let mut slots = [false; SAVE_SLOT_COUNT];
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        match byte {
+            0 => slots[index] = false,
+            1 => slots[index] = true,
+            _ => return Err(Bnd4Error::BadEntry),
+        }
+    }
+    Ok(slots)
+}
+
+/// True when a save container has at least one active character slot.
+pub fn has_active_slot(data: &[u8]) -> Result<bool, Bnd4Error> {
+    active_slots(data).map(|slots| slots.into_iter().any(|active| active))
 }
 
 /// The 16-byte stored MD5 checksum prefix of a slot entry.
@@ -856,6 +898,45 @@ mod tests {
             let md5 = slot_md5(&data, slot).expect("slot md5");
             assert_eq!(md5.len(), ENTRY_MD5_LEN, "slot {slot} md5 len");
         }
+    }
+
+    #[test]
+    fn reads_user_data10_active_slot_bitmap() {
+        let Some(data) = load_150_banon_fixture() else {
+            eprintln!("150-Banon fixture missing; skipping");
+            return;
+        };
+        let slots = active_slots(&data).expect("active slots");
+        assert_eq!(
+            slots,
+            [
+                true, false, false, false, false, false, false, false, false, false
+            ]
+        );
+        assert!(has_active_slot(&data).expect("has active slot"));
+    }
+
+    #[test]
+    fn detects_save_with_no_active_slots() {
+        let Some(mut data) = load_150_banon_fixture() else {
+            eprintln!("150-Banon fixture missing; skipping");
+            return;
+        };
+        let entry = parse_entries(&data)
+            .expect("entries")
+            .into_iter()
+            .find(|entry| entry.name == USER_DATA010_NAME)
+            .expect("USER_DATA010");
+        let body_start = entry.data_offset + ENTRY_MD5_LEN;
+        let menu_len = rd_u32(&data, body_start + USER_DATA010_MENU_SAVE_LOAD_LEN_OFF)
+            .expect("menu save-load len") as usize;
+        let active_off = body_start + USER_DATA010_MENU_SAVE_LOAD_DATA_AFTER_LEN_OFF + menu_len;
+        data[active_off..active_off + SAVE_SLOT_COUNT].fill(0);
+        assert_eq!(
+            active_slots(&data).expect("active slots"),
+            [false; SAVE_SLOT_COUNT]
+        );
+        assert!(!has_active_slot(&data).expect("has active slot"));
     }
 
     #[test]

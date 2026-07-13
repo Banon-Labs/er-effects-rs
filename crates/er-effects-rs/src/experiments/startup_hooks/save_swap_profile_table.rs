@@ -37,9 +37,18 @@ unsafe fn system_quit_apply_foreign_profile_summary_preview(base: usize, bytes: 
     }
     drop(st);
 
+    let Ok(active_slots) = er_save_loader::bnd4::active_slots(bytes) else {
+        append_autoload_debug(format_args!(
+            "system-quit-load-save-profiles: replacement preview refused -- active-slot bitmap unreadable"
+        ));
+        return 0;
+    };
     let mut mask = 0usize;
     let mut preview_stats = vec![Vec::new(); TITLE_PROFILE_SLOT_COUNT];
     for slot in 0..TITLE_PROFILE_SLOT_COUNT {
+        if !active_slots.get(slot).copied().unwrap_or(false) {
+            continue;
+        }
         if let Ok(body) = er_save_loader::bnd4::slot_body(bytes, slot) {
             let slot_body = SerializedSaveSlot::new(body);
             let Some(pgd) = slot_body.player_game_data() else {

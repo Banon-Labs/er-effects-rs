@@ -8,9 +8,9 @@
 //! native staging (ProfileSummary preview records, window submit/close); this module owns what
 //! the rows MEAN.
 //!
-//! Extension filtering is mode-locked via `save_picker_seamless_mode_after_settle` (launcher
-//! hint, then the ERSC module latch: `.co2` for Seamless, else `.sl2`; user directive
-//! 2026-07-06 -- never offer the flavor the active runtime cannot load).
+//! Extension filtering follows the active runtime flavor: vanilla offers `.sl2`; Seamless offers
+//! both `.co2` and vanilla `.sl2` sources so users can import/load a vanilla save while ERSC owns
+//! the session.
 
 use std::{
     path::{Path, PathBuf},
@@ -35,7 +35,7 @@ pub(crate) const PICKER_ROW_NAME_UTF16_MAX: usize = 16;
 pub(crate) enum PickerEntry {
     /// A subdirectory of the current directory.
     Dir { name: String, path: PathBuf },
-    /// A save container matching the active extension filter.
+    /// A save container matching the active extension filter(s).
     File {
         name: String,
         path: PathBuf,
@@ -87,8 +87,10 @@ pub(crate) enum PickerActivation {
 #[derive(Debug, Default)]
 pub(crate) struct SavePickerModel {
     current_dir: PathBuf,
-    /// Extension filter (no dot), e.g. `sl2`; locked at open time.
+    /// Display label for the extension filter(s), e.g. `sl2` or `co2/sl2`; locked at open time.
     extension: String,
+    /// Extension filters (no dot), lower-cased; locked at open time.
+    extensions: Vec<String>,
     /// Dirs first (name order), then files (most recently modified first).
     entries: Vec<PickerEntry>,
     page: usize,
@@ -112,12 +114,60 @@ fn enumerate_drives() -> Vec<PathBuf> {
         .collect()
 }
 
+/// Save-file rows are only useful if the selected container can offer at least one ACTIVE
+/// character slot. Deleted/inactive slots can leave stale `USER_DATA00N` character bodies behind;
+/// the authoritative occupancy source is `USER_DATA010.active_slot`, so filter by that before the
+/// file ever appears in either custom load menu.
+fn save_file_has_active_slots(path: &Path) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        append_autoload_debug(format_args!(
+            "save-picker: hiding '{}' -- failed to read save while checking active slots",
+            path.display()
+        ));
+        return false;
+    };
+    match er_save_loader::bnd4::has_active_slot(&bytes) {
+        Ok(true) => true,
+        Ok(false) => {
+            append_autoload_debug(format_args!(
+                "save-picker: hiding '{}' -- save has no active character slots",
+                path.display()
+            ));
+            false
+        }
+        Err(err) => {
+            append_autoload_debug(format_args!(
+                "save-picker: hiding '{}' -- active-slot bitmap unreadable ({err:?})",
+                path.display()
+            ));
+            false
+        }
+    }
+}
+
 impl SavePickerModel {
     /// Build a model rooted at `dir`, listing subdirectories plus `*.{extension}` files.
     pub(crate) fn open(dir: &Path, extension: &str) -> Self {
+        Self::open_with_extensions(dir, &[extension])
+    }
+
+    /// Build a model rooted at `dir`, listing subdirectories plus files whose extension matches any
+    /// entry in `extensions`.
+    pub(crate) fn open_with_extensions(dir: &Path, extensions: &[&str]) -> Self {
+        let mut filters: Vec<String> = extensions
+            .iter()
+            .map(|ext| ext.trim().trim_start_matches('.').to_ascii_lowercase())
+            .filter(|ext| !ext.is_empty())
+            .collect();
+        filters.sort();
+        filters.dedup();
+        if filters.is_empty() {
+            filters.push("sl2".to_owned());
+        }
         let mut model = SavePickerModel {
             current_dir: dir.to_path_buf(),
-            extension: extension.to_ascii_lowercase(),
+            extension: filters.join("/"),
+            extensions: filters,
             entries: Vec::new(),
             page: 0,
             cursor: 0,
@@ -234,7 +284,12 @@ impl SavePickerModel {
                 && path
                     .extension()
                     .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case(&self.extension))
+                    .is_some_and(|ext| {
+                        self.extensions
+                            .iter()
+                            .any(|allowed| ext.eq_ignore_ascii_case(allowed))
+                    })
+                && save_file_has_active_slots(&path)
             {
                 files.push(PickerEntry::File {
                     name: name.to_owned(),
