@@ -23,6 +23,13 @@ bash_event_object_signal(cmd, branch) := {
 	"signals": {"current_branch": {"output": branch, "exit_code": 0}},
 }
 
+bash_event_no_branch_signal(cmd) := {
+	"hook_event_name": "PreToolUse",
+	"tool_name": "Bash",
+	"tool_input": {"command": cmd, "timeout": 30000},
+	"signals": {},
+}
+
 rule_ids(denials) := {d.rule_id | some d in denials}
 
 test_deny_git_commit_on_main_string_signal if {
@@ -37,6 +44,16 @@ test_deny_git_commit_on_main_object_signal if {
 
 test_deny_git_add_then_commit_on_main if {
 	denials := guard.deny with input as bash_event("git add . && git commit -m bad", "main")
+	"ER-EFFECTS-BLOCK-MAIN-COMMIT" in rule_ids(denials)
+}
+
+test_deny_git_commit_when_branch_signal_missing if {
+	denials := guard.deny with input as bash_event_no_branch_signal("git commit -m 'bad'")
+	"ER-EFFECTS-BLOCK-MAIN-COMMIT" in rule_ids(denials)
+}
+
+test_deny_git_commit_when_branch_signal_empty if {
+	denials := guard.deny with input as bash_event("git commit -m 'bad'", "\n")
 	"ER-EFFECTS-BLOCK-MAIN-COMMIT" in rule_ids(denials)
 }
 
