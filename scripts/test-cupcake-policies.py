@@ -39,6 +39,7 @@ def run_case(case: PolicyCase) -> None:
         "hook_event_name": "PreToolUse",
         "tool_name": case.tool_name,
         "tool_input": tool_input,
+        "signals": {"current_branch": "feature/policy-regression\n"},
     }
     if case.extra_event:
         event.update(case.extra_event)
