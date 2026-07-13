@@ -72,7 +72,8 @@ pub(crate) unsafe extern "system" fn title_gfx_value_set_visible_hook(
         } else {
             0
         };
-    let force_title_fadein_visible = (1..=4).contains(&title_fadein_visible_ordinal);
+    let force_title_fadein_visible =
+        title_fadein_visible_ordinal == TITLE_05_000_FADEIN_FLASH_VISIBLE_ORDINAL;
     let forced = (single_target != null && single_target != 0 && value == single_target)
         || in_text_hide_set
         || force_title_fadein_visible;
@@ -131,7 +132,7 @@ pub(crate) fn install_title_gfx_value_set_visible_hook() {
                     std::mem::forget(hook);
                     TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "title-cover-part-a: hooked GFx visibility setter 0x{addr:x}; forcing first 4 title FadeIn visible calls at rva 0x{TITLE_GFX_VISIBLE_TITLE_FADEIN_CALLER_RVA:x} false"
+                        "title-cover-part-a: hooked GFx visibility setter 0x{addr:x}; forcing 05_000_Title FadeIn flash ordinal {TITLE_05_000_FADEIN_FLASH_VISIBLE_ORDINAL} at rva 0x{TITLE_GFX_VISIBLE_TITLE_FADEIN_CALLER_RVA:x} false"
                     ));
                 }
                 status => append_autoload_debug(format_args!(

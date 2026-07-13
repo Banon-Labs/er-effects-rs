@@ -350,6 +350,10 @@ pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALLER_RVA: usize = 
 /// Ordered log proof: `user-visible-gfx-visible-logonly-current-branch-20260713-140820` first
 /// title-window visible calls were `value=0x10f6a0/0x10f350 caller_rva=0x744e02`.
 pub(crate) const TITLE_GFX_VISIBLE_TITLE_FADEIN_CALLER_RVA: usize = 0x744e02;
+/// Within the title FadeIn GFx SetVisible callsite, this observed visible-call ordinal produces
+/// the user-visible flash/glare during the autoload transition. Keep the name behavioral: the
+/// underlying Scaleform object identity is still unknown.
+pub(crate) const TITLE_05_000_FADEIN_FLASH_VISIBLE_ORDINAL: usize = 2;
 pub(crate) const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
 /// OptionSetting tab-select VISIBILITY pass `FUN_14093b850` (deobf 0x93b760):
 /// `fn(CompositeOptionSettingDialog* composite, int tabIndex, u8* r8, u8* r9)`. It sets the current
