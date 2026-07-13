@@ -242,6 +242,7 @@ pub(crate) const TITLE_GFX_VALUE_SET_SCALE_RVA: usize = 0xd84090;
 pub(crate) static TITLE_GFX_VALUE_SET_VISIBLE_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static TITLE_GFX_VISIBLE_TITLE_FADEIN_SEEN: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_PRESS_START_GFX_VALUE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// Small fixed set of title text CSScaleformValue pointers that must remain hidden while the

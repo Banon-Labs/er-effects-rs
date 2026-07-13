@@ -65,9 +65,18 @@ pub(crate) unsafe extern "system" fn title_gfx_value_set_visible_hook(
         let target = slot.load(Ordering::SeqCst);
         target != null && target != 0 && value == target
     });
-    let forced_visible = if (single_target != null && single_target != 0 && value == single_target)
+    let caller_rva = trace_first_game_caller_rva();
+    let title_fadein_visible_ordinal =
+        if caller_rva == TITLE_GFX_VISIBLE_TITLE_FADEIN_CALLER_RVA && visible != 0 {
+            TITLE_GFX_VISIBLE_TITLE_FADEIN_SEEN.fetch_add(1, Ordering::SeqCst) + 1
+        } else {
+            0
+        };
+    let force_title_fadein_visible = (1..=4).contains(&title_fadein_visible_ordinal);
+    let forced = (single_target != null && single_target != 0 && value == single_target)
         || in_text_hide_set
-    {
+        || force_title_fadein_visible;
+    let forced_visible = if forced {
         TITLE_PRESS_START_GFX_FORCE_FALSE_CALLS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
         TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_VALUE.store(value, Ordering::SeqCst);
         TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_REQUESTED.store(visible as usize, Ordering::SeqCst);
@@ -75,6 +84,11 @@ pub(crate) unsafe extern "system" fn title_gfx_value_set_visible_hook(
     } else {
         visible
     };
+    if title_fadein_visible_ordinal != 0 && title_fadein_visible_ordinal <= 5 {
+        append_autoload_debug(format_args!(
+            "gfx-visible-log: value=0x{value:x} requested_visible={visible} forced_visible={forced_visible} forced={forced} forced_title_fadein={force_title_fadein_visible} title_fadein_ordinal={title_fadein_visible_ordinal} caller_rva=0x{caller_rva:x}"
+        ));
+    }
     let f: unsafe extern "system" fn(usize, u8) -> usize = unsafe { std::mem::transmute(orig) };
     unsafe { f(value, forced_visible) }
 }
@@ -117,7 +131,7 @@ pub(crate) fn install_title_gfx_value_set_visible_hook() {
                     std::mem::forget(hook);
                     TITLE_GFX_VALUE_SET_VISIBLE_INSTALLED.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "title-cover-part-a: hooked GFx visibility setter 0x{addr:x}; only PressStart value will be forced hidden"
+                        "title-cover-part-a: hooked GFx visibility setter 0x{addr:x}; forcing first 4 title FadeIn visible calls at rva 0x{TITLE_GFX_VISIBLE_TITLE_FADEIN_CALLER_RVA:x} false"
                     ));
                 }
                 status => append_autoload_debug(format_args!(
