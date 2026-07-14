@@ -546,7 +546,7 @@ pub(crate) unsafe fn menu_input_probe(owner: usize, base: usize) {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     INPUT_PROBE_ACTIVE.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
     let inputmgr =
-        unsafe { safe_read_usize(base + SELECTBOT_INPUT_MANAGER_GLOBAL_RVA) }.unwrap_or(NULL);
+        Some(cs_menu_man_ptr_or_null()).unwrap_or(NULL);
     let f = INPUT_PROBE_FRAME.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
     let item = MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst);
     let leaf_ticks = MENU_D180_LEAF_TICKED.load(Ordering::SeqCst);

@@ -178,7 +178,7 @@ pub(crate) unsafe fn selectbot_probe_once(module_base: usize, tick: u64) {
     let registry = unsafe { *((module_base + SELECTBOT_REGISTRY_GLOBAL_RVA) as *const usize) };
     let load_gate = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
     let input_manager =
-        unsafe { *((module_base + SELECTBOT_INPUT_MANAGER_GLOBAL_RVA) as *const usize) };
+        cs_menu_man_ptr_or_null();
     let pump_ran = if input_manager != TITLE_OWNER_SCAN_START_ADDRESS {
         unsafe { *((input_manager + SELECTBOT_PUMP_RAN_FLAG_OFFSET) as *const u8) }
     } else {
@@ -263,7 +263,7 @@ pub(crate) unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u
                 unsafe { *((game_man + FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET) as *const i32) };
             let latch = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
             let b72 = unsafe { *((game_man + GAME_MAN_ARM_FLAG_B72_OFFSET) as *const u8) };
-            let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
+            let csfeman = cs_fe_man_ptr_or_null();
             append_autoload_debug(format_args!(
                 "native_autoload: observe slot={slot_now} b80={load_in_progress} load14={load14} latch={latch} b72={b72} csfeman=0x{csfeman:x} tick={tick}"
             ));
@@ -288,7 +288,7 @@ pub(crate) unsafe fn native_autoload_once(module_base: usize, slot: i32, tick: u
         *((game_man + GAME_MAN_ARM_FLAG_B72_OFFSET) as *mut u8) = TITLE_PROCEED_GATE_SET_VALUE;
     }
     NATIVE_AUTOLOAD_ARMED.store(true, Ordering::SeqCst);
-    let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
+    let csfeman = cs_fe_man_ptr_or_null();
     append_autoload_debug(format_args!(
         "native_autoload: armed slot={slot_after} b72=1 latch_left={latch_before} b80={load_in_progress} csfeman=0x{csfeman:x} tick={tick}"
     ));
@@ -523,8 +523,8 @@ pub(crate) unsafe fn maybe_set_title_accept_byte(base: usize) {
 /// raises at menu-open. Each handler is guarded by `if (IsInOnlineMode()) { if
 /// (IsServerConnectionEnabled() && ...) { build popup } }`, which reduces to two `GameMan` bytes:
 /// `isInOnlineMode = [GameMan+0xBC8]`, `serverConnectionEnabled = [GameMan+0xBC9]`
-/// (`GameMan = *(base+GAME_SAVE_SLOT_SINGLETON_RVA)`; getter `0x14067a030` is `mov rax,[0x143d69918];
-/// movzx eax,[rax+0xBC8]; ret` -- VERIFIED by deobf disasm). NOTE the existing online-disable patches
+/// (`GameMan::IsOnlineMode` reads the GameMan singleton and `+0xBC8` -- VERIFIED by deobf disasm).
+/// NOTE the existing online-disable patches
 /// that getter's RETURN value, but the handlers consult the BYTES (directly / via getters our patch
 /// does not cover), so the patch alone does not gate them. Forcing both bytes to 0 each title frame
 /// short-circuits the whole connection-loss family at the source (the guard fails -> no popup is ever
@@ -535,7 +535,7 @@ pub(crate) unsafe fn force_offline_connection_bytes(base: usize) {
     const IS_IN_ONLINE_MODE_BC8_OFFSET: usize = 0xBC8;
     const SERVER_CONNECTION_ENABLED_BC9_OFFSET: usize = 0xBC9;
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let game_man = unsafe { safe_read_usize(base + GAME_SAVE_SLOT_SINGLETON_RVA) }.unwrap_or(null);
+    let game_man = Some(game_man_ptr_or_null()).unwrap_or(null);
     if game_man == null {
         return;
     }
@@ -584,7 +584,7 @@ pub(crate) unsafe fn maybe_fire_tfc_continue(base: usize) {
         return;
     }
     // Require "the rest of GameMan is set up": the GetSaveSlot singleton (*(base+0x3d69918)) non-null.
-    let gm_singleton = unsafe { safe_read_usize(base + GAME_SAVE_SLOT_SINGLETON_RVA) }.unwrap_or(0);
+    let gm_singleton = Some(game_man_ptr_or_null()).unwrap_or(0);
     if gm_singleton == null || gm_singleton == 0 {
         return;
     }
@@ -746,7 +746,6 @@ pub(crate) unsafe fn maybe_fire_tfc_continue(base: usize) {
     // the title menu -- unlike currentTopMenuJob+0xB0 which a run showed is EMPTY/unused by the title).
     // owner+0x130 is a MenuJob* slot (PushBackJob AV'd there because it is NOT a FixOrderJobSequence;
     // Assign -- a slot replace -- is the right primitive). bd currenttopjob-B0-empty-not-drained.
-    let _ = GLOBAL_CSMENUMAN_RVA;
     let _ = CSMENUMAN_POPUP_80_OFFSET;
     let _ = CSPOPUP_TOP_JOB_B0_OFFSET;
     let dest = owner + TITLE_OWNER_MENU_LIST_130_OFFSET;

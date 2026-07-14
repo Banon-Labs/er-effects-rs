@@ -536,10 +536,7 @@ unsafe fn own_load_install_job_fire(
 /// fault-tolerant read failure. Pure reads.
 pub(crate) unsafe fn resolve_menu_system_save_load(base: usize) -> Option<usize> {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let gdm = unsafe { safe_read_usize(base + GAME_DATA_MAN_GLOBAL_RVA) }
-        .filter(|&v| v != null && v != 0)?;
-    unsafe { safe_read_usize(gdm + GAME_DATA_MAN_MENU_SAVELOAD_60_OFFSET) }
-        .filter(|&v| v != null && v != 0)
+    Some(game_data_man_menu_system_save_load_or_null()).filter(|&v| v != null && v != 0)
 }
 
 /// The "engine filled enough to drive our own load" gate -- distinct from "GameMan instance pointer

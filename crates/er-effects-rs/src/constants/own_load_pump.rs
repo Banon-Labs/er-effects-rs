@@ -29,11 +29,8 @@ pub(crate) const MENUJOB_STATE_FAILED: i32 = 3;
 /// f32 frame delta at +8 (a zeroed buffer => delta 0.0 is valid; the deser self-builds regardless).
 pub(crate) const FD4_TIME_SIZE: usize = 0x10;
 pub(crate) const FD4_TIME_DELTA_8_OFFSET: usize = 0x8;
-/// GameDataMan singleton global (.data abs `0x143d5df38`, == `CONTINUE_MANAGER_GLOBAL_RVA` deref base).
-/// `GetMenuSystemSaveLoad() = GLOBAL_GameDataMan->menuSystemSaveLoad`, i.e. `mss = *(*(base+RVA)+0x60)`.
-pub(crate) const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d5df38;
-/// `GameDataMan->menuSystemSaveLoad` field offset (`mss = *(GameDataMan + 0x60)`).
-pub(crate) const GAME_DATA_MAN_MENU_SAVELOAD_60_OFFSET: usize = 0x60;
+/// `GetMenuSystemSaveLoad() = GameDataMan->menuSystemSaveLoad`; use the typed
+/// fromsoftware-rs `GameDataMan` field instead of a local global RVA/offset pair.
 /// LoadGame build factory REAL ctx args (golden Continue trace): `ctx_parent = mss + 0x50`,
 /// `owner_ctx = *(mss + 0xa38)` (CS::TitleFlowContext). Non-null real ctx; the prior ctx=0 build AV'd
 /// when the outer profile-selection sub-job dereffed the captured null.
@@ -104,12 +101,15 @@ pub(crate) const MENU_DRAIN_WRAPPER_RVA: usize = 0x7a90f0;
 /// the dialog's `+0x8` slot (which is NOT a MenuJob and AV'd the queue-drain wrapper). Grounded by
 /// prologue on eldenring-deobf.bin (the `vtable[2]` call site `0x1407a968b call *0x10(rax)`).
 pub(crate) const EXECUTE_MENU_JOB_RVA: usize = 0x7a9600;
-/// CS::MenuManImp singleton global (`*(base+0x3d6b7b0)` = CSMenuManImp*). Verified: HasTopMenuJob
-/// 0x14080d960 does `mov rax,[0x143d6b7b0]; mov rcx,0x80(rax)` (popupMenu) then reads +0xB0. (Same
-/// singleton whose +0x90 is the menu input bitmap.) bd menu-job-install-mechanism-2026-06-23.
-pub(crate) const GLOBAL_CSMENUMAN_RVA: usize = 0x3d6b7b0;
-/// CSMenuManImp -> menuData* at +0x8. Return-title final functor writes `menuData+0x5d = 1`.
-pub(crate) const CSMENUMAN_MENU_DATA_08_OFFSET: usize = 0x8;
+/// CS::MenuManImp singleton. Verified: HasTopMenuJob 0x14080d960 reads this object, then
+/// `popupMenu` and `currentTopMenuJob`. bd menu-job-install-mechanism-2026-06-23.
+pub(crate) fn cs_menu_man_ptr_or_null() -> usize {
+    CSMenuManImp::instance_ptr().map_or(NULL_MODULE_BASE, |ptr| ptr as usize)
+}
+/// CSMenuManImp -> menuData*. Return-title final functor writes `menuData+0x5d = 1`.
+pub(crate) fn cs_menu_man_menu_data_or_null() -> usize {
+    unsafe { CSMenuManImp::instance() }.map_or(NULL_MODULE_BASE, |menu_man| menu_man.menu_data)
+}
 /// CSMenuMan menuData return-title request flag written by final functor `FUN_1407a3990`.
 pub(crate) const CSMENUMAN_MENU_DATA_RETURN_TITLE_FLAG_5D_OFFSET: usize = 0x5d;
 /// Companion global flag written by the same return-title final functor (`DAT_143d6c5e8 = 1`).
@@ -141,10 +141,8 @@ pub(crate) const DLFIXEDVECTOR_COUNT_48_OFFSET: usize = 0x48;
 /// writes the slot here (the builder `0x1409ac8b0` reads it at `0x1409ac9d2` as the factory `r8`).
 /// Replicate that write so the direct trigger loads the intended slot.
 pub(crate) const MSS_SAVE_SLOT_1200_OFFSET: usize = 0x1200;
-/// GameMan/GameDataMan singleton global read by `GetSaveSlot` (`*(0x143d69918)`, slot at `+0xac0`):
-/// the "rest of GameMan is set up" readiness signal the user observed after press-any-button. The
-/// direct continue trigger only fires once this is non-null. RVA = abs - base.
-pub(crate) const GAME_SAVE_SLOT_SINGLETON_RVA: usize = 0x3d69918;
+/// GameMan singleton readiness signal: the "rest of GameMan is set up" signal the user observed
+/// after press-any-button. The direct continue trigger only fires once this is non-null.
 /// Plausible-pointer bounds for validating `owner_ctx = *(mss+0xa38)`: at `title_boot_ready` the
 /// TitleFlowContext is often uninitialized (reads as 0x8080808080808080 -- non-null garbage), so a
 /// `!= 0` check is insufficient. A real wine-heap pointer sits roughly in `0x1_0000 .. 0x8000_0000_0000`

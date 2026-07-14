@@ -348,15 +348,16 @@ pub(crate) fn system_quit_save_swap_recommit_after_return_title_save() {
     }
 }
 
-/// Patch the loaded slot's profile offscreen RT size BEFORE any post-Continue profile renderer is
+/// Patch the target slot's profile offscreen RT size BEFORE any post-Continue profile renderer is
 /// constructed. The constructor snapshots this table; patching after `PROFILE_TABLE_BUILDER_RVA` runs is
-/// too late and produces the 256x256 loading-screen portrait (Bug A). Returns true only when the loaded
-/// slot is known and its row is confirmed at the configured target size.
+/// too late and produces the 256x256 loading-screen portrait (Bug A). During a System-Quit character
+/// switch the selected target slot is known before GameMan's loaded slot flips, so key this off the
+/// same target-slot oracle as the portrait build/capture path rather than the old/current loaded slot.
 unsafe fn patch_profile_offscreen_size_for_loaded_slot(base: usize) -> bool {
     if !portrait_real_pixels_enabled() {
         return true;
     }
-    let Some(target) = portrait_loaded_slot_confirmed() else {
+    let Some(target) = portrait_target_slot_confirmed() else {
         return false;
     };
     if !(0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&target) {
@@ -441,7 +442,7 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     if !valid(gdm) {
         return;
     }
-    let summary = unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(0);
+    let summary = game_data_man_profile_summary_or_null();
     if !valid(summary) {
         return;
     }
@@ -494,17 +495,21 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
     // renderer's +0x754 is still 0, mark + refresh it immediately (off-cadence) and open the feed window to
     // drive the async build to completion. Idempotent -- once +0x754 latches to 1 this no-ops, so no churn.
     // Only marks REAL slots (post-read), identical to the cadence loop's gate, so it can't pre-empt the read.
-    // ONLY THE LOADED SLOT (2026-06-30, user: a DIFFERENT character showed on the loading screen). The
+    // ONLY THE TARGET SLOT (2026-06-30, user: a DIFFERENT character showed on the loading screen). The
     // save holds multiple characters (all 10 slots build models), and the slot-0 readback grabbed a
-    // neighbouring slot's identical-size 1024 RT -> wrong face. Build + mark ONLY the autoload target slot
-    // so the loaded character (Banon, slot 0) is the ONLY portrait model that exists -> no wrong-slot grab.
-    // CORRELATION FIX (er-effects-rs-j3r): render the slot the game ACTUALLY loaded (ac0), via the
-    // shared `portrait_loaded_slot*` source used by every portrait site (build/capture/spare).
-    // CONFIRMED-ONLY (run anim-bind5, 2026-07-03): before ac0/stepper name the slot, do NOTHING --
-    // the old fallback-to-0 kicked a foreign slot-0 build ~340ms early; storm-free that model
-    // persisted and the single-model stability gate starved the drive/publish/anim pipeline for the
-    // whole load. The lever loops below are no-ops with no model built, so skipping the tick is safe.
-    let Some(target_slot) = portrait_loaded_slot_confirmed() else {
+    // neighbouring slot's identical-size 1024 RT -> wrong face. Build + mark ONLY the selected/autoload
+    // target slot so it is the ONLY portrait model that exists -> no wrong-slot grab.
+    // CORRELATION FIX (er-effects-rs-j3r): on a System-Quit character switch, the selected slot is known
+    // at ProfileSelect confirm before GameMan.save_slot (ac0) flips. Using only the loaded-slot source
+    // keeps building/baking the OLD character during the transition, then the new selected slot first
+    // appears as a black 256x256 loading-owned renderer. Use the confirmed target (selected slot if any,
+    // else loaded slot) for build/capture/spare so the next character has a real portrait ready before
+    // Continue hands off.
+    // CONFIRMED-ONLY (run anim-bind5, 2026-07-03): before a selected slot or ac0/stepper names the slot,
+    // do NOTHING -- the old fallback-to-0 kicked a foreign slot-0 build ~340ms early; storm-free that
+    // model persisted and the single-model stability gate starved the drive/publish/anim pipeline for
+    // the whole load. The lever loops below are no-ops with no model built, so skipping the tick is safe.
+    let Some(target_slot) = portrait_target_slot_confirmed() else {
         return;
     };
     // FAIL-FAST SEMAPHORE: assert the slot we're about to render IS the loaded character
@@ -765,7 +770,7 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
                 // made oracle_..._gx_nonblack a false success. Requiring !checker means we keep re-checking each
                 // dump cycle and latch only once a real shaded head has actually rendered into the offscreen
                 // (which needs the render-thread offscreen drive -- see portrait_render_drive). One-shot via swap.
-                if s == portrait_loaded_slot()
+                if s == target_slot
                     && nb
                     && !checker
                     && PROFILE_BAKE_RGBA_CAPTURED.swap(1, Ordering::SeqCst) == 0

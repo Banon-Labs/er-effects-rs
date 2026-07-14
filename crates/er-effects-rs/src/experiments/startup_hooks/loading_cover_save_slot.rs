@@ -193,7 +193,16 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     } else {
         PROFILE_TABLE_EMPTY_STREAK.fetch_add(1, Ordering::SeqCst) + 1
     };
-    if PROFILE_LOADSCREEN_REBUILT.load(Ordering::SeqCst) != 0 {
+    let terminal_loading_bar = LOADING_SCREEN_BAR_ENABLED.load(Ordering::SeqCst) != 0
+        && LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst) != 0
+        && LOADING_SCREEN_BAR_CURRENT_FRAME.load(Ordering::SeqCst)
+            >= LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst);
+    let repair_owned_empty = PROFILE_LOADSCREEN_REBUILT.load(Ordering::SeqCst) != 0
+        && PROFILE_LOADSCREEN_TABLE_OWNED.load(Ordering::SeqCst) != 0
+        && PROFILE_LOADSCREEN_REPAIR_REBUILT.load(Ordering::SeqCst) == 0
+        && loading_screen_started
+        && !terminal_loading_bar;
+    if PROFILE_LOADSCREEN_REBUILT.load(Ordering::SeqCst) != 0 && !repair_owned_empty {
         return; // already built our table for this load window
     }
     // HARD SAFETY: never call the builder until the menu has built a table at least once. At the title
@@ -202,7 +211,8 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
         return;
     }
     let nowload = unsafe { now_loading_active(base) };
-    if !force_loading_screen_rebuild
+    if !repair_owned_empty
+        && !force_loading_screen_rebuild
         && !(nowload || profile_select_window_open || streak >= PROFILE_TABLE_EMPTY_STREAK_BUILD_THRESHOLD)
     {
         return;
@@ -245,9 +255,14 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     PROFILE_LOADSCREEN_REBUILT.store(1, Ordering::SeqCst);
     PROFILE_LOADSCREEN_TABLE_OWNED.store(1, Ordering::SeqCst);
     PROFILE_LOADSCREEN_TABLE_BUILDS.fetch_add(1, Ordering::SeqCst);
+    if repair_owned_empty {
+        PROFILE_LOADSCREEN_REPAIR_REBUILT.store(1, Ordering::SeqCst);
+    }
     append_autoload_debug(format_args!(
         "loading-portrait: profile table rebuild (trigger={} streak={streak}) -> called builder 0x{:x} to build our own renderers for the post-Continue portrait",
-        if force_loading_screen_rebuild {
+        if repair_owned_empty {
+            "owned-empty-repair"
+        } else if force_loading_screen_rebuild {
             "native-loading-screen"
         } else if nowload {
             "now-loading"
@@ -379,7 +394,7 @@ pub(crate) unsafe fn kick_target_profile_slot(
     let kicks = PROFILE_TARGET_KICKS.fetch_add(1, Ordering::SeqCst) + 1;
     if kicks <= 4 {
         append_autoload_debug(format_args!(
-            "loading-portrait: per-slot build kick #{kicks} for LOADED slot {slot} (renderer=0x{renderer:x} record=0x{record:x}) -- global refresh not called, other slots stay unbuilt"
+            "loading-portrait: per-slot build kick #{kicks} for target slot {slot} (renderer=0x{renderer:x} record=0x{record:x}) -- global refresh not called, other slots stay unbuilt"
         ));
     }
     true
@@ -461,14 +476,18 @@ pub(crate) fn portrait_tear_score(cpx: &[u8], w: usize, h: usize) -> usize {
 /// renderer is already built + live in the ProfileSelect table, so we can spare/render IT, while ac0
 /// still names the old character until the reload deserializes.
 pub(crate) fn portrait_target_slot() -> i32 {
+    portrait_target_slot_confirmed().unwrap_or_else(portrait_loaded_slot)
+}
+
+pub(crate) fn portrait_target_slot_confirmed() -> Option<i32> {
     let sel = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
     if sel <= i32::MAX as usize {
         let sel = sel as i32;
         if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&sel) {
-            return sel;
+            return Some(sel);
         }
     }
-    portrait_loaded_slot()
+    portrait_loaded_slot_confirmed()
 }
 
 /// Fail-fast CHARACTER-IDENTITY semaphore for the loading-screen portrait (er-effects-rs-j3r; user
@@ -523,7 +542,7 @@ unsafe fn portrait_render_slot_semaphore(base: usize, render_target_slot: i32) {
         return;
     }
     let profile_summary =
-        unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(null);
+        game_data_man_profile_summary_or_null();
     if profile_summary == null {
         return;
     }
@@ -697,7 +716,7 @@ unsafe fn profile_slot_has_character(slot: i32) -> bool {
         return false;
     }
     let profile_summary =
-        unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(null);
+        game_data_man_profile_summary_or_null();
     if profile_summary == null {
         return false;
     }
@@ -821,7 +840,7 @@ unsafe fn system_quit_profile_summary_ptr() -> usize {
     if gdm == null {
         return null;
     }
-    unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(null)
+    game_data_man_profile_summary_or_null()
 }
 
 #[derive(Clone, Copy)]

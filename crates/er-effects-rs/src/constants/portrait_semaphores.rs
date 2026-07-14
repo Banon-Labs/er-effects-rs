@@ -129,8 +129,12 @@ pub(crate) const PROFILE_DRAW_STEP_RVA: usize = 0x9aa290;
 /// ctor is self-contained off process-lifetime singletons (no TitleTopDialog dependency).
 pub(crate) const PROFILE_TABLE_BUILDER_RVA: usize = 0x9af3a0;
 /// One-shot latch: set when we've rebuilt the profile table for the current load window; cleared when
-/// now-loading drops, so each load rebuilds at most once (no per-frame churn / teardown thrash).
+/// now-loading drops. The normal path builds once; a separate bounded repair latch below permits one
+/// mid-window rebuild if a later native owner clears our loading-owned table before terminal close.
 pub(crate) static PROFILE_LOADSCREEN_REBUILT: AtomicUsize = AtomicUsize::new(0);
+/// One-shot repair latch for a loading-owned table that unexpectedly becomes empty before the loading
+/// screen terminal close. Reset with the loading portrait window.
+pub(crate) static PROFILE_LOADSCREEN_REPAIR_REBUILT: AtomicUsize = AtomicUsize::new(0);
 /// Count of post-Continue profile-table (re)builds for the loading-screen portrait (telemetry/sweep).
 pub(crate) static PROFILE_LOADSCREEN_TABLE_BUILDS: AtomicUsize = AtomicUsize::new(0);
 /// 1 while the currently populated profile-renderer table is the loading-screen-owned table we built,

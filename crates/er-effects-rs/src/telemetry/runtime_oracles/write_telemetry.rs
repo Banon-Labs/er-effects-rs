@@ -220,10 +220,10 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         if let Ok(base) = game_module_base() {
             let global_flag =
                 unsafe { safe_read_u8(base + RETURN_TITLE_FINAL_FUNCTOR_GLOBAL_FLAG_RVA) };
-            let menu_man = unsafe { safe_read_usize(base + GLOBAL_CSMENUMAN_RVA) }
+            let menu_man = Some(cs_menu_man_ptr_or_null())
                 .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
             let menu_data = if menu_man != TITLE_OWNER_SCAN_START_ADDRESS && menu_man != 0 {
-                unsafe { safe_read_usize(menu_man + CSMENUMAN_MENU_DATA_08_OFFSET) }
+                Some(cs_menu_man_menu_data_or_null())
                     .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
             } else {
                 TITLE_OWNER_SCAN_START_ADDRESS

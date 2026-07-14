@@ -209,24 +209,54 @@ pub(crate) const GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET: usize =
 pub(crate) fn game_data_man_ptr_or_null() -> usize {
     GameDataMan::instance_ptr().map_or(NULL_MODULE_BASE, |ptr| ptr as usize)
 }
-/// GameDataMan -> main player save data (compiler-verified equal to the upstream typed field).
-pub(crate) const SLOT_MANAGER_DATA_OFFSET: usize =
-    core::mem::offset_of!(GameDataMan, main_player_game_data);
-/// GameDataMan private tail fields used by the save/profile probes.
-#[repr(C)]
-pub(crate) struct GameDataManProfileSummaryLayout {
-    pub(crate) unknown_000: [u8; 0x78],
-    pub(crate) profile_summary: usize,
+
+pub(crate) fn game_data_man_main_player_game_data_or_null() -> usize {
+    unsafe { GameDataMan::instance() }
+        .map_or(NULL_MODULE_BASE, |gdm| gdm.main_player_game_data.as_ptr() as usize)
 }
 
-/// GameDataMan -> `profile_summary`; private upstream, but documented locally as a typed layout.
-pub(crate) const SLOT_MANAGER_CONTAINER_OFFSET: usize =
-    core::mem::offset_of!(GameDataManProfileSummaryLayout, profile_summary);
-pub(crate) const CSFEMAN_SINGLETON_RVA: usize = 0x3d6b880;
+pub(crate) fn game_data_man_profile_summary_or_null() -> usize {
+    unsafe { GameDataMan::instance() }.map_or(NULL_MODULE_BASE, |gdm| gdm.profile_summary)
+}
+
+pub(crate) fn game_data_man_menu_system_save_load_or_null() -> usize {
+    unsafe { GameDataMan::instance() }.map_or(NULL_MODULE_BASE, |gdm| gdm.menu_system_save_load)
+}
+pub(crate) fn cs_fe_man_ptr_or_null() -> usize {
+    CSFeManImp::instance_ptr().map_or(NULL_MODULE_BASE, |ptr| ptr as usize)
+}
+
+pub(crate) fn now_loading_helper_ptr_or_null() -> usize {
+    CSNowLoadingHelper::instance_ptr().map_or(NULL_MODULE_BASE, |ptr| ptr as usize)
+}
+
+/// Native owner path to the live title step:
+/// `CSSystemStep -> titleFlowStep -> CSMoveMapListStep -> GameRootStep -> TitleStep`.
+/// This replaces the old whole-process TitleStep-vtable memory scan with the same EzChildStep
+/// ownership chain used by the engine constructors/register calls.
+pub(crate) fn title_step_ptr_or_null() -> usize {
+    let Ok(system_step) = (unsafe { CSSystemStep::instance() }) else {
+        return NULL_MODULE_BASE;
+    };
+    let Some(title_flow_step) = system_step.title_flow_step() else {
+        return NULL_MODULE_BASE;
+    };
+    let title_flow_step = unsafe { title_flow_step.as_ref() };
+    let Some(move_map_list_step) = title_flow_step.move_map_list_step() else {
+        return NULL_MODULE_BASE;
+    };
+    let move_map_list_step = unsafe { move_map_list_step.as_ref() };
+    let Some(game_root_step) = move_map_list_step.game_root_step() else {
+        return NULL_MODULE_BASE;
+    };
+    let game_root_step = unsafe { game_root_step.as_ref() };
+    game_root_step
+        .title_step()
+        .map_or(NULL_MODULE_BASE, |ptr| ptr.as_ptr() as usize)
+}
 /// Session manager singleton (absolute 0x1447ef360; NULL at the title, built by
 /// the move-map/load path). RVA = 0x1447ef360 - 0x140000000 = 0x47ef360.
 pub(crate) const SESSION_SINGLETON_RVA: usize = TitleSessionRva::MoveMapSession as usize;
-pub(crate) const TITLE_INPUT_MANAGER_RVA: usize = 0x3d6b7b0;
 /// Pure-observe snapshot interval (game-task ticks). Logs the title->menu->load state
 /// every N ticks with NO forcing, to capture what the REAL button press does.
 pub(crate) const OBSERVE_INTERVAL: u64 = 10;

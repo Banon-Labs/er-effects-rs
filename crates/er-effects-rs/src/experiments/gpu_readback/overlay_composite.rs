@@ -456,6 +456,7 @@ pub(crate) fn loading_portrait_window_reset(reason: &str) {
     PROFILE_HAVE_KEYED_FRAME.store(0, Ordering::SeqCst);
     PROFILE_BAKE_RGBA_CAPTURED.store(0, Ordering::SeqCst);
     PROFILE_LOADSCREEN_TABLE_OWNED.store(0, Ordering::SeqCst);
+    PROFILE_LOADSCREEN_REPAIR_REBUILT.store(0, Ordering::SeqCst);
     // Candidate A (er-effects-rs-jsm): drop the demote credit + stash the cached CSTextureImage ref for
     // the game-thread updater to Release (this reset runs off the game thread; Scaleform frees must not).
     gfx_loading_portrait_window_reset();
@@ -817,33 +818,44 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
     }
     let cur_ver = LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst);
     if loadscreen_active {
+        let has_existing_portrait = LOADING_BG_PORTRAIT_RGBA
+            .lock()
+            .map(|g| {
+                g.as_ref().is_some_and(|(w, h, px)| {
+                    *w != 0 && *h != 0 && px.len() >= (*w as usize) * (*h as usize) * RGBA8_BPP
+                })
+            })
+            .unwrap_or(false);
         let seen = OVERLAY_LOADSCREEN_BUILD_SEEN.load(Ordering::SeqCst);
         if seen != load_builds {
             OVERLAY_LOADSCREEN_BUILD_SEEN.store(load_builds, Ordering::SeqCst);
             OVERLAY_LOADSCREEN_BASELINE_VERSION.store(cur_ver, Ordering::SeqCst);
-            append_autoload_debug(format_args!(
-                "present-overlay: loadscreen build {load_builds} started; holding prior portrait until source version advances past {cur_ver}"
-            ));
-            return false;
+            if has_existing_portrait {
+                append_autoload_debug(format_args!(
+                    "present-overlay: loadscreen build {load_builds} started; drawing frozen existing portrait until source version advances past {cur_ver}"
+                ));
+            } else {
+                append_autoload_debug(format_args!(
+                    "present-overlay: loadscreen build {load_builds} started; holding blank until source version advances past {cur_ver} (no existing portrait snapshot)"
+                ));
+                return false;
+            }
         }
-        if cur_ver <= OVERLAY_LOADSCREEN_BASELINE_VERSION.load(Ordering::SeqCst) {
+        if cur_ver <= OVERLAY_LOADSCREEN_BASELINE_VERSION.load(Ordering::SeqCst)
+            && !has_existing_portrait
+        {
             return false;
         }
     }
-    // CANDIDATE A HANDOFF (er-effects-rs-jsm): if the live head is currently being copied INTO the
-    // displayed now-loading GFx texture, the movie shows the head UNDER its own native tips/bar -- so the
-    // overlay must NOT draw its head over the top. The game-thread updater refills the demote credit on
-    // each successful in-movie copy; we consume one credit per present and yield. Return `true` so the
-    // Present hook treats the frame as handled (skips the boot-progress fallback). Fail-open: if the
-    // in-movie path stalls, the credit drains to 0 and the overlay resumes drawing the head next present.
-    // PIXEL-ORACLE-DRIVEN overlay hand-off (er-effects-rs-jsm). Once the head has been baked into a
-    // now-loading artwork, probe the game's OWN composited backbuffer (throttled; at the top of the
-    // Present hook it is the movie's render BEFORE the overlay draws this frame) to check whether the head
-    // actually reached the screen. Demote the overlay -- yield its head draw so the native tips render
-    // above the in-movie head -- ONLY while the oracle confirms the head is on screen; otherwise fall
-    // through and let the overlay draw the head as a BRIDGE (head over tips), so a bg-only movie (short
-    // load, no post-capture rotation) is never left with a missing head. Self-correcting, no regression.
-    if GFX_PORTRAIT_BAKED.load(Ordering::SeqCst) > 0 {
+    // CANDIDATE A HANDOFF (er-effects-rs-jsm): demote the overlay only when the native now-loading movie
+    // has a LIVE per-frame head update path. A one-shot baked background is static by construction; using
+    // the backbuffer head-match oracle alone made the overlay yield to that static image, which froze the
+    // character exactly when the native loading screen appeared. Until a real in-movie update path bumps
+    // `GFX_PORTRAIT_UPLOADS`, the overlay remains the animated product surface and keeps drawing the live
+    // head as a bridge.
+    if GFX_PORTRAIT_BAKED.load(Ordering::SeqCst) > 0
+        && GFX_PORTRAIT_UPLOADS.load(Ordering::SeqCst) > 0
+    {
         let tick = OVERLAY_HEAD_PROBE_TICK.fetch_add(1, Ordering::SeqCst);
         if tick % 30 == 0 {
             let sc_raw = swapchain_raw as *mut c_void;

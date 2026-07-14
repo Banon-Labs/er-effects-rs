@@ -1279,13 +1279,13 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 // (GameMan.save_requested flips true again ~3.6s later, proven by gm-snap) and bounces
                 // the freshly-loaded world back to the title. The teardown they were needed for is done
                 // by now (we are at the clean-title Continue), so undo them.
-                let menu_man = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
+                let menu_man = Some(cs_menu_man_ptr_or_null())
                     .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
                 if menu_man != TITLE_OWNER_SCAN_START_ADDRESS
                     && unsafe { is_heap_aligned_ptr(menu_man) }
                 {
                     if let Some(menu_data) =
-                        unsafe { safe_read_usize(menu_man + CS_MENU_MAN_MENU_DATA_OFFSET) }
+                        Some(cs_menu_man_menu_data_or_null())
                     {
                         if menu_data != TITLE_OWNER_SCAN_START_ADDRESS
                             && unsafe { is_heap_aligned_ptr(menu_data) }

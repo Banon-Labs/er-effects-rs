@@ -66,7 +66,7 @@ pub(crate) fn snapshot_game_man_on_change() {
     };
     let base = crate::experiments::game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
     let menu_job = if base != TITLE_OWNER_SCAN_START_ADDRESS {
-        unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
+        Some(cs_menu_man_ptr_or_null())
             .filter(|mm| *mm != TITLE_OWNER_SCAN_START_ADDRESS)
             .and_then(|mm| unsafe { safe_read_usize(mm + CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET) })
             .unwrap_or(usize::MAX)

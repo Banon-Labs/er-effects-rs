@@ -282,7 +282,6 @@ pub(crate) const SELECTBOT_LOAD_GATE_RVA: usize = 0x3d856a0;
 /// actually running MenuLoop at the title idle (so SelectBot injection would be
 /// parsed) or is still parked before it (so injection alone would be a no-op
 /// until the title-accept advances the outer state).
-pub(crate) const SELECTBOT_INPUT_MANAGER_GLOBAL_RVA: usize = 0x3d6b7b0;
 pub(crate) const SELECTBOT_PUMP_RAN_FLAG_OFFSET: usize = 0x6b0;
 /// Lever-1 title-accept experiment (runs 304+). Static RE (bd
 /// `title-accept-lever-143d856a0`) shows inner MenuJobWait (state 10, 0xb0d400)

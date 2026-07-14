@@ -3,21 +3,33 @@ pub(crate) unsafe fn title_owner(module_base: usize) -> Option<*mut u8> {
     if !cached.is_null() {
         return Some(cached);
     }
-    // Throttle the full-memory scan: until the owner exists it would otherwise
-    // run every frame and cripple FPS (observed ~2 task ticks/s).
-    let countdown = TITLE_OWNER_SCAN_COUNTDOWN.load(Ordering::SeqCst);
-    if countdown > TITLE_OWNER_SCAN_COUNTDOWN_READY {
-        TITLE_OWNER_SCAN_COUNTDOWN.fetch_sub(TITLE_OWNER_SCAN_COUNTDOWN_STEP, Ordering::SeqCst);
+    let found = title_step_ptr_or_null();
+    if found == NULL_MODULE_BASE {
         return None;
     }
-    TITLE_OWNER_SCAN_COUNTDOWN.store(TITLE_OWNER_SCAN_CALL_INTERVAL, Ordering::SeqCst);
-    let found = unsafe { find_title_owner_by_vtable(module_base) }?;
-    TITLE_OWNER_PTR.store(found as usize, Ordering::SeqCst);
-    let state_value = unsafe { *(found.add(TITLE_OWNER_STATE_OFFSET) as *const i32) };
+    let owner = found as *mut u8;
+    let vtable = unsafe { *(found as *const usize) };
+    let instance_table = unsafe { safe_read_usize(found + TITLE_OWNER_INSTANCE_TABLE_OFFSET) };
+    let state_value = unsafe { safe_read_i32(found + TITLE_OWNER_STATE_OFFSET) };
+    let vtable_ok = vtable == module_base + title_owner_vtable_rva();
+    let table_ok = instance_table == Some(module_base + title_step_state_table_rva());
+    let state_ok = state_value.is_some_and(|s| (TITLE_OWNER_MIN_STATE..=TITLE_OWNER_MAX_STATE).contains(&s));
+    if !(vtable_ok && table_ok && state_ok) {
+        append_autoload_debug(format_args!(
+            "native_title_job: title owner path rejected owner=0x{found:x} vt=0x{vtable:x} table={:?} state={:?} expected_vt=0x{:x} expected_table=0x{:x}",
+            instance_table,
+            state_value,
+            module_base + title_owner_vtable_rva(),
+            module_base + title_step_state_table_rva()
+        ));
+        return None;
+    }
+    TITLE_OWNER_PTR.store(found, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "native_title_job: captured title owner={found:p} state={state_value}"
+        "native_title_job: captured title owner={owner:p} state={}",
+        state_value.unwrap_or_default()
     ));
-    Some(found)
+    Some(owner)
 }
 pub(crate) unsafe fn call_native_title_job_once(module_base: usize, tick: u64) -> bool {
     if TITLE_NATIVE_JOB_CALLED.load(Ordering::SeqCst) != TITLE_NATIVE_JOB_NOT_CALLED {

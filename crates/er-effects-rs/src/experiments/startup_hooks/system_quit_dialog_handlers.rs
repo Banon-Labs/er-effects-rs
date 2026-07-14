@@ -1,5 +1,53 @@
 
 unsafe fn system_quit_open_profile_load_dialog(action_obj: usize) -> bool {
+    if active_save_file_for_system_quit().is_none()
+        && crate::experiments::save_picker::active_save_picker_lock().is_none()
+    {
+        let start_dir = save_picker_title_start_dir();
+        let seamless = save_picker_seamless_mode_after_settle("system-quit-load-profile-no-active-save");
+        let model = if seamless {
+            crate::experiments::save_picker::SavePickerModel::open_with_extensions(
+                &start_dir,
+                &["co2", "sl2"],
+            )
+        } else {
+            crate::experiments::save_picker::SavePickerModel::open(&start_dir, "sl2")
+        };
+        if !unsafe { save_picker_stage_row_records(&model) } {
+            SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-picker: Load Profile no-active-save fallback failed to stage rows dir='{}'",
+                start_dir.display()
+            ));
+            return false;
+        }
+        *crate::experiments::save_picker::active_save_picker_lock() = Some(model);
+        SAVE_PICKER_MODE_ACTIVE.store(1, Ordering::SeqCst);
+        SAVE_PICKER_ACTION_OBJ.store(action_obj, Ordering::SeqCst);
+        SAVE_PICKER_REOPEN_PENDING.store(0, Ordering::SeqCst);
+        SAVE_PICKER_OPEN_SLOTS_PENDING.store(0, Ordering::SeqCst);
+        let opened = unsafe { system_quit_submit_profile_load_dialog(action_obj) };
+        if opened {
+            SAVE_PICKER_OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-picker: Load Profile fell back to no-active-save picker action=0x{action_obj:x} dir='{}'",
+                start_dir.display()
+            ));
+        } else {
+            *crate::experiments::save_picker::active_save_picker_lock() = None;
+            SAVE_PICKER_MODE_ACTIVE.store(0, Ordering::SeqCst);
+            SAVE_PICKER_ACTION_OBJ.store(0, Ordering::SeqCst);
+            SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-picker: Load Profile no-active-save fallback failed to submit 05_010 action=0x{action_obj:x}"
+            ));
+        }
+        return opened;
+    }
+    unsafe { system_quit_submit_profile_load_dialog(action_obj) }
+}
+
+unsafe fn system_quit_submit_profile_load_dialog(action_obj: usize) -> bool {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const HEAP_LO: usize = 0x10000;
     let Ok(base) = game_module_base() else {
