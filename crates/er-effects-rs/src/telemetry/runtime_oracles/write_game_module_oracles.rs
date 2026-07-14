@@ -2438,6 +2438,11 @@ fn write_game_module_oracles(body: &mut String) {
         );
         push_json_usize(
             body,
+            "oracle_portrait_pump_block_off_resource",
+            PORTRAIT_PUMP_BLOCK_OFF_RESOURCE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
             "oracle_portrait_pump_block_multi",
             PORTRAIT_PUMP_BLOCK_MULTI.load(Ordering::SeqCst),
         );

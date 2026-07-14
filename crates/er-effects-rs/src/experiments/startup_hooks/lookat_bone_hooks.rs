@@ -277,6 +277,30 @@ unsafe fn lookat_apply_realtime(holder: usize, slot_idx: usize, yaw: f32, pitch:
     true
 }
 
+/// The native offscreen command path (`FUN_141a853a0` -> `FUN_141a02de0`) only checks the four wrapper
+/// pointers at `off+0x40..0x58`; `FUN_141a02de0` then blindly loads each wrapper's underlying GX resource
+/// from `wrapper+0x40` and passes it to the GX state classifier. On the Windows crash report from
+/// 2026-07-14, the second wrapper existed but `wrapper+0x40 == 0`, so the classifier saw rcx=0x20 and
+/// faulted reading `[rcx+0x10]`. Match the native wrapper-presence check AND add the missing inner-resource
+/// readiness check before we enqueue our extra profile draw.
+unsafe fn profile_offscreen_gx_resources_ready(off: usize) -> bool {
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if off == 0 || off == null {
+        return false;
+    }
+    for field in [0x40usize, 0x48, 0x50, 0x58] {
+        let wrapper = unsafe { safe_read_usize(off + field) }.unwrap_or(0);
+        if wrapper == 0 || wrapper == null {
+            return false;
+        }
+        let resource = unsafe { safe_read_usize(wrapper + 0x40) }.unwrap_or(0);
+        if resource == 0 || resource == null {
+            return false;
+        }
+    }
+    true
+}
+
 /// REALTIME LOOK-AT DRAW TICK -- registered as a recurring task in a DRAW phase
 /// (`CSTaskGroupIndex::GameSceneDraw`), so it runs on the render thread INSIDE an actively-recording GX
 /// frame (unlike the FrameBegin game task, where the GX subcontext pool is still empty -> a black no-op).
@@ -410,6 +434,17 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
             if off != 0 && off != null && live_models > 1 {
                 PORTRAIT_PUMP_BLOCK_MULTI.fetch_add(1, Ordering::SeqCst);
             }
+            let off_resources_ready = off != 0
+                && off != null
+                && unsafe { profile_offscreen_gx_resources_ready(off) };
+            if off != 0 && off != null && !off_resources_ready {
+                let n = PORTRAIT_PUMP_BLOCK_OFF_RESOURCE.fetch_add(1, Ordering::SeqCst) + 1;
+                if n <= 4 || n.is_power_of_two() {
+                    append_autoload_debug(format_args!(
+                        "profile-drive-resource-skip #{n}: offscreen=0x{off:x} has a null native GX resource wrapper(+0x40/+0x48/+0x50/+0x58 or wrapper+0x40); skipping extra profile draw to avoid FUN_141e90290 rcx=0x20 AV"
+                    ));
+                }
+            }
             // STATE-MACHINE PUMP -- runs even with the model DEAD (run anim-bind6 deadlock fix,
             // 2026-07-03). The update task is the renderer's engine-designed per-frame tick (state
             // machine + anim step + transforms); ResMan runs it continuously in the menu era but
@@ -433,7 +468,12 @@ pub(crate) unsafe fn profile_lookat_realtime_draw_tick(base: usize, task_data: &
             // SeqCst -- one side always yields; see profile_renderer_teardown_spare_hook). The
             // PROFILE_BAKE_RGBA_CAPTURED latch itself is unchanged: publish/overlay/readback
             // consumers still key on "first capture landed"; it just no longer stops the drive.
-            if portrait_render_drive_enabled() && off != 0 && off != null && live_models <= 1 {
+            if portrait_render_drive_enabled()
+                && off != 0
+                && off != null
+                && off_resources_ready
+                && live_models <= 1
+            {
                 // BUILD-DURATION semaphore: one log line on the null->valid model transition. Run
                 // #9 implies the mid-load async build takes ~13s (kick +16.8s -> stable gate first
                 // passes ~+29.5s) from world-streaming contention -- vs the boot-era 133ms build on

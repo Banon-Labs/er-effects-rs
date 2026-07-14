@@ -453,11 +453,12 @@ pub(crate) fn profile_lookat_phase_diag_tick() {
             PROFILE_BOUND_GX_ALPHA_MAX.load(Ordering::SeqCst),
         ));
         append_autoload_debug(format_args!(
-            "lookat-pump-blocks: draws={} r_bad={} vt_bad={} off_bad={} multi={}",
+            "lookat-pump-blocks: draws={} r_bad={} vt_bad={} off_bad={} off_resource_bad={} multi={}",
             PROFILE_PERFRAME_MODEL_DRAWS.load(Ordering::SeqCst),
             PORTRAIT_PUMP_BLOCK_R.load(Ordering::SeqCst),
             PORTRAIT_PUMP_BLOCK_VTABLE.load(Ordering::SeqCst),
             PORTRAIT_PUMP_BLOCK_OFF.load(Ordering::SeqCst),
+            PORTRAIT_PUMP_BLOCK_OFF_RESOURCE.load(Ordering::SeqCst),
             PORTRAIT_PUMP_BLOCK_MULTI.load(Ordering::SeqCst),
         ));
         append_autoload_debug(format_args!(
