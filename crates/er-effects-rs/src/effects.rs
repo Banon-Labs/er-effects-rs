@@ -6,12 +6,13 @@ use std::{
         Mutex, OnceLock,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
+    time::UNIX_EPOCH,
 };
 
 use eldenring::cs::{ChrInsExt, PlayerIns};
 use er_effects_data::{
-    BUILT_IN_EFFECT_CATALOGS, EffectCallSpec, EffectKindSpec, embedded_effect_master_catalog,
-    embedded_effects, parse_effect_hotkeys_json, parse_effect_id_catalog_json,
+    EffectCallSpec, EffectKindSpec, embedded_effect_master_catalog, embedded_effects,
+    parse_effect_hotkeys_json, parse_effect_id_catalog_json,
 };
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -204,6 +205,31 @@ pub(crate) fn effect_trigger_hotkeys_path() -> PathBuf {
 
 pub(crate) fn user_effect_catalog_dir() -> PathBuf {
     PathBuf::from("effect-catalogs")
+}
+
+pub(crate) fn current_effect_catalog_signature() -> String {
+    let Ok(entries) = fs::read_dir(user_effect_catalog_dir()) else {
+        return "missing".to_owned();
+    };
+    let mut parts = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .filter_map(|path| {
+            let file_name = path.file_name()?.to_str()?.to_owned();
+            let metadata = fs::metadata(&path).ok()?;
+            let len = metadata.len();
+            let modified = metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
+            Some(format!("{file_name}:{len}:{modified}"))
+        })
+        .collect::<Vec<_>>();
+    parts.sort();
+    parts.join("|")
 }
 
 pub(crate) fn current_effect_setting_modified() -> Option<std::time::SystemTime> {
@@ -439,16 +465,6 @@ pub(crate) fn build_effect_catalog_state()
 
     let mut raw_catalogs = Vec::new();
     let mut load_errors = Vec::new();
-    for catalog in BUILT_IN_EFFECT_CATALOGS {
-        match parse_effect_id_catalog_json(catalog.json) {
-            Ok(ids) => raw_catalogs.push(RawEffectCatalog {
-                source_key: format!("builtin/{}", catalog.file_name),
-                file_name: catalog.file_name.to_owned(),
-                ids,
-            }),
-            Err(error) => load_errors.push(format!("{}: {error}", catalog.file_name)),
-        }
-    }
     if let Ok(entries) = fs::read_dir(user_effect_catalog_dir()) {
         let mut paths = entries
             .filter_map(Result::ok)
@@ -466,7 +482,7 @@ pub(crate) fn build_effect_catalog_state()
                     parse_effect_id_catalog_json(&json).map_err(|error| error.to_string())
                 }) {
                 Ok(ids) => raw_catalogs.push(RawEffectCatalog {
-                    source_key: format!("user/{file_name}"),
+                    source_key: file_name.to_owned(),
                     file_name: file_name.to_owned(),
                     ids,
                 }),
@@ -816,9 +832,14 @@ pub(crate) fn publish_effect_selector_overlay_text(state: &mut EffectsState) {
     let effect_label = selected_call
         .and_then(truncated_effect_overlay_name)
         .map_or_else(String::new, |name| format!(" {name}"));
+    let catalog_display_index = if catalog_count == 0 {
+        0
+    } else {
+        catalog_index.saturating_add(1)
+    };
     let mut text = format!(
         "CAT {}/{} {} | ID {}{} | {}/{} | {}{}",
-        catalog_index.saturating_add(1),
+        catalog_display_index,
         catalog_count,
         catalog_name,
         effect_id.map_or_else(|| "NONE".to_owned(), |id| id.to_string()),
@@ -1210,6 +1231,62 @@ fn enable_only_call(player: &mut PlayerIns, state: &mut EffectsState, index: usi
                 effect_application_block_reason(state)
             )
         });
+    }
+}
+
+pub(crate) fn poll_live_effect_catalogs(player: &mut PlayerIns, state: &mut EffectsState) {
+    let signature = current_effect_catalog_signature();
+    if state.effect_catalogs_signature == signature {
+        return;
+    }
+
+    let selected_id = state
+        .effect_setting_last_id
+        .or_else(restore_selected_effect_id);
+    let selected_catalog_key = state
+        .selected_catalog_index
+        .and_then(|index| state.catalogs.get(index))
+        .map(|catalog| catalog.source_key.clone())
+        .or_else(restore_selected_catalog_key);
+    let effects_were_on = state.effect_hotkeys_effects_on;
+
+    disable_all_calls(player, state);
+    let (mut calls, catalogs, load_error) = build_effect_catalog_state();
+    let selected_effect_index = selected_id.and_then(|id| find_call_index_by_id(&calls, id));
+    let selected_catalog_index = selected_catalog_key
+        .as_deref()
+        .and_then(|key| {
+            catalogs
+                .iter()
+                .position(|catalog| catalog.source_key == key)
+        })
+        .or_else(|| {
+            selected_effect_index.and_then(|selected| {
+                catalogs.iter().position(|catalog| {
+                    catalog
+                        .call_indices
+                        .iter()
+                        .any(|call_index| *call_index == selected)
+                })
+            })
+        })
+        .or_else(|| (!catalogs.is_empty()).then_some(0));
+
+    state.effect_catalogs_signature = signature;
+    state.effect_catalog_live_updates = state.effect_catalog_live_updates.saturating_add(1);
+    state.calls = std::mem::take(&mut calls);
+    state.catalogs = catalogs;
+    state.load_error = load_error;
+    state.selected_effect_index = selected_effect_index;
+    state.selected_catalog_index = selected_catalog_index;
+    state.effect_hotkeys_effects_on = false;
+    state.last_driver_command = Some(format!(
+        "effect-catalogs: reloaded {} catalog(s)",
+        state.catalogs.len()
+    ));
+
+    if effects_were_on && let Some(index) = selected_effect_index {
+        enable_only_call(player, state, index, false);
     }
 }
 

@@ -277,8 +277,8 @@ Runtime SpEffect application is gated to the loaded character state: the local p
 
 Persisted selector files next to `eldenring.exe`:
 
-- `.effect-catalog-setting.txt`: selected catalog key.
-- `.effect-setting.txt`: selected SpEffect ID. Editing this file while the game is running applies the matching in-catalog effect ID live, moves the catalog cursor to the first catalog containing that ID, and persists effects as ON.
+- `.effect-catalog-setting.txt`: selected catalog file name.
+- `.effect-setting.txt`: selected SpEffect ID. Editing this file while the game is running applies the matching in-catalog effect ID live, moves the catalog cursor to the first catalog containing that ID, and persists effects as ON. If no user catalog contains the ID, the DLL records the ID but has no catalog entry to apply.
 - `.effect-enabled-setting.txt`: persistent selector ON/OFF state (`on` or `off`). If it is `on`, the selected persisted effect is re-armed on DLL startup and applied once the local player is live.
 - `.effect-hotkeys.json`: user-editable hotkey triggers. If missing, the DLL creates this default file:
 
@@ -298,11 +298,9 @@ Persisted selector files next to `eldenring.exe`:
 
 Supported key names include `numpad_multiply`, `numpad_add`, `numpad_subtract`, `numpad_divide`, `numpad_decimal`, `numpad0`..`numpad9`, arrow keys, and optional `alt+` prefixes. `count` is clamped to `1..=200`. Trigger hotkeys apply the configured SpEffect directly to the local player `count` times without removing other effects, and the file is reloaded while the game is running.
 
-Built-in user-style catalogs:
+User catalogs:
 
-`data/effect-catalogs/*.json` are provider catalogs in the same shape intended for user catalogs: each file is a plain JSON array of SpEffect IDs, with the file name acting as the catalog identity, for example `hides-from-npcs.json`. The DLL validates every ID against the embedded master catalog before exposing it to Up/Down cycling. User-provided game-directory catalogs can be placed in `effect-catalogs/*.json` next to `eldenring.exe` and use the same plain ID-list format.
-
-The original 594-entry visual/audio triage list now lives as `data/effect-catalogs/nonmechanical-visual-sfx.json`; supporting audit artifacts are under `target/effect-meaningfulness-*.csv` when regenerated locally.
+The DLL starts with zero effect selector catalogs. User-provided game-directory catalogs can be placed in `effect-catalogs/*.json` next to `eldenring.exe`; each file is a plain JSON array of SpEffect IDs, with the file name acting as the catalog identity, for example `my-effects.json`. The DLL watches this folder while the game is running, reloads catalogs when JSON files are created/changed/removed, and validates every ID against the embedded master catalog before exposing it to Up/Down cycling.
 
 Master catalog:
 

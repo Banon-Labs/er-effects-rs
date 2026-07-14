@@ -38,6 +38,8 @@ pub(crate) struct EffectsState {
     selected_effect_index: Option<usize>,
     catalogs: Vec<EffectCatalog>,
     selected_catalog_index: Option<usize>,
+    effect_catalogs_signature: String,
+    effect_catalog_live_updates: u64,
     effect_hotkeys_effects_on: bool,
     effect_selector_overlay_visible: bool,
     effect_trigger_hotkeys: Vec<EffectTriggerHotkey>,
@@ -62,6 +64,7 @@ pub(crate) struct EffectsState {
 
 impl Default for EffectsState {
     fn default() -> Self {
+        let effect_catalogs_signature = current_effect_catalog_signature();
         let (mut calls, catalogs, load_error) = build_effect_catalog_state();
         let (effect_trigger_hotkeys, effect_trigger_hotkeys_load_error) = match load_effect_trigger_hotkeys() {
             Ok(hotkeys) => (hotkeys, None),
@@ -117,6 +120,8 @@ impl Default for EffectsState {
             game_task_ticks: INITIAL_GAME_TASK_TICKS,
             selected_effect_index,
             selected_catalog_index,
+            effect_catalogs_signature,
+            effect_catalog_live_updates: 0,
             effect_hotkeys_effects_on,
             effect_selector_overlay_visible: false,
             effect_trigger_hotkeys,

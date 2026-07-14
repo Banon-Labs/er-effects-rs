@@ -3,137 +3,20 @@
 //! The game DLL embeds this file at compile time and builds its overlay
 //! entries from it; `er-param-inspect validate` reads the same file to check
 //! every ID against `SpEffectParam` in a regulation archive. Editing
-//! `data/effects.json` is the only step needed to change the built-in catalog.
+//! `data/effects.json` is the only step needed to change the legacy built-in call list.
 
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
 /// `data/effects.json`, embedded at compile time so the DLL and the
-/// validation tooling always agree on the built-in catalog.
+/// validation tooling always agree on the legacy built-in call list.
 pub const EMBEDDED_EFFECTS_JSON: &str = include_str!("../../../data/effects.json");
 
 /// Rich metadata keyed by `SpEffectParam` ID. Selector/user catalogs should
 /// reference this by ID instead of duplicating field data.
 pub const EMBEDDED_EFFECT_MASTER_CATALOG_JSON: &str =
     include_str!("../../../data/effect-master-catalog.json");
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct BuiltInEffectCatalog {
-    pub file_name: &'static str,
-    pub json: &'static str,
-}
-
-pub const BUILT_IN_EFFECT_CATALOGS: &[BuiltInEffectCatalog] = &[
-    BuiltInEffectCatalog {
-        file_name: "ai-perception.json",
-        json: include_str!("../../../data/effect-catalogs/ai-perception.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "ai-targeting-experimental.json",
-        json: include_str!("../../../data/effect-catalogs/ai-targeting-experimental.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "casting-and-consumption.json",
-        json: include_str!("../../../data/effect-catalogs/casting-and-consumption.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "damage-output.json",
-        json: include_str!("../../../data/effect-catalogs/damage-output.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "darkness-and-light.json",
-        json: include_str!("../../../data/effect-catalogs/darkness-and-light.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "defense-resistance.json",
-        json: include_str!("../../../data/effect-catalogs/defense-resistance.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "fp-mp-changes.json",
-        json: include_str!("../../../data/effect-catalogs/fp-mp-changes.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "hearing-reduced.json",
-        json: include_str!("../../../data/effect-catalogs/hearing-reduced.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "hearing-zero.json",
-        json: include_str!("../../../data/effect-catalogs/hearing-zero.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "hides-from-npcs.json",
-        json: include_str!("../../../data/effect-catalogs/hides-from-npcs.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "hp-changes.json",
-        json: include_str!("../../../data/effect-catalogs/hp-changes.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "instant-or-default-duration.json",
-        json: include_str!("../../../data/effect-catalogs/instant-or-default-duration.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "item-drop-and-souls.json",
-        json: include_str!("../../../data/effect-catalogs/item-drop-and-souls.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "movement-timing.json",
-        json: include_str!("../../../data/effect-catalogs/movement-timing.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "nonmechanical-visual-sfx.json",
-        json: include_str!("../../../data/effect-catalogs/nonmechanical-visual-sfx.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "permanent-effects.json",
-        json: include_str!("../../../data/effect-catalogs/permanent-effects.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "sight-and-hearing-zero.json",
-        json: include_str!("../../../data/effect-catalogs/sight-and-hearing-zero.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "sight-reduced.json",
-        json: include_str!("../../../data/effect-catalogs/sight-reduced.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "sight-zero.json",
-        json: include_str!("../../../data/effect-catalogs/sight-zero.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "stamina-changes.json",
-        json: include_str!("../../../data/effect-catalogs/stamina-changes.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "status-ailments.json",
-        json: include_str!("../../../data/effect-catalogs/status-ailments.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "target-clear.json",
-        json: include_str!("../../../data/effect-catalogs/target-clear.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "target-priority-high.json",
-        json: include_str!("../../../data/effect-catalogs/target-priority-high.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "target-priority-low.json",
-        json: include_str!("../../../data/effect-catalogs/target-priority-low.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "team-change-experimental.json",
-        json: include_str!("../../../data/effect-catalogs/team-change-experimental.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "timed-effects.json",
-        json: include_str!("../../../data/effect-catalogs/timed-effects.json"),
-    },
-    BuiltInEffectCatalog {
-        file_name: "visual-vfx.json",
-        json: include_str!("../../../data/effect-catalogs/visual-vfx.json"),
-    },
-];
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -251,7 +134,6 @@ mod tests {
 
     const EXPECTED_BUILT_IN_CALL_COUNT: usize = 594;
     const EXPECTED_MASTER_EFFECT_COUNT: usize = 11325;
-    const EXPECTED_BUILT_IN_CATALOG_COUNT: usize = 27;
 
     #[test]
     fn embedded_effects_file_is_valid() {
@@ -306,42 +188,9 @@ mod tests {
     }
 
     #[test]
-    fn built_in_effect_catalogs_are_plain_id_lists() {
-        assert_eq!(
-            BUILT_IN_EFFECT_CATALOGS.len(),
-            EXPECTED_BUILT_IN_CATALOG_COUNT
-        );
-        let master = embedded_effect_master_catalog().expect("master catalog must parse");
-        let valid_ids = master
-            .effects
-            .iter()
-            .map(|effect| effect.id)
-            .collect::<std::collections::BTreeSet<_>>();
-        for catalog in BUILT_IN_EFFECT_CATALOGS {
-            let ids = parse_effect_id_catalog_json(catalog.json).unwrap_or_else(|error| {
-                panic!(
-                    "{} must parse as a JSON array of IDs: {error}",
-                    catalog.file_name
-                )
-            });
-            assert!(!ids.is_empty(), "{} must not be empty", catalog.file_name);
-            let mut unique = ids.clone();
-            unique.sort_unstable();
-            unique.dedup();
-            assert_eq!(
-                unique.len(),
-                ids.len(),
-                "{} has duplicate IDs",
-                catalog.file_name
-            );
-            for id in ids {
-                assert!(
-                    valid_ids.contains(&id),
-                    "{} references unknown SpEffect ID {id}",
-                    catalog.file_name
-                );
-            }
-        }
+    fn user_effect_catalogs_are_plain_id_lists() {
+        let ids = parse_effect_id_catalog_json("[18570, 20004380]").expect("plain ID list parses");
+        assert_eq!(ids, vec![18570, 20004380]);
     }
 
     #[test]
