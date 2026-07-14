@@ -785,13 +785,23 @@ pub(crate) fn consume_effect_hotkeys(player: &mut PlayerIns, state: &mut Effects
     let downs = EFFECT_HOTKEY_PENDING_DOWN.swap(0, Ordering::SeqCst);
     let lefts = EFFECT_HOTKEY_PENDING_LEFT.swap(0, Ordering::SeqCst);
     let rights = EFFECT_HOTKEY_PENDING_RIGHT.swap(0, Ordering::SeqCst);
-    let total = toggles + ups + downs + lefts + rights;
-    if total == 0 {
+    let arrow_total = ups + downs + lefts + rights;
+    let arrows_allowed = state.effect_selector_overlay_visible;
+    let applied_total = toggles + if arrows_allowed { arrow_total } else { 0 };
+    if !arrows_allowed && arrow_total != 0 {
+        state.last_driver_command = Some(format!(
+            "effect-hotkey: ignored {arrow_total} arrow keypresses because debug menu is hidden"
+        ));
+    }
+    if applied_total == 0 {
         return;
     }
-    EFFECT_HOTKEY_APPLIED_ACTIONS.fetch_add(total, Ordering::SeqCst);
+    EFFECT_HOTKEY_APPLIED_ACTIONS.fetch_add(applied_total, Ordering::SeqCst);
     for _ in 0..toggles {
         toggle_selected_effect(player, state);
+    }
+    if !arrows_allowed {
+        return;
     }
     for _ in 0..lefts {
         step_selected_catalog(player, state, -1);
@@ -833,7 +843,12 @@ fn consume_effect_trigger_hotkeys(player: &mut PlayerIns, state: &mut EffectsSta
     if pending.is_empty() || state.effect_trigger_hotkeys.is_empty() {
         return;
     }
+    let mut hidden_arrow_ignores = 0usize;
     for keypress in pending {
+        if !state.effect_selector_overlay_visible && is_arrow_key(keypress.vk) {
+            hidden_arrow_ignores = hidden_arrow_ignores.saturating_add(1);
+            continue;
+        }
         let matched = state
             .effect_trigger_hotkeys
             .iter()
@@ -844,6 +859,15 @@ fn consume_effect_trigger_hotkeys(player: &mut PlayerIns, state: &mut EffectsSta
         };
         trigger_effect_hotkey(player, state, &hotkey);
     }
+    if hidden_arrow_ignores != 0 {
+        state.last_driver_command = Some(format!(
+            "effect-trigger: ignored {hidden_arrow_ignores} arrow keypresses because debug menu is hidden"
+        ));
+    }
+}
+
+fn is_arrow_key(vk: u32) -> bool {
+    matches!(vk, VK_LEFT | VK_UP | VK_RIGHT | VK_DOWN)
 }
 
 fn trigger_effect_hotkey(

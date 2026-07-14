@@ -268,10 +268,10 @@ inactive by default.
 
 In-game controls:
 
-- Left/Right: switch the active effect catalog.
-- Up/Down: step through the selected catalog's validated IDs and apply the selected effect.
+- Left/Right: switch the active effect catalog when the debug HUD is visible.
+- Up/Down: step through the selected catalog's validated IDs and apply the selected effect when the debug HUD is visible.
 - Alt+': toggle the currently selected effect off/on.
-- Alt+Numpad0: toggle the effect selector debug HUD. The HUD is hidden by default.
+- Alt+Numpad0: toggle the effect selector debug HUD. The HUD is hidden by default; while hidden, arrow keys are ignored by the selector and by any arrow-key entries in `.effect-hotkeys.json`.
 
 Runtime SpEffect application is gated to the loaded/animating character state: the local player must exist and the player's current TimeAct animation ID must be valid before the DLL calls `apply_speffect`. Selector/file changes outside that window may arm the selected effect, but they do not apply it until the animation gate is live.
 
