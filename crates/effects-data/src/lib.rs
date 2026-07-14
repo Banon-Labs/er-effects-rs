@@ -49,7 +49,7 @@ pub fn embedded_effects() -> Result<EffectsFile, serde_json::Error> {
 mod tests {
     use super::*;
 
-    const EXPECTED_BUILT_IN_CALL_COUNT: usize = 2861;
+    const EXPECTED_BUILT_IN_CALL_COUNT: usize = 594;
 
     #[test]
     fn embedded_effects_file_is_valid() {

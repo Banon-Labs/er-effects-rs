@@ -271,9 +271,9 @@ effect. Press Alt+' to toggle the currently selected effect off/on.
 
 Built-in catalog:
 
-The built-in catalog is now the exhaustive static VFX-bearing SpEffect candidate set from the local Elden Ring `regulation.bin`: every `SpEffectParam` row whose `vfxId`/`vfxId1..7` fields contain at least one nonnegative VFX ID. It currently contains 2,861 disabled-by-default entries in numeric ID order. 1,728 entries have Paramdex/project names; the remaining entries use deterministic fallback names that include the ID, VFX IDs, duration, category, and state fields.
+The built-in catalog is currently narrowed for visual/audio triage: it contains the 594 disabled-by-default `SpEffectParam` rows that static analysis classified as non-mechanical (no direct stat/resource/status/damage/defense fields and no chain fields) while still referencing `SpEffectVfxParam` rows with visual/audio/SFX-like data. Up/Down cycles only this non-mechanical visual/audio subset in numeric ID order.
 
-The full list lives in `data/effects.json`; it is intentionally not duplicated here because it is thousands of rows.
+The full triage list lives in `data/effects.json`; supporting audit artifacts are under `target/effect-meaningfulness-*.csv` when regenerated locally.
 
 Validate the list against a regulation file:
 
