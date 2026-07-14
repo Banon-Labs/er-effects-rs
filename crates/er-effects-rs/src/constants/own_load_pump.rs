@@ -110,16 +110,30 @@ pub(crate) fn cs_menu_man_ptr_or_null() -> usize {
 pub(crate) fn cs_menu_man_menu_data_or_null() -> usize {
     unsafe { CSMenuManImp::instance() }.map_or(NULL_MODULE_BASE, |menu_man| menu_man.menu_data)
 }
+
+pub(crate) fn cs_menu_man_popup_menu_or_null() -> usize {
+    unsafe { CSMenuManImp::instance() }
+        .ok()
+        .and_then(|menu_man| menu_man.popup_menu)
+        .map_or(NULL_MODULE_BASE, |popup_menu| popup_menu.as_ptr() as usize)
+}
+
+pub(crate) fn cs_menu_man_window_job_or_null() -> usize {
+    unsafe { CSMenuManImp::instance() }.map_or(NULL_MODULE_BASE, |menu_man| menu_man.window_job)
+}
+
+pub(crate) fn cs_menu_man_current_top_menu_job_or_null() -> usize {
+    unsafe { CSMenuManImp::instance() }
+        .ok()
+        .and_then(|menu_man| menu_man.popup_menu)
+        .map_or(NULL_MODULE_BASE, |popup_menu| {
+            unsafe { popup_menu.as_ref() }.current_top_menu_job
+        })
+}
 /// CSMenuMan menuData return-title request flag written by final functor `FUN_1407a3990`.
 pub(crate) const CSMENUMAN_MENU_DATA_RETURN_TITLE_FLAG_5D_OFFSET: usize = 0x5d;
 /// Companion global flag written by the same return-title final functor (`DAT_143d6c5e8 = 1`).
 pub(crate) const RETURN_TITLE_FINAL_FUNCTOR_GLOBAL_FLAG_RVA: usize = 0x3d6c5e8;
-/// CSMenuManImp -> CSPopupMenu* at +0x80.
-pub(crate) const CSMENUMAN_POPUP_80_OFFSET: usize = 0x80;
-/// CSPopupMenu -> `currentTopMenuJob` (MenuJob*) at +0xB0 -- the single top-job slot the per-frame
-/// menu pump drains (no cap). Install our built LoadGame job here so the native pump runs its Run
-/// IN CONTEXT (vs our menu-jumping self-pump).
-pub(crate) const CSPOPUP_TOP_JOB_B0_OFFSET: usize = 0xB0;
 /// `CS::MenuJob::Assign(rcx = dest MenuJob**, rdx = out MenuJob**, r8 = src MenuJob**)` (deobf
 /// 0x1407a9460 -- verified prologue: homes r8/rdx, `rbx=*dest`; if `*dest != *src` AtomicDecrements
 /// the old occupant (0x141eba200) + dtors if last, then installs `*dest=*src` + AtomicIncrement).

@@ -746,8 +746,6 @@ pub(crate) unsafe fn maybe_fire_tfc_continue(base: usize) {
     // the title menu -- unlike currentTopMenuJob+0xB0 which a run showed is EMPTY/unused by the title).
     // owner+0x130 is a MenuJob* slot (PushBackJob AV'd there because it is NOT a FixOrderJobSequence;
     // Assign -- a slot replace -- is the right primitive). bd currenttopjob-B0-empty-not-drained.
-    let _ = CSMENUMAN_POPUP_80_OFFSET;
-    let _ = CSPOPUP_TOP_JOB_B0_OFFSET;
     let dest = owner + TITLE_OWNER_MENU_LIST_130_OFFSET;
     let old_top = unsafe { safe_read_usize(dest) }.unwrap_or(0);
     // Pre-bump the job refcount (+0x8) so it survives the Assign regardless of the wrap's count.

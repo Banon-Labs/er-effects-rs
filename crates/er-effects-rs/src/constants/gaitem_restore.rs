@@ -222,6 +222,14 @@ pub(crate) fn game_data_man_profile_summary_or_null() -> usize {
 pub(crate) fn game_data_man_menu_system_save_load_or_null() -> usize {
     unsafe { GameDataMan::instance() }.map_or(NULL_MODULE_BASE, |gdm| gdm.menu_system_save_load)
 }
+
+pub(crate) fn game_data_man_menu_profile_save_load_or_null() -> usize {
+    unsafe { GameDataMan::instance() }.map_or(NULL_MODULE_BASE, |gdm| gdm.menu_profile_save_load)
+}
+
+pub(crate) fn game_data_man_key_config_save_load_or_null() -> usize {
+    unsafe { GameDataMan::instance() }.map_or(NULL_MODULE_BASE, |gdm| gdm.key_config_save_load)
+}
 pub(crate) fn cs_fe_man_ptr_or_null() -> usize {
     CSFeManImp::instance_ptr().map_or(NULL_MODULE_BASE, |ptr| ptr as usize)
 }

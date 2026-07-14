@@ -245,8 +245,19 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     let format_optional_u8 = |value: Option<u8>| -> String {
         value.map_or_else(|| "null".to_owned(), |v| v.to_string())
     };
+    let fromsoft_game_data_man = game_data_man_ptr_or_null();
+    let fromsoft_menu_system_save_load = game_data_man_menu_system_save_load_or_null();
+    let fromsoft_menu_profile_save_load = game_data_man_menu_profile_save_load_or_null();
+    let fromsoft_key_config_save_load = game_data_man_key_config_save_load_or_null();
+    let fromsoft_profile_summary = game_data_man_profile_summary_or_null();
+    let fromsoft_title_step = title_step_ptr_or_null();
+    let fromsoft_csmenuman = cs_menu_man_ptr_or_null();
+    let fromsoft_csmenuman_menu_data = cs_menu_man_menu_data_or_null();
+    let fromsoft_csmenuman_popup_menu = cs_menu_man_popup_menu_or_null();
+    let fromsoft_csmenuman_window_job = cs_menu_man_window_job_or_null();
+    let fromsoft_current_top_menu_job = cs_menu_man_current_top_menu_job_or_null();
     body.push_str(&format!(
-        "  \"product_autoload_armed\": {},\n  \"product_core_callsite_ticks\": {},\n  \"product_core_callsite_base_ok_ticks\": {},\n  \"product_core_callsite_slot_ok_ticks\": {},\n  \"product_core_callsite_last_slot\": {},\n  \"product_core_autoload_ticks\": {},\n  \"product_core_ready_blocks\": {},\n  \"product_core_ready_successes\": {},\n  \"product_core_owner_ticks\": {},\n  \"product_core_last_owner\": {},\n  \"product_core_last_title_dialog\": {},\n  \"product_core_last_title_dialog_vt\": {},\n  \"product_core_last_title_in_loop\": {},\n  \"product_core_last_title_in_textfadeout\": {},\n  \"product_core_last_menu_opened_latch\": {},\n  \"product_core_last_press_start_proxy\": {},\n  \"product_core_last_press_start_vt\": {},\n  \"product_core_last_press_start_context\": {},\n  \"product_core_last_return_title_job_predicate_bc4\": {},\n  \"product_core_return_title_final_global_flag\": {},\n  \"product_core_csmenuman\": {},\n  \"product_core_csmenuman_menu_data\": {},\n  \"product_core_csmenuman_menu_data_return_title_flag_5d\": {},\n  \"product_core_last_phase\": {},\n  \"product_core_ready_blocker\": \"{}\",\n  \"title_owner_scan_attempts\": {},\n  \"title_owner_scan_vtable_hits\": {},\n  \"title_owner_scan_table_rejects\": {},\n  \"title_owner_scan_state_rejects\": {},\n  \"title_owner_scan_cached_owner\": {},\n  \"title_owner_scan_last_candidate\": {},\n  \"title_owner_scan_last_table\": {},\n  \"title_owner_scan_last_state\": {},\n",
+        "  \"product_autoload_armed\": {},\n  \"product_core_callsite_ticks\": {},\n  \"product_core_callsite_base_ok_ticks\": {},\n  \"product_core_callsite_slot_ok_ticks\": {},\n  \"product_core_callsite_last_slot\": {},\n  \"product_core_autoload_ticks\": {},\n  \"product_core_ready_blocks\": {},\n  \"product_core_ready_successes\": {},\n  \"product_core_owner_ticks\": {},\n  \"product_core_last_owner\": {},\n  \"product_core_last_title_dialog\": {},\n  \"product_core_last_title_dialog_vt\": {},\n  \"product_core_last_title_in_loop\": {},\n  \"product_core_last_title_in_textfadeout\": {},\n  \"product_core_last_menu_opened_latch\": {},\n  \"product_core_last_press_start_proxy\": {},\n  \"product_core_last_press_start_vt\": {},\n  \"product_core_last_press_start_context\": {},\n  \"product_core_last_return_title_job_predicate_bc4\": {},\n  \"product_core_return_title_final_global_flag\": {},\n  \"product_core_csmenuman\": {},\n  \"product_core_csmenuman_menu_data\": {},\n  \"product_core_csmenuman_menu_data_return_title_flag_5d\": {},\n  \"fromsoftware_game_data_man\": {},\n  \"fromsoftware_game_data_man_menu_system_save_load\": {},\n  \"fromsoftware_game_data_man_menu_profile_save_load\": {},\n  \"fromsoftware_game_data_man_key_config_save_load\": {},\n  \"fromsoftware_game_data_man_profile_summary\": {},\n  \"fromsoftware_title_step\": {},\n  \"fromsoftware_csmenuman\": {},\n  \"fromsoftware_csmenuman_menu_data\": {},\n  \"fromsoftware_csmenuman_popup_menu\": {},\n  \"fromsoftware_csmenuman_window_job\": {},\n  \"fromsoftware_csmenuman_current_top_menu_job\": {},\n  \"product_core_last_phase\": {},\n  \"product_core_ready_blocker\": \"{}\",\n  \"title_owner_scan_attempts\": {},\n  \"title_owner_scan_vtable_hits\": {},\n  \"title_owner_scan_table_rejects\": {},\n  \"title_owner_scan_state_rejects\": {},\n  \"title_owner_scan_cached_owner\": {},\n  \"title_owner_scan_last_candidate\": {},\n  \"title_owner_scan_last_table\": {},\n  \"title_owner_scan_last_state\": {},\n",
         product_autoload_enabled(),
         PRODUCT_CORE_CALLSITE_TICKS.load(Ordering::SeqCst),
         PRODUCT_CORE_CALLSITE_BASE_OK_TICKS.load(Ordering::SeqCst),
@@ -270,6 +281,17 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         format_scan_ptr(csmenuman),
         format_scan_ptr(csmenuman_menu_data),
         format_optional_u8(csmenuman_menu_data_flag_5d),
+        format_scan_ptr(fromsoft_game_data_man),
+        format_scan_ptr(fromsoft_menu_system_save_load),
+        format_scan_ptr(fromsoft_menu_profile_save_load),
+        format_scan_ptr(fromsoft_key_config_save_load),
+        format_scan_ptr(fromsoft_profile_summary),
+        format_scan_ptr(fromsoft_title_step),
+        format_scan_ptr(fromsoft_csmenuman),
+        format_scan_ptr(fromsoft_csmenuman_menu_data),
+        format_scan_ptr(fromsoft_csmenuman_popup_menu),
+        format_scan_ptr(fromsoft_csmenuman_window_job),
+        format_scan_ptr(fromsoft_current_top_menu_job),
         PRODUCT_CORE_LAST_PHASE.load(Ordering::SeqCst),
         json_escape(product_core_ready_blocker_label(product_core_blocker)),
         TITLE_OWNER_SCAN_ATTEMPTS.load(Ordering::SeqCst),
