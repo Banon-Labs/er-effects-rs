@@ -25,11 +25,13 @@ const EFFECT_HOTKEY_DOWN: usize = 1 << 1;
 const EFFECT_HOTKEY_LEFT: usize = 1 << 2;
 const EFFECT_HOTKEY_RIGHT: usize = 1 << 3;
 const EFFECT_HOTKEY_TOGGLE: usize = 1 << 4;
+const EFFECT_HOTKEY_OVERLAY_TOGGLE: usize = 1 << 5;
 
 const VK_LEFT: u32 = 0x25;
 const VK_UP: u32 = 0x26;
 const VK_RIGHT: u32 = 0x27;
 const VK_DOWN: u32 = 0x28;
+const VK_INSERT: u32 = 0x2d;
 const VK_NUMPAD0: u32 = 0x60;
 const VK_NUMPAD9: u32 = 0x69;
 const VK_MULTIPLY: u32 = 0x6a;
@@ -57,6 +59,7 @@ static EFFECT_HOTKEY_PENDING_DOWN: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_PENDING_LEFT: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_PENDING_RIGHT: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_PENDING_TOGGLE: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_HOTKEY_PENDING_OVERLAY_TOGGLE: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_HOOK_STARTED: AtomicBool = AtomicBool::new(false);
 static EFFECT_HOTKEY_HOOK_ACTIVE: AtomicBool = AtomicBool::new(false);
 static EFFECT_SELECTOR_OVERLAY_TEXT: OnceLock<Mutex<String>> = OnceLock::new();
@@ -496,6 +499,18 @@ pub(crate) fn call_status_text(call: &NamedEffectCall) -> &'static str {
     }
 }
 
+pub(crate) fn effect_application_allowed(state: &EffectsState) -> bool {
+    state.current_animation_id.is_some()
+}
+
+fn effect_application_block_reason(state: &EffectsState) -> &'static str {
+    if effect_application_allowed(state) {
+        "ready"
+    } else {
+        "character is not animating"
+    }
+}
+
 pub(crate) fn add_custom_call(state: &mut EffectsState) {
     let id = state.custom_call_id;
     let kind = EffectCallKind::SpEffect { id };
@@ -514,6 +529,7 @@ fn effect_hotkey_action_for_key(vk: u32, alt_down: bool) -> usize {
         VK_RIGHT => EFFECT_HOTKEY_RIGHT,
         VK_DOWN => EFFECT_HOTKEY_DOWN,
         VK_OEM_7 if alt_down => EFFECT_HOTKEY_TOGGLE,
+        VK_NUMPAD0 | VK_INSERT if alt_down => EFFECT_HOTKEY_OVERLAY_TOGGLE,
         _ => 0,
     }
 }
@@ -535,6 +551,10 @@ fn drain_effect_trigger_keys() -> Vec<EffectTriggerKeyPress> {
         .lock()
         .map(|mut pending| std::mem::take(&mut *pending))
         .unwrap_or_default()
+}
+
+pub(crate) fn discard_pending_effect_trigger_keys() -> usize {
+    drain_effect_trigger_keys().len()
 }
 
 unsafe extern "system" fn effect_hotkey_ll_keyboard_proc(
@@ -565,6 +585,9 @@ unsafe extern "system" fn effect_hotkey_ll_keyboard_proc(
                 }
                 if action & EFFECT_HOTKEY_TOGGLE != 0 {
                     EFFECT_HOTKEY_PENDING_TOGGLE.fetch_add(1, Ordering::SeqCst);
+                }
+                if action & EFFECT_HOTKEY_OVERLAY_TOGGLE != 0 {
+                    EFFECT_HOTKEY_PENDING_OVERLAY_TOGGLE.fetch_add(1, Ordering::SeqCst);
                 }
             }
         }
@@ -640,7 +663,31 @@ pub(crate) fn effect_selector_overlay_text() -> String {
         .unwrap_or_default()
 }
 
-pub(crate) fn publish_effect_selector_overlay_text(state: &EffectsState) {
+pub(crate) fn publish_effect_selector_overlay_text(state: &mut EffectsState) {
+    let overlay_toggles = EFFECT_HOTKEY_PENDING_OVERLAY_TOGGLE.swap(0, Ordering::SeqCst);
+    if overlay_toggles != 0 {
+        if overlay_toggles % 2 == 1 {
+            state.effect_selector_overlay_visible = !state.effect_selector_overlay_visible;
+        }
+        state.last_driver_command = Some(format!(
+            "effect-overlay: {}",
+            if state.effect_selector_overlay_visible {
+                "shown"
+            } else {
+                "hidden"
+            }
+        ));
+        EFFECT_HOTKEY_APPLIED_ACTIONS.fetch_add(overlay_toggles, Ordering::SeqCst);
+    }
+    if !state.effect_selector_overlay_visible {
+        if let Ok(mut slot) = EFFECT_SELECTOR_OVERLAY_TEXT
+            .get_or_init(|| Mutex::new(String::new()))
+            .lock()
+        {
+            slot.clear();
+        }
+        return;
+    }
     let catalog = state
         .selected_catalog_index
         .and_then(|index| state.catalogs.get(index));
@@ -805,6 +852,19 @@ fn trigger_effect_hotkey(
     hotkey: &EffectTriggerHotkey,
 ) {
     let count = hotkey.count.clamp(1, EFFECT_TRIGGER_COUNT_MAX);
+    state.effect_trigger_last_key = Some(hotkey.key_name.clone());
+    state.effect_trigger_last_id = Some(hotkey.effect_id);
+    state.effect_trigger_last_count = count;
+    if !effect_application_allowed(state) {
+        state.last_driver_command = Some(format!(
+            "effect-trigger: {} ignored for {} x{} ({})",
+            hotkey.key_name,
+            hotkey.effect_id,
+            count,
+            effect_application_block_reason(state)
+        ));
+        return;
+    }
     for _ in 0..count {
         EffectCallKind::SpEffect {
             id: hotkey.effect_id,
@@ -817,9 +877,6 @@ fn trigger_effect_hotkey(
         .entries()
         .any(|entry| entry.param_id == hotkey.effect_id);
     state.effect_trigger_fire_count = state.effect_trigger_fire_count.saturating_add(1);
-    state.effect_trigger_last_key = Some(hotkey.key_name.clone());
-    state.effect_trigger_last_id = Some(hotkey.effect_id);
-    state.effect_trigger_last_count = count;
     state.effect_setting_last_id = Some(hotkey.effect_id);
     if let Some(index) = find_call_index_by_id(&state.calls, hotkey.effect_id) {
         state.selected_effect_index = Some(index);
@@ -959,14 +1016,21 @@ fn disable_all_calls(player: &mut PlayerIns, state: &mut EffectsState) {
 
 fn enable_only_call(player: &mut PlayerIns, state: &mut EffectsState, index: usize, persist: bool) {
     let network_sync = state.network_sync;
+    let can_apply = effect_application_allowed(state);
     for (call_index, call) in state.calls.iter_mut().enumerate() {
         if call_index == index {
             call.enabled = true;
             call.remove_requested = false;
-            call.kind.apply(player, network_sync);
-            call.active = call.kind.is_active(player);
-            call.active_seen_since_enable = call.active;
-            call.apply_failed = !call.active;
+            if can_apply {
+                call.kind.apply(player, network_sync);
+                call.active = call.kind.is_active(player);
+                call.active_seen_since_enable = call.active;
+                call.apply_failed = !call.active;
+            } else {
+                call.active = call.kind.is_active(player);
+                call.active_seen_since_enable = false;
+                call.apply_failed = false;
+            }
         } else {
             call.kind.remove(player);
             call.enabled = false;
@@ -990,7 +1054,14 @@ fn enable_only_call(player: &mut PlayerIns, state: &mut EffectsState, index: usi
         }
         state.effect_setting_last_id = Some(id);
         state.effect_setting_last_modified = current_effect_setting_modified();
-        state.last_driver_command = Some(format!("effect-hotkey: selected {label} ({name})"));
+        state.last_driver_command = Some(if can_apply {
+            format!("effect-hotkey: selected {label} ({name})")
+        } else {
+            format!(
+                "effect-hotkey: armed {label} ({name}); not applied because {}",
+                effect_application_block_reason(state)
+            )
+        });
     }
 }
 
@@ -1048,14 +1119,24 @@ pub(crate) fn poll_live_effect_setting(player: &mut PlayerIns, state: &mut Effec
         persist_selected_catalog(catalog);
     }
 
+    let can_apply = effect_application_allowed(state);
     enable_only_call(player, state, index, false);
     state.effect_setting_live_updates = state.effect_setting_live_updates.saturating_add(1);
     if let Some(call) = state.calls.get(index) {
-        state.last_driver_command = Some(format!(
-            "effect-setting: selected {} ({})",
-            call.kind.label(),
-            call.name
-        ));
+        state.last_driver_command = Some(if can_apply {
+            format!(
+                "effect-setting: selected {} ({})",
+                call.kind.label(),
+                call.name
+            )
+        } else {
+            format!(
+                "effect-setting: armed {} ({}); not applied because {}",
+                call.kind.label(),
+                call.name,
+                effect_application_block_reason(state)
+            )
+        });
     }
 }
 
@@ -1136,6 +1217,7 @@ pub(crate) fn set_call_enabled(
     index: usize,
     enabled: bool,
 ) -> Result<(), String> {
+    let can_apply = effect_application_allowed(state);
     let call = state
         .calls
         .get_mut(index)
@@ -1143,10 +1225,16 @@ pub(crate) fn set_call_enabled(
 
     call.enabled = enabled;
     if enabled {
-        call.kind.apply(player, state.network_sync);
-        call.active = call.kind.is_active(player);
-        call.active_seen_since_enable = call.active;
-        call.apply_failed = !call.active;
+        if can_apply {
+            call.kind.apply(player, state.network_sync);
+            call.active = call.kind.is_active(player);
+            call.active_seen_since_enable = call.active;
+            call.apply_failed = !call.active;
+        } else {
+            call.active = call.kind.is_active(player);
+            call.active_seen_since_enable = false;
+            call.apply_failed = false;
+        }
         state.selected_effect_index = Some(index);
         state.effect_hotkeys_effects_on = true;
         persist_selected_effect(call);
@@ -1193,6 +1281,9 @@ pub(crate) fn remove_requested_calls(player: &mut PlayerIns, state: &mut Effects
 }
 
 pub(crate) fn apply_selected_calls(player: &mut PlayerIns, state: &mut EffectsState) {
+    if !effect_application_allowed(state) {
+        return;
+    }
     let network_sync = state.network_sync;
     for call in state.calls.iter_mut().filter(|call| call.enabled) {
         call.kind.apply(player, network_sync);
@@ -1204,6 +1295,9 @@ pub(crate) fn apply_selected_calls(player: &mut PlayerIns, state: &mut EffectsSt
 }
 
 pub(crate) fn reapply_expired_enabled_calls(player: &mut PlayerIns, state: &mut EffectsState) {
+    if !effect_application_allowed(state) {
+        return;
+    }
     let network_sync = state.network_sync;
     for (index, call) in state
         .calls

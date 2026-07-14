@@ -61,7 +61,13 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     if lite_mode() {
                         return;
                     }
-                    publish_effect_selector_overlay_text(&state);
+                    let discarded_effect_triggers = discard_pending_effect_trigger_keys();
+                    if discarded_effect_triggers != 0 {
+                        state.last_driver_command = Some(format!(
+                            "effect-trigger: discarded {discarded_effect_triggers} pre-load keypresses"
+                        ));
+                    }
+                    publish_effect_selector_overlay_text(&mut state);
                     unsafe { system_quit_profile_select_top_menu_tick() };
                     // Product autoload: run the native title open-menu predicate + minimal
                     // native save-load core from the recurring game task, before the idx10
@@ -317,7 +323,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 process_driver_command(player, &mut state);
                 poll_live_effect_setting(player, &mut state);
                 consume_effect_hotkeys(player, &mut state);
-                publish_effect_selector_overlay_text(&state);
+                publish_effect_selector_overlay_text(&mut state);
 
                 let appear_playing = observation.current_animation_id == Some(APPEAR_ANIMATION_ID);
                 if !appear_playing {
