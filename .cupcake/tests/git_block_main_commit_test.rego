@@ -42,13 +42,42 @@ test_deny_git_commit_on_main_object_signal if {
 	"ER-EFFECTS-BLOCK-MAIN-COMMIT" in rule_ids(denials)
 }
 
+test_deny_git_c_commit_on_main if {
+	denials := guard.deny with input as bash_event("git -C \"$repo\" commit -m bad", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-COMMIT" in rule_ids(denials)
+}
+
 test_deny_git_add_then_commit_on_main if {
 	denials := guard.deny with input as bash_event("git add . && git commit -m bad", "main")
 	"ER-EFFECTS-BLOCK-MAIN-COMMIT" in rule_ids(denials)
 }
 
+test_deny_git_dash_c_commit_on_main if {
+	denials := guard.deny with input as bash_event("git -C /tmp/repo commit -m bad", "main")
+	"ER-EFFECTS-BLOCK-MAIN-COMMIT" in rule_ids(denials)
+}
+
+test_allow_git_branch_reset_with_commit_prose_on_main if {
+	cmd := concat("\n", [
+		"repo=/home/banon/projects/fromsoftware-rs",
+		"archive_branch=archive/local-inputblocker-injected-key-20260617",
+		"old_head=$(git -C \"$repo\" rev-parse HEAD)",
+		"# Preserve the old commit under a named local branch before resetting main.",
+		"git -C \"$repo\" branch \"$archive_branch\" \"$old_head\"",
+		"git -C \"$repo\" reset --hard origin/main",
+		"printf 'archive_commit=%s\\n' \"$old_head\"",
+	])
+	denials := guard.deny with input as bash_event(cmd, "main")
+	count(denials) == 0
+}
+
 test_deny_git_commit_when_branch_signal_missing if {
 	denials := guard.deny with input as bash_event_no_branch_signal("git commit -m 'bad'")
+	"ER-EFFECTS-BLOCK-MAIN-COMMIT" in rule_ids(denials)
+}
+
+test_deny_git_c_commit_when_branch_signal_missing if {
+	denials := guard.deny with input as bash_event_no_branch_signal("git -C /tmp/repo commit -m 'bad'")
 	"ER-EFFECTS-BLOCK-MAIN-COMMIT" in rule_ids(denials)
 }
 
@@ -69,5 +98,39 @@ test_allow_non_commit_git_on_main if {
 
 test_allow_commit_word_without_git_on_main if {
 	denials := guard.deny with input as bash_event("echo commit", "main\n")
+	count(denials) == 0
+}
+
+test_allow_git_archive_reset_script_with_commit_comments_on_main if {
+	cmd := `set -euo pipefail
+repo=/home/banon/projects/fromsoftware-rs
+archive_branch=archive/local-inputblocker-injected-key-20260617
+old_head=$(git -C "$repo" rev-parse HEAD)
+# Preserve the old commit under a named local branch before resetting main.
+if git -C "$repo" show-ref --verify --quiet "refs/heads/$archive_branch"; then
+  existing=$(git -C "$repo" rev-parse "$archive_branch")
+  if [ "$existing" != "$old_head" ]; then
+    echo "archive branch exists at different commit: $archive_branch $existing" >&2
+    exit 1
+  fi
+else
+  git -C "$repo" branch "$archive_branch" "$old_head"
+fi
+git -C "$repo" reset --hard origin/main
+printf 'archive_branch=%s\n' "$archive_branch"
+printf 'archive_commit=%s\n' "$old_head"
+printf '\nstatus\n'
+git -C "$repo" status --short --branch
+printf '\nremotes\n'
+git -C "$repo" remote -v
+printf '\nrecent refs\n'
+git -C "$repo" log --oneline --decorate --max-count=6 --graph --all --simplify-by-decoration`
+	denials := guard.deny with input as bash_event(cmd, "main\n")
+	count(denials) == 0
+}
+
+test_allow_git_operations_with_commit_variable_names_on_main if {
+	cmd := "commit_hash=$(git rev-parse HEAD); git reset --hard origin/main; printf 'archive_commit=%s\\n' \"$commit_hash\""
+	denials := guard.deny with input as bash_event(cmd, "main\n")
 	count(denials) == 0
 }
