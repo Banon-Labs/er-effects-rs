@@ -94,10 +94,12 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         })
     });
     body.push_str(&format!(
-        "  \"effect_hotkey_hook_active\": {},\n  \"effect_hotkey_hook_hits\": {},\n  \"effect_hotkey_applied_actions\": {},\n  \"effect_selector_overlay_draw_hits\": {},\n  \"effect_selector_overlay_visible\": {},\n  \"effect_selector_overlay_text\": \"{}\",\n  \"effect_application_allowed\": {},\n  \"effect_hotkeys_effects_on\": {},\n  \"effect_trigger_hotkey_count\": {},\n  \"effect_trigger_hotkeys_load_error\": {},\n  \"pending_effect_trigger_count\": {},\n  \"effect_trigger_fire_count\": {},\n  \"effect_trigger_last_key\": {},\n  \"effect_trigger_last_id\": {},\n  \"effect_trigger_last_count\": {},\n  \"effect_catalog_count\": {},\n  \"selected_effect_catalog_index\": {},\n  \"selected_effect_catalog_file\": {},\n  \"selected_effect_catalog_name\": {},\n  \"selected_effect_catalog_size\": {},\n  \"selected_effect_catalog_position\": {},\n  \"selected_effect_index\": {},\n  \"effect_setting_last_id\": {},\n  \"effect_setting_live_updates\": {},\n  \"effect_reapply_count\": {},\n  \"effect_reapply_last_index\": {},\n",
+        "  \"effect_hotkey_hook_active\": {},\n  \"effect_hotkey_hook_hits\": {},\n  \"effect_hotkey_applied_actions\": {},\n  \"effect_input_suppressed_keys\": {},\n  \"effect_input_suppressed_arrow_keys\": {},\n  \"effect_selector_overlay_draw_hits\": {},\n  \"effect_selector_overlay_visible\": {},\n  \"effect_selector_overlay_text\": \"{}\",\n  \"effect_application_allowed\": {},\n  \"effect_hotkeys_effects_on\": {},\n  \"effect_trigger_hotkey_count\": {},\n  \"effect_trigger_hotkeys_load_error\": {},\n  \"pending_effect_trigger_count\": {},\n  \"effect_trigger_fire_count\": {},\n  \"effect_trigger_last_key\": {},\n  \"effect_trigger_last_id\": {},\n  \"effect_trigger_last_count\": {},\n  \"effect_catalog_count\": {},\n  \"selected_effect_catalog_index\": {},\n  \"selected_effect_catalog_file\": {},\n  \"selected_effect_catalog_name\": {},\n  \"selected_effect_catalog_size\": {},\n  \"selected_effect_catalog_position\": {},\n  \"selected_effect_index\": {},\n  \"effect_setting_last_id\": {},\n  \"effect_setting_live_updates\": {},\n  \"effect_reapply_count\": {},\n  \"effect_reapply_last_index\": {},\n",
         effect_hotkey_hook_active(),
         EFFECT_HOTKEY_HOOK_HITS.load(Ordering::SeqCst),
         EFFECT_HOTKEY_APPLIED_ACTIONS.load(Ordering::SeqCst),
+        EFFECT_INPUT_SUPPRESSED_KEYS.load(Ordering::SeqCst),
+        EFFECT_INPUT_SUPPRESSED_ARROW_KEYS.load(Ordering::SeqCst),
         EFFECT_SELECTOR_OVERLAY_DRAW_HITS.load(Ordering::SeqCst),
         state.effect_selector_overlay_visible,
         json_escape(&effect_selector_overlay_text()),

@@ -15,7 +15,7 @@ use er_effects_data::{
 };
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, HC_ACTION, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_SYSKEYDOWN,
+    CallNextHookEx, HC_ACTION, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 use crate::{EffectsState, append_autoload_debug, command_path};
@@ -64,9 +64,12 @@ static EFFECT_HOTKEY_PENDING_OVERLAY_TOGGLE: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_HOOK_STARTED: AtomicBool = AtomicBool::new(false);
 static EFFECT_HOTKEY_HOOK_ACTIVE: AtomicBool = AtomicBool::new(false);
 static EFFECT_SELECTOR_OVERLAY_TEXT: OnceLock<Mutex<String>> = OnceLock::new();
+static EFFECT_SELECTOR_OVERLAY_VISIBLE_FOR_HOOK: AtomicBool = AtomicBool::new(false);
 static EFFECT_TRIGGER_PENDING_KEYS: OnceLock<Mutex<Vec<EffectTriggerKeyPress>>> = OnceLock::new();
 pub(crate) static EFFECT_HOTKEY_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static EFFECT_HOTKEY_APPLIED_ACTIONS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static EFFECT_INPUT_SUPPRESSED_KEYS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static EFFECT_INPUT_SUPPRESSED_ARROW_KEYS: AtomicUsize = AtomicUsize::new(0);
 
 /// A named runtime effect call the overlay can trigger.
 ///
@@ -592,7 +595,12 @@ unsafe extern "system" fn effect_hotkey_ll_keyboard_proc(
     if ncode == HC_ACTION as i32 && lparam.0 != 0 {
         let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
         let msg = wparam.0 as u32;
-        if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
+        let key_down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+        let key_up = msg == WM_KEYUP || msg == WM_SYSKEYUP;
+        let suppress_arrow = (key_down || key_up)
+            && is_arrow_key(kb.vkCode)
+            && EFFECT_SELECTOR_OVERLAY_VISIBLE_FOR_HOOK.load(Ordering::SeqCst);
+        if key_down {
             let alt_down = msg == WM_SYSKEYDOWN || (kb.flags.0 & LLKHF_ALTDOWN) != 0;
             queue_effect_trigger_key(kb.vkCode, alt_down);
             let action = effect_hotkey_action_for_key(kb.vkCode, alt_down);
@@ -617,6 +625,11 @@ unsafe extern "system" fn effect_hotkey_ll_keyboard_proc(
                     EFFECT_HOTKEY_PENDING_OVERLAY_TOGGLE.fetch_add(1, Ordering::SeqCst);
                 }
             }
+        }
+        if suppress_arrow {
+            EFFECT_INPUT_SUPPRESSED_KEYS.fetch_add(1, Ordering::SeqCst);
+            EFFECT_INPUT_SUPPRESSED_ARROW_KEYS.fetch_add(1, Ordering::SeqCst);
+            return LRESULT(1);
         }
     }
     unsafe { CallNextHookEx(None, ncode, wparam, lparam) }
@@ -728,6 +741,8 @@ pub(crate) fn publish_effect_selector_overlay_text(state: &mut EffectsState) {
         ));
         EFFECT_HOTKEY_APPLIED_ACTIONS.fetch_add(overlay_toggles, Ordering::SeqCst);
     }
+    EFFECT_SELECTOR_OVERLAY_VISIBLE_FOR_HOOK
+        .store(state.effect_selector_overlay_visible, Ordering::SeqCst);
     if !state.effect_selector_overlay_visible {
         if let Ok(mut slot) = EFFECT_SELECTOR_OVERLAY_TEXT
             .get_or_init(|| Mutex::new(String::new()))
@@ -1282,14 +1297,20 @@ pub(crate) fn execute_driver_command(
     match parts.as_slice() {
         ["overlay", "on"] => {
             state.effect_selector_overlay_visible = true;
+            EFFECT_SELECTOR_OVERLAY_VISIBLE_FOR_HOOK.store(true, Ordering::SeqCst);
             Ok(())
         }
         ["overlay", "off"] => {
             state.effect_selector_overlay_visible = false;
+            EFFECT_SELECTOR_OVERLAY_VISIBLE_FOR_HOOK.store(false, Ordering::SeqCst);
             Ok(())
         }
         ["overlay", "toggle"] => {
             state.effect_selector_overlay_visible = !state.effect_selector_overlay_visible;
+            EFFECT_SELECTOR_OVERLAY_VISIBLE_FOR_HOOK.store(
+                state.effect_selector_overlay_visible,
+                Ordering::SeqCst,
+            );
             Ok(())
         }
         ["apply_all"] => {

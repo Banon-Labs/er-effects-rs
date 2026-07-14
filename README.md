@@ -271,7 +271,7 @@ In-game controls:
 - Left/Right: switch the active effect catalog when the debug HUD is visible.
 - Up/Down: step through the selected catalog's validated IDs and apply the selected effect when the debug HUD is visible.
 - Alt+': toggle the currently selected effect off/on.
-- Alt+Numpad0: toggle the effect selector debug HUD. The HUD is hidden by default; while hidden, arrow keys are ignored by the selector and by any arrow-key entries in `.effect-hotkeys.json`.
+- Alt+Numpad0: toggle the effect selector debug HUD. The HUD is hidden by default; while hidden, arrow keys are ignored by the selector and by any arrow-key entries in `.effect-hotkeys.json`. While the HUD is visible, arrow keys are consumed by the selector and suppressed before the game receives them.
 
 Runtime SpEffect application is gated to the loaded character state: the local player must exist before the DLL calls `apply_speffect`, but standing idle is allowed. Selector/file changes before the player exists may arm the selected effect; once the player is live, direct trigger hotkeys and selected effects apply immediately.
 
