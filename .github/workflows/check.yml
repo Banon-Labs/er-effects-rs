@@ -16,10 +16,13 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
-  # Commit of vswarte/fromsoftware-rs the workspace is developed against.
+  # fromsoftware-rs checkout the workspace is developed against.
   # The root crate uses `../fromsoftware-rs` path dependencies, so the
   # workspace cannot even be loaded by cargo without this sibling checkout.
-  FROMSOFTWARE_RS_REV: 902851865d05069eda7dcfd6385c8881eadf29bf
+  # This feature branch depends on generic Elden Ring CS title/menu/save layouts
+  # that are still staged on our fork while the upstream PR is under review.
+  FROMSOFTWARE_RS_REPO: https://github.com/chozandrias76/fromsoftware-rs.git
+  FROMSOFTWARE_RS_REV: d5f3505c23b2b6f63e12ad66dbf757b4345eeee5
   # Commit of eqtylab/cupcake the policy checker is built from. Also keys the
   # cache of the built binary -- bumping the rev invalidates the cache.
   CUPCAKE_REV: 27b94b8
@@ -36,7 +39,7 @@ jobs:
 
       - name: Check out fromsoftware-rs as sibling
         run: |
-          git clone https://github.com/vswarte/fromsoftware-rs.git "$GITHUB_WORKSPACE/../fromsoftware-rs"
+          git clone "$FROMSOFTWARE_RS_REPO" "$GITHUB_WORKSPACE/../fromsoftware-rs"
           git -C "$GITHUB_WORKSPACE/../fromsoftware-rs" checkout "$FROMSOFTWARE_RS_REV"
 
       - name: Check out MinHook vendor source
