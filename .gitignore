@@ -27,6 +27,15 @@ offline-launcher.exe
 # Local runtime-probe env files (may contain AUTHORIZED runtime flags)
 .envs/
 
+# Local/user-specific agent settings and generated research artifacts.
+.claude/settings.local.json
+/autoresearch/
+/investigations/
+.auto/autoload-request-*.txt
+.auto/ideas.md
+.auto/prompt.md
+.auto/run-portrait-source-probe.sh
+
 # Third-party reference binaries for RE/compat analysis (copyrighted; NEVER commit,
 # NEVER bundle into product/release/target). Seamless Co-op (ersc.dll) lives here.
 /vendor/
