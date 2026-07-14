@@ -10,6 +10,8 @@ use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 
 static INPUT_BLOCKER: OnceLock<&'static InputBlocker> = OnceLock::new();
 static INJECTED_KEY: AtomicU8 = AtomicU8::new(0);
+static SUPPRESS_ARROW_KEYS: AtomicBool = AtomicBool::new(false);
+pub(crate) static DINPUT_SUPPRESSED_ARROW_KEYS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Default)]
 pub struct InputBlocker {
@@ -68,6 +70,11 @@ impl InputBlocker {
     /// cleared (0 = none). User input remains suppressed.
     pub fn set_injected_key(&self, dik: u8) {
         INJECTED_KEY.store(dik, Ordering::Relaxed);
+    }
+
+    /// Suppress only the DInput arrow-key state while leaving the rest of the keyboard live.
+    pub fn set_arrow_key_suppression(&self, enabled: bool) {
+        SUPPRESS_ARROW_KEYS.store(enabled, Ordering::Relaxed);
     }
 }
 
@@ -193,11 +200,22 @@ unsafe extern "system" fn dinput_mouse_get_state_hook(
 }
 
 fn zero_blocked_dinput_state(hr: i32, size: u32, data: *mut u8, flags: InputFlags) {
-    if hr != 0 || data.is_null() || size == 0 || !is_blocked(flags) {
+    if hr != 0 || data.is_null() || size == 0 {
         return;
     }
 
     let size = size as usize;
+    if flags.contains(InputFlags::Keyboard)
+        && SUPPRESS_ARROW_KEYS.load(Ordering::Relaxed)
+        && size >= DINPUT_KEYBOARD_BUFFER_LEN
+    {
+        zero_dinput_arrow_keys(data);
+    }
+
+    if !is_blocked(flags) {
+        return;
+    }
+
     unsafe { std::ptr::write_bytes(data, 0, size) };
     if flags.contains(InputFlags::Keyboard) && size >= DINPUT_KEYBOARD_BUFFER_LEN {
         const DIK_PRESSED: u8 = 0x80;
@@ -205,6 +223,27 @@ fn zero_blocked_dinput_state(hr: i32, size: u32, data: *mut u8, flags: InputFlag
         if dik != 0 && (dik as usize) < DINPUT_KEYBOARD_BUFFER_LEN {
             unsafe { *data.add(dik as usize) = DIK_PRESSED };
         }
+    }
+}
+
+fn zero_dinput_arrow_keys(data: *mut u8) {
+    const DIK_LEFT: usize = 0xcb;
+    const DIK_RIGHT: usize = 0xcd;
+    const DIK_UP: usize = 0xc8;
+    const DIK_DOWN: usize = 0xd0;
+    let mut cleared = 0usize;
+    for offset in [DIK_LEFT, DIK_RIGHT, DIK_UP, DIK_DOWN] {
+        let slot = unsafe { data.add(offset) };
+        let was_pressed = unsafe { *slot } != 0;
+        unsafe { *slot = 0 };
+        if was_pressed {
+            cleared = cleared.saturating_add(1);
+        }
+    }
+    if cleared != 0 {
+        DINPUT_SUPPRESSED_ARROW_KEYS.fetch_add(cleared, Ordering::SeqCst);
+        crate::effects::EFFECT_INPUT_SUPPRESSED_KEYS.fetch_add(cleared, Ordering::SeqCst);
+        crate::effects::EFFECT_INPUT_SUPPRESSED_ARROW_KEYS.fetch_add(cleared, Ordering::SeqCst);
     }
 }
 

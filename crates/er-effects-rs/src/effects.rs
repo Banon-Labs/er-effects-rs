@@ -18,7 +18,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, HC_ACTION, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
-use crate::{EffectsState, append_autoload_debug, command_path};
+use crate::{EffectsState, append_autoload_debug, command_path, input_blocker::InputBlocker};
 
 const EFFECT_HOTKEY_UP: usize = 1 << 0;
 const EFFECT_HOTKEY_DOWN: usize = 1 << 1;
@@ -65,6 +65,7 @@ static EFFECT_HOTKEY_HOOK_STARTED: AtomicBool = AtomicBool::new(false);
 static EFFECT_HOTKEY_HOOK_ACTIVE: AtomicBool = AtomicBool::new(false);
 static EFFECT_SELECTOR_OVERLAY_TEXT: OnceLock<Mutex<String>> = OnceLock::new();
 static EFFECT_SELECTOR_OVERLAY_VISIBLE_FOR_HOOK: AtomicBool = AtomicBool::new(false);
+static EFFECT_SELECTOR_DINPUT_HOOK_INSTALL_ATTEMPTED: AtomicBool = AtomicBool::new(false);
 static EFFECT_TRIGGER_PENDING_KEYS: OnceLock<Mutex<Vec<EffectTriggerKeyPress>>> = OnceLock::new();
 pub(crate) static EFFECT_HOTKEY_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static EFFECT_HOTKEY_APPLIED_ACTIONS: AtomicUsize = AtomicUsize::new(0);
@@ -725,6 +726,32 @@ fn truncated_effect_overlay_name(call: &NamedEffectCall) -> Option<String> {
     Some(out)
 }
 
+fn sync_effect_selector_input_suppression(visible: bool) {
+    EFFECT_SELECTOR_OVERLAY_VISIBLE_FOR_HOOK.store(visible, Ordering::SeqCst);
+    let blocker = InputBlocker::get_instance();
+    blocker.set_arrow_key_suppression(visible);
+    if !EFFECT_SELECTOR_DINPUT_HOOK_INSTALL_ATTEMPTED.swap(true, Ordering::SeqCst) {
+        let res = std::panic::catch_unwind(|| unsafe { blocker.install_hooks() });
+        match res {
+            Ok(Ok(())) => append_autoload_debug(format_args!(
+                "effect-selector: DInput arrow suppression hook installed"
+            )),
+            Ok(Err(status)) => {
+                EFFECT_SELECTOR_DINPUT_HOOK_INSTALL_ATTEMPTED.store(false, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "effect-selector: DInput arrow suppression hook install failed: {status:?}"
+                ));
+            }
+            Err(_) => {
+                EFFECT_SELECTOR_DINPUT_HOOK_INSTALL_ATTEMPTED.store(false, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "effect-selector: DInput arrow suppression hook install panicked"
+                ));
+            }
+        }
+    }
+}
+
 pub(crate) fn publish_effect_selector_overlay_text(state: &mut EffectsState) {
     let overlay_toggles = EFFECT_HOTKEY_PENDING_OVERLAY_TOGGLE.swap(0, Ordering::SeqCst);
     if overlay_toggles != 0 {
@@ -741,8 +768,7 @@ pub(crate) fn publish_effect_selector_overlay_text(state: &mut EffectsState) {
         ));
         EFFECT_HOTKEY_APPLIED_ACTIONS.fetch_add(overlay_toggles, Ordering::SeqCst);
     }
-    EFFECT_SELECTOR_OVERLAY_VISIBLE_FOR_HOOK
-        .store(state.effect_selector_overlay_visible, Ordering::SeqCst);
+    sync_effect_selector_input_suppression(state.effect_selector_overlay_visible);
     if !state.effect_selector_overlay_visible {
         if let Ok(mut slot) = EFFECT_SELECTOR_OVERLAY_TEXT
             .get_or_init(|| Mutex::new(String::new()))
@@ -1297,20 +1323,17 @@ pub(crate) fn execute_driver_command(
     match parts.as_slice() {
         ["overlay", "on"] => {
             state.effect_selector_overlay_visible = true;
-            EFFECT_SELECTOR_OVERLAY_VISIBLE_FOR_HOOK.store(true, Ordering::SeqCst);
+            sync_effect_selector_input_suppression(true);
             Ok(())
         }
         ["overlay", "off"] => {
             state.effect_selector_overlay_visible = false;
-            EFFECT_SELECTOR_OVERLAY_VISIBLE_FOR_HOOK.store(false, Ordering::SeqCst);
+            sync_effect_selector_input_suppression(false);
             Ok(())
         }
         ["overlay", "toggle"] => {
             state.effect_selector_overlay_visible = !state.effect_selector_overlay_visible;
-            EFFECT_SELECTOR_OVERLAY_VISIBLE_FOR_HOOK.store(
-                state.effect_selector_overlay_visible,
-                Ordering::SeqCst,
-            );
+            sync_effect_selector_input_suppression(state.effect_selector_overlay_visible);
             Ok(())
         }
         ["apply_all"] => {
