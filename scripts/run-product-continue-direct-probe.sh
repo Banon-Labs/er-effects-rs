@@ -465,9 +465,9 @@ start_hypr_window_placer
 # compat-tool/wine tree, which dies with its parent, so we must stay as the launch parent for the
 # game's whole lifetime --
 # backgrounding and exiting kills it (observed). The zero-input autoload then runs on the user's
-# monitor; the DLL input block releases in-world so the user takes over. Tear down with
-# `pkill -x eldenring.exe` (or quit the game). Save-safe: the gold is only read; writes go to the
-# isolated staged copy / pre-wiped default dir, never save-files/...).
+# monitor; the DLL input block releases in-world so the user takes over. End the run through the
+# game's native in-game quit flow. Save-safe: the gold is only read; writes go to the isolated staged
+# copy / pre-wiped default dir, never save-files/...).
 if [[ "${RUNTIME_NO_TEARDOWN:-0}" == "1" ]]; then
   echo "$$" > "$PID_FILE"
   echo ""
@@ -478,7 +478,7 @@ if [[ "${RUNTIME_NO_TEARDOWN:-0}" == "1" ]]; then
   echo " releases once you are in the world, then you can play."
   echo " Telemetry: $TELEMETRY_PATH"
   echo " Debug log: $AUTOLOAD_DEBUG_PATH"
-  echo " TEAR DOWN when done:  pkill -x eldenring.exe"
+  echo " END when done: use Elden Ring's native in-game quit flow"
   echo "============================================================================"
   cd "$GAME_DIR"
   # exec -> this launcher BECOMES the foreground me3 CLI, which owns the compat-tool/wine tree;

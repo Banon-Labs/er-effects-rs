@@ -142,15 +142,30 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     // instead of waiting for that flag to clear, so the loading-owned renderer is ready when the loading
     // screen appears.
     let profile_select_window_open = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0;
+    // Native LoadingScreen::Update is a stronger "the menu is done; the loading surface is already on
+    // screen" signal than waiting for the profile renderer table to become empty. Prior behavior waited for
+    // the stale native table to drain, building at +19011ms even though Gauge_3 was visible at +16650ms; the
+    // async model then came live ~560ms later. Once this native screen is ticking, rebuilding the table is
+    // just the game's own builder's first step (FUN_1409b2db0 delay-deletes the old 10 renderers before
+    // constructing new ones), so do it immediately instead of burning the leading portrait gap.
+    let loading_screen_started = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst) != 0
+        && LOADING_SCREEN_BAR_ENABLED.load(Ordering::SeqCst) != 0
+        && LOADING_SCREEN_BAR_MAX_FRAME.load(Ordering::SeqCst) != 0;
     // If the table is already populated (menu built it, or our own build already ran), leave it -- the
     // existing mark+refresh feed + look-at + draw + oracle drive it. A live table also RE-ARMS the latch:
-    // a subsequent Continue teardown empties it again and we rebuild our own for that load window.
+    // a subsequent Continue teardown empties it again and we rebuild our own for that load window. Exception:
+    // native LoadingScreen is already ticking while the table is still populated. That table is stale for the
+    // loadscreen portrait; force the normal builder now so the model build overlaps the earliest loading bar.
     let t0 = unsafe { safe_read_usize(portrait_renderer_table_entry(base, 0)) }.unwrap_or(0);
     let populated = t0 != 0
         && t0 != null
         && unsafe { safe_read_usize(t0) }.unwrap_or(0)
             == base + TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA;
-    if populated {
+    let force_loading_screen_rebuild = populated
+        && loading_screen_started
+        && PROFILE_LOADSCREEN_TABLE_OWNED.load(Ordering::SeqCst) == 0
+        && PROFILE_LOADSCREEN_REBUILT.load(Ordering::SeqCst) == 0;
+    if populated && !force_loading_screen_rebuild {
         PROFILE_TABLE_EMPTY_STREAK.store(0, Ordering::SeqCst);
         PROFILE_TABLE_WAS_POPULATED.store(1, Ordering::SeqCst);
         if PROFILE_LOADSCREEN_TABLE_OWNED.load(Ordering::SeqCst) == 0 {
@@ -158,7 +173,13 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
         }
         return;
     }
-    if profile_select_window_open {
+    if populated {
+        PROFILE_TABLE_EMPTY_STREAK.store(0, Ordering::SeqCst);
+        PROFILE_TABLE_WAS_POPULATED.store(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "loading-portrait: native LoadingScreen already updating while profile table is still populated -- rebuilding loading-owned renderer immediately to close the leading portrait gap"
+        ));
+    } else if profile_select_window_open {
         append_autoload_debug(format_args!(
             "loading-portrait: ProfileSelect owner flag still set, but renderer table is empty -- treating as Continue teardown and building loading-owned renderer now"
         ));
@@ -167,7 +188,11 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     // sustained-empty table across ticks means the Continue teardown ran with no menu rebuild (we've left
     // the menu into the load), which happens ~17s -- well before the now-loading flag flips (~21s on the
     // fast gold-save load). Build as soon as EITHER signal fires so ResMan has time to build the model.
-    let streak = PROFILE_TABLE_EMPTY_STREAK.fetch_add(1, Ordering::SeqCst) + 1;
+    let streak = if force_loading_screen_rebuild {
+        0
+    } else {
+        PROFILE_TABLE_EMPTY_STREAK.fetch_add(1, Ordering::SeqCst) + 1
+    };
     if PROFILE_LOADSCREEN_REBUILT.load(Ordering::SeqCst) != 0 {
         return; // already built our table for this load window
     }
@@ -177,7 +202,9 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
         return;
     }
     let nowload = unsafe { now_loading_active(base) };
-    if !(nowload || profile_select_window_open || streak >= PROFILE_TABLE_EMPTY_STREAK_BUILD_THRESHOLD) {
+    if !force_loading_screen_rebuild
+        && !(nowload || profile_select_window_open || streak >= PROFILE_TABLE_EMPTY_STREAK_BUILD_THRESHOLD)
+    {
         return;
     }
     // ORPHAN RECLAIM BACKSTOP (second-load foreign-head fix; primary reclaim is at the switch confirm in
@@ -219,8 +246,10 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     PROFILE_LOADSCREEN_TABLE_OWNED.store(1, Ordering::SeqCst);
     PROFILE_LOADSCREEN_TABLE_BUILDS.fetch_add(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "loading-portrait: empty profile table (trigger={} streak={streak}) -> called builder 0x{:x} to build our own renderers for the post-Continue portrait",
-        if nowload {
+        "loading-portrait: profile table rebuild (trigger={} streak={streak}) -> called builder 0x{:x} to build our own renderers for the post-Continue portrait",
+        if force_loading_screen_rebuild {
+            "native-loading-screen"
+        } else if nowload {
             "now-loading"
         } else if profile_select_window_open {
             "profile-window-empty"

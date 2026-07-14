@@ -559,7 +559,13 @@ pub(crate) static LOADING_SCREEN_BAR_CURRENT_FRAME: AtomicUsize = AtomicUsize::n
 pub(crate) static LOADING_SCREEN_BAR_MAX_FRAME: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static LOADING_SCREEN_BAR_PROGRESS_PERMILLE: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static LOADING_SCREEN_BAR_FINAL_HITS: AtomicUsize = AtomicUsize::new(0);
+/// `CS::LoadingScreen::Update` sets this byte after the post-100%-bar countdown elapses, calls the
+/// owning MenuWindow result callback, and resets the `LoadingScreenData`. This is later than Gauge_3's
+/// terminal frame and matches the native loading-screen close handoff more closely than "bar is full".
+pub(crate) static LOADING_SCREEN_CLOSE_SENT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LOADING_SCREEN_CLOSE_SENT_HITS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const LOADING_SCREEN_DATA_OFFSET: usize = 0xa38;
+pub(crate) const LOADING_SCREEN_FINISH_SENT_OFFSET: usize = 0xa44;
 pub(crate) const LOADING_SCREEN_GAUGE_COMPONENT_OFFSET: usize = 0xa48;
 pub(crate) const LOADING_SCREEN_GAUGE_ENABLED_OFFSET: usize = 0xab0;
 pub(crate) const MENU_FRAME_COMPONENT_CURRENT_FRAME_OFFSET: usize = 0x70;

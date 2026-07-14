@@ -50,11 +50,13 @@ TARGET_AUTOLOAD_REQUEST = "autoload-request"
 TARGET_REQUEST_CONSUMPTION = "request-consumption"
 TARGET_PLAYER_LOAD = "player-load"
 TARGET_WORLD_STABLE = "world-stable"
+TARGET_LOADING_PORTRAIT_STOP = "loading-portrait-stop"
 READY_REASON = "game_man_telemetry_ready"
 COLD_CHAR_MOUNT_COMPLETE = "cold_char_mount_complete"
 COLD_CHAR_MOUNT_PHASE_DONE = 5  # cold_char_mount_drive MOUNT_PHASE PHASE_DONE, published as phase+1
 MODULE_BASE_READY = "runtime_module_base_observed"
 WORLD_STABLE = "world_stable"
+LOADING_PORTRAIT_STOPPED = "loading_portrait_stopped"
 RUNTIME_EXE_NAME = "eldenring.exe"
 WINDOW_WITHOUT_BOOTSTRAP = "window_without_bootstrap_marker"
 WINDOW_WITHOUT_TASK = "window_without_game_task_ready"
@@ -1290,6 +1292,21 @@ def telemetry_cold_char_mount_complete(telemetry: dict[str, Any] | None) -> bool
     return as_int(telemetry.get("oracle_cold_char_mount_phase"), 0) >= COLD_CHAR_MOUNT_PHASE_DONE
 
 
+def telemetry_loading_portrait_stopped(telemetry: dict[str, Any] | None) -> bool:
+    """True once the loading portrait feature hit its product stop.
+
+    Stop reason 5 is the native LoadingScreen close/result handoff, intentionally later than the legacy
+    Gauge_3 terminal-frame reason 4. Feature-specific probes should tear down here instead of waiting
+    for world-stable.
+    """
+    if not isinstance(telemetry, dict):
+        return False
+    return (
+        as_int(telemetry.get("oracle_overlay_stop_reason"), 0) == 5
+        and as_int(telemetry.get("oracle_loading_screen_close_sent_hits"), 0) > 0
+    )
+
+
 def telemetry_server_status_semaphore_detected(telemetry: dict[str, Any] | None) -> bool:
     if not isinstance(telemetry, dict):
         return False
@@ -2397,6 +2414,21 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
                     expected_animation_id=args.expected_animation_id,
                 )
             )
+        if args.target == TARGET_LOADING_PORTRAIT_STOP and telemetry_loading_portrait_stopped(telemetry):
+            return with_runtime_module_info(
+                ReadinessResult(
+                    True,
+                    LOADING_PORTRAIT_STOPPED,
+                    pid,
+                    bootstrap,
+                    telemetry,
+                    [],
+                    spawn_polls + poll,
+                    float(args.max_runtime_seconds),
+                    expected_save_oracle=expected_save_oracle,
+                    expected_animation_id=args.expected_animation_id,
+                )
+            )
         if telemetry_native_load_save_data_corrupted_detected(telemetry) and not (
             telemetry is not None and telemetry.get("oracle_native_profile_capture_enabled") is True
         ):
@@ -2461,8 +2493,10 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
                     expected_animation_id=args.expected_animation_id,
                 )
             )
-        if args.fail_on_portrait_publish_failure and telemetry_portrait_publish_failure_detected(
-            telemetry
+        if (
+            args.fail_on_portrait_publish_failure
+            and args.target != TARGET_LOADING_PORTRAIT_STOP
+            and telemetry_portrait_publish_failure_detected(telemetry)
         ):
             return with_runtime_module_info(
                 ReadinessResult(
@@ -2816,6 +2850,7 @@ def parse_args() -> argparse.Namespace:
             TARGET_REQUEST_CONSUMPTION,
             TARGET_PLAYER_LOAD,
             TARGET_WORLD_STABLE,
+            TARGET_LOADING_PORTRAIT_STOP,
         ],
         default=TARGET_GAME_MAN,
     )

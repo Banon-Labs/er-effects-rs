@@ -2492,8 +2492,8 @@ fn write_game_module_oracles(body: &mut String) {
             PORTRAIT_LUMA_FLICKER_MAX.load(Ordering::SeqCst),
         );
         // LOADING-SCREEN WINDOW semaphores: overlay stop count + last stop reason (1 = load-done bridge
-        // elapsed; 3 = anti-runaway backstop; 4 = native now-loading Gauge_3 terminal frame / visible
-        // loading bar reached 100%).
+        // elapsed; 3 = anti-runaway backstop; 4 = legacy Gauge_3 terminal frame; 5 = native LoadingScreen
+        // close/result handoff after the post-100%-bar countdown).
         push_json_usize(
             body,
             "oracle_overlay_window_stops",
@@ -2538,6 +2538,16 @@ fn write_game_module_oracles(body: &mut String) {
             body,
             "oracle_loading_bar_final_hits",
             LOADING_SCREEN_BAR_FINAL_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_loading_screen_close_sent",
+            LOADING_SCREEN_CLOSE_SENT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_loading_screen_close_sent_hits",
+            LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst),
         );
         // CANDIDATE A (er-effects-rs-jsm): live head copied INTO the displayed now-loading GFx texture so
         // the native tips/bar render above it. `uploads > 0` == the head is in the movie; `overlay_yields`

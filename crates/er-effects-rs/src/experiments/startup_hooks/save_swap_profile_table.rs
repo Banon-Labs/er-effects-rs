@@ -840,6 +840,22 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
             "loading-portrait: reclaimed prior spared renderer 0x{orphan:x} via CSDelayDeleteMan enqueued={deleted} (repeated-switch GX command-queue leak fix)"
         ));
     }
+    // If the native title/menu code tries to run the teardown-all AGAIN after we have already rebuilt the
+    // loading-screen-owned portrait table, do NOT let it delete the live animated source mid-load. This is
+    // the exact failure exposed by the leading-gap fix: early build at LoadingScreen start, model animates,
+    // then a later stale native teardown clears DAT_143d6d8d0 and the overlay keeps displaying the last
+    // snapshot frozen (r_bad climbs, drive/display diverges). The builder's own internal teardown still runs
+    // normally because PROFILE_LOADSCREEN_TABLE_OWNED is set only after the builder returns.
+    if PROFILE_LOADSCREEN_TABLE_OWNED.load(Ordering::SeqCst) != 0
+        && LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst) != 0
+        && LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst) == 0
+    {
+        append_autoload_debug(format_args!(
+            "loading-portrait: skipped stale native profile-table teardown during active LoadingScreen -- keeping loading-owned renderer alive so the portrait keeps animating"
+        ));
+        PROFILE_RENDERER_TEARDOWN_FENCE.store(0, Ordering::SeqCst);
+        return;
+    }
     // Gate on the look-at/portrait feature OR product autoload -- the native-continue path does NOT set
     // PRODUCT_AUTOLOAD_ARMED, so gating on product_autoload alone never spared anything there.
     if LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) == 0
