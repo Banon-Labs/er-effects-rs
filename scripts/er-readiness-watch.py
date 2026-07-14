@@ -1397,6 +1397,25 @@ def telemetry_result_action_insert_has_update_rva(telemetry: dict[str, Any]) -> 
     return False
 
 
+def telemetry_player_character_loaded(telemetry: dict[str, Any] | None) -> bool:
+    """Summary-only product health signal.
+
+    This is intentionally weaker than telemetry_world_loaded(): it does not certify map/world
+    stability, but it is strong enough to stop reporting title-submit diagnostic gate state as the
+    active blocker after a real character is loaded and no native popup failure is present.
+    """
+    if not isinstance(telemetry, dict) or telemetry.get("game_man_instance_resolved") is not True:
+        return False
+    player_seen = telemetry.get("player_available") is True or telemetry.get("player_seen") is True
+    if not player_seen:
+        return False
+    if name_empty_like(telemetry.get("oracle_char_name")):
+        return False
+    if as_int(telemetry.get("oracle_char_level"), -1) < 0:
+        return False
+    return telemetry_no_postload_popup(telemetry)
+
+
 def telemetry_native_continue_chain_stage(telemetry: dict[str, Any]) -> str:
     phase = as_int(telemetry.get("oracle_continue_phase"), -1)
     result_chain_ready = telemetry_native_result_chain_ready(telemetry)
@@ -1444,7 +1463,12 @@ def autoload_progress_summary(telemetry: dict[str, Any] | None) -> dict[str, Any
     phase = as_int(telemetry.get("oracle_continue_phase"), -1)
     title_handoff_complete = telemetry.get("title_handoff_complete") is True
     native_stage = telemetry_native_continue_chain_stage(telemetry)
-    if telemetry.get("game_man_instance_resolved") is not True:
+    player_character_loaded = telemetry_player_character_loaded(telemetry)
+    if native_stage == "world_loaded":
+        blocker = "world_loaded"
+    elif player_character_loaded:
+        blocker = "player_character_loaded"
+    elif telemetry.get("game_man_instance_resolved") is not True:
         blocker = "waiting_for_game_man"
     elif telemetry.get("product_autoload_armed") is True and product_core_ticks > 0 and attempts <= 0:
         blocker = f"product_core_{product_core_blocker}"
@@ -1465,6 +1489,7 @@ def autoload_progress_summary(telemetry: dict[str, Any] | None) -> dict[str, Any
         "game_task_ticks": telemetry.get("game_task_ticks"),
         "player_available": telemetry.get("player_available"),
         "player_seen": telemetry.get("player_seen"),
+        "player_character_loaded": player_character_loaded,
         "autoload_slot": telemetry.get("autoload_slot"),
         "autoload_method": telemetry.get("autoload_method"),
         "autoload_require_title_bootstrap": telemetry.get("autoload_require_title_bootstrap"),
@@ -1472,6 +1497,9 @@ def autoload_progress_summary(telemetry: dict[str, Any] | None) -> dict[str, Any
         "product_core_autoload_ticks": telemetry.get("product_core_autoload_ticks"),
         "product_core_ready_blocks": telemetry.get("product_core_ready_blocks"),
         "product_core_ready_successes": telemetry.get("product_core_ready_successes"),
+        "product_core_ready_current": telemetry.get("product_core_ready_current"),
+        "product_core_ready_ever": telemetry.get("product_core_ready_ever"),
+        "product_core_ready_last_gate_state": telemetry.get("product_core_ready_last_gate_state"),
         "product_core_owner_ticks": telemetry.get("product_core_owner_ticks"),
         "product_core_last_owner": telemetry.get("product_core_last_owner"),
         "product_core_last_title_dialog": telemetry.get("product_core_last_title_dialog"),
