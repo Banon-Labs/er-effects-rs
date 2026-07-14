@@ -275,6 +275,17 @@ The built-in catalog is currently narrowed for visual/audio triage: it contains 
 
 The selected ID is persisted to `.effect-setting.txt`; editing that file while the game is running also applies the matching in-catalog effect ID live. The full triage list lives in `data/effects.json`; supporting audit artifacts are under `target/effect-meaningfulness-*.csv` when regenerated locally.
 
+Master catalog:
+
+`data/effect-master-catalog.json` is the rich authoritative SpEffect metadata map. It is keyed by `SpEffectParam` ID and records names, VFX IDs, derived tags, and meaningful non-default fields such as AI perception, HP/FP/stamina, movement/timing, damage, defense, and lifetime fields. Selector/user catalogs should reference this file by ID instead of copying field metadata; future user catalogs should be named JSON files in a shared catalog folder and contain only ID lists plus minimal catalog identity.
+
+Regenerate the master catalog from a local regulation file:
+
+<!-- md-test: bash-n -->
+```bash
+scripts/generate-effect-master-catalog.py --regulation "$REGULATION_BIN"
+```
+
 Validate the list against a regulation file:
 
 <!-- md-test: bash-n -->
