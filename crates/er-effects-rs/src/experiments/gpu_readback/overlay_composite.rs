@@ -10,9 +10,10 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12_COLOR_WRITE_ENABLE_ALL, D3D12_COMPARISON_FUNC_ALWAYS,
     D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF, D3D12_CULL_MODE_NONE,
     D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING, D3D12_DEPTH_STENCIL_DESC,
-    D3D12_DESCRIPTOR_HEAP_DESC, D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
+    D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_DESCRIPTOR_HEAP_DESC, D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
     D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
     D3D12_DESCRIPTOR_HEAP_TYPE_RTV, D3D12_DESCRIPTOR_RANGE, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
+    D3D12_GPU_DESCRIPTOR_HANDLE,
     D3D12_DESCRIPTOR_RANGE_TYPE_SRV, D3D12_FILL_MODE_SOLID,
     D3D12_FILTER_MIN_MAG_MIP_LINEAR, D3D12_GRAPHICS_PIPELINE_STATE_DESC,
     D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED, D3D12_INPUT_LAYOUT_DESC,
@@ -43,6 +44,13 @@ static OVERLAY_GPU_TEX_W: AtomicUsize = AtomicUsize::new(0);
 static OVERLAY_GPU_TEX_H: AtomicUsize = AtomicUsize::new(0);
 static OVERLAY_GPU_TEX_STATE: AtomicUsize = AtomicUsize::new(0); // 0=COPY_DEST/unknown, 1=PIXEL_SHADER_RESOURCE
 static OVERLAY_GPU_TEX_VERSION: AtomicUsize = AtomicUsize::new(usize::MAX);
+static OVERLAY_TEXT_GPU_TEXTURE: AtomicUsize = AtomicUsize::new(0);
+static OVERLAY_TEXT_GPU_UPLOAD: AtomicUsize = AtomicUsize::new(0);
+static OVERLAY_TEXT_GPU_UPLOAD_SIZE: AtomicU64 = AtomicU64::new(0);
+static OVERLAY_TEXT_GPU_TEX_W: AtomicUsize = AtomicUsize::new(0);
+static OVERLAY_TEXT_GPU_TEX_H: AtomicUsize = AtomicUsize::new(0);
+static OVERLAY_TEXT_GPU_TEX_STATE: AtomicUsize = AtomicUsize::new(0); // 0=COPY_DEST/unknown, 1=PIXEL_SHADER_RESOURCE
+static OVERLAY_TEXT_GPU_TEX_VERSION: AtomicUsize = AtomicUsize::new(usize::MAX);
 static OVERLAY_PSO_FORMAT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static OVERLAY_GPU_FAIL_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static OVERLAY_GPU_FAIL_CODE: AtomicUsize = AtomicUsize::new(0);
@@ -132,7 +140,8 @@ unsafe fn init_overlay_draw_state(backbuffer: &ID3D12Resource) -> bool {
     };
     let srv_heap_desc = D3D12_DESCRIPTOR_HEAP_DESC {
         Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-        NumDescriptors: 1,
+        // descriptor 0 = animated portrait, descriptor 1 = independently rasterized stats text.
+        NumDescriptors: 2,
         Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
         NodeMask: 0,
     };
@@ -875,16 +884,12 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
     // frame with the freshly rendered, DEPTH-ALPHA-KEYED head (background alpha 0), so we blend the CURRENT
     // snapshot every frame -- the displayed head follows the cursor and its background stays transparent. On
     // any snapshot failure we skip this frame (leave the last presented content).
-    let Some((sw, sh, mut spx)) = LOADING_BG_PORTRAIT_RGBA.lock().ok().and_then(|g| g.clone()) else {
+    let Some((sw, sh, spx)) = LOADING_BG_PORTRAIT_RGBA.lock().ok().and_then(|g| g.clone()) else {
         return false;
     };
     if sw == 0 || sh == 0 || spx.len() < (sw as usize) * (sh as usize) * RGBA8_BPP {
         return false;
     }
-    // PIVOT (er-effects-rs-jsm): composite the player-stats text (game menu font) into the head's lower
-    // region before it is drawn -- opaque text pixels show, the transparent surround still shows the movie,
-    // and the native tips are suppressed separately. Reuses the whole existing head draw.
-    composite_stats_into_head(&mut spx, sw, sh);
     // Animation-stall semaphore: a portrait frame is being displayed this present. Paired with the
     // per-drive-frame counter, a low drive/display ratio means the head froze early in the window.
     PROFILE_DISPLAY_FRAMES_WINDOW.fetch_add(1, Ordering::SeqCst);
@@ -924,11 +929,15 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
     let ch = bh;
     let dx = 0;
     let dy = 0;
+    // Stats text is deliberately NOT baked into `spx`: keep the animated portrait at its current lower
+    // render/readback resolution, then rasterize the text at actual backbuffer scale and draw it as a
+    // second overlay texture so text sharpness no longer depends on portrait RT size.
+    let stats_text = stats_text_screen_bitmap(bw.max(bh));
 
     // Alpha-honoring GPU composite: upload the latest CPU-published portrait RGBA into a tiny GPU texture
     // on version changes, then draw one full-screen triangle over the live loading-screen backbuffer with
     // standard src-alpha blending. This preserves transparency without reading/blending the 4K backbuffer
-    // on the CPU.
+    // on the CPU. If stats text is available, a second alpha-blended draw overlays it at screen resolution.
     if !unsafe {
         gpu_composite_portrait_over_backbuffer(
             &device,
@@ -946,6 +955,7 @@ unsafe fn composite_portrait_inner(base: usize, swapchain_raw: usize) -> bool {
             sh,
             &spx,
             cur_ver,
+            stats_text.as_ref(),
         )
     } {
         return false;
@@ -1288,6 +1298,7 @@ unsafe fn gpu_composite_portrait_over_backbuffer(
     sh: u32,
     spx: &[u8],
     cur_ver: usize,
+    stats_text: Option<&(u32, u32, Vec<u8>, usize)>,
 ) -> bool {
     if bb_format.0 as usize != OVERLAY_PSO_FORMAT.load(Ordering::SeqCst) {
         return overlay_gpu_fail(10, "backbuffer format changed", cur_ver);
@@ -1329,6 +1340,33 @@ unsafe fn gpu_composite_portrait_over_backbuffer(
         // cannot leave the list open and poison every later frame's Reset.
         return overlay_gpu_fail(15, "fill upload buffer failed", cur_ver);
     }
+
+    let mut text_resources: Option<(ID3D12Resource, ID3D12Resource, u32, u32, usize)> = None;
+    let text_upload_needed = if let Some((tw, th, tpx, text_ver)) = stats_text {
+        let needed = OVERLAY_TEXT_GPU_TEX_VERSION.load(Ordering::SeqCst) != *text_ver
+            || OVERLAY_TEXT_GPU_TEX_W.load(Ordering::SeqCst) != *tw as usize
+            || OVERLAY_TEXT_GPU_TEX_H.load(Ordering::SeqCst) != *th as usize;
+        if needed && !unsafe { ensure_overlay_text_gpu_texture(device, srv_heap, *tw, *th) } {
+            return overlay_gpu_fail(17, "ensure text texture/upload failed", *text_ver);
+        }
+        let text_tex_raw = OVERLAY_TEXT_GPU_TEXTURE.load(Ordering::SeqCst) as *mut c_void;
+        let text_upload_raw = OVERLAY_TEXT_GPU_UPLOAD.load(Ordering::SeqCst) as *mut c_void;
+        let (Some(text_tex), Some(text_upload)) = (unsafe {
+            (
+                ID3D12Resource::from_raw_borrowed(&text_tex_raw),
+                ID3D12Resource::from_raw_borrowed(&text_upload_raw),
+            )
+        }) else {
+            return overlay_gpu_fail(18, "missing text texture/upload resource", *text_ver);
+        };
+        if needed && !unsafe { fill_overlay_text_upload_buffer(text_upload, *tw, *th, tpx) } {
+            return overlay_gpu_fail(19, "fill text upload buffer failed", *text_ver);
+        }
+        text_resources = Some((text_tex.clone(), text_upload.clone(), *tw, *th, *text_ver));
+        needed
+    } else {
+        false
+    };
 
     if unsafe { allocator.Reset() }.is_err() || unsafe { list.Reset(allocator, Some(pso)) }.is_err() {
         return overlay_gpu_fail(14, "allocator/list reset failed", cur_ver);
@@ -1385,6 +1423,59 @@ unsafe fn gpu_composite_portrait_over_backbuffer(
         };
         OVERLAY_GPU_TEX_STATE.store(1, Ordering::SeqCst);
     }
+    if text_upload_needed {
+        let Some((text_texture, text_upload, _tw, _th, _text_ver)) = text_resources.as_ref() else {
+            return overlay_gpu_fail(20, "text upload requested without resources", cur_ver);
+        };
+        if OVERLAY_TEXT_GPU_TEX_STATE.load(Ordering::SeqCst) == 1 {
+            unsafe {
+                record_transition(
+                    list,
+                    text_texture,
+                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                    D3D12_RESOURCE_STATE_COPY_DEST,
+                )
+            };
+        }
+        let desc = unsafe { text_texture.GetDesc() };
+        let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+        unsafe {
+            device.GetCopyableFootprints(
+                &desc,
+                0,
+                1,
+                0,
+                Some(&mut footprint),
+                None,
+                None,
+                None,
+            )
+        };
+        let mut src = D3D12_TEXTURE_COPY_LOCATION {
+            pResource: ManuallyDrop::new(Some(text_upload.clone())),
+            Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                PlacedFootprint: footprint,
+            },
+        };
+        let mut dst = D3D12_TEXTURE_COPY_LOCATION {
+            pResource: ManuallyDrop::new(Some(text_texture.clone())),
+            Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
+        };
+        unsafe { list.CopyTextureRegion(&dst, 0, 0, 0, &src, None) };
+        unsafe { ManuallyDrop::drop(&mut src.pResource) };
+        unsafe { ManuallyDrop::drop(&mut dst.pResource) };
+        unsafe {
+            record_transition(
+                list,
+                text_texture,
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            )
+        };
+        OVERLAY_TEXT_GPU_TEX_STATE.store(1, Ordering::SeqCst);
+    }
 
     let rtv_cpu = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
     let rtv_desc = D3D12_RENDER_TARGET_VIEW_DESC {
@@ -1428,13 +1519,47 @@ unsafe fn gpu_composite_portrait_over_backbuffer(
         list.SetGraphicsRootSignature(root_sig);
         list.SetPipelineState(pso);
         list.SetDescriptorHeaps(&[Some(srv_heap.clone())]);
-        list.SetGraphicsRootDescriptorTable(0, srv_heap.GetGPUDescriptorHandleForHeapStart());
+        list.SetGraphicsRootDescriptorTable(0, srv_gpu_handle_at(device, srv_heap, 0));
         list.SetGraphicsRoot32BitConstants(1, constants.len() as u32, constants.as_ptr() as *const c_void, 0);
         list.RSSetViewports(std::slice::from_ref(&viewport));
         list.RSSetScissorRects(std::slice::from_ref(&scissor));
         list.OMSetRenderTargets(1, Some(&rtv_cpu), true, None);
         list.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         list.DrawInstanced(3, 1, 0, 0);
+
+        if let Some((_text_texture, _text_upload, tw, th, _text_ver)) = text_resources.as_ref() {
+            let (tx, ty) = stats_text_screen_position(cw, ch, sw, sh);
+            let right = (tx + *tw as i32).min(cw as i32);
+            let bottom = (ty + *th as i32).min(ch as i32);
+            if tx < cw as i32 && ty < ch as i32 && right > tx.max(0) && bottom > ty.max(0) {
+                let text_viewport = D3D12_VIEWPORT {
+                    TopLeftX: tx as f32,
+                    TopLeftY: ty as f32,
+                    Width: *tw as f32,
+                    Height: *th as f32,
+                    MinDepth: 0.0,
+                    MaxDepth: 1.0,
+                };
+                let text_scissor = RECT {
+                    left: tx.max(0),
+                    top: ty.max(0),
+                    right,
+                    bottom,
+                };
+                let text_constants = [1.0f32.to_bits(), 1.0f32.to_bits(), 0.0f32.to_bits(), 0.0f32.to_bits()];
+                list.SetGraphicsRootDescriptorTable(0, srv_gpu_handle_at(device, srv_heap, 1));
+                list.SetGraphicsRoot32BitConstants(
+                    1,
+                    text_constants.len() as u32,
+                    text_constants.as_ptr() as *const c_void,
+                    0,
+                );
+                list.RSSetViewports(std::slice::from_ref(&text_viewport));
+                list.RSSetScissorRects(std::slice::from_ref(&text_scissor));
+                list.DrawInstanced(3, 1, 0, 0);
+            }
+        }
+
         record_transition(list, backbuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
     }
 
@@ -1444,6 +1569,11 @@ unsafe fn gpu_composite_portrait_over_backbuffer(
     }
     if upload_needed {
         OVERLAY_GPU_TEX_VERSION.store(cur_ver, Ordering::SeqCst);
+    }
+    if text_upload_needed {
+        if let Some((_text_texture, _text_upload, _tw, _th, text_ver)) = text_resources.as_ref() {
+            OVERLAY_TEXT_GPU_TEX_VERSION.store(*text_ver, Ordering::SeqCst);
+        }
     }
     record_overlay_stage_ms(
         &OVERLAY_STAGE_BLEND_COUNT,
@@ -1460,13 +1590,70 @@ unsafe fn ensure_overlay_gpu_texture(
     sw: u32,
     sh: u32,
 ) -> bool {
+    unsafe {
+        ensure_overlay_gpu_texture_slot(
+            device,
+            srv_heap,
+            sw,
+            sh,
+            0,
+            &OVERLAY_GPU_TEXTURE,
+            &OVERLAY_GPU_UPLOAD,
+            &OVERLAY_GPU_UPLOAD_SIZE,
+            &OVERLAY_GPU_TEX_W,
+            &OVERLAY_GPU_TEX_H,
+            &OVERLAY_GPU_TEX_STATE,
+            &OVERLAY_GPU_TEX_VERSION,
+        )
+    }
+}
+
+unsafe fn ensure_overlay_text_gpu_texture(
+    device: &ID3D12Device,
+    srv_heap: &ID3D12DescriptorHeap,
+    sw: u32,
+    sh: u32,
+) -> bool {
+    unsafe {
+        ensure_overlay_gpu_texture_slot(
+            device,
+            srv_heap,
+            sw,
+            sh,
+            1,
+            &OVERLAY_TEXT_GPU_TEXTURE,
+            &OVERLAY_TEXT_GPU_UPLOAD,
+            &OVERLAY_TEXT_GPU_UPLOAD_SIZE,
+            &OVERLAY_TEXT_GPU_TEX_W,
+            &OVERLAY_TEXT_GPU_TEX_H,
+            &OVERLAY_TEXT_GPU_TEX_STATE,
+            &OVERLAY_TEXT_GPU_TEX_VERSION,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn ensure_overlay_gpu_texture_slot(
+    device: &ID3D12Device,
+    srv_heap: &ID3D12DescriptorHeap,
+    sw: u32,
+    sh: u32,
+    srv_index: u32,
+    texture_slot: &AtomicUsize,
+    upload_slot: &AtomicUsize,
+    upload_size_slot: &AtomicU64,
+    tex_w_slot: &AtomicUsize,
+    tex_h_slot: &AtomicUsize,
+    tex_state_slot: &AtomicUsize,
+    tex_version_slot: &AtomicUsize,
+) -> bool {
     if sw == 0 || sh == 0 || sw > MAX_RT_DIM || sh > MAX_RT_DIM {
         return false;
     }
-    if OVERLAY_GPU_TEXTURE.load(Ordering::SeqCst) != 0
-        && OVERLAY_GPU_UPLOAD.load(Ordering::SeqCst) != 0
-        && OVERLAY_GPU_TEX_W.load(Ordering::SeqCst) == sw as usize
-        && OVERLAY_GPU_TEX_H.load(Ordering::SeqCst) == sh as usize
+    if texture_slot.load(Ordering::SeqCst) != 0
+        && upload_slot.load(Ordering::SeqCst) != 0
+        && tex_w_slot.load(Ordering::SeqCst) == sw as usize
+        && tex_h_slot.load(Ordering::SeqCst) == sh as usize
     {
         return true;
     }
@@ -1572,15 +1759,60 @@ unsafe fn ensure_overlay_gpu_texture(
             },
         },
     };
-    unsafe { device.CreateShaderResourceView(&texture, Some(&srv_desc), srv_heap.GetCPUDescriptorHandleForHeapStart()) };
-    OVERLAY_GPU_TEXTURE.store(texture.into_raw() as usize, Ordering::SeqCst);
-    OVERLAY_GPU_UPLOAD.store(upload.into_raw() as usize, Ordering::SeqCst);
-    OVERLAY_GPU_UPLOAD_SIZE.store(total_bytes, Ordering::SeqCst);
-    OVERLAY_GPU_TEX_W.store(sw as usize, Ordering::SeqCst);
-    OVERLAY_GPU_TEX_H.store(sh as usize, Ordering::SeqCst);
-    OVERLAY_GPU_TEX_STATE.store(0, Ordering::SeqCst);
-    OVERLAY_GPU_TEX_VERSION.store(usize::MAX, Ordering::SeqCst);
+    unsafe {
+        device.CreateShaderResourceView(
+            &texture,
+            Some(&srv_desc),
+            srv_cpu_handle_at(device, srv_heap, srv_index),
+        )
+    };
+    texture_slot.store(texture.into_raw() as usize, Ordering::SeqCst);
+    upload_slot.store(upload.into_raw() as usize, Ordering::SeqCst);
+    upload_size_slot.store(total_bytes, Ordering::SeqCst);
+    tex_w_slot.store(sw as usize, Ordering::SeqCst);
+    tex_h_slot.store(sh as usize, Ordering::SeqCst);
+    tex_state_slot.store(0, Ordering::SeqCst);
+    tex_version_slot.store(usize::MAX, Ordering::SeqCst);
     true
+}
+
+fn srv_cpu_handle_at(
+    device: &ID3D12Device,
+    heap: &ID3D12DescriptorHeap,
+    index: u32,
+) -> D3D12_CPU_DESCRIPTOR_HANDLE {
+    let mut handle = unsafe { heap.GetCPUDescriptorHandleForHeapStart() };
+    let inc = unsafe { device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) } as usize;
+    handle.ptr += inc * index as usize;
+    handle
+}
+
+fn srv_gpu_handle_at(
+    device: &ID3D12Device,
+    heap: &ID3D12DescriptorHeap,
+    index: u32,
+) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+    let mut handle = unsafe { heap.GetGPUDescriptorHandleForHeapStart() };
+    let inc = unsafe { device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) } as u64;
+    handle.ptr += inc * index as u64;
+    handle
+}
+
+fn stats_text_screen_position(cw: u32, ch: u32, sw: u32, sh: u32) -> (i32, i32) {
+    if cw == 0 || ch == 0 || sw == 0 || sh == 0 {
+        return (0, 0);
+    }
+    // Match the old placement that baked the text into the portrait texture at (5%, 60%) BEFORE the
+    // portrait was aspect-cover scaled/cropped to the backbuffer. The text is now a separate screen-space
+    // draw, but preserving this mapping keeps its visual position stable while improving sharpness.
+    let scale = (cw as f32 / sw as f32).max(ch as f32 / sh as f32);
+    let visible_w = cw as f32 / scale;
+    let visible_h = ch as f32 / scale;
+    let src_x = sw as f32 * 0.05;
+    let src_y = sh as f32 * 0.60;
+    let crop_x = (sw as f32 - visible_w) * 0.5;
+    let crop_y = (sh as f32 - visible_h) * 0.5;
+    (((src_x - crop_x) * scale).round() as i32, ((src_y - crop_y) * scale).round() as i32)
 }
 
 unsafe fn fill_overlay_upload_buffer(upload: &ID3D12Resource, sw: u32, sh: u32, spx: &[u8]) -> bool {
@@ -1611,6 +1843,48 @@ unsafe fn fill_overlay_upload_buffer(upload: &ID3D12Resource, sw: u32, sh: u32, 
     if unsafe { upload.Map(0, None, Some(&mut map)) }.is_err() || map.is_null() {
         append_autoload_debug(format_args!(
             "present-overlay: upload fill Map failed dims={}x{} total={total}",
+            sw, sh
+        ));
+        return false;
+    }
+    {
+        let dst = unsafe { std::slice::from_raw_parts_mut(map as *mut u8, total) };
+        let src_row = row_size;
+        for y in 0..sh as usize {
+            let src = &spx[y * src_row..y * src_row + src_row];
+            let dst_off = y * row_pitch;
+            dst[dst_off..dst_off + src_row].copy_from_slice(src);
+        }
+    }
+    unsafe { upload.Unmap(0, None) };
+    true
+}
+
+unsafe fn fill_overlay_text_upload_buffer(upload: &ID3D12Resource, sw: u32, sh: u32, spx: &[u8]) -> bool {
+    let expected = sw as usize * sh as usize * RGBA8_BPP;
+    if spx.len() < expected {
+        append_autoload_debug(format_args!(
+            "present-overlay: text upload fill rejected short source len={} expected={} dims={}x{}",
+            spx.len(), expected, sw, sh
+        ));
+        return false;
+    }
+    let row_size = sw as usize * RGBA8_BPP;
+    let row_pitch = ((row_size + 255) & !255).max(row_size);
+    let total = OVERLAY_TEXT_GPU_UPLOAD_SIZE.load(Ordering::SeqCst) as usize;
+    let needed = row_pitch * (sh as usize).saturating_sub(1) + row_size;
+    if total < needed {
+        append_autoload_debug(format_args!(
+            "present-overlay: text upload fill rejected short upload total={total} need={needed} row_pitch={row_pitch} row_size={row_size} dims={}x{}",
+            sw,
+            sh
+        ));
+        return false;
+    }
+    let mut map: *mut c_void = std::ptr::null_mut();
+    if unsafe { upload.Map(0, None, Some(&mut map)) }.is_err() || map.is_null() {
+        append_autoload_debug(format_args!(
+            "present-overlay: text upload fill Map failed dims={}x{} total={total}",
             sw, sh
         ));
         return false;
