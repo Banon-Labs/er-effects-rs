@@ -314,6 +314,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
 
                 remove_requested_calls(player, &mut state);
                 process_driver_command(player, &mut state);
+                consume_effect_hotkeys(player, &mut state);
 
                 let appear_playing = observation.current_animation_id == Some(APPEAR_ANIMATION_ID);
                 if !appear_playing {
@@ -335,6 +336,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
 
                 process_global_driver_command(&mut state);
                 refresh_call_status(player, &mut state);
+                reapply_expired_enabled_calls(player, &mut state);
                 write_telemetry_throttled(&mut state, true);
             },
             CSTaskGroupIndex::FrameBegin,

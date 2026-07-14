@@ -141,6 +141,16 @@ impl SoulsFormats {
             );
         }
 
+        if let Some(path) = env::var_os(SMITHBOX_BINARY_DIR_ENV) {
+            let smithbox_root = PathBuf::from(path);
+            checked_paths.push(smithbox_root.clone());
+            return Self::from_smithbox_root_with_repo_root(
+                smithbox_root,
+                repo_root,
+                checked_paths,
+            );
+        }
+
         for candidate in DEFAULT_SMITHBOX_REPO_CANDIDATES {
             let path = repo_root.join(candidate);
             checked_paths.push(path.clone());

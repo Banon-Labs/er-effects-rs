@@ -25,7 +25,7 @@ usage:
       Print name/found status for the given param rows.
   er-param-inspect validate <regulation.bin>
       Check every entry of data/effects.json against SpEffectParam.
-      Exits non-zero if any seeded ID has no param row.
+      Exits non-zero if any built-in catalog ID has no param row.
   er-param-inspect recon <recon-report.txt> [regulation.bin]
       Summarize FastSpEffectRecon output and extract candidate SpEffect IDs.
       With a regulation path, also checks candidates against SpEffectParam.";
@@ -92,7 +92,7 @@ fn run_validate(args: &[String]) -> Result<ExitCode, String> {
 
     if missing.is_empty() {
         println!(
-            "all {} seeded SpEffect IDs found in {SP_EFFECT_PARAM_NAME}",
+            "all {} built-in SpEffect IDs found in {SP_EFFECT_PARAM_NAME}",
             effects.calls.len()
         );
         Ok(ExitCode::SUCCESS)

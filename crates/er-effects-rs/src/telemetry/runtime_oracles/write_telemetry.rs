@@ -83,6 +83,20 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     ));
     body.push_str(&format!("  \"network_sync\": {},\n", state.network_sync));
     body.push_str(&format!(
+        "  \"effect_hotkey_hook_active\": {},\n  \"effect_hotkey_hook_hits\": {},\n  \"effect_hotkey_applied_actions\": {},\n  \"effect_hotkeys_effects_on\": {},\n  \"selected_effect_index\": {},\n  \"effect_reapply_count\": {},\n  \"effect_reapply_last_index\": {},\n",
+        effect_hotkey_hook_active(),
+        EFFECT_HOTKEY_HOOK_HITS.load(Ordering::SeqCst),
+        EFFECT_HOTKEY_APPLIED_ACTIONS.load(Ordering::SeqCst),
+        state.effect_hotkeys_effects_on,
+        state
+            .selected_effect_index
+            .map_or_else(|| "null".to_owned(), |index| index.to_string()),
+        state.effect_reapply_count,
+        state
+            .effect_reapply_last_index
+            .map_or_else(|| "null".to_owned(), |index| index.to_string())
+    ));
+    body.push_str(&format!(
         "  \"autoload_save_extension\": {},\n",
         state.autoload.save_extension().map_or_else(
             || "null".to_owned(),
@@ -455,11 +469,12 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
             ","
         };
         body.push_str(&format!(
-            "    {{\"index\": {index}, \"name\": \"{}\", \"kind\": \"{}\", \"enabled\": {}, \"active\": {}, \"apply_failed\": {}}}{comma}\n",
+            "    {{\"index\": {index}, \"name\": \"{}\", \"kind\": \"{}\", \"enabled\": {}, \"active\": {}, \"active_seen_since_enable\": {}, \"apply_failed\": {}}}{comma}\n",
             json_escape(&call.name),
             json_escape(&call.kind.label()),
             call.enabled,
             call.active,
+            call.active_seen_since_enable,
             call.apply_failed,
         ));
     }

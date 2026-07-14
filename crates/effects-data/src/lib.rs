@@ -3,12 +3,12 @@
 //! The game DLL embeds this file at compile time and builds its overlay
 //! entries from it; `er-param-inspect validate` reads the same file to check
 //! every ID against `SpEffectParam` in a regulation archive. Editing
-//! `data/effects.json` is the only step needed to change the seeded list.
+//! `data/effects.json` is the only step needed to change the built-in catalog.
 
 use serde::Deserialize;
 
 /// `data/effects.json`, embedded at compile time so the DLL and the
-/// validation tooling always agree on the seeded list.
+/// validation tooling always agree on the built-in catalog.
 pub const EMBEDDED_EFFECTS_JSON: &str = include_str!("../../../data/effects.json");
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -49,22 +49,21 @@ pub fn embedded_effects() -> Result<EffectsFile, serde_json::Error> {
 mod tests {
     use super::*;
 
-    const EXPECTED_SEEDED_CALL_COUNT: usize = 3;
+    const EXPECTED_BUILT_IN_CALL_COUNT: usize = 65;
 
     #[test]
     fn embedded_effects_file_is_valid() {
         let effects = embedded_effects().expect("data/effects.json must parse");
 
-        assert_eq!(effects.calls.len(), EXPECTED_SEEDED_CALL_COUNT);
-        let first = effects.calls.first().expect("first seeded call");
+        assert_eq!(effects.calls.len(), EXPECTED_BUILT_IN_CALL_COUNT);
         let player_all_black = effects
             .calls
             .iter()
             .find(|call| call.name == "Player all black")
-            .expect("Player all black seeded call");
-        assert_eq!(first, player_all_black);
-        assert_eq!(first.kind, EffectKindSpec::SpEffect);
-        assert!(first.enabled);
+            .expect("Player all black built-in call");
+        assert_eq!(player_all_black.kind, EffectKindSpec::SpEffect);
+        assert!(!player_all_black.enabled);
+        assert!(effects.calls.iter().all(|call| !call.enabled));
     }
 
     #[test]

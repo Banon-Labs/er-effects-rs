@@ -1,7 +1,394 @@
 {
   "calls": [
-    { "kind": "sp_effect", "id": 4330, "name": "Player all black", "enabled": true },
-    { "kind": "sp_effect", "id": 20018100, "name": "Player right eye red", "enabled": true },
-    { "kind": "sp_effect", "id": 20018101, "name": "Player left eye red", "enabled": true }
+    {
+      "kind": "sp_effect",
+      "id": 490,
+      "name": "Rune Arc",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1586,
+      "name": "Jellyfish Shield - Damage Buff",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1650,
+      "name": "Endure - Poise Buff",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1721,
+      "name": "DMGS - Frost/Magic Buff",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1730,
+      "name": "Golden Vow - Damage/Defence Buff",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1766,
+      "name": "Assassin's Gambit",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1806,
+      "name": "Ruinous Ghostflame - Frost/Magic Buff",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1821,
+      "name": "Cragblade - Damage/Stagger Buff",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1850,
+      "name": "Oath of Vengeance - Stat Buff",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1870,
+      "name": "Shared Order - Anti-Undead/Damage Buff - Self",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1881,
+      "name": "Sword of St. Trina - Sleep Buff",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1891,
+      "name": "Ice Lightning Sword - Frost/Lightning Buff",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3140,
+      "name": "Freezing Grease - Right",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3150,
+      "name": "Soporific Grease - Right",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3160,
+      "name": "Fire Grease - Right",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3165,
+      "name": "Lightning Grease - Right",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3170,
+      "name": "Magic Grease - Right",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3175,
+      "name": "Poison Grease - Right",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3185,
+      "name": "Holy Grease - Right",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3190,
+      "name": "Blood Grease - Right",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3260,
+      "name": "Dragonwound Grease - Right",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3310,
+      "name": "Rot Grease - Right",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3507,
+      "name": "Opaline Bubbletear",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3512,
+      "name": "Crimson Bubbletear",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3515,
+      "name": "Strength-knot Crystal Tear",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3517,
+      "name": "Intelligence-knot Crystal Tear",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3518,
+      "name": "Faith-knot Crystal Tear",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3519,
+      "name": "Leaden Hardtear",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3604,
+      "name": "Speckled Hardtear (Cycled)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4330,
+      "name": "Player all black",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 6400,
+      "name": "Hemorrhage - Type 1 - Special 1",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 6450,
+      "name": "Sleep - Type 1 - Special 1",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 6500,
+      "name": "Poison - Type 1 - Special 1",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 6600,
+      "name": "Scarlet Rot - Type 1 - Special 1",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 6700,
+      "name": "Frostbite - Type 1 - Special 1",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 6860,
+      "name": "Destined Death - (Max HP Debuff)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 511028,
+      "name": "Flame-Shrouding Cracked Tear",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 511029,
+      "name": "Magic-Shrouding Cracked Tear",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 511030,
+      "name": "Lightning-Shrouding Cracked Tear",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 511031,
+      "name": "Holy-Shrouding Cracked Tear",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1467000,
+      "name": "Unseen Form",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1627000,
+      "name": "Black Flame's Protection",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1632000,
+      "name": "Bloodflame Blade (Self)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1633000,
+      "name": "Barrier of Gold",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1634000,
+      "name": "Protection of the Erdtree",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1643000,
+      "name": "Blessing's Boon",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1643100,
+      "name": "Blessing of the Erdtree",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1645000,
+      "name": "Flame Fortification",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1646000,
+      "name": "Magic Fortification",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1647000,
+      "name": "Lightning Fortification",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1648000,
+      "name": "Divine Fortification",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1649000,
+      "name": "Lord's Divine Fortification",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1651000,
+      "name": "Assassin's Approach",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1660000,
+      "name": "Golden Vow",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1677000,
+      "name": "Order's Blade",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1696000,
+      "name": "Electrify Armament",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1697000,
+      "name": "Vyke's Dragonbolt",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1697100,
+      "name": "Dragonbolt Blessing",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1733000,
+      "name": "Howl of Shabriri",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1790300,
+      "name": "Golden Lightning Fortification",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20018100,
+      "name": "Player right eye red",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20018101,
+      "name": "Player left eye red",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20501410,
+      "name": "Dragonbolt Grease - Right",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20502100,
+      "name": "Ancient Dragon's Blessing",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20503170,
+      "name": "Golden Vow",
+      "enabled": false
+    }
   ]
 }

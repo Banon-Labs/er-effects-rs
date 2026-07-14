@@ -262,16 +262,82 @@ artifacts, not the run-stopping oracle.
 
 ## SpEffect trigger system
 
-The original feature remains: selected named SpEffect calls are embedded from
-`data/effects.json` and can be applied by runtime trigger logic.
+The original feature remains: named SpEffect calls are embedded from
+`data/effects.json` and can be applied by runtime trigger logic. They start
+inactive by default. In-game, press Up/Down to step through the built-in effect
+catalog and enable the selected valid ID. The selected ID is persisted to
+`.effect-setting.txt`, so a restart keeps the cursor anchored on the last chosen
+effect. Press Alt+' to toggle the currently selected effect off/on.
 
-Seeded calls:
+Built-in catalog:
 
 | ID | Name |
 | --- | --- |
+| `490` | Rune Arc |
+| `1586` | Jellyfish Shield - Damage Buff |
+| `1650` | Endure - Poise Buff |
+| `1721` | DMGS - Frost/Magic Buff |
+| `1730` | Golden Vow - Damage/Defence Buff |
+| `1766` | Assassin's Gambit |
+| `1806` | Ruinous Ghostflame - Frost/Magic Buff |
+| `1821` | Cragblade - Damage/Stagger Buff |
+| `1850` | Oath of Vengeance - Stat Buff |
+| `1870` | Shared Order - Anti-Undead/Damage Buff - Self |
+| `1881` | Sword of St. Trina - Sleep Buff |
+| `1891` | Ice Lightning Sword - Frost/Lightning Buff |
+| `3140` | Freezing Grease - Right |
+| `3150` | Soporific Grease - Right |
+| `3160` | Fire Grease - Right |
+| `3165` | Lightning Grease - Right |
+| `3170` | Magic Grease - Right |
+| `3175` | Poison Grease - Right |
+| `3185` | Holy Grease - Right |
+| `3190` | Blood Grease - Right |
+| `3260` | Dragonwound Grease - Right |
+| `3310` | Rot Grease - Right |
+| `3507` | Opaline Bubbletear |
+| `3512` | Crimson Bubbletear |
+| `3515` | Strength-knot Crystal Tear |
+| `3517` | Intelligence-knot Crystal Tear |
+| `3518` | Faith-knot Crystal Tear |
+| `3519` | Leaden Hardtear |
+| `3604` | Speckled Hardtear (Cycled) |
 | `4330` | Player all black |
+| `6400` | Hemorrhage - Type 1 - Special 1 |
+| `6450` | Sleep - Type 1 - Special 1 |
+| `6500` | Poison - Type 1 - Special 1 |
+| `6600` | Scarlet Rot - Type 1 - Special 1 |
+| `6700` | Frostbite - Type 1 - Special 1 |
+| `6860` | Destined Death - (Max HP Debuff) |
+| `511028` | Flame-Shrouding Cracked Tear |
+| `511029` | Magic-Shrouding Cracked Tear |
+| `511030` | Lightning-Shrouding Cracked Tear |
+| `511031` | Holy-Shrouding Cracked Tear |
+| `1467000` | Unseen Form |
+| `1627000` | Black Flame's Protection |
+| `1632000` | Bloodflame Blade (Self) |
+| `1633000` | Barrier of Gold |
+| `1634000` | Protection of the Erdtree |
+| `1643000` | Blessing's Boon |
+| `1643100` | Blessing of the Erdtree |
+| `1645000` | Flame Fortification |
+| `1646000` | Magic Fortification |
+| `1647000` | Lightning Fortification |
+| `1648000` | Divine Fortification |
+| `1649000` | Lord's Divine Fortification |
+| `1651000` | Assassin's Approach |
+| `1660000` | Golden Vow |
+| `1677000` | Order's Blade |
+| `1696000` | Electrify Armament |
+| `1697000` | Vyke's Dragonbolt |
+| `1697100` | Dragonbolt Blessing |
+| `1733000` | Howl of Shabriri |
+| `1790300` | Golden Lightning Fortification |
 | `20018100` | Player right eye red |
 | `20018101` | Player left eye red |
+| `20501410` | Dragonbolt Grease - Right |
+| `20502100` | Ancient Dragon's Blessing |
+| `20503170` | Golden Vow |
 
 Validate the list against a regulation file:
 

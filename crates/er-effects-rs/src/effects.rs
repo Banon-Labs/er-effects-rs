@@ -1,9 +1,34 @@
-use std::fs;
+use std::{
+    fs,
+    path::PathBuf,
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+};
 
 use eldenring::cs::{ChrInsExt, PlayerIns};
 use er_effects_data::{EffectCallSpec, EffectKindSpec};
+use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+use windows::Win32::UI::WindowsAndMessaging::{
+    CallNextHookEx, HC_ACTION, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_SYSKEYDOWN,
+};
 
-use crate::{EffectsState, command_path};
+use crate::{EffectsState, append_autoload_debug, command_path};
+
+const EFFECT_HOTKEY_UP: usize = 1 << 0;
+const EFFECT_HOTKEY_DOWN: usize = 1 << 1;
+const EFFECT_HOTKEY_TOGGLE: usize = 1 << 2;
+
+const VK_UP: u32 = 0x26;
+const VK_DOWN: u32 = 0x28;
+const VK_OEM_7: u32 = 0xde;
+const LLKHF_ALTDOWN: u32 = 0x20;
+
+static EFFECT_HOTKEY_PENDING_UP: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_HOTKEY_PENDING_DOWN: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_HOTKEY_PENDING_TOGGLE: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_HOTKEY_HOOK_STARTED: AtomicBool = AtomicBool::new(false);
+static EFFECT_HOTKEY_HOOK_ACTIVE: AtomicBool = AtomicBool::new(false);
+pub(crate) static EFFECT_HOTKEY_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static EFFECT_HOTKEY_APPLIED_ACTIONS: AtomicUsize = AtomicUsize::new(0);
 
 /// A named runtime effect call the overlay can trigger.
 ///
@@ -65,6 +90,11 @@ pub(crate) struct NamedEffectCall {
     /// Live status, recomputed every game tick from the player's SpEffect
     /// list.
     pub(crate) active: bool,
+    /// Latched after this enabled call has appeared in the player's active
+    /// SpEffect list. Once latched, the game task can reapply the call after a
+    /// finite-duration effect naturally expires without hammering IDs that
+    /// never took in the first place.
+    pub(crate) active_seen_since_enable: bool,
     /// Set when an apply attempt did not take (e.g. the ID has no
     /// `SpEffectParam` row); cleared as soon as the effect shows up active.
     pub(crate) apply_failed: bool,
@@ -78,8 +108,30 @@ impl NamedEffectCall {
             enabled,
             remove_requested: false,
             active: false,
+            active_seen_since_enable: false,
             apply_failed: false,
         }
+    }
+}
+
+pub(crate) fn effect_setting_path() -> PathBuf {
+    PathBuf::from(".effect-setting.txt")
+}
+
+pub(crate) fn restore_selected_effect_index(calls: &[NamedEffectCall]) -> Option<usize> {
+    let path = effect_setting_path();
+    let id = fs::read_to_string(path).ok()?.trim().parse::<i32>().ok()?;
+    calls.iter().position(|call| match call.kind {
+        EffectCallKind::SpEffect { id: call_id } => call_id == id,
+    })
+}
+
+fn persist_selected_effect(call: &NamedEffectCall) {
+    let EffectCallKind::SpEffect { id } = call.kind;
+    let path = effect_setting_path();
+    let tmp_path = path.with_extension("txt.tmp");
+    if fs::write(&tmp_path, format!("{id}\n")).is_ok() {
+        let _ = fs::rename(tmp_path, path);
     }
 }
 
@@ -113,6 +165,200 @@ pub(crate) fn add_custom_call(state: &mut EffectsState) {
     state
         .calls
         .push(NamedEffectCall::new(format!("Custom {id}"), kind, true));
+}
+
+fn effect_hotkey_action_for_key(vk: u32, alt_down: bool) -> usize {
+    match vk {
+        VK_UP => EFFECT_HOTKEY_UP,
+        VK_DOWN => EFFECT_HOTKEY_DOWN,
+        VK_OEM_7 if alt_down => EFFECT_HOTKEY_TOGGLE,
+        _ => 0,
+    }
+}
+
+unsafe extern "system" fn effect_hotkey_ll_keyboard_proc(
+    ncode: i32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if ncode == HC_ACTION as i32 && lparam.0 != 0 {
+        let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+        let msg = wparam.0 as u32;
+        if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
+            let alt_down = msg == WM_SYSKEYDOWN || (kb.flags.0 & LLKHF_ALTDOWN) != 0;
+            let action = effect_hotkey_action_for_key(kb.vkCode, alt_down);
+            if action != 0 {
+                EFFECT_HOTKEY_HOOK_HITS.fetch_add(1, Ordering::SeqCst);
+                if action & EFFECT_HOTKEY_UP != 0 {
+                    EFFECT_HOTKEY_PENDING_UP.fetch_add(1, Ordering::SeqCst);
+                }
+                if action & EFFECT_HOTKEY_DOWN != 0 {
+                    EFFECT_HOTKEY_PENDING_DOWN.fetch_add(1, Ordering::SeqCst);
+                }
+                if action & EFFECT_HOTKEY_TOGGLE != 0 {
+                    EFFECT_HOTKEY_PENDING_TOGGLE.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        }
+    }
+    unsafe { CallNextHookEx(None, ncode, wparam, lparam) }
+}
+
+pub(crate) fn ensure_effect_hotkey_hook() {
+    if EFFECT_HOTKEY_HOOK_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("er-effects-hotkeys".to_owned())
+        .spawn(|| {
+            use windows::Win32::Foundation::HWND;
+            use windows::Win32::UI::WindowsAndMessaging::{
+                DispatchMessageW, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE,
+                PeekMessageW, QS_ALLINPUT, SetWindowsHookExW, TranslateMessage,
+                UnhookWindowsHookEx, WH_KEYBOARD_LL,
+            };
+
+            let Ok(hook) = (unsafe {
+                SetWindowsHookExW(
+                    WH_KEYBOARD_LL,
+                    Some(effect_hotkey_ll_keyboard_proc),
+                    None,
+                    0,
+                )
+            }) else {
+                EFFECT_HOTKEY_HOOK_STARTED.store(false, Ordering::SeqCst);
+                append_autoload_debug(format_args!("effect-hotkeys: hook install failed"));
+                return;
+            };
+            EFFECT_HOTKEY_HOOK_ACTIVE.store(true, Ordering::SeqCst);
+            append_autoload_debug(format_args!("effect-hotkeys: hook installed"));
+            let mut msg = MSG::default();
+            loop {
+                let _ = unsafe {
+                    MsgWaitForMultipleObjectsEx(None, 50, QS_ALLINPUT, MWMO_INPUTAVAILABLE)
+                };
+                while unsafe {
+                    PeekMessageW(&mut msg, Some(HWND(std::ptr::null_mut())), 0, 0, PM_REMOVE)
+                }
+                .as_bool()
+                {
+                    unsafe {
+                        let _ = TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
+                }
+            }
+            #[allow(unreachable_code)]
+            unsafe {
+                let _ = UnhookWindowsHookEx(hook);
+                EFFECT_HOTKEY_HOOK_ACTIVE.store(false, Ordering::SeqCst);
+                EFFECT_HOTKEY_HOOK_STARTED.store(false, Ordering::SeqCst);
+            }
+        });
+    if spawned.is_err() {
+        EFFECT_HOTKEY_HOOK_STARTED.store(false, Ordering::SeqCst);
+    }
+}
+
+pub(crate) fn effect_hotkey_hook_active() -> bool {
+    EFFECT_HOTKEY_HOOK_ACTIVE.load(Ordering::SeqCst)
+}
+
+pub(crate) fn consume_effect_hotkeys(player: &mut PlayerIns, state: &mut EffectsState) {
+    let toggles = EFFECT_HOTKEY_PENDING_TOGGLE.swap(0, Ordering::SeqCst);
+    let ups = EFFECT_HOTKEY_PENDING_UP.swap(0, Ordering::SeqCst);
+    let downs = EFFECT_HOTKEY_PENDING_DOWN.swap(0, Ordering::SeqCst);
+    let total = toggles + ups + downs;
+    if total == 0 {
+        return;
+    }
+    EFFECT_HOTKEY_APPLIED_ACTIONS.fetch_add(total, Ordering::SeqCst);
+    for _ in 0..toggles {
+        toggle_selected_effect(player, state);
+    }
+    for _ in 0..ups {
+        step_selected_effect(player, state, -1);
+    }
+    for _ in 0..downs {
+        step_selected_effect(player, state, 1);
+    }
+}
+
+fn toggle_selected_effect(player: &mut PlayerIns, state: &mut EffectsState) {
+    if state.effect_hotkeys_effects_on {
+        disable_all_calls(player, state);
+        state.effect_hotkeys_effects_on = false;
+        state.last_driver_command = Some("effect-hotkey: toggled effects off".to_owned());
+        return;
+    }
+
+    let Some(index) = state
+        .selected_effect_index
+        .filter(|index| *index < state.calls.len())
+        .or_else(|| (!state.calls.is_empty()).then_some(0))
+    else {
+        state.last_driver_command = Some("effect-hotkey: no effects available".to_owned());
+        return;
+    };
+    enable_only_call(player, state, index, true);
+}
+
+fn step_selected_effect(player: &mut PlayerIns, state: &mut EffectsState, delta: isize) {
+    let len = state.calls.len();
+    if len == 0 {
+        state.last_driver_command = Some("effect-hotkey: no effects available".to_owned());
+        return;
+    }
+    let current = state.selected_effect_index.filter(|index| *index < len);
+    let next = match (current, delta.is_negative()) {
+        (Some(index), false) => (index + 1) % len,
+        (Some(index), true) => (index + len - 1) % len,
+        (None, false) => 0,
+        (None, true) => len - 1,
+    };
+    enable_only_call(player, state, next, true);
+}
+
+fn disable_all_calls(player: &mut PlayerIns, state: &mut EffectsState) {
+    for call in &mut state.calls {
+        call.kind.remove(player);
+        call.enabled = false;
+        call.remove_requested = false;
+        call.active_seen_since_enable = false;
+        call.apply_failed = false;
+        call.active = call.kind.is_active(player);
+    }
+}
+
+fn enable_only_call(player: &mut PlayerIns, state: &mut EffectsState, index: usize, persist: bool) {
+    let network_sync = state.network_sync;
+    for (call_index, call) in state.calls.iter_mut().enumerate() {
+        if call_index == index {
+            call.enabled = true;
+            call.remove_requested = false;
+            call.kind.apply(player, network_sync);
+            call.active = call.kind.is_active(player);
+            call.active_seen_since_enable = call.active;
+            call.apply_failed = !call.active;
+        } else {
+            call.kind.remove(player);
+            call.enabled = false;
+            call.remove_requested = false;
+            call.active_seen_since_enable = false;
+            call.apply_failed = false;
+            call.active = call.kind.is_active(player);
+        }
+    }
+    state.selected_effect_index = Some(index);
+    state.effect_hotkeys_effects_on = true;
+    if persist && let Some(call) = state.calls.get(index) {
+        persist_selected_effect(call);
+        state.last_driver_command = Some(format!(
+            "effect-hotkey: selected {} ({})",
+            call.kind.label(),
+            call.name
+        ));
+    }
 }
 
 pub(crate) fn process_driver_command(player: &mut PlayerIns, state: &mut EffectsState) {
@@ -157,6 +403,7 @@ pub(crate) fn execute_driver_command(
                 call.kind.remove(player);
                 call.enabled = false;
                 call.remove_requested = false;
+                call.active_seen_since_enable = false;
                 call.apply_failed = false;
             }
             refresh_call_status(player, state);
@@ -200,12 +447,20 @@ pub(crate) fn set_call_enabled(
     if enabled {
         call.kind.apply(player, state.network_sync);
         call.active = call.kind.is_active(player);
+        call.active_seen_since_enable = call.active;
         call.apply_failed = !call.active;
+        state.selected_effect_index = Some(index);
+        state.effect_hotkeys_effects_on = true;
+        persist_selected_effect(call);
     } else {
         call.kind.remove(player);
         call.remove_requested = false;
+        call.active_seen_since_enable = false;
         call.apply_failed = false;
         call.active = call.kind.is_active(player);
+        if state.selected_effect_index == Some(index) {
+            state.effect_hotkeys_effects_on = false;
+        }
     }
 
     Ok(())
@@ -216,6 +471,7 @@ pub(crate) fn remove_requested_calls(player: &mut PlayerIns, state: &mut Effects
         for call in &mut state.calls {
             call.kind.remove(player);
             call.remove_requested = false;
+            call.active_seen_since_enable = false;
             call.apply_failed = false;
         }
         state.remove_all_requested = false;
@@ -226,6 +482,7 @@ pub(crate) fn remove_requested_calls(player: &mut PlayerIns, state: &mut Effects
         if call.remove_requested {
             call.kind.remove(player);
             call.remove_requested = false;
+            call.active_seen_since_enable = false;
             call.apply_failed = false;
         }
     }
@@ -236,7 +493,26 @@ pub(crate) fn apply_selected_calls(player: &mut PlayerIns, state: &mut EffectsSt
     for call in state.calls.iter_mut().filter(|call| call.enabled) {
         call.kind.apply(player, network_sync);
         // The game call reports nothing, so check the active list directly.
-        call.apply_failed = !call.kind.is_active(player);
+        call.active = call.kind.is_active(player);
+        call.active_seen_since_enable |= call.active;
+        call.apply_failed = !call.active;
+    }
+}
+
+pub(crate) fn reapply_expired_enabled_calls(player: &mut PlayerIns, state: &mut EffectsState) {
+    let network_sync = state.network_sync;
+    for (index, call) in state
+        .calls
+        .iter_mut()
+        .enumerate()
+        .filter(|(_, call)| call.enabled && !call.active && call.active_seen_since_enable)
+    {
+        call.kind.apply(player, network_sync);
+        call.active = call.kind.is_active(player);
+        call.active_seen_since_enable |= call.active;
+        call.apply_failed = !call.active;
+        state.effect_reapply_count = state.effect_reapply_count.saturating_add(1);
+        state.effect_reapply_last_index = Some(index);
     }
 }
 
@@ -244,6 +520,7 @@ pub(crate) fn refresh_call_status(player: &PlayerIns, state: &mut EffectsState) 
     for call in &mut state.calls {
         call.active = call.kind.is_active(player);
         if call.active {
+            call.active_seen_since_enable = true;
             call.apply_failed = false;
         }
     }

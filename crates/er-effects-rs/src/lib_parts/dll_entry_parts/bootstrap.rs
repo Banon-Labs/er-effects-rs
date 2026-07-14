@@ -35,6 +35,10 @@ pub(crate) struct EffectsState {
     remove_all_requested: bool,
     network_sync: bool,
     custom_call_id: i32,
+    selected_effect_index: Option<usize>,
+    effect_hotkeys_effects_on: bool,
+    effect_reapply_count: u64,
+    effect_reapply_last_index: Option<usize>,
     last_telemetry_write: Option<Instant>,
     last_driver_command: Option<String>,
     autoload: SaveLoader,
@@ -50,7 +54,7 @@ impl Default for EffectsState {
                     .calls
                     .into_iter()
                     .map(named_call_from_spec)
-                    .collect(),
+                    .collect::<Vec<_>>(),
                 None,
             ),
             Err(error) => (
@@ -58,6 +62,7 @@ impl Default for EffectsState {
                 Some(format!("failed to parse embedded effects.json: {error}")),
             ),
         };
+        let selected_effect_index = restore_selected_effect_index(&calls);
 
         Self {
             calls,
@@ -74,6 +79,10 @@ impl Default for EffectsState {
             last_driver_command: None,
             autoload: SaveLoader::new(configured_save_load_request()),
             game_task_ticks: INITIAL_GAME_TASK_TICKS,
+            selected_effect_index,
+            effect_hotkeys_effects_on: false,
+            effect_reapply_count: 0,
+            effect_reapply_last_index: None,
             safe_input: SafeInputRuntime::default(),
         }
     }
@@ -196,6 +205,8 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
             .spawn(install_show_progress_shortcircuit_hook)
             .ok();
     }
+
+    ensure_effect_hotkey_hook();
 
     let initial_state = EffectsState::default();
     arm_product_autoload_from_request(&initial_state.autoload);
