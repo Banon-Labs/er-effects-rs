@@ -273,12 +273,13 @@ In-game controls:
 - Alt+': toggle the currently selected effect off/on.
 - Alt+Numpad0: toggle the effect selector debug HUD. The HUD is hidden by default; while hidden, arrow keys are ignored by the selector and by any arrow-key entries in `.effect-hotkeys.json`.
 
-Runtime SpEffect application is gated to the loaded/animating character state: the local player must exist and the player's current TimeAct animation ID must be valid before the DLL calls `apply_speffect`. Selector/file changes outside that window may arm the selected effect, but they do not apply it until the animation gate is live.
+Runtime SpEffect application is gated to the loaded character state: the local player must exist before the DLL calls `apply_speffect`, but standing idle is allowed. Selector/file changes before the player exists may arm the selected effect; once the player is live, direct trigger hotkeys and selected effects apply immediately.
 
 Persisted selector files next to `eldenring.exe`:
 
 - `.effect-catalog-setting.txt`: selected catalog key.
-- `.effect-setting.txt`: selected SpEffect ID. Editing this file while the game is running applies the matching in-catalog effect ID live and moves the catalog cursor to the first catalog containing that ID.
+- `.effect-setting.txt`: selected SpEffect ID. Editing this file while the game is running applies the matching in-catalog effect ID live, moves the catalog cursor to the first catalog containing that ID, and persists effects as ON.
+- `.effect-enabled-setting.txt`: persistent selector ON/OFF state (`on` or `off`). If it is `on`, the selected persisted effect is re-armed on DLL startup and applied once the local player is live.
 - `.effect-hotkeys.json`: user-editable hotkey triggers. If missing, the DLL creates this default file:
 
 <!-- md-test: skip illustrative JSON config example -->

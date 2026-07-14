@@ -318,6 +318,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     state.expected_animation_seen = true;
                 }
                 state.last_write_idx = Some(observation.write_idx);
+                apply_pending_effect_work(player, &mut state);
 
                 remove_requested_calls(player, &mut state);
                 process_driver_command(player, &mut state);

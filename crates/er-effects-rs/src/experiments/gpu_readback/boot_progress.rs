@@ -162,7 +162,10 @@ const BOOT_VIEW_HANDOFF_HOLD_BAIL_MS: u64 = 5_000;
 // indistinguishable from the black boot frames underneath, so only the bar + label are visible.
 // (The game's REAL loading-bar widget/asset cannot be reused here: its menu resources are not in
 // game memory until ~+12.7s and the DLL must not unpack assets from disk itself.)
-const BOOT_VIEW_TEXT_SCALE: usize = 2;
+const BOOT_VIEW_TEXT_BASE_SCALE: usize = 2;
+const BOOT_VIEW_TEXT_REFERENCE_H: u32 = 1080;
+const BOOT_VIEW_TEXT_MIN_SCALE: usize = 1;
+const BOOT_VIEW_TEXT_MAX_SCALE: usize = 4;
 const BOOT_VIEW_GLYPH_W: usize = 5;
 const BOOT_VIEW_GLYPH_H: usize = 7;
 /// Advance per character (5px glyph + 1px gap, pre-scale).
@@ -174,10 +177,16 @@ const BOOT_VIEW_TEXT_BAR_GAP: usize = 5;
 /// Bottom padding row so the handoff marker never touches the strip edge.
 const BOOT_VIEW_PAD_BOTTOM: usize = 3;
 /// Total strip height: text row, gap, bar, bottom pad.
-const BOOT_VIEW_STRIP_HEIGHT: usize = BOOT_VIEW_GLYPH_H * BOOT_VIEW_TEXT_SCALE
-    + BOOT_VIEW_TEXT_BAR_GAP
-    + BOOT_VIEW_BAR_H
-    + BOOT_VIEW_PAD_BOTTOM;
+fn boot_view_strip_height(text_scale: usize) -> usize {
+    BOOT_VIEW_GLYPH_H * text_scale + BOOT_VIEW_TEXT_BAR_GAP + BOOT_VIEW_BAR_H + BOOT_VIEW_PAD_BOTTOM
+}
+
+fn boot_view_text_scale(backbuffer_h: u32) -> usize {
+    let scaled = (backbuffer_h as usize * BOOT_VIEW_TEXT_BASE_SCALE
+        + (BOOT_VIEW_TEXT_REFERENCE_H as usize / 2))
+        / BOOT_VIEW_TEXT_REFERENCE_H as usize;
+    scaled.clamp(BOOT_VIEW_TEXT_MIN_SCALE, BOOT_VIEW_TEXT_MAX_SCALE)
+}
 /// Strip width = backbuffer width * NUM/DEN (clamped to a sane minimum).
 const BOOT_VIEW_STRIP_W_NUM: u32 = 19;
 const BOOT_VIEW_STRIP_W_DEN: u32 = 25;
@@ -380,11 +389,11 @@ fn boot_glyph_5x7(c: char) -> [u8; 7] {
     }
 }
 
-fn boot_text_width(text: &str) -> usize {
-    text.chars().count() * BOOT_VIEW_GLYPH_ADV * BOOT_VIEW_TEXT_SCALE
+fn boot_text_width(text: &str, scale: usize) -> usize {
+    text.chars().count() * BOOT_VIEW_GLYPH_ADV * scale
 }
 
-/// Blit `text` into the tight RGBA buffer at (x, y), scaled by `BOOT_VIEW_TEXT_SCALE`.
+/// Blit `text` into the tight RGBA buffer at (x, y), scaled by `scale`.
 fn boot_draw_text_rgb(
     buf: &mut [u8],
     w: usize,
@@ -393,6 +402,7 @@ fn boot_draw_text_rgb(
     y: usize,
     text: &str,
     rgb: [u8; 3],
+    scale: usize,
 ) {
     let mut cx = x;
     for c in text.chars() {
@@ -402,10 +412,10 @@ fn boot_draw_text_rgb(
                 if row & (1 << (BOOT_VIEW_GLYPH_W - 1 - gx)) == 0 {
                     continue;
                 }
-                for sy in 0..BOOT_VIEW_TEXT_SCALE {
-                    for sx in 0..BOOT_VIEW_TEXT_SCALE {
-                        let px = cx + gx * BOOT_VIEW_TEXT_SCALE + sx;
-                        let py = y + gy * BOOT_VIEW_TEXT_SCALE + sy;
+                for sy in 0..scale {
+                    for sx in 0..scale {
+                        let px = cx + gx * scale + sx;
+                        let py = y + gy * scale + sy;
                         if px < w && py < h {
                             let o = (py * w + px) * RGBA8_BPP;
                             buf[o] = rgb[0];
@@ -417,25 +427,42 @@ fn boot_draw_text_rgb(
                 }
             }
         }
-        cx += BOOT_VIEW_GLYPH_ADV * BOOT_VIEW_TEXT_SCALE;
+        cx += BOOT_VIEW_GLYPH_ADV * scale;
     }
 }
 
-fn boot_draw_text(buf: &mut [u8], w: usize, h: usize, x: usize, y: usize, text: &str) {
-    boot_draw_text_rgb(buf, w, h, x, y, text, BOOT_VIEW_RGB_TEXT);
+fn boot_draw_text(
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+    x: usize,
+    y: usize,
+    text: &str,
+    scale: usize,
+) {
+    boot_draw_text_rgb(buf, w, h, x, y, text, BOOT_VIEW_RGB_TEXT, scale);
 }
 
-fn boot_draw_text_shadowed(buf: &mut [u8], w: usize, h: usize, x: usize, y: usize, text: &str) {
+fn boot_draw_text_shadowed(
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+    x: usize,
+    y: usize,
+    text: &str,
+    scale: usize,
+) {
     boot_draw_text_rgb(
         buf,
         w,
         h,
-        x.saturating_add(2),
-        y.saturating_add(2),
+        x.saturating_add(scale),
+        y.saturating_add(scale),
         text,
         BOOT_VIEW_RGB_BLACK,
+        scale,
     );
-    boot_draw_text(buf, w, h, x, y, text);
+    boot_draw_text(buf, w, h, x, y, text, scale);
 }
 
 /// Axis-aligned opaque fill into the tight RGBA buffer (clamped).
@@ -714,6 +741,7 @@ fn boot_darken_bar_shadow(
     content_x: usize,
     content_y: usize,
     content_w: usize,
+    strip_h: usize,
 ) {
     // Soft vignette behind the progress UI: strongest at the bar center, fading to no darkening at
     // the edges. This keeps the hairline readable over bright screenshots without a hard rectangular
@@ -721,12 +749,12 @@ fn boot_darken_bar_shadow(
     let x0 = content_x.saturating_sub(32);
     let y0 = content_y.saturating_sub(10);
     let rw = (content_w + 64).min(w.saturating_sub(x0));
-    let rh = (BOOT_VIEW_STRIP_HEIGHT + 20).min(h.saturating_sub(y0));
+    let rh = (strip_h + 20).min(h.saturating_sub(y0));
     if rw == 0 || rh == 0 {
         return;
     }
     let cx2 = (content_x * 2).saturating_add(content_w);
-    let cy2 = (content_y * 2).saturating_add(BOOT_VIEW_STRIP_HEIGHT);
+    let cy2 = (content_y * 2).saturating_add(strip_h);
     let rx = (rw.max(1) as u32).max(1);
     let ry = (rh.max(1) as u32).max(1);
     for y in y0..(y0 + rh).min(h) {
@@ -757,16 +785,17 @@ fn boot_draw_marker_label(
     permille: usize,
     label: &str,
     has_bg: bool,
+    text_scale: usize,
 ) -> usize {
     let marker_x = content_x + (content_w * permille / 1000).min(content_w.saturating_sub(1));
-    let label_w = boot_text_width(label);
+    let label_w = boot_text_width(label, text_scale);
     let label_x = marker_x
         .saturating_sub(label_w / 2)
         .min(w.saturating_sub(label_w));
     if has_bg {
-        boot_draw_text_shadowed(buf, w, h, label_x, content_y, label);
+        boot_draw_text_shadowed(buf, w, h, label_x, content_y, label, text_scale);
     } else {
-        boot_draw_text(buf, w, h, label_x, content_y, label);
+        boot_draw_text(buf, w, h, label_x, content_y, label, text_scale);
     }
     marker_x
 }
@@ -782,6 +811,7 @@ fn boot_view_rasterize(
     content_y: usize,
     content_w: usize,
     bg: Option<&BootBgImage>,
+    text_scale: usize,
 ) -> Vec<u8> {
     let mut buf = vec![0u8; w * h * RGBA8_BPP];
     let has_bg = bg.is_some();
@@ -791,16 +821,17 @@ fn boot_view_rasterize(
         boot_fill_rect(&mut buf, w, h, 0, 0, w, h, BOOT_VIEW_RGB_BLACK);
     }
     let label = BOOT_VIEW_MILESTONE_LABELS[idx.min(BOOT_VIEW_MILESTONE_LABELS.len() - 1)];
-    let bar_y = content_y + BOOT_VIEW_GLYPH_H * BOOT_VIEW_TEXT_SCALE + BOOT_VIEW_TEXT_BAR_GAP;
+    let strip_h = boot_view_strip_height(text_scale);
+    let bar_y = content_y + BOOT_VIEW_GLYPH_H * text_scale + BOOT_VIEW_TEXT_BAR_GAP;
     if has_bg {
         // Local shadow band only around the UI, plus globally dimmed screenshot: keeps the hairline bar
         // readable on bright screenshots without turning the boot screen back into a heavy panel.
-        boot_darken_bar_shadow(&mut buf, w, h, content_x, content_y, content_w);
+        boot_darken_bar_shadow(&mut buf, w, h, content_x, content_y, content_w, strip_h);
     }
     if has_bg {
-        boot_draw_text_shadowed(&mut buf, w, h, content_x, content_y, label);
+        boot_draw_text_shadowed(&mut buf, w, h, content_x, content_y, label, text_scale);
     } else {
-        boot_draw_text(&mut buf, w, h, content_x, content_y, label);
+        boot_draw_text(&mut buf, w, h, content_x, content_y, label, text_scale);
     }
     // SAVE CHECK (the picker-hold pause, ~577) and SAVE LOAD (615) sit close together, so only one
     // is shown at a time to keep their labels from overlapping: SAVE CHECK while the missing-save
@@ -818,6 +849,7 @@ fn boot_view_rasterize(
             BOOT_VIEW_SAVE_CHECK_PERMILLE,
             BOOT_VIEW_SAVE_CHECK_LABEL,
             has_bg,
+            text_scale,
         )
     } else {
         usize::MAX
@@ -835,6 +867,7 @@ fn boot_view_rasterize(
             BOOT_VIEW_SAVE_LOAD_PERMILLE,
             BOOT_VIEW_SAVE_LOAD_LABEL,
             has_bg,
+            text_scale,
         )
     };
     let marker_x = boot_draw_marker_label(
@@ -847,6 +880,7 @@ fn boot_view_rasterize(
         BOOT_VIEW_NATIVE_HANDOFF_PERMILLE,
         BOOT_VIEW_NATIVE_HANDOFF_LABEL,
         has_bg,
+        text_scale,
     );
     boot_fill_rect(
         &mut buf,
@@ -1137,10 +1171,11 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
 
     // Progress-bar geometry follows the backbuffer. When a cached screenshot background exists, copy a
     // full-screen region; otherwise preserve the original tiny strip copy over black boot frames.
+    let text_scale = boot_view_text_scale(bh);
     let strip_w = (bw * BOOT_VIEW_STRIP_W_NUM / BOOT_VIEW_STRIP_W_DEN)
         .max(BOOT_VIEW_STRIP_MIN_W)
         .min(bw);
-    let strip_h = (BOOT_VIEW_STRIP_HEIGHT as u32).min(bh);
+    let strip_h = (boot_view_strip_height(text_scale) as u32).min(bh);
     let strip_dx = (bw - strip_w) / 2;
     let strip_dy = (bh * BOOT_VIEW_STRIP_Y_NUM / BOOT_VIEW_STRIP_Y_DEN).min(bh - strip_h);
     let bg = boot_bg_image();
@@ -1288,6 +1323,7 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
             content_y,
             content_w,
             bg,
+            text_scale,
         );
         if picker_active
             && overlay_save_picker_onto(&mut tight, region_w as usize, region_h as usize)
@@ -1567,16 +1603,17 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
     }
 
     let text_lines = effect_selector_overlay_lines(&text);
+    let effect_text_scale = BOOT_VIEW_TEXT_BASE_SCALE;
     let text_w = text_lines
         .iter()
-        .map(|line| boot_text_width(line) as u32)
+        .map(|line| boot_text_width(line, effect_text_scale) as u32)
         .max()
         .unwrap_or(0);
     let region_w = (text_w + (EFFECT_SELECTOR_VIEW_PAD_X as u32 * 2))
         .max(EFFECT_SELECTOR_VIEW_MIN_W)
         .min(EFFECT_SELECTOR_VIEW_MAX_W)
         .min(bw.saturating_sub(EFFECT_SELECTOR_VIEW_SCREEN_MARGIN_X).max(1));
-    let line_h = BOOT_VIEW_GLYPH_H * BOOT_VIEW_TEXT_SCALE;
+    let line_h = BOOT_VIEW_GLYPH_H * effect_text_scale;
     let text_block_h = text_lines.len() * line_h
         + text_lines.len().saturating_sub(1) * EFFECT_SELECTOR_VIEW_LINE_GAP;
     let region_h = (text_block_h + EFFECT_SELECTOR_VIEW_PAD_Y * 2) as u32;
@@ -1714,7 +1751,7 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
         );
         for (line_index, line) in text_lines.iter().enumerate() {
             let y = EFFECT_SELECTOR_VIEW_PAD_Y
-                + line_index * (BOOT_VIEW_GLYPH_H * BOOT_VIEW_TEXT_SCALE + EFFECT_SELECTOR_VIEW_LINE_GAP);
+                + line_index * (BOOT_VIEW_GLYPH_H * effect_text_scale + EFFECT_SELECTOR_VIEW_LINE_GAP);
             boot_draw_text_rgb(
                 &mut tight,
                 region_w as usize,
@@ -1723,6 +1760,7 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
                 y,
                 line,
                 EFFECT_SELECTOR_VIEW_TEXT,
+                effect_text_scale,
             );
         }
         let row_pitch = footprint.Footprint.RowPitch as usize;

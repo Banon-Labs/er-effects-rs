@@ -189,6 +189,10 @@ pub(crate) fn effect_catalog_setting_path() -> PathBuf {
     PathBuf::from(".effect-catalog-setting.txt")
 }
 
+pub(crate) fn effect_enabled_setting_path() -> PathBuf {
+    PathBuf::from(".effect-enabled-setting.txt")
+}
+
 pub(crate) fn effect_trigger_hotkeys_path() -> PathBuf {
     PathBuf::from(".effect-hotkeys.json")
 }
@@ -212,6 +216,25 @@ pub(crate) fn restore_selected_catalog_key() -> Option<String> {
     let value = fs::read_to_string(effect_catalog_setting_path()).ok()?;
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+pub(crate) fn restore_effects_enabled() -> bool {
+    let Ok(value) = fs::read_to_string(effect_enabled_setting_path()) else {
+        return false;
+    };
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "on" | "true" | "1" | "enabled"
+    )
+}
+
+pub(crate) fn persist_effects_enabled(enabled: bool) {
+    let path = effect_enabled_setting_path();
+    let tmp_path = path.with_extension("txt.tmp");
+    let value = if enabled { "on\n" } else { "off\n" };
+    if fs::write(&tmp_path, value).is_ok() {
+        let _ = fs::rename(tmp_path, path);
+    }
 }
 
 pub(crate) fn restore_selected_effect_index(calls: &[NamedEffectCall]) -> Option<usize> {
@@ -499,15 +522,18 @@ pub(crate) fn call_status_text(call: &NamedEffectCall) -> &'static str {
     }
 }
 
-pub(crate) fn effect_application_allowed(state: &EffectsState) -> bool {
-    state.current_animation_id.is_some()
+pub(crate) fn effect_application_allowed(_state: &EffectsState) -> bool {
+    // All callers already hold a live PlayerIns reference. Requiring the sampled TimeAct
+    // animation id here makes standing-idle characters look unavailable until movement
+    // changes the sampled slot, even though SpEffect application is already valid.
+    true
 }
 
 fn effect_application_block_reason(state: &EffectsState) -> &'static str {
     if effect_application_allowed(state) {
         "ready"
     } else {
-        "character is not animating"
+        "player is not loaded"
     }
 }
 
@@ -880,8 +906,11 @@ fn trigger_effect_hotkey(
     state.effect_trigger_last_id = Some(hotkey.effect_id);
     state.effect_trigger_last_count = count;
     if !effect_application_allowed(state) {
+        if state.pending_effect_triggers.len() < 16 {
+            state.pending_effect_triggers.push(hotkey.clone());
+        }
         state.last_driver_command = Some(format!(
-            "effect-trigger: {} ignored for {} x{} ({})",
+            "effect-trigger: {} armed {} x{} until next animation ({})",
             hotkey.key_name,
             hotkey.effect_id,
             count,
@@ -889,6 +918,15 @@ fn trigger_effect_hotkey(
         ));
         return;
     }
+    apply_effect_trigger_now(player, state, hotkey);
+}
+
+fn apply_effect_trigger_now(
+    player: &mut PlayerIns,
+    state: &mut EffectsState,
+    hotkey: &EffectTriggerHotkey,
+) {
+    let count = hotkey.count.clamp(1, EFFECT_TRIGGER_COUNT_MAX);
     for _ in 0..count {
         EffectCallKind::SpEffect {
             id: hotkey.effect_id,
@@ -922,10 +960,25 @@ fn trigger_effect_hotkey(
     ));
 }
 
+pub(crate) fn apply_pending_effect_work(player: &mut PlayerIns, state: &mut EffectsState) {
+    if !effect_application_allowed(state) {
+        return;
+    }
+    let pending_triggers = std::mem::take(&mut state.pending_effect_triggers);
+    for hotkey in pending_triggers {
+        state.effect_trigger_last_key = Some(hotkey.key_name.clone());
+        state.effect_trigger_last_id = Some(hotkey.effect_id);
+        state.effect_trigger_last_count = hotkey.count.clamp(1, EFFECT_TRIGGER_COUNT_MAX);
+        apply_effect_trigger_now(player, state, &hotkey);
+    }
+    apply_pending_enabled_calls(player, state);
+}
+
 fn toggle_selected_effect(player: &mut PlayerIns, state: &mut EffectsState) {
     if state.effect_hotkeys_effects_on {
         disable_all_calls(player, state);
         state.effect_hotkeys_effects_on = false;
+        persist_effects_enabled(false);
         state.last_driver_command = Some("effect-hotkey: toggled effects off".to_owned());
         return;
     }
@@ -1066,6 +1119,9 @@ fn enable_only_call(player: &mut PlayerIns, state: &mut EffectsState, index: usi
     }
     state.selected_effect_index = Some(index);
     state.effect_hotkeys_effects_on = true;
+    if persist {
+        persist_effects_enabled(true);
+    }
     if persist && let Some(call) = state.calls.get(index) {
         let EffectCallKind::SpEffect { id } = call.kind;
         let label = call.kind.label();
@@ -1145,6 +1201,7 @@ pub(crate) fn poll_live_effect_setting(player: &mut PlayerIns, state: &mut Effec
 
     let can_apply = effect_application_allowed(state);
     enable_only_call(player, state, index, false);
+    persist_effects_enabled(true);
     state.effect_setting_live_updates = state.effect_setting_live_updates.saturating_add(1);
     if let Some(call) = state.calls.get(index) {
         state.last_driver_command = Some(if can_apply {
@@ -1209,6 +1266,8 @@ pub(crate) fn execute_driver_command(
                 call.active_seen_since_enable = false;
                 call.apply_failed = false;
             }
+            state.effect_hotkeys_effects_on = false;
+            persist_effects_enabled(false);
             refresh_call_status(player, state);
             Ok(())
         }
@@ -1261,6 +1320,7 @@ pub(crate) fn set_call_enabled(
         }
         state.selected_effect_index = Some(index);
         state.effect_hotkeys_effects_on = true;
+        persist_effects_enabled(true);
         persist_selected_effect(call);
         state.effect_setting_last_modified = current_effect_setting_modified();
         if let Some(catalog_index) = state.selected_catalog_index
@@ -1276,6 +1336,7 @@ pub(crate) fn set_call_enabled(
         call.active = call.kind.is_active(player);
         if state.selected_effect_index == Some(index) {
             state.effect_hotkeys_effects_on = false;
+            persist_effects_enabled(false);
         }
     }
 
@@ -1312,6 +1373,20 @@ pub(crate) fn apply_selected_calls(player: &mut PlayerIns, state: &mut EffectsSt
     for call in state.calls.iter_mut().filter(|call| call.enabled) {
         call.kind.apply(player, network_sync);
         // The game call reports nothing, so check the active list directly.
+        call.active = call.kind.is_active(player);
+        call.active_seen_since_enable |= call.active;
+        call.apply_failed = !call.active;
+    }
+}
+
+fn apply_pending_enabled_calls(player: &mut PlayerIns, state: &mut EffectsState) {
+    let network_sync = state.network_sync;
+    for call in state
+        .calls
+        .iter_mut()
+        .filter(|call| call.enabled && !call.active_seen_since_enable && !call.apply_failed)
+    {
+        call.kind.apply(player, network_sync);
         call.active = call.kind.is_active(player);
         call.active_seen_since_enable |= call.active;
         call.apply_failed = !call.active;

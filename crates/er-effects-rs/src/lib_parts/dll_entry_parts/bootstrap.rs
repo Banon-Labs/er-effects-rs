@@ -43,6 +43,7 @@ pub(crate) struct EffectsState {
     effect_trigger_hotkeys: Vec<EffectTriggerHotkey>,
     effect_trigger_hotkeys_modified: Option<std::time::SystemTime>,
     effect_trigger_hotkeys_load_error: Option<String>,
+    pending_effect_triggers: Vec<EffectTriggerHotkey>,
     effect_trigger_fire_count: u64,
     effect_trigger_last_key: Option<String>,
     effect_trigger_last_id: Option<i32>,
@@ -61,7 +62,7 @@ pub(crate) struct EffectsState {
 
 impl Default for EffectsState {
     fn default() -> Self {
-        let (calls, catalogs, load_error) = build_effect_catalog_state();
+        let (mut calls, catalogs, load_error) = build_effect_catalog_state();
         let (effect_trigger_hotkeys, effect_trigger_hotkeys_load_error) = match load_effect_trigger_hotkeys() {
             Ok(hotkeys) => (hotkeys, None),
             Err(error) => (Vec::new(), Some(error)),
@@ -87,6 +88,16 @@ impl Default for EffectsState {
                 })
             })
             .or_else(|| (!catalogs.is_empty()).then_some(0));
+        let effect_hotkeys_effects_on = restore_effects_enabled() && selected_effect_index.is_some();
+        if effect_hotkeys_effects_on
+            && let Some(index) = selected_effect_index
+            && let Some(call) = calls.get_mut(index)
+        {
+            call.enabled = true;
+            call.remove_requested = false;
+            call.active_seen_since_enable = false;
+            call.apply_failed = false;
+        }
 
         Self {
             calls,
@@ -106,11 +117,12 @@ impl Default for EffectsState {
             game_task_ticks: INITIAL_GAME_TASK_TICKS,
             selected_effect_index,
             selected_catalog_index,
-            effect_hotkeys_effects_on: false,
+            effect_hotkeys_effects_on,
             effect_selector_overlay_visible: false,
             effect_trigger_hotkeys,
             effect_trigger_hotkeys_modified: current_effect_trigger_hotkeys_modified(),
             effect_trigger_hotkeys_load_error,
+            pending_effect_triggers: Vec::new(),
             effect_trigger_fire_count: 0,
             effect_trigger_last_key: None,
             effect_trigger_last_id: None,
