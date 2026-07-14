@@ -1431,3 +1431,398 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     }
     true
 }
+
+// In-world effect selector HUD: a tiny top-left text strip rendered through the same proven
+// swapchain-copy path as the boot progress bar. This intentionally uses its own command objects so it
+// cannot interfere with the boot view or loading portrait overlay state.
+static EFFECT_SELECTOR_VIEW_DRAW_STATE: AtomicUsize = AtomicUsize::new(0); // 0=uninit, 1=ready, 2=failed
+static EFFECT_SELECTOR_VIEW_BUSY: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_SELECTOR_VIEW_ALLOCATOR: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_SELECTOR_VIEW_LIST: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_SELECTOR_VIEW_FENCE: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_SELECTOR_VIEW_QUEUE: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_SELECTOR_VIEW_UPLOAD: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_SELECTOR_VIEW_UPLOAD_SIZE: AtomicU64 = AtomicU64::new(0);
+static EFFECT_SELECTOR_VIEW_W: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_SELECTOR_VIEW_H: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_SELECTOR_VIEW_HASH: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static EFFECT_SELECTOR_OVERLAY_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
+
+const EFFECT_SELECTOR_VIEW_PAD_X: usize = 8;
+const EFFECT_SELECTOR_VIEW_PAD_Y: usize = 7;
+const EFFECT_SELECTOR_VIEW_SCREEN_X: u32 = 18;
+const EFFECT_SELECTOR_VIEW_SCREEN_Y: u32 = 18;
+const EFFECT_SELECTOR_VIEW_MIN_W: u32 = 300;
+const EFFECT_SELECTOR_VIEW_MAX_W: u32 = 1400;
+const EFFECT_SELECTOR_VIEW_BG: [u8; 3] = [5, 5, 5];
+const EFFECT_SELECTOR_VIEW_BORDER: [u8; 3] = [72, 70, 64];
+const EFFECT_SELECTOR_VIEW_TEXT: [u8; 3] = [226, 223, 214];
+
+struct EffectSelectorViewBusyGuard;
+impl Drop for EffectSelectorViewBusyGuard {
+    fn drop(&mut self) {
+        EFFECT_SELECTOR_VIEW_BUSY.store(0, Ordering::SeqCst);
+    }
+}
+
+pub(crate) unsafe fn composite_effect_selector_on_swapchain(swapchain_raw: usize) -> bool {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        composite_effect_selector_inner(swapchain_raw)
+    }))
+    .unwrap_or(false)
+}
+
+unsafe fn effect_selector_view_init(backbuffer: &ID3D12Resource) -> bool {
+    let mut device_opt: Option<ID3D12Device> = None;
+    if unsafe { backbuffer.GetDevice(&mut device_opt) }.is_err() {
+        return false;
+    }
+    let Some(device) = device_opt else {
+        return false;
+    };
+    let Ok(allocator) = (unsafe {
+        device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)
+    }) else {
+        return false;
+    };
+    let Ok(list) = (unsafe {
+        device.CreateCommandList::<_, _, ID3D12GraphicsCommandList>(
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            &allocator,
+            None,
+        )
+    }) else {
+        return false;
+    };
+    if unsafe { list.Close() }.is_err() {
+        return false;
+    }
+    let Ok(fence) = (unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }) else {
+        return false;
+    };
+    let queue_desc = D3D12_COMMAND_QUEUE_DESC {
+        Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+        Priority: 0,
+        Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
+        NodeMask: 0,
+    };
+    let Ok(queue) = (unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue_desc) }) else {
+        return false;
+    };
+    EFFECT_SELECTOR_VIEW_ALLOCATOR.store(allocator.into_raw() as usize, Ordering::SeqCst);
+    EFFECT_SELECTOR_VIEW_LIST.store(list.into_raw() as usize, Ordering::SeqCst);
+    EFFECT_SELECTOR_VIEW_FENCE.store(fence.into_raw() as usize, Ordering::SeqCst);
+    EFFECT_SELECTOR_VIEW_QUEUE.store(queue.into_raw() as usize, Ordering::SeqCst);
+    true
+}
+
+unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
+    let text = crate::effects::effect_selector_overlay_text();
+    if text.trim().is_empty() || EFFECT_SELECTOR_VIEW_DRAW_STATE.load(Ordering::SeqCst) == 2 {
+        return false;
+    }
+    if EFFECT_SELECTOR_VIEW_BUSY.swap(1, Ordering::SeqCst) != 0 {
+        return false;
+    }
+    let _busy = EffectSelectorViewBusyGuard;
+
+    let sc_raw = swapchain_raw as *mut c_void;
+    let Some(sc) = (unsafe { IDXGISwapChain3::from_raw_borrowed(&sc_raw) }) else {
+        return false;
+    };
+    let idx = unsafe { sc.GetCurrentBackBufferIndex() };
+    let Ok(backbuffer) = (unsafe { sc.GetBuffer::<ID3D12Resource>(idx) }) else {
+        return false;
+    };
+    if EFFECT_SELECTOR_VIEW_DRAW_STATE.load(Ordering::SeqCst) == 0 {
+        if unsafe { effect_selector_view_init(&backbuffer) } {
+            EFFECT_SELECTOR_VIEW_DRAW_STATE.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!("effect-selector-overlay: draw state READY"));
+        } else {
+            EFFECT_SELECTOR_VIEW_DRAW_STATE.store(2, Ordering::SeqCst);
+            append_autoload_debug(format_args!("effect-selector-overlay: draw init FAILED"));
+            return false;
+        }
+    }
+
+    let bb_desc = unsafe { backbuffer.GetDesc() };
+    let bw = bb_desc.Width as u32;
+    let bh = bb_desc.Height;
+    if bw == 0 || bh == 0 || bw > MAX_RT_DIM || bh > MAX_RT_DIM {
+        return false;
+    }
+    let swap_rb = matches!(
+        bb_desc.Format,
+        DXGI_FORMAT_B8G8R8A8_UNORM | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
+    );
+    if !swap_rb
+        && !matches!(
+            bb_desc.Format,
+            DXGI_FORMAT_R8G8B8A8_UNORM | DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+        )
+    {
+        return false;
+    }
+
+    let text_w = boot_text_width(&text) as u32;
+    let region_w = (text_w + (EFFECT_SELECTOR_VIEW_PAD_X as u32 * 2))
+        .max(EFFECT_SELECTOR_VIEW_MIN_W)
+        .min(EFFECT_SELECTOR_VIEW_MAX_W)
+        .min(bw.saturating_sub(EFFECT_SELECTOR_VIEW_SCREEN_X).max(1));
+    let region_h = (BOOT_VIEW_GLYPH_H * BOOT_VIEW_TEXT_SCALE
+        + EFFECT_SELECTOR_VIEW_PAD_Y * 2) as u32;
+    if region_w == 0 || region_h == 0 || EFFECT_SELECTOR_VIEW_SCREEN_Y + region_h > bh {
+        return false;
+    }
+
+    let mut device_opt: Option<ID3D12Device> = None;
+    if unsafe { backbuffer.GetDevice(&mut device_opt) }.is_err() {
+        return false;
+    }
+    let Some(device) = device_opt else {
+        return false;
+    };
+    let region_desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        Alignment: 0,
+        Width: region_w as u64,
+        Height: region_h,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: bb_desc.Format,
+        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+        Flags: D3D12_RESOURCE_FLAG_NONE,
+    };
+    let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+    let mut total_bytes: u64 = 0;
+    unsafe {
+        device.GetCopyableFootprints(
+            &region_desc,
+            0,
+            1,
+            0,
+            Some(&mut footprint),
+            None,
+            None,
+            Some(&mut total_bytes),
+        )
+    };
+    if total_bytes == 0 || footprint.Footprint.RowPitch == 0 {
+        return false;
+    }
+
+    let mut upload_fresh = false;
+    if EFFECT_SELECTOR_VIEW_UPLOAD_SIZE.load(Ordering::SeqCst) != total_bytes {
+        let up_heap = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_UPLOAD,
+            CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+            MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+            CreationNodeMask: 1,
+            VisibleNodeMask: 1,
+        };
+        let buf_desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+            Alignment: 0,
+            Width: total_bytes,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: DXGI_FORMAT_UNKNOWN,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            Flags: D3D12_RESOURCE_FLAG_NONE,
+        };
+        let mut up_opt: Option<ID3D12Resource> = None;
+        if unsafe {
+            device.CreateCommittedResource(
+                &up_heap,
+                D3D12_HEAP_FLAG_NONE,
+                &buf_desc,
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+                None,
+                &mut up_opt,
+            )
+        }
+        .is_err()
+        {
+            return false;
+        }
+        let Some(up) = up_opt else {
+            return false;
+        };
+        let old = EFFECT_SELECTOR_VIEW_UPLOAD.swap(up.into_raw() as usize, Ordering::SeqCst);
+        if old != 0 {
+            drop(unsafe { ID3D12Resource::from_raw(old as *mut c_void) });
+        }
+        EFFECT_SELECTOR_VIEW_UPLOAD_SIZE.store(total_bytes, Ordering::SeqCst);
+        upload_fresh = true;
+    }
+    let upload_raw = EFFECT_SELECTOR_VIEW_UPLOAD.load(Ordering::SeqCst) as *mut c_void;
+    let Some(upload) = (unsafe { ID3D12Resource::from_raw_borrowed(&upload_raw) }) else {
+        return false;
+    };
+
+    let hash = effect_selector_text_hash(&text);
+    let geom_changed = EFFECT_SELECTOR_VIEW_W.swap(region_w as usize, Ordering::SeqCst)
+        != region_w as usize
+        || EFFECT_SELECTOR_VIEW_H.swap(region_h as usize, Ordering::SeqCst) != region_h as usize;
+    if upload_fresh
+        || geom_changed
+        || EFFECT_SELECTOR_VIEW_HASH.load(Ordering::SeqCst) != hash
+    {
+        let mut tight = vec![0u8; region_w as usize * region_h as usize * RGBA8_BPP];
+        boot_fill_rect(
+            &mut tight,
+            region_w as usize,
+            region_h as usize,
+            0,
+            0,
+            region_w as usize,
+            region_h as usize,
+            EFFECT_SELECTOR_VIEW_BG,
+        );
+        boot_fill_rect(
+            &mut tight,
+            region_w as usize,
+            region_h as usize,
+            0,
+            0,
+            region_w as usize,
+            1,
+            EFFECT_SELECTOR_VIEW_BORDER,
+        );
+        boot_fill_rect(
+            &mut tight,
+            region_w as usize,
+            region_h as usize,
+            0,
+            region_h as usize - 1,
+            region_w as usize,
+            1,
+            EFFECT_SELECTOR_VIEW_BORDER,
+        );
+        boot_draw_text_rgb(
+            &mut tight,
+            region_w as usize,
+            region_h as usize,
+            EFFECT_SELECTOR_VIEW_PAD_X,
+            EFFECT_SELECTOR_VIEW_PAD_Y,
+            &text,
+            EFFECT_SELECTOR_VIEW_TEXT,
+        );
+        let row_pitch = footprint.Footprint.RowPitch as usize;
+        let total = total_bytes as usize;
+        let mut map: *mut c_void = std::ptr::null_mut();
+        if unsafe { upload.Map(0, None, Some(&mut map)) }.is_err() || map.is_null() {
+            return false;
+        }
+        {
+            let dst = unsafe { std::slice::from_raw_parts_mut(map as *mut u8, total) };
+            let src_row = region_w as usize * RGBA8_BPP;
+            for y in 0..region_h as usize {
+                let so = y * src_row;
+                let dofs = y * row_pitch;
+                if dofs + src_row > total || so + src_row > tight.len() {
+                    break;
+                }
+                let drow = &mut dst[dofs..dofs + src_row];
+                drow.copy_from_slice(&tight[so..so + src_row]);
+                if swap_rb {
+                    for t in 0..region_w as usize {
+                        drow.swap(t * RGBA8_BPP, t * RGBA8_BPP + 2);
+                    }
+                }
+            }
+        }
+        unsafe { upload.Unmap(0, None) };
+        EFFECT_SELECTOR_VIEW_HASH.store(hash, Ordering::SeqCst);
+    }
+
+    let alloc_raw = EFFECT_SELECTOR_VIEW_ALLOCATOR.load(Ordering::SeqCst) as *mut c_void;
+    let list_raw = EFFECT_SELECTOR_VIEW_LIST.load(Ordering::SeqCst) as *mut c_void;
+    let fence_raw = EFFECT_SELECTOR_VIEW_FENCE.load(Ordering::SeqCst) as *mut c_void;
+    let queue_raw = EFFECT_SELECTOR_VIEW_QUEUE.load(Ordering::SeqCst) as *mut c_void;
+    let (Some(allocator), Some(list), Some(fence), Some(queue)) = (unsafe {
+        (
+            ID3D12CommandAllocator::from_raw_borrowed(&alloc_raw),
+            ID3D12GraphicsCommandList::from_raw_borrowed(&list_raw),
+            ID3D12Fence::from_raw_borrowed(&fence_raw),
+            ID3D12CommandQueue::from_raw_borrowed(&queue_raw),
+        )
+    }) else {
+        return false;
+    };
+    if unsafe { allocator.Reset() }.is_err() || unsafe { list.Reset(allocator, None) }.is_err() {
+        return false;
+    }
+    unsafe {
+        record_transition(
+            list,
+            &backbuffer,
+            D3D12_RESOURCE_STATE_PRESENT,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+        )
+    };
+    let mut up_src = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(upload.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            PlacedFootprint: footprint,
+        },
+    };
+    let mut bb_dst = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(backbuffer.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
+    };
+    let up_box = D3D12_BOX {
+        left: 0,
+        top: 0,
+        front: 0,
+        right: region_w,
+        bottom: region_h,
+        back: 1,
+    };
+    unsafe {
+        list.CopyTextureRegion(
+            &bb_dst,
+            EFFECT_SELECTOR_VIEW_SCREEN_X,
+            EFFECT_SELECTOR_VIEW_SCREEN_Y,
+            0,
+            &up_src,
+            Some(&up_box),
+        )
+    };
+    unsafe { ManuallyDrop::drop(&mut up_src.pResource) };
+    unsafe { ManuallyDrop::drop(&mut bb_dst.pResource) };
+    unsafe {
+        record_transition(
+            list,
+            &backbuffer,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PRESENT,
+        )
+    };
+    if !unsafe { execute_and_wait(queue, list, fence) } {
+        return false;
+    }
+    let hits = EFFECT_SELECTOR_OVERLAY_DRAW_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    if hits == 1 {
+        append_autoload_debug(format_args!(
+            "effect-selector-overlay: first draw {region_w}x{region_h} at {},{} text='{}'",
+            EFFECT_SELECTOR_VIEW_SCREEN_X, EFFECT_SELECTOR_VIEW_SCREEN_Y, text
+        ));
+    }
+    true
+}
+
+fn effect_selector_text_hash(text: &str) -> usize {
+    let mut hash = 0xcbf29ce484222325usize;
+    for byte in text.as_bytes() {
+        hash ^= *byte as usize;
+        hash = hash.wrapping_mul(0x100000001b3usize);
+    }
+    hash
+}

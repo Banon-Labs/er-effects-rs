@@ -36,6 +36,8 @@ pub(crate) struct EffectsState {
     network_sync: bool,
     custom_call_id: i32,
     selected_effect_index: Option<usize>,
+    catalogs: Vec<EffectCatalog>,
+    selected_catalog_index: Option<usize>,
     effect_hotkeys_effects_on: bool,
     effect_setting_last_id: Option<i32>,
     effect_setting_last_modified: Option<std::time::SystemTime>,
@@ -51,29 +53,32 @@ pub(crate) struct EffectsState {
 
 impl Default for EffectsState {
     fn default() -> Self {
-        let (calls, load_error) = match embedded_effects() {
-            Ok(effects) => (
-                effects
-                    .calls
-                    .into_iter()
-                    .map(named_call_from_spec)
-                    .collect::<Vec<_>>(),
-                None,
-            ),
-            Err(error) => (
-                Vec::new(),
-                Some(format!("failed to parse embedded effects.json: {error}")),
-            ),
-        };
+        let (calls, catalogs, load_error) = build_effect_catalog_state();
         let selected_effect_id = restore_selected_effect_id();
         let selected_effect_index = selected_effect_id.and_then(|id| {
             calls.iter().position(|call| match call.kind {
                 EffectCallKind::SpEffect { id: call_id } => call_id == id,
             })
         });
+        let restored_catalog_key = restore_selected_catalog_key();
+        let selected_catalog_index = restored_catalog_key
+            .as_deref()
+            .and_then(|key| catalogs.iter().position(|catalog| catalog.source_key == key))
+            .or_else(|| {
+                selected_effect_index.and_then(|selected| {
+                    catalogs.iter().position(|catalog| {
+                        catalog
+                            .call_indices
+                            .iter()
+                            .any(|call_index| *call_index == selected)
+                    })
+                })
+            })
+            .or_else(|| (!catalogs.is_empty()).then_some(0));
 
         Self {
             calls,
+            catalogs,
             load_error,
             current_animation_id: None,
             expected_animation_seen: false,
@@ -88,6 +93,7 @@ impl Default for EffectsState {
             autoload: SaveLoader::new(configured_save_load_request()),
             game_task_ticks: INITIAL_GAME_TASK_TICKS,
             selected_effect_index,
+            selected_catalog_index,
             effect_hotkeys_effects_on: false,
             effect_setting_last_id: selected_effect_id,
             effect_setting_last_modified: current_effect_setting_modified(),

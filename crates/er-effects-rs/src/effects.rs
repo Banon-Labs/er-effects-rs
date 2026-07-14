@@ -1,11 +1,18 @@
 use std::{
+    collections::{HashMap, HashSet},
     fs,
-    path::PathBuf,
-    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    path::{Path, PathBuf},
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
 };
 
 use eldenring::cs::{ChrInsExt, PlayerIns};
-use er_effects_data::{EffectCallSpec, EffectKindSpec};
+use er_effects_data::{
+    BUILT_IN_EFFECT_CATALOGS, EffectCallSpec, EffectKindSpec, embedded_effect_master_catalog,
+    embedded_effects, parse_effect_id_catalog_json,
+};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, HC_ACTION, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_SYSKEYDOWN,
@@ -15,18 +22,25 @@ use crate::{EffectsState, append_autoload_debug, command_path};
 
 const EFFECT_HOTKEY_UP: usize = 1 << 0;
 const EFFECT_HOTKEY_DOWN: usize = 1 << 1;
-const EFFECT_HOTKEY_TOGGLE: usize = 1 << 2;
+const EFFECT_HOTKEY_LEFT: usize = 1 << 2;
+const EFFECT_HOTKEY_RIGHT: usize = 1 << 3;
+const EFFECT_HOTKEY_TOGGLE: usize = 1 << 4;
 
+const VK_LEFT: u32 = 0x25;
 const VK_UP: u32 = 0x26;
+const VK_RIGHT: u32 = 0x27;
 const VK_DOWN: u32 = 0x28;
 const VK_OEM_7: u32 = 0xde;
 const LLKHF_ALTDOWN: u32 = 0x20;
 
 static EFFECT_HOTKEY_PENDING_UP: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_PENDING_DOWN: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_HOTKEY_PENDING_LEFT: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_HOTKEY_PENDING_RIGHT: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_PENDING_TOGGLE: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_HOOK_STARTED: AtomicBool = AtomicBool::new(false);
 static EFFECT_HOTKEY_HOOK_ACTIVE: AtomicBool = AtomicBool::new(false);
+static EFFECT_SELECTOR_OVERLAY_TEXT: OnceLock<Mutex<String>> = OnceLock::new();
 pub(crate) static EFFECT_HOTKEY_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static EFFECT_HOTKEY_APPLIED_ACTIONS: AtomicUsize = AtomicUsize::new(0);
 
@@ -114,8 +128,25 @@ impl NamedEffectCall {
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct EffectCatalog {
+    pub(crate) source_key: String,
+    pub(crate) file_name: String,
+    pub(crate) name: String,
+    pub(crate) call_indices: Vec<usize>,
+    pub(crate) invalid_ids: usize,
+}
+
 pub(crate) fn effect_setting_path() -> PathBuf {
     PathBuf::from(".effect-setting.txt")
+}
+
+pub(crate) fn effect_catalog_setting_path() -> PathBuf {
+    PathBuf::from(".effect-catalog-setting.txt")
+}
+
+pub(crate) fn user_effect_catalog_dir() -> PathBuf {
+    PathBuf::from("effect-catalogs")
 }
 
 pub(crate) fn current_effect_setting_modified() -> Option<std::time::SystemTime> {
@@ -127,6 +158,12 @@ pub(crate) fn current_effect_setting_modified() -> Option<std::time::SystemTime>
 pub(crate) fn restore_selected_effect_id() -> Option<i32> {
     let path = effect_setting_path();
     fs::read_to_string(path).ok()?.trim().parse::<i32>().ok()
+}
+
+pub(crate) fn restore_selected_catalog_key() -> Option<String> {
+    let value = fs::read_to_string(effect_catalog_setting_path()).ok()?;
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
 pub(crate) fn restore_selected_effect_index(calls: &[NamedEffectCall]) -> Option<usize> {
@@ -149,6 +186,22 @@ fn persist_selected_effect(call: &NamedEffectCall) {
     }
 }
 
+fn persist_selected_catalog(catalog: &EffectCatalog) {
+    let path = effect_catalog_setting_path();
+    let tmp_path = path.with_extension("txt.tmp");
+    if fs::write(&tmp_path, format!("{}\n", catalog.source_key)).is_ok() {
+        let _ = fs::rename(tmp_path, path);
+    }
+}
+
+fn catalog_display_name(file_name: &str) -> String {
+    Path::new(file_name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or(file_name)
+        .replace(['-', '_'], " ")
+}
+
 pub(crate) fn call_kind_from_spec(kind: EffectKindSpec, id: i32) -> EffectCallKind {
     match kind {
         EffectKindSpec::SpEffect => EffectCallKind::SpEffect { id },
@@ -158,6 +211,128 @@ pub(crate) fn call_kind_from_spec(kind: EffectKindSpec, id: i32) -> EffectCallKi
 pub(crate) fn named_call_from_spec(spec: EffectCallSpec) -> NamedEffectCall {
     let kind = call_kind_from_spec(spec.kind, spec.id);
     NamedEffectCall::new(spec.name, kind, spec.enabled)
+}
+
+struct RawEffectCatalog {
+    source_key: String,
+    file_name: String,
+    ids: Vec<i32>,
+}
+
+pub(crate) fn build_effect_catalog_state()
+-> (Vec<NamedEffectCall>, Vec<EffectCatalog>, Option<String>) {
+    let master = match embedded_effect_master_catalog() {
+        Ok(master) => master,
+        Err(error) => {
+            let fallback = embedded_effects()
+                .map(|effects| {
+                    effects
+                        .calls
+                        .into_iter()
+                        .map(named_call_from_spec)
+                        .collect()
+                })
+                .unwrap_or_default();
+            return (
+                fallback,
+                Vec::new(),
+                Some(format!(
+                    "failed to parse embedded effect master catalog: {error}"
+                )),
+            );
+        }
+    };
+    let master_names = master
+        .effects
+        .into_iter()
+        .map(|effect| {
+            let name = if effect.name.is_empty() {
+                format!("SpEffect {}", effect.id)
+            } else {
+                effect.name
+            };
+            (effect.id, name)
+        })
+        .collect::<HashMap<_, _>>();
+
+    let mut raw_catalogs = Vec::new();
+    let mut load_errors = Vec::new();
+    for catalog in BUILT_IN_EFFECT_CATALOGS {
+        match parse_effect_id_catalog_json(catalog.json) {
+            Ok(ids) => raw_catalogs.push(RawEffectCatalog {
+                source_key: format!("builtin/{}", catalog.file_name),
+                file_name: catalog.file_name.to_owned(),
+                ids,
+            }),
+            Err(error) => load_errors.push(format!("{}: {error}", catalog.file_name)),
+        }
+    }
+    if let Ok(entries) = fs::read_dir(user_effect_catalog_dir()) {
+        let mut paths = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+            .collect::<Vec<_>>();
+        paths.sort();
+        for path in paths {
+            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            match fs::read_to_string(&path)
+                .map_err(|error| error.to_string())
+                .and_then(|json| {
+                    parse_effect_id_catalog_json(&json).map_err(|error| error.to_string())
+                }) {
+                Ok(ids) => raw_catalogs.push(RawEffectCatalog {
+                    source_key: format!("user/{file_name}"),
+                    file_name: file_name.to_owned(),
+                    ids,
+                }),
+                Err(error) => load_errors.push(format!("{}: {error}", path.display())),
+            }
+        }
+    }
+
+    let mut calls = Vec::new();
+    let mut call_index_by_id = HashMap::<i32, usize>::new();
+    let mut catalogs = Vec::new();
+    for raw in raw_catalogs {
+        let mut seen = HashSet::new();
+        let mut call_indices = Vec::new();
+        let mut invalid_ids = 0usize;
+        for id in raw.ids {
+            if !seen.insert(id) {
+                continue;
+            }
+            let Some(name) = master_names.get(&id).cloned() else {
+                invalid_ids = invalid_ids.saturating_add(1);
+                continue;
+            };
+            let index = *call_index_by_id.entry(id).or_insert_with(|| {
+                let index = calls.len();
+                calls.push(NamedEffectCall::new(
+                    name,
+                    EffectCallKind::SpEffect { id },
+                    false,
+                ));
+                index
+            });
+            call_indices.push(index);
+        }
+        if !call_indices.is_empty() {
+            catalogs.push(EffectCatalog {
+                source_key: raw.source_key,
+                name: catalog_display_name(&raw.file_name),
+                file_name: raw.file_name,
+                call_indices,
+                invalid_ids,
+            });
+        }
+    }
+
+    let load_error = (!load_errors.is_empty())
+        .then(|| format!("effect catalog load errors: {}", load_errors.join("; ")));
+    (calls, catalogs, load_error)
 }
 
 pub(crate) fn call_status_text(call: &NamedEffectCall) -> &'static str {
@@ -183,7 +358,9 @@ pub(crate) fn add_custom_call(state: &mut EffectsState) {
 
 fn effect_hotkey_action_for_key(vk: u32, alt_down: bool) -> usize {
     match vk {
+        VK_LEFT => EFFECT_HOTKEY_LEFT,
         VK_UP => EFFECT_HOTKEY_UP,
+        VK_RIGHT => EFFECT_HOTKEY_RIGHT,
         VK_DOWN => EFFECT_HOTKEY_DOWN,
         VK_OEM_7 if alt_down => EFFECT_HOTKEY_TOGGLE,
         _ => 0,
@@ -208,6 +385,12 @@ unsafe extern "system" fn effect_hotkey_ll_keyboard_proc(
                 }
                 if action & EFFECT_HOTKEY_DOWN != 0 {
                     EFFECT_HOTKEY_PENDING_DOWN.fetch_add(1, Ordering::SeqCst);
+                }
+                if action & EFFECT_HOTKEY_LEFT != 0 {
+                    EFFECT_HOTKEY_PENDING_LEFT.fetch_add(1, Ordering::SeqCst);
+                }
+                if action & EFFECT_HOTKEY_RIGHT != 0 {
+                    EFFECT_HOTKEY_PENDING_RIGHT.fetch_add(1, Ordering::SeqCst);
                 }
                 if action & EFFECT_HOTKEY_TOGGLE != 0 {
                     EFFECT_HOTKEY_PENDING_TOGGLE.fetch_add(1, Ordering::SeqCst);
@@ -278,17 +461,110 @@ pub(crate) fn effect_hotkey_hook_active() -> bool {
     EFFECT_HOTKEY_HOOK_ACTIVE.load(Ordering::SeqCst)
 }
 
+pub(crate) fn effect_selector_overlay_text() -> String {
+    EFFECT_SELECTOR_OVERLAY_TEXT
+        .get_or_init(|| Mutex::new(String::new()))
+        .lock()
+        .map(|text| text.clone())
+        .unwrap_or_default()
+}
+
+pub(crate) fn publish_effect_selector_overlay_text(state: &EffectsState) {
+    let catalog = state
+        .selected_catalog_index
+        .and_then(|index| state.catalogs.get(index));
+    let catalog_count = state.catalogs.len();
+    let catalog_index = state.selected_catalog_index.unwrap_or(0);
+    let catalog_name = catalog
+        .map(|catalog| catalog.name.as_str())
+        .unwrap_or("NO CATALOG");
+    let catalog_size = catalog.map_or(0, |catalog| catalog.call_indices.len());
+    let position = state.selected_effect_index.and_then(|selected| {
+        catalog.and_then(|catalog| {
+            catalog
+                .call_indices
+                .iter()
+                .position(|call_index| *call_index == selected)
+        })
+    });
+    let effect_id = state
+        .selected_effect_index
+        .and_then(|index| state.calls.get(index))
+        .map(|call| match call.kind {
+            EffectCallKind::SpEffect { id } => id,
+        });
+    let mut text = format!(
+        "CAT {}/{} {} | ID {} | {}/{} | {}",
+        catalog_index.saturating_add(1),
+        catalog_count,
+        catalog_name,
+        effect_id.map_or_else(|| "NONE".to_owned(), |id| id.to_string()),
+        position.map_or(0, |position| position.saturating_add(1)),
+        catalog_size,
+        if state.effect_hotkeys_effects_on {
+            "ON"
+        } else {
+            "OFF"
+        }
+    );
+    text = text
+        .chars()
+        .map(|c| {
+            let c = c.to_ascii_uppercase();
+            if c.is_ascii_alphanumeric()
+                || matches!(
+                    c,
+                    ' ' | '-'
+                        | '_'
+                        | '/'
+                        | ':'
+                        | '['
+                        | ']'
+                        | '('
+                        | ')'
+                        | '>'
+                        | '?'
+                        | '!'
+                        | '%'
+                        | '.'
+                )
+            {
+                c
+            } else {
+                ' '
+            }
+        })
+        .collect();
+    if text.len() > 96 {
+        text.truncate(96);
+    }
+    if let Ok(mut slot) = EFFECT_SELECTOR_OVERLAY_TEXT
+        .get_or_init(|| Mutex::new(String::new()))
+        .lock()
+    {
+        *slot = text;
+    }
+}
+
 pub(crate) fn consume_effect_hotkeys(player: &mut PlayerIns, state: &mut EffectsState) {
     let toggles = EFFECT_HOTKEY_PENDING_TOGGLE.swap(0, Ordering::SeqCst);
     let ups = EFFECT_HOTKEY_PENDING_UP.swap(0, Ordering::SeqCst);
     let downs = EFFECT_HOTKEY_PENDING_DOWN.swap(0, Ordering::SeqCst);
-    let total = toggles + ups + downs;
+    let lefts = EFFECT_HOTKEY_PENDING_LEFT.swap(0, Ordering::SeqCst);
+    let rights = EFFECT_HOTKEY_PENDING_RIGHT.swap(0, Ordering::SeqCst);
+    let total = toggles + ups + downs + lefts + rights;
     if total == 0 {
         return;
     }
     EFFECT_HOTKEY_APPLIED_ACTIONS.fetch_add(total, Ordering::SeqCst);
     for _ in 0..toggles {
         toggle_selected_effect(player, state);
+    }
+    for _ in 0..lefts {
+        step_selected_catalog(player, state, -1);
+    }
+    for _ in 0..rights {
+        step_selected_catalog(player, state, 1);
     }
     for _ in 0..ups {
         step_selected_effect(player, state, -1);
@@ -317,20 +593,90 @@ fn toggle_selected_effect(player: &mut PlayerIns, state: &mut EffectsState) {
     enable_only_call(player, state, index, true);
 }
 
+fn selected_catalog_indices(state: &EffectsState) -> Vec<usize> {
+    state
+        .selected_catalog_index
+        .and_then(|catalog_index| state.catalogs.get(catalog_index))
+        .map(|catalog| catalog.call_indices.clone())
+        .unwrap_or_else(|| (0..state.calls.len()).collect())
+}
+
+fn selected_catalog_position(state: &EffectsState) -> Option<usize> {
+    let selected = state.selected_effect_index?;
+    selected_catalog_indices(state)
+        .iter()
+        .position(|index| *index == selected)
+}
+
 fn step_selected_effect(player: &mut PlayerIns, state: &mut EffectsState, delta: isize) {
-    let len = state.calls.len();
+    let catalog_indices = selected_catalog_indices(state);
+    let len = catalog_indices.len();
     if len == 0 {
         state.last_driver_command = Some("effect-hotkey: no effects available".to_owned());
         return;
     }
-    let current = state.selected_effect_index.filter(|index| *index < len);
+    let current_position = state
+        .selected_effect_index
+        .and_then(|selected| catalog_indices.iter().position(|index| *index == selected));
+    let next_position = match (current_position, delta.is_negative()) {
+        (Some(index), false) => (index + 1) % len,
+        (Some(index), true) => (index + len - 1) % len,
+        (None, false) => 0,
+        (None, true) => len - 1,
+    };
+    enable_only_call(player, state, catalog_indices[next_position], true);
+}
+
+fn step_selected_catalog(player: &mut PlayerIns, state: &mut EffectsState, delta: isize) {
+    let len = state.catalogs.len();
+    if len == 0 {
+        state.last_driver_command = Some("effect-hotkey: no catalogs available".to_owned());
+        return;
+    }
+    let current = state.selected_catalog_index.filter(|index| *index < len);
     let next = match (current, delta.is_negative()) {
         (Some(index), false) => (index + 1) % len,
         (Some(index), true) => (index + len - 1) % len,
         (None, false) => 0,
         (None, true) => len - 1,
     };
-    enable_only_call(player, state, next, true);
+    select_catalog(player, state, next, true);
+}
+
+fn select_catalog(
+    player: &mut PlayerIns,
+    state: &mut EffectsState,
+    catalog_index: usize,
+    persist: bool,
+) {
+    let Some(catalog) = state.catalogs.get(catalog_index) else {
+        return;
+    };
+    state.selected_catalog_index = Some(catalog_index);
+    let selected_in_catalog = state
+        .selected_effect_index
+        .filter(|selected| catalog.call_indices.iter().any(|index| index == selected));
+    let next_effect_index = selected_in_catalog.or_else(|| catalog.call_indices.first().copied());
+    let catalog_name = catalog.name.clone();
+    let catalog_file = catalog.file_name.clone();
+    if persist {
+        persist_selected_catalog(catalog);
+    }
+    if let Some(index) = next_effect_index {
+        state.selected_effect_index = Some(index);
+        if persist && let Some(call) = state.calls.get(index) {
+            persist_selected_effect(call);
+            state.effect_setting_last_modified = current_effect_setting_modified();
+        }
+        if state.effect_hotkeys_effects_on {
+            enable_only_call(player, state, index, persist);
+            return;
+        }
+    }
+    state.last_driver_command = Some(format!(
+        "effect-hotkey: catalog {} ({})",
+        catalog_name, catalog_file
+    ));
 }
 
 fn disable_all_calls(player: &mut PlayerIns, state: &mut EffectsState) {
@@ -370,6 +716,11 @@ fn enable_only_call(player: &mut PlayerIns, state: &mut EffectsState, index: usi
         let label = call.kind.label();
         let name = call.name.clone();
         persist_selected_effect(call);
+        if let Some(catalog_index) = state.selected_catalog_index
+            && let Some(catalog) = state.catalogs.get(catalog_index)
+        {
+            persist_selected_catalog(catalog);
+        }
         state.effect_setting_last_id = Some(id);
         state.effect_setting_last_modified = current_effect_setting_modified();
         state.last_driver_command = Some(format!("effect-hotkey: selected {label} ({name})"));
@@ -405,6 +756,30 @@ pub(crate) fn poll_live_effect_setting(player: &mut PlayerIns, state: &mut Effec
         state.last_driver_command = Some(format!("effect-setting: id {id} is not in catalog"));
         return;
     };
+    let current_catalog_contains_id = state
+        .selected_catalog_index
+        .and_then(|catalog_index| state.catalogs.get(catalog_index))
+        .is_some_and(|catalog| {
+            catalog
+                .call_indices
+                .iter()
+                .any(|call_index| *call_index == index)
+        });
+    if !current_catalog_contains_id
+        && let Some(catalog_index) = state.catalogs.iter().position(|catalog| {
+            catalog
+                .call_indices
+                .iter()
+                .any(|call_index| *call_index == index)
+        })
+    {
+        state.selected_catalog_index = Some(catalog_index);
+    }
+    if let Some(catalog_index) = state.selected_catalog_index
+        && let Some(catalog) = state.catalogs.get(catalog_index)
+    {
+        persist_selected_catalog(catalog);
+    }
 
     enable_only_call(player, state, index, false);
     state.effect_setting_live_updates = state.effect_setting_live_updates.saturating_add(1);
@@ -508,6 +883,12 @@ pub(crate) fn set_call_enabled(
         state.selected_effect_index = Some(index);
         state.effect_hotkeys_effects_on = true;
         persist_selected_effect(call);
+        state.effect_setting_last_modified = current_effect_setting_modified();
+        if let Some(catalog_index) = state.selected_catalog_index
+            && let Some(catalog) = state.catalogs.get(catalog_index)
+        {
+            persist_selected_catalog(catalog);
+        }
     } else {
         call.kind.remove(player);
         call.remove_requested = false;

@@ -82,12 +82,41 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         state.expected_animation_seen
     ));
     body.push_str(&format!("  \"network_sync\": {},\n", state.network_sync));
+    let selected_catalog = state
+        .selected_catalog_index
+        .and_then(|index| state.catalogs.get(index));
+    let selected_catalog_position = state.selected_effect_index.and_then(|selected| {
+        selected_catalog.and_then(|catalog| {
+            catalog
+                .call_indices
+                .iter()
+                .position(|call_index| *call_index == selected)
+        })
+    });
     body.push_str(&format!(
-        "  \"effect_hotkey_hook_active\": {},\n  \"effect_hotkey_hook_hits\": {},\n  \"effect_hotkey_applied_actions\": {},\n  \"effect_hotkeys_effects_on\": {},\n  \"selected_effect_index\": {},\n  \"effect_setting_last_id\": {},\n  \"effect_setting_live_updates\": {},\n  \"effect_reapply_count\": {},\n  \"effect_reapply_last_index\": {},\n",
+        "  \"effect_hotkey_hook_active\": {},\n  \"effect_hotkey_hook_hits\": {},\n  \"effect_hotkey_applied_actions\": {},\n  \"effect_selector_overlay_draw_hits\": {},\n  \"effect_hotkeys_effects_on\": {},\n  \"effect_catalog_count\": {},\n  \"selected_effect_catalog_index\": {},\n  \"selected_effect_catalog_file\": {},\n  \"selected_effect_catalog_name\": {},\n  \"selected_effect_catalog_size\": {},\n  \"selected_effect_catalog_position\": {},\n  \"selected_effect_index\": {},\n  \"effect_setting_last_id\": {},\n  \"effect_setting_live_updates\": {},\n  \"effect_reapply_count\": {},\n  \"effect_reapply_last_index\": {},\n",
         effect_hotkey_hook_active(),
         EFFECT_HOTKEY_HOOK_HITS.load(Ordering::SeqCst),
         EFFECT_HOTKEY_APPLIED_ACTIONS.load(Ordering::SeqCst),
+        EFFECT_SELECTOR_OVERLAY_DRAW_HITS.load(Ordering::SeqCst),
         state.effect_hotkeys_effects_on,
+        state.catalogs.len(),
+        state
+            .selected_catalog_index
+            .map_or_else(|| "null".to_owned(), |index| index.to_string()),
+        selected_catalog.map_or_else(
+            || "null".to_owned(),
+            |catalog| format!("\"{}\"", json_escape(&catalog.file_name))
+        ),
+        selected_catalog.map_or_else(
+            || "null".to_owned(),
+            |catalog| format!("\"{}\"", json_escape(&catalog.name))
+        ),
+        selected_catalog.map_or_else(
+            || "null".to_owned(),
+            |catalog| catalog.call_indices.len().to_string()
+        ),
+        selected_catalog_position.map_or_else(|| "null".to_owned(), |index| index.to_string()),
         state
             .selected_effect_index
             .map_or_else(|| "null".to_owned(), |index| index.to_string()),
@@ -466,14 +495,20 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         )
     ));
     body.push_str("  \"calls\": [\n");
-    for (index, call) in state.calls.iter().enumerate() {
-        let comma = if index + NEXT_INDEX_OFFSET == state.calls.len() {
+    let telemetry_call_indices = selected_catalog
+        .map(|catalog| catalog.call_indices.clone())
+        .unwrap_or_else(|| (0..state.calls.len()).collect());
+    for (position, index) in telemetry_call_indices.iter().copied().enumerate() {
+        let Some(call) = state.calls.get(index) else {
+            continue;
+        };
+        let comma = if position + NEXT_INDEX_OFFSET == telemetry_call_indices.len() {
             ""
         } else {
             ","
         };
         body.push_str(&format!(
-            "    {{\"index\": {index}, \"name\": \"{}\", \"kind\": \"{}\", \"enabled\": {}, \"active\": {}, \"active_seen_since_enable\": {}, \"apply_failed\": {}}}{comma}\n",
+            "    {{\"index\": {index}, \"catalog_position\": {position}, \"name\": \"{}\", \"kind\": \"{}\", \"enabled\": {}, \"active\": {}, \"active_seen_since_enable\": {}, \"apply_failed\": {}}}{comma}\n",
             json_escape(&call.name),
             json_escape(&call.kind.label()),
             call.enabled,
