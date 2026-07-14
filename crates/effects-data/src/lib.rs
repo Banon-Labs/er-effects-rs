@@ -141,6 +141,21 @@ pub struct EffectsFile {
     pub calls: Vec<EffectCallSpec>,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EffectHotkeysFile {
+    pub hotkeys: Vec<EffectHotkeySpec>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EffectHotkeySpec {
+    pub name: Option<String>,
+    pub key: String,
+    pub effect_id: i32,
+    pub count: u32,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EffectMasterCatalog {
@@ -207,6 +222,10 @@ pub fn parse_effects_json(json: &str) -> Result<EffectsFile, serde_json::Error> 
 }
 
 pub fn parse_effect_id_catalog_json(json: &str) -> Result<Vec<i32>, serde_json::Error> {
+    serde_json::from_str(json)
+}
+
+pub fn parse_effect_hotkeys_json(json: &str) -> Result<EffectHotkeysFile, serde_json::Error> {
     serde_json::from_str(json)
 }
 
@@ -323,6 +342,38 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn parses_effect_hotkeys_file() {
+        let parsed = parse_effect_hotkeys_json(
+            r#"{
+                "hotkeys": [
+                    {
+                        "name": "deathblight self test",
+                        "key": "numpad_multiply",
+                        "effect_id": 8355,
+                        "count": 1
+                    }
+                ]
+            }"#,
+        )
+        .expect("effect hotkeys file must parse");
+
+        assert_eq!(parsed.hotkeys.len(), 1);
+        assert_eq!(parsed.hotkeys[0].key, "numpad_multiply");
+        assert_eq!(parsed.hotkeys[0].effect_id, 8355);
+        assert_eq!(parsed.hotkeys[0].count, 1);
+    }
+
+    #[test]
+    fn rejects_unknown_hotkey_fields() {
+        assert!(
+            parse_effect_hotkeys_json(
+                r#"{"hotkeys":[{"key":"numpad_multiply","effect_id":8355,"count":1,"extra":true}]}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

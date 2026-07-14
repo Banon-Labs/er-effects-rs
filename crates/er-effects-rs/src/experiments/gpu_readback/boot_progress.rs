@@ -1834,10 +1834,14 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
 fn effect_selector_overlay_lines(text: &str) -> Vec<String> {
     let parts = text.split(" | ").collect::<Vec<_>>();
     if parts.len() >= 4 {
-        vec![
+        let mut lines = vec![
             parts[0].to_owned(),
             format!("{} {} {}", parts[1], parts[2], parts[3]),
-        ]
+        ];
+        if parts.len() > 4 {
+            lines.push(parts[4..].join(" "));
+        }
+        lines
     } else {
         vec![text.to_owned()]
     }

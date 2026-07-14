@@ -39,6 +39,13 @@ pub(crate) struct EffectsState {
     catalogs: Vec<EffectCatalog>,
     selected_catalog_index: Option<usize>,
     effect_hotkeys_effects_on: bool,
+    effect_trigger_hotkeys: Vec<EffectTriggerHotkey>,
+    effect_trigger_hotkeys_modified: Option<std::time::SystemTime>,
+    effect_trigger_hotkeys_load_error: Option<String>,
+    effect_trigger_fire_count: u64,
+    effect_trigger_last_key: Option<String>,
+    effect_trigger_last_id: Option<i32>,
+    effect_trigger_last_count: u32,
     effect_setting_last_id: Option<i32>,
     effect_setting_last_modified: Option<std::time::SystemTime>,
     effect_setting_live_updates: u64,
@@ -54,6 +61,10 @@ pub(crate) struct EffectsState {
 impl Default for EffectsState {
     fn default() -> Self {
         let (calls, catalogs, load_error) = build_effect_catalog_state();
+        let (effect_trigger_hotkeys, effect_trigger_hotkeys_load_error) = match load_effect_trigger_hotkeys() {
+            Ok(hotkeys) => (hotkeys, None),
+            Err(error) => (Vec::new(), Some(error)),
+        };
         let selected_effect_id = restore_selected_effect_id();
         let selected_effect_index = selected_effect_id.and_then(|id| {
             calls.iter().position(|call| match call.kind {
@@ -95,6 +106,13 @@ impl Default for EffectsState {
             selected_effect_index,
             selected_catalog_index,
             effect_hotkeys_effects_on: false,
+            effect_trigger_hotkeys,
+            effect_trigger_hotkeys_modified: current_effect_trigger_hotkeys_modified(),
+            effect_trigger_hotkeys_load_error,
+            effect_trigger_fire_count: 0,
+            effect_trigger_last_key: None,
+            effect_trigger_last_id: None,
+            effect_trigger_last_count: 0,
             effect_setting_last_id: selected_effect_id,
             effect_setting_last_modified: current_effect_setting_modified(),
             effect_setting_live_updates: 0,

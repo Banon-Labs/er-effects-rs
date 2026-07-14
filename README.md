@@ -276,6 +276,23 @@ Persisted selector files next to `eldenring.exe`:
 
 - `.effect-catalog-setting.txt`: selected catalog key.
 - `.effect-setting.txt`: selected SpEffect ID. Editing this file while the game is running applies the matching in-catalog effect ID live and moves the catalog cursor to the first catalog containing that ID.
+- `.effect-hotkeys.json`: user-editable hotkey triggers. If missing, the DLL creates this default file:
+
+<!-- md-test: skip illustrative JSON config example -->
+```json
+{
+  "hotkeys": [
+    {
+      "name": "deathblight self test",
+      "key": "numpad_multiply",
+      "effect_id": 8355,
+      "count": 1
+    }
+  ]
+}
+```
+
+Supported key names include `numpad_multiply`, `numpad_add`, `numpad_subtract`, `numpad_divide`, `numpad_decimal`, `numpad0`..`numpad9`, arrow keys, and optional `alt+` prefixes. `count` is clamped to `1..=200`. Trigger hotkeys apply the configured SpEffect directly to the local player `count` times without removing other effects, and the file is reloaded while the game is running.
 
 Built-in user-style catalogs:
 

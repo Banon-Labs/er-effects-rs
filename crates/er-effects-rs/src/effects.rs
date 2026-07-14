@@ -11,7 +11,7 @@ use std::{
 use eldenring::cs::{ChrInsExt, PlayerIns};
 use er_effects_data::{
     BUILT_IN_EFFECT_CATALOGS, EffectCallSpec, EffectKindSpec, embedded_effect_master_catalog,
-    embedded_effects, parse_effect_id_catalog_json,
+    embedded_effects, parse_effect_hotkeys_json, parse_effect_id_catalog_json,
 };
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -30,8 +30,27 @@ const VK_LEFT: u32 = 0x25;
 const VK_UP: u32 = 0x26;
 const VK_RIGHT: u32 = 0x27;
 const VK_DOWN: u32 = 0x28;
+const VK_NUMPAD0: u32 = 0x60;
+const VK_NUMPAD9: u32 = 0x69;
+const VK_MULTIPLY: u32 = 0x6a;
+const VK_ADD: u32 = 0x6b;
+const VK_SUBTRACT: u32 = 0x6d;
+const VK_DECIMAL: u32 = 0x6e;
+const VK_DIVIDE: u32 = 0x6f;
 const VK_OEM_7: u32 = 0xde;
 const LLKHF_ALTDOWN: u32 = 0x20;
+const DEFAULT_EFFECT_TRIGGER_HOTKEYS_JSON: &str = r#"{
+  "hotkeys": [
+    {
+      "name": "deathblight self test",
+      "key": "numpad_multiply",
+      "effect_id": 8355,
+      "count": 1
+    }
+  ]
+}
+"#;
+const EFFECT_TRIGGER_COUNT_MAX: u32 = 200;
 
 static EFFECT_HOTKEY_PENDING_UP: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_PENDING_DOWN: AtomicUsize = AtomicUsize::new(0);
@@ -41,6 +60,7 @@ static EFFECT_HOTKEY_PENDING_TOGGLE: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_HOOK_STARTED: AtomicBool = AtomicBool::new(false);
 static EFFECT_HOTKEY_HOOK_ACTIVE: AtomicBool = AtomicBool::new(false);
 static EFFECT_SELECTOR_OVERLAY_TEXT: OnceLock<Mutex<String>> = OnceLock::new();
+static EFFECT_TRIGGER_PENDING_KEYS: OnceLock<Mutex<Vec<EffectTriggerKeyPress>>> = OnceLock::new();
 pub(crate) static EFFECT_HOTKEY_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static EFFECT_HOTKEY_APPLIED_ACTIONS: AtomicUsize = AtomicUsize::new(0);
 
@@ -137,12 +157,37 @@ pub(crate) struct EffectCatalog {
     pub(crate) invalid_ids: usize,
 }
 
+#[derive(Clone, Copy)]
+struct EffectTriggerKeyPress {
+    vk: u32,
+    alt: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct EffectTriggerKey {
+    vk: u32,
+    alt: bool,
+}
+
+#[derive(Clone)]
+pub(crate) struct EffectTriggerHotkey {
+    pub(crate) name: String,
+    pub(crate) key_name: String,
+    key: EffectTriggerKey,
+    pub(crate) effect_id: i32,
+    pub(crate) count: u32,
+}
+
 pub(crate) fn effect_setting_path() -> PathBuf {
     PathBuf::from(".effect-setting.txt")
 }
 
 pub(crate) fn effect_catalog_setting_path() -> PathBuf {
     PathBuf::from(".effect-catalog-setting.txt")
+}
+
+pub(crate) fn effect_trigger_hotkeys_path() -> PathBuf {
+    PathBuf::from(".effect-hotkeys.json")
 }
 
 pub(crate) fn user_effect_catalog_dir() -> PathBuf {
@@ -200,6 +245,112 @@ fn catalog_display_name(file_name: &str) -> String {
         .and_then(|stem| stem.to_str())
         .unwrap_or(file_name)
         .replace(['-', '_'], " ")
+}
+
+fn ensure_default_effect_trigger_hotkeys_file() {
+    let path = effect_trigger_hotkeys_path();
+    if path.exists() {
+        return;
+    }
+    let tmp_path = path.with_extension("json.tmp");
+    if fs::write(&tmp_path, DEFAULT_EFFECT_TRIGGER_HOTKEYS_JSON).is_ok() {
+        let _ = fs::rename(tmp_path, path);
+    }
+}
+
+pub(crate) fn current_effect_trigger_hotkeys_modified() -> Option<std::time::SystemTime> {
+    fs::metadata(effect_trigger_hotkeys_path())
+        .and_then(|metadata| metadata.modified())
+        .ok()
+}
+
+pub(crate) fn load_effect_trigger_hotkeys() -> Result<Vec<EffectTriggerHotkey>, String> {
+    ensure_default_effect_trigger_hotkeys_file();
+    let path = effect_trigger_hotkeys_path();
+    let raw = fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let parsed = parse_effect_hotkeys_json(&raw)
+        .map_err(|error| format!("failed to parse {}: {error}", path.display()))?;
+    parsed
+        .hotkeys
+        .into_iter()
+        .enumerate()
+        .map(|(index, spec)| {
+            let key = parse_effect_trigger_key(&spec.key)
+                .map_err(|error| format!("hotkeys[{index}] {}: {error}", spec.key))?;
+            let count = spec.count.clamp(1, EFFECT_TRIGGER_COUNT_MAX);
+            let name = spec
+                .name
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| format!("{} x{}", spec.effect_id, count));
+            Ok(EffectTriggerHotkey {
+                name,
+                key_name: spec.key,
+                key,
+                effect_id: spec.effect_id,
+                count,
+            })
+        })
+        .collect()
+}
+
+fn parse_effect_trigger_key(raw: &str) -> Result<EffectTriggerKey, String> {
+    let mut alt = false;
+    let mut key_name = raw.trim().to_ascii_lowercase();
+    loop {
+        let Some((prefix, rest)) = key_name.split_once('+') else {
+            break;
+        };
+        match prefix.trim() {
+            "alt" => alt = true,
+            "" => {}
+            modifier => {
+                return Err(format!(
+                    "unsupported modifier {modifier:?}; only alt+ is supported"
+                ));
+            }
+        }
+        key_name = rest.trim().to_owned();
+    }
+    let vk = match key_name.as_str() {
+        "numpad_multiply" | "numpad_*" | "num_*" | "*" => VK_MULTIPLY,
+        "numpad_add" | "numpad_plus" | "numpad_+" | "+" => VK_ADD,
+        "numpad_subtract" | "numpad_minus" | "numpad_-" | "-" => VK_SUBTRACT,
+        "numpad_decimal" | "numpad_." => VK_DECIMAL,
+        "numpad_divide" | "numpad_/" | "/" => VK_DIVIDE,
+        "up" => VK_UP,
+        "down" => VK_DOWN,
+        "left" => VK_LEFT,
+        "right" => VK_RIGHT,
+        "semicolon" | "quote" => VK_OEM_7,
+        other if other.starts_with("numpad") && other.len() == "numpad0".len() => {
+            let digit = other
+                .chars()
+                .last()
+                .and_then(|c| c.to_digit(10))
+                .ok_or_else(|| format!("unknown key {raw:?}"))?;
+            VK_NUMPAD0 + digit
+        }
+        other => return Err(format!("unknown key {other:?}")),
+    };
+    if !(VK_NUMPAD0..=VK_NUMPAD9).contains(&vk)
+        && !matches!(
+            vk,
+            VK_MULTIPLY
+                | VK_ADD
+                | VK_SUBTRACT
+                | VK_DECIMAL
+                | VK_DIVIDE
+                | VK_UP
+                | VK_DOWN
+                | VK_LEFT
+                | VK_RIGHT
+                | VK_OEM_7
+        )
+    {
+        return Err(format!("unsupported key {raw:?}"));
+    }
+    Ok(EffectTriggerKey { vk, alt })
 }
 
 pub(crate) fn call_kind_from_spec(kind: EffectKindSpec, id: i32) -> EffectCallKind {
@@ -367,6 +518,25 @@ fn effect_hotkey_action_for_key(vk: u32, alt_down: bool) -> usize {
     }
 }
 
+fn queue_effect_trigger_key(vk: u32, alt: bool) {
+    if let Ok(mut pending) = EFFECT_TRIGGER_PENDING_KEYS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+    {
+        if pending.len() < 64 {
+            pending.push(EffectTriggerKeyPress { vk, alt });
+        }
+    }
+}
+
+fn drain_effect_trigger_keys() -> Vec<EffectTriggerKeyPress> {
+    EFFECT_TRIGGER_PENDING_KEYS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .map(|mut pending| std::mem::take(&mut *pending))
+        .unwrap_or_default()
+}
+
 unsafe extern "system" fn effect_hotkey_ll_keyboard_proc(
     ncode: i32,
     wparam: WPARAM,
@@ -377,6 +547,7 @@ unsafe extern "system" fn effect_hotkey_ll_keyboard_proc(
         let msg = wparam.0 as u32;
         if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
             let alt_down = msg == WM_SYSKEYDOWN || (kb.flags.0 & LLKHF_ALTDOWN) != 0;
+            queue_effect_trigger_key(kb.vkCode, alt_down);
             let action = effect_hotkey_action_for_key(kb.vkCode, alt_down);
             if action != 0 {
                 EFFECT_HOTKEY_HOOK_HITS.fetch_add(1, Ordering::SeqCst);
@@ -479,6 +650,18 @@ pub(crate) fn publish_effect_selector_overlay_text(state: &EffectsState) {
         .map(|catalog| catalog.name.as_str())
         .unwrap_or("NO CATALOG");
     let catalog_size = catalog.map_or(0, |catalog| catalog.call_indices.len());
+    let trigger_text = state
+        .effect_trigger_last_key
+        .as_ref()
+        .and_then(|key| {
+            state.effect_trigger_last_id.map(|id| {
+                format!(
+                    " | TRIG {} ID {} X{}",
+                    key, id, state.effect_trigger_last_count
+                )
+            })
+        })
+        .unwrap_or_default();
     let position = state.selected_effect_index.and_then(|selected| {
         catalog.and_then(|catalog| {
             catalog
@@ -494,7 +677,7 @@ pub(crate) fn publish_effect_selector_overlay_text(state: &EffectsState) {
             EffectCallKind::SpEffect { id } => id,
         });
     let mut text = format!(
-        "CAT {}/{} {} | ID {} | {}/{} | {}",
+        "CAT {}/{} {} | ID {} | {}/{} | {}{}",
         catalog_index.saturating_add(1),
         catalog_count,
         catalog_name,
@@ -505,7 +688,8 @@ pub(crate) fn publish_effect_selector_overlay_text(state: &EffectsState) {
             "ON"
         } else {
             "OFF"
-        }
+        },
+        trigger_text
     );
     text = text
         .chars()
@@ -535,8 +719,8 @@ pub(crate) fn publish_effect_selector_overlay_text(state: &EffectsState) {
             }
         })
         .collect();
-    if text.len() > 96 {
-        text.truncate(96);
+    if text.len() > 128 {
+        text.truncate(128);
     }
     if let Ok(mut slot) = EFFECT_SELECTOR_OVERLAY_TEXT
         .get_or_init(|| Mutex::new(String::new()))
@@ -547,6 +731,8 @@ pub(crate) fn publish_effect_selector_overlay_text(state: &EffectsState) {
 }
 
 pub(crate) fn consume_effect_hotkeys(player: &mut PlayerIns, state: &mut EffectsState) {
+    poll_effect_trigger_hotkeys(state);
+    consume_effect_trigger_hotkeys(player, state);
     let toggles = EFFECT_HOTKEY_PENDING_TOGGLE.swap(0, Ordering::SeqCst);
     let ups = EFFECT_HOTKEY_PENDING_UP.swap(0, Ordering::SeqCst);
     let downs = EFFECT_HOTKEY_PENDING_DOWN.swap(0, Ordering::SeqCst);
@@ -572,6 +758,87 @@ pub(crate) fn consume_effect_hotkeys(player: &mut PlayerIns, state: &mut Effects
     for _ in 0..downs {
         step_selected_effect(player, state, 1);
     }
+}
+
+fn poll_effect_trigger_hotkeys(state: &mut EffectsState) {
+    let modified = current_effect_trigger_hotkeys_modified();
+    if state.effect_trigger_hotkeys_modified == modified {
+        return;
+    }
+    state.effect_trigger_hotkeys_modified = modified;
+    match load_effect_trigger_hotkeys() {
+        Ok(hotkeys) => {
+            let count = hotkeys.len();
+            state.effect_trigger_hotkeys = hotkeys;
+            state.effect_trigger_hotkeys_load_error = None;
+            state.last_driver_command = Some(format!("effect-trigger: loaded {count} hotkeys"));
+        }
+        Err(error) => {
+            state.effect_trigger_hotkeys.clear();
+            state.effect_trigger_hotkeys_load_error = Some(error.clone());
+            state.last_driver_command = Some(format!("effect-trigger: {error}"));
+        }
+    }
+}
+
+fn consume_effect_trigger_hotkeys(player: &mut PlayerIns, state: &mut EffectsState) {
+    let pending = drain_effect_trigger_keys();
+    if pending.is_empty() || state.effect_trigger_hotkeys.is_empty() {
+        return;
+    }
+    for keypress in pending {
+        let matched = state
+            .effect_trigger_hotkeys
+            .iter()
+            .find(|hotkey| hotkey.key.vk == keypress.vk && hotkey.key.alt == keypress.alt)
+            .cloned();
+        let Some(hotkey) = matched else {
+            continue;
+        };
+        trigger_effect_hotkey(player, state, &hotkey);
+    }
+}
+
+fn trigger_effect_hotkey(
+    player: &mut PlayerIns,
+    state: &mut EffectsState,
+    hotkey: &EffectTriggerHotkey,
+) {
+    let count = hotkey.count.clamp(1, EFFECT_TRIGGER_COUNT_MAX);
+    for _ in 0..count {
+        EffectCallKind::SpEffect {
+            id: hotkey.effect_id,
+        }
+        .apply(player, state.network_sync);
+    }
+    let active = player
+        .chr_ins
+        .special_effect
+        .entries()
+        .any(|entry| entry.param_id == hotkey.effect_id);
+    state.effect_trigger_fire_count = state.effect_trigger_fire_count.saturating_add(1);
+    state.effect_trigger_last_key = Some(hotkey.key_name.clone());
+    state.effect_trigger_last_id = Some(hotkey.effect_id);
+    state.effect_trigger_last_count = count;
+    state.effect_setting_last_id = Some(hotkey.effect_id);
+    if let Some(index) = find_call_index_by_id(&state.calls, hotkey.effect_id) {
+        state.selected_effect_index = Some(index);
+        if let Some(catalog_index) = state.catalogs.iter().position(|catalog| {
+            catalog
+                .call_indices
+                .iter()
+                .any(|call_index| *call_index == index)
+        }) {
+            state.selected_catalog_index = Some(catalog_index);
+        }
+    }
+    state.last_driver_command = Some(format!(
+        "effect-trigger: {} fired {} x{} ({})",
+        hotkey.key_name,
+        hotkey.effect_id,
+        count,
+        if active { "active" } else { "not active" }
+    ));
 }
 
 fn toggle_selected_effect(player: &mut PlayerIns, state: &mut EffectsState) {
