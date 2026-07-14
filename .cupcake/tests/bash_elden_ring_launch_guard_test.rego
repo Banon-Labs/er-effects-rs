@@ -243,6 +243,15 @@ test_allow_cd_prefixed_proc_comm_scan_exact_false_positive if {
 	count(denials) == 0
 }
 
+# Exact 2026-07-13 false positive: shell pgrep checks Steam, then a Python heredoc scans
+# /proc/<pid>/comm for exact game/EAC process names. Cupcake receives this shape whitespace-flattened;
+# with no semicolon before `python3`, it is still read-only process detection, not a launch.
+test_allow_steam_pgrep_prefixed_proc_comm_scan_flattened_false_positive if {
+	cmd := `pgrep -x steam >/dev/null && echo steam-running || echo steam-missing python3 - <<'PY' import os for name in ('eldenring.exe','start_protected_game.exe'): found=[] for pid in filter(str.isdigit, os.listdir('/proc')): try: comm=open(f'/proc/{pid}/comm',encoding='utf-8',errors='replace').read().strip() except OSError: continue if comm == name: found.append(pid) print(f'{name}:', 'running '+','.join(found) if found else 'not-running') PY`
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
 # Same detection intent as a `python3 -c` one-liner with the whole program
 # quoted (the RTK-caveat-sanctioned inspection form).
 test_allow_proc_comm_scan_python_c_naming_eac_launcher if {

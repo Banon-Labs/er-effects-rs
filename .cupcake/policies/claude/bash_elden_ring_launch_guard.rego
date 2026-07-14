@@ -405,6 +405,17 @@ proc_scan_python_shape if {
 	terminator_parts[1] == ""
 }
 
+# Runtime preflight may check Steam with shell pgrep before a Python heredoc scans exact
+# `/proc/<pid>/comm` names. Keep that composite read-only shape allowed without opening a generic
+# chained-command bypass.
+proc_scan_python_shape if {
+	count(proc_scan_heredoc_parts) == 2
+	regex.match(`^(/usr/bin/)?pgrep -x steam >/dev/null && echo steam-running \|\| echo steam-missing;? (/usr/bin/)?python3? - ?$`, proc_scan_heredoc_parts[0])
+	terminator_parts := split(proc_scan_norm_command, concat("", [" ", proc_scan_heredoc_tag]))
+	count(terminator_parts) == 2
+	terminator_parts[1] == ""
+}
+
 # Inline form: `python3 -c '<program>'` with nothing outside the quotes; the
 # quote-scrubbed command must reduce to exactly the python invocation, so any
 # chained `; wrapper '/path/start_protected_game.exe'` breaks the shape.

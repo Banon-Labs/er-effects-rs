@@ -386,8 +386,10 @@ unsafe fn patch_profile_offscreen_size_for_loaded_slot(base: usize) -> bool {
     if patched {
         PROFILE_SIZE_PATCHED.fetch_or(bit, Ordering::SeqCst);
     }
+    let target_w = PROFILE_OFFSCREEN_SIZE_TARGET & 0xffff_ffff;
+    let target_h = (PROFILE_OFFSCREEN_SIZE_TARGET >> 32) & 0xffff_ffff;
     append_autoload_debug(format_args!(
-        "portrait-res: pre-builder target slot {target} row=0x{cur:x} patched={} -> base 2056x2056, native supersample off (expected RT 2056x2056); other slots left native 128",
+        "portrait-res: pre-builder target slot {target} row=0x{cur:x} patched={} -> base {target_w}x{target_h}, native supersample off (expected RT {target_w}x{target_h}); other slots left native 128",
         if patched { 1 } else { 0 }
     ));
     patched

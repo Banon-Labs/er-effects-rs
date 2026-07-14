@@ -369,6 +369,22 @@ pub(crate) struct StatsTextCache {
 }
 pub(crate) static STATS_TEXT_CACHE: std::sync::Mutex<Option<StatsTextCache>> =
     std::sync::Mutex::new(None);
+
+/// Screen-resolution text bitmap cache for the Present overlay. The stats lines still come from the
+/// game thread (safe slot/stat reads), but the final bitmap is sized from the actual backbuffer so the
+/// text is no longer baked into, and then upscaled with, the lower-resolution animated portrait RT.
+struct StatsTextScreenCache {
+    w: u32,
+    h: u32,
+    rgba: Vec<u8>,
+    lines: Vec<String>,
+    screen_max_dim: u32,
+    version: usize,
+}
+static STATS_TEXT_SCREEN_CACHE: std::sync::Mutex<Option<StatsTextScreenCache>> =
+    std::sync::Mutex::new(None);
+static STATS_TEXT_SCREEN_VERSION: AtomicUsize = AtomicUsize::new(0);
+
 /// Cumulative stats-bitmap build count (telemetry oracle `oracle_stats_text_built`; never reset).
 pub(crate) static STATS_TEXT_BUILT: AtomicUsize = AtomicUsize::new(0);
 /// `(name, level, live)` of the last logged build -- gates the debug log so per-second playtime rebuilds
@@ -444,27 +460,49 @@ pub(crate) unsafe fn maybe_build_stats_text() {
     }
 }
 
-/// Composite the cached stats text into the head RGBA `spx` (`sw`x`sh`) at the lower-left, at the text's
-/// native pixel size. The head is depth-alpha-keyed, so the region under the text is transparent -- the
-/// opaque text pixels show on screen while the surrounding transparent pixels still show the loading
-/// movie; the head silhouette (upper) is untouched. Reuses the whole existing overlay draw (no new GPU
-/// pipeline). Called from the overlay fill each frame (the head under the static text updates per frame).
-pub(crate) fn composite_stats_into_head(spx: &mut [u8], sw: u32, sh: u32) {
-    let Some((tw, th, tpx)) = STATS_TEXT_CACHE
+/// Return a stats-text bitmap sized for the actual backbuffer. This is the high-resolution product path:
+/// the animated character stays at the current portrait RT resolution, while text is rasterized directly
+/// at screen scale and drawn as a second Present-overlay texture. The returned `version` is stable while
+/// both the display lines and requested backbuffer scale are unchanged, so the D3D texture uploads only on
+/// content/size changes.
+pub(crate) fn stats_text_screen_bitmap(screen_max_dim: u32) -> Option<(u32, u32, Vec<u8>, usize)> {
+    if screen_max_dim == 0 {
+        return None;
+    }
+    let lines = STATS_TEXT_CACHE
         .lock()
         .ok()
-        .and_then(|g| g.as_ref().map(|c| (c.w, c.h, c.rgba.clone())))
-    else {
-        return;
-    };
-    if tw == 0 || th == 0 || sw == 0 || sh == 0 {
-        return;
+        .and_then(|g| g.as_ref().map(|c| c.lines.clone()))?;
+    if lines.is_empty() {
+        return None;
     }
-    // Lower-left of the head texture; if the text is wider/taller than fits, it clips (blend_rgba_over
-    // clamps). Positions chosen so the aspect-cover to the 16:9 backbuffer lands it in the lower third.
-    let x0 = (sw as f32 * 0.05) as i32;
-    let y0 = (sh as f32 * 0.60) as i32;
-    blend_rgba_over(spx, sw, sh, &tpx, tw, th, x0, y0);
+    if let Some(cached) = STATS_TEXT_SCREEN_CACHE.lock().ok().and_then(|g| {
+        g.as_ref()
+            .filter(|c| c.screen_max_dim == screen_max_dim && c.lines == lines)
+            .map(|c| (c.w, c.h, c.rgba.clone(), c.version))
+    }) {
+        return Some(cached);
+    }
+    let font = menu_font()?;
+    const STATS_TEXT_EM_PX_AT_REF_RT: f32 = 48.0;
+    const STATS_TEXT_REF_RT_DIM: f32 = 2056.0;
+    let em_px = screen_max_dim as f32 * (STATS_TEXT_EM_PX_AT_REF_RT / STATS_TEXT_REF_RT_DIM);
+    let (w, h, rgba) = render_lines_to_rgba(font, &lines, em_px, [238, 228, 202, 255]);
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let version = STATS_TEXT_SCREEN_VERSION.fetch_add(1, Ordering::SeqCst) + 1;
+    if let Ok(mut g) = STATS_TEXT_SCREEN_CACHE.lock() {
+        *g = Some(StatsTextScreenCache {
+            w,
+            h,
+            rgba: rgba.clone(),
+            lines,
+            screen_max_dim,
+            version,
+        });
+    }
+    Some((w, h, rgba, version))
 }
 
 /// Reset the per-load stats-text cache so the next load starts from a clean (no-text) frame and its
@@ -473,6 +511,9 @@ pub(crate) fn composite_stats_into_head(spx: &mut [u8], sw: u32, sh: u32) {
 /// character. `STATS_TEXT_BUILT` is a cumulative oracle and is deliberately not reset.
 pub(crate) fn stats_text_window_reset() {
     if let Ok(mut g) = STATS_TEXT_CACHE.lock() {
+        *g = None;
+    }
+    if let Ok(mut g) = STATS_TEXT_SCREEN_CACHE.lock() {
         *g = None;
     }
     if let Ok(mut g) = STATS_TEXT_LOGGED.lock() {
