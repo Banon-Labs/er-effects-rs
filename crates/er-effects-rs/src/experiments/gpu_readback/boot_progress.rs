@@ -1432,7 +1432,7 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     true
 }
 
-// In-world effect selector HUD: a tiny top-left text strip rendered through the same proven
+// In-world effect selector HUD: a top-right two-line panel rendered through the same proven
 // swapchain-copy path as the boot progress bar. This intentionally uses its own command objects so it
 // cannot interfere with the boot view or loading portrait overlay state.
 static EFFECT_SELECTOR_VIEW_DRAW_STATE: AtomicUsize = AtomicUsize::new(0); // 0=uninit, 1=ready, 2=failed
@@ -1448,12 +1448,13 @@ static EFFECT_SELECTOR_VIEW_H: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_SELECTOR_VIEW_HASH: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub(crate) static EFFECT_SELECTOR_OVERLAY_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
 
-const EFFECT_SELECTOR_VIEW_PAD_X: usize = 8;
-const EFFECT_SELECTOR_VIEW_PAD_Y: usize = 7;
-const EFFECT_SELECTOR_VIEW_SCREEN_X: u32 = 18;
-const EFFECT_SELECTOR_VIEW_SCREEN_Y: u32 = 18;
-const EFFECT_SELECTOR_VIEW_MIN_W: u32 = 300;
-const EFFECT_SELECTOR_VIEW_MAX_W: u32 = 1400;
+const EFFECT_SELECTOR_VIEW_PAD_X: usize = 10;
+const EFFECT_SELECTOR_VIEW_PAD_Y: usize = 8;
+const EFFECT_SELECTOR_VIEW_SCREEN_MARGIN_X: u32 = 18;
+const EFFECT_SELECTOR_VIEW_SCREEN_Y: u32 = 70;
+const EFFECT_SELECTOR_VIEW_MIN_W: u32 = 360;
+const EFFECT_SELECTOR_VIEW_MAX_W: u32 = 1120;
+const EFFECT_SELECTOR_VIEW_LINE_GAP: usize = 5;
 const EFFECT_SELECTOR_VIEW_BG: [u8; 3] = [5, 5, 5];
 const EFFECT_SELECTOR_VIEW_BORDER: [u8; 3] = [72, 70, 64];
 const EFFECT_SELECTOR_VIEW_TEXT: [u8; 3] = [226, 223, 214];
@@ -1565,16 +1566,24 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
         return false;
     }
 
-    let text_w = boot_text_width(&text) as u32;
+    let text_lines = effect_selector_overlay_lines(&text);
+    let text_w = text_lines
+        .iter()
+        .map(|line| boot_text_width(line) as u32)
+        .max()
+        .unwrap_or(0);
     let region_w = (text_w + (EFFECT_SELECTOR_VIEW_PAD_X as u32 * 2))
         .max(EFFECT_SELECTOR_VIEW_MIN_W)
         .min(EFFECT_SELECTOR_VIEW_MAX_W)
-        .min(bw.saturating_sub(EFFECT_SELECTOR_VIEW_SCREEN_X).max(1));
-    let region_h = (BOOT_VIEW_GLYPH_H * BOOT_VIEW_TEXT_SCALE
-        + EFFECT_SELECTOR_VIEW_PAD_Y * 2) as u32;
+        .min(bw.saturating_sub(EFFECT_SELECTOR_VIEW_SCREEN_MARGIN_X).max(1));
+    let line_h = BOOT_VIEW_GLYPH_H * BOOT_VIEW_TEXT_SCALE;
+    let text_block_h = text_lines.len() * line_h
+        + text_lines.len().saturating_sub(1) * EFFECT_SELECTOR_VIEW_LINE_GAP;
+    let region_h = (text_block_h + EFFECT_SELECTOR_VIEW_PAD_Y * 2) as u32;
     if region_w == 0 || region_h == 0 || EFFECT_SELECTOR_VIEW_SCREEN_Y + region_h > bh {
         return false;
     }
+    let dst_x = bw.saturating_sub(region_w + EFFECT_SELECTOR_VIEW_SCREEN_MARGIN_X);
 
     let mut device_opt: Option<ID3D12Device> = None;
     if unsafe { backbuffer.GetDevice(&mut device_opt) }.is_err() {
@@ -1703,15 +1712,19 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
             1,
             EFFECT_SELECTOR_VIEW_BORDER,
         );
-        boot_draw_text_rgb(
-            &mut tight,
-            region_w as usize,
-            region_h as usize,
-            EFFECT_SELECTOR_VIEW_PAD_X,
-            EFFECT_SELECTOR_VIEW_PAD_Y,
-            &text,
-            EFFECT_SELECTOR_VIEW_TEXT,
-        );
+        for (line_index, line) in text_lines.iter().enumerate() {
+            let y = EFFECT_SELECTOR_VIEW_PAD_Y
+                + line_index * (BOOT_VIEW_GLYPH_H * BOOT_VIEW_TEXT_SCALE + EFFECT_SELECTOR_VIEW_LINE_GAP);
+            boot_draw_text_rgb(
+                &mut tight,
+                region_w as usize,
+                region_h as usize,
+                EFFECT_SELECTOR_VIEW_PAD_X,
+                y,
+                line,
+                EFFECT_SELECTOR_VIEW_TEXT,
+            );
+        }
         let row_pitch = footprint.Footprint.RowPitch as usize;
         let total = total_bytes as usize;
         let mut map: *mut c_void = std::ptr::null_mut();
@@ -1788,7 +1801,7 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
     unsafe {
         list.CopyTextureRegion(
             &bb_dst,
-            EFFECT_SELECTOR_VIEW_SCREEN_X,
+            dst_x,
             EFFECT_SELECTOR_VIEW_SCREEN_Y,
             0,
             &up_src,
@@ -1811,11 +1824,23 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
     let hits = EFFECT_SELECTOR_OVERLAY_DRAW_HITS.fetch_add(1, Ordering::SeqCst) + 1;
     if hits == 1 {
         append_autoload_debug(format_args!(
-            "effect-selector-overlay: first draw {region_w}x{region_h} at {},{} text='{}'",
-            EFFECT_SELECTOR_VIEW_SCREEN_X, EFFECT_SELECTOR_VIEW_SCREEN_Y, text
+            "effect-selector-overlay: first draw {region_w}x{region_h} at {dst_x},{} text='{}'",
+            EFFECT_SELECTOR_VIEW_SCREEN_Y, text
         ));
     }
     true
+}
+
+fn effect_selector_overlay_lines(text: &str) -> Vec<String> {
+    let parts = text.split(" | ").collect::<Vec<_>>();
+    if parts.len() >= 4 {
+        vec![
+            parts[0].to_owned(),
+            format!("{} {} {}", parts[1], parts[2], parts[3]),
+        ]
+    } else {
+        vec![text.to_owned()]
+    }
 }
 
 fn effect_selector_text_hash(text: &str) -> usize {
