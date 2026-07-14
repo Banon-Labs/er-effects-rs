@@ -53,6 +53,7 @@ const DEFAULT_EFFECT_TRIGGER_HOTKEYS_JSON: &str = r#"{
 }
 "#;
 const EFFECT_TRIGGER_COUNT_MAX: u32 = 200;
+const EFFECT_SELECTOR_OVERLAY_NAME_CHARS: usize = 36;
 
 static EFFECT_HOTKEY_PENDING_UP: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_PENDING_DOWN: AtomicUsize = AtomicUsize::new(0);
@@ -689,6 +690,28 @@ pub(crate) fn effect_selector_overlay_text() -> String {
         .unwrap_or_default()
 }
 
+fn truncated_effect_overlay_name(call: &NamedEffectCall) -> Option<String> {
+    let EffectCallKind::SpEffect { id } = call.kind;
+    let fallback = format!("SpEffect {id}");
+    let name = call.name.trim();
+    if name.is_empty() || name == fallback {
+        return None;
+    }
+    let mut out = String::new();
+    let mut truncated = false;
+    for (index, ch) in name.chars().enumerate() {
+        if index >= EFFECT_SELECTOR_OVERLAY_NAME_CHARS {
+            truncated = true;
+            break;
+        }
+        out.push(ch);
+    }
+    if truncated {
+        out.push('>');
+    }
+    Some(out)
+}
+
 pub(crate) fn publish_effect_selector_overlay_text(state: &mut EffectsState) {
     let overlay_toggles = EFFECT_HOTKEY_PENDING_OVERLAY_TOGGLE.swap(0, Ordering::SeqCst);
     if overlay_toggles != 0 {
@@ -743,18 +766,22 @@ pub(crate) fn publish_effect_selector_overlay_text(state: &mut EffectsState) {
                 .position(|call_index| *call_index == selected)
         })
     });
-    let effect_id = state
+    let selected_call = state
         .selected_effect_index
-        .and_then(|index| state.calls.get(index))
-        .map(|call| match call.kind {
-            EffectCallKind::SpEffect { id } => id,
-        });
+        .and_then(|index| state.calls.get(index));
+    let effect_id = selected_call.map(|call| match call.kind {
+        EffectCallKind::SpEffect { id } => id,
+    });
+    let effect_label = selected_call
+        .and_then(truncated_effect_overlay_name)
+        .map_or_else(String::new, |name| format!(" {name}"));
     let mut text = format!(
-        "CAT {}/{} {} | ID {} | {}/{} | {}{}",
+        "CAT {}/{} {} | ID {}{} | {}/{} | {}{}",
         catalog_index.saturating_add(1),
         catalog_count,
         catalog_name,
         effect_id.map_or_else(|| "NONE".to_owned(), |id| id.to_string()),
+        effect_label,
         position.map_or(0, |position| position.saturating_add(1)),
         catalog_size,
         if state.effect_hotkeys_effects_on {
@@ -1253,6 +1280,18 @@ pub(crate) fn execute_driver_command(
 ) -> Result<(), String> {
     let parts: Vec<_> = command.split_whitespace().collect();
     match parts.as_slice() {
+        ["overlay", "on"] => {
+            state.effect_selector_overlay_visible = true;
+            Ok(())
+        }
+        ["overlay", "off"] => {
+            state.effect_selector_overlay_visible = false;
+            Ok(())
+        }
+        ["overlay", "toggle"] => {
+            state.effect_selector_overlay_visible = !state.effect_selector_overlay_visible;
+            Ok(())
+        }
         ["apply_all"] => {
             apply_selected_calls(player, state);
             refresh_call_status(player, state);
@@ -1284,7 +1323,7 @@ pub(crate) fn execute_driver_command(
                 .enabled;
             set_call_enabled(player, state, index, enabled)
         }
-        _ => Err("expected apply_all, remove_all, apply <index>, remove <index>, set <index> on|off, toggle <index>, or load_slot <index> before player load".to_owned()),
+        _ => Err("expected overlay on|off|toggle, apply_all, remove_all, apply <index>, remove <index>, set <index> on|off, toggle <index>, or load_slot <index> before player load".to_owned()),
     }
 }
 
