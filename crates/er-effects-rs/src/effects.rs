@@ -11,8 +11,8 @@ use std::{
 
 use eldenring::cs::{ChrInsExt, PlayerIns};
 use er_effects_data::{
-    EffectCallSpec, EffectKindSpec, embedded_effect_master_catalog, embedded_effects,
-    parse_effect_hotkeys_json, parse_effect_id_catalog_json,
+    EffectCallSpec, EffectKindSpec, parse_effect_hotkeys_json, parse_effect_id_catalog_json,
+    parse_effect_master_catalog_json,
 };
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -207,28 +207,45 @@ pub(crate) fn user_effect_catalog_dir() -> PathBuf {
     PathBuf::from("effect-catalogs")
 }
 
-pub(crate) fn current_effect_catalog_signature() -> String {
-    let Ok(entries) = fs::read_dir(user_effect_catalog_dir()) else {
+pub(crate) fn effect_master_catalog_path() -> PathBuf {
+    PathBuf::from("effect-master-catalog.json")
+}
+
+fn effect_file_signature(path: &Path) -> String {
+    let Ok(metadata) = fs::metadata(path) else {
         return "missing".to_owned();
     };
-    let mut parts = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
-        .filter_map(|path| {
-            let file_name = path.file_name()?.to_str()?.to_owned();
-            let metadata = fs::metadata(&path).ok()?;
-            let len = metadata.len();
-            let modified = metadata
-                .modified()
-                .ok()
-                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0);
-            Some(format!("{file_name}:{len}:{modified}"))
-        })
-        .collect::<Vec<_>>();
-    parts.sort();
+    let len = metadata.len();
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!("{len}:{modified}")
+}
+
+pub(crate) fn current_effect_catalog_signature() -> String {
+    let mut parts = Vec::new();
+    parts.push(format!(
+        "master:{}",
+        effect_file_signature(&effect_master_catalog_path())
+    ));
+    if let Ok(entries) = fs::read_dir(user_effect_catalog_dir()) {
+        let mut catalog_parts = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+            .filter_map(|path| {
+                let file_name = path.file_name()?.to_str()?.to_owned();
+                Some(format!("{file_name}:{}", effect_file_signature(&path)))
+            })
+            .collect::<Vec<_>>();
+        catalog_parts.sort();
+        parts.extend(catalog_parts);
+    } else {
+        parts.push("catalogs:missing".to_owned());
+    }
     parts.join("|")
 }
 
@@ -429,42 +446,42 @@ struct RawEffectCatalog {
 
 pub(crate) fn build_effect_catalog_state()
 -> (Vec<NamedEffectCall>, Vec<EffectCatalog>, Option<String>) {
-    let master = match embedded_effect_master_catalog() {
-        Ok(master) => master,
+    let mut load_errors = Vec::new();
+    let master_names = match fs::read_to_string(effect_master_catalog_path()) {
+        Ok(json) => match parse_effect_master_catalog_json(&json) {
+            Ok(master) => Some(
+                master
+                    .effects
+                    .into_iter()
+                    .map(|effect| {
+                        let name = if effect.name.is_empty() {
+                            format!("SpEffect {}", effect.id)
+                        } else {
+                            effect.name
+                        };
+                        (effect.id, name)
+                    })
+                    .collect::<HashMap<_, _>>(),
+            ),
+            Err(error) => {
+                load_errors.push(format!(
+                    "{}: {error}",
+                    effect_master_catalog_path().display()
+                ));
+                None
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {
-            let fallback = embedded_effects()
-                .map(|effects| {
-                    effects
-                        .calls
-                        .into_iter()
-                        .map(named_call_from_spec)
-                        .collect()
-                })
-                .unwrap_or_default();
-            return (
-                fallback,
-                Vec::new(),
-                Some(format!(
-                    "failed to parse embedded effect master catalog: {error}"
-                )),
-            );
+            load_errors.push(format!(
+                "{}: {error}",
+                effect_master_catalog_path().display()
+            ));
+            None
         }
     };
-    let master_names = master
-        .effects
-        .into_iter()
-        .map(|effect| {
-            let name = if effect.name.is_empty() {
-                format!("SpEffect {}", effect.id)
-            } else {
-                effect.name
-            };
-            (effect.id, name)
-        })
-        .collect::<HashMap<_, _>>();
 
     let mut raw_catalogs = Vec::new();
-    let mut load_errors = Vec::new();
     if let Ok(entries) = fs::read_dir(user_effect_catalog_dir()) {
         let mut paths = entries
             .filter_map(Result::ok)
@@ -502,9 +519,14 @@ pub(crate) fn build_effect_catalog_state()
             if !seen.insert(id) {
                 continue;
             }
-            let Some(name) = master_names.get(&id).cloned() else {
-                invalid_ids = invalid_ids.saturating_add(1);
-                continue;
+            let name = if let Some(names) = master_names.as_ref() {
+                let Some(name) = names.get(&id).cloned() else {
+                    invalid_ids = invalid_ids.saturating_add(1);
+                    continue;
+                };
+                name
+            } else {
+                format!("SpEffect {id}")
             };
             let index = *call_index_by_id.entry(id).or_insert_with(|| {
                 let index = calls.len();

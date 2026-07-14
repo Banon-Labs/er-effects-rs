@@ -1,22 +1,15 @@
-//! Shared schema for `data/effects.json`, the named effect-call list.
+//! Shared schemas for effect metadata and user-provided effect catalogs.
 //!
-//! The game DLL embeds this file at compile time and builds its overlay
-//! entries from it; `er-param-inspect validate` reads the same file to check
-//! every ID against `SpEffectParam` in a regulation archive. Editing
-//! `data/effects.json` is the only step needed to change the legacy built-in call list.
+//! Runtime selector catalogs are external JSON files in `effect-catalogs/*.json`
+//! next to `eldenring.exe`. `data/effects.json` remains a host-side curated list
+//! used by validation/generation tooling, not a runtime built-in catalog.
 
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-/// `data/effects.json`, embedded at compile time so the DLL and the
-/// validation tooling always agree on the legacy built-in call list.
+/// Host-side curated effect list used by validation/generation tooling.
 pub const EMBEDDED_EFFECTS_JSON: &str = include_str!("../../../data/effects.json");
-
-/// Rich metadata keyed by `SpEffectParam` ID. Selector/user catalogs should
-/// reference this by ID instead of duplicating field data.
-pub const EMBEDDED_EFFECT_MASTER_CATALOG_JSON: &str =
-    include_str!("../../../data/effect-master-catalog.json");
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -123,18 +116,11 @@ pub fn embedded_effects() -> Result<EffectsFile, serde_json::Error> {
     parse_effects_json(EMBEDDED_EFFECTS_JSON)
 }
 
-/// Parses the compile-time embedded copy of `data/effect-master-catalog.json`.
-pub fn embedded_effect_master_catalog() -> Result<EffectMasterCatalog, serde_json::Error> {
-    parse_effect_master_catalog_json(EMBEDDED_EFFECT_MASTER_CATALOG_JSON)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const EXPECTED_BUILT_IN_CALL_COUNT: usize = 594;
-    const EXPECTED_MASTER_EFFECT_COUNT: usize = 11325;
-
     #[test]
     fn embedded_effects_file_is_valid() {
         let effects = embedded_effects().expect("data/effects.json must parse");
@@ -161,30 +147,57 @@ mod tests {
     }
 
     #[test]
-    fn embedded_master_catalog_is_valid() {
-        let master =
-            embedded_effect_master_catalog().expect("data/effect-master-catalog.json must parse");
+    fn parses_effect_master_catalog_schema() {
+        let master = parse_effect_master_catalog_json(
+            r#"{
+                "schema_version": 1,
+                "kind": "sp_effect_master_catalog",
+                "source": {
+                    "param": "SpEffectParam",
+                    "binder_version": "7",
+                    "row_count": 1,
+                    "regulation_file": "regulation.bin",
+                    "paramdef_file": "SpEffect.xml",
+                    "names_file": "SpEffectParam.txt"
+                },
+                "field_index": {
+                    "sightSearchEnemyRate": {
+                        "type": "f32",
+                        "display_name": "Sight Search Enemy Rate",
+                        "tags": ["ai.perception"]
+                    }
+                },
+                "effects": [
+                    {
+                        "id": 20004380,
+                        "name": "Stealth",
+                        "row_name": null,
+                        "community_name": null,
+                        "curated_name": null,
+                        "vfx": [],
+                        "tags": ["ai.perception.zero"],
+                        "fields": {"sightSearchEnemyRate": 0}
+                    }
+                ]
+            }"#,
+        )
+        .expect("effect master catalog schema must parse");
 
         assert_eq!(master.schema_version, 1);
         assert_eq!(master.kind, "sp_effect_master_catalog");
         assert_eq!(master.source.param, "SpEffectParam");
-        assert_eq!(master.effects.len(), EXPECTED_MASTER_EFFECT_COUNT);
-        assert_eq!(master.source.row_count, EXPECTED_MASTER_EFFECT_COUNT);
-
-        let stealth = master
-            .effects
-            .iter()
-            .find(|effect| effect.id == 20004380)
-            .expect("known sight/hearing-zero effect");
+        assert_eq!(master.effects.len(), 1);
+        assert_eq!(master.effects[0].id, 20004380);
         assert_eq!(
-            stealth.fields.get("sightSearchEnemyRate"),
+            master.effects[0].fields.get("sightSearchEnemyRate"),
             Some(&serde_json::json!(0))
         );
-        assert_eq!(
-            stealth.fields.get("hearingSearchEnemyRate"),
-            Some(&serde_json::json!(0))
+        assert!(
+            master.effects[0]
+                .tags
+                .iter()
+                .any(|tag| tag == "ai.perception.zero")
         );
-        assert!(stealth.tags.iter().any(|tag| tag == "ai.perception.zero"));
     }
 
     #[test]

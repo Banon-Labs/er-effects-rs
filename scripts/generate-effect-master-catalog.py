@@ -15,16 +15,17 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_REGULATION = Path(
-    "/home/banon/.local/share/Steam/steamapps/common/ELDEN RING/Game/regulation.bin"
+DEFAULT_GAME_DIR = Path(
+    "/home/banon/.local/share/Steam/steamapps/common/ELDEN RING/Game"
 )
+DEFAULT_REGULATION = DEFAULT_GAME_DIR / "regulation.bin"
 DEFAULT_PARAMDEF = Path(
     "/home/banon/projects/WitchyBND/WitchyBND/Assets/Paramdex/ER/Defs/SpEffect.xml"
 )
 DEFAULT_NAMES = Path(
     "/home/banon/projects/WitchyBND/WitchyBND/Assets/Paramdex/ER/Names/SpEffectParam.txt"
 )
-DEFAULT_OUTPUT = REPO_ROOT / "data" / "effect-master-catalog.json"
+DEFAULT_OUTPUT = DEFAULT_GAME_DIR / "effect-master-catalog.json"
 DEFAULT_SMITHBOX_BINARY_DIR = Path("/home/banon/.local/share/smithbox/app")
 
 

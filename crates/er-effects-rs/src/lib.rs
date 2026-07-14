@@ -21,7 +21,6 @@ use eldenring::{
     dlkr::DLAllocator,
     fd4::FD4TaskData,
 };
-use er_effects_data::embedded_effects;
 use er_save_loader::{GameManTelemetry, SaveLoadContext, SaveLoader};
 use fromsoftware_shared::{F32Vector4, FromStatic, InstanceError, SharedTaskImpExt};
 use windows::{

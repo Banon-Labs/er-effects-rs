@@ -300,11 +300,11 @@ Supported key names include `numpad_multiply`, `numpad_add`, `numpad_subtract`, 
 
 User catalogs:
 
-The DLL starts with zero effect selector catalogs. User-provided game-directory catalogs can be placed in `effect-catalogs/*.json` next to `eldenring.exe`; each file is a plain JSON array of SpEffect IDs, with the file name acting as the catalog identity, for example `my-effects.json`. The DLL watches this folder while the game is running, reloads catalogs when JSON files are created/changed/removed, and validates every ID against the embedded master catalog before exposing it to Up/Down cycling.
+The DLL starts with zero effect selector catalogs. User-provided game-directory catalogs can be placed in `effect-catalogs/*.json` next to `eldenring.exe`; each file is a plain JSON array of SpEffect IDs, with the file name acting as the catalog identity, for example `my-effects.json`. The DLL watches this folder while the game is running and reloads catalogs when JSON files are created/changed/removed.
 
 Master catalog:
 
-`data/effect-master-catalog.json` is the rich authoritative SpEffect metadata map. It is keyed by `SpEffectParam` ID and records names, VFX IDs, derived tags, and meaningful non-default fields such as AI perception, HP/FP/stamina, movement/timing, damage, defense, and lifetime fields. Selector/user catalogs should reference this file by ID instead of copying field metadata; future user catalogs should be named JSON files in a shared catalog folder and contain only ID lists plus minimal catalog identity.
+`effect-master-catalog.json` can be placed next to `eldenring.exe` when rich SpEffect metadata is available. It is keyed by `SpEffectParam` ID and records names, VFX IDs, derived tags, and meaningful non-default fields such as AI perception, HP/FP/stamina, movement/timing, damage, defense, and lifetime fields. When this file is present, selector/user catalog IDs are validated against it and the HUD uses its names. When it is absent, user catalog IDs still load with generic `SpEffect <id>` names. Selector/user catalogs should reference this file by ID instead of copying field metadata.
 
 Regenerate the master catalog from a local regulation file:
 
@@ -353,8 +353,12 @@ Supported Smithbox layouts:
 - binary release/install containing `Andre.Formats.dll` or
   `Andre.SoulsFormats.dll`.
 
-Discovery order uses `SMITHBOX_SOURCE_DIR` first, then common sibling/local
-paths. The generated bridge lives under `target/soulsformats-bridge/`.
+Discovery order uses `SMITHBOX_SOURCE_DIR` first, then `SMITHBOX_BINARY_DIR`,
+then common sibling/local paths. `SMITHBOX_BINARY_DIR` points at a binary
+Smithbox install directory containing `Andre.Formats.dll` and
+`Andre.SoulsFormats.dll`; it is also passed to the generated bridge so .NET can
+resolve Smithbox's transitive assemblies from that install directory at runtime.
+The generated bridge lives under `target/soulsformats-bridge/`.
 
 ## Cheat Engine tables
 
