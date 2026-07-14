@@ -83,7 +83,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     ));
     body.push_str(&format!("  \"network_sync\": {},\n", state.network_sync));
     body.push_str(&format!(
-        "  \"effect_hotkey_hook_active\": {},\n  \"effect_hotkey_hook_hits\": {},\n  \"effect_hotkey_applied_actions\": {},\n  \"effect_hotkeys_effects_on\": {},\n  \"selected_effect_index\": {},\n  \"effect_reapply_count\": {},\n  \"effect_reapply_last_index\": {},\n",
+        "  \"effect_hotkey_hook_active\": {},\n  \"effect_hotkey_hook_hits\": {},\n  \"effect_hotkey_applied_actions\": {},\n  \"effect_hotkeys_effects_on\": {},\n  \"selected_effect_index\": {},\n  \"effect_setting_last_id\": {},\n  \"effect_setting_live_updates\": {},\n  \"effect_reapply_count\": {},\n  \"effect_reapply_last_index\": {},\n",
         effect_hotkey_hook_active(),
         EFFECT_HOTKEY_HOOK_HITS.load(Ordering::SeqCst),
         EFFECT_HOTKEY_APPLIED_ACTIONS.load(Ordering::SeqCst),
@@ -91,6 +91,10 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         state
             .selected_effect_index
             .map_or_else(|| "null".to_owned(), |index| index.to_string()),
+        state
+            .effect_setting_last_id
+            .map_or_else(|| "null".to_owned(), |id| id.to_string()),
+        state.effect_setting_live_updates,
         state.effect_reapply_count,
         state
             .effect_reapply_last_index

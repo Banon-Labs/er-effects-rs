@@ -118,9 +118,23 @@ pub(crate) fn effect_setting_path() -> PathBuf {
     PathBuf::from(".effect-setting.txt")
 }
 
-pub(crate) fn restore_selected_effect_index(calls: &[NamedEffectCall]) -> Option<usize> {
+pub(crate) fn current_effect_setting_modified() -> Option<std::time::SystemTime> {
+    fs::metadata(effect_setting_path())
+        .and_then(|metadata| metadata.modified())
+        .ok()
+}
+
+pub(crate) fn restore_selected_effect_id() -> Option<i32> {
     let path = effect_setting_path();
-    let id = fs::read_to_string(path).ok()?.trim().parse::<i32>().ok()?;
+    fs::read_to_string(path).ok()?.trim().parse::<i32>().ok()
+}
+
+pub(crate) fn restore_selected_effect_index(calls: &[NamedEffectCall]) -> Option<usize> {
+    let id = restore_selected_effect_id()?;
+    find_call_index_by_id(calls, id)
+}
+
+fn find_call_index_by_id(calls: &[NamedEffectCall], id: i32) -> Option<usize> {
     calls.iter().position(|call| match call.kind {
         EffectCallKind::SpEffect { id: call_id } => call_id == id,
     })
@@ -352,9 +366,51 @@ fn enable_only_call(player: &mut PlayerIns, state: &mut EffectsState, index: usi
     state.selected_effect_index = Some(index);
     state.effect_hotkeys_effects_on = true;
     if persist && let Some(call) = state.calls.get(index) {
+        let EffectCallKind::SpEffect { id } = call.kind;
+        let label = call.kind.label();
+        let name = call.name.clone();
         persist_selected_effect(call);
+        state.effect_setting_last_id = Some(id);
+        state.effect_setting_last_modified = current_effect_setting_modified();
+        state.last_driver_command = Some(format!("effect-hotkey: selected {label} ({name})"));
+    }
+}
+
+pub(crate) fn poll_live_effect_setting(player: &mut PlayerIns, state: &mut EffectsState) {
+    let path = effect_setting_path();
+    let Ok(metadata) = fs::metadata(&path) else {
+        state.effect_setting_last_modified = None;
+        return;
+    };
+    let Ok(modified) = metadata.modified() else {
+        return;
+    };
+    if state.effect_setting_last_modified == Some(modified) {
+        return;
+    }
+    state.effect_setting_last_modified = Some(modified);
+
+    let Ok(raw_id) = fs::read_to_string(&path) else {
+        state.last_driver_command = Some("effect-setting: failed to read live setting".to_owned());
+        return;
+    };
+    let trimmed = raw_id.trim();
+    let Ok(id) = trimmed.parse::<i32>() else {
+        state.last_driver_command = Some(format!("effect-setting: invalid id {trimmed:?}"));
+        return;
+    };
+    state.effect_setting_last_id = Some(id);
+
+    let Some(index) = find_call_index_by_id(&state.calls, id) else {
+        state.last_driver_command = Some(format!("effect-setting: id {id} is not in catalog"));
+        return;
+    };
+
+    enable_only_call(player, state, index, false);
+    state.effect_setting_live_updates = state.effect_setting_live_updates.saturating_add(1);
+    if let Some(call) = state.calls.get(index) {
         state.last_driver_command = Some(format!(
-            "effect-hotkey: selected {} ({})",
+            "effect-setting: selected {} ({})",
             call.kind.label(),
             call.name
         ));

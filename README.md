@@ -273,7 +273,7 @@ Built-in catalog:
 
 The built-in catalog is currently narrowed for visual/audio triage: it contains the 594 disabled-by-default `SpEffectParam` rows that static analysis classified as non-mechanical (no direct stat/resource/status/damage/defense fields and no chain fields) while still referencing `SpEffectVfxParam` rows with visual/audio/SFX-like data. Up/Down cycles only this non-mechanical visual/audio subset in numeric ID order.
 
-The full triage list lives in `data/effects.json`; supporting audit artifacts are under `target/effect-meaningfulness-*.csv` when regenerated locally.
+The selected ID is persisted to `.effect-setting.txt`; editing that file while the game is running also applies the matching in-catalog effect ID live. The full triage list lives in `data/effects.json`; supporting audit artifacts are under `target/effect-meaningfulness-*.csv` when regenerated locally.
 
 Validate the list against a regulation file:
 

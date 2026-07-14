@@ -314,6 +314,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
 
                 remove_requested_calls(player, &mut state);
                 process_driver_command(player, &mut state);
+                poll_live_effect_setting(player, &mut state);
                 consume_effect_hotkeys(player, &mut state);
 
                 let appear_playing = observation.current_animation_id == Some(APPEAR_ANIMATION_ID);

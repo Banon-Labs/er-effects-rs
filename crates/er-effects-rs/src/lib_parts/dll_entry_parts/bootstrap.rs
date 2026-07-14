@@ -37,6 +37,9 @@ pub(crate) struct EffectsState {
     custom_call_id: i32,
     selected_effect_index: Option<usize>,
     effect_hotkeys_effects_on: bool,
+    effect_setting_last_id: Option<i32>,
+    effect_setting_last_modified: Option<std::time::SystemTime>,
+    effect_setting_live_updates: u64,
     effect_reapply_count: u64,
     effect_reapply_last_index: Option<usize>,
     last_telemetry_write: Option<Instant>,
@@ -62,7 +65,12 @@ impl Default for EffectsState {
                 Some(format!("failed to parse embedded effects.json: {error}")),
             ),
         };
-        let selected_effect_index = restore_selected_effect_index(&calls);
+        let selected_effect_id = restore_selected_effect_id();
+        let selected_effect_index = selected_effect_id.and_then(|id| {
+            calls.iter().position(|call| match call.kind {
+                EffectCallKind::SpEffect { id: call_id } => call_id == id,
+            })
+        });
 
         Self {
             calls,
@@ -81,6 +89,9 @@ impl Default for EffectsState {
             game_task_ticks: INITIAL_GAME_TASK_TICKS,
             selected_effect_index,
             effect_hotkeys_effects_on: false,
+            effect_setting_last_id: selected_effect_id,
+            effect_setting_last_modified: current_effect_setting_modified(),
+            effect_setting_live_updates: 0,
             effect_reapply_count: 0,
             effect_reapply_last_index: None,
             safe_input: SafeInputRuntime::default(),
