@@ -42,11 +42,14 @@ contains_git_no_verify(cmd) if {
 }
 
 contains_git_no_verify(cmd) if {
-	# Check for git commit with -n (shorthand for --no-verify)
-	commands.has_verb(cmd, "git")
-	commands.has_verb(cmd, "commit")
-	regex.match(`\s-[a-z]*n[a-z]*\s`, concat(" ", [cmd, " "])) # Matches -n, -an, -nm, etc.
+	# Check for git commit with -n (shorthand for --no-verify), but only
+	# inside the actual git-commit command segment. A later command like
+	# `| sed -n ...` must not make `git commit -h | sed -n` look like a
+	# no-verify commit.
+	regex.match(git_commit_short_no_verify_pattern, cmd)
 }
+
+git_commit_short_no_verify_pattern := `(?m)(^|[;&|]\s*|\n)\s*git(\s+(?:-C|-c)\s+\S+|\s+--git-dir=\S+|\s+--work-tree=\S+|\s+--namespace=\S+)*\s+commit(\s+[^;&|\n]*)?\s+-[a-z]*n[a-z]*(\s|$|[;&|])`
 
 contains_git_no_verify(cmd) if {
 	# Check for git push with --no-verify
