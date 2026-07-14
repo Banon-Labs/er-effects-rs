@@ -35,6 +35,26 @@ pub(crate) struct EffectsState {
     remove_all_requested: bool,
     network_sync: bool,
     custom_call_id: i32,
+    selected_effect_index: Option<usize>,
+    catalogs: Vec<EffectCatalog>,
+    selected_catalog_index: Option<usize>,
+    effect_catalogs_signature: String,
+    effect_catalog_live_updates: u64,
+    effect_hotkeys_effects_on: bool,
+    effect_selector_overlay_visible: bool,
+    effect_trigger_hotkeys: Vec<EffectTriggerHotkey>,
+    effect_trigger_hotkeys_modified: Option<std::time::SystemTime>,
+    effect_trigger_hotkeys_load_error: Option<String>,
+    pending_effect_triggers: Vec<EffectTriggerHotkey>,
+    effect_trigger_fire_count: u64,
+    effect_trigger_last_key: Option<String>,
+    effect_trigger_last_id: Option<i32>,
+    effect_trigger_last_count: u32,
+    effect_setting_last_id: Option<i32>,
+    effect_setting_last_modified: Option<std::time::SystemTime>,
+    effect_setting_live_updates: u64,
+    effect_reapply_count: u64,
+    effect_reapply_last_index: Option<usize>,
     last_telemetry_write: Option<Instant>,
     last_driver_command: Option<String>,
     autoload: SaveLoader,
@@ -44,23 +64,47 @@ pub(crate) struct EffectsState {
 
 impl Default for EffectsState {
     fn default() -> Self {
-        let (calls, load_error) = match embedded_effects() {
-            Ok(effects) => (
-                effects
-                    .calls
-                    .into_iter()
-                    .map(named_call_from_spec)
-                    .collect(),
-                None,
-            ),
-            Err(error) => (
-                Vec::new(),
-                Some(format!("failed to parse embedded effects.json: {error}")),
-            ),
+        let effect_catalogs_signature = current_effect_catalog_signature();
+        let (mut calls, catalogs, load_error) = build_effect_catalog_state();
+        let (effect_trigger_hotkeys, effect_trigger_hotkeys_load_error) = match load_effect_trigger_hotkeys() {
+            Ok(hotkeys) => (hotkeys, None),
+            Err(error) => (Vec::new(), Some(error)),
         };
+        let selected_effect_id = restore_selected_effect_id();
+        let selected_effect_index = selected_effect_id.and_then(|id| {
+            calls.iter().position(|call| match call.kind {
+                EffectCallKind::SpEffect { id: call_id } => call_id == id,
+            })
+        });
+        let restored_catalog_key = restore_selected_catalog_key();
+        let selected_catalog_index = restored_catalog_key
+            .as_deref()
+            .and_then(|key| catalogs.iter().position(|catalog| catalog.source_key == key))
+            .or_else(|| {
+                selected_effect_index.and_then(|selected| {
+                    catalogs.iter().position(|catalog| {
+                        catalog
+                            .call_indices
+                            .iter()
+                            .any(|call_index| *call_index == selected)
+                    })
+                })
+            })
+            .or_else(|| (!catalogs.is_empty()).then_some(0));
+        let effect_hotkeys_effects_on = restore_effects_enabled() && selected_effect_index.is_some();
+        if effect_hotkeys_effects_on
+            && let Some(index) = selected_effect_index
+            && let Some(call) = calls.get_mut(index)
+        {
+            call.enabled = true;
+            call.remove_requested = false;
+            call.active_seen_since_enable = false;
+            call.apply_failed = false;
+        }
 
         Self {
             calls,
+            catalogs,
             load_error,
             current_animation_id: None,
             expected_animation_seen: false,
@@ -74,6 +118,25 @@ impl Default for EffectsState {
             last_driver_command: None,
             autoload: SaveLoader::new(configured_save_load_request()),
             game_task_ticks: INITIAL_GAME_TASK_TICKS,
+            selected_effect_index,
+            selected_catalog_index,
+            effect_catalogs_signature,
+            effect_catalog_live_updates: 0,
+            effect_hotkeys_effects_on,
+            effect_selector_overlay_visible: false,
+            effect_trigger_hotkeys,
+            effect_trigger_hotkeys_modified: current_effect_trigger_hotkeys_modified(),
+            effect_trigger_hotkeys_load_error,
+            pending_effect_triggers: Vec::new(),
+            effect_trigger_fire_count: 0,
+            effect_trigger_last_key: None,
+            effect_trigger_last_id: None,
+            effect_trigger_last_count: 0,
+            effect_setting_last_id: selected_effect_id,
+            effect_setting_last_modified: current_effect_setting_modified(),
+            effect_setting_live_updates: 0,
+            effect_reapply_count: 0,
+            effect_reapply_last_index: None,
             safe_input: SafeInputRuntime::default(),
         }
     }
@@ -196,6 +259,8 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
             .spawn(install_show_progress_shortcircuit_hook)
             .ok();
     }
+
+    ensure_effect_hotkey_hook();
 
     let initial_state = EffectsState::default();
     arm_product_autoload_from_request(&initial_state.autoload);

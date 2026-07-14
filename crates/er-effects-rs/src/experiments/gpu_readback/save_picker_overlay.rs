@@ -635,7 +635,7 @@ const PICKER_RGB_RULE: [u8; 3] = [40, 38, 33];
 /// Truncate `text` so it fits within `max_px` at the boot font's scale (drops the tail; keeps a
 /// trailing marker when clipped).
 fn picker_fit_text(text: &str, max_px: usize) -> String {
-    let adv = BOOT_VIEW_GLYPH_ADV * BOOT_VIEW_TEXT_SCALE;
+    let adv = BOOT_VIEW_GLYPH_ADV * BOOT_VIEW_TEXT_BASE_SCALE;
     let max_chars = (max_px / adv).max(1);
     if text.chars().count() <= max_chars {
         return text.to_owned();
@@ -652,7 +652,7 @@ fn picker_fit_text(text: &str, max_px: usize) -> String {
 /// composited WITH the bar, not in place of it. Reads the live model; render-thread safe (pure
 /// read + CPU raster). Returns false if there is no model.
 pub(crate) fn overlay_save_picker_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
-    let scale = BOOT_VIEW_TEXT_SCALE;
+    let scale = BOOT_VIEW_TEXT_BASE_SCALE;
     let line_h = BOOT_VIEW_GLYPH_H * scale;
     let row_step = line_h + line_h / 2; // 1.5 line spacing between rows
     let margin_x = (w / 10).max(24);
@@ -686,12 +686,12 @@ pub(crate) fn overlay_save_picker_onto(buf: &mut [u8], w: usize, h: usize) -> bo
     let mut y = panel_top + line_h;
 
     // Title.
-    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, "SELECT SAVE FILE", PICKER_RGB_TITLE);
+    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, "SELECT SAVE FILE", PICKER_RGB_TITLE, scale);
     y += line_h + line_h / 2;
 
     // Location line (dimmed, fit to width): the current directory path.
     let loc_line = picker_fit_text(&model.location_label(), content_w.saturating_sub(scale * 8));
-    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, &loc_line, PICKER_RGB_DIM);
+    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, &loc_line, PICKER_RGB_DIM, scale);
     y += line_h;
     let mode_line = format!(
         "SHOWING *.{}   PAGE {}/{}",
@@ -699,7 +699,7 @@ pub(crate) fn overlay_save_picker_onto(buf: &mut [u8], w: usize, h: usize) -> bo
         model.page() + 1,
         model.page_count()
     );
-    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, &mode_line, PICKER_RGB_DIM);
+    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, &mode_line, PICKER_RGB_DIM, scale);
     y += line_h;
     // Divider rule.
     boot_fill_rect(buf, w, h, margin_x + scale * 4, y, content_w.saturating_sub(scale * 8), scale.max(1), PICKER_RGB_RULE);
@@ -735,7 +735,7 @@ pub(crate) fn overlay_save_picker_onto(buf: &mut [u8], w: usize, h: usize) -> bo
             (PICKER_RGB_ROW, "  ")
         };
         let text = picker_fit_text(&format!("{prefix}{label}"), content_w.saturating_sub(scale * 8));
-        boot_draw_text_rgb(buf, w, h, margin_x + scale * 6, y, &text, color);
+        boot_draw_text_rgb(buf, w, h, margin_x + scale * 6, y, &text, color, scale);
         y += row_step;
     }
 
@@ -749,6 +749,7 @@ pub(crate) fn overlay_save_picker_onto(buf: &mut [u8], w: usize, h: usize) -> bo
         footer_y,
         "UP/DN MOVE  L/R DRIVE (TOP ROW) OR PAGE  ENTER/A OPEN  BKSP/B UP",
         PICKER_RGB_DIM,
+        scale,
     );
     true
 }
@@ -763,7 +764,7 @@ fn overlay_character_stage_onto(
     panel_top: usize,
     panel_bottom: usize,
 ) -> bool {
-    let scale = BOOT_VIEW_TEXT_SCALE;
+    let scale = BOOT_VIEW_TEXT_BASE_SCALE;
     let line_h = BOOT_VIEW_GLYPH_H * scale;
     let row_step = line_h + line_h / 2;
     let guard = pending_save_lock();
@@ -772,7 +773,7 @@ fn overlay_character_stage_onto(
     };
 
     let mut y = panel_top + line_h;
-    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, "SELECT CHARACTER", PICKER_RGB_TITLE);
+    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, "SELECT CHARACTER", PICKER_RGB_TITLE, scale);
     y += line_h + line_h / 2;
 
     let name = pending
@@ -782,7 +783,7 @@ fn overlay_character_stage_onto(
         .unwrap_or("?")
         .to_ascii_uppercase();
     let file_line = picker_fit_text(&name, content_w.saturating_sub(scale * 8));
-    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, &file_line, PICKER_RGB_DIM);
+    boot_draw_text_rgb(buf, w, h, margin_x + scale * 4, y, &file_line, PICKER_RGB_DIM, scale);
     y += line_h;
     boot_fill_rect(
         buf,
@@ -829,7 +830,7 @@ fn overlay_character_stage_onto(
             info.level
         );
         let text = picker_fit_text(&label, content_w.saturating_sub(scale * 8));
-        boot_draw_text_rgb(buf, w, h, margin_x + scale * 6, y, &text, color);
+        boot_draw_text_rgb(buf, w, h, margin_x + scale * 6, y, &text, color, scale);
         y += row_step;
     }
 
@@ -842,6 +843,7 @@ fn overlay_character_stage_onto(
         footer_y,
         "UP/DN MOVE  ENTER/A LOAD CHARACTER  BKSP/B BACK TO FILES",
         PICKER_RGB_DIM,
+        scale,
     );
     true
 }

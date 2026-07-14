@@ -162,7 +162,10 @@ const BOOT_VIEW_HANDOFF_HOLD_BAIL_MS: u64 = 5_000;
 // indistinguishable from the black boot frames underneath, so only the bar + label are visible.
 // (The game's REAL loading-bar widget/asset cannot be reused here: its menu resources are not in
 // game memory until ~+12.7s and the DLL must not unpack assets from disk itself.)
-const BOOT_VIEW_TEXT_SCALE: usize = 2;
+const BOOT_VIEW_TEXT_BASE_SCALE: usize = 2;
+const BOOT_VIEW_TEXT_REFERENCE_H: u32 = 1080;
+const BOOT_VIEW_TEXT_MIN_SCALE: usize = 1;
+const BOOT_VIEW_TEXT_MAX_SCALE: usize = 4;
 const BOOT_VIEW_GLYPH_W: usize = 5;
 const BOOT_VIEW_GLYPH_H: usize = 7;
 /// Advance per character (5px glyph + 1px gap, pre-scale).
@@ -174,10 +177,16 @@ const BOOT_VIEW_TEXT_BAR_GAP: usize = 5;
 /// Bottom padding row so the handoff marker never touches the strip edge.
 const BOOT_VIEW_PAD_BOTTOM: usize = 3;
 /// Total strip height: text row, gap, bar, bottom pad.
-const BOOT_VIEW_STRIP_HEIGHT: usize = BOOT_VIEW_GLYPH_H * BOOT_VIEW_TEXT_SCALE
-    + BOOT_VIEW_TEXT_BAR_GAP
-    + BOOT_VIEW_BAR_H
-    + BOOT_VIEW_PAD_BOTTOM;
+fn boot_view_strip_height(text_scale: usize) -> usize {
+    BOOT_VIEW_GLYPH_H * text_scale + BOOT_VIEW_TEXT_BAR_GAP + BOOT_VIEW_BAR_H + BOOT_VIEW_PAD_BOTTOM
+}
+
+fn boot_view_text_scale(backbuffer_h: u32) -> usize {
+    let scaled = (backbuffer_h as usize * BOOT_VIEW_TEXT_BASE_SCALE
+        + (BOOT_VIEW_TEXT_REFERENCE_H as usize / 2))
+        / BOOT_VIEW_TEXT_REFERENCE_H as usize;
+    scaled.clamp(BOOT_VIEW_TEXT_MIN_SCALE, BOOT_VIEW_TEXT_MAX_SCALE)
+}
 /// Strip width = backbuffer width * NUM/DEN (clamped to a sane minimum).
 const BOOT_VIEW_STRIP_W_NUM: u32 = 19;
 const BOOT_VIEW_STRIP_W_DEN: u32 = 25;
@@ -380,11 +389,11 @@ fn boot_glyph_5x7(c: char) -> [u8; 7] {
     }
 }
 
-fn boot_text_width(text: &str) -> usize {
-    text.chars().count() * BOOT_VIEW_GLYPH_ADV * BOOT_VIEW_TEXT_SCALE
+fn boot_text_width(text: &str, scale: usize) -> usize {
+    text.chars().count() * BOOT_VIEW_GLYPH_ADV * scale
 }
 
-/// Blit `text` into the tight RGBA buffer at (x, y), scaled by `BOOT_VIEW_TEXT_SCALE`.
+/// Blit `text` into the tight RGBA buffer at (x, y), scaled by `scale`.
 fn boot_draw_text_rgb(
     buf: &mut [u8],
     w: usize,
@@ -393,6 +402,7 @@ fn boot_draw_text_rgb(
     y: usize,
     text: &str,
     rgb: [u8; 3],
+    scale: usize,
 ) {
     let mut cx = x;
     for c in text.chars() {
@@ -402,10 +412,10 @@ fn boot_draw_text_rgb(
                 if row & (1 << (BOOT_VIEW_GLYPH_W - 1 - gx)) == 0 {
                     continue;
                 }
-                for sy in 0..BOOT_VIEW_TEXT_SCALE {
-                    for sx in 0..BOOT_VIEW_TEXT_SCALE {
-                        let px = cx + gx * BOOT_VIEW_TEXT_SCALE + sx;
-                        let py = y + gy * BOOT_VIEW_TEXT_SCALE + sy;
+                for sy in 0..scale {
+                    for sx in 0..scale {
+                        let px = cx + gx * scale + sx;
+                        let py = y + gy * scale + sy;
                         if px < w && py < h {
                             let o = (py * w + px) * RGBA8_BPP;
                             buf[o] = rgb[0];
@@ -417,25 +427,42 @@ fn boot_draw_text_rgb(
                 }
             }
         }
-        cx += BOOT_VIEW_GLYPH_ADV * BOOT_VIEW_TEXT_SCALE;
+        cx += BOOT_VIEW_GLYPH_ADV * scale;
     }
 }
 
-fn boot_draw_text(buf: &mut [u8], w: usize, h: usize, x: usize, y: usize, text: &str) {
-    boot_draw_text_rgb(buf, w, h, x, y, text, BOOT_VIEW_RGB_TEXT);
+fn boot_draw_text(
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+    x: usize,
+    y: usize,
+    text: &str,
+    scale: usize,
+) {
+    boot_draw_text_rgb(buf, w, h, x, y, text, BOOT_VIEW_RGB_TEXT, scale);
 }
 
-fn boot_draw_text_shadowed(buf: &mut [u8], w: usize, h: usize, x: usize, y: usize, text: &str) {
+fn boot_draw_text_shadowed(
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+    x: usize,
+    y: usize,
+    text: &str,
+    scale: usize,
+) {
     boot_draw_text_rgb(
         buf,
         w,
         h,
-        x.saturating_add(2),
-        y.saturating_add(2),
+        x.saturating_add(scale),
+        y.saturating_add(scale),
         text,
         BOOT_VIEW_RGB_BLACK,
+        scale,
     );
-    boot_draw_text(buf, w, h, x, y, text);
+    boot_draw_text(buf, w, h, x, y, text, scale);
 }
 
 /// Axis-aligned opaque fill into the tight RGBA buffer (clamped).
@@ -714,6 +741,7 @@ fn boot_darken_bar_shadow(
     content_x: usize,
     content_y: usize,
     content_w: usize,
+    strip_h: usize,
 ) {
     // Soft vignette behind the progress UI: strongest at the bar center, fading to no darkening at
     // the edges. This keeps the hairline readable over bright screenshots without a hard rectangular
@@ -721,12 +749,12 @@ fn boot_darken_bar_shadow(
     let x0 = content_x.saturating_sub(32);
     let y0 = content_y.saturating_sub(10);
     let rw = (content_w + 64).min(w.saturating_sub(x0));
-    let rh = (BOOT_VIEW_STRIP_HEIGHT + 20).min(h.saturating_sub(y0));
+    let rh = (strip_h + 20).min(h.saturating_sub(y0));
     if rw == 0 || rh == 0 {
         return;
     }
     let cx2 = (content_x * 2).saturating_add(content_w);
-    let cy2 = (content_y * 2).saturating_add(BOOT_VIEW_STRIP_HEIGHT);
+    let cy2 = (content_y * 2).saturating_add(strip_h);
     let rx = (rw.max(1) as u32).max(1);
     let ry = (rh.max(1) as u32).max(1);
     for y in y0..(y0 + rh).min(h) {
@@ -757,16 +785,17 @@ fn boot_draw_marker_label(
     permille: usize,
     label: &str,
     has_bg: bool,
+    text_scale: usize,
 ) -> usize {
     let marker_x = content_x + (content_w * permille / 1000).min(content_w.saturating_sub(1));
-    let label_w = boot_text_width(label);
+    let label_w = boot_text_width(label, text_scale);
     let label_x = marker_x
         .saturating_sub(label_w / 2)
         .min(w.saturating_sub(label_w));
     if has_bg {
-        boot_draw_text_shadowed(buf, w, h, label_x, content_y, label);
+        boot_draw_text_shadowed(buf, w, h, label_x, content_y, label, text_scale);
     } else {
-        boot_draw_text(buf, w, h, label_x, content_y, label);
+        boot_draw_text(buf, w, h, label_x, content_y, label, text_scale);
     }
     marker_x
 }
@@ -782,6 +811,7 @@ fn boot_view_rasterize(
     content_y: usize,
     content_w: usize,
     bg: Option<&BootBgImage>,
+    text_scale: usize,
 ) -> Vec<u8> {
     let mut buf = vec![0u8; w * h * RGBA8_BPP];
     let has_bg = bg.is_some();
@@ -791,16 +821,17 @@ fn boot_view_rasterize(
         boot_fill_rect(&mut buf, w, h, 0, 0, w, h, BOOT_VIEW_RGB_BLACK);
     }
     let label = BOOT_VIEW_MILESTONE_LABELS[idx.min(BOOT_VIEW_MILESTONE_LABELS.len() - 1)];
-    let bar_y = content_y + BOOT_VIEW_GLYPH_H * BOOT_VIEW_TEXT_SCALE + BOOT_VIEW_TEXT_BAR_GAP;
+    let strip_h = boot_view_strip_height(text_scale);
+    let bar_y = content_y + BOOT_VIEW_GLYPH_H * text_scale + BOOT_VIEW_TEXT_BAR_GAP;
     if has_bg {
         // Local shadow band only around the UI, plus globally dimmed screenshot: keeps the hairline bar
         // readable on bright screenshots without turning the boot screen back into a heavy panel.
-        boot_darken_bar_shadow(&mut buf, w, h, content_x, content_y, content_w);
+        boot_darken_bar_shadow(&mut buf, w, h, content_x, content_y, content_w, strip_h);
     }
     if has_bg {
-        boot_draw_text_shadowed(&mut buf, w, h, content_x, content_y, label);
+        boot_draw_text_shadowed(&mut buf, w, h, content_x, content_y, label, text_scale);
     } else {
-        boot_draw_text(&mut buf, w, h, content_x, content_y, label);
+        boot_draw_text(&mut buf, w, h, content_x, content_y, label, text_scale);
     }
     // SAVE CHECK (the picker-hold pause, ~577) and SAVE LOAD (615) sit close together, so only one
     // is shown at a time to keep their labels from overlapping: SAVE CHECK while the missing-save
@@ -818,6 +849,7 @@ fn boot_view_rasterize(
             BOOT_VIEW_SAVE_CHECK_PERMILLE,
             BOOT_VIEW_SAVE_CHECK_LABEL,
             has_bg,
+            text_scale,
         )
     } else {
         usize::MAX
@@ -835,6 +867,7 @@ fn boot_view_rasterize(
             BOOT_VIEW_SAVE_LOAD_PERMILLE,
             BOOT_VIEW_SAVE_LOAD_LABEL,
             has_bg,
+            text_scale,
         )
     };
     let marker_x = boot_draw_marker_label(
@@ -847,6 +880,7 @@ fn boot_view_rasterize(
         BOOT_VIEW_NATIVE_HANDOFF_PERMILLE,
         BOOT_VIEW_NATIVE_HANDOFF_LABEL,
         has_bg,
+        text_scale,
     );
     boot_fill_rect(
         &mut buf,
@@ -1137,10 +1171,11 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
 
     // Progress-bar geometry follows the backbuffer. When a cached screenshot background exists, copy a
     // full-screen region; otherwise preserve the original tiny strip copy over black boot frames.
+    let text_scale = boot_view_text_scale(bh);
     let strip_w = (bw * BOOT_VIEW_STRIP_W_NUM / BOOT_VIEW_STRIP_W_DEN)
         .max(BOOT_VIEW_STRIP_MIN_W)
         .min(bw);
-    let strip_h = (BOOT_VIEW_STRIP_HEIGHT as u32).min(bh);
+    let strip_h = (boot_view_strip_height(text_scale) as u32).min(bh);
     let strip_dx = (bw - strip_w) / 2;
     let strip_dy = (bh * BOOT_VIEW_STRIP_Y_NUM / BOOT_VIEW_STRIP_Y_DEN).min(bh - strip_h);
     let bg = boot_bg_image();
@@ -1288,6 +1323,7 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
             content_y,
             content_w,
             bg,
+            text_scale,
         );
         if picker_active
             && overlay_save_picker_onto(&mut tight, region_w as usize, region_h as usize)
@@ -1430,4 +1466,430 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
         ));
     }
     true
+}
+
+// In-world effect selector HUD: a top-right two-line panel rendered through the same proven
+// swapchain-copy path as the boot progress bar. This intentionally uses its own command objects so it
+// cannot interfere with the boot view or loading portrait overlay state.
+static EFFECT_SELECTOR_VIEW_DRAW_STATE: AtomicUsize = AtomicUsize::new(0); // 0=uninit, 1=ready, 2=failed
+static EFFECT_SELECTOR_VIEW_BUSY: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_SELECTOR_VIEW_ALLOCATOR: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_SELECTOR_VIEW_LIST: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_SELECTOR_VIEW_FENCE: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_SELECTOR_VIEW_QUEUE: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_SELECTOR_VIEW_UPLOAD: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_SELECTOR_VIEW_UPLOAD_SIZE: AtomicU64 = AtomicU64::new(0);
+static EFFECT_SELECTOR_VIEW_W: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_SELECTOR_VIEW_H: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_SELECTOR_VIEW_HASH: AtomicUsize = AtomicUsize::new(usize::MAX);
+pub(crate) static EFFECT_SELECTOR_OVERLAY_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
+
+const EFFECT_SELECTOR_VIEW_PAD_X: usize = 10;
+const EFFECT_SELECTOR_VIEW_PAD_Y: usize = 8;
+const EFFECT_SELECTOR_VIEW_SCREEN_MARGIN_X: u32 = 18;
+const EFFECT_SELECTOR_VIEW_SCREEN_Y: u32 = 70;
+const EFFECT_SELECTOR_VIEW_MIN_W: u32 = 360;
+const EFFECT_SELECTOR_VIEW_MAX_W: u32 = 1120;
+const EFFECT_SELECTOR_VIEW_LINE_GAP: usize = 5;
+const EFFECT_SELECTOR_VIEW_BG: [u8; 3] = [5, 5, 5];
+const EFFECT_SELECTOR_VIEW_BORDER: [u8; 3] = [72, 70, 64];
+const EFFECT_SELECTOR_VIEW_TEXT: [u8; 3] = [226, 223, 214];
+
+struct EffectSelectorViewBusyGuard;
+impl Drop for EffectSelectorViewBusyGuard {
+    fn drop(&mut self) {
+        EFFECT_SELECTOR_VIEW_BUSY.store(0, Ordering::SeqCst);
+    }
+}
+
+pub(crate) unsafe fn composite_effect_selector_on_swapchain(swapchain_raw: usize) -> bool {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        composite_effect_selector_inner(swapchain_raw)
+    }))
+    .unwrap_or(false)
+}
+
+unsafe fn effect_selector_view_init(backbuffer: &ID3D12Resource) -> bool {
+    let mut device_opt: Option<ID3D12Device> = None;
+    if unsafe { backbuffer.GetDevice(&mut device_opt) }.is_err() {
+        return false;
+    }
+    let Some(device) = device_opt else {
+        return false;
+    };
+    let Ok(allocator) = (unsafe {
+        device.CreateCommandAllocator::<ID3D12CommandAllocator>(D3D12_COMMAND_LIST_TYPE_DIRECT)
+    }) else {
+        return false;
+    };
+    let Ok(list) = (unsafe {
+        device.CreateCommandList::<_, _, ID3D12GraphicsCommandList>(
+            0,
+            D3D12_COMMAND_LIST_TYPE_DIRECT,
+            &allocator,
+            None,
+        )
+    }) else {
+        return false;
+    };
+    if unsafe { list.Close() }.is_err() {
+        return false;
+    }
+    let Ok(fence) = (unsafe { device.CreateFence::<ID3D12Fence>(0, D3D12_FENCE_FLAG_NONE) }) else {
+        return false;
+    };
+    let queue_desc = D3D12_COMMAND_QUEUE_DESC {
+        Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+        Priority: 0,
+        Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
+        NodeMask: 0,
+    };
+    let Ok(queue) = (unsafe { device.CreateCommandQueue::<ID3D12CommandQueue>(&queue_desc) }) else {
+        return false;
+    };
+    EFFECT_SELECTOR_VIEW_ALLOCATOR.store(allocator.into_raw() as usize, Ordering::SeqCst);
+    EFFECT_SELECTOR_VIEW_LIST.store(list.into_raw() as usize, Ordering::SeqCst);
+    EFFECT_SELECTOR_VIEW_FENCE.store(fence.into_raw() as usize, Ordering::SeqCst);
+    EFFECT_SELECTOR_VIEW_QUEUE.store(queue.into_raw() as usize, Ordering::SeqCst);
+    true
+}
+
+unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
+    let text = crate::effects::effect_selector_overlay_text();
+    if text.trim().is_empty() || EFFECT_SELECTOR_VIEW_DRAW_STATE.load(Ordering::SeqCst) == 2 {
+        return false;
+    }
+    if EFFECT_SELECTOR_VIEW_BUSY.swap(1, Ordering::SeqCst) != 0 {
+        return false;
+    }
+    let _busy = EffectSelectorViewBusyGuard;
+
+    let sc_raw = swapchain_raw as *mut c_void;
+    let Some(sc) = (unsafe { IDXGISwapChain3::from_raw_borrowed(&sc_raw) }) else {
+        return false;
+    };
+    let idx = unsafe { sc.GetCurrentBackBufferIndex() };
+    let Ok(backbuffer) = (unsafe { sc.GetBuffer::<ID3D12Resource>(idx) }) else {
+        return false;
+    };
+    if EFFECT_SELECTOR_VIEW_DRAW_STATE.load(Ordering::SeqCst) == 0 {
+        if unsafe { effect_selector_view_init(&backbuffer) } {
+            EFFECT_SELECTOR_VIEW_DRAW_STATE.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!("effect-selector-overlay: draw state READY"));
+        } else {
+            EFFECT_SELECTOR_VIEW_DRAW_STATE.store(2, Ordering::SeqCst);
+            append_autoload_debug(format_args!("effect-selector-overlay: draw init FAILED"));
+            return false;
+        }
+    }
+
+    let bb_desc = unsafe { backbuffer.GetDesc() };
+    let bw = bb_desc.Width as u32;
+    let bh = bb_desc.Height;
+    if bw == 0 || bh == 0 || bw > MAX_RT_DIM || bh > MAX_RT_DIM {
+        return false;
+    }
+    let swap_rb = matches!(
+        bb_desc.Format,
+        DXGI_FORMAT_B8G8R8A8_UNORM | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
+    );
+    if !swap_rb
+        && !matches!(
+            bb_desc.Format,
+            DXGI_FORMAT_R8G8B8A8_UNORM | DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+        )
+    {
+        return false;
+    }
+
+    let text_lines = effect_selector_overlay_lines(&text);
+    let effect_text_scale = BOOT_VIEW_TEXT_BASE_SCALE;
+    let text_w = text_lines
+        .iter()
+        .map(|line| boot_text_width(line, effect_text_scale) as u32)
+        .max()
+        .unwrap_or(0);
+    let region_w = (text_w + (EFFECT_SELECTOR_VIEW_PAD_X as u32 * 2))
+        .max(EFFECT_SELECTOR_VIEW_MIN_W)
+        .min(EFFECT_SELECTOR_VIEW_MAX_W)
+        .min(bw.saturating_sub(EFFECT_SELECTOR_VIEW_SCREEN_MARGIN_X).max(1));
+    let line_h = BOOT_VIEW_GLYPH_H * effect_text_scale;
+    let text_block_h = text_lines.len() * line_h
+        + text_lines.len().saturating_sub(1) * EFFECT_SELECTOR_VIEW_LINE_GAP;
+    let region_h = (text_block_h + EFFECT_SELECTOR_VIEW_PAD_Y * 2) as u32;
+    if region_w == 0 || region_h == 0 || EFFECT_SELECTOR_VIEW_SCREEN_Y + region_h > bh {
+        return false;
+    }
+    let dst_x = bw.saturating_sub(region_w + EFFECT_SELECTOR_VIEW_SCREEN_MARGIN_X);
+
+    let mut device_opt: Option<ID3D12Device> = None;
+    if unsafe { backbuffer.GetDevice(&mut device_opt) }.is_err() {
+        return false;
+    }
+    let Some(device) = device_opt else {
+        return false;
+    };
+    let region_desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        Alignment: 0,
+        Width: region_w as u64,
+        Height: region_h,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: bb_desc.Format,
+        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+        Flags: D3D12_RESOURCE_FLAG_NONE,
+    };
+    let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+    let mut total_bytes: u64 = 0;
+    unsafe {
+        device.GetCopyableFootprints(
+            &region_desc,
+            0,
+            1,
+            0,
+            Some(&mut footprint),
+            None,
+            None,
+            Some(&mut total_bytes),
+        )
+    };
+    if total_bytes == 0 || footprint.Footprint.RowPitch == 0 {
+        return false;
+    }
+
+    let mut upload_fresh = false;
+    if EFFECT_SELECTOR_VIEW_UPLOAD_SIZE.load(Ordering::SeqCst) != total_bytes {
+        let up_heap = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_UPLOAD,
+            CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+            MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+            CreationNodeMask: 1,
+            VisibleNodeMask: 1,
+        };
+        let buf_desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+            Alignment: 0,
+            Width: total_bytes,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: DXGI_FORMAT_UNKNOWN,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            Flags: D3D12_RESOURCE_FLAG_NONE,
+        };
+        let mut up_opt: Option<ID3D12Resource> = None;
+        if unsafe {
+            device.CreateCommittedResource(
+                &up_heap,
+                D3D12_HEAP_FLAG_NONE,
+                &buf_desc,
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+                None,
+                &mut up_opt,
+            )
+        }
+        .is_err()
+        {
+            return false;
+        }
+        let Some(up) = up_opt else {
+            return false;
+        };
+        let old = EFFECT_SELECTOR_VIEW_UPLOAD.swap(up.into_raw() as usize, Ordering::SeqCst);
+        if old != 0 {
+            drop(unsafe { ID3D12Resource::from_raw(old as *mut c_void) });
+        }
+        EFFECT_SELECTOR_VIEW_UPLOAD_SIZE.store(total_bytes, Ordering::SeqCst);
+        upload_fresh = true;
+    }
+    let upload_raw = EFFECT_SELECTOR_VIEW_UPLOAD.load(Ordering::SeqCst) as *mut c_void;
+    let Some(upload) = (unsafe { ID3D12Resource::from_raw_borrowed(&upload_raw) }) else {
+        return false;
+    };
+
+    let hash = effect_selector_text_hash(&text);
+    let geom_changed = EFFECT_SELECTOR_VIEW_W.swap(region_w as usize, Ordering::SeqCst)
+        != region_w as usize
+        || EFFECT_SELECTOR_VIEW_H.swap(region_h as usize, Ordering::SeqCst) != region_h as usize;
+    if upload_fresh
+        || geom_changed
+        || EFFECT_SELECTOR_VIEW_HASH.load(Ordering::SeqCst) != hash
+    {
+        let mut tight = vec![0u8; region_w as usize * region_h as usize * RGBA8_BPP];
+        boot_fill_rect(
+            &mut tight,
+            region_w as usize,
+            region_h as usize,
+            0,
+            0,
+            region_w as usize,
+            region_h as usize,
+            EFFECT_SELECTOR_VIEW_BG,
+        );
+        boot_fill_rect(
+            &mut tight,
+            region_w as usize,
+            region_h as usize,
+            0,
+            0,
+            region_w as usize,
+            1,
+            EFFECT_SELECTOR_VIEW_BORDER,
+        );
+        boot_fill_rect(
+            &mut tight,
+            region_w as usize,
+            region_h as usize,
+            0,
+            region_h as usize - 1,
+            region_w as usize,
+            1,
+            EFFECT_SELECTOR_VIEW_BORDER,
+        );
+        for (line_index, line) in text_lines.iter().enumerate() {
+            let y = EFFECT_SELECTOR_VIEW_PAD_Y
+                + line_index * (BOOT_VIEW_GLYPH_H * effect_text_scale + EFFECT_SELECTOR_VIEW_LINE_GAP);
+            boot_draw_text_rgb(
+                &mut tight,
+                region_w as usize,
+                region_h as usize,
+                EFFECT_SELECTOR_VIEW_PAD_X,
+                y,
+                line,
+                EFFECT_SELECTOR_VIEW_TEXT,
+                effect_text_scale,
+            );
+        }
+        let row_pitch = footprint.Footprint.RowPitch as usize;
+        let total = total_bytes as usize;
+        let mut map: *mut c_void = std::ptr::null_mut();
+        if unsafe { upload.Map(0, None, Some(&mut map)) }.is_err() || map.is_null() {
+            return false;
+        }
+        {
+            let dst = unsafe { std::slice::from_raw_parts_mut(map as *mut u8, total) };
+            let src_row = region_w as usize * RGBA8_BPP;
+            for y in 0..region_h as usize {
+                let so = y * src_row;
+                let dofs = y * row_pitch;
+                if dofs + src_row > total || so + src_row > tight.len() {
+                    break;
+                }
+                let drow = &mut dst[dofs..dofs + src_row];
+                drow.copy_from_slice(&tight[so..so + src_row]);
+                if swap_rb {
+                    for t in 0..region_w as usize {
+                        drow.swap(t * RGBA8_BPP, t * RGBA8_BPP + 2);
+                    }
+                }
+            }
+        }
+        unsafe { upload.Unmap(0, None) };
+        EFFECT_SELECTOR_VIEW_HASH.store(hash, Ordering::SeqCst);
+    }
+
+    let alloc_raw = EFFECT_SELECTOR_VIEW_ALLOCATOR.load(Ordering::SeqCst) as *mut c_void;
+    let list_raw = EFFECT_SELECTOR_VIEW_LIST.load(Ordering::SeqCst) as *mut c_void;
+    let fence_raw = EFFECT_SELECTOR_VIEW_FENCE.load(Ordering::SeqCst) as *mut c_void;
+    let queue_raw = EFFECT_SELECTOR_VIEW_QUEUE.load(Ordering::SeqCst) as *mut c_void;
+    let (Some(allocator), Some(list), Some(fence), Some(queue)) = (unsafe {
+        (
+            ID3D12CommandAllocator::from_raw_borrowed(&alloc_raw),
+            ID3D12GraphicsCommandList::from_raw_borrowed(&list_raw),
+            ID3D12Fence::from_raw_borrowed(&fence_raw),
+            ID3D12CommandQueue::from_raw_borrowed(&queue_raw),
+        )
+    }) else {
+        return false;
+    };
+    if unsafe { allocator.Reset() }.is_err() || unsafe { list.Reset(allocator, None) }.is_err() {
+        return false;
+    }
+    unsafe {
+        record_transition(
+            list,
+            &backbuffer,
+            D3D12_RESOURCE_STATE_PRESENT,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+        )
+    };
+    let mut up_src = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(upload.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+            PlacedFootprint: footprint,
+        },
+    };
+    let mut bb_dst = D3D12_TEXTURE_COPY_LOCATION {
+        pResource: ManuallyDrop::new(Some(backbuffer.clone())),
+        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
+    };
+    let up_box = D3D12_BOX {
+        left: 0,
+        top: 0,
+        front: 0,
+        right: region_w,
+        bottom: region_h,
+        back: 1,
+    };
+    unsafe {
+        list.CopyTextureRegion(
+            &bb_dst,
+            dst_x,
+            EFFECT_SELECTOR_VIEW_SCREEN_Y,
+            0,
+            &up_src,
+            Some(&up_box),
+        )
+    };
+    unsafe { ManuallyDrop::drop(&mut up_src.pResource) };
+    unsafe { ManuallyDrop::drop(&mut bb_dst.pResource) };
+    unsafe {
+        record_transition(
+            list,
+            &backbuffer,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PRESENT,
+        )
+    };
+    if !unsafe { execute_and_wait(queue, list, fence) } {
+        return false;
+    }
+    let hits = EFFECT_SELECTOR_OVERLAY_DRAW_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    if hits == 1 {
+        append_autoload_debug(format_args!(
+            "effect-selector-overlay: first draw {region_w}x{region_h} at {dst_x},{} text='{}'",
+            EFFECT_SELECTOR_VIEW_SCREEN_Y, text
+        ));
+    }
+    true
+}
+
+fn effect_selector_overlay_lines(text: &str) -> Vec<String> {
+    let parts = text.split(" | ").collect::<Vec<_>>();
+    if parts.len() >= 4 {
+        let mut lines = vec![
+            parts[0].to_owned(),
+            format!("{} {} {}", parts[1], parts[2], parts[3]),
+        ];
+        if parts.len() > 4 {
+            lines.push(parts[4..].join(" "));
+        }
+        lines
+    } else {
+        vec![text.to_owned()]
+    }
+}
+
+fn effect_selector_text_hash(text: &str) -> usize {
+    let mut hash = 0xcbf29ce484222325usize;
+    for byte in text.as_bytes() {
+        hash ^= *byte as usize;
+        hash = hash.wrapping_mul(0x100000001b3usize);
+    }
+    hash
 }

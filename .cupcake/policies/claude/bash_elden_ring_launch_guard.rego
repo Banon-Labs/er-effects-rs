@@ -494,6 +494,18 @@ pgrep_subprocess_python_shape if {
 	terminator_parts[1] == ""
 }
 
+# Runtime validation may sleep briefly after an approved direct/offline launch
+# before checking for stale protected-launcher processes. Allow only that
+# sleep-then-single-python-heredoc shape; the exact pgrep subprocess and
+# no-launch checks above still gate the payload.
+pgrep_subprocess_python_shape if {
+	count(proc_scan_heredoc_parts) == 2
+	regex.match(`^(/usr/bin/)?sleep [0-9]+(\.[0-9]+)?; (/usr/bin/)?python3? - ?$`, proc_scan_heredoc_parts[0])
+	terminator_parts := split(proc_scan_norm_command, concat("", [" ", proc_scan_heredoc_tag]))
+	count(terminator_parts) == 2
+	terminator_parts[1] == ""
+}
+
 pgrep_subprocess_forbidden_marker if {
 	some marker in {
 		"os.system", "system(", "popen", "spawn", "exec(", "execv",

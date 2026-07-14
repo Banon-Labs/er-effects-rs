@@ -149,6 +149,35 @@ test_allow_python_subprocess_pgrep_assignment_start_protected_detection if {
 	count(denials) == 0
 }
 
+# Regression for the 2026-07-14 false positive: after an approved offline/me3
+# launch, runtime validation may wait briefly before a read-only Python exact
+# pgrep check for stale protected-launcher processes.
+test_allow_sleep_then_python_subprocess_pgrep_start_protected_detection if {
+	cmd := concat("\n", [
+		"sleep 5; python3 - <<'PY'",
+		"import subprocess",
+		"p = subprocess.run(['pgrep','-x','start_protected_game.exe'], text=True, capture_output=True)",
+		"print(p.returncode)",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	count(denials) == 0
+}
+
+# The sleep-prefixed Python allowance must not hide a later launch-shaped
+# subprocess call.
+test_deny_sleep_then_python_subprocess_pgrep_then_proton_launch if {
+	cmd := concat("\n", [
+		"sleep 5; python3 - <<'PY'",
+		"import subprocess",
+		"subprocess.run(['pgrep','-x','start_protected_game.exe'])",
+		"subprocess.run(['proton', 'run', 'start_protected_game.exe'])",
+		"PY",
+	])
+	denials := guard.deny with input as bash_event(cmd)
+	"ER-EFFECTS-START-PROTECTED-LAUNCH-GUARD" in rule_ids(denials)
+}
+
 # The Python pgrep allowance must stay limited to the single pgrep call; a
 # later launch-shaped subprocess call keeps the protected-launch guard active.
 test_deny_python_subprocess_pgrep_then_proton_launch if {

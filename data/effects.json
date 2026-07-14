@@ -1,7 +1,3568 @@
 {
   "calls": [
-    { "kind": "sp_effect", "id": 4330, "name": "Player all black", "enabled": true },
-    { "kind": "sp_effect", "id": 20018100, "name": "Player right eye red", "enabled": true },
-    { "kind": "sp_effect", "id": 20018101, "name": "Player left eye red", "enabled": true }
+    {
+      "kind": "sp_effect",
+      "id": 2,
+      "name": "SpEffect 2 (VFX 1000; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 25,
+      "name": "SpEffect 25 (VFX 175; duration 0; category 0; state 175)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 60,
+      "name": "SpEffect 60 (VFX 4000; duration -1; category 20)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 180,
+      "name": "SpEffect 180 (VFX 53000; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 392,
+      "name": "SpEffect 392 (VFX 60000; duration 5; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 404,
+      "name": "SpEffect 404 (VFX 5000; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 412,
+      "name": "SpEffect 412 (VFX 5001; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 450,
+      "name": "SpEffect 450 (VFX 50320; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 451,
+      "name": "SpEffect 451 (VFX 50321; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 491,
+      "name": "Rune Arc",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 608,
+      "name": "SpEffect 608 (VFX 5051; duration 5; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 618,
+      "name": "SpEffect 618 (VFX 5052; duration 5; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 628,
+      "name": "SpEffect 628 (VFX 5053; duration 5; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 638,
+      "name": "SpEffect 638 (VFX 5054; duration 5; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 648,
+      "name": "SpEffect 648 (VFX 5055; duration 5; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 658,
+      "name": "SpEffect 658 (VFX 5056; duration 5; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1100,
+      "name": "SpEffect 1100 (VFX 11100; duration 0.1; category 20)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1140,
+      "name": "SpEffect 1140 (VFX 11140; duration -1; category 20)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1150,
+      "name": "SpEffect 1150 (VFX 11150; duration -1; category 20)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1400,
+      "name": "SpEffect 1400 (VFX 11300; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1550,
+      "name": "SpEffect 1550 (VFX 8500; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1555,
+      "name": "Winged Scythe - No Flask",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1618,
+      "name": "Poison Moth Flight - VFX",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1624,
+      "name": "Poison Moth Flight - VFX",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1646,
+      "name": "Loretta's Slash - VFX",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1648,
+      "name": "Loretta's Slash - VFX",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1661,
+      "name": "Determination Removal - Right (Cycle)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1666,
+      "name": "Determination Removal - Left (Cycle)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1710,
+      "name": "SpEffect 1710 (VFX 62; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1740,
+      "name": "SpEffect 1740 (VFX 8570; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1766,
+      "name": "Assassin's Gambit",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1767,
+      "name": "Assassin's Gambit",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1772,
+      "name": "Blood Blade - VFX",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1774,
+      "name": "Blood Blade - VFX",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1935,
+      "name": "SpEffect 1935 (VFX 6010; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1951,
+      "name": "SpEffect 1951 (VFX 7000; duration 0; category 0; state 459)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1953,
+      "name": "SpEffect 1953 (VFX 7001; duration 0; category 0; state 460)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1955,
+      "name": "SpEffect 1955 (VFX 7002; duration 0; category 0; state 461)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1957,
+      "name": "SpEffect 1957 (VFX 7003; duration 0; category 0; state 462)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1959,
+      "name": "SpEffect 1959 (VFX 7004; duration 0; category 0; state 463)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3200,
+      "name": "Holy Water Pot",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3245,
+      "name": "Lantern - Right",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3380,
+      "name": "Cursed-Blood Pot",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3381,
+      "name": "Cursed-Blood Pot - PLAN_SP_EFFECT_BUDDY_AGGRESSIVE",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 3519,
+      "name": "Leaden Hardtear",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4085,
+      "name": "SpEffect 4085 (VFX 47; duration 60; category 10001; state 47)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4090,
+      "name": "SpEffect 4090 (VFX 130000; duration 10; category 200; state 8)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4200,
+      "name": "SpEffect 4200 (VFX 200000; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4202,
+      "name": "SpEffect 4202 (VFX 200002; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4205,
+      "name": "SpEffect 4205 (VFX 200005; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4210,
+      "name": "SpEffect 4210 (VFX 200010; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4211,
+      "name": "SpEffect 4211 (VFX 200011; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4212,
+      "name": "SpEffect 4212 (VFX 200012; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4213,
+      "name": "SpEffect 4213 (VFX 200013; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4320,
+      "name": "SpEffect 4320 (VFX 104320; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4321,
+      "name": "SpEffect 4321 (VFX 104321; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4330,
+      "name": "Player all black",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4340,
+      "name": "SpEffect 4340 (VFX 104340; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4350,
+      "name": "SpEffect 4350 (VFX 104350; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4370,
+      "name": "SpEffect 4370 (VFX 54310; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4375,
+      "name": "SpEffect 4375 (VFX 54315; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4380,
+      "name": "SpEffect 4380 (VFX 104380; duration -1; category 0; state 8)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4510,
+      "name": "SpEffect 4510 (VFX 100000; duration 30; category 1003)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4520,
+      "name": "SpEffect 4520 (VFX 100010; duration 30; category 1003)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4530,
+      "name": "SpEffect 4530 (VFX 100020; duration 30; category 1003)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4531,
+      "name": "SpEffect 4531 (VFX 100021; duration 30; category 1003)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4532,
+      "name": "SpEffect 4532 (VFX 100021; duration 30; category 1003)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4550,
+      "name": "SpEffect 4550 (VFX 100030; duration 30; category 1003)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 4700,
+      "name": "SpEffect 4700 (VFX 101000; duration -1; category 20)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 5120,
+      "name": "SpEffect 5120 (VFX 120000; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 6915,
+      "name": "Enemy - Crystal Dart Confusion - Visual",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 8550,
+      "name": "SpEffect 8550 (VFX 59000; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 8551,
+      "name": "SpEffect 8551 (VFX 59001; duration 1; category 100; state 8)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 8552,
+      "name": "SpEffect 8552 (VFX 59002; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 8553,
+      "name": "SpEffect 8553 (VFX 59003; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 8560,
+      "name": "SpEffect 8560 (VFX 50850; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 8670,
+      "name": "SpEffect 8670 (VFX 99999; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 8810,
+      "name": "SpEffect 8810 (VFX 60002; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 8870,
+      "name": "SpEffect 8870 (VFX 60001; duration 5; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 8972,
+      "name": "PLAN_SP_EFFECT_STRAGGLER_ACT_HOSTILE",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 9546,
+      "name": "SpEffect 9546 (VFX 110015; duration 1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 9551,
+      "name": "SpEffect 9551 (VFX 110000; duration 1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 9650,
+      "name": "SpEffect 9650 (VFX 730300; duration 5; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 9651,
+      "name": "SpEffect 9651 (VFX 730301; duration 5; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 9703,
+      "name": "SpEffect 9703 (VFX 53220; duration -1; category 200)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 9712,
+      "name": "SpEffect 9712 (VFX 53222; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 9910,
+      "name": "SpEffect 9910 (VFX 20700000; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10100,
+      "name": "SpEffect 10100 (VFX 50100; duration -1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10102,
+      "name": "SpEffect 10102 (VFX 50101; duration -1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10111,
+      "name": "SpEffect 10111 (VFX 50111; duration 0.1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10112,
+      "name": "SpEffect 10112 (VFX 50104; duration -1; category 0; state 412)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10113,
+      "name": "SpEffect 10113 (VFX 50111; duration -1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10121,
+      "name": "SpEffect 10121 (VFX 50112; duration -1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10122,
+      "name": "SpEffect 10122 (VFX 50113; duration -1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10124,
+      "name": "SpEffect 10124 (VFX 50114; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10125,
+      "name": "SpEffect 10125 (VFX 50115; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10141,
+      "name": "SpEffect 10141 (VFX 50170,50171,50172; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10163,
+      "name": "SpEffect 10163 (VFX 50134; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10175,
+      "name": "SpEffect 10175 (VFX 50133; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10181,
+      "name": "SpEffect 10181 (VFX 50130; duration -1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10240,
+      "name": "SpEffect 10240 (VFX 50400; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10283,
+      "name": "SpEffect 10283 (VFX 50404; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10287,
+      "name": "SpEffect 10287 (VFX 50405; duration -1; category 0; state 416)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10300,
+      "name": "SpEffect 10300 (VFX 50300; duration 15; category 110)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10301,
+      "name": "SpEffect 10301 (VFX 50301; duration 10; category 110)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10302,
+      "name": "SpEffect 10302 (VFX 50302; duration 10; category 110)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10303,
+      "name": "SpEffect 10303 (VFX 50303; duration 10; category 110)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10310,
+      "name": "SpEffect 10310 (VFX 50310; duration -1; category 100; state 8)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10311,
+      "name": "SpEffect 10311 (VFX 50311; duration 0.1; category 100; state 8)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10316,
+      "name": "SpEffect 10316 (VFX 50316; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10422,
+      "name": "SpEffect 10422 (VFX 52510; duration -1; category 0; state 421)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10431,
+      "name": "SpEffect 10431 (VFX 52520; duration -1; category 0; state 421)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10510,
+      "name": "SpEffect 10510 (VFX 50505; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10541,
+      "name": "SpEffect 10541 (VFX 51040; duration -1; category 100; state 338)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10543,
+      "name": "SpEffect 10543 (VFX 51041,51042; duration -1; category 100; state 338)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10551,
+      "name": "SpEffect 10551 (VFX 51010; duration -1; category 100; state 338)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10553,
+      "name": "SpEffect 10553 (VFX 51011,51012; duration -1; category 100; state 338)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10571,
+      "name": "SpEffect 10571 (VFX 51020; duration -1; category 100; state 338)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10573,
+      "name": "SpEffect 10573 (VFX 51021,51022; duration -1; category 100; state 338)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10582,
+      "name": "SpEffect 10582 (VFX 51030; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10593,
+      "name": "SpEffect 10593 (VFX 54230; duration 0.1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10594,
+      "name": "SpEffect 10594 (VFX 54231; duration 0.1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10595,
+      "name": "SpEffect 10595 (VFX 54232; duration 0.1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10650,
+      "name": "SpEffect 10650 (VFX 50650; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10651,
+      "name": "SpEffect 10651 (VFX 50651; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10652,
+      "name": "SpEffect 10652 (VFX 50652; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10653,
+      "name": "SpEffect 10653 (VFX 50653; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10790,
+      "name": "SpEffect 10790 (VFX 50700; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10830,
+      "name": "SpEffect 10830 (VFX 50715; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10880,
+      "name": "SpEffect 10880 (VFX 54015; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10883,
+      "name": "SpEffect 10883 (VFX 54017; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10898,
+      "name": "SpEffect 10898 (VFX 50970,50971; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10990,
+      "name": "SpEffect 10990 (VFX 50850; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10991,
+      "name": "SpEffect 10991 (VFX 50851; duration 1; category 100; state 8)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10992,
+      "name": "SpEffect 10992 (VFX 50852; duration 0.1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10993,
+      "name": "SpEffect 10993 (VFX 50853; duration 0.1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10994,
+      "name": "SpEffect 10994 (VFX 50854; duration 0.1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10999,
+      "name": "SpEffect 10999 (VFX 50859; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11149,
+      "name": "SpEffect 11149 (VFX 57050; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11155,
+      "name": "SpEffect 11155 (VFX 50950,50951; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11320,
+      "name": "SpEffect 11320 (VFX 50901; duration -1; category 155)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11322,
+      "name": "SpEffect 11322 (VFX 50900; duration -1; category 1002)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11406,
+      "name": "SpEffect 11406 (VFX 54250; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11420,
+      "name": "SpEffect 11420 (VFX 50160; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11570,
+      "name": "SpEffect 11570 (VFX 51100; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11571,
+      "name": "SpEffect 11571 (VFX 51101; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11575,
+      "name": "SpEffect 11575 (VFX 51110; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11580,
+      "name": "SpEffect 11580 (VFX 51120; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11581,
+      "name": "SpEffect 11581 (VFX 51121; duration 0.1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11615,
+      "name": "SpEffect 11615 (VFX 52231; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11616,
+      "name": "SpEffect 11616 (VFX 52232,52233; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11700,
+      "name": "SpEffect 11700 (VFX 51050; duration 0.1; category 20)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11768,
+      "name": "SpEffect 11768 (VFX 51151; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11773,
+      "name": "SpEffect 11773 (VFX 51152; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11774,
+      "name": "SpEffect 11774 (VFX 51153; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11830,
+      "name": "SpEffect 11830 (VFX 51710; duration -1; category 100; state 267)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11847,
+      "name": "SpEffect 11847 (VFX 51720,51721; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11860,
+      "name": "SpEffect 11860 (VFX 51300,51301,51302,51303; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 11900,
+      "name": "SpEffect 11900 (VFX 51451; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12000,
+      "name": "Large Fingercreeper - Bullet",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12047,
+      "name": "SpEffect 12047 (VFX 54210; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12050,
+      "name": "SpEffect 12050 (VFX 54020; duration -1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12059,
+      "name": "SpEffect 12059 (VFX 54021; duration -1; category 1002)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12150,
+      "name": "SpEffect 12150 (VFX 51350; duration -1; category 155)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12151,
+      "name": "SpEffect 12151 (VFX 51351; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12158,
+      "name": "SpEffect 12158 (VFX 51353; duration 0; category 155)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12175,
+      "name": "SpEffect 12175 (VFX 51352; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12176,
+      "name": "SpEffect 12176 (VFX 51354; duration -1; category 155)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12185,
+      "name": "SpEffect 12185 (VFX 51355; duration -1; category 0; state 421)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12186,
+      "name": "SpEffect 12186 (VFX 51356; duration -1; category 0; state 421)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12290,
+      "name": "Godfrey/Hoarah Loux Phase 2 - VFX",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12295,
+      "name": "SpEffect 12295 (VFX 51901; duration -1; category 0; state 432)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12511,
+      "name": "SpEffect 12511 (VFX 51600; duration 0.1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12512,
+      "name": "SpEffect 12512 (VFX 51601; duration 0.1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12513,
+      "name": "SpEffect 12513 (VFX 51602; duration 0.1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12590,
+      "name": "SpEffect 12590 (VFX 52119; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12591,
+      "name": "SpEffect 12591 (VFX 52120; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12592,
+      "name": "SpEffect 12592 (VFX 52121; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12593,
+      "name": "SpEffect 12593 (VFX 52122; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12594,
+      "name": "SpEffect 12594 (VFX 52123; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12595,
+      "name": "SpEffect 12595 (VFX 52124; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12596,
+      "name": "SpEffect 12596 (VFX 52125; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12597,
+      "name": "SpEffect 12597 (VFX 52126; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12598,
+      "name": "SpEffect 12598 (VFX 52127; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12606,
+      "name": "SpEffect 12606 (VFX 52105; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12607,
+      "name": "SpEffect 12607 (VFX 52106; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12608,
+      "name": "SpEffect 12608 (VFX 52107; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12611,
+      "name": "SpEffect 12611 (VFX 52100; duration 0.1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12612,
+      "name": "SpEffect 12612 (VFX 52101; duration 0.1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12613,
+      "name": "SpEffect 12613 (VFX 52102; duration 5; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12620,
+      "name": "SpEffect 12620 (VFX 52104; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12636,
+      "name": "SpEffect 12636 (VFX 52116; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12637,
+      "name": "SpEffect 12637 (VFX 52117; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12638,
+      "name": "SpEffect 12638 (VFX 52118; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12647,
+      "name": "SpEffect 12647 (VFX 52113; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12648,
+      "name": "SpEffect 12648 (VFX 52114; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12649,
+      "name": "SpEffect 12649 (VFX 52115; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12660,
+      "name": "SpEffect 12660 (VFX 52300,52301; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12670,
+      "name": "SpEffect 12670 (VFX 52302; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12672,
+      "name": "SpEffect 12672 (VFX 52303,52304; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12710,
+      "name": "SpEffect 12710 (VFX 52950,52951,52952; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12720,
+      "name": "SpEffect 12720 (VFX 52960,52961,52962; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12730,
+      "name": "SpEffect 12730 (VFX 52970; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12731,
+      "name": "SpEffect 12731 (VFX 52971; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12732,
+      "name": "SpEffect 12732 (VFX 52972; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12733,
+      "name": "SpEffect 12733 (VFX 52973; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12734,
+      "name": "SpEffect 12734 (VFX 52974; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12735,
+      "name": "SpEffect 12735 (VFX 52975; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12736,
+      "name": "SpEffect 12736 (VFX 52976; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12737,
+      "name": "SpEffect 12737 (VFX 52977; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12738,
+      "name": "SpEffect 12738 (VFX 52978; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12740,
+      "name": "SpEffect 12740 (VFX 52980; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12741,
+      "name": "SpEffect 12741 (VFX 52981; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12742,
+      "name": "SpEffect 12742 (VFX 52982; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12743,
+      "name": "SpEffect 12743 (VFX 52983; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12744,
+      "name": "SpEffect 12744 (VFX 52984; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12745,
+      "name": "SpEffect 12745 (VFX 52985; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12746,
+      "name": "SpEffect 12746 (VFX 52986; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12747,
+      "name": "SpEffect 12747 (VFX 52987; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 12748,
+      "name": "SpEffect 12748 (VFX 52988; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13056,
+      "name": "SpEffect 13056 (VFX 51217; duration 0; category 0; state 8)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13061,
+      "name": "SpEffect 13061 (VFX 51200; duration -1; category 155)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13105,
+      "name": "SpEffect 13105 (VFX 51402; duration 0; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13106,
+      "name": "SpEffect 13106 (VFX 51403; duration 0; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13107,
+      "name": "SpEffect 13107 (VFX 51400; duration 0; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13108,
+      "name": "SpEffect 13108 (VFX 51401; duration 0; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13152,
+      "name": "SpEffect 13152 (VFX 51501; duration -1; category 100; state 337)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13154,
+      "name": "Ancestral Follower - Bullet",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13177,
+      "name": "SpEffect 13177 (VFX 51508; duration -1; category 0; state 432)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13179,
+      "name": "SpEffect 13179 (VFX 51509; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13190,
+      "name": "SpEffect 13190 (VFX 51504; duration -1; category 0; state 42)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13204,
+      "name": "SpEffect 13204 (VFX 53800,53802; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13205,
+      "name": "SpEffect 13205 (VFX 53801,53803; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13211,
+      "name": "SpEffect 13211 (VFX 53804; duration -1; category 0; state 432)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13214,
+      "name": "SpEffect 13214 (VFX 53805; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13284,
+      "name": "SpEffect 13284 (VFX 51210; duration -1; category 0; state 307)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13289,
+      "name": "SpEffect 13289 (VFX 51211; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13330,
+      "name": "SpEffect 13330 (VFX 52050; duration 0; category 1002)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13331,
+      "name": "SpEffect 13331 (VFX 52052; duration 0; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13332,
+      "name": "SpEffect 13332 (VFX 52050; duration 5; category 1002)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13334,
+      "name": "SpEffect 13334 (VFX 52053,52054; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13415,
+      "name": "SpEffect 13415 (VFX 51550; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13416,
+      "name": "SpEffect 13416 (VFX 51551; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13417,
+      "name": "SpEffect 13417 (VFX 51552; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13418,
+      "name": "SpEffect 13418 (VFX 51553; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13500,
+      "name": "SpEffect 13500 (VFX 51650; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13503,
+      "name": "SpEffect 13503 (VFX 51650; duration 0; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13617,
+      "name": "Ancestor Spirit - Drain Attack",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13630,
+      "name": "SpEffect 13630 (VFX 51850; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13648,
+      "name": "SpEffect 13648 (VFX 51853; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13658,
+      "name": "SpEffect 13658 (VFX 51950; duration -1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13663,
+      "name": "SpEffect 13663 (VFX 51952; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13665,
+      "name": "SpEffect 13665 (VFX 51951; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13668,
+      "name": "SpEffect 13668 (VFX 50800; duration 25; category 20; state 154)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13669,
+      "name": "SpEffect 13669 (VFX 51954; duration 0; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13685,
+      "name": "SpEffect 13685 (VFX 50800; duration 25; category 20; state 154)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13689,
+      "name": "SpEffect 13689 (VFX 51953; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13695,
+      "name": "SpEffect 13695 (VFX 51953; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13751,
+      "name": "SpEffect 13751 (VFX 51750; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13802,
+      "name": "SpEffect 13802 (VFX 51770; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13806,
+      "name": "SpEffect 13806 (VFX 51772; duration 2; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13822,
+      "name": "SpEffect 13822 (VFX 51771; duration -1; category 0; state 432)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13851,
+      "name": "SpEffect 13851 (VFX 51801; duration 40; category 100; state 72)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13852,
+      "name": "SpEffect 13852 (VFX 51800; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13904,
+      "name": "SpEffect 13904 (VFX 52206; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13905,
+      "name": "SpEffect 13905 (VFX 52204,52205; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13930,
+      "name": "SpEffect 13930 (VFX 52200,52201; duration -1; category 163; state 308)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13931,
+      "name": "SpEffect 13931 (VFX 52201; duration -1; category 163; state 309)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13933,
+      "name": "SpEffect 13933 (VFX 52202,52203; duration -1; category 164; state 310)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13934,
+      "name": "SpEffect 13934 (VFX 52203; duration -1; category 164; state 311)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 13942,
+      "name": "SpEffect 13942 (VFX 52207; duration 5; category 200; state 8)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14053,
+      "name": "SpEffect 14053 (VFX 52393; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14054,
+      "name": "SpEffect 14054 (VFX 52392; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14055,
+      "name": "SpEffect 14055 (VFX 58000; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14056,
+      "name": "SpEffect 14056 (VFX 52391; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14086,
+      "name": "SpEffect 14086 (VFX 52421; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14087,
+      "name": "SpEffect 14087 (VFX 52420; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14100,
+      "name": "SpEffect 14100 (VFX 52000; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14203,
+      "name": "SpEffect 14203 (VFX 52153; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14204,
+      "name": "SpEffect 14204 (VFX 52154; duration 0.5; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14207,
+      "name": "SpEffect 14207 (VFX 52155; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14391,
+      "name": "SpEffect 14391 (VFX 52352,52353; duration -1; category 100; state 421)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14396,
+      "name": "SpEffect 14396 (VFX 52350; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14406,
+      "name": "Depraved Perfumer - Bullet",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14435,
+      "name": "Depraved Perfumer",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14472,
+      "name": "SpEffect 14472 (VFX 54186; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14481,
+      "name": "SpEffect 14481 (VFX 54170; duration 60; category 1000; state 413)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14482,
+      "name": "SpEffect 14482 (VFX 54171; duration 60; category 1000; state 413)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14483,
+      "name": "SpEffect 14483 (VFX 54172; duration 60; category 1000; state 414)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14484,
+      "name": "SpEffect 14484 (VFX 54173; duration 60; category 1000; state 414)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14485,
+      "name": "SpEffect 14485 (VFX 54174; duration 0.1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14486,
+      "name": "SpEffect 14486 (VFX 54175; duration -1; category 1000; state 415)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14487,
+      "name": "SpEffect 14487 (VFX 54176; duration -1; category 1000; state 415)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14492,
+      "name": "SpEffect 14492 (VFX 54181; duration -1; category 1000; state 304)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14493,
+      "name": "SpEffect 14493 (VFX 54182; duration -1; category 1000; state 304)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14495,
+      "name": "SpEffect 14495 (VFX 54183; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14497,
+      "name": "SpEffect 14497 (VFX 54191; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14501,
+      "name": "SpEffect 14501 (VFX 52252; duration 1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14503,
+      "name": "SpEffect 14503 (VFX 52251; duration 0; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14550,
+      "name": "SpEffect 14550 (VFX 52400; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14559,
+      "name": "SpEffect 14559 (VFX 52402,52403; duration -1; category 0; state 413)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14570,
+      "name": "SpEffect 14570 (VFX 52357; duration -1; category 0; state 143)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14650,
+      "name": "SpEffect 14650 (VFX 51011,51010; duration -1; category 100; state 338)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14652,
+      "name": "SpEffect 14652 (VFX 54100; duration -1; category 0; state 412)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14653,
+      "name": "SpEffect 14653 (VFX 54101; duration -1; category 0; state 412)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14654,
+      "name": "SpEffect 14654 (VFX 54102; duration -1; category 1002; state 412)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14665,
+      "name": "SpEffect 14665 (VFX 54103; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14700,
+      "name": "SpEffect 14700 (VFX 52550; duration -1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14715,
+      "name": "SpEffect 14715 (VFX 52551; duration -1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14724,
+      "name": "SpEffect 14724 (VFX 52553; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14760,
+      "name": "SpEffect 14760 (VFX 52700; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14762,
+      "name": "SpEffect 14762 (VFX 52701; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14768,
+      "name": "SpEffect 14768 (VFX 52702,52703; duration 1.2; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14807,
+      "name": "SpEffect 14807 (VFX 54270; duration -1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14808,
+      "name": "SpEffect 14808 (VFX 54271; duration -1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14809,
+      "name": "SpEffect 14809 (VFX 54272; duration -1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14888,
+      "name": "SpEffect 14888 (VFX 52850,52851,52852,52853; duration -1; category 1002)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14899,
+      "name": "SpEffect 14899 (VFX 52882; duration 2.5; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14903,
+      "name": "SpEffect 14903 (VFX 52750; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 14955,
+      "name": "SpEffect 14955 (VFX 52651; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 15022,
+      "name": "SpEffect 15022 (VFX 51204; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 15031,
+      "name": "SpEffect 15031 (VFX 51221; duration 0.5; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 15032,
+      "name": "SpEffect 15032 (VFX 51220; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 15033,
+      "name": "SpEffect 15033 (VFX 51223; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 15042,
+      "name": "SpEffect 15042 (VFX 51230,51223; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 15253,
+      "name": "SpEffect 15253 (VFX 52800; duration -1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 15314,
+      "name": "SpEffect 15314 (VFX 54061,54062; duration -1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 15328,
+      "name": "SpEffect 15328 (VFX 54060; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 15329,
+      "name": "SpEffect 15329 (VFX 51609; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 15354,
+      "name": "SpEffect 15354 (VFX 53600; duration -1; category 156; state 306)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 15451,
+      "name": "SpEffect 15451 (VFX 50200,50201; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 15461,
+      "name": "SpEffect 15461 (VFX 50203; duration 3; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 15501,
+      "name": "SpEffect 15501 (VFX 50250; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 15516,
+      "name": "SpEffect 15516 (VFX 50252; duration 3; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 15552,
+      "name": "SpEffect 15552 (VFX 53300; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 15554,
+      "name": "SpEffect 15554 (VFX 53301; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 15653,
+      "name": "SpEffect 15653 (VFX 53151; duration 0.1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16140,
+      "name": "SpEffect 16140 (VFX 53400,53401,53402,53403,53404,53405; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16156,
+      "name": "SpEffect 16156 (VFX 54070; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16208,
+      "name": "SpEffect 16208 (VFX 54340; duration -1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16265,
+      "name": "SpEffect 16265 (VFX 53850,53851; duration 60; category 0; state 372)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16313,
+      "name": "SpEffect 16313 (VFX 53200; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16315,
+      "name": "SpEffect 16315 (VFX 53201; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16316,
+      "name": "Spirit Summon - Fade In",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16482,
+      "name": "Fallingstar Beast - Ground AoE Alert",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16496,
+      "name": "SpEffect 16496 (VFX 53500,53503; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16531,
+      "name": "SpEffect 16531 (VFX 53552; duration -1; category 0; state 413)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16550,
+      "name": "SpEffect 16550 (VFX 53100; duration -1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16552,
+      "name": "SpEffect 16552 (VFX 53101; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16555,
+      "name": "SpEffect 16555 (VFX 53102; duration -1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16561,
+      "name": "SpEffect 16561 (VFX 53700; duration -1; category 1000; state 304)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16562,
+      "name": "SpEffect 16562 (VFX 53701; duration -1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16563,
+      "name": "SpEffect 16563 (VFX 53702; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16566,
+      "name": "SpEffect 16566 (VFX 53703; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16570,
+      "name": "SpEffect 16570 (VFX 53704; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16577,
+      "name": "SpEffect 16577 (VFX 53700,53701; duration -1; category 1000; state 304)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16610,
+      "name": "SpEffect 16610 (VFX 52530; duration 1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16611,
+      "name": "SpEffect 16611 (VFX 52531; duration 1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16690,
+      "name": "SpEffect 16690 (VFX 50122; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16691,
+      "name": "SpEffect 16691 (VFX 50123; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16695,
+      "name": "SpEffect 16695 (VFX 50124; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16750,
+      "name": "SpEffect 16750 (VFX 53900; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16756,
+      "name": "SpEffect 16756 (VFX 53901; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16800,
+      "name": "SpEffect 16800 (VFX 53920; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16804,
+      "name": "SpEffect 16804 (VFX 53921; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16805,
+      "name": "SpEffect 16805 (VFX 53922; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16870,
+      "name": "SpEffect 16870 (VFX 53670; duration 3; category 155)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16871,
+      "name": "SpEffect 16871 (VFX 53671; duration 3; category 155)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16875,
+      "name": "SpEffect 16875 (VFX 53680; duration 3; category 155)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16876,
+      "name": "SpEffect 16876 (VFX 53681; duration 3; category 155)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16880,
+      "name": "SpEffect 16880 (VFX 53692; duration 0; category 164)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16881,
+      "name": "SpEffect 16881 (VFX 53692; duration 0; category 164)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16885,
+      "name": "SpEffect 16885 (VFX 53695; duration -1; category 162)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 16951,
+      "name": "SpEffect 16951 (VFX 53450,53451; duration -1; category 100; state 304)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 17010,
+      "name": "SpEffect 17010 (VFX 53510; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 17011,
+      "name": "SpEffect 17011 (VFX 53511; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 17012,
+      "name": "SpEffect 17012 (VFX 53512; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 17015,
+      "name": "SpEffect 17015 (VFX 53520; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 17016,
+      "name": "SpEffect 17016 (VFX 53521; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 17017,
+      "name": "SpEffect 17017 (VFX 53522; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 17105,
+      "name": "SpEffect 17105 (VFX 53750; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 17250,
+      "name": "SpEffect 17250 (VFX 54041; duration 4.5; category 20; state 32)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 17253,
+      "name": "SpEffect 17253 (VFX 54040; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 17300,
+      "name": "SpEffect 17300 (VFX 54010; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 17550,
+      "name": "SpEffect 17550 (VFX 51202; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 17553,
+      "name": "SpEffect 17553 (VFX 51204; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 17652,
+      "name": "SpEffect 17652 (VFX 54151; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 17653,
+      "name": "SpEffect 17653 (VFX 54151,54152; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18001,
+      "name": "SpEffect 18001 (VFX 53400,53401,53402,53403,53404,53405; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18006,
+      "name": "SpEffect 18006 (VFX 53410; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18023,
+      "name": "SpEffect 18023 (VFX 53400,53401,53402,53403,53404,53405; duration -1; category 163)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18028,
+      "name": "SpEffect 18028 (VFX 53420; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18560,
+      "name": "SpEffect 18560 (VFX 53230; duration 25; category 0; state 303)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18577,
+      "name": "SpEffect 18577 (VFX 53230,53231; duration -1; category 155; state 310)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18648,
+      "name": "SpEffect 18648 (VFX 53252; duration 0.5; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18672,
+      "name": "SpEffect 18672 (VFX 57100; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18673,
+      "name": "SpEffect 18673 (VFX 53221; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18674,
+      "name": "SpEffect 18674 (VFX 53220; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18675,
+      "name": "SpEffect 18675 (VFX 53219; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18676,
+      "name": "SpEffect 18676 (VFX 53218; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18677,
+      "name": "SpEffect 18677 (VFX 53217; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18679,
+      "name": "SpEffect 18679 (VFX 53216; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18683,
+      "name": "SpEffect 18683 (VFX 53215; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18686,
+      "name": "SpEffect 18686 (VFX 53214; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18689,
+      "name": "SpEffect 18689 (VFX 51204; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18696,
+      "name": "SpEffect 18696 (VFX 53213; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18697,
+      "name": "SpEffect 18697 (VFX 53212; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18698,
+      "name": "SpEffect 18698 (VFX 53210; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18699,
+      "name": "Unknown FFX",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18745,
+      "name": "SpEffect 18745 (VFX 54220; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18746,
+      "name": "SpEffect 18746 (VFX 54221; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18880,
+      "name": "SpEffect 18880 (VFX 54030; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 18881,
+      "name": "SpEffect 18881 (VFX 54031; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 19051,
+      "name": "SpEffect 19051 (VFX 54260; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 19057,
+      "name": "SpEffect 19057 (VFX 54262; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 19062,
+      "name": "SpEffect 19062 (VFX 54280; duration 3; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 19065,
+      "name": "SpEffect 19065 (VFX 54280; duration 0; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 19066,
+      "name": "SpEffect 19066 (VFX 54280; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 19100,
+      "name": "SpEffect 19100 (VFX 54290; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 19310,
+      "name": "SpEffect 19310 (VFX 54330; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 19681,
+      "name": "SpEffect 19681 (VFX 20050560; duration -1; category 201)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 19683,
+      "name": "Miquella's Great Rune",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 19701,
+      "name": "SpEffect 19701 (VFX 20052850; duration -1; category 155)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 19702,
+      "name": "SpEffect 19702 (VFX 20052851; duration -1; category 155)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 19703,
+      "name": "SpEffect 19703 (VFX 20052852; duration -1; category 155)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 19704,
+      "name": "SpEffect 19704 (VFX 20052853; duration -1; category 155)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 19705,
+      "name": "SpEffect 19705 (VFX 20052854; duration -1; category 155)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 19706,
+      "name": "SpEffect 19706 (VFX 20052855; duration -1; category 155)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 99004,
+      "name": "SpEffect 99004 (VFX 8; duration 30; category 10001; state 8)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 99200,
+      "name": "SpEffect 99200 (VFX 34; duration -1; category 0; state 34)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 99201,
+      "name": "SpEffect 99201 (VFX 91; duration -1; category 0; state 91)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 99310,
+      "name": "SpEffect 99310 (VFX 35; duration -1; category 0; state 35)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 99311,
+      "name": "SpEffect 99311 (VFX 36; duration -1; category 0; state 36)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 99312,
+      "name": "SpEffect 99312 (VFX 37; duration -1; category 0; state 37)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 99313,
+      "name": "SpEffect 99313 (VFX 78; duration -1; category 0; state 78)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 99314,
+      "name": "SpEffect 99314 (VFX 79; duration -1; category 0; state 79)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 102000,
+      "name": "Deflecting Hardtear",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 102150,
+      "name": "SpEffect 102150 (VFX 20050151; duration -1; category 165; state 303)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 102151,
+      "name": "SpEffect 102151 (VFX 20050152; duration -1; category 165; state 303)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 110100,
+      "name": "SpEffect 110100 (VFX 5800; duration -1; category 0; state 264)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 110101,
+      "name": "SpEffect 110101 (VFX 5801; duration -1; category 0; state 264)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 110102,
+      "name": "SpEffect 110102 (VFX 5802; duration -1; category 0; state 264)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 110103,
+      "name": "SpEffect 110103 (VFX 5803; duration -1; category 0; state 264)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 110104,
+      "name": "SpEffect 110104 (VFX 5804; duration -1; category 0; state 264)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 110105,
+      "name": "SpEffect 110105 (VFX 5805; duration -1; category 0; state 264)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 110106,
+      "name": "SpEffect 110106 (VFX 5806; duration -1; category 0; state 264)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 110107,
+      "name": "SpEffect 110107 (VFX 5807; duration -1; category 0; state 264)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 130100,
+      "name": "SpEffect 130100 (VFX 61000; duration 30; category 164; state 281)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 130110,
+      "name": "SpEffect 130110 (VFX 61010; duration 30; category 164; state 281)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 130120,
+      "name": "SpEffect 130120 (VFX 61020; duration 30; category 164; state 281)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 130130,
+      "name": "SpEffect 130130 (VFX 61030; duration 30; category 164; state 281)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 130140,
+      "name": "SpEffect 130140 (VFX 61040; duration 30; category 164; state 281)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 295000,
+      "name": "Color",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 295010,
+      "name": "SpEffect 295010 (VFX 5022; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 295190,
+      "name": "SpEffect 295190 (VFX 57050; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 295200,
+      "name": "Color (Puppet)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 295201,
+      "name": "SpEffect 295201 (VFX 57101,57130; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 295202,
+      "name": "SpEffect 295202 (VFX 57102,57131; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 295203,
+      "name": "SpEffect 295203 (VFX 57103,57132; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 295204,
+      "name": "SpEffect 295204 (VFX 57104,57133; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 295902,
+      "name": "Clayman Corpse Hider 3",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 500351,
+      "name": "Sacred Order Pot",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 500510,
+      "name": "Roped Holy Water Pot",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 500610,
+      "name": "Albinauric Pot",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 502080,
+      "name": "SpEffect 502080 (VFX 5376; duration 0.3; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 503040,
+      "name": "Mimic's Veil",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 503350,
+      "name": "Bewitching Branch",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 503501,
+      "name": "Uplifting Aromatic",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 503529,
+      "name": "Ironjar Aromatic",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 503559,
+      "name": "SpEffect 503559 (VFX 5281; duration 1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 511019,
+      "name": "Twiggy Cracked Tear",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 511027,
+      "name": "Purifying Crystal Tear",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1414000,
+      "name": "Starlight",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1448000,
+      "name": "Lucidity",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1467000,
+      "name": "Unseen Form",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1467001,
+      "name": "Unseen Form",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1467002,
+      "name": "Unseen Form",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1467005,
+      "name": "Unseen Form",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1467006,
+      "name": "Unseen Form",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1604000,
+      "name": "Flame Cleanse Me",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1644000,
+      "name": "Cure Poison",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1644100,
+      "name": "Lord's Aid",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1644110,
+      "name": "Lord's Aid",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1653001,
+      "name": "Darkness (Chained)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1673000,
+      "name": "Law of Regression",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1673020,
+      "name": "Law of Regression",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1678000,
+      "name": "Order Healing",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 1686000,
+      "name": "Bestial Constitution",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 10010000,
+      "name": "SpEffect 10010000 (VFX 10050000; duration -1; category 156; state 413)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20001020,
+      "name": "SpEffect 20001020 (VFX 20008590; duration 15; category 20; state 8)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20001910,
+      "name": "SpEffect 20001910 (VFX 20006101; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20001911,
+      "name": "SpEffect 20001911 (VFX 20006105; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20001912,
+      "name": "SpEffect 20001912 (VFX 20006106; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20001913,
+      "name": "SpEffect 20001913 (VFX 20006103; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20001914,
+      "name": "SpEffect 20001914 (VFX 20006122; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20001915,
+      "name": "SpEffect 20001915 (VFX 20006124; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20001916,
+      "name": "SpEffect 20001916 (VFX 20006125; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20001917,
+      "name": "SpEffect 20001917 (VFX 20006126; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20001918,
+      "name": "SpEffect 20001918 (VFX 20006127; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20001919,
+      "name": "SpEffect 20001919 (VFX 20006128; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20001920,
+      "name": "SpEffect 20001920 (VFX 20006129; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20001921,
+      "name": "SpEffect 20001921 (VFX 20006130; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20001922,
+      "name": "SpEffect 20001922 (VFX 20006131,20006132; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20001923,
+      "name": "SpEffect 20001923 (VFX 20006133; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20001924,
+      "name": "SpEffect 20001924 (VFX 20006134; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20001925,
+      "name": "SpEffect 20001925 (VFX 20006135; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20001926,
+      "name": "SpEffect 20001926 (VFX 20006136; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20001927,
+      "name": "SpEffect 20001927 (VFX 20006137; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20004210,
+      "name": "SpEffect 20004210 (VFX 20200010; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20004211,
+      "name": "SpEffect 20004211 (VFX 20200011; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20004220,
+      "name": "SpEffect 20004220 (VFX 20200020; duration 60; category 20)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20004221,
+      "name": "SpEffect 20004221 (VFX 20200021; duration 60; category 20)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20004222,
+      "name": "SpEffect 20004222 (VFX 20200022; duration 60; category 20)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20004230,
+      "name": "SpEffect 20004230 (VFX 20200030; duration 15; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20004380,
+      "name": "SpEffect 20004380 (VFX 20104380; duration -1; category 0; state 8)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20010198,
+      "name": "SpEffect 20010198 (VFX 20050900; duration -1; category 0; state 413)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20010268,
+      "name": "SpEffect 20010268 (VFX 20050400; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20010331,
+      "name": "SpEffect 20010331 (VFX 20052750; duration -1; category 155; state 416)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20010332,
+      "name": "SpEffect 20010332 (VFX 20052751; duration -1; category 157; state 423)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20010448,
+      "name": "SpEffect 20010448 (VFX 20050050; duration 180; category 156)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20010450,
+      "name": "SpEffect 20010450 (VFX 20050000; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20010451,
+      "name": "SpEffect 20010451 (VFX 20050001; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20010452,
+      "name": "SpEffect 20010452 (VFX 20050002; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20010523,
+      "name": "SpEffect 20010523 (VFX 20050300; duration -1; category 0; state 412)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20010704,
+      "name": "SpEffect 20010704 (VFX 57050; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20010719,
+      "name": "SpEffect 20010719 (VFX 20050101; duration -1; category 100; state 267)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20010773,
+      "name": "SpEffect 20010773 (VFX 20050252; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20010779,
+      "name": "SpEffect 20010779 (VFX 20050254; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20010826,
+      "name": "SpEffect 20010826 (VFX 20050700; duration -1; category 155; state 413)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20010854,
+      "name": "SpEffect 20010854 (VFX 20050150; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20010944,
+      "name": "SpEffect 20010944 (VFX 20050350; duration 60; category 156)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011090,
+      "name": "SpEffect 20011090 (VFX 20050650; duration 5.5; category 20; state 32)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011151,
+      "name": "SpEffect 20011151 (VFX 20052051; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011152,
+      "name": "SpEffect 20011152 (VFX 20052050; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011213,
+      "name": "SpEffect 20011213 (VFX 20050215; duration -1; category 162; state 415)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011220,
+      "name": "SpEffect 20011220 (VFX 20050210; duration 30; category 164)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011242,
+      "name": "SpEffect 20011242 (VFX 20050213; duration -1; category 162; state 412)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011243,
+      "name": "SpEffect 20011243 (VFX 20050214; duration -1; category 162; state 413)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011246,
+      "name": "SpEffect 20011246 (VFX 20050211; duration 1; category 164)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011301,
+      "name": "SpEffect 20011301 (VFX 20050222; duration 8; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011303,
+      "name": "SpEffect 20011303 (VFX 20050225; duration 15; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011320,
+      "name": "SpEffect 20011320 (VFX 20050220; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011333,
+      "name": "SpEffect 20011333 (VFX 20050229; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011454,
+      "name": "SpEffect 20011454 (VFX 20050450,20050451; duration 1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011455,
+      "name": "SpEffect 20011455 (VFX 20050452; duration 2; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011456,
+      "name": "SpEffect 20011456 (VFX 20050453; duration 1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011457,
+      "name": "SpEffect 20011457 (VFX 20050453,20050454; duration 1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011458,
+      "name": "SpEffect 20011458 (VFX 20050455; duration 1; category 155)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011459,
+      "name": "SpEffect 20011459 (VFX 20050456,20050455; duration 1; category 155; state 267)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011460,
+      "name": "SpEffect 20011460 (VFX 20050457; duration 1; category 155; state 267)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011465,
+      "name": "SpEffect 20011465 (VFX 20050455; duration 1; category 155)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011471,
+      "name": "SpEffect 20011471 (VFX 20050459; duration -1; category 1001; state 121)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011472,
+      "name": "SpEffect 20011472 (VFX 20050460; duration 1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011476,
+      "name": "SpEffect 20011476 (VFX 20050461; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011499,
+      "name": "SpEffect 20011499 (VFX 20050456; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011503,
+      "name": "SpEffect 20011503 (VFX 20052550; duration 1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011595,
+      "name": "SpEffect 20011595 (VFX 20050550,20050551,20050552,20050553,20050554,20050555,20050556,20050557; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011601,
+      "name": "SpEffect 20011601 (VFX 20052700; duration -1; category 1000)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011602,
+      "name": "SpEffect 20011602 (VFX 20052701; duration -1; category 0; state 413)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011603,
+      "name": "SpEffect 20011603 (VFX 20052702; duration -1; category 0; state 413)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011736,
+      "name": "SpEffect 20011736 (VFX 20051000; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011830,
+      "name": "SpEffect 20011830 (VFX 20050600,20050603; duration -1; category 1000; state 420)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011831,
+      "name": "SpEffect 20011831 (VFX 20050601,20050603; duration -1; category 1000; state 420)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011832,
+      "name": "SpEffect 20011832 (VFX 20050602,20050604; duration -1; category 1000; state 420)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011850,
+      "name": "SpEffect 20011850 (VFX 20050500,20050501,20050502; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011851,
+      "name": "SpEffect 20011851 (VFX 20050503; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011855,
+      "name": "SpEffect 20011855 (VFX 20050505; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011865,
+      "name": "SpEffect 20011865 (VFX 20050507; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011866,
+      "name": "SpEffect 20011866 (VFX 20050507; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011884,
+      "name": "SpEffect 20011884 (VFX 20200040; duration -1; category 155)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011885,
+      "name": "SpEffect 20011885 (VFX 20200041; duration -1; category 155)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20011886,
+      "name": "SpEffect 20011886 (VFX 20200042; duration -1; category 155)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20012010,
+      "name": "SpEffect 20012010 (VFX 20052010; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20012011,
+      "name": "SpEffect 20012011 (VFX 20052011; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20012015,
+      "name": "SpEffect 20012015 (VFX 20052015; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20012016,
+      "name": "SpEffect 20012016 (VFX 20052016; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20012550,
+      "name": "SpEffect 20012550 (VFX 20052100; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20012551,
+      "name": "SpEffect 20012551 (VFX 20052101; duration -1; category 100)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20012552,
+      "name": "SpEffect 20012552 (VFX 20052102; duration 1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20012751,
+      "name": "SpEffect 20012751 (VFX 20052500; duration 0; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20012853,
+      "name": "SpEffect 20012853 (VFX 20052450; duration -1; category 0; state 421)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20012950,
+      "name": "SpEffect 20012950 (VFX 20052300; duration -1; category 130)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20012951,
+      "name": "SpEffect 20012951 (VFX 20052301; duration -1; category 131)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20013000,
+      "name": "SpEffect 20013000 (VFX 20052351; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20013001,
+      "name": "SpEffect 20013001 (VFX 20052350; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20013050,
+      "name": "SpEffect 20013050 (VFX 20052400; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20013150,
+      "name": "SpEffect 20013150 (VFX 20052600; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20013300,
+      "name": "SpEffect 20013300 (VFX 20052800; duration -1; category 0)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20013561,
+      "name": "SpEffect 20013561 (VFX 20053000; duration -1; category 0; state 413)",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20018100,
+      "name": "Player right eye red",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20018101,
+      "name": "Player left eye red",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20500800,
+      "name": "Spirit Raisin",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 20511060,
+      "name": "Glovewort Crystal Tear",
+      "enabled": false
+    },
+    {
+      "kind": "sp_effect",
+      "id": 21430000,
+      "name": "Miriam's Vanishing",
+      "enabled": false
+    }
   ]
 }

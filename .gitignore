@@ -9,6 +9,13 @@ __pycache__/
 
 /save-files
 
+# Runtime/user-provided SpEffect metadata belongs next to eldenring.exe:
+# Game/effect-master-catalog.json and Game/effect-catalogs/*.json.
+/effect-master-catalog.json
+/effect-catalogs/
+/data/effect-master-catalog.json
+/data/effect-catalogs/
+
 # Deobfuscated (Arxan-decrypted) ER image for static RE -- copyrighted game binary, NEVER commit
 eldenring-deobf.bin
 *.deobf.bin

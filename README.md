@@ -262,16 +262,56 @@ artifacts, not the run-stopping oracle.
 
 ## SpEffect trigger system
 
-The original feature remains: selected named SpEffect calls are embedded from
-`data/effects.json` and can be applied by runtime trigger logic.
+The original feature remains: named SpEffect calls are embedded from
+`data/effects.json` and can be applied by runtime trigger logic. They start
+inactive by default.
 
-Seeded calls:
+In-game controls:
 
-| ID | Name |
-| --- | --- |
-| `4330` | Player all black |
-| `20018100` | Player right eye red |
-| `20018101` | Player left eye red |
+- Left/Right: switch the active effect catalog when the debug HUD is visible.
+- Up/Down: step through the selected catalog's validated IDs and apply the selected effect when the debug HUD is visible.
+- Alt+': toggle the currently selected effect off/on.
+- Alt+Numpad0: toggle the effect selector debug HUD. The HUD is hidden by default; while hidden, arrow keys are ignored by the selector and by any arrow-key entries in `.effect-hotkeys.json`. While the HUD is visible, arrow keys are consumed by the selector and suppressed before the game receives them.
+
+Runtime SpEffect application is gated to the loaded character state: the local player must exist before the DLL calls `apply_speffect`, but standing idle is allowed. Selector/file changes before the player exists may arm the selected effect; once the player is live, direct trigger hotkeys and selected effects apply immediately.
+
+Persisted selector files next to `eldenring.exe`:
+
+- `.effect-catalog-setting.txt`: selected catalog file name.
+- `.effect-setting.txt`: selected SpEffect ID. Editing this file while the game is running applies the matching in-catalog effect ID live, moves the catalog cursor to the first catalog containing that ID, and persists effects as ON. If no user catalog contains the ID, the DLL records the ID but has no catalog entry to apply.
+- `.effect-enabled-setting.txt`: persistent selector ON/OFF state (`on` or `off`). If it is `on`, the selected persisted effect is re-armed on DLL startup and applied once the local player is live.
+- `.effect-hotkeys.json`: user-editable hotkey triggers. If missing, the DLL creates this default file:
+
+<!-- md-test: skip illustrative JSON config example -->
+```json
+{
+  "hotkeys": [
+    {
+      "name": "deathblight self test",
+      "key": "numpad_multiply",
+      "effect_id": 8355,
+      "count": 1
+    }
+  ]
+}
+```
+
+Supported key names include `numpad_multiply`, `numpad_add`, `numpad_subtract`, `numpad_divide`, `numpad_decimal`, `numpad0`..`numpad9`, arrow keys, and optional `alt+` prefixes. `count` is clamped to `1..=200`. Trigger hotkeys apply the configured SpEffect directly to the local player `count` times without removing other effects, and the file is reloaded while the game is running.
+
+User catalogs:
+
+The DLL starts with zero effect selector catalogs. User-provided game-directory catalogs can be placed in `effect-catalogs/*.json` next to `eldenring.exe`; each file is a plain JSON array of SpEffect IDs, with the file name acting as the catalog identity, for example `my-effects.json`. The DLL watches this folder while the game is running and reloads catalogs when JSON files are created/changed/removed.
+
+Master catalog:
+
+`effect-master-catalog.json` can be placed next to `eldenring.exe` when rich SpEffect metadata is available. It is keyed by `SpEffectParam` ID and records names, VFX IDs, derived tags, and meaningful non-default fields such as AI perception, HP/FP/stamina, movement/timing, damage, defense, and lifetime fields. When this file is present, selector/user catalog IDs are validated against it and the HUD uses its names. When it is absent, user catalog IDs still load with generic `SpEffect <id>` names. Selector/user catalogs should reference this file by ID instead of copying field metadata.
+
+Regenerate the master catalog from a local regulation file:
+
+<!-- md-test: bash-n -->
+```bash
+scripts/generate-effect-master-catalog.py --regulation "$REGULATION_BIN"
+```
 
 Validate the list against a regulation file:
 
@@ -313,8 +353,12 @@ Supported Smithbox layouts:
 - binary release/install containing `Andre.Formats.dll` or
   `Andre.SoulsFormats.dll`.
 
-Discovery order uses `SMITHBOX_SOURCE_DIR` first, then common sibling/local
-paths. The generated bridge lives under `target/soulsformats-bridge/`.
+Discovery order uses `SMITHBOX_SOURCE_DIR` first, then `SMITHBOX_BINARY_DIR`,
+then common sibling/local paths. `SMITHBOX_BINARY_DIR` points at a binary
+Smithbox install directory containing `Andre.Formats.dll` and
+`Andre.SoulsFormats.dll`; it is also passed to the generated bridge so .NET can
+resolve Smithbox's transitive assemblies from that install directory at runtime.
+The generated bridge lives under `target/soulsformats-bridge/`.
 
 ## Cheat Engine tables
 
