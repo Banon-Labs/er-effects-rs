@@ -52,6 +52,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{Interface, w};
 
+use super::LOADING_SCREEN_BAR_PROGRESS_PERMILLE;
 use crate::telemetry::append_autoload_debug;
 
 /// Visibility request set by the game task each frame from the loading state: 1 = SHOW (cover the game),
@@ -77,6 +78,16 @@ pub(crate) fn install_native_overlay() {
         .spawn(|| {
             let _ = std::panic::catch_unwind(|| unsafe { native_overlay_run() });
         });
+}
+
+/// Progress (0..=1000) for the overlay loading bar. During the game's native loading screen we mirror its
+/// real progress; before that (boot / title), a gentle frame-driven creep (capped) reads as "working".
+fn overlay_progress_permille() -> usize {
+    let native = LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst);
+    if native > 0 {
+        return native.min(1000);
+    }
+    (NATIVE_OVERLAY_FRAMES.load(Ordering::SeqCst) / 8).min(350)
 }
 
 unsafe extern "system" fn overlay_wndproc(
@@ -387,8 +398,31 @@ unsafe fn native_overlay_run() {
         let handle = D3D12_CPU_DESCRIPTOR_HANDLE {
             ptr: rtv_base.ptr + idx * rtv_size,
         };
-        // Dark charcoal cover (clearly-visible proof it owns the screen; real content lands next).
+        // Charcoal cover (owns the screen), then a horizontal loading bar: a dim track with an Elden-Ring
+        // gold fill sized to the progress. Drawn with ClearRenderTargetView sub-rects -- no upload needed.
         unsafe { list.ClearRenderTargetView(handle, &[0.02, 0.02, 0.03, 1.0], None) };
+        let permille = overlay_progress_permille();
+        let bar_w = win_w * 11 / 20; // ~55% width
+        let bar_h = (win_h / 240).max(6); // ~9px at 2160p
+        let bar_x = (win_w - bar_w) / 2;
+        let bar_y = win_h * 82 / 100;
+        let track = RECT {
+            left: bar_x,
+            top: bar_y,
+            right: bar_x + bar_w,
+            bottom: bar_y + bar_h,
+        };
+        unsafe { list.ClearRenderTargetView(handle, &[0.12, 0.10, 0.08, 1.0], Some(&[track])) };
+        let fill_w = bar_w * permille as i32 / 1000;
+        if fill_w > 0 {
+            let fill = RECT {
+                left: bar_x,
+                top: bar_y,
+                right: bar_x + fill_w,
+                bottom: bar_y + bar_h,
+            };
+            unsafe { list.ClearRenderTargetView(handle, &[0.80, 0.66, 0.36, 1.0], Some(&[fill])) };
+        }
         unsafe {
             overlay_transition(
                 &list,
