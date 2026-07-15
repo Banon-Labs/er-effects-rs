@@ -567,26 +567,6 @@ pub(crate) const SCALEFORM_DESC_PROVIDER_OFFSET: usize = 0x38;
 pub(crate) static SCALEFORM_DESC_ADVANCE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static SCALEFORM_DESC_ADVANCE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SCALEFORM_DESC_PROVIDER_NULL_HITS: AtomicUsize = AtomicUsize::new(0);
-
-/// === GX offscreen resource-state classifier null guard (er-effects-rs-n4x) ==================
-/// The game's GX resource-state classifier `FUN_141e90290` (deobf VA 0x141e90290; deobf RVA 0x1e90290)
-/// is called from the offscreen command path `FUN_141a853a0 -> FUN_141a02de0`, which loads each of the
-/// four offscreen texture wrappers' underlying GX resource from `wrapper+0x40` and passes it (rcx) to
-/// the classifier. The classifier reads `[rcx+0x10]` then dereferences that at `+0x30`; when the inner
-/// resource is null/half-seeded (native-Windows crash 2026-07-14/2026-07-15: rcx=0x20, fault_addr=0x30)
-/// it access-violates. Our Present-overlay composite's concurrent GPU submit widens the engine's own
-/// advance-before-seed window (proven 2026-07-15: composite draw -> crash, hook-only -> clean, bd
-/// er-effects-rs-n4x), so the engine's ResMan-scheduled offscreen render reaches the classifier with a
-/// null resource. This guard null-checks rcx (and the `[rcx+0x10]`/`+0x30` chain the classifier derefs)
-/// at entry and bails to a benign 0 -- the same environment-agnostic pattern as the Scaleform descriptor
-/// guard above. Vanilla never reaches the null window (vkd3d tolerates the race; native D3D12 does not).
-pub(crate) const GX_RESOURCE_CLASSIFIER_RVA: usize = 0x1e90290;
-/// Offsets the classifier derefs off the resource `rcx` before the guard can prove the chain is seeded.
-pub(crate) const GX_RESOURCE_CLASSIFIER_INNER_OFFSET: usize = 0x10;
-pub(crate) const GX_RESOURCE_CLASSIFIER_STATE_OFFSET: usize = 0x30;
-pub(crate) static GX_RESOURCE_CLASSIFIER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
-pub(crate) static GX_RESOURCE_CLASSIFIER_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-pub(crate) static GX_RESOURCE_CLASSIFIER_NULL_HITS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static LOADING_SCREEN_LAST_THIS: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static LOADING_SCREEN_LAST_DATA: AtomicUsize =

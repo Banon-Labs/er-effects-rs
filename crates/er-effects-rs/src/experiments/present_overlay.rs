@@ -358,6 +358,32 @@ pub(crate) fn install_present_overlay_hook() {
         .ok();
 }
 
+/// True when running under Wine/Proton (vkd3d), detected by the `wine_get_version` export that Wine's
+/// `ntdll` exposes and native Windows never does. Cached after the first probe. Used to gate the boot
+/// self-present, which is only barrier-safe under vkd3d's tolerant translation layer.
+fn running_under_wine() -> bool {
+    static CACHED: AtomicUsize = AtomicUsize::new(0); // 0=unknown, 1=native, 2=wine
+    match CACHED.load(Ordering::SeqCst) {
+        1 => return false,
+        2 => return true,
+        _ => {}
+    }
+    let is_wine = unsafe { GetModuleHandleW(windows::core::w!("ntdll.dll")) }
+        .ok()
+        .map(|h| {
+            unsafe {
+                windows::Win32::System::LibraryLoader::GetProcAddress(
+                    h,
+                    windows::core::s!("wine_get_version"),
+                )
+            }
+            .is_some()
+        })
+        .unwrap_or(false);
+    CACHED.store(if is_wine { 2 } else { 1 }, Ordering::SeqCst);
+    is_wine
+}
+
 /// Self-present budget: the game's first present lands ~+3.7s; if it has not arrived by this
 /// pump-relative age, something unusual is happening -- stop pumping and let the detour path
 /// (which needs no pump) carry the view whenever presents do start.
@@ -415,20 +441,24 @@ fn boot_present_pump() {
             }
             let found_ms = start.elapsed().as_millis().min(usize::MAX as u128) as usize;
             BOOT_VIEW_SWAPCHAIN_FOUND_MS.store(found_ms, Ordering::SeqCst);
-            // WRAPPED-SWAPCHAIN SAFETY (native Windows, 2026-07-15, bd er-effects-rs-n4x). When the
-            // swapchain was accepted via the QI fallback (accept_path==2) its Present/Present1 live in a
-            // co-resident overlay's module (Special K observed in-process, vtable in SpecialK64.dll), i.e.
-            // the overlay OWNS the present pipeline. Self-presenting that swapchain ourselves -- or drawing
-            // on its backbuffer with our own PRESENT<->COPY_DEST transitions -- deterministically removed
-            // the D3D12 device (Present hr=0x887a0005) within ~40ms and crashed the game in its
-            // device-removed handler (rva=0x1e8ad57). So do NOT run the self-present loop on a wrapped
-            // swapchain: hand off immediately and let the Present DETOUR (which draws on the OVERLAY/game's
-            // OWN present, when the backbuffer state is owned by them) carry the boot bar + portrait. The
-            // vkd3d fast path (accept_path==1, shared CDXGISwapChain vtable) keeps the proven self-present.
-            if PRESENT_ACCEPT_PATH.load(Ordering::SeqCst) == 2 {
+            // NATIVE-WINDOWS SAFETY (2026-07-15, bd er-effects-rs-n4x). The boot pump self-presents by
+            // drawing on the game swapchain's backbuffer with our own PRESENT<->COPY_DEST transitions at an
+            // ARBITRARY time (our thread, not synchronized with the game's frame). That barrier assumes the
+            // backbuffer is in PRESENT state; on a real D3D12 driver it usually is NOT (the game may be
+            // mid-render), so the wrong-state transition removes the device (Present hr=0x887a0005) and the
+            // game crashes in its device-removed handler (rva=0x1e8ad57). vkd3d/Proton TOLERATES the wrong
+            // barrier (translation layer), which is the only reason this ever worked. So the self-present is
+            // safe ONLY under Wine/Proton; on native Windows (with OR without a co-resident overlay like
+            // Special K) skip it entirely and let the Present DETOUR -- which draws INSIDE the game's Present
+            // call, when D3D12 guarantees the backbuffer is in PRESENT state -- carry the boot bar + portrait.
+            let self_present_safe =
+                running_under_wine() && PRESENT_ACCEPT_PATH.load(Ordering::SeqCst) != 2;
+            if !self_present_safe {
                 BOOT_VIEW_PUMP_STOP_REASON.store(4, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "boot-pump: swapchain hooked at pump+{found_ms}ms -- WRAPPED (accept_path=2); handing off to the Present detour without self-presenting"
+                    "boot-pump: swapchain hooked at pump+{found_ms}ms -- native/wrapped (wine={}, accept_path={}); handing off to the Present detour without self-presenting",
+                    running_under_wine(),
+                    PRESENT_ACCEPT_PATH.load(Ordering::SeqCst)
                 ));
                 return;
             }

@@ -2736,19 +2736,6 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_scaleform_desc_provider_null_hits",
             SCALEFORM_DESC_PROVIDER_NULL_HITS.load(Ordering::SeqCst),
         );
-        // `gx_resource_classifier_guard_installed` = the FUN_141e90290 null-guard detour is live;
-        // `gx_resource_classifier_null_hits` = classifier calls we bailed because the inner GX resource
-        // was null/half-seeded (the exact condition that AVs at rva 0xe90290, rcx=0x20). (er-effects-rs-n4x.)
-        push_json_usize(
-            body,
-            "oracle_gx_resource_classifier_guard_installed",
-            GX_RESOURCE_CLASSIFIER_INSTALLED.load(Ordering::SeqCst),
-        );
-        push_json_usize(
-            body,
-            "oracle_gx_resource_classifier_null_hits",
-            GX_RESOURCE_CLASSIFIER_NULL_HITS.load(Ordering::SeqCst),
-        );
         push_json_usize(
             body,
             "oracle_overlay_gpu_fail_count",

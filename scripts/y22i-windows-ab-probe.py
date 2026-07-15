@@ -47,6 +47,8 @@ ORACLE_KEYS = (
     "oracle_scaleform_desc_provider_null_hits",
     "oracle_gx_resource_classifier_guard_installed",
     "oracle_gx_resource_classifier_null_hits",
+    "oracle_gx_resource_dispatcher_guard_installed",
+    "oracle_gx_resource_dispatcher_null_hits",
     "oracle_gx_offscreen_builder_guard_installed",
     "oracle_gx_offscreen_builder_skip_hits",
     "player_available", "player_seen", "runtime_mode", "oracle_char_name",
