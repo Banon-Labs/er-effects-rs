@@ -196,14 +196,24 @@ pub(crate) unsafe fn maybe_build_profile_table_for_loading(base: usize) {
     if PROFILE_LOADSCREEN_REBUILT.load(Ordering::SeqCst) != 0 {
         return; // already built our table for this load window
     }
-    // HARD SAFETY: never call the builder until the menu has built a table at least once. At the title
-    // screen the table is empty too, but the engine/ResMan are not up and the builder access-violates.
-    if PROFILE_TABLE_WAS_POPULATED.load(Ordering::SeqCst) == 0 {
+    // HARD SAFETY: never call the builder until the engine/ResMan is provably up, or it access-violates at
+    // the title (empty table, ResMan not up). Normally we require the game's own ProfileSelect menu to have
+    // built its portrait table once (PROFILE_TABLE_WAS_POPULATED). But a MENU-FREE autoload (native product /
+    // staged / native-continue) NEVER shows ProfileSelect, so that latch stays 0 and the builder was blocked
+    // forever -- the loading-portrait pipeline never engaged on native (run30 2026-07-15:
+    // loadscreen_table_builds=0, model drive never fired). During an ACTIVE native loading screen
+    // (loading_screen_started: CS::LoadingScreen::Update ticking + Gauge_3 enabled + max-frame set) ResMan is
+    // definitively up (the world is streaming), so the builder is safe THERE even without the menu having
+    // built its table. Accept that context as the ResMan-up proof for the menu-free autoload path.
+    if PROFILE_TABLE_WAS_POPULATED.load(Ordering::SeqCst) == 0 && !loading_screen_started {
         return;
     }
     let nowload = unsafe { now_loading_active(base) };
     if !force_loading_screen_rebuild
-        && !(nowload || profile_select_window_open || streak >= PROFILE_TABLE_EMPTY_STREAK_BUILD_THRESHOLD)
+        && !(nowload
+            || profile_select_window_open
+            || loading_screen_started
+            || streak >= PROFILE_TABLE_EMPTY_STREAK_BUILD_THRESHOLD)
     {
         return;
     }

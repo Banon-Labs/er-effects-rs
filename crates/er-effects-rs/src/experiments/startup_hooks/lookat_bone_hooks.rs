@@ -283,22 +283,58 @@ unsafe fn lookat_apply_realtime(holder: usize, slot_idx: usize, yaw: f32, pitch:
 /// 2026-07-14, the second wrapper existed but `wrapper+0x40 == 0`, so the classifier saw rcx=0x20 and
 /// faulted reading `[rcx+0x10]`. Match the native wrapper-presence check AND add the missing inner-resource
 /// readiness check before we enqueue our extra profile draw.
+/// SETTLE-FRAMES the four inner GX resources must be non-null AND pointer-STABLE before we trust them
+/// enough to drive (deep-RE 2026-07-15, bd portrait-drive-crash-mechanism-re). The 2026-07-14 crash is a
+/// CROSS-THREAD TOCTOU that a point-in-time non-null check cannot close: the engine's async build WORKER
+/// (a different thread than our render-thread drive) seeds `wrapper` first and its inner `wrapper+0x40`
+/// later, and re-seeds them on every rebuild. Our old per-frame REFRESH kept triggering rebuilds, so the
+/// worker was perpetually mid-build and `wrapper+0x40` could go null between our readiness check and the
+/// submit. Requiring the SAME four inner pointers for K consecutive frames proves the worker is NOT
+/// mid-rebuild right now (any rebuild churns the pointers -> resets the counter), which is the missing
+/// serialization the bare non-null guard lacked.
+const PROFILE_OFFSCREEN_SETTLE_FRAMES: usize = 8;
+static PROFILE_OFFSCREEN_SETTLE_INNERS: [AtomicUsize; 4] = [
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+];
+static PROFILE_OFFSCREEN_SETTLE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
 unsafe fn profile_offscreen_gx_resources_ready(off: usize) -> bool {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     if off == 0 || off == null {
+        PROFILE_OFFSCREEN_SETTLE_COUNT.store(0, Ordering::SeqCst);
         return false;
     }
-    for field in [0x40usize, 0x48, 0x50, 0x58] {
+    let mut inners = [0usize; 4];
+    for (i, field) in [0x40usize, 0x48, 0x50, 0x58].into_iter().enumerate() {
         let wrapper = unsafe { safe_read_usize(off + field) }.unwrap_or(0);
         if wrapper == 0 || wrapper == null {
+            PROFILE_OFFSCREEN_SETTLE_COUNT.store(0, Ordering::SeqCst);
             return false;
         }
         let resource = unsafe { safe_read_usize(wrapper + 0x40) }.unwrap_or(0);
         if resource == 0 || resource == null {
+            PROFILE_OFFSCREEN_SETTLE_COUNT.store(0, Ordering::SeqCst);
             return false;
         }
+        inners[i] = resource;
     }
-    true
+    // Cross-thread settle gate: the four inner resource pointers must be IDENTICAL to last frame's. A
+    // change means the async build worker re-seeded them (mid-rebuild) -> reset the settle counter and
+    // withhold the drive. Only after K identical frames do we treat the offscreen as settled/worker-idle.
+    let mut changed = false;
+    for (i, &inner) in inners.iter().enumerate() {
+        if PROFILE_OFFSCREEN_SETTLE_INNERS[i].swap(inner, Ordering::SeqCst) != inner {
+            changed = true;
+        }
+    }
+    if changed {
+        PROFILE_OFFSCREEN_SETTLE_COUNT.store(0, Ordering::SeqCst);
+        return false;
+    }
+    PROFILE_OFFSCREEN_SETTLE_COUNT.fetch_add(1, Ordering::SeqCst) + 1 >= PROFILE_OFFSCREEN_SETTLE_FRAMES
 }
 
 /// REALTIME LOOK-AT DRAW TICK -- registered as a recurring task in a DRAW phase
