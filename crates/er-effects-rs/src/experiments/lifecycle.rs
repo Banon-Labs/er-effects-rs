@@ -14,6 +14,21 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     if is_native_windows() {
         let player_present = unsafe { PlayerIns::local_player_mut() }.is_ok();
         NATIVE_OVERLAY_SHOW.store(usize::from(!player_present), Ordering::SeqCst);
+        // NATIVE-WINDOWS SAVE PICKER input (bd er-effects-rs-8wt): the picker LIST already renders
+        // via the overlay's shared boot_view_render_frame (overlay_save_picker_onto), but the Wine
+        // build drives the picker's input from the D3D12 Present hook -- which never installs on native
+        // Windows (composite suppressed on the game device). Drive it here on the game task instead:
+        //   * ensure_save_picker_keyboard_hook() installs the GLOBAL WH_KEYBOARD_LL hook on its OWN
+        //     message-pumped, time-critical thread. That hook is focus-independent, so keyboard reaches
+        //     the picker even though the overlay window is WS_EX_NOACTIVATE and the game keeps focus.
+        //   * save_picker_overlay_input_tick() arms the picker when a no-save boot is pending, polls the
+        //     gamepad (XInput), and disarms once the pick releases the hold. The keyboard poll inside it
+        //     self-skips while the LL hook owns keyboard, so there is no double-apply.
+        // Both self-gate on missing_save_selection_pending(), so this is a no-op on a normal (save
+        // found) boot. Gated to native Windows so the Wine Present-hook path is never double-polled
+        // (the gamepad edge-detection state is shared). catch_unwind matches the Present-hook call site.
+        let _ = std::panic::catch_unwind(ensure_save_picker_keyboard_hook);
+        let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
     }
     // Hardware write-watchpoint on GameMan+0xc30: (re)arm each frame until
     // the save-mount write is caught, so the VEH logs the exact writer. Runs
