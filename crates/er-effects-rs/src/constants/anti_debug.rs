@@ -550,6 +550,23 @@ pub(crate) static KNOWLEDGE_TIP_ADVANCE_ENABLED_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static KNOWLEDGE_TIP_ADVANCE_ENABLED_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static KNOWLEDGE_TIP_ADVANCE_SUPPRESSED_HITS: AtomicUsize = AtomicUsize::new(0);
+
+/// Scaleform (GFx) D3D12 `CBV_SRV_UAV` descriptor-heap ring/sub-allocator advance
+/// (deobf entry `0x140ec9530`; `f(this /rcx/, count /edx/)`). Verified disasm: the new-page branch
+/// reloads the current-page provider `*(this+0x38)` and unconditionally derefs `[provider+0x20]` at
+/// deobf `0x140ec95d1` (`mov 0x20(%rax),%rcx`), access-violating when the provider is null
+/// (native-Windows crash report for our DLL: rva=0xec95d1, fault_addr=0x20). A null provider means a
+/// fresh/reset HAL (ring capacity `this+0x20 == 0`), so the original ALWAYS takes that branch and
+/// always faults; our detour skips the advance until the provider is initialized. Vanilla ER never
+/// reaches the null window (vkd3d masks it; the native D3D12 driver does not); our DLL only reaches it
+/// indirectly. The guard is environment-agnostic -- it null-checks the pointer the game derefs, every
+/// call, and is a transparent passthrough otherwise. (bd er-effects-rs-y22i.)
+pub(crate) const SCALEFORM_DESC_ADVANCE_RVA: usize = 0xec9530;
+/// Byte offset of the current-page provider field within the descriptor sub-allocator `this`.
+pub(crate) const SCALEFORM_DESC_PROVIDER_OFFSET: usize = 0x38;
+pub(crate) static SCALEFORM_DESC_ADVANCE_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
+pub(crate) static SCALEFORM_DESC_ADVANCE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SCALEFORM_DESC_PROVIDER_NULL_HITS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static LOADING_SCREEN_LAST_THIS: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static LOADING_SCREEN_LAST_DATA: AtomicUsize =

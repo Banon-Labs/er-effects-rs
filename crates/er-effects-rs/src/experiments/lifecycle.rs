@@ -405,6 +405,14 @@ pub(crate) fn install_title_visual_startup_hooks() {
                 .spawn(install_tip_suppression_hook);
         });
     }
+    // er-effects-rs-y22i: ALWAYS-ON Scaleform descriptor-heap null guard (native-Windows crash
+    // 0xec95d1). NOT feature-gated -- it is a crash guard, a transparent passthrough when the null
+    // never occurs. Installed at attach so it is live before the first loading-screen composite.
+    START_SCALEFORM_GUARD.call_once(|| {
+        let _ = std::thread::Builder::new()
+            .name("er-effects-scaleform-guard".to_owned())
+            .spawn(install_scaleform_descriptor_guard);
+    });
     // D3D12 PRESENT OVERLAY: the deterministic display path -- draw the captured portrait directly onto the
     // swapchain backbuffer when the now-loading screen is up (the in-pipeline forge/Scaleform routes cannot
     // drive the displayed image). Install only on the portrait path (diagnostic), via the dummy-swapchain

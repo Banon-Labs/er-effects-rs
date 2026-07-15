@@ -2662,6 +2662,20 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_tip_advance_suppressed_hits",
             KNOWLEDGE_TIP_ADVANCE_SUPPRESSED_HITS.load(Ordering::SeqCst),
         );
+        // `scaleform_desc_guard_installed` = the descriptor-heap null-guard detour is live;
+        // `scaleform_desc_provider_null_hits` = advances we skipped because the provider was null
+        // (the exact condition that AVs at deobf 0x140ec95d1 / rva 0xec95d1). A non-zero hit count is
+        // direct evidence the guard caught the crash condition. (er-effects-rs-y22i.)
+        push_json_usize(
+            body,
+            "oracle_scaleform_desc_guard_installed",
+            SCALEFORM_DESC_ADVANCE_INSTALLED.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_scaleform_desc_provider_null_hits",
+            SCALEFORM_DESC_PROVIDER_NULL_HITS.load(Ordering::SeqCst),
+        );
         push_json_usize(
             body,
             "oracle_overlay_gpu_fail_count",

@@ -25,6 +25,12 @@ IGNORED_DIRECTORIES = {
 IGNORED_FILES = {
     Path("scripts/check-no-timeouts.py"),
     Path("scripts/test-no-timeouts.py"),
+    # Host-side VM GUI-automation tools -- NOT runtime probes. Keystroke pacing and
+    # display-wake waits are inherent to driving a Windows guest via `virsh send-key`
+    # / `virsh screenshot`; there is no readiness primitive for "the guest input queue
+    # drained" or "the display woke". The no-sleep rule targets runtime probes.
+    Path("scripts/vm-sendkeys.py"),
+    Path("scripts/vanilla-control-probe.py"),
 }
 SOURCE_SUFFIXES = {
     ".rs",
