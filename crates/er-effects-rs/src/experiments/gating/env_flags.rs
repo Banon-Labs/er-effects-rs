@@ -107,8 +107,42 @@ pub(crate) fn native_profile_capture_enabled() -> bool {
 /// `user-pref-too-many-env-file-gates-default-on-product`): the loading-screen portrait is now product
 /// behavior, so it builds the model on every real autoload run without a staged flag. Master off:
 /// `autoload_disabled()`; telemetry-only/native-capture runs stay off; env/file remain force-on overrides.
+/// True on native Windows (NOT Wine/Proton). Wine's `ntdll` exports `wine_get_version`; native Windows
+/// never does. Cached. Used to disable the character-profile RENDER-DRIVE on native Windows, where
+/// driving the game's own offscreen model render mid-load crashes the strict D3D12 driver (bd
+/// er-effects-rs-n4x, 2026-07-15). vkd3d/Proton tolerates it, so the drive stays on there.
+pub(crate) fn is_native_windows() -> bool {
+    use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+    static CACHED: AtomicUsize = AtomicUsize::new(0); // 0=unknown, 1=native, 2=wine
+    match CACHED.load(Ordering::SeqCst) {
+        1 => return true,
+        2 => return false,
+        _ => {}
+    }
+    let is_wine = unsafe { GetModuleHandleW(windows::core::w!("ntdll.dll")) }
+        .ok()
+        .map(|h| unsafe { GetProcAddress(h, windows::core::s!("wine_get_version")) }.is_some())
+        .unwrap_or(false);
+    CACHED.store(if is_wine { 2 } else { 1 }, Ordering::SeqCst);
+    !is_wine
+}
+
+/// True when the operator force-enabled the native-Windows profile render-drive despite the crash risk
+/// (env `ER_EFFECTS_ALLOW_NATIVE_PROFILE_DRIVE=1`). Diagnostic override only.
+fn native_profile_drive_forced() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_ALLOW_NATIVE_PROFILE_DRIVE").as_deref(),
+        Ok("1")
+    )
+}
+
 pub(crate) fn force_profile_render_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
+        return false;
+    }
+    // Native Windows: the render-drive crashes the strict D3D12 driver (see is_native_windows). Off by
+    // default there; the whole-feature infra (swapchain/HDR/composite) still runs, just not the drive.
+    if is_native_windows() && !native_profile_drive_forced() {
         return false;
     }
     !save_override_telemetry_only()
@@ -165,6 +199,9 @@ pub(crate) fn portrait_render_drive_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
+    if is_native_windows() && !native_profile_drive_forced() {
+        return false;
+    }
     !save_override_telemetry_only()
         || matches!(
             std::env::var("ER_EFFECTS_PORTRAIT_RENDER_DRIVE").as_deref(),
@@ -191,6 +228,10 @@ pub(crate) fn portrait_lookat_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
+    // NOTE: this gate ALSO controls the present-overlay/composite install, so it is NOT disabled on
+    // native Windows -- the composite infra must stay up. The render-DRIVE that crashes native Windows is
+    // gated off separately (force_profile_render_enabled / portrait_render_drive_enabled). With the drive
+    // off, the look-at pose writes have no built model to drive, so they are inert.
     !save_override_telemetry_only()
         || matches!(
             std::env::var("ER_EFFECTS_PORTRAIT_LOOKAT").as_deref(),

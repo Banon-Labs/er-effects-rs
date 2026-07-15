@@ -218,19 +218,32 @@ fn profile_model_build_in_flight() -> bool {
     l754 != 0 || l755 != 0
 }
 
-/// Shared Present/Present1 composite body: draw the loading-screen portrait (or the boot bar as a
-/// fallback), then the in-world effect-selector HUD, then service overlay input. Runs on the game render
-/// thread; never panics. CRASH GATE: skip the portrait/boot composite while a profile-model build is in
-/// flight (profile_model_build_in_flight) so we do not add concurrent GPU device work during the window
-/// the engine's own offscreen render can fault (FUN_141e90290, y22i). The effect-selector HUD is in-world
-/// (post-load) and unrelated to that window, so it is not gated.
+/// Presents skipped because the now-loading display window has not opened yet (RAM oracle).
+pub(crate) static PRESENT_COMPOSITE_EARLY_SKIPS: AtomicUsize = AtomicUsize::new(0);
+
+/// Shared Present/Present1 composite body: draw the loading-screen portrait, then the in-world
+/// effect-selector HUD, then service overlay input. Runs on the game render thread; never panics.
+///
+/// NATIVE-WINDOWS CRASH GATE (2026-07-15, bd er-effects-rs-n4x). On the strict native D3D12 driver, ANY
+/// composite GPU work during the FRAGILE EARLY BOOT (D3D/asset init + the title/profile-select offscreen
+/// build, ~0..+15s) destabilizes the game and it AVs before it ever renders its title -- so the user only
+/// ever saw a black screen + cursor + teardown, never a frame. The same DLL WITHOUT the overlay reaches
+/// the world fine (proven: control runs, present_hook_hits=0, player_available=true). So do NOT composite
+/// until the now-loading screen has actually opened (`PROFILE_LOADSCREEN_TABLE_BUILDS > 0`, set by the
+/// game task ~+49s, long after the early-boot crash window). Until then the detour is a pure passthrough:
+/// zero GPU work, the game boots exactly as it does overlay-less. This SACRIFICES the pre-title boot bar
+/// (it lived entirely inside the crash window) to keep the character portrait, which is drawn in the
+/// now-loading window where it belongs and where the game is stable.
 unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) {
     // NOTE: the offscreen RASTERIZE is NOT driven here. Present is the WRONG GX phase -- the frame's GX
     // recording is already closed, so the subcontext pool pop no-ops (black). The rasterize is driven from
     // profile_lookat_realtime_draw_tick (a DRAW-phase CSTaskImp task, live recording frame). This hook
-    // only does the static composite of an already-captured RGBA. The boot-progress view owns the
-    // pre-Continue black gap; once the portrait composite starts drawing (loading window) it wins, and the
-    // boot view self-stops on the same signals.
+    // only does the static composite of an already-captured RGBA.
+    if PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst) == 0 {
+        // Fragile early boot: pure passthrough, no GPU work (survive to the now-loading window).
+        PRESENT_COMPOSITE_EARLY_SKIPS.fetch_add(1, Ordering::SeqCst);
+        return;
+    }
     if profile_model_build_in_flight() {
         PRESENT_COMPOSITE_BUILD_SKIPS.fetch_add(1, Ordering::SeqCst);
     } else {

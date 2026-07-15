@@ -1654,6 +1654,14 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_present_composite_build_skips",
             PRESENT_COMPOSITE_BUILD_SKIPS.load(Ordering::SeqCst),
         );
+        // Presents where we skipped ALL compositing because the now-loading display window had not opened
+        // yet -- the pure-passthrough gate that keeps our GPU work out of the fragile early-boot crash
+        // window on native Windows (er-effects-rs-n4x). High during boot, stops once now-loading opens.
+        push_json_usize(
+            body,
+            "oracle_present_composite_early_skips",
+            PRESENT_COMPOSITE_EARLY_SKIPS.load(Ordering::SeqCst),
+        );
         push_json_usize(
             body,
             "oracle_overlay_draw_hits",

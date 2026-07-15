@@ -54,7 +54,7 @@ ORACLE_KEYS = (
     "player_available", "player_seen", "runtime_mode", "oracle_char_name",
     "oracle_present_hook_hits", "oracle_present_find_tries", "oracle_present_find_stage",
     "oracle_present_find_vt_module_kind", "oracle_present_find_streak",
-    "oracle_present_accept_path", "oracle_present_find_candidate",
+    "oracle_present_accept_path", "oracle_present_composite_early_skips", "oracle_present_find_candidate",
     "oracle_present_find_candidate_vt", "oracle_present_find_got8", "oracle_present_find_got22",
     "oracle_boot_view_draw_hits", "oracle_boot_view_self_presents",
     "oracle_boot_view_pump_stop_reason", "oracle_boot_view_swapchain_found_ms",
