@@ -49,3 +49,6 @@ offline-launcher.exe
 
 # scratch analysis dumps (game-derived; never commit)
 .auto/scratch-jsm/
+
+# Per-run runtime-probe evidence (y22i Windows validation etc.) -- regenerable, not source.
+/.artifacts/

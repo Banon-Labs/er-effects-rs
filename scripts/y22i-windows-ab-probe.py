@@ -40,6 +40,21 @@ ME3 = "/mnt/c/Users/choza/AppData/Local/garyttierney/me3/bin/me3.exe"
 LAUNCH_CWD = "/mnt/c/Users/choza/build/y22i"
 
 CRASH_RVA = "0xec95d1"
+# Verdict oracle set: y22i guard fields + the display-path fields (Present hook / swapchain find /
+# boot bar / portrait composite) added for the 2026-07-15 native-Windows visual-regression work.
+ORACLE_KEYS = (
+    "oracle_scaleform_desc_guard_installed",
+    "oracle_scaleform_desc_provider_null_hits",
+    "player_available", "player_seen", "runtime_mode", "oracle_char_name",
+    "oracle_present_hook_hits", "oracle_present_find_tries", "oracle_present_find_stage",
+    "oracle_present_find_vt_module_kind", "oracle_present_find_streak",
+    "oracle_present_accept_path", "oracle_present_find_candidate",
+    "oracle_present_find_candidate_vt", "oracle_present_find_got8", "oracle_present_find_got22",
+    "oracle_boot_view_draw_hits", "oracle_boot_view_self_presents",
+    "oracle_boot_view_pump_stop_reason", "oracle_boot_view_swapchain_found_ms",
+    "oracle_overlay_draw_hits", "oracle_overlay_reuploads",
+    "oracle_portrait_pump_draws", "oracle_portrait_pump_block_off_resource",
+)
 EVIDENCE_FILES = [
     "er-effects-crash-log.txt",
     "er-effects-telemetry.json",
@@ -152,7 +167,7 @@ def crash_lines() -> list[str]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--arm", required=True, choices=["guard", "control"])
+    ap.add_argument("--arm", required=True, choices=["guard", "control", "fix"])
     ap.add_argument("--run", required=True, type=int)
     ap.add_argument("--dll", required=True, help="Windows path to er_effects_rs.dll")
     args = ap.parse_args()
@@ -235,12 +250,7 @@ def main() -> int:
         tele = parse_telemetry()
         if tele:
             verdict["oracles"] = {
-                k: tele.get(k) for k in (
-                    "oracle_scaleform_desc_guard_installed",
-                    "oracle_scaleform_desc_provider_null_hits",
-                    "player_available", "player_seen", "runtime_mode",
-                    "oracle_char_name",
-                ) if k in tele
+                k: tele.get(k) for k in ORACLE_KEYS if k in tele
             }
             o = verdict["oracles"]
             null_hits = o.get("oracle_scaleform_desc_provider_null_hits")
@@ -277,9 +287,7 @@ def main() -> int:
         verdict["crash_rva_hit"] = any(f"rva={CRASH_RVA}" in l for l in lines)
         verdict["other_access_violation"] = bool(lines) and not verdict["crash_rva_hit"]
     tele = parse_telemetry()
-    for k in ("oracle_scaleform_desc_guard_installed",
-              "oracle_scaleform_desc_provider_null_hits",
-              "player_available", "player_seen", "runtime_mode", "oracle_char_name"):
+    for k in ORACLE_KEYS:
         if k in tele:
             verdict["oracles"][k] = tele[k]
     for name in EVIDENCE_FILES:

@@ -1155,19 +1155,12 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
     if bw == 0 || bh == 0 || bw > MAX_RT_DIM || bh > MAX_RT_DIM {
         return false;
     }
-    // Only the two 8-bit RGBA/BGRA families are handled (format 28 measured on the live swapchain).
-    let swap_rb = matches!(
-        bb_desc.Format,
-        DXGI_FORMAT_B8G8R8A8_UNORM | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
-    );
-    if !swap_rb
-        && !matches!(
-            bb_desc.Format,
-            DXGI_FORMAT_R8G8B8A8_UNORM | DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
-        )
-    {
+    // Backbuffer pixel encoding for the raw-copy path: 8-bit BGRA (swap R/B), 8-bit RGBA (straight),
+    // or 10-bit R10G10B10A2 (pack) -- the last is the native-Windows HDR/10-bit swapchain (format 24),
+    // where a byte copy would garble every pixel, so the map loop must pack instead.
+    let Some(bb_encoding) = boot_view_backbuffer_encoding(bb_desc.Format) else {
         return false;
-    }
+    };
 
     // Progress-bar geometry follows the backbuffer. When a cached screenshot background exists, copy a
     // full-screen region; otherwise preserve the original tiny strip copy over black boot frames.
@@ -1345,11 +1338,27 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
                 if dofs + src_row > total || so + src_row > tight.len() {
                     break;
                 }
+                let srow = &tight[so..so + src_row];
                 let drow = &mut dst[dofs..dofs + src_row];
-                drow.copy_from_slice(&tight[so..so + src_row]);
-                if swap_rb {
-                    for t in 0..region_w as usize {
-                        drow.swap(t * RGBA8_BPP, t * RGBA8_BPP + 2);
+                match bb_encoding {
+                    BackbufferEncoding::Straight => drow.copy_from_slice(srow),
+                    BackbufferEncoding::SwapRb => {
+                        drow.copy_from_slice(srow);
+                        for t in 0..region_w as usize {
+                            drow.swap(t * RGBA8_BPP, t * RGBA8_BPP + 2);
+                        }
+                    }
+                    BackbufferEncoding::Pack10 => {
+                        for t in 0..region_w as usize {
+                            let s = t * RGBA8_BPP;
+                            let packed = pack_rgba8_to_r10g10b10a2(
+                                srow[s],
+                                srow[s + 1],
+                                srow[s + 2],
+                                srow[s + 3],
+                            );
+                            drow[s..s + 4].copy_from_slice(&packed.to_le_bytes());
+                        }
                     }
                 }
             }
@@ -1589,18 +1598,9 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
     if bw == 0 || bh == 0 || bw > MAX_RT_DIM || bh > MAX_RT_DIM {
         return false;
     }
-    let swap_rb = matches!(
-        bb_desc.Format,
-        DXGI_FORMAT_B8G8R8A8_UNORM | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
-    );
-    if !swap_rb
-        && !matches!(
-            bb_desc.Format,
-            DXGI_FORMAT_R8G8B8A8_UNORM | DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
-        )
-    {
+    let Some(bb_encoding) = boot_view_backbuffer_encoding(bb_desc.Format) else {
         return false;
-    }
+    };
 
     let text_lines = effect_selector_overlay_lines(&text);
     let effect_text_scale = BOOT_VIEW_TEXT_BASE_SCALE;
@@ -1778,11 +1778,27 @@ unsafe fn composite_effect_selector_inner(swapchain_raw: usize) -> bool {
                 if dofs + src_row > total || so + src_row > tight.len() {
                     break;
                 }
+                let srow = &tight[so..so + src_row];
                 let drow = &mut dst[dofs..dofs + src_row];
-                drow.copy_from_slice(&tight[so..so + src_row]);
-                if swap_rb {
-                    for t in 0..region_w as usize {
-                        drow.swap(t * RGBA8_BPP, t * RGBA8_BPP + 2);
+                match bb_encoding {
+                    BackbufferEncoding::Straight => drow.copy_from_slice(srow),
+                    BackbufferEncoding::SwapRb => {
+                        drow.copy_from_slice(srow);
+                        for t in 0..region_w as usize {
+                            drow.swap(t * RGBA8_BPP, t * RGBA8_BPP + 2);
+                        }
+                    }
+                    BackbufferEncoding::Pack10 => {
+                        for t in 0..region_w as usize {
+                            let s = t * RGBA8_BPP;
+                            let packed = pack_rgba8_to_r10g10b10a2(
+                                srow[s],
+                                srow[s + 1],
+                                srow[s + 2],
+                                srow[s + 3],
+                            );
+                            drow[s..s + 4].copy_from_slice(&packed.to_le_bytes());
+                        }
                     }
                 }
             }

@@ -1594,6 +1594,66 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_present_hook_hits",
             PRESENT_HOOK_HITS.load(Ordering::SeqCst),
         );
+        // Swapchain-find reject attribution (present_overlay.rs FIND_STAGE_*): stage 1-4 = chain link
+        // null, 5-9 = candidate rejected (6=vt not module-backed, 7=vt in game exe, 8=stability wait,
+        // 9=QI rejected), 10/11 = accepted (exact vtable match / QI fallback). Added after the
+        // 2026-07-15 native-Windows runs where an opaque "chain miss" hid WHICH predicate refused the
+        // real swapchain for three full probes.
+        push_json_usize(
+            body,
+            "oracle_present_find_tries",
+            GAME_SWAPCHAIN_FIND_TRIES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_find_stage",
+            PRESENT_FIND_STAGE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_find_candidate",
+            PRESENT_FIND_CANDIDATE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_find_candidate_vt",
+            PRESENT_FIND_CANDIDATE_VT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_find_vt_module_kind",
+            PRESENT_FIND_VT_MODULE_KIND.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_find_got8",
+            PRESENT_FIND_GOT8.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_find_got22",
+            PRESENT_FIND_GOT22.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_find_streak",
+            PRESENT_FIND_STREAK.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_accept_path",
+            PRESENT_ACCEPT_PATH.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_backbuffer_format",
+            PRESENT_BACKBUFFER_FORMAT.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_present_composite_build_skips",
+            PRESENT_COMPOSITE_BUILD_SKIPS.load(Ordering::SeqCst),
+        );
         push_json_usize(
             body,
             "oracle_overlay_draw_hits",
