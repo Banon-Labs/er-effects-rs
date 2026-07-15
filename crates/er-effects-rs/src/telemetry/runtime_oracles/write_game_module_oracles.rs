@@ -1662,6 +1662,24 @@ fn write_game_module_oracles(body: &mut String) {
             "oracle_present_composite_early_skips",
             PRESENT_COMPOSITE_EARLY_SKIPS.load(Ordering::SeqCst),
         );
+        // Native-Windows loading overlay (separate window + own D3D12 device, er-effects-rs-8jz):
+        // stage = how far init got (10 = render loop live); frames = frames presented on OUR swapchain
+        // (proof the isolated overlay is rendering); show = current visibility request from loading state.
+        push_json_usize(
+            body,
+            "oracle_native_overlay_stage",
+            NATIVE_OVERLAY_STAGE.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_frames",
+            NATIVE_OVERLAY_FRAMES.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
+            "oracle_native_overlay_show",
+            NATIVE_OVERLAY_SHOW.load(Ordering::SeqCst),
+        );
         push_json_usize(
             body,
             "oracle_overlay_draw_hits",

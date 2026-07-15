@@ -6,6 +6,15 @@
 use super::*;
 
 pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
+    // NATIVE-WINDOWS LOADING OVERLAY ownership cycle (bd er-effects-rs-8jz): our separate-window overlay
+    // OWNS the screen (SHOW) whenever the local player is absent -- boot, title, and EVERY loading screen
+    // (fast-travel, area transitions, death re-load) -- and RELEASES it (HIDE) once the world is loaded and
+    // the player exists. This re-owns automatically on each subsequent load. Cheap per-frame check; the
+    // overlay thread reads the flag and toggles ShowWindow. No-op off native Windows.
+    if is_native_windows() {
+        let player_present = unsafe { PlayerIns::local_player_mut() }.is_ok();
+        NATIVE_OVERLAY_SHOW.store(usize::from(!player_present), Ordering::SeqCst);
+    }
     // Hardware write-watchpoint on GameMan+0xc30: (re)arm each frame until
     // the save-mount write is caught, so the VEH logs the exact writer. Runs
     // HARD input block (DInput keyboard+mouse + XInput gamepad), driven from the
@@ -423,6 +432,13 @@ pub(crate) fn install_title_visual_startup_hooks() {
                 .name("er-effects-present-overlay".to_owned())
                 .spawn(install_present_overlay_hook);
         });
+    }
+    // NATIVE-WINDOWS LOADING OVERLAY (bd er-effects-rs-8jz): a SEPARATE topmost window with our OWN D3D12
+    // device/swapchain that OWNS the screen during boot + every loading screen. On native Windows we
+    // cannot composite on the game's shared device (it crashes the strict driver), so this is the only
+    // safe display path there. Wine/vkd3d keeps the in-swapchain composite above. Install is idempotent.
+    if is_native_windows() {
+        install_native_overlay();
     }
 }
 
