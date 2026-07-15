@@ -221,36 +221,60 @@ fn profile_model_build_in_flight() -> bool {
 /// Presents skipped because the now-loading display window has not opened yet (RAM oracle).
 pub(crate) static PRESENT_COMPOSITE_EARLY_SKIPS: AtomicUsize = AtomicUsize::new(0);
 
-/// Shared Present/Present1 composite body: draw the loading-screen portrait, then the in-world
-/// effect-selector HUD, then service overlay input. Runs on the game render thread; never panics.
+/// True on native Windows, where our overlay compositing must be fully suppressed. Runtime-proven across
+/// 17 native-Windows runs (bd er-effects-rs-n4x, 2026-07-15): compositing on the GAME's shared D3D12
+/// device -- creating resources + submitting command lists -- crashes the strict native AMD driver at
+/// EVERY phase (early-boot D3D12 init: RIP-outside AV; the game's own now-loading screen: WRITE AV), while
+/// composite-off is 60s clean and reaches gameplay. vkd3d/Proton isolates the shared-device work; native
+/// Windows does not. Displaying our overlay on native Windows therefore needs a different architecture (a
+/// SEPARATE overlay swapchain/window, or the game's own Scaleform/CSEzDraw render primitives), not a
+/// when-gate. Until that redesign, native Windows runs stable with NO custom overlay visuals; the
+/// swapchain-find/HDR/device-removed infra all stay in place for the eventual redesign.
+fn composite_suppressed_on_native() -> bool {
+    !running_under_wine()
+}
+
+/// Shared Present/Present1 composite body: draw the loading bar / save picker (and, where the render-drive
+/// runs, the loading-screen portrait), then the in-world effect-selector HUD, then service overlay input.
+/// Runs on the game render thread; never panics.
 ///
-/// NATIVE-WINDOWS CRASH GATE (2026-07-15, bd er-effects-rs-n4x). On the strict native D3D12 driver, ANY
-/// composite GPU work during the FRAGILE EARLY BOOT (D3D/asset init + the title/profile-select offscreen
-/// build, ~0..+15s) destabilizes the game and it AVs before it ever renders its title -- so the user only
-/// ever saw a black screen + cursor + teardown, never a frame. The same DLL WITHOUT the overlay reaches
-/// the world fine (proven: control runs, present_hook_hits=0, player_available=true). So do NOT composite
-/// until the now-loading screen has actually opened (`PROFILE_LOADSCREEN_TABLE_BUILDS > 0`, set by the
-/// game task ~+49s, long after the early-boot crash window). Until then the detour is a pure passthrough:
-/// zero GPU work, the game boots exactly as it does overlay-less. This SACRIFICES the pre-title boot bar
-/// (it lived entirely inside the crash window) to keep the character portrait, which is drawn in the
-/// now-loading window where it belongs and where the game is stable.
+/// NATIVE-WINDOWS SPLIT (2026-07-15, bd er-effects-rs-n4x). The strict native D3D12 driver crashes on the
+/// character-profile RENDER-DRIVE (proven: drive off => 60s stable + reaches gameplay), so on native
+/// Windows the drive is gated off and the animated PORTRAIT cannot render. But the loading BAR + save
+/// PICKER are pure DISPLAY (a CopyTextureRegion of our own CPU-rasterized pixels onto the backbuffer
+/// inside the game's Present, when the backbuffer is guaranteed to be in PRESENT state) -- they need no
+/// drive. So on native Windows: SKIP the portrait composite (it would only ever have a stale/absent head
+/// with the drive off, and its readback path is heavier), and draw the boot-progress bar + picker
+/// directly. On Wine/Proton (vkd3d), keep the full portrait-first path.
 unsafe fn composite_on_game_swapchain(base: usize, this_u: usize) {
     // NOTE: the offscreen RASTERIZE is NOT driven here. Present is the WRONG GX phase -- the frame's GX
     // recording is already closed, so the subcontext pool pop no-ops (black). The rasterize is driven from
     // profile_lookat_realtime_draw_tick (a DRAW-phase CSTaskImp task, live recording frame). This hook
     // only does the static composite of an already-captured RGBA.
-    if PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst) == 0 {
-        // Fragile early boot: pure passthrough, no GPU work (survive to the now-loading window).
+    //
+    // NATIVE-WINDOWS DISPLAY-WINDOW GATE (2026-07-15, bd er-effects-rs-n4x). Compositing during the fragile
+    // early-boot D3D12 init / title crashes the strict driver even with the render-drive off (RIP-outside
+    // AV ~+8s; composite-off is 60s clean). So on native Windows, do NO GPU work until the game's OWN
+    // now-loading screen is live (LOADING_SCREEN_UPDATE_HITS > 0, set by the native CS::LoadingScreen hook
+    // -- drive-independent, unlike PROFILE_LOADSCREEN_TABLE_BUILDS). Until then the detour is a pure
+    // passthrough and the game boots exactly as it does overlay-less. (Wine/vkd3d composites throughout,
+    // as before.)
+    if composite_suppressed_on_native() {
         PRESENT_COMPOSITE_EARLY_SKIPS.fetch_add(1, Ordering::SeqCst);
         return;
     }
-    if profile_model_build_in_flight() {
-        PRESENT_COMPOSITE_BUILD_SKIPS.fetch_add(1, Ordering::SeqCst);
+    let portrait_path = running_under_wine();
+    let drew_portrait = if portrait_path && !profile_model_build_in_flight() {
+        unsafe { composite_portrait_on_swapchain(base, this_u) }
     } else {
-        let drew_portrait = unsafe { composite_portrait_on_swapchain(base, this_u) };
-        if !drew_portrait {
-            let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
+        if portrait_path {
+            PRESENT_COMPOSITE_BUILD_SKIPS.fetch_add(1, Ordering::SeqCst);
         }
+        false
+    };
+    if !drew_portrait {
+        // Loading bar + save picker (the native-Windows display path; also the boot/black-gap path on Wine).
+        let _ = unsafe { composite_boot_progress_on_swapchain(base, this_u) };
     }
     let _ = unsafe { composite_effect_selector_on_swapchain(this_u) };
     // Keyboard input runs on an event-driven WH_KEYBOARD_LL hook (spawned once) so every press registers
