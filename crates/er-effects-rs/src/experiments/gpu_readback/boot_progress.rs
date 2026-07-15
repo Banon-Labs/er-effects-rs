@@ -808,16 +808,22 @@ fn boot_draw_marker_label(
     label: &str,
     has_bg: bool,
     text_scale: usize,
+    draw_label: bool,
 ) -> usize {
     let marker_x = content_x + (content_w * permille / 1000).min(content_w.saturating_sub(1));
-    let label_w = boot_text_width(label, text_scale);
-    let label_x = marker_x
-        .saturating_sub(label_w / 2)
-        .min(w.saturating_sub(label_w));
-    if has_bg {
-        boot_draw_text_shadowed(buf, w, h, label_x, content_y, label, text_scale);
-    } else {
-        boot_draw_text(buf, w, h, label_x, content_y, label, text_scale);
+    // `draw_label=false` still returns the marker position so the caller can draw the tick LINE, but
+    // suppresses the LABEL TEXT -- used when two nearby ticks' labels would collide (e.g. SAVE LOAD vs the
+    // long LOADING WORLD label at high resolution).
+    if draw_label {
+        let label_w = boot_text_width(label, text_scale);
+        let label_x = marker_x
+            .saturating_sub(label_w / 2)
+            .min(w.saturating_sub(label_w));
+        if has_bg {
+            boot_draw_text_shadowed(buf, w, h, label_x, content_y, label, text_scale);
+        } else {
+            boot_draw_text(buf, w, h, label_x, content_y, label, text_scale);
+        }
     }
     marker_x
 }
@@ -943,9 +949,22 @@ fn boot_view_rasterize(
             BOOT_VIEW_SAVE_CHECK_LABEL,
             has_bg,
             text_scale,
+            true,
         )
     } else {
         usize::MAX
+    };
+    // SAVE LOAD (615) and LOADING WORLD (700) sit only 85 permille apart, and the renamed LOADING WORLD
+    // label is long enough that at high resolution it overruns SAVE LOAD's label (the garbled overlap the
+    // user saw). Draw SAVE LOAD's LABEL only when it clears the LOADING WORLD label with a one-glyph gap;
+    // its tick LINE is always drawn regardless. At lower resolutions where both fit, SAVE LOAD keeps its label.
+    let save_load_label_fits = {
+        let sl_center = content_x + content_w * BOOT_VIEW_SAVE_LOAD_PERMILLE / 1000;
+        let lw_center = content_x + content_w * BOOT_VIEW_NATIVE_HANDOFF_PERMILLE / 1000;
+        let sl_right = sl_center + boot_text_width(BOOT_VIEW_SAVE_LOAD_LABEL, text_scale) / 2;
+        let lw_left =
+            lw_center.saturating_sub(boot_text_width(BOOT_VIEW_NATIVE_HANDOFF_LABEL, text_scale) / 2);
+        sl_right + BOOT_VIEW_GLYPH_ADV * text_scale <= lw_left
     };
     let save_load_marker_x = if save_picker_hold {
         usize::MAX
@@ -961,6 +980,7 @@ fn boot_view_rasterize(
             BOOT_VIEW_SAVE_LOAD_LABEL,
             has_bg,
             text_scale,
+            save_load_label_fits,
         )
     };
     let marker_x = boot_draw_marker_label(
@@ -974,6 +994,7 @@ fn boot_view_rasterize(
         BOOT_VIEW_NATIVE_HANDOFF_LABEL,
         has_bg,
         text_scale,
+        true,
     );
     boot_fill_rect(
         &mut buf,
