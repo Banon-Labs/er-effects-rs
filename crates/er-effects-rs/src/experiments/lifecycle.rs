@@ -12,8 +12,21 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // the player exists. This re-owns automatically on each subsequent load. Cheap per-frame check; the
     // overlay thread reads the flag and toggles ShowWindow. No-op off native Windows.
     if is_native_windows() {
-        let player_present = unsafe { PlayerIns::local_player_mut() }.is_ok();
-        NATIVE_OVERLAY_SHOW.store(usize::from(!player_present), Ordering::SeqCst);
+        // OWN THE WHOLE LOADING SURFACE (user 2026-07-15): the overlay must keep covering the screen through
+        // EVERY loading sequence -- boot, title, and the game's OWN native loading screen -- and release only
+        // in settled gameplay. Gating on !player_present alone released too early: PlayerIns becomes valid
+        // MID-LOAD (before the world finishes streaming), so the overlay hid and the game's native loading
+        // screen (with its own bar) showed through -- the exact regression the user reported. Reuse the same
+        // gameplay-idle predicate the portrait pipeline uses (portrait_pipeline_idle_in_gameplay: in-world
+        // AND load_done AND no cover up, or the native ProfileSelect menu is open), which stays "not idle"
+        // through boot/title/EVERY loading screen and only goes idle in real gameplay. Always own the screen
+        // while our own startup save picker is up (it needs the overlay regardless of load state).
+        let owns_surface = save_picker_overlay_active()
+            || match game_module_base() {
+                Ok(base) => !unsafe { portrait_pipeline_idle_in_gameplay(base) },
+                Err(_) => true,
+            };
+        NATIVE_OVERLAY_SHOW.store(usize::from(owns_surface), Ordering::SeqCst);
         // NATIVE-WINDOWS SAVE PICKER input (bd er-effects-rs-8wt): the picker LIST already renders
         // via the overlay's shared boot_view_render_frame (overlay_save_picker_onto), but the Wine
         // build drives the picker's input from the D3D12 Present hook -- which never installs on native
@@ -29,6 +42,17 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
         // (the gamepad edge-detection state is shared). catch_unwind matches the Present-hook call site.
         let _ = std::panic::catch_unwind(ensure_save_picker_keyboard_hook);
         let _ = std::panic::catch_unwind(save_picker_overlay_input_tick);
+        // Loading-screen character STATS (bd er-effects-rs-rbc): build the game-menu-font stats lines on
+        // the GAME THREAD (safe guarded reads of ProfileSummary/PlayerGameData) into STATS_TEXT_CACHE, so
+        // the isolated overlay's render thread can re-raster them at screen scale and composite them at the
+        // expected loading-screen location (5%/60%, game MenuFont). Content-keyed + self-gates on a captured
+        // font + a readable character, so it is a cheap no-op until a character context exists, and updates
+        // as early as the data is available -- before the game's own loading screen. On Wine this is built
+        // from save_swap_profile_table for the in-swapchain composite; on native Windows that composite is
+        // suppressed, so drive the same build here.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            maybe_build_stats_text()
+        }));
     }
     // Hardware write-watchpoint on GameMan+0xc30: (re)arm each frame until
     // the save-mount write is caught, so the VEH logs the exact writer. Runs

@@ -1682,6 +1682,11 @@ fn write_game_module_oracles(body: &mut String) {
         );
         push_json_usize(
             body,
+            "oracle_overlay_stats_draw_hits",
+            OVERLAY_STATS_DRAW_HITS.load(Ordering::SeqCst),
+        );
+        push_json_usize(
+            body,
             "oracle_overlay_draw_hits",
             OVERLAY_DRAW_HITS.load(Ordering::SeqCst),
         );

@@ -128,7 +128,10 @@ const BOOT_VIEW_SAVE_CHECK_LABEL: &str = "SAVE CHECK";
 const BOOT_VIEW_SAVE_LOAD_PERMILLE: usize = 615;
 const BOOT_VIEW_SAVE_LOAD_LABEL: &str = "SAVE LOAD";
 const BOOT_VIEW_NATIVE_HANDOFF_PERMILLE: usize = 700;
-const BOOT_VIEW_NATIVE_HANDOFF_LABEL: &str = "NATIVE";
+// User-facing label for the world-load handoff tick. On native Windows our overlay now OWNS/covers the
+// game's own loading screen through this phase (rather than handing off to it), so the marker reads as a
+// player-facing "loading the world" step, not the internal "NATIVE" (game-native-loading-screen) handoff.
+const BOOT_VIEW_NATIVE_HANDOFF_LABEL: &str = "LOADING WORLD";
 const BOOT_VIEW_HANDOFF_MARKER_W: usize = 3;
 const BOOT_VIEW_HANDOFF_GAP_W: usize = 9;
 const BOOT_VIEW_MILESTONE_PERMILLE: [usize; 7] = [
@@ -322,6 +325,25 @@ fn boot_view_progress() -> (usize, usize) {
     // so the bar resumes past SAVE CHECK toward SAVE LOAD / NATIVE.
     let pm = if missing_save_selection_pending() {
         pm.min(BOOT_VIEW_SAVE_CHECK_PERMILLE)
+    } else {
+        pm
+    };
+    // OWN-THE-SURFACE completion (native Windows). Once the LOADING WORLD handoff milestone (idx 6) is
+    // reached and our isolated overlay COVERS the game's native loading screen, the bar must finish itself
+    // 700 -> 1000 instead of freezing at the handoff marker (the frozen 70% the user saw the native screen
+    // take over from). Drive the final segment from the game's REAL loading gauge
+    // (LOADING_SCREEN_BAR_PROGRESS_PERMILLE, the native Gauge_3 progress our now-loading observer samples),
+    // mapping its 0..1000 onto 700..1000. On Wine we still hand the surface off to that native Gauge_3
+    // (the composite path stops at the handoff), so this completion is native-only; the fetch_max below
+    // keeps it monotonic.
+    let pm = if crate::experiments::is_native_windows()
+        && idx + 1 >= BOOT_VIEW_MILESTONE_PERMILLE.len()
+    {
+        let handoff = BOOT_VIEW_NATIVE_HANDOFF_PERMILLE;
+        let native = LOADING_SCREEN_BAR_PROGRESS_PERMILLE
+            .load(Ordering::SeqCst)
+            .min(1000);
+        pm.max(handoff + native * (1000 - handoff) / 1000)
     } else {
         pm
     };
@@ -826,7 +848,10 @@ pub(crate) fn boot_view_render_frame(bw: usize, bh: usize) -> BootViewFrame {
     let strip_dy = (bh32 * BOOT_VIEW_STRIP_Y_NUM / BOOT_VIEW_STRIP_Y_DEN).min(bh32 - strip_h);
     let bg = boot_bg_image();
     let picker_active = save_picker_overlay_active();
-    let full_frame = bg.is_some() || picker_active;
+    // Loading-screen character stats (game menu font) also need the full-screen canvas so they land at
+    // their expected 5%/60% location; force full_frame when they are shown, exactly like picker_active.
+    let stats_active = stats_overlay_active();
+    let full_frame = bg.is_some() || picker_active || stats_active;
     let (region_w, region_h, dx, dy, content_x, content_y, content_w) = if full_frame {
         (
             bw,
@@ -854,6 +879,10 @@ pub(crate) fn boot_view_render_frame(bw: usize, bh: usize) -> BootViewFrame {
     );
     if picker_active {
         let _ = overlay_save_picker_onto(&mut rgba, region_w, region_h);
+    } else if stats_active {
+        // Mutually exclusive with the picker (stats_active is false while the picker owns the screen);
+        // the else-if makes that explicit. Composites the game-font stats block at 5%/60%.
+        let _ = overlay_stats_onto(&mut rgba, region_w, region_h);
     }
     BootViewFrame {
         rgba,
