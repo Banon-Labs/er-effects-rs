@@ -125,6 +125,17 @@ pub(crate) fn block_input_enabled() -> bool {
     if own_stepper_enabled() && !own_stepper_passive_enabled() && inject_nav_enabled() {
         return true;
     }
+    // NATIVE-WINDOWS PRODUCT is USER-INTERACTIVE (user drives the startup save picker, then plays). The
+    // DEFAULT zero-input autoload block below -- DInput/XInput state-zeroing + a 1x1 ClipCursor cursor
+    // confinement -- is a Wine-probe PROOF feature (prove the autoload needs no foreign input), NOT product
+    // behavior: on the user's machine it TRAPS the mouse to the top-left and eats keyboard/mouse/gamepad from
+    // boot until in-world (user-reported 2026-07-15: "the DLL is moving my mouse / clicking / changing focus").
+    // So the DEFAULT product path must never confine or suppress the user's input on native Windows. The
+    // EXPLICIT probe opt-ins above (sq_repro, ER_EFFECTS_BLOCK_INPUT env/file, inject_nav) are checked first
+    // and still engage the block when a real probe wants it, on native Windows or Wine.
+    if is_native_windows() {
+        return false;
+    }
     // PASSIVE mode never blocks. Otherwise keep the block engaged through the ENTIRE headless
     // drive -- boot -> menu-open -> zero-input title-confirm Load fire -> mount -> confirm --
     // releasing ONLY once in-world (the user takes over) or on abort (phase DONE). Product
