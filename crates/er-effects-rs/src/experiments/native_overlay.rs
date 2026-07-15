@@ -26,16 +26,22 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC, D3D12_COMMAND_QUEUE_FLAG_NONE,
-    D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_DESCRIPTOR_HEAP_DESC, D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
-    D3D12_DESCRIPTOR_HEAP_TYPE_RTV, D3D12_FENCE_FLAG_NONE, D3D12_RESOURCE_BARRIER,
-    D3D12_RESOURCE_BARRIER_0, D3D12_RESOURCE_BARRIER_FLAG_NONE,
-    D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, D3D12_RESOURCE_STATE_PRESENT,
-    D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES, D3D12_RESOURCE_TRANSITION_BARRIER,
-    D3D12CreateDevice, ID3D12CommandAllocator, ID3D12CommandQueue, ID3D12DescriptorHeap,
-    ID3D12Device, ID3D12Fence, ID3D12GraphicsCommandList, ID3D12Resource,
+    D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_DESCRIPTOR_HEAP_DESC,
+    D3D12_DESCRIPTOR_HEAP_FLAG_NONE, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, D3D12_FENCE_FLAG_NONE,
+    D3D12_HEAP_FLAG_NONE, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_UPLOAD, D3D12_MEMORY_POOL_UNKNOWN,
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT, D3D12_RESOURCE_BARRIER, D3D12_RESOURCE_BARRIER_0,
+    D3D12_RESOURCE_BARRIER_FLAG_NONE, D3D12_RESOURCE_BARRIER_TYPE_TRANSITION, D3D12_RESOURCE_DESC,
+    D3D12_RESOURCE_DIMENSION_BUFFER, D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_FLAG_NONE,
+    D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_GENERIC_READ,
+    D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES,
+    D3D12_RESOURCE_TRANSITION_BARRIER, D3D12_TEXTURE_COPY_LOCATION, D3D12_TEXTURE_COPY_LOCATION_0,
+    D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+    D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_TEXTURE_LAYOUT_UNKNOWN, D3D12CreateDevice,
+    ID3D12CommandAllocator, ID3D12CommandQueue, ID3D12DescriptorHeap, ID3D12Device, ID3D12Fence,
+    ID3D12GraphicsCommandList, ID3D12Resource,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
+    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_UNKNOWN, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_PRESENT, DXGI_SCALING_STRETCH,
@@ -52,7 +58,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{Interface, w};
 
-use super::LOADING_SCREEN_BAR_PROGRESS_PERMILLE;
+use super::{BootViewFrame, boot_view_render_frame};
 use crate::telemetry::append_autoload_debug;
 
 /// Visibility request set by the game task each frame from the loading state: 1 = SHOW (cover the game),
@@ -78,16 +84,6 @@ pub(crate) fn install_native_overlay() {
         .spawn(|| {
             let _ = std::panic::catch_unwind(|| unsafe { native_overlay_run() });
         });
-}
-
-/// Progress (0..=1000) for the overlay loading bar. During the game's native loading screen we mirror its
-/// real progress; before that (boot / title), a gentle frame-driven creep (capped) reads as "working".
-fn overlay_progress_permille() -> usize {
-    let native = LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst);
-    if native > 0 {
-        return native.min(1000);
-    }
-    (NATIVE_OVERLAY_FRAMES.load(Ordering::SeqCst) / 8).min(350)
 }
 
 unsafe extern "system" fn overlay_wndproc(
@@ -339,9 +335,70 @@ unsafe fn native_overlay_run() {
         }
     };
     let mut fence_val: u64 = 0;
+
+    // --- upload buffer for the SHARED boot/loading frame (bar + picker), sized for a full-screen copy ---
+    // The per-frame region is a small strip most of the time and full-screen when the picker is up; both
+    // fit in this full-frame-sized upload buffer, so it is created once.
+    let region_desc_for = |w: usize, h: usize| D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        Alignment: 0,
+        Width: w as u64,
+        Height: h as u32,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+        Flags: D3D12_RESOURCE_FLAG_NONE,
+    };
+    let full_desc = region_desc_for(win_w as usize, win_h as usize);
+    let mut full_total: u64 = 0;
+    unsafe {
+        device.GetCopyableFootprints(&full_desc, 0, 1, 0, None, None, None, Some(&mut full_total))
+    };
+    let up_heap = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_UPLOAD,
+        CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+        CreationNodeMask: 1,
+        VisibleNodeMask: 1,
+    };
+    let buf_desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+        Alignment: 0,
+        Width: full_total.max(1),
+        Height: 1,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: DXGI_FORMAT_UNKNOWN,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+        Flags: D3D12_RESOURCE_FLAG_NONE,
+    };
+    let mut upload_opt: Option<ID3D12Resource> = None;
+    let have_upload = full_total > 0
+        && unsafe {
+            device.CreateCommittedResource(
+                &up_heap,
+                D3D12_HEAP_FLAG_NONE,
+                &buf_desc,
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+                None,
+                &mut upload_opt,
+            )
+        }
+        .is_ok();
+    let upload = upload_opt;
+
     NATIVE_OVERLAY_STAGE.store(9, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "native-overlay: D3D12 ready (own device); entering render loop"
+        "native-overlay: D3D12 ready (own device); entering render loop (upload={have_upload})"
     ));
 
     // Pacing primitive (thread::sleep is banned; a held-but-never-sent channel + recv_timeout is the
@@ -398,39 +455,105 @@ unsafe fn native_overlay_run() {
         let handle = D3D12_CPU_DESCRIPTOR_HANDLE {
             ptr: rtv_base.ptr + idx * rtv_size,
         };
-        // Charcoal cover (owns the screen), then a horizontal loading bar: a dim track with an Elden-Ring
-        // gold fill sized to the progress. Drawn with ClearRenderTargetView sub-rects -- no upload needed.
-        unsafe { list.ClearRenderTargetView(handle, &[0.02, 0.02, 0.03, 1.0], None) };
-        let permille = overlay_progress_permille();
-        let bar_w = win_w * 11 / 20; // ~55% width
-        let bar_h = (win_h / 240).max(6); // ~9px at 2160p
-        let bar_x = (win_w - bar_w) / 2;
-        let bar_y = win_h * 82 / 100;
-        let track = RECT {
-            left: bar_x,
-            top: bar_y,
-            right: bar_x + bar_w,
-            bottom: bar_y + bar_h,
-        };
-        unsafe { list.ClearRenderTargetView(handle, &[0.12, 0.10, 0.08, 1.0], Some(&[track])) };
-        let fill_w = bar_w * permille as i32 / 1000;
-        if fill_w > 0 {
-            let fill = RECT {
-                left: bar_x,
-                top: bar_y,
-                right: bar_x + fill_w,
-                bottom: bar_y + bar_h,
-            };
-            unsafe { list.ClearRenderTargetView(handle, &[0.80, 0.66, 0.36, 1.0], Some(&[fill])) };
+        // Black cover (matches the game's black boot and the bar frame's own black background).
+        unsafe { list.ClearRenderTargetView(handle, &[0.0, 0.0, 0.0, 1.0], None) };
+
+        // SHARED rasterizer: the exact same loading bar (milestone label, ticks, text scaling, progress)
+        // and save-picker panel as the Wine in-swapchain path -- rendered once, here uploaded + copied onto
+        // OUR backbuffer at its placement.
+        let frame = boot_view_render_frame(win_w as usize, win_h as usize);
+        let mut drew = false;
+        if let Some(up) = upload.as_ref() {
+            if frame.w > 0 && frame.h > 0 {
+                let region_desc = region_desc_for(frame.w, frame.h);
+                let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+                let mut total: u64 = 0;
+                unsafe {
+                    device.GetCopyableFootprints(
+                        &region_desc,
+                        0,
+                        1,
+                        0,
+                        Some(&mut footprint),
+                        None,
+                        None,
+                        Some(&mut total),
+                    )
+                };
+                let row_pitch = footprint.Footprint.RowPitch as usize;
+                let src_row = frame.w * 4;
+                let mut mapped: *mut c_void = std::ptr::null_mut();
+                if total > 0
+                    && unsafe { up.Map(0, None, Some(&mut mapped)) }.is_ok()
+                    && !mapped.is_null()
+                {
+                    let dst = unsafe {
+                        std::slice::from_raw_parts_mut(mapped as *mut u8, total as usize)
+                    };
+                    for y in 0..frame.h {
+                        let so = y * src_row;
+                        let d = y * row_pitch;
+                        if d + src_row <= dst.len() && so + src_row <= frame.rgba.len() {
+                            dst[d..d + src_row].copy_from_slice(&frame.rgba[so..so + src_row]);
+                        }
+                    }
+                    unsafe { up.Unmap(0, None) };
+                    unsafe {
+                        overlay_transition(
+                            &list,
+                            bb,
+                            D3D12_RESOURCE_STATE_RENDER_TARGET,
+                            D3D12_RESOURCE_STATE_COPY_DEST,
+                        )
+                    };
+                    let mut dst_loc = D3D12_TEXTURE_COPY_LOCATION {
+                        pResource: ManuallyDrop::new(Some(bb.clone())),
+                        Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+                        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                            SubresourceIndex: 0,
+                        },
+                    };
+                    let mut src_loc = D3D12_TEXTURE_COPY_LOCATION {
+                        pResource: ManuallyDrop::new(Some(up.clone())),
+                        Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+                        Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
+                            PlacedFootprint: footprint,
+                        },
+                    };
+                    unsafe {
+                        list.CopyTextureRegion(
+                            &dst_loc,
+                            frame.dx as u32,
+                            frame.dy as u32,
+                            0,
+                            &src_loc,
+                            None,
+                        )
+                    };
+                    unsafe { ManuallyDrop::drop(&mut dst_loc.pResource) };
+                    unsafe { ManuallyDrop::drop(&mut src_loc.pResource) };
+                    unsafe {
+                        overlay_transition(
+                            &list,
+                            bb,
+                            D3D12_RESOURCE_STATE_COPY_DEST,
+                            D3D12_RESOURCE_STATE_PRESENT,
+                        )
+                    };
+                    drew = true;
+                }
+            }
         }
-        unsafe {
-            overlay_transition(
-                &list,
-                bb,
-                D3D12_RESOURCE_STATE_RENDER_TARGET,
-                D3D12_RESOURCE_STATE_PRESENT,
-            )
-        };
+        if !drew {
+            unsafe {
+                overlay_transition(
+                    &list,
+                    bb,
+                    D3D12_RESOURCE_STATE_RENDER_TARGET,
+                    D3D12_RESOURCE_STATE_PRESENT,
+                )
+            };
+        }
         if unsafe { list.Close() }.is_err() {
             let _ = tick_rx.recv_timeout(hidden_poll);
             continue;

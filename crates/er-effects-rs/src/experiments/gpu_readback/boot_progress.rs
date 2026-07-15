@@ -166,10 +166,10 @@ const BOOT_VIEW_TEXT_BASE_SCALE: usize = 2;
 const BOOT_VIEW_TEXT_REFERENCE_H: u32 = 1080;
 const BOOT_VIEW_TEXT_MIN_SCALE: usize = 1;
 const BOOT_VIEW_TEXT_MAX_SCALE: usize = 4;
-const BOOT_VIEW_GLYPH_W: usize = 5;
-const BOOT_VIEW_GLYPH_H: usize = 7;
+pub(crate) const BOOT_VIEW_GLYPH_W: usize = 5;
+pub(crate) const BOOT_VIEW_GLYPH_H: usize = 7;
 /// Advance per character (5px glyph + 1px gap, pre-scale).
-const BOOT_VIEW_GLYPH_ADV: usize = 6;
+pub(crate) const BOOT_VIEW_GLYPH_ADV: usize = 6;
 /// Hairline bar, like the game's own loading bar.
 const BOOT_VIEW_BAR_H: usize = 3;
 /// Gap between the text row and the bar track.
@@ -389,12 +389,12 @@ fn boot_glyph_5x7(c: char) -> [u8; 7] {
     }
 }
 
-fn boot_text_width(text: &str, scale: usize) -> usize {
+pub(crate) fn boot_text_width(text: &str, scale: usize) -> usize {
     text.chars().count() * BOOT_VIEW_GLYPH_ADV * scale
 }
 
 /// Blit `text` into the tight RGBA buffer at (x, y), scaled by `scale`.
-fn boot_draw_text_rgb(
+pub(crate) fn boot_draw_text_rgb(
     buf: &mut [u8],
     w: usize,
     h: usize,
@@ -798,6 +798,70 @@ fn boot_draw_marker_label(
         boot_draw_text(buf, w, h, label_x, content_y, label, text_scale);
     }
     marker_x
+}
+
+/// The rendered boot/loading frame: CPU RGBA plus where to place it on a `bw`x`bh` backbuffer.
+pub(crate) struct BootViewFrame {
+    pub(crate) rgba: Vec<u8>,
+    pub(crate) w: usize,
+    pub(crate) h: usize,
+    pub(crate) dx: usize,
+    pub(crate) dy: usize,
+}
+
+/// Render the boot/loading-screen frame ONCE, device-agnostically: the loading bar (milestone label,
+/// ticks, text scaling, progress creep) and -- when the startup save picker is armed -- its browser panel
+/// composited on top. This is the SHARED rasterizer for BOTH the Wine in-swapchain composite
+/// (composite_boot_progress_inner) and the native-Windows separate-window overlay, so the loading screen
+/// is identical on both. The caller uploads `rgba` and copies it to its backbuffer at `(dx, dy)`.
+pub(crate) fn boot_view_render_frame(bw: usize, bh: usize) -> BootViewFrame {
+    let bw32 = bw as u32;
+    let bh32 = bh as u32;
+    let text_scale = boot_view_text_scale(bh32);
+    let strip_w = (bw32 * BOOT_VIEW_STRIP_W_NUM / BOOT_VIEW_STRIP_W_DEN)
+        .max(BOOT_VIEW_STRIP_MIN_W)
+        .min(bw32);
+    let strip_h = (boot_view_strip_height(text_scale) as u32).min(bh32);
+    let strip_dx = (bw32 - strip_w) / 2;
+    let strip_dy = (bh32 * BOOT_VIEW_STRIP_Y_NUM / BOOT_VIEW_STRIP_Y_DEN).min(bh32 - strip_h);
+    let bg = boot_bg_image();
+    let picker_active = save_picker_overlay_active();
+    let full_frame = bg.is_some() || picker_active;
+    let (region_w, region_h, dx, dy, content_x, content_y, content_w) = if full_frame {
+        (
+            bw,
+            bh,
+            0usize,
+            0usize,
+            strip_dx as usize,
+            strip_dy as usize,
+            strip_w as usize,
+        )
+    } else {
+        (
+            strip_w as usize,
+            strip_h as usize,
+            strip_dx as usize,
+            strip_dy as usize,
+            0usize,
+            0usize,
+            strip_w as usize,
+        )
+    };
+    let (ms_idx, permille) = boot_view_progress();
+    let mut rgba = boot_view_rasterize(
+        region_w, region_h, ms_idx, permille, content_x, content_y, content_w, bg, text_scale,
+    );
+    if picker_active {
+        let _ = overlay_save_picker_onto(&mut rgba, region_w, region_h);
+    }
+    BootViewFrame {
+        rgba,
+        w: region_w,
+        h: region_h,
+        dx,
+        dy,
+    }
 }
 
 /// Rasterize either the original tight black progress strip, or a full-screen cached screenshot
