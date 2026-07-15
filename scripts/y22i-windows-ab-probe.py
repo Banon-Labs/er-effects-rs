@@ -45,6 +45,10 @@ CRASH_RVA = "0xec95d1"
 ORACLE_KEYS = (
     "oracle_scaleform_desc_guard_installed",
     "oracle_scaleform_desc_provider_null_hits",
+    "oracle_gx_resource_classifier_guard_installed",
+    "oracle_gx_resource_classifier_null_hits",
+    "oracle_gx_offscreen_builder_guard_installed",
+    "oracle_gx_offscreen_builder_skip_hits",
     "player_available", "player_seen", "runtime_mode", "oracle_char_name",
     "oracle_present_hook_hits", "oracle_present_find_tries", "oracle_present_find_stage",
     "oracle_present_find_vt_module_kind", "oracle_present_find_streak",

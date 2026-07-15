@@ -90,3 +90,96 @@ pub(crate) fn install_scaleform_descriptor_guard() {
         )),
     }
 }
+
+/// Detour over the GX offscreen resource-state classifier `FUN_141e90290`. The classifier is called with
+/// the wrapper's inner GX resource in `rcx`; it derefs `[rcx+0x10]` then that value at `+0x30`. When the
+/// resource is null/half-seeded (advance-before-seed race our composite widens) the game access-violates
+/// (rcx=0x20, fault_addr=0x30). We null-check `rcx` and the exact chain the classifier walks; if it is not
+/// yet seeded we bail to a benign 0 (classification "none"), skipping the fault. Otherwise a transparent
+/// passthrough. `extern "system"` with the four register args (rcx/rdx/r8/r9) forwarded -- the classifier
+/// uses at most these; a bail returns before touching the trampoline so its exact arity never matters there.
+pub(crate) unsafe extern "system" fn gx_resource_classifier_hook(
+    resource: usize,
+    rdx: usize,
+    r8: usize,
+    r9: usize,
+) -> usize {
+    // Seeded-resource proof: rcx is a real pointer, `[rcx+0x10]` is readable, and the classifier's next
+    // deref `[[rcx+0x10]+0x30]` is readable. Any failure = the null window; bail to 0 without faulting.
+    let seeded = resource > 0x10000 && resource != TITLE_OWNER_SCAN_START_ADDRESS && {
+        match unsafe { safe_read_usize(resource + GX_RESOURCE_CLASSIFIER_INNER_OFFSET) } {
+            Some(inner) if inner > 0x10000 && inner != TITLE_OWNER_SCAN_START_ADDRESS => {
+                unsafe { safe_read_usize(inner + GX_RESOURCE_CLASSIFIER_STATE_OFFSET) }.is_some()
+            }
+            _ => false,
+        }
+    };
+    if !seeded {
+        GX_RESOURCE_CLASSIFIER_NULL_HITS.fetch_add(1, Ordering::SeqCst);
+        return 0;
+    }
+    let orig = GX_RESOURCE_CLASSIFIER_ORIG.load(Ordering::SeqCst);
+    if orig != TITLE_OWNER_SCAN_START_ADDRESS && orig != HOOK_ORIGINAL_UNSET {
+        let f: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+            unsafe { std::mem::transmute(orig) };
+        return unsafe { f(resource, rdx, r8, r9) };
+    }
+    0
+}
+
+/// Install the always-on GX offscreen resource-state classifier null guard. Idempotent; safe to call
+/// unconditionally at attach. Transparent unless the null-resource window occurs.
+pub(crate) fn install_gx_resource_classifier_guard() {
+    if GX_RESOURCE_CLASSIFIER_INSTALLED.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    match unsafe { MH_Initialize() } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
+        status => {
+            append_autoload_debug(format_args!(
+                "gx-classifier-guard: MH_Initialize failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    let Ok(target) = game_rva(GX_RESOURCE_CLASSIFIER_RVA as u32) else {
+        append_autoload_debug(format_args!(
+            "gx-classifier-guard: game_rva(0x{GX_RESOURCE_CLASSIFIER_RVA:x}) failed"
+        ));
+        return;
+    };
+    match unsafe {
+        MhHook::new(
+            target as *mut c_void,
+            gx_resource_classifier_hook as *mut c_void,
+        )
+    } {
+        Ok(hook) => {
+            GX_RESOURCE_CLASSIFIER_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            if unsafe { hook.queue_enable() }.is_err() {
+                append_autoload_debug(format_args!(
+                    "gx-classifier-guard: queue_enable failed for 0x{target:x}"
+                ));
+                return;
+            }
+            std::mem::forget(hook);
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "gx-classifier-guard: MhHook::new failed: {status:?}"
+            ));
+            return;
+        }
+    }
+    match unsafe { MH_ApplyQueued() } {
+        MH_STATUS::MH_OK => {
+            GX_RESOURCE_CLASSIFIER_INSTALLED.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "gx-classifier-guard: installed GX resource-state classifier null guard at 0x{target:x}"
+            ));
+        }
+        status => append_autoload_debug(format_args!(
+            "gx-classifier-guard: MH_ApplyQueued failed: {status:?}"
+        )),
+    }
+}

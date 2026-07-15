@@ -366,6 +366,7 @@ pub(crate) static START_TIP_SUPPRESSION: Once = Once::new();
 /// One-shot install of the always-on Scaleform descriptor-heap null guard (er-effects-rs-y22i).
 /// Installed unconditionally at DLL attach -- it is a crash guard, not a feature.
 pub(crate) static START_SCALEFORM_GUARD: Once = Once::new();
+pub(crate) static START_GX_RESOURCE_CLASSIFIER_GUARD: Once = Once::new();
 /// One-shot install latch for the D3D12 Present overlay (the deterministic loading-portrait display path).
 pub(crate) static START_PRESENT_OVERLAY: Once = Once::new();
 pub(crate) static START_PROFILE_RENDERER_TEARDOWN_SPARE: Once = Once::new();
