@@ -21,7 +21,31 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
         // AND load_done AND no cover up, or the native ProfileSelect menu is open), which stays "not idle"
         // through boot/title/EVERY loading screen and only goes idle in real gameplay. Always own the screen
         // while our own startup save picker is up (it needs the overlay regardless of load state).
+        // OWN UNTIL THE NATIVE SCREEN IS ACTUALLY GONE (user 2026-07-15 "if I see the game's native loading
+        // screen, we aren't owning it long enough"). portrait_pipeline_idle_in_gameplay (world-reached +
+        // load-done + no cover) can flip true while the native NOW-LOADING screen is STILL VISUALLY UP on a
+        // fast load, so the overlay released and the native screen flashed through. The native loading screen
+        // is rendering iff CS::LoadingScreen::Update is still ticking (LOADING_SCREEN_UPDATE_HITS increments
+        // each of its frames; it stops the moment the screen is destroyed). Keep owning while it ticks, plus a
+        // short grace to cover its fade-out, so the native screen is never exposed; then release to gameplay.
+        let native_loadscreen_up = {
+            static LAST_LOADSCREEN_HITS: AtomicUsize = AtomicUsize::new(0);
+            static LOADSCREEN_GRACE: AtomicUsize = AtomicUsize::new(0);
+            const LOADSCREEN_GRACE_FRAMES: usize = 12;
+            let hits = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst);
+            if LAST_LOADSCREEN_HITS.swap(hits, Ordering::SeqCst) != hits {
+                LOADSCREEN_GRACE.store(LOADSCREEN_GRACE_FRAMES, Ordering::SeqCst);
+            }
+            let g = LOADSCREEN_GRACE.load(Ordering::SeqCst);
+            if g > 0 {
+                LOADSCREEN_GRACE.store(g - 1, Ordering::SeqCst);
+                true
+            } else {
+                false
+            }
+        };
         let owns_surface = save_picker_overlay_active()
+            || native_loadscreen_up
             || match game_module_base() {
                 Ok(base) => !unsafe { portrait_pipeline_idle_in_gameplay(base) },
                 Err(_) => true,
