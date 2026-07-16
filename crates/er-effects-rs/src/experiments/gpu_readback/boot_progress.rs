@@ -106,47 +106,38 @@ const BOOT_BG_STEAM_APPID: &str = "1245620";
 const BOOT_BG_MAX_DIM: usize = 4096;
 const BOOT_BG_MAX_PIXELS: usize = BOOT_BG_MAX_DIM * BOOT_BG_MAX_DIM;
 
-/// Milestone labels (5x7 font glyph coverage: A-Z subset + digits + '%'; see `boot_glyph_5x7`).
-const BOOT_VIEW_MILESTONE_LABELS: [&str; 7] = [
-    "BOOT", "GAME", "OFFLINE", "TITLE", "MENU", "CONTINUE", "LOADING",
+/// Number of loading phases. Higher granularity than the old 7 (user 2026-07-15: "we need higher
+/// granularity and specificity to the label ... It gets stuck on some of these phases for longer
+/// segments"), especially across the world-load, which is the long stuck stretch.
+const BOOT_VIEW_MILESTONE_COUNT: usize = 9;
+/// Left-aligned phase labels (5x7 font: A-Z + space; see `boot_glyph_5x7`). Specific + multi-word -- this
+/// single label above the bar now carries the whole phase story (all tick markers removed), so it is
+/// left-aligned in the reserved text space and can be more than one word. Ordered; each idx is asserted by
+/// `boot_milestone_reached(idx)` and latched monotonic by the caller.
+const BOOT_VIEW_MILESTONE_LABELS: [&str; BOOT_VIEW_MILESTONE_COUNT] = [
+    "STARTING UP",     // 0: our present hook + the game swapchain are live (engine still initializing)
+    "GAME SYSTEMS",    // 1: GameMan/global systems constructed
+    "LOADING TITLE",   // 2: the title menu resources are being acquired (the long ~32s title-asset load)
+    "TITLE SCREEN",    // 3: the title is up (PRESS START bound)
+    "MAIN MENU",       // 4: the main menu opened
+    "LOADING SAVE",    // 5: Continue committed (SetState5)
+    "BUILDING WORLD",  // 6: the native loading screen appeared (world build begun)
+    "STREAMING WORLD", // 7: the game's world-load gauge is actively streaming
+    "ENTERING WORLD",  // 8: the world-load gauge is near-complete / the load is closing
 ];
-/// Progress targets per milestone, in permille. Spacing follows the measured product-run timeline
-/// (first present +3.5s, offline +8.5s, title/menu ~+10s, continue ~+15s, table builds ~+15.5s) so
-/// the bar's pace roughly matches wall-clock without ever depending on it. The final pre-loading-view
-/// milestone deliberately stops at the native-handoff marker instead of 100%: the remaining gap is owned
-/// by the game's real now-loading Gauge_3 bar, whose terminal frame is the true all-loading-complete
-/// semaphore.
-// SAVE CHECK sits at the fill edge where the bar actually PAUSES while the missing-save overlay
-// picker is up. The native title menu-open is now HELD until the pick (title_open_menu_suppress_hook),
-// so the MENU milestone (490) cannot latch while the picker is pending -- the bar stalls at the TITLE
-// milestone (385) and its inter-milestone creep tops out at 385 + 7/10*(490-385) = 458. The clamp in
-// `boot_view_progress` pins the fill edge exactly here while the pick is pending; it lifts the frame the
-// pick clears the latch, so the bar resumes MENU -> CONTINUE -> SAVE LOAD / NATIVE. (Was 570, which
-// matched the OLD flow where the menu opened before the pick and the bar paused at the MENU milestone.)
-const BOOT_VIEW_SAVE_CHECK_PERMILLE: usize = 458;
-const BOOT_VIEW_SAVE_CHECK_LABEL: &str = "SAVE CHECK";
-const BOOT_VIEW_SAVE_LOAD_PERMILLE: usize = 615;
-const BOOT_VIEW_SAVE_LOAD_LABEL: &str = "SAVE LOAD";
-const BOOT_VIEW_NATIVE_HANDOFF_PERMILLE: usize = 700;
-// User-facing label for the world-load handoff tick. On native Windows our overlay now OWNS/covers the
-// game's own loading screen through this phase (rather than handing off to it), so the marker reads as a
-// player-facing "loading the world" step, not the internal "NATIVE" (game-native-loading-screen) handoff.
-const BOOT_VIEW_NATIVE_HANDOFF_LABEL: &str = "LOADING WORLD";
-const BOOT_VIEW_HANDOFF_MARKER_W: usize = 3;
-const BOOT_VIEW_HANDOFF_GAP_W: usize = 9;
-const BOOT_VIEW_MILESTONE_PERMILLE: [usize; 7] = [
-    45,
-    140,
-    245,
-    385,
-    490,
-    615,
-    BOOT_VIEW_NATIVE_HANDOFF_PERMILLE,
-];
-/// Inter-milestone creep: over this window the bar moves up to 7/10 of the gap to the next target.
-const BOOT_VIEW_CREEP_FULL_MS: u64 = 6000;
-const BOOT_VIEW_CREEP_NUM: usize = 7;
-const BOOT_VIEW_CREEP_DEN: usize = 10;
+/// Progress target per phase, in permille. The world-load tail (STREAMING/ENTERING) is ALSO driven by the
+/// game's real Gauge_3 progress and forced to 1000 at the in-game handoff (see `boot_view_progress`), so --
+/// unlike before -- our bar owns the whole 0..100% and reaches 100% right as the character switches in.
+const BOOT_VIEW_MILESTONE_PERMILLE: [usize; BOOT_VIEW_MILESTONE_COUNT] =
+    [40, 120, 200, 320, 440, 560, 680, 800, 920];
+/// Fill edge the bar pauses at while the startup save picker holds the boot (the MAIN MENU phase, whose
+/// creep tops out near here). `boot_view_progress` clamps the fill here while a pick is pending, then
+/// lifts it the frame the pick clears the latch.
+const BOOT_VIEW_SAVE_CHECK_PERMILLE: usize = 460;
+/// Asymptotic creep time-constant: creep = gap * since/(since + K). At `since == K` the bar is halfway to
+/// the next milestone; it keeps approaching but never reaches it, so the bar NEVER fully freezes during a
+/// long phase (user 2026-07-15: STARTING UP ~23s and the title load ~32s made a 70%-capped bar look stuck).
+const BOOT_VIEW_CREEP_K_MS: u64 = 2600;
 /// Seamless handoff (user 2026-07-06, replacing the earlier fade-out design): at the loading
 /// handoff the cover HOLDS fully lit over the game's black gap and the loading screen's own
 /// fade-in-from-black, then stops in a single cut once the native loading screen is fully lit --
@@ -223,10 +214,9 @@ fn boot_milestone_reached(idx: usize) -> bool {
             5 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
                 || SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
                 || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0,
-            6 => {
-                PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst)
-                    > BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.load(Ordering::SeqCst)
-            }
+            // World-load phases 6/7/8, keyed off the game's native loading screen (shared with the normal
+            // path so both flows get the same BUILDING/STREAMING/ENTERING WORLD granularity).
+            6 | 7 | 8 => boot_world_phase_reached(idx),
             _ => false,
         };
     }
@@ -234,8 +224,14 @@ fn boot_milestone_reached(idx: usize) -> bool {
         // Drawing at all proves the present hook + game swapchain are live.
         0 => true,
         1 => game_man_ptr_or_null() != 0,
-        2 => FORCE_OFFLINE_BYTES_CLEARED.load(Ordering::SeqCst) != 0,
-        3 => TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS,
+        // LOADING TITLE: the title menu starts acquiring its Scaleform resources (~23.6s), right after
+        // GameMan -- a far more informative + earlier-advancing signal than the old offline-bytes latch,
+        // which sat on one label for the whole ~32s title-asset load.
+        2 => TITLE_MENU_RESOURCE_ACQUIRE_HITS.load(Ordering::SeqCst) != 0,
+        // TITLE SCREEN: PRESS START is bound (~40s, the title is actually up) -- OR the fade-in skip fired
+        // (backstop), so the phase advances mid-title-load instead of only at the very end.
+        3 => TITLE_PRESS_START_BIND_HITS.load(Ordering::SeqCst) != 0
+            || TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS,
         // Menu-open era: the own-stepper latch when that task runs, OR'd with the network-check
         // shortcircuit which fires ~10ms after the title-accept-byte natural menu-open on the
         // product path (runtime-proven 2026-07-05: latch stayed 0, shortcircuit fired at +12.8s).
@@ -251,10 +247,27 @@ fn boot_milestone_reached(idx: usize) -> bool {
                 || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0
                 || LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0
         }
-        6 => {
-            PROFILE_LOADSCREEN_TABLE_BUILDS.load(Ordering::SeqCst)
-                > BOOT_VIEW_LOADSCREEN_TABLE_BASELINE.load(Ordering::SeqCst)
-        }
+        // World-load phases: the native loading screen carries these (see boot_world_phase_reached), so
+        // they assert even on the menu-free autoload where the profile table never builds.
+        6 | 7 | 8 => boot_world_phase_reached(idx),
+        _ => false,
+    }
+}
+
+/// The three world-load phases (6=BUILDING, 7=STREAMING, 8=ENTERING WORLD), keyed off the game's native
+/// CS::LoadingScreen so they assert on every load path (normal autoload AND own-menu switch), independent
+/// of the profile-table build. Pure atomic reads; safe from the render thread.
+fn boot_world_phase_reached(idx: usize) -> bool {
+    let update_hits = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst);
+    let progress = LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst);
+    let close_hits = LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst);
+    match idx {
+        // The native loading screen has appeared -> the world build has begun.
+        6 => update_hits != 0,
+        // The native world-load gauge is actively streaming.
+        7 => progress > 0,
+        // The gauge is near-complete or the loading screen sent its close -> about to switch in-game.
+        8 => progress >= 900 || close_hits != 0,
         _ => false,
     }
 }
@@ -315,35 +328,31 @@ fn boot_view_progress() -> (usize, usize) {
         base
     };
     let since = now_ms.saturating_sub(BOOT_VIEW_IDX_CHANGED_MS.load(Ordering::SeqCst));
-    let creep = (next.saturating_sub(base) * (since.min(BOOT_VIEW_CREEP_FULL_MS) as usize)
-        * BOOT_VIEW_CREEP_NUM)
-        / (BOOT_VIEW_CREEP_FULL_MS as usize * BOOT_VIEW_CREEP_DEN);
+    // Asymptotic creep toward (never reaching) the next milestone, so a long phase's bar keeps inching
+    // forward instead of freezing at a fixed cap -- the "is it stuck?" fix.
+    let gap = next.saturating_sub(base) as u64;
+    let creep = (gap * since / (since + BOOT_VIEW_CREEP_K_MS)) as usize;
     let pm = (base + creep).min(1000);
-    // While the overlay picker holds the boot, clamp the fill so its edge stops EXACTLY at the
-    // SAVE CHECK tick (the MENU milestone + creep would otherwise creep ~7 permille past it, leaving
-    // the tick sitting behind the fill edge). The clamp lifts the frame the pick clears the latch,
-    // so the bar resumes past SAVE CHECK toward SAVE LOAD / NATIVE.
+    // While the startup save picker holds the boot, clamp the fill so it PAUSES at the MAIN MENU edge
+    // (the phase creep would otherwise drift past it); the clamp lifts the frame the pick clears the latch,
+    // so the bar resumes toward LOADING SAVE / the world phases.
     let pm = if missing_save_selection_pending() {
         pm.min(BOOT_VIEW_SAVE_CHECK_PERMILLE)
     } else {
         pm
     };
-    // OWN-THE-SURFACE completion (native Windows). Once the LOADING WORLD handoff milestone (idx 6) is
-    // reached and our isolated overlay COVERS the game's native loading screen, the bar must finish itself
-    // 700 -> 1000 instead of freezing at the handoff marker (the frozen 70% the user saw the native screen
-    // take over from). Drive the final segment from the game's REAL loading gauge
-    // (LOADING_SCREEN_BAR_PROGRESS_PERMILLE, the native Gauge_3 progress our now-loading observer samples),
-    // mapping its 0..1000 onto 700..1000. On Wine we still hand the surface off to that native Gauge_3
-    // (the composite path stops at the handoff), so this completion is native-only; the fetch_max below
-    // keeps it monotonic.
-    let pm = if crate::experiments::is_native_windows()
-        && idx + 1 >= BOOT_VIEW_MILESTONE_PERMILLE.len()
-    {
-        let handoff = BOOT_VIEW_NATIVE_HANDOFF_PERMILLE;
+    // WORLD-LOAD tail (native Windows): during STREAMING/ENTERING WORLD (idx >= 7) drive the fill from the
+    // game's REAL Gauge_3 world-load progress (LOADING_SCREEN_BAR_PROGRESS_PERMILLE) mapped onto
+    // [BUILDING WORLD permille .. 100%], so the bar shows genuine progress across the long streaming stretch
+    // and reaches 100% exactly as the gauge completes -- the moment the game switches the character in-game
+    // (user 2026-07-15). Native-only so the Wine composite's native-Gauge_3 handoff is untouched; the
+    // fetch_max below keeps it monotonic.
+    let pm = if crate::experiments::is_native_windows() && idx >= 7 {
+        let floor = BOOT_VIEW_MILESTONE_PERMILLE[6];
         let native = LOADING_SCREEN_BAR_PROGRESS_PERMILLE
             .load(Ordering::SeqCst)
             .min(1000);
-        pm.max(handoff + native * (1000 - handoff) / 1000)
+        pm.max(floor + native * (1000 - floor) / 1000)
     } else {
         pm
     };
@@ -797,36 +806,6 @@ fn boot_darken_bar_shadow(
     }
 }
 
-fn boot_draw_marker_label(
-    buf: &mut [u8],
-    w: usize,
-    h: usize,
-    content_x: usize,
-    content_y: usize,
-    content_w: usize,
-    permille: usize,
-    label: &str,
-    has_bg: bool,
-    text_scale: usize,
-    draw_label: bool,
-) -> usize {
-    let marker_x = content_x + (content_w * permille / 1000).min(content_w.saturating_sub(1));
-    // `draw_label=false` still returns the marker position so the caller can draw the tick LINE, but
-    // suppresses the LABEL TEXT -- used when two nearby ticks' labels would collide (e.g. SAVE LOAD vs the
-    // long LOADING WORLD label at high resolution).
-    if draw_label {
-        let label_w = boot_text_width(label, text_scale);
-        let label_x = marker_x
-            .saturating_sub(label_w / 2)
-            .min(w.saturating_sub(label_w));
-        if has_bg {
-            boot_draw_text_shadowed(buf, w, h, label_x, content_y, label, text_scale);
-        } else {
-            boot_draw_text(buf, w, h, label_x, content_y, label, text_scale);
-        }
-    }
-    marker_x
-}
 
 /// The rendered boot/loading frame: CPU RGBA plus where to place it on a `bw`x`bh` backbuffer.
 pub(crate) struct BootViewFrame {
@@ -932,70 +911,8 @@ fn boot_view_rasterize(
     } else {
         boot_draw_text(&mut buf, w, h, content_x, content_y, label, text_scale);
     }
-    // SAVE CHECK (the picker-hold pause, ~577) and SAVE LOAD (615) sit close together, so only one
-    // is shown at a time to keep their labels from overlapping: SAVE CHECK while the missing-save
-    // picker holds the boot (that is where the fill visibly pauses), SAVE LOAD otherwise (the normal
-    // continue/save-load checkpoint on every boot). `usize::MAX` = not shown (tick skipped below).
-    let save_picker_hold = missing_save_selection_pending();
-    let save_check_marker_x = if save_picker_hold {
-        boot_draw_marker_label(
-            &mut buf,
-            w,
-            h,
-            content_x,
-            content_y,
-            content_w,
-            BOOT_VIEW_SAVE_CHECK_PERMILLE,
-            BOOT_VIEW_SAVE_CHECK_LABEL,
-            has_bg,
-            text_scale,
-            true,
-        )
-    } else {
-        usize::MAX
-    };
-    // SAVE LOAD (615) and LOADING WORLD (700) sit only 85 permille apart, and the renamed LOADING WORLD
-    // label is long enough that at high resolution it overruns SAVE LOAD's label (the garbled overlap the
-    // user saw). Draw SAVE LOAD's LABEL only when it clears the LOADING WORLD label with a one-glyph gap;
-    // its tick LINE is always drawn regardless. At lower resolutions where both fit, SAVE LOAD keeps its label.
-    let save_load_label_fits = {
-        let sl_center = content_x + content_w * BOOT_VIEW_SAVE_LOAD_PERMILLE / 1000;
-        let lw_center = content_x + content_w * BOOT_VIEW_NATIVE_HANDOFF_PERMILLE / 1000;
-        let sl_right = sl_center + boot_text_width(BOOT_VIEW_SAVE_LOAD_LABEL, text_scale) / 2;
-        let lw_left =
-            lw_center.saturating_sub(boot_text_width(BOOT_VIEW_NATIVE_HANDOFF_LABEL, text_scale) / 2);
-        sl_right + BOOT_VIEW_GLYPH_ADV * text_scale <= lw_left
-    };
-    let save_load_marker_x = if save_picker_hold {
-        usize::MAX
-    } else {
-        boot_draw_marker_label(
-            &mut buf,
-            w,
-            h,
-            content_x,
-            content_y,
-            content_w,
-            BOOT_VIEW_SAVE_LOAD_PERMILLE,
-            BOOT_VIEW_SAVE_LOAD_LABEL,
-            has_bg,
-            text_scale,
-            save_load_label_fits,
-        )
-    };
-    let marker_x = boot_draw_marker_label(
-        &mut buf,
-        w,
-        h,
-        content_x,
-        content_y,
-        content_w,
-        BOOT_VIEW_NATIVE_HANDOFF_PERMILLE,
-        BOOT_VIEW_NATIVE_HANDOFF_LABEL,
-        has_bg,
-        text_scale,
-        true,
-    );
+    // NO tick markers/labels (user 2026-07-15 "remove all of the markers ... remove other tick markers and
+    // labels"): all phase information is carried by the single left-aligned granular label above the bar.
     boot_fill_rect(
         &mut buf,
         w,
@@ -1014,58 +931,6 @@ fn boot_view_rasterize(
         bar_y,
         content_w * permille.min(1000) / 1000,
         BOOT_VIEW_BAR_H,
-        BOOT_VIEW_RGB_FILL,
-    );
-    // Save-check tick: the fill edge where the boot pauses while the overlay picker is up.
-    if save_check_marker_x != usize::MAX {
-        boot_fill_rect(
-            &mut buf,
-            w,
-            h,
-            save_check_marker_x.saturating_sub(BOOT_VIEW_HANDOFF_MARKER_W / 2),
-            bar_y.saturating_sub(2),
-            BOOT_VIEW_HANDOFF_MARKER_W,
-            BOOT_VIEW_BAR_H + 4,
-            BOOT_VIEW_RGB_FILL,
-        );
-    }
-    // Save-load tick: the ShowProgressJob save-data continue/load checkpoint (shown once a save is
-    // resolved, i.e. off the picker hold).
-    if save_load_marker_x != usize::MAX {
-        boot_fill_rect(
-            &mut buf,
-            w,
-            h,
-            save_load_marker_x.saturating_sub(BOOT_VIEW_HANDOFF_MARKER_W / 2),
-            bar_y.saturating_sub(2),
-            BOOT_VIEW_HANDOFF_MARKER_W,
-            BOOT_VIEW_BAR_H + 4,
-            BOOT_VIEW_RGB_FILL,
-        );
-    }
-    // Handoff marker/gap: this pre-loading bar is only phase 1. Leave the remaining track empty for the
-    // native now-loading Gauge_3 phase; the native loading-bar hook supplies the true terminal-frame
-    // semaphore for 100%. Make the split visible: a small black break in the track, a brighter 3px marker,
-    // and the NATIVE label centered above it.
-    let gap_x = marker_x.saturating_sub(BOOT_VIEW_HANDOFF_GAP_W / 2);
-    boot_fill_rect(
-        &mut buf,
-        w,
-        h,
-        gap_x,
-        bar_y.saturating_sub(2),
-        BOOT_VIEW_HANDOFF_GAP_W,
-        BOOT_VIEW_BAR_H + 4,
-        BOOT_VIEW_RGB_BLACK,
-    );
-    boot_fill_rect(
-        &mut buf,
-        w,
-        h,
-        marker_x.saturating_sub(BOOT_VIEW_HANDOFF_MARKER_W / 2),
-        bar_y.saturating_sub(2),
-        BOOT_VIEW_HANDOFF_MARKER_W,
-        BOOT_VIEW_BAR_H + 4,
         BOOT_VIEW_RGB_FILL,
     );
     buf
