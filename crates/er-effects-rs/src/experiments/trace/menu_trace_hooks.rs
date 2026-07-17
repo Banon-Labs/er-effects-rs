@@ -888,19 +888,31 @@ pub(crate) static WORLDRES_BLOCKRES_GETTER_ORIG: AtomicUsize = AtomicUsize::new(
 static WORLDRES_GETTER_LAST_1C: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 pub(crate) static BLOCKRES_PHASE2_ORIG: AtomicUsize = AtomicUsize::new(0);
+// Retry accounting is PER block-res, not global: BLOCKRES_STALECAP_LAST_BRES pins the block we are
+// currently retrying; when a DIFFERENT block-res stalls (or the same block re-enters after a fresh
+// second load) the counter resets, so one exhausted block can never starve later loads (the old single
+// global counter capped the WHOLE session at 6 and never re-armed). Bound is per block; a genuinely
+// un-evictable file trips the cap in << 1s of frames and the block is left to the game.
 static BLOCKRES_STALECAP_RETRIES: AtomicUsize = AtomicUsize::new(0);
-const BLOCKRES_STALECAP_MAX_RETRIES: usize = 6;
+static BLOCKRES_STALECAP_LAST_BRES: AtomicUsize = AtomicUsize::new(0);
+const BLOCKRES_STALECAP_MAX_RETRIES: usize = 32;
 
-// ENV-GATE RATIONALE: ER_EFFECTS_BLOCKRES_STALECAP_FIX is an explicit diagnostic gate for the
-// stale-file-cap reload fix while it is runtime-validated; default off until proven, then it becomes
-// the ungated product fix. The hook is inert (pure pass-through) unless this is armed.
+// PRODUCT DEFAULT (2026-07-17): the stale-file-cap reload fix is ON by default so it runs on the plain
+// me3 product path with NO env vars / marker (goal: the second-load fix must not depend on agent-only
+// arming). The env var is a DIAGNOSTIC KILL-SWITCH only: `ER_EFFECTS_BLOCKRES_STALECAP_FIX=0` (or the
+// marker `er-effects-blockres-stalecap-fix-DISABLE.txt`) makes the corrective action inert so the raw
+// stall can still be observed. The scoping guard (IN_WORLD_REACHED==YES + exact stuck condition) means
+// the first autoload and normal play are never touched.
 fn blockres_stalecap_fix_enabled() -> bool {
-    matches!(
+    if matches!(
         std::env::var("ER_EFFECTS_BLOCKRES_STALECAP_FIX").as_deref(),
-        Ok("1")
-    ) || game_directory_path()
+        Ok("0")
+    ) {
+        return false;
+    }
+    !game_directory_path()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-blockres-stalecap-fix.txt")
+        .join("er-effects-blockres-stalecap-fix-DISABLE.txt")
         .exists()
 }
 
@@ -937,35 +949,85 @@ pub(crate) unsafe extern "system" fn blockres_phase2_hook(
         .map(|v| v as i32)
         .unwrap_or(-1);
     let data = unsafe { safe_read_usize(fc + FILECAP_DATA_90_OFFSET) }.unwrap_or(0);
-    // The determined stall: cap reports LOADED (0x88==0x04) but its data (+0x90) is null -- the
-    // teardown between loads freed the data yet left the "loaded" status, so the phase-2 machine
-    // (deobf 0x1406157f0) short-circuits (it advances to phase 3 only when status==4 AND data!=0, and
-    // its own phase=5 retry does NOT re-read because the cap still says loaded -- run4 proved forcing
-    // phase=5 leaves data null). So clear the stale "loaded" status on BOTH file caps (+0x40 primary,
-    // +0x48 secondary) and restart the block load (phase +0x35 = 0) so the block re-requests the caps
-    // and they re-issue a fresh FD4 read that re-attaches data. Bounded so an un-evictable file cannot
-    // spin. RUN-VALIDATED root: step3-run4-filecap-status4-data-null-resident-shortcircuit-2026-07-17.
+    // The determined stall: the primary cap reports LOADED (0x88==0x04) but its data (+0x90) is null.
+    // World teardown released the cap's content child (refcount->0, freed) but left the PARENT cap
+    // registered in CSFile's name map with status still 0x04, so the reload's find-or-insert
+    // (0x142651bb0) just refcount-bumps the SAME stale cap and re-reads NOTHING. RE-PROVEN (2026-07-17):
+    // clearing +0x88 alone or resetting the block phase does NOT re-issue -- loading is enqueue-driven
+    // and nothing polls a registered cap's status. The only native re-issue is to put the cap back on
+    // its own CSFile load queue (blockres_reissue_filecap), which the per-frame update loop then reads
+    // and re-attaches +0x90 to, letting the phase-2 handler advance 2->3 on a later frame. We do NOT
+    // touch the block phase: leaving +0x35 at 2 lets the untouched original handler re-check and advance
+    // the instant the read completes. Root: step3-run6-fix-was-envgated-off-static-gates-confirmed.
     if status == FILECAP_STATUS_LOADED && data == 0 {
+        // Per-block retry accounting: a newly-stalled block-res resets the counter so one exhausted
+        // block can never starve a later load, and the same block re-arms across a fresh second load.
+        if BLOCKRES_STALECAP_LAST_BRES.swap(bres, Ordering::SeqCst) != bres {
+            BLOCKRES_STALECAP_RETRIES.store(0, Ordering::SeqCst);
+        }
         let n = BLOCKRES_STALECAP_RETRIES.fetch_add(1, Ordering::SeqCst) + 1;
         if n <= BLOCKRES_STALECAP_MAX_RETRIES {
+            // Re-enqueue every block file cap that is resident-but-dataless (both +0x40 and +0x48; the
+            // handler requires both status==4 and only advances when the primary's +0x90 re-attaches).
+            let mut issued = 0u32;
             for coff in [BLOCKRES_PRIMARY_FILECAP_40_OFFSET, BLOCKRES_SECOND_FILECAP_48_OFFSET] {
-                if let Some(cap) =
-                    unsafe { safe_read_usize(bres + coff) }.filter(|&v| v > 0x10000)
-                {
-                    unsafe { *((cap + FILECAP_STATUS_88_OFFSET) as *mut u8) = 0 };
+                if let Some(cap) = unsafe { safe_read_usize(bres + coff) }.filter(|&v| v > 0x10000) {
+                    let cs = unsafe { safe_read_u8(cap + FILECAP_STATUS_88_OFFSET) }
+                        .map(|v| v as i32)
+                        .unwrap_or(-1);
+                    let cd = unsafe { safe_read_usize(cap + FILECAP_DATA_90_OFFSET) }.unwrap_or(0);
+                    if cs == FILECAP_STATUS_LOADED && cd == 0 && unsafe { blockres_reissue_filecap(cap) } {
+                        issued += 1;
+                    }
                 }
             }
-            unsafe { *((bres + BLOCKRES_PHASE_35_OFFSET) as *mut u8) = 0 };
             append_autoload_debug(format_args!(
-                "BLOCKRES-STALECAP-FIX #{n}: block-res=0x{bres:x} cap=0x{fc:x} status=0x04 data=null -> cleared both cap +0x88 and reset block phase=0 to force a fresh FD4 re-read"
+                "BLOCKRES-STALECAP-FIX #{n}: block-res=0x{bres:x} primary-cap=0x{fc:x} status=0x04 data=null -> re-enqueued {issued} stale file cap(s) onto the CSFile load queue (native 0x269d7b0) to re-attach +0x90"
             ));
         } else if n == BLOCKRES_STALECAP_MAX_RETRIES + 1 {
             append_autoload_debug(format_args!(
-                "BLOCKRES-STALECAP-FIX: retry cap ({BLOCKRES_STALECAP_MAX_RETRIES}) hit for block-res=0x{bres:x} cap=0x{fc:x}; cap-status reset did not re-attach data (needs teardown-eviction or direct cap re-load)"
+                "BLOCKRES-STALECAP-FIX: retry cap ({BLOCKRES_STALECAP_MAX_RETRIES}) hit for block-res=0x{bres:x} cap=0x{fc:x}; native re-enqueue did not re-attach data (file may be genuinely evicted from its package -- needs a full block teardown/reload)"
             ));
         }
     }
     ret
+}
+
+/// Re-issue the FD4 read for a resident-but-dataless file cap by putting it back on its own CSFile load
+/// queue exactly the way the game's new-insert load path does (0x142651c42 in 0x142651bb0). The stale
+/// cap keeps its name-map identity (path/name intact), so the dispatched read re-attaches its content
+/// child at +0x90. Every derived pointer is validated before the status write or the native call, so a
+/// missing/unexpected layout fails closed (returns false) rather than faulting. Returns true iff the
+/// enqueue was issued. See CSFILE_* / FILECAP_QUEUEFLAGS_89_OFFSET in constants/return_title.rs.
+unsafe fn blockres_reissue_filecap(cap: usize) -> bool {
+    if cap <= 0x10000 {
+        return false;
+    }
+    let Ok(singleton_addr) = game_rva(CSFILE_SINGLETON_RVA) else {
+        return false;
+    };
+    let Some(singleton) = (unsafe { safe_read_usize(singleton_addr) }).filter(|&v| v > 0x10000) else {
+        return false;
+    };
+    let Some(holder) =
+        (unsafe { safe_read_usize(singleton + CSFILE_HOLDER_8_OFFSET) }).filter(|&v| v > 0x10000)
+    else {
+        return false;
+    };
+    let idx = (unsafe { safe_read_u8(cap + FILECAP_QUEUEFLAGS_89_OFFSET) }.unwrap_or(0) >> 2) & 7;
+    let queue_slot = holder + CSFILE_QUEUE_ARRAY_E0_OFFSET + (idx as usize) * 8;
+    let Some(queue) = (unsafe { safe_read_usize(queue_slot) }).filter(|&v| v > 0x10000) else {
+        return false;
+    };
+    let Ok(enqueue_addr) = game_rva(CSFILE_ENQUEUE_RVA) else {
+        return false;
+    };
+    // Clear the stale "loaded" status so the per-frame update loop (0x1426525a0) will select this cap
+    // (it picks only status==0 queue entries), then hand it to the enqueue primitive (rcx=queue,rdx=cap).
+    unsafe { *((cap + FILECAP_STATUS_88_OFFSET) as *mut u8) = 0 };
+    let enqueue: unsafe extern "system" fn(usize, usize) = unsafe { core::mem::transmute(enqueue_addr) };
+    unsafe { enqueue(queue, cap) };
+    true
 }
 
 /// DETERMINING MEASUREMENT: the REAL WorldResWait block-res getter, called WITH the search key (rdx),

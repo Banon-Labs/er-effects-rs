@@ -270,7 +270,33 @@ pub(crate) const BLOCKRES_SECOND_FILECAP_48_OFFSET: usize = 0x48;
 pub(crate) const FILECAP_STATUS_88_OFFSET: usize = 0x88;
 pub(crate) const FILECAP_DATA_90_OFFSET: usize = 0x90;
 pub(crate) const FILECAP_STATUS_LOADED: i32 = 0x04;
+// Historical: the block-load phase value the game's own data-null retry writes (phase-2 handler
+// 0x1406157f0 sets +0x35=5 when worldBlockInfo+0x28 != 0). The stalecap fix no longer forces this --
+// RE proved forcing the phase re-runs phase-1's find-or-insert which refcount-bumps the SAME stale cap
+// and re-issues no read. Kept as documentation of the native retry value; the fix now re-enqueues.
 pub(crate) const BLOCKRES_PHASE_TEARDOWN_RETRY: u8 = 5;
+// --- FD4 file-cap re-issue path (RE 2026-07-17, deobf eldenring-deobf.bin) ---
+// The stale second-load cap is status +0x88==4 (loaded) with data +0x90==NULL because world teardown
+// releases the content child (refcount->0, freed) but leaves the PARENT cap registered in CSFile's name
+// map (parent refcount +0x58 never reached 0). CSFile load (0x142651bb0) then find-or-inserts the SAME
+// cap and only refcount-bumps it -- nothing re-reads. The game re-reads a cap only by ENQUEUEING it:
+//   singleton  = *(CSFILE_SINGLETON_RVA)             (global holding the CSFile object)
+//   holder     = *(singleton + 0x8)                  (load thunk 0x1426538b0: `mov rcx,[rcx+8]`)
+//   idx        = (cap[+0x89] >> 2) & 7               (queue/priority index, set at insert 0x142651c1a)
+//   queue      = *(holder + 0xe0 + idx*8)            (enqueue site 0x142651c4d; update loop 0x1426525bc)
+//   cap[+0x88] = 0  then  ENQUEUE(rcx=queue, rdx=cap) via 0x14269d7b0
+// The per-frame update loop (0x1426525a0) then selects the status==0 cap, sets it in-progress, and
+// dispatches the async read (0x142659440) which re-attaches +0x90 on completion -> phase-2 advances.
+/// CSFile singleton global (deobf VA 0x143d5b0f8): holds a pointer to the CSFile object.
+pub(crate) const CSFILE_SINGLETON_RVA: u32 = 0x03d5b0f8;
+/// Load-queue holder offset inside the CSFile object (`*(singleton+0x8)`; load thunk 0x1426538b0).
+pub(crate) const CSFILE_HOLDER_8_OFFSET: usize = 0x8;
+/// Base of the per-priority load-queue pointer array inside the holder (`holder+0xe0`, stride 8).
+pub(crate) const CSFILE_QUEUE_ARRAY_E0_OFFSET: usize = 0xe0;
+/// FD4FileCap +0x89: bits [2:4] hold the load-queue/priority index, `idx = (v>>2)&7`.
+pub(crate) const FILECAP_QUEUEFLAGS_89_OFFSET: usize = 0x89;
+/// FD4 file-cap ENQUEUE primitive (deobf VA 0x14269d7b0): `fn(rcx=queue, rdx=cap)`.
+pub(crate) const CSFILE_ENQUEUE_RVA: u32 = 0x0269d7b0;
 // World BLOCK constructor (deobf/runtime 0x0062ec00): the ONLY writer of block+0x40 (load-state slice
 // count) and block+0x48 (slice base), sourced from STACK args (0x68/0x70(%rsp)). NOT hooked -- a
 // register-only forwarding hook loses those stack args and corrupts every block (runtime AV 2026-07-17).
