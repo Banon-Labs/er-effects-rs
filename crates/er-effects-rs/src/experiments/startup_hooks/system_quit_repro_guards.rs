@@ -123,8 +123,19 @@ fn sq_repro_profile_back_mode() -> bool {
 
 /// SAVE-GAME ROW mode for the System->Quit repro autopilot. The main
 /// `ER_EFFECTS_SYSTEM_QUIT_REPRO=1` gate still controls whether the repro harness runs at all.
+///
+/// PROFILE-LOAD-SWITCH mode (the user's exact repro: Quit tab -> Load Profile -> ProfileSelect ->
+/// pick the top character -> confirm -> load) is selected by the SAME opt-in that lets the confirm
+/// actually fire the native load (`system_quit_profile_load_activation_allowed`, file
+/// `er-effects-system-quit-allow-profile-load.txt` / `ER_EFFECTS_SYSTEM_QUIT_ALLOW_PROFILE_LOAD=1`).
+/// Turning it on means "drive the real profile-load switch," so `save_game_only` yields to it: the
+/// autopilot then walks TO_PROFILE -> TO_SLOT (cursor to `SQ_REPRO_TARGET_SLOTS[i]`) -> CONFIRM ->
+/// WAIT_RELOAD instead of the Save Game row. This is the path that drives the first
+/// overworld->legacy switch and reproduces the STEP_WorldResWait (3/20) stall deterministically.
 fn sq_repro_save_game_only() -> bool {
-    !sq_repro_tab_return_mode() && !sq_repro_profile_back_mode()
+    !sq_repro_tab_return_mode()
+        && !sq_repro_profile_back_mode()
+        && !system_quit_profile_load_activation_allowed()
 }
 
 /// Enter a switch: capture the confirm-count baseline and clear the per-switch menu-window/cursor
@@ -186,6 +197,48 @@ fn sq_repro_begin_switch() {
     ));
 }
 
+/// KEYBOARD MIRROR (native Windows): map a fabricated gamepad wButtons value to the equivalent DInput
+/// DIK scancode. Runtime-proven 2026-07-17 that native ER polls XInput slot 0 (poll count climbed to
+/// 7000+) and reads our fabricated START (4 poll-frames) but does NOT route fabricated gamepad input
+/// to menu ACTIONS when no real controller is the active input device -- so the menu never opened. The
+/// keyboard IS the active device on native, and ER routes DInput keyboard to menu actions (proven by
+/// the `inject_nav` DIK_DOWN cursor move + the arrow-suppression hook). So the autopilot also stamps
+/// the equivalent key each frame via `InputBlocker::set_injected_key`. Menu nav (arrows), Esc (open/
+/// back), and Enter (confirm) are FIXED menu keys in ER -- not the remappable gameplay binds -- so
+/// this is robust to the user's custom keybinds. Tab-switch (LB/RB) keyboard binds are the least
+/// certain and are refined empirically from the phase the run stalls at. 0 = no key this frame.
+fn sq_repro_gamepad_to_dik(btn: u16) -> u8 {
+    match btn {
+        XINPUT_GAMEPAD_START => 0x01,          // DIK_ESCAPE  -- open the in-world system/escape menu
+        XINPUT_GAMEPAD_A => 0x1c,              // DIK_RETURN  -- menu confirm/select
+        XINPUT_GAMEPAD_B => 0x0e,              // DIK_BACK (Backspace) -- menu cancel/back
+        XINPUT_GAMEPAD_DPAD_UP => 0xc8,        // DIK_UP
+        XINPUT_GAMEPAD_DPAD_DOWN => 0xd0,      // DIK_DOWN
+        XINPUT_GAMEPAD_LEFT_SHOULDER => 0x10,  // DIK_Q  -- tab left (empirical; refine if TO_PROFILE stalls)
+        XINPUT_GAMEPAD_RIGHT_SHOULDER => 0x12, // DIK_E  -- tab right (empirical)
+        _ => 0,
+    }
+}
+
+/// Native-Windows keyboard channel: map a fabricated gamepad button to a Win32 VK code posted to the
+/// ER window via WM_KEYDOWN/WM_KEYUP. Runtime-proven 2026-07-17 that native ER reads keyboard via
+/// window messages / RawInput (NOT DInput: dinput_kb_fires==0) and does not route the fabricated pad
+/// to menu actions -- so this WM path is the actual driver on native; the XInput/DInk mirrors stay for
+/// Wine. Esc opens the in-world menu; arrows nav; Enter confirms -- fixed menu keys, not the
+/// remappable gameplay binds. Tab-switch (LB/RB) VKs are the least certain and refined empirically.
+fn sq_repro_gamepad_to_vk(btn: u16) -> u32 {
+    match btn {
+        XINPUT_GAMEPAD_START => 0x1b,          // VK_ESCAPE -- open the in-world system/escape menu
+        XINPUT_GAMEPAD_A => 0x0d,              // VK_RETURN -- menu confirm
+        XINPUT_GAMEPAD_B => 0x1b,              // VK_ESCAPE -- back (unused in the load path)
+        XINPUT_GAMEPAD_DPAD_UP => 0x26,        // VK_UP
+        XINPUT_GAMEPAD_DPAD_DOWN => 0x28,      // VK_DOWN
+        XINPUT_GAMEPAD_LEFT_SHOULDER => 0x51,  // 'Q' -- tab left (empirical; refine if TO_PROFILE stalls)
+        XINPUT_GAMEPAD_RIGHT_SHOULDER => 0x45, // 'E' -- tab right (empirical)
+        _ => 0,
+    }
+}
+
 /// Fabricated gamepad wButtons for a phase that issues a FIXED list of button edges ONCE, in order,
 /// then holds. `tick` is phase-local; each edge occupies one `INJECT_NAV_CYCLE` (the RE-grounded
 /// edge hold+gap -- edge-triggered menu nav needs a multi-frame hold to register one step). Returns
@@ -218,10 +271,18 @@ pub(crate) unsafe fn system_quit_repro_tick() {
     if state == SQ_REPRO_STATE_DONE {
         return;
     }
-    // Driven entirely via the XInput poll hook; keep the DInput keyboard stamp clear every frame so
-    // no stale key leaks while the block zeroes the real keyboard.
+    // Clear any stale keyboard stamp; `set_pad` below re-stamps the mirrored key for button frames.
     crate::input_blocker::InputBlocker::get_instance().set_injected_key(DIK_NONE);
-    let set_pad = |b: u16| SQ_REPRO_XINPUT_BUTTONS.store(b as usize, Ordering::SeqCst);
+    // Drive BOTH the XInput poll hook (SQ_REPRO_XINPUT_BUTTONS) AND the DInput keyboard mirror
+    // (set_injected_key): native ER polls the pad but only routes KEYBOARD to menu actions when no
+    // real controller is active (see sq_repro_gamepad_to_dik). One `set_pad` call drives both paths.
+    let set_pad = |b: u16| {
+        SQ_REPRO_XINPUT_BUTTONS.store(b as usize, Ordering::SeqCst);
+        crate::input_blocker::InputBlocker::get_instance()
+            .set_injected_key(sq_repro_gamepad_to_dik(b));
+        // NATIVE path: post the equivalent VK to the ER window (keyboard is WM/RawInput, not DInput).
+        sq_repro_drive_wm_key(sq_repro_gamepad_to_vk(b));
+    };
     let tick = SQ_REPRO_STATE_TICK.fetch_add(1, Ordering::SeqCst);
 
     match state {
@@ -256,17 +317,54 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             let ingame_top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
             if ingame_top != 0 {
                 append_autoload_debug(format_args!(
-                    "sq-repro: IngameTop opened window=0x{ingame_top:x} (escape/system menu) -> TO_SYSTEM (UP, A into the quit submenu)"
+                    "sq-repro: IngameTop opened window=0x{ingame_top:x} via menu-open key VK 0x{:x} (SendInput RawInput) -> TO_SYSTEM (UP, A into the quit submenu)",
+                    SQ_REPRO_OPEN_KEY_VK.load(Ordering::SeqCst)
                 ));
+                sq_repro_drive_wm_key(0); // release the discovered key
                 set_pad(0);
                 sq_repro_transition(SQ_REPRO_STATE_TO_SYSTEM);
                 return;
             }
-            let (btn, holding) = sq_repro_edges(tick, &[XINPUT_GAMEPAD_START]);
-            if holding {
-                sq_repro_waiting_once("OPEN_MENU: START issued, waiting for 02_000_IngameTop");
+            // INPUT-PATH DIAGNOSTIC (native-Windows XInput poll probe): every ~2s while holding for
+            // IngameTop, log whether native ER is actually polling XInput slot 0. polls==0 across the
+            // hold => the game is NOT polling slot 0 (cached "no controller"; our fabricated START can
+            // never land -> a device re-scan or a DInput keyboard mirror is required). polls>0 but the
+            // menu never opens => it polls but ignores our buttons (START may not be the in-world
+            // menu-open on this build/keybinding).
+            if tick % 120 == 0 {
+                append_autoload_debug(format_args!(
+                    "sq-repro: OPEN_MENU input-diag tick={tick} xinput_slot0_polls={} dinput_kb_fires={} dinput_mouse_fires={} fg_forces={} is_foreground={} (SendInput RawInput to foreground Esc is driving; is_foreground=1 means focus achieved)",
+                    XINPUT_SLOT0_POLLS.load(Ordering::SeqCst),
+                    crate::input_blocker::DINPUT_KB_HOOK_FIRES.load(Ordering::SeqCst),
+                    crate::input_blocker::DINPUT_MOUSE_HOOK_FIRES.load(Ordering::SeqCst),
+                    SQ_REPRO_FOREGROUND_FORCES.load(Ordering::SeqCst),
+                    SQ_REPRO_IS_FOREGROUND.load(Ordering::SeqCst),
+                ));
             }
-            set_pad(btn);
+            // AUTO-DISCOVER the in-world menu-open key. The input channel now works (SendInput RawInput
+            // to the forced-foreground ER window, is_foreground=1) but VK_ESCAPE alone did NOT open
+            // 02_000_IngameTop, so cycle plausible menu-open keys until the IngameTop semaphore fires,
+            // then latch the winner (recorded in SQ_REPRO_OPEN_KEY_VK). Each candidate is pulse-held
+            // for OPEN_KEY_HOLD frames. Semaphore-gated (we advance the instant IngameTop opens,
+            // above), so this is key discovery, not a blind budget. The pad START is fabricated too
+            // (harmless; the Wine path). Candidates are low-gameplay-risk menu keys.
+            const OPEN_CANDIDATES: [(u32, &str); 4] =
+                [(0x1b, "Esc"), (0x5a, "Z"), (0x09, "Tab"), (0x0d, "Enter")];
+            const OPEN_KEY_HOLD: usize = INJECT_NAV_CYCLE * 3;
+            let cand = (tick / OPEN_KEY_HOLD) % OPEN_CANDIDATES.len();
+            let (vk, name) = OPEN_CANDIDATES[cand];
+            let pressed = (tick % INJECT_NAV_CYCLE) < INJECT_NAV_TAP_LEN;
+            sq_repro_drive_wm_key(if pressed { vk } else { 0 });
+            SQ_REPRO_XINPUT_BUTTONS.store(
+                if pressed { XINPUT_GAMEPAD_START as usize } else { 0 },
+                Ordering::SeqCst,
+            );
+            SQ_REPRO_OPEN_KEY_VK.store(vk as usize, Ordering::SeqCst);
+            if tick % OPEN_KEY_HOLD == 0 {
+                append_autoload_debug(format_args!(
+                    "sq-repro: OPEN_MENU trying menu-open key '{name}' (VK 0x{vk:x}) via SendInput RawInput to foreground; waiting for 02_000_IngameTop"
+                ));
+            }
         }
         SQ_REPRO_STATE_TO_SYSTEM => {
             let option_setting = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);

@@ -31,11 +31,18 @@ use windows::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
             Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
             SystemServices::DLL_PROCESS_ATTACH,
-            Threading::GetCurrentProcessId,
+            Threading::{AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId},
         },
-        UI::WindowsAndMessaging::{
-            ClipCursor, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
-            WM_KEYDOWN, WM_KEYUP,
+        UI::{
+            Input::KeyboardAndMouse::{
+                INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP,
+                SendInput, SetFocus, VIRTUAL_KEY,
+            },
+            WindowsAndMessaging::{
+                BringWindowToTop, ClipCursor, EnumWindows, GetForegroundWindow,
+                GetWindowThreadProcessId, IsWindowVisible, PostMessageW, SetForegroundWindow,
+                WM_KEYDOWN, WM_KEYUP,
+            },
         },
     },
     core::{BOOL, PCSTR},
@@ -69,6 +76,131 @@ static XINPUT_KEEPALIVE_PACKET: AtomicUsize = AtomicUsize::new(0);
 /// this to ENUMERATE which pad slots exist; with no controller it returns DEVICE_NOT_CONNECTED and
 /// the game then never polls `XInputGetState(0)`. The harness forces slot 0 connected here too.
 static XINPUT_GET_CAPABILITIES_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// DIAGNOSTIC: total `XInputGetState(user_index==0)` calls the game makes (the poll counter). If this
+/// stays 0 while the sq-repro harness holds at OPEN_MENU, native ER is NOT polling slot 0 (cached
+/// "no controller" from a pre-hook enumeration -> our button fabrication can never land, and a device
+/// re-scan is required). If it climbs but the menu still does not open, ER polls but ignores the
+/// fabricated buttons (a different problem). Read/logged from `system_quit_repro_tick`.
+pub(crate) static XINPUT_SLOT0_POLLS: AtomicUsize = AtomicUsize::new(0);
+/// DIAGNOSTIC: times we wrote a NON-ZERO fabricated button into a slot-0 poll (so the log can show
+/// the game both polled slot 0 AND received a real button edge from us).
+pub(crate) static XINPUT_SLOT0_FABRICATED_BUTTONS: AtomicUsize = AtomicUsize::new(0);
+/// DIAGNOSTIC: total `XInputGetCapabilities(user_index==0)` calls (the ENUMERATION probe). Non-zero
+/// means the game re-enumerated slot 0 after our hook installed (so forcing "connected" there can
+/// convince it slot 0 exists); 0 means it enumerated once at startup and cached the result.
+pub(crate) static XINPUT_SLOT0_CAPS_QUERIES: AtomicUsize = AtomicUsize::new(0);
+/// Cached ER main window HWND for WM keyboard injection (0 = not found yet). Native ER does NOT read
+/// keyboard via DInput (proven 2026-07-17: dinput_kb_fires==0) nor route fabricated XInput to menu
+/// actions, so the self-drive posts real WM_KEYDOWN/WM_KEYUP to this window (ER reads keyboard via
+/// window messages / RawInput; PostMessageW reaches it without foreground).
+static SQ_REPRO_ER_HWND: AtomicUsize = AtomicUsize::new(0);
+/// The VK currently "held" by the WM key driver (0 = none), so we post one clean KEYDOWN on press and
+/// one KEYUP on release instead of spamming per frame.
+static SQ_REPRO_HELD_VK: AtomicUsize = AtomicUsize::new(0);
+
+unsafe extern "system" fn sq_repro_find_hwnd_cb(hwnd: HWND, _l: LPARAM) -> BOOL {
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    if pid == unsafe { GetCurrentProcessId() } && unsafe { IsWindowVisible(hwnd) }.as_bool() {
+        SQ_REPRO_ER_HWND.store(hwnd.0 as usize, Ordering::SeqCst);
+        return BOOL(0); // found a visible window owned by this process -> stop enumerating
+    }
+    BOOL(1)
+}
+
+/// Return (and cache) the ER main window HWND: the first visible top-level window owned by this
+/// process. Null HWND if none found yet (retried each call until the window exists).
+fn sq_repro_er_hwnd() -> HWND {
+    let cached = SQ_REPRO_ER_HWND.load(Ordering::SeqCst);
+    if cached != 0 {
+        return HWND(cached as *mut core::ffi::c_void);
+    }
+    let _ = unsafe { EnumWindows(Some(sq_repro_find_hwnd_cb), LPARAM(0)) };
+    HWND(SQ_REPRO_ER_HWND.load(Ordering::SeqCst) as *mut core::ffi::c_void)
+}
+
+/// Count of foreground-forces performed (diagnostic) and whether the ER window is currently the
+/// foreground window at the last drive (1/0), so the OPEN_MENU diag can report if focus was achieved.
+pub(crate) static SQ_REPRO_FOREGROUND_FORCES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SQ_REPRO_IS_FOREGROUND: AtomicUsize = AtomicUsize::new(0);
+
+/// Force the ER window to the foreground (headless me3 launches often leave it non-foreground, and
+/// native ER only processes RawInput menu input for the FOREGROUND window). Uses the AttachThreadInput
+/// trick so `SetForegroundWindow` is not silently refused. Records whether it ended up foreground.
+fn sq_repro_ensure_foreground(hwnd: HWND) {
+    unsafe {
+        let fg = GetForegroundWindow();
+        let already = fg == hwnd;
+        SQ_REPRO_IS_FOREGROUND.store(already as usize, Ordering::SeqCst);
+        if already {
+            return;
+        }
+        let cur_tid = GetCurrentThreadId();
+        let fg_tid = if fg.0.is_null() {
+            0
+        } else {
+            GetWindowThreadProcessId(fg, None)
+        };
+        let attached = fg_tid != 0 && fg_tid != cur_tid && AttachThreadInput(cur_tid, fg_tid, true).as_bool();
+        let _ = BringWindowToTop(hwnd);
+        let ok = SetForegroundWindow(hwnd).as_bool();
+        let _ = SetFocus(Some(hwnd));
+        if attached {
+            let _ = AttachThreadInput(cur_tid, fg_tid, false);
+        }
+        SQ_REPRO_FOREGROUND_FORCES.fetch_add(1, Ordering::SeqCst);
+        SQ_REPRO_IS_FOREGROUND.store((ok || GetForegroundWindow() == hwnd) as usize, Ordering::SeqCst);
+    }
+}
+
+/// SendInput one VK keyboard event (down or up) at the OS level -> delivered as RawInput to the
+/// foreground window. Native ER reads keyboard via RawInput (proven: not DInput, ignores posted
+/// WM_KEYDOWN), so this is the real menu-input channel; it requires the ER window to be foreground
+/// (forced by `sq_repro_ensure_foreground`).
+fn sq_repro_send_vk(vk: u32, keyup: bool) {
+    let ki = KEYBDINPUT {
+        wVk: VIRTUAL_KEY(vk as u16),
+        wScan: 0,
+        dwFlags: if keyup {
+            KEYEVENTF_KEYUP
+        } else {
+            KEYBD_EVENT_FLAGS(0)
+        },
+        time: 0,
+        dwExtraInfo: 0,
+    };
+    let input = INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 { ki },
+    };
+    unsafe {
+        SendInput(&[input], core::mem::size_of::<INPUT>() as i32);
+    }
+}
+
+/// Drive a keyboard key (Win32 VK code; 0 = release the held key) to the ER window for the
+/// self-driving System->Quit repro. Native ER does NOT read keyboard via DInput and ignores posted
+/// WM_KEYDOWN, so this forces the window foreground and uses OS-level `SendInput` (delivered as
+/// RawInput). Posts a clean key-down on press and key-up on release when the VK transitions. Gated by
+/// the caller (only the sq-repro autopilot calls it) so it never touches the product path.
+pub(crate) fn sq_repro_drive_wm_key(vk: u32) {
+    let hwnd = sq_repro_er_hwnd();
+    if hwnd.0.is_null() {
+        return;
+    }
+    // Keep ER foreground so SendInput/RawInput reaches it (cheap: no-op once it is already foreground).
+    sq_repro_ensure_foreground(hwnd);
+    let prev = SQ_REPRO_HELD_VK.swap(vk as usize, Ordering::SeqCst) as u32;
+    if prev == vk {
+        return;
+    }
+    if prev != 0 {
+        sq_repro_send_vk(prev, true);
+    }
+    if vk != 0 {
+        sq_repro_send_vk(vk, false);
+    }
+}
 
 /// STAY-ACTIVE gate (`ER_EFFECTS_STAY_ACTIVE=1` / `er-effects-stay-active.txt`). When set, keep ER's
 /// input-accept flag `[DLUID+0x88d]` forced to 1 every tick so a virtual gamepad keeps driving the
@@ -225,6 +357,11 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
     const XINPUT_GAMEPAD_SIZE: usize = 12;
     const ZERO_FILL_BYTE: u8 = 0;
     const XINPUT_PRIMARY_USER_INDEX: u32 = 0;
+    // DIAGNOSTIC: count every slot-0 poll so we can tell whether native ER is polling XInput slot 0 at
+    // all (see XINPUT_SLOT0_POLLS doc). Cheap Relaxed add on the hot poll path.
+    if user_index == XINPUT_PRIMARY_USER_INDEX {
+        XINPUT_SLOT0_POLLS.fetch_add(1, Ordering::Relaxed);
+    }
     let orig = XINPUT_GET_STATE_ORIG.load(Ordering::SeqCst);
     let mut hr = if orig != TITLE_OWNER_SCAN_START_ADDRESS {
         let f: unsafe extern "system" fn(u32, *mut u8) -> u32 =
@@ -293,6 +430,12 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
                 *(state.add(XINPUT_GAMEPAD_OFFSET + WBUTTONS_OFFSET_IN_GAMEPAD) as *mut u16) =
                     buttons;
             }
+            // DIAGNOSTIC: record that the game polled slot 0 AND received a real fabricated button
+            // edge from us this poll (so the log distinguishes "polled + got a button" from "polled
+            // idle"). Only meaningful when the game actually calls this hook for slot 0.
+            if buttons != 0 && user_index == XINPUT_PRIMARY_USER_INDEX {
+                XINPUT_SLOT0_FABRICATED_BUTTONS.fetch_add(1, Ordering::Relaxed);
+            }
             let _ = user_index;
             return XINPUT_SUCCESS;
         }
@@ -331,6 +474,10 @@ pub(crate) unsafe extern "system" fn xinput_get_capabilities_hook(
     const XINPUT_DEVSUBTYPE_GAMEPAD: u8 = 1;
     const CAPS_TYPE_OFFSET: usize = 0;
     const CAPS_SUBTYPE_OFFSET: usize = 1;
+    // DIAGNOSTIC: count slot-0 enumeration probes (see XINPUT_SLOT0_CAPS_QUERIES doc).
+    if user_index == XINPUT_PRIMARY_USER_INDEX {
+        XINPUT_SLOT0_CAPS_QUERIES.fetch_add(1, Ordering::Relaxed);
+    }
     let orig = XINPUT_GET_CAPABILITIES_ORIG.load(Ordering::SeqCst);
     let hr = if orig != TITLE_OWNER_SCAN_START_ADDRESS {
         let f: unsafe extern "system" fn(u32, u32, *mut u8) -> u32 =

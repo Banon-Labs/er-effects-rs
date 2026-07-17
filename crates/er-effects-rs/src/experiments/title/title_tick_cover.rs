@@ -834,6 +834,41 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         let mms = ig_ptr
             .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
             .filter(|&v| v > 0x10000);
+        // LOADLIST ROOT LEAD: the world-res loadlist is built by STEP_MoveMap_LoadlistInit only when
+        // worldloadlistlistVirtualPath.size (InGameStep+0x220) != 0, storing the cap at +0x238. At the
+        // step-3 stall, ll_size==0 + ll_fcap==0 == "loadlist never built for the target area".
+        let ll_size = ig_ptr
+            .and_then(|ig| unsafe {
+                safe_read_usize(ig + INGAMESTEP_WORLDLOADLIST_VPATH_SIZE_220_OFFSET)
+            })
+            .unwrap_or(usize::MAX);
+        let ll_fcap = ig_ptr
+            .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_LOADLISTLIST_FILECAP_238_OFFSET) })
+            .unwrap_or(0);
+        // The loadlist virtual path CONTENT: is it the TARGET map (m28) or a STALE map (m60)? DLString
+        // wchar; size 35 > 7 so it is heap (data = *(base+0x210)). Read the ASCII low byte of each wchar
+        // (map paths are ASCII) into a string -- reveals the map id in the path (e.g. .../m28.. vs /m60..).
+        let ll_path = if ll_size > 0 && ll_size < 200 {
+            ig_ptr
+                .and_then(|ig| unsafe {
+                    safe_read_usize(ig + INGAMESTEP_WORLDLOADLIST_VPATH_BASE_210_OFFSET)
+                })
+                .filter(|&v| v > 0x10000)
+                .map(|heap| {
+                    let mut s = String::new();
+                    for i in 0..ll_size.min(72) {
+                        let b = unsafe { safe_read_u8(heap + i * 2) }.unwrap_or(0);
+                        if b == 0 {
+                            break;
+                        }
+                        s.push(if (0x20..0x7f).contains(&b) { b as char } else { '?' });
+                    }
+                    s
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         let mms_step = mms
             .and_then(|m| unsafe { safe_read_i32(m + INGAMESTEP_STEP_STATE_OFFSET) })
             .unwrap_or(-1);
@@ -1081,7 +1116,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             // vtable[0x10] load-state getter that returns null (why the legacy load is never created).
             let blk_vt_rva = mms_blk_vt.saturating_sub(module_base);
             append_autoload_debug(format_args!(
-                "SWITCH-ORACLE #{n}: slot={slot} bc4={bc4v} player={player_present} ig_d8={ig_d8} pstep={ig_pstep}/{ig_pnext} menu_job=0x{menu_job:x} stable_frames={sf} peak={peak} mms=0x{mms_disp:x} mms_step={mms_step}({}) next={mms_next} done50={mms_done} gate={mms_gate_lo}/{mms_gate_hi} end5e={md_5e} rt5d={md_5d} force={ending_force} b7c={gb7c} b7d={gb7d} warp={gwarp} hold270=0x{mms_hold:x} cd100={mms_cd} req248={mms_req248} b7c1={mms_b7c1} blocks={mms_blocks} curblk=0x{mms_cur_block:x} blk_found={mms_block_found} blk_ls=0x{mms_blk_ls:x} blk_2c={mms_blk_2c} blk_2d={mms_blk_2d} blk_35={mms_blk_35} blk_vt_rva=0x{blk_vt_rva:x} ow_cnt={mms_ow_count} ow=[{mms_ow_areas}] blk_areas=[{mms_block_areas}] phase={} -- {cls}",
+                "SWITCH-ORACLE #{n}: slot={slot} bc4={bc4v} player={player_present} ig_d8={ig_d8} pstep={ig_pstep}/{ig_pnext} menu_job=0x{menu_job:x} stable_frames={sf} peak={peak} mms=0x{mms_disp:x} mms_step={mms_step}({}) next={mms_next} done50={mms_done} gate={mms_gate_lo}/{mms_gate_hi} end5e={md_5e} rt5d={md_5d} force={ending_force} b7c={gb7c} b7d={gb7d} warp={gwarp} hold270=0x{mms_hold:x} cd100={mms_cd} req248={mms_req248} b7c1={mms_b7c1} blocks={mms_blocks} curblk=0x{mms_cur_block:x} blk_found={mms_block_found} blk_ls=0x{mms_blk_ls:x} blk_2c={mms_blk_2c} blk_2d={mms_blk_2d} blk_35={mms_blk_35} blk_vt_rva=0x{blk_vt_rva:x} ll_size={ll_size} ll_fcap=0x{ll_fcap:x} ll_path='{ll_path}' ow_cnt={mms_ow_count} ow=[{mms_ow_areas}] blk_areas=[{mms_block_areas}] phase={} -- {cls}",
                 movemapstep_step_name(mms_step),
                 SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             ));

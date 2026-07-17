@@ -53,6 +53,10 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Imaging",
     "Win32_UI_WindowsAndMessaging",
+    # SendInput/KEYBDINPUT + AttachThreadInput/SetFocus for the self-driving System->Quit repro
+    # harness: native ER reads keyboard via RawInput (not DInput, ignores posted WM_KEYDOWN), so the
+    # autopilot forces the window foreground and injects real OS keystrokes (diagnostic path only).
+    "Win32_UI_Input_KeyboardAndMouse",
     # Common file-open dialog lets System -> Quit -> Load Save Profiles pick a replacement SL2.
     "Win32_UI_Controls_Dialogs",
     # CreateEventW (fence-completion event for the D3D12 readback wait) is gated behind Win32_Security.

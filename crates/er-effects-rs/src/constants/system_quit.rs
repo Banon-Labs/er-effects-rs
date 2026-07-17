@@ -92,6 +92,9 @@ pub(crate) const SQ_REPRO_TAB_RETURN_STALL_TICKS: usize = 40;
 /// Dwell on Game Options this many ticks so the pane-visibility oracle samples the (blank) tab 0.
 pub(crate) const SQ_REPRO_TAB_RETURN_DWELL_TICKS: usize = 180;
 pub(crate) static SQ_REPRO_STATE: AtomicUsize = AtomicUsize::new(SQ_REPRO_STATE_WAIT_WORLD);
+/// The VK code the OPEN_MENU auto-discovery is currently sending (and the winner when IngameTop
+/// opens), so the log reports which menu-open key actually worked on native Windows.
+pub(crate) static SQ_REPRO_OPEN_KEY_VK: AtomicUsize = AtomicUsize::new(0);
 /// Which back-to-back switch the autopilot is driving (0-based). Switch `i` loads
 /// `SQ_REPRO_TARGET_SLOTS[i]`. Proves the feature can load N different characters after one startup.
 pub(crate) static SQ_REPRO_SWITCH_INDEX: AtomicUsize = AtomicUsize::new(0);

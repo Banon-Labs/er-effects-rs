@@ -242,6 +242,16 @@ pub(crate) const BLOCK_LOADSTATE_REQUEST_2C_OFFSET: usize = 0x2c;
 /// is what starves the legacy load-request. Each entry's areaId is its BlockId byte[3].
 pub(crate) const WORLDINFO_OVERWORLD_LIST_B3148_OFFSET: usize = 0xb3148;
 pub(crate) const WORLDINFO_OVERWORLD_COUNT_B31D0_OFFSET: usize = 0xb31d0;
+/// LOADLIST ROOT LEAD (2026-07-16). STEP_MoveMap_LoadlistInit (InGameStep step 4, dump 0x140aec660)
+/// builds the world-res loadlist ONLY when `worldloadlistlistVirtualPath.size != 0`
+/// (`CMP qword [InGameStep+0x220], 0`); it then stores the built cap in `loadlistlistFileCap`
+/// (`MOV [InGameStep+0x238], RAX`). If the path is empty, the loadlist is never built ->
+/// `loadlistlistFileCap` stays null -> no world-res block load-states -> STEP_WorldResWait's null
+/// load-state (blk_ls=0) stall. So at the stall `ll_size==0` + `ll_fcap==0` confirms the loadlist
+/// was never built for the target area (our switch left the virtual path empty/stale).
+pub(crate) const INGAMESTEP_WORLDLOADLIST_VPATH_BASE_210_OFFSET: usize = 0x210;
+pub(crate) const INGAMESTEP_WORLDLOADLIST_VPATH_SIZE_220_OFFSET: usize = 0x220;
+pub(crate) const INGAMESTEP_LOADLISTLIST_FILECAP_238_OFFSET: usize = 0x238;
 pub(crate) static SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_READY_BLOCK_COUNT: AtomicUsize =
     AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_LAST_DIALOG: AtomicUsize =
