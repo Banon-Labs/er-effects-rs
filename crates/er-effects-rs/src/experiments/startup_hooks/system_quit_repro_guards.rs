@@ -239,6 +239,14 @@ fn sq_repro_gamepad_to_vk(btn: u16) -> u32 {
     }
 }
 
+/// TO_PROFILE tab-switch key auto-discovery state (native keyboard): the discovered VK that moves
+/// OPTIONSETTING_CURRENT_TAB (0 = not found yet), the tab index observed when the current candidate
+/// window began (to detect a change), and the phase-local tick when we reached the Quit tab (so the
+/// DOWN,DOWN,Enter row nav has its own base; usize::MAX = not yet on the Quit tab).
+static SQ_REPRO_TAB_DISCOVERED: AtomicUsize = AtomicUsize::new(0);
+static SQ_REPRO_TAB_BASELINE: AtomicUsize = AtomicUsize::new(usize::MAX);
+static SQ_REPRO_ROWNAV_BASE: AtomicUsize = AtomicUsize::new(usize::MAX);
+
 /// Fabricated gamepad wButtons for a phase that issues a FIXED list of button edges ONCE, in order,
 /// then holds. `tick` is phase-local; each edge occupies one `INJECT_NAV_CYCLE` (the RE-grounded
 /// edge hold+gap -- edge-triggered menu nav needs a multi-frame hold to register one step). Returns
@@ -601,10 +609,66 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 sq_repro_transition(SQ_REPRO_STATE_TO_SLOT);
                 return;
             }
+            // Navigate to the Quit tab (OPTIONSETTING_QUIT_TAB_INDEX), then DOWN,DOWN,Enter to activate
+            // the Load Profile row. The tab-switch keyboard key is uncertain, so AUTO-DISCOVER it:
+            // cycle candidate keys and watch OPTIONSETTING_CURRENT_TAB change, then keep pressing the
+            // discovered key until we are on the Quit tab. All keys reach the (now correct) ER game
+            // window via SendInput. Semaphore-gated throughout (ProfileSelect open advances, above).
+            let cur = OPTIONSETTING_CURRENT_TAB.load(Ordering::SeqCst);
+            let target = OPTIONSETTING_QUIT_TAB_INDEX;
+            if cur == usize::MAX {
+                set_pad(0); // tab index not readable yet -- hold
+                return;
+            }
+            if cur != target {
+                SQ_REPRO_ROWNAV_BASE.store(usize::MAX, Ordering::SeqCst);
+                // Safe-first candidate order (arrows/Tab/brackets/PgDn before activating keys).
+                const TAB_CANDS: [(u32, &str); 8] = [
+                    (0x27, "Right"), (0x25, "Left"), (0x09, "Tab"), (0xdd, "]"),
+                    (0xdb, "["), (0x22, "PgDn"), (0x51, "Q"), (0x45, "E"),
+                ];
+                const TAB_HOLD: usize = INJECT_NAV_CYCLE * 2;
+                let mut key = SQ_REPRO_TAB_DISCOVERED.load(Ordering::SeqCst) as u32;
+                if key == 0 {
+                    let idx = (tick / TAB_HOLD) % TAB_CANDS.len();
+                    let (vk, name) = TAB_CANDS[idx];
+                    if tick % TAB_HOLD == 0 {
+                        SQ_REPRO_TAB_BASELINE.store(cur, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "sq-repro: TO_PROFILE trying tab-switch key '{name}' (VK 0x{vk:x}); cur_tab={cur} target={target}"
+                        ));
+                    }
+                    if cur != SQ_REPRO_TAB_BASELINE.load(Ordering::SeqCst) {
+                        SQ_REPRO_TAB_DISCOVERED.store(vk as usize, Ordering::SeqCst);
+                        key = vk;
+                        append_autoload_debug(format_args!(
+                            "sq-repro: TO_PROFILE tab-switch key DISCOVERED VK 0x{vk:x} ('{name}') -> now at tab {cur}"
+                        ));
+                    } else {
+                        key = vk;
+                    }
+                }
+                let pressed = (tick % INJECT_NAV_CYCLE) < INJECT_NAV_TAP_LEN;
+                sq_repro_drive_wm_key(if pressed { key } else { 0 });
+                SQ_REPRO_XINPUT_BUTTONS.store(0, Ordering::SeqCst);
+                return;
+            }
+            // On the Quit tab: DOWN, DOWN, Enter to activate the cloned Load Profile row.
+            let rn_base = {
+                let b = SQ_REPRO_ROWNAV_BASE.load(Ordering::SeqCst);
+                if b == usize::MAX {
+                    SQ_REPRO_ROWNAV_BASE.store(tick, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "sq-repro: TO_PROFILE on Quit tab {target} -> DOWN,DOWN,Enter to activate Load Profile"
+                    ));
+                    tick
+                } else {
+                    b
+                }
+            };
             let (btn, holding) = sq_repro_edges(
-                tick,
+                tick.saturating_sub(rn_base),
                 &[
-                    XINPUT_GAMEPAD_LEFT_SHOULDER,
                     XINPUT_GAMEPAD_DPAD_DOWN,
                     XINPUT_GAMEPAD_DPAD_DOWN,
                     XINPUT_GAMEPAD_A,
@@ -612,7 +676,7 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             );
             if holding {
                 sq_repro_waiting_once(
-                    "TO_PROFILE: LB+DOWN+DOWN+A issued, waiting for 05_010_ProfileSelect",
+                    "TO_PROFILE: DOWN+DOWN+Enter issued on Quit tab, waiting for 05_010_ProfileSelect",
                 );
             }
             set_pad(btn);
