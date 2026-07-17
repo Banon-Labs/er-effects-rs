@@ -264,6 +264,9 @@ pub(crate) const WORLDRES_BLOCKRES_PHASE2_RVA: u32 = 0x006157f0;
 pub(crate) const BLOCKRES_PHASE_35_OFFSET: usize = 0x35;
 pub(crate) const BLOCKRES_GATE_2F_OFFSET: usize = 0x2f;
 pub(crate) const BLOCKRES_PRIMARY_FILECAP_40_OFFSET: usize = 0x40;
+// Secondary FD4 file cap on the WorldBlockRes; the phase-2 handler (deobf 0x1406157f0) reads both
+// block-res+0x40 and +0x48 and requires BOTH to report status==4 before advancing.
+pub(crate) const BLOCKRES_SECOND_FILECAP_48_OFFSET: usize = 0x48;
 pub(crate) const FILECAP_STATUS_88_OFFSET: usize = 0x88;
 pub(crate) const FILECAP_DATA_90_OFFSET: usize = 0x90;
 pub(crate) const FILECAP_STATUS_LOADED: i32 = 0x04;

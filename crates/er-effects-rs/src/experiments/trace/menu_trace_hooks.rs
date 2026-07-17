@@ -937,17 +937,31 @@ pub(crate) unsafe extern "system" fn blockres_phase2_hook(
         .map(|v| v as i32)
         .unwrap_or(-1);
     let data = unsafe { safe_read_usize(fc + FILECAP_DATA_90_OFFSET) }.unwrap_or(0);
-    // The determined stall: cap loaded but no data attached.
+    // The determined stall: cap reports LOADED (0x88==0x04) but its data (+0x90) is null -- the
+    // teardown between loads freed the data yet left the "loaded" status, so the phase-2 machine
+    // (deobf 0x1406157f0) short-circuits (it advances to phase 3 only when status==4 AND data!=0, and
+    // its own phase=5 retry does NOT re-read because the cap still says loaded -- run4 proved forcing
+    // phase=5 leaves data null). So clear the stale "loaded" status on BOTH file caps (+0x40 primary,
+    // +0x48 secondary) and restart the block load (phase +0x35 = 0) so the block re-requests the caps
+    // and they re-issue a fresh FD4 read that re-attaches data. Bounded so an un-evictable file cannot
+    // spin. RUN-VALIDATED root: step3-run4-filecap-status4-data-null-resident-shortcircuit-2026-07-17.
     if status == FILECAP_STATUS_LOADED && data == 0 {
         let n = BLOCKRES_STALECAP_RETRIES.fetch_add(1, Ordering::SeqCst) + 1;
         if n <= BLOCKRES_STALECAP_MAX_RETRIES {
-            unsafe { *((bres + BLOCKRES_PHASE_35_OFFSET) as *mut u8) = BLOCKRES_PHASE_TEARDOWN_RETRY };
+            for coff in [BLOCKRES_PRIMARY_FILECAP_40_OFFSET, BLOCKRES_SECOND_FILECAP_48_OFFSET] {
+                if let Some(cap) =
+                    unsafe { safe_read_usize(bres + coff) }.filter(|&v| v > 0x10000)
+                {
+                    unsafe { *((cap + FILECAP_STATUS_88_OFFSET) as *mut u8) = 0 };
+                }
+            }
+            unsafe { *((bres + BLOCKRES_PHASE_35_OFFSET) as *mut u8) = 0 };
             append_autoload_debug(format_args!(
-                "BLOCKRES-STALECAP-FIX #{n}: block-res=0x{bres:x} cap=0x{fc:x} status=0x04 data=null at phase 2 -> forced phase=5 (teardown/reload retry) to re-load the file fresh"
+                "BLOCKRES-STALECAP-FIX #{n}: block-res=0x{bres:x} cap=0x{fc:x} status=0x04 data=null -> cleared both cap +0x88 and reset block phase=0 to force a fresh FD4 re-read"
             ));
         } else if n == BLOCKRES_STALECAP_MAX_RETRIES + 1 {
             append_autoload_debug(format_args!(
-                "BLOCKRES-STALECAP-FIX: retry cap ({BLOCKRES_STALECAP_MAX_RETRIES}) hit for block-res=0x{bres:x} cap=0x{fc:x}; file did not re-attach data on reload (needs eviction/other fix)"
+                "BLOCKRES-STALECAP-FIX: retry cap ({BLOCKRES_STALECAP_MAX_RETRIES}) hit for block-res=0x{bres:x} cap=0x{fc:x}; cap-status reset did not re-attach data (needs teardown-eviction or direct cap re-load)"
             ));
         }
     }
