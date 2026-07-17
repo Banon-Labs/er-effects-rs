@@ -39,9 +39,9 @@ use windows::{
                 SendInput, SetFocus, VIRTUAL_KEY,
             },
             WindowsAndMessaging::{
-                BringWindowToTop, ClipCursor, EnumWindows, GetForegroundWindow,
-                GetWindowThreadProcessId, IsWindowVisible, PostMessageW, SetForegroundWindow,
-                WM_KEYDOWN, WM_KEYUP,
+                BringWindowToTop, ClipCursor, EnumWindows, GetClassNameW, GetForegroundWindow,
+                GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+                PostMessageW, SetForegroundWindow, WM_KEYDOWN, WM_KEYUP,
             },
         },
     },
@@ -98,24 +98,66 @@ static SQ_REPRO_ER_HWND: AtomicUsize = AtomicUsize::new(0);
 /// one KEYUP on release instead of spamming per frame.
 static SQ_REPRO_HELD_VK: AtomicUsize = AtomicUsize::new(0);
 
+/// Best (largest-area) candidate window + its area, tracked across the EnumWindows callback.
+static SQ_REPRO_BEST_HWND: AtomicUsize = AtomicUsize::new(0);
+static SQ_REPRO_BEST_AREA: AtomicUsize = AtomicUsize::new(0);
+
 unsafe extern "system" fn sq_repro_find_hwnd_cb(hwnd: HWND, _l: LPARAM) -> BOOL {
     let mut pid = 0u32;
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-    if pid == unsafe { GetCurrentProcessId() } && unsafe { IsWindowVisible(hwnd) }.as_bool() {
-        SQ_REPRO_ER_HWND.store(hwnd.0 as usize, Ordering::SeqCst);
-        return BOOL(0); // found a visible window owned by this process -> stop enumerating
+    if pid != unsafe { GetCurrentProcessId() } || !unsafe { IsWindowVisible(hwnd) }.as_bool() {
+        return BOOL(1);
     }
-    BOOL(1)
+    // Skip OUR OWN overlay/helper windows (class 'ErEffectsLoadingOverlay', the fullscreen D3D12
+    // present-overlay window). It is the LARGEST visible window owned by this process, so without this
+    // filter the finder picked IT and every SendInput/foreground went to our overlay instead of the ER
+    // game window -- the root cause of "no key opens the menu" (runtime-proven 2026-07-17).
+    let mut cls = [0u16; 128];
+    let n = unsafe { GetClassNameW(hwnd, &mut cls) }.max(0) as usize;
+    let cls_s = String::from_utf16_lossy(&cls[..n.min(cls.len())]);
+    if cls_s.contains("ErEffects") || cls_s.contains("er-effects") {
+        return BOOL(1);
+    }
+    // Pick the LARGEST visible window owned by this process -- the game render window, not a helper/
+    // overlay/console window (focusing the wrong one is why SendInput could miss the game).
+    let mut rect = RECT::default();
+    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
+        let w = (rect.right - rect.left).max(0) as usize;
+        let h = (rect.bottom - rect.top).max(0) as usize;
+        let area = w * h;
+        if area > SQ_REPRO_BEST_AREA.load(Ordering::SeqCst) {
+            SQ_REPRO_BEST_AREA.store(area, Ordering::SeqCst);
+            SQ_REPRO_BEST_HWND.store(hwnd.0 as usize, Ordering::SeqCst);
+        }
+    }
+    BOOL(1) // keep enumerating to find the largest
 }
 
-/// Return (and cache) the ER main window HWND: the first visible top-level window owned by this
-/// process. Null HWND if none found yet (retried each call until the window exists).
+/// Return (and cache) the ER main game window HWND: the LARGEST visible top-level window owned by this
+/// process. Logs the chosen window's class/title/rect once so it can be confirmed as the game window.
 fn sq_repro_er_hwnd() -> HWND {
     let cached = SQ_REPRO_ER_HWND.load(Ordering::SeqCst);
     if cached != 0 {
         return HWND(cached as *mut core::ffi::c_void);
     }
+    SQ_REPRO_BEST_HWND.store(0, Ordering::SeqCst);
+    SQ_REPRO_BEST_AREA.store(0, Ordering::SeqCst);
     let _ = unsafe { EnumWindows(Some(sq_repro_find_hwnd_cb), LPARAM(0)) };
+    let best = SQ_REPRO_BEST_HWND.load(Ordering::SeqCst);
+    if best != 0 {
+        SQ_REPRO_ER_HWND.store(best, Ordering::SeqCst);
+        let hwnd = HWND(best as *mut core::ffi::c_void);
+        let mut cls = [0u16; 128];
+        let mut title = [0u16; 128];
+        let n = unsafe { GetClassNameW(hwnd, &mut cls) }.max(0) as usize;
+        let m = unsafe { GetWindowTextW(hwnd, &mut title) }.max(0) as usize;
+        let cls_s = String::from_utf16_lossy(&cls[..n.min(cls.len())]);
+        let title_s = String::from_utf16_lossy(&title[..m.min(title.len())]);
+        let area = SQ_REPRO_BEST_AREA.load(Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "sq-repro: ER window selected hwnd=0x{best:x} class='{cls_s}' title='{title_s}' area={area}px (SendInput/foreground target)"
+        ));
+    }
     HWND(SQ_REPRO_ER_HWND.load(Ordering::SeqCst) as *mut core::ffi::c_void)
 }
 
