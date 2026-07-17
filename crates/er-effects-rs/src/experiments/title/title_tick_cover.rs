@@ -1006,6 +1006,52 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         } else {
             (-1, String::new())
         };
+        // STEP-3 / WORLD-RES FIX (2026-07-17, decompile+runtime grounded). When a switch reaches
+        // WORLD RES WAIT (step 3) with the incoming block's load-state NULL (blk_ls=0), the block-res
+        // entry was never created because the fast in-process switch skipped STEP_MoveMap_Init's
+        // world-res rebuild. Re-run the game's own CS::WorldInfoOwner::ProcessMsbLoadLists(worldInfoOwner,
+        // loadlistlistFileCap, dlc02=0) (0x14066b2c0) -- it runs ResetAreaResLists + PopulateLists to
+        // CREATE the missing block-res, exactly like _Common_Initialize (which calls it with
+        // &worldInfoOwner, loadlistlistFileCap, loadlistlistFileCap_dlc02). dlc02=0 is null-safe
+        // (decompile line 214 null-checks it; base-game areas have no dlc02 loadlist). Gate on a
+        // SUSTAINED null (>= 2s) so the sub-second boot-load transient (which loads fine) never trips
+        // it, and one-shot per DLL load.
+        // The null-block-load-state stall persists across WORLD RES WAIT (3) and CURRENT LOD BLOCK (4)
+        // -- the switch advances 3->4 but both wait on the same never-created block-res -- so count the
+        // streak across steps 3..=8, not step 3 alone (the switch left step 3 before 2s elapsed).
+        // Count the streak on the null load-state alone (curblk flickers to 0xffffffff while the
+        // world-res is half-set-up, which would keep resetting a curblk-gated streak); the valid-block
+        // check stays on the actual fire below. Gate on IN_WORLD_REACHED==YES so this only counts a
+        // SWITCH reload (we were already in-world), never the sub-second boot-load transient -- which is
+        // what let us drop the threshold to 30 frames (the switch reaches step 3/4 late, after the old
+        // world's slow step-18 teardown, so a 2s window did not fit before the run cap).
+        if IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES
+            && (MOVEMAPSTEP_STEP_WORLDRESWAIT_INDEX..=8).contains(&mms_step)
+            && mms_blk_ls == 0
+        {
+            SWITCH_WORLDRES_NULL_STREAK.fetch_add(1, Ordering::SeqCst);
+        } else {
+            SWITCH_WORLDRES_NULL_STREAK.store(0, Ordering::SeqCst);
+        }
+        if SWITCH_WORLDRES_NULL_STREAK.load(Ordering::SeqCst) >= 30
+            && ((mms_cur_block >> 24) & 0xff) != 0
+            && mms_resmgr.unwrap_or(0) >= 0x10000
+            && ll_fcap >= 0x10000
+            && SWITCH_WORLDRES_REBUILD_TRIED.swap(1, Ordering::SeqCst) == 0
+        {
+            let owner = mms_resmgr.unwrap_or(0);
+            if let Ok(addr) = game_rva(WORLDINFO_PROCESS_MSB_LOADLISTS_RVA) {
+                let process_msb_load_lists: unsafe extern "system" fn(usize, usize, usize) -> u8 =
+                    unsafe { std::mem::transmute(addr) };
+                let ret = unsafe { process_msb_load_lists(owner, ll_fcap, 0) };
+                SWITCH_WORLDRES_REBUILD_COUNT.fetch_add(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "STEP-3 FIX: ProcessMsbLoadLists(owner=0x{owner:x} fcap=0x{ll_fcap:x} dlc02=0) ret={ret} area=0x{:x} curblk=0x{:x} -- rebuilt world-res lists to create the missing block-res (should advance WORLD RES WAIT)",
+                    (mms_cur_block >> 24) & 0xff,
+                    mms_cur_block
+                ));
+            }
+        }
         // STEP_MoveMap advance gate (MoveMapStep+0x4b8 low / +0x4b9 high). lo=1 -> ready to advance;
         // lo=0 -> blocked; lo=0,hi=1 -> WorldChrMan-not-ready (0x100). Blocked-with-bc4=1 is the softlock.
         let mms_gate_lo = mms

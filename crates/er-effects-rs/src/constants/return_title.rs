@@ -225,6 +225,18 @@ pub(crate) const WORLDINFO_BLOCK_LIST_B3030_OFFSET: usize = 0xb3030;
 pub(crate) const WORLDINFO_BLOCK_ENTRY_INNER_8_OFFSET: usize = 0x8;
 pub(crate) const WORLDINFO_BLOCK_AREA_ID_C_OFFSET: usize = 0xc;
 pub(crate) const MOVEMAPSTEP_STEP_WORLDRESWAIT_INDEX: i32 = 3;
+/// STEP-3 FIX (2026-07-17): `CS::WorldInfoOwner::ProcessMsbLoadLists(WorldInfoOwner*, LoadlistlistFileCap*,
+/// LoadlistlistFileCap* dlc02)` -- dump/live 0x14066b2c0. Runs ResetAreaResLists + PopulateLists to
+/// create the per-block world-res load-state entries from the loadlist. Re-invoking it at the switch's
+/// WORLD RES WAIT (when the incoming block's load-state is null) creates the missing block-res so the
+/// step advances. dlc02 is null-checked in the callee, so 0 is safe for base-game (non-dlc) areas.
+pub(crate) const WORLDINFO_PROCESS_MSB_LOADLISTS_RVA: u32 = 0x0066b2c0;
+/// Consecutive frames the switch has sat at WORLD RES WAIT with the incoming block's load-state NULL
+/// (a real stall; the boot-load transient clears in << 2s), the one-shot latch for the ProcessMsbLoadLists
+/// rebuild, and the count of rebuilds performed (runtime semaphore).
+pub(crate) static SWITCH_WORLDRES_NULL_STREAK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SWITCH_WORLDRES_REBUILD_TRIED: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SWITCH_WORLDRES_REBUILD_COUNT: AtomicUsize = AtomicUsize::new(0);
 // The matched block's load-state, read exactly as FUN_14066d4d0 does: call the block's vtable slot
 // +0x10 (`block->vtable[0x10](block)`) to get the load-state object, then LOADED requires +0x2d != 0
 // AND +0x35 == 0x0a(10). +0x35 (the stream-state/phase enum) stuck below 10 = the block is registered
