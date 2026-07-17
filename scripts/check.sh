@@ -23,6 +23,7 @@ python3 "$repo_root/scripts/test-env-gate-comments.py"
 command -v cupcake >/dev/null 2>&1 || { echo "missing required command: cupcake" >&2; exit 127; }
 cupcake validate --log-level error
 python3 "$repo_root/scripts/test-cupcake-policies.py"
+python3 "$repo_root/scripts/test-authority-agreement-signal.py"
 command -v opa >/dev/null 2>&1 && opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego"
 python3 "$repo_root/scripts/check-no-lossy-utf8.py"
 python3 "$repo_root/scripts/check-rust-file-sizes.py"

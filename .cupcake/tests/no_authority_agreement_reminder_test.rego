@@ -37,9 +37,21 @@ test_no_interlock_on_clean_prior_turn if {
 	not has_interlock(ctxs)
 }
 
-# A prior-turn slip (string signal) trips the interlock backstop on the next prompt.
+# A prior-turn slip (bare/untagged string signal) trips the interlock backstop on the next prompt.
 test_interlock_on_prior_slip_string_signal if {
 	ctxs := guard.add_context with input as ups_event("You're right")
+	has_interlock(ctxs)
+}
+
+# Category A tagged value (AUTH:<phrase>) trips the interlock.
+test_interlock_on_auth_tagged_signal if {
+	ctxs := guard.add_context with input as ups_event("AUTH:you're right")
+	has_interlock(ctxs)
+}
+
+# Category B unbacked tagged value (ACKUNBACKED:<phrase>) trips the interlock.
+test_interlock_on_ackunbacked_tagged_signal if {
+	ctxs := guard.add_context with input as ups_event("ACKUNBACKED:Point taken")
 	has_interlock(ctxs)
 }
 

@@ -22,9 +22,30 @@ stop_event_object_signal(sig) := {
 rule_ids(halts) := {d.rule_id | some d in halts}
 
 # A banned phrase in the last message halts the turn-end (string-shaped signal).
+# Bare/untagged value (backward compat with older/crafted signal shapes) is treated as Category A.
 test_halt_on_banned_phrase_string_signal if {
 	halts := guard.halt with input as stop_event("You're right")
 	"ER-EFFECTS-NO-AUTHORITY-AGREEMENT" in rule_ids(halts)
+}
+
+# Category A tagged value (AUTH:<phrase>) halts.
+test_halt_on_auth_tagged_signal if {
+	halts := guard.halt with input as stop_event("AUTH:you're right")
+	"ER-EFFECTS-NO-AUTHORITY-AGREEMENT" in rule_ids(halts)
+}
+
+# Category B unbacked tagged value (ACKUNBACKED:<phrase>) halts.
+test_halt_on_ackunbacked_tagged_signal if {
+	halts := guard.halt with input as stop_event("ACKUNBACKED:Point taken")
+	"ER-EFFECTS-NO-AUTHORITY-AGREEMENT" in rule_ids(halts)
+}
+
+# The halt reason names the acknowledgement case and cites the beads-memory remedy.
+test_ackunbacked_reason_mentions_beads_memory if {
+	halts := guard.halt with input as stop_event("ACKUNBACKED:Point taken")
+	some d in halts
+	contains(d.reason, "beads memory")
+	contains(d.reason, "bd remember")
 }
 
 # Object-shaped signal ({output: ...}) is handled too.
