@@ -50,7 +50,13 @@ DEFAULT_TARGETS = {
 }
 
 
-def _run(cmd: list[str], timeout: float = 8.0) -> str | None:
+# Every boundary helper is a fast local OS query; a module-constant timeout keeps them bounded
+# (and satisfies scripts/check-no-timeouts.py, which requires a literal/constant <=30s, not a
+# variable). WSL interop (tasklist.exe/reg.exe) can be sluggish on a cold call, hence 10s not less.
+_SUBPROCESS_TIMEOUT_SECONDS = 10.0
+
+
+def _run(cmd: list[str]) -> str | None:
     """Run a helper command, returning decoded stdout or None on any failure.
 
     Never raises: a missing/blocked boundary must degrade to "not probed", not crash the
@@ -60,7 +66,7 @@ def _run(cmd: list[str], timeout: float = 8.0) -> str | None:
         out = subprocess.run(
             cmd,
             capture_output=True,
-            timeout=timeout,
+            timeout=_SUBPROCESS_TIMEOUT_SECONDS,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):

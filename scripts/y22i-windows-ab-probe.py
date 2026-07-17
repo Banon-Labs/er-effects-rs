@@ -35,6 +35,15 @@ import sys
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(REPO, "scripts"))
+from semaphore_watchdog import (  # noqa: E402  # pyright: ignore[reportMissingImports]
+    ProgressWatchdog,
+    CONTINUE,
+    TEARDOWN_TERMINAL,
+    TEARDOWN_STALL,
+    TEARDOWN_CAP,
+)
+
 GAME_DIR = "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game"
 ME3 = "/mnt/c/Users/choza/AppData/Local/garyttierney/me3/bin/me3.exe"
 # THE dll under test defaults to THIS repo's canonical release build output -- no separate
@@ -258,14 +267,33 @@ def main() -> int:
         me3_log.close()
         return 1
 
-    # --- runtime watch loop, hard-capped ---
+    # --- runtime watch loop: semaphore-progress teardown, cap is only the backstop ---
+    # Primary teardown is the ProgressWatchdog (bd runtime-teardown-semaphore-progress-watchdog):
+    # it tears down a flush-delay after this arm's terminal semaphore, or on a progress-idle STALL
+    # (no world-load progress oracle advancing -- exactly WORLD RES WAIT), with `cap` as the hard
+    # backstop. Crash detection stays inline: a crash is the control arm's terminal signal and needs
+    # immediate capture, not the flush delay.
+    def guard_terminal(tele: dict) -> bool:
+        null_hits = tele.get("oracle_scaleform_desc_provider_null_hits")
+        return (tele.get("oracle_scaleform_desc_guard_installed") in (True, "true", 1)
+                and isinstance(null_hits, int) and null_hits > 0
+                and tele.get("player_available") in (True, "true"))
+
+    watchdog = ProgressWatchdog(
+        # Idle window is generous for now: the loop samples at the tasklist-interop cadence
+        # (~0.3-1s), so sub-second stall detection needs faster polling (a later change). This
+        # still beats running the full cap on a wedge. Arm once the player exists so a slow boot
+        # cannot false-stall; terminal only for the guard arm (control's terminal is a crash).
+        idle_window_seconds=20.0,
+        teardown_delay_seconds=3.0,
+        hard_cap_seconds=float(cap),
+        arm_predicate=lambda t: t.get("player_available") in (True, "true"),
+        terminal_predicate=guard_terminal if args.arm == "guard" else None,
+    )
+
     t0 = time.monotonic()
     stop = None
     while True:
-        elapsed = time.monotonic() - t0
-        if elapsed >= cap:
-            stop = "cap"
-            break
         lines = crash_lines()
         if lines:
             verdict["crash_lines"] = lines[:5]
@@ -278,17 +306,16 @@ def main() -> int:
             break
         tele = parse_telemetry()
         if tele:
-            verdict["oracles"] = {
-                k: tele.get(k) for k in ORACLE_KEYS if k in tele
-            }
-            o = verdict["oracles"]
-            null_hits = o.get("oracle_scaleform_desc_provider_null_hits")
-            if (args.arm == "guard"
-                    and o.get("oracle_scaleform_desc_guard_installed") in (True, "true", 1)
-                    and isinstance(null_hits, int) and null_hits > 0
-                    and o.get("player_available") in (True, "true")):
-                stop = "guard-proven-world-reached"
-                break
+            verdict["oracles"] = {k: tele.get(k) for k in ORACLE_KEYS if k in tele}
+        decision = watchdog.observe(tele or {}, time.monotonic())
+        if decision != CONTINUE:
+            stop = {
+                TEARDOWN_TERMINAL: "terminal-semaphore",
+                TEARDOWN_STALL: "progress-idle-stall",
+                TEARDOWN_CAP: "cap",
+            }[decision]
+            verdict["watchdog_reason"] = watchdog.last_reason
+            break
         if not tasklist("eldenring.exe"):
             verdict["process_exited"] = True
             stop = "process-exited"
@@ -297,7 +324,7 @@ def main() -> int:
     verdict["stop_reason"] = stop
 
     # --- teardown: always leave no game running ---
-    if stop in ("cap", "crash-rva-hit", "other-access-violation", "guard-proven-world-reached"):
+    if stop != "process-exited":
         if stop != "cap":
             wait_for_evidence_flush()
         if tasklist("eldenring.exe"):
