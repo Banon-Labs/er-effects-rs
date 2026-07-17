@@ -1028,9 +1028,15 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                             unsafe { safe_read_usize(vt + BLOCK_LOADSTATE_GETTER_VT_10_OFFSET) }
                                 .filter(|&v| v > 0x10000)
                         {
-                            let get_ls: unsafe extern "system" fn(usize) -> usize =
+                            // 2-ARG call, matching the game's check FUN_14066d4d0 (deobf
+                            // 0x14066d3e0): vtable[0x10](rcx=WorldAreaRes, rdx=&blockId) returns the
+                            // LOADSTATE for that block; the earlier 1-arg call passed garbage in rdx
+                            // and got null (the blk_ls=0 red herring). blockId = area<<24 (0x1c000000
+                            // for the legacy angrE block, byte[3]==area as the check reads *(blockId+3)).
+                            let get_ls: unsafe extern "system" fn(usize, *const u32) -> usize =
                                 unsafe { core::mem::transmute(getter) };
-                            let ls = unsafe { get_ls(bp) };
+                            let block_id: u32 = (cur_area as u32) << 24;
+                            let ls = unsafe { get_ls(bp, &block_id as *const u32) };
                             ls_ptr = ls;
                             if ls > 0x10000 {
                                 ls_2c = unsafe { safe_read_u8(ls + BLOCK_LOADSTATE_REQUEST_2C_OFFSET) }
