@@ -56,6 +56,16 @@
         ]
       }
     ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "cupcake eval --harness claude --policy-dir $CLAUDE_PROJECT_DIR/.cupcake --global-config $CLAUDE_PROJECT_DIR/.cupcake/rulebook.yml",
+            "type": "command"
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [
