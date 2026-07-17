@@ -5,8 +5,10 @@ import rego.v1
 default allow := false
 
 # Kept in sync with the single source of truth .auto/runtime_timeout_cap_seconds by
-# scripts/check-runtime-probe-contract.py (rego cannot read files at eval time).
-max_timeout_seconds := 60
+# scripts/check-runtime-probe-contract.py (rego cannot read files at eval time). This is the GAME
+# runtime idle/stall backstop (semaphore-driven early teardown is the primary bound); non-game
+# timeouts are separately hard-capped at 30s by scripts/check-no-timeouts.py.
+max_timeout_seconds := 180
 
 manual_event_driver_ready if {
     input.readiness_watcher == "scripts/er-readiness-watch.py"

@@ -3,7 +3,9 @@
 
 Runtime Elden Ring probes are disruptive. The durable contract is conservative:
 manual probes must be explicit, event/readiness-driven, cleanly torn down, and
-hard-bounded by a timeout_seconds value greater than 0 and no more than 60.
+hard-bounded by a timeout_seconds value greater than 0 and no more than the canonical
+GAME idle/stall backstop in .auto/runtime_timeout_cap_seconds (currently 180s; the
+primary teardown is semaphore-driven, and non-game ops are separately capped at 30s).
 """
 from __future__ import annotations
 

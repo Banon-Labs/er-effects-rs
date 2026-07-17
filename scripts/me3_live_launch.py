@@ -147,7 +147,7 @@ def main() -> None:
     #    `wslpath -w` gives the \\wsl.localhost\<distro>\... form; Windows LoadLibraryW over
     #    the WSL filesystem was verified reliable, so no stale-copy footgun exists.
     dll_win = subprocess.run(
-        ["wslpath", "-w", str(BUILT_DLL)], capture_output=True, text=True, check=True
+        ["wslpath", "-w", str(BUILT_DLL)], capture_output=True, text=True, check=True, timeout=15
     ).stdout.strip()
     print(f"loading repo DLL in place: {BUILT_DLL}", flush=True)
     print(f"      -> {dll_win}", flush=True)
