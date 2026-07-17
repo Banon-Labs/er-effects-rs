@@ -52,6 +52,9 @@ def main() -> int:
     assert oracle.name_empty_like("   ")
     assert oracle.name_empty_like("_")
     assert not oracle.name_empty_like(EXPECTED_NAME)
+    if not FIXTURE_PATH.exists():  # game-derived save binary, not committed (repo policy)
+        print(f"SKIP: fixture {FIXTURE_PATH} absent (game-derived, not committed)")
+        return 0
     slot_data = FIXTURE_PATH.read_bytes()
     decoded = oracle.decode_sl2_bt_fixture_fields(slot_data)
     fields = decoded["decoded_fields"]
