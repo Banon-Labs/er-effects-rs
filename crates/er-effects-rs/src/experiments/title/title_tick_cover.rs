@@ -972,6 +972,51 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                     ar_state = unsafe { safe_read_i32(bp + 0x1c) }.unwrap_or(-1);
                     ar_bres = unsafe { safe_read_i32(bp + 0xcd8) }.unwrap_or(-1);
                     ar_ptr = bp;
+                    // STALE +0xce0 DUMP (run-validated root probe 2026-07-17): the getter
+                    // (deobf 0x14062f470) searches WorldAreaRes+0xce0[i] (stride 0xb98), reads
+                    // *(entry+0x8)=worldBlockInfo, +0x34=mapId2, matching the requested BlockId
+                    // (0x1c000000). ar_bres=1 yet the getter returns null => the resident entry's
+                    // mapId2 != 0x1c000000, i.e. a STALE block-res left over from the prior in-world
+                    // load and never reset on the switch. Dump each entry's mapId2 to identify the
+                    // stale block. Change-detected (base ^ first ^ count) so a steady stall logs once.
+                    if ar_bres > 0 && ar_bres <= 64 {
+                        if let Some(ce0_base) =
+                            unsafe { safe_read_usize(bp + 0xce0) }.filter(|&v| v > 0x10000)
+                        {
+                            let mut mapids = String::new();
+                            let mut first: u32 = u32::MAX;
+                            for k in 0..ar_bres {
+                                let entry = ce0_base + (k as usize) * 0xb98;
+                                let wbi = unsafe { safe_read_usize(entry + 0x8) }.unwrap_or(0);
+                                let m = if wbi > 0x10000 {
+                                    unsafe { safe_read_i32(wbi + 0x34) }
+                                        .map(|v| v as u32)
+                                        .unwrap_or(u32::MAX)
+                                } else {
+                                    u32::MAX
+                                };
+                                if k == 0 {
+                                    first = m;
+                                }
+                                let _ = core::fmt::Write::write_fmt(
+                                    &mut mapids,
+                                    format_args!("{m:#x},"),
+                                );
+                            }
+                            static LAST_CE0_SIG: core::sync::atomic::AtomicUsize =
+                                core::sync::atomic::AtomicUsize::new(0);
+                            let sig =
+                                ce0_base ^ ((first as usize) << 8) ^ (ar_bres as usize);
+                            if LAST_CE0_SIG
+                                .swap(sig, core::sync::atomic::Ordering::SeqCst)
+                                != sig
+                            {
+                                append_autoload_debug(format_args!(
+                                    "STALE-CE0 dump: area=0x{cur_area:x} bp=0x{bp:x} ce0_base=0x{ce0_base:x} cnt={ar_bres} entry_mapids=[{mapids}] -- getter wants 0x{cur_area:x}000000 (blk_ls null => none match)"
+                                ));
+                            }
+                        }
+                    }
                     // Read the load-state exactly like FUN_14066d4d0: block->vtable[0x10](block) returns
                     // the load-state object; then +0x2d / +0x35. This is the same getter the game polls
                     // on this same block every frame, so it is safe. RCX = block (Windows x64 ABI).
