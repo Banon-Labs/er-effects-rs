@@ -903,7 +903,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             mms_blk_35,
             mms_blk_ls,
             mms_blk_vt,
-        ) = if mms_step == MOVEMAPSTEP_STEP_WORLDRESWAIT_INDEX
+        ) = if (MOVEMAPSTEP_STEP_WORLDRESWAIT_INDEX..=8).contains(&mms_step)
             && mms_cur_block != u32::MAX
             && mms_blocks > 0
             && mms_blocks < 256
@@ -984,7 +984,8 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // OVERWORLD-RESIDUAL confirm: the overworld block list (+0xb3148, count +0xb31d0). If the boot
         // char's m60 overworld blocks (area 0x3c) are still resident here while step 3 waits on the
         // incoming legacy block (area 0x1c), the overworld residual is starving the legacy load-request.
-        let (mms_ow_count, mms_ow_areas) = if mms_step == MOVEMAPSTEP_STEP_WORLDRESWAIT_INDEX
+        let (mms_ow_count, mms_ow_areas) = if (MOVEMAPSTEP_STEP_WORLDRESWAIT_INDEX..=8)
+            .contains(&mms_step)
             && mms_resmgr.is_some()
         {
             let wio = mms_resmgr.unwrap_or(null);
