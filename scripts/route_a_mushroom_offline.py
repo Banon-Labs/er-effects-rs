@@ -193,7 +193,11 @@ def run_witchy(witchy: Path, input_path: Path, timeout: int = 45) -> CommandResu
 
 def parse_witchy_manifest(directory: Path) -> dict[str, object]:
     manifests = list(directory.glob("_witchy-*.xml"))
-    files = [path for path in directory.rglob("*") if path.is_file() and ".witchy-cmd" not in path.parts]
+    files = [
+        path
+        for path in directory.rglob("*")
+        if path.is_file() and ".witchy-cmd" not in path.parts
+    ]
     extension_counts: dict[str, int] = {}
     for path in files:
         if path.name.startswith("_witchy-"):
@@ -377,7 +381,9 @@ def main() -> int:
                     summary["commands"].append(asdict(tpf_result))
                     tpf_out_dir = expected_witchy_dir(nested_tpf)
                     if tpf_out_dir.exists():
-                        summary["witchy_outputs"].append(parse_witchy_manifest(tpf_out_dir))
+                        summary["witchy_outputs"].append(
+                            parse_witchy_manifest(tpf_out_dir)
+                        )
 
     summary["witchy_outputs"].extend(discover_outputs(output))
     status_path = output / "inventory-status.json"
