@@ -103,6 +103,10 @@ pub(crate) unsafe fn switch_harness_discovery_tick() {
 
 pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     unsafe { switch_harness_discovery_tick() };
+    // PASSIVE CONTROLLER-INPUT TRACE (er-effects-input-trace.txt): record real pad edges +
+    // semaphore snapshots to er-effects-input-trace.jsonl for USER-DRIVEN runs. Recording only --
+    // never blocks, never fabricates; a marker/env-gated no-op by default.
+    input_trace_tick();
     // NATIVE-WINDOWS LOADING OVERLAY ownership cycle (bd er-effects-rs-8jz): our separate-window overlay
     // OWNS the screen (SHOW) whenever the local player is absent -- boot, title, and EVERY loading screen
     // (fast-travel, area transitions, death re-load) -- and RELEASES it (HIDE) once the world is loaded and

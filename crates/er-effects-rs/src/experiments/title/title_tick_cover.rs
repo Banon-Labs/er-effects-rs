@@ -878,6 +878,19 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         let mms_resmgr = mms_wrm
             .and_then(|w| unsafe { safe_read_usize(w + WORLDRES_RESMGR_10_OFFSET) })
             .filter(|&v| v > 0x10000);
+        // DEST-BLOCK REGISTER (RE wf_3f1e7d9a): worldres+0xb798 = current dest BlockId the WorldResWait
+        // drives to, +0xb79c = previous. ResetAreaResLists sets b798=-1 each load; FUN_14066da30 pushes
+        // the target on a "changed" transition. If on the reload b798 stays -1/stale (not 0x1c000000)
+        // while it is 0x1c000000 on the first load, the dest was never seeded -> area never activates
+        // -> WORLD RES WAIT. Read-only.
+        let (mms_b798, mms_b79c) = if let Some(wio) = mms_resmgr {
+            (
+                unsafe { safe_read_i32(wio + 0xb798) }.unwrap_or(-2),
+                unsafe { safe_read_i32(wio + 0xb79c) }.unwrap_or(-2),
+            )
+        } else {
+            (-2, -2)
+        };
         let mms_b7c1 = mms_resmgr
             .and_then(|r| unsafe { safe_read_u8(r + RESMGR_STREAM_ENABLE_B7C1_OFFSET) })
             .map(|b| b as i32)
@@ -903,6 +916,10 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             mms_blk_35,
             mms_blk_ls,
             mms_blk_vt,
+            mms_ar_wanted,
+            mms_ar_state,
+            mms_ar_bres,
+            mms_ar_ptr,
         ) = if (MOVEMAPSTEP_STEP_WORLDRESWAIT_INDEX..=8).contains(&mms_step)
             && mms_cur_block != u32::MAX
             && mms_blocks > 0
@@ -925,6 +942,14 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             let mut ls_2d: i32 = -1;
             let mut ls_35: i32 = -1;
             let mut areas = String::new();
+            // WorldAreaRes ACTIVATION state (RE wf_3f1e7d9a): the matched +0xb3030 entry IS the area's
+            // WorldAreaRes. +0x1a = "area wanted" flag, +0x1c = activation state machine (0..7; ==6 is
+            // the state that permits the block load to start), +0xcd8 = the area's WorldBlockRes count.
+            // If on the reload the area's state never reaches 6 (not wanted), the block load never kicks.
+            let mut ar_wanted: i32 = -1;
+            let mut ar_state: i32 = -1;
+            let mut ar_bres: i32 = -1;
+            let mut ar_ptr: usize = 0;
             for i in 0..(mms_blocks as usize) {
                 let Some(bp) = (unsafe {
                     safe_read_usize(wio + WORLDINFO_BLOCK_LIST_B3030_OFFSET + i * 8)
@@ -942,6 +967,11 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                     .unwrap_or(u32::MAX);
                 if area == cur_area && !found {
                     found = true;
+                    // The matched entry `bp` is area cur_area's WorldAreaRes: read its activation state.
+                    ar_wanted = unsafe { safe_read_u8(bp + 0x1a) }.map(|v| v as i32).unwrap_or(-1);
+                    ar_state = unsafe { safe_read_i32(bp + 0x1c) }.unwrap_or(-1);
+                    ar_bres = unsafe { safe_read_i32(bp + 0xcd8) }.unwrap_or(-1);
+                    ar_ptr = bp;
                     // Read the load-state exactly like FUN_14066d4d0: block->vtable[0x10](block) returns
                     // the load-state object; then +0x2d / +0x35. This is the same getter the game polls
                     // on this same block every frame, so it is safe. RCX = block (Windows x64 ABI).
@@ -977,9 +1007,68 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                     let _ = core::fmt::Write::write_fmt(&mut areas, format_args!("{area:#x},"));
                 }
             }
-            (if found { 1 } else { 0 }, areas, ls_2c, ls_2d, ls_35, ls_ptr, ls_vt)
+            (
+                if found { 1 } else { 0 },
+                areas,
+                ls_2c,
+                ls_2d,
+                ls_35,
+                ls_ptr,
+                ls_vt,
+                ar_wanted,
+                ar_state,
+                ar_bres,
+                ar_ptr,
+            )
         } else {
-            (-1, String::new(), -1, -1, -1, 0, 0)
+            (-1, String::new(), -1, -1, -1, 0, 0, -1, -1, -1, 0)
+        };
+        // FILE-CAP READINESS (RE FUN_140613710): the state-2 handler advances 2->3 only when every present
+        // FD4FileCap slot on the WorldAreaRes has load-status +0x88 == 0x04. Scan them so the stall shows
+        // whether a file cap is stuck (present but not 0x04) -- vs all-loaded (=> the CSEmkResMan gate is
+        // what stalls). Read-only, bounded.
+        let (mms_fc_present, mms_fc_notloaded, mms_fc_stuck) = {
+            const GROUPS: &[(usize, usize)] = &[
+                (0x28, 5),
+                (0x50, 5),
+                (0x78, 1),
+                (0x80, 1),
+                (0x88, 7),
+                (0xc0, 1),
+                (0xc8, 1),
+                (0xd0, 1),
+                (0x470, 1),
+                (0x480, 1),
+            ];
+            if mms_ar_ptr > 0x10000 {
+                let mut present = 0i32;
+                let mut notloaded = 0i32;
+                let mut stuck = String::new();
+                for &(base, cnt) in GROUPS {
+                    for i in 0..cnt {
+                        let slot = base + i * 8;
+                        let Some(cap) = (unsafe { safe_read_usize(mms_ar_ptr + slot) })
+                            .filter(|&v| v > 0x10000)
+                        else {
+                            continue;
+                        };
+                        present += 1;
+                        let st = unsafe { safe_read_u8(cap + 0x88) }.unwrap_or(0xff);
+                        if st != 0x04 {
+                            notloaded += 1;
+                            if stuck.len() < 80 {
+                                let _ = core::fmt::Write::write_fmt(
+                                    &mut stuck,
+                                    format_args!("+{slot:x}:{st:#x},"),
+                                );
+                            }
+                        }
+                    }
+                }
+                (present, notloaded, stuck)
+            } else {
+                (-1, -1, String::new())
+            }
         };
         // OVERWORLD-RESIDUAL confirm: the overworld block list (+0xb3148, count +0xb31d0). If the boot
         // char's m60 overworld blocks (area 0x3c) are still resident here while step 3 waits on the
@@ -1173,7 +1262,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             // vtable[0x10] load-state getter that returns null (why the legacy load is never created).
             let blk_vt_rva = mms_blk_vt.saturating_sub(module_base);
             append_autoload_debug(format_args!(
-                "SWITCH-ORACLE #{n}: slot={slot} bc4={bc4v} player={player_present} ig_d8={ig_d8} pstep={ig_pstep}/{ig_pnext} menu_job=0x{menu_job:x} stable_frames={sf} peak={peak} mms=0x{mms_disp:x} mms_step={mms_step}({}) next={mms_next} done50={mms_done} gate={mms_gate_lo}/{mms_gate_hi} end5e={md_5e} rt5d={md_5d} force={ending_force} b7c={gb7c} b7d={gb7d} warp={gwarp} hold270=0x{mms_hold:x} cd100={mms_cd} req248={mms_req248} b7c1={mms_b7c1} blocks={mms_blocks} curblk=0x{mms_cur_block:x} blk_found={mms_block_found} blk_ls=0x{mms_blk_ls:x} blk_2c={mms_blk_2c} blk_2d={mms_blk_2d} blk_35={mms_blk_35} blk_vt_rva=0x{blk_vt_rva:x} ll_size={ll_size} ll_fcap=0x{ll_fcap:x} ll_path='{ll_path}' ow_cnt={mms_ow_count} ow=[{mms_ow_areas}] blk_areas=[{mms_block_areas}] phase={} -- {cls}",
+                "SWITCH-ORACLE #{n}: slot={slot} bc4={bc4v} player={player_present} ig_d8={ig_d8} pstep={ig_pstep}/{ig_pnext} menu_job=0x{menu_job:x} stable_frames={sf} peak={peak} mms=0x{mms_disp:x} mms_step={mms_step}({}) next={mms_next} done50={mms_done} gate={mms_gate_lo}/{mms_gate_hi} end5e={md_5e} rt5d={md_5d} force={ending_force} b7c={gb7c} b7d={gb7d} warp={gwarp} hold270=0x{mms_hold:x} cd100={mms_cd} req248={mms_req248} b7c1={mms_b7c1} blocks={mms_blocks} curblk=0x{mms_cur_block:x} b798=0x{mms_b798:x} b79c=0x{mms_b79c:x} blk_found={mms_block_found} blk_ls=0x{mms_blk_ls:x} blk_2c={mms_blk_2c} blk_2d={mms_blk_2d} blk_35={mms_blk_35} ar_wanted={mms_ar_wanted} ar_state={mms_ar_state} ar_bres={mms_ar_bres} fc_present={mms_fc_present} fc_notloaded={mms_fc_notloaded} fc_stuck=[{mms_fc_stuck}] blk_vt_rva=0x{blk_vt_rva:x} ll_size={ll_size} ll_fcap=0x{ll_fcap:x} ll_path='{ll_path}' ow_cnt={mms_ow_count} ow=[{mms_ow_areas}] blk_areas=[{mms_block_areas}] phase={} -- {cls}",
                 movemapstep_step_name(mms_step),
                 SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             ));

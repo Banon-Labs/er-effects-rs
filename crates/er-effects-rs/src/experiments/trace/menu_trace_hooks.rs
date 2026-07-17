@@ -655,6 +655,48 @@ pub(crate) fn install_continue_trace_hooks() {
             mms_child_cleanup_hook as *mut c_void,
             &MMS_CHILD_CLEANUP_ORIG,
         );
+        // WORLD-RES POPULATE source-builder (deobf 0x66bb10): the ONE function that (re)creates the
+        // +0xce0 per-block res the WorldResWait stall waits on. It early-outs when its input MSB-list
+        // count (arg2+0x10) is 0. Logging that count per load is the decisive divergence semaphore --
+        // full on the fresh boot (load 1), 0 for the dest on the in-game reload (load 2). Read-only.
+        create_continue_trace_hook(
+            &mut hooks,
+            "populate_blocks_lists_66bb10",
+            POPULATE_BLOCKS_LISTS_RVA,
+            populate_blocks_lists_hook as *mut c_void,
+            &POPULATE_BLOCKS_LISTS_ORIG,
+        );
+        // Load-state ENTRY ctor (0x6610e0): decisive load1-vs-load2 probe for whether the destination
+        // area-0x1c load-state entry is re-created on the reload (absence on load 2 == the resident-reuse
+        // root). Read-only, 2 register args (rcx=entry, rdx=descNode) so 4-arg forwarding is safe.
+        // NOTE: we deliberately do NOT hook the world BLOCK ctor 0x62ec00 -- it takes its count/base as
+        // STACK args (0x68/0x70(%rsp)); a 4-register forwarding hook loses them and corrupts every block's
+        // load-state slice -> AV (runtime-proven 2026-07-17, crash in the 0x61-0x62 worldres region).
+        create_continue_trace_hook(
+            &mut hooks,
+            "worldres_entry_ctor_6610e0",
+            WORLDRES_ENTRY_CTOR_RVA,
+            worldres_entry_ctor_hook as *mut c_void,
+            &WORLDRES_ENTRY_CTOR_ORIG,
+        );
+        // The REAL block-res getter (WITH the search key) -- the determining measurement the keyless
+        // oracle blk_ls could not give. Change-detected so the hot path is not flooded.
+        create_continue_trace_hook(
+            &mut hooks,
+            "worldres_blockres_getter_62f470",
+            WORLDRES_BLOCKRES_GETTER_RVA,
+            worldres_blockres_getter_hook as *mut c_void,
+            &WORLDRES_BLOCKRES_GETTER_ORIG,
+        );
+        // FIX: WorldBlockRes phase-2 handler -- force a bounded teardown/reload retry when the block's
+        // file cap is loaded but its data +0x90 is null (the determined reload stall). Inert unless armed.
+        create_continue_trace_hook(
+            &mut hooks,
+            "worldres_blockres_phase2_6157f0",
+            WORLDRES_BLOCKRES_PHASE2_RVA,
+            blockres_phase2_hook as *mut c_void,
+            &BLOCKRES_PHASE2_ORIG,
+        );
     }
 
     match unsafe { MH_ApplyQueued() } {
@@ -767,7 +809,329 @@ pub(crate) unsafe extern "system" fn mms_step_init_hook(
             "MMS-INIT #{n}: InGameStep=0x{this:x} child(mms)=0x{mms:x} -- MoveMapStep child created+registered (step 6)"
         ));
     }
+    // STEP-3 WORLD-RES REBUILD (init-point fix): on a SUBSEQUENT load (the autoload->reload of the
+    // same save), the per-block world-res load-state for the destination block is never created, so
+    // STEP_WorldResWait (child step 3) stalls with blk_ls=0. The reactive rebuild at the stall AVs
+    // (ResetAreaResLists mid-stream). This runs the game's own ProcessMsbLoadLists HERE -- right after
+    // STEP_MoveMap_Init created the child, BEFORE the world streams -- exactly where _Common_Initialize
+    // legitimately calls it, so ResetAreaResLists is safe. Instruments unconditionally on a reload;
+    // fires the corrective call only under the diagnostic gate until proven.
+    unsafe { step3_init_worldres_rebuild(this) };
     ret
+}
+
+/// One-shot latch (per DLL load) + count for the init-point world-res rebuild (runtime semaphore).
+static STEP3_INIT_REBUILD_FIRED: AtomicUsize = AtomicUsize::new(0);
+static STEP3_INIT_REBUILD_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) static POPULATE_BLOCKS_LISTS_ORIG: AtomicUsize = AtomicUsize::new(0);
+
+/// DECISIVE DIVERGENCE PROBE: log the input MSB-list block count `*(rdx+0x10)` every time PopulateLists'
+/// source-builder runs, tagged with IN_WORLD (load 1 = false, subsequent reloads = true). Hypothesis: the
+/// fresh boot passes a non-zero count (rebuilds all block-res incl the dest); the in-game reload passes 0
+/// (the source list is empty for the dest -> +0xce0 never rebuilt -> WORLD RES WAIT stall). Read-only,
+/// forwards to the original. `this` (rcx) = builder receiver, `list` (rdx) = the input MSB block list.
+pub(crate) unsafe extern "system" fn populate_blocks_lists_hook(
+    this: usize,
+    list: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
+    let count = if list > 0x10000 {
+        unsafe { safe_read_i32(list + POPULATE_BLOCKS_LIST_INPUT_COUNT_10_OFFSET) }.unwrap_or(-1)
+    } else {
+        -2
+    };
+    let n = POPULATE_BLOCKS_LISTS_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+    // Log every call while an own-menu load is active, plus the first several always, so both the
+    // fresh-boot populate (load 1) and the reload populate (load 2) are captured for comparison.
+    if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 || n <= 40 {
+        append_autoload_debug(format_args!(
+            "POPULATE-BLOCKS #{n}: input_block_count={count} in_world={in_world} this=0x{this:x} list=0x{list:x} -- (count==0 => builds NO +0xce0 block-res; the WORLD RES WAIT root)"
+        ));
+    }
+    unsafe { mms_call_original(&POPULATE_BLOCKS_LISTS_ORIG, this, list, c, d) }
+}
+static POPULATE_BLOCKS_LISTS_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) static WORLDRES_ENTRY_CTOR_ORIG: AtomicUsize = AtomicUsize::new(0);
+static WORLDRES_ENTRY_CTOR_1C_HITS: AtomicUsize = AtomicUsize::new(0);
+
+/// DECISIVE: the load-state ENTRY constructor. `entry`=rcx, `desc`=rdx (descriptor node whose first
+/// dword is the BlockId key written to entry+0x8). Logs when an entry is created for an area-0x1c block,
+/// tagged with IN_WORLD -- so load 1 (in_world=false) vs load 2 (in_world=true) shows whether the
+/// 0x1c000000 load-state entry is (re)created on the reload. If it fires on load 1 but NOT load 2, the
+/// reconcile skips creating the destination entry on the resident-block reload == the stall's root.
+pub(crate) unsafe extern "system" fn worldres_entry_ctor_hook(
+    entry: usize,
+    desc: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let block_id = if desc > 0x10000 {
+        unsafe { safe_read_i32(desc) }.unwrap_or(-1) as u32
+    } else {
+        0
+    };
+    if (block_id >> 24) == 0x1c {
+        let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
+        let n = WORLDRES_ENTRY_CTOR_1C_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+        append_autoload_debug(format_args!(
+            "WORLDRES-ENTRY-CTOR #{n}: block_id=0x{block_id:x} entry=0x{entry:x} in_world={in_world} -- load-state entry CREATED for area 0x1c (absent on load 2 == the stall root)"
+        ));
+    }
+    unsafe { mms_call_original(&WORLDRES_ENTRY_CTOR_ORIG, entry, desc, c, d) }
+}
+
+pub(crate) static WORLDRES_BLOCKRES_GETTER_ORIG: AtomicUsize = AtomicUsize::new(0);
+static WORLDRES_GETTER_LAST_1C: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+pub(crate) static BLOCKRES_PHASE2_ORIG: AtomicUsize = AtomicUsize::new(0);
+static BLOCKRES_STALECAP_RETRIES: AtomicUsize = AtomicUsize::new(0);
+const BLOCKRES_STALECAP_MAX_RETRIES: usize = 6;
+
+// ENV-GATE RATIONALE: ER_EFFECTS_BLOCKRES_STALECAP_FIX is an explicit diagnostic gate for the
+// stale-file-cap reload fix while it is runtime-validated; default off until proven, then it becomes
+// the ungated product fix. The hook is inert (pure pass-through) unless this is armed.
+fn blockres_stalecap_fix_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_BLOCKRES_STALECAP_FIX").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-blockres-stalecap-fix.txt")
+        .exists()
+}
+
+/// FIX (determined-root): the WorldBlockRes phase-2 handler parks at phase 2 on the reload when the
+/// block's primary file cap reports loaded (status 0x04) but its data ptr +0x90 is null (file resident
+/// from load 1, re-load short-circuits without re-attaching data). Detect that EXACT condition after the
+/// original handler runs and, only on a SUBSEQUENT load (IN_WORLD_REACHED==YES, so the first autoload is
+/// never touched), force the block's phase +0x35 to 5 (the game's own teardown/reload retry) so it
+/// releases the stale cap and re-loads fresh. Bounded retries so a genuinely un-evictable file cannot
+/// spin forever. `bres`=rcx (block-res).
+pub(crate) unsafe extern "system" fn blockres_phase2_hook(
+    bres: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let ret = unsafe { mms_call_original(&BLOCKRES_PHASE2_ORIG, bres, b, c, d) };
+    if !blockres_stalecap_fix_enabled()
+        || IN_WORLD_REACHED.load(Ordering::SeqCst) != IN_WORLD_REACHED_YES
+        || bres <= 0x10000
+    {
+        return ret;
+    }
+    let phase = unsafe { safe_read_u8(bres + BLOCKRES_PHASE_35_OFFSET) }.unwrap_or(0xff);
+    let gate = unsafe { safe_read_u8(bres + BLOCKRES_GATE_2F_OFFSET) }.unwrap_or(0);
+    if phase != 2 || gate == 0 {
+        return ret;
+    }
+    let fc = unsafe { safe_read_usize(bres + BLOCKRES_PRIMARY_FILECAP_40_OFFSET) }.unwrap_or(0);
+    if fc <= 0x10000 {
+        return ret;
+    }
+    let status = unsafe { safe_read_u8(fc + FILECAP_STATUS_88_OFFSET) }
+        .map(|v| v as i32)
+        .unwrap_or(-1);
+    let data = unsafe { safe_read_usize(fc + FILECAP_DATA_90_OFFSET) }.unwrap_or(0);
+    // The determined stall: cap loaded but no data attached.
+    if status == FILECAP_STATUS_LOADED && data == 0 {
+        let n = BLOCKRES_STALECAP_RETRIES.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= BLOCKRES_STALECAP_MAX_RETRIES {
+            unsafe { *((bres + BLOCKRES_PHASE_35_OFFSET) as *mut u8) = BLOCKRES_PHASE_TEARDOWN_RETRY };
+            append_autoload_debug(format_args!(
+                "BLOCKRES-STALECAP-FIX #{n}: block-res=0x{bres:x} cap=0x{fc:x} status=0x04 data=null at phase 2 -> forced phase=5 (teardown/reload retry) to re-load the file fresh"
+            ));
+        } else if n == BLOCKRES_STALECAP_MAX_RETRIES + 1 {
+            append_autoload_debug(format_args!(
+                "BLOCKRES-STALECAP-FIX: retry cap ({BLOCKRES_STALECAP_MAX_RETRIES}) hit for block-res=0x{bres:x} cap=0x{fc:x}; file did not re-attach data on reload (needs eviction/other fix)"
+            ));
+        }
+    }
+    ret
+}
+
+/// DETERMINING MEASUREMENT: the REAL WorldResWait block-res getter, called WITH the search key (rdx),
+/// unlike the SWITCH-ORACLE's keyless call. `area_res`=rcx (WorldAreaRes), `key_ptr`=rdx (int* BlockId).
+/// For area-0x1c keys, log (on change) whether the getter FINDS the 0x1c000000 entry and, if so, the
+/// found WorldBlockRes's +0x2d(ready)/+0x35(phase). This splits the stall's true cause deterministically:
+///   found=0            -> the 0x1c000000 WorldBlockRes is NOT in this area's +0xce0 (key-miss / wrong area);
+///   found=1, 2d==0/35!=0xa -> entry found but the block LOAD never completes (ready/phase never advance).
+/// Comparing in_world=false (load 1, works) vs in_world=true (load 2, stall) isolates the determining
+/// difference. Read-only, forwards to the original; change-detected so it does not flood the hot path.
+pub(crate) unsafe extern "system" fn worldres_blockres_getter_hook(
+    area_res: usize,
+    key_ptr: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let ret = unsafe { mms_call_original(&WORLDRES_BLOCKRES_GETTER_ORIG, area_res, key_ptr, c, d) };
+    let key = if key_ptr > 0x10000 {
+        unsafe { safe_read_i32(key_ptr) }.unwrap_or(-1) as u32
+    } else {
+        0
+    };
+    if (key >> 24) == 0x1c {
+        let count = if area_res > 0x10000 {
+            unsafe { safe_read_i32(area_res + 0xcd8) }.unwrap_or(-1)
+        } else {
+            -1
+        };
+        // Read the block-res load-state (getter return) + the exact phase-2->3 gate inputs from the
+        // decompiled FUN_1406158d0: gate byte +0x2f; the block's two FD4FileCap slots at +0x40 (blockres[8])
+        // and +0x48 (blockres[9]); for the primary cap +0x88 load-status (0x04=loaded) and +0x90 data ptr.
+        // HYPOTHESIS: on the reload the primary cap is loaded (0x88==0x04) but its data +0x90 is NULL, so
+        // the phase-2 handler cannot advance and parks at 2 (the determined stall cause).
+        let (d2d, d35, g2f, fc8, fc8_88, fc8_90, fc9, fc9_88) = if ret > 0x10000 {
+            let fc8 = unsafe { safe_read_usize(ret + 0x40) }.unwrap_or(0);
+            let fc9 = unsafe { safe_read_usize(ret + 0x48) }.unwrap_or(0);
+            (
+                unsafe { safe_read_u8(ret + 0x2d) }.map(|v| v as i32).unwrap_or(-1),
+                unsafe { safe_read_u8(ret + 0x35) }.map(|v| v as i32).unwrap_or(-1),
+                unsafe { safe_read_u8(ret + 0x2f) }.map(|v| v as i32).unwrap_or(-1),
+                fc8,
+                if fc8 > 0x10000 {
+                    unsafe { safe_read_u8(fc8 + 0x88) }.map(|v| v as i32).unwrap_or(-1)
+                } else {
+                    -1
+                },
+                if fc8 > 0x10000 {
+                    unsafe { safe_read_usize(fc8 + 0x90) }.unwrap_or(0)
+                } else {
+                    0
+                },
+                fc9,
+                if fc9 > 0x10000 {
+                    unsafe { safe_read_u8(fc9 + 0x88) }.map(|v| v as i32).unwrap_or(-1)
+                } else {
+                    -1
+                },
+            )
+        } else {
+            (-1, -1, -1, 0, -1, 0, 0, -1)
+        };
+        let found = usize::from(ret != 0);
+        let packed = found
+            | ((d2d as u32 as usize & 0xff) << 1)
+            | ((d35 as u32 as usize & 0xff) << 9)
+            | ((g2f as u32 as usize & 0x3) << 17)
+            | (usize::from(fc8_90 != 0) << 19)
+            | ((fc8_88 as u32 as usize & 0xff) << 20);
+        if WORLDRES_GETTER_LAST_1C.swap(packed, Ordering::Relaxed) != packed {
+            let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
+            append_autoload_debug(format_args!(
+                "WORLDRES-GETTER 0x1c: key=0x{key:x} count={count} found={found} ret=0x{ret:x} +0x2d(ready)={d2d} +0x35(phase)={d35} +0x2f(gate)={g2f} fc8=0x{fc8:x} fc8_88(status)={fc8_88} fc8_90(data)=0x{fc8_90:x} fc9=0x{fc9:x} fc9_88={fc9_88} in_world={in_world} -- phase-2 stalls if gate set + status 0x04 but data +0x90 null"
+            ));
+        }
+    }
+    ret
+}
+
+// ENV-GATE RATIONALE: ER_EFFECTS_STEP3_INIT_FIX is an explicit diagnostic gate for the init-point
+// world-res rebuild while it is being runtime-validated; the INSTRUMENTATION logs unconditionally on a
+// reload, only the corrective native call is gated. Default off until proven, then it becomes the
+// ungated product fix.
+fn step3_init_rebuild_call_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_STEP3_INIT_FIX").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-step3-init-fix.txt")
+        .exists()
+}
+
+/// Read the loadlist virtual-path (DLString wchar, ASCII low byte) at `InGameStep+0x210/0x220` so the
+/// log reveals which MAP the loadlist points at (the DEST m28 vs a STALE m60) -- the decisive datum for
+/// whether `fcap` is correct at init time.
+fn read_ingamestep_vpath(this: usize) -> (usize, usize, String) {
+    let base = unsafe { safe_read_usize(this + INGAMESTEP_WORLDLOADLIST_VPATH_BASE_210_OFFSET) }
+        .unwrap_or(0);
+    let size = unsafe { safe_read_usize(this + INGAMESTEP_WORLDLOADLIST_VPATH_SIZE_220_OFFSET) }
+        .unwrap_or(0);
+    let mut s = String::new();
+    if base > 0x10000 && size > 0 && size < 200 {
+        for i in 0..size.min(72) {
+            let byte = unsafe { safe_read_u8(base + i * 2) }.unwrap_or(0);
+            if byte == 0 {
+                break;
+            }
+            s.push(if (0x20..0x7f).contains(&byte) {
+                byte as char
+            } else {
+                '?'
+            });
+        }
+    }
+    (base, size, s)
+}
+
+/// The init-point world-res rebuild. `this` = InGameStep (the STEP_MoveMap_Init executor's arg). Runs
+/// only on a SUBSEQUENT load (IN_WORLD_REACHED==YES, so the first autoload's init is untouched).
+/// Replicates `_Common_Initialize`'s call verbatim: ProcessMsbLoadLists(&worldInfoOwner @ this+0x250,
+/// fcap @ *(this+0x238), dlc02 @ *(this+0x240)). Instruments first (flushed) so an AV or a stale-fcap
+/// is diagnosable from the log.
+unsafe fn step3_init_worldres_rebuild(this: usize) {
+    if IN_WORLD_REACHED.load(Ordering::SeqCst) != IN_WORLD_REACHED_YES {
+        return; // first autoload -- never touch it
+    }
+    if this < 0x10000 {
+        return;
+    }
+    let embed_worldio = this + INGAMESTEP_WORLDINFO_OWNER_EMBED_250_OFFSET;
+    let fcap = unsafe { safe_read_usize(this + INGAMESTEP_LOADLISTLIST_FILECAP_238_OFFSET) }
+        .unwrap_or(0);
+    let dlc02 =
+        unsafe { safe_read_usize(this + INGAMESTEP_LOADLISTLIST_DLC02_240_OFFSET) }.unwrap_or(0);
+    let (vbase, vsize, vpath) = read_ingamestep_vpath(this);
+    // Cross-check: the WorldInfoOwner reached via the child chain (MoveMapStep->FieldArea->+0x10),
+    // which the SWITCH-ORACLE uses -- log both so we can confirm the embedded +0x250 is the right arg.
+    let mms = unsafe { safe_read_usize(this + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) }.unwrap_or(0);
+    let fa = if mms > 0x10000 {
+        unsafe { safe_read_usize(mms + MOVEMAPSTEP_WORLDRES_F0_OFFSET) }.unwrap_or(0)
+    } else {
+        0
+    };
+    let chain_wio = if fa > 0x10000 {
+        unsafe { safe_read_usize(fa + WORLDRES_RESMGR_10_OFFSET) }.unwrap_or(0)
+    } else {
+        0
+    };
+    let cur_block = if fa > 0x10000 {
+        unsafe { safe_read_i32(fa + FIELDAREA_CURRENT_BLOCK_ID_2C_OFFSET) }.unwrap_or(-1) as u32
+    } else {
+        u32::MAX
+    };
+    let call_enabled = step3_init_rebuild_call_enabled();
+    append_autoload_debug(format_args!(
+        "STEP3-INIT-REBUILD probe: InGameStep=0x{this:x} embed_worldio(+0x250)=0x{embed_worldio:x} chain_worldio=0x{chain_wio:x} fcap(+0x238)=0x{fcap:x} dlc02(+0x240)=0x{dlc02:x} vpath(+0x210)=0x{vbase:x} vsize={vsize} vpath='{vpath}' cur_block=0x{cur_block:x} area=0x{:x} call_enabled={call_enabled}",
+        (cur_block >> 24) & 0xff
+    ));
+    if !call_enabled || fcap < 0x10000 {
+        return;
+    }
+    if STEP3_INIT_REBUILD_FIRED.swap(1, Ordering::SeqCst) != 0 {
+        return; // one-shot per DLL load (single reload per run during validation)
+    }
+    let Ok(addr) = game_rva(WORLDINFO_PROCESS_MSB_LOADLISTS_RVA) else {
+        return;
+    };
+    let count = STEP3_INIT_REBUILD_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+    // Pass dlc02 = 0 (NOT *(this+0x240)): the callee null-checks dlc02 and base-game areas have no DLC
+    // loadlist; passing the raw field AV'd (2026-07-17). Address is now the corrected deobf 0x66b1d0.
+    let _ = dlc02;
+    append_autoload_debug(format_args!(
+        "STEP3-INIT-REBUILD PRE-CALL #{count}: ProcessMsbLoadLists(0x{embed_worldio:x}, 0x{fcap:x}, dlc02=0) @ 0x{addr:x} -- init-time (pre-stream), replicating _Common_Initialize"
+    ));
+    let process_msb_loadlists: unsafe extern "system" fn(usize, usize, usize) =
+        unsafe { core::mem::transmute(addr) };
+    unsafe { process_msb_loadlists(embed_worldio, fcap, 0) };
+    append_autoload_debug(format_args!(
+        "STEP3-INIT-REBUILD POST-CALL #{count}: returned OK (no AV) -- world-res lists rebuilt for the destination at init time"
+    ));
 }
 
 /// STEP_MoveMap_Finish (InGameStep step 8): the MoveMap load COMPLETED. Edge semaphore -- its

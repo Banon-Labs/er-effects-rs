@@ -225,12 +225,53 @@ pub(crate) const WORLDINFO_BLOCK_LIST_B3030_OFFSET: usize = 0xb3030;
 pub(crate) const WORLDINFO_BLOCK_ENTRY_INNER_8_OFFSET: usize = 0x8;
 pub(crate) const WORLDINFO_BLOCK_AREA_ID_C_OFFSET: usize = 0xc;
 pub(crate) const MOVEMAPSTEP_STEP_WORLDRESWAIT_INDEX: i32 = 3;
-/// STEP-3 FIX (2026-07-17): `CS::WorldInfoOwner::ProcessMsbLoadLists(WorldInfoOwner*, LoadlistlistFileCap*,
-/// LoadlistlistFileCap* dlc02)` -- dump/live 0x14066b2c0. Runs ResetAreaResLists + PopulateLists to
-/// create the per-block world-res load-state entries from the loadlist. Re-invoking it at the switch's
-/// WORLD RES WAIT (when the incoming block's load-state is null) creates the missing block-res so the
-/// step advances. dlc02 is null-checked in the callee, so 0 is safe for base-game (non-dlc) areas.
-pub(crate) const WORLDINFO_PROCESS_MSB_LOADLISTS_RVA: u32 = 0x0066b2c0;
+/// `CS::WorldInfoOwner::ProcessMsbLoadLists(WorldInfoOwner*, LoadlistlistFileCap*, LoadlistlistFileCap* dlc02)`.
+/// ADDRESS CORRECTION (2026-07-17): the previous value 0x0066b2c0 was the DUMP RVA; the deobf/RUNTIME
+/// address is 0x0066b1d0 (shift -0xf0, ground-truthed by scripts/dump-deobf-shift.py 0x14066b2c0). The
+/// old value jumped 0xf0 INTO the function -> the "reactive ProcessMsbLoadLists AVs mid-stream" crash
+/// (commit c43879c) AND the init-point crash (2026-07-17) were BOTH this wrong-address bug, not a timing
+/// constraint. Runs ResetAreaResLists + PopulateLists to rebuild the per-block world-res from the loadlist;
+/// dlc02 is null-checked in the callee, so 0 is safe for base-game (non-dlc) areas.
+pub(crate) const WORLDINFO_PROCESS_MSB_LOADLISTS_RVA: u32 = 0x0066b1d0;
+/// PopulateLists' per-area block-res source-builder (deobf 0x0066bb10, dump 0x14066bc00). The ONLY caller
+/// of the +0xce0 WorldBlockRes constructor. Its 2nd arg (rdx) is the input MSB block list; it early-outs
+/// on `*(rdx+0x10) == 0` (the block count) and builds nothing. On a fresh boot this list is full (incl the
+/// dest block); on the in-game reload it is empty for the dest -> +0xce0 entry never (re)created -> blk_ls=0.
+/// The `*(rdx+0x10)` count is the single decisive divergence semaphore between load 1 and load 2.
+pub(crate) const POPULATE_BLOCKS_LISTS_RVA: u32 = 0x0066bb10;
+pub(crate) const POPULATE_BLOCKS_LIST_INPUT_COUNT_10_OFFSET: usize = 0x10;
+/// Load-state ENTRY constructor (deobf/runtime 0x006610e0, ground-truthed by disassembling the deobf
+/// binary AT this address: vtable `lea …142a7d4b0`, `mov (%rdx),%eax; mov %eax,0x8(%rcx)` = the BlockId
+/// key `entry+0x8` the getter scans for). Creates one entry in the shared load-state pool `worldres+0x148`
+/// (stride 0xe0). Called only from the reconcile 0x66bb10. If this is NOT called with key 0x1c000000 on the
+/// second load, the load-state entry for the destination block is never created -> getter null -> WORLD RES
+/// WAIT stall. Args: rcx=entry, rdx=descNode.
+pub(crate) const WORLDRES_ENTRY_CTOR_RVA: u32 = 0x006610e0;
+/// The REAL WorldResWait block-res getter (deobf/runtime 0x0062f470; ground-truthed decompile:
+/// `longlong FUN(WorldAreaRes* rcx, int* keyBlockId rdx)` scanning `+0xce0` [count `+0xcd8`, stride
+/// 0xb98] for the entry whose WorldBlockInfo(+0x8)->BlockId(+0x34) == *key, returns that WorldBlockRes
+/// (or 0). The WorldResWait check calls THIS with the real key and requires the returned entry's
+/// +0x2d(ready) != 0 AND +0x35(phase) == 0x0a. The SWITCH-ORACLE's `blk_ls` calls the vtable getter
+/// WITHOUT this key, so it is unreliable; hook this to see the TRUE result with the real key.
+pub(crate) const WORLDRES_BLOCKRES_GETTER_RVA: u32 = 0x0062f470;
+/// WorldBlockRes phase-2 handler (deobf/runtime 0x006157f0, dump 0x1406158d0). Advances the block load
+/// phase +0x35 from 2 to 3 only when the block's primary FD4FileCap (block-res+0x40) has data ptr +0x90
+/// != 0. On the reload the cap reports status +0x88==0x04 (loaded) but +0x90 stays null (file resident
+/// from load 1, load short-circuits without re-attaching data), so it parks at phase 2. Single arg
+/// (rcx=block-res). Hooked to force a bounded teardown/reload retry (phase +0x35 = 5) when that exact
+/// stuck condition holds, so the block releases the stale cap and re-loads fresh.
+pub(crate) const WORLDRES_BLOCKRES_PHASE2_RVA: u32 = 0x006157f0;
+pub(crate) const BLOCKRES_PHASE_35_OFFSET: usize = 0x35;
+pub(crate) const BLOCKRES_GATE_2F_OFFSET: usize = 0x2f;
+pub(crate) const BLOCKRES_PRIMARY_FILECAP_40_OFFSET: usize = 0x40;
+pub(crate) const FILECAP_STATUS_88_OFFSET: usize = 0x88;
+pub(crate) const FILECAP_DATA_90_OFFSET: usize = 0x90;
+pub(crate) const FILECAP_STATUS_LOADED: i32 = 0x04;
+pub(crate) const BLOCKRES_PHASE_TEARDOWN_RETRY: u8 = 5;
+// World BLOCK constructor (deobf/runtime 0x0062ec00): the ONLY writer of block+0x40 (load-state slice
+// count) and block+0x48 (slice base), sourced from STACK args (0x68/0x70(%rsp)). NOT hooked -- a
+// register-only forwarding hook loses those stack args and corrupts every block (runtime AV 2026-07-17).
+// The slice-count/base offsets (0x40/0x48) live with the fix when it needs to repoint them.
 /// Consecutive frames the switch has sat at WORLD RES WAIT with the incoming block's load-state NULL
 /// (a real stall; the boot-load transient clears in << 2s), the one-shot latch for the ProcessMsbLoadLists
 /// rebuild, and the count of rebuilds performed (runtime semaphore).
@@ -264,6 +305,15 @@ pub(crate) const WORLDINFO_OVERWORLD_COUNT_B31D0_OFFSET: usize = 0xb31d0;
 pub(crate) const INGAMESTEP_WORLDLOADLIST_VPATH_BASE_210_OFFSET: usize = 0x210;
 pub(crate) const INGAMESTEP_WORLDLOADLIST_VPATH_SIZE_220_OFFSET: usize = 0x220;
 pub(crate) const INGAMESTEP_LOADLISTLIST_FILECAP_238_OFFSET: usize = 0x238;
+/// The `dlc02` loadlist file-cap arg `_Common_Initialize` passes to `ProcessMsbLoadLists` as its
+/// 3rd param: `MOV R8, [InGameStep+0x240]` (dump 0x140aed820). Null for base-game (non-DLC) areas;
+/// the callee null-checks it, so passing this field (or 0) is safe.
+pub(crate) const INGAMESTEP_LOADLISTLIST_DLC02_240_OFFSET: usize = 0x240;
+/// `_Common_Initialize` passes the WorldInfoOwner to `ProcessMsbLoadLists` by ADDRESS of an EMBEDDED
+/// sub-object at `InGameStep+0x250` (`LEA RCX, [InGameStep+0x250]`, dump 0x140aed820), NOT the pointer
+/// stored at `FieldArea+0x10`. The init-time world-res rebuild replicates the native call verbatim,
+/// so it uses this embedded address as the `this`.
+pub(crate) const INGAMESTEP_WORLDINFO_OWNER_EMBED_250_OFFSET: usize = 0x250;
 pub(crate) static SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_READY_BLOCK_COUNT: AtomicUsize =
     AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_LAST_DIALOG: AtomicUsize =

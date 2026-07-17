@@ -301,8 +301,9 @@ pub(crate) fn crash_log_path() -> PathBuf {
 static PROCESS_LOG_EPOCH: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Elapsed milliseconds since the process-log epoch (lazily anchored on first call). Cheap: a single
-/// short-lived lock, poison-tolerant, no file IO under the lock.
-fn process_log_elapsed_ms() -> u128 {
+/// short-lived lock, poison-tolerant, no file IO under the lock. `pub(crate)` so the input-trace
+/// JSONL stamps its rows on the SAME clock as the `[+Nms]` debug-log prefixes (cross-correlation).
+pub(crate) fn process_log_elapsed_ms() -> u128 {
     let mut guard = match PROCESS_LOG_EPOCH.lock() {
         Ok(g) => g,
         Err(p) => p.into_inner(),

@@ -183,7 +183,8 @@ fn sq_repro_ensure_foreground(hwnd: HWND) {
         } else {
             GetWindowThreadProcessId(fg, None)
         };
-        let attached = fg_tid != 0 && fg_tid != cur_tid && AttachThreadInput(cur_tid, fg_tid, true).as_bool();
+        let attached =
+            fg_tid != 0 && fg_tid != cur_tid && AttachThreadInput(cur_tid, fg_tid, true).as_bool();
         let _ = BringWindowToTop(hwnd);
         let ok = SetForegroundWindow(hwnd).as_bool();
         let _ = SetFocus(Some(hwnd));
@@ -191,9 +192,32 @@ fn sq_repro_ensure_foreground(hwnd: HWND) {
             let _ = AttachThreadInput(cur_tid, fg_tid, false);
         }
         SQ_REPRO_FOREGROUND_FORCES.fetch_add(1, Ordering::SeqCst);
-        SQ_REPRO_IS_FOREGROUND.store((ok || GetForegroundWindow() == hwnd) as usize, Ordering::SeqCst);
+        SQ_REPRO_IS_FOREGROUND.store(
+            (ok || GetForegroundWindow() == hwnd) as usize,
+            Ordering::SeqCst,
+        );
     }
 }
+
+/// Force the ER game window to the foreground NOW (find + focus), mimicking the user's first
+/// interaction: clicking the game in the taskbar at world-readiness to make it the active window
+/// before pressing START. Native ER only routes RawInput menu keys to the FOREGROUND window, so the
+/// self-drive must own focus before its first key. Idempotent + logged once.
+pub(crate) fn sq_repro_force_foreground_now() {
+    let hwnd = sq_repro_er_hwnd();
+    if hwnd.0.is_null() {
+        return;
+    }
+    sq_repro_ensure_foreground(hwnd);
+    if SQ_REPRO_INITIAL_FOREGROUND_LOGGED.swap(1, Ordering::SeqCst) == 0 {
+        append_autoload_debug(format_args!(
+            "sq-repro: INITIAL FOREGROUND FORCE at world-readiness (mimics the user's taskbar click) hwnd=0x{:x} is_foreground={}",
+            hwnd.0 as usize,
+            SQ_REPRO_IS_FOREGROUND.load(Ordering::SeqCst)
+        ));
+    }
+}
+static SQ_REPRO_INITIAL_FOREGROUND_LOGGED: AtomicUsize = AtomicUsize::new(0);
 
 /// SendInput one VK keyboard event (down or up) at the OS level -> delivered as RawInput to the
 /// foreground window. Native ER reads keyboard via RawInput (proven: not DInput, ignores posted
@@ -418,6 +442,13 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
     };
     const XINPUT_PACKET_OFFSET: usize = 0;
     const WBUTTONS_OFFSET_IN_GAMEPAD: usize = 0;
+    // PASSIVE INPUT-TRACE CAPTURE (er-effects-input-trace.txt): record the REAL slot-0 pad state
+    // exactly as the original returned it, BEFORE the keepalive/fabrication branches below can
+    // overwrite the caller's buffer. A single Relaxed flag load when the trace is off; never
+    // mutates `state` or `hr`, so pass-through/block behavior stays byte-identical.
+    if user_index == XINPUT_PRIMARY_USER_INDEX && hr == XINPUT_SUCCESS && !state.is_null() {
+        input_trace_record_real_poll(state as *const u8);
+    }
     // KEEP SLOT 0 "CONNECTED" while an XInput harness is armed, even when no physical pad exists and
     // even before the block flag flips ON -- ER's connection scan can sample the slot on any frame,
     // and if it ever sees DEVICE_NOT_CONNECTED it can stop polling slot 0 (killing the fabrication
@@ -651,6 +682,17 @@ unsafe fn install_xinput_block() {
         append_autoload_debug(format_args!(
             "xinput-block: no xinput DLL with XInputGetState found yet (will retry next frame)"
         ));
+    }
+}
+
+/// PASSIVE INPUT-TRACE support: install the XInput hooks WITHOUT engaging any input block. With
+/// `BLOCK_INPUT_ACTIVE` clear and no harness gate armed the detour is a pure pass-through (one
+/// Relaxed poll counter + the trace capture), so installing it early fabricates nothing and blocks
+/// nothing. Same retry-until-hooked idiom as `enforce_input_block_now` (xinput DLL may load late).
+/// Deliberately does NOT install the DInput hooks or touch ClipCursor.
+pub(crate) fn ensure_xinput_hook_installed_for_trace() {
+    if XINPUT_GET_STATE_ORIG.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS {
+        unsafe { install_xinput_block() };
     }
 }
 

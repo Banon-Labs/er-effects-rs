@@ -67,6 +67,9 @@ pub(crate) use native_overlay::*;
 mod input_block;
 pub(crate) use input_block::*;
 
+mod input_trace;
+pub(crate) use input_trace::*;
+
 mod own_load;
 pub(crate) use own_load::*;
 
