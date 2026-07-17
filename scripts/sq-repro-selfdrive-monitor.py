@@ -43,7 +43,7 @@ MARKERS = [
 ]
 START_OFFSET = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 CAP_SECONDS = int(sys.argv[2]) if len(sys.argv) > 2 else 360
-POLL = 3.0
+POLL = 1.0  # bound the progress-idle watchdog check to ~1s even if the log briefly goes quiet
 ME3_STDOUT = "/tmp/sq-repro-me3-stdout.txt"  # data artifact (allowed in /tmp)
 
 # Deterministic readiness (repo no-sleep policy): block on inotify game-dir file-change events with a
@@ -111,6 +111,18 @@ def main():
     )
     print(f"launched me3 pid={p.pid}; markers armed; watching log from offset {START_OFFSET}", flush=True)
 
+    # Shared semaphore-progress watchdog (bd runtime-teardown-semaphore-progress-watchdog): the
+    # monitor's OLD stall detector keyed on blk_ls=0, which the 2-arg getter fix made non-null, so it
+    # no longer fired and every run went to the full cap. Replace it with the agreed THREE-condition
+    # teardown.
+    from semaphore_watchdog import (  # pyright: ignore[reportMissingImports]
+        ProgressWatchdog,
+        CONTINUE,
+        TEARDOWN_TERMINAL,
+        TEARDOWN_STALL,
+        TEARDOWN_CAP,
+    )
+
     t0 = time.time()
     offset = START_OFFSET
     seen = {k: 0 for k in ("in_world", "open_menu", "ingametop", "optionsetting",
@@ -118,16 +130,33 @@ def main():
     step3_hits = 0
     step3_first = None
     loaded_stable_frames = 0
+    mms_step_hwm = 0
+    blk35_hwm = 0
     last_oracle = ""
     step3_oracle = ""
     game_seen = False
     verdict = None
 
+    # THREE-condition teardown (user directive 2026-07-17):
+    #  (1) LOADED_STABLE (world entered + held)  -> terminal success (+small flush delay)
+    #  (2) no world-load PROGRESS for ~1s after the second-load confirm -> progress-idle stall
+    #  (3) CAP seconds -> hard backstop
+    # Progress = MONOTONIC high-water marks only, never liveness: loaded_stable_frames, max mms_step,
+    # and the max block load-phase blk_35 (which cycles 0/2/7 while wedged, so we track its HIGH-water
+    # so oscillation is not mistaken for progress). Armed only after the second-load confirm so boot /
+    # first-autoload coarse phases cannot false-stall.
+    watchdog = ProgressWatchdog(
+        idle_window_seconds=1.5,
+        teardown_delay_seconds=1.0,
+        hard_cap_seconds=float(CAP_SECONDS),
+        arm_predicate=lambda t: t.get("confirm", 0) >= 1,
+        terminal_predicate=lambda t: t.get("stable_frames", 0) >= 300,
+        progress_keys=("stable_frames", "mms_step_hwm", "blk35_hwm"),
+    )
+
     while True:
-        elapsed = time.time() - t0
-        if elapsed > CAP_SECONDS:
-            verdict = f"CAP {CAP_SECONDS}s reached (no terminal semaphore)"
-            break
+        now = time.time()
+        elapsed = now - t0
         if game_alive():
             game_seen = True
         try:
@@ -155,23 +184,48 @@ def main():
                 if "SWITCH-ORACLE" in line:
                     last_oracle = line.strip()
                     m = re.search(r"mms_step=(\d+)", line)
-                    blk = re.search(r"blk_ls=0x([0-9a-fA-F]+)", line)
+                    if m:
+                        mms_step_hwm = max(mms_step_hwm, int(m.group(1)))
+                        # legacy blk_ls=0 counter kept only for the report, not teardown
+                        blk = re.search(r"blk_ls=0x([0-9a-fA-F]+)", line)
+                        if int(m.group(1)) == 3 and blk and blk.group(1).rstrip("0") == "":
+                            step3_hits += 1
+                            if step3_first is None:
+                                step3_first = round(elapsed, 1)
+                                step3_oracle = line.strip()
+                    p35 = re.search(r"blk_35=(-?\d+)", line)
+                    if p35:
+                        blk35_hwm = max(blk35_hwm, int(p35.group(1)))
                     st = re.search(r"stable_frames=(\d+)", line)
-                    if m and int(m.group(1)) == 3 and blk and blk.group(1).rstrip("0") == "":
-                        step3_hits += 1
-                        if step3_first is None:
-                            step3_first = round(elapsed, 1)
-                            step3_oracle = line.strip()
                     if st:
                         loaded_stable_frames = max(loaded_stable_frames, int(st.group(1)))
-        if loaded_stable_frames >= 300:
-            verdict = "WORLD ENTERED (LOADED_STABLE >= 300 frames) -- no step-3 stall"
-            break
-        if step3_hits >= 40 and seen["confirm"]:
-            verdict = "STEP-3 STALL REPRODUCED self-driven (mms_step=3 WORLD RES WAIT, blk_ls=0x0)"
-            break
         if game_seen and not game_alive():
             verdict = "GAME EXITED (crash or close)"
+            break
+        decision = watchdog.observe(
+            {
+                "confirm": seen["confirm"],
+                "stable_frames": loaded_stable_frames,
+                "mms_step_hwm": mms_step_hwm,
+                "blk35_hwm": blk35_hwm,
+            },
+            now,
+        )
+        if decision == TEARDOWN_TERMINAL:
+            verdict = "WORLD ENTERED (LOADED_STABLE) -- second load reached world readiness"
+            break
+        if decision == TEARDOWN_STALL:
+            verdict = (
+                f"PROGRESS-IDLE STALL: no world-load progress for {watchdog.idle_window_seconds}s "
+                f"after confirm (blk35_hwm={blk35_hwm} mms_step_hwm={mms_step_hwm} "
+                f"stable={loaded_stable_frames}) -- {watchdog.last_reason}"
+            )
+            break
+        if decision == TEARDOWN_CAP:
+            verdict = f"CAP {CAP_SECONDS}s reached (no terminal semaphore, no idle-stall)"
+            break
+        if decision != CONTINUE:
+            verdict = f"watchdog: {decision}"
             break
         wait_for_change(POLL)
 
