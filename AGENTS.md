@@ -202,9 +202,18 @@ Handling rule:
 - **Blocker: do it first.** If the issue interferes with or blocks your current task (a gate you must
   pass to commit/validate, a broken dependency you need, a failure that makes your own proof
   untrustworthy), it is a blocker: fix it BEFORE the original task, not in parallel.
+- **Blocker + major digression that touches this code: isolate it in a worktree.** When the fix is
+  both a real blocker AND a substantial change to shared source (not a small localized fix), run the
+  subagent in its OWN git worktree under an agreed untracked dir -- `.worktrees/<name>` (gitignored;
+  see Local Hidden Worktrees) or under `./target` -- via the Agent tool's `isolation: "worktree"` or
+  an explicit `git worktree add`. That keeps its edits/commits out of your main working tree so they
+  cannot collide with your in-flight work; bring the result back only once it is green. A small,
+  localized, non-conflicting fix does NOT need a worktree -- a plain background subagent in the main
+  tree is fine (it must avoid the exact files you are editing).
 
 The pre-authorization is standing, so you do not need to ask before fixing a pre-existing issue; just
-fix it (in parallel or first, per the rule above) and report it alongside your main work.
+fix it (in parallel, first, or worktree-isolated per the rules above) and report it alongside your
+main work.
 
 ## Session Completion
 
