@@ -246,6 +246,16 @@ fn sq_repro_gamepad_to_vk(btn: u16) -> u32 {
 static SQ_REPRO_TAB_DISCOVERED: AtomicUsize = AtomicUsize::new(0);
 static SQ_REPRO_TAB_BASELINE: AtomicUsize = AtomicUsize::new(usize::MAX);
 static SQ_REPRO_ROWNAV_BASE: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// One-shot: the deterministic Load-Profile route (`system_quit_open_profile_load_dialog`) was fired
+/// this switch, so we do not re-fire it. Native ER has no keyboard bind for the OptionSetting
+/// tab-switch (mouse-only), so instead of navigating to the Quit tab we invoke the DLL's own route
+/// directly when the Load-Profile row action was captured -- it opens ProfileSelect and sets the
+/// return-chain System dialog, exactly like a click.
+static SQ_REPRO_ROUTE_FIRED: AtomicUsize = AtomicUsize::new(0);
+/// One-shot: we force-built the OptionSetting Quit-tab pane (via the game's own tab-select
+/// FUN_14093b850) so the cloned Load-Profile row + its action object get created without the
+/// mouse-only tab visit.
+static SQ_REPRO_PANE_BUILD_TRIED: AtomicUsize = AtomicUsize::new(0);
 
 /// Fabricated gamepad wButtons for a phase that issues a FIXED list of button edges ONCE, in order,
 /// then holds. `tick` is phase-local; each edge occupies one `INJECT_NAV_CYCLE` (the RE-grounded
@@ -607,6 +617,51 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 set_pad(0);
                 SQ_REPRO_INITIAL_CURSOR.store(usize::MAX, Ordering::SeqCst);
                 sq_repro_transition(SQ_REPRO_STATE_TO_SLOT);
+                return;
+            }
+            // DETERMINISTIC LOAD-PROFILE ROUTE (native-Windows: the OptionSetting tab-switch is
+            // mouse-only, no keyboard bind). Instead of navigating to the Quit tab, fire the DLL's own
+            // Load-Profile route directly the moment the row's action object has been captured (the
+            // OptionSetting Quit-tab pane built the row). `system_quit_open_profile_load_dialog` opens
+            // 05_010_ProfileSelect AND stores SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG (the arm
+            // precondition) -- byte-identical to a real click. One-shot per switch; on success the
+            // `profile != 0` branch above advances to TO_SLOT next frame.
+            let route_action = SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
+            // If the Load-Profile action was never captured (its row is only cloned when the Quit-tab
+            // pane BUILDS, which needs the mouse-only tab visit), force-build that pane once via the
+            // game's own tab-select FUN_14093b850(composite, quit_pane_index). Quit visual tab
+            // OPTIONSETTING_QUIT_TAB_INDEX(8) is backed by cache slot 9. Building it fires the
+            // AddCancelButton clone hook -> captures SYSTEM_QUIT_NOOP_ACTION_LAST_OBJECT; the route
+            // fires next frame.
+            if route_action == 0 && SQ_REPRO_PANE_BUILD_TRIED.swap(1, Ordering::SeqCst) == 0 {
+                let opt = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
+                let built = if opt >= 0x10000 {
+                    if let Ok(sel_addr) = game_rva(OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA) {
+                        let composite = opt + OPTIONSETTING_COMPOSITE_OFFSET;
+                        let pane_index = (OPTIONSETTING_QUIT_TAB_INDEX + 1) as i32;
+                        let select_tab: unsafe extern "system" fn(usize, i32) =
+                            unsafe { std::mem::transmute(sel_addr) };
+                        unsafe { select_tab(composite, pane_index) };
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                append_autoload_debug(format_args!(
+                    "sq-repro: TO_PROFILE force-built Quit-tab pane via tab-select(composite, cache_slot 9) built={built} opt=0x{opt:x} (mouse-only tab-visit bypass; capturing Load-Profile action)"
+                ));
+                set_pad(0);
+                return;
+            }
+            if route_action != 0 && SQ_REPRO_ROUTE_FIRED.swap(1, Ordering::SeqCst) == 0 {
+                sq_repro_drive_wm_key(0); // release any held key
+                let opened = unsafe { system_quit_open_profile_load_dialog(route_action) };
+                append_autoload_debug(format_args!(
+                    "sq-repro: TO_PROFILE fired DETERMINISTIC Load-Profile route on captured action=0x{route_action:x} opened={opened} (bypassing mouse-only tab-switch); waiting for 05_010_ProfileSelect"
+                ));
+                set_pad(0);
                 return;
             }
             // Navigate to the Quit tab (OPTIONSETTING_QUIT_TAB_INDEX), then DOWN,DOWN,Enter to activate
