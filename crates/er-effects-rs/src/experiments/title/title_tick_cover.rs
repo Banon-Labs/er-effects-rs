@@ -1033,22 +1033,32 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         } else {
             SWITCH_WORLDRES_NULL_STREAK.store(0, Ordering::SeqCst);
         }
-        if SWITCH_WORLDRES_NULL_STREAK.load(Ordering::SeqCst) >= 30
+        if SWITCH_WORLDRES_NULL_STREAK.load(Ordering::SeqCst) >= 8
             && ((mms_cur_block >> 24) & 0xff) != 0
             && mms_resmgr.unwrap_or(0) >= 0x10000
             && ll_fcap >= 0x10000
             && SWITCH_WORLDRES_REBUILD_TRIED.swap(1, Ordering::SeqCst) == 0
         {
             let owner = mms_resmgr.unwrap_or(0);
+            SWITCH_WORLDRES_REBUILD_COUNT.fetch_add(1, Ordering::SeqCst);
+            // DETECT-ONLY. Calling CS::WorldInfoOwner::ProcessMsbLoadLists reactively HERE (at WORLD RES
+            // WAIT / step 3-4) ACCESS-VIOLATES -- runtime-proven 2026-07-17: the PRE-CALL log flushed,
+            // the game died before the call returned. ProcessMsbLoadLists runs ResetAreaResLists +
+            // PopulateLists, which is only safe at STEP_MoveMap_Init (BEFORE the world starts streaming);
+            // resetting the area-res lists mid-stream faults. So the reactive rebuild is DISABLED. The
+            // correct fix must run at STEP_MoveMap_Init (0x140aec210) / _Common_Initialize (0x140aed910)
+            // with the DESTINATION map's loadlist -- i.e. make the fast switch not skip / not run that
+            // native init with a stale loadlist -- not a reactive call at the stall. This block now just
+            // records the confirmed stall for the next (init-point) fix. See bd
+            // step3-reactive-processmsbloadlists-crashes-init-point-fix-needed-2026-07-17.
             if let Ok(addr) = game_rva(WORLDINFO_PROCESS_MSB_LOADLISTS_RVA) {
-                let process_msb_load_lists: unsafe extern "system" fn(usize, usize, usize) -> u8 =
-                    unsafe { std::mem::transmute(addr) };
-                let ret = unsafe { process_msb_load_lists(owner, ll_fcap, 0) };
-                SWITCH_WORLDRES_REBUILD_COUNT.fetch_add(1, Ordering::SeqCst);
+                let _ = addr;
+                let _ = owner;
                 append_autoload_debug(format_args!(
-                    "STEP-3 FIX: ProcessMsbLoadLists(owner=0x{owner:x} fcap=0x{ll_fcap:x} dlc02=0) ret={ret} area=0x{:x} curblk=0x{:x} -- rebuilt world-res lists to create the missing block-res (should advance WORLD RES WAIT)",
+                    "STEP-3 STALL DETECTED (reactive ProcessMsbLoadLists disabled -- it AVs mid-stream): owner=0x{owner:x} fcap=0x{ll_fcap:x} area=0x{:x} curblk=0x{:x} streak={} -- fix belongs at STEP_MoveMap_Init, not here",
                     (mms_cur_block >> 24) & 0xff,
-                    mms_cur_block
+                    mms_cur_block,
+                    SWITCH_WORLDRES_NULL_STREAK.load(Ordering::SeqCst)
                 ));
             }
         }
