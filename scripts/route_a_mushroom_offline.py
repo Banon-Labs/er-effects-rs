@@ -5,6 +5,7 @@ This script never launches either game. It only discovers local files, extracts
 archive contents with fstools_cli when archives are present, and unpacks BND/DCX
 files with WitchyBND for static inspection.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -84,7 +85,9 @@ def run_command(
 def wsl_to_windows(path: Path) -> str:
     result = run_command(["wslpath", "-w", str(path)], timeout=10)
     if not result.accepted:
-        raise RuntimeError(f"wslpath failed for {path}: {result.stderr or result.stdout}")
+        raise RuntimeError(
+            f"wslpath failed for {path}: {result.stderr or result.stdout}"
+        )
     return result.stdout.strip()
 
 
@@ -98,11 +101,15 @@ def find_dsr_game(explicit: Path | None) -> Path | None:
 
 def has_dsr_archives(game_dir: Path) -> bool:
     archive_sets = [
-        [game_dir / f"dvdbnd{i}.bhd5" for i in range(4)] + [game_dir / f"dvdbnd{i}.bdt" for i in range(4)],
-        [game_dir / f"dvdbnd{i}.bhd" for i in range(4)] + [game_dir / f"dvdbnd{i}.bdt" for i in range(4)],
+        [game_dir / f"dvdbnd{i}.bhd5" for i in range(4)]
+        + [game_dir / f"dvdbnd{i}.bdt" for i in range(4)],
+        [game_dir / f"dvdbnd{i}.bhd" for i in range(4)]
+        + [game_dir / f"dvdbnd{i}.bdt" for i in range(4)],
         [game_dir / "dvdbnd.bhd", game_dir / "dvdbnd.bdt"],
     ]
-    return any(all(path.exists() for path in archive_set) for archive_set in archive_sets)
+    return any(
+        all(path.exists() for path in archive_set) for archive_set in archive_sets
+    )
 
 
 def copy_loose_dsr_targets(game_dir: Path, output_dir: Path) -> list[PathStatus]:
@@ -118,9 +125,14 @@ def copy_loose_dsr_targets(game_dir: Path, output_dir: Path) -> list[PathStatus]
     return copied
 
 
-def extract_with_fstools(fstools: Path, game_dir: Path, output_dir: Path, filters: Iterable[str]) -> list[CommandResult]:
+def extract_with_fstools(
+    fstools: Path, game_dir: Path, output_dir: Path, filters: Iterable[str]
+) -> list[CommandResult]:
     results: list[CommandResult] = []
-    if fstools.parent.name in {"debug", "release"} and fstools.parent.parent.name == "target":
+    if (
+        fstools.parent.name in {"debug", "release"}
+        and fstools.parent.parent.name == "target"
+    ):
         fstools_cwd = fstools.parent.parent.parent
     else:
         fstools_cwd = fstools.parent
@@ -128,7 +140,15 @@ def extract_with_fstools(fstools: Path, game_dir: Path, output_dir: Path, filter
         output_dir.mkdir(parents=True, exist_ok=True)
         results.append(
             run_command(
-                [str(fstools), "--game-path", str(game_dir), "extract", "-o", str(output_dir), filter_text],
+                [
+                    str(fstools),
+                    "--game-path",
+                    str(game_dir),
+                    "extract",
+                    "-o",
+                    str(output_dir),
+                    filter_text,
+                ],
                 cwd=fstools_cwd,
                 timeout=30,
             )
@@ -140,7 +160,12 @@ def expected_witchy_dir(input_path: Path) -> Path:
     # Witchy usually maps file.ext.dcx -> file-ext-dcx, with special ANIBND suffixes possible.
     stem = input_path.name.replace(".", "-")
     parent = input_path.parent
-    candidates = [parent / stem, parent / f"{stem}-wanibnd", parent / f"{stem}-bnd4", parent / f"{stem}-bnd3"]
+    candidates = [
+        parent / stem,
+        parent / f"{stem}-wanibnd",
+        parent / f"{stem}-bnd4",
+        parent / f"{stem}-bnd3",
+    ]
     for candidate in candidates:
         if candidate.exists():
             return candidate
@@ -155,7 +180,10 @@ def run_witchy(witchy: Path, input_path: Path, timeout: int = 45) -> CommandResu
     script = cmd_dir / f"unpack-{input_path.name}.cmd"
     witchy_dir = wsl_to_windows(witchy.parent)
     target = wsl_to_windows(input_path)
-    script.write_text(f'@echo off\r\ncd /d "{witchy_dir}"\r\nWitchyBND.exe "{target}"\r\n', encoding="utf-8")
+    script.write_text(
+        f'@echo off\r\ncd /d "{witchy_dir}"\r\nWitchyBND.exe "{target}"\r\n',
+        encoding="utf-8",
+    )
     script_win = wsl_to_windows(script)
     result = run_command(["cmd.exe", "/c", script_win], timeout=timeout, accept=(0, 82))
     out_dir = expected_witchy_dir(input_path)
@@ -165,7 +193,7 @@ def run_witchy(witchy: Path, input_path: Path, timeout: int = 45) -> CommandResu
 
 def parse_witchy_manifest(directory: Path) -> dict[str, object]:
     manifests = list(directory.glob("_witchy-*.xml"))
-    files = [path for path in directory.rglob("*") if path.is_file()]
+    files = [path for path in directory.rglob("*") if path.is_file() and ".witchy-cmd" not in path.parts]
     extension_counts: dict[str, int] = {}
     for path in files:
         if path.name.startswith("_witchy-"):
@@ -197,19 +225,27 @@ def discover_outputs(output_dir: Path) -> list[dict[str, object]]:
     summaries: list[dict[str, object]] = []
     for directory in sorted(output_dir.rglob("*")):
         if directory.is_dir() and any(
-            child.name.startswith("_witchy-") and child.suffix == ".xml" for child in directory.iterdir() if child.is_file()
+            child.name.startswith("_witchy-") and child.suffix == ".xml"
+            for child in directory.iterdir()
+            if child.is_file()
         ):
             summaries.append(parse_witchy_manifest(directory))
     return summaries
 
 
 def resolve_output_dir(workspace: Path, requested_output: Path) -> Path:
-    candidate = requested_output if requested_output.is_absolute() else workspace / requested_output
+    candidate = (
+        requested_output
+        if requested_output.is_absolute()
+        else workspace / requested_output
+    )
     resolved = candidate.resolve()
     try:
         resolved.relative_to(workspace)
     except ValueError as exc:
-        raise ValueError(f"output path must stay under workspace {workspace}: {resolved}") from exc
+        raise ValueError(
+            f"output path must stay under workspace {workspace}: {resolved}"
+        ) from exc
     return resolved
 
 
@@ -219,16 +255,47 @@ def emit_json(payload: dict[str, Any]) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Offline DS1 mushroom -> ER Route A asset helper")
-    parser.add_argument("--workspace", type=Path, default=Path.cwd(), help="Repo/worktree root for relative output paths")
-    parser.add_argument("--output", type=Path, default=Path("target/mushroom-route-a-offline"), help="Output directory")
+    parser = argparse.ArgumentParser(
+        description="Offline DS1 mushroom -> ER Route A asset helper"
+    )
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        default=Path.cwd(),
+        help="Repo/worktree root for relative output paths",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("target/mushroom-route-a-offline"),
+        help="Output directory",
+    )
     parser.add_argument("--dsr-game", type=Path, help="Dark Souls/DSR game directory")
-    parser.add_argument("--er-game", type=Path, default=DEFAULT_ER_GAME, help="Elden Ring Game directory")
-    parser.add_argument("--fstools", type=Path, default=DEFAULT_FSTOOLS, help="fstools_cli path")
-    parser.add_argument("--witchy", type=Path, default=DEFAULT_WITCHY, help="WitchyBND.exe path")
-    parser.add_argument("--status", action="store_true", help="Only report availability/status")
-    parser.add_argument("--prepare-er", action="store_true", help="Extract and unpack ER c0000 + bd_m_1010 donor references")
-    parser.add_argument("--extract-dsr", action="store_true", help="Extract/unpack c2270/c2280 from loose files or DSR archives if present")
+    parser.add_argument(
+        "--er-game",
+        type=Path,
+        default=DEFAULT_ER_GAME,
+        help="Elden Ring Game directory",
+    )
+    parser.add_argument(
+        "--fstools", type=Path, default=DEFAULT_FSTOOLS, help="fstools_cli path"
+    )
+    parser.add_argument(
+        "--witchy", type=Path, default=DEFAULT_WITCHY, help="WitchyBND.exe path"
+    )
+    parser.add_argument(
+        "--status", action="store_true", help="Only report availability/status"
+    )
+    parser.add_argument(
+        "--prepare-er",
+        action="store_true",
+        help="Extract and unpack ER c0000 + bd_m_1010 donor references",
+    )
+    parser.add_argument(
+        "--extract-dsr",
+        action="store_true",
+        help="Extract/unpack c2270/c2280 from loose files or DSR archives if present",
+    )
     args = parser.parse_args()
 
     workspace = args.workspace.resolve()
@@ -245,7 +312,9 @@ def main() -> int:
         },
         "er_game": asdict(path_status(args.er_game)),
         "dsr_game": asdict(path_status(dsr_game)) if dsr_game else None,
-        "dsr_targets": [asdict(path_status(dsr_game / rel)) for rel in DSR_TARGETS] if dsr_game else [],
+        "dsr_targets": [asdict(path_status(dsr_game / rel)) for rel in DSR_TARGETS]
+        if dsr_game
+        else [],
         "dsr_archives_present": has_dsr_archives(dsr_game) if dsr_game else False,
         "commands": [],
         "copied_dsr_targets": [],
@@ -253,16 +322,24 @@ def main() -> int:
     }
 
     if args.status:
-        (output / "inventory-status.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        (output / "inventory-status.json").write_text(
+            json.dumps(summary, indent=2), encoding="utf-8"
+        )
         emit_json(summary)
         return 0
 
     if args.prepare_er:
         er_out = output / "er"
         if args.fstools.exists() and args.er_game.exists():
-            results = extract_with_fstools(args.fstools, args.er_game, er_out, [ER_PLAYER_FILTER, ER_DONOR_FILTER])
+            results = extract_with_fstools(
+                args.fstools, args.er_game, er_out, [ER_PLAYER_FILTER, ER_DONOR_FILTER]
+            )
             summary["commands"].extend(asdict(result) for result in results)
-            er_unpack_names = {"c0000.chrbnd.dcx", "c0000.anibnd.dcx", "bd_m_1010.partsbnd.dcx"}
+            er_unpack_names = {
+                "c0000.chrbnd.dcx",
+                "c0000.anibnd.dcx",
+                "bd_m_1010.partsbnd.dcx",
+            }
             for input_path in sorted(er_out.glob("*.dcx")):
                 if input_path.name not in er_unpack_names:
                     continue
@@ -276,14 +353,18 @@ def main() -> int:
                         summary["commands"].append(asdict(tpf_result))
                         tpf_out_dir = expected_witchy_dir(nested_tpf)
                         if tpf_out_dir.exists():
-                            summary["witchy_outputs"].append(parse_witchy_manifest(tpf_out_dir))
+                            summary["witchy_outputs"].append(
+                                parse_witchy_manifest(tpf_out_dir)
+                            )
 
     if args.extract_dsr and dsr_game:
         dsr_out = output / "dsr"
         copied = copy_loose_dsr_targets(dsr_game, dsr_out)
         summary["copied_dsr_targets"] = [asdict(item) for item in copied]
         if args.fstools.exists() and has_dsr_archives(dsr_game):
-            results = extract_with_fstools(args.fstools, dsr_game, dsr_out, ["chr/c2280", "chr/c2270"])
+            results = extract_with_fstools(
+                args.fstools, dsr_game, dsr_out, ["chr/c2280", "chr/c2270"]
+            )
             summary["commands"].extend(asdict(result) for result in results)
         for input_path in sorted(dsr_out.rglob("c22*.dcx")):
             result = run_witchy(args.witchy, input_path)
@@ -291,6 +372,12 @@ def main() -> int:
             out_dir = expected_witchy_dir(input_path)
             if out_dir.exists():
                 summary["witchy_outputs"].append(parse_witchy_manifest(out_dir))
+                for nested_tpf in sorted(out_dir.glob("*.tpf")):
+                    tpf_result = run_witchy(args.witchy, nested_tpf)
+                    summary["commands"].append(asdict(tpf_result))
+                    tpf_out_dir = expected_witchy_dir(nested_tpf)
+                    if tpf_out_dir.exists():
+                        summary["witchy_outputs"].append(parse_witchy_manifest(tpf_out_dir))
 
     summary["witchy_outputs"].extend(discover_outputs(output))
     status_path = output / "inventory-status.json"
