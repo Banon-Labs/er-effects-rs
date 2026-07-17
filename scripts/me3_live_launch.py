@@ -2,16 +2,13 @@
 """Launch Elden Ring live via me3 with the freshly-built repo DLL, for manual inspection.
 
 WSL <-> Windows seam (why the paths look "mixed"):
-    me3.exe is a NATIVE WINDOWS process that we start from WSL. It loads our DLL, and
-    me3 (Windows) cannot reliably load a DLL that lives on the WSL ext4 filesystem
-    (`/home/...`). So every run we COPY the repo's build output to a Windows-drive
-    location and hand me3 the `C:\\...` spelling of that path.
-
-    To keep the classic "same directory spelled two ways" curse contained, each path is
-    derived ONCE from a single base and expressed in exactly two forms where needed:
-        - a WSL form (`/mnt/c/...`) used by the Python-side file copy, and
-        - a Windows form (`C:\\...`) used by the (Windows) me3 process.
-    See DEPLOY_DIR_WSL / DEPLOY_DIR_WIN below.
+    me3.exe is a NATIVE WINDOWS process that we start from WSL. It loads THIS repo's build
+    output IN PLACE: we hand me3 the Windows spelling of the repo's WSL path (via
+    `wslpath -w`, e.g. `\\\\wsl.localhost\\<distro>\\home\\...\\er_effects_rs.dll`). No copy to a
+    C:\\ tree -- Windows LoadLibraryW over the WSL filesystem was verified reliable (5/5),
+    so the old "must copy to a Windows drive first" belief does not hold. (The real UNC
+    hazard is log WRITES from the game, not the DLL load; the DLL's debug log already lands
+    in the game dir, a Windows path.) One build, referenced where cargo puts it.
 
 No-teardown stdin trick (INTENTIONAL, do not "fix"):
     me3 tears the game down when its own stdin hits EOF. We pass `stdin=PIPE` and NEVER
@@ -26,7 +23,6 @@ launch errors stay visible.
 
 import argparse
 import hashlib
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -43,13 +39,6 @@ BUILT_DLL = (
     / "release"
     / "er_effects_rs.dll"
 )
-
-# --- Single clean deploy target, defined ONCE in each spelling ---------------------------
-# WSL form is used by the Python file copy; Windows form is handed to the Windows me3.
-DEPLOY_DIR_WSL = Path("/mnt/c/Users/choza/er-effects-live")
-DEPLOY_DIR_WIN = r"C:\Users\choza\er-effects-live"
-DEPLOY_DLL_WSL = DEPLOY_DIR_WSL / "er_effects_rs.dll"
-DEPLOY_DLL_WIN = DEPLOY_DIR_WIN + r"\er_effects_rs.dll"
 
 CARGO_BUILD_CMD = [
     "cargo",
@@ -154,20 +143,22 @@ def main() -> None:
             "or re-run this script with --build."
         )
 
-    # 3. AUTO-DEPLOY: copy the fresh repo DLL to the single clean Windows-accessible
-    #    location every run. This removes the manual `cp` and the stale-DLL footgun.
-    DEPLOY_DIR_WSL.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(BUILT_DLL, DEPLOY_DLL_WSL)
-    print(f"deployed {BUILT_DLL}", flush=True)
-    print(f"      -> {DEPLOY_DLL_WSL}  (== {DEPLOY_DLL_WIN})", flush=True)
-    print(f"      md5[:8] = {md5_prefix(DEPLOY_DLL_WSL)}  <- this is the dll me3 will load", flush=True)
+    # 3. Spell the repo's build output for the Windows me3 (loaded IN PLACE, no copy).
+    #    `wslpath -w` gives the \\wsl.localhost\<distro>\... form; Windows LoadLibraryW over
+    #    the WSL filesystem was verified reliable, so no stale-copy footgun exists.
+    dll_win = subprocess.run(
+        ["wslpath", "-w", str(BUILT_DLL)], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    print(f"loading repo DLL in place: {BUILT_DLL}", flush=True)
+    print(f"      -> {dll_win}", flush=True)
+    print(f"      md5[:8] = {md5_prefix(BUILT_DLL)}  <- this is the dll me3 will load", flush=True)
 
-    # 4. Launch me3 with the WINDOWS spelling of the deployed DLL path.
+    # 4. Launch me3 with the WINDOWS spelling of the repo DLL path.
     #    stdin=PIPE is held open forever (never closed): me3 tears the game down on stdin
     #    EOF, so keeping stdin open keeps the game alive for manual inspection. stdout/
     #    stderr inherit to the console so launch errors are visible. p.wait() returns only
     #    when the USER closes the game.
-    cmd = [ME3, "launch", "-g", "eldenring", "-n", DEPLOY_DLL_WIN]
+    cmd = [ME3, "launch", "-g", "eldenring", "-n", dll_win]
     print(f"launching: {' '.join(cmd)}", flush=True)
     p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     print(

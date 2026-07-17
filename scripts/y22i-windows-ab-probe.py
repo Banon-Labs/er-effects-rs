@@ -16,8 +16,10 @@ the game is force-killed at the cap. Stop/continue decisions come only from the
 crash log, telemetry JSON, and process exit -- never from screenshots.
 
 Usage:
-  python3 scripts/y22i-windows-ab-probe.py --arm control --run 1 \
-      --dll 'C:\\Users\\choza\\build\\y22i\\control\\er-effects-rs\\target\\x86_64-pc-windows-msvc\\release\\er_effects_rs.dll'
+  # Uses THIS repo's release build in place (no --dll needed):
+  python3 scripts/y22i-windows-ab-probe.py --arm control --run 1
+  # Override only for a staged A/B arm that is a different DLL:
+  python3 scripts/y22i-windows-ab-probe.py --arm guard --run 1 --dll 'C:\\path\\to\\er_effects_rs.dll'
 
 Emits a single JSON verdict line prefixed with `VERDICT: ` and copies all
 evidence files into .artifacts/y22i-win/<arm>-run<run>/.
@@ -35,9 +37,15 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GAME_DIR = "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game"
 ME3 = "/mnt/c/Users/choza/AppData/Local/garyttierney/me3/bin/me3.exe"
-# me3 is launched with this WSL cwd so any CWD-relative DLL logs land on a real
-# Windows path (not a \\wsl.localhost UNC the game cannot write to).
-LAUNCH_CWD = "/mnt/c/Users/choza/build/y22i"
+# THE dll under test defaults to THIS repo's canonical release build output -- no separate
+# Windows-side checkout, no per-experiment copy. Windows me3 loads it IN PLACE from the WSL
+# filesystem: LoadLibraryW over \\wsl$\<distro>\... was verified reliable (5/5), so the old
+# "copy to a C:\ build tree first" belief does not hold. `--dll` still overrides for A/B arms.
+BUILT_DLL = os.path.join(REPO, "target", "x86_64-pc-windows-msvc", "release", "er_effects_rs.dll")
+# me3 runs with this WSL cwd so any CWD-relative DLL logs land on a real Windows path the game
+# can WRITE to (writes to a \\wsl$ UNC are the actual hazard; the DLL load is not). Kept off any
+# experiment-specific build tree -- a neutral shared Windows-writable dir.
+LAUNCH_CWD = "/mnt/c/Users/choza/er-effects-live"
 
 CRASH_RVA = "0xec95d1"
 # Verdict oracle set: y22i guard fields + the display-path fields (Present hook / swapchain find /
@@ -175,12 +183,27 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", required=True, choices=["guard", "control", "fix"])
     ap.add_argument("--run", required=True, type=int)
-    ap.add_argument("--dll", required=True, help="Windows path to er_effects_rs.dll")
+    ap.add_argument("--dll", default=None,
+                    help="Windows path to er_effects_rs.dll (default: this repo's release build, "
+                         "loaded in place via wslpath -w -- no copy)")
     args = ap.parse_args()
+
+    # Default the DLL to the repo's canonical build output, spelled for the Windows me3 via
+    # `wslpath -w`. This is what replaces the old C:\Users\choza\build\y22i\...\release\ path:
+    # one build, referenced in place. An explicit --dll (e.g. a staged A/B arm) still wins.
+    if args.dll is None:
+        if not os.path.exists(BUILT_DLL):
+            print(f"PREFLIGHT-FAIL: repo DLL not built: {BUILT_DLL} "
+                  "(run: cargo xwin build --release --target x86_64-pc-windows-msvc)")
+            return 2
+        args.dll = subprocess.run(["wslpath", "-w", BUILT_DLL], capture_output=True,
+                                  text=True, check=True, timeout=15).stdout.strip()
 
     cap = runtime_cap_seconds()
     artifact_dir = os.path.join(REPO, ".artifacts", "y22i-win", f"{args.arm}-run{args.run}")
     os.makedirs(artifact_dir, exist_ok=True)
+    # LAUNCH_CWD receives CWD-relative game/DLL logs, so it must exist and be Windows-writable.
+    os.makedirs(LAUNCH_CWD, exist_ok=True)
 
     # --- preflight (fail closed) ---
     if not tasklist("steam.exe"):
