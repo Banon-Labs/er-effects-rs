@@ -132,6 +132,8 @@ pub(crate) fn is_native_windows() -> bool {
 /// the isolated overlay owns its own D3D12 device and the 8-frame settle gate keeps the crash-prone
 /// model-drive blocked, so the portrait pipeline is runtime-proven safe on native (2026-07-15, zero AVs
 /// across 7 boots, animated head captured + displayed). This env is now only a diagnostic force-OFF escape.
+// ENV-GATE RATIONALE: ER_EFFECTS_ALLOW_NATIVE_PROFILE_DRIVE=0 force-DISABLES the (now default-on) native
+// profile render-drive; it is a diagnostic escape hatch only and never writes a save or perturbs the mount.
 fn native_profile_drive_disabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_ALLOW_NATIVE_PROFILE_DRIVE").as_deref(),
@@ -139,6 +141,9 @@ fn native_profile_drive_disabled() -> bool {
     )
 }
 
+// ENV-GATE RATIONALE: ER_EFFECTS_FORCE_PROFILE_RENDER=1 force-ENABLES the profile portrait render-drive
+// even on telemetry-only/no-load save-override runs (where it is otherwise off); diagnostic force-ON
+// override only. Does not write a save; simply keeps the portrait render pipeline active for the probe.
 pub(crate) fn force_profile_render_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
         return false;

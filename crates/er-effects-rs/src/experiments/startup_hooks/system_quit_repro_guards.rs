@@ -129,6 +129,9 @@ fn sq_repro_profile_back_mode() -> bool {
 /// (system_quit_ownership_repro.rs:1215 gates the direct-arm on `!allowed`). The direct-arm is exactly
 /// what the switch needs (it sets QUICKLOAD_PHASE and drives return-title + reload), so this mode must
 /// leave activation-allowed OFF.
+// ENV-GATE RATIONALE: ER_EFFECTS_SQ_LOAD_SWITCH=1 selects the profile-load-switch repro autopilot (Quit
+// tab -> Load Profile -> pick top character -> confirm -> load). This mode DOES drive a real profile
+// load/reload; agent-owned repro only, gated separately from the default Save Game harness.
 fn sq_repro_load_switch_mode() -> bool {
     matches!(std::env::var("ER_EFFECTS_SQ_LOAD_SWITCH").as_deref(), Ok("1"))
         || game_directory_path()

@@ -886,6 +886,13 @@ pub(crate) unsafe extern "system" fn worldres_entry_ctor_hook(
 
 pub(crate) static WORLDRES_BLOCKRES_GETTER_ORIG: AtomicUsize = AtomicUsize::new(0);
 static WORLDRES_GETTER_LAST_1C: AtomicUsize = AtomicUsize::new(usize::MAX);
+// One-shot: dump the PRISTINE full FD4FileCap state for the stalled 0x1c block's two caps the first
+// time the resident-null stall (status 0x04 + data +0x90 null) is observed. The refcount +0x58 is the
+// missing semaphore for the teardown refcount-leak root: it tells whether ONE release would evict the
+// cap (leak == 1) or more, and +0x8c (resident bit) / +0x78 (read-job) / +0x80 (pending) reveal why a
+// re-issued read did not recreate the content child. Read-only. Disable the corrective action for a
+// pristine reading by dropping `er-effects-blockres-stalecap-fix-DISABLE.txt` in the game dir.
+static WORLDRES_CAPSTATE_DUMPED: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) static BLOCKRES_PHASE2_ORIG: AtomicUsize = AtomicUsize::new(0);
 // Retry accounting is PER block-res, not global: BLOCKRES_STALECAP_LAST_BRES pins the block we are
@@ -898,18 +905,13 @@ static BLOCKRES_STALECAP_LAST_BRES: AtomicUsize = AtomicUsize::new(0);
 const BLOCKRES_STALECAP_MAX_RETRIES: usize = 32;
 
 // PRODUCT DEFAULT (2026-07-17): the stale-file-cap reload fix is ON by default so it runs on the plain
-// me3 product path with NO env vars / marker (goal: the second-load fix must not depend on agent-only
-// arming). The env var is a DIAGNOSTIC KILL-SWITCH only: `ER_EFFECTS_BLOCKRES_STALECAP_FIX=0` (or the
-// marker `er-effects-blockres-stalecap-fix-DISABLE.txt`) makes the corrective action inert so the raw
-// stall can still be observed. The scoping guard (IN_WORLD_REACHED==YES + exact stuck condition) means
-// the first autoload and normal play are never touched.
+// me3 product path with NO env vars and NO marker (goal: the second-load fix must not depend on
+// agent-only arming). A single diagnostic KILL-SWITCH remains -- the marker file
+// `er-effects-blockres-stalecap-fix-DISABLE.txt` in the game dir makes the corrective action inert so
+// the raw pristine stall can still be observed (for the refcount CAPSTATE-DUMP measurement). No env var
+// is read here on purpose (env-gate policy prefers no per-lever env knob). The scoping guard
+// (IN_WORLD_REACHED==YES + exact stuck condition) means the first autoload and normal play are untouched.
 fn blockres_stalecap_fix_enabled() -> bool {
-    if matches!(
-        std::env::var("ER_EFFECTS_BLOCKRES_STALECAP_FIX").as_deref(),
-        Ok("0")
-    ) {
-        return false;
-    }
     !game_directory_path()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("er-effects-blockres-stalecap-fix-DISABLE.txt")
@@ -1101,6 +1103,33 @@ pub(crate) unsafe extern "system" fn worldres_blockres_getter_hook(
             append_autoload_debug(format_args!(
                 "WORLDRES-GETTER 0x1c: key=0x{key:x} count={count} found={found} ret=0x{ret:x} +0x2d(ready)={d2d} +0x35(phase)={d35} +0x2f(gate)={g2f} fc8=0x{fc8:x} fc8_88(status)={fc8_88} fc8_90(data)=0x{fc8_90:x} fc9=0x{fc9:x} fc9_88={fc9_88} in_world={in_world} -- phase-2 stalls if gate set + status 0x04 but data +0x90 null"
             ));
+        }
+        // Missing semaphore: the parent-cap REFCOUNT (+0x58) and flag state at the pristine stall. One
+        // shot when the resident-null condition holds (status 4, data null, phase 2). This measures the
+        // teardown refcount leak so the eviction/teardown fix can release EXACTLY the leaked ref(s).
+        if found == 1
+            && d35 == 2
+            && fc8_88 == FILECAP_STATUS_LOADED
+            && fc8_90 == 0
+            && WORLDRES_CAPSTATE_DUMPED.swap(1, Ordering::SeqCst) == 0
+        {
+            for (tag, cap) in [("fc8(+0x40)", fc8), ("fc9(+0x48)", fc9)] {
+                if cap <= 0x10000 {
+                    continue;
+                }
+                let rc58 = unsafe { safe_read_i32(cap + 0x58) }.unwrap_or(-1);
+                let r5c = unsafe { safe_read_i32(cap + 0x5c) }.unwrap_or(-1);
+                let s88 = unsafe { safe_read_u8(cap + 0x88) }.map(|v| v as i32).unwrap_or(-1);
+                let f89 = unsafe { safe_read_u8(cap + 0x89) }.map(|v| v as i32).unwrap_or(-1);
+                let f8a = unsafe { safe_read_u8(cap + 0x8a) }.map(|v| v as i32).unwrap_or(-1);
+                let w8c = unsafe { safe_read_i32(cap + 0x8c) }.unwrap_or(-1);
+                let job78 = unsafe { safe_read_usize(cap + 0x78) }.unwrap_or(0);
+                let pend80 = unsafe { safe_read_usize(cap + 0x80) }.unwrap_or(0);
+                let data90 = unsafe { safe_read_usize(cap + 0x90) }.unwrap_or(0);
+                append_autoload_debug(format_args!(
+                    "CAPSTATE-DUMP {tag} cap=0x{cap:x}: refcount+0x58={rc58} +0x5c={r5c} status+0x88={s88} qflags+0x89=0x{f89:x} +0x8a=0x{f8a:x} +0x8c=0x{w8c:x} readjob+0x78=0x{job78:x} pending+0x80=0x{pend80:x} data+0x90=0x{data90:x} -- refcount is the leak-count semaphore (1 => single release evicts)"
+                ));
+            }
         }
     }
     ret
