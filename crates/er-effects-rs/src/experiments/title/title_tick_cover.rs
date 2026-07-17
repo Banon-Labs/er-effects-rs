@@ -850,6 +850,126 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         let mms_blocks = mms_resmgr
             .and_then(|r| unsafe { safe_read_i32(r + RESMGR_BLOCK_COUNT_B3140_OFFSET) })
             .unwrap_or(-1);
+        // STEP-3 (WORLD RES WAIT) DETERMINANT: the BlockId step 3 waits on (FieldArea+0x2c) and whether
+        // its areaId is present in the world's loaded-block list. `mms_wrm` = FieldArea, `mms_resmgr` =
+        // worldInfoOwner. Only scan the list at step 3 (bounded cost). `mms_cur_block` = the target
+        // BlockId; `mms_block_found` = is that block's areaId among the loaded blocks (1 yes / 0 no /
+        // -1 not scanned); `mms_block_areas` = the loaded blocks' areaIds (first few) for comparison.
+        // The BlockId areaId is one byte of the u32; we match against every byte to stay byte-order-safe.
+        let mms_cur_block = mms_wrm
+            .and_then(|fa| unsafe { safe_read_i32(fa + FIELDAREA_CURRENT_BLOCK_ID_2C_OFFSET) })
+            .map(|v| v as u32)
+            .unwrap_or(u32::MAX);
+        let (
+            mms_block_found,
+            mms_block_areas,
+            mms_blk_2c,
+            mms_blk_2d,
+            mms_blk_35,
+            mms_blk_ls,
+            mms_blk_vt,
+        ) = if mms_step == MOVEMAPSTEP_STEP_WORLDRESWAIT_INDEX
+            && mms_cur_block != u32::MAX
+            && mms_blocks > 0
+            && mms_blocks < 256
+        {
+            let wio = mms_resmgr.unwrap_or(null);
+            // areaId is BlockId byte[3] (disasm FUN_14066d4d0: `MOVZX R11D, byte ptr [RDX + 0x3]`,
+            // then `CMP dword ptr [inner + 0xc], R11D`). So the block the step waits on is the one whose
+            // inner+0xc == (curblk >> 24) & 0xff. Match EXACTLY that (the earlier byte-set match false-
+            // positived on the 0x00 bytes of curblk).
+            let cur_area = (mms_cur_block >> 24) & 0xff;
+            let mut found = false;
+            // The matched block's load-state: the getter return `ls_ptr` (0 = NULL load-state, i.e. the
+            // block's load was never kicked off = FUN_14066d4d0's `if(loadstate==0) return 0` bail), and
+            // when non-null its bytes +0x2c (load-request flag, set by FUN_14066d8d0), +0x2d (ready), and
+            // +0x35 (stream phase; == 10 means loaded). -1 = not read.
+            let mut ls_ptr: usize = 0;
+            let mut ls_vt: usize = 0;
+            let mut ls_2c: i32 = -1;
+            let mut ls_2d: i32 = -1;
+            let mut ls_35: i32 = -1;
+            let mut areas = String::new();
+            for i in 0..(mms_blocks as usize) {
+                let Some(bp) = (unsafe {
+                    safe_read_usize(wio + WORLDINFO_BLOCK_LIST_B3030_OFFSET + i * 8)
+                })
+                .filter(|&v| v > 0x10000) else {
+                    continue;
+                };
+                let Some(inner) = (unsafe { safe_read_usize(bp + WORLDINFO_BLOCK_ENTRY_INNER_8_OFFSET) })
+                    .filter(|&v| v > 0x10000)
+                else {
+                    continue;
+                };
+                let area = unsafe { safe_read_i32(inner + WORLDINFO_BLOCK_AREA_ID_C_OFFSET) }
+                    .map(|v| v as u32)
+                    .unwrap_or(u32::MAX);
+                if area == cur_area && !found {
+                    found = true;
+                    // Read the load-state exactly like FUN_14066d4d0: block->vtable[0x10](block) returns
+                    // the load-state object; then +0x2d / +0x35. This is the same getter the game polls
+                    // on this same block every frame, so it is safe. RCX = block (Windows x64 ABI).
+                    if let Some(vt) =
+                        unsafe { safe_read_usize(bp) }.filter(|&v| v > 0x10000)
+                    {
+                        ls_vt = vt;
+                        if let Some(getter) =
+                            unsafe { safe_read_usize(vt + BLOCK_LOADSTATE_GETTER_VT_10_OFFSET) }
+                                .filter(|&v| v > 0x10000)
+                        {
+                            let get_ls: unsafe extern "system" fn(usize) -> usize =
+                                unsafe { core::mem::transmute(getter) };
+                            let ls = unsafe { get_ls(bp) };
+                            ls_ptr = ls;
+                            if ls > 0x10000 {
+                                ls_2c = unsafe { safe_read_u8(ls + BLOCK_LOADSTATE_REQUEST_2C_OFFSET) }
+                                    .map(|v| v as i32)
+                                    .unwrap_or(-1);
+                                ls_2d = unsafe { safe_read_u8(ls + BLOCK_LOADSTATE_FLAG_2D_OFFSET) }
+                                    .map(|v| v as i32)
+                                    .unwrap_or(-1);
+                                ls_35 = unsafe {
+                                    safe_read_u8(ls + BLOCK_LOADSTATE_PHASE_35_OFFSET)
+                                }
+                                .map(|v| v as i32)
+                                .unwrap_or(-1);
+                            }
+                        }
+                    }
+                }
+                if i < 40 {
+                    let _ = core::fmt::Write::write_fmt(&mut areas, format_args!("{area:#x},"));
+                }
+            }
+            (if found { 1 } else { 0 }, areas, ls_2c, ls_2d, ls_35, ls_ptr, ls_vt)
+        } else {
+            (-1, String::new(), -1, -1, -1, 0, 0)
+        };
+        // OVERWORLD-RESIDUAL confirm: the overworld block list (+0xb3148, count +0xb31d0). If the boot
+        // char's m60 overworld blocks (area 0x3c) are still resident here while step 3 waits on the
+        // incoming legacy block (area 0x1c), the overworld residual is starving the legacy load-request.
+        let (mms_ow_count, mms_ow_areas) = if mms_step == MOVEMAPSTEP_STEP_WORLDRESWAIT_INDEX
+            && mms_resmgr.is_some()
+        {
+            let wio = mms_resmgr.unwrap_or(null);
+            let cnt = unsafe { safe_read_i32(wio + WORLDINFO_OVERWORLD_COUNT_B31D0_OFFSET) }
+                .unwrap_or(-1);
+            let mut s = String::new();
+            if cnt > 0 && cnt < 256 {
+                for i in 0..(cnt as usize).min(24) {
+                    let bid =
+                        unsafe { safe_read_i32(wio + WORLDINFO_OVERWORLD_LIST_B3148_OFFSET + i * 4) }
+                            .map(|v| v as u32)
+                            .unwrap_or(u32::MAX);
+                    let a = (bid >> 24) & 0xff;
+                    let _ = core::fmt::Write::write_fmt(&mut s, format_args!("{a:#x},"));
+                }
+            }
+            (cnt, s)
+        } else {
+            (-1, String::new())
+        };
         // STEP_MoveMap advance gate (MoveMapStep+0x4b8 low / +0x4b9 high). lo=1 -> ready to advance;
         // lo=0 -> blocked; lo=0,hi=1 -> WorldChrMan-not-ready (0x100). Blocked-with-bc4=1 is the softlock.
         let mms_gate_lo = mms
@@ -957,8 +1077,11 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             } else {
                 "in-progress"
             };
+            // The stuck block's vtable as a module RVA -> look it up in the dump to RE the
+            // vtable[0x10] load-state getter that returns null (why the legacy load is never created).
+            let blk_vt_rva = mms_blk_vt.saturating_sub(module_base);
             append_autoload_debug(format_args!(
-                "SWITCH-ORACLE #{n}: slot={slot} bc4={bc4v} player={player_present} ig_d8={ig_d8} pstep={ig_pstep}/{ig_pnext} menu_job=0x{menu_job:x} stable_frames={sf} peak={peak} mms=0x{mms_disp:x} mms_step={mms_step}({}) next={mms_next} done50={mms_done} gate={mms_gate_lo}/{mms_gate_hi} end5e={md_5e} rt5d={md_5d} force={ending_force} b7c={gb7c} b7d={gb7d} warp={gwarp} hold270=0x{mms_hold:x} cd100={mms_cd} req248={mms_req248} b7c1={mms_b7c1} blocks={mms_blocks} phase={} -- {cls}",
+                "SWITCH-ORACLE #{n}: slot={slot} bc4={bc4v} player={player_present} ig_d8={ig_d8} pstep={ig_pstep}/{ig_pnext} menu_job=0x{menu_job:x} stable_frames={sf} peak={peak} mms=0x{mms_disp:x} mms_step={mms_step}({}) next={mms_next} done50={mms_done} gate={mms_gate_lo}/{mms_gate_hi} end5e={md_5e} rt5d={md_5d} force={ending_force} b7c={gb7c} b7d={gb7d} warp={gwarp} hold270=0x{mms_hold:x} cd100={mms_cd} req248={mms_req248} b7c1={mms_b7c1} blocks={mms_blocks} curblk=0x{mms_cur_block:x} blk_found={mms_block_found} blk_ls=0x{mms_blk_ls:x} blk_2c={mms_blk_2c} blk_2d={mms_blk_2d} blk_35={mms_blk_35} blk_vt_rva=0x{blk_vt_rva:x} ow_cnt={mms_ow_count} ow=[{mms_ow_areas}] blk_areas=[{mms_block_areas}] phase={} -- {cls}",
                 movemapstep_step_name(mms_step),
                 SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
             ));

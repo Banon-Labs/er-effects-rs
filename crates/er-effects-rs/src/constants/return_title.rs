@@ -211,6 +211,37 @@ pub(crate) static SYSTEM_QUIT_LOAD3_FINALIZE_CLEAR_COUNT: AtomicUsize = AtomicUs
 pub(crate) const GAME_MAN_SAVE_REQUESTED_B72_OFFSET: usize = 0xb72;
 pub(crate) const GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET: usize = 0xb73;
 pub(crate) static SYSTEM_QUIT_TEARDOWN_SAVEREQ_CLEAR_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// STEP-3 (WORLD RES WAIT) DETERMINANT instrumentation (2026-07-16, Ghidra-proven). STEP_WorldResWait
+/// (dump 0x140af9de0) advances 3->4 only when FUN_14066d4d0(worldInfoOwner, &currentBlockId) finds the
+/// block matching currentBlockId's areaId in the world block-list AND that block's load-state reaches
+/// +0x35==10. FieldArea = MoveMapStep+0xf0 (the oracle's `mms_wrm`); currentBlockId (BlockId u32) =
+/// FieldArea+0x2c; worldInfoOwner = FieldArea+0x10 (`mms_resmgr`); block-list = worldInfoOwner+0xb3030
+/// (array of block ptrs, count = worldInfoOwner+0xb3140 = the oracle's `blocks`). Each list entry i:
+/// block_ptr=*(u64*)(list+i*8); inner=*(u64*)(block_ptr+0x8); block areaId=*(u32*)(inner+0xc). If, on a
+/// step-3 stall, currentBlockId's areaId is NOT among the listed blocks -> the target block was never
+/// registered (teardown left the wrong block set); if present -> its stream-state is stuck below 10.
+pub(crate) const FIELDAREA_CURRENT_BLOCK_ID_2C_OFFSET: usize = 0x2c;
+pub(crate) const WORLDINFO_BLOCK_LIST_B3030_OFFSET: usize = 0xb3030;
+pub(crate) const WORLDINFO_BLOCK_ENTRY_INNER_8_OFFSET: usize = 0x8;
+pub(crate) const WORLDINFO_BLOCK_AREA_ID_C_OFFSET: usize = 0xc;
+pub(crate) const MOVEMAPSTEP_STEP_WORLDRESWAIT_INDEX: i32 = 3;
+// The matched block's load-state, read exactly as FUN_14066d4d0 does: call the block's vtable slot
+// +0x10 (`block->vtable[0x10](block)`) to get the load-state object, then LOADED requires +0x2d != 0
+// AND +0x35 == 0x0a(10). +0x35 (the stream-state/phase enum) stuck below 10 = the block is registered
+// but its stream never completes (the WORLD RES WAIT stall). The getter/flag/phase offsets already
+// exist as BLOCK_LOADSTATE_GETTER_VT_10_OFFSET / BLOCK_LOADSTATE_FLAG_2D_OFFSET /
+// BLOCK_LOADSTATE_PHASE_35_OFFSET in constants/gaitem_restore.rs -- reused here, not redefined.
+/// Load-request flag on the load-state object (FUN_14066d8d0 sets `+0x2c = 1` to request the block's
+/// load). If the load-state exists but +0x2c is 0, the load was never requested.
+pub(crate) const BLOCK_LOADSTATE_REQUEST_2C_OFFSET: usize = 0x2c;
+/// The OVERWORLD block list on the WorldInfoOwner: `+0xb3148` = a u32 BlockId array (4-aligned),
+/// `+0xb31d0` = its entry count. FUN_14066d8d0 routes OVERWORLD blocks (areaId in [0x32,0x59)) here
+/// (via FUN_14063c5a0) instead of the +0xb3030 non-overworld path. Instrumented to confirm the
+/// residual-outgoing-overworld hypothesis: if the boot char's m60 overworld blocks (area 0x3c) are
+/// still resident here while we wait on the incoming legacy block (area 0x1c), the overworld residual
+/// is what starves the legacy load-request. Each entry's areaId is its BlockId byte[3].
+pub(crate) const WORLDINFO_OVERWORLD_LIST_B3148_OFFSET: usize = 0xb3148;
+pub(crate) const WORLDINFO_OVERWORLD_COUNT_B31D0_OFFSET: usize = 0xb31d0;
 pub(crate) static SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_READY_BLOCK_COUNT: AtomicUsize =
     AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_LAST_DIALOG: AtomicUsize =

@@ -61,6 +61,14 @@ pub(crate) static BLOCK_INPUT_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 const BLOCK_INPUT_ON: usize = 1;
 /// Original `XInputGetState` (minhook trampoline). 0 until the hook installs.
 pub(crate) static XINPUT_GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// Monotonic `dwPacketNumber` for the no-controller "connected idle pad" keepalive the
+/// `xinput_get_state_hook` presents on slot 0 while an XInput harness is armed (see the hook doc).
+/// Private to the keepalive so it never perturbs the fabrication cadence in `INJECT_NAV_FRAME`.
+static XINPUT_KEEPALIVE_PACKET: AtomicUsize = AtomicUsize::new(0);
+/// Original `XInputGetCapabilities` (minhook trampoline). 0 until the hook installs. The game uses
+/// this to ENUMERATE which pad slots exist; with no controller it returns DEVICE_NOT_CONNECTED and
+/// the game then never polls `XInputGetState(0)`. The harness forces slot 0 connected here too.
+static XINPUT_GET_CAPABILITIES_ORIG: AtomicUsize = AtomicUsize::new(0);
 
 /// STAY-ACTIVE gate (`ER_EFFECTS_STAY_ACTIVE=1` / `er-effects-stay-active.txt`). When set, keep ER's
 /// input-accept flag `[DLUID+0x88d]` forced to 1 every tick so a virtual gamepad keeps driving the
@@ -196,6 +204,18 @@ pub(crate) fn release_input_block_now() {
 /// (buttons + triggers + thumbsticks) so the game reads a connected-but-idle pad (no
 /// "controller disconnected" popup, but zero input). Leaves the disconnected return code
 /// untouched so a genuinely absent pad still reads absent.
+///
+/// NO-CONTROLLER HARNESS SUPPORT (agent-owned diagnostic): the game only KEEPS polling an XInput
+/// slot it believes is connected. When no physical pad is plugged in, the real `XInputGetState(0)`
+/// returns ERROR_DEVICE_NOT_CONNECTED, so ER's connection detection stops polling slot 0 and our
+/// button-fabrication frames (below) never reach the game -- which is exactly why the sq-repro /
+/// inject-nav harness previously only worked with a controller physically attached. To make the
+/// harness work with NO controller, whenever an XInput-driven harness is ARMED (env/file gate:
+/// `system_quit_repro_enabled()` / `inject_nav_enabled()`) we force slot 0 to report a CONNECTED
+/// idle pad (SUCCESS + fresh packet) instead of DEVICE_NOT_CONNECTED. That keeps ER polling slot 0
+/// so the fabrication frames land. This is gated STRICTLY behind the existing diagnostic
+/// opt-ins (never on the default/product path) and only touches slot 0; other slots and the
+/// non-armed case still read a genuinely absent pad as absent.
 pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, state: *mut u8) -> u32 {
     const XINPUT_SUCCESS: u32 = 0;
     const XINPUT_ERROR_DEVICE_NOT_CONNECTED: u32 = 1167;
@@ -204,8 +224,9 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
     const XINPUT_GAMEPAD_OFFSET: usize = 4;
     const XINPUT_GAMEPAD_SIZE: usize = 12;
     const ZERO_FILL_BYTE: u8 = 0;
+    const XINPUT_PRIMARY_USER_INDEX: u32 = 0;
     let orig = XINPUT_GET_STATE_ORIG.load(Ordering::SeqCst);
-    let hr = if orig != TITLE_OWNER_SCAN_START_ADDRESS {
+    let mut hr = if orig != TITLE_OWNER_SCAN_START_ADDRESS {
         let f: unsafe extern "system" fn(u32, *mut u8) -> u32 =
             unsafe { std::mem::transmute(orig) };
         unsafe { f(user_index, state) }
@@ -214,6 +235,29 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
     };
     const XINPUT_PACKET_OFFSET: usize = 0;
     const WBUTTONS_OFFSET_IN_GAMEPAD: usize = 0;
+    // KEEP SLOT 0 "CONNECTED" while an XInput harness is armed, even when no physical pad exists and
+    // even before the block flag flips ON -- ER's connection scan can sample the slot on any frame,
+    // and if it ever sees DEVICE_NOT_CONNECTED it can stop polling slot 0 (killing the fabrication
+    // below). Present a connected idle pad with a fresh packet so the slot stays live. Gated behind
+    // the diagnostic harness opt-ins only; never runs on the default/product path.
+    if user_index == XINPUT_PRIMARY_USER_INDEX
+        && hr == XINPUT_ERROR_DEVICE_NOT_CONNECTED
+        && !state.is_null()
+        && (system_quit_repro_enabled() || inject_nav_enabled())
+    {
+        // Advance a private keepalive counter (NOT INJECT_NAV_FRAME, whose cadence drives the
+        // fabrication schedule) so the "connected" pad always presents a fresh, changing packet.
+        let pkt = XINPUT_KEEPALIVE_PACKET.fetch_add(1, Ordering::SeqCst) as u32;
+        unsafe {
+            std::ptr::write_bytes(
+                state.add(XINPUT_GAMEPAD_OFFSET),
+                ZERO_FILL_BYTE,
+                XINPUT_GAMEPAD_SIZE,
+            );
+            *(state.add(XINPUT_PACKET_OFFSET) as *mut u32) = pkt;
+        }
+        hr = XINPUT_SUCCESS;
+    }
     if !state.is_null() && BLOCK_INPUT_ACTIVE.load(Ordering::SeqCst) == BLOCK_INPUT_ON {
         // Two drivers fabricate the pad at the poll source: the System->Quit repro autopilot (the
         // user's controller sequence, written to SQ_REPRO_XINPUT_BUTTONS every game-task frame) and
@@ -261,6 +305,51 @@ pub(crate) unsafe extern "system" fn xinput_get_state_hook(user_index: u32, stat
                 )
             };
         }
+    }
+    hr
+}
+
+/// `XInputGetCapabilities(user_index, flags, *mut XINPUT_CAPABILITIES) -> DWORD` detour. The game
+/// calls this to ENUMERATE connected pads; when it returns DEVICE_NOT_CONNECTED for slot 0 (no
+/// physical controller) the game stops polling that slot, so the fabrication in
+/// `xinput_get_state_hook` never lands (the root cause of "the harness only works with a controller
+/// plugged in"). While an XInput harness is ARMED, force slot 0 to report a connected standard
+/// gamepad so enumeration keeps slot 0 live. Gated strictly behind the diagnostic harness opt-ins;
+/// non-armed and other slots pass through untouched (a genuinely absent pad still reads absent).
+pub(crate) unsafe extern "system" fn xinput_get_capabilities_hook(
+    user_index: u32,
+    flags: u32,
+    caps: *mut u8,
+) -> u32 {
+    const XINPUT_SUCCESS: u32 = 0;
+    const XINPUT_ERROR_DEVICE_NOT_CONNECTED: u32 = 1167;
+    const XINPUT_PRIMARY_USER_INDEX: u32 = 0;
+    // XINPUT_CAPABILITIES = { BYTE Type; BYTE SubType; WORD Flags; XINPUT_GAMEPAD Gamepad;
+    //                         XINPUT_VIBRATION Vibration; } == 20 bytes.
+    const XINPUT_CAPABILITIES_SIZE: usize = 20;
+    const XINPUT_DEVTYPE_GAMEPAD: u8 = 1;
+    const XINPUT_DEVSUBTYPE_GAMEPAD: u8 = 1;
+    const CAPS_TYPE_OFFSET: usize = 0;
+    const CAPS_SUBTYPE_OFFSET: usize = 1;
+    let orig = XINPUT_GET_CAPABILITIES_ORIG.load(Ordering::SeqCst);
+    let hr = if orig != TITLE_OWNER_SCAN_START_ADDRESS {
+        let f: unsafe extern "system" fn(u32, u32, *mut u8) -> u32 =
+            unsafe { std::mem::transmute(orig) };
+        unsafe { f(user_index, flags, caps) }
+    } else {
+        XINPUT_ERROR_DEVICE_NOT_CONNECTED
+    };
+    if user_index == XINPUT_PRIMARY_USER_INDEX
+        && hr == XINPUT_ERROR_DEVICE_NOT_CONNECTED
+        && !caps.is_null()
+        && (system_quit_repro_enabled() || inject_nav_enabled())
+    {
+        unsafe {
+            std::ptr::write_bytes(caps, 0, XINPUT_CAPABILITIES_SIZE);
+            *caps.add(CAPS_TYPE_OFFSET) = XINPUT_DEVTYPE_GAMEPAD;
+            *caps.add(CAPS_SUBTYPE_OFFSET) = XINPUT_DEVSUBTYPE_GAMEPAD;
+        }
+        return XINPUT_SUCCESS;
     }
     hr
 }
@@ -329,6 +418,32 @@ unsafe fn install_xinput_block() {
                         "xinput-block: hooked XInputGetStateEx(ord 100) at 0x{ex_addr:x}"
                     ));
                 }
+            }
+        }
+        // XInputGetCapabilities is the slot-ENUMERATION call the game uses to decide which pads to
+        // poll. Hook it so a harness-armed run can keep slot 0 "connected" with no physical
+        // controller (see xinput_get_capabilities_hook). Same DLL, resolved by name.
+        let caps = unsafe { GetProcAddress(hmod, PCSTR(b"XInputGetCapabilities\0".as_ptr())) };
+        if let Some(caps_addr) = caps {
+            let caps_addr = caps_addr as usize;
+            match unsafe {
+                MhHook::new(
+                    caps_addr as *mut c_void,
+                    xinput_get_capabilities_hook as *mut c_void,
+                )
+            } {
+                Ok(hook) => {
+                    XINPUT_GET_CAPABILITIES_ORIG
+                        .store(hook.trampoline() as usize, Ordering::SeqCst);
+                    let _ = unsafe { hook.queue_enable() };
+                    std::mem::forget(hook);
+                    append_autoload_debug(format_args!(
+                        "xinput-block: hooked XInputGetCapabilities at 0x{caps_addr:x}"
+                    ));
+                }
+                Err(status) => append_autoload_debug(format_args!(
+                    "xinput-block: MhHook::new XInputGetCapabilities failed: {status:?}"
+                )),
             }
         }
         break;
