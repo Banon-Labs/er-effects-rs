@@ -121,21 +121,29 @@ fn sq_repro_profile_back_mode() -> bool {
         .exists()
 }
 
+/// PROFILE-LOAD-SWITCH repro mode: drive the user's exact switch (Quit tab -> Load Profile ->
+/// ProfileSelect -> pick the top character -> confirm -> load). Gated by its OWN marker
+/// `er-effects-system-quit-load-switch.txt` / `ER_EFFECTS_SQ_LOAD_SWITCH=1` -- deliberately NOT the
+/// `system_quit_profile_load_activation_allowed` opt-in, because that opt-in makes the ProfileSelect
+/// slot-activate hook FORWARD to the guarded native load instead of DIRECT-ARMING the save-safe switch
+/// (system_quit_ownership_repro.rs:1215 gates the direct-arm on `!allowed`). The direct-arm is exactly
+/// what the switch needs (it sets QUICKLOAD_PHASE and drives return-title + reload), so this mode must
+/// leave activation-allowed OFF.
+fn sq_repro_load_switch_mode() -> bool {
+    matches!(std::env::var("ER_EFFECTS_SQ_LOAD_SWITCH").as_deref(), Ok("1"))
+        || game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("er-effects-system-quit-load-switch.txt")
+            .exists()
+}
+
 /// SAVE-GAME ROW mode for the System->Quit repro autopilot. The main
 /// `ER_EFFECTS_SYSTEM_QUIT_REPRO=1` gate still controls whether the repro harness runs at all.
-///
-/// PROFILE-LOAD-SWITCH mode (the user's exact repro: Quit tab -> Load Profile -> ProfileSelect ->
-/// pick the top character -> confirm -> load) is selected by the SAME opt-in that lets the confirm
-/// actually fire the native load (`system_quit_profile_load_activation_allowed`, file
-/// `er-effects-system-quit-allow-profile-load.txt` / `ER_EFFECTS_SYSTEM_QUIT_ALLOW_PROFILE_LOAD=1`).
-/// Turning it on means "drive the real profile-load switch," so `save_game_only` yields to it: the
-/// autopilot then walks TO_PROFILE -> TO_SLOT (cursor to `SQ_REPRO_TARGET_SLOTS[i]`) -> CONFIRM ->
-/// WAIT_RELOAD instead of the Save Game row. This is the path that drives the first
-/// overworld->legacy switch and reproduces the STEP_WorldResWait (3/20) stall deterministically.
+/// Yields to the tab-return, profile-back, and profile-load-switch modes.
 fn sq_repro_save_game_only() -> bool {
     !sq_repro_tab_return_mode()
         && !sq_repro_profile_back_mode()
-        && !system_quit_profile_load_activation_allowed()
+        && !sq_repro_load_switch_mode()
 }
 
 /// Enter a switch: capture the confirm-count baseline and clear the per-switch menu-window/cursor

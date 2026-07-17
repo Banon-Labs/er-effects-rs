@@ -230,9 +230,13 @@ pub(crate) fn sq_repro_drive_wm_key(vk: u32) {
     if hwnd.0.is_null() {
         return;
     }
-    // Keep ER foreground so SendInput/RawInput reaches it (cheap: no-op once it is already foreground).
-    sq_repro_ensure_foreground(hwnd);
     let prev = SQ_REPRO_HELD_VK.swap(vk as usize, Ordering::SeqCst) as u32;
+    // Only force ER foreground when we actually have a key to deliver (pressing, holding, or
+    // releasing). Doing it every idle frame (e.g. all of WAIT_WORLD during the ~60s boot) churns the
+    // window focus for no reason and can disturb the boot; skip it when idle (vk==0 and none held).
+    if vk != 0 || prev != 0 {
+        sq_repro_ensure_foreground(hwnd);
+    }
     if prev == vk {
         return;
     }

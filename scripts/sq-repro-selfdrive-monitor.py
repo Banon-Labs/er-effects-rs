@@ -31,10 +31,12 @@ DEPLOY_DLL_WSL = os.path.join(DEPLOY_DIR_WSL, "er_effects_rs.dll")
 DEPLOY_DLL_WIN = r"C:\Users\choza\er-effects-live\er_effects_rs.dll"
 MARKERS = [
     os.path.join(GAMEDIR, "er-effects-system-quit-repro.txt"),
-    os.path.join(GAMEDIR, "er-effects-system-quit-allow-profile-load.txt"),
-    # STAY-ACTIVE: force ER's input-accept flag every tick so menu input routes while the game window
-    # is UNFOCUSED (headless WSL launch never focuses it). Without this, native ER ignores both the
-    # fabricated XInput pad and the injected DInput keyboard -> the menu never opens.
+    # Select the PROFILE-LOAD-SWITCH mode. NOT er-effects-system-quit-allow-profile-load.txt: that
+    # opt-in makes the ProfileSelect slot-activate FORWARD to the guarded native load instead of
+    # DIRECT-ARMING the save-safe switch, so quickload_phase never advances and the switch never runs.
+    os.path.join(GAMEDIR, "er-effects-system-quit-load-switch.txt"),
+    # STAY-ACTIVE: force ER's input-accept flag every tick (headless launch leaves the window
+    # unfocused). Combined with the foreground-force + SendInput, this lets keyboard input route.
     os.path.join(GAMEDIR, "er-effects-stay-active.txt"),
 ]
 START_OFFSET = int(sys.argv[1]) if len(sys.argv) > 1 else 0
