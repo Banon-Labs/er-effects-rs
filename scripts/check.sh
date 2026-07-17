@@ -11,6 +11,7 @@ python3 "$repo_root/scripts/check-runtime-probe-contract.py" --audit
 python3 "$repo_root/scripts/test-runtime-probe-contract.py"
 python3 "$repo_root/scripts/test-er-readiness-watch.py"
 python3 "$repo_root/scripts/test-save-slot-oracle.py"
+python3 "$repo_root/scripts/test-detect-proc.py"
 python3 "$repo_root/scripts/check-autoload-happy-path.py"
 python3 "$repo_root/scripts/test-autoload-happy-path.py"
 python3 "$repo_root/scripts/check-user-release-package.py"
