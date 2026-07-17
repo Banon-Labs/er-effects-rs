@@ -133,7 +133,7 @@ pub(crate) unsafe fn submit_play_game_once(
         return false;
     }
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
+    let csfeman = cs_fe_man_ptr_or_null();
     let gm = game_man_ptr_or_null();
     let read_c30 = || {
         if gm != null {

@@ -19,6 +19,7 @@ env:
   # Commit of vswarte/fromsoftware-rs the workspace is developed against.
   # The root crate uses `../fromsoftware-rs` path dependencies, so the
   # workspace cannot even be loaded by cargo without this sibling checkout.
+  FROMSOFTWARE_RS_REPO: https://github.com/vswarte/fromsoftware-rs.git
   FROMSOFTWARE_RS_REV: 902851865d05069eda7dcfd6385c8881eadf29bf
   # Commit of eqtylab/cupcake the policy checker is built from. Also keys the
   # cache of the built binary -- bumping the rev invalidates the cache.
@@ -36,7 +37,7 @@ jobs:
 
       - name: Check out fromsoftware-rs as sibling
         run: |
-          git clone https://github.com/vswarte/fromsoftware-rs.git "$GITHUB_WORKSPACE/../fromsoftware-rs"
+          git clone "$FROMSOFTWARE_RS_REPO" "$GITHUB_WORKSPACE/../fromsoftware-rs"
           git -C "$GITHUB_WORKSPACE/../fromsoftware-rs" checkout "$FROMSOFTWARE_RS_REV"
 
       - name: Check out MinHook vendor source

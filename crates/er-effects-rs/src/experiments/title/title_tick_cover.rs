@@ -178,7 +178,7 @@ pub(crate) unsafe extern "system" fn title_setstate_trace_detour(owner: usize, s
             if let Ok(base) = game_module_base() {
                 let table = unsafe { safe_read_usize(owner + TITLE_OWNER_INSTANCE_TABLE_OFFSET) }
                     .unwrap_or(0);
-                if table == base + INNER_TITLE_STATE_TABLE_RVA {
+                if table == base + title_step_state_table_rva() {
                     let previous = TITLE_OWNER_PTR.swap(owner, Ordering::SeqCst);
                     TITLE_OWNER_SCAN_COUNTDOWN
                         .store(TITLE_OWNER_SCAN_CALL_INTERVAL, Ordering::SeqCst);
@@ -357,7 +357,7 @@ pub(crate) fn auto_confirm_tap() {
         return;
     }
     let inputmgr =
-        unsafe { safe_read_usize(base + SELECTBOT_INPUT_MANAGER_GLOBAL_RVA) }.unwrap_or(null);
+        Some(cs_menu_man_ptr_or_null()).unwrap_or(null);
     if inputmgr == null {
         return;
     }
@@ -428,7 +428,7 @@ pub(crate) unsafe fn title_boot_ready(owner: usize, base: usize) -> bool {
     };
     if committed != TITLE_STEP_MENU_JOB_WAIT
         || requested != TITLE_STEP_MENU_JOB_WAIT
-        || table != base + INNER_TITLE_STATE_TABLE_RVA
+        || table != base + title_step_state_table_rva()
         || session == null
         || dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA
         || unsafe { title_press_button_component_ready(dialog, base) }.is_none()
@@ -466,7 +466,7 @@ pub(crate) unsafe fn product_core_autoload_ready(
         unsafe { safe_read_usize(base + SESSION_SINGLETON_144588E98_RVA) }.unwrap_or(null);
     let game_data_man = game_data_man_ptr_or_null();
     let profile_summary = if game_data_man != null {
-        unsafe { safe_read_usize(game_data_man + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(null)
+        game_data_man_profile_summary_or_null()
     } else {
         null
     };
@@ -491,7 +491,7 @@ pub(crate) unsafe fn product_core_autoload_ready(
     };
     if committed != TITLE_STEP_MENU_JOB_WAIT
         || requested != TITLE_STEP_MENU_JOB_WAIT
-        || table != base + INNER_TITLE_STATE_TABLE_RVA
+        || table != base + title_step_state_table_rva()
         || session == null
         || game_data_man == null
         || profile_summary == null
@@ -952,12 +952,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         let session = unsafe { safe_read_usize(module_base + SESSION_SINGLETON_144588E98_RVA) }
             .unwrap_or(null);
         let game_data_man = game_data_man_ptr_or_null();
-        let profile_summary = if game_data_man != null {
-            unsafe { safe_read_usize(game_data_man + SLOT_MANAGER_CONTAINER_OFFSET) }
-                .unwrap_or(null)
-        } else {
-            null
-        };
+        let profile_summary = game_data_man_profile_summary_or_null();
         let iodev = unsafe { safe_read_usize(module_base + IODEV_GLOBAL_RVA) }.unwrap_or(null);
         let heap_allocator = crate::runtime_heap_allocator_ptr_or_null();
         let dialog =
@@ -997,7 +992,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         let blocker =
             if committed != TITLE_STEP_MENU_JOB_WAIT || requested != TITLE_STEP_MENU_JOB_WAIT {
                 PRODUCT_CORE_BLOCKER_TITLE_OWNER_STATE
-            } else if table != module_base + INNER_TITLE_STATE_TABLE_RVA {
+            } else if table != module_base + title_step_state_table_rva() {
                 PRODUCT_CORE_BLOCKER_TITLE_TABLE
             } else if session == null {
                 PRODUCT_CORE_BLOCKER_SESSION

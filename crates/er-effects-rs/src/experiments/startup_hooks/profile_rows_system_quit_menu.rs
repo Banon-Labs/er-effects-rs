@@ -570,7 +570,7 @@ unsafe fn system_quit_menu_window_set_visible_and_flags(
     unsafe { dtor(scratch_ptr + 0x28) };
 
     let menu_id = unsafe { safe_read_u16(window + 0x180) }.unwrap_or(u16::MAX);
-    let cs_menu_man = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(NULL);
+    let cs_menu_man = Some(cs_menu_man_ptr_or_null()).unwrap_or(NULL);
     let mut flags_before = NULL;
     let mut flags_after = NULL;
     if menu_id < 0x47 && cs_menu_man >= HEAP_LO {
@@ -1312,7 +1312,7 @@ unsafe fn sample_optionsetting_pane_visibility(base: usize, option_window: usize
     // OptionSetting MenuWindowJob::Run also fires during preload/hidden states; without this gate the
     // blank fired at +26s before the user could reproduce.
     let menu_id = unsafe { safe_read_u16(option_window + 0x180) }.unwrap_or(u16::MAX);
-    let cs_menu_man = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(0);
+    let cs_menu_man = Some(cs_menu_man_ptr_or_null()).unwrap_or(0);
     let flag = if menu_id < 0x47 && cs_menu_man >= OPTIONSETTING_WINDOW_MIN_PTR {
         unsafe { safe_read_u8(cs_menu_man + 0x90 + menu_id as usize) }.unwrap_or(0)
     } else {

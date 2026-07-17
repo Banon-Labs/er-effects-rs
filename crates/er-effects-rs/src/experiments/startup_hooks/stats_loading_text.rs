@@ -242,7 +242,7 @@ pub(crate) unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
         return None;
     };
     // ProfileSummary record: name / level / playtime (populated before the load).
-    let summary = unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(0);
+    let summary = game_data_man_profile_summary_or_null();
     let mut name = String::new();
     let mut level = 0i32;
     let mut record_play_ms = 0u32;

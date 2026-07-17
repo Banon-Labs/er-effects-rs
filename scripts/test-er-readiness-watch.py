@@ -309,6 +309,22 @@ def main() -> int:
     }
     assert watcher.telemetry_world_loaded(world_loaded_telemetry, expected_save_oracle, watcher.DEFAULT_EXPECTED_ANIMATION_ID)
     assert watcher.oracle_summary(world_loaded_telemetry, expected_save_oracle, watcher.DEFAULT_EXPECTED_ANIMATION_ID)["character_name"] == "Tester"
+    loaded_with_stale_title_gate = {
+        **world_loaded_telemetry,
+        "oracle_player_present": False,
+        "oracle_block_id_valid": False,
+        "oracle_grounded": False,
+        "player_available": True,
+        "product_autoload_armed": True,
+        "product_core_autoload_ticks": 100,
+        "product_core_ready_blocker": "title_owner_state",
+        "product_core_ready_successes": 8,
+        "autoload_attempts": 0,
+        "title_handoff_complete": False,
+    }
+    loaded_progress = watcher.autoload_progress_summary(loaded_with_stale_title_gate)
+    assert loaded_progress["player_character_loaded"] is True
+    assert loaded_progress["blocker"] == "player_character_loaded"
     assert watcher.name_empty_like("")
     assert watcher.name_empty_like("   ")
     assert watcher.name_empty_like("_")

@@ -20,16 +20,7 @@ pub(crate) fn write_save_data_snapshot_telemetry(body: &mut String) {
     };
 
     let game_data_man = crate::game_data_man_ptr_or_null();
-    let profile_summary = if game_data_man == NULL_POINTER_VALUE {
-        NULL_POINTER_VALUE
-    } else {
-        unsafe {
-            crate::experiments::safe_read_usize(
-                game_data_man + crate::SLOT_MANAGER_CONTAINER_OFFSET,
-            )
-        }
-        .unwrap_or(NULL_POINTER_VALUE)
-    };
+    let profile_summary = crate::game_data_man_profile_summary_or_null();
     let slot_active_bytes = if profile_summary == NULL_POINTER_VALUE {
         None
     } else {
@@ -434,10 +425,9 @@ pub(crate) fn append_crash_log(args: std::fmt::Arguments<'_>) {
 /// the coarse telemetry writes. Records the capture dims + neutral-color fraction, latches the two
 /// once-seen bug versions (semaphores), and RETURNS whether this capture is fit to PUBLISH.
 ///
-/// Returns `false` (do NOT publish; hold the previous frame / the loading background) only when the
-/// capture is our neutral texture. Small captures are still published: the current 56x56 native-source
-/// experiment intentionally relies on scaling a tiny real head up to the full backbuffer. Cheap: a
-/// strided sample.
+/// Returns `false` (do NOT publish; hold the previous frame / the loading background) when the capture
+/// is our neutral texture OR a too-small portrait. A <=512px capture is the old native 128-base/2x
+/// supersample path and must not be scaled up into the product loading screen. Cheap: a strided sample.
 pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
     let texels = (w as usize) * (h as usize);
     if texels == 0 || px.len() < texels * 4 {
@@ -490,13 +480,10 @@ pub(crate) fn note_ls_portrait_capture(w: u32, h: u32, px: &[u8]) -> bool {
             Ordering::SeqCst,
         );
     }
-    // Publishable unless it is our NEUTRAL texture (Bug B) -- that must never reach the loading screen.
-    // We deliberately do NOT reject the too-small case: the current experiment intentionally renders a
-    // tiny 56x56 native portrait and scales it up to test whether quality is related to choppiness.
-    // `is_small` still latches its semaphore for monitoring. Rejected frames are counted so a monitor can
-    // see the neutral-texture gate working.
-    let _ = is_small;
-    let publishable = !is_neutral;
+    // Publishable only when it is neither the NEUTRAL texture (Bug B) nor the old too-small native
+    // 128-base/2x path (Bug A). Scaling a real-but-small head up is visibly low resolution and must hold
+    // on the bridge until a full-size target-slot renderer publishes.
+    let publishable = !is_neutral && !is_small;
     if !publishable {
         LS_PORTRAIT_REJECTED_PUBLISHES.fetch_add(1, Ordering::SeqCst);
     }

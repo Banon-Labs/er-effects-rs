@@ -178,14 +178,11 @@ fn write_game_module_oracles(body: &mut String) {
         // latch, NOT "loading screen visible." `Update` copies it from `request_load_done` (raised by the
         // map-load system), so it reads true AFTER the load finishes and lingers into gameplay. Kept as a
         // telemetry field, but do not treat it as a screen-visibility signal (see CSNowLoadingHelperImp).
-        const NOW_LOADING_SINGLETON_RVA: usize = RuntimeGlobalRva::NowLoadingSingleton as usize;
         const NOW_LOADING_FLAG_OFFSET: usize =
             core::mem::offset_of!(CSNowLoadingHelperImp, load_done);
         const NOW_LOADING_BYTE_MASK: usize = u8::MAX as usize;
         let now_loading = {
-            let helper =
-                unsafe { crate::experiments::safe_read_usize(base + NOW_LOADING_SINGLETON_RVA) }
-                    .unwrap_or(NULL_PTR);
+            let helper = now_loading_helper_ptr_or_null();
             if helper == NULL_PTR {
                 READ_FAIL_SENTINEL
             } else {
@@ -620,19 +617,7 @@ fn write_game_module_oracles(body: &mut String) {
             TITLE_OVERLAY_COVER_LAST_GX_TEXTURE.load(Ordering::SeqCst);
         let title_overlay_cover_last_texture_resource =
             TITLE_OVERLAY_COVER_LAST_TEXTURE_RESOURCE.load(Ordering::SeqCst);
-        let title_logo_profile_summary = {
-            let game_data_man = crate::game_data_man_ptr_or_null();
-            if game_data_man != NULL_PTR {
-                unsafe {
-                    crate::experiments::safe_read_usize(
-                        game_data_man + SLOT_MANAGER_CONTAINER_OFFSET,
-                    )
-                }
-                .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS)
-            } else {
-                TITLE_OWNER_SCAN_START_ADDRESS
-            }
-        };
+        let title_logo_profile_summary = crate::game_data_man_profile_summary_or_null();
         let title_logo_profile_summary_ready = title_logo_profile_summary
             != TITLE_OWNER_SCAN_START_ADDRESS
             && title_logo_profile_summary != NULL_PTR;

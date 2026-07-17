@@ -769,10 +769,14 @@ def main() -> int:
     )
     require(
         "autoload_progress_summary" in watcher
+        and "telemetry_player_character_loaded" in watcher
         and '"autoload_progress"' in watcher
         and '"product_core_ready_blocker"' in watcher
+        and '"product_core_ready_last_gate_state"' in watcher
+        and '"player_character_loaded"' in watcher
         and '"product_core_autoload_ticks"' in watcher
         and 'product_core_{product_core_blocker}' in watcher
+        and 'blocker = "player_character_loaded"' in watcher
         and '"native_continue_chain_stage"' in watcher
         and '"result_action_insert_hits"' in watcher,
         "readiness watcher must report a compact autoload/native-Continue/product-core progress summary in readiness-result.json",
@@ -877,6 +881,9 @@ def main() -> int:
         and "title_langselect_ready_last_masked" in watcher
         and "title_langselect_ready_last_ret" in watcher
         and "product_core_ready_blocker" in telemetry_src
+        and "product_core_ready_current" in telemetry_src
+        and "product_core_ready_ever" in telemetry_src
+        and "product_core_ready_last_gate_state" in telemetry_src
         and "product_core_autoload_ticks" in telemetry_src,
         "DLL telemetry must expose product-core autoload tick/readiness blocker and title-owner scan evidence",
         failures,

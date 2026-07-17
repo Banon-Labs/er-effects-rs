@@ -101,14 +101,15 @@ pub(crate) const SAFE_INPUT_DIRECT_INPUT_WAIT_TICKS: u64 = 300;
 // matched the live object.
 #[repr(usize)]
 pub(crate) enum TitleSessionRva {
-    TitleOwnerVtable = 0x02b63bb0,
     SaveSafeBeginLogoSession = 0x4588e98,
     SessionA = 0x3d687a0,
     SessionB = 0x3d67bd0,
     MoveMapSession = 0x47ef360,
 }
 
-pub(crate) const TITLE_OWNER_VTABLE_RVA: usize = TitleSessionRva::TitleOwnerVtable as usize;
+pub(crate) fn title_owner_vtable_rva() -> usize {
+    TitleStep::vtable_rva() as usize
+}
 /// Partial SimpleTitleStep owner layout used by the zero-input title/menu driver.
 /// Unknown byte arrays intentionally document unmodeled in-between fields while
 /// keeping the offsets compiler-checked through `offset_of!`.
@@ -153,7 +154,9 @@ pub(crate) const TITLE_OWNER_STATE_COMMITTED_OFFSET: usize =
 /// this rejects stray .data vtable matches (e.g. the 0x1000ffc58 false positive).
 pub(crate) const TITLE_OWNER_INSTANCE_TABLE_OFFSET: usize =
     core::mem::offset_of!(TitleOwnerLayout, instance_table);
-pub(crate) const INNER_TITLE_STATE_TABLE_RVA: usize = 0x3d71580;
+pub(crate) fn title_step_state_table_rva() -> usize {
+    TitleStep::state_table_rva() as usize
+}
 pub(crate) const TITLE_OWNER_SCAN_ALIGNMENT: usize = core::mem::align_of::<usize>();
 pub(crate) const TITLE_OWNER_SCAN_MAX_ADDRESS: usize =
     (true as usize) << (usize::BITS as usize - (u16::BITS as usize + true as usize));
@@ -354,7 +357,6 @@ pub(crate) const TITLE_GFX_VISIBLE_TITLE_FADEIN_CALLER_RVA: usize = 0x744e02;
 /// the user-visible flash/glare during the autoload transition. Keep the name behavioral: the
 /// underlying Scaleform object identity is still unknown.
 pub(crate) const TITLE_05_000_FADEIN_FLASH_VISIBLE_ORDINAL: usize = 2;
-pub(crate) const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
 /// OptionSetting tab-select VISIBILITY pass `FUN_14093b850` (deobf 0x93b760):
 /// `fn(CompositeOptionSettingDialog* composite, int tabIndex, u8* r8, u8* r9)`. It sets the current
 /// pane (`composite+0xb8 = cache[tabIndex]`, building via the switch dispatch only if the cache slot is

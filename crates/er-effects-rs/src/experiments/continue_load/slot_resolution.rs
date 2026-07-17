@@ -15,7 +15,7 @@ pub(crate) unsafe fn save_load_watchdog() {
         return;
     }
     let summary =
-        unsafe { safe_read_usize(gdm + crate::SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(NULL);
+        game_data_man_profile_summary_or_null();
     if summary == NULL {
         return; // profile summary not loaded yet -> still booting, do not count
     }
@@ -169,7 +169,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         // idempotent. Skip if ProfileSummary is not resolvable yet.
         let gdm_for_mark = game_data_man_ptr_or_null();
         let summary = if gdm_for_mark != NULL {
-            unsafe { safe_read_usize(gdm_for_mark + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(NULL)
+            game_data_man_profile_summary_or_null()
         } else {
             NULL
         };
@@ -382,7 +382,7 @@ pub(crate) unsafe fn profile_slot_fingerprint(slot: i32) -> (bool, i32, u32, usi
         return (false, BAD_I32, ZERO_U32, NAME_LEN_NONE);
     }
     let profile_summary =
-        unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(NULL);
+        game_data_man_profile_summary_or_null();
     if profile_summary == NULL {
         return (false, BAD_I32, ZERO_U32, NAME_LEN_NONE);
     }
@@ -461,7 +461,7 @@ pub(crate) unsafe fn requested_slot_identity(slot: i32, c30: i32) -> RequestedSl
     let pgd =
         unsafe { safe_read_usize(gdm + GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET) }.unwrap_or(NULL);
     let profile_summary =
-        unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(NULL);
+        game_data_man_profile_summary_or_null();
     result.profile_summary = profile_summary;
     if pgd == NULL || profile_summary == NULL {
         return result;

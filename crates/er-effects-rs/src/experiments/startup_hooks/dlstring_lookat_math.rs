@@ -202,8 +202,10 @@ unsafe fn sample_loading_screen_bar(this: usize) {
     LOADING_SCREEN_BAR_PROGRESS_PERMILLE.store(progress_pm, Ordering::SeqCst);
     let finish_sent = unsafe { safe_read_u8(this + LOADING_SCREEN_FINISH_SENT_OFFSET) }
         .unwrap_or(0) as usize;
-    let prev_finish_sent = LOADING_SCREEN_CLOSE_SENT.swap(finish_sent, Ordering::SeqCst);
-    if enabled != 0 && max != 0 && current >= max {
+    let bar_terminal = enabled != 0 && max != 0 && current >= max;
+    let qualified_finish_sent = (finish_sent != 0 && bar_terminal) as usize;
+    let prev_finish_sent = LOADING_SCREEN_CLOSE_SENT.swap(qualified_finish_sent, Ordering::SeqCst);
+    if bar_terminal {
         let hits = LOADING_SCREEN_BAR_FINAL_HITS.fetch_add(1, Ordering::SeqCst) + 1;
         if hits <= 4 || hits.is_power_of_two() {
             append_autoload_debug(format_args!(
@@ -212,7 +214,17 @@ unsafe fn sample_loading_screen_bar(this: usize) {
             ));
         }
     }
-    if finish_sent != 0 && prev_finish_sent == 0 {
+    if finish_sent != 0 && !bar_terminal {
+        static NONTERMINAL_FINISH_PULSE_LOGS: std::sync::atomic::AtomicUsize =
+            std::sync::atomic::AtomicUsize::new(0);
+        let n = NONTERMINAL_FINISH_PULSE_LOGS.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 4 || n.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "loading-bar: ignored nonterminal LoadingScreen finish/result pulse #{n} frame={current}/{max} progress={progress_pm}permille this=0x{this:x}"
+            ));
+        }
+    }
+    if qualified_finish_sent != 0 && prev_finish_sent == 0 {
         let hits = LOADING_SCREEN_CLOSE_SENT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
         append_autoload_debug(format_args!(
             "loading-bar: native LoadingScreen finish/result sent (hits={hits}, frame={current}/{max}, progress={progress_pm}permille, this=0x{this:x})"

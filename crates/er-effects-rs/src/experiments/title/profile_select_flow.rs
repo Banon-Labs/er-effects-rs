@@ -393,7 +393,7 @@ pub(crate) unsafe fn title_observe_tick(module_base: usize, tick: u64) {
             }
         }
     }
-    let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
+    let csfeman = cs_fe_man_ptr_or_null();
     let session = unsafe { *((module_base + SESSION_SINGLETON_RVA) as *const usize) };
     let gm = game_man_ptr_or_null();
     let read_gm = |off: usize| {
@@ -628,7 +628,7 @@ pub(crate) unsafe fn title_accept_tick(module_base: usize, tick: u64, do_write: 
     // its full-memory VirtualQuery+deref walk raced the booting game (region freed
     // mid-scan -> AV, the boot-crash). The autoload needs none of it -- the movie
     // singleton and GameMan are fixed globals.
-    let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
+    let csfeman = cs_fe_man_ptr_or_null();
     let latch = unsafe { *((module_base + TITLE_ACCEPT_LATCH_RVA) as *const u8) };
     let movie = unsafe { *((module_base + MOVIE_SINGLETON_RVA) as *const usize) };
     let skip = unsafe { *((module_base + MOVIE_SKIP_FLAG_RVA) as *const u8) };
@@ -701,7 +701,7 @@ pub(crate) unsafe fn native_arm_loop_tick(module_base: usize, slot: i32, tick: u
     let load_in_progress =
         unsafe { *((game_man + GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET) as *const u8) };
     let armed = unsafe { *((game_man + GAME_MAN_ARM_FLAG_B72_OFFSET) as *const u8) };
-    let csfeman = unsafe { *((module_base + CSFEMAN_SINGLETON_RVA) as *const usize) };
+    let csfeman = cs_fe_man_ptr_or_null();
     if load_in_progress == TITLE_NATIVE_JOB_TASK_DATA_ZERO {
         // Re-arm each frame: persist the slot against the title's reset, set latch.
         let set_save_slot: unsafe extern "system" fn(i32) =
@@ -729,11 +729,10 @@ pub(crate) unsafe fn arm_precondition_probe(module_base: usize, tick: u64) {
     {
         return;
     }
-    let read_ptr = |rva: usize| unsafe { *((module_base + rva) as *const usize) };
     let game_man = game_man_ptr_or_null();
     let slot_mgr = game_data_man_ptr_or_null();
-    let csfeman = read_ptr(CSFEMAN_SINGLETON_RVA);
-    let input_mgr = read_ptr(TITLE_INPUT_MANAGER_RVA);
+    let csfeman = cs_fe_man_ptr_or_null();
+    let input_mgr = cs_menu_man_ptr_or_null();
     let latch = unsafe { *((module_base + SELECTBOT_LOAD_GATE_RVA) as *const u8) };
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let gm_byte = |off: usize| {
@@ -752,8 +751,8 @@ pub(crate) unsafe fn arm_precondition_probe(module_base: usize, tick: u64) {
     };
     let (slot_data, slot_container) = if slot_mgr != null {
         (
-            unsafe { *((slot_mgr + SLOT_MANAGER_DATA_OFFSET) as *const usize) },
-            unsafe { *((slot_mgr + SLOT_MANAGER_CONTAINER_OFFSET) as *const usize) },
+            game_data_man_main_player_game_data_or_null(),
+            game_data_man_profile_summary_or_null(),
         )
     } else {
         (null, null)
@@ -768,103 +767,4 @@ pub(crate) unsafe fn arm_precondition_probe(module_base: usize, tick: u64) {
         gm_i32(GAME_MAN_REQUESTED_SLOT_B78_OFFSET),
         gm_byte(GAME_MAN_FLAG_BC4_OFFSET),
     ));
-}
-pub(crate) unsafe fn find_title_owner_by_vtable(module_base: usize) -> Option<*mut u8> {
-    TITLE_OWNER_SCAN_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
-    let target_vtable = module_base.checked_add(TITLE_OWNER_VTABLE_RVA)?;
-    let mut scan_buf = vec![MOVIE_SKIP_FLAG_CLEAR; SCAN_CHUNK_SIZE];
-    let mut address = TITLE_OWNER_SCAN_START_ADDRESS;
-    while address < TITLE_OWNER_SCAN_MAX_ADDRESS {
-        let mut info = MEMORY_BASIC_INFORMATION::default();
-        let queried = unsafe {
-            VirtualQuery(
-                Some(address as *const c_void),
-                &mut info,
-                std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
-            )
-        };
-        if queried == TITLE_OWNER_QUERY_FAILED_BYTES {
-            break;
-        }
-
-        let base = info.BaseAddress as usize;
-        let size = info.RegionSize;
-        let next = base.saturating_add(size);
-        let state = info.State.0;
-        let protect = info.Protect.0;
-        if state == MEM_COMMIT_NUMERIC
-            && protect & (PAGE_NOACCESS_NUMERIC | PAGE_GUARD_NUMERIC) == PAGE_PROTECTION_NO_FLAGS
-            && size >= TITLE_OWNER_STATE_OFFSET + std::mem::size_of::<i32>()
-        {
-            // Read the region in chunks via ReadProcessMemory (a chunk freed by
-            // the booting game returns FALSE instead of faulting), then scan each
-            // buffer in-process. One syscall per 64KB keeps the scan fast.
-            let mut region_off = TITLE_OWNER_SCAN_START_ADDRESS;
-            while region_off < size {
-                let chunk = (size - region_off).min(SCAN_CHUNK_SIZE);
-                let chunk_base = base + region_off;
-                let mut read: usize = TITLE_OWNER_SCAN_START_ADDRESS;
-                let ok = unsafe {
-                    ReadProcessMemory(
-                        CURRENT_PROCESS_PSEUDO_HANDLE,
-                        chunk_base as *const c_void,
-                        scan_buf.as_mut_ptr() as *mut c_void,
-                        chunk,
-                        &mut read,
-                    )
-                };
-                if ok != HOOK_FALSE_RETURN as i32 && read >= std::mem::size_of::<usize>() {
-                    let mut i = TITLE_OWNER_SCAN_START_ADDRESS;
-                    while i + std::mem::size_of::<usize>() <= read {
-                        let vtable = usize::from_le_bytes(
-                            scan_buf[i..i + std::mem::size_of::<usize>()]
-                                .try_into()
-                                .unwrap(),
-                        );
-                        if vtable == target_vtable {
-                            TITLE_OWNER_SCAN_VTABLE_HITS.fetch_add(1, Ordering::SeqCst);
-                            let cursor = chunk_base + i;
-                            TITLE_OWNER_SCAN_LAST_CANDIDATE.store(cursor, Ordering::SeqCst);
-                            // Validate the per-instance state-table pointer (rejects
-                            // the stray .data match 0x1000ffc58); fault-tolerant.
-                            let instance_table = unsafe {
-                                safe_read_usize(cursor + TITLE_OWNER_INSTANCE_TABLE_OFFSET)
-                            };
-                            let state_value =
-                                unsafe { safe_read_i32(cursor + TITLE_OWNER_STATE_OFFSET) };
-                            TITLE_OWNER_SCAN_LAST_TABLE.store(
-                                instance_table.unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS),
-                                Ordering::SeqCst,
-                            );
-                            TITLE_OWNER_SCAN_LAST_STATE_BITS.store(
-                                state_value.map_or(usize::MAX, |s| s as u32 as usize),
-                                Ordering::SeqCst,
-                            );
-                            let table_ok =
-                                instance_table == Some(module_base + INNER_TITLE_STATE_TABLE_RVA);
-                            let state_ok = state_value.is_some_and(|s| {
-                                (TITLE_OWNER_MIN_STATE..=TITLE_OWNER_MAX_STATE).contains(&s)
-                            });
-                            if table_ok && state_ok {
-                                return Some(cursor as *mut u8);
-                            }
-                            if !table_ok {
-                                TITLE_OWNER_SCAN_TABLE_REJECTS.fetch_add(1, Ordering::SeqCst);
-                            } else if !state_ok {
-                                TITLE_OWNER_SCAN_STATE_REJECTS.fetch_add(1, Ordering::SeqCst);
-                            }
-                        }
-                        i += TITLE_OWNER_SCAN_ALIGNMENT;
-                    }
-                }
-                region_off = region_off.saturating_add(chunk);
-            }
-        }
-
-        if next <= address {
-            break;
-        }
-        address = next;
-    }
-    None
 }

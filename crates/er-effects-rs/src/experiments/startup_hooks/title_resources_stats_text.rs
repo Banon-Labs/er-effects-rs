@@ -371,7 +371,7 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook
     }
     let base = game_module_base().unwrap_or(null);
     let cs_menu_man = if base != null {
-        unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(null)
+        Some(cs_menu_man_ptr_or_null()).unwrap_or(null)
     } else {
         null
     };

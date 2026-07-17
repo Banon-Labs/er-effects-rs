@@ -160,7 +160,7 @@ pub(crate) unsafe fn own_stepper_direct_build(owner: usize, base: usize) {
     let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
     let gdm = game_data_man_ptr_or_null();
     let profile_summary = if gdm != NULL {
-        unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(NULL)
+        game_data_man_profile_summary_or_null()
     } else {
         NULL
     };
@@ -366,7 +366,7 @@ pub(crate) unsafe fn cold_char_mount_drive(base: usize, gm: usize, want_slot: i3
         const SLOT_ACTIVE_BYTE_BASE: usize = 0x8;
         let game_data_man = game_data_man_ptr_or_null();
         let profile_summary = if game_data_man != null {
-            unsafe { *((game_data_man + SLOT_MANAGER_CONTAINER_OFFSET) as *const usize) }
+            game_data_man_profile_summary_or_null()
         } else {
             null
         };

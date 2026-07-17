@@ -185,7 +185,7 @@ pub(crate) unsafe fn system_quit_open_save_picker_menu(action_obj: usize) -> boo
     SAVE_PICKER_ACTION_OBJ.store(action_obj, Ordering::SeqCst);
     SAVE_PICKER_REOPEN_PENDING.store(0, Ordering::SeqCst);
     SAVE_PICKER_OPEN_SLOTS_PENDING.store(0, Ordering::SeqCst);
-    let opened = unsafe { system_quit_open_profile_load_dialog(action_obj) };
+    let opened = unsafe { system_quit_submit_profile_load_dialog(action_obj) };
     if !opened {
         // Roll back: restore rows + drop the model so the System menu stays coherent.
         unsafe { system_quit_save_swap_restore_profile_summary("save-picker-open-failed") };
@@ -341,7 +341,7 @@ pub(crate) unsafe fn save_picker_menu_pump_resubmit() -> bool {
     let reopen_as_picker = SAVE_PICKER_REOPEN_PENDING.load(Ordering::SeqCst) != 0;
     SAVE_PICKER_REOPEN_PENDING.store(0, Ordering::SeqCst);
     SAVE_PICKER_OPEN_SLOTS_PENDING.store(0, Ordering::SeqCst);
-    let opened = unsafe { system_quit_open_profile_load_dialog(action_obj) };
+    let opened = unsafe { system_quit_submit_profile_load_dialog(action_obj) };
     if opened {
         SAVE_PICKER_RESUBMIT_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(

@@ -413,7 +413,7 @@ pub(crate) fn render_liveness_probe() {
     let Ok(base) = game_module_base() else {
         return;
     };
-    let csfeman = unsafe { *((base + CSFEMAN_SINGLETON_RVA) as *const usize) };
+    let csfeman = cs_fe_man_ptr_or_null();
     let latch = unsafe { *((base + TITLE_ACCEPT_LATCH_RVA) as *const u8) };
     append_autoload_debug(format_args!(
         "render_probe: frame={frame} csfeman=0x{csfeman:x} latch={latch}"

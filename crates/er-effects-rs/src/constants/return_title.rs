@@ -5,9 +5,7 @@
 // quit-to-title -> GameMan.save_requested flips true again (~3.6s post-load, proven by the gm-snap
 // trace) -> a second save + SetState(2) bounces the freshly-loaded world back to the title. We clear
 // both once the reload commits (continue_confirm), which is after the teardown they were needed for.
-/// (`CS_MENU_MAN_GLOBAL_RVA` = `[GLOBAL_CSMenuMan]` pointer global is already defined above.)
-/// `CSMenuManImp::menuData` pointer at CSMenuMan+0x8.
-pub(crate) const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
+/// Use the typed fromsoftware-rs `CSMenuManImp::menu_data` field for the menuData pointer.
 /// The "return-to-title / menu-rebuild requested" byte at menuData+0x5d.
 pub(crate) const CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET: usize = 0x5d;
 /// `DAT_143d6c5e8` companion rebuild flag (data RVA). No readers found in the dump, but cleared for

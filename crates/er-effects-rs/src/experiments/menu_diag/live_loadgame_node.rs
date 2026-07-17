@@ -141,7 +141,7 @@ pub(crate) unsafe fn fire_live_loadgame_node(
     let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
     let gdm = game_data_man_ptr_or_null();
     let profile_summary = if gdm != NULL {
-        unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(NULL)
+        game_data_man_profile_summary_or_null()
     } else {
         NULL
     };
