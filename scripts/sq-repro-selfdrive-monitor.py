@@ -15,8 +15,10 @@ verdict (tear-down-on-insight) and removes the markers so the next manual launch
 
 Usage: python3 scripts/sq-repro-selfdrive-monitor.py <log_start_offset> [cap_seconds]
 """
+import ctypes
 import os
 import re
+import select
 import shutil
 import subprocess
 import sys
@@ -43,6 +45,39 @@ START_OFFSET = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 CAP_SECONDS = int(sys.argv[2]) if len(sys.argv) > 2 else 360
 POLL = 3.0
 ME3_STDOUT = "/tmp/sq-repro-me3-stdout.txt"  # data artifact (allowed in /tmp)
+
+# Deterministic readiness (repo no-sleep policy): block on inotify game-dir file-change events with a
+# bounded select() timeout as the hard safety cap -- never a bare sleep. The DLL debug log grows inside
+# GAMEDIR, so an inotify MODIFY/CREATE event is the real readiness signal (new log bytes to scan); POLL
+# only bounds how long we block before re-checking process liveness / the RAM-derived semaphore.
+_IN_MODIFY = 0x00000002
+_IN_CREATE = 0x00000100
+_IN_MOVED_TO = 0x00000080
+_IN_CLOSE_WRITE = 0x00000008
+_inotify_fd = -1
+try:
+    _libc = ctypes.CDLL("libc.so.6", use_errno=True)
+    _inotify_fd = _libc.inotify_init1(0)
+    if _inotify_fd >= 0:
+        _libc.inotify_add_watch(
+            _inotify_fd,
+            GAMEDIR.encode("utf-8"),
+            _IN_MODIFY | _IN_CREATE | _IN_MOVED_TO | _IN_CLOSE_WRITE,
+        )
+except OSError:
+    _inotify_fd = -1
+
+
+def wait_for_change(timeout):
+    # Return when a game-dir file changes (log append) OR the timeout safety cap elapses, then the loop
+    # re-reads the log + re-checks process liveness. Readiness is the inotify event; the cap only bounds it.
+    watch = [_inotify_fd] if _inotify_fd >= 0 else []
+    ready, _, _ = select.select(watch, [], [], timeout)
+    if ready:
+        try:
+            os.read(_inotify_fd, 65536)  # drain events; we re-read the log from the saved offset anyway
+        except OSError:
+            pass
 
 
 def game_alive():
@@ -138,7 +173,7 @@ def main():
         if game_seen and not game_alive():
             verdict = "GAME EXITED (crash or close)"
             break
-        time.sleep(POLL)
+        wait_for_change(POLL)
 
     kill("eldenring.exe")
     kill("me3.exe")
