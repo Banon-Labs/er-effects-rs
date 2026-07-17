@@ -10,9 +10,37 @@
 pub(crate) const CS_MENU_MAN_MENU_DATA_OFFSET: usize = 0x8;
 /// The "return-to-title / menu-rebuild requested" byte at menuData+0x5d.
 pub(crate) const CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET: usize = 0x5d;
+/// The "ending request" flag at menuData+0x5e that STEP_MoveMap's advancer FUN_140afa7c0 WRITES each
+/// frame (`GLOBAL_CSMenuMan->menuData->field_0x5e = cVar10`). cVar10 = "an ending/load-completion
+/// condition holds" (return-title 0x5d, warp, session WaitReload, deadReset==2, force-flag 0x3d856a0,
+/// GameMan checks, state==8). STEP_MoveMap only walks the child toward its -1 terminal when this is 1;
+/// if it stays 0 on a re-load, the child parks at resident step 18 and the InGameStep parent
+/// (finished == MoveMapStep+0x48==-1) waits forever = the 2nd (runtime-accumulation) soft-lock. The
+/// linchpin diagnostic: read 0x5e (the output) + 0x5d and the force-flag (inputs) at the lock.
+pub(crate) const CS_MENU_DATA_ENDING_FLAG_5E_OFFSET: usize = 0x5e;
+/// The force/ending latch global (BOOL_143d856a0) = one of the `cVar10` ending-request inputs.
+pub(crate) const ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA: usize = 0x3d856a0;
+/// The remaining `cVar10` ending-request INPUTS that read GameMan directly (the load-in signals a
+/// normal load sets so STEP_MoveMap walks the child to its -1 terminal): GameMan+0xb7c (FUN_140679520),
+/// GameMan+0xb7d (FUN_140679530), and warpRequested at GameMan+0x10 (GameManIsWarpRequested). On the
+/// stuck re-load one of these is 0 when it should be 1 -- that's the stale runtime flag to reset.
+pub(crate) const GAME_MAN_ENDING_FLAG_B7C_OFFSET: usize = 0xb7c;
+pub(crate) const GAME_MAN_ENDING_FLAG_B7D_OFFSET: usize = 0xb7d;
+pub(crate) const GAME_MAN_WARP_REQUESTED_10_OFFSET: usize = 0x10;
 /// `DAT_143d6c5e8` companion rebuild flag (data RVA). No readers found in the dump, but cleared for
 /// symmetry so we fully undo what the final functor set.
 pub(crate) const RETURN_TITLE_REBUILD_FLAG_DAT_RVA: usize = 0x3d6c5e8;
+/// `CSMenuManImp::disableSaveMenu` BOOL at CSMenuMan+0x13c. RE of the 1.16.1 dump (2026-07-16, persistent
+/// Ghidra project): `CanShowSaveMenu` (dump 0x14080d150) returns `GLOBAL_CSMenuMan->disableSaveMenu != 0`,
+/// and the native quit-save (GameMan `bc4` 1->2 pump `FUN_14067b840`/`FUN_14067ba30`, and `ShouldSave`
+/// 0x1406794c0) ABORTS -- clearing `saveRequested` -- the instant this byte is non-zero. `bc4`
+/// (GameMan+0xbc4) is the return-title predicate: REQUEST `FUN_14067a490` sets it 1, the quit-save pumps
+/// 1->2, `FUN_14067aa70` pumps 2->3, and the world only tears down once it reaches 3. On a 2nd in-process
+/// System->Quit switch `disableSaveMenu` is left set from the prior switch's menu flow, so the save never
+/// runs, `bc4` freezes at 1, and the world never tears down (the observed switch-2 soft-lock). Switch 1
+/// has it 0. We clear it while the switch is active so every switch matches switch 1. `GLOBAL_CSMenuMan`
+/// (dump 0x143d6b7b0) == our `CS_MENU_MAN_GLOBAL_RVA` base+0x3d6b7b0, so the offset is version-stable.
+pub(crate) const CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET: usize = 0x13c;
 // ---- In-game session liveness gate (the post-reload bounce decision, static RE 2026-07-02) ----
 // TitleStep state 6 (STEP_GameStepWait, dump 0x140b0ced0) exits to the quit-to-title transition
 // (SetState(2) -> BeginLogo -> BeginTitle -> MenuJobWait) the first tick it sees
@@ -62,6 +90,127 @@ pub(crate) static SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT: AtomicUsize
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_NATIVE_QUIT_ACTION_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_SUBMIT_COUNT: AtomicUsize =
     AtomicUsize::new(0);
+/// Count of frames we cleared a stale `CSMenuMan->disableSaveMenu` during an active switch (the switch-2
+/// quit-save gate; see [`CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET`]). Non-zero on a switch == that switch's
+/// quit-save was being blocked and we unblocked it (the runtime semaphore for this fix).
+pub(crate) static SYSTEM_QUIT_DISABLE_SAVE_MENU_CLEAR_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Rate-limit counter for the switch-2 save-gate diagnostic (which of the save orchestrator
+/// `FUN_140afb970`'s three gates -- force latch `0x143d856a0`, `save_state`, or the CSMenuMan menu gate
+/// `FUN_14080d660` -- is blocking the quit-save so `bc4` freezes at 1).
+pub(crate) static SYSTEM_QUIT_SAVE_GATE_DIAG_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// SWITCH-OUTCOME ORACLE (2026-07-16, user-mandated reliable semaphore). Read-only per-frame classifier of
+/// a switch/load outcome so the state is ALWAYS knowable from telemetry, never from eyeballing. `_TICK` is
+/// the frame counter since a switch was picked (if it STOPS advancing the game task froze = FROZE). `_STABLE`
+/// is consecutive frames the game's own stable-in-world condition holds (player present + requestCode==2 +
+/// in-game menu job CSMenuMan+0x798 != 0): climbing high == LOADED_STABLE; resetting to 0 after climbing ==
+/// the world dropped (BOUNCED/reload). `_MAX_STABLE` latches the peak so a later drop is still visible.
+pub(crate) static SWITCH_ORACLE_TICK: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SWITCH_ORACLE_STABLE_FRAMES: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SWITCH_ORACLE_MAX_STABLE_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// The picked slot the oracle is tracking (usize::MAX = none / classified); reset on a new pick.
+pub(crate) static SWITCH_ORACLE_TRACKED_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// InGameStep requestCode (`InGameStep + 0xd8`) values. 1 = a MoveMap (load) request is pending/in
+/// progress; 2 = STABLE IN-WORLD (the load handoff completed, the world is settled -- player present,
+/// in-game menu job populated). STEP_MoveMap_Update drains 1 -> 2 once the child finishes.
+pub(crate) const INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING: i32 = 1;
+pub(crate) const INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD: i32 = 2;
+/// 3RD-LOAD ROOT SHARPENED (Ghidra 1.16.1, 2026-07-16). The softlock parks the InGameStep at
+/// `InGameStep_StepperArray[7] = STEP_MoveMap_Update` (dump 0x140aec810). STEP_MoveMap_Update gates
+/// its advance to step 8 (STEP_MoveMap_Finish) on `FUN_140eb5550(ezChildStepBase)` == "is the
+/// MoveMapStep CHILD step finished?"; only then does it write requestCode(+0xd8)=2. On the stall the
+/// child is NON-NULL (created at step 6 STEP_MoveMap_Init) but its own step machine never reaches
+/// Finish, so requestCode stays 1 forever. So the true stall is INSIDE the MoveMapStep child's
+/// world-load. This oracle publishes the child's current internal step so the stuck point is a RAM
+/// semaphore, not an eyeball. `usize::MAX` = not sampled / no child.
+pub(crate) static SWITCH_ORACLE_MMS_STEP: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Last-seen streaming-enable bit + block count for the stall log (RAM semaphore, -1 = null chain).
+pub(crate) static SWITCH_ORACLE_MMS_B7C1: AtomicI32 = AtomicI32::new(-1);
+pub(crate) static SWITCH_ORACLE_MMS_BLOCKS: AtomicI32 = AtomicI32::new(-1);
+/// MoveMapStep internal step index -> name. Order from the InGameStep-analogue registrar labels
+/// (`u_MoveMapStep::STEP_*` at dump 0x142b5eb30..) and VALIDATED for 0..3 by the observed
+/// `mms_state 1 MsbLoad -> 2 MsbLoadWait -> 3 WorldResWait` progression (own_stepper idx6 watch).
+/// Indices >8 are best-effort (label order); the RAW index in the log is authoritative.
+/// UPPERCASE (the boot-bar 5x7 font is A-Z + space only, and it doubles as the bar's phase label).
+pub(crate) const MOVEMAPSTEP_STEP_NAMES: [&str; 21] = [
+    "BEGIN INIT",         // 0
+    "MSB LOAD",           // 1
+    "MSB LOAD WAIT",      // 2
+    "WORLD RES WAIT",     // 3  <- classic streaming-completion wait (resmgr+0xb7c1 gate)
+    "CURRENT LOD BLOCK",  // 4
+    "LEAVE SESSION WAIT", // 5  <- network/session step (stale session state suspect on a switch)
+    "SIGN IN",            // 6
+    "SIGN IN WAIT LOAD",  // 7
+    "WAIT CHR TYPE SYNC", // 8
+    "CREATE DRAW PLAN",   // 9
+    "INIT ANIM",          // 10
+    "FIXED GRID INIT",    // 11
+    "ESCAPE DEATH LOOP",  // 12
+    "HIT STABILIZE WAIT", // 13
+    "HIT STABILIZE WAIT", // 14
+    "HIT STABILIZE WAIT", // 15
+    "TEX STABILIZE WAIT", // 16
+    "HORSE WAIT",         // 17
+    "MOVE MAP",           // 18
+    "CLEANUP",            // 19
+    "FINISH",             // 20
+];
+/// Name a MoveMapStep child step index (out-of-range -> "?").
+pub(crate) fn movemapstep_step_name(idx: i32) -> &'static str {
+    if idx >= 0 && (idx as usize) < MOVEMAPSTEP_STEP_NAMES.len() {
+        MOVEMAPSTEP_STEP_NAMES[idx as usize]
+    } else {
+        "?"
+    }
+}
+/// MoveMapStep child edge-hook counters (STEP_MoveMap_Init fires when the child is created; Finish
+/// fires when the load completes). On the softlock INIT fires but FINISH never does = the semaphore.
+pub(crate) static SWITCH_ORACLE_MMS_INIT_HITS: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SWITCH_ORACLE_MMS_FINISH_HITS: AtomicUsize = AtomicUsize::new(0);
+/// The MoveMapStep child step index whose handler is `STEP_MoveMap` (dump registrar
+/// FUN_1400a40c0: MoveMapStep_StepperArray[0x12]). This is the FINAL fade/finalize step; index 19 =
+/// Cleanup, 20 = Finish follow. The 3rd-load softlock parks the child here.
+pub(crate) const MOVEMAPSTEP_STEP_MOVEMAP_INDEX: i32 = 18;
+/// MoveMapStep advance-gate byte (`field_0x4b8`). STEP_MoveMap sets the u16 at +0x4b8 to 1 each frame,
+/// then blockers knock it down; it advances only when the LOW byte (+0x4b8) stays nonzero. Low byte 0 =
+/// blocked; +0x4b9 high byte 1 with low 0 = the WorldChrMan-not-ready (`0x100`) branch fired.
+pub(crate) const MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET: usize = 0x4b8;
+pub(crate) const MOVEMAPSTEP_ADVANCE_GATE_HI_4B9_OFFSET: usize = 0x4b9;
+/// STEP_MoveMap transition state (2026-07-16): after bc4 cleared, the child still parks at step 18 with
+/// the per-frame gate (+0x4b8) ready, so the real 18->19 transition is a separate finalize condition. The
+/// FD4StepTemplate "step done, advance" flag is `field8_0x50` (STEP_WorldResWait/STEP_MoveMap_Finish set
+/// it; STEP_MoveMap's handler never does -> external/fade-driven). Read the child's next-step (+0x4c),
+/// done-flag (+0x50), the fade hold-timer (+0x270, f32 bits; only counts down while the screen fade < 1.0
+/// so a stuck-opaque fade freezes it), and the finalize counters (+0x100 field17, +0x248 field298) to
+/// name the second gate at runtime.
+pub(crate) const MOVEMAPSTEP_NEXT_STEP_4C_OFFSET: usize = 0x4c;
+pub(crate) const MOVEMAPSTEP_DONE_FLAG_50_OFFSET: usize = 0x50;
+pub(crate) const MOVEMAPSTEP_HOLD_TIMER_270_OFFSET: usize = 0x270;
+pub(crate) const MOVEMAPSTEP_COUNTDOWN_100_OFFSET: usize = 0x100;
+pub(crate) const MOVEMAPSTEP_FINALIZE_REQ_248_OFFSET: usize = 0x248;
+/// SAVE-DISABLED SWITCH COMPLETION (2026-07-16). By design the ONLY save writer is the in-game "Save
+/// Game" button; the game's quit-save on a System->Quit switch must NOT run. But the native return-title
+/// state machine advances `GameMan+0xbc4` 1->2->3 ONLY inside a successful quit-save write (dump
+/// FUN_14067b840: bc4 1->2 is welded to `cVar4 != 0`), and our final functor (title_tick_cover.rs) only
+/// fires at bc4==READY(3). So with saving disabled bc4 can never reach READY through the game and the
+/// switch stalls at STEP_MoveMap(18). We therefore drive bc4 ourselves, deterministically (no frame
+/// counters): at the return-title REQUEST we write bc4=READY(3) directly, which BOTH lets the final
+/// functor fire AND suppresses the quit-save (the orchestrator's `ShouldSave`/`FUN_140679460` require
+/// bc4 != 3), so no disk write and no "failed to save" popup. `_FORCE_READY_COUNT` = REQUEST-time
+/// bc4->READY writes. Then, because bc4 != 0 keeps the INCOMING world's STEP_MoveMap(18) advance gate
+/// cleared every frame (FUN_140679010 reads bc4), once the new character is fully streamed (b7c1=1,
+/// blocks>0) and parked at STEP_MoveMap with the final functor already fired, we clear bc4->0 so it
+/// advances 18->19->20 and the world enters. `_FINALIZE_CLEAR_COUNT` = those incoming-world bc4->0 clears.
+pub(crate) static SYSTEM_QUIT_BC4_FORCE_READY_COUNT: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static SYSTEM_QUIT_LOAD3_FINALIZE_CLEAR_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// TEARDOWN SAVE-REQUEST CLEAR (2026-07-16). The MoveMapStep ending sub-machine (FUN_140afa7c0) that
+/// walks the old world's child out of STEP_MoveMap(18) hangs at case 7 unless `ShouldSave() == false`
+/// AND `FUN_140679460() == false`. Those read `GameMan.saveRequested` (b72) and `GameMan+0xb73`, both
+/// set by our return-title REQUEST (which intends a quit-save we suppress by design). Clearing them each
+/// teardown frame makes the gate deterministically false so the world tears down with NO save. `_COUNT`
+/// = frames we cleared the flags (a switch that stalls-then-recovers shows it climbing during teardown).
+pub(crate) const GAME_MAN_SAVE_REQUESTED_B72_OFFSET: usize = 0xb72;
+pub(crate) const GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET: usize = 0xb73;
+pub(crate) static SYSTEM_QUIT_TEARDOWN_SAVEREQ_CLEAR_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_READY_BLOCK_COUNT: AtomicUsize =
     AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_DIRECT_RETURN_TITLE_CHAIN_LAST_DIALOG: AtomicUsize =

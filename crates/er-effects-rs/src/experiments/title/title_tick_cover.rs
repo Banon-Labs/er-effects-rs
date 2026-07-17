@@ -787,7 +787,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     PRODUCT_CORE_OWNER_TICKS.fetch_add(1, Ordering::SeqCst);
     PRODUCT_CORE_LAST_OWNER.store(owner, Ordering::SeqCst);
     let gm = game_man_ptr_or_null();
-    let return_title_job_predicate_bc4 = if gm != null {
+    let mut return_title_job_predicate_bc4 = if gm != null {
         unsafe { safe_read_usize(gm + GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET) }
             .map(|v| v as u32 as usize)
             .unwrap_or(usize::MAX)
@@ -796,8 +796,210 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
     };
     PRODUCT_CORE_LAST_RETURN_TITLE_JOB_PREDICATE_BC4
         .store(return_title_job_predicate_bc4, Ordering::SeqCst);
+    // (Deferred return-title-context clear experiment REMOVED 2026-07-16: it was inert -- the stuck load's
+    // menuData+0x5d is 0 to begin with, the functor never set it. The real root is the incomplete teardown
+    // functor, not our clear. See bd ending-request-fix-was-wrong / rt5d-never-set findings.)
+    // SWITCH-OUTCOME ORACLE (read-only, user-mandated reliable semaphore). Runs whenever a slot is picked,
+    // OUTSIDE the dormancy gate below, so it observes the post-commit native session too. Literals: CSMenuMan
+    // global +0x3d6b7b0, in-game menu job +0x798; InGameStep = TitleStep(owner)+0x2e8, requestCode +0xd8.
+    // The trace classifies the outcome with no eyeballs: stable_frames (player present + requestCode==2 +
+    // menu_job!=0) climbing high = LOADED_STABLE; resetting after a peak = the world DROPPED (bounce/reload);
+    // the line STOPPING = FROZE; bc4 stuck at 1 = never-tears-down freeze.
+    if slot >= OWN_STEPPER_SLOT_ZERO && gm != null {
+        let player_present = unsafe { PlayerIns::local_player_mut() }.is_ok();
+        let ig_d8 = if owner != null {
+            unsafe { safe_read_usize(owner + 0x2e8) }
+                .filter(|&ig| ig > 0x10000)
+                .and_then(|ig| unsafe { safe_read_i32(ig + 0xd8) })
+                .unwrap_or(-1)
+        } else {
+            -1
+        };
+        let menu_job = unsafe { safe_read_usize(module_base + 0x3d6b7b0) }
+            .filter(|&m| m > 0x10000)
+            .and_then(|m| unsafe { safe_read_usize(m + 0x798) })
+            .unwrap_or(0);
+        // MoveMapStep CHILD state (3rd-load root, 2026-07-16 Ghidra). InGameStep step 7
+        // STEP_MoveMap_Update loops until the MoveMapStep child's own step machine FINISHES (gate
+        // FUN_140eb5550); only then does requestCode(ig_d8) go 1->2. On the softlock the child is
+        // created (step 6 STEP_MoveMap_Init ran) but never finishes, so ig_d8 stays 1 and step 7
+        // self-loops. Read the child's internal step + world-res streaming state so the true stuck
+        // point is a RAM semaphore, not the eyeballed "stuck at LOADING SAVE" bar. All reads are
+        // safe_read (null/garbage -> None) on the game-thread tick; identical chain to submit.rs.
+        let ig_ptr = if owner != null {
+            unsafe { safe_read_usize(owner + 0x2e8) }.filter(|&v| v > 0x10000)
+        } else {
+            None
+        };
+        let mms = ig_ptr
+            .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
+            .filter(|&v| v > 0x10000);
+        let mms_step = mms
+            .and_then(|m| unsafe { safe_read_i32(m + INGAMESTEP_STEP_STATE_OFFSET) })
+            .unwrap_or(-1);
+        let mms_wrm = mms
+            .and_then(|m| unsafe { safe_read_usize(m + MOVEMAPSTEP_WORLDRES_F0_OFFSET) })
+            .filter(|&v| v > 0x10000);
+        let mms_resmgr = mms_wrm
+            .and_then(|w| unsafe { safe_read_usize(w + WORLDRES_RESMGR_10_OFFSET) })
+            .filter(|&v| v > 0x10000);
+        let mms_b7c1 = mms_resmgr
+            .and_then(|r| unsafe { safe_read_u8(r + RESMGR_STREAM_ENABLE_B7C1_OFFSET) })
+            .map(|b| b as i32)
+            .unwrap_or(-1);
+        let mms_blocks = mms_resmgr
+            .and_then(|r| unsafe { safe_read_i32(r + RESMGR_BLOCK_COUNT_B3140_OFFSET) })
+            .unwrap_or(-1);
+        // STEP_MoveMap advance gate (MoveMapStep+0x4b8 low / +0x4b9 high). lo=1 -> ready to advance;
+        // lo=0 -> blocked; lo=0,hi=1 -> WorldChrMan-not-ready (0x100). Blocked-with-bc4=1 is the softlock.
+        let mms_gate_lo = mms
+            .and_then(|m| unsafe { safe_read_u8(m + MOVEMAPSTEP_ADVANCE_GATE_LO_4B8_OFFSET) })
+            .map(|b| b as i32)
+            .unwrap_or(-1);
+        let mms_gate_hi = mms
+            .and_then(|m| unsafe { safe_read_u8(m + MOVEMAPSTEP_ADVANCE_GATE_HI_4B9_OFFSET) })
+            .map(|b| b as i32)
+            .unwrap_or(-1);
+        // STEP_MoveMap 18->19 transition state (bc4 was blocker #1; this pins blocker #2). next=next step
+        // (18 = STEP_MoveMap not requesting advance; 19 = requested but pump not committing). done50 = the
+        // FD4 "step complete" flag (must go 1 to advance). hold270 = fade hold-timer bits (frozen nonzero =
+        // fade stuck opaque). cd100/req248 = finalize counters.
+        let mms_next = mms
+            .and_then(|m| unsafe { safe_read_i32(m + MOVEMAPSTEP_NEXT_STEP_4C_OFFSET) })
+            .unwrap_or(-1);
+        let mms_done = mms
+            .and_then(|m| unsafe { safe_read_u8(m + MOVEMAPSTEP_DONE_FLAG_50_OFFSET) })
+            .map(|b| b as i32)
+            .unwrap_or(-1);
+        let mms_hold = mms
+            .and_then(|m| unsafe { safe_read_i32(m + MOVEMAPSTEP_HOLD_TIMER_270_OFFSET) })
+            .unwrap_or(0);
+        let mms_cd = mms
+            .and_then(|m| unsafe { safe_read_i32(m + MOVEMAPSTEP_COUNTDOWN_100_OFFSET) })
+            .unwrap_or(-1);
+        let mms_req248 = mms
+            .and_then(|m| unsafe { safe_read_i32(m + MOVEMAPSTEP_FINALIZE_REQ_248_OFFSET) })
+            .unwrap_or(-1);
+        // ENDING-REQUEST diagnostic (2nd runtime-accum lock, 2026-07-16). STEP_MoveMap walks the child
+        // to its -1 terminal only while the advancer FUN_140afa7c0 sets menuData+0x5e (cVar10 = an
+        // ending/load-completion condition). If 0x5e stays 0 on a re-load, the child parks at resident
+        // step 18 and the InGameStep parent (finished == MoveMapStep+0x48==-1) waits forever. Read the
+        // OUTPUT (0x5e) + the two easy INPUTS (return-title byte 0x5d, force-flag 0x3d856a0) + the PARENT
+        // step (InGameStep+0x48/+0x4c) so the next repro names why the ending request never fires.
+        let ig_pstep = ig_ptr
+            .and_then(|ig| unsafe { safe_read_i32(ig + INGAMESTEP_STEP_STATE_OFFSET) })
+            .unwrap_or(-1);
+        let ig_pnext = ig_ptr
+            .and_then(|ig| unsafe { safe_read_i32(ig + INGAMESTEP_NEXT_STATE_OFFSET) })
+            .unwrap_or(-1);
+        let menudata = unsafe { safe_read_usize(module_base + CS_MENU_MAN_GLOBAL_RVA) }
+            .filter(|&m| m > 0x10000)
+            .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
+            .filter(|&d| d > 0x10000);
+        let md_5d = menudata
+            .and_then(|d| unsafe { safe_read_u8(d + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) })
+            .map(|b| b as i32)
+            .unwrap_or(-1);
+        let md_5e = menudata
+            .and_then(|d| unsafe { safe_read_u8(d + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) })
+            .map(|b| b as i32)
+            .unwrap_or(-1);
+        let ending_force = unsafe { safe_read_u8(module_base + ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA) }
+            .map(|b| b as i32)
+            .unwrap_or(-1);
+        // Remaining cVar10 ending-request INPUTS read straight off GameMan (the load-in signals): 0xb7c,
+        // 0xb7d, warpRequested@0x10. On a good load one is 1; on the stuck re-load they should reveal the
+        // stale one. gm is the live GameMan ptr from the outer guard; safe_read guards a bad offset.
+        let gb7c = unsafe { safe_read_u8(gm + GAME_MAN_ENDING_FLAG_B7C_OFFSET) }
+            .map(|b| b as i32)
+            .unwrap_or(-1);
+        let gb7d = unsafe { safe_read_u8(gm + GAME_MAN_ENDING_FLAG_B7D_OFFSET) }
+            .map(|b| b as i32)
+            .unwrap_or(-1);
+        let gwarp = unsafe { safe_read_u8(gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) }
+            .map(|b| b as i32)
+            .unwrap_or(-1);
+        let mms_disp = mms.unwrap_or(0);
+        let mms_step_pub = if mms.is_some() && mms_step >= 0 {
+            mms_step as usize
+        } else {
+            usize::MAX
+        };
+        let prev_mms_step = SWITCH_ORACLE_MMS_STEP.swap(mms_step_pub, Ordering::SeqCst);
+        let mms_step_changed = prev_mms_step != mms_step_pub;
+        SWITCH_ORACLE_MMS_B7C1.store(mms_b7c1, Ordering::SeqCst);
+        SWITCH_ORACLE_MMS_BLOCKS.store(mms_blocks, Ordering::SeqCst);
+        let bc4v = return_title_job_predicate_bc4;
+        let stable =
+            player_present && ig_d8 == INGAMESTEP_REQUEST_CODE_STABLE_IN_WORLD && menu_job != 0;
+        let sf = if stable {
+            let v = SWITCH_ORACLE_STABLE_FRAMES.fetch_add(1, Ordering::SeqCst) + 1;
+            SWITCH_ORACLE_MAX_STABLE_FRAMES.fetch_max(v, Ordering::SeqCst);
+            v
+        } else {
+            SWITCH_ORACLE_STABLE_FRAMES.store(0, Ordering::SeqCst);
+            0
+        };
+        let peak = SWITCH_ORACLE_MAX_STABLE_FRAMES.load(Ordering::SeqCst);
+        let n = SWITCH_ORACLE_TICK.fetch_add(1, Ordering::SeqCst) + 1;
+        let dropped = !stable && peak >= 30;
+        if n <= 10 || n % 30 == 0 || matches!(sf, 1 | 60 | 300 | 600) || dropped || mms_step_changed {
+            let cls = if peak >= 300 {
+                "LOADED_STABLE"
+            } else if dropped {
+                "DROPPED(bounce/reload)"
+            } else if bc4v == 1 && ig_d8 == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING && mms.is_some() {
+                // bc4=1 + requestCode=1 + a live MoveMapStep child = the 3rd-load softlock: InGameStep
+                // step 7 waiting on the child that never finishes. mms_step names the exact stuck point.
+                "MMS-CHILD-STALL(step7 waiting on child)"
+            } else if bc4v == 1 {
+                "bc4=1(save/teardown pending)"
+            } else {
+                "in-progress"
+            };
+            append_autoload_debug(format_args!(
+                "SWITCH-ORACLE #{n}: slot={slot} bc4={bc4v} player={player_present} ig_d8={ig_d8} pstep={ig_pstep}/{ig_pnext} menu_job=0x{menu_job:x} stable_frames={sf} peak={peak} mms=0x{mms_disp:x} mms_step={mms_step}({}) next={mms_next} done50={mms_done} gate={mms_gate_lo}/{mms_gate_hi} end5e={md_5e} rt5d={md_5d} force={ending_force} b7c={gb7c} b7d={gb7d} warp={gwarp} hold270=0x{mms_hold:x} cd100={mms_cd} req248={mms_req248} b7c1={mms_b7c1} blocks={mms_blocks} phase={} -- {cls}",
+                movemapstep_step_name(mms_step),
+                SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+            ));
+        }
+        // RESTORE bc4 AFTER THE FUNCTOR (save-disabled switch completion, 2026-07-16). We forced bc4=READY(3)
+        // at the return-title REQUEST purely to fire the final functor without a quit-save. bc4=3 has done its
+        // one job the moment the functor has fired (FINAL_FUNCTOR_CALL_COUNT>0), so put it straight back to 0
+        // -- leaving it at 3 would keep clearing the incoming world's STEP_MoveMap advance gate (+0x4b8)
+        // (FUN_140679010 reads bc4). This is NOT the step-18 stall fix: runtime (2026-07-16) proved the child
+        // parks at STEP_MoveMap with the +0x4b8 gate ALREADY ready (1/0) at bc4=0 and cd100 (field17_0x100)
+        // frozen -- i.e. the child's step handler is not ticking at all, a task-starvation freeze, NOT a bc4
+        // gate. So this only keeps bc4 from interfering; the real freeze is handled elsewhere. Deterministic
+        // (keyed on the functor one-shot), fires effectively once. Game-thread; `gm` non-null per outer guard.
+        if bc4v == GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY
+            && SYSTEM_QUIT_RETURN_TITLE_FINAL_FUNCTOR_CALL_COUNT.load(Ordering::SeqCst) > 0
+        {
+            unsafe {
+                *((gm + GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET) as *mut i32) = 0;
+            }
+            return_title_job_predicate_bc4 = 0;
+            let n = SYSTEM_QUIT_LOAD3_FINALIZE_CLEAR_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+            if n <= 5 || n % 60 == 0 {
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: restored bc4->0 after final functor fired #{n} (bc4=READY had done its one job: firing the functor; cleared so it does not gate the incoming world's STEP_MoveMap)"
+                ));
+            }
+        }
+    }
+    // POST-COMMIT DORMANCY (2026-07-16, runtime-confirmed instability). This whole per-frame switch block
+    // (b78 re-arm guard + disableSaveMenu clear + save-gate diagnostic) touches game state every frame while
+    // the switch is active. Once the picked slot's load has COMMITTED (FRESH_DESER_DONE=1 -- set by the
+    // feed/continue_confirm, cleared only when a NEW switch arms), the native continue_confirm->SetState5
+    // stream is establishing the in-game session on the game's worker threads; our per-frame writes racing
+    // that stream is the most likely cause of the non-deterministic Windows-native instability (bc4-freeze /
+    // post-load bounce / stream hard-freeze -- all after the char has already fed correctly). So go FULLY
+    // dormant here once committed: emit nothing, write nothing, let the native session settle. Inert before
+    // the feed (latch 0 -> block runs and fires the initial load exactly as before); re-enabled for the next
+    // genuine pick when the arm clears the latch.
     if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
         >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+        && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0
         && gm != null
         && slot >= OWN_STEPPER_SLOT_ZERO
     {
@@ -812,12 +1014,94 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // b78=slot so the clean-title autoload loads the picked slot via that same b78 -> RequestLoadSlot
         // path. See bd system-quit-loadjob-success-commits-phantom-load-2026-07-01.
         let world_up = unsafe { PlayerIns::local_player_mut() }.is_ok();
-        let b78_val = if world_up {
+        // SWITCH-2 SOFT-LOCK FIX (game-task path, 2026-07-16). RE of the 1.16.1 dump (Ghidra persistent
+        // project) proved the switch-2 freeze is the native quit-save aborting on a stale
+        // `CSMenuMan->disableSaveMenu` (+0x13c): `ShouldSave` (dump 0x1406794c0) does
+        // `if (CanShowSaveMenu()) saveRequested = 0;` and `CanShowSaveMenu` (dump 0x14080d150) returns
+        // `GLOBAL_CSMenuMan->disableSaveMenu != 0`, so while that byte is set the quit-save returns 0
+        // regardless of saveRequested/menu-gate/save_state -- `bc4` never pumps 1->2->3 and the world
+        // never tears down. This is DISTINCT from the menu gate the stall-diag below logs (`FUN_14080d660`
+        // = CSMenuMan+0x80->0x290/0x298), which is why that diag reported `menu_gate_ok=true ->
+        // blocked_by=NONE(orchestrator not called?)`: it never checked +0x13c. The sibling menu-pump path
+        // (`system_quit_restore_real_system_windows`) already clears this byte, but that observer is not
+        // re-invoked for switch 2's torn-down windows, so the stale byte survives into the game-task stall.
+        // Clear it HERE, on the game task, every frame the switch-2 stall signature holds (world still up
+        // AND bc4 frozen at 1 == GAME_MAN_RETURN_TITLE_JOB_PREDICATE_PENDING), so the clear fires
+        // independently of the menu-pump path. Native BOOL field write of an RE-confirmed gate (not a
+        // speculative poke); no-op once 0. Byte-for-byte inert on switch 1 (its byte is already 0, and this
+        // whole block only runs at phase >= RETURN_TITLE_REQUESTED). SYSTEM_QUIT_DISABLE_SAVE_MENU_CLEAR_COUNT
+        // is the runtime semaphore: >0 on a switch == that switch's quit-save was gated OFF and we unblocked it.
+        if world_up && return_title_job_predicate_bc4 == GAME_MAN_RETURN_TITLE_JOB_PREDICATE_PENDING
+        {
+            let cs_menu_man =
+                unsafe { safe_read_usize(module_base + CS_MENU_MAN_GLOBAL_RVA) }.unwrap_or(null);
+            if cs_menu_man != null && unsafe { is_heap_aligned_ptr(cs_menu_man) } {
+                let dsm = (cs_menu_man + CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET) as *mut u8;
+                let prev = unsafe { core::ptr::read_volatile(dsm) };
+                if prev != 0 {
+                    unsafe { core::ptr::write_volatile(dsm, 0) };
+                    let n = SYSTEM_QUIT_DISABLE_SAVE_MENU_CLEAR_COUNT
+                        .fetch_add(1, Ordering::SeqCst)
+                        + 1;
+                    if n <= 5 || n % 120 == 0 {
+                        append_autoload_debug(format_args!(
+                            "system-quit-quickload: [game-task] cleared stale CSMenuMan->disableSaveMenu (was {prev}) #{n} at switch-2 stall (world_up=true bc4=1) -- native quit-save was gated OFF via ShouldSave/CanShowSaveMenu (+0x13c); now unblocked so bc4 pumps 1->2->3 and the world tears down"
+                        ));
+                    }
+                }
+            }
+        }
+        // b78 GUARD (companion to the disableSaveMenu clear above). Force b78 = -1 for the WHOLE time
+        // the old world is up (through bc4 1 -> 2 -> 3), and only write the picked slot once the world has
+        // torn down. The switch-2-fix proposal to narrow this to only `world_up && bc4 == 1` was NOT
+        // applied on this branch: with the disableSaveMenu clear now letting bc4 advance to 2/3 while the
+        // player is still briefly present, gating on `bc4 == 1` alone would let b78 = slot leak at bc4 2/3
+        // and re-arm the very in-world MoveMapStep load the block comment above warns against (2026-07-01:
+        // b78 = slot while in-world spun RequestLoadSlot 4600+ times and stuck the map machine "loading").
+        // `world_up` is the correct invariant: b78 must be -1 until the world is gone, then = slot for the
+        // clean-title autoload. So the force-(-1) condition stays keyed on world_up, unchanged from switch 1.
+        // POST-COMMIT RE-LOAD LOOP FIX (2026-07-16, runtime-confirmed). Once this switch's picked slot has
+        // COMMITTED its load (SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE=1 -- set by the feed/continue_confirm
+        // at the clean-title stream, cleared to 0 only when a genuinely NEW switch arms at
+        // system_quit_repro_guards.rs:864), STOP re-arming b78=slot. Proven from the gm-snap/setstate trace:
+        // after the picked char loads and reaches stable in-world (ig_d8=2, menu_job populated), the world
+        // momentarily drops to world_up=false and this guard RE-WROTE b78=slot -> a redundant in-world reload
+        // that tears the freshly-loaded world down and bounces it back to title (menu_job->0 -> requestCode->0
+        // -> SetState 6->2 -> our autoload re-drives -> loop = the soft-lock). Holding b78=-1 once committed
+        // keeps the loaded world up. Inert before the feed (latch still 0 -> b78=slot fires the initial load
+        // exactly as before) and reset for the next genuine pick, so switch 1's initial load is unchanged.
+        let switch_committed =
+            SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1;
+        let b78_val = if world_up || switch_committed {
             OWN_STEPPER_SLOT_NONE
         } else {
             slot
         };
         unsafe { *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = b78_val };
+        // CLEAR THE QUIT-SAVE REQUEST FLAGS DURING TEARDOWN (2026-07-16, Ghidra + runtime proven root).
+        // The old world's MoveMapStep leaves its resident STEP_MoveMap(18) step only when the "ending
+        // request" sub-machine (MoveMapStep.field25_0x12a, in FUN_140afa7c0, ticked by the MoveMap update
+        // FUN_140aff730) walks case 0->..->7->8; case 8 calls FUN_140af9e80 to advance the parent step
+        // (18->19->20->-1), which is what lets the InGameStep finish and the world tear down. The gate that
+        // FREEZES it is case 7->8: it requires `ShouldSave() == false` AND `FUN_140679460() == false`.
+        // `ShouldSave` (0x1406794c0) = saveRequested(b72) && !CanShowSaveMenu() && menu_gate && bc4!=3;
+        // `FUN_140679460` = GameMan+0xb73 && menu_gate && bc4!=3. Our return-title REQUEST set b72 and b73
+        // (it intends a quit-save); the native quit clears them BY SAVING, but we suppress the save (no save
+        // on quit, by design), so they stay set -> ShouldSave/FUN_140679460 stay true -> case 7 hangs forever
+        // -> child never finishes -> world never tears down = the "MOVE MAP 18/20" stall (runtime: the stuck
+        // switch had b72=1 b73=1; the one that tore down had b72=0 b73=0). So clear both here every teardown
+        // frame while the OLD world is up: this makes ShouldSave()/FUN_140679460() deterministically false,
+        // unblocks the ending sub-machine, and is exactly the no-save-on-quit behavior we want (no disk
+        // write; we are only dropping the request flags the game would otherwise satisfy via a save). Once
+        // the world is gone (world_up=false) the block stops mattering; the post-commit dormancy latch and
+        // continue_confirm own the incoming char's flags. GameMan+0xb73 is the byte right after b72.
+        if world_up {
+            unsafe {
+                *((gm + GAME_MAN_SAVE_REQUESTED_B72_OFFSET) as *mut u8) = 0;
+                *((gm + GAME_MAN_SAVE_REQUEST_COMPANION_B73_OFFSET) as *mut u8) = 0;
+            }
+            SYSTEM_QUIT_TEARDOWN_SAVEREQ_CLEAR_COUNT.fetch_add(1, Ordering::SeqCst);
+        }
         // NOTE: an earlier attempt repointed GameMan+0xac0 (set_save_slot) here at the clean title.
         // That was proven INSUFFICIENT and misleading: ac0 is a deserialize BYPRODUCT, never read as
         // load input, and repointing it forges the `ac0==expected` deser-evidence the Continue GUARD
@@ -832,6 +1116,71 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             append_autoload_debug(format_args!(
                 "system-quit-quickload: requested save-slot load index world_up={world_up} wrote gm_b78={b78_val} (read_back={requested_slot}) selected_slot={slot} phase={} bc4=0x{return_title_job_predicate_bc4:x}",
                 SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+            ));
+            // save-gate diag DURING the stall (bc4=1): the quit-save orchestrator FUN_140afb970 (RE 1.16.1)
+            // skips the save unless force-latch 0x3d856a0 == 0, GameMan->save_state(+0xb80) == 0, AND the
+            // menu gate FUN_14080d660 (*(CSMenuMan[+0x80])->0x290==0 && ->0x298==0). Names the blocker while
+            // bc4 is frozen. Literals: 0x3d856a0 = load-active latch, 0x3d6b7b0 = CSMenuMan global.
+            let dsg_force = unsafe { safe_read_u8(module_base + 0x3d856a0) }.unwrap_or(0xff);
+            let dsg_ss = unsafe { safe_read_i32(gm + 0xb80) }.unwrap_or(-1);
+            let dsg_csm = unsafe { safe_read_usize(module_base + 0x3d6b7b0) }.unwrap_or(0);
+            let dsg_sub = if dsg_csm > 0x10000 {
+                unsafe { safe_read_usize(dsg_csm + 0x80) }.unwrap_or(0)
+            } else {
+                0
+            };
+            let (dsg_m290, dsg_m298) = if dsg_sub > 0x10000 {
+                (
+                    unsafe { safe_read_u8(dsg_sub + 0x290) }.unwrap_or(0xff),
+                    unsafe { safe_read_usize(dsg_sub + 0x298) }.unwrap_or(usize::MAX),
+                )
+            } else {
+                (0xff, usize::MAX)
+            };
+            let dsg_menu_ok = dsg_m290 == 0 && dsg_m298 == 0;
+            // The REAL orchestrator (FUN_140afb970) pump gate is bVar5 (NOT what this diag checked before):
+            // bVar5 = ShouldSave() [saveRequested(b72) && !CanShowSaveMenu() && menu_gate && bc4!=3]
+            //      || FUN_140679460() [b73 && menu_gate && bc4!=3]  ||  GetRequestedSaveSlotLoad()(b78) != -1.
+            // If bVar5==0 the orchestrator returns without pumping bc4. b78==-1 is likely OUR b78 guard
+            // starving the third term. Read the components so the stall names the exact failing term.
+            let dsg_b72 = unsafe { safe_read_u8(gm + 0xb72) }.unwrap_or(0xff);
+            let dsg_b73 = unsafe { safe_read_u8(gm + 0xb73) }.unwrap_or(0xff);
+            let dsg_b78 = unsafe { safe_read_i32(gm + 0xb78) }.unwrap_or(-99);
+            let bc4_not3 = return_title_job_predicate_bc4 != 3;
+            let bvar5_est = (dsg_b72 != 0 && dsg_menu_ok && bc4_not3)
+                || (dsg_b73 != 0 && dsg_menu_ok && bc4_not3)
+                || (dsg_b78 != -1);
+            // The REAL bc4 blocker (deeper than bVar5): the quit-save FUN_14067ba30 does the full
+            // bc4-advancing save ONLY if saveSlot < 10 AND disableSaveMenu == 0; otherwise it FALLS BACK
+            // to a plain save (FUN_14067b660) that writes disk but never advances bc4 (and clears
+            // saveRequested). CanShowSaveMenu() == (CSMenuMan->disableSaveMenu != 0). Read both.
+            let dsg_slot = unsafe {
+                safe_read_i32(gm + core::mem::offset_of!(eldenring::cs::GameMan, save_slot))
+            }
+            .unwrap_or(-99);
+            let dsg_dsm = if dsg_csm > 0x10000 {
+                unsafe { safe_read_u8(dsg_csm + CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET) }
+                    .map(|v| v as i32)
+                    .unwrap_or(-1)
+            } else {
+                -1
+            };
+            let pump_fallback = dsg_slot < 0 || dsg_slot > 9 || dsg_dsm != 0;
+            let dsg_blocker = if pump_fallback {
+                "QUIT-SAVE FALLBACK(saveSlot>=10 or disableSaveMenu!=0 -> plain save, bc4 NOT advanced)"
+            } else if dsg_force != 0 {
+                "FORCE_LATCH(0x143d856a0)"
+            } else if dsg_ss != 0 {
+                "save_state"
+            } else if !dsg_menu_ok {
+                "MENU_GATE(ProfileSelect)"
+            } else if !bvar5_est {
+                "bVar5=0(no save cond: b72/b73 off AND b78==-1 -- b78 likely OUR guard starving the pump)"
+            } else {
+                "NONE(bVar5 est OK but bc4 stuck -- CanShowSaveMenu()==true killing ShouldSave? recheck)"
+            };
+            append_autoload_debug(format_args!(
+                "save-gate-diag(stall): force=0x{dsg_force:x} save_state={dsg_ss} bc4=0x{return_title_job_predicate_bc4:x} menu_gate_ok={dsg_menu_ok} b72={dsg_b72} b73={dsg_b73} b78={dsg_b78} bVar5_est={bvar5_est} saveSlot={dsg_slot} disableSaveMenu={dsg_dsm} pump_fallback={pump_fallback} -> blocked_by={dsg_blocker}"
             ));
         }
     }

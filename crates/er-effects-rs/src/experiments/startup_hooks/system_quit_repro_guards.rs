@@ -851,6 +851,13 @@ unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, source: &str) {
     // NowLoading transition that froze the menu pump; blocking it here (not reactively) lets the
     // menu-pump-owned return-title chain run + tear the world down. Forwarded at a clean title.
     install_system_quit_request_load_slot_guard();
+    // REVERTED 2026-07-16: wiring install_system_quit_gaitem_deserialize_hook() here (to backstop the
+    // 0x67141a stale-table AV) was WORSE -- its handler's SKIP path during the return-title transition
+    // (phase CONFIRMED..HANDOFF) leaves the gaitem singleton inconsistent and the game DL_PANICs from inside
+    // the gaitem code (crash stk showed the panic called from game+0x671843). That broke the FIRST switch
+    // (DL_PANIC before the load) whereas without the hook the first switch completes via continue_confirm.
+    // The 0x67141a crash on the 2nd+ consecutive switch remains a separate, pre-existing issue to solve
+    // without this SKIP-based hook (2026-07-01 already noted these gaitem guards corrupt the singleton).
     // Re-arm the continue_confirm guard's one-shot: the upcoming clean-title confirm must drive a
     // fresh deserialize of THIS switch's picked slot before it streams (the hook itself is installed
     // unconditionally at attach; see install_system_quit_continue_confirm_hook).
@@ -915,11 +922,49 @@ unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, source: &str) {
     TITLE_OWNER_PTR.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
     TITLE_OWNER_SCAN_COUNTDOWN.store(TITLE_OWNER_SCAN_COUNTDOWN_READY, Ordering::SeqCst);
     OWN_LOAD_CONTINUE_FIRED.store(false, Ordering::SeqCst);
+    // Re-arm the product-core-autoload CONTINUE DRIVER for repeatable switching (2026-07-15): FULLREAD_PHASE is
+    // a one-shot that reaches FULLREAD_PHASE_DONE after the first switch's Continue and then early-returns
+    // (product_continue.rs:282), so the 2ND consecutive switch's return-title reaches the title but nothing
+    // drives its native Continue -> stuck at the covered title (the "black screen"). Reset the phase to SUBMIT
+    // and drop the stale MENU_CONTINUE_* row/router pointers captured for the previous switch's (torn-down)
+    // menu, so the driver re-captures + re-submits the Continue for THIS switch. Idempotent one-shots reset to
+    // their init values, exactly like the per-switch latches above; the continue_confirm/world-up guards still
+    // prevent driving a load into a live world. (Distinct from the return-title one-shots at 868-869, which the
+    // 2026-07-02 bisect showed regress the single switch -- those stay disabled.)
+    FULLREAD_PHASE.store(FULLREAD_PHASE_SUBMIT, Ordering::SeqCst);
+    FULLREAD_DRAIN_WAITS.store(0, Ordering::SeqCst);
+    MENU_CONTINUE_ITEM.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+    MENU_CONTINUE_ENTRY.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+    MENU_CONTINUE_FUNCTOR.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+    MENU_CONTINUE_DOCALL.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+    MENU_CONTINUE_ROUTER.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
+    MENU_CONTINUE_INDEX.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
     SYSTEM_QUIT_QUICKLOAD_LAST_TITLE_OWNER.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_QUICKLOAD_AUTOLOAD_HANDOFF_COUNT.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_PROFILE_LOAD_JOB_POST_RETURN_TITLE_FIRED.store(0, Ordering::SeqCst);
     PROFILE_REFRESH_KICKED.store(0, Ordering::SeqCst);
     PORTRAIT_RENDER_WINDOW_DONE.store(0, Ordering::SeqCst);
+    // Reset the switch-outcome oracle so THIS switch's classification starts fresh (see the atomics' doc).
+    SWITCH_ORACLE_TICK.store(0, Ordering::SeqCst);
+    SWITCH_ORACLE_STABLE_FRAMES.store(0, Ordering::SeqCst);
+    SWITCH_ORACLE_MAX_STABLE_FRAMES.store(0, Ordering::SeqCst);
+    // SWITCH-2 SOFT-LOCK FIX (arm-point pre-clear, 2026-07-16). RE of the 1.16.1 dump proved the switch-2
+    // freeze is the native quit-save (`ShouldSave` 0x1406794c0) aborting on a stale
+    // `CSMenuMan->disableSaveMenu` (+0x13c, read by `CanShowSaveMenu` 0x14080d150) left set from the prior
+    // switch's menu flow -- so `bc4` freezes at 1 and the world never tears down. Clear it HERE, the moment
+    // this switch arms its return-title, so the gate is already open before the quit-save orchestrator runs
+    // (belt-and-suspenders with the per-frame game-task clear in product_core_autoload_tick and the menu-pump
+    // clear in system_quit_restore_real_system_windows). No-op / inert on switch 1 (its byte is already 0);
+    // reuses the shared startup_hooks helper. SYSTEM_QUIT_DISABLE_SAVE_MENU_CLEAR_COUNT is the runtime
+    // semaphore: >0 on a switch == that switch's quit-save was gated OFF and we unblocked it.
+    let base = game_rva(0).unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
+    if base != TITLE_OWNER_SCAN_START_ADDRESS {
+        let dsm_prev =
+            unsafe { system_quit_clear_disable_save_menu(base, "arm-quickload-return-title") };
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: arm pre-clear CSMenuMan->disableSaveMenu was {dsm_prev} (>0 = switch-2 quit-save was BLOCKED; cleared so bc4 can pump 1->2->3 and the world tears down) selected_slot={selected_slot} source={source}"
+        ));
+    }
     SYSTEM_QUIT_QUICKLOAD_PHASE.store(
         SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED,
         Ordering::SeqCst,
@@ -1209,7 +1254,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
     let switch_active = (SYSTEM_QUIT_QUICKLOAD_PHASE_CONFIRMED
         ..=SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF)
         .contains(&phase);
-    if switch_active && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0 {
+    if switch_active {
         let selected = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
         let world_up = unsafe { PlayerIns::local_player_mut() }.is_ok();
         if world_up {
@@ -1219,7 +1264,9 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
             append_autoload_debug(format_args!(
                 "system-quit-quickload: continue_confirm called while OLD WORLD STILL UP phase={phase} selected={selected} shim=0x{shim:x} -- forwarding WITHOUT fresh deserialize (unexpected caller)"
             ));
-        } else if selected >= TITLE_PROFILE_SLOT_COUNT {
+        } else if SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0
+            && selected >= TITLE_PROFILE_SLOT_COUNT
+        {
             let n = SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
             append_autoload_debug(format_args!(
                 "system-quit-quickload: continue_confirm BLOCKED #{n} -- switch active (phase={phase}) but no valid picked slot ({selected}); refusing to stream stale pre-switch state"
@@ -1237,12 +1284,20 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
             // and OOB-dispatches gaitemInsTable[-1] (the AV at live 0x67141a). Native per-item
             // release; declines fail-closed if the singleton looks wrong (then the deserialize may
             // still crash, but we never sweep a bogus pointer).
-            if base != TITLE_OWNER_SCAN_START_ADDRESS {
-                unsafe { own_load_reset_gaitem_singleton(base) };
-            }
-            if base != TITLE_OWNER_SCAN_START_ADDRESS
-                && unsafe { own_load_feed_deserialize(base, gm, slot) }
-            {
+            // Feed here ONLY if the native-fullread DESER-path did not already feed this switch (it sets
+            // FRESH_DESER_DONE=1 after making c30 real so the GUARD->COMMIT chain reaches us). Either way,
+            // once the picked character is fed we fall through to the COMMIT steps below (phase -> IDLE,
+            // clear b78/warp, restore one-shots) so BOTH the clean-title feed AND the native-fullread feed
+            // get the "get out of the way" cleanup -- previously it only ran when THIS call fed, so the
+            // native-fullread path stalled at state 6 with the overlay stuck over a loaded world (2026-07-16).
+            let already_fed =
+                SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1;
+            let fed_ok = already_fed
+                || (base != TITLE_OWNER_SCAN_START_ADDRESS && {
+                    unsafe { own_load_reset_gaitem_singleton(base) };
+                    unsafe { own_load_feed_deserialize(base, gm, slot) }
+                });
+            if fed_ok {
                 SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(1, Ordering::SeqCst);
                 let n = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
                     .fetch_add(1, Ordering::SeqCst)
@@ -1273,12 +1328,12 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                             OWN_STEPPER_SLOT_NONE;
                     }
                 }
-                // CLEAR the return-title "rebuild the title" request flags the final functor set for
-                // this switch's teardown. They are LEVEL flags nothing resets, so once the reloaded
-                // world comes up the still-set menuData+0x5d re-requests the quit-to-title
-                // (GameMan.save_requested flips true again ~3.6s later, proven by gm-snap) and bounces
-                // the freshly-loaded world back to the title. The teardown they were needed for is done
-                // by now (we are at the clean-title Continue), so undo them.
+                // CLEAR the return-title "rebuild the title" request flags the final functor set for this
+                // switch's teardown (restored 2026-07-16 after the DEFER experiment failed: the stuck load
+                // has menuData+0x5d==0 to BEGIN with -- the functor never set it, incomplete teardown -- so
+                // deferring OUR clear was inert). They are LEVEL flags nothing resets; left set on a
+                // resident world they re-request quit-to-title (bounce). Undo them at the clean-title
+                // Continue as before.
                 let menu_man = unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) }
                     .unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
                 if menu_man != TITLE_OWNER_SCAN_START_ADDRESS

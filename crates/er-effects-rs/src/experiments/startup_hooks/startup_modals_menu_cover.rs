@@ -1064,6 +1064,11 @@ pub(crate) unsafe extern "system" fn title_custom_cover_menu_window_run_hook(
     if TITLE_CUSTOM_COVER_RUN_RECURSION.load(Ordering::SeqCst) != 0 {
         return ret;
     }
+    // This detour WON the MenuWindowJob::Run RVA race, so the System->Quit hook's own install fails
+    // ALREADY_CREATED. Run its post-original work here (System/ProfileSelect resource-map + real-window
+    // HIDE + in-world-load ABORT + return-title submit) or the profile switch never completes and the
+    // System menu never hides (2026-07-15 root cause). Safe: same (job, ret) contract, pure observation.
+    unsafe { system_quit_menu_window_run_post(job, ret) };
     let title_job = TITLE_NATIVE_MENU_VISUAL_NATIVE_JOB.load(Ordering::SeqCst);
     let pab_job = TITLE_PAB_INFORMATION_VISUAL_LAST_JOB.load(Ordering::SeqCst);
     let cover_job = TITLE_CUSTOM_COVER_BLACK_LAST_JOB.load(Ordering::SeqCst);

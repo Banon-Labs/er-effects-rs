@@ -839,7 +839,11 @@ pub(crate) unsafe extern "system" fn msgbox_builder_hook(
     let in_world = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
     let switch_active = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
         != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
-        || SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0;
+        || SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0
+        // Covers the gap before the MenuWindowJob::Run hook sets PROFILE_SELECT_WINDOW: the own_stepper
+        // self-pump can build the load-confirm MessageBox first, and without this flag it escapes
+        // suppression and crashes (2026-07-15). Set at the Load-Profile click, cleared on ProfileSelect reset.
+        || SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) != 0;
     if product_autoload_enabled() && (!in_world || switch_active) {
         MSGBOX_LAST_ARG_RCX.store(a, Ordering::SeqCst);
         MSGBOX_LAST_ARG_RDX.store(b, Ordering::SeqCst);

@@ -46,6 +46,12 @@ pub(crate) static SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_LOG_COUNT: AtomicUsize = Atomi
 pub(crate) static SYSTEM_QUIT_INGAME_TOP_WINDOW: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_OPTION_SETTING_WINDOW: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_PROFILE_SELECT_WINDOW: AtomicUsize = AtomicUsize::new(0);
+/// Latched from the moment the user clicks System->Quit->Load Profile (the profile-load route FIRE) until
+/// ProfileSelect is reset. `SYSTEM_QUIT_PROFILE_SELECT_WINDOW` is only set later, in the MenuWindowJob::Run
+/// hook, so there is a window where the own_stepper self-pump builds the native load-confirm MessageBox
+/// while that var is still 0 -- the confirm then escapes msgbox suppression and CRASHES the game (2026-07-15).
+/// This flag spans the whole flow so `switch_active` in the msgbox builder hook covers that gap.
+pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_HIDE_REAL_WINDOWS_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -183,6 +189,9 @@ pub(crate) static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_BLOCK_COUNT: AtomicUsize = Atomi
 pub(crate) static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_GAITEM_DESERIALIZE_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_GAITEM_DESERIALIZE_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Times the CSGaitemImp singleton was reset to pristine right before a switch-reload's native deserialize
+/// (clears char#1's stale items so char#2's deserialize does not dispatch a freed vtable -> the 0x67141a AV).
+pub(crate) static SYSTEM_QUIT_GAITEM_DESERIALIZE_RESET_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_GAITEM_LOOKUP_EMPTY_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_GAITEM_LOOKUP_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_GAITEM_FINALIZE_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);

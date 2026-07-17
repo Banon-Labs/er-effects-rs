@@ -243,10 +243,47 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     }
 
     if phase == FULLREAD_PHASE_DESER {
-        // Step 5: deserialize 0x14067b290(slot) ONCE at b80==3 -> writes GameMan+0xc30 = real map.
-        let deser: unsafe extern "system" fn(i32) -> i32 =
-            unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
-        let dret = unsafe { deser(slot) };
+        // SWITCH FEED + STALE-TABLE FIX (0x67141a + soft-lock, 2026-07-16, workflow wf_0a1d790f). Two bugs on a
+        // 2nd+ consecutive System->Quit->Load-Profile switch, both here:
+        //  (a) CRASH: the native deser's inner CSGaitemImp::Deserialize (game+0x671130) runs on the PRIOR
+        //      character's stale gaitem table -> AV at game+0x67141a. Fix: reset the singleton to pristine
+        //      first (own_load_reset_gaitem_singleton, the same native per-item release continue_confirm uses).
+        //  (b) SOFT-LOCK: the native deser(slot) reads the game's RESIDENT IO buffer, which on switch 2 comes
+        //      back m10-null (c30=0xa010000, a level-9 shell) and never populates -> GUARD never passes ->
+        //      the COMMIT block's continue_confirm/SetState5 never fires -> DONE observe-loops forever.
+        // Fix (b): instead of the un-gated native deser, FEED our OWN on-disk slot bytes through the SAME
+        // native parser (own_load_feed_deserialize arms OWN_LOAD_GATE) so c30 becomes deterministically real
+        // -> GUARD passes -> COMMIT fires the native continue_confirm (our hook forwards it, no re-feed) ->
+        // SetState5 streams the character. Latch FRESH_DESER_DONE=1 so switch-1's own clean-title continue_confirm
+        // and this path never BOTH feed -- exactly ONE deserialize per switch. Boot / non-switch (picked==MAX,
+        // or continue_confirm already fed) falls back to the native deser unchanged.
+        let picked = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
+        let switch_feed_case = picked < TITLE_PROFILE_SLOT_COUNT
+            && gm != TITLE_OWNER_SCAN_START_ADDRESS
+            && unsafe { PlayerIns::local_player_mut() }.is_err()
+            && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 0;
+        let dret = if switch_feed_case {
+            unsafe { own_load_reset_gaitem_singleton(base) };
+            if unsafe { own_load_feed_deserialize(base, gm, picked as i32) } {
+                SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(1, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "native-fullread: DESER-path FEED of picked slot {picked} OK -- c30 now real, gaitem reset; GUARD->COMMIT continue_confirm streams (FRESH_DESER_DONE=1, no double-feed)"
+                ));
+                1
+            } else {
+                append_autoload_debug(format_args!(
+                    "native-fullread: DESER-path FEED of picked slot {picked} FAILED -- falling back to native deser"
+                ));
+                let deser: unsafe extern "system" fn(i32) -> i32 =
+                    unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
+                unsafe { deser(slot) }
+            }
+        } else {
+            // Step 5: deserialize 0x14067b290(slot) ONCE at b80==3 -> writes GameMan+0xc30 = real map.
+            let deser: unsafe extern "system" fn(i32) -> i32 =
+                unsafe { std::mem::transmute(base + DESERIALIZE_SLOT_RVA) };
+            unsafe { deser(slot) }
+        };
         let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
         let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
         let (_fp, level, _nl) = unsafe { char_fingerprint(base) };

@@ -109,31 +109,47 @@ const BOOT_BG_MAX_PIXELS: usize = BOOT_BG_MAX_DIM * BOOT_BG_MAX_DIM;
 /// Number of loading phases. Higher granularity than the old 7 (user 2026-07-15: "we need higher
 /// granularity and specificity to the label ... It gets stuck on some of these phases for longer
 /// segments"), especially across the world-load, which is the long stuck stretch.
-const BOOT_VIEW_MILESTONE_COUNT: usize = 9;
+const BOOT_VIEW_MILESTONE_COUNT: usize = 12;
 /// Left-aligned phase labels (5x7 font: A-Z + space; see `boot_glyph_5x7`). Specific + multi-word -- this
 /// single label above the bar now carries the whole phase story (all tick markers removed), so it is
 /// left-aligned in the reserved text space and can be more than one word. Ordered; each idx is asserted by
 /// `boot_milestone_reached(idx)` and latched monotonic by the caller.
 const BOOT_VIEW_MILESTONE_LABELS: [&str; BOOT_VIEW_MILESTONE_COUNT] = [
-    "STARTING UP",     // 0: our present hook + the game swapchain are live (engine still initializing)
-    "GAME SYSTEMS",    // 1: GameMan/global systems constructed
-    "LOADING TITLE",   // 2: the title menu resources are being acquired (the long ~32s title-asset load)
-    "TITLE SCREEN",    // 3: the title is up (PRESS START bound)
-    "MAIN MENU",       // 4: the main menu opened
-    "LOADING SAVE",    // 5: Continue committed (SetState5)
-    "BUILDING WORLD",  // 6: the native loading screen appeared (world build begun)
-    "STREAMING WORLD", // 7: the game's world-load gauge is actively streaming
-    "ENTERING WORLD",  // 8: the world-load gauge is near-complete / the load is closing
+    "STARTING UP",      // 0: our present hook + the game swapchain are live (engine still initializing)
+    "GAME SYSTEMS",     // 1: GameMan/global systems constructed
+    "ACQUIRING ASSETS", // 2: title menu resource acquisition begins (start of the long ~32s asset load)
+    "OPENING SCALEFORM", // 3: Scaleform (.gfx) files opening -- ramps through the middle of the asset load
+    "BUILDING SCALEFORM", // 4: Scaleform resource ctors -- ramps late in the asset load
+    "TITLE READY",      // 5: engine interactive internally (PRESS START bound); we cover the title itself
+    "PREPARING SAVE",   // 6: menu opened internally / offline committed; autoload about to commit the save
+    "LOADING SAVE",     // 7: Continue committed (SetState5)
+    "BUILDING WORLD",   // 8: the native loading screen appeared (world build begun)
+    "STREAMING WORLD",  // 9: the game's world-load gauge is actively streaming
+    "FINALIZING WORLD", // 10: the world-load gauge is past the midpoint, nearing complete
+    "ENTERING WORLD",   // 11: the gauge is near-complete / the loading screen is closing
 ];
-/// Progress target per phase, in permille. The world-load tail (STREAMING/ENTERING) is ALSO driven by the
-/// game's real Gauge_3 progress and forced to 1000 at the in-game handoff (see `boot_view_progress`), so --
-/// unlike before -- our bar owns the whole 0..100% and reaches 100% right as the character switches in.
+/// Progress target per phase, in permille. The two long stretches -- the title-asset load (2..5) and the
+/// world stream (8..11) -- get the widest spans. The world tail is ALSO driven by the game's real Gauge_3
+/// progress and forced to 1000 at the in-game handoff (see `boot_view_progress`), so our bar owns the whole
+/// 0..100% and reaches 100% right as the character switches in.
 const BOOT_VIEW_MILESTONE_PERMILLE: [usize; BOOT_VIEW_MILESTONE_COUNT] =
-    [40, 120, 200, 320, 440, 560, 680, 800, 920];
+    [30, 80, 150, 220, 290, 360, 440, 520, 610, 730, 860, 950];
+/// SWITCH STEP-NAME LABELS (2026-07-16, user-requested). Once the MoveMapStep child is live during an
+/// own-menu switch, the bar shows the REAL engine step (`movemapstep_step_name`) as its label and
+/// drives the fill from the child step index, so a softlock FREEZES the bar on the exact stuck step by
+/// name (WORLD RES WAIT, LEAVE SESSION WAIT, ...) -- the label becomes the RAM semaphore, not an
+/// eyeballed "stuck at LOADING SAVE". `boot_view_progress` returns `idx >= MMS_LABEL_IDX_BASE` to signal
+/// the rasterizer to name the step instead of using the heuristic milestone label; the child step is
+/// `idx - MMS_LABEL_IDX_BASE`. The `(permille, idx)` draw cache invalidates naturally on a step change.
+const MMS_LABEL_IDX_BASE: usize = 100;
+/// Fill (permille) the child steps span: step 0 starts just past LOADING SAVE (520), the last step
+/// approaches 100%. Keeps the bar monotonic across the heuristic->step-name handoff.
+const MMS_STEP_FILL_BASE: usize = 540;
+const MMS_STEP_FILL_SPAN: usize = 440;
 /// Fill edge the bar pauses at while the startup save picker holds the boot (the MAIN MENU phase, whose
 /// creep tops out near here). `boot_view_progress` clamps the fill here while a pick is pending, then
 /// lifts it the frame the pick clears the latch.
-const BOOT_VIEW_SAVE_CHECK_PERMILLE: usize = 460;
+const BOOT_VIEW_SAVE_CHECK_PERMILLE: usize = 470;
 /// Asymptotic creep time-constant: creep = gap * since/(since + K). At `since == K` the bar is halfway to
 /// the next milestone; it keeps approaching but never reaches it, so the bar NEVER fully freezes during a
 /// long phase (user 2026-07-15: STARTING UP ~23s and the title load ~32s made a 70%-capped bar look stuck).
@@ -206,17 +222,22 @@ fn boot_milestone_reached(idx: usize) -> bool {
             // Drawing at all proves the present hook + game swapchain are live.
             0 => true,
             1 => game_man_ptr_or_null() != 0,
-            // Offline bytes are already cleared by the first boot in the same process.
+            // Offline bytes are already cleared by the first boot in the same process. The own-menu switch
+            // reuses the title pipeline, so the three title-asset ramps assert here too; fall back to the
+            // quickload-phase ordinal when they don't (older/other switch paths).
             2 => FORCE_OFFLINE_BYTES_CLEARED.load(Ordering::SeqCst) != 0,
-            // Own-menu switch phases replace stale first-boot title/menu latches.
-            3 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED,
-            4 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN,
-            5 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
+            3 => TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst) != 0
+                || phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED,
+            4 => TITLE_SCALEFORM_RESOURCE_CTOR_HITS.load(Ordering::SeqCst) != 0
+                || phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED,
+            5 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN,
+            6 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF,
+            7 => phase >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
                 || SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
                 || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0,
-            // World-load phases 6/7/8, keyed off the game's native loading screen (shared with the normal
-            // path so both flows get the same BUILDING/STREAMING/ENTERING WORLD granularity).
-            6 | 7 | 8 => boot_world_phase_reached(idx),
+            // World-load phases 8..11, keyed off the game's native loading screen (shared with the normal
+            // path so both flows get the same BUILDING/STREAMING/FINALIZING/ENTERING WORLD granularity).
+            8 | 9 | 10 | 11 => boot_world_phase_reached(idx),
             _ => false,
         };
     }
@@ -224,32 +245,37 @@ fn boot_milestone_reached(idx: usize) -> bool {
         // Drawing at all proves the present hook + game swapchain are live.
         0 => true,
         1 => game_man_ptr_or_null() != 0,
-        // LOADING TITLE: the title menu starts acquiring its Scaleform resources (~23.6s), right after
-        // GameMan -- a far more informative + earlier-advancing signal than the old offline-bytes latch,
-        // which sat on one label for the whole ~32s title-asset load.
+        // ACQUIRING ASSETS: the title menu starts acquiring its Scaleform resources (~12.7s), right after
+        // GameMan. First of three title-asset ramps; splitting the old single ~32s "asset load" label into
+        // three keeps the bar/label advancing across that long stretch.
         2 => TITLE_MENU_RESOURCE_ACQUIRE_HITS.load(Ordering::SeqCst) != 0,
-        // TITLE SCREEN: PRESS START is bound (~40s, the title is actually up) -- OR the fade-in skip fired
-        // (backstop), so the phase advances mid-title-load instead of only at the very end.
-        3 => TITLE_PRESS_START_BIND_HITS.load(Ordering::SeqCst) != 0
+        // OPENING SCALEFORM / BUILDING SCALEFORM: the .gfx file-open counter climbs to ~113 across the load,
+        // so keying these off ASCENDING COUNT thresholds (not `!= 0`) spreads the two labels through the
+        // stretch instead of both flipping the instant the first file opens (they all go nonzero together).
+        3 => TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst) >= 30,
+        4 => TITLE_SCALEFORM_FILE_OPEN_HITS.load(Ordering::SeqCst) >= 70,
+        // TITLE READY: PRESS START is bound (~40s, the title is actually up internally) -- OR the fade-in
+        // skip fired (backstop). We cover the title itself; this only reflects the engine reaching it.
+        5 => TITLE_PRESS_START_BIND_HITS.load(Ordering::SeqCst) != 0
             || TITLE_FADEIN_SKIP_FIRED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS,
-        // Menu-open era: the own-stepper latch when that task runs, OR'd with the network-check
-        // shortcircuit which fires ~10ms after the title-accept-byte natural menu-open on the
+        // PREPARING SAVE: menu opened internally -- the own-stepper latch when that task runs, OR'd with the
+        // network-check shortcircuit which fires ~10ms after the title-accept-byte natural menu-open on the
         // product path (runtime-proven 2026-07-05: latch stayed 0, shortcircuit fired at +12.8s).
-        4 => {
+        6 => {
             PRODUCT_CORE_LAST_MENU_OPENED_LATCH.load(Ordering::SeqCst) != 0
                 || NETWORK_CHECK_SHORTCIRCUIT_COUNT.load(Ordering::SeqCst) != 0
         }
-        // Continue committed: the confirm/TFC counters on their paths, OR'd with the portrait
-        // teardown-SPARE which lands in the same millisecond as the Continue SetState5 on the
-        // portrait-lookat product path (runtime-proven 2026-07-05: counters stayed 0, spare fired).
-        5 => {
+        // LOADING SAVE: Continue committed -- the confirm/TFC counters on their paths, OR'd with the portrait
+        // teardown-SPARE which lands in the same millisecond as the Continue SetState5 on the portrait-lookat
+        // product path (runtime-proven 2026-07-05: counters stayed 0, spare fired).
+        7 => {
             SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
                 || TFC_CONTINUE_FIRED.load(Ordering::SeqCst) != 0
                 || LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0
         }
         // World-load phases: the native loading screen carries these (see boot_world_phase_reached), so
         // they assert even on the menu-free autoload where the profile table never builds.
-        6 | 7 | 8 => boot_world_phase_reached(idx),
+        8 | 9 | 10 | 11 => boot_world_phase_reached(idx),
         _ => false,
     }
 }
@@ -262,12 +288,14 @@ fn boot_world_phase_reached(idx: usize) -> bool {
     let progress = LOADING_SCREEN_BAR_PROGRESS_PERMILLE.load(Ordering::SeqCst);
     let close_hits = LOADING_SCREEN_CLOSE_SENT_HITS.load(Ordering::SeqCst);
     match idx {
-        // The native loading screen has appeared -> the world build has begun.
-        6 => update_hits != 0,
-        // The native world-load gauge is actively streaming.
-        7 => progress > 0,
-        // The gauge is near-complete or the loading screen sent its close -> about to switch in-game.
-        8 => progress >= 900 || close_hits != 0,
+        // BUILDING WORLD: the native loading screen has appeared -> the world build has begun.
+        8 => update_hits != 0,
+        // STREAMING WORLD: the native world-load gauge is actively streaming.
+        9 => progress > 0,
+        // FINALIZING WORLD: the gauge is past the midpoint, splitting the long stream into two labels.
+        10 => progress >= 500,
+        // ENTERING WORLD: the gauge is near-complete or the loading screen sent its close -> switch in-game.
+        11 => progress >= 900 || close_hits != 0,
         _ => false,
     }
 }
@@ -298,6 +326,22 @@ pub(crate) fn rearm_boot_progress_for_own_menu_load(selected_slot: i32, source: 
     BOOT_VIEW_DRAWN_IDX.store(usize::MAX, Ordering::SeqCst);
     BOOT_VIEW_DRAWN_BG_ACTIVE.store(usize::MAX, Ordering::SeqCst);
     BOOT_VIEW_IDX_CHANGED_MS.store(boot_view_epoch_ms(), Ordering::SeqCst);
+    // Reset the WORLD-PHASE semaphores (native loading-screen counters read by boot_world_phase_reached)
+    // so this switch's bar markers 8..11 start UNREACHED instead of inheriting the PREVIOUS load's finished
+    // state (user-reported 2026-07-16: the bar stays FULL and the label never updates for the whole 2nd/3rd
+    // load = "I don't know what's going on for 30s"). Markers 3-4 already re-assert from the switch's phase,
+    // 5-7 from phase advance; only the world-tail counters were sticky. The switch's own native loading
+    // screen re-increments these as its world streams, so 8..11 (BUILDING/STREAMING/FINALIZING/ENTERING
+    // WORLD) advance with the real load and the bar/label move again (and STALL at the true stuck marker).
+    LOADING_SCREEN_UPDATE_HITS.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_BAR_PROGRESS_PERMILLE.store(0, Ordering::SeqCst);
+    LOADING_SCREEN_CLOSE_SENT_HITS.store(0, Ordering::SeqCst);
+    // Clear the PREVIOUS character's portrait/render state IMMEDIATELY when a new load arms (2026-07-16,
+    // user-reported: the old character lingered on the new load screen). The portrait window is otherwise
+    // only reset on load COMPLETION, so the just-loaded character carried into the NEXT switch's cover.
+    // Resetting here rebinds the portrait pipeline for the incoming slot so the cover shows the new
+    // character (or a clean black/bar) instead of the prior one.
+    loading_portrait_window_reset("own-menu-switch-rearm");
     append_autoload_debug(format_args!(
         "boot-view: rearmed for own-menu character load selected_slot={selected_slot} source={source} table_baseline={table_baseline}"
     ));
@@ -333,7 +377,7 @@ fn boot_view_progress() -> (usize, usize) {
     let gap = next.saturating_sub(base) as u64;
     let creep = (gap * since / (since + BOOT_VIEW_CREEP_K_MS)) as usize;
     let pm = (base + creep).min(1000);
-    // While the startup save picker holds the boot, clamp the fill so it PAUSES at the MAIN MENU edge
+    // While the startup save picker holds the boot, clamp the fill so it PAUSES at the PREPARING SAVE edge
     // (the phase creep would otherwise drift past it); the clamp lifts the frame the pick clears the latch,
     // so the bar resumes toward LOADING SAVE / the world phases.
     let pm = if missing_save_selection_pending() {
@@ -341,20 +385,36 @@ fn boot_view_progress() -> (usize, usize) {
     } else {
         pm
     };
-    // WORLD-LOAD tail (native Windows): during STREAMING/ENTERING WORLD (idx >= 7) drive the fill from the
-    // game's REAL Gauge_3 world-load progress (LOADING_SCREEN_BAR_PROGRESS_PERMILLE) mapped onto
+    // WORLD-LOAD tail (native Windows): from BUILDING WORLD onward (idx >= 8) drive the fill from the game's
+    // REAL Gauge_3 world-load progress (LOADING_SCREEN_BAR_PROGRESS_PERMILLE) mapped onto
     // [BUILDING WORLD permille .. 100%], so the bar shows genuine progress across the long streaming stretch
     // and reaches 100% exactly as the gauge completes -- the moment the game switches the character in-game
     // (user 2026-07-15). Native-only so the Wine composite's native-Gauge_3 handoff is untouched; the
     // fetch_max below keeps it monotonic.
-    let pm = if crate::experiments::is_native_windows() && idx >= 7 {
-        let floor = BOOT_VIEW_MILESTONE_PERMILLE[6];
+    let pm = if crate::experiments::is_native_windows() && idx >= 8 {
+        let floor = BOOT_VIEW_MILESTONE_PERMILLE[8];
         let native = LOADING_SCREEN_BAR_PROGRESS_PERMILLE
             .load(Ordering::SeqCst)
             .min(1000);
         pm.max(floor + native * (1000 - floor) / 1000)
     } else {
         pm
+    };
+    // SWITCH STEP-NAME OVERRIDE (user-requested 2026-07-16): once the MoveMapStep child is live during
+    // an own-menu switch, encode the child's real step into idx (>= MMS_LABEL_IDX_BASE) and drive the
+    // fill from it, so the label shows the engine step (MSB LOAD -> WORLD RES WAIT -> ... -> FINISH) and
+    // the bar FREEZES on the exact stuck step during a softlock. Double-gated on OWN_MENU_LOAD_ACTIVE so
+    // first-boot is untouched. SWITCH_ORACLE_MMS_STEP is published by the game-thread SWITCH-ORACLE.
+    let (idx, pm) = if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {
+        let s = SWITCH_ORACLE_MMS_STEP.load(Ordering::SeqCst);
+        if s != usize::MAX && s < MOVEMAPSTEP_STEP_NAMES.len() {
+            let mms_pm = MMS_STEP_FILL_BASE + s * MMS_STEP_FILL_SPAN / MOVEMAPSTEP_STEP_NAMES.len();
+            (MMS_LABEL_IDX_BASE + s, pm.max(mms_pm))
+        } else {
+            (idx, pm)
+        }
+    } else {
+        (idx, pm)
     };
     // Monotonic display: an idx re-latch or timer wobble must never walk the bar backwards.
     let shown = BOOT_VIEW_LAST_PERMILLE.fetch_max(pm, Ordering::SeqCst).max(pm);
@@ -697,7 +757,7 @@ fn boot_bg_is_supported_image_path(path: &std::path::Path) -> bool {
         && path
             .extension()
             .and_then(|ext| ext.to_str())
-            .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "jpg" | "jpeg" | "png"))
+            .map(|ext| matches!(ext.to_ascii_lowercase().as_str(), "jpg" | "jpeg" | "png" | "gif"))
             .unwrap_or(false)
 }
 
@@ -836,7 +896,10 @@ pub(crate) fn boot_view_render_frame(bw: usize, bh: usize) -> BootViewFrame {
     // Loading-screen character stats (game menu font) also need the full-screen canvas so they land at
     // their expected 5%/60% location; force full_frame when they are shown, exactly like picker_active.
     let stats_active = stats_overlay_active();
-    let full_frame = bg.is_some() || picker_active || stats_active;
+    // Captured character portrait (from LOADING_BG_PORTRAIT_RGBA) also needs the full-screen canvas so the
+    // head lands at its upper-left rect; force full_frame when a portrait is published, like picker/stats.
+    let portrait_active = portrait_overlay_active();
+    let full_frame = bg.is_some() || picker_active || stats_active || portrait_active;
     let (region_w, region_h, dx, dy, content_x, content_y, content_w) = if full_frame {
         (
             bw,
@@ -859,14 +922,17 @@ pub(crate) fn boot_view_render_frame(bw: usize, bh: usize) -> BootViewFrame {
         )
     };
     let (ms_idx, permille) = boot_view_progress();
+    // Portrait draws INSIDE the rasterizer (behind the bar) when active and the picker is not up.
+    let draw_portrait = portrait_active && !picker_active;
     let mut rgba = boot_view_rasterize(
         region_w, region_h, ms_idx, permille, content_x, content_y, content_w, bg, text_scale,
+        draw_portrait,
     );
     if picker_active {
+        // Picker owns the screen exclusively (no character context to portrait/stat yet).
         let _ = overlay_save_picker_onto(&mut rgba, region_w, region_h);
     } else if stats_active {
-        // Mutually exclusive with the picker (stats_active is false while the picker owns the screen);
-        // the else-if makes that explicit. Composites the game-font stats block at 5%/60%.
+        // Stats stay in front of the portrait; the game-font block sits at 5%/60%.
         let _ = overlay_stats_onto(&mut rgba, region_w, region_h);
     }
     BootViewFrame {
@@ -890,6 +956,7 @@ fn boot_view_rasterize(
     content_w: usize,
     bg: Option<&BootBgImage>,
     text_scale: usize,
+    draw_portrait: bool,
 ) -> Vec<u8> {
     let mut buf = vec![0u8; w * h * RGBA8_BPP];
     let has_bg = bg.is_some();
@@ -898,7 +965,25 @@ fn boot_view_rasterize(
     } else {
         boot_fill_rect(&mut buf, w, h, 0, 0, w, h, BOOT_VIEW_RGB_BLACK);
     }
-    let label = BOOT_VIEW_MILESTONE_LABELS[idx.min(BOOT_VIEW_MILESTONE_LABELS.len() - 1)];
+    // Character portrait BEHIND the bar/label: composite it right after the background so the bar, its
+    // shadow band, and the phase label all draw in front (user 2026-07-15 "behind the loading bar").
+    if draw_portrait {
+        let _ = portrait_onto(&mut buf, w, h);
+    }
+    // Label = "<PHASE NAME> <i>/<N>" (user-requested 2026-07-16): the numerator/denominator makes the
+    // overall progress legible as a number, and on a switch the i/N is the REAL engine step index out of
+    // the MoveMapStep child's 20, so a softlock reads e.g. "MOVE MAP 18/20" -- the stuck step by name AND
+    // position. idx >= MMS_LABEL_IDX_BASE = the live child step name; otherwise the heuristic boot label.
+    let label_buf: String = if idx >= MMS_LABEL_IDX_BASE {
+        let step = idx - MMS_LABEL_IDX_BASE;
+        let max = MOVEMAPSTEP_STEP_NAMES.len() - 1;
+        format!("{} {}/{}", movemapstep_step_name(step as i32), step, max)
+    } else {
+        let max = BOOT_VIEW_MILESTONE_LABELS.len() - 1;
+        let i = idx.min(max);
+        format!("{} {}/{}", BOOT_VIEW_MILESTONE_LABELS[i], i, max)
+    };
+    let label: &str = &label_buf;
     let strip_h = boot_view_strip_height(text_scale);
     let bar_y = content_y + BOOT_VIEW_GLYPH_H * text_scale + BOOT_VIEW_TEXT_BAR_GAP;
     if has_bg {
@@ -1296,6 +1381,7 @@ unsafe fn composite_boot_progress_inner(swapchain_raw: usize, clear_first: bool)
             content_w,
             bg,
             text_scale,
+            false,
         );
         if picker_active
             && overlay_save_picker_onto(&mut tight, region_w as usize, region_h as usize)

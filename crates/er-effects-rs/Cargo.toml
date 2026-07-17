@@ -44,6 +44,9 @@ windows = { version = "0.62", features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_SystemServices",
+    # Read HKCU\Software\Valve\Steam\SteamPath so the boot-background feature can find the Windows Steam
+    # userdata (screenshots) -- the install dir is not an ancestor of a game in a separate library.
+    "Win32_System_Registry",
     # Hidden dummy window for the D3D12 Present-overlay swapchain: CreateSwapChainForComposition is
     # "Not implemented" under vkd3d/Wine, so we need a real HWND via CreateSwapChainForHwnd, which pulls
     # in WNDCLASSW's GDI handle types.

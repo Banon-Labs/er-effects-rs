@@ -294,20 +294,9 @@ pub(crate) const ONLINE_DISABLE_EXPECTED_FIRST: u8 = 0x48;
 pub(crate) const ONLINE_DISABLE_STUB: [u8; 3] = [0x31, 0xc0, 0xc3];
 pub(crate) const ONLINE_DISABLE_PATCH_LEN: usize = 3;
 pub(crate) const ONLINE_DISABLE_BYTE_STEP: usize = 1;
-/// Foreground-force: `CS::CSWindowImp::IsGameInForeground` (0x14266def0,
-/// `return this->windowHandle == GetForegroundWindow()`) is the engine's foreground oracle; the
-/// present/flip pacer `UpdateFlipTiming` (0x140e829d0) and friends throttle the game to a few fps
-/// when it returns false. An UNFOCUSED probe window therefore runs at ~6 fps and never boots in the
-/// runtime cap. Patch it to `mov al,1; ret` so the game always believes it is foreground -> full
-/// speed regardless of focus. Safe for the probe: input is blocked, and "always foreground" only
-/// removes the background throttle/pause. Verified prologue first byte 0x40 (`push rbx`).
-// NB: address ground-truthed against the deobf/live binary (scripts/disas-deobf.sh), NOT the Ghidra
-// dump -- the dump placed this fn at 0x14266def0 but the live entry is 0x14266df00 (dump<->deobf has
-// regional shifts; trust the deobf binary for addresses to patch/call).
-pub(crate) const FOREGROUND_FORCE_RVA: usize = 0x266df00;
-pub(crate) const FOREGROUND_FORCE_EXPECTED_FIRST: u8 = 0x40;
-/// `mov al,1; ret` -- returns true (foreground) for the whole getter.
-pub(crate) const FOREGROUND_FORCE_STUB: [u8; 3] = [0xb0, 0x01, 0xc3];
+// Foreground-force constants REMOVED (user directive 2026-07-16): the product must not patch
+// CS::CSWindowImp::IsGameInForeground (it made the game grab the OS cursor on world-entry). See
+// bootstrap.rs / profile_select_flow.rs.
 /// Sign-in force (cold save-load gate). The SaveLoad2 storage-select op ctor (deobf 0x14240f1b0)
 /// creates its runnable ONLY if the sign-in check returns true AND the user index is <= 3; cold
 /// (no signed-in user) both fail, so the op is null and the load FSM parks (the b80 wall). Patch

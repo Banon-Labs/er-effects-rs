@@ -287,16 +287,11 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         });
     }
 
-    // Foreground-force: ALWAYS ON (user directive 2026-06-21 -- "if it works, keep it on"),
-    // independent of online-disable. The unfocused-window fps throttle hits during boot (before any
-    // cold-mount runs), so patch it at attach so the game always runs full speed regardless of which
-    // window holds focus. Verified to make a cold probe boot at 60fps unfocused (was ~6fps). Benign:
-    // it only removes the background throttle/auto-pause; input is blocked during probes anyway.
-    START_FOREGROUND_FORCE.call_once(|| {
-        let _ = std::thread::Builder::new()
-            .name("er-effects-foreground-force".to_owned())
-            .spawn(apply_foreground_force);
-    });
+    // Foreground-force REMOVED (user directive 2026-07-16): the product feature must NOT force the
+    // game's foreground state. Patching CS::CSWindowImp::IsGameInForeground to always-true made the
+    // game behave as if focused, which captures/confines the OS cursor onto the window when a load
+    // completes and the world comes up -- unwanted product behavior. The old 2026-06-21 "keep it on"
+    // directive (full-speed unfocused probes) is superseded; the game now uses its real focus state.
 
     // Audio-side startup/title-logo semaphore: log actual Wwise PostEvent IDs because this regression
     // can be heard without a reliable visual artifact. Read-only; forwards the event unchanged.

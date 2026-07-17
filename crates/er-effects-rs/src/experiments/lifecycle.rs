@@ -5,7 +5,104 @@
 
 use super::*;
 
+// === SWITCH-HARNESS DISCOVERY (agent-owned; user authorized self-driving 2026-07-15) ===
+// Highest-value feasibility probe for the autonomous consecutive-switch harness: does injecting the
+// menu-open key via the DInput keyboard BLOCK actually open the in-game menu on NATIVE WINDOWS? Under
+// Proton the game reads DInput keyboard (where this injection works); native Windows may use raw input,
+// in which case injection never reaches the menu and the harness needs a different vehicle (PostMessage).
+// Enabled ONLY by ER_EFFECTS_SWITCH_HARNESS_DISCOVERY=1 or a marker file next to the game exe; OFF for
+// product. Once in-world+stable it blocks the keyboard, pulses DIK_ESCAPE once, and (via run_post) logs
+// every MenuWindowJob::Run filename that appears -- so the log reveals whether a menu opened and its
+// structure. Then it unblocks. No effect on the default/product path.
+const HARNESS_DISC_DIK_ESCAPE: u8 = 0x01;
+static HARNESS_DISC_STABLE: AtomicUsize = AtomicUsize::new(0);
+static HARNESS_DISC_PHASE: AtomicUsize = AtomicUsize::new(0); // 0 wait,1 press,2 release,3 observe,4 done
+static HARNESS_DISC_PHASE_FRAME: AtomicUsize = AtomicUsize::new(0);
+static HARNESS_DISC_SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+pub(crate) fn switch_harness_discovery_enabled() -> bool {
+    matches!(
+        std::env::var("ER_EFFECTS_SWITCH_HARNESS_DISCOVERY").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("er-effects-switch-harness-discovery.txt")
+        .exists()
+}
+
+/// Called from run_post for every MenuWindowJob::Run filename during discovery: log each distinct
+/// name once so the menu structure is revealed without per-frame spam.
+pub(crate) fn switch_harness_note_menu_filename(name: &str) {
+    if name.is_empty() {
+        return;
+    }
+    if let Ok(mut seen) = HARNESS_DISC_SEEN.lock() {
+        if !seen.iter().any(|n| n == name) {
+            seen.push(name.to_string());
+            append_autoload_debug(format_args!(
+                "switch-harness-disc: MenuWindowJob::Run filename seen = '{name}' (distinct #{})",
+                seen.len()
+            ));
+        }
+    }
+}
+
+pub(crate) unsafe fn switch_harness_discovery_tick() {
+    if !switch_harness_discovery_enabled() {
+        return;
+    }
+    let phase = HARNESS_DISC_PHASE.load(Ordering::SeqCst);
+    if phase == 4 {
+        return;
+    }
+    let player_present = unsafe { PlayerIns::local_player_mut() }.is_ok();
+    if !player_present {
+        HARNESS_DISC_STABLE.store(0, Ordering::SeqCst);
+        return;
+    }
+    let ib = InputBlocker::get_instance();
+    if phase == 0 {
+        let stable = HARNESS_DISC_STABLE.fetch_add(1, Ordering::SeqCst) + 1;
+        if stable < 180 {
+            return; // ~3s settled in-world before touching input
+        }
+        let _ = unsafe { ib.install_hooks() };
+        ib.block(InputFlags::Keyboard);
+        HARNESS_DISC_PHASE.store(1, Ordering::SeqCst);
+        HARNESS_DISC_PHASE_FRAME.store(0, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "switch-harness-disc: in-world+stable -> keyboard BLOCKED, pulsing DIK_ESCAPE (0x01) to test whether DInput injection opens the native-Windows menu"
+        ));
+        return;
+    }
+    let pf = HARNESS_DISC_PHASE_FRAME.fetch_add(1, Ordering::SeqCst);
+    if phase == 1 {
+        ib.set_injected_key(HARNESS_DISC_DIK_ESCAPE);
+        if pf >= 4 {
+            HARNESS_DISC_PHASE.store(2, Ordering::SeqCst);
+            HARNESS_DISC_PHASE_FRAME.store(0, Ordering::SeqCst);
+        }
+    } else if phase == 2 {
+        ib.set_injected_key(0);
+        if pf >= 10 {
+            HARNESS_DISC_PHASE.store(3, Ordering::SeqCst);
+            HARNESS_DISC_PHASE_FRAME.store(0, Ordering::SeqCst);
+        }
+    } else if phase == 3 {
+        if pf >= 150 {
+            ib.set_injected_key(0);
+            ib.unblock(InputFlags::Keyboard);
+            HARNESS_DISC_PHASE.store(4, Ordering::SeqCst);
+            let count = HARNESS_DISC_SEEN.lock().map(|s| s.len()).unwrap_or(0);
+            append_autoload_debug(format_args!(
+                "switch-harness-disc: observation done -> keyboard UNBLOCKED. distinct MenuWindowJob filenames seen after ESC = {count} (if a game menu like 02_000_IngameTop appeared, DInput injection WORKS on native Windows)"
+            ));
+        }
+    }
+}
+
 pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
+    unsafe { switch_harness_discovery_tick() };
     // NATIVE-WINDOWS LOADING OVERLAY ownership cycle (bd er-effects-rs-8jz): our separate-window overlay
     // OWNS the screen (SHOW) whenever the local player is absent -- boot, title, and EVERY loading screen
     // (fast-travel, area transitions, death re-load) -- and RELEASES it (HIDE) once the world is loaded and
@@ -44,12 +141,28 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
                 false
             }
         };
+        // While the in-world System->Quit ProfileSelect menu is up, do NOT let the pipeline-based term show
+        // the overlay -- the re-engaging portrait pipeline would draw our stats/portrait over the live menu
+        // (the "ghosting" user-reported 2026-07-15). The actual profile-switch world-load is still covered by
+        // `native_loadscreen_up` once its loading screen ticks, so nothing is exposed.
+        let profile_menu_up = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0
+            || SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) != 0;
+        // OWN THE SCREEN THE INSTANT A SWITCH IS ARMED (user 2026-07-16): from the slot-click (phase ->
+        // CONFIRMED) until the load completes (phase -> IDLE at repro_guards.rs:1286), cover the screen with
+        // our loading overlay. Without this, the ~5s world-teardown BEFORE the native loading screen starts
+        // ticking left a frozen blank window (Windows said "not responding") so the user couldn't tell the
+        // load was working. Phase is IDLE while ProfileSelect is still interactive (the arm sets CONFIRMED
+        // only ON the pick), so this never covers the live menu.
+        let switch_active =
+            SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE;
         let owns_surface = save_picker_overlay_active()
             || native_loadscreen_up
-            || match game_module_base() {
-                Ok(base) => !unsafe { portrait_pipeline_idle_in_gameplay(base) },
-                Err(_) => true,
-            };
+            || switch_active
+            || (!profile_menu_up
+                && match game_module_base() {
+                    Ok(base) => !unsafe { portrait_pipeline_idle_in_gameplay(base) },
+                    Err(_) => true,
+                });
         NATIVE_OVERLAY_SHOW.store(usize::from(owns_surface), Ordering::SeqCst);
         // NATIVE-WINDOWS SAVE PICKER input (bd er-effects-rs-8wt): the picker LIST already renders
         // via the overlay's shared boot_view_render_frame (overlay_save_picker_onto), but the Wine

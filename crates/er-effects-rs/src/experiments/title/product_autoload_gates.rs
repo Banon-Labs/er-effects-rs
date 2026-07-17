@@ -466,21 +466,27 @@ pub(crate) unsafe fn maybe_set_title_accept_byte(base: usize) {
     if dialog == 0 || dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
         return;
     }
-    // Only at the parked press-any-button (menu not yet open): a40 latch == 0.
-    let a40 = unsafe { safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }
-        .map(|v| v & TITLE_TOP_DIALOG_LATCH_BYTE_MASK)
-        .unwrap_or(1);
-    if a40 != OWN_STEPPER_MENU_OPENED_NO {
-        TITLE_ACCEPT_BYTE_GATE_FIRED.store(true, Ordering::SeqCst); // already open -> nothing to do
-        return;
-    }
-    // Require the dialog SETTLED in Loop so the native update's accept-gate consumes our byte on its
-    // next tick (read-only probe of the live state by name, no side effects).
+    // Require the dialog SETTLED in Loop FIRST (read-only probe of the live state by name, no side
+    // effects). This MUST precede the a40 "already open" shortcut below: on a 2nd-switch return-title
+    // teardown the a40 latch is transiently != 0 WHILE the dialog is NOT yet in Loop, and taking the
+    // shortcut there would consume the TITLE_ACCEPT_BYTE_GATE_FIRED one-shot before the title ever parks
+    // at press-any-button -- so the accept byte is never set, the menu never opens, and the consecutive
+    // switch soft-locks at the covered title (root-caused from the log delta 2026-07-15: switch #2 had no
+    // "set [..]=1 on settled TitleTopDialog" line, jumping straight to PRESS BUTTON ready). Returning here
+    // while not-in-Loop preserves the one-shot so the byte is set once the title genuinely settles.
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
     let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
         unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
     let in_loop = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
     if !in_loop {
+        return; // not settled (e.g. return-title teardown) -> wait; do NOT consume the one-shot
+    }
+    // Only at the parked press-any-button (menu not yet open): a40 latch == 0.
+    let a40 = unsafe { safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }
+        .map(|v| v & TITLE_TOP_DIALOG_LATCH_BYTE_MASK)
+        .unwrap_or(1);
+    if a40 != OWN_STEPPER_MENU_OPENED_NO {
+        TITLE_ACCEPT_BYTE_GATE_FIRED.store(true, Ordering::SeqCst); // genuinely open in Loop -> nothing to do
         return;
     }
     if TITLE_ACCEPT_BYTE_GATE_FIRED.swap(true, Ordering::SeqCst) {

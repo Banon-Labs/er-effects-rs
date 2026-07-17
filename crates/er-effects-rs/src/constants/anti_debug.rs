@@ -469,6 +469,10 @@ pub(crate) static TITLE_CUSTOM_COVER_RUN_ORIG: AtomicUsize = AtomicUsize::new(HO
 pub(crate) static TITLE_CUSTOM_COVER_RUN_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_CUSTOM_COVER_RUN_RECURSION: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_CUSTOM_COVER_RUN_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// PAB detour -> system_quit_menu_window_run_post call count. Confirms the deterministic-winner wiring
+/// (2026-07-15 install-race fix) is live at runtime: >0 means PAB is driving run_post on MenuWindowJob::Run
+/// passes, so the hide + slot-activation-gate latches get written regardless of the MinHook race.
+pub(crate) static PAB_RUN_POST_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_NATIVE_JOB: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_CUSTOM_COVER_RUN_LAST_COVER_JOB: AtomicUsize =

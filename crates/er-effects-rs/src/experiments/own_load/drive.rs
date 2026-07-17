@@ -376,6 +376,48 @@ pub(crate) unsafe fn own_load_read_sl2_bytes(base: usize) -> Option<Vec<u8>> {
     // Same std::fs access the redirect enforcer already uses successfully from this DLL under Proton
     // (save_redirect::save_override_redirect_root_w). The full multi-slot save is returned; the
     // caller slices the picked slot exactly as it does for the native-builder bytes.
+    //
+    // RUNTIME FOREIGN PICK OVERRIDE (Load-Save-Profiles pick-override fix, er-effects-rs, 2026-07-15):
+    // When the human-driven "Load Save Profiles" path has COMMITTED a foreign slot this switch,
+    // `system_quit_save_swap_prepare_selected_slot` has already overwritten the game-owned ACTIVE
+    // `%APPDATA%/EldenRing/<steamid>/ER0000.{sl2,co2}` file with the picked slot's bytes (and re-committed
+    // it after the return-title save). Those committed bytes -- NOT the configured `save_file` -- are what
+    // the user just picked, so the feed MUST read the committed file here. The configured `save_file`
+    // stays the INITIAL boot autoload default (it wins only when no runtime pick is committed): reading it
+    // over a fresh foreign commit is exactly the pick-override bug (preview showed the picked character but
+    // the game loaded the config default). Read the committed path DIRECTLY -- same std::fs source as the
+    // configured-direct branch below -- because in direct mode the CreateFileW redirect does not cover the
+    // native builder's `read_dir` enumeration (see the native-builder note below), so relying on the dir
+    // walk to observe the just-committed bytes is timing/redirect fragile.
+    if let Some(committed_path) = system_quit_committed_foreign_save_path() {
+        match std::fs::read(&committed_path) {
+            Ok(mut bytes)
+                if bytes.len() as u64 >= crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES =>
+            {
+                normalize_save_bytes_to_active_steam_id(base, &mut bytes, "own-load-committed-foreign");
+                append_autoload_debug(format_args!(
+                    "own-load: read COMMITTED FOREIGN save \"{}\" ({} bytes) for slicing (Load-Save-Profiles pick overrides configured save_file for this load)",
+                    committed_path,
+                    bytes.len()
+                ));
+                return Some(bytes);
+            }
+            Ok(bytes) => {
+                append_autoload_debug(format_args!(
+                    "own-load: committed foreign save \"{}\" too small ({} bytes < {}) -- falling back to configured/native save-dir",
+                    committed_path,
+                    bytes.len(),
+                    crate::experiments::SAVE_OVERRIDE_MIN_PLAUSIBLE_BYTES
+                ));
+            }
+            Err(e) => {
+                append_autoload_debug(format_args!(
+                    "own-load: committed foreign save \"{}\" read failed ({e}) -- falling back to configured/native save-dir",
+                    committed_path
+                ));
+            }
+        }
+    }
     if let Some(path) = configured_or_default_save_file() {
         match std::fs::read(&path) {
             Ok(mut bytes)

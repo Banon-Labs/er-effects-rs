@@ -236,32 +236,26 @@ pub(crate) fn game_man_trace_summary() -> String {
 }
 
 pub(crate) unsafe fn create_continue_trace_hook(
-    hooks: &mut Vec<MhHook>,
+    _hooks: &mut Vec<MhHook>,
     name: &str,
     rva: u32,
     hook_impl: *mut c_void,
-    original: &AtomicUsize,
+    original: &'static AtomicUsize,
 ) {
     let Ok(addr) = game_rva(rva) else {
         append_continue_trace(format_args!("hook {name}: failed to resolve rva=0x{rva:x}"));
         return;
     };
-
-    match unsafe { MhHook::new(addr as *mut c_void, hook_impl) } {
-        Ok(hook) => {
-            original.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
-                append_continue_trace(format_args!("hook {name}: queue_enable failed: {status:?}"));
-            } else {
-                append_continue_trace(format_args!(
-                    "hook {name}: target=0x{addr:x} trampoline={:p}",
-                    hook.trampoline()
-                ));
-                hooks.push(hook);
-            }
-        }
+    // UNION (2026-07-16): these diagnostic trace observers hook the SAME menu functions as product
+    // hooks (e.g. cap_load_activate on 0x9a4670). Register through the union so the trace CHAINS with
+    // the product handler instead of racing it for the single MinHook slot -- the trace no longer
+    // silently steals (or loses) the address depending on install order.
+    let handler_fn: crate::mh::UnionFn =
+        unsafe { std::mem::transmute::<*mut c_void, crate::mh::UnionFn>(hook_impl) };
+    match unsafe { crate::mh::register_union_hook(addr, handler_fn, original) } {
+        Ok(()) => append_continue_trace(format_args!("hook {name}: unioned on 0x{addr:x}")),
         Err(status) => append_continue_trace(format_args!(
-            "hook {name}: create failed at 0x{addr:x}: {status:?}"
+            "hook {name}: union register failed at 0x{addr:x}: {status:?}"
         )),
     }
 }
@@ -628,6 +622,39 @@ pub(crate) fn install_continue_trace_hooks() {
             cap_append_one_hook as *mut c_void,
             &CAP_APPEND_ONE_ORIG,
         );
+        // MoveMapStep child EDGE hooks (3rd-load root, 2026-07-16). InGameStep step 6
+        // STEP_MoveMap_Init CREATES the MoveMapStep child; step 8 STEP_MoveMap_Finish fires when its
+        // load COMPLETES. On the softlock Init fires but Finish never does -- that absence IS the
+        // semaphore. These fire once per world load (edge, not per-frame) so they add no timing
+        // perturbation to the Windows-native race (unlike detouring the hot Execute pump 0x140b0bd60,
+        // which froze the title machine, submit.rs run 305). RVAs ground-truthed dump->deobf via the
+        // shift tool (dump 0x140aec210/0x140aec140 -> deobf, shift -0xf0, content-unique).
+        create_continue_trace_hook(
+            &mut hooks,
+            "mms_step_init_aec120",
+            MMS_STEP_INIT_RVA,
+            mms_step_init_hook as *mut c_void,
+            &MMS_STEP_INIT_ORIG,
+        );
+        create_continue_trace_hook(
+            &mut hooks,
+            "mms_step_finish_aec050",
+            MMS_STEP_FINISH_RVA,
+            mms_step_finish_hook as *mut c_void,
+            &MMS_STEP_FINISH_ORIG,
+        );
+        // The CHILD's own STEP_Cleanup (MoveMapStep step 18->19 exit, dump 0x140af5840 -> deobf, shift
+        // -0xf0 content-unique). Fires the instant a MoveMapStep child leaves the STEP_MoveMap resident
+        // step toward Finish. Logs the GameMan load-in signals at that exact moment so a SUCCESSFUL load
+        // reveals which input drives the advance -- on the re-load lock the incoming child never reaches
+        // this hook (parks at 18), so its ABSENCE (with a matching MMS-INIT ptr) is itself the signal.
+        create_continue_trace_hook(
+            &mut hooks,
+            "mms_child_cleanup_af5750",
+            MMS_CHILD_CLEANUP_RVA,
+            mms_child_cleanup_hook as *mut c_void,
+            &MMS_CHILD_CLEANUP_ORIG,
+        );
     }
 
     match unsafe { MH_ApplyQueued() } {
@@ -650,6 +677,114 @@ pub(crate) fn install_continue_trace_hooks() {
     }
 
     std::mem::forget(hooks);
+}
+
+/// MoveMapStep child STEP_Cleanup deobf RVA (dump 0x140af5840, shift -0xf0 content-unique). Fires when a
+/// child leaves the resident STEP_MoveMap(18) toward Finish -- the load-in completion (or teardown) edge.
+const MMS_CHILD_CLEANUP_RVA: u32 = 0xaf5750;
+pub(crate) static MMS_CHILD_CLEANUP_ORIG: AtomicUsize = AtomicUsize::new(0);
+
+/// Logs the GameMan load-in signals at the moment a MoveMapStep child advances out of STEP_MoveMap. On a
+/// SUCCESSFUL switch-load this names the input that drives the incoming child to Finish; on the re-load
+/// lock the incoming child (matching the MMS-INIT ptr) never reaches this hook. `this` = the MoveMapStep.
+pub(crate) unsafe extern "system" fn mms_child_cleanup_hook(
+    this: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {
+        let gm = game_man_ptr_or_null();
+        let rd = |off: usize| {
+            if gm != 0 {
+                unsafe { safe_read_u8(gm + off) }.map(|v| v as i32).unwrap_or(-1)
+            } else {
+                -1
+            }
+        };
+        // Also read the return-title byte (menuData+0x5d) + force latch (0x3d856a0) at the advance edge --
+        // warp/b7c/b7d proved 0 even on a SUCCESSFUL advance, so the driver is one of these (or session).
+        let menudata = game_rva(CS_MENU_MAN_GLOBAL_RVA as u32)
+            .ok()
+            .and_then(|p| unsafe { safe_read_usize(p) })
+            .filter(|&m| m > 0x10000)
+            .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
+            .filter(|&d| d > 0x10000);
+        let rt5d = menudata
+            .and_then(|d| unsafe { safe_read_u8(d + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) })
+            .map(|v| v as i32)
+            .unwrap_or(-1);
+        let force = game_rva(ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA as u32)
+            .ok()
+            .and_then(|p| unsafe { safe_read_u8(p) })
+            .map(|v| v as i32)
+            .unwrap_or(-1);
+        append_autoload_debug(format_args!(
+            "MMS-CLEANUP: child(mms)=0x{this:x} leaving STEP_MoveMap -> Cleanup; warp={} b7c={} b7d={} rt5d={rt5d} force={force} -- what drove the advance (compare to the lock where the incoming child never reaches here)",
+            rd(GAME_MAN_WARP_REQUESTED_10_OFFSET),
+            rd(GAME_MAN_ENDING_FLAG_B7C_OFFSET),
+            rd(GAME_MAN_ENDING_FLAG_B7D_OFFSET)
+        ));
+    }
+    unsafe { mms_call_original(&MMS_CHILD_CLEANUP_ORIG, this, b, c, d) }
+}
+
+/// STEP_MoveMap_Init deobf RVA (dump 0x140aec210, shift -0xf0 content-unique). Creates the child.
+const MMS_STEP_INIT_RVA: u32 = 0xaec120;
+/// STEP_MoveMap_Finish deobf RVA (dump 0x140aec140, shift -0xf0 content-unique). Load complete.
+const MMS_STEP_FINISH_RVA: u32 = 0xaec050;
+pub(crate) static MMS_STEP_INIT_ORIG: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static MMS_STEP_FINISH_ORIG: AtomicUsize = AtomicUsize::new(0);
+
+/// Pass-through: call the chained original (union trampoline) with the received ABI. The step
+/// executors are `fn(InGameStep*, FD4TaskData*)`; the union passes 4 regs and the callee ignores
+/// the extra two, so forwarding all four is ABI-safe. Returns the original's value (void executors
+/// leave rax undefined; the pump ignores it).
+unsafe fn mms_call_original(orig: &AtomicUsize, a: usize, b: usize, c: usize, d: usize) -> usize {
+    let original = orig.load(Ordering::SeqCst);
+    if original == 0 {
+        return 0;
+    }
+    let f: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(original) };
+    unsafe { f(a, b, c, d) }
+}
+
+/// STEP_MoveMap_Init (InGameStep step 6): the MoveMapStep child is (re)created + RegisterStepTask'd
+/// here. Edge semaphore: increments per world load. Logs only while an own-menu switch is active
+/// (BOOT_VIEW_OWN_MENU_LOAD_ACTIVE) so normal-play map moves don't spam.
+pub(crate) unsafe extern "system" fn mms_step_init_hook(
+    this: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let ret = unsafe { mms_call_original(&MMS_STEP_INIT_ORIG, this, b, c, d) };
+    let n = SWITCH_ORACLE_MMS_INIT_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {
+        let mms = unsafe { safe_read_usize(this + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) }.unwrap_or(0);
+        append_autoload_debug(format_args!(
+            "MMS-INIT #{n}: InGameStep=0x{this:x} child(mms)=0x{mms:x} -- MoveMapStep child created+registered (step 6)"
+        ));
+    }
+    ret
+}
+
+/// STEP_MoveMap_Finish (InGameStep step 8): the MoveMap load COMPLETED. Edge semaphore -- its
+/// ABSENCE while MMS-INIT fired is the 3rd-load softlock (child never finished, step 7 self-looped).
+pub(crate) unsafe extern "system" fn mms_step_finish_hook(
+    this: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let n = SWITCH_ORACLE_MMS_FINISH_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {
+        append_autoload_debug(format_args!(
+            "MMS-FINISH #{n}: InGameStep=0x{this:x} -- MoveMap load COMPLETE (step 8); requestCode now drains 1->0, world enters"
+        ));
+    }
+    unsafe { mms_call_original(&MMS_STEP_FINISH_ORIG, this, b, c, d) }
 }
 
 pub(crate) unsafe fn call_wrapper_original(

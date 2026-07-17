@@ -480,6 +480,31 @@ pub(crate) unsafe extern "system" fn pab_node_update_detour(
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         pab_advance_try(step)
     }));
+    // PAB deterministically WINS the shared MinHook slot at 0x7ad1c0 (MENU_WINDOW_JOB_RUN_RVA ==
+    // PAB_NODE_UPDATE_RVA), so it must also run the System->Quit post-original work here. Root cause
+    // (2026-07-15): THREE detours target 0x7ad1c0 (PAB, System->Quit MenuWindowJob::Run, and the dead
+    // title-cover hook); MinHook binds only ONE. On native Windows the inline/early PAB install wins and
+    // the background-thread System->Quit install fails ALREADY_CREATED, so `system_quit_menu_window_run_post`
+    // -- the SOLE writer of the hide latch (SYSTEM_QUIT_REAL_WINDOWS_HIDDEN) and the slot-activation gate
+    // latch (SYSTEM_QUIT_PROFILE_SELECT_WINDOW) -- never ran, giving BOTH the ghosting and the
+    // non-interactive ProfileSelect. Under Wine the scheduler happened to let System->Quit win. Making the
+    // guaranteed winner (PAB) call run_post removes the race on both platforms. `step`==rcx==the
+    // MenuWindowJob `this`; `ret`==the Run return; run_post early-returns for non-System/ProfileSelect jobs
+    // so this is cheap on every other Run pass. Recursion-guarded: a Run re-entered from run_post's own
+    // return-title submit must not re-run run_post.
+    if crate::constants::TITLE_CUSTOM_COVER_RUN_RECURSION.load(Ordering::SeqCst) == 0 {
+        crate::constants::TITLE_CUSTOM_COVER_RUN_RECURSION.store(1, Ordering::SeqCst);
+        let n = crate::constants::PAB_RUN_POST_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+        if n == 1 || n % 1200 == 0 {
+            append_autoload_debug(format_args!(
+                "pab-run-post: PAB detour (deterministic 0x7ad1c0 winner) drove system_quit_menu_window_run_post #{n}"
+            ));
+        }
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            crate::experiments::startup_hooks::system_quit_menu_window_run_post(step, ret)
+        }));
+        crate::constants::TITLE_CUSTOM_COVER_RUN_RECURSION.store(0, Ordering::SeqCst);
+    }
     ret
 }
 

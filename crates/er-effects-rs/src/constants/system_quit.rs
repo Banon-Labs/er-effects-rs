@@ -344,7 +344,7 @@ pub(crate) static START_CONTINUE_TRACE: Once = Once::new();
 pub(crate) static START_SAFE_INPUT_HOOKS: Once = Once::new();
 pub(crate) static START_SPLASH_SKIP: Once = Once::new();
 pub(crate) static START_ONLINE_DISABLE: Once = Once::new();
-pub(crate) static START_FOREGROUND_FORCE: Once = Once::new();
+// START_FOREGROUND_FORCE removed 2026-07-16 (foreground-force dropped from the product).
 pub(crate) static START_SOUND_POST_EVENT_OBSERVER: Once = Once::new();
 pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS: Once = Once::new();
 pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS: Once = Once::new();

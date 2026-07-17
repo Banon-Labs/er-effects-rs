@@ -127,12 +127,15 @@ pub(crate) fn is_native_windows() -> bool {
     !is_wine
 }
 
-/// True when the operator force-enabled the native-Windows profile render-drive despite the crash risk
-/// (env `ER_EFFECTS_ALLOW_NATIVE_PROFILE_DRIVE=1`). Diagnostic override only.
-fn native_profile_drive_forced() -> bool {
+/// True when the operator force-DISABLED the native-Windows profile render-drive (env
+/// `ER_EFFECTS_ALLOW_NATIVE_PROFILE_DRIVE=0`). The drive is now DEFAULT-ON for native (see the gates below):
+/// the isolated overlay owns its own D3D12 device and the 8-frame settle gate keeps the crash-prone
+/// model-drive blocked, so the portrait pipeline is runtime-proven safe on native (2026-07-15, zero AVs
+/// across 7 boots, animated head captured + displayed). This env is now only a diagnostic force-OFF escape.
+fn native_profile_drive_disabled() -> bool {
     matches!(
         std::env::var("ER_EFFECTS_ALLOW_NATIVE_PROFILE_DRIVE").as_deref(),
-        Ok("1")
+        Ok("0")
     )
 }
 
@@ -140,9 +143,9 @@ pub(crate) fn force_profile_render_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
-    // Native Windows: the render-drive crashes the strict D3D12 driver (see is_native_windows). Off by
-    // default there; the whole-feature infra (swapchain/HDR/composite) still runs, just not the drive.
-    if is_native_windows() && !native_profile_drive_forced() {
+    // Native Windows: DEFAULT-ON now (isolated overlay + settle gate make it safe; see
+    // native_profile_drive_disabled). Operator can still force-OFF with ER_EFFECTS_ALLOW_NATIVE_PROFILE_DRIVE=0.
+    if is_native_windows() && native_profile_drive_disabled() {
         return false;
     }
     !save_override_telemetry_only()
@@ -199,7 +202,7 @@ pub(crate) fn portrait_render_drive_enabled() -> bool {
     if autoload_disabled() || native_profile_capture_enabled() {
         return false;
     }
-    if is_native_windows() && !native_profile_drive_forced() {
+    if is_native_windows() && native_profile_drive_disabled() {
         return false;
     }
     !save_override_telemetry_only()

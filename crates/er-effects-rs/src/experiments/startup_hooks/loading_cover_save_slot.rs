@@ -62,6 +62,26 @@ pub(crate) unsafe fn portrait_pipeline_idle_in_gameplay(base: usize) -> bool {
         && !unsafe { fake_loading_screen_visible(base) }
 }
 
+/// True while the game's native NOW-LOADING screen is actively rendering -- CS::LoadingScreen::Update
+/// ticked within the last ~250ms (LOADING_SCREEN_UPDATE_HITS increments each of its frames and stops the
+/// instant the screen is destroyed). The portrait build/drive pipeline keys off this to stay engaged
+/// THROUGH the native loading screen: on a fast load PlayerIns resolves (IN_WORLD_REACHED) ~1.7s before the
+/// loading screen clears, so portrait_pipeline_idle_in_gameplay flips true mid-load and the build/drive
+/// pipeline returned before the model could build+render (run32: force_profile_render_tick never reached
+/// maybe_build). Wall-clock recency (not a per-call decrement) makes it safe to poll multiple times a frame.
+pub(crate) fn native_loading_screen_active() -> bool {
+    static LAST_HITS: AtomicUsize = AtomicUsize::new(0);
+    static LAST_CHANGE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let now_ms = EPOCH.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64;
+    let hits = LOADING_SCREEN_UPDATE_HITS.load(Ordering::SeqCst);
+    if LAST_HITS.swap(hits, Ordering::SeqCst) != hits {
+        LAST_CHANGE_MS.store(now_ms, Ordering::SeqCst);
+    }
+    let last = LAST_CHANGE_MS.load(Ordering::SeqCst);
+    last != 0 && now_ms.saturating_sub(last) < 250
+}
+
 /// Count profile-table renderers that currently hold a LIVE character model (+0x778 valid). The game's
 /// Load Profile menu builds all 10 (one per save), so this reads ~10 during the menu; our post-Continue
 /// rebuild leaves only the loaded character's model live, so it reads 1 on the loading screen. The display

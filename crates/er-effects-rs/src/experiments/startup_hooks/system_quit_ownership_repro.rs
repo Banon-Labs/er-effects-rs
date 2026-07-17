@@ -642,8 +642,20 @@ fn install_menu_window_job_dtor_guard() {
 }
 
 fn install_system_quit_menu_window_job_run_hook() {
-    if SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED.load(Ordering::SeqCst)
-        != SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED
+    // Atomic ONCE-CLAIM: only the FIRST caller proceeds; concurrent/reentrant callers bail immediately. The
+    // old `load != NOT ? return` guard did NOT block a reentrant call while the first was mid-install (INSTALLED
+    // was only set on full success), so the install ran twice -> double MhHook::new (ALREADY_CREATED) + double
+    // MH_EnableHook, leaving our handler non-deterministically not firing (intermittent ghosting / stalled
+    // switch; 2026-07-15, MH_ERROR_ENABLED). Rolled back to NOT_INSTALLED only on a REAL failure so a later
+    // call can retry; MH_ERROR_ENABLED is treated as SUCCESS (the hook is already on).
+    if SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED
+        .compare_exchange(
+            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED,
+            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED_YES,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        )
+        .is_err()
     {
         return;
     }
@@ -653,6 +665,8 @@ fn install_system_quit_menu_window_job_run_hook() {
             append_autoload_debug(format_args!(
                 "system-quit-dup: MH_Initialize for MenuWindowJob::Run hook failed: {status:?}"
             ));
+            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED
+                .store(SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED, Ordering::SeqCst);
             return;
         }
     }
@@ -660,42 +674,45 @@ fn install_system_quit_menu_window_job_run_hook() {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve MenuWindowJob::Run rva 0x{MENU_WINDOW_JOB_RUN_RVA:x}"
         ));
+        SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED
+            .store(SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED, Ordering::SeqCst);
         return;
     };
-    match unsafe {
+    let created = match unsafe {
         MhHook::new(
             addr as *mut c_void,
             system_quit_menu_window_job_run_hook as *mut c_void,
         )
     } {
         Ok(hook) => {
-            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG
-                .store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
-                append_autoload_debug(format_args!(
-                    "system-quit-dup: queue_enable MenuWindowJob::Run hook failed: {status:?}"
-                ));
-                return;
-            }
-            match unsafe { MH_ApplyQueued() } {
-                MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
-                    SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED.store(
-                        SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED_YES,
-                        Ordering::SeqCst,
-                    );
-                    append_autoload_debug(format_args!(
-                        "system-quit-dup: hooked MenuWindowJob::Run 0x{addr:x}; will map System/ProfileSelect resources to real MenuWindow pointers"
-                    ));
-                }
-                status => append_autoload_debug(format_args!(
-                    "system-quit-dup: MH_ApplyQueued MenuWindowJob::Run hook failed: {status:?}"
-                )),
-            }
+            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+            std::mem::forget(hook);
+            true
         }
-        Err(status) => append_autoload_debug(format_args!(
-            "system-quit-dup: MhHook::new MenuWindowJob::Run hook failed: {status:?}"
-        )),
+        // Adopt a hook a prior rolled-back attempt already created (ORIG was stored then); just enable it.
+        Err(MH_STATUS::MH_ERROR_ALREADY_CREATED) => false,
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: MhHook::new MenuWindowJob::Run hook failed: {status:?}"
+            ));
+            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED
+                .store(SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED, Ordering::SeqCst);
+            return;
+        }
+    };
+    match unsafe { crate::mh::MH_EnableHook(addr as *mut c_void) } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ENABLED => {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: hooked MenuWindowJob::Run 0x{addr:x} (immediate enable, created={created}); System-menu hide + resource map + return-title will run"
+            ));
+        }
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-dup: MH_EnableHook MenuWindowJob::Run hook failed: {status:?}"
+            ));
+            SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED
+                .store(SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_NOT_INSTALLED, Ordering::SeqCst);
+        }
     }
 }
 
@@ -1130,6 +1147,17 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
     let hidden = SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0;
     let profile_window = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
 
+    // DIAGNOSTIC (2026-07-16): slot-click does nothing on native Windows 1.16.2 despite ghosting fixed.
+    // Log EVERY activation with the full gate inputs so ONE click pinpoints the failing condition
+    // (vt mismatch = wrong 1.16.2 RVA, or profile_window unset, or hidden unset).
+    let flow_active_diag = SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) != 0;
+    append_autoload_debug(format_args!(
+        "sqdiag: ProfileLoadDialog ACTIVATE dialog=0x{dialog:x} vt_match={} flow_active={flow_active_diag} (old-async: hidden={hidden} profile_window=0x{profile_window:x}) save_picker={} -> {}",
+        vt == expected_vt,
+        SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst),
+        if flow_active_diag && vt == expected_vt { "ARM-load" } else { "forward-original(no-op)" }
+    ));
+
     // SAVE-FILE PICKER: while the live 05_010 window is our directory browser (in-game System
     // menu picker OR the startup title picker), every slot activation is a browse action (up /
     // enter dir / page / pick file) -- never a character load. Routed before ALL other logic:
@@ -1144,7 +1172,14 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
         return unsafe { save_picker_handle_activation(dialog, cursor) };
     }
 
-    let system_quit_profile_active = hidden && profile_window != 0 && vt == expected_vt;
+    // TIMING-INDEPENDENT GATE (2026-07-16): the old gate required `hidden` + `profile_window`, BOTH set
+    // asynchronously by run_post on a later frame. A fast slot-click raced them and fell through to the
+    // native no-op -- native Windows exposes the race Wine's scheduling hides. Gate instead on
+    // SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE (set SYNCHRONOUSLY the instant "Load Profile" is clicked, in the
+    // route FIRE) plus the dialog vtable read right here -- both known AT click time, no run_post dependency,
+    // so the click can't race a value it reads itself.
+    let flow_active = SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) != 0;
+    let system_quit_profile_active = flow_active && vt == expected_vt;
     if !system_quit_profile_active {
         return unsafe { original(dialog, b, c, d) };
     }

@@ -52,6 +52,10 @@ unsafe fn system_quit_open_profile_load_dialog(action_obj: usize) -> bool {
     };
     let job_slot = &SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT as *const AtomicUsize as usize;
     SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT.store(NULL, Ordering::SeqCst);
+    // Latch the profile-load flow as active NOW (before the ProfileSelect job/Run hook runs) so the native
+    // load-confirm MessageBox the own_stepper self-pump triggers is suppressed and cannot crash the game.
+    // Cleared on ProfileSelect reset (system_quit_reset_profile_select_state).
+    SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.store(1, Ordering::SeqCst);
     let wrapper: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(wrapper_addr) };
     append_autoload_debug(format_args!(
@@ -212,6 +216,23 @@ unsafe fn system_quit_route_button_action_or_forward(
         ));
         return 0;
     }
+    // REAL Return-to-Desktop confirm (the cloned Load Profile / Load Save Profiles rows were already routed
+    // and returned above, so reaching here with the native return-desktop action + no visual-row match is
+    // the genuine "Return to Desktop"). Make quit an INSTANT ALT+F4: persist the save, release the cursor
+    // clip, and ExitProcess(0) BEFORE the world teardown renders a loading screen (user 2026-07-15). The old
+    // clean-kill (system_quit_ownership_repro) fired mid-teardown, so the loading cover was already visible.
+    if action_obj != 0
+        && native_return_desktop_action != 0
+        && action_obj == native_return_desktop_action
+        && native_return_visual_row.is_none()
+    {
+        unsafe { system_quit_save_game_request_save_only() };
+        release_input_block_now();
+        append_autoload_debug(format_args!(
+            "quit-to-desktop: Return-to-Desktop confirmed action=0x{action_obj:x} cursor={cursor}; requested save + released cursor clip; INSTANT ExitProcess(0) before world teardown (no loading screen)"
+        ));
+        unsafe { ExitProcess(0) };
+    }
     let save_game_action = SYSTEM_QUIT_NATIVE_SAVE_GAME_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
     if action_obj != 0 && action_obj == save_game_action {
         let dialog = unsafe { safe_read_usize(action_obj + 0x8) }.unwrap_or(0);
@@ -335,6 +356,47 @@ pub(crate) unsafe extern "system" fn property_new_button_controller_activate_hoo
             "system-quit-load-save-profiles: Load Save Profiles controller selected controller=0x{controller:x} action=0x{action:x} event_kind={event_kind} event_a=0x{event_a:x} event_b=0x{event_b:x} opened={opened} (in-game save picker); suppressing native button activation"
         ));
         return;
+    }
+    // REAL Return-to-Desktop click: the native GameEnd button is NOT one of our cloned controllers, so it
+    // falls through here. The action-route hook never sees it (the native dispatch bypasses it), so intercept
+    // at the CONTROLLER level. If this controller carries the captured native return-desktop action, make quit
+    // an INSTANT ALT+F4: persist the save, release the cursor, and ExitProcess(0) BEFORE the world teardown
+    // renders any loading screen / our isolated overlay (user 2026-07-15).
+    let native_return_action = SYSTEM_QUIT_NATIVE_RETURN_DESKTOP_ACTION_LAST_OBJECT.load(Ordering::SeqCst);
+    if native_return_action != 0 && controller != 0 {
+        let action = unsafe {
+            safe_read_usize(controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET)
+        }
+        .unwrap_or(0);
+        // Diagnostic (throttled): surface every non-cloned controller activation so the real Return-to-Desktop
+        // dispatch is visible even when the action does not match, instead of guessing the path again.
+        static RETURN_DESKTOP_CONTROLLER_DIAG: AtomicUsize = AtomicUsize::new(0);
+        let dn = RETURN_DESKTOP_CONTROLLER_DIAG.fetch_add(1, Ordering::SeqCst);
+        if dn < 24 {
+            append_autoload_debug(format_args!(
+                "quit-to-desktop: non-cloned controller activation #{dn} controller=0x{controller:x} action=0x{action:x} native_return_action=0x{native_return_action:x} event_kind={event_kind}"
+            ));
+        }
+        // Gate on the native should-invoke predicate (real CLICK, not navigation/focus). ALSO require that NO
+        // profile-switch is in flight: the native return-desktop ACTION is reused across ProfileSelect
+        // controllers (observed: 12 activations carried it during one switch), so without this gate a switch's
+        // ProfileSelect activation would ExitProcess mid-switch (2026-07-15). Only the genuine top-level Quit
+        // menu (no switch phase, no ProfileSelect window) may quit to desktop.
+        let switch_in_flight = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+            != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
+            || SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0
+            || SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) != 0;
+        if action == native_return_action
+            && !switch_in_flight
+            && unsafe { system_quit_controller_should_invoke_action(controller, event_a) }
+        {
+            unsafe { system_quit_save_game_request_save_only() };
+            release_input_block_now();
+            append_autoload_debug(format_args!(
+                "quit-to-desktop: Return-to-Desktop controller CLICK controller=0x{controller:x} action=0x{action:x}; requested save + released cursor; INSTANT ExitProcess(0) (no teardown/loading screen)"
+            ));
+            unsafe { ExitProcess(0) };
+        }
     }
     unsafe { system_quit_forward_button_controller_activation(controller, event_kind, event_a, event_b) };
 }

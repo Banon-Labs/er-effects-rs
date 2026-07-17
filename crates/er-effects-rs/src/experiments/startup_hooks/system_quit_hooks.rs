@@ -161,6 +161,22 @@ pub(crate) unsafe extern "system" fn system_quit_gaitem_deserialize_hook(
         return;
     }
     SYSTEM_QUIT_GAITEM_DESERIALIZE_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst);
+    // 2ND-IN-PROCESS RELOAD FIX: when a profile-switch has picked a slot (SELECTED_SLOT in 0..10; usize::MAX
+    // on a clean boot), this deserialize is char#2's load running on the CSGaitemImp table that still holds
+    // char#1's items (freed by teardown). The native deserialize then exhausts the free-queue and dispatches a
+    // stale CSGaitemIns vtable -> the AV at CSGaitemImp::Deserialize (0x67141a). Reset the singleton to pristine
+    // BEFORE the native deserialize so it starts from an empty table. Never fires on a clean boot (no pick, so
+    // the table is already fresh); idempotent with the continue_confirm reset (clearing an empty table no-ops).
+    let picked = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
+    if picked < TITLE_PROFILE_SLOT_COUNT {
+        if let Ok(base) = game_module_base() {
+            let n = SYSTEM_QUIT_GAITEM_DESERIALIZE_RESET_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: reset CSGaitemImp singleton #{n} before native deserialize (picked slot={picked}) -- clears char#1 stale items so char#2 deserialize does not dispatch a freed vtable (0x67141a)"
+            ));
+            unsafe { own_load_reset_gaitem_singleton(base) };
+        }
+    }
     let orig = SYSTEM_QUIT_GAITEM_DESERIALIZE_ORIG.load(Ordering::SeqCst);
     if orig == HOOK_ORIGINAL_UNSET {
         append_autoload_debug(format_args!(
@@ -542,12 +558,29 @@ pub(crate) fn install_system_quit_gaitem_deserialize_hook() {
         }
         return;
     }
+    // Atomic once-claim for the fresh install (installed == NOT_INSTALLED here): only the first caller
+    // proceeds; reentrant callers see YES and bail. Prevents the double MhHook::new/enable reentrancy that
+    // left the hook non-deterministically un-enabled -> the native deserialize crashed on char#1's stale table
+    // (2026-07-15, same fix as MenuWindowJob::Run). Rolled back to NOT on real failure; MH_ERROR_ENABLED == on.
+    if SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED
+        .compare_exchange(
+            SYSTEM_QUIT_GAITEM_DESERIALIZE_NOT_INSTALLED,
+            SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED_YES,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        )
+        .is_err()
+    {
+        return;
+    }
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
         status => {
             append_autoload_debug(format_args!(
                 "system-quit-quickload: MH_Initialize for CSGaitemImp::Deserialize hook failed: {status:?}"
             ));
+            SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED
+                .store(SYSTEM_QUIT_GAITEM_DESERIALIZE_NOT_INSTALLED, Ordering::SeqCst);
             return;
         }
     }
@@ -555,10 +588,12 @@ pub(crate) fn install_system_quit_gaitem_deserialize_hook() {
         append_autoload_debug(format_args!(
             "system-quit-quickload: failed to resolve CSGaitemImp::Deserialize rva 0x{SYSTEM_QUIT_GAITEM_DESERIALIZE_RVA:x}"
         ));
+        SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED
+            .store(SYSTEM_QUIT_GAITEM_DESERIALIZE_NOT_INSTALLED, Ordering::SeqCst);
         return;
     };
     SYSTEM_QUIT_GAITEM_DESERIALIZE_ADDR.store(addr, Ordering::SeqCst);
-    match unsafe {
+    let created = match unsafe {
         MhHook::new(
             addr as *mut c_void,
             system_quit_gaitem_deserialize_hook as *mut c_void,
@@ -566,30 +601,32 @@ pub(crate) fn install_system_quit_gaitem_deserialize_hook() {
     } {
         Ok(hook) => {
             SYSTEM_QUIT_GAITEM_DESERIALIZE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
-                append_autoload_debug(format_args!(
-                    "system-quit-quickload: queue_enable CSGaitemImp::Deserialize hook failed: {status:?}"
-                ));
-                return;
-            }
-            match unsafe { MH_ApplyQueued() } {
-                MH_STATUS::MH_OK => {
-                    SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED.store(
-                        SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED_YES,
-                        Ordering::SeqCst,
-                    );
-                    append_autoload_debug(format_args!(
-                        "system-quit-quickload: hooked CSGaitemImp::Deserialize 0x{addr:x}; transition inventory deserialize leaf skipped until native title handoff"
-                    ));
-                }
-                status => append_autoload_debug(format_args!(
-                    "system-quit-quickload: MH_ApplyQueued CSGaitemImp::Deserialize hook failed: {status:?}"
-                )),
-            }
+            std::mem::forget(hook);
+            true
         }
-        Err(status) => append_autoload_debug(format_args!(
-            "system-quit-quickload: MhHook::new CSGaitemImp::Deserialize hook failed: {status:?}"
-        )),
+        Err(MH_STATUS::MH_ERROR_ALREADY_CREATED) => false,
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: MhHook::new CSGaitemImp::Deserialize hook failed: {status:?}"
+            ));
+            SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED
+                .store(SYSTEM_QUIT_GAITEM_DESERIALIZE_NOT_INSTALLED, Ordering::SeqCst);
+            return;
+        }
+    };
+    match unsafe { crate::mh::MH_EnableHook(addr as *mut c_void) } {
+        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ENABLED => {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: hooked CSGaitemImp::Deserialize 0x{addr:x} (immediate enable, created={created}); transition deserialize skip + stale-table reset active"
+            ));
+        }
+        status => {
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: MH_EnableHook CSGaitemImp::Deserialize hook failed: {status:?}"
+            ));
+            SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED
+                .store(SYSTEM_QUIT_GAITEM_DESERIALIZE_NOT_INSTALLED, Ordering::SeqCst);
+        }
     }
 }
 
@@ -732,176 +769,102 @@ pub(crate) fn disable_system_quit_gameman_load_save_hook(source: &str) {
     }
 }
 
-fn install_system_quit_profile_load_activate_hook() {
-    if SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED.load(Ordering::SeqCst)
-        != SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_NOT_INSTALLED
+/// Robust "install this MinHook detour exactly once" primitive shared by the boot-time hook installs. Fixes
+/// the non-deterministic MinHook install races (2026-07-15): these installs are retried per game-tick until
+/// they land, and the old `load()!=NOT?return` guard did not block a REENTRANT call while the first was
+/// mid-install (the flag was only set on full success), so an install ran twice -> double MhHook::new
+/// (ALREADY_CREATED) + a `queue_enable`+shared-`MH_ApplyQueued` race -> the handler non-deterministically
+/// never fired (intermittent ghosting, dead slot-pick, reload crash). This helper: (1) atomic once-CLAIM on
+/// `flag` so only the first caller proceeds; (2) atomic single-target `MH_EnableHook` (no shared queue);
+/// (3) adopts `MH_ERROR_ALREADY_CREATED` and treats `MH_ERROR_ENABLED` as success. Rolls `flag` back to
+/// `not_installed` only on a REAL failure so a later tick retries. `addr` is the already-resolved target VA.
+pub(crate) fn mh_install_hook_once(
+    flag: &AtomicUsize,
+    not_installed: usize,
+    installed_yes: usize,
+    addr: usize,
+    handler: *mut c_void,
+    orig: &'static AtomicUsize,
+    name: &str,
+) -> bool {
+    if flag
+        .compare_exchange(not_installed, installed_yes, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
     {
-        return;
+        return flag.load(Ordering::SeqCst) == installed_yes;
     }
-    match unsafe { MH_Initialize() } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-        status => {
+    // UNION (2026-07-16): register through the hook union instead of a bare MhHook. If another feature
+    // already hooks this game address, we CHAIN onto it (no silent drop, no install-order race) rather
+    // than losing the single MinHook slot. `orig` is wired to the next handler (or the real trampoline).
+    let handler_fn: crate::mh::UnionFn =
+        unsafe { std::mem::transmute::<*mut c_void, crate::mh::UnionFn>(handler) };
+    match unsafe { crate::mh::register_union_hook(addr, handler_fn, orig) } {
+        Ok(()) => {
             append_autoload_debug(format_args!(
-                "system-quit-dup: MH_Initialize for ProfileLoadDialog activation hook failed: {status:?}"
+                "mh-install: {name} registered on union 0x{addr:x}"
             ));
-            return;
+            true
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "mh-install: register_union_hook {name} failed: {status:?}"
+            ));
+            flag.store(not_installed, Ordering::SeqCst);
+            false
         }
     }
+}
+
+fn install_system_quit_profile_load_activate_hook() {
     let Ok(addr) = game_rva(SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve ProfileLoadDialog activation rva 0x{SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA:x}"
         ));
         return;
     };
-    match unsafe {
-        MhHook::new(
-            addr as *mut c_void,
-            system_quit_profile_load_activate_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => {
-            SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ORIG
-                .store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
-                append_autoload_debug(format_args!(
-                    "system-quit-dup: queue_enable ProfileLoadDialog activation hook failed: {status:?}"
-                ));
-                return;
-            }
-            match unsafe { MH_ApplyQueued() } {
-                MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
-                    SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED.store(
-                        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED_YES,
-                        Ordering::SeqCst,
-                    );
-                    append_autoload_debug(format_args!(
-                        "system-quit-dup: hooked ProfileLoadDialog activation 0x{addr:x}; injected in-world ProfileSelect can build confirmation dialog"
-                    ));
-                }
-                status => append_autoload_debug(format_args!(
-                    "system-quit-dup: MH_ApplyQueued ProfileLoadDialog activation hook failed: {status:?}"
-                )),
-            }
-        }
-        Err(status) => append_autoload_debug(format_args!(
-            "system-quit-dup: MhHook::new ProfileLoadDialog activation hook failed: {status:?}"
-        )),
-    }
+    mh_install_hook_once(
+        &SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED,
+        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_NOT_INSTALLED,
+        SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_INSTALLED_YES,
+        addr,
+        system_quit_profile_load_activate_hook as *mut c_void,
+        &SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_ORIG,
+        "ProfileLoadDialog activation",
+    );
 }
 
 fn install_system_quit_profile_load_confirmed_hook() {
-    if SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED.load(Ordering::SeqCst)
-        != SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_NOT_INSTALLED
-    {
-        return;
-    }
-    match unsafe { MH_Initialize() } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-        status => {
-            append_autoload_debug(format_args!(
-                "system-quit-dup: MH_Initialize for ProfileLoadDialog confirmed-load hook failed: {status:?}"
-            ));
-            return;
-        }
-    }
     let Ok(addr) = game_rva(SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve ProfileLoadDialog confirmed-load rva 0x{SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA:x}"
         ));
         return;
     };
-    match unsafe {
-        MhHook::new(
-            addr as *mut c_void,
-            system_quit_profile_load_confirmed_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => {
-            SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ORIG
-                .store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
-                append_autoload_debug(format_args!(
-                    "system-quit-dup: queue_enable ProfileLoadDialog confirmed-load hook failed: {status:?}"
-                ));
-                return;
-            }
-            match unsafe { MH_ApplyQueued() } {
-                MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
-                    SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED.store(
-                        SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED_YES,
-                        Ordering::SeqCst,
-                    );
-                    append_autoload_debug(format_args!(
-                        "system-quit-dup: hooked ProfileLoadDialog confirmed-load transition 0x{addr:x}; transition is allowed after load-job guard"
-                    ));
-                }
-                status => append_autoload_debug(format_args!(
-                    "system-quit-dup: MH_ApplyQueued ProfileLoadDialog confirmed-load hook failed: {status:?}"
-                )),
-            }
-        }
-        Err(status) => append_autoload_debug(format_args!(
-            "system-quit-dup: MhHook::new ProfileLoadDialog confirmed-load hook failed: {status:?}"
-        )),
-    }
+    mh_install_hook_once(
+        &SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED,
+        SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_NOT_INSTALLED,
+        SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_INSTALLED_YES,
+        addr,
+        system_quit_profile_load_confirmed_hook as *mut c_void,
+        &SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ORIG,
+        "ProfileLoadDialog confirmed-load",
+    );
 }
 
 fn install_system_quit_profile_load_job_run_hook() {
-    if SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED.load(Ordering::SeqCst)
-        != SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_NOT_INSTALLED
-    {
-        return;
-    }
-    match unsafe { MH_Initialize() } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-        status => {
-            append_autoload_debug(format_args!(
-                "system-quit-dup: MH_Initialize for ProfileLoadDialog load-job Run hook failed: {status:?}"
-            ));
-            return;
-        }
-    }
     let Ok(addr) = game_rva(SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-dup: failed to resolve ProfileLoadDialog load-job Run rva 0x{SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA:x}"
         ));
         return;
     };
-    match unsafe {
-        MhHook::new(
-            addr as *mut c_void,
-            system_quit_profile_load_job_run_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => {
-            SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ORIG
-                .store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
-                append_autoload_debug(format_args!(
-                    "system-quit-dup: queue_enable ProfileLoadDialog load-job Run hook failed: {status:?}"
-                ));
-                return;
-            }
-            match unsafe { MH_ApplyQueued() } {
-                MH_STATUS::MH_OK => {
-                    std::mem::forget(hook);
-                    SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED.store(
-                        SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED_YES,
-                        Ordering::SeqCst,
-                    );
-                    append_autoload_debug(format_args!(
-                        "system-quit-dup: hooked ProfileLoadDialog load-job Run 0x{addr:x}; actual in-world load/deser is blocked by default"
-                    ));
-                }
-                status => append_autoload_debug(format_args!(
-                    "system-quit-dup: MH_ApplyQueued ProfileLoadDialog load-job Run hook failed: {status:?}"
-                )),
-            }
-        }
-        Err(status) => append_autoload_debug(format_args!(
-            "system-quit-dup: MhHook::new ProfileLoadDialog load-job Run hook failed: {status:?}"
-        )),
-    }
+    mh_install_hook_once(
+        &SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED,
+        SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_NOT_INSTALLED,
+        SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_INSTALLED_YES,
+        addr,
+        system_quit_profile_load_job_run_hook as *mut c_void,
+        &SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ORIG,
+        "ProfileLoadDialog load-job Run",
+    );
 }
