@@ -843,7 +843,9 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             })
             .unwrap_or(usize::MAX);
         let ll_fcap = ig_ptr
-            .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_LOADLISTLIST_FILECAP_238_OFFSET) })
+            .and_then(|ig| unsafe {
+                safe_read_usize(ig + INGAMESTEP_LOADLISTLIST_FILECAP_238_OFFSET)
+            })
             .unwrap_or(0);
         // The loadlist virtual path CONTENT: is it the TARGET map (m28) or a STALE map (m60)? DLString
         // wchar; size 35 > 7 so it is heap (data = *(base+0x210)). Read the ASCII low byte of each wchar
@@ -861,7 +863,11 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                         if b == 0 {
                             break;
                         }
-                        s.push(if (0x20..0x7f).contains(&b) { b as char } else { '?' });
+                        s.push(if (0x20..0x7f).contains(&b) {
+                            b as char
+                        } else {
+                            '?'
+                        });
                     }
                     s
                 })
@@ -951,14 +957,15 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             let mut ar_bres: i32 = -1;
             let mut ar_ptr: usize = 0;
             for i in 0..(mms_blocks as usize) {
-                let Some(bp) = (unsafe {
-                    safe_read_usize(wio + WORLDINFO_BLOCK_LIST_B3030_OFFSET + i * 8)
-                })
-                .filter(|&v| v > 0x10000) else {
+                let Some(bp) =
+                    (unsafe { safe_read_usize(wio + WORLDINFO_BLOCK_LIST_B3030_OFFSET + i * 8) })
+                        .filter(|&v| v > 0x10000)
+                else {
                     continue;
                 };
-                let Some(inner) = (unsafe { safe_read_usize(bp + WORLDINFO_BLOCK_ENTRY_INNER_8_OFFSET) })
-                    .filter(|&v| v > 0x10000)
+                let Some(inner) =
+                    (unsafe { safe_read_usize(bp + WORLDINFO_BLOCK_ENTRY_INNER_8_OFFSET) })
+                        .filter(|&v| v > 0x10000)
                 else {
                     continue;
                 };
@@ -968,7 +975,9 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                 if area == cur_area && !found {
                     found = true;
                     // The matched entry `bp` is area cur_area's WorldAreaRes: read its activation state.
-                    ar_wanted = unsafe { safe_read_u8(bp + 0x1a) }.map(|v| v as i32).unwrap_or(-1);
+                    ar_wanted = unsafe { safe_read_u8(bp + 0x1a) }
+                        .map(|v| v as i32)
+                        .unwrap_or(-1);
                     ar_state = unsafe { safe_read_i32(bp + 0x1c) }.unwrap_or(-1);
                     ar_bres = unsafe { safe_read_i32(bp + 0xcd8) }.unwrap_or(-1);
                     ar_ptr = bp;
@@ -1005,12 +1014,8 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                             }
                             static LAST_CE0_SIG: core::sync::atomic::AtomicUsize =
                                 core::sync::atomic::AtomicUsize::new(0);
-                            let sig =
-                                ce0_base ^ ((first as usize) << 8) ^ (ar_bres as usize);
-                            if LAST_CE0_SIG
-                                .swap(sig, core::sync::atomic::Ordering::SeqCst)
-                                != sig
-                            {
+                            let sig = ce0_base ^ ((first as usize) << 8) ^ (ar_bres as usize);
+                            if LAST_CE0_SIG.swap(sig, core::sync::atomic::Ordering::SeqCst) != sig {
                                 append_autoload_debug(format_args!(
                                     "STALE-CE0 dump: area=0x{cur_area:x} bp=0x{bp:x} ce0_base=0x{ce0_base:x} cnt={ar_bres} entry_mapids=[{mapids}] -- getter wants 0x{cur_area:x}000000 (blk_ls null => none match)"
                                 ));
@@ -1020,9 +1025,7 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                     // Read the load-state exactly like FUN_14066d4d0: block->vtable[0x10](block) returns
                     // the load-state object; then +0x2d / +0x35. This is the same getter the game polls
                     // on this same block every frame, so it is safe. RCX = block (Windows x64 ABI).
-                    if let Some(vt) =
-                        unsafe { safe_read_usize(bp) }.filter(|&v| v > 0x10000)
-                    {
+                    if let Some(vt) = unsafe { safe_read_usize(bp) }.filter(|&v| v > 0x10000) {
                         ls_vt = vt;
                         if let Some(getter) =
                             unsafe { safe_read_usize(vt + BLOCK_LOADSTATE_GETTER_VT_10_OFFSET) }
@@ -1039,17 +1042,18 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
                             let ls = unsafe { get_ls(bp, &block_id as *const u32) };
                             ls_ptr = ls;
                             if ls > 0x10000 {
-                                ls_2c = unsafe { safe_read_u8(ls + BLOCK_LOADSTATE_REQUEST_2C_OFFSET) }
-                                    .map(|v| v as i32)
-                                    .unwrap_or(-1);
-                                ls_2d = unsafe { safe_read_u8(ls + BLOCK_LOADSTATE_FLAG_2D_OFFSET) }
-                                    .map(|v| v as i32)
-                                    .unwrap_or(-1);
-                                ls_35 = unsafe {
-                                    safe_read_u8(ls + BLOCK_LOADSTATE_PHASE_35_OFFSET)
-                                }
-                                .map(|v| v as i32)
-                                .unwrap_or(-1);
+                                ls_2c =
+                                    unsafe { safe_read_u8(ls + BLOCK_LOADSTATE_REQUEST_2C_OFFSET) }
+                                        .map(|v| v as i32)
+                                        .unwrap_or(-1);
+                                ls_2d =
+                                    unsafe { safe_read_u8(ls + BLOCK_LOADSTATE_FLAG_2D_OFFSET) }
+                                        .map(|v| v as i32)
+                                        .unwrap_or(-1);
+                                ls_35 =
+                                    unsafe { safe_read_u8(ls + BLOCK_LOADSTATE_PHASE_35_OFFSET) }
+                                        .map(|v| v as i32)
+                                        .unwrap_or(-1);
                             }
                         }
                     }
@@ -1134,10 +1138,11 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             let mut s = String::new();
             if cnt > 0 && cnt < 256 {
                 for i in 0..(cnt as usize).min(24) {
-                    let bid =
-                        unsafe { safe_read_i32(wio + WORLDINFO_OVERWORLD_LIST_B3148_OFFSET + i * 4) }
-                            .map(|v| v as u32)
-                            .unwrap_or(u32::MAX);
+                    let bid = unsafe {
+                        safe_read_i32(wio + WORLDINFO_OVERWORLD_LIST_B3148_OFFSET + i * 4)
+                    }
+                    .map(|v| v as u32)
+                    .unwrap_or(u32::MAX);
                     let a = (bid >> 24) & 0xff;
                     let _ = core::fmt::Write::write_fmt(&mut s, format_args!("{a:#x},"));
                 }
@@ -1256,9 +1261,10 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             .and_then(|d| unsafe { safe_read_u8(d + CS_MENU_DATA_ENDING_FLAG_5E_OFFSET) })
             .map(|b| b as i32)
             .unwrap_or(-1);
-        let ending_force = unsafe { safe_read_u8(module_base + ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA) }
-            .map(|b| b as i32)
-            .unwrap_or(-1);
+        let ending_force =
+            unsafe { safe_read_u8(module_base + ENDING_REQUEST_FORCE_FLAG_3D856A0_RVA) }
+                .map(|b| b as i32)
+                .unwrap_or(-1);
         // Remaining cVar10 ending-request INPUTS read straight off GameMan (the load-in signals): 0xb7c,
         // 0xb7d, warpRequested@0x10. On a good load one is 1; on the stuck re-load they should reveal the
         // stale one. gm is the live GameMan ptr from the outer guard; safe_read guards a bad offset.
@@ -1293,6 +1299,25 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             0
         };
         let peak = SWITCH_ORACLE_MAX_STABLE_FRAMES.load(Ordering::SeqCst);
+        if sf == 30
+            && SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+                >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
+            && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE
+                .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        {
+            SYSTEM_QUIT_QUICKLOAD_PHASE.store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
+            unsafe {
+                *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = OWN_STEPPER_SLOT_NONE;
+            }
+            if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
+                er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
+                er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
+            }
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: native MoveMap stable proof OK sf={sf} slot={slot} player_present={player_present} ig_d8={ig_d8} menu_job=0x{menu_job:x} -> phase IDLE, cleared GameMan+0xb78/save_requested/warp_requested"
+            ));
+        }
         let n = SWITCH_ORACLE_TICK.fetch_add(1, Ordering::SeqCst) + 1;
         let dropped = !stable && peak >= 30;
         // FIX: on the second load (in_world), flip the map-mount guard each tick (cooldown-bounded, self-
@@ -1303,12 +1328,14 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
             mms_step,
             sf as i64,
         );
-        if n <= 10 || n % 30 == 0 || matches!(sf, 1 | 60 | 300 | 600) || dropped || mms_step_changed {
+        if n <= 10 || n % 30 == 0 || matches!(sf, 1 | 60 | 300 | 600) || dropped || mms_step_changed
+        {
             let cls = if peak >= 300 {
                 "LOADED_STABLE"
             } else if dropped {
                 "DROPPED(bounce/reload)"
-            } else if bc4v == 1 && ig_d8 == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING && mms.is_some() {
+            } else if bc4v == 1 && ig_d8 == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING && mms.is_some()
+            {
                 // bc4=1 + requestCode=1 + a live MoveMapStep child = the 3rd-load softlock: InGameStep
                 // step 7 waiting on the child that never finishes. mms_step names the exact stuck point.
                 "MMS-CHILD-STALL(step7 waiting on child)"
@@ -1448,7 +1475,31 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         // exactly as before) and reset for the next genuine pick, so switch 1's initial load is unchanged.
         let switch_committed =
             SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1;
-        let b78_val = if world_up || switch_committed {
+        let phase_for_b78 = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+        let (post_b78_ig_d8, post_b78_mms_step) = if owner != null {
+            let ig = unsafe { safe_read_usize(owner + 0x2e8) }.filter(|&v| v > 0x10000);
+            let ig_d8 = ig
+                .and_then(|ig| unsafe { safe_read_i32(ig + 0xd8) })
+                .unwrap_or(-1);
+            let mms_step = ig
+                .and_then(|ig| unsafe { safe_read_usize(ig + INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET) })
+                .filter(|&v| v > 0x10000)
+                .and_then(|mms| unsafe { safe_read_i32(mms + INGAMESTEP_STEP_STATE_OFFSET) })
+                .unwrap_or(-1);
+            (ig_d8, mms_step)
+        } else {
+            (-1, -1)
+        };
+        let post_continue_movemap_load = phase_for_b78
+            >= SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF
+            && return_title_job_predicate_bc4 == 0
+            && post_b78_ig_d8 == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING
+            && post_b78_mms_step == MOVEMAPSTEP_STEP_MOVEMAP_INDEX;
+        let b78_val = if switch_committed {
+            OWN_STEPPER_SLOT_NONE
+        } else if post_continue_movemap_load {
+            slot
+        } else if world_up {
             OWN_STEPPER_SLOT_NONE
         } else {
             slot

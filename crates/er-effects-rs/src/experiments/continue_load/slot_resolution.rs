@@ -117,6 +117,16 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     const WAIT_INC: usize = 1;
     let gm = game_man_ptr_or_null();
     let phase = FULLREAD_PHASE.load(Ordering::SeqCst);
+    let system_quit_slot = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
+    if system_quit_slot < TITLE_PROFILE_SLOT_COUNT {
+        if phase != FULLREAD_PHASE_DONE {
+            append_autoload_debug(format_args!(
+                "native-fullread: STAND-DOWN for System->Quit selected slot {system_quit_slot}; native b78/MoveMapStep path owns this switch (phase={phase})"
+            ));
+            FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
+        }
+        return;
+    }
     // Already finished: keep observing (the golden oracle is written by the caller's telemetry once
     // the native pump streams the world).
     if phase == FULLREAD_PHASE_DONE {

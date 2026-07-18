@@ -1,18 +1,18 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `/home/banon/.local/bin/bd`** -- do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly always works. Run `/home/banon/.local/bin/bd prime` for full workflow context.
+This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `/home/choza/.local/bin/bd`** -- do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly always works. Run `/home/choza/.local/bin/bd prime` for full workflow context.
 
 ## Quick Reference
 
 ```bash
-/home/banon/.local/bin/bd ready              # Find available work
-/home/banon/.local/bin/bd show <id>          # View issue details
-/home/banon/.local/bin/bd update <id> --claim  # Claim work atomically
-/home/banon/.local/bin/bd close <id>         # Complete work
-/home/banon/.local/bin/bd dolt push          # Push beads data to remote
+/home/choza/.local/bin/bd ready              # Find available work
+/home/choza/.local/bin/bd show <id>          # View issue details
+/home/choza/.local/bin/bd update <id> --claim  # Claim work atomically
+/home/choza/.local/bin/bd close <id>         # Complete work
+/home/choza/.local/bin/bd dolt push          # Push beads data to remote
 ```
 
-For task startup in this repo, read relevant `bd` memories (`/home/banon/.local/bin/bd memories <topic>` and `/home/banon/.local/bin/bd recall <key>`) before broad source inspection or implementation. Treat memories as the first-pass continuation context; do not discover them midstream after choosing an approach.
+For task startup in this repo, read relevant `bd` memories (`/home/choza/.local/bin/bd memories <topic>` and `/home/choza/.local/bin/bd recall <key>`) before broad source inspection or implementation. Treat memories as the first-pass continuation context; do not discover them midstream after choosing an approach.
 
 ## Elden Ring Runtime Probe Hygiene
 
@@ -171,9 +171,9 @@ cp -rf source dest          # NOT: cp -r source dest
 
 ### Rules
 
-- Use `/home/banon/.local/bin/bd` for ALL task tracking -- do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `/home/banon/.local/bin/bd prime` for detailed command reference and session close protocol
-- Use `/home/banon/.local/bin/bd remember` for persistent knowledge -- do NOT use MEMORY.md files (and to READ a memory use `/home/banon/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
+- Use `/home/choza/.local/bin/bd` for ALL task tracking -- do NOT use TodoWrite, TaskCreate, or markdown TODO lists
+- Run `/home/choza/.local/bin/bd prime` for detailed command reference and session close protocol
+- Use `/home/choza/.local/bin/bd remember` for persistent knowledge -- do NOT use MEMORY.md files (and to READ a memory use `/home/choza/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
 
 ## RTK / Code Search Caveat
 
@@ -243,7 +243,7 @@ commit-immediately-after-runtime-validation-2026-07-17.
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   /home/banon/.local/bin/bd dolt push
+   /home/choza/.local/bin/bd dolt push
    git push
    git status  # MUST show "up to date with origin"
    ```

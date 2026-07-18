@@ -1,4 +1,3 @@
-
 /// Log `msg` exactly once for the current repro phase (`SQ_REPRO_STATE_TAPS` latches it), used when
 /// a phase has issued all its edges and is now HOLDING until its transition is observed. Not a retry
 /// budget -- a boolean latch so the "waiting" line is not spammed.
@@ -42,14 +41,14 @@ fn sq_repro_option_tab_row_fingerprint(option_window: usize, tab: usize) -> Opti
         return None;
     }
     let composite = option_window + OPTIONSETTING_COMPOSITE_OFFSET;
-    let dialog = unsafe {
-        safe_read_usize(composite + OPTIONSETTING_COMPOSITE_PANE_CACHE_OFFSET + tab * 8)
-    }
-    .unwrap_or(0);
+    let dialog =
+        unsafe { safe_read_usize(composite + OPTIONSETTING_COMPOSITE_PANE_CACHE_OFFSET + tab * 8) }
+            .unwrap_or(0);
     if dialog < HEAP_LO || dialog == TITLE_OWNER_SCAN_START_ADDRESS {
         return None;
     }
-    let count = unsafe { safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET) }?;
+    let count =
+        unsafe { safe_read_usize(dialog + PROPERTY_EDIT_DIALOG_PROPERTY_COUNT_1AF0_OFFSET) }?;
     if count > 64 {
         return None;
     }
@@ -133,20 +132,20 @@ fn sq_repro_profile_back_mode() -> bool {
 // tab -> Load Profile -> pick top character -> confirm -> load). This mode DOES drive a real profile
 // load/reload; agent-owned repro only, gated separately from the default Save Game harness.
 fn sq_repro_load_switch_mode() -> bool {
-    matches!(std::env::var("ER_EFFECTS_SQ_LOAD_SWITCH").as_deref(), Ok("1"))
-        || game_directory_path()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("er-effects-system-quit-load-switch.txt")
-            .exists()
+    matches!(
+        std::env::var("ER_EFFECTS_SQ_LOAD_SWITCH").as_deref(),
+        Ok("1")
+    ) || game_directory_path()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("er-effects-system-quit-load-switch.txt")
+        .exists()
 }
 
 /// SAVE-GAME ROW mode for the System->Quit repro autopilot. The main
 /// `ER_EFFECTS_SYSTEM_QUIT_REPRO=1` gate still controls whether the repro harness runs at all.
 /// Yields to the tab-return, profile-back, and profile-load-switch modes.
 fn sq_repro_save_game_only() -> bool {
-    !sq_repro_tab_return_mode()
-        && !sq_repro_profile_back_mode()
-        && !sq_repro_load_switch_mode()
+    !sq_repro_tab_return_mode() && !sq_repro_profile_back_mode() && !sq_repro_load_switch_mode()
 }
 
 /// Enter a switch: capture the confirm-count baseline and clear the per-switch menu-window/cursor
@@ -220,12 +219,12 @@ fn sq_repro_begin_switch() {
 /// certain and are refined empirically from the phase the run stalls at. 0 = no key this frame.
 fn sq_repro_gamepad_to_dik(btn: u16) -> u8 {
     match btn {
-        XINPUT_GAMEPAD_START => 0x01,          // DIK_ESCAPE  -- open the in-world system/escape menu
-        XINPUT_GAMEPAD_A => 0x1c,              // DIK_RETURN  -- menu confirm/select
-        XINPUT_GAMEPAD_B => 0x0e,              // DIK_BACK (Backspace) -- menu cancel/back
-        XINPUT_GAMEPAD_DPAD_UP => 0xc8,        // DIK_UP
-        XINPUT_GAMEPAD_DPAD_DOWN => 0xd0,      // DIK_DOWN
-        XINPUT_GAMEPAD_LEFT_SHOULDER => 0x10,  // DIK_Q  -- tab left (empirical; refine if TO_PROFILE stalls)
+        XINPUT_GAMEPAD_START => 0x01, // DIK_ESCAPE  -- open the in-world system/escape menu
+        XINPUT_GAMEPAD_A => 0x1c,     // DIK_RETURN  -- menu confirm/select
+        XINPUT_GAMEPAD_B => 0x0e,     // DIK_BACK (Backspace) -- menu cancel/back
+        XINPUT_GAMEPAD_DPAD_UP => 0xc8, // DIK_UP
+        XINPUT_GAMEPAD_DPAD_DOWN => 0xd0, // DIK_DOWN
+        XINPUT_GAMEPAD_LEFT_SHOULDER => 0x10, // DIK_Q  -- tab left (empirical; refine if TO_PROFILE stalls)
         XINPUT_GAMEPAD_RIGHT_SHOULDER => 0x12, // DIK_E  -- tab right (empirical)
         _ => 0,
     }
@@ -239,12 +238,12 @@ fn sq_repro_gamepad_to_dik(btn: u16) -> u8 {
 /// remappable gameplay binds. Tab-switch (LB/RB) VKs are the least certain and refined empirically.
 fn sq_repro_gamepad_to_vk(btn: u16) -> u32 {
     match btn {
-        XINPUT_GAMEPAD_START => 0x1b,          // VK_ESCAPE -- open the in-world system/escape menu
-        XINPUT_GAMEPAD_A => 0x0d,              // VK_RETURN -- menu confirm
-        XINPUT_GAMEPAD_B => 0x1b,              // VK_ESCAPE -- back (unused in the load path)
-        XINPUT_GAMEPAD_DPAD_UP => 0x26,        // VK_UP
-        XINPUT_GAMEPAD_DPAD_DOWN => 0x28,      // VK_DOWN
-        XINPUT_GAMEPAD_LEFT_SHOULDER => 0x51,  // 'Q' -- tab left (empirical; refine if TO_PROFILE stalls)
+        XINPUT_GAMEPAD_START => 0x1b, // VK_ESCAPE -- open the in-world system/escape menu
+        XINPUT_GAMEPAD_A => 0x0d,     // VK_RETURN -- menu confirm
+        XINPUT_GAMEPAD_B => 0x1b,     // VK_ESCAPE -- back (unused in the load path)
+        XINPUT_GAMEPAD_DPAD_UP => 0x26, // VK_UP
+        XINPUT_GAMEPAD_DPAD_DOWN => 0x28, // VK_DOWN
+        XINPUT_GAMEPAD_LEFT_SHOULDER => 0x51, // 'Q' -- tab left (empirical; refine if TO_PROFILE stalls)
         XINPUT_GAMEPAD_RIGHT_SHOULDER => 0x45, // 'E' -- tab right (empirical)
         _ => 0,
     }
@@ -391,7 +390,11 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             let pressed = (tick % INJECT_NAV_CYCLE) < INJECT_NAV_TAP_LEN;
             sq_repro_drive_wm_key(if pressed { vk } else { 0 });
             SQ_REPRO_XINPUT_BUTTONS.store(
-                if pressed { XINPUT_GAMEPAD_START as usize } else { 0 },
+                if pressed {
+                    XINPUT_GAMEPAD_START as usize
+                } else {
+                    0
+                },
                 Ordering::SeqCst,
             );
             SQ_REPRO_OPEN_KEY_VK.store(vk as usize, Ordering::SeqCst);
@@ -696,8 +699,14 @@ pub(crate) unsafe fn system_quit_repro_tick() {
                 SQ_REPRO_ROWNAV_BASE.store(usize::MAX, Ordering::SeqCst);
                 // Safe-first candidate order (arrows/Tab/brackets/PgDn before activating keys).
                 const TAB_CANDS: [(u32, &str); 8] = [
-                    (0x27, "Right"), (0x25, "Left"), (0x09, "Tab"), (0xdd, "]"),
-                    (0xdb, "["), (0x22, "PgDn"), (0x51, "Q"), (0x45, "E"),
+                    (0x27, "Right"),
+                    (0x25, "Left"),
+                    (0x09, "Tab"),
+                    (0xdd, "]"),
+                    (0xdb, "["),
+                    (0x22, "PgDn"),
+                    (0x51, "Q"),
+                    (0x45, "E"),
                 ];
                 const TAB_HOLD: usize = INJECT_NAV_CYCLE * 2;
                 let mut key = SQ_REPRO_TAB_DISCOVERED.load(Ordering::SeqCst) as u32;
@@ -793,8 +802,8 @@ pub(crate) unsafe fn system_quit_repro_tick() {
             let verify_mask = SQ_REPRO_PROFILE_BACK_VERIFY_MASK.load(Ordering::SeqCst);
             let mismatch_mask = SQ_REPRO_PROFILE_BACK_MISMATCH_MASK.load(Ordering::SeqCst);
             let required_mask = 1usize << OPTIONSETTING_QUIT_TAB_INDEX;
-            let verified_quit = (baseline_mask & required_mask) != 0
-                && (verify_mask & required_mask) != 0;
+            let verified_quit =
+                (baseline_mask & required_mask) != 0 && (verify_mask & required_mask) != 0;
             let quit_mismatch = mismatch_mask & required_mask;
             if cur == OPTIONSETTING_QUIT_TAB_INDEX
                 && verified_quit
@@ -1294,7 +1303,27 @@ pub(crate) unsafe extern "system" fn system_quit_inworld_load_skip_hook(slot: i3
         return 0;
     }
     let original: unsafe extern "system" fn(i32) -> usize = unsafe { std::mem::transmute(orig) };
-    unsafe { original(slot) }
+    let ret = unsafe { original(slot) };
+    let selected = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
+    if ret != 0 && selected < TITLE_PROFILE_SLOT_COUNT && slot == selected as i32 {
+        SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(1, Ordering::SeqCst);
+        SYSTEM_QUIT_QUICKLOAD_PHASE.store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
+        let gm = game_man_ptr_or_null();
+        if gm != TITLE_OWNER_SCAN_START_ADDRESS {
+            unsafe {
+                *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = OWN_STEPPER_SLOT_NONE;
+            }
+        }
+        if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
+            er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
+            er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
+        }
+        let n = SYSTEM_QUIT_INWORLD_LOAD_ALLOW_COUNT.load(Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-quickload: native slot deserialize proof OK via 0x67b290 slot={slot} ret={ret} prior_phase={phase} world_up={world_up} allow_count={n} -> phase IDLE, cleared GameMan+0xb78/save_requested/warp_requested"
+        ));
+    }
+    ret
 }
 
 pub(crate) fn install_system_quit_inworld_load_guard() {
@@ -1510,29 +1539,30 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
             let slot = selected as i32;
             let base = game_rva(0).unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
             let gm = game_man_ptr_or_null();
-            append_autoload_debug(format_args!(
-                "system-quit-quickload: continue_confirm intercepted at clean title phase={phase} -> restore gaitem singleton + fresh feed-deserialize of PICKED slot {slot} before stream (shim=0x{shim:x})"
-            ));
-            // Release char#1's leaked gaitems back to the free-queue at this clean title (player
-            // absent) BEFORE the reload deserialize, else char#2's deserialize exhausts the queue
-            // and OOB-dispatches gaitemInsTable[-1] (the AV at live 0x67141a). Native per-item
-            // release; declines fail-closed if the singleton looks wrong (then the deserialize may
-            // still crash, but we never sweep a bogus pointer).
-            // Feed here ONLY if the native-fullread DESER-path did not already feed this switch (it sets
-            // FRESH_DESER_DONE=1 after making c30 real so the GUARD->COMMIT chain reaches us). Either way,
-            // once the picked character is fed we fall through to the COMMIT steps below (phase -> IDLE,
-            // clear b78/warp, restore one-shots) so BOTH the clean-title feed AND the native-fullread feed
-            // get the "get out of the way" cleanup -- previously it only ran when THIS call fed, so the
-            // native-fullread path stalled at state 6 with the overlay stuck over a loaded world (2026-07-16).
-            let already_fed =
+            let native_slot_proven =
                 SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1;
-            let fed_ok = already_fed
-                || (base != TITLE_OWNER_SCAN_START_ADDRESS && {
-                    unsafe { own_load_reset_gaitem_singleton(base) };
-                    unsafe { own_load_feed_deserialize(base, gm, slot) }
-                });
-            if fed_ok {
-                SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "system-quit-quickload: continue_confirm intercepted at clean title phase={phase} slot={slot} native_slot_proven={native_slot_proven} shim=0x{shim:x}"
+            ));
+            if !native_slot_proven {
+                if gm != TITLE_OWNER_SCAN_START_ADDRESS {
+                    unsafe {
+                        *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = slot;
+                    }
+                }
+                let n = SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                append_autoload_debug(format_args!(
+                    "system-quit-quickload: continue_confirm FORWARD #{n} -- native requested-slot proof pending for slot={slot}; armed GameMan+0xb78 and letting SetState5 drive the native b78 -> RequestLoadSlot path"
+                ));
+                let orig = SYSTEM_QUIT_CONTINUE_CONFIRM_ORIG.load(Ordering::SeqCst);
+                if orig == HOOK_ORIGINAL_UNSET {
+                    return 0;
+                }
+                let original: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+                    unsafe { std::mem::transmute(orig) };
+                return unsafe { original(shim, b, c, d) };
+            }
+            {
                 let n = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
                     .fetch_add(1, Ordering::SeqCst)
                     + 1;
@@ -1636,14 +1666,8 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 SYSTEM_QUIT_INGAME_TOP_WINDOW.store(0, Ordering::SeqCst);
                 SYSTEM_QUIT_OPTION_SETTING_WINDOW.store(0, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "system-quit-quickload: fresh picked-slot deserialize OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase -> IDLE + cleared GameMan+0xb78=-1 + cleared return-title rebuild flags (menuData+0x5d, DAT, save_requested, warp_requested) + RESET return-title one-shots (request/submit/final-functor) so the NEXT switch starts boot-fresh (er-effects-rs-qwj repeatable switching)"
+                    "system-quit-quickload: native requested-slot proof OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase -> IDLE + cleared GameMan+0xb78=-1 + cleared return-title rebuild flags (menuData+0x5d, DAT, save_requested, warp_requested) + RESET return-title one-shots (request/submit/final-functor) so the NEXT switch starts boot-fresh (er-effects-rs-qwj repeatable switching)"
                 ));
-            } else {
-                let n = SYSTEM_QUIT_CONTINUE_CONFIRM_BLOCK_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-                append_autoload_debug(format_args!(
-                    "system-quit-quickload: continue_confirm BLOCKED #{n} -- fresh deserialize of picked slot {slot} FAILED (see own-load-feed line); refusing to stream stale pre-switch state"
-                ));
-                return 0;
             }
         }
     }
