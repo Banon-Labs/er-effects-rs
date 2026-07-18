@@ -40,7 +40,9 @@ def file_allows_unnamed_numbers(path: Path) -> bool:
     in the file header so bypasses remain intentional and reviewable.
     """
     header = "\n".join(
-        path.read_text(encoding="utf-8").splitlines()[:FILE_ALLOW_HEADER_LINES]  # pi-lens-ignore: python-thread-global-write — false positive; file read, no threading
+        path.read_text(encoding="utf-8").splitlines()[
+            :FILE_ALLOW_HEADER_LINES
+        ]  # pi-lens-ignore: python-thread-global-write — false positive; file read, no threading
     )
     return FILE_ALLOW_MARKER in header
 
@@ -105,7 +107,10 @@ def numeric_literals_in(path: Path) -> list[tuple[int, str, str]]:
     findings: list[tuple[int, str, str]] = []
     in_block_comment = False
 
-    for line_number, original_line in enumerate(  # pi-lens-ignore: python-thread-global-write — false positive; sequential file scan, no threading
+    for (
+        line_number,
+        original_line,
+    ) in enumerate(  # pi-lens-ignore: python-thread-global-write — false positive; sequential file scan, no threading
         path.read_text(encoding="utf-8").splitlines(), start=1
     ):
         stripped_line, in_block_comment = strip_strings_and_comments(
@@ -115,7 +120,9 @@ def numeric_literals_in(path: Path) -> list[tuple[int, str, str]]:
             continue  # pi-lens-ignore: python-thread-global-write — false positive; loop control, no threading
 
         for match in NUMERIC_LITERAL_RE.finditer(stripped_line):
-            findings.append((line_number, match.group(), original_line.strip()))  # pi-lens-ignore: python-thread-global-write — false positive; local result list, no threading
+            findings.append(
+                (line_number, match.group(), original_line.strip())
+            )  # pi-lens-ignore: python-thread-global-write — false positive; local result list, no threading
 
     return findings
 
@@ -145,7 +152,9 @@ def main() -> int:
 
     if failures:
         sys.stderr.write("Unnamed numeric literals are banned in Rust source.\n")
-        sys.stderr.write("Move the value to a named const/static and use the name instead.\n\n")
+        sys.stderr.write(
+            "Move the value to a named const/static and use the name instead.\n\n"
+        )
         sys.stderr.write("\n".join(failures))
         sys.stderr.write("\n")
         return 1
