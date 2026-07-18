@@ -1547,20 +1547,15 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
             if !native_slot_proven {
                 if gm != TITLE_OWNER_SCAN_START_ADDRESS {
                     unsafe {
-                        *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) = slot;
+                        *((gm + GAME_MAN_REQUESTED_SLOT_B78_OFFSET) as *mut i32) =
+                            OWN_STEPPER_SLOT_NONE;
                     }
                 }
                 let n = SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.store(1, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "system-quit-quickload: continue_confirm FORWARD #{n} -- native requested-slot proof pending for slot={slot}; armed GameMan+0xb78 and letting SetState5 drive the native b78 -> RequestLoadSlot path"
+                    "system-quit-quickload: continue_confirm FORWARD #{n} -- native requested-slot proof did not fire for slot={slot}; disarmed GameMan+0xb78 and treating SetState5 handoff as the commit edge (runtime evidence: b78=slot re-enters 0x67141a, b78=-1 reaches MoveMap)"
                 ));
-                let orig = SYSTEM_QUIT_CONTINUE_CONFIRM_ORIG.load(Ordering::SeqCst);
-                if orig == HOOK_ORIGINAL_UNSET {
-                    return 0;
-                }
-                let original: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
-                    unsafe { std::mem::transmute(orig) };
-                return unsafe { original(shim, b, c, d) };
             }
             {
                 let n = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT
@@ -1666,7 +1661,7 @@ pub(crate) unsafe extern "system" fn system_quit_continue_confirm_hook(
                 SYSTEM_QUIT_INGAME_TOP_WINDOW.store(0, Ordering::SeqCst);
                 SYSTEM_QUIT_OPTION_SETTING_WINDOW.store(0, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "system-quit-quickload: native requested-slot proof OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase -> IDLE + cleared GameMan+0xb78=-1 + cleared return-title rebuild flags (menuData+0x5d, DAT, save_requested, warp_requested) + RESET return-title one-shots (request/submit/final-functor) so the NEXT switch starts boot-fresh (er-effects-rs-qwj repeatable switching)"
+                    "system-quit-quickload: native Continue handoff commit OK #{n} slot={slot} -- forwarding continue_confirm so SetState5 streams; phase -> IDLE + cleared GameMan+0xb78=-1 + cleared return-title rebuild flags (menuData+0x5d, DAT, save_requested, warp_requested) + RESET return-title one-shots (request/submit/final-functor) so the NEXT switch starts boot-fresh (er-effects-rs-qwj repeatable switching)"
                 ));
             }
         }
