@@ -16,10 +16,12 @@ witchy="/mnt/d/Witchy BND/WitchyBND.exe"
 
 bd_high_fallback="target/mushroom-route-a-offline/prototype/mod/parts/bd_m_1010.partsbnd.dcx"
 bd_low_fallback="target/mushroom-route-a-offline/prototype/mod/parts/bd_m_1010_l.partsbnd.dcx"
+fc_high_tpf_fallback="target/mushroom-route-a-offline/prototype/fc_m_0000-mushroom-parts/FC_M_0000.tpf"
+fc_low_tpf_fallback="target/mushroom-route-a-offline/prototype/fc_m_0000_l-mushroom-parts/FC_M_0000_L.tpf"
+facegen_fallback="target/mushroom-route-a-offline/prototype/mod/facegen/facegen.fgbnd.dcx"
+fg_face_fallback="target/mushroom-route-a-offline/prototype/mod/parts/fg_a_0000_m.partsbnd.dcx"
 fc_high_src="target/mushroom-route-a-offline/er-naked-parts/fc_m_0000-partsbnd-dcx"
 fc_low_src="target/mushroom-route-a-offline/er-naked-parts/fc_m_0000_l-partsbnd-dcx"
-facegen_src="target/mushroom-route-a-offline/er-facegen/facegen-fgbnd-dcx"
-fg_face_src="target/mushroom-route-a-offline/er-face-parts/fg_a_0000_m-partsbnd-dcx"
 
 require_path() {
 	local path="$1"
@@ -120,9 +122,6 @@ build_variant() {
 	local export_dir="$variant_dir/c2280-rust-export"
 	local fc_high_dst="$variant_dir/fc_m_0000-mushroom-parts"
 	local fc_low_dst="$variant_dir/fc_m_0000_l-mushroom-parts"
-	local facegen_dst="$variant_dir/facegen-mushroom-fgbnd"
-	local fg_face_dst="$variant_dir/fg_a_0000_m-mushroom-parts"
-
 	rm -rf "$variant_dir"
 	mkdir -p "$variant_dir"
 	read -r -a params <<<"$params_text"
@@ -131,8 +130,6 @@ build_variant() {
 
 	copy_donor_payload "$fc_high_src" "$fc_high_dst" "FC_M_0000.flver"
 	copy_donor_payload "$fc_low_src" "$fc_low_dst" "FC_M_0000_L.flver"
-	copy_donor_payload "$facegen_src" "$facegen_dst" "face.flver"
-	copy_donor_payload "$fg_face_src" "$fg_face_dst" "FG_A_0000_M.flver"
 
 	./target/route_a_mushroom_patch_donor \
 		--obj "$export_dir/c2280_route_a_scaled.obj" \
@@ -151,47 +148,19 @@ build_variant() {
 		--donor-mesh-index 13 \
 		>"$variant_dir/patch-fc-l.out"
 
-	./target/route_a_mushroom_hide_flver_faces \
-		--source-flver "$facegen_src/face.flver" \
-		--output-flver "$facegen_dst/face.flver" \
-		--summary "$variant_dir/facegen-summary.txt" \
-		>"$variant_dir/hide-facegen.out"
-	./target/route_a_mushroom_hide_flver_faces \
-		--source-flver "$fg_face_src/FG_A_0000_M.flver" \
-		--output-flver "$fg_face_dst/FG_A_0000_M.flver" \
-		--summary "$variant_dir/fg_a_0000_m-summary.txt" \
-		>"$variant_dir/hide-fg-a-0000-m.out"
+	cp -f "$fc_high_tpf_fallback" "$fc_high_dst/FC_M_0000.tpf"
+	cp -f "$fc_low_tpf_fallback" "$fc_low_dst/FC_M_0000_L.tpf"
 
-	./target/route_a_mushroom_stage_textures \
-		--parts-dir "$fc_high_dst" \
-		--tpf-dir-name FC_M_0000-tpf \
-		--tpf-filename FC_M_0000.tpf \
-		--target-prefix FC_M_0000 \
-		--manifest-kind fc \
-		>"$variant_dir/stage-textures-fc.out"
-	./target/route_a_mushroom_stage_textures \
-		--parts-dir "$fc_low_dst" \
-		--tpf-dir-name FC_M_0000_L-tpf \
-		--tpf-filename FC_M_0000_L.tpf \
-		--texture-suffix _l \
-		--target-prefix FC_M_0000 \
-		--manifest-kind fc \
-		>"$variant_dir/stage-textures-fc-l.out"
-
-	run_witchy_pack "$variant_dir" fc-tpf "$fc_high_dst/FC_M_0000-tpf"
-	run_witchy_pack "$variant_dir" fc-l-tpf "$fc_low_dst/FC_M_0000_L-tpf"
 	run_witchy_pack "$variant_dir" fc-parts "$fc_high_dst"
 	run_witchy_pack "$variant_dir" fc-l-parts "$fc_low_dst"
-	run_witchy_pack "$variant_dir" facegen "$facegen_dst"
-	run_witchy_pack "$variant_dir" fg-a-0000-m "$fg_face_dst"
 
 	write_me3_profile "$variant_dir" "$label"
 	cp -f "$bd_high_fallback" "$variant_dir/mod/parts/bd_m_1010.partsbnd.dcx"
 	cp -f "$bd_low_fallback" "$variant_dir/mod/parts/bd_m_1010_l.partsbnd.dcx"
 	cp -f "$variant_dir/fc_m_0000.partsbnd.dcx" "$variant_dir/mod/parts/fc_m_0000.partsbnd.dcx"
 	cp -f "$variant_dir/fc_m_0000_l.partsbnd.dcx" "$variant_dir/mod/parts/fc_m_0000_l.partsbnd.dcx"
-	cp -f "$variant_dir/fg_a_0000_m.partsbnd.dcx" "$variant_dir/mod/parts/fg_a_0000_m.partsbnd.dcx"
-	cp -f "$variant_dir/facegen.fgbnd.dcx" "$variant_dir/mod/facegen/facegen.fgbnd.dcx"
+	cp -f "$fg_face_fallback" "$variant_dir/mod/parts/fg_a_0000_m.partsbnd.dcx"
+	cp -f "$facegen_fallback" "$variant_dir/mod/facegen/facegen.fgbnd.dcx"
 
 	printf '%s\t%s\t%s\n' "$label" "$variant_dir/mushroom-arm-${label}.me3" "$params_text" >>"$sweep_root/variant-index.tsv"
 }
@@ -199,16 +168,16 @@ build_variant() {
 require_path "$witchy"
 require_path "$bd_high_fallback"
 require_path "$bd_low_fallback"
+require_path "$fc_high_tpf_fallback"
+require_path "$fc_low_tpf_fallback"
+require_path "$facegen_fallback"
+require_path "$fg_face_fallback"
 require_path "$fc_high_src/FC_M_0000.flver"
 require_path "$fc_low_src/FC_M_0000_L.flver"
-require_path "$facegen_src/face.flver"
-require_path "$fg_face_src/FG_A_0000_M.flver"
 
 mkdir -p target
 rustc scripts/route_a_mushroom_export.rs -O -o target/route_a_mushroom_export
 rustc scripts/route_a_mushroom_patch_donor.rs -O -o target/route_a_mushroom_patch_donor
-rustc scripts/route_a_mushroom_hide_flver_faces.rs -O -o target/route_a_mushroom_hide_flver_faces
-rustc scripts/route_a_mushroom_stage_textures.rs -O -o target/route_a_mushroom_stage_textures
 
 variant_params() {
 	case "$1" in
@@ -243,12 +212,18 @@ Useful slider args forwarded to route_a_mushroom_export:
   --arm-upper-to-shoulder-abs-x <float> inner upper-arm threshold remapped to shoulder
   --arm-forearm-to-upper-abs-x <float>  inner forearm threshold remapped to upper arm
   --vertical-stretch <float>            mushroom height stretch
+  --torso-x-scale <float>               shrink/widen non-arm torso/body band
+  --torso-z-scale <float>               flatten/deepen non-arm torso/body band
+  --cap-x-scale <float>                 shrink/widen cap band
+  --cap-z-scale <float>                 flatten/deepen cap band
+  --torso-start-norm-y <float>          normalized height where torso scaling starts
+  --cap-start-norm-y <float>            normalized height where cap scaling starts
 
 Example build-only custom profile:
-  bash scripts/route_a_mushroom_build_arm_sweep.sh --label trial --arm-x-swell 1.04 --arm-z-swell 1.25 --arm-shoulder-out 0.44 --arm-upper-out 0.34 --arm-forearm-out 0.12 --arm-upper-to-shoulder-abs-x 0.48 --arm-forearm-to-upper-abs-x 0.52
+  bash scripts/route_a_mushroom_build_arm_sweep.sh --label trial --arm-x-swell 1.04 --arm-z-swell 1.25 --arm-shoulder-out 0.44 --arm-upper-out 0.34 --arm-forearm-out 0.12 --arm-upper-to-shoulder-abs-x 0.48 --arm-forearm-to-upper-abs-x 0.52 --torso-x-scale 0.88 --cap-x-scale 0.92
 
 Example build and launch custom profile:
-  bash scripts/route_a_mushroom_build_arm_sweep.sh --label trial --launch --arm-x-swell 1.04 --arm-z-swell 1.25 --arm-shoulder-out 0.44 --arm-upper-out 0.34 --arm-forearm-out 0.12 --arm-upper-to-shoulder-abs-x 0.48 --arm-forearm-to-upper-abs-x 0.52
+  bash scripts/route_a_mushroom_build_arm_sweep.sh --label trial --launch --arm-x-swell 1.04 --arm-z-swell 1.25 --arm-shoulder-out 0.44 --arm-upper-out 0.34 --arm-forearm-out 0.12 --arm-upper-to-shoulder-abs-x 0.48 --arm-forearm-to-upper-abs-x 0.52 --torso-x-scale 0.88 --cap-x-scale 0.92
 EOF
 }
 

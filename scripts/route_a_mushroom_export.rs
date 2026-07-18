@@ -30,6 +30,12 @@ const ROUTE_A_ARM_SHOULDER_OUTWARD_OFFSET: f32 = 0.33;
 const ROUTE_A_ARM_UPPER_OUTWARD_OFFSET: f32 = 0.27;
 const ROUTE_A_ARM_FOREARM_OUTWARD_OFFSET: f32 = 0.10;
 const ROUTE_A_ARM_HAND_OUTWARD_OFFSET: f32 = 0.02;
+const ROUTE_A_TORSO_X_SCALE: f32 = 1.0;
+const ROUTE_A_TORSO_Z_SCALE: f32 = 1.0;
+const ROUTE_A_CAP_X_SCALE: f32 = 1.0;
+const ROUTE_A_CAP_Z_SCALE: f32 = 1.0;
+const ROUTE_A_TORSO_START_NORM_Y: f32 = 0.18;
+const ROUTE_A_CAP_START_NORM_Y: f32 = 0.68;
 const HEADER_SIZE: usize = 0x80;
 const DUMMY_SIZE: usize = 0x40;
 const MATERIAL_SIZE: usize = 0x20;
@@ -167,6 +173,12 @@ struct RouteAParams {
     arm_hand_outward_offset: f32,
     arm_upper_to_shoulder_abs_x: f32,
     arm_forearm_to_upper_abs_x: f32,
+    torso_x_scale: f32,
+    torso_z_scale: f32,
+    cap_x_scale: f32,
+    cap_z_scale: f32,
+    torso_start_norm_y: f32,
+    cap_start_norm_y: f32,
 }
 
 impl Default for RouteAParams {
@@ -182,6 +194,12 @@ impl Default for RouteAParams {
             arm_hand_outward_offset: ROUTE_A_ARM_HAND_OUTWARD_OFFSET,
             arm_upper_to_shoulder_abs_x: 0.42,
             arm_forearm_to_upper_abs_x: 0.52,
+            torso_x_scale: ROUTE_A_TORSO_X_SCALE,
+            torso_z_scale: ROUTE_A_TORSO_Z_SCALE,
+            cap_x_scale: ROUTE_A_CAP_X_SCALE,
+            cap_z_scale: ROUTE_A_CAP_Z_SCALE,
+            torso_start_norm_y: ROUTE_A_TORSO_START_NORM_Y,
+            cap_start_norm_y: ROUTE_A_CAP_START_NORM_Y,
         }
     }
 }
@@ -271,6 +289,20 @@ fn parse_args() -> Result<Config, Box<dyn std::error::Error>> {
             "--arm-forearm-to-upper-abs-x" => {
                 params.arm_forearm_to_upper_abs_x = required_value(&arg, args.next())?.parse()?;
             }
+            "--torso-x-scale" => {
+                params.torso_x_scale = required_value(&arg, args.next())?.parse()?;
+            }
+            "--torso-z-scale" => {
+                params.torso_z_scale = required_value(&arg, args.next())?.parse()?;
+            }
+            "--cap-x-scale" => params.cap_x_scale = required_value(&arg, args.next())?.parse()?,
+            "--cap-z-scale" => params.cap_z_scale = required_value(&arg, args.next())?.parse()?,
+            "--torso-start-norm-y" => {
+                params.torso_start_norm_y = required_value(&arg, args.next())?.parse()?;
+            }
+            "--cap-start-norm-y" => {
+                params.cap_start_norm_y = required_value(&arg, args.next())?.parse()?;
+            }
             "--help" | "-h" => {
                 print_help();
                 std::process::exit(0);
@@ -310,6 +342,12 @@ fn print_help() {
     println!("  --arm-hand-out <float>              default: {ROUTE_A_ARM_HAND_OUTWARD_OFFSET}");
     println!("  --arm-upper-to-shoulder-abs-x <float> default: 0.42");
     println!("  --arm-forearm-to-upper-abs-x <float> default: 0.52");
+    println!("  --torso-x-scale <float>            default: {ROUTE_A_TORSO_X_SCALE}");
+    println!("  --torso-z-scale <float>            default: {ROUTE_A_TORSO_Z_SCALE}");
+    println!("  --cap-x-scale <float>              default: {ROUTE_A_CAP_X_SCALE}");
+    println!("  --cap-z-scale <float>              default: {ROUTE_A_CAP_Z_SCALE}");
+    println!("  --torso-start-norm-y <float>       default: {ROUTE_A_TORSO_START_NORM_Y}");
+    println!("  --cap-start-norm-y <float>         default: {ROUTE_A_CAP_START_NORM_Y}");
 }
 
 fn parse_first_lod0_mesh(bytes: &[u8]) -> Result<ExportedMesh, Box<dyn std::error::Error>> {
@@ -681,6 +719,16 @@ fn write_obj(
         params.arm_forearm_outward_offset,
         params.arm_hand_outward_offset
     )?;
+    writeln!(
+        file,
+        "# torso_scales={},{} cap_scales={},{} torso_start_norm_y={} cap_start_norm_y={}",
+        params.torso_x_scale,
+        params.torso_z_scale,
+        params.cap_x_scale,
+        params.cap_z_scale,
+        params.torso_start_norm_y,
+        params.cap_start_norm_y
+    )?;
     writeln!(file, "mtllib {mtl_name}")?;
     writeln!(file, "o c2280_route_a_scaled")?;
     for vertex in &mesh.vertices {
@@ -737,12 +785,32 @@ fn route_a_output_position(
         position.y = center.y + (position.y - center.y) * params.arm_y_swell;
         position.z = center.z + (position.z - center.z) * params.arm_z_swell;
         position.x += side * arm_outward_offset_for_target(target, params);
+    } else {
+        let normalized_y = normalized_vertex_y(vertex, &mesh.header);
+        if normalized_y >= params.torso_start_norm_y {
+            let (x_scale, z_scale) = if normalized_y >= params.cap_start_norm_y {
+                (params.cap_x_scale, params.cap_z_scale)
+            } else {
+                (params.torso_x_scale, params.torso_z_scale)
+            };
+            position.x *= x_scale;
+            position.z *= z_scale;
+        }
     }
 
     Vec3 {
         x: position.x * scale,
         y: position.y * scale,
         z: position.z * scale,
+    }
+}
+
+fn normalized_vertex_y(vertex: &Vertex, header: &Header) -> f32 {
+    let height = header.bbox_max.y - header.bbox_min.y;
+    if height.abs() > f32::EPSILON {
+        (vertex.position.y - header.bbox_min.y) / height
+    } else {
+        0.5
     }
 }
 
@@ -946,6 +1014,20 @@ fn write_summary(path: &Path, config: &Config, mesh: &ExportedMesh) -> io::Resul
         file,
         "arm_hand_outward_offset={:.9}",
         config.params.arm_hand_outward_offset
+    )?;
+    writeln!(file, "torso_x_scale={:.9}", config.params.torso_x_scale)?;
+    writeln!(file, "torso_z_scale={:.9}", config.params.torso_z_scale)?;
+    writeln!(file, "cap_x_scale={:.9}", config.params.cap_x_scale)?;
+    writeln!(file, "cap_z_scale={:.9}", config.params.cap_z_scale)?;
+    writeln!(
+        file,
+        "torso_start_norm_y={:.9}",
+        config.params.torso_start_norm_y
+    )?;
+    writeln!(
+        file,
+        "cap_start_norm_y={:.9}",
+        config.params.cap_start_norm_y
     )?;
     writeln!(file, "flver_version=0x{:X}", mesh.header.version)?;
     writeln!(file, "data_offset=0x{:X}", mesh.header.data_offset)?;
