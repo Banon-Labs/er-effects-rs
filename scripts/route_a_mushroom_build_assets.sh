@@ -13,39 +13,79 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 proto_root="target/mushroom-route-a-offline/prototype"
+mod_dir="$proto_root/mod"
+profile_path="$proto_root/mushroom-route-a-assets.me3"
 high_src="target/er-extract-parts-sample/bd_m_1010-partsbnd-dcx"
 low_src="target/er-extract-parts-sample/bd_m_1010_l-partsbnd-dcx"
 high_dst="$proto_root/bd_m_1010-mushroom-parts"
 low_dst="$proto_root/bd_m_1010_l-mushroom-parts"
 
 require_path() {
-  local path="$1"
-  if [[ ! -e "$path" ]]; then
-    echo "missing required path: $path" >&2
-    exit 1
-  fi
+	local path="$1"
+	if [[ ! -e "$path" ]]; then
+		echo "missing required path: $path" >&2
+		exit 1
+	fi
 }
 
 copy_donor_payload() {
-  local src="$1"
-  local dst="$2"
-  local flver_name="$3"
-  require_path "$src"
-  rm -rf "$dst"
-  mkdir -p "$dst"
-  shopt -s nullglob dotglob
-  local item
-  for item in "$src"/*; do
-    if [[ "$(basename "$item")" == "$flver_name" ]]; then
-      continue
-    fi
-    if [[ -d "$item" ]]; then
-      cp -rf "$item" "$dst/"
-    else
-      cp -f "$item" "$dst/"
-    fi
-  done
-  shopt -u nullglob dotglob
+	local src="$1"
+	local dst="$2"
+	local flver_name="$3"
+	require_path "$src"
+	rm -rf "$dst"
+	mkdir -p "$dst"
+	shopt -s nullglob dotglob
+	local item
+	for item in "$src"/*; do
+		if [[ "$(basename "$item")" == "$flver_name" ]]; then
+			continue
+		fi
+		if [[ -d "$item" ]]; then
+			cp -rf "$item" "$dst/"
+		else
+			cp -f "$item" "$dst/"
+		fi
+	done
+	shopt -u nullglob dotglob
+}
+
+write_me3_profile() {
+	local package_path
+	package_path="$(wslpath -w "$mod_dir")"
+	mkdir -p "$mod_dir/parts"
+	cat >"$profile_path" <<EOF
+profileVersion = "v1"
+natives = []
+
+[[supports]]
+game = "eldenring"
+
+[[packages]]
+enabled = true
+path = '$package_path'
+load_after = []
+load_before = []
+EOF
+	cat >"$mod_dir/README.txt" <<EOF
+Offline Route A mushroom prototype mod payload.
+
+ME3 profile:
+  ../mushroom-route-a-assets.me3
+
+The profile is intentionally asset-only:
+  natives = []
+  packages = this mod directory only
+
+Expected payload after the separate WitchyBND pack phase:
+  parts/bd_m_1010.partsbnd.dcx
+  parts/bd_m_1010_l.partsbnd.dcx
+
+Runtime intent:
+  Use an existing or new character and in-game equipment/appearance mechanisms that load the BD_M_1010 body part. No er_effects_rs.dll or unrelated repo DLL features are required by this profile.
+
+This package has not been runtime-tested yet. No game launch is performed by the offline build scripts.
+EOF
 }
 
 require_path "target/mushroom-route-a-offline/dsr/dsr-loose-mushroom/c2280-chrbnd-dcx/c2280.flver"
@@ -54,28 +94,32 @@ require_path "$low_src/BD_M_1010_L.flver"
 
 mkdir -p "$proto_root"
 rustc scripts/route_a_mushroom_export.rs -O -o target/route_a_mushroom_export
-./target/route_a_mushroom_export > "$proto_root/export-smoke.out"
+./target/route_a_mushroom_export >"$proto_root/export-smoke.out"
 
 copy_donor_payload "$high_src" "$high_dst" "BD_M_1010.flver"
 copy_donor_payload "$low_src" "$low_dst" "BD_M_1010_L.flver"
 
 rustc scripts/route_a_mushroom_patch_donor.rs -O -o target/route_a_mushroom_patch_donor
-./target/route_a_mushroom_patch_donor > "$proto_root/patch-smoke.out"
+./target/route_a_mushroom_patch_donor >"$proto_root/patch-smoke.out"
 ./target/route_a_mushroom_patch_donor \
-  --donor-flver "$low_src/BD_M_1010_L.flver" \
-  --output-flver "$low_dst/BD_M_1010_L.flver" \
-  --summary "$proto_root/bd_m_1010_l-mushroom-parts-summary.txt" \
-  > "$proto_root/patch-l-smoke.out"
+	--donor-flver "$low_src/BD_M_1010_L.flver" \
+	--output-flver "$low_dst/BD_M_1010_L.flver" \
+	--summary "$proto_root/bd_m_1010_l-mushroom-parts-summary.txt" \
+	>"$proto_root/patch-l-smoke.out"
 
 rustc scripts/route_a_mushroom_stage_textures.rs -O -o target/route_a_mushroom_stage_textures
-./target/route_a_mushroom_stage_textures > "$proto_root/stage-textures-smoke.out"
+./target/route_a_mushroom_stage_textures >"$proto_root/stage-textures-smoke.out"
 ./target/route_a_mushroom_stage_textures \
-  --parts-dir "$low_dst" \
-  --tpf-dir-name BD_M_1010_L-tpf \
-  --tpf-filename BD_M_1010_L.tpf \
-  --texture-suffix _l \
-  > "$proto_root/stage-textures-l-smoke.out"
+	--parts-dir "$low_dst" \
+	--tpf-dir-name BD_M_1010_L-tpf \
+	--tpf-filename BD_M_1010_L.tpf \
+	--texture-suffix _l \
+	>"$proto_root/stage-textures-l-smoke.out"
+
+write_me3_profile
 
 printf 'built offline mushroom asset folders:\n'
 printf '  %s\n' "$high_dst" "$low_dst"
-printf 'next pack phase: pack each *-tpf folder with WitchyBND, then pack each *-mushroom-parts folder.\n'
+printf 'wrote decoupled asset-only me3 profile:\n'
+printf '  %s\n' "$profile_path"
+printf 'next pack phase: pack each *-tpf folder with WitchyBND, then pack each *-mushroom-parts folder into %s/parts.\n' "$mod_dir"
