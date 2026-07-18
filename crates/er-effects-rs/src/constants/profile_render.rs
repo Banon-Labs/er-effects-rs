@@ -271,6 +271,20 @@ pub(crate) static SYSTEM_QUIT_INWORLD_ARMED_DISARM_COUNT: AtomicUsize = AtomicUs
 /// from cancelling a genuine switch whose old world lingers past the threshold (the switch-regression
 /// in bd angre-4loads-goal-met-but-switch-regression-2026-07-18). 1 = armed while player absent.
 pub(crate) static SYSTEM_QUIT_ARM_PLAYER_WAS_ABSENT: AtomicUsize = AtomicUsize::new(0);
+/// ENDING-REQUEST RECOVERY (2026-07-18, live-proven fix for the genuine-switch mms18 stall, bd
+/// live-genuine-switch-stalls-mms18-end5e0-2026-07-18). Continuous frames the exact stuck signature
+/// (in-world, ig_d8==1, mms_step==18, menuData+0x5e==0, +0x5d==0, b7c1==1, blocks>0) has held while a
+/// switch's OLD world refuses to tear down. A normally-advancing load leaves step 18 within a few
+/// frames, so this never accumulates on a healthy load. Reset whenever the signature breaks.
+pub(crate) static ENDING_REQUEST_STALL_STREAK: AtomicUsize = AtomicUsize::new(0);
+/// Latch (0/1): we drove menuData+0x5d=1 to walk the child past 18 and are holding it until the child
+/// leaves step 18, then we CLEAR it -- a lingering 0x5d re-requests quit-to-title ~4s after the reload
+/// commits (return_title.rs:1-7), bouncing the freshly-loaded world back to title.
+pub(crate) static ENDING_REQUEST_SET: AtomicUsize = AtomicUsize::new(0);
+/// Runtime semaphore: >0 == the recovery fired (SET menuData+0x5d=1 at an mms18 stall) this run.
+pub(crate) static ENDING_REQUEST_SET_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Sustained stuck-at-18 frames before the recovery drives the ending request (~2s at task rate).
+pub(crate) const ENDING_REQUEST_STALL_RELEASE_FRAMES: usize = 120;
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT: AtomicUsize =
     AtomicUsize::new(0);

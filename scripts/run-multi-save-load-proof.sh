@@ -55,34 +55,44 @@ echo "== multi-save-load proof =="
 echo "GAME_DIR=$GAME_DIR"
 echo "boot: $BOOT_FILE slot=$BOOT_SLOT ; switches=$SWITCHES ; artifacts=$ARTIFACT_DIR"
 
-# --- 1. boot TOML (in-memory read-only redirect of the source save) ---
-BOOT_FILE_WIN="$(python3 - "$BOOT_FILE" <<'PY'
-import sys
-# /mnt/<d>/rest -> <D>:\rest  (the game sees the corpus mount as a Windows drive letter)
-p=sys.argv[1]
-if p.startswith('/mnt/') and len(p)>6 and p[6]=='/':
-    print(p[5].upper()+':\\'+p[7:].replace('/','\\'))
-else:
-    print(p)
-PY
-)"
-TOML_SRC="$ARTIFACT_DIR/er-effects.toml"
-cat > "$TOML_SRC" <<EOF
-# staged by run-multi-save-load-proof.sh for the initial auto-load
-save_file = '$BOOT_FILE_WIN'
-slot = $BOOT_SLOT
-EOF
-echo "staged boot TOML -> $TOML_SRC (save_file=$BOOT_FILE_WIN slot=$BOOT_SLOT)"
+# This box: WSL2 + Windows-native Steam. The game is loaded by the WINDOWS me3.exe with a .me3
+# profile; the Linux run-product-continue-direct-probe.sh (--steam-dir) does not apply here. The DLL
+# reads er-effects.toml + control files from game_directory_path() (= GAME_DIR) and writes telemetry/
+# debug log there, so we stage into GAME_DIR and monitor GAME_DIR.
+ME3="${ME3:-/mnt/c/Users/$USER/AppData/Local/garyttierney/me3/bin/me3.exe}"
+[[ -f "$ME3" ]] || fail "Windows me3.exe not found at $ME3 (set ME3=<path to me3.exe>)"
+DLL_GAMEDIR="$GAME_DIR/er_effects_rs.dll"
 
-# --- 2. autopilot + switch-count + target-slots control files in GAME_DIR (game_directory_path()) ---
+win_path() { python3 -c "import sys;p=sys.argv[1];print((p[5].upper()+':\\\\'+p[7:].replace('/','\\\\')) if p.startswith('/mnt/') and len(p)>6 and p[6]=='/' else p)" "$1"; }
+
+# --- 1. stage the FIX build DLL to a Windows-native path + a .me3 profile ---
+cp -f "$BUILT_DLL" "$DLL_GAMEDIR"
+PROFILE="$ARTIFACT_DIR/multi-save-load.me3"
+{ echo 'profileVersion = "v1"'; echo; echo '[[supports]]'; echo 'game = "eldenring"'; echo; echo '[[natives]]'; echo "path = '$(win_path "$DLL_GAMEDIR")'"; } > "$PROFILE"
+echo "staged DLL -> $DLL_GAMEDIR ; profile -> $PROFILE"
+
+# --- 2. boot TOML (in-memory read-only redirect) in GAME_DIR (back up the existing one) ---
+[[ -f "$GAME_DIR/er-effects.toml" ]] && cp -f "$GAME_DIR/er-effects.toml" "$ARTIFACT_DIR/er-effects.toml.bak"
+{ echo "# staged by run-multi-save-load-proof.sh for the initial auto-load"; echo "save_file = '$(win_path "$BOOT_FILE")'"; echo "slot = $BOOT_SLOT"; } > "$GAME_DIR/er-effects.toml"
+echo "staged boot TOML (save_file=$(win_path "$BOOT_FILE") slot=$BOOT_SLOT)"
+
+# --- 3. autopilot + switch-count + target-slots control files in GAME_DIR ---
+printf '1\n' > "$GAME_DIR/er-effects-system-quit-repro.txt"
 printf '1\n' > "$GAME_DIR/er-effects-system-quit-load-switch.txt"
 printf '%s\n' "$SWITCHES" > "$GAME_DIR/er-effects-sq-target-switches.txt"
 printf '%s\n' "$TARGET_SLOTS" > "$GAME_DIR/er-effects-sq-target-slots.txt"
-echo "armed autopilot markers in GAME_DIR (load-switch; switches=$SWITCHES; target-slots=[$TARGET_SLOTS])"
-cleanup_markers() { rm -f "$GAME_DIR/er-effects-system-quit-load-switch.txt" "$GAME_DIR/er-effects-sq-target-switches.txt" "$GAME_DIR/er-effects-sq-target-slots.txt" 2>/dev/null; }
-trap cleanup_markers EXIT
+echo "armed autopilot markers in GAME_DIR (repro + load-switch; switches=$SWITCHES; target-slots=[$TARGET_SLOTS])"
+# shellcheck disable=SC2317  # body runs via `trap cleanup EXIT`, not inline
+cleanup() {
+  taskkill.exe /F /IM eldenring.exe >/dev/null 2>&1
+  taskkill.exe /F /IM me3.exe >/dev/null 2>&1
+  rm -f "$GAME_DIR/er-effects-system-quit-repro.txt" "$GAME_DIR/er-effects-system-quit-load-switch.txt" \
+        "$GAME_DIR/er-effects-sq-target-switches.txt" "$GAME_DIR/er-effects-sq-target-slots.txt" 2>/dev/null
+  [[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
+}
+trap cleanup EXIT
 
-# --- 3. targets.json for the monitor (boot char first, then the DISTINCT within-file switch sequence) ---
+# --- 4. targets.json for the monitor (boot char first, then the DISTINCT within-file switch sequence) ---
 TARGETS_JSON="$ARTIFACT_DIR/targets.json"
 python3 - "$BOOT_FILE" "$BOOT_SLOT" "$TARGET_SLOTS" "$TARGETS_JSON" <<'PY'
 import json, sys
@@ -94,29 +104,29 @@ json.dump(targets, open(out,"w"), indent=1)
 print(f"wrote {out}: {len(targets)} targets (boot slot {boot_slot} -> switches {slots})")
 PY
 
-# --- 4. launch (approved probe owns Steam preflight + me3 + teardown); autopilot enabled ---
-echo "launching ER via run-product-continue-direct-probe.sh (background) ..."
-GAME_DIR="$GAME_DIR" \
-ARTIFACT_DIR="$ARTIFACT_DIR" \
-ER_EFFECTS_TOML_SOURCE="$TOML_SRC" \
-ER_EFFECTS_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1 \
-ER_EFFECTS_SYSTEM_QUIT_REPRO=1 \
-ER_EFFECTS_SQ_LOAD_SWITCH=1 \
-  bash "$REPO_ROOT/scripts/run-product-continue-direct-probe.sh" &
+# --- 5. record debug-log start offset (shared append-log), launch via Windows me3.exe, monitor GAME_DIR ---
+OFFSET="$(stat -c%s "$GAME_DIR/er-effects-autoload-debug.log" 2>/dev/null || echo 0)"
+echo "launching ER via Windows me3.exe (offline) ..."
+"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" > "$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 LAUNCH_PID=$!
 
-# --- 5. monitor the live artifact dir until every load is verified / crash / stall ---
 echo "monitoring loads (RAM-oracle verify + report) ..."
 python3 "$REPO_ROOT/scripts/multi-load-proof-monitor.py" \
-  --artifact-dir "$ARTIFACT_DIR" \
+  --artifact-dir "$GAME_DIR" \
   --targets "$TARGETS_JSON" \
   --report "$ARTIFACT_DIR/proof-report.md" \
+  --debug-log-offset "$OFFSET" \
   --per-load-deadline "${PER_LOAD_DEADLINE:-120}" \
-  --overall-deadline "${OVERALL_DEADLINE:-600}"
+  --overall-deadline "${OVERALL_DEADLINE:-300}"
 RC=$?
 
+# capture my-run artifacts before teardown clears markers
+cp -f "$GAME_DIR/er-effects-telemetry.json" "$ARTIFACT_DIR/er-effects-telemetry.json" 2>/dev/null
+python3 -c "
+off=$OFFSET
+with open('$GAME_DIR/er-effects-autoload-debug.log','rb') as f: f.seek(off); d=f.read()
+open('$ARTIFACT_DIR/my-run-debug.log','wb').write(d)
+" 2>/dev/null
 echo "monitor exit=$RC ; report -> $ARTIFACT_DIR/proof-report.md"
-# tear down the launch (the probe script also self-tears-down via its watcher cap)
-pkill -x eldenring.exe 2>/dev/null
 wait "$LAUNCH_PID" 2>/dev/null
 exit $RC

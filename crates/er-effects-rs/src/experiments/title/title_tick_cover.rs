@@ -1277,6 +1277,61 @@ pub(crate) unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, t
         let gwarp = unsafe { safe_read_u8(gm + GAME_MAN_WARP_REQUESTED_10_OFFSET) }
             .map(|b| b as i32)
             .unwrap_or(-1);
+        // ENDING-REQUEST RECOVERY (2026-07-18, live-proven fix for the genuine cross-char switch stall,
+        // bd live-genuine-switch-stalls-mms18-end5e0-2026-07-18). A genuine switch's return-title
+        // suppresses the quit-save (no-save-on-quit by design), so none of cVar10's inputs
+        // (b7c/b7d/force/warp/rt5d) are set, the advancer FUN_140afa7c0 never writes menuData+0x5e=1,
+        // and the OLD world's MoveMapStep child parks at STEP_MoveMap(18): the InGameStep parent (step 7)
+        // waits forever on MoveMapStep+0x48 != -1, so the world never tears down (the switched-from char
+        // stays resident, mms_step pinned at 18, end5e=0, rt5d=0, b7c1=1, blocks>0 -- the exact runtime
+        // signature captured live). RE-proven differentiator (bd
+        // ending-request-recovery-fix-applied-2026-07-16): an ADVANCING child has menuData+0x5d(rt5d)==1;
+        // the stuck child has rt5d==0. So drive rt5d=1 -> the advancer computes cVar10=1 -> writes 0x5e=1
+        // -> STEP_MoveMap walks the child 18->Cleanup(19)->Finish(20)->-1, tearing down the old world so
+        // the clean-title autoload of the picked slot proceeds via the proven boot path. Then CLEAR rt5d
+        // the frame the child leaves 18, BEFORE the ~4s resident-world bounce a lingering rt5d triggers via
+        // CheckReturnToTitle (return_title.rs:1-7). This is distinct from bc4 (the 1st teardown flag): the
+        // suppressed quit-save that would pump bc4->3 and set 0x5d never runs, so we supply the
+        // ending-request input directly. Gate on the EXACT stuck signature + a sustained streak so a
+        // healthy load (leaves 18 in a few frames) never trips it; ENDING_REQUEST_SET_COUNT is the semaphore.
+        if let Some(md) = menudata {
+            let stuck_mms18 = player_present
+                && ig_d8 == INGAMESTEP_REQUEST_CODE_MOVEMAP_PENDING
+                && mms_step == MOVEMAPSTEP_STEP_MOVEMAP_INDEX
+                && md_5e == 0
+                && md_5d == 0
+                && mms_b7c1 == 1
+                && mms_blocks > 0;
+            if stuck_mms18 {
+                let streak = ENDING_REQUEST_STALL_STREAK.fetch_add(1, Ordering::SeqCst) + 1;
+                if streak >= ENDING_REQUEST_STALL_RELEASE_FRAMES
+                    && ENDING_REQUEST_SET
+                        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_ok()
+                {
+                    unsafe {
+                        *((md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) as *mut u8) = 1;
+                    }
+                    let n = ENDING_REQUEST_SET_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+                    append_autoload_debug(format_args!(
+                        "ENDING-REQUEST RECOVERY #{n}: SET menuData+0x5d=1 at mms18 stall (streak={streak} end5e=0 rt5d=0 b7c1=1 blocks={mms_blocks}) -> advancer should write 0x5e=1 and walk the STEP_MoveMap child 18->19->20->-1 to tear down the old world"
+                    ));
+                }
+            } else {
+                ENDING_REQUEST_STALL_STREAK.store(0, Ordering::SeqCst);
+                if ENDING_REQUEST_SET.load(Ordering::SeqCst) == 1
+                    && mms_step != MOVEMAPSTEP_STEP_MOVEMAP_INDEX
+                {
+                    unsafe {
+                        *((md + CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET) as *mut u8) = 0;
+                    }
+                    ENDING_REQUEST_SET.store(0, Ordering::SeqCst);
+                    append_autoload_debug(format_args!(
+                        "ENDING-REQUEST RECOVERY: cleared menuData+0x5d=0 as the child left step 18 (mms_step={mms_step}) -- bounce-prevention before the resident-world re-title window"
+                    ));
+                }
+            }
+        }
         let mms_disp = mms.unwrap_or(0);
         let mms_step_pub = if mms.is_some() && mms_step >= 0 {
             mms_step as usize
