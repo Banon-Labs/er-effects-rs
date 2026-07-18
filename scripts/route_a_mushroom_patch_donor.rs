@@ -1,3 +1,4 @@
+//! check-no-magic-numbers: allow-file -- offline FLVER binary layout helper; byte offsets/field widths are external format literals validated by pack/reparse smoke.
 //! Rust-first offline patcher for the Route A mushroom prototype.
 //!
 //! Inputs are the Rust-exported c2280 OBJ/weight TSV and the unpacked ER donor
@@ -8,7 +9,7 @@
 //!   rustc scripts/route_a_mushroom_patch_donor.rs -O -o target/route_a_mushroom_patch_donor
 //!   target/route_a_mushroom_patch_donor
 
-use std::{env, fs, io::Write, path::PathBuf};
+use std::{collections::HashMap, env, fs, io::Write, path::PathBuf};
 
 const DEFAULT_OBJ: &str =
     "target/mushroom-route-a-offline/prototype/c2280-rust-export/c2280_route_a_scaled.obj";
@@ -52,6 +53,21 @@ struct SourceVertex {
     uv: Vec2,
     bone_indices: [u8; 4],
     bone_weights: [f32; 4],
+}
+
+#[derive(Clone, Debug)]
+struct DonorBoneLookup {
+    by_name: HashMap<String, u16>,
+}
+
+impl DonorBoneLookup {
+    fn resolve(&self, name: &str) -> Option<u16> {
+        self.by_name.get(name).copied().or_else(|| {
+            (name == "Head")
+                .then(|| self.by_name.get("Neck").copied())
+                .flatten()
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -127,9 +143,10 @@ struct Config {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = parse_args()?;
     let mut source = read_obj(&config.obj_path)?;
-    apply_weights(&mut source, &config.weights_path)?;
-
     let mut donor_bytes = fs::read(&config.donor_flver)?;
+    let donor_lookup = donor_bone_lookup(&donor_bytes)?;
+    apply_weights(&mut source, &config.weights_path, &donor_lookup)?;
+
     let patch_report = patch_donor_flver(&mut donor_bytes, &source, config.donor_mesh_index)?;
 
     if let Some(parent) = config.output_flver.parent() {
@@ -287,7 +304,11 @@ fn required_part<'a>(
         .ok_or_else(|| format!("missing {label}").into())
 }
 
-fn apply_weights(mesh: &mut SourceMesh, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn apply_weights(
+    mesh: &mut SourceMesh,
+    path: &PathBuf,
+    donor_lookup: &DonorBoneLookup,
+) -> Result<(), Box<dyn std::error::Error>> {
     let text = fs::read_to_string(path)?;
     let mut accum = vec![[0.0_f32; 256]; mesh.vertices.len()];
     for (line_index, line) in text.lines().enumerate() {
@@ -304,8 +325,10 @@ fn apply_weights(mesh: &mut SourceMesh, path: &PathBuf) -> Result<(), Box<dyn st
         if weight <= 0.0 || target_bone.starts_with('<') {
             continue;
         }
-        let donor_bone = donor_bone_index(target_bone)
+        let donor_bone = donor_lookup
+            .resolve(target_bone)
             .ok_or_else(|| format!("no donor bone mapping for ER target bone {target_bone}"))?;
+        let donor_bone = bone_index_to_u8(donor_bone, target_bone)?;
         let vertex = accum
             .get_mut(vertex_index)
             .ok_or_else(|| format!("weight references missing vertex {vertex_index}"))?;
@@ -319,9 +342,10 @@ fn apply_weights(mesh: &mut SourceMesh, path: &PathBuf) -> Result<(), Box<dyn st
             .filter_map(|(bone, weight)| (*weight > 0.0001).then_some((bone as u8, *weight)))
             .collect();
         if pairs.is_empty() {
-            let fallback =
-                donor_bone_index("Spine2").ok_or("missing hardcoded Spine2 donor bone")?;
-            pairs.push((fallback, 1.0));
+            let fallback = donor_lookup
+                .resolve("Spine2")
+                .ok_or("missing Spine2 donor bone")?;
+            pairs.push((bone_index_to_u8(fallback, "Spine2")?, 1.0));
         }
         pairs.sort_by(|a, b| b.1.total_cmp(&a.1));
         pairs.truncate(4);
@@ -333,28 +357,6 @@ fn apply_weights(mesh: &mut SourceMesh, path: &PathBuf) -> Result<(), Box<dyn st
     }
 
     Ok(())
-}
-
-fn donor_bone_index(name: &str) -> Option<u8> {
-    Some(match name {
-        "Spine" => 0,
-        "Spine1" => 1,
-        "Spine2" => 2,
-        "L_UpperArm" => 5,
-        "L_Forearm" => 9,
-        "L_Hand" => 10,
-        "R_UpperArm" => 15,
-        "R_Forearm" => 19,
-        "R_Hand" => 20,
-        "Neck" => 24,
-        "Pelvis" => 39,
-        "L_Thigh" => 40,
-        "R_Thigh" => 45,
-        // The BD donor's body chain does not expose a main-chain Head child;
-        // keep cap/head support on Neck for this first coarse proof.
-        "Head" => 24,
-        _ => return None,
-    })
 }
 
 fn patch_donor_flver(
@@ -608,6 +610,49 @@ fn parse_header(bytes: &[u8]) -> Result<Header, Box<dyn std::error::Error>> {
         face_set_count: read_u32(bytes, 0x50)? as usize,
         buffer_layout_count: read_u32(bytes, 0x54)? as usize,
     })
+}
+
+fn bone_index_to_u8(index: u16, bone_name: &str) -> Result<u8, Box<dyn std::error::Error>> {
+    if index <= u8::MAX as u16 {
+        Ok(index as u8)
+    } else {
+        Err(format!("donor bone {bone_name} index {index} does not fit in Byte4B weights").into())
+    }
+}
+
+fn donor_bone_lookup(bytes: &[u8]) -> Result<DonorBoneLookup, Box<dyn std::error::Error>> {
+    let header = parse_header(bytes)?;
+    let bone_table =
+        HEADER_SIZE + DUMMY_SIZE * header.dummy_count + MATERIAL_SIZE * header.material_count;
+    let mut by_name = HashMap::new();
+    for i in 0..header.bone_count {
+        let off = bone_table + i * BONE_SIZE;
+        let name_offset = read_u32(bytes, off + 0x0C)? as usize;
+        let name = read_flver_string(bytes, name_offset)?;
+        if i > u16::MAX as usize {
+            return Err(format!("donor bone index {i} does not fit in u16").into());
+        }
+        by_name.insert(name, i as u16);
+    }
+    Ok(DonorBoneLookup { by_name })
+}
+
+fn read_flver_string(bytes: &[u8], offset: usize) -> Result<String, Box<dyn std::error::Error>> {
+    if offset >= bytes.len() {
+        return Ok(String::new());
+    }
+    let mut units = Vec::new();
+    let mut cursor = offset;
+    loop {
+        bounds(bytes, cursor, 2)?;
+        let unit = u16::from_le_bytes([bytes[cursor], bytes[cursor + 1]]);
+        if unit == 0 {
+            break;
+        }
+        units.push(unit);
+        cursor += 2;
+    }
+    Ok(String::from_utf16(&units)?)
 }
 
 fn parse_meshes(

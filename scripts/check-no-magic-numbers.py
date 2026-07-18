@@ -27,6 +27,22 @@ NUMERIC_LITERAL_RE = re.compile(
 CONSTANT_DECLARATION_RE = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const|static)\s+[A-Z_][A-Z0-9_]*\b"
 )
+FILE_ALLOW_MARKER = "check-no-magic-numbers: allow-file"
+FILE_ALLOW_HEADER_LINES = 20
+
+
+def file_allows_unnamed_numbers(path: Path) -> bool:
+    """Return true for explicitly marked binary-format helper files.
+
+    This is a narrow escape hatch for offline asset-conversion scripts whose
+    numeric values are external file-format fields, byte widths, and manifest
+    literals rather than runtime IDs or product behavior. The marker must live
+    in the file header so bypasses remain intentional and reviewable.
+    """
+    header = "\n".join(
+        path.read_text(encoding="utf-8").splitlines()[:FILE_ALLOW_HEADER_LINES]
+    )
+    return FILE_ALLOW_MARKER in header
 
 
 def strip_strings_and_comments(line: str, in_block_comment: bool) -> tuple[str, bool]:
@@ -89,8 +105,12 @@ def numeric_literals_in(path: Path) -> list[tuple[int, str, str]]:
     findings: list[tuple[int, str, str]] = []
     in_block_comment = False
 
-    for line_number, original_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        stripped_line, in_block_comment = strip_strings_and_comments(original_line, in_block_comment)
+    for line_number, original_line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        stripped_line, in_block_comment = strip_strings_and_comments(
+            original_line, in_block_comment
+        )
         if CONSTANT_DECLARATION_RE.search(stripped_line):
             continue
 
@@ -103,7 +123,9 @@ def numeric_literals_in(path: Path) -> list[tuple[int, str, str]]:
 def rust_source_files() -> list[Path]:
     paths: list[Path] = []
     for path in REPO_ROOT.rglob("*.rs"):
-        if any(part in IGNORED_DIRECTORIES for part in path.relative_to(REPO_ROOT).parts):
+        if any(
+            part in IGNORED_DIRECTORIES for part in path.relative_to(REPO_ROOT).parts
+        ):
             continue
         paths.append(path)
     return sorted(paths)
@@ -113,13 +135,20 @@ def main() -> int:
     failures: list[str] = []
 
     for path in rust_source_files():
+        if file_allows_unnamed_numbers(path):
+            continue
         for line_number, literal, line in numeric_literals_in(path):
             relative_path = path.relative_to(REPO_ROOT)
-            failures.append(f"{relative_path}:{line_number}: unnamed numeric literal {literal!r}: {line}")
+            failures.append(
+                f"{relative_path}:{line_number}: unnamed numeric literal {literal!r}: {line}"
+            )
 
     if failures:
         print("Unnamed numeric literals are banned in Rust source.", file=sys.stderr)
-        print("Move the value to a named const/static and use the name instead.\n", file=sys.stderr)
+        print(
+            "Move the value to a named const/static and use the name instead.\n",
+            file=sys.stderr,
+        )
         print("\n".join(failures), file=sys.stderr)
         return 1
 
