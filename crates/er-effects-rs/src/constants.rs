@@ -142,5 +142,6 @@ include!("constants/profile_render.rs");
 include!("constants/return_title.rs");
 include!("constants/switch_liveness.rs");
 include!("constants/loading_cover.rs");
+include!("constants/render_handoff.rs");
 include!("constants/system_quit.rs");
 include!("constants/menu_sort.rs");
