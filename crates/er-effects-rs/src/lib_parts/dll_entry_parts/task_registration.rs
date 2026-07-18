@@ -251,6 +251,34 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // choices), optionally clean stale title-dialog render resources, then run the
                 // one-shot correctness dump.
                 IN_WORLD_REACHED.store(IN_WORLD_REACHED_YES, Ordering::SeqCst);
+                // SPURIOUS RETURN-TITLE ARM DISARM (2026-07-18, bd angre-reload-full-causal-chain-and-fix).
+                // Root cause of the angrE repeated-load crash: the boot autoload navigates the ProfileSelect
+                // LOAD flow, which trips `system_quit_arm_quickload_autoload` and arms a post-load return-title
+                // reload (QUICKLOAD_PHASE = RETURN_TITLE_REQUESTED) of the character we JUST loaded. Load #1 then
+                // completes and is stable in-world, but because the phase stays armed the in-world branch below
+                // keeps driving product_core_autoload_tick until the return-title chain submits, tears down the
+                // good load, and the reload sticks at MoveMapStep 18 and crashes (game assert AV 0x1eb9999).
+                // A GENUINE user-initiated return-title tears the world down within ~1-2s (the player vanishes,
+                // so this counter never climbs); a SPURIOUS arm leaves the player continuously present. Once
+                // presence has been sustained past the threshold while still armed, the arm is spurious: latch
+                // the load DONE by resetting the phase to IDLE, which gates OFF both this destructive branch and
+                // the return-title chain submit (both require phase != IDLE). Reset the counter whenever nothing
+                // is armed so only *continuous* armed presence counts.
+                if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+                    >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+                {
+                    let armed = SYSTEM_QUIT_INWORLD_ARMED_STABLE_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+                    if armed == SYSTEM_QUIT_INWORLD_ARMED_DISARM_TICKS {
+                        SYSTEM_QUIT_QUICKLOAD_PHASE
+                            .store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
+                        SYSTEM_QUIT_INWORLD_ARMED_DISARM_COUNT.fetch_add(1, Ordering::SeqCst);
+                        append_autoload_debug(format_args!(
+                            "system-quit-quickload: SPURIOUS return-title arm DISARMED after {armed} continuous in-world frames (player present + world stable while armed => not a real return-title) -> phase IDLE; load latched done, destructive reload suppressed"
+                        ));
+                    }
+                } else {
+                    SYSTEM_QUIT_INWORLD_ARMED_STABLE_TICKS.store(0, Ordering::SeqCst);
+                }
                 if product_autoload_enabled()
                     && SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
                         >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED

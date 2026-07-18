@@ -245,6 +245,20 @@ pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED: usize = 2;
 pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_TITLE_OWNER_SEEN: usize = 3;
 pub(crate) const SYSTEM_QUIT_QUICKLOAD_PHASE_AUTOLOAD_HANDOFF: usize = 4;
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_PHASE: AtomicUsize = AtomicUsize::new(0);
+/// Continuous in-world game-task frames observed while a return-title reload is still ARMED
+/// (`SYSTEM_QUIT_QUICKLOAD_PHASE >= RETURN_TITLE_REQUESTED`) with the local player present. A genuine
+/// user-initiated return-title tears the world down within ~1-2s so the player vanishes and this never
+/// climbs; a SPURIOUS arm -- the boot autoload's own ProfileSelect navigation queuing a post-load reload
+/// of the character we just loaded (`system_quit_arm_quickload_autoload`) -- leaves the player present
+/// indefinitely. Reset to 0 whenever no reload is armed. See bd
+/// angre-reload-full-causal-chain-and-fix-2026-07-18.
+pub(crate) static SYSTEM_QUIT_INWORLD_ARMED_STABLE_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Continuous armed+in-world frames after which a still-armed return-title is treated as SPURIOUS and
+/// disarmed (phase -> IDLE). ~5s at the game-task rate: far below a genuine stable load's tens-of-seconds
+/// presence (observed ~47s to the destructive submit) and comfortably above a real switch's ~1-2s
+/// arm->teardown window, so it never disarms a legitimate user switch.
+pub(crate) const SYSTEM_QUIT_INWORLD_ARMED_DISARM_TICKS: usize = 300;
+pub(crate) static SYSTEM_QUIT_INWORLD_ARMED_DISARM_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub(crate) static SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT: AtomicUsize =
     AtomicUsize::new(0);
