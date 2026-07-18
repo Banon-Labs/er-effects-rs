@@ -296,6 +296,38 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 } else {
                     SYSTEM_QUIT_INWORLD_ARMED_STABLE_TICKS.store(0, Ordering::SeqCst);
                 }
+                // MENU-FREE RELOAD COMPLETION LATCH (2026-07-18, repeatability fix, bd
+                // repeatability-menu-free-phase-reset-fix-2026-07-18). own_load_switch_reload_fire committed
+                // the picked slot (FRESH_DESER_DONE=1) and its native SetState5 streamed the new character to
+                // this in-world state, but the switch phase is still armed. Left armed, the return-title chain
+                // re-submits (title_tick_cover.rs) and bounces the freshly-loaded world back to title, blocking
+                // the NEXT switch (switch #1 loads, then bounces -> switch #2 never arms). The in-world sf==30
+                // stable-proof cannot reset it (needs a title owner, absent in-world; and its FRESH_DESER_DONE
+                // cmpxch already lost to our =1). So latch the switch DONE from an in-world signal: sustained
+                // player presence with FRESH_DESER_DONE==1 -> phase IDLE + clear the GameMan save/warp request
+                // flags, so the chain cannot re-submit and the loaded world persists. The autopilot's next
+                // switch re-arms (resetting FRESH_DESER_DONE + SWITCH_MENU_FREE_RELOAD_FIRED) and
+                // own_load_switch_reload_fire fires again for the new slot.
+                if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+                    >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED
+                    && SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1
+                {
+                    let stable =
+                        SYSTEM_QUIT_MENU_FREE_STABLE_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+                    if stable == SYSTEM_QUIT_MENU_FREE_STABLE_TICKS_THRESHOLD {
+                        SYSTEM_QUIT_QUICKLOAD_PHASE
+                            .store(SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE, Ordering::SeqCst);
+                        if let Ok(gm_typed) = unsafe { eldenring::cs::GameMan::instance_mut() } {
+                            er_save_loader::GameManSaveAccess::set_save_requested(gm_typed, false);
+                            er_save_loader::GameManSaveAccess::set_warp_requested(gm_typed, false);
+                        }
+                        append_autoload_debug(format_args!(
+                            "menu-free reload COMPLETION: picked char stable in-world {stable} frames (FRESH_DESER_DONE=1) -> phase IDLE, cleared save_requested/warp_requested; return-title chain disarmed so the loaded world persists for the next switch"
+                        ));
+                    }
+                } else {
+                    SYSTEM_QUIT_MENU_FREE_STABLE_TICKS.store(0, Ordering::SeqCst);
+                }
                 if product_autoload_enabled()
                     && SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
                         >= SYSTEM_QUIT_QUICKLOAD_PHASE_RETURN_TITLE_REQUESTED

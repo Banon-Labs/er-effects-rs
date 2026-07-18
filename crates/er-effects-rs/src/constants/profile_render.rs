@@ -241,6 +241,17 @@ pub(crate) static SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT: AtomicUsize = 
 /// the single attempt so a flickering-owner / partial-feed frame never re-runs the leak-prone feed.
 /// Reset per switch in system_quit_arm_quickload_autoload.
 pub(crate) static SYSTEM_QUIT_SWITCH_MENU_FREE_RELOAD_FIRED: AtomicUsize = AtomicUsize::new(0);
+/// MENU-FREE RELOAD COMPLETION LATCH (2026-07-18, repeatability fix). Continuous in-world frames observed
+/// after own_load_switch_reload_fire committed the picked slot (FRESH_DESER_DONE==1) while the switch phase
+/// is still armed. Once sustained, the switch is DONE: reset the phase to IDLE + clear the arm so the
+/// return-title chain cannot re-submit and bounce the freshly-loaded world back to title (which would block
+/// the NEXT switch). Reset whenever the completion condition breaks. See bd
+/// repeatability-menu-free-phase-reset-fix-2026-07-18.
+pub(crate) static SYSTEM_QUIT_MENU_FREE_STABLE_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Sustained in-world frames after the menu-free reload commit before latching the switch DONE (~1s at
+/// task rate). Long enough that a transient mid-stream player flicker does not latch prematurely, short
+/// enough to disarm well before the return-title chain's queue-ready re-submit window (~tens of seconds).
+pub(crate) const SYSTEM_QUIT_MENU_FREE_STABLE_TICKS_THRESHOLD: usize = 60;
 /// Count of confirms BLOCKED fail-closed because the fresh deserialize could not be proven (no save
 /// bytes / parse failed / fingerprint not real). Streaming stale state would load the wrong
 /// character and the post-load autosave would then write it back to the picked slot.
